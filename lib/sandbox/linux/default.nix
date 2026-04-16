@@ -53,6 +53,7 @@ in
       name = "wrapix";
       runtimeInputs = [
         crun-krun
+        pkgs.beads-dolt
         pkgs.podman
       ];
       text = ''
@@ -81,6 +82,14 @@ in
         ${expandPathFn}
 
         verbose "Project dir: $PROJECT_DIR"
+
+        # Ensure the per-workspace wrapix-beads dolt container is running
+        # before launching. Without it, bd inside the container has no
+        # server to talk to and the socket at $PROJECT_DIR/.gc/dolt.sock
+        # won't exist. beads-dolt start is idempotent.
+        if [ -d "$PROJECT_DIR/.beads/dolt" ] && command -v podman >/dev/null 2>&1; then
+          beads-dolt start "$PROJECT_DIR"
+        fi
 
         # Read git author from host config (overrideable via env vars)
         GIT_AUTHOR_NAME="''${GIT_AUTHOR_NAME:-$(git config --global user.name 2>/dev/null || echo 'Wrapix Sandbox')}"

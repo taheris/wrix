@@ -234,8 +234,8 @@ let
   daemonTools = with pkgs; [
     bash
     beads
-    wrapix.beads.cli
-    wrapix.beads.push
+    beads-dolt
+    beads-push
     coreutils
     dolt
     findutils

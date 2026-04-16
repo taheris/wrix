@@ -43,10 +43,8 @@ let
     inherit pkgs;
     inherit (sandbox) mkSandbox;
   };
-  beadsLib = import ../../lib/beads { inherit pkgs linuxPkgs; };
   cityMod = import ../../lib/city {
     inherit pkgs linuxPkgs;
-    beads = beadsLib;
     inherit (sandbox) mkSandbox profiles baseClaudeSettings;
     inherit (ralph) mkRalph;
   };

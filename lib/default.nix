@@ -15,7 +15,6 @@ let
     inherit pkgs linuxPkgs;
     inherit (sandbox) mkSandbox profiles baseClaudeSettings;
     inherit (ralph) mkRalph;
-    inherit beads;
   };
 
 in
@@ -42,16 +41,14 @@ in
       shellHook ? "",
     }:
     pkgs.mkShell {
-      packages =
-        with pkgs;
-        [
-          beads.cli
-          beads.push
-          pkgs.beads
-          dolt
-          prek
-        ]
-        ++ packages;
+      packages = [
+        pkgs.beads
+        pkgs.beads-dolt
+        pkgs.beads-push
+        pkgs.dolt
+        pkgs.prek
+      ]
+      ++ packages;
       shellHook = ''
         ${shellHook}
         # Configure Dolt origin remote for bd dolt pull/push (no-op if already set)

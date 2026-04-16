@@ -274,6 +274,7 @@ let
         done
         podman run -d \
           --name "$name" \
+          --restart=unless-stopped \
           --entrypoint "" \
           --network wrapix-dolt \
           --userns=keep-id \
@@ -362,6 +363,8 @@ in
 {
   inherit imageName shellHook;
 
+  # cli/push are exposed here for the flake overlay (see wrapixBeadsPkgs in
+  # flake.nix). Consumers should reach them via pkgs.beads-dolt / pkgs.beads-push.
   image = doltImageDrv;
   cli = beadsDolt;
   push = beadsPush;

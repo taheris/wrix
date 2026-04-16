@@ -79,6 +79,7 @@ let
   basePackages = with pkgs; [
     bash
     beads
+    beads-push
     coreutils
     curl
     diffutils

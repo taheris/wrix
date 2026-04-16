@@ -10,7 +10,6 @@
   mkSandbox,
   mkRalph,
   profiles,
-  beads,
   baseClaudeSettings,
 }:
 
@@ -542,9 +541,9 @@ let
       # gc runtime deps (tmux, procps, lsof) are included so the devShell
       # is self-contained — gc doctor/start checks for these at startup.
       shellPackages = ralphInstance.packages ++ [
-        beads.cli
-        beads.push
         cityScripts
+        pkgs.beads-dolt
+        pkgs.beads-push
         pkgs.gc
         pkgs.lsof
         pkgs.procps
@@ -583,9 +582,9 @@ let
 
           # Ensure the per-workspace beads dolt container is running
           # and propagate its host/port to child processes (gc → bd).
-          ${beads.cli}/bin/beads-dolt start "$GC_WORKSPACE"
+          ${pkgs.beads-dolt}/bin/beads-dolt start "$GC_WORKSPACE"
           export BEADS_DOLT_SERVER_HOST=127.0.0.1
-          BEADS_DOLT_SERVER_PORT="$(${beads.cli}/bin/beads-dolt port "$GC_WORKSPACE")"
+          BEADS_DOLT_SERVER_PORT="$(${pkgs.beads-dolt}/bin/beads-dolt port "$GC_WORKSPACE")"
           export BEADS_DOLT_SERVER_PORT
           export BEADS_DOLT_AUTO_START=0
 

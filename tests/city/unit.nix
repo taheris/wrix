@@ -55,10 +55,8 @@ let
     inherit (sandbox) mkSandbox;
   };
 
-  beads = import ../../lib/beads { inherit pkgs linuxPkgs; };
-
   city = import ../../lib/city {
-    inherit pkgs linuxPkgs beads;
+    inherit pkgs linuxPkgs;
     inherit (sandbox) mkSandbox profiles baseClaudeSettings;
     inherit (ralph) mkRalph;
   };

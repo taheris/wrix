@@ -57,10 +57,29 @@
             ...
           }:
           let
-            hostOverlay = final: _prev: {
-              beads = beadsFor final;
-              gc = gcFor final;
-            };
+            # Build beads-dolt and beads-push against a given pkgs scope.
+            # Used by both hostOverlay and linuxOverlay so the wrapper scripts
+            # are available as pkgs.beads-dolt / pkgs.beads-push everywhere.
+            wrapixBeadsPkgs =
+              hostPkgs_: linuxPkgs_:
+              let
+                m = import ./lib/beads {
+                  pkgs = hostPkgs_;
+                  linuxPkgs = linuxPkgs_;
+                };
+              in
+              {
+                beads-dolt = m.cli;
+                beads-push = m.push;
+              };
+
+            hostOverlay =
+              final: _prev:
+              {
+                beads = beadsFor final;
+                gc = gcFor final;
+              }
+              // wrapixBeadsPkgs final linuxPkgs;
 
             beadsFor =
               pkgs':
@@ -85,10 +104,13 @@
               };
 
             linuxSystem = if system == "aarch64-darwin" then "aarch64-linux" else system;
-            linuxOverlay = final: _prev: {
-              beads = beadsFor final;
-              gc = gcFor final;
-            };
+            linuxOverlay =
+              final: _prev:
+              {
+                beads = beadsFor final;
+                gc = gcFor final;
+              }
+              // wrapixBeadsPkgs final final;
             linuxPkgs = import nixpkgs {
               system = linuxSystem;
               overlays = [
