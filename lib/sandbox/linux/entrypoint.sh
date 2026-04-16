@@ -81,49 +81,23 @@ for item in projects plans todos file-history paste-cache backups \
   fi
 done
 
-# Initialize container-local beads database
+# Connect bd to the host's wrapix-beads dolt container via the mounted
+# unix socket. The host starts wrapix-beads (lib/beads/default.nix shellHook)
+# and bind-mounts /workspace/.gc/dolt.sock into every wrapix container.
 if [ -f /workspace/.beads/config.yaml ]; then
-  PREFIX=$(yq -r '.["issue-prefix"] // ""' /workspace/.beads/config.yaml 2>/dev/null || echo "")
   BACKEND=$(jq -r '.backend // "sqlite"' /workspace/.beads/metadata.json 2>/dev/null || echo "sqlite")
 
-  if [ -n "$PREFIX" ] && [ "$BACKEND" = "dolt" ]; then
-    DOLT_DB_NAME=$(jq -r '.dolt_database // "beads"' /workspace/.beads/metadata.json 2>/dev/null || echo "beads")
-    DOLT_DB="/workspace/.beads/dolt/$DOLT_DB_NAME"
-    WORKTREE="/workspace/.git/beads-worktrees/beads"
-    DOLT_REMOTE="$WORKTREE/.beads/dolt-remote"
-
-    # Fix worktree git pointer (host absolute path → container path)
-    if [ -f "$WORKTREE/.git" ] && ! git -C "$WORKTREE" rev-parse HEAD &>/dev/null; then
-      echo "gitdir: /workspace/.git/worktrees/beads" > "$WORKTREE/.git"
-      git worktree repair 2>/dev/null || true
+  if [ "$BACKEND" = "dolt" ] && [ -S /workspace/.gc/dolt.sock ]; then
+    export BEADS_DOLT_SERVER_SOCKET=/workspace/.gc/dolt.sock
+    export BEADS_DOLT_AUTO_START=0
+  elif [ "$BACKEND" = "dolt" ]; then
+    echo "Warning: dolt backend configured but /workspace/.gc/dolt.sock not mounted" >&2
+    echo "  Start the host wrapix-beads container (enter the devShell) before launching this container." >&2
+  else
+    PREFIX=$(yq -r '.["issue-prefix"] // ""' /workspace/.beads/config.yaml 2>/dev/null || echo "")
+    if [ -n "$PREFIX" ] && [ -f /workspace/.beads/issues.jsonl ]; then
+      bd init --prefix "$PREFIX" --from-jsonl --quiet --skip-hooks --skip-merge-driver
     fi
-
-    # Clone database from dolt-remote if missing or incomplete
-    if [ ! -f "$DOLT_DB/.dolt/manifest" ]; then
-      bd dolt stop 2>/dev/null || true
-      rm -rf "$DOLT_DB"
-      mkdir -p /workspace/.beads/dolt
-      chmod 700 /workspace/.beads
-      if [ -d "$DOLT_REMOTE" ]; then
-        dolt clone "file://$DOLT_REMOTE" "$DOLT_DB" || echo "Warning: dolt clone failed" >&2
-      else
-        echo "Error: dolt-remote not found at $DOLT_REMOTE" >&2
-        echo "Run 'mkdir -p $DOLT_REMOTE && cd .beads/dolt/$DOLT_DB_NAME && dolt push origin main' on the host to initialize it." >&2
-      fi
-    fi
-
-    # Configure remote and start server
-    if [ -d "$DOLT_DB/.dolt" ] && [ -d "$DOLT_REMOTE" ]; then
-      (cd "$DOLT_DB" && dolt remote remove origin 2>/dev/null || true)
-      (cd "$DOLT_DB" && dolt remote add origin "file://$DOLT_REMOTE" 2>/dev/null || true)
-    fi
-    if [ -d "$DOLT_DB/.dolt" ]; then
-      bd dolt start 2>/dev/null || true
-    fi
-
-  elif [ -n "$PREFIX" ] && [ -f /workspace/.beads/issues.jsonl ]; then
-    # Legacy: init from JSONL (pre-Dolt repos)
-    bd init --prefix "$PREFIX" --from-jsonl --quiet --skip-hooks --skip-merge-driver
   fi
 
   git checkout -- .beads/.gitignore AGENTS.md 2>/dev/null || true

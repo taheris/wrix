@@ -620,12 +620,8 @@ let
         return 1
       fi
 
-      if [[ -n "''${CONTAINER_HOST:-}" ]]; then
-        export BEADS_DOLT_SERVER_SOCKET="$WS/.gc/dolt.sock"
-        export BEADS_DOLT_SERVER_HOST=127.0.0.1
-      else
-        export BEADS_DOLT_SERVER_HOST=127.0.0.1
-      fi
+      export BEADS_DOLT_SERVER_HOST=127.0.0.1
+      export BEADS_DOLT_SERVER_SOCKET="''${CONTAINER_HOST:+$WS/.gc/dolt.sock}"
       export BEADS_DOLT_SERVER_PORT="$DOLT_PORT"
       export BEADS_DOLT_AUTO_START=0
       # gc CLI commands (gc sling, gc status) resolve the dolt port from

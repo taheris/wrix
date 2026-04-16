@@ -8,7 +8,13 @@ result
 result-*
 target/
 
+# Beads / Dolt files (added by bd init)
+.beads-credential-key
+.dolt/
+*.db
+
 # Gas City scaffold (gc start creates these at workspace root)
+.runtime/
 formulas/
 hooks/
 orders/
@@ -24,8 +30,3 @@ scripts/reaper.sh
 scripts/runtime.sh
 scripts/spawn-storm-detect.sh
 scripts/wisp-compact.sh
-
-# Beads / Dolt files (added by bd init)
-.dolt/
-*.db
-.beads-credential-key
