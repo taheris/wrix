@@ -7,12 +7,75 @@
 # github sync is skipped with a notice.
 set -euo pipefail
 
-bd dolt commit >/dev/null 2>&1 || true
-bd dolt push "$@"
+# Gas City's reconciler writes an event every ~10s on each gc:session-labeled
+# bead (judge/scout/mayor). Without this prune the events table grows without
+# bound — three beads × 8640 rows/day = ~26k/day of reconciler churn, plus
+# the rows are large (full state snapshots in old_value/new_value).
+#
+# Trim to the most recent KEEP per session bead before every push. KEEP=100
+# leaves ~17 min of scroll-back per bead, which is plenty for debugging and
+# ~99% smaller than the steady-state rate.
+KEEP=${BEADS_KEEP_SESSION_EVENTS:-100}
+bd sql "
+  DELETE FROM events
+  WHERE issue_id IN (SELECT issue_id FROM labels WHERE label = 'gc:session')
+    AND id NOT IN (
+      SELECT id FROM (
+        SELECT id,
+               ROW_NUMBER() OVER (PARTITION BY issue_id ORDER BY created_at DESC) AS rn
+        FROM events
+        WHERE issue_id IN (SELECT issue_id FROM labels WHERE label = 'gc:session')
+      ) ranked
+      WHERE rn <= $KEEP
+    )
+" >/dev/null
 
 BRANCH="$(grep '^sync-branch:' .beads/config.yaml 2>/dev/null | awk '{print $2}' | tr -d '"' || echo beads)"
 BRANCH="${BRANCH:-beads}"
-WT="$(git rev-parse --show-toplevel 2>/dev/null)/.git/beads-worktrees/$BRANCH"
+
+# Peel back to the main workspace: when beads-push is invoked from inside
+# .git/beads-worktrees/<branch>, git rev-parse --show-toplevel returns the
+# worktree itself, which is not where the dolt socket lives.
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+case "$ROOT" in
+  */.git/beads-worktrees/*) ROOT="${ROOT%/.git/beads-worktrees/*}" ;;
+esac
+WT="$ROOT/.git/beads-worktrees/$BRANCH"
+REMOTE_DIR="$WT/.beads/dolt-remote"
+
+# Gate the flatten+rebuild path: any remote file >= THRESHOLD_MB triggers a
+# full history squash + remote rebuild. GitHub's hard limit is 100 MiB per
+# file; 50 MiB gives us headroom for the next push cycle's growth before the
+# gate trips again. The session-event prune above keeps steady-state small;
+# this gate is the circuit breaker for when dolt chunk files grow regardless
+# (schema migrations, long-running reconcile churn, etc).
+THRESHOLD_MB=${BEADS_REMOTE_REBUILD_MB:-50}
+threshold_bytes=$((THRESHOLD_MB * 1024 * 1024))
+needs_rebuild=0
+if [ -d "$REMOTE_DIR" ]; then
+  while IFS= read -r sz; do
+    if [ "$sz" -ge "$threshold_bytes" ]; then needs_rebuild=1; break; fi
+  done < <(find "$REMOTE_DIR" -type f -printf '%s\n' 2>/dev/null)
+fi
+
+if [ "$needs_rebuild" = 1 ]; then
+  if ! command -v beads-dolt >/dev/null 2>&1; then
+    echo "beads-push: remote file >= ${THRESHOLD_MB}MiB but beads-dolt not on PATH — cannot rebuild" >&2
+    exit 1
+  fi
+  echo "beads-push: remote file >= ${THRESHOLD_MB}MiB — flattening history + rebuilding remote" >&2
+  bd flatten --force
+  find "$REMOTE_DIR" -mindepth 1 -delete
+  beads-dolt stop || true
+  beads-dolt start "$ROOT"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -S "$ROOT/.gc/dolt.sock" ] && break
+    sleep 1
+  done
+fi
+
+bd dolt commit || true
+bd dolt push "$@"
 
 if [ ! -d "$WT" ]; then
   echo "beads-push: worktree $WT not present — skipping github sync" >&2
