@@ -62,9 +62,14 @@ if [ -d /etc/wrapix/mcp ]; then
   fi
 fi
 
-# Write project-level settings only if missing (preserve user customizations)
+# Seed project-level settings if missing, then sync env vars from image
 if [ ! -f /workspace/.claude/settings.json ]; then
   cp /etc/wrapix/claude-settings.json /workspace/.claude/settings.json
+else
+  jq -s '.[1].env = (.[1].env // {}) * .[0].env | .[1]' \
+    /etc/wrapix/claude-settings.json /workspace/.claude/settings.json \
+    > /workspace/.claude/settings.json.tmp \
+    && mv /workspace/.claude/settings.json.tmp /workspace/.claude/settings.json
 fi
 
 # Symlink persistent session data from workspace for /resume and /rename

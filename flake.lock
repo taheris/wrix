@@ -47,10 +47,10 @@
     "gascity": {
       "flake": false,
       "locked": {
-        "lastModified": 1775981307,
-        "narHash": "sha256-r6rGxeDODaJ/Jdf1EwmfsVKr0q82nCufbBGPUISTTV4=",
+        "lastModified": 1776366307,
+        "narHash": "sha256-5cNsdQtMMWWW6yrw5dmSE6wCJ7HEvGTHaZKjKDTVF34=",
         "ref": "main",
-        "rev": "1b74f73190a5108069eb735294fc98d20f46ae03",
+        "rev": "ee3da18bf16fa47e195549a0cb978c2c02114075",
         "shallow": true,
         "type": "git",
         "url": "ssh://git@github.com/gastownhall/gascity.git"
@@ -64,10 +64,10 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1775710090,
-        "narHash": "sha256-ar3rofg+awPB8QXDaFJhJ2jJhu+KqN/PRCXeyuXR76E=",
+        "lastModified": 1776169885,
+        "narHash": "sha256-l/iNYDZ4bGOAFQY2q8y5OAfBBtrDAaPuRQqWaFHVRXM=",
         "ref": "nixos-unstable",
-        "rev": "4c1018dae018162ec878d42fec712642d214fdfa",
+        "rev": "4bd9165a9165d7b5e33ae57f3eecbcb28fb231c9",
         "shallow": true,
         "type": "git",
         "url": "ssh://git@github.com/NixOS/nixpkgs.git"
@@ -96,10 +96,10 @@
         ]
       },
       "locked": {
-        "lastModified": 1775963625,
-        "narHash": "sha256-OmwF0Rd/HDbEGC0ZcBS2jPMvmCcn3HDqUypjXrR7KfM=",
+        "lastModified": 1776350315,
+        "narHash": "sha256-ijD4bgb5Iyap9F3MX73vLAZF/SYu+q7Gd7Ux4cbfCWw=",
         "ref": "master",
-        "rev": "573a61faa8ec910a6b8576cc3c145844245574f3",
+        "rev": "62e3b8aedabc240e5b0cc9fae003bc9edfebbc9b",
         "shallow": true,
         "type": "git",
         "url": "ssh://git@github.com/oxalica/rust-overlay.git"
