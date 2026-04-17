@@ -579,6 +579,14 @@ let
     # Isolate dolt global config so tests don't clobber the host's ~/.dolt/
     export HOME="$WS"
 
+    # City env exported up front so every scenario (not just happy-path) can
+    # start/restart gc and invoke gate.sh → gc session submit → provider.sh
+    # without depending on a prior scenario's start_gc having run.
+    export GC_CITY_NAME="$CITY_NAME"
+    export GC_WORKSPACE="$WS"
+    export GC_AGENT_IMAGE="${liveCity.imageName}"
+    export GC_PODMAN_NETWORK="$TEST_NETWORK"
+
     setup_workspace() {
       git init -b main
       git config user.email test@test
@@ -653,10 +661,7 @@ let
       DOLT_CONTAINER="$(beads-dolt name "$WS")"
       DOLT_PORT="$(beads-dolt port "$WS")"
 
-      export GC_CITY_NAME="$CITY_NAME"
-      export GC_WORKSPACE="$WS"
-      export GC_AGENT_IMAGE="${liveCity.imageName}"
-      export GC_PODMAN_NETWORK="$TEST_NETWORK"
+      # GC_CITY_NAME/WORKSPACE/AGENT_IMAGE/PODMAN_NETWORK exported at top.
 
       # Run entrypoint with ONLY the live PATH — no test extras — so
       # missing-dependency bugs surface here just as they would in prod.
@@ -687,7 +692,6 @@ let
       # .beads/dolt-server.port for non-external (localhost) dolt servers.
       echo "$DOLT_PORT" > "$WS/.beads/dolt-server.port"
       save DOLT_CONTAINER DOLT_PORT GC_PID \
-        GC_CITY_NAME GC_WORKSPACE GC_AGENT_IMAGE GC_PODMAN_NETWORK \
         BEADS_DOLT_SERVER_HOST BEADS_DOLT_SERVER_PORT BEADS_DOLT_AUTO_START \
         BEADS_DOLT_SERVER_SOCKET
     }
@@ -1418,7 +1422,22 @@ let
         tail -40 "$WS/gc-gate.log" 2>/dev/null | sed 's/^/  /' || true
         return 1
       fi
-      save GC_PID
+      # Point bd at the dolt entrypoint just started — without this, bd from
+      # the test shell auto-starts a second dolt on a different port and
+      # collides with entrypoint's running instance. Needed when this
+      # scenario runs standalone (start_gc in happy-path would otherwise
+      # have set these).
+      DOLT_CONTAINER="$(beads-dolt name "$WS")"
+      DOLT_PORT="$(beads-dolt port "$WS")"
+      export DOLT_CONTAINER DOLT_PORT
+      export BEADS_DOLT_SERVER_HOST=127.0.0.1
+      export BEADS_DOLT_SERVER_SOCKET="''${CONTAINER_HOST:+$WS/.gc/dolt.sock}"
+      export BEADS_DOLT_SERVER_PORT="$DOLT_PORT"
+      export BEADS_DOLT_AUTO_START=0
+      echo "$DOLT_PORT" > "$WS/.beads/dolt-server.port"
+      save GC_PID DOLT_CONTAINER DOLT_PORT \
+        BEADS_DOLT_SERVER_HOST BEADS_DOLT_SERVER_PORT BEADS_DOLT_AUTO_START \
+        BEADS_DOLT_SERVER_SOCKET
     }
     subtest "Restart gc for gate tests" restart_gc_for_gate
 
