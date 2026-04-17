@@ -7,7 +7,8 @@
 #    items to the human on attach.
 # 2. Runs crash recovery — reconciles orphaned containers and worktrees.
 # 3. Starts a background process watching podman events for service container
-#    lifecycle events (die, oom, restart) and wakes the scout via gc nudge.
+#    lifecycle events (die, oom, restart) and wakes the scout via
+#    gc session submit (ensureRunning auto-wakes a sleeping scout).
 # 4. Stages gc home (via stage-home.sh) and runs gc start --foreground
 #    in the background with a trap to clean up dolt on exit.
 #
