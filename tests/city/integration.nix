@@ -1542,6 +1542,83 @@ let
     subtest "Stop gc after gate tests" stop_gc_after_gate
     fi  # end gate-approve-reject
 
+    if scenario_enabled judge-merge-live; then
+    # ================================================================
+    # judge-merge-live: bad-arg guards and explicit reject path
+    # exercise the live .gc/scripts/judge-merge.sh against real bd
+    # ================================================================
+
+    subtest "Create judge-merge-live bead" \
+      bd create --title="Judge merge live test" --type=task --priority=2
+
+    BEAD_JML=$(bd list --json --title "Judge merge live test" | jq -r '.[0].id')
+
+    verify_judge_merge_bad_args() {
+      [ -n "$BEAD_JML" ] && [ "$BEAD_JML" != "null" ]
+      local err_log
+      err_log="$(mktemp)"
+      local exit_code=0
+
+      GC_BEAD_ID="$BEAD_JML" GC_WORKSPACE="$WS" live judge-merge.sh 2>"$err_log" || exit_code=$?
+      [ "$exit_code" -eq 2 ] || { echo "FAIL: missing verdict expected exit 2, got $exit_code"; cat "$err_log"; return 1; }
+
+      exit_code=0
+      GC_BEAD_ID="$BEAD_JML" GC_WORKSPACE="$WS" live judge-merge.sh maybe 2>"$err_log" || exit_code=$?
+      [ "$exit_code" -eq 2 ] || { echo "FAIL: unknown verdict expected exit 2, got $exit_code"; cat "$err_log"; return 1; }
+
+      exit_code=0
+      GC_BEAD_ID="$BEAD_JML" GC_WORKSPACE="$WS" live judge-merge.sh reject 2>"$err_log" || exit_code=$?
+      [ "$exit_code" -eq 2 ] || { echo "FAIL: reject without reason expected exit 2, got $exit_code"; cat "$err_log"; return 1; }
+
+      rm -f "$err_log"
+
+      # None of the bad-arg paths may write metadata
+      local verdict failure
+      verdict="$(bd show "$BEAD_JML" --json | jq -r '.[0].metadata.review_verdict // empty')"
+      failure="$(bd show "$BEAD_JML" --json | jq -r '.[0].metadata.merge_failure // empty')"
+      [ -z "$verdict" ] || { echo "FAIL: bad args wrote review_verdict=$verdict"; return 1; }
+      [ -z "$failure" ] || { echo "FAIL: bad args wrote merge_failure=$failure"; return 1; }
+    }
+    subtest "Bad args exit 2 with no metadata changes" verify_judge_merge_bad_args
+
+    setup_explicit_reject() {
+      bd update "$BEAD_JML" --status=in_progress
+      git -C "$WS" add .beads/ && git -C "$WS" diff --cached --quiet || \
+        git -C "$WS" commit -m "beads: judge-merge-live setup"
+      git -C "$WS" checkout -b "$BEAD_JML"
+      echo "reject me" > "$WS/reject-me.txt"
+      git -C "$WS" add reject-me.txt
+      git -C "$WS" commit -m "fix: to be rejected"
+      git -C "$WS" checkout main
+    }
+    subtest "Set up branch for explicit reject" setup_explicit_reject
+
+    verify_explicit_reject() {
+      local exit_code=0
+      GC_BEAD_ID="$BEAD_JML" GC_WORKSPACE="$WS" \
+        live judge-merge.sh reject "SH-1 violated in reject-me.txt" || exit_code=$?
+      [ "$exit_code" -eq 0 ] || { echo "FAIL: explicit reject expected exit 0, got $exit_code"; return 1; }
+
+      local verdict failure status
+      verdict="$(bd show "$BEAD_JML" --json | jq -r '.[0].metadata.review_verdict // empty')"
+      failure="$(bd show "$BEAD_JML" --json | jq -r '.[0].metadata.merge_failure // empty')"
+      status="$(bd show "$BEAD_JML" --json | jq -r '.[0].status // empty')"
+
+      [ "$verdict" = "reject" ] || { echo "FAIL: review_verdict=reject not written (got: $verdict)"; return 1; }
+      [[ "$failure" == *"SH-1 violated"* ]] || { echo "FAIL: merge_failure reason missing (got: $failure)"; return 1; }
+      [ "$status" = "open" ] || { echo "FAIL: bead not reopened (status: $status)"; return 1; }
+
+      # EXIT trap must delete the branch
+      if git -C "$WS" rev-parse --verify "$BEAD_JML" >/dev/null 2>&1; then
+        echo "FAIL: EXIT trap did not delete branch $BEAD_JML"
+        git -C "$WS" branch -v
+        return 1
+      fi
+    }
+    subtest "Explicit reject writes metadata + cleans up branch" verify_explicit_reject
+
+    fi  # end judge-merge-live
+
     if scenario_enabled dispatch-cooldown; then
     # ================================================================
     # dispatch-cooldown: cooldown-aware worker scale check
