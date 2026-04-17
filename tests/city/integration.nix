@@ -908,6 +908,12 @@ let
     }
     subtest "Worker logs persist in .gc/logs/worker (wx-iy1vt)" verify_worker_host_logs
 
+    # wx-92md7: monitor writes .wrapix/state/worker-<bead>.done as its final
+    # step after post-gate. Without it, is-running lies "true" for exited
+    # workers and gc's pool reconciler can't drain the slot.
+    subtest "Worker .done marker written after post-gate (wx-92md7)" \
+      poll_until "test -f \"\$WS/.wrapix/state/worker-\$BEAD_ID.done\"" 30
+
     # judge-merge.sh approve already ran inside the mock judge during the
     # review window — it writes review_verdict=approve only after main has
     # advanced, so by the time gate.sh returns, the branch is merged and
@@ -2362,6 +2368,64 @@ let
     }
     subtest "Stopped worker container preserved for log inspection (wx-4041e)" verify_stopped_container_preserved
     fi  # end stopped-container-preserved
+
+    if scenario_enabled worker-done-marker; then
+    # ================================================================
+    # worker-done-marker: is-running honors .wrapix/state/worker-<bead>.done
+    # (wx-92md7) — provider stops lying when the monitor finishes so the
+    # reconciler can drain the pool slot.
+    # ================================================================
+
+    verify_worker_done_marker() {
+      podman network create "$TEST_NETWORK" >/dev/null 2>&1 || true
+      local test_bead="wx-donemarker-$RUN_ID"
+      local cname="$CITY_NAME-worker-$test_bead"
+      local marker="$WS/.wrapix/state/worker-$test_bead.done"
+
+      # Create a stopped worker-named container with a chosen exit code.
+      # Runs the real agent image (not a fake) so the harness exercises
+      # the same podman inspect code path provider.sh uses in prod.
+      run_worker_exit() {
+        local exit_code="$1"
+        podman rm -f "$cname" 2>/dev/null || true
+        podman run --name "$cname" --pull=never --entrypoint "" \
+          "${liveCity.imageName}" /bin/sh -c "exit $exit_code" || true
+      }
+
+      is_running() {
+        GC_AGENT_TEMPLATE=worker GC_CITY_NAME="$CITY_NAME" GC_WORKSPACE="$WS" \
+          PATH="$LIVE_PATH" bash "$WS/.gc/scripts/provider.sh" is-running "worker-$test_bead"
+      }
+
+      mkdir -p "$WS/.wrapix/state"
+      rm -f "$marker"
+
+      # Case 1: exit=0, no marker → lie ("true") so gc doesn't treat this
+      # as a startup crash while the monitor is still running post-gate.
+      run_worker_exit 0
+      local result
+      result="$(is_running)"
+      [ "$result" = "true" ] || { echo "FAIL: exit=0 no marker → expected true, got '$result'"; return 1; }
+
+      # Case 2: exit=0, marker present → honest "false" so the reconciler
+      # drains the pool slot (the fix wx-92md7 is landing).
+      : > "$marker"
+      result="$(is_running)"
+      [ "$result" = "false" ] || { echo "FAIL: exit=0 + marker → expected false, got '$result'"; return 1; }
+
+      # Case 3: exit!=0, no marker → "false" so gc sees the real failure
+      # and retries (crash-loop protection path, preserved).
+      rm -f "$marker"
+      run_worker_exit 1
+      result="$(is_running)"
+      [ "$result" = "false" ] || { echo "FAIL: exit=1 no marker → expected false, got '$result'"; return 1; }
+
+      # Cleanup
+      podman rm -f "$cname" 2>/dev/null || true
+      rm -f "$marker"
+    }
+    subtest "is-running honors worker .done marker (wx-92md7)" verify_worker_done_marker
+    fi  # end worker-done-marker
   '';
 
 in

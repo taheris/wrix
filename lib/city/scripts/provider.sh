@@ -400,6 +400,14 @@ worker_start() {
   local host_log_dir="${GC_WORKSPACE}/.gc/logs/worker/${bead_id}"
   mkdir -p "$host_log_dir"
 
+  # is-running reads .wrapix/state/worker-<bead>.done to distinguish "monitor
+  # still running post-gate" from "fully done, safe to dispose" (wx-92md7).
+  # Clear any stale marker from a prior run of the same bead before starting.
+  local state_dir="${GC_WORKSPACE}/.wrapix/state"
+  local done_marker="${state_dir}/worker-${bead_id}.done"
+  mkdir -p "$state_dir"
+  rm -f "$done_marker"
+
   local task_file="${GC_WORKSPACE}/${worktree_path}/.task"
 
   # Rewrite worktree .git reference for container-internal mount path.
@@ -473,6 +481,12 @@ worker_start() {
         bash "${script_dir}/post-gate.sh"; then
       echo "monitor: ERROR: post-gate.sh failed for bead ${bead_id} (reason: ${post_gate_reason})" >&2
     fi
+
+    # Final step: mark the worker as fully done so is-running can stop
+    # lying and let the reconciler drain the pool slot (wx-92md7). Written
+    # unconditionally — even a failed post-gate means the worker's pipeline
+    # is finished, no more work happens here.
+    : > "$done_marker"
   ) </dev/null >> "$monitor_log" 2>&1 &
 }
 
@@ -541,9 +555,22 @@ case "$METHOD" in
         # crash. Report "true" so gc doesn't treat it as "died during
         # startup" and retry in a loop. The background monitor handles
         # post-completion (collect, gate, post-gate, bead close).
+        #
+        # Stop lying once the monitor's .done marker appears so gc's pool
+        # reconciler can drain this slot (wx-92md7). Marker missing + exit=0
+        # means monitor is still running post-gate; keep the "true" lie so
+        # the container isn't treated as a startup crash.
         _gc_exit="$(podman inspect --format '{{.State.ExitCode}}' "$name" 2>/dev/null)" || _gc_exit=""
         if [[ "$_gc_exit" == "0" ]]; then
-          running="true"
+          # ##*worker- strips any prefix (bare 'worker-<bead>' or
+          # qualified '<city>-worker-<bead>') down to the bead id.
+          _gc_bead="${SESSION##*worker-}"
+          if [[ -n "$_gc_bead" && "$_gc_bead" != "$SESSION" && \
+                -f "${GC_WORKSPACE:-}/.wrapix/state/worker-${_gc_bead}.done" ]]; then
+            running="false"
+          else
+            running="true"
+          fi
         fi
       else
         _gc_sock="$(tmux_sock "$(role_name)")"
