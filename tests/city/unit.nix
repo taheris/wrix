@@ -2037,7 +2037,8 @@ in
       '';
 
   # Post-gate: auto-deploy path (low-risk + auto-deploy configured)
-  # Post-gate no longer merges — it nudges the judge and creates deploy beads.
+  # Post-gate no longer merges — it submits the merge request to the judge
+  # and creates deploy beads.
   city-post-gate-auto-deploy =
     runCommandLocal "city-post-gate-auto-deploy"
       {
@@ -2091,7 +2092,7 @@ in
         MOCK
         chmod +x "$MOCK_BIN/bd"
 
-        # Mock gc — record nudge calls
+        # Mock gc — record submit calls
         GC_LOG="$TMPDIR/gc.log"
         cat > "$MOCK_BIN/gc" << MOCK
         #!/bin/sh
@@ -2105,7 +2106,7 @@ in
         MOCK
         chmod +x "$MOCK_BIN/wrapix-notify"
 
-        # Run post-gate (no merge — just nudge judge + deploy bead)
+        # Run post-gate (no merge — just submit merge request to judge + deploy bead)
         PATH="$MOCK_BIN:$PATH" \
           GC_BEAD_ID=test-bead \
           GC_TERMINAL_REASON=approved \
@@ -2113,10 +2114,10 @@ in
           GC_CITY_NAME=test \
           bash "$POST_GATE" 2>&1
 
-        # Verify judge was nudged to merge
-        grep -q 'session nudge judge' "$GC_LOG" || { echo "FAIL: judge not nudged"; cat "$GC_LOG"; exit 1; }
-        grep -q 'test-bead' "$GC_LOG" || { echo "FAIL: nudge missing bead ID"; cat "$GC_LOG"; exit 1; }
-        echo "  PASS: judge nudged with bead ID"
+        # Verify judge received merge submit
+        grep -q 'session submit judge' "$GC_LOG" || { echo "FAIL: judge not submitted to"; cat "$GC_LOG"; exit 1; }
+        grep -q 'test-bead' "$GC_LOG" || { echo "FAIL: submit missing bead ID"; cat "$GC_LOG"; exit 1; }
+        echo "  PASS: judge submit carried bead ID"
 
         # Verify auto_deploy metadata was set (not human label)
         grep -q "auto_deploy=true" "$DEPLOY_ACTIONS" || { echo "FAIL: auto_deploy not set"; cat "$DEPLOY_ACTIONS"; exit 1; }

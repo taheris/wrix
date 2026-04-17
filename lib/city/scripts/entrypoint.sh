@@ -128,8 +128,12 @@ start_events_watcher() {
         continue
       fi
 
-      # Nudge the scout with event details
-      gc session nudge scout "Service container event: ${container_name} ${event_type}" 2>/dev/null || true
+      # submit (not nudge) so an auto-suspended scout wakes via ensureRunning;
+      # log failures and keep the watcher alive — it must outlive transient gc
+      # unavailability (startup races, scout session not yet created).
+      if ! gc session submit scout "Service container event: ${container_name} ${event_type}"; then
+        echo "entrypoint: events-watcher: submit to scout failed for event ${container_name} ${event_type}" >&2
+      fi
     done
   ) &
 }

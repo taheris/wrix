@@ -49,26 +49,28 @@ if [[ -z "$commit_range" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Step 2: Nudge the judge session with the commit range
+# Step 2: Submit review request to the judge session
+#
+# submit (not nudge) so the runtime auto-wakes a session_sleep-suspended
+# judge via ensureRunning; nudge is fenced out when the session is asleep.
 # ---------------------------------------------------------------------------
 
-NUDGE_MSG="Review bead $BEAD_ID — commit range: $commit_range"
-RENUDGE_INTERVAL="${GC_RENUDGE_INTERVAL:-60}"
+REVIEW_MSG="Review bead $BEAD_ID — commit range: $commit_range"
+RESUBMIT_INTERVAL="${GC_RENUDGE_INTERVAL:-60}"
 
-gc session nudge judge "$NUDGE_MSG"
+gc session submit judge "$REVIEW_MSG"
 
 # ---------------------------------------------------------------------------
 # Step 3: Poll bead metadata for review_verdict
 #
-# Re-nudge every RENUDGE_INTERVAL seconds so a judge session restart
-# (which changes the epoch) doesn't permanently fence out the nudge.
-# The nudge system deduplicates by agent+source+reference, so repeated
-# nudges are cheap — but a fresh nudge carries the current epoch.
+# Re-submit every RESUBMIT_INTERVAL seconds so a judge restart
+# (which changes the epoch) doesn't fence out the request, and so a
+# session that auto-suspended during the poll wakes back up.
 # ---------------------------------------------------------------------------
 
 elapsed=0
 verdict=""
-_since_nudge=0
+_since_submit=0
 
 while [[ "$elapsed" -lt "$POLL_TIMEOUT" ]]; do
   # best-effort: verdict may not be set yet (polling)
@@ -84,12 +86,14 @@ while [[ "$elapsed" -lt "$POLL_TIMEOUT" ]]; do
 
   sleep "$POLL_INTERVAL"
   elapsed=$((elapsed + POLL_INTERVAL))
-  _since_nudge=$((_since_nudge + POLL_INTERVAL))
+  _since_submit=$((_since_submit + POLL_INTERVAL))
 
-  if (( _since_nudge >= RENUDGE_INTERVAL )); then
-    echo "gate: re-nudging judge for bead $BEAD_ID" >&2
-    gc session nudge judge "$NUDGE_MSG" 2>/dev/null || true
-    _since_nudge=0
+  if (( _since_submit >= RESUBMIT_INTERVAL )); then
+    echo "gate: re-submitting to judge for bead $BEAD_ID" >&2
+    if ! gc session submit judge "$REVIEW_MSG"; then
+      echo "gate: re-submit failed, will retry in ${RESUBMIT_INTERVAL}s" >&2
+    fi
+    _since_submit=0
   fi
 done
 

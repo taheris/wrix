@@ -142,38 +142,51 @@ let
             sleep 600
             ;;
           judge|judge*)
-            # Simulate Claude Code's hook-driven nudge drain.
-            # Read UserPromptSubmit commands from the merged settings
-            # (gc's hooks/claude.json + Nix env, merged by provider.sh).
-            # This exercises the real production path: hooks → drain → act.
-            _settings="$HOME/.claude/settings.json"
+            # gate.sh/post-gate.sh deliver review requests via gc session submit,
+            # which routes through exec provider → tmux send-keys into this pane.
+            # The mock observes its own pane via capture-pane — the same signal a
+            # live Claude Code session would receive as a user prompt.
+            _sock="/workspace/.wrapix/tmux/''${GC_AGENT}.sock"
+            _seen="/tmp/judge-seen-beads"
+            : > "$_seen"
             while true; do
-              while IFS= read -r _cmd; do
-                [[ -z "$_cmd" ]] && continue
-                _out="$(eval "$_cmd" 2>&1)" || true
-                while IFS= read -r line; do
-                  case "$line" in
-                    *"Review bead "*)
-                      echo "JUDGE: received nudge via drain: $line"
-                      rest="''${line#*Review bead }"
-                      bead_id="''${rest%% —*}"
-                      commit_range="''${rest##*commit range: }"
-                      sleep 3
-                      verdict="approve"
-                      new_sh="$(git diff "$commit_range" --name-only --diff-filter=A -- '*.sh')"
-                      for f in $new_sh; do
-                        content="$(git show "''${commit_range##*..}:$f")" || continue
-                        if ! echo "$content" | head -5 | grep -q 'set -euo pipefail'; then
-                          verdict="reject"
-                          bd update "$bead_id" --notes "Judge: SH-1 violated in $f" || true
-                          break
-                        fi
-                      done
-                      bd update "$bead_id" --set-metadata "review_verdict=$verdict" || true
-                      ;;
-                  esac
-                done <<< "$_out"
-              done < <(jq -r '.hooks.UserPromptSubmit[]?.hooks[]?.command // empty' "$_settings")
+              # -J joins wrapped lines so long "Review bead ... commit range: ..."
+              # submissions are not split by the 80-column pane width.
+              _pane="$(tmux -S "$_sock" capture-pane -t "$GC_AGENT" -p -J -S -200 2>/dev/null || echo "")"
+              while IFS= read -r line; do
+                [[ -z "$line" ]] && continue
+                # Match only direct "Review bead ..." submits, not echoed
+                # instances (e.g. "JUDGE: received submit via pane: Review ...").
+                case "$line" in
+                  "Review bead "*)
+                    rest="''${line#Review bead }"
+                    bead_id="''${rest%% —*}"
+                    commit_range="''${rest##*commit range: }"
+                    # Dedupe by bead_id so re-submits during the same pane
+                    # retention window don't double-process.
+                    if grep -qxF "$bead_id" "$_seen"; then
+                      continue
+                    fi
+                    echo "$bead_id" >> "$_seen"
+                    echo "JUDGE: received submit via pane: $line"
+                    sleep 3
+                    verdict="approve"
+                    # git diff can fail on a bogus commit range (probe tests,
+                    # malformed submissions); default to empty so the mock
+                    # survives under set -e.
+                    new_sh="$(git diff "$commit_range" --name-only --diff-filter=A -- '*.sh' 2>/dev/null)" || new_sh=""
+                    for f in $new_sh; do
+                      content="$(git show "''${commit_range##*..}:$f")" || continue
+                      if ! echo "$content" | head -5 | grep -q 'set -euo pipefail'; then
+                        verdict="reject"
+                        bd update "$bead_id" --notes "Judge: SH-1 violated in $f" || true
+                        break
+                      fi
+                    done
+                    bd update "$bead_id" --set-metadata "review_verdict=$verdict" || true
+                    ;;
+                esac
+              done <<< "$_pane"
               sleep 2
             done
             ;;
@@ -307,6 +320,33 @@ let
       FAIL_FAST=false
     fi
 
+    # Scenario selector. TEST_SCENARIOS is a comma-separated list of
+    # scenario names; "all" (default) runs every scenario. Infrastructure
+    # steps (pre-cleanup, workspace setup, image load) always run.
+    SCENARIOS="''${TEST_SCENARIOS:-all}"
+    SCENARIOS_WITH_GC="happy-path reconciler-sling"
+    scenario_enabled() {
+      local name="$1"
+      case ",$SCENARIOS," in
+        *",all,"*|*",$name,"*) return 0 ;;
+      esac
+      return 1
+    }
+    any_gc_scenario() {
+      local s
+      for s in $SCENARIOS_WITH_GC; do
+        if scenario_enabled "$s"; then return 0; fi
+      done
+      return 1
+    }
+    # reconciler-sling reuses the gc boot from happy-path; running it
+    # alone would have no gc to sling against. Exit before the cleanup
+    # trap is installed so the error is clean.
+    if scenario_enabled reconciler-sling && ! scenario_enabled happy-path; then
+      echo "FATAL: reconciler-sling requires happy-path (shared gc boot) — include both in TEST_SCENARIOS" >&2
+      exit 2
+    fi
+
     dump_diagnostics() {
       echo ""
       echo "--- Diagnostics ---"
@@ -334,11 +374,19 @@ let
           done
         fi
       fi
-      # Mock claude logs written to host-visible .beads/ dir
-      for logf in "$WS"/.beads/mock-claude-*.log; do
+      # Mock claude logs written to host-visible .beads/ dir (both top-level
+      # and per-container beads-staging mounts).
+      for logf in "$WS"/.beads/mock-claude-*.log "$WS"/.gc/beads-staging/*/mock-claude-*.log; do
         [ -f "$logf" ] || continue
-        echo "  $(basename "$logf"):"
+        echo "  $logf:"
         tail -30 "$logf" | sed 's/^/    /'
+      done
+      # Capture persistent-role tmux panes — shows what gc submitted via send-keys.
+      for role in judge mayor scout; do
+        local sock="$WS/.wrapix/tmux/$role.sock"
+        [ -S "$sock" ] || continue
+        echo "  tmux pane ($role, full scrollback):"
+        tmux -S "$sock" capture-pane -t "$role" -p -S - 2>/dev/null | sed 's/^/    /' || echo "    (capture failed)"
       done
       if [ -n "''${BEAD_ID:-}" ]; then
         echo "  bead $BEAD_ID metadata:"
@@ -473,7 +521,7 @@ let
     chmod +x "$_LIVE_DIR/live"
     export PATH="$_LIVE_DIR:$PATH"
 
-    echo "=== Gas City Integration Test ==="
+    echo "=== Gas City Integration Test (scenarios: $SCENARIOS) ==="
 
     # ================================================================
     # Pre-cleanup: remove stale state from previous runs
@@ -576,6 +624,7 @@ let
     }
     subtest "Set up workspace" setup_workspace
 
+    if scenario_enabled happy-path; then
     # ================================================================
     # happy-path: mayor + scout + judge → worker → judge merge
     # ================================================================
@@ -698,31 +747,35 @@ let
     subtest "Wait for scout container to start" \
       poll_until 'test -S "$WS/.wrapix/tmux/scout.sock"' 30
 
-    # Shared tmux socket: gc session nudge from host via provider.sh → shared socket
-    verify_gc_nudge_via_socket() {
-      GC_CITY="$WS/.gc/home" gc session nudge --delivery=immediate scout "host-nudge-test"
-      poll_until 'tmux -S "$WS/.wrapix/tmux/scout.sock" capture-pane -t scout -p | grep -q "host-nudge-test"' 10
+    # Shared tmux socket: gc session submit from host via provider.sh → shared socket.
+    # submit is the live-path call (gate.sh, post-gate.sh, entrypoint.sh all
+    # use submit so a sleeping session auto-wakes via ensureRunning).
+    verify_gc_submit_via_socket() {
+      GC_CITY="$WS/.gc/home" gc session submit scout "host-submit-test"
+      poll_until 'tmux -S "$WS/.wrapix/tmux/scout.sock" capture-pane -t scout -p | grep -q "host-submit-test"' 10
     }
-    subtest "gc session nudge uses shared tmux socket from host" verify_gc_nudge_via_socket
+    subtest "gc session submit uses shared tmux socket from host" verify_gc_submit_via_socket
 
-    # Cross-container: mayor calls gc session nudge from inside its container.
-    # Uses default delivery (wait-idle) — the production path that enqueues
-    # to .gc/nudges/ (acquiring state.lock).  For exec providers, queued
-    # nudges are drained by Claude Code's session hook (gc nudge drain);
-    # we simulate that second half here.
-    verify_cross_container_gc_nudge() {
+    # Cross-container: mayor calls gc session submit from inside its container.
+    # Verifies the shared-socket + .gc-symlink setup lets gc inside mayor reach
+    # scout's tmux pane. submit with default intent injects via send-keys when
+    # the target is idle (the mock scout runs `sleep 600`, not a real agent).
+    verify_cross_container_gc_submit() {
       podman exec "''${CITY_NAME}-mayor" \
-        gc session nudge scout "cross-container-nudge-test"
-      # Drain from inside the scout container — the live path:
-      # Claude Code's session hook runs gc nudge drain inside the agent container.
-      local drained
-      drained="$(podman exec "''${CITY_NAME}-scout" gc nudge drain scout 2>&1)"
-      echo "$drained" | grep -q "cross-container-nudge-test" || {
-        echo "FAIL: drained output missing nudge message: $drained"
-        return 1
-      }
+        gc session submit scout "cross-container-submit-test"
+      poll_until 'tmux -S "$WS/.wrapix/tmux/scout.sock" capture-pane -t scout -p | grep -q "cross-container-submit-test"' 10
     }
-    subtest "gc session nudge works from inside mayor container" verify_cross_container_gc_nudge
+    subtest "gc session submit works from inside mayor container" verify_cross_container_gc_submit
+
+    # gate.sh submits "Review bead ..." to judge from the host-side monitor
+    # pipeline. The judge mock reads its own pane to observe submissions, which
+    # requires submit to actually reach the pane. Exercise this path directly
+    # with a marker that doesn't trigger the mock's review handler.
+    verify_gc_submit_to_judge() {
+      GC_CITY="$WS/.gc/home" gc session submit judge "judge-submit-probe"
+      poll_until 'tmux -S "$WS/.wrapix/tmux/judge.sock" capture-pane -t judge -p -S -200 | grep -q "judge-submit-probe"' 30
+    }
+    subtest "gc session submit reaches judge pane" verify_gc_submit_to_judge
 
     # .gc must be writable from inside containers (wx-9gm3t)
     verify_gc_writable_scout() {
@@ -821,12 +874,12 @@ let
     subtest "Worker claude has --dangerously-skip-permissions, config, and tmux (wx-cswtw, wx-m5sd6)" verify_worker_agent_setup
 
     # Provider monitor runs gate.sh after worker-collect sets commit_range.
-    # gate.sh nudges judge → mock judge reads nudge, diffs, approves → gate returns 0.
+    # gate.sh submits review to judge → mock judge reads it, diffs, approves → gate returns 0.
     subtest "Wait for judge approval (via monitor gate pipeline)" \
       poll_until "bd show $BEAD_ID --json 2>/dev/null | jq -r '.[0].metadata.review_verdict // empty' 2>/dev/null | grep -q approve" 60
 
     # Monitor pipeline: gate approved → post-gate.sh fires → closes bead,
-    # creates deploy bead. Mock judge only handles "Review bead" nudges.
+    # creates deploy bead. Mock judge only handles "Review bead" submits.
     subtest "Wait for post-gate pipeline (deploy bead created)" \
       poll_until 'bd list --json 2>/dev/null | jq -e "[.[] | select(.title | startswith(\"Deploy:\"))] | length > 0"' 120
 
@@ -839,8 +892,9 @@ let
     }
     subtest "Worker logs persist in .gc/logs/worker (wx-iy1vt)" verify_worker_host_logs
 
-    # Judge merge — post-gate nudges judge via gc session nudge. Called
-    # manually since the mock judge does not handle merge nudges.
+    # Judge merge — post-gate submits the merge request to judge via
+    # gc session submit. Called manually since the mock judge does not
+    # handle merge requests.
     judge_merge_phase1() {
       GC_BEAD_ID="$BEAD_ID" GC_WORKSPACE="$WS" live judge-merge.sh
     }
@@ -867,7 +921,9 @@ let
       ! git branch | grep gc-
     }
     subtest "Verify branch cleaned up" verify_branch_cleaned
+    fi  # end happy-path
 
+    if scenario_enabled reconciler-sling; then
     # ================================================================
     # reconciler-sling: reconciler-driven worker start (wx-y9qco)
     #
@@ -909,7 +965,9 @@ let
       git -C "$WS" branch -D "$RBEAD" 2>/dev/null || true
     }
     subtest "Clean up reconciler test" cleanup_reconciler_test
+    fi  # end reconciler-sling
 
+    if any_gc_scenario; then
     # ================================================================
     # Stop gc — remaining scenarios don't need it (saves resources)
     # ================================================================
@@ -950,7 +1008,9 @@ let
       save GC_PID
     }
     subtest "Stop gc after happy-path" stop_gc
+    fi  # end any_gc_scenario
 
+    if scenario_enabled merge-conflict-reject; then
     # ================================================================
     # merge-conflict-reject: rebase fails, reject_to_worker
     # ================================================================
@@ -1006,7 +1066,9 @@ let
 
     subtest "Verify old worktree cleaned up after rejection" \
       test ! -d "$WS/.wrapix/worktree/$BEAD2"
+    fi  # end merge-conflict-reject
 
+    if scenario_enabled escalation-non-approved; then
     # ================================================================
     # escalation-non-approved: convergence ends with non-approved reason
     # ================================================================
@@ -1061,7 +1123,9 @@ let
       bd show "$BEAD3" --json 2>/dev/null | jq -r '.[0].labels[]' 2>/dev/null | grep -q "human"
     }
     subtest "Verify escalation bead flagged for human review" verify_escalation_human_label
+    fi  # end escalation-non-approved
 
+    if scenario_enabled recovery-monitor-died; then
     # ================================================================
     # recovery-monitor-died: monitor died, verify recovery.sh picks up
     # ================================================================
@@ -1120,7 +1184,9 @@ let
       git -C "$WS" branch -D "$BEAD4" 2>/dev/null || true
     }
     subtest "Clean up recovery worktree" cleanup_recovery
+    fi  # end recovery-monitor-died
 
+    if scenario_enabled recovery-empty-branch; then
     # ================================================================
     # recovery-empty-branch: worker exited without committing
     # ================================================================
@@ -1166,7 +1232,9 @@ let
       git -C "$WS" branch -D "$BEAD5" 2>/dev/null || true
     }
     subtest "Clean up no-op worktree" cleanup_noop
+    fi  # end recovery-empty-branch
 
+    if scenario_enabled worker-setup-collect; then
     # ================================================================
     # worker-setup-collect: worker-setup.sh and worker-collect.sh
     # ================================================================
@@ -1236,7 +1304,9 @@ let
       done
     }
     subtest "Clean up worker-setup-collect" cleanup_phase6
+    fi  # end worker-setup-collect
 
+    if scenario_enabled rebase-success; then
     # ================================================================
     # rebase-success: main advanced, rebase works, merge
     # ================================================================
@@ -1314,13 +1384,15 @@ let
       ! git -C "$WS" branch | grep "$BEAD8"
     }
     subtest "Verify rebase branch cleaned up" verify_rebase_branch_cleaned
+    fi  # end rebase-success
 
+    if scenario_enabled gate-approve-reject; then
     # ================================================================
     # gate-approve-reject: approve and reject verdicts
-    # gate.sh calls real gc session nudge — no stubs (wx-9gm3t)
+    # gate.sh calls real gc session submit — no stubs (wx-9gm3t)
     # ================================================================
 
-    # Restart gc daemon so gate.sh's gc session nudge uses the live path.
+    # Restart gc daemon so gate.sh's gc session submit uses the live path.
     restart_gc_for_gate() {
       podman rm -f "''${CITY_NAME}-mayor" "''${CITY_NAME}-scout" "''${CITY_NAME}-judge" 2>/dev/null || true
       setsid env PATH="$LIVE_PATH" GC_NUDGE_IDLE_TIMEOUT=1 "$WS/.gc/scripts/entrypoint.sh" >"$WS/gc-gate.log" 2>&1 &
@@ -1363,7 +1435,7 @@ let
         bash "$WS/.gc/scripts/gate.sh" 2>&1 || exit_code=$?
       [ "$exit_code" -eq 0 ] || { echo "FAIL: gate should exit 0 on approve (got: $exit_code)"; return 1; }
     }
-    subtest "Gate exits 0 — judge reads nudge, diffs, approves (wx-ha7ff)" verify_gate_approve
+    subtest "Gate exits 0 — judge reads submit, diffs, approves (wx-ha7ff)" verify_gate_approve
 
     setup_gate_reject() {
       bd create --title="Gate reject test" --type=task --priority=2
@@ -1390,27 +1462,27 @@ let
         bash "$WS/.gc/scripts/gate.sh" 2>&1 || exit_code=$?
       [ "$exit_code" -eq 1 ] || { echo "FAIL: gate should exit 1 on reject (got: $exit_code)"; return 1; }
     }
-    subtest "Gate exits 1 — judge reads nudge, diffs bad.sh, rejects (wx-ha7ff)" verify_gate_reject
+    subtest "Gate exits 1 — judge reads submit, diffs bad.sh, rejects (wx-ha7ff)" verify_gate_reject
 
-    setup_gate_renudge() {
-      bd create --title="Gate renudge test" --type=task --priority=2
-      BEAD11=$(bd list --json --title "Gate renudge test" 2>/dev/null | jq -r '.[0].id')
+    setup_gate_resubmit() {
+      bd create --title="Gate resubmit test" --type=task --priority=2
+      BEAD11=$(bd list --json --title "Gate resubmit test" 2>/dev/null | jq -r '.[0].id')
       [ -n "$BEAD11" ] && [ "$BEAD11" != "null" ]
       bd update "$BEAD11" --status=in_progress
-      git add .beads/ && git diff --cached --quiet || git commit -m "beads: gate renudge setup"
+      git add .beads/ && git diff --cached --quiet || git commit -m "beads: gate resubmit setup"
       local merge_base
       merge_base="$(git rev-parse HEAD)"
-      git checkout -b gate-renudge-branch
-      printf '#!/usr/bin/env bash\nset -euo pipefail\necho ok\n' > fix-renudge.sh
-      git add fix-renudge.sh
-      git commit -m "add clean script for renudge"
+      git checkout -b gate-resubmit-branch
+      printf '#!/usr/bin/env bash\nset -euo pipefail\necho ok\n' > fix-resubmit.sh
+      git add fix-resubmit.sh
+      git commit -m "add clean script for resubmit"
       git checkout main
-      bd update "$BEAD11" --set-metadata "commit_range=''${merge_base}..gate-renudge-branch"
+      bd update "$BEAD11" --set-metadata "commit_range=''${merge_base}..gate-resubmit-branch"
       save BEAD11
     }
-    subtest "Set up gate re-nudge test (wx-ha7ff)" setup_gate_renudge
+    subtest "Set up gate re-submit test (wx-ha7ff)" setup_gate_resubmit
 
-    verify_gate_renudge() {
+    verify_gate_resubmit() {
       local gate_log
       gate_log="$(mktemp)"
       local exit_code=0
@@ -1419,10 +1491,10 @@ let
         GC_RENUDGE_INTERVAL=2 \
         bash "$WS/.gc/scripts/gate.sh" >"$gate_log" 2>&1 || exit_code=$?
       [ "$exit_code" -eq 0 ] || { echo "FAIL: gate should exit 0 (got: $exit_code)"; cat "$gate_log"; return 1; }
-      grep -q "re-nudging" "$gate_log" || { echo "FAIL: expected re-nudge log line"; cat "$gate_log"; return 1; }
+      grep -q "re-submitting" "$gate_log" || { echo "FAIL: expected re-submit log line"; cat "$gate_log"; return 1; }
       rm -f "$gate_log"
     }
-    subtest "Gate re-nudges judge during poll (wx-ha7ff)" verify_gate_renudge
+    subtest "Gate re-submits to judge during poll (wx-ha7ff)" verify_gate_resubmit
 
     # Stop gc after gate tests
     stop_gc_after_gate() {
@@ -1448,7 +1520,9 @@ let
       save GC_PID
     }
     subtest "Stop gc after gate tests" stop_gc_after_gate
+    fi  # end gate-approve-reject
 
+    if scenario_enabled dispatch-cooldown; then
     # ================================================================
     # dispatch-cooldown: cooldown-aware worker scale check
     # ================================================================
@@ -1508,7 +1582,9 @@ let
       bd close "$BEAD_DISPATCH" 2>/dev/null || true
     }
     subtest "Clean up dispatch test" cleanup_dispatch
+    fi  # end dispatch-cooldown
 
+    if scenario_enabled post-gate-close-bead; then
     # ================================================================
     # post-gate-close-bead: approved convergence closes work bead
     # ================================================================
@@ -1539,7 +1615,9 @@ let
       [ "$status" = "closed" ] || { echo "FAIL: bead status=$status, expected closed"; return 1; }
     }
     subtest "Verify post-gate closed work bead" verify_post_gate_closed_bead
+    fi  # end post-gate-close-bead
 
+    if scenario_enabled retry-judge-notes; then
     # ================================================================
     # retry-judge-notes: task file includes judge rejection notes
     # ================================================================
@@ -1575,7 +1653,9 @@ let
       git -C "$WS" branch -D "$BEAD12" 2>/dev/null || true
     }
     subtest "Clean up retry-judge-notes" cleanup_phase10
+    fi  # end retry-judge-notes
 
+    if scenario_enabled recovery-orphan-worktree; then
     # ================================================================
     # recovery-orphan-worktree: closed bead → recovery cleans worktree
     # ================================================================
@@ -1610,7 +1690,9 @@ let
       ! git -C "$WS" branch | grep "$BEAD13"
     }
     subtest "Verify orphaned branch cleaned up by recovery" verify_orphan_branch_cleaned
+    fi  # end recovery-orphan-worktree
 
+    if scenario_enabled phantom-dog-suppressed; then
     # ================================================================
     # phantom-dog-suppressed: dog agent max=0 override (wx-m7a1d)
     #
@@ -1631,7 +1713,9 @@ let
       fi
     }
     subtest "Dog agent override has max_active_sessions=0 (wx-m7a1d)" verify_no_phantom_dog
+    fi  # end phantom-dog-suppressed
 
+    if scenario_enabled provider-stripped-from-config; then
     # ================================================================
     # provider-stripped-from-config: workspace.provider removed (wx-y4tx2)
     #
@@ -1680,7 +1764,9 @@ let
       fi
     }
     subtest "gc home city.toml has no workspace.provider (wx-y4tx2)" verify_gc_home_no_workspace_provider
+    fi  # end provider-stripped-from-config
 
+    if scenario_enabled provider-worker-name-routing; then
     # ================================================================
     # provider-worker-name-routing: agent_template detection (wx-aqe4z)
     #
@@ -1778,7 +1864,9 @@ let
       git -C "$WS" branch -D "$test_bead" 2>/dev/null || true
     }
     subtest "Name-based worker detection still works (wx-aqe4z)" verify_name_based_worker_still_works
+    fi  # end provider-worker-name-routing
 
+    if scenario_enabled provider-extracts-issue; then
     # ================================================================
     # provider-extracts-issue: issue field from start JSON (wx-fsqcz)
     #
@@ -1830,7 +1918,9 @@ let
       git -C "$WS" branch -D "$test_bead" 2>/dev/null || true
     }
     subtest "Provider extracts issue from start JSON (wx-fsqcz)" verify_provider_extracts_issue
+    fi  # end provider-extracts-issue
 
+    if scenario_enabled agent-max-sessions; then
     # ================================================================
     # agent-max-sessions: pool agents have max_active_sessions (wx-65bws)
     #
@@ -1860,7 +1950,9 @@ let
       fi
     }
     subtest "Agent templates have max_active_sessions (wx-65bws)" verify_pool_agent_max_sessions
+    fi  # end agent-max-sessions
 
+    if scenario_enabled config-drift-kills-stale; then
     # ================================================================
     # config-drift-kills-stale: entrypoint kills stale containers (wx-i42sb)
     #
@@ -1957,7 +2049,9 @@ let
       done
     }
     subtest "Config drift: entrypoint kills stale containers (wx-i42sb)" config_drift_restart
+    fi  # end config-drift-kills-stale
 
+    if scenario_enabled worker-detection-bead-metadata; then
     # ================================================================
     # worker-detection-bead-metadata: s-wx-* session names (wx-pq03c)
     #
@@ -2004,7 +2098,9 @@ let
       git -C "$WS" branch -D "$test_bead" 2>/dev/null || true
     }
     subtest "Provider detects worker from bead metadata for s-wx-* names (wx-pq03c)" verify_worker_detection_by_bead_metadata
+    fi  # end worker-detection-bead-metadata
 
+    if scenario_enabled gate-logging; then
     # ================================================================
     # gate-logging: poll progress appears on stderr (wx-lpucs)
     # ================================================================
@@ -2029,7 +2125,9 @@ let
       rm -f "$stderr_file"
     }
     subtest "Gate.sh emits poll progress to stderr (wx-lpucs)" verify_gate_logging
+    fi  # end gate-logging
 
+    if scenario_enabled gate-configurable-timeout; then
     # ================================================================
     # gate-configurable-timeout: GC_COMMIT_RANGE_TIMEOUT (wx-kilk0)
     # ================================================================
@@ -2049,7 +2147,9 @@ let
       [ "$elapsed" -lt 15 ] || { echo "FAIL: gate took ''${elapsed}s — should respect GC_COMMIT_RANGE_TIMEOUT=4"; return 1; }
     }
     subtest "Gate respects GC_COMMIT_RANGE_TIMEOUT (wx-kilk0)" verify_configurable_commit_range_timeout
+    fi  # end gate-configurable-timeout
 
+    if scenario_enabled worker-prestart-guard; then
     # ================================================================
     # worker-prestart-guard: duplicate start is no-op (wx-tvj7o)
     # ================================================================
@@ -2100,7 +2200,9 @@ let
       git -C "$WS" branch -D "$test_bead" 2>/dev/null || true
     }
     subtest "Worker pre-start guard prevents double-start (wx-tvj7o)" verify_worker_prestart_guard
+    fi  # end worker-prestart-guard
 
+    if scenario_enabled stopped-container-preserved; then
     # ================================================================
     # stopped-container-preserved: podman logs available (wx-4041e)
     # ================================================================
@@ -2143,6 +2245,7 @@ let
       git -C "$WS" branch -D "$test_bead" 2>/dev/null || true
     }
     subtest "Stopped worker container preserved for log inspection (wx-4041e)" verify_stopped_container_preserved
+    fi  # end stopped-container-preserved
   '';
 
 in

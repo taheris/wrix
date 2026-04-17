@@ -59,7 +59,7 @@ for d in formulas scripts prompts; do
 done
 
 # gc needs these writable dirs
-mkdir -p "$GC_HOME/.gc/cache" "$GC_HOME/.gc/system" "$GC_HOME/.gc/runtime"
+mkdir -p "$GC_HOME/.gc/cache" "$GC_HOME/.gc/system" "$GC_HOME/.gc/runtime" "$GC_HOME/.gc/nudges"
 touch "$GC_HOME/.gc/events.jsonl"
 
 # bd requires a git repo at the working directory root.  Without this,
