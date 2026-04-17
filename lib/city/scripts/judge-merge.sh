@@ -1,24 +1,59 @@
 #!/usr/bin/env bash
-# Judge merge — merges an approved worker branch to main.
+# Judge finalize — writes review verdict, merges on approve, cleans up.
 #
-# Attempts fast-forward merge first. If main has advanced, rebases the
-# branch onto main and re-runs prek before merging. Rejects back to a
-# new worker iteration on rebase conflicts or prek failures.
+# Sole writer of review_verdict metadata. Called by the judge formula's
+# finalize step in both approve and reject paths so the verdict, the
+# merge, and the worktree/branch cleanup can never drift apart (wx-mc7k0).
 #
-# Always cleans up the worktree and branch, whether merged or rejected.
+# Usage:
+#   judge-merge.sh approve
+#   judge-merge.sh reject <reason>
+#
+# On approve: records review_verdict=approve, then attempts fast-forward
+# merge. If main has advanced, rebases the branch onto main and re-runs
+# prek before merging. On rebase conflicts or prek failures, converts the
+# verdict to reject (see reject()) and exits 1 so convergence iterates.
+#
+# On reject: records review_verdict=reject and merge_failure=<reason>,
+# reopens the bead. No merge attempted.
+#
+# EXIT trap always cleans up worktree and branch — guaranteed regardless
+# of which exit path fires.
 #
 # Exit codes:
-#   0 — merged successfully
-#   1 — rejected (conflicts or prek failure, metadata set on bead)
-#   2 — fatal error (missing env, bad state)
+#   0 — approve merged, or reject recorded
+#   1 — approve attempted but merge failed (verdict converted to reject)
+#   2 — fatal error (missing env, bad args, bad state)
 #
 # Environment variables:
-#   GC_BEAD_ID    — bead to merge (required)
+#   GC_BEAD_ID    — bead to finalize (required)
 #   GC_WORKSPACE  — host workspace path (required)
 set -euo pipefail
 
 BEAD_ID="${GC_BEAD_ID:?judge-merge.sh requires GC_BEAD_ID}"
 WORKSPACE="${GC_WORKSPACE:?judge-merge.sh requires GC_WORKSPACE}"
+
+verdict="${1:-}"
+case "$verdict" in
+  approve)
+    reject_reason=""
+    ;;
+  reject)
+    reject_reason="${2:-}"
+    if [[ -z "$reject_reason" ]]; then
+      echo "judge-merge: 'reject' mode requires a reason string" >&2
+      exit 2
+    fi
+    ;;
+  "")
+    echo "judge-merge: missing verdict arg (expected: approve | reject <reason>)" >&2
+    exit 2
+    ;;
+  *)
+    echo "judge-merge: unknown verdict '$verdict' (expected: approve | reject <reason>)" >&2
+    exit 2
+    ;;
+esac
 
 BRANCH="${BEAD_ID}"
 WORKTREE="${WORKSPACE}/.wrapix/worktree/${BRANCH}"
@@ -68,12 +103,27 @@ reject() {
     echo "judge-merge: ERROR: failed to set review_verdict=reject on $BEAD_ID" >&2
   bd update "$BEAD_ID" --set-metadata "merge_failure=${reason}" ||
     echo "judge-merge: ERROR: failed to set merge_failure on $BEAD_ID" >&2
-  bd update "$BEAD_ID" --status=open --notes="Judge: merge rejected — ${reason}" ||
+  bd update "$BEAD_ID" --status=open --notes="Judge rejected — ${reason}" ||
     echo "judge-merge: ERROR: failed to reopen $BEAD_ID" >&2
 }
 
 # ---------------------------------------------------------------------------
-# Merge
+# Explicit reject — judge made a style-rule call; record and cleanup only
+# ---------------------------------------------------------------------------
+
+if [[ "$verdict" == "reject" ]]; then
+  reject "$reject_reason"
+  echo "judge-merge: recorded reject for $BEAD_ID — $reject_reason"
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Approve — attempt merge first, then record verdict
+#
+# Verdict is written AFTER the merge succeeds so gate.sh, which polls
+# review_verdict=approve, only observes approve once the branch has
+# actually landed. This removes the race where downstream tests (and
+# post-gate.sh) see approve before the merge commit exists.
 # ---------------------------------------------------------------------------
 
 # Free the branch from the worktree — git won't allow checkout of a branch
@@ -87,8 +137,18 @@ fi
 
 git -C "$WORKSPACE" checkout main
 
+# Writes review_verdict=approve + approval note. Called from every merge
+# success path so the metadata is never set until main has advanced.
+record_approve() {
+  bd update "$BEAD_ID" --set-metadata "review_verdict=approve" ||
+    echo "judge-merge: ERROR: failed to set review_verdict=approve on $BEAD_ID" >&2
+  bd update "$BEAD_ID" --notes="Judge approved — merged $BRANCH" ||
+    echo "judge-merge: WARNING: failed to write approval note on $BEAD_ID" >&2
+}
+
 # Try fast-forward first (non-zero = not fast-forwardable, not an error)
 if git -C "$WORKSPACE" merge --ff-only "$BRANCH" 2>/dev/null; then
+  record_approve
   echo "judge-merge: fast-forward merged $BRANCH"
   exit 0
 fi
@@ -135,5 +195,6 @@ if ! git -C "$WORKSPACE" merge --ff-only "$BRANCH" 2>/dev/null; then
   exit 1
 fi
 
+record_approve
 echo "judge-merge: rebased and merged $BRANCH"
 exit 0

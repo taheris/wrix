@@ -170,20 +170,32 @@ let
                     echo "$bead_id" >> "$_seen"
                     echo "JUDGE: received submit via pane: $line"
                     sleep 3
-                    verdict="approve"
-                    # git diff can fail on a bogus commit range (probe tests,
-                    # malformed submissions); default to empty so the mock
-                    # survives under set -e.
+                    # Decide verdict by scanning newly-added .sh files for SH-1
+                    # (missing 'set -euo pipefail'). git diff can fail on a bogus
+                    # commit range (probe tests, malformed submissions); default
+                    # to empty so the mock survives under set -e.
+                    reject_reason=""
                     new_sh="$(git diff "$commit_range" --name-only --diff-filter=A -- '*.sh' 2>/dev/null)" || new_sh=""
                     for f in $new_sh; do
                       content="$(git show "''${commit_range##*..}:$f")" || continue
                       if ! echo "$content" | head -5 | grep -q 'set -euo pipefail'; then
-                        verdict="reject"
-                        bd update "$bead_id" --notes "Judge: SH-1 violated in $f" || true
+                        reject_reason="SH-1 violated in $f"
                         break
                       fi
                     done
-                    bd update "$bead_id" --set-metadata "review_verdict=$verdict" || true
+                    # judge-merge.sh is the sole writer of review_verdict. The
+                    # approve path also merges and cleans up the worktree and
+                    # branch; the reject path records reason metadata and
+                    # reopens the bead.
+                    if [[ -n "$reject_reason" ]]; then
+                      GC_BEAD_ID="$bead_id" GC_WORKSPACE=/workspace \
+                        bash /workspace/.gc/scripts/judge-merge.sh reject "$reject_reason" ||
+                        echo "JUDGE: judge-merge.sh reject failed for $bead_id" >&2
+                    else
+                      GC_BEAD_ID="$bead_id" GC_WORKSPACE=/workspace \
+                        bash /workspace/.gc/scripts/judge-merge.sh approve ||
+                        echo "JUDGE: judge-merge.sh approve failed for $bead_id (may be a gate-only test without a live branch)" >&2
+                    fi
                     ;;
                 esac
               done <<< "$_pane"
@@ -892,13 +904,10 @@ let
     }
     subtest "Worker logs persist in .gc/logs/worker (wx-iy1vt)" verify_worker_host_logs
 
-    # Judge merge — post-gate submits the merge request to judge via
-    # gc session submit. Called manually since the mock judge does not
-    # handle merge requests.
-    judge_merge_phase1() {
-      GC_BEAD_ID="$BEAD_ID" GC_WORKSPACE="$WS" live judge-merge.sh
-    }
-    subtest "Judge merges approved changes" judge_merge_phase1
+    # judge-merge.sh approve already ran inside the mock judge during the
+    # review window — it writes review_verdict=approve only after main has
+    # advanced, so by the time gate.sh returns, the branch is merged and
+    # the worktree is cleaned up. No manual merge step here.
 
     check_human_deploy() {
       human_list=$(bd human list 2>/dev/null)
@@ -907,7 +916,10 @@ let
     subtest "Director sees deploy bead in bd human" check_human_deploy
 
     verify_merge() {
-      git log --oneline | grep -q fix
+      # --grep avoids pipefail+SIGPIPE when grep -q short-circuits
+      local matches
+      matches="$(git -C "$WS" log --grep=fix --oneline)"
+      [ -n "$matches" ]
     }
     subtest "Verify merge landed on main" verify_merge
 
@@ -1039,16 +1051,16 @@ let
         git worktree add "$wt" "$BEAD2"
       (cd "$wt" && echo "fix applied v2" > fix.txt && git add fix.txt && git commit -m "fix: resolve second error")
       GC_BEAD_ID="$BEAD2" GC_WORKSPACE="$WS" live worker-collect.sh
-      bd update "$BEAD2" --set-metadata "review_verdict=approve"
       bd update "$BEAD2" --status=in_progress
     }
     subtest "Simulate worker commit for second bead" simulate_worker2
 
-    # judge-merge.sh exits 1 on rejection (conflicts) — verify that exit code
+    # judge-merge.sh approve attempts the merge; on conflict it converts the
+    # verdict to reject via its internal reject() path and exits 1.
     judge_merge_conflict() {
       local exit_code=0
       GC_BEAD_ID="$BEAD2" GC_WORKSPACE="$WS" \
-        live judge-merge.sh 2>&1 || exit_code=$?
+        live judge-merge.sh approve 2>&1 || exit_code=$?
       [ "$exit_code" -eq 1 ] || { echo "FAIL: judge-merge should exit 1 on conflict (got: $exit_code)"; return 1; }
     }
     subtest "Judge detects merge conflict and rejects" judge_merge_conflict
@@ -1338,7 +1350,6 @@ let
 
       # Collect metadata
       GC_BEAD_ID="$BEAD8" GC_WORKSPACE="$WS" live worker-collect.sh
-      bd update "$BEAD8" --set-metadata "review_verdict=approve"
     }
     subtest "Set up diverged branch (non-conflicting)" setup_rebase_success
 
@@ -1351,14 +1362,18 @@ let
       chmod +x "$stub_dir/prek"
       local exit_code=0
       PATH="$stub_dir:$LIVE_PATH" GC_BEAD_ID="$BEAD8" GC_WORKSPACE="$WS" \
-        bash "$WS/.gc/scripts/judge-merge.sh" 2>&1 || exit_code=$?
+        bash "$WS/.gc/scripts/judge-merge.sh" approve 2>&1 || exit_code=$?
       rm -rf "$stub_dir"
       [ "$exit_code" -eq 0 ] || { echo "FAIL: judge-merge should exit 0 on rebase success (got: $exit_code)"; return 1; }
     }
     subtest "Judge rebases and merges diverged branch" judge_merge_rebase_success
 
     verify_rebase_merge_landed() {
-      git -C "$WS" log --oneline main | grep -q "rebase success test" || {
+      # Use --grep (not a pipe to grep -q) — pipefail + SIGPIPE makes
+      # git log fail with 141 when grep -q short-circuits on the first match.
+      local matches
+      matches="$(git -C "$WS" log --grep='rebase success test' --oneline main)"
+      [ -n "$matches" ] || {
         echo "DEBUG rebase-verify: git log --oneline -10 main:"
         git -C "$WS" log --oneline -10 main
         echo "DEBUG rebase-verify: HEAD=$(git -C "$WS" rev-parse HEAD) main=$(git -C "$WS" rev-parse main)"
@@ -1418,12 +1433,14 @@ let
       git add .beads/ && git diff --cached --quiet || git commit -m "beads: gate approve setup"
       local merge_base
       merge_base="$(git rev-parse HEAD)"
-      git checkout -b gate-approve-branch
+      # Branch name must match $BEAD9: mock judge's approve path runs
+      # judge-merge.sh approve, which uses BEAD_ID as the branch name.
+      git checkout -b "$BEAD9"
       printf '#!/usr/bin/env bash\nset -euo pipefail\necho ok\n' > fix-approve.sh
       git add fix-approve.sh
       git commit -m "add clean script"
       git checkout main
-      bd update "$BEAD9" --set-metadata "commit_range=''${merge_base}..gate-approve-branch"
+      bd update "$BEAD9" --set-metadata "commit_range=''${merge_base}..$BEAD9"
       save BEAD9
     }
     subtest "Set up gate approve test (wx-ha7ff)" setup_gate_approve
@@ -1445,12 +1462,14 @@ let
       git add .beads/ && git diff --cached --quiet || git commit -m "beads: gate reject setup"
       local merge_base
       merge_base="$(git rev-parse HEAD)"
-      git checkout -b gate-reject-branch
+      # Branch name matches bead ID so the mock judge's reject path (via
+      # judge-merge.sh reject) cleans it up through the EXIT trap.
+      git checkout -b "$BEAD10"
       printf '#!/usr/bin/env bash\necho no guard\n' > bad.sh
       git add bad.sh
       git commit -m "add script without set -euo pipefail"
       git checkout main
-      bd update "$BEAD10" --set-metadata "commit_range=''${merge_base}..gate-reject-branch"
+      bd update "$BEAD10" --set-metadata "commit_range=''${merge_base}..$BEAD10"
       save BEAD10
     }
     subtest "Set up gate reject test (wx-ha7ff)" setup_gate_reject
@@ -1472,12 +1491,13 @@ let
       git add .beads/ && git diff --cached --quiet || git commit -m "beads: gate resubmit setup"
       local merge_base
       merge_base="$(git rev-parse HEAD)"
-      git checkout -b gate-resubmit-branch
+      # Branch name matches bead ID for judge-merge.sh approve compatibility.
+      git checkout -b "$BEAD11"
       printf '#!/usr/bin/env bash\nset -euo pipefail\necho ok\n' > fix-resubmit.sh
       git add fix-resubmit.sh
       git commit -m "add clean script for resubmit"
       git checkout main
-      bd update "$BEAD11" --set-metadata "commit_range=''${merge_base}..gate-resubmit-branch"
+      bd update "$BEAD11" --set-metadata "commit_range=''${merge_base}..$BEAD11"
       save BEAD11
     }
     subtest "Set up gate re-submit test (wx-ha7ff)" setup_gate_resubmit

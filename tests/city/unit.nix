@@ -2106,7 +2106,15 @@ in
         MOCK
         chmod +x "$MOCK_BIN/wrapix-notify"
 
-        # Run post-gate (no merge — just submit merge request to judge + deploy bead)
+        # Pre-create GC_LOG so the negative-grep below works even if post-gate
+        # never invokes the gc mock. Under set -euo pipefail, grep's
+        # file-not-found stderr would otherwise be the only signal of a bug.
+        : > "$GC_LOG"
+
+        # Run post-gate. Approved path: close bead + create deploy bead + notify.
+        # Post-gate no longer submits a merge request to judge — the judge's
+        # finalize step (judge-merge.sh approve) runs the merge before gate.sh
+        # returns, so by the time post-gate fires the branch is already merged.
         PATH="$MOCK_BIN:$PATH" \
           GC_BEAD_ID=test-bead \
           GC_TERMINAL_REASON=approved \
@@ -2114,10 +2122,18 @@ in
           GC_CITY_NAME=test \
           bash "$POST_GATE" 2>&1
 
-        # Verify judge received merge submit
-        grep -q 'session submit judge' "$GC_LOG" || { echo "FAIL: judge not submitted to"; cat "$GC_LOG"; exit 1; }
-        grep -q 'test-bead' "$GC_LOG" || { echo "FAIL: submit missing bead ID"; cat "$GC_LOG"; exit 1; }
-        echo "  PASS: judge submit carried bead ID"
+        # Verify post-gate does NOT submit to judge (merge already happened)
+        if grep -q 'session submit judge' "$GC_LOG"; then
+          echo "FAIL: post-gate should not submit merge request to judge (merge already done)"
+          cat "$GC_LOG"
+          exit 1
+        fi
+        echo "  PASS: post-gate does not re-submit merge to judge"
+
+        # Verify work bead was closed
+        grep -q 'close test-bead' "$DEPLOY_ACTIONS" || {
+          echo "FAIL: work bead not closed"; cat "$DEPLOY_ACTIONS"; exit 1; }
+        echo "  PASS: work bead closed"
 
         # Verify auto_deploy metadata was set (not human label)
         grep -q "auto_deploy=true" "$DEPLOY_ACTIONS" || { echo "FAIL: auto_deploy not set"; cat "$DEPLOY_ACTIONS"; exit 1; }
@@ -2836,46 +2852,100 @@ in
         echo "  PASS: uncommitted changes captured by self-review"
 
         # =====================================================================
-        # Judge: review-diff — set review verdict metadata
+        # Judge: finalize — judge-merge.sh is the sole writer of verdict
         # =====================================================================
-        echo "=== Judge: review-diff ==="
+        echo "=== Judge: finalize (judge-merge.sh) ==="
 
+        JUDGE_MERGE="${../../lib/city/scripts/judge-merge.sh}"
         BD_LOG="$TMPDIR/judge-bd.log"
         cat > "$MOCK_BIN/bd" << MOCK
         #!/bin/sh
         echo "\$@" >> "$BD_LOG"
-        case "\$1" in
-          show)
-            echo '[{"id":"bead-42","title":"Fix auth","description":"Auth module broken"}]'
-            ;;
-        esac
+        exit 0
         MOCK
         chmod +x "$MOCK_BIN/bd"
-        rm -f "$BD_LOG"
 
-        # Formula command: approve
-        BEAD_ID="bead-42"
-        PATH="$MOCK_BIN:$PATH" bd update "$BEAD_ID" --set-metadata "review_verdict=approve"
-        PATH="$MOCK_BIN:$PATH" bd update "$BEAD_ID" --notes "Judge: approved — all style guidelines pass"
-        grep -q 'review_verdict=approve' "$BD_LOG" || { echo "FAIL: approve verdict not set"; exit 1; }
-        grep -q 'all style guidelines pass' "$BD_LOG" || { echo "FAIL: approve notes not set"; exit 1; }
-        echo "  PASS: approve verdict and notes set correctly"
+        # Each case gets a fresh workspace so the EXIT trap's checkout/branch
+        # operations start from a known state.
+        make_judge_ws() {
+          local ws="$1" bead="$2"
+          mkdir -p "$ws"
+          git -C "$ws" init -q -b main
+          git -C "$ws" config user.email test@test
+          git -C "$ws" config user.name test
+          echo "base" > "$ws/code.sh"
+          git -C "$ws" add -A && git -C "$ws" commit -m "initial" -q
+          git -C "$ws" checkout -b "$bead" -q
+          echo "fixed" > "$ws/code.sh"
+          git -C "$ws" add -A && git -C "$ws" commit -m "fix: test (''${bead})" -q
+          git -C "$ws" checkout main -q
+        }
 
-        # Formula command: reject with specific feedback
+        # Bad args — script must exit 2 without touching metadata
         rm -f "$BD_LOG"
-        PATH="$MOCK_BIN:$PATH" bd update "$BEAD_ID" --set-metadata "review_verdict=reject"
-        PATH="$MOCK_BIN:$PATH" bd update "$BEAD_ID" --notes "Judge: rejected — SH-01 violated at line 42: missing set -euo pipefail"
-        grep -q 'review_verdict=reject' "$BD_LOG" || { echo "FAIL: reject verdict not set"; exit 1; }
-        grep -q 'SH-01 violated at line 42' "$BD_LOG" || { echo "FAIL: rejection details missing"; exit 1; }
-        echo "  PASS: reject verdict with rule reference and line number"
+        exit_code=0
+        PATH="$MOCK_BIN:$PATH" GC_BEAD_ID=bead-1 GC_WORKSPACE=/tmp \
+          bash "$JUDGE_MERGE" 2>/dev/null || exit_code=$?
+        [[ "$exit_code" -eq 2 ]] || { echo "FAIL: missing verdict should exit 2 (got: $exit_code)"; exit 1; }
+        [[ ! -s "$BD_LOG" ]] || { echo "FAIL: bd should not be called on arg error: $(cat "$BD_LOG")"; exit 1; }
+        echo "  PASS: missing verdict → exit 2, no bd calls"
 
-        # Formula command: flag non-documented concern (approve + human label)
+        exit_code=0
+        PATH="$MOCK_BIN:$PATH" GC_BEAD_ID=bead-1 GC_WORKSPACE=/tmp \
+          bash "$JUDGE_MERGE" maybe 2>/dev/null || exit_code=$?
+        [[ "$exit_code" -eq 2 ]] || { echo "FAIL: unknown verdict should exit 2 (got: $exit_code)"; exit 1; }
+        echo "  PASS: unknown verdict → exit 2"
+
+        exit_code=0
+        PATH="$MOCK_BIN:$PATH" GC_BEAD_ID=bead-1 GC_WORKSPACE=/tmp \
+          bash "$JUDGE_MERGE" reject 2>/dev/null || exit_code=$?
+        [[ "$exit_code" -eq 2 ]] || { echo "FAIL: reject without reason should exit 2 (got: $exit_code)"; exit 1; }
+        echo "  PASS: reject without reason → exit 2"
+
+        # Reject path — writes verdict=reject + merge_failure + reopens, exit 0
         rm -f "$BD_LOG"
-        PATH="$MOCK_BIN:$PATH" bd update "$BEAD_ID" --set-metadata "review_verdict=approve"
-        PATH="$MOCK_BIN:$PATH" bd label add "$BEAD_ID" human
-        grep -q 'review_verdict=approve' "$BD_LOG" || { echo "FAIL: approve not set for flagged bead"; exit 1; }
+        WS_REJECT="$TMPDIR/judge-reject-ws"
+        make_judge_ws "$WS_REJECT" bead-42
+        exit_code=0
+        PATH="$MOCK_BIN:$PATH" GC_BEAD_ID=bead-42 GC_WORKSPACE="$WS_REJECT" \
+          bash "$JUDGE_MERGE" reject "SH-1 violated at line 15" || exit_code=$?
+        [[ "$exit_code" -eq 0 ]] || { echo "FAIL: reject should exit 0 (got: $exit_code)"; exit 1; }
+        grep -q 'update bead-42 --set-metadata review_verdict=reject' "$BD_LOG" || {
+          echo "FAIL: reject verdict not written"; cat "$BD_LOG"; exit 1; }
+        grep -q 'merge_failure=SH-1 violated at line 15' "$BD_LOG" || {
+          echo "FAIL: merge_failure reason not written"; cat "$BD_LOG"; exit 1; }
+        grep -q 'update bead-42 --status=open' "$BD_LOG" || {
+          echo "FAIL: bead not reopened on reject"; cat "$BD_LOG"; exit 1; }
+        ! git -C "$WS_REJECT" rev-parse --verify bead-42 >/dev/null 2>&1 || {
+          echo "FAIL: EXIT trap did not delete branch on reject"; exit 1; }
+        echo "  PASS: reject writes verdict + reason, reopens, cleans up branch"
+
+        # Approve path (ff-mergeable) — merge first, verdict=approve after
+        rm -f "$BD_LOG"
+        WS_APPROVE="$TMPDIR/judge-approve-ws"
+        make_judge_ws "$WS_APPROVE" bead-99
+        WORKER_HEAD="$(git -C "$WS_APPROVE" rev-parse bead-99)"
+        exit_code=0
+        PATH="$MOCK_BIN:$PATH" GC_BEAD_ID=bead-99 GC_WORKSPACE="$WS_APPROVE" \
+          bash "$JUDGE_MERGE" approve || exit_code=$?
+        [[ "$exit_code" -eq 0 ]] || { echo "FAIL: approve should exit 0 (got: $exit_code)"; exit 1; }
+        MAIN_HEAD="$(git -C "$WS_APPROVE" rev-parse main)"
+        [[ "$MAIN_HEAD" == "$WORKER_HEAD" ]] || { echo "FAIL: ff merge did not advance main"; exit 1; }
+        grep -q 'update bead-99 --set-metadata review_verdict=approve' "$BD_LOG" || {
+          echo "FAIL: approve verdict not written"; cat "$BD_LOG"; exit 1; }
+        grep -q 'review_verdict=reject' "$BD_LOG" && {
+          echo "FAIL: approve path should not write reject verdict"; cat "$BD_LOG"; exit 1; } || true
+        ! git -C "$WS_APPROVE" rev-parse --verify bead-99 >/dev/null 2>&1 || {
+          echo "FAIL: EXIT trap did not delete branch on approve"; exit 1; }
+        echo "  PASS: approve merges then writes verdict=approve, cleans up branch"
+
+        # Formula command: flag non-documented concern (still uses bd directly)
+        rm -f "$BD_LOG"
+        PATH="$MOCK_BIN:$PATH" bd label add bead-42 human
+        PATH="$MOCK_BIN:$PATH" bd note bead-42 "Non-documented concern: naming"
         grep -q 'label add bead-42 human' "$BD_LOG" || { echo "FAIL: human label not added"; exit 1; }
-        echo "  PASS: non-documented concern flagged with human label + approve"
+        grep -q 'note bead-42' "$BD_LOG" || { echo "FAIL: note not recorded"; exit 1; }
+        echo "  PASS: non-documented concern flagged with human label + note"
 
         # =====================================================================
         # Judge: merge — fast-forward merge and worktree cleanup

@@ -63,13 +63,13 @@ If no review pending, proceed to sweep step.
 **Exit criteria:** Style guidelines loaded, review assignment known (or none)."""
 
 [[steps]]
-id = "review-diff"
-title = "Review worker diff against style guidelines"
+id = "finalize"
+title = "Review diff, then finalize the outcome via judge-merge.sh"
 needs = ["load-context"]
 description = """
 If no review assignment from load-context, skip to sweep step.
 
-**1. Read the bead from .beads/ and diff the commits:**
+**1. Read the bead and diff the commits:**
 ```bash
 bd show $BEAD_ID
 git diff $COMMIT_RANGE
@@ -83,64 +83,51 @@ The bead ID is available via the `$GC_BEAD_ID` environment variable
 For each rule in the style guide, check if the diff violates it.
 Be precise — only flag violations of DOCUMENTED rules.
 
-**3. Handle findings:**
+**3. Flag non-documented concerns for the director (optional):**
 
-**If all rules pass → approve:**
-```bash
-bd update $BEAD_ID --set-metadata "review_verdict=approve"
-bd update $BEAD_ID --notes "Judge: approved — all style guidelines pass"
-```
-
-**If documented rule violations found → reject:**
-```bash
-bd update $BEAD_ID --set-metadata "review_verdict=reject"
-bd update $BEAD_ID --notes "Judge: rejected — $VIOLATION_DETAILS"
-```
-Include specific rule IDs (e.g. SH-1, NX-2, GIT-1) and line numbers
-from docs/style-guidelines.md so the next worker iteration can address
-them precisely. Example rejection note:
-  "Judge: rejected — SH-1 violated at line 15: missing set -euo pipefail;
-   SH-2 violated at line 23: unquoted variable $foo"
-
-**If issues found outside documented rules → flag for director:**
-Do NOT reject based on undocumented opinions. Flag for human review:
+Do NOT reject based on undocumented opinions. If you see a concern that
+isn't a documented rule, flag it for human review without changing the
+verdict:
 ```bash
 bd label add $BEAD_ID human && bd note $BEAD_ID "Non-documented concern: $DESCRIPTION"
 ```
-Still set verdict based only on documented rules (approve if no
-documented violations, even if flagged).
 
-**Exit criteria:** Review verdict set on bead metadata."""
+**4. Finalize via judge-merge.sh (sole writer of review_verdict):**
 
-[[steps]]
-id = "merge"
-title = "Merge approved changes to main"
-needs = ["review-diff"]
-description = """
-If the review verdict was reject, skip this step — convergence handles retry.
+Call the script in one of two modes — always, whether approving or
+rejecting. Do NOT set review_verdict directly with bd; the script owns
+that metadata and guarantees cleanup on all paths.
 
-The judge owns both review and merge as one continuous flow. After approving,
-merge immediately via the judge-merge script:
-
+**If all documented rules pass → approve (script merges and cleans up):**
 ```bash
-GC_BEAD_ID=$BEAD_ID GC_WORKSPACE=$GC_WORKSPACE bash .gc/scripts/judge-merge.sh
+GC_BEAD_ID=$BEAD_ID GC_WORKSPACE=$GC_WORKSPACE bash .gc/scripts/judge-merge.sh approve
 ```
 
-The script handles the full merge lifecycle:
-- Fast-forward merge (primary path, preserves linear history)
-- Rebase onto main if fast-forward fails (main advanced)
-- Reject back to worker on rebase conflicts or prek failures
-- Worktree and branch cleanup (always, whether merged or rejected)
+**If documented rule violations found → reject (script records + cleans up):**
+```bash
+GC_BEAD_ID=$BEAD_ID GC_WORKSPACE=$GC_WORKSPACE bash .gc/scripts/judge-merge.sh reject \\
+  "SH-1 violated at line 15: missing set -euo pipefail; SH-2 violated at line 23: unquoted \$foo"
+```
+Include specific rule IDs (e.g. SH-1, NX-2, GIT-1) and line numbers from
+docs/style-guidelines.md so the next worker iteration can address them
+precisely.
 
-Exit code 0 = merged, 1 = rejected (metadata set on bead).
+The script handles, in a single flow:
+- Recording review_verdict=approve|reject on the bead
+- (approve only) Fast-forward merge, or rebase+ff if main advanced
+- (approve only) Conflict/prek failure → converts verdict to reject
+- Worktree and branch cleanup (EXIT trap — always runs)
 
-**Exit criteria:** Changes merged to main via fast-forward (or rejected with
-specific failure details), worktree and branch cleaned up."""
+Exit code 0 = merged on approve, or reject recorded.
+Exit code 1 = approve attempted but merge failed (verdict now reject).
+
+**Exit criteria:** Verdict written, merge attempted if approved, worktree
+and branch cleaned up."""
 
 [[steps]]
 id = "sweep-stale"
 title = "Sweep .wrapix/orchestration.md for stale context"
-needs = ["merge"]
+needs = ["finalize"]
 description = """
 Check .wrapix/orchestration.md for stale dynamic context.
 

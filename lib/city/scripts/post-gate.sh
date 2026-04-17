@@ -112,19 +112,13 @@ handle_approved() {
   bd close "$BEAD_ID" ||
     echo "post-gate: ERROR: failed to close bead $BEAD_ID — may be re-dispatched" >&2
 
-  # Notify judge to merge — judge owns the actual git operations
-  # (fast-forward, rebase, worktree cleanup). submit (not nudge) so a
-  # suspended judge auto-wakes via ensureRunning; silent failure =
-  # branch never merged.
-  gc session submit judge \
-    "Merge approved bead $BEAD_ID — branch ${BEAD_ID}. Run merge step now." ||
-    echo "post-gate: ERROR: failed to submit merge request to judge for $BEAD_ID" >&2
+  # The judge's finalize step (judge-merge.sh approve) already merged and
+  # cleaned up before gate.sh returned. Post-gate's job is the downstream
+  # fan-out: deploy bead + notification.
 
-  # Create deploy bead
   create_deploy_bead
 
-  # Notification
-  notify "[${CITY_NAME}] Convergence approved: bead ${BEAD_ID} — judge notified to merge"
+  notify "[${CITY_NAME}] Convergence approved: bead ${BEAD_ID} — merged by judge"
 }
 
 # ---------------------------------------------------------------------------
