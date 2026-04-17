@@ -179,7 +179,8 @@ if [ -f /workspace/.beads/config.yaml ]; then
     export BEADS_DOLT_AUTO_START=0
   elif [ "$BACKEND" = "dolt" ]; then
     echo "Warning: dolt backend configured but /workspace/.gc/dolt.sock not mounted" >&2
-    echo "  Start the host wrapix-beads container (enter the devShell) before launching this container." >&2
+    _repo=$(git -C /workspace remote get-url origin 2>/dev/null | sed 's|.*/||;s|\.git$||')
+    echo "  Start the host ${_repo:-repo}-beads container (enter the devShell) before launching this container." >&2
   else
     PREFIX=$(yq -r '.["issue-prefix"] // ""' /workspace/.beads/config.yaml 2>/dev/null || echo "")
     if [ -n "$PREFIX" ] && [ -f /workspace/.beads/issues.jsonl ]; then

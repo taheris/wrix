@@ -270,7 +270,7 @@ let
       (
         for _fd in /proc/self/fd/*; do
           _fd=''${_fd##*/}
-          [ "$_fd" -gt 2 ] && eval "exec $_fd>&-" 2>/dev/null || true
+          [[ "$_fd" =~ ^[0-9]+$ ]] && [ "$_fd" -gt 2 ] && eval "exec $_fd>&-" 2>/dev/null || true
         done
         podman run -d \
           --name "$name" \

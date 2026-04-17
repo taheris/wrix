@@ -455,7 +455,6 @@ let
         name = "wrapix-city-scripts";
         paths = [
           (pkgs.writeShellScriptBin "wrapix-agent" (readFile ./scripts/agent.sh))
-          (pkgs.writeShellScriptBin "beads-push" (readFile ../../scripts/beads-push))
           (pkgs.writeShellScriptBin "wrapix-prime-hook" (readFile ./scripts/prime-hook.sh))
           (pkgs.writeShellScriptBin "city-reload" (readFile ./scripts/city-reload.sh))
         ];
