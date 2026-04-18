@@ -482,11 +482,19 @@ worker_start() {
       echo "monitor: ERROR: post-gate.sh failed for bead ${bead_id} (reason: ${post_gate_reason})" >&2
     fi
 
-    # Final step: mark the worker as fully done so is-running can stop
-    # lying and let the reconciler drain the pool slot (wx-92md7). Written
-    # unconditionally — even a failed post-gate means the worker's pipeline
-    # is finished, no more work happens here.
+    # Mark the worker as fully done so is-running can stop lying (wx-92md7).
+    # Written unconditionally — even a failed post-gate means the worker's
+    # pipeline is finished, no more work happens here.
     : > "$done_marker"
+
+    # Close the session bead so the pool slot drains (wx-de4cn). Without
+    # this, gc's legacy sleep policy suspends the session instead of
+    # closing it; with max_active_sessions=1 that blocks future dispatch
+    # indefinitely. Closes only the session bead (issue_type=session);
+    # the work bead's status is owned by post-gate.sh above.
+    if ! gc session close "$SESSION"; then
+      echo "monitor: warning: gc session close failed for $SESSION" >&2
+    fi
   ) </dev/null >> "$monitor_log" 2>&1 &
 }
 

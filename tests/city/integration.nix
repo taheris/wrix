@@ -914,6 +914,13 @@ let
     subtest "Worker .done marker written after post-gate (wx-92md7)" \
       poll_until "test -f \"\$WS/.wrapix/state/worker-\$BEAD_ID.done\"" 30
 
+    # wx-de4cn: after the .done marker, the monitor calls gc session close
+    # so the session bead transitions to closed and the pool slot drains.
+    # Without this, gc's legacy sleep policy suspends the session instead,
+    # and with max_active_sessions=1 the next routed bead never dispatches.
+    subtest "Worker session bead closed after monitor (wx-de4cn)" \
+      poll_until 'bd list --label gc:session --label agent:worker --status open --json 2>/dev/null | jq -e "length == 0"' 30
+
     # judge-merge.sh approve already ran inside the mock judge during the
     # review window — it writes review_verdict=approve only after main has
     # advanced, so by the time gate.sh returns, the branch is merged and
