@@ -123,7 +123,12 @@ let
     export REPO_ROOT="${src}"
     export RALPH_METADATA_DIR="${ralphModule.scripts}/share/ralph"
     export RALPH_TEMPLATE_DIR="${src}/lib/ralph/template"
-    export PATH="${pkgs.beads}/bin:${ralphModule.scripts}/bin:$PATH"
+    export PATH="${pkgs.beads}/bin:${pkgs.dolt}/bin:${pkgs.git}/bin:${ralphModule.scripts}/bin:$PATH"
+    # dolt init requires an identity; provide one for test runs outside a devShell
+    export DOLT_ROOT_PATH="$(mktemp -d -t wrapix-test-dolt-root-XXXXXX)"
+    trap 'rm -rf "$DOLT_ROOT_PATH"' EXIT
+    dolt config --global --add user.email "test@wrapix.local" >/dev/null
+    dolt config --global --add user.name "wrapix-test" >/dev/null
     exec ${ralphTestDir}/run-tests.sh
   '';
 
