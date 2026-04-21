@@ -106,7 +106,7 @@ GC_BEAD_ID=$BEAD_ID GC_WORKSPACE=$GC_WORKSPACE bash .gc/scripts/judge-merge.sh a
 **If documented rule violations found → reject (script records + cleans up):**
 ```bash
 GC_BEAD_ID=$BEAD_ID GC_WORKSPACE=$GC_WORKSPACE bash .gc/scripts/judge-merge.sh reject \\
-  "SH-1 violated at line 15: missing set -euo pipefail; SH-2 violated at line 23: unquoted \$foo"
+  "SH-1 violated at line 15: missing set -euo pipefail; SH-2 violated at line 23: unquoted $foo"
 ```
 Include specific rule IDs (e.g. SH-1, NX-2, GIT-1) and line numbers from
 docs/style-guidelines.md so the next worker iteration can address them

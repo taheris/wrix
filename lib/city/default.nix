@@ -92,6 +92,7 @@ let
       resources ? { },
       secrets ? { },
       name ? "dev",
+      bdPrefix ? name,
     }:
     let
       scoutInterval = scout.interval or "5m";
@@ -243,6 +244,13 @@ let
       cityConfig = {
         workspace = {
           inherit name;
+          # Pin the bd issue prefix explicitly. Without this, gc derives one
+          # from `name` via DeriveBeadsPrefix (first-letter-of-each-dash-part)
+          # and stamps it into .beads/config.yaml during normalization, which
+          # then takes precedence over the DB's issue_prefix and breaks
+          # `bd create` with prefix-mismatch errors whenever the derived
+          # prefix differs from what `bd init --prefix` set up.
+          prefix = bdPrefix;
           # NOTE: Do NOT set `provider = "claude"` here — that activates gc's
           # built-in claude provider which manages sessions via HOST tmux,
           # conflicting with the exec session provider. Agent invocation is

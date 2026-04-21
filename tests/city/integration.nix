@@ -62,6 +62,11 @@ let
 
   liveCity = cityMod.mkCity {
     name = "test-city";
+    # Matches `bd init --prefix cg` in setup_workspace. Without this, gc's
+    # DeriveBeadsPrefix("test-city") returns "tc" and gc stamps "tc" into
+    # .beads/config.yaml during startup normalization, which takes
+    # precedence over the DB's "cg" and breaks `bd create --parent`.
+    bdPrefix = "cg";
     workers = 2;
     profile = testProfile;
   };
@@ -651,8 +656,7 @@ let
     # ================================================================
 
     validate_config() {
-      result=$(gc config show --city "$WS" --validate 2>&1)
-      echo "$result" | grep -qi "valid\|ok"
+      gc config show --city "$WS" --validate >/dev/null
     }
     subtest "Validate gc accepts config" validate_config
 
