@@ -6,11 +6,11 @@
 
 let
   sandbox = import ./sandbox { inherit pkgs system linuxPkgs; };
+  beads = import ./beads { inherit pkgs linuxPkgs; };
   ralph = import ./ralph {
-    inherit pkgs;
+    inherit pkgs beads;
     inherit (sandbox) mkSandbox;
   };
-  beads = import ./beads { inherit pkgs linuxPkgs; };
   city = import ./city {
     inherit pkgs linuxPkgs;
     inherit (sandbox) mkSandbox profiles baseClaudeSettings;

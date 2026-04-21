@@ -267,9 +267,9 @@ let
         };
 
         # Host-side gc daemon talks to dolt over the published port on
-        # 127.0.0.1. Role containers reach dolt by container hostname; the
-        # provider script injects BEADS_DOLT_SERVER_HOST=$GC_BEADS_DOLT_CONTAINER
-        # into each container's env, overriding this value.
+        # 127.0.0.1. Role containers use the mounted Unix socket at
+        # /workspace/.wrapix/dolt.sock for bd; gc still reaches dolt
+        # directly via TCP on the city network using GC_DOLT_HOST/PORT.
         dolt = {
           host = "127.0.0.1";
           port = 99999;
@@ -496,6 +496,7 @@ let
         export GC_BEADS_DOLT_CONTAINER="$(beads-dolt name "$(pwd)")"
         export GC_CITY_NAME="${name}"
         export GC_COOLDOWN="${cooldown}"
+        export GC_DOLT_PORT="$(beads-dolt port "$(pwd)")"
         export GC_PODMAN_NETWORK="${networkName}"
         export GC_WORKSPACE="$(pwd)"
         export SCOUT_MAX_BEADS="${toString scoutMaxBeads}"
@@ -579,13 +580,25 @@ let
           export SCOUT_MAX_BEADS="${toString scoutMaxBeads}"
           ${secretFlagsExport}
 
-          # Ensure the per-workspace beads dolt container is running
-          # and propagate its host/port to child processes (gc → bd).
+          # Ensure the per-workspace beads dolt container is running and
+          # propagate its socket to child processes (gc → bd). Socket is
+          # required because rootless podman pasta hides host loopback
+          # from role containers. Fails loudly if the socket never
+          # appears — no fallback to bd's embedded autostart.
           ${pkgs.beads-dolt}/bin/beads-dolt start "$GC_WORKSPACE"
-          export BEADS_DOLT_SERVER_HOST=127.0.0.1
-          BEADS_DOLT_SERVER_PORT="$(${pkgs.beads-dolt}/bin/beads-dolt port "$GC_WORKSPACE")"
-          export BEADS_DOLT_SERVER_PORT
+          _gc_sock="$(${pkgs.beads-dolt}/bin/beads-dolt socket "$GC_WORKSPACE")"
+          _gc_waited=0
+          while [ ! -S "$_gc_sock" ] && [ "$_gc_waited" -lt 30 ]; do
+            sleep 0.2
+            _gc_waited=$((_gc_waited + 1))
+          done
+          if [ ! -S "$_gc_sock" ]; then
+            echo "city: dolt socket did not appear at $_gc_sock" >&2
+            exit 1
+          fi
+          export BEADS_DOLT_SERVER_SOCKET="$_gc_sock"
           export BEADS_DOLT_AUTO_START=0
+          unset _gc_sock _gc_waited
 
           ${loadImageSnippet}
 

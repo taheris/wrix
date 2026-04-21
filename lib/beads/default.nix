@@ -77,7 +77,7 @@ let
     }
 
     _socket_path() {
-      echo "''${1:-$PWD}/.gc/dolt.sock"
+      echo "''${1:-$PWD}/.wrapix/dolt.sock"
     }
 
     _load_image() {
@@ -292,7 +292,7 @@ let
             mkdir -p /tmp/dolthome
             mkdir -p "$(dirname "$2")"
             exec dolt sql-server --data-dir /data -H 0.0.0.0 -P "$1" --socket "$2"
-          ' -- "$port" "/workspace/.gc/dolt.sock" \
+          ' -- "$port" "/workspace/.wrapix/dolt.sock" \
           >/dev/null
       )
 
@@ -348,14 +348,30 @@ let
   beadsPush = pkgs.writeShellScriptBin "beads-push" (readFile ../../scripts/beads-push);
 
   # Shell hook fragment: ensures per-workspace dolt is running and exports
-  # the env that suppresses bd's embedded autostart. No-op if the current
-  # directory isn't a beads workspace or podman isn't available.
+  # the socket path that bd connects through. Suppresses bd's embedded
+  # autostart so failure to reach the server fails loudly instead of
+  # silently forking a second dolt. No-op if the current directory isn't
+  # a beads workspace.
   shellHook = ''
-    if [ -d "$PWD/.beads/dolt" ] && command -v podman >/dev/null 2>&1; then
+    if [ -d "$PWD/.beads/dolt" ]; then
+      if ! command -v podman >/dev/null 2>&1; then
+        echo "beads: .beads/dolt exists but podman is not on PATH — cannot start dolt server" >&2
+        return 1 2>/dev/null || exit 1
+      fi
       ${beadsDolt}/bin/beads-dolt start "$PWD"
-      export BEADS_DOLT_SERVER_HOST=127.0.0.1
-      export BEADS_DOLT_SERVER_PORT=$(${beadsDolt}/bin/beads-dolt port "$PWD")
+      _beads_sock=$(${beadsDolt}/bin/beads-dolt socket "$PWD")
+      _waited=0
+      while [ ! -S "$_beads_sock" ] && [ "$_waited" -lt 30 ]; do
+        sleep 0.2
+        _waited=$((_waited + 1))
+      done
+      if [ ! -S "$_beads_sock" ]; then
+        echo "beads: dolt socket did not appear at $_beads_sock — refusing to fall back to embedded mode" >&2
+        return 1 2>/dev/null || exit 1
+      fi
+      export BEADS_DOLT_SERVER_SOCKET="$_beads_sock"
       export BEADS_DOLT_AUTO_START=0
+      unset _beads_sock _waited
     fi
   '';
 

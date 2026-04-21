@@ -83,17 +83,22 @@ done
 
 # Connect bd to the host's wrapix-beads dolt container via the mounted
 # unix socket. The host starts wrapix-beads (lib/beads/default.nix shellHook)
-# and bind-mounts /workspace/.gc/dolt.sock into every wrapix container.
+# and bind-mounts /workspace/.wrapix/dolt.sock into every wrapix container.
+# Missing socket is fatal when the dolt backend is configured — we refuse
+# to fall back to bd's embedded autostart (which would fork a per-container
+# dolt that diverges from the host's authoritative state).
 if [ -f /workspace/.beads/config.yaml ]; then
   BACKEND=$(jq -r '.backend // "sqlite"' /workspace/.beads/metadata.json 2>/dev/null || echo "sqlite")
 
-  if [ "$BACKEND" = "dolt" ] && [ -S /workspace/.gc/dolt.sock ]; then
-    export BEADS_DOLT_SERVER_SOCKET=/workspace/.gc/dolt.sock
+  if [ "$BACKEND" = "dolt" ]; then
+    if [ ! -S /workspace/.wrapix/dolt.sock ]; then
+      echo "Error: dolt backend configured but /workspace/.wrapix/dolt.sock not mounted" >&2
+      _repo=$(git -C /workspace remote get-url origin 2>/dev/null | sed 's|.*/||;s|\.git$||')
+      echo "  Start the host ${_repo:-repo}-beads container (enter the devShell) before launching this container." >&2
+      exit 1
+    fi
+    export BEADS_DOLT_SERVER_SOCKET=/workspace/.wrapix/dolt.sock
     export BEADS_DOLT_AUTO_START=0
-  elif [ "$BACKEND" = "dolt" ]; then
-    echo "Warning: dolt backend configured but /workspace/.gc/dolt.sock not mounted" >&2
-    _repo=$(git -C /workspace remote get-url origin 2>/dev/null | sed 's|.*/||;s|\.git$||')
-    echo "  Start the host ${_repo:-repo}-beads container (enter the devShell) before launching this container." >&2
   else
     PREFIX=$(yq -r '.["issue-prefix"] // ""' /workspace/.beads/config.yaml 2>/dev/null || echo "")
     if [ -n "$PREFIX" ] && [ -f /workspace/.beads/issues.jsonl ]; then

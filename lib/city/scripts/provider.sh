@@ -37,7 +37,7 @@ REQUIRED_ENV=(
   GC_AGENT_IMAGE
   GC_PODMAN_NETWORK
   GC_BEADS_DOLT_CONTAINER
-  BEADS_DOLT_SERVER_PORT
+  GC_DOLT_PORT
 )
 
 check_env() {
@@ -233,11 +233,14 @@ resource_flags() {
 # Centralizes the gc→container env contract — add new vars here, not
 # in each start function.  Uses the same echo-flags pattern as
 # container_labels() and resource_flags().
+#
+# bd inside the container reaches dolt through the mounted Unix socket
+# at /workspace/.wrapix/dolt.sock. GC_DOLT_HOST/PORT remain for gc's
+# own TCP fallback but bd itself uses the socket exclusively.
 container_env() {
   local dolt_host="$1" dolt_port="$2"
   echo "-e BEADS_DOLT_AUTO_START=0"
-  echo "-e BEADS_DOLT_SERVER_HOST=${dolt_host}"
-  echo "-e BEADS_DOLT_SERVER_PORT=${dolt_port}"
+  echo "-e BEADS_DOLT_SERVER_SOCKET=/workspace/.wrapix/dolt.sock"
   echo "-e GC_DOLT_HOST=${dolt_host}"
   echo "-e GC_DOLT_PORT=${dolt_port}"
   echo "-e CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}"
@@ -264,11 +267,11 @@ persistent_start() {
     ws_mode="ro"
   fi
 
-  # Containers reach dolt via podman network DNS (container name), not
-  # localhost. The entrypoint sets GC_BEADS_DOLT_CONTAINER to the
-  # beads-dolt container name and attaches it to the city network.
+  # bd inside the container reaches dolt via the mounted Unix socket
+  # (/workspace/.wrapix/dolt.sock). dolt_host/dolt_port are passed to
+  # container_env for gc's direct TCP fallback only.
   local dolt_host="${GC_BEADS_DOLT_CONTAINER:?provider requires GC_BEADS_DOLT_CONTAINER}"
-  local dolt_port="${BEADS_DOLT_SERVER_PORT:?provider requires BEADS_DOLT_SERVER_PORT}"
+  local dolt_port="${GC_DOLT_PORT:?provider requires GC_DOLT_PORT}"
 
   local role beads_staging
   role="$(role_name)"
@@ -416,13 +419,11 @@ worker_start() {
   # and rewrite the gitdir to match.
   echo "gitdir: /mnt/git/worktrees/${bead_id}" > "${GC_WORKSPACE}/${worktree_path}/.git"
 
-  # Prefer env var (set by entrypoint) over port file (can be corrupted by
-  # agents running bd dolt start inside containers with .beads mounted rw).
-  # Containers reach dolt via podman network DNS (container name), not
-  # localhost. The entrypoint sets GC_BEADS_DOLT_CONTAINER to the
-  # beads-dolt container name and attaches it to the city network.
+  # bd inside the worker reaches dolt via the mounted Unix socket
+  # (/workspace/.wrapix/dolt.sock). dolt_host/dolt_port are passed to
+  # container_env for gc's direct TCP fallback only.
   local dolt_host="${GC_BEADS_DOLT_CONTAINER:?provider requires GC_BEADS_DOLT_CONTAINER}"
-  local dolt_port="${BEADS_DOLT_SERVER_PORT:?provider requires BEADS_DOLT_SERVER_PORT}"
+  local dolt_port="${GC_DOLT_PORT:?provider requires GC_DOLT_PORT}"
   local beads_staging
   beads_staging="$(stage_beads)"
 

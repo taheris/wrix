@@ -39,8 +39,9 @@ let
   sandbox = import ../../lib/sandbox {
     inherit pkgs system linuxPkgs;
   };
+  beads = import ../../lib/beads { inherit pkgs linuxPkgs; };
   ralph = import ../../lib/ralph {
-    inherit pkgs;
+    inherit pkgs beads;
     inherit (sandbox) mkSandbox;
   };
   cityMod = import ../../lib/city {
@@ -516,7 +517,7 @@ let
     # networking), use the Unix socket on the shared filesystem.
     dolt_reachable() {
       if [[ -n "''${CONTAINER_HOST:-}" ]]; then
-        test -S "$WS/.gc/dolt.sock"
+        test -S "$WS/.wrapix/dolt.sock"
       else
         bash -c "echo > /dev/tcp/127.0.0.1/$DOLT_PORT" 2>/dev/null
       fi
@@ -684,16 +685,14 @@ let
         return 1
       fi
 
-      export BEADS_DOLT_SERVER_HOST=127.0.0.1
-      export BEADS_DOLT_SERVER_SOCKET="''${CONTAINER_HOST:+$WS/.gc/dolt.sock}"
-      export BEADS_DOLT_SERVER_PORT="$DOLT_PORT"
+      export BEADS_DOLT_SERVER_SOCKET="$WS/.wrapix/dolt.sock"
       export BEADS_DOLT_AUTO_START=0
+      export GC_DOLT_PORT="$DOLT_PORT"
       # gc CLI commands (gc sling, gc status) resolve the dolt port from
       # .beads/dolt-server.port for non-external (localhost) dolt servers.
       echo "$DOLT_PORT" > "$WS/.beads/dolt-server.port"
-      save DOLT_CONTAINER DOLT_PORT GC_PID \
-        BEADS_DOLT_SERVER_HOST BEADS_DOLT_SERVER_PORT BEADS_DOLT_AUTO_START \
-        BEADS_DOLT_SERVER_SOCKET
+      save DOLT_CONTAINER DOLT_PORT GC_PID GC_DOLT_PORT \
+        BEADS_DOLT_AUTO_START BEADS_DOLT_SERVER_SOCKET
     }
     subtest "Start gc daemon" start_gc
 
@@ -1443,14 +1442,12 @@ let
       DOLT_CONTAINER="$(beads-dolt name "$WS")"
       DOLT_PORT="$(beads-dolt port "$WS")"
       export DOLT_CONTAINER DOLT_PORT
-      export BEADS_DOLT_SERVER_HOST=127.0.0.1
-      export BEADS_DOLT_SERVER_SOCKET="''${CONTAINER_HOST:+$WS/.gc/dolt.sock}"
-      export BEADS_DOLT_SERVER_PORT="$DOLT_PORT"
+      export BEADS_DOLT_SERVER_SOCKET="$WS/.wrapix/dolt.sock"
       export BEADS_DOLT_AUTO_START=0
+      export GC_DOLT_PORT="$DOLT_PORT"
       echo "$DOLT_PORT" > "$WS/.beads/dolt-server.port"
-      save GC_PID DOLT_CONTAINER DOLT_PORT \
-        BEADS_DOLT_SERVER_HOST BEADS_DOLT_SERVER_PORT BEADS_DOLT_AUTO_START \
-        BEADS_DOLT_SERVER_SOCKET
+      save GC_PID DOLT_CONTAINER DOLT_PORT GC_DOLT_PORT \
+        BEADS_DOLT_AUTO_START BEADS_DOLT_SERVER_SOCKET
     }
     subtest "Restart gc for gate tests" restart_gc_for_gate
 
@@ -1928,7 +1925,7 @@ let
       GC_AGENT_IMAGE="${liveCity.imageName}" \
       GC_PODMAN_NETWORK="$TEST_NETWORK" \
       GC_BEADS_DOLT_CONTAINER="$DOLT_CONTAINER" \
-      BEADS_DOLT_SERVER_PORT="$DOLT_PORT" \
+      GC_DOLT_PORT="$DOLT_PORT" \
         bash -c "echo '$start_json' | PATH=\"$LIVE_PATH\" bash $WS/.gc/scripts/provider.sh start $test_bead" \
         2>&1 || exit_code=$?
 
@@ -1971,7 +1968,7 @@ let
       GC_AGENT_IMAGE="${liveCity.imageName}" \
       GC_PODMAN_NETWORK="$TEST_NETWORK" \
       GC_BEADS_DOLT_CONTAINER="$DOLT_CONTAINER" \
-      BEADS_DOLT_SERVER_PORT="$DOLT_PORT" \
+      GC_DOLT_PORT="$DOLT_PORT" \
         bash -c "echo '{}' | PATH=\"$LIVE_PATH\" bash $WS/.gc/scripts/provider.sh start worker-$test_bead" \
         2>&1 || exit_code=$?
 
@@ -2024,7 +2021,7 @@ let
       GC_AGENT_IMAGE="${liveCity.imageName}" \
       GC_PODMAN_NETWORK="$TEST_NETWORK" \
       GC_BEADS_DOLT_CONTAINER="$DOLT_CONTAINER" \
-      BEADS_DOLT_SERVER_PORT="$DOLT_PORT" \
+      GC_DOLT_PORT="$DOLT_PORT" \
         bash -c "echo '$start_json' | PATH=\"$LIVE_PATH\" bash $WS/.gc/scripts/provider.sh start issue-$test_bead" \
         2>&1 || exit_code=$?
 
@@ -2206,7 +2203,7 @@ let
       GC_AGENT_IMAGE="${liveCity.imageName}" \
       GC_PODMAN_NETWORK="$TEST_NETWORK" \
       GC_BEADS_DOLT_CONTAINER="$DOLT_CONTAINER" \
-      BEADS_DOLT_SERVER_PORT="$DOLT_PORT" \
+      GC_DOLT_PORT="$DOLT_PORT" \
         bash -c "echo '{}' | PATH=\"$LIVE_PATH\" bash $WS/.gc/scripts/provider.sh start s-wx-$test_bead" \
         2>&1 || exit_code=$?
 
@@ -2297,7 +2294,7 @@ let
       # is still running when the second start arrives.
       GC_BEAD_ID="$test_bead" GC_CITY_NAME="$CITY_NAME" GC_WORKSPACE="$WS" \
       GC_AGENT_IMAGE="${liveCity.imageName}" GC_PODMAN_NETWORK="$TEST_NETWORK" \
-      GC_BEADS_DOLT_CONTAINER="$DOLT_CONTAINER" BEADS_DOLT_SERVER_PORT="$DOLT_PORT" \
+      GC_BEADS_DOLT_CONTAINER="$DOLT_CONTAINER" GC_DOLT_PORT="$DOLT_PORT" \
       GC_SECRET_FLAGS="-e MOCK_WORKER_SLEEP=120" \
         bash -c "echo '$start_json' | PATH=\"$LIVE_PATH\" bash $WS/.gc/scripts/provider.sh start worker-$test_bead" \
         2>&1
@@ -2312,7 +2309,7 @@ let
       local exit_code=0
       GC_BEAD_ID="$test_bead" GC_CITY_NAME="$CITY_NAME" GC_WORKSPACE="$WS" \
       GC_AGENT_IMAGE="${liveCity.imageName}" GC_PODMAN_NETWORK="$TEST_NETWORK" \
-      GC_BEADS_DOLT_CONTAINER="$DOLT_CONTAINER" BEADS_DOLT_SERVER_PORT="$DOLT_PORT" \
+      GC_BEADS_DOLT_CONTAINER="$DOLT_CONTAINER" GC_DOLT_PORT="$DOLT_PORT" \
         bash -c "echo '$start_json' | PATH=\"$LIVE_PATH\" bash $WS/.gc/scripts/provider.sh start worker-$test_bead" \
         2>&1 || exit_code=$?
       [ "$exit_code" -eq 0 ] || { echo "FAIL: second start should exit 0"; return 1; }
@@ -2346,7 +2343,7 @@ let
       local start_json='{"agent_template":"worker","issue":"'"$test_bead"'"}'
       GC_BEAD_ID="$test_bead" GC_CITY_NAME="$CITY_NAME" GC_WORKSPACE="$WS" \
       GC_AGENT_IMAGE="${liveCity.imageName}" GC_PODMAN_NETWORK="$TEST_NETWORK" \
-      GC_BEADS_DOLT_CONTAINER="$DOLT_CONTAINER" BEADS_DOLT_SERVER_PORT="$DOLT_PORT" \
+      GC_BEADS_DOLT_CONTAINER="$DOLT_CONTAINER" GC_DOLT_PORT="$DOLT_PORT" \
         bash -c "echo '$start_json' | PATH=\"$LIVE_PATH\" bash $WS/.gc/scripts/provider.sh start worker-$test_bead" 2>&1
 
       poll_until "podman inspect --format '{{.State.Running}}' $CITY_NAME-worker-$test_bead 2>/dev/null | grep -q true" 45

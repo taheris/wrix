@@ -5,6 +5,7 @@
 {
   pkgs,
   mkSandbox ? null, # only needed if using mkRalph
+  beads ? null, # beads module (provides cli + shellHook); enables socket bootstrap
 }:
 
 let
@@ -99,6 +100,42 @@ in
           throw "mkRalph requires either 'sandbox' or 'profile' argument";
 
       wrapixBin = effectiveSandbox.package;
+
+      # Host-side beads bootstrap: start the per-workspace beads-dolt
+      # container and export the socket path so `bd dolt pull` in
+      # ralph/cmd/run.sh talks to the shared server through the socket
+      # (TCP host-loopback is invisible from rootless podman containers).
+      # Fails loudly if the socket never appears — no fallback to bd's
+      # embedded autostart. No-op when beads arg is null (template-only
+      # consumers).
+      beadsBootstrap =
+        if beads != null then
+          ''
+            if [ -d "$PWD/.beads/dolt" ]; then
+              if ! command -v podman >/dev/null 2>&1; then
+                echo "ralph: .beads/dolt exists but podman is not on PATH" >&2
+                return 1 2>/dev/null || exit 1
+              fi
+              ${beads.cli}/bin/beads-dolt start "$PWD"
+              _ralph_sock=$(${beads.cli}/bin/beads-dolt socket "$PWD")
+              _ralph_waited=0
+              while [ ! -S "$_ralph_sock" ] && [ "$_ralph_waited" -lt 30 ]; do
+                sleep 0.2
+                _ralph_waited=$((_ralph_waited + 1))
+              done
+              if [ ! -S "$_ralph_sock" ]; then
+                echo "ralph: dolt socket did not appear at $_ralph_sock" >&2
+                return 1 2>/dev/null || exit 1
+              fi
+              export BEADS_DOLT_SERVER_SOCKET="$_ralph_sock"
+              export BEADS_DOLT_AUTO_START=0
+              unset _ralph_sock _ralph_waited
+            fi
+          ''
+        else
+          "";
+
+      beadsPackages = if beads != null then [ beads.cli ] else [ ];
     in
     {
       inherit (effectiveSandbox) profile;
@@ -108,12 +145,14 @@ in
       packages = [
         scripts
         wrapixBin
-      ];
+      ]
+      ++ beadsPackages;
 
       # Shell hook that symlinks ralph scripts from the source tree for
       # live editing (no direnv reload needed).  Metadata stays in the
       # store since it's computed at build time.
       shellHook = ''
+        ${beadsBootstrap}
         export PATH="${scripts}/bin:${wrapixBin}/bin:$PATH"
         export RALPH_TEMPLATE_DIR="${templateDir}"
         export RALPH_METADATA_DIR="${scripts}/share/ralph"
@@ -125,6 +164,8 @@ in
         meta.description = "Ralph Wiggum loop in a sandbox";
         type = "app";
         program = "${pkgs.writeShellScriptBin "ralph-runner" ''
+          set -euo pipefail
+          ${beadsBootstrap}
           export PATH="${scripts}/bin:${wrapixBin}/bin:$PATH"
           export WRAPIX_PROFILE="${effectiveSandbox.profile.name}"
           exec ralph "$@"

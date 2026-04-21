@@ -36,25 +36,30 @@ fi
 beads-dolt start "$GC_WORKSPACE"
 DOLT_CONTAINER="$(beads-dolt name "$GC_WORKSPACE")"
 DOLT_PORT="$(beads-dolt port "$GC_WORKSPACE")"
+DOLT_SOCKET="$(beads-dolt socket "$GC_WORKSPACE")"
 
 beads-dolt attach "${GC_PODMAN_NETWORK:?}" "$GC_WORKSPACE"
 
-# When talking to host podman from inside a container (CONTAINER_HOST),
-# host-loopback ports are invisible from pasta networking.  The dolt
-# container's Unix socket on the shared workspace filesystem bypasses
-# the network entirely — bd reads BEADS_DOLT_SERVER_SOCKET.
-# Role containers on the bridge network still reach dolt via TCP
-# (container hostname), so DOLT_HOST/PORT are set for them too.
-if [[ -n "${CONTAINER_HOST:-}" ]]; then
-  DOLT_HOST="$(podman inspect --format '{{(index .NetworkSettings.Networks "wrapix-dolt").IPAddress}}' "$DOLT_CONTAINER")"
-  export BEADS_DOLT_SERVER_SOCKET="${GC_WORKSPACE}/.gc/dolt.sock"
-else
-  DOLT_HOST="127.0.0.1"
+# bd connects via the Unix socket on the shared workspace filesystem.
+# This bypasses podman networking entirely — required because rootless
+# pasta hides host-loopback ports from role containers. Fails loudly
+# if the socket never appears rather than falling back to bd's embedded
+# autostart (BEADS_DOLT_AUTO_START=0).
+_waited=0
+while [[ ! -S "$DOLT_SOCKET" && "$_waited" -lt 30 ]]; do
+  sleep 0.2
+  _waited=$((_waited + 1))
+done
+if [[ ! -S "$DOLT_SOCKET" ]]; then
+  echo "entrypoint: dolt socket did not appear at $DOLT_SOCKET" >&2
+  exit 1
 fi
 
-export BEADS_DOLT_SERVER_HOST="$DOLT_HOST"
-export BEADS_DOLT_SERVER_PORT="$DOLT_PORT"
+export BEADS_DOLT_SERVER_SOCKET="$DOLT_SOCKET"
 export BEADS_DOLT_AUTO_START=0
+# GC_DOLT_PORT / GC_BEADS_DOLT_CONTAINER are consumed by stage-home.sh
+# and city.toml substitution (gc connects to dolt directly over TCP on
+# the city network); they are not used by bd.
 export GC_DOLT_PORT="$DOLT_PORT"
 export GC_BEADS_DOLT_CONTAINER="$DOLT_CONTAINER"
 
@@ -69,8 +74,8 @@ fi
 bd config set types.custom "molecule,convoy,message,event,gate,merge-request,agent,role,rig,session,convergence"
 
 # Substitute the dolt port sentinel in city.toml. The host field is
-# already 127.0.0.1 (host gc daemon needs that); the provider script
-# overrides BEADS_DOLT_SERVER_HOST per-container with $DOLT_CONTAINER.
+# already 127.0.0.1 (host gc daemon uses direct TCP); role containers
+# reach dolt through the mounted Unix socket, ignoring the TCP port.
 if [[ -f "${GC_WORKSPACE}/city.toml" ]]; then
   sed -i \
     -e "s|port = 99999|port = ${DOLT_PORT}|" \

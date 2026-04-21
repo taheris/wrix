@@ -70,6 +70,9 @@ let
   # Gas City integration test (shell-based, requires podman at runtime)
   cityIntegration = import ./city/integration.nix { inherit pkgs system linuxPkgs; };
 
+  # Ralph standalone container integration test (requires podman at runtime)
+  ralphContainerIntegration = import ./ralph/container.nix { inherit pkgs system linuxPkgs; };
+
   # README example verification
   readmeTest = {
     readme = import ./readme.nix { inherit pkgs src; };
@@ -169,6 +172,13 @@ in
       type = "app";
       program = "${testRalph}/bin/test-ralph";
     };
+
+    # Ralph standalone container integration test (requires podman)
+    ralph-container = {
+      meta.description = "Run ralph standalone container integration test (requires podman)";
+      type = "app";
+      program = "${ralphContainerIntegration.script}/bin/test-ralph-container";
+    };
   };
 
   # Individual test sets (for debugging/selective running)
@@ -178,6 +188,7 @@ in
     darwinMountTests
     darwinNetworkTests
     darwinUidTests
+    ralphContainerIntegration
     ralphTemplatesCheck
     ralphTests
     readmeTest

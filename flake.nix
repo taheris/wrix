@@ -184,6 +184,7 @@
               test = test.app;
               test-city = test.apps.city;
               test-ralph = test.apps.ralph;
+              test-ralph-container = test.apps.ralph-container;
             };
 
             packages =

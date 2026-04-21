@@ -50,8 +50,9 @@ let
     inherit linuxPkgs;
   };
 
+  beads = import ../../lib/beads { inherit pkgs linuxPkgs; };
   ralph = import ../../lib/ralph {
-    inherit pkgs;
+    inherit pkgs beads;
     inherit (sandbox) mkSandbox;
   };
 
@@ -724,7 +725,7 @@ in
           GC_PODMAN_NETWORK="wrapix-test" \
           GC_BEAD_ID="bead-123" \
           GC_BEADS_DOLT_CONTAINER="beads-test" \
-          BEADS_DOLT_SERVER_PORT="13306" \
+          GC_DOLT_PORT="13306" \
           bash "$PROVIDER" start worker-1 > "$TMPDIR/out" 2>&1 || {
             echo "FAIL: provider start exited non-zero"
             cat "$TMPDIR/out"
@@ -860,7 +861,7 @@ in
           GC_AGENT_IMAGE=test:latest \
           GC_PODMAN_NETWORK=wrapix-test \
           GC_BEADS_DOLT_CONTAINER=beads-test \
-          BEADS_DOLT_SERVER_PORT=13306 \
+          GC_DOLT_PORT=13306 \
           bash "$PROVIDER" start mayor > "$TMPDIR/out" 2>&1 || {
             echo "FAIL: provider start mayor exited non-zero"
             cat "$TMPDIR/out"
@@ -972,7 +973,7 @@ in
           GC_AGENT_IMAGE=test:latest \
           GC_PODMAN_NETWORK=wrapix-test \
           GC_BEADS_DOLT_CONTAINER=beads-test \
-          BEADS_DOLT_SERVER_PORT=13306 \
+          GC_DOLT_PORT=13306 \
           bash "$PROVIDER" nudge scout
         sleep 0.5
 
@@ -989,7 +990,7 @@ in
           GC_AGENT_IMAGE=test:latest \
           GC_PODMAN_NETWORK=wrapix-test \
           GC_BEADS_DOLT_CONTAINER=beads-test \
-          BEADS_DOLT_SERVER_PORT=13306 \
+          GC_DOLT_PORT=13306 \
           bash "$PROVIDER" peek scout)"
         echo "$output" | grep -q "test-nudge-message" \
           || { echo "FAIL: peek did not return pane content"; echo "Output: $output"; exit 1; }
@@ -1005,7 +1006,7 @@ in
           GC_AGENT_IMAGE=test:latest \
           GC_PODMAN_NETWORK=wrapix-test \
           GC_BEADS_DOLT_CONTAINER=beads-test \
-          BEADS_DOLT_SERVER_PORT=13306 \
+          GC_DOLT_PORT=13306 \
           bash "$PROVIDER" get-last-activity scout)" \
           || { echo "FAIL: get-last-activity errored via shared socket"; exit 1; }
         echo "  PASS: get-last-activity works via shared socket (got: ''${activity:-empty})"
@@ -1018,7 +1019,7 @@ in
           GC_AGENT_IMAGE=test:latest \
           GC_PODMAN_NETWORK=wrapix-test \
           GC_BEADS_DOLT_CONTAINER=beads-test \
-          BEADS_DOLT_SERVER_PORT=13306 \
+          GC_DOLT_PORT=13306 \
           bash "$PROVIDER" send-keys scout "send-keys-test" Enter
         sleep 0.3
 
@@ -1035,7 +1036,7 @@ in
           GC_AGENT_IMAGE=test:latest \
           GC_PODMAN_NETWORK=wrapix-test \
           GC_BEADS_DOLT_CONTAINER=beads-test \
-          BEADS_DOLT_SERVER_PORT=13306 \
+          GC_DOLT_PORT=13306 \
           bash "$PROVIDER" is-running scout)"
         [[ "$running" == "true" ]] \
           || { echo "FAIL: is-running should detect live socket (got: $running)"; exit 1; }
@@ -1048,16 +1049,17 @@ in
 
   # End-to-end env contract: provider.sh -> gc -> bd.
   #
-  # gc's bdRuntimeEnv strips BEADS_DOLT_SERVER_* from the inherited env
-  # and rebuilds them from GC_DOLT_HOST/GC_DOLT_PORT via mirrorBeadsDoltEnv.
-  # If provider.sh only sets BEADS_DOLT_SERVER_* (which bd reads directly),
-  # then gc subprocesses of bd hit "127.0.0.1:0" because gc strips and
-  # doesn't replace them.
+  # provider.sh sets two env families on the role container:
+  #   - BEADS_DOLT_SERVER_SOCKET — for direct bd calls (claude → bd)
+  #   - GC_DOLT_HOST / GC_DOLT_PORT — for gc, which strips
+  #     BEADS_DOLT_SERVER_* and rebuilds HOST/PORT from GC_DOLT_*
+  #     before spawning bd (role containers live on the dolt bridge
+  #     network, so TCP via container hostname works post-rebuild).
   #
   # This test runs provider.sh with a stubbed podman to capture the exact
   # -e flags, parses them into an env, runs gc with that env against a
-  # stubbed bd that dumps its env, and asserts BEADS_DOLT_SERVER_HOST/PORT
-  # still reach bd after gc's round-trip.
+  # stubbed bd that dumps its env, and asserts the dolt endpoint still
+  # reaches bd after gc's round-trip.
   city-gc-bd-env-passthrough =
     runCommandLocal "city-gc-bd-env-passthrough"
       {
@@ -1093,7 +1095,7 @@ in
           GC_AGENT_IMAGE=test:latest \
           GC_PODMAN_NETWORK=wrapix-test \
           GC_BEADS_DOLT_CONTAINER=beads-test \
-          BEADS_DOLT_SERVER_PORT=13306 \
+          GC_DOLT_PORT=13306 \
           bash "$PROVIDER" start mayor > "$TMPDIR/out" 2>&1 || {
             echo "FAIL: provider start mayor exited non-zero"
             cat "$TMPDIR/out"
@@ -1114,15 +1116,20 @@ in
         done < "$PODMAN_ARGS"
 
         # Sanity: both env families must be set by provider.sh
-        grep -qE '^BEADS_DOLT_SERVER_HOST=' "$TMPDIR/container.env" \
-          || { echo "FAIL: provider did not set BEADS_DOLT_SERVER_HOST"; cat "$TMPDIR/container.env"; exit 1; }
-        grep -qE '^BEADS_DOLT_SERVER_PORT=' "$TMPDIR/container.env" \
-          || { echo "FAIL: provider did not set BEADS_DOLT_SERVER_PORT"; exit 1; }
+        grep -qE '^BEADS_DOLT_SERVER_SOCKET=/workspace/\.wrapix/dolt\.sock$' "$TMPDIR/container.env" \
+          || { echo "FAIL: provider did not set BEADS_DOLT_SERVER_SOCKET"; cat "$TMPDIR/container.env"; exit 1; }
+        grep -qE '^BEADS_DOLT_AUTO_START=0$' "$TMPDIR/container.env" \
+          || { echo "FAIL: provider did not set BEADS_DOLT_AUTO_START=0 (embedded fallback risk)"; exit 1; }
+        if grep -qE '^BEADS_DOLT_SERVER_(HOST|PORT)=' "$TMPDIR/container.env"; then
+          echo "FAIL: provider leaked legacy BEADS_DOLT_SERVER_HOST/PORT into container env"
+          cat "$TMPDIR/container.env"
+          exit 1
+        fi
         grep -qE '^GC_DOLT_HOST=' "$TMPDIR/container.env" \
           || { echo "FAIL: provider did not set GC_DOLT_HOST (gc won't find dolt)"; cat "$TMPDIR/container.env"; exit 1; }
         grep -qE '^GC_DOLT_PORT=' "$TMPDIR/container.env" \
           || { echo "FAIL: provider did not set GC_DOLT_PORT (gc won't find dolt)"; exit 1; }
-        echo "  PASS: provider.sh sets both env var families"
+        echo "  PASS: provider.sh sets socket + GC_DOLT_* env families"
 
         # Step 3: stage a minimal city so gc can find city.toml / provider
         cp ${minimalCity.config} "$TMPDIR/city.toml"
@@ -2434,6 +2441,7 @@ in
           bash
           pkgs.coreutils
           pkgs.jq
+          pkgs.netcat
         ];
       }
       ''
@@ -2478,13 +2486,31 @@ in
         MOCK
                 chmod +x "$MOCK_BIN/podman"
 
-                # beads-dolt: deterministic name/port, no-op for start/attach
-                cat > "$MOCK_BIN/beads-dolt" << 'MOCK'
+                # beads-dolt: deterministic name/port/socket. start creates
+                # a real Unix socket via nc so entrypoint's fail-hard socket
+                # check passes.
+                mkdir -p "$TMPDIR/ws/.wrapix"
+                cat > "$MOCK_BIN/beads-dolt" << MOCK
                 #!/bin/sh
-                case "$1" in
-                  start|attach|stop) exit 0 ;;
+                case "\$1" in
+                  start)
+                    # Kill any previous nc holding the socket from a prior run
+                    if [ -f "$TMPDIR/nc.pid" ]; then
+                      kill "\$(cat "$TMPDIR/nc.pid")" 2>/dev/null || true
+                    fi
+                    rm -f "$TMPDIR/ws/.wrapix/dolt.sock"
+                    nc -lkU "$TMPDIR/ws/.wrapix/dolt.sock" >/dev/null 2>&1 &
+                    echo \$! > "$TMPDIR/nc.pid"
+                    for _ in 1 2 3 4 5 6 7 8 9 10; do
+                      [ -S "$TMPDIR/ws/.wrapix/dolt.sock" ] && exit 0
+                      sleep 0.05
+                    done
+                    exit 1
+                    ;;
+                  attach|stop) exit 0 ;;
                   name)  echo "beads-test" ;;
                   port)  echo "13306" ;;
+                  socket) echo "$TMPDIR/ws/.wrapix/dolt.sock" ;;
                   *) exit 0 ;;
                 esac
         MOCK

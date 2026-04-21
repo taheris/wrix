@@ -69,7 +69,7 @@ if [ "$needs_rebuild" = 1 ]; then
   beads-dolt stop || true
   beads-dolt start "$ROOT"
   for _ in 1 2 3 4 5 6 7 8 9 10; do
-    [ -S "$ROOT/.gc/dolt.sock" ] && break
+    [ -S "$ROOT/.wrapix/dolt.sock" ] && break
     sleep 1
   done
 fi
