@@ -83,14 +83,18 @@
 
             beadsFor =
               pkgs':
-              (pkgs'.callPackage "${inputs.beads}/default.nix" {
+              pkgs'.callPackage "${inputs.beads}/default.nix" {
                 self = inputs.beads;
-              }).overrideAttrs
-                (old: {
-                  goModules = old.goModules.overrideAttrs {
-                    outputHash = "sha256-stY1JxMAeINT73KCvwZyh/TUktkLirEcGa0sW1u7W1s=";
-                  };
-                });
+                buildGoModule =
+                  args:
+                  pkgs'.buildGoModule (
+                    args
+                    // {
+                      proxyVendor = true;
+                      vendorHash = "sha256-S/NavjGH6VSPU+rCtqtviOcGhgXc6VZUXCUhasSdUGU=";
+                    }
+                  );
+              };
 
             gcFor =
               pkgs':
@@ -99,7 +103,8 @@
                 version = "dev";
                 src = inputs.gascity;
                 subPackages = [ "cmd/gc" ];
-                vendorHash = "sha256-Z5fI5WqPXJfKv3kB1MVLBhxdAI+knAcxa0CWlmyNzkg=";
+                proxyVendor = true;
+                vendorHash = "sha256-59k7xFBaLZJ50KWNhwIzttE8j7GXZPneq6o4eUTlvBI=";
                 doCheck = false;
               };
 
