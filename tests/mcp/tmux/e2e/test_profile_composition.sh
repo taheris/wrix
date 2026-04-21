@@ -157,7 +157,7 @@ check_command_output() {
 echo ""
 log_info "=== Checking Rust toolchain ==="
 
-# Check rustc (Rust compiler) - provided by rust-overlay
+# Check rustc (Rust compiler) - provided by fenix
 check_command "rustc" "rustc (Rust compiler)"
 check_command_output "rustc --version" "rustc" "rustc is functional"
 

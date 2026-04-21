@@ -99,7 +99,7 @@ See [specs/gas-city.md](specs/gas-city.md) for the full specification.
 | Profile | Packages |
 |---------|----------|
 | `base` | git, ripgrep, fd, jq, vim |
-| `rust` | base + rust-overlay toolchain, gcc, openssl, pkg-config |
+| `rust` | base + fenix toolchain, sccache, gcc, openssl, pkg-config |
 | `python` | base + python3, uv, ty, ruff |
 
 ## NixOS Module

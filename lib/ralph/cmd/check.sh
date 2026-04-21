@@ -235,25 +235,11 @@ Current value: ${RALPH_TEMPLATE_DIR:-<not set>}"
 
   local TEMPLATES_TO_CHECK=("plan-new" "plan-update" "todo-new" "todo-update" "run" "check" "watch")
 
-  # Find flake root for lib access
-  local FLAKE_ROOT
-  FLAKE_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
-  if [ -z "$FLAKE_ROOT" ] || [ ! -f "$FLAKE_ROOT/flake.nix" ]; then
-    echo "  ⚠ Not in a git repo with flake.nix, skipping template rendering check"
-    FLAKE_ROOT=""
-  fi
-
   # shellcheck disable=SC2016  # Single quotes are intentional for Nix expression building
   for template in "${TEMPLATES_TO_CHECK[@]}"; do
-    if [ -z "$FLAKE_ROOT" ]; then
-      echo "  - $template (skipped - no flake)"
-      continue
-    fi
-
     local render_expr='
 let
-  flake = builtins.getFlake (toString '"$FLAKE_ROOT"');
-  lib = flake.inputs.nixpkgs.lib;
+  lib = (builtins.getFlake "nixpkgs").lib;
   templateModule = import '"$NIX_FILE"' { inherit lib; };
   templates = templateModule.templates;
   variableDefs = templateModule.variableDefinitions;
@@ -301,10 +287,6 @@ in builtins.stringLength rendered
   echo ""
   echo "Checking variable declarations..."
 
-  if [ -z "$FLAKE_ROOT" ]; then
-    echo "  ⚠ Variable check skipped (no flake root)"
-  else
-
   local VAR_CHECK_NIX
   VAR_CHECK_NIX=$(mktemp)
   # shellcheck disable=SC2064
@@ -312,8 +294,7 @@ in builtins.stringLength rendered
 
   cat > "$VAR_CHECK_NIX" << NIXEOF
 let
-  flake = builtins.getFlake (toString $FLAKE_ROOT);
-  lib = flake.inputs.nixpkgs.lib;
+  lib = (builtins.getFlake "nixpkgs").lib;
   nixFile = builtins.getEnv "RALPH_CHECK_NIX_FILE";
   templates = (import nixFile { inherit lib; }).templates;
 
@@ -367,8 +348,6 @@ NIXEOF
   else
     echo "  ⚠ Variable check skipped (evaluation failed)"
   fi
-
-  fi # End of FLAKE_ROOT check
 
   #---------------------------------------------------------------------------
   # Summary

@@ -2,10 +2,18 @@
   pkgs,
   system,
   linuxPkgs ? pkgs,
+  fenix ? null,
 }:
 
 let
-  sandbox = import ./sandbox { inherit pkgs system linuxPkgs; };
+  sandbox = import ./sandbox {
+    inherit
+      pkgs
+      system
+      linuxPkgs
+      fenix
+      ;
+  };
   beads = import ./beads { inherit pkgs linuxPkgs; };
   ralph = import ./ralph {
     inherit pkgs beads;

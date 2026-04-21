@@ -2,6 +2,7 @@
   pkgs,
   system,
   linuxPkgs,
+  fenix ? null,
 }:
 
 let
@@ -23,7 +24,12 @@ let
   linuxSandbox = import ./linux { inherit pkgs; };
 
   # Profiles must use Linux packages (they contain Linux-only tools like iproute2)
-  profiles = import ./profiles.nix { pkgs = linuxPkgs; };
+  # hostPkgs is used only by hostShellHook references.
+  profiles = import ./profiles.nix {
+    pkgs = linuxPkgs;
+    hostPkgs = pkgs;
+    inherit fenix;
+  };
 
   # MCP server registry (uses Linux packages for server binaries)
   mcpRegistry = import ../mcp { pkgs = linuxPkgs; };

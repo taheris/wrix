@@ -9,6 +9,11 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    fenix = {
+      url = "git+https://github.com/nix-community/fenix.git?ref=main&shallow=1";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     flake-parts = {
       url = "git+ssh://git@github.com/hercules-ci/flake-parts.git?ref=main&shallow=1";
       inputs.nixpkgs-lib.follows = "nixpkgs";
@@ -17,11 +22,6 @@
     gascity = {
       url = "git+ssh://git@github.com/gastownhall/gascity.git?ref=main&shallow=1";
       flake = false;
-    };
-
-    rust-overlay = {
-      url = "git+ssh://git@github.com/oxalica/rust-overlay.git?ref=master&shallow=1";
-      inputs.nixpkgs.follows = "nixpkgs";
     };
 
     treefmt-nix = {
@@ -118,10 +118,7 @@
               // wrapixBeadsPkgs final final;
             linuxPkgs = import nixpkgs {
               system = linuxSystem;
-              overlays = [
-                inputs.rust-overlay.overlays.default
-                linuxOverlay
-              ];
+              overlays = [ linuxOverlay ];
               config.allowUnfree = true;
             };
 
@@ -147,7 +144,10 @@
               settings.formatter.shellcheck.excludes = [ ".envrc" ];
             };
 
-            wrapix = import ./lib { inherit pkgs system linuxPkgs; };
+            wrapix = import ./lib {
+              inherit pkgs system linuxPkgs;
+              inherit (inputs) fenix;
+            };
             city = wrapix.mkCity {
               name = "wx";
               profile = wrapix.profiles.base;
@@ -161,7 +161,6 @@
             _module.args.pkgs = import nixpkgs {
               inherit system;
               overlays = [
-                inputs.rust-overlay.overlays.default
                 hostOverlay
               ];
               config.allowUnfree = true;

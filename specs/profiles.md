@@ -45,14 +45,22 @@ Core tools for any development environment:
 
 ### Rust Profile
 
-Extends base with Rust toolchain via `oxalica/rust-overlay`. The overlay provides
-Rust toolchains as proper Nix derivations — no dynamic linker breakage across rebuilds.
+Extends base with Rust toolchain via `nix-community/fenix`. fenix provides
+Rust toolchains as proper Nix derivations — no dynamic linker breakage across rebuilds —
+and is the same provider downstream projects are standardizing on, so store paths
+align across the host/sandbox boundary.
 
-**Toolchain:** `rust-bin.stable.latest.default` with extensions `rust-src`, `rust-analyzer`
+**Toolchain:** `fenix.packages.${system}.stable.defaultToolchain` combined with
+`rust-src` and `rust-analyzer` (both separately pinned via fenix). The default
+toolchain matches the rustup-equivalent set: rustc + cargo + rust-std + clippy +
+rustfmt + rust-docs.
 
 | Package | Purpose |
 |---------|---------|
-| rust-overlay toolchain | cargo, rustc, clippy, rustfmt, rust-analyzer, rust-src |
+| fenix toolchain | cargo, rustc, clippy, rustfmt, rust-std |
+| fenix rust-src | Standard library source for rust-analyzer |
+| fenix rust-analyzer | LSP server (pinned independently of the channel) |
+| sccache | Shared compile cache across host + sandbox |
 | gcc | C compiler for linking |
 | openssl | TLS library |
 | pkg-config | Library discovery |
@@ -65,24 +73,31 @@ Environment:
 - `LIBRARY_PATH=${pkgs.postgresql.lib}/lib` — PostgreSQL library discovery at link time
 - `OPENSSL_INCLUDE_DIR=${pkgs.openssl.dev}/include` — OpenSSL headers
 - `OPENSSL_LIB_DIR=${pkgs.openssl.out}/lib` — OpenSSL libraries
+- `RUSTC_WRAPPER=${pkgs.sccache}/bin/sccache` — route compiler invocations through sccache
+- `CARGO_BUILD_RUSTC_WRAPPER` — same, picked up by cargo directly
+- `SCCACHE_DIR=/workspace/.cache/sccache` — stable in-container cache path, mounted from host
+- `CARGO_TARGET_DIR=/workspace/.target-sandbox` — isolate sandbox incremental artifacts from the host's `target/`
 
 Mounts:
 
 - `~/.cargo/registry` (ro, optional) — pre-warm crate cache from host
 - `~/.cargo/git` (ro, optional) — pre-warm git dependency cache from host
+- `~/.cache/sccache` (rw, optional) — shared sccache store between host and sandbox
 
 Network allowlist: `crates.io`, `static.crates.io`, `index.crates.io`
 
 > **Why not rustup?** Rustup downloads pre-built binaries dynamically linked against
 > a specific glibc in the nix store. When nixpkgs is updated and the container is
 > rebuilt, the old glibc path disappears and all toolchain binaries silently break
-> ("No such file or directory" — the dynamic linker is missing). rust-overlay provides
+> ("No such file or directory" — the dynamic linker is missing). fenix provides
 > the same toolchains as proper Nix derivations with correct dynamic linkers.
 >
-> **Why rust-overlay over plain nixpkgs packages?** rust-overlay supports arbitrary
-> version selection and can read `rust-toolchain.toml` files via
-> `rust-bin.fromRustupToolchainFile`. The `withToolchain` function exposes this.
-> The default profile uses `stable.latest`.
+> **Why fenix?** fenix supports arbitrary version selection and can read
+> `rust-toolchain.toml` files via `fromToolchainFile`. Downstream projects that pin
+> rust via fenix on the host get identical rustc store paths inside the sandbox
+> when they align the flake input (`inputs.wrapix.inputs.fenix.follows = "fenix"`),
+> which in turn lets sccache hit across the host/sandbox boundary. rust-analyzer
+> is combined separately so it can track its own cadence.
 
 ### Python Profile
 
@@ -98,19 +113,24 @@ Extends base with Python toolchain:
 
 | File | Role |
 |------|------|
-| `flake.nix` | Add `rust-overlay` flake input, apply overlay to `linuxPkgs` and host `pkgs` |
-| `lib/sandbox/profiles.nix` | Replace `rustup` with `rust-bin.stable.latest.default` toolchain from overlay |
-| `lib/sandbox/linux/entrypoint.sh` | Remove rustup bootstrap logic (`rustup default stable`, `rustup component add`) |
-| `lib/sandbox/darwin/entrypoint.sh` | Remove rustup bootstrap logic |
+| `flake.nix` | Add `fenix` flake input, thread it through to `lib/sandbox/profiles.nix` |
+| `lib/sandbox/profiles.nix` | Build rust toolchain via `fenixPkgs.stable.minimalToolchain` + `combine [ rust-src rust-analyzer ]`; wire `sccache`, `RUSTC_WRAPPER`, `SCCACHE_DIR`, `CARGO_TARGET_DIR` |
+| `lib/sandbox/linux/entrypoint.sh` | Contains no rustup bootstrap logic (toolchain is baked in at image build time) |
+| `lib/sandbox/darwin/entrypoint.sh` | Contains no rustup bootstrap logic |
 
 ## API
 
 ```nix
-# Use built-in profile (stable.latest)
+# Use built-in profile (fenix stable + rust-analyzer + rust-src)
 mkSandbox { profile = profiles.rust; }
 
-# Use project's rust-toolchain.toml
-mkSandbox { profile = profiles.rust.withToolchain ./rust-toolchain.toml; }
+# Use project's rust-toolchain.toml (fenix requires a sha256 for purity)
+mkSandbox {
+  profile = profiles.rust.withToolchain {
+    file = ./rust-toolchain.toml;
+    sha256 = "sha256-...";
+  };
+}
 
 # Extend profile with additional packages
 mkSandbox {
@@ -122,7 +142,10 @@ mkSandbox {
 
 # Combine: custom toolchain + extra packages
 mkSandbox {
-  profile = deriveProfile (profiles.rust.withToolchain ./rust-toolchain.toml) {
+  profile = deriveProfile (profiles.rust.withToolchain {
+    file = ./rust-toolchain.toml;
+    sha256 = "sha256-...";
+  }) {
     packages = [ pkgs.sqlx-cli ];
   };
 }
@@ -133,10 +156,11 @@ mkSandbox {
 Profiles may expose functions for configuration specific to their toolchain.
 These live on the profile attrset itself, not on `deriveProfile`.
 
-- `profiles.rust.withToolchain` — accepts a `rust-toolchain.toml` path, returns a
-  new profile attrset (without `withToolchain`) using `rust-bin.fromRustupToolchainFile`.
-  Extensions `rust-src` and `rust-analyzer` are merged with any components specified
-  in the toolchain file.
+- `profiles.rust.withToolchain` — accepts `{ file, sha256 }` (the `file` is the
+  path to `rust-toolchain.toml`; `sha256` is the hash of the downloaded components),
+  returns a new profile attrset (without `withToolchain`) using
+  `fenix.fromToolchainFile`. `rust-src` and `rust-analyzer` are combined in on top
+  of whatever components the toolchain file declares.
 
 Only the Rust profile has `withToolchain`. Other profiles (base, python) do not
 expose profile-specific configuration functions.
@@ -151,7 +175,7 @@ expose profile-specific configuration functions.
   [judge](../tests/judges/profiles.sh#test_rust_profile_rebuild_stable)
 - [ ] rust-analyzer can resolve the standard library (RUST_SRC_PATH is set correctly)
   [judge](../tests/judges/profiles.sh#test_rust_analyzer_sysroot)
-- [ ] `profiles.rust.withToolchain ./rust-toolchain.toml` produces a working profile
+- [ ] `profiles.rust.withToolchain { file = ./rust-toolchain.toml; sha256 = "..."; }` produces a working profile
   [judge](../tests/judges/profiles.sh#test_rust_with_toolchain)
 - [ ] Python profile can run Python scripts with dependencies
   [judge](../tests/judges/profiles.sh#test_python_profile)
@@ -165,3 +189,26 @@ expose profile-specific configuration functions.
 - Language-specific project scaffolding
 - IDE configuration beyond Claude Code
 - Auto-detection of `rust-toolchain.toml` at runtime (must be passed explicitly via `withToolchain`)
+
+## Downstream Integration
+
+Projects consuming wrapix that want cross-boundary sccache hits and identical
+rustc store paths in the sandbox must:
+
+1. Use fenix on the host too.
+2. Route through the same fenix revision as wrapix:
+
+   ```nix
+   inputs.wrapix.url = "...";
+   inputs.fenix.url = "git+https://github.com/nix-community/fenix.git?ref=main";
+   inputs.wrapix.inputs.fenix.follows = "fenix";
+   ```
+
+Without this, host and sandbox will each lock fenix to their own revision and
+produce different `/nix/store/.../bin/rustc` paths — sccache entries will not
+cross the boundary.
+
+Downstream projects should gitignore both of the sandbox-only cache paths:
+
+- `/workspace/.cache/sccache` — mounted from the host's `~/.cache/sccache` (rw, optional)
+- `/workspace/.target-sandbox` — sandbox `CARGO_TARGET_DIR`, kept out of the host's `target/`

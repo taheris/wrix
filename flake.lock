@@ -22,6 +22,29 @@
         "url": "ssh://git@github.com/taheris/beads.git"
       }
     },
+    "fenix": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ],
+        "rust-analyzer-src": "rust-analyzer-src"
+      },
+      "locked": {
+        "lastModified": 1776758770,
+        "narHash": "sha256-l2MswgsG69v+NYADWcNUOJUBSmuOImz62NZeW5pYkkg=",
+        "ref": "main",
+        "rev": "76b4f0657f3bfbfd1cb14deb4d4a1482e0fa7159",
+        "shallow": true,
+        "type": "git",
+        "url": "https://github.com/nix-community/fenix.git"
+      },
+      "original": {
+        "ref": "main",
+        "shallow": true,
+        "type": "git",
+        "url": "https://github.com/nix-community/fenix.git"
+      }
+    },
     "flake-parts": {
       "inputs": {
         "nixpkgs-lib": [
@@ -82,33 +105,28 @@
     "root": {
       "inputs": {
         "beads": "beads",
+        "fenix": "fenix",
         "flake-parts": "flake-parts",
         "gascity": "gascity",
         "nixpkgs": "nixpkgs",
-        "rust-overlay": "rust-overlay",
         "treefmt-nix": "treefmt-nix"
       }
     },
-    "rust-overlay": {
-      "inputs": {
-        "nixpkgs": [
-          "nixpkgs"
-        ]
-      },
+    "rust-analyzer-src": {
+      "flake": false,
       "locked": {
-        "lastModified": 1776741231,
-        "narHash": "sha256-k9G98qzn+7npROUaks8VqCFm7cFtEG8ulQLBBo5lItg=",
-        "ref": "master",
-        "rev": "02061303f7c4c964f7b4584dabd9e985b4cd442b",
-        "shallow": true,
-        "type": "git",
-        "url": "ssh://git@github.com/oxalica/rust-overlay.git"
+        "lastModified": 1776702210,
+        "narHash": "sha256-SX0+HYv/rEcU6G42nUdXP30GYLcBaP8qx8HvKCIrw9c=",
+        "owner": "rust-lang",
+        "repo": "rust-analyzer",
+        "rev": "f381976fa67d9b87ca6c2ae35f8277b13013abf8",
+        "type": "github"
       },
       "original": {
-        "ref": "master",
-        "shallow": true,
-        "type": "git",
-        "url": "ssh://git@github.com/oxalica/rust-overlay.git"
+        "owner": "rust-lang",
+        "ref": "nightly",
+        "repo": "rust-analyzer",
+        "type": "github"
       }
     },
     "treefmt-nix": {

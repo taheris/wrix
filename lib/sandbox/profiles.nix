@@ -1,80 +1,10 @@
-{ pkgs }:
+{
+  pkgs,
+  hostPkgs ? pkgs,
+  fenix ? null,
+}:
 
 let
-  # Build a Rust toolchain from rust-overlay with required extensions
-  mkRustToolchain =
-    base:
-    base.override {
-      extensions = [
-        "rust-src"
-        "rust-analyzer"
-      ];
-    };
-
-  # Default stable toolchain with extensions
-  defaultRustToolchain = mkRustToolchain pkgs.rust-bin.stable.latest.default;
-
-  # Build a Rust profile attrset from a given toolchain
-  mkRustProfile =
-    toolchain:
-    let
-      profile = mkProfile {
-        name = "rust";
-
-        packages = [
-          toolchain
-          pkgs.gcc
-          pkgs.openssl
-          pkgs.openssl.dev
-          pkgs.pkg-config
-          pkgs.postgresql.lib
-        ];
-
-        enabledPlugins = {
-          "rust-analyzer-lsp@claude-plugins-official" = true;
-        };
-
-        env = {
-          CARGO_HOME = "/workspace/.cargo";
-          RUST_SRC_PATH = "${toolchain}/lib/rustlib/src/rust/library";
-          LIBRARY_PATH = "${pkgs.postgresql.lib}/lib";
-          OPENSSL_INCLUDE_DIR = "${pkgs.openssl.dev}/include";
-          OPENSSL_LIB_DIR = "${pkgs.openssl.out}/lib";
-        };
-
-        mounts = [
-          {
-            source = "~/.cargo/registry";
-            dest = "~/.cargo/registry";
-            mode = "ro";
-            optional = true;
-          }
-          {
-            source = "~/.cargo/git";
-            dest = "~/.cargo/git";
-            mode = "ro";
-            optional = true;
-          }
-        ];
-
-        networkAllowlist = [
-          "crates.io"
-          "static.crates.io"
-          "index.crates.io"
-        ];
-      };
-    in
-    profile;
-
-  # Build a toolchain from a rust-toolchain.toml file, ensuring rust-src and rust-analyzer
-  withToolchainFromFile =
-    toolchainFile:
-    let
-      base = pkgs.rust-bin.fromRustupToolchainFile toolchainFile;
-      toolchain = mkRustToolchain base;
-    in
-    mkRustProfile toolchain;
-
   # Base packages included in all profiles
   basePackages = with pkgs; [
     bash
@@ -138,7 +68,11 @@ let
     "cache.nixos.org" # Nix binary cache
   ];
 
-  # Helper to create a profile with base packages, mounts, and env merged in
+  # Helper to create a profile with base packages, mounts, and env merged in.
+  # hostShellHook is a shell snippet consumer shellHooks (ralph, city, or a
+  # downstream devShell) splice in to align host-side env with what the profile
+  # mounts into the sandbox — e.g. pointing host sccache at the path the rust
+  # profile mounts, so cross-boundary cache hits work.
   mkProfile =
     {
       name,
@@ -147,14 +81,118 @@ let
       mounts ? [ ],
       networkAllowlist ? [ ],
       enabledPlugins ? { },
+      hostShellHook ? "",
     }:
     {
-      inherit name enabledPlugins;
+      inherit name enabledPlugins hostShellHook;
       packages = basePackages ++ packages;
       env = baseEnv // env;
       mounts = baseMounts ++ mounts;
       networkAllowlist = baseNetworkAllowlist ++ networkAllowlist;
     };
+
+  fenixPkgs =
+    if fenix == null then
+      throw "lib/sandbox/profiles.nix: profiles.rust requires the fenix input; pass `fenix` to this file"
+    else
+      fenix.packages.${pkgs.system};
+
+  mkRustToolchain =
+    base:
+    fenixPkgs.combine [
+      base
+      fenixPkgs.rust-analyzer
+      fenixPkgs.stable.rust-src
+    ];
+
+  # fenix's minimalToolchain omits clippy/rustfmt; defaultToolchain is the
+  # rustup-equivalent "default" set (rustc + cargo + rust-std + clippy + rustfmt + rust-docs).
+  defaultRustToolchain = mkRustToolchain fenixPkgs.stable.defaultToolchain;
+
+  # Build a Rust profile attrset from a given toolchain
+  mkRustProfile =
+    toolchain:
+    mkProfile {
+      name = "rust";
+
+      packages = [
+        toolchain
+        pkgs.gcc
+        pkgs.openssl
+        pkgs.openssl.dev
+        pkgs.pkg-config
+        pkgs.postgresql.lib
+        pkgs.sccache
+      ];
+
+      enabledPlugins = {
+        "rust-analyzer-lsp@claude-plugins-official" = true;
+      };
+
+      env = {
+        CARGO_HOME = "/workspace/.cargo";
+        RUST_SRC_PATH = "${toolchain}/lib/rustlib/src/rust/library";
+        LIBRARY_PATH = "${pkgs.postgresql.lib}/lib";
+        OPENSSL_INCLUDE_DIR = "${pkgs.openssl.dev}/include";
+        OPENSSL_LIB_DIR = "${pkgs.openssl.out}/lib";
+
+        RUSTC_WRAPPER = "${pkgs.sccache}/bin/sccache";
+        CARGO_BUILD_RUSTC_WRAPPER = "${pkgs.sccache}/bin/sccache";
+        SCCACHE_DIR = "/workspace/.cache/sccache";
+
+        # Isolate sandbox incremental artifacts from the host's target/;
+        # different rustc store paths write incompatible incremental data.
+        CARGO_TARGET_DIR = "/workspace/.target-sandbox";
+      };
+
+      mounts = [
+        {
+          source = "~/.cargo/registry";
+          dest = "~/.cargo/registry";
+          mode = "ro";
+          optional = true;
+        }
+        {
+          source = "~/.cargo/git";
+          dest = "~/.cargo/git";
+          mode = "ro";
+          optional = true;
+        }
+        {
+          source = "~/.cache/sccache";
+          dest = "/workspace/.cache/sccache";
+          mode = "rw";
+          optional = true;
+        }
+      ];
+
+      networkAllowlist = [
+        "crates.io"
+        "static.crates.io"
+        "index.crates.io"
+      ];
+
+      # Align host with the sandbox so cross-boundary cache hits work.
+      # RUSTC_WRAPPER: always pin to wrapix's sccache so host and sandbox
+      # run the same version — avoids cache-format drift if the user's
+      # ambient sccache is a different build.
+      # SCCACHE_DIR: respect an existing host value; default matches the
+      # sandbox mount path (and sccache's Linux default).
+      hostShellHook = ''
+        export RUSTC_WRAPPER="${hostPkgs.sccache}/bin/sccache"
+        export SCCACHE_DIR="''${SCCACHE_DIR:-$HOME/.cache/sccache}"
+      '';
+    };
+
+  # Build a toolchain from a rust-toolchain.toml file. fenix requires a sha256
+  # of the downloaded components for purity, so callers must pass { file, sha256 }.
+  withToolchainFromFile =
+    { file, sha256 }:
+    let
+      base = fenixPkgs.fromToolchainFile { inherit file sha256; };
+      toolchain = mkRustToolchain base;
+    in
+    mkRustProfile toolchain;
 
   # Suppress GNU which's verbose "no X in (PATH)" errors
   whichQuiet = pkgs.writeShellScriptBin "which" ''

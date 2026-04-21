@@ -843,7 +843,7 @@ Specs can declare companion directories whose manifest is injected into template
 
 ## Implementation Notes
 
-State files can contain an optional `implementation_notes` field: an array of strings providing transient implementation hints gathered during `ralph plan -u` spec update interviews. These are details that help the implementer but don't belong in the permanent spec (e.g., "remove the rustup bootstrap block", "use rust-overlay's fromRustupToolchainFile").
+State files can contain an optional `implementation_notes` field: an array of strings providing transient implementation hints gathered during `ralph plan -u` spec update interviews. These are details that help the implementer but don't belong in the permanent spec (e.g., "remove the rustup bootstrap block", "use fenix's fromToolchainFile").
 
 - Populated during `ralph plan -u` interviews — the interviewer stores notes in the state file rather than adding an "Implementation Notes" section to the spec markdown
 - Read by `ralph todo` from `state/<label>.json` and formatted as a markdown bullet list
