@@ -10,6 +10,8 @@ set -euo pipefail
 #   ralph msg -i <id> "answer"         # Reply (answer as positional)
 #   ralph msg -i <id> -d               # Dismiss without answering
 
+RALPH_DIR="${RALPH_DIR:-.wrapix/ralph}"
+
 # Load shared helpers
 # shellcheck source=util.sh
 source "$(dirname "$0")/util.sh"
@@ -129,6 +131,36 @@ get_question_for_bead() {
 }
 
 #-----------------------------------------------------------------------------
+# Print one-line resume hint after clearing a clarify.
+# When the bead's spec label matches state/current (or current is unset), the
+# hint is `ralph run`; otherwise it appends `-s <label>` so the user resumes
+# the right workflow.
+#-----------------------------------------------------------------------------
+print_resume_hint() {
+  local bead_id="$1"
+
+  local labels_json
+  labels_json=$(bd_json show "$bead_id" --json 2>/dev/null | jq -c '.[0].labels // []' 2>/dev/null || echo '[]')
+
+  local bead_spec
+  bead_spec=$(get_spec_from_labels "$labels_json")
+
+  local current_spec=""
+  local current_file="$RALPH_DIR/state/current"
+  if [ -f "$current_file" ]; then
+    current_spec=$(<"$current_file")
+    current_spec="${current_spec#"${current_spec%%[![:space:]]*}"}"
+    current_spec="${current_spec%"${current_spec##*[![:space:]]}"}"
+  fi
+
+  if [ -n "$bead_spec" ] && [ "$bead_spec" != "—" ] && [ "$bead_spec" != "$current_spec" ]; then
+    echo "Clarify cleared on $bead_id. Resume with: ralph run -s $bead_spec"
+  else
+    echo "Clarify cleared on $bead_id. Resume with: ralph run"
+  fi
+}
+
+#-----------------------------------------------------------------------------
 # Mode: Show specific question
 #-----------------------------------------------------------------------------
 if [ -n "$BEAD_ID" ] && [ -z "$ANSWER" ] && [ "$DISMISS" = "false" ]; then
@@ -149,7 +181,7 @@ if [ -n "$BEAD_ID" ] && [ -n "$ANSWER" ]; then
   # Remove ralph:clarify label
   remove_clarify_label "$BEAD_ID"
 
-  echo "Reply stored for $BEAD_ID. The agent will pick it up on its next iteration."
+  print_resume_hint "$BEAD_ID"
   exit 0
 fi
 

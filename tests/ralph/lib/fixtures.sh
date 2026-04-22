@@ -219,7 +219,7 @@ EOF
   # Symlink ralph commands from SOURCE (not installed) to test latest code
   # This ensures tests verify the actual source, not a potentially stale build
   RALPH_SRC_DIR="$REPO_ROOT/lib/ralph/cmd"
-  for cmd in ralph-run ralph-todo ralph-plan ralph-status ralph-sync ralph-check ralph-spec ralph-use ralph-logs; do
+  for cmd in ralph-run ralph-todo ralph-plan ralph-status ralph-sync ralph-check ralph-spec ralph-use ralph-logs ralph-msg; do
     local script_name="${cmd#ralph-}"  # Remove 'ralph-' prefix
     if [ -f "$RALPH_SRC_DIR/$script_name.sh" ]; then
       ln -sf "$RALPH_SRC_DIR/$script_name.sh" "$TEST_DIR/bin/$cmd"

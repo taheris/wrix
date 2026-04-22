@@ -1939,6 +1939,73 @@ EOF
   teardown_test_env
 }
 
+# Test: ralph msg reply prints a one-line resume hint after clearing clarify.
+# Covers both the matching-spec case (just `ralph run`) and the differing-spec
+# case (`ralph run -s <label>`).
+test_msg_reply_resume_hint() {
+  CURRENT_TEST="msg_reply_resume_hint"
+  test_header "ralph msg reply prints resume hint on clarify clear"
+
+  setup_test_env "msg-resume-hint"
+  init_beads
+
+  mkdir -p "$RALPH_DIR/state"
+  echo "current-feature" > "$RALPH_DIR/state/current"
+
+  local matching_id
+  matching_id=$(bd create --title="Matching spec question" --type=task \
+    --description="Question for matching spec" \
+    --labels="spec-current-feature,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+
+  local matching_output
+  matching_output=$(ralph-msg -i "$matching_id" "use approach A" 2>&1)
+
+  if echo "$matching_output" | grep -qF "Clarify cleared on $matching_id. Resume with: ralph run"; then
+    test_pass "Reply hint matches expected text for current spec"
+  else
+    test_fail "Reply hint missing expected text (got: $matching_output)"
+  fi
+
+  if echo "$matching_output" | grep -qE "Resume with: ralph run -s "; then
+    test_fail "Hint should not include -s flag when bead spec matches state/current"
+  else
+    test_pass "No -s flag in hint when bead spec matches current"
+  fi
+
+  local has_label_after
+  has_label_after=$(bd show "$matching_id" --json 2>/dev/null \
+    | jq -r '.[0].labels // [] | map(select(. == "ralph:clarify")) | length')
+  if [ "$has_label_after" = "0" ]; then
+    test_pass "ralph:clarify label removed after reply"
+  else
+    test_fail "ralph:clarify label still present after reply"
+  fi
+
+  local notes_after
+  notes_after=$(bd show "$matching_id" --json 2>/dev/null | jq -r '.[0].notes // ""')
+  if echo "$notes_after" | grep -qF "Answer: use approach A"; then
+    test_pass "Answer stored in bead notes"
+  else
+    test_fail "Answer not stored in bead notes (got: ${notes_after:0:200})"
+  fi
+
+  local other_id
+  other_id=$(bd create --title="Other spec question" --type=task \
+    --description="Question for other spec" \
+    --labels="spec-other-feature,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+
+  local other_output
+  other_output=$(ralph-msg -i "$other_id" "go with option B" 2>&1)
+
+  if echo "$other_output" | grep -qF "Clarify cleared on $other_id. Resume with: ralph run -s other-feature"; then
+    test_pass "Reply hint includes -s flag when bead spec differs from current"
+  else
+    test_fail "Reply hint missing -s flag (got: $other_output)"
+  fi
+
+  teardown_test_env
+}
+
 # Test: partial epic completion (2/3 tasks closed, epic stays open)
 # When an epic has tasks and only some are closed, the epic should remain open
 test_partial_epic_completion() {
@@ -10411,6 +10478,7 @@ SEQUENTIAL_TESTS=(
   test_run_handles_clarify_signal
   test_run_skips_awaiting_input
   test_clarify_label_helpers
+  test_msg_reply_resume_hint
   test_run_respects_dependencies
   test_run_loop_processes_all
   test_parallel_agent_simulation
