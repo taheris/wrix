@@ -85,6 +85,7 @@ if [ -n "${WRAPIX_SOCK_MOUNTS:-}" ]; then
         [ -z "$sock" ] && continue
         sock=$(expand_path "$sock")
         if [ -e "$sock" ]; then
+            # best-effort: VirtioFS sometimes forbids chmod; fail silently so boot continues
             chmod 777 "$sock" 2>/dev/null || true
         fi
     done
@@ -175,11 +176,13 @@ done
 # to fall back to bd's embedded autostart (which would fork a per-container
 # dolt that diverges from the host's authoritative state).
 if [ -f /workspace/.beads/config.yaml ]; then
+  # best-effort: missing/malformed metadata.json -> default to sqlite backend
   BACKEND=$(jq -r '.backend // "sqlite"' /workspace/.beads/metadata.json 2>/dev/null || echo "sqlite")
 
   if [ "$BACKEND" = "dolt" ]; then
     if [ ! -S /workspace/.wrapix/dolt.sock ]; then
       echo "Error: dolt backend configured but /workspace/.wrapix/dolt.sock not mounted" >&2
+      # best-effort: no git remote -> _repo stays empty, message uses generic fallback
       _repo=$(git -C /workspace remote get-url origin 2>/dev/null | sed 's|.*/||;s|\.git$||')
       echo "  Start the host ${_repo:-repo}-beads container (enter the devShell) before launching this container." >&2
       exit 1
@@ -187,12 +190,14 @@ if [ -f /workspace/.beads/config.yaml ]; then
     export BEADS_DOLT_SERVER_SOCKET=/workspace/.wrapix/dolt.sock
     export BEADS_DOLT_AUTO_START=0
   else
+    # best-effort: config.yaml without issue-prefix -> PREFIX empty, bd init skipped
     PREFIX=$(yq -r '.["issue-prefix"] // ""' /workspace/.beads/config.yaml 2>/dev/null || echo "")
     if [ -n "$PREFIX" ] && [ -f /workspace/.beads/issues.jsonl ]; then
       bd init --prefix "$PREFIX" --from-jsonl --quiet --skip-hooks --skip-merge-driver
     fi
   fi
 
+  # best-effort: files may not exist or not be tracked; restoring them is idempotent cleanup
   git checkout -- .beads/.gitignore AGENTS.md 2>/dev/null || true
 fi
 
@@ -219,6 +224,7 @@ if [ "${WRAPIX_NETWORK:-open}" = "limit" ]; then
     for domain in "${DOMAINS[@]}"; do
       [ -z "$domain" ] && continue
       # Resolve domain to IPv4 addresses
+      # best-effort: unresolvable domain -> no iptables rule added, traffic stays blocked
       while IFS=' ' read -r ip _rest; do
         [ -z "$ip" ] && continue
         iptables -A OUTPUT -d "$ip" -j ACCEPT
@@ -234,6 +240,7 @@ if [ "${WRAPIX_NETWORK:-open}" = "limit" ]; then
 
       for domain in "${DOMAINS[@]}"; do
         [ -z "$domain" ] && continue
+        # best-effort: no IPv6 records -> no ip6tables rule, domain only reachable via IPv4
         while IFS=' ' read -r ip _rest; do
           [ -z "$ip" ] && continue
           ip6tables -A OUTPUT -d "$ip" -j ACCEPT
@@ -265,12 +272,14 @@ write_session_log() {
   # Read bead ID if ralph wrote one during the session
   local bead_id=""
   if [ -f /tmp/wrapix-bead-id ]; then
+    # best-effort: ralph didn't write a bead id -> field stays empty in session log
     bead_id=$(cat /tmp/wrapix-bead-id 2>/dev/null || true)
   fi
 
   # Find most recent claude session ID from history
   local claude_session_id=""
   if [ -f /workspace/.claude/history.jsonl ]; then
+    # best-effort: missing/malformed history.jsonl -> session id stays empty
     claude_session_id=$(tail -1 /workspace/.claude/history.jsonl 2>/dev/null \
       | jq -r '.sessionId // empty' 2>/dev/null || true)
   fi
@@ -300,6 +309,7 @@ write_session_log() {
       claude_session_id: (if $claude_session_id == "" then null else $claude_session_id end),
       claude_session_dir: $claude_session_dir
     }' > "$log_file" 2>/dev/null || true
+    # best-effort: /workspace/.wrapix/log unwritable in some profiles -> skip session log rather than fail exit trap
 }
 
 # Drop to HOST_UID via user namespace (maps inner HOST_UID to outer root,

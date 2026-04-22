@@ -91,8 +91,9 @@ if [[ -z "$LOG_FILE" ]]; then
   debug "logs: resolved label=$LABEL, bead_label=$BEAD_LABEL"
 
   # Get issue IDs for this spec's workflow
-  ISSUE_IDS=$(bd list --label "$BEAD_LABEL" --json 2>/dev/null \
-    | jq -r '.[].id // empty' 2>/dev/null) || true
+  # best-effort: no beads or empty result -> fall through to recent-log fallback below
+  ISSUE_IDS=$(bd list --label "$BEAD_LABEL" --json \
+    | jq -r '.[].id // empty') || true
 
   if [[ -n "$ISSUE_IDS" ]]; then
     # Build a find pattern matching work-<issue_id>.log for each issue
@@ -109,8 +110,9 @@ if [[ -z "$LOG_FILE" ]]; then
     done <<< "$ISSUE_IDS"
 
     if [[ ${#FIND_ARGS[@]} -gt 0 ]]; then
+      # best-effort: no matching logs -> LOG_FILE empty, fallback branch below runs
       LOG_FILE=$(find "$LOGS_DIR" -maxdepth 1 -type f \( "${FIND_ARGS[@]}" \) \
-        -printf '%T@\t%p\n' 2>/dev/null \
+        -printf '%T@\t%p\n' \
         | sort -rn \
         | head -1 \
         | cut -f2) || true
@@ -119,8 +121,9 @@ if [[ -z "$LOG_FILE" ]]; then
 
   # Fallback: if no spec-specific logs found, try most recent work-*.log
   if [[ -z "$LOG_FILE" ]]; then
+    # best-effort: missing logs dir or no matches -> LOG_FILE empty, error handler below
     LOG_FILE=$(find "$LOGS_DIR" -maxdepth 1 -name "work-*.log" -type f \
-      -printf '%T@\t%p\n' 2>/dev/null \
+      -printf '%T@\t%p\n' \
       | sort -rn \
       | head -1 \
       | cut -f2) || true
@@ -157,7 +160,7 @@ if [[ "$SHOW_ALL" == "true" ]]; then
     else
       "─── " + (.type // "unknown") + " ───"
     end
-  ' "$LOG_FILE" 2>/dev/null || cat "$LOG_FILE"
+  ' "$LOG_FILE" || cat "$LOG_FILE"  # best-effort: malformed JSONL -> raw dump
   exit 0
 fi
 
@@ -172,13 +175,15 @@ find_error_line() {
   # Step 1: Use grep to find lines with JSON error indicators (streaming, memory-safe)
   # Check for is_error:true, non-zero exit_code, or subtype:error
   local json_error_line
-  json_error_line=$(grep -n -m1 -E '"is_error"\s*:\s*true|"exit_code"\s*:\s*[1-9]|"subtype"\s*:\s*"error"' "$file" 2>/dev/null | cut -d: -f1) || true
+  # best-effort: no match -> empty, handled below
+  json_error_line=$(grep -n -m1 -E '"is_error"\s*:\s*true|"exit_code"\s*:\s*[1-9]|"subtype"\s*:\s*"error"' "$file" | cut -d: -f1) || true
 
   # Step 2: Use grep to find lines with error text patterns (streaming, memory-safe)
   local text_error_line
+  # best-effort: no match -> empty, handled below
   text_error_line=$(grep -n -m1 -iE \
     'error:|failed|exception|panic:|stack trace|traceback' \
-    "$file" 2>/dev/null | cut -d: -f1) || true
+    "$file" | cut -d: -f1) || true
 
   # Filter out false positives (0 errors, RALPH_COMPLETE, etc)
   if [[ -n "$text_error_line" ]]; then
@@ -187,8 +192,9 @@ find_error_line() {
     if echo "$line_content" | grep -qE '0 errors|no errors|errors: 0|RALPH_COMPLETE'; then
       # False positive - continue searching from this line
       local remaining
+      # best-effort: no more matches -> empty, handled below
       remaining=$(tail -n "+$((text_error_line + 1))" "$file" | grep -n -m1 -iE \
-        'error:|failed|exception|panic:|stack trace|traceback' 2>/dev/null | cut -d: -f1) || true
+        'error:|failed|exception|panic:|stack trace|traceback' | cut -d: -f1) || true
       if [[ -n "$remaining" ]]; then
         text_error_line=$((text_error_line + remaining))
         # Re-check for false positives
@@ -225,10 +231,11 @@ if [[ "$ERROR_LINE" -eq 0 ]]; then
   echo "No errors found in log."
   echo ""
   echo "Last result:"
-  jq -r 'select(.type == "result") |
+  # best-effort: malformed JSONL -> no output, acceptable for a display summary
+  { jq -r 'select(.type == "result") |
     "Status: " + (.subtype // "unknown") +
     (if .result then "\n" + .result else "" end)
-  ' "$LOG_FILE" 2>/dev/null | tail -30
+  ' "$LOG_FILE" || true; } | tail -30
   exit 0
 fi
 
@@ -242,6 +249,7 @@ echo "Error found at line $ERROR_LINE (showing $CONTEXT_LINES lines of context)"
 echo ""
 
 # Show context leading up to and including the error
+# best-effort: malformed JSONL -> raw sed output (fallback after ||)
 sed -n "${START_LINE},${ERROR_LINE}p" "$LOG_FILE" | jq -r '
   if .type == "assistant" then
     "─── assistant ───\n" + (.message.content // .content // "(no content)")
@@ -256,9 +264,10 @@ sed -n "${START_LINE},${ERROR_LINE}p" "$LOG_FILE" | jq -r '
   else
     "─── " + (.type // "unknown") + " ───"
   end
-' 2>/dev/null || sed -n "${START_LINE},${ERROR_LINE}p" "$LOG_FILE"
+' || sed -n "${START_LINE},${ERROR_LINE}p" "$LOG_FILE"
 
 # Highlight what triggered the error detection
 echo ""
 echo "═══ Error detected at line $ERROR_LINE ═══"
-sed -n "${ERROR_LINE}p" "$LOG_FILE" | jq -C '.' 2>/dev/null || sed -n "${ERROR_LINE}p" "$LOG_FILE"
+# best-effort: malformed line -> raw sed output
+sed -n "${ERROR_LINE}p" "$LOG_FILE" | jq -C '.' || sed -n "${ERROR_LINE}p" "$LOG_FILE"

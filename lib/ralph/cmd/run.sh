@@ -19,6 +19,13 @@ set -euo pipefail
 #
 # Each iteration runs with fresh context (new claude process).
 # When all beads complete, transitions WIP -> REVIEW.
+#
+# SH-6 convention: jq lookups of config/state/bd JSON below use
+# `2>/dev/null || <default>` as best-effort: missing/malformed inputs fall
+# back to sensible defaults (empty string, "0", "block", numeric limits) so
+# the loop continues rather than aborts. `bd dolt commit || true` during the
+# loop tolerates "nothing to commit" between iterations; the final push path
+# surfaces errors explicitly.
 
 # Parse flags (including --spec/-s early, before container detection)
 RUN_ONCE=false
@@ -156,7 +163,7 @@ if [ ! -f /etc/wrapix/claude-config.json ] && command -v wrapix &>/dev/null; the
   wrapix
   wrapix_exit=$?
   echo "Syncing beads from container..."
-  bd dolt pull 2>/dev/null || echo "Warning: bd dolt pull failed (beads may not be synced)"
+  bd dolt pull || echo "Warning: bd dolt pull failed (beads may not be synced)"
   exit $wrapix_exit
 fi
 
@@ -171,8 +178,9 @@ check_ralph_staleness
 # This is critical - container may have stale data
 # Commit first so dolt pull can merge into a clean working set
 debug "Pulling beads database..."
-bd dolt commit >/dev/null 2>&1 || true
-bd dolt pull >/dev/null 2>&1 || warn "bd dolt pull failed, continuing with local state"
+# best-effort: "nothing to commit" is fine; pull below still merges
+bd dolt commit >/dev/null || true
+bd dolt pull >/dev/null || warn "bd dolt pull failed, continuing with local state"
 
 RALPH_DIR="${RALPH_DIR:-.wrapix/ralph}"
 CONFIG_FILE="$RALPH_DIR/config.nix"
@@ -551,8 +559,9 @@ run_step() {
       bd close "$next_issue"
 
       # Push beads to Dolt remote (incremental sync for progress visibility and crash safety)
-      bd dolt commit >/dev/null 2>&1 || true
-      bd dolt push 2>/dev/null || echo "Warning: bd dolt push failed"
+      # best-effort: "nothing to commit" when no beads changed this step
+      bd dolt commit >/dev/null || true
+      bd dolt push || echo "Warning: bd dolt push failed"
 
       # Check if all beads with this label are complete
       check_all_complete "$bead_label" "$label" "$hidden"
@@ -714,8 +723,9 @@ run_step_in_worktree() {
   if jq -e '[.[] | select(.type == "result") | .result | contains("RALPH_COMPLETE")] | any' -s "$log" >/dev/null 2>&1; then
     echo "  [$bead_id] Work complete. Closing issue."
     bd close "$bead_id"
-    bd dolt commit >/dev/null 2>&1 || true
-    bd dolt push 2>/dev/null || true
+    # best-effort: "nothing to commit" possible; push failure retried next step
+    bd dolt commit >/dev/null || true
+    bd dolt push || warn "bd dolt push failed for $bead_id (retry next step)"
     return 0
   elif jq -e '[.[] | select(.type == "result") | .result | contains("RALPH_CLARIFY")] | any' -s "$log" >/dev/null 2>&1; then
     local clarify_text
@@ -813,7 +823,8 @@ run_parallel_batch() {
       cleanup_worktree "$wt"
       # Delete the worktree branch
       local branch_name="ralph/${label}/${bead}"
-      git branch -D "$branch_name" 2>/dev/null || true
+      # best-effort: branch may already be gone (e.g. never committed)
+      git branch -D "$branch_name" || true
     fi
   done
 

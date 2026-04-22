@@ -15,6 +15,12 @@ set -euo pipefail
 # Exit codes:
 #   0 = success (or review passed)
 #   1 = errors found (or review found issues)
+#
+# SH-6 convention: diagnostic captures of the form `cmd 2>&1 || true` inside
+# else-branches are intentional — they collect error output for a validation
+# report, not silence it. jq/bd lookups in display paths fall back to sensible
+# defaults (empty string, "0", "[]") per the same display-script pattern used
+# in status.sh.
 
 # Load shared helpers
 # shellcheck source=util.sh
@@ -235,7 +241,8 @@ To fix this, do one of the following:
     [ -f "$body_path" ] || continue
 
     local refs
-    refs=$(grep -oE '\{\{> [a-z-]+\}\}' "$body_path" 2>/dev/null | sed 's/{{> //;s/}}//' || true)
+    # best-effort: no partial refs -> empty, loop below skipped
+    refs=$(grep -oE '\{\{> [a-z-]+\}\}' "$body_path" | sed 's/{{> //;s/}}//' || true)
 
     if [ -n "$refs" ]; then
       for ref in $refs; do
@@ -491,7 +498,7 @@ run_spec_review() {
 
     # Container bead sync protocol: pull before re-counting on host side
     echo "Syncing beads from container..."
-    bd dolt pull 2>/dev/null || echo "Warning: bd dolt pull failed (beads may not be synced)"
+    bd dolt pull || echo "Warning: bd dolt pull failed (beads may not be synced)"
 
     if [ $wrapix_exit -ne 0 ]; then
       echo ""
@@ -696,7 +703,8 @@ run_spec_review() {
   # fix-up or ralph:clarify beads the reviewer created.
   echo ""
   echo "Pushing beads to Dolt remote..."
-  bd dolt commit >/dev/null 2>&1 || true
+  # best-effort: nothing to commit -> dolt returns non-zero; push below still runs
+  bd dolt commit >/dev/null || true
   if ! bd dolt push 2>&1; then
     echo "Warning: bd dolt push failed — beads may not reach host"
   fi

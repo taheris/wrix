@@ -68,7 +68,7 @@ if [ ! -f /etc/wrapix/claude-config.json ] && command -v wrapix &>/dev/null; the
   wrapix_exit=$?
   if [ $wrapix_exit -eq 0 ]; then
     echo "Syncing beads from container..."
-    bd dolt pull 2>/dev/null || echo "Warning: bd dolt pull failed (beads may not be synced)"
+    bd dolt pull || echo "Warning: bd dolt pull failed (beads may not be synced)"
   fi
   exit $wrapix_exit
 fi
@@ -196,7 +196,8 @@ if [ "$SPEC_NEW" = "false" ] && [ "$SPEC_HIDDEN" = "false" ] && [ -z "$UPDATE_SP
       LABEL_STATE_RESUME="$RALPH_DIR/state/${LABEL}.json"
       if [ -f "$LABEL_STATE_RESUME" ]; then
         # Derive hidden from spec_path in state JSON
-        resume_spec_path=$(jq -r '.spec_path // ""' "$LABEL_STATE_RESUME" 2>/dev/null || echo "")
+        # best-effort: malformed state JSON -> empty spec_path, caller handles
+        resume_spec_path=$(jq -r '.spec_path // ""' "$LABEL_STATE_RESUME" || echo "")
         if [[ "$resume_spec_path" == *"/state/"* ]]; then
           SPEC_HIDDEN="true"
         fi
@@ -430,7 +431,7 @@ run_claude_interactive "PROMPT_CONTENT"
 # bd dolt push only pushes committed data; without commit, working set
 # changes are lost to subsequent dolt clone (e.g., ralph run container)
 echo "Pushing beads to Dolt remote..."
-beads-push 2>/dev/null || echo "Warning: beads-push failed"
+beads-push || echo "Warning: beads-push failed"
 
 echo ""
 echo "Next steps:"

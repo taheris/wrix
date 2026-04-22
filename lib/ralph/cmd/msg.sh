@@ -104,7 +104,8 @@ get_source_label() {
 #-----------------------------------------------------------------------------
 get_spec_from_labels() {
   local labels_json="$1"
-  echo "$labels_json" | jq -r '[.[] | select(startswith("spec:"))] | first // "—"' 2>/dev/null | sed 's/^spec://'
+  # best-effort: malformed labels -> em-dash placeholder, caller treats as "no spec"
+  echo "$labels_json" | { jq -r '[.[] | select(startswith("spec:"))] | first // "—"' || echo "—"; } | sed 's/^spec://'
 }
 
 #-----------------------------------------------------------------------------
@@ -123,6 +124,7 @@ get_question_for_bead() {
     return 0
   fi
 
+  # best-effort: no legacy Question: line -> fall through to notes below
   question=$(echo "$notes" | grep -oP '^Question:\s*\K.*' | tail -1 || true)
   if [ -z "$question" ]; then
     question="$notes"
@@ -138,7 +140,8 @@ reset_iteration_for_bead() {
   local bead_id="$1"
 
   local labels_json
-  labels_json=$(bd_json show "$bead_id" --json 2>/dev/null | jq -c '.[0].labels // []' 2>/dev/null || echo '[]')
+  # best-effort: bd unavailable -> empty labels, caller treats as "no spec"
+  labels_json=$(bd_json show "$bead_id" --json | jq -c '.[0].labels // []' || echo '[]')
 
   local bead_spec
   bead_spec=$(get_spec_from_labels "$labels_json")
@@ -160,7 +163,8 @@ print_resume_hint() {
   local bead_id="$1"
 
   local labels_json
-  labels_json=$(bd_json show "$bead_id" --json 2>/dev/null | jq -c '.[0].labels // []' 2>/dev/null || echo '[]')
+  # best-effort: bd unavailable -> empty labels, caller treats as "no spec"
+  labels_json=$(bd_json show "$bead_id" --json | jq -c '.[0].labels // []' || echo '[]')
 
   local bead_spec
   bead_spec=$(get_spec_from_labels "$labels_json")
@@ -238,7 +242,7 @@ QUESTIONS_JSON=$(list_clarify_beads "$SPEC_FILTER") || {
 }
 
 # Check if we got any results
-QUESTION_COUNT=$(echo "$QUESTIONS_JSON" | jq 'if type == "array" then length else 0 end' 2>/dev/null || echo "0")
+QUESTION_COUNT=$(echo "$QUESTIONS_JSON" | { jq 'if type == "array" then length else 0 end' || echo "0"; })
 
 if [ "$QUESTION_COUNT" -eq 0 ]; then
   echo "No outstanding questions."

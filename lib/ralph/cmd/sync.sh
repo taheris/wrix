@@ -80,7 +80,7 @@ fetch_github_templates() {
     if [ "$DRY_RUN" = "true" ]; then
       echo "[dry-run] Would fetch: $file" >&2
     else
-      if ! curl -sSfL "$url" -o "$dest" 2>/dev/null; then
+      if ! curl -sSfL "$url" -o "$dest"; then
         warn "Failed to fetch: $file from $url"
         failed=true
       else
@@ -98,7 +98,7 @@ fetch_github_templates() {
     if [ "$DRY_RUN" = "true" ]; then
       echo "[dry-run] Would fetch: partial/$file" >&2
     else
-      if ! curl -sSfL "$url" -o "$dest" 2>/dev/null; then
+      if ! curl -sSfL "$url" -o "$dest"; then
         warn "Failed to fetch: partial/$file from $url"
         failed=true
       else
@@ -272,8 +272,8 @@ list_files() {
   fi
 
   for pattern in "$@"; do
-    # Use find for reliable file listing
-    find "$dir" -maxdepth 1 -type f -name "$pattern" 2>/dev/null || true
+    # best-effort: no matches -> nothing printed, caller iterates empty
+    find "$dir" -maxdepth 1 -type f -name "$pattern" || true
   done
 }
 
@@ -383,7 +383,7 @@ copy_fresh_templates() {
     fi
 
     copy_file "$src_file" "$templates_dir/$name" "$name"
-    ((file_count++)) || true
+    file_count=$((file_count + 1))
   done < <(list_files "$packaged_dir" "*.md" "*.nix")
 
   # Copy partial directory
@@ -398,7 +398,7 @@ copy_fresh_templates() {
       local name
       name=$(basename "$src_file")
       copy_file "$src_file" "$partial_dir/$name" "partial/$name"
-      ((file_count++)) || true
+      file_count=$((file_count + 1))
     done < <(list_files "$packaged_partial" "*.md")
   fi
 
@@ -494,7 +494,7 @@ Valid partials: ${partials_to_diff[*]}"
       diff_result=$(diff -u \
         --label "packaged/${template}.md" \
         --label "local/${template}.md" \
-        "$packaged_file" "$local_file" 2>/dev/null || true)
+        "$packaged_file" "$local_file" || true)  # diff exits 1 when files differ (expected)
 
       if [ -n "$diff_result" ]; then
         diff_output+="
@@ -536,7 +536,7 @@ $diff_result
       diff_result=$(diff -u \
         --label "packaged/partial/${partial}.md" \
         --label "local/partial/${partial}.md" \
-        "$packaged_file" "$local_file" 2>/dev/null || true)
+        "$packaged_file" "$local_file" || true)  # diff exits 1 when files differ (expected)
 
       if [ -n "$diff_result" ]; then
         diff_output+="
@@ -652,7 +652,7 @@ scan_file_for_deps() {
     # Match tool as a command: at start of line, after pipe, in $(), after &&/||,
     # or as argument to command -v / which / type
     # Use word-boundary-like matching to avoid false positives
-    if echo "$content" | grep -qE "(^|[[:space:]|;&\(])${tool}([[:space:]|;&\)]|$)" 2>/dev/null; then
+    if echo "$content" | grep -qE "(^|[[:space:]|;&\(])${tool}([[:space:]|;&\)]|$)"; then
       local pkg
       if pkg=$(tool_to_nix_package "$tool"); then
         found_pkgs+=("$pkg")
@@ -935,13 +935,14 @@ scaffold_doc() {
     # Create a bead flagged for director review
     if command -v bd &>/dev/null; then
       local bead_id
+      # best-effort: bd not initialized or dolt down -> empty bead_id, skip logging
       bead_id=$(bd create \
         --title="Review scaffolded $filepath" \
         --description="$description" \
         --type=task \
         --priority=2 \
         --labels="ralph:scaffold,human" \
-        --silent 2>/dev/null) || true
+        --silent) || true
       if [ -n "$bead_id" ]; then
         action "Created review bead: $bead_id for $filepath"
       fi
@@ -960,32 +961,37 @@ scaffold_docs() {
   echo ""
   echo "Checking docs scaffolding..."
 
-  scaffold_doc "docs/README.md" \
+  if scaffold_doc "docs/README.md" \
     "$DOCS_README_CONTENT" \
-    "Review and customize the scaffolded project overview (docs/README.md). Add project-specific terminology and description." \
-    && ((scaffolded++)) || true
+    "Review and customize the scaffolded project overview (docs/README.md). Add project-specific terminology and description."; then
+    scaffolded=$((scaffolded + 1))
+  fi
 
-  scaffold_doc "docs/architecture.md" \
+  if scaffold_doc "docs/architecture.md" \
     "$DOCS_ARCHITECTURE_CONTENT" \
-    "Review and customize the scaffolded architecture document (docs/architecture.md). Describe the system design, components, and key boundaries." \
-    && ((scaffolded++)) || true
+    "Review and customize the scaffolded architecture document (docs/architecture.md). Describe the system design, components, and key boundaries."; then
+    scaffolded=$((scaffolded + 1))
+  fi
 
-  scaffold_doc "docs/style-guidelines.md" \
+  if scaffold_doc "docs/style-guidelines.md" \
     "$DOCS_STYLE_CONTENT" \
-    "Review and customize the scaffolded style guidelines (docs/style-guidelines.md). Define code standards and review criteria." \
-    && ((scaffolded++)) || true
+    "Review and customize the scaffolded style guidelines (docs/style-guidelines.md). Define code standards and review criteria."; then
+    scaffolded=$((scaffolded + 1))
+  fi
 
-  scaffold_doc "AGENTS.md" \
+  if scaffold_doc "AGENTS.md" \
     "$DOCS_AGENTS_CONTENT" \
-    "Review and customize the scaffolded agent instructions (AGENTS.md). Adjust build commands, session protocol, and tooling references to match this project. Optionally create a CLAUDE.md symlink: ln -s AGENTS.md CLAUDE.md" \
-    && ((scaffolded++)) || true
+    "Review and customize the scaffolded agent instructions (AGENTS.md). Adjust build commands, session protocol, and tooling references to match this project. Optionally create a CLAUDE.md symlink: ln -s AGENTS.md CLAUDE.md"; then
+    scaffolded=$((scaffolded + 1))
+  fi
 
   # Gas City projects get an additional orchestration doc
   if flake_uses_mkcity; then
-    scaffold_doc "docs/orchestration.md" \
+    if scaffold_doc "docs/orchestration.md" \
       "$DOCS_ORCHESTRATION_CONTENT" \
-      "Review and customize the scaffolded orchestration config (docs/orchestration.md). Define deploy commands, scout error patterns, and auto-deploy criteria." \
-      && ((scaffolded++)) || true
+      "Review and customize the scaffolded orchestration config (docs/orchestration.md). Define deploy commands, scout error patterns, and auto-deploy criteria."; then
+      scaffolded=$((scaffolded + 1))
+    fi
   fi
 
   if [ "$scaffolded" -gt 0 ]; then

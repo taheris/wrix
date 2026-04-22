@@ -91,7 +91,7 @@ if [ ! -f /etc/wrapix/claude-config.json ] && command -v wrapix &>/dev/null; the
   export RALPH_ARGS="$RALPH_ARGS_PARTS"
   wrapix
   wrapix_exit=$?
-  bd dolt pull 2>/dev/null || echo "Warning: bd dolt pull failed (beads may not be synced)"
+  bd dolt pull || echo "Warning: bd dolt pull failed (beads may not be synced)"
   exit $wrapix_exit
 fi
 
@@ -119,7 +119,8 @@ MOLECULE_ID=""
 # Read state from per-label state file
 STATE_FILE="$RALPH_DIR/state/${FEATURE_NAME}.json"
 if [ -f "$STATE_FILE" ]; then
-  MOLECULE_ID=$(jq -r '.molecule // empty' "$STATE_FILE" 2>/dev/null || true)
+  # best-effort: malformed/missing field -> empty MOLECULE_ID, caller handles
+  MOLECULE_ID=$(jq -r '.molecule // empty' "$STATE_FILE" || true)
 fi
 
 if [ -z "$MOLECULE_ID" ]; then
@@ -175,7 +176,7 @@ if [ ! -f "$WATCH_STATE_FILE" ]; then
 - Panes: ${PANES_FLAG:-all}
 
 ## Ignore Patterns
-$(echo "$IGNORE_PATTERNS" | jq -r '.[] // empty' 2>/dev/null | sed 's/^/- /' || echo "- (none)")
+$(echo "$IGNORE_PATTERNS" | { jq -r '.[] // empty' || true; } | sed 's/^/- /' || echo "- (none)")
 
 ## Known Issues
 (none yet)
@@ -215,7 +216,8 @@ while [ "$RUNNING" = "true" ]; do
 
   # Check bead count: count source:watch labeled beads in the molecule
   WATCH_BEAD_COUNT=0
-  watch_beads_json=$(bd_json list --label "source:watch" --parent "$MOLECULE_ID" --json 2>/dev/null || echo "[]")
+  # best-effort: bd list failure -> empty array, downstream uses default count 0
+  watch_beads_json=$(bd_json list --label "source:watch" --parent "$MOLECULE_ID" --json || echo "[]")
   if echo "$watch_beads_json" | jq -e 'type == "array"' >/dev/null 2>&1; then
     WATCH_BEAD_COUNT=$(echo "$watch_beads_json" | jq 'length')
   fi
@@ -274,14 +276,16 @@ while [ "$RUNNING" = "true" ]; do
   fi
 
   # Check for newly created watch beads and notify
-  new_watch_json=$(bd_json list --label "source:watch" --parent "$MOLECULE_ID" --json 2>/dev/null || echo "[]")
+  # best-effort: bd list failure -> empty array, caller falls back to prior count
+  new_watch_json=$(bd_json list --label "source:watch" --parent "$MOLECULE_ID" --json || echo "[]")
   new_watch_count=0
   if echo "$new_watch_json" | jq -e 'type == "array"' >/dev/null 2>&1; then
     new_watch_count=$(echo "$new_watch_json" | jq 'length')
   fi
   if [ "$new_watch_count" -gt "$beads_before_cycle" ]; then
     # Notify for each new bead
-    echo "$new_watch_json" | jq -r ".[$beads_before_cycle:] | .[].title // empty" 2>/dev/null | while IFS= read -r new_title; do
+    # best-effort: jq failure -> no notifications, acceptable (WATCH_BEAD_COUNT still updates)
+    echo "$new_watch_json" | { jq -r ".[$beads_before_cycle:] | .[].title // empty" || true; } | while IFS= read -r new_title; do
       [ -z "$new_title" ] && continue
       notify_event "Ralph" "New issue detected: $new_title"
     done
@@ -289,8 +293,9 @@ while [ "$RUNNING" = "true" ]; do
   fi
 
   # Push beads (incremental sync)
-  bd dolt commit >/dev/null 2>&1 || true
-  bd dolt push 2>/dev/null || true
+  # best-effort: transient network/dolt errors -> retry next cycle, final sync at end
+  bd dolt commit >/dev/null || true
+  bd dolt push || true
 
   # Check if we should continue
   if [ "$RUNNING" != "true" ]; then
@@ -308,7 +313,7 @@ done
 
 # Final sync
 echo "Pushing beads to Dolt remote..."
-beads-push 2>/dev/null || echo "Warning: beads-push failed"
+beads-push || echo "Warning: beads-push failed"
 
 echo ""
 echo "Watch stopped after $cycle cycle(s)."

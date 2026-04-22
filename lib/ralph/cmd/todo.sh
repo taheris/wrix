@@ -12,6 +12,11 @@ set -euo pipefail
 # - Accepts --since flag to force tier 1 from a specific commit
 # - Errors on uncommitted spec changes (git-tracked specs only)
 # - Stores HEAD as base_commit only on RALPH_COMPLETE
+#
+# SH-6 convention: jq/bd fallbacks below (e.g. `jq -r ... 2>/dev/null || echo 0`)
+# are best-effort display/count lookups — failures fall back to safe defaults
+# (empty string, "0", "HEAD~1") so the host-side verification and repin hook
+# can still run.
 
 # Parse --spec/-s and --since flags early (before container detection)
 SPEC_FLAG=""
@@ -109,7 +114,7 @@ if [ ! -f /etc/wrapix/claude-config.json ] && command -v wrapix &>/dev/null; the
   if [ $wrapix_exit -eq 0 ]; then
     # Pull beads synced by container's bd dolt push
     echo "Syncing beads from container..."
-    bd dolt pull 2>/dev/null || echo "Warning: bd dolt pull failed (beads may not be synced)"
+    bd dolt pull || echo "Warning: bd dolt pull failed (beads may not be synced)"
 
     # Host-side verification: did task count increase?
     _HOST_POST_COUNT=$(bd list -l "spec:${_HOST_LABEL}" --json 2>/dev/null \
@@ -193,7 +198,7 @@ fi
 
 # Check for uncommitted spec changes (git-tracked specs only)
 if [ "$SPEC_HIDDEN" = "false" ] && git ls-files --error-unmatch "$SPEC_PATH" >/dev/null 2>&1; then
-  if ! git diff --quiet -- "$SPEC_PATH" 2>/dev/null || ! git diff --cached --quiet -- "$SPEC_PATH" 2>/dev/null; then
+  if ! git diff --quiet -- "$SPEC_PATH" || ! git diff --cached --quiet -- "$SPEC_PATH"; then
     echo "Error: Uncommitted changes detected in $SPEC_PATH"
     echo ""
     echo "Spec changes must be committed before running ralph todo."
@@ -393,14 +398,18 @@ if jq -e '[.[] | select(.type == "result") | .result | contains("RALPH_COMPLETE"
     if [ -f "$PINNED_CONTEXT_FILE" ]; then
       git add "$PINNED_CONTEXT_FILE"
     fi
-    if git diff --cached --quiet 2>/dev/null; then
+    if git diff --cached --quiet; then
       echo "  (no changes to commit)"
     else
       COMMIT_MSG="Add $LABEL specification"
       if [ "$UPDATE_MODE" = "true" ]; then
         COMMIT_MSG="Update $LABEL specification"
       fi
-      git commit -m "$COMMIT_MSG" >/dev/null 2>&1 && echo "  Committed: $FINAL_SPEC_PATH" || echo "  (commit failed or nothing to commit)"
+      if git commit -m "$COMMIT_MSG" >/dev/null; then
+        echo "  Committed: $FINAL_SPEC_PATH"
+      else
+        echo "  (commit failed or nothing to commit)"
+      fi
     fi
   fi
 

@@ -19,6 +19,13 @@ set -euo pipefail
 #   Bottom pane: live tail of agent output if ralph run is active,
 #                otherwise recent git log + last errors from ralph logs.
 #   Requires tmux — errors with a clear message if $TMUX is not set.
+#
+# SH-6 convention for this file: every bd/jq/date/find invocation below is
+# best-effort display. Failure falls back to a sensible default (empty string,
+# "0 0", or a placeholder line) rather than aborting the status command. Per
+# SH-6 we prefer precondition checks where feasible and document the few
+# remaining `2>/dev/null || <default>` sites with local comments when the
+# rationale is non-obvious.
 
 # Source shared utilities
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -56,7 +63,8 @@ show_awaiting_items() {
 
   # Query beads with both the spec label AND ralph:clarify label
   local awaiting_json
-  awaiting_json=$(bd_json list --label "$bead_label" --label "ralph:clarify" --json --limit 50 2>/dev/null) || true
+  # best-effort: bd unavailable -> no awaiting section displayed
+  awaiting_json=$(bd_json list --label "$bead_label" --label "ralph:clarify" --json --limit 50) || true
 
   # Check if we have any results
   if [ -z "$awaiting_json" ] || [ "$awaiting_json" = "[]" ] || ! echo "$awaiting_json" | jq -e 'length > 0' >/dev/null 2>&1; then
@@ -78,9 +86,11 @@ show_awaiting_items() {
     # Prefer clarify note appended to description; fall back to legacy "Question: " in notes
     local question=""
     if [ -n "$description" ]; then
+      # best-effort: no clarify marker -> empty question, falls to notes branch
       question=$(extract_clarify_note "$description") || true
     fi
     if [ -z "$question" ] && [ -n "$notes" ]; then
+      # best-effort: no "Question:" line -> empty question, display skips it
       question=$(echo "$notes" | grep -oP 'Question:\s*\K.*' | head -1) || true
     fi
 
@@ -88,6 +98,7 @@ show_awaiting_items() {
     local age_str=""
     if [ -n "$updated_at" ] && [ "$updated_at" != "null" ]; then
       local updated_epoch
+      # best-effort: malformed timestamp -> age omitted from display
       updated_epoch=$(date -d "$updated_at" +%s 2>/dev/null) || true
       if [ -n "$updated_epoch" ]; then
         local age_seconds=$(( now - updated_epoch ))
@@ -156,7 +167,7 @@ get_workflow_phase() {
   local molecule=""
 
   if [ -f "$state_file" ]; then
-    molecule=$(jq -r '.molecule // empty' "$state_file" 2>/dev/null || true)
+    molecule=$(jq -r '.molecule // empty' "$state_file" 2>/dev/null || true)  # best-effort: malformed state -> no molecule, display adapts
   fi
 
   if [ -z "$molecule" ]; then
@@ -201,7 +212,7 @@ get_workflow_progress() {
   local molecule=""
 
   if [ -f "$state_file" ]; then
-    molecule=$(jq -r '.molecule // empty' "$state_file" 2>/dev/null || true)
+    molecule=$(jq -r '.molecule // empty' "$state_file" 2>/dev/null || true)  # best-effort: malformed state -> no molecule, display adapts
   fi
 
   if [ -z "$molecule" ]; then
@@ -229,7 +240,7 @@ show_single_status() {
   local molecule=""
 
   if [ -f "$state_file" ]; then
-    molecule=$(jq -r '.molecule // empty' "$state_file" 2>/dev/null || true)
+    molecule=$(jq -r '.molecule // empty' "$state_file" 2>/dev/null || true)  # best-effort: malformed state -> no molecule, display adapts
   fi
 
   # Header

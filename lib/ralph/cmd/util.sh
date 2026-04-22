@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # Shared helper functions for ralph scripts
 # Source this file: source "$(dirname "$0")/lib.sh"
+#
+# SH-6 convention: util.sh is the display/lookup layer for ralph commands.
+# `jq ... 2>/dev/null || <fallback>` sites below are best-effort lookups
+# against state JSON, bd output, or claude log files: failures fall back to
+# empty/default values so the calling command can continue rather than abort.
+# Precondition checks (e.g. `[ -f "$state_file" ]`) are preferred where the
+# caller can reasonably expect the input to exist; the remaining suppressed
+# sites tolerate races, partial writes, and optional fields.
 
 # Debug mode: set RALPH_DEBUG=1 to see verbose output
 RALPH_DEBUG="${RALPH_DEBUG:-0}"
@@ -1156,7 +1164,8 @@ notify_event() {
   local body="${2:-}"
 
   if command -v wrapix-notify &>/dev/null; then
-    wrapix-notify "$title" "$body" 2>/dev/null || true
+    # best-effort: notifier may be unreachable (e.g. unit not running); never fail caller
+    wrapix-notify "$title" "$body" || true
   else
     debug "[notify] ${title}${body:+: $body}"
   fi
@@ -1358,7 +1367,7 @@ create_worktree() {
 
   debug "Creating worktree at $worktree_path on branch $branch_name"
 
-  if ! git worktree add "$worktree_path" -b "$branch_name" HEAD 2>/dev/null; then
+  if ! git worktree add "$worktree_path" -b "$branch_name" HEAD; then
     warn "Failed to create worktree for $bead_id"
     rm -rf "$worktree_path"
     return 1
@@ -1374,29 +1383,34 @@ merge_worktree() {
   local worktree_path="$1"
   local bead_id="$2"
   local branch_name
-  branch_name=$(git -C "$worktree_path" rev-parse --abbrev-ref HEAD 2>/dev/null)
+  branch_name=$(git -C "$worktree_path" rev-parse --abbrev-ref HEAD)
 
   debug "Merging worktree branch $branch_name for $bead_id"
 
-  if git merge --no-edit "$branch_name" 2>/dev/null; then
+  if git merge --no-edit "$branch_name"; then
     # Success — clean up worktree and branch
-    git worktree remove "$worktree_path" 2>/dev/null || true
-    git branch -d "$branch_name" 2>/dev/null || true
+    # best-effort: worktree already removed by user or branch consumed upstream
+    git worktree remove "$worktree_path" || true
+    git branch -d "$branch_name" || true
     debug "Successfully merged and cleaned up worktree for $bead_id"
     return 0
   else
     # Merge conflict — abort merge, reopen bead with details
     warn "Merge conflict for $bead_id on branch $branch_name"
-    git merge --abort 2>/dev/null || true
+    # best-effort: no merge in progress if merge failed pre-commit
+    git merge --abort || true
 
-    # Reopen the bead with conflict information
-    bd update "$bead_id" --status=open 2>/dev/null || true
-    bd update "$bead_id" --add-label "ralph:clarify" 2>/dev/null || true
-    bd update "$bead_id" --append-notes "Merge conflict when merging worktree branch $branch_name back to main working branch. Manual resolution required." 2>/dev/null || true
+    # Reopen the bead with conflict information; bd failures are warned
+    # rather than swallowed so we notice if the bead isn't actually reopened.
+    bd update "$bead_id" --status=open || warn "bd update --status=open failed for $bead_id"
+    bd update "$bead_id" --add-label "ralph:clarify" || warn "bd add-label failed for $bead_id"
+    bd update "$bead_id" --append-notes "Merge conflict when merging worktree branch $branch_name back to main working branch. Manual resolution required." \
+      || warn "bd append-notes failed for $bead_id"
 
     # Clean up worktree
     cleanup_worktree "$worktree_path"
-    git branch -D "$branch_name" 2>/dev/null || true
+    # best-effort: branch may already be gone if cleanup_worktree pruned it
+    git branch -D "$branch_name" || true
     return 1
   fi
 }
@@ -1408,7 +1422,8 @@ cleanup_worktree() {
   local worktree_path="$1"
 
   debug "Cleaning up worktree at $worktree_path"
-  git worktree remove --force "$worktree_path" 2>/dev/null || rm -rf "$worktree_path"
+  # best-effort: worktree may be corrupted; fall back to direct rm
+  git worktree remove --force "$worktree_path" || rm -rf "$worktree_path"
   return 0
 }
 
