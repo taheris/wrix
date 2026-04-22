@@ -3,6 +3,7 @@
   system,
   linuxPkgs ? pkgs,
   fenix ? null,
+  treefmt ? null,
 }:
 
 let
@@ -12,6 +13,7 @@ let
       system
       linuxPkgs
       fenix
+      treefmt
       ;
   };
   beads = import ./beads { inherit pkgs linuxPkgs; };

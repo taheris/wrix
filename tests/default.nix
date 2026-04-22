@@ -3,6 +3,7 @@
   pkgs,
   system,
   linuxPkgs,
+  treefmt,
   src,
 }:
 
@@ -23,24 +24,24 @@ let
   # ============================================================================
 
   # Smoke tests run on all platforms
-  smokeTests = import ./sandbox/smoke.nix { inherit pkgs system; };
+  smokeTests = import ./sandbox/smoke.nix { inherit pkgs system treefmt; };
 
   # Sandbox VM integration tests require NixOS VM (Linux with KVM only)
   # Skip when KVM unavailable (e.g., inside containers)
   sandboxIntegrationTests =
-    if isLinux && hasKvm then import ./sandbox/integration.nix { inherit pkgs; } else { };
+    if isLinux && hasKvm then import ./sandbox/integration.nix { inherit pkgs treefmt; } else { };
 
   # Shell utility tests run on all platforms
   shellTests = import ./sandbox/shell.nix { inherit pkgs; };
 
   # Darwin mount tests run on all platforms (test logic, not VM)
-  darwinMountTests = import ./darwin/mounts.nix { inherit pkgs; };
+  darwinMountTests = import ./darwin/mounts.nix { inherit pkgs treefmt; };
 
   # Darwin network tests run on all platforms (test logic, not VM)
-  darwinNetworkTests = import ./darwin/network.nix { inherit pkgs; };
+  darwinNetworkTests = import ./darwin/network.nix { inherit pkgs treefmt; };
 
   # Darwin UID mapping tests (verify unshare-based VirtioFS ownership fix)
-  darwinUidTests = import ./darwin/uid.nix { inherit pkgs; };
+  darwinUidTests = import ./darwin/uid.nix { inherit pkgs treefmt; };
 
   # Ralph utility function tests run on all platforms
   ralphTests = import ./ralph { inherit pkgs; };
@@ -59,19 +60,40 @@ let
     };
 
   # tmux-mcp tests (Rust unit tests and shell script syntax)
-  tmuxMcpTests = import ./mcp/tmux/check.nix { inherit pkgs system src; };
+  tmuxMcpTests = import ./mcp/tmux/check.nix {
+    inherit
+      pkgs
+      system
+      treefmt
+      src
+      ;
+  };
 
   # TOML utility tests
   tomlTests = import ./toml.nix { inherit pkgs; };
 
   # Gas City tests (layered: eval, provider, lifecycle)
-  cityTests = import ./city/unit.nix { inherit pkgs system; };
+  cityTests = import ./city/unit.nix { inherit pkgs system treefmt; };
 
   # Gas City integration test (shell-based, requires podman at runtime)
-  cityIntegration = import ./city/integration.nix { inherit pkgs system linuxPkgs; };
+  cityIntegration = import ./city/integration.nix {
+    inherit
+      pkgs
+      system
+      linuxPkgs
+      treefmt
+      ;
+  };
 
   # Ralph standalone container integration test (requires podman at runtime)
-  ralphContainerIntegration = import ./ralph/container.nix { inherit pkgs system linuxPkgs; };
+  ralphContainerIntegration = import ./ralph/container.nix {
+    inherit
+      pkgs
+      system
+      linuxPkgs
+      treefmt
+      ;
+  };
 
   # README example verification
   readmeTest = {

@@ -23,18 +23,33 @@
   pkgs,
   system,
   linuxPkgs,
+  treefmt,
 }:
 
 let
   inherit (pkgs) lib writeShellScriptBin;
 
-  sandbox = import ../../lib/sandbox { inherit pkgs system linuxPkgs; };
+  sandbox = import ../../lib/sandbox {
+    inherit
+      pkgs
+      system
+      linuxPkgs
+      treefmt
+      ;
+  };
   beads = import ../../lib/beads { inherit pkgs linuxPkgs; };
   ralph = import ../../lib/ralph {
     inherit pkgs beads;
     inherit (sandbox) mkSandbox;
   };
-  wrapixLib = import ../../lib { inherit pkgs system linuxPkgs; };
+  wrapixLib = import ../../lib {
+    inherit
+      pkgs
+      system
+      linuxPkgs
+      treefmt
+      ;
+  };
 
   testProfile = sandbox.profiles.base // {
     name = "ralph-test";

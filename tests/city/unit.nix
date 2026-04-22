@@ -17,6 +17,7 @@
 {
   pkgs,
   system,
+  treefmt,
 }:
 
 let
@@ -47,7 +48,7 @@ let
 
   sandbox = import ../../lib/sandbox {
     inherit pkgs system;
-    inherit linuxPkgs;
+    inherit linuxPkgs treefmt;
   };
 
   beads = import ../../lib/beads { inherit pkgs linuxPkgs; };

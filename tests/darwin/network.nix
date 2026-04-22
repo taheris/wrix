@@ -9,6 +9,7 @@
 #   container system start    # Start container system first
 {
   pkgs,
+  treefmt,
 }:
 
 let
@@ -28,7 +29,10 @@ let
       pkgs;
 
   # Build profile image for testing
-  profiles = import ../../lib/sandbox/profiles.nix { pkgs = linuxPkgs; };
+  profiles = import ../../lib/sandbox/profiles.nix {
+    pkgs = linuxPkgs;
+    inherit treefmt;
+  };
   profileImage = import ../../lib/sandbox/image.nix {
     pkgs = linuxPkgs;
     profile = profiles.base;

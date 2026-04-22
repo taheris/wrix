@@ -2,6 +2,7 @@
 {
   pkgs,
   system,
+  treefmt,
 }:
 
 let
@@ -29,7 +30,10 @@ let
     else
       pkgs;
 
-  profiles = import ../../lib/sandbox/profiles.nix { pkgs = linuxPkgs; };
+  profiles = import ../../lib/sandbox/profiles.nix {
+    pkgs = linuxPkgs;
+    inherit treefmt;
+  };
 
   baseImage = import ../../lib/sandbox/image.nix {
     pkgs = linuxPkgs;
@@ -42,7 +46,14 @@ let
     asTarball = isDarwin;
   };
 
-  sandboxLib = import ../../lib { inherit pkgs system linuxPkgs; };
+  sandboxLib = import ../../lib {
+    inherit
+      pkgs
+      system
+      linuxPkgs
+      treefmt
+      ;
+  };
   sandbox = sandboxLib.mkSandbox { profile = sandboxLib.profiles.base; };
   wrapix = sandbox.package;
 

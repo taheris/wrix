@@ -32,12 +32,18 @@
   pkgs,
   system,
   linuxPkgs,
+  treefmt,
 }:
 
 let
   inherit (pkgs) lib;
   sandbox = import ../../lib/sandbox {
-    inherit pkgs system linuxPkgs;
+    inherit
+      pkgs
+      system
+      linuxPkgs
+      treefmt
+      ;
   };
   beads = import ../../lib/beads { inherit pkgs linuxPkgs; };
   ralph = import ../../lib/ralph {
@@ -50,7 +56,12 @@ let
     inherit (ralph) mkRalph;
   };
   wrapixLib = import ../../lib {
-    inherit pkgs system linuxPkgs;
+    inherit
+      pkgs
+      system
+      linuxPkgs
+      treefmt
+      ;
   };
 
   # Name the input profile so liveCity.sandbox.profile ends up as

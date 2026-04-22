@@ -2,6 +2,7 @@
 {
   pkgs,
   system,
+  treefmt,
   src,
 }:
 
@@ -198,7 +199,10 @@ let
                 system = "x86_64-linux";
                 config.allowUnfree = true;
               };
-              profiles = import ../../../lib/sandbox/profiles.nix { pkgs = linuxPkgs; };
+              profiles = import ../../../lib/sandbox/profiles.nix {
+                pkgs = linuxPkgs;
+                inherit treefmt;
+              };
               debugImage = import ../../../lib/sandbox/image.nix {
                 pkgs = linuxPkgs;
                 profile = profiles.debug;

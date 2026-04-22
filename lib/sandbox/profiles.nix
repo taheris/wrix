@@ -2,9 +2,19 @@
   pkgs,
   hostPkgs ? pkgs,
   fenix ? null,
+  treefmt ? null,
 }:
 
 let
+  # Agent tooling: project-wide formatter wrapper. Forced when basePackages
+  # is materialized; throws with a helpful message if the caller didn't thread
+  # the treefmt-nix wrapper through from the flake.
+  treefmtPkg =
+    if treefmt == null then
+      throw "lib/sandbox/profiles.nix: basePackages requires the treefmt wrapper; pass `treefmt` to this file"
+    else
+      treefmt;
+
   # Base packages included in all profiles
   basePackages = with pkgs; [
     bash
@@ -43,6 +53,7 @@ let
     shellcheck
     tmux
     tree
+    treefmtPkg
     unzip
     util-linux
     vim

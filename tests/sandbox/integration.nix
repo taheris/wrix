@@ -1,13 +1,16 @@
 # Integration tests - require NixOS VM with KVM
 # These tests verify actual container runtime behavior
-{ pkgs }:
+{ pkgs, treefmt }:
 
 let
   # Use pkgs.hello as stand-in for beads and claude-code in tests
   testPkgs = pkgs.extend (_final: _prev: { beads = pkgs.hello; });
 
   # Build the sandbox image for tests
-  profiles = import ../../lib/sandbox/profiles.nix { pkgs = testPkgs; };
+  profiles = import ../../lib/sandbox/profiles.nix {
+    pkgs = testPkgs;
+    inherit treefmt;
+  };
   testImage = import ../../lib/sandbox/image.nix {
     pkgs = testPkgs;
     profile = profiles.base;

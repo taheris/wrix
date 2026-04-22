@@ -122,10 +122,11 @@
               config.allowUnfree = true;
             };
 
-            sandboxPackages = [ (inputs.treefmt-nix.lib.mkWrapper linuxPkgs treefmt) ];
+            treefmtWrapper = inputs.treefmt-nix.lib.mkWrapper linuxPkgs treefmt;
 
             test = import ./tests {
               inherit pkgs system linuxPkgs;
+              treefmt = treefmtWrapper;
               src = self;
             };
 
@@ -147,6 +148,7 @@
             wrapix = import ./lib {
               inherit pkgs system linuxPkgs;
               inherit (inputs) fenix;
+              treefmt = treefmtWrapper;
             };
             city = wrapix.mkCity {
               name = "wx";
@@ -191,8 +193,7 @@
                 inherit (builtins) mapAttrs;
                 inherit (wrapix) profiles;
 
-                mkSandboxPkg =
-                  cfg: (wrapix.mkSandbox (cfg // { packages = (cfg.packages or [ ]) ++ sandboxPackages; })).package;
+                mkSandboxPkg = cfg: (wrapix.mkSandbox cfg).package;
                 sandboxPkgs = mapAttrs (_: mkSandboxPkg) {
                   sandbox = {
                     profile = profiles.base;
