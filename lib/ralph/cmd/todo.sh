@@ -190,13 +190,18 @@ DIFF_OUTPUT=$(compute_spec_diff "$STATE_FILE" "${DIFF_ARGS[@]+"${DIFF_ARGS[@]}"}
 DIFF_MODE=$(echo "$DIFF_OUTPUT" | head -1)
 DIFF_CONTENT=$(echo "$DIFF_OUTPUT" | tail -n +2)
 
-# Determine template and mode based on tier
+# Determine template and mode based on tier.
+# EXISTING_SPEC carries its own section header so the whole block vanishes
+# when empty (diff mode). Inlining the full spec alongside the diff duplicates
+# content Claude already sees in the diff and can push the prompt past the
+# 128KB MAX_ARG_STRLEN limit on mature specs.
 SPEC_DIFF=""
 EXISTING_TASKS=""
+EXISTING_SPEC=""
 
 case "$DIFF_MODE" in
   diff)
-    # Tier 1: git-based diff
+    # Tier 1: git-based diff. Full spec is redundant with the diff.
     if [ -z "$(echo "$DIFF_CONTENT" | tr -d '[:space:]')" ]; then
       echo "No spec changes since last task creation."
       echo "  base_commit: $(jq -r '.base_commit // "unknown"' "$STATE_FILE")"
@@ -209,9 +214,17 @@ case "$DIFF_MODE" in
     SPEC_DIFF="$DIFF_CONTENT"
     ;;
   tasks)
-    # Tier 2: molecule-based comparison
+    # Tier 2: molecule-based comparison. No diff available, so include the
+    # full spec for Claude to reconcile against EXISTING_TASKS.
     TEMPLATE_NAME="todo-update"
     EXISTING_TASKS="$DIFF_CONTENT"
+    EXISTING_SPEC="## Existing Specification
+
+The main spec file (\`$SPEC_PATH\`) contains the full current specification:
+
+\`\`\`markdown
+$SPEC_CONTENT
+\`\`\`"
     ;;
   new)
     # Tier 4: full decomposition
@@ -307,7 +320,7 @@ if [ "$UPDATE_MODE" = "true" ]; then
   PROMPT_CONTENT=$(render_template "$TEMPLATE_NAME" \
     "LABEL=$LABEL" \
     "SPEC_PATH=$SPEC_PATH" \
-    "EXISTING_SPEC=$SPEC_CONTENT" \
+    "EXISTING_SPEC=$EXISTING_SPEC" \
     "MOLECULE_ID=$MOLECULE_ID" \
     "MOLECULE_PROGRESS=$MOLECULE_PROGRESS" \
     "SPEC_DIFF=$SPEC_DIFF" \

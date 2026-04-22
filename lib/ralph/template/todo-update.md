@@ -7,13 +7,7 @@ changed requirements and create tasks ONLY for those changes.
 
 {{> spec-header}}
 
-## Existing Specification
-
-The main spec file (`specs/{{LABEL}}.md`) contains the full current specification:
-
-```markdown
 {{EXISTING_SPEC}}
-```
 
 {{> companions-context}}
 
