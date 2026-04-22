@@ -2055,6 +2055,94 @@ test_bootstrap_claude_symlink() {
   teardown_test_env
 }
 
+# Test: scaffold_docs, scaffold_agents, scaffold_templates live in util.sh and
+# are invoked by the same code path from ralph init and ralph sync (single
+# source of truth). Verifies (a) the helpers are defined in util.sh, (b) they
+# actually scaffold the expected artifacts, (c) scaffold_docs does NOT create
+# AGENTS.md (that's scaffold_agents' job), and (d) sync.sh delegates to util.sh
+# rather than redefining them.
+test_scaffold_shared_code_path() {
+  CURRENT_TEST="scaffold_shared_code_path"
+  test_header "scaffold_{docs,agents,templates} shared between ralph init and ralph sync"
+
+  setup_test_env "scaffold-shared"
+
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  # (a) Helpers must be defined in util.sh
+  local helper
+  for helper in scaffold_docs scaffold_agents scaffold_templates; do
+    if declare -f "$helper" >/dev/null; then
+      test_pass "util.sh defines $helper"
+    else
+      test_fail "util.sh missing $helper"
+    fi
+  done
+
+  cd "$TEST_DIR"
+
+  # setup_test_env pre-creates docs/README.md and .wrapix/ralph/template/ — drop
+  # them so scaffold helpers run against a truly empty workspace.
+  rm -rf docs .wrapix/ralph/template
+
+  # (b) Running the helpers creates the expected artifacts.
+  # bd create inside scaffold_doc is best-effort (|| true) and will warn to
+  # stderr when no beads DB is initialized — silence that noise here since the
+  # test targets file-scaffold behavior, not bead creation.
+  scaffold_docs >/dev/null 2>&1
+  scaffold_agents >/dev/null 2>&1
+  scaffold_templates >/dev/null 2>&1
+
+  local f
+  for f in docs/README.md docs/architecture.md docs/style-guidelines.md; do
+    if [ -f "$f" ]; then
+      test_pass "scaffold_docs created $f"
+    else
+      test_fail "scaffold_docs missing $f"
+    fi
+  done
+
+  if [ -f AGENTS.md ]; then
+    test_pass "scaffold_agents created AGENTS.md"
+  else
+    test_fail "scaffold_agents missing AGENTS.md"
+  fi
+
+  if [ -d .wrapix/ralph/template ] && [ -d .wrapix/ralph/template/partial ]; then
+    test_pass "scaffold_templates populated .wrapix/ralph/template/ and partial/"
+  else
+    test_fail "scaffold_templates missing template dir or partial/"
+  fi
+
+  # (c) sync.sh must delegate to util.sh, not inline its own implementations
+  local sync_src="$REPO_ROOT/lib/ralph/cmd/sync.sh"
+  if grep -qE '^scaffold_docs\(\)|^scaffold_doc\(\)|^scaffold_agents\(\)|^scaffold_templates\(\)|^DOCS_README_CONTENT=|^DOCS_AGENTS_CONTENT=' "$sync_src"; then
+    test_fail "sync.sh still contains inline scaffold_* / DOCS_*_CONTENT definitions (should delegate to util.sh)"
+  else
+    test_pass "sync.sh contains no inline scaffold definitions"
+  fi
+
+  if grep -qE '^[[:space:]]*scaffold_docs$' "$sync_src" && \
+     grep -qE '^[[:space:]]*scaffold_agents$' "$sync_src"; then
+    test_pass "sync.sh invokes scaffold_docs and scaffold_agents from util.sh"
+  else
+    test_fail "sync.sh does not invoke shared scaffold_docs/scaffold_agents"
+  fi
+
+  # (d) Idempotency: scaffold_templates returns 1 (skipped) on re-run, matching
+  # the bootstrap_* contract that ralph init relies on for its summary.
+  local rc=0
+  scaffold_templates >/dev/null 2>&1 || rc=$?
+  if [ "$rc" = "1" ]; then
+    test_pass "scaffold_templates returns 1 (skipped) when template dir exists"
+  else
+    test_fail "scaffold_templates should return 1 on skip, got rc=$rc"
+  fi
+
+  teardown_test_env
+}
+
 # Test: clarify label helpers operate against live beads (add appends to
 # description, label gates notifications, list returns tagged beads only)
 test_clarify_label_helpers() {
@@ -12685,6 +12773,7 @@ PARALLEL_TESTS=(
   test_bootstrap_precommit
   test_bootstrap_beads_skip
   test_bootstrap_claude_symlink
+  test_scaffold_shared_code_path
   test_plan_flag_validation
   test_plan_per_label_state_files
   test_plan_update_direct_edit

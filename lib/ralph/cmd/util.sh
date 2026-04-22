@@ -1955,6 +1955,381 @@ The code implements progress percentage display via the calc_progress function a
   fi
 }
 
+# -------- Shared scaffold helpers (used by ralph init and ralph sync) --------
+#
+# scaffold_docs, scaffold_agents, scaffold_templates are the single code path
+# that both `ralph init` and `ralph sync` invoke to materialize docs/,
+# AGENTS.md, and .wrapix/ralph/template/. All are skip-if-exists and rely on
+# the DRY_RUN global (defaults to "false" when unset) so sync's dry-run mode
+# continues to work; init never sets DRY_RUN.
+
+DRY_RUN="${DRY_RUN:-false}"
+
+# Prefix string for dry-run-aware action messages.
+prefix() {
+  if [ "$DRY_RUN" = "true" ]; then
+    echo "[dry-run] "
+  else
+    echo ""
+  fi
+}
+
+# Print an action line with optional dry-run prefix.
+action() {
+  echo "$(prefix)$*"
+}
+
+# Create a directory if it does not exist (dry-run aware).
+ensure_dir() {
+  local dir="$1"
+  if [ ! -d "$dir" ]; then
+    action "Creating directory: $dir"
+    if [ "$DRY_RUN" = "false" ]; then
+      mkdir -p "$dir"
+    fi
+  fi
+}
+
+# Copy a file with action logging (dry-run aware, makes dest writable).
+copy_file() {
+  local src="$1"
+  local dst="$2"
+  local name="${3:-$(basename "$src")}"
+
+  action "Copying: $name"
+  debug "  from: $src"
+  debug "  to:   $dst"
+
+  if [ "$DRY_RUN" = "false" ]; then
+    if [ -f "$dst" ]; then
+      rm -f "$dst"
+    fi
+    cp "$src" "$dst"
+    chmod 644 "$dst"
+  fi
+}
+
+# List top-level files matching one or more patterns in a directory.
+# Usage: list_files "$dir" "*.md" "*.nix"
+list_files() {
+  local dir="$1"
+  shift
+
+  if [ ! -d "$dir" ]; then
+    return 0
+  fi
+
+  for pattern in "$@"; do
+    find "$dir" -maxdepth 1 -type f -name "$pattern" || true
+  done
+}
+
+# Default content for docs/README.md
+DOCS_README_CONTENT='# Project Overview
+
+<!-- Scaffolded by ralph sync — edit this file, then close the review bead -->
+
+## Summary
+
+Describe what this project does, who it is for, and its key capabilities.
+
+## Specs
+
+Individual spec files live in `specs/`. Add a row when each spec lands.
+
+| Spec | Code | Beads | Purpose |
+|------|------|-------|---------|
+| _add rows as specs land_ | | | |
+
+## Terminology
+
+| Term | Definition |
+|------|------------|
+| Example | Replace with project-specific terms |
+'
+
+# Default content for docs/architecture.md
+DOCS_ARCHITECTURE_CONTENT='# Architecture
+
+<!-- Scaffolded by ralph sync — edit this file, then close the review bead -->
+
+## System Design
+
+Describe the high-level architecture: components, data flow, and key boundaries.
+
+## Design Principles
+
+1. Describe the guiding principles for this system.
+
+## Source Layout
+
+```
+Describe the directory structure and what each area is responsible for.
+```
+'
+
+# Default content for docs/style-guidelines.md
+DOCS_STYLE_CONTENT='# Style Guidelines
+
+<!-- Scaffolded by ralph sync — edit this file, then close the review bead -->
+
+## Code Standards
+
+Describe formatting, naming conventions, and patterns to follow.
+
+## Review Criteria
+
+- What reviewers should check for
+- What patterns to avoid
+'
+
+# Default content for AGENTS.md (mirrored to CLAUDE.md via symlink)
+DOCS_AGENTS_CONTENT='# Agent Instructions
+
+<!-- Scaffolded by ralph sync — edit this file, then close the review bead -->
+<!-- Recommended: `ln -s AGENTS.md CLAUDE.md` so Claude Code reads the same file -->
+
+## Project Context
+
+- **Overview & specs** — `docs/README.md` (pinned at session start)
+- **Architecture** — `docs/architecture.md`
+- **Style guidelines** — `docs/style-guidelines.md`
+- **Individual specs** — `specs/<label>.md`
+
+## Building
+
+```bash
+nix develop          # Enter devShell
+nix build            # Build this project
+```
+
+## Issue Tracking (Beads)
+
+Use `bd` for ALL issue tracking. Do NOT use markdown TODOs or external trackers.
+
+```bash
+bd ready                          # Show unblocked work
+bd show <id>                      # Issue details
+bd create --title="..." --description="..." --type=task --priority=2
+bd update <id> --status=in_progress   # Claim before starting
+bd close <id>                     # Mark complete
+bd dep add <issue> <depends-on>   # Add dependency
+```
+
+**Priority:** 0-4 (critical to backlog, default 2). **Types:** task, bug, feature, epic.
+
+## Session Protocol
+
+### Start
+
+```bash
+bd dolt pull
+```
+
+### End ("land the plane")
+
+```bash
+git add <files>
+git commit -m "..."
+git push
+beads-push            # Sync beads branch to GitHub
+```
+
+Work is NOT complete until both pushes succeed.
+
+## Hidden Specs
+
+Files in `.wrapix/ralph/state/` are hidden specs managed by ralph. Never copy or
+commit them to `specs/`.
+'
+
+# Default content for docs/orchestration.md (Gas City projects only)
+DOCS_ORCHESTRATION_CONTENT='# Orchestration
+
+<!-- Scaffolded by ralph sync — edit this file, then close the review bead -->
+
+## Deploy Commands
+
+Describe how to deploy changes (e.g., `nix build`, `podman restart`).
+
+## Scout Rules
+
+Error patterns the scout watches for in service container logs.
+
+### Immediate (P0 bead)
+
+```
+FATAL|PANIC|panic:
+```
+
+### Batched (collected over one poll cycle)
+
+```
+ERROR|Exception
+```
+
+### Ignore
+
+```
+# Add patterns for known noise
+```
+
+## Auto-deploy
+
+<!-- Define criteria for changes that can be deployed without director approval -->
+<!-- Remove this section or leave empty to require director approval for all deploys -->
+'
+
+# Detect whether the flake uses mkCity (Gas City integration).
+flake_uses_mkcity() {
+  if [ -f "flake.nix" ] && grep -q 'mkCity' "flake.nix"; then
+    return 0
+  fi
+  return 1
+}
+
+# Scaffold a single docs file and create a review bead.
+# Usage: scaffold_doc <filepath> <content> <description>
+# Returns: 0 if created, 1 if already exists
+scaffold_doc() {
+  local filepath="$1"
+  local content="$2"
+  local description="$3"
+
+  if [ -f "$filepath" ]; then
+    debug "Docs file already exists: $filepath"
+    return 1
+  fi
+
+  action "Scaffolding: $filepath"
+
+  if [ "$DRY_RUN" = "false" ]; then
+    mkdir -p "$(dirname "$filepath")"
+    echo "$content" > "$filepath"
+
+    if command -v bd &>/dev/null; then
+      local bead_id
+      bead_id=$(bd create \
+        --title="Review scaffolded $filepath" \
+        --description="$description" \
+        --type=task \
+        --priority=2 \
+        --labels="ralph:scaffold,human" \
+        --silent) || true
+      if [ -n "$bead_id" ]; then
+        action "Created review bead: $bead_id for $filepath"
+      fi
+    fi
+  fi
+
+  return 0
+}
+
+# Scaffold project docs (docs/README.md, docs/architecture.md,
+# docs/style-guidelines.md, and docs/orchestration.md when mkCity is detected).
+# AGENTS.md is scaffolded separately by scaffold_agents.
+scaffold_docs() {
+  local scaffolded=0
+
+  echo ""
+  echo "Checking docs scaffolding..."
+
+  if scaffold_doc "docs/README.md" \
+    "$DOCS_README_CONTENT" \
+    "Review and customize the scaffolded project overview (docs/README.md). Add project-specific terminology and description."; then
+    scaffolded=$((scaffolded + 1))
+  fi
+
+  if scaffold_doc "docs/architecture.md" \
+    "$DOCS_ARCHITECTURE_CONTENT" \
+    "Review and customize the scaffolded architecture document (docs/architecture.md). Describe the system design, components, and key boundaries."; then
+    scaffolded=$((scaffolded + 1))
+  fi
+
+  if scaffold_doc "docs/style-guidelines.md" \
+    "$DOCS_STYLE_CONTENT" \
+    "Review and customize the scaffolded style guidelines (docs/style-guidelines.md). Define code standards and review criteria."; then
+    scaffolded=$((scaffolded + 1))
+  fi
+
+  if flake_uses_mkcity; then
+    if scaffold_doc "docs/orchestration.md" \
+      "$DOCS_ORCHESTRATION_CONTENT" \
+      "Review and customize the scaffolded orchestration config (docs/orchestration.md). Define deploy commands, scout error patterns, and auto-deploy criteria."; then
+      scaffolded=$((scaffolded + 1))
+    fi
+  fi
+
+  if [ "$scaffolded" -gt 0 ]; then
+    echo "Scaffolded $scaffolded docs file(s) — review beads created for director approval"
+  else
+    echo "All docs files already exist"
+  fi
+}
+
+# Scaffold AGENTS.md (skip-if-exists). CLAUDE.md symlinking is handled by
+# bootstrap_claude_symlink during ralph init; sync users create the symlink
+# manually per the scaffolded content's recommendation.
+scaffold_agents() {
+  if scaffold_doc "AGENTS.md" \
+    "$DOCS_AGENTS_CONTENT" \
+    "Review and customize the scaffolded agent instructions (AGENTS.md). Adjust build commands, session protocol, and tooling references to match this project. Optionally create a CLAUDE.md symlink: ln -s AGENTS.md CLAUDE.md"; then
+    echo "Scaffolded AGENTS.md — review bead created for director approval"
+  else
+    echo "AGENTS.md already exists"
+  fi
+}
+
+# Scaffold .wrapix/ralph/template/ from RALPH_TEMPLATE_DIR (skip-if-exists).
+# Init-time first-time scaffolding — ralph sync performs a fuller
+# backup/refresh via copy_fresh_templates.
+scaffold_templates() {
+  local ralph_dir="${RALPH_DIR:-.wrapix/ralph}"
+  local target="$ralph_dir/template"
+  local src="${RALPH_TEMPLATE_DIR:-}"
+
+  if [ -d "$target" ]; then
+    echo "Templates already present at: $target"
+    return 1
+  fi
+
+  if [ -z "$src" ] || [ ! -d "$src" ]; then
+    warn "RALPH_TEMPLATE_DIR not set or missing: $src"
+    return 2
+  fi
+
+  ensure_dir "$target"
+
+  local file_count=0
+  while IFS= read -r src_file; do
+    [ -f "$src_file" ] || continue
+    local name
+    name=$(basename "$src_file")
+    if [ "$name" = "default.nix" ] || [ "$name" = "config.nix" ]; then
+      debug "Skipping $name: internal Nix file"
+      continue
+    fi
+    copy_file "$src_file" "$target/$name" "$name"
+    file_count=$((file_count + 1))
+  done < <(list_files "$src" "*.md" "*.nix")
+
+  local src_partial="$src/partial"
+  if [ -d "$src_partial" ]; then
+    local target_partial="$target/partial"
+    ensure_dir "$target_partial"
+    while IFS= read -r src_file; do
+      [ -f "$src_file" ] || continue
+      local name
+      name=$(basename "$src_file")
+      copy_file "$src_file" "$target_partial/$name" "partial/$name"
+      file_count=$((file_count + 1))
+    done < <(list_files "$src_partial" "*.md")
+  fi
+
+  echo "Scaffolded $file_count template file(s) to: $target"
+  return 0
+}
+
 # -------- ralph init bootstrap helpers --------
 #
 # Each helper creates one init-only artifact in the current directory and is
