@@ -40,10 +40,10 @@
   };
 
   loop = {
-    max-iterations = 0; # 0 = infinite
+    max-iterations = 3; # per molecule, bounds run ↔ check auto-iteration before escalating via ralph:clarify
     pause-on-failure = true;
     parallel = 1; # Concurrency limit (1 = sequential)
-    max-retries = 2; # Per-bead retry limit before ralph:clarify
+    max-retries = 2; # per bead, retry with PREVIOUS_FAILURE context
     max-reviews = 2; # Max review cycles before stopping
   };
 
