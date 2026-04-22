@@ -1954,3 +1954,121 @@ The code implements progress percentage display via the calc_progress function a
     return 1
   fi
 }
+
+# -------- ralph init bootstrap helpers --------
+#
+# Each helper creates one init-only artifact in the current directory and is
+# idempotent: skip-if-exists, never overwrites. Helpers set BOOTSTRAP_DETAIL
+# to a parenthetical string for the summary (e.g. "4 entries appended",
+# "already initialized", "-> AGENTS.md") and return:
+#   0 — created/modified
+#   1 — skipped (artifact already present)
+#   2 — error
+#
+# Helpers print nothing themselves. The caller (init.sh) renders the summary.
+
+export BOOTSTRAP_DETAIL=""
+
+# Copy $RALPH_TEMPLATE_DIR/flake.nix to ./flake.nix.
+bootstrap_flake() {
+  BOOTSTRAP_DETAIL=""
+  if [ -e flake.nix ]; then
+    BOOTSTRAP_DETAIL="already exists"
+    return 1
+  fi
+  local src="${RALPH_TEMPLATE_DIR:-}/flake.nix"
+  if [ ! -f "$src" ]; then
+    BOOTSTRAP_DETAIL="template not found: $src"
+    return 2
+  fi
+  cp "$src" flake.nix
+  return 0
+}
+
+# Write 'use flake' to ./.envrc.
+bootstrap_envrc() {
+  BOOTSTRAP_DETAIL=""
+  if [ -e .envrc ]; then
+    BOOTSTRAP_DETAIL="already exists"
+    return 1
+  fi
+  printf 'use flake\n' > .envrc
+  return 0
+}
+
+# Append missing entries to ./.gitignore. Creates the file if absent.
+bootstrap_gitignore() {
+  BOOTSTRAP_DETAIL=""
+  local entries=('.direnv/' '.wrapix/' 'result' 'result-*')
+  local missing=()
+  local entry
+  for entry in "${entries[@]}"; do
+    if [ ! -f .gitignore ] || ! grep -Fxq -- "$entry" .gitignore; then
+      missing+=("$entry")
+    fi
+  done
+  if [ ${#missing[@]} -eq 0 ]; then
+    BOOTSTRAP_DETAIL="all entries present"
+    return 1
+  fi
+  # Ensure trailing newline before appending so entries land on their own line.
+  if [ -f .gitignore ] && [ -s .gitignore ] && [ -n "$(tail -c 1 .gitignore)" ]; then
+    printf '\n' >> .gitignore
+  fi
+  for entry in "${missing[@]}"; do
+    printf '%s\n' "$entry" >> .gitignore
+  done
+  local n=${#missing[@]}
+  if [ "$n" -eq 1 ]; then
+    BOOTSTRAP_DETAIL="1 entry appended"
+  else
+    BOOTSTRAP_DETAIL="${n} entries appended"
+  fi
+  return 0
+}
+
+# Copy $RALPH_TEMPLATE_DIR/pre-commit-config.yaml to ./.pre-commit-config.yaml.
+bootstrap_precommit() {
+  BOOTSTRAP_DETAIL=""
+  if [ -e .pre-commit-config.yaml ]; then
+    BOOTSTRAP_DETAIL="already exists"
+    return 1
+  fi
+  local src="${RALPH_TEMPLATE_DIR:-}/pre-commit-config.yaml"
+  if [ ! -f "$src" ]; then
+    BOOTSTRAP_DETAIL="template not found: $src"
+    return 2
+  fi
+  cp "$src" .pre-commit-config.yaml
+  return 0
+}
+
+# Run 'bd init' if .beads/ does not exist.
+bootstrap_beads() {
+  BOOTSTRAP_DETAIL=""
+  if [ -d .beads ]; then
+    BOOTSTRAP_DETAIL="already initialized"
+    return 1
+  fi
+  if ! command -v bd >/dev/null 2>&1; then
+    BOOTSTRAP_DETAIL="bd not on PATH"
+    return 2
+  fi
+  if ! bd init; then
+    BOOTSTRAP_DETAIL="bd init failed"
+    return 2
+  fi
+  return 0
+}
+
+# Create CLAUDE.md as a symlink to AGENTS.md when CLAUDE.md is absent.
+bootstrap_claude_symlink() {
+  BOOTSTRAP_DETAIL=""
+  if [ -e CLAUDE.md ] || [ -L CLAUDE.md ]; then
+    BOOTSTRAP_DETAIL="already exists"
+    return 1
+  fi
+  ln -s AGENTS.md CLAUDE.md
+  BOOTSTRAP_DETAIL="-> AGENTS.md"
+  return 0
+}

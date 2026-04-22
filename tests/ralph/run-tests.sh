@@ -1822,6 +1822,239 @@ Answer arrived.
   teardown_test_env
 }
 
+# Test: bootstrap_flake copies template when absent, skips when present
+test_bootstrap_flake() {
+  CURRENT_TEST="bootstrap_flake"
+  test_header "bootstrap_flake Copies Template and Skips When Present"
+
+  setup_test_env "bootstrap-flake"
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  cd "$TEST_DIR"
+
+  if bootstrap_flake; then
+    if [ -f flake.nix ] && diff -q "$RALPH_TEMPLATE_DIR/flake.nix" flake.nix >/dev/null; then
+      test_pass "bootstrap_flake created flake.nix matching template"
+    else
+      test_fail "flake.nix missing or differs from template"
+    fi
+  else
+    test_fail "bootstrap_flake returned non-zero on fresh dir"
+  fi
+
+  local rc=0
+  bootstrap_flake || rc=$?
+  if [ "$rc" = "1" ] && [ "$BOOTSTRAP_DETAIL" = "already exists" ]; then
+    test_pass "bootstrap_flake skipped when flake.nix exists (returns 1 with reason)"
+  else
+    test_fail "Expected rc=1 'already exists', got rc=$rc detail='$BOOTSTRAP_DETAIL'"
+  fi
+
+  teardown_test_env
+}
+
+# Test: bootstrap_envrc writes 'use flake' and skips when present
+test_bootstrap_envrc() {
+  CURRENT_TEST="bootstrap_envrc"
+  test_header "bootstrap_envrc Writes 'use flake' and Skips When Present"
+
+  setup_test_env "bootstrap-envrc"
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  cd "$TEST_DIR"
+
+  if bootstrap_envrc && [ "$(cat .envrc)" = "use flake" ]; then
+    test_pass "bootstrap_envrc wrote 'use flake\\n'"
+  else
+    test_fail "bootstrap_envrc did not produce expected .envrc content"
+  fi
+
+  local rc=0
+  bootstrap_envrc || rc=$?
+  if [ "$rc" = "1" ] && [ "$BOOTSTRAP_DETAIL" = "already exists" ]; then
+    test_pass "bootstrap_envrc skipped when .envrc exists"
+  else
+    test_fail "Expected rc=1 'already exists', got rc=$rc detail='$BOOTSTRAP_DETAIL'"
+  fi
+
+  teardown_test_env
+}
+
+# Test: bootstrap_gitignore appends missing entries idempotently
+test_bootstrap_gitignore() {
+  CURRENT_TEST="bootstrap_gitignore"
+  test_header "bootstrap_gitignore Appends Missing Entries Idempotently"
+
+  setup_test_env "bootstrap-gitignore"
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  cd "$TEST_DIR"
+
+  # Fresh .gitignore: all 4 entries appended
+  if bootstrap_gitignore && [ "$BOOTSTRAP_DETAIL" = "4 entries appended" ]; then
+    test_pass "bootstrap_gitignore appended 4 entries to fresh .gitignore"
+  else
+    test_fail "Expected '4 entries appended', got '$BOOTSTRAP_DETAIL'"
+  fi
+
+  local required
+  for required in ".direnv/" ".wrapix/" "result" "result-*"; do
+    if ! grep -Fxq -- "$required" .gitignore; then
+      test_fail ".gitignore missing entry: $required"
+      teardown_test_env
+      return
+    fi
+  done
+  test_pass ".gitignore contains all required entries"
+
+  # Re-run on complete file: no-op, returns 1
+  local rc=0
+  bootstrap_gitignore || rc=$?
+  if [ "$rc" = "1" ] && [ "$BOOTSTRAP_DETAIL" = "all entries present" ]; then
+    test_pass "bootstrap_gitignore skipped when all entries present"
+  else
+    test_fail "Expected rc=1 'all entries present', got rc=$rc detail='$BOOTSTRAP_DETAIL'"
+  fi
+
+  # Partial file: only missing entries appended
+  rm .gitignore
+  printf '.direnv/\nresult\n' > .gitignore
+  rc=0
+  bootstrap_gitignore || rc=$?
+  if [ "$rc" = "0" ] && [ "$BOOTSTRAP_DETAIL" = "2 entries appended" ]; then
+    test_pass "bootstrap_gitignore appends only missing entries (2 of 4)"
+  else
+    test_fail "Expected rc=0 '2 entries appended', got rc=$rc detail='$BOOTSTRAP_DETAIL'"
+  fi
+
+  # Count each required entry appears exactly once (idempotence of partial run)
+  local count
+  for required in ".direnv/" ".wrapix/" "result" "result-*"; do
+    count=$(grep -Fxc -- "$required" .gitignore)
+    if [ "$count" != "1" ]; then
+      test_fail "Entry '$required' appears $count times (expected 1)"
+      teardown_test_env
+      return
+    fi
+  done
+  test_pass "Each entry appears exactly once after partial merge"
+
+  # File without trailing newline: helper should add one before appending
+  rm .gitignore
+  printf 'custom' > .gitignore
+  bootstrap_gitignore
+  if [ "$(head -n 1 .gitignore)" = "custom" ] && grep -Fxq -- ".direnv/" .gitignore; then
+    test_pass "bootstrap_gitignore preserves existing lines when no trailing newline"
+  else
+    test_fail "bootstrap_gitignore corrupted existing lines"
+  fi
+
+  teardown_test_env
+}
+
+# Test: bootstrap_precommit copies template and skips when present
+test_bootstrap_precommit() {
+  CURRENT_TEST="bootstrap_precommit"
+  test_header "bootstrap_precommit Copies Template and Skips When Present"
+
+  setup_test_env "bootstrap-precommit"
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  cd "$TEST_DIR"
+
+  if bootstrap_precommit; then
+    if diff -q "$RALPH_TEMPLATE_DIR/pre-commit-config.yaml" .pre-commit-config.yaml >/dev/null; then
+      test_pass "bootstrap_precommit copied template"
+    else
+      test_fail ".pre-commit-config.yaml differs from template"
+    fi
+  else
+    test_fail "bootstrap_precommit returned non-zero on fresh dir"
+  fi
+
+  local rc=0
+  bootstrap_precommit || rc=$?
+  if [ "$rc" = "1" ] && [ "$BOOTSTRAP_DETAIL" = "already exists" ]; then
+    test_pass "bootstrap_precommit skipped when config exists"
+  else
+    test_fail "Expected rc=1 'already exists', got rc=$rc detail='$BOOTSTRAP_DETAIL'"
+  fi
+
+  teardown_test_env
+}
+
+# Test: bootstrap_beads skips when .beads/ exists (creation path requires dolt)
+test_bootstrap_beads_skip() {
+  CURRENT_TEST="bootstrap_beads_skip"
+  test_header "bootstrap_beads Skips When .beads/ Exists"
+
+  setup_test_env "bootstrap-beads-skip"
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  cd "$TEST_DIR"
+
+  # setup_test_env creates .beads/; verify skip path
+  local rc=0
+  bootstrap_beads || rc=$?
+  if [ "$rc" = "1" ] && [ "$BOOTSTRAP_DETAIL" = "already initialized" ]; then
+    test_pass "bootstrap_beads skipped existing .beads/ with correct reason"
+  else
+    test_fail "Expected rc=1 'already initialized', got rc=$rc detail='$BOOTSTRAP_DETAIL'"
+  fi
+
+  teardown_test_env
+}
+
+# Test: bootstrap_claude_symlink creates symlink when absent, skips otherwise
+test_bootstrap_claude_symlink() {
+  CURRENT_TEST="bootstrap_claude_symlink"
+  test_header "bootstrap_claude_symlink Creates Symlink and Skips When Present"
+
+  setup_test_env "bootstrap-claude-symlink"
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  cd "$TEST_DIR"
+
+  # Symlink creation path
+  if bootstrap_claude_symlink; then
+    if [ -L CLAUDE.md ] && [ "$(readlink CLAUDE.md)" = "AGENTS.md" ] && [ "$BOOTSTRAP_DETAIL" = "-> AGENTS.md" ]; then
+      test_pass "bootstrap_claude_symlink created symlink -> AGENTS.md"
+    else
+      test_fail "Symlink missing or wrong target (detail='$BOOTSTRAP_DETAIL')"
+    fi
+  else
+    test_fail "bootstrap_claude_symlink returned non-zero on fresh dir"
+  fi
+
+  # Skip when symlink exists
+  local rc=0
+  bootstrap_claude_symlink || rc=$?
+  if [ "$rc" = "1" ] && [ "$BOOTSTRAP_DETAIL" = "already exists" ]; then
+    test_pass "bootstrap_claude_symlink skipped when symlink already present"
+  else
+    test_fail "Expected rc=1 'already exists', got rc=$rc detail='$BOOTSTRAP_DETAIL'"
+  fi
+
+  # Skip when CLAUDE.md exists as a regular file (not a symlink)
+  rm CLAUDE.md
+  echo "# manual" > CLAUDE.md
+  rc=0
+  bootstrap_claude_symlink || rc=$?
+  if [ "$rc" = "1" ] && [ ! -L CLAUDE.md ] && [ "$(cat CLAUDE.md)" = "# manual" ]; then
+    test_pass "bootstrap_claude_symlink leaves existing regular CLAUDE.md untouched"
+  else
+    test_fail "Expected skip preserving regular file, got rc=$rc"
+  fi
+
+  teardown_test_env
+}
+
 # Test: clarify label helpers operate against live beads (add appends to
 # description, label gates notifications, list returns tagged beads only)
 test_clarify_label_helpers() {
@@ -12446,6 +12679,12 @@ PARALLEL_TESTS=(
   test_malformed_bd_output_parsing
   test_filter_clarify_beads
   test_extract_clarify_note
+  test_bootstrap_flake
+  test_bootstrap_envrc
+  test_bootstrap_gitignore
+  test_bootstrap_precommit
+  test_bootstrap_beads_skip
+  test_bootstrap_claude_symlink
   test_plan_flag_validation
   test_plan_per_label_state_files
   test_plan_update_direct_edit
