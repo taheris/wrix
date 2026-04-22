@@ -131,6 +131,26 @@ get_question_for_bead() {
 }
 
 #-----------------------------------------------------------------------------
+# Reset the run ↔ check iteration counter for the bead's spec (if any).
+# Called after a clarify is cleared so the next ralph run starts fresh.
+#-----------------------------------------------------------------------------
+reset_iteration_for_bead() {
+  local bead_id="$1"
+
+  local labels_json
+  labels_json=$(bd_json show "$bead_id" --json 2>/dev/null | jq -c '.[0].labels // []' 2>/dev/null || echo '[]')
+
+  local bead_spec
+  bead_spec=$(get_spec_from_labels "$labels_json")
+
+  if [ -z "$bead_spec" ] || [ "$bead_spec" = "—" ]; then
+    return 0
+  fi
+
+  reset_iteration_count "$RALPH_DIR/state/${bead_spec}.json"
+}
+
+#-----------------------------------------------------------------------------
 # Print one-line resume hint after clearing a clarify.
 # When the bead's spec label matches state/current (or current is unset), the
 # hint is `ralph run`; otherwise it appends `-s <label>` so the user resumes
@@ -181,6 +201,9 @@ if [ -n "$BEAD_ID" ] && [ -n "$ANSWER" ]; then
   # Remove ralph:clarify label
   remove_clarify_label "$BEAD_ID"
 
+  # Reset the auto-iteration counter so ralph run starts the clock fresh.
+  reset_iteration_for_bead "$BEAD_ID"
+
   print_resume_hint "$BEAD_ID"
   exit 0
 fi
@@ -196,6 +219,9 @@ if [ -n "$BEAD_ID" ] && [ "$DISMISS" = "true" ]; then
 
   # Remove ralph:clarify label
   remove_clarify_label "$BEAD_ID"
+
+  # Reset the auto-iteration counter so ralph run starts the clock fresh.
+  reset_iteration_for_bead "$BEAD_ID"
 
   echo "Dismissed $BEAD_ID. The agent will proceed without an answer on its next iteration."
   exit 0

@@ -500,16 +500,24 @@ run_spec_review() {
     local new_beads=$((beads_after - beads_before))
     debug "Host post-count: $beads_after bead(s) (new: $new_beads)"
 
+    # Load config on host so we can consult loop.max-iterations for escalation.
+    local host_config_file="$RALPH_DIR/config.nix"
+    local host_config="{}"
+    if [ -f "$host_config_file" ]; then
+      host_config=$(nix eval --json --file "$host_config_file" 2>/dev/null || echo "{}")
+    fi
+
     echo ""
     echo "─────────────────────────────────────"
+
+    # Shared clarify query: any bead in the spec carrying ralph:clarify,
+    # regardless of whether it pre-existed or was just created.
+    local clarify_json clarify_count
+    clarify_json=$(list_clarify_beads "$host_label")
+    clarify_count=$(echo "$clarify_json" | jq 'length' 2>/dev/null || echo 0)
+
     if [ "$new_beads" -le 0 ]; then
       echo "✓ Review PASSED — no new beads created"
-
-      # Push gate: refuse if any bead in the spec carries ralph:clarify.
-      # Pre-existing clarifies block the push even when this review created none.
-      local clarify_json clarify_count
-      clarify_json=$(list_clarify_beads "$host_label")
-      clarify_count=$(echo "$clarify_json" | jq 'length' 2>/dev/null || echo 0)
 
       if [ "$clarify_count" -gt 0 ]; then
         echo ""
@@ -519,19 +527,58 @@ run_spec_review() {
         return 0
       fi
 
+      # Clean RALPH_COMPLETE on the push path: reset the auto-iteration counter.
+      reset_iteration_count "$host_state_file"
+
       notify_event "Ralph" "Review passed for $host_label"
       do_push_gate || return $?
       return 0
-    else
-      echo "✗ Review found $new_beads new bead(s)"
-      echo ""
-      echo "Follow-up beads:"
-      echo "$beads_after_json" \
-        | jq -r --argjson n "$beads_before" '.[$n:] | .[] | "  - \(.id): \(.title)"' \
-          2>/dev/null || true
-      notify_event "Ralph" "Review found $new_beads issue(s) for $host_label"
-      return 1
     fi
+
+    echo "✗ Review found $new_beads new bead(s)"
+    echo ""
+    echo "Follow-up beads:"
+    echo "$beads_after_json" \
+      | jq -r --argjson n "$beads_before" '.[$n:] | .[] | "  - \(.id): \(.title)"' \
+        2>/dev/null || true
+
+    # Fix-up beads + ralph:clarify → stop, wait for ralph msg (no push).
+    if [ "$clarify_count" -gt 0 ]; then
+      echo ""
+      echo "Outstanding questions: $clarify_count bead(s) carry ralph:clarify."
+      echo "Resolve via: ralph msg"
+      notify_event "Ralph" "Review paused on clarify for $host_label"
+      return 0
+    fi
+
+    # Fix-up beads + no clarify: auto-iterate up to loop.max-iterations.
+    local max_iter iter_count
+    max_iter=$(echo "$host_config" | jq -r '.loop."max-iterations" // 3' 2>/dev/null || echo 3)
+    iter_count=$(get_iteration_count "$host_state_file")
+
+    if [ "$iter_count" -lt "$max_iter" ]; then
+      local next_iter=$((iter_count + 1))
+      set_iteration_count "$host_state_file" "$next_iter"
+      echo ""
+      echo "Auto-iteration $next_iter/$max_iter — re-running ralph run on fix-up beads"
+      notify_event "Ralph" "Review found $new_beads issue(s) for $host_label (iter $next_iter/$max_iter)"
+      exec ralph run -s "$host_label"
+    fi
+
+    # At cap: escalate via ralph:clarify on the newest fix-up bead.
+    local newest_id
+    newest_id=$(echo "$beads_after_json" \
+      | jq -r --argjson n "$beads_before" '.[$n:] | last.id // empty' 2>/dev/null || echo "")
+    if [ -n "$newest_id" ]; then
+      add_clarify_label "$newest_id" \
+        "Iteration cap ($max_iter) reached: review kept finding fix-up work. Human input needed before resuming." \
+        || true
+    fi
+    echo ""
+    echo "Iteration cap reached ($iter_count/$max_iter). Escalated to ralph:clarify on $newest_id."
+    echo "Resolve via: ralph msg"
+    notify_event "Ralph" "Iteration cap reached for $host_label"
+    return 0
   fi
 
   # -----------------------------------------------------------------------

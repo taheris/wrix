@@ -5346,6 +5346,157 @@ test_check_push_failure_modes() {
   fi
 }
 
+# Test: check.sh escalates to ralph:clarify + stops after loop.max-iterations
+test_check_iteration_cap_escalates() {
+  CURRENT_TEST="check_iteration_cap_escalates"
+  test_header "check.sh: auto-iteration escalates via ralph:clarify at the cap"
+
+  local check_script="$REPO_ROOT/lib/ralph/cmd/check.sh"
+
+  # Must read loop.max-iterations from config (default 3)
+  if grep -qE 'loop\."max-iterations"' "$check_script"; then
+    test_pass "check.sh reads loop.max-iterations from config"
+  else
+    test_fail "check.sh should read loop.max-iterations from config"
+  fi
+
+  # Under-cap branch: increment and exec ralph run
+  if grep -qE 'set_iteration_count[[:space:]]+"\$host_state_file"[[:space:]]+"\$next_iter"' "$check_script"; then
+    test_pass "under-cap branch increments iteration_count"
+  else
+    test_fail "under-cap branch should increment iteration_count in state JSON"
+  fi
+
+  if grep -qE 'exec[[:space:]]+ralph[[:space:]]+run[[:space:]]+-s[[:space:]]+"\$host_label"' "$check_script"; then
+    test_pass "under-cap branch exec's ralph run for auto-iteration"
+  else
+    test_fail "under-cap branch should 'exec ralph run -s <label>' to auto-iterate"
+  fi
+
+  # At-cap branch: add ralph:clarify to the newest fix-up bead
+  if grep -qE 'add_clarify_label[[:space:]]+"\$newest_id"' "$check_script"; then
+    test_pass "at-cap branch adds ralph:clarify to newest fix-up bead"
+  else
+    test_fail "at-cap branch should call add_clarify_label \"\$newest_id\""
+  fi
+
+  if grep -qE 'Iteration cap[[:space:]]*\(\$max_iter\) reached' "$check_script"; then
+    test_pass "at-cap clarify note mentions the iteration cap"
+  else
+    test_fail "at-cap clarify note should mention the iteration cap"
+  fi
+
+  # At-cap branch must not push and must point at ralph msg
+  local cap_line push_call_line
+  cap_line=$(grep -n 'Iteration cap reached' "$check_script" | head -1 | cut -d: -f1)
+  push_call_line=$(grep -nE '^[[:space:]]*do_push_gate[[:space:]]*(\|\||$)' "$check_script" | head -1 | cut -d: -f1)
+  if [ -n "$cap_line" ] && [ -n "$push_call_line" ] && [ "$push_call_line" -lt "$cap_line" ]; then
+    test_pass "at-cap path runs after the push gate branch (no push)"
+  else
+    test_fail "at-cap path should be reached only on fix-up beads (cap:$cap_line push:$push_call_line)"
+  fi
+
+  if grep -qE 'Resolve via: ralph msg' "$check_script"; then
+    test_pass "at-cap path prints a 'ralph msg' pointer"
+  else
+    test_fail "at-cap path should point user at ralph msg"
+  fi
+}
+
+# Test: iteration_count persists in state JSON and resets on clean push + clarify clear
+test_iteration_counter_persistence() {
+  CURRENT_TEST="iteration_counter_persistence"
+  test_header "iteration_count persists in state JSON and resets on push/clarify-clear"
+
+  local util_script="$REPO_ROOT/lib/ralph/cmd/util.sh"
+  local check_script="$REPO_ROOT/lib/ralph/cmd/check.sh"
+  local msg_script="$REPO_ROOT/lib/ralph/cmd/msg.sh"
+
+  # util.sh exposes helpers for reading/writing/resetting the counter
+  for helper in get_iteration_count set_iteration_count reset_iteration_count; do
+    if grep -qE "^${helper}\(\)" "$util_script"; then
+      test_pass "util.sh defines $helper"
+    else
+      test_fail "util.sh should define $helper"
+    fi
+  done
+
+  # Helpers must read/write .iteration_count in the state JSON
+  if grep -qE '\.iteration_count' "$util_script"; then
+    test_pass "iteration_count helpers operate on .iteration_count field"
+  else
+    test_fail "iteration_count helpers should read/write .iteration_count in state JSON"
+  fi
+
+  # check.sh resets the counter on the clean push path
+  if grep -qE 'reset_iteration_count[[:space:]]+"\$host_state_file"' "$check_script"; then
+    test_pass "check.sh resets iteration_count on clean RALPH_COMPLETE"
+  else
+    test_fail "check.sh should reset iteration_count on clean RALPH_COMPLETE (push path)"
+  fi
+
+  # Reset must appear before do_push_gate — only clean pushes clear the counter
+  local reset_line push_call_line
+  reset_line=$(grep -nE 'reset_iteration_count[[:space:]]+"\$host_state_file"' "$check_script" | head -1 | cut -d: -f1)
+  push_call_line=$(grep -nE '^[[:space:]]*do_push_gate[[:space:]]*(\|\||$)' "$check_script" | head -1 | cut -d: -f1)
+  if [ -n "$reset_line" ] && [ -n "$push_call_line" ] && [ "$reset_line" -lt "$push_call_line" ]; then
+    test_pass "iteration_count reset precedes do_push_gate"
+  else
+    test_fail "reset_iteration_count should run before do_push_gate (reset:$reset_line push:$push_call_line)"
+  fi
+
+  # msg.sh resets the counter on reply and dismiss
+  if grep -qE 'reset_iteration_for_bead|reset_iteration_count' "$msg_script"; then
+    test_pass "msg.sh resets iteration_count when a clarify is cleared"
+  else
+    test_fail "msg.sh should reset iteration_count when a clarify is cleared"
+  fi
+
+  # Runtime check: set + get round-trips through the JSON file
+  local tmp_dir tmp_state
+  tmp_dir=$(mktemp -d)
+  tmp_state="$tmp_dir/label.json"
+
+  # Source helpers in a subshell so the main runner's env stays clean
+  local got
+  got=$(
+    set +u
+    # shellcheck source=/dev/null
+    source "$util_script"
+    set_iteration_count "$tmp_state" 2
+    get_iteration_count "$tmp_state"
+  )
+  if [ "$got" = "2" ]; then
+    test_pass "set/get iteration_count round-trips (got $got)"
+  else
+    test_fail "set/get iteration_count round-trip failed (got '$got', expected 2)"
+  fi
+
+  # File must now contain {"iteration_count": 2}
+  if [ -f "$tmp_state" ] && [ "$(jq -r '.iteration_count' "$tmp_state")" = "2" ]; then
+    test_pass "iteration_count is persisted to state JSON"
+  else
+    test_fail "iteration_count should be persisted to state JSON"
+  fi
+
+  # reset_iteration_count should zero the counter
+  local after_reset
+  after_reset=$(
+    set +u
+    # shellcheck source=/dev/null
+    source "$util_script"
+    reset_iteration_count "$tmp_state"
+    get_iteration_count "$tmp_state"
+  )
+  if [ "$after_reset" = "0" ]; then
+    test_pass "reset_iteration_count zeroes the counter"
+  else
+    test_fail "reset_iteration_count should zero the counter (got '$after_reset')"
+  fi
+
+  rm -rf "$tmp_dir"
+}
+
 # Test: default config template has hooks configured
 test_default_config_has_hooks() {
   CURRENT_TEST="default_config_has_hooks"
@@ -11427,6 +11578,8 @@ PARALLEL_TESTS=(
   test_check_push_gate_clean
   test_check_clarify_stops_push
   test_check_push_failure_modes
+  test_check_iteration_cap_escalates
+  test_iteration_counter_persistence
   test_default_config_has_hooks
   test_parse_annotation_link
   test_parse_spec_annotations

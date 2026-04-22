@@ -1245,6 +1245,51 @@ filter_clarify_beads() {
 }
 
 #-----------------------------------------------------------------------------
+# Iteration Counter (run ↔ check auto-iteration)
+#
+# Tracks how many unsuccessful check iterations a molecule has consumed.
+# Persisted in state/<label>.json as .iteration_count. Bounded by
+# loop.max-iterations; reset to 0 on clean RALPH_COMPLETE (push path) or
+# when a clarify is cleared via ralph msg.
+#-----------------------------------------------------------------------------
+
+# Read iteration_count from state JSON (0 if absent or file missing).
+# Usage: get_iteration_count <state_file>
+get_iteration_count() {
+  local state_file="$1"
+  if [ ! -f "$state_file" ]; then
+    echo 0
+    return 0
+  fi
+  jq -r '.iteration_count // 0' "$state_file" 2>/dev/null || echo 0
+}
+
+# Write iteration_count to state JSON (creates file if absent).
+# Usage: set_iteration_count <state_file> <n>
+set_iteration_count() {
+  local state_file="$1"
+  local count="$2"
+  local dir
+  dir=$(dirname "$state_file")
+  mkdir -p "$dir"
+  if [ -f "$state_file" ]; then
+    jq --argjson n "$count" '.iteration_count = $n' "$state_file" \
+      > "$state_file.tmp" && mv "$state_file.tmp" "$state_file"
+  else
+    jq -n --argjson n "$count" '{iteration_count: $n}' > "$state_file"
+  fi
+}
+
+# Reset iteration_count to 0.
+# Usage: reset_iteration_count <state_file>
+reset_iteration_count() {
+  local state_file="$1"
+  # Only touch the field if a state file exists — no-op if the spec has none.
+  [ -f "$state_file" ] || return 0
+  set_iteration_count "$state_file" 0
+}
+
+#-----------------------------------------------------------------------------
 # Worktree Management for Parallel Dispatch
 #
 # Helpers for creating, merging, and cleaning up git worktrees used by
