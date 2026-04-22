@@ -523,7 +523,7 @@ two successive ralph commands, must observe updated content between them.
 - [ ] Full suite runs in <90s on dev hardware
 - [ ] `init_beads` uses snapshot copy instead of per-test `bd init`
 - [x] `setup_test_env` uses batched fixture operations (single `mkdir -p`, bulk symlinks)
-- [ ] `RALPH_TEST_MAX_JOBS` default tuned to shared-Dolt concurrency ceiling
+- [x] `RALPH_TEST_MAX_JOBS` default tuned to shared-Dolt concurrency ceiling
 
 ## Out of Scope
 

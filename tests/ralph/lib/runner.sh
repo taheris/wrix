@@ -109,12 +109,12 @@ run_tests_parallel() {
   local results_dir
   results_dir=$(mktemp -d -t "ralph-test-results-XXXXXX")
 
-  # Inside wrapix container, limit concurrency to avoid overwhelming Claude
-  # Too many background processes cause Claude to exit unexpectedly
-  local max_jobs="${RALPH_TEST_MAX_JOBS:-0}"  # 0 = unlimited
-  if [ "$max_jobs" -eq 0 ] && [ -f /etc/wrapix/claude-config.json ]; then
-    max_jobs=5
-  fi
+  # 16 = measured safe ceiling for the shared dolt sql-server under this suite's
+  # bd call pattern. 5 = container cap matched to Claude rate limits (heavier
+  # concurrency has caused mid-run exits). Set RALPH_TEST_MAX_JOBS=0 for unlimited.
+  local default_max_jobs=16
+  [ -f /etc/wrapix/claude-config.json ] && default_max_jobs=5
+  local max_jobs="${RALPH_TEST_MAX_JOBS-$default_max_jobs}"
 
   if [ "$max_jobs" -gt 0 ]; then
     echo "Running ${#tests_ref[@]} tests (max $max_jobs concurrent)..."
