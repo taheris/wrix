@@ -386,6 +386,48 @@ NIXEOF
 }
 
 #-----------------------------------------------------------------------------
+# Push gate: invoked on the host side after a clean review (RALPH_COMPLETE,
+# no new beads, no ralph:clarify). Refuses on detached HEAD; surfaces
+# distinct hints for git push and beads-push failures.
+#
+# Returns:
+#   0  — both pushes succeeded
+#   1  — git push failed (non-fast-forward, rejected, refused, …)
+#   2  — git push succeeded but beads-push failed (code on remote, beads local)
+#   3  — refused: detached HEAD
+#-----------------------------------------------------------------------------
+do_push_gate() {
+  if ! git symbolic-ref --quiet HEAD >/dev/null; then
+    echo ""
+    echo "✗ Push refused: HEAD is detached"
+    echo "  Switch to a branch before re-running ralph check."
+    return 3
+  fi
+
+  echo ""
+  echo "Pushing code to remote..."
+  if ! git push; then
+    echo ""
+    echo "✗ git push failed (likely non-fast-forward / rejected)"
+    echo "  Pull/rebase then re-run ralph check."
+    return 1
+  fi
+
+  echo ""
+  echo "Pushing beads to remote..."
+  if ! beads-push; then
+    echo ""
+    echo "✗ beads-push failed (code is on the remote; beads remain local)"
+    echo "  Run beads-push manually to sync beads to GitHub."
+    return 2
+  fi
+
+  echo ""
+  echo "✓ Pushed code + beads"
+  return 0
+}
+
+#-----------------------------------------------------------------------------
 # Spec review (default / -s <label>)
 #
 # Split across two execution contexts:
@@ -444,7 +486,23 @@ run_spec_review() {
     echo "─────────────────────────────────────"
     if [ "$new_beads" -le 0 ]; then
       echo "✓ Review PASSED — no new beads created"
+
+      # Push gate: refuse if any bead in the spec carries ralph:clarify.
+      # Pre-existing clarifies block the push even when this review created none.
+      local clarify_json clarify_count
+      clarify_json=$(list_clarify_beads "$host_label")
+      clarify_count=$(echo "$clarify_json" | jq 'length' 2>/dev/null || echo 0)
+
+      if [ "$clarify_count" -gt 0 ]; then
+        echo ""
+        echo "Push skipped: $clarify_count bead(s) carry ralph:clarify."
+        echo "Resolve via: ralph msg"
+        notify_event "Ralph" "Review passed (clarify pending) for $host_label"
+        return 0
+      fi
+
       notify_event "Ralph" "Review passed for $host_label"
+      do_push_gate || return $?
       return 0
     else
       echo "✗ Review found $new_beads new bead(s)"

@@ -5221,6 +5221,131 @@ test_check_dolt_pull_before_recount() {
   fi
 }
 
+# Test: check.sh push gate fires only when RALPH_COMPLETE + no new beads + no clarify
+test_check_push_gate_clean() {
+  CURRENT_TEST="check_push_gate_clean"
+  test_header "check.sh: push gate runs git push + beads-push only on clean review"
+
+  local check_script="$REPO_ROOT/lib/ralph/cmd/check.sh"
+
+  if grep -q 'do_push_gate' "$check_script"; then
+    test_pass "check.sh defines/calls do_push_gate"
+  else
+    test_fail "check.sh should define a push gate (do_push_gate)"
+    return
+  fi
+
+  # do_push_gate must invoke both git push and beads-push
+  if grep -qE '^[[:space:]]*(if !|)[[:space:]]*git push' "$check_script"; then
+    test_pass "do_push_gate runs git push"
+  else
+    test_fail "do_push_gate should run git push"
+  fi
+
+  if grep -qE '^[[:space:]]*(if !|)[[:space:]]*beads-push' "$check_script"; then
+    test_pass "do_push_gate runs beads-push"
+  else
+    test_fail "do_push_gate should run beads-push"
+  fi
+
+  # Push must be guarded by the new_beads <= 0 branch
+  local clean_line push_call_line failure_line
+  clean_line=$(grep -n '"\$new_beads" -le 0' "$check_script" | head -1 | cut -d: -f1)
+  push_call_line=$(grep -nE '^[[:space:]]*do_push_gate[[:space:]]*(\|\||$)' "$check_script" | head -1 | cut -d: -f1)
+  failure_line=$(grep -n 'Review found \$new_beads new bead' "$check_script" | head -1 | cut -d: -f1)
+
+  if [ -n "$clean_line" ] && [ -n "$push_call_line" ] && [ "$push_call_line" -gt "$clean_line" ]; then
+    test_pass "Push gate is invoked inside the clean (new_beads <= 0) branch"
+  else
+    test_fail "do_push_gate call should be inside the clean branch (clean:$clean_line call:$push_call_line)"
+  fi
+
+  if [ -n "$push_call_line" ] && [ -n "$failure_line" ] && [ "$push_call_line" -lt "$failure_line" ]; then
+    test_pass "Push gate is not invoked in the new-beads (fix-up) branch"
+  else
+    test_fail "do_push_gate must not be reached when new beads were created (call:$push_call_line failure:$failure_line)"
+  fi
+}
+
+# Test: check.sh stops short of pushing when ralph:clarify beads exist for the spec
+test_check_clarify_stops_push() {
+  CURRENT_TEST="check_clarify_stops_push"
+  test_header "check.sh: ralph:clarify beads block the push gate"
+
+  local check_script="$REPO_ROOT/lib/ralph/cmd/check.sh"
+
+  if grep -q 'list_clarify_beads "\$host_label"' "$check_script"; then
+    test_pass "check.sh queries clarify beads scoped to the spec label"
+  else
+    test_fail "check.sh should call list_clarify_beads \"\$host_label\""
+  fi
+
+  # The clarify-pending branch must early-return BEFORE do_push_gate is reached.
+  local clarify_branch_line push_call_line
+  clarify_branch_line=$(grep -n '"\$clarify_count" -gt 0' "$check_script" | head -1 | cut -d: -f1)
+  push_call_line=$(grep -nE '^[[:space:]]*do_push_gate[[:space:]]*(\|\||$)' "$check_script" | head -1 | cut -d: -f1)
+
+  if [ -n "$clarify_branch_line" ] && [ -n "$push_call_line" ] && [ "$clarify_branch_line" -lt "$push_call_line" ]; then
+    test_pass "clarify check guards the push gate"
+  else
+    test_fail "clarify guard should appear before do_push_gate (clarify:$clarify_branch_line push:$push_call_line)"
+  fi
+
+  # Clarify-pending branch must include a 'Resolve via: ralph msg' pointer
+  if grep -q 'ralph msg' "$check_script"; then
+    test_pass "clarify-pending branch points the user at ralph msg"
+  else
+    test_fail "clarify-pending branch should point the user at 'ralph msg'"
+  fi
+}
+
+# Test: check.sh push gate handles the three documented failure modes
+test_check_push_failure_modes() {
+  CURRENT_TEST="check_push_failure_modes"
+  test_header "check.sh: push gate covers detached HEAD, git-push, beads-push failures"
+
+  local check_script="$REPO_ROOT/lib/ralph/cmd/check.sh"
+
+  # Detached HEAD: refuse before pushing anything
+  if grep -q 'git symbolic-ref --quiet HEAD' "$check_script"; then
+    test_pass "do_push_gate detects detached HEAD via git symbolic-ref"
+  else
+    test_fail "do_push_gate should detect detached HEAD with git symbolic-ref --quiet HEAD"
+  fi
+
+  if grep -qiE 'detached HEAD' "$check_script"; then
+    test_pass "do_push_gate prints a detached-HEAD error"
+  else
+    test_fail "do_push_gate should print a clear 'detached HEAD' error"
+  fi
+
+  # git push failure: hint to pull/rebase + re-run ralph check
+  if grep -qiE 'pull/rebase then re-run ralph check' "$check_script"; then
+    test_pass "do_push_gate hints 'pull/rebase then re-run ralph check' on git push failure"
+  else
+    test_fail "do_push_gate should hint 'pull/rebase then re-run ralph check' on git push failure"
+  fi
+
+  # beads-push failure: hint to run beads-push manually
+  if grep -qE 'Run beads-push manually' "$check_script"; then
+    test_pass "do_push_gate hints 'Run beads-push manually' on beads-push failure"
+  else
+    test_fail "do_push_gate should hint 'Run beads-push manually' on beads-push failure"
+  fi
+
+  # All three failure paths must return non-zero
+  local detached_return git_return beads_return
+  detached_return=$(awk '/git symbolic-ref --quiet HEAD/,/^\}/' "$check_script" | grep -cE '^[[:space:]]*return[[:space:]]+[1-9]')
+  git_return=$(awk '/git push failed/,/^\}/' "$check_script" | grep -cE '^[[:space:]]*return[[:space:]]+[1-9]')
+  beads_return=$(awk '/beads-push failed/,/^\}/' "$check_script" | grep -cE '^[[:space:]]*return[[:space:]]+[1-9]')
+
+  if [ "$detached_return" -ge 1 ] && [ "$git_return" -ge 1 ] && [ "$beads_return" -ge 1 ]; then
+    test_pass "All three failure paths return non-zero"
+  else
+    test_fail "Each failure path must return non-zero (detached:$detached_return git:$git_return beads:$beads_return)"
+  fi
+}
+
 # Test: default config template has hooks configured
 test_default_config_has_hooks() {
   CURRENT_TEST="default_config_has_hooks"
@@ -10856,6 +10981,9 @@ PARALLEL_TESTS=(
   test_check_default_runs_review
   test_check_dolt_push_in_container
   test_check_dolt_pull_before_recount
+  test_check_push_gate_clean
+  test_check_clarify_stops_push
+  test_check_push_failure_modes
   test_default_config_has_hooks
   test_parse_annotation_link
   test_parse_spec_annotations
