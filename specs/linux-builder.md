@@ -128,15 +128,15 @@ nix-daemon                         sshd (:22)
 ## Success Criteria
 
 - [ ] `nix build --system aarch64-linux` works on macOS
-  [verify](../tests/builder-test.sh)
+  [judge](../tests/judges/linux-builder.sh#test_aarch64_linux_builds)
 - [ ] Nix store persists across container restarts
-  [verify](../tests/builder-test.sh)
+  [judge](../tests/judges/linux-builder.sh#test_nix_store_persistence)
 - [ ] SSH connection is secure (key-based auth)
   [judge](../tests/judges/linux-builder.sh#test_ssh_key_auth)
 - [ ] `wrapix-builder config` prints nix-darwin configuration snippet (full nix-darwin module not yet implemented)
   [judge](../tests/judges/linux-builder.sh#test_nix_darwin_config)
 - [ ] Builder can be stopped and restarted cleanly
-  [verify](../tests/builder-test.sh)
+  [judge](../tests/judges/linux-builder.sh#test_stop_restart_clean)
 
 ## Out of Scope
 

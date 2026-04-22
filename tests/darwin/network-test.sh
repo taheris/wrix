@@ -15,14 +15,17 @@ echo ""
 FAILED=0
 
 # Test 1: Check network interfaces
+# Pick whichever interface carries the default route rather than hard-coding
+# eth0 — on Linux hosts the container may expose eno1/enp*/ens* etc., and on
+# Darwin vmnet still routes through eth0.
 echo "Test 1: Network interfaces"
 if ip addr show 2>/dev/null; then
-  # Verify eth0 has an IP address (vmnet assigns dynamically)
-  if ip addr show eth0 2>/dev/null | grep -q "inet "; then
-    ETH0_IP=$(ip addr show eth0 | grep "inet " | awk '{print $2}')
-    echo "  PASS: eth0 configured with $ETH0_IP"
+  DEFAULT_IF=$(ip route show default 2>/dev/null | awk '/^default/ {print $5; exit}')
+  if [ -n "$DEFAULT_IF" ] && ip addr show "$DEFAULT_IF" 2>/dev/null | grep -q "inet "; then
+    IF_IP=$(ip addr show "$DEFAULT_IF" | grep "inet " | awk '{print $2}')
+    echo "  PASS: $DEFAULT_IF configured with $IF_IP"
   else
-    echo "  FAIL: eth0 not configured correctly"
+    echo "  FAIL: no default-route interface has an IPv4 address"
     FAILED=1
   fi
 else

@@ -987,10 +987,10 @@ parse_spec_annotations() {
     # Match annotation lines: [verify](...) or [judge](...)
     if [ -n "$prev_criterion" ]; then
       local ann_type="" ann_target=""
-      # Use variables for regexes containing brackets (bash workaround)
-      local verify_wrapix_re='^[[:space:]]*\[verify:wrapix\]\(([^)]+)\)'
-      local verify_re='^[[:space:]]*\[verify\]\(([^)]+)\)'
-      local judge_re='^[[:space:]]*\[judge\]\(([^)]+)\)'
+      # Targets may contain one level of balanced parens (e.g. "Wait for X (via Y)").
+      local verify_wrapix_re='^[[:space:]]*\[verify:wrapix\]\(([^()]*(\([^()]*\)[^()]*)*)\)'
+      local verify_re='^[[:space:]]*\[verify\]\(([^()]*(\([^()]*\)[^()]*)*)\)'
+      local judge_re='^[[:space:]]*\[judge\]\(([^()]*(\([^()]*\)[^()]*)*)\)'
       if [[ "$line" =~ $verify_wrapix_re ]]; then
         ann_type="verify-wrapix"
         ann_target="${BASH_REMATCH[1]}"
@@ -1916,11 +1916,9 @@ The code implements progress percentage display via the calc_progress function a
   debug "run_judge: evaluating criterion: $JUDGE_CRITERION"
   debug "run_judge: files: $JUDGE_FILES"
 
-  # Call Claude with --print for simple text response
+  # Pipe via stdin — prompt can exceed ARG_MAX when specs reference many files.
   local llm_output exit_code
-  export JUDGE_PROMPT="$prompt"
-  llm_output=$(claude --dangerously-skip-permissions --print "$prompt" 2>&1) && exit_code=0 || exit_code=$?
-  unset JUDGE_PROMPT
+  llm_output=$(printf '%s' "$prompt" | claude --dangerously-skip-permissions --print 2>&1) && exit_code=0 || exit_code=$?
 
   if [ $exit_code -ne 0 ]; then
     warn "run_judge: claude invocation failed (exit $exit_code)"

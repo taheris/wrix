@@ -820,11 +820,11 @@ discovers the provider from `city.toml`.
 - [x] Provider script handles all gc provider methods
   [verify](tests/city/unit.nix::city-shell-syntax), [verify](tests/city/unit.nix::city-provider-worker)
 - [x] Ephemeral workers use git worktrees at `.wrapix/worktree/<bead-id>`
-  [verify](tests/city/integration.nix::Phase 1 worker worktree)
+  [verify](tests/city/integration.nix::Wait for worker worktree)
 - [x] Persistent roles (mayor, scout, judge) start with tmux as PID 1
-  [verify](tests/city/integration.nix::Phase 1 mayor/scout/judge start)
+  [verify](tests/city/integration.nix::Verify tmux session alive in mayor container)
 - [x] gc convergence detects worker completion and triggers judge gate
-  [verify](tests/city/integration.nix::Phase 1 judge approval)
+  [verify](tests/city/integration.nix::Wait for judge approval (via monitor gate pipeline))
 - [x] Secrets are injected at runtime, never baked into images
   [verify](tests/city/unit.nix::city-secrets)
 - [ ] `ralph run` still works standalone without gc
@@ -843,20 +843,20 @@ discovers the provider from `city.toml`.
   [judge]
 - [ ] P0 beads bypass cooldown and are dispatched immediately
 - [x] Merge uses fast-forward only; rebase + prek on divergence
-  [verify](tests/city/integration.nix::Phase 1 post-gate merge), [verify](tests/city/integration.nix::Phase 2 merge conflict)
+  [verify](tests/city/integration.nix::Verify merge landed on main), [verify](tests/city/integration.nix::Judge detects merge conflict and rejects)
 - [x] Post-gate order sends notifications via `wrapix-notify`
-  [verify](tests/city/integration.nix::Phase 1 deploy bead)
+  [verify](tests/city/integration.nix::Wait for post-gate pipeline (deploy bead created))
 - [ ] Scout pauses bead creation when queue cap is reached
 - [x] Scout detects errors via log pattern regex matching
   [verify](tests/city/unit.nix::city-scout-parse-rules), [verify](tests/city/unit.nix::city-scout-scan)
 - [x] Judge gate reads commit range from bead metadata
-  [verify](tests/city/unit.nix::city-gate-functional)
+  [verify](tests/city/integration.nix::Verify gate can find metadata after recovery)
 - [ ] Scout polling uses gc orders for scheduling
 - [ ] Worker→judge retry uses gc convergence with max 2 iterations
 - [x] Role behavior defined as gc formulas, overridable by consumers
   [verify](tests/city/unit.nix::city-formulas)
 - [x] Post-gate handles escalation path (non-approved convergence)
-  [verify](tests/city/integration.nix::Phase 3 escalation)
+  [verify](tests/city/integration.nix::Post-gate handles escalation (non-approved))
 - [x] Custom scale_check avoids gc's 30s timeout under dolt contention
   [verify](tests/city/unit.nix::city-config-validate)
 - [ ] Mayor formula starts as persistent session and responds on attach
@@ -865,7 +865,7 @@ discovers the provider from `city.toml`.
 - [ ] Mayor executes approved actions on human's behalf (dismiss, approve, file)
 - [ ] Mayor `autoDecompose` config option skips human approval
 - [ ] Judge owns merge after approval (review + merge as one flow)
-  [verify](tests/city/integration.nix::Phase 1 judge merge)
+  [verify](tests/city/integration.nix::Verify merge landed on main)
 - [ ] Judge rejection includes specific rule references and line numbers
 - [ ] Escalation flows to mayor instead of raw notification
 - [ ] Scout performs housekeeping (stale beads, orphaned workers, worktree cleanup)

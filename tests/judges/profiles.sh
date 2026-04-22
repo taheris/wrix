@@ -17,8 +17,8 @@ test_python_profile() {
 }
 
 test_derive_profile_merge() {
-  judge_files "lib/sandbox/profiles.nix"
-  judge_criterion "deriveProfile correctly merges packages and environment variables from base and extension profiles"
+  judge_files "lib/default.nix" "lib/sandbox/profiles.nix"
+  judge_criterion "deriveProfile (in lib/default.nix) correctly merges packages, mounts, env, and networkAllowlist from a base profile and extension attrset. packages/mounts/networkAllowlist are concatenated; env is right-biased (extension wins). Other fields pass through from the extension if set, otherwise the base."
 }
 
 test_rust_profile_rebuild_stable() {

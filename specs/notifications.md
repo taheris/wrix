@@ -108,15 +108,15 @@ Newline-delimited JSON:
 ## Success Criteria
 
 - [ ] Notifications appear on Linux with notify-send
-  [verify](../tests/notify-test.sh)
+  [judge](../tests/judges/notifications.sh#test_linux_notify_send)
 - [ ] Notifications appear on macOS with terminal-notifier
-  [verify](../tests/notify-test.sh)
+  [judge](../tests/judges/notifications.sh#test_macos_terminal_notifier)
 - [ ] No notification when terminal is focused
   [judge](../tests/judges/notifications.sh#test_focus_suppression)
 - [ ] Daemon handles multiple simultaneous connections
   [judge](../tests/judges/notifications.sh#test_concurrent_connections)
 - [ ] Client works from inside container
-  [verify](../tests/notify-test.sh)
+  [judge](../tests/judges/notifications.sh#test_client_in_container)
 
 ## Security Considerations
 

@@ -53,6 +53,134 @@ lookup_molecule_id() {
   echo "$molecule_id"
 }
 
+# Cached nix system and integration-test outputs.
+_NIX_SYSTEM=""
+declare -A _NIX_INTEGRATION_CACHE=()
+declare -A _NIX_INTEGRATION_EXIT=()
+
+nix_current_system() {
+  if [ -z "$_NIX_SYSTEM" ]; then
+    _NIX_SYSTEM=$(nix eval --raw --impure --expr 'builtins.currentSystem' 2>/dev/null) || _NIX_SYSTEM=""
+  fi
+  echo "$_NIX_SYSTEM"
+}
+
+run_verify_nix_test() {
+  local criterion="$1"
+  local file_path="$2"
+  local function_name="$3"
+
+  if [[ "$file_path" == *integration.nix ]]; then
+    run_verify_nix_integration "$criterion" "$file_path" "$function_name"
+    return
+  fi
+
+  local system attr build_output exit_code
+  system=$(nix_current_system)
+  if [ -z "$system" ]; then
+    echo "  [FAIL] $criterion"
+    echo "         nix eval for builtins.currentSystem failed"
+    failed=$((failed + 1))
+    has_failure=true
+    return
+  fi
+  attr="$function_name"
+  if [ -z "$attr" ]; then
+    echo "  [FAIL] $criterion"
+    echo "         .nix verify target missing attribute (expected path::attr)"
+    failed=$((failed + 1))
+    has_failure=true
+    return
+  fi
+  build_output=$(nix build -L --no-link ".#checks.${system}.${attr}" 2>&1) && exit_code=0 || exit_code=$?
+
+  if [ "$exit_code" -eq 0 ]; then
+    echo "  [PASS] $criterion"
+    echo "         $file_path::$attr (nix build .#checks.${system}.${attr})"
+    passed=$((passed + 1))
+  else
+    echo "  [FAIL] $criterion"
+    echo "         $file_path::$attr (nix build exit $exit_code)"
+    failed=$((failed + 1))
+    has_failure=true
+    if [ -n "$build_output" ]; then
+      local tail_n=5
+      [ "$VERBOSE" = "true" ] && tail_n=200
+      echo "$build_output" | tail -n "$tail_n" | while IFS= read -r line; do
+        echo "         | $line"
+      done
+    fi
+  fi
+}
+
+run_verify_nix_integration() {
+  local criterion="$1"
+  local file_path="$2"
+  local subtest="$3"
+
+  if [ -z "$subtest" ]; then
+    echo "  [FAIL] $criterion"
+    echo "         $file_path: integration verify requires a subtest name"
+    failed=$((failed + 1))
+    has_failure=true
+    return
+  fi
+
+  local app=""
+  case "$file_path" in
+    tests/city/integration.nix) app="test-city" ;;
+    *)
+      echo "  [FAIL] $criterion"
+      echo "         $file_path: no known nix app for integration file"
+      failed=$((failed + 1))
+      has_failure=true
+      return
+      ;;
+  esac
+
+  if [ -z "${_NIX_INTEGRATION_CACHE[$file_path]+set}" ]; then
+    local output exit_code
+    output=$(nix run ".#${app}" -- --no-fail-fast 2>&1) && exit_code=0 || exit_code=$?
+    _NIX_INTEGRATION_CACHE[$file_path]="$output"
+    _NIX_INTEGRATION_EXIT[$file_path]="$exit_code"
+  fi
+
+  local output="${_NIX_INTEGRATION_CACHE[$file_path]}"
+  local run_exit="${_NIX_INTEGRATION_EXIT[$file_path]}"
+
+  if [ "$run_exit" = "77" ]; then
+    echo "  [SKIP] $criterion"
+    echo "         $file_path::$subtest (nix run .#${app} exit 77)"
+    skipped=$((skipped + 1))
+    return
+  fi
+
+  if grep -Fxq "PASS: $subtest" <<<"$output"; then
+    echo "  [PASS] $criterion"
+    echo "         $file_path::$subtest (integration subtest)"
+    passed=$((passed + 1))
+  elif grep -Fxq "FAIL: $subtest" <<<"$output"; then
+    echo "  [FAIL] $criterion"
+    echo "         $file_path::$subtest (integration subtest)"
+    failed=$((failed + 1))
+    has_failure=true
+    if [ "$VERBOSE" = "true" ]; then
+      echo "$output" | awk -v name="$subtest" '
+        $0 == "--- " name " ---" { on=1; print; next }
+        on && /^--- .* ---$/ { on=0 }
+        on { print }
+      ' | while IFS= read -r line; do
+        echo "         | $line"
+      done
+    fi
+  else
+    echo "  [FAIL] $criterion"
+    echo "         $file_path::$subtest (subtest not found in output; run_exit=$run_exit)"
+    failed=$((failed + 1))
+    has_failure=true
+  fi
+}
+
 #-----------------------------------------------------------------------------
 # Helper: run a [verify] test
 #-----------------------------------------------------------------------------
@@ -66,6 +194,11 @@ run_verify_test() {
     echo "         $file_path not found"
     failed=$((failed + 1))
     has_failure=true
+    return
+  fi
+
+  if [[ "$file_path" == *.nix ]]; then
+    run_verify_nix_test "$criterion" "$file_path" "$function_name"
     return
   fi
 
@@ -350,6 +483,25 @@ run_single_spec_tests() {
   local spec_file="$1"
   local label="$2"
   local molecule_id="$3"
+
+  local supersede
+  supersede=$(awk '
+    /^>[[:space:]]+\*\*Superseded by:[[:space:]]*/ {
+      sub(/^>[[:space:]]+\*\*Superseded by:[[:space:]]*/, "")
+      sub(/\*\*[[:space:]]*$/, "")
+      print; exit
+    }
+  ' "$spec_file")
+  if [ -n "$supersede" ]; then
+    local header_text="Ralph Skipped: $label"
+    [ -n "$molecule_id" ] && header_text="$header_text ($molecule_id)"
+    echo "$header_text"
+    printf '=%.0s' $(seq 1 ${#header_text})
+    echo ""
+    echo "  [SKIP] spec is superseded by: $supersede"
+    skipped=$((skipped + 1))
+    return 0
+  fi
 
   # Parse annotations from the spec
   local annotations

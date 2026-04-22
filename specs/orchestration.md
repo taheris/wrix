@@ -1,5 +1,7 @@
 # Orchestration
 
+> **Superseded by: gas-city.md and ralph-workflow.md**
+
 Automated verification, parallel dispatch, and observation for ralph.
 
 ## Problem Statement
