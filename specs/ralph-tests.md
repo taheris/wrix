@@ -523,7 +523,7 @@ two successive ralph commands, must observe updated content between them.
   [verify](../tests/ralph/run-tests.sh#test_repin_content_after_plan)
 - [x] Refresh-per-invocation is verified — orientation updates between successive ralph commands
   [verify](../tests/ralph/run-tests.sh#test_simulate_compact_event_refresh_per_invocation)
-- [ ] Full suite runs in <90s on dev hardware
+- [x] Full suite runs in <90s on dev hardware (measured: 64s / 555 tests on 2026-04-22)
 - [x] `init_beads` uses snapshot copy instead of per-test `bd init`
   [verify](../tests/ralph/run-tests.sh#test_init_beads_uses_snapshot)
 - [x] `setup_test_env` uses batched fixture operations (single `mkdir -p`, bulk symlinks)
