@@ -66,6 +66,11 @@ test_todo_update_fills_readme_beads() {
   judge_criterion "todo-update.md template instructs the LLM to check if specs/README.md Beads column is empty for this spec, and if so, fill in the molecule ID"
 }
 
+test_plan_update_invariant_clash_detection() {
+  judge_files "lib/ralph/template/plan-update.md"
+  judge_criterion "plan-update.md instructs the LLM to scan the existing spec for invariants (architectural decisions, data-structure choices, explicit constraints, non-functional requirements, out-of-scope items) before committing a change, pause the interview when a potential clash is found, and propose contextual options (typically 2-4) guided by the three-paths principle (preserve invariant / keep on top inelegantly / change invariant) but not limited to a fixed A/B/C menu. The template biases toward asking when uncertain."
+}
+
 test_tune_interactive() {
   judge_files "lib/ralph/cmd/tune.sh"
   judge_criterion "ralph tune in interactive mode identifies the correct template to edit and allows making changes"
