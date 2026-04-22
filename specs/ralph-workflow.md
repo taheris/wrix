@@ -1255,18 +1255,6 @@ Specs can declare companion directories whose manifest is injected into template
 - No CLI flags for managing companions — users edit `state/<label>.json` manually
 - Companions are not included in `plan-new` template (state JSON doesn't exist yet)
 
-## Implementation Notes
-
-State files can contain an optional `implementation_notes` field: an array of strings providing transient implementation hints gathered during `ralph plan -u` spec update interviews. These are details that help the implementer but don't belong in the permanent spec (e.g., "remove the rustup bootstrap block", "use fenix's fromToolchainFile").
-
-- Populated during `ralph plan -u` interviews — the interviewer stores notes in the state file rather than adding an "Implementation Notes" section to the spec markdown
-- Read by `ralph todo` from `state/<label>.json` and formatted as a markdown bullet list
-- Passed to both `todo-new.md` and `todo-update.md` templates as the `IMPLEMENTATION_NOTES` variable
-- Provide additional context to the LLM during task creation without polluting the permanent spec
-- **Lifecycle:** notes describe *how* to implement the current diff; once `ralph todo` has folded them into task descriptions they've served their purpose. `ralph todo` clears `implementation_notes` from the **anchor's** `state/<label>.json` atomically with advancing its `base_commit` on `RALPH_COMPLETE` — the same success signal that advances the spec cursor. Sibling state files never hold `implementation_notes`. This prevents stale hints from silently biasing future task creation
-
-The `strip_implementation_notes` function in `util.sh` remains as a backward-compatibility safety net for specs that manually include a `## Implementation Notes` section.
-
 ## Git-Based Spec Diffing
 
 Spec-change detection uses `git diff` scoped by the `base_commit` field in state JSON; no intermediate files.
