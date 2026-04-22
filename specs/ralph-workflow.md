@@ -33,7 +33,7 @@ Ralph provides a structured workflow that guides AI through spec creation, issue
 12. **Companion Content** — Specs can declare companion directories whose `manifest.md` is injected into templates, giving the LLM awareness of related content it can read on demand
 13. **Git-Based Spec Diffing** — `ralph todo` uses `base_commit` in state JSON and `git diff` to detect spec changes, replacing `state/<label>.md` intermediary
 14. **Container Bead Sync** — Container-executed commands (`plan`, `todo`, `run --once`, `check`) run `bd dolt push` inside the container after `RALPH_COMPLETE` before exit, then `bd dolt pull` on the host after container exits
-15. **Cross-Machine State Recovery** — `ralph todo` discovers molecule IDs from `specs/README.md` when no local state file exists, reconstructing `state/<label>.json` to avoid duplicate molecule creation
+15. **Cross-Machine State Recovery** — `ralph todo` discovers molecule IDs from the pinned-context file (`docs/README.md` by default) when no local state file exists, reconstructing `state/<label>.json` to avoid duplicate molecule creation
 16. **Post-Sync Verification (informational)** — After `bd dolt pull` on the host, `ralph todo` checks whether task count increased and emits a warning with recovery hints if not; `base_commit` always advances on `RALPH_COMPLETE`
 17. **Compaction Re-Pin** — Container-executed Claude sessions register a `SessionStart` hook with matcher `"compact"` that re-injects a condensed orientation (label, spec path, exit signals, command-specific context) after auto-compaction, so the model retains orientation without re-pinning the full spec body
 18. **Invariant-Clash Awareness** — `ralph plan -u` (during spec updates) and `ralph check` (post-loop review) detect when a proposed change clashes with an existing invariant and surface the clash for a human decision instead of silently choosing a path. The detection is LLM-judgment biased toward asking. The reviewer proposes *contextual* options tailored to the specific clash (not a fixed menu), guided by the three-paths principle: preserve the invariant, keep the change on top of the invariant inelegantly, or change the invariant
@@ -96,7 +96,7 @@ Launches wrapix container with base profile. Reads `state/<label>.json` (resolve
 
 1. **Tier 1 (git diff)**: `base_commit` exists in state JSON → `git diff <base_commit> HEAD -- <spec_path>` (fast, precise)
 2. **Tier 2 (molecule-based)**: No `base_commit` but molecule in state JSON → LLM compares spec against existing task descriptions
-3. **Tier 3 (README discovery)**: No `state/<label>.json` exists → look up molecule ID from `specs/README.md` Beads column, validate with `bd show`, reconstruct state file, then proceed as tier 2
+3. **Tier 3 (README discovery)**: No `state/<label>.json` exists → look up molecule ID from the pinned-context file (`docs/README.md` by default) Beads column, validate with `bd show`, reconstruct state file, then proceed as tier 2
 4. **Tier 4 (new)**: No state file AND no molecule in README (or README molecule is stale/invalid) → full spec decomposition from `specs/<label>.md`
 
 **Flags:**
@@ -365,6 +365,11 @@ Synchronizes local templates with packaged versions:
 1. Creates `.wrapix/ralph/template/` with fresh packaged templates
 2. Moves existing customized templates to `.wrapix/ralph/backup/`
 3. Copies all templates including variants and `partial/` directory
+4. Scaffolds project documentation (skip-if-exists):
+   - `docs/README.md` — spec index stub with Specs/Beads/Purpose table
+   - `docs/architecture.md` — architecture overview stub
+   - `docs/style-guidelines.md` — code style guidelines stub
+   - `AGENTS.md` — agent instructions pointing at the docs above
 
 **`--diff` mode**: Shows changes between local templates and packaged versions. Pipe to `ralph tune` for integration:
 ```bash
@@ -725,7 +730,7 @@ Projects configure ralph via `.wrapix/ralph/config.nix` (local project overrides
   wrapix = "github:user/wrapix";  # or local path
 
   # Context pinning - file read for {{PINNED_CONTEXT}}
-  pinnedContext = ./specs/README.md;
+  pinnedContext = "docs/README.md";
 
   # Spec locations
   specDir = ./specs;
@@ -746,7 +751,7 @@ Projects configure ralph via `.wrapix/ralph/config.nix` (local project overrides
 ```nix
 {
   wrapix = null;            # Error if container commands need it
-  pinnedContext = ./specs/README.md;
+  pinnedContext = "docs/README.md";
   specDir = ./specs;
   stateDir = ./state;
   templateDir = null;       # Use packaged templates only
@@ -769,7 +774,7 @@ Projects configure ralph via `.wrapix/ralph/config.nix` (local project overrides
 ```markdown
 ## Context Pinning
 
-First, read specs/README.md to understand project terminology:
+First, read the project overview to understand project terminology:
 
 {{PINNED_CONTEXT}}
 ```
@@ -867,7 +872,7 @@ Ships with the above content; overridable by local template overlay.
    - Tasks touching `.py` files or using pytest/pip → `profile:python`
    - Tasks touching only `.nix`, `.sh`, `.md` files → `profile:base`
 8. Molecule creation — Create epic, child tasks with profile labels, set dependencies
-9. README update — Write molecule ID to the Beads column of `specs/README.md` (required for cross-machine state recovery)
+9. README update — Write molecule ID to the Beads column of the pinned-context file (`docs/README.md` by default) (required for cross-machine state recovery)
 10. `{{> exit-signals}}`
 
 **Exit signals:** RALPH_COMPLETE, RALPH_BLOCKED
@@ -885,7 +890,7 @@ Ships with the above content; overridable by local template overlay.
 6. Spec diff or existing tasks — Receives both `{{SPEC_DIFF}}` and `{{EXISTING_TASKS}}`; one is always empty depending on tier. Instructions: "if SPEC_DIFF is provided, use that to identify new requirements; otherwise use EXISTING_TASKS to compare against the spec and identify gaps."
 7. Profile assignment guidance — Assign `profile:X` per-task based on implementation needs
 8. Task creation — Create tasks ONLY for new/changed requirements, bond to molecule
-9. README backfill — If `specs/README.md` Beads column is empty for this spec, fill in the molecule ID
+9. README backfill — If the pinned-context file (`docs/README.md` by default) Beads column is empty for this spec, fill in the molecule ID
 10. `{{> exit-signals}}`
 
 **`EXISTING_TASKS` format** (tier 2/3):
@@ -1047,7 +1052,7 @@ Replace the transient `state/<label>.md` intermediary with git-based diffing usi
 - `ralph plan -u -h` edits the hidden spec directly but does NOT commit
 - `ralph todo` uses four-tier detection (see `ralph todo` command section)
 - `compute_spec_diff` helper in `util.sh` encapsulates the four-tier fallback
-- `discover_molecule_from_readme` helper in `util.sh` parses `specs/README.md` to find molecule IDs by spec label
+- `discover_molecule_from_readme` helper in `util.sh` parses the pinned-context file (`docs/README.md` by default) to find molecule IDs by spec label
 - `--since <commit>` flag forces tier 1 with the given commit
 - No explicit migration required — existing specs handled via tier 2/3/4 fallback
 
@@ -1055,7 +1060,7 @@ Replace the transient `state/<label>.md` intermediary with git-based diffing usi
 
 When `state/<label>.json` does not exist (e.g., working from a different machine), `ralph todo`:
 
-1. Parses `specs/README.md` to find the row whose spec filename matches `<label>.md`
+1. Parses the pinned-context file (`docs/README.md` by default) to find the row whose spec filename matches `<label>.md`
 2. Extracts the Beads column value (the molecule ID) from that row
 3. Validates the molecule exists via `bd show <id>` — if invalid/not found, falls through to tier 4
 4. Reconstructs `state/<label>.json` with:
@@ -1191,7 +1196,7 @@ Ralph uses `bd mol` for work tracking:
   [verify](../tests/ralph/run-tests.sh#test_todo_orphaned_commit_fallback)
 - [ ] `ralph todo` falls back to molecule-based diff when no `base_commit` but molecule exists
   [verify](../tests/ralph/run-tests.sh#test_todo_molecule_fallback)
-- [ ] `ralph todo` discovers molecule from `specs/README.md` when no state file exists (tier 3)
+- [ ] `ralph todo` discovers molecule from the pinned-context file (`docs/README.md` by default) when no state file exists (tier 3)
   [verify](../tests/ralph/run-tests.sh#test_todo_readme_discovery)
 - [ ] `ralph todo` reconstructs `state/<label>.json` after README discovery
   [verify](../tests/ralph/run-tests.sh#test_todo_readme_state_reconstruction)
@@ -1199,7 +1204,7 @@ Ralph uses `bd mol` for work tracking:
   [verify](../tests/ralph/run-tests.sh#test_todo_readme_no_molecule_fallthrough)
 - [ ] `ralph todo` falls through to tier 4 when README molecule ID is stale/invalid
   [verify](../tests/ralph/run-tests.sh#test_todo_readme_stale_molecule_fallthrough)
-- [ ] `discover_molecule_from_readme` correctly parses the Beads column from `specs/README.md`
+- [ ] `discover_molecule_from_readme` correctly parses the Beads column from the pinned-context file (`docs/README.md` by default)
   [verify](../tests/ralph/run-tests.sh#test_discover_molecule_from_readme)
 - [ ] `discover_molecule_from_readme` returns empty string when spec not in README
   [verify](../tests/ralph/run-tests.sh#test_discover_molecule_not_in_readme)
@@ -1229,7 +1234,7 @@ Ralph uses `bd mol` for work tracking:
   [judge](../tests/judges/ralph-workflow.sh#test_todo_runs_in_container)
 - [ ] `ralph todo` LLM assigns `profile:X` labels per-task based on implementation needs
   [verify](../tests/ralph/run-tests.sh#test_run_profile_selection)
-- [ ] `todo-new.md` instructs LLM to write molecule ID to `specs/README.md` Beads column
+- [ ] `todo-new.md` instructs LLM to write molecule ID to the pinned-context file (`docs/README.md` by default) Beads column
   [judge](../tests/judges/ralph-workflow.sh#test_todo_new_writes_readme_beads)
 - [ ] `todo-update.md` instructs LLM to fill in README Beads column if empty
   [judge](../tests/judges/ralph-workflow.sh#test_todo_update_fills_readme_beads)

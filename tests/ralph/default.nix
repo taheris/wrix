@@ -876,7 +876,8 @@ templateTests
         mkdir $out
       '';
 
-  # Test: ralph-check requires RALPH_TEMPLATE_DIR
+  # Test: ralph-check resolves a template directory (RALPH_TEMPLATE_DIR or
+  # $RALPH_DIR/template fallback) and errors clearly when neither exists
   check-env-validation =
     runCommandLocal "ralph-check-env-validation"
       {
@@ -892,7 +893,7 @@ templateTests
 
         script="${../.. + "/lib/ralph/cmd/check.sh"}"
 
-        # Verify the script requires RALPH_TEMPLATE_DIR
+        # Verify the script references RALPH_TEMPLATE_DIR
         if grep -q 'RALPH_TEMPLATE_DIR' "$script"; then
           echo "PASS: Script references RALPH_TEMPLATE_DIR"
         else
@@ -900,11 +901,19 @@ templateTests
           exit 1
         fi
 
-        # Verify error message for missing env
-        if grep -q "RALPH_TEMPLATE_DIR not set" "$script"; then
-          echo "PASS: Script shows error for missing RALPH_TEMPLATE_DIR"
+        # Verify the script falls back to $RALPH_DIR/template
+        if grep -q '\$RALPH_DIR/template' "$script"; then
+          echo "PASS: Script falls back to \$RALPH_DIR/template"
         else
-          echo "FAIL: Script missing RALPH_TEMPLATE_DIR error message"
+          echo "FAIL: Script missing \$RALPH_DIR/template fallback"
+          exit 1
+        fi
+
+        # Verify error message when no template dir is found
+        if grep -q "No template directory found" "$script"; then
+          echo "PASS: Script shows error when no template dir is found"
+        else
+          echo "FAIL: Script missing no-template-dir error message"
           exit 1
         fi
 

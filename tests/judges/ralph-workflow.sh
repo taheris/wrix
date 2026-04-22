@@ -58,12 +58,12 @@ test_run_already_implemented() {
 
 test_todo_new_writes_readme_beads() {
   judge_files "lib/ralph/template/todo-new.md" "lib/ralph/cmd/todo.sh"
-  judge_criterion "todo-new.md template instructs the LLM to write the molecule ID to the specs/README.md Beads column, and the instruction emphasizes this is required for cross-machine state recovery"
+  judge_criterion "todo-new.md template instructs the LLM to write the molecule ID to the spec index Beads column (the pinned-context file, docs/README.md by default), and the instruction emphasizes this is required for cross-machine state recovery"
 }
 
 test_todo_update_fills_readme_beads() {
   judge_files "lib/ralph/template/todo-update.md"
-  judge_criterion "todo-update.md template instructs the LLM to check if specs/README.md Beads column is empty for this spec, and if so, fill in the molecule ID"
+  judge_criterion "todo-update.md template instructs the LLM to check if the spec index (the pinned-context file, docs/README.md by default) has an empty Beads column for this spec, and if so, fill in the molecule ID"
 }
 
 test_plan_update_invariant_clash_detection() {

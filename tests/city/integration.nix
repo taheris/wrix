@@ -304,10 +304,20 @@ let
     export PATH="${livePath}:${testOnlyPath}"
 
     # Preflight: check podman before setting up trap/counters so skip
-    # doesn't print a misleading "ALL TESTS PASSED" summary.
+    # doesn't print a misleading "ALL TESTS PASSED" summary. `command -v`
+    # only proves the binary is on PATH; `podman info` proves the runtime
+    # can actually reach its socket/VM/storage — nested-container sandboxes
+    # commonly ship the binary but cannot talk to a working backend.
     if ! command -v podman >/dev/null 2>&1; then
-      echo "SKIP: podman not found — city integration tests require podman on the host."
-      exit 0
+      echo "SKIP: podman not found on PATH — city integration tests require a working podman."
+      exit 77
+    fi
+    if ! podman_probe=$(podman info 2>&1); then
+      echo "SKIP: podman is on PATH but not functional (cannot reach socket/runtime)."
+      echo "       This usually means you're inside a nested container or rootless"
+      echo "       user-namespaces are unavailable. podman info output:"
+      printf '%s\n' "$podman_probe" | sed 's/^/         /'
+      exit 77
     fi
 
     # Isolate from the caller's environment. The wrapix devShell shellHook

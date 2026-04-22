@@ -84,15 +84,18 @@ setup_test_env() {
 
   # Create project structure
   mkdir -p "$TEST_DIR/specs"
+  mkdir -p "$TEST_DIR/docs"
   mkdir -p "$TEST_DIR/.wrapix/ralph/state"
   mkdir -p "$TEST_DIR/.wrapix/ralph/logs"
   mkdir -p "$TEST_DIR/.wrapix/ralph/template"
   mkdir -p "$TEST_DIR/.beads"
   chmod 700 "$TEST_DIR/.beads"
 
-  # Create minimal specs/README.md
-  cat > "$TEST_DIR/specs/README.md" << 'EOF'
-# Project Specifications
+  # Create minimal docs/README.md (session-start pin)
+  cat > "$TEST_DIR/docs/README.md" << 'EOF'
+# Project Overview
+
+## Specs
 
 | Spec | Bead | Purpose |
 |------|------|---------|
@@ -101,6 +104,7 @@ EOF
   # Create minimal ralph config
   cat > "$TEST_DIR/.wrapix/ralph/config.nix" << 'EOF'
 {
+  pinnedContext = "docs/README.md";
   beads.priority = 2;
 }
 EOF
@@ -111,7 +115,7 @@ EOF
 
 ## Context Pinning
 
-First, read specs/README.md to understand project terminology and context:
+First, read the project overview to understand project terminology and context:
 
 {{PINNED_CONTEXT}}
 
@@ -179,7 +183,7 @@ EOF
 
 You are conducting a specification interview.
 
-## Context (from specs/README.md)
+## Context (from docs/README.md)
 
 {{PINNED_CONTEXT}}
 

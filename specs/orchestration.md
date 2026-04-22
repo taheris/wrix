@@ -35,7 +35,7 @@ An independent reviewer agent assesses the full deliverable after an epic comple
 - `base_commit` SHA (reviewer runs `git diff` / `git log` as needed)
 - Molecule ID
 
-Context pinning (`specs/README.md`) and companions are injected via standard partials. The reviewer has full codebase access inside the container — it reads implementation code, test files, `CLAUDE.md`, and related specs on demand rather than having them injected into the prompt.
+Context pinning (the file set via `pinnedContext`, default `docs/README.md`) and companions are injected via standard partials. The reviewer has full codebase access inside the container — it reads implementation code, test files, `CLAUDE.md`, and related specs on demand rather than having them injected into the prompt.
 
 **Reviewer behavior:**
 - Runs inside a wrapix container with base profile

@@ -482,6 +482,39 @@ resolve_model() {
   fi
 }
 
+# Resolve the pinned-context file path relative to the workspace root.
+# Reads config.pinnedContext from $RALPH_DIR/config.nix; falls back to
+# docs/README.md when config is missing or unreadable.
+# Usage: path=$(get_pinned_context_file)
+get_pinned_context_file() {
+  local ralph_dir="${RALPH_DIR:-.wrapix/ralph}"
+  local config_file="$ralph_dir/config.nix"
+  local default="docs/README.md"
+
+  if [ ! -f "$config_file" ]; then
+    debug "get_pinned_context_file: $config_file missing, using default $default"
+    echo "$default"
+    return 0
+  fi
+
+  local json
+  if ! json=$(nix eval --json --file "$config_file"); then
+    warn "get_pinned_context_file: failed to eval $config_file, using default $default"
+    echo "$default"
+    return 0
+  fi
+
+  local configured
+  configured=$(echo "$json" | jq -r '.pinnedContext // empty')
+  if [ -z "$configured" ]; then
+    debug "get_pinned_context_file: config has no pinnedContext, using default $default"
+    echo "$default"
+    return 0
+  fi
+
+  echo "$configured"
+}
+
 # Run claude with stream-json output and configurable display
 # Usage: run_claude_stream "$prompt_var_name" "$log_file" "$config_json" [model]
 # The prompt must be exported as an environment variable before calling
@@ -1539,10 +1572,10 @@ compute_spec_diff() {
 #-----------------------------------------------------------------------------
 # Molecule Discovery from README
 #
-# Parses specs/README.md to find a molecule ID by spec label. Looks for a
-# table row whose Spec column contains <label>.md, then extracts the Beads
-# column value. Returns empty string when spec is not in README or when the
-# molecule ID is invalid/not found.
+# Parses the configured pinnedContext file to find a molecule ID by spec
+# label. Looks for a table row whose Spec column contains <label>.md, then
+# extracts the Beads column value. Returns empty string when spec is not in
+# the file or when the molecule ID is invalid/not found.
 #
 # Usage: discover_molecule_from_readme <label>
 # Output: molecule ID on stdout (empty string if not found or invalid)
@@ -1550,7 +1583,8 @@ compute_spec_diff() {
 #-----------------------------------------------------------------------------
 discover_molecule_from_readme() {
   local label="$1"
-  local readme="specs/README.md"
+  local readme
+  readme=$(get_pinned_context_file)
 
   if [ ! -f "$readme" ]; then
     debug "discover_molecule_from_readme: $readme not found"

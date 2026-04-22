@@ -6784,8 +6784,8 @@ test_spec_verify_all_specs() {
 
   setup_test_env "spec-verify-all"
 
-  # Create specs/README.md with molecule IDs
-  cat > "$TEST_DIR/specs/README.md" << 'EOF'
+  # Create docs/README.md with molecule IDs
+  cat > "$TEST_DIR/docs/README.md" << 'EOF'
 # Specs
 
 | Spec | Code | Beads | Purpose |
@@ -6872,8 +6872,8 @@ test_spec_judge_all_specs() {
 
   setup_test_env "spec-judge-all"
 
-  # Create specs/README.md
-  cat > "$TEST_DIR/specs/README.md" << 'EOF'
+  # Create docs/README.md
+  cat > "$TEST_DIR/docs/README.md" << 'EOF'
 # Specs
 
 | Spec | Code | Beads | Purpose |
@@ -6930,7 +6930,7 @@ test_spec_all_all_specs() {
 
   setup_test_env "spec-all-all"
 
-  cat > "$TEST_DIR/specs/README.md" << 'EOF'
+  cat > "$TEST_DIR/docs/README.md" << 'EOF'
 # Specs
 
 | Spec | Code | Beads | Purpose |
@@ -7004,7 +7004,7 @@ test_spec_filter_single() {
 
   setup_test_env "spec-filter-single"
 
-  cat > "$TEST_DIR/specs/README.md" << 'EOF'
+  cat > "$TEST_DIR/docs/README.md" << 'EOF'
 # Specs
 
 | Spec | Code | Beads | Purpose |
@@ -7083,7 +7083,7 @@ test_spec_short_flag_v() {
 
   setup_test_env "spec-short-v"
 
-  cat > "$TEST_DIR/specs/README.md" << 'EOF'
+  cat > "$TEST_DIR/docs/README.md" << 'EOF'
 # Specs
 
 | Spec | Code | Beads | Purpose |
@@ -7137,7 +7137,7 @@ test_spec_short_flag_j() {
 
   setup_test_env "spec-short-j"
 
-  cat > "$TEST_DIR/specs/README.md" << 'EOF'
+  cat > "$TEST_DIR/docs/README.md" << 'EOF'
 # Specs
 
 | Spec | Code | Beads | Purpose |
@@ -7184,7 +7184,7 @@ test_spec_short_flag_a() {
 
   setup_test_env "spec-short-a"
 
-  cat > "$TEST_DIR/specs/README.md" << 'EOF'
+  cat > "$TEST_DIR/docs/README.md" << 'EOF'
 # Specs
 
 | Spec | Code | Beads | Purpose |
@@ -7241,7 +7241,7 @@ test_spec_short_flag_s() {
 
   setup_test_env "spec-short-s"
 
-  cat > "$TEST_DIR/specs/README.md" << 'EOF'
+  cat > "$TEST_DIR/docs/README.md" << 'EOF'
 # Specs
 
 | Spec | Code | Beads | Purpose |
@@ -7313,7 +7313,7 @@ test_spec_verbose_no_short_v() {
 
   setup_test_env "spec-verbose-no-v"
 
-  cat > "$TEST_DIR/specs/README.md" << 'EOF'
+  cat > "$TEST_DIR/docs/README.md" << 'EOF'
 # Specs
 
 | Spec | Code | Beads | Purpose |
@@ -7369,7 +7369,7 @@ test_spec_short_compose() {
 
   setup_test_env "spec-compose"
 
-  cat > "$TEST_DIR/specs/README.md" << 'EOF'
+  cat > "$TEST_DIR/docs/README.md" << 'EOF'
 # Specs
 
 | Spec | Code | Beads | Purpose |
@@ -7447,7 +7447,7 @@ test_spec_grouped_output() {
 
   setup_test_env "spec-grouped"
 
-  cat > "$TEST_DIR/specs/README.md" << 'EOF'
+  cat > "$TEST_DIR/docs/README.md" << 'EOF'
 # Specs
 
 | Spec | Code | Beads | Purpose |
@@ -7524,7 +7524,7 @@ test_spec_summary_line() {
 
   setup_test_env "spec-summary"
 
-  cat > "$TEST_DIR/specs/README.md" << 'EOF'
+  cat > "$TEST_DIR/docs/README.md" << 'EOF'
 # Specs
 
 | Spec | Code | Beads | Purpose |
@@ -7599,7 +7599,7 @@ test_spec_nonzero_exit() {
 
   setup_test_env "spec-nonzero"
 
-  cat > "$TEST_DIR/specs/README.md" << 'EOF'
+  cat > "$TEST_DIR/docs/README.md" << 'EOF'
 # Specs
 
 | Spec | Code | Beads | Purpose |
@@ -7670,7 +7670,7 @@ test_spec_skip_empty() {
 
   setup_test_env "spec-skip-empty"
 
-  cat > "$TEST_DIR/specs/README.md" << 'EOF'
+  cat > "$TEST_DIR/docs/README.md" << 'EOF'
 # Specs
 
 | Spec | Code | Beads | Purpose |
@@ -9561,7 +9561,7 @@ test_todo_readme_discovery() {
   _setup_readme_mock_bd "$mol_id"
 
   # Set up README with the mock molecule ID
-  cat > "$TEST_DIR/specs/README.md" << EOF
+  cat > "$TEST_DIR/docs/README.md" << EOF
 # Project Specifications
 
 | Spec | Code | Beads | Purpose |
@@ -9598,7 +9598,7 @@ test_todo_readme_state_reconstruction() {
   local mol_id="wx-mock-recon"
   _setup_readme_mock_bd "$mol_id"
 
-  cat > "$TEST_DIR/specs/README.md" << EOF
+  cat > "$TEST_DIR/docs/README.md" << EOF
 # Project Specifications
 
 | Spec | Code | Beads | Purpose |
@@ -9647,7 +9647,7 @@ test_todo_readme_reconstructed_state_schema() {
   local mol_id="wx-mock-schema"
   _setup_readme_mock_bd "$mol_id"
 
-  cat > "$TEST_DIR/specs/README.md" << EOF
+  cat > "$TEST_DIR/docs/README.md" << EOF
 # Project Specifications
 
 | Spec | Code | Beads | Purpose |
@@ -9696,7 +9696,7 @@ test_todo_readme_no_molecule_fallthrough() {
   _setup_spec_diff_git "my-feature"
 
   # README exists but has no row for my-feature
-  cat > "$TEST_DIR/specs/README.md" << 'EOF'
+  cat > "$TEST_DIR/docs/README.md" << 'EOF'
 # Project Specifications
 
 | Spec | Code | Beads | Purpose |
@@ -9747,7 +9747,7 @@ MOCK_EOF
   chmod +x "$bin_dir/bd"
 
   # README has a molecule that doesn't exist in beads
-  cat > "$TEST_DIR/specs/README.md" << 'EOF'
+  cat > "$TEST_DIR/docs/README.md" << 'EOF'
 # Project Specifications
 
 | Spec | Code | Beads | Purpose |
@@ -11203,7 +11203,7 @@ EOF
 
 test_discover_molecule_from_readme() {
   CURRENT_TEST="discover_molecule_from_readme"
-  test_header "discover_molecule_from_readme parses Beads column from specs/README.md"
+  test_header "discover_molecule_from_readme parses Beads column from docs/README.md"
 
   setup_test_env "discover-molecule"
   init_beads
@@ -11211,8 +11211,8 @@ test_discover_molecule_from_readme() {
   # shellcheck source=../../lib/ralph/cmd/util.sh
   source "$REPO_ROOT/lib/ralph/cmd/util.sh"
 
-  # Create a realistic specs/README.md with the 4-column format
-  cat > "$TEST_DIR/specs/README.md" << 'EOF'
+  # Create a realistic docs/README.md with the 4-column format
+  cat > "$TEST_DIR/docs/README.md" << 'EOF'
 # Project Specifications
 
 | Spec | Code | Beads | Purpose |
@@ -11233,7 +11233,7 @@ EOF
   fi
 
   # Update README to use the real molecule ID
-  sed -i "s/wx-abc1/$real_mol/" "$TEST_DIR/specs/README.md"
+  sed -i "s/wx-abc1/$real_mol/" "$TEST_DIR/docs/README.md"
 
   local result
   result=$(discover_molecule_from_readme "my-feature")
@@ -11256,8 +11256,8 @@ test_discover_molecule_not_in_readme() {
   # shellcheck source=../../lib/ralph/cmd/util.sh
   source "$REPO_ROOT/lib/ralph/cmd/util.sh"
 
-  # Create a realistic specs/README.md without the target label
-  cat > "$TEST_DIR/specs/README.md" << 'EOF'
+  # Create a realistic docs/README.md without the target label
+  cat > "$TEST_DIR/docs/README.md" << 'EOF'
 # Project Specifications
 
 | Spec | Code | Beads | Purpose |

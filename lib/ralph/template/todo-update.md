@@ -71,10 +71,11 @@ Use `bd mol show {{MOLECULE_ID}}` to see the current tasks in this molecule.
 - Include **test tasks** where appropriate
 - **Assign profile per-task** based on what that specific task needs
 
-## README Backfill
+## Spec Index Backfill
 
-After creating tasks, check if `specs/README.md` has an empty Beads column for this spec (`{{LABEL}}`).
-If the Beads column is empty, fill in the molecule ID (`{{MOLECULE_ID}}`).
+After creating tasks, check if the project spec index (the file shown above under
+"Context Pinning") has an empty Beads column for this spec (`{{LABEL}}`). If the
+Beads column is empty, fill in the molecule ID (`{{MOLECULE_ID}}`).
 
 {{> exit-signals}}
 

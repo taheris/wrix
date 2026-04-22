@@ -138,7 +138,6 @@ All automatic Chromium flags (`--no-sandbox`, `--disable-dev-shm-usage`, `--disa
 | `lib/mcp/playwright/default.nix` | Create | Server definition: name, packages, mkServerConfig |
 | `lib/mcp/default.nix` | Edit | Add `playwright` to registry |
 | `specs/playwright-mcp.md` | Create | This spec |
-| `specs/README.md` | Edit | Add spec to table |
 | `tests/mcp/playwright/smoke-test.sh` | Create | Smoke test: MCP server starts, responds to initialize |
 | `tests/mcp/playwright/screenshot-test.sh` | Create | Screenshot test: navigate to page, capture base64 PNG |
 | `tests/mcp/playwright/build-test.sh` | Create | Nix build test: image contains chromium + MCP server |

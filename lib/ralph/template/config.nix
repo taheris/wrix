@@ -1,4 +1,9 @@
 {
+  # Workspace-relative path to the file ralph reads at session start and
+  # splices into PINNED_CONTEXT across all prompts. Override per-project by
+  # editing .wrapix/ralph/config.nix.
+  pinnedContext = "docs/README.md";
+
   # Stream output visibility (what to show during claude execution)
   output = {
     # Core output types

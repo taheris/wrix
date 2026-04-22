@@ -2656,9 +2656,9 @@ in
 
         # Formula command: no decomposition commit -> fallback
         WS2="$TMPDIR/mayor-ws2"
-        mkdir -p "$WS2/specs"
+        mkdir -p "$WS2/docs"
         git -C "$WS2" init -q -b main
-        echo "# Project" > "$WS2/specs/README.md"
+        echo "# Project" > "$WS2/docs/README.md"
         git -C "$WS2" add -A && git -C "$WS2" commit -m "initial" -q
         LAST_DECOMPOSE2=$(git -C "$WS2" log --all --grep="mayor: decompose specs" --format="%H" -1 2>/dev/null || echo "")
         [[ -z "$LAST_DECOMPOSE2" ]] || { echo "FAIL: expected empty, got $LAST_DECOMPOSE2"; exit 1; }

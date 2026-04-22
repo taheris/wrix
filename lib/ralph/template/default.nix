@@ -120,7 +120,7 @@ let
       required = false;
       filePath = "config.pinnedContext";
       default = "";
-      description = "Content from pinned context file (usually specs/README.md)";
+      description = "Content from pinned context file (default docs/README.md)";
     };
 
     # --- Beads data (from issue) ---

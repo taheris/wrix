@@ -21,11 +21,12 @@ source "$(dirname "$0")/util.sh"
 SPECS_DIR="specs"
 
 #-----------------------------------------------------------------------------
-# Helper: look up molecule ID for a spec from specs/README.md
+# Helper: look up molecule ID for a spec from the pinned-context file
 #-----------------------------------------------------------------------------
 lookup_molecule_id() {
   local spec_name="$1"  # e.g. "notifications" (without .md)
-  local readme="$SPECS_DIR/README.md"
+  local readme
+  readme=$(get_pinned_context_file)
 
   if [ ! -f "$readme" ]; then
     echo ""

@@ -110,7 +110,7 @@ bd dolt pull >/dev/null 2>&1 || warn "bd dolt pull failed, continuing with local
 RALPH_DIR="${RALPH_DIR:-.wrapix/ralph}"
 CONFIG_FILE="$RALPH_DIR/config.nix"
 SPECS_DIR="specs"
-SPECS_README="$SPECS_DIR/README.md"
+PINNED_CONTEXT_FILE=$(get_pinned_context_file)
 
 # Resolve spec label
 FEATURE_NAME=$(resolve_spec_label "$SPEC_FLAG")
@@ -234,8 +234,8 @@ while [ "$RUNNING" = "true" ]; do
 
   # Pin context
   pinned_context=""
-  if [ -f "$SPECS_README" ]; then
-    pinned_context=$(cat "$SPECS_README")
+  if [ -f "$PINNED_CONTEXT_FILE" ]; then
+    pinned_context=$(cat "$PINNED_CONTEXT_FILE")
   fi
 
   # Read companion manifests

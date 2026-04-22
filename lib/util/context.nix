@@ -1,22 +1,21 @@
 # Context pinning utility for AI agents
 #
-# Provides a function to read specs/README.md for better AI search hit rates.
-# Used by sandbox entrypoints and ralph commands.
+# Provides a function to read the project pin file (default docs/README.md)
+# for better AI search hit rates. Used by sandbox entrypoints and ralph commands.
 { pkgs }:
 
 let
   inherit (pkgs) writeShellScriptBin;
 in
 {
-  # Script that outputs context from specs/README.md
+  # Script that outputs pinned project context
   pin-context = writeShellScriptBin "pin-context" ''
-    # Pin context by reading specs/README.md for better AI search hit rates
-    specs_readme="''${1:-specs/README.md}"
-    if [ -f "$specs_readme" ]; then
-      echo "Context pinned: $specs_readme" >&2
-      cat "$specs_readme"
+    pin_file="''${1:-docs/README.md}"
+    if [ -f "$pin_file" ]; then
+      echo "Context pinned: $pin_file" >&2
+      cat "$pin_file"
     else
-      echo "No specs/README.md found" >&2
+      echo "No pinned context file found at $pin_file" >&2
       echo ""
     fi
   '';

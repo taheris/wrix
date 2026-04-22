@@ -138,8 +138,8 @@ Scan success criteria sections for `[verify](...)` and `[judge](...)` links on l
 ### Multi-spec iteration
 
 When `--verify`, `--judge`, or `--all` is used without `--spec`:
-- Iterate all `specs/*.md` files (excluding `README.md`)
-- For each spec, look up the molecule ID from `specs/README.md` for the header
+- Iterate all `specs/*.md` files
+- For each spec, look up the molecule ID from the pinned-context file (`docs/README.md` by default) for the header
 - Skip specs with no success criteria silently
 - Run tests per-spec, grouping output with per-spec headers
 - Track cumulative pass/fail/skip counts and spec count

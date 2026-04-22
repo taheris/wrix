@@ -29,9 +29,10 @@ the Mayor via `bd human` instead.
 
 ## Documentation (DOC-)
 
-- **DOC-1** — New specs go in `specs/` and must be added to `specs/README.md`
+- **DOC-1** — New specs go in `specs/` and must be added to the spec index
+  in `docs/README.md` (the session-start pin)
 - **DOC-2** — Architecture references point to `docs/architecture.md`, not `specs/`
-- **DOC-3** — Terminology references point to `docs/README.md`, not `specs/README.md`
+- **DOC-3** — Terminology references point to `docs/README.md`
 
 ## Git (GIT-)
 

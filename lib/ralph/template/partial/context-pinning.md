@@ -1,5 +1,5 @@
 ## Context Pinning
 
-First, read specs/README.md to understand project terminology and context:
+First, read the project overview to understand project terminology and context:
 
 {{PINNED_CONTEXT}}

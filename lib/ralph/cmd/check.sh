@@ -107,24 +107,30 @@ fi
 # Template validation (-t)
 #-----------------------------------------------------------------------------
 run_template_validation() {
-  # Template directory: use RALPH_TEMPLATE_DIR if set and exists
+  # Template directory precedence:
+  #   1. RALPH_TEMPLATE_DIR (devShell / direnv)
+  #   2. $RALPH_DIR/template (default .wrapix/ralph/template — populated by `ralph sync`)
   local TEMPLATE_DIR=""
   if [ -n "${RALPH_TEMPLATE_DIR:-}" ] && [ -d "$RALPH_TEMPLATE_DIR" ]; then
     TEMPLATE_DIR="$RALPH_TEMPLATE_DIR"
+  elif [ -d "$RALPH_DIR/template" ]; then
+    TEMPLATE_DIR="$RALPH_DIR/template"
   fi
 
   # Track errors
   local ERRORS=()
 
-  # Validate RALPH_TEMPLATE_DIR is set
   if [ -z "$TEMPLATE_DIR" ]; then
-    error "RALPH_TEMPLATE_DIR not set or directory doesn't exist.
+    error "No template directory found.
+
+Checked:
+  - RALPH_TEMPLATE_DIR: ${RALPH_TEMPLATE_DIR:-<not set>}
+  - $RALPH_DIR/template: missing
 
 To fix this, do one of the following:
-  - Run 'ralph sync' to fetch templates from GitHub
-  - Set RALPH_TEMPLATE_DIR to point to an existing template directory
-
-Current value: ${RALPH_TEMPLATE_DIR:-<not set>}"
+  - Run 'ralph sync' to populate $RALPH_DIR/template
+  - Enter 'nix develop' (or enable direnv) to set RALPH_TEMPLATE_DIR
+  - Set RALPH_TEMPLATE_DIR to point to an existing template directory"
   fi
 
   echo "Checking templates in: $TEMPLATE_DIR"
@@ -632,10 +638,12 @@ run_spec_review() {
     companions=$(read_manifests "$state_file")
   fi
 
-  # Pin context
+  # Pin context from the configured pinnedContext file
+  local pinned_context_file
+  pinned_context_file=$(get_pinned_context_file)
   local pinned_context=""
-  if [ -f "specs/README.md" ]; then
-    pinned_context=$(cat "specs/README.md")
+  if [ -f "$pinned_context_file" ]; then
+    pinned_context=$(cat "$pinned_context_file")
   fi
 
   # Load config for model override and output settings

@@ -46,7 +46,7 @@ Different tasks in the same molecule can have different profiles. Assign based o
    jq --arg mol "$MOLECULE_ID" '.molecule = $mol' {{CURRENT_FILE}} > {{CURRENT_FILE}}.tmp && mv {{CURRENT_FILE}}.tmp {{CURRENT_FILE}}
    ```
    **CRITICAL:** Use the exact ID returned by `bd create --silent`. Do NOT substitute
-   a molecule ID from specs/README.md or any other source — `bd create` generates a
+   a molecule ID from the spec index or any other source — `bd create` generates a
    unique ID and that is the only valid value.
 3. **Create child tasks** with `--parent` and appropriate `profile:X` label:
    ```bash

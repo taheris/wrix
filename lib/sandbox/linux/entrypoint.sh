@@ -248,12 +248,12 @@ else
   # Build system prompt only for interactive claude (not needed for command
   # overrides or ralph mode).  Requires /etc/wrapix-prompt to be mounted.
   SYSTEM_PROMPT=$(cat /etc/wrapix-prompt)
-  if [ -f /workspace/specs/README.md ]; then
+  if [ -f /workspace/docs/README.md ]; then
     SYSTEM_PROMPT="$SYSTEM_PROMPT
 
-## Project Context (from specs/README.md)
+## Project Context (from docs/README.md)
 
-$(cat /workspace/specs/README.md)"
+$(cat /workspace/docs/README.md)"
   fi
   claude --dangerously-skip-permissions --append-system-prompt "$SYSTEM_PROMPT" || MAIN_EXIT=$?
 fi

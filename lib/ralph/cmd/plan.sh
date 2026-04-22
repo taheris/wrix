@@ -85,7 +85,6 @@ else
   TEMPLATE=""
 fi
 SPECS_DIR="specs"
-SPECS_README="$SPECS_DIR/README.md"
 CURRENT_POINTER="$RALPH_DIR/state/current"
 
 # Parse arguments
@@ -304,22 +303,6 @@ if [ ! -d "$SPECS_DIR" ]; then
   echo "Created $SPECS_DIR directory"
 fi
 
-# Create specs/README.md from template if not exists (never overwrite)
-if [ ! -f "$SPECS_README" ]; then
-  cat > "$SPECS_README" << 'EOF'
-# Project Specifications
-
-| Spec | Code | Purpose |
-|------|------|---------|
-
-## Terminology Index
-
-| Term | Definition |
-|------|------------|
-EOF
-  echo "Created $SPECS_README"
-fi
-
 # Set/update state in per-label state file: state/<label>.json
 UPDATE_MODE="false"
 if [ -n "$UPDATE_SPEC" ]; then
@@ -358,7 +341,7 @@ if [ "$SPEC_HIDDEN" = "true" ]; then
   README_INSTRUCTIONS=""
 else
   SPEC_PATH="$SPECS_DIR/$LABEL.md"
-  README_INSTRUCTIONS="5. **Update specs/README.md** with the epic bead ID"
+  README_INSTRUCTIONS="5. **Update the spec index in $(get_pinned_context_file)** with the epic bead ID"
 fi
 
 # Select template based on mode: plan-new for new specs, plan-update for updates
@@ -368,10 +351,11 @@ else
   TEMPLATE_NAME="plan-new"
 fi
 
-# Pin context from specs/README.md
+# Pin context from the configured pinnedContext file
+PINNED_CONTEXT_FILE=$(get_pinned_context_file)
 PINNED_CONTEXT=""
-if [ -f "$SPECS_README" ]; then
-  PINNED_CONTEXT=$(cat "$SPECS_README")
+if [ -f "$PINNED_CONTEXT_FILE" ]; then
+  PINNED_CONTEXT=$(cat "$PINNED_CONTEXT_FILE")
 fi
 
 # Check if we're continuing an existing spec

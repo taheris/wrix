@@ -51,13 +51,13 @@ SPEC
 }
 
 #-----------------------------------------------------------------------------
-# Helper: update README.md spec table with a molecule ID for a spec
+# Helper: update docs/README.md spec table with a molecule ID for a spec
 #-----------------------------------------------------------------------------
 add_readme_spec_entry() {
   local spec_name="$1"
   local molecule_id="${2:-}"
   local beads_col="${molecule_id:----}"
-  echo "| [${spec_name}.md](./${spec_name}.md) | — | $beads_col | Test spec |" >> "$TEST_DIR/specs/README.md"
+  echo "| [${spec_name}.md](../specs/${spec_name}.md) | — | $beads_col | Test spec |" >> "$TEST_DIR/docs/README.md"
 }
 
 #-----------------------------------------------------------------------------

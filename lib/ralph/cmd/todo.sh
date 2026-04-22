@@ -147,7 +147,6 @@ RALPH_DIR="${RALPH_DIR:-.wrapix/ralph}"
 
 CONFIG_FILE="$RALPH_DIR/config.nix"
 SPECS_DIR="specs"
-SPECS_README="$SPECS_DIR/README.md"
 
 if [ ! -f "$CONFIG_FILE" ]; then
   echo "Error: No ralph config found at $CONFIG_FILE"
@@ -177,9 +176,10 @@ if [ "$SPEC_HIDDEN" = "true" ]; then
   README_INSTRUCTIONS=""
 else
   SPEC_PATH="$SPECS_DIR/$LABEL.md"
-  README_INSTRUCTIONS="## README Update (required for cross-machine state recovery)
+  PINNED_CONTEXT_FILE=$(get_pinned_context_file)
+  README_INSTRUCTIONS="## Spec Index Update (required for cross-machine state recovery)
 
-After creating the molecule, update \`specs/README.md\`:
+After creating the molecule, update \`$PINNED_CONTEXT_FILE\`:
 - Find the row for this spec
 - Update the Beads column with the molecule ID (epic ID)"
 fi
@@ -263,10 +263,11 @@ fi
 
 mkdir -p "$RALPH_DIR/logs"
 
-# Pin context from specs/README.md
+# Pin context from the configured pinnedContext file
+PINNED_CONTEXT_FILE="${PINNED_CONTEXT_FILE:-$(get_pinned_context_file)}"
 PINNED_CONTEXT=""
-if [ -f "$SPECS_README" ]; then
-  PINNED_CONTEXT=$(cat "$SPECS_README")
+if [ -f "$PINNED_CONTEXT_FILE" ]; then
+  PINNED_CONTEXT=$(cat "$PINNED_CONTEXT_FILE")
 fi
 
 # Extract title from spec file (first heading)
@@ -388,7 +389,10 @@ if jq -e '[.[] | select(.type == "result") | .result | contains("RALPH_COMPLETE"
   if [ -f "$FINAL_SPEC_PATH" ]; then
     echo ""
     echo "Committing spec..."
-    git add "$FINAL_SPEC_PATH" "$SPECS_README" 2>/dev/null || true
+    git add "$FINAL_SPEC_PATH"
+    if [ -f "$PINNED_CONTEXT_FILE" ]; then
+      git add "$PINNED_CONTEXT_FILE"
+    fi
     if git diff --cached --quiet 2>/dev/null; then
       echo "  (no changes to commit)"
     else

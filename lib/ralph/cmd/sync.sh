@@ -757,6 +757,14 @@ DOCS_README_CONTENT='# Project Overview
 
 Describe what this project does, who it is for, and its key capabilities.
 
+## Specs
+
+Individual spec files live in `specs/`. Add a row when each spec lands.
+
+| Spec | Code | Beads | Purpose |
+|------|------|-------|---------|
+| _add rows as specs land_ | | | |
+
 ## Terminology
 
 | Term | Definition |
@@ -797,6 +805,66 @@ Describe formatting, naming conventions, and patterns to follow.
 
 - What reviewers should check for
 - What patterns to avoid
+'
+
+# Default content for AGENTS.md (mirrored to CLAUDE.md via symlink)
+DOCS_AGENTS_CONTENT='# Agent Instructions
+
+<!-- Scaffolded by ralph sync — edit this file, then close the review bead -->
+<!-- Recommended: `ln -s AGENTS.md CLAUDE.md` so Claude Code reads the same file -->
+
+## Project Context
+
+- **Overview & specs** — `docs/README.md` (pinned at session start)
+- **Architecture** — `docs/architecture.md`
+- **Style guidelines** — `docs/style-guidelines.md`
+- **Individual specs** — `specs/<label>.md`
+
+## Building
+
+```bash
+nix develop          # Enter devShell
+nix build            # Build this project
+```
+
+## Issue Tracking (Beads)
+
+Use `bd` for ALL issue tracking. Do NOT use markdown TODOs or external trackers.
+
+```bash
+bd ready                          # Show unblocked work
+bd show <id>                      # Issue details
+bd create --title="..." --description="..." --type=task --priority=2
+bd update <id> --status=in_progress   # Claim before starting
+bd close <id>                     # Mark complete
+bd dep add <issue> <depends-on>   # Add dependency
+```
+
+**Priority:** 0-4 (critical to backlog, default 2). **Types:** task, bug, feature, epic.
+
+## Session Protocol
+
+### Start
+
+```bash
+bd dolt pull
+```
+
+### End ("land the plane")
+
+```bash
+git add <files>
+git commit -m "..."
+git push
+beads-push            # Sync beads branch to GitHub
+```
+
+Work is NOT complete until both pushes succeed.
+
+## Hidden Specs
+
+Files in `.wrapix/ralph/state/` are hidden specs managed by ralph. Never copy or
+commit them to `specs/`.
 '
 
 # Default content for docs/orchestration.md (Gas City projects only)
@@ -884,7 +952,7 @@ scaffold_doc() {
 }
 
 # Scaffold missing docs files
-# Always scaffolds: docs/README.md, docs/architecture.md, docs/style-guidelines.md
+# Always scaffolds: docs/README.md, docs/architecture.md, docs/style-guidelines.md, AGENTS.md
 # When mkCity detected: additionally scaffolds docs/orchestration.md
 scaffold_docs() {
   local scaffolded=0
@@ -905,6 +973,11 @@ scaffold_docs() {
   scaffold_doc "docs/style-guidelines.md" \
     "$DOCS_STYLE_CONTENT" \
     "Review and customize the scaffolded style guidelines (docs/style-guidelines.md). Define code standards and review criteria." \
+    && ((scaffolded++)) || true
+
+  scaffold_doc "AGENTS.md" \
+    "$DOCS_AGENTS_CONTENT" \
+    "Review and customize the scaffolded agent instructions (AGENTS.md). Adjust build commands, session protocol, and tooling references to match this project. Optionally create a CLAUDE.md symlink: ln -s AGENTS.md CLAUDE.md" \
     && ((scaffolded++)) || true
 
   # Gas City projects get an additional orchestration doc

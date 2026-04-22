@@ -177,7 +177,7 @@ bd dolt pull >/dev/null 2>&1 || warn "bd dolt pull failed, continuing with local
 RALPH_DIR="${RALPH_DIR:-.wrapix/ralph}"
 CONFIG_FILE="$RALPH_DIR/config.nix"
 SPECS_DIR="specs"
-SPECS_README="$SPECS_DIR/README.md"
+PINNED_CONTEXT_FILE=$(get_pinned_context_file)
 
 # Resolve the spec label ONCE at startup using --spec flag or state/current.
 # This label is held in a shell variable for the entire run duration —
@@ -347,7 +347,7 @@ run_hook() {
 # Completion Helpers
 #-----------------------------------------------------------------------------
 
-# Update spec status to REVIEW in specs/README.md
+# Update spec status to REVIEW in the pinned-context file
 update_spec_status_to_review() {
   local feature="$1"
   local hidden="$2"
@@ -355,9 +355,9 @@ update_spec_status_to_review() {
   echo ""
   echo "All tasks for '$feature' are complete!"
 
-  # Only mention README update if not hidden
-  if [ "$hidden" != "true" ] && [ -f "$SPECS_README" ]; then
-    echo "Please update specs/README.md to move the spec from WIP to REVIEW."
+  # Only mention spec-index update if not hidden
+  if [ "$hidden" != "true" ] && [ -f "$PINNED_CONTEXT_FILE" ]; then
+    echo "Please update $PINNED_CONTEXT_FILE to move the spec from WIP to REVIEW."
   fi
 }
 
@@ -487,10 +487,10 @@ run_step() {
   fi
   debug "Issue title: ${issue_title:0:50}..."
 
-  # Pin context from specs/README.md
+  # Pin context from the configured pinnedContext file
   local pinned_context=""
-  if [ -f "$SPECS_README" ]; then
-    pinned_context=$(cat "$SPECS_README")
+  if [ -f "$PINNED_CONTEXT_FILE" ]; then
+    pinned_context=$(cat "$PINNED_CONTEXT_FILE")
   fi
 
   # Compute spec path based on hidden flag
@@ -667,8 +667,8 @@ run_step_in_worktree() {
 
   # Pin context
   local pinned_context=""
-  if [ -f "$SPECS_README" ]; then
-    pinned_context=$(cat "$SPECS_README")
+  if [ -f "$PINNED_CONTEXT_FILE" ]; then
+    pinned_context=$(cat "$PINNED_CONTEXT_FILE")
   fi
 
   # Compute spec path

@@ -2,10 +2,10 @@
 
 ## Specifications
 
-Before implementing features, consult `specs/README.md`:
+Before implementing features, consult `docs/README.md`:
 
 - **Architecture first** — Read `docs/architecture.md` for system overview
-- **Check specs before coding** — Each feature has a dedicated spec file
+- **Check specs before coding** — Each feature has a dedicated spec file in `specs/`
 - **Terminology** — `docs/README.md` has a terminology index
 
 ## Building
