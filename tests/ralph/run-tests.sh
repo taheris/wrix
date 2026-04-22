@@ -2179,6 +2179,67 @@ test_isolated_beads_db() {
   fi
 }
 
+# Test: init_beads copies the shared snapshot instead of running bd init per test
+test_init_beads_uses_snapshot() {
+  CURRENT_TEST="init_beads_uses_snapshot"
+  test_header "init_beads copies shared .beads/ snapshot"
+
+  if [ -z "${RALPH_BEADS_SNAPSHOT:-}" ] || [ ! -d "$RALPH_BEADS_SNAPSHOT" ]; then
+    test_fail "RALPH_BEADS_SNAPSHOT is not set or missing (ensure shared dolt server is running)"
+    return
+  fi
+  test_pass "RALPH_BEADS_SNAPSHOT points to $RALPH_BEADS_SNAPSHOT"
+
+  # Snapshot mtime must be stable across init_beads calls (no re-init per test)
+  local snapshot_mtime_before
+  snapshot_mtime_before=$(stat -c %Y "$RALPH_BEADS_SNAPSHOT" 2>/dev/null)
+
+  setup_test_env "init-beads-snap-a"
+  init_beads
+
+  if [ -d "$TEST_DIR/.beads/embeddeddolt/ralphsnap" ]; then
+    test_pass "Test A has embedded dolt DB populated from snapshot"
+  else
+    test_fail "Test A missing embeddeddolt/ralphsnap (snapshot copy incomplete)"
+  fi
+
+  # Exercise the copied DB — confirms it is fully usable, not just files on disk.
+  local bead_a
+  bead_a=$(bd create --title="From snapshot A" --type=task --json 2>/dev/null | jq -r '.id')
+  if [ -n "$bead_a" ] && [ "$bead_a" != "null" ]; then
+    test_pass "Created bead $bead_a against snapshot-derived DB"
+  else
+    test_fail "Failed to create bead against snapshot-derived DB"
+  fi
+  local dir_a="$TEST_DIR"
+  teardown_test_env
+
+  setup_test_env "init-beads-snap-b"
+  init_beads
+
+  # Second test must see an empty DB — snapshot copies are independent.
+  local open_count
+  open_count=$(bd list --status=open --json 2>/dev/null | jq 'length' 2>/dev/null || echo 0)
+  if [ "$open_count" -eq 0 ]; then
+    test_pass "Second test sees clean DB (per-test isolation preserved)"
+  else
+    test_fail "Second test leaked beads from test A (count=$open_count)"
+  fi
+
+  local snapshot_mtime_after
+  snapshot_mtime_after=$(stat -c %Y "$RALPH_BEADS_SNAPSHOT" 2>/dev/null)
+  if [ "$snapshot_mtime_before" = "$snapshot_mtime_after" ]; then
+    test_pass "Snapshot not re-initialized between tests (mtime stable)"
+  else
+    test_fail "Snapshot mtime changed — bd init ran more than once"
+  fi
+
+  teardown_test_env
+  if [ -d "$dir_a" ]; then
+    rm -rf "$dir_a"
+  fi
+}
+
 # Data-driven configuration tests
 # Consolidates configuration tests into 1 parameterized test:
 # (Note: spec_hidden tests removed - they require interactive plan mode which mock-claude doesn't support)
@@ -12344,6 +12405,7 @@ SEQUENTIAL_TESTS=(
   test_run_profile_selection
   test_status_awaiting_display
   test_isolated_beads_db
+  test_init_beads_uses_snapshot
   test_logs_spec_flag
   # Todo-to-run bead visibility tests (require ralph-run)
   test_todo_beads_visible_to_run
@@ -12570,6 +12632,9 @@ main() {
     setup_shared_dolt_server
     trap teardown_shared_dolt_server EXIT
 
+    # Pre-seed the beads snapshot once so init_beads can cp -a it per test
+    _ensure_beads_snapshot || exit 1
+
     # Run single test in isolation
     local results_dir
     results_dir=$(mktemp -d -t "ralph-test-results-XXXXXX")
@@ -12601,6 +12666,10 @@ main() {
   setup_shared_dolt_server
   # Trap EXIT, INT, and TERM to ensure cleanup on ^C or kill
   trap teardown_shared_dolt_server EXIT INT TERM
+
+  # Pre-seed the beads snapshot in the parent shell so parallel subshells
+  # inherit RALPH_BEADS_SNAPSHOT and share one 'bd init' per suite run.
+  _ensure_beads_snapshot || exit 1
 
   # In --sequential mode, run everything sequentially
   if [ "$filter" = "--sequential" ] || [ "${RALPH_TEST_SEQUENTIAL:-}" = "1" ]; then

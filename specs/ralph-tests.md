@@ -524,7 +524,8 @@ two successive ralph commands, must observe updated content between them.
 - [x] Refresh-per-invocation is verified — orientation updates between successive ralph commands
   [verify](../tests/ralph/run-tests.sh#test_simulate_compact_event_refresh_per_invocation)
 - [ ] Full suite runs in <90s on dev hardware
-- [ ] `init_beads` uses snapshot copy instead of per-test `bd init`
+- [x] `init_beads` uses snapshot copy instead of per-test `bd init`
+  [verify](../tests/ralph/run-tests.sh#test_init_beads_uses_snapshot)
 - [x] `setup_test_env` uses batched fixture operations (single `mkdir -p`, bulk symlinks)
 - [x] `RALPH_TEST_MAX_JOBS` default tuned to shared-Dolt concurrency ceiling
 

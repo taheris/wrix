@@ -279,13 +279,42 @@ EOF
   echo "  Test environment: $TEST_DIR"
 }
 
+# Run 'bd init' once per test-run and expose the result as RALPH_BEADS_SNAPSHOT;
+# init_beads cp -a's this template instead of paying bd init's cost per test.
+# Snapshot lives under $SHARED_DOLT_DIR so teardown_shared_dolt_server cleans it up.
+_ensure_beads_snapshot() {
+  if [ -n "${RALPH_BEADS_SNAPSHOT:-}" ] && [ -d "$RALPH_BEADS_SNAPSHOT" ]; then
+    return 0
+  fi
+
+  if [ -z "${SHARED_DOLT_DIR:-}" ] || [ ! -d "$SHARED_DOLT_DIR" ]; then
+    echo "ERROR: _ensure_beads_snapshot requires SHARED_DOLT_DIR; call setup_shared_dolt_server first" >&2
+    return 1
+  fi
+
+  local snap_root="$SHARED_DOLT_DIR/beads-snapshot"
+  if [ ! -d "$snap_root/.beads" ]; then
+    mkdir -p "$snap_root"
+    if ! (cd "$snap_root" && bd init --prefix ralphsnap \
+            ${SHARED_DOLT_PORT:+--server-port "$SHARED_DOLT_PORT"} \
+            --skip-hooks --skip-agents --quiet >/dev/null 2>&1); then
+      echo "ERROR: bd init failed while creating beads snapshot at $snap_root" >&2
+      rm -rf "$snap_root"
+      return 1
+    fi
+  fi
+
+  RALPH_BEADS_SNAPSHOT="$snap_root/.beads"
+  export RALPH_BEADS_SNAPSHOT
+}
+
 # Initialize beads database for tests that need it.
-# Must be called AFTER setup_test_env. Creates a unique database on the shared
-# dolt server so tests get full isolation without affecting pure tests.
+# Must be called AFTER setup_test_env. Populates TEST_DIR/.beads from the shared
+# snapshot (see _ensure_beads_snapshot); each TEST_DIR still holds its own
+# embedded Dolt DB, so tests remain isolated without re-running bd init.
 # Usage: init_beads
 init_beads() {
   export BD_DB="$TEST_DIR/.beads/issues.db"
-  mkdir -p "$(dirname "$BD_DB")"
 
   # Suppress dolt sql-server auto-start in test subprocesses.
   # Without this, any bd command that briefly fails to connect to the shared
@@ -296,14 +325,18 @@ init_beads() {
     export BEADS_DOLT_SERVER_PORT="$SHARED_DOLT_PORT"
   fi
 
-  local test_prefix
-  test_prefix="t$(echo "${CURRENT_TEST:-unknown}" | tr -cd 'a-z0-9' | head -c 6)${RANDOM}"
-  if [ -n "${SHARED_DOLT_PORT:-}" ]; then
-    (cd "$TEST_DIR" && bd init --prefix "$test_prefix" \
-      --server-port "$SHARED_DOLT_PORT" --skip-hooks --quiet >/dev/null 2>&1) || {
-      echo "WARNING: bd init failed for ${CURRENT_TEST:-unknown}" >&2
-    }
+  if [ -z "${SHARED_DOLT_PORT:-}" ]; then
+    mkdir -p "$(dirname "$BD_DB")"
+    return 0
   fi
+
+  if ! _ensure_beads_snapshot; then
+    echo "WARNING: beads snapshot unavailable for ${CURRENT_TEST:-unknown}" >&2
+    return 1
+  fi
+
+  rm -rf "$TEST_DIR/.beads"
+  cp -a "$RALPH_BEADS_SNAPSHOT" "$TEST_DIR/.beads"
 }
 
 # Simulate Claude dispatching the SessionStart[compact] re-pin hook and emit

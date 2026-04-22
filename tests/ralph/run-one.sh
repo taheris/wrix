@@ -71,6 +71,7 @@ if [ "$NO_DOLT" = false ]; then
     setup_shared_dolt_server
     trap teardown_shared_dolt_server EXIT
   fi
+  _ensure_beads_snapshot || exit 1
 fi
 
 # Run the test directly (no subshell isolation for easier debugging)
