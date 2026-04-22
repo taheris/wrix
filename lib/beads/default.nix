@@ -17,6 +17,7 @@ let
   imageTag = imageTagLib.mkImageTag doltImageDrv;
   imageName = "localhost/wrapix-beads:${imageTag}";
   loadImageCmd = if pkgs.stdenv.isDarwin then "cat ${doltImageDrv}" else "${doltImageDrv}";
+  shellLib = import ../util/shell.nix { };
 
   # Minimal dolt-only container image used to serve a workspace's .beads/dolt.
   doltImageDrv = mkImage {
@@ -81,16 +82,14 @@ let
     }
 
     _load_image() {
-      if podman image exists "$IMAGE" 2>/dev/null; then
-        return 0
+      if ! podman image exists "$IMAGE" 2>/dev/null; then
+        echo "Loading beads image..." >&2
+        ${loadImageCmd} | podman load -q >/dev/null
+        podman tag "localhost/wrapix-beads:latest" "$IMAGE" 2>/dev/null || true
       fi
-      echo "Loading beads image..." >&2
-      ${loadImageCmd} | podman load -q >/dev/null
-      podman tag "localhost/wrapix-beads:latest" "$IMAGE" 2>/dev/null || true
-      podman images --filter "reference=localhost/wrapix-beads" --format '{{.Tag}}' | while read -r _old_tag; do
-        case "$_old_tag" in latest|${imageTag}) continue ;; esac
-        podman rmi "localhost/wrapix-beads:$_old_tag" 2>/dev/null || true
-      done
+      # Prune on every load_image call so beads-dolt sweeps stale wrapix-*
+      # tags even when its own image is cached.
+      ${shellLib.pruneStaleImages { }}
     }
 
     # Translate container-local path to host-side path for nested podman.

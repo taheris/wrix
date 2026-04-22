@@ -33,6 +33,8 @@ let
     linuxPkgs = pkgs;
   };
 
+  shellLib = import ../lib/util/shell.nix { };
+
   # Resolve a profile string shorthand to a profile attrset
   resolveProfile =
     p:
@@ -260,11 +262,11 @@ let
           if ! ${pkgs.podman}/bin/podman image exists "${city.imageName}" 2>/dev/null; then
             ${city.sandbox.image} | ${pkgs.podman}/bin/podman load
             ${pkgs.podman}/bin/podman tag "localhost/wrapix-${city.sandbox.profile.name}:latest" "${city.imageName}" 2>/dev/null || true
-            ${pkgs.podman}/bin/podman images --filter "reference=localhost/wrapix-${city.sandbox.profile.name}" --format '{{.Tag}}' | while read -r _old_tag; do
-              case "$_old_tag" in latest|${imageTagLib.mkImageTag city.sandbox.image}) continue ;; esac
-              ${pkgs.podman}/bin/podman rmi -f "localhost/wrapix-${city.sandbox.profile.name}:$_old_tag"
-            done
           fi
+          # Prune runs unconditionally — stale tags from other profiles don't
+          # show up in this city's load path, so gate-free pruning is the
+          # only way to sweep them.
+          ${shellLib.pruneStaleImages { cmd = "${pkgs.podman}/bin/podman"; }}
         ''
         + builtins.concatStringsSep "" (
           mapAttrsToList (svcName: _svc: ''

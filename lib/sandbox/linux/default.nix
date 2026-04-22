@@ -10,6 +10,7 @@ let
     cleanStaleStagingDirs
     createStagingDir
     mkDeployKeyExpr
+    pruneStaleImages
     stageBeads
     ;
 
@@ -255,14 +256,14 @@ in
           verbose "Loading image from ${profileImage}..."
           ${profileImage} | podman load -q >/dev/null
           podman tag "localhost/wrapix-${profile.name}:latest" "$IMAGE_ID" 2>/dev/null || true
-          podman images --filter "reference=localhost/wrapix-${profile.name}" --format '{{.Tag}}' | while read -r _old_tag; do
-            case "$_old_tag" in latest|${imageTagLib.mkImageTag profileImage}) continue ;; esac
-            podman rmi "localhost/wrapix-${profile.name}:$_old_tag" 2>/dev/null || true
-          done
           verbose "Loaded image $IMAGE_ID"
         else
           verbose "Using cached image $IMAGE_ID"
         fi
+        # Prune stale wrapix-* tags from every profile on every invocation,
+        # not just after a fresh load — otherwise a cached current profile
+        # lets stale hashes from other profiles accumulate indefinitely.
+        ${pruneStaleImages { }}
 
         verbose "Starting container (cpus=$CPUS, memory=${toString memoryMb}m)..."
 

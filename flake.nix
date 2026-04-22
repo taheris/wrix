@@ -5,7 +5,7 @@
     nixpkgs.url = "git+ssh://git@github.com/NixOS/nixpkgs.git?ref=nixos-unstable&shallow=1";
 
     beads = {
-      url = "git+ssh://git@github.com/taheris/beads.git?ref=feat/unix-socket-support&shallow=1";
+      url = "git+ssh://git@github.com/gastownhall/beads.git?ref=main&shallow=1";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 

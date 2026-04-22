@@ -63,4 +63,59 @@ _:
       ''"${deployKey}"''
     else
       ''$(basename "$PROJECT_DIR")-$(hostname -s 2>/dev/null || uname -n)'';
+
+  # Prune stale image tags across every wrapix-* repo (not just the active
+  # one). After a fresh load, :latest and the new hash tag are aliases for
+  # the same image ID; old hash tags from prior rebuilds are stray. For each
+  # wrapix-* repo, keep :latest and any tag that aliases it (same ID/digest)
+  # and delete the rest. Without this, rebuilding one profile leaves stale
+  # hashes from every other profile accumulating forever, since the old
+  # filter was scoped to the currently-invoked profile only.
+  #
+  # runtime:
+  #   "podman"    — Linux, city, module, beads-dolt; repos are
+  #                 localhost/wrapix-*.
+  #   "container" — Darwin's Apple container CLI; repos are wrapix-*.
+  # cmd: override the CLI binary (absolute path for systemd units, etc.).
+  pruneStaleImages =
+    {
+      runtime ? "podman",
+      cmd ? null,
+    }:
+    let
+      bin = if cmd != null then cmd else runtime;
+      spec =
+        {
+          podman = {
+            list = "${bin} images --format '{{.Repository}} {{.Tag}} {{.ID}}'";
+            delete = "${bin} rmi";
+            pattern = "^localhost/wrapix-";
+          };
+          container = {
+            list = "${bin} image list | tail -n +2";
+            delete = "${bin} image delete";
+            pattern = "^wrapix-";
+          };
+        }
+        .${runtime};
+    in
+    ''
+      ${spec.list} \
+        | awk '
+            $1 ~ "${spec.pattern}" {
+              if ($2 == "latest") { latest[$1] = $3 }
+              else { rows[NR] = $1 " " $2 " " $3 }
+            }
+            END {
+              for (i in rows) {
+                split(rows[i], f, " ")
+                if (f[3] != latest[f[1]]) print f[1] ":" f[2]
+              }
+            }' \
+        | while read -r _stale; do
+            if ! _err=$(${spec.delete} "$_stale" 2>&1); then
+              echo "prune-stale-images: could not remove $_stale: $_err" >&2
+            fi
+          done
+    '';
 }

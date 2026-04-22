@@ -38,6 +38,7 @@ let
 
   toTOML = import ../util/toml.nix { inherit (pkgs) lib; };
   imageTagLib = import ../util/image-tag.nix { };
+  shellLib = import ../util/shell.nix { };
 
   # Build a service container image from a Nix package
   mkServiceImage =
@@ -135,11 +136,12 @@ let
           echo "Loading sandbox image..."
           ${loadImageCmd} | podman load -q >/dev/null
           podman tag "localhost/wrapix-${agentSandbox.profile.name}:latest" "${imageName}" 2>/dev/null || true
-          podman images --filter "reference=localhost/wrapix-${agentSandbox.profile.name}" --format '{{.Tag}}' | while read -r _old_tag; do
-            case "$_old_tag" in latest|${imageTag}) continue ;; esac
-            podman rmi "localhost/wrapix-${agentSandbox.profile.name}:$_old_tag" 2>/dev/null || true
-          done
         fi
+        # Prune runs unconditionally: rebuilding a profile that we aren't
+        # currently loading (e.g. devShell cached current profile, user
+        # rebuilt wrapix-rust in another shell) still leaves stale hash tags
+        # that need to be swept here. Cheap when there's nothing to remove.
+        ${shellLib.pruneStaleImages { }}
       '';
 
       # Provider path — references the live script in .gc/scripts/, which the

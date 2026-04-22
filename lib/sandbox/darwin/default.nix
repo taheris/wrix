@@ -10,6 +10,7 @@ let
     cleanStaleStagingDirs
     createStagingDir
     mkDeployKeyExpr
+    pruneStaleImages
     stageBeads
     ;
 
@@ -94,11 +95,23 @@ in
               LOADED_REF=$(echo "$LOAD_OUTPUT" | grep -oE 'untagged@sha256:[a-f0-9]+' | head -1)
               if [ -n "$LOADED_REF" ]; then
                 container image tag "$LOADED_REF" "$PROFILE_IMAGE"
+                # Maintain :latest as an alias so pruneStaleImages has a
+                # per-profile keep-anchor to compare hash tags against.
+                container image tag "$LOADED_REF" "wrapix-${profile.name}:latest"
               fi
               rm -f "$OCI_TAR"
               verbose "Loaded image $PROFILE_IMAGE"
             else
               verbose "Using cached image $PROFILE_IMAGE"
+            fi
+            # Prune runs on every invocation, not just after load, so stale
+            # hashes from other profiles get swept even when the current
+            # profile is cached. Podman runs via 'podman machine' on Darwin
+            # for beads-dolt and city containers, so prune it too when
+            # available.
+            ${pruneStaleImages { runtime = "container"; }}
+            if command -v podman >/dev/null 2>&1; then
+              ${pruneStaleImages { }}
             fi
 
             verbose "Project dir: $PROJECT_DIR"
