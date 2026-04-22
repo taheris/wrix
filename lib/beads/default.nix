@@ -226,15 +226,28 @@ let
 
       _evict_port_squatter "$port"
 
+      _load_image
+
       if podman container exists "$name"; then
-        if podman inspect --format '{{.State.Running}}' "$name" | grep -q true \
-           && _dolt_reachable "$name" "$port" "$ws"; then
+        # Recreate if the running container is pinned to an older image
+        # than the one we just loaded. Data dir is bind-mounted so this
+        # drops nothing; it also releases the stale tag for prune. If
+        # either inspect fails (rare — container/image disappeared mid-check),
+        # fall through to the running+reachable path.
+        local _running_id _expected_id
+        if _running_id=$(podman inspect --format '{{.Image}}' "$name") \
+           && _expected_id=$(podman image inspect --format '{{.Id}}' "$IMAGE") \
+           && [ "$_running_id" != "$_expected_id" ]; then
+          echo "beads-dolt: $name pinned to stale image — recreating with $IMAGE" >&2
+          podman rm -f "$name" >/dev/null
+        elif podman inspect --format '{{.State.Running}}' "$name" | grep -q true \
+             && _dolt_reachable "$name" "$port" "$ws"; then
           return 0
+        else
+          podman rm -f "$name" >/dev/null
         fi
-        podman rm -f "$name" >/dev/null
       fi
 
-      _load_image
       _clean_data_dir "$data_dir"
       rm -f "$(_socket_path "$ws")"
 

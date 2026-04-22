@@ -90,11 +90,18 @@ _:
             list = "${bin} images --format '{{.Repository}} {{.Tag}} {{.ID}}'";
             delete = "${bin} rmi";
             pattern = "^localhost/wrapix-";
+            # Name the container pinning a given tag (via $_stale at shell
+            # runtime). Empty if none — lets callers print a friendly notice
+            # naming the holder instead of a generic rmi error.
+            holder = ''${bin} ps -a --filter "ancestor=$_stale" --format '{{.Names}}' | head -n1'';
           };
           container = {
             list = "${bin} image list | tail -n +2";
             delete = "${bin} image delete";
             pattern = "^wrapix-";
+            # Apple's container CLI has no ancestor filter — fall through
+            # to the generic "pinned by a container" message.
+            holder = "echo ''";
           };
         }
         .${runtime};
@@ -114,7 +121,22 @@ _:
             }' \
         | while read -r _stale; do
             if ! _err=$(${spec.delete} "$_stale" 2>&1); then
-              echo "prune-stale-images: could not remove $_stale: $_err" >&2
+              case "$_err" in
+                *"in use"*|*"is using"*)
+                  if _holder=$(${spec.holder}); then
+                    if [ -n "$_holder" ]; then
+                      echo "prune-stale-images: $_stale pinned by container $_holder — upgrades on next start" >&2
+                    else
+                      echo "prune-stale-images: $_stale pinned by a container — upgrades on next start" >&2
+                    fi
+                  else
+                    echo "prune-stale-images: $_stale pinned by a container (holder lookup failed)" >&2
+                  fi
+                  ;;
+                *)
+                  echo "prune-stale-images: could not remove $_stale: $_err" >&2
+                  ;;
+              esac
             fi
           done
     '';
