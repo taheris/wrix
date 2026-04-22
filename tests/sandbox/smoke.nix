@@ -292,6 +292,26 @@ in
       mkdir $out
     '';
 
+  # Regression guard for wx-1thzk.1: treefmt must be in basePackages so
+  # mkCity-built city containers inherit the project formatter wrapper.
+  profiles-contain-treefmt =
+    let
+      hasTreefmt = profile: elem treefmt profile.packages;
+      hasTreefmtByName =
+        profile: builtins.any (p: (p.pname or p.name or "") == "treefmt") profile.packages;
+      checks =
+        assert hasTreefmt sandboxLib.profiles.base;
+        assert hasTreefmtByName sandboxLib.profiles.base;
+        assert hasTreefmt sandboxLib.profiles.rust;
+        assert hasTreefmt sandboxLib.profiles.python;
+        true;
+    in
+    assert checks;
+    runCommandLocal "smoke-profiles-contain-treefmt" { } ''
+      echo "PASS: treefmt present in base, rust, and python profile packages"
+      mkdir $out
+    '';
+
   # Verify wrapix script contains krun microVM boundary detection
   # Security property: Linux defaults to microVM boundary via krun runtime
   # See specs/security-review.md "MicroVM Boundary" section
