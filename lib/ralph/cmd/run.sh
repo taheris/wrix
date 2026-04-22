@@ -999,14 +999,20 @@ if [ "$RUN_CHECK" = "true" ] && [ "$FINAL_EXIT_CODE" -eq 0 ] && [ "$RUN_ONCE" !=
   fi
 fi
 
-# Final bead sync: push all state to Dolt remote and github before exiting
-echo "Pushing beads to Dolt remote..."
-beads-push 2>/dev/null || echo "Warning: beads-push failed"
-
 # Run post-loop hook (even in --once mode, for consistency)
 run_hook "post-loop" "$HOOK_POST_LOOP"
 
 echo ""
 echo "All work complete after $step_count step(s)!"
+
+# Continuous mode hands off to ralph check (push gate + auto-iteration).
+# --once exits normally without invoking check.
+if [ "$RUN_ONCE" != "true" ]; then
+  if [ -n "$FEATURE_NAME" ]; then
+    exec ralph check --spec "$FEATURE_NAME"
+  else
+    exec ralph check
+  fi
+fi
 
 exit $FINAL_EXIT_CODE

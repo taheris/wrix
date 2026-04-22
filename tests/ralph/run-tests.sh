@@ -9815,6 +9815,60 @@ test_run_continuous_dolt_push() {
   fi
 }
 
+# Test: run.sh does not invoke git push or beads-push
+test_run_does_not_push() {
+  CURRENT_TEST="run_does_not_push"
+  test_header "run.sh: no git push or beads-push (push deferred to ralph check)"
+
+  local run_script="$REPO_ROOT/lib/ralph/cmd/run.sh"
+
+  if grep -qE '^[^#]*\bgit push\b' "$run_script"; then
+    test_fail "run.sh should not invoke 'git push' (push gate lives in ralph check)"
+  else
+    test_pass "run.sh does not invoke git push"
+  fi
+
+  if grep -qE '^[^#]*\bbeads-push\b' "$run_script"; then
+    test_fail "run.sh should not invoke 'beads-push' (push gate lives in ralph check)"
+  else
+    test_pass "run.sh does not invoke beads-push"
+  fi
+}
+
+# Test: run.sh exec-s ralph check at molecule completion (continuous mode only)
+test_run_execs_check_on_complete() {
+  CURRENT_TEST="run_execs_check_on_complete"
+  test_header "run.sh: exec ralph check at molecule completion, --once exits normally"
+
+  local run_script="$REPO_ROOT/lib/ralph/cmd/run.sh"
+
+  if grep -qE '^[[:space:]]*exec ralph check' "$run_script"; then
+    test_pass "run.sh contains 'exec ralph check' handoff"
+  else
+    test_fail "run.sh should 'exec ralph check' at molecule completion"
+  fi
+
+  # The exec must forward --spec so the resolved label is preserved
+  # shellcheck disable=SC2016 # literal string match against source file
+  if grep -qE 'exec ralph check --spec "\$FEATURE_NAME"' "$run_script"; then
+    test_pass "run.sh forwards --spec \$FEATURE_NAME to ralph check"
+  else
+    test_fail "run.sh should forward --spec \"\$FEATURE_NAME\" to ralph check"
+  fi
+
+  # The exec must be guarded so --once exits normally
+  local exec_line guard_line
+  exec_line=$(grep -nE '^[[:space:]]*exec ralph check' "$run_script" | head -1 | cut -d: -f1)
+  # shellcheck disable=SC2016 # literal string match against source file
+  guard_line=$(grep -nE '\$RUN_ONCE.*!=.*true' "$run_script" | tail -1 | cut -d: -f1)
+
+  if [ -n "$exec_line" ] && [ -n "$guard_line" ] && [ "$guard_line" -lt "$exec_line" ]; then
+    test_pass "exec ralph check is guarded by RUN_ONCE != true"
+  else
+    test_fail "exec ralph check should be guarded so --once exits without handoff (exec:$exec_line guard:$guard_line)"
+  fi
+}
+
 # Test: run.sh host-side block runs bd dolt pull after container exits
 test_run_dolt_pull_after_complete() {
   CURRENT_TEST="run_dolt_pull_after_complete"
@@ -10897,6 +10951,8 @@ PARALLEL_TESTS=(
   test_run_once_dolt_push_in_container
   test_run_continuous_dolt_push
   test_run_dolt_pull_after_complete
+  test_run_does_not_push
+  test_run_execs_check_on_complete
   # Todo-to-run bead visibility tests (dolt failure behaviors)
   test_todo_container_dolt_commit_failure
   test_todo_container_dolt_push_failure
