@@ -82,13 +82,15 @@ setup_test_env() {
   TEST_DIR=$(mktemp -d -t "ralph-test-$test_name-XXXXXX")
   export TEST_DIR
 
-  # Create project structure
-  mkdir -p "$TEST_DIR/specs"
-  mkdir -p "$TEST_DIR/docs"
-  mkdir -p "$TEST_DIR/.wrapix/ralph/state"
-  mkdir -p "$TEST_DIR/.wrapix/ralph/logs"
-  mkdir -p "$TEST_DIR/.wrapix/ralph/template"
-  mkdir -p "$TEST_DIR/.beads"
+  # Create entire project structure in one mkdir invocation
+  mkdir -p \
+    "$TEST_DIR/specs" \
+    "$TEST_DIR/docs" \
+    "$TEST_DIR/bin" \
+    "$TEST_DIR/.wrapix/ralph/state" \
+    "$TEST_DIR/.wrapix/ralph/logs" \
+    "$TEST_DIR/.wrapix/ralph/template" \
+    "$TEST_DIR/.beads"
   chmod 700 "$TEST_DIR/.beads"
 
   # Create minimal docs/README.md (session-start pin)
@@ -216,32 +218,21 @@ Output ONE of these at the end of your response:
 - `RALPH_CLARIFY: <question>` - Need clarification
 EOF
 
-  # Create bin directory with mock claude as 'claude'
-  mkdir -p "$TEST_DIR/bin"
-  ln -sf "$MOCK_CLAUDE" "$TEST_DIR/bin/claude"
-
-  # Symlink ralph commands from SOURCE (not installed) to test latest code
-  # This ensures tests verify the actual source, not a potentially stale build
   RALPH_SRC_DIR="$REPO_ROOT/lib/ralph/cmd"
-  for cmd in ralph-run ralph-todo ralph-plan ralph-status ralph-sync ralph-check ralph-spec ralph-use ralph-logs ralph-msg; do
-    local script_name="${cmd#ralph-}"  # Remove 'ralph-' prefix
-    if [ -f "$RALPH_SRC_DIR/$script_name.sh" ]; then
-      ln -sf "$RALPH_SRC_DIR/$script_name.sh" "$TEST_DIR/bin/$cmd"
-    fi
+  local script_name
+  for script_name in run todo plan status sync check spec use logs msg; do
+    ln -sf "$RALPH_SRC_DIR/$script_name.sh" "$TEST_DIR/bin/ralph-$script_name"
   done
 
-  # Symlink util.sh from source
-  if [ -f "$RALPH_SRC_DIR/util.sh" ]; then
-    ln -sf "$RALPH_SRC_DIR/util.sh" "$TEST_DIR/bin/util.sh"
-  fi
-
-  # Symlink other required commands from installed location
-  # Include core utilities that may be in the wrapix profile
-  for cmd in bd jq nix grep cat sed awk mkdir rm cp mv ls chmod touch date script echo diff git; do
-    if cmd_path=$(command -v "$cmd" 2>/dev/null); then
-      ln -sf "$cmd_path" "$TEST_DIR/bin/$cmd"
+  local -a same_name_srcs=("$RALPH_SRC_DIR/util.sh")
+  local util_cmd util_path
+  for util_cmd in bd jq nix grep cat sed awk mkdir rm cp mv ls chmod touch date script echo diff git; do
+    if util_path=$(command -v "$util_cmd" 2>/dev/null); then
+      same_name_srcs+=("$util_path")
     fi
   done
+  ln -sf "${same_name_srcs[@]}" "$TEST_DIR/bin/"
+  ln -sf "$MOCK_CLAUDE" "$TEST_DIR/bin/claude"
 
   # Filter PATH to remove wrapix-related paths (prevents using installed claude/ralph)
   # Two cases:

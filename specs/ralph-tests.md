@@ -522,7 +522,7 @@ two successive ralph commands, must observe updated content between them.
 - [ ] Refresh-per-invocation is verified — orientation updates between successive ralph commands
 - [ ] Full suite runs in <90s on dev hardware
 - [ ] `init_beads` uses snapshot copy instead of per-test `bd init`
-- [ ] `setup_test_env` uses batched fixture operations (single `mkdir -p`, bulk symlinks)
+- [x] `setup_test_env` uses batched fixture operations (single `mkdir -p`, bulk symlinks)
 - [ ] `RALPH_TEST_MAX_JOBS` default tuned to shared-Dolt concurrency ceiling
 
 ## Out of Scope
