@@ -12018,6 +12018,258 @@ EOF
   teardown_test_env
 }
 
+# Verify the SessionStart[compact] re-pin content installed by ralph plan names
+# the active label/spec/mode. Mirrors the host-side block in plan.sh that runs
+# before wrapix launches; tests run inside a wrapix container so the host-side
+# branch is otherwise skipped.
+test_repin_content_after_plan() {
+  CURRENT_TEST="repin_content_after_plan"
+  test_header "re-pin after ralph plan reflects active label/spec/mode"
+
+  setup_test_env "repin-after-plan"
+  # shellcheck source=../../lib/ralph/cmd/util.sh
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  local label="plan-happy"
+
+  # Happy-path plan state: label pointer + spec file exist.
+  echo "$label" > "$RALPH_DIR/state/current"
+  create_test_spec "$label"
+
+  # Mirror plan.sh host-side repin install (mode=new path).
+  local _host_spec="specs/$label.md"
+  [ -f "$RALPH_DIR/state/${label}.md" ] && _host_spec="$RALPH_DIR/state/${label}.md"
+  local _repin_content
+  _repin_content=$(build_repin_content "$label" plan \
+    "spec=$_host_spec" \
+    "mode=new")
+  install_repin_hook "$label" "$_repin_content"
+
+  local ctx
+  if ! ctx=$(simulate_compact_event "$label"); then
+    test_fail "simulate_compact_event failed after ralph plan setup"
+    unset RALPH_RUNTIME_DIR
+    teardown_test_env
+    return
+  fi
+
+  if ! echo "$ctx" | grep -q "^Label: ${label}$"; then
+    test_fail "re-pin Label is stale (expected 'Label: ${label}'); got: $ctx"
+  elif ! echo "$ctx" | grep -q "^Spec: ${_host_spec}$"; then
+    test_fail "re-pin Spec is stale (expected 'Spec: ${_host_spec}'); got: $ctx"
+  elif ! echo "$ctx" | grep -q "^Mode: new$"; then
+    test_fail "re-pin Mode is stale (expected 'Mode: new'); got: $ctx"
+  else
+    test_pass "re-pin names active label/spec/mode after ralph plan"
+  fi
+
+  unset RALPH_RUNTIME_DIR
+  teardown_test_env
+}
+
+# Verify re-pin content after ralph todo reflects the current molecule id.
+# Mirrors the host-side block in todo.sh.
+test_repin_content_after_todo() {
+  CURRENT_TEST="repin_content_after_todo"
+  test_header "re-pin after ralph todo reflects current molecule id"
+
+  setup_test_env "repin-after-todo"
+  init_beads
+  # shellcheck source=../../lib/ralph/cmd/util.sh
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  local label="todo-happy"
+  create_test_spec "$label"
+
+  # Create an epic (molecule root) like the todo happy path does, then wire
+  # it into state/<label>.json via setup_label_state.
+  local epic_id
+  epic_id=$(bd create --title="Todo Happy Feature" --type=epic \
+    --labels="spec-$label" --silent 2>/dev/null)
+  if [ -z "$epic_id" ]; then
+    test_fail "could not create epic for todo repin test"
+    teardown_test_env
+    return
+  fi
+  setup_label_state "$label" "false" "$epic_id"
+
+  # Mirror todo.sh host-side repin install.
+  local _host_state_file="$RALPH_DIR/state/${label}.json"
+  local _host_spec="specs/${label}.md"
+  [ -f "$RALPH_DIR/state/${label}.md" ] && _host_spec="$RALPH_DIR/state/${label}.md"
+  local _host_molecule
+  _host_molecule=$(jq -r '.molecule // empty' "$_host_state_file" 2>/dev/null || true)
+  local _repin_content
+  _repin_content=$(build_repin_content "$label" todo \
+    "spec=$_host_spec" \
+    "molecule=$_host_molecule")
+  install_repin_hook "$label" "$_repin_content"
+
+  local ctx
+  if ! ctx=$(simulate_compact_event "$label"); then
+    test_fail "simulate_compact_event failed after ralph todo setup"
+    unset RALPH_RUNTIME_DIR
+    teardown_test_env
+    return
+  fi
+
+  if ! echo "$ctx" | grep -q "^Label: ${label}$"; then
+    test_fail "re-pin Label is stale (expected 'Label: ${label}'); got: $ctx"
+  elif ! echo "$ctx" | grep -q "^Spec: ${_host_spec}$"; then
+    test_fail "re-pin Spec is stale (expected 'Spec: ${_host_spec}'); got: $ctx"
+  elif ! echo "$ctx" | grep -q "^Molecule: ${epic_id}$"; then
+    test_fail "re-pin Molecule is stale (expected 'Molecule: ${epic_id}'); got: $ctx"
+  else
+    test_pass "re-pin names current molecule id after ralph todo"
+  fi
+
+  unset RALPH_RUNTIME_DIR
+  teardown_test_env
+}
+
+# Verify re-pin content after ralph run --once reflects the issue the host
+# selected to claim (the first ready non-epic bead). Mirrors the host-side
+# block in run.sh (RUN_ONCE path).
+test_repin_content_after_run_once() {
+  CURRENT_TEST="repin_content_after_run_once"
+  test_header "re-pin after ralph run --once reflects claimed issue id"
+
+  setup_test_env "repin-after-run-once"
+  init_beads
+  # shellcheck source=../../lib/ralph/cmd/util.sh
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  local label="run-once-happy"
+  create_test_spec "$label"
+
+  # Create a task bead that ralph-run --once would claim. Use the same setup
+  # as test_run_closes_issue_on_complete (complete.sh scenario).
+  local task_id task_title="Implement run-once feature"
+  task_id=$(bd create --title="$task_title" --type=task \
+    --labels="spec-$label" --json 2>/dev/null | jq -r '.id')
+  if [ -z "$task_id" ] || [ "$task_id" = "null" ]; then
+    test_fail "could not create task bead for run-once repin test"
+    teardown_test_env
+    return
+  fi
+  setup_label_state "$label" "false"
+
+  # Mirror run.sh host-side repin install (--once path): peek at next ready
+  # bead and include its id + title.
+  local _host_spec="specs/${label}.md"
+  [ -f "$RALPH_DIR/state/${label}.md" ] && _host_spec="$RALPH_DIR/state/${label}.md"
+  local _next _host_issue _host_title
+  _next=$(bd ready --label "spec-${label}" --sort priority --json 2>/dev/null \
+    | jq -r '[.[] | select(.issue_type != "epic")][0] | "\(.id // "")\t\(.title // "")"' 2>/dev/null || true)
+  _host_issue="${_next%%$'\t'*}"
+  _host_title="${_next#*$'\t'}"
+  [ "$_host_title" = "$_next" ] && _host_title=""
+
+  if [ -z "$_host_issue" ] || [ "$_host_issue" != "$task_id" ]; then
+    test_fail "bd ready did not surface the created task (expected $task_id, got '$_host_issue')"
+    teardown_test_env
+    return
+  fi
+
+  local _repin_content
+  _repin_content=$(build_repin_content "$label" run \
+    "spec=$_host_spec" \
+    "issue=$_host_issue" \
+    "title=$_host_title")
+  install_repin_hook "$label" "$_repin_content"
+
+  local ctx
+  if ! ctx=$(simulate_compact_event "$label"); then
+    test_fail "simulate_compact_event failed after ralph run --once setup"
+    unset RALPH_RUNTIME_DIR
+    teardown_test_env
+    return
+  fi
+
+  if ! echo "$ctx" | grep -q "^Label: ${label}$"; then
+    test_fail "re-pin Label is stale (expected 'Label: ${label}'); got: $ctx"
+  elif ! echo "$ctx" | grep -q "^Spec: ${_host_spec}$"; then
+    test_fail "re-pin Spec is stale (expected 'Spec: ${_host_spec}'); got: $ctx"
+  elif ! echo "$ctx" | grep -q "^Issue: ${task_id}$"; then
+    test_fail "re-pin Issue is stale (expected 'Issue: ${task_id}'); got: $ctx"
+  elif ! echo "$ctx" | grep -q "^Title: ${task_title}$"; then
+    test_fail "re-pin Title is stale (expected 'Title: ${task_title}'); got: $ctx"
+  else
+    test_pass "re-pin names claimed issue id + title after ralph run --once"
+  fi
+
+  unset RALPH_RUNTIME_DIR
+  teardown_test_env
+}
+
+# Verify re-pin content after ralph check reflects the active label, spec,
+# current molecule, and base commit. Mirrors the host-side block in check.sh.
+test_repin_content_after_check() {
+  CURRENT_TEST="repin_content_after_check"
+  test_header "re-pin after ralph check reflects label/molecule/base"
+
+  setup_test_env "repin-after-check"
+  init_beads
+  # shellcheck source=../../lib/ralph/cmd/util.sh
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  local label="check-happy"
+  create_test_spec "$label"
+
+  # Populate state/<label>.json with molecule + base_commit, as a completed
+  # todo->run cycle would leave it before ralph check runs.
+  local epic_id
+  epic_id=$(bd create --title="Check Happy Feature" --type=epic \
+    --labels="spec-$label" --silent 2>/dev/null)
+  if [ -z "$epic_id" ]; then
+    test_fail "could not create epic for check repin test"
+    teardown_test_env
+    return
+  fi
+  setup_label_state "$label" "false" "$epic_id"
+
+  local base_commit="abcdef1234567890"
+  local state_file="$RALPH_DIR/state/${label}.json"
+  jq --arg b "$base_commit" '. + {base_commit: $b}' "$state_file" \
+    > "$state_file.tmp" && mv "$state_file.tmp" "$state_file"
+
+  # Mirror check.sh host-side repin install.
+  local _host_spec="specs/${label}.md"
+  [ -f "$RALPH_DIR/state/${label}.md" ] && _host_spec="$RALPH_DIR/state/${label}.md"
+  local _host_molecule _host_base
+  _host_molecule=$(jq -r '.molecule // empty' "$state_file" 2>/dev/null || true)
+  _host_base=$(jq -r '.base_commit // empty' "$state_file" 2>/dev/null || true)
+  local _repin_content
+  _repin_content=$(build_repin_content "$label" check \
+    "spec=$_host_spec" \
+    "molecule=$_host_molecule" \
+    "base=$_host_base")
+  install_repin_hook "$label" "$_repin_content"
+
+  local ctx
+  if ! ctx=$(simulate_compact_event "$label"); then
+    test_fail "simulate_compact_event failed after ralph check setup"
+    unset RALPH_RUNTIME_DIR
+    teardown_test_env
+    return
+  fi
+
+  if ! echo "$ctx" | grep -q "^Label: ${label}$"; then
+    test_fail "re-pin Label is stale (expected 'Label: ${label}'); got: $ctx"
+  elif ! echo "$ctx" | grep -q "^Spec: ${_host_spec}$"; then
+    test_fail "re-pin Spec is stale (expected 'Spec: ${_host_spec}'); got: $ctx"
+  elif ! echo "$ctx" | grep -q "^Molecule: ${epic_id}$"; then
+    test_fail "re-pin Molecule is stale (expected 'Molecule: ${epic_id}'); got: $ctx"
+  elif ! echo "$ctx" | grep -q "^Base commit: ${base_commit}$"; then
+    test_fail "re-pin Base commit is stale (expected 'Base commit: ${base_commit}'); got: $ctx"
+  else
+    test_pass "re-pin names label/spec/molecule/base after ralph check"
+  fi
+
+  unset RALPH_RUNTIME_DIR
+  teardown_test_env
+}
+
 #-----------------------------------------------------------------------------
 # Main Test Runner
 #-----------------------------------------------------------------------------
@@ -12246,6 +12498,10 @@ PARALLEL_TESTS=(
   test_simulate_compact_event_returns_additional_context
   test_simulate_compact_event_refresh_per_invocation
   test_simulate_compact_event_error_paths
+  test_repin_content_after_plan
+  test_repin_content_after_todo
+  test_repin_content_after_run_once
+  test_repin_content_after_check
 )
 
 # ALL_TESTS is the combined list for --sequential mode and single-test runs.

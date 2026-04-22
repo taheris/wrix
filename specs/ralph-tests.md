@@ -519,7 +519,8 @@ two successive ralph commands, must observe updated content between them.
   [verify](../tests/ralph/run-tests.sh#test_companion_template_variable)
 - [x] `simulate_compact_event` helper exercises `SessionStart[compact]` hook and returns `additionalContext`
   [verify](../tests/ralph/run-tests.sh#test_simulate_compact_event_returns_additional_context)
-- [ ] Re-pin content is asserted after each ralph command (plan/todo/run/check) and reflects current state
+- [x] Re-pin content is asserted after each ralph command (plan/todo/run/check) and reflects current state
+  [verify](../tests/ralph/run-tests.sh#test_repin_content_after_plan)
 - [x] Refresh-per-invocation is verified — orientation updates between successive ralph commands
   [verify](../tests/ralph/run-tests.sh#test_simulate_compact_event_refresh_per_invocation)
 - [ ] Full suite runs in <90s on dev hardware
