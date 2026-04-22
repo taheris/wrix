@@ -4716,6 +4716,50 @@ test_check_exit_codes() {
   teardown_test_env
 }
 
+# Test: ralph check -t is a standalone template validator that does not invoke Claude
+test_check_templates_no_claude() {
+  CURRENT_TEST="check_templates_no_claude"
+  test_header "ralph check -t does not invoke Claude"
+
+  setup_test_env "check-templates-no-claude"
+
+  local tripwire="$TEST_DIR/claude-invocations.log"
+  rm -f "$tripwire"
+  rm -f "$TEST_DIR/bin/claude"
+  cat > "$TEST_DIR/bin/claude" << EOF
+#!/usr/bin/env bash
+echo "invoked at \$(date +%s) with args: \$*" >> "$tripwire"
+exit 0
+EOF
+  chmod +x "$TEST_DIR/bin/claude"
+
+  set +e
+  ralph-check -t >/dev/null 2>&1
+  set -e
+
+  if [ ! -s "$tripwire" ]; then
+    test_pass "ralph check -t did not invoke claude"
+  else
+    local count
+    count=$(wc -l < "$tripwire")
+    test_fail "ralph check -t invoked claude $count time(s) (tripwire: $(cat "$tripwire"))"
+  fi
+
+  set +e
+  local mutex_output
+  mutex_output=$(ralph-check -t -s dummy 2>&1)
+  local mutex_exit=$?
+  set -e
+
+  if [ "$mutex_exit" -ne 0 ] && echo "$mutex_output" | grep -q "mutually exclusive"; then
+    test_pass "ralph check -t -s errors out (mutually exclusive)"
+  else
+    test_fail "Expected -t + -s to error with 'mutually exclusive', got exit=$mutex_exit output=$mutex_output"
+  fi
+
+  teardown_test_env
+}
+
 # Test: default config template has hooks configured
 test_default_config_has_hooks() {
   CURRENT_TEST="default_config_has_hooks"
@@ -10209,6 +10253,7 @@ PARALLEL_TESTS=(
   test_check_missing_partial
   test_check_invalid_nix_syntax
   test_check_exit_codes
+  test_check_templates_no_claude
   test_default_config_has_hooks
   test_parse_annotation_link
   test_parse_spec_annotations

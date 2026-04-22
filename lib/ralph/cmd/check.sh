@@ -5,9 +5,11 @@ set -euo pipefail
 #
 # Modes:
 #   ralph check              Print usage help
-#   ralph check -t           Validate all templates (existing behavior)
+#   ralph check -t           Validate all templates (no Claude invocation)
 #   ralph check -s <label>   Post-epic review of completed work
-#   ralph check -s <label> -t  Both template validation and spec review
+#
+# -t and -s are mutually exclusive: template validation is a static check that
+# runs under `nix flake check`; the review invokes Claude.
 #
 # Exit codes:
 #   0 = success (or review passed)
@@ -59,15 +61,23 @@ while [ $# -gt 0 ]; do
 done
 
 #-----------------------------------------------------------------------------
+# Mutual exclusion: -t is a static check; -s invokes Claude
+#-----------------------------------------------------------------------------
+if [ "$DO_TEMPLATES" = "true" ] && [ "$DO_SPEC" = "true" ]; then
+  error "ralph check -t and -s are mutually exclusive (see 'ralph check --help')"
+fi
+
+#-----------------------------------------------------------------------------
 # No flags → print usage help, exit 0
 #-----------------------------------------------------------------------------
 if [ "$DO_TEMPLATES" = "false" ] && [ "$DO_SPEC" = "false" ]; then
   echo "Usage: ralph check [flags]"
   echo ""
   echo "Modes:"
-  echo "  -t, --templates         Validate all ralph templates"
+  echo "  -t, --templates         Validate all ralph templates (static, no Claude)"
   echo "  -s, --spec <label>      Post-epic review of completed work"
-  echo "  -s <label> -t           Both template validation and spec review"
+  echo ""
+  echo "-t and -s are mutually exclusive."
   echo ""
   echo "Validates all ralph templates:"
   echo "  - Partial files exist"
