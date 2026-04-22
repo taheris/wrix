@@ -72,10 +72,13 @@ show_awaiting_items() {
   now=$(date +%s)
 
   # Iterate over awaiting items
-  echo "$awaiting_json" | jq -r '.[] | [.id, .title, (.notes // ""), .updated_at] | @tsv' | while IFS=$'\t' read -r id title notes updated_at; do
-    # Extract question from notes (look for "Question: ..." format)
+  echo "$awaiting_json" | jq -r '.[] | [.id, .title, (.description // ""), (.notes // ""), .updated_at] | @tsv' | while IFS=$'\t' read -r id title description notes updated_at; do
+    # Prefer clarify note appended to description; fall back to legacy "Question: " in notes
     local question=""
-    if [ -n "$notes" ]; then
+    if [ -n "$description" ]; then
+      question=$(extract_clarify_note "$description") || true
+    fi
+    if [ -z "$question" ] && [ -n "$notes" ]; then
       question=$(echo "$notes" | grep -oP 'Question:\s*\K.*' | head -1) || true
     fi
 

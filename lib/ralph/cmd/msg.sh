@@ -106,15 +106,23 @@ get_spec_from_labels() {
 }
 
 #-----------------------------------------------------------------------------
-# Extract question text from bead notes
-# Looks for lines starting with "Question: "
+# Resolve the question text for a clarify bead.
+# Prefer the clarify note appended to the description (current convention);
+# fall back to a legacy "Question: ..." line in notes for older beads.
 #-----------------------------------------------------------------------------
-get_question_from_notes() {
-  local notes="$1"
+get_question_for_bead() {
+  local description="$1"
+  local notes="$2"
+
   local question
+  question=$(extract_clarify_note "$description")
+  if [ -n "$question" ]; then
+    echo "$question"
+    return 0
+  fi
+
   question=$(echo "$notes" | grep -oP '^Question:\s*\K.*' | tail -1 || true)
   if [ -z "$question" ]; then
-    # Fall back to the full notes if no "Question:" prefix found
     question="$notes"
   fi
   echo "$question"
@@ -165,16 +173,8 @@ fi
 # Mode: List outstanding questions
 #-----------------------------------------------------------------------------
 
-# Build bd list command args
-BD_ARGS=(list --label "ralph:clarify" --json)
-
-# Add spec filter if provided
-if [ -n "$SPEC_FILTER" ]; then
-  BD_ARGS+=(--label "spec-$SPEC_FILTER")
-fi
-
-# Query beads with ralph:clarify label
-QUESTIONS_JSON=$(bd_json "${BD_ARGS[@]}") || {
+# Query beads with ralph:clarify label (optionally filtered by spec)
+QUESTIONS_JSON=$(list_clarify_beads "$SPEC_FILTER") || {
   echo "No outstanding questions."
   exit 0
 }
@@ -196,10 +196,11 @@ echo "$QUESTIONS_JSON" | jq -c '.[]' | while IFS= read -r item; do
   local_id=$(echo "$item" | jq -r '.id // "—"')
   local_labels=$(echo "$item" | jq -c '.labels // []')
   local_notes=$(echo "$item" | jq -r '.notes // ""')
+  local_description=$(echo "$item" | jq -r '.description // ""')
 
   local_spec=$(get_spec_from_labels "$local_labels")
   local_source=$(get_source_label "$local_labels")
-  local_question=$(get_question_from_notes "$local_notes")
+  local_question=$(get_question_for_bead "$local_description" "$local_notes")
 
   # Truncate question for table display
   if [ ${#local_question} -gt 60 ]; then

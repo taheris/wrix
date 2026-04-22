@@ -1117,31 +1117,90 @@ notify_event() {
 #-----------------------------------------------------------------------------
 # ralph:clarify Label Management
 #
-# Helpers for adding/removing the ralph:clarify label on beads.
-# Used when agents need human input (RALPH_CLARIFY signal).
+# Helpers for adding/removing the ralph:clarify label on beads, listing
+# beads that carry it, and filtering queue output to skip them. Used by
+# ralph run, ralph msg, ralph status, and the reviewer agent.
 #-----------------------------------------------------------------------------
 
-# Add ralph:clarify label to a bead, optionally storing a question in notes
-# and emitting a desktop notification.
-# Usage: add_clarify_label <bead_id> [question]
+# Marker line preceding clarify notes appended to a bead's description.
+# Kept as a literal HTML comment so it renders invisibly in markdown views
+# while staying easy to locate with a grep/awk reader.
+CLARIFY_NOTE_MARKER="<!-- ralph:clarify -->"
+
+# Append a clarify note block to a bead's description.
+# Block shape:
+#     <!-- ralph:clarify -->
+#     **Clarify:** <note>
+# Usage: append_clarify_note <bead_id> <note>
+# Returns: 0 on success, non-zero on failure (with warnings)
+append_clarify_note() {
+  local bead_id="$1"
+  local note="$2"
+
+  local current_desc
+  current_desc=$(bd_json show "$bead_id" --json 2>/dev/null | jq -r '.[0].description // ""')
+
+  local new_desc
+  new_desc=$(printf '%s\n\n%s\n**Clarify:** %s' "$current_desc" "$CLARIFY_NOTE_MARKER" "$note")
+
+  bd update "$bead_id" --description "$new_desc" || {
+    warn "Failed to append clarify note to $bead_id description"
+    return 1
+  }
+
+  return 0
+}
+
+# Extract the most recent clarify note from a bead description.
+# Usage: extract_clarify_note <description>
+# Output: clarify note text (empty string if none found)
+extract_clarify_note() {
+  local desc="$1"
+  echo "$desc" | awk -v marker="$CLARIFY_NOTE_MARKER" '
+    $0 == marker { in_block = 1; next }
+    in_block && /^\*\*Clarify:\*\* / {
+      sub(/^\*\*Clarify:\*\* /, "")
+      last = $0
+      in_block = 0
+      next
+    }
+    in_block && NF == 0 { next }
+    in_block { in_block = 0 }
+    END { if (last != "") print last }
+  '
+}
+
+# Add ralph:clarify label to a bead, optionally appending a note to the
+# bead's description. Emits a desktop notification only on first
+# application (label not previously present on the bead).
+# Usage: add_clarify_label <bead_id> [note]
 # Returns: 0 on success, non-zero on failure (with warnings)
 add_clarify_label() {
   local bead_id="$1"
-  local question="${2:-}"
+  local note="${2:-}"
+
+  local bead_json
+  bead_json=$(bd_json show "$bead_id" --json 2>/dev/null) || bead_json="[]"
+
+  local had_label=0
+  if echo "$bead_json" | jq -e '.[0].labels // [] | any(. == "ralph:clarify")' >/dev/null 2>&1; then
+    had_label=1
+  fi
+
+  if [ -n "$note" ]; then
+    append_clarify_note "$bead_id" "$note" || true
+  fi
 
   bd update "$bead_id" --add-label "ralph:clarify" || {
     warn "Failed to add ralph:clarify label to $bead_id"
     return 1
   }
 
-  if [ -n "$question" ]; then
-    bd update "$bead_id" --append-notes "Question: $question" || warn "Failed to store question in notes for $bead_id"
+  if [ "$had_label" = "0" ]; then
+    local bead_title
+    bead_title=$(echo "$bead_json" | jq -r '.[0].title // empty' 2>/dev/null || true)
+    notify_event "Ralph" "Input needed for ${bead_title:-$bead_id}"
   fi
-
-  # Emit notification
-  local bead_title
-  bead_title=$(bd show "$bead_id" --json 2>/dev/null | jq -r '.[0].title // empty' 2>/dev/null || true)
-  notify_event "Ralph" "Input needed for ${bead_title:-$bead_id}"
 
   return 0
 }
@@ -1158,6 +1217,31 @@ remove_clarify_label() {
   }
 
   return 0
+}
+
+# List beads carrying the ralph:clarify label.
+# Optionally filter by spec label (adds --label spec-<label>).
+# Usage: list_clarify_beads [spec_label]
+# Output: JSON array of beads ([] on error or no results)
+list_clarify_beads() {
+  local spec_label="${1:-}"
+  local -a args=(list --label "ralph:clarify" --json)
+  if [ -n "$spec_label" ]; then
+    args+=(--label "spec-$spec_label")
+  fi
+  bd_json "${args[@]}" || echo "[]"
+}
+
+# Filter a JSON array of beads, dropping those carrying the ralph:clarify
+# label. Consumes bd list/ready --json output; preserves array shape.
+# Usage: filter_clarify_beads <json>
+# Output: filtered JSON array ([] on parse error)
+filter_clarify_beads() {
+  local json="$1"
+  echo "$json" \
+    | jq '[.[] | select((.labels // []) | map(select(. == "ralph:clarify")) | length == 0)]' \
+      2>/dev/null \
+    || echo "[]"
 }
 
 #-----------------------------------------------------------------------------

@@ -384,9 +384,10 @@ run_step() {
     bd_list_json="[]"
   }
 
-  # Filter out epics and beads with ralph:clarify label (not truly ready)
+  # Drop beads carrying ralph:clarify (waiting on human) and epics (containers)
   local bd_work_items
-  bd_work_items=$(echo "$bd_list_json" | jq '[.[] | select((.issue_type == "epic" | not) and ((.labels // []) | map(select(. == "ralph:clarify")) | length == 0))]' 2>/dev/null || echo "[]")
+  bd_work_items=$(filter_clarify_beads "$bd_list_json" \
+    | jq '[.[] | select(.issue_type != "epic")]' 2>/dev/null || echo "[]")
 
   # Note: || true prevents set -e from exiting on empty array (return code 1)
   local next_issue
@@ -580,10 +581,11 @@ get_ready_beads() {
     return 0
   }
 
-  # Filter out epics and beads with ralph:clarify label, take up to limit
-  echo "$bd_list_json" | jq -r \
-    --argjson limit "$limit" \
-    '[.[] | select((.issue_type == "epic" | not) and ((.labels // []) | map(select(. == "ralph:clarify")) | length == 0))] | .[0:$limit] | .[].id' \
+  # Drop ralph:clarify beads and epics, then take up to $limit IDs
+  filter_clarify_beads "$bd_list_json" \
+    | jq -r \
+      --argjson limit "$limit" \
+      '[.[] | select(.issue_type != "epic")] | .[0:$limit] | .[].id' \
     2>/dev/null || true
 }
 

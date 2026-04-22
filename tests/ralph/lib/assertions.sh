@@ -185,6 +185,21 @@ assert_bead_notes_contain() {
   fi
 }
 
+# Assert beads issue description contains a string
+# Usage: assert_bead_description_contains <issue_id> <pattern> [message]
+assert_bead_description_contains() {
+  local issue_id="$1"
+  local pattern="$2"
+  local msg="${3:-Issue $issue_id description should contain: $pattern}"
+  local description
+  description=$(bd show "$issue_id" --json 2>/dev/null | jq -r '.[0].description // ""' 2>/dev/null || echo "")
+  if echo "$description" | grep -qF "$pattern"; then
+    test_pass "$msg"
+  else
+    test_fail "$msg (description: ${description:0:200})"
+  fi
+}
+
 #-----------------------------------------------------------------------------
 # Molecule Test Assertions
 #-----------------------------------------------------------------------------

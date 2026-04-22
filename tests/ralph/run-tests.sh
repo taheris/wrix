@@ -1191,8 +1191,9 @@ EOF
   # Verify ralph:clarify label was added
   assert_bead_has_label "$TASK_ID" "ralph:clarify" "Issue should have ralph:clarify label after RALPH_CLARIFY"
 
-  # Verify question text was stored in notes
-  assert_bead_notes_contain "$TASK_ID" "Question:" "Issue notes should contain question text after RALPH_CLARIFY"
+  # Verify clarify note was appended to the bead's description
+  assert_bead_description_contains "$TASK_ID" "<!-- ralph:clarify -->" "Issue description should contain clarify marker after RALPH_CLARIFY"
+  assert_bead_description_contains "$TASK_ID" "**Clarify:**" "Issue description should contain Clarify block after RALPH_CLARIFY"
 
   teardown_test_env
 }
@@ -1711,6 +1712,228 @@ Removing stale Dolt LOCK file: /path/to/lock (age: 6s)
     test_pass "Extracted empty array from warning + empty array"
   else
     test_fail "Failed to extract empty array from warning + empty array"
+  fi
+
+  teardown_test_env
+}
+
+# Test: filter_clarify_beads drops ralph:clarify-tagged items
+test_filter_clarify_beads() {
+  CURRENT_TEST="filter_clarify_beads"
+  test_header "filter_clarify_beads Drops ralph:clarify Beads"
+
+  setup_test_env "filter-clarify"
+
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  local input='[
+    {"id": "a", "labels": ["spec-x"]},
+    {"id": "b", "labels": ["spec-x", "ralph:clarify"]},
+    {"id": "c", "labels": []},
+    {"id": "d", "labels": ["ralph:clarify", "profile:base"]}
+  ]'
+
+  local filtered
+  filtered=$(filter_clarify_beads "$input")
+
+  local remaining_ids
+  remaining_ids=$(echo "$filtered" | jq -r '.[].id' | sort | paste -sd ',')
+
+  if [ "$remaining_ids" = "a,c" ]; then
+    test_pass "Filter retained only beads without ralph:clarify label"
+  else
+    test_fail "Expected 'a,c', got '$remaining_ids'"
+  fi
+
+  # Missing labels field should not trip the filter (select preserves unlabeled)
+  local no_labels='[{"id": "a"}]'
+  local filtered_no_labels
+  filtered_no_labels=$(filter_clarify_beads "$no_labels")
+  if echo "$filtered_no_labels" | jq -e '.[0].id == "a"' >/dev/null; then
+    test_pass "Filter preserves beads with no labels field"
+  else
+    test_fail "Filter should preserve beads when labels key is missing"
+  fi
+
+  # Invalid JSON falls back to empty array
+  local invalid
+  invalid=$(filter_clarify_beads "not json")
+  if [ "$invalid" = "[]" ]; then
+    test_pass "Filter returns [] on invalid JSON input"
+  else
+    test_fail "Expected '[]' on invalid input, got '$invalid'"
+  fi
+
+  teardown_test_env
+}
+
+# Test: extract_clarify_note pulls the most recent clarify block from a description
+test_extract_clarify_note() {
+  CURRENT_TEST="extract_clarify_note"
+  test_header "extract_clarify_note Reads Description Marker Block"
+
+  setup_test_env "extract-clarify"
+
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  local desc1="Original task body.
+
+<!-- ralph:clarify -->
+**Clarify:** Which path should we take, A or B?"
+
+  local note1
+  note1=$(extract_clarify_note "$desc1")
+  if [ "$note1" = "Which path should we take, A or B?" ]; then
+    test_pass "Extracted clarify note from trailing block"
+  else
+    test_fail "Expected question text, got: $note1"
+  fi
+
+  # Multiple blocks — pick the last (most recent)
+  local desc2="Task.
+
+<!-- ralph:clarify -->
+**Clarify:** First question?
+
+Answer arrived.
+
+<!-- ralph:clarify -->
+**Clarify:** Second question?"
+
+  local note2
+  note2=$(extract_clarify_note "$desc2")
+  if [ "$note2" = "Second question?" ]; then
+    test_pass "extract_clarify_note returns most recent block when multiple exist"
+  else
+    test_fail "Expected second question, got: $note2"
+  fi
+
+  # No marker → empty output
+  local note3
+  note3=$(extract_clarify_note "Just a plain description")
+  if [ -z "$note3" ]; then
+    test_pass "extract_clarify_note returns empty when no marker present"
+  else
+    test_fail "Expected empty output, got: $note3"
+  fi
+
+  teardown_test_env
+}
+
+# Test: clarify label helpers operate against live beads (add appends to
+# description, label gates notifications, list returns tagged beads only)
+test_clarify_label_helpers() {
+  CURRENT_TEST="clarify_label_helpers"
+  test_header "Clarify Label Helpers Operate on Live Beads"
+
+  setup_test_env "clarify-helpers"
+  init_beads
+
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  cd "$TEST_DIR"
+
+  local task_id
+  task_id=$(bd create --title="Helper target" --type=task \
+    --description="Original description" \
+    --labels="spec-test-feature" --json 2>/dev/null | jq -r '.id')
+
+  # Capture notifications fired by notify_event via wrapix-notify shim
+  local notify_log="$TEST_DIR/notify.log"
+  local shim_dir="$TEST_DIR/shim"
+  mkdir -p "$shim_dir"
+  cat > "$shim_dir/wrapix-notify" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "$notify_log"
+EOF
+  chmod +x "$shim_dir/wrapix-notify"
+  export PATH="$shim_dir:$PATH"
+
+  # First application: should append note to description, add label, notify
+  add_clarify_label "$task_id" "Which approach should we take?"
+
+  local desc
+  desc=$(bd show "$task_id" --json 2>/dev/null | jq -r '.[0].description // ""')
+
+  if echo "$desc" | grep -qF "Original description"; then
+    test_pass "Original description preserved after add_clarify_label"
+  else
+    test_fail "Original description lost after add_clarify_label"
+  fi
+
+  if echo "$desc" | grep -qF "<!-- ralph:clarify -->"; then
+    test_pass "Description contains ralph:clarify marker"
+  else
+    test_fail "Description missing ralph:clarify marker"
+  fi
+
+  if echo "$desc" | grep -qF "**Clarify:** Which approach should we take?"; then
+    test_pass "Description contains Clarify block with note text"
+  else
+    test_fail "Description missing Clarify block (got: ${desc:0:200})"
+  fi
+
+  assert_bead_has_label "$task_id" "ralph:clarify" "Bead carries ralph:clarify after first add"
+
+  local first_notify_count
+  first_notify_count=$(wc -l < "$notify_log" 2>/dev/null || echo 0)
+  if [ "$first_notify_count" = "1" ]; then
+    test_pass "Notification emitted once on first application"
+  else
+    test_fail "Expected 1 notification on first add, got $first_notify_count"
+  fi
+
+  # Second application: label already present → no additional notification
+  add_clarify_label "$task_id" "Follow-up question"
+
+  local second_notify_count
+  second_notify_count=$(wc -l < "$notify_log" 2>/dev/null || echo 0)
+  if [ "$second_notify_count" = "1" ]; then
+    test_pass "No extra notification when label already present"
+  else
+    test_fail "Expected 1 notification total, got $second_notify_count"
+  fi
+
+  # list_clarify_beads returns the tagged bead
+  local clarify_json
+  clarify_json=$(list_clarify_beads)
+  if echo "$clarify_json" | jq -e --arg id "$task_id" '.[] | select(.id == $id)' >/dev/null 2>&1; then
+    test_pass "list_clarify_beads returns the tagged bead"
+  else
+    test_fail "list_clarify_beads did not return expected bead"
+  fi
+
+  # Filter by spec label
+  local scoped_json
+  scoped_json=$(list_clarify_beads "test-feature")
+  if echo "$scoped_json" | jq -e --arg id "$task_id" '.[] | select(.id == $id)' >/dev/null 2>&1; then
+    test_pass "list_clarify_beads with spec label returns matching bead"
+  else
+    test_fail "list_clarify_beads with spec label should have returned bead"
+  fi
+
+  # remove_clarify_label strips the label
+  remove_clarify_label "$task_id"
+  local has_label_after
+  has_label_after=$(bd show "$task_id" --json 2>/dev/null \
+    | jq -r '.[0].labels // [] | map(select(. == "ralph:clarify")) | length')
+  if [ "$has_label_after" = "0" ]; then
+    test_pass "remove_clarify_label strips the label"
+  else
+    test_fail "Label still present after remove_clarify_label"
+  fi
+
+  # Re-adding after removal is a fresh first application — should notify again
+  add_clarify_label "$task_id" "Re-raised question"
+  local third_notify_count
+  third_notify_count=$(wc -l < "$notify_log" 2>/dev/null || echo 0)
+  if [ "$third_notify_count" = "2" ]; then
+    test_pass "Notification fires again when label is re-added after removal"
+  else
+    test_fail "Expected 2 notifications total after re-add, got $third_notify_count"
   fi
 
   teardown_test_env
@@ -10187,6 +10410,7 @@ SEQUENTIAL_TESTS=(
   test_run_handles_blocked_signal
   test_run_handles_clarify_signal
   test_run_skips_awaiting_input
+  test_clarify_label_helpers
   test_run_respects_dependencies
   test_run_loop_processes_all
   test_parallel_agent_simulation
@@ -10224,6 +10448,8 @@ PARALLEL_TESTS=(
   test_status_spec_equals_form
   test_status_spec_missing_state
   test_malformed_bd_output_parsing
+  test_filter_clarify_beads
+  test_extract_clarify_note
   test_plan_flag_validation
   test_plan_per_label_state_files
   test_plan_update_direct_edit
