@@ -24,24 +24,50 @@ Different projects require different toolchains. Users need:
 
 ### Non-Functional
 
-1. **Minimal Base** - Base profile includes only essential tools
+1. **Curated Toolkit** - Base profile ships a ready-to-work agent container (shell, search, VCS, issue tracking, formatters) — the shared floor for city agents and direct `mkSandbox` consumers alike, not a minimal OS layer. Language profiles extend it.
 2. **Reproducible** - Same profile produces same environment via Nix
+
+## Profile Attrset Schema
+
+A profile is a Nix attrset produced by the internal `mkProfile` helper in `lib/sandbox/profiles.nix`. Fields:
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `name` | string | Profile identifier (e.g. `"base"`, `"rust"`) |
+| `packages` | list of derivations | Packages baked into the container image |
+| `env` | attrset of strings | Environment variables set inside the container |
+| `mounts` | list of mount specs | Host → container bind mounts; each `{ source, dest, mode, optional }` |
+| `networkAllowlist` | list of strings | Domains permitted when `WRAPIX_NETWORK=limit` (merged with base allowlist) |
+| `enabledPlugins` | attrset | Claude Code plugins merged into `~/.claude/settings.json` (e.g. `"rust-analyzer-lsp@claude-plugins-official" = true`) |
+| `hostShellHook` | shell snippet | Optional snippet that downstream devShell / ralph / city shellHooks splice in to align host-side env with container-side mounts (rust uses this to pin `RUSTC_WRAPPER` and default `SCCACHE_DIR`) |
+| `writableDirs` | list of strings | Linux-only: paths where the launcher stacks a tmpfs with `U=true` so the dir is wrapix-owned — needed when a ro bind mount would otherwise force the parent to be root-owned |
+
+`deriveProfile` merges `packages`, `mounts`, `env`, and `networkAllowlist` (packages/mounts/allowlist concatenated; env right-biased). Other fields (`name`, `enabledPlugins`, `hostShellHook`, `writableDirs`) pass through from the extensions attrset if set, otherwise inherit from the base — they are not deep-merged. Callers extending a profile with extra plugins or host hooks must compose those values themselves.
 
 ## Built-in Profiles
 
 ### Base Profile
 
-Core tools for any development environment:
+Curated developer toolkit present in every profile. Grouped by purpose:
 
-| Package | Purpose |
-|---------|---------|
-| git | Version control |
-| ripgrep | Fast text search |
-| fd | Fast file finder |
-| jq | JSON processing |
-| vim | Text editor |
-| openssh | SSH client |
-| nix | Package manager |
+| Category | Packages |
+|----------|----------|
+| Shell + POSIX core | bash, coreutils, diffutils, findutils, gawk, gnugrep, gnused, gnutar, gzip, less, patch, rsync, tree, unzip, util-linux, whichQuiet, zip |
+| File + text | fd, file, ripgrep, vim |
+| Network + process | curl, iproute2, iptables, iputils, lsof, netcat, openssh, procps |
+| Data | jq, yq |
+| Package manager | nix |
+| VCS + PRs | git, gh |
+| Issue tracker | beads, beads-push, dolt, gc |
+| Agent tooling | man, prek, shellcheck, tmux, treefmt (wrapped with project formatters) |
+
+`whichQuiet` is a local `pkgs.which` wrapper that suppresses `"no X in (PATH)"` noise.
+
+`treefmt` is the project-wide formatter wrapper (nixfmt, rustfmt, shellcheck, deadnix, statix) built via `treefmt-nix.lib.mkWrapper`. Placing it in `basePackages` ensures every consumer of `profiles.base` — direct `mkSandbox` calls **and** `mkCity`-built city containers — gets the same formatters. (The code previously added treefmt only to the flake's `packages.sandbox*` outputs, so city containers missed it. Implementation plumbing for making the wrapper available to `profiles.nix` is a separate decision.)
+
+**Base env:** none.
+**Base mounts:** none. Host `~/.claude` is intentionally NOT mounted — containers use `$PROJECT_DIR/.claude` so user-level settings stay separate from project-level settings.
+**Base network allowlist:** `api.anthropic.com`, `github.com`, `ssh.github.com`, `cache.nixos.org` — always permitted regardless of profile, used only when `WRAPIX_NETWORK=limit`.
 
 ### Rust Profile
 
@@ -62,7 +88,8 @@ rustfmt + rust-docs.
 | fenix rust-analyzer | LSP server (pinned independently of the channel) |
 | sccache | Shared compile cache across host + sandbox |
 | gcc | C compiler for linking |
-| openssl | TLS library |
+| openssl | TLS library (runtime) |
+| openssl.dev | TLS headers (separate Nix output) |
 | pkg-config | Library discovery |
 | postgresql.lib | Database client libs |
 
@@ -78,6 +105,7 @@ Environment:
 - `SCCACHE_DIR=/home/wrapix/.cache/sccache` — stable in-container cache path, mounted from host
 - `SCCACHE_CACHE_SIZE=50G` — ceiling above sccache's 10 GiB default; the default LRU-evicts mid-build for workspace-sized Rust projects. Changing this requires `sccache --stop-server` before the server picks up the new value.
 - `CARGO_INCREMENTAL=0` — sccache refuses to cache any `rustc` invocation with `-C incremental=...`, so incremental compilation and sccache are redundant; disabling incremental lets every Rust compile flow through the cache.
+- `CARGO_TARGET_DIR` — intentionally **unset**; cargo's per-workspace default (`<workspace>/target`) applies. The judge asserts this invariant because pinning `CARGO_TARGET_DIR` to a shared path across workspaces defeats cargo's freshness tracking and churns builds.
 
 Mounts (host source → literal container dest; literal dests avoid the `~`-expands-on-host-launcher gotcha):
 
@@ -121,13 +149,26 @@ Extends base with Python toolchain:
 | python3 | Python interpreter |
 | uv | Fast package installer |
 | ruff | Linter and formatter |
+| ty | Type checker |
+
+Environment:
+
+- `UV_CACHE_DIR=/workspace/.uv-cache` — uv cache location inside the container
+
+Mounts:
+
+- `~/.cache/uv` → `~/.cache/uv` (ro, optional) — pre-warm uv cache from host
+
+Network allowlist: `pypi.org`, `files.pythonhosted.org`
 
 ## Affected Files
 
 | File | Role |
 |------|------|
-| `flake.nix` | Add `fenix` flake input, thread it through to `lib/sandbox/profiles.nix` |
-| `lib/sandbox/profiles.nix` | Build rust toolchain via `fenixPkgs.stable.minimalToolchain` + `combine [ rust-src rust-analyzer ]`; wire `sccache`, `RUSTC_WRAPPER`, `SCCACHE_DIR`, `SCCACHE_CACHE_SIZE`, `CARGO_INCREMENTAL` |
+| `flake.nix` | Declares `fenix` and `treefmt-nix` flake inputs; threads `fenix` and the project treefmt wrapper to `lib/sandbox/profiles.nix` via `lib/sandbox/default.nix` |
+| `lib/default.nix` | Defines `deriveProfile` (merges `packages` / `mounts` / `env` / `networkAllowlist`; passes through other profile fields) |
+| `lib/sandbox/default.nix` | Imports `profiles.nix` with Linux `pkgs`, host `pkgs`, `fenix`, and the treefmt wrapper; defines internal `extendProfile` helper |
+| `lib/sandbox/profiles.nix` | Defines `mkProfile`, `basePackages`, built-in `base`/`rust`/`python` profiles; builds rust toolchain via `fenixPkgs.stable.defaultToolchain` combined with `rust-src` and `rust-analyzer`; wires sccache and sccache env vars, `CARGO_INCREMENTAL=0` |
 | `lib/sandbox/linux/entrypoint.sh` | Contains no rustup bootstrap logic (toolchain is baked in at image build time) |
 | `lib/sandbox/darwin/entrypoint.sh` | Contains no rustup bootstrap logic |
 
