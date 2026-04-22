@@ -2,7 +2,7 @@
 { pkgs }:
 
 let
-  inherit (builtins) readFile;
+  inherit (builtins) concatStringsSep readFile;
   inherit (paths) mkMountSpecs;
   inherit (pkgs) writeShellApplication writeText;
   inherit (shellLib)
@@ -327,6 +327,11 @@ in
           --userns=keep-id \
           --passwd-entry "wrapix:*:$(id -u):$(id -g)::/home/wrapix:/bin/bash" \
           --mount type=tmpfs,destination=/home/wrapix,U=true \
+          ${
+            concatStringsSep " " (
+              map (d: "--mount type=tmpfs,destination=${d},U=true") (profile.writableDirs or [ ])
+            )
+          } \
           $VOLUME_ARGS \
           $BEADS_ARGS \
           $DEPLOY_KEY_ARGS \

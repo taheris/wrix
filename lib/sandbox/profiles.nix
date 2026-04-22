@@ -82,9 +82,15 @@ let
       networkAllowlist ? [ ],
       enabledPlugins ? { },
       hostShellHook ? "",
+      writableDirs ? [ ],
     }:
     {
-      inherit name enabledPlugins hostShellHook;
+      inherit
+        name
+        enabledPlugins
+        hostShellHook
+        writableDirs
+        ;
       packages = basePackages ++ packages;
       env = baseEnv // env;
       mounts = baseMounts ++ mounts;
@@ -95,7 +101,7 @@ let
     if fenix == null then
       throw "lib/sandbox/profiles.nix: profiles.rust requires the fenix input; pass `fenix` to this file"
     else
-      fenix.packages.${pkgs.system};
+      fenix.packages.${pkgs.stdenv.hostPlatform.system};
 
   mkRustToolchain =
     base:
@@ -130,37 +136,34 @@ let
       };
 
       env = {
-        CARGO_HOME = "/workspace/.cargo";
-        RUST_SRC_PATH = "${toolchain}/lib/rustlib/src/rust/library";
+        CARGO_BUILD_RUSTC_WRAPPER = "${pkgs.sccache}/bin/sccache";
+        CARGO_HOME = "/home/wrapix/.cargo";
+        CARGO_INCREMENTAL = "0";
         LIBRARY_PATH = "${pkgs.postgresql.lib}/lib";
         OPENSSL_INCLUDE_DIR = "${pkgs.openssl.dev}/include";
         OPENSSL_LIB_DIR = "${pkgs.openssl.out}/lib";
-
         RUSTC_WRAPPER = "${pkgs.sccache}/bin/sccache";
-        CARGO_BUILD_RUSTC_WRAPPER = "${pkgs.sccache}/bin/sccache";
-        SCCACHE_DIR = "/workspace/.cache/sccache";
-
-        # Isolate sandbox incremental artifacts from the host's target/;
-        # different rustc store paths write incompatible incremental data.
-        CARGO_TARGET_DIR = "/workspace/.target-sandbox";
+        RUST_SRC_PATH = "${toolchain}/lib/rustlib/src/rust/library";
+        SCCACHE_CACHE_SIZE = "50G";
+        SCCACHE_DIR = "/home/wrapix/.cache/sccache";
       };
 
       mounts = [
         {
           source = "~/.cargo/registry";
-          dest = "~/.cargo/registry";
+          dest = "/home/wrapix/.cargo/registry";
           mode = "ro";
           optional = true;
         }
         {
           source = "~/.cargo/git";
-          dest = "~/.cargo/git";
+          dest = "/home/wrapix/.cargo/git";
           mode = "ro";
           optional = true;
         }
         {
           source = "~/.cache/sccache";
-          dest = "/workspace/.cache/sccache";
+          dest = "/home/wrapix/.cache/sccache";
           mode = "rw";
           optional = true;
         }
@@ -172,15 +175,25 @@ let
         "index.crates.io"
       ];
 
+      # Linux-only: stack a tmpfs at CARGO_HOME so the dir is wrapix-owned.
+      # Without this, podman creates /home/wrapix/.cargo as root to serve as
+      # the mountpoint parent for the ro registry/git binds, and cargo (as
+      # wrapix) can't write its .global-cache/credentials there.
+      # Darwin is unaffected: the entrypoint mkdirs these paths itself as
+      # namespaced-root-mapped-to-HOST_UID, so they're already writable.
+      writableDirs = [ "/home/wrapix/.cargo" ];
+
       # Align host with the sandbox so cross-boundary cache hits work.
       # RUSTC_WRAPPER: always pin to wrapix's sccache so host and sandbox
       # run the same version — avoids cache-format drift if the user's
       # ambient sccache is a different build.
-      # SCCACHE_DIR: respect an existing host value; default matches the
-      # sandbox mount path (and sccache's Linux default).
+      # SCCACHE_DIR/SCCACHE_CACHE_SIZE/CARGO_INCREMENTAL: default if unset;
+      # downstream can override in its own shellHook.
       hostShellHook = ''
         export RUSTC_WRAPPER="${hostPkgs.sccache}/bin/sccache"
         export SCCACHE_DIR="''${SCCACHE_DIR:-$HOME/.cache/sccache}"
+        export SCCACHE_CACHE_SIZE="''${SCCACHE_CACHE_SIZE:-50G}"
+        export CARGO_INCREMENTAL="''${CARGO_INCREMENTAL:-0}"
       '';
     };
 

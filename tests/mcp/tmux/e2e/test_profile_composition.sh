@@ -165,7 +165,7 @@ check_command_output "rustc --version" "rustc" "rustc is functional"
 check_command "cargo" "cargo (Rust package manager)"
 
 # Verify CARGO_HOME and RUST_SRC_PATH environment variables are set
-check_command_output "echo \$CARGO_HOME" "/workspace/.cargo" "CARGO_HOME is set correctly"
+check_command_output "echo \$CARGO_HOME" "/home/wrapix/.cargo" "CARGO_HOME is set correctly"
 check_command_output "echo \$RUST_SRC_PATH" "rustlib/src/rust/library" "RUST_SRC_PATH is set correctly"
 
 echo ""

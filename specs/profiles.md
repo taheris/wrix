@@ -68,23 +68,36 @@ rustfmt + rust-docs.
 
 Environment:
 
-- `CARGO_HOME=/workspace/.cargo` — persists registry cache on workspace volume
+- `CARGO_HOME=/home/wrapix/.cargo` — aligns with the registry/git mount dests below so cargo actually consults the host pre-warm. Non-mounted CARGO_HOME state (credentials.toml, config.toml, `cargo install` bins) lives on tmpfs on Linux and is ephemeral across container runs — intentional for an agent-style environment.
 - `RUST_SRC_PATH=${toolchain}/lib/rustlib/src/rust/library` — rust-analyzer standard library resolution
 - `LIBRARY_PATH=${pkgs.postgresql.lib}/lib` — PostgreSQL library discovery at link time
 - `OPENSSL_INCLUDE_DIR=${pkgs.openssl.dev}/include` — OpenSSL headers
 - `OPENSSL_LIB_DIR=${pkgs.openssl.out}/lib` — OpenSSL libraries
 - `RUSTC_WRAPPER=${pkgs.sccache}/bin/sccache` — route compiler invocations through sccache
 - `CARGO_BUILD_RUSTC_WRAPPER` — same, picked up by cargo directly
-- `SCCACHE_DIR=/workspace/.cache/sccache` — stable in-container cache path, mounted from host
-- `CARGO_TARGET_DIR=/workspace/.target-sandbox` — isolate sandbox incremental artifacts from the host's `target/`
+- `SCCACHE_DIR=/home/wrapix/.cache/sccache` — stable in-container cache path, mounted from host
+- `SCCACHE_CACHE_SIZE=50G` — ceiling above sccache's 10 GiB default; the default LRU-evicts mid-build for workspace-sized Rust projects. Changing this requires `sccache --stop-server` before the server picks up the new value.
+- `CARGO_INCREMENTAL=0` — sccache refuses to cache any `rustc` invocation with `-C incremental=...`, so incremental compilation and sccache are redundant; disabling incremental lets every Rust compile flow through the cache.
 
-Mounts:
+Mounts (host source → literal container dest; literal dests avoid the `~`-expands-on-host-launcher gotcha):
 
-- `~/.cargo/registry` (ro, optional) — pre-warm crate cache from host
-- `~/.cargo/git` (ro, optional) — pre-warm git dependency cache from host
-- `~/.cache/sccache` (rw, optional) — shared sccache store between host and sandbox
+- `~/.cargo/registry` → `/home/wrapix/.cargo/registry` (ro, optional) — pre-warm crate cache from host
+- `~/.cargo/git` → `/home/wrapix/.cargo/git` (ro, optional) — pre-warm git dependency cache from host
+- `~/.cache/sccache` → `/home/wrapix/.cache/sccache` (rw, optional) — shared sccache store between host and sandbox
+
+Writable dirs (`writableDirs = [ "/home/wrapix/.cargo" ]`): on Linux, the launcher stacks a tmpfs at `/home/wrapix/.cargo` with `U=true` so the dir is wrapix-owned. Without this, podman creates the mountpoint parent as root (to host the ro registry/git binds on top) and cargo can't write `.global-cache`/`credentials.toml` there. Darwin doesn't need the fix — its entrypoint creates these dirs via `mkdir -p` as namespaced-root-mapped-to-`HOST_UID`, already wrapix-writable.
 
 Network allowlist: `crates.io`, `static.crates.io`, `index.crates.io`
+
+> **Darwin caveat — rw sccache is session-scoped, not cross-boundary.** Apple's
+> `container` CLI only exposes host paths via VirtioFS staging; the darwin
+> entrypoint then `cp -r`s staged content into the profile's destination. That
+> means writes to `/home/wrapix/.cache/sccache` inside a Darwin sandbox stay in
+> the container's writable layer and are discarded at exit — nothing propagates
+> back to the host's `~/.cache/sccache`. Cross-boundary sccache caching is
+> Linux-only today. On Darwin the mount still delivers a cold pre-warm at
+> container start; repeated compiles within a single container session do hit
+> the cache, but subsequent sessions start cold.
 
 > **Why not rustup?** Rustup downloads pre-built binaries dynamically linked against
 > a specific glibc in the nix store. When nixpkgs is updated and the container is
@@ -114,7 +127,7 @@ Extends base with Python toolchain:
 | File | Role |
 |------|------|
 | `flake.nix` | Add `fenix` flake input, thread it through to `lib/sandbox/profiles.nix` |
-| `lib/sandbox/profiles.nix` | Build rust toolchain via `fenixPkgs.stable.minimalToolchain` + `combine [ rust-src rust-analyzer ]`; wire `sccache`, `RUSTC_WRAPPER`, `SCCACHE_DIR`, `CARGO_TARGET_DIR` |
+| `lib/sandbox/profiles.nix` | Build rust toolchain via `fenixPkgs.stable.minimalToolchain` + `combine [ rust-src rust-analyzer ]`; wire `sccache`, `RUSTC_WRAPPER`, `SCCACHE_DIR`, `SCCACHE_CACHE_SIZE`, `CARGO_INCREMENTAL` |
 | `lib/sandbox/linux/entrypoint.sh` | Contains no rustup bootstrap logic (toolchain is baked in at image build time) |
 | `lib/sandbox/darwin/entrypoint.sh` | Contains no rustup bootstrap logic |
 
@@ -208,7 +221,6 @@ Without this, host and sandbox will each lock fenix to their own revision and
 produce different `/nix/store/.../bin/rustc` paths — sccache entries will not
 cross the boundary.
 
-Downstream projects should gitignore both of the sandbox-only cache paths:
-
-- `/workspace/.cache/sccache` — mounted from the host's `~/.cache/sccache` (rw, optional)
-- `/workspace/.target-sandbox` — sandbox `CARGO_TARGET_DIR`, kept out of the host's `target/`
+No downstream gitignore is required for the sandbox cache paths: mount dests
+live under `/home/wrapix/` inside the container, not under `/workspace/`, so
+nothing is materialized in the project tree.
