@@ -61,11 +61,11 @@ if ! command -v podman &>/dev/null; then
     exit 1
 fi
 
-log_info "Building wrapix-mcp image (mcpRuntime=true)..."
+log_info "Building sandbox-mcp image (mcpRuntime=true)..."
 
 # Build the mcp image: all MCP server packages included, runtime selection via env vars
-IMAGE_PATH=$(nix build "${REPO_ROOT}#wrapix-mcp" --print-out-paths 2>/dev/null) || {
-    log_error "Failed to build wrapix-mcp image"
+IMAGE_PATH=$(nix build "${REPO_ROOT}#sandbox-mcp" --print-out-paths 2>/dev/null) || {
+    log_error "Failed to build sandbox-mcp image"
     log_warn "Check that the mcp parameter is properly configured in lib/sandbox/default.nix"
     exit 1
 }

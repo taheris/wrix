@@ -10,14 +10,14 @@ Provides filesystem and process isolation — code inside the container cannot a
 ## Quick Start
 
 ```bash
-nix run github:taheris/wrapix                # base profile
-nix run github:taheris/wrapix#wrapix-rust    # rust profile
-nix run github:taheris/wrapix#wrapix-python  # python profile
+nix run github:taheris/wrapix                 # base profile
+nix run github:taheris/wrapix#sandbox-rust    # rust profile
+nix run github:taheris/wrapix#sandbox-python  # python profile
 ```
 
 ## Flake Integration
 
-### Sandbox only
+### mkSandbox
 
 ```nix
 {
@@ -43,28 +43,7 @@ nix run github:taheris/wrapix#wrapix-python  # python profile
 }
 ```
 
-### With Gas City (multi-agent orchestration)
-
-```nix
-perSystem = { system, ... }:
-  let
-    wrapix = inputs.wrapix.legacyPackages.${system}.lib;
-    city = wrapix.mkCity {
-      profile = wrapix.profiles.rust;
-      services.api.package = myApp;
-      secrets.claude = "ANTHROPIC_API_KEY";
-    };
-  in {
-    packages.default = city.sandbox.package;  # ad-hoc container
-    apps.city = city.app;                      # gc start --foreground
-    apps.ralph = city.ralph.app;               # ralph in a sandbox
-    devShells.default = city.devShell;         # gc, bd, ralph — all on PATH
-  };
-```
-
-`mkCity` creates one shared sandbox and threads it through everything. The devShell gives you `gc`, `bd`, `ralph`, and `wrapix` — all ready to use. Use `city.mkDevShell { packages = [ ... ]; }` to add your own packages.
-
-## mkSandbox Options
+#### mkSandbox Options
 
 | Option | Type | Description |
 |--------|------|-------------|
@@ -77,22 +56,6 @@ perSystem = { system, ... }:
 | `mcpRuntime` | bool | Include all MCP servers, select at runtime via `WRAPIX_MCP` |
 
 See [specs/sandbox.md](specs/sandbox.md) for full details.
-
-## mkCity Options
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `profile` | profile or string | `"base"` | Shared sandbox profile |
-| `sandbox` | sandbox attrset | — | Use existing sandbox instead of profile |
-| `services` | attrset | `{ }` | Service containers to monitor |
-| `secrets` | attrset of strings | `{ }` | Secrets (`"/path"` = file, else = env var) |
-| `name` | string | `"dev"` | City name (used for container/network naming) |
-| `workers` | int | `1` | Max concurrent workers |
-| `cooldown` | string | `"0"` | Delay between task dispatches |
-| `scout` | `{ interval, maxBeads }` | `5m`, `10` | Scout polling config |
-| `resources` | attrset | `{ }` | Per-role resource limits |
-
-See [specs/gas-city.md](specs/gas-city.md) for the full specification.
 
 ## Profiles
 

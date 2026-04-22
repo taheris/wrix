@@ -194,30 +194,30 @@
                 mkSandboxPkg =
                   cfg: (wrapix.mkSandbox (cfg // { packages = (cfg.packages or [ ]) ++ sandboxPackages; })).package;
                 sandboxPkgs = mapAttrs (_: mkSandboxPkg) {
-                  wrapix = {
+                  sandbox = {
                     profile = profiles.base;
                   };
-                  wrapix-rust = {
+                  sandbox-rust = {
                     profile = profiles.rust;
                   };
-                  wrapix-python = {
+                  sandbox-python = {
                     profile = profiles.python;
                   };
-                  wrapix-debug = {
+                  sandbox-mcp = {
+                    profile = profiles.base;
+                    mcpRuntime = true;
+                  };
+                  sandbox-rust-mcp = {
+                    profile = profiles.rust;
+                    mcpRuntime = true;
+                  };
+                  sandbox-python-mcp = {
+                    profile = profiles.python;
+                    mcpRuntime = true;
+                  };
+                  debug = {
                     profile = profiles.base;
                     packages = [ linuxPkgs.podman ];
-                  };
-                  wrapix-mcp = {
-                    profile = profiles.base;
-                    mcpRuntime = true;
-                  };
-                  wrapix-rust-mcp = {
-                    profile = profiles.rust;
-                    mcpRuntime = true;
-                  };
-                  wrapix-python-mcp = {
-                    profile = profiles.python;
-                    mcpRuntime = true;
                   };
                 };
 
@@ -225,7 +225,7 @@
               sandboxPkgs
               // {
                 inherit (pkgs) beads gc;
-                default = sandboxPkgs.wrapix;
+                default = sandboxPkgs.sandbox;
                 city-config = city.configDir;
                 tmux-mcp = import ./lib/mcp/tmux/mcp-server.nix { inherit pkgs; };
                 wrapix-builder = import ./lib/builder { inherit pkgs linuxPkgs; };

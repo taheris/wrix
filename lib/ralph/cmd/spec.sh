@@ -112,7 +112,7 @@ run_verify_test() {
 # Helper: run a [verify:wrapix] test inside a wrapix container
 #-----------------------------------------------------------------------------
 
-# Cached wrapix-mcp build state: "" = untried, "ok" = built, "skip" = unavailable
+# Cached sandbox-mcp build state: "" = untried, "ok" = built, "skip" = unavailable
 _WRAPIX_BUILD_STATE=""
 _WRAPIX_BUILD_MSG=""
 
@@ -122,7 +122,7 @@ ensure_wrapix_build() {
   fi
 
   local build_output build_exit
-  build_output=$(nix build .#wrapix-mcp --no-link 2>&1) && build_exit=0 || build_exit=$?
+  build_output=$(nix build .#sandbox-mcp --no-link 2>&1) && build_exit=0 || build_exit=$?
 
   if [ "$build_exit" -eq 0 ]; then
     _WRAPIX_BUILD_STATE="ok"
@@ -145,12 +145,12 @@ run_verify_wrapix_test() {
     return
   fi
 
-  # Build the wrapix-mcp sandbox (cached across invocations)
+  # Build the sandbox-mcp sandbox (cached across invocations)
   ensure_wrapix_build
 
   if [ "$_WRAPIX_BUILD_STATE" = "skip" ]; then
     echo "  [FAIL] $criterion"
-    echo "         Failed to build wrapix-mcp container"
+    echo "         Failed to build sandbox-mcp container"
     if [ -n "$_WRAPIX_BUILD_MSG" ]; then
       echo "$_WRAPIX_BUILD_MSG" | while IFS= read -r line; do
         echo "         | $line"
@@ -168,9 +168,9 @@ run_verify_wrapix_test() {
   project_dir="$(pwd)"
 
   if [ -n "$function_name" ]; then
-    test_output=$(nix run .#wrapix-mcp -- "$project_dir" bash -c "source $container_file_path && $function_name" 2>&1) && exit_code=0 || exit_code=$?
+    test_output=$(nix run .#sandbox-mcp -- "$project_dir" bash -c "source $container_file_path && $function_name" 2>&1) && exit_code=0 || exit_code=$?
   else
-    test_output=$(nix run .#wrapix-mcp -- "$project_dir" "$container_file_path" 2>&1) && exit_code=0 || exit_code=$?
+    test_output=$(nix run .#sandbox-mcp -- "$project_dir" "$container_file_path" 2>&1) && exit_code=0 || exit_code=$?
   fi
 
   if [ "$exit_code" -eq 0 ]; then

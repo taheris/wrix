@@ -4,7 +4,7 @@
 # This test verifies that the WRAPIX_MCP_TMUX_AUDIT env var is properly
 # merged into Claude settings at container startup:
 #
-# 1. Build wrapix-mcp sandbox (mcpRuntime=true, all servers included)
+# 1. Build sandbox-mcp sandbox (mcpRuntime=true, all servers included)
 # 2. Run with WRAPIX_MCP=tmux and WRAPIX_MCP_TMUX_AUDIT set
 # 3. Verify TMUX_DEBUG_AUDIT appears in the MCP server configuration
 #
@@ -58,11 +58,11 @@ if ! command -v podman &>/dev/null; then
     exit 1
 fi
 
-log_info "Building wrapix-mcp image (mcpRuntime=true)..."
+log_info "Building sandbox-mcp image (mcpRuntime=true)..."
 
 # Build the mcp image: all MCP server packages included, runtime selection via env vars
-IMAGE_PATH=$(nix build "${REPO_ROOT}#wrapix-mcp" --print-out-paths 2>/dev/null) || {
-    log_error "Failed to build wrapix-mcp image"
+IMAGE_PATH=$(nix build "${REPO_ROOT}#sandbox-mcp" --print-out-paths 2>/dev/null) || {
+    log_error "Failed to build sandbox-mcp image"
     log_warn "Check that mcpRuntime is properly configured in lib/sandbox/default.nix"
     exit 1
 }

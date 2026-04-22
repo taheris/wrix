@@ -67,12 +67,12 @@ if ! command -v podman &>/dev/null; then
     exit 1
 fi
 
-log_info "Building wrapix-mcp image (mcpRuntime=true)..."
+log_info "Building sandbox-mcp image (mcpRuntime=true)..."
 
 # Build the mcp image: all MCP server packages included, runtime selection via env vars
 IMAGE_FILE=$(mktemp --suffix=.tar)
-if ! nix build "${REPO_ROOT}#wrapix-mcp" --out-link "${IMAGE_FILE%.tar}" 2>&1; then
-    log_error "Failed to build wrapix-mcp image"
+if ! nix build "${REPO_ROOT}#sandbox-mcp" --out-link "${IMAGE_FILE%.tar}" 2>&1; then
+    log_error "Failed to build sandbox-mcp image"
     log_warn "Check that the mcp parameter is properly configured in lib/sandbox/default.nix"
     exit 1
 fi
