@@ -29,9 +29,9 @@ Ralph provides a structured workflow that guides AI through spec creation, issue
 8. **Template Tuning** — `ralph tune` edits templates (interactive or integration mode)
 9. **Template Sync** — `ralph sync` updates local templates (use `--diff` to preview changes)
 10. **Concurrent Workflows** — Per-label state files (`state/<label>.json`) replace singleton `state/current.json`, enabling multiple ralph workflows simultaneously
-11. **Spec Switching** — `ralph use <name>` sets the active workflow; `--spec <name>` flag on `todo`, `run`, `status`, `logs` targets a specific workflow
+11. **Spec Switching** — `ralph use <name>` sets the active workflow; `--spec <name>` flag on `todo`, `run`, `status`, `logs`, `check`, `msg` targets a specific workflow
 12. **Companion Content** — Specs can declare companion directories whose `manifest.md` is injected into templates, giving the LLM awareness of related content it can read on demand
-13. **Git-Based Spec Diffing** — `ralph todo` uses `base_commit` in state JSON and `git diff` to detect spec changes, replacing `state/<label>.md` intermediary
+13. **Git-Based Spec Diffing** — `ralph todo` uses `base_commit` in state JSON and `git diff` to detect spec changes, scoped by the anchor's cursor
 14. **Container Bead Sync** — Container-executed commands (`plan`, `todo`, `run --once`, `check`) run `bd dolt push` inside the container after `RALPH_COMPLETE` before exit, then `bd dolt pull` on the host after container exits
 15. **Cross-Machine State Recovery** — `ralph todo` discovers molecule IDs from the pinned-context file (`docs/README.md` by default) when no local state file exists, reconstructing `state/<label>.json` to avoid duplicate molecule creation
 16. **Post-Sync Verification (informational)** — After `bd dolt pull` on the host, `ralph todo` checks whether task count increased and emits a warning with recovery hints if not; `base_commit` always advances on `RALPH_COMPLETE`
@@ -39,6 +39,13 @@ Ralph provides a structured workflow that guides AI through spec creation, issue
 18. **Invariant-Clash Awareness** — `ralph plan -u` (during spec updates) and `ralph check` (post-loop review) detect when a proposed change clashes with an existing invariant and surface the clash for a human decision instead of silently choosing a path. The detection is LLM-judgment biased toward asking. The reviewer proposes *contextual* options tailored to the specific clash (not a fixed menu), guided by the three-paths principle: preserve the invariant, keep the change on top of the invariant inelegantly, or change the invariant
 19. **Post-Loop Review & Push Gate** — `ralph run` auto-invokes `ralph check` when the molecule reaches completion. `ralph run` commits work per-bead during the loop but does NOT push; push is owned by `ralph check` and only happens when check emits `RALPH_COMPLETE` with no new beads created. If check creates fix-up beads without a clarify, it auto-invokes `ralph run` to work them, then re-runs itself. Iteration continues until clean RALPH_COMPLETE (→ push), `ralph:clarify` (→ stop, wait for user), or the `loop.max-iterations` cap is reached (→ escalate via `ralph:clarify`)
 20. **Planning Interview Modes** — During `ralph plan -n` / `plan -u`, the user can request two structured sub-modes by saying phrases like "one by one" (walk open design questions individually with suggested defaults) or "polish the spec" (end-of-session read-through for readability, consistency, and ambiguities). Phrase matching is loose — variations like "let's go through one by one" or "polish this spec" also trigger the respective mode
+21. **Anchor-Driven Multi-Spec Planning** — a plan session named by `-u <anchor>` may touch sibling specs in `specs/`:
+    - **Anchor** — `ralph plan -u <anchor>` opens the session; session state lives in `state/<label>.json` where `<label>` is the anchor
+    - **Siblings** — the LLM may read and edit any spec in `specs/` when a change cross-cuts; no pre-declaration, the set emerges from the interview
+    - **Fan-out** — `ralph todo` widens its diff to `git diff <anchor.base_commit> HEAD -- specs/` and computes a per-spec diff using each touched spec's own `base_commit`
+    - **Cursor advancement** — on `RALPH_COMPLETE`, every spec that received at least one task has its `base_commit` advanced; sibling state files are created on demand
+    - **`--since <commit>`** — overrides only the anchor's cursor; siblings retain their own
+22. **Project Bootstrap** — `ralph init` scaffolds a fresh wrapix project from zero (`flake.nix`, `.envrc`, `.gitignore`, `.pre-commit-config.yaml`, `bd init`, `docs/`, `AGENTS.md`, `CLAUDE.md` symlink, `.wrapix/ralph/template/`). Invocable as a flake app (`nix run github:taheris/wrapix#init`) for use before ralph is on PATH. All artifacts are skip-if-exists; no git operations. Shares `scaffold_docs`/`scaffold_agents`/`scaffold_templates` with `ralph sync`
 
 ### Non-Functional
 
@@ -83,6 +90,15 @@ ralph plan -u -h <label>        # Update existing spec in state/
 - Container runs `bd dolt push` after `RALPH_COMPLETE` (syncs beads to Dolt remote)
 - Host runs `bd dolt pull` after container exits (receives synced beads)
 
+**Anchor session (update mode):** `ralph plan -u <anchor>` is anchored on one spec but permits the LLM to edit sibling specs when a change cross-cuts.
+
+- **State** — the anchor's state file (`state/<label>.json`, where `<label>` is the anchor) owns `implementation_notes`, `molecule`, and `iteration_count` regardless of which spec files are edited
+- **Sibling edits** — ordinary commits to `specs/<sibling>.md`; no pre-declaration; the touched set emerges from the interview
+- **Invariant-clash awareness across siblings** — a change landing in the anchor may clash with an invariant in a sibling; the LLM scans all touched specs for clashes and asks the user before committing, using the three-paths principle
+- **Hidden specs (`-u -h`)** — remain single-spec; hidden specs are not in `specs/` and do not participate in the anchor/sibling model
+
+See the `ralph todo` section for how sibling edits are picked up at task-creation time (per-spec cursor fan-out).
+
 ### `ralph todo`
 
 ```bash
@@ -92,26 +108,39 @@ ralph todo -s <name>        # Short form
 ralph todo --since <commit> # Force git-diff mode from specific commit
 ```
 
-Launches wrapix container with base profile. Reads `state/<label>.json` (resolved via `--spec` flag or `state/current`). Uses four-tier detection to determine mode:
+Launches wrapix container with base profile. Reads the anchor's `state/<label>.json` (resolved via `--spec` flag or `state/current`; the resolved label plays the anchor role for this session). Uses four-tier detection to determine mode:
 
-1. **Tier 1 (git diff)**: `base_commit` exists in state JSON → `git diff <base_commit> HEAD -- <spec_path>` (fast, precise)
-2. **Tier 2 (molecule-based)**: No `base_commit` but molecule in state JSON → LLM compares spec against existing task descriptions
-3. **Tier 3 (README discovery)**: No `state/<label>.json` exists → look up molecule ID from the pinned-context file (`docs/README.md` by default) Beads column, validate with `bd show`, reconstruct state file, then proceed as tier 2
-4. **Tier 4 (new)**: No state file AND no molecule in README (or README molecule is stale/invalid) → full spec decomposition from `specs/<label>.md`
+1. **Tier 1 (git diff)**: `base_commit` exists in anchor's state JSON → widen to `git diff <anchor.base_commit> HEAD -- specs/` and apply **per-spec cursor fan-out** (below)
+2. **Tier 2 (molecule-based)**: No `base_commit` but molecule in state JSON → LLM compares spec against existing task descriptions (single-spec only; siblings not supported in this tier)
+3. **Tier 3 (README discovery)**: No `state/<label>.json` exists for the anchor → look up molecule ID from the pinned-context file (`docs/README.md` by default) Beads column, validate with `bd show`, reconstruct state file, then proceed as tier 2
+4. **Tier 4 (new)**: No state file AND no molecule in README (or README molecule is stale/invalid) → full spec decomposition from `specs/<anchor>.md`
+
+**Per-spec cursor fan-out (tier 1):**
+
+Under Anchor-Driven Multi-Spec Planning, a single plan session may edit multiple specs. Each spec owns its own `base_commit` (required for concurrent workflows), so the diff is computed per-spec, not anchor-wide.
+
+1. **Candidate set** — `git diff <anchor.base_commit> HEAD --name-only -- specs/` returns every spec file changed since the anchor's cursor.
+2. **Per-spec effective base** — for each candidate spec `<s>`:
+   - If `state/<s>.json` exists → use `state/<s>.base_commit`
+   - Else → seed from `<anchor>.base_commit` (first time this spec is being tasked)
+   - If the effective base is orphaned (detected via `git merge-base --is-ancestor`) → fall back to `<anchor>.base_commit`
+3. **Compute per-spec diff** — `git diff <effective_base> HEAD -- specs/<s>.md`.
+4. **Feed {spec → diff} map** to the task-creation LLM. Each task gets a `spec:<s>` label identifying which file it implements; all tasks bond to the anchor's molecule.
+5. **Fan-out on `RALPH_COMPLETE`** — for every spec that received at least one task, set `state/<s>.base_commit = HEAD`. If `state/<s>.json` did not exist, create it with `{label: <s>, spec_path: "specs/<s>.md", base_commit: HEAD, companions: []}`. Anchor's state file is always updated (molecule ID, cleared `implementation_notes`).
 
 **Flags:**
-- `--since <commit>` forces tier 1 with the given commit, skipping tier 2/3/4; errors if commit is invalid
+- `--since <commit>` forces tier 1 with the given commit as the **anchor's cursor only**. Sibling specs retain their own `base_commit` values; the flag does not override them. Errors if commit is invalid.
 
 **Constraints:**
-- Requires spec changes to be committed — errors if uncommitted changes detected in spec file
-- If tier 1 finds no changes (empty diff), exits early: "No spec changes since last task creation"
-- When `base_commit` is orphaned (rebase/amend), detected via `git merge-base --is-ancestor`, falls back to tier 2
-- Hidden spec updates (`-u -h`) use tier 2 since hidden specs are not in git
+- Requires spec changes to be committed — errors if uncommitted changes detected in any spec file in the candidate set
+- If tier 1 finds no changes (empty candidate set), exits early: "No spec changes since last task creation"
+- When `base_commit` is orphaned (rebase/amend), detected via `git merge-base --is-ancestor`, falls back to tier 2 for that spec
+- Hidden spec updates (`-u -h`) use tier 2, single-spec only (hidden specs are not in git and cannot participate in fan-out)
 - Tier 3 reconstructs `state/<label>.json` with: label, spec_path (`specs/<label>.md`), molecule (from README), no base_commit, empty companions array
 
 **Profile assignment:** The LLM analyzes each task's requirements and assigns appropriate `profile:X` labels based on implementation needs (e.g., tasks touching `.rs` files get `profile:rust`). This happens per-task, not per-spec.
 
-Stores molecule ID in `state/<label>.json`. On `RALPH_COMPLETE`, atomically stores `HEAD` as `base_commit` and clears `implementation_notes` (see Implementation Notes section for lifecycle rationale). Host-side verification checks that tasks synced correctly but is informational only — it does not block `base_commit` advancement or workflow progression.
+Stores molecule ID in the anchor's `state/<label>.json`. On `RALPH_COMPLETE`, atomically stores `HEAD` as `base_commit` on every spec that received at least one task and clears the anchor's `implementation_notes` (see Implementation Notes section for lifecycle rationale). Host-side verification checks that tasks synced correctly but is informational only — it does not block `base_commit` advancement or workflow progression.
 
 **Container bead sync:** After RALPH_COMPLETE inside the container, `todo.sh` runs `bd dolt push` before the container exits. On the host side, `todo.sh` then runs `bd dolt pull` to receive the synced beads. This two-step sync (push inside container → pull on host) ensures beads created in the container's isolated `.beads/` database reach the host.
 
@@ -250,14 +279,13 @@ ralph check -t                  # Validate templates (no Claude invocation; mutu
 - Body files parse correctly
 - No syntax errors in Nix expressions
 - Dry-run render with dummy values to catch placeholder typos
-- Also runs as part of `nix flake check`
 
 **Post-loop review (default):**
 
 An independent reviewer agent assesses the full deliverable for the resolved spec (via `--spec` or `state/current`). Runs inside a wrapix container with base profile. Context-pinning and companions are injected via standard partials, plus the compaction re-pin hook (see Compaction Re-Pin). Reviewer has full codebase access and reads implementation code, tests, `CLAUDE.md`, and related specs on demand.
 
 Input context (in prompt):
-- Spec file (`specs/<label>.md`)
+- Spec file(s): the anchor at `specs/<label>.md`, plus any sibling specs referenced by task `spec:<s>` labels (reviewer reads on demand)
 - Beads summary (titles and status only — reviewer reads full descriptions on demand)
 - `base_commit` SHA (reviewer runs `git diff` / `git log` as needed)
 - Molecule ID
@@ -411,6 +439,185 @@ Sets `state/current` to the given label after validation:
 3. Writes the label to `state/current`
 4. Errors with clear message if either validation fails
 
+### `ralph init`
+
+Cold-start bootstrap for a new wrapix project. Creates the minimal files needed for `ralph plan` to be immediately useful. Invocable as a flake app so it works before ralph is on PATH.
+
+```bash
+nix run github:taheris/wrapix#init   # from a fresh directory
+ralph init                            # from inside a devShell
+```
+
+**Scope:** always operates on `cwd`. No path argument, no `git init`, no initial commit, no remote setup.
+
+**Execution context:** runs on the **host**, not in a container. `ralph init` creates `flake.nix` and `.envrc` — both must exist before any wrapix container can spin up. Running init inside a container would be a chicken-and-egg loop.
+
+**Artifacts (all skip-if-exists, idempotent):**
+
+| Artifact | Source | Skip condition |
+|----------|--------|----------------|
+| `flake.nix` | `lib/ralph/template/flake.nix` | file exists |
+| `.envrc` | static `use flake\n` | file exists |
+| `.gitignore` | append-missing of `.direnv/`, `.wrapix/`, `result`, `result-*` | all entries present |
+| `.pre-commit-config.yaml` | `lib/ralph/template/pre-commit-config.yaml` | file exists |
+| `.beads/` | `bd init` | `.beads/` directory exists |
+| `docs/README.md`, `docs/architecture.md`, `docs/style-guidelines.md` | `scaffold_docs` (shared with sync) | file exists |
+| `AGENTS.md` | `scaffold_agents` (shared with sync) | file exists |
+| `CLAUDE.md` | `ln -sf AGENTS.md CLAUDE.md` | `CLAUDE.md` exists (file or symlink) |
+| `.wrapix/ralph/template/` + `partial/` | `scaffold_templates` (shared with sync) | directory exists |
+
+**Shared scaffolding:** `scaffold_docs`, `scaffold_agents`, `scaffold_templates` live in `lib/ralph/cmd/util.sh` (or `scaffold.sh`) and are called by both `ralph init` and `ralph sync`. Init-only helpers (`bootstrap_flake`, `bootstrap_envrc`, `bootstrap_gitignore`, `bootstrap_precommit`, `bootstrap_beads`, `bootstrap_claude_symlink`) are not shared.
+
+**`flake.nix` template (`lib/ralph/template/flake.nix`):**
+
+Uses flake-parts with an `apps.sandbox` app, a `devShells.default` composing `${ralph.shellHook}` (exposed as a passthru on wrapix's ralph package), treefmt-nix integration, and `checks.treefmt`:
+
+```nix
+{
+  description = "wrapix project";
+
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    flake-parts.url = "github:hercules-ci/flake-parts";
+    treefmt-nix.url = "github:numtide/treefmt-nix";
+    wrapix.url = "github:taheris/wrapix";
+  };
+
+  outputs = inputs@{ flake-parts, ... }:
+    flake-parts.lib.mkFlake { inherit inputs; } {
+      systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
+      imports = [ inputs.treefmt-nix.flakeModule ];
+
+      perSystem = { config, pkgs, system, ... }:
+        let
+          ralph = inputs.wrapix.packages.${system}.ralph;
+        in {
+          apps.sandbox = {
+            type = "app";
+            program = "${inputs.wrapix.lib.mkSandbox { inherit system; }}/bin/wrapix";
+          };
+
+          devShells.default = pkgs.mkShell {
+            packages = [
+              ralph
+              inputs.wrapix.packages.${system}.bd
+              config.treefmt.build.wrapper
+            ];
+            shellHook = ''
+              ${ralph.shellHook}
+            '';
+          };
+
+          treefmt = {
+            projectRootFile = "flake.nix";
+            programs = {
+              deadnix.enable = true;
+              nixfmt.enable = true;
+              shellcheck.enable = true;
+              statix.enable = true;
+            };
+            settings.formatter = {
+              shellcheck.excludes = [ ".envrc" ];
+            };
+          };
+
+          checks = {
+            treefmt = config.treefmt.build.check inputs.self;
+          };
+        };
+    };
+}
+```
+
+`rustfmt` is intentionally omitted from the default template — it's the only treefmt program that carries a language assumption. Users enable it when they add Rust code. `mkCity` is not wired in; users opt in by extending their flake.
+
+**`.pre-commit-config.yaml` template:**
+
+```yaml
+repos:
+  - repo: local
+    hooks:
+      - id: treefmt
+        name: treefmt
+        entry: nix fmt
+        language: system
+        pass_filenames: false
+      - id: nix-flake-check
+        name: nix flake check
+        entry: nix flake check
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+```
+
+Formatting/linting runs on pre-commit (via treefmt, which covers deadnix/nixfmt/shellcheck/statix). `nix flake check` is pre-push only — too slow for every commit.
+
+**Output format** — per-artifact summary plus next-steps block, printed on exit:
+
+```
+✓ Bootstrapped wrapix project in .
+
+Created:
+  flake.nix
+  .envrc
+  .pre-commit-config.yaml
+  .gitignore  (4 entries appended)
+  AGENTS.md
+  CLAUDE.md (-> AGENTS.md)
+  docs/README.md
+  docs/architecture.md
+  docs/style-guidelines.md
+  .wrapix/ralph/template/
+Skipped:
+  .beads/  (already initialized)
+
+Next steps:
+  1. direnv allow            # devShell auto-enters
+  2. ralph plan -n <label>   # start your first feature
+
+Docs: specs/ralph-workflow.md
+```
+
+Skipped entries list the reason in parentheses. The next-steps block is fixed (2 steps + docs pointer).
+
+**Flake app exposure:** the top-level wrapix flake exposes `apps.init` so `nix run github:taheris/wrapix#init` invokes `ralph init` without requiring ralph to be pre-installed.
+
+## Spec File Format
+
+```markdown
+# Feature Name
+
+Overview of the feature.
+
+## Problem Statement
+
+Why this feature is needed.
+
+## Requirements
+
+### Functional
+1. Requirement one
+2. Requirement two
+
+### Non-Functional
+1. Performance requirement
+
+## Affected Files
+
+| File | Role |
+|------|------|
+| `path/to/file.nix` | Description |
+
+## Success Criteria
+
+- [ ] Criterion one
+- [ ] Criterion two
+
+## Out of Scope
+
+- Thing not included
+```
+
 ## `ralph:clarify` Label
 
 Beads waiting on human response are tagged with `ralph:clarify`. Used by implementation workers and the reviewer agent. The run loop filters out beads with this label when selecting the next bead to work. Each iteration re-queries, so when a human removes the label via `ralph msg`, the bead becomes eligible on the next pass. A notification is emitted when the label is first applied.
@@ -439,7 +646,7 @@ plan --update → todo → run → check → (done + push)
       │            ├─ Create tasks ONLY for new/changed requirements
       │            └─ Store HEAD as base_commit on success
       └─ LLM edits spec directly → commits changes
-         ├─ Detects invariant clashes → asks user (no RALPH_CLARIFY needed, interactive)
+         ├─ Detects invariant clashes → resolves interactively in the interview
          ├─ "one by one" / "polish the spec" modes available
          └─ Stores transient hints in state/<label>.json implementation_notes
 
@@ -456,6 +663,7 @@ Ralph runs Claude-calling commands inside wrapix containers for isolation and re
 
 | Command | Execution | Profile |
 |---------|-----------|---------|
+| `ralph init` | host | N/A (bootstrap; creates `flake.nix` so must precede any container) |
 | `ralph plan` | wrapix container | base |
 | `ralph todo` | wrapix container | base |
 | `ralph run` | host (orchestrator) | N/A (spawns containerized work per-issue) |
@@ -491,7 +699,7 @@ Ralph configures a `SessionStart` hook with matcher `"compact"` so a condensed r
 
 ### Hook Scope
 
-The hook is registered for every container-executed Claude session. Host-side commands (`status`, `logs`, `check -t`, `msg`, `tune`, `sync`, `use`) do not invoke Claude and do not register the hook.
+The hook is registered for every container-executed Claude session. Host-side commands (`status`, `logs`, `check -t`, `msg`, `tune`, `sync`, `use`, `init`) do not invoke Claude and do not register the hook.
 
 | Command | Re-pin content |
 |---------|----------------|
@@ -848,11 +1056,12 @@ Ships with the above content; overridable by local template overlay.
 5. Existing spec display — Show current spec from `specs/<label>.md` for reference
 6. `{{> companions-context}}` — after existing spec, before update guidelines
 7. Update guidelines — Discuss NEW requirements only
-8. Invariant-clash awareness — Before committing a spec change, scan the existing spec for invariants the change may clash with (architectural decisions, data-structure choices, explicit constraints, non-functional requirements, out-of-scope items). When a potential clash is found, pause the interview and ask the user to pick a path, proposing *contextual* options for the specific clash — guided by the three-paths principle (preserve invariant / keep on top inelegantly / change invariant) but not limited to exactly three or those exact framings. Bias toward asking when uncertain — the cost of asking is low compared to a silent wrong choice
-9. Implementation notes guidance — Store transient implementation hints in state file `implementation_notes` array, not in the spec
-10. Instructions — LLM edits `specs/<label>.md` directly during the interview; commits changes at end of session (git-tracked specs only; hidden specs just save file)
-11. `{{> interview-modes}}` — Documents the "one by one" and "polish the spec" fast phrases
-12. `{{> exit-signals}}`
+8. Anchor session + sibling-spec editing — The label named on the `-u` flag is the **anchor**; it owns the state file (`state/<label>.json`). The LLM may read and edit any spec in `specs/` when a change cross-cuts — sibling specs are edited in place and committed like the anchor. No pre-declaration is required. `docs/README.md` is the spec index; consult it to locate siblings. Hidden specs (`-u -h`) are single-spec and do not participate in sibling editing
+9. Invariant-clash awareness — Before committing a spec change, scan the anchor **and any touched sibling specs** for invariants the change may clash with (architectural decisions, data-structure choices, explicit constraints, non-functional requirements, out-of-scope items). When a potential clash is found, pause the interview and ask the user to pick a path, proposing *contextual* options for the specific clash — guided by the three-paths principle (preserve invariant / keep on top inelegantly / change invariant) but not limited to exactly three or those exact framings. Bias toward asking when uncertain — the cost of asking is low compared to a silent wrong choice
+10. Implementation notes guidance — Store transient implementation hints in the anchor's state file `implementation_notes` array, not in any spec. Notes always live with the anchor regardless of which sibling file they apply to
+11. Instructions — LLM edits `specs/<label>.md` (anchor) and any touched sibling specs directly during the interview; commits changes at end of session (git-tracked specs only; hidden specs just save file)
+12. `{{> interview-modes}}` — Documents the "one by one" and "polish the spec" fast phrases
+13. `{{> exit-signals}}`
 
 **Exit signals:** RALPH_COMPLETE, RALPH_BLOCKED, RALPH_CLARIFY
 
@@ -885,12 +1094,12 @@ Ships with the above content; overridable by local template overlay.
 1. Role statement — "You are adding tasks to an existing molecule"
 2. `{{> context-pinning}}`
 3. `{{> spec-header}}`
-4. Existing spec — Show `specs/<label>.md` for context (what's already implemented)
+4. Existing spec — Show the anchor spec (`specs/<anchor>.md`) for context (what's already implemented)
 5. `{{> companions-context}}` — after existing spec, before diff/tasks section
-6. Spec diff or existing tasks — Receives both `{{SPEC_DIFF}}` and `{{EXISTING_TASKS}}`; one is always empty depending on tier. Instructions: "if SPEC_DIFF is provided, use that to identify new requirements; otherwise use EXISTING_TASKS to compare against the spec and identify gaps."
+6. Spec diff or existing tasks — Receives both `{{SPEC_DIFF}}` and `{{EXISTING_TASKS}}`; one is always empty depending on tier. Under per-spec cursor fan-out, `{{SPEC_DIFF}}` may span multiple sibling specs — each diff block is prefixed with its spec path. Instructions: "if SPEC_DIFF is provided, use that to identify new requirements across all listed specs; otherwise use EXISTING_TASKS to compare against the anchor spec and identify gaps."
 7. Profile assignment guidance — Assign `profile:X` per-task based on implementation needs
-8. Task creation — Create tasks ONLY for new/changed requirements, bond to molecule
-9. README backfill — If the pinned-context file (`docs/README.md` by default) Beads column is empty for this spec, fill in the molecule ID
+8. Task creation — Create tasks ONLY for new/changed requirements, bond to the anchor's molecule. Label each task with `spec:<s>` identifying which spec file it implements (may differ from the anchor under fan-out)
+9. README backfill — If the pinned-context file (`docs/README.md` by default) Beads column is empty for the anchor spec, fill in the molecule ID. Sibling specs touched in this session do not get their own molecule — their tasks bond to the anchor's molecule. Do NOT write the anchor's molecule ID into a sibling's README Beads column; the sibling's row stays empty until it is planned as its own anchor
 10. `{{> exit-signals}}`
 
 **`EXISTING_TASKS` format** (tier 2/3):
@@ -998,17 +1207,31 @@ Commands that accept `--spec/-s` resolve the target workflow as follows:
 2. If no `--spec` → read label from `state/current` → use `state/<label>.json`
 3. If `state/current` does not exist and no `--spec` given → error with clear message
 
-Commands with `--spec` support: `ralph todo`, `ralph run`, `ralph status`, `ralph logs`, `ralph check`
-Commands without `--spec`: `ralph plan` (takes label as positional arg), `ralph tune`, `ralph sync`, `ralph use` (takes label as positional arg)
+Commands with `--spec` support: `ralph todo`, `ralph run`, `ralph status`, `ralph logs`, `ralph check`, `ralph msg`
+Commands without `--spec`: `ralph plan` (takes label as positional arg), `ralph tune`, `ralph sync`, `ralph use` (takes label as positional arg), `ralph init`
+
+### Anchor & Sibling State Files
+
+Under Anchor-Driven Multi-Spec Planning, the anchor's state file (`state/<label>.json` where `<label>` is the anchor) owns the session: it holds the molecule ID, `implementation_notes`, and `iteration_count`. Sibling specs touched during an anchor session do **not** get their own molecule — they share the anchor's.
+
+What sibling state files DO hold:
+- `label`, `spec_path`, `base_commit`, `companions`
+
+What they do NOT hold (these are anchor-only):
+- `molecule`, `implementation_notes`, `iteration_count`
+
+Sibling state files are created lazily by `ralph todo` at RALPH_COMPLETE time (only for siblings that received tasks). A sibling that's later planned as its own anchor can set its own `molecule` at that point — its `base_commit` (already advanced during the earlier sibling session) prevents task duplication.
 
 ### Backwards Compatibility
 
 Serial workflow is unchanged: `ralph plan` sets `state/current`, subsequent commands pick it up automatically. The only structural difference is the state file location (`state/<label>.json` + `state/current` vs the old singleton `state/current.json`).
 
+Single-spec `ralph plan -u <label>` continues to work unchanged — the spec is simply its own anchor with an empty sibling set. The fan-out machinery reduces to a single-file diff.
+
 Existing specs without `base_commit` are handled via four-tier fallback:
 - If molecule in state JSON → tier 2 (LLM compares spec against tasks)
 - If no state file but molecule in README → tier 3 (reconstruct state, then tier 2)
-- If no molecule anywhere → tier 4 (treats as new, creates full molecule)
+- If no molecule anywhere → tier 4 (full spec decomposition, creates new molecule)
 
 After first successful `ralph todo`, `base_commit` is set and fast-path diffing works going forward.
 
@@ -1040,21 +1263,57 @@ State files can contain an optional `implementation_notes` field: an array of st
 - Read by `ralph todo` from `state/<label>.json` and formatted as a markdown bullet list
 - Passed to both `todo-new.md` and `todo-update.md` templates as the `IMPLEMENTATION_NOTES` variable
 - Provide additional context to the LLM during task creation without polluting the permanent spec
-- **Lifecycle:** notes describe *how* to implement the current diff; once `ralph todo` has folded them into task descriptions they've served their purpose. `ralph todo` clears `implementation_notes` from `state/<label>.json` atomically with setting `base_commit` on `RALPH_COMPLETE` — the same success signal that advances the spec cursor. This prevents stale hints from silently biasing future task creation
+- **Lifecycle:** notes describe *how* to implement the current diff; once `ralph todo` has folded them into task descriptions they've served their purpose. `ralph todo` clears `implementation_notes` from the **anchor's** `state/<label>.json` atomically with advancing its `base_commit` on `RALPH_COMPLETE` — the same success signal that advances the spec cursor. Sibling state files never hold `implementation_notes`. This prevents stale hints from silently biasing future task creation
 
 The `strip_implementation_notes` function in `util.sh` remains as a backward-compatibility safety net for specs that manually include a `## Implementation Notes` section.
 
 ## Git-Based Spec Diffing
 
-Replace the transient `state/<label>.md` intermediary with git-based diffing using a `base_commit` field in state JSON.
+Spec-change detection uses `git diff` scoped by the `base_commit` field in state JSON; no intermediate files.
 
-- `ralph plan -u` edits `specs/<label>.md` directly (LLM commits the changes for git-tracked specs)
-- `ralph plan -u -h` edits the hidden spec directly but does NOT commit
-- `ralph todo` uses four-tier detection (see `ralph todo` command section)
-- `compute_spec_diff` helper in `util.sh` encapsulates the four-tier fallback
+- `ralph plan -u <anchor>` edits `specs/<anchor>.md` directly and may edit sibling specs in `specs/` (LLM commits the changes for git-tracked specs)
+- `ralph plan -u -h` edits the hidden spec directly but does NOT commit (single-spec only; no sibling editing)
+- `ralph todo` uses four-tier detection with per-spec cursor fan-out in tier 1 (see `ralph todo` command section)
+- `compute_spec_diff` helper in `util.sh` encapsulates the four-tier fallback and the per-spec fan-out for tier 1
 - `discover_molecule_from_readme` helper in `util.sh` parses the pinned-context file (`docs/README.md` by default) to find molecule IDs by spec label
-- `--since <commit>` flag forces tier 1 with the given commit
+- `--since <commit>` flag forces tier 1 with the given commit as the **anchor's cursor only**; sibling specs retain their own `base_commit` values
 - No explicit migration required — existing specs handled via tier 2/3/4 fallback
+
+### Per-Spec Cursor Fan-Out (Tier 1 details)
+
+Each spec owns its own `base_commit`. A single `ralph plan -u` session may edit multiple specs across multiple commits; fan-out ensures each spec's cursor advances only for the portion of the diff actually tasked.
+
+**Diff computation per candidate spec `<s>`:**
+
+1. Determine effective base:
+   - If `state/<s>.json` exists → `state/<s>.base_commit`
+   - Else → anchor's `base_commit` (seed)
+   - If orphaned → anchor's `base_commit` (fallback)
+2. Run `git diff <effective_base> HEAD -- specs/<s>.md`
+
+The candidate set is computed from the **anchor's cursor** (`git diff <anchor.base_commit> HEAD --name-only -- specs/`) — this bounds the set of specs to inspect without scanning the entire `specs/` tree.
+
+**Cursor advancement on RALPH_COMPLETE:**
+
+- For every spec `<s>` that received at least one task, set `state/<s>.base_commit = HEAD`
+- If `state/<s>.json` did not exist, create it (`{label, spec_path, base_commit, companions: []}`)
+- Anchor's `implementation_notes` cleared atomically with its `base_commit` advancement
+- Specs in the candidate set that did NOT receive tasks (e.g., a whitespace-only change the LLM judged non-actionable) do not have their cursor advanced — next run re-inspects that diff
+
+**Worked example:**
+
+Initial: `state/ralph-workflow.base_commit = X`, `state/ralph-templates.base_commit = Y` (Y > X, templates was planned independently last week).
+
+During `ralph plan -u ralph-workflow`, commits land on `ralph-workflow.md` (C1), `ralph-templates.md` (C2, discovered cross-cut), `ralph-init.md` (C3, new sibling with no state file).
+
+`ralph todo` run:
+- Candidate set from `X..HEAD -- specs/`: `ralph-workflow.md`, `ralph-templates.md`, `ralph-init.md`
+- Per-spec diffs:
+  - `ralph-workflow.md`: `X..HEAD` (anchor's own cursor)
+  - `ralph-templates.md`: `Y..HEAD` (templates' own cursor — no double-creation of tasks already created last week)
+  - `ralph-init.md`: `X..HEAD` (no state yet, seeded from anchor)
+- Tasks created across all three with `spec:<label>` labels; all bonded to anchor's molecule
+- On RALPH_COMPLETE: all three state files have `base_commit = HEAD`; `ralph-init.json` is newly created
 
 ### Cross-Machine State Recovery (Tier 3)
 
@@ -1073,42 +1332,6 @@ When `state/<label>.json` does not exist (e.g., working from a different machine
 
 **README parsing**: Simple grep/awk to find the row matching the spec filename and extract the Beads column. The table format is stable and controlled by the project.
 
-## Spec File Format
-
-```markdown
-# Feature Name
-
-Overview of the feature.
-
-## Problem Statement
-
-Why this feature is needed.
-
-## Requirements
-
-### Functional
-1. Requirement one
-2. Requirement two
-
-### Non-Functional
-1. Performance requirement
-
-## Affected Files
-
-| File | Role |
-|------|------|
-| `path/to/file.nix` | Description |
-
-## Success Criteria
-
-- [ ] Criterion one
-- [ ] Criterion two
-
-## Out of Scope
-
-- Thing not included
-```
-
 ## Affected Files
 
 | File | Role |
@@ -1122,16 +1345,20 @@ Why this feature is needed.
 | `lib/ralph/cmd/check.sh` | Post-loop review (default) and template validation (`-t`); runs `bd dolt push` in container and `bd dolt pull` on host so fix-up/clarify beads created by the reviewer reach the host before re-counting; auto-iteration chain (`exec ralph run` on fix-up beads; `git push` + `beads-push` on clean RALPH_COMPLETE) |
 | `lib/ralph/cmd/msg.sh` | Async human communication |
 | `lib/ralph/cmd/tune.sh` | Template editing (interactive + integration) |
-| `lib/ralph/cmd/sync.sh` | Template sync from packaged (includes --diff) |
+| `lib/ralph/cmd/sync.sh` | Template sync from packaged (includes --diff); calls shared `scaffold_docs`/`scaffold_agents`/`scaffold_templates` from util.sh |
 | `lib/ralph/cmd/use.sh` | Active workflow switching with validation |
-| `lib/ralph/cmd/util.sh` | Shared helper functions (includes `resolve_spec_label`, `read_manifests`, `compute_spec_diff`, `discover_molecule_from_readme`, `ralph:clarify` label management, `build_repin_content`, `install_repin_hook`) |
+| `lib/ralph/cmd/init.sh` | Project bootstrap — flake.nix, .envrc, .gitignore, .pre-commit-config.yaml, bd init, CLAUDE.md symlink; calls shared scaffold functions |
+| `lib/ralph/cmd/util.sh` | Shared helper functions (includes `resolve_spec_label`, `read_manifests`, `compute_spec_diff` (per-spec fan-out in tier 1), `discover_molecule_from_readme`, `ralph:clarify` label management, `build_repin_content`, `install_repin_hook`, `scaffold_docs`, `scaffold_agents`, `scaffold_templates`, `bootstrap_flake`, `bootstrap_envrc`, `bootstrap_gitignore`, `bootstrap_precommit`, `bootstrap_beads`, `bootstrap_claude_symlink`) |
 | `lib/ralph/template/` | Prompt templates |
 | `lib/ralph/template/check.md` | Reviewer agent prompt |
 | `lib/ralph/template/default.nix` | Nix template definitions (includes check template, `PREVIOUS_FAILURE` variable) |
+| `lib/ralph/template/flake.nix` | Project flake template rendered by `bootstrap_flake` (flake-parts, apps.sandbox, devShell, treefmt) |
+| `lib/ralph/template/pre-commit-config.yaml` | Pre-commit template rendered by `bootstrap_precommit` (treefmt pre-commit + nix flake check pre-push) |
 | `lib/ralph/template/partial/companions-context.md` | Companion manifest injection partial |
 | `lib/ralph/template/partial/interview-modes.md` | Documents "one by one" and "polish the spec" fast phrases |
 | `lib/sandbox/linux/entrypoint.sh` | Merge ralph runtime `claude-settings.json` from `$RALPH_RUNTIME_DIR` into `~/.claude/settings.json` when the env var is set |
-| `.gitignore` | Exclude `.wrapix/ralph/runtime/` |
+| `flake.nix` (top-level wrapix) | Expose `apps.init`; add `shellHook` passthru on `packages.${system}.ralph` |
+| `.gitignore` (wrapix repo) | Exclude `.wrapix/ralph/runtime/` (runtime cleanup, not an `init` artifact — init's `.gitignore` edits happen in downstream projects) |
 
 ## Integration with Beads Molecules
 
@@ -1368,8 +1595,101 @@ Ralph uses `bd mol` for work tracking:
 - [ ] `ralph msg` reply prints a `Resume with: ralph run` hint on successful clarify clear
   [verify](../tests/ralph/run-tests.sh#test_msg_reply_resume_hint)
 - [ ] Workflow Phases diagram in the spec reflects `plan → todo → run → check → (done + push)`
+- [ ] `ralph plan -u <anchor>` permits the LLM to read and edit any spec in `specs/` (sibling-spec editing)
+  [judge](../tests/judges/ralph-workflow.sh#test_plan_anchor_sibling_editing)
+- [ ] Anchor's `state/<anchor>.json` owns `molecule`, `implementation_notes`, `iteration_count` regardless of which sibling specs are edited
+  [verify](../tests/ralph/run-tests.sh#test_anchor_owns_session_state)
+- [ ] Sibling state files only hold `label`, `spec_path`, `base_commit`, `companions` (no molecule)
+  [verify](../tests/ralph/run-tests.sh#test_sibling_state_shape)
+- [ ] `ralph plan -u -h` (hidden) remains single-spec; no sibling-spec editing
+  [verify](../tests/ralph/run-tests.sh#test_plan_update_hidden_single_spec)
+- [ ] Invariant-clash detection during planning scans the anchor and any touched sibling specs
+  [judge](../tests/judges/ralph-workflow.sh#test_plan_cross_spec_invariant_clash)
+- [ ] `ralph todo` widens tier 1 candidate set to `git diff <anchor.base_commit> HEAD --name-only -- specs/`
+  [verify](../tests/ralph/run-tests.sh#test_todo_tier1_candidate_set)
+- [ ] `ralph todo` computes per-spec diff using each touched spec's own `base_commit`
+  [verify](../tests/ralph/run-tests.sh#test_todo_per_spec_cursor)
+- [ ] Sibling with no state file uses the anchor's `base_commit` as its effective base
+  [verify](../tests/ralph/run-tests.sh#test_todo_sibling_seed_from_anchor)
+- [ ] Orphaned sibling `base_commit` falls back to anchor's `base_commit`
+  [verify](../tests/ralph/run-tests.sh#test_todo_sibling_orphan_fallback)
+- [ ] Tasks created during a multi-spec session all bond to the anchor's molecule
+  [verify](../tests/ralph/run-tests.sh#test_todo_multi_spec_single_molecule)
+- [ ] Each task labeled with `spec:<s>` identifying which spec file it implements
+  [verify](../tests/ralph/run-tests.sh#test_todo_per_task_spec_label)
+- [ ] On RALPH_COMPLETE, `base_commit` advances for every spec that received at least one task
+  [verify](../tests/ralph/run-tests.sh#test_todo_cursor_fanout_on_complete)
+- [ ] Sibling state file is created on demand if it didn't exist before the fan-out
+  [verify](../tests/ralph/run-tests.sh#test_todo_creates_sibling_state_file)
+- [ ] `ralph todo --since <commit>` overrides only the anchor's cursor; siblings retain own `base_commit`
+  [verify](../tests/ralph/run-tests.sh#test_todo_since_anchor_only)
+- [ ] `ralph todo` exits early when tier 1 candidate set is empty ("No spec changes since last task creation")
+  [verify](../tests/ralph/run-tests.sh#test_todo_empty_candidate_set_exits)
+- [ ] Worked example (anchor + two siblings) produces correct molecule + per-spec cursors
+  [judge](../tests/judges/ralph-workflow.sh#test_todo_fanout_worked_example)
+- [ ] `ralph init` runs on host, not in a container
+  [verify](../tests/ralph/run-tests.sh#test_init_host_execution)
+- [ ] `nix run github:taheris/wrapix#init` invokes `ralph init` in cwd
+  [verify](../tests/ralph/run-tests.sh#test_init_flake_app)
+- [ ] `ralph init` creates `flake.nix` from template when absent, skips when present
+  [verify](../tests/ralph/run-tests.sh#test_init_flake_skip_existing)
+- [ ] Generated `flake.nix` uses flake-parts, exposes `apps.sandbox`, `devShells.default` composing `${ralph.shellHook}`, `treefmt`, `checks.treefmt`
+  [verify](../tests/ralph/run-tests.sh#test_init_flake_structure)
+- [ ] Generated `flake.nix` systems list is `[x86_64-linux aarch64-linux aarch64-darwin]` (no x86_64-darwin)
+  [verify](../tests/ralph/run-tests.sh#test_init_flake_systems)
+- [ ] Generated `flake.nix` treefmt programs are deadnix, nixfmt, shellcheck, statix (no rustfmt)
+  [verify](../tests/ralph/run-tests.sh#test_init_treefmt_programs)
+- [ ] Generated `flake.nix` evaluates cleanly under `nix flake check` in a fresh directory
+  [judge](../tests/judges/ralph-workflow.sh#test_init_flake_evaluates)
+- [ ] `ralph init` creates `.envrc` with `use flake` content, skip-if-exists
+  [verify](../tests/ralph/run-tests.sh#test_init_creates_envrc)
+- [ ] `ralph init` appends missing `.gitignore` entries (`.direnv/`, `.wrapix/`, `result`, `result-*`) idempotently
+  [verify](../tests/ralph/run-tests.sh#test_init_gitignore_idempotent)
+- [ ] `ralph init` creates `.pre-commit-config.yaml` with `treefmt` pre-commit + `nix flake check` pre-push stages
+  [verify](../tests/ralph/run-tests.sh#test_init_precommit_stages)
+- [ ] `ralph init` runs `bd init` when `.beads/` is absent, skips otherwise
+  [verify](../tests/ralph/run-tests.sh#test_init_bd_init_idempotent)
+- [ ] `ralph init` creates `docs/README.md`, `docs/architecture.md`, `docs/style-guidelines.md` via shared `scaffold_docs`
+  [verify](../tests/ralph/run-tests.sh#test_init_scaffolds_docs)
+- [ ] `ralph init` creates `AGENTS.md` via shared `scaffold_agents`
+  [verify](../tests/ralph/run-tests.sh#test_init_creates_agents)
+- [ ] `ralph init` creates `CLAUDE.md` as symlink to `AGENTS.md` when absent, skips when `CLAUDE.md` exists (file or symlink)
+  [verify](../tests/ralph/run-tests.sh#test_init_claude_symlink)
+- [ ] `ralph init` populates `.wrapix/ralph/template/` via shared `scaffold_templates`
+  [verify](../tests/ralph/run-tests.sh#test_init_scaffolds_templates)
+- [ ] `ralph init` and `ralph sync` share `scaffold_docs`, `scaffold_agents`, `scaffold_templates` (one code path)
+  [verify](../tests/ralph/run-tests.sh#test_scaffold_shared_code_path)
+- [ ] `ralph init` prints per-artifact created/skipped summary + fixed 2-step next-steps block
+  [judge](../tests/judges/ralph-workflow.sh#test_init_output_format)
+- [ ] Top-level wrapix flake exposes `apps.init`
+  [verify](../tests/ralph/run-tests.sh#test_wrapix_flake_exposes_init)
+- [ ] Top-level wrapix flake's `packages.${system}.ralph` exposes a `shellHook` passthru
+  [verify](../tests/ralph/run-tests.sh#test_wrapix_ralph_shellhook_passthru)
+
+## Pending Split
+
+Once the requirements added in this round (anchor-driven multi-spec planning, per-spec cursor fan-out, `ralph init`) are implemented and green, this spec is to be **mechanically refactored** into the following structure. No new requirements are introduced by the split; it's pure reorganization.
+
+| Target spec | Source sections |
+|-------------|-----------------|
+| `specs/ralph-harness.md` | Problem statement, phase diagram (top-level), state management (per-label JSON, `state/current`, spec resolution, anchor & sibling state files), compaction re-pin, template system (Nix definitions, partials, variables, `.wrapix/ralph/config.nix`, flake check integration), template content requirements for **partials only**, utility commands (`use`, `msg`, `status`, `logs`, `sync`, `tune`, `init`), container execution table, `ralph:clarify` label |
+| `specs/ralph-loop.md` (new) | `ralph plan` + `ralph todo` + `ralph run` commands; template content for `plan-new.md`, `plan-update.md`, `todo-new.md`, `todo-update.md`, `run.md`; anchor session + sibling-spec editing; per-spec cursor fan-out + git-based spec diffing; interview modes; invariant-clash awareness (planning side); implementation notes lifecycle; profile selection; retry with `PREVIOUS_FAILURE`; companion content; cross-machine recovery (tier 3); container bead sync protocol (for plan/todo/run --once) |
+| `specs/ralph-check.md` (new) | `ralph check` command (default + `-t`); template content for `check.md`; invariant-clash review + three-paths principle; push gate + auto-iteration; iteration cap + escalation; push failure handling; container bead sync protocol (for check) |
+| `specs/ralph-tests.md` (unchanged) | Integration test harness (out of scope for the split) |
+
+**`docs/README.md` row changes** accompanying the split:
+
+```
+| [ralph-harness.md]        | [`lib/ralph/`]                       | wx-zay1 | Platform: state, templates, utilities, init |
+| [ralph-loop.md]      (new)| [`lib/ralph/cmd/{plan,todo,run}.sh`] | <new>   | Forward pipeline: plan → todo → run |
+| [ralph-check.md]     (new)| [`lib/ralph/cmd/check.sh`]           | <new>   | Review gate: invariant clash, push gate, auto-iteration |
+```
+
+The split should NOT be attempted before multi-spec awareness ships — current single-spec `ralph todo` cannot see across spec files, and a split ahead of multi-spec implementation would produce tasks that only reference the surviving overview spec, missing content migrated to `ralph-loop.md` and `ralph-check.md`.
 
 ## Out of Scope
+
+### General
 
 - Cross-workflow file conflicts (user's responsibility to pick non-overlapping features)
 - Workflow locking or mutual exclusion
@@ -1378,3 +1698,13 @@ Ralph uses `bd mol` for work tracking:
 - PR creation automation
 - Formula-based workflows (Ralph uses specs, not formulas)
 - Cross-repo automation for template propagation (manual diff + tune)
+- Anchor/sibling planning for hidden specs (`plan -u -h`) — hidden specs remain single-spec
+- Automatic discovery of which specs form a conceptual group — the touched set emerges per-session, not from static declaration
+
+### `ralph init`
+
+- Git operations (`git init`, initial commit, remote setup) — user-owned
+- Interactive prompts — init is non-interactive
+- Path argument — operates on cwd only (flake-app form has no shell context to pass a path from)
+- Overwrite/merge of existing `flake.nix` — skip-and-continue policy; user merges manually if retrofitting
+- `mkCity` wiring in generated `flake.nix` — user opt-in; default flake keeps scope minimal
