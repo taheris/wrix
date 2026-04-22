@@ -959,6 +959,97 @@ SPEC
 }
 
 #-----------------------------------------------------------------------------
+# Test: fenced code blocks containing ## Success Criteria are skipped
+# Regression for wx-6xs5p.19: a spec template embedded in a markdown code
+# block would trigger the parser's first match, exiting before the real
+# Success Criteria section was reached.
+#-----------------------------------------------------------------------------
+test_spec_fenced_code_block_ignored() {
+  CURRENT_TEST="spec_fenced_code_block_ignored"
+  test_header "Spec Parser Ignores Fenced Code Blocks"
+
+  setup_test_env "spec-fenced"
+
+  # shellcheck source=../../lib/ralph/cmd/util.sh
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  cat > "$TEST_DIR/specs/fenced.md" << 'SPEC'
+# Fenced Feature
+
+## Spec File Format
+
+The template looks like this:
+
+```markdown
+# Feature Name
+
+## Success Criteria
+
+- [ ] Template criterion one
+- [ ] Template criterion two
+
+## Out of Scope
+
+- Thing not included
+```
+
+## Success Criteria
+
+- [ ] Real criterion one
+  [verify](tests/real.sh::test_real_one)
+- [ ] Real criterion two
+  [judge](tests/judges/real.sh::test_real_two)
+- [ ] Real criterion three
+
+## Out of Scope
+
+Nothing.
+SPEC
+
+  local output
+  output=$(parse_spec_annotations "$TEST_DIR/specs/fenced.md")
+
+  local total verify_count judge_count none_count
+  total=$(echo "$output" | wc -l)
+  verify_count=$(echo "$output" | awk -F'\t' '$2 == "verify"' | wc -l)
+  judge_count=$(echo "$output" | awk -F'\t' '$2 == "judge"' | wc -l)
+  none_count=$(echo "$output" | awk -F'\t' '$2 == "none"' | wc -l)
+
+  if [ "$total" -eq 3 ]; then
+    test_pass "Parses 3 criteria from real section, ignoring template block"
+  else
+    test_fail "Expected 3 criteria, got $total (template criteria likely not skipped)"
+  fi
+
+  if [ "$verify_count" -eq 1 ]; then
+    test_pass "Counts 1 verify annotation"
+  else
+    test_fail "Expected 1 verify, got $verify_count"
+  fi
+
+  if [ "$judge_count" -eq 1 ]; then
+    test_pass "Counts 1 judge annotation"
+  else
+    test_fail "Expected 1 judge, got $judge_count"
+  fi
+
+  if [ "$none_count" -eq 1 ]; then
+    test_pass "Counts 1 unannotated criterion"
+  else
+    test_fail "Expected 1 unannotated, got $none_count"
+  fi
+
+  # Ensure template-only criteria text never leaked into output
+  if echo "$output" | grep -q 'Template criterion'; then
+    test_fail "Template criteria inside fenced block leaked into parser output"
+  else
+    test_pass "Template criteria are excluded from parser output"
+  fi
+
+  teardown_test_env
+}
+
+#-----------------------------------------------------------------------------
 # Test: ralph spec --verify header includes molecule ID from README.md
 #-----------------------------------------------------------------------------
 test_spec_verify_molecule_header() {
@@ -1798,6 +1889,7 @@ ALL_TESTS=(
   test_spec_criterion_text_preservation
   test_spec_multiple_files
   test_spec_criteria_at_eof
+  test_spec_fenced_code_block_ignored
   test_spec_verify_molecule_header
   test_spec_verify_no_molecule_header
   test_spec_verify_verbose_output

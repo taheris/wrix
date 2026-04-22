@@ -885,11 +885,26 @@ parse_spec_annotations() {
   spec_dir=$(dirname "$spec_file")
 
   local in_criteria=0
+  local in_fence=0
   local prev_criterion=""
   local prev_checked=""
   local has_criteria=0
 
   while IFS= read -r line; do
+    # Skip fenced code blocks: their headings are literal content, not sections.
+    if [[ "$line" =~ ^[[:space:]]*\`\`\` ]]; then
+      if [ "$in_fence" -eq 0 ]; then
+        in_fence=1
+      else
+        in_fence=0
+      fi
+      continue
+    fi
+
+    if [ "$in_fence" -eq 1 ]; then
+      continue
+    fi
+
     # Detect start of Success Criteria section
     if [[ "$line" =~ ^##[[:space:]]+Success[[:space:]]+Criteria ]]; then
       in_criteria=1
