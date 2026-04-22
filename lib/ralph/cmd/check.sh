@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ralph check — Template validation and post-epic review
+# ralph check — Template validation and post-loop review
 #
 # Modes:
-#   ralph check              Print usage help
+#   ralph check              Post-loop review of the active spec (default)
+#   ralph check --spec <n>   Post-loop review of a named spec
+#   ralph check -s <n>       Short form
 #   ralph check -t           Validate all templates (no Claude invocation)
-#   ralph check -s <label>   Post-epic review of completed work
 #
-# -t and -s are mutually exclusive: template validation is a static check that
-# runs under `nix flake check`; the review invokes Claude.
+# -t and --spec/-s are mutually exclusive: template validation is a static
+# check that runs under `nix flake check`; the review invokes Claude.
 #
 # Exit codes:
 #   0 = success (or review passed)
@@ -26,16 +27,14 @@ RALPH_DIR="${RALPH_DIR:-.wrapix/ralph}"
 #-----------------------------------------------------------------------------
 DO_TEMPLATES=false
 DO_SPEC=false
+PRINT_HELP=false
 SPEC_LABEL=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help)
-      # Show full help (same as no-flags)
-      DO_TEMPLATES=false
-      DO_SPEC=false
+      PRINT_HELP=true
       shift
-      break 2>/dev/null || break
       ;;
     -t|--templates)
       DO_TEMPLATES=true
@@ -68,18 +67,19 @@ if [ "$DO_TEMPLATES" = "true" ] && [ "$DO_SPEC" = "true" ]; then
 fi
 
 #-----------------------------------------------------------------------------
-# No flags → print usage help, exit 0
+# --help → print usage, exit 0
 #-----------------------------------------------------------------------------
-if [ "$DO_TEMPLATES" = "false" ] && [ "$DO_SPEC" = "false" ]; then
+if [ "$PRINT_HELP" = "true" ]; then
   echo "Usage: ralph check [flags]"
   echo ""
   echo "Modes:"
-  echo "  -t, --templates         Validate all ralph templates (static, no Claude)"
-  echo "  -s, --spec <label>      Post-epic review of completed work"
+  echo "  (no flags)              Post-loop review of active spec (default)"
+  echo "  -s, --spec <label>      Post-loop review of a named spec"
+  echo "  -t, --templates         Validates all ralph templates (static, no Claude)"
   echo ""
-  echo "-t and -s are mutually exclusive."
+  echo "-t and --spec/-s are mutually exclusive."
   echo ""
-  echo "Validates all ralph templates:"
+  echo "Template validation checks:"
   echo "  - Partial files exist"
   echo "  - Body files parse correctly"
   echo "  - No syntax errors in Nix expressions"
@@ -94,6 +94,13 @@ if [ "$DO_TEMPLATES" = "false" ] && [ "$DO_SPEC" = "false" ]; then
   echo "Environment:"
   echo "  RALPH_TEMPLATE_DIR  Template directory (from nix develop)"
   exit 0
+fi
+
+#-----------------------------------------------------------------------------
+# No flags → default to spec review (resolve label from state/current)
+#-----------------------------------------------------------------------------
+if [ "$DO_TEMPLATES" = "false" ] && [ "$DO_SPEC" = "false" ]; then
+  DO_SPEC=true
 fi
 
 #-----------------------------------------------------------------------------
@@ -379,33 +386,86 @@ NIXEOF
 }
 
 #-----------------------------------------------------------------------------
-# Spec review (-s <label>)
+# Spec review (default / -s <label>)
+#
+# Split across two execution contexts:
+#   - Host side (outside container): resolve label, pre-count beads, launch
+#     wrapix, bd dolt pull after exit, post-count beads, compare.
+#   - Container side (inside wrapix): render check.md, run Claude reviewer,
+#     bd dolt push after RALPH_COMPLETE so the host can pull new beads.
 #-----------------------------------------------------------------------------
 run_spec_review() {
-  local label="$1"
+  local label_arg="${1:-}"
 
-  echo "Ralph check: post-epic review for '$label'"
-  echo ""
-
-  # Container detection: if not in container and wrapix is available, re-launch
+  # -----------------------------------------------------------------------
+  # HOST SIDE: launch container, handle bead sync, compute verdict
+  # -----------------------------------------------------------------------
   if [ ! -f /etc/wrapix/claude-config.json ] && command -v wrapix &>/dev/null; then
+    # Resolve label on host so state file is validated before launching
+    local host_label
+    host_label=$(resolve_spec_label "$label_arg")
+
+    echo "Ralph check: post-loop review for '$host_label'"
+    echo ""
+
+    # Pre-invocation bead count using spec label (survives container bead sync)
+    local beads_before
+    beads_before=$(bd list -l "spec-${host_label}" --json 2>/dev/null \
+      | jq 'length' 2>/dev/null || echo 0)
+    debug "Host pre-count: $beads_before bead(s) with label spec-${host_label}"
+
+    # Re-launch in container with explicit label so container-side resolves
+    # the same spec (avoids state/current drift during a long review).
     export RALPH_MODE=1
     export RALPH_CMD=check
-    export RALPH_ARGS="-s $label"
+    export RALPH_ARGS="-s $host_label"
 
     wrapix
     local wrapix_exit=$?
+
+    # Container bead sync protocol: pull before re-counting on host side
     echo "Syncing beads from container..."
     bd dolt pull 2>/dev/null || echo "Warning: bd dolt pull failed (beads may not be synced)"
-    return $wrapix_exit
+
+    if [ $wrapix_exit -ne 0 ]; then
+      echo ""
+      echo "Review did not complete (container exited $wrapix_exit)."
+      return $wrapix_exit
+    fi
+
+    # Post-sync bead count
+    local beads_after_json beads_after
+    beads_after_json=$(bd list -l "spec-${host_label}" --json 2>/dev/null || echo "[]")
+    beads_after=$(echo "$beads_after_json" | jq 'length' 2>/dev/null || echo 0)
+    local new_beads=$((beads_after - beads_before))
+    debug "Host post-count: $beads_after bead(s) (new: $new_beads)"
+
+    echo ""
+    echo "─────────────────────────────────────"
+    if [ "$new_beads" -le 0 ]; then
+      echo "✓ Review PASSED — no new beads created"
+      notify_event "Ralph" "Review passed for $host_label"
+      return 0
+    else
+      echo "✗ Review found $new_beads new bead(s)"
+      echo ""
+      echo "Follow-up beads:"
+      echo "$beads_after_json" \
+        | jq -r --argjson n "$beads_before" '.[$n:] | .[] | "  - \(.id): \(.title)"' \
+          2>/dev/null || true
+      notify_event "Ralph" "Review found $new_beads issue(s) for $host_label"
+      return 1
+    fi
   fi
 
-  # Resolve spec label (validates state file exists)
-  label=$(resolve_spec_label "$label")
+  # -----------------------------------------------------------------------
+  # CONTAINER SIDE: render check.md, run reviewer, push beads to Dolt
+  # -----------------------------------------------------------------------
+  local label
+  label=$(resolve_spec_label "$label_arg")
 
   local state_file="$RALPH_DIR/state/${label}.json"
 
-  # Read state
   local molecule_id base_commit spec_path
   molecule_id=$(jq -r '.molecule // empty' "$state_file")
   base_commit=$(jq -r '.base_commit // empty' "$state_file")
@@ -424,15 +484,15 @@ run_spec_review() {
     spec_path="specs/${label}.md"
   fi
 
+  echo "Ralph check: post-loop review for '$label'"
   echo "  Spec: $spec_path"
   echo "  Molecule: $molecule_id"
   echo "  Base commit: $base_commit"
   echo ""
 
-  # Compute BEADS_SUMMARY: query molecule's beads, format as titles + status
+  # BEADS_SUMMARY: titles + status for the molecule's beads
   local beads_json beads_summary
   beads_json=$(bd_json list --parent "$molecule_id" --json 2>/dev/null || echo "[]")
-
   if echo "$beads_json" | jq -e 'type == "array" and length > 0' >/dev/null 2>&1; then
     beads_summary=$(echo "$beads_json" | jq -r '.[] | "- \(.id): \(.title) [\(.status)]"')
   else
@@ -442,11 +502,6 @@ run_spec_review() {
   echo "Beads summary:"
   echo "$beads_summary"
   echo ""
-
-  # Count molecule beads BEFORE review
-  local beads_before
-  beads_before=$(echo "$beads_json" | jq 'length' 2>/dev/null || echo "0")
-  debug "Beads before review: $beads_before"
 
   # Read companion manifests
   local companions=""
@@ -467,7 +522,6 @@ run_spec_review() {
     config=$(nix eval --json --file "$config_file" 2>/dev/null || echo "{}")
   fi
 
-  # Check for model.check override
   local model_check
   model_check=$(resolve_model "check" "$config")
 
@@ -493,12 +547,11 @@ run_spec_review() {
   export CHECK_PROMPT="$review_prompt"
   run_claude_stream "CHECK_PROMPT" "$log" "$config" "$model_check"
 
-  # Check for RALPH_COMPLETE in result
+  # Require RALPH_COMPLETE before pushing beads
   if ! jq -e '[.[] | select(.type == "result") | .result | contains("RALPH_COMPLETE")] | any' -s "$log" >/dev/null 2>&1; then
     echo ""
     echo "Review did not complete (no RALPH_COMPLETE signal)."
 
-    # Check for RALPH_CLARIFY
     if jq -e '[.[] | select(.type == "result") | .result | contains("RALPH_CLARIFY")] | any' -s "$log" >/dev/null 2>&1; then
       local clarify_text
       clarify_text=$(jq -r 'select(.type == "result") | .result' "$log" \
@@ -508,41 +561,16 @@ run_spec_review() {
     return 1
   fi
 
+  # Container bead sync protocol: commit + push so the host can pull any
+  # fix-up or ralph:clarify beads the reviewer created.
   echo ""
-
-  # Compare bead count after review
-  local beads_after_json beads_after
-  beads_after_json=$(bd_json list --parent "$molecule_id" --json 2>/dev/null || echo "[]")
-  beads_after=$(echo "$beads_after_json" | jq 'length' 2>/dev/null || echo "0")
-  debug "Beads after review: $beads_after"
-
-  local new_beads=$((beads_after - beads_before))
-
-  echo "─────────────────────────────────────"
-  if [ "$new_beads" -le 0 ]; then
-    echo "✓ Review PASSED — no new beads created"
-    notify_event "Ralph" "Review passed for $label"
-    return 0
-  else
-    echo "✗ Review FAILED — $new_beads new bead(s) created"
-
-    # List the new beads
-    echo ""
-    echo "Follow-up beads:"
-    # Get beads that weren't in the original list
-    local original_ids
-    original_ids=$(echo "$beads_json" | jq -r '.[].id' 2>/dev/null || true)
-    echo "$beads_after_json" | jq -r '.[].id' 2>/dev/null | while IFS= read -r bead_id; do
-      if ! echo "$original_ids" | grep -qF "$bead_id"; then
-        local title
-        title=$(echo "$beads_after_json" | jq -r --arg id "$bead_id" '.[] | select(.id == $id) | .title' 2>/dev/null)
-        echo "  - $bead_id: $title"
-      fi
-    done
-
-    notify_event "Ralph" "Review found $new_beads issue(s) for $label"
-    return 1
+  echo "Pushing beads to Dolt remote..."
+  bd dolt commit >/dev/null 2>&1 || true
+  if ! bd dolt push 2>&1; then
+    echo "Warning: bd dolt push failed — beads may not reach host"
   fi
+
+  return 0
 }
 
 #-----------------------------------------------------------------------------

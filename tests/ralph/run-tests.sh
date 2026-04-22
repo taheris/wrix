@@ -5100,6 +5100,127 @@ EOF
   teardown_test_env
 }
 
+# Test: ralph check (no flags) runs the post-loop review against the resolved spec
+test_check_default_runs_review() {
+  CURRENT_TEST="check_default_runs_review"
+  test_header "ralph check (no flags) runs post-loop review using state/current"
+
+  setup_test_env "check-default-runs-review"
+  init_beads
+
+  local label="default-review-feature"
+
+  # Minimal state: state/current + state/<label>.json with molecule
+  echo "$label" > "$RALPH_DIR/state/current"
+  local mol_id
+  mol_id=$(bd create --type=epic --title="Default review molecule" \
+    --labels="spec-$label" --silent)
+  cat > "$RALPH_DIR/state/${label}.json" <<JSON
+{"label":"$label","spec_path":"specs/${label}.md","molecule":"$mol_id","base_commit":"HEAD"}
+JSON
+
+  # Minimal spec file
+  cat > "$TEST_DIR/specs/${label}.md" <<'SPEC'
+# Default review feature
+Spec body.
+SPEC
+
+  # Mock claude with a tripwire + RALPH_COMPLETE so host logic can progress
+  local tripwire="$TEST_DIR/claude-invocations.log"
+  rm -f "$tripwire" "$TEST_DIR/bin/claude"
+  cat > "$TEST_DIR/bin/claude" <<EOF
+#!/usr/bin/env bash
+echo "invoked with args: \$*" >> "$tripwire"
+cat <<'STREAM'
+{"type":"result","result":"RALPH_COMPLETE"}
+STREAM
+exit 0
+EOF
+  chmod +x "$TEST_DIR/bin/claude"
+
+  set +e
+  local output
+  output=$(ralph-check 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [ -s "$tripwire" ]; then
+    test_pass "ralph check (no flags) invoked claude"
+  else
+    test_fail "ralph check (no flags) did not invoke claude (output: $output, exit=$exit_code)"
+  fi
+
+  if echo "$output" | grep -q "post-loop review for '$label'"; then
+    test_pass "ralph check (no flags) resolved label from state/current"
+  else
+    test_fail "Expected output to mention label '$label' resolved from state/current (output: $output)"
+  fi
+
+  teardown_test_env
+}
+
+# Test: check.sh runs bd dolt push inside the container after RALPH_COMPLETE
+test_check_dolt_push_in_container() {
+  CURRENT_TEST="check_dolt_push_in_container"
+  test_header "check.sh: contains bd dolt push in container-side after RALPH_COMPLETE"
+
+  local check_script="$REPO_ROOT/lib/ralph/cmd/check.sh"
+
+  if grep -q 'bd dolt push' "$check_script"; then
+    test_pass "check.sh contains bd dolt push"
+  else
+    test_fail "check.sh should contain 'bd dolt push'"
+    return
+  fi
+
+  # bd dolt push must appear after the RALPH_COMPLETE check (container-side).
+  # Skip commented lines so docstrings referencing the protocol don't trip us up.
+  local complete_line push_line
+  complete_line=$(grep -n 'contains("RALPH_COMPLETE")' "$check_script" | head -1 | cut -d: -f1)
+  push_line=$(grep -nE '^[[:space:]]*([a-zA-Z_].*)?bd dolt push' "$check_script" | head -1 | cut -d: -f1)
+
+  if [ -n "$complete_line" ] && [ -n "$push_line" ] && [ "$push_line" -gt "$complete_line" ]; then
+    test_pass "bd dolt push appears after RALPH_COMPLETE check"
+  else
+    test_fail "bd dolt push should appear after RALPH_COMPLETE check (complete:$complete_line push:$push_line)"
+  fi
+}
+
+# Test: check.sh runs bd dolt pull on host after container exits, before re-counting beads
+test_check_dolt_pull_before_recount() {
+  CURRENT_TEST="check_dolt_pull_before_recount"
+  test_header "check.sh: host-side bd dolt pull runs before post-count"
+
+  local check_script="$REPO_ROOT/lib/ralph/cmd/check.sh"
+
+  if grep -q 'bd dolt pull' "$check_script"; then
+    test_pass "check.sh contains bd dolt pull"
+  else
+    test_fail "check.sh should contain 'bd dolt pull'"
+    return
+  fi
+
+  # Find the host-side path: wrapix invocation, then bd dolt pull, then post-count.
+  # Skip commented lines so docstrings referencing the protocol don't trip us up.
+  local wrapix_line pull_line recount_line
+  wrapix_line=$(grep -n '^[[:space:]]*wrapix$' "$check_script" | head -1 | cut -d: -f1)
+  pull_line=$(grep -nE '^[[:space:]]*([a-zA-Z_].*)?bd dolt pull' "$check_script" | head -1 | cut -d: -f1)
+  # Post-count uses `bd list -l "spec-${host_label}"` on the host branch
+  recount_line=$(grep -n 'beads_after=' "$check_script" | head -1 | cut -d: -f1)
+
+  if [ -n "$wrapix_line" ] && [ -n "$pull_line" ] && [ "$pull_line" -gt "$wrapix_line" ]; then
+    test_pass "bd dolt pull runs after wrapix exits"
+  else
+    test_fail "bd dolt pull should run after wrapix exits (wrapix:$wrapix_line pull:$pull_line)"
+  fi
+
+  if [ -n "$pull_line" ] && [ -n "$recount_line" ] && [ "$recount_line" -gt "$pull_line" ]; then
+    test_pass "Host-side post-count happens after bd dolt pull"
+  else
+    test_fail "Post-count should happen after bd dolt pull (pull:$pull_line recount:$recount_line)"
+  fi
+}
+
 # Test: default config template has hooks configured
 test_default_config_has_hooks() {
   CURRENT_TEST="default_config_has_hooks"
@@ -10678,6 +10799,9 @@ PARALLEL_TESTS=(
   test_check_invalid_nix_syntax
   test_check_exit_codes
   test_check_templates_no_claude
+  test_check_default_runs_review
+  test_check_dolt_push_in_container
+  test_check_dolt_pull_before_recount
   test_default_config_has_hooks
   test_parse_annotation_link
   test_parse_spec_annotations
