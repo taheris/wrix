@@ -287,7 +287,7 @@ show_single_status() {
       echo "$current_output" | grep -E '^\s*\[(done|current|ready|blocked|pending)\]' || echo "  (no position markers found)"
     else
       # Fallback: show next ready task
-      local bead_label="spec-$label"
+      local bead_label="spec:$label"
       local next_issue
       next_issue=$(bd list --label "$bead_label" --ready --sort priority --limit 1 --json 2>/dev/null | jq -r '.[0].id // empty') || true
       if [ -n "$next_issue" ]; then
@@ -310,7 +310,7 @@ show_single_status() {
     echo ""
 
     # Show awaiting input items
-    show_awaiting_items "spec-$label"
+    show_awaiting_items "spec:$label"
 
     # Check for stale molecules (hygiene warnings)
     echo "Warnings:"
@@ -323,7 +323,7 @@ show_single_status() {
     echo ""
   else
     # Fallback: no molecule set, use legacy label-based counting
-    local bead_label="spec-$label"
+    local bead_label="spec:$label"
     echo "Beads Progress ($bead_label):"
     echo "  (No molecule set - using label-based counting)"
     echo ""
@@ -384,7 +384,7 @@ show_single_status() {
 # Helper function for label-based progress (fallback when molecule commands fail)
 show_label_progress() {
   local label="$1"
-  local bead_label="spec-$label"
+  local bead_label="spec:$label"
 
   # Count by status
   local open_count in_progress_count closed_count ready_count total

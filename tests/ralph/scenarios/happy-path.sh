@@ -64,7 +64,7 @@ phase_todo() {
 
   # Create an epic for this feature (epic becomes the molecule root)
   local epic_json
-  epic_json=$(bd create --title="Happy Path Feature" --type=epic --labels="spec-$label" --json 2>/dev/null)
+  epic_json=$(bd create --title="Happy Path Feature" --type=epic --labels="spec:$label" --json 2>/dev/null)
   local epic_id
   epic_id=$(echo "$epic_json" | jq -r '.id')
 
@@ -88,17 +88,17 @@ phase_todo() {
   # Tasks are bonded to the molecule for proper tracking.
 
   local task_a_id
-  task_a_id=$(bd create --title="Task A - First task" --type=task --labels="spec-$label" --silent 2>/dev/null)
+  task_a_id=$(bd create --title="Task A - First task" --type=task --labels="spec:$label" --silent 2>/dev/null)
   bd mol bond "$epic_id" "$task_a_id" --type parallel 2>/dev/null || true
   echo "Created and bonded Task A: $task_a_id"
 
   local task_b_id
-  task_b_id=$(bd create --title="Task B - Second task" --type=task --labels="spec-$label" --silent 2>/dev/null)
+  task_b_id=$(bd create --title="Task B - Second task" --type=task --labels="spec:$label" --silent 2>/dev/null)
   bd mol bond "$epic_id" "$task_b_id" --type parallel 2>/dev/null || true
   echo "Created and bonded Task B: $task_b_id"
 
   local task_c_id
-  task_c_id=$(bd create --title="Task C - Third task" --type=task --labels="spec-$label" --silent 2>/dev/null)
+  task_c_id=$(bd create --title="Task C - Third task" --type=task --labels="spec:$label" --silent 2>/dev/null)
   bd mol bond "$epic_id" "$task_c_id" --type parallel 2>/dev/null || true
   echo "Created and bonded Task C: $task_c_id"
 

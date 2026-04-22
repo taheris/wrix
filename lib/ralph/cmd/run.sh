@@ -135,7 +135,7 @@ if [ ! -f /etc/wrapix/claude-config.json ] && command -v wrapix &>/dev/null; the
       _host_issue=""
       _host_title=""
       if command -v bd >/dev/null 2>&1; then
-        _next=$(bd ready --label "spec-${_host_label}" --sort priority --json 2>/dev/null \
+        _next=$(bd ready --label "spec:${_host_label}" --sort priority --json 2>/dev/null \
           | jq -r '[.[] | select(.issue_type != "epic")][0] | "\(.id // "")\t\(.title // "")"' 2>/dev/null || true)
         _host_issue="${_next%%$'\t'*}"
         _host_title="${_next#*$'\t'}"
@@ -422,7 +422,7 @@ run_step() {
   local label="$1"
   local hidden="$2"
 
-  local bead_label="spec-$label"
+  local bead_label="spec:$label"
   debug "Looking for issues with label: $bead_label"
 
   # Find next ready issue with this label (excluding epics - they're containers, not work items)
@@ -737,7 +737,7 @@ run_parallel_batch() {
   local label="$1"
   local hidden="$2"
   local parallel="$3"
-  local bead_label="spec-$label"
+  local bead_label="spec:$label"
 
   # Get up to N ready beads
   local bead_ids
@@ -873,7 +873,7 @@ while true; do
       grep -oE '^[a-z]+-[a-zA-Z0-9.]+' | head -1 || true)
   elif [ -n "$FEATURE_NAME" ]; then
     # Fall back to label-based query for backward compatibility
-    current_issue_id=$(bd ready --label "spec-$FEATURE_NAME" --sort priority --json 2>/dev/null | \
+    current_issue_id=$(bd ready --label "spec:$FEATURE_NAME" --sort priority --json 2>/dev/null | \
       jq -r '[.[] | select(.issue_type == "epic" | not)][0].id // empty' 2>/dev/null || true)
   fi
 
@@ -935,7 +935,7 @@ done
 
 if [ "$RUN_CHECK" = "true" ] && [ "$FINAL_EXIT_CODE" -eq 0 ] && [ "$RUN_ONCE" != "true" ]; then
   review_cycle=0
-  bead_label="spec-$FEATURE_NAME"
+  bead_label="spec:$FEATURE_NAME"
 
   while [ "$review_cycle" -lt "$MAX_REVIEWS" ]; do
     ((++review_cycle))

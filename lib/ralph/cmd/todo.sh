@@ -288,7 +288,7 @@ if [ "$UPDATE_MODE" = "true" ]; then
   else
     echo "  Mode: UPDATE (creating molecule for existing spec)"
     echo "  Creating epic..."
-    MOLECULE_ID=$(bd create --type=epic --title="$SPEC_TITLE" --labels="spec-$LABEL" --silent)
+    MOLECULE_ID=$(bd create --type=epic --title="$SPEC_TITLE" --labels="spec:$LABEL" --silent)
     jq --arg mol "$MOLECULE_ID" '.molecule = $mol' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
     echo "  Molecule: $MOLECULE_ID"
   fi
@@ -448,7 +448,7 @@ if jq -e '[.[] | select(.type == "result") | .result | contains("RALPH_COMPLETE"
 
   echo ""
   echo "To list created issues:"
-  echo "  bd list -l spec-$LABEL"
+  echo "  bd list -l spec:$LABEL"
   echo ""
   echo "To work through issues:"
   echo "  ralph run         # Work all issues automatically"

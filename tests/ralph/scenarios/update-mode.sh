@@ -81,7 +81,7 @@ phase_todo() {
 
   # Create new Task D (new requirement from update)
   local task_d_json
-  task_d_json=$(bd create --title="Task D - New validation feature" --type=task --labels="spec-$label" --json 2>/dev/null)
+  task_d_json=$(bd create --title="Task D - New validation feature" --type=task --labels="spec:$label" --json 2>/dev/null)
   local task_d_id
   task_d_id=$(echo "$task_d_json" | jq -r '.id')
   echo "Created new Task D: $task_d_id"
@@ -95,7 +95,7 @@ phase_todo() {
 
   # Create another new task that depends on Task D
   local task_e_json
-  task_e_json=$(bd create --title="Task E - Validation tests" --type=task --labels="spec-$label" --json 2>/dev/null)
+  task_e_json=$(bd create --title="Task E - Validation tests" --type=task --labels="spec:$label" --json 2>/dev/null)
   local task_e_id
   task_e_id=$(echo "$task_e_json" | jq -r '.id')
   echo "Created new Task E: $task_e_id"

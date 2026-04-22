@@ -1268,14 +1268,14 @@ remove_clarify_label() {
 }
 
 # List beads carrying the ralph:clarify label.
-# Optionally filter by spec label (adds --label spec-<label>).
+# Optionally filter by spec label (adds --label spec:<label>).
 # Usage: list_clarify_beads [spec_label]
 # Output: JSON array of beads ([] on error or no results)
 list_clarify_beads() {
   local spec_label="${1:-}"
   local -a args=(list --label "ralph:clarify" --json)
   if [ -n "$spec_label" ]; then
-    args+=(--label "spec-$spec_label")
+    args+=(--label "spec:$spec_label")
   fi
   bd_json "${args[@]}" || echo "[]"
 }

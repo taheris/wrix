@@ -11,7 +11,7 @@ phase_run() {
   # First, output what work items are available to a "second agent"
   # This simulates checking bd ready from a parallel agent's perspective
 
-  local label="${PARALLEL_CHECK_LABEL:-spec-test-feature}"
+  local label="${PARALLEL_CHECK_LABEL:-spec:test-feature}"
 
   echo "=== Parallel Agent Simulation ==="
   echo "Checking available work for second agent..."

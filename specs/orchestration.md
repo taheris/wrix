@@ -156,7 +156,7 @@ ralph watch -s <label> --panes <panes>    # Specify tmux panes to observe
 3. Deduplication check against `known_issues` in watch state and existing beads (`bd list`)
 4. Creates bead with title, description, reproduction steps, log snippets
 5. Bonds bead to the molecule (`bd mol bond`) so `ralph run` can pick it up
-6. Labels: `spec-<label>`, `profile:<X>`, `source:watch`
+6. Labels: `spec:<label>`, `profile:<X>`, `source:watch`
 7. Updates watch state with new known issue
 
 **Config:**

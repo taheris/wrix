@@ -79,7 +79,7 @@ proposed options and attach the `ralph:clarify` label, then bond it to the molec
 CLARIFY_ID=$(bd create \
   --title="Invariant clash: <short summary>" \
   --type=task \
-  --labels="spec-{{LABEL}},ralph:clarify,profile:base" \
+  --labels="spec:{{LABEL}},ralph:clarify,profile:base" \
   --parent="{{MOLECULE_ID}}" \
   --description="$(cat <<'EOF'
 ## Clash
@@ -109,7 +109,7 @@ tests, typos), create follow-up beads directly — label them with the appropria
 NEW_ID=$(bd create \
   --title="..." \
   --type=bug \
-  --labels="spec-{{LABEL}},profile:base" \
+  --labels="spec:{{LABEL}},profile:base" \
   --parent="{{MOLECULE_ID}}" \
   --silent)
 bd mol bond "$NEW_ID" "{{MOLECULE_ID}}"

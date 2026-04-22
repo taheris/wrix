@@ -157,7 +157,7 @@ phase_todo() {
 
   # Create a molecule (epic as root)
   local epic_json
-  epic_json=$(bd create --title="Check Status Test" --type=epic --labels="spec-$label" --json 2>/dev/null)
+  epic_json=$(bd create --title="Check Status Test" --type=epic --labels="spec:$label" --json 2>/dev/null)
   local epic_id
   epic_id=$(echo "$epic_json" | jq -r '.id')
 
@@ -175,19 +175,19 @@ phase_todo() {
   # Create tasks with various states for testing
   # Task A: Will be completed (for [done] marker)
   local task_a_json
-  task_a_json=$(bd create --title="Task A - Completed" --type=task --labels="spec-$label" --json 2>/dev/null)
+  task_a_json=$(bd create --title="Task A - Completed" --type=task --labels="spec:$label" --json 2>/dev/null)
   local task_a_id
   task_a_id=$(echo "$task_a_json" | jq -r '.id')
 
   # Task B: Will be in_progress (for [current] marker)
   local task_b_json
-  task_b_json=$(bd create --title="Task B - In Progress" --type=task --labels="spec-$label" --json 2>/dev/null)
+  task_b_json=$(bd create --title="Task B - In Progress" --type=task --labels="spec:$label" --json 2>/dev/null)
   local task_b_id
   task_b_id=$(echo "$task_b_json" | jq -r '.id')
 
   # Task C: Depends on Task B (for [blocked] marker)
   local task_c_json
-  task_c_json=$(bd create --title="Task C - Blocked" --type=task --labels="spec-$label" --json 2>/dev/null)
+  task_c_json=$(bd create --title="Task C - Blocked" --type=task --labels="spec:$label" --json 2>/dev/null)
   local task_c_id
   task_c_id=$(echo "$task_c_json" | jq -r '.id')
 

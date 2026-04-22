@@ -27,7 +27,7 @@ phase_todo() {
 
   # Create a task with the specified priority
   local task_json
-  task_json=$(bd create --title="Priority test task" --type=task --labels="spec-$label" --priority="$priority" --json 2>/dev/null)
+  task_json=$(bd create --title="Priority test task" --type=task --labels="spec:$label" --priority="$priority" --json 2>/dev/null)
   local task_id
   task_id=$(echo "$task_json" | jq -r '.id')
 

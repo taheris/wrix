@@ -29,7 +29,7 @@ You are an observation agent monitoring running services for spec **{{LABEL}}**.
 
 When you find a genuine issue:
 ```bash
-NEW_ID=$(bd create --title="..." --type=bug --labels="spec-{{LABEL}},source:watch" \
+NEW_ID=$(bd create --title="..." --type=bug --labels="spec:{{LABEL}},source:watch" \
   --parent="{{MOLECULE_ID}}" --silent)
 bd mol bond "$NEW_ID" "{{MOLECULE_ID}}"
 ```

@@ -100,11 +100,11 @@ get_source_label() {
 }
 
 #-----------------------------------------------------------------------------
-# Extract spec label from bead labels (spec-<label>)
+# Extract spec label from bead labels (spec:<label>)
 #-----------------------------------------------------------------------------
 get_spec_from_labels() {
   local labels_json="$1"
-  echo "$labels_json" | jq -r '[.[] | select(startswith("spec-"))] | first // "—"' 2>/dev/null | sed 's/^spec-//'
+  echo "$labels_json" | jq -r '[.[] | select(startswith("spec:"))] | first // "—"' 2>/dev/null | sed 's/^spec://'
 }
 
 #-----------------------------------------------------------------------------

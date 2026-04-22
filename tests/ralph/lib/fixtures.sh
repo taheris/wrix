@@ -138,7 +138,7 @@ Molecule: {{MOLECULE_ID}}
 1. **Understand**: Read the spec and issue thoroughly before making changes
 2. **Implement**: Write code following the spec
 3. **Discovered Work**: If you find tasks outside this issue's scope:
-   - Create with: `bd create --title="..." --labels="spec-{{LABEL}}"`
+   - Create with: `bd create --title="..." --labels="spec:{{LABEL}}"`
    - Bond to molecule: `bd mol bond {{MOLECULE_ID}} <new-issue>`
 4. **Quality Gates**: Before completing, ensure:
    - [ ] All tests pass
@@ -159,7 +159,7 @@ EOF
 
 Read: {{SPEC_PATH}}
 
-Label: spec-{{LABEL}}
+Label: spec:{{LABEL}}
 Priority: {{PRIORITY}}
 Spec Title: {{SPEC_TITLE}}
 

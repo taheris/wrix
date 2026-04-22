@@ -87,7 +87,7 @@ if [[ -z "$LOG_FILE" ]]; then
 
   # Resolve spec label to filter logs by workflow
   LABEL=$(resolve_spec_label "$SPEC_FLAG")
-  BEAD_LABEL="spec-$LABEL"
+  BEAD_LABEL="spec:$LABEL"
   debug "logs: resolved label=$LABEL, bead_label=$BEAD_LABEL"
 
   # Get issue IDs for this spec's workflow

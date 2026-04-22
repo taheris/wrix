@@ -29,7 +29,7 @@ Title: {{TITLE}}
 4. **Discovered Work**: If you find tasks outside this issue's scope:
    - Create the issue as a child of the molecule:
      ```bash
-     NEW_ID=$(bd create --title="..." --type=task --labels="spec-{{LABEL}}" \
+     NEW_ID=$(bd create --title="..." --type=task --labels="spec:{{LABEL}}" \
        --parent="{{MOLECULE_ID}}" --silent)
      ```
    - Set execution order if needed:

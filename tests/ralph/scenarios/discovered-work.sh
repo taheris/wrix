@@ -72,7 +72,7 @@ phase_todo() {
 
   # Create an epic for this feature (epic becomes the molecule root)
   local epic_json
-  epic_json=$(bd create --title="Discovered Work Feature" --type=epic --labels="spec-$label" --json 2>/dev/null)
+  epic_json=$(bd create --title="Discovered Work Feature" --type=epic --labels="spec:$label" --json 2>/dev/null)
   local epic_id
   epic_id=$(echo "$epic_json" | jq -r '.id')
 
@@ -89,7 +89,7 @@ phase_todo() {
 
   # Create the main task that will discover work
   local main_task_id
-  main_task_id=$(bd create --title="Main Task - discovers additional work" --type=task --labels="spec-$label" --silent 2>/dev/null)
+  main_task_id=$(bd create --title="Main Task - discovers additional work" --type=task --labels="spec:$label" --silent 2>/dev/null)
   bd mol bond "$epic_id" "$main_task_id" --type parallel 2>/dev/null || true
   echo "Created and bonded Main Task: $main_task_id"
 
@@ -134,7 +134,7 @@ phase_run() {
 
     # Create the discovered task
     local discovered_json
-    discovered_json=$(bd create --title="Discovered Sequential Work - prerequisite" --type=task --labels="spec-$label" --json 2>/dev/null)
+    discovered_json=$(bd create --title="Discovered Sequential Work - prerequisite" --type=task --labels="spec:$label" --json 2>/dev/null)
     local discovered_id
     discovered_id=$(echo "$discovered_json" | jq -r '.id')
     echo "Created discovered task: $discovered_id"
@@ -161,7 +161,7 @@ phase_run() {
 
     # Create the discovered task
     local discovered_json
-    discovered_json=$(bd create --title="Discovered Parallel Work - independent" --type=task --labels="spec-$label" --json 2>/dev/null)
+    discovered_json=$(bd create --title="Discovered Parallel Work - independent" --type=task --labels="spec:$label" --json 2>/dev/null)
     local discovered_id
     discovered_id=$(echo "$discovered_json" | jq -r '.id')
     echo "Created discovered task: $discovered_id"
@@ -187,7 +187,7 @@ phase_run() {
 
     # Sequential task
     local seq_json
-    seq_json=$(bd create --title="Discovered Sequential Work - must do first" --type=task --labels="spec-$label" --json 2>/dev/null)
+    seq_json=$(bd create --title="Discovered Sequential Work - must do first" --type=task --labels="spec:$label" --json 2>/dev/null)
     local seq_id
     seq_id=$(echo "$seq_json" | jq -r '.id')
     echo "Created sequential task: $seq_id"
@@ -200,7 +200,7 @@ phase_run() {
 
     # Parallel task
     local par_json
-    par_json=$(bd create --title="Discovered Parallel Work - can do later" --type=task --labels="spec-$label" --json 2>/dev/null)
+    par_json=$(bd create --title="Discovered Parallel Work - can do later" --type=task --labels="spec:$label" --json 2>/dev/null)
     local par_id
     par_id=$(echo "$par_json" | jq -r '.id')
     echo "Created parallel task: $par_id"

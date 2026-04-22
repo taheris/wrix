@@ -458,9 +458,9 @@ run_spec_review() {
 
     # Pre-invocation bead count using spec label (survives container bead sync)
     local beads_before
-    beads_before=$(bd list -l "spec-${host_label}" --json 2>/dev/null \
+    beads_before=$(bd list -l "spec:${host_label}" --json 2>/dev/null \
       | jq 'length' 2>/dev/null || echo 0)
-    debug "Host pre-count: $beads_before bead(s) with label spec-${host_label}"
+    debug "Host pre-count: $beads_before bead(s) with label spec:${host_label}"
 
     # Re-launch in container with explicit label so container-side resolves
     # the same spec (avoids state/current drift during a long review).
@@ -501,7 +501,7 @@ run_spec_review() {
 
     # Post-sync bead count
     local beads_after_json beads_after
-    beads_after_json=$(bd list -l "spec-${host_label}" --json 2>/dev/null || echo "[]")
+    beads_after_json=$(bd list -l "spec:${host_label}" --json 2>/dev/null || echo "[]")
     beads_after=$(echo "$beads_after_json" | jq 'length' 2>/dev/null || echo 0)
     local new_beads=$((beads_after - beads_before))
     debug "Host post-count: $beads_after bead(s) (new: $new_beads)"

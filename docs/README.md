@@ -19,7 +19,7 @@ pin — keep it current when specs land or retire.
 | ~~[orchestration.md](../specs/orchestration.md)~~ | — | ~~wx-fqkv~~ | *Superseded by gas-city.md and ralph-workflow.md* |
 | [playwright-mcp.md](../specs/playwright-mcp.md) | [`lib/mcp/playwright/`](../lib/mcp/playwright/) | wx-9mvh | Browser automation for frontend development |
 | [pre-commit.md](../specs/pre-commit.md) | [`.pre-commit-config.yaml`](../.pre-commit-config.yaml), [`lib/ralph/cmd/run.sh`](../lib/ralph/cmd/run.sh) | wx-t6rh | Git hooks and ralph run integration |
-| [profiles.md](../specs/profiles.md) | [`lib/sandbox/profiles.nix`](../lib/sandbox/profiles.nix) | wx-zna0 | Pre-configured development environments |
+| [profiles.md](../specs/profiles.md) | [`lib/sandbox/profiles.nix`](../lib/sandbox/profiles.nix) | wx-1thzk | Pre-configured development environments |
 | [ralph-tests.md](../specs/ralph-tests.md) | [`tests/ralph/`](../tests/ralph/) | wx-h0qqy | Integration tests for ralph workflow |
 | [ralph-workflow.md](../specs/ralph-workflow.md) | [`lib/ralph/`](../lib/ralph/) | wx-zay1 | Spec-driven AI orchestration |
 | [sandbox.md](../specs/sandbox.md) | [`lib/sandbox/default.nix`](../lib/sandbox/default.nix) | — | Platform-agnostic container isolation |

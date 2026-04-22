@@ -42,7 +42,7 @@ Use `bd mol show {{MOLECULE_ID}}` to see the current tasks in this molecule.
 2. **Create new tasks as children of the molecule**:
    ```bash
    TASK_ID=$(bd create --title="<task title>" --description="<detailed description>" \
-     --type=task --labels="spec-{{LABEL}},profile:<profile>" --parent="{{MOLECULE_ID}}" --silent)
+     --type=task --labels="spec:{{LABEL}},profile:<profile>" --parent="{{MOLECULE_ID}}" --silent)
    ```
 3. **Assign profile per-task** based on implementation needs:
    - Tasks touching `.rs` files or using cargo → `profile:rust`
