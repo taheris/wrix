@@ -11913,43 +11913,88 @@ test_simulate_compact_event_returns_additional_context() {
 
 test_simulate_compact_event_refresh_per_invocation() {
   CURRENT_TEST="simulate_compact_event_refresh_per_invocation"
-  test_header "simulate_compact_event reflects updated content between successive invocations"
+  test_header "simulate_compact_event reflects state changes across successive ralph commands"
 
   setup_test_env "simulate-compact-refresh"
+  init_beads
   # shellcheck source=../../lib/ralph/cmd/util.sh
   source "$REPO_ROOT/lib/ralph/cmd/util.sh"
 
-  install_repin_hook "my-feature" \
-    "$(build_repin_content "my-feature" "todo" "molecule=wx-abc")"
-  local first
-  first=$(simulate_compact_event) || {
-    test_fail "first simulate_compact_event failed"
+  local label="refresh-feat"
+  local spec_path="specs/${label}.md"
+  create_test_spec "$label"
+
+  # Stage 1 — mirror `ralph plan`: spec + mode, no molecule yet.
+  install_repin_hook "$label" \
+    "$(build_repin_content "$label" plan "spec=$spec_path" "mode=new")"
+  local after_plan
+  if ! after_plan=$(simulate_compact_event "$label"); then
+    test_fail "simulate_compact_event failed after plan stage"
     unset RALPH_RUNTIME_DIR
     teardown_test_env
     return
-  }
-
-  # Overwrite with fresh content as a subsequent ralph command would.
-  install_repin_hook "my-feature" \
-    "$(build_repin_content "my-feature" "run" "molecule=wx-abc" "issue=wx-abc.1")"
-  local second
-  second=$(simulate_compact_event) || {
-    test_fail "second simulate_compact_event failed"
-    unset RALPH_RUNTIME_DIR
-    teardown_test_env
-    return
-  }
-
-  if [ "$first" = "$second" ]; then
-    test_fail "simulate_compact_event returned identical output across invocations"
-  else
-    test_pass "output refreshes when re-pin content is rewritten"
   fi
 
-  if echo "$second" | grep -q "Issue: wx-abc.1"; then
-    test_pass "second invocation reflects newly installed issue"
+  # Stage 2 — mirror `ralph todo`: real epic id appears as Molecule.
+  local epic_id
+  epic_id=$(bd create --title="Refresh feat" --type=epic \
+    --labels="spec-$label" --silent 2>/dev/null)
+  if [ -z "$epic_id" ]; then
+    test_fail "could not create epic for refresh test"
+    unset RALPH_RUNTIME_DIR
+    teardown_test_env
+    return
+  fi
+  install_repin_hook "$label" \
+    "$(build_repin_content "$label" todo "spec=$spec_path" "molecule=$epic_id")"
+  local after_todo
+  if ! after_todo=$(simulate_compact_event "$label"); then
+    test_fail "simulate_compact_event failed after todo stage"
+    unset RALPH_RUNTIME_DIR
+    teardown_test_env
+    return
+  fi
+
+  if echo "$after_plan" | grep -q "^Molecule: "; then
+    test_fail "plan-stage context must not contain Molecule:; got: $after_plan"
+  elif ! echo "$after_todo" | grep -q "^Molecule: ${epic_id}$"; then
+    test_fail "todo-stage context missing 'Molecule: ${epic_id}'; got: $after_todo"
+  elif [ "$after_plan" = "$after_todo" ]; then
+    test_fail "plan and todo contexts must differ; identical output"
   else
-    test_fail "second invocation did not pick up new content"
+    test_pass "molecule id appears between plan and todo invocations"
+  fi
+
+  # Stage 3 — mirror `ralph run --once`: claimed task id appears as Issue.
+  local task_id task_title="Implement refresh feat"
+  task_id=$(bd create --title="$task_title" --type=task \
+    --labels="spec-$label" --json 2>/dev/null | jq -r '.id')
+  if [ -z "$task_id" ] || [ "$task_id" = "null" ]; then
+    test_fail "could not create task for refresh test"
+    unset RALPH_RUNTIME_DIR
+    teardown_test_env
+    return
+  fi
+  install_repin_hook "$label" \
+    "$(build_repin_content "$label" run \
+      "spec=$spec_path" "molecule=$epic_id" \
+      "issue=$task_id" "title=$task_title")"
+  local after_run
+  if ! after_run=$(simulate_compact_event "$label"); then
+    test_fail "simulate_compact_event failed after run-once stage"
+    unset RALPH_RUNTIME_DIR
+    teardown_test_env
+    return
+  fi
+
+  if echo "$after_todo" | grep -q "^Issue: "; then
+    test_fail "todo-stage context must not contain Issue:; got: $after_todo"
+  elif ! echo "$after_run" | grep -q "^Issue: ${task_id}$"; then
+    test_fail "run-stage context missing 'Issue: ${task_id}'; got: $after_run"
+  elif [ "$after_todo" = "$after_run" ]; then
+    test_fail "todo and run contexts must differ; identical output"
+  else
+    test_pass "claimed issue id appears between todo and run-once invocations"
   fi
 
   unset RALPH_RUNTIME_DIR
