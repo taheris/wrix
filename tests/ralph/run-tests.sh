@@ -10890,6 +10890,182 @@ EOF
 }
 
 #-----------------------------------------------------------------------------
+# Compaction re-pin helper tests (build_repin_content / install_repin_hook)
+#-----------------------------------------------------------------------------
+
+test_repin_hook_settings_shape() {
+  CURRENT_TEST="repin_hook_settings_shape"
+  test_header "install_repin_hook writes SessionStart[compact] fragment pointing at repin.sh"
+
+  setup_test_env "repin-settings-shape"
+  # shellcheck source=../../lib/ralph/cmd/util.sh
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  install_repin_hook "my-feature" "orientation text"
+
+  local settings="$RALPH_DIR/runtime/my-feature/claude-settings.json"
+  if [ ! -f "$settings" ]; then
+    test_fail "claude-settings.json not written at $settings"
+    teardown_test_env
+    return
+  fi
+
+  local matcher cmd
+  matcher=$(jq -r '.hooks.SessionStart[0].matcher' "$settings")
+  cmd=$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$settings")
+
+  if [ "$matcher" = "compact" ]; then
+    test_pass "SessionStart matcher is \"compact\""
+  else
+    test_fail "expected matcher=compact, got '$matcher'"
+  fi
+
+  if [ "$cmd" = "/workspace/.wrapix/ralph/runtime/my-feature/repin.sh" ]; then
+    test_pass "hook command points at container-side repin.sh"
+  else
+    test_fail "unexpected hook command: '$cmd'"
+  fi
+
+  if [ -x "$RALPH_DIR/runtime/my-feature/repin.sh" ]; then
+    test_pass "repin.sh is executable"
+  else
+    test_fail "repin.sh missing or not executable"
+  fi
+
+  if [ "${RALPH_RUNTIME_DIR:-}" = "$RALPH_DIR/runtime/my-feature" ]; then
+    test_pass "RALPH_RUNTIME_DIR exported"
+  else
+    test_fail "RALPH_RUNTIME_DIR not exported (got '${RALPH_RUNTIME_DIR:-}')"
+  fi
+
+  unset RALPH_RUNTIME_DIR
+  teardown_test_env
+}
+
+test_repin_script_output() {
+  CURRENT_TEST="repin_script_output"
+  test_header "repin.sh emits hookSpecificOutput.additionalContext JSON"
+
+  setup_test_env "repin-script-output"
+  # shellcheck source=../../lib/ralph/cmd/util.sh
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  local content
+  content=$(build_repin_content "my-feature" "todo" "molecule=wx-abc" "issue=wx-abc.1")
+  install_repin_hook "my-feature" "$content"
+
+  local output event ctx
+  output=$(bash "$RALPH_DIR/runtime/my-feature/repin.sh")
+
+  if ! echo "$output" | jq empty 2>/dev/null; then
+    test_fail "repin.sh output is not valid JSON"
+    unset RALPH_RUNTIME_DIR
+    teardown_test_env
+    return
+  fi
+
+  event=$(echo "$output" | jq -r '.hookSpecificOutput.hookEventName')
+  ctx=$(echo "$output" | jq -r '.hookSpecificOutput.additionalContext')
+
+  if [ "$event" = "SessionStart" ]; then
+    test_pass "hookEventName is SessionStart"
+  else
+    test_fail "expected hookEventName=SessionStart, got '$event'"
+  fi
+
+  if echo "$ctx" | grep -q "Label: my-feature" && echo "$ctx" | grep -q "RALPH_COMPLETE"; then
+    test_pass "additionalContext contains orientation (label + exit signals)"
+  else
+    test_fail "additionalContext missing orientation markers"
+  fi
+
+  unset RALPH_RUNTIME_DIR
+  teardown_test_env
+}
+
+test_repin_content_is_condensed() {
+  CURRENT_TEST="repin_content_is_condensed"
+  test_header "build_repin_content excludes full spec body and issue description"
+
+  setup_test_env "repin-content-condensed"
+  # shellcheck source=../../lib/ralph/cmd/util.sh
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  # Drop a spec with a unique sentinel phrase; re-pin must not echo it.
+  local sentinel="SENTINEL_SPEC_BODY_DO_NOT_INCLUDE_1f3b9"
+  cat > "$TEST_DIR/specs/my-feature.md" <<EOF
+# My Feature
+
+Lots of detail including the phrase ${sentinel} that lives in the spec body.
+EOF
+
+  local content
+  content=$(build_repin_content "my-feature" "todo" \
+    "molecule=wx-abc" \
+    "issue=wx-abc.1" \
+    "title=Implement thing")
+
+  if echo "$content" | grep -q "$sentinel"; then
+    test_fail "re-pin content leaked spec body (found sentinel)"
+  else
+    test_pass "re-pin content excludes spec body"
+  fi
+
+  # Must still reference the spec path so the model can re-read on demand
+  if echo "$content" | grep -q "specs/my-feature.md"; then
+    test_pass "re-pin content references spec path for re-read"
+  else
+    test_fail "re-pin content should point at specs/my-feature.md"
+  fi
+
+  teardown_test_env
+}
+
+test_repin_content_size() {
+  CURRENT_TEST="repin_content_size"
+  test_header "build_repin_content stays well under 10KB"
+
+  setup_test_env "repin-content-size"
+  # shellcheck source=../../lib/ralph/cmd/util.sh
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  # Exercise every known key with long-ish values
+  local long_companions="specs/companions/a.md,specs/companions/b.md,specs/companions/c.md,specs/companions/d.md"
+  local content
+  content=$(build_repin_content "my-feature" "run" \
+    "spec=specs/my-feature.md" \
+    "mode=update" \
+    "molecule=wx-abc" \
+    "issue=wx-abc.42" \
+    "title=A reasonably long title describing the work to be done" \
+    "companions=$long_companions" \
+    "base=abcdef1234567890")
+
+  local size
+  size=$(printf '%s' "$content" | wc -c)
+
+  if [ "$size" -lt 10240 ]; then
+    test_pass "re-pin content is $size bytes (< 10240)"
+  else
+    test_fail "re-pin content is $size bytes (>= 10240 cap)"
+  fi
+
+  teardown_test_env
+}
+
+test_runtime_dir_gitignored() {
+  CURRENT_TEST="runtime_dir_gitignored"
+  test_header ".wrapix/ralph/runtime/ is listed in .gitignore"
+
+  local gitignore="$REPO_ROOT/.gitignore"
+  if grep -qE '^\.wrapix/ralph/runtime/?$' "$gitignore"; then
+    test_pass ".gitignore contains .wrapix/ralph/runtime/"
+  else
+    test_fail ".gitignore missing entry for .wrapix/ralph/runtime/"
+  fi
+}
+
+#-----------------------------------------------------------------------------
 # Main Test Runner
 #-----------------------------------------------------------------------------
 
@@ -11097,6 +11273,12 @@ PARALLEL_TESTS=(
   # discover_molecule_from_readme tests
   test_discover_molecule_from_readme
   test_discover_molecule_not_in_readme
+  # Compaction re-pin helpers
+  test_repin_hook_settings_shape
+  test_repin_script_output
+  test_repin_content_is_condensed
+  test_repin_content_size
+  test_runtime_dir_gitignored
 )
 
 # ALL_TESTS is the combined list for --sequential mode and single-test runs.

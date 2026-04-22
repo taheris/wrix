@@ -1583,6 +1583,119 @@ resolve_spec_label() {
 }
 
 #-----------------------------------------------------------------------------
+# Compaction re-pin helpers
+#
+# When Claude auto-compacts a long session, the initial orientation (label,
+# spec path, exit signals) can be pushed out of context. Ralph installs a
+# SessionStart hook with matcher "compact" that re-injects a condensed
+# orientation via hookSpecificOutput.additionalContext.
+#
+# build_repin_content composes the orientation string from structured keys.
+# install_repin_hook writes repin.sh + claude-settings.json under
+# .wrapix/ralph/runtime/<label>/ and exports RALPH_RUNTIME_DIR.
+#-----------------------------------------------------------------------------
+
+# Compose the condensed re-pin content from known keys.
+# Usage: build_repin_content <label> <command> [key=value ...]
+#   label    — spec label (e.g. ralph-workflow)
+#   command  — invoking ralph command (plan|todo|run|check)
+#   keys: spec, mode, molecule, issue, title, companions, base
+# Output: plain-text re-pin content on stdout (well under 10KB — excludes the
+# full spec body, companion bodies, and issue description).
+build_repin_content() {
+  local label="$1"
+  local command="$2"
+  shift 2
+
+  local spec="specs/${label}.md"
+  local mode="" molecule="" issue="" title="" companions="" base=""
+
+  local kv key value
+  for kv in "$@"; do
+    key="${kv%%=*}"
+    value="${kv#*=}"
+    case "$key" in
+      spec) spec="$value" ;;
+      mode) mode="$value" ;;
+      molecule) molecule="$value" ;;
+      issue) issue="$value" ;;
+      title) title="$value" ;;
+      companions) companions="$value" ;;
+      base) base="$value" ;;
+      *) warn "build_repin_content: unknown key: $key" ;;
+    esac
+  done
+
+  {
+    echo "# Ralph re-pin (${command})"
+    echo ""
+    echo "Session was auto-compacted. This orientation was re-injected on the next turn."
+    echo ""
+    echo "Label: ${label}"
+    echo "Spec: ${spec}"
+    [ -n "$mode" ] && echo "Mode: ${mode}"
+    [ -n "$molecule" ] && echo "Molecule: ${molecule}"
+    [ -n "$issue" ] && echo "Issue: ${issue}"
+    [ -n "$title" ] && echo "Title: ${title}"
+    [ -n "$companions" ] && echo "Companions: ${companions}"
+    [ -n "$base" ] && echo "Base commit: ${base}"
+    echo ""
+    echo "Exit signals: RALPH_COMPLETE, RALPH_BLOCKED: <reason>, RALPH_CLARIFY: <question>"
+    echo ""
+    echo "Re-read as needed: ${spec}, \`bd show <id>\`, \`bd mol current\`, companion manifests."
+  }
+}
+
+# Install the SessionStart[compact] re-pin hook under .wrapix/ralph/runtime/<label>/.
+# Writes three files:
+#   repin.sh              — wraps repin.content into hookSpecificOutput.additionalContext JSON
+#   repin.content         — raw orientation text (read by repin.sh via jq --rawfile)
+#   claude-settings.json  — hook fragment pointing at repin.sh
+# Exports RALPH_RUNTIME_DIR so callers can pass it via wrapix --env.
+#
+# Usage: install_repin_hook <label> <content>
+install_repin_hook() {
+  local label="$1"
+  local content="$2"
+  local ralph_dir="${RALPH_DIR:-.wrapix/ralph}"
+  local runtime_dir="${ralph_dir}/runtime/${label}"
+  # Path as seen inside the wrapix container (bind mount at /workspace)
+  local container_runtime_dir="/workspace/${ralph_dir}/runtime/${label}"
+
+  mkdir -p "$runtime_dir"
+
+  local repin_script="$runtime_dir/repin.sh"
+  local content_file="$runtime_dir/repin.content"
+  local settings_file="$runtime_dir/claude-settings.json"
+
+  printf '%s' "$content" > "$content_file"
+
+  cat > "$repin_script" <<'REPIN_SCRIPT_EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+dir="$(cd "$(dirname "$0")" && pwd)"
+jq -n --rawfile c "$dir/repin.content" \
+  '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $c}}'
+REPIN_SCRIPT_EOF
+  chmod +x "$repin_script"
+
+  jq -n --arg cmd "${container_runtime_dir}/repin.sh" '{
+    hooks: {
+      SessionStart: [
+        {
+          matcher: "compact",
+          hooks: [
+            { type: "command", command: $cmd }
+          ]
+        }
+      ]
+    }
+  }' > "$settings_file"
+
+  export RALPH_RUNTIME_DIR="$runtime_dir"
+}
+
+#-----------------------------------------------------------------------------
 # Judge test infrastructure
 #
 # Judge tests define rubrics via two setter functions:

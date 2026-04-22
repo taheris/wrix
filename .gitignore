@@ -3,6 +3,7 @@
 .direnv/
 .gc/
 .wrapix/
+.wrapix/ralph/runtime/
 city.toml
 result
 result-*
