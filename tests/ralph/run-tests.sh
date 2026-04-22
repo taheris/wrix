@@ -11065,6 +11065,107 @@ test_runtime_dir_gitignored() {
   fi
 }
 
+test_repin_hook_files_written() {
+  CURRENT_TEST="repin_hook_files_written"
+  test_header "plan/todo/run --once/check call install_repin_hook before wrapix"
+
+  local plan="$REPO_ROOT/lib/ralph/cmd/plan.sh"
+  local todo="$REPO_ROOT/lib/ralph/cmd/todo.sh"
+  local run="$REPO_ROOT/lib/ralph/cmd/run.sh"
+  local check="$REPO_ROOT/lib/ralph/cmd/check.sh"
+
+  # Each container-executed command must call install_repin_hook and then
+  # invoke wrapix (in that order). Grep for both, then compare line numbers
+  # of the first install_repin_hook call and the first bare `wrapix` call.
+  local script label hook_line wrapix_line
+  for entry in "plan:$plan" "todo:$todo" "run:$run" "check:$check"; do
+    label="${entry%%:*}"
+    script="${entry#*:}"
+    if grep -q 'install_repin_hook' "$script"; then
+      test_pass "$label script calls install_repin_hook"
+    else
+      test_fail "$label script missing install_repin_hook call"
+      continue
+    fi
+
+    hook_line=$(grep -n 'install_repin_hook' "$script" | head -1 | cut -d: -f1)
+    # first call to the bare wrapix command (tolerate leading whitespace)
+    wrapix_line=$(grep -nE '^\s*wrapix($| |$)' "$script" | head -1 | cut -d: -f1)
+    if [ -n "$hook_line" ] && [ -n "$wrapix_line" ] && [ "$hook_line" -lt "$wrapix_line" ]; then
+      test_pass "$label: install_repin_hook precedes wrapix invocation"
+    else
+      test_fail "$label: expected install_repin_hook before wrapix (hook:$hook_line wrapix:$wrapix_line)"
+    fi
+
+    if grep -qE 'trap .*rm -rf.*runtime' "$script"; then
+      test_pass "$label: trap removes runtime dir on exit"
+    else
+      test_fail "$label: missing cleanup trap for runtime dir"
+    fi
+  done
+
+  # run.sh: hook must be --once-gated, not in the continuous loop path.
+  # Require a `RUN_ONCE` guard on a line preceding install_repin_hook.
+  local run_once_line
+  run_once_line=$(grep -nE 'RUN_ONCE.*=.*"true"' "$run" | head -1 | cut -d: -f1)
+  hook_line=$(grep -n 'install_repin_hook' "$run" | head -1 | cut -d: -f1)
+  if [ -n "$run_once_line" ] && [ -n "$hook_line" ] && [ "$run_once_line" -lt "$hook_line" ]; then
+    test_pass "run: install_repin_hook is gated on RUN_ONCE=true"
+  else
+    test_fail "run: install_repin_hook should be gated on --once path (RUN_ONCE:$run_once_line hook:$hook_line)"
+  fi
+}
+
+test_host_commands_no_repin_hook() {
+  CURRENT_TEST="host_commands_no_repin_hook"
+  test_header "host-side commands do not call install_repin_hook"
+
+  # These commands never launch wrapix — they must not register a hook or
+  # create .wrapix/ralph/runtime/<label>/.
+  local host_scripts=(
+    "$REPO_ROOT/lib/ralph/cmd/status.sh"
+    "$REPO_ROOT/lib/ralph/cmd/logs.sh"
+    "$REPO_ROOT/lib/ralph/cmd/msg.sh"
+    "$REPO_ROOT/lib/ralph/cmd/tune.sh"
+    "$REPO_ROOT/lib/ralph/cmd/sync.sh"
+    "$REPO_ROOT/lib/ralph/cmd/use.sh"
+  )
+
+  local script
+  for script in "${host_scripts[@]}"; do
+    local name
+    name=$(basename "$script" .sh)
+    if [ ! -f "$script" ]; then
+      test_fail "expected host-side script missing: $script"
+      continue
+    fi
+    if grep -q 'install_repin_hook' "$script"; then
+      test_fail "$name: must not call install_repin_hook (host-only command)"
+    else
+      test_pass "$name: does not call install_repin_hook"
+    fi
+  done
+
+  # check -t path: template validation is host-side and must not install the
+  # hook. The hook call in check.sh must sit inside run_spec_review (before
+  # the wrapix invocation), not in the template branch.
+  local check_script="$REPO_ROOT/lib/ralph/cmd/check.sh"
+  local hook_line review_line template_line
+  hook_line=$(grep -n 'install_repin_hook' "$check_script" | head -1 | cut -d: -f1)
+  review_line=$(grep -n '^run_spec_review()' "$check_script" | head -1 | cut -d: -f1)
+  template_line=$(grep -n '^run_template_validation()' "$check_script" | head -1 | cut -d: -f1)
+  if [ -n "$hook_line" ] && [ -n "$review_line" ] && [ "$hook_line" -gt "$review_line" ] \
+    && { [ -z "$template_line" ] || [ "$hook_line" -lt "$template_line" ] || [ "$hook_line" -gt "$template_line" ]; }; then
+    if [ -n "$template_line" ] && [ "$hook_line" -gt "$template_line" ] && [ "$hook_line" -lt "$review_line" ]; then
+      test_fail "check: install_repin_hook should not be inside run_template_validation"
+    else
+      test_pass "check: install_repin_hook scoped to run_spec_review (not template path)"
+    fi
+  else
+    test_fail "check: install_repin_hook missing or outside run_spec_review"
+  fi
+}
+
 # Extract the ralph-settings-merge block from the live entrypoint.sh so tests
 # exercise the exact jq pipeline live uses. Sentinels bracket the block in
 # lib/sandbox/linux/entrypoint.sh; drifting here without the same change
@@ -11444,6 +11545,8 @@ PARALLEL_TESTS=(
   test_repin_script_output
   test_repin_content_is_condensed
   test_repin_content_size
+  test_repin_hook_files_written
+  test_host_commands_no_repin_hook
   test_runtime_dir_gitignored
   test_entrypoint_merges_ralph_settings
   test_entrypoint_merge_concatenates_hooks

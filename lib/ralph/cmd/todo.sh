@@ -81,6 +81,28 @@ if [ ! -f /etc/wrapix/claude-config.json ] && command -v wrapix &>/dev/null; the
   _HOST_PRE_COUNT=$(bd list -l "spec:${_HOST_LABEL}" --json 2>/dev/null \
     | jq 'length' 2>/dev/null || echo 0)
 
+  # Compaction re-pin hook: label/spec/molecule/companions/exit-signals
+  if [ -n "$_HOST_LABEL" ]; then
+    # shellcheck source=util.sh
+    source "$(dirname "$0")/util.sh"
+
+    _host_spec="specs/${_HOST_LABEL}.md"
+    [ -f "$_HOST_RALPH_DIR/state/${_HOST_LABEL}.md" ] && _host_spec="$_HOST_RALPH_DIR/state/${_HOST_LABEL}.md"
+    _host_molecule=""
+    _host_companions=""
+    if [ -f "$_HOST_STATE_FILE" ]; then
+      _host_molecule=$(jq -r '.molecule // empty' "$_HOST_STATE_FILE" 2>/dev/null || true)
+      _host_companions=$(jq -r '(.companions // []) | join(",")' "$_HOST_STATE_FILE" 2>/dev/null || true)
+    fi
+    _repin_content=$(build_repin_content "$_HOST_LABEL" todo \
+      "spec=$_host_spec" \
+      "molecule=$_host_molecule" \
+      "companions=$_host_companions")
+    install_repin_hook "$_HOST_LABEL" "$_repin_content"
+    # shellcheck disable=SC2064
+    trap "rm -rf '$_HOST_RALPH_DIR/runtime/$_HOST_LABEL'" EXIT
+  fi
+
   wrapix
   wrapix_exit=$?
 

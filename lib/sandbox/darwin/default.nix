@@ -281,6 +281,7 @@ in
             ENV_ARGS+=(-e "RALPH_ARGS=''${RALPH_ARGS:-}")
             ENV_ARGS+=(-e "RALPH_DIR=''${RALPH_DIR:-}")
             ENV_ARGS+=(-e "RALPH_DEBUG=''${RALPH_DEBUG:-}")
+            ENV_ARGS+=(-e "RALPH_RUNTIME_DIR=''${RALPH_RUNTIME_DIR:-}")
             ENV_ARGS+=(-e "HOST_UID=$(id -u)")
             ENV_ARGS+=(-e "GIT_AUTHOR_NAME=$GIT_AUTHOR_NAME")
             ENV_ARGS+=(-e "GIT_AUTHOR_EMAIL=$GIT_AUTHOR_EMAIL")

@@ -346,6 +346,7 @@ in
           -e "RALPH_ARGS=''${RALPH_ARGS:-}" \
           -e "RALPH_DIR=''${RALPH_DIR:-}" \
           -e "RALPH_DEBUG=''${RALPH_DEBUG:-}" \
+          -e "RALPH_RUNTIME_DIR=''${RALPH_RUNTIME_DIR:-}" \
           -e "HOME=/home/wrapix" \
           -e "GIT_AUTHOR_NAME=$GIT_AUTHOR_NAME" \
           -e "GIT_AUTHOR_EMAIL=$GIT_AUTHOR_EMAIL" \

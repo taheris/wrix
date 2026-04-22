@@ -462,6 +462,24 @@ run_spec_review() {
     export RALPH_CMD=check
     export RALPH_ARGS="-s $host_label"
 
+    # Compaction re-pin hook: label/spec/molecule/base commit/exit-signals
+    local host_state_file="$RALPH_DIR/state/${host_label}.json"
+    local host_spec="specs/${host_label}.md"
+    [ -f "$RALPH_DIR/state/${host_label}.md" ] && host_spec="$RALPH_DIR/state/${host_label}.md"
+    local host_molecule="" host_base=""
+    if [ -f "$host_state_file" ]; then
+      host_molecule=$(jq -r '.molecule // empty' "$host_state_file" 2>/dev/null || true)
+      host_base=$(jq -r '.base_commit // empty' "$host_state_file" 2>/dev/null || true)
+    fi
+    local repin_content
+    repin_content=$(build_repin_content "$host_label" check \
+      "spec=$host_spec" \
+      "molecule=$host_molecule" \
+      "base=$host_base")
+    install_repin_hook "$host_label" "$repin_content"
+    # shellcheck disable=SC2064
+    trap "rm -rf '$RALPH_DIR/runtime/$host_label'" EXIT
+
     wrapix
     local wrapix_exit=$?
 

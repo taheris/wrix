@@ -10,12 +10,60 @@ set -euo pipefail
 # - Conducts interactive spec interview
 # - Creates spec file
 
+# Load shared helpers (needed for install_repin_hook on host side too)
+# shellcheck source=util.sh
+source "$(dirname "$0")/util.sh"
+
 # Container detection: if not in container and wrapix is available, re-launch in container
 # /etc/wrapix/claude-config.json only exists inside containers (baked into image)
 if [ ! -f /etc/wrapix/claude-config.json ] && command -v wrapix &>/dev/null; then
   export RALPH_MODE=1
   export RALPH_CMD=plan
   export RALPH_ARGS="${*:-}"
+
+  # Best-effort label + mode extraction for the compaction re-pin hook.
+  # Full parsing happens in-container; host-side only needs enough to pick
+  # the right runtime directory and content keys.
+  _host_label=""
+  _host_mode="new"
+  _prev=""
+  for _arg in "$@"; do
+    case "$_prev" in
+      -u | --update | -uh | -hu)
+        _host_label="$_arg"
+        _host_mode="update"
+        ;;
+    esac
+    case "$_arg" in
+      --update=*)
+        _host_label="${_arg#--update=}"
+        _host_mode="update"
+        ;;
+      -u | --update | -uh | -hu) _host_mode="update" ;;
+      -*) ;;
+      *) [ -z "$_host_label" ] && _host_label="$_arg" ;;
+    esac
+    _prev="$_arg"
+  done
+
+  _host_ralph_dir="${RALPH_DIR:-.wrapix/ralph}"
+  if [ -z "$_host_label" ] && [ -f "$_host_ralph_dir/state/current" ]; then
+    _host_label=$(<"$_host_ralph_dir/state/current")
+    _host_label="${_host_label#"${_host_label%%[![:space:]]*}"}"
+    _host_label="${_host_label%"${_host_label##*[![:space:]]}"}"
+  fi
+
+  if [ -n "$_host_label" ]; then
+    _host_spec="specs/${_host_label}.md"
+    [ -f "$_host_ralph_dir/state/${_host_label}.md" ] && _host_spec="$_host_ralph_dir/state/${_host_label}.md"
+    _repin_content=$(build_repin_content "$_host_label" plan \
+      "spec=$_host_spec" \
+      "mode=$_host_mode")
+    install_repin_hook "$_host_label" "$_repin_content"
+    # shellcheck disable=SC2064
+    trap "rm -rf '$_host_ralph_dir/runtime/$_host_label'" EXIT
+  fi
+
   wrapix
   wrapix_exit=$?
   if [ $wrapix_exit -eq 0 ]; then
@@ -24,10 +72,6 @@ if [ ! -f /etc/wrapix/claude-config.json ] && command -v wrapix &>/dev/null; the
   fi
   exit $wrapix_exit
 fi
-
-# Load shared helpers
-# shellcheck source=util.sh
-source "$(dirname "$0")/util.sh"
 
 # Warn early if scripts or templates are stale
 check_ralph_staleness

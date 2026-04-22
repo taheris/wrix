@@ -104,6 +104,55 @@ if [ ! -f /etc/wrapix/claude-config.json ] && command -v wrapix &>/dev/null; the
     echo "Warning: WRAPIX_PROFILE not set, defaulting to base" >&2
   fi
 
+  # Compaction re-pin hook: only register for --once (single-session runs).
+  # Continuous mode spawns many claude sessions across distinct issues, so a
+  # statically-written re-pin can't name a single issue without going stale.
+  if [ "$RUN_ONCE" = "true" ]; then
+    # shellcheck source=util.sh
+    source "$(dirname "$0")/util.sh"
+
+    _host_ralph_dir="${RALPH_DIR:-.wrapix/ralph}"
+    _host_label="$SPEC_FLAG"
+    if [ -z "$_host_label" ] && [ -f "$_host_ralph_dir/state/current" ]; then
+      _host_label=$(<"$_host_ralph_dir/state/current")
+      _host_label="${_host_label#"${_host_label%%[![:space:]]*}"}"
+      _host_label="${_host_label%"${_host_label##*[![:space:]]}"}"
+    fi
+
+    if [ -n "$_host_label" ]; then
+      _host_state_file="$_host_ralph_dir/state/${_host_label}.json"
+      _host_spec="specs/${_host_label}.md"
+      [ -f "$_host_ralph_dir/state/${_host_label}.md" ] && _host_spec="$_host_ralph_dir/state/${_host_label}.md"
+
+      _host_companions=""
+      if [ -f "$_host_state_file" ]; then
+        _host_companions=$(jq -r '(.companions // []) | join(",")' "$_host_state_file" 2>/dev/null || true)
+      fi
+
+      # Best-effort: peek at the next ready bead so the re-pin names it.
+      # If bd can't reach the backend here, the hook still installs with
+      # label/spec and the in-container ralph will resolve the issue anyway.
+      _host_issue=""
+      _host_title=""
+      if command -v bd >/dev/null 2>&1; then
+        _next=$(bd ready --label "spec-${_host_label}" --sort priority --json 2>/dev/null \
+          | jq -r '[.[] | select(.issue_type != "epic")][0] | "\(.id // "")\t\(.title // "")"' 2>/dev/null || true)
+        _host_issue="${_next%%$'\t'*}"
+        _host_title="${_next#*$'\t'}"
+        [ "$_host_title" = "$_next" ] && _host_title=""
+      fi
+
+      _repin_content=$(build_repin_content "$_host_label" run \
+        "spec=$_host_spec" \
+        "issue=$_host_issue" \
+        "title=$_host_title" \
+        "companions=$_host_companions")
+      install_repin_hook "$_host_label" "$_repin_content"
+      # shellcheck disable=SC2064
+      trap "rm -rf '$_host_ralph_dir/runtime/$_host_label'" EXIT
+    fi
+  fi
+
   wrapix
   wrapix_exit=$?
   echo "Syncing beads from container..."
