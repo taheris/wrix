@@ -11065,6 +11065,172 @@ test_runtime_dir_gitignored() {
   fi
 }
 
+# Extract the ralph-settings-merge block from the live entrypoint.sh so tests
+# exercise the exact jq pipeline live uses. Sentinels bracket the block in
+# lib/sandbox/linux/entrypoint.sh; drifting here without the same change
+# breaks extraction and fails the tests loudly.
+_extract_entrypoint_merge_block() {
+  local entrypoint="$REPO_ROOT/lib/sandbox/linux/entrypoint.sh"
+  sed -n '/=== ralph settings merge: start ===/,/=== ralph settings merge: end ===/p' "$entrypoint"
+}
+
+test_entrypoint_merges_ralph_settings() {
+  CURRENT_TEST="entrypoint_merges_ralph_settings"
+  test_header "entrypoint merges RALPH_RUNTIME_DIR/claude-settings.json when env var set"
+
+  setup_test_env "entrypoint-ralph-settings"
+
+  local block
+  block=$(_extract_entrypoint_merge_block)
+  if [ -z "$block" ]; then
+    test_fail "could not extract ralph settings merge block from entrypoint.sh"
+    teardown_test_env
+    return
+  fi
+
+  export HOME="$TEST_DIR/home"
+  mkdir -p "$HOME/.claude"
+  cat > "$HOME/.claude/settings.json" <<'EOF'
+{
+  "env": {"FOO": "1"},
+  "hooks": {
+    "Notification": [
+      {"matcher": "", "hooks": [{"type": "command", "command": "notify"}]}
+    ]
+  }
+}
+EOF
+
+  export RALPH_RUNTIME_DIR="$TEST_DIR/runtime/my-feature"
+  mkdir -p "$RALPH_RUNTIME_DIR"
+  cat > "$RALPH_RUNTIME_DIR/claude-settings.json" <<EOF
+{
+  "hooks": {
+    "SessionStart": [
+      {"matcher": "compact", "hooks": [{"type": "command", "command": "$RALPH_RUNTIME_DIR/repin.sh"}]}
+    ]
+  }
+}
+EOF
+
+  # Execute the extracted merge block against the staged HOME/runtime fixtures.
+  ( set -euo pipefail; eval "$block" )
+
+  local result="$HOME/.claude/settings.json"
+
+  local notify_cmd session_cmd preserved_env
+  notify_cmd=$(jq -r '.hooks.Notification[0].hooks[0].command' "$result")
+  session_cmd=$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$result")
+  preserved_env=$(jq -r '.env.FOO' "$result")
+
+  if [ "$notify_cmd" = "notify" ]; then
+    test_pass "existing Notification hook preserved"
+  else
+    test_fail "expected Notification hook command=notify, got '$notify_cmd'"
+  fi
+
+  if [ "$session_cmd" = "$RALPH_RUNTIME_DIR/repin.sh" ]; then
+    test_pass "ralph SessionStart[compact] hook merged in"
+  else
+    test_fail "expected SessionStart hook pointing at repin.sh, got '$session_cmd'"
+  fi
+
+  if [ "$preserved_env" = "1" ]; then
+    test_pass "non-hooks fields (env) preserved"
+  else
+    test_fail "expected env.FOO=1 preserved, got '$preserved_env'"
+  fi
+
+  # Absence case: unset env → no-op, settings unchanged
+  unset RALPH_RUNTIME_DIR
+  local before_hash after_hash
+  before_hash=$(sha256sum "$result" | cut -d' ' -f1)
+  ( set -euo pipefail; eval "$block" )
+  after_hash=$(sha256sum "$result" | cut -d' ' -f1)
+
+  if [ "$before_hash" = "$after_hash" ]; then
+    test_pass "merge is a no-op when RALPH_RUNTIME_DIR is unset"
+  else
+    test_fail "merge modified settings despite unset RALPH_RUNTIME_DIR"
+  fi
+
+  unset HOME
+  teardown_test_env
+}
+
+test_entrypoint_merge_concatenates_hooks() {
+  CURRENT_TEST="entrypoint_merge_concatenates_hooks"
+  test_header "entrypoint merge concatenates hook arrays under the same event"
+
+  setup_test_env "entrypoint-merge-concat"
+
+  local block
+  block=$(_extract_entrypoint_merge_block)
+  if [ -z "$block" ]; then
+    test_fail "could not extract ralph settings merge block from entrypoint.sh"
+    teardown_test_env
+    return
+  fi
+
+  export HOME="$TEST_DIR/home"
+  mkdir -p "$HOME/.claude"
+  # Base has SessionStart[startup] plus Notification; fragment adds
+  # SessionStart[compact]. Expected result: SessionStart carries both entries.
+  cat > "$HOME/.claude/settings.json" <<'EOF'
+{
+  "hooks": {
+    "Notification": [
+      {"matcher": "", "hooks": [{"type": "command", "command": "notify"}]}
+    ],
+    "SessionStart": [
+      {"matcher": "startup", "hooks": [{"type": "command", "command": "user-startup"}]}
+    ]
+  }
+}
+EOF
+
+  export RALPH_RUNTIME_DIR="$TEST_DIR/runtime/concat"
+  mkdir -p "$RALPH_RUNTIME_DIR"
+  cat > "$RALPH_RUNTIME_DIR/claude-settings.json" <<EOF
+{
+  "hooks": {
+    "SessionStart": [
+      {"matcher": "compact", "hooks": [{"type": "command", "command": "$RALPH_RUNTIME_DIR/repin.sh"}]}
+    ]
+  }
+}
+EOF
+
+  ( set -euo pipefail; eval "$block" )
+
+  local result="$HOME/.claude/settings.json"
+  local session_len notif_len matchers
+  session_len=$(jq '.hooks.SessionStart | length' "$result")
+  notif_len=$(jq '.hooks.Notification | length' "$result")
+  matchers=$(jq -r '.hooks.SessionStart[].matcher' "$result" | sort | tr '\n' ',')
+
+  if [ "$session_len" -eq 2 ]; then
+    test_pass "SessionStart array has both base and ralph entries (len=2)"
+  else
+    test_fail "expected SessionStart length 2, got $session_len"
+  fi
+
+  if [ "$matchers" = "compact,startup," ]; then
+    test_pass "SessionStart entries include both matchers (startup + compact)"
+  else
+    test_fail "expected matchers 'compact,startup,', got '$matchers'"
+  fi
+
+  if [ "$notif_len" -eq 1 ]; then
+    test_pass "Notification hook unchanged (len=1)"
+  else
+    test_fail "expected Notification length 1, got $notif_len"
+  fi
+
+  unset RALPH_RUNTIME_DIR HOME
+  teardown_test_env
+}
+
 #-----------------------------------------------------------------------------
 # Main Test Runner
 #-----------------------------------------------------------------------------
@@ -11279,6 +11445,8 @@ PARALLEL_TESTS=(
   test_repin_content_is_condensed
   test_repin_content_size
   test_runtime_dir_gitignored
+  test_entrypoint_merges_ralph_settings
+  test_entrypoint_merge_concatenates_hooks
 )
 
 # ALL_TESTS is the combined list for --sequential mode and single-test runs.

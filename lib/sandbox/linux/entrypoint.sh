@@ -72,6 +72,27 @@ else
     && mv /workspace/.claude/settings.json.tmp /workspace/.claude/settings.json
 fi
 
+# === ralph settings merge: start ===
+# Deep-merge ralph runtime settings fragment (SessionStart[compact] re-pin hook)
+# into ~/.claude/settings.json. Array entries under each hook event are
+# concatenated so ralph's hooks coexist with the sandbox Notification hook.
+if [ -n "${RALPH_RUNTIME_DIR:-}" ] && [ -f "$RALPH_RUNTIME_DIR/claude-settings.json" ]; then
+  jq -s '
+    .[0] as $base
+    | .[1] as $frag
+    | ($base.hooks // {}) as $bh
+    | ($frag.hooks // {}) as $fh
+    | $base
+    | .hooks = (
+        ($bh * $fh)
+        | with_entries(.value = (($bh[.key] // []) + ($fh[.key] // [])))
+      )
+  ' "$HOME/.claude/settings.json" "$RALPH_RUNTIME_DIR/claude-settings.json" \
+    > "$HOME/.claude/settings.json.tmp"
+  mv "$HOME/.claude/settings.json.tmp" "$HOME/.claude/settings.json"
+fi
+# === ralph settings merge: end ===
+
 # Symlink persistent session data from workspace for /resume and /rename
 for item in projects plans todos file-history paste-cache backups \
             debug session-env plugins shell-snapshots \
