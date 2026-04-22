@@ -72,6 +72,8 @@ You may include an optional `## Implementation Notes` section at the end for:
 
 This section is **automatically stripped** when the spec is finalized. Use it freely for transient context that aids implementation planning.
 
+{{> interview-modes}}
+
 {{README_INSTRUCTIONS}}
 
 {{> exit-signals}}

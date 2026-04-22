@@ -3576,6 +3576,56 @@ EOF
   teardown_test_env
 }
 
+test_plan_templates_include_interview_modes() {
+  CURRENT_TEST="plan_templates_include_interview_modes"
+  test_header "plan-new and plan-update include interview-modes partial"
+
+  local plan_new="$REPO_ROOT/lib/ralph/template/plan-new.md"
+  local plan_update="$REPO_ROOT/lib/ralph/template/plan-update.md"
+
+  if grep -qF '{{> interview-modes}}' "$plan_new"; then
+    test_pass "plan-new.md references {{> interview-modes}}"
+  else
+    test_fail "plan-new.md missing {{> interview-modes}} partial reference"
+  fi
+
+  if grep -qF '{{> interview-modes}}' "$plan_update"; then
+    test_pass "plan-update.md references {{> interview-modes}}"
+  else
+    test_fail "plan-update.md missing {{> interview-modes}} partial reference"
+  fi
+}
+
+test_interview_modes_partial_content() {
+  CURRENT_TEST="interview_modes_partial_content"
+  test_header "interview-modes partial documents both modes with loose matching"
+
+  local partial="$REPO_ROOT/lib/ralph/template/partial/interview-modes.md"
+
+  if [ ! -f "$partial" ]; then
+    test_fail "interview-modes.md partial does not exist at $partial"
+    return
+  fi
+
+  if grep -qF '"one by one"' "$partial"; then
+    test_pass "Documents 'one by one' mode"
+  else
+    test_fail "Missing 'one by one' mode documentation"
+  fi
+
+  if grep -qF '"polish the spec"' "$partial"; then
+    test_pass "Documents 'polish the spec' mode"
+  else
+    test_fail "Missing 'polish the spec' mode documentation"
+  fi
+
+  if grep -qi 'loose' "$partial"; then
+    test_pass "Mentions loose phrase matching"
+  else
+    test_fail "Partial should note that phrase matching is loose"
+  fi
+}
+
 # Test: discovered work - bd mol bond during run execution
 # Verifies:
 # 1. bd mol bond --type sequential during run works
@@ -10602,6 +10652,8 @@ PARALLEL_TESTS=(
   test_plan_update_creates_state_json
   test_state_json_schema
   test_plan_template_with_partials
+  test_plan_templates_include_interview_modes
+  test_interview_modes_partial_content
   test_logs_error_detection
   test_logs_all_flag
   test_logs_context_lines

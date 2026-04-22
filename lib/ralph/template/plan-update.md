@@ -69,6 +69,8 @@ When updating the spec, use the Edit tool to modify `specs/{{LABEL}}.md` directl
 2. Create tasks ONLY for new/changed requirements
 3. Store the new commit as `base_commit` for future diffs
 
+{{> interview-modes}}
+
 {{> exit-signals}}
 
 - `RALPH_COMPLETE` - Spec updated and committed

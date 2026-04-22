@@ -335,6 +335,7 @@ let
     (partialDir + "/companions-context.md")
     (partialDir + "/context-pinning.md")
     (partialDir + "/exit-signals.md")
+    (partialDir + "/interview-modes.md")
     (partialDir + "/spec-header.md")
   ];
 
