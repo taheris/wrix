@@ -16,7 +16,7 @@ pin — keep it current when specs land or retire.
 | [notifications.md](../specs/notifications.md) | [`lib/notify/`](../lib/notify/) | wx-q6x | Desktop notifications with focus suppression |
 | [pre-commit.md](../specs/pre-commit.md) | [`.pre-commit-config.yaml`](../.pre-commit-config.yaml), [`lib/ralph/cmd/run.sh`](../lib/ralph/cmd/run.sh) | wx-t6rh | Git hooks and ralph run integration |
 | [profiles.md](../specs/profiles.md) | [`lib/sandbox/profiles.nix`](../lib/sandbox/profiles.nix) | wx-zna0 | Pre-configured development environments |
-| [ralph-tests.md](../specs/ralph-tests.md) | [`tests/ralph/`](../tests/ralph/) | wx-hfp | Integration tests for ralph workflow |
+| [ralph-tests.md](../specs/ralph-tests.md) | [`tests/ralph/`](../tests/ralph/) | wx-h0qqy | Integration tests for ralph workflow |
 | [ralph-workflow.md](../specs/ralph-workflow.md) | [`lib/ralph/`](../lib/ralph/) | wx-zay1 | Spec-driven AI orchestration |
 | [sandbox.md](../specs/sandbox.md) | [`lib/sandbox/default.nix`](../lib/sandbox/default.nix) | — | Platform-agnostic container isolation |
 | [security-review.md](../specs/security-review.md) | — | wx-eok | Security tradeoffs and mitigations |

@@ -4,16 +4,22 @@ Integration tests for the ralph workflow with unified test infrastructure.
 
 ## Problem Statement
 
-The ralph workflow orchestrates AI-driven feature development but lacks automated tests. Manual testing is slow and doesn't catch regressions. Additionally, existing test targets (`.#test-darwin`, `.#test-integration`) are fragmented and don't include ralph coverage.
+The ralph workflow orchestrates AI-driven feature development. Manual testing is
+slow and doesn't catch regressions, and ralph-specific coverage needs a runtime
+environment (mock claude, live `bd`) that doesn't fit inside `nix flake check`.
+This spec defines the integration suite that fills that gap.
 
 ## Requirements
 
 ### Functional
 
-1. **Unified test command** — `nix run .#test` runs all tests:
-   - Existing darwin tests (skipped on non-darwin)
-   - Existing integration tests
-   - New ralph integration tests
+1. **Test entry points** — two runners with complementary scope:
+   - `nix run .#test` → `nix flake check`: fast pure checks (smoke, unit, darwin
+     logic, ralph utility tests, template validation). Runs on all platforms; VM
+     integration tests skip on non-Linux / no-KVM.
+   - `nix run .#test-ralph` → ralph integration suite with mock claude and live
+     `bd` (the subject of this spec). Separate because it needs a runtime
+     environment and is slower than `nix flake check`.
 
 2. **Mock Claude interface** — Tests use a mock `claude` executable that:
    - Receives prompts via command-line arguments
@@ -43,10 +49,9 @@ The ralph workflow orchestrates AI-driven feature development but lacks automate
    - Invalid beads JSON output — graceful handling
    - Partial completion — epic remains open when tasks remain
 
-7. **Merge start into plan** — Combine `ralph start` and `ralph plan`:
-   - `ralph plan <label>` does setup AND interview
-   - Remove `ralph start` as separate command
-   - Setup steps are idempotent (safe to rerun)
+7. **Single-command planning** — `ralph plan <label>` performs both setup and the
+   interview in one invocation. Setup steps are idempotent (safe to rerun). No
+   separate `ralph start` command exists.
 
 8. **Implementation Notes section** — Support transient context in specs:
    - Specs may contain `## Implementation Notes` section
@@ -54,23 +59,80 @@ The ralph workflow orchestrates AI-driven feature development but lacks automate
    - Section is stripped when spec is finalized to `specs/<feature>.md`
    - Useful for capturing bugs, gotchas, and implementation hints that don't belong in permanent docs
 
+9. **Extended command coverage** — Tests exercise every ralph subcommand:
+   - `status` — current mol position, awaiting-input display, `--spec`/`-s`/`--all` flags, missing state
+   - `logs` — error detection, `--all`, context lines, `--spec` resolution, missing logfile, exit-code errors
+   - `sync` — fresh install, backup, dry-run, partials; `--diff` template/partial filtering, pipe-friendly output
+   - `check` — template/partial validation, push gate, iteration counter, auto-iterate via run, clarify-stops-push, dolt pull/push
+   - `use` — switch active workflow, hidden specs, missing spec/state errors, no-label error, plain-text output
+   - `msg` — reply resume hint
+   - `spec` — verify/judge/all annotations, filter single, short flags, grouped output, summary line, nonzero exit, empty skip
+   - `tune` — help, mode detection (interactive vs integration), env validation, prompt building
+
+10. **Concurrent workflow coverage** — Tests verify per-label state isolation:
+    - Per-label `state.json` files under `.wrapix/ralph/state/`
+    - `--spec <label>` and `-s <label>` flags on `todo`/`run`/`status`/`logs`
+    - `--current` pointer semantics (read-once, mid-switch safety, plain-text format)
+    - Cross-spec isolation — multiple `ralph plan` calls produce independent state
+    - Pre-per-label serial workflows (no `current` pointer) still run unchanged
+
+11. **Spec-change detection** — `ralph todo` uses git diff to find changed requirements:
+    - `base_commit` tracked in state.json, advanced on success (and on post-sync warning)
+    - `--since <commit>` override; orphaned-commit fallback; molecule fallback; new-mode fallback
+    - README discovery path for reconstructed state when molecule missing
+    - Uncommitted-changes error; `implementation_notes` cleared on success
+    - No `base_commit` written on failure or for hidden specs
+
+12. **Beads sync (Dolt) coverage** — Tests verify bidirectional sync:
+    - Host-side `bd dolt pull` after `ralph todo` / `ralph run` complete
+    - Container-side `bd dolt push` for `plan` / `todo` / `run` (once and continuous) / `check`
+    - Failure modes: container commit failure, push failure, host sync failure, post-sync warning recovery
+    - `ralph run` does not push (only reads); startup `bd dolt pull` behavior
+    - Todo-created beads visible to subsequent `ralph run`
+
+13. **Template infrastructure coverage** — Tests verify the template system:
+    - Companion templates (variable injection, partial override, wiring)
+    - Re-pin hooks (settings shape, script output, content size, host-commands exclusion)
+    - Runtime dir (gitignored, env propagation, cleanup on exit)
+    - Entrypoint settings merge (ralph settings concatenated with host settings/hooks)
+    - Manifest reading (empty, format, missing directory/manifest)
+    - Molecule discovery from README
+
+14. **Amortized test setup** — Per-test overhead is bounded so the suite meets NFR
+    §2's <90s target. See *Performance Infrastructure* below for the concrete
+    mechanisms (snapshot DB, shared Dolt server, batched fixtures, metadata cache,
+    tuned parallelism).
+
+15. **Compaction re-pin simulation** — Tests verify the `SessionStart[compact]`
+    re-pin hook end-to-end, *excluding* Claude's own hook dispatcher:
+    - A test helper (`simulate_compact_event`) reads `claude-settings.json`, locates
+      the `SessionStart` entry with `matcher: "compact"`, executes its hook script,
+      and captures `hookSpecificOutput.additionalContext`.
+    - Tests invoke the helper after each ralph command (`plan`, `todo`, `run --once`,
+      `check`) and assert the returned orientation reflects **current** state
+      (claimed issue id, current molecule, active label) — not stale startup state.
+    - Explicitly validates refresh-per-invocation: `repin.content` must be rewritten
+      whenever ralph state changes that the orientation references.
+    - Out of scope: exercising Claude's own dispatch of the hook after a real
+      compaction. That remains Claude's contract; the helper simulates the dispatch
+      boundary.
+
 ### Non-Functional
 
-1. **Deterministic** — Tests produce consistent results (no real API calls)
-2. **Fast** — Mock responses are instant, no network latency
-3. **Isolated** — Each test runs in clean temporary directory
+1. **Deterministic** — Tests produce consistent results (no real Claude API calls)
+2. **Fast** — Full suite completes in <90s on dev hardware. See *Performance Infrastructure* for how this is achieved.
+3. **Isolated** — Each test runs in a clean temp directory with its own beads database prefix
 4. **Skip-aware** — Darwin tests skip gracefully on Linux
-5. **Clean beads** — Tests use isolated beads database, no test beads persist after run
+5. **Clean beads** — No test beads persist after run; temp dirs removed in teardown
+6. **Real bd** — Tests run against live `bd` (not a mock) so semantic behaviors (dep ordering, status filtering, label selectors, JSON shape) are verified end-to-end
 
 ## Affected Files
 
 | File | Change |
 |------|--------|
-| `lib/ralph/cmd/start.sh` | Remove (merge into plan.sh) |
-| `lib/ralph/cmd/plan.sh` | Absorb start.sh logic |
-| `lib/ralph/cmd/ralph.sh` | Remove `start` command routing |
-| `specs/ralph-workflow.md` | Update to reflect merged command |
-| `flake.nix` | Add `.#test` that combines all test targets |
+| `tests/ralph/lib/fixtures.sh` | Snapshot-based `init_beads`; batched setup; `simulate_compact_event` helper |
+| `tests/ralph/lib/runner.sh` | Tuned default `RALPH_TEST_MAX_JOBS` |
+| `tests/lib/dolt-server.sh` | Shared Dolt SQL server lifecycle |
 
 ### Test Directory Structure
 
@@ -82,29 +144,21 @@ tests/ralph/
 ├── templates.nix            # Template test fixtures
 ├── lib/                     # Reusable test libraries
 │   ├── assertions.sh        # test_pass, test_fail, assert_*
-│   ├── fixtures.sh          # setup_*, teardown_*, temp directories
+│   ├── fixtures.sh          # setup_*, teardown_*, simulate_compact_event
 │   ├── mock-claude.sh       # Mock infrastructure
 │   └── runner.sh            # Parallel/sequential test execution
-└── scenarios/               # Test scenario definitions
-    ├── happy-path.sh        # Full workflow test (shell format)
-    ├── happy-path.json      # Same test (JSON format)
-    ├── blocked.json         # RALPH_BLOCKED signal handling
-    ├── clarify.json         # RALPH_CLARIFY signal handling
-    ├── complete.json        # Basic completion
-    ├── no-signal.json       # Missing exit signal
-    └── ...
+└── scenarios/               # Test scenario definitions (shell + JSON formats)
 ```
+
+Scenario files cover the signals and edge cases exercised by the suite (happy
+path, `RALPH_BLOCKED`, `RALPH_CLARIFY`, missing signal, malformed output, etc.).
+See `tests/ralph/scenarios/` for the current set rather than enumerating here —
+the list evolves with coverage.
 
 ### Darwin Test Reorganization
 
-Move darwin tests into `tests/darwin/`:
-| From | To |
-|------|-----|
-| `tests/darwin-network-test.sh` | `tests/darwin/network-test.sh` |
-| `tests/darwin-mount-test.sh` | `tests/darwin/mount-test.sh` |
-| `tests/darwin-mounts.nix` | `tests/darwin/mounts.nix` |
-| `tests/darwin-network.nix` | `tests/darwin/network.nix` |
-| `tests/darwin.nix` | `tests/darwin/default.nix` |
+Darwin tests live under `tests/darwin/` (migrated from the previous
+`tests/darwin-*` flat layout).
 
 ## Test Exit Code Convention
 
@@ -212,10 +266,12 @@ Provides assertion functions for test validation:
 ### `fixtures.sh`
 
 Test setup and teardown helpers:
-- `setup_test_env` — Create isolated temp directory with clean beads DB
+- `setup_test_env` — Create isolated temp directory; batched `mkdir -p` and bulk symlinks
 - `teardown_test_env` — Clean up temp directory
 - `setup_ralph_config` — Initialize `.wrapix/ralph/config.nix`
 - `create_test_spec <label> <content>` — Create spec file for testing
+- `init_beads` — Populate `.beads/` from the pre-seeded snapshot and register the test's unique prefix on the shared Dolt server (no per-test `bd init`)
+- `simulate_compact_event` — Read `claude-settings.json`, locate the `SessionStart[compact]` hook, execute it, and return `hookSpecificOutput.additionalContext`. Used to verify re-pin content reflects current ralph state without needing real Claude compaction.
 
 ### `mock-claude.sh`
 
@@ -229,9 +285,29 @@ Mock Claude infrastructure:
 
 Test execution framework:
 - `run_test_isolated <func> <result> <output>` — Run test in subshell
-- `run_tests_parallel <tests...>` — Execute tests concurrently
-- `run_tests_sequential <tests...>` — Execute tests in order
-- `summarize_results` — Print pass/fail/skip counts
+- `run_tests_parallel <tests...>` — Execute tests concurrently, capped by `RALPH_TEST_MAX_JOBS`
+- `run_tests_sequential <tests...>` — Execute tests in order (for tests that share state)
+- `summarize_results` — Print pass/fail/skip/not-implemented counts
+
+## Performance Infrastructure
+
+The ralph test suite runs against **live `bd`** (not a mock) so semantic drift is caught
+end-to-end. To keep this fast, per-test overhead is amortized:
+
+- **Shared Dolt server** — `tests/lib/dolt-server.sh` starts a single `dolt sql-server`
+  per test run. Each test gets its own database on the server via a unique `bd init
+  --prefix` namespace. Orphaned servers from prior runs are reaped at startup.
+- **Snapshot-based DB init** — `bd init` runs once to produce a template `.beads/`
+  directory. `init_beads` copies this template rather than re-running `bd init` per
+  test.
+- **Batched fixture ops** — `setup_test_env` does a single `mkdir -p` with all paths
+  and symlinks all ralph commands in one loop. Avoids per-test fork/exec storms.
+- **Template metadata cache** — `nix eval` runs once per run to produce
+  `variables.json` / `templates.json`. Shared across tests via `RALPH_METADATA_DIR`
+  (pre-set by the Nix test wrapper; generated on first use otherwise).
+- **Tunable parallelism** — `RALPH_TEST_MAX_JOBS` caps concurrent tests. Default is
+  tuned to the shared Dolt server's safe concurrency ceiling; inside the wrapix
+  container it is clamped lower to avoid overwhelming Claude.
 
 ## Mock Claude Design
 
@@ -335,10 +411,10 @@ Mock determines current phase from:
 1. **spec.hidden = true** — spec file created in `state/` instead of `specs/`, README not updated
 2. **spec.hidden = false** — spec file created in `specs/`, README updated with WIP entry
 3. **beads.priority** — issues created with configured priority (test with priority=1 vs priority=3)
-4. **run.max-iterations** — run stops after N iterations even if work remains
-5. **run.pause-on-failure = true** — run pauses when iteration fails
-6. **run.pause-on-failure = false** — run continues after iteration failure
-7. **run.pre-hook / post-hook** — hooks execute before/after each iteration
+4. **loop.max-iterations** — run stops after N iterations even if work remains
+5. **loop.pause-on-failure = true** — run pauses when iteration fails
+6. **loop.pause-on-failure = false** — run continues after iteration failure
+7. **loop.pre-hook / loop.post-hook** — hooks execute before/after each iteration
 8. **failure-patterns** — custom patterns trigger configured actions (log/pause)
 
 ### Error Scenarios
@@ -348,9 +424,53 @@ Mock determines current phase from:
 3. **Malformed bd output** — `bd list` returns warning + JSON, verify parsing succeeds
 4. **Partial epic** — close 2 of 3 tasks, verify epic stays open
 
+### Extended Commands
+
+Each ralph subcommand beyond `plan`/`todo`/`run` has direct coverage (see
+Functional §9 for the per-command assertion list). Representative behaviors:
+`status` mol-position rendering, `logs` error detection with context lines,
+`sync --diff` markdown output, `check` push-gate and iteration counter, `use`
+active-workflow switching, and `spec` verify/judge annotation parsing.
+
+### Concurrent Workflows
+
+Multiple specs coexist with isolated per-label `state.json`. `--spec`/`-s` flags on
+`todo`/`run`/`status`/`logs` override the `current` pointer; `current` itself is
+written as plain text and read exactly once per invocation to tolerate mid-run
+switches. Serial (pre-per-label) workflows remain supported.
+
+### Spec Change Detection
+
+`ralph todo` invokes a three-tier diff: (1) git diff against `base_commit`, (2)
+molecule fallback from state, (3) README discovery + state reconstruction. `--since`
+overrides the base. Uncommitted changes abort with a clear error. `base_commit`
+advances on success and on post-sync warnings; `implementation_notes` is cleared.
+
+### Beads Sync
+
+Host pulls via `bd dolt pull` after `ralph todo` / `run` complete. Container pushes
+via `bd dolt push` for `plan` / `todo` / `run` (once + continuous) / `check`. Failure
+paths exercised: container commit failure, container push failure, host sync
+failure (state reset), post-sync warning with recovery hints.
+
+### Template Infrastructure
+
+Companion templates inject variables and override partials. Re-pin hooks produce
+condensed content of bounded size. Runtime dir is gitignored, propagates via env,
+and cleans up on exit. Entrypoint merges ralph settings with host settings and
+concatenates hook lists.
+
+### Compaction Re-pin
+
+`simulate_compact_event` runs the `SessionStart[compact]` hook through the same
+JSON contract Claude uses, capturing `additionalContext`. After each ralph
+invocation, the captured orientation must reflect current state (claimed issue,
+molecule, label). Refresh-per-invocation is asserted — the helper, called after
+two successive ralph commands, must observe updated content between them.
+
 ## Success Criteria
 
-- [x] `nix run .#test` runs all tests (darwin, integration, ralph)
+- [x] `nix run .#test` runs fast pure checks via `nix flake check`; `nix run .#test-ralph` runs the ralph integration suite
   [verify](../tests/ralph/run-tests.sh#test_mock_claude_exists)
 - [x] Darwin tests skip gracefully on Linux
 - [x] Ralph tests pass with mock claude (no real API calls)
@@ -369,7 +489,7 @@ Mock determines current phase from:
   [verify](../tests/ralph/run-tests.sh#test_parallel_agent_simulation)
 - [x] Tests verify error handling (missing signals, RALPH_BLOCKED, bad JSON)
   [verify](../tests/ralph/run-tests.sh#test_run_no_close_without_signal)
-- [x] Tests verify config options affect behavior (spec.hidden, beads.priority, run settings)
+- [x] Tests verify config options affect behavior (spec.hidden, beads.priority, loop settings)
   [verify](../tests/ralph/run-tests.sh#test_config_data_driven)
 - [x] Tests are deterministic and fast
   [judge](../tests/judges/ralph-tests.sh#test_deterministic_and_fast)
@@ -379,10 +499,36 @@ Mock determines current phase from:
   [verify](../tests/ralph/run-tests.sh#test_run_handles_blocked_signal)
 - [x] Shell format support for complex scenarios requiring custom logic
   [verify](../tests/ralph/run-tests.sh#test_run_loop_processes_all)
+- [x] `ralph status` has coverage (mol position, awaiting, `--spec`, `--all`, missing state)
+  [verify](../tests/ralph/run-tests.sh#test_status_mol_current_position)
+- [x] `ralph logs` has coverage (error detection, `--all`, context, `--spec`, missing logfile)
+  [verify](../tests/ralph/run-tests.sh#test_logs_error_detection)
+- [x] `ralph sync` has coverage (fresh/backup/dry-run/partials, `--diff` filtering)
+  [verify](../tests/ralph/run-tests.sh#test_sync_fresh)
+- [x] `ralph check` has coverage (templates, push gate, iteration counter, auto-iterate, dolt sync)
+  [verify](../tests/ralph/run-tests.sh#test_check_valid_templates)
+- [x] `ralph use` / `msg` / `spec` / `tune` have coverage
+  [verify](../tests/ralph/run-tests.sh#test_use_switches_active_workflow)
+- [x] Per-label `state.json` isolation across concurrent workflows
+  [verify](../tests/ralph/run-tests.sh#test_concurrent_state_isolation)
+- [x] `ralph todo` detects spec changes via git diff (`base_commit`, `--since`, fallbacks)
+  [verify](../tests/ralph/run-tests.sh#test_todo_git_diff)
+- [x] Host-side `bd dolt pull` and container-side `bd dolt push` for plan/todo/run/check
+  [verify](../tests/ralph/run-tests.sh#test_todo_dolt_push_in_container)
+- [x] Companion templates, re-pin hooks, runtime dir, entrypoint settings merge
+  [verify](../tests/ralph/run-tests.sh#test_companion_template_variable)
+- [ ] `simulate_compact_event` helper exercises `SessionStart[compact]` hook and returns `additionalContext`
+- [ ] Re-pin content is asserted after each ralph command (plan/todo/run/check) and reflects current state
+- [ ] Refresh-per-invocation is verified — orientation updates between successive ralph commands
+- [ ] Full suite runs in <90s on dev hardware
+- [ ] `init_beads` uses snapshot copy instead of per-test `bd init`
+- [ ] `setup_test_env` uses batched fixture operations (single `mkdir -p`, bulk symlinks)
+- [ ] `RALPH_TEST_MAX_JOBS` default tuned to shared-Dolt concurrency ceiling
 
 ## Out of Scope
 
 - Actual Claude API integration tests
-- Performance benchmarking
+- Performance benchmarking of ralph itself (test-suite speed target is in-scope; see NFR §2)
 - UI/UX improvements to ralph commands
 - Changes to beads functionality
+- Mocking `bd` (tests run against live bd — see NFR §6)
