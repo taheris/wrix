@@ -102,12 +102,11 @@ in
       wrapixBin = effectiveSandbox.package;
 
       # Host-side beads bootstrap: start the per-workspace beads-dolt
-      # container and export the socket path so `bd dolt pull` in
-      # ralph/cmd/run.sh talks to the shared server through the socket
-      # (TCP host-loopback is invisible from rootless podman containers).
-      # Fails loudly if the socket never appears — no fallback to bd's
-      # embedded autostart. No-op when beads arg is null (template-only
-      # consumers).
+      # container and export connection info so `bd dolt pull` in
+      # ralph/cmd/run.sh talks to the shared server (TCP on Darwin,
+      # socket on Linux). Fails loudly if the server never appears — no
+      # fallback to bd's embedded autostart. No-op when beads arg is
+      # null (template-only consumers).
       beadsBootstrap =
         if beads != null then
           ''
@@ -117,19 +116,7 @@ in
                 return 1 2>/dev/null || exit 1
               fi
               ${beads.cli}/bin/beads-dolt start "$PWD"
-              _ralph_sock=$(${beads.cli}/bin/beads-dolt socket "$PWD")
-              _ralph_waited=0
-              while [ ! -S "$_ralph_sock" ] && [ "$_ralph_waited" -lt 30 ]; do
-                sleep 0.2
-                _ralph_waited=$((_ralph_waited + 1))
-              done
-              if [ ! -S "$_ralph_sock" ]; then
-                echo "ralph: dolt socket did not appear at $_ralph_sock" >&2
-                return 1 2>/dev/null || exit 1
-              fi
-              export BEADS_DOLT_SERVER_SOCKET="$_ralph_sock"
-              export BEADS_DOLT_AUTO_START=0
-              unset _ralph_sock _ralph_waited
+              ${beads.waitAndExport}
             fi
           ''
         else

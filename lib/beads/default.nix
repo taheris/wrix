@@ -347,8 +347,47 @@ let
 
   beadsPush = pkgs.writeShellScriptBin "beads-push" (readFile ../../scripts/beads-push);
 
+  # Wait for the dolt server and export connection env vars.
+  # On Darwin, Unix sockets created inside the podman VM are not reachable
+  # from the host, so we use TCP host/port. On Linux the socket works.
+  waitAndExport =
+    if pkgs.stdenv.isDarwin then
+      ''
+        _beads_port=$(${beadsDolt}/bin/beads-dolt port "$PWD")
+        _beads_waited=0
+        while ! bash -c "echo >/dev/tcp/127.0.0.1/$_beads_port" 2>/dev/null && [ "$_beads_waited" -lt 30 ]; do
+          sleep 0.2
+          _beads_waited=$((_beads_waited + 1))
+        done
+        if ! bash -c "echo >/dev/tcp/127.0.0.1/$_beads_port" 2>/dev/null; then
+          echo "beads: dolt TCP port $_beads_port not reachable — refusing to fall back to embedded mode" >&2
+          return 1 2>/dev/null || exit 1
+        fi
+        export BEADS_DOLT_SERVER_HOST=127.0.0.1
+        export BEADS_DOLT_SERVER_PORT="$_beads_port"
+        unset BEADS_DOLT_SERVER_SOCKET
+        export BEADS_DOLT_AUTO_START=0
+        unset _beads_port _beads_waited
+      ''
+    else
+      ''
+        _beads_sock=$(${beadsDolt}/bin/beads-dolt socket "$PWD")
+        _beads_waited=0
+        while [ ! -S "$_beads_sock" ] && [ "$_beads_waited" -lt 30 ]; do
+          sleep 0.2
+          _beads_waited=$((_beads_waited + 1))
+        done
+        if [ ! -S "$_beads_sock" ]; then
+          echo "beads: dolt socket did not appear at $_beads_sock — refusing to fall back to embedded mode" >&2
+          return 1 2>/dev/null || exit 1
+        fi
+        export BEADS_DOLT_SERVER_SOCKET="$_beads_sock"
+        export BEADS_DOLT_AUTO_START=0
+        unset _beads_sock _beads_waited
+      '';
+
   # Shell hook fragment: ensures per-workspace dolt is running and exports
-  # the socket path that bd connects through. Suppresses bd's embedded
+  # connection info that bd connects through. Suppresses bd's embedded
   # autostart so failure to reach the server fails loudly instead of
   # silently forking a second dolt. No-op if the current directory isn't
   # a beads workspace.
@@ -359,25 +398,13 @@ let
         return 1 2>/dev/null || exit 1
       fi
       ${beadsDolt}/bin/beads-dolt start "$PWD"
-      _beads_sock=$(${beadsDolt}/bin/beads-dolt socket "$PWD")
-      _waited=0
-      while [ ! -S "$_beads_sock" ] && [ "$_waited" -lt 30 ]; do
-        sleep 0.2
-        _waited=$((_waited + 1))
-      done
-      if [ ! -S "$_beads_sock" ]; then
-        echo "beads: dolt socket did not appear at $_beads_sock — refusing to fall back to embedded mode" >&2
-        return 1 2>/dev/null || exit 1
-      fi
-      export BEADS_DOLT_SERVER_SOCKET="$_beads_sock"
-      export BEADS_DOLT_AUTO_START=0
-      unset _beads_sock _waited
+      ${waitAndExport}
     fi
   '';
 
 in
 {
-  inherit imageName shellHook;
+  inherit imageName shellHook waitAndExport;
 
   # cli/push are exposed here for the flake overlay (see wrapixBeadsPkgs in
   # flake.nix). Consumers should reach them via pkgs.beads-dolt / pkgs.beads-push.
