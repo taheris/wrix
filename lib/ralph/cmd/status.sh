@@ -72,7 +72,9 @@ show_awaiting_items() {
   now=$(date +%s)
 
   # Iterate over awaiting items
-  echo "$awaiting_json" | jq -r '.[] | [.id, .title, (.description // ""), (.notes // ""), .updated_at] | @tsv' | while IFS=$'\t' read -r id title description notes updated_at; do
+  # Description is placed last because IFS=$'\t' collapses adjacent empty
+  # whitespace fields, and description is often empty in bd list output.
+  echo "$awaiting_json" | jq -r '.[] | [.id, .title, (.notes // ""), .updated_at, (.description // "")] | @tsv' | while IFS=$'\t' read -r id title notes updated_at description; do
     # Prefer clarify note appended to description; fall back to legacy "Question: " in notes
     local question=""
     if [ -n "$description" ]; then
