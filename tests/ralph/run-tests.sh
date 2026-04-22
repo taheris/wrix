@@ -9262,6 +9262,84 @@ test_todo_no_base_commit_for_hidden() {
   teardown_test_env
 }
 
+# Test: todo.sh atomically clears implementation_notes when it advances base_commit on RALPH_COMPLETE
+test_todo_clears_implementation_notes() {
+  CURRENT_TEST="todo_clears_implementation_notes"
+  test_header "todo.sh: atomically clears implementation_notes + sets base_commit on RALPH_COMPLETE"
+
+  setup_test_env "todo-clears-impl-notes"
+  _setup_spec_diff_git "my-feature"
+  setup_label_state "my-feature" "false" ""
+
+  # Seed implementation_notes into state
+  jq '.implementation_notes = ["remove rustup bootstrap", "use fenix fromToolchainFile"]' \
+    "$RALPH_DIR/state/my-feature.json" > "$RALPH_DIR/state/my-feature.json.tmp"
+  mv "$RALPH_DIR/state/my-feature.json.tmp" "$RALPH_DIR/state/my-feature.json"
+
+  # Sanity: notes present, no base_commit
+  local notes_len
+  notes_len=$(jq '.implementation_notes | length' "$RALPH_DIR/state/my-feature.json")
+  if [ "$notes_len" = "2" ]; then
+    test_pass "state seeded with 2 implementation_notes"
+  else
+    test_fail "expected 2 implementation_notes, got '$notes_len'"
+  fi
+
+  # Simulate todo.sh RALPH_COMPLETE: atomic jq — del(.implementation_notes) | .base_commit = HEAD
+  local head_commit
+  head_commit=$(git -C "$TEST_DIR" rev-parse HEAD)
+  jq --arg bc "$head_commit" 'del(.implementation_notes) | .base_commit = $bc' \
+    "$RALPH_DIR/state/my-feature.json" > "$RALPH_DIR/state/my-feature.json.tmp"
+  mv "$RALPH_DIR/state/my-feature.json.tmp" "$RALPH_DIR/state/my-feature.json"
+
+  # implementation_notes is gone
+  if jq -e '.implementation_notes' "$RALPH_DIR/state/my-feature.json" >/dev/null 2>&1; then
+    test_fail "implementation_notes should be cleared after RALPH_COMPLETE"
+  else
+    test_pass "implementation_notes cleared"
+  fi
+
+  # base_commit set to HEAD
+  local stored_bc
+  stored_bc=$(jq -r '.base_commit // ""' "$RALPH_DIR/state/my-feature.json")
+  if [ "$stored_bc" = "$head_commit" ]; then
+    test_pass "base_commit stored as HEAD ($head_commit)"
+  else
+    test_fail "base_commit should be HEAD ($head_commit), got '$stored_bc'"
+  fi
+
+  # Verify todo.sh uses the atomic form (single jq with both mutations)
+  local todo_sh="$REPO_ROOT/lib/ralph/cmd/todo.sh"
+  if grep -qE "del\(\.implementation_notes\)\s*\|\s*\.base_commit" "$todo_sh"; then
+    test_pass "todo.sh uses atomic jq: del(.implementation_notes) | .base_commit"
+  else
+    test_fail "todo.sh should combine del(.implementation_notes) and .base_commit in one jq write"
+  fi
+
+  teardown_test_env
+}
+
+# Test: todo.sh host-side verification uses spec:<label> (colon) label format
+test_todo_verification_uses_colon_label() {
+  CURRENT_TEST="todo_verification_uses_colon_label"
+  test_header "todo.sh: post-completion verification queries bd list -l spec:<label>"
+
+  local todo_sh="$REPO_ROOT/lib/ralph/cmd/todo.sh"
+
+  # The host-side verification block must query spec:<label>, not spec-<label>
+  if grep -qE 'bd list -l "spec:\$\{_HOST_LABEL\}"' "$todo_sh"; then
+    test_pass "count query uses spec:<label> (colon)"
+  else
+    test_fail "host-side count query should use 'spec:\${_HOST_LABEL}'"
+  fi
+
+  if grep -qE 'Check: bd list -l spec:\$\{_HOST_LABEL\}' "$todo_sh"; then
+    test_pass "warning hint uses spec:<label> (colon)"
+  else
+    test_fail "warning hint should use 'spec:\${_HOST_LABEL}'"
+  fi
+}
+
 # Test: todo.sh runs bd dolt pull on host after container exits with RALPH_COMPLETE
 # Tests the host-side code path by simulating the container detection block.
 # Since tests run inside a wrapix container, we extract and test the host-side
@@ -10628,6 +10706,8 @@ PARALLEL_TESTS=(
   test_todo_sets_base_commit
   test_todo_no_base_commit_on_failure
   test_todo_no_base_commit_for_hidden
+  test_todo_clears_implementation_notes
+  test_todo_verification_uses_colon_label
   # todo.sh host-side bd dolt pull tests
   test_todo_dolt_pull_after_complete
   test_todo_no_dolt_pull_on_failure

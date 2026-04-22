@@ -78,7 +78,7 @@ if [ ! -f /etc/wrapix/claude-config.json ] && command -v wrapix &>/dev/null; the
   fi
   _HOST_STATE_FILE="$_HOST_RALPH_DIR/state/${_HOST_LABEL}.json"
   # Count beads by label (works reliably after dolt pull, unlike --children)
-  _HOST_PRE_COUNT=$(bd list -l "spec-${_HOST_LABEL}" --json 2>/dev/null \
+  _HOST_PRE_COUNT=$(bd list -l "spec:${_HOST_LABEL}" --json 2>/dev/null \
     | jq 'length' 2>/dev/null || echo 0)
 
   wrapix
@@ -90,7 +90,7 @@ if [ ! -f /etc/wrapix/claude-config.json ] && command -v wrapix &>/dev/null; the
     bd dolt pull 2>/dev/null || echo "Warning: bd dolt pull failed (beads may not be synced)"
 
     # Host-side verification: did task count increase?
-    _HOST_POST_COUNT=$(bd list -l "spec-${_HOST_LABEL}" --json 2>/dev/null \
+    _HOST_POST_COUNT=$(bd list -l "spec:${_HOST_LABEL}" --json 2>/dev/null \
       | jq 'length' 2>/dev/null || echo 0)
 
     if [ "$_HOST_POST_COUNT" -le "$_HOST_PRE_COUNT" ]; then
@@ -98,7 +98,7 @@ if [ ! -f /etc/wrapix/claude-config.json ] && command -v wrapix &>/dev/null; the
       echo ""
       echo "ERROR: RALPH_COMPLETE but no new tasks detected after sync."
       echo "  Container dolt push likely failed — beads are lost."
-      echo "  Check: bd list -l spec-${_HOST_LABEL}"
+      echo "  Check: bd list -l spec:${_HOST_LABEL}"
       echo "  To re-run: ralph todo --since ${_PREV_BASE_COMMIT}"
       echo ""
       echo "Resetting state file to allow re-run..."
@@ -362,12 +362,6 @@ if jq -e '[.[] | select(.type == "result") | .result | contains("RALPH_COMPLETE"
     fi
   fi
 
-  # Clear implementation_notes from state file — they've been consumed
-  if [ -f "$STATE_FILE" ] && jq -e '.implementation_notes' "$STATE_FILE" >/dev/null 2>&1; then
-    jq 'del(.implementation_notes)' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
-    echo "Cleared implementation_notes from state file"
-  fi
-
   # Commit the spec file
   if [ -f "$FINAL_SPEC_PATH" ]; then
     echo ""
@@ -402,12 +396,18 @@ if jq -e '[.[] | select(.type == "result") | .result | contains("RALPH_COMPLETE"
     exit 1
   fi
 
-  # Store base_commit (HEAD) on successful completion
-  if [ "$SPEC_HIDDEN" = "false" ]; then
-    HEAD_COMMIT=$(git rev-parse HEAD)
-    jq --arg bc "$HEAD_COMMIT" '.base_commit = $bc' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
-    echo ""
-    echo "Stored base_commit: $HEAD_COMMIT"
+  # Atomic: clear implementation_notes + set base_commit in one write — either both land or neither
+  if [ -f "$STATE_FILE" ]; then
+    if [ "$SPEC_HIDDEN" = "false" ]; then
+      HEAD_COMMIT=$(git rev-parse HEAD)
+      jq --arg bc "$HEAD_COMMIT" 'del(.implementation_notes) | .base_commit = $bc' \
+        "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+      echo ""
+      echo "Stored base_commit: $HEAD_COMMIT"
+    else
+      jq 'del(.implementation_notes)' \
+        "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+    fi
   fi
 
   # Display the molecule ID if available
