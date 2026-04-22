@@ -190,18 +190,17 @@ DIFF_OUTPUT=$(compute_spec_diff "$STATE_FILE" "${DIFF_ARGS[@]+"${DIFF_ARGS[@]}"}
 DIFF_MODE=$(echo "$DIFF_OUTPUT" | head -1)
 DIFF_CONTENT=$(echo "$DIFF_OUTPUT" | tail -n +2)
 
-# Determine template and mode based on tier.
-# EXISTING_SPEC carries its own section header so the whole block vanishes
-# when empty (diff mode). Inlining the full spec alongside the diff duplicates
-# content Claude already sees in the diff and can push the prompt past the
-# 128KB MAX_ARG_STRLEN limit on mature specs.
+SPEC_CONTENT=""
+if [ -f "$SPEC_PATH" ]; then
+  SPEC_CONTENT=$(cat "$SPEC_PATH")
+fi
+
 SPEC_DIFF=""
 EXISTING_TASKS=""
 EXISTING_SPEC=""
 
 case "$DIFF_MODE" in
   diff)
-    # Tier 1: git-based diff. Full spec is redundant with the diff.
     if [ -z "$(echo "$DIFF_CONTENT" | tr -d '[:space:]')" ]; then
       echo "No spec changes since last task creation."
       echo "  base_commit: $(jq -r '.base_commit // "unknown"' "$STATE_FILE")"
@@ -214,8 +213,7 @@ case "$DIFF_MODE" in
     SPEC_DIFF="$DIFF_CONTENT"
     ;;
   tasks)
-    # Tier 2: molecule-based comparison. No diff available, so include the
-    # full spec for Claude to reconcile against EXISTING_TASKS.
+    # Tier 2 has no diff; Claude needs the full spec to reconcile against tasks.
     TEMPLATE_NAME="todo-update"
     EXISTING_TASKS="$DIFF_CONTENT"
     EXISTING_SPEC="## Existing Specification
@@ -275,12 +273,6 @@ else
   echo "  Mode: NEW (creating molecule from scratch)"
 fi
 echo ""
-
-# Read spec content for template
-SPEC_CONTENT=""
-if [ -f "$SPEC_PATH" ]; then
-  SPEC_CONTENT=$(cat "$SPEC_PATH")
-fi
 
 # Read companion manifests
 COMPANIONS=$(read_manifests "$STATE_FILE")
