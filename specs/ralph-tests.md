@@ -517,9 +517,11 @@ two successive ralph commands, must observe updated content between them.
   [verify](../tests/ralph/run-tests.sh#test_todo_dolt_push_in_container)
 - [x] Companion templates, re-pin hooks, runtime dir, entrypoint settings merge
   [verify](../tests/ralph/run-tests.sh#test_companion_template_variable)
-- [ ] `simulate_compact_event` helper exercises `SessionStart[compact]` hook and returns `additionalContext`
+- [x] `simulate_compact_event` helper exercises `SessionStart[compact]` hook and returns `additionalContext`
+  [verify](../tests/ralph/run-tests.sh#test_simulate_compact_event_returns_additional_context)
 - [ ] Re-pin content is asserted after each ralph command (plan/todo/run/check) and reflects current state
-- [ ] Refresh-per-invocation is verified — orientation updates between successive ralph commands
+- [x] Refresh-per-invocation is verified — orientation updates between successive ralph commands
+  [verify](../tests/ralph/run-tests.sh#test_simulate_compact_event_refresh_per_invocation)
 - [ ] Full suite runs in <90s on dev hardware
 - [ ] `init_beads` uses snapshot copy instead of per-test `bd init`
 - [x] `setup_test_env` uses batched fixture operations (single `mkdir -p`, bulk symlinks)

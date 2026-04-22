@@ -306,6 +306,106 @@ init_beads() {
   fi
 }
 
+# Simulate Claude dispatching the SessionStart[compact] re-pin hook and emit
+# hookSpecificOutput.additionalContext on stdout.
+#
+# Locates claude-settings.json in this order:
+#   1. $RALPH_DIR/runtime/<label>/claude-settings.json (if label given)
+#   2. $RALPH_RUNTIME_DIR/claude-settings.json (set by install_repin_hook)
+#   3. The unique $RALPH_DIR/runtime/*/claude-settings.json under the test tree
+#
+# Extracts the SessionStart entry with matcher="compact", resolves its command
+# (rewriting the container /workspace/... path to the test-tree runtime dir
+# when needed), executes it, and returns hookSpecificOutput.additionalContext.
+#
+# Exits nonzero with a message to stderr if:
+#   - settings file missing or not readable
+#   - no SessionStart[compact] hook registered
+#   - the hook script is not executable or exits non-zero
+#   - the hook output is not valid JSON or lacks additionalContext
+#
+# Usage: simulate_compact_event [label]
+simulate_compact_event() {
+  local label="${1:-}"
+  local ralph_dir="${RALPH_DIR:-.wrapix/ralph}"
+  local settings=""
+  local runtime_dir=""
+
+  if [ -n "$label" ]; then
+    runtime_dir="$ralph_dir/runtime/$label"
+    settings="$runtime_dir/claude-settings.json"
+  elif [ -n "${RALPH_RUNTIME_DIR:-}" ] && [ -f "$RALPH_RUNTIME_DIR/claude-settings.json" ]; then
+    runtime_dir="$RALPH_RUNTIME_DIR"
+    settings="$RALPH_RUNTIME_DIR/claude-settings.json"
+  else
+    local -a matches=()
+    local runtime_root="$ralph_dir/runtime"
+    if [ -d "$runtime_root" ]; then
+      local entry
+      for entry in "$runtime_root"/*/claude-settings.json; do
+        [ -f "$entry" ] && matches+=("$entry")
+      done
+    fi
+    if [ "${#matches[@]}" -eq 1 ]; then
+      settings="${matches[0]}"
+      runtime_dir="$(dirname "$settings")"
+    elif [ "${#matches[@]}" -gt 1 ]; then
+      echo "simulate_compact_event: multiple runtime settings found under $runtime_root; pass a label" >&2
+      return 1
+    fi
+  fi
+
+  if [ -z "$settings" ] || [ ! -f "$settings" ]; then
+    echo "simulate_compact_event: claude-settings.json not found (RALPH_RUNTIME_DIR=${RALPH_RUNTIME_DIR:-unset}, ralph_dir=$ralph_dir)" >&2
+    return 1
+  fi
+
+  local cmd
+  if ! cmd=$(jq -er '
+    (.hooks.SessionStart // [])
+    | map(select(.matcher == "compact"))
+    | .[0].hooks[0].command // empty
+  ' "$settings"); then
+    echo "simulate_compact_event: failed to parse $settings as JSON" >&2
+    return 1
+  fi
+
+  if [ -z "$cmd" ]; then
+    echo "simulate_compact_event: no SessionStart[compact] hook registered in $settings" >&2
+    return 1
+  fi
+
+  # install_repin_hook writes a container-view path (/workspace/...); rewrite
+  # to the test-tree runtime dir when that file isn't directly executable.
+  if [ ! -x "$cmd" ]; then
+    local rewritten
+    rewritten="$runtime_dir/$(basename "$cmd")"
+    if [ -x "$rewritten" ]; then
+      cmd="$rewritten"
+    fi
+  fi
+
+  if [ ! -x "$cmd" ]; then
+    echo "simulate_compact_event: hook command not executable: $cmd" >&2
+    return 1
+  fi
+
+  local output
+  if ! output=$("$cmd"); then
+    echo "simulate_compact_event: hook script exited non-zero: $cmd" >&2
+    return 1
+  fi
+
+  local ctx
+  if ! ctx=$(jq -er '.hookSpecificOutput.additionalContext' <<<"$output" 2>/dev/null); then
+    echo "simulate_compact_event: hook output missing hookSpecificOutput.additionalContext" >&2
+    echo "  output: $output" >&2
+    return 1
+  fi
+
+  printf '%s' "$ctx"
+}
+
 # Clean up test environment
 # Usage: teardown_test_env
 teardown_test_env() {

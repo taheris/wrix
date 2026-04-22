@@ -11867,6 +11867,157 @@ EOF
   teardown_test_env
 }
 
+test_simulate_compact_event_returns_additional_context() {
+  CURRENT_TEST="simulate_compact_event_returns_additional_context"
+  test_header "simulate_compact_event runs SessionStart[compact] hook and returns additionalContext"
+
+  setup_test_env "simulate-compact-happy"
+  # shellcheck source=../../lib/ralph/cmd/util.sh
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  local content
+  content=$(build_repin_content "my-feature" "run" "issue=wx-abc.1" "molecule=wx-abc")
+  install_repin_hook "my-feature" "$content"
+
+  local ctx
+  if ! ctx=$(simulate_compact_event); then
+    test_fail "simulate_compact_event failed (no arg, RALPH_RUNTIME_DIR set)"
+    unset RALPH_RUNTIME_DIR
+    teardown_test_env
+    return
+  fi
+
+  if echo "$ctx" | grep -q "Label: my-feature" \
+    && echo "$ctx" | grep -q "Issue: wx-abc.1" \
+    && echo "$ctx" | grep -q "RALPH_COMPLETE"; then
+    test_pass "additionalContext reflects re-pin content (label, issue, exit signals)"
+  else
+    test_fail "additionalContext missing expected markers; got: $ctx"
+  fi
+
+  # Label argument path
+  unset RALPH_RUNTIME_DIR
+  local ctx_by_label
+  if ctx_by_label=$(simulate_compact_event "my-feature"); then
+    if [ "$ctx_by_label" = "$ctx" ]; then
+      test_pass "simulate_compact_event <label> yields the same context"
+    else
+      test_fail "label-addressed output differs from RALPH_RUNTIME_DIR output"
+    fi
+  else
+    test_fail "simulate_compact_event my-feature failed"
+  fi
+
+  teardown_test_env
+}
+
+test_simulate_compact_event_refresh_per_invocation() {
+  CURRENT_TEST="simulate_compact_event_refresh_per_invocation"
+  test_header "simulate_compact_event reflects updated content between successive invocations"
+
+  setup_test_env "simulate-compact-refresh"
+  # shellcheck source=../../lib/ralph/cmd/util.sh
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  install_repin_hook "my-feature" \
+    "$(build_repin_content "my-feature" "todo" "molecule=wx-abc")"
+  local first
+  first=$(simulate_compact_event) || {
+    test_fail "first simulate_compact_event failed"
+    unset RALPH_RUNTIME_DIR
+    teardown_test_env
+    return
+  }
+
+  # Overwrite with fresh content as a subsequent ralph command would.
+  install_repin_hook "my-feature" \
+    "$(build_repin_content "my-feature" "run" "molecule=wx-abc" "issue=wx-abc.1")"
+  local second
+  second=$(simulate_compact_event) || {
+    test_fail "second simulate_compact_event failed"
+    unset RALPH_RUNTIME_DIR
+    teardown_test_env
+    return
+  }
+
+  if [ "$first" = "$second" ]; then
+    test_fail "simulate_compact_event returned identical output across invocations"
+  else
+    test_pass "output refreshes when re-pin content is rewritten"
+  fi
+
+  if echo "$second" | grep -q "Issue: wx-abc.1"; then
+    test_pass "second invocation reflects newly installed issue"
+  else
+    test_fail "second invocation did not pick up new content"
+  fi
+
+  unset RALPH_RUNTIME_DIR
+  teardown_test_env
+}
+
+test_simulate_compact_event_error_paths() {
+  CURRENT_TEST="simulate_compact_event_error_paths"
+  test_header "simulate_compact_event exits nonzero on missing/invalid hook"
+
+  setup_test_env "simulate-compact-errors"
+  # shellcheck source=../../lib/ralph/cmd/util.sh
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  # No settings file at all
+  unset RALPH_RUNTIME_DIR
+  if simulate_compact_event 2>/dev/null; then
+    test_fail "expected failure when no claude-settings.json exists"
+  else
+    test_pass "fails when no settings file is found"
+  fi
+
+  # Settings file without a compact matcher
+  mkdir -p "$RALPH_DIR/runtime/no-compact"
+  cat > "$RALPH_DIR/runtime/no-compact/claude-settings.json" <<'EOF'
+{"hooks": {"SessionStart": [{"matcher": "startup", "hooks": [{"type": "command", "command": "/bin/true"}]}]}}
+EOF
+  if simulate_compact_event "no-compact" 2>/dev/null; then
+    test_fail "expected failure when no compact matcher is registered"
+  else
+    test_pass "fails when SessionStart[compact] is absent"
+  fi
+
+  # Hook script exits non-zero
+  mkdir -p "$RALPH_DIR/runtime/fails"
+  cat > "$RALPH_DIR/runtime/fails/repin.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+  chmod +x "$RALPH_DIR/runtime/fails/repin.sh"
+  cat > "$RALPH_DIR/runtime/fails/claude-settings.json" <<EOF
+{"hooks": {"SessionStart": [{"matcher": "compact", "hooks": [{"type": "command", "command": "$PWD/$RALPH_DIR/runtime/fails/repin.sh"}]}]}}
+EOF
+  if simulate_compact_event "fails" 2>/dev/null; then
+    test_fail "expected failure when hook script exits non-zero"
+  else
+    test_pass "fails when hook script exits non-zero"
+  fi
+
+  # Hook emits non-JSON output
+  mkdir -p "$RALPH_DIR/runtime/garbage"
+  cat > "$RALPH_DIR/runtime/garbage/repin.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "not json at all"
+EOF
+  chmod +x "$RALPH_DIR/runtime/garbage/repin.sh"
+  cat > "$RALPH_DIR/runtime/garbage/claude-settings.json" <<EOF
+{"hooks": {"SessionStart": [{"matcher": "compact", "hooks": [{"type": "command", "command": "$PWD/$RALPH_DIR/runtime/garbage/repin.sh"}]}]}}
+EOF
+  if simulate_compact_event "garbage" 2>/dev/null; then
+    test_fail "expected failure when hook output isn't JSON with additionalContext"
+  else
+    test_pass "fails when hook output lacks hookSpecificOutput.additionalContext"
+  fi
+
+  teardown_test_env
+}
+
 #-----------------------------------------------------------------------------
 # Main Test Runner
 #-----------------------------------------------------------------------------
@@ -12092,6 +12243,9 @@ PARALLEL_TESTS=(
   test_runtime_dir_env_propagation
   test_entrypoint_merges_ralph_settings
   test_entrypoint_merge_concatenates_hooks
+  test_simulate_compact_event_returns_additional_context
+  test_simulate_compact_event_refresh_per_invocation
+  test_simulate_compact_event_error_paths
 )
 
 # ALL_TESTS is the combined list for --sequential mode and single-test runs.
