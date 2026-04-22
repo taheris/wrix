@@ -12,10 +12,14 @@
 #
 # Exports: SHARED_DOLT_HOST, SHARED_DOLT_DIR, SHARED_DOLT_PORT, SHARED_DOLT_PID
 
+# bd must never auto-start its own dolt sql-server or prompt on stdin —
+# both leak orphan processes when tests run non-interactively.
+export BEADS_DOLT_AUTO_START=0
+export BD_NON_INTERACTIVE=1
+
 # Kill orphaned dolt sql-server processes left over from previous test runs.
-# Each test run writes a runner.pid file into its SHARED_DOLT_DIR. At startup
-# we scan /tmp/*-test-dolt-*/runner.pid — if the recorded runner PID is no
-# longer alive, the dolt server in that directory is orphaned and safe to kill.
+# Scans harness pidfiles (/tmp/*-test-dolt-*/) and sweeps bd-auto-started dolts
+# (--loglevel=warning, no --data-dir) — but only when no live runner exists.
 kill_stale_test_dolt_servers() {
   local killed=0
   for pidfile in /tmp/*-test-dolt-*/runner.pid; do
@@ -38,6 +42,29 @@ kill_stale_test_dolt_servers() {
     fi
     rm -rf "$dir"
   done
+
+  # Skip the bd-orphan sweep if any live harness runner exists.
+  local live_runners=0
+  for pidfile in /tmp/*-test-dolt-*/runner.pid; do
+    [ -f "$pidfile" ] || continue
+    local rpid
+    rpid=$(cat "$pidfile" 2>/dev/null || echo "")
+    if [ -n "$rpid" ] && kill -0 "$rpid" 2>/dev/null; then
+      live_runners=$((live_runners + 1))
+    fi
+  done
+  if [ "$live_runners" -eq 0 ]; then
+    local bd_pid
+    while read -r bd_pid; do
+      [ -n "$bd_pid" ] || continue
+      kill "$bd_pid" 2>/dev/null && killed=$((killed + 1)) || true
+    done < <(pgrep -af 'dolt sql-server' \
+              | grep -- '--loglevel=warning' \
+              | grep -v -- '--data-dir' \
+              | grep -v '/workspace/.wrapix' \
+              | awk '{print $1}')
+  fi
+
   if [ "$killed" -gt 0 ]; then
     echo "Cleaned up $killed orphaned dolt sql-server process(es) from previous run"
     sleep 0.2

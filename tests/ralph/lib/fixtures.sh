@@ -297,7 +297,7 @@ _ensure_beads_snapshot() {
     mkdir -p "$snap_root"
     if ! (cd "$snap_root" && bd init --prefix ralphsnap \
             ${SHARED_DOLT_PORT:+--server-port "$SHARED_DOLT_PORT"} \
-            --skip-hooks --skip-agents --quiet >/dev/null 2>&1); then
+            --skip-hooks --skip-agents --non-interactive --quiet </dev/null); then
       echo "ERROR: bd init failed while creating beads snapshot at $snap_root" >&2
       rm -rf "$snap_root"
       return 1
@@ -451,8 +451,8 @@ teardown_test_env() {
     rm -rf "$TEST_DIR"
   fi
 
-  # Unset test environment variables
-  unset TEST_DIR BD_DB MOCK_SCENARIO RALPH_DIR RALPH_TEMPLATE_DIR BEADS_DOLT_AUTO_START BEADS_DOLT_SERVER_PORT
+  # BEADS_DOLT_AUTO_START must survive teardown — sourced at top of dolt-server.sh.
+  unset TEST_DIR BD_DB MOCK_SCENARIO RALPH_DIR RALPH_TEMPLATE_DIR BEADS_DOLT_SERVER_PORT
 }
 
 #-----------------------------------------------------------------------------
