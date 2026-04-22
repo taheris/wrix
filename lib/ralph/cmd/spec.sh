@@ -64,7 +64,7 @@ run_verify_test() {
   if [ ! -f "$file_path" ]; then
     echo "  [FAIL] $criterion"
     echo "         $file_path not found"
-    ((failed++)) || true
+    failed=$((failed + 1))
     has_failure=true
     return
   fi
@@ -79,19 +79,19 @@ run_verify_test() {
   if [ "$exit_code" -eq 0 ]; then
     echo "  [PASS] $criterion"
     echo "         $file_path${function_name:+::$function_name} (exit 0)"
-    ((passed++)) || true
+    passed=$((passed + 1))
   elif [ "$exit_code" -eq 77 ]; then
     echo "  [SKIP] $criterion"
     echo "         $file_path${function_name:+::$function_name} (exit 77 — skipped)"
-    ((skipped++)) || true
+    skipped=$((skipped + 1))
   elif [ "$exit_code" -eq 78 ]; then
     echo "  [SKIP] $criterion"
     echo "         $file_path${function_name:+::$function_name} (exit 78 — not implemented)"
-    ((skipped++)) || true
+    skipped=$((skipped + 1))
   else
     echo "  [FAIL] $criterion"
     echo "         $file_path${function_name:+::$function_name} (exit $exit_code)"
-    ((failed++)) || true
+    failed=$((failed + 1))
     has_failure=true
     # Always show tail of output on failure (helps diagnose missing binaries etc.)
     if [ "$VERBOSE" != "true" ] && [ -n "$test_output" ]; then
@@ -141,7 +141,7 @@ run_verify_wrapix_test() {
   if [ ! -f "$file_path" ]; then
     echo "  [FAIL] $criterion"
     echo "         $file_path not found"
-    ((failed++)) || true
+    failed=$((failed + 1))
     has_failure=true
     return
   fi
@@ -157,7 +157,7 @@ run_verify_wrapix_test() {
         echo "         | $line"
       done
     fi
-    ((failed++)) || true
+    failed=$((failed + 1))
     has_failure=true
     return
   fi
@@ -177,25 +177,25 @@ run_verify_wrapix_test() {
   if [ "$exit_code" -eq 0 ]; then
     echo "  [PASS] $criterion"
     echo "         $file_path${function_name:+::$function_name} (exit 0, container)"
-    ((passed++)) || true
+    passed=$((passed + 1))
   elif [ "$exit_code" -eq 77 ]; then
     echo "  [SKIP] $criterion"
     echo "         $file_path${function_name:+::$function_name} (exit 77 — skipped, container)"
-    ((skipped++)) || true
+    skipped=$((skipped + 1))
   elif [ "$exit_code" -eq 78 ]; then
     echo "  [SKIP] $criterion"
     echo "         $file_path${function_name:+::$function_name} (exit 78 — not implemented, container)"
-    ((skipped++)) || true
+    skipped=$((skipped + 1))
   else
     # Detect container infrastructure failures (not test failures)
     if echo "$test_output" | grep -q "payload does not match any of the supported image formats\|no policy.json file found\|Error: exec container process\|cannot find a cgroup"; then
       echo "  [SKIP] $criterion"
       echo "         Container runtime unavailable (cannot run nested containers)"
-      ((skipped++)) || true
+      skipped=$((skipped + 1))
     else
       echo "  [FAIL] $criterion"
       echo "         $file_path${function_name:+::$function_name} (exit $exit_code, container)"
-      ((failed++)) || true
+      failed=$((failed + 1))
       has_failure=true
       if [ "$VERBOSE" != "true" ] && [ -n "$test_output" ]; then
         echo "$test_output" | tail -5 | while IFS= read -r line; do
@@ -224,7 +224,7 @@ run_judge_test() {
   if [ ! -f "$file_path" ]; then
     echo "  [FAIL] $criterion"
     echo "         $file_path not found"
-    ((failed++)) || true
+    failed=$((failed + 1))
     has_failure=true
     return
   fi
@@ -247,19 +247,19 @@ run_judge_test() {
     if [ -n "$JUDGE_REASONING" ]; then
       echo "         \"$JUDGE_REASONING\""
     fi
-    ((passed++)) || true
+    passed=$((passed + 1))
   elif [ "$judge_exit" -eq 2 ]; then
     # Error (missing files, LLM unavailable, etc.) — report as FAIL with reason
     echo "  [FAIL] $criterion"
     echo "         $JUDGE_REASONING"
-    ((failed++)) || true
+    failed=$((failed + 1))
     has_failure=true
   else
     echo "  [FAIL] $criterion"
     if [ -n "$JUDGE_REASONING" ]; then
       echo "         \"$JUDGE_REASONING\""
     fi
-    ((failed++)) || true
+    failed=$((failed + 1))
     has_failure=true
   fi
 }
@@ -294,7 +294,7 @@ show_annotation_index() {
 
     # Parse annotations; skip files without success criteria
     local annotations
-    annotations=$(parse_spec_annotations "$spec_file" 2>/dev/null) || continue
+    annotations=$(parse_spec_annotations "$spec_file") || continue
     if [ -z "$annotations" ]; then
       continue
     fi
@@ -353,7 +353,7 @@ run_single_spec_tests() {
 
   # Parse annotations from the spec
   local annotations
-  annotations=$(parse_spec_annotations "$spec_file" 2>/dev/null) || return 0
+  annotations=$(parse_spec_annotations "$spec_file") || return 0
   if [ -z "$annotations" ]; then
     return 0
   fi
@@ -381,7 +381,7 @@ run_single_spec_tests() {
       # --all mode: run both verify and judge, skip only unannotated
       if [ "$ann_type" = "none" ]; then
         echo "  [SKIP] $criterion (no annotation)"
-        ((skipped++)) || true
+        skipped=$((skipped + 1))
       elif [ "$ann_type" = "verify" ]; then
         run_verify_test "$criterion" "$file_path" "$function_name"
       elif [ "$ann_type" = "verify-wrapix" ]; then
@@ -396,7 +396,7 @@ run_single_spec_tests() {
         run_verify_wrapix_test "$criterion" "$file_path" "$function_name"
       elif [ "$ann_type" = "none" ]; then
         echo "  [SKIP] $criterion (no annotation)"
-        ((skipped++)) || true
+        skipped=$((skipped + 1))
       fi
       # judge-only criteria are silently omitted in verify mode
     elif [ "$JUDGE" = "true" ]; then
@@ -404,7 +404,7 @@ run_single_spec_tests() {
         run_judge_test "$criterion" "$file_path" "$function_name"
       elif [ "$ann_type" = "none" ]; then
         echo "  [SKIP] $criterion (no annotation)"
-        ((skipped++)) || true
+        skipped=$((skipped + 1))
       fi
       # verify-only and verify-wrapix criteria are silently omitted in judge mode
     fi
@@ -468,7 +468,7 @@ run_spec_tests() {
 
     # Check if this spec has success criteria; skip silently if not
     local annotations
-    annotations=$(parse_spec_annotations "$spec_file" 2>/dev/null) || continue
+    annotations=$(parse_spec_annotations "$spec_file") || continue
     if [ -z "$annotations" ]; then
       continue
     fi
@@ -477,7 +477,7 @@ run_spec_tests() {
     molecule_id=$(lookup_molecule_id "$label")
 
     run_single_spec_tests "$spec_file" "$label" "$molecule_id"
-    ((spec_count++)) || true
+    spec_count=$((spec_count + 1))
   done
 
   # Cross-spec summary

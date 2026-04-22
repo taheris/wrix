@@ -104,7 +104,7 @@ check_ralph_staleness
 
 # Pull latest beads state
 debug "Pulling beads database..."
-bd dolt commit >/dev/null 2>&1 || true
+bd dolt commit >/dev/null 2>&1 || warn "bd dolt commit failed, continuing"
 bd dolt pull >/dev/null 2>&1 || warn "bd dolt pull failed, continuing with local state"
 
 RALPH_DIR="${RALPH_DIR:-.wrapix/ralph}"

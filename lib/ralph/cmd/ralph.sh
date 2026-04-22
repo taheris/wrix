@@ -3,7 +3,9 @@ set -euo pipefail
 
 RALPH_DIR="${RALPH_DIR:-.wrapix/ralph}"
 COMMAND="${1:-help}"
-shift || true
+if [ "$#" -gt 0 ]; then
+  shift
+fi
 
 case "$COMMAND" in
   check)  exec ralph-check  "$@" ;;

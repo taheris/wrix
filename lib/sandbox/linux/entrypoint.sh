@@ -135,7 +135,10 @@ fi
 if [ "${WRAPIX_NETWORK:-open}" = "limit" ]; then
   echo "Network mode: limit (restricting outbound to allowlist)" >&2
 
-  if iptables -P OUTPUT DROP 2>/dev/null; then
+  if ! command -v iptables >/dev/null 2>&1; then
+    echo "Warning: iptables not available, network filtering disabled" >&2
+    echo "  WRAPIX_NETWORK=limit requires NET_ADMIN capability (microVM recommended)" >&2
+  elif iptables -P OUTPUT DROP; then
     # Allow loopback traffic
     iptables -A OUTPUT -o lo -j ACCEPT
 
@@ -158,7 +161,7 @@ if [ "${WRAPIX_NETWORK:-open}" = "limit" ]; then
     done
 
     # IPv6: set default drop policy and allow same exceptions
-    if ip6tables -P OUTPUT DROP 2>/dev/null; then
+    if command -v ip6tables >/dev/null 2>&1 && ip6tables -P OUTPUT DROP; then
       ip6tables -A OUTPUT -o lo -j ACCEPT
       ip6tables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
       ip6tables -A OUTPUT -p udp --dport 53 -j ACCEPT
@@ -175,7 +178,7 @@ if [ "${WRAPIX_NETWORK:-open}" = "limit" ]; then
 
     echo "Network filtering active: ${WRAPIX_NETWORK_ALLOWLIST:-}" >&2
   else
-    echo "Warning: iptables not available, network filtering disabled" >&2
+    echo "Warning: iptables -P OUTPUT DROP failed, network filtering disabled" >&2
     echo "  WRAPIX_NETWORK=limit requires NET_ADMIN capability (microVM recommended)" >&2
   fi
 fi

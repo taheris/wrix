@@ -347,6 +347,8 @@ let
     PASSED=0
     FAILED=0
     GC_PID=""
+    POLL_WATCH_PID=""
+    POLL_WATCH_LOG=""
     WS=""
     RUN_ID="$(head -c4 /dev/urandom | od -An -tx1 | tr -d ' \n')"
     CITY_NAME="test-$RUN_ID"
@@ -513,31 +515,10 @@ let
       rm -f "$vars_file"
     }
 
-    # Poll until a command succeeds. Usage: poll_until command timeout
-    poll_until() {
-      local cmd="$1"
-      local timeout="''${2:-30}"
-      local interval="''${3:-1}"
-      local elapsed=0
-      echo "  > waiting (up to ''${timeout}s): $cmd"
-      while [ "$elapsed" -lt "$timeout" ]; do
-        if eval "$cmd" >/dev/null 2>&1; then
-          echo "  > satisfied after ''${elapsed}s"
-          return 0
-        fi
-        # Early exit if gc died while we're polling
-        if [ -n "$GC_PID" ] && ! kill -0 "$GC_PID" 2>/dev/null; then
-          echo "  > gc (pid $GC_PID) died during poll"
-          echo "  gc.log tail:"
-          tail -20 "$WS/gc.log" 2>/dev/null | sed 's/^/    /' || true
-          return 1
-        fi
-        sleep "$interval"
-        elapsed=$((elapsed + interval))
-      done
-      echo "  > TIMED OUT after ''${timeout}s: $cmd"
-      return 1
-    }
+    # Shared poll_until helper. Watches $POLL_WATCH_PID and dumps
+    # $POLL_WATCH_LOG on death. Both env vars are set/reset at each
+    # GC_PID assignment below.
+    ${builtins.readFile ../lib/poll.sh}
 
     # Check if dolt is reachable. bd is configured with
     # BEADS_DOLT_SERVER_SOCKET and connects via the Unix socket, so the
@@ -693,6 +674,8 @@ let
       # cross-container nudge tests don't block on the wait-idle loop.
       setsid env PATH="$LIVE_PATH" GC_NUDGE_IDLE_TIMEOUT=1 "$WS/.gc/scripts/entrypoint.sh" >"$WS/gc.log" 2>&1 &
       GC_PID=$!
+      POLL_WATCH_PID="$GC_PID"
+      POLL_WATCH_LOG="$WS/gc.log"
 
       for _i in $(seq 1 100); do
         dolt_reachable && break
@@ -1044,6 +1027,7 @@ let
         podman rm -f "$cid" 2>/dev/null || true
       done
       GC_PID=""
+      POLL_WATCH_PID=""
 
       # Remove stale git locks left by killed monitor pipeline processes
       # (e.g. worker-collect.sh's git merge-base holding index.lock when
@@ -1462,6 +1446,8 @@ let
       podman rm -f "''${CITY_NAME}-mayor" "''${CITY_NAME}-scout" "''${CITY_NAME}-judge" 2>/dev/null || true
       setsid env PATH="$LIVE_PATH" GC_NUDGE_IDLE_TIMEOUT=1 "$WS/.gc/scripts/entrypoint.sh" >"$WS/gc-gate.log" 2>&1 &
       GC_PID=$!
+      POLL_WATCH_PID="$GC_PID"
+      POLL_WATCH_LOG="$WS/gc-gate.log"
       poll_until 'test -S "$WS/.gc/home/.gc/controller.sock" || ! kill -0 "$GC_PID" 2>/dev/null' 15
       if ! kill -0 "$GC_PID" 2>/dev/null; then
         echo "gc daemon died before gate tests:"
@@ -1595,6 +1581,7 @@ let
         podman rm -f "$cid" 2>/dev/null || true
       done
       GC_PID=""
+      POLL_WATCH_PID=""
       if ! beads-dolt start "$WS"; then
         echo "FAIL: beads-dolt start failed after gate teardown"
         podman logs "$(beads-dolt name "$WS")" 2>&1 | tail -20 | sed 's/^/  dolt: /' || true
