@@ -5100,6 +5100,47 @@ EOF
   teardown_test_env
 }
 
+# Test: check.md template includes three-paths-principle section
+test_check_template_has_three_paths() {
+  CURRENT_TEST="check_template_has_three_paths"
+  test_header "check.md template includes three-paths-principle section"
+
+  local check_tpl="$REPO_ROOT/lib/ralph/template/check.md"
+
+  if [ ! -f "$check_tpl" ]; then
+    test_fail "check.md template not found at $check_tpl"
+    return
+  fi
+
+  if grep -qiE 'Three[- ]Paths Principle' "$check_tpl"; then
+    test_pass "check.md names the Three-Paths Principle section"
+  else
+    test_fail "check.md should include a 'Three-Paths Principle' section"
+  fi
+
+  # Each of the three resolution directions must be named so reviewers can
+  # recognize the full option set.
+  local preserve keep change
+  preserve=$(grep -cF 'Preserve the invariant' "$check_tpl")
+  keep=$(grep -cF 'Keep the change' "$check_tpl")
+  change=$(grep -cF 'Change the invariant' "$check_tpl")
+
+  if [ "$preserve" -ge 1 ] && [ "$keep" -ge 1 ] && [ "$change" -ge 1 ]; then
+    test_pass "check.md names all three paths (preserve/keep/change)"
+  else
+    test_fail "check.md should name all three paths (preserve:$preserve keep:$keep change:$change)"
+  fi
+
+  # Framing must mark the three paths as guidance, not a fixed A/B/C menu —
+  # otherwise the reviewer will emit boilerplate options instead of tailored
+  # ones per clash.
+  if grep -qiE 'guidance.*not a fixed|not a fixed.*menu' "$check_tpl"; then
+    test_pass "check.md frames the three paths as guidance, not a fixed menu"
+  else
+    test_fail "check.md should frame the three paths as guidance, not a fixed A/B/C menu"
+  fi
+}
+
 # Test: ralph check (no flags) runs the post-loop review against the resolved spec
 test_check_default_runs_review() {
   CURRENT_TEST="check_default_runs_review"
@@ -5403,6 +5444,61 @@ test_check_iteration_cap_escalates() {
   fi
 }
 
+# Test: check.sh exec-s ralph run on fix-up beads without clarify (auto-iterate)
+test_check_auto_iterates_via_run() {
+  CURRENT_TEST="check_auto_iterates_via_run"
+  test_header "check.sh: exec ralph run on fix-up beads without clarify (auto-iteration)"
+
+  local check_script="$REPO_ROOT/lib/ralph/cmd/check.sh"
+
+  # Core handoff: exec ralph run -s "$host_label"
+  if grep -qE '^[[:space:]]*exec[[:space:]]+ralph[[:space:]]+run[[:space:]]+-s[[:space:]]+"\$host_label"' "$check_script"; then
+    test_pass "check.sh contains exec ralph run -s \"\$host_label\""
+  else
+    test_fail "check.sh should exec ralph run -s \"\$host_label\" to auto-iterate"
+    return
+  fi
+
+  local under_cap_line exec_run_line clarify_line at_cap_line
+  under_cap_line=$(grep -nE '"\$iter_count" -lt "\$max_iter"' "$check_script" | head -1 | cut -d: -f1)
+  exec_run_line=$(grep -nE '^[[:space:]]*exec[[:space:]]+ralph[[:space:]]+run' "$check_script" | head -1 | cut -d: -f1)
+  clarify_line=$(grep -n '"\$clarify_count" -gt 0' "$check_script" | head -1 | cut -d: -f1)
+  at_cap_line=$(grep -n 'Iteration cap reached' "$check_script" | head -1 | cut -d: -f1)
+
+  # Handoff must be gated on iter_count < max_iter so it's bounded
+  if [ -n "$under_cap_line" ] && [ -n "$exec_run_line" ] && [ "$exec_run_line" -gt "$under_cap_line" ]; then
+    test_pass "auto-iteration gated on iter_count < max_iter"
+  else
+    test_fail "exec ralph run must be gated on iter_count < max_iter (cap:$under_cap_line exec:$exec_run_line)"
+  fi
+
+  # Handoff must sit AFTER the clarify-stop branch so it doesn't fire when a
+  # clarify is pending.
+  if [ -n "$clarify_line" ] && [ -n "$exec_run_line" ] && [ "$exec_run_line" -gt "$clarify_line" ]; then
+    test_pass "auto-iteration sits after clarify-stop branch"
+  else
+    test_fail "auto-iteration must sit after clarify guard (clarify:$clarify_line exec:$exec_run_line)"
+  fi
+
+  # Handoff must sit BEFORE the at-cap escalation path so the cap fires only
+  # when the under-cap branch did not take the exec path.
+  if [ -n "$exec_run_line" ] && [ -n "$at_cap_line" ] && [ "$exec_run_line" -lt "$at_cap_line" ]; then
+    test_pass "auto-iteration precedes the at-cap escalation path"
+  else
+    test_fail "auto-iteration exec should precede at-cap escalation (exec:$exec_run_line cap:$at_cap_line)"
+  fi
+
+  # Iteration counter must be bumped before the exec so the next iteration
+  # sees the updated value.
+  local bump_line
+  bump_line=$(grep -nE 'set_iteration_count[[:space:]]+"\$host_state_file"[[:space:]]+"\$next_iter"' "$check_script" | head -1 | cut -d: -f1)
+  if [ -n "$bump_line" ] && [ -n "$exec_run_line" ] && [ "$bump_line" -lt "$exec_run_line" ]; then
+    test_pass "iteration counter is bumped before exec ralph run"
+  else
+    test_fail "iteration counter must be bumped before exec ralph run (bump:$bump_line exec:$exec_run_line)"
+  fi
+}
+
 # Test: iteration_count persists in state JSON and resets on clean push + clarify clear
 test_iteration_counter_persistence() {
   CURRENT_TEST="iteration_counter_persistence"
@@ -5495,6 +5591,148 @@ test_iteration_counter_persistence() {
   fi
 
   rm -rf "$tmp_dir"
+}
+
+# Test: full run → check → run → check → push loop has clean termination paths
+test_run_check_loop_terminates() {
+  CURRENT_TEST="run_check_loop_terminates"
+  test_header "run ↔ check loop has a clean termination path (no runaway exec chain)"
+
+  local run_script="$REPO_ROOT/lib/ralph/cmd/run.sh"
+  local check_script="$REPO_ROOT/lib/ralph/cmd/check.sh"
+
+  # 1. run.sh continuous mode hands off to ralph check at molecule completion,
+  #    but --once must NOT chain into check (would spin forever in tests).
+  local run_exec_line run_guard_line
+  run_exec_line=$(grep -nE '^[[:space:]]*exec ralph check' "$run_script" | head -1 | cut -d: -f1)
+  # shellcheck disable=SC2016 # literal match
+  run_guard_line=$(grep -nE 'if \[ "\$RUN_ONCE" != "true" \]' "$run_script" | tail -1 | cut -d: -f1)
+  if [ -n "$run_exec_line" ] && [ -n "$run_guard_line" ] && [ "$run_guard_line" -lt "$run_exec_line" ]; then
+    test_pass "run.sh: exec ralph check gated on RUN_ONCE != true"
+  else
+    test_fail "run.sh: exec ralph check must sit inside a RUN_ONCE != true guard (guard:$run_guard_line exec:$run_exec_line)"
+  fi
+
+  # 2. check.sh clean RALPH_COMPLETE path terminates with do_push_gate + return 0.
+  local clean_branch_line push_call_line clean_return_line
+  clean_branch_line=$(grep -n '"\$new_beads" -le 0' "$check_script" | head -1 | cut -d: -f1)
+  push_call_line=$(grep -nE '^[[:space:]]*do_push_gate[[:space:]]*(\|\||$)' "$check_script" | head -1 | cut -d: -f1)
+  clean_return_line=$(awk -v start="$push_call_line" 'NR > start && /^[[:space:]]*return 0[[:space:]]*$/ {print NR; exit}' "$check_script")
+  if [ -n "$clean_branch_line" ] && [ -n "$push_call_line" ] && [ -n "$clean_return_line" ] \
+    && [ "$push_call_line" -gt "$clean_branch_line" ] && [ "$clean_return_line" -gt "$push_call_line" ]; then
+    test_pass "check.sh: clean-complete branch terminates (push gate + return 0)"
+  else
+    test_fail "check.sh: clean branch must push_gate then return 0 (clean:$clean_branch_line push:$push_call_line return:$clean_return_line)"
+  fi
+
+  # 3. Auto-iteration is bounded. Without a bound the loop could churn forever
+  #    whenever the reviewer keeps finding fix-ups.
+  if grep -qE '"\$iter_count" -lt "\$max_iter"' "$check_script"; then
+    test_pass "check.sh bounds auto-iteration by loop.max-iterations"
+  else
+    test_fail "check.sh must bound auto-iteration by loop.max-iterations"
+  fi
+
+  # 4. At-cap path does NOT re-exec; it escalates and returns cleanly.
+  local at_cap_line exec_run_line final_return_line
+  at_cap_line=$(grep -n 'Iteration cap reached' "$check_script" | head -1 | cut -d: -f1)
+  exec_run_line=$(grep -nE '^[[:space:]]*exec[[:space:]]+ralph[[:space:]]+run' "$check_script" | head -1 | cut -d: -f1)
+  final_return_line=$(awk -v start="$at_cap_line" 'NR > start && /^[[:space:]]*return 0[[:space:]]*$/ {print NR; exit}' "$check_script")
+  if [ -n "$at_cap_line" ] && [ -n "$exec_run_line" ] && [ "$at_cap_line" -gt "$exec_run_line" ]; then
+    test_pass "at-cap escalation runs only after the auto-iteration exec"
+  else
+    test_fail "at-cap escalation must sit after the auto-iteration exec (cap:$at_cap_line exec:$exec_run_line)"
+  fi
+  if [ -n "$at_cap_line" ] && [ -n "$final_return_line" ] && [ "$final_return_line" -gt "$at_cap_line" ]; then
+    test_pass "at-cap path returns cleanly (no further exec chain)"
+  else
+    test_fail "at-cap path must return cleanly (cap:$at_cap_line return:$final_return_line)"
+  fi
+
+  # 5. Clarify-pending branch short-circuits with return 0 (no push, no exec)
+  local clarify_branch_line clarify_return_line
+  clarify_branch_line=$(grep -n '"\$clarify_count" -gt 0' "$check_script" | head -1 | cut -d: -f1)
+  clarify_return_line=$(awk -v start="$clarify_branch_line" 'NR > start && /^[[:space:]]*return 0[[:space:]]*$/ {print NR; exit}' "$check_script")
+  if [ -n "$clarify_branch_line" ] && [ -n "$clarify_return_line" ] && [ "$clarify_return_line" -gt "$clarify_branch_line" ]; then
+    test_pass "clarify-pending branch returns cleanly (no push, no exec)"
+  else
+    test_fail "clarify-pending branch must return cleanly (clarify:$clarify_branch_line return:$clarify_return_line)"
+  fi
+
+  # 6. Runtime smoke: ralph check with mocked claude + no fix-up beads + clean
+  #    review must exit the container-side early-return before the host-side
+  #    review block fires. The check runs host-side post-loop review; we stub
+  #    claude + stub the push gate and verify an exit code of 0.
+  setup_test_env "run-check-loop-terminates"
+  init_beads
+
+  local label="loop-terminates"
+  echo "$label" > "$RALPH_DIR/state/current"
+  local mol_id
+  mol_id=$(bd create --type=epic --title="Loop-terminates molecule" \
+    --labels="spec-$label" --silent)
+  cat > "$RALPH_DIR/state/${label}.json" <<JSON
+{"label":"$label","spec_path":"specs/${label}.md","molecule":"$mol_id","base_commit":"HEAD"}
+JSON
+
+  cat > "$TEST_DIR/specs/${label}.md" <<'SPEC'
+# Loop-terminates feature
+Spec body.
+SPEC
+
+  # Claude returns RALPH_COMPLETE immediately, creating no beads — that's the
+  # terminating condition for the whole loop. setup_test_env symlinks claude to
+  # the real mock-claude; overwriting would follow the symlink and clobber the
+  # source file.
+  rm -f "$TEST_DIR/bin/claude"
+  cat > "$TEST_DIR/bin/claude" <<'EOF'
+#!/usr/bin/env bash
+cat <<'STREAM'
+{"type":"result","result":"RALPH_COMPLETE"}
+STREAM
+exit 0
+EOF
+  chmod +x "$TEST_DIR/bin/claude"
+
+  # Stub git push + beads-push so do_push_gate can't reach the real remote.
+  cat > "$TEST_DIR/bin/beads-push" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$TEST_DIR/bin/beads-push"
+
+  # setup_test_env symlinks git to the real binary; overwriting would follow
+  # the symlink into the Nix store. Replace the symlink with a shim that
+  # intercepts `git push` so do_push_gate can't reach a real remote.
+  local real_git
+  real_git=$(readlink -f "$TEST_DIR/bin/git" 2>/dev/null || command -v git)
+  rm -f "$TEST_DIR/bin/git"
+  cat > "$TEST_DIR/bin/git" <<EOF
+#!/usr/bin/env bash
+if [ "\${1:-}" = "push" ]; then
+  exit 0
+fi
+exec "$real_git" "\$@"
+EOF
+  chmod +x "$TEST_DIR/bin/git"
+
+  # Need to be on a branch for do_push_gate's detached-HEAD check
+  (cd "$TEST_DIR" && "$real_git" init --quiet -b main && \
+    "$real_git" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init) >/dev/null
+
+  set +e
+  local output exit_code
+  output=$(ralph-check 2>&1)
+  exit_code=$?
+  set -e
+
+  if [ "$exit_code" -eq 0 ]; then
+    test_pass "ralph check terminates with exit 0 on clean review"
+  else
+    test_fail "ralph check should terminate with exit 0 (got $exit_code, output: ${output:0:300})"
+  fi
+
+  teardown_test_env
 }
 
 # Test: default config template has hooks configured
@@ -11483,6 +11721,152 @@ EOF
   teardown_test_env
 }
 
+# Test: runtime dir is removed by trap on both success and failure paths
+test_runtime_dir_cleanup() {
+  CURRENT_TEST="runtime_dir_cleanup"
+  test_header "trap removes .wrapix/ralph/runtime/<label>/ on success and failure"
+
+  setup_test_env "runtime-dir-cleanup"
+  # shellcheck source=../../lib/ralph/cmd/util.sh
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  local label="cleanup-test"
+  local runtime_dir="$RALPH_DIR/runtime/$label"
+
+  # Success path: subshell installs the hook, registers the exact trap pattern
+  # used by plan.sh/todo.sh/run.sh/check.sh, then exits 0.
+  (
+    install_repin_hook "$label" "orientation text"
+    # shellcheck disable=SC2064 # mirror live plan.sh/todo.sh/run.sh/check.sh trap
+    trap "rm -rf '$runtime_dir'" EXIT
+    [ -d "$runtime_dir" ] || { echo "runtime dir missing after install_repin_hook" >&2; exit 2; }
+    exit 0
+  )
+  if [ ! -d "$runtime_dir" ]; then
+    test_pass "trap removed runtime dir on success path"
+  else
+    test_fail "runtime dir still present after successful exit: $runtime_dir"
+  fi
+
+  # Failure path: same trap pattern, subshell exits non-zero.
+  (
+    install_repin_hook "$label" "orientation text"
+    # shellcheck disable=SC2064 # mirror live plan.sh/todo.sh/run.sh/check.sh trap
+    trap "rm -rf '$runtime_dir'" EXIT
+    [ -d "$runtime_dir" ] || { echo "runtime dir missing after install_repin_hook" >&2; exit 2; }
+    exit 1
+  ) || true
+  if [ ! -d "$runtime_dir" ]; then
+    test_pass "trap removed runtime dir on failure path"
+  else
+    test_fail "runtime dir still present after non-zero exit: $runtime_dir"
+  fi
+
+  # Every container-executed ralph command registers the same trap pattern.
+  # Catches drift if one of them loses the trap (e.g., refactor mistake).
+  local script label_var
+  for entry in \
+    "plan.sh:_host_ralph_dir:_host_label" \
+    "todo.sh:_HOST_RALPH_DIR:_HOST_LABEL" \
+    "run.sh:_host_ralph_dir:_host_label" \
+    "check.sh:RALPH_DIR:host_label"; do
+    script="$REPO_ROOT/lib/ralph/cmd/${entry%%:*}"
+    local rest="${entry#*:}"
+    local ralph_dir_var="${rest%%:*}"
+    label_var="${rest##*:}"
+    if grep -qE "trap \"rm -rf '\\\$${ralph_dir_var}/runtime/\\\$${label_var}'\" EXIT" "$script"; then
+      test_pass "$(basename "$script"): registers cleanup trap"
+    else
+      test_fail "$(basename "$script"): missing cleanup trap (expected \$${ralph_dir_var}/runtime/\$${label_var})"
+    fi
+  done
+
+  unset RALPH_RUNTIME_DIR
+  teardown_test_env
+}
+
+# Test: container-executed ralph commands propagate RALPH_RUNTIME_DIR end-to-end
+test_runtime_dir_env_propagation() {
+  CURRENT_TEST="runtime_dir_env_propagation"
+  test_header "container-executed commands propagate RALPH_RUNTIME_DIR via wrapix --env"
+
+  local linux_nix="$REPO_ROOT/lib/sandbox/linux/default.nix"
+  local darwin_nix="$REPO_ROOT/lib/sandbox/darwin/default.nix"
+  local entrypoint="$REPO_ROOT/lib/sandbox/linux/entrypoint.sh"
+  local util_script="$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  # Linux sandbox passes RALPH_RUNTIME_DIR via podman -e
+  if grep -qE 'RALPH_RUNTIME_DIR=.*RALPH_RUNTIME_DIR:-' "$linux_nix"; then
+    test_pass "linux sandbox passes -e RALPH_RUNTIME_DIR=\$RALPH_RUNTIME_DIR"
+  else
+    test_fail "linux sandbox must pass RALPH_RUNTIME_DIR via -e"
+  fi
+
+  # Darwin sandbox passes RALPH_RUNTIME_DIR via krun -e
+  if grep -qE 'RALPH_RUNTIME_DIR=.*RALPH_RUNTIME_DIR:-' "$darwin_nix"; then
+    test_pass "darwin sandbox passes -e RALPH_RUNTIME_DIR=\$RALPH_RUNTIME_DIR"
+  else
+    test_fail "darwin sandbox must pass RALPH_RUNTIME_DIR via -e"
+  fi
+
+  # entrypoint.sh guards the settings merge on the env var being set
+  if grep -qE '\[ -n "\$\{RALPH_RUNTIME_DIR:-\}" \]' "$entrypoint"; then
+    test_pass "entrypoint guards settings merge on RALPH_RUNTIME_DIR being set"
+  else
+    test_fail "entrypoint must guard settings merge on RALPH_RUNTIME_DIR being set"
+  fi
+
+  # install_repin_hook exports RALPH_RUNTIME_DIR so wrapix picks it up
+  if grep -qE '^[[:space:]]*export RALPH_RUNTIME_DIR=' "$util_script"; then
+    test_pass "install_repin_hook exports RALPH_RUNTIME_DIR"
+  else
+    test_fail "install_repin_hook must export RALPH_RUNTIME_DIR"
+  fi
+
+  # Runtime smoke: sourcing util.sh + calling install_repin_hook sets the env
+  # var to an existing directory. Exercises the exact function wrapix invokers
+  # call on the host side.
+  setup_test_env "runtime-dir-env"
+  # shellcheck source=../../lib/ralph/cmd/util.sh
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+  unset RALPH_RUNTIME_DIR
+  install_repin_hook "env-prop" "orientation text"
+  if [ -n "${RALPH_RUNTIME_DIR:-}" ] && [ -d "$RALPH_RUNTIME_DIR" ]; then
+    test_pass "install_repin_hook sets RALPH_RUNTIME_DIR to an existing dir"
+  else
+    test_fail "install_repin_hook should export RALPH_RUNTIME_DIR pointing at an existing dir (got '${RALPH_RUNTIME_DIR:-}')"
+  fi
+
+  # Entrypoint contract: merge block must be a no-op when the env var is
+  # unset. Exercise the live block (same extraction as
+  # test_entrypoint_merges_ralph_settings) against an unset RALPH_RUNTIME_DIR.
+  local block
+  block=$(_extract_entrypoint_merge_block)
+  if [ -z "$block" ]; then
+    test_fail "could not extract entrypoint merge block"
+  else
+    export HOME="$TEST_DIR/home"
+    mkdir -p "$HOME/.claude"
+    cat > "$HOME/.claude/settings.json" <<'EOF'
+{"env": {"FOO": "1"}}
+EOF
+    unset RALPH_RUNTIME_DIR
+    local before after
+    before=$(sha256sum "$HOME/.claude/settings.json" | cut -d' ' -f1)
+    ( set -euo pipefail; eval "$block" )
+    after=$(sha256sum "$HOME/.claude/settings.json" | cut -d' ' -f1)
+    if [ "$before" = "$after" ]; then
+      test_pass "entrypoint merge is a no-op when RALPH_RUNTIME_DIR is unset"
+    else
+      test_fail "entrypoint merge must be a no-op when RALPH_RUNTIME_DIR is unset"
+    fi
+    unset HOME
+  fi
+
+  unset RALPH_RUNTIME_DIR
+  teardown_test_env
+}
+
 #-----------------------------------------------------------------------------
 # Main Test Runner
 #-----------------------------------------------------------------------------
@@ -11516,6 +11900,7 @@ SEQUENTIAL_TESTS=(
   # Todo-to-run bead visibility tests (require ralph-run)
   test_todo_beads_visible_to_run
   test_run_startup_dolt_pull_behavior
+  test_run_check_loop_terminates
 )
 
 # Tests safe for parallel execution (template logic, file state, simple bd calls).
@@ -11572,12 +11957,14 @@ PARALLEL_TESTS=(
   test_check_invalid_nix_syntax
   test_check_exit_codes
   test_check_templates_no_claude
+  test_check_template_has_three_paths
   test_check_default_runs_review
   test_check_dolt_push_in_container
   test_check_dolt_pull_before_recount
   test_check_push_gate_clean
   test_check_clarify_stops_push
   test_check_push_failure_modes
+  test_check_auto_iterates_via_run
   test_check_iteration_cap_escalates
   test_iteration_counter_persistence
   test_default_config_has_hooks
@@ -11701,6 +12088,8 @@ PARALLEL_TESTS=(
   test_repin_hook_files_written
   test_host_commands_no_repin_hook
   test_runtime_dir_gitignored
+  test_runtime_dir_cleanup
+  test_runtime_dir_env_propagation
   test_entrypoint_merges_ralph_settings
   test_entrypoint_merge_concatenates_hooks
 )
