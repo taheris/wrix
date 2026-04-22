@@ -184,23 +184,26 @@ let
       rm -f "$data_dir/.doltcfg/privileges.db"
     }
 
-    # Check if dolt port is reachable. When CONTAINER_HOST is set, the
-    # port is on host loopback (invisible from pasta); probe inside the
-    # dolt container instead.
+    # Check if dolt is reachable — both TCP (gc's embedded clients) and
+    # Unix socket (bd). A live TCP listener with a missing socket still
+    # breaks every bd caller, so both must pass before we declare success.
+    # When CONTAINER_HOST is set the TCP port is on host loopback
+    # (invisible from pasta); probe inside the dolt container instead.
     _dolt_reachable() {
-      local name="$1" port="$2"
+      local name="$1" port="$2" ws="$3"
       if [[ -n "''${CONTAINER_HOST:-}" ]]; then
-        podman exec "$name" bash -c "echo > /dev/tcp/127.0.0.1/$port" 2>/dev/null
+        podman exec "$name" bash -c "echo > /dev/tcp/127.0.0.1/$port" 2>/dev/null || return 1
       else
-        bash -c "echo > /dev/tcp/127.0.0.1/$port" 2>/dev/null
+        bash -c "echo > /dev/tcp/127.0.0.1/$port" 2>/dev/null || return 1
       fi
+      test -S "$(_socket_path "$ws")"
     }
 
     _wait_for_dolt() {
-      local name="$1" port="$2"
+      local name="$1" port="$2" ws="$3"
       local retries=50
       while [ $retries -gt 0 ]; do
-        if _dolt_reachable "$name" "$port"; then
+        if _dolt_reachable "$name" "$port" "$ws"; then
           return 0
         fi
         sleep 0.2
@@ -225,7 +228,7 @@ let
 
       if podman container exists "$name"; then
         if podman inspect --format '{{.State.Running}}' "$name" | grep -q true \
-           && _dolt_reachable "$name" "$port"; then
+           && _dolt_reachable "$name" "$port" "$ws"; then
           return 0
         fi
         podman rm -f "$name" >/dev/null
@@ -295,7 +298,7 @@ let
           >/dev/null
       )
 
-      if ! _wait_for_dolt "$name" "$port"; then
+      if ! _wait_for_dolt "$name" "$port" "$ws"; then
         echo "beads-dolt: container did not become ready" >&2
         podman logs "$name" 2>&1 | tail -10 >&2
         return 1

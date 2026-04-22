@@ -518,14 +518,12 @@ let
       return 1
     }
 
-    # Check if dolt is reachable. When CONTAINER_HOST is set (pasta
-    # networking), use the Unix socket on the shared filesystem.
+    # Check if dolt is reachable. bd is configured with
+    # BEADS_DOLT_SERVER_SOCKET and connects via the Unix socket, so the
+    # socket file is the authoritative signal — a live TCP port with a
+    # missing socket still breaks every bd call.
     dolt_reachable() {
-      if [[ -n "''${CONTAINER_HOST:-}" ]]; then
-        test -S "$WS/.wrapix/dolt.sock"
-      else
-        bash -c "echo > /dev/tcp/127.0.0.1/$DOLT_PORT" 2>/dev/null
-      fi
+      test -S "$WS/.wrapix/dolt.sock"
     }
 
     # Run a city script via the live .gc/scripts/ symlinks with LIVE_PATH.
@@ -1017,9 +1015,9 @@ let
         kill -9 -"$GC_PID" 2>/dev/null || true
         wait "$GC_PID" 2>/dev/null || true
       fi
-      # Stop and remove all gc containers. The beads-dolt container is
-      # shared across scenarios and kept running (entrypoint only disconnects
-      # it from the network on exit).
+      # Stop and remove all gc-owned containers (filter matches $CITY_NAME-*
+      # session containers, not the beads-dolt container which is named
+      # <basename($WS)>-beads and persists across scenarios).
       for cid in $(podman ps -a --filter "name=$CITY_NAME-" -q 2>/dev/null); do
         podman stop -t 3 "$cid" 2>/dev/null || true
         podman rm -f "$cid" 2>/dev/null || true
@@ -1031,12 +1029,23 @@ let
       # the process group was SIGKILL'd).
       rm -f "$WS/.git/index.lock"
 
-      # Ensure beads-dolt is still running for remaining scenarios
-      beads-dolt start "$WS" >/dev/null 2>&1 || true
+      # Ensure beads-dolt is still running for remaining scenarios. Print
+      # output directly — silencing hid real failures (wx-jf95x investigation).
+      if ! beads-dolt start "$WS"; then
+        echo "FAIL: beads-dolt start failed after gc teardown"
+        podman logs "$(beads-dolt name "$WS")" 2>&1 | tail -20 | sed 's/^/  dolt: /' || true
+        return 1
+      fi
       for _i in $(seq 1 50); do
         dolt_reachable && break
         sleep 0.2
       done
+      if ! dolt_reachable; then
+        echo "FAIL: dolt socket $WS/.wrapix/dolt.sock missing after beads-dolt start"
+        podman ps -a --filter "name=$(beads-dolt name "$WS")" 2>&1 | sed 's/^/  /' || true
+        podman logs "$(beads-dolt name "$WS")" 2>&1 | tail -20 | sed 's/^/  dolt: /' || true
+        return 1
+      fi
       save GC_PID
     }
     subtest "Stop gc after happy-path" stop_gc
@@ -1565,11 +1574,21 @@ let
         podman rm -f "$cid" 2>/dev/null || true
       done
       GC_PID=""
-      beads-dolt start "$WS" >/dev/null 2>&1 || true
+      if ! beads-dolt start "$WS"; then
+        echo "FAIL: beads-dolt start failed after gate teardown"
+        podman logs "$(beads-dolt name "$WS")" 2>&1 | tail -20 | sed 's/^/  dolt: /' || true
+        return 1
+      fi
       for _i in $(seq 1 50); do
         dolt_reachable && break
         sleep 0.2
       done
+      if ! dolt_reachable; then
+        echo "FAIL: dolt socket $WS/.wrapix/dolt.sock missing after beads-dolt start"
+        podman ps -a --filter "name=$(beads-dolt name "$WS")" 2>&1 | sed 's/^/  /' || true
+        podman logs "$(beads-dolt name "$WS")" 2>&1 | tail -20 | sed 's/^/  dolt: /' || true
+        return 1
+      fi
       save GC_PID
     }
     subtest "Stop gc after gate tests" stop_gc_after_gate
