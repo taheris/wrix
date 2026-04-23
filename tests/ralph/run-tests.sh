@@ -2092,8 +2092,22 @@ test_init_flake_app() {
     return
   fi
 
-  local program rc=0 err_log
+  local program drv rc=0 err_log
   err_log=$(mktemp)
+  drv=$(nix eval --raw "$REPO_ROOT#apps.${system}.init.program" \
+    --apply 'p: builtins.head (builtins.attrNames (builtins.getContext p))' \
+    2>"$err_log") || rc=$?
+  if [ "$rc" -ne 0 ] || [ -z "$drv" ]; then
+    test_fail "could not resolve apps.${system}.init.program drv: $(cat "$err_log")"
+    rm -f "$err_log"
+    return
+  fi
+  nix build --no-link "${drv}^out" 2>"$err_log" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    test_fail "failed to build apps.${system}.init.program drv: $(cat "$err_log")"
+    rm -f "$err_log"
+    return
+  fi
   program=$(nix eval --raw "$REPO_ROOT#apps.${system}.init.program" 2>"$err_log") || rc=$?
   if [ "$rc" -ne 0 ] || [ ! -x "$program" ]; then
     test_fail "apps.${system}.init.program not resolvable or not executable: $(cat "$err_log")"
