@@ -1285,6 +1285,15 @@ add_clarify_label() {
     return 1
   }
 
+  # A bead parked for human input is not being worked on. Leaving it
+  # in_progress blocks every dependent bead (bd ready excludes in_progress
+  # items and their dependents), which can silently stall ralph run.
+  local bead_status
+  bead_status=$(echo "$bead_json" | jq -r '.[0].status // empty' 2>/dev/null || true)
+  if [ "$bead_status" = "in_progress" ]; then
+    bd update "$bead_id" --status=open || warn "Failed to reset status to open on $bead_id"
+  fi
+
   if [ "$had_label" = "0" ]; then
     local bead_title
     bead_title=$(echo "$bead_json" | jq -r '.[0].title // empty' 2>/dev/null || true)

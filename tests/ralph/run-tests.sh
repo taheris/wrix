@@ -1636,6 +1636,62 @@ EOF
   teardown_test_env
 }
 
+# Test: run_step returns 101 (not 100) when every bead is blocked by an
+# in_progress dependency. Silent-exit 100 makes 'ralph run' appear to succeed
+# while outstanding work remains; 101 surfaces the stuck state and (via
+# FINAL_EXIT_CODE) skips the post-container exec ralph check + push gate.
+test_run_step_stuck_surface() {
+  CURRENT_TEST="run_step_stuck_surface"
+  test_header "run_step surfaces stuck state when open beads are all blocked"
+
+  setup_test_env "run-stuck"
+  init_beads
+
+  cat > "$TEST_DIR/specs/test-feature.md" << 'EOF'
+# Test Feature
+
+## Requirements
+- Parent is in_progress (stuck); child is blocked by parent.
+EOF
+
+  echo '{"label":"test-feature","hidden":false}' > "$RALPH_DIR/state/current.json"
+
+  local parent_id child_id
+  parent_id=$(bd create --title="Stuck parent" --type=task \
+    --labels="spec:test-feature" --json 2>/dev/null | jq -r '.id')
+  bd update "$parent_id" --status=in_progress 2>/dev/null
+
+  child_id=$(bd create --title="Blocked child" --type=task \
+    --labels="spec:test-feature" --json 2>/dev/null | jq -r '.id')
+  bd dep add "$child_id" "$parent_id" 2>/dev/null
+
+  set +e
+  local output exit_code
+  output=$(ralph-run --once 2>&1)
+  exit_code=$?
+  set -e
+
+  if [ "$exit_code" = "101" ]; then
+    test_pass "run exits 101 (stuck) — not 100 (complete)"
+  else
+    test_fail "Expected exit 101 on stuck state, got $exit_code. Output: ${output:0:400}"
+  fi
+
+  if echo "$output" | grep -qF "Stuck:"; then
+    test_pass "output surfaces 'Stuck:' diagnostic"
+  else
+    test_fail "output should contain 'Stuck:' diagnostic (got: ${output:0:400})"
+  fi
+
+  if echo "$output" | grep -qF "All work complete!"; then
+    test_fail "output must NOT claim 'All work complete!' on stuck state"
+  else
+    test_pass "output does not misclaim completion"
+  fi
+
+  teardown_test_env
+}
+
 # Test: extract_json handles malformed bd output (warning + JSON)
 # bd commands sometimes emit warnings before the actual JSON output
 # The extract_json function should handle this gracefully
@@ -2941,6 +2997,53 @@ EOF
   else
     test_fail "Expected 2 notifications total after re-add, got $third_notify_count"
   fi
+
+  teardown_test_env
+}
+
+# Test: add_clarify_label resets status from in_progress → open. A bead
+# parked for human input is not being worked on; leaving it in_progress
+# blocks every dependent (bd ready excludes in_progress and its dependents),
+# silently stalling ralph run.
+test_add_clarify_resets_in_progress() {
+  CURRENT_TEST="add_clarify_resets_in_progress"
+  test_header "add_clarify_label unclaims in_progress beads"
+
+  setup_test_env "clarify-reset-status"
+  init_beads
+
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  cd "$TEST_DIR"
+
+  local task_id
+  task_id=$(bd create --title="Retry exhausted" --type=task \
+    --labels="spec:test-feature" --json 2>/dev/null | jq -r '.id')
+  bd update "$task_id" --status=in_progress 2>/dev/null
+
+  # Stub wrapix-notify so add_clarify_label's notify_event call doesn't fail.
+  local shim_dir="$TEST_DIR/shim"
+  mkdir -p "$shim_dir"
+  cat > "$shim_dir/wrapix-notify" <<'EOF'
+#!/usr/bin/env bash
+true
+EOF
+  chmod +x "$shim_dir/wrapix-notify"
+  export PATH="$shim_dir:$PATH"
+
+  add_clarify_label "$task_id" "Failed after 3 attempt(s)."
+
+  assert_bead_has_label "$task_id" "ralph:clarify" "Label applied as before"
+  assert_bead_status "$task_id" "open" \
+    "Status reset to open (was in_progress) so dependents unblock"
+
+  # Already-open beads must not be disturbed (idempotent no-op on status).
+  local open_id
+  open_id=$(bd create --title="Already open" --type=task \
+    --labels="spec:test-feature" --json 2>/dev/null | jq -r '.id')
+  add_clarify_label "$open_id" "Question"
+  assert_bead_status "$open_id" "open" "Open beads stay open after add_clarify_label"
 
   teardown_test_env
 }
@@ -14512,6 +14615,7 @@ SEQUENTIAL_TESTS=(
   test_run_handles_clarify_signal
   test_run_skips_awaiting_input
   test_clarify_label_helpers
+  test_add_clarify_resets_in_progress
   test_msg_reply_resume_hint
   test_msg_list_fallback_to_title
   test_run_respects_dependencies
@@ -14519,6 +14623,7 @@ SEQUENTIAL_TESTS=(
   test_parallel_agent_simulation
   test_run_skips_in_progress
   test_run_skips_blocked_by_in_progress
+  test_run_step_stuck_surface
   test_partial_epic_completion
   test_discovered_work
   test_config_data_driven

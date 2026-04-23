@@ -463,6 +463,21 @@ run_step() {
   next_issue=$(bd_list_first_id "$bd_work_items") || true
 
   if [ -z "$next_issue" ]; then
+    # Distinguish "all closed" from "open but blocked". bd ready returns
+    # empty in both cases; silently exiting 100 on the stuck-blocked case
+    # makes 'ralph run' appear to succeed while work remains.
+    local stuck_json stuck_count
+    stuck_json=$(bd_json list --label "$bead_label" --status open --status in_progress --json 2>/dev/null || echo "[]")
+    stuck_count=$(echo "$stuck_json" | jq '[.[] | select(.issue_type != "epic")] | length' 2>/dev/null || echo "0")
+
+    if [ "$stuck_count" -gt 0 ]; then
+      echo "No ready issues with label: $bead_label"
+      echo "Stuck: $stuck_count open/in_progress bead(s) but none ready (all blocked)."
+      echo "$stuck_json" | jq -r '[.[] | select(.issue_type != "epic")] | .[0:3] | .[] | "  - \(.id) [\(.status)]: \(.title)"' 2>/dev/null || true
+      echo "Investigate with: bd blocked  |  bd show <id>"
+      return 101
+    fi
+
     echo "No more ready issues with label: $bead_label"
     echo "All work complete!"
 
@@ -764,6 +779,18 @@ run_parallel_batch() {
   bead_ids=$(get_ready_beads "$bead_label" "$parallel")
 
   if [ -z "$bead_ids" ]; then
+    local stuck_json stuck_count
+    stuck_json=$(bd_json list --label "$bead_label" --status open --status in_progress --json 2>/dev/null || echo "[]")
+    stuck_count=$(echo "$stuck_json" | jq '[.[] | select(.issue_type != "epic")] | length' 2>/dev/null || echo "0")
+
+    if [ "$stuck_count" -gt 0 ]; then
+      echo "No ready issues with label: $bead_label"
+      echo "Stuck: $stuck_count open/in_progress bead(s) but none ready (all blocked)."
+      echo "$stuck_json" | jq -r '[.[] | select(.issue_type != "epic")] | .[0:3] | .[] | "  - \(.id) [\(.status)]: \(.title)"' 2>/dev/null || true
+      echo "Investigate with: bd blocked  |  bd show <id>"
+      return 101
+    fi
+
     echo "No more ready issues with label: $bead_label"
     echo "All work complete!"
     close_epic_if_exists "$bead_label"
@@ -931,6 +958,13 @@ while true; do
       fi
       break
       ;;
+    101)
+      # Stuck: open beads exist but none ready. Retrying would loop forever;
+      # non-zero FINAL_EXIT_CODE also skips the post-container exec ralph check
+      # so the push gate does not fire on a stalled spec.
+      FINAL_EXIT_CODE=101
+      break
+      ;;
     *)
       if [ "$RUN_ONCE" = "true" ]; then
         echo ""
@@ -1046,6 +1080,12 @@ if [ "$RUN_CHECK" = "true" ] && [ "$FINAL_EXIT_CODE" -eq 0 ] && [ "$RUN_ONCE" !=
         100)
           # All follow-up beads complete — re-trigger review
           break
+          ;;
+        101)
+          # Stuck follow-up: open beads blocked. Abort review cycle — the
+          # outer while exits on FINAL_EXIT_CODE set by the caller context.
+          FINAL_EXIT_CODE=101
+          break 2
           ;;
         0)
           # Task completed, more may remain
