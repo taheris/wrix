@@ -1227,6 +1227,37 @@ extract_clarify_note() {
   '
 }
 
+# Resolve the question text for a clarify bead. Falls through in order:
+#   1. clarify-note marker block in description (current convention)
+#   2. legacy "Question: ..." line in notes
+#   3. non-empty notes body as-is
+#   4. bead title (ensures the list view never renders blank for a
+#      ralph:clarify bead authored outside add_clarify_label)
+# Usage: get_question_for_bead <description> <notes> [title]
+get_question_for_bead() {
+  local description="$1"
+  local notes="$2"
+  local title="${3:-}"
+
+  local question
+  question=$(extract_clarify_note "$description")
+  if [ -n "$question" ]; then
+    echo "$question"
+    return 0
+  fi
+
+  question=$(echo "$notes" | grep -oP '^Question:\s*\K.*' | tail -1 || true)
+  if [ -z "$question" ]; then
+    question="$notes"
+  fi
+  if [ -n "$question" ]; then
+    echo "$question"
+    return 0
+  fi
+
+  echo "$title"
+}
+
 # Add ralph:clarify label to a bead, optionally appending a note to the
 # bead's description. Emits a desktop notification only on first
 # application (label not previously present on the bead).

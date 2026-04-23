@@ -1582,6 +1582,8 @@ Ralph uses `bd mol` for work tracking:
   [verify](../tests/ralph/run-tests.sh#test_todo_clears_implementation_notes)
 - [ ] `ralph msg` reply prints a `Resume with: ralph run` hint on successful clarify clear
   [verify](../tests/ralph/run-tests.sh#test_msg_reply_resume_hint)
+- [ ] `ralph msg` list mode renders a non-empty QUESTION column for every `ralph:clarify` bead, falling back from marker block → legacy `Question:` line in notes → bead title
+  [verify](../tests/ralph/run-tests.sh#test_msg_list_fallback_to_title)
 - [ ] Workflow Phases diagram in the spec reflects `plan → todo → run → check → (done + push)`
 - [ ] `ralph plan -u <anchor>` permits the LLM to read and edit any spec in `specs/` (sibling-spec editing)
   [judge](../tests/judges/ralph-workflow.sh#test_plan_anchor_sibling_editing)

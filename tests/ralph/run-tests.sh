@@ -1822,6 +1822,55 @@ Answer arrived.
   teardown_test_env
 }
 
+# Test: get_question_for_bead falls through marker → legacy notes → title
+# so the clarify list view never renders a blank QUESTION column
+test_get_question_for_bead() {
+  CURRENT_TEST="get_question_for_bead"
+  test_header "get_question_for_bead Falls Through to Title When Marker Absent"
+
+  setup_test_env "get-question-for-bead"
+
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  # (a) marker-present → marker text wins
+  local desc_marker="Task body.
+
+<!-- ralph:clarify -->
+**Clarify:** Which branch should we ship?"
+  local q_marker
+  q_marker=$(get_question_for_bead "$desc_marker" "" "Fallback title unused")
+  if [ "$q_marker" = "Which branch should we ship?" ]; then
+    test_pass "Marker block in description takes precedence"
+  else
+    test_fail "Expected marker text, got: $q_marker"
+  fi
+
+  # (b) legacy notes-only → Question: line picked from notes
+  local q_legacy
+  q_legacy=$(get_question_for_bead "Plain body with no marker" \
+    "Question: Which key should we rotate?" \
+    "Fallback title unused")
+  if [ "$q_legacy" = "Which key should we rotate?" ]; then
+    test_pass "Legacy Question: line in notes is used when marker absent"
+  else
+    test_fail "Expected legacy question text, got: $q_legacy"
+  fi
+
+  # (c) regression: no marker, empty notes → title fallback
+  local q_title
+  q_title=$(get_question_for_bead "## Clash\n## Evidence\n## Proposed Options" \
+    "" \
+    "Should we keep the old flag?")
+  if [ "$q_title" = "Should we keep the old flag?" ]; then
+    test_pass "Title used when description has no marker and notes are empty"
+  else
+    test_fail "Expected title fallback, got: $q_title"
+  fi
+
+  teardown_test_env
+}
+
 # Test: bootstrap_flake copies template when absent, skips when present
 test_bootstrap_flake() {
   CURRENT_TEST="bootstrap_flake"
@@ -2958,6 +3007,72 @@ test_msg_reply_resume_hint() {
     test_pass "Reply hint includes -s flag when bead spec differs from current"
   else
     test_fail "Reply hint missing -s flag (got: $other_output)"
+  fi
+
+  teardown_test_env
+}
+
+# Test: ralph msg list mode never renders a blank QUESTION column for a
+# ralph:clarify bead — marker-present, legacy notes, and the no-marker/
+# no-notes regression case all produce non-empty text.
+test_msg_list_fallback_to_title() {
+  CURRENT_TEST="msg_list_fallback_to_title"
+  test_header "ralph msg list falls through to title when marker absent"
+
+  setup_test_env "msg-list-fallback"
+  init_beads
+
+  mkdir -p "$RALPH_DIR/state"
+
+  local marker_desc="Body.
+
+<!-- ralph:clarify -->
+**Clarify:** Marker-block question text?"
+  local marker_id
+  marker_id=$(bd create --title="Marker bead title" --type=task \
+    --description="$marker_desc" \
+    --labels="spec:demo,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+
+  local legacy_id
+  legacy_id=$(bd create --title="Legacy bead title" --type=task \
+    --description="Plain body without marker" \
+    --labels="spec:demo,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+  bd update "$legacy_id" --append-notes "Question: Legacy-notes question text?" >/dev/null
+
+  local bare_id
+  bare_id=$(bd create --title="Bare bead title without clarify marker" --type=task \
+    --description="## Clash
+
+## Evidence
+
+## Proposed Options" \
+    --labels="spec:demo,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+
+  local list_output
+  list_output=$(ralph-msg 2>&1)
+
+  local marker_row
+  marker_row=$(echo "$list_output" | grep -F "$marker_id" || true)
+  if echo "$marker_row" | grep -qF "Marker-block question text?"; then
+    test_pass "Marker bead row shows marker-block text"
+  else
+    test_fail "Marker bead row missing marker text (got: $marker_row)"
+  fi
+
+  local legacy_row
+  legacy_row=$(echo "$list_output" | grep -F "$legacy_id" || true)
+  if echo "$legacy_row" | grep -qF "Legacy-notes question text?"; then
+    test_pass "Legacy bead row shows Question: line from notes"
+  else
+    test_fail "Legacy bead row missing legacy question text (got: $legacy_row)"
+  fi
+
+  local bare_row
+  bare_row=$(echo "$list_output" | grep -F "$bare_id" || true)
+  if echo "$bare_row" | grep -qF "Bare bead title without clarify marker"; then
+    test_pass "Bead with no marker and no notes falls back to title"
+  else
+    test_fail "Bare bead row missing title fallback (got: $bare_row)"
   fi
 
   teardown_test_env
@@ -14242,6 +14357,7 @@ SEQUENTIAL_TESTS=(
   test_run_skips_awaiting_input
   test_clarify_label_helpers
   test_msg_reply_resume_hint
+  test_msg_list_fallback_to_title
   test_run_respects_dependencies
   test_run_loop_processes_all
   test_parallel_agent_simulation
@@ -14283,6 +14399,7 @@ PARALLEL_TESTS=(
   test_malformed_bd_output_parsing
   test_filter_clarify_beads
   test_extract_clarify_note
+  test_get_question_for_bead
   test_bootstrap_flake
   test_bootstrap_envrc
   test_bootstrap_gitignore

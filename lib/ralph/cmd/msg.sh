@@ -109,30 +109,6 @@ get_spec_from_labels() {
 }
 
 #-----------------------------------------------------------------------------
-# Resolve the question text for a clarify bead.
-# Prefer the clarify note appended to the description (current convention);
-# fall back to a legacy "Question: ..." line in notes for older beads.
-#-----------------------------------------------------------------------------
-get_question_for_bead() {
-  local description="$1"
-  local notes="$2"
-
-  local question
-  question=$(extract_clarify_note "$description")
-  if [ -n "$question" ]; then
-    echo "$question"
-    return 0
-  fi
-
-  # best-effort: no legacy Question: line -> fall through to notes below
-  question=$(echo "$notes" | grep -oP '^Question:\s*\K.*' | tail -1 || true)
-  if [ -z "$question" ]; then
-    question="$notes"
-  fi
-  echo "$question"
-}
-
-#-----------------------------------------------------------------------------
 # Reset the run ↔ check iteration counter for the bead's spec (if any).
 # Called after a clarify is cleared so the next ralph run starts fresh.
 #-----------------------------------------------------------------------------
@@ -259,10 +235,11 @@ echo "$QUESTIONS_JSON" | jq -c '.[]' | while IFS= read -r item; do
   local_labels=$(echo "$item" | jq -c '.labels // []')
   local_notes=$(echo "$item" | jq -r '.notes // ""')
   local_description=$(echo "$item" | jq -r '.description // ""')
+  local_title=$(echo "$item" | jq -r '.title // ""')
 
   local_spec=$(get_spec_from_labels "$local_labels")
   local_source=$(get_source_label "$local_labels")
-  local_question=$(get_question_for_bead "$local_description" "$local_notes")
+  local_question=$(get_question_for_bead "$local_description" "$local_notes" "$local_title")
 
   # Truncate question for table display
   if [ ${#local_question} -gt 60 ]; then
