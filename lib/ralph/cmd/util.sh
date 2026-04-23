@@ -1448,18 +1448,26 @@ spec_is_hidden() {
 # Spec Diff Computation (Four-Tier Fallback)
 #
 # Determines how to detect spec changes for `ralph todo`:
-#   Tier 1 (diff):     base_commit exists and is valid → git diff
+#   Tier 1 (diff):     base_commit exists and is valid → per-spec fan-out diff
 #   Tier 2 (tasks):    no base_commit but molecule exists → fetch task list
 #   Tier 3 (README):   no state file → discover molecule from README, reconstruct state, proceed as tier 2
 #   Tier 4 (new):      no state file AND no molecule in README → full spec decomposition
 #
 # Usage: compute_spec_diff <state_file> [--since <commit>]
-# Output: Two lines on stdout:
+# Output on stdout:
 #   Line 1: mode indicator — "diff", "tasks", or "new"
-#   Line 2+: content (diff output, task list, or empty)
-# Returns: 0 on success, 1 on error
+#   Line 2+: content (see format below; empty for tier 4 or empty tier 1 set)
 #
-# --since <commit> forces tier 1 with the given commit (errors if invalid)
+# Tier 1 content format (git-tracked anchor, fan-out):
+#   For each spec in the candidate set with non-empty diff:
+#     === <spec_path> ===
+#     <git diff output>
+#   Empty candidate set → empty content.
+#
+# Tier 1 content format (hidden anchor): raw git diff (single-spec, no fan-out).
+#
+# --since <commit> forces tier 1 with the given commit as the anchor's cursor;
+# sibling specs keep their own base_commit. Errors if commit is invalid.
 #
 # Environment:
 #   GIT_DIR — optional, for non-standard git repos
@@ -1540,10 +1548,57 @@ compute_spec_diff() {
       # Check ancestry — if not an ancestor of HEAD, it was rebased
       if git merge-base --is-ancestor "$base_commit" HEAD 2>/dev/null; then
         debug "compute_spec_diff: tier 1 — git diff from $base_commit"
-        local diff_output
-        diff_output=$(git diff "$base_commit" HEAD -- "$spec_path" 2>/dev/null || true)
+
+        # Hidden specs bypass fan-out (not in git, no sibling model)
+        if [[ "$spec_path" == *"/state/"* ]]; then
+          local diff_output
+          diff_output=$(git diff "$base_commit" HEAD -- "$spec_path" 2>/dev/null || true)
+          echo "diff"
+          echo "$diff_output"
+          return 0
+        fi
+
+        # Per-spec cursor fan-out: candidate set from anchor's cursor
+        local candidate_list
+        candidate_list=$(git diff "$base_commit" HEAD --name-only -- specs/ 2>/dev/null || true)
+
         echo "diff"
-        echo "$diff_output"
+        if [ -z "$candidate_list" ]; then
+          return 0
+        fi
+
+        local state_dir
+        state_dir=$(dirname "$state_file")
+
+        local candidate_spec cand_label cand_state effective_base spec_diff
+        while IFS= read -r candidate_spec; do
+          [ -z "$candidate_spec" ] && continue
+          cand_label=$(basename "$candidate_spec" .md)
+          cand_state="${state_dir}/${cand_label}.json"
+
+          effective_base=""
+          if [ -f "$cand_state" ]; then
+            effective_base=$(jq -r '.base_commit // ""' "$cand_state" 2>/dev/null || echo "")
+          fi
+
+          if [ -z "$effective_base" ]; then
+            debug "compute_spec_diff: $cand_label has no base_commit, seeding from anchor"
+            effective_base="$base_commit"
+          elif ! git rev-parse --verify "${effective_base}^{commit}" >/dev/null 2>&1; then
+            debug "compute_spec_diff: $cand_label base_commit $effective_base missing, using anchor"
+            effective_base="$base_commit"
+          elif ! git merge-base --is-ancestor "$effective_base" HEAD 2>/dev/null; then
+            debug "compute_spec_diff: $cand_label base_commit $effective_base orphaned, using anchor"
+            effective_base="$base_commit"
+          fi
+
+          spec_diff=$(git diff "$effective_base" HEAD -- "$candidate_spec" 2>/dev/null || true)
+          if [ -n "$spec_diff" ]; then
+            echo "=== $candidate_spec ==="
+            echo "$spec_diff"
+          fi
+        done <<< "$candidate_list"
+
         return 0
       else
         debug "compute_spec_diff: base_commit $base_commit is orphaned (not ancestor of HEAD)"

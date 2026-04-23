@@ -10429,6 +10429,245 @@ test_todo_orphaned_commit_fallback() {
   teardown_test_env
 }
 
+# Test: tier 1 fan-out — candidate set widens to every spec changed since anchor's base_commit
+test_todo_tier1_candidate_set() {
+  CURRENT_TEST="todo_tier1_candidate_set"
+  test_header "compute_spec_diff: tier 1 — candidate set from anchor cursor"
+
+  setup_test_env "spec-diff-candidate"
+  _setup_spec_diff_git "anchor"
+
+  # Commit a second spec so it's trackable
+  create_test_spec "sibling" "# Sibling
+- init
+"
+  git -C "$TEST_DIR" add specs/sibling.md
+  git -C "$TEST_DIR" commit -q -m "add sibling spec"
+
+  # Record anchor's base_commit
+  local base_commit
+  base_commit=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+  # Modify BOTH anchor and sibling specs (independent commits)
+  echo "- anchor change" >> "$TEST_DIR/specs/anchor.md"
+  git -C "$TEST_DIR" add specs/anchor.md
+  git -C "$TEST_DIR" commit -q -m "change anchor"
+
+  echo "- sibling change" >> "$TEST_DIR/specs/sibling.md"
+  git -C "$TEST_DIR" add specs/sibling.md
+  git -C "$TEST_DIR" commit -q -m "change sibling"
+
+  # Set up anchor state with base_commit
+  setup_label_state "anchor" "false" ""
+  jq --arg bc "$base_commit" '.base_commit = $bc' "$RALPH_DIR/state/anchor.json" \
+    > "$RALPH_DIR/state/anchor.json.tmp"
+  mv "$RALPH_DIR/state/anchor.json.tmp" "$RALPH_DIR/state/anchor.json"
+
+  local output
+  output=$(cd "$TEST_DIR" && source "$REPO_ROOT/lib/ralph/cmd/util.sh" \
+    && compute_spec_diff "$RALPH_DIR/state/anchor.json")
+
+  local mode
+  mode=$(echo "$output" | head -1)
+  if [ "$mode" = "diff" ]; then
+    test_pass "fan-out returns 'diff' mode"
+  else
+    test_fail "fan-out should return 'diff', got '$mode'"
+  fi
+
+  if echo "$output" | grep -q "=== specs/anchor.md ==="; then
+    test_pass "output contains anchor spec header"
+  else
+    test_fail "output should contain '=== specs/anchor.md ==='"
+  fi
+
+  if echo "$output" | grep -q "=== specs/sibling.md ==="; then
+    test_pass "output contains sibling spec header"
+  else
+    test_fail "output should contain '=== specs/sibling.md ==='"
+  fi
+
+  if echo "$output" | grep -q "anchor change" && echo "$output" | grep -q "sibling change"; then
+    test_pass "both anchor and sibling diffs are present"
+  else
+    test_fail "expected both anchor and sibling diff content"
+  fi
+
+  teardown_test_env
+}
+
+# Test: tier 1 fan-out — per-spec diff uses each candidate's own base_commit
+test_todo_per_spec_cursor() {
+  CURRENT_TEST="todo_per_spec_cursor"
+  test_header "compute_spec_diff: tier 1 — per-spec cursor from sibling state"
+
+  setup_test_env "spec-diff-per-cursor"
+  _setup_spec_diff_git "anchor"
+
+  create_test_spec "sibling" "# Sibling
+- init
+"
+  git -C "$TEST_DIR" add specs/sibling.md
+  git -C "$TEST_DIR" commit -q -m "add sibling"
+
+  # Anchor cursor X (before any further changes)
+  local anchor_base
+  anchor_base=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+  # First sibling change — commits after anchor's base
+  echo "- sibling old change" >> "$TEST_DIR/specs/sibling.md"
+  git -C "$TEST_DIR" add specs/sibling.md
+  git -C "$TEST_DIR" commit -q -m "sibling old change"
+
+  # Sibling's own cursor Y > X (sibling was planned independently already)
+  local sibling_base
+  sibling_base=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+  # Further sibling change (the only thing that should appear in diff)
+  echo "- sibling new change" >> "$TEST_DIR/specs/sibling.md"
+  git -C "$TEST_DIR" add specs/sibling.md
+  git -C "$TEST_DIR" commit -q -m "sibling new change"
+
+  # Anchor state: base at X
+  setup_label_state "anchor" "false" ""
+  jq --arg bc "$anchor_base" '.base_commit = $bc' "$RALPH_DIR/state/anchor.json" \
+    > "$RALPH_DIR/state/anchor.json.tmp"
+  mv "$RALPH_DIR/state/anchor.json.tmp" "$RALPH_DIR/state/anchor.json"
+
+  # Sibling state: base at Y
+  setup_label_state "sibling" "false" ""
+  jq --arg bc "$sibling_base" '.base_commit = $bc' "$RALPH_DIR/state/sibling.json" \
+    > "$RALPH_DIR/state/sibling.json.tmp"
+  mv "$RALPH_DIR/state/sibling.json.tmp" "$RALPH_DIR/state/sibling.json"
+
+  # Restore anchor as active
+  echo "anchor" > "$RALPH_DIR/state/current"
+
+  local output
+  output=$(cd "$TEST_DIR" && source "$REPO_ROOT/lib/ralph/cmd/util.sh" \
+    && compute_spec_diff "$RALPH_DIR/state/anchor.json")
+
+  if echo "$output" | grep -Eq '^\+.*sibling new change'; then
+    test_pass "sibling diff includes changes after its own base_commit"
+  else
+    test_fail "expected added line 'sibling new change' in output"
+  fi
+
+  # "sibling old change" may appear as unified-diff context (space-prefixed),
+  # but must NOT appear as an addition (+ prefix) — that would mean the diff
+  # was computed from the anchor's cursor instead of the sibling's own.
+  if echo "$output" | grep -Eq '^\+.*sibling old change'; then
+    test_fail "sibling diff leaked pre-cursor line as addition"
+  else
+    test_pass "sibling's own base_commit gates the diff (no old change leak)"
+  fi
+
+  teardown_test_env
+}
+
+# Test: tier 1 fan-out — sibling with no state file uses anchor's base_commit
+test_todo_sibling_seed_from_anchor() {
+  CURRENT_TEST="todo_sibling_seed_from_anchor"
+  test_header "compute_spec_diff: tier 1 — sibling with no state seeds from anchor"
+
+  setup_test_env "spec-diff-seed"
+  _setup_spec_diff_git "anchor"
+
+  # Anchor base at initial commit
+  local anchor_base
+  anchor_base=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+  # Add a new sibling spec AFTER anchor's base — sibling has no state file
+  create_test_spec "new-sibling" "# New sibling spec body
+- requirement alpha
+"
+  git -C "$TEST_DIR" add specs/new-sibling.md
+  git -C "$TEST_DIR" commit -q -m "add new sibling"
+
+  setup_label_state "anchor" "false" ""
+  jq --arg bc "$anchor_base" '.base_commit = $bc' "$RALPH_DIR/state/anchor.json" \
+    > "$RALPH_DIR/state/anchor.json.tmp"
+  mv "$RALPH_DIR/state/anchor.json.tmp" "$RALPH_DIR/state/anchor.json"
+
+  # No state/new-sibling.json
+
+  local output
+  output=$(cd "$TEST_DIR" && source "$REPO_ROOT/lib/ralph/cmd/util.sh" \
+    && compute_spec_diff "$RALPH_DIR/state/anchor.json")
+
+  if echo "$output" | grep -q "=== specs/new-sibling.md ==="; then
+    test_pass "sibling without state file appears in fan-out"
+  else
+    test_fail "sibling without state file should appear (seeded from anchor)"
+  fi
+
+  if echo "$output" | grep -q "requirement alpha"; then
+    test_pass "seeded diff contains sibling content"
+  else
+    test_fail "seeded diff should contain 'requirement alpha'"
+  fi
+
+  teardown_test_env
+}
+
+# Test: tier 1 fan-out — orphaned sibling base_commit falls back to anchor's
+test_todo_sibling_orphan_fallback() {
+  CURRENT_TEST="todo_sibling_orphan_fallback"
+  test_header "compute_spec_diff: tier 1 — orphaned sibling base_commit falls back to anchor"
+
+  setup_test_env "spec-diff-sibling-orphan"
+  _setup_spec_diff_git "anchor"
+
+  create_test_spec "sibling" "# Sibling
+- init
+"
+  git -C "$TEST_DIR" add specs/sibling.md
+  git -C "$TEST_DIR" commit -q -m "add sibling"
+
+  local anchor_base
+  anchor_base=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+  # Sibling change + amend to orphan its intermediate commit
+  echo "- sibling pre-orphan" >> "$TEST_DIR/specs/sibling.md"
+  git -C "$TEST_DIR" add specs/sibling.md
+  git -C "$TEST_DIR" commit -q -m "sibling change"
+
+  local orphan_commit
+  orphan_commit=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+  echo "- sibling post-orphan" >> "$TEST_DIR/specs/sibling.md"
+  git -C "$TEST_DIR" add specs/sibling.md
+  git -C "$TEST_DIR" commit -q --amend -m "sibling change (amended)"
+
+  setup_label_state "anchor" "false" ""
+  jq --arg bc "$anchor_base" '.base_commit = $bc' "$RALPH_DIR/state/anchor.json" \
+    > "$RALPH_DIR/state/anchor.json.tmp"
+  mv "$RALPH_DIR/state/anchor.json.tmp" "$RALPH_DIR/state/anchor.json"
+
+  # Sibling's state points at the orphaned commit
+  setup_label_state "sibling" "false" ""
+  jq --arg bc "$orphan_commit" '.base_commit = $bc' "$RALPH_DIR/state/sibling.json" \
+    > "$RALPH_DIR/state/sibling.json.tmp"
+  mv "$RALPH_DIR/state/sibling.json.tmp" "$RALPH_DIR/state/sibling.json"
+
+  echo "anchor" > "$RALPH_DIR/state/current"
+
+  local output
+  output=$(cd "$TEST_DIR" && source "$REPO_ROOT/lib/ralph/cmd/util.sh" \
+    && compute_spec_diff "$RALPH_DIR/state/anchor.json")
+
+  # With fallback to anchor's base, both pre-orphan and post-orphan lines should
+  # appear (they're all after anchor's base). If the orphaned commit were
+  # silently used, git diff would error and produce nothing.
+  if echo "$output" | grep -q "sibling post-orphan"; then
+    test_pass "orphan fallback produces diff from anchor's base"
+  else
+    test_fail "orphan fallback should produce diff (expected 'sibling post-orphan')"
+  fi
+
+  teardown_test_env
+}
+
 # Test: tier 2 — no base_commit but molecule exists → returns tasks mode
 test_todo_molecule_fallback() {
   CURRENT_TEST="todo_molecule_fallback"
@@ -13485,6 +13724,10 @@ PARALLEL_TESTS=(
   test_todo_since_flag
   test_todo_since_invalid_commit
   test_todo_orphaned_commit_fallback
+  test_todo_tier1_candidate_set
+  test_todo_per_spec_cursor
+  test_todo_sibling_seed_from_anchor
+  test_todo_sibling_orphan_fallback
   test_todo_molecule_fallback
   test_todo_new_mode_fallback
   test_todo_update_detection
