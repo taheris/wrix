@@ -166,7 +166,7 @@ To fix this, do one of the following:
   echo ""
   echo "Checking body files..."
 
-  local BODY_FILES=("plan-new.md" "plan-update.md" "todo-new.md" "todo-update.md" "run.md" "check.md" "watch.md")
+  local BODY_FILES=("plan-new.md" "plan-update.md" "todo-new.md" "todo-update.md" "run.md" "check.md" "watch.md" "msg.md")
 
   for body in "${BODY_FILES[@]}"; do
     local body_path="$TEMPLATE_DIR/$body"
@@ -263,7 +263,7 @@ To fix this, do one of the following:
   echo ""
   echo "Checking template rendering..."
 
-  local TEMPLATES_TO_CHECK=("plan-new" "plan-update" "todo-new" "todo-update" "run" "check" "watch")
+  local TEMPLATES_TO_CHECK=("plan-new" "plan-update" "todo-new" "todo-update" "run" "check" "watch" "msg")
 
   # shellcheck disable=SC2016  # Single quotes are intentional for Nix expression building
   for template in "${TEMPLATES_TO_CHECK[@]}"; do
