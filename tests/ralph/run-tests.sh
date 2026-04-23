@@ -3269,67 +3269,316 @@ test_msg_reply_resume_hint() {
   teardown_test_env
 }
 
-# Test: ralph msg list mode never renders a blank QUESTION column for a
-# ralph:clarify bead — marker-present, legacy notes, and the no-marker/
-# no-notes regression case all produce non-empty text.
-test_msg_list_fallback_to_title() {
-  CURRENT_TEST="msg_list_fallback_to_title"
-  test_header "ralph msg list falls through to title when marker absent"
+# Test: ralph msg list SUMMARY column renders the `## Options — <summary>`
+# header value from parse_options_format, falling back to the bead title
+# when the header or summary text is absent (spec: ralph-review §Msg).
+test_msg_list_summary_fallback() {
+  CURRENT_TEST="msg_list_summary_fallback"
+  test_header "ralph msg list SUMMARY uses Options header, falls back to title"
 
-  setup_test_env "msg-list-fallback"
+  setup_test_env "msg-list-summary-fallback"
   init_beads
 
   mkdir -p "$RALPH_DIR/state"
+  echo "demo" > "$RALPH_DIR/state/current"
 
-  local marker_desc="Body.
+  local summary_id
+  summary_id=$(bd create --title="Bead title not summary" --type=task \
+    --description="Body.
 
-<!-- ralph:clarify -->
-**Clarify:** Marker-block question text?"
-  local marker_id
-  marker_id=$(bd create --title="Marker bead title" --type=task \
-    --description="$marker_desc" \
+## Options — Header summary text here
+
+### Option 1 — First
+
+First body.
+
+### Option 2 — Second
+
+Second body." \
     --labels="spec:demo,ralph:clarify" --json 2>/dev/null | jq -r '.id')
 
-  local legacy_id
-  legacy_id=$(bd create --title="Legacy bead title" --type=task \
-    --description="Plain body without marker" \
+  local no_summary_id
+  no_summary_id=$(bd create --title="No-summary options title" --type=task \
+    --description="### Option 1 — Only
+
+Body." \
     --labels="spec:demo,ralph:clarify" --json 2>/dev/null | jq -r '.id')
-  bd update "$legacy_id" --append-notes "Question: Legacy-notes question text?" >/dev/null
 
-  local bare_id
-  bare_id=$(bd create --title="Bare bead title without clarify marker" --type=task \
-    --description="## Clash
-
-## Evidence
-
-## Proposed Options" \
+  local no_options_id
+  no_options_id=$(bd create --title="Fallback to title" --type=task \
+    --description="Plain body without options" \
     --labels="spec:demo,ralph:clarify" --json 2>/dev/null | jq -r '.id')
 
   local list_output
   list_output=$(ralph-msg 2>&1)
 
-  local marker_row
-  marker_row=$(echo "$list_output" | grep -F "$marker_id" || true)
-  if echo "$marker_row" | grep -qF "Marker-block question text?"; then
-    test_pass "Marker bead row shows marker-block text"
+  local summary_row
+  summary_row=$(echo "$list_output" | grep -F "$summary_id" || true)
+  if echo "$summary_row" | grep -qF "Header summary text here"; then
+    test_pass "SUMMARY uses ## Options header summary when present"
   else
-    test_fail "Marker bead row missing marker text (got: $marker_row)"
+    test_fail "SUMMARY missing Options header text (got: $summary_row)"
   fi
 
-  local legacy_row
-  legacy_row=$(echo "$list_output" | grep -F "$legacy_id" || true)
-  if echo "$legacy_row" | grep -qF "Legacy-notes question text?"; then
-    test_pass "Legacy bead row shows Question: line from notes"
+  local no_summary_row
+  no_summary_row=$(echo "$list_output" | grep -F "$no_summary_id" || true)
+  if echo "$no_summary_row" | grep -qF "No-summary options title"; then
+    test_pass "SUMMARY falls back to title when Options header has no summary"
   else
-    test_fail "Legacy bead row missing legacy question text (got: $legacy_row)"
+    test_fail "SUMMARY missing title fallback for no-summary bead (got: $no_summary_row)"
   fi
 
-  local bare_row
-  bare_row=$(echo "$list_output" | grep -F "$bare_id" || true)
-  if echo "$bare_row" | grep -qF "Bare bead title without clarify marker"; then
-    test_pass "Bead with no marker and no notes falls back to title"
+  local no_options_row
+  no_options_row=$(echo "$list_output" | grep -F "$no_options_id" || true)
+  if echo "$no_options_row" | grep -qF "Fallback to title"; then
+    test_pass "SUMMARY falls back to title when ## Options section is absent"
   else
-    test_fail "Bare bead row missing title fallback (got: $bare_row)"
+    test_fail "SUMMARY missing title fallback when no Options section (got: $no_options_row)"
+  fi
+
+  teardown_test_env
+}
+
+# Test: `ralph msg -c` launches the interactive Drafter (container path:
+# renders msg.md + calls claude), while bare `ralph msg` stays host-side
+# (no claude invocation). Tests run with wrapix filtered from PATH, so
+# container-side rendering/claude lives in-process inside the test env.
+test_msg_interactive_container() {
+  CURRENT_TEST="msg_interactive_container"
+  test_header "ralph msg -c launches Drafter; bare ralph msg stays host-side"
+
+  setup_test_env "msg-interactive-container"
+  init_beads
+
+  local label="chat-feature"
+  mkdir -p "$RALPH_DIR/state"
+  echo "$label" > "$RALPH_DIR/state/current"
+  cat > "$RALPH_DIR/state/${label}.json" <<JSON
+{"label":"$label","spec_path":"specs/${label}.md"}
+JSON
+  cat > "$TEST_DIR/specs/${label}.md" <<'SPEC'
+# Chat feature
+Body.
+SPEC
+
+  local clarify_id
+  clarify_id=$(bd create --title="Invariant clash?" --type=task \
+    --description="## Options — Invariant clash framing
+
+### Option 1 — Preserve
+Body A.
+
+### Option 2 — Override
+Body B." \
+    --labels="spec:${label},ralph:clarify" --json 2>/dev/null | jq -r '.id')
+
+  # Tripwire for claude invocations + RALPH_COMPLETE so the container-side
+  # push/sync path returns cleanly.
+  local tripwire="$TEST_DIR/claude-invocations.log"
+  rm -f "$tripwire" "$TEST_DIR/bin/claude"
+  cat > "$TEST_DIR/bin/claude" <<EOF
+#!/usr/bin/env bash
+echo "invoked" >> "$tripwire"
+cat <<'STREAM'
+{"type":"result","result":"RALPH_COMPLETE"}
+STREAM
+exit 0
+EOF
+  chmod +x "$TEST_DIR/bin/claude"
+
+  set +e
+  local bare_output
+  bare_output=$(ralph-msg 2>&1)
+  set -e
+
+  if [ ! -s "$tripwire" ]; then
+    test_pass "bare ralph msg did not invoke claude (list-only)"
+  else
+    test_fail "bare ralph msg unexpectedly invoked claude"
+  fi
+
+  if echo "$bare_output" | grep -qE "^[[:space:]]*1[[:space:]]+$clarify_id"; then
+    test_pass "bare ralph msg rendered list row for $clarify_id"
+  else
+    test_fail "bare ralph msg list row missing for $clarify_id (got: $bare_output)"
+  fi
+
+  rm -f "$tripwire"
+
+  set +e
+  local chat_output
+  chat_output=$(ralph-msg -c 2>&1)
+  local chat_exit=$?
+  set -e
+
+  if [ -s "$tripwire" ]; then
+    test_pass "ralph msg -c invoked claude"
+  else
+    test_fail "ralph msg -c did not invoke claude (exit=$chat_exit, output: $chat_output)"
+  fi
+
+  if echo "$chat_output" | grep -q "Interactive Drafter session"; then
+    test_pass "ralph msg -c printed Drafter session banner"
+  else
+    test_fail "ralph msg -c missing Drafter session banner (got: $chat_output)"
+  fi
+
+  teardown_test_env
+}
+
+# Test: `ralph msg -c` treats mid-walk termination as a clean exit.
+# When claude emits RALPH_COMPLETE without clearing all clarifies, the
+# remaining beads stay labelled and visible to the next `ralph msg` list.
+test_msg_partial_progress_clean() {
+  CURRENT_TEST="msg_partial_progress_clean"
+  test_header "ralph msg -c partial progress is clean; remaining clarifies persist"
+
+  setup_test_env "msg-partial-progress"
+  init_beads
+
+  local label="partial-feature"
+  mkdir -p "$RALPH_DIR/state"
+  echo "$label" > "$RALPH_DIR/state/current"
+  cat > "$RALPH_DIR/state/${label}.json" <<JSON
+{"label":"$label","spec_path":"specs/${label}.md"}
+JSON
+  cat > "$TEST_DIR/specs/${label}.md" <<'SPEC'
+# Partial feature
+SPEC
+
+  local bead_a bead_b
+  bead_a=$(bd create --title="First clarify" --type=task \
+    --description="## Options — First decision
+
+### Option 1 — Alpha
+A." \
+    --labels="spec:${label},ralph:clarify" --json 2>/dev/null | jq -r '.id')
+  bead_b=$(bd create --title="Second clarify" --type=task \
+    --description="## Options — Second decision
+
+### Option 1 — Beta
+B." \
+    --labels="spec:${label},ralph:clarify" --json 2>/dev/null | jq -r '.id')
+
+  # Mock claude that only clears the first bead (simulates user stopping mid-walk).
+  cat > "$TEST_DIR/bin/claude" <<EOF
+#!/usr/bin/env bash
+bd update "$bead_a" --append-notes "Answer: chose Alpha" >/dev/null 2>&1
+bd update "$bead_a" --remove-label ralph:clarify >/dev/null 2>&1
+cat <<'STREAM'
+{"type":"result","result":"RALPH_COMPLETE"}
+STREAM
+exit 0
+EOF
+  chmod +x "$TEST_DIR/bin/claude"
+
+  set +e
+  local chat_output
+  chat_output=$(ralph-msg -c 2>&1)
+  local chat_exit=$?
+  set -e
+
+  if [ "$chat_exit" -eq 0 ]; then
+    test_pass "ralph msg -c exits 0 on partial progress"
+  else
+    test_fail "ralph msg -c exited $chat_exit (expected 0; output: $chat_output)"
+  fi
+
+  # bead_a should be cleared, bead_b should remain labelled
+  local a_label_count b_label_count
+  a_label_count=$(bd show "$bead_a" --json 2>/dev/null \
+    | jq -r '.[0].labels // [] | map(select(. == "ralph:clarify")) | length')
+  b_label_count=$(bd show "$bead_b" --json 2>/dev/null \
+    | jq -r '.[0].labels // [] | map(select(. == "ralph:clarify")) | length')
+
+  if [ "$a_label_count" = "0" ]; then
+    test_pass "Cleared clarify on $bead_a"
+  else
+    test_fail "Expected $bead_a ralph:clarify removed"
+  fi
+
+  if [ "$b_label_count" = "1" ]; then
+    test_pass "Unresolved clarify $bead_b retains label"
+  else
+    test_fail "Expected $bead_b to retain ralph:clarify"
+  fi
+
+  # Next bare `ralph msg` should list only the remaining bead.
+  local next_list
+  next_list=$(ralph-msg 2>&1)
+  if echo "$next_list" | grep -qF "$bead_b"; then
+    test_pass "Next ralph msg list shows remaining clarify $bead_b"
+  else
+    test_fail "Next ralph msg list missing remaining clarify (got: $next_list)"
+  fi
+  if echo "$next_list" | grep -qF "$bead_a"; then
+    test_fail "Next ralph msg list should not show cleared $bead_a"
+  else
+    test_pass "Next ralph msg list excludes cleared $bead_a"
+  fi
+
+  teardown_test_env
+}
+
+# Test: the sequential index `#` in ralph msg list output is 1-based and
+# ordered by bead creation time ascending (first created = #1).
+test_msg_index_ordering() {
+  CURRENT_TEST="msg_index_ordering"
+  test_header "ralph msg list index is 1-based, ordered by creation time asc"
+
+  setup_test_env "msg-index-ordering"
+  init_beads
+
+  mkdir -p "$RALPH_DIR/state"
+  echo "demo" > "$RALPH_DIR/state/current"
+
+  local first_id second_id third_id
+  first_id=$(bd create --title="First created" --type=task \
+    --description="Body" \
+    --labels="spec:demo,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+  sleep 1
+  second_id=$(bd create --title="Second created" --type=task \
+    --description="Body" \
+    --labels="spec:demo,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+  sleep 1
+  third_id=$(bd create --title="Third created" --type=task \
+    --description="Body" \
+    --labels="spec:demo,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+
+  local list_output
+  list_output=$(ralph-msg 2>&1)
+
+  local first_line second_line third_line
+  first_line=$(echo "$list_output" | grep -nF "$first_id" | head -1 | cut -d: -f1)
+  second_line=$(echo "$list_output" | grep -nF "$second_id" | head -1 | cut -d: -f1)
+  third_line=$(echo "$list_output" | grep -nF "$third_id" | head -1 | cut -d: -f1)
+
+  if [ -n "$first_line" ] && [ -n "$second_line" ] && [ -n "$third_line" ] \
+     && [ "$first_line" -lt "$second_line" ] && [ "$second_line" -lt "$third_line" ]; then
+    test_pass "List ordered by creation time ascending"
+  else
+    test_fail "List order wrong (first:$first_line second:$second_line third:$third_line; output: $list_output)"
+  fi
+
+  local first_row second_row third_row
+  first_row=$(echo "$list_output" | grep -F "$first_id" | head -1)
+  second_row=$(echo "$list_output" | grep -F "$second_id" | head -1)
+  third_row=$(echo "$list_output" | grep -F "$third_id" | head -1)
+
+  if echo "$first_row" | grep -qE "^[[:space:]]+1[[:space:]]+$first_id"; then
+    test_pass "First-created bead has index 1"
+  else
+    test_fail "Expected index 1 for $first_id (got: $first_row)"
+  fi
+  if echo "$second_row" | grep -qE "^[[:space:]]+2[[:space:]]+$second_id"; then
+    test_pass "Second-created bead has index 2"
+  else
+    test_fail "Expected index 2 for $second_id (got: $second_row)"
+  fi
+  if echo "$third_row" | grep -qE "^[[:space:]]+3[[:space:]]+$third_id"; then
+    test_pass "Third-created bead has index 3"
+  else
+    test_fail "Expected index 3 for $third_id (got: $third_row)"
   fi
 
   teardown_test_env
@@ -14771,7 +15020,10 @@ SEQUENTIAL_TESTS=(
   test_clarify_label_helpers
   test_add_clarify_resets_in_progress
   test_msg_reply_resume_hint
-  test_msg_list_fallback_to_title
+  test_msg_list_summary_fallback
+  test_msg_interactive_container
+  test_msg_partial_progress_clean
+  test_msg_index_ordering
   test_run_respects_dependencies
   test_run_loop_processes_all
   test_parallel_agent_simulation
