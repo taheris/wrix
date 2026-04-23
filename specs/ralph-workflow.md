@@ -1628,7 +1628,7 @@ Ralph uses `bd mol` for work tracking:
 - [ ] Generated `flake.nix` treefmt programs are deadnix, nixfmt, shellcheck, statix (no rustfmt)
   [verify](../tests/ralph/run-tests.sh#test_init_treefmt_programs)
 - [ ] Generated `flake.nix` evaluates cleanly under `nix flake check` in a fresh directory
-  [judge](../tests/judges/ralph-workflow.sh#test_init_flake_evaluates)
+  [verify](../tests/ralph/run-tests.sh#test_init_flake_evaluates)
 - [ ] `ralph init` creates `.envrc` with `use flake` content, skip-if-exists
   [verify](../tests/ralph/run-tests.sh#test_init_creates_envrc)
 - [ ] `ralph init` appends missing `.gitignore` entries (`.direnv/`, `.wrapix/`, `result`, `result-*`) idempotently

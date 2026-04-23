@@ -27,17 +27,19 @@
         }:
         let
           inherit (inputs.wrapix.packages.${system}) ralph;
+          wrapixLib = inputs.wrapix.legacyPackages.${system}.lib;
+          sandbox = wrapixLib.mkSandbox { profile = wrapixLib.profiles.base; };
         in
         {
           apps.sandbox = {
             type = "app";
-            program = "${inputs.wrapix.lib.mkSandbox { inherit system; }}/bin/wrapix";
+            program = "${sandbox.package}/bin/wrapix";
           };
 
           devShells.default = pkgs.mkShell {
             packages = [
               ralph
-              inputs.wrapix.packages.${system}.bd
+              inputs.wrapix.packages.${system}.beads
               config.treefmt.build.wrapper
             ];
             shellHook = ''
@@ -56,10 +58,6 @@
             settings.formatter = {
               shellcheck.excludes = [ ".envrc" ];
             };
-          };
-
-          checks = {
-            treefmt = config.treefmt.build.check inputs.self;
           };
         };
     };

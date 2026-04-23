@@ -2183,8 +2183,8 @@ test_init_flake_structure() {
     'ralph.shellHook' \
     'inputs.treefmt-nix.flakeModule' \
     'treefmt =' \
-    'checks' \
-    'config.treefmt.build.check'
+    'inputs.wrapix.legacyPackages' \
+    'inputs.wrapix.packages.${system}.beads'
   do
     if grep -Fq -- "$marker" "$src"; then
       test_pass "template flake.nix contains: $marker"
@@ -2234,6 +2234,41 @@ test_init_treefmt_programs() {
   else
     test_pass "treefmt does not enable rustfmt by default"
   fi
+}
+
+test_init_flake_evaluates() {
+  CURRENT_TEST="init_flake_evaluates"
+  test_header "generated flake.nix evaluates cleanly under 'nix flake check' against wrapix override"
+
+  setup_test_env "init-flake-evaluates"
+  cd "$TEST_DIR"
+
+  local rc=0
+  ralph init >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ] || [ ! -f flake.nix ]; then
+    test_fail "ralph init did not produce flake.nix (rc=$rc)"
+    teardown_test_env
+    return
+  fi
+
+  # Fresh-dir flake checks need their own git metadata — 'nix flake check'
+  # refuses to resolve a path: input that isn't a git repo.
+  git init -q .
+  git add flake.nix
+  git -c user.email=test@wrapix.local -c user.name=wrapix-test commit -q -m "init"
+
+  local err_log
+  err_log=$(mktemp)
+  rc=0
+  nix flake check --override-input wrapix "$REPO_ROOT" >"$err_log" 2>&1 || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    test_pass "nix flake check passed on generated flake.nix"
+  else
+    test_fail "nix flake check failed (rc=$rc): $(tail -40 "$err_log")"
+  fi
+  rm -f "$err_log"
+
+  teardown_test_env
 }
 
 test_init_creates_envrc() {
@@ -14260,6 +14295,7 @@ PARALLEL_TESTS=(
   test_init_flake_structure
   test_init_flake_systems
   test_init_treefmt_programs
+  test_init_flake_evaluates
   test_init_creates_envrc
   test_init_gitignore_idempotent
   test_init_precommit_stages
