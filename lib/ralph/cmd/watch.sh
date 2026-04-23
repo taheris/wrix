@@ -259,8 +259,7 @@ while [ "$RUNNING" = "true" ]; do
   log="$RALPH_DIR/logs/watch-${FEATURE_NAME}-${cycle}.log"
 
   # Run claude with FRESH CONTEXT (new process each cycle)
-  export WATCH_PROMPT="$watch_prompt"
-  run_claude_stream "WATCH_PROMPT" "$log" "$CONFIG" "$MODEL_WATCH"
+  run_claude_stream "$watch_prompt" "$log" "$CONFIG" "$MODEL_WATCH"
 
   # Check result
   if jq -e '[.[] | select(.type == "result") | .result | contains("RALPH_COMPLETE")] | any' -s "$log" >/dev/null 2>&1; then

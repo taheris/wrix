@@ -11931,6 +11931,17 @@ EOF
     test_pass "PROMPT_CONTENT is not exported anywhere in lib/ralph/cmd/"
   fi
 
+  # wx-p5iuz: run_claude_stream now takes prompt content directly (piped to
+  # stdin), not a variable name. Passing a bare capitalised identifier as the
+  # first arg (e.g. run_claude_stream "CHECK_PROMPT" ...) sends the literal
+  # 13-char string to claude and the reviewer asks what "CHECK_PROMPT" means,
+  # so RALPH_COMPLETE never fires. Catch the misuse statically.
+  if grep -rnE 'run_claude_stream[[:space:]]+"[A-Z_][A-Z0-9_]*"' "$REPO_ROOT/lib/ralph/cmd/" >/dev/null 2>&1; then
+    test_fail "run_claude_stream called with bare identifier — see $(grep -rlnE 'run_claude_stream[[:space:]]+"[A-Z_][A-Z0-9_]*"' "$REPO_ROOT/lib/ralph/cmd/")"
+  else
+    test_pass "run_claude_stream first arg is never a bare identifier in lib/ralph/cmd/"
+  fi
+
   teardown_test_env
 }
 

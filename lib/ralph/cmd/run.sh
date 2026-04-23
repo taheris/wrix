@@ -549,8 +549,7 @@ run_step() {
     echo ""
 
     # Use stream-json for real-time output display with configurable visibility
-    export WORK_PROMPT="$work_prompt"
-    run_claude_stream "WORK_PROMPT" "$log" "$CONFIG" "$MODEL_RUN"
+    run_claude_stream "$work_prompt" "$log" "$CONFIG" "$MODEL_RUN"
 
     # Check for completion by examining the result in the JSON log
     if jq -e '[.[] | select(.type == "result") | .result | contains("RALPH_COMPLETE")] | any' -s "$log" >/dev/null 2>&1; then
@@ -715,8 +714,7 @@ run_step_in_worktree() {
   echo "  [$bead_id] Starting claude session..."
   (
     cd "$worktree_path"
-    export WORK_PROMPT="$work_prompt"
-    run_claude_stream "WORK_PROMPT" "$log" "$CONFIG" "$MODEL_RUN"
+    run_claude_stream "$work_prompt" "$log" "$CONFIG" "$MODEL_RUN"
   )
 
   # Check result

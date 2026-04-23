@@ -682,8 +682,7 @@ run_spec_review() {
   echo ""
 
   # Run the reviewer agent
-  export CHECK_PROMPT="$review_prompt"
-  run_claude_stream "CHECK_PROMPT" "$log" "$config" "$model_check"
+  run_claude_stream "$review_prompt" "$log" "$config" "$model_check"
 
   # Require RALPH_COMPLETE before pushing beads
   if ! jq -e '[.[] | select(.type == "result") | .result | contains("RALPH_COMPLETE")] | any' -s "$log" >/dev/null 2>&1; then
