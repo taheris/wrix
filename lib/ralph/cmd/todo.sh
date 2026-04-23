@@ -122,20 +122,13 @@ if [ ! -f /etc/wrapix/claude-config.json ] && command -v wrapix &>/dev/null; the
 
     if [ "$_HOST_POST_COUNT" -le "$_HOST_PRE_COUNT" ]; then
       _PREV_BASE_COMMIT=$(jq -r '.base_commit // "HEAD~1"' "$_HOST_STATE_FILE" 2>/dev/null || echo "HEAD~1")
-      echo ""
-      echo "ERROR: RALPH_COMPLETE but no new tasks detected after sync."
-      echo "  Container dolt push likely failed — beads are lost."
-      echo "  Check: bd list -l spec:${_HOST_LABEL}"
-      echo "  To re-run: ralph todo --since ${_PREV_BASE_COMMIT}"
-      echo ""
-      echo "Resetting state file to allow re-run..."
-      # Remove molecule and base_commit so tier 4 (new) can run again
-      if [ -f "$_HOST_STATE_FILE" ]; then
-        jq 'del(.molecule, .base_commit)' "$_HOST_STATE_FILE" > "$_HOST_STATE_FILE.tmp" \
-          && mv "$_HOST_STATE_FILE.tmp" "$_HOST_STATE_FILE"
-        echo "  Reset: $_HOST_STATE_FILE"
-      fi
-      exit 1
+      echo "" >&2
+      echo "Warning: RALPH_COMPLETE but no new tasks detected after sync." >&2
+      echo "  If the container dolt push failed above, tasks may not have synced." >&2
+      echo "  This may be expected under anchor-driven multi-spec planning" >&2
+      echo "  when only sibling specs received tasks." >&2
+      echo "  Check: bd list -l spec:${_HOST_LABEL}" >&2
+      echo "  To re-run: ralph todo --since ${_PREV_BASE_COMMIT}" >&2
     fi
   fi
   exit $wrapix_exit

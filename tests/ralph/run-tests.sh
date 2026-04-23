@@ -12172,10 +12172,11 @@ test_todo_dolt_push_in_container() {
 }
 
 # Test: todo.sh host-side verifies task count after bd dolt pull
-# Test: todo.sh exits non-zero and resets state when sync fails
+# Spec req 16: the post-sync check is informational — it emits a warning but
+# does NOT reset state or exit non-zero.
 test_todo_post_sync_warning() {
   CURRENT_TEST="todo_post_sync_warning"
-  test_header "todo.sh: host-side post-sync verification (fatal)"
+  test_header "todo.sh: host-side post-sync verification (informational warning)"
 
   local todo_script="$REPO_ROOT/lib/ralph/cmd/todo.sh"
 
@@ -12210,48 +12211,58 @@ test_todo_post_sync_warning() {
     test_fail "_HOST_POST_COUNT must query label 'spec:<label>' (colon), got: $post_line"
   fi
 
-  # Verify it emits an ERROR and exits non-zero on sync failure
+  # Spec req 16: warning is informational — must NOT emit "ERROR:".
   if grep -q 'ERROR: RALPH_COMPLETE but no new tasks detected' "$todo_script"; then
-    test_pass "todo.sh emits error on sync failure"
+    test_fail "todo.sh must emit 'Warning:' not 'ERROR:' (spec req 16: informational)"
   else
-    test_fail "todo.sh should emit ERROR message for sync verification"
+    test_pass "todo.sh does not emit fatal ERROR on sync count mismatch"
   fi
 
-  # Verify it auto-resets state file on sync failure
-  if grep -q 'del(.molecule, .base_commit)' "$todo_script"; then
-    test_pass "todo.sh resets state file on sync failure"
+  if grep -q 'Warning: RALPH_COMPLETE but no new tasks detected' "$todo_script"; then
+    test_pass "todo.sh emits informational warning on sync count mismatch"
   else
-    test_fail "todo.sh should reset state file (del molecule/base_commit) on sync failure"
+    test_fail "todo.sh should emit 'Warning: RALPH_COMPLETE but no new tasks detected'"
+  fi
+
+  # Spec req 16: host-side block must NOT reset state file on count mismatch.
+  if grep -q 'del(.molecule, .base_commit)' "$todo_script"; then
+    test_fail "todo.sh must NOT reset state file on sync count mismatch (spec req 16)"
+  else
+    test_pass "todo.sh preserves state file on sync count mismatch"
   fi
 }
 
-# Test: todo.sh exits non-zero and resets state on sync failure (not just a warning)
+# Test: host-side warning preserves state and exit 0 (spec req 16).
 test_todo_advances_base_commit_on_warning() {
   CURRENT_TEST="todo_advances_base_commit_on_warning"
-  test_header "todo.sh: exits non-zero and resets state on sync failure"
+  test_header "todo.sh: preserves state and exits 0 on sync warning"
 
   local todo_script="$REPO_ROOT/lib/ralph/cmd/todo.sh"
 
-  # Verify the host-side block DOES contain state reset on sync failure
+  # Host-side block must NOT reset molecule/base_commit on warning.
   if grep -q 'del(.molecule, .base_commit)' "$todo_script"; then
-    test_pass "todo.sh resets molecule and base_commit on sync failure"
+    test_fail "todo.sh must NOT reset molecule/base_commit on sync warning (spec req 16)"
   else
-    test_fail "todo.sh should reset state file on sync failure"
+    test_pass "todo.sh preserves molecule and base_commit despite sync warning"
   fi
 
-  # Verify the host-side block DOES exit 1 on sync failure
-  local error_line
-  error_line=$(grep -n 'no new tasks detected' "$todo_script" | head -1 | cut -d: -f1)
-  if [ -n "$error_line" ]; then
-    local after_error
-    after_error=$(tail -n "+${error_line}" "$todo_script" | head -15)
-    if echo "$after_error" | grep -q 'exit 1'; then
-      test_pass "todo.sh exits non-zero after sync failure"
-    else
-      test_fail "todo.sh should exit 1 after sync failure detection"
-    fi
+  # Host-side block must not exit non-zero after the warning: the block ending
+  # `exit $wrapix_exit` must be reached (wrapix_exit=0 on RALPH_COMPLETE).
+  local warning_line next_exit_1
+  warning_line=$(grep -n 'no new tasks detected' "$todo_script" | head -1 | cut -d: -f1)
+  if [ -z "$warning_line" ]; then
+    test_fail "could not find warning line in todo.sh"
+    return
+  fi
+
+  # Scan forward 20 lines: no 'exit 1' should appear before the closing `fi`.
+  local after_warning
+  after_warning=$(tail -n "+${warning_line}" "$todo_script" | head -20)
+  next_exit_1=$(echo "$after_warning" | grep -n 'exit 1' | head -1 | cut -d: -f1 || true)
+  if [ -n "$next_exit_1" ]; then
+    test_fail "todo.sh must not 'exit 1' after sync warning (spec req 16: exit 0)"
   else
-    test_fail "could not find error line in todo.sh"
+    test_pass "todo.sh does not exit non-zero after sync warning"
   fi
 }
 
