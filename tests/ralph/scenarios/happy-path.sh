@@ -71,7 +71,7 @@ phase_todo() {
   echo "Created epic (molecule root): $epic_id"
 
   # Store molecule ID in current.json
-  # The epic is the molecule root per ralph-workflow.md spec
+  # The epic is the molecule root per ralph-loop.md spec
   local current_file="$ralph_dir/state/current.json"
   if [ -f "$current_file" ]; then
     # Update existing current.json with molecule ID

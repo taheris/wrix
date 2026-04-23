@@ -1,6 +1,6 @@
 # Orchestration
 
-> **Superseded by: gas-city.md and ralph-workflow.md**
+> **Superseded by: gas-city.md, ralph-harness.md, ralph-loop.md, and ralph-review.md**
 
 Automated verification, parallel dispatch, and observation for ralph.
 

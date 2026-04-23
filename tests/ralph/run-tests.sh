@@ -2122,7 +2122,7 @@ test_init_host_execution() {
     test_pass "init.sh contains no container invocation references"
   fi
 
-  local spec="$REPO_ROOT/specs/ralph-workflow.md"
+  local spec="$REPO_ROOT/specs/ralph-harness.md"
   if grep -qE '\| *`ralph init` *\| *host *\|' "$spec"; then
     test_pass "spec's container execution table declares ralph init as host"
   else

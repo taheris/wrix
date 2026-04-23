@@ -104,7 +104,8 @@ Under Anchor-Driven Multi-Spec Planning, a single plan session may edit multiple
 
 1. **Candidate set** — `git diff <anchor.base_commit> HEAD --name-only -- specs/` returns every spec file changed since the anchor's cursor.
 2. **Per-spec effective base** — for each candidate spec `<s>`:
-   - If `state/<s>.json` exists → use `state/<s>.base_commit`
+   - If `<s>` is the anchor AND `--since <commit>` was supplied → use `<commit>` (the override supersedes the anchor's stored `base_commit` for the anchor's own per-spec diff, not only for the candidate-set computation)
+   - Else if `state/<s>.json` exists → use `state/<s>.base_commit`
    - Else → seed from `<anchor>.base_commit` (first time this spec is being tasked)
    - If the effective base is orphaned (detected via `git merge-base --is-ancestor`) → fall back to `<anchor>.base_commit`
 3. **Compute per-spec diff** — `git diff <effective_base> HEAD -- specs/<s>.md`.
@@ -112,7 +113,7 @@ Under Anchor-Driven Multi-Spec Planning, a single plan session may edit multiple
 5. **Fan-out on `RALPH_COMPLETE`** — for every spec that received at least one task, set `state/<s>.base_commit = HEAD`. If `state/<s>.json` did not exist, create it with `{label: <s>, spec_path: "specs/<s>.md", base_commit: HEAD, companions: []}`. Anchor's state file is always updated (molecule ID, cleared `implementation_notes`).
 
 **Flags:**
-- `--since <commit>` forces tier 1 with the given commit as the **anchor's cursor only**. Sibling specs retain their own `base_commit` values; the flag does not override them. Errors if commit is invalid.
+- `--since <commit>` forces tier 1 with the given commit as the **anchor's cursor only** — applied both to the candidate-set diff (`git diff <commit> HEAD -- specs/`) and to the anchor's own per-spec diff inside the fan-out loop. Sibling specs retain their own `base_commit` values; the flag does not override them. Errors if commit is invalid.
 
 **Constraints:**
 - Requires spec changes to be committed — errors if uncommitted changes detected in any spec file in the candidate set
@@ -260,7 +261,7 @@ Spec-change detection uses `git diff` scoped by the `base_commit` field in state
 - `ralph todo` uses four-tier detection with per-spec cursor fan-out in tier 1 (see `ralph todo` command section)
 - `compute_spec_diff` helper in `util.sh` encapsulates the four-tier fallback and the per-spec fan-out for tier 1
 - `discover_molecule_from_readme` helper in `util.sh` parses the pinned-context file (`docs/README.md` by default) to find molecule IDs by spec label
-- `--since <commit>` flag forces tier 1 with the given commit as the **anchor's cursor only**; sibling specs retain their own `base_commit` values
+- `--since <commit>` flag forces tier 1 with the given commit as the **anchor's cursor only** — applied to both the candidate-set diff and the anchor's per-spec diff in fan-out; sibling specs retain their own `base_commit` values
 - No explicit migration required — existing specs handled via tier 2/3/4 fallback
 
 ### Per-Spec Cursor Fan-Out (Tier 1 details)
@@ -583,6 +584,8 @@ Add unit tests for parser edge cases...
   [verify](../tests/ralph/run-tests.sh#test_todo_creates_sibling_state_file)
 - [ ] `ralph todo --since <commit>` overrides only the anchor's cursor; siblings retain own `base_commit`
   [verify](../tests/ralph/run-tests.sh#test_todo_since_anchor_only)
+- [ ] `ralph todo --since <commit>` applies the override to the anchor's own per-spec diff in fan-out, not just the candidate-set computation (so a stale stored `base_commit` on the anchor does not mask the override)
+  [verify](../tests/ralph/run-tests.sh#test_todo_since_override_anchor_per_spec_diff)
 - [ ] `ralph todo` exits early when tier 1 candidate set is empty ("No spec changes since last task creation")
   [verify](../tests/ralph/run-tests.sh#test_todo_empty_candidate_set_exits)
 - [ ] Worked example (anchor + two siblings) produces correct molecule + per-spec cursors

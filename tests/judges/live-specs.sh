@@ -62,7 +62,7 @@ test_judge_rubric_format() {
 }
 
 test_clickable_links() {
-  judge_files "specs/notifications.md" "specs/ralph-workflow.md"
+  judge_files "specs/notifications.md" "specs/ralph-harness.md"
   judge_criterion "Annotations use standard markdown link syntax [verify](path) and [judge](path) that renders as clickable links in GitHub and VS Code"
 }
 
