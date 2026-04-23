@@ -6465,11 +6465,11 @@ test_check_clarify_stops_push() {
     test_fail "clarify guard should appear before do_push_gate (clarify:$clarify_branch_line push:$push_call_line)"
   fi
 
-  # Clarify-pending branch must include a 'Resolve via: ralph msg' pointer
-  if grep -q 'ralph msg' "$check_script"; then
-    test_pass "clarify-pending branch points the user at ralph msg"
+  # Clarify-pending branch must surface outstanding questions via ralph msg
+  if grep -qE 'ralph msg -s "\$host_label"' "$check_script"; then
+    test_pass "clarify-pending branch inlines ralph msg output"
   else
-    test_fail "clarify-pending branch should point the user at 'ralph msg'"
+    test_fail "clarify-pending branch should inline ralph msg -s \"\$host_label\" output"
   fi
 }
 
@@ -6570,10 +6570,10 @@ test_check_iteration_cap_escalates() {
     test_fail "at-cap path should be reached only on fix-up beads (cap:$cap_line push:$push_call_line)"
   fi
 
-  if grep -qE 'Resolve via: ralph msg' "$check_script"; then
-    test_pass "at-cap path prints a 'ralph msg' pointer"
+  if grep -qE 'ralph msg -s "\$host_label"' "$check_script"; then
+    test_pass "at-cap path inlines ralph msg output"
   else
-    test_fail "at-cap path should point user at ralph msg"
+    test_fail "at-cap path should inline ralph msg -s \"\$host_label\" output"
   fi
 }
 
@@ -12485,19 +12485,31 @@ test_run_execs_check_on_complete() {
     test_fail "run.sh should 'exec ralph check' at molecule completion"
   fi
 
-  # The exec must forward --spec so the resolved label is preserved
+  # The exec must forward --spec using the host-resolved label
   # shellcheck disable=SC2016 # literal string match against source file
-  if grep -qE 'exec ralph check --spec "\$FEATURE_NAME"' "$run_script"; then
-    test_pass "run.sh forwards --spec \$FEATURE_NAME to ralph check"
+  if grep -qE 'exec ralph check --spec "\$_host_label"' "$run_script"; then
+    test_pass "run.sh forwards --spec \$_host_label to ralph check"
   else
-    test_fail "run.sh should forward --spec \"\$FEATURE_NAME\" to ralph check"
+    test_fail "run.sh should forward --spec \"\$_host_label\" to ralph check"
+  fi
+
+  # The exec must live on host-side (post-wrapix), not in-container, so
+  # check.sh's host-side branch (verdict, push gate, iteration counter) runs.
+  # shellcheck disable=SC2016 # literal string match against source file
+  local exec_line wrapix_line
+  exec_line=$(grep -nE '^[[:space:]]*exec ralph check' "$run_script" | head -1 | cut -d: -f1)
+  wrapix_line=$(grep -nE '^[[:space:]]*wrapix$' "$run_script" | head -1 | cut -d: -f1)
+
+  if [ -n "$exec_line" ] && [ -n "$wrapix_line" ] && [ "$exec_line" -gt "$wrapix_line" ]; then
+    test_pass "exec ralph check runs after wrapix (host-side post-container)"
+  else
+    test_fail "exec ralph check must run host-side after wrapix (exec:$exec_line wrapix:$wrapix_line)"
   fi
 
   # The exec must be guarded so --once exits normally
-  local exec_line guard_line
-  exec_line=$(grep -nE '^[[:space:]]*exec ralph check' "$run_script" | head -1 | cut -d: -f1)
+  local guard_line
   # shellcheck disable=SC2016 # literal string match against source file
-  guard_line=$(grep -nE '\$RUN_ONCE.*!=.*true' "$run_script" | tail -1 | cut -d: -f1)
+  guard_line=$(grep -nE '\$RUN_ONCE.*!=.*true' "$run_script" | head -1 | cut -d: -f1)
 
   if [ -n "$exec_line" ] && [ -n "$guard_line" ] && [ "$guard_line" -lt "$exec_line" ]; then
     test_pass "exec ralph check is guarded by RUN_ONCE != true"

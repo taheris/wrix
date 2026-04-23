@@ -111,59 +111,71 @@ if [ ! -f /etc/wrapix/claude-config.json ] && command -v wrapix &>/dev/null; the
     echo "Warning: WRAPIX_PROFILE not set, defaulting to base" >&2
   fi
 
+  # shellcheck source=util.sh
+  source "$(dirname "$0")/util.sh"
+
+  _host_ralph_dir="${RALPH_DIR:-.wrapix/ralph}"
+  _host_label="$SPEC_FLAG"
+  if [ -z "$_host_label" ] && [ -f "$_host_ralph_dir/state/current" ]; then
+    _host_label=$(<"$_host_ralph_dir/state/current")
+    _host_label="${_host_label#"${_host_label%%[![:space:]]*}"}"
+    _host_label="${_host_label%"${_host_label##*[![:space:]]}"}"
+  fi
+
   # Compaction re-pin hook: only register for --once (single-session runs).
   # Continuous mode spawns many claude sessions across distinct issues, so a
   # statically-written re-pin can't name a single issue without going stale.
-  if [ "$RUN_ONCE" = "true" ]; then
-    # shellcheck source=util.sh
-    source "$(dirname "$0")/util.sh"
+  if [ "$RUN_ONCE" = "true" ] && [ -n "$_host_label" ]; then
+    _host_state_file="$_host_ralph_dir/state/${_host_label}.json"
+    _host_spec="specs/${_host_label}.md"
+    [ -f "$_host_ralph_dir/state/${_host_label}.md" ] && _host_spec="$_host_ralph_dir/state/${_host_label}.md"
 
-    _host_ralph_dir="${RALPH_DIR:-.wrapix/ralph}"
-    _host_label="$SPEC_FLAG"
-    if [ -z "$_host_label" ] && [ -f "$_host_ralph_dir/state/current" ]; then
-      _host_label=$(<"$_host_ralph_dir/state/current")
-      _host_label="${_host_label#"${_host_label%%[![:space:]]*}"}"
-      _host_label="${_host_label%"${_host_label##*[![:space:]]}"}"
+    _host_companions=""
+    if [ -f "$_host_state_file" ]; then
+      _host_companions=$(jq -r '(.companions // []) | join(",")' "$_host_state_file" 2>/dev/null || true)
     fi
 
-    if [ -n "$_host_label" ]; then
-      _host_state_file="$_host_ralph_dir/state/${_host_label}.json"
-      _host_spec="specs/${_host_label}.md"
-      [ -f "$_host_ralph_dir/state/${_host_label}.md" ] && _host_spec="$_host_ralph_dir/state/${_host_label}.md"
-
-      _host_companions=""
-      if [ -f "$_host_state_file" ]; then
-        _host_companions=$(jq -r '(.companions // []) | join(",")' "$_host_state_file" 2>/dev/null || true)
-      fi
-
-      # Best-effort: peek at the next ready bead so the re-pin names it.
-      # If bd can't reach the backend here, the hook still installs with
-      # label/spec and the in-container ralph will resolve the issue anyway.
-      _host_issue=""
-      _host_title=""
-      if command -v bd >/dev/null 2>&1; then
-        _next=$(bd ready --label "spec:${_host_label}" --sort priority --json 2>/dev/null \
-          | jq -r '[.[] | select(.issue_type != "epic")][0] | "\(.id // "")\t\(.title // "")"' 2>/dev/null || true)
-        _host_issue="${_next%%$'\t'*}"
-        _host_title="${_next#*$'\t'}"
-        [ "$_host_title" = "$_next" ] && _host_title=""
-      fi
-
-      _repin_content=$(build_repin_content "$_host_label" run \
-        "spec=$_host_spec" \
-        "issue=$_host_issue" \
-        "title=$_host_title" \
-        "companions=$_host_companions")
-      install_repin_hook "$_host_label" "$_repin_content"
-      # shellcheck disable=SC2064
-      trap "rm -rf '$_host_ralph_dir/runtime/$_host_label'" EXIT
+    # Best-effort: peek at the next ready bead so the re-pin names it.
+    # If bd can't reach the backend here, the hook still installs with
+    # label/spec and the in-container ralph will resolve the issue anyway.
+    _host_issue=""
+    _host_title=""
+    if command -v bd >/dev/null 2>&1; then
+      _next=$(bd ready --label "spec:${_host_label}" --sort priority --json 2>/dev/null \
+        | jq -r '[.[] | select(.issue_type != "epic")][0] | "\(.id // "")\t\(.title // "")"' 2>/dev/null || true)
+      _host_issue="${_next%%$'\t'*}"
+      _host_title="${_next#*$'\t'}"
+      [ "$_host_title" = "$_next" ] && _host_title=""
     fi
+
+    _repin_content=$(build_repin_content "$_host_label" run \
+      "spec=$_host_spec" \
+      "issue=$_host_issue" \
+      "title=$_host_title" \
+      "companions=$_host_companions")
+    install_repin_hook "$_host_label" "$_repin_content"
+    # shellcheck disable=SC2064
+    trap "rm -rf '$_host_ralph_dir/runtime/$_host_label'" EXIT
   fi
 
   wrapix
   wrapix_exit=$?
   echo "Syncing beads from container..."
   bd dolt pull || echo "Warning: bd dolt pull failed (beads may not be synced)"
+
+  # Continuous mode hands off to ralph check on the HOST so the push gate,
+  # verdict display, clarify detection, iteration counter, and notifications
+  # all fire. The exec must live here (post-container) rather than at the end
+  # of the in-container loop, because `ralph check` invoked inside the
+  # container takes the container-side branch and skips all of the above.
+  if [ "$RUN_ONCE" != "true" ] && [ "$wrapix_exit" -eq 0 ]; then
+    if [ -n "$_host_label" ]; then
+      exec ralph check --spec "$_host_label"
+    else
+      exec ralph check
+    fi
+  fi
+
   exit $wrapix_exit
 fi
 
@@ -1063,14 +1075,8 @@ run_hook "post-loop" "$HOOK_POST_LOOP"
 echo ""
 echo "All work complete after $step_count step(s)!"
 
-# Continuous mode hands off to ralph check (push gate + auto-iteration).
-# --once exits normally without invoking check.
-if [ "$RUN_ONCE" != "true" ]; then
-  if [ -n "$FEATURE_NAME" ]; then
-    exec ralph check --spec "$FEATURE_NAME"
-  else
-    exec ralph check
-  fi
-fi
+# Handoff to ralph check runs on the HOST (see run.sh host-side block),
+# not here — an in-container exec lands in check.sh's container-side
+# branch and skips the push gate, verdict, and iteration counter.
 
 exit $FINAL_EXIT_CODE
