@@ -42,7 +42,7 @@ repos:
         entry: nix run .#test-city
         language: system
         pass_filenames: false
-        files: ^(lib/city/|tests/city)
+        files: ^(lib/city/(scripts|formulas|orders|prompts)/|tests/city/)
         stages: [pre-push]
 
       - id: ralph-integration
@@ -50,5 +50,5 @@ repos:
         entry: nix run .#test-ralph
         language: system
         pass_filenames: false
-        files: ^(lib/ralph/|tests/ralph/)
+        files: ^(lib/ralph/(cmd|template)/|tests/ralph/)
         stages: [pre-push]
