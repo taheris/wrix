@@ -6738,8 +6738,12 @@ test_run_check_loop_terminates() {
   #    but --once must NOT chain into check (would spin forever in tests).
   local run_exec_line run_guard_line
   run_exec_line=$(grep -nE '^[[:space:]]*exec ralph check' "$run_script" | head -1 | cut -d: -f1)
+  # Find the closest RUN_ONCE != "true" guard preceding the exec (not tail -1,
+  # which would pick unrelated guards elsewhere in the file).
   # shellcheck disable=SC2016 # literal match
-  run_guard_line=$(grep -nE 'if \[ "\$RUN_ONCE" != "true" \]' "$run_script" | tail -1 | cut -d: -f1)
+  run_guard_line=$(grep -nE 'if \[ "\$RUN_ONCE" != "true" \]' "$run_script" \
+    | cut -d: -f1 \
+    | awk -v e="$run_exec_line" '$1 < e { g = $1 } END { print g }')
   if [ -n "$run_exec_line" ] && [ -n "$run_guard_line" ] && [ "$run_guard_line" -lt "$run_exec_line" ]; then
     test_pass "run.sh: exec ralph check gated on RUN_ONCE != true"
   else
