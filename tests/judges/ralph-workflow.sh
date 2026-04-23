@@ -105,3 +105,8 @@ test_plan_polish_mode() {
   judge_files "lib/ralph/template/partial/interview-modes.md" "lib/ralph/template/plan-new.md" "lib/ralph/template/plan-update.md"
   judge_criterion "The interview-modes partial (wired into plan-new.md and plan-update.md) instructs the LLM to recognize 'polish the spec' and close variants (e.g. 'polish this spec', 'give it a polish', 'do a polish pass') via loose phrase matching, and to respond by reading the full spec end-to-end and reporting findings across readability, consistency, ambiguity, and structural dimensions, each finding accompanied by a SPECIFIC proposed edit (not vague suggestions). Both interview modes remain planning-only — no code changes are produced."
 }
+
+test_init_output_format() {
+  judge_files "lib/ralph/cmd/init.sh"
+  judge_criterion "ralph init prints a per-artifact summary on exit: a leading '✓ Bootstrapped wrapix project in .' banner, a 'Created:' section listing each artifact the run produced (including flake.nix, .envrc, .gitignore with '(N entries appended)' detail, .pre-commit-config.yaml, docs/README.md, docs/architecture.md, docs/style-guidelines.md, AGENTS.md, CLAUDE.md with '(-> AGENTS.md)' detail, and .wrapix/ralph/template/), a 'Skipped:' section listing each artifact that was left alone with a parenthetical reason (e.g. '.beads/  (already initialized)'), and a fixed two-step 'Next steps:' block — 'direnv allow' then 'ralph plan -n <label>' — followed by a 'Docs: specs/ralph-workflow.md' pointer. The next-steps block is fixed (always the same two items + docs pointer) regardless of what was created or skipped."
+}

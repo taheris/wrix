@@ -9,6 +9,7 @@ fi
 
 case "$COMMAND" in
   check)  exec ralph-check  "$@" ;;
+  init)   exec ralph-init   "$@" ;;
   logs)   exec ralph-logs   "$@" ;;
   msg)    exec ralph-msg    "$@" ;;
   plan)   exec ralph-plan   "$@" ;;
@@ -92,6 +93,7 @@ case "$COMMAND" in
     echo "    -i <id> -d      Dismiss without answering"
     echo ""
     echo "Utility Commands:"
+    echo "  init            Bootstrap a new wrapix project in cwd (host-side)"
     echo "  logs [N]        View recent work logs (default 5)"
     echo "  edit            Edit current spec file"
     echo ""
