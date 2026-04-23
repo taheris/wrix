@@ -71,6 +71,16 @@ test_plan_update_invariant_clash_detection() {
   judge_criterion "plan-update.md instructs the LLM to scan the existing spec for invariants (architectural decisions, data-structure choices, explicit constraints, non-functional requirements, out-of-scope items) before committing a change, pause the interview when a potential clash is found, and propose contextual options (typically 2-4) guided by the three-paths principle (preserve invariant / keep on top inelegantly / change invariant) but not limited to a fixed A/B/C menu. The template biases toward asking when uncertain."
 }
 
+test_plan_anchor_sibling_editing() {
+  judge_files "lib/ralph/template/plan-update.md"
+  judge_criterion "plan-update.md explains that the label named on '-u' is the anchor and owns state/<label>.json (holding molecule, implementation_notes, iteration_count), that the LLM may read and edit any spec in specs/ when a change cross-cuts (sibling-spec editing, no pre-declaration, touched set emerges from the interview), that docs/README.md is the spec index to consult for locating siblings, and that hidden specs (-u -h) are single-spec and do NOT participate in sibling editing. The template instructs the LLM to commit the anchor and every touched sibling spec at end of session (git-tracked specs only; hidden specs just save the file)."
+}
+
+test_plan_cross_spec_invariant_clash() {
+  judge_files "lib/ralph/template/plan-update.md"
+  judge_criterion "plan-update.md's invariant-clash scan explicitly covers the anchor spec AND any touched sibling specs — not just specs/<LABEL>.md — so a change landing in the anchor that contradicts an invariant in a sibling is caught before commit. The three-paths principle remains guidance (not a fixed menu), and the template still biases toward asking when uncertain."
+}
+
 test_tune_interactive() {
   judge_files "lib/ralph/cmd/tune.sh"
   judge_criterion "ralph tune in interactive mode identifies the correct template to edit and allows making changes"
