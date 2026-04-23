@@ -1343,6 +1343,153 @@ filter_clarify_beads() {
 }
 
 #-----------------------------------------------------------------------------
+# Options Format Contract parser (see specs/ralph-review.md)
+#
+# Clarify beads that present a choice enumerate options in a standard markdown
+# shape so ralph msg can render summaries, list options in view mode, and
+# resolve integer fast-replies:
+#
+#   ## Options — <one-line summary>
+#
+#   ### Option 1 — <short title>
+#   <body paragraph(s)>
+#
+#   ### Option 2 — <short title>
+#   <body>
+#
+# The separator between "Options" and summary (or "Option N" and title) may be
+# em-dash (—), en-dash (–), single hyphen (-), or double hyphen (--); LLMs
+# default to em-dash. Each option's body extends from its ### Option heading
+# until the next ### Option heading or the next ## heading.
+#-----------------------------------------------------------------------------
+
+# Strip a leading Options-format separator (em-dash, en-dash, double hyphen,
+# single hyphen) and any surrounding whitespace from a string. If no
+# separator is present, returns empty (by spec, summary/title requires a
+# separator). Empty input yields empty output.
+# Usage: _strip_options_separator "<tail after Options or Option N>"
+_strip_options_separator() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  [ -n "$s" ] || return 0
+  case "$s" in
+    —*)  s="${s#—}"  ;;
+    –*)  s="${s#–}"  ;;
+    --*) s="${s#--}" ;;
+    -*)  s="${s#-}"  ;;
+    *)   return 0 ;;
+  esac
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+
+# Parse the Options Format Contract from a bead description.
+# Usage: parse_options_format "<description>"
+# Output: JSON object
+#   {"summary": <string>,
+#    "options": [{"n": <int>, "title": <string>, "body": <string>}, ...]}
+# Summary is empty when the ## Options heading is absent or carries no summary.
+# Options is [] when no ### Option N subsections are found.
+parse_options_format() {
+  local desc="${1-}"
+  local summary=""
+  local in_options=0
+  local current_n=""
+  local current_title=""
+  local current_body=""
+  local -a opts_json=()
+
+  local heading_re='^##[[:space:]]+Options([[:space:]].*)?$'
+  local option_re='^###[[:space:]]+Option[[:space:]]+([0-9]+)([[:space:]].*)?$'
+  local next_h2_re='^##[[:space:]]'
+
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [ "$in_options" = "0" ]; then
+      if [[ "$line" =~ $heading_re ]]; then
+        in_options=1
+        summary=$(_strip_options_separator "${BASH_REMATCH[1]:-}")
+      fi
+      continue
+    fi
+
+    if [[ "$line" =~ $option_re ]]; then
+      if [ -n "$current_n" ]; then
+        while [ -n "$current_body" ] && [ "${current_body: -1}" = $'\n' ]; do
+          current_body="${current_body%$'\n'}"
+        done
+        opts_json+=("$(jq -cn \
+          --argjson n "$current_n" \
+          --arg title "$current_title" \
+          --arg body "$current_body" \
+          '{n: $n, title: $title, body: $body}')")
+      fi
+      current_n="${BASH_REMATCH[1]}"
+      current_title=$(_strip_options_separator "${BASH_REMATCH[2]:-}")
+      current_body=""
+      continue
+    fi
+
+    if [[ "$line" =~ $next_h2_re ]]; then
+      if [ -n "$current_n" ]; then
+        while [ -n "$current_body" ] && [ "${current_body: -1}" = $'\n' ]; do
+          current_body="${current_body%$'\n'}"
+        done
+        opts_json+=("$(jq -cn \
+          --argjson n "$current_n" \
+          --arg title "$current_title" \
+          --arg body "$current_body" \
+          '{n: $n, title: $title, body: $body}')")
+        current_n=""
+        current_title=""
+        current_body=""
+      fi
+      in_options=0
+      continue
+    fi
+
+    if [ -n "$current_n" ]; then
+      if [ -z "$current_body" ]; then
+        current_body="$line"
+      else
+        current_body="${current_body}"$'\n'"${line}"
+      fi
+    fi
+  done <<< "$desc"
+
+  if [ -n "$current_n" ]; then
+    while [ -n "$current_body" ] && [ "${current_body: -1}" = $'\n' ]; do
+      current_body="${current_body%$'\n'}"
+    done
+    opts_json+=("$(jq -cn \
+      --argjson n "$current_n" \
+      --arg title "$current_title" \
+      --arg body "$current_body" \
+      '{n: $n, title: $title, body: $body}')")
+  fi
+
+  local opts_array="[]"
+  if [ ${#opts_json[@]} -gt 0 ]; then
+    opts_array=$(printf '%s\n' "${opts_json[@]}" | jq -s '.')
+  fi
+
+  jq -cn --arg summary "$summary" --argjson options "$opts_array" \
+    '{summary: $summary, options: $options}'
+}
+
+# Fetch a bead's description via `bd show --json` and parse the Options
+# Format Contract from it.
+# Usage: parse_options_format_from_bead <bead_id>
+# Output: JSON object (see parse_options_format)
+parse_options_format_from_bead() {
+  local bead_id="$1"
+  local desc
+  desc=$(bd_json show "$bead_id" --json | jq -r '.[0].description // ""')
+  parse_options_format "$desc"
+}
+
+#-----------------------------------------------------------------------------
 # Iteration Counter (run ↔ check auto-iteration)
 #
 # Tracks how many unsuccessful check iterations a molecule has consumed.

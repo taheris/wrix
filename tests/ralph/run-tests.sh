@@ -1824,6 +1824,153 @@ test_filter_clarify_beads() {
   teardown_test_env
 }
 
+# Test: parse_options_format accepts em-dash, en-dash, single hyphen, and
+# double hyphen as the separator on ## Options and ### Option N headings.
+# Covers: specs/ralph-review.md Options Format Contract.
+test_options_format_separators() {
+  CURRENT_TEST="options_format_separators"
+  test_header "parse_options_format accepts em/en-dash and single/double hyphen"
+
+  setup_test_env "options-format-separators"
+
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  _assert_options() {
+    local label="$1" desc="$2" want_summary="$3" want_title="$4"
+    local json
+    json=$(parse_options_format "$desc")
+    local got_summary got_count got_title got_n got_body
+    got_summary=$(echo "$json" | jq -r '.summary')
+    got_count=$(echo "$json" | jq -r '.options | length')
+    got_n=$(echo "$json" | jq -r '.options[0].n // empty')
+    got_title=$(echo "$json" | jq -r '.options[0].title // empty')
+    got_body=$(echo "$json" | jq -r '.options[0].body // empty')
+
+    if [ "$got_summary" = "$want_summary" ]; then
+      test_pass "$label: summary parsed (${got_summary:-<empty>})"
+    else
+      test_fail "$label: summary mismatch — want '$want_summary', got '$got_summary'"
+    fi
+    if [ "$got_count" = "1" ]; then
+      test_pass "$label: one option parsed"
+    else
+      test_fail "$label: expected 1 option, got $got_count"
+    fi
+    if [ "$got_n" = "1" ]; then
+      test_pass "$label: option N=1 parsed"
+    else
+      test_fail "$label: option N mismatch — want 1, got '$got_n'"
+    fi
+    if [ "$got_title" = "$want_title" ]; then
+      test_pass "$label: option title parsed ($got_title)"
+    else
+      test_fail "$label: option title mismatch — want '$want_title', got '$got_title'"
+    fi
+    if [ "$got_body" = "Body." ]; then
+      test_pass "$label: option body parsed"
+    else
+      test_fail "$label: body mismatch — got '$got_body'"
+    fi
+  }
+
+  _assert_options "em-dash" \
+    "## Options — Pick an approach
+
+### Option 1 — Preserve invariant
+Body." \
+    "Pick an approach" "Preserve invariant"
+
+  _assert_options "en-dash" \
+    "## Options – Pick
+
+### Option 1 – Path A
+Body." \
+    "Pick" "Path A"
+
+  _assert_options "single hyphen" \
+    "## Options - Pick
+
+### Option 1 - Path A
+Body." \
+    "Pick" "Path A"
+
+  _assert_options "double hyphen" \
+    "## Options -- Pick
+
+### Option 1 -- Path A
+Body." \
+    "Pick" "Path A"
+
+  _assert_options "mixed separators (Options em-dash, Option N hyphen)" \
+    "## Options — Pick
+
+### Option 1 - Path A
+Body." \
+    "Pick" "Path A"
+
+  local no_summary_desc='## Options
+
+### Option 1 — Only option
+Body.'
+  local ns_json
+  ns_json=$(parse_options_format "$no_summary_desc")
+  if [ "$(echo "$ns_json" | jq -r '.summary')" = "" ]; then
+    test_pass "no summary: empty summary"
+  else
+    test_fail "no summary: expected empty, got $(echo "$ns_json" | jq -r '.summary')"
+  fi
+  if [ "$(echo "$ns_json" | jq -r '.options[0].title')" = "Only option" ]; then
+    test_pass "no summary: option parsed"
+  else
+    test_fail "no summary: option title wrong"
+  fi
+
+  local no_heading_desc='## Description
+
+Just text.'
+  local nh_json
+  nh_json=$(parse_options_format "$no_heading_desc")
+  if [ "$(echo "$nh_json" | jq -r '.summary')" = "" ] \
+    && [ "$(echo "$nh_json" | jq -r '.options | length')" = "0" ]; then
+    test_pass "no ## Options heading: empty summary and no options"
+  else
+    test_fail "no heading: expected empty, got $nh_json"
+  fi
+
+  local multi_desc='## Options — Multi
+
+### Option 1 — A
+First para.
+
+Second para.
+
+### Option 2 — B
+Body B.
+
+## Other section
+ignored'
+  local multi_json
+  multi_json=$(parse_options_format "$multi_desc")
+  if [ "$(echo "$multi_json" | jq -r '.options | length')" = "2" ]; then
+    test_pass "multi-option: two options parsed"
+  else
+    test_fail "multi-option: expected 2, got $(echo "$multi_json" | jq -r '.options | length')"
+  fi
+  if [ "$(echo "$multi_json" | jq -r '.options[0].body')" = $'First para.\n\nSecond para.' ]; then
+    test_pass "multi-option: option 1 body preserves blank line"
+  else
+    test_fail "multi-option: option 1 body mismatch — got '$(echo "$multi_json" | jq -r '.options[0].body')'"
+  fi
+  if [ "$(echo "$multi_json" | jq -r '.options[1].body')" = "Body B." ]; then
+    test_pass "multi-option: option 2 body ends at next ## heading"
+  else
+    test_fail "multi-option: option 2 body mismatch — got '$(echo "$multi_json" | jq -r '.options[1].body')'"
+  fi
+
+  teardown_test_env
+}
+
 # Test: extract_clarify_note pulls the most recent clarify block from a description
 test_extract_clarify_note() {
   CURRENT_TEST="extract_clarify_note"
@@ -14659,6 +14806,7 @@ PARALLEL_TESTS=(
   test_status_spec_missing_state
   test_malformed_bd_output_parsing
   test_filter_clarify_beads
+  test_options_format_separators
   test_extract_clarify_note
   test_get_question_for_bead
   test_bootstrap_flake
