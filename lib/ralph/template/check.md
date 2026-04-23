@@ -70,10 +70,45 @@ These paths are **guidance, not a fixed A/B/C menu**. For each specific clash, p
 **contextual options tailored to the situation** — typically **2–4 options**, each
 naming its cost (churn, debt, coupling, risk). Do NOT emit a generic fixed menu.
 
+### Options Format Contract (REQUIRED)
+
+Every invariant-clash clarify bead you create **MUST** present its options using the
+canonical Options Format Contract. `ralph msg` parses this format to render the
+SUMMARY column, enumerate options for view mode, and resolve integer fast-replies.
+A malformed bead breaks fast-reply with `-a <int>`.
+
+**Required shape:**
+
+```markdown
+## Options — <one-line summary of the decision, ≤50 chars>
+
+### Option 1 — <short title>
+<body paragraph(s) describing the option, naming its cost>
+
+### Option 2 — <short title>
+<body, including cost>
+
+### Option 3 — <short title>
+<body, including cost>
+```
+
+**Rules:**
+
+- The `## Options` header carries a one-line summary (≤50 chars) separated from the
+  word `Options` by em-dash `—` (default), en-dash `–`, single hyphen `-`, or double
+  hyphen `--`. Parsers tolerate any of these; emit em-dash by default.
+- Each option is `### Option N — <title>` where `N` is 1-based sequential. Numbering
+  is required for `-a <int>` lookup to work.
+- Each option body extends from its `### Option N` heading until the next
+  `### Option` or the next `##` heading; name the cost (churn, debt, coupling, risk).
+- Use contextual options per clash — typically 2–4 — shaped by the three-paths
+  principle. Do NOT emit a fixed A/B/C menu.
+
 ### Handling Each Clash
 
 For every invariant clash you detect, create a bead whose description contains the
-proposed options and attach the `ralph:clarify` label, then bond it to the molecule:
+proposed options in the format above, attach the `ralph:clarify` label, then bond it
+to the molecule:
 
 ```bash
 CLARIFY_ID=$(bd create \
@@ -88,16 +123,40 @@ CLARIFY_ID=$(bd create \
 ## Evidence
 <Files, commits, spec sections that establish the invariant>
 
-## Proposed Options
-1. <Option A> — cost: <...>
-2. <Option B> — cost: <...>
-3. <Option C> — cost: <...>
+## Options — <one-line summary, ≤50 chars>
+
+### Option 1 — <short title>
+<body, name the cost>
+
+### Option 2 — <short title>
+<body, name the cost>
+
+### Option 3 — <short title>
+<body, name the cost>
 EOF
 )" --silent)
 bd mol bond "$CLARIFY_ID" "{{MOLECULE_ID}}"
 ```
 
-The user will answer with a free-form choice via `ralph msg`.
+**Inline example** (state-storage clash):
+
+```markdown
+## Options — State JSON vs. dedicated table
+
+### Option 1 — Keep state in JSON
+Add a `companions` array to `state/<label>.json`. Cost: schema drift risk; ad-hoc
+reads in shell.
+
+### Option 2 — Migrate to a beads-side table
+Move companion tracking into beads via labels. Cost: ralph now depends on beads
+schema; loses local-only state.
+
+### Option 3 — Hybrid
+JSON stays authoritative; beads mirrors for cross-session search. Cost: two writers,
+divergence risk.
+```
+
+The user will answer with a free-form choice or an integer option pick via `ralph msg`.
 
 ## Creating Fix-Up Beads
 

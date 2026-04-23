@@ -191,6 +191,13 @@ let
       default = "";
       description = "Error output from a previous failed attempt, injected on retry";
     };
+
+    CLARIFY_BEADS = {
+      source = "computed";
+      required = false;
+      default = "";
+      description = "Markdown block of outstanding ralph:clarify beads (id, title, options) for ralph msg interactive session";
+    };
   };
 
   # Get list of all variable names
@@ -429,6 +436,19 @@ let
         "BEADS_SUMMARY"
         "BASE_COMMIT"
         "MOLECULE_ID"
+        "EXIT_SIGNALS"
+      ];
+    };
+
+    msg = mkTemplate {
+      body = ./msg.md;
+      partials = partialFiles;
+      variables = [
+        "COMPANIONS"
+        "PINNED_CONTEXT"
+        "SPEC_PATH"
+        "LABEL"
+        "CLARIFY_BEADS"
         "EXIT_SIGNALS"
       ];
     };
