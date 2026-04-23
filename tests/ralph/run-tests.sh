@@ -10840,6 +10840,301 @@ test_sibling_state_shape() {
   teardown_test_env
 }
 
+# Test: anchor state/<anchor>.json owns molecule, implementation_notes, and
+# iteration_count regardless of which sibling specs are edited (spec req 21).
+# Fan-out must not disturb anchor-owned session fields.
+test_anchor_owns_session_state() {
+  CURRENT_TEST="anchor_owns_session_state"
+  test_header "anchor state: retains molecule, implementation_notes, iteration_count through sibling fan-out"
+
+  setup_test_env "anchor-owns-state"
+  _setup_spec_diff_git "anchor"
+
+  create_test_spec "sib1" "# Sibling one
+- init
+"
+  create_test_spec "sib2" "# Sibling two
+- init
+"
+  git -C "$TEST_DIR" add specs/sib1.md specs/sib2.md
+  git -C "$TEST_DIR" commit -q -m "add siblings"
+
+  local head_commit
+  head_commit=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+  local anchor_state="$RALPH_DIR/state/anchor.json"
+  local s1_state="$RALPH_DIR/state/sib1.json"
+  local s2_state="$RALPH_DIR/state/sib2.json"
+
+  mkdir -p "$RALPH_DIR/state"
+  jq -n \
+    --arg label "anchor" \
+    --arg spec_path "specs/anchor.md" \
+    --arg mol "wx-anchor-mol" \
+    '{label: $label, spec_path: $spec_path, molecule: $mol,
+      implementation_notes: ["note one", "note two"],
+      iteration_count: 3, companions: []}' \
+    > "$anchor_state"
+
+  (
+    cd "$TEST_DIR" || exit 1
+    # shellcheck source=/dev/null
+    source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+    advance_spec_cursor "$s1_state" "sib1" "specs/sib1.md" "$head_commit"
+    advance_spec_cursor "$s2_state" "sib2" "specs/sib2.md" "$head_commit"
+  )
+
+  local anchor_mol anchor_iter
+  anchor_mol=$(jq -r '.molecule // empty' "$anchor_state")
+  anchor_iter=$(jq -r '.iteration_count // empty' "$anchor_state")
+
+  if [ "$anchor_mol" = "wx-anchor-mol" ]; then
+    test_pass "anchor retains .molecule through sibling advance"
+  else
+    test_fail "anchor .molecule missing after fan-out (got '$anchor_mol')"
+  fi
+
+  local notes_first notes_second
+  notes_first=$(jq -r '.implementation_notes[0] // empty' "$anchor_state")
+  notes_second=$(jq -r '.implementation_notes[1] // empty' "$anchor_state")
+  if [ "$notes_first" = "note one" ] && [ "$notes_second" = "note two" ]; then
+    test_pass "anchor retains .implementation_notes through sibling advance"
+  else
+    test_fail "anchor .implementation_notes altered (got '$notes_first','$notes_second')"
+  fi
+
+  if [ "$anchor_iter" = "3" ]; then
+    test_pass "anchor retains .iteration_count through sibling advance"
+  else
+    test_fail "anchor .iteration_count altered (got '$anchor_iter')"
+  fi
+
+  local sib_state forbidden
+  for sib_state in "$s1_state" "$s2_state"; do
+    for forbidden in molecule implementation_notes iteration_count; do
+      if jq -e "has(\"$forbidden\")" "$sib_state" | grep -q true; then
+        test_fail "$(basename "$sib_state"): must not contain '$forbidden'"
+      else
+        test_pass "$(basename "$sib_state"): omits '$forbidden'"
+      fi
+    done
+  done
+
+  teardown_test_env
+}
+
+# Test: `ralph plan -u -h` (hidden) remains single-spec; compute_spec_diff
+# bypasses fan-out for hidden specs (spec_path under state/). Sibling specs
+# in specs/ must not appear in the diff output (spec req 21).
+test_plan_update_hidden_single_spec() {
+  CURRENT_TEST="plan_update_hidden_single_spec"
+  test_header "hidden anchor: compute_spec_diff skips sibling fan-out"
+
+  setup_test_env "plan-hidden-single"
+
+  git init -q "$TEST_DIR"
+  git -C "$TEST_DIR" config user.email "test@test.com"
+  git -C "$TEST_DIR" config user.name "Test"
+  git -C "$TEST_DIR" config commit.gpgsign false
+
+  # Initial commit with a tracked sibling spec in specs/
+  create_test_spec "sibling" "# Sibling
+- init
+"
+  # Create the hidden anchor under state/ (also tracked so git diff can see it)
+  mkdir -p "$RALPH_DIR/state"
+  cat > "$RALPH_DIR/state/hidden-anchor.md" << 'EOF'
+# Hidden anchor
+- initial
+EOF
+  git -C "$TEST_DIR" add specs/sibling.md "$RALPH_DIR/state/hidden-anchor.md"
+  git -C "$TEST_DIR" commit -q -m "seed hidden anchor + sibling"
+
+  local base_commit
+  base_commit=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+  # Independent changes to both the hidden anchor and the visible sibling
+  echo "- hidden change" >> "$RALPH_DIR/state/hidden-anchor.md"
+  git -C "$TEST_DIR" add "$RALPH_DIR/state/hidden-anchor.md"
+  git -C "$TEST_DIR" commit -q -m "change hidden anchor"
+
+  echo "- sibling change" >> "$TEST_DIR/specs/sibling.md"
+  git -C "$TEST_DIR" add specs/sibling.md
+  git -C "$TEST_DIR" commit -q -m "change sibling"
+
+  setup_label_state "hidden-anchor" "true" ""
+  jq --arg bc "$base_commit" '.base_commit = $bc' \
+    "$RALPH_DIR/state/hidden-anchor.json" > "$RALPH_DIR/state/hidden-anchor.json.tmp"
+  mv "$RALPH_DIR/state/hidden-anchor.json.tmp" "$RALPH_DIR/state/hidden-anchor.json"
+
+  local output
+  output=$(cd "$TEST_DIR" && source "$REPO_ROOT/lib/ralph/cmd/util.sh" \
+    && compute_spec_diff "$RALPH_DIR/state/hidden-anchor.json")
+
+  local mode
+  mode=$(echo "$output" | head -1)
+  if [ "$mode" = "diff" ]; then
+    test_pass "hidden anchor returns 'diff' mode"
+  else
+    test_fail "hidden anchor should return 'diff' mode, got '$mode'"
+  fi
+
+  if echo "$output" | grep -q "=== specs/sibling.md ==="; then
+    test_fail "hidden spec triggered fan-out (sibling appeared in diff)"
+  else
+    test_pass "hidden anchor omits sibling specs (no fan-out)"
+  fi
+
+  if echo "$output" | grep -q "hidden change"; then
+    test_pass "hidden anchor diff contains its own changes"
+  else
+    test_fail "hidden anchor diff should include 'hidden change'"
+  fi
+
+  if echo "$output" | grep -q "sibling change"; then
+    test_fail "hidden anchor diff leaked sibling content"
+  else
+    test_pass "hidden anchor diff excludes sibling content"
+  fi
+
+  teardown_test_env
+}
+
+# Test: tasks created during a multi-spec session all bond to the anchor's
+# molecule — only the anchor's state/<anchor>.json carries `.molecule`;
+# sibling state files created by fan-out do not (spec req 21).
+test_todo_multi_spec_single_molecule() {
+  CURRENT_TEST="todo_multi_spec_single_molecule"
+  test_header "fan-out: only anchor state holds .molecule; siblings bond to it"
+
+  setup_test_env "todo-single-mol"
+  _setup_spec_diff_git "anchor"
+
+  create_test_spec "sib1" "# Sibling one
+- init
+"
+  create_test_spec "sib2" "# Sibling two
+- init
+"
+  git -C "$TEST_DIR" add specs/sib1.md specs/sib2.md
+  git -C "$TEST_DIR" commit -q -m "add siblings"
+
+  local head_commit
+  head_commit=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+  local anchor_state="$RALPH_DIR/state/anchor.json"
+  local s1_state="$RALPH_DIR/state/sib1.json"
+  local s2_state="$RALPH_DIR/state/sib2.json"
+
+  mkdir -p "$RALPH_DIR/state"
+  jq -n \
+    --arg label "anchor" \
+    --arg spec_path "specs/anchor.md" \
+    --arg mol "wx-session-mol" \
+    '{label: $label, spec_path: $spec_path, molecule: $mol, companions: []}' \
+    > "$anchor_state"
+
+  (
+    cd "$TEST_DIR" || exit 1
+    # shellcheck source=/dev/null
+    source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+    advance_spec_cursor "$s1_state" "sib1" "specs/sib1.md" "$head_commit"
+    advance_spec_cursor "$s2_state" "sib2" "specs/sib2.md" "$head_commit"
+  )
+
+  local anchor_mol s1_mol s2_mol
+  anchor_mol=$(jq -r '.molecule // empty' "$anchor_state")
+  s1_mol=$(jq -r '.molecule // empty' "$s1_state")
+  s2_mol=$(jq -r '.molecule // empty' "$s2_state")
+
+  if [ "$anchor_mol" = "wx-session-mol" ]; then
+    test_pass "anchor holds the session molecule"
+  else
+    test_fail "anchor should hold 'wx-session-mol', got '$anchor_mol'"
+  fi
+
+  if [ -z "$s1_mol" ] && [ -z "$s2_mol" ]; then
+    test_pass "sibling state files carry no .molecule (bond to anchor's)"
+  else
+    test_fail "siblings should not hold a molecule (got '$s1_mol','$s2_mol')"
+  fi
+
+  teardown_test_env
+}
+
+# Test: compute_spec_diff emits per-spec headers (`=== specs/<s>.md ===`)
+# for every spec in the fan-out candidate set. The headers are the mechanism
+# by which the task-creation LLM assigns each task a `spec:<s>` label
+# identifying which file it implements (spec req 21).
+test_todo_per_task_spec_label() {
+  CURRENT_TEST="todo_per_task_spec_label"
+  test_header "fan-out: diff output carries per-spec headers for per-task labeling"
+
+  setup_test_env "todo-per-task-label"
+  _setup_spec_diff_git "anchor"
+
+  create_test_spec "alpha" "# Alpha
+- init
+"
+  create_test_spec "beta" "# Beta
+- init
+"
+  git -C "$TEST_DIR" add specs/alpha.md specs/beta.md
+  git -C "$TEST_DIR" commit -q -m "add alpha + beta"
+
+  local base_commit
+  base_commit=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+  echo "- anchor req" >> "$TEST_DIR/specs/anchor.md"
+  git -C "$TEST_DIR" add specs/anchor.md
+  git -C "$TEST_DIR" commit -q -m "change anchor"
+
+  echo "- alpha req" >> "$TEST_DIR/specs/alpha.md"
+  git -C "$TEST_DIR" add specs/alpha.md
+  git -C "$TEST_DIR" commit -q -m "change alpha"
+
+  echo "- beta req" >> "$TEST_DIR/specs/beta.md"
+  git -C "$TEST_DIR" add specs/beta.md
+  git -C "$TEST_DIR" commit -q -m "change beta"
+
+  setup_label_state "anchor" "false" ""
+  jq --arg bc "$base_commit" '.base_commit = $bc' "$RALPH_DIR/state/anchor.json" \
+    > "$RALPH_DIR/state/anchor.json.tmp"
+  mv "$RALPH_DIR/state/anchor.json.tmp" "$RALPH_DIR/state/anchor.json"
+
+  local output
+  output=$(cd "$TEST_DIR" && source "$REPO_ROOT/lib/ralph/cmd/util.sh" \
+    && compute_spec_diff "$RALPH_DIR/state/anchor.json")
+
+  local label
+  for label in anchor alpha beta; do
+    if echo "$output" | grep -q "=== specs/${label}.md ==="; then
+      test_pass "diff output has '=== specs/${label}.md ===' header"
+    else
+      test_fail "diff output missing '=== specs/${label}.md ===' header"
+    fi
+  done
+
+  # Each header must be followed by its own spec-specific addition, so the
+  # LLM can attribute per-task spec labels accurately.
+  local spec_label block
+  for spec_label in anchor alpha beta; do
+    block=$(echo "$output" \
+      | awk -v hdr="=== specs/${spec_label}.md ===" '
+          $0 == hdr { grab = 1; next }
+          /^=== specs\// { grab = 0 }
+          grab { print }
+        ')
+    if echo "$block" | grep -Eq "^\+.*${spec_label} req"; then
+      test_pass "spec:${spec_label} block carries its own addition"
+    else
+      test_fail "spec:${spec_label} block missing '+${spec_label} req'"
+    fi
+  done
+
+  teardown_test_env
+}
+
 # Test: tier 2 — no base_commit but molecule exists → returns tasks mode
 test_todo_molecule_fallback() {
   CURRENT_TEST="todo_molecule_fallback"
@@ -11291,8 +11586,8 @@ EOF
 
 # Test: --since overrides the anchor's cursor only; siblings with their own
 # state/<s>.base_commit are not overridden (spec req 21).
-test_todo_since_preserves_sibling_cursor() {
-  CURRENT_TEST="todo_since_preserves_sibling_cursor"
+test_todo_since_anchor_only() {
+  CURRENT_TEST="todo_since_anchor_only"
   test_header "compute_spec_diff: --since overrides anchor only, siblings retain base_commit"
 
   setup_test_env "todo-since-sibling"
@@ -11371,8 +11666,8 @@ test_todo_since_preserves_sibling_cursor() {
 
 # Test: when tier 1 candidate set is empty, todo.sh prints the "No spec
 # changes since last task creation" message and exits 0 (spec req 21).
-test_todo_empty_candidate_set_early_exit() {
-  CURRENT_TEST="todo_empty_candidate_set_early_exit"
+test_todo_empty_candidate_set_exits() {
+  CURRENT_TEST="todo_empty_candidate_set_exits"
   test_header "todo.sh: empty candidate set exits early with expected message"
 
   setup_test_env "todo-empty-candidate"
@@ -14091,6 +14386,10 @@ PARALLEL_TESTS=(
   test_todo_cursor_fanout_on_complete
   test_todo_creates_sibling_state_file
   test_sibling_state_shape
+  test_anchor_owns_session_state
+  test_plan_update_hidden_single_spec
+  test_todo_multi_spec_single_molecule
+  test_todo_per_task_spec_label
   test_todo_molecule_fallback
   test_todo_new_mode_fallback
   test_todo_update_detection
@@ -14103,8 +14402,8 @@ PARALLEL_TESTS=(
   # todo.sh integration tests (git-based spec diffing)
   test_todo_uncommitted_error
   test_todo_uncommitted_sibling_error
-  test_todo_since_preserves_sibling_cursor
-  test_todo_empty_candidate_set_early_exit
+  test_todo_since_anchor_only
+  test_todo_empty_candidate_set_exits
   test_todo_sets_base_commit
   test_todo_no_base_commit_on_failure
   test_todo_no_base_commit_for_hidden
