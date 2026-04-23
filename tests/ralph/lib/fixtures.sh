@@ -220,7 +220,7 @@ EOF
 
   RALPH_SRC_DIR="$REPO_ROOT/lib/ralph/cmd"
   local script_name
-  for script_name in run todo plan status sync check spec use logs msg; do
+  for script_name in run todo plan status sync check spec use logs msg init; do
     ln -sf "$RALPH_SRC_DIR/$script_name.sh" "$TEST_DIR/bin/ralph-$script_name"
   done
 

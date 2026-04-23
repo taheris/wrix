@@ -2055,6 +2055,506 @@ test_bootstrap_claude_symlink() {
   teardown_test_env
 }
 
+test_init_host_execution() {
+  CURRENT_TEST="init_host_execution"
+  test_header "ralph init runs on host, not in a container"
+
+  local ralph_sh="$REPO_ROOT/lib/ralph/cmd/ralph.sh"
+  if grep -qE '^[[:space:]]*init\)[[:space:]]+exec[[:space:]]+ralph-init[[:space:]]' "$ralph_sh"; then
+    test_pass "ralph.sh dispatches init via direct exec (no container wrapper)"
+  else
+    test_fail "ralph.sh does not exec ralph-init directly"
+  fi
+
+  local init_sh="$REPO_ROOT/lib/ralph/cmd/init.sh"
+  if grep -qE 'wrapix[[:space:]]+run|podman[[:space:]]|docker[[:space:]]|exec_in_container' "$init_sh"; then
+    test_fail "init.sh references container invocation primitives"
+  else
+    test_pass "init.sh contains no container invocation references"
+  fi
+
+  local spec="$REPO_ROOT/specs/ralph-workflow.md"
+  if grep -qE '\| *`ralph init` *\| *host *\|' "$spec"; then
+    test_pass "spec's container execution table declares ralph init as host"
+  else
+    test_fail "spec does not declare ralph init as host in container execution table"
+  fi
+}
+
+test_init_flake_app() {
+  CURRENT_TEST="init_flake_app"
+  test_header "nix run #init invokes ralph init in cwd"
+
+  local system
+  system=$(nix eval --impure --raw --expr 'builtins.currentSystem')
+  if [ -z "$system" ]; then
+    test_fail "could not determine current system"
+    return
+  fi
+
+  local program rc=0 err_log
+  err_log=$(mktemp)
+  program=$(nix eval --raw "$REPO_ROOT#apps.${system}.init.program" 2>"$err_log") || rc=$?
+  if [ "$rc" -ne 0 ] || [ ! -x "$program" ]; then
+    test_fail "apps.${system}.init.program not resolvable or not executable: $(cat "$err_log")"
+    rm -f "$err_log"
+    return
+  fi
+  rm -f "$err_log"
+
+  if grep -qE '^[[:space:]]*exec[[:space:]]+ralph[[:space:]]+init[[:space:]]+"\$@"' "$program"; then
+    test_pass "init runner execs 'ralph init \"\$@\"' (in caller's cwd)"
+  else
+    test_fail "init runner does not exec 'ralph init' as final command"
+  fi
+
+  if grep -qE '(cd |pushd |chdir)' "$program"; then
+    test_fail "init runner changes directory before exec (breaks cwd-relative bootstrap)"
+  else
+    test_pass "init runner does not cd before exec (preserves caller cwd)"
+  fi
+
+  if grep -q 'RALPH_TEMPLATE_DIR=' "$program"; then
+    test_pass "init runner sets RALPH_TEMPLATE_DIR"
+  else
+    test_fail "init runner missing RALPH_TEMPLATE_DIR export"
+  fi
+}
+
+test_init_flake_skip_existing() {
+  CURRENT_TEST="init_flake_skip_existing"
+  test_header "ralph init creates flake.nix when absent, skips when present"
+
+  setup_test_env "init-flake-skip"
+  cd "$TEST_DIR"
+
+  local out rc=0
+  out=$(ralph init 2>&1) || rc=$?
+  if [ "$rc" -eq 0 ] && [ -f flake.nix ] && \
+     diff -q "$RALPH_TEMPLATE_DIR/flake.nix" flake.nix >/dev/null; then
+    test_pass "ralph init created flake.nix matching template"
+  else
+    test_fail "ralph init failed to create flake.nix (rc=$rc): $out"
+    teardown_test_env
+    return
+  fi
+
+  rc=0
+  out=$(ralph init 2>&1) || rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -qE 'flake\.nix[[:space:]]+\(already exists\)'; then
+    test_pass "ralph init re-run skipped flake.nix with 'already exists' reason"
+  else
+    test_fail "ralph init re-run did not skip flake.nix (rc=$rc): $out"
+  fi
+
+  teardown_test_env
+}
+
+test_init_flake_structure() {
+  CURRENT_TEST="init_flake_structure"
+  test_header "generated flake.nix uses flake-parts, apps.sandbox, devShell w/ ralph.shellHook, treefmt, checks.treefmt"
+
+  local src="$REPO_ROOT/lib/ralph/template/flake.nix"
+  if [ ! -f "$src" ]; then
+    test_fail "template flake.nix not found at $src"
+    return
+  fi
+
+  local marker
+  for marker in \
+    'flake-parts.url' \
+    'flake-parts.lib.mkFlake' \
+    'apps.sandbox' \
+    'devShells.default' \
+    'ralph.shellHook' \
+    'inputs.treefmt-nix.flakeModule' \
+    'treefmt =' \
+    'checks' \
+    'config.treefmt.build.check'
+  do
+    if grep -Fq -- "$marker" "$src"; then
+      test_pass "template flake.nix contains: $marker"
+    else
+      test_fail "template flake.nix missing: $marker"
+    fi
+  done
+}
+
+test_init_flake_systems() {
+  CURRENT_TEST="init_flake_systems"
+  test_header "generated flake.nix systems list excludes x86_64-darwin"
+
+  local src="$REPO_ROOT/lib/ralph/template/flake.nix"
+  local sys
+  for sys in '"x86_64-linux"' '"aarch64-linux"' '"aarch64-darwin"'; do
+    if grep -Fq -- "$sys" "$src"; then
+      test_pass "systems list includes $sys"
+    else
+      test_fail "systems list missing $sys"
+    fi
+  done
+
+  if grep -Fq -- '"x86_64-darwin"' "$src"; then
+    test_fail "systems list unexpectedly includes x86_64-darwin"
+  else
+    test_pass "systems list excludes x86_64-darwin"
+  fi
+}
+
+test_init_treefmt_programs() {
+  CURRENT_TEST="init_treefmt_programs"
+  test_header "generated flake.nix treefmt programs are deadnix, nixfmt, shellcheck, statix (no rustfmt)"
+
+  local src="$REPO_ROOT/lib/ralph/template/flake.nix"
+  local prog
+  for prog in deadnix nixfmt shellcheck statix; do
+    if grep -qE "${prog}\.enable[[:space:]]*=[[:space:]]*true" "$src"; then
+      test_pass "treefmt enables $prog"
+    else
+      test_fail "treefmt missing program: $prog"
+    fi
+  done
+
+  if grep -qE 'rustfmt\.enable[[:space:]]*=[[:space:]]*true' "$src"; then
+    test_fail "treefmt unexpectedly enables rustfmt (should be user opt-in)"
+  else
+    test_pass "treefmt does not enable rustfmt by default"
+  fi
+}
+
+test_init_creates_envrc() {
+  CURRENT_TEST="init_creates_envrc"
+  test_header "ralph init creates .envrc with 'use flake' content, skip-if-exists"
+
+  setup_test_env "init-envrc"
+  cd "$TEST_DIR"
+
+  local out rc=0
+  out=$(ralph init 2>&1) || rc=$?
+  if [ "$rc" -eq 0 ] && [ -f .envrc ] && [ "$(cat .envrc)" = "use flake" ]; then
+    test_pass "ralph init created .envrc with 'use flake' content"
+  else
+    test_fail "ralph init did not produce expected .envrc (rc=$rc content=$(cat .envrc 2>/dev/null || echo MISSING))"
+    teardown_test_env
+    return
+  fi
+
+  rc=0
+  out=$(ralph init 2>&1) || rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -qE '\.envrc[[:space:]]+\(already exists\)'; then
+    test_pass "ralph init re-run skipped .envrc"
+  else
+    test_fail "ralph init re-run did not skip .envrc: $out"
+  fi
+
+  teardown_test_env
+}
+
+test_init_gitignore_idempotent() {
+  CURRENT_TEST="init_gitignore_idempotent"
+  test_header "ralph init appends missing .gitignore entries idempotently"
+
+  setup_test_env "init-gitignore"
+  cd "$TEST_DIR"
+
+  local rc=0
+  ralph init >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    test_fail "ralph init failed (rc=$rc)"
+    teardown_test_env
+    return
+  fi
+
+  local entry
+  for entry in ".direnv/" ".wrapix/" "result" "result-*"; do
+    if grep -Fxq -- "$entry" .gitignore; then
+      test_pass ".gitignore contains $entry after init"
+    else
+      test_fail ".gitignore missing entry: $entry"
+    fi
+  done
+
+  rc=0
+  ralph init >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    test_fail "ralph init re-run failed (rc=$rc)"
+    teardown_test_env
+    return
+  fi
+
+  local count
+  for entry in ".direnv/" ".wrapix/" "result" "result-*"; do
+    count=$(grep -Fxc -- "$entry" .gitignore)
+    if [ "$count" = "1" ]; then
+      test_pass "$entry appears exactly once after re-run"
+    else
+      test_fail "$entry appears $count times after re-run (expected 1)"
+    fi
+  done
+
+  teardown_test_env
+}
+
+test_init_precommit_stages() {
+  CURRENT_TEST="init_precommit_stages"
+  test_header "ralph init creates .pre-commit-config.yaml with treefmt pre-commit + nix flake check pre-push stages"
+
+  setup_test_env "init-precommit"
+  cd "$TEST_DIR"
+
+  local rc=0
+  ralph init >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ] || [ ! -f .pre-commit-config.yaml ]; then
+    test_fail "ralph init did not create .pre-commit-config.yaml (rc=$rc)"
+    teardown_test_env
+    return
+  fi
+
+  if diff -q "$RALPH_TEMPLATE_DIR/pre-commit-config.yaml" .pre-commit-config.yaml >/dev/null; then
+    test_pass ".pre-commit-config.yaml matches template"
+  else
+    test_fail ".pre-commit-config.yaml differs from template"
+  fi
+
+  if grep -qE '^[[:space:]]*-[[:space:]]+id:[[:space:]]+treefmt' .pre-commit-config.yaml && \
+     grep -qE '^[[:space:]]*entry:[[:space:]]+nix fmt' .pre-commit-config.yaml; then
+    test_pass "treefmt hook registered (default pre-commit stage)"
+  else
+    test_fail "treefmt hook missing or wrong entry"
+  fi
+
+  local nix_check_line
+  nix_check_line=$(grep -n 'id: nix-flake-check' .pre-commit-config.yaml | cut -d: -f1)
+  if [ -n "$nix_check_line" ]; then
+    # Check that stages: [pre-push] follows within this hook block (next 6 lines).
+    if awk -v start="$nix_check_line" 'NR>=start && NR<=start+6' .pre-commit-config.yaml \
+       | grep -qE 'stages:[[:space:]]*\[[[:space:]]*pre-push[[:space:]]*\]'; then
+      test_pass "nix-flake-check hook runs at pre-push stage"
+    else
+      test_fail "nix-flake-check hook missing 'stages: [pre-push]'"
+    fi
+  else
+    test_fail "nix-flake-check hook not registered"
+  fi
+
+  teardown_test_env
+}
+
+test_init_bd_init_idempotent() {
+  CURRENT_TEST="init_bd_init_idempotent"
+  test_header "ralph init runs bd init when .beads/ is absent, skips otherwise"
+
+  setup_test_env "init-bd-idempotent"
+  cd "$TEST_DIR"
+
+  # Skip path: setup_test_env pre-created .beads/ → ralph init must report skip.
+  local out rc=0
+  out=$(ralph init 2>&1) || rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -qE '\.beads/[[:space:]]+\(already initialized\)'; then
+    test_pass "ralph init skipped .beads/ with 'already initialized' reason"
+  else
+    test_fail "ralph init did not skip existing .beads/ (rc=$rc): $out"
+  fi
+
+  # Create path: remove .beads/, shadow bd with a recorder, rerun ralph init.
+  rm -rf .beads
+  mkdir "$TEST_DIR/mockbin"
+  local bd_log="$TEST_DIR/bd-invocations.log"
+  cat > "$TEST_DIR/mockbin/bd" <<EOF
+#!/usr/bin/env bash
+echo "\$@" >> "$bd_log"
+case "\$1" in
+  init) mkdir -p .beads ;;
+esac
+exit 0
+EOF
+  chmod +x "$TEST_DIR/mockbin/bd"
+
+  rc=0
+  PATH="$TEST_DIR/mockbin:$PATH" out=$(PATH="$TEST_DIR/mockbin:$PATH" ralph init 2>&1) || rc=$?
+  if [ "$rc" -eq 0 ] && grep -Fxq 'init' "$bd_log"; then
+    test_pass "ralph init invoked 'bd init' when .beads/ was absent"
+  else
+    test_fail "ralph init did not invoke 'bd init' (rc=$rc log=$(cat "$bd_log" 2>/dev/null)): $out"
+  fi
+
+  if [ -d .beads ] && echo "$out" | grep -qE '\.beads/'; then
+    test_pass "ralph init reported .beads/ in summary after creation"
+  else
+    test_fail ".beads/ was not created or not reported: $out"
+  fi
+
+  teardown_test_env
+}
+
+test_init_scaffolds_docs() {
+  CURRENT_TEST="init_scaffolds_docs"
+  test_header "ralph init scaffolds docs/ via shared scaffold_docs"
+
+  setup_test_env "init-scaffolds-docs"
+  cd "$TEST_DIR"
+
+  # setup_test_env pre-creates docs/README.md; remove docs/ to exercise the
+  # full scaffold path end-to-end (README.md re-created, plus architecture and
+  # style-guidelines).
+  rm -rf docs
+
+  local rc=0
+  ralph init >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    test_fail "ralph init failed (rc=$rc)"
+    teardown_test_env
+    return
+  fi
+
+  local f
+  for f in docs/README.md docs/architecture.md docs/style-guidelines.md; do
+    if [ -f "$f" ]; then
+      test_pass "ralph init scaffolded $f"
+    else
+      test_fail "ralph init did not scaffold $f"
+    fi
+  done
+
+  # init.sh must delegate to the shared util.sh helper rather than inlining.
+  local init_sh="$REPO_ROOT/lib/ralph/cmd/init.sh"
+  if grep -qE '^[[:space:]]*run_scaffold[[:space:]]+scaffold_docs' "$init_sh"; then
+    test_pass "init.sh invokes shared scaffold_docs helper"
+  else
+    test_fail "init.sh does not call scaffold_docs"
+  fi
+
+  teardown_test_env
+}
+
+test_init_creates_agents() {
+  CURRENT_TEST="init_creates_agents"
+  test_header "ralph init creates AGENTS.md via shared scaffold_agents"
+
+  setup_test_env "init-creates-agents"
+  cd "$TEST_DIR"
+
+  local rc=0
+  ralph init >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    test_fail "ralph init failed (rc=$rc)"
+    teardown_test_env
+    return
+  fi
+
+  if [ -f AGENTS.md ] && [ -s AGENTS.md ]; then
+    test_pass "ralph init created AGENTS.md"
+  else
+    test_fail "AGENTS.md missing or empty after ralph init"
+  fi
+
+  local init_sh="$REPO_ROOT/lib/ralph/cmd/init.sh"
+  if grep -qE '^[[:space:]]*run_scaffold[[:space:]]+scaffold_agents' "$init_sh"; then
+    test_pass "init.sh invokes shared scaffold_agents helper"
+  else
+    test_fail "init.sh does not call scaffold_agents"
+  fi
+
+  teardown_test_env
+}
+
+test_init_claude_symlink() {
+  CURRENT_TEST="init_claude_symlink"
+  test_header "ralph init creates CLAUDE.md symlink when absent, skips when CLAUDE.md exists"
+
+  setup_test_env "init-claude-symlink"
+  cd "$TEST_DIR"
+
+  # Fresh dir: CLAUDE.md absent → symlink created.
+  local rc=0
+  ralph init >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -eq 0 ] && [ -L CLAUDE.md ] && [ "$(readlink CLAUDE.md)" = "AGENTS.md" ]; then
+    test_pass "ralph init created CLAUDE.md -> AGENTS.md symlink"
+  else
+    test_fail "CLAUDE.md not a symlink to AGENTS.md (rc=$rc)"
+    teardown_test_env
+    return
+  fi
+
+  # Re-run with existing symlink → skipped, symlink preserved.
+  rc=0
+  local out
+  out=$(ralph init 2>&1) || rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -qE 'CLAUDE\.md[[:space:]]+\(already exists\)' && \
+     [ -L CLAUDE.md ]; then
+    test_pass "ralph init re-run skipped existing CLAUDE.md symlink"
+  else
+    test_fail "re-run did not skip existing symlink (rc=$rc): $out"
+  fi
+
+  # Replace symlink with a regular file → still skipped, contents preserved.
+  rm CLAUDE.md
+  echo "# manual notes" > CLAUDE.md
+  rc=0
+  ralph init >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -eq 0 ] && [ ! -L CLAUDE.md ] && [ "$(cat CLAUDE.md)" = "# manual notes" ]; then
+    test_pass "ralph init leaves existing regular CLAUDE.md untouched"
+  else
+    test_fail "ralph init overwrote existing CLAUDE.md file (rc=$rc)"
+  fi
+
+  teardown_test_env
+}
+
+test_init_scaffolds_templates() {
+  CURRENT_TEST="init_scaffolds_templates"
+  test_header "ralph init populates .wrapix/ralph/template/ via shared scaffold_templates"
+
+  setup_test_env "init-scaffolds-templates"
+  cd "$TEST_DIR"
+
+  # setup_test_env pre-populates .wrapix/ralph/template/; clear it so the
+  # scaffold path actually runs.
+  rm -rf .wrapix/ralph/template
+
+  local rc=0
+  ralph init >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    test_fail "ralph init failed (rc=$rc)"
+    teardown_test_env
+    return
+  fi
+
+  if [ -d .wrapix/ralph/template ]; then
+    test_pass "ralph init created .wrapix/ralph/template/"
+  else
+    test_fail ".wrapix/ralph/template/ missing after ralph init"
+    teardown_test_env
+    return
+  fi
+
+  if [ -d .wrapix/ralph/template/partial ]; then
+    test_pass "scaffold populated partial/ subdirectory"
+  else
+    test_fail "partial/ subdirectory missing"
+  fi
+
+  # Expect at least the core workflow templates to have landed in the project.
+  local t missing=()
+  for t in run.md plan-new.md todo-new.md; do
+    [ -f ".wrapix/ralph/template/$t" ] || missing+=("$t")
+  done
+  if [ ${#missing[@]} -eq 0 ]; then
+    test_pass "core template files present (run.md, plan-new.md, todo-new.md)"
+  else
+    test_fail "missing templates: ${missing[*]}"
+  fi
+
+  local init_sh="$REPO_ROOT/lib/ralph/cmd/init.sh"
+  if grep -qE '^[[:space:]]*run_scaffold[[:space:]]+scaffold_templates' "$init_sh"; then
+    test_pass "init.sh invokes shared scaffold_templates helper"
+  else
+    test_fail "init.sh does not call scaffold_templates"
+  fi
+
+  teardown_test_env
+}
+
 # Test: scaffold_docs, scaffold_agents, scaffold_templates live in util.sh and
 # are invoked by the same code path from ralph init and ralph sync (single
 # source of truth). Verifies (a) the helpers are defined in util.sh, (b) they
@@ -12860,6 +13360,20 @@ PARALLEL_TESTS=(
   test_bootstrap_precommit
   test_bootstrap_beads_skip
   test_bootstrap_claude_symlink
+  test_init_host_execution
+  test_init_flake_app
+  test_init_flake_skip_existing
+  test_init_flake_structure
+  test_init_flake_systems
+  test_init_treefmt_programs
+  test_init_creates_envrc
+  test_init_gitignore_idempotent
+  test_init_precommit_stages
+  test_init_bd_init_idempotent
+  test_init_scaffolds_docs
+  test_init_creates_agents
+  test_init_claude_symlink
+  test_init_scaffolds_templates
   test_scaffold_shared_code_path
   test_wrapix_flake_exposes_init
   test_wrapix_ralph_shellhook_passthru
