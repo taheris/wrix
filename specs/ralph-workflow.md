@@ -470,7 +470,7 @@ ralph init                            # from inside a devShell
 
 **`flake.nix` template (`lib/ralph/template/flake.nix`):**
 
-Uses flake-parts with an `apps.sandbox` app, a `devShells.default` composing `${ralph.shellHook}` (exposed as a passthru on wrapix's ralph package), treefmt-nix integration, and `checks.treefmt`:
+Uses flake-parts with an `apps.sandbox` app, a `devShells.default` composing `${ralph.shellHook}` (exposed as a passthru on wrapix's ralph package), and treefmt-nix integration. `checks.treefmt` is not declared explicitly — `inputs.treefmt-nix.flakeModule` registers it automatically, and defining it twice triggers a multiple-definition evaluation error:
 
 ```nix
 {
@@ -519,10 +519,6 @@ Uses flake-parts with an `apps.sandbox` app, a `devShells.default` composing `${
             settings.formatter = {
               shellcheck.excludes = [ ".envrc" ];
             };
-          };
-
-          checks = {
-            treefmt = config.treefmt.build.check inputs.self;
           };
         };
     };
