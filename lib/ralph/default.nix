@@ -60,6 +60,30 @@ in
 {
   inherit scripts templateDir;
 
+  # `shellHook` passthru is composed by lib/ralph/template/flake.nix.
+  package = scripts.overrideAttrs (old: {
+    passthru = (old.passthru or { }) // {
+      shellHook = ''
+        export PATH="${scripts}/bin:$PATH"
+        export RALPH_TEMPLATE_DIR="''${RALPH_TEMPLATE_DIR:-${templateDir}}"
+        export RALPH_METADATA_DIR="${scripts}/share/ralph"
+      '';
+    };
+  });
+
+  # `nix run #init` — wraps `ralph init` with template/metadata env and bd on PATH.
+  initApp = {
+    meta.description = "Bootstrap a wrapix project in cwd";
+    type = "app";
+    program = "${pkgs.writeShellScriptBin "ralph-init-runner" ''
+      set -euo pipefail
+      export PATH="${scripts}/bin:${pkgs.beads}/bin:$PATH"
+      export RALPH_TEMPLATE_DIR="${templateDir}"
+      export RALPH_METADATA_DIR="${scripts}/share/ralph"
+      exec ralph init "$@"
+    ''}/bin/ralph-init-runner";
+  };
+
   # Template validation for flake checks
   # Usage: ralph.lib.mkTemplatesCheck pkgs
   mkTemplatesCheck = templateModule.mkTemplatesCheck pkgs;

@@ -181,6 +181,7 @@
 
             apps = {
               city = city.app;
+              init = wrapix.ralphInitApp;
               ralph = city.ralph.app;
               test = test.app;
               test-city = test.apps.city;
@@ -228,6 +229,7 @@
                 inherit (pkgs) beads gc;
                 default = sandboxPkgs.sandbox;
                 city-config = city.configDir;
+                ralph = wrapix.ralphPackage;
                 tmux-mcp = import ./lib/mcp/tmux/mcp-server.nix { inherit pkgs; };
                 wrapix-builder = import ./lib/builder { inherit pkgs linuxPkgs; };
                 wrapix-notifyd = import ./lib/notify/daemon.nix { inherit pkgs; };

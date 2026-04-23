@@ -32,6 +32,8 @@ in
   inherit (sandbox) profiles mkSandbox;
   inherit (city) mkCity;
   inherit (ralph) mkRalph scripts;
+  ralphPackage = ralph.package;
+  ralphInitApp = ralph.initApp;
   inherit beads;
 
   deriveProfile =

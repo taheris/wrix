@@ -2143,6 +2143,93 @@ test_scaffold_shared_code_path() {
   teardown_test_env
 }
 
+# Test: top-level flake exposes apps.${system}.init for `nix run #init`.
+test_wrapix_flake_exposes_init() {
+  CURRENT_TEST="wrapix_flake_exposes_init"
+  test_header "Top-level wrapix flake exposes apps.\${system}.init"
+
+  local system
+  system=$(nix eval --impure --raw --expr 'builtins.currentSystem')
+  if [ -z "$system" ]; then
+    test_fail "could not determine current system"
+    return
+  fi
+
+  local err_log app_type rc
+  err_log=$(mktemp)
+  app_type=$(nix eval --raw "$REPO_ROOT#apps.${system}.init.type" 2>"$err_log") && rc=0 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    test_fail "nix eval apps.${system}.init.type failed (rc=$rc): $(cat "$err_log")"
+    rm -f "$err_log"
+    return
+  fi
+  if [ "$app_type" = "app" ]; then
+    test_pass "apps.${system}.init.type == \"app\""
+  else
+    test_fail "apps.${system}.init.type expected 'app', got: $app_type"
+    rm -f "$err_log"
+    return
+  fi
+
+  local program
+  program=$(nix eval --raw "$REPO_ROOT#apps.${system}.init.program" 2>"$err_log") && rc=0 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    test_fail "nix eval apps.${system}.init.program failed (rc=$rc): $(cat "$err_log")"
+    rm -f "$err_log"
+    return
+  fi
+  if [[ "$program" == /nix/store/*-ralph-init-runner/bin/ralph-init-runner ]]; then
+    test_pass "apps.${system}.init.program points to ralph-init-runner"
+  else
+    test_fail "apps.${system}.init.program unexpected value: $program"
+  fi
+  rm -f "$err_log"
+}
+
+# Test: top-level flake exposes packages.${system}.ralph.shellHook passthru
+# composed by lib/ralph/template/flake.nix.
+test_wrapix_ralph_shellhook_passthru() {
+  CURRENT_TEST="wrapix_ralph_shellhook_passthru"
+  test_header "Top-level wrapix flake exposes packages.\${system}.ralph.shellHook"
+
+  local system
+  system=$(nix eval --impure --raw --expr 'builtins.currentSystem')
+  if [ -z "$system" ]; then
+    test_fail "could not determine current system"
+    return
+  fi
+
+  local err_log hook rc
+  err_log=$(mktemp)
+  hook=$(nix eval --raw "$REPO_ROOT#packages.${system}.ralph.shellHook" 2>"$err_log") && rc=0 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    test_fail "nix eval packages.${system}.ralph.shellHook failed (rc=$rc): $(cat "$err_log")"
+    rm -f "$err_log"
+    return
+  fi
+  rm -f "$err_log"
+  if [ -z "$hook" ]; then
+    test_fail "packages.${system}.ralph.shellHook is empty"
+    return
+  fi
+
+  local marker
+  for marker in 'export PATH=' 'RALPH_TEMPLATE_DIR' 'RALPH_METADATA_DIR' 'ralph-scripts'; do
+    if echo "$hook" | grep -Fq -- "$marker"; then
+      test_pass "shellHook contains: $marker"
+    else
+      test_fail "shellHook missing: $marker"
+    fi
+  done
+
+  # Pre-set RALPH_TEMPLATE_DIR must win (parameter expansion `${...:-default}`).
+  if echo "$hook" | grep -Fq 'RALPH_TEMPLATE_DIR:-'; then
+    test_pass "shellHook respects pre-set RALPH_TEMPLATE_DIR"
+  else
+    test_fail "shellHook overrides RALPH_TEMPLATE_DIR unconditionally"
+  fi
+}
+
 # Test: clarify label helpers operate against live beads (add appends to
 # description, label gates notifications, list returns tagged beads only)
 test_clarify_label_helpers() {
@@ -12774,6 +12861,8 @@ PARALLEL_TESTS=(
   test_bootstrap_beads_skip
   test_bootstrap_claude_symlink
   test_scaffold_shared_code_path
+  test_wrapix_flake_exposes_init
+  test_wrapix_ralph_shellhook_passthru
   test_plan_flag_validation
   test_plan_per_label_state_files
   test_plan_update_direct_edit
