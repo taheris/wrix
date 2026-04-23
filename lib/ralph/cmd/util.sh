@@ -1640,6 +1640,37 @@ compute_spec_diff() {
 }
 
 #-----------------------------------------------------------------------------
+# Spec Cursor Advancement (Per-Spec Fan-Out on RALPH_COMPLETE)
+#
+# Sets base_commit = <head_commit> on <state_file>. If the state file does
+# not exist, creates it with the minimal sibling shape:
+#     {label, spec_path, base_commit, companions: []}
+# Sibling state files MUST NOT contain molecule/implementation_notes/
+# iteration_count — those are anchor-only fields (spec req 21).
+#
+# Usage: advance_spec_cursor <state_file> <label> <spec_path> <head_commit>
+#-----------------------------------------------------------------------------
+advance_spec_cursor() {
+  local state_file="$1"
+  local label="$2"
+  local spec_path="$3"
+  local head_commit="$4"
+
+  if [ -f "$state_file" ]; then
+    jq --arg bc "$head_commit" '.base_commit = $bc' \
+      "$state_file" > "$state_file.tmp" && mv "$state_file.tmp" "$state_file"
+  else
+    mkdir -p "$(dirname "$state_file")"
+    jq -n \
+      --arg label "$label" \
+      --arg spec_path "$spec_path" \
+      --arg bc "$head_commit" \
+      '{label: $label, spec_path: $spec_path, base_commit: $bc, companions: []}' \
+      > "$state_file"
+  fi
+}
+
+#-----------------------------------------------------------------------------
 # Molecule Discovery from README
 #
 # Parses the configured pinnedContext file to find a molecule ID by spec

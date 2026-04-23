@@ -10668,6 +10668,164 @@ test_todo_sibling_orphan_fallback() {
   teardown_test_env
 }
 
+# Test: RALPH_COMPLETE fan-out advances base_commit for specs that received tasks
+test_todo_cursor_fanout_on_complete() {
+  CURRENT_TEST="todo_cursor_fanout_on_complete"
+  test_header "advance_spec_cursor: anchor + sibling cursors advance on RALPH_COMPLETE"
+
+  setup_test_env "todo-cursor-fanout"
+  _setup_spec_diff_git "anchor"
+
+  create_test_spec "sibling" "# Sibling
+- init
+"
+  git -C "$TEST_DIR" add specs/sibling.md
+  git -C "$TEST_DIR" commit -q -m "add sibling"
+
+  echo "- anchor update" >> "$TEST_DIR/specs/anchor.md"
+  git -C "$TEST_DIR" add specs/anchor.md
+  git -C "$TEST_DIR" commit -q -m "anchor update"
+  echo "- sibling update" >> "$TEST_DIR/specs/sibling.md"
+  git -C "$TEST_DIR" add specs/sibling.md
+  git -C "$TEST_DIR" commit -q -m "sibling update"
+
+  local head_commit
+  head_commit=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+  setup_label_state "anchor" "false" "wx-mol"
+
+  (
+    cd "$TEST_DIR" || exit 1
+    # shellcheck source=/dev/null
+    source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+    advance_spec_cursor "$RALPH_DIR/state/anchor.json" "anchor" "specs/anchor.md" "$head_commit"
+    advance_spec_cursor "$RALPH_DIR/state/sibling.json" "sibling" "specs/sibling.md" "$head_commit"
+  )
+
+  local anchor_bc sibling_bc
+  anchor_bc=$(jq -r '.base_commit' "$RALPH_DIR/state/anchor.json")
+  sibling_bc=$(jq -r '.base_commit' "$RALPH_DIR/state/sibling.json")
+
+  if [ "$anchor_bc" = "$head_commit" ]; then
+    test_pass "anchor base_commit advanced to HEAD"
+  else
+    test_fail "anchor base_commit '$anchor_bc' != HEAD '$head_commit'"
+  fi
+
+  if [ "$sibling_bc" = "$head_commit" ]; then
+    test_pass "sibling base_commit advanced to HEAD"
+  else
+    test_fail "sibling base_commit '$sibling_bc' != HEAD '$head_commit'"
+  fi
+
+  teardown_test_env
+}
+
+# Test: sibling state file is created on demand when fan-out touches a new spec
+test_todo_creates_sibling_state_file() {
+  CURRENT_TEST="todo_creates_sibling_state_file"
+  test_header "advance_spec_cursor: creates sibling state file when missing"
+
+  setup_test_env "todo-creates-sibling"
+  _setup_spec_diff_git "anchor"
+  local head_commit
+  head_commit=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+  local sibling_state="$RALPH_DIR/state/new-sibling.json"
+  if [ ! -f "$sibling_state" ]; then
+    test_pass "sibling state file absent before fan-out"
+  else
+    test_fail "sibling state file should not exist pre-fan-out"
+  fi
+
+  (
+    cd "$TEST_DIR" || exit 1
+    # shellcheck source=/dev/null
+    source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+    advance_spec_cursor "$sibling_state" "new-sibling" "specs/new-sibling.md" "$head_commit"
+  )
+
+  if [ -f "$sibling_state" ]; then
+    test_pass "sibling state file created"
+  else
+    test_fail "sibling state file should have been created"
+    teardown_test_env
+    return
+  fi
+
+  local label spec_path base_commit companions_type
+  label=$(jq -r '.label' "$sibling_state")
+  spec_path=$(jq -r '.spec_path' "$sibling_state")
+  base_commit=$(jq -r '.base_commit' "$sibling_state")
+  companions_type=$(jq -r '.companions | type' "$sibling_state")
+
+  if [ "$label" = "new-sibling" ]; then
+    test_pass "sibling state has label='new-sibling'"
+  else
+    test_fail "sibling state label '$label' != 'new-sibling'"
+  fi
+
+  if [ "$spec_path" = "specs/new-sibling.md" ]; then
+    test_pass "sibling state has spec_path='specs/new-sibling.md'"
+  else
+    test_fail "sibling state spec_path '$spec_path' != 'specs/new-sibling.md'"
+  fi
+
+  if [ "$base_commit" = "$head_commit" ]; then
+    test_pass "sibling state base_commit = HEAD"
+  else
+    test_fail "sibling state base_commit '$base_commit' != HEAD '$head_commit'"
+  fi
+
+  if [ "$companions_type" = "array" ]; then
+    test_pass "sibling state companions is array"
+  else
+    test_fail "sibling state companions is '$companions_type', expected 'array'"
+  fi
+
+  teardown_test_env
+}
+
+# Test: sibling state files omit anchor-only fields (molecule/notes/iterations)
+test_sibling_state_shape() {
+  CURRENT_TEST="sibling_state_shape"
+  test_header "advance_spec_cursor: sibling state shape excludes anchor-only fields"
+
+  setup_test_env "sibling-state-shape"
+  _setup_spec_diff_git "anchor"
+  local head_commit
+  head_commit=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+  local sibling_state="$RALPH_DIR/state/sibling.json"
+  mkdir -p "$RALPH_DIR/state"
+
+  (
+    cd "$TEST_DIR" || exit 1
+    # shellcheck source=/dev/null
+    source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+    advance_spec_cursor "$sibling_state" "sibling" "specs/sibling.md" "$head_commit"
+  )
+
+  local keys
+  keys=$(jq -r 'keys | sort | join(",")' "$sibling_state")
+  if [ "$keys" = "base_commit,companions,label,spec_path" ]; then
+    test_pass "sibling state contains exactly the allowed 4 keys"
+  else
+    test_fail "sibling state keys '$keys' != 'base_commit,companions,label,spec_path'"
+  fi
+
+  local forbidden
+  for forbidden in molecule implementation_notes iteration_count; do
+    if jq -e "has(\"$forbidden\")" "$sibling_state" | grep -q true; then
+      test_fail "sibling state must not contain '$forbidden'"
+    else
+      test_pass "sibling state omits '$forbidden'"
+    fi
+  done
+
+  teardown_test_env
+}
+
 # Test: tier 2 — no base_commit but molecule exists → returns tasks mode
 test_todo_molecule_fallback() {
   CURRENT_TEST="todo_molecule_fallback"
@@ -13728,6 +13886,9 @@ PARALLEL_TESTS=(
   test_todo_per_spec_cursor
   test_todo_sibling_seed_from_anchor
   test_todo_sibling_orphan_fallback
+  test_todo_cursor_fanout_on_complete
+  test_todo_creates_sibling_state_file
+  test_sibling_state_shape
   test_todo_molecule_fallback
   test_todo_new_mode_fallback
   test_todo_update_detection

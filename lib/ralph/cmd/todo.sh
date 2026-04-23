@@ -217,6 +217,22 @@ DIFF_OUTPUT=$(compute_spec_diff "$STATE_FILE" "${DIFF_ARGS[@]+"${DIFF_ARGS[@]}"}
 DIFF_MODE=$(echo "$DIFF_OUTPUT" | head -1)
 DIFF_CONTENT=$(echo "$DIFF_OUTPUT" | tail -n +2)
 
+# Pre-count tasks per tier-1 fan-out candidate so RALPH_COMPLETE can detect
+# which specs received tasks this session (spec req 21).
+FANOUT_SPECS=()
+declare -A FANOUT_PRE_COUNTS=()
+if [ "$DIFF_MODE" = "diff" ] && [ "$SPEC_HIDDEN" = "false" ]; then
+  while IFS= read -r _fo_line; do
+    if [[ "$_fo_line" =~ ^===[[:space:]]+(specs/[^[:space:]]+\.md)[[:space:]]+===$ ]]; then
+      _fo_label=$(basename "${BASH_REMATCH[1]}" .md)
+      FANOUT_SPECS+=("$_fo_label")
+      FANOUT_PRE_COUNTS["$_fo_label"]=$(bd list -l "spec:$_fo_label" --json 2>/dev/null \
+        | jq 'length' 2>/dev/null || echo 0)
+    fi
+  done <<< "$DIFF_CONTENT"
+  unset _fo_line _fo_label
+fi
+
 SPEC_CONTENT=""
 if [ -f "$SPEC_PATH" ]; then
   SPEC_CONTENT=$(cat "$SPEC_PATH")
@@ -431,10 +447,39 @@ if jq -e '[.[] | select(.type == "result") | .result | contains("RALPH_COMPLETE"
     exit 1
   fi
 
-  # Atomic: clear implementation_notes + set base_commit in one write — either both land or neither
+  # Per-spec cursor fan-out (spec req 21).
+  HEAD_COMMIT=$(git rev-parse HEAD)
+  ANCHOR_RECEIVED_TASKS=1
+  if [ "$DIFF_MODE" = "diff" ] && [ "$SPEC_HIDDEN" = "false" ]; then
+    _anchor_in_fanout=0
+    for _fo_label in "${FANOUT_SPECS[@]+"${FANOUT_SPECS[@]}"}"; do
+      _fo_pre="${FANOUT_PRE_COUNTS[$_fo_label]:-0}"
+      _fo_post=$(bd list -l "spec:$_fo_label" --json 2>/dev/null \
+        | jq 'length' 2>/dev/null || echo 0)
+      if [ "$_fo_label" = "$LABEL" ]; then
+        _anchor_in_fanout=1
+        if [ "$_fo_post" -le "$_fo_pre" ]; then
+          ANCHOR_RECEIVED_TASKS=0
+        fi
+        continue
+      fi
+      if [ "$_fo_post" -le "$_fo_pre" ]; then
+        continue
+      fi
+      _fo_state="$RALPH_DIR/state/${_fo_label}.json"
+      advance_spec_cursor "$_fo_state" "$_fo_label" "specs/${_fo_label}.md" "$HEAD_COMMIT"
+      echo "Advanced sibling $_fo_label base_commit: $HEAD_COMMIT"
+    done
+    if [ "$_anchor_in_fanout" = "0" ]; then
+      ANCHOR_RECEIVED_TASKS=0
+    fi
+    unset _fo_label _fo_pre _fo_post _fo_state _anchor_in_fanout
+  fi
+
+  # Anchor always clears implementation_notes; base_commit advances only when
+  # the anchor itself received tasks (same rule as siblings).
   if [ -f "$STATE_FILE" ]; then
-    if [ "$SPEC_HIDDEN" = "false" ]; then
-      HEAD_COMMIT=$(git rev-parse HEAD)
+    if [ "$SPEC_HIDDEN" = "false" ] && [ "$ANCHOR_RECEIVED_TASKS" = "1" ]; then
       jq --arg bc "$HEAD_COMMIT" 'del(.implementation_notes) | .base_commit = $bc' \
         "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
       echo ""
