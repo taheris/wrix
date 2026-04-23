@@ -196,15 +196,48 @@ if [ ! -f "$SPEC_PATH" ]; then
   exit 1
 fi
 
-# Check for uncommitted spec changes (git-tracked specs only)
-if [ "$SPEC_HIDDEN" = "false" ] && git ls-files --error-unmatch "$SPEC_PATH" >/dev/null 2>&1; then
-  if ! git diff --quiet -- "$SPEC_PATH" || ! git diff --cached --quiet -- "$SPEC_PATH"; then
-    echo "Error: Uncommitted changes detected in $SPEC_PATH"
+# Check for uncommitted spec changes (git-tracked specs only).
+# Guard covers the anchor plus every sibling in the tier 1 candidate set
+# (spec req 21: anchor-driven multi-spec planning).
+check_uncommitted_spec() {
+  local path="$1"
+  if ! git ls-files --error-unmatch "$path" >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! git diff --quiet -- "$path" || ! git diff --cached --quiet -- "$path"; then
+    echo "Error: Uncommitted changes detected in $path"
     echo ""
     echo "Spec changes must be committed before running ralph todo."
-    echo "  git add $SPEC_PATH && git commit -m 'Update $LABEL spec'"
+    echo "  git add $path && git commit -m 'Update spec'"
     exit 1
   fi
+}
+
+if [ "$SPEC_HIDDEN" = "false" ]; then
+  check_uncommitted_spec "$SPEC_PATH"
+
+  # Widen to tier 1 candidate set: every spec changed since anchor's cursor
+  # (override with --since applies to the anchor only — siblings keep their
+  # own state/<s>.base_commit).
+  ANCHOR_BASE_FOR_GUARD=""
+  if [ -f "$STATE_FILE" ]; then
+    ANCHOR_BASE_FOR_GUARD=$(jq -r '.base_commit // ""' "$STATE_FILE")
+  fi
+  if [ -n "$SINCE_FLAG" ] \
+    && git rev-parse --verify "${SINCE_FLAG}^{commit}" >/dev/null 2>&1; then
+    ANCHOR_BASE_FOR_GUARD="$SINCE_FLAG"
+  fi
+  if [ -n "$ANCHOR_BASE_FOR_GUARD" ] \
+    && git rev-parse --verify "${ANCHOR_BASE_FOR_GUARD}^{commit}" >/dev/null 2>&1 \
+    && git merge-base --is-ancestor "$ANCHOR_BASE_FOR_GUARD" HEAD >/dev/null 2>&1; then
+    while IFS= read -r _cand_path; do
+      [ -z "$_cand_path" ] && continue
+      [ "$_cand_path" = "$SPEC_PATH" ] && continue
+      check_uncommitted_spec "$_cand_path"
+    done < <(git diff "$ANCHOR_BASE_FOR_GUARD" HEAD --name-only -- specs/)
+    unset _cand_path
+  fi
+  unset ANCHOR_BASE_FOR_GUARD
 fi
 
 # Use compute_spec_diff for four-tier detection

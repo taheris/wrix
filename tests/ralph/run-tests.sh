@@ -11210,6 +11210,194 @@ EOF
   teardown_test_env
 }
 
+# Test: todo.sh widens uncommitted guard to tier 1 candidate set (spec req 21).
+# A sibling spec with both a committed change (so it enters the candidate set
+# via `git diff anchor.base_commit HEAD --name-only`) and an uncommitted change
+# must abort ralph todo with a non-zero exit and an error message naming the
+# sibling path.
+test_todo_uncommitted_sibling_error() {
+  CURRENT_TEST="todo_uncommitted_sibling_error"
+  test_header "todo.sh: uncommitted sibling spec in candidate set errors"
+
+  setup_test_env "todo-uncommitted-sibling"
+  _setup_spec_diff_git "anchor"
+
+  create_test_spec "sibling" "# Sibling
+- init
+"
+  git -C "$TEST_DIR" add specs/sibling.md
+  git -C "$TEST_DIR" commit -q -m "add sibling"
+
+  local base_commit
+  base_commit=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+  # Commit a change to sibling so it enters the candidate set.
+  echo "- sibling committed" >> "$TEST_DIR/specs/sibling.md"
+  git -C "$TEST_DIR" add specs/sibling.md
+  git -C "$TEST_DIR" commit -q -m "change sibling"
+
+  # Commit a change to the anchor so the anchor check itself passes.
+  echo "- anchor committed" >> "$TEST_DIR/specs/anchor.md"
+  git -C "$TEST_DIR" add specs/anchor.md
+  git -C "$TEST_DIR" commit -q -m "change anchor"
+
+  # Now add an uncommitted change to the sibling — this must be caught.
+  echo "- sibling uncommitted" >> "$TEST_DIR/specs/sibling.md"
+
+  setup_label_state "anchor" "false" ""
+  jq --arg bc "$base_commit" '.base_commit = $bc' "$RALPH_DIR/state/anchor.json" \
+    > "$RALPH_DIR/state/anchor.json.tmp"
+  mv "$RALPH_DIR/state/anchor.json.tmp" "$RALPH_DIR/state/anchor.json"
+
+  cat > "$RALPH_DIR/config.nix" << 'EOF'
+{ output = {}; }
+EOF
+
+  local output exit_code=0
+  output=$(
+    cd "$TEST_DIR"
+    export RALPH_DIR
+    bash "$REPO_ROOT/lib/ralph/cmd/todo.sh" 2>&1
+  ) || exit_code=$?
+
+  if [ "$exit_code" -ne 0 ]; then
+    test_pass "todo.sh exits non-zero when sibling spec has uncommitted changes"
+  else
+    test_fail "todo.sh should error on uncommitted sibling spec"
+  fi
+
+  if echo "$output" | grep -q "specs/sibling.md"; then
+    test_pass "error message names the sibling spec"
+  else
+    test_fail "error message should name specs/sibling.md; got: $output"
+  fi
+
+  teardown_test_env
+}
+
+# Test: --since overrides the anchor's cursor only; siblings with their own
+# state/<s>.base_commit are not overridden (spec req 21).
+test_todo_since_preserves_sibling_cursor() {
+  CURRENT_TEST="todo_since_preserves_sibling_cursor"
+  test_header "compute_spec_diff: --since overrides anchor only, siblings retain base_commit"
+
+  setup_test_env "todo-since-sibling"
+  _setup_spec_diff_git "anchor"
+
+  create_test_spec "sibling" "# Sibling
+- init
+"
+  git -C "$TEST_DIR" add specs/sibling.md
+  git -C "$TEST_DIR" commit -q -m "add sibling"
+
+  # T0 — --since anchor cursor (before any spec edits)
+  local since_commit
+  since_commit=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+  # Sibling change at T1 — committed but BEFORE sibling's own base_commit
+  echo "- sibling pre-cursor" >> "$TEST_DIR/specs/sibling.md"
+  git -C "$TEST_DIR" add specs/sibling.md
+  git -C "$TEST_DIR" commit -q -m "sibling pre-cursor change"
+
+  # Sibling's own cursor lands at T1
+  local sibling_base
+  sibling_base=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+  # Sibling change at T2 — the only change that should appear in diff
+  echo "- sibling post-cursor" >> "$TEST_DIR/specs/sibling.md"
+  git -C "$TEST_DIR" add specs/sibling.md
+  git -C "$TEST_DIR" commit -q -m "sibling post-cursor change"
+
+  # Anchor state has NO base_commit (will be overridden by --since)
+  setup_label_state "anchor" "false" ""
+
+  # Sibling state has its own base_commit at T1
+  setup_label_state "sibling" "false" ""
+  jq --arg bc "$sibling_base" '.base_commit = $bc' "$RALPH_DIR/state/sibling.json" \
+    > "$RALPH_DIR/state/sibling.json.tmp"
+  mv "$RALPH_DIR/state/sibling.json.tmp" "$RALPH_DIR/state/sibling.json"
+
+  echo "anchor" > "$RALPH_DIR/state/current"
+
+  local output
+  output=$(cd "$TEST_DIR" && source "$REPO_ROOT/lib/ralph/cmd/util.sh" \
+    && compute_spec_diff "$RALPH_DIR/state/anchor.json" --since "$since_commit")
+
+  # Sibling must be in candidate set (changed since --since anchor cursor)
+  if echo "$output" | grep -q "=== specs/sibling.md ==="; then
+    test_pass "sibling appears in fan-out under --since"
+  else
+    test_fail "sibling should appear in fan-out; got: $output"
+  fi
+
+  # Sibling diff must be computed from its OWN base_commit (T1), not from
+  # --since (T0). So "sibling pre-cursor" must not appear as an addition.
+  if echo "$output" | grep -Eq '^\+.*sibling post-cursor'; then
+    test_pass "sibling diff uses its own base_commit under --since"
+  else
+    test_fail "expected '+sibling post-cursor' line in output: $output"
+  fi
+  if echo "$output" | grep -Eq '^\+.*sibling pre-cursor'; then
+    test_fail "--since leaked to sibling: pre-cursor change appeared as addition"
+  else
+    test_pass "--since did not override sibling's base_commit"
+  fi
+
+  # Sibling state file must be unchanged by the diff call
+  local stored_sibling_bc
+  stored_sibling_bc=$(jq -r '.base_commit' "$RALPH_DIR/state/sibling.json")
+  if [ "$stored_sibling_bc" = "$sibling_base" ]; then
+    test_pass "sibling state/<s>.base_commit unchanged by --since"
+  else
+    test_fail "sibling base_commit was modified: expected '$sibling_base', got '$stored_sibling_bc'"
+  fi
+
+  teardown_test_env
+}
+
+# Test: when tier 1 candidate set is empty, todo.sh prints the "No spec
+# changes since last task creation" message and exits 0 (spec req 21).
+test_todo_empty_candidate_set_early_exit() {
+  CURRENT_TEST="todo_empty_candidate_set_early_exit"
+  test_header "todo.sh: empty candidate set exits early with expected message"
+
+  setup_test_env "todo-empty-candidate"
+  _setup_spec_diff_git "my-feature"
+  setup_label_state "my-feature" "false" ""
+
+  # base_commit = HEAD → candidate set is empty
+  local head_commit
+  head_commit=$(git -C "$TEST_DIR" rev-parse HEAD)
+  jq --arg bc "$head_commit" '.base_commit = $bc' "$RALPH_DIR/state/my-feature.json" \
+    > "$RALPH_DIR/state/my-feature.json.tmp"
+  mv "$RALPH_DIR/state/my-feature.json.tmp" "$RALPH_DIR/state/my-feature.json"
+
+  cat > "$RALPH_DIR/config.nix" << 'EOF'
+{ output = {}; }
+EOF
+
+  local output exit_code=0
+  output=$(
+    cd "$TEST_DIR"
+    export RALPH_DIR
+    bash "$REPO_ROOT/lib/ralph/cmd/todo.sh" 2>&1
+  ) || exit_code=$?
+
+  if [ "$exit_code" -eq 0 ]; then
+    test_pass "todo.sh exits 0 on empty candidate set"
+  else
+    test_fail "todo.sh should exit 0 on empty candidate set, got $exit_code; output: $output"
+  fi
+
+  if echo "$output" | grep -q "No spec changes since last task creation"; then
+    test_pass "expected message printed on empty candidate set"
+  else
+    test_fail "expected 'No spec changes since last task creation' in output: $output"
+  fi
+
+  teardown_test_env
+}
+
 # Test: todo.sh stores base_commit (HEAD) on RALPH_COMPLETE
 test_todo_sets_base_commit() {
   CURRENT_TEST="todo_sets_base_commit"
@@ -13900,6 +14088,9 @@ PARALLEL_TESTS=(
   test_todo_readme_stale_molecule_fallthrough
   # todo.sh integration tests (git-based spec diffing)
   test_todo_uncommitted_error
+  test_todo_uncommitted_sibling_error
+  test_todo_since_preserves_sibling_cursor
+  test_todo_empty_candidate_set_early_exit
   test_todo_sets_base_commit
   test_todo_no_base_commit_on_failure
   test_todo_no_base_commit_for_hidden
