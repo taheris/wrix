@@ -3461,10 +3461,11 @@ B." \
     --labels="spec:${label},ralph:clarify" --json 2>/dev/null | jq -r '.id')
 
   # Mock claude that only clears the first bead (simulates user stopping mid-walk).
+  rm -f "$TEST_DIR/bin/claude"
   cat > "$TEST_DIR/bin/claude" <<EOF
 #!/usr/bin/env bash
-bd update "$bead_a" --append-notes "Answer: chose Alpha" >/dev/null 2>&1
-bd update "$bead_a" --remove-label ralph:clarify >/dev/null 2>&1
+bd update "$bead_a" --append-notes "Answer: chose Alpha" >/dev/null
+bd update "$bead_a" --remove-label ralph:clarify >/dev/null
 cat <<'STREAM'
 {"type":"result","result":"RALPH_COMPLETE"}
 STREAM
