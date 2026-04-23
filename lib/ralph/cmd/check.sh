@@ -538,7 +538,7 @@ run_spec_review() {
         echo ""
         ralph msg -s "$host_label"
         echo ""
-        echo "Resolve with: ralph msg -i <id> -a \"answer\"  |  ralph msg -i <id> -d"
+        echo "Resolve with: ralph msg -i <id> \"answer\"  |  ralph msg -i <id> -d"
         notify_event "Ralph" "Review passed (clarify pending) for $host_label"
         return 0
       fi
@@ -565,7 +565,7 @@ run_spec_review() {
       echo ""
       ralph msg -s "$host_label"
       echo ""
-      echo "Resolve with: ralph msg -i <id> -a \"answer\"  |  ralph msg -i <id> -d"
+      echo "Resolve with: ralph msg -i <id> \"answer\"  |  ralph msg -i <id> -d"
       notify_event "Ralph" "Review paused on clarify for $host_label"
       return 0
     fi
@@ -598,7 +598,7 @@ run_spec_review() {
     echo ""
     ralph msg -s "$host_label"
     echo ""
-    echo "Resolve with: ralph msg -i <id> -a \"answer\"  |  ralph msg -i <id> -d"
+    echo "Resolve with: ralph msg -i <id> \"answer\"  |  ralph msg -i <id> -d"
     notify_event "Ralph" "Iteration cap reached for $host_label"
     return 0
   fi

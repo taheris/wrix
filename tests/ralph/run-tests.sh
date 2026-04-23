@@ -6473,6 +6473,47 @@ test_check_clarify_stops_push() {
   fi
 }
 
+# Test: every "Resolve with: ralph msg ..." hint in check.sh uses only flags
+# that lib/ralph/cmd/msg.sh actually parses. Guards against drift where the
+# verdict hint advertises a flag msg.sh doesn't implement yet (wx-qvuhk.11).
+test_check_verdict_hint_flags_match_msg_parser() {
+  CURRENT_TEST="check_verdict_hint_flags_match_msg_parser"
+  test_header "check.sh: verdict hint flags are accepted by msg.sh"
+
+  local check_script="$REPO_ROOT/lib/ralph/cmd/check.sh"
+  local msg_script="$REPO_ROOT/lib/ralph/cmd/msg.sh"
+
+  # Collect flags advertised in every "Resolve with: ralph msg ..." hint.
+  local hints
+  hints=$(grep -E 'Resolve with: ralph msg' "$check_script" || true)
+  if [ -z "$hints" ]; then
+    test_fail "check.sh has no 'Resolve with: ralph msg' hint lines to validate"
+    return
+  fi
+
+  local advertised
+  advertised=$(echo "$hints" | grep -oE -- '-[a-zA-Z]+' | sort -u)
+
+  # Collect flags parsed by msg.sh (short forms in case branches).
+  local accepted
+  accepted=$(grep -oE -- '-[a-zA-Z]\|' "$msg_script" | tr -d '|' | sort -u)
+
+  local unmatched=""
+  local flag
+  while IFS= read -r flag; do
+    [ -z "$flag" ] && continue
+    if ! echo "$accepted" | grep -qxF -- "$flag"; then
+      unmatched="$unmatched $flag"
+    fi
+  done <<<"$advertised"
+
+  if [ -z "$unmatched" ]; then
+    test_pass "every verdict hint flag is parsed by msg.sh ($(echo "$advertised" | tr '\n' ' '))"
+  else
+    test_fail "verdict hint advertises flags msg.sh rejects:$unmatched"
+  fi
+}
+
 # Test: check.sh push gate handles the three documented failure modes
 test_check_push_failure_modes() {
   CURRENT_TEST="check_push_failure_modes"
@@ -14577,6 +14618,7 @@ PARALLEL_TESTS=(
   test_check_dolt_pull_before_recount
   test_check_push_gate_clean
   test_check_clarify_stops_push
+  test_check_verdict_hint_flags_match_msg_parser
   test_check_push_failure_modes
   test_check_auto_iterates_via_run
   test_check_iteration_cap_escalates
