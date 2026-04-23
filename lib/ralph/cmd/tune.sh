@@ -292,8 +292,8 @@ else
   PROMPT_CONTENT=$(build_integration_prompt "$DIFF_INPUT")
 fi
 
-export PROMPT_CONTENT
-run_claude_interactive "PROMPT_CONTENT"
+# Pass directly — do not export (environ bloat breaks child execs, wx-gaasw).
+run_claude_interactive "$PROMPT_CONTENT"
 
 # After Claude session, run validation
 echo ""

@@ -423,9 +423,8 @@ else
   PROMPT_CONTENT="${PROMPT_CONTENT}${CONTINUATION_CONTEXT}"
 fi
 
-# Open interactive Claude console with the plan prompt
-export PROMPT_CONTENT
-run_claude_interactive "PROMPT_CONTENT"
+# Pass directly — do not export (environ bloat breaks child execs, wx-gaasw).
+run_claude_interactive "$PROMPT_CONTENT"
 
 # Commit working set then push to Dolt remote so host can pull them
 # bd dolt push only pushes committed data; without commit, working set

@@ -524,11 +524,11 @@ get_pinned_context_file() {
 }
 
 # Run claude with stream-json output and configurable display
-# Usage: run_claude_stream "$prompt_var_name" "$log_file" "$config_json" [model]
-# The prompt must be exported as an environment variable before calling
+# Usage: run_claude_stream "$prompt" "$log_file" "$config_json" [model]
+# Prompt is piped via stdin (avoids argv/environ ARG_MAX limits, wx-gaasw).
 # If model is provided, --model <model> is prepended to claude CLI args
 run_claude_stream() {
-  local prompt_var="$1"
+  local prompt="$1"
   local log_file="$2"
   local config="$3"
   local model="${4:-}"
@@ -545,9 +545,10 @@ run_claude_stream() {
     debug "Using model override: $model"
   fi
 
-  # Run claude with stream-json, tee to log, and filter with jq
-  # The prompt variable is passed via environment
-  claude "${claude_args[@]}" "${!prompt_var}" 2>&1 \
+  # Prompt via stdin, not argv: argv is bounded by MAX_ARG_STRLEN (128KB
+  # per string on Linux); multi-spec tier-1 diffs blow through it (wx-gaasw).
+  printf '%s' "$prompt" \
+    | claude "${claude_args[@]}" 2>&1 \
     | tee "$log_file" \
     | jq --unbuffered -r "$jq_filter" 2>/dev/null || true
 }
@@ -600,16 +601,16 @@ validate_template() {
 }
 
 # Run claude interactively with an initial prompt
-# Usage: run_claude_interactive "$prompt_var_name"
+# Usage: run_claude_interactive "$prompt"
 # Opens an interactive Claude console with the prompt as initial context
 run_claude_interactive() {
-  local prompt_var="$1"
+  local prompt="$1"
 
   debug "Running claude interactively"
 
   # Run claude without --print to open interactive console
   # The prompt is passed as the initial message
-  claude --dangerously-skip-permissions "${!prompt_var}"
+  claude --dangerously-skip-permissions "$prompt"
 }
 
 # Get variable definitions from pre-computed metadata

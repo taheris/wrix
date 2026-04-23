@@ -11857,6 +11857,83 @@ EOF
   teardown_test_env
 }
 
+# Regression (wx-x03c5): a multi-spec tier-1 DIFF_OUTPUT larger than the
+# ~64KB Linux pipe buffer must not SIGPIPE the splitter under
+# `set -euo pipefail`.
+test_todo_large_diff_no_sigpipe() {
+  CURRENT_TEST="todo_large_diff_no_sigpipe"
+  test_header "todo.sh: large tier-1 diff does not SIGPIPE the splitter"
+
+  setup_test_env "todo-large-diff"
+  _setup_spec_diff_git "my-feature"
+  setup_label_state "my-feature" "false" ""
+
+  # Capture base_commit (before the large diff) so compute_spec_diff
+  # produces a DIFF_OUTPUT > 64KB.
+  local base_commit
+  base_commit=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+  # Append ~300KB of spec content directly (avoids ourselves piping a
+  # large bash variable, which is what we're trying to test).
+  {
+    printf '\n## Big Section\n\n'
+    for i in $(seq 1 6000); do
+      printf 'spec line %d with some extra text to make this line longer\n' "$i"
+    done
+  } >> "$TEST_DIR/specs/my-feature.md"
+  git -C "$TEST_DIR" add specs/my-feature.md
+  git -C "$TEST_DIR" commit -q -m "big diff"
+
+  jq --arg bc "$base_commit" '.base_commit = $bc' "$RALPH_DIR/state/my-feature.json" \
+    > "$RALPH_DIR/state/my-feature.json.tmp"
+  mv "$RALPH_DIR/state/my-feature.json.tmp" "$RALPH_DIR/state/my-feature.json"
+
+  cat > "$RALPH_DIR/config.nix" << 'EOF'
+{ output = {}; }
+EOF
+
+  local output exit_code=0
+  output=$(
+    cd "$TEST_DIR"
+    export RALPH_DIR
+    bash "$REPO_ROOT/lib/ralph/cmd/todo.sh" 2>&1
+  ) || exit_code=$?
+
+  # Old pipe-based splitter SIGPIPEs here and exits 141 with no output.
+  if [ "$exit_code" -eq 141 ]; then
+    test_fail "todo.sh exited 141 (SIGPIPE regression); output: $output"
+    teardown_test_env
+    return
+  fi
+
+  # Post-fix, the splitter runs cleanly and the script reaches the
+  # banner printed after mode dispatch.
+  if echo "$output" | grep -q "Ralph Todo: Converting spec to molecule"; then
+    test_pass "todo.sh progresses past the splitter on >64KB diff"
+  else
+    test_fail "todo.sh did not reach post-splitter banner; exit=$exit_code output: $output"
+  fi
+
+  # wx-gaasw: exporting a large PROMPT_CONTENT would bloat every child's
+  # environ and surface as "Argument list too long" on jq/tee execs.
+  # This runtime check only fires when the kernel's ARG_MAX is tight enough
+  # to reject a ~300KB environ; pair it with the static guard below so the
+  # regression still trips on systems with a large ARG_MAX (e.g. 2MB).
+  if echo "$output" | grep -q "Argument list too long"; then
+    test_fail "child exec hit E2BIG — PROMPT_CONTENT export regression"
+  else
+    test_pass "no E2BIG errors from environ bloat"
+  fi
+
+  if grep -rn '^export PROMPT_CONTENT' "$REPO_ROOT/lib/ralph/cmd/" >/dev/null 2>&1; then
+    test_fail "export PROMPT_CONTENT regression — see $(grep -rln '^export PROMPT_CONTENT' "$REPO_ROOT/lib/ralph/cmd/")"
+  else
+    test_pass "PROMPT_CONTENT is not exported anywhere in lib/ralph/cmd/"
+  fi
+
+  teardown_test_env
+}
+
 # Test: todo.sh stores base_commit (HEAD) on RALPH_COMPLETE
 test_todo_sets_base_commit() {
   CURRENT_TEST="todo_sets_base_commit"
@@ -14568,6 +14645,7 @@ PARALLEL_TESTS=(
   test_todo_uncommitted_sibling_error
   test_todo_since_anchor_only
   test_todo_empty_candidate_set_exits
+  test_todo_large_diff_no_sigpipe
   test_todo_sets_base_commit
   test_todo_no_base_commit_on_failure
   test_todo_no_base_commit_for_hidden

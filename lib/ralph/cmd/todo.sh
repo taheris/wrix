@@ -240,8 +240,15 @@ if [ -n "$SINCE_FLAG" ]; then
 fi
 
 DIFF_OUTPUT=$(compute_spec_diff "$STATE_FILE" "${DIFF_ARGS[@]+"${DIFF_ARGS[@]}"}")
-DIFF_MODE=$(echo "$DIFF_OUTPUT" | head -1)
-DIFF_CONTENT=$(echo "$DIFF_OUTPUT" | tail -n +2)
+# Split on first newline via parameter expansion. Piping `echo "$DIFF_OUTPUT"`
+# through `head -1` SIGPIPEs under `set -euo pipefail` once DIFF_OUTPUT exceeds
+# the ~64KB pipe buffer (multi-spec tier-1 fan-outs routinely do).
+DIFF_MODE="${DIFF_OUTPUT%%$'\n'*}"
+if [[ "$DIFF_OUTPUT" == *$'\n'* ]]; then
+  DIFF_CONTENT="${DIFF_OUTPUT#*$'\n'}"
+else
+  DIFF_CONTENT=""
+fi
 
 # Pre-count tasks per tier-1 fan-out candidate so RALPH_COMPLETE can detect
 # which specs received tasks this session (spec req 21).
@@ -409,9 +416,9 @@ LOG="$RALPH_DIR/logs/todo-$(date +%Y%m%d-%H%M%S).log"
 
 echo "=== Creating Task Breakdown ==="
 echo ""
-# Use stream-json for real-time output display with configurable visibility
-export PROMPT_CONTENT
-run_claude_stream "PROMPT_CONTENT" "$LOG" "$CONFIG"
+# Pass the prompt directly — do not export into the environ. A large prompt
+# in the environ pushes every child exec over ARG_MAX (wx-gaasw).
+run_claude_stream "$PROMPT_CONTENT" "$LOG" "$CONFIG"
 
 # Check for completion by examining the result in the JSON log
 if jq -e '[.[] | select(.type == "result") | .result | contains("RALPH_COMPLETE")] | any' -s "$LOG" >/dev/null 2>&1; then
