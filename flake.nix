@@ -69,7 +69,7 @@
                 };
               in
               {
-                beads-dolt = m.cli;
+                beads-dolt = m.dolt;
                 beads-push = m.push;
               };
 
@@ -226,7 +226,12 @@
               in
               sandboxPkgs
               // {
-                inherit (pkgs) beads gc;
+                inherit (pkgs)
+                  beads
+                  beads-dolt
+                  beads-push
+                  gc
+                  ;
                 default = sandboxPkgs.sandbox;
                 city-config = city.configDir;
                 ralph = wrapix.ralphPackage;

@@ -139,7 +139,7 @@ in
                 echo "ralph: .beads/dolt exists but podman is not on PATH" >&2
                 return 1 2>/dev/null || exit 1
               fi
-              ${beads.cli}/bin/beads-dolt start "$PWD"
+              ${beads.dolt}/bin/beads-dolt start "$PWD"
               ${beads.waitAndExport}
             fi
           ''

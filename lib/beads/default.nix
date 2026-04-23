@@ -421,9 +421,18 @@ in
 {
   inherit imageName shellHook waitAndExport;
 
-  # cli/push are exposed here for the flake overlay (see wrapixBeadsPkgs in
+  # dolt/push are exposed here for the flake overlay (see wrapixBeadsPkgs in
   # flake.nix). Consumers should reach them via pkgs.beads-dolt / pkgs.beads-push.
+  # `cli` is a convenience bundle of both scripts — used by mkRalph so a single
+  # package entry puts both binaries on the host devShell PATH.
   image = doltImageDrv;
-  cli = beadsDolt;
+  dolt = beadsDolt;
   push = beadsPush;
+  cli = pkgs.symlinkJoin {
+    name = "beads-cli";
+    paths = [
+      beadsDolt
+      beadsPush
+    ];
+  };
 }
