@@ -148,8 +148,11 @@ EOF
   EXIT_CODE=$?
   set -e
 
-  # Verify issue is NOT closed (should be in_progress)
-  assert_bead_status "$TASK_ID" "in_progress" "Issue should remain in_progress without RALPH_COMPLETE"
+  # After MAX_RETRIES with no signal, run parks the bead via add_clarify_label,
+  # which unclaims (status → open) so dependents aren't blocked by a bead
+  # that nobody is actually working on.
+  assert_bead_status "$TASK_ID" "open" "Retries exhausted: bead parked open via ralph:clarify"
+  assert_bead_has_label "$TASK_ID" "ralph:clarify" "Retries exhausted: bead labeled ralph:clarify"
 
   teardown_test_env
 }
@@ -1128,7 +1131,10 @@ EOF
     test_fail "Step should exit non-zero on RALPH_BLOCKED"
   fi
 
-  assert_bead_status "$TASK_ID" "in_progress" "Issue should remain in_progress after RALPH_BLOCKED"
+  # RALPH_BLOCKED has no dedicated handler: it falls through to the retry
+  # path and, after MAX_RETRIES, add_clarify_label parks the bead open.
+  assert_bead_status "$TASK_ID" "open" "RALPH_BLOCKED → retries exhausted → bead parked open"
+  assert_bead_has_label "$TASK_ID" "ralph:clarify" "RALPH_BLOCKED → retries exhausted → ralph:clarify label"
 
   teardown_test_env
 }
@@ -1173,8 +1179,9 @@ EOF
     test_fail "Step should exit non-zero on RALPH_CLARIFY"
   fi
 
-  # Issue should remain in_progress (not closed)
-  assert_bead_status "$TASK_ID" "in_progress" "Issue should remain in_progress after RALPH_CLARIFY"
+  # RALPH_CLARIFY parks the bead via add_clarify_label: it unclaims
+  # (status → open) so dependents aren't blocked while awaiting a human.
+  assert_bead_status "$TASK_ID" "open" "RALPH_CLARIFY parks bead open (unclaimed)"
 
   # Verify the log file contains RALPH_CLARIFY (distinct from RALPH_BLOCKED)
   LOG_FILE="$RALPH_DIR/logs/work-$TASK_ID.log"
