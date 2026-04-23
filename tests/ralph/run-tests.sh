@@ -14197,11 +14197,11 @@ test_host_commands_no_repin_hook() {
   test_header "host-side commands do not call install_repin_hook"
 
   # These commands never launch wrapix — they must not register a hook or
-  # create .wrapix/ralph/runtime/<label>/.
+  # create .wrapix/ralph/runtime/<label>/. msg.sh is excluded: its -c/--chat
+  # path DOES launch a container and installs the hook (scoped check below).
   local host_scripts=(
     "$REPO_ROOT/lib/ralph/cmd/status.sh"
     "$REPO_ROOT/lib/ralph/cmd/logs.sh"
-    "$REPO_ROOT/lib/ralph/cmd/msg.sh"
     "$REPO_ROOT/lib/ralph/cmd/tune.sh"
     "$REPO_ROOT/lib/ralph/cmd/sync.sh"
     "$REPO_ROOT/lib/ralph/cmd/use.sh"
@@ -14221,6 +14221,22 @@ test_host_commands_no_repin_hook() {
       test_pass "$name: does not call install_repin_hook"
     fi
   done
+
+  # msg -c (chat) launches wrapix so it may install the hook — but bare
+  # `ralph msg` (list mode) must not. Assert install_repin_hook appears
+  # inside the CHAT=true branch, i.e. after the first '[ "$CHAT" = "true" ]'
+  # check and before the default "Mode: List outstanding questions" section.
+  local msg_script="$REPO_ROOT/lib/ralph/cmd/msg.sh"
+  local msg_chat_line msg_hook_line msg_list_line
+  msg_chat_line=$(grep -n '\[ "\$CHAT" = "true" \]' "$msg_script" | head -1 | cut -d: -f1)
+  msg_hook_line=$(grep -n 'install_repin_hook' "$msg_script" | head -1 | cut -d: -f1)
+  msg_list_line=$(grep -n 'Mode: List outstanding questions' "$msg_script" | head -1 | cut -d: -f1)
+  if [ -n "$msg_chat_line" ] && [ -n "$msg_hook_line" ] && [ -n "$msg_list_line" ] \
+    && [ "$msg_hook_line" -gt "$msg_chat_line" ] && [ "$msg_hook_line" -lt "$msg_list_line" ]; then
+    test_pass "msg: install_repin_hook scoped to -c/--chat path (not list mode)"
+  else
+    test_fail "msg: install_repin_hook must sit inside -c/--chat branch (chat:$msg_chat_line hook:$msg_hook_line list:$msg_list_line)"
+  fi
 
   # check -t path: template validation is host-side and must not install the
   # hook. The hook call in check.sh must sit inside run_spec_review (before
