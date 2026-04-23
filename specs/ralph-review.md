@@ -23,7 +23,8 @@ clarify beads legible to both sides. The forward pipeline lives in
 2. **Invariant-Clash Awareness (review side)** — `ralph check` detects when completed work clashes with an existing invariant and surfaces the clash for a human decision instead of silently choosing a path. Detection is LLM-judgment biased toward asking. Options are *contextual* per clash (not a fixed menu), guided by the three-paths principle: preserve the invariant, keep the change on top of the invariant inelegantly, or change the invariant. (Planning-side clash detection lives in [ralph-loop.md](ralph-loop.md).)
 3. **Push Gate** — `ralph run` auto-invokes `ralph check` when the molecule reaches completion. `ralph run` commits work per-bead during the loop but does NOT push; push is owned by `ralph check` and only happens when check emits `RALPH_COMPLETE` with no new beads created. If check creates fix-up beads without a clarify, it auto-invokes `ralph run` to work them, then re-runs itself. Iteration continues until clean RALPH_COMPLETE (→ push), `ralph:clarify` (→ stop, wait for user), or the `loop.max-iterations` cap is reached (→ escalate via `ralph:clarify`)
 4. **Clarify Resolution** — `ralph msg` resolves outstanding `ralph:clarify` beads:
-   - **Interactive triage + walk** (container, Claude Drafter) — default: the LLM reads every outstanding clarify, presents a triage summary, walks the user through them in order, drafts resolution notes, and clears the label per bead
+   - **List (host, default)** — bare `ralph msg` (optionally `-s <label>`) prints the outstanding clarify table and exits. No Claude, no container. Safe to call from other commands' verdicts
+   - **Interactive triage + walk** (container, Claude Drafter) — opt-in via `-c`/`--chat`: the LLM reads every outstanding clarify, presents a triage summary, walks the user through them in order, drafts resolution notes, and clears the label per bead
    - **Fast paths (host)** — `-n <N>` / `-i <id>` views a bead; `-a <choice>` replies (integer → option lookup, otherwise verbatim); `-d` dismisses
 5. **Options Format Contract** — clarify beads that present a choice use a standard markdown shape (`## Options — <summary>` + `### Option N — <title>`). `ralph msg` consumes this format for SUMMARY display, view-mode enumeration, and integer fast-reply; `ralph check` produces this format for every invariant-clash bead
 
@@ -44,9 +45,10 @@ run → check → (new beads?) ─┬─ yes + no clarify + under cap → exec r
                             └─ no                           → git push + beads-push → done
 
 Clarify-resolution (ralph msg):
-ralph msg ─┬─ (no flags) → container (Claude Drafter) → triage + walk
-           │                 └─ per-bead: draft note → bd update --notes + remove ralph:clarify
-           │                 └─ exit: RALPH_COMPLETE (partial progress is clean)
+ralph msg ─┬─ (no flags) / -s <label>  → host list of outstanding clarifies (default)
+           ├─ -c / --chat              → container (Claude Drafter) → triage + walk
+           │                              └─ per-bead: draft note → bd update --notes + remove ralph:clarify
+           │                              └─ exit: RALPH_COMPLETE (partial progress is clean)
            ├─ -n <N> / -i <id>         → host view, no Claude
            ├─ -n <N> -a <int>          → host fast-reply: look up ### Option <int>, write note, clear label
            ├─ -n <N> -a <string>       → host fast-reply: store verbatim, clear label
@@ -123,13 +125,15 @@ Exit codes: 0 = pass (pushed) or clarify-pending (awaiting user); 1 = review fai
 
 ### `ralph msg`
 
-Human interface for resolving agent questions tagged with `ralph:clarify`. `ralph msg` has two modes: an **interactive Drafter session** (container, Claude) that triages all outstanding clarifies and walks through them with the user, and a set of **non-interactive fast operations** (view, fast-reply, dismiss) that run on the host without Claude.
+Human interface for resolving agent questions tagged with `ralph:clarify`. The default is a host-side **list** of outstanding clarifies — safe to call from other commands' verdicts, no Claude, no container. An opt-in **interactive Drafter session** (`-c`/`--chat`, container, Claude) triages all outstanding clarifies and walks through them with the user. A set of **non-interactive fast operations** (view, fast-reply, dismiss) covers scripted answers on the host without Claude.
 
 #### Command shape
 
 ```bash
-ralph msg                          # Interactive triage + walk (container, Claude)
-ralph msg -s <label>               # Interactive, filtered to a single spec
+ralph msg                          # List outstanding clarifies (host-side, default)
+ralph msg -s <label>               # List filtered to a single spec (host-side)
+ralph msg -c                       # Interactive triage + walk (container, Claude)
+ralph msg -c -s <label>            # Interactive, filtered to a single spec
 ralph msg -n <N>                   # View clarify #N (host-side, fast)
 ralph msg -i <id>                  # View clarify by bead ID (host-side, fast)
 ralph msg -n <N> -a <choice>       # Fast-reply to #N (host-side)
@@ -139,6 +143,7 @@ ralph msg -i <id> -d               # Dismiss by bead ID (host-side)
 ```
 
 **Flags:**
+- `-c` / `--chat` — launch the interactive Drafter session (container, Claude); without this flag `ralph msg` is list-only
 - `-s` / `--spec` — filter to a single spec's clarifies (default: current spec from `state/current`)
 - `-n <N>` / `--num <N>` — target clarify by 1-based sequential index (as printed in the list table)
 - `-i <id>` / `--id <id>` — target clarify by bead ID (stable reference for scripts or deep links)
@@ -147,13 +152,13 @@ ralph msg -i <id> -d               # Dismiss by bead ID (host-side)
 
 #### Sequential index
 
-The list table (printed by `ralph msg`, or by invocations that would otherwise open interactive triage) assigns a 1-based index `#` to each outstanding clarify, ordered by bead creation time ascending. The index is **ephemeral** — valid only until the clarify set changes. Users who see stale numbers should re-run `ralph msg` to refresh.
+The list table (printed by bare `ralph msg`, or as the pre-walk triage view of the interactive `-c` session) assigns a 1-based index `#` to each outstanding clarify, ordered by bead creation time ascending. The index is **ephemeral** — valid only until the clarify set changes. Users who see stale numbers should re-run `ralph msg` to refresh.
 
 `-n <N>` and `-i <id>` are interchangeable ways to reference a bead; `-n` is ergonomic for humans working from a just-printed list, `-i` is robust when the clarify set may have changed.
 
 #### List output
 
-`ralph msg` without flags renders a summary of outstanding clarifies for the resolved spec and opens the interactive triage session (unless filtered or redirected by flags). Example:
+`ralph msg` without action flags renders a summary of outstanding clarifies for the resolved spec and exits (host-side, no Claude). Example:
 
 ```
 $ ralph msg
@@ -165,7 +170,7 @@ Outstanding clarifies for ralph-workflow (3):
  3  wx-ghi3f    Naming convention for discovered tasks
 
 Reply:
-  ralph msg                  # interactive triage + walk
+  ralph msg -c               # interactive triage + walk (container, Claude)
   ralph msg -n 2             # view #2
   ralph msg -n 2 -a 3        # fast-reply: pick option 3 from #2
   ralph msg -n 2 -a "text"   # fast-reply: verbatim answer
@@ -221,7 +226,7 @@ This prevents silent garbage notes when the options format is missing or malform
 
 #### Interactive session
 
-`ralph msg` with no action flags launches a containerized Drafter session (base profile, `msg.md` template). Session flow:
+`ralph msg -c` (optionally `-c -s <label>`) launches a containerized Drafter session (base profile, `msg.md` template). Session flow:
 
 1. Container starts; LLM reads every `ralph:clarify` bead for the resolved spec (anchor + siblings that bonded to its molecule, if applicable)
 2. LLM presents a triage summary — one line per bead framed by the `## Options — <summary>` header; this is richer than any static heuristic can produce and supersedes the static SUMMARY fallback for the interactive flow
@@ -310,7 +315,7 @@ Clarify beads that present a choice must enumerate their options in a standard m
 
 ### msg.md
 
-**Purpose:** Interactive Drafter session for resolving outstanding `ralph:clarify` beads. Invoked by the interactive form of `ralph msg` (no `-a`/`-d`, no standalone `-n`/`-i` view).
+**Purpose:** Interactive Drafter session for resolving outstanding `ralph:clarify` beads. Invoked by the interactive form of `ralph msg` (`-c`/`--chat`, optionally with `-s <label>`).
 
 **Required sections:**
 1. Role statement — "You are helping the user resolve outstanding clarify questions. You are a Drafter: the reviewer has already presented options; your job is to help the user decide and write a high-quality resolution note. You may read the codebase, the spec, and companion files to answer questions, but do not re-generate options."
@@ -380,7 +385,7 @@ Clarify beads that present a choice must enumerate their options in a standard m
   [verify](../tests/ralph/run-tests.sh#test_msg_reply_resume_hint)
 - [ ] `ralph msg` list SUMMARY column renders the `## Options — <summary>` header value, falling back to bead title when the header or summary is absent
   [verify](../tests/ralph/run-tests.sh#test_msg_list_summary_fallback)
-- [ ] `ralph msg` (no flags) launches the interactive Drafter session inside a wrapix container with the base profile, using the `msg.md` template
+- [ ] `ralph msg -c` launches the interactive Drafter session inside a wrapix container with the base profile, using the `msg.md` template; bare `ralph msg` stays host-side (no container, no Claude)
   [verify](../tests/ralph/run-tests.sh#test_msg_interactive_container)
 - [ ] `ralph msg` interactive session presents a triage summary of outstanding clarifies before walking through them
   [judge](../tests/judges/ralph-workflow.sh#test_msg_interactive_triage)

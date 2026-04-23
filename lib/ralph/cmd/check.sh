@@ -536,7 +536,7 @@ run_spec_review() {
         echo ""
         echo "Push skipped: $clarify_count bead(s) carry ralph:clarify."
         echo ""
-        ralph msg -s "$host_label" || true
+        ralph msg -s "$host_label"
         echo ""
         echo "Resolve with: ralph msg -i <id> \"answer\"  |  ralph msg -i <id> -d"
         notify_event "Ralph" "Review passed (clarify pending) for $host_label"
@@ -563,7 +563,7 @@ run_spec_review() {
       echo ""
       echo "Outstanding questions: $clarify_count bead(s) carry ralph:clarify."
       echo ""
-      ralph msg -s "$host_label" || true
+      ralph msg -s "$host_label"
       echo ""
       echo "Resolve with: ralph msg -i <id> \"answer\"  |  ralph msg -i <id> -d"
       notify_event "Ralph" "Review paused on clarify for $host_label"
@@ -596,7 +596,7 @@ run_spec_review() {
     echo ""
     echo "Iteration cap reached ($iter_count/$max_iter). Escalated to ralph:clarify on $newest_id."
     echo ""
-    ralph msg -s "$host_label" || true
+    ralph msg -s "$host_label"
     echo ""
     echo "Resolve with: ralph msg -i <id> \"answer\"  |  ralph msg -i <id> -d"
     notify_event "Ralph" "Iteration cap reached for $host_label"
