@@ -320,19 +320,24 @@ The ralph test suite runs against **live `bd`** (not a mock) so semantic drift i
 end-to-end. To keep this fast, per-test overhead is amortized:
 
 - **Shared Dolt server** — `tests/lib/dolt-server.sh` starts a single `dolt sql-server`
-  per test run. Each test gets its own database on the server via a unique `bd init
-  --prefix` namespace. Orphaned servers from prior runs are reaped at startup.
+  per test run, used to create the initial snapshot. Orphaned servers from prior runs
+  are reaped at startup.
 - **Snapshot-based DB init** — `bd init` runs once to produce a template `.beads/`
-  directory. `init_beads` copies this template rather than re-running `bd init` per
-  test.
+  directory with an embedded Dolt DB. `init_beads` `cp -a`'s this template per test
+  instead of re-running `bd init`; each test gets its own embedded Dolt, fully
+  isolated from peers.
+- **All-parallel execution** — tests run concurrently via `run_tests_parallel`.
+  Per-test embedded Dolt means no shared MySQL server is on the write path, so there
+  is no concurrent-write ceiling beyond host CPU/memory. An earlier sequential tier
+  (for shared-server load avoidance) was removed once embedded Dolt landed.
 - **Batched fixture ops** — `setup_test_env` does a single `mkdir -p` with all paths
   and symlinks all ralph commands in one loop. Avoids per-test fork/exec storms.
 - **Template metadata cache** — `nix eval` runs once per run to produce
   `variables.json` / `templates.json`. Shared across tests via `RALPH_METADATA_DIR`
   (pre-set by the Nix test wrapper; generated on first use otherwise).
-- **Tunable parallelism** — `RALPH_TEST_MAX_JOBS` caps concurrent tests. Default is
-  tuned to the shared Dolt server's safe concurrency ceiling; inside the wrapix
-  container it is clamped lower to avoid overwhelming Claude.
+- **Tunable parallelism** — `RALPH_TEST_MAX_JOBS` caps concurrent tests. Default 16
+  on host (balances CPU/memory); inside the wrapix container it is clamped to 5 to
+  avoid overwhelming Claude.
 
 ## Mock Claude Design
 
@@ -570,11 +575,11 @@ two successive ralph commands, must observe updated content between them.
   [verify](../tests/ralph/run-tests.sh#test_repin_content_after_plan)
 - [x] Refresh-per-invocation is verified — orientation updates between successive ralph commands
   [verify](../tests/ralph/run-tests.sh#test_simulate_compact_event_refresh_per_invocation)
-- [x] Full suite runs in <90s on dev hardware (measured: 64s / 555 tests on 2026-04-22)
+- [x] Full suite runs in <60s on dev hardware (measured: 29s / 928 assertions on 2026-04-24)
 - [x] `init_beads` uses snapshot copy instead of per-test `bd init`
   [verify](../tests/ralph/run-tests.sh#test_init_beads_uses_snapshot)
 - [x] `setup_test_env` uses batched fixture operations (single `mkdir -p`, bulk symlinks)
-- [x] `RALPH_TEST_MAX_JOBS` default tuned to shared-Dolt concurrency ceiling
+- [x] `RALPH_TEST_MAX_JOBS` default (16 host / 5 container) balances CPU/memory and Claude rate limits
 
 ## Out of Scope
 

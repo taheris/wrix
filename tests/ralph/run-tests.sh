@@ -15382,10 +15382,12 @@ test_repin_content_after_check() {
 #-----------------------------------------------------------------------------
 
 # List of all test functions
-# Tests that run ralph-run workflows (multi-step bd interactions).
-# These are flaky under parallel execution because dolt's MySQL server
-# drops connections under concurrent load. Run sequentially for reliability.
-SEQUENTIAL_TESTS=(
+# All tests run in parallel. A prior split into SEQUENTIAL_TESTS existed because
+# a shared dolt MySQL server dropped connections under concurrent load; tests
+# now use embedded Dolt per test directory (see init_beads in lib/fixtures.sh),
+# so that constraint no longer applies.
+ALL_TESTS=(
+  # --- Former SEQUENTIAL_TESTS (ralph-run workflows) ---
   test_run_marks_in_progress
   test_run_closes_issue_on_complete
   test_run_no_close_without_signal
@@ -15421,21 +15423,16 @@ SEQUENTIAL_TESTS=(
   test_isolated_beads_db
   test_init_beads_uses_snapshot
   test_logs_spec_flag
-  # Todo-to-run bead visibility tests (require ralph-run)
   test_todo_beads_visible_to_run
   test_run_startup_dolt_pull_behavior
   test_run_check_loop_terminates
-  # Live-path tests for host-side check/run branch (wx-8oz8i)
   test_check_host_push_gate_clean_live
   test_check_host_clarify_stops_push_live
   test_check_host_auto_iterate_live
   test_check_host_iteration_cap_live
   test_check_host_push_failures_live
   test_run_to_check_handoff_live
-)
-
-# Tests safe for parallel execution (template logic, file state, simple bd calls).
-PARALLEL_TESTS=(
+  # --- Parallel-safe tests (template logic, file state, simple bd calls) ---
   test_mock_claude_exists
   test_render_template_basic
   test_render_template_missing_required
@@ -15662,9 +15659,6 @@ PARALLEL_TESTS=(
   test_repin_content_after_check
 )
 
-# ALL_TESTS is the combined list for --sequential mode and single-test runs.
-ALL_TESTS=("${SEQUENTIAL_TESTS[@]}" "${PARALLEL_TESTS[@]}")
-
 #-----------------------------------------------------------------------------
 # Main Entry Point
 #-----------------------------------------------------------------------------
@@ -15722,28 +15716,14 @@ main() {
   # inherit RALPH_BEADS_SNAPSHOT and share one 'bd init' per suite run.
   _ensure_beads_snapshot || exit 1
 
-  # In --sequential mode, run everything sequentially
+  # --sequential flag (or RALPH_TEST_SEQUENTIAL=1) forces sequential execution
+  # for debugging; normally everything runs in parallel.
   if [ "$filter" = "--sequential" ] || [ "${RALPH_TEST_SEQUENTIAL:-}" = "1" ]; then
     run_tests ALL_TESTS "--sequential"
     return
   fi
 
-  # Tiered execution: run dolt-heavy tests sequentially (they're flaky under
-  # concurrent load due to dolt MySQL server connection drops), then run
-  # parallel-safe tests concurrently for speed.
-  echo "Phase 1: Sequential tests (dolt-heavy workflows)..."
-  echo ""
-  run_tests_sequential SEQUENTIAL_TESTS
-  local seq_exit=$?
-
-  echo ""
-  echo "Phase 2: Parallel tests (template logic, file state)..."
-  echo ""
-  run_tests_parallel PARALLEL_TESTS
-  local par_exit=$?
-
-  # Fail if either phase failed
-  [ "$seq_exit" -eq 0 ] && [ "$par_exit" -eq 0 ]
+  run_tests_parallel ALL_TESTS
 }
 
 # Run main (pass through args)
