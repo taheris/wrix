@@ -216,6 +216,54 @@ templateTests
               exit 1
             fi
 
+            echo "Test: ## Implementation Notes Lifecycle is preserved..."
+            input4="# Feature
+
+        ## Implementation Notes Lifecycle
+
+        Permanent canonical section that must survive strip.
+
+        - Written
+        - Read
+        - Cleared
+
+        ## Template Content Requirements
+
+        Other content"
+
+            result4=$(strip_implementation_notes "$input4")
+
+            if [ "$result4" != "$input4" ]; then
+              echo "FAIL: '## Implementation Notes Lifecycle' must not be stripped"
+              echo "--- expected ---"
+              echo "$input4"
+              echo "--- got ---"
+              echo "$result4"
+              exit 1
+            fi
+
+            echo "Test: lowercase '## Implementation notes' is also stripped..."
+            input5="# Feature
+
+        ## Implementation notes
+
+        transient lowercase variant
+
+        ## Success Criteria
+        - Criterion"
+
+            result5=$(strip_implementation_notes "$input5")
+
+            if echo "$result5" | grep -q "transient lowercase variant"; then
+              echo "FAIL: lowercase 'Implementation notes' should be stripped"
+              exit 1
+            fi
+
+            if ! echo "$result5" | grep -q "Success Criteria"; then
+              echo "FAIL: Success Criteria should remain after lowercase strip"
+              exit 1
+            fi
+
             echo "PASS: strip_implementation_notes tests"
             mkdir $out
       '';

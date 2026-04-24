@@ -330,10 +330,10 @@ bd_list_first_id() {
 strip_implementation_notes() {
   local content="$1"
 
-  # Use awk to remove the ## Implementation Notes section
-  # Removes from "## Implementation Notes" to the next ## heading or end of file
+  # Match case-insensitively but anchor end-of-line so sibling headings like
+  # "## Implementation Notes Lifecycle" survive.
   echo "$content" | awk '
-    /^## Implementation Notes/ { skip = 1; next }
+    tolower($0) ~ /^## implementation notes[[:space:]]*$/ { skip = 1; next }
     /^## / && skip { skip = 0 }
     !skip { print }
   '
