@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# shellcheck source=./_flock.sh
+source "$(dirname "$0")/_flock.sh"
+exec prek run --hook-stage pre-push "$@"

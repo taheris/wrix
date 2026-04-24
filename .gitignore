@@ -15,10 +15,10 @@ target/
 *.db
 
 # Gas City scaffold (gc start creates these at workspace root)
-.runtime/
-formulas/
-hooks/
-orders/
+/.runtime/
+/formulas/
+/hooks/
+/orders/
 /prompts/
 
 # Gas City pack symlinks (gc start creates these in scripts/)
