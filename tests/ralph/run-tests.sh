@@ -3383,6 +3383,17 @@ test_prek_lock_timeout() {
     else
       test_fail "$stage shim does not source _flock.sh"
     fi
+
+    # Guard: `prek run` treats positional args as hook/project selectors, which
+    # breaks pre-push (git passes <remote> <url>). The shim must use
+    # `prek hook-impl` so git's args are handled as hook metadata, and must
+    # pass `--script-version 4` to match the pinned prek (else prek prints an
+    # "outdated shim" warning on every invocation).
+    if grep -Eq "prek hook-impl .*--script-version 4 .*--hook-type=$stage" "$shim"; then
+      test_pass "$stage shim invokes prek hook-impl --script-version 4 --hook-type=$stage"
+    else
+      test_fail "$stage shim does not use prek hook-impl with --script-version 4 --hook-type=$stage (contents: $(cat "$shim"))"
+    fi
   done
 }
 

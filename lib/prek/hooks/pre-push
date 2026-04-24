@@ -2,4 +2,6 @@
 set -euo pipefail
 # shellcheck source=./_flock.sh
 source "$(dirname "$0")/_flock.sh"
-exec prek run --hook-stage pre-push "$@"
+# Use hook-impl (not `prek run`) so git's positional args (<remote> <url>) are
+# handled as git-hook metadata rather than parsed as hook/project selectors.
+exec prek hook-impl --hook-dir "$(dirname "$0")" --script-version 4 --hook-type=pre-push -- "$@"
