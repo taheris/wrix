@@ -526,7 +526,13 @@ get_pinned_context_file() {
 # Run claude with stream-json output and configurable display
 # Usage: run_claude_stream "$prompt" "$log_file" "$config_json" [model]
 # Prompt is piped via stdin (avoids argv/environ ARG_MAX limits, wx-gaasw).
-# If model is provided, --model <model> is prepended to claude CLI args
+# If model is provided, --model <model> is prepended to claude CLI args.
+#
+# Watchdogs a known claude hang (wx-1jhl2): `claude --print --output-format
+# stream-json` sometimes emits its terminal {type:"result"} record then fails
+# to exit, leaving the display pipeline blocked on EOF. Once a result record
+# lands in the log, we give claude RALPH_CLAUDE_POST_RESULT_GRACE seconds
+# (default 5) to exit cleanly, then SIGTERM (and SIGKILL 2s later).
 run_claude_stream() {
   local prompt="$1"
   local log_file="$2"
@@ -535,6 +541,8 @@ run_claude_stream() {
 
   local jq_filter
   jq_filter=$(build_stream_filter "$config")
+
+  local post_result_grace="${RALPH_CLAUDE_POST_RESULT_GRACE:-5}"
 
   debug "Running claude with stream-json output to $log_file"
 
@@ -545,12 +553,46 @@ run_claude_stream() {
     debug "Using model override: $model"
   fi
 
-  # Prompt via stdin, not argv: argv is bounded by MAX_ARG_STRLEN (128KB
-  # per string on Linux); multi-spec tier-1 diffs blow through it (wx-gaasw).
-  printf '%s' "$prompt" \
-    | claude "${claude_args[@]}" 2>&1 \
-    | tee "$log_file" \
-    | jq --unbuffered -r "$jq_filter" 2>/dev/null || true
+  # Truncate so the watchdog's grep can't trip on a stale result record.
+  : > "$log_file"
+
+  printf '%s' "$prompt" | claude "${claude_args[@]}" > "$log_file" 2>&1 &
+  local claude_pid=$!
+
+  # tail --pid exits when claude dies; jq then EOFs. -s 0.1 keeps teardown ~100ms.
+  tail -n +1 -F --pid="$claude_pid" -s 0.1 "$log_file" | jq --unbuffered -r "$jq_filter" 2>/dev/null &
+  local display_pid=$!
+
+  # Inner tick loop exits early if claude dies naturally inside the grace period.
+  (
+    max_ticks=$((post_result_grace * 5))
+    while [ -d "/proc/$claude_pid" ]; do
+      if grep -q '"type":"result"' "$log_file" 2>/dev/null; then
+        ticks=0
+        while [ -d "/proc/$claude_pid" ] && [ "$ticks" -lt "$max_ticks" ]; do
+          sleep 0.2
+          ticks=$((ticks + 1))
+        done
+        if [ -d "/proc/$claude_pid" ]; then
+          debug "claude hung ${post_result_grace}s past result record; sending SIGTERM"
+          kill -TERM "$claude_pid" || true
+          sleep 2
+          if [ -d "/proc/$claude_pid" ]; then
+            kill -KILL "$claude_pid" || true
+          fi
+        fi
+        break
+      fi
+      sleep 0.1
+    done
+  ) &
+  local watchdog_pid=$!
+
+  wait "$claude_pid" || true
+  wait "$display_pid" || true
+  # TOCTOU: watchdog may have already exited after seeing claude die.
+  kill -TERM "$watchdog_pid" 2>/dev/null || true
+  wait "$watchdog_pid" || true
 }
 
 # Validate template has required placeholders, reset from source if corrupted

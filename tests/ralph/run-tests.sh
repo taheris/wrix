@@ -1750,6 +1750,77 @@ test_filter_clarify_beads() {
   teardown_test_env
 }
 
+# Test: run_claude_stream SIGTERMs claude if it hangs after emitting a
+# {type:"result"} record. Regression guard for wx-1jhl2: `claude --print
+# --output-format stream-json` sometimes writes its final result line then
+# fails to exit, leaving the tee|jq pipeline stuck on EOF and hanging
+# ralph run indefinitely after RALPH_COMPLETE.
+test_run_claude_stream_watchdogs_hang_after_result() {
+  CURRENT_TEST="run_claude_stream_watchdogs_hang_after_result"
+  test_header "run_claude_stream SIGTERMs claude after post-result grace"
+
+  setup_test_env "claude-hang"
+
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  # Stub a claude binary that emits a result record then sleeps forever —
+  # exactly the production failure mode (log has end_turn result, process
+  # never exits).
+  local shim_dir="$TEST_DIR/claude-shim"
+  mkdir -p "$shim_dir"
+  cat > "$shim_dir/claude" << 'SHIM'
+#!/usr/bin/env bash
+# Drain stdin so printf | claude doesn't SIGPIPE the test.
+cat >/dev/null
+echo '{"type":"result","subtype":"success","is_error":false,"result":"RALPH_COMPLETE","stop_reason":"end_turn","duration_ms":1234}'
+exec sleep 3600
+SHIM
+  chmod +x "$shim_dir/claude"
+  export PATH="$shim_dir:$PATH"
+
+  local log="$TEST_DIR/work-hang.log"
+  local config='{}'
+
+  # Grace = 0 fires SIGTERM as soon as the result record appears; the real
+  # default is 5s. We trust the watchdog mechanism, not the grace duration.
+  export RALPH_CLAUDE_POST_RESULT_GRACE=0
+
+  local start_ns end_ns elapsed_ms
+  start_ns=$(date +%s%N)
+  # run_claude_stream must not hang when claude sleeps past a result record.
+  # Bound the test itself with `timeout` as a belt-and-braces safeguard: if
+  # the watchdog is broken, this prevents the test harness from hanging too.
+  if timeout 10 bash -c "
+      source '$REPO_ROOT/lib/ralph/cmd/util.sh'
+      run_claude_stream '' '$log' '$config'
+    "; then
+    end_ns=$(date +%s%N)
+    elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
+
+    # Upper bound: 100ms grep poll + 100ms tail --pid poll + teardown headroom.
+    if [ "$elapsed_ms" -le 1500 ]; then
+      test_pass "run_claude_stream returned in ${elapsed_ms}ms (<=1500ms)"
+    else
+      test_fail "run_claude_stream took ${elapsed_ms}ms (>1500ms) — watchdog too slow"
+    fi
+
+    if grep -q '"type":"result"' "$log"; then
+      test_pass "Log preserved the result record"
+    else
+      test_fail "Log missing the result record"
+    fi
+  else
+    test_fail "run_claude_stream hung past 15s timeout — watchdog did not fire"
+  fi
+
+  # Make sure no orphan sleep 3600 processes survive.
+  pkill -f 'sleep 3600' 2>/dev/null || true
+
+  unset RALPH_CLAUDE_POST_RESULT_GRACE
+  teardown_test_env
+}
+
 # Test: parse_options_format accepts em-dash, en-dash, single hyphen, and
 # double hyphen as the separator on ## Options and ### Option N headings.
 # Covers: specs/ralph-review.md Options Format Contract.
@@ -15505,6 +15576,7 @@ ALL_TESTS=(
   test_status_spec_missing_state
   test_malformed_bd_output_parsing
   test_filter_clarify_beads
+  test_run_claude_stream_watchdogs_hang_after_result
   test_options_format_separators
   test_extract_clarify_note
   test_get_question_for_bead
