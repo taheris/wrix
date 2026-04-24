@@ -99,9 +99,9 @@ This spec defines the integration suite that fills that gap.
     - Molecule discovery from README
 
 14. **Amortized test setup** — Per-test overhead is bounded so the suite meets NFR
-    §2's <90s target. See *Performance Infrastructure* below for the concrete
-    mechanisms (snapshot DB, shared Dolt server, batched fixtures, metadata cache,
-    tuned parallelism).
+    §2's <60s target. See *Performance Infrastructure* below for the concrete
+    mechanisms (snapshot DB, per-test embedded Dolt, batched fixtures, metadata
+    cache, all-parallel dispatch).
 
 15. **Compaction re-pin simulation** — Tests verify the `SessionStart[compact]`
     re-pin hook end-to-end, *excluding* Claude's own hook dispatcher:
@@ -120,7 +120,7 @@ This spec defines the integration suite that fills that gap.
 ### Non-Functional
 
 1. **Deterministic** — Tests produce consistent results (no real Claude API calls)
-2. **Fast** — Full suite completes in <90s on dev hardware. See *Performance Infrastructure* for how this is achieved.
+2. **Fast** — Full suite completes in <60s on dev hardware. See *Performance Infrastructure* for how this is achieved.
 3. **Isolated** — Each test runs in a clean temp directory with its own beads database prefix
 4. **Skip-aware** — Darwin tests skip gracefully on Linux
 5. **Clean beads** — No test beads persist after run; temp dirs removed in teardown
@@ -131,7 +131,7 @@ This spec defines the integration suite that fills that gap.
 | File | Change |
 |------|--------|
 | `tests/ralph/lib/fixtures.sh` | Snapshot-based `init_beads`; batched setup; `simulate_compact_event` helper; `setup_host_mocks` for live-path tests |
-| `tests/ralph/lib/runner.sh` | Tuned default `RALPH_TEST_MAX_JOBS` |
+| `tests/ralph/lib/runner.sh` | Tuned default `RALPH_TEST_MAX_JOBS`; all-parallel dispatch (sequential tier retired) |
 | `tests/lib/dolt-server.sh` | Shared Dolt SQL server lifecycle |
 | `lib/ralph/cmd/{check,run,todo,plan,watch,msg}.sh` | Host-side guard parameterized via `WRAPIX_CLAUDE_CONFIG` to enable live-path tests |
 
@@ -147,7 +147,7 @@ tests/ralph/
 │   ├── assertions.sh        # test_pass, test_fail, assert_*
 │   ├── fixtures.sh          # setup_*, teardown_*, simulate_compact_event
 │   ├── mock-claude.sh       # Mock infrastructure
-│   └── runner.sh            # Parallel/sequential test execution
+│   └── runner.sh            # Parallel test execution (sequential path kept for debug)
 └── scenarios/               # Test scenario definitions (shell + JSON formats)
 ```
 
@@ -310,8 +310,8 @@ Mock Claude infrastructure:
 
 Test execution framework:
 - `run_test_isolated <func> <result> <output>` — Run test in subshell
-- `run_tests_parallel <tests...>` — Execute tests concurrently, capped by `RALPH_TEST_MAX_JOBS`
-- `run_tests_sequential <tests...>` — Execute tests in order (for tests that share state)
+- `run_tests_parallel <tests...>` — Execute tests concurrently, capped by `RALPH_TEST_MAX_JOBS` (default dispatch)
+- `run_tests_sequential <tests...>` — Execute tests in order; debug-only, opt in via `--sequential` or `RALPH_TEST_SEQUENTIAL=1`
 - `summarize_results` — Print pass/fail/skip/not-implemented counts
 
 ## Performance Infrastructure
