@@ -3990,6 +3990,86 @@ EOF
   teardown_test_env
 }
 
+# Test: msg.md template lists only RALPH_COMPLETE as the exit signal.
+# The session's purpose is resolving clarifies — RALPH_BLOCKED and
+# RALPH_CLARIFY are nonsensical and must not be offered as viable exits.
+test_msg_template_exit_signals() {
+  CURRENT_TEST="msg_template_exit_signals"
+  test_header "msg.md exit signals list RALPH_COMPLETE only"
+
+  local msg_tpl="$REPO_ROOT/lib/ralph/template/msg.md"
+
+  if [ ! -f "$msg_tpl" ]; then
+    test_fail "msg.md template not found at $msg_tpl"
+    return
+  fi
+
+  if grep -qE '^[[:space:]]*-[[:space:]]*`RALPH_COMPLETE`' "$msg_tpl"; then
+    test_pass "msg.md lists RALPH_COMPLETE as an exit signal"
+  else
+    test_fail "msg.md should list RALPH_COMPLETE as an exit signal bullet"
+  fi
+
+  if grep -qE '^[[:space:]]*-[[:space:]]*`RALPH_BLOCKED`' "$msg_tpl"; then
+    test_fail "msg.md should not offer RALPH_BLOCKED as a viable exit"
+  else
+    test_pass "msg.md does not list RALPH_BLOCKED as an exit-signal bullet"
+  fi
+
+  if grep -qE '^[[:space:]]*-[[:space:]]*`RALPH_CLARIFY`' "$msg_tpl"; then
+    test_fail "msg.md should not offer RALPH_CLARIFY as a viable exit"
+  else
+    test_pass "msg.md does not list RALPH_CLARIFY as an exit-signal bullet"
+  fi
+
+  if grep -qE '(no|not).*`RALPH_BLOCKED`' "$msg_tpl"; then
+    test_pass "msg.md explains why RALPH_BLOCKED does not apply"
+  else
+    test_fail "msg.md should explain that RALPH_BLOCKED does not apply"
+  fi
+
+  if grep -qE '(no|not).*`RALPH_CLARIFY`' "$msg_tpl"; then
+    test_pass "msg.md explains why RALPH_CLARIFY does not apply"
+  else
+    test_fail "msg.md should explain that RALPH_CLARIFY does not apply"
+  fi
+}
+
+# Test: msg.md template structure — must include context-pinning, spec-header,
+# companions-context, exit-signals partials and the CLARIFY_BEADS variable.
+test_msg_template_structure() {
+  CURRENT_TEST="msg_template_structure"
+  test_header "msg.md includes required partials and CLARIFY_BEADS variable"
+
+  local msg_tpl="$REPO_ROOT/lib/ralph/template/msg.md"
+
+  if [ ! -f "$msg_tpl" ]; then
+    test_fail "msg.md template not found at $msg_tpl"
+    return
+  fi
+
+  local partial
+  for partial in context-pinning spec-header companions-context exit-signals; do
+    if grep -qF "{{> $partial}}" "$msg_tpl"; then
+      test_pass "msg.md includes {{> $partial}} partial"
+    else
+      test_fail "msg.md missing {{> $partial}} partial"
+    fi
+  done
+
+  if grep -qF '{{CLARIFY_BEADS}}' "$msg_tpl"; then
+    test_pass "msg.md references {{CLARIFY_BEADS}} variable"
+  else
+    test_fail "msg.md should reference {{CLARIFY_BEADS}} variable"
+  fi
+
+  if grep -qF '{{LABEL}}' "$msg_tpl"; then
+    test_pass "msg.md references {{LABEL}} variable"
+  else
+    test_fail "msg.md should reference {{LABEL}} variable"
+  fi
+}
+
 # Test: partial epic completion (2/3 tasks closed, epic stays open)
 # When an epic has tasks and only some are closed, the epic should remain open
 test_partial_epic_completion() {
@@ -7183,6 +7263,53 @@ test_check_template_has_three_paths() {
     test_pass "check.md frames the three paths as guidance, not a fixed menu"
   else
     test_fail "check.md should frame the three paths as guidance, not a fixed A/B/C menu"
+  fi
+}
+
+# Test: check.md mandates the Options Format Contract for invariant-clash
+# clarify beads (## Options — <summary> + ### Option N — <title>). Without
+# this, reviewer beads are illegible to `ralph msg -a <int>` fast-reply.
+test_check_template_options_format() {
+  CURRENT_TEST="check_template_options_format"
+  test_header "check.md mandates Options Format Contract for clarify beads"
+
+  local check_tpl="$REPO_ROOT/lib/ralph/template/check.md"
+
+  if [ ! -f "$check_tpl" ]; then
+    test_fail "check.md template not found at $check_tpl"
+    return
+  fi
+
+  if grep -qiE 'Options Format Contract' "$check_tpl"; then
+    test_pass "check.md names the Options Format Contract"
+  else
+    test_fail "check.md should name the Options Format Contract"
+  fi
+
+  if grep -qE 'MUST|REQUIRED|Required' "$check_tpl"; then
+    test_pass "check.md marks the options format as required"
+  else
+    test_fail "check.md should mark the options format as required/MUST"
+  fi
+
+  if grep -qF '## Options —' "$check_tpl"; then
+    test_pass "check.md shows the ## Options — <summary> heading shape"
+  else
+    test_fail "check.md should include '## Options —' heading example"
+  fi
+
+  if grep -qE '### Option [0-9N] —' "$check_tpl"; then
+    test_pass "check.md shows the ### Option N — <title> shape"
+  else
+    test_fail "check.md should include '### Option N — <title>' example"
+  fi
+
+  # Separator tolerance should be documented so reviewers know the contract
+  # matches the parser's accepted separators.
+  if grep -qE 'em-dash.*en-dash|en-dash.*em-dash' "$check_tpl"; then
+    test_pass "check.md documents separator tolerance (em/en-dash)"
+  else
+    test_fail "check.md should document em-dash/en-dash/hyphen separator tolerance"
   fi
 }
 
@@ -15553,6 +15680,9 @@ PARALLEL_TESTS=(
   test_check_exit_codes
   test_check_templates_no_claude
   test_check_template_has_three_paths
+  test_check_template_options_format
+  test_msg_template_exit_signals
+  test_msg_template_structure
   test_check_default_runs_review
   test_check_dolt_push_in_container
   test_check_dolt_pull_before_recount
