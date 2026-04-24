@@ -803,46 +803,6 @@ MOCK_EOF
 }
 
 # Test: ralph status --spec short form (-s) works
-test_status_spec_short_flag() {
-  CURRENT_TEST="status_spec_short_flag"
-  test_header "Status -s Short Flag Works"
-
-  setup_test_env "status-spec-short"
-
-  local label="short-test"
-
-  cat > "$TEST_DIR/specs/$label.md" << 'SPEC_EOF'
-# Short Test
-## Requirements
-- Test
-SPEC_EOF
-
-  setup_label_state "$label" "false"
-
-  # Run ralph-status with -s flag
-  set +e
-  local status_output
-  status_output=$(ralph-status -s "$label" 2>&1)
-  local status_exit=$?
-  set -e
-
-  if [ $status_exit -eq 0 ]; then
-    test_pass "ralph-status -s completed successfully"
-  else
-    test_fail "ralph-status -s failed with exit code $status_exit"
-  fi
-
-  if echo "$status_output" | grep -q "Ralph Status: $label"; then
-    test_pass "-s shows correct label"
-  else
-    test_fail "-s should show '$label' in header"
-    echo "    Output:"
-    echo "$status_output" | head -3 | sed 's/^/      /'
-  fi
-
-  teardown_test_env
-}
-
 # Test: ralph status --all shows summary of all active workflows
 test_status_all_flag() {
   CURRENT_TEST="status_all_flag"
@@ -982,47 +942,6 @@ SPEC_EOF
     test_pass "Resolves label from state/current"
   else
     test_fail "Should resolve '$label' from state/current"
-    echo "    Output:"
-    echo "$status_output" | head -3 | sed 's/^/      /'
-  fi
-
-  teardown_test_env
-}
-
-# Test: ralph status --spec=value (equals form) works
-test_status_spec_equals_form() {
-  CURRENT_TEST="status_spec_equals_form"
-  test_header "Status --spec=value Works"
-
-  setup_test_env "status-spec-equals"
-
-  local label="equals-feature"
-
-  cat > "$TEST_DIR/specs/$label.md" << 'SPEC_EOF'
-# Equals Feature
-## Requirements
-- Test
-SPEC_EOF
-
-  setup_label_state "$label" "false"
-
-  # Run ralph-status with --spec=value form
-  set +e
-  local status_output
-  status_output=$(ralph-status --spec="$label" 2>&1)
-  local status_exit=$?
-  set -e
-
-  if [ $status_exit -eq 0 ]; then
-    test_pass "ralph-status --spec=value completed successfully"
-  else
-    test_fail "ralph-status --spec=value failed with exit code $status_exit"
-  fi
-
-  if echo "$status_output" | grep -q "Ralph Status: $label"; then
-    test_pass "--spec=value resolves correctly"
-  else
-    test_fail "--spec=value should show '$label' in header"
     echo "    Output:"
     echo "$status_output" | head -3 | sed 's/^/      /'
   fi
@@ -3537,14 +3456,13 @@ test_msg_index_ordering() {
   first_id=$(bd create --title="First created" --type=task \
     --description="Body" \
     --labels="spec:demo,ralph:clarify" --json 2>/dev/null | jq -r '.id')
-  sleep 1
   second_id=$(bd create --title="Second created" --type=task \
     --description="Body" \
     --labels="spec:demo,ralph:clarify" --json 2>/dev/null | jq -r '.id')
-  sleep 1
   third_id=$(bd create --title="Third created" --type=task \
     --description="Body" \
     --labels="spec:demo,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+  set_monotonic_created_at "$first_id" "$second_id" "$third_id"
 
   local list_output
   list_output=$(ralph-msg 2>&1)
@@ -3998,10 +3916,10 @@ test_msg_dismiss() {
   bead_n=$(bd create --title="Question A" --type=task \
     --description="Body A." \
     --labels="spec:demo,ralph:clarify" --json 2>/dev/null | jq -r '.id')
-  sleep 1
   bead_i=$(bd create --title="Question B" --type=task \
     --description="Body B." \
     --labels="spec:demo,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+  set_monotonic_created_at "$bead_n" "$bead_i"
 
   local tripwire="$TEST_DIR/claude-invocations.log"
   rm -f "$tripwire" "$TEST_DIR/bin/claude"
@@ -6342,8 +6260,8 @@ EOF
 {"type":"result","subtype":"success","result":"Feature B done. RALPH_COMPLETE"}
 EOF
 
-  # Touch feature-b log to be newer
-  sleep 1
+  # Touch feature-b log to be newer (ns-precision mtime is enough)
+  sleep 0.05
   touch "$RALPH_DIR/logs/work-${issue_b}.log"
 
   # ralph logs --spec feature-a should show feature A's log (not the newer B log)
@@ -6373,42 +6291,6 @@ EOF
 }
 
 # Test: ralph logs -s (short form) works like --spec
-test_logs_spec_short_flag() {
-  CURRENT_TEST="logs_spec_short_flag"
-  test_header "ralph logs -s: short form of --spec"
-
-  setup_test_env "logs-spec-short"
-  init_beads
-
-  create_test_spec "my-feature"
-  setup_label_state "my-feature"
-
-  local issue_id
-  issue_id=$(bd create --title="My task" --type=task --labels="spec:my-feature" --silent)
-
-  cat > "$RALPH_DIR/logs/work-${issue_id}.log" << 'EOF'
-{"type":"assistant","content":"Working on my feature"}
-{"type":"result","subtype":"success","result":"All done. RALPH_COMPLETE"}
-EOF
-
-  set +e
-  local output
-  output=$(bash "$REPO_ROOT/lib/ralph/cmd/logs.sh" -s my-feature 2>&1)
-  local exit_code=$?
-  set -e
-
-  assert_exit_code 0 $exit_code "ralph logs -s should succeed"
-
-  if echo "$output" | grep -q "work-${issue_id}.log"; then
-    test_pass "Short flag -s resolves to correct log"
-  else
-    test_fail "Short flag should resolve to spec's log"
-    echo "  Output: $output"
-  fi
-
-  teardown_test_env
-}
-
 # Test: ralph logs (no --spec) uses state/current
 test_logs_no_spec_uses_current() {
   CURRENT_TEST="logs_no_spec_uses_current"
@@ -6440,45 +6322,6 @@ EOF
     test_pass "Uses current spec's logs by default"
   else
     test_fail "Should use logs from state/current spec"
-    echo "  Output: $output"
-  fi
-
-  teardown_test_env
-}
-
-# Test: ralph logs --spec=<name> (equals form) works
-test_logs_spec_equals_form() {
-  CURRENT_TEST="logs_spec_equals_form"
-  test_header "ralph logs --spec=<name>: equals form"
-
-  setup_test_env "logs-spec-equals"
-  init_beads
-
-  create_test_spec "eq-feature"
-  echo '{"label":"eq-feature","update":false,"hidden":false,"spec_path":"specs/eq-feature.md"}' \
-    > "$RALPH_DIR/state/eq-feature.json"
-  echo "eq-feature" > "$RALPH_DIR/state/current"
-
-  local issue_id
-  issue_id=$(bd create --title="Eq task" --type=task --labels="spec:eq-feature" --silent)
-
-  cat > "$RALPH_DIR/logs/work-${issue_id}.log" << 'EOF'
-{"type":"assistant","content":"Working on eq feature"}
-{"type":"result","subtype":"success","result":"Done. RALPH_COMPLETE"}
-EOF
-
-  set +e
-  local output
-  output=$(bash "$REPO_ROOT/lib/ralph/cmd/logs.sh" --spec=eq-feature 2>&1)
-  local exit_code=$?
-  set -e
-
-  assert_exit_code 0 $exit_code "ralph logs --spec=name should succeed"
-
-  if echo "$output" | grep -q "work-${issue_id}.log"; then
-    test_pass "Equals form resolves to correct log"
-  else
-    test_fail "Equals form should resolve to spec's log"
     echo "  Output: $output"
   fi
 
@@ -10598,32 +10441,6 @@ test_todo_spec_flag_reads_named_state() {
 }
 
 # Test: ralph todo -s (short form) works like --spec
-test_todo_spec_short_flag() {
-  CURRENT_TEST="todo_spec_short_flag"
-  test_header "ralph todo -s: short form of --spec"
-
-  setup_test_env "todo-spec-short"
-  init_beads
-
-  create_test_spec "short-test"
-  echo '{"label":"short-test","update":false,"hidden":false,"spec_path":"specs/short-test.md"}' \
-    > "$RALPH_DIR/state/short-test.json"
-  echo "short-test" > "$RALPH_DIR/state/current"
-
-  local output exit_code=0
-  output=$(ralph-todo -s short-test 2>&1) || exit_code=$?
-
-  if echo "$output" | grep -q "Label: short-test"; then
-    test_pass "todo -s resolves correctly"
-  elif echo "$output" | grep -q "short-test"; then
-    test_pass "todo -s targets correct feature"
-  else
-    test_fail "Expected output to reference 'short-test', got: ${output:0:300}"
-  fi
-
-  teardown_test_env
-}
-
 # Test: ralph todo without --spec falls back to state/current
 test_todo_no_spec_uses_current() {
   CURRENT_TEST="todo_no_spec_uses_current"
@@ -10707,33 +10524,6 @@ test_todo_no_spec_no_current_errors() {
   teardown_test_env
 }
 
-# Test: ralph todo --spec=value (equals form) works
-test_todo_spec_equals_form() {
-  CURRENT_TEST="todo_spec_equals_form"
-  test_header "ralph todo --spec=value: equals form"
-
-  setup_test_env "todo-spec-equals"
-  init_beads
-
-  create_test_spec "equals-test"
-  echo '{"label":"equals-test","update":false,"hidden":false,"spec_path":"specs/equals-test.md"}' \
-    > "$RALPH_DIR/state/equals-test.json"
-  echo "equals-test" > "$RALPH_DIR/state/current"
-
-  local output exit_code=0
-  output=$(ralph-todo --spec=equals-test 2>&1) || exit_code=$?
-
-  if echo "$output" | grep -q "Label: equals-test"; then
-    test_pass "todo --spec=value resolves correctly"
-  elif echo "$output" | grep -q "equals-test"; then
-    test_pass "todo --spec=value targets correct feature"
-  else
-    test_fail "Expected output to reference 'equals-test', got: ${output:0:300}"
-  fi
-
-  teardown_test_env
-}
-
 #-----------------------------------------------------------------------------
 # ralph run --spec Tests
 #-----------------------------------------------------------------------------
@@ -10788,37 +10578,6 @@ test_run_spec_flag_reads_named_state() {
 }
 
 # Test: ralph run -s (short form) works like --spec
-test_run_spec_short_flag() {
-  CURRENT_TEST="run_spec_short_flag"
-  test_header "ralph run -s: short form of --spec"
-
-  setup_test_env "run-spec-short"
-  init_beads
-
-  create_test_spec "short-test"
-  echo '{"label":"short-test","update":false,"hidden":false,"spec_path":"specs/short-test.md"}' \
-    > "$RALPH_DIR/state/short-test.json"
-  echo "short-test" > "$RALPH_DIR/state/current"
-
-  # Create a task bead
-  TASK_ID=$(bd create --title="Implement short" --type=task --labels="spec:short-test" --json 2>/dev/null | jq -r '.id')
-
-  export MOCK_SCENARIO="$SCENARIOS_DIR/complete.sh"
-
-  local output exit_code=0
-  output=$(ralph-run --once -s short-test 2>&1) || exit_code=$?
-
-  if echo "$output" | grep -q "Feature: short-test"; then
-    test_pass "run -s resolves correctly"
-  elif echo "$output" | grep -q "short-test"; then
-    test_pass "run -s targets correct feature"
-  else
-    test_fail "Expected output to reference 'short-test', got: ${output:0:300}"
-  fi
-
-  teardown_test_env
-}
-
 # Test: ralph run without --spec falls back to state/current
 test_run_no_spec_uses_current() {
   CURRENT_TEST="run_no_spec_uses_current"
@@ -10873,37 +10632,6 @@ test_run_spec_flag_missing_state_json() {
     test_pass "Error message references missing state file"
   else
     test_fail "Expected error about missing state, got: ${output:0:300}"
-  fi
-
-  teardown_test_env
-}
-
-# Test: ralph run --spec=value (equals form) works
-test_run_spec_equals_form() {
-  CURRENT_TEST="run_spec_equals_form"
-  test_header "ralph run --spec=value: equals form"
-
-  setup_test_env "run-spec-equals"
-  init_beads
-
-  create_test_spec "equals-test"
-  echo '{"label":"equals-test","update":false,"hidden":false,"spec_path":"specs/equals-test.md"}' \
-    > "$RALPH_DIR/state/equals-test.json"
-
-  # Create a task bead
-  TASK_ID=$(bd create --title="Implement equals" --type=task --labels="spec:equals-test" --json 2>/dev/null | jq -r '.id')
-
-  export MOCK_SCENARIO="$SCENARIOS_DIR/complete.sh"
-
-  local output exit_code=0
-  output=$(ralph-run --once --spec=equals-test 2>&1) || exit_code=$?
-
-  if echo "$output" | grep -q "Feature: equals-test"; then
-    test_pass "run --spec=value resolves correctly"
-  elif echo "$output" | grep -q "equals-test"; then
-    test_pass "run --spec=value targets correct feature"
-  else
-    test_fail "Expected output to reference 'equals-test', got: ${output:0:300}"
   fi
 
   teardown_test_env
@@ -13392,101 +13120,68 @@ test_todo_verification_uses_colon_label() {
 # Tests the host-side code path by simulating the container detection block.
 # Since tests run inside a wrapix container, we extract and test the host-side
 # logic directly rather than running the full script.
-test_todo_dolt_pull_after_complete() {
-  CURRENT_TEST="todo_dolt_pull_after_complete"
-  test_header "todo.sh: runs bd dolt pull after container exits with RALPH_COMPLETE"
-
-  setup_test_env "todo-dolt-pull"
-  init_beads
-
-  local bd_log="$TEST_DIR/bd-calls.log"
-  local real_bd
-  real_bd=$(command -v bd)
-  rm -f "$TEST_DIR/bin/bd"
-  cat > "$TEST_DIR/bin/bd" <<MOCK
-#!/usr/bin/env bash
-echo "\$*" >> "$bd_log"
-exit 0
-MOCK
-  chmod +x "$TEST_DIR/bin/bd"
-
-  # Simulate the host-side code path from todo.sh: wrapix exits 0 → bd dolt pull
-  wrapix_exit=0
-  if [ $wrapix_exit -eq 0 ]; then
-    bd dolt pull 2>/dev/null || true
-  fi
-
-  if [ -f "$bd_log" ] && grep -q "dolt pull" "$bd_log"; then
-    test_pass "bd dolt pull called after successful container exit"
-  else
-    test_fail "bd dolt pull was NOT called after container exit"
-  fi
-
-  teardown_test_env
-}
-
-# Test: todo.sh does NOT run bd dolt pull when container fails
-test_todo_no_dolt_pull_on_failure() {
-  CURRENT_TEST="todo_no_dolt_pull_on_failure"
-  test_header "todo.sh: does not run bd dolt pull when container fails"
-
-  setup_test_env "todo-no-dolt-pull"
-  init_beads
-
-  local bd_log="$TEST_DIR/bd-calls.log"
-  local real_bd
-  real_bd=$(command -v bd)
-  rm -f "$TEST_DIR/bin/bd"
-  cat > "$TEST_DIR/bin/bd" <<MOCK
-#!/usr/bin/env bash
-echo "\$*" >> "$bd_log"
-exit 0
-MOCK
-  chmod +x "$TEST_DIR/bin/bd"
-
-  # Simulate the host-side code path from todo.sh: wrapix exits 1 → no bd dolt pull
-  wrapix_exit=1
-  if [ $wrapix_exit -eq 0 ]; then
-    bd dolt pull 2>/dev/null || true
-  fi
-
-  if [ -f "$bd_log" ] && grep -q "dolt pull" "$bd_log"; then
-    test_fail "bd dolt pull should NOT be called when container exits with failure"
-  else
-    test_pass "bd dolt pull not called when container exits with failure"
-  fi
-
-  teardown_test_env
-}
-
-# Test: todo.sh host-side code contains bd dolt pull after wrapix
-# Verifies the actual code structure in todo.sh matches the expected pattern
-test_todo_dolt_pull_code_structure() {
-  CURRENT_TEST="todo_dolt_pull_code_structure"
-  test_header "todo.sh: host-side code contains bd dolt pull after wrapix"
+# Test: todo.sh host-side bd dolt pull is gated on successful wrapix exit.
+# Runs the real host-side block extracted from todo.sh (not a freshly-written
+# duplicate) so the conditional and pull command stay in sync with production.
+test_todo_dolt_pull_gated_on_wrapix_exit() {
+  CURRENT_TEST="todo_dolt_pull_gated_on_wrapix_exit"
+  test_header "todo.sh: bd dolt pull runs iff wrapix exited 0"
 
   local todo_script="$REPO_ROOT/lib/ralph/cmd/todo.sh"
 
-  # Verify the host-side block has the expected pattern:
-  # wrapix (not exec wrapix) followed by bd dolt pull on success
   if grep -q 'exec wrapix' "$todo_script"; then
-    test_fail "todo.sh should not use 'exec wrapix' (needs to continue after container exits)"
-  else
-    test_pass "todo.sh does not use exec wrapix"
+    test_fail "todo.sh should not use 'exec wrapix' (must continue after container exits)"
+    return
+  fi
+  test_pass "todo.sh does not use exec wrapix"
+
+  # Extract the host-side block (wrapix_exit check + bd dolt pull) and run it
+  # against each exit code. This shares the real source derivation with live.
+  local host_block
+  host_block=$(awk '/wrapix_exit=\$\?/,/^fi$/' "$todo_script")
+  if ! echo "$host_block" | grep -q 'bd dolt pull'; then
+    test_fail "host-side block missing 'bd dolt pull'"
+    return
+  fi
+  if ! echo "$host_block" | grep -q 'wrapix_exit -eq 0'; then
+    test_fail "host-side block missing 'wrapix_exit -eq 0' guard"
+    return
   fi
 
-  if grep -q 'bd dolt pull' "$todo_script"; then
-    test_pass "todo.sh contains bd dolt pull"
-  else
-    test_fail "todo.sh should contain 'bd dolt pull'"
-  fi
+  setup_test_env "todo-dolt-pull-gated"
+  init_beads
 
-  # Verify the conditional: bd dolt pull only runs on wrapix exit 0
-  if grep -A2 'wrapix_exit=\$?' "$todo_script" | grep -q 'wrapix_exit -eq 0'; then
-    test_pass "bd dolt pull is conditional on wrapix exit code 0"
-  else
-    test_fail "bd dolt pull should be conditional on wrapix exit code 0"
-  fi
+  local bd_log="$TEST_DIR/bd-calls.log"
+  rm -f "$TEST_DIR/bin/bd"
+  cat > "$TEST_DIR/bin/bd" <<MOCK
+#!/usr/bin/env bash
+echo "\$*" >> "$bd_log"
+exit 0
+MOCK
+  chmod +x "$TEST_DIR/bin/bd"
+
+  local exit_code
+  for exit_code in 0 1; do
+    : > "$bd_log"
+    # shellcheck disable=SC2034 # referenced by the extracted host block
+    wrapix_exit=$exit_code
+    eval "$host_block"
+    if [ "$exit_code" = "0" ]; then
+      if grep -q 'dolt pull' "$bd_log"; then
+        test_pass "bd dolt pull runs when wrapix_exit=0"
+      else
+        test_fail "bd dolt pull should run when wrapix_exit=0"
+      fi
+    else
+      if grep -q 'dolt pull' "$bd_log"; then
+        test_fail "bd dolt pull must NOT run when wrapix_exit=$exit_code"
+      else
+        test_pass "bd dolt pull skipped when wrapix_exit=$exit_code"
+      fi
+    fi
+  done
+
+  teardown_test_env
 }
 
 #-----------------------------------------------------------------------------
@@ -15752,11 +15447,9 @@ PARALLEL_TESTS=(
   test_status_wrapper
   test_status_no_awaiting_when_empty
   test_status_spec_flag
-  test_status_spec_short_flag
   test_status_all_flag
   test_status_all_empty
   test_status_no_flag_uses_current
-  test_status_spec_equals_form
   test_status_spec_missing_state
   test_malformed_bd_output_parsing
   test_filter_clarify_beads
@@ -15800,9 +15493,7 @@ PARALLEL_TESTS=(
   test_logs_context_lines
   test_logs_no_errors
   test_logs_exit_code_error
-  test_logs_spec_short_flag
   test_logs_no_spec_uses_current
-  test_logs_spec_equals_form
   test_logs_spec_flag_missing_state_json
   test_logs_explicit_logfile_with_spec
   test_diff_no_changes
@@ -15866,16 +15557,12 @@ PARALLEL_TESTS=(
   test_use_no_label
   test_use_writes_plain_text
   test_todo_spec_flag_reads_named_state
-  test_todo_spec_short_flag
   test_todo_no_spec_uses_current
   test_todo_spec_flag_missing_state_json
   test_todo_no_spec_no_current_errors
-  test_todo_spec_equals_form
   test_run_spec_flag_reads_named_state
-  test_run_spec_short_flag
   test_run_no_spec_uses_current
   test_run_spec_flag_missing_state_json
-  test_run_spec_equals_form
   test_run_spec_read_once_semantics
   test_run_spec_no_current_update
   # Concurrent workflow tests
@@ -15927,9 +15614,7 @@ PARALLEL_TESTS=(
   test_todo_clears_implementation_notes
   test_todo_verification_uses_colon_label
   # todo.sh host-side bd dolt pull tests
-  test_todo_dolt_pull_after_complete
-  test_todo_no_dolt_pull_on_failure
-  test_todo_dolt_pull_code_structure
+  test_todo_dolt_pull_gated_on_wrapix_exit
   # Container bead sync tests (bd dolt push / pull / verification)
   test_todo_dolt_push_in_container
   test_todo_post_sync_warning

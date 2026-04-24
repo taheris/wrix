@@ -339,6 +339,31 @@ init_beads() {
   cp -a "$RALPH_BEADS_SNAPSHOT" "$TEST_DIR/.beads"
 }
 
+# Assign monotonically increasing created_at timestamps to bead IDs in argument
+# order. bd's storage layer formats timestamps as time.RFC3339 (second precision;
+# see beads internal/storage/dolt/transaction.go), so rapid bd create calls can
+# produce identical created_at values and a non-deterministic sort. This helper
+# writes created_at directly via dolt sql against the embedded Dolt DB so
+# ordering-sensitive tests don't need sleeps between creates. `bd sql` refuses
+# to run in embedded mode, so we bypass bd and talk to Dolt directly.
+#
+# Usage: set_monotonic_created_at <id1> [<id2> ...]
+set_monotonic_created_at() {
+  local dolt_dir="$TEST_DIR/.beads/embeddeddolt/ralphsnap"
+  if [ ! -d "$dolt_dir/.dolt" ]; then
+    echo "ERROR: set_monotonic_created_at: embedded dolt dir missing at $dolt_dir" >&2
+    return 1
+  fi
+  local i=0
+  local id
+  for id in "$@"; do
+    (cd "$dolt_dir" && dolt sql -q \
+      "UPDATE issues SET created_at = '2000-01-01 00:00:0${i}' WHERE id = '${id}'" \
+      >/dev/null)
+    i=$((i + 1))
+  done
+}
+
 # Simulate Claude dispatching the SessionStart[compact] re-pin hook and emit
 # hookSpecificOutput.additionalContext on stdout.
 #
