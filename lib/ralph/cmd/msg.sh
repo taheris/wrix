@@ -673,6 +673,7 @@ if [ "$CHAT" = "true" ]; then
   cleared_ids=$(jq -cn --argjson a "$before_ids" --argjson b "$remaining" '$a - $b')
   echo "$cleared_ids" | jq -r '.[]' | while IFS= read -r cleared; do
     [ -z "$cleared" ] && continue
+    reset_iteration_for_bead "$cleared"
     print_resume_hint "$cleared"
   done
 

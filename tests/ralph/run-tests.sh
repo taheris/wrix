@@ -7806,6 +7806,49 @@ test_iteration_counter_persistence() {
   rm -rf "$tmp_dir"
 }
 
+# Test: interactive Drafter session (`ralph msg -c`) also resets iteration_count
+# when the LLM clears a clarify — parallel to fast-reply/dismiss coverage.
+test_msg_interactive_clear_resets_iteration() {
+  CURRENT_TEST="msg_interactive_clear_resets_iteration"
+  test_header "interactive Drafter clarify-clear resets iteration_count (spec:ralph-review §113)"
+
+  local msg_script="$REPO_ROOT/lib/ralph/cmd/msg.sh"
+
+  # Locate the cleared_ids loop: `echo "$cleared_ids" | jq -r '.[]' | while ... read -r cleared`
+  local loop_start_line loop_end_line
+  loop_start_line=$(grep -nE 'echo "\$cleared_ids".*jq.*while.*read -r cleared' "$msg_script" \
+    | head -1 | cut -d: -f1)
+  if [ -z "$loop_start_line" ]; then
+    test_fail "could not locate cleared_ids while-loop in msg.sh"
+    return
+  fi
+  # End of the loop = first `done` after loop_start_line
+  loop_end_line=$(awk -v start="$loop_start_line" 'NR > start && /^[[:space:]]*done[[:space:]]*$/ {print NR; exit}' "$msg_script")
+  if [ -z "$loop_end_line" ]; then
+    test_fail "could not locate end of cleared_ids while-loop in msg.sh"
+    return
+  fi
+
+  # Extract the loop body and verify both reset + resume-hint are present, in order.
+  local reset_line resume_line
+  reset_line=$(awk -v s="$loop_start_line" -v e="$loop_end_line" \
+    'NR > s && NR < e && /reset_iteration_for_bead[[:space:]]+"\$cleared"/ {print NR; exit}' "$msg_script")
+  resume_line=$(awk -v s="$loop_start_line" -v e="$loop_end_line" \
+    'NR > s && NR < e && /print_resume_hint[[:space:]]+"\$cleared"/ {print NR; exit}' "$msg_script")
+
+  if [ -n "$reset_line" ]; then
+    test_pass "cleared_ids loop calls reset_iteration_for_bead"
+  else
+    test_fail "cleared_ids loop should call reset_iteration_for_bead \"\$cleared\" (spec:ralph-review §113)"
+  fi
+
+  if [ -n "$reset_line" ] && [ -n "$resume_line" ] && [ "$reset_line" -lt "$resume_line" ]; then
+    test_pass "reset_iteration_for_bead precedes print_resume_hint in cleared_ids loop"
+  else
+    test_fail "reset_iteration_for_bead should run before print_resume_hint (reset:$reset_line resume:$resume_line)"
+  fi
+}
+
 # Test: full run → check → run → check → push loop has clean termination paths
 test_run_check_loop_terminates() {
   CURRENT_TEST="run_check_loop_terminates"
@@ -15693,6 +15736,7 @@ PARALLEL_TESTS=(
   test_check_auto_iterates_via_run
   test_check_iteration_cap_escalates
   test_iteration_counter_persistence
+  test_msg_interactive_clear_resets_iteration
   test_default_config_has_hooks
   test_parse_annotation_link
   test_parse_spec_annotations
