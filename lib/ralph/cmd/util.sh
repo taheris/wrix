@@ -2054,6 +2054,38 @@ build_repin_content() {
     esac
   done
 
+  local template_name=""
+  case "$command" in
+    plan)
+      case "$mode" in
+        new) template_name="plan-new" ;;
+        update) template_name="plan-update" ;;
+      esac
+      ;;
+    todo)
+      case "$mode" in
+        new) template_name="todo-new" ;;
+        update) template_name="todo-update" ;;
+      esac
+      ;;
+    run | check | msg) template_name="$command" ;;
+  esac
+
+  # Template lookup precedence mirrors render_template: prefer local
+  # .wrapix/ralph/template over the packaged RALPH_TEMPLATE_DIR.
+  local template_path="" partial_dir=""
+  if [ -n "$template_name" ]; then
+    local local_template_dir="${RALPH_DIR:-.wrapix/ralph}/template"
+    local pkg_template_dir="${RALPH_TEMPLATE_DIR:-}"
+    if [ -f "$local_template_dir/${template_name}.md" ]; then
+      template_path="$local_template_dir/${template_name}.md"
+      partial_dir="$local_template_dir/partial"
+    elif [ -n "$pkg_template_dir" ] && [ -f "$pkg_template_dir/${template_name}.md" ]; then
+      template_path="$pkg_template_dir/${template_name}.md"
+      partial_dir="$pkg_template_dir/partial"
+    fi
+  fi
+
   {
     echo "# Ralph re-pin (${command})"
     echo ""
@@ -2071,6 +2103,19 @@ build_repin_content() {
     echo "Exit signals: RALPH_COMPLETE, RALPH_BLOCKED: <reason>, RALPH_CLARIFY: <question>"
     echo ""
     echo "Re-read as needed: ${spec}, \`bd show <id>\`, \`bd mol current\`, companion manifests."
+
+    if [ -n "$template_path" ] && [ -d "$partial_dir" ]; then
+      local refs
+      refs=$(grep -oE '\{\{> [a-z-]+\}\}' "$template_path" | sed 's/{{> //;s/}}//' | sort -u || true)
+      local ref body
+      for ref in $refs; do
+        body=$(resolve_partials "{{> $ref}}" "$partial_dir")
+        if [ -n "$body" ] && [ "$body" != "{{> $ref}}" ]; then
+          echo ""
+          echo "$body"
+        fi
+      done
+    fi
   }
 }
 
