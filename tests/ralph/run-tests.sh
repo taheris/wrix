@@ -15130,6 +15130,209 @@ test_repin_content_size() {
   teardown_test_env
 }
 
+test_repin_scans_template_for_partials() {
+  CURRENT_TEST="repin_scans_template_for_partials"
+  test_header "build_repin_content scans template for {{> X}} refs and resolves them"
+
+  setup_test_env "repin-scans-partials"
+  # shellcheck source=../../lib/ralph/cmd/util.sh
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  # Minimal local run.md with two distinct partial refs. Local template dir
+  # takes precedence over RALPH_TEMPLATE_DIR inside build_repin_content.
+  cat > "$RALPH_DIR/template/run.md" << 'EOF'
+# Run with partials
+
+Preamble.
+
+{{> partial-alpha}}
+
+{{> partial-beta}}
+
+Trailer.
+EOF
+
+  mkdir -p "$RALPH_DIR/template/partial"
+  local alpha_sentinel="SENTINEL_ALPHA_BODY_7a3f29"
+  local beta_sentinel="SENTINEL_BETA_BODY_9b2e41"
+  cat > "$RALPH_DIR/template/partial/partial-alpha.md" << EOF
+## Alpha Partial
+
+${alpha_sentinel}
+EOF
+  cat > "$RALPH_DIR/template/partial/partial-beta.md" << EOF
+## Beta Partial
+
+${beta_sentinel}
+EOF
+
+  local content
+  content=$(build_repin_content "my-feature" "run" "issue=wx-abc.1" "title=t")
+
+  if echo "$content" | grep -qF "$alpha_sentinel"; then
+    test_pass "re-pin includes body of partial-alpha"
+  else
+    test_fail "re-pin did not include body of partial-alpha"
+  fi
+
+  if echo "$content" | grep -qF "$beta_sentinel"; then
+    test_pass "re-pin includes body of partial-beta"
+  else
+    test_fail "re-pin did not include body of partial-beta"
+  fi
+
+  # Unreferenced partials must not be injected — scanning, not glob-dumping.
+  cat > "$RALPH_DIR/template/partial/partial-gamma.md" << 'EOF'
+SENTINEL_GAMMA_UNREFERENCED_DO_NOT_INCLUDE
+EOF
+  content=$(build_repin_content "my-feature" "run" "issue=wx-abc.1" "title=t")
+  if echo "$content" | grep -qF "SENTINEL_GAMMA_UNREFERENCED_DO_NOT_INCLUDE"; then
+    test_fail "re-pin leaked body of unreferenced partial (gamma)"
+  else
+    test_pass "re-pin excludes unreferenced partials in the same dir"
+  fi
+
+  teardown_test_env
+}
+
+test_repin_injects_rendered_partials() {
+  CURRENT_TEST="repin_injects_rendered_partials"
+  test_header "re-pin for each container-executed command includes rendered partials after orientation"
+
+  setup_test_env "repin-injects-partials"
+  # shellcheck source=../../lib/ralph/cmd/util.sh
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  # Remove local stubs that would shadow packaged templates. Only run.md from
+  # the fixture matches a build_repin_content lookup name; plan.md and todo.md
+  # are never looked up (the helper targets plan-new/plan-update/todo-new/
+  # todo-update). Deleting unconditionally keeps the test resilient.
+  rm -f "$RALPH_DIR/template/run.md" \
+    "$RALPH_DIR/template/plan.md" \
+    "$RALPH_DIR/template/todo.md"
+
+  local pkg_dir="$RALPH_TEMPLATE_DIR"
+
+  # case format: <command>|<mode>|<template-basename>
+  local cases=(
+    "plan|new|plan-new"
+    "plan|update|plan-update"
+    "todo|new|todo-new"
+    "todo|update|todo-update"
+    "run||run"
+    "check||check"
+    "msg||msg"
+  )
+
+  local entry command mode tmpl template_path content refs ref partial_path body_head
+  for entry in "${cases[@]}"; do
+    IFS='|' read -r command mode tmpl <<< "$entry"
+    template_path="$pkg_dir/${tmpl}.md"
+
+    if [ ! -f "$template_path" ]; then
+      test_fail "packaged template missing: $template_path"
+      continue
+    fi
+
+    if [ -n "$mode" ]; then
+      content=$(build_repin_content "my-feature" "$command" \
+        "mode=$mode" "molecule=wx-abc" "issue=wx-abc.1" \
+        "title=t" "companions=specs/x" "base=abc")
+    else
+      content=$(build_repin_content "my-feature" "$command" \
+        "molecule=wx-abc" "issue=wx-abc.1" \
+        "title=t" "companions=specs/x" "base=abc")
+    fi
+
+    refs=$(grep -oE '\{\{> [a-z-]+\}\}' "$template_path" | sed 's/{{> //;s/}}//' | sort -u)
+    if [ -z "$refs" ]; then
+      test_fail "$tmpl: packaged template has no partial refs (precondition)"
+      continue
+    fi
+
+    local all_ok=1
+    local orient_line first_partial_line=""
+    orient_line=$(echo "$content" | grep -n 'Re-read as needed' | head -1 | cut -d: -f1)
+
+    for ref in $refs; do
+      partial_path="$pkg_dir/partial/${ref}.md"
+      if [ ! -f "$partial_path" ]; then
+        test_fail "$tmpl: referenced partial missing on disk: $partial_path"
+        all_ok=0
+        continue
+      fi
+      body_head=$(head -1 "$partial_path")
+      if [ -z "$body_head" ]; then
+        test_fail "$tmpl: partial '$ref' has empty first line (bad fixture)"
+        all_ok=0
+        continue
+      fi
+      if ! echo "$content" | grep -qF "$body_head"; then
+        test_fail "$tmpl: re-pin missing rendered body of partial '$ref' (fingerprint: $body_head)"
+        all_ok=0
+        continue
+      fi
+      local candidate
+      candidate=$(echo "$content" | grep -nF "$body_head" | head -1 | cut -d: -f1)
+      if [ -n "$candidate" ]; then
+        if [ -z "$first_partial_line" ] || [ "$candidate" -lt "$first_partial_line" ]; then
+          first_partial_line="$candidate"
+        fi
+      fi
+    done
+
+    if [ "$all_ok" -eq 1 ]; then
+      test_pass "$tmpl: re-pin includes every referenced partial body"
+    fi
+
+    if [ -n "$orient_line" ] && [ -n "$first_partial_line" ] && [ "$first_partial_line" -gt "$orient_line" ]; then
+      test_pass "$tmpl: partials appended after orientation block"
+    else
+      test_fail "$tmpl: partials not after orientation (orient:$orient_line first_partial:$first_partial_line)"
+    fi
+  done
+
+  teardown_test_env
+}
+
+test_repin_content_size_with_partials() {
+  CURRENT_TEST="repin_content_size_with_partials"
+  test_header "build_repin_content stays under 10KB with all partials injected"
+
+  setup_test_env "repin-content-size-with-partials"
+  # shellcheck source=../../lib/ralph/cmd/util.sh
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  # Ensure packaged templates are resolved (largest partial set — plan-update).
+  rm -f "$RALPH_DIR/template/run.md" \
+    "$RALPH_DIR/template/plan.md" \
+    "$RALPH_DIR/template/todo.md"
+
+  # plan-update references the full partial set — exercise it as worst case,
+  # and exercise every known key so the orientation block is also at max size.
+  local long_companions="specs/companions/a.md,specs/companions/b.md,specs/companions/c.md,specs/companions/d.md"
+  local content
+  content=$(build_repin_content "my-feature" "plan" \
+    "spec=specs/my-feature.md" \
+    "mode=update" \
+    "molecule=wx-abc" \
+    "issue=wx-abc.42" \
+    "title=A reasonably long title describing the work to be done" \
+    "companions=$long_companions" \
+    "base=abcdef1234567890")
+
+  local size
+  size=$(printf '%s' "$content" | wc -c)
+
+  if [ "$size" -lt 10240 ]; then
+    test_pass "re-pin content with partials is $size bytes (< 10240)"
+  else
+    test_fail "re-pin content with partials is $size bytes (>= 10240 cap)"
+  fi
+
+  teardown_test_env
+}
+
 test_runtime_dir_gitignored() {
   CURRENT_TEST="runtime_dir_gitignored"
   test_header ".wrapix/ralph/runtime/ is listed in .gitignore"
@@ -16296,6 +16499,9 @@ ALL_TESTS=(
   test_repin_script_output
   test_repin_content_is_condensed
   test_repin_content_size
+  test_repin_scans_template_for_partials
+  test_repin_injects_rendered_partials
+  test_repin_content_size_with_partials
   test_repin_hook_files_written
   test_host_commands_no_repin_hook
   test_runtime_dir_gitignored
