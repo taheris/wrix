@@ -317,16 +317,6 @@ When `state/<label>.json` does not exist (e.g., working from a different machine
 
 **README parsing**: Simple grep/awk to find the row matching the spec filename and extract the Beads column. The table format is stable and controlled by the project.
 
-## Implementation Notes Lifecycle
-
-`state/<label>.json` has an optional `implementation_notes` array — transient hints captured during planning that inform task creation but should not outlive it.
-
-- **Written** during `ralph plan -u` when the user shares task-creation-shaped context the LLM should preserve for the next `ralph todo` session
-- **Read** by `ralph todo` via the `IMPLEMENTATION_NOTES` template variable (todo-new, todo-update)
-- **Cleared** atomically with `base_commit` advancement on `ralph todo` RALPH_COMPLETE — notes are task-creation-local; re-running on a new diff starts clean
-
-Notes live with the anchor regardless of which sibling specs the planning session edited.
-
 ## Template Content Requirements
 
 ### plan-new.md
