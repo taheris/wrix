@@ -3905,6 +3905,83 @@ B." \
   teardown_test_env
 }
 
+# Test: `ralph msg -a <choice>` and `ralph msg -d` without -n/-i must fail
+# loudly instead of silently falling through to list mode.
+test_msg_answer_dismiss_require_target() {
+  CURRENT_TEST="msg_answer_dismiss_require_target"
+  test_header "ralph msg -a/-d without -n/-i errors instead of listing"
+
+  setup_test_env "msg-require-target"
+  init_beads
+
+  mkdir -p "$RALPH_DIR/state"
+  echo "demo" > "$RALPH_DIR/state/current"
+
+  local bead_id
+  bead_id=$(bd create --title="Outstanding question" --type=task \
+    --description="Body." \
+    --labels="spec:demo,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+
+  set +e
+  local answer_output answer_exit
+  answer_output=$(ralph-msg -a "free text" 2>&1)
+  answer_exit=$?
+  set -e
+
+  if [ "$answer_exit" -ne 0 ]; then
+    test_pass "ralph msg -a without target exits non-zero (exit=$answer_exit)"
+  else
+    test_fail "ralph msg -a without target should exit non-zero"
+  fi
+
+  if echo "$answer_output" | grep -qF -- "-a requires -n <N> or -i <id>"; then
+    test_pass "ralph msg -a without target prints explicit error"
+  else
+    test_fail "ralph msg -a error missing expected message (got: $answer_output)"
+  fi
+
+  if echo "$answer_output" | grep -qF "Outstanding clarifies"; then
+    test_fail "ralph msg -a without target fell through to list mode"
+  else
+    test_pass "ralph msg -a without target did not print clarify list"
+  fi
+
+  set +e
+  local dismiss_output dismiss_exit
+  dismiss_output=$(ralph-msg -d 2>&1)
+  dismiss_exit=$?
+  set -e
+
+  if [ "$dismiss_exit" -ne 0 ]; then
+    test_pass "ralph msg -d without target exits non-zero (exit=$dismiss_exit)"
+  else
+    test_fail "ralph msg -d without target should exit non-zero"
+  fi
+
+  if echo "$dismiss_output" | grep -qF -- "-d requires -n <N> or -i <id>"; then
+    test_pass "ralph msg -d without target prints explicit error"
+  else
+    test_fail "ralph msg -d error missing expected message (got: $dismiss_output)"
+  fi
+
+  if echo "$dismiss_output" | grep -qF "Outstanding clarifies"; then
+    test_fail "ralph msg -d without target fell through to list mode"
+  else
+    test_pass "ralph msg -d without target did not print clarify list"
+  fi
+
+  local label_count
+  label_count=$(bd show "$bead_id" --json 2>/dev/null \
+    | jq -r '.[0].labels // [] | map(select(. == "ralph:clarify")) | length')
+  if [ "$label_count" = "1" ]; then
+    test_pass "ralph:clarify remained intact after targetless -a/-d"
+  else
+    test_fail "ralph:clarify was cleared despite targetless -a/-d"
+  fi
+
+  teardown_test_env
+}
+
 # Test: `ralph msg -n <N> -d` and `ralph msg -i <id> -d` dismiss a clarify
 # with a work-around note, host-side; label cleared, resume hint printed.
 test_msg_dismiss() {
@@ -15621,6 +15698,7 @@ SEQUENTIAL_TESTS=(
   test_msg_answer_option_lookup
   test_msg_answer_verbatim
   test_msg_answer_option_missing_errors
+  test_msg_answer_dismiss_require_target
   test_msg_dismiss
   test_run_respects_dependencies
   test_run_loop_processes_all

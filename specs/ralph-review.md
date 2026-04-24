@@ -409,6 +409,8 @@ Clarify beads that present a choice must enumerate their options in a standard m
   [verify](../tests/ralph/run-tests.sh#test_msg_answer_option_missing_errors)
 - [ ] `ralph msg -n <N> -d` and `ralph msg -i <id> -d` dismiss a clarify with a work-around note, host-side
   [verify](../tests/ralph/run-tests.sh#test_msg_dismiss)
+- [ ] `ralph msg -a <choice>` and `ralph msg -d` without `-n <N>`/`-i <id>` exit non-zero with a clear error instead of silently falling through to list mode
+  [verify](../tests/ralph/run-tests.sh#test_msg_answer_dismiss_require_target)
 - [ ] `msg.md` template exists and includes `context-pinning`, `spec-header`, `companions-context`, and `exit-signals` partials with `CLARIFY_BEADS` variable
   [verify](../tests/ralph/run-tests.sh#test_msg_template_structure)
 

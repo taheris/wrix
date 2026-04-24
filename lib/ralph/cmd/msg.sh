@@ -131,6 +131,14 @@ if [ "$ANSWER_SET" = "true" ] && [ "$DISMISS" = "true" ]; then
   error "Use either -a <choice> or -d, not both"
 fi
 
+if [ "$ANSWER_SET" = "true" ] && [ -z "$BEAD_ID" ] && [ -z "$NUM_TARGET" ]; then
+  error "-a requires -n <N> or -i <id>"
+fi
+
+if [ "$DISMISS" = "true" ] && [ -z "$BEAD_ID" ] && [ -z "$NUM_TARGET" ]; then
+  error "-d requires -n <N> or -i <id>"
+fi
+
 #-----------------------------------------------------------------------------
 # Determine source label from bead labels
 #-----------------------------------------------------------------------------
