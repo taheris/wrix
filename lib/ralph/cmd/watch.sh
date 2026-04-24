@@ -81,7 +81,7 @@ if [ -z "$SPEC_FLAG" ]; then
 fi
 
 # Container detection: if not in container and wrapix is available, re-launch in container
-if [ ! -f /etc/wrapix/claude-config.json ] && command -v wrapix &>/dev/null; then
+if [ ! -f "${WRAPIX_CLAUDE_CONFIG:-/etc/wrapix/claude-config.json}" ] && command -v wrapix &>/dev/null; then
   export RALPH_MODE=1
   export RALPH_CMD=watch
   RALPH_ARGS_PARTS="--spec $SPEC_FLAG"

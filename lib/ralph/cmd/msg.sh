@@ -564,7 +564,7 @@ fi
 #-----------------------------------------------------------------------------
 if [ "$CHAT" = "true" ]; then
   # HOST SIDE: re-launch in container
-  if [ ! -f /etc/wrapix/claude-config.json ] && command -v wrapix &>/dev/null; then
+  if [ ! -f "${WRAPIX_CLAUDE_CONFIG:-/etc/wrapix/claude-config.json}" ] && command -v wrapix &>/dev/null; then
     host_label=$(resolve_spec_label "$SPEC_FILTER")
 
     echo "Ralph msg: interactive Drafter session for '$host_label'"

@@ -16,7 +16,7 @@ source "$(dirname "$0")/util.sh"
 
 # Container detection: if not in container and wrapix is available, re-launch in container
 # /etc/wrapix/claude-config.json only exists inside containers (baked into image)
-if [ ! -f /etc/wrapix/claude-config.json ] && command -v wrapix &>/dev/null; then
+if [ ! -f "${WRAPIX_CLAUDE_CONFIG:-/etc/wrapix/claude-config.json}" ] && command -v wrapix &>/dev/null; then
   export RALPH_MODE=1
   export RALPH_CMD=plan
   export RALPH_ARGS="${*:-}"

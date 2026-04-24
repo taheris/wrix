@@ -7883,6 +7883,343 @@ test_iteration_counter_persistence() {
   rm -rf "$tmp_dir"
 }
 
+#-----------------------------------------------------------------------------
+# Live-path tests for ralph check / run host-side branch (wx-8oz8i)
+#
+# These tests run lib/ralph/cmd/check.sh and run.sh end-to-end with mocks for
+# wrapix, git push, beads-push, and the ralph dispatcher. They force the
+# host-side branch via WRAPIX_CLAUDE_CONFIG=/nonexistent so the verdict,
+# do_push_gate, clarify detection, iteration counter, and run→check handoff
+# all execute — not just get grep-matched in source.
+#-----------------------------------------------------------------------------
+
+# Test: clean RALPH_COMPLETE with no new beads invokes git push + beads-push
+test_check_host_push_gate_clean_live() {
+  CURRENT_TEST="check_host_push_gate_clean_live"
+  test_header "check.sh live: clean review runs git push + beads-push"
+
+  setup_test_env "check-push-gate-live"
+  init_beads
+  setup_host_mocks
+
+  create_test_spec "live-clean"
+  setup_label_state "live-clean"
+
+  local output
+  set +e
+  output=$(ralph-check --spec live-clean 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [ "$exit_code" -eq 0 ]; then
+    test_pass "ralph check --spec live-clean exits 0 on clean review"
+  else
+    test_fail "ralph check exited $exit_code; output: $output"
+  fi
+
+  assert_mock_called wrapix "." "wrapix was launched"
+  assert_mock_called git "push" "do_push_gate ran git push"
+  assert_mock_called beads-push "." "do_push_gate ran beads-push"
+
+  if echo "$output" | grep -q "Review PASSED"; then
+    test_pass "verdict shows 'Review PASSED'"
+  else
+    test_fail "verdict missing 'Review PASSED'; got: $output"
+  fi
+
+  teardown_test_env
+}
+
+# Test: pre-existing ralph:clarify bead on the spec suppresses the push gate
+test_check_host_clarify_stops_push_live() {
+  CURRENT_TEST="check_host_clarify_stops_push_live"
+  test_header "check.sh live: pre-existing ralph:clarify blocks push + surfaces ralph msg"
+
+  setup_test_env "check-clarify-live"
+  init_beads
+  setup_host_mocks
+
+  create_test_spec "live-clarify"
+  setup_label_state "live-clarify"
+
+  # Seed a bead with ralph:clarify BEFORE wrapix runs (pre-existing question).
+  local clarify_id
+  clarify_id=$(bd create --title="Need decision on approach" \
+    --description="Which approach should we take?" \
+    --type=task --labels="spec:live-clarify,ralph:clarify" \
+    --json | jq -r '.id')
+
+  local output
+  set +e
+  output=$(ralph-check --spec live-clarify 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [ "$exit_code" -eq 0 ]; then
+    test_pass "ralph check exits 0 even with clarify pending (no error, just no push)"
+  else
+    test_fail "ralph check exited $exit_code; output: $output"
+  fi
+
+  assert_mock_called wrapix "." "wrapix was launched"
+  assert_mock_not_called git "push gate skipped on clarify"
+  assert_mock_not_called beads-push "beads-push skipped on clarify"
+
+  if echo "$output" | grep -q "$clarify_id"; then
+    test_pass "inline ralph msg surfaces pending clarify $clarify_id"
+  else
+    test_fail "output should mention clarify bead $clarify_id; got: $output"
+  fi
+
+  teardown_test_env
+}
+
+# Test: fix-up beads under cap trigger exec ralph run + iteration_count bump
+test_check_host_auto_iterate_live() {
+  CURRENT_TEST="check_host_auto_iterate_live"
+  test_header "check.sh live: under-cap fix-up beads auto-iterate via exec ralph run"
+
+  setup_test_env "check-auto-iterate-live"
+  init_beads
+  setup_host_mocks
+
+  create_test_spec "live-iter"
+  setup_label_state "live-iter"
+
+  # Simulate reviewer creating a fix-up bead inside the container.
+  export MOCK_WRAPIX_HOOK='bd create --title="Fix-up work" --type=task --labels="spec:live-iter" --json >/dev/null'
+  # Do NOT dispatch 'run' — record only, so we don't recurse.
+  export MOCK_RALPH_DISPATCH="msg"
+
+  local output
+  set +e
+  output=$(ralph-check --spec live-iter 2>&1)
+  local exit_code=$?
+  set -e
+
+  assert_mock_called wrapix "." "wrapix was launched"
+  assert_mock_called ralph "^ralph run -s live-iter" "host branch exec'd 'ralph run -s live-iter'"
+  assert_mock_not_called beads-push "push gate skipped on fix-up"
+
+  local iter
+  iter=$(jq -r '.iteration_count // 0' "$RALPH_DIR/state/live-iter.json")
+  if [ "$iter" = "1" ]; then
+    test_pass "iteration_count incremented to 1"
+  else
+    test_fail "iteration_count should be 1 after one auto-iterate; got '$iter'"
+  fi
+
+  # ralph check exec's ralph run → mock exits 0 → we see that exit code.
+  if [ "$exit_code" -eq 0 ]; then
+    test_pass "handoff exits with mock ralph run's exit code (0)"
+  else
+    test_fail "unexpected exit code $exit_code; output: $output"
+  fi
+
+  unset MOCK_WRAPIX_HOOK MOCK_RALPH_DISPATCH
+  teardown_test_env
+}
+
+# Test: at iteration cap, fix-up beads escalate to ralph:clarify (no push, no handoff)
+test_check_host_iteration_cap_live() {
+  CURRENT_TEST="check_host_iteration_cap_live"
+  test_header "check.sh live: iteration cap escalates via ralph:clarify"
+
+  setup_test_env "check-iter-cap-live"
+  init_beads
+  setup_host_mocks
+
+  create_test_spec "live-cap"
+  setup_label_state "live-cap"
+
+  # Pre-seed iteration_count at the cap (default 3).
+  jq '. + {iteration_count: 3}' "$RALPH_DIR/state/live-cap.json" \
+    > "$RALPH_DIR/state/live-cap.json.tmp"
+  mv "$RALPH_DIR/state/live-cap.json.tmp" "$RALPH_DIR/state/live-cap.json"
+
+  export MOCK_WRAPIX_HOOK='bd create --title="Another fix-up" --type=task --labels="spec:live-cap" --json >/dev/null'
+  export MOCK_RALPH_DISPATCH="msg"
+
+  local output
+  set +e
+  output=$(ralph-check --spec live-cap 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [ "$exit_code" -eq 0 ]; then
+    test_pass "at-cap escalation returns 0 (human-attention state, not an error)"
+  else
+    test_fail "ralph check exited $exit_code; output: $output"
+  fi
+
+  assert_mock_called wrapix "." "wrapix was launched"
+  assert_mock_not_called beads-push "push gate skipped at cap"
+
+  # At cap: must NOT have exec'd ralph run (no auto-iterate beyond cap).
+  if [ ! -f "$MOCK_LOG_DIR/ralph.log" ] || ! grep -qE "^ralph run" "$MOCK_LOG_DIR/ralph.log"; then
+    test_pass "no 'ralph run' handoff at iteration cap"
+  else
+    test_fail "at-cap must not exec ralph run; ralph.log: $(cat "$MOCK_LOG_DIR/ralph.log")"
+  fi
+
+  if echo "$output" | grep -q "Iteration cap"; then
+    test_pass "output explains iteration cap reached"
+  else
+    test_fail "output should mention 'Iteration cap'; got: $output"
+  fi
+
+  # Newest fix-up bead should now carry ralph:clarify.
+  local clarify_count
+  clarify_count=$(bd list -l "spec:live-cap,ralph:clarify" --json | jq 'length')
+  if [ "$clarify_count" -ge 1 ]; then
+    test_pass "newest fix-up bead received ralph:clarify label"
+  else
+    test_fail "at-cap should add ralph:clarify to newest fix-up; clarify count=$clarify_count"
+  fi
+
+  unset MOCK_WRAPIX_HOOK MOCK_RALPH_DISPATCH
+  teardown_test_env
+}
+
+# Test: git push failure returns non-zero with the documented hint; beads-push
+# failure returns non-zero but leaves code pushed.
+test_check_host_push_failures_live() {
+  CURRENT_TEST="check_host_push_failures_live"
+  test_header "check.sh live: do_push_gate failure modes return distinct codes"
+
+  # --- git push fails ---
+  setup_test_env "check-gitpush-fail-live"
+  init_beads
+  setup_host_mocks
+
+  create_test_spec "live-gitfail"
+  setup_label_state "live-gitfail"
+
+  export MOCK_GIT_PUSH_EXIT=1
+  local output exit_code
+  set +e
+  output=$(ralph-check --spec live-gitfail 2>&1)
+  exit_code=$?
+  set -e
+
+  # do_push_gate returns 1 on git push fail; check.sh main() collapses any
+  # non-zero SPEC_EXIT to `exit 1` — so the CLI-visible code is always 1 for
+  # push-gate errors. We assert the hint differentiates the failure mode.
+  if [ "$exit_code" -ne 0 ]; then
+    test_pass "git push failure surfaces as non-zero exit (got $exit_code)"
+  else
+    test_fail "git push failure should return non-zero; got $exit_code"
+  fi
+
+  if echo "$output" | grep -qE "Pull/rebase then re-run ralph check"; then
+    test_pass "git push failure surfaces pull/rebase hint"
+  else
+    test_fail "missing pull/rebase hint; output: $output"
+  fi
+
+  assert_mock_not_called beads-push "beads-push must not run when git push failed"
+  unset MOCK_GIT_PUSH_EXIT
+  teardown_test_env
+
+  # --- beads-push fails ---
+  setup_test_env "check-beadspush-fail-live"
+  init_beads
+  setup_host_mocks
+
+  create_test_spec "live-beadsfail"
+  setup_label_state "live-beadsfail"
+
+  export MOCK_BEADS_PUSH_EXIT=1
+  set +e
+  output=$(ralph-check --spec live-beadsfail 2>&1)
+  exit_code=$?
+  set -e
+
+  if [ "$exit_code" -ne 0 ]; then
+    test_pass "beads-push failure surfaces as non-zero exit (got $exit_code)"
+  else
+    test_fail "beads-push failure should return non-zero; got $exit_code"
+  fi
+
+  if echo "$output" | grep -qE "Run beads-push manually"; then
+    test_pass "beads-push failure surfaces manual-run hint (distinguishes from git-push failure)"
+  else
+    test_fail "missing 'Run beads-push manually' hint; output: $output"
+  fi
+
+  assert_mock_called git "push" "git push ran (code made it to remote)"
+  unset MOCK_BEADS_PUSH_EXIT
+  teardown_test_env
+
+  # --- detached HEAD ---
+  setup_test_env "check-detached-live"
+  init_beads
+  setup_host_mocks --no-git-init
+
+  create_test_spec "live-detached"
+  setup_label_state "live-detached"
+
+  # Set up a commit + detach HEAD.
+  (cd "$TEST_DIR" && git init -q -b main && \
+    git -c user.email=test@test -c user.name=Test commit -q --allow-empty -m "init" && \
+    git -c advice.detachedHead=false checkout -q --detach HEAD) >/dev/null 2>&1
+
+  set +e
+  output=$(ralph-check --spec live-detached 2>&1)
+  exit_code=$?
+  set -e
+
+  if [ "$exit_code" -ne 0 ]; then
+    test_pass "detached HEAD surfaces as non-zero exit (got $exit_code)"
+  else
+    test_fail "detached HEAD should return non-zero; got $exit_code"
+  fi
+
+  if echo "$output" | grep -qE "detached"; then
+    test_pass "detached HEAD surfaces 'detached' error"
+  else
+    test_fail "missing 'detached' error; output: $output"
+  fi
+
+  assert_mock_not_called git "detached HEAD must not attempt git push"
+  assert_mock_not_called beads-push "detached HEAD must not attempt beads-push"
+  teardown_test_env
+}
+
+# Test: ralph run (continuous) exec's ralph check on host after wrapix returns 0
+test_run_to_check_handoff_live() {
+  CURRENT_TEST="run_to_check_handoff_live"
+  test_header "run.sh live: continuous mode exec's 'ralph check --spec <label>' after wrapix"
+
+  setup_test_env "run-check-handoff-live"
+  init_beads
+  setup_host_mocks
+
+  create_test_spec "live-handoff"
+  setup_label_state "live-handoff"
+
+  # Do NOT dispatch 'check' — record only so we see the handoff without recursing.
+  export MOCK_RALPH_DISPATCH="msg"
+
+  set +e
+  ralph-run --spec live-handoff >/dev/null 2>&1
+  local exit_code=$?
+  set -e
+
+  assert_mock_called wrapix "." "wrapix was launched"
+  assert_mock_called ralph "^ralph check --spec live-handoff" \
+    "run.sh exec'd 'ralph check --spec live-handoff' on host after wrapix"
+
+  if [ "$exit_code" -eq 0 ]; then
+    test_pass "handoff exits with mock ralph check's exit code (0)"
+  else
+    test_fail "unexpected exit code $exit_code"
+  fi
+
+  unset MOCK_RALPH_DISPATCH
+  teardown_test_env
+}
+
 # Test: interactive Drafter session (`ralph msg -c`) also resets iteration_count
 # when the LLM clears a clarify — parallel to fast-reply/dismiss coverage.
 test_msg_interactive_clear_resets_iteration() {
@@ -15718,6 +16055,13 @@ SEQUENTIAL_TESTS=(
   test_todo_beads_visible_to_run
   test_run_startup_dolt_pull_behavior
   test_run_check_loop_terminates
+  # Live-path tests for host-side check/run branch (wx-8oz8i)
+  test_check_host_push_gate_clean_live
+  test_check_host_clarify_stops_push_live
+  test_check_host_auto_iterate_live
+  test_check_host_iteration_cap_live
+  test_check_host_push_failures_live
+  test_run_to_check_handoff_live
 )
 
 # Tests safe for parallel execution (template logic, file state, simple bd calls).

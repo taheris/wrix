@@ -455,7 +455,7 @@ run_spec_review() {
   # -----------------------------------------------------------------------
   # HOST SIDE: launch container, handle bead sync, compute verdict
   # -----------------------------------------------------------------------
-  if [ ! -f /etc/wrapix/claude-config.json ] && command -v wrapix &>/dev/null; then
+  if [ ! -f "${WRAPIX_CLAUDE_CONFIG:-/etc/wrapix/claude-config.json}" ] && command -v wrapix &>/dev/null; then
     # Resolve label on host so state file is validated before launching
     local host_label
     host_label=$(resolve_spec_label "$label_arg")

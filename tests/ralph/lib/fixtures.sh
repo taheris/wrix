@@ -647,3 +647,153 @@ assert_bd_called() {
     return 1
   fi
 }
+
+#-----------------------------------------------------------------------------
+# Host-Side Mocks (wx-8oz8i)
+#
+# Overlays mocks for wrapix, git push, beads-push, and the ralph dispatcher so
+# ralph check/run's host-side branches run end-to-end without a real container.
+# Forces the host-side guard via WRAPIX_CLAUDE_CONFIG=/nonexistent and ensures
+# TEST_DIR is on a branch (git init + initial commit) so do_push_gate's
+# detached-HEAD check passes.
+#
+# Each mock records invocations under $MOCK_LOG_DIR as <name>.log. Exit codes
+# are overridable per-test via env vars — see below.
+#
+# Usage: setup_host_mocks [--no-git-init]
+#   --no-git-init  Skip the git init + initial commit (for detached-HEAD tests
+#                  that want to set HEAD state themselves).
+#
+# Env vars (read by the mocks, not setup_host_mocks itself):
+#   MOCK_WRAPIX_EXIT      — exit code for mock wrapix (default 0)
+#   MOCK_WRAPIX_HOOK      — shell command run before mock wrapix exits (e.g.
+#                           `bd create ... --labels=spec:foo` to simulate
+#                           fix-up work). Runs under bash -c with TEST_DIR as
+#                           cwd. Failures are logged but do not abort the mock.
+#   MOCK_GIT_PUSH_EXIT    — exit code for intercepted 'git push' (default 0)
+#   MOCK_BEADS_PUSH_EXIT  — exit code for mock beads-push (default 0)
+#   MOCK_RALPH_DISPATCH   — comma-separated sub-commands to dispatch through
+#                           to ralph-<cmd> (default "msg"; pass "" to disable).
+#                           Sub-commands not in the list are recorded-only so
+#                           tests can assert on 'exec ralph run/check' handoffs
+#                           without recursing.
+#-----------------------------------------------------------------------------
+setup_host_mocks() {
+  local do_git_init="true"
+  if [ "${1:-}" = "--no-git-init" ]; then
+    do_git_init="false"
+  fi
+
+  local bin="$TEST_DIR/bin"
+  local logdir="$TEST_DIR/mock"
+  mkdir -p "$logdir"
+  export MOCK_LOG_DIR="$logdir"
+
+  # Mock wrapix: optional hook (to synthesise fix-up beads), then exit.
+  cat > "$bin/wrapix" <<'WRAPIX_MOCK'
+#!/usr/bin/env bash
+echo "wrapix $*" >> "$MOCK_LOG_DIR/wrapix.log"
+if [ -n "${MOCK_WRAPIX_HOOK:-}" ]; then
+  bash -c "$MOCK_WRAPIX_HOOK" >> "$MOCK_LOG_DIR/wrapix.log" 2>&1 \
+    || echo "wrapix_hook_failed exit=$?" >> "$MOCK_LOG_DIR/wrapix.log"
+fi
+exit "${MOCK_WRAPIX_EXIT:-0}"
+WRAPIX_MOCK
+  chmod +x "$bin/wrapix"
+
+  # Intercept 'git push' only — everything else falls through to real git.
+  local real_git
+  real_git=$(readlink -f "$bin/git" 2>/dev/null || command -v git)
+  rm -f "$bin/git"
+  cat > "$bin/git" <<GIT_MOCK
+#!/usr/bin/env bash
+if [ "\${1:-}" = "push" ]; then
+  echo "git \$*" >> "\$MOCK_LOG_DIR/git.log"
+  exit "\${MOCK_GIT_PUSH_EXIT:-0}"
+fi
+exec "$real_git" "\$@"
+GIT_MOCK
+  chmod +x "$bin/git"
+
+  cat > "$bin/beads-push" <<'BEADS_MOCK'
+#!/usr/bin/env bash
+echo "beads-push $*" >> "$MOCK_LOG_DIR/beads-push.log"
+exit "${MOCK_BEADS_PUSH_EXIT:-0}"
+BEADS_MOCK
+  chmod +x "$bin/beads-push"
+
+  # ralph dispatcher: records every call; selectively forwards to ralph-<cmd>
+  # for non-recursive sub-commands (default: msg). 'run' / 'check' would recurse
+  # into the same host branch, so they default to record-only.
+  cat > "$bin/ralph" <<RALPH_MOCK
+#!/usr/bin/env bash
+echo "ralph \$*" >> "\$MOCK_LOG_DIR/ralph.log"
+sub="\${1:-}"
+dispatch_list="\${MOCK_RALPH_DISPATCH-msg}"
+if [ -n "\$sub" ] && [ -n "\$dispatch_list" ]; then
+  IFS=',' read -ra _cmds <<< "\$dispatch_list"
+  for _c in "\${_cmds[@]}"; do
+    if [ "\$_c" = "\$sub" ] && [ -x "$bin/ralph-\$sub" ]; then
+      shift
+      exec "$bin/ralph-\$sub" "\$@"
+    fi
+  done
+fi
+exit 0
+RALPH_MOCK
+  chmod +x "$bin/ralph"
+
+  # Force host-side guard branch in ralph scripts.
+  export WRAPIX_CLAUDE_CONFIG="/nonexistent"
+
+  # do_push_gate refuses on detached HEAD — give tests a real branch.
+  if [ "$do_git_init" = "true" ] && [ ! -d "$TEST_DIR/.git" ]; then
+    (
+      cd "$TEST_DIR" && \
+      git init -q -b main && \
+      git -c user.email=test@test -c user.name=Test commit -q --allow-empty -m "init"
+    )
+  fi
+}
+
+# Assert a mock was invoked with an argument string matching the pattern.
+# Usage: assert_mock_called <mock_name> <grep_pattern> [message]
+assert_mock_called() {
+  local name="$1"
+  local pattern="$2"
+  local msg="${3:-mock $name should have been called with: $pattern}"
+  local log="$MOCK_LOG_DIR/$name.log"
+
+  if [ -f "$log" ] && grep -qE "$pattern" "$log"; then
+    test_pass "$msg"
+    return 0
+  fi
+
+  test_fail "$msg"
+  echo "  Expected pattern: $pattern"
+  echo "  Log ($log):"
+  if [ -f "$log" ]; then
+    sed 's/^/    /' "$log"
+  else
+    echo "    (missing)"
+  fi
+  return 1
+}
+
+# Assert a mock was NOT invoked at all (log absent or empty).
+# Usage: assert_mock_not_called <mock_name> [message]
+assert_mock_not_called() {
+  local name="$1"
+  local msg="${2:-mock $name should not have been called}"
+  local log="$MOCK_LOG_DIR/$name.log"
+
+  if [ ! -s "$log" ]; then
+    test_pass "$msg"
+    return 0
+  fi
+
+  test_fail "$msg"
+  echo "  Log ($log):"
+  sed 's/^/    /' "$log"
+  return 1
+}

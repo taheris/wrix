@@ -81,7 +81,7 @@ set -- "${RUN_ARGS[@]+"${RUN_ARGS[@]}"}"
 
 # Container detection: if not in container and wrapix is available, re-launch in container
 # /etc/wrapix/claude-config.json only exists inside containers (baked into image)
-if [ ! -f /etc/wrapix/claude-config.json ] && command -v wrapix &>/dev/null; then
+if [ ! -f "${WRAPIX_CLAUDE_CONFIG:-/etc/wrapix/claude-config.json}" ] && command -v wrapix &>/dev/null; then
   export RALPH_MODE=1
   export RALPH_CMD=run
   # Preserve --once and --spec flags in args for container re-exec
