@@ -282,30 +282,19 @@ Several ralph commands (`plan`, `todo`, `run`, `check`, `watch`, `msg --chat`) s
 execution between a host-side branch (pre/post container) and a container-side
 branch. The host-side branch is reached only when the process is NOT inside a wrapix
 container, which is detected via `/etc/wrapix/claude-config.json`. Integration tests
-run INSIDE a wrapix container — which historically meant the host-side branch was
-unreachable, and tests could only assert on source-text patterns (grep-based).
-That left entire host-side paths (verdict, `do_push_gate`, clarify detection,
-iteration counter, notifications, `run→check` handoff) dead at runtime while
-grep tests kept passing.
-
-The suite now supports both layers:
-
-1. **Source-pattern tests** (grep-based) — quickly catch refactor-induced drift
-   (renamed vars, reordered branches) with precise line-level failure messages.
-2. **Live-path tests** (`setup_host_mocks` + `WRAPIX_CLAUDE_CONFIG=/nonexistent`) —
-   actually run the host-side branch with mocks for the side-effectful commands
-   (`wrapix`, `git push`, `beads-push`, `ralph` dispatcher). These catch behavior
-   drift: silent dead code, broken handoffs, and push-gate regressions.
-
-The guard in every host/container-split script is parameterized:
+run INSIDE a wrapix container, so the host guard in every split script is
+parameterized:
 
 ```bash
 if [ ! -f "${WRAPIX_CLAUDE_CONFIG:-/etc/wrapix/claude-config.json}" ] && command -v wrapix &>/dev/null; then
   # host-side branch …
 ```
 
-Setting `WRAPIX_CLAUDE_CONFIG=/nonexistent` (done inside `setup_host_mocks`) and
-placing a mock `wrapix` on `PATH` forces the host-side branch in tests. Production
+`setup_host_mocks` sets `WRAPIX_CLAUDE_CONFIG=/nonexistent` and places mocks for
+`wrapix`, `git push`, `beads-push`, and the `ralph` dispatcher on `PATH`, forcing
+the host-side branch and recording invocations. Tests then assert behavior
+end-to-end (verdict, `do_push_gate`, clarify detection, iteration counter,
+`run → check` handoff) rather than grepping source for patterns. Production
 behavior is unchanged (the env var is unset, the default path exists in the real
 container image).
 
@@ -489,10 +478,6 @@ The host-side branch of `ralph check` / `ralph run` is exercised end-to-end via
   to `exit 1`; the hint text differentiates the failure mode.)
 - **run → check handoff** — `test_run_to_check_handoff_live`: continuous
   `ralph run` exec's `ralph check --spec <label>` on the host post-wrapix.
-
-These sit alongside the existing source-pattern (grep-based) tests that catch
-refactor-induced drift at line-level granularity. Both layers run in every
-suite invocation.
 
 ### Concurrent Workflows
 

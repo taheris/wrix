@@ -7511,84 +7511,6 @@ test_check_dolt_pull_before_recount() {
   fi
 }
 
-# Test: check.sh push gate fires only when RALPH_COMPLETE + no new beads + no clarify
-test_check_push_gate_clean() {
-  CURRENT_TEST="check_push_gate_clean"
-  test_header "check.sh: push gate runs git push + beads-push only on clean review"
-
-  local check_script="$REPO_ROOT/lib/ralph/cmd/check.sh"
-
-  if grep -q 'do_push_gate' "$check_script"; then
-    test_pass "check.sh defines/calls do_push_gate"
-  else
-    test_fail "check.sh should define a push gate (do_push_gate)"
-    return
-  fi
-
-  # do_push_gate must invoke both git push and beads-push
-  if grep -qE '^[[:space:]]*(if !|)[[:space:]]*git push' "$check_script"; then
-    test_pass "do_push_gate runs git push"
-  else
-    test_fail "do_push_gate should run git push"
-  fi
-
-  if grep -qE '^[[:space:]]*(if !|)[[:space:]]*beads-push' "$check_script"; then
-    test_pass "do_push_gate runs beads-push"
-  else
-    test_fail "do_push_gate should run beads-push"
-  fi
-
-  # Push must be guarded by the new_beads <= 0 branch
-  local clean_line push_call_line failure_line
-  clean_line=$(grep -n '"\$new_beads" -le 0' "$check_script" | head -1 | cut -d: -f1)
-  push_call_line=$(grep -nE '^[[:space:]]*do_push_gate[[:space:]]*(\|\||$)' "$check_script" | head -1 | cut -d: -f1)
-  failure_line=$(grep -n 'Review found \$new_beads new bead' "$check_script" | head -1 | cut -d: -f1)
-
-  if [ -n "$clean_line" ] && [ -n "$push_call_line" ] && [ "$push_call_line" -gt "$clean_line" ]; then
-    test_pass "Push gate is invoked inside the clean (new_beads <= 0) branch"
-  else
-    test_fail "do_push_gate call should be inside the clean branch (clean:$clean_line call:$push_call_line)"
-  fi
-
-  if [ -n "$push_call_line" ] && [ -n "$failure_line" ] && [ "$push_call_line" -lt "$failure_line" ]; then
-    test_pass "Push gate is not invoked in the new-beads (fix-up) branch"
-  else
-    test_fail "do_push_gate must not be reached when new beads were created (call:$push_call_line failure:$failure_line)"
-  fi
-}
-
-# Test: check.sh stops short of pushing when ralph:clarify beads exist for the spec
-test_check_clarify_stops_push() {
-  CURRENT_TEST="check_clarify_stops_push"
-  test_header "check.sh: ralph:clarify beads block the push gate"
-
-  local check_script="$REPO_ROOT/lib/ralph/cmd/check.sh"
-
-  if grep -q 'list_clarify_beads "\$host_label"' "$check_script"; then
-    test_pass "check.sh queries clarify beads scoped to the spec label"
-  else
-    test_fail "check.sh should call list_clarify_beads \"\$host_label\""
-  fi
-
-  # The clarify-pending branch must early-return BEFORE do_push_gate is reached.
-  local clarify_branch_line push_call_line
-  clarify_branch_line=$(grep -n '"\$clarify_count" -gt 0' "$check_script" | head -1 | cut -d: -f1)
-  push_call_line=$(grep -nE '^[[:space:]]*do_push_gate[[:space:]]*(\|\||$)' "$check_script" | head -1 | cut -d: -f1)
-
-  if [ -n "$clarify_branch_line" ] && [ -n "$push_call_line" ] && [ "$clarify_branch_line" -lt "$push_call_line" ]; then
-    test_pass "clarify check guards the push gate"
-  else
-    test_fail "clarify guard should appear before do_push_gate (clarify:$clarify_branch_line push:$push_call_line)"
-  fi
-
-  # Clarify-pending branch must surface outstanding questions via ralph msg
-  if grep -qE 'ralph msg -s "\$host_label"' "$check_script"; then
-    test_pass "clarify-pending branch inlines ralph msg output"
-  else
-    test_fail "clarify-pending branch should inline ralph msg -s \"\$host_label\" output"
-  fi
-}
-
 # Test: every "Resolve with: ralph msg ..." hint in check.sh uses only flags
 # that lib/ralph/cmd/msg.sh actually parses. Guards against drift where the
 # verdict hint advertises a flag msg.sh doesn't implement yet (wx-qvuhk.11).
@@ -7630,213 +7552,12 @@ test_check_verdict_hint_flags_match_msg_parser() {
   fi
 }
 
-# Test: check.sh push gate handles the three documented failure modes
-test_check_push_failure_modes() {
-  CURRENT_TEST="check_push_failure_modes"
-  test_header "check.sh: push gate covers detached HEAD, git-push, beads-push failures"
-
-  local check_script="$REPO_ROOT/lib/ralph/cmd/check.sh"
-
-  # Detached HEAD: refuse before pushing anything
-  if grep -q 'git symbolic-ref --quiet HEAD' "$check_script"; then
-    test_pass "do_push_gate detects detached HEAD via git symbolic-ref"
-  else
-    test_fail "do_push_gate should detect detached HEAD with git symbolic-ref --quiet HEAD"
-  fi
-
-  if grep -qiE 'detached HEAD' "$check_script"; then
-    test_pass "do_push_gate prints a detached-HEAD error"
-  else
-    test_fail "do_push_gate should print a clear 'detached HEAD' error"
-  fi
-
-  # git push failure: hint to pull/rebase + re-run ralph check
-  if grep -qiE 'pull/rebase then re-run ralph check' "$check_script"; then
-    test_pass "do_push_gate hints 'pull/rebase then re-run ralph check' on git push failure"
-  else
-    test_fail "do_push_gate should hint 'pull/rebase then re-run ralph check' on git push failure"
-  fi
-
-  # beads-push failure: hint to run beads-push manually
-  if grep -qE 'Run beads-push manually' "$check_script"; then
-    test_pass "do_push_gate hints 'Run beads-push manually' on beads-push failure"
-  else
-    test_fail "do_push_gate should hint 'Run beads-push manually' on beads-push failure"
-  fi
-
-  # All three failure paths must return non-zero
-  local detached_return git_return beads_return
-  detached_return=$(awk '/git symbolic-ref --quiet HEAD/,/^\}/' "$check_script" | grep -cE '^[[:space:]]*return[[:space:]]+[1-9]')
-  git_return=$(awk '/git push failed/,/^\}/' "$check_script" | grep -cE '^[[:space:]]*return[[:space:]]+[1-9]')
-  beads_return=$(awk '/beads-push failed/,/^\}/' "$check_script" | grep -cE '^[[:space:]]*return[[:space:]]+[1-9]')
-
-  if [ "$detached_return" -ge 1 ] && [ "$git_return" -ge 1 ] && [ "$beads_return" -ge 1 ]; then
-    test_pass "All three failure paths return non-zero"
-  else
-    test_fail "Each failure path must return non-zero (detached:$detached_return git:$git_return beads:$beads_return)"
-  fi
-}
-
-# Test: check.sh escalates to ralph:clarify + stops after loop.max-iterations
-test_check_iteration_cap_escalates() {
-  CURRENT_TEST="check_iteration_cap_escalates"
-  test_header "check.sh: auto-iteration escalates via ralph:clarify at the cap"
-
-  local check_script="$REPO_ROOT/lib/ralph/cmd/check.sh"
-
-  # Must read loop.max-iterations from config (default 3)
-  if grep -qE 'loop\."max-iterations"' "$check_script"; then
-    test_pass "check.sh reads loop.max-iterations from config"
-  else
-    test_fail "check.sh should read loop.max-iterations from config"
-  fi
-
-  # Under-cap branch: increment and exec ralph run
-  if grep -qE 'set_iteration_count[[:space:]]+"\$host_state_file"[[:space:]]+"\$next_iter"' "$check_script"; then
-    test_pass "under-cap branch increments iteration_count"
-  else
-    test_fail "under-cap branch should increment iteration_count in state JSON"
-  fi
-
-  if grep -qE 'exec[[:space:]]+ralph[[:space:]]+run[[:space:]]+-s[[:space:]]+"\$host_label"' "$check_script"; then
-    test_pass "under-cap branch exec's ralph run for auto-iteration"
-  else
-    test_fail "under-cap branch should 'exec ralph run -s <label>' to auto-iterate"
-  fi
-
-  # At-cap branch: add ralph:clarify to the newest fix-up bead
-  if grep -qE 'add_clarify_label[[:space:]]+"\$newest_id"' "$check_script"; then
-    test_pass "at-cap branch adds ralph:clarify to newest fix-up bead"
-  else
-    test_fail "at-cap branch should call add_clarify_label \"\$newest_id\""
-  fi
-
-  if grep -qE 'Iteration cap[[:space:]]*\(\$max_iter\) reached' "$check_script"; then
-    test_pass "at-cap clarify note mentions the iteration cap"
-  else
-    test_fail "at-cap clarify note should mention the iteration cap"
-  fi
-
-  # At-cap branch must not push and must point at ralph msg
-  local cap_line push_call_line
-  cap_line=$(grep -n 'Iteration cap reached' "$check_script" | head -1 | cut -d: -f1)
-  push_call_line=$(grep -nE '^[[:space:]]*do_push_gate[[:space:]]*(\|\||$)' "$check_script" | head -1 | cut -d: -f1)
-  if [ -n "$cap_line" ] && [ -n "$push_call_line" ] && [ "$push_call_line" -lt "$cap_line" ]; then
-    test_pass "at-cap path runs after the push gate branch (no push)"
-  else
-    test_fail "at-cap path should be reached only on fix-up beads (cap:$cap_line push:$push_call_line)"
-  fi
-
-  if grep -qE 'ralph msg -s "\$host_label"' "$check_script"; then
-    test_pass "at-cap path inlines ralph msg output"
-  else
-    test_fail "at-cap path should inline ralph msg -s \"\$host_label\" output"
-  fi
-}
-
-# Test: check.sh exec-s ralph run on fix-up beads without clarify (auto-iterate)
-test_check_auto_iterates_via_run() {
-  CURRENT_TEST="check_auto_iterates_via_run"
-  test_header "check.sh: exec ralph run on fix-up beads without clarify (auto-iteration)"
-
-  local check_script="$REPO_ROOT/lib/ralph/cmd/check.sh"
-
-  # Core handoff: exec ralph run -s "$host_label"
-  if grep -qE '^[[:space:]]*exec[[:space:]]+ralph[[:space:]]+run[[:space:]]+-s[[:space:]]+"\$host_label"' "$check_script"; then
-    test_pass "check.sh contains exec ralph run -s \"\$host_label\""
-  else
-    test_fail "check.sh should exec ralph run -s \"\$host_label\" to auto-iterate"
-    return
-  fi
-
-  local under_cap_line exec_run_line clarify_line at_cap_line
-  under_cap_line=$(grep -nE '"\$iter_count" -lt "\$max_iter"' "$check_script" | head -1 | cut -d: -f1)
-  exec_run_line=$(grep -nE '^[[:space:]]*exec[[:space:]]+ralph[[:space:]]+run' "$check_script" | head -1 | cut -d: -f1)
-  clarify_line=$(grep -n '"\$clarify_count" -gt 0' "$check_script" | head -1 | cut -d: -f1)
-  at_cap_line=$(grep -n 'Iteration cap reached' "$check_script" | head -1 | cut -d: -f1)
-
-  # Handoff must be gated on iter_count < max_iter so it's bounded
-  if [ -n "$under_cap_line" ] && [ -n "$exec_run_line" ] && [ "$exec_run_line" -gt "$under_cap_line" ]; then
-    test_pass "auto-iteration gated on iter_count < max_iter"
-  else
-    test_fail "exec ralph run must be gated on iter_count < max_iter (cap:$under_cap_line exec:$exec_run_line)"
-  fi
-
-  # Handoff must sit AFTER the clarify-stop branch so it doesn't fire when a
-  # clarify is pending.
-  if [ -n "$clarify_line" ] && [ -n "$exec_run_line" ] && [ "$exec_run_line" -gt "$clarify_line" ]; then
-    test_pass "auto-iteration sits after clarify-stop branch"
-  else
-    test_fail "auto-iteration must sit after clarify guard (clarify:$clarify_line exec:$exec_run_line)"
-  fi
-
-  # Handoff must sit BEFORE the at-cap escalation path so the cap fires only
-  # when the under-cap branch did not take the exec path.
-  if [ -n "$exec_run_line" ] && [ -n "$at_cap_line" ] && [ "$exec_run_line" -lt "$at_cap_line" ]; then
-    test_pass "auto-iteration precedes the at-cap escalation path"
-  else
-    test_fail "auto-iteration exec should precede at-cap escalation (exec:$exec_run_line cap:$at_cap_line)"
-  fi
-
-  # Iteration counter must be bumped before the exec so the next iteration
-  # sees the updated value.
-  local bump_line
-  bump_line=$(grep -nE 'set_iteration_count[[:space:]]+"\$host_state_file"[[:space:]]+"\$next_iter"' "$check_script" | head -1 | cut -d: -f1)
-  if [ -n "$bump_line" ] && [ -n "$exec_run_line" ] && [ "$bump_line" -lt "$exec_run_line" ]; then
-    test_pass "iteration counter is bumped before exec ralph run"
-  else
-    test_fail "iteration counter must be bumped before exec ralph run (bump:$bump_line exec:$exec_run_line)"
-  fi
-}
-
 # Test: iteration_count persists in state JSON and resets on clean push + clarify clear
 test_iteration_counter_persistence() {
   CURRENT_TEST="iteration_counter_persistence"
   test_header "iteration_count persists in state JSON and resets on push/clarify-clear"
 
   local util_script="$REPO_ROOT/lib/ralph/cmd/util.sh"
-  local check_script="$REPO_ROOT/lib/ralph/cmd/check.sh"
-  local msg_script="$REPO_ROOT/lib/ralph/cmd/msg.sh"
-
-  # util.sh exposes helpers for reading/writing/resetting the counter
-  for helper in get_iteration_count set_iteration_count reset_iteration_count; do
-    if grep -qE "^${helper}\(\)" "$util_script"; then
-      test_pass "util.sh defines $helper"
-    else
-      test_fail "util.sh should define $helper"
-    fi
-  done
-
-  # Helpers must read/write .iteration_count in the state JSON
-  if grep -qE '\.iteration_count' "$util_script"; then
-    test_pass "iteration_count helpers operate on .iteration_count field"
-  else
-    test_fail "iteration_count helpers should read/write .iteration_count in state JSON"
-  fi
-
-  # check.sh resets the counter on the clean push path
-  if grep -qE 'reset_iteration_count[[:space:]]+"\$host_state_file"' "$check_script"; then
-    test_pass "check.sh resets iteration_count on clean RALPH_COMPLETE"
-  else
-    test_fail "check.sh should reset iteration_count on clean RALPH_COMPLETE (push path)"
-  fi
-
-  # Reset must appear before do_push_gate — only clean pushes clear the counter
-  local reset_line push_call_line
-  reset_line=$(grep -nE 'reset_iteration_count[[:space:]]+"\$host_state_file"' "$check_script" | head -1 | cut -d: -f1)
-  push_call_line=$(grep -nE '^[[:space:]]*do_push_gate[[:space:]]*(\|\||$)' "$check_script" | head -1 | cut -d: -f1)
-  if [ -n "$reset_line" ] && [ -n "$push_call_line" ] && [ "$reset_line" -lt "$push_call_line" ]; then
-    test_pass "iteration_count reset precedes do_push_gate"
-  else
-    test_fail "reset_iteration_count should run before do_push_gate (reset:$reset_line push:$push_call_line)"
-  fi
-
-  # msg.sh resets the counter on reply and dismiss
-  if grep -qE 'reset_iteration_for_bead|reset_iteration_count' "$msg_script"; then
-    test_pass "msg.sh resets iteration_count when a clarify is cleared"
-  else
-    test_fail "msg.sh should reset iteration_count when a clarify is cleared"
-  fi
 
   # Runtime check: set + get round-trips through the JSON file
   local tmp_dir tmp_state
@@ -14013,52 +13734,6 @@ test_run_does_not_push() {
   fi
 }
 
-# Test: run.sh exec-s ralph check at molecule completion (continuous mode only)
-test_run_execs_check_on_complete() {
-  CURRENT_TEST="run_execs_check_on_complete"
-  test_header "run.sh: exec ralph check at molecule completion, --once exits normally"
-
-  local run_script="$REPO_ROOT/lib/ralph/cmd/run.sh"
-
-  if grep -qE '^[[:space:]]*exec ralph check' "$run_script"; then
-    test_pass "run.sh contains 'exec ralph check' handoff"
-  else
-    test_fail "run.sh should 'exec ralph check' at molecule completion"
-  fi
-
-  # The exec must forward --spec using the host-resolved label
-  # shellcheck disable=SC2016 # literal string match against source file
-  if grep -qE 'exec ralph check --spec "\$_host_label"' "$run_script"; then
-    test_pass "run.sh forwards --spec \$_host_label to ralph check"
-  else
-    test_fail "run.sh should forward --spec \"\$_host_label\" to ralph check"
-  fi
-
-  # The exec must live on host-side (post-wrapix), not in-container, so
-  # check.sh's host-side branch (verdict, push gate, iteration counter) runs.
-  # shellcheck disable=SC2016 # literal string match against source file
-  local exec_line wrapix_line
-  exec_line=$(grep -nE '^[[:space:]]*exec ralph check' "$run_script" | head -1 | cut -d: -f1)
-  wrapix_line=$(grep -nE '^[[:space:]]*wrapix$' "$run_script" | head -1 | cut -d: -f1)
-
-  if [ -n "$exec_line" ] && [ -n "$wrapix_line" ] && [ "$exec_line" -gt "$wrapix_line" ]; then
-    test_pass "exec ralph check runs after wrapix (host-side post-container)"
-  else
-    test_fail "exec ralph check must run host-side after wrapix (exec:$exec_line wrapix:$wrapix_line)"
-  fi
-
-  # The exec must be guarded so --once exits normally
-  local guard_line
-  # shellcheck disable=SC2016 # literal string match against source file
-  guard_line=$(grep -nE '\$RUN_ONCE.*!=.*true' "$run_script" | head -1 | cut -d: -f1)
-
-  if [ -n "$exec_line" ] && [ -n "$guard_line" ] && [ "$guard_line" -lt "$exec_line" ]; then
-    test_pass "exec ralph check is guarded by RUN_ONCE != true"
-  else
-    test_fail "exec ralph check should be guarded so --once exits without handoff (exec:$exec_line guard:$guard_line)"
-  fi
-}
-
 # Test: run.sh host-side block runs bd dolt pull after container exits
 test_run_dolt_pull_after_complete() {
   CURRENT_TEST="run_dolt_pull_after_complete"
@@ -16151,12 +15826,7 @@ PARALLEL_TESTS=(
   test_check_default_runs_review
   test_check_dolt_push_in_container
   test_check_dolt_pull_before_recount
-  test_check_push_gate_clean
-  test_check_clarify_stops_push
   test_check_verdict_hint_flags_match_msg_parser
-  test_check_push_failure_modes
-  test_check_auto_iterates_via_run
-  test_check_iteration_cap_escalates
   test_iteration_counter_persistence
   test_msg_interactive_clear_resets_iteration
   test_default_config_has_hooks
@@ -16270,7 +15940,6 @@ PARALLEL_TESTS=(
   test_run_continuous_dolt_push
   test_run_dolt_pull_after_complete
   test_run_does_not_push
-  test_run_execs_check_on_complete
   # Todo-to-run bead visibility tests (dolt failure behaviors)
   test_todo_container_dolt_commit_failure
   test_todo_container_dolt_push_failure
