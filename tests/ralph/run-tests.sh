@@ -3106,6 +3106,433 @@ test_flock_in_devshell_and_base_profile() {
   rm -f "$err_log"
 }
 
+# ----------------------------------------------------------------------------
+# FR7 lock test helpers
+# ----------------------------------------------------------------------------
+# Build a real git repo wired up like FR7: lib/prek/hooks/_flock.sh comes from
+# the live source, and the per-stage shims drop the `exec prek` tail in favour
+# of a recorder that timestamps start/end into HOOK_LOG and sleeps. That keeps
+# tests independent of prek's hook config while still exercising the live
+# _flock.sh (lock path resolution, timeout flag, error format).
+#
+# Args:
+#   $1: flock --timeout value (default 600)
+#   $2: seconds the recorder sleeps while holding the lock (default 1)
+# Globals set: HOOK_LOG (path to recorder log), FR7_REPO (repo root)
+_setup_fr7_repo() {
+  local timeout="${1:-600}"
+  local sleep_dur="${2:-1}"
+
+  FR7_REPO="$TEST_DIR/repo"
+  HOOK_LOG="$TEST_DIR/hook.log"
+  mkdir -p "$FR7_REPO/lib/prek/hooks"
+  : > "$HOOK_LOG"
+
+  cp "$REPO_ROOT/lib/prek/hooks/_flock.sh" "$FR7_REPO/lib/prek/hooks/_flock.sh"
+  if [ "$timeout" != "600" ]; then
+    sed -i "s/--timeout 600/--timeout $timeout/" "$FR7_REPO/lib/prek/hooks/_flock.sh"
+  fi
+
+  local stage
+  for stage in pre-commit pre-push; do
+    cat > "$FR7_REPO/lib/prek/hooks/$stage" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+# shellcheck source=/dev/null
+source "\$(dirname "\$0")/_flock.sh"
+printf '%s start %s %s\n' "$stage" "\$\$" "\$(date +%s.%N)" >> "$HOOK_LOG"
+sleep $sleep_dur
+printf '%s end %s %s\n' "$stage" "\$\$" "\$(date +%s.%N)" >> "$HOOK_LOG"
+EOF
+    chmod +x "$FR7_REPO/lib/prek/hooks/$stage"
+  done
+
+  (
+    cd "$FR7_REPO"
+    git init -q -b main
+    git config --local user.email "test@wrapix.local"
+    git config --local user.name "wrapix-test"
+    git add lib
+    # Initial commit must precede core.hooksPath wiring so the shim isn't fired
+    # before lib/prek/hooks/ is in the index.
+    git commit -q -m "init hooks" --no-verify
+    git config --local core.hooksPath "lib/prek/hooks"
+  )
+}
+
+# Verify each (start,end) interval in HOOK_LOG is non-overlapping with the
+# others. Returns 0 if serialized, 1 otherwise.
+_assert_log_serialized() {
+  local log="$1"
+  awk '
+    $2 == "start" { s[$3] = $4; order[++n] = $3 }
+    $2 == "end"   { e[$3] = $4 }
+    END {
+      for (i = 1; i <= n; i++) {
+        for (j = i+1; j <= n; j++) {
+          a = order[i]; b = order[j]
+          if (s[a]+0 < e[b]+0 && s[b]+0 < e[a]+0) {
+            printf "overlap: pid %s [%s,%s] vs pid %s [%s,%s]\n", a, s[a], e[a], b, s[b], e[b]
+            exit 1
+          }
+        }
+      }
+      exit 0
+    }
+  ' "$log"
+}
+
+# Test (FR7): two concurrent `git commit` invocations from sibling worktrees
+# serialize via .wrapix/prek.lock and neither loses working-tree edits.
+# Reproduces the scenario from wx-m5yuq.
+test_prek_lock_commit_serializes() {
+  CURRENT_TEST="prek_lock_commit_serializes"
+  test_header "FR7: concurrent git commits serialize via .wrapix/prek.lock"
+
+  setup_test_env "fr7-commit-serialize"
+  _setup_fr7_repo 600 1
+
+  local wt2="$TEST_DIR/wt2"
+  git -C "$FR7_REPO" worktree add -q -b wt2 "$wt2"
+
+  echo "main edit" > "$FR7_REPO/main.txt"
+  git -C "$FR7_REPO" add main.txt
+  echo "wt2 edit" > "$wt2/wt2.txt"
+  git -C "$wt2" add wt2.txt
+
+  local start_ns end_ns elapsed_ms rc1=0 rc2=0
+  start_ns=$(date +%s%N)
+  ( git -C "$FR7_REPO" commit -q -m "main commit" ) &
+  local p1=$!
+  ( git -C "$wt2" commit -q -m "wt2 commit" ) &
+  local p2=$!
+  wait "$p1" || rc1=$?
+  wait "$p2" || rc2=$?
+  end_ns=$(date +%s%N)
+  elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
+
+  if [ "$rc1" -eq 0 ] && [ "$rc2" -eq 0 ]; then
+    test_pass "both concurrent commits succeeded"
+  else
+    test_fail "concurrent commits failed (rc1=$rc1, rc2=$rc2)"
+  fi
+
+  if git -C "$FR7_REPO" log --all --name-only --pretty=format: | grep -qx 'main.txt' \
+     && git -C "$FR7_REPO" log --all --name-only --pretty=format: | grep -qx 'wt2.txt'; then
+    test_pass "no working-tree edits lost (both files committed)"
+  else
+    test_fail "working-tree edits lost"
+    git -C "$FR7_REPO" log --all --name-only --pretty=oneline
+  fi
+
+  # Each shim sleeps 1s while holding the lock; serialized total ~> 2s.
+  if [ "$elapsed_ms" -gt 1500 ]; then
+    test_pass "concurrent commits took ${elapsed_ms}ms (serialized; >1500ms)"
+  else
+    test_fail "concurrent commits took ${elapsed_ms}ms (likely parallel; expected >1500ms)"
+  fi
+
+  if _assert_log_serialized "$HOOK_LOG"; then
+    test_pass "pre-commit hook windows do not overlap"
+  else
+    test_fail "pre-commit hook windows overlap (lock did not serialize)"
+    cat "$HOOK_LOG" >&2
+  fi
+
+  assert_file_exists "$FR7_REPO/.wrapix/prek.lock" "lock file at .wrapix/prek.lock"
+
+  teardown_test_env
+}
+
+# Test (FR7): two concurrent `git push` invocations from sibling worktrees
+# serialize via the same .wrapix/prek.lock. Both stages share the lock because
+# either path could collide with prek's stash window.
+test_prek_lock_push_serializes() {
+  CURRENT_TEST="prek_lock_push_serializes"
+  test_header "FR7: concurrent git pushes serialize via .wrapix/prek.lock"
+
+  setup_test_env "fr7-push-serialize"
+  _setup_fr7_repo 600 1
+
+  local remote="$TEST_DIR/remote.git"
+  git init -q --bare -b main "$remote"
+  git -C "$FR7_REPO" remote add origin "$remote"
+  git -C "$FR7_REPO" push -q origin main
+
+  local wt2="$TEST_DIR/wt2"
+  git -C "$FR7_REPO" worktree add -q -b wt2 "$wt2"
+
+  echo "main update" > "$FR7_REPO/main.txt"
+  git -C "$FR7_REPO" add main.txt
+  git -C "$FR7_REPO" commit -q -m "main update" --no-verify
+
+  echo "wt2 update" > "$wt2/wt2.txt"
+  git -C "$wt2" add wt2.txt
+  git -C "$wt2" commit -q -m "wt2 update" --no-verify
+
+  : > "$HOOK_LOG"
+
+  local start_ns end_ns elapsed_ms rc1=0 rc2=0
+  start_ns=$(date +%s%N)
+  ( git -C "$FR7_REPO" push -q origin main ) &
+  local p1=$!
+  ( git -C "$wt2" push -q origin wt2 ) &
+  local p2=$!
+  wait "$p1" || rc1=$?
+  wait "$p2" || rc2=$?
+  end_ns=$(date +%s%N)
+  elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
+
+  if [ "$rc1" -eq 0 ] && [ "$rc2" -eq 0 ]; then
+    test_pass "both concurrent pushes succeeded"
+  else
+    test_fail "concurrent pushes failed (rc1=$rc1, rc2=$rc2)"
+  fi
+
+  if [ "$elapsed_ms" -gt 1500 ]; then
+    test_pass "concurrent pushes took ${elapsed_ms}ms (serialized; >1500ms)"
+  else
+    test_fail "concurrent pushes took ${elapsed_ms}ms (likely parallel; expected >1500ms)"
+  fi
+
+  if _assert_log_serialized "$HOOK_LOG"; then
+    test_pass "pre-push hook windows do not overlap"
+  else
+    test_fail "pre-push hook windows overlap (lock did not serialize)"
+    cat "$HOOK_LOG" >&2
+  fi
+
+  teardown_test_env
+}
+
+# Test (FR7): a commit that hits a held push lock waits up to the configured
+# timeout, then aborts loudly with the holder PID rather than hanging.
+# Uses a 2-second timeout for the test (real shim uses 600s — see
+# test_prek_lock_timeout for the 10-min assertion).
+test_prek_lock_cross_stage_timeout() {
+  CURRENT_TEST="prek_lock_cross_stage_timeout"
+  test_header "FR7: commit against held push lock fails loudly within timeout"
+
+  setup_test_env "fr7-cross-stage-timeout"
+  _setup_fr7_repo 2 0
+
+  mkdir -p "$FR7_REPO/.wrapix"
+  local lock="$FR7_REPO/.wrapix/prek.lock"
+  : > "$lock"
+
+  # Hold the lock for longer than the shim timeout so the shim is forced to
+  # give up. The shim opens the lock with `exec 9<>"$lock"; flock 9`, so we
+  # lock the same path here via flock's file form.
+  flock --exclusive "$lock" sleep 5 &
+  local holder=$!
+  # Brief wait so the holder definitely owns the lock before we race the shim.
+  sleep 0.3
+
+  echo "needs commit" > "$FR7_REPO/x.txt"
+  git -C "$FR7_REPO" add x.txt
+
+  local out start_ns end_ns elapsed_ms rc=0
+  start_ns=$(date +%s%N)
+  out=$(git -C "$FR7_REPO" commit -m "blocked" 2>&1) || rc=$?
+  end_ns=$(date +%s%N)
+  elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
+
+  kill "$holder" 2>/dev/null
+  wait "$holder" 2>/dev/null
+
+  if [ "$rc" -ne 0 ]; then
+    test_pass "commit aborted (rc=$rc)"
+  else
+    test_fail "commit unexpectedly succeeded against held lock"
+  fi
+
+  if echo "$out" | grep -q "timed out"; then
+    test_pass "error message reports timeout"
+  else
+    test_fail "error message missing 'timed out' (output: $out)"
+  fi
+
+  if [ "$elapsed_ms" -ge 1500 ] && [ "$elapsed_ms" -lt 4500 ]; then
+    test_pass "timeout fired between 1.5s and 4.5s (got ${elapsed_ms}ms)"
+  else
+    test_fail "timeout fired at ${elapsed_ms}ms (expected ~2000ms; bound was 4500ms)"
+  fi
+
+  teardown_test_env
+}
+
+# Test (FR7): both shims invoke flock with --timeout 600 (10 min). Static
+# assertion against the live source; complements the runtime timeout test
+# which uses a shorter override.
+test_prek_lock_timeout() {
+  CURRENT_TEST="prek_lock_timeout"
+  test_header "FR7: pre-commit and pre-push shims use --timeout 600"
+
+  local flock_helper="$REPO_ROOT/lib/prek/hooks/_flock.sh"
+  if grep -Fq -- '--timeout 600' "$flock_helper"; then
+    test_pass "_flock.sh invokes flock with --timeout 600"
+  else
+    test_fail "_flock.sh missing --timeout 600 (contents: $(cat "$flock_helper"))"
+  fi
+
+  local stage
+  for stage in pre-commit pre-push; do
+    local shim="$REPO_ROOT/lib/prek/hooks/$stage"
+    if grep -Fq '_flock.sh' "$shim"; then
+      test_pass "$stage shim sources _flock.sh (inherits --timeout 600)"
+    else
+      test_fail "$stage shim does not source _flock.sh"
+    fi
+  done
+}
+
+# Test (FR7): `git commit --no-verify` and `git push --no-verify` skip the
+# shim entirely, so the lock is never created. This is the documented
+# escape hatch for emergency commits.
+test_prek_lock_no_verify_bypass() {
+  CURRENT_TEST="prek_lock_no_verify_bypass"
+  test_header "FR7: --no-verify bypasses both lock and shim"
+
+  setup_test_env "fr7-no-verify-bypass"
+  _setup_fr7_repo 600 1
+
+  # Setup did the initial commit with --no-verify; ensure no lock exists yet.
+  rm -rf "$FR7_REPO/.wrapix"
+  : > "$HOOK_LOG"
+
+  echo "first" > "$FR7_REPO/a.txt"
+  git -C "$FR7_REPO" add a.txt
+  if git -C "$FR7_REPO" commit -q --no-verify -m "no-verify commit"; then
+    test_pass "git commit --no-verify succeeded"
+  else
+    test_fail "git commit --no-verify failed"
+  fi
+
+  if [ ! -e "$FR7_REPO/.wrapix/prek.lock" ]; then
+    test_pass "lock file not created during --no-verify commit"
+  else
+    test_fail "lock file created at $FR7_REPO/.wrapix/prek.lock"
+  fi
+
+  if [ ! -s "$HOOK_LOG" ]; then
+    test_pass "pre-commit shim did not run during --no-verify commit"
+  else
+    test_fail "pre-commit shim ran during --no-verify commit (log: $(cat "$HOOK_LOG"))"
+  fi
+
+  local remote="$TEST_DIR/remote.git"
+  git init -q --bare -b main "$remote"
+  git -C "$FR7_REPO" remote add origin "$remote"
+  : > "$HOOK_LOG"
+  rm -rf "$FR7_REPO/.wrapix"
+
+  if git -C "$FR7_REPO" push -q --no-verify origin main; then
+    test_pass "git push --no-verify succeeded"
+  else
+    test_fail "git push --no-verify failed"
+  fi
+
+  if [ ! -e "$FR7_REPO/.wrapix/prek.lock" ]; then
+    test_pass "lock file not created during --no-verify push"
+  else
+    test_fail "lock file created at $FR7_REPO/.wrapix/prek.lock"
+  fi
+
+  if [ ! -s "$HOOK_LOG" ]; then
+    test_pass "pre-push shim did not run during --no-verify push"
+  else
+    test_fail "pre-push shim ran during --no-verify push (log: $(cat "$HOOK_LOG"))"
+  fi
+
+  teardown_test_env
+}
+
+# Test (FR7): the shim aborts with the documented "flock not found" error
+# when flock is missing from PATH. Builds a sanitized PATH that contains
+# only dirname (needed by `source $(dirname "$0")/_flock.sh`) but not flock.
+test_prek_lock_requires_flock() {
+  CURRENT_TEST="prek_lock_requires_flock"
+  test_header "FR7: shim aborts with 'flock not found' when flock is absent"
+
+  setup_test_env "fr7-requires-flock"
+
+  local sanitized="$TEST_DIR/sanitized-path"
+  mkdir -p "$sanitized"
+  # bash is needed because PATH=foo cmd resolves cmd via the new PATH;
+  # dirname is needed by `source "$(dirname "$0")/_flock.sh"` in the shim.
+  ln -s "$(command -v bash)" "$sanitized/bash"
+  ln -s "$(command -v dirname)" "$sanitized/dirname"
+
+  local out rc=0
+  # Run the live shim under a sanitized PATH that intentionally lacks flock.
+  # The shim must abort with the documented error before any git work.
+  out=$(PATH="$sanitized" bash "$REPO_ROOT/lib/prek/hooks/pre-commit" 2>&1) || rc=$?
+
+  if [ "$rc" -ne 0 ]; then
+    test_pass "shim exited non-zero when flock is missing (rc=$rc)"
+  else
+    test_fail "shim exited 0 with flock missing (out: $out)"
+  fi
+
+  if echo "$out" | grep -q "flock not found"; then
+    test_pass "shim error message contains 'flock not found'"
+  else
+    test_fail "shim error missing 'flock not found' (out: $out)"
+  fi
+
+  teardown_test_env
+}
+
+# Test (FR7): with core.hooksPath = lib/prek/hooks, `git commit` actually
+# invokes lib/prek/hooks/pre-commit. Uses a sentinel side-effect to confirm
+# the shim ran in-process during the commit.
+test_git_commit_routes_through_shim() {
+  CURRENT_TEST="git_commit_routes_through_shim"
+  test_header "FR7: git commit routes through lib/prek/hooks/pre-commit"
+
+  setup_test_env "fr7-routes-through-shim"
+
+  local repo="$TEST_DIR/repo"
+  local sentinel="$TEST_DIR/sentinel"
+  mkdir -p "$repo/lib/prek/hooks"
+  cp "$REPO_ROOT/lib/prek/hooks/_flock.sh" "$repo/lib/prek/hooks/_flock.sh"
+  cat > "$repo/lib/prek/hooks/pre-commit" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+# shellcheck source=/dev/null
+source "\$(dirname "\$0")/_flock.sh"
+printf 'shim ran pid=%s\n' "\$\$" > "$sentinel"
+EOF
+  chmod +x "$repo/lib/prek/hooks/pre-commit"
+
+  (
+    cd "$repo"
+    git init -q -b main
+    git config --local user.email "test@wrapix.local"
+    git config --local user.name "wrapix-test"
+    git add lib
+    git commit -q -m "init hooks" --no-verify
+    git config --local core.hooksPath "lib/prek/hooks"
+    echo "trigger" > trigger.txt
+    git add trigger.txt
+    git commit -q -m "trigger shim"
+  )
+
+  if [ -f "$sentinel" ]; then
+    test_pass "shim sentinel was written by git commit"
+  else
+    test_fail "shim sentinel missing — git did not invoke lib/prek/hooks/pre-commit"
+  fi
+
+  if [ -e "$repo/.wrapix/prek.lock" ]; then
+    test_pass "lock file at .wrapix/prek.lock proves _flock.sh ran"
+  else
+    test_fail "lock file missing at $repo/.wrapix/prek.lock"
+  fi
+
+  teardown_test_env
+}
+
 # Test: clarify label helpers operate against live beads (add appends to
 # description, label gates notifications, list returns tagged beads only)
 test_clarify_label_helpers() {
@@ -15684,6 +16111,13 @@ ALL_TESTS=(
   test_wrapix_ralph_shellhook_passthru
   test_devshell_sets_core_hooks_path
   test_flock_in_devshell_and_base_profile
+  test_prek_lock_commit_serializes
+  test_prek_lock_push_serializes
+  test_prek_lock_cross_stage_timeout
+  test_prek_lock_timeout
+  test_prek_lock_no_verify_bypass
+  test_prek_lock_requires_flock
+  test_git_commit_routes_through_shim
   test_plan_flag_validation
   test_plan_per_label_state_files
   test_plan_update_direct_edit
