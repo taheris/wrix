@@ -578,9 +578,6 @@ if [ "$CHAT" = "true" ]; then
       exit 0
     fi
 
-    render_clarify_list "$host_questions" "$host_label"
-    echo ""
-
     export RALPH_MODE=1
     export RALPH_CMD=msg
     export RALPH_ARGS="-c -s $host_label"
@@ -657,13 +654,17 @@ if [ "$CHAT" = "true" ]; then
     "PINNED_CONTEXT=$pinned_context" \
     "EXIT_SIGNALS=")
 
-  mkdir -p "$RALPH_DIR/logs"
-  log="$RALPH_DIR/logs/msg-${label}.log"
-
   echo "=== Interactive Drafter session ==="
   echo ""
 
-  run_claude_stream "$msg_prompt" "$log" "$config" "$model_msg"
+  claude_args=(--dangerously-skip-permissions)
+  if [ -n "$model_msg" ]; then
+    claude_args+=(--model "$model_msg")
+  fi
+  # Interactive TUI (no --print). Continue to bead push regardless of exit.
+  set +e
+  claude "${claude_args[@]}" "$msg_prompt"
+  set -e
 
   # Container bead sync: push so host can pull any note/label changes.
   echo ""

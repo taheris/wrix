@@ -3291,16 +3291,12 @@ Body A.
 Body B." \
     --labels="spec:${label},ralph:clarify" --json 2>/dev/null | jq -r '.id')
 
-  # Tripwire for claude invocations + RALPH_COMPLETE so the container-side
-  # push/sync path returns cleanly.
+  # Tripwire records argv so we can assert interactive launch (no --print).
   local tripwire="$TEST_DIR/claude-invocations.log"
   rm -f "$tripwire" "$TEST_DIR/bin/claude"
   cat > "$TEST_DIR/bin/claude" <<EOF
 #!/usr/bin/env bash
-echo "invoked" >> "$tripwire"
-cat <<'STREAM'
-{"type":"result","result":"RALPH_COMPLETE"}
-STREAM
+printf 'invoked: %s\n' "\$*" >> "$tripwire"
 exit 0
 EOF
   chmod +x "$TEST_DIR/bin/claude"
@@ -3340,6 +3336,13 @@ EOF
     test_pass "ralph msg -c printed Drafter session banner"
   else
     test_fail "ralph msg -c missing Drafter session banner (got: $chat_output)"
+  fi
+
+  # --print / -p / --output-format collapses the session to a single turn.
+  if grep -qE -- '(^|[[:space:]])(--print|-p|--output-format)([[:space:]]|$)' "$tripwire"; then
+    test_fail "ralph msg -c launched claude with --print/--output-format (expected interactive TUI); args: $(cat "$tripwire")"
+  else
+    test_pass "ralph msg -c launched claude without --print (interactive TUI)"
   fi
 
   teardown_test_env
