@@ -1765,7 +1765,10 @@ compute_spec_diff() {
           cand_state="${state_dir}/${cand_label}.json"
 
           effective_base=""
-          if [ -f "$cand_state" ]; then
+          if [ -n "$since_commit" ] && [ "$candidate_spec" = "$spec_path" ]; then
+            debug "compute_spec_diff: $cand_label is anchor, applying --since override to per-spec diff"
+            effective_base="$base_commit"
+          elif [ -f "$cand_state" ]; then
             effective_base=$(jq -r '.base_commit // ""' "$cand_state" 2>/dev/null || echo "")
           fi
 

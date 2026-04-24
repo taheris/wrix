@@ -12807,6 +12807,58 @@ test_todo_since_anchor_only() {
   teardown_test_env
 }
 
+# Regression (wx-a923h): --since overrides the anchor's own per-spec diff
+# inside the fan-out loop, not only the candidate-set computation.
+test_todo_since_override_anchor_per_spec_diff() {
+  CURRENT_TEST="todo_since_override_anchor_per_spec_diff"
+  test_header "compute_spec_diff: --since overrides anchor's own per-spec diff in fan-out"
+
+  setup_test_env "todo-since-anchor-perspec"
+  _setup_spec_diff_git "anchor"
+
+  local since_commit
+  since_commit=$(git -C "$TEST_DIR" rev-parse HEAD)
+
+  echo "- anchor post-cursor change" >> "$TEST_DIR/specs/anchor.md"
+  git -C "$TEST_DIR" add specs/anchor.md
+  git -C "$TEST_DIR" commit -q -m "anchor post-cursor change"
+
+  local head_commit
+  head_commit=$(git -C "$TEST_DIR" rev-parse HEAD)
+  setup_label_state "anchor" "false" ""
+  jq --arg bc "$head_commit" '.base_commit = $bc' "$RALPH_DIR/state/anchor.json" \
+    > "$RALPH_DIR/state/anchor.json.tmp"
+  mv "$RALPH_DIR/state/anchor.json.tmp" "$RALPH_DIR/state/anchor.json"
+
+  echo "anchor" > "$RALPH_DIR/state/current"
+
+  local output
+  output=$(cd "$TEST_DIR" && source "$REPO_ROOT/lib/ralph/cmd/util.sh" \
+    && compute_spec_diff "$RALPH_DIR/state/anchor.json" --since "$since_commit")
+
+  if echo "$output" | grep -q "=== specs/anchor.md ==="; then
+    test_pass "anchor appears in fan-out under --since"
+  else
+    test_fail "anchor should appear in fan-out under --since; got: $output"
+  fi
+
+  if echo "$output" | grep -Eq '^\+.*anchor post-cursor change'; then
+    test_pass "anchor per-spec diff uses --since override, not stale base_commit"
+  else
+    test_fail "expected '+anchor post-cursor change' in anchor's per-spec diff: $output"
+  fi
+
+  local stored_anchor_bc
+  stored_anchor_bc=$(jq -r '.base_commit' "$RALPH_DIR/state/anchor.json")
+  if [ "$stored_anchor_bc" = "$head_commit" ]; then
+    test_pass "anchor state/<s>.base_commit unchanged by --since"
+  else
+    test_fail "anchor base_commit was modified: expected '$head_commit', got '$stored_anchor_bc'"
+  fi
+
+  teardown_test_env
+}
+
 # Test: when tier 1 candidate set is empty, todo.sh prints the "No spec
 # changes since last task creation" message and exits 0 (spec req 21).
 test_todo_empty_candidate_set_exits() {
@@ -15606,6 +15658,7 @@ ALL_TESTS=(
   test_todo_uncommitted_error
   test_todo_uncommitted_sibling_error
   test_todo_since_anchor_only
+  test_todo_since_override_anchor_per_spec_diff
   test_todo_empty_candidate_set_exits
   test_todo_large_diff_no_sigpipe
   test_todo_sets_base_commit
