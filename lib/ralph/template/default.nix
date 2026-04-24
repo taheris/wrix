@@ -342,7 +342,11 @@ let
     (partialDir + "/companions-context.md")
     (partialDir + "/context-pinning.md")
     (partialDir + "/exit-signals.md")
+    (partialDir + "/implementation-notes-spec.md")
+    (partialDir + "/implementation-notes-state.md")
     (partialDir + "/interview-modes.md")
+    (partialDir + "/invariant-clash.md")
+    (partialDir + "/sibling-spec-editing.md")
     (partialDir + "/spec-header.md")
   ];
 

@@ -23,26 +23,7 @@ The current spec file (`specs/{{LABEL}}.md`) contains:
 2. **Ask clarifying questions** to understand the additional work needed
 3. **Capture scope clearly** - What new functionality is being added?
 
-## Anchor Session & Sibling-Spec Editing
-
-The label named on the `-u` flag (`{{LABEL}}`) is the **anchor**; it owns the
-session state file at `.wrapix/ralph/state/{{LABEL}}.json`. The anchor's state
-file holds the molecule, `implementation_notes`, and `iteration_count`
-regardless of which spec files are edited.
-
-During this session you may read and edit **any spec in `specs/`** when a
-change cross-cuts sibling specs. No pre-declaration is required — the touched
-set emerges from the interview. `docs/README.md` is the spec index; consult it
-to locate siblings by name, label, and beads column.
-
-Rules:
-
-- Edit sibling specs in place under `specs/` using the Edit tool, just like the
-  anchor
-- Sibling specs do **not** get their own state file or molecule during this
-  session; `ralph todo` creates sibling state files lazily on fan-out
-- **Hidden specs (`-u -h`)** are single-spec and do NOT participate in
-  sibling-spec editing — they remain anchor-only
+{{> sibling-spec-editing}}
 
 ## Interview Flow
 
@@ -62,61 +43,9 @@ Rules:
    (git-tracked specs only; hidden specs just save the file without committing)
 6. Output RALPH_COMPLETE when the user confirms
 
-## Invariant-Clash Awareness
+{{> invariant-clash}}
 
-Before committing a spec change, scan the anchor spec **and any touched sibling
-specs** for **invariants** the change may clash with. A change landing in the
-anchor may contradict an invariant in a sibling; check every spec the session
-has touched, not just `specs/{{LABEL}}.md`. Invariant categories:
-
-- **Architectural decisions** — module boundaries, data flow, layering
-- **Data-structure choices** — file formats, schemas, key conventions
-- **Explicit constraints** — e.g., "must be idempotent", "no external deps"
-- **Non-functional requirements** — performance, security, portability
-- **Out-of-scope items** — things the spec deliberately excludes
-
-When a potential clash is detected, **pause the interview** and ask the user to
-pick a path. Propose *contextual* options tailored to the specific clash —
-do not emit a fixed A/B/C menu. Typically 2–4 options per clash, each naming
-the cost.
-
-The **three-paths principle** is guidance, not a rigid template. The three
-paths are:
-
-1. **Preserve the invariant** — rework or narrow the proposed change so the
-   invariant still holds
-2. **Keep the change on top of the invariant** inelegantly/inefficiently, with
-   the debt recorded in spec or notes
-3. **Change the invariant** — update the spec to accommodate the change, then
-   plan follow-up work to realign code
-
-Use these as a lens, but a given clash may need fewer or differently-framed
-options. Phrase each option in terms concrete to the clash at hand.
-
-**Bias toward asking when uncertain.** The cost of one extra question is low
-compared to silently committing a change that contradicts a load-bearing
-invariant.
-
-## Implementation Notes
-
-During the interview, you may gather implementation hints — specific technical details
-that help the implementer but don't belong in the permanent spec (e.g., "remove the
-rustup bootstrap block from entrypoint.sh", "use fenix's fromToolchainFile").
-
-Store these in the **anchor's state file**
-(`.wrapix/ralph/state/{{LABEL}}.json`) as an `implementation_notes` array of
-strings. Implementation notes **always** live in the anchor's state file
-regardless of which sibling spec they apply to — sibling state files never
-hold `implementation_notes`. Do NOT add an "Implementation Notes" section to
-any spec markdown. Example:
-
-```bash
-jq '.implementation_notes = ["Remove rustup bootstrap block", "Use fenix fromToolchainFile"]' \
-  .wrapix/ralph/state/{{LABEL}}.json > .wrapix/ralph/state/{{LABEL}}.json.tmp \
-  && mv .wrapix/ralph/state/{{LABEL}}.json.tmp .wrapix/ralph/state/{{LABEL}}.json
-```
-
-These notes are automatically passed to `ralph todo` templates during task creation.
+{{> implementation-notes-state}}
 
 ## Spec Editing
 
