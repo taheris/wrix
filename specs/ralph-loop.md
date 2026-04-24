@@ -452,7 +452,7 @@ Add unit tests for parser edge cases...
    2. **Test strategy** — Property-based vs unit tests
    3. **Implement** — Write code following spec
    4. **Discovered work** — Create issue, bond to molecule (sequential vs parallel)
-   5. **Quality gates** — Tests pass, lint passes, changes committed (commit yes; **do not push** — push is owned by `ralph check`)
+   5. **Quality gates** — Tests pass, lint passes, changes committed (commit yes; **do not push** — push is owned by `ralph check`). Both commit and push routes serialize through the repo-wide `.wrapix/prek.lock` defined in [pre-commit.md](pre-commit.md) (FR7) to prevent prek stash/restore races with concurrent writers (wx-m5yuq); no ralph-side action required — the installed pre-commit and pre-push shims take the lock transparently
    6. **Blocked vs waiting** — Distinguish dependency blocks from true blocks:
       - Need user input? → `RALPH_BLOCKED: <reason>`
       - Need other beads done? → Add dep with `bd dep add`, output `RALPH_COMPLETE`
