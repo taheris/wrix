@@ -24,7 +24,7 @@ defines the platform those commands share. Pipeline semantics live in
 6. **Template Sync** — `ralph sync` updates local templates (use `--diff` to preview changes)
 7. **Container Execution** — Claude-calling commands (`plan`, `todo`, `run --once`, `check`, interactive `msg`) run inside wrapix containers; utility commands run on host
 8. **Container Bead Sync** — Container-executed commands run `bd dolt push` inside the container after `RALPH_COMPLETE` before exit, then the host runs `bd dolt pull` after container exits
-9. **Compaction Re-Pin** — Container-executed Claude sessions register a `SessionStart` hook with matcher `"compact"` that re-injects a condensed orientation (label, spec path, exit signals, command-specific context) after auto-compaction, so the model retains orientation without re-pinning the full spec body
+9. **Compaction Re-Pin** — Container-executed Claude sessions register a `SessionStart` hook with matcher `"compact"` that re-injects, after auto-compaction, (a) a condensed orientation (label, spec path, exit signals, command-specific context) and (b) the rendered body of every `{{> partial}}` referenced by the running command's template, so the model retains both orientation and non-derivable rules without re-pinning the full spec body. Rule content MUST live in partials (not inline in template bodies) to survive re-pin; see [Compaction Re-Pin](#compaction-re-pin) for the rules/data/role framing and enforcement discipline
 10. **`ralph:clarify` Label** — Beads waiting on human response carry this label; the run loop filters them out, a notification is emitted when first applied, and `ralph msg` handles resolution (see [ralph-review.md](ralph-review.md))
 11. **Project Bootstrap** — `ralph init` scaffolds a fresh wrapix project from zero (`flake.nix`, `.envrc`, `.gitignore`, `.pre-commit-config.yaml`, `bd init`, `docs/`, `AGENTS.md`, `CLAUDE.md` symlink, `.wrapix/ralph/template/`). Invocable as a flake app (`nix run github:taheris/wrapix#init`) for use before ralph is on PATH. All artifacts are skip-if-exists; no git operations. Shares `scaffold_docs`/`scaffold_agents`/`scaffold_templates` with `ralph sync`
 
@@ -398,23 +398,37 @@ The Options Format Contract — the markdown shape that `ralph msg` consumes and
 
 ## Compaction Re-Pin
 
-Claude Code auto-compacts long-running sessions when the context window fills. The initial rendered template content (label, spec path, companion manifest list, exit-signal instructions, issue details) can be pushed out of the compacted transcript, causing the model to drift — forgetting which spec it's working on, which exit signals to use, which companion files exist to consult.
+> Driving bead: [wx-p9tzi](#) — long-running ralph plan sessions lost template-defined conventions (e.g. `## Implementation Notes`) after auto-compact because the re-pin only restored orientation, not rule content carried by the initial template.
 
-Ralph configures a `SessionStart` hook with matcher `"compact"` so a condensed re-pin is re-injected into the session on the next model turn. The re-pin deliberately excludes the full spec body (the model can re-read `specs/<label>.md` on demand); keeping the injection small protects the savings from compaction.
+Claude Code auto-compacts long-running sessions when the context window fills. The initial rendered template content (label, spec path, companion manifest list, exit-signal instructions, issue details, and the template's own rule prose) is delivered as the first user message and is summarized lossily by auto-compaction, causing the model to drift — forgetting which spec it's working on, which exit signals to use, which companion files exist to consult, and which template-defined conventions it was given.
+
+Ralph configures a `SessionStart` hook with matcher `"compact"` so a condensed re-pin is re-injected into the session on the next model turn. The re-pin carries (a) orientation metadata and (b) the rendered body of every `{{> partial}}` referenced by the running command's template; it deliberately excludes the full spec body, companion manifest bodies, task list, and first-turn role framing (the model can re-read `specs/<label>.md`, companion directories, and `bd show <id>` / `bd mol current` on demand). Keeping the injection small protects the savings from compaction.
+
+### What Gets Re-Pinned
+
+Template content falls into three categories. Only one is re-injected post-compact:
+
+| Category | Re-injected? | Examples | Rationale |
+|----------|:------------:|----------|-----------|
+| **Rule** | ✅ yes | Implementation Notes convention, sibling-spec editing protocol, invariant-clash three-paths principle, exit-signal format, interview modes | Non-derivable from spec, codebase, or `bd show`; the model cannot reconstruct these from disk. MUST be encoded as `{{> partial}}` references in template bodies so re-pin restores them faithfully. |
+| **Data** | ❌ no | `{{SPEC_CONTENT}}`, `{{EXISTING_SPEC}}`, `{{SPEC_DIFF}}`, `{{EXISTING_TASKS}}`, `{{COMPANIONS}}`, `{{DESCRIPTION}}` | Re-readable from disk via the spec path, companion directories, or `bd show`; re-injecting would bloat the re-pin without information gain. |
+| **Role** | ❌ no | First-turn role statement ("You are conducting a specification interview"), interview-flow numbering, planning-only warnings | First-turn framing prose; after compaction the model has already acted in role. Intentionally lost — the model's behavior is anchored by the rules and orientation, not by re-stating the role. |
+
+**Enforcement discipline.** The "rules live as partials, never inline" invariant is enforced by (a) code review during template edits and (b) a lint/judge rubric that flags rule-shaped prose (conventions, protocols, "MUST"/"SHOULD" statements) appearing directly in `plan-*.md`, `todo-*.md`, `run.md`, `check.md`, `msg.md` bodies outside of `{{> }}` references. Templates stay flat (no `## Rules` / `## Data` / `## Role` sectioning); the partial-is-a-rule encoding is the structural contract.
 
 ### Hook Scope
 
 The hook is registered for every container-executed Claude session. Host-side commands (`status`, `logs`, `check -t`, `tune`, `sync`, `use`, `init`, and non-interactive `msg` operations — view, fast-reply, dismiss) do not invoke Claude and do not register the hook.
 
-| Command | Re-pin content |
-|---------|----------------|
-| `ralph plan` (new/update) | Label, spec path, mode (`new`/`update`), exit signals |
-| `ralph todo` | Label, spec path, molecule ID (if set), companion paths, exit signals |
-| `ralph run --once` | Label, spec path, issue ID, title, companion paths, exit signals |
-| `ralph check` | Label, spec path, molecule ID, base commit, exit signals |
-| `ralph msg` (interactive) | Label, spec path, outstanding clarify IDs + summaries, exit signals |
+| Command | Orientation block | Partial bodies |
+|---------|-------------------|----------------|
+| `ralph plan` (new/update) | Label, spec path, mode (`new`/`update`), exit signals | every `{{> partial}}` in `plan-new.md` / `plan-update.md` |
+| `ralph todo` | Label, spec path, molecule ID (if set), companion paths, exit signals | every `{{> partial}}` in `todo-new.md` / `todo-update.md` |
+| `ralph run --once` | Label, spec path, issue ID, title, companion paths, exit signals | every `{{> partial}}` in `run.md` |
+| `ralph check` | Label, spec path, molecule ID, base commit, exit signals | every `{{> partial}}` in `check.md` |
+| `ralph msg` (interactive) | Label, spec path, outstanding clarify IDs + summaries, exit signals | every `{{> partial}}` in `msg.md` |
 
-The re-pin does NOT include the full spec body, companion manifest bodies, full issue description, or task list — these can be re-read on demand from `specs/<label>.md`, the companion directories, `bd show <id>`, and `bd mol current`.
+The re-pin does NOT include the full spec body, companion manifest bodies, full issue description, or task list — these are **data** (re-readable on demand from `specs/<label>.md`, the companion directories, `bd show <id>`, and `bd mol current`) and would bloat the re-pin. Partial bodies are **rules** and are injected verbatim; see [What Gets Re-Pinned](#what-gets-re-pinned).
 
 ### Implementation
 
@@ -474,7 +488,7 @@ The runtime directory is not committed to git; `.wrapix/ralph/runtime/` is added
 
 `lib/ralph/cmd/util.sh` gains two helpers:
 
-- `build_repin_content <label> <command> [key=value ...]` — composes the condensed re-pin string from known keys (spec path, molecule ID, issue ID, companion paths, exit signals for the command).
+- `build_repin_content <label> <command> [key=value ...]` — composes the re-pin output in two stages: (1) the condensed orientation block from known keys (spec path, molecule ID, issue ID, companion paths, exit signals for the command), and (2) the rendered body of every `{{> partial}}` referenced by the running command's template, resolved via the existing partial-resolution helper and appended after the orientation block. The template is located by `<command>` (e.g., `plan` → `plan-new.md` or `plan-update.md` depending on mode).
 - `install_repin_hook <label> <content>` — writes `repin.sh` (chmod +x) and `claude-settings.json` into `.wrapix/ralph/runtime/<label>/` and exports `RALPH_RUNTIME_DIR`. Called by each container-executed command before `run_claude_stream`.
 
 Cleanup of the runtime directory is handled by a trap in the command script so it runs on both success and failure paths.
@@ -568,20 +582,24 @@ Resolved during template rendering.
 
 ```
 lib/ralph/template/
-├── default.nix              # Template definitions + validation
+├── default.nix                      # Template definitions + validation
 ├── partial/
-│   ├── companions-context.md # Companion manifest injection
-│   ├── context-pinning.md   # Project context loading
-│   ├── exit-signals.md      # Exit signal format
-│   ├── interview-modes.md   # "one by one" / "polish the spec" fast phrases
-│   └── spec-header.md       # Label, spec path block
-├── check.md                 # Post-loop reviewer prompt (invariant-clash aware)
-├── msg.md                   # Interactive Drafter session prompt for clarify resolution
-├── plan-new.md              # New spec interview
-├── plan-update.md           # Update existing spec
-├── todo-new.md              # Create molecule
-├── todo-update.md           # Bond new tasks
-└── run.md                   # Single-issue implementation
+│   ├── companions-context.md        # Companion manifest injection
+│   ├── context-pinning.md           # Project context loading
+│   ├── exit-signals.md              # Exit signal format
+│   ├── implementation-notes-spec.md # Rule: ## Implementation Notes section in spec markdown, stripped on finalize (plan-new)
+│   ├── implementation-notes-state.md # Rule: implementation_notes array lives in state JSON, not spec markdown (plan-update)
+│   ├── interview-modes.md           # "one by one" / "polish the spec" fast phrases
+│   ├── invariant-clash.md           # Rule: three-paths principle for invariant clashes (plan-update)
+│   ├── sibling-spec-editing.md      # Rule: anchor owns state file; sibling specs editable in place (plan-update)
+│   └── spec-header.md               # Label, spec path block
+├── check.md                         # Post-loop reviewer prompt (invariant-clash aware)
+├── msg.md                           # Interactive Drafter session prompt for clarify resolution
+├── plan-new.md                      # New spec interview
+├── plan-update.md                   # Update existing spec
+├── todo-new.md                      # Create molecule
+├── todo-update.md                   # Bond new tasks
+└── run.md                           # Single-issue implementation
 ```
 
 ### Template Variables
@@ -654,6 +672,22 @@ Ships with just `{{COMPANIONS}}`; overridable by local template overlay.
 Label: {{LABEL}}
 Spec file: {{SPEC_PATH}}
 ```
+
+**`partial/implementation-notes-spec.md`:** (referenced by `plan-new.md`)
+
+Rule content: the spec markdown includes an optional `## Implementation Notes` section for transient technical hints that guide the implementer but are stripped on finalize (ralph's finalize step removes them from the committed spec). Canonical wording lives in this partial so it survives re-pin. Content sourced from the existing plan-new.md inline rule — no new rules introduced.
+
+**`partial/implementation-notes-state.md`:** (referenced by `plan-update.md`)
+
+Rule content: during an update session, implementation hints are stored in the anchor's state file `implementation_notes` array (`state/<label>.json`), NOT in spec markdown. Notes live with the anchor regardless of which sibling file they apply to. Content sourced from the existing plan-update.md inline rule.
+
+**`partial/sibling-spec-editing.md`:** (referenced by `plan-update.md`)
+
+Rule content: the label named on `-u` is the **anchor**; it owns the state file. The LLM may read and edit any spec in `specs/` when a change cross-cuts — sibling specs are edited in place and committed like the anchor. No pre-declaration is required; `docs/README.md` is the spec index. Hidden specs (`-u -h`) are single-spec and do not participate in sibling editing. Content sourced from the existing plan-update.md inline rule.
+
+**`partial/invariant-clash.md`:** (referenced by `plan-update.md`)
+
+Rule content: before committing a spec change, scan the anchor **and any touched sibling specs** for invariants the change may clash with (architectural decisions, data-structure choices, explicit constraints, non-functional requirements, out-of-scope items). When a potential clash is found, pause and ask the user with *contextual* options tailored to the specific clash — guided by the three-paths principle (preserve invariant / keep on top inelegantly / change invariant) but not limited to exactly three or those exact framings. Bias toward asking when uncertain. Content sourced from the existing plan-update.md inline rule.
 
 **`partial/interview-modes.md`:**
 ```markdown
@@ -822,12 +856,16 @@ Ralph uses `bd mol` for work tracking:
 | `lib/ralph/cmd/sync.sh` | Template sync from packaged (includes --diff); calls shared `scaffold_docs`/`scaffold_agents`/`scaffold_templates` from util.sh |
 | `lib/ralph/cmd/use.sh` | Active workflow switching with validation |
 | `lib/ralph/cmd/init.sh` | Project bootstrap — flake.nix, .envrc, .gitignore, .pre-commit-config.yaml, bd init, CLAUDE.md symlink; calls shared scaffold functions |
-| `lib/ralph/cmd/util.sh` | Shared helper functions (includes `resolve_spec_label`, `read_manifests`, `compute_spec_diff`, `discover_molecule_from_readme`, `ralph:clarify` label management, `build_repin_content`, `install_repin_hook`, `scaffold_docs`, `scaffold_agents`, `scaffold_templates`, `bootstrap_flake`, `bootstrap_envrc`, `bootstrap_gitignore`, `bootstrap_precommit`, `bootstrap_beads`, `bootstrap_claude_symlink`) |
+| `lib/ralph/cmd/util.sh` | Shared helper functions (includes `resolve_spec_label`, `read_manifests`, `compute_spec_diff`, `discover_molecule_from_readme`, `ralph:clarify` label management, `build_repin_content` (scans template for `{{> }}` references and resolves partials), `install_repin_hook`, `scaffold_docs`, `scaffold_agents`, `scaffold_templates`, `bootstrap_flake`, `bootstrap_envrc`, `bootstrap_gitignore`, `bootstrap_precommit`, `bootstrap_beads`, `bootstrap_claude_symlink`) |
 | `lib/ralph/template/default.nix` | Nix template definitions |
 | `lib/ralph/template/partial/companions-context.md` | Companion manifest injection partial |
 | `lib/ralph/template/partial/context-pinning.md` | Project context partial |
 | `lib/ralph/template/partial/exit-signals.md` | Exit signal format partial |
+| `lib/ralph/template/partial/implementation-notes-spec.md` | Rule partial: `## Implementation Notes` section in spec markdown, stripped on finalize (plan-new) |
+| `lib/ralph/template/partial/implementation-notes-state.md` | Rule partial: implementation_notes array lives in state JSON, not spec markdown (plan-update) |
 | `lib/ralph/template/partial/interview-modes.md` | Documents "one by one" and "polish the spec" fast phrases |
+| `lib/ralph/template/partial/invariant-clash.md` | Rule partial: three-paths principle for invariant clashes (plan-update) |
+| `lib/ralph/template/partial/sibling-spec-editing.md` | Rule partial: anchor owns state file; sibling specs editable in place (plan-update) |
 | `lib/ralph/template/partial/spec-header.md` | Label + spec path header partial |
 | `lib/ralph/template/flake.nix` | Project flake template rendered by `bootstrap_flake` (flake-parts, apps.sandbox, devShell, treefmt) |
 | `lib/ralph/template/pre-commit-config.yaml` | Pre-commit template rendered by `bootstrap_precommit` (treefmt pre-commit + nix flake check pre-push) |
@@ -900,6 +938,16 @@ Ralph uses `bd mol` for work tracking:
   [judge](../tests/judges/ralph-workflow.sh#test_repin_after_compaction)
 - [ ] Container-executed ralph commands pass `--env RALPH_RUNTIME_DIR=…` to wrapix; entrypoint only merges the settings fragment when the env var is set
   [verify](../tests/ralph/run-tests.sh#test_runtime_dir_env_propagation)
+- [ ] `build_repin_content` scans the running command's template for `{{> X}}` partial references and resolves each via the existing partial-resolution helper
+  [verify](../tests/ralph/run-tests.sh#test_repin_scans_template_for_partials)
+- [ ] Re-pin output for each container-executed command includes the rendered body of every `{{> partial}}` referenced by that command's template, appended after the orientation block
+  [verify](../tests/ralph/run-tests.sh#test_repin_injects_rendered_partials)
+- [ ] Re-pin content stays under 10KB even with all referenced partial bodies injected
+  [verify](../tests/ralph/run-tests.sh#test_repin_content_size_with_partials)
+- [ ] Rule content (conventions, protocols, MUST/SHOULD statements) in `plan-new.md`, `plan-update.md`, `todo-new.md`, `todo-update.md`, `run.md`, `check.md`, `msg.md` lives only inside `{{> partial}}` references; inline rule prose in template bodies is flagged as lint-eligible drift
+  [judge](../tests/judges/ralph-workflow.sh#test_rule_partial_discipline)
+- [ ] After auto-compact in a long-running `ralph plan -u` session, the model retains template-defined conventions (e.g. `## Implementation Notes` naming for plan-new, `implementation_notes` state-JSON location for plan-update) without re-reading the spec
+  [judge](../tests/judges/ralph-workflow.sh#test_repin_restores_template_rules_after_compact)
 
 ### Init
 

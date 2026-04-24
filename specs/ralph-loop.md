@@ -361,9 +361,11 @@ Notes live with the anchor regardless of which sibling specs the planning sessio
 5. Interview guidelines — One question at a time, capture terminology, identify code locations, clarify scope, define success criteria
 6. Interview flow — Describe idea → clarify → write spec → RALPH_COMPLETE
 7. Spec file format — Title, problem, requirements, affected files, success criteria, out of scope
-8. Implementation notes section — Optional transient context, stripped on finalize
+8. `{{> implementation-notes-spec}}` — Rule: `## Implementation Notes` section in spec markdown, stripped on finalize (see partial in [ralph-harness.md](ralph-harness.md)). Encoded as a partial so the rule survives re-pin after auto-compact
 9. `{{> interview-modes}}` — Documents the "one by one" and "polish the spec" fast phrases (see partial in [ralph-harness.md](ralph-harness.md)). Phrase matching is loose
 10. `{{> exit-signals}}`
+
+Rule content (section 8) MUST stay inside the `{{> }}` reference — inline rule prose would be lost on auto-compact (see [Compaction Re-Pin](ralph-harness.md#compaction-re-pin)).
 
 **Exit signals:** RALPH_COMPLETE, RALPH_BLOCKED, RALPH_CLARIFY
 
@@ -379,12 +381,14 @@ Notes live with the anchor regardless of which sibling specs the planning sessio
 5. Existing spec display — Show current spec from `specs/<label>.md` for reference
 6. `{{> companions-context}}` — after existing spec, before update guidelines
 7. Update guidelines — Discuss NEW requirements only
-8. Anchor session + sibling-spec editing — The label named on the `-u` flag is the **anchor**; it owns the state file (`state/<label>.json`). The LLM may read and edit any spec in `specs/` when a change cross-cuts — sibling specs are edited in place and committed like the anchor. No pre-declaration is required. `docs/README.md` is the spec index; consult it to locate siblings. Hidden specs (`-u -h`) are single-spec and do not participate in sibling editing
-9. Invariant-clash awareness — Before committing a spec change, scan the anchor **and any touched sibling specs** for invariants the change may clash with (architectural decisions, data-structure choices, explicit constraints, non-functional requirements, out-of-scope items). When a potential clash is found, pause the interview and ask the user to pick a path, proposing *contextual* options for the specific clash — guided by the three-paths principle (preserve invariant / keep on top inelegantly / change invariant) but not limited to exactly three or those exact framings. Bias toward asking when uncertain — the cost of asking is low compared to a silent wrong choice
-10. Implementation notes guidance — Store transient implementation hints in the anchor's state file `implementation_notes` array, not in any spec. Notes always live with the anchor regardless of which sibling file they apply to
+8. `{{> sibling-spec-editing}}` — Rule: anchor owns the state file; LLM may read and edit any spec in `specs/` when a change cross-cuts; hidden specs (`-u -h`) are single-spec (see partial in [ralph-harness.md](ralph-harness.md))
+9. `{{> invariant-clash}}` — Rule: scan anchor + touched siblings for invariants the change may clash with; pause and ask with contextual options guided by the three-paths principle; bias toward asking (see partial in [ralph-harness.md](ralph-harness.md))
+10. `{{> implementation-notes-state}}` — Rule: transient implementation hints live in the anchor's state file `implementation_notes` array, never in spec markdown (see partial in [ralph-harness.md](ralph-harness.md))
 11. Instructions — LLM edits `specs/<label>.md` (anchor) and any touched sibling specs directly during the interview; commits changes at end of session (git-tracked specs only; hidden specs just save file)
 12. `{{> interview-modes}}` — Documents the "one by one" and "polish the spec" fast phrases
 13. `{{> exit-signals}}`
+
+Rule content (sections 8, 9, 10) MUST stay inside the `{{> }}` references — inline rule prose would be lost on auto-compact (see [Compaction Re-Pin](ralph-harness.md#compaction-re-pin)).
 
 **Exit signals:** RALPH_COMPLETE, RALPH_BLOCKED, RALPH_CLARIFY
 
@@ -506,6 +510,10 @@ Add unit tests for parser edge cases...
   [judge](../tests/judges/ralph-workflow.sh#test_plan_update_invariant_clash_detection)
 - [ ] `plan-new.md` and `plan-update.md` include the `interview-modes` partial
   [verify](../tests/ralph/run-tests.sh#test_plan_templates_include_interview_modes)
+- [ ] `plan-new.md` references `{{> implementation-notes-spec}}` and carries no inline `## Implementation Notes` rule prose outside the partial reference
+  [verify](../tests/ralph/run-tests.sh#test_plan_new_rule_partials)
+- [ ] `plan-update.md` references `{{> sibling-spec-editing}}`, `{{> invariant-clash}}`, and `{{> implementation-notes-state}}` and carries no inline rule prose for those topics outside the partial references
+  [verify](../tests/ralph/run-tests.sh#test_plan_update_rule_partials)
 - [ ] `interview-modes.md` documents "one by one" and "polish the spec" with loose-matching guidance
   [verify](../tests/ralph/run-tests.sh#test_interview_modes_partial_content)
 - [ ] LLM responds to "one by one" (and close variants) with one-question-at-a-time + suggested defaults
