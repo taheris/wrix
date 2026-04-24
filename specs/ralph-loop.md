@@ -37,6 +37,7 @@ compaction re-pin, utilities, bootstrap) is defined in
 9. **Cross-Machine State Recovery** — `ralph todo` discovers molecule IDs from the pinned-context file (`docs/README.md` by default) when no local state file exists, reconstructing `state/<label>.json` to avoid duplicate molecule creation
 10. **Post-Sync Verification (informational)** — After `bd dolt pull` on the host, `ralph todo` checks whether task count increased and emits a warning with recovery hints if not; `base_commit` always advances on `RALPH_COMPLETE`
 11. **Companion Content** — Specs can declare companion directories whose `manifest.md` is injected into templates, giving the LLM awareness of related content it can read on demand
+12. **Implementation Notes Lifecycle** — `state/<label>.json` holds an optional `implementation_notes` array (transient planning hints): written during `ralph plan -u`, read by `ralph todo` via the `IMPLEMENTATION_NOTES` template variable, and cleared atomically when `ralph todo` advances the anchor's `base_commit` on RALPH_COMPLETE. Full contract: [Implementation Notes Lifecycle](#implementation-notes-lifecycle)
 
 ## Commands
 
@@ -124,7 +125,7 @@ Under Anchor-Driven Multi-Spec Planning, a single plan session may edit multiple
 
 **Profile assignment:** The LLM analyzes each task's requirements and assigns appropriate `profile:X` labels based on implementation needs (e.g., tasks touching `.rs` files get `profile:rust`). This happens per-task, not per-spec.
 
-Stores molecule ID in the anchor's `state/<label>.json`. On `RALPH_COMPLETE`, atomically stores `HEAD` as `base_commit` on every spec that received at least one task and clears the anchor's `implementation_notes` (see Implementation Notes section for lifecycle rationale). Host-side verification checks that tasks synced correctly but is informational only — it does not block `base_commit` advancement or workflow progression.
+Stores molecule ID in the anchor's `state/<label>.json`. On `RALPH_COMPLETE`, atomically stores `HEAD` as `base_commit` on every spec that received at least one task and clears the anchor's `implementation_notes` (see [Implementation Notes Lifecycle](#implementation-notes-lifecycle) for rationale). Host-side verification checks that tasks synced correctly but is informational only — it does not block `base_commit` advancement or workflow progression.
 
 **Container bead sync:** After RALPH_COMPLETE inside the container, `todo.sh` runs `bd dolt push` before the container exits. On the host side, `todo.sh` then runs `bd dolt pull` to receive the synced beads. This two-step sync (push inside container → pull on host) ensures beads created in the container's isolated `.beads/` database reach the host.
 
@@ -316,6 +317,35 @@ When `state/<label>.json` does not exist (e.g., working from a different machine
 5. Proceeds as tier 2 (molecule-based comparison against existing tasks)
 
 **README parsing**: Simple grep/awk to find the row matching the spec filename and extract the Beads column. The table format is stable and controlled by the project.
+
+## Implementation Notes Lifecycle
+
+<!--
+  CANONICAL DEFINITION of `implementation_notes`. Do not remove this section
+  without first removing every reference enumerated in "Referenced by" below
+  and excising the feature from lib/ralph/cmd/todo.sh, util.sh, and the four
+  templates (plan-update.md, todo-new.md, todo-update.md, default.nix).
+-->
+
+`state/<label>.json` has an optional `implementation_notes` array — transient hints captured during planning that inform task creation but should not outlive it.
+
+- **Written** during `ralph plan -u` when the user shares task-creation-shaped context the LLM should preserve for the next `ralph todo` session
+- **Read** by `ralph todo` via the `IMPLEMENTATION_NOTES` template variable (todo-new, todo-update)
+- **Cleared** atomically with `base_commit` advancement on `ralph todo` RALPH_COMPLETE — notes are task-creation-local; re-running on a new diff starts clean
+
+Notes live with the anchor regardless of which sibling specs the planning session edited.
+
+**Schema:** `implementation_notes` is an optional array of strings. Absent field and empty array are equivalent. No per-note metadata.
+
+**Referenced by** (removing this section breaks these):
+- Requirements FR #12 (anchor link)
+- `ralph plan` Anchor session — anchor state file ownership
+- `ralph todo` Tier 1 fan-out step 5 — clearing on cursor advancement
+- `ralph todo` RALPH_COMPLETE description (anchor link)
+- Per-Spec Cursor Fan-Out — cursor advancement list
+- `plan-update.md` Template § Implementation notes guidance
+- Success Criteria § Todo — `test_todo_clears_implementation_notes`
+- Success Criteria § Anchor + per-spec fan-out — anchor owns `implementation_notes`
 
 ## Template Content Requirements
 
