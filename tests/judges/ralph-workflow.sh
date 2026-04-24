@@ -140,3 +140,29 @@ test_msg_interactive_clears_label() {
   judge_files "lib/ralph/template/msg.md"
   judge_criterion "msg.md instructs the Drafter, for each clarify bead, to BOTH (1) write a self-contained resolution note via 'bd update <id> --notes' AND (2) remove the clarify label via 'bd update <id> --remove-label=ralph:clarify' — both actions happen per bead, after user confirmation of the drafted note. The note is explicitly self-contained (states what was decided, why, and consequences) so that a reader a month later understands the decision without re-reading the bead description, which may have been edited. The template shows both bd commands in the per-bead step (not just one), and clearing the label is not conditional on anything beyond the user confirming the note."
 }
+
+test_rule_partial_discipline() {
+  judge_files \
+    "lib/ralph/template/plan-new.md" \
+    "lib/ralph/template/plan-update.md" \
+    "lib/ralph/template/todo-new.md" \
+    "lib/ralph/template/todo-update.md" \
+    "lib/ralph/template/run.md" \
+    "lib/ralph/template/check.md" \
+    "lib/ralph/template/msg.md"
+  judge_criterion "Rule-shaped prose — conventions, protocols, 'MUST'/'SHOULD'/'NEVER' statements, mandatory process steps, or non-derivable discipline the model cannot reconstruct from reading the spec, codebase, or 'bd show' — lives ONLY inside '{{> partial}}' references within these template bodies. Inline content outside {{> }} references is limited to orientation (label, spec path, issue metadata, companion paths, exit-signal placeholders), role/first-turn framing (e.g. 'You are conducting a specification interview'), or data-variable placeholders ({{SPEC_CONTENT}}, {{EXISTING_SPEC}}, {{DESCRIPTION}}, etc.). A passing judgement reports no rule-shaped prose appearing inline outside a {{> partial}} reference; a failing judgement names each offending inline rule with file + approximate location and the partial it should have been extracted to. This invariant is the structural contract that makes Compaction Re-Pin faithful: partials are re-injected after auto-compact, inline rule prose is not."
+}
+
+test_repin_restores_template_rules_after_compact() {
+  judge_files \
+    "lib/ralph/cmd/util.sh" \
+    "lib/ralph/cmd/plan.sh" \
+    "lib/ralph/template/plan-new.md" \
+    "lib/ralph/template/plan-update.md" \
+    "lib/ralph/template/partial/implementation-notes-spec.md" \
+    "lib/ralph/template/partial/implementation-notes-state.md" \
+    "lib/ralph/template/partial/sibling-spec-editing.md" \
+    "lib/ralph/template/partial/invariant-clash.md" \
+    "specs/ralph-harness.md"
+  judge_criterion "After auto-compaction in a long-running 'ralph plan -u <label>' session, the SessionStart[compact] re-pin — produced by build_repin_content and delivered via repin.sh — restores template-defined conventions that the model would otherwise lose. Evaluate end-to-end that the fix for wx-p9tzi holds: (1) build_repin_content scans the running command's template (plan-update.md for '-u' sessions) for {{> partial}} references and appends each resolved partial body after the orientation block; (2) for plan-new.md the re-pin restores the '## Implementation Notes' spec-markdown convention (via partial/implementation-notes-spec.md); (3) for plan-update.md the re-pin restores the 'implementation_notes lives in state JSON, not spec markdown' convention (via partial/implementation-notes-state.md), the sibling-spec editing protocol (partial/sibling-spec-editing.md), and the invariant-clash three-paths principle (partial/invariant-clash.md); (4) these partials carry the rule prose verbatim so the model retains the conventions WITHOUT needing to re-read specs/<label>.md or this spec; (5) the orientation block does NOT re-inject the full spec body (that's data, re-readable on demand). A passing judgement confirms the re-pin pipeline delivers each named convention to the post-compact session. A failing judgement names which convention is missing or where the pipeline breaks."
+}
