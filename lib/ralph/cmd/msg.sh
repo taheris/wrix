@@ -8,9 +8,12 @@ set -euo pipefail
 #   ralph msg -s <label>               List filtered to a single spec (host)
 #   ralph msg -c                       Interactive Drafter session (container)
 #   ralph msg -c -s <label>            Interactive, filtered to a single spec
+#   ralph msg -n <N>                   View clarify #N (host)
 #   ralph msg -i <id>                  View by bead ID (host)
-#   ralph msg -i <id> "answer"         Fast-reply, verbatim answer (host)
-#   ralph msg -i <id> -d               Dismiss (host)
+#   ralph msg -n <N> -a <choice>       Fast-reply (int = option lookup; else verbatim)
+#   ralph msg -i <id> -a <choice>      Fast-reply by bead ID (host)
+#   ralph msg -n <N> -d                Dismiss (host)
+#   ralph msg -i <id> -d               Dismiss by bead ID (host)
 
 RALPH_DIR="${RALPH_DIR:-.wrapix/ralph}"
 
@@ -20,9 +23,11 @@ source "$(dirname "$0")/util.sh"
 # Parse flags
 SPEC_FILTER=""
 BEAD_ID=""
+NUM_TARGET=""
 DISMISS=false
 CHAT=false
 ANSWER=""
+ANSWER_SET=false
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -48,6 +53,30 @@ while [ $# -gt 0 ]; do
       BEAD_ID="${1#--id=}"
       shift
       ;;
+    -n|--num)
+      if [ -z "${2:-}" ]; then
+        error "Flag $1 requires an integer index argument"
+      fi
+      NUM_TARGET="$2"
+      shift 2
+      ;;
+    --num=*)
+      NUM_TARGET="${1#--num=}"
+      shift
+      ;;
+    -a|--answer)
+      if [ $# -lt 2 ]; then
+        error "Flag $1 requires a choice argument"
+      fi
+      ANSWER="$2"
+      ANSWER_SET=true
+      shift 2
+      ;;
+    --answer=*)
+      ANSWER="${1#--answer=}"
+      ANSWER_SET=true
+      shift
+      ;;
     -c|--chat)
       CHAT=true
       shift
@@ -57,36 +86,50 @@ while [ $# -gt 0 ]; do
       shift
       ;;
     -h|--help)
-      echo "Usage: ralph msg [flags] [answer]"
-      echo ""
-      echo "Human interface for resolving ralph:clarify beads."
-      echo ""
-      echo "Modes:"
-      echo "  ralph msg                    List outstanding clarifies (host)"
-      echo "  ralph msg -s <label>         List filtered to a single spec (host)"
-      echo "  ralph msg -c                 Interactive Drafter session (container)"
-      echo "  ralph msg -c -s <label>      Interactive, filtered to a single spec"
-      echo "  ralph msg -i <id>            View specific clarify (host)"
-      echo "  ralph msg -i <id> \"answer\"   Reply to a clarify (host)"
-      echo "  ralph msg -i <id> -d         Dismiss without answering (host)"
-      echo ""
-      echo "Flags:"
-      echo "  -c, --chat           Launch interactive Drafter (container, Claude)"
-      echo "  -s, --spec <label>   Filter by spec label (default: state/current)"
-      echo "  -i, --id <id>        Target specific clarify by bead ID"
-      echo "  -d, --dismiss        Dismiss without answering"
-      echo "  -h, --help           Show this help"
+      cat <<'HELP'
+Usage: ralph msg [flags]
+
+Human interface for resolving ralph:clarify beads.
+
+Modes:
+  ralph msg                         List outstanding clarifies (host)
+  ralph msg -s <label>              List filtered to a single spec (host)
+  ralph msg -c                      Interactive Drafter session (container)
+  ralph msg -c -s <label>           Interactive, filtered to a single spec
+  ralph msg -n <N>                  View clarify #N (host)
+  ralph msg -i <id>                 View by bead ID (host)
+  ralph msg -n <N> -a <choice>      Fast-reply: int = option lookup, else verbatim
+  ralph msg -i <id> -a <choice>     Fast-reply by bead ID (host)
+  ralph msg -n <N> -d               Dismiss (host)
+  ralph msg -i <id> -d              Dismiss by bead ID (host)
+
+Flags:
+  -c, --chat               Launch interactive Drafter (container, Claude)
+  -s, --spec <label>       Filter by spec label (default: state/current)
+  -n, --num <N>            Target clarify by 1-based sequential index
+  -i, --id <id>            Target clarify by bead ID
+  -a, --answer <choice>    Store answer and clear label (int = option lookup)
+  -d, --dismiss            Dismiss without answering
+  -h, --help               Show this help
+HELP
       exit 0
       ;;
     -*)
       error "Unknown flag: $1 (see ralph msg --help)"
       ;;
     *)
-      ANSWER="$1"
-      shift
+      error "Unexpected argument: $1 (use -a <choice> to supply an answer; see ralph msg --help)"
       ;;
   esac
 done
+
+if [ -n "$BEAD_ID" ] && [ -n "$NUM_TARGET" ]; then
+  error "Use either -n <N> or -i <id>, not both"
+fi
+
+if [ "$ANSWER_SET" = "true" ] && [ "$DISMISS" = "true" ]; then
+  error "Use either -a <choice> or -d, not both"
+fi
 
 #-----------------------------------------------------------------------------
 # Determine source label from bead labels
@@ -236,9 +279,10 @@ render_clarify_list() {
   echo ""
   echo "Reply:"
   echo "  ralph msg -c                  # interactive triage + walk (container, Claude)"
-  echo "  ralph msg -i <id>             # view a clarify"
-  echo "  ralph msg -i <id> \"answer\"    # fast-reply verbatim"
-  echo "  ralph msg -i <id> -d          # dismiss"
+  echo "  ralph msg -n <N>              # view clarify #N"
+  echo "  ralph msg -n <N> -a <int>     # fast-reply: pick option <int>"
+  echo "  ralph msg -n <N> -a \"text\"    # fast-reply: verbatim answer"
+  echo "  ralph msg -n <N> -d           # dismiss"
 }
 
 #-----------------------------------------------------------------------------
@@ -302,40 +346,202 @@ build_clarify_beads_block() {
 }
 
 #-----------------------------------------------------------------------------
-# Mode: Show specific question by bead ID
+# Resolve the target bead ID from -n <N> (1-based index into the sorted
+# clarify list for the resolved spec filter) or -i <id>. Sets TARGET_ID and
+# TARGET_INDEX. TARGET_INDEX is the 1-based sequential position if known,
+# else empty.
 #-----------------------------------------------------------------------------
-if [ -n "$BEAD_ID" ] && [ -z "$ANSWER" ] && [ "$DISMISS" = "false" ] && [ "$CHAT" = "false" ]; then
-  bd show "$BEAD_ID"
-  exit 0
-fi
+resolve_target_bead() {
+  local num="$1"
+  local id="$2"
+  local spec="$3"
+
+  TARGET_ID=""
+  TARGET_INDEX=""
+
+  local json
+  json=$(get_sorted_clarify_beads "$spec")
+  local count
+  count=$(echo "$json" | jq 'length' 2>/dev/null || echo 0)
+
+  if [ -n "$num" ]; then
+    if ! [[ "$num" =~ ^[0-9]+$ ]]; then
+      error "Invalid index '$num' for -n (expected a positive integer)"
+    fi
+    if [ "$num" -lt 1 ] || [ "$num" -gt "$count" ]; then
+      error "No clarify at index $num ($count outstanding)"
+    fi
+    TARGET_ID=$(echo "$json" | jq -r --argjson idx "$((num - 1))" '.[$idx].id')
+    TARGET_INDEX="$num"
+    return 0
+  fi
+
+  if [ -n "$id" ]; then
+    TARGET_ID="$id"
+    local pos
+    pos=$(echo "$json" | jq -r --arg id "$id" \
+      'to_entries | map(select(.value.id == $id)) | first | (.key + 1) // empty')
+    TARGET_INDEX="$pos"
+    return 0
+  fi
+}
 
 #-----------------------------------------------------------------------------
-# Mode: Reply to a question (positional answer)
+# Render view output for a single clarify: header, summary, body (description
+# preamble), enumerated options, reply hints. Host-side, no container.
+# Usage: render_view <bead_id> [index]
 #-----------------------------------------------------------------------------
-if [ -n "$BEAD_ID" ] && [ -n "$ANSWER" ]; then
-  debug "Replying to $BEAD_ID with answer"
+render_view() {
+  local bead_id="$1"
+  local index="${2:-}"
 
-  bd update "$BEAD_ID" --append-notes "Answer: $ANSWER" || error "Failed to store answer for $BEAD_ID"
+  local bead_json description title summary
+  bead_json=$(bd_json show "$bead_id" --json)
+  description=$(echo "$bead_json" | jq -r '.[0].description // ""')
+  title=$(echo "$bead_json" | jq -r '.[0].title // ""')
+  summary=$(get_summary_for_bead "$description" "$title")
 
-  remove_clarify_label "$BEAD_ID"
-  reset_iteration_for_bead "$BEAD_ID"
+  if [ -n "$index" ]; then
+    echo "Clarify #${index} — ${bead_id}"
+  else
+    echo "Clarify — ${bead_id}"
+  fi
+  echo "Summary: ${summary}"
+  echo ""
 
-  print_resume_hint "$BEAD_ID"
-  exit 0
-fi
+  local body
+  body=$(printf '%s\n' "$description" \
+    | awk 'BEGIN{p=1} /^##[[:space:]]+Options([[:space:]]|$)/{p=0} p' \
+    | awk 'BEGIN{seen=0; buf=""} { if (NF) { if (buf != "") buf = buf "\n"; buf = buf $0; seen=1 } else if (seen) { buf = buf "\n" } } END{ sub(/\n+$/, "", buf); if (buf != "") print buf }')
+  if [ -n "$body" ]; then
+    echo "$body"
+    echo ""
+  fi
+
+  local parsed options_count hdr_summary
+  parsed=$(parse_options_format "$description")
+  options_count=$(echo "$parsed" | jq -r '.options | length')
+
+  if [ "$options_count" -gt 0 ]; then
+    hdr_summary=$(echo "$parsed" | jq -r '.summary // ""')
+    if [ -n "$hdr_summary" ]; then
+      echo "## Options — ${hdr_summary}"
+    else
+      echo "## Options"
+    fi
+    echo ""
+
+    local opt
+    while IFS= read -r opt; do
+      local n otitle obody
+      n=$(echo "$opt" | jq -r '.n')
+      otitle=$(echo "$opt" | jq -r '.title // ""')
+      obody=$(echo "$opt" | jq -r '.body // ""')
+      if [ -n "$otitle" ]; then
+        echo "[${n}] ${otitle}"
+      else
+        echo "[${n}]"
+      fi
+      if [ -n "$obody" ]; then
+        echo "$obody" | sed 's/^/    /'
+      fi
+      echo ""
+    done < <(echo "$parsed" | jq -c '.options[]')
+  fi
+
+  local target_ref
+  if [ -n "$index" ]; then
+    target_ref="-n ${index}"
+  else
+    target_ref="-i ${bead_id}"
+  fi
+  echo "Reply:"
+  echo "  ralph msg ${target_ref} -a <int>     # pick an option"
+  echo "  ralph msg ${target_ref} -a \"text\"    # custom answer"
+  echo "  ralph msg ${target_ref} -d           # dismiss"
+}
 
 #-----------------------------------------------------------------------------
-# Mode: Dismiss a question
+# Fast-reply: store an answer and clear ralph:clarify. Integer <choice>
+# triggers Options Format lookup; anything else is stored verbatim.
+# Usage: do_fast_reply <bead_id> <choice>
 #-----------------------------------------------------------------------------
-if [ -n "$BEAD_ID" ] && [ "$DISMISS" = "true" ]; then
-  debug "Dismissing $BEAD_ID"
+do_fast_reply() {
+  local bead_id="$1"
+  local choice="$2"
+  local note
 
-  bd update "$BEAD_ID" --append-notes "Dismissed: Agent should work around this question." || error "Failed to store dismissal for $BEAD_ID"
+  if [[ "$choice" =~ ^[0-9]+$ ]]; then
+    local parsed matched
+    parsed=$(parse_options_format_from_bead "$bead_id")
+    matched=$(echo "$parsed" | jq -c --argjson n "$choice" \
+      '.options[] | select(.n == $n)' 2>/dev/null || true)
+    if [ -z "$matched" ] || [ "$matched" = "null" ]; then
+      local available
+      available=$(echo "$parsed" | jq -r '.options | map(.n) | join(", ")')
+      [ -z "$available" ] && available="(none)"
+      echo "Option ${choice} not found in ${bead_id}. Available options: ${available}" >&2
+      echo "Use -a \"text\" for a free-form answer." >&2
+      exit 1
+    fi
+    local otitle obody
+    otitle=$(echo "$matched" | jq -r '.title // ""')
+    obody=$(echo "$matched" | jq -r '.body // ""')
+    note="Chose option ${choice} — ${otitle}: ${obody}"
+  else
+    note="$choice"
+  fi
 
-  remove_clarify_label "$BEAD_ID"
-  reset_iteration_for_bead "$BEAD_ID"
+  bd update "$bead_id" --append-notes "$note" || error "Failed to store answer for $bead_id"
+  remove_clarify_label "$bead_id"
+  reset_iteration_for_bead "$bead_id"
+  print_resume_hint "$bead_id"
+}
 
-  echo "Dismissed $BEAD_ID. The agent will proceed without an answer on its next iteration."
+#-----------------------------------------------------------------------------
+# Dismiss: remove ralph:clarify with a work-around note. Host-side.
+# Usage: do_dismiss <bead_id>
+#-----------------------------------------------------------------------------
+do_dismiss() {
+  local bead_id="$1"
+  bd update "$bead_id" --append-notes "Dismissed: Agent should work around this question." \
+    || error "Failed to store dismissal for $bead_id"
+  remove_clarify_label "$bead_id"
+  reset_iteration_for_bead "$bead_id"
+  print_resume_hint "$bead_id"
+}
+
+#-----------------------------------------------------------------------------
+# Mode: View, fast-reply, or dismiss a single clarify (host-side).
+#-----------------------------------------------------------------------------
+if { [ -n "$BEAD_ID" ] || [ -n "$NUM_TARGET" ]; } && [ "$CHAT" = "false" ]; then
+  # Resolve spec filter for index lookup. Same rules as list mode: explicit
+  # --spec, else state/current, else unfiltered.
+  resolved_filter=""
+  if [ -n "$SPEC_FILTER" ]; then
+    resolved_filter="$SPEC_FILTER"
+  else
+    current_file="$RALPH_DIR/state/current"
+    if [ -f "$current_file" ]; then
+      resolved_filter=$(<"$current_file")
+      resolved_filter="${resolved_filter#"${resolved_filter%%[![:space:]]*}"}"
+      resolved_filter="${resolved_filter%"${resolved_filter##*[![:space:]]}"}"
+    fi
+  fi
+
+  resolve_target_bead "$NUM_TARGET" "$BEAD_ID" "$resolved_filter"
+
+  if [ "$ANSWER_SET" = "true" ]; then
+    do_fast_reply "$TARGET_ID" "$ANSWER"
+    exit 0
+  fi
+
+  if [ "$DISMISS" = "true" ]; then
+    do_dismiss "$TARGET_ID"
+    exit 0
+  fi
+
+  render_view "$TARGET_ID" "$TARGET_INDEX"
   exit 0
 fi
 

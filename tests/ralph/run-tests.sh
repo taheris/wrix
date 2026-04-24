@@ -3221,7 +3221,7 @@ test_msg_reply_resume_hint() {
     --labels="spec:current-feature,ralph:clarify" --json 2>/dev/null | jq -r '.id')
 
   local matching_output
-  matching_output=$(ralph-msg -i "$matching_id" "use approach A" 2>&1)
+  matching_output=$(ralph-msg -i "$matching_id" -a "use approach A" 2>&1)
 
   if echo "$matching_output" | grep -qF "Clarify cleared on $matching_id. Resume with: ralph run"; then
     test_pass "Reply hint matches expected text for current spec"
@@ -3246,7 +3246,7 @@ test_msg_reply_resume_hint() {
 
   local notes_after
   notes_after=$(bd show "$matching_id" --json 2>/dev/null | jq -r '.[0].notes // ""')
-  if echo "$notes_after" | grep -qF "Answer: use approach A"; then
+  if echo "$notes_after" | grep -qF "use approach A"; then
     test_pass "Answer stored in bead notes"
   else
     test_fail "Answer not stored in bead notes (got: ${notes_after:0:200})"
@@ -3258,7 +3258,7 @@ test_msg_reply_resume_hint() {
     --labels="spec:other-feature,ralph:clarify" --json 2>/dev/null | jq -r '.id')
 
   local other_output
-  other_output=$(ralph-msg -i "$other_id" "go with option B" 2>&1)
+  other_output=$(ralph-msg -i "$other_id" -a "go with option B" 2>&1)
 
   if echo "$other_output" | grep -qF "Clarify cleared on $other_id. Resume with: ralph run -s other-feature"; then
     test_pass "Reply hint includes -s flag when bead spec differs from current"
@@ -3580,6 +3580,411 @@ test_msg_index_ordering() {
     test_pass "Third-created bead has index 3"
   else
     test_fail "Expected index 3 for $third_id (got: $third_row)"
+  fi
+
+  teardown_test_env
+}
+
+# Test: `ralph msg -n <N>` prints bead summary, body, and enumerated options
+# on the host with no container / claude invocation.
+test_msg_view_host_only() {
+  CURRENT_TEST="msg_view_host_only"
+  test_header "ralph msg -n <N> views clarify on host (no container)"
+
+  setup_test_env "msg-view-host-only"
+  init_beads
+
+  mkdir -p "$RALPH_DIR/state"
+  echo "demo" > "$RALPH_DIR/state/current"
+
+  local bead_id
+  bead_id=$(bd create --title="Decide the thing" --type=task \
+    --description="Question body text lives here.
+
+## Options — Short summary of decision
+
+### Option 1 — First path
+First option body.
+
+### Option 2 — Second path
+Second option body." \
+    --labels="spec:demo,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+
+  local tripwire="$TEST_DIR/claude-invocations.log"
+  rm -f "$tripwire" "$TEST_DIR/bin/claude"
+  cat > "$TEST_DIR/bin/claude" <<EOF
+#!/usr/bin/env bash
+echo "invoked" >> "$tripwire"
+exit 0
+EOF
+  chmod +x "$TEST_DIR/bin/claude"
+
+  local view_output
+  view_output=$(ralph-msg -n 1 2>&1)
+
+  if [ ! -s "$tripwire" ]; then
+    test_pass "ralph msg -n 1 did not invoke claude"
+  else
+    test_fail "ralph msg -n 1 unexpectedly invoked claude"
+  fi
+
+  if echo "$view_output" | grep -qF "Clarify #1 — $bead_id"; then
+    test_pass "view prints Clarify #N — <id> header"
+  else
+    test_fail "view missing header (got: $view_output)"
+  fi
+
+  if echo "$view_output" | grep -qF "Summary: Short summary of decision"; then
+    test_pass "view prints Options summary"
+  else
+    test_fail "view missing summary line (got: $view_output)"
+  fi
+
+  if echo "$view_output" | grep -qF "Question body text lives here."; then
+    test_pass "view prints question body"
+  else
+    test_fail "view missing question body (got: $view_output)"
+  fi
+
+  if echo "$view_output" | grep -qE '^\[1\][[:space:]]+First path'; then
+    test_pass "view enumerates option 1"
+  else
+    test_fail "view missing [1] First path (got: $view_output)"
+  fi
+
+  if echo "$view_output" | grep -qE '^\[2\][[:space:]]+Second path'; then
+    test_pass "view enumerates option 2"
+  else
+    test_fail "view missing [2] Second path (got: $view_output)"
+  fi
+
+  # Label must remain — view does not clear
+  local label_count
+  label_count=$(bd show "$bead_id" --json 2>/dev/null \
+    | jq -r '.[0].labels // [] | map(select(. == "ralph:clarify")) | length')
+  if [ "$label_count" = "1" ]; then
+    test_pass "view does not clear ralph:clarify"
+  else
+    test_fail "view should not clear ralph:clarify (label_count=$label_count)"
+  fi
+
+  teardown_test_env
+}
+
+# Test: `ralph msg -i <id>` is an ID-addressed equivalent of -n <N>.
+test_msg_view_by_id() {
+  CURRENT_TEST="msg_view_by_id"
+  test_header "ralph msg -i <id> views clarify on host"
+
+  setup_test_env "msg-view-by-id"
+  init_beads
+
+  mkdir -p "$RALPH_DIR/state"
+  echo "demo" > "$RALPH_DIR/state/current"
+
+  local bead_id
+  bead_id=$(bd create --title="Review question" --type=task \
+    --description="Body text.
+
+## Options — Pick a path
+
+### Option 1 — Alpha
+Alpha body.
+
+### Option 2 — Beta
+Beta body." \
+    --labels="spec:demo,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+
+  local view_output
+  view_output=$(ralph-msg -i "$bead_id" 2>&1)
+
+  if echo "$view_output" | grep -qF "$bead_id"; then
+    test_pass "view references bead id"
+  else
+    test_fail "view missing bead id (got: $view_output)"
+  fi
+
+  if echo "$view_output" | grep -qF "Summary: Pick a path"; then
+    test_pass "view -i prints Options summary"
+  else
+    test_fail "view -i missing summary (got: $view_output)"
+  fi
+
+  if echo "$view_output" | grep -qE '^\[1\][[:space:]]+Alpha'; then
+    test_pass "view -i enumerates option 1"
+  else
+    test_fail "view -i missing [1] Alpha (got: $view_output)"
+  fi
+
+  if echo "$view_output" | grep -qE '^\[2\][[:space:]]+Beta'; then
+    test_pass "view -i enumerates option 2"
+  else
+    test_fail "view -i missing [2] Beta (got: $view_output)"
+  fi
+
+  teardown_test_env
+}
+
+# Test: `ralph msg -a <int>` looks up ### Option <int> in the bead description
+# and writes `Chose option <N> — <title>: <body>` to notes.
+test_msg_answer_option_lookup() {
+  CURRENT_TEST="msg_answer_option_lookup"
+  test_header "ralph msg -a <int> composes note from Option lookup"
+
+  setup_test_env "msg-answer-option-lookup"
+  init_beads
+
+  mkdir -p "$RALPH_DIR/state"
+  echo "demo" > "$RALPH_DIR/state/current"
+
+  local bead_id
+  bead_id=$(bd create --title="Pick one" --type=task \
+    --description="## Options — Choose a path
+
+### Option 1 — Preserve
+Keep the invariant; revert the change.
+
+### Option 2 — Override
+Update the invariant in spec; accept the drift.
+
+### Option 3 — Hybrid
+Keep change, record debt." \
+    --labels="spec:demo,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+
+  local reply_output
+  reply_output=$(ralph-msg -n 1 -a 2 2>&1)
+
+  if echo "$reply_output" | grep -qF "Clarify cleared on $bead_id. Resume with: ralph run"; then
+    test_pass "resume hint printed on integer fast-reply"
+  else
+    test_fail "missing resume hint (got: $reply_output)"
+  fi
+
+  local label_count
+  label_count=$(bd show "$bead_id" --json 2>/dev/null \
+    | jq -r '.[0].labels // [] | map(select(. == "ralph:clarify")) | length')
+  if [ "$label_count" = "0" ]; then
+    test_pass "ralph:clarify label cleared after -a <int>"
+  else
+    test_fail "ralph:clarify label still present"
+  fi
+
+  local notes_after
+  notes_after=$(bd show "$bead_id" --json 2>/dev/null | jq -r '.[0].notes // ""')
+  if echo "$notes_after" | grep -qF "Chose option 2 — Override"; then
+    test_pass "note includes composed Chose option header"
+  else
+    test_fail "note missing composed header (got: ${notes_after:0:200})"
+  fi
+  if echo "$notes_after" | grep -qF "Update the invariant in spec"; then
+    test_pass "note includes option body text"
+  else
+    test_fail "note missing body text (got: ${notes_after:0:200})"
+  fi
+
+  teardown_test_env
+}
+
+# Test: `ralph msg -a <string>` (non-integer) stores the string verbatim.
+test_msg_answer_verbatim() {
+  CURRENT_TEST="msg_answer_verbatim"
+  test_header "ralph msg -a <string> stores verbatim note"
+
+  setup_test_env "msg-answer-verbatim"
+  init_beads
+
+  mkdir -p "$RALPH_DIR/state"
+  echo "demo" > "$RALPH_DIR/state/current"
+
+  local bead_id
+  bead_id=$(bd create --title="Free-form question" --type=task \
+    --description="## Options — Options here
+
+### Option 1 — First
+Body." \
+    --labels="spec:demo,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+
+  local reply_output
+  reply_output=$(ralph-msg -n 1 -a "go with hybrid approach and revisit next quarter" 2>&1)
+
+  if echo "$reply_output" | grep -qF "Clarify cleared on $bead_id. Resume with: ralph run"; then
+    test_pass "resume hint printed on verbatim fast-reply"
+  else
+    test_fail "missing resume hint (got: $reply_output)"
+  fi
+
+  local notes_after
+  notes_after=$(bd show "$bead_id" --json 2>/dev/null | jq -r '.[0].notes // ""')
+  if echo "$notes_after" | grep -qF "go with hybrid approach and revisit next quarter"; then
+    test_pass "verbatim answer stored in notes"
+  else
+    test_fail "verbatim answer missing (got: ${notes_after:0:200})"
+  fi
+
+  if echo "$notes_after" | grep -qF "Chose option"; then
+    test_fail "verbatim answer should not be prefixed with Chose option"
+  else
+    test_pass "verbatim answer has no Chose-option prefix"
+  fi
+
+  local label_count
+  label_count=$(bd show "$bead_id" --json 2>/dev/null \
+    | jq -r '.[0].labels // [] | map(select(. == "ralph:clarify")) | length')
+  if [ "$label_count" = "0" ]; then
+    test_pass "ralph:clarify cleared after verbatim fast-reply"
+  else
+    test_fail "ralph:clarify still present after verbatim fast-reply"
+  fi
+
+  teardown_test_env
+}
+
+# Test: `ralph msg -a <int>` with a missing option exits non-zero with a
+# clear error listing available options and pointing at verbatim fallback.
+test_msg_answer_option_missing_errors() {
+  CURRENT_TEST="msg_answer_option_missing_errors"
+  test_header "ralph msg -a <int> errors when option is missing"
+
+  setup_test_env "msg-answer-option-missing"
+  init_beads
+
+  mkdir -p "$RALPH_DIR/state"
+  echo "demo" > "$RALPH_DIR/state/current"
+
+  local bead_id
+  bead_id=$(bd create --title="Only two options" --type=task \
+    --description="## Options — Two paths
+
+### Option 1 — First
+A.
+
+### Option 2 — Second
+B." \
+    --labels="spec:demo,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+
+  set +e
+  local reply_output reply_exit
+  reply_output=$(ralph-msg -n 1 -a 9 2>&1)
+  reply_exit=$?
+  set -e
+
+  if [ "$reply_exit" -ne 0 ]; then
+    test_pass "missing-option lookup exits non-zero (exit=$reply_exit)"
+  else
+    test_fail "missing-option lookup should exit non-zero"
+  fi
+
+  if echo "$reply_output" | grep -qF "Option 9 not found in $bead_id"; then
+    test_pass "error message names the bead and missing option"
+  else
+    test_fail "error missing 'Option 9 not found in $bead_id' (got: $reply_output)"
+  fi
+
+  if echo "$reply_output" | grep -qF "Available options: 1, 2"; then
+    test_pass "error lists available options"
+  else
+    test_fail "error missing 'Available options: 1, 2' (got: $reply_output)"
+  fi
+
+  if echo "$reply_output" | grep -qF 'Use -a "text" for a free-form answer'; then
+    test_pass "error points at verbatim fallback"
+  else
+    test_fail "error missing verbatim-fallback hint (got: $reply_output)"
+  fi
+
+  # Label must remain — failure doesn't clear
+  local label_count
+  label_count=$(bd show "$bead_id" --json 2>/dev/null \
+    | jq -r '.[0].labels // [] | map(select(. == "ralph:clarify")) | length')
+  if [ "$label_count" = "1" ]; then
+    test_pass "failed lookup does not clear ralph:clarify"
+  else
+    test_fail "ralph:clarify should remain on failure"
+  fi
+
+  teardown_test_env
+}
+
+# Test: `ralph msg -n <N> -d` and `ralph msg -i <id> -d` dismiss a clarify
+# with a work-around note, host-side; label cleared, resume hint printed.
+test_msg_dismiss() {
+  CURRENT_TEST="msg_dismiss"
+  test_header "ralph msg -d dismisses clarify on host with work-around note"
+
+  setup_test_env "msg-dismiss"
+  init_beads
+
+  mkdir -p "$RALPH_DIR/state"
+  echo "demo" > "$RALPH_DIR/state/current"
+
+  local bead_n bead_i
+  bead_n=$(bd create --title="Question A" --type=task \
+    --description="Body A." \
+    --labels="spec:demo,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+  sleep 1
+  bead_i=$(bd create --title="Question B" --type=task \
+    --description="Body B." \
+    --labels="spec:demo,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+
+  local tripwire="$TEST_DIR/claude-invocations.log"
+  rm -f "$tripwire" "$TEST_DIR/bin/claude"
+  cat > "$TEST_DIR/bin/claude" <<EOF
+#!/usr/bin/env bash
+echo "invoked" >> "$tripwire"
+exit 0
+EOF
+  chmod +x "$TEST_DIR/bin/claude"
+
+  local n_output
+  n_output=$(ralph-msg -n 1 -d 2>&1)
+
+  if [ ! -s "$tripwire" ]; then
+    test_pass "ralph msg -n -d did not invoke claude"
+  else
+    test_fail "ralph msg -n -d unexpectedly invoked claude"
+  fi
+
+  if echo "$n_output" | grep -qF "Clarify cleared on $bead_n. Resume with: ralph run"; then
+    test_pass "dismiss -n prints resume hint"
+  else
+    test_fail "dismiss -n missing resume hint (got: $n_output)"
+  fi
+
+  local n_labels
+  n_labels=$(bd show "$bead_n" --json 2>/dev/null \
+    | jq -r '.[0].labels // [] | map(select(. == "ralph:clarify")) | length')
+  if [ "$n_labels" = "0" ]; then
+    test_pass "dismiss -n cleared ralph:clarify"
+  else
+    test_fail "dismiss -n did not clear ralph:clarify"
+  fi
+
+  local n_notes
+  n_notes=$(bd show "$bead_n" --json 2>/dev/null | jq -r '.[0].notes // ""')
+  if echo "$n_notes" | grep -qF "Dismissed: Agent should work around this question."; then
+    test_pass "dismiss -n stored work-around note"
+  else
+    test_fail "dismiss -n missing work-around note (got: ${n_notes:0:200})"
+  fi
+
+  # Now dismiss the second bead by id (bead_i). After n dismissed #1, the
+  # list rebuilds — bead_i is now #1 but we address it by id explicitly.
+  local i_output
+  i_output=$(ralph-msg -i "$bead_i" -d 2>&1)
+
+  if echo "$i_output" | grep -qF "Clarify cleared on $bead_i. Resume with: ralph run"; then
+    test_pass "dismiss -i prints resume hint"
+  else
+    test_fail "dismiss -i missing resume hint (got: $i_output)"
+  fi
+
+  local i_labels
+  i_labels=$(bd show "$bead_i" --json 2>/dev/null \
+    | jq -r '.[0].labels // [] | map(select(. == "ralph:clarify")) | length')
+  if [ "$i_labels" = "0" ]; then
+    test_pass "dismiss -i cleared ralph:clarify"
+  else
+    test_fail "dismiss -i did not clear ralph:clarify"
   fi
 
   teardown_test_env
@@ -15041,6 +15446,12 @@ SEQUENTIAL_TESTS=(
   test_msg_interactive_container
   test_msg_partial_progress_clean
   test_msg_index_ordering
+  test_msg_view_host_only
+  test_msg_view_by_id
+  test_msg_answer_option_lookup
+  test_msg_answer_verbatim
+  test_msg_answer_option_missing_errors
+  test_msg_dismiss
   test_run_respects_dependencies
   test_run_loop_processes_all
   test_parallel_agent_simulation
