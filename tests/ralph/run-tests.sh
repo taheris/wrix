@@ -3028,6 +3028,84 @@ test_wrapix_ralph_shellhook_passthru() {
   fi
 }
 
+# Test (FR7): devShell shellHook sets core.hooksPath = lib/prek/hooks so git
+# routes pre-commit/pre-push through the flock-wrapped shims.
+test_devshell_sets_core_hooks_path() {
+  CURRENT_TEST="devshell_sets_core_hooks_path"
+  test_header "devShell shellHook pins core.hooksPath to lib/prek/hooks"
+
+  local system
+  system=$(nix eval --impure --raw --expr 'builtins.currentSystem')
+  if [ -z "$system" ]; then
+    test_fail "could not determine current system"
+    return
+  fi
+
+  local err_log hook rc
+  err_log=$(mktemp)
+  hook=$(nix eval --raw "$REPO_ROOT#devShells.${system}.default.shellHook" 2>"$err_log") && rc=0 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    test_fail "nix eval devShells.${system}.default.shellHook failed (rc=$rc): $(cat "$err_log")"
+    rm -f "$err_log"
+    return
+  fi
+  rm -f "$err_log"
+
+  if echo "$hook" | grep -Fq 'core.hooksPath lib/prek/hooks'; then
+    test_pass "shellHook sets core.hooksPath = lib/prek/hooks"
+  else
+    test_fail "shellHook does not set core.hooksPath = lib/prek/hooks"
+  fi
+}
+
+# Test (FR7): flock(1) is available in both the nix devShell (for host commits)
+# and the sandbox base profile (for container commits). Without flock on PATH
+# the FR7 shims abort loudly.
+test_flock_in_devshell_and_base_profile() {
+  CURRENT_TEST="flock_in_devshell_and_base_profile"
+  test_header "flock is present in nix devShell and sandbox base profile"
+
+  local system
+  system=$(nix eval --impure --raw --expr 'builtins.currentSystem')
+  if [ -z "$system" ]; then
+    test_fail "could not determine current system"
+    return
+  fi
+
+  local err_log rc pnames
+  err_log=$(mktemp)
+
+  pnames=$(nix eval --json \
+    "$REPO_ROOT#devShells.${system}.default.nativeBuildInputs" \
+    --apply 'ps: map (p: p.pname or p.name or "") ps' 2>"$err_log") && rc=0 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    test_fail "nix eval devShell nativeBuildInputs failed (rc=$rc): $(cat "$err_log")"
+    rm -f "$err_log"
+    return
+  fi
+  if echo "$pnames" | grep -Eq '"(flock|util-linux)"'; then
+    test_pass "devShell packages include flock (or util-linux)"
+  else
+    test_fail "devShell packages missing flock: $pnames"
+  fi
+
+  pnames=$(nix eval --json \
+    "$REPO_ROOT#legacyPackages.${system}.lib.profiles.base.packages" \
+    --apply 'ps: map (p: p.pname or p.name or "") ps' 2>"$err_log") && rc=0 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    test_fail "nix eval base profile packages failed (rc=$rc): $(cat "$err_log")"
+    rm -f "$err_log"
+    return
+  fi
+  if echo "$pnames" | grep -Eq '"(flock|util-linux)"'; then
+    test_pass "base profile packages include flock (or util-linux)"
+  else
+    test_fail "base profile packages missing flock: $pnames"
+  fi
+
+  rm -f "$err_log"
+}
+
 # Test: clarify label helpers operate against live beads (add appends to
 # description, label gates notifications, list returns tagged beads only)
 test_clarify_label_helpers() {
@@ -15604,6 +15682,8 @@ ALL_TESTS=(
   test_scaffold_shared_code_path
   test_wrapix_flake_exposes_init
   test_wrapix_ralph_shellhook_passthru
+  test_devshell_sets_core_hooks_path
+  test_flock_in_devshell_and_base_profile
   test_plan_flag_validation
   test_plan_per_label_state_files
   test_plan_update_direct_edit
