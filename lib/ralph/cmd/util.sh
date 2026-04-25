@@ -2784,13 +2784,14 @@ bootstrap_precommit() {
 
 # Disable auto-export: it git-adds the gitignored .beads/issues.jsonl
 # (post-Dolt, d1c260f) and bd warns "auto-export: git add failed". Flat-form
-# keys override bd init's nested form.
+# keys override bd init's nested form. 'bd config set' rewrites config.yaml
+# without a trailing newline, so only set when the value isn't already false.
 ensure_beads_config() {
   command -v bd >/dev/null 2>&1 || return 0
-  [ -d .beads ] || return 0
+  [ -f .beads/config.yaml ] || return 0
   chmod 700 .beads
-  bd config set export.auto false >/dev/null
-  bd config set export.git-add false >/dev/null
+  [ "$(bd config get export.auto)" = "false" ] || bd config set export.auto false >/dev/null
+  [ "$(bd config get export.git-add)" = "false" ] || bd config set export.git-add false >/dev/null
 }
 
 # Run 'bd init' if .beads/ does not exist.
