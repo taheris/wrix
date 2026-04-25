@@ -758,6 +758,11 @@ fi
 scaffold_docs
 scaffold_agents
 
+# Step 5: Retrofit beads config for existing projects (shared with ralph init)
+if [ "$DRY_RUN" = "false" ]; then
+  ensure_beads_config
+fi
+
 echo ""
 if [ "$DRY_RUN" = "true" ]; then
   echo "Dry run complete. Run without --dry-run to apply changes."

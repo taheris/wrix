@@ -73,3 +73,7 @@ dolt:
 export:
   auto: false
   git-add: false
+
+export.auto: false
+
+export.git-add: false
