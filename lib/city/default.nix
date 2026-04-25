@@ -15,23 +15,19 @@
 
 let
   inherit (builtins)
-    attrNames
     concatStringsSep
     elem
-    filter
     hasAttr
     isString
     listToAttrs
     mapAttrs
     path
-    readDir
     readFile
     substring
     ;
   inherit (pkgs.lib)
     escapeShellArg
     filterAttrs
-    hasSuffix
     mapAttrsToList
     ;
   inherit (pkgs.lib.strings) toUpper;
@@ -470,37 +466,11 @@ let
         ];
       };
 
-      # Source files that affect the container image — auto-discovered
-      # via readDir so new files are tracked without manual updates.
-      # Written to .wrapix/direnv-watch by shellHook so nix-direnv
-      # re-evaluates when any of these change.
-      direnvWatchFiles =
-        let
-          shFiles =
-            dir: prefix: map (f: "${prefix}/${f}") (filter (f: hasSuffix ".sh" f) (attrNames (readDir dir)));
-          allFiles = dir: prefix: map (f: "${prefix}/${f}") (attrNames (readDir dir));
-          filesOnly =
-            dir: prefix:
-            map (f: "${prefix}/${f}") (filter (f: (readDir dir).${f} == "regular") (attrNames (readDir dir)));
-        in
-        shFiles ./scripts "lib/city/scripts"
-        ++ allFiles ../ralph/cmd "lib/ralph/cmd"
-        ++ filesOnly ../ralph/template "lib/ralph/template"
-        ++ filesOnly ../ralph/template/partial "lib/ralph/template/partial"
-        ++ [ "scripts/beads-push" ];
-
       # Shell hook: copies config and exports env vars for provider
       shellHook = ''
         ${ralphInstance.shellHook}
 
         mkdir -p .wrapix
-        _direnv_watch_new=$(cat <<'WATCHEOF'
-        ${concatStringsSep "\n" direnvWatchFiles}
-        WATCHEOF
-        )
-        if [ ! -f .wrapix/direnv-watch ] || [ "$(cat .wrapix/direnv-watch)" != "$_direnv_watch_new" ]; then
-          printf '%s\n' "$_direnv_watch_new" > .wrapix/direnv-watch
-        fi
 
         export GC_AGENT_IMAGE="${imageName}"
         export GC_BEADS_DOLT_CONTAINER="$(beads-dolt name "$(pwd)")"

@@ -291,6 +291,7 @@ let
           --name "$name" \
           --restart=unless-stopped \
           --entrypoint "" \
+          --label "wrapix.workspace=$ws" \
           --network wrapix-dolt \
           --userns=keep-id \
           -e HOME=/tmp/dolthome \

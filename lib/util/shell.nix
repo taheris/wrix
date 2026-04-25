@@ -96,6 +96,9 @@ _:
             # runtime). Empty if none — lets callers print a friendly notice
             # naming the holder instead of a generic rmi error.
             holder = ''${bin} ps -a --filter "ancestor=$_stale" --format '{{.Names}}' | head -n1'';
+            # Workspace label set by beads-dolt cmd_start. Empty for legacy
+            # containers or when the holder disappears mid-check.
+            holderWorkspace = ''${bin} inspect --format '{{ index .Config.Labels "wrapix.workspace" }}' "$_holder"'';
           };
           container = {
             list = "${bin} image list | tail -n +2";
@@ -104,6 +107,7 @@ _:
             # Apple's container CLI has no ancestor filter — fall through
             # to the generic "pinned by a container" message.
             holder = "echo ''";
+            holderWorkspace = "echo ''";
           };
         }
         .${runtime};
@@ -126,6 +130,13 @@ _:
               case "$_err" in
                 *"in use"*|*"is using"*)
                   if _holder=$(${spec.holder}); then
+                    _holder_ws=$(${spec.holderWorkspace}) || _holder_ws=""
+                    # Skip cross-workspace pins silently: the holder is
+                    # correctly pinned to its own workspace's flake.lock,
+                    # not actually stale from its perspective.
+                    if [ -n "$_holder_ws" ] && [ "$_holder_ws" != "$PWD" ]; then
+                      continue
+                    fi
                     if [ -n "$_holder" ]; then
                       echo "prune-stale-images: $_stale pinned by container $_holder — upgrades on next start" >&2
                     else
