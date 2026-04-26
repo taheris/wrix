@@ -2235,7 +2235,7 @@ let
       case "$CR" in
         container)
           container run -d --name "$CITY_NAME-stale-scout" --network default \
-            -- "${liveCity.imageName}" sleep 3600
+            --workdir / -- "${liveCity.imageName}" sleep 3600
           cr_set_labels "$CITY_NAME-stale-scout" "gc-city=$CITY_NAME" "gc-role=scout"
           ;;
         *)
@@ -2550,7 +2550,7 @@ let
         cr_rm "$cname"
         case "$CR" in
           container)
-            container run --name "$cname" -- "${liveCity.imageName}" /bin/sh -c "exit $exit_code" || true
+            container run --name "$cname" --workdir / -- "${liveCity.imageName}" /bin/sh -c "exit $exit_code" || true
             ;;
           *)
             podman run --name "$cname" --pull=never --entrypoint "" \
