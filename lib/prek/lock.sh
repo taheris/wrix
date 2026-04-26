@@ -1,4 +1,19 @@
 #!/usr/bin/env bash
+# Shared lock infrastructure for prek git hook shims.
+#
+# Sourced (not executed) by lib/prek/hooks/{pre-commit,pre-push}.
+# On source: resolves _wrapix_dir and _lock_file from git-common-dir.
+# Callers invoke _prek_acquire_lock explicitly when they need the lock.
+#
+# Lock semantics:
+#   - flock on FD 9 against .wrapix/prek.lock (inode-level, not filename)
+#   - FD 9 is inherited by exec'd processes (pre-commit → prek hook-impl)
+#     so the lock is held for the full hook duration
+#   - Callers that spawn subprocesses (not exec) should close FD 9 for
+#     children (9>&-) to prevent orphans from holding the lock
+#   - Dead-PID recovery: if the PID in the lock file is no longer running,
+#     the lock file is deleted and re-acquired on a fresh inode
+#   - 600s timeout with 1s poll; prints holder PID on wait and timeout
 set -euo pipefail
 
 if ! command -v flock >/dev/null; then
@@ -42,5 +57,3 @@ _prek_acquire_lock() {
         fi
     done
 }
-
-_prek_acquire_lock

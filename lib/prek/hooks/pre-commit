@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# shellcheck source=./_flock.sh
-source "$(dirname "$0")/_flock.sh"
+# shellcheck source=../lock.sh
+source "$(dirname "$0")/../lock.sh"
+_prek_acquire_lock
 exec prek hook-impl --hook-dir "$(dirname "$0")" --script-version 4 --hook-type=pre-commit -- "$@"

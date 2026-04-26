@@ -1,7 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# shellcheck source=./_flock.sh
-source "$(dirname "$0")/_flock.sh"
-# Use hook-impl (not `prek run`) so git's positional args (<remote> <url>) are
-# handled as git-hook metadata rather than parsed as hook/project selectors.
-exec prek hook-impl --hook-dir "$(dirname "$0")" --script-version 4 --hook-type=pre-push -- "$@"
+# shellcheck source=../lock.sh
+source "$(dirname "$0")/../lock.sh"
+
+_stamp_file="$_wrapix_dir/push-verified"
+_head_sha=$(git rev-parse HEAD)
+
+# Second push: stamp valid for current HEAD — consume it and let git push.
+if [[ -f "$_stamp_file" ]] && [[ "$(<"$_stamp_file")" == "$_head_sha" ]]; then
+    rm -f "$_stamp_file"
+    exit 0
+fi
+
+_prek_acquire_lock
+
+# Consume stdin before running tests — git writes ref lines once.
+while IFS= read -r _line; do :; done
+
+# Run pre-push hooks independently (no SSH connection involved).
+prek run --stage pre-push 9>&- || exit 1
+
+# Tests passed — stamp for next push attempt.
+printf '%s\n' "$_head_sha" > "$_stamp_file"
+echo "prek: tests passed — run 'git push' again." >&2
+exit 1

@@ -3109,11 +3109,11 @@ test_flock_in_devshell_and_base_profile() {
 # ----------------------------------------------------------------------------
 # FR7 lock test helpers
 # ----------------------------------------------------------------------------
-# Build a real git repo wired up like FR7: lib/prek/hooks/_flock.sh comes from
+# Build a real git repo wired up like FR7: lib/prek/lock.sh comes from
 # the live source, and the per-stage shims drop the `exec prek` tail in favour
 # of a recorder that timestamps start/end into HOOK_LOG and sleeps. That keeps
 # tests independent of prek's hook config while still exercising the live
-# _flock.sh (lock path resolution, timeout flag, error format).
+# lock.sh (lock path resolution, timeout, error format).
 #
 # Args:
 #   $1: flock --timeout value (default 600)
@@ -3128,9 +3128,9 @@ _setup_fr7_repo() {
   mkdir -p "$FR7_REPO/lib/prek/hooks"
   : > "$HOOK_LOG"
 
-  cp "$REPO_ROOT/lib/prek/hooks/_flock.sh" "$FR7_REPO/lib/prek/hooks/_flock.sh"
+  cp "$REPO_ROOT/lib/prek/lock.sh" "$FR7_REPO/lib/prek/lock.sh"
   if [ "$timeout" != "600" ]; then
-    sed -i "s/--timeout 600/--timeout $timeout/" "$FR7_REPO/lib/prek/hooks/_flock.sh"
+    sed -i "s/waited -ge 600/waited -ge $timeout/" "$FR7_REPO/lib/prek/lock.sh"
   fi
 
   local stage
@@ -3139,7 +3139,8 @@ _setup_fr7_repo() {
 #!/usr/bin/env bash
 set -euo pipefail
 # shellcheck source=/dev/null
-source "\$(dirname "\$0")/_flock.sh"
+source "\$(dirname "\$0")/../lock.sh"
+_prek_acquire_lock
 printf '%s start %s %s\n' "$stage" "\$\$" "\$(date +%s.%N)" >> "$HOOK_LOG"
 sleep $sleep_dur
 printf '%s end %s %s\n' "$stage" "\$\$" "\$(date +%s.%N)" >> "$HOOK_LOG"
@@ -3368,33 +3369,40 @@ test_prek_lock_timeout() {
   CURRENT_TEST="prek_lock_timeout"
   test_header "FR7: pre-commit and pre-push shims use --timeout 600"
 
-  local flock_helper="$REPO_ROOT/lib/prek/hooks/_flock.sh"
-  if grep -Fq -- '--timeout 600' "$flock_helper"; then
-    test_pass "_flock.sh invokes flock with --timeout 600"
+  local lock_helper="$REPO_ROOT/lib/prek/lock.sh"
+  if grep -Fq 'waited -ge 600' "$lock_helper"; then
+    test_pass "lock.sh uses 600s timeout"
   else
-    test_fail "_flock.sh missing --timeout 600 (contents: $(cat "$flock_helper"))"
+    test_fail "lock.sh missing 600s timeout (contents: $(cat "$lock_helper"))"
   fi
 
   local stage
   for stage in pre-commit pre-push; do
     local shim="$REPO_ROOT/lib/prek/hooks/$stage"
-    if grep -Fq '_flock.sh' "$shim"; then
-      test_pass "$stage shim sources _flock.sh (inherits --timeout 600)"
+    if grep -Fq 'lock.sh' "$shim"; then
+      test_pass "$stage shim sources lock.sh"
     else
-      test_fail "$stage shim does not source _flock.sh"
-    fi
-
-    # Guard: `prek run` treats positional args as hook/project selectors, which
-    # breaks pre-push (git passes <remote> <url>). The shim must use
-    # `prek hook-impl` so git's args are handled as hook metadata, and must
-    # pass `--script-version 4` to match the pinned prek (else prek prints an
-    # "outdated shim" warning on every invocation).
-    if grep -Eq "prek hook-impl .*--script-version 4 .*--hook-type=$stage" "$shim"; then
-      test_pass "$stage shim invokes prek hook-impl --script-version 4 --hook-type=$stage"
-    else
-      test_fail "$stage shim does not use prek hook-impl with --script-version 4 --hook-type=$stage (contents: $(cat "$shim"))"
+      test_fail "$stage shim does not source lock.sh"
     fi
   done
+
+  # pre-commit must use prek hook-impl (not prek run) so git's positional
+  # args are handled as hook metadata.
+  local pre_commit_shim="$REPO_ROOT/lib/prek/hooks/pre-commit"
+  if grep -Eq "prek hook-impl .*--script-version 4 .*--hook-type=pre-commit" "$pre_commit_shim"; then
+    test_pass "pre-commit shim invokes prek hook-impl --script-version 4"
+  else
+    test_fail "pre-commit shim missing prek hook-impl (contents: $(cat "$pre_commit_shim"))"
+  fi
+
+  # pre-push uses prek run --stage pre-push (runs independently of git's
+  # SSH connection) then stamps success for a second push attempt.
+  local pre_push_shim="$REPO_ROOT/lib/prek/hooks/pre-push"
+  if grep -Eq "prek run --stage pre-push" "$pre_push_shim"; then
+    test_pass "pre-push shim uses prek run --stage pre-push"
+  else
+    test_fail "pre-push shim missing prek run --stage (contents: $(cat "$pre_push_shim"))"
+  fi
 }
 
 # Test (FR7): `git commit --no-verify` and `git push --no-verify` skip the
@@ -3460,7 +3468,7 @@ test_prek_lock_no_verify_bypass() {
 
 # Test (FR7): the shim aborts with the documented "flock not found" error
 # when flock is missing from PATH. Builds a sanitized PATH that contains
-# only dirname (needed by `source $(dirname "$0")/_flock.sh`) but not flock.
+# only dirname (needed by `source $(dirname "$0")/../lock.sh`) but not flock.
 test_prek_lock_requires_flock() {
   CURRENT_TEST="prek_lock_requires_flock"
   test_header "FR7: shim aborts with 'flock not found' when flock is absent"
@@ -3470,7 +3478,7 @@ test_prek_lock_requires_flock() {
   local sanitized="$TEST_DIR/sanitized-path"
   mkdir -p "$sanitized"
   # bash is needed because PATH=foo cmd resolves cmd via the new PATH;
-  # dirname is needed by `source "$(dirname "$0")/_flock.sh"` in the shim.
+  # dirname is needed by `source "$(dirname "$0")/../lock.sh"` in the shim.
   ln -s "$(command -v bash)" "$sanitized/bash"
   ln -s "$(command -v dirname)" "$sanitized/dirname"
 
@@ -3506,12 +3514,13 @@ test_git_commit_routes_through_shim() {
   local repo="$TEST_DIR/repo"
   local sentinel="$TEST_DIR/sentinel"
   mkdir -p "$repo/lib/prek/hooks"
-  cp "$REPO_ROOT/lib/prek/hooks/_flock.sh" "$repo/lib/prek/hooks/_flock.sh"
+  cp "$REPO_ROOT/lib/prek/lock.sh" "$repo/lib/prek/lock.sh"
   cat > "$repo/lib/prek/hooks/pre-commit" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 # shellcheck source=/dev/null
-source "\$(dirname "\$0")/_flock.sh"
+source "\$(dirname "\$0")/../lock.sh"
+_prek_acquire_lock
 printf 'shim ran pid=%s\n' "\$\$" > "$sentinel"
 EOF
   chmod +x "$repo/lib/prek/hooks/pre-commit"
@@ -3536,7 +3545,7 @@ EOF
   fi
 
   if [ -e "$repo/.wrapix/prek.lock" ]; then
-    test_pass "lock file at .wrapix/prek.lock proves _flock.sh ran"
+    test_pass "lock file at .wrapix/prek.lock proves lock.sh ran"
   else
     test_fail "lock file missing at $repo/.wrapix/prek.lock"
   fi
