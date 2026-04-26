@@ -33,7 +33,8 @@ printf '%s\n' "$_stdin" | prek hook-impl \
     -- "$@" \
     9>&- || exit 1
 
-# Tests passed — stamp for next push attempt.
+# Tests passed — stamp in case the SSH connection died during tests.
+# Exit 0 lets git try the original connection. If it's still alive, the
+# push succeeds in one shot. If it's dead, the user re-runs git push
+# and the stamp makes it instant.
 printf '%s\n' "$_head_sha" > "$_stamp_file"
-echo "prek: tests passed — run 'git push' again." >&2
-exit 1
