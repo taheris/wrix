@@ -105,6 +105,7 @@ let
             container image tag "$LOADED_REF" "$BUILDER_IMAGE"
           fi
           rm -f "$OCI_TAR"
+          container image prune
         fi
       }
 

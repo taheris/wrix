@@ -127,6 +127,7 @@ in
                 container image tag "$LOADED_REF" "wrapix-${profile.name}:latest"
               fi
               rm -f "$OCI_TAR"
+              container image prune
               verbose "Loaded image $PROFILE_IMAGE"
             else
               verbose "Using cached image $PROFILE_IMAGE"
