@@ -66,6 +66,7 @@ _:
   # function returns 0 even on failure — callers should treat route issues
   # as warnings, not fatal errors.
   fixVmnetRoute = ''
+    _vpn_conflict=false
     _fix_vmnet_route() {
       local _subnet _net _default_if _prefix _vmnet_if
       _subnet=$(container network inspect default 2>/dev/null \
@@ -76,6 +77,7 @@ _:
       _default_if=$(route -n get default 2>/dev/null \
         | awk '/interface:/{print $2}') || return 0
       [[ "$_default_if" == utun* ]] || return 0
+      _vpn_conflict=true
       _prefix="''${_net%.*}"
       netstat -rn | grep -q "^$_prefix.*bridge" && return 0
       _vmnet_if=$(ifconfig 2>/dev/null \
