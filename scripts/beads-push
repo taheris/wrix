@@ -92,8 +92,19 @@ if [ ! -d "$WT" ]; then
   fi
 fi
 
+# Fix worktree pointers when running inside a container: the .git file
+# and worktree metadata may reference host-side paths that don't exist here.
+_wt_gitdir="$ROOT/.git/worktrees/$BRANCH"
+if [ -f "$WT/.git" ]; then
+  _current=$(sed 's/^gitdir: //' "$WT/.git")
+  if [ ! -d "$_current" ] && [ -d "$_wt_gitdir" ]; then
+    printf 'gitdir: %s\n' "$_wt_gitdir" > "$WT/.git"
+    printf '%s/.git\n' "$WT" > "$_wt_gitdir/gitdir"
+  fi
+fi
+
 cd "$WT"
-PREK_ALLOW_NO_CONFIG=1 git pull --rebase --quiet
+PREK_ALLOW_NO_CONFIG=1 git pull --rebase --autostash --quiet
 rsync -a --delete "$REMOTE_DIR/" "$WT/.beads/dolt-remote/"
 
 if ! git diff --quiet || ! git diff --cached --quiet; then
