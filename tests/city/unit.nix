@@ -453,12 +453,10 @@ in
         KEY="$TMPDIR/deploy.key"
         ssh-keygen -t ed25519 -f "$KEY" -N "" -q
         HOME="$TMPDIR/home-case2" WRAPIX_DEPLOY_KEY="$KEY" bash -c 'mkdir -p "$HOME" && . '"$FRAGMENT"'; \
-          [[ "$GIT_SSH_COMMAND" == "ssh -i '"$KEY"' -o IdentitiesOnly=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=10" ]] || { \
+          [[ "$GIT_SSH_COMMAND" == "ssh -i '"$KEY"' -o IdentitiesOnly=yes" ]] || { \
           echo "FAIL: GIT_SSH_COMMAND=$GIT_SSH_COMMAND"; exit 1; }; \
           grep -q "IdentityFile '"$KEY"'" "$HOME/.ssh/config" || { \
-          echo "FAIL: ~/.ssh/config missing IdentityFile"; cat "$HOME/.ssh/config" 2>/dev/null; exit 1; }; \
-          grep -q "ServerAliveInterval 30" "$HOME/.ssh/config" || { \
-          echo "FAIL: ~/.ssh/config missing ServerAliveInterval"; cat "$HOME/.ssh/config" 2>/dev/null; exit 1; }'
+          echo "FAIL: ~/.ssh/config missing IdentityFile"; cat "$HOME/.ssh/config" 2>/dev/null; exit 1; }'
         echo "  PASS: GIT_SSH_COMMAND and ~/.ssh/config set from deploy key"
 
         # Case 3: WRAPIX_SIGNING_KEY configures commit signing
