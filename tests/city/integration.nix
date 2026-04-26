@@ -2541,6 +2541,7 @@ let
       local test_bead="wx-donemarker-$RUN_ID"
       local cname="$CITY_NAME-worker-$test_bead"
       local marker="$WS/.wrapix/state/worker-$test_bead.done"
+      local processing="$WS/.wrapix/state/worker-$test_bead.processing"
 
       # Create a stopped worker-named container with a chosen exit code.
       # Runs the real agent image (not a fake) so the harness exercises
@@ -2550,7 +2551,7 @@ let
         cr_rm "$cname"
         case "$CR" in
           container)
-            container run --name "$cname" --workdir / -- "${liveCity.imageName}" /bin/sh -c "exit $exit_code" || true
+            container run --name "$cname" --workdir / --entrypoint /bin/sh -- "${liveCity.imageName}" -c "exit $exit_code" || true
             ;;
           *)
             podman run --name "$cname" --pull=never --entrypoint "" \
@@ -2565,31 +2566,39 @@ let
       }
 
       mkdir -p "$WS/.wrapix/state"
-      rm -f "$marker"
+      rm -f "$marker" "$processing"
 
-      # Case 1: exit=0, no marker → lie ("true") so gc doesn't treat this
-      # as a startup crash while the monitor is still running post-gate.
+      # Case 1: exit=0, .processing present, no .done → lie ("true") so gc
+      # doesn't treat this as a startup crash while the monitor is still
+      # running post-gate. The .processing marker is the monitor's signal
+      # that it took over after the container exited (needed on Apple
+      # Containers where exit codes are unavailable).
       run_worker_exit 0
+      : > "$processing"
       local result
       result="$(is_running)"
-      [ "$result" = "true" ] || { echo "FAIL: exit=0 no marker → expected true, got '$result'"; return 1; }
+      [ "$result" = "true" ] || { echo "FAIL: exit=0 processing no done → expected true, got '$result'"; return 1; }
 
-      # Case 2: exit=0, marker present → honest "false" so the reconciler
+      # Case 2: exit=0, .done present → honest "false" so the reconciler
       # drains the pool slot (the fix wx-92md7 is landing).
       : > "$marker"
       result="$(is_running)"
-      [ "$result" = "false" ] || { echo "FAIL: exit=0 + marker → expected false, got '$result'"; return 1; }
+      [ "$result" = "false" ] || { echo "FAIL: exit=0 + done → expected false, got '$result'"; return 1; }
 
       # Case 3: exit!=0, no marker → "false" so gc sees the real failure
       # and retries (crash-loop protection path, preserved).
-      rm -f "$marker"
-      run_worker_exit 1
-      result="$(is_running)"
-      [ "$result" = "false" ] || { echo "FAIL: exit=1 no marker → expected false, got '$result'"; return 1; }
+      # Apple Containers doesn't expose exit codes, so stopped + unknown
+      # exit + no .processing is always "false" — skip this assertion there.
+      if [[ "$CR" != "container" ]]; then
+        rm -f "$marker" "$processing"
+        run_worker_exit 1
+        result="$(is_running)"
+        [ "$result" = "false" ] || { echo "FAIL: exit=1 no marker → expected false, got '$result'"; return 1; }
+      fi
 
       # Cleanup
       cr_rm "$cname"
-      rm -f "$marker"
+      rm -f "$marker" "$processing"
     }
     subtest "is-running honors worker .done marker (wx-92md7)" verify_worker_done_marker
     fi  # end worker-done-marker

@@ -514,7 +514,7 @@ worker_start() {
   local state_dir="${GC_WORKSPACE}/.wrapix/state"
   local done_marker="${state_dir}/worker-${bead_id}.done"
   mkdir -p "$state_dir"
-  rm -f "$done_marker"
+  rm -f "$done_marker" "${state_dir}/worker-${bead_id}.processing"
 
   local task_file="${GC_WORKSPACE}/${worktree_path}/.task"
 
@@ -587,6 +587,11 @@ worker_start() {
     # best-effort: container may already be gone (killed externally)
     cr_wait "$name" || true
 
+    # Signal that the monitor is processing post-gate pipeline. is-running
+    # checks this marker on Apple Containers (which lacks exit codes) to
+    # distinguish "monitor active" from "worker failed to start" (wx-92md7).
+    : > "${state_dir}/worker-${bead_id}.processing"
+
     if ! GC_BEAD_ID="${bead_id}" GC_WORKSPACE="${GC_WORKSPACE}" \
       bash "${script_dir}/worker-collect.sh"; then
       echo "monitor: ERROR: worker-collect.sh failed for bead ${bead_id}" >&2
@@ -613,6 +618,7 @@ worker_start() {
     # Written unconditionally — even a failed post-gate means the worker's
     # pipeline is finished, no more work happens here.
     : > "$done_marker"
+    rm -f "${state_dir}/worker-${bead_id}.processing"
 
     # Close the session bead so the pool slot drains (wx-de4cn). Without
     # this, gc's legacy sleep policy suspends the session instead of
@@ -705,10 +711,13 @@ case "$METHOD" in
         # means monitor is still running post-gate; keep the "true" lie so
         # the container isn't treated as a startup crash.
         _gc_exit="$(cr_exit_code "$name")" || _gc_exit=""
-        if [[ "$_gc_exit" == "0" ]]; then
-          # ##*worker- strips any prefix (bare 'worker-<bead>' or
-          # qualified '<city>-worker-<bead>') down to the bead id.
-          _gc_bead="${SESSION##*worker-}"
+        _gc_bead="${SESSION##*worker-}"
+        # Apple Containers doesn't expose exit codes; use the monitor's
+        # .processing marker (written after cr_wait) as a proxy for
+        # "container exited, monitor is handling post-gate pipeline".
+        if [[ "$_gc_exit" == "0" ]] || \
+           [[ -z "$_gc_exit" && -n "$_gc_bead" && "$_gc_bead" != "$SESSION" && \
+              -f "${GC_WORKSPACE:-}/.wrapix/state/worker-${_gc_bead}.processing" ]]; then
           if [[ -n "$_gc_bead" && "$_gc_bead" != "$SESSION" && \
                 -f "${GC_WORKSPACE:-}/.wrapix/state/worker-${_gc_bead}.done" ]]; then
             running="false"

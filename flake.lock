@@ -7,10 +7,10 @@
         ]
       },
       "locked": {
-        "lastModified": 1776834735,
-        "narHash": "sha256-AH9e3+6fxnPPqLJPcjSNFsUt01IcR+FUm0dH6lEHv7k=",
+        "lastModified": 1777172224,
+        "narHash": "sha256-27wKQptw4oUTltkkSH8S45qK7z8px1bWcsLIuhxbt+c=",
         "ref": "main",
-        "rev": "a78e58388f5ec82a568de94eedb8a449a7f486e7",
+        "rev": "0fffa44a2302a496dfa4ffa838843b3bbf0ee122",
         "shallow": true,
         "type": "git",
         "url": "ssh://git@github.com/gastownhall/beads.git"
@@ -30,10 +30,10 @@
         "rust-analyzer-src": "rust-analyzer-src"
       },
       "locked": {
-        "lastModified": 1776845169,
-        "narHash": "sha256-Ya6Ba5oC0+PK1TSU4Rkjpoca73mUp6FoHQV5QGnqbx0=",
+        "lastModified": 1777190237,
+        "narHash": "sha256-XbNSZv/fi6U8r8r8J/rljY91wf2jxyM6AwNLBeeM5SA=",
         "ref": "main",
-        "rev": "f0b5be1fa2891221ba8b48784f8fded5ef15301f",
+        "rev": "82fcabb6d9819f34170877fb1848b92e9350ec57",
         "shallow": true,
         "type": "git",
         "url": "https://github.com/nix-community/fenix.git"
@@ -70,10 +70,10 @@
     "gascity": {
       "flake": false,
       "locked": {
-        "lastModified": 1776818539,
-        "narHash": "sha256-o88ZgiD7XVefaTlqCQQRNOBjP0NDE/YD+JJ5CoFDuc4=",
+        "lastModified": 1777233116,
+        "narHash": "sha256-o8+OgpKjwDGCdPQ44ztxQ/iy5tcybH+qmtUK4k17EOM=",
         "ref": "main",
-        "rev": "bc6058d352fc2a46e6d43ff32e90d4a42f2b4bac",
+        "rev": "65404c4a7bcd5f5701ac5b556ce9ab4c9043dfac",
         "shallow": true,
         "type": "git",
         "url": "ssh://git@github.com/gastownhall/gascity.git"
@@ -87,10 +87,10 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1776548001,
-        "narHash": "sha256-ZSK0NL4a1BwVbbTBoSnWgbJy9HeZFXLYQizjb2DPF24=",
+        "lastModified": 1776877367,
+        "narHash": "sha256-EHq1/OX139R1RvBzOJ0aMRT3xnWyqtHBRUBuO1gFzjI=",
         "ref": "nixos-unstable",
-        "rev": "b12141ef619e0a9c1c84dc8c684040326f27cdcc",
+        "rev": "0726a0ecb6d4e08f6adced58726b95db924cef57",
         "shallow": true,
         "type": "git",
         "url": "ssh://git@github.com/NixOS/nixpkgs.git"
