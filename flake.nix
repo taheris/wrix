@@ -130,19 +130,29 @@
               src = self;
             };
 
+            shellcheck-batched = pkgs.writeShellApplication {
+              name = "shellcheck-batched";
+              runtimeInputs = [ pkgs.shellcheck ];
+              text = builtins.readFile ./lib/prek/shellcheck-batched.sh;
+            };
+
             treefmt = {
               projectRootFile = "flake.nix";
               programs = {
                 deadnix.enable = true;
                 nixfmt.enable = true;
                 rustfmt.enable = true;
-                shellcheck = {
-                  enable = true;
-                  severity = "warning";
-                };
                 statix.enable = true;
               };
-              settings.formatter.shellcheck.excludes = [ ".envrc" ];
+              settings.formatter.shellcheck = {
+                command = pkgs.lib.getExe shellcheck-batched;
+                includes = [
+                  "*.sh"
+                  "*.bash"
+                ];
+                excludes = [ ".envrc" ];
+                options = [ "--severity=warning" ];
+              };
             };
 
             wrapix = import ./lib {
