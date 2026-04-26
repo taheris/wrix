@@ -427,7 +427,7 @@ let
         local sock="$WS/.wrapix/tmux/$role.sock"
         [ -S "$sock" ] || continue
         echo "  tmux pane ($role, full scrollback):"
-        tmux -S "$sock" capture-pane -t "$role" -p -S - 2>/dev/null | sed 's/^/    /' || echo "    (capture failed)"
+        tmux_host "$role" capture-pane -t "$role" -p -S - 2>/dev/null | sed 's/^/    /' || echo "    (capture failed)"
       done
       if [ -n "''${BEAD_ID:-}" ]; then
         echo "  bead $BEAD_ID metadata:"
@@ -520,12 +520,30 @@ let
     # GC_PID assignment below.
     ${builtins.readFile ../lib/poll.sh}
 
-    # Check if dolt is reachable. bd is configured with
-    # BEADS_DOLT_SERVER_SOCKET and connects via the Unix socket, so the
-    # socket file is the authoritative signal — a live TCP port with a
-    # missing socket still breaks every bd call.
+    # Platform flag — VirtioFS on macOS can't relay Unix socket IPC across
+    # the host/VM boundary, so dolt and tmux need platform-specific paths.
+    IS_DARWIN=${if isDarwin then "true" else "false"}
+
     dolt_reachable() {
-      test -S "$WS/.wrapix/dolt.sock"
+      if $IS_DARWIN; then
+        bash -c "echo >/dev/tcp/127.0.0.1/$DOLT_PORT" 2>/dev/null
+      else
+        test -S "$WS/.wrapix/dolt.sock"
+      fi
+    }
+
+    # Export bd connection vars for the current platform and save to state.
+    export_dolt_env() {
+      export BEADS_DOLT_AUTO_START=0
+      if $IS_DARWIN; then
+        export BEADS_DOLT_SERVER_HOST=127.0.0.1
+        export BEADS_DOLT_SERVER_PORT="$DOLT_PORT"
+        unset BEADS_DOLT_SERVER_SOCKET
+      else
+        export BEADS_DOLT_SERVER_SOCKET="$WS/.wrapix/dolt.sock"
+      fi
+      export GC_DOLT_PORT="$DOLT_PORT"
+      echo "$DOLT_PORT" > "$WS/.beads/dolt-server.port"
     }
 
     # Run a city script via the live .gc/scripts/ symlinks with LIVE_PATH.
@@ -583,7 +601,18 @@ let
     cd "$WS"
 
     # Isolate dolt global config so tests don't clobber the host's ~/.dolt/
+    REAL_HOME="$HOME"
     export HOME="$WS"
+    # Preserve podman config and storage (macOS: connection config for
+    # podman-machine; both platforms: image storage from pre-HOME load step).
+    if [[ -d "$REAL_HOME/.config/containers" ]]; then
+      mkdir -p "$WS/.config"
+      ln -sfn "$REAL_HOME/.config/containers" "$WS/.config/containers"
+    fi
+    if [[ -d "$REAL_HOME/.local/share/containers" ]]; then
+      mkdir -p "$WS/.local/share"
+      ln -sfn "$REAL_HOME/.local/share/containers" "$WS/.local/share/containers"
+    fi
 
     # City env exported up front so every scenario (not just happy-path) can
     # start/restart gc and invoke gate.sh → gc session submit → provider.sh
@@ -610,9 +639,9 @@ let
       # beads-dolt can serve.  Unlike gc init this needs no systemctl,
       # so the test works inside containers without systemd.
       bd init --prefix cg --skip-hooks --skip-agents --non-interactive --server
-      bd dolt stop
+      # bd init --server's dolt exits on its own; clean stale state files.
+      # bd config set types.custom is handled by entrypoint.sh after dolt starts.
       rm -f .beads/dolt-server.pid .beads/dolt-server.lock .beads/dolt-server.port
-      bd config set types.custom "molecule,convoy,message,event,gate,merge-request,agent,role,rig,session,convergence"
 
       # Pre-create .gc/ layout so gc start never runs auto-init
       # (matches city.app and modules/city.nix).
@@ -691,14 +720,11 @@ let
         return 1
       fi
 
-      export BEADS_DOLT_SERVER_SOCKET="$WS/.wrapix/dolt.sock"
-      export BEADS_DOLT_AUTO_START=0
-      export GC_DOLT_PORT="$DOLT_PORT"
-      # gc CLI commands (gc sling, gc status) resolve the dolt port from
-      # .beads/dolt-server.port for non-external (localhost) dolt servers.
-      echo "$DOLT_PORT" > "$WS/.beads/dolt-server.port"
+      export_dolt_env
       save DOLT_CONTAINER DOLT_PORT GC_PID GC_DOLT_PORT \
-        BEADS_DOLT_AUTO_START BEADS_DOLT_SERVER_SOCKET
+        BEADS_DOLT_AUTO_START ${
+          if isDarwin then "BEADS_DOLT_SERVER_HOST BEADS_DOLT_SERVER_PORT" else "BEADS_DOLT_SERVER_SOCKET"
+        }
     }
     subtest "Start gc daemon" start_gc
 
@@ -756,11 +782,27 @@ let
     subtest "Wait for mayor container to start" \
       poll_until 'podman ps --filter "name=''${CITY_NAME}-mayor" -q 2>/dev/null | grep -q .' 30
 
+    # Run a tmux command against a role's shared socket. On Darwin, routes
+    # through podman exec (VirtioFS can't relay Unix socket IPC).
+    tmux_host() {
+      local role="$1"
+      shift
+      if $IS_DARWIN; then
+        podman exec "''${CITY_NAME}-''${role}" tmux -S "/workspace/.wrapix/tmux/''${role}.sock" "$@"
+      else
+        tmux -S "$WS/.wrapix/tmux/''${role}.sock" "$@"
+      fi
+    }
+
+    tmux_capture() {
+      local role="$1"
+      shift
+      tmux_host "$role" capture-pane -t "$role" -p "$@"
+    }
+
     verify_mayor_tmux() {
-      # Verify the shared tmux socket was created on .wrapix/tmux/ and the
-      # session is reachable directly (no podman exec needed).
       poll_until 'test -S "$WS/.wrapix/tmux/mayor.sock"' 10
-      tmux -S "$WS/.wrapix/tmux/mayor.sock" has-session -t mayor 2>/dev/null
+      tmux_host mayor has-session -t mayor
     }
     subtest "Verify tmux session alive in mayor container" verify_mayor_tmux
 
@@ -768,12 +810,9 @@ let
     subtest "Wait for scout container to start" \
       poll_until 'test -S "$WS/.wrapix/tmux/scout.sock"' 30
 
-    # Shared tmux socket: gc session submit from host via provider.sh → shared socket.
-    # submit is the live-path call (gate.sh, post-gate.sh, entrypoint.sh all
-    # use submit so a sleeping session auto-wakes via ensureRunning).
     verify_gc_submit_via_socket() {
       GC_CITY="$WS/.gc/home" gc session submit scout "host-submit-test"
-      poll_until 'tmux -S "$WS/.wrapix/tmux/scout.sock" capture-pane -t scout -p | grep -q "host-submit-test"' 10
+      poll_until 'tmux_capture scout | grep -q "host-submit-test"' 10
     }
     subtest "gc session submit uses shared tmux socket from host" verify_gc_submit_via_socket
 
@@ -784,7 +823,7 @@ let
     verify_cross_container_gc_submit() {
       podman exec "''${CITY_NAME}-mayor" \
         gc session submit scout "cross-container-submit-test"
-      poll_until 'tmux -S "$WS/.wrapix/tmux/scout.sock" capture-pane -t scout -p | grep -q "cross-container-submit-test"' 10
+      poll_until 'tmux_capture scout | grep -q "cross-container-submit-test"' 10
     }
     subtest "gc session submit works from inside mayor container" verify_cross_container_gc_submit
 
@@ -794,7 +833,7 @@ let
     # with a marker that doesn't trigger the mock's review handler.
     verify_gc_submit_to_judge() {
       GC_CITY="$WS/.gc/home" gc session submit judge "judge-submit-probe"
-      poll_until 'tmux -S "$WS/.wrapix/tmux/judge.sock" capture-pane -t judge -p -S -200 | grep -q "judge-submit-probe"' 30
+      poll_until 'tmux_capture judge -S -200 | grep -q "judge-submit-probe"' 30
     }
     subtest "gc session submit reaches judge pane" verify_gc_submit_to_judge
 
@@ -1046,7 +1085,7 @@ let
         sleep 0.2
       done
       if ! dolt_reachable; then
-        echo "FAIL: dolt socket $WS/.wrapix/dolt.sock missing after beads-dolt start"
+        echo "FAIL: dolt not reachable after beads-dolt start"
         podman ps -a --filter "name=$(beads-dolt name "$WS")" 2>&1 | sed 's/^/  /' || true
         podman logs "$(beads-dolt name "$WS")" 2>&1 | tail -20 | sed 's/^/  dolt: /' || true
         return 1
@@ -1462,12 +1501,11 @@ let
       DOLT_CONTAINER="$(beads-dolt name "$WS")"
       DOLT_PORT="$(beads-dolt port "$WS")"
       export DOLT_CONTAINER DOLT_PORT
-      export BEADS_DOLT_SERVER_SOCKET="$WS/.wrapix/dolt.sock"
-      export BEADS_DOLT_AUTO_START=0
-      export GC_DOLT_PORT="$DOLT_PORT"
-      echo "$DOLT_PORT" > "$WS/.beads/dolt-server.port"
+      export_dolt_env
       save GC_PID DOLT_CONTAINER DOLT_PORT GC_DOLT_PORT \
-        BEADS_DOLT_AUTO_START BEADS_DOLT_SERVER_SOCKET
+        BEADS_DOLT_AUTO_START ${
+          if isDarwin then "BEADS_DOLT_SERVER_HOST BEADS_DOLT_SERVER_PORT" else "BEADS_DOLT_SERVER_SOCKET"
+        }
     }
     subtest "Restart gc for gate tests" restart_gc_for_gate
 
@@ -1592,7 +1630,7 @@ let
         sleep 0.2
       done
       if ! dolt_reachable; then
-        echo "FAIL: dolt socket $WS/.wrapix/dolt.sock missing after beads-dolt start"
+        echo "FAIL: dolt not reachable after beads-dolt start"
         podman ps -a --filter "name=$(beads-dolt name "$WS")" 2>&1 | sed 's/^/  /' || true
         podman logs "$(beads-dolt name "$WS")" 2>&1 | tail -20 | sed 's/^/  dolt: /' || true
         return 1

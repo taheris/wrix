@@ -5117,8 +5117,9 @@ config_assert_run_max_iterations() {
   elif [ "$final_count" -eq 0 ]; then
     echo "  NOTE: max-iterations not yet implemented in loop.sh"
     echo "        Expected 3 remaining tasks, but loop completed all"
-    teardown_test_env
-    test_not_implemented "loop.max-iterations (not yet implemented)"
+    echo -e "  ${YELLOW:-}NOT_IMPL${NC:-}: loop.max-iterations (not yet implemented)" >&2
+    NOT_IMPLEMENTED=$((NOT_IMPLEMENTED + 1))
+    return 0
   else
     test_fail "Expected 3 remaining tasks after max-iterations=2, got $final_count"
   fi
@@ -5230,8 +5231,9 @@ config_assert_run_pause_on_failure_false() {
   if [ "$CONFIG_EXIT_CODE" -ne 0 ]; then
     echo "  NOTE: pause-on-failure=false not yet implemented in loop.sh"
     echo "        Loop currently always pauses on failure"
-    teardown_test_env
-    test_not_implemented "loop.pause-on-failure=false (not yet implemented)"
+    echo -e "  ${YELLOW:-}NOT_IMPL${NC:-}: loop.pause-on-failure=false (not yet implemented)" >&2
+    NOT_IMPLEMENTED=$((NOT_IMPLEMENTED + 1))
+    return 0
   else
     test_pass "Loop continued despite failure (pause-on-failure=false working)"
   fi
@@ -5686,8 +5688,9 @@ config_assert_failure_patterns() {
   if [ "$task_status" = "closed" ]; then
     echo "  NOTE: failure-patterns detection not yet implemented"
     echo "        Task completed despite CUSTOM_ERROR: pattern in output"
-    teardown_test_env
-    test_not_implemented "failure-patterns (not yet implemented)"
+    echo -e "  ${YELLOW:-}NOT_IMPL${NC:-}: failure-patterns (not yet implemented)" >&2
+    NOT_IMPLEMENTED=$((NOT_IMPLEMENTED + 1))
+    return 0
   elif [ "$task_status" = "in_progress" ]; then
     test_pass "Failure pattern detected, task stayed in_progress"
   else

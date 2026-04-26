@@ -179,6 +179,21 @@ tmux_sock() {
   echo "${ws}/.wrapix/tmux/${target}.sock"
 }
 
+# Run a tmux command against a role's shared socket. On Linux, uses the
+# socket directly from the host. On Darwin, VirtioFS exposes the socket
+# file but can't relay Unix domain socket IPC, so routes through podman exec.
+tmux_via() {
+  local target="$1"
+  shift
+  local sock
+  sock="$(tmux_sock "$target")"
+  if [[ -S "$sock" ]] && [[ "$(uname)" != "Darwin" ]]; then
+    tmux -S "$sock" "$@"
+  else
+    podman exec "$(container_name)" tmux -S "/workspace/.wrapix/tmux/${target}.sock" "$@"
+  fi
+}
+
 # Stage .beads config files for container-local database isolation.
 # Each container gets its own .beads with just config — no host mount.
 stage_beads() {
@@ -336,19 +351,10 @@ persistent_start() {
 }
 
 persistent_exec() {
-  local target sock
+  local target
   target="$(role_name)"
-  sock="$(tmux_sock "$target")"
-  if [[ -S "$sock" ]]; then
-    # Direct tmux via shared socket — works from host and inside containers.
-    shift  # drop "tmux" (always the first arg at every call site)
-    tmux -S "$sock" "$@"
-  else
-    # Fallback: podman exec (pre-migration containers without shared sockets).
-    local name
-    name="$(container_name)"
-    podman exec "$name" "$@"
-  fi
+  shift  # drop "tmux" (always the first arg at every call site)
+  tmux_via "$target" "$@"
 }
 
 # ---------------------------------------------------------------------------
@@ -583,7 +589,7 @@ case "$METHOD" in
         fi
       else
         _gc_sock="$(tmux_sock "$(role_name)")"
-        if [[ -S "$_gc_sock" ]] && tmux -S "$_gc_sock" list-sessions &>/dev/null; then
+        if [[ -S "$_gc_sock" ]] && tmux_via "$(role_name)" list-sessions &>/dev/null; then
           running="true"
         fi
       fi
@@ -595,12 +601,13 @@ case "$METHOD" in
     if is_worker; then
       : # no-op
     else
-      _gc_sock="$(tmux_sock "$(role_name)")"
-      if [[ -S "$_gc_sock" ]]; then
-        tmux -S "$_gc_sock" attach -t "$(role_name)"
+      _gc_role="$(role_name)"
+      _gc_sock="$(tmux_sock "$_gc_role")"
+      if [[ -S "$_gc_sock" ]] && [[ "$(uname)" != "Darwin" ]]; then
+        tmux -S "$_gc_sock" attach -t "$_gc_role"
       else
-        name="$(container_name)"
-        podman exec -it "$name" tmux attach -t "$(role_name)"
+        # attach needs -it for interactive TTY; can't use tmux_via
+        podman exec -it "$(container_name)" tmux -S "/workspace/.wrapix/tmux/${_gc_role}.sock" attach -t "$_gc_role"
       fi
       # Restore terminal state after detach (cursor, alternate screen)
       printf '\033[?25h\033[?1049l' 2>/dev/null

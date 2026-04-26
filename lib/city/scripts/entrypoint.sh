@@ -40,23 +40,29 @@ DOLT_SOCKET="$(beads-dolt socket "$GC_WORKSPACE")"
 
 beads-dolt attach "${GC_PODMAN_NETWORK:?}" "$GC_WORKSPACE"
 
-# bd connects via the Unix socket on the shared workspace filesystem.
-# This bypasses podman networking entirely — required because rootless
-# pasta hides host-loopback ports from role containers. Fails loudly
-# if the socket never appears rather than falling back to bd's embedded
-# autostart (BEADS_DOLT_AUTO_START=0).
-_waited=0
-while [[ ! -S "$DOLT_SOCKET" && "$_waited" -lt 30 ]]; do
-  sleep 0.2
-  _waited=$((_waited + 1))
-done
-if [[ ! -S "$DOLT_SOCKET" ]]; then
-  echo "entrypoint: dolt socket did not appear at $DOLT_SOCKET" >&2
-  exit 1
-fi
-
-export BEADS_DOLT_SERVER_SOCKET="$DOLT_SOCKET"
+# bd connection: on Linux, use the Unix socket (bypasses podman networking —
+# rootless pasta hides host-loopback ports from role containers). On Darwin,
+# Unix sockets inside the podman VM aren't reachable from the host, so use TCP.
+wait_for_dolt() {
+  local _waited=0
+  if [[ "$(uname)" == "Darwin" ]]; then
+    while ! bash -c "echo >/dev/tcp/127.0.0.1/$DOLT_PORT" 2>/dev/null && [[ "$_waited" -lt 150 ]]; do
+      sleep 0.2; _waited=$((_waited + 1))
+    done
+    bash -c "echo >/dev/tcp/127.0.0.1/$DOLT_PORT" 2>/dev/null || { echo "entrypoint: dolt TCP port $DOLT_PORT not reachable" >&2; exit 1; }
+    export BEADS_DOLT_SERVER_HOST=127.0.0.1
+    export BEADS_DOLT_SERVER_PORT="$DOLT_PORT"
+    unset BEADS_DOLT_SERVER_SOCKET
+  else
+    while [[ ! -S "$DOLT_SOCKET" && "$_waited" -lt 150 ]]; do
+      sleep 0.2; _waited=$((_waited + 1))
+    done
+    [[ -S "$DOLT_SOCKET" ]] || { echo "entrypoint: dolt socket did not appear at $DOLT_SOCKET" >&2; exit 1; }
+    export BEADS_DOLT_SERVER_SOCKET="$DOLT_SOCKET"
+  fi
+}
 export BEADS_DOLT_AUTO_START=0
+wait_for_dolt
 # GC_DOLT_PORT / GC_BEADS_DOLT_CONTAINER are consumed by stage-home.sh
 # and city.toml substitution (gc connects to dolt directly over TCP on
 # the city network); they are not used by bd.

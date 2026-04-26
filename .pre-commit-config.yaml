@@ -16,7 +16,7 @@ repos:
         name: treefmt
         entry: treefmt --fail-on-change
         language: system
-        pass_filenames: false
+        pass_filenames: true
         stages: [pre-commit]
 
       - id: ralph-check-templates
