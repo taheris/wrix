@@ -104,10 +104,20 @@ if [ -f "$WT/.git" ]; then
 fi
 
 cd "$WT"
-PREK_ALLOW_NO_CONFIG=1 git pull --rebase --autostash --quiet
-rsync -a --delete "$REMOTE_DIR/" "$WT/.beads/dolt-remote/"
 
-if ! git diff --quiet || ! git diff --cached --quiet; then
+# Commit any leftover dirt from a prior interrupted run before pulling.
+if ! git diff --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
+  PREK_ALLOW_NO_CONFIG=1 git add -A
+  PREK_ALLOW_NO_CONFIG=1 git commit -m "bd sync" --quiet
+fi
+
+PREK_ALLOW_NO_CONFIG=1 git pull --rebase --quiet
+
+if [ -d "$REMOTE_DIR" ]; then
+  rsync -a --delete "$REMOTE_DIR/" "$WT/.beads/dolt-remote/"
+fi
+
+if ! git diff --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
   PREK_ALLOW_NO_CONFIG=1 git add -A
   PREK_ALLOW_NO_CONFIG=1 git commit -m "bd sync" --quiet
 fi
