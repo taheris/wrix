@@ -806,9 +806,11 @@ let
     }
     subtest "Verify tmux session alive in mayor container" verify_mayor_tmux
 
-    # Wait for scout to start (needed for nudge tests below)
+    # Wait for scout to start (needed for nudge tests below).
+    # Darwin needs longer — gc starts containers sequentially and each
+    # podman operation goes through the VM.
     subtest "Wait for scout container to start" \
-      poll_until 'test -S "$WS/.wrapix/tmux/scout.sock"' 30
+      poll_until 'test -S "$WS/.wrapix/tmux/scout.sock"' "$($IS_DARWIN && echo 90 || echo 30)"
 
     verify_gc_submit_via_socket() {
       GC_CITY="$WS/.gc/home" gc session submit scout "host-submit-test"

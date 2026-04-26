@@ -2488,20 +2488,24 @@ in
                 chmod +x "$MOCK_BIN/podman"
 
                 # beads-dolt: deterministic name/port/socket. start creates
-                # a real Unix socket via nc so entrypoint's fail-hard socket
-                # check passes.
+                # a real Unix socket AND a TCP listener so both the Linux
+                # (socket) and Darwin (TCP) wait_for_dolt paths succeed.
                 mkdir -p "$TMPDIR/ws/.wrapix"
                 cat > "$MOCK_BIN/beads-dolt" << MOCK
                 #!/bin/sh
                 case "\$1" in
                   start)
-                    # Kill any previous nc holding the socket from a prior run
-                    if [ -f "$TMPDIR/nc.pid" ]; then
-                      kill "\$(cat "$TMPDIR/nc.pid")" 2>/dev/null || true
-                    fi
+                    # Kill any previous listeners from a prior run
+                    for pidfile in "$TMPDIR/nc.pid" "$TMPDIR/nc-tcp.pid"; do
+                      if [ -f "\$pidfile" ]; then
+                        kill "\$(cat "\$pidfile")" 2>/dev/null || true
+                      fi
+                    done
                     rm -f "$TMPDIR/ws/.wrapix/dolt.sock"
                     nc -lkU "$TMPDIR/ws/.wrapix/dolt.sock" >/dev/null 2>&1 &
                     echo \$! > "$TMPDIR/nc.pid"
+                    nc -lk 127.0.0.1 13306 >/dev/null 2>&1 &
+                    echo \$! > "$TMPDIR/nc-tcp.pid"
                     for _ in 1 2 3 4 5 6 7 8 9 10; do
                       [ -S "$TMPDIR/ws/.wrapix/dolt.sock" ] && exit 0
                       sleep 0.05

@@ -130,6 +130,10 @@ is_worker() {
   if [[ "${GC_AGENT_TEMPLATE:-}" == "worker" ]]; then
     return 0
   fi
+  # Known non-worker template — skip the slow podman inspect fallback.
+  if [[ -n "${GC_AGENT_TEMPLATE:-}" ]]; then
+    return 1
+  fi
   # Container label fallback — covers non-start methods (stop, is-running, peek)
   # for s-wx-* session names where name patterns don't match. (wx-pq03c)
   local _gc_label
@@ -187,7 +191,7 @@ tmux_via() {
   shift
   local sock
   sock="$(tmux_sock "$target")"
-  if [[ -S "$sock" ]] && [[ "$(uname)" != "Darwin" ]]; then
+  if [[ -S "$sock" ]] && [[ -n "${GC_AGENT:-}" || "$(uname)" != "Darwin" ]]; then
     tmux -S "$sock" "$@"
   else
     podman exec "$(container_name)" tmux -S "/workspace/.wrapix/tmux/${target}.sock" "$@"
@@ -523,6 +527,15 @@ case "$METHOD" in
       if [[ -n "$_gc_issue" ]]; then
         export GC_BEAD_ID="$_gc_issue"
       fi
+    fi
+    # Infer agent_template from session name before the slow bd query.
+    # Named agents (scout, judge, mayor) don't need a dolt round-trip.
+    if [[ -z "${GC_AGENT_TEMPLATE:-}" ]]; then
+      if is_scout; then GC_AGENT_TEMPLATE="scout"
+      elif is_judge; then GC_AGENT_TEMPLATE="judge"
+      elif is_mayor; then GC_AGENT_TEMPLATE="mayor"
+      fi
+      export GC_AGENT_TEMPLATE
     fi
     # Fallback: query bead metadata for agent_template when gc's start JSON
     # omits it — reconciler writes agent_template before calling start. (wx-pq03c)

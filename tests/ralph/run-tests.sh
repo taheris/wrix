@@ -3395,13 +3395,13 @@ test_prek_lock_timeout() {
     test_fail "pre-commit shim missing prek hook-impl (contents: $(cat "$pre_commit_shim"))"
   fi
 
-  # pre-push uses prek run --stage pre-push (runs independently of git's
-  # SSH connection) then stamps success for a second push attempt.
+  # pre-push uses prek hook-impl (same as pre-commit) so the ref range
+  # from stdin is parsed correctly, then stamps success for a retry.
   local pre_push_shim="$REPO_ROOT/lib/prek/hooks/pre-push"
-  if grep -Eq "prek run --stage pre-push" "$pre_push_shim"; then
-    test_pass "pre-push shim uses prek run --stage pre-push"
+  if grep -Fq "prek hook-impl" "$pre_push_shim" && grep -Fq -- "--hook-type=pre-push" "$pre_push_shim"; then
+    test_pass "pre-push shim invokes prek hook-impl --hook-type=pre-push"
   else
-    test_fail "pre-push shim missing prek run --stage (contents: $(cat "$pre_push_shim"))"
+    test_fail "pre-push shim missing prek hook-impl (contents: $(cat "$pre_push_shim"))"
   fi
 }
 
