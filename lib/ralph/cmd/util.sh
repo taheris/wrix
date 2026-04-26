@@ -566,18 +566,18 @@ run_claude_stream() {
   # Inner tick loop exits early if claude dies naturally inside the grace period.
   (
     max_ticks=$((post_result_grace * 5))
-    while [ -d "/proc/$claude_pid" ]; do
+    while kill -0 "$claude_pid" 2>/dev/null; do
       if grep -q '"type":"result"' "$log_file" 2>/dev/null; then
         ticks=0
-        while [ -d "/proc/$claude_pid" ] && [ "$ticks" -lt "$max_ticks" ]; do
+        while kill -0 "$claude_pid" 2>/dev/null && [ "$ticks" -lt "$max_ticks" ]; do
           sleep 0.2
           ticks=$((ticks + 1))
         done
-        if [ -d "/proc/$claude_pid" ]; then
+        if kill -0 "$claude_pid" 2>/dev/null; then
           debug "claude hung ${post_result_grace}s past result record; sending SIGTERM"
           kill -TERM "$claude_pid" || true
           sleep 2
-          if [ -d "/proc/$claude_pid" ]; then
+          if kill -0 "$claude_pid" 2>/dev/null; then
             kill -KILL "$claude_pid" || true
           fi
         fi

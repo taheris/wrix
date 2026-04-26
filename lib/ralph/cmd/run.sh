@@ -282,6 +282,10 @@ debug "hooks-on-failure: $HOOKS_ON_FAILURE"
 MAX_RETRIES=$(echo "$CONFIG" | jq -r '.loop."max-retries" // 2' 2>/dev/null || echo "2")
 debug "Max retries per bead: $MAX_RETRIES"
 
+# Load pause-on-failure config (stop loop on first step failure, default true)
+PAUSE_ON_FAILURE=$(echo "$CONFIG" | jq -r '.loop."pause-on-failure" // true' 2>/dev/null || echo "true")
+debug "Pause on failure: $PAUSE_ON_FAILURE"
+
 # Load parallel config: flag overrides config, default 1
 PARALLEL=1
 if [ -n "$PARALLEL_FLAG" ]; then
@@ -616,9 +620,13 @@ run_step() {
       ((++attempt))
 
       if [ "$attempt" -gt "$MAX_RETRIES" ]; then
-        # Max retries exceeded — label ralph:clarify with failure details and move on
         echo ""
         echo "Work did not complete after $attempt attempt(s). Max retries ($MAX_RETRIES) exceeded."
+
+        if [ "$PAUSE_ON_FAILURE" = "true" ] && [ "$RUN_ONCE" != "true" ]; then
+          echo "Issue $next_issue remains in_progress (pause-on-failure=true)."
+          return 1
+        fi
 
         local failure_summary
         failure_summary=$(extract_error_from_log "$log")
@@ -971,7 +979,13 @@ while true; do
         echo "Step failed (exit code: $EXIT_CODE)."
         exit 1
       fi
-      # In loop mode, continue to the next bead (failed bead has ralph:clarify)
+      if [ "$PAUSE_ON_FAILURE" = "true" ]; then
+        echo ""
+        echo "Step failed (exit code: $EXIT_CODE). Pausing (pause-on-failure=true)."
+        FINAL_EXIT_CODE=$EXIT_CODE
+        break
+      fi
+      # In loop mode with pause-on-failure=false, continue to the next bead
       echo ""
       echo "Step failed (exit code: $EXIT_CODE). Continuing to next bead..."
       ;;
