@@ -90,9 +90,8 @@ in
             fi
 
             # Ensure the per-workspace wrapix-beads dolt container is running.
-            # Requires host podman (typically via 'podman machine'); skipped
-            # if podman isn't available, same as the devShell shellHook.
-            if [ -d "$PROJECT_DIR/.beads/dolt" ] && command -v podman >/dev/null 2>&1; then
+            # Uses Apple container CLI (same runtime as the sandbox itself).
+            if [ -d "$PROJECT_DIR/.beads/dolt" ]; then
               ${pkgs.beads-dolt}/bin/beads-dolt start "$PROJECT_DIR"
             fi
 
@@ -134,13 +133,8 @@ in
             fi
             # Prune runs on every invocation, not just after load, so stale
             # hashes from other profiles get swept even when the current
-            # profile is cached. Podman runs via 'podman machine' on Darwin
-            # for beads-dolt and city containers, so prune it too when
-            # available.
+            # profile is cached.
             ${pruneStaleImages { runtime = "container"; }}
-            if command -v podman >/dev/null 2>&1; then
-              ${pruneStaleImages { }}
-            fi
 
             verbose "Project dir: $PROJECT_DIR"
 
@@ -266,31 +260,13 @@ in
               MOUNT_ARGS="$MOUNT_ARGS -v $BEADS_STAGING:/workspace/.beads"
             fi
 
-            # VirtioFS can't pass Unix sockets. Pass the dolt TCP port and
-            # bridge the container's gateway (192.168.64.1) to 127.0.0.1 via
-            # socat. The gateway interface only exists while a container runs
-            # on the default network, so socat retries in the background until
-            # the interface appears (container run brings it up).
+            # VirtioFS can't pass Unix sockets. Dolt runs as an Apple Container
+            # and publishes its port to all host interfaces including vmnet.
+            # The sandbox container reaches dolt via the vmnet gateway IP.
+            # No socat bridge needed — both containers are on the same vmnet.
             BEADS_DOLT_PORT=""
-            SOCAT_PID=""
             if [ -d "$PROJECT_DIR/.beads/dolt" ]; then
               BEADS_DOLT_PORT=$(${pkgs.beads-dolt}/bin/beads-dolt port "$PROJECT_DIR")
-              (
-                set +e
-                for _i in $(seq 1 30); do
-                  ${pkgs.socat}/bin/socat \
-                    "TCP-LISTEN:$BEADS_DOLT_PORT,bind=192.168.64.1,fork,reuseaddr" \
-                    "TCP:127.0.0.1:$BEADS_DOLT_PORT" 2>/dev/null &
-                  _pid=$!
-                  sleep 0.5
-                  if kill -0 "$_pid" 2>/dev/null; then
-                    wait "$_pid"
-                    exit
-                  fi
-                done
-                verbose "socat could not bind to 192.168.64.1:$BEADS_DOLT_PORT — dolt unreachable from container"
-              ) &
-              SOCAT_PID=$!
             fi
 
             # Session registration for focus-aware notifications (tmux only)
@@ -311,7 +287,6 @@ in
             fi
 
             cleanup_session() {
-              [ -n "''${SOCAT_PID:-}" ] && kill "$SOCAT_PID" 2>/dev/null || true
               [ -n "$WRAPIX_SESSION_FILE" ] && [ -f "$WRAPIX_SESSION_FILE" ] && rm -f "$WRAPIX_SESSION_FILE"
             }
             trap cleanup_session EXIT
@@ -346,9 +321,12 @@ in
             [ -n "$DIR_MOUNTS" ] && ENV_ARGS+=(-e "WRAPIX_DIR_MOUNTS=$DIR_MOUNTS")
             [ -n "$FILE_MOUNTS" ] && ENV_ARGS+=(-e "WRAPIX_FILE_MOUNTS=$FILE_MOUNTS")
             [ -n "$SOCK_MOUNTS" ] && ENV_ARGS+=(-e "WRAPIX_SOCK_MOUNTS=$SOCK_MOUNTS")
-            # VirtioFS can't pass Unix sockets — use TCP for notifications and dolt
+            # VirtioFS can't pass Unix sockets — use TCP for notifications and dolt.
+            # Dolt is now also an Apple Container publishing to all interfaces;
+            # the sandbox VM reaches it via the vmnet gateway.
             ENV_ARGS+=(-e "WRAPIX_NOTIFY_TCP=1")
             [ -n "$BEADS_DOLT_PORT" ] && ENV_ARGS+=(-e "BEADS_DOLT_SERVER_PORT=$BEADS_DOLT_PORT")
+            [ -n "$BEADS_DOLT_PORT" ] && ENV_ARGS+=(-e "BEADS_DOLT_SERVER_HOST=192.168.64.1")
             # Pass session ID for focus-aware notifications (empty if not in tmux)
             ENV_ARGS+=(-e "WRAPIX_SESSION_ID=$WRAPIX_SESSION_ID")
             # Pass network mode and allowlist for WRAPIX_NETWORK=limit filtering

@@ -617,6 +617,7 @@ let
     # City env exported up front so every scenario (not just happy-path) can
     # start/restart gc and invoke gate.sh → gc session submit → provider.sh
     # without depending on a prior scenario's start_gc having run.
+    export CR=podman
     export GC_CITY_NAME="$CITY_NAME"
     export GC_WORKSPACE="$WS"
     export GC_AGENT_IMAGE="${liveCity.imageName}"

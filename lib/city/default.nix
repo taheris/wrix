@@ -35,6 +35,7 @@ let
   toTOML = import ../util/toml.nix { inherit (pkgs) lib; };
   imageTagLib = import ../util/image-tag.nix { };
   shellLib = import ../util/shell.nix { };
+  containerRuntime = readFile ../util/container.sh;
 
   # Build a service container image from a Nix package
   mkServiceImage =
@@ -117,28 +118,58 @@ let
 
       profileImage = agentSandbox.image;
       imageTag = imageTagLib.mkImageTag profileImage;
-      imageName = "localhost/wrapix-${agentSandbox.profile.name}:${imageTag}";
+      imageName =
+        if pkgs.stdenv.isDarwin then
+          "wrapix-${agentSandbox.profile.name}:${imageTag}"
+        else
+          "localhost/wrapix-${agentSandbox.profile.name}:${imageTag}";
       networkName = "city-${name}";
 
-      # Load image into podman: stream script on Linux, tarball on Darwin.
-      # On Darwin, the image is a buildLayeredImage tar (Linux shebang won't run).
+      # Load image: stream script (Linux) or skopeo+container-image-load (Darwin).
       loadImageCmd = if pkgs.stdenv.isDarwin then "cat ${profileImage}" else "${profileImage}";
 
       # Shared image loading snippet — used by both shellHook and app.
-      # Uses hash-based tag derived from the Nix store path so
-      # `podman image exists` is sufficient for freshness (no version file).
-      loadImageSnippet = ''
-        if ! podman image exists "${imageName}" 2>/dev/null; then
-          echo "Loading sandbox image..."
-          ${loadImageCmd} | podman load -q >/dev/null
-          podman tag "localhost/wrapix-${agentSandbox.profile.name}:latest" "${imageName}" 2>/dev/null || true
-        fi
-        # Prune runs unconditionally: rebuilding a profile that we aren't
-        # currently loading (e.g. devShell cached current profile, user
-        # rebuilt wrapix-rust in another shell) still leaves stale hash tags
-        # that need to be swept here. Cheap when there's nothing to remove.
-        ${shellLib.pruneStaleImages { }}
-      '';
+      # Uses hash-based tag derived from the Nix store path so freshness
+      # checking is a single image-exists call (no version file).
+      loadImageSnippet =
+        if pkgs.stdenv.isDarwin then
+          ''
+            if ! cr_image_exists "${imageName}"; then
+              echo "Loading sandbox image..."
+              if [[ "$CR" == "container" ]]; then
+                cr_image_delete "wrapix-${agentSandbox.profile.name}:latest"
+                _OCI_TAR="''${XDG_CACHE_HOME:-$HOME/.cache}/wrapix/city-image-oci.tar"
+                mkdir -p "$(dirname "$_OCI_TAR")"
+                ${pkgs.skopeo}/bin/skopeo --insecure-policy copy --quiet \
+                  "docker-archive:${profileImage}" "oci-archive:$_OCI_TAR"
+                _LOAD_OUT=$($CR image load --input "$_OCI_TAR" 2>&1)
+                _LOADED_REF=$(echo "$_LOAD_OUT" | grep -oE 'untagged@sha256:[a-f0-9]+' | head -1)
+                if [ -n "$_LOADED_REF" ]; then
+                  cr_image_tag "$_LOADED_REF" "${imageName}"
+                  cr_image_tag "$_LOADED_REF" "wrapix-${agentSandbox.profile.name}:latest"
+                fi
+                rm -f "$_OCI_TAR"
+                cr_image_prune
+              else
+                cat ${profileImage} | podman load -q >/dev/null
+                podman tag "localhost/wrapix-${agentSandbox.profile.name}:latest" "${imageName}" 2>/dev/null || true
+              fi
+            fi
+            if [[ "$CR" == "container" ]]; then
+              ${shellLib.pruneStaleImages { runtime = "container"; }}
+            else
+              ${shellLib.pruneStaleImages { }}
+            fi
+          ''
+        else
+          ''
+            if ! cr_image_exists "${imageName}"; then
+              echo "Loading sandbox image..."
+              ${loadImageCmd} | podman load -q >/dev/null
+              podman tag "localhost/wrapix-${agentSandbox.profile.name}:latest" "${imageName}" 2>/dev/null || true
+            fi
+            ${shellLib.pruneStaleImages { }}
+          '';
 
       # Provider path — references the live script in .gc/scripts/, which the
       # shellHook and app copy from the Nix store on every entry/run.
@@ -176,6 +207,7 @@ let
 
       # Source-relative paths for live symlinks (no direnv reload needed)
       scriptNames = [
+        "container.sh"
         "dispatch.sh"
         "entrypoint.sh"
         "gate.sh"
@@ -187,6 +219,7 @@ let
         "worker-collect.sh"
         "worker-setup.sh"
       ];
+      localScriptNames = builtins.filter (n: n != "container.sh") scriptNames;
       promptNames = [
         "judge.md"
         "mayor.md"
@@ -218,13 +251,18 @@ let
 
       # Content-addressed store copies for integration tests (Nix sandbox
       # can't reach the source tree, so tests need real store paths).
-      # builtins.path with a name ensures the hash depends only on file
-      # content, not on the position within self.
-      scriptsStore = path {
-        name = "city-scripts";
+      # container.sh lives in lib/util/ (shared with beads-dolt),
+      # so we merge it with the local scripts into a single store path.
+      localScriptsStore = path {
+        name = "city-scripts-local";
         path = ./scripts;
-        filter = path: _type: elem (baseNameOf path) scriptNames;
+        filter = path: _type: elem (baseNameOf path) localScriptNames;
       };
+      scriptsStore = pkgs.runCommand "city-scripts" { } ''
+        mkdir -p $out
+        cp ${localScriptsStore}/* $out/
+        cp ${../util/container.sh} $out/container.sh
+      '';
       promptsStore = path {
         name = "city-prompts";
         path = ./prompts;
@@ -469,11 +507,13 @@ let
       # Shell hook: copies config and exports env vars for provider
       shellHook = ''
         ${ralphInstance.shellHook}
+        ${containerRuntime}
+        export CR
 
         mkdir -p .wrapix
 
         export GC_AGENT_IMAGE="${imageName}"
-        export GC_BEADS_DOLT_CONTAINER="$(beads-dolt name "$(pwd)")"
+        export GC_BEADS_DOLT_CONTAINER="$(beads-dolt host "$(pwd)")"
         export GC_CITY_NAME="${name}"
         export GC_COOLDOWN="${cooldown}"
         export GC_DOLT_PORT="$(beads-dolt port "$(pwd)")"
@@ -502,8 +542,7 @@ let
           ${promoteGcLayout}
         fi
 
-        # Ensure podman network exists (NixOS module creates via systemd)
-        if command -v podman >/dev/null 2>&1; then
+        if [[ "$CR" != "container" ]] && command -v podman >/dev/null 2>&1; then
           if ! podman network exists "${networkName}" 2>/dev/null; then
             podman network create "${networkName}" >/dev/null 2>&1 || true
           fi
@@ -553,6 +592,8 @@ let
         type = "app";
         program = "${pkgs.writeShellScriptBin "wrapix-city" ''
           set -euo pipefail
+          ${containerRuntime}
+          export CR
           export GC_CITY_NAME="${name}"
           export GC_WORKSPACE="$(pwd)"
           export GC_AGENT_IMAGE="${imageName}"
@@ -600,8 +641,10 @@ let
           ${stageGcLayout}
           ${promoteGcLayout}
 
-          if ! podman network exists "${networkName}" 2>/dev/null; then
-            podman network create "${networkName}" >/dev/null
+          if [[ "$CR" != "container" ]]; then
+            if ! podman network exists "${networkName}" 2>/dev/null; then
+              podman network create "${networkName}" >/dev/null
+            fi
           fi
 
           exec .gc/scripts/entrypoint.sh

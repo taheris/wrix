@@ -6,18 +6,21 @@
 let
   inherit (builtins) readFile;
   inherit (pkgs) lib;
+  inherit (pkgs.stdenv) isDarwin;
+  inherit (lib) optionals;
 
   mkImage =
-    if pkgs.stdenv.isDarwin then
+    if isDarwin then
       linuxPkgs.dockerTools.buildLayeredImage
     else
       linuxPkgs.dockerTools.streamLayeredImage;
 
   imageTagLib = import ../util/image-tag.nix { };
   imageTag = imageTagLib.mkImageTag doltImageDrv;
-  imageName = "localhost/wrapix-beads:${imageTag}";
-  loadImageCmd = if pkgs.stdenv.isDarwin then "cat ${doltImageDrv}" else "${doltImageDrv}";
+  imageName = if isDarwin then "wrapix-beads:${imageTag}" else "localhost/wrapix-beads:${imageTag}";
+  loadImageCmd = if isDarwin then "cat ${doltImageDrv}" else "${doltImageDrv}";
   shellLib = import ../util/shell.nix { };
+  containerRuntime = builtins.readFile ../util/container.sh;
 
   # Minimal dolt-only container image used to serve a workspace's .beads/dolt.
   doltImageDrv = mkImage {
@@ -45,6 +48,10 @@ let
       bashInteractive
       coreutils
     ]
+    ++ optionals isDarwin [
+      jq
+      skopeo
+    ]
   );
 
   # Host CLI: manages the per-workspace dolt container.
@@ -60,7 +67,24 @@ let
     # coreutils for basic tools. Prepended so we don't rely on host PATH.
     export PATH="${cliRuntimePath}:''${PATH:-}"
 
-    IMAGE="${imageName}"
+    # Container runtime abstraction (cr_* functions)
+    ${containerRuntime}
+
+    if [[ "$CR" == "container" ]]; then
+      IMAGE="wrapix-beads:${imageTag}"
+    else
+      IMAGE="localhost/wrapix-beads:${imageTag}"
+    fi
+
+    ${
+      if isDarwin then
+        ''
+          XDG_CACHE_HOME="''${XDG_CACHE_HOME:-$HOME/.cache}"
+          WRAPIX_CACHE="$XDG_CACHE_HOME/wrapix"
+        ''
+      else
+        ""
+    }
 
     _hash() {
       printf '%s' "''${1:-$PWD}" | sha256sum | cut -c1-8
@@ -82,18 +106,57 @@ let
     }
 
     _load_image() {
-      if ! podman image exists "$IMAGE" 2>/dev/null; then
-        echo "Loading beads image..." >&2
-        ${loadImageCmd} | podman load -q >/dev/null
-        podman tag "localhost/wrapix-beads:latest" "$IMAGE" 2>/dev/null || true
+      if cr_image_exists "$IMAGE"; then
+        return 0
       fi
-      # Prune on every load_image call so beads-dolt sweeps stale wrapix-*
-      # tags even when its own image is cached.
-      ${shellLib.pruneStaleImages { }}
+      echo "Loading beads image..." >&2
+      case "$CR" in
+        container)
+          ${
+            if isDarwin then
+              ''
+                local oci_tar="$WRAPIX_CACHE/beads-image-oci.tar"
+                mkdir -p "$WRAPIX_CACHE"
+                ${pkgs.skopeo}/bin/skopeo --insecure-policy copy --quiet \
+                  "docker-archive:${doltImageDrv}" "oci-archive:$oci_tar"
+                local load_out loaded_ref
+                load_out=$($CR image load --input "$oci_tar" 2>&1)
+                loaded_ref=$(echo "$load_out" | grep -oE 'untagged@sha256:[a-f0-9]+' | head -1)
+                if [ -n "$loaded_ref" ]; then
+                  cr_image_tag "$loaded_ref" "$IMAGE"
+                  cr_image_tag "$loaded_ref" "wrapix-beads:latest"
+                fi
+                rm -f "$oci_tar"
+              ''
+            else
+              ''
+                echo "beads-dolt: CR=container on non-Darwin build — this should not happen" >&2
+                return 1
+              ''
+          }
+          ;;
+        *)
+          ${loadImageCmd} | podman load -q >/dev/null
+          cr_image_tag "localhost/wrapix-beads:latest" "$IMAGE" 2>/dev/null || true
+          ;;
+      esac
+      ${
+        if isDarwin then
+          ''
+            if [[ "$CR" == "container" ]]; then
+              ${shellLib.pruneStaleImages { runtime = "container"; }}
+            else
+              ${shellLib.pruneStaleImages { }}
+            fi
+          ''
+        else
+          shellLib.pruneStaleImages { }
+      }
     }
 
     # Translate container-local path to host-side path for nested podman.
-    # No-op when GC_HOST_WORKSPACE is unset (normal case).
+    # No-op when GC_HOST_WORKSPACE is unset (normal case) or on Darwin
+    # (Apple Containers don't have nested-container host-socket patterns).
     _host_path() {
       local p="$1"
       [[ -n "''${GC_HOST_WORKSPACE:-}" ]] || { echo "$p"; return; }
@@ -113,6 +176,14 @@ let
     cmd_port() { _port "''${1:-$PWD}"; }
     cmd_socket() { _socket_path "''${1:-$PWD}"; }
 
+    cmd_host() {
+      local ws="''${1:-$PWD}"
+      case "$CR" in
+        container) echo "192.168.64.1" ;;
+        *) _name "$ws" ;;
+      esac
+    }
+
     cmd_status() {
       local ws="''${1:-$PWD}"
       local name port
@@ -121,24 +192,26 @@ let
       echo "workspace: $ws"
       echo "container: $name"
       echo "port:      $port"
-      echo "state:     $(podman inspect --format '{{.State.Status}}' "$name" 2>/dev/null || echo 'not found')"
+      echo "state:     $(cr_status "$name")"
     }
 
     _ensure_network() {
-      if podman network exists wrapix-dolt; then
-        return 0
-      fi
-      # Tolerate a race: a concurrent caller may have created it between
-      # our exists check and our own create.
-      if podman network create wrapix-dolt >/dev/null 2>&1; then
-        return 0
-      fi
-      podman network exists wrapix-dolt
+      case "$CR" in
+        container) return 0 ;;
+        *)
+          if podman network exists wrapix-dolt; then
+            return 0
+          fi
+          if podman network create wrapix-dolt >/dev/null 2>&1; then
+            return 0
+          fi
+          podman network exists wrapix-dolt
+          ;;
+      esac
     }
 
     # Detect and evict a non-container process squatting on our port.
-    # This can happen when e.g. gc's embedded dolt outlives its test run
-    # and occupies the same port the container expects.
+    # Linux-only: uses ss and /proc which don't exist on Darwin.
     _evict_port_squatter() {
       local port="$1"
       command -v ss >/dev/null 2>&1 || return 0
@@ -146,15 +219,11 @@ let
       local info
       info=$(ss -tlnp "sport = :$port" 2>/dev/null) || true
 
-      # Extract pid= from ss output: users:(("dolt",pid=12345,fd=8))
       local rest="''${info#*pid=}"
-      [ "$rest" = "$info" ] && return 0  # no listener
+      [ "$rest" = "$info" ] && return 0
       local pid="''${rest%%[!0-9]*}"
       [ -z "$pid" ] && return 0
 
-      # Container port-forwarding uses rootlessport/pasta/conmon — never
-      # a bare dolt binary.  If the listener is dolt, it is a stale host
-      # process (e.g. leftover gc embedded dolt from a test run).
       local exe
       exe=$(readlink "/proc/$pid/exe" 2>/dev/null) || true
       case "$exe" in
@@ -166,7 +235,6 @@ let
       echo "beads-dolt: killing to reclaim port for container" >&2
       kill "$pid" 2>/dev/null || true
 
-      # Wait for the port to free up (up to 4 s).
       local w=20
       while [ $w -gt 0 ]; do
         ss -tlnp "sport = :$port" 2>/dev/null | grep -q "pid=" || return 0
@@ -184,19 +252,21 @@ let
       rm -f "$data_dir/.doltcfg/privileges.db"
     }
 
-    # Check if dolt is reachable — both TCP (gc's embedded clients) and
-    # Unix socket (bd). A live TCP listener with a missing socket still
-    # breaks every bd caller, so both must pass before we declare success.
-    # When CONTAINER_HOST is set the TCP port is on host loopback
-    # (invisible from pasta); probe inside the dolt container instead.
     _dolt_reachable() {
       local name="$1" port="$2" ws="$3"
-      if [[ -n "''${CONTAINER_HOST:-}" ]]; then
-        podman exec "$name" bash -c "echo > /dev/tcp/127.0.0.1/$port" 2>/dev/null || return 1
-      else
-        bash -c "echo > /dev/tcp/127.0.0.1/$port" 2>/dev/null || return 1
-      fi
-      test -S "$(_socket_path "$ws")"
+      case "$CR" in
+        container)
+          cr_exec "$name" bash -c "echo > /dev/tcp/127.0.0.1/$port" 2>/dev/null || return 1
+          ;;
+        *)
+          if [[ -n "''${CONTAINER_HOST:-}" ]]; then
+            cr_exec "$name" bash -c "echo > /dev/tcp/127.0.0.1/$port" 2>/dev/null || return 1
+          else
+            bash -c "echo > /dev/tcp/127.0.0.1/$port" 2>/dev/null || return 1
+          fi
+          test -S "$(_socket_path "$ws")"
+          ;;
+      esac
     }
 
     _wait_for_dolt() {
@@ -228,93 +298,91 @@ let
 
       _load_image
 
-      if podman container exists "$name"; then
-        # Recreate if the running container is pinned to an older image
-        # than the one we just loaded. Data dir is bind-mounted so this
-        # drops nothing; it also releases the stale tag for prune. If
-        # either inspect fails (rare — container/image disappeared mid-check),
-        # fall through to the running+reachable path.
+      if cr_exists "$name"; then
         local _running_id _expected_id
-        if _running_id=$(podman inspect --format '{{.Image}}' "$name") \
-           && _expected_id=$(podman image inspect --format '{{.Id}}' "$IMAGE") \
+        if _running_id=$(cr_container_image "$name") \
+           && _expected_id=$(cr_image_id "$IMAGE") \
            && [ "$_running_id" != "$_expected_id" ]; then
           echo "beads-dolt: $name pinned to stale image — recreating with $IMAGE" >&2
-          podman rm -f "$name" >/dev/null
-        elif podman inspect --format '{{.State.Running}}' "$name" | grep -q true \
+          cr_rm "$name"
+        elif cr_is_running "$name" \
              && _dolt_reachable "$name" "$port" "$ws"; then
           return 0
         else
-          podman rm -f "$name" >/dev/null
+          cr_rm "$name"
         fi
       fi
 
       _clean_data_dir "$data_dir"
       rm -f "$(_socket_path "$ws")"
 
-      # Named bridge network so `podman network connect` works later.
-      # Rootless podman's default (pasta) rejects multi-network attach.
       _ensure_network
 
-      # Inside the container, force dolt temp files under .dolt/temptf
-      # (not /tmp), run the server, then grant root@% over the network.
-      # Host dolt never touches the data dir — avoids host /tmp leaking
-      # into noms state.
-      # HOME points at a tmpfs path distinct from the data dir: dolt writes
-      # its user config (eventsData/, config_global.json, tmp/) under
-      # $HOME/.dolt. Co-locating that with the data dir made dolt observe a
-      # spurious incomplete .dolt/ at the data-dir root and abort database
-      # discovery. --data-dir makes the mount unambiguously the multi-db root.
-      #
-      # The workspace is also bind-mounted at its host-matching absolute
-      # path so that `bd dolt push` to a `file://$ws/...` remote (e.g. the
-      # beads git worktree under $ws/.git/beads-worktrees/beads/.beads/dolt-remote)
-      # resolves inside the server's namespace. Without this, sync to the
-      # beads git worktree — and therefore the github mirror — fails.
-      #
-      # It is also mounted at /workspace to match the path that agent
-      # containers use (lib/city/scripts/provider.sh sets workdir to /workspace).
-      # Without this, bd's auto-backup — whose path is resolved server-side —
-      # fails with `mkdir /workspace: permission denied` when clients running
-      # inside agent containers reference `/workspace/.beads/backup`.
       local workspace_mount=()
       if [ "$ws" != "/workspace" ]; then
         workspace_mount=(-v "$(_host_path "$ws"):/workspace:rw")
       fi
-      # Subshell closes inherited fds so conmon doesn't hold direnv's
-      # pipes open (which blocks direnv from completing).
-      (
-        for _fd in /proc/self/fd/*; do
-          _fd=''${_fd##*/}
-          [[ "$_fd" =~ ^[0-9]+$ ]] && [ "$_fd" -gt 2 ] && eval "exec $_fd>&-" 2>/dev/null || true
-        done
-        podman run -d \
-          --name "$name" \
-          --restart=unless-stopped \
-          --entrypoint "" \
-          --label "wrapix.workspace=$ws" \
-          --network wrapix-dolt \
-          --userns=keep-id \
-          -e HOME=/tmp/dolthome \
-          -e DOLT_FORCE_LOCAL_TEMP_FILES=1 \
-          -e DOLT_ROOT_HOST="%" \
-          --tmpfs /tmp:rw,mode=1777 \
-          -p "127.0.0.1:$port:$port" \
-          -v "$(_host_path "$data_dir"):/data:rw" \
-          -v "$(_host_path "$ws"):$ws:rw" \
-          "''${workspace_mount[@]}" \
-          "$IMAGE" \
-          bash -c '
-            set -e
-            mkdir -p /tmp/dolthome
-            mkdir -p "$(dirname "$2")"
-            exec dolt sql-server --data-dir /data -H 0.0.0.0 -P "$1" --socket "$2"
-          ' -- "$port" "/workspace/.wrapix/dolt.sock" \
-          >/dev/null
-      )
+
+      case "$CR" in
+        container)
+          $CR run -d \
+            --name "$name" \
+            --network default \
+            -e HOME=/tmp/dolthome \
+            -e DOLT_FORCE_LOCAL_TEMP_FILES=1 \
+            -e DOLT_ROOT_HOST="%" \
+            --publish "$port:$port" \
+            -v "$data_dir:/data" \
+            -v "$ws:$ws" \
+            "''${workspace_mount[@]}" \
+            -- \
+            "$IMAGE" \
+            bash -c '
+              set -e
+              mkdir -p /tmp/dolthome /tmp
+              mkdir -p "$(dirname "$2")"
+              exec dolt sql-server --data-dir /data -H 0.0.0.0 -P "$1" --socket "$2"
+            ' -- "$port" "/workspace/.wrapix/dolt.sock" \
+            >/dev/null
+          ;;
+        *)
+          # Subshell closes inherited fds so conmon doesn't hold direnv's
+          # pipes open (which blocks direnv from completing).
+          (
+            for _fd in /proc/self/fd/*; do
+              _fd=''${_fd##*/}
+              [[ "$_fd" =~ ^[0-9]+$ ]] && [ "$_fd" -gt 2 ] && eval "exec $_fd>&-" 2>/dev/null || true
+            done
+            podman run -d \
+              --name "$name" \
+              --restart=unless-stopped \
+              --entrypoint "" \
+              --label "wrapix.workspace=$ws" \
+              --network wrapix-dolt \
+              --userns=keep-id \
+              -e HOME=/tmp/dolthome \
+              -e DOLT_FORCE_LOCAL_TEMP_FILES=1 \
+              -e DOLT_ROOT_HOST="%" \
+              --tmpfs /tmp:rw,mode=1777 \
+              -p "127.0.0.1:$port:$port" \
+              -v "$(_host_path "$data_dir"):/data:rw" \
+              -v "$(_host_path "$ws"):$ws:rw" \
+              "''${workspace_mount[@]}" \
+              "$IMAGE" \
+              bash -c '
+                set -e
+                mkdir -p /tmp/dolthome
+                mkdir -p "$(dirname "$2")"
+                exec dolt sql-server --data-dir /data -H 0.0.0.0 -P "$1" --socket "$2"
+              ' -- "$port" "/workspace/.wrapix/dolt.sock" \
+              >/dev/null
+          )
+          ;;
+      esac
 
       if ! _wait_for_dolt "$name" "$port" "$ws"; then
         echo "beads-dolt: container did not become ready" >&2
-        podman logs "$name" 2>&1 | tail -10 >&2
+        cr_logs_tail "$name" 10 >&2
         return 1
       fi
     }
@@ -323,8 +391,8 @@ let
       local ws="''${1:-$PWD}"
       local name
       name=$(_name "$ws")
-      if podman container exists "$name"; then
-        podman rm -f "$name" >/dev/null
+      if cr_exists "$name"; then
+        cr_rm "$name"
       fi
     }
 
@@ -334,16 +402,13 @@ let
       local name
       name=$(_name "$ws")
 
-      if ! podman container exists "$name"; then
+      if ! cr_exists "$name"; then
         echo "beads-dolt attach: container $name does not exist — run 'beads-dolt start' first" >&2
         return 1
       fi
 
-      if podman inspect "$name" --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' \
-         | grep -qw "$network"; then
-        return 0
-      fi
-      podman network connect "$network" "$name"
+      cr_network_has "$name" "$network" && return 0
+      cr_network_connect "$network" "$name"
     }
 
     case "''${1:-}" in
@@ -353,9 +418,10 @@ let
       port)   shift; cmd_port "$@" ;;
       name)   shift; cmd_name "$@" ;;
       socket) shift; cmd_socket "$@" ;;
+      host)   shift; cmd_host "$@" ;;
       attach) shift; cmd_attach "$@" ;;
       *)
-        echo "Usage: beads-dolt {start|stop|status|port|name|socket|attach <network>} [workspace]" >&2
+        echo "Usage: beads-dolt {start|stop|status|port|name|socket|host|attach <network>} [workspace]" >&2
         exit 2
         ;;
     esac
@@ -367,7 +433,7 @@ let
   # On Darwin, Unix sockets created inside the podman VM are not reachable
   # from the host, so we use TCP host/port. On Linux the socket works.
   waitAndExport =
-    if pkgs.stdenv.isDarwin then
+    if isDarwin then
       ''
         _beads_port=$(${beadsDolt}/bin/beads-dolt port "$PWD")
         _beads_waited=0
@@ -407,16 +473,29 @@ let
   # autostart so failure to reach the server fails loudly instead of
   # silently forking a second dolt. No-op if the current directory isn't
   # a beads workspace.
-  shellHook = ''
-    if [ -d "$PWD/.beads/dolt" ]; then
-      if ! command -v podman >/dev/null 2>&1; then
-        echo "beads: .beads/dolt exists but podman is not on PATH — cannot start dolt server" >&2
-        return 1 2>/dev/null || exit 1
-      fi
-      ${beadsDolt}/bin/beads-dolt start "$PWD"
-      ${waitAndExport}
-    fi
-  '';
+  shellHook =
+    if isDarwin then
+      ''
+        if [ -d "$PWD/.beads/dolt" ]; then
+          if ! command -v container >/dev/null 2>&1 && ! command -v podman >/dev/null 2>&1; then
+            echo "beads: .beads/dolt exists but no container runtime is available — cannot start dolt server" >&2
+            return 1 2>/dev/null || exit 1
+          fi
+          ${beadsDolt}/bin/beads-dolt start "$PWD"
+          ${waitAndExport}
+        fi
+      ''
+    else
+      ''
+        if [ -d "$PWD/.beads/dolt" ]; then
+          if ! command -v podman >/dev/null 2>&1; then
+            echo "beads: .beads/dolt exists but podman is not on PATH — cannot start dolt server" >&2
+            return 1 2>/dev/null || exit 1
+          fi
+          ${beadsDolt}/bin/beads-dolt start "$PWD"
+          ${waitAndExport}
+        fi
+      '';
 
 in
 {

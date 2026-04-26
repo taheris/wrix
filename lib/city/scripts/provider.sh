@@ -1,14 +1,52 @@
 #!/usr/bin/env bash
-# Gas City exec:<script> provider — translates gc commands to podman operations.
+# Gas City exec:<script> provider — translates gc commands to container operations.
 #
 # Called by gc as: provider.sh <method> <session-name> [args...]
+#
+# Uses Apple container CLI on Darwin, podman on Linux.
 #
 # Environment variables (set by mkCity / entrypoint):
 #   GC_CITY_NAME    — city name for container labeling
 #   GC_WORKSPACE    — host workspace path (mounted into containers)
 #   GC_AGENT_IMAGE  — OCI image for agent containers
-#   GC_PODMAN_NETWORK — podman network name (wrapix-<city>)
+#   GC_PODMAN_NETWORK — container network name (wrapix-<city>), unused on Darwin
 set -euo pipefail
+
+# Container runtime abstraction (cr_* functions).
+# When provider.sh is copied standalone (e.g. env-parity test), the companion
+# file may be absent — source it only when present (check-env doesn't need it).
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}" 2>/dev/null || echo ".")" 2>/dev/null && pwd)" || _SCRIPT_DIR="."
+if [[ -f "$_SCRIPT_DIR/container.sh" ]]; then
+  # shellcheck source=container.sh
+  source "$_SCRIPT_DIR/container.sh"
+elif [[ -z "${CR:-}" ]]; then
+  # Fallback when sourced standalone (tests). Define minimal cr_* shims
+  # forwarding to podman so test stubs work unchanged.
+  CR=podman
+  cr_exists() { podman container exists "$1"; }
+  cr_is_running() { [[ "$(podman inspect --format '{{.State.Running}}' "$1" 2>/dev/null)" == "true" ]]; }
+  cr_status() { podman inspect --format '{{.State.Status}}' "$1" 2>/dev/null || echo "not found"; }
+  cr_exit_code() { podman inspect --format '{{.State.ExitCode}}' "$1" 2>/dev/null; }
+  cr_container_image() { podman inspect --format '{{.Image}}' "$1" 2>/dev/null; }
+  cr_image_id() { podman image inspect --format '{{.Id}}' "$1" 2>/dev/null; }
+  cr_image_exists() { podman image exists "$1" 2>/dev/null; }
+  cr_stop() { podman stop "$1" 2>/dev/null || true; }
+  cr_rm() { podman rm -f "$1" 2>/dev/null || true; }
+  cr_exec() { local n="$1"; shift; podman exec "$n" "$@"; }
+  cr_exec_it() { local n="$1"; shift; podman exec -it "$n" "$@"; }
+  cr_logs() { podman logs "$1" 2>&1; }
+  cr_logs_tail() { podman logs --tail "${2:-50}" "$1" 2>&1; }
+  cr_wait() { podman wait "$1"; }
+  cr_network_exists() { podman network exists "$1"; }
+  cr_network_create() { podman network create "$1" >/dev/null 2>&1 || true; }
+  cr_network_connect() { podman network connect "$1" "$2"; }
+  cr_network_has() { podman inspect "$1" --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' | grep -qw "$2"; }
+  cr_ps_names() { podman ps --format '{{.Names}}' 2>/dev/null; }
+  cr_ps_names_by_prefix() { cr_ps_names | grep "^$1" || true; }
+  cr_cp() { podman cp "$2" "${1}:${3}"; }
+  cr_label() { podman inspect --format "{{index .Config.Labels \"${2}\"}}" "$1" 2>/dev/null || echo ""; }
+  cr_set_labels() { :; }
+fi
 
 METHOD="${1:?missing method}"
 SESSION="${2:-}"
@@ -137,7 +175,7 @@ is_worker() {
   # Container label fallback — covers non-start methods (stop, is-running, peek)
   # for s-wx-* session names where name patterns don't match. (wx-pq03c)
   local _gc_label
-  _gc_label="$(podman inspect --format '{{index .Config.Labels "gc-role"}}' "$(container_name)" 2>/dev/null)" || _gc_label=""
+  _gc_label="$(cr_label "$(container_name)" "gc-role")"
   [[ "$_gc_label" == "worker" ]]
 }
 
@@ -164,7 +202,7 @@ role_name() {
   else
     # Container label fallback for roles with non-standard session names (wx-pq03c)
     local _gc_label
-    _gc_label="$(podman inspect --format '{{index .Config.Labels "gc-role"}}' "$(container_name)" 2>/dev/null)" || _gc_label=""
+    _gc_label="$(cr_label "$(container_name)" "gc-role")"
     if [[ -n "$_gc_label" ]]; then
       echo "$_gc_label"
     else
@@ -194,7 +232,7 @@ tmux_via() {
   if [[ -S "$sock" ]] && [[ -n "${GC_AGENT:-}" || "$(uname)" != "Darwin" ]]; then
     tmux -S "$sock" "$@"
   else
-    podman exec "$(container_name)" tmux -S "/workspace/.wrapix/tmux/${target}.sock" "$@"
+    cr_exec "$(container_name)" tmux -S "/workspace/.wrapix/tmux/${target}.sock" "$@"
   fi
 }
 
@@ -235,7 +273,7 @@ container_labels() {
   fi
 }
 
-# Resource limit flags for a role
+# Resource limit flags for a role (podman)
 resource_flags() {
   local role="$1"
   local flags=""
@@ -244,6 +282,18 @@ resource_flags() {
   fi
   if [[ -n "${GC_MEMORY:-}" ]]; then
     flags+=" --memory=${GC_MEMORY}"
+  fi
+  echo "$flags"
+}
+
+# Resource limit flags for Apple container CLI (-c and -m instead of --cpus/--memory)
+resource_flags_apple() {
+  local flags=""
+  if [[ -n "${GC_CPUS:-}" ]]; then
+    flags+=" -c ${GC_CPUS}"
+  fi
+  if [[ -n "${GC_MEMORY:-}" ]]; then
+    flags+=" -m ${GC_MEMORY}"
   fi
   echo "$flags"
 }
@@ -296,60 +346,81 @@ persistent_start() {
   role="$(role_name)"
   beads_staging="$(stage_beads)"
 
-  # shellcheck disable=SC2046,SC2086
-  podman run -d \
-    --pull=never \
-    --replace \
-    --name "$name" \
-    --entrypoint "" \
-    --network "${GC_PODMAN_NETWORK:?}" \
-    --userns=keep-id \
-    --passwd-entry "wrapix:*:$(id -u):$(id -g)::/home/wrapix:/bin/bash" \
-    --mount type=tmpfs,destination=/home/wrapix,U=true \
-    --mount type=tmpfs,destination=/tmp,U=true \
-    --workdir /workspace \
-    $(container_labels) \
-    $(resource_flags "${SESSION}") \
-    $(container_volumes_persistent "$ws_mode" "$beads_staging") \
-    ${GC_SECRET_FLAGS:-} \
-    $(container_env "$dolt_host" "$dolt_port") \
-    -e "GC_SESSION=exec:/workspace/.gc/scripts/provider.sh" \
-    -e "GC_AGENT=${role}" \
-    -e "GC_ALIAS=${role}" \
-    "${GC_AGENT_IMAGE:?}" \
-    bash -c '
-      set -e
-      # shellcheck disable=SC1091
-      [[ -f /git-ssh-setup.sh ]] && . /git-ssh-setup.sh
-      mkdir -p "$HOME/.claude"
-      cp /etc/wrapix/claude-config.json "$HOME/.claude.json"
-      # Merge Nix-generated settings (env, Notification hook) with gc-
-      # installed hooks (UserPromptSubmit, Stop).  gc owns the hook
-      # definitions — using its template keeps hooks in sync across
-      # gc version upgrades.
-      if [[ -f /workspace/.gc/home/hooks/claude.json ]]; then
-        jq -s "(.[0] * .[1]) + {hooks: ((.[0].hooks // {}) + (.[1].hooks // {}))}" \
-          "$WRAPIX_CITY_DIR/claude-settings.json" \
-          /workspace/.gc/home/hooks/claude.json \
-          > "$HOME/.claude/settings.json"
-      else
-        cp "$WRAPIX_CITY_DIR/claude-settings.json" "$HOME/.claude/settings.json"
-      fi
-      cp "$WRAPIX_CITY_DIR/tmux.conf" "$HOME/.tmux.conf"
-      mkdir -p /workspace/.wrapix/tmux
-      _sock="/workspace/.wrapix/tmux/${GC_AGENT}.sock"
-      tmux -S "$_sock" start-server
-      tmux -S "$_sock" new-session -d -s "$GC_AGENT" "claude --dangerously-skip-permissions"
-      exec tmux -S "$_sock" wait-for gc-shutdown
-    '
+  # Inline entrypoint shared by both runtimes
+  local _entrypoint='
+    set -e
+    # shellcheck disable=SC1091
+    [[ -f /git-ssh-setup.sh ]] && . /git-ssh-setup.sh
+    mkdir -p "$HOME/.claude"
+    cp /etc/wrapix/claude-config.json "$HOME/.claude.json"
+    if [[ -f /workspace/.gc/home/hooks/claude.json ]]; then
+      jq -s "(.[0] * .[1]) + {hooks: ((.[0].hooks // {}) + (.[1].hooks // {}))}" \
+        "$WRAPIX_CITY_DIR/claude-settings.json" \
+        /workspace/.gc/home/hooks/claude.json \
+        > "$HOME/.claude/settings.json"
+    else
+      cp "$WRAPIX_CITY_DIR/claude-settings.json" "$HOME/.claude/settings.json"
+    fi
+    cp "$WRAPIX_CITY_DIR/tmux.conf" "$HOME/.tmux.conf"
+    mkdir -p /workspace/.wrapix/tmux
+    _sock="/workspace/.wrapix/tmux/${GC_AGENT}.sock"
+    tmux -S "$_sock" start-server
+    tmux -S "$_sock" new-session -d -s "$GC_AGENT" "claude --dangerously-skip-permissions"
+    exec tmux -S "$_sock" wait-for gc-shutdown
+  '
+
+  if [[ "$CR" == "container" ]]; then
+    # Apple Containers: lightweight VM per container. No --userns, --replace,
+    # --label, --tmpfs, --passwd-entry. VirtioFS maps host user to root in VM.
+    cr_rm "$name"
+    # shellcheck disable=SC2046,SC2086
+    container run -d \
+      --name "$name" \
+      --network default \
+      -w /workspace \
+      $(resource_flags_apple) \
+      $(container_volumes_persistent "$ws_mode" "$beads_staging") \
+      $(container_env "$dolt_host" "$dolt_port") \
+      -e "GC_SESSION=exec:/workspace/.gc/scripts/provider.sh" \
+      -e "GC_AGENT=${role}" \
+      -e "GC_ALIAS=${role}" \
+      -- \
+      "${GC_AGENT_IMAGE:?}" \
+      bash -c "$_entrypoint"
+
+    sleep 2
+    # Write labels as files inside the container (no native label support)
+    cr_set_labels "$name" "gc-city=${GC_CITY_NAME}" "gc-role=${role}"
+  else
+    # shellcheck disable=SC2046,SC2086
+    podman run -d \
+      --pull=never \
+      --replace \
+      --name "$name" \
+      --entrypoint "" \
+      --network "${GC_PODMAN_NETWORK:?}" \
+      --userns=keep-id \
+      --passwd-entry "wrapix:*:$(id -u):$(id -g)::/home/wrapix:/bin/bash" \
+      --mount type=tmpfs,destination=/home/wrapix,U=true \
+      --mount type=tmpfs,destination=/tmp,U=true \
+      --workdir /workspace \
+      $(container_labels) \
+      $(resource_flags "${SESSION}") \
+      $(container_volumes_persistent "$ws_mode" "$beads_staging") \
+      ${GC_SECRET_FLAGS:-} \
+      $(container_env "$dolt_host" "$dolt_port") \
+      -e "GC_SESSION=exec:/workspace/.gc/scripts/provider.sh" \
+      -e "GC_AGENT=${role}" \
+      -e "GC_ALIAS=${role}" \
+      "${GC_AGENT_IMAGE:?}" \
+      bash -c "$_entrypoint"
+  fi
 
   # Verify the container survived initialization (tmux startup).
-  # podman run -d returns before the inline script executes, so a brief
-  # wait lets tmux either start or fail-and-exit.
   sleep 2
-  if [[ "$(podman inspect --format '{{.State.Running}}' "$name" 2>/dev/null)" != "true" ]]; then
+  if ! cr_is_running "$name"; then
     echo "persistent_start: container $name exited during startup — check tmux/config" >&2
-    podman logs --tail 20 "$name" 2>&1 >&2 || true
+    cr_logs_tail "$name" 20 >&2 || true
     return 1
   fi
 }
@@ -371,14 +442,14 @@ worker_start() {
 
   # Pre-start guard: avoid killing an in-progress worker (wx-tvj7o)
   local _existing_state
-  _existing_state="$(podman inspect --format '{{.State.Status}}' "$name" 2>/dev/null)" || _existing_state=""
+  _existing_state="$(cr_status "$name")" || _existing_state=""
   case "$_existing_state" in
     running)
       echo "worker_start: container $name already running — skipping duplicate start" >&2
       return 0
       ;;
     exited|stopped|created)
-      podman rm "$name" 2>/dev/null || true
+      cr_rm "$name" 2>/dev/null || true
       ;;
   esac
 
@@ -437,29 +508,50 @@ worker_start() {
   local beads_staging
   beads_staging="$(stage_beads)"
 
-  # shellcheck disable=SC2046,SC2086
-  podman run -d \
-    --pull=never \
-    --name "$name" \
-    --entrypoint "" \
-    --network "${GC_PODMAN_NETWORK:?}" \
-    --userns=keep-id \
-    --passwd-entry "wrapix:*:$(id -u):$(id -g)::/home/wrapix:/bin/bash" \
-    --mount type=tmpfs,destination=/home/wrapix,U=true \
-    --mount type=tmpfs,destination=/tmp,U=true \
-    --workdir /workspace \
-    $(container_labels) \
-    $(resource_flags worker) \
-    $(container_volumes_worker "$worktree_path" "$beads_staging" "$task_file" "$host_log_dir") \
-    ${GC_SECRET_FLAGS:-} \
-    $(container_env "$dolt_host" "$dolt_port") \
-    -e "GC_BEAD_ID=${bead_id}" \
-    -e "GC_SESSION=worker" \
-    -e "GC_AGENT=worker" \
-    -e "WRAPIX_PROMPT_FILE=/workspace/.task" \
-    -e "WRAPIX_SYSTEM_PROMPT_FILE=/workspace/.role-prompt" \
-    "${GC_AGENT_IMAGE}" \
-    wrapix-agent run
+  if [[ "$CR" == "container" ]]; then
+    # shellcheck disable=SC2046,SC2086
+    container run -d \
+      --name "$name" \
+      --network default \
+      -w /workspace \
+      $(resource_flags_apple) \
+      $(container_volumes_worker "$worktree_path" "$beads_staging" "$task_file" "$host_log_dir") \
+      $(container_env "$dolt_host" "$dolt_port") \
+      -e "GC_BEAD_ID=${bead_id}" \
+      -e "GC_SESSION=worker" \
+      -e "GC_AGENT=worker" \
+      -e "WRAPIX_PROMPT_FILE=/workspace/.task" \
+      -e "WRAPIX_SYSTEM_PROMPT_FILE=/workspace/.role-prompt" \
+      -- \
+      "${GC_AGENT_IMAGE}" \
+      wrapix-agent run
+
+    cr_set_labels "$name" "gc-city=${GC_CITY_NAME}" "gc-role=worker" "gc-bead=${bead_id}"
+  else
+    # shellcheck disable=SC2046,SC2086
+    podman run -d \
+      --pull=never \
+      --name "$name" \
+      --entrypoint "" \
+      --network "${GC_PODMAN_NETWORK:?}" \
+      --userns=keep-id \
+      --passwd-entry "wrapix:*:$(id -u):$(id -g)::/home/wrapix:/bin/bash" \
+      --mount type=tmpfs,destination=/home/wrapix,U=true \
+      --mount type=tmpfs,destination=/tmp,U=true \
+      --workdir /workspace \
+      $(container_labels) \
+      $(resource_flags worker) \
+      $(container_volumes_worker "$worktree_path" "$beads_staging" "$task_file" "$host_log_dir") \
+      ${GC_SECRET_FLAGS:-} \
+      $(container_env "$dolt_host" "$dolt_port") \
+      -e "GC_BEAD_ID=${bead_id}" \
+      -e "GC_SESSION=worker" \
+      -e "GC_AGENT=worker" \
+      -e "WRAPIX_PROMPT_FILE=/workspace/.task" \
+      -e "WRAPIX_SYSTEM_PROMPT_FILE=/workspace/.role-prompt" \
+      "${GC_AGENT_IMAGE}" \
+      wrapix-agent run
+  fi
 
   # Monitor worker exit in background — collect metadata, run gate, post-gate.
   # FDs redirected to log file to avoid holding gc's pipes open (WaitDelay).
@@ -469,7 +561,7 @@ worker_start() {
   local monitor_log="${host_log_dir}/monitor.log"
   (
     # best-effort: container may already be gone (killed externally)
-    podman wait "$name" || true
+    cr_wait "$name" || true
 
     if ! GC_BEAD_ID="${bead_id}" GC_WORKSPACE="${GC_WORKSPACE}" \
       bash "${script_dir}/worker-collect.sh"; then
@@ -558,11 +650,11 @@ case "$METHOD" in
       rm -f "$(tmux_sock "$_gc_role")" 2>/dev/null || true
     fi
     name="$(container_name)"
-    podman stop "$name" 2>/dev/null || true
+    cr_stop "$name"
     # Workers: preserve stopped container for log inspection (wx-4041e).
     # Pre-start guard (wx-tvj7o) cleans up before creating new containers.
     if ! is_worker; then
-      podman rm -f "$name" 2>/dev/null || true
+      cr_rm "$name"
     fi
     ;;
 
@@ -576,7 +668,7 @@ case "$METHOD" in
 
   is-running)
     name="$(container_name)"
-    running="$(podman inspect --format '{{.State.Running}}' "$name" 2>/dev/null || echo "false")"
+    if cr_is_running "$name"; then running="true"; else running="false"; fi
     if [[ "$running" != "true" ]]; then
       if is_worker; then
         # Workers are ephemeral — exit 0 means the task completed, not a
@@ -588,7 +680,7 @@ case "$METHOD" in
         # reconciler can drain this slot (wx-92md7). Marker missing + exit=0
         # means monitor is still running post-gate; keep the "true" lie so
         # the container isn't treated as a startup crash.
-        _gc_exit="$(podman inspect --format '{{.State.ExitCode}}' "$name" 2>/dev/null)" || _gc_exit=""
+        _gc_exit="$(cr_exit_code "$name")" || _gc_exit=""
         if [[ "$_gc_exit" == "0" ]]; then
           # ##*worker- strips any prefix (bare 'worker-<bead>' or
           # qualified '<city>-worker-<bead>') down to the bead id.
@@ -620,7 +712,7 @@ case "$METHOD" in
         tmux -S "$_gc_sock" attach -t "$_gc_role"
       else
         # attach needs -it for interactive TTY; can't use tmux_via
-        podman exec -it "$(container_name)" tmux -S "/workspace/.wrapix/tmux/${_gc_role}.sock" attach -t "$_gc_role"
+        cr_exec_it "$(container_name)" tmux -S "/workspace/.wrapix/tmux/${_gc_role}.sock" attach -t "$_gc_role"
       fi
       # Restore terminal state after detach (cursor, alternate screen)
       printf '\033[?25h\033[?1049l' 2>/dev/null
@@ -631,7 +723,7 @@ case "$METHOD" in
   peek)
     name="$(container_name)"
     if is_worker; then
-      podman logs --tail "${1:-50}" "$name" 2>&1
+      cr_logs_tail "$name" "${1:-50}"
     else
       persistent_exec tmux capture-pane -t "$(role_name)" -p
     fi
@@ -698,7 +790,7 @@ case "$METHOD" in
     ;;
 
   list-running)
-    podman ps --filter "label=gc-city=${GC_CITY_NAME}" --format '{{.Names}}' 2>/dev/null
+    cr_ps_names_by_prefix "${GC_CITY_NAME}-"
     ;;
 
   set-meta)
@@ -707,7 +799,7 @@ case "$METHOD" in
     # gc sends value on stdin; fall back to positional arg for direct calls
     value="${STDIN_DATA:-${2:-}}"
     # Store metadata as a file inside the container
-    if ! podman exec "$name" sh -c "mkdir -p /tmp/gc-meta && echo '${value}' > /tmp/gc-meta/${key}"; then
+    if ! cr_exec "$name" sh -c "mkdir -p /tmp/gc-meta && echo '${value}' > /tmp/gc-meta/${key}"; then
       echo "provider: ERROR: set-meta ${key} failed for container ${name}" >&2
       exit 1
     fi
@@ -716,20 +808,20 @@ case "$METHOD" in
   get-meta)
     name="$(container_name)"
     key="${1:?get-meta requires key}"
-    podman exec "$name" cat "/tmp/gc-meta/${key}" 2>/dev/null || echo ""
+    cr_exec "$name" cat "/tmp/gc-meta/${key}" 2>/dev/null || echo ""
     ;;
 
   remove-meta)
     name="$(container_name)"
     key="${1:?remove-meta requires key}"
-    podman exec "$name" rm -f "/tmp/gc-meta/${key}" 2>/dev/null || true
+    cr_exec "$name" rm -f "/tmp/gc-meta/${key}" 2>/dev/null || true
     ;;
 
   copy-to)
     name="$(container_name)"
     src="${1:?copy-to requires source path}"
     dst="${2:?copy-to requires destination path}"
-    podman cp "$src" "${name}:${dst}"
+    cr_cp "$name" "$src" "$dst"
     ;;
 
   process-alive)
@@ -740,7 +832,7 @@ case "$METHOD" in
       # Check each process name — return true if any is alive
       while IFS= read -r pname; do
         [[ -z "$pname" ]] && continue
-        if podman exec "$name" pgrep -x "$pname" >/dev/null 2>&1; then
+        if cr_exec "$name" pgrep -x "$pname" >/dev/null 2>&1; then
           echo "true"
           exit 0
         fi
@@ -748,13 +840,13 @@ case "$METHOD" in
       echo "false"
     else
       # No process names — check if the container itself is running
-      podman inspect --format '{{.State.Running}}' "$name" 2>/dev/null || echo "false"
+      cr_is_running "$name" && echo "true" || echo "false"
     fi
     ;;
 
   check-image)
     image="${1:?check-image requires image name}"
-    podman image exists "$image" 2>/dev/null && echo "true" || echo "false"
+    cr_image_exists "$image" && echo "true" || echo "false"
     ;;
 
   run-live)
