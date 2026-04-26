@@ -14,23 +14,24 @@ fi
 
 _prek_acquire_lock
 
-# Parse stdin to extract the push range. Git writes one line per ref:
-#   <local ref> <local sha> <remote ref> <remote sha>
-_from_ref=""
-while IFS=' ' read -r _local_ref _local_sha _remote_ref _remote_sha; do
-    if [[ "$_remote_sha" != "0000000000000000000000000000000000000000" ]]; then
-        _from_ref="$_remote_sha"
-    fi
-done
+# Save stdin — git writes ref lines once and hook-impl needs them to
+# determine which files changed across the push range.
+_stdin=$(cat)
 
-# Run pre-push hooks independently (no SSH connection involved).
-# Pass the ref range so file-filtered hooks (integration tests) see all
-# files changed across the full push, not just the last commit.
-_prek_args=(run --stage pre-push)
-if [[ -n "$_from_ref" ]]; then
-    _prek_args+=(--from-ref "$_from_ref" --to-ref "$_head_sha")
+if [[ -z "$_stdin" ]]; then
+    exit 0
 fi
-prek "${_prek_args[@]}" 9>&- || exit 1
+
+# Run pre-push hooks via hook-impl (not `prek run`) so the ref range
+# from stdin is parsed correctly — same code path git would use, but
+# decoupled from the SSH connection.
+_hook_dir="$(dirname "$0")"
+printf '%s\n' "$_stdin" | prek hook-impl \
+    --hook-dir "$_hook_dir" \
+    --script-version 4 \
+    --hook-type=pre-push \
+    -- "$@" \
+    9>&- || exit 1
 
 # Tests passed — stamp for next push attempt.
 printf '%s\n' "$_head_sha" > "$_stamp_file"
