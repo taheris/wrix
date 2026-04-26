@@ -15,7 +15,7 @@
 # becomes a no-op.
 
 if [ -n "${WRAPIX_DEPLOY_KEY:-}" ] && [ -f "$WRAPIX_DEPLOY_KEY" ]; then
-  export GIT_SSH_COMMAND="ssh -i $WRAPIX_DEPLOY_KEY -o IdentitiesOnly=yes"
+  export GIT_SSH_COMMAND="ssh -i $WRAPIX_DEPLOY_KEY -o IdentitiesOnly=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=10"
 
   # Write SSH config so bare `ssh -T git@github.com` also works (not just
   # git commands that honour GIT_SSH_COMMAND).
@@ -25,6 +25,8 @@ if [ -n "${WRAPIX_DEPLOY_KEY:-}" ] && [ -f "$WRAPIX_DEPLOY_KEY" ]; then
 Host github.com
   IdentityFile $WRAPIX_DEPLOY_KEY
   IdentitiesOnly yes
+  ServerAliveInterval 30
+  ServerAliveCountMax 10
 SSHEOF
   chmod 600 "$HOME/.ssh/config"
 fi
