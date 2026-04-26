@@ -457,12 +457,12 @@ let
 
       # City helper scripts bundled for PATH (content-addressed — only
       # rebuilds when script text changes, not when unrelated files change)
-      cityScripts = pkgs.symlinkJoin {
+      cityScripts = linuxPkgs.symlinkJoin {
         name = "wrapix-city-scripts";
         paths = [
-          (pkgs.writeShellScriptBin "wrapix-agent" (readFile ./scripts/agent.sh))
-          (pkgs.writeShellScriptBin "wrapix-prime-hook" (readFile ./scripts/prime-hook.sh))
-          (pkgs.writeShellScriptBin "city-reload" (readFile ./scripts/city-reload.sh))
+          (linuxPkgs.writeShellScriptBin "wrapix-agent" (readFile ./scripts/agent.sh))
+          (linuxPkgs.writeShellScriptBin "wrapix-prime-hook" (readFile ./scripts/prime-hook.sh))
+          (linuxPkgs.writeShellScriptBin "city-reload" (readFile ./scripts/city-reload.sh))
         ];
       };
 
