@@ -587,6 +587,24 @@ let
       echo "$DOLT_PORT" > "$WS/.beads/dolt-server.port"
     }
 
+    # Ensure beads-dolt is alive after gc teardown. Restarts if unresponsive.
+    ensure_dolt_alive() {
+      if ! beads-dolt start "$WS"; then
+        echo "FAIL: beads-dolt start failed"
+        cr_logs_tail "$(beads-dolt name "$WS")" 20 | sed 's/^/  dolt: /' || true
+        return 1
+      fi
+      for _i in $(seq 1 50); do
+        dolt_reachable && break
+        sleep 0.2
+      done
+      if ! dolt_reachable; then
+        echo "FAIL: dolt not reachable after beads-dolt start"
+        cr_logs_tail "$(beads-dolt name "$WS")" 20 | sed 's/^/  dolt: /' || true
+        return 1
+      fi
+    }
+
     # Run a city script via the live .gc/scripts/ symlinks with LIVE_PATH.
     # Every script invocation must go through this to exercise the real
     # invocation path (symlink resolution, live PATH, live env).
@@ -1147,22 +1165,7 @@ let
       # the process group was SIGKILL'd).
       rm -f "$WS/.git/index.lock"
 
-      # Ensure beads-dolt is still running for remaining scenarios. Print
-      # output directly — silencing hid real failures (wx-jf95x investigation).
-      if ! beads-dolt start "$WS"; then
-        echo "FAIL: beads-dolt start failed after gc teardown"
-        cr_logs_tail "$(beads-dolt name "$WS")" 20 | sed 's/^/  dolt: /' || true
-        return 1
-      fi
-      for _i in $(seq 1 50); do
-        dolt_reachable && break
-        sleep 0.2
-      done
-      if ! dolt_reachable; then
-        echo "FAIL: dolt not reachable after beads-dolt start"
-        cr_logs_tail "$(beads-dolt name "$WS")" 20 | sed 's/^/  dolt: /' || true
-        return 1
-      fi
+      ensure_dolt_alive
       save GC_PID
     }
     subtest "Stop gc after happy-path" stop_gc
@@ -1695,20 +1698,7 @@ let
       for _cn in $_sgg_names; do cr_rm "$_cn"; done
       GC_PID=""
       POLL_WATCH_PID=""
-      if ! beads-dolt start "$WS"; then
-        echo "FAIL: beads-dolt start failed after gate teardown"
-        cr_logs_tail "$(beads-dolt name "$WS")" 20 | sed 's/^/  dolt: /' || true
-        return 1
-      fi
-      for _i in $(seq 1 50); do
-        dolt_reachable && break
-        sleep 0.2
-      done
-      if ! dolt_reachable; then
-        echo "FAIL: dolt not reachable after beads-dolt start"
-        cr_logs_tail "$(beads-dolt name "$WS")" 20 | sed 's/^/  dolt: /' || true
-        return 1
-      fi
+      ensure_dolt_alive
       save GC_PID
     }
     subtest "Stop gc after gate tests" stop_gc_after_gate
@@ -2325,6 +2315,8 @@ let
         *) _drift_names=$(podman ps -a --filter "name=$CITY_NAME-" --format '{{.Names}}' || true) ;;
       esac
       for _cn in $_drift_names; do cr_rm "$_cn"; done
+
+      ensure_dolt_alive
     }
     subtest "Config drift: entrypoint kills stale containers (wx-i42sb)" config_drift_restart
     fi  # end config-drift-kills-stale
