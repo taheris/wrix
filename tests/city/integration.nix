@@ -1,6 +1,6 @@
 # Gas City full ops loop integration test
 #
-# Exercises the real stack: gc → provider.sh → podman → container → mock claude
+# Exercises the real stack: gc → provider.sh → container runtime → mock claude
 # Only the LLM binary is substituted. Everything else runs for real.
 #
 # Scenarios:
@@ -27,7 +27,7 @@
 #   agent-max-sessions: pool agents have max_active_sessions (wx-65bws)
 #   config-drift-kills-stale: mutated city.toml → entrypoint kills stale sessions (wx-i42sb)
 #
-# Requires podman. Run via: nix run .#test-city
+# Requires podman or Apple container CLI (macOS 26+). Run via: nix run .#test-city
 {
   pkgs,
   system,
@@ -92,6 +92,7 @@ let
     ;
 
   toTOML = import ../../lib/util/toml.nix { inherit lib; };
+  containerRuntime = builtins.readFile ../../lib/util/container.sh;
 
   # Mock claude binary — deterministic bash script per role
   mockClaude = pkgs.writeShellScriptBin "claude" ''
@@ -110,7 +111,7 @@ let
     case "''${GC_SESSION:-}" in
       worker)
         # Worker run mode — launched inside tmux by agent.sh
-        # Write checks to log file — tmux captures stdout away from podman logs.
+        # Write checks to log file — tmux captures stdout away from container logs.
         _log=/workspace/mock-claude-worker.log
         _check() { echo "$1"; echo "$1" >> "$_log"; }
         # Verify wx-cswtw: --dangerously-skip-permissions must be passed
@@ -146,8 +147,8 @@ let
       *)
         # Persistent session mode (mayor, scout, or judge)
         # Ensure dolt config exists (container has no global config)
-        dolt config --global --add user.email mock@test 2>/dev/null || true
-        dolt config --global --add user.name mock 2>/dev/null || true
+        dolt config --global --add user.email mock@test
+        dolt config --global --add user.name mock
         case "''${GC_AGENT:-}" in
           mayor|mayor*)
             # Mayor stays alive — responds on attach with briefing
@@ -192,7 +193,7 @@ let
                     # commit range (probe tests, malformed submissions); default
                     # to empty so the mock survives under set -e.
                     reject_reason=""
-                    new_sh="$(git diff "$commit_range" --name-only --diff-filter=A -- '*.sh' 2>/dev/null)" || new_sh=""
+                    new_sh="$(git diff "$commit_range" --name-only --diff-filter=A -- '*.sh')" || new_sh=""
                     for f in $new_sh; do
                       content="$(git show "''${commit_range##*..}:$f")" || continue
                       if ! echo "$content" | head -5 | grep -q 'set -euo pipefail'; then
@@ -264,16 +265,21 @@ let
   #
   # Structure mirrors flake.nix devShells.default:
   #   wrapix.mkDevShell {
-  #     packages = city.packages ++ [ podman ... ];
+  #     packages = city.packages ++ [ podman skopeo ... ];
   #   };
   #
   # wrapix.mkDevShell (lib/default.nix) provides its own base packages
   # (beads, dolt, prek) on top of city.packages, so we don't duplicate them.
   liveDevShell = wrapixLib.mkDevShell {
     inherit (liveCity) shellHook;
-    packages = liveCity.packages ++ [
-      pkgs.podman # consumer extra (flake.nix)
-    ];
+    packages =
+      liveCity.packages
+      ++ [
+        pkgs.podman # consumer extra (flake.nix)
+      ]
+      ++ lib.optionals isDarwin [
+        pkgs.skopeo # OCI archive conversion for Apple Containers
+      ];
   };
 
   # The live PATH has three layers:
@@ -314,22 +320,38 @@ let
     export LIVE_PATH="${livePath}"
     export PATH="${livePath}:${testOnlyPath}"
 
-    # Preflight: check podman before setting up trap/counters so skip
-    # doesn't print a misleading "ALL TESTS PASSED" summary. `command -v`
-    # only proves the binary is on PATH; `podman info` proves the runtime
-    # can actually reach its socket/VM/storage — nested-container sandboxes
-    # commonly ship the binary but cannot talk to a working backend.
-    if ! command -v podman >/dev/null 2>&1; then
-      echo "SKIP: podman not found on PATH — city integration tests require a working podman."
-      exit 77
-    fi
-    if ! podman_probe=$(podman info 2>&1); then
-      echo "SKIP: podman is on PATH but not functional (cannot reach socket/runtime)."
-      echo "       This usually means you're inside a nested container or rootless"
-      echo "       user-namespaces are unavailable. podman info output:"
-      printf '%s\n' "$podman_probe" | sed 's/^/         /'
-      exit 77
-    fi
+    ${lib.optionalString isDarwin ''
+      # On Darwin, the Apple container CLI is a system tool (not a nix package).
+      # Append common locations so containerRuntime detection works.
+      for _cpath in "$HOME/.nix-profile/bin" "/usr/local/bin"; do
+        if [[ -x "$_cpath/container" ]] && [[ ":$PATH:" != *":$_cpath:"* ]]; then
+          export PATH="$PATH:$_cpath"
+          export LIVE_PATH="$LIVE_PATH:$_cpath"
+        fi
+      done
+    ''}
+
+    # Source container runtime abstraction — sets CR based on available runtime
+    ${containerRuntime}
+    export CR
+
+    # Preflight: verify the detected runtime is functional before setting up
+    # trap/counters so skip doesn't print a misleading "ALL TESTS PASSED" summary.
+    case "$CR" in
+      container)
+        if ! container system status >/dev/null 2>&1; then
+          echo "SKIP: Apple container CLI detected but not functional."
+          exit 77
+        fi
+        ;;
+      podman)
+        if ! podman_probe=$(podman info 2>&1); then
+          echo "SKIP: podman detected but not functional (cannot reach socket/runtime)."
+          printf '%s\n' "$podman_probe" | sed 's/^/         /'
+          exit 77
+        fi
+        ;;
+    esac
 
     # Isolate from the caller's environment. The wrapix devShell shellHook
     # exports BEADS_DOLT_SERVER_* pointing at the host workspace's dolt
@@ -393,25 +415,28 @@ let
       echo "--- Diagnostics ---"
       if [ -n "$WS" ] && [ -f "$WS/gc.log" ]; then
         echo "  gc.log (last 40 lines):"
-        tail -40 "$WS/gc.log" 2>/dev/null | sed 's/^/    /' || true
+        tail -40 "$WS/gc.log" | sed 's/^/    /' || true
       fi
       # Show logs from any gc containers
-      for cid in $(podman ps -a --filter "name=$CITY_NAME-" -q 2>/dev/null); do
-        local cname
-        cname=$(podman inspect --format '{{.Name}}' "$cid" 2>/dev/null || echo "$cid")
-        echo "  container $cname (podman logs):"
-        podman logs "$cid" 2>&1 | tail -20 | sed 's/^/    /' || true
+      local _diag_names
+      case "$CR" in
+        container) _diag_names=$(container list --all --format json | jq -r '.[].configuration.id // empty' | grep "^$CITY_NAME-" || true) ;;
+        *) _diag_names=$(podman ps -a --filter "name=$CITY_NAME-" --format '{{.Names}}' || true) ;;
+      esac
+      for cname in $_diag_names; do
+        echo "  container $cname (logs):"
+        cr_logs_tail "$cname" 20 | sed 's/^/    /' || true
       done
       if [[ "''${DEBUG:-}" == "1" ]]; then
         echo "  dolt container logs:"
-        podman logs "$DOLT_CONTAINER" 2>&1 | tail -10 | sed 's/^/    /' || true
+        cr_logs_tail "$DOLT_CONTAINER" 10 | sed 's/^/    /' || true
         if [ -n "$WS" ] && [ -d "$WS/.beads/dolt" ]; then
           echo "  .beads/dolt tree:"
-          find "$WS/.beads/dolt" -maxdepth 4 2>/dev/null | sed 's/^/    /'
+          find "$WS/.beads/dolt" -maxdepth 4 | sed 's/^/    /'
           echo "  files referencing /tmp/:"
-          grep -rl "/tmp/" "$WS/.beads/dolt" 2>/dev/null | while IFS= read -r f; do
+          grep -rl "/tmp/" "$WS/.beads/dolt" | while IFS= read -r f; do
             echo "    $f:"
-            grep -o "/tmp/[A-Za-z0-9_/.-]*" "$f" 2>/dev/null | sort -u | sed 's/^/      /'
+            grep -o "/tmp/[A-Za-z0-9_/.-]*" "$f" | sort -u | sed 's/^/      /'
           done
         fi
       fi
@@ -427,17 +452,17 @@ let
         local sock="$WS/.wrapix/tmux/$role.sock"
         [ -S "$sock" ] || continue
         echo "  tmux pane ($role, full scrollback):"
-        tmux_host "$role" capture-pane -t "$role" -p -S - 2>/dev/null | sed 's/^/    /' || echo "    (capture failed)"
+        tmux_host "$role" capture-pane -t "$role" -p -S - | sed 's/^/    /' || echo "    (capture failed)"
       done
       if [ -n "''${BEAD_ID:-}" ]; then
         echo "  bead $BEAD_ID metadata:"
-        (cd "$WS" && bd show "$BEAD_ID" --json 2>/dev/null | jq '.[0].metadata // {}' 2>/dev/null | sed 's/^/    /') || true
+        (cd "$WS" && bd show "$BEAD_ID" --json | jq '.[0].metadata // {}' | sed 's/^/    /') || true
         echo "  monitor.log ($BEAD_ID):"
-        cat "$WS/.gc/logs/worker/$BEAD_ID/monitor.log" 2>/dev/null | tail -30 | sed 's/^/    /' || echo "    (not found)"
+        cat "$WS/.gc/logs/worker/$BEAD_ID/monitor.log" | tail -30 | sed 's/^/    /' || echo "    (not found)"
       fi
       if [ -n "$WS" ]; then
         echo "  beads:"
-        (cd "$WS" && bd list 2>/dev/null | sed 's/^/    /') || true
+        (cd "$WS" && bd list | sed 's/^/    /') || true
       fi
     }
 
@@ -454,17 +479,21 @@ let
         wait "$GC_PID" 2>/dev/null || true
       fi
       if [ -n "$WS" ]; then
-        beads-dolt stop "$WS" 2>/dev/null || true
+        beads-dolt stop "$WS" || true
       fi
-      podman ps --filter "name=$CITY_NAME-" -q 2>/dev/null | xargs -r podman stop -t 3 2>/dev/null || true
-      podman ps -a --filter "name=$CITY_NAME-" -q 2>/dev/null | xargs -r podman rm -f 2>/dev/null || true
-      podman network rm "$TEST_NETWORK" 2>/dev/null || true
+      local _cleanup_names
+      case "$CR" in
+        container) _cleanup_names=$(cr_ps_names_by_prefix "$CITY_NAME-") ;;
+        *) _cleanup_names=$(podman ps -a --filter "name=$CITY_NAME-" --format '{{.Names}}' || true) ;;
+      esac
+      for _cn in $_cleanup_names; do cr_rm "$_cn"; done
+      [[ "$CR" != "container" ]] && podman network rm "$TEST_NETWORK" || true
       if [ -n "$WS" ]; then
-        rm -rf "$WS" 2>/dev/null || true
+        rm -rf "$WS" || true
       fi
       echo ""
       echo "========================================"
-      echo "PASSED: $PASSED  FAILED: $FAILED"
+      echo "PASSED: $PASSED  FAILED: $FAILED  SKIPPED: $SKIPPED"
       if [ "$FAILED" -gt 0 ]; then
         echo "SOME TESTS FAILED"
         exit 1
@@ -524,6 +553,18 @@ let
     # the host/VM boundary, so dolt and tmux need platform-specific paths.
     IS_DARWIN=${if isDarwin then "true" else "false"}
 
+    SKIPPED=0
+    skip_apple_vm() {
+      if [[ "$CR" == "container" ]]; then
+        echo ""
+        echo "--- $1 ---"
+        echo "SKIP: $1 (VirtioFS cannot relay Unix socket IPC)"
+        SKIPPED=$((SKIPPED + 1))
+        return 0
+      fi
+      subtest "$@"
+    }
+
     dolt_reachable() {
       if $IS_DARWIN; then
         bash -c "echo >/dev/tcp/127.0.0.1/$DOLT_PORT" 2>/dev/null
@@ -563,20 +604,38 @@ let
     # Pre-cleanup: remove stale state from previous runs
     # ================================================================
 
-    podman ps --filter "name=$CITY_NAME-" -q 2>/dev/null | xargs -r podman stop -t 3 2>/dev/null || true
-    podman ps -a --filter "name=$CITY_NAME-" -q 2>/dev/null | xargs -r podman rm -f 2>/dev/null || true
-    podman network rm "$TEST_NETWORK" 2>/dev/null || true
+    _pre_names=""
+    case "$CR" in
+      container) _pre_names=$(container list --all --format json | jq -r '.[].configuration.id // empty' | grep "^$CITY_NAME-" || true) ;;
+      *) _pre_names=$(podman ps -a --filter "name=$CITY_NAME-" --format '{{.Names}}' || true) ;;
+    esac
+    for _cn in $_pre_names; do cr_rm "$_cn"; done
+    [[ "$CR" != "container" ]] && podman network rm "$TEST_NETWORK" || true
 
     # ================================================================
     # Setup: workspace, config, image
     # ================================================================
 
     subtest "Load test container image" \
-      sh -c '${
-        if isDarwin then "cat ${testImage}" else "${testImage}"
-      } | podman load && podman tag "localhost/wrapix-${liveCity.sandbox.profile.name}:latest" "${liveCity.imageName}"'
+      sh -c 'case "$CR" in
+        container)
+          _OCI_TAR="$(mktemp).tar"
+          ${pkgs.skopeo}/bin/skopeo --insecure-policy copy --quiet \
+            "docker-archive:${testImage}" "oci-archive:$_OCI_TAR"
+          _LOAD_OUT=$(container image load --input "$_OCI_TAR" 2>&1)
+          _LOADED_REF=$(echo "$_LOAD_OUT" | grep -oE "untagged@sha256:[a-f0-9]+" | head -1)
+          [ -n "$_LOADED_REF" ] && container image tag "$_LOADED_REF" "${liveCity.imageName}"
+          [ -n "$_LOADED_REF" ] && container image tag "$_LOADED_REF" "wrapix-${liveCity.sandbox.profile.name}:latest"
+          rm -f "$_OCI_TAR"
+          ;;
+        *)
+          ${if isDarwin then "cat ${testImage}" else "${testImage}"} \
+            | podman load -q >/dev/null
+          podman tag "localhost/wrapix-${liveCity.sandbox.profile.name}:latest" "${liveCity.imageName}"
+          ;;
+      esac'
 
-    # When using a remote podman socket (CONTAINER_HOST), bind-mount paths
+    # When using a remote container socket (CONTAINER_HOST), bind-mount paths
     # must exist on the host.  /workspace is shared; /tmp is container-local.
     if [ -n "''${CONTAINER_HOST:-}" ]; then
       WS=$(mktemp -d /workspace/.wrapix/citytest-XXXXXX)
@@ -594,7 +653,7 @@ let
     else
       WS=$(mktemp -d -t citytest-XXXXXX)
     fi
-    # Resolve symlinks (macOS /tmp -> /private/tmp) so podman VM can mount paths
+    # Resolve symlinks (macOS /tmp -> /private/tmp) so container runtime can mount paths
     WS=$(cd "$WS" && pwd -P)
     export WS
     echo "  > workspace: $WS"
@@ -603,7 +662,7 @@ let
     # Isolate dolt global config so tests don't clobber the host's ~/.dolt/
     REAL_HOME="$HOME"
     export HOME="$WS"
-    # Preserve podman config and storage (macOS: connection config for
+    # Preserve container runtime config and storage (macOS: connection config for
     # podman-machine; both platforms: image storage from pre-HOME load step).
     if [[ -d "$REAL_HOME/.config/containers" ]]; then
       mkdir -p "$WS/.config"
@@ -617,7 +676,6 @@ let
     # City env exported up front so every scenario (not just happy-path) can
     # start/restart gc and invoke gate.sh → gc session submit → provider.sh
     # without depending on a prior scenario's start_gc having run.
-    export CR=podman
     export GC_CITY_NAME="$CITY_NAME"
     export GC_WORKSPACE="$WS"
     export GC_AGENT_IMAGE="${liveCity.imageName}"
@@ -649,7 +707,7 @@ let
       mkdir -p .gc/cache .gc/system .gc/runtime
       touch .gc/events.jsonl
 
-      podman network create "$TEST_NETWORK" >/dev/null 2>&1 || true
+      cr_network_create "$TEST_NETWORK"
 
       # Copy city.toml to workspace root — entrypoint.sh sed-replaces the
       # dolt port sentinel here, and stage-home.sh copies it into the
@@ -691,7 +749,9 @@ let
     subtest "Validate gc accepts config" validate_config
 
     start_gc() {
-      podman rm -f "''${CITY_NAME}-mayor" "''${CITY_NAME}-scout" "''${CITY_NAME}-judge" 2>/dev/null || true
+      cr_rm "''${CITY_NAME}-mayor"
+      cr_rm "''${CITY_NAME}-scout"
+      cr_rm "''${CITY_NAME}-judge"
 
       DOLT_CONTAINER="$(beads-dolt name "$WS")"
       DOLT_PORT="$(beads-dolt port "$WS")"
@@ -717,7 +777,7 @@ let
       poll_until 'test -S "$WS/.gc/home/.gc/controller.sock" || ! kill -0 "$GC_PID" 2>/dev/null' 15
       if ! kill -0 "$GC_PID" 2>/dev/null; then
         echo "gc daemon died:"
-        tail -40 "$WS/gc.log" 2>/dev/null | sed 's/^/  /' || true
+        tail -40 "$WS/gc.log" | sed 's/^/  /' || true
         return 1
       fi
 
@@ -781,15 +841,15 @@ let
     subtest "Verify controller and script symlinks are relative" verify_relative_symlinks
 
     subtest "Wait for mayor container to start" \
-      poll_until 'podman ps --filter "name=''${CITY_NAME}-mayor" -q 2>/dev/null | grep -q .' 30
+      poll_until 'cr_is_running "''${CITY_NAME}-mayor"' 30
 
     # Run a tmux command against a role's shared socket. On Darwin, routes
-    # through podman exec (VirtioFS can't relay Unix socket IPC).
+    # through container exec (VirtioFS can't relay Unix socket IPC).
     tmux_host() {
       local role="$1"
       shift
       if $IS_DARWIN; then
-        podman exec "''${CITY_NAME}-''${role}" tmux -S "/workspace/.wrapix/tmux/''${role}.sock" "$@"
+        cr_exec "''${CITY_NAME}-''${role}" tmux -S "/workspace/.wrapix/tmux/''${role}.sock" "$@"
       else
         tmux -S "$WS/.wrapix/tmux/''${role}.sock" "$@"
       fi
@@ -809,7 +869,7 @@ let
 
     # Wait for scout to start (needed for nudge tests below).
     # Darwin needs longer — gc starts containers sequentially and each
-    # podman operation goes through the VM.
+    # container operation goes through the VM.
     subtest "Wait for scout container to start" \
       poll_until 'test -S "$WS/.wrapix/tmux/scout.sock"' "$($IS_DARWIN && echo 90 || echo 30)"
 
@@ -817,18 +877,18 @@ let
       GC_CITY="$WS/.gc/home" gc session submit scout "host-submit-test"
       poll_until 'tmux_capture scout | grep -q "host-submit-test"' 10
     }
-    subtest "gc session submit uses shared tmux socket from host" verify_gc_submit_via_socket
+    skip_apple_vm "gc session submit uses shared tmux socket from host" verify_gc_submit_via_socket
 
     # Cross-container: mayor calls gc session submit from inside its container.
     # Verifies the shared-socket + .gc-symlink setup lets gc inside mayor reach
     # scout's tmux pane. submit with default intent injects via send-keys when
     # the target is idle (the mock scout runs `sleep 600`, not a real agent).
     verify_cross_container_gc_submit() {
-      podman exec "''${CITY_NAME}-mayor" \
+      cr_exec "''${CITY_NAME}-mayor" \
         gc session submit scout "cross-container-submit-test"
       poll_until 'tmux_capture scout | grep -q "cross-container-submit-test"' 10
     }
-    subtest "gc session submit works from inside mayor container" verify_cross_container_gc_submit
+    skip_apple_vm "gc session submit works from inside mayor container" verify_cross_container_gc_submit
 
     # gate.sh submits "Review bead ..." to judge from the host-side monitor
     # pipeline. The judge mock reads its own pane to observe submissions, which
@@ -838,11 +898,11 @@ let
       GC_CITY="$WS/.gc/home" gc session submit judge "judge-submit-probe"
       poll_until 'tmux_capture judge -S -200 | grep -q "judge-submit-probe"' 30
     }
-    subtest "gc session submit reaches judge pane" verify_gc_submit_to_judge
+    skip_apple_vm "gc session submit reaches judge pane" verify_gc_submit_to_judge
 
     # .gc must be writable from inside containers (wx-9gm3t)
     verify_gc_writable_scout() {
-      podman exec "''${CITY_NAME}-scout" \
+      cr_exec "''${CITY_NAME}-scout" \
         touch /workspace/.gc/home/.gc/nudges/write-test-scout
       [ -f "$WS/.gc/home/.gc/nudges/write-test-scout" ]
       rm -f "$WS/.gc/home/.gc/nudges/write-test-scout"
@@ -850,7 +910,7 @@ let
     subtest ".gc is writable from scout container" verify_gc_writable_scout
 
     verify_gc_writable_mayor() {
-      podman exec "''${CITY_NAME}-mayor" \
+      cr_exec "''${CITY_NAME}-mayor" \
         touch /workspace/.gc/home/.gc/nudges/write-test-mayor
       [ -f "$WS/.gc/home/.gc/nudges/write-test-mayor" ]
       rm -f "$WS/.gc/home/.gc/nudges/write-test-mayor"
@@ -863,12 +923,12 @@ let
       output="$(GC_CITY="$WS/.gc/home" gc session peek scout)"
       [[ -n "$output" ]]
     }
-    subtest "gc session peek uses shared tmux socket" verify_gc_peek_via_socket
+    skip_apple_vm "gc session peek uses shared tmux socket" verify_gc_peek_via_socket
 
     subtest "Wait for scout to create a bead" \
-      poll_until 'timeout 5 bd list --json 2>/dev/null | jq -e "[.[] | select(.title | test(\"Fix test error\"))] | length > 0"' 60
+      poll_until 'timeout 5 bd list --json | jq -e "[.[] | select(.title | test(\"Fix test error\"))] | length > 0"' 60
 
-    BEAD_ID=$(bd list --json 2>/dev/null | jq -r '[.[] | select(.title | test("Fix test error"))][0].id' || echo "")
+    BEAD_ID=$(bd list --json | jq -r '[.[] | select(.title | test("Fix test error"))][0].id' || echo "")
 
     sling_bead() {
       [ -n "$BEAD_ID" ] && [ "$BEAD_ID" != "null" ]
@@ -882,32 +942,38 @@ let
     subtest "Director slings bead (worker→judge via monitor pipeline)" sling_bead
 
     subtest "Wait for worker worktree" \
-      poll_until "ls $WS/.wrapix/worktree/*/fix.txt 2>/dev/null" 90
+      poll_until "ls $WS/.wrapix/worktree/*/fix.txt" 90
 
     # wx-cswtw: verify worker's claude invocation had permissions flag and config
     verify_worker_agent_setup() {
       # The mock writes to /workspace/mock-claude-worker.log (the worktree
-      # mount). Try host-visible paths first, then podman cp as fallback.
+      # mount). Try host-visible paths first, then exec cat as fallback.
       local logf=""
       for f in "$WS"/.wrapix/worktree/*/mock-claude-worker.log "$WS"/.beads/mock-claude-worker.log "$WS"/.wrapix/worktree/*/.beads/mock-claude-worker.log; do
         [ -f "$f" ] && logf="$f" && break
       done
       if [ -z "$logf" ]; then
-        # Container-internal /tmp: use podman cp from the (stopped) worker
-        local worker_name
-        worker_name="$(podman ps -a --filter "name=$CITY_NAME-worker" --format '{{.Names}}' 2>/dev/null | head -1)"
+        # Container-internal /tmp: use exec cat from the (stopped) worker
+        local worker_name=""
+        case "$CR" in
+          container) worker_name=$(container list --all --format json | jq -r '.[].configuration.id // empty' | grep "^$CITY_NAME-worker" | head -1 || true) ;;
+          *) worker_name="$(podman ps -a --filter "name=$CITY_NAME-worker" --format '{{.Names}}' | head -1)" ;;
+        esac
         if [ -n "$worker_name" ]; then
           logf="$(mktemp)"
-          podman cp "$worker_name:/tmp/mock-claude-worker.log" "$logf" 2>/dev/null || logf=""
+          cr_exec "$worker_name" cat /tmp/mock-claude-worker.log > "$logf" || logf=""
         fi
       fi
       if [ -z "$logf" ] || [ ! -f "$logf" ]; then
-        # Last resort: check podman logs for the AGENT_CHECK lines
-        local worker_name
-        worker_name="$(podman ps -a --filter "name=$CITY_NAME-worker" --format '{{.Names}}' 2>/dev/null | head -1)"
+        # Last resort: check container logs for the AGENT_CHECK lines
+        local worker_name=""
+        case "$CR" in
+          container) worker_name=$(container list --all --format json | jq -r '.[].configuration.id // empty' | grep "^$CITY_NAME-worker" | head -1 || true) ;;
+          *) worker_name="$(podman ps -a --filter "name=$CITY_NAME-worker" --format '{{.Names}}' | head -1)" ;;
+        esac
         if [ -n "$worker_name" ]; then
           logf="$(mktemp)"
-          podman logs "$worker_name" > "$logf" 2>&1 || true
+          cr_logs "$worker_name" > "$logf" 2>&1 || true
         fi
       fi
       [ -n "$logf" ] && [ -f "$logf" ] || { echo "FAIL: mock-claude worker log not found"; return 1; }
@@ -939,12 +1005,12 @@ let
     # Provider monitor runs gate.sh after worker-collect sets commit_range.
     # gate.sh submits review to judge → mock judge reads it, diffs, approves → gate returns 0.
     subtest "Wait for judge approval (via monitor gate pipeline)" \
-      poll_until "bd show $BEAD_ID --json 2>/dev/null | jq -r '.[0].metadata.review_verdict // empty' 2>/dev/null | grep -q approve" 60
+      poll_until "bd show $BEAD_ID --json | jq -r '.[0].metadata.review_verdict // empty' | grep -q approve" 60
 
     # Monitor pipeline: gate approved → post-gate.sh fires → closes bead,
     # creates deploy bead. Mock judge only handles "Review bead" submits.
     subtest "Wait for post-gate pipeline (deploy bead created)" \
-      poll_until 'bd list --json 2>/dev/null | jq -e "[.[] | select(.title | startswith(\"Deploy:\"))] | length > 0"' 120
+      poll_until 'bd list --json | jq -e "[.[] | select(.title | startswith(\"Deploy:\"))] | length > 0"' 120
 
     # wx-iy1vt: logs persist in host-side .gc/logs/worker/ dir
     verify_worker_host_logs() {
@@ -966,7 +1032,7 @@ let
     # Without this, gc's legacy sleep policy suspends the session instead,
     # and with max_active_sessions=1 the next routed bead never dispatches.
     subtest "Worker session bead closed after monitor (wx-de4cn)" \
-      poll_until 'bd list --label gc:session --label agent:worker --status open --json 2>/dev/null | jq -e "length == 0"' 30
+      poll_until 'bd list --label gc:session --label agent:worker --status open --json | jq -e "length == 0"' 30
 
     # judge-merge.sh approve already ran inside the mock judge during the
     # review window — it writes review_verdict=approve only after main has
@@ -974,7 +1040,7 @@ let
     # the worktree is cleaned up. No manual merge step here.
 
     check_human_deploy() {
-      human_list=$(bd human list 2>/dev/null)
+      human_list=$(bd human list)
       echo "$human_list" | grep -qi deploy
     }
     subtest "Director sees deploy bead in bd human" check_human_deploy
@@ -989,7 +1055,7 @@ let
 
     verify_worktree_cleaned() {
       # Judge cleaned up the worktree and branch during merge
-      ! test -d "$WS"/.wrapix/worktree/* 2>/dev/null
+      ! test -d "$WS"/.wrapix/worktree/*
     }
     subtest "Verify worktree cleaned up" verify_worktree_cleaned
 
@@ -997,6 +1063,7 @@ let
       ! git branch | grep gc-
     }
     subtest "Verify branch cleaned up" verify_branch_cleaned
+
     fi  # end happy-path
 
     if scenario_enabled reconciler-sling; then
@@ -1015,7 +1082,7 @@ let
     subtest "Create reconciler-routed bead" \
       bd create --title="Reconciler worker test" --type=bug --priority=2
 
-    RBEAD=$(bd list --json --title "Reconciler worker test" 2>/dev/null | jq -r '.[0].id')
+    RBEAD=$(bd list --json --title "Reconciler worker test" | jq -r '.[0].id')
 
     subtest "Route bead via gc sling" \
       env GC_CITY="$WS/.gc/home" gc sling worker "$RBEAD" --no-convoy --force
@@ -1024,21 +1091,23 @@ let
     # scale_check counts routed open beads; the deficit vs running sessions
     # becomes "new" tier demand → reconciler starts a worker.
     subtest "Reconciler starts worker for routed bead (wx-y9qco)" \
-      poll_until "ls $WS/.wrapix/worktree/$RBEAD 2>/dev/null" 60
+      poll_until "ls $WS/.wrapix/worktree/$RBEAD" 60
 
     # Clean up: stop the worker container and remove worktree so
     # merge-conflict-reject starts clean.
     cleanup_reconciler_test() {
-      for cid in $(podman ps -q --filter "name=$CITY_NAME-worker" 2>/dev/null); do
-        podman stop -t 3 "$cid" 2>/dev/null || true
-        podman rm -f "$cid" 2>/dev/null || true
-      done
+      local _rc_names
+      case "$CR" in
+        container) _rc_names=$(container list --all --format json | jq -r '.[].configuration.id // empty' | grep "^$CITY_NAME-worker" || true) ;;
+        *) _rc_names=$(podman ps -a --filter "name=$CITY_NAME-worker" --format '{{.Names}}' || true) ;;
+      esac
+      for _cn in $_rc_names; do cr_rm "$_cn"; done
       local wt="$WS/.wrapix/worktree/$RBEAD"
       if [[ -d "$wt" ]]; then
         rm -rf "$wt"
-        git -C "$WS" worktree prune 2>/dev/null || true
+        git -C "$WS" worktree prune || true
       fi
-      git -C "$WS" branch -D "$RBEAD" 2>/dev/null || true
+      git -C "$WS" branch -D "$RBEAD" || true
     }
     subtest "Clean up reconciler test" cleanup_reconciler_test
     fi  # end reconciler-sling
@@ -1064,10 +1133,12 @@ let
       # Stop and remove all gc-owned containers (filter matches $CITY_NAME-*
       # session containers, not the beads-dolt container which is named
       # <basename($WS)>-beads and persists across scenarios).
-      for cid in $(podman ps -a --filter "name=$CITY_NAME-" -q 2>/dev/null); do
-        podman stop -t 3 "$cid" 2>/dev/null || true
-        podman rm -f "$cid" 2>/dev/null || true
-      done
+      local _sg_names
+      case "$CR" in
+        container) _sg_names=$(container list --all --format json | jq -r '.[].configuration.id // empty' | grep "^$CITY_NAME-" || true) ;;
+        *) _sg_names=$(podman ps -a --filter "name=$CITY_NAME-" --format '{{.Names}}' || true) ;;
+      esac
+      for _cn in $_sg_names; do cr_rm "$_cn"; done
       GC_PID=""
       POLL_WATCH_PID=""
 
@@ -1080,7 +1151,7 @@ let
       # output directly — silencing hid real failures (wx-jf95x investigation).
       if ! beads-dolt start "$WS"; then
         echo "FAIL: beads-dolt start failed after gc teardown"
-        podman logs "$(beads-dolt name "$WS")" 2>&1 | tail -20 | sed 's/^/  dolt: /' || true
+        cr_logs_tail "$(beads-dolt name "$WS")" 20 | sed 's/^/  dolt: /' || true
         return 1
       fi
       for _i in $(seq 1 50); do
@@ -1089,8 +1160,7 @@ let
       done
       if ! dolt_reachable; then
         echo "FAIL: dolt not reachable after beads-dolt start"
-        podman ps -a --filter "name=$(beads-dolt name "$WS")" 2>&1 | sed 's/^/  /' || true
-        podman logs "$(beads-dolt name "$WS")" 2>&1 | tail -20 | sed 's/^/  dolt: /' || true
+        cr_logs_tail "$(beads-dolt name "$WS")" 20 | sed 's/^/  dolt: /' || true
         return 1
       fi
       save GC_PID
@@ -1113,7 +1183,7 @@ let
     subtest "Create second bead" \
       bd create --title="Second fix" --type=bug --priority=2
 
-    BEAD2=$(bd list --json --title "Second fix" 2>/dev/null | jq -r '.[0].id')
+    BEAD2=$(bd list --json --title "Second fix" | jq -r '.[0].id')
 
     # Tests the judge's merge conflict handling. The judge owns merge,
     # so conflict rejection is the judge's responsibility.
@@ -1123,7 +1193,7 @@ let
       # Create worktree from BEFORE the conflict commit so branches diverge.
       # Can't use worker-setup.sh here — it branches from HEAD, but we need
       # HEAD~1 to produce a merge conflict (main advanced while worker worked).
-      git worktree add "$wt" -b "$BEAD2" HEAD~1 2>/dev/null || \
+      git worktree add "$wt" -b "$BEAD2" HEAD~1 || \
         git worktree add "$wt" "$BEAD2"
       (cd "$wt" && echo "fix applied v2" > fix.txt && git add fix.txt && git commit -m "fix: resolve second error")
       GC_BEAD_ID="$BEAD2" GC_WORKSPACE="$WS" live worker-collect.sh
@@ -1142,13 +1212,13 @@ let
     subtest "Judge detects merge conflict and rejects" judge_merge_conflict
 
     verify_reopened() {
-      status=$(bd show "$BEAD2" --json 2>/dev/null | jq -r '.[0].status')
+      status=$(bd show "$BEAD2" --json | jq -r '.[0].status')
       [ "$status" = "open" ]
     }
     subtest "Verify bead reopened after conflict" verify_reopened
 
     verify_merge_failure_metadata() {
-      bd show "$BEAD2" --json 2>/dev/null | jq -r '.[0].metadata.merge_failure // empty' 2>/dev/null | grep -qi conflict
+      bd show "$BEAD2" --json | jq -r '.[0].metadata.merge_failure // empty' | grep -qi conflict
     }
     subtest "Verify merge_failure metadata set" verify_merge_failure_metadata
 
@@ -1164,7 +1234,7 @@ let
     subtest "Create escalation bead" \
       bd create --title="Escalation test" --type=bug --priority=2
 
-    BEAD3=$(bd list --json --title "Escalation test" 2>/dev/null | jq -r '.[0].id')
+    BEAD3=$(bd list --json --title "Escalation test" | jq -r '.[0].id')
 
     setup_escalation_worktree() {
       GC_BEAD_ID="$BEAD3" GC_WORKSPACE="$WS" live worker-setup.sh
@@ -1192,23 +1262,23 @@ let
     # Clean up manually (simulates what recovery.sh or human would do)
     cleanup_escalation_worktree() {
       rm -rf "$WS/.wrapix/worktree/$BEAD3"
-      git -C "$WS" worktree prune 2>/dev/null || true
-      git -C "$WS" branch -D "$BEAD3" 2>/dev/null || true
+      git -C "$WS" worktree prune || true
+      git -C "$WS" branch -D "$BEAD3" || true
     }
     subtest "Clean up escalation worktree" cleanup_escalation_worktree
 
     verify_escalation_metadata() {
       local escalated
-      escalated="$(bd show "$BEAD3" --json 2>/dev/null | jq -r '.[0].metadata.escalated // empty')"
+      escalated="$(bd show "$BEAD3" --json | jq -r '.[0].metadata.escalated // empty')"
       [ "$escalated" = "true" ] || { echo "FAIL: escalated metadata not set"; return 1; }
       local reason
-      reason="$(bd show "$BEAD3" --json 2>/dev/null | jq -r '.[0].metadata.escalation_reason // empty')"
+      reason="$(bd show "$BEAD3" --json | jq -r '.[0].metadata.escalation_reason // empty')"
       [ "$reason" = "max_rounds_exceeded" ] || { echo "FAIL: escalation_reason=$reason"; return 1; }
     }
     subtest "Verify escalation metadata set on bead" verify_escalation_metadata
 
     verify_escalation_human_label() {
-      bd show "$BEAD3" --json 2>/dev/null | jq -r '.[0].labels[]' 2>/dev/null | grep -q "human"
+      bd show "$BEAD3" --json | jq -r '.[0].labels[]' | grep -q "human"
     }
     subtest "Verify escalation bead flagged for human review" verify_escalation_human_label
     fi  # end escalation-non-approved
@@ -1221,7 +1291,7 @@ let
     subtest "Create recovery bead" \
       bd create --title="Recovery test" --type=bug --priority=2
 
-    BEAD4=$(bd list --json --title "Recovery test" 2>/dev/null | jq -r '.[0].id')
+    BEAD4=$(bd list --json --title "Recovery test" | jq -r '.[0].id')
 
     # Simulate: worker committed to branch, but monitor died before
     # setting metadata. This is the state after a crash.
@@ -1234,7 +1304,7 @@ let
 
       # Verify: no commit_range metadata (monitor "died")
       local cr
-      cr="$(bd show "$BEAD4" --json 2>/dev/null | jq -r '.[0].metadata.commit_range // empty' 2>/dev/null)" || cr=""
+      cr="$(bd show "$BEAD4" --json | jq -r '.[0].metadata.commit_range // empty')" || cr=""
       [ -z "$cr" ] || { echo "FAIL: commit_range should not be set yet"; return 1; }
     }
     subtest "Simulate crashed worker (commits but no metadata)" setup_crashed_worker
@@ -1246,30 +1316,28 @@ let
 
     verify_recovery_metadata() {
       local cr
-      cr="$(bd show "$BEAD4" --json 2>/dev/null | jq -r '.[0].metadata.commit_range // empty' 2>/dev/null)" || cr=""
+      cr="$(bd show "$BEAD4" --json | jq -r '.[0].metadata.commit_range // empty')" || cr=""
       [ -n "$cr" ] || { echo "FAIL: recovery did not set commit_range"; return 1; }
       echo "  commit_range=$cr"
 
       local bn
-      bn="$(bd show "$BEAD4" --json 2>/dev/null | jq -r '.[0].metadata.branch_name // empty' 2>/dev/null)" || bn=""
+      bn="$(bd show "$BEAD4" --json | jq -r '.[0].metadata.branch_name // empty')" || bn=""
       [ "$bn" = "$BEAD4" ] || { echo "FAIL: recovery did not set branch_name (got: $bn)"; return 1; }
     }
     subtest "Verify recovery set commit_range metadata" verify_recovery_metadata
 
-    # Gate should now succeed (metadata exists)
     verify_gate_reads_metadata() {
       local cr
-      cr="$(bd show "$BEAD4" --json 2>/dev/null | jq -r '.[0].metadata.commit_range // empty' 2>/dev/null)" || cr=""
+      cr="$(bd show "$BEAD4" --json | jq -r '.[0].metadata.commit_range // empty')" || cr=""
       [ -n "$cr" ]
     }
     subtest "Verify gate can find metadata after recovery" verify_gate_reads_metadata
 
-    # Clean up recovery worktree
     cleanup_recovery() {
       local wt="$WS/.wrapix/worktree/$BEAD4"
       rm -rf "$wt"
-      git -C "$WS" worktree prune 2>/dev/null || true
-      git -C "$WS" branch -D "$BEAD4" 2>/dev/null || true
+      git -C "$WS" worktree prune || true
+      git -C "$WS" branch -D "$BEAD4" || true
     }
     subtest "Clean up recovery worktree" cleanup_recovery
     fi  # end recovery-monitor-died
@@ -1282,7 +1350,7 @@ let
     subtest "Create no-op bead" \
       bd create --title="No-op worker test" --type=bug --priority=2
 
-    BEAD5=$(bd list --json --title "No-op worker test" 2>/dev/null | jq -r '.[0].id')
+    BEAD5=$(bd list --json --title "No-op worker test" | jq -r '.[0].id')
 
     # Worker started but exited without committing — no commits beyond main.
     setup_noop_worker() {
@@ -1298,7 +1366,7 @@ let
 
     verify_noop_no_metadata() {
       local cr
-      cr="$(bd show "$BEAD5" --json 2>/dev/null | jq -r '.[0].metadata.commit_range // empty' 2>/dev/null)" || cr=""
+      cr="$(bd show "$BEAD5" --json | jq -r '.[0].metadata.commit_range // empty')" || cr=""
       [ -z "$cr" ] || { echo "FAIL: commit_range should not be set for no-op worker (got: $cr)"; return 1; }
     }
     subtest "Verify no metadata set for no-op worker" verify_noop_no_metadata
@@ -1316,8 +1384,8 @@ let
     cleanup_noop() {
       local wt="$WS/.wrapix/worktree/$BEAD5"
       rm -rf "$wt"
-      git -C "$WS" worktree prune 2>/dev/null || true
-      git -C "$WS" branch -D "$BEAD5" 2>/dev/null || true
+      git -C "$WS" worktree prune || true
+      git -C "$WS" branch -D "$BEAD5" || true
     }
     subtest "Clean up no-op worktree" cleanup_noop
     fi  # end recovery-empty-branch
@@ -1330,7 +1398,7 @@ let
     subtest "Create worker-setup test bead" \
       bd create --title="Worker setup test" --type=task --priority=2
 
-    BEAD6=$(bd list --json --title "Worker setup test" 2>/dev/null | jq -r '.[0].id')
+    BEAD6=$(bd list --json --title "Worker setup test" | jq -r '.[0].id')
 
     verify_worker_setup() {
       [ -n "$BEAD6" ] && [ "$BEAD6" != "null" ]
@@ -1340,7 +1408,7 @@ let
       [ -d "$wt" ] || { echo "FAIL: worktree not created at $wt"; return 1; }
 
       local status
-      status="$(bd show "$BEAD6" --json 2>/dev/null | jq -r '.[0].status')"
+      status="$(bd show "$BEAD6" --json | jq -r '.[0].status')"
       [ "$status" = "in_progress" ] || { echo "FAIL: status=$status, expected in_progress"; return 1; }
 
       [ -f "$wt/.task" ] || { echo "FAIL: .task file not created"; return 1; }
@@ -1356,12 +1424,12 @@ let
       GC_BEAD_ID="$BEAD6" GC_WORKSPACE="$WS" live worker-collect.sh
 
       local cr
-      cr="$(bd show "$BEAD6" --json 2>/dev/null | jq -r '.[0].metadata.commit_range // empty')"
+      cr="$(bd show "$BEAD6" --json | jq -r '.[0].metadata.commit_range // empty')"
       [ -n "$cr" ] || { echo "FAIL: commit_range not set"; return 1; }
       echo "  commit_range=$cr"
 
       local bn
-      bn="$(bd show "$BEAD6" --json 2>/dev/null | jq -r '.[0].metadata.branch_name // empty')"
+      bn="$(bd show "$BEAD6" --json | jq -r '.[0].metadata.branch_name // empty')"
       [ "$bn" = "$BEAD6" ] || { echo "FAIL: branch_name=$bn, expected $BEAD6"; return 1; }
     }
     subtest "worker-collect.sh sets commit_range and branch_name" verify_worker_collect
@@ -1370,7 +1438,7 @@ let
     subtest "Create worker-collect no-op bead" \
       bd create --title="Collect no-op test" --type=task --priority=2
 
-    BEAD7=$(bd list --json --title "Collect no-op test" 2>/dev/null | jq -r '.[0].id')
+    BEAD7=$(bd list --json --title "Collect no-op test" | jq -r '.[0].id')
 
     verify_collect_noop() {
       [ -n "$BEAD7" ] && [ "$BEAD7" != "null" ]
@@ -1378,7 +1446,7 @@ let
       GC_BEAD_ID="$BEAD7" GC_WORKSPACE="$WS" live worker-collect.sh
 
       local cr
-      cr="$(bd show "$BEAD7" --json 2>/dev/null | jq -r '.[0].metadata.commit_range // empty')"
+      cr="$(bd show "$BEAD7" --json | jq -r '.[0].metadata.commit_range // empty')"
       [ -z "$cr" ] || { echo "FAIL: commit_range should be empty for no-op (got: $cr)"; return 1; }
     }
     subtest "worker-collect.sh no-ops on empty branch" verify_collect_noop
@@ -1387,8 +1455,8 @@ let
       for b in "$BEAD6" "$BEAD7"; do
         local wt="$WS/.wrapix/worktree/$b"
         [ -d "$wt" ] && rm -rf "$wt"
-        git -C "$WS" worktree prune 2>/dev/null || true
-        git -C "$WS" branch -D "$b" 2>/dev/null || true
+        git -C "$WS" worktree prune || true
+        git -C "$WS" branch -D "$b" || true
       done
     }
     subtest "Clean up worker-setup-collect" cleanup_phase6
@@ -1402,7 +1470,7 @@ let
     subtest "Create rebase-success bead" \
       bd create --title="Rebase success test" --type=bug --priority=2
 
-    BEAD8=$(bd list --json --title "Rebase success test" 2>/dev/null | jq -r '.[0].id')
+    BEAD8=$(bd list --json --title "Rebase success test" | jq -r '.[0].id')
 
     setup_rebase_success() {
       [ -n "$BEAD8" ] && [ "$BEAD8" != "null" ]
@@ -1418,7 +1486,7 @@ let
       # so a stale index.lock from a dying monitor pipeline would cause
       # checkout to fail silently and the commit to land on the wrong branch.
       git -C "$WS" add .beads/ && git -C "$WS" diff --cached --quiet || git -C "$WS" commit -m "beads: rebase setup"
-      git -C "$WS" checkout main 2>/dev/null
+      git -C "$WS" checkout main
       local current_branch
       current_branch="$(git -C "$WS" rev-parse --abbrev-ref HEAD)"
       [[ "$current_branch" == "main" ]] || { echo "FAIL: checkout main failed, HEAD on $current_branch"; return 1; }
@@ -1485,7 +1553,9 @@ let
 
     # Restart gc daemon so gate.sh's gc session submit uses the live path.
     restart_gc_for_gate() {
-      podman rm -f "''${CITY_NAME}-mayor" "''${CITY_NAME}-scout" "''${CITY_NAME}-judge" 2>/dev/null || true
+      cr_rm "''${CITY_NAME}-mayor"
+      cr_rm "''${CITY_NAME}-scout"
+      cr_rm "''${CITY_NAME}-judge"
       setsid env PATH="$LIVE_PATH" GC_NUDGE_IDLE_TIMEOUT=1 "$WS/.gc/scripts/entrypoint.sh" >"$WS/gc-gate.log" 2>&1 &
       GC_PID=$!
       POLL_WATCH_PID="$GC_PID"
@@ -1493,7 +1563,7 @@ let
       poll_until 'test -S "$WS/.gc/home/.gc/controller.sock" || ! kill -0 "$GC_PID" 2>/dev/null' 15
       if ! kill -0 "$GC_PID" 2>/dev/null; then
         echo "gc daemon died before gate tests:"
-        tail -40 "$WS/gc-gate.log" 2>/dev/null | sed 's/^/  /' || true
+        tail -40 "$WS/gc-gate.log" | sed 's/^/  /' || true
         return 1
       fi
       # Point bd at the dolt entrypoint just started — without this, bd from
@@ -1517,7 +1587,7 @@ let
 
     setup_gate_approve() {
       bd create --title="Gate approve test" --type=task --priority=2
-      BEAD9=$(bd list --json --title "Gate approve test" 2>/dev/null | jq -r '.[0].id')
+      BEAD9=$(bd list --json --title "Gate approve test" | jq -r '.[0].id')
       [ -n "$BEAD9" ] && [ "$BEAD9" != "null" ]
       bd update "$BEAD9" --status=in_progress
       git add .beads/ && git diff --cached --quiet || git commit -m "beads: gate approve setup"
@@ -1546,7 +1616,7 @@ let
 
     setup_gate_reject() {
       bd create --title="Gate reject test" --type=task --priority=2
-      BEAD10=$(bd list --json --title "Gate reject test" 2>/dev/null | jq -r '.[0].id')
+      BEAD10=$(bd list --json --title "Gate reject test" | jq -r '.[0].id')
       [ -n "$BEAD10" ] && [ "$BEAD10" != "null" ]
       bd update "$BEAD10" --status=in_progress
       git add .beads/ && git diff --cached --quiet || git commit -m "beads: gate reject setup"
@@ -1575,7 +1645,7 @@ let
 
     setup_gate_resubmit() {
       bd create --title="Gate resubmit test" --type=task --priority=2
-      BEAD11=$(bd list --json --title "Gate resubmit test" 2>/dev/null | jq -r '.[0].id')
+      BEAD11=$(bd list --json --title "Gate resubmit test" | jq -r '.[0].id')
       [ -n "$BEAD11" ] && [ "$BEAD11" != "null" ]
       bd update "$BEAD11" --status=in_progress
       git add .beads/ && git diff --cached --quiet || git commit -m "beads: gate resubmit setup"
@@ -1617,15 +1687,17 @@ let
         kill -9 -"$GC_PID" 2>/dev/null || true
         wait "$GC_PID" 2>/dev/null || true
       fi
-      for cid in $(podman ps -a --filter "name=$CITY_NAME-" -q 2>/dev/null); do
-        podman stop -t 3 "$cid" 2>/dev/null || true
-        podman rm -f "$cid" 2>/dev/null || true
-      done
+      local _sgg_names
+      case "$CR" in
+        container) _sgg_names=$(container list --all --format json | jq -r '.[].configuration.id // empty' | grep "^$CITY_NAME-" || true) ;;
+        *) _sgg_names=$(podman ps -a --filter "name=$CITY_NAME-" --format '{{.Names}}' || true) ;;
+      esac
+      for _cn in $_sgg_names; do cr_rm "$_cn"; done
       GC_PID=""
       POLL_WATCH_PID=""
       if ! beads-dolt start "$WS"; then
         echo "FAIL: beads-dolt start failed after gate teardown"
-        podman logs "$(beads-dolt name "$WS")" 2>&1 | tail -20 | sed 's/^/  dolt: /' || true
+        cr_logs_tail "$(beads-dolt name "$WS")" 20 | sed 's/^/  dolt: /' || true
         return 1
       fi
       for _i in $(seq 1 50); do
@@ -1634,8 +1706,7 @@ let
       done
       if ! dolt_reachable; then
         echo "FAIL: dolt not reachable after beads-dolt start"
-        podman ps -a --filter "name=$(beads-dolt name "$WS")" 2>&1 | sed 's/^/  /' || true
-        podman logs "$(beads-dolt name "$WS")" 2>&1 | tail -20 | sed 's/^/  dolt: /' || true
+        cr_logs_tail "$(beads-dolt name "$WS")" 20 | sed 's/^/  dolt: /' || true
         return 1
       fi
       save GC_PID
@@ -1728,7 +1799,7 @@ let
     subtest "Create dispatch bead" \
       bd create --title="Dispatch cooldown test" --type=bug --priority=2
 
-    BEAD_DISPATCH=$(bd list --json --title "Dispatch cooldown test" 2>/dev/null | jq -r '.[0].id')
+    BEAD_DISPATCH=$(bd list --json --title "Dispatch cooldown test" | jq -r '.[0].id')
 
     setup_dispatch() {
       [ -n "$BEAD_DISPATCH" ] && [ "$BEAD_DISPATCH" != "null" ]
@@ -1777,7 +1848,7 @@ let
 
     cleanup_dispatch() {
       rm -f "$WS/.wrapix/state/last-dispatch" "$WS/.wrapix/state/rate-limited"
-      bd close "$BEAD_DISPATCH" 2>/dev/null || true
+      bd close "$BEAD_DISPATCH" || true
     }
     subtest "Clean up dispatch test" cleanup_dispatch
     fi  # end dispatch-cooldown
@@ -1790,7 +1861,7 @@ let
     subtest "Create post-gate-close bead" \
       bd create --title="Post-gate close test" --type=bug --priority=2
 
-    BEAD11=$(bd list --json --title "Post-gate close test" 2>/dev/null | jq -r '.[0].id')
+    BEAD11=$(bd list --json --title "Post-gate close test" | jq -r '.[0].id')
 
     setup_post_gate_close() {
       [ -n "$BEAD11" ] && [ "$BEAD11" != "null" ]
@@ -1809,7 +1880,7 @@ let
 
     verify_post_gate_closed_bead() {
       local status
-      status="$(bd show "$BEAD11" --json 2>/dev/null | jq -r '.[0].status')"
+      status="$(bd show "$BEAD11" --json | jq -r '.[0].status')"
       [ "$status" = "closed" ] || { echo "FAIL: bead status=$status, expected closed"; return 1; }
     }
     subtest "Verify post-gate closed work bead" verify_post_gate_closed_bead
@@ -1824,7 +1895,7 @@ let
       bd create --title="Retry notes test" --type=bug --priority=2 \
         --description="Fix the flaky parser"
 
-    BEAD12=$(bd list --json --title "Retry notes test" 2>/dev/null | jq -r '.[0].id')
+    BEAD12=$(bd list --json --title "Retry notes test" | jq -r '.[0].id')
 
     setup_retry_notes() {
       [ -n "$BEAD12" ] && [ "$BEAD12" != "null" ]
@@ -1847,8 +1918,8 @@ let
     cleanup_phase10() {
       local wt="$WS/.wrapix/worktree/$BEAD12"
       [ -d "$wt" ] && rm -rf "$wt"
-      git -C "$WS" worktree prune 2>/dev/null || true
-      git -C "$WS" branch -D "$BEAD12" 2>/dev/null || true
+      git -C "$WS" worktree prune || true
+      git -C "$WS" branch -D "$BEAD12" || true
     }
     subtest "Clean up retry-judge-notes" cleanup_phase10
     fi  # end retry-judge-notes
@@ -1861,7 +1932,7 @@ let
     subtest "Create orphan-cleanup bead" \
       bd create --title="Orphan cleanup test" --type=bug --priority=2
 
-    BEAD13=$(bd list --json --title "Orphan cleanup test" 2>/dev/null | jq -r '.[0].id')
+    BEAD13=$(bd list --json --title "Orphan cleanup test" | jq -r '.[0].id')
 
     setup_orphan_worktree() {
       [ -n "$BEAD13" ] && [ "$BEAD13" != "null" ]
@@ -1955,7 +2026,7 @@ let
 
     verify_gc_home_no_workspace_provider() {
       # The live gc home (staged by entrypoint) must not have workspace.provider
-      if grep -q 'provider = "claude"' "$WS/.gc/home/city.toml" 2>/dev/null; then
+      if grep -q 'provider = "claude"' "$WS/.gc/home/city.toml"; then
         echo "FAIL: gc home city.toml has workspace.provider"
         grep provider "$WS/.gc/home/city.toml"
         return 1
@@ -1979,7 +2050,7 @@ let
       # (creates worktree) rather than persistent_start (tmux).
       local test_bead
       bd create --title="Worker detection test" --type=task --priority=2
-      test_bead=$(bd list --json --title "Worker detection test" 2>/dev/null | jq -r '.[0].id')
+      test_bead=$(bd list --json --title "Worker detection test" | jq -r '.[0].id')
       [ -n "$test_bead" ] && [ "$test_bead" != "null" ] || { echo "FAIL: could not create test bead"; return 1; }
       bd update "$test_bead" --set-metadata "gc.routed_to=worker"
 
@@ -2013,11 +2084,10 @@ let
       fi
 
       # Clean up
-      podman stop "$CITY_NAME-$test_bead" 2>/dev/null || true
-      podman rm -f "$CITY_NAME-$test_bead" 2>/dev/null || true
+      cr_rm "$CITY_NAME-$test_bead"
       rm -rf "$WS/.wrapix/worktree/$test_bead"
-      git -C "$WS" worktree prune 2>/dev/null || true
-      git -C "$WS" branch -D "$test_bead" 2>/dev/null || true
+      git -C "$WS" worktree prune || true
+      git -C "$WS" branch -D "$test_bead" || true
     }
     subtest "Provider detects worker from agent_template, not name (wx-aqe4z)" verify_worker_detection_by_template
 
@@ -2026,10 +2096,10 @@ let
       # A session named "worker-test" should always be detected as a worker.
       # Re-ensure network exists — the previous test's container cleanup can
       # leave netavark in a state where the network bridge is torn down.
-      podman network create "$TEST_NETWORK" >/dev/null 2>&1 || true
+      cr_network_create "$TEST_NETWORK"
       local test_bead
       bd create --title="Name-based worker test" --type=task --priority=2
-      test_bead=$(bd list --json --title "Name-based worker test" 2>/dev/null | jq -r '.[0].id')
+      test_bead=$(bd list --json --title "Name-based worker test" | jq -r '.[0].id')
       [ -n "$test_bead" ] && [ "$test_bead" != "null" ] || { echo "FAIL: could not create test bead"; return 1; }
       bd update "$test_bead" --set-metadata "gc.routed_to=worker"
 
@@ -2055,11 +2125,10 @@ let
       fi
 
       # Clean up
-      podman stop "$CITY_NAME-worker-$test_bead" 2>/dev/null || true
-      podman rm -f "$CITY_NAME-worker-$test_bead" 2>/dev/null || true
+      cr_rm "$CITY_NAME-worker-$test_bead"
       rm -rf "$WS/.wrapix/worktree/$test_bead"
-      git -C "$WS" worktree prune 2>/dev/null || true
-      git -C "$WS" branch -D "$test_bead" 2>/dev/null || true
+      git -C "$WS" worktree prune || true
+      git -C "$WS" branch -D "$test_bead" || true
     }
     subtest "Name-based worker detection still works (wx-aqe4z)" verify_name_based_worker_still_works
     fi  # end provider-worker-name-routing
@@ -2077,7 +2146,7 @@ let
     verify_provider_extracts_issue() {
       local test_bead
       bd create --title="Issue extraction test" --type=task --priority=2
-      test_bead=$(bd list --json --title "Issue extraction test" 2>/dev/null | jq -r '.[0].id')
+      test_bead=$(bd list --json --title "Issue extraction test" | jq -r '.[0].id')
       [ -n "$test_bead" ] && [ "$test_bead" != "null" ] || { echo "FAIL: could not create test bead"; return 1; }
       bd update "$test_bead" --set-metadata "gc.routed_to=worker"
 
@@ -2109,11 +2178,10 @@ let
       fi
 
       # Clean up
-      podman stop "$CITY_NAME-issue-$test_bead" 2>/dev/null || true
-      podman rm -f "$CITY_NAME-issue-$test_bead" 2>/dev/null || true
+      cr_rm "$CITY_NAME-issue-$test_bead"
       rm -rf "$WS/.wrapix/worktree/$test_bead"
-      git -C "$WS" worktree prune 2>/dev/null || true
-      git -C "$WS" branch -D "$test_bead" 2>/dev/null || true
+      git -C "$WS" worktree prune || true
+      git -C "$WS" branch -D "$test_bead" || true
     }
     subtest "Provider extracts issue from start JSON (wx-fsqcz)" verify_provider_extracts_issue
     fi  # end provider-extracts-issue
@@ -2163,12 +2231,22 @@ let
 
     config_drift_setup() {
       # Start a labeled container simulating a leftover persistent session.
-      podman run -d --replace \
-        --name $CITY_NAME-stale-scout \
-        --entrypoint "" \
-        --network "$TEST_NETWORK" \
-        --label "gc-city=$CITY_NAME" \
-        "${liveCity.imageName}" sleep 3600
+      cr_rm "$CITY_NAME-stale-scout"
+      case "$CR" in
+        container)
+          container run -d --name "$CITY_NAME-stale-scout" --network default \
+            -- "${liveCity.imageName}" sleep 3600
+          cr_set_labels "$CITY_NAME-stale-scout" "gc-city=$CITY_NAME" "gc-role=scout"
+          ;;
+        *)
+          podman run -d --replace \
+            --name $CITY_NAME-stale-scout \
+            --entrypoint "" \
+            --network "$TEST_NETWORK" \
+            --label "gc-city=$CITY_NAME" \
+            "${liveCity.imageName}" sleep 3600
+          ;;
+      esac
 
       # The happy-path entrypoint wrote .gc/config.hash with the current
       # city.toml hash. That file is the "previous run" state. Now mutate
@@ -2176,7 +2254,7 @@ let
       echo "# drift-marker $(date +%s)" >> "$WS/city.toml"
 
       # Verify precondition: stale container is running
-      if [[ "$(podman inspect --format '{{.State.Running}}' $CITY_NAME-stale-scout 2>/dev/null)" != "true" ]]; then
+      if ! cr_is_running "$CITY_NAME-stale-scout"; then
         echo "FAIL: stale container should be running before entrypoint"
         return 1
       fi
@@ -2200,8 +2278,8 @@ let
 
       # Wait for drift detection or gc start
       for _i in $(seq 1 60); do
-        if grep -q "Config drift detected" "$WS/drift.log" 2>/dev/null || \
-           grep -q "City started" "$WS/drift.log" 2>/dev/null || \
+        if grep -q "Config drift detected" "$WS/drift.log" || \
+           grep -q "City started" "$WS/drift.log" || \
            ! kill -0 "$DRIFT_PID" 2>/dev/null; then
           break
         fi
@@ -2209,11 +2287,11 @@ let
       done
 
       # Poll until the stale container is stopped (rather than sleeping a fixed interval)
-      poll_until '! podman inspect --format "{{.State.Running}}" $CITY_NAME-stale-scout 2>/dev/null | grep -q true' 15
+      poll_until '! cr_is_running "$CITY_NAME-stale-scout"' 15
       echo "  PASS: stale container killed"
 
       # Verify the entrypoint logged the drift
-      if ! grep -q "Config drift detected" "$WS/drift.log" 2>/dev/null; then
+      if ! grep -q "Config drift detected" "$WS/drift.log"; then
         echo "FAIL: no drift log message in entrypoint output"
         cat "$WS/drift.log" | sed 's/^/  /'
         kill -TERM -"$DRIFT_PID" 2>/dev/null || true
@@ -2240,11 +2318,13 @@ let
       wait "$DRIFT_PID" 2>/dev/null || true
 
       # Clean up containers
-      podman rm -f $CITY_NAME-stale-scout 2>/dev/null || true
-      for cid in $(podman ps -a --filter "name=$CITY_NAME-" -q 2>/dev/null); do
-        podman stop -t 3 "$cid" 2>/dev/null || true
-        podman rm -f "$cid" 2>/dev/null || true
-      done
+      cr_rm "$CITY_NAME-stale-scout"
+      local _drift_names
+      case "$CR" in
+        container) _drift_names=$(container list --all --format json | jq -r '.[].configuration.id // empty' | grep "^$CITY_NAME-" || true) ;;
+        *) _drift_names=$(podman ps -a --filter "name=$CITY_NAME-" --format '{{.Names}}' || true) ;;
+      esac
+      for _cn in $_drift_names; do cr_rm "$_cn"; done
     }
     subtest "Config drift: entrypoint kills stale containers (wx-i42sb)" config_drift_restart
     fi  # end config-drift-kills-stale
@@ -2259,10 +2339,10 @@ let
     # ================================================================
 
     verify_worker_detection_by_bead_metadata() {
-      podman network create "$TEST_NETWORK" >/dev/null 2>&1 || true
+      cr_network_create "$TEST_NETWORK"
       local test_bead
       bd create --title="Session name detection test" --type=task --priority=2
-      test_bead=$(bd list --json --title "Session name detection test" 2>/dev/null | jq -r '.[0].id')
+      test_bead=$(bd list --json --title "Session name detection test" | jq -r '.[0].id')
       [ -n "$test_bead" ] && [ "$test_bead" != "null" ] || { echo "FAIL: could not create test bead"; return 1; }
       bd update "$test_bead" --set-metadata "gc.routed_to=worker"
       bd update "$test_bead" --set-metadata "agent_template=worker"
@@ -2289,11 +2369,10 @@ let
       }
 
       # Clean up
-      podman stop "$CITY_NAME-s-wx-$test_bead" 2>/dev/null || true
-      podman rm -f "$CITY_NAME-s-wx-$test_bead" 2>/dev/null || true
+      cr_rm "$CITY_NAME-s-wx-$test_bead"
       rm -rf "$WS/.wrapix/worktree/$test_bead"
-      git -C "$WS" worktree prune 2>/dev/null || true
-      git -C "$WS" branch -D "$test_bead" 2>/dev/null || true
+      git -C "$WS" worktree prune || true
+      git -C "$WS" branch -D "$test_bead" || true
     }
     subtest "Provider detects worker from bead metadata for s-wx-* names (wx-pq03c)" verify_worker_detection_by_bead_metadata
     fi  # end worker-detection-bead-metadata
@@ -2308,7 +2387,7 @@ let
       stderr_file="$(mktemp)"
       bd create --title="Gate logging test" --type=task --priority=2
       local bead_log
-      bead_log=$(bd list --json --title "Gate logging test" 2>/dev/null | jq -r '.[0].id')
+      bead_log=$(bd list --json --title "Gate logging test" | jq -r '.[0].id')
       bd update "$bead_log" --status=in_progress
       # No commit_range — gate will poll and timeout
       local exit_code=0
@@ -2333,7 +2412,7 @@ let
     verify_configurable_commit_range_timeout() {
       bd create --title="Timeout config test" --type=task --priority=2
       local bead_t
-      bead_t=$(bd list --json --title "Timeout config test" 2>/dev/null | jq -r '.[0].id')
+      bead_t=$(bd list --json --title "Timeout config test" | jq -r '.[0].id')
       bd update "$bead_t" --status=in_progress
       local start_time end_time elapsed exit_code=0
       start_time=$(date +%s)
@@ -2353,10 +2432,10 @@ let
     # ================================================================
 
     verify_worker_prestart_guard() {
-      podman network create "$TEST_NETWORK" >/dev/null 2>&1 || true
+      cr_network_create "$TEST_NETWORK"
       local test_bead
       bd create --title="Pre-start guard test" --type=task --priority=2
-      test_bead=$(bd list --json --title "Pre-start guard test" 2>/dev/null | jq -r '.[0].id')
+      test_bead=$(bd list --json --title "Pre-start guard test" | jq -r '.[0].id')
       bd update "$test_bead" --set-metadata "gc.routed_to=worker"
 
       local container_name="$CITY_NAME-worker-$test_bead"
@@ -2372,10 +2451,13 @@ let
         2>&1
 
       # Wait for container to be running (agent.sh starts tmux session)
-      poll_until "podman inspect --format '{{.State.Status}}' $container_name 2>/dev/null | grep -q running" 10
+      poll_until "cr_is_running $container_name" 10
 
       local cid_before
-      cid_before="$(podman inspect --format '{{.Id}}' "$container_name")"
+      case "$CR" in
+        container) cid_before="$(container inspect "$container_name" | jq -r '.[0].id // empty')" ;;
+        *) cid_before="$(podman inspect --format '{{.Id}}' "$container_name")" ;;
+      esac
 
       # Second start should detect running container and no-op
       local exit_code=0
@@ -2387,29 +2469,31 @@ let
       [ "$exit_code" -eq 0 ] || { echo "FAIL: second start should exit 0"; return 1; }
 
       local cid_after
-      cid_after="$(podman inspect --format '{{.Id}}' "$container_name")"
+      case "$CR" in
+        container) cid_after="$(container inspect "$container_name" | jq -r '.[0].id // empty')" ;;
+        *) cid_after="$(podman inspect --format '{{.Id}}' "$container_name")" ;;
+      esac
       [ "$cid_before" = "$cid_after" ] || { echo "FAIL: container was replaced (IDs differ)"; return 1; }
 
       # Clean up
-      podman stop "$container_name" 2>/dev/null || true
-      podman rm -f "$container_name" 2>/dev/null || true
+      cr_rm "$container_name"
       rm -rf "$WS/.wrapix/worktree/$test_bead"
-      git -C "$WS" worktree prune 2>/dev/null || true
-      git -C "$WS" branch -D "$test_bead" 2>/dev/null || true
+      git -C "$WS" worktree prune || true
+      git -C "$WS" branch -D "$test_bead" || true
     }
     subtest "Worker pre-start guard prevents double-start (wx-tvj7o)" verify_worker_prestart_guard
     fi  # end worker-prestart-guard
 
     if scenario_enabled stopped-container-preserved; then
     # ================================================================
-    # stopped-container-preserved: podman logs available (wx-4041e)
+    # stopped-container-preserved: container logs available (wx-4041e)
     # ================================================================
 
     verify_stopped_container_preserved() {
-      podman network create "$TEST_NETWORK" >/dev/null 2>&1 || true
+      cr_network_create "$TEST_NETWORK"
       local test_bead
       bd create --title="Container preserve test" --type=task --priority=2
-      test_bead=$(bd list --json --title "Container preserve test" 2>/dev/null | jq -r '.[0].id')
+      test_bead=$(bd list --json --title "Container preserve test" | jq -r '.[0].id')
       bd update "$test_bead" --set-metadata "gc.routed_to=worker"
 
       local start_json='{"agent_template":"worker","issue":"'"$test_bead"'"}'
@@ -2418,29 +2502,29 @@ let
       GC_BEADS_DOLT_CONTAINER="$DOLT_CONTAINER" GC_DOLT_PORT="$DOLT_PORT" \
         bash -c "echo '$start_json' | PATH=\"$LIVE_PATH\" bash $WS/.gc/scripts/provider.sh start worker-$test_bead" 2>&1
 
-      poll_until "podman inspect --format '{{.State.Running}}' $CITY_NAME-worker-$test_bead 2>/dev/null | grep -q true" 45
+      poll_until "cr_is_running $CITY_NAME-worker-$test_bead" 45
 
       # Stop via provider
       GC_AGENT_TEMPLATE=worker GC_CITY_NAME="$CITY_NAME" GC_WORKSPACE="$WS" \
         echo "" | PATH="$LIVE_PATH" bash "$WS/.gc/scripts/provider.sh" stop "worker-$test_bead" 2>&1
 
       # Container should still exist (stopped, not removed)
-      podman inspect "$CITY_NAME-worker-$test_bead" >/dev/null 2>&1 || {
+      cr_exists "$CITY_NAME-worker-$test_bead" || {
         echo "FAIL: stopped worker container was removed"
         return 1
       }
 
-      # podman logs should still work
-      podman logs "$CITY_NAME-worker-$test_bead" >/dev/null 2>&1 || {
+      # container logs should still work
+      cr_logs "$CITY_NAME-worker-$test_bead" >/dev/null 2>&1 || {
         echo "FAIL: cannot read logs from stopped worker container"
         return 1
       }
 
       # Clean up
-      podman rm -f "$CITY_NAME-worker-$test_bead" 2>/dev/null || true
+      cr_rm "$CITY_NAME-worker-$test_bead"
       rm -rf "$WS/.wrapix/worktree/$test_bead"
-      git -C "$WS" worktree prune 2>/dev/null || true
-      git -C "$WS" branch -D "$test_bead" 2>/dev/null || true
+      git -C "$WS" worktree prune || true
+      git -C "$WS" branch -D "$test_bead" || true
     }
     subtest "Stopped worker container preserved for log inspection (wx-4041e)" verify_stopped_container_preserved
     fi  # end stopped-container-preserved
@@ -2453,19 +2537,26 @@ let
     # ================================================================
 
     verify_worker_done_marker() {
-      podman network create "$TEST_NETWORK" >/dev/null 2>&1 || true
+      cr_network_create "$TEST_NETWORK"
       local test_bead="wx-donemarker-$RUN_ID"
       local cname="$CITY_NAME-worker-$test_bead"
       local marker="$WS/.wrapix/state/worker-$test_bead.done"
 
       # Create a stopped worker-named container with a chosen exit code.
       # Runs the real agent image (not a fake) so the harness exercises
-      # the same podman inspect code path provider.sh uses in prod.
+      # the same container inspect code path provider.sh uses in prod.
       run_worker_exit() {
         local exit_code="$1"
-        podman rm -f "$cname" 2>/dev/null || true
-        podman run --name "$cname" --pull=never --entrypoint "" \
-          "${liveCity.imageName}" /bin/sh -c "exit $exit_code" || true
+        cr_rm "$cname"
+        case "$CR" in
+          container)
+            container run --name "$cname" -- "${liveCity.imageName}" /bin/sh -c "exit $exit_code" || true
+            ;;
+          *)
+            podman run --name "$cname" --pull=never --entrypoint "" \
+              "${liveCity.imageName}" /bin/sh -c "exit $exit_code" || true
+            ;;
+        esac
       }
 
       is_running() {
@@ -2497,7 +2588,7 @@ let
       [ "$result" = "false" ] || { echo "FAIL: exit=1 no marker → expected false, got '$result'"; return 1; }
 
       # Cleanup
-      podman rm -f "$cname" 2>/dev/null || true
+      cr_rm "$cname"
       rm -f "$marker"
     }
     subtest "is-running honors worker .done marker (wx-92md7)" verify_worker_done_marker

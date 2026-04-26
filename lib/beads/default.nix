@@ -385,6 +385,17 @@ let
         cr_logs_tail "$name" 10 >&2
         return 1
       fi
+
+      ${
+        if isDarwin then
+          ''
+            if [[ "$CR" == "container" ]]; then
+              ${shellLib.fixVmnetRoute}
+            fi
+          ''
+        else
+          ""
+      }
     }
 
     cmd_stop() {

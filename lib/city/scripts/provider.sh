@@ -127,10 +127,20 @@ container_volumes_worker() {
   local worktree_path="$1" beads_staging="$2" task_file="$3" log_dir="$4"
   echo "-v $(_host_path "${GC_WORKSPACE}/${worktree_path}"):/workspace:rw"
   echo "-v $(_host_path "${GC_WORKSPACE}/.git"):/mnt/git:rw"
-  echo "-v $(_host_path "${GC_WORKSPACE}/.wrapix"):/workspace/.wrapix:ro"
   echo "-v $(_host_path "${beads_staging}"):/workspace/.beads"
-  echo "-v $(_host_path "${task_file}"):/workspace/.task:ro"
   echo "-v $(_host_path "${log_dir}"):/workspace/logs:rw"
+  case "$CR" in
+    container)
+      # Apple Containers VirtioFS: file-level sub-mounts cause permission
+      # errors and :ro sub-mounts on a :rw parent conflict.  The .task file
+      # is already in the worktree; .wrapix needs rw for session logging.
+      echo "-v $(_host_path "${GC_WORKSPACE}/.wrapix"):/workspace/.wrapix:rw"
+      ;;
+    *)
+      echo "-v $(_host_path "${GC_WORKSPACE}/.wrapix"):/workspace/.wrapix:ro"
+      echo "-v $(_host_path "${task_file}"):/workspace/.task:ro"
+      ;;
+  esac
 }
 
 # ---------------------------------------------------------------------------
@@ -303,13 +313,27 @@ resource_flags_apple() {
 # in each start function.  Uses the same echo-flags pattern as
 # container_labels() and resource_flags().
 #
-# bd inside the container reaches dolt through the mounted Unix socket
-# at /workspace/.wrapix/dolt.sock. GC_DOLT_HOST/PORT remain for gc's
-# own TCP fallback but bd itself uses the socket exclusively.
+# On Linux, bd inside the container reaches dolt through the mounted
+# Unix socket at /workspace/.wrapix/dolt.sock.  On Darwin, VirtioFS
+# creates socket files but does not relay connections, so bd uses TCP
+# via the dolt container hostname on the shared network.
 container_env() {
   local dolt_host="$1" dolt_port="$2"
   echo "-e BEADS_DOLT_AUTO_START=0"
-  echo "-e BEADS_DOLT_SERVER_SOCKET=/workspace/.wrapix/dolt.sock"
+  case "$CR" in
+    container)
+      # Apple Containers: no DNS for container names — resolve to IP.
+      local _dolt_ip
+      _dolt_ip=$(container inspect "$dolt_host" 2>/dev/null \
+        | jq -r '.[0].networks[0].ipv4Address // empty' \
+        | cut -d/ -f1) || _dolt_ip=""
+      echo "-e BEADS_DOLT_SERVER_HOST=${_dolt_ip:-$dolt_host}"
+      echo "-e BEADS_DOLT_SERVER_PORT=${dolt_port}"
+      ;;
+    *)
+      echo "-e BEADS_DOLT_SERVER_SOCKET=/workspace/.wrapix/dolt.sock"
+      ;;
+  esac
   echo "-e GC_DOLT_HOST=${dolt_host}"
   echo "-e GC_DOLT_PORT=${dolt_port}"
   echo "-e CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}"

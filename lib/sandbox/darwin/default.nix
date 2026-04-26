@@ -6,8 +6,8 @@ let
   inherit (paths) mkMountSpecs;
   inherit (pkgs) writeShellScriptBin writeTextDir;
   inherit (shellLib)
-    detectVpnRouteConflict
     expandPathFn
+    fixVmnetRoute
     cleanStaleStagingDirs
     createStagingDir
     mkDeployKeyExpr
@@ -22,29 +22,6 @@ let
   sshConfig = import ../../util/ssh.nix;
 
   promptDir = writeTextDir "wrapix-prompt" (readFile ../prompt.txt);
-
-  # Fix VPN route conflict via sudo (supports Touch ID on macOS).
-  # Polls in the background for the vmnet interface and adds /25
-  # routes once it appears. Uses /25 instead of /24 because Tailscale
-  # manages the /24 route and blocks adds for the same prefix.
-  fixVpnRoute = ''
-    if [ "$_vpn_conflict" = true ]; then
-      echo "Fixing container route (Touch ID)..." >&2
-      sudo sh -c "
-        (
-          for i in \$(seq 1 30); do
-            VMNET_IF=\$(ifconfig | grep -B5 192.168.64 | grep -oE '^[a-z][a-z0-9]+' | head -1)
-            if [ -n \"\$VMNET_IF\" ]; then
-              route add -net $CONTAINER_NET/25 -interface \$VMNET_IF >/dev/null 2>&1
-              route add -net ''${CONTAINER_NET%.*}.128/25 -interface \$VMNET_IF >/dev/null 2>&1
-              exit
-            fi
-            sleep 0.5
-          done
-        ) &
-      "
-    fi
-  '';
 
 in
 {
@@ -102,8 +79,7 @@ in
               sleep 2
             fi
 
-            ${detectVpnRouteConflict}
-            ${fixVpnRoute}
+            ${fixVmnetRoute}
 
             # Load profile image using hash-based tag — no version file needed.
             PROFILE_IMAGE="wrapix-${profile.name}:${imageTagLib.mkImageTag profileImage}"

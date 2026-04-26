@@ -19,6 +19,10 @@
 #   NOTIFY_SOCKET_PATH — notify socket path (optional, for wrapix-notifyd)
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=container.sh
+source "$SCRIPT_DIR/container.sh"
+
 CITY_NAME="${GC_CITY_NAME:?entrypoint.sh requires GC_CITY_NAME}"
 : "${GC_WORKSPACE:?entrypoint.sh requires GC_WORKSPACE}"
 
@@ -42,7 +46,8 @@ beads-dolt attach "${GC_PODMAN_NETWORK:?}" "$GC_WORKSPACE"
 
 # bd connection: on Linux, use the Unix socket (bypasses podman networking —
 # rootless pasta hides host-loopback ports from role containers). On Darwin,
-# Unix sockets inside the podman VM aren't reachable from the host, so use TCP.
+# Unix sockets inside the container VM aren't connectable from the host
+# (VirtioFS creates the file but doesn't relay socket connections), so use TCP.
 wait_for_dolt() {
   local _waited=0
   if [[ "$(uname)" == "Darwin" ]]; then
@@ -116,7 +121,6 @@ print_pending_reviews
 
 # All city scripts (recovery, stage-home, etc.) are co-located in the
 # same Nix derivation (scriptsDir), so SCRIPT_DIR always has siblings.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 "${SCRIPT_DIR}/recovery.sh"
 
 # ---------------------------------------------------------------------------
@@ -127,27 +131,30 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Only watches containers in our city's network, excludes gc-managed agent
 # containers (which have the gc-city label).
 start_events_watcher() {
-  (
-    podman events \
-      --filter="type=container" \
-      --filter="event=die" \
-      --filter="event=oom" \
-      --filter="event=restart" \
-      --format='{{.Actor.Attributes.name}} {{.Status}}' 2>/dev/null |
-    while IFS=' ' read -r container_name event_type; do
-      # Skip gc-managed containers (agent sessions)
-      if [[ "$container_name" == "${CITY_NAME}"-* ]]; then
-        continue
-      fi
-
-      # submit (not nudge) so an auto-suspended scout wakes via ensureRunning;
-      # log failures and keep the watcher alive — it must outlive transient gc
-      # unavailability (startup races, scout session not yet created).
-      if ! gc session submit scout "Service container event: ${container_name} ${event_type}"; then
-        echo "entrypoint: events-watcher: submit to scout failed for event ${container_name} ${event_type}" >&2
-      fi
-    done
-  ) &
+  case "$CR" in
+    container)
+      # Apple Containers has no events API — skip the watcher.
+      return 0
+      ;;
+    podman)
+      (
+        podman events \
+          --filter="type=container" \
+          --filter="event=die" \
+          --filter="event=oom" \
+          --filter="event=restart" \
+          --format='{{.Actor.Attributes.name}} {{.Status}}' 2>/dev/null |
+        while IFS=' ' read -r container_name event_type; do
+          if [[ "$container_name" == "${CITY_NAME}"-* ]]; then
+            continue
+          fi
+          if ! gc session submit scout "Service container event: ${container_name} ${event_type}"; then
+            echo "entrypoint: events-watcher: submit to scout failed for event ${container_name} ${event_type}" >&2
+          fi
+        done
+      ) &
+      ;;
+  esac
 }
 
 start_events_watcher
@@ -186,10 +193,10 @@ _kill_stale_containers() {
     previous_hash="$(cat "$hash_file")"
     if [[ "$previous_hash" != "$current_hash" ]]; then
       echo "Config drift detected (${previous_hash:0:12}… → ${current_hash:0:12}…), killing stale containers" >&2
-      local cid
-      for cid in $(podman ps -q --filter "label=gc-city=${GC_CITY_NAME}" 2>/dev/null); do
-        podman stop "$cid" 2>/dev/null || true
-        podman rm -f "$cid" 2>/dev/null || true
+      local _stale_names
+      _stale_names="$(cr_ps_names_by_prefix "${GC_CITY_NAME}-")"
+      for _cn in $_stale_names; do
+        cr_rm "$_cn"
       done
     fi
   fi
@@ -204,8 +211,9 @@ _kill_stale_containers
 _gc_cleanup() {
   [ -n "${_GC_PID:-}" ] && kill -TERM "$_GC_PID" 2>/dev/null || true
   [ -n "${_GC_PID:-}" ] && wait "$_GC_PID" 2>/dev/null || true
-  # Detach (but don't stop) the beads-dolt container from this city's network.
-  podman network disconnect "${GC_PODMAN_NETWORK}" "$DOLT_CONTAINER" 2>/dev/null || true
+  case "$CR" in
+    podman) podman network disconnect "${GC_PODMAN_NETWORK}" "$DOLT_CONTAINER" 2>/dev/null || true ;;
+  esac
   rm -f "${GC_WORKSPACE}/.gc/controller.sock" "${GC_WORKSPACE}/.gc/controller.lock" "${GC_WORKSPACE}/.gc/controller.token"
 }
 trap _gc_cleanup EXIT INT TERM

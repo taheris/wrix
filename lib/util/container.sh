@@ -192,7 +192,7 @@ cr_network_has() {
 
 cr_ps_names() {
   case "$CR" in
-    container) container list --format json 2>/dev/null | jq -r '.[].name // empty' 2>/dev/null ;;
+    container) container list --all --format json 2>/dev/null | jq -r '.[].configuration.id // empty' 2>/dev/null ;;
     podman) podman ps --format '{{.Names}}' 2>/dev/null ;;
   esac
 }

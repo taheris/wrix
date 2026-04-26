@@ -300,12 +300,7 @@ let
       }
 
       cmd_setup_routes() {
-        ${shellLib.detectVpnRouteConflict}
-        if [ "$_vpn_conflict" = true ]; then
-          ${shellLib.addContainerRoute}
-        else
-          echo "No VPN route conflict detected — no fix needed"
-        fi
+        ${shellLib.fixVmnetRoute}
       }
 
       cmd_setup_ssh() {

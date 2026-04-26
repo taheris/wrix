@@ -1759,13 +1759,21 @@ in
         MOCK
         chmod +x "$MOCK_BIN/bd"
 
+        # Copy recovery.sh and container.sh into a shared temp directory so
+        # _SCRIPT_DIR resolution finds container.sh as a sibling.
+        SCRIPTS="$TMPDIR/scripts"
+        mkdir -p "$SCRIPTS"
+        cp "$RECOVERY" "$SCRIPTS/recovery.sh"
+        chmod +x "$SCRIPTS/recovery.sh"
+        cp "${../../lib/util/container.sh}" "$SCRIPTS/container.sh"
+
         # Create a stale worktree
         mkdir -p "$WS/.wrapix/worktree"
         git -C "$WS" worktree add "$WS/.wrapix/worktree/stale-bead" -b stale-bead -q
         test -d "$WS/.wrapix/worktree/stale-bead" || { echo "FAIL: worktree not created"; exit 1; }
 
         # Run recovery
-        PATH="$MOCK_BIN:$PATH" GC_CITY_NAME=test GC_WORKSPACE="$WS" bash "$RECOVERY"
+        PATH="$MOCK_BIN:$PATH" GC_CITY_NAME=test GC_WORKSPACE="$WS" bash "$SCRIPTS/recovery.sh"
 
         # Verify stale worktree was cleaned up
         ! test -d "$WS/.wrapix/worktree/stale-bead" || { echo "FAIL: stale worktree not cleaned"; exit 1; }
@@ -2531,6 +2539,7 @@ in
 
                 # --- Prepare entrypoint with mocked SCRIPT_DIR ---
                 # Copy entrypoint and patch SCRIPT_DIR to use our mock recovery.sh
+                cp "${../../lib/util/container.sh}" "$TMPDIR/container.sh"
                 cp "$ENTRYPOINT" "$TMPDIR/entrypoint.sh"
                 chmod +x "$TMPDIR/entrypoint.sh"
                 # Replace the SCRIPT_DIR line so recovery.sh is found in TMPDIR

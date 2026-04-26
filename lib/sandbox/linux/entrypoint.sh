@@ -63,6 +63,7 @@ if [ -d /etc/wrapix/mcp ]; then
 fi
 
 # Seed project-level settings if missing, then sync env vars from image
+mkdir -p /workspace/.claude
 if [ ! -f /workspace/.claude/settings.json ]; then
   cp /etc/wrapix/claude-settings.json /workspace/.claude/settings.json
 else
@@ -113,15 +114,17 @@ if [ -f /workspace/.beads/config.yaml ]; then
   BACKEND=$(jq -r '.backend // "sqlite"' /workspace/.beads/metadata.json 2>/dev/null || echo "sqlite")
 
   if [ "$BACKEND" = "dolt" ]; then
-    if [ ! -S /workspace/.wrapix/dolt.sock ]; then
-      echo "Error: dolt backend configured but /workspace/.wrapix/dolt.sock not mounted" >&2
-      # best-effort: no git remote -> _repo stays empty, message uses generic fallback
+    if [ -n "${BEADS_DOLT_SERVER_HOST:-}" ] && [ -n "${BEADS_DOLT_SERVER_PORT:-}" ]; then
+      export BEADS_DOLT_AUTO_START=0
+    elif [ -S /workspace/.wrapix/dolt.sock ]; then
+      export BEADS_DOLT_SERVER_SOCKET=/workspace/.wrapix/dolt.sock
+      export BEADS_DOLT_AUTO_START=0
+    else
+      echo "Error: dolt backend configured but no connection available (socket or TCP)" >&2
       _repo=$(git -C /workspace remote get-url origin 2>/dev/null | sed 's|.*/||;s|\.git$||')
       echo "  Start the host ${_repo:-repo}-beads container (enter the devShell) before launching this container." >&2
       exit 1
     fi
-    export BEADS_DOLT_SERVER_SOCKET=/workspace/.wrapix/dolt.sock
-    export BEADS_DOLT_AUTO_START=0
   else
     # best-effort: config.yaml without issue-prefix -> PREFIX empty, bd init skipped
     PREFIX=$(yq -r '.["issue-prefix"] // ""' /workspace/.beads/config.yaml 2>/dev/null || echo "")
