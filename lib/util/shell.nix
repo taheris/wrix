@@ -57,6 +57,41 @@ _:
     fi
   '';
 
+  # Detect the Apple container subnet and whether a VPN (Tailscale exit
+  # node, etc.) is capturing the default route.  Sets CONTAINER_SUBNET and
+  # returns 0 when a route fix is needed.
+  detectVpnRouteConflict = ''
+    CONTAINER_SUBNET=$(container network inspect default 2>/dev/null \
+      | grep -oE '"ipv4Subnet":"[0-9./\\]+"' | head -1 \
+      | sed 's/.*"ipv4Subnet":"//;s/"$//;s/\\//g')
+    CONTAINER_NET=""
+    _vpn_conflict=false
+    if [ -n "$CONTAINER_SUBNET" ]; then
+      CONTAINER_NET="''${CONTAINER_SUBNET%%/*}"
+      DEFAULT_IF=$(route -n get default 2>/dev/null | awk '/interface:/{print $2}')
+      if [ -n "$DEFAULT_IF" ] && [[ "$DEFAULT_IF" == utun* ]]; then
+        _vpn_conflict=true
+        _net_prefix="''${CONTAINER_NET%.*}"
+        if netstat -rn | grep -q "^$_net_prefix.*bridge"; then
+          _vpn_conflict=false
+        fi
+      fi
+    fi
+  '';
+
+  # Add a local route for the container subnet when a VPN captures the
+  # default route.  Call AFTER a container is running (vmnet interface must
+  # exist).  Expects CONTAINER_NET from detectVpnRouteConflict.
+  addContainerRoute = ''
+    VMNET_IF=$(ifconfig 2>/dev/null | grep -B5 "192.168.64" | grep -oE '^[a-z][a-z0-9]+' | head -1)
+    if [ -n "$VMNET_IF" ]; then
+      sudo route add -net "$CONTAINER_NET/25" -interface "$VMNET_IF"
+      sudo route add -net "''${CONTAINER_NET%.*}.128/25" -interface "$VMNET_IF"
+    else
+      echo "Warning: no vmnet interface found — is a container running?" >&2
+    fi
+  '';
+
   # Generate deploy key name expression
   # If deployKey is provided, uses that; otherwise generates repo-hostname format at runtime
   mkDeployKeyExpr =

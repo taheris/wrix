@@ -6,6 +6,7 @@ let
   inherit (paths) mkMountSpecs;
   inherit (pkgs) writeShellScriptBin writeTextDir;
   inherit (shellLib)
+    detectVpnRouteConflict
     expandPathFn
     cleanStaleStagingDirs
     createStagingDir
@@ -21,6 +22,29 @@ let
   sshConfig = import ../../util/ssh.nix;
 
   promptDir = writeTextDir "wrapix-prompt" (readFile ../prompt.txt);
+
+  # Fix VPN route conflict via sudo (supports Touch ID on macOS).
+  # Polls in the background for the vmnet interface and adds /25
+  # routes once it appears. Uses /25 instead of /24 because Tailscale
+  # manages the /24 route and blocks adds for the same prefix.
+  fixVpnRoute = ''
+    if [ "$_vpn_conflict" = true ]; then
+      echo "Fixing container route (Touch ID)..." >&2
+      sudo sh -c "
+        (
+          for i in \$(seq 1 30); do
+            VMNET_IF=\$(ifconfig | grep -B5 192.168.64 | grep -oE '^[a-z][a-z0-9]+' | head -1)
+            if [ -n \"\$VMNET_IF\" ]; then
+              route add -net $CONTAINER_NET/25 -interface \$VMNET_IF >/dev/null 2>&1
+              route add -net ''${CONTAINER_NET%.*}.128/25 -interface \$VMNET_IF >/dev/null 2>&1
+              exit
+            fi
+            sleep 0.5
+          done
+        ) &
+      "
+    fi
+  '';
 
 in
 {
@@ -78,6 +102,9 @@ in
               container system start
               sleep 2
             fi
+
+            ${detectVpnRouteConflict}
+            ${fixVpnRoute}
 
             # Load profile image using hash-based tag — no version file needed.
             PROFILE_IMAGE="wrapix-${profile.name}:${imageTagLib.mkImageTag profileImage}"
@@ -238,6 +265,33 @@ in
               MOUNT_ARGS="$MOUNT_ARGS -v $BEADS_STAGING:/workspace/.beads"
             fi
 
+            # VirtioFS can't pass Unix sockets. Pass the dolt TCP port and
+            # bridge the container's gateway (192.168.64.1) to 127.0.0.1 via
+            # socat. The gateway interface only exists while a container runs
+            # on the default network, so socat retries in the background until
+            # the interface appears (container run brings it up).
+            BEADS_DOLT_PORT=""
+            SOCAT_PID=""
+            if [ -d "$PROJECT_DIR/.beads/dolt" ]; then
+              BEADS_DOLT_PORT=$(${pkgs.beads-dolt}/bin/beads-dolt port "$PROJECT_DIR")
+              (
+                set +e
+                for _i in $(seq 1 30); do
+                  ${pkgs.socat}/bin/socat \
+                    "TCP-LISTEN:$BEADS_DOLT_PORT,bind=192.168.64.1,fork,reuseaddr" \
+                    "TCP:127.0.0.1:$BEADS_DOLT_PORT" 2>/dev/null &
+                  _pid=$!
+                  sleep 0.5
+                  if kill -0 "$_pid" 2>/dev/null; then
+                    wait "$_pid"
+                    exit
+                  fi
+                done
+                verbose "socat could not bind to 192.168.64.1:$BEADS_DOLT_PORT — dolt unreachable from container"
+              ) &
+              SOCAT_PID=$!
+            fi
+
             # Session registration for focus-aware notifications (tmux only)
             WRAPIX_SESSION_ID=""
             WRAPIX_SESSION_FILE=""
@@ -255,8 +309,8 @@ in
               printf '{"session_id":"%s","terminal_app":"%s"}\n' "$WRAPIX_SESSION_ID" "$TERMINAL_APP" > "$WRAPIX_SESSION_FILE"
             fi
 
-            # Cleanup function for session file
             cleanup_session() {
+              [ -n "''${SOCAT_PID:-}" ] && kill "$SOCAT_PID" 2>/dev/null || true
               [ -n "$WRAPIX_SESSION_FILE" ] && [ -f "$WRAPIX_SESSION_FILE" ] && rm -f "$WRAPIX_SESSION_FILE"
             }
             trap cleanup_session EXIT
@@ -291,12 +345,14 @@ in
             [ -n "$DIR_MOUNTS" ] && ENV_ARGS+=(-e "WRAPIX_DIR_MOUNTS=$DIR_MOUNTS")
             [ -n "$FILE_MOUNTS" ] && ENV_ARGS+=(-e "WRAPIX_FILE_MOUNTS=$FILE_MOUNTS")
             [ -n "$SOCK_MOUNTS" ] && ENV_ARGS+=(-e "WRAPIX_SOCK_MOUNTS=$SOCK_MOUNTS")
-            # Tell notification client to use TCP (VirtioFS can't pass Unix sockets)
+            # VirtioFS can't pass Unix sockets — use TCP for notifications and dolt
             ENV_ARGS+=(-e "WRAPIX_NOTIFY_TCP=1")
+            [ -n "$BEADS_DOLT_PORT" ] && ENV_ARGS+=(-e "BEADS_DOLT_SERVER_PORT=$BEADS_DOLT_PORT")
             # Pass session ID for focus-aware notifications (empty if not in tmux)
             ENV_ARGS+=(-e "WRAPIX_SESSION_ID=$WRAPIX_SESSION_ID")
             # Pass network mode and allowlist for WRAPIX_NETWORK=limit filtering
             ENV_ARGS+=(-e "WRAPIX_NETWORK=$WRAPIX_NETWORK")
+            [ "$_vpn_conflict" = true ] && ENV_ARGS+=(-e "WRAPIX_WAIT_FOR_ROUTE=1")
             ENV_ARGS+=(-e "WRAPIX_NETWORK_ALLOWLIST=${networkAllowlist}")
 
             # Generate unique container name
@@ -330,7 +386,8 @@ in
             TTY_ARGS=""
             [ -t 0 ] && TTY_ARGS="-t -i"
 
-            exec container run \
+            CONTAINER_EXIT=0
+            container run \
               --name "$CONTAINER_NAME" \
               --rm \
               $TTY_ARGS \
@@ -346,6 +403,8 @@ in
               $DEPLOY_KEY_ARGS \
               -- \
               "''${WRAPIX_IMAGE:-$PROFILE_IMAGE}" \
-              "''${CONTAINER_CMD[@]}"
+              "''${CONTAINER_CMD[@]}" \
+              || CONTAINER_EXIT=$?
+            exit $CONTAINER_EXIT
     '';
 }

@@ -13,6 +13,8 @@
 { pkgs, linuxPkgs }:
 
 let
+  shellLib = import ../util/shell.nix { };
+
   builderImage = import ../sandbox/builder/image.nix {
     pkgs = linuxPkgs;
   };
@@ -297,29 +299,12 @@ let
       }
 
       cmd_setup_routes() {
-        # Get the container network subnet from the default network
-        # JSON has escaped slashes: "ipv4Subnet":"192.168.65.0\/24"
-        # Note: container commands must run as original user when script is run with sudo
-        local network
-        if [ -n "''${SUDO_USER:-}" ]; then
-          network=$(sudo -u "$SUDO_USER" container network inspect default 2>/dev/null | \
-            grep -oE '"ipv4Subnet":"[0-9./\\]+"' | head -1 | \
-            sed 's/.*"ipv4Subnet":"//' | sed 's/"$//' | sed 's/\\//g')
+        ${shellLib.detectVpnRouteConflict}
+        if [ "$_vpn_conflict" = true ]; then
+          ${shellLib.addContainerRoute}
         else
-          network=$(container network inspect default 2>/dev/null | \
-            grep -oE '"ipv4Subnet":"[0-9./\\]+"' | head -1 | \
-            sed 's/.*"ipv4Subnet":"//' | sed 's/"$//' | sed 's/\\//g')
+          echo "No VPN route conflict detected — no fix needed"
         fi
-        if [ -z "$network" ]; then
-          echo "Error: Could not determine container network subnet"
-          echo "Is the container system running? Try: container system start"
-          exit 1
-        fi
-
-        echo "Fixing route for container network $network..."
-        route delete -net "$network" 2>/dev/null || true
-        route add -net "$network" -interface bridge100
-        echo "Route configured successfully"
       }
 
       cmd_setup_ssh() {

@@ -41,7 +41,10 @@ case "$ROOT" in
   */.git/beads-worktrees/*) ROOT="${ROOT%/.git/beads-worktrees/*}" ;;
 esac
 WT="$ROOT/.git/beads-worktrees/$BRANCH"
-REMOTE_DIR="$WT/.beads/dolt-remote"
+# Dolt-remote lives next to the database inside .beads/dolt/ so the
+# relative URL file://../dolt-remote resolves correctly from both the
+# CLI (.beads/dolt/<db>/) and the SQL server (/data/<db>/ in containers).
+REMOTE_DIR="$ROOT/.beads/dolt/dolt-remote"
 
 # Gate the flatten+rebuild path: any remote file >= THRESHOLD_MB triggers a
 # full history squash + remote rebuild. GitHub's hard limit is 100 MiB per
@@ -55,7 +58,8 @@ needs_rebuild=0
 if [ -d "$REMOTE_DIR" ]; then
   while IFS= read -r sz; do
     if [ "$sz" -ge "$threshold_bytes" ]; then needs_rebuild=1; break; fi
-  done < <(find "$REMOTE_DIR" -type f -printf '%s\n' 2>/dev/null)
+  done < <(find "$REMOTE_DIR" -type f -exec stat -f '%z' {} + 2>/dev/null \
+           || find "$REMOTE_DIR" -type f -printf '%s\n' 2>/dev/null)
 fi
 
 if [ "$needs_rebuild" = 1 ]; then
@@ -78,11 +82,19 @@ bd dolt commit || true
 bd dolt push "$@"
 
 if [ ! -d "$WT" ]; then
-  echo "beads-push: worktree $WT not present — skipping github sync" >&2
-  exit 0
+  if git rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
+    git worktree add "$WT" "$BRANCH" --quiet
+  elif git rev-parse --verify "origin/$BRANCH" >/dev/null 2>&1; then
+    git worktree add "$WT" "origin/$BRANCH" --quiet
+  else
+    echo "beads-push: no '$BRANCH' branch found — skipping github sync" >&2
+    exit 0
+  fi
 fi
 
 cd "$WT"
+PREK_ALLOW_NO_CONFIG=1 git pull --rebase --quiet
+rsync -a --delete "$REMOTE_DIR/" "$WT/.beads/dolt-remote/"
 
 if ! git diff --quiet || ! git diff --cached --quiet; then
   PREK_ALLOW_NO_CONFIG=1 git add -A

@@ -169,26 +169,37 @@ for item in projects plans todos file-history paste-cache backups \
   fi
 done
 
-# Connect bd to the host's wrapix-beads dolt container via the mounted
-# unix socket. The host starts wrapix-beads (lib/beads/default.nix shellHook)
-# and bind-mounts /workspace/.wrapix/dolt.sock into every wrapix container.
-# Missing socket is fatal when the dolt backend is configured — we refuse
-# to fall back to bd's embedded autostart (which would fork a per-container
-# dolt that diverges from the host's authoritative state).
+# Connect bd to the host's wrapix-beads dolt server.
+# VirtioFS can't pass Unix sockets, so the launcher passes
+# BEADS_DOLT_SERVER_PORT for TCP. The socat bridge on the host retries
+# until the container network interface appears, so we wait here too.
 if [ -f /workspace/.beads/config.yaml ]; then
   # best-effort: missing/malformed metadata.json -> default to sqlite backend
   BACKEND=$(jq -r '.backend // "sqlite"' /workspace/.beads/metadata.json 2>/dev/null || echo "sqlite")
 
   if [ "$BACKEND" = "dolt" ]; then
-    if [ ! -S /workspace/.wrapix/dolt.sock ]; then
-      echo "Error: dolt backend configured but /workspace/.wrapix/dolt.sock not mounted" >&2
-      # best-effort: no git remote -> _repo stays empty, message uses generic fallback
+    if [ -n "${BEADS_DOLT_SERVER_HOST:-}" ] && [ -n "${BEADS_DOLT_SERVER_PORT:-}" ]; then
+      export BEADS_DOLT_AUTO_START=0
+    elif [ -n "${BEADS_DOLT_SERVER_PORT:-}" ]; then
+      BEADS_DOLT_SERVER_HOST=$(ip route 2>/dev/null | awk '/default/ {print $3; exit}')
+      export BEADS_DOLT_SERVER_HOST
+      export BEADS_DOLT_AUTO_START=0
+      # Wait for the socat bridge on the host to become reachable
+      for _i in $(seq 1 30); do
+        if nc -z -w1 "$BEADS_DOLT_SERVER_HOST" "$BEADS_DOLT_SERVER_PORT" 2>/dev/null; then
+          break
+        fi
+        sleep 0.5
+      done
+    elif [ -S /workspace/.wrapix/dolt.sock ]; then
+      export BEADS_DOLT_SERVER_SOCKET=/workspace/.wrapix/dolt.sock
+      export BEADS_DOLT_AUTO_START=0
+    else
+      echo "Error: dolt backend configured but no connection available" >&2
       _repo=$(git -C /workspace remote get-url origin 2>/dev/null | sed 's|.*/||;s|\.git$||')
       echo "  Start the host ${_repo:-repo}-beads container (enter the devShell) before launching this container." >&2
       exit 1
     fi
-    export BEADS_DOLT_SERVER_SOCKET=/workspace/.wrapix/dolt.sock
-    export BEADS_DOLT_AUTO_START=0
   else
     # best-effort: config.yaml without issue-prefix -> PREFIX empty, bd init skipped
     PREFIX=$(yq -r '.["issue-prefix"] // ""' /workspace/.beads/config.yaml 2>/dev/null || echo "")
@@ -199,6 +210,23 @@ if [ -f /workspace/.beads/config.yaml ]; then
 
   # best-effort: files may not exist or not be tracked; restoring them is idempotent cleanup
   git checkout -- .beads/.gitignore AGENTS.md 2>/dev/null || true
+fi
+
+# Wait for external network if host is fixing a VPN route conflict.
+# The host's fixVpnRoute adds a route for the container subnet once
+# bridge100 appears; this loop blocks until internet is reachable.
+if [ "${WRAPIX_WAIT_FOR_ROUTE:-}" = "1" ]; then
+  _route_ok=false
+  for _i in $(seq 1 30); do
+    if nc -z -w1 1.1.1.1 443 2>/dev/null; then
+      _route_ok=true
+      break
+    fi
+    sleep 0.5
+  done
+  if [ "$_route_ok" = false ]; then
+    echo "Warning: network still unreachable after route fix timeout" >&2
+  fi
 fi
 
 # Apply network filtering when WRAPIX_NETWORK=limit
