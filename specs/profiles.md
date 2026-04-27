@@ -107,7 +107,9 @@ Environment:
 - `CARGO_INCREMENTAL=0` — sccache refuses to cache any `rustc` invocation with `-C incremental=...`, so incremental compilation and sccache are redundant; disabling incremental lets every Rust compile flow through the cache.
 - `CARGO_TARGET_DIR` — intentionally **unset**; cargo's per-workspace default (`<workspace>/target`) applies. The judge asserts this invariant because pinning `CARGO_TARGET_DIR` to a shared path across workspaces defeats cargo's freshness tracking and churns builds.
 
-**Host devshell alignment.** The profile's `shellHook` (spliced into downstream host devShells alongside `ralph.shellHook`) prepends `${toolchain}/bin` to `PATH` and re-exports `RUSTC_WRAPPER`, `SCCACHE_DIR`, `SCCACHE_CACHE_SIZE`, and `CARGO_INCREMENTAL=0` so the host shell uses the same fenix-pinned `rustc` binary as the sandbox. Without the PATH prepend, host PATH falls through to rustup's `rustc` (or whichever appears first), and the diverging sysroot path baked into rlib metadata invalidates every sccache key across the boundary — even when both sides report the same Rust version. `withToolchain` rebuilds the snippet over the custom toolchain so both `packages` and `shellHook` close over the same derivation.
+**Host devshell alignment.** The profile's `shellHook` (spliced into downstream host devShells alongside `ralph.shellHook`) prepends `${toolchain}/bin` to `PATH` and re-exports `RUSTC_WRAPPER`, `SCCACHE_DIR`, `SCCACHE_CACHE_SIZE`, and `CARGO_INCREMENTAL=0` so the host shell uses the same fenix-pinned `rustc` binary as the sandbox. Without the PATH prepend, host PATH falls through to rustup's `rustc` (or whichever appears first), and the diverging sysroot path baked into rlib metadata invalidates every sccache key across the boundary — even when both sides report the same Rust version. `withToolchain` rebuilds the snippet over the custom toolchain so `packages`, `shellHook`, and `toolchain` (see below) all close over the same derivation.
+
+**Toolchain derivation (`profile.toolchain`).** The rust profile exposes the resolved fenix `combine` derivation as `profile.toolchain` — the same store path that lands in `packages` and is interpolated into `shellHook`'s PATH prepend. Sibling Nix apps that run cargo (e.g. `pkgs.writeShellApplication { runtimeInputs = [ rustProfile.toolchain ]; ... }`) must point `runtimeInputs` at this field rather than re-instantiating fenix in their own flake. Re-instantiation produces a different `/nix/store/...` path even when fenix versions match, and again when calling `fromToolchainFile` directly (bare `rust-<ver>` vs the `combine`-wrapped `rust-mixed`); sccache hashes the compiler binary, so a divergent path means every cache key misses across the boundary. The default profile and the `withToolchain` variant both set this field to the toolchain they were built from.
 
 Mounts (host source → literal container dest; literal dests avoid the `~`-expands-on-host-launcher gotcha):
 
@@ -170,7 +172,7 @@ Network allowlist: `pypi.org`, `files.pythonhosted.org`
 | `flake.nix` | Declares `fenix` and `treefmt-nix` flake inputs; threads `fenix` and the project treefmt wrapper to `lib/sandbox/profiles.nix` via `lib/sandbox/default.nix` |
 | `lib/default.nix` | Defines `deriveProfile` (merges `packages` / `mounts` / `env` / `networkAllowlist`; passes through other profile fields) |
 | `lib/sandbox/default.nix` | Imports `profiles.nix` with Linux `pkgs`, host `pkgs`, `fenix`, and the treefmt wrapper; defines internal `extendProfile` helper |
-| `lib/sandbox/profiles.nix` | Defines `mkProfile`, `basePackages`, built-in `base`/`rust`/`python` profiles; builds rust toolchain via `fenixPkgs.stable.defaultToolchain` combined with `rust-src` and `rust-analyzer`; wires sccache and sccache env vars, `CARGO_INCREMENTAL=0`; exposes the per-profile host `shellHook` (rust prepends `${toolchain}/bin` to host PATH and re-exports sccache env) |
+| `lib/sandbox/profiles.nix` | Defines `mkProfile`, `basePackages`, built-in `base`/`rust`/`python` profiles; builds rust toolchain via `fenixPkgs.stable.defaultToolchain` combined with `rust-src` and `rust-analyzer`; wires sccache and sccache env vars, `CARGO_INCREMENTAL=0`; exposes the per-profile host `shellHook` (rust prepends `${toolchain}/bin` to host PATH and re-exports sccache env); exposes `profile.toolchain` on the rust profile (default and `withToolchain` variants) so consumer-side derivations can share the sandbox's toolchain store path |
 | `lib/sandbox/linux/entrypoint.sh` | Contains no rustup bootstrap logic (toolchain is baked in at image build time) |
 | `lib/sandbox/darwin/entrypoint.sh` | Contains no rustup bootstrap logic |
 
@@ -205,6 +207,20 @@ mkSandbox {
     packages = [ pkgs.sqlx-cli ];
   };
 }
+
+# Reuse the same toolchain derivation in a sibling Nix app so its `rustc` shares
+# a /nix/store/... path with the sandbox image and the host devshell PATH.
+let
+  rustProfile = profiles.rust.withToolchain {
+    file = ./rust-toolchain.toml;
+    sha256 = "sha256-...";
+  };
+in
+pkgs.writeShellApplication {
+  name = "test-ci";
+  runtimeInputs = [ rustProfile.toolchain ];
+  text = "cargo nextest run";
+}
 ```
 
 ### Profile-Specific Configuration
@@ -216,10 +232,11 @@ These live on the profile attrset itself, not on `deriveProfile`.
   path to `rust-toolchain.toml`; `sha256` is the hash of the downloaded components),
   returns a new profile attrset (without `withToolchain`) using
   `fenix.fromToolchainFile`. `rust-src` and `rust-analyzer` are combined in on top
-  of whatever components the toolchain file declares. Both `packages` and
-  `shellHook` are rebuilt against the custom toolchain so they close over the
-  same derivation — the host PATH prepend in `shellHook` resolves to the same
-  `rustc` binary the sandbox uses.
+  of whatever components the toolchain file declares. `packages`, `shellHook`,
+  and `toolchain` are all rebuilt against the custom toolchain so they close
+  over the same derivation — the host PATH prepend in `shellHook` resolves to
+  the same `rustc` binary the sandbox uses, and `profile.toolchain` is exactly
+  that derivation for downstream `runtimeInputs`.
 
 Only the Rust profile has `withToolchain`. Other profiles (base, python) do not
 expose profile-specific configuration functions.
@@ -244,6 +261,8 @@ expose profile-specific configuration functions.
   [verify:wrapix](../tests/mcp/tmux/e2e/test_profile_composition.sh)
 - [ ] Host devshell that splices `rustProfile.shellHook` resolves `rustc` to the same `/nix/store/...` path as the sandbox
   [judge](../tests/judges/profiles.sh#test_host_sandbox_rustc_same_store_path)
+- [ ] `profile.toolchain` is exposed on both the default rust profile and `withToolchain { file; sha256; }`, and points at the same derivation referenced by the profile's `packages` and the `${toolchain}/bin` PATH prepend in `shellHook`
+  [judge](../tests/judges/profiles.sh#test_rust_toolchain_field)
 
 ## Out of Scope
 
@@ -279,6 +298,34 @@ prerequisite for cross-boundary sccache hits and shared `target/` artifact
 reuse: when host and sandbox compile against the same toolchain derivation,
 sysroot paths in rlib metadata match, sccache keys collide, and cargo's
 fingerprints in `/workspace/target/` stay valid across switches.
+
+**Sibling Nix apps that run cargo.** Aligning the host shell PATH is not
+enough on its own — any sibling app derivation in the consumer's flake
+(`pkgs.writeShellApplication`, a `nix run` target, a CI runner) ships its own
+`runtimeInputs` and bypasses PATH from the devshell. If that derivation
+re-instantiates fenix (`inputs.fenix.packages.fromToolchainFile { ... }`), it
+gets a different `/nix/store/...` path than the sandbox/host even when fenix
+versions match, and an additional difference between the bare `rust-<ver>`
+output and the `combine`-wrapped `rust-mixed` the profile builds. sccache
+hashes the compiler binary, so cache keys never collide and an 11 GiB host
+cache populated from inside the sandbox can produce 0 hits when invoked from
+the sibling app.
+
+The fix is to point `runtimeInputs` at `rustProfile.toolchain`, which is the
+exact derivation the profile baked into the image and prepended to PATH:
+
+```nix
+packages.test-ci = pkgs.writeShellApplication {
+  name = "test-ci";
+  runtimeInputs = [ rustProfile.toolchain ];
+  text = "cargo nextest run";
+};
+```
+
+Consumers with their own `rust-toolchain.toml` feed it to `withToolchain`
+once; `rustProfile.toolchain` is then the `combine`-wrapped output of THEIR
+file, identical across sandbox image, host shellHook PATH, and sibling app
+`runtimeInputs`. They never need to call fenix directly.
 
 **Escape hatch.** If a downstream wants to control `rustc` independently of
 wrapix's pin (e.g., to use a different fenix revision on the host), it can
