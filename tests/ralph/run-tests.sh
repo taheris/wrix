@@ -15000,6 +15000,364 @@ EOF
 }
 
 #-----------------------------------------------------------------------------
+# Prompt File-References tests (FR12)
+#-----------------------------------------------------------------------------
+
+# Test: no template body or partial body inlines whole-file spec content via
+# {{EXISTING_SPEC}} or {{SPEC_CONTENT}} (variables removed under FR12).
+test_templates_no_inlined_spec_content() {
+  CURRENT_TEST="templates_no_inlined_spec_content"
+  test_header "Templates and partials do not reference {{EXISTING_SPEC}} or {{SPEC_CONTENT}}"
+
+  local template_dir="$REPO_ROOT/lib/ralph/template"
+  local partial_dir="$template_dir/partial"
+
+  if [ ! -d "$template_dir" ]; then
+    test_fail "Template directory not found: $template_dir"
+    return
+  fi
+
+  local var
+  for var in EXISTING_SPEC SPEC_CONTENT; do
+    local hits
+    hits=$(grep -lF "{{${var}}}" "$template_dir"/*.md "$partial_dir"/*.md 2>/dev/null || true)
+    if [ -z "$hits" ]; then
+      test_pass "No template body or partial body references {{${var}}}"
+    else
+      test_fail "{{${var}}} still referenced in: $hits"
+    fi
+  done
+}
+
+# Test: no template body or partial body references the literal {{COMPANIONS}}
+# (replaced by {{COMPANION_PATHS}} under FR12).
+test_templates_use_companion_paths() {
+  CURRENT_TEST="templates_use_companion_paths"
+  test_header "Templates and partials do not reference {{COMPANIONS}} (replaced by {{COMPANION_PATHS}})"
+
+  local template_dir="$REPO_ROOT/lib/ralph/template"
+  local partial_dir="$template_dir/partial"
+
+  if [ ! -d "$template_dir" ]; then
+    test_fail "Template directory not found: $template_dir"
+    return
+  fi
+
+  # Match {{COMPANIONS}} as a whole token, not the {{COMPANION_PATHS}} prefix.
+  local hits
+  hits=$(grep -lE '\{\{COMPANIONS\}\}' "$template_dir"/*.md "$partial_dir"/*.md 2>/dev/null || true)
+  if [ -z "$hits" ]; then
+    test_pass "No template body or partial body references {{COMPANIONS}}"
+  else
+    test_fail "{{COMPANIONS}} still referenced in: $hits"
+  fi
+}
+
+# Test: list_companion_paths returns directory paths only — never the body of
+# manifest.md — even when manifests carry non-trivial multi-line content.
+test_list_companion_paths_returns_paths_only() {
+  CURRENT_TEST="list_companion_paths_returns_paths_only"
+  test_header "list_companion_paths emits paths only, never inlines manifest.md body"
+
+  setup_test_env "manifests-paths-only"
+
+  # shellcheck source=../../lib/ralph/cmd/util.sh
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  local comp1="$TEST_DIR/specs/e2e"
+  local comp2="$TEST_DIR/docs/api"
+  mkdir -p "$comp1" "$comp2"
+
+  # Non-trivial multi-line manifest content with headers, lists, and a unique
+  # sentinel phrase per manifest so we can assert exact-body exclusion.
+  cat > "$comp1/manifest.md" << 'EOF'
+# E2E Test Suite Manifest
+
+## Overview
+End-to-end test scenarios covering the full user journey.
+
+## Coverage
+- Login flow validation
+- Multi-tenant isolation checks
+- Sentinel-phrase-uniquely-in-e2e-manifest
+
+## Notes
+These scenarios exercise the live deployment, not mocks.
+EOF
+
+  cat > "$comp2/manifest.md" << 'EOF'
+# API Documentation Manifest
+
+## Endpoints
+- POST /api/v1/sessions
+- GET  /api/v1/sessions/:id
+- DELETE /api/v1/sessions/:id
+
+## Conventions
+All responses are JSON; errors carry an RFC 7807 problem document.
+Sentinel-phrase-uniquely-in-api-manifest
+
+## Versioning
+Breaking changes bump the major version segment.
+EOF
+
+  local state_file="$RALPH_DIR/state/test-feature.json"
+  mkdir -p "$(dirname "$state_file")"
+  cat > "$state_file" << EOF
+{"label":"test-feature","spec_path":"specs/test-feature.md","companions":["$comp1","$comp2"]}
+EOF
+
+  local output
+  output=$(list_companion_paths "$state_file")
+
+  # Output must be exactly two lines, each one of the companion directory paths.
+  local line_count
+  line_count=$(printf '%s\n' "$output" | wc -l)
+  if [ "$line_count" = "2" ]; then
+    test_pass "Output has exactly two lines for two companions"
+  else
+    test_fail "Expected 2 lines, got: $line_count (output: $output)"
+  fi
+
+  if [ "$(printf '%s\n' "$output" | sed -n '1p')" = "$comp1" ]; then
+    test_pass "First line is first companion path"
+  else
+    test_fail "First line should be $comp1, got: $(printf '%s\n' "$output" | sed -n '1p')"
+  fi
+
+  if [ "$(printf '%s\n' "$output" | sed -n '2p')" = "$comp2" ]; then
+    test_pass "Second line is second companion path"
+  else
+    test_fail "Second line should be $comp2, got: $(printf '%s\n' "$output" | sed -n '2p')"
+  fi
+
+  # No manifest body fragment, header, or unique sentinel phrase may appear.
+  local needle
+  for needle in \
+    'Sentinel-phrase-uniquely-in-e2e-manifest' \
+    'Sentinel-phrase-uniquely-in-api-manifest' \
+    'E2E Test Suite Manifest' \
+    'API Documentation Manifest' \
+    'Login flow validation' \
+    'POST /api/v1/sessions' \
+    'RFC 7807'; do
+    if echo "$output" | grep -qF "$needle"; then
+      test_fail "Output should not inline manifest body fragment: '$needle'"
+    else
+      test_pass "Output does not inline manifest body fragment: '$needle'"
+    fi
+  done
+
+  teardown_test_env
+}
+
+# Test: every container-executed command's rendered prompt stays under 64 KiB
+# (half the 128 KiB MAX_ARG_STRLEN ceiling) on representative project state.
+# Provides headroom below the argv limit for future template growth.
+test_rendered_prompt_size_bound() {
+  CURRENT_TEST="rendered_prompt_size_bound"
+  test_header "Each container-executed command's rendered prompt stays under 64 KiB"
+
+  setup_test_env "rendered-prompt-size"
+
+  # shellcheck source=../../lib/ralph/cmd/util.sh
+  source "$REPO_ROOT/lib/ralph/cmd/util.sh"
+
+  export RALPH_TEMPLATE_DIR="$REPO_ROOT/lib/ralph/template"
+  # Local overlays in setup_test_env (run.md, todo.md, plan.md) shadow the
+  # packaged templates with stubs and would mask real-template growth — drop
+  # them so render_template falls through to RALPH_TEMPLATE_DIR.
+  rm -rf "$RALPH_DIR/template"
+
+  # Representative variable values. Sizes stay within plausible-real-world
+  # bounds: a realistic spec path, ~10 companion directories, a multi-bead
+  # task list, and an implementation-notes block sized like a moderately
+  # busy planning session. Whole-file content (the spec itself, manifest
+  # bodies) is intentionally NOT inlined — this is the FR12 contract.
+  local label="prompt-size-feature"
+  local spec_path="specs/${label}.md"
+
+  local pinned_context
+  pinned_context=$(printf '# Project Overview\n\n%s\n' \
+    "$(printf -- '- Spec terminology entry %d: short note explaining a project-specific term.\n' {1..40})")
+
+  local companion_paths
+  companion_paths=$(printf 'specs/companion-%02d\n' {1..10})
+
+  local exit_signals="- RALPH_COMPLETE — task finished
+- RALPH_BLOCKED: <reason> — cannot proceed
+- RALPH_CLARIFY: <question> — need user input"
+
+  local readme_instructions="If you add a new spec, add a row to docs/README.md (Spec | Code | Beads | Purpose)."
+
+  local implementation_notes
+  implementation_notes=$(printf -- '- Implementation hint %d: keep this in mind while writing the new function.\n' {1..30})
+
+  local spec_diff
+  spec_diff=$(printf '@@ -%d,3 +%d,4 @@\n-old line %d\n+new line %d\n+extra line %d\n' \
+    {1..15} {1..15} {1..15} {1..15} {1..15})
+
+  local existing_tasks
+  existing_tasks=$(printf -- '- [%s] wx-abc.%d %s\n' \
+    open 1 "Wire up the orchestrator" \
+    in_progress 2 "Add per-bead state file" \
+    open 3 "Refactor the dispatcher to support concurrent labels" \
+    closed 4 "Initial scaffolding for the harness" \
+    open 5 "Document the new template variables" \
+    open 6 "Add integration tests for the rename" \
+    open 7 "Hook the new flag into ralph check" \
+    open 8 "Backfill existing molecules for the schema change" \
+    open 9 "Land the gas-city sibling spec edits" \
+    open 10 "Final read-through and merge")
+
+  local beads_summary="$existing_tasks"
+
+  local description="Implement the renamed helper so callers stop relying on the legacy in-prompt manifest body. Update each call site to pass COMPANION_PATHS instead of COMPANIONS. Add structural tests under tests/ralph/ to cover the rename, the new variable wiring, and the size bound under FR12."
+
+  local previous_failure="Last attempt failed: render_template returned exit 1 because COMPANION_PATHS was not declared in the variables list for the run template."
+
+  local clarify_beads
+  clarify_beads=$(printf -- '## wx-abc.%d — %s\n\n%s\n\n### Options\n\n- **A**: %s\n- **B**: %s\n- **C**: %s\n\n' \
+    1 "Disambiguate companion path resolution" \
+    "Should companions be resolved relative to repo root, the spec file, or the state file?" \
+    "Relative to repo root (matches list_companion_paths today)" \
+    "Relative to the spec file (less surprising for hand-edited state)" \
+    "Relative to the state file (matches the field's declared location)" \
+    2 "Choose the rename target for read_manifests" \
+    "The helper currently named read_manifests should be renamed; pick the new name." \
+    "list_companion_paths" \
+    "companion_dirs" \
+    "load_companion_dirs")
+
+  # Per-template required variables come from default.nix:
+  #   plan-new:    PINNED_CONTEXT, LABEL, SPEC_PATH, EXIT_SIGNALS, README_INSTRUCTIONS
+  #   plan-update: COMPANION_PATHS, PINNED_CONTEXT, LABEL, SPEC_PATH, EXIT_SIGNALS
+  #   todo-new:    COMPANION_PATHS, PINNED_CONTEXT, LABEL, SPEC_PATH, CURRENT_FILE,
+  #                EXIT_SIGNALS, README_INSTRUCTIONS, IMPLEMENTATION_NOTES
+  #   todo-update: COMPANION_PATHS, PINNED_CONTEXT, LABEL, SPEC_PATH, MOLECULE_ID,
+  #                MOLECULE_PROGRESS, SPEC_DIFF, EXISTING_TASKS, EXIT_SIGNALS,
+  #                README_INSTRUCTIONS, IMPLEMENTATION_NOTES
+  #   run:         COMPANION_PATHS, PINNED_CONTEXT, SPEC_PATH, LABEL, MOLECULE_ID,
+  #                ISSUE_ID, TITLE, DESCRIPTION, EXIT_SIGNALS, PREVIOUS_FAILURE
+  #   check:      COMPANION_PATHS, PINNED_CONTEXT, SPEC_PATH, LABEL, BEADS_SUMMARY,
+  #                BASE_COMMIT, MOLECULE_ID, EXIT_SIGNALS
+  #   msg:         COMPANION_PATHS, PINNED_CONTEXT, SPEC_PATH, LABEL, CLARIFY_BEADS,
+  #                EXIT_SIGNALS
+
+  local max_size=$((64 * 1024))
+
+  local tmpl rendered size
+  for tmpl in plan-new plan-update todo-new todo-update run check msg; do
+    case "$tmpl" in
+      plan-new)
+        rendered=$(render_template plan-new \
+          PINNED_CONTEXT="$pinned_context" \
+          LABEL="$label" \
+          SPEC_PATH="$spec_path" \
+          EXIT_SIGNALS="$exit_signals" \
+          README_INSTRUCTIONS="$readme_instructions") || {
+          test_fail "render_template plan-new failed"
+          continue
+        }
+        ;;
+      plan-update)
+        rendered=$(render_template plan-update \
+          COMPANION_PATHS="$companion_paths" \
+          PINNED_CONTEXT="$pinned_context" \
+          LABEL="$label" \
+          SPEC_PATH="$spec_path" \
+          EXIT_SIGNALS="$exit_signals") || {
+          test_fail "render_template plan-update failed"
+          continue
+        }
+        ;;
+      todo-new)
+        rendered=$(render_template todo-new \
+          COMPANION_PATHS="$companion_paths" \
+          PINNED_CONTEXT="$pinned_context" \
+          LABEL="$label" \
+          SPEC_PATH="$spec_path" \
+          CURRENT_FILE="state/${label}.json" \
+          EXIT_SIGNALS="$exit_signals" \
+          README_INSTRUCTIONS="$readme_instructions" \
+          IMPLEMENTATION_NOTES="$implementation_notes") || {
+          test_fail "render_template todo-new failed"
+          continue
+        }
+        ;;
+      todo-update)
+        rendered=$(render_template todo-update \
+          COMPANION_PATHS="$companion_paths" \
+          PINNED_CONTEXT="$pinned_context" \
+          LABEL="$label" \
+          SPEC_PATH="$spec_path" \
+          MOLECULE_ID="wx-abc" \
+          MOLECULE_PROGRESS="40% (4/10)" \
+          SPEC_DIFF="$spec_diff" \
+          EXISTING_TASKS="$existing_tasks" \
+          EXIT_SIGNALS="$exit_signals" \
+          README_INSTRUCTIONS="$readme_instructions" \
+          IMPLEMENTATION_NOTES="$implementation_notes") || {
+          test_fail "render_template todo-update failed"
+          continue
+        }
+        ;;
+      run)
+        rendered=$(render_template run \
+          COMPANION_PATHS="$companion_paths" \
+          PINNED_CONTEXT="$pinned_context" \
+          SPEC_PATH="$spec_path" \
+          LABEL="$label" \
+          MOLECULE_ID="wx-abc" \
+          ISSUE_ID="wx-abc.7" \
+          TITLE="Add structural verify tests for prompt file-references" \
+          DESCRIPTION="$description" \
+          EXIT_SIGNALS="$exit_signals" \
+          PREVIOUS_FAILURE="$previous_failure") || {
+          test_fail "render_template run failed"
+          continue
+        }
+        ;;
+      check)
+        rendered=$(render_template check \
+          COMPANION_PATHS="$companion_paths" \
+          PINNED_CONTEXT="$pinned_context" \
+          SPEC_PATH="$spec_path" \
+          LABEL="$label" \
+          BEADS_SUMMARY="$beads_summary" \
+          BASE_COMMIT="abc123def4567890" \
+          MOLECULE_ID="wx-abc" \
+          EXIT_SIGNALS="$exit_signals") || {
+          test_fail "render_template check failed"
+          continue
+        }
+        ;;
+      msg)
+        rendered=$(render_template msg \
+          COMPANION_PATHS="$companion_paths" \
+          PINNED_CONTEXT="$pinned_context" \
+          SPEC_PATH="$spec_path" \
+          LABEL="$label" \
+          CLARIFY_BEADS="$clarify_beads" \
+          EXIT_SIGNALS="$exit_signals") || {
+          test_fail "render_template msg failed"
+          continue
+        }
+        ;;
+    esac
+
+    size=$(printf '%s' "$rendered" | wc -c)
+    if [ "$size" -lt "$max_size" ]; then
+      test_pass "${tmpl} rendered prompt is ${size} bytes (< ${max_size})"
+    else
+      test_fail "${tmpl} rendered prompt is ${size} bytes (>= ${max_size})"
+    fi
+  done
+
+  teardown_test_env
+}
+
+#-----------------------------------------------------------------------------
 # discover_molecule_from_readme tests
 #-----------------------------------------------------------------------------
 
@@ -16607,6 +16965,11 @@ ALL_TESTS=(
   test_list_companion_paths_format
   test_list_companion_paths_missing_directory
   test_list_companion_paths_missing_manifest
+  # Prompt File-References tests (FR12)
+  test_templates_no_inlined_spec_content
+  test_templates_use_companion_paths
+  test_list_companion_paths_returns_paths_only
+  test_rendered_prompt_size_bound
   # discover_molecule_from_readme tests
   test_discover_molecule_from_readme
   test_discover_molecule_not_in_readme
