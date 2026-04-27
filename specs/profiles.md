@@ -39,10 +39,10 @@ A profile is a Nix attrset produced by the internal `mkProfile` helper in `lib/s
 | `mounts` | list of mount specs | Host → container bind mounts; each `{ source, dest, mode, optional }` |
 | `networkAllowlist` | list of strings | Domains permitted when `WRAPIX_NETWORK=limit` (merged with base allowlist) |
 | `enabledPlugins` | attrset | Claude Code plugins merged into `~/.claude/settings.json` (e.g. `"rust-analyzer-lsp@claude-plugins-official" = true`) |
-| `hostShellHook` | shell snippet | Optional snippet that downstream devShell / ralph / city shellHooks splice in to align host-side env with container-side mounts (rust uses this to pin `RUSTC_WRAPPER` and default `SCCACHE_DIR`) |
+| `shellHook` | shell snippet | Optional snippet for downstream **host** devShells / ralph / city shellHooks to splice in (e.g. `${rustProfile.shellHook}`). Aligns host-side toolchain identity, env, and PATH with the sandbox so `rustc` resolves to the same `/nix/store/...` path on both sides — the prerequisite for cross-boundary sccache hits and shared `target/` artifact reuse. |
 | `writableDirs` | list of strings | Linux-only: paths where the launcher stacks a tmpfs with `U=true` so the dir is wrapix-owned — needed when a ro bind mount would otherwise force the parent to be root-owned |
 
-`deriveProfile` merges `packages`, `mounts`, `env`, and `networkAllowlist` (packages/mounts/allowlist concatenated; env right-biased). Other fields (`name`, `enabledPlugins`, `hostShellHook`, `writableDirs`) pass through from the extensions attrset if set, otherwise inherit from the base — they are not deep-merged. Callers extending a profile with extra plugins or host hooks must compose those values themselves.
+`deriveProfile` merges `packages`, `mounts`, `env`, and `networkAllowlist` (packages/mounts/allowlist concatenated; env right-biased). Other fields (`name`, `enabledPlugins`, `shellHook`, `writableDirs`) pass through from the extensions attrset if set, otherwise inherit from the base — they are not deep-merged. Callers extending a profile with extra plugins or host hooks must compose those values themselves.
 
 ## Built-in Profiles
 
@@ -107,6 +107,8 @@ Environment:
 - `CARGO_INCREMENTAL=0` — sccache refuses to cache any `rustc` invocation with `-C incremental=...`, so incremental compilation and sccache are redundant; disabling incremental lets every Rust compile flow through the cache.
 - `CARGO_TARGET_DIR` — intentionally **unset**; cargo's per-workspace default (`<workspace>/target`) applies. The judge asserts this invariant because pinning `CARGO_TARGET_DIR` to a shared path across workspaces defeats cargo's freshness tracking and churns builds.
 
+**Host devshell alignment.** The profile's `shellHook` (spliced into downstream host devShells alongside `ralph.shellHook`) prepends `${toolchain}/bin` to `PATH` and re-exports `RUSTC_WRAPPER`, `SCCACHE_DIR`, `SCCACHE_CACHE_SIZE`, and `CARGO_INCREMENTAL=0` so the host shell uses the same fenix-pinned `rustc` binary as the sandbox. Without the PATH prepend, host PATH falls through to rustup's `rustc` (or whichever appears first), and the diverging sysroot path baked into rlib metadata invalidates every sccache key across the boundary — even when both sides report the same Rust version. `withToolchain` rebuilds the snippet over the custom toolchain so both `packages` and `shellHook` close over the same derivation.
+
 Mounts (host source → literal container dest; literal dests avoid the `~`-expands-on-host-launcher gotcha):
 
 - `~/.cargo/registry` → `/home/wrapix/.cargo/registry` (ro, optional) — pre-warm crate cache from host
@@ -134,11 +136,11 @@ Network allowlist: `crates.io`, `static.crates.io`, `index.crates.io`
 > the same toolchains as proper Nix derivations with correct dynamic linkers.
 >
 > **Why fenix?** fenix supports arbitrary version selection and can read
-> `rust-toolchain.toml` files via `fromToolchainFile`. Downstream projects that pin
-> rust via fenix on the host get identical rustc store paths inside the sandbox
-> when they align the flake input (`inputs.wrapix.inputs.fenix.follows = "fenix"`),
-> which in turn lets sccache hit across the host/sandbox boundary. rust-analyzer
-> is combined separately so it can track its own cadence.
+> `rust-toolchain.toml` files via `fromToolchainFile`. Identical rustc store
+> paths across the host/sandbox boundary — required for sccache hits — come
+> from splicing `rustProfile.shellHook` into the downstream devShell (see
+> *Downstream Integration*). rust-analyzer is combined separately so it can
+> track its own cadence.
 
 ### Python Profile
 
@@ -237,6 +239,8 @@ expose profile-specific configuration functions.
   [judge](../tests/judges/profiles.sh#test_derive_profile_merge)
 - [ ] Profiles are composable (can extend extended profiles)
   [verify:wrapix](../tests/mcp/tmux/e2e/test_profile_composition.sh)
+- [ ] Host devshell that splices `rustProfile.shellHook` resolves `rustc` to the same `/nix/store/...` path as the sandbox
+  [judge](../tests/judges/profiles.sh#test_host_sandbox_rustc_same_store_path)
 
 ## Out of Scope
 
@@ -246,21 +250,46 @@ expose profile-specific configuration functions.
 
 ## Downstream Integration
 
-Projects consuming wrapix that want cross-boundary sccache hits and identical
-rustc store paths in the sandbox must:
+To get cross-boundary sccache hits and identical `rustc` store paths in the
+sandbox, downstream consumers splice the rust profile's `shellHook` into their
+host devShell — parallel to `ralph.shellHook`:
 
-1. Use fenix on the host too.
-2. Route through the same fenix revision as wrapix:
+```nix
+let
+  rustProfile = wrapix.profiles.rust.withToolchain {
+    file = ./rust-toolchain.toml;
+    sha256 = "sha256-...";
+  };
+  sandbox = wrapix.mkSandbox { profile = rustProfile; };
+  ralph = wrapix.mkRalph { inherit sandbox; };
+in pkgs.mkShell {
+  shellHook = ''
+    ${ralph.shellHook}
+    ${rustProfile.shellHook}
+  '';
+}
+```
 
-   ```nix
-   inputs.wrapix.url = "...";
-   inputs.fenix.url = "git+https://github.com/nix-community/fenix.git?ref=main";
-   inputs.wrapix.inputs.fenix.follows = "fenix";
-   ```
+The hook prepends the profile's pinned toolchain to `PATH`, so host `rustc`
+resolves to the same `/nix/store/.../bin/rustc` the sandbox uses. This is the
+prerequisite for cross-boundary sccache hits and shared `target/` artifact
+reuse: when host and sandbox compile against the same toolchain derivation,
+sysroot paths in rlib metadata match, sccache keys collide, and cargo's
+fingerprints in `/workspace/target/` stay valid across switches.
 
-Without this, host and sandbox will each lock fenix to their own revision and
-produce different `/nix/store/.../bin/rustc` paths — sccache entries will not
-cross the boundary.
+**Escape hatch.** If a downstream wants to control `rustc` independently of
+wrapix's pin (e.g., to use a different fenix revision on the host), it can
+skip the splice and instead lock its fenix flake input to wrapix's:
+
+```nix
+inputs.wrapix.url = "...";
+inputs.fenix.url = "git+https://github.com/nix-community/fenix.git?ref=main";
+inputs.wrapix.inputs.fenix.follows = "fenix";
+```
+
+Without one of these mechanisms, host and sandbox lock fenix to their own
+revisions, produce different `/nix/store/.../bin/rustc` paths, and sccache
+entries do not cross the boundary.
 
 No downstream gitignore is required for the sandbox cache paths: mount dests
 live under `/home/wrapix/` inside the container, not under `/workspace/`, so
