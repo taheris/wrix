@@ -1073,20 +1073,22 @@ parse_spec_annotations() {
 }
 
 #-----------------------------------------------------------------------------
-# Companion Manifest Reader
+# Companion Path Lister
 #
-# Reads companion directories from state JSON and concatenates their
-# manifest.md files wrapped in XML-style <companion path="..."> tags.
+# Reads companion directories from state JSON and emits a newline-separated
+# list of companion-directory paths. Per spec FR12 (Prompt File-References),
+# manifest.md content is NOT inlined — the model uses Read on each
+# manifest.md as needed.
 #
-# Usage: read_manifests <state_file>
-# Output: concatenated manifests on stdout (empty string if no companions)
+# Usage: list_companion_paths <state_file>
+# Output: newline-separated list of paths on stdout (empty if no companions)
 # Returns: 0 on success, 1 on error (missing directory or manifest)
 #-----------------------------------------------------------------------------
-read_manifests() {
+list_companion_paths() {
   local state_file="$1"
 
   if [ ! -f "$state_file" ]; then
-    error "read_manifests: state file not found: $state_file"
+    error "list_companion_paths: state file not found: $state_file"
   fi
 
   # Read companions array from state JSON
@@ -1095,7 +1097,7 @@ read_manifests() {
 
   # No companions field or null → return empty string
   if [ -z "$companions_json" ] || [ "$companions_json" = "null" ]; then
-    debug "read_manifests: no companions declared"
+    debug "list_companion_paths: no companions declared"
     return 0
   fi
 
@@ -1103,12 +1105,12 @@ read_manifests() {
   local count
   count=$(echo "$companions_json" | jq -r 'if type == "array" then length else -1 end' 2>/dev/null || echo "-1")
   if [ "$count" = "-1" ]; then
-    error "read_manifests: companions field is not an array"
+    error "list_companion_paths: companions field is not an array"
   fi
 
   # Empty array → return empty string
   if [ "$count" = "0" ]; then
-    debug "read_manifests: companions array is empty"
+    debug "list_companion_paths: companions array is empty"
     return 0
   fi
 
@@ -1120,24 +1122,19 @@ read_manifests() {
 
     # Validate directory exists
     if [ ! -d "$dir_path" ]; then
-      error "read_manifests: companion directory does not exist: $dir_path"
+      error "list_companion_paths: companion directory does not exist: $dir_path"
     fi
 
     # Validate manifest.md exists
     local manifest_path="$dir_path/manifest.md"
     if [ ! -f "$manifest_path" ]; then
-      error "read_manifests: companion directory lacks manifest.md: $dir_path"
+      error "list_companion_paths: companion directory lacks manifest.md: $dir_path"
     fi
-
-    local manifest_content
-    manifest_content=$(<"$manifest_path")
 
     if [ -n "$result" ]; then
       result+=$'\n'
     fi
-    result+="<companion path=\"$dir_path\">"
-    result+=$'\n'"$manifest_content"$'\n'
-    result+="</companion>"
+    result+="$dir_path"
 
     i=$((i + 1))
   done

@@ -360,21 +360,15 @@ if [ -f "$PINNED_CONTEXT_FILE" ]; then
 fi
 
 # Check if we're continuing an existing spec
-EXISTING_SPEC=""
 CONTINUATION_CONTEXT=""
 if [ -f "$SPEC_PATH" ]; then
-  EXISTING_SPEC=$(cat "$SPEC_PATH")
   CONTINUATION_CONTEXT="
 
 ---
 
 ## Continuing Existing Plan
 
-You are continuing work on an existing specification. Here is the current content of \`$SPEC_PATH\`:
-
-\`\`\`markdown
-$EXISTING_SPEC
-\`\`\`
+You are continuing work on an existing specification. Read the current content from \`$SPEC_PATH\`.
 
 Review this spec with the user. They may want to:
 - Continue refining incomplete sections
@@ -395,10 +389,10 @@ else
 fi
 echo ""
 
-# Read companion manifests for update mode
-COMPANIONS=""
+# Read companion paths for update mode
+COMPANION_PATHS=""
 if [ "$UPDATE_MODE" = "true" ]; then
-  COMPANIONS=$(read_manifests "$LABEL_STATE_FILE")
+  COMPANION_PATHS=$(list_companion_paths "$LABEL_STATE_FILE")
 fi
 
 # Render template using centralized render_template function
@@ -407,8 +401,7 @@ if [ "$UPDATE_MODE" = "true" ]; then
   PROMPT_CONTENT=$(render_template "$TEMPLATE_NAME" \
     "LABEL=$LABEL" \
     "SPEC_PATH=$SPEC_PATH" \
-    "EXISTING_SPEC=$EXISTING_SPEC" \
-    "COMPANIONS=$COMPANIONS" \
+    "COMPANION_PATHS=$COMPANION_PATHS" \
     "PINNED_CONTEXT=$PINNED_CONTEXT" \
     "EXIT_SIGNALS=")
 else
@@ -423,7 +416,11 @@ else
   PROMPT_CONTENT="${PROMPT_CONTENT}${CONTINUATION_CONTEXT}"
 fi
 
-# Pass directly — do not export (environ bloat breaks child execs, wx-gaasw).
+# Templates reference SPEC_PATH instead of inlining the spec body, so the
+# rendered argv stays well under the Linux MAX_ARG_STRLEN ceiling
+# (PAGE_SIZE * 32 = 128 KiB on x86_64) that previously blew up
+# run_claude_interactive on large specs (wx-gaasw). Reverting to the env-var
+# route is rejected — env strings share the same per-string ceiling.
 run_claude_interactive "$PROMPT_CONTENT"
 
 # Commit working set then push to Dolt remote so host can pull them

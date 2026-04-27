@@ -648,10 +648,10 @@ run_spec_review() {
   echo "$beads_summary"
   echo ""
 
-  # Read companion manifests
+  # Read companion paths
   local companions=""
   if [ -f "$state_file" ]; then
-    companions=$(read_manifests "$state_file")
+    companions=$(list_companion_paths "$state_file")
   fi
 
   # Pin context from the configured pinnedContext file
@@ -680,7 +680,7 @@ run_spec_review() {
     "BEADS_SUMMARY=$beads_summary" \
     "BASE_COMMIT=$base_commit" \
     "MOLECULE_ID=$molecule_id" \
-    "COMPANIONS=$companions" \
+    "COMPANION_PATHS=$companions" \
     "PINNED_CONTEXT=$pinned_context" \
     "EXIT_SIGNALS=")
 

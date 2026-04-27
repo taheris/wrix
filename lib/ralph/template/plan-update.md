@@ -11,9 +11,7 @@ requirements and update the spec file directly.
 
 ## Existing Specification
 
-The current spec file (`specs/{{LABEL}}.md`) contains:
-
-{{EXISTING_SPEC}}
+Read the existing spec at `{{SPEC_PATH}}` for full context before refining.
 
 {{> companions-context}}
 

@@ -16,7 +16,7 @@ molecule, and it reflects what has already been implemented. Under
 create tasks for sibling specs in `specs/` that were touched during the plan
 session; those sibling diffs appear in the Spec Diff section below.
 
-{{EXISTING_SPEC}}
+Read the anchor spec at `{{SPEC_PATH}}` for the full current contents before identifying changes.
 
 {{> companions-context}}
 

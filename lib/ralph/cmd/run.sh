@@ -544,7 +544,7 @@ run_step() {
   local companions=""
   local state_file="$RALPH_DIR/state/${label}.json"
   if [ -f "$state_file" ]; then
-    companions=$(read_manifests "$state_file")
+    companions=$(list_companion_paths "$state_file")
   fi
 
   # Retry loop: attempt up to MAX_RETRIES+1 times (1 initial + MAX_RETRIES retries)
@@ -562,7 +562,7 @@ run_step() {
       "TITLE=$issue_title" \
       "LABEL=$label" \
       "MOLECULE_ID=$MOLECULE_ID" \
-      "COMPANIONS=$companions" \
+      "COMPANION_PATHS=$companions" \
       "DESCRIPTION=$issue_desc" \
       "PINNED_CONTEXT=$pinned_context" \
       "PREVIOUS_FAILURE=$previous_failure" \
@@ -726,7 +726,7 @@ run_step_in_worktree() {
   local companions=""
   local state_file="$RALPH_DIR/state/${label}.json"
   if [ -f "$state_file" ]; then
-    companions=$(read_manifests "$state_file")
+    companions=$(list_companion_paths "$state_file")
   fi
 
   # Render template
@@ -737,7 +737,7 @@ run_step_in_worktree() {
     "TITLE=$issue_title" \
     "LABEL=$label" \
     "MOLECULE_ID=$MOLECULE_ID" \
-    "COMPANIONS=$companions" \
+    "COMPANION_PATHS=$companions" \
     "DESCRIPTION=$issue_desc" \
     "PINNED_CONTEXT=$pinned_context" \
     "EXIT_SIGNALS=")

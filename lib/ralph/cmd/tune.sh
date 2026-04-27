@@ -126,9 +126,9 @@ Packaged templates: \`$PACKAGED_DIR\`
 | Variable | Description |
 |----------|-------------|
 | \`{{LABEL}}\` | Feature label |
-| \`{{SPEC_PATH}}\` | Path to spec file |
+| \`{{SPEC_PATH}}\` | Path to spec file (templates instruct the model to Read it on demand) |
 | \`{{PINNED_CONTEXT}}\` | Content from pinnedContext file |
-| \`{{SPEC_CONTENT}}\` | Full spec content |
+| \`{{COMPANION_PATHS}}\` | Newline-separated list of companion-directory paths |
 | \`{{ISSUE_ID}}\` | Beads issue ID |
 | \`{{TITLE}}\` | Issue title |
 | \`{{DESCRIPTION}}\` | Issue description |

@@ -266,14 +266,8 @@ if [ "$DIFF_MODE" = "diff" ] && [ "$SPEC_HIDDEN" = "false" ]; then
   unset _fo_line _fo_label
 fi
 
-SPEC_CONTENT=""
-if [ -f "$SPEC_PATH" ]; then
-  SPEC_CONTENT=$(cat "$SPEC_PATH")
-fi
-
 SPEC_DIFF=""
 EXISTING_TASKS=""
-EXISTING_SPEC=""
 
 case "$DIFF_MODE" in
   diff)
@@ -289,16 +283,9 @@ case "$DIFF_MODE" in
     SPEC_DIFF="$DIFF_CONTENT"
     ;;
   tasks)
-    # Tier 2 has no diff; Claude needs the full spec to reconcile against tasks.
+    # Tier 2 has no diff; Claude reads the spec from disk via SPEC_PATH.
     TEMPLATE_NAME="todo-update"
     EXISTING_TASKS="$DIFF_CONTENT"
-    EXISTING_SPEC="## Existing Specification
-
-The main spec file (\`$SPEC_PATH\`) contains the full current specification:
-
-\`\`\`markdown
-$SPEC_CONTENT
-\`\`\`"
     ;;
   new)
     # Tier 4: full decomposition
@@ -351,8 +338,8 @@ else
 fi
 echo ""
 
-# Read companion manifests
-COMPANIONS=$(read_manifests "$STATE_FILE")
+# Read companion paths
+COMPANION_PATHS=$(list_companion_paths "$STATE_FILE")
 
 # Read implementation notes from state file and format as markdown bullet list
 IMPLEMENTATION_NOTES=""
@@ -389,12 +376,11 @@ if [ "$UPDATE_MODE" = "true" ]; then
   PROMPT_CONTENT=$(render_template "$TEMPLATE_NAME" \
     "LABEL=$LABEL" \
     "SPEC_PATH=$SPEC_PATH" \
-    "EXISTING_SPEC=$EXISTING_SPEC" \
     "MOLECULE_ID=$MOLECULE_ID" \
     "MOLECULE_PROGRESS=$MOLECULE_PROGRESS" \
     "SPEC_DIFF=$SPEC_DIFF" \
     "EXISTING_TASKS=$EXISTING_TASKS" \
-    "COMPANIONS=$COMPANIONS" \
+    "COMPANION_PATHS=$COMPANION_PATHS" \
     "PINNED_CONTEXT=$PINNED_CONTEXT" \
     "README_INSTRUCTIONS=$README_INSTRUCTIONS" \
     "IMPLEMENTATION_NOTES=$IMPLEMENTATION_NOTES" \
@@ -403,8 +389,7 @@ else
   PROMPT_CONTENT=$(render_template "$TEMPLATE_NAME" \
     "LABEL=$LABEL" \
     "SPEC_PATH=$SPEC_PATH" \
-    "SPEC_CONTENT=$SPEC_CONTENT" \
-    "COMPANIONS=$COMPANIONS" \
+    "COMPANION_PATHS=$COMPANION_PATHS" \
     "CURRENT_FILE=$STATE_FILE" \
     "PINNED_CONTEXT=$PINNED_CONTEXT" \
     "README_INSTRUCTIONS=$README_INSTRUCTIONS" \

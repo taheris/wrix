@@ -240,10 +240,10 @@ while [ "$RUNNING" = "true" ]; do
     pinned_context=$(cat "$PINNED_CONTEXT_FILE")
   fi
 
-  # Read companion manifests
+  # Read companion paths
   companions=""
   if [ -f "$STATE_FILE" ]; then
-    companions=$(read_manifests "$STATE_FILE")
+    companions=$(list_companion_paths "$STATE_FILE")
   fi
 
   # Render watch template
@@ -251,7 +251,7 @@ while [ "$RUNNING" = "true" ]; do
     "SPEC_PATH=$SPEC_PATH" \
     "LABEL=$FEATURE_NAME" \
     "MOLECULE_ID=$MOLECULE_ID" \
-    "COMPANIONS=$companions" \
+    "COMPANION_PATHS=$companions" \
     "PINNED_CONTEXT=$pinned_context" \
     "EXIT_SIGNALS=")
 

@@ -9,7 +9,7 @@ create a beads molecule (epic + child issues) that breaks down the work.
 
 ## Specification Content
 
-{{SPEC_CONTENT}}
+Read the spec at `{{SPEC_PATH}}` for full content before decomposing.
 
 {{> companions-context}}
 

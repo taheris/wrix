@@ -89,20 +89,6 @@ let
     };
 
     # --- File content (read from paths) ---
-    SPEC_CONTENT = {
-      source = "file";
-      required = false;
-      filePath = "SPEC_PATH";
-      description = "Full content of the spec file";
-    };
-
-    EXISTING_SPEC = {
-      source = "file";
-      required = false;
-      filePath = "SPEC_PATH";
-      description = "Existing spec content (alias for SPEC_CONTENT in update mode)";
-    };
-
     SPEC_DIFF = {
       source = "computed";
       required = false;
@@ -143,11 +129,11 @@ let
     };
 
     # --- Companions (from state JSON) ---
-    COMPANIONS = {
+    COMPANION_PATHS = {
       source = "computed";
       required = false;
       default = "";
-      description = "Rendered companion manifests from read_manifests";
+      description = "Newline-separated list of companion-directory paths from list_companion_paths (no manifest body inlined)";
     };
 
     # --- Config (from ralph config) ---
@@ -368,11 +354,10 @@ let
       body = ./plan-update.md;
       partials = partialFiles;
       variables = [
-        "COMPANIONS"
+        "COMPANION_PATHS"
         "PINNED_CONTEXT"
         "LABEL"
         "SPEC_PATH"
-        "EXISTING_SPEC"
         "EXIT_SIGNALS"
       ];
     };
@@ -381,11 +366,10 @@ let
       body = ./todo-new.md;
       partials = partialFiles;
       variables = [
-        "COMPANIONS"
+        "COMPANION_PATHS"
         "PINNED_CONTEXT"
         "LABEL"
         "SPEC_PATH"
-        "SPEC_CONTENT"
         "CURRENT_FILE"
         "EXIT_SIGNALS"
         "README_INSTRUCTIONS"
@@ -397,11 +381,10 @@ let
       body = ./todo-update.md;
       partials = partialFiles;
       variables = [
-        "COMPANIONS"
+        "COMPANION_PATHS"
         "PINNED_CONTEXT"
         "LABEL"
         "SPEC_PATH"
-        "EXISTING_SPEC"
         "MOLECULE_ID"
         "MOLECULE_PROGRESS"
         "SPEC_DIFF"
@@ -416,7 +399,7 @@ let
       body = ./run.md;
       partials = partialFiles;
       variables = [
-        "COMPANIONS"
+        "COMPANION_PATHS"
         "PINNED_CONTEXT"
         "SPEC_PATH"
         "LABEL"
@@ -433,7 +416,7 @@ let
       body = ./check.md;
       partials = partialFiles;
       variables = [
-        "COMPANIONS"
+        "COMPANION_PATHS"
         "PINNED_CONTEXT"
         "SPEC_PATH"
         "LABEL"
@@ -448,7 +431,7 @@ let
       body = ./msg.md;
       partials = partialFiles;
       variables = [
-        "COMPANIONS"
+        "COMPANION_PATHS"
         "PINNED_CONTEXT"
         "SPEC_PATH"
         "LABEL"
@@ -461,7 +444,7 @@ let
       body = ./watch.md;
       partials = partialFiles;
       variables = [
-        "COMPANIONS"
+        "COMPANION_PATHS"
         "PINNED_CONTEXT"
         "SPEC_PATH"
         "LABEL"

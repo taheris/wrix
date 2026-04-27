@@ -629,7 +629,7 @@ if [ "$CHAT" = "true" ]; then
 
   companions=""
   if [ -f "$state_file" ]; then
-    companions=$(read_manifests "$state_file")
+    companions=$(list_companion_paths "$state_file")
   fi
 
   pinned_context_file=$(get_pinned_context_file)
@@ -650,7 +650,7 @@ if [ "$CHAT" = "true" ]; then
     "SPEC_PATH=$spec_path" \
     "LABEL=$label" \
     "CLARIFY_BEADS=$clarify_beads" \
-    "COMPANIONS=$companions" \
+    "COMPANION_PATHS=$companions" \
     "PINNED_CONTEXT=$pinned_context" \
     "EXIT_SIGNALS=")
 

@@ -358,7 +358,7 @@ in
     mkdir $out
   '';
 
-  # Test: plan-update template does not have NEW_REQUIREMENTS_PATH
+  # Test: plan-update template uses path-only references (no inlined spec body)
   template-plan-update-variables = runCommandLocal "template-plan-update-variables" { } ''
     set -e
 
@@ -368,7 +368,9 @@ in
       let
         t = templates."plan-update";
         checks = assertAll [
-          (assertTrue "plan-update-has-EXISTING_SPEC" (builtins.elem "EXISTING_SPEC" t.variables))
+          (assertTrue "plan-update-has-SPEC_PATH" (builtins.elem "SPEC_PATH" t.variables))
+          (assertTrue "plan-update-has-COMPANION_PATHS" (builtins.elem "COMPANION_PATHS" t.variables))
+          (assertTrue "plan-update-no-EXISTING_SPEC" (!(builtins.elem "EXISTING_SPEC" t.variables)))
           (assertTrue "plan-update-no-NEW_REQUIREMENTS_PATH" (
             !(builtins.elem "NEW_REQUIREMENTS_PATH" t.variables)
           ))
@@ -390,11 +392,10 @@ in
       let
         t = templates."todo-update";
         rendered = t.render {
-          COMPANIONS = "";
+          COMPANION_PATHS = "";
           PINNED_CONTEXT = "# Project Context";
           LABEL = "test-feature";
           SPEC_PATH = "specs/test-feature.md";
-          EXISTING_SPEC = "# Test Feature\n## Requirements\n1. Do something";
           MOLECULE_ID = "wx-abc123";
           MOLECULE_PROGRESS = "50% (5/10)";
           SPEC_DIFF = "+## New Section\n+2. Do something else";
