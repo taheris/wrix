@@ -42,7 +42,7 @@ A profile is a Nix attrset produced by the internal `mkProfile` helper in `lib/s
 | `shellHook` | shell snippet | Optional snippet for downstream **host** devShells / ralph / city shellHooks to splice in (e.g. `${rustProfile.shellHook}`). Aligns host-side toolchain identity, env, and PATH with the sandbox so `rustc` resolves to the same `/nix/store/...` path on both sides — the prerequisite for cross-boundary sccache hits and shared `target/` artifact reuse. |
 | `writableDirs` | list of strings | Linux-only: paths where the launcher stacks a tmpfs with `U=true` so the dir is wrapix-owned — needed when a ro bind mount would otherwise force the parent to be root-owned |
 
-`deriveProfile` merges `packages`, `mounts`, `env`, and `networkAllowlist` (packages/mounts/allowlist concatenated; env right-biased). Other fields (`name`, `enabledPlugins`, `shellHook`, `writableDirs`) pass through from the extensions attrset if set, otherwise inherit from the base — they are not deep-merged. Callers extending a profile with extra plugins or host hooks must compose those values themselves.
+`deriveProfile` merges `packages`, `mounts`, `env`, and `networkAllowlist` (packages/mounts/allowlist concatenated; env right-biased). Other fields (`name`, `enabledPlugins`, `shellHook`, `writableDirs`) pass through from the extensions attrset if set, otherwise inherit from the base — they are not deep-merged. Callers extending a profile with extra plugins or shell hooks must compose those values themselves.
 
 ## Built-in Profiles
 
@@ -101,7 +101,7 @@ Environment:
 - `OPENSSL_INCLUDE_DIR=${pkgs.openssl.dev}/include` — OpenSSL headers
 - `OPENSSL_LIB_DIR=${pkgs.openssl.out}/lib` — OpenSSL libraries
 - `RUSTC_WRAPPER=${pkgs.sccache}/bin/sccache` — route compiler invocations through sccache
-- `CARGO_BUILD_RUSTC_WRAPPER` — same, picked up by cargo directly
+- `CARGO_BUILD_RUSTC_WRAPPER=${pkgs.sccache}/bin/sccache` — same value, picked up by cargo directly
 - `SCCACHE_DIR=/home/wrapix/.cache/sccache` — stable in-container cache path, mounted from host
 - `SCCACHE_CACHE_SIZE=50G` — ceiling above sccache's 10 GiB default; the default LRU-evicts mid-build for workspace-sized Rust projects. Changing this requires `sccache --stop-server` before the server picks up the new value.
 - `CARGO_INCREMENTAL=0` — sccache refuses to cache any `rustc` invocation with `-C incremental=...`, so incremental compilation and sccache are redundant; disabling incremental lets every Rust compile flow through the cache.
@@ -170,7 +170,7 @@ Network allowlist: `pypi.org`, `files.pythonhosted.org`
 | `flake.nix` | Declares `fenix` and `treefmt-nix` flake inputs; threads `fenix` and the project treefmt wrapper to `lib/sandbox/profiles.nix` via `lib/sandbox/default.nix` |
 | `lib/default.nix` | Defines `deriveProfile` (merges `packages` / `mounts` / `env` / `networkAllowlist`; passes through other profile fields) |
 | `lib/sandbox/default.nix` | Imports `profiles.nix` with Linux `pkgs`, host `pkgs`, `fenix`, and the treefmt wrapper; defines internal `extendProfile` helper |
-| `lib/sandbox/profiles.nix` | Defines `mkProfile`, `basePackages`, built-in `base`/`rust`/`python` profiles; builds rust toolchain via `fenixPkgs.stable.defaultToolchain` combined with `rust-src` and `rust-analyzer`; wires sccache and sccache env vars, `CARGO_INCREMENTAL=0` |
+| `lib/sandbox/profiles.nix` | Defines `mkProfile`, `basePackages`, built-in `base`/`rust`/`python` profiles; builds rust toolchain via `fenixPkgs.stable.defaultToolchain` combined with `rust-src` and `rust-analyzer`; wires sccache and sccache env vars, `CARGO_INCREMENTAL=0`; exposes the per-profile host `shellHook` (rust prepends `${toolchain}/bin` to host PATH and re-exports sccache env) |
 | `lib/sandbox/linux/entrypoint.sh` | Contains no rustup bootstrap logic (toolchain is baked in at image build time) |
 | `lib/sandbox/darwin/entrypoint.sh` | Contains no rustup bootstrap logic |
 
@@ -216,7 +216,10 @@ These live on the profile attrset itself, not on `deriveProfile`.
   path to `rust-toolchain.toml`; `sha256` is the hash of the downloaded components),
   returns a new profile attrset (without `withToolchain`) using
   `fenix.fromToolchainFile`. `rust-src` and `rust-analyzer` are combined in on top
-  of whatever components the toolchain file declares.
+  of whatever components the toolchain file declares. Both `packages` and
+  `shellHook` are rebuilt against the custom toolchain so they close over the
+  same derivation — the host PATH prepend in `shellHook` resolves to the same
+  `rustc` binary the sandbox uses.
 
 Only the Rust profile has `withToolchain`. Other profiles (base, python) do not
 expose profile-specific configuration functions.
