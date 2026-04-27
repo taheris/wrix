@@ -15357,6 +15357,157 @@ test_rendered_prompt_size_bound() {
   teardown_test_env
 }
 
+# Regression (FR12 / wx-gaasw): a >150 KiB spec must not trip MAX_ARG_STRLEN
+# in run_claude_interactive. Templates reference SPEC_PATH so the rendered
+# prompt stays small regardless of spec size; if a future change re-inlines
+# the spec body (e.g. resurrects {{EXISTING_SPEC}} or {{SPEC_CONTENT}}), the
+# argv exceeds the per-string 128 KiB ceiling and exec returns E2BIG (exit
+# 126). Exercises the real argv path via mock-claude — do NOT mock
+# run_claude_interactive itself.
+test_plan_large_spec_no_e2big() {
+  CURRENT_TEST="plan_large_spec_no_e2big"
+  test_header "ralph plan -u: 150+ KiB spec does not trip MAX_ARG_STRLEN (E2BIG)"
+
+  setup_test_env "plan-large-spec-e2big"
+  init_beads
+
+  local label="big-spec"
+  local spec_path="specs/${label}.md"
+
+  # Synthesize a >150 KiB spec — well above the 128 KiB MAX_ARG_STRLEN ceiling
+  # on x86_64 (PAGE_SIZE * 32). 1500 lines × ~110 bytes ≈ 165 KiB.
+  {
+    echo "# Big Feature"
+    echo ""
+    echo "## Requirements"
+    local i
+    for i in $(seq 1 1500); do
+      printf -- '- Requirement %05d: %s\n' "$i" \
+        "this requirement adds bytes to the spec body to push it past the 128 KiB MAX_ARG_STRLEN ceiling on x86_64."
+    done
+  } > "$TEST_DIR/$spec_path"
+
+  local size
+  size=$(wc -c < "$TEST_DIR/$spec_path")
+  if [ "$size" -lt 153600 ]; then
+    test_fail "synthetic spec is only $size bytes; expected >= 150 KiB"
+    teardown_test_env
+    return
+  fi
+  test_pass "synthesized $size-byte spec at $spec_path"
+
+  set +e
+  local output exit_code
+  output=$(ralph-plan -u "$label" 2>&1)
+  exit_code=$?
+  set -e
+
+  if [ "$exit_code" -eq 126 ]; then
+    test_fail "plan -u exited 126 (E2BIG / argv ceiling regression); tail: $(echo "$output" | tail -5)"
+    teardown_test_env
+    return
+  fi
+
+  if echo "$output" | grep -qiE "argument list too long|E2BIG"; then
+    test_fail "plan -u tripped MAX_ARG_STRLEN (exit=$exit_code); output: $output"
+  else
+    test_pass "plan -u completes without E2BIG (exit=$exit_code)"
+  fi
+
+  teardown_test_env
+}
+
+# Regression (FR12 / wx-gaasw): ralph tune's rendered prompt must not exceed
+# MAX_ARG_STRLEN even when a large spec + large companion manifest exist on
+# disk. tune does not inline {{SPEC_CONTENT}} or {{COMPANIONS}} today; this
+# test guards against a future regression that would. Exercises the real
+# argv path via mock-claude (PATH-overlaid stub). Do NOT mock
+# run_claude_interactive itself.
+test_tune_large_prompt_no_e2big() {
+  CURRENT_TEST="tune_large_prompt_no_e2big"
+  test_header "ralph tune: 150+ KiB context does not trip MAX_ARG_STRLEN (E2BIG)"
+
+  setup_test_env "tune-large-prompt-e2big"
+  init_beads
+
+  local label="big-tune"
+  local spec_path="specs/${label}.md"
+  local companion_dir="specs/big-companions"
+
+  # Synthesize a >150 KiB spec.
+  {
+    echo "# Big Tune Feature"
+    echo ""
+    local i
+    for i in $(seq 1 1500); do
+      printf -- '- Detail %05d: %s\n' "$i" \
+        "this paragraph pushes the spec body past 128 KiB so a regression that re-inlines spec content into the tune prompt would deterministically fail with E2BIG."
+    done
+  } > "$TEST_DIR/$spec_path"
+
+  # Synthesize a >150 KiB companion manifest.
+  mkdir -p "$TEST_DIR/$companion_dir"
+  {
+    echo "# Companion Manifest"
+    echo ""
+    local j
+    for j in $(seq 1 1500); do
+      printf -- '- Manifest entry %05d: %s\n' "$j" \
+        "this is companion content that, if inlined into the rendered tune prompt by a regressed template, would exceed 128 KiB and trip MAX_ARG_STRLEN."
+    done
+  } > "$TEST_DIR/$companion_dir/manifest.md"
+
+  local spec_size companion_size
+  spec_size=$(wc -c < "$TEST_DIR/$spec_path")
+  companion_size=$(wc -c < "$TEST_DIR/$companion_dir/manifest.md")
+  if [ "$spec_size" -lt 153600 ] || [ "$companion_size" -lt 153600 ]; then
+    test_fail "synthetic context too small: spec=$spec_size, companion=$companion_size"
+    teardown_test_env
+    return
+  fi
+  test_pass "synthesized large context (spec=${spec_size}B, companion=${companion_size}B)"
+
+  # Wire spec + companion into state so any regressed template that pulls
+  # them via list_companion_paths or {{SPEC_CONTENT}} would inline both.
+  setup_label_state "$label" "false"
+  jq --arg c "$companion_dir" '.companions = [$c]' \
+    "$RALPH_DIR/state/${label}.json" > "$RALPH_DIR/state/${label}.json.tmp"
+  mv "$RALPH_DIR/state/${label}.json.tmp" "$RALPH_DIR/state/${label}.json"
+
+  # tune.sh runs `ralph-check` after the Claude session; stub it to a no-op
+  # so post-claude validation does not perturb the exit code we care about
+  # (the run_claude_interactive argv-path outcome).
+  rm -f "$TEST_DIR/bin/ralph-check"
+  cat > "$TEST_DIR/bin/ralph-check" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+  chmod +x "$TEST_DIR/bin/ralph-check"
+
+  # Pipe a small diff so tune enters integration mode (stdin not a TTY in
+  # tests). The diff content is tiny — the test verifies that on-disk
+  # spec/companion bulk does NOT inflate the rendered tune prompt.
+  set +e
+  local output exit_code
+  output=$(echo "small synthetic diff" | bash "$REPO_ROOT/lib/ralph/cmd/tune.sh" 2>&1)
+  exit_code=$?
+  set -e
+
+  if [ "$exit_code" -eq 126 ]; then
+    test_fail "tune exited 126 (E2BIG / argv ceiling regression); tail: $(echo "$output" | tail -5)"
+    teardown_test_env
+    return
+  fi
+
+  if echo "$output" | grep -qiE "argument list too long|E2BIG"; then
+    test_fail "tune tripped MAX_ARG_STRLEN (exit=$exit_code); output: $output"
+  else
+    test_pass "tune completes without E2BIG (exit=$exit_code)"
+  fi
+
+  teardown_test_env
+}
+
 #-----------------------------------------------------------------------------
 # discover_molecule_from_readme tests
 #-----------------------------------------------------------------------------
@@ -16970,6 +17121,8 @@ ALL_TESTS=(
   test_templates_use_companion_paths
   test_list_companion_paths_returns_paths_only
   test_rendered_prompt_size_bound
+  test_plan_large_spec_no_e2big
+  test_tune_large_prompt_no_e2big
   # discover_molecule_from_readme tests
   test_discover_molecule_from_readme
   test_discover_molecule_not_in_readme
