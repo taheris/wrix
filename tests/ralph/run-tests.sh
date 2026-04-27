@@ -6348,6 +6348,79 @@ test_interview_modes_partial_content() {
   fi
 }
 
+test_plan_new_rule_partials() {
+  CURRENT_TEST="plan_new_rule_partials"
+  test_header "plan-new.md keeps Implementation Notes rule prose in partial"
+
+  local plan_new="$REPO_ROOT/lib/ralph/template/plan-new.md"
+
+  if [ ! -f "$plan_new" ]; then
+    test_fail "plan-new.md does not exist at $plan_new"
+    return
+  fi
+
+  if grep -qF '{{> implementation-notes-spec}}' "$plan_new"; then
+    test_pass "plan-new.md references {{> implementation-notes-spec}}"
+  else
+    test_fail "plan-new.md missing {{> implementation-notes-spec}} partial reference"
+  fi
+
+  # Phrases unique to implementation-notes-spec.md. Their presence in the
+  # template body indicates the partial's rule prose has been inlined.
+  local phrase
+  for phrase in 'automatically stripped' 'transient context'; do
+    if grep -qF "$phrase" "$plan_new"; then
+      test_fail "plan-new.md inlines rule prose ('$phrase' belongs only in implementation-notes-spec partial)"
+    else
+      test_pass "plan-new.md does not inline '$phrase'"
+    fi
+  done
+}
+
+test_plan_update_rule_partials() {
+  CURRENT_TEST="plan_update_rule_partials"
+  test_header "plan-update.md keeps rule prose inside partials"
+
+  local plan_update="$REPO_ROOT/lib/ralph/template/plan-update.md"
+
+  if [ ! -f "$plan_update" ]; then
+    test_fail "plan-update.md does not exist at $plan_update"
+    return
+  fi
+
+  local partial_ref
+  for partial_ref in \
+    '{{> sibling-spec-editing}}' \
+    '{{> invariant-clash}}' \
+    '{{> implementation-notes-state}}'; do
+    if grep -qF "$partial_ref" "$plan_update"; then
+      test_pass "plan-update.md references $partial_ref"
+    else
+      test_fail "plan-update.md missing $partial_ref reference"
+    fi
+  done
+
+  # Phrases unique to each partial. Presence in the template body indicates
+  # the partial's rule prose has been inlined.
+  # - 'three-paths principle', 'Preserve the invariant' -> invariant-clash
+  # - 'implementation_notes array', 'automatically passed to' ->
+  #   implementation-notes-state (anchor-owns-state-file rule)
+  # - 'Sibling specs do **not**' -> sibling-spec-editing
+  local phrase
+  for phrase in \
+    'three-paths principle' \
+    'Preserve the invariant' \
+    'implementation_notes array' \
+    'automatically passed to' \
+    'Sibling specs do **not**'; do
+    if grep -qF "$phrase" "$plan_update"; then
+      test_fail "plan-update.md inlines rule prose ('$phrase' belongs only in a partial)"
+    else
+      test_pass "plan-update.md does not inline '$phrase'"
+    fi
+  done
+}
+
 # Test: discovered work - bd mol bond during run execution
 # Verifies:
 # 1. bd mol bond --type sequential during run works
@@ -16352,6 +16425,8 @@ ALL_TESTS=(
   test_plan_template_with_partials
   test_plan_templates_include_interview_modes
   test_interview_modes_partial_content
+  test_plan_new_rule_partials
+  test_plan_update_rule_partials
   test_logs_error_detection
   test_logs_all_flag
   test_logs_context_lines
