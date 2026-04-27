@@ -27,6 +27,7 @@ defines the platform those commands share. Pipeline semantics live in
 9. **Compaction Re-Pin** — Container-executed Claude sessions register a `SessionStart` hook with matcher `"compact"` that re-injects, after auto-compaction, (a) a condensed orientation (label, spec path, exit signals, command-specific context) and (b) the rendered body of every `{{> partial}}` referenced by the running command's template, so the model retains both orientation and non-derivable rules without re-pinning the full spec body. Rule content MUST live in partials (not inline in template bodies) to survive re-pin; see [Compaction Re-Pin](#compaction-re-pin) for the rules/data/role framing and enforcement discipline
 10. **`ralph:clarify` Label** — Beads waiting on human response carry this label; the run loop filters them out, a notification is emitted when first applied, and `ralph msg` handles resolution (see [ralph-review.md](ralph-review.md))
 11. **Project Bootstrap** — `ralph init` scaffolds a fresh wrapix project from zero (`flake.nix`, `.envrc`, `.gitignore`, `.pre-commit-config.yaml`, `bd init`, `docs/`, `AGENTS.md`, `CLAUDE.md` symlink, `.wrapix/ralph/template/`). Invocable as a flake app (`nix run github:taheris/wrapix#init`) for use before ralph is on PATH. All artifacts are skip-if-exists; no git operations. Shares `scaffold_docs`/`scaffold_agents`/`scaffold_templates` with `ralph sync`
+12. **Prompt File-References** — Rendered prompts reference spec and manifest files by path; whole-file contents are not inlined into the prompt body, regardless of whether the command delivers via argv (interactive) or stdin (stream). Avoids the Linux `MAX_ARG_STRLEN` (128 KiB per argv string on x86_64) ceiling in `run_claude_interactive` and aligns first-turn context with the Compaction Re-Pin "data is re-readable from disk" doctrine; see [Prompt File-References](#prompt-file-references)
 
 ### Non-Functional
 
@@ -93,6 +94,23 @@ Ralph runs Claude-calling commands inside wrapix containers for isolation and re
 4. Host-side `<cmd>.sh` runs `bd dolt pull` (syncs Dolt remote → host `.beads/`)
 
 This is necessary because the container has its own `.beads/` database (not bind-mounted). Without the push/pull handoff, beads created inside the container are lost when the container exits. The host-side pull is the final step; if `bd dolt push` failed inside the container, the pull gets stale data and the host emits an informational warning with recovery hints.
+
+## Prompt File-References
+
+Templates rendered for a Claude session MUST reference spec and manifest files by path, not by inlined content. Concretely:
+
+- `{{SPEC_PATH}}` (existing) is used as a path reference, e.g. "Read the existing spec at `{{SPEC_PATH}}`"
+- `{{COMPANION_PATHS}}` (replaces the prior `{{COMPANIONS}}`) is a newline-separated list of companion-directory paths; the model uses Read on each `manifest.md` as needed
+- The variables `{{EXISTING_SPEC}}` and `{{SPEC_CONTENT}}` are removed — templates that previously inlined them now point the model at `{{SPEC_PATH}}`
+
+Two motivations:
+
+1. **Argv ceiling.** `run_claude_interactive` (used by `ralph plan` and `ralph tune`) passes the rendered prompt as a single argv string. Linux `MAX_ARG_STRLEN` caps each argv at `PAGE_SIZE * 32` (128 KiB on x86_64), independent of total `ARG_MAX`. Inlining a spec body north of ~120 KiB plus template chrome trips `E2BIG` deterministically before Claude starts. Stream commands (`run_claude_stream`: `todo`, `run`, `check`) pipe via stdin and do not hit the per-argv limit, but the rule applies uniformly so future templates cannot reintroduce the bug.
+2. **Doctrine consistency.** File-readable inputs are already classified "data" by [What Gets Re-Pinned](#what-gets-re-pinned) and excluded from the post-compact re-pin. First-turn prompts adopt the same lens: the model reads spec/manifest content from disk on demand.
+
+Variables that stay inline (computed/derived data, not whole-file inputs): `SPEC_DIFF`, `EXISTING_TASKS`, `BEADS_SUMMARY`, `IMPLEMENTATION_NOTES`, `CLARIFY_BEADS`, `TITLE`, `DESCRIPTION`, `PREVIOUS_FAILURE`.
+
+The fix lives in templates and `list_companion_paths` (the renamed `read_manifests`), not in `run_claude_interactive`: once templates stop inlining whole-file content, the per-argv limit is satisfied naturally and no runtime guard or stdin fallback is required. Reverting to the env-var route is explicitly rejected — env strings share the same per-string ceiling (see prior wx-gaasw discussion in `lib/ralph/cmd/plan.sh`).
 
 ## Commands
 
@@ -400,7 +418,7 @@ The Options Format Contract — the markdown shape that `ralph msg` consumes and
 
 > Driving bead: [wx-p9tzi](#) — long-running ralph plan sessions lost template-defined conventions (e.g. `## Implementation Notes`) after auto-compact because the re-pin only restored orientation, not rule content carried by the initial template.
 
-Claude Code auto-compacts long-running sessions when the context window fills. The initial rendered template content (label, spec path, companion manifest list, exit-signal instructions, issue details, and the template's own rule prose) is delivered as the first user message and is summarized lossily by auto-compaction, causing the model to drift — forgetting which spec it's working on, which exit signals to use, which companion files exist to consult, and which template-defined conventions it was given.
+Claude Code auto-compacts long-running sessions when the context window fills. The initial rendered template content (label, spec path, companion-directory path list, exit-signal instructions, issue details, and the template's own rule prose) is delivered as the first user message and is summarized lossily by auto-compaction, causing the model to drift — forgetting which spec it's working on, which exit signals to use, which companion directories exist to consult, and which template-defined conventions it was given.
 
 Ralph configures a `SessionStart` hook with matcher `"compact"` so a condensed re-pin is re-injected into the session on the next model turn. The re-pin carries (a) orientation metadata and (b) the rendered body of every `{{> partial}}` referenced by the running command's template; it deliberately excludes the full spec body, companion manifest bodies, task list, and first-turn role framing (the model can re-read `specs/<label>.md`, companion directories, and `bd show <id>` / `bd mol current` on demand). Keeping the injection small protects the savings from compaction.
 
@@ -411,7 +429,7 @@ Template content falls into three categories. Only one is re-injected post-compa
 | Category | Re-injected? | Examples | Rationale |
 |----------|:------------:|----------|-----------|
 | **Rule** | ✅ yes | Implementation Notes convention, sibling-spec editing protocol, invariant-clash three-paths principle, exit-signal format, interview modes | Non-derivable from spec, codebase, or `bd show`; the model cannot reconstruct these from disk. MUST be encoded as `{{> partial}}` references in template bodies so re-pin restores them faithfully. |
-| **Data** | ❌ no | `{{SPEC_CONTENT}}`, `{{EXISTING_SPEC}}`, `{{SPEC_DIFF}}`, `{{EXISTING_TASKS}}`, `{{COMPANIONS}}`, `{{DESCRIPTION}}` | Re-readable from disk via the spec path, companion directories, or `bd show`; re-injecting would bloat the re-pin without information gain. |
+| **Data** | ❌ no | `{{SPEC_PATH}}` (path-only; no body), `{{SPEC_DIFF}}`, `{{EXISTING_TASKS}}`, `{{COMPANION_PATHS}}` (path-only), `{{DESCRIPTION}}` | Re-readable from disk via the spec path, companion directories, or `bd show`; re-injecting would bloat the re-pin without information gain. (`{{EXISTING_SPEC}}` and `{{SPEC_CONTENT}}` are removed entirely under [Prompt File-References](#prompt-file-references); `{{COMPANIONS}}` is replaced by the path-list `{{COMPANION_PATHS}}`.) |
 | **Role** | ❌ no | First-turn role statement ("You are conducting a specification interview"), interview-flow numbering, planning-only warnings | First-turn framing prose; after compaction the model has already acted in role. Intentionally lost — the model's behavior is anchored by the rules and orientation, not by re-stating the role. |
 
 **Enforcement discipline.** The "rules live as partials, never inline" invariant is enforced by (a) code review during template edits and (b) a lint/judge rubric that flags rule-shaped prose (conventions, protocols, "MUST"/"SHOULD" statements) appearing directly in `plan-*.md`, `todo-*.md`, `run.md`, `check.md`, `msg.md` bodies outside of `{{> }}` references. Templates stay flat (no `## Rules` / `## Data` / `## Role` sectioning); the partial-is-a-rule encoding is the structural contract.
@@ -584,7 +602,7 @@ Resolved during template rendering.
 lib/ralph/template/
 ├── default.nix                      # Template definitions + validation
 ├── partial/
-│   ├── companions-context.md        # Companion manifest injection
+│   ├── companions-context.md        # Companion path-list injection (no manifest body)
 │   ├── context-pinning.md           # Project context loading
 │   ├── exit-signals.md              # Exit signal format
 │   ├── implementation-notes-spec.md # Rule: ## Implementation Notes section in spec markdown, stripped on finalize (plan-new)
@@ -608,12 +626,10 @@ lib/ralph/template/
 |----------|--------|---------|
 | `PINNED_CONTEXT` | Read from `pinnedContext` file | all |
 | `LABEL` | From command args | all |
-| `SPEC_PATH` | Computed from label + mode | all |
-| `SPEC_CONTENT` | Read from spec file | todo-new, run |
-| `EXISTING_SPEC` | Read from `specs/<label>.md` | plan-update, todo-update |
+| `SPEC_PATH` | Computed from label + mode | all (used as a path reference; templates instruct the model to Read the file on demand — see [Prompt File-References](#prompt-file-references)) |
 | `SPEC_DIFF` | From `git diff base_commit..HEAD` (tier 1) | todo-update |
 | `EXISTING_TASKS` | From molecule task list (tier 2) | todo-update |
-| `COMPANIONS` | From `read_manifests` (companion directories) | plan-update, todo-new, todo-update, run, check, msg |
+| `COMPANION_PATHS` | Newline-separated list of companion-directory paths from `list_companion_paths` (no manifest body inlined) | plan-update, todo-new, todo-update, run, check, msg |
 | `CLARIFY_BEADS` | Outstanding `ralph:clarify` beads for the spec (ID, title, description) | msg |
 | `IMPLEMENTATION_NOTES` | From `implementation_notes` in `state/<label>.json` | todo-new, todo-update |
 | `MOLECULE_ID` | From `state/<label>.json` | todo-update, run |
@@ -660,10 +676,14 @@ Output ONE of these at the end of your response:
 
 **`partial/companions-context.md`:**
 ```markdown
-{{COMPANIONS}}
+## Companions
+
+The following companion directories are in scope. Read each one's `manifest.md` on demand:
+
+{{COMPANION_PATHS}}
 ```
 
-Ships with just `{{COMPANIONS}}`; overridable by local template overlay.
+Ships with just the path-list framing above; overridable by local template overlay. The partial body MUST NOT inline manifest contents — see [Prompt File-References](#prompt-file-references).
 
 **`partial/spec-header.md`:**
 ```markdown
@@ -856,9 +876,9 @@ Ralph uses `bd mol` for work tracking:
 | `lib/ralph/cmd/sync.sh` | Template sync from packaged (includes --diff); calls shared `scaffold_docs`/`scaffold_agents`/`scaffold_templates` from util.sh |
 | `lib/ralph/cmd/use.sh` | Active workflow switching with validation |
 | `lib/ralph/cmd/init.sh` | Project bootstrap — flake.nix, .envrc, .gitignore, .pre-commit-config.yaml, bd init, CLAUDE.md symlink; calls shared scaffold functions |
-| `lib/ralph/cmd/util.sh` | Shared helper functions (includes `resolve_spec_label`, `read_manifests`, `compute_spec_diff`, `discover_molecule_from_readme`, `ralph:clarify` label management, `build_repin_content` (scans template for `{{> }}` references and resolves partials), `install_repin_hook`, `scaffold_docs`, `scaffold_agents`, `scaffold_templates`, `bootstrap_flake`, `bootstrap_envrc`, `bootstrap_gitignore`, `bootstrap_precommit`, `bootstrap_beads`, `bootstrap_claude_symlink`) |
+| `lib/ralph/cmd/util.sh` | Shared helper functions (includes `resolve_spec_label`, `list_companion_paths` (replaces the prior `read_manifests`; returns a newline-separated list of companion-directory paths, no manifest body), `compute_spec_diff`, `discover_molecule_from_readme`, `ralph:clarify` label management, `build_repin_content` (scans template for `{{> }}` references and resolves partials), `install_repin_hook`, `scaffold_docs`, `scaffold_agents`, `scaffold_templates`, `bootstrap_flake`, `bootstrap_envrc`, `bootstrap_gitignore`, `bootstrap_precommit`, `bootstrap_beads`, `bootstrap_claude_symlink`). `run_claude_interactive` is unchanged — once templates stop inlining whole-file content, the per-argv `MAX_ARG_STRLEN` ceiling is satisfied naturally. |
 | `lib/ralph/template/default.nix` | Nix template definitions |
-| `lib/ralph/template/partial/companions-context.md` | Companion manifest injection partial |
+| `lib/ralph/template/partial/companions-context.md` | Companion path-list injection partial (no manifest body — see [Prompt File-References](#prompt-file-references)) |
 | `lib/ralph/template/partial/context-pinning.md` | Project context partial |
 | `lib/ralph/template/partial/exit-signals.md` | Exit signal format partial |
 | `lib/ralph/template/partial/implementation-notes-spec.md` | Rule partial: `## Implementation Notes` section in spec markdown, stripped on finalize (plan-new) |
@@ -989,6 +1009,23 @@ Ralph uses `bd mol` for work tracking:
   [verify](../tests/ralph/run-tests.sh#test_wrapix_flake_exposes_init)
 - [ ] Top-level wrapix flake's `packages.${system}.ralph` exposes a `shellHook` passthru
   [verify](../tests/ralph/run-tests.sh#test_wrapix_ralph_shellhook_passthru)
+
+### Prompt file-references
+
+- [ ] No template body or partial body references `{{EXISTING_SPEC}}` or `{{SPEC_CONTENT}}` (variables are removed)
+  [verify](../tests/ralph/run-tests.sh#test_templates_no_inlined_spec_content)
+- [ ] No template body or partial body references `{{COMPANIONS}}` (replaced by `{{COMPANION_PATHS}}`)
+  [verify](../tests/ralph/run-tests.sh#test_templates_use_companion_paths)
+- [ ] `list_companion_paths` returns a newline-separated list of companion-directory paths and never inlines `manifest.md` contents
+  [verify](../tests/ralph/run-tests.sh#test_list_companion_paths_returns_paths_only)
+- [ ] `{{COMPANION_PATHS}}` is wired into plan-update, todo-new, todo-update, run, check, and msg renders
+  [verify](../tests/ralph/run-tests.sh#test_companion_paths_template_variable)
+- [ ] `ralph plan -u <label>` against a synthetic spec ≥150 KiB completes without `E2BIG` / exit 126 (regression for the argv ceiling that tripped on a 127 KiB spec before this change)
+  [verify](../tests/ralph/run-tests.sh#test_plan_large_spec_no_e2big)
+- [ ] `ralph tune` interactive launch with a synthetic ≥150 KiB context completes without `E2BIG`
+  [verify](../tests/ralph/run-tests.sh#test_tune_large_prompt_no_e2big)
+- [ ] After the rename, the rendered prompt for every container-executed command stays under 64 KiB on representative project state (well below the 128 KiB argv ceiling, with headroom for future template growth)
+  [verify](../tests/ralph/run-tests.sh#test_rendered_prompt_size_bound)
 
 ### Top-level diagram
 

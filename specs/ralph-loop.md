@@ -235,18 +235,18 @@ This is more accurate than spec-level detection because tasks often span multipl
 
 ## Companion Content
 
-Specs can declare companion directories whose manifest is injected into templates, giving the LLM awareness of related content it can read on demand.
+Specs can declare companion directories whose paths are injected into templates, giving the LLM awareness of related content it can read on demand. Manifest bodies are NOT inlined — see [ralph-harness.md#prompt-file-references](ralph-harness.md#prompt-file-references).
 
 - `state/<label>.json` gains an optional `companions` field: an array of directory paths relative to repo root
 - Each companion directory must exist and contain a `manifest.md` — error if directory does not exist, separate error if directory exists but `manifest.md` is missing
-- `read_manifests` in `util.sh` reads only `manifest.md` from each directory, wrapping each in XML-style tags:
+- `list_companion_paths` in `util.sh` returns a newline-separated list of companion-directory paths, one per line:
 
-  ```xml
-  <companion path="specs/e2e">
-  (contents of specs/e2e/manifest.md)
-  </companion>
+  ```
+  specs/e2e
+  docs/api
   ```
 
+  Manifest contents are NOT inlined — the model uses Read on each `<dir>/manifest.md` on demand. This avoids the per-argv `MAX_ARG_STRLEN` ceiling for `run_claude_interactive` (see [ralph-harness.md#prompt-file-references](ralph-harness.md#prompt-file-references)) and is uniform across stream and interactive commands.
 - Individual companion files are never bulk-injected; the LLM reads them on demand based on manifest guidance
 - No exclusion patterns, no individual file entries, no size limits
 - Any repo-relative path is valid (not restricted to `specs/`)
@@ -472,7 +472,7 @@ Add unit tests for parser edge cases...
 | `lib/ralph/cmd/plan.sh` | Feature initialization + spec interview |
 | `lib/ralph/cmd/todo.sh` | Issue creation (renamed from ready.sh) |
 | `lib/ralph/cmd/run.sh` | Issue work (merged from step.sh + loop.sh), retry logic; commits per-bead but does NOT push; at molecule completion `exec ralph check` |
-| `lib/ralph/cmd/util.sh` | `compute_spec_diff` (per-spec fan-out in tier 1), `discover_molecule_from_readme`, `read_manifests` |
+| `lib/ralph/cmd/util.sh` | `compute_spec_diff` (per-spec fan-out in tier 1), `discover_molecule_from_readme`, `list_companion_paths` (replaces `read_manifests`; returns paths, not inlined manifest content — see [ralph-harness.md#prompt-file-references](ralph-harness.md#prompt-file-references)) |
 | `lib/ralph/template/plan-new.md` | New-spec interview prompt |
 | `lib/ralph/template/plan-update.md` | Existing-spec update interview prompt |
 | `lib/ralph/template/todo-new.md` | Molecule creation prompt |
@@ -646,16 +646,16 @@ Add unit tests for parser edge cases...
 
 ### Companions
 
-- [ ] `read_manifests` errors if a companion directory does not exist
-  [verify](../tests/ralph/run-tests.sh#test_read_manifests_missing_directory)
-- [ ] `read_manifests` errors if a companion directory lacks `manifest.md`
-  [verify](../tests/ralph/run-tests.sh#test_read_manifests_missing_manifest)
-- [ ] `read_manifests` returns empty string when no companions declared
-  [verify](../tests/ralph/run-tests.sh#test_read_manifests_empty)
-- [ ] `read_manifests` wraps each manifest in `<companion path="...">` tags
-  [verify](../tests/ralph/run-tests.sh#test_read_manifests_format)
-- [ ] `{{COMPANIONS}}` is available in plan-update, todo-new, todo-update, and run templates
-  [verify](../tests/ralph/run-tests.sh#test_companion_template_variable)
+- [ ] `list_companion_paths` errors if a companion directory does not exist
+  [verify](../tests/ralph/run-tests.sh#test_list_companion_paths_missing_directory)
+- [ ] `list_companion_paths` errors if a companion directory lacks `manifest.md`
+  [verify](../tests/ralph/run-tests.sh#test_list_companion_paths_missing_manifest)
+- [ ] `list_companion_paths` returns empty string when no companions declared
+  [verify](../tests/ralph/run-tests.sh#test_list_companion_paths_empty)
+- [ ] `list_companion_paths` returns a newline-separated list of paths, no manifest body
+  [verify](../tests/ralph/run-tests.sh#test_list_companion_paths_format)
+- [ ] `{{COMPANION_PATHS}}` is available in plan-update, todo-new, todo-update, and run templates
+  [verify](../tests/ralph/run-tests.sh#test_companion_paths_template_variable)
 - [ ] Local template overlay can override `partial/companions-context.md`
   [verify](../tests/ralph/run-tests.sh#test_companion_partial_override)
 
