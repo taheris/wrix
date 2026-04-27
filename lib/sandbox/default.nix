@@ -25,7 +25,7 @@ let
   linuxSandbox = import ./linux { inherit pkgs; };
 
   # Profiles must use Linux packages (they contain Linux-only tools like iproute2)
-  # hostPkgs is used only by hostShellHook references.
+  # hostPkgs is used only by profile.shellHook references.
   profiles = import ./profiles.nix {
     pkgs = linuxPkgs;
     hostPkgs = pkgs;

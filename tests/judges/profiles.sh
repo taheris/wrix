@@ -35,3 +35,8 @@ test_rust_with_toolchain() {
   judge_files "lib/sandbox/profiles.nix"
   judge_criterion "profiles.rust.withToolchain accepts { file, sha256 } (file being a rust-toolchain.toml path, sha256 being the component hash fenix needs for purity) and returns a profile attrset (without withToolchain) using fenix.fromToolchainFile. rust-src and rust-analyzer are combined in via fenix.combine. The returned profile is compatible with deriveProfile."
 }
+
+test_host_sandbox_rustc_same_store_path() {
+  judge_files "lib/sandbox/profiles.nix"
+  judge_criterion "The rust profile exposes a shellHook field (not hostShellHook) that, when spliced into a host devShell, prepends \${toolchain}/bin to PATH so host rustc resolves to the same /nix/store/... path the sandbox bakes in. Both the default rust profile and the withToolchain variant must close their shellHook over the same toolchain derivation that goes into packages, so packages and shellHook never drift."
+}

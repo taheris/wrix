@@ -80,10 +80,11 @@ let
   ];
 
   # Helper to create a profile with base packages, mounts, and env merged in.
-  # hostShellHook is a shell snippet consumer shellHooks (ralph, city, or a
-  # downstream devShell) splice in to align host-side env with what the profile
-  # mounts into the sandbox — e.g. pointing host sccache at the path the rust
-  # profile mounts, so cross-boundary cache hits work.
+  # shellHook is a shell snippet consumer shellHooks (ralph, city, or a
+  # downstream host devShell) splice in to align host-side toolchain identity,
+  # env, and PATH with the sandbox — e.g. prepending the rust profile's
+  # `${toolchain}/bin` so host `rustc` resolves to the same /nix/store/... path
+  # the sandbox uses, the prerequisite for cross-boundary sccache hits.
   mkProfile =
     {
       name,
@@ -92,14 +93,14 @@ let
       mounts ? [ ],
       networkAllowlist ? [ ],
       enabledPlugins ? { },
-      hostShellHook ? "",
+      shellHook ? "",
       writableDirs ? [ ],
     }:
     {
       inherit
         name
         enabledPlugins
-        hostShellHook
+        shellHook
         writableDirs
         ;
       packages = basePackages ++ packages;
@@ -195,12 +196,13 @@ let
       writableDirs = [ "/home/wrapix/.cargo" ];
 
       # Align host with the sandbox so cross-boundary cache hits work.
-      # RUSTC_WRAPPER: always pin to wrapix's sccache so host and sandbox
-      # run the same version — avoids cache-format drift if the user's
-      # ambient sccache is a different build.
+      # PATH prepend pins host `rustc` to the same fenix derivation the sandbox
+      # bakes in — without it, host falls through to rustup and the diverging
+      # sysroot baked into rlib metadata invalidates every sccache key.
       # SCCACHE_DIR/SCCACHE_CACHE_SIZE/CARGO_INCREMENTAL: default if unset;
       # downstream can override in its own shellHook.
-      hostShellHook = ''
+      shellHook = ''
+        export PATH="${toolchain}/bin:$PATH"
         export RUSTC_WRAPPER="${hostPkgs.sccache}/bin/sccache"
         export SCCACHE_DIR="''${SCCACHE_DIR:-$HOME/.cache/sccache}"
         export SCCACHE_CACHE_SIZE="''${SCCACHE_CACHE_SIZE:-50G}"
