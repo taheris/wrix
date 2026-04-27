@@ -40,3 +40,8 @@ test_host_sandbox_rustc_same_store_path() {
   judge_files "lib/sandbox/profiles.nix"
   judge_criterion "The rust profile exposes a shellHook field (not hostShellHook) that, when spliced into a host devShell, prepends \${toolchain}/bin to PATH so host rustc resolves to the same /nix/store/... path the sandbox bakes in. Both the default rust profile and the withToolchain variant must close their shellHook over the same toolchain derivation that goes into packages, so packages and shellHook never drift."
 }
+
+test_rust_toolchain_field() {
+  judge_files "lib/sandbox/profiles.nix"
+  judge_criterion "The rust profile exposes a 'toolchain' field on both the default profile and the withToolchain { file, sha256 } variant. The field is the resolved fenix combine derivation — the same derivation interpolated into the profile's packages list and into the \${toolchain}/bin PATH prepend in shellHook. All three references close over the same value so sibling Nix apps using rustProfile.toolchain in runtimeInputs see the identical /nix/store/... path the sandbox bakes in."
+}

@@ -208,6 +208,9 @@ let
         export SCCACHE_CACHE_SIZE="''${SCCACHE_CACHE_SIZE:-50G}"
         export CARGO_INCREMENTAL="''${CARGO_INCREMENTAL:-0}"
       '';
+    }
+    // {
+      inherit toolchain;
     };
 
   # Build a toolchain from a rust-toolchain.toml file. fenix requires a sha256
