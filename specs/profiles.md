@@ -44,6 +44,8 @@ A profile is a Nix attrset produced by the internal `mkProfile` helper in `lib/s
 
 `deriveProfile` merges `packages`, `mounts`, `env`, and `networkAllowlist` (packages/mounts/allowlist concatenated; env right-biased). Other fields (`name`, `enabledPlugins`, `shellHook`, `writableDirs`) pass through from the extensions attrset if set, otherwise inherit from the base — they are not deep-merged. Callers extending a profile with extra plugins or shell hooks must compose those values themselves.
 
+The rust profile additionally exposes `toolchain` (the resolved fenix `combine` derivation) and `withToolchain` (a configuration function); both pass through `deriveProfile` since extensions don't override them. See [Rust Profile](#rust-profile) for details.
+
 ## Built-in Profiles
 
 ### Base Profile
@@ -139,10 +141,11 @@ Network allowlist: `crates.io`, `static.crates.io`, `index.crates.io`
 >
 > **Why fenix?** fenix supports arbitrary version selection and can read
 > `rust-toolchain.toml` files via `fromToolchainFile`. Identical rustc store
-> paths across the host/sandbox boundary — required for sccache hits — come
-> from splicing `rustProfile.shellHook` into the downstream devShell (see
-> *Downstream Integration*). rust-analyzer is combined separately so it can
-> track its own cadence.
+> paths across the host/sandbox/sibling-app boundary — required for sccache
+> hits — come from splicing `rustProfile.shellHook` into the downstream
+> devShell and using `rustProfile.toolchain` in sibling app `runtimeInputs`
+> (see *Downstream Integration*). rust-analyzer is combined separately so it
+> can track its own cadence.
 
 ### Python Profile
 
@@ -272,9 +275,15 @@ expose profile-specific configuration functions.
 
 ## Downstream Integration
 
-To get cross-boundary sccache hits and identical `rustc` store paths in the
-sandbox, downstream consumers splice the rust profile's `shellHook` into their
-host devShell — parallel to `ralph.shellHook`:
+Cross-boundary sccache hits require the host shell, sandbox image, and any
+sibling Nix app derivations that run cargo to all reference the same toolchain
+derivation. Wrapix exposes two surfaces for this — splice `rustProfile.shellHook`
+into the host devShell, and use `rustProfile.toolchain` in `runtimeInputs` of
+any sibling derivation that runs cargo. Both close over the same `/nix/store/...`
+path the sandbox bakes in.
+
+For the host devshell, splice the rust profile's `shellHook` parallel to
+`ralph.shellHook`:
 
 ```nix
 let
@@ -337,7 +346,9 @@ inputs.fenix.url = "git+https://github.com/nix-community/fenix.git?ref=main";
 inputs.wrapix.inputs.fenix.follows = "fenix";
 ```
 
-Without one of these mechanisms, host and sandbox lock fenix to their own
+Without aligning toolchain identity through one of these surfaces (shellHook
+splice for the devshell, `profile.toolchain` for sibling apps, or the `follows`
+escape hatch), host, sandbox, and sibling derivations lock fenix to their own
 revisions, produce different `/nix/store/.../bin/rustc` paths, and sccache
 entries do not cross the boundary.
 
