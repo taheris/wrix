@@ -14564,10 +14564,10 @@ MOCK_EOF
 # Companion Template Tests
 #-----------------------------------------------------------------------------
 
-# Test: COMPANIONS variable is available in plan-update, todo-new, todo-update, and run templates
-test_companion_template_variable() {
-  CURRENT_TEST="companion_template_variable"
-  test_header "COMPANIONS variable in plan-update, todo-new, todo-update, run templates"
+# Test: COMPANION_PATHS variable is available in plan-update, todo-new, todo-update, run, check, and msg templates
+test_companion_paths_template_variable() {
+  CURRENT_TEST="companion_paths_template_variable"
+  test_header "COMPANION_PATHS variable in plan-update, todo-new, todo-update, run, check, msg templates"
 
   setup_test_env "companion-template-var"
 
@@ -14581,48 +14581,46 @@ test_companion_template_variable() {
   # (setup_test_env creates a local run.md without companions-context)
   rm -f "$RALPH_DIR/template/run.md"
 
-  local companion_text="<companion path=\"specs/e2e\">E2E manifest content</companion>"
+  local companion_paths="specs/e2e
+docs/api"
 
-  # Test plan-update template renders COMPANIONS
+  # Test plan-update template renders COMPANION_PATHS
   local output
   output=$(render_template plan-update \
-    COMPANIONS="$companion_text" \
+    COMPANION_PATHS="$companion_paths" \
     PINNED_CONTEXT="# Context" \
     LABEL="test-feature" \
     SPEC_PATH="specs/test-feature.md" \
-    EXISTING_SPEC="# Existing spec" \
     EXIT_SIGNALS="" 2>&1)
 
-  if echo "$output" | grep -qF "$companion_text"; then
-    test_pass "plan-update template renders COMPANIONS"
+  if echo "$output" | grep -qF "specs/e2e" && echo "$output" | grep -qF "docs/api"; then
+    test_pass "plan-update template renders COMPANION_PATHS"
   else
-    test_fail "plan-update template should render COMPANIONS"
+    test_fail "plan-update template should render COMPANION_PATHS"
   fi
 
-  # Test todo-new template renders COMPANIONS
+  # Test todo-new template renders COMPANION_PATHS
   output=$(render_template todo-new \
-    COMPANIONS="$companion_text" \
+    COMPANION_PATHS="$companion_paths" \
     PINNED_CONTEXT="# Context" \
     LABEL="test-feature" \
     SPEC_PATH="specs/test-feature.md" \
-    SPEC_CONTENT="# Spec content" \
     CURRENT_FILE="state/test-feature.json" \
     EXIT_SIGNALS="" \
     README_INSTRUCTIONS="" 2>&1)
 
-  if echo "$output" | grep -qF "$companion_text"; then
-    test_pass "todo-new template renders COMPANIONS"
+  if echo "$output" | grep -qF "specs/e2e" && echo "$output" | grep -qF "docs/api"; then
+    test_pass "todo-new template renders COMPANION_PATHS"
   else
-    test_fail "todo-new template should render COMPANIONS"
+    test_fail "todo-new template should render COMPANION_PATHS"
   fi
 
-  # Test todo-update template renders COMPANIONS
+  # Test todo-update template renders COMPANION_PATHS
   output=$(render_template todo-update \
-    COMPANIONS="$companion_text" \
+    COMPANION_PATHS="$companion_paths" \
     PINNED_CONTEXT="# Context" \
     LABEL="test-feature" \
     SPEC_PATH="specs/test-feature.md" \
-    EXISTING_SPEC="# Existing spec" \
     MOLECULE_ID="wx-abc" \
     MOLECULE_PROGRESS="50% (5/10)" \
     SPEC_DIFF="" \
@@ -14630,15 +14628,15 @@ test_companion_template_variable() {
     EXIT_SIGNALS="" \
     README_INSTRUCTIONS="" 2>&1)
 
-  if echo "$output" | grep -qF "$companion_text"; then
-    test_pass "todo-update template renders COMPANIONS"
+  if echo "$output" | grep -qF "specs/e2e" && echo "$output" | grep -qF "docs/api"; then
+    test_pass "todo-update template renders COMPANION_PATHS"
   else
-    test_fail "todo-update template should render COMPANIONS"
+    test_fail "todo-update template should render COMPANION_PATHS"
   fi
 
-  # Test run template renders COMPANIONS
+  # Test run template renders COMPANION_PATHS
   output=$(render_template run \
-    COMPANIONS="$companion_text" \
+    COMPANION_PATHS="$companion_paths" \
     PINNED_CONTEXT="# Context" \
     SPEC_PATH="specs/test-feature.md" \
     LABEL="test-feature" \
@@ -14648,13 +14646,45 @@ test_companion_template_variable() {
     DESCRIPTION="Test description" \
     EXIT_SIGNALS="" 2>&1)
 
-  if echo "$output" | grep -qF "$companion_text"; then
-    test_pass "run template renders COMPANIONS"
+  if echo "$output" | grep -qF "specs/e2e" && echo "$output" | grep -qF "docs/api"; then
+    test_pass "run template renders COMPANION_PATHS"
   else
-    test_fail "run template should render COMPANIONS"
+    test_fail "run template should render COMPANION_PATHS"
   fi
 
-  # Test that COMPANIONS defaults to empty string when not provided
+  # Test check template renders COMPANION_PATHS
+  output=$(render_template check \
+    COMPANION_PATHS="$companion_paths" \
+    PINNED_CONTEXT="# Context" \
+    SPEC_PATH="specs/test-feature.md" \
+    LABEL="test-feature" \
+    BEADS_SUMMARY="" \
+    BASE_COMMIT="abc123" \
+    MOLECULE_ID="wx-abc" \
+    EXIT_SIGNALS="" 2>&1)
+
+  if echo "$output" | grep -qF "specs/e2e" && echo "$output" | grep -qF "docs/api"; then
+    test_pass "check template renders COMPANION_PATHS"
+  else
+    test_fail "check template should render COMPANION_PATHS"
+  fi
+
+  # Test msg template renders COMPANION_PATHS
+  output=$(render_template msg \
+    COMPANION_PATHS="$companion_paths" \
+    PINNED_CONTEXT="# Context" \
+    SPEC_PATH="specs/test-feature.md" \
+    LABEL="test-feature" \
+    CLARIFY_BEADS="" \
+    EXIT_SIGNALS="" 2>&1)
+
+  if echo "$output" | grep -qF "specs/e2e" && echo "$output" | grep -qF "docs/api"; then
+    test_pass "msg template renders COMPANION_PATHS"
+  else
+    test_fail "msg template should render COMPANION_PATHS"
+  fi
+
+  # Test that COMPANION_PATHS defaults to empty string when not provided
   output=$(render_template run \
     PINNED_CONTEXT="# Context" \
     SPEC_PATH="specs/test-feature.md" \
@@ -14665,10 +14695,10 @@ test_companion_template_variable() {
     DESCRIPTION="Test description" \
     EXIT_SIGNALS="" 2>&1)
 
-  if echo "$output" | grep -qF "{{COMPANIONS}}"; then
-    test_fail "COMPANIONS placeholder should be substituted even when empty"
+  if echo "$output" | grep -qF "{{COMPANION_PATHS}}"; then
+    test_fail "COMPANION_PATHS placeholder should be substituted even when empty"
   else
-    test_pass "COMPANIONS defaults to empty when not provided"
+    test_pass "COMPANION_PATHS defaults to empty when not provided"
   fi
 
   teardown_test_env
@@ -14695,11 +14725,11 @@ test_companion_partial_override() {
   cat > "$RALPH_DIR/template/partial/companions-context.md" << 'EOF'
 ## Companion Resources
 
-The following companion content is available for reference:
+The following companion paths are available for reference:
 
-{{COMPANIONS}}
+{{COMPANION_PATHS}}
 
-Use the Read tool to explore individual files mentioned in the manifests above.
+Use the Read tool to explore each path's manifest.md.
 EOF
 
   # Copy other required partials
@@ -14711,10 +14741,10 @@ EOF
   # shellcheck source=../../lib/ralph/cmd/util.sh
   source "$REPO_ROOT/lib/ralph/cmd/util.sh"
 
-  local companion_text="<companion path=\"docs/api\">API docs manifest</companion>"
+  local companion_paths="docs/api"
   local output
   output=$(render_template run \
-    COMPANIONS="$companion_text" \
+    COMPANION_PATHS="$companion_paths" \
     PINNED_CONTEXT="# Context" \
     SPEC_PATH="specs/test.md" \
     LABEL="test-feature" \
@@ -14731,11 +14761,11 @@ EOF
     test_fail "Should render custom companions-context partial framing"
   fi
 
-  # Should contain the actual companion content
-  if echo "$output" | grep -qF "$companion_text"; then
-    test_pass "COMPANIONS variable substituted in overridden partial"
+  # Should contain the actual companion paths
+  if echo "$output" | grep -qF "$companion_paths"; then
+    test_pass "COMPANION_PATHS variable substituted in overridden partial"
   else
-    test_fail "COMPANIONS variable should be substituted in overridden partial"
+    test_fail "COMPANION_PATHS variable should be substituted in overridden partial"
   fi
 
   # Should contain the extra instruction text
@@ -14751,62 +14781,62 @@ EOF
   teardown_test_env
 }
 
-# Test: plan.sh, todo.sh, and run.sh call read_manifests and pass COMPANIONS
+# Test: plan.sh, todo.sh, and run.sh call list_companion_paths and pass COMPANION_PATHS
 test_companions_wiring() {
   CURRENT_TEST="companions_wiring"
-  test_header "plan.sh, todo.sh, run.sh call read_manifests and pass COMPANIONS"
+  test_header "plan.sh, todo.sh, run.sh call list_companion_paths and pass COMPANION_PATHS"
 
   local plan_sh="$REPO_ROOT/lib/ralph/cmd/plan.sh"
   local todo_sh="$REPO_ROOT/lib/ralph/cmd/todo.sh"
   local run_sh="$REPO_ROOT/lib/ralph/cmd/run.sh"
 
-  # plan.sh: calls read_manifests and passes COMPANIONS in update mode
-  if grep -q 'read_manifests' "$plan_sh"; then
-    test_pass "plan.sh calls read_manifests"
+  # plan.sh: calls list_companion_paths and passes COMPANION_PATHS in update mode
+  if grep -q 'list_companion_paths' "$plan_sh"; then
+    test_pass "plan.sh calls list_companion_paths"
   else
-    test_fail "plan.sh should call read_manifests"
+    test_fail "plan.sh should call list_companion_paths"
   fi
   # shellcheck disable=SC2016
-  if grep -q 'COMPANIONS=\$COMPANIONS' "$plan_sh"; then
-    test_pass "plan.sh passes COMPANIONS to render_template"
+  if grep -q 'COMPANION_PATHS=\$COMPANION_PATHS' "$plan_sh"; then
+    test_pass "plan.sh passes COMPANION_PATHS to render_template"
   else
-    test_fail "plan.sh should pass COMPANIONS to render_template"
+    test_fail "plan.sh should pass COMPANION_PATHS to render_template"
   fi
 
-  # todo.sh: calls read_manifests and passes COMPANIONS
-  if grep -q 'read_manifests' "$todo_sh"; then
-    test_pass "todo.sh calls read_manifests"
+  # todo.sh: calls list_companion_paths and passes COMPANION_PATHS
+  if grep -q 'list_companion_paths' "$todo_sh"; then
+    test_pass "todo.sh calls list_companion_paths"
   else
-    test_fail "todo.sh should call read_manifests"
+    test_fail "todo.sh should call list_companion_paths"
   fi
   # shellcheck disable=SC2016
-  if grep -c 'COMPANIONS=\$COMPANIONS' "$todo_sh" | grep -q '2'; then
-    test_pass "todo.sh passes COMPANIONS in both update and new mode"
+  if grep -c 'COMPANION_PATHS=\$COMPANION_PATHS' "$todo_sh" | grep -q '2'; then
+    test_pass "todo.sh passes COMPANION_PATHS in both update and new mode"
   else
-    test_fail "todo.sh should pass COMPANIONS in both render_template calls"
+    test_fail "todo.sh should pass COMPANION_PATHS in both render_template calls"
   fi
 
-  # run.sh: calls read_manifests and passes COMPANIONS in run_step
-  if grep -q 'read_manifests' "$run_sh"; then
-    test_pass "run.sh calls read_manifests"
+  # run.sh: calls list_companion_paths and passes COMPANION_PATHS in run_step
+  if grep -q 'list_companion_paths' "$run_sh"; then
+    test_pass "run.sh calls list_companion_paths"
   else
-    test_fail "run.sh should call read_manifests"
+    test_fail "run.sh should call list_companion_paths"
   fi
   # shellcheck disable=SC2016
-  if grep -q 'COMPANIONS=\$companions' "$run_sh"; then
-    test_pass "run.sh passes COMPANIONS to render_template"
+  if grep -q 'COMPANION_PATHS=\$companions' "$run_sh"; then
+    test_pass "run.sh passes COMPANION_PATHS to render_template"
   else
-    test_fail "run.sh should pass COMPANIONS to render_template"
+    test_fail "run.sh should pass COMPANION_PATHS to render_template"
   fi
 }
 
 #-----------------------------------------------------------------------------
-# read_manifests tests
+# list_companion_paths tests
 #-----------------------------------------------------------------------------
 
-test_read_manifests_empty() {
-  CURRENT_TEST="read_manifests_empty"
-  test_header "read_manifests returns empty string when no companions declared"
+test_list_companion_paths_empty() {
+  CURRENT_TEST="list_companion_paths_empty"
+  test_header "list_companion_paths returns empty string when no companions declared"
 
   setup_test_env "manifests-empty"
 
@@ -14819,7 +14849,7 @@ test_read_manifests_empty() {
   echo '{"label":"test-feature","spec_path":"specs/test-feature.md"}' > "$state_file"
 
   local output
-  output=$(read_manifests "$state_file")
+  output=$(list_companion_paths "$state_file")
   if [ -z "$output" ]; then
     test_pass "Empty output when no companions field"
   else
@@ -14828,7 +14858,7 @@ test_read_manifests_empty() {
 
   # State JSON with empty companions array
   echo '{"label":"test-feature","spec_path":"specs/test-feature.md","companions":[]}' > "$state_file"
-  output=$(read_manifests "$state_file")
+  output=$(list_companion_paths "$state_file")
   if [ -z "$output" ]; then
     test_pass "Empty output when companions array is empty"
   else
@@ -14838,9 +14868,9 @@ test_read_manifests_empty() {
   teardown_test_env
 }
 
-test_read_manifests_format() {
-  CURRENT_TEST="read_manifests_format"
-  test_header "read_manifests wraps each manifest in <companion> tags"
+test_list_companion_paths_format() {
+  CURRENT_TEST="list_companion_paths_format"
+  test_header "list_companion_paths emits one companion path per line, no manifest body"
 
   setup_test_env "manifests-format"
 
@@ -14861,49 +14891,48 @@ test_read_manifests_format() {
 EOF
 
   local output
-  output=$(read_manifests "$state_file")
+  output=$(list_companion_paths "$state_file")
 
-  # Check opening tags
-  if echo "$output" | grep -qF "<companion path=\"$comp1\">"; then
-    test_pass "First companion has correct opening tag"
+  # Output is exactly two lines, each a companion directory path (no XML, no body)
+  local line_count
+  line_count=$(printf '%s\n' "$output" | wc -l)
+  if [ "$line_count" = "2" ]; then
+    test_pass "Output has exactly two lines for two companions"
   else
-    test_fail "Missing opening tag for first companion"
+    test_fail "Expected 2 lines, got: $line_count (output: $output)"
   fi
 
-  if echo "$output" | grep -qF "<companion path=\"$comp2\">"; then
-    test_pass "Second companion has correct opening tag"
+  if [ "$(printf '%s\n' "$output" | sed -n '1p')" = "$comp1" ]; then
+    test_pass "First line is first companion path"
   else
-    test_fail "Missing opening tag for second companion"
+    test_fail "First line should be $comp1, got: $(printf '%s\n' "$output" | sed -n '1p')"
   fi
 
-  # Check closing tags
-  local closing_count
-  closing_count=$(echo "$output" | grep -c '</companion>' || true)
-  if [ "$closing_count" = "2" ]; then
-    test_pass "Two closing companion tags present"
+  if [ "$(printf '%s\n' "$output" | sed -n '2p')" = "$comp2" ]; then
+    test_pass "Second line is second companion path"
   else
-    test_fail "Expected 2 closing tags, got: $closing_count"
+    test_fail "Second line should be $comp2, got: $(printf '%s\n' "$output" | sed -n '2p')"
   fi
 
-  # Check manifest content is included
-  if echo "$output" | grep -q "E2E test manifest content"; then
-    test_pass "First manifest content included"
+  # Output MUST NOT inline manifest body or XML wrapping
+  if echo "$output" | grep -q '<companion'; then
+    test_fail "Output should not contain <companion> XML tags"
   else
-    test_fail "First manifest content missing"
+    test_pass "Output is free of <companion> XML tags"
   fi
 
-  if echo "$output" | grep -q "API docs manifest content"; then
-    test_pass "Second manifest content included"
+  if echo "$output" | grep -q "E2E test manifest content\|API docs manifest content"; then
+    test_fail "Output should not inline manifest.md body"
   else
-    test_fail "Second manifest content missing"
+    test_pass "Output does not inline manifest.md body"
   fi
 
   teardown_test_env
 }
 
-test_read_manifests_missing_directory() {
-  CURRENT_TEST="read_manifests_missing_directory"
-  test_header "read_manifests errors if companion directory does not exist"
+test_list_companion_paths_missing_directory() {
+  CURRENT_TEST="list_companion_paths_missing_directory"
+  test_header "list_companion_paths errors if companion directory does not exist"
 
   setup_test_env "manifests-missing-dir"
 
@@ -14915,8 +14944,8 @@ test_read_manifests_missing_directory() {
   echo '{"label":"test-feature","spec_path":"specs/test.md","companions":["/nonexistent/path"]}' > "$state_file"
 
   local output exit_code
-  # read_manifests calls error() which exits — run in subshell
-  output=$(read_manifests "$state_file" 2>&1) && exit_code=0 || exit_code=$?
+  # list_companion_paths calls error() which exits — run in subshell
+  output=$(list_companion_paths "$state_file" 2>&1) && exit_code=0 || exit_code=$?
 
   if [ "$exit_code" -ne 0 ]; then
     test_pass "Non-zero exit when companion directory missing"
@@ -14933,9 +14962,9 @@ test_read_manifests_missing_directory() {
   teardown_test_env
 }
 
-test_read_manifests_missing_manifest() {
-  CURRENT_TEST="read_manifests_missing_manifest"
-  test_header "read_manifests errors if companion directory lacks manifest.md"
+test_list_companion_paths_missing_manifest() {
+  CURRENT_TEST="list_companion_paths_missing_manifest"
+  test_header "list_companion_paths errors if companion directory lacks manifest.md"
 
   setup_test_env "manifests-missing-manifest"
 
@@ -14953,7 +14982,7 @@ test_read_manifests_missing_manifest() {
 EOF
 
   local output exit_code
-  output=$(read_manifests "$state_file" 2>&1) && exit_code=0 || exit_code=$?
+  output=$(list_companion_paths "$state_file" 2>&1) && exit_code=0 || exit_code=$?
 
   if [ "$exit_code" -ne 0 ]; then
     test_pass "Non-zero exit when manifest.md missing"
@@ -16570,14 +16599,14 @@ ALL_TESTS=(
   test_todo_container_dolt_push_failure
   test_todo_host_sync_failure_resets_state
   # Companion template tests
-  test_companion_template_variable
+  test_companion_paths_template_variable
   test_companion_partial_override
   test_companions_wiring
-  # read_manifests tests
-  test_read_manifests_empty
-  test_read_manifests_format
-  test_read_manifests_missing_directory
-  test_read_manifests_missing_manifest
+  # list_companion_paths tests
+  test_list_companion_paths_empty
+  test_list_companion_paths_format
+  test_list_companion_paths_missing_directory
+  test_list_companion_paths_missing_manifest
   # discover_molecule_from_readme tests
   test_discover_molecule_from_readme
   test_discover_molecule_not_in_readme
