@@ -79,6 +79,7 @@ if [ "$needs_rebuild" = 1 ]; then
 fi
 
 bd dolt commit || true
+bd dolt pull
 bd dolt push "$@"
 
 if [ ! -d "$WT" ]; then
