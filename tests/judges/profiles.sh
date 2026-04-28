@@ -46,6 +46,11 @@ test_cargo_registry_writable() {
   judge_criterion "The rust profile's mounts for ~/.cargo/registry → /home/wrapix/.cargo/registry and ~/.cargo/git → /home/wrapix/.cargo/git are mode = \"rw\" (not \"ro\"), so cargo can write new crates and git checkouts on cache miss without 'Read-only file system (os error 30)' errors. writableDirs includes /home/wrapix/.cargo so the launcher stacks a tmpfs there with U=true; without this, podman creates the bind-mount parent as root and cargo cannot write sibling files like .global-cache/credentials.toml even though the registry/git binds themselves are rw. The Darwin entrypoint is exempt — its rw cache mounts are session-scoped (writes stay in the writable layer and are discarded at exit), and writableDirs is Linux-only by design."
 }
 
+test_uv_cache_writable() {
+  judge_files "lib/sandbox/profiles.nix"
+  judge_criterion "The python profile's mount for ~/.cache/uv → /home/wrapix/.cache/uv is mode = \"rw\" (not \"ro\"), the dest is the literal path /home/wrapix/.cache/uv (no \"~\" since the launcher expands tildes on the host), and env.UV_CACHE_DIR equals /home/wrapix/.cache/uv so uv reads from and writes back to the same mount destination. This mirrors the cargo registry writable invariant: ro here would break any uv invocation that needs a package not in the pre-warm set with 'Read-only file system (os error 30)' on the cache write path."
+}
+
 test_rust_toolchain_field() {
   judge_files "lib/sandbox/profiles.nix"
   judge_criterion "The rust profile exposes a 'toolchain' field on both the default profile and the withToolchain { file, sha256 } variant. The field is the resolved fenix combine derivation — the same derivation interpolated into the profile's packages list and into the \${toolchain}/bin PATH prepend in shellHook. All three references close over the same value so sibling Nix apps using rustProfile.toolchain in runtimeInputs see the identical /nix/store/... path the sandbox bakes in."

@@ -266,6 +266,8 @@ expose profile-specific configuration functions.
   [judge](../tests/judges/profiles.sh#test_cargo_registry_writable)
 - [ ] Python profile can run Python scripts with dependencies
   [judge](../tests/judges/profiles.sh#test_python_profile)
+- [ ] uv cache mount is writable so uv can fetch packages not in the pre-warm set without `Read-only file system` errors
+  [judge](../tests/judges/profiles.sh#test_uv_cache_writable)
 - [ ] deriveProfile correctly merges packages and environment
   [judge](../tests/judges/profiles.sh#test_derive_profile_merge)
 - [ ] Profiles are composable (can extend extended profiles)
