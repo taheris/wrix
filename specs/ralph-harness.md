@@ -286,7 +286,7 @@ ralph init                            # from inside a devShell
 
 | Artifact | Source | Skip condition |
 |----------|--------|----------------|
-| `flake.nix` | `lib/ralph/template/flake.nix` | file exists |
+| `flake.nix` + `nix/flake/{apps,devshell,formatter}.nix` | `lib/ralph/template/flake/` (directory copy) | `flake.nix` exists (sentinel — skips whole flake tree) |
 | `.envrc` | static `use flake\n` | file exists |
 | `.gitignore` | append-missing of `.direnv/`, `.wrapix/`, `result`, `result-*` | all entries present |
 | `.pre-commit-config.yaml` | `lib/ralph/template/pre-commit-config.yaml` | file exists |
@@ -298,11 +298,14 @@ ralph init                            # from inside a devShell
 
 **Shared scaffolding:** `scaffold_docs`, `scaffold_agents`, `scaffold_templates` live in `lib/ralph/cmd/util.sh` (or `scaffold.sh`) and are called by both `ralph init` and `ralph sync`. Init-only helpers (`bootstrap_flake`, `bootstrap_envrc`, `bootstrap_gitignore`, `bootstrap_precommit`, `bootstrap_beads`, `bootstrap_claude_symlink`) are not shared.
 
-**`flake.nix` template (`lib/ralph/template/flake.nix`):**
+**`flake.nix` template (`lib/ralph/template/flake/`):**
 
-Uses flake-parts with an `apps.sandbox` app, a `devShells.default` composing `${ralph.shellHook}` (exposed as a passthru on wrapix's ralph package), and treefmt-nix integration. `checks.treefmt` is not declared explicitly — `inputs.treefmt-nix.flakeModule` registers it automatically, and defining it twice triggers a multiple-definition evaluation error:
+Source lives in a directory mirroring the target layout. `bootstrap_flake` recursively copies `lib/ralph/template/flake/` into the project root: a thin top-level `flake.nix` plus `nix/flake/{apps,devshell,formatter}.nix`. The split mirrors the wrapix repo's own `modules/flake/` layout, downsized to the modules a fresh project needs (apps.sandbox + devShell + treefmt).
+
+`flake.nix` is an entry point: declares description, inputs, systems, and imports the three flake-parts modules alongside `treefmt-nix.flakeModule`. `checks.treefmt` is not declared explicitly — `treefmt-nix.flakeModule` registers it automatically, and defining it twice triggers a multiple-definition evaluation error.
 
 ```nix
+# flake.nix
 {
   description = "wrapix project";
 
@@ -313,47 +316,89 @@ Uses flake-parts with an `apps.sandbox` app, a `devShells.default` composing `${
     wrapix.url = "github:taheris/wrapix";
   };
 
-  outputs = inputs@{ flake-parts, ... }:
+  outputs =
+    inputs@{ flake-parts, ... }:
     flake-parts.lib.mkFlake { inherit inputs; } {
-      systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
-      imports = [ inputs.treefmt-nix.flakeModule ];
-
-      perSystem = { config, pkgs, system, ... }:
-        let
-          ralph = inputs.wrapix.packages.${system}.ralph;
-        in {
-          apps.sandbox = {
-            type = "app";
-            program = "${inputs.wrapix.lib.mkSandbox { inherit system; }}/bin/wrapix";
-          };
-
-          devShells.default = pkgs.mkShell {
-            packages = [
-              ralph
-              inputs.wrapix.packages.${system}.bd
-              config.treefmt.build.wrapper
-            ];
-            shellHook = ''
-              ${ralph.shellHook}
-            '';
-          };
-
-          treefmt = {
-            projectRootFile = "flake.nix";
-            programs = {
-              deadnix.enable = true;
-              nixfmt.enable = true;
-              shellcheck.enable = true;
-              statix.enable = true;
-            };
-            settings.formatter = {
-              shellcheck.excludes = [ ".envrc" ];
-            };
-          };
-        };
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "aarch64-darwin"
+      ];
+      imports = [
+        inputs.treefmt-nix.flakeModule
+        ./nix/flake/apps.nix
+        ./nix/flake/devshell.nix
+        ./nix/flake/formatter.nix
+      ];
     };
 }
 ```
+
+```nix
+# nix/flake/apps.nix
+{ inputs, ... }:
+{
+  perSystem =
+    { system, ... }:
+    let
+      wrapixLib = inputs.wrapix.legacyPackages.${system}.lib;
+      sandbox = wrapixLib.mkSandbox { profile = wrapixLib.profiles.base; };
+    in
+    {
+      apps.sandbox = {
+        type = "app";
+        program = "${sandbox.package}/bin/wrapix";
+      };
+    };
+}
+```
+
+```nix
+# nix/flake/devshell.nix
+{ inputs, ... }:
+{
+  perSystem =
+    { config, pkgs, system, ... }:
+    let
+      inherit (inputs.wrapix.packages.${system}) ralph;
+    in
+    {
+      devShells.default = pkgs.mkShell {
+        packages = [
+          ralph
+          inputs.wrapix.packages.${system}.beads
+          config.treefmt.build.wrapper
+        ];
+        shellHook = ''
+          ${ralph.shellHook}
+        '';
+      };
+    };
+}
+```
+
+```nix
+# nix/flake/formatter.nix
+_:
+{
+  perSystem = _: {
+    treefmt = {
+      projectRootFile = "flake.nix";
+      programs = {
+        deadnix.enable = true;
+        nixfmt.enable = true;
+        shellcheck.enable = true;
+        statix.enable = true;
+      };
+      settings.formatter = {
+        shellcheck.excludes = [ ".envrc" ];
+      };
+    };
+  };
+}
+```
+
+Each module carries its own `let` for the bindings it needs (e.g., `wrapixLib`, `ralph`); flake-parts modules don't share lexical scope, and the duplication is small enough that adding `_module.args` plumbing isn't justified at this scale.
 
 `rustfmt` is intentionally omitted from the default template — it's the only treefmt program that carries a language assumption. Users enable it when they add Rust code. `mkCity` is not wired in; users opt in by extending their flake.
 
@@ -385,6 +430,7 @@ Formatting/linting runs on pre-commit (via treefmt, which covers deadnix/nixfmt/
 
 Created:
   flake.nix
+  nix/flake/
   .envrc
   .pre-commit-config.yaml
   .gitignore  (4 entries appended)
@@ -887,7 +933,7 @@ Ralph uses `bd mol` for work tracking:
 | `lib/ralph/template/partial/invariant-clash.md` | Rule partial: three-paths principle for invariant clashes (plan-update) |
 | `lib/ralph/template/partial/sibling-spec-editing.md` | Rule partial: anchor owns state file; sibling specs editable in place (plan-update) |
 | `lib/ralph/template/partial/spec-header.md` | Label + spec path header partial |
-| `lib/ralph/template/flake.nix` | Project flake template rendered by `bootstrap_flake` (flake-parts, apps.sandbox, devShell, treefmt) |
+| `lib/ralph/template/flake/` | Project flake template tree copied recursively by `bootstrap_flake`: top-level `flake.nix` (entry point with imports) plus `nix/flake/{apps,devshell,formatter}.nix` (apps.sandbox, devShell, treefmt) |
 | `lib/ralph/template/pre-commit-config.yaml` | Pre-commit template rendered by `bootstrap_precommit` (treefmt pre-commit + nix flake check pre-push) |
 | `lib/sandbox/linux/entrypoint.sh` | Merge ralph runtime `claude-settings.json` from `$RALPH_RUNTIME_DIR` into `~/.claude/settings.json` when the env var is set |
 | `flake.nix` (top-level wrapix) | Expose `apps.init`; add `shellHook` passthru on `packages.${system}.ralph` |
@@ -975,13 +1021,15 @@ Ralph uses `bd mol` for work tracking:
   [verify](../tests/ralph/run-tests.sh#test_init_host_execution)
 - [ ] `nix run github:taheris/wrapix#init` invokes `ralph init` in cwd
   [verify](../tests/ralph/run-tests.sh#test_init_flake_app)
-- [ ] `ralph init` creates `flake.nix` from template when absent, skips when present
+- [ ] `ralph init` recursively copies the `lib/ralph/template/flake/` tree (top-level `flake.nix` + `nix/flake/{apps,devshell,formatter}.nix`) into the project root when `flake.nix` is absent; treats `flake.nix` as the sentinel and skips the entire flake bootstrap (including the `nix/flake/` tree) when it exists
   [verify](../tests/ralph/run-tests.sh#test_init_flake_skip_existing)
-- [ ] Generated `flake.nix` uses flake-parts, exposes `apps.sandbox`, `devShells.default` composing `${ralph.shellHook}`, `treefmt`, `checks.treefmt`
-  [verify](../tests/ralph/run-tests.sh#test_init_flake_structure)
+- [ ] Generated top-level `flake.nix` is a thin entry point: declares inputs/systems and imports `inputs.treefmt-nix.flakeModule` plus `./nix/flake/apps.nix`, `./nix/flake/devshell.nix`, `./nix/flake/formatter.nix`; carries no inline `perSystem` body
+  [verify](../tests/ralph/run-tests.sh#test_init_flake_modular_imports)
+- [ ] Generated `nix/flake/apps.nix`, `nix/flake/devshell.nix`, `nix/flake/formatter.nix` each contribute their expected attribute (`apps.sandbox`, `devShells.default` composing `${ralph.shellHook}`, `treefmt` with `checks.treefmt` auto-registered by `treefmt-nix.flakeModule`)
+  [verify](../tests/ralph/run-tests.sh#test_init_flake_modules_present)
 - [ ] Generated `flake.nix` systems list is `[x86_64-linux aarch64-linux aarch64-darwin]` (no x86_64-darwin)
   [verify](../tests/ralph/run-tests.sh#test_init_flake_systems)
-- [ ] Generated `flake.nix` treefmt programs are deadnix, nixfmt, shellcheck, statix (no rustfmt)
+- [ ] Generated `nix/flake/formatter.nix` treefmt programs are deadnix, nixfmt, shellcheck, statix (no rustfmt)
   [verify](../tests/ralph/run-tests.sh#test_init_treefmt_programs)
 - [ ] Generated `flake.nix` evaluates cleanly under `nix flake check` in a fresh directory
   [verify](../tests/ralph/run-tests.sh#test_init_flake_evaluates)
@@ -1046,5 +1094,5 @@ Ralph uses `bd mol` for work tracking:
 - Git operations (`git init`, initial commit, remote setup) — user-owned
 - Interactive prompts — init is non-interactive
 - Path argument — operates on cwd only (flake-app form has no shell context to pass a path from)
-- Overwrite/merge of existing `flake.nix` — skip-and-continue policy; user merges manually if retrofitting
+- Overwrite/merge of existing `flake.nix` (and any sibling `nix/flake/*.nix` modules) — skip-and-continue policy gated on the `flake.nix` sentinel; user merges manually if retrofitting
 - `mkCity` wiring in generated `flake.nix` — user opt-in; default flake keeps scope minimal
