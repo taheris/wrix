@@ -164,13 +164,13 @@ let
         {
           source = "~/.cargo/registry";
           dest = "/home/wrapix/.cargo/registry";
-          mode = "ro";
+          mode = "rw";
           optional = true;
         }
         {
           source = "~/.cargo/git";
           dest = "/home/wrapix/.cargo/git";
-          mode = "ro";
+          mode = "rw";
           optional = true;
         }
         {
