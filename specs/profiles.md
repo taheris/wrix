@@ -40,7 +40,9 @@ A profile is a Nix attrset produced by the internal `mkProfile` helper in `lib/s
 | `networkAllowlist` | list of strings | Domains permitted when `WRAPIX_NETWORK=limit` (merged with base allowlist) |
 | `enabledPlugins` | attrset | Claude Code plugins merged into `~/.claude/settings.json` (e.g. `"rust-analyzer-lsp@claude-plugins-official" = true`) |
 | `shellHook` | shell snippet | Optional snippet for downstream **host** devShells / ralph / city shellHooks to splice in (e.g. `${rustProfile.shellHook}`). Aligns host-side toolchain identity, env, and PATH with the sandbox so `rustc` resolves to the same `/nix/store/...` path on both sides — the prerequisite for cross-boundary sccache hits and shared `target/` artifact reuse. |
-| `writableDirs` | list of strings | Linux-only: paths where the launcher stacks a tmpfs with `U=true` so the dir is wrapix-owned — needed when a ro bind mount would otherwise force the parent to be root-owned |
+| `writableDirs` | list of strings | Linux-only: paths where the launcher stacks a tmpfs with `U=true` so the dir is wrapix-owned — needed because podman creates bind-mount parents as root, which blocks writes to sibling files like `.global-cache`/`credentials.toml` |
+
+Mount specs use `optional = true` to mean "skip this bind silently if the host source path does not exist", letting profiles declare cache mounts that no-op on hosts that haven't yet populated them.
 
 `deriveProfile` merges `packages`, `mounts`, `env`, and `networkAllowlist` (packages/mounts/allowlist concatenated; env right-biased). Other fields (`name`, `enabledPlugins`, `shellHook`, `writableDirs`) pass through from the extensions attrset if set, otherwise inherit from the base — they are not deep-merged. Callers extending a profile with extra plugins or shell hooks must compose those values themselves.
 
@@ -65,7 +67,7 @@ Curated developer toolkit present in every profile. Grouped by purpose:
 
 `whichQuiet` is a local `pkgs.which` wrapper that suppresses `"no X in (PATH)"` noise.
 
-`treefmt` is the project-wide formatter wrapper (nixfmt, rustfmt, shellcheck, deadnix, statix) built via `treefmt-nix.lib.mkWrapper`. Placing it in `basePackages` ensures every consumer of `profiles.base` — direct `mkSandbox` calls **and** `mkCity`-built city containers — gets the same formatters. (The code previously added treefmt only to the flake's `packages.sandbox*` outputs, so city containers missed it. Implementation plumbing for making the wrapper available to `profiles.nix` is a separate decision.)
+`treefmt` is the project-wide formatter wrapper (nixfmt, rustfmt, shellcheck, deadnix, statix) built via `treefmt-nix.lib.mkWrapper`. Placing it in `basePackages` ensures every consumer of `profiles.base` — direct `mkSandbox` calls **and** `mkCity`-built city containers — gets the same formatters.
 
 **Base env:** none.
 **Base mounts:** none. Host `~/.claude` is intentionally NOT mounted — containers use `$PROJECT_DIR/.claude` so user-level settings stay separate from project-level settings.
@@ -97,7 +99,7 @@ rustfmt + rust-docs.
 
 Environment:
 
-- `CARGO_HOME=/home/wrapix/.cargo` — aligns with the registry/git mount dests below so cargo actually consults the host pre-warm. Non-mounted CARGO_HOME state (credentials.toml, config.toml, `cargo install` bins) lives on tmpfs on Linux and is ephemeral across container runs — intentional for an agent-style environment.
+- `CARGO_HOME=/home/wrapix/.cargo` — aligns with the registry/git mount dests below so cargo reads from and writes back to the shared host cache. Non-mounted CARGO_HOME state (credentials.toml, config.toml, `cargo install` bins) lives on tmpfs on Linux and is ephemeral across container runs — intentional for an agent-style environment.
 - `RUST_SRC_PATH=${toolchain}/lib/rustlib/src/rust/library` — rust-analyzer standard library resolution
 - `LIBRARY_PATH=${pkgs.postgresql.lib}/lib` — PostgreSQL library discovery at link time
 - `OPENSSL_INCLUDE_DIR=${pkgs.openssl.dev}/include` — OpenSSL headers
@@ -109,29 +111,32 @@ Environment:
 - `CARGO_INCREMENTAL=0` — sccache refuses to cache any `rustc` invocation with `-C incremental=...`, so incremental compilation and sccache are redundant; disabling incremental lets every Rust compile flow through the cache.
 - `CARGO_TARGET_DIR` — intentionally **unset**; cargo's per-workspace default (`<workspace>/target`) applies. The judge asserts this invariant because pinning `CARGO_TARGET_DIR` to a shared path across workspaces defeats cargo's freshness tracking and churns builds.
 
-**Host devshell alignment.** The profile's `shellHook` (spliced into downstream host devShells alongside `ralph.shellHook`) prepends `${toolchain}/bin` to `PATH` and re-exports `RUSTC_WRAPPER`, `SCCACHE_DIR`, `SCCACHE_CACHE_SIZE`, and `CARGO_INCREMENTAL=0` so the host shell uses the same fenix-pinned `rustc` binary as the sandbox. Without the PATH prepend, host PATH falls through to rustup's `rustc` (or whichever appears first), and the diverging sysroot path baked into rlib metadata invalidates every sccache key across the boundary — even when both sides report the same Rust version. `withToolchain` rebuilds the snippet over the custom toolchain so `packages`, `shellHook`, and `toolchain` (see below) all close over the same derivation.
+**Host devshell alignment.** The profile's `shellHook` (spliced into downstream host devShells alongside `ralph.shellHook`) prepends `${toolchain}/bin` to `PATH` and re-exports `RUSTC_WRAPPER`, `SCCACHE_DIR`, `SCCACHE_CACHE_SIZE`, and `CARGO_INCREMENTAL=0` so the host shell uses the same fenix-pinned `rustc` binary as the sandbox. Without the PATH prepend, host PATH falls through to rustup's `rustc` (or whichever appears first), and the diverging sysroot path baked into rlib metadata invalidates every sccache key across the boundary — even when both sides report the same Rust version. `withToolchain` rebuilds the snippet over the custom toolchain so `packages`, `env`, `shellHook`, and `toolchain` (see below) all close over the same derivation.
 
 **Toolchain derivation (`profile.toolchain`).** The rust profile exposes the resolved fenix `combine` derivation as `profile.toolchain` — the same store path that lands in `packages` and is interpolated into `shellHook`'s PATH prepend. Sibling Nix apps that run cargo (e.g. `pkgs.writeShellApplication { runtimeInputs = [ rustProfile.toolchain ]; ... }`) must point `runtimeInputs` at this field rather than re-instantiating fenix in their own flake. Re-instantiation produces a different `/nix/store/...` path even when fenix versions match, and again when calling `fromToolchainFile` directly (bare `rust-<ver>` vs the `combine`-wrapped `rust-mixed`); sccache hashes the compiler binary, so a divergent path means every cache key misses across the boundary. The default profile and the `withToolchain` variant both set this field to the toolchain they were built from.
 
 Mounts (host source → literal container dest; literal dests avoid the `~`-expands-on-host-launcher gotcha):
 
-- `~/.cargo/registry` → `/home/wrapix/.cargo/registry` (ro, optional) — pre-warm crate cache from host
-- `~/.cargo/git` → `/home/wrapix/.cargo/git` (ro, optional) — pre-warm git dependency cache from host
+- `~/.cargo/registry` → `/home/wrapix/.cargo/registry` (rw, optional) — shared crate cache between host and sandbox; pre-warms at launch and writes back as cargo downloads crates not in the pre-warm set. `ro` here breaks any cargo command that needs a fresh crate (`Read-only file system (os error 30)` writing to `registry/index/.../.cache/...` or `registry/cache/...`), since cargo's pre-fetch path is the same as its on-demand download path.
+- `~/.cargo/git` → `/home/wrapix/.cargo/git` (rw, optional) — shared git dependency cache; same rw rationale as registry (cargo writes new git checkouts here on cache miss).
 - `~/.cache/sccache` → `/home/wrapix/.cache/sccache` (rw, optional) — shared sccache store between host and sandbox
 
-Writable dirs (`writableDirs = [ "/home/wrapix/.cargo" ]`): on Linux, the launcher stacks a tmpfs at `/home/wrapix/.cargo` with `U=true` so the dir is wrapix-owned. Without this, podman creates the mountpoint parent as root (to host the ro registry/git binds on top) and cargo can't write `.global-cache`/`credentials.toml` there. Darwin doesn't need the fix — its entrypoint creates these dirs via `mkdir -p` as namespaced-root-mapped-to-`HOST_UID`, already wrapix-writable.
+Writable dirs (`writableDirs = [ "/home/wrapix/.cargo" ]`): on Linux, the launcher stacks a tmpfs at `/home/wrapix/.cargo` with `U=true` so the dir is wrapix-owned. Without this, podman creates the mountpoint parent as root (to host the registry/git binds on top, regardless of mount mode) and cargo can't write `.global-cache`/`credentials.toml` there. Darwin doesn't need the fix — its entrypoint creates these dirs via `mkdir -p` as namespaced-root-mapped-to-`HOST_UID`, already wrapix-writable.
 
 Network allowlist: `crates.io`, `static.crates.io`, `index.crates.io`
 
-> **Darwin caveat — rw sccache is session-scoped, not cross-boundary.** Apple's
-> `container` CLI only exposes host paths via VirtioFS staging; the darwin
+> **Darwin caveat — rw cache mounts are session-scoped, not cross-boundary.**
+> Apple's `container` CLI only exposes host paths via VirtioFS staging; the darwin
 > entrypoint then `cp -r`s staged content into the profile's destination. That
-> means writes to `/home/wrapix/.cache/sccache` inside a Darwin sandbox stay in
-> the container's writable layer and are discarded at exit — nothing propagates
-> back to the host's `~/.cache/sccache`. Cross-boundary sccache caching is
-> Linux-only today. On Darwin the mount still delivers a cold pre-warm at
-> container start; repeated compiles within a single container session do hit
-> the cache, but subsequent sessions start cold.
+> means writes to any rw cache mount inside a Darwin sandbox — `/home/wrapix/.cargo/registry`,
+> `/home/wrapix/.cargo/git`, `/home/wrapix/.cache/sccache`, and (per the Python profile)
+> `/home/wrapix/.cache/uv` — stay in the container's writable layer and are discarded
+> at exit; nothing propagates back to the corresponding `~/.cargo/{registry,git}`,
+> `~/.cache/sccache`, or `~/.cache/uv`. Cross-boundary cache reuse is Linux-only today.
+> On Darwin the mounts still deliver a cold pre-warm at container start; in-session
+> cargo/uv downloads and compile-cache writes succeed (so the read-only-FS symptom does
+> not reproduce on Darwin), but each new container session starts with only what was
+> on the host at launch.
 
 > **Why not rustup?** Rustup downloads pre-built binaries dynamically linked against
 > a specific glibc in the nix store. When nixpkgs is updated and the container is
@@ -160,11 +165,11 @@ Extends base with Python toolchain:
 
 Environment:
 
-- `UV_CACHE_DIR=/workspace/.uv-cache` — uv cache location inside the container
+- `UV_CACHE_DIR=/home/wrapix/.cache/uv` — points at the cache mount dest below so uv reads from and writes back to the shared host cache (mirrors the rust profile's `CARGO_HOME` ↔ registry-mount alignment).
 
-Mounts:
+Mounts (host source → literal container dest):
 
-- `~/.cache/uv` → `~/.cache/uv` (ro, optional) — pre-warm uv cache from host
+- `~/.cache/uv` → `/home/wrapix/.cache/uv` (rw, optional) — shared uv cache between host and sandbox; pre-warms at launch and writes back on cache miss. `ro` here would break any `uv` invocation that needs a package not in the pre-warm set, same failure mode as the cargo registry.
 
 Network allowlist: `pypi.org`, `files.pythonhosted.org`
 
@@ -235,9 +240,10 @@ These live on the profile attrset itself, not on `deriveProfile`.
   path to `rust-toolchain.toml`; `sha256` is the hash of the downloaded components),
   returns a new profile attrset (without `withToolchain`) using
   `fenix.fromToolchainFile`. `rust-src` and `rust-analyzer` are combined in on top
-  of whatever components the toolchain file declares. `packages`, `shellHook`,
-  and `toolchain` are all rebuilt against the custom toolchain so they close
-  over the same derivation — the host PATH prepend in `shellHook` resolves to
+  of whatever components the toolchain file declares. `packages`, `env`,
+  `shellHook`, and `toolchain` are all rebuilt against the custom toolchain so
+  they close over the same derivation — `env.RUST_SRC_PATH` resolves to the new
+  toolchain's stdlib source, the host PATH prepend in `shellHook` resolves to
   the same `rustc` binary the sandbox uses, and `profile.toolchain` is exactly
   that derivation for downstream `runtimeInputs`.
 
@@ -256,6 +262,8 @@ expose profile-specific configuration functions.
   [judge](../tests/judges/profiles.sh#test_rust_analyzer_sysroot)
 - [ ] `profiles.rust.withToolchain { file = ./rust-toolchain.toml; sha256 = "..."; }` produces a working profile
   [judge](../tests/judges/profiles.sh#test_rust_with_toolchain)
+- [ ] Cargo registry and git mounts are writable so cargo can fetch crates not in the pre-warm set without `Read-only file system` errors
+  [judge](../tests/judges/profiles.sh#test_cargo_registry_writable)
 - [ ] Python profile can run Python scripts with dependencies
   [judge](../tests/judges/profiles.sh#test_python_profile)
 - [ ] deriveProfile correctly merges packages and environment
@@ -272,6 +280,7 @@ expose profile-specific configuration functions.
 - Language-specific project scaffolding
 - IDE configuration beyond Claude Code
 - Auto-detection of `rust-toolchain.toml` at runtime (must be passed explicitly via `withToolchain`)
+- Automatic pruning of cargo registry / git / uv caches — operators are expected to clean `~/.cargo/{registry,git}` and `~/.cache/uv` manually if they grow unbounded; sccache is self-capped via `SCCACHE_CACHE_SIZE`.
 
 ## Downstream Integration
 
