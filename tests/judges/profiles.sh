@@ -8,7 +8,7 @@ test_base_profile_functional() {
 
 test_rust_profile() {
   judge_files "lib/sandbox/profiles.nix"
-  judge_criterion "Rust profile uses fenix (fenix.packages.\${system}.stable.defaultToolchain combined with fenix rust-src and rust-analyzer), gcc for linking, openssl, pkg-config, postgresql libs, and sccache. CARGO_HOME, RUST_SRC_PATH, OPENSSL, RUSTC_WRAPPER, CARGO_BUILD_RUSTC_WRAPPER, SCCACHE_DIR, SCCACHE_CACHE_SIZE, and CARGO_INCREMENTAL=0 environment variables are configured. CARGO_TARGET_DIR is not pinned (cargo default applies). No rustup, RUSTUP_HOME, or rust-overlay."
+  judge_criterion "Rust profile uses fenix (fenix.packages.\${system}.stable.defaultToolchain combined with fenix.stable.rust-src and fenix.stable.rust-analyzer-preview (manifest builds — NOT fenix.packages.\${system}.rust-analyzer which is built from nightly source)), gcc for linking, openssl, pkg-config, postgresql libs, and sccache. CARGO_HOME, RUST_SRC_PATH, OPENSSL, RUSTC_WRAPPER, CARGO_BUILD_RUSTC_WRAPPER, SCCACHE_DIR, SCCACHE_CACHE_SIZE, and CARGO_INCREMENTAL=0 environment variables are configured. CARGO_TARGET_DIR is not pinned (cargo default applies). No rustup, RUSTUP_HOME, or rust-overlay."
 }
 
 test_python_profile() {
@@ -33,7 +33,7 @@ test_rust_analyzer_sysroot() {
 
 test_rust_with_toolchain() {
   judge_files "lib/sandbox/profiles.nix"
-  judge_criterion "profiles.rust.withToolchain accepts { file, sha256 } (file being a rust-toolchain.toml path, sha256 being the component hash fenix needs for purity) and returns a profile attrset (without withToolchain) using fenix.fromToolchainFile. rust-src and rust-analyzer are combined in via fenix.combine. The returned profile is compatible with deriveProfile."
+  judge_criterion "profiles.rust.withToolchain accepts { file, sha256 } (file being a rust-toolchain.toml path, sha256 being the component hash fenix needs for purity) and returns a profile attrset (without withToolchain) using fenix.fromToolchainFile. rust-src and fenix.stable.rust-analyzer-preview are combined in via fenix.combine. The returned profile is compatible with deriveProfile."
 }
 
 test_host_sandbox_rustc_same_store_path() {
