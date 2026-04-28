@@ -119,7 +119,8 @@ let
     base:
     fenixPkgs.combine [
       base
-      fenixPkgs.rust-analyzer
+      # stable RA from manifest avoids dragging matching nightly toolchain into closure
+      fenixPkgs.stable.rust-analyzer-preview
       fenixPkgs.stable.rust-src
     ];
 
