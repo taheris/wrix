@@ -2083,10 +2083,20 @@ test_bootstrap_flake() {
   cd "$TEST_DIR"
 
   if bootstrap_flake; then
-    if [ -f flake.nix ] && diff -q "$RALPH_TEMPLATE_DIR/flake.nix" flake.nix >/dev/null; then
-      test_pass "bootstrap_flake created flake.nix matching template"
+    local tree_ok=1 module
+    if [ ! -f flake.nix ] || ! diff -q "$RALPH_TEMPLATE_DIR/flake/flake.nix" flake.nix >/dev/null; then
+      tree_ok=0
+    fi
+    for module in apps devshell formatter; do
+      if [ ! -f "nix/flake/${module}.nix" ] || \
+         ! diff -q "$RALPH_TEMPLATE_DIR/flake/nix/flake/${module}.nix" "nix/flake/${module}.nix" >/dev/null; then
+        tree_ok=0
+      fi
+    done
+    if [ "$tree_ok" = "1" ]; then
+      test_pass "bootstrap_flake created flake.nix + nix/flake/{apps,devshell,formatter}.nix matching template tree"
     else
-      test_fail "flake.nix missing or differs from template"
+      test_fail "bootstrap_flake template tree missing or differs from source"
     fi
   else
     test_fail "bootstrap_flake returned non-zero on fresh dir"
@@ -2391,13 +2401,22 @@ test_init_flake_skip_existing() {
   setup_test_env "init-flake-skip"
   cd "$TEST_DIR"
 
-  local out rc=0
+  local out rc=0 tree_ok=1 module
   out=$(ralph init 2>&1) || rc=$?
-  if [ "$rc" -eq 0 ] && [ -f flake.nix ] && \
-     diff -q "$RALPH_TEMPLATE_DIR/flake.nix" flake.nix >/dev/null; then
-    test_pass "ralph init created flake.nix matching template"
+  if [ "$rc" -ne 0 ] || [ ! -f flake.nix ] || \
+     ! diff -q "$RALPH_TEMPLATE_DIR/flake/flake.nix" flake.nix >/dev/null; then
+    tree_ok=0
+  fi
+  for module in apps devshell formatter; do
+    if [ ! -f "nix/flake/${module}.nix" ] || \
+       ! diff -q "$RALPH_TEMPLATE_DIR/flake/nix/flake/${module}.nix" "nix/flake/${module}.nix" >/dev/null; then
+      tree_ok=0
+    fi
+  done
+  if [ "$tree_ok" = "1" ]; then
+    test_pass "ralph init created flake.nix + nix/flake/ tree matching template"
   else
-    test_fail "ralph init failed to create flake.nix (rc=$rc): $out"
+    test_fail "ralph init failed to create flake template tree (rc=$rc): $out"
     teardown_test_env
     return
   fi
@@ -2415,39 +2434,65 @@ test_init_flake_skip_existing() {
 
 test_init_flake_structure() {
   CURRENT_TEST="init_flake_structure"
-  test_header "generated flake.nix uses flake-parts, apps.sandbox, devShell w/ ralph.shellHook, treefmt, checks.treefmt"
+  test_header "generated flake template tree uses flake-parts, apps.sandbox, devShell w/ ralph.shellHook, treefmt"
 
-  local src="$REPO_ROOT/lib/ralph/template/flake.nix"
-  if [ ! -f "$src" ]; then
-    test_fail "template flake.nix not found at $src"
-    return
-  fi
+  local tree_root="$REPO_ROOT/lib/ralph/template/flake"
+  local top="$tree_root/flake.nix"
+  local apps="$tree_root/nix/flake/apps.nix"
+  local devshell="$tree_root/nix/flake/devshell.nix"
+  local formatter="$tree_root/nix/flake/formatter.nix"
+  local f
+  for f in "$top" "$apps" "$devshell" "$formatter"; do
+    if [ ! -f "$f" ]; then
+      test_fail "template file not found: $f"
+      return
+    fi
+  done
 
   local marker
   for marker in \
     'flake-parts.url' \
     'flake-parts.lib.mkFlake' \
-    'apps.sandbox' \
-    'devShells.default' \
-    'ralph.shellHook' \
     'inputs.treefmt-nix.flakeModule' \
-    'treefmt =' \
-    'inputs.wrapix.legacyPackages' \
-    'inputs.wrapix.packages.${system}.beads'
+    './nix/flake/apps.nix' \
+    './nix/flake/devshell.nix' \
+    './nix/flake/formatter.nix'
   do
-    if grep -Fq -- "$marker" "$src"; then
-      test_pass "template flake.nix contains: $marker"
+    if grep -Fq -- "$marker" "$top"; then
+      test_pass "top-level flake.nix contains: $marker"
     else
-      test_fail "template flake.nix missing: $marker"
+      test_fail "top-level flake.nix missing: $marker"
     fi
   done
+
+  for marker in 'apps.sandbox' 'inputs.wrapix.legacyPackages' 'mkSandbox'; do
+    if grep -Fq -- "$marker" "$apps"; then
+      test_pass "nix/flake/apps.nix contains: $marker"
+    else
+      test_fail "nix/flake/apps.nix missing: $marker"
+    fi
+  done
+
+  for marker in 'devShells.default' 'ralph.shellHook' 'inputs.wrapix.packages.${system}.beads'; do
+    if grep -Fq -- "$marker" "$devshell"; then
+      test_pass "nix/flake/devshell.nix contains: $marker"
+    else
+      test_fail "nix/flake/devshell.nix missing: $marker"
+    fi
+  done
+
+  if grep -Fq -- 'treefmt =' "$formatter"; then
+    test_pass "nix/flake/formatter.nix contains: treefmt ="
+  else
+    test_fail "nix/flake/formatter.nix missing: treefmt ="
+  fi
 }
 
 test_init_flake_systems() {
   CURRENT_TEST="init_flake_systems"
   test_header "generated flake.nix systems list excludes x86_64-darwin"
 
-  local src="$REPO_ROOT/lib/ralph/template/flake.nix"
+  local src="$REPO_ROOT/lib/ralph/template/flake/flake.nix"
   local sys
   for sys in '"x86_64-linux"' '"aarch64-linux"' '"aarch64-darwin"'; do
     if grep -Fq -- "$sys" "$src"; then
@@ -2468,7 +2513,7 @@ test_init_treefmt_programs() {
   CURRENT_TEST="init_treefmt_programs"
   test_header "generated flake.nix treefmt programs are deadnix, nixfmt, shellcheck, statix (no rustfmt)"
 
-  local src="$REPO_ROOT/lib/ralph/template/flake.nix"
+  local src="$REPO_ROOT/lib/ralph/template/flake/nix/flake/formatter.nix"
   local prog
   for prog in deadnix nixfmt shellcheck statix; do
     if grep -qE "${prog}\.enable[[:space:]]*=[[:space:]]*true" "$src"; then
@@ -2503,7 +2548,7 @@ test_init_flake_evaluates() {
   # Fresh-dir flake checks need their own git metadata — 'nix flake check'
   # refuses to resolve a path: input that isn't a git repo.
   git init -q .
-  git add flake.nix
+  git add flake.nix nix/flake
   git -c user.email=test@wrapix.local -c user.name=wrapix-test commit -q -m "init"
 
   local err_log
