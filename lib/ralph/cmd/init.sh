@@ -58,10 +58,18 @@ record_skipped() {
 
 run_bootstrap() {
   local fn="$1" artifact="$2"
+  shift 2
+  local extra=("$@")
   local rc=0
   "$fn" || rc=$?
   case "$rc" in
-    0) record_created "$artifact" "$BOOTSTRAP_DETAIL" ;;
+    0)
+      record_created "$artifact" "$BOOTSTRAP_DETAIL"
+      local e
+      for e in "${extra[@]}"; do
+        record_created "$e"
+      done
+      ;;
     1) record_skipped "$artifact" "$BOOTSTRAP_DETAIL" ;;
     *) error "$artifact: $BOOTSTRAP_DETAIL" ;;
   esac
@@ -90,7 +98,7 @@ record_scaffolded() {
   fi
 }
 
-run_bootstrap bootstrap_flake     "flake.nix"
+run_bootstrap bootstrap_flake     "flake.nix" "nix/flake/"
 run_bootstrap bootstrap_envrc     ".envrc"
 run_bootstrap bootstrap_gitignore ".gitignore"
 run_bootstrap bootstrap_precommit ".pre-commit-config.yaml"

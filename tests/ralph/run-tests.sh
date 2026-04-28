@@ -2438,6 +2438,57 @@ test_init_flake_skip_existing() {
   teardown_test_env
 }
 
+test_init_flake_lists_nix_flake_entry() {
+  CURRENT_TEST="init_flake_lists_nix_flake_entry"
+  test_header "ralph init lists nix/flake/ as a separate Created entry alongside flake.nix"
+
+  setup_test_env "init-flake-listing"
+  cd "$TEST_DIR"
+
+  local out rc=0
+  out=$(ralph init 2>&1) || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    test_fail "ralph init failed (rc=$rc): $out"
+    teardown_test_env
+    return
+  fi
+
+  local created
+  created=$(printf '%s\n' "$out" | awk '/^Created:$/{flag=1; next} /^Skipped:$/{flag=0} flag')
+  if printf '%s\n' "$created" | grep -qE '^[[:space:]]+flake\.nix$'; then
+    test_pass "Created section lists 'flake.nix'"
+  else
+    test_fail "Created section missing 'flake.nix' line: $out"
+  fi
+  if printf '%s\n' "$created" | grep -qE '^[[:space:]]+nix/flake/$'; then
+    test_pass "Created section lists 'nix/flake/' as a separate entry"
+  else
+    test_fail "Created section missing 'nix/flake/' line: $out"
+  fi
+
+  rc=0
+  out=$(ralph init 2>&1) || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    test_fail "ralph init re-run failed (rc=$rc): $out"
+    teardown_test_env
+    return
+  fi
+  local rerun_created
+  rerun_created=$(printf '%s\n' "$out" | awk '/^Created:$/{flag=1; next} /^Skipped:$/{flag=0} flag')
+  if printf '%s\n' "$rerun_created" | grep -qE 'flake\.nix|nix/flake/'; then
+    test_fail "re-run still listed flake artifacts under Created: $out"
+  else
+    test_pass "re-run Created section omits flake.nix and nix/flake/"
+  fi
+  if printf '%s\n' "$out" | grep -qE '^[[:space:]]+nix/flake/'; then
+    test_fail "re-run mentioned 'nix/flake/' on the skip path: $out"
+  else
+    test_pass "re-run skip output omits 'nix/flake/' (only flake.nix sentinel)"
+  fi
+
+  teardown_test_env
+}
+
 test_init_flake_structure() {
   CURRENT_TEST="init_flake_structure"
   test_header "generated flake template tree uses flake-parts, apps.sandbox, devShell w/ ralph.shellHook, treefmt"
@@ -3131,7 +3182,7 @@ test_wrapix_flake_exposes_init() {
 }
 
 # Test: top-level flake exposes packages.${system}.ralph.shellHook passthru
-# composed by lib/ralph/template/flake.nix.
+# composed by lib/ralph/template/flake/.
 test_wrapix_ralph_shellhook_passthru() {
   CURRENT_TEST="wrapix_ralph_shellhook_passthru"
   test_header "Top-level wrapix flake exposes packages.\${system}.ralph.shellHook"
@@ -17077,6 +17128,7 @@ ALL_TESTS=(
   test_init_host_execution
   test_init_flake_app
   test_init_flake_skip_existing
+  test_init_flake_lists_nix_flake_entry
   test_init_flake_structure
   test_init_flake_systems
   test_init_treefmt_programs
