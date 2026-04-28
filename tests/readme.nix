@@ -33,9 +33,9 @@ pkgs.runCommandLocal "test-readme-example" { } ''
 
   echo "  Access pattern correct: OK"
 
-  # Verify flake.nix exports match
-  if ! grep -q 'legacyPackages\.lib' ${src}/flake.nix; then
-    echo "ERROR: flake.nix should export legacyPackages.lib"
+  # Verify the flake-parts lib module exports legacyPackages.lib
+  if ! grep -q 'legacyPackages\.lib' ${src}/modules/flake/lib.nix; then
+    echo "ERROR: modules/flake/lib.nix should export legacyPackages.lib"
     exit 1
   fi
 
