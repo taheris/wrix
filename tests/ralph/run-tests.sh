@@ -2429,6 +2429,12 @@ test_init_flake_skip_existing() {
     test_fail "ralph init re-run did not skip flake.nix (rc=$rc): $out"
   fi
 
+  if echo "$out" | grep -qE 'nix/flake/|(apps|devshell|formatter)\.nix'; then
+    test_fail "ralph init re-run reported per-module entries (selective copy): $out"
+  else
+    test_pass "ralph init re-run did not selectively copy nix/flake/*.nix modules"
+  fi
+
   teardown_test_env
 }
 
@@ -2561,6 +2567,101 @@ test_init_flake_evaluates() {
     test_fail "nix flake check failed (rc=$rc): $(tail -40 "$err_log")"
   fi
   rm -f "$err_log"
+
+  teardown_test_env
+}
+
+test_init_flake_modular_imports() {
+  CURRENT_TEST="init_flake_modular_imports"
+  test_header "generated top-level flake.nix is a thin entry point with module imports only"
+
+  setup_test_env "init-flake-modular-imports"
+  cd "$TEST_DIR"
+
+  local rc=0
+  ralph init >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ] || [ ! -f flake.nix ]; then
+    test_fail "ralph init did not produce flake.nix (rc=$rc)"
+    teardown_test_env
+    return
+  fi
+
+  local marker
+  for marker in \
+    'inputs' \
+    'systems' \
+    'inputs.treefmt-nix.flakeModule' \
+    './nix/flake/apps.nix' \
+    './nix/flake/devshell.nix' \
+    './nix/flake/formatter.nix'
+  do
+    if grep -Fq -- "$marker" flake.nix; then
+      test_pass "top-level flake.nix declares: $marker"
+    else
+      test_fail "top-level flake.nix missing: $marker"
+    fi
+  done
+
+  if grep -qE 'perSystem[[:space:]]*=' flake.nix; then
+    test_fail "top-level flake.nix has inline perSystem body (should live in modules)"
+  else
+    test_pass "top-level flake.nix carries no inline perSystem body"
+  fi
+
+  local inline
+  for inline in 'apps.sandbox' 'devShells.default' 'treefmt[[:space:]]*='; do
+    if grep -qE -- "$inline" flake.nix; then
+      test_fail "top-level flake.nix unexpectedly defines: $inline"
+    else
+      test_pass "top-level flake.nix does not inline: $inline"
+    fi
+  done
+
+  teardown_test_env
+}
+
+test_init_flake_modules_present() {
+  CURRENT_TEST="init_flake_modules_present"
+  test_header "generated nix/flake/*.nix modules each contribute their expected attribute"
+
+  setup_test_env "init-flake-modules-present"
+  cd "$TEST_DIR"
+
+  local rc=0
+  ralph init >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    test_fail "ralph init failed (rc=$rc)"
+    teardown_test_env
+    return
+  fi
+
+  local module
+  for module in apps devshell formatter; do
+    if [ -f "nix/flake/${module}.nix" ]; then
+      test_pass "nix/flake/${module}.nix exists"
+    else
+      test_fail "nix/flake/${module}.nix missing"
+    fi
+  done
+
+  if grep -Fq 'apps.sandbox' nix/flake/apps.nix && grep -Fq 'mkSandbox' nix/flake/apps.nix; then
+    test_pass "nix/flake/apps.nix contributes apps.sandbox referencing mkSandbox"
+  else
+    test_fail "nix/flake/apps.nix missing apps.sandbox or mkSandbox"
+  fi
+
+  if grep -Fq 'devShells.default' nix/flake/devshell.nix \
+     && grep -Fq '${ralph.shellHook}' nix/flake/devshell.nix; then
+    test_pass "nix/flake/devshell.nix contributes devShells.default composing \${ralph.shellHook}"
+  else
+    test_fail "nix/flake/devshell.nix missing devShells.default or \${ralph.shellHook}"
+  fi
+
+  if grep -qE 'treefmt[[:space:]]*=' nix/flake/formatter.nix; then
+    test_pass "nix/flake/formatter.nix contributes treefmt block"
+  else
+    test_fail "nix/flake/formatter.nix missing treefmt block"
+  fi
 
   teardown_test_env
 }
@@ -16980,6 +17081,8 @@ ALL_TESTS=(
   test_init_flake_systems
   test_init_treefmt_programs
   test_init_flake_evaluates
+  test_init_flake_modular_imports
+  test_init_flake_modules_present
   test_init_creates_envrc
   test_init_gitignore_idempotent
   test_init_precommit_stages
