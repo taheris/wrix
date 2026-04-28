@@ -721,7 +721,7 @@ let
       rm -f .beads/dolt-server.pid .beads/dolt-server.lock .beads/dolt-server.port
 
       # Pre-create .gc/ layout so gc start never runs auto-init
-      # (matches city.app and modules/city.nix).
+      # (matches city.app and modules/nixos/city.nix).
       mkdir -p .gc/cache .gc/system .gc/runtime
       touch .gc/events.jsonl
 
@@ -729,7 +729,7 @@ let
 
       # Copy city.toml to workspace root — entrypoint.sh sed-replaces the
       # dolt port sentinel here, and stage-home.sh copies it into the
-      # staged gc home. Matches live (city.app and modules/city.nix).
+      # staged gc home. Matches live (city.app and modules/nixos/city.nix).
       cp -f ${cityToml} city.toml
       chmod u+w city.toml
 

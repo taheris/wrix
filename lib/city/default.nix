@@ -688,7 +688,7 @@ let
       inherit classifiedSecrets;
 
       # Single source of truth for podman secret flags — consumed by the
-      # devShell/app shellHook and by modules/city.nix so the systemd,
+      # devShell/app shellHook and by modules/nixos/city.nix so the systemd,
       # `nix develop`, and `nix run .#city` entry points all plumb deploy
       # and signing keys into role containers the same way.
       secretFlags = secretFlagsValue;

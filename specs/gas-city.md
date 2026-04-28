@@ -794,7 +794,7 @@ discovers the provider from `city.toml`.
 | Nix API | `lib/city/default.nix` | `mkCity` function |
 | Shared dolt | `lib/beads/default.nix` | Per-workspace `beads-dolt` container + CLI, shared between host `bd` and the city |
 | Provider | `lib/city/scripts/provider.sh` | Shell script for `exec:<script>` |
-| NixOS module | `modules/city.nix` | `services.wrapix.cities` |
+| NixOS module | `modules/nixos/city.nix` | `services.wrapix.cities` |
 | Agent wrapper | `lib/city/scripts/agent.sh` | `wrapix-agent` CLI abstraction |
 | Formulas | `lib/city/formulas/` | Default mayor, scout, worker, judge formulas |
 | Post-gate order | `lib/city/scripts/post-gate.sh` | Event-gated order: notify judge to merge, deploy bead creation |

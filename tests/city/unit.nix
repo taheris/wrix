@@ -1259,7 +1259,7 @@ in
   # NixOS module: verifies env var plumbing via Nix evaluation
   city-nixos-module =
     let
-      moduleFile = readFile ../../modules/city.nix;
+      moduleFile = readFile ../../modules/nixos/city.nix;
       cityFile = readFile ../../lib/city/default.nix;
 
       # Structural checks — the module must define these
