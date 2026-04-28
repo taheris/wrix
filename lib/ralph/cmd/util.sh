@@ -2720,19 +2720,21 @@ scaffold_templates() {
 
 export BOOTSTRAP_DETAIL=""
 
-# Copy $RALPH_TEMPLATE_DIR/flake.nix to ./flake.nix.
+# Recursively copy $RALPH_TEMPLATE_DIR/flake/ (top-level flake.nix +
+# nix/flake/*.nix) into the project root. flake.nix is the sentinel — if it
+# exists, the entire flake bootstrap is skipped.
 bootstrap_flake() {
   BOOTSTRAP_DETAIL=""
   if [ -e flake.nix ]; then
     BOOTSTRAP_DETAIL="already exists"
     return 1
   fi
-  local src="${RALPH_TEMPLATE_DIR:-}/flake.nix"
-  if [ ! -f "$src" ]; then
+  local src="${RALPH_TEMPLATE_DIR:-}/flake"
+  if [ ! -d "$src" ] || [ ! -f "$src/flake.nix" ]; then
     BOOTSTRAP_DETAIL="template not found: $src"
     return 2
   fi
-  cp "$src" flake.nix
+  cp -r "$src/." .
   return 0
 }
 

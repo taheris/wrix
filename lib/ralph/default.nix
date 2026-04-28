@@ -60,7 +60,8 @@ in
 {
   inherit scripts templateDir;
 
-  # `shellHook` passthru is composed by lib/ralph/template/flake.nix.
+  # `shellHook` passthru is composed by the lib/ralph/template/flake/ tree
+  # (top-level flake.nix + nix/flake/devshell.nix).
   package = scripts.overrideAttrs (old: {
     passthru = (old.passthru or { }) // {
       shellHook = ''
