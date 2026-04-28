@@ -249,14 +249,14 @@ in
     ];
 
     env = {
-      UV_CACHE_DIR = "/workspace/.uv-cache";
+      UV_CACHE_DIR = "/home/wrapix/.cache/uv";
     };
 
     mounts = [
       {
         source = "~/.cache/uv";
-        dest = "~/.cache/uv";
-        mode = "ro";
+        dest = "/home/wrapix/.cache/uv";
+        mode = "rw";
         optional = true;
       }
     ];
