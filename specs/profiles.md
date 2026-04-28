@@ -81,7 +81,8 @@ and is the same provider downstream projects are standardizing on, so store path
 align across the host/sandbox boundary.
 
 **Toolchain:** `fenix.packages.${system}.stable.defaultToolchain` combined with
-`rust-src` and `rust-analyzer` (both separately pinned via fenix). The default
+`rust-src` (separately pinned) and `stable.rust-analyzer-preview` (manifest build
+from the stable channel — see *Why stable rust-analyzer?* below). The default
 toolchain matches the rustup-equivalent set: rustc + cargo + rust-std + clippy +
 rustfmt + rust-docs.
 
@@ -89,7 +90,7 @@ rustfmt + rust-docs.
 |---------|---------|
 | fenix toolchain | cargo, rustc, clippy, rustfmt, rust-std |
 | fenix rust-src | Standard library source for rust-analyzer |
-| fenix rust-analyzer | LSP server (pinned independently of the channel) |
+| fenix `stable.rust-analyzer-preview` | LSP server (manifest build, channel-aligned with stable) |
 | sccache | Shared compile cache across host + sandbox |
 | gcc | C compiler for linking |
 | openssl | TLS library (runtime) |
@@ -149,8 +150,18 @@ Network allowlist: `crates.io`, `static.crates.io`, `index.crates.io`
 > paths across the host/sandbox/sibling-app boundary — required for sccache
 > hits — come from splicing `rustProfile.shellHook` into the downstream
 > devShell and using `rustProfile.toolchain` in sibling app `runtimeInputs`
-> (see *Downstream Integration*). rust-analyzer is combined separately so it
-> can track its own cadence.
+> (see *Downstream Integration*).
+>
+> **Why stable rust-analyzer?** rust-analyzer ships from
+> `fenix.stable.rust-analyzer-preview`, a manifest download channel-aligned
+> with the stable toolchain — *not* `fenix.packages.${system}.rust-analyzer`,
+> which is built from source against the nightly branch. The from-source
+> nightly RA drags a full nightly cargo/rustc/rust-std closure into every
+> downstream flake on each input update (its source input tracks the nightly
+> branch tip, so fenix's lock advances daily). Stable RA lags nightly by
+> ~6 weeks; consumers who need nightly RA can opt in per-flake via
+> `deriveProfile profiles.rust { packages = [ fenix.packages.${system}.rust-analyzer ]; }`
+> and accept the closure cost themselves.
 
 ### Python Profile
 
@@ -239,13 +250,20 @@ These live on the profile attrset itself, not on `deriveProfile`.
 - `profiles.rust.withToolchain` — accepts `{ file, sha256 }` (the `file` is the
   path to `rust-toolchain.toml`; `sha256` is the hash of the downloaded components),
   returns a new profile attrset (without `withToolchain`) using
-  `fenix.fromToolchainFile`. `rust-src` and `rust-analyzer` are combined in on top
-  of whatever components the toolchain file declares. `packages`, `env`,
-  `shellHook`, and `toolchain` are all rebuilt against the custom toolchain so
-  they close over the same derivation — `env.RUST_SRC_PATH` resolves to the new
-  toolchain's stdlib source, the host PATH prepend in `shellHook` resolves to
-  the same `rustc` binary the sandbox uses, and `profile.toolchain` is exactly
-  that derivation for downstream `runtimeInputs`.
+  `fenix.fromToolchainFile`. `rust-src` and `stable.rust-analyzer-preview` are
+  combined in on top of whatever components the toolchain file declares.
+  `packages`, `env`, `shellHook`, and `toolchain` are all rebuilt against the
+  custom toolchain so they close over the same derivation — `env.RUST_SRC_PATH`
+  resolves to the new toolchain's stdlib source, the host PATH prepend in
+  `shellHook` resolves to the same `rustc` binary the sandbox uses, and
+  `profile.toolchain` is exactly that derivation for downstream `runtimeInputs`.
+
+  **Caveat:** do not list `rust-analyzer` in your `rust-toolchain.toml`
+  `components`. The profile always combines `stable.rust-analyzer-preview` on
+  top, and `fenix.combine` errors on duplicate `bin/rust-analyzer`. Consumers
+  who want a different RA should omit it from `components` and add their
+  preferred build via `deriveProfile profiles.rust { packages = [ ... ]; }`
+  instead.
 
 Only the Rust profile has `withToolchain`. Other profiles (base, python) do not
 expose profile-specific configuration functions.
@@ -276,6 +294,8 @@ expose profile-specific configuration functions.
   [judge](../tests/judges/profiles.sh#test_host_sandbox_rustc_same_store_path)
 - [ ] `profile.toolchain` is exposed on both the default rust profile and `withToolchain { file; sha256; }`, and points at the same derivation referenced by the profile's `packages` and the `${toolchain}/bin` PATH prepend in `shellHook`
   [judge](../tests/judges/profiles.sh#test_rust_toolchain_field)
+- [ ] `profiles.rust` and `profiles.rust.withToolchain { ... }` closures contain zero `*-nightly-*` derivations after a fresh `nix flake update` (regression guard against reintroducing `fenix.packages.${system}.rust-analyzer`, which drags a nightly cargo/rustc/rust-std closure)
+  [judge](../tests/judges/profiles.sh#test_rust_profile_no_nightly_closure)
 
 ## Out of Scope
 
@@ -283,6 +303,7 @@ expose profile-specific configuration functions.
 - IDE configuration beyond Claude Code
 - Auto-detection of `rust-toolchain.toml` at runtime (must be passed explicitly via `withToolchain`)
 - Automatic pruning of cargo registry / git / uv caches — operators are expected to clean `~/.cargo/{registry,git}` and `~/.cache/uv` manually if they grow unbounded; sccache is self-capped via `SCCACHE_CACHE_SIZE`.
+- Tracking nightly rust-analyzer in the default profile. Building `fenix.packages.${system}.rust-analyzer` from source pulls a matching nightly cargo/rustc/rust-std closure into every consumer's flake on each input update; the profile pins `fenix.stable.rust-analyzer-preview` instead. Consumers who need nightly RA opt in via `deriveProfile`.
 
 ## Downstream Integration
 
