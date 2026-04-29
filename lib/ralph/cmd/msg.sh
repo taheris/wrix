@@ -199,15 +199,7 @@ print_resume_hint() {
   local bead_spec
   bead_spec=$(get_spec_from_labels "$labels_json")
 
-  local current_spec=""
-  local current_file="$RALPH_DIR/state/current"
-  if [ -f "$current_file" ]; then
-    current_spec=$(<"$current_file")
-    current_spec="${current_spec#"${current_spec%%[![:space:]]*}"}"
-    current_spec="${current_spec%"${current_spec##*[![:space:]]}"}"
-  fi
-
-  if [ -n "$bead_spec" ] && [ "$bead_spec" != "—" ] && [ "$bead_spec" != "$current_spec" ]; then
+  if [ -n "$bead_spec" ] && [ "$bead_spec" != "—" ]; then
     echo "Clarify cleared on $bead_id. Resume with: ralph run -s $bead_spec"
   else
     echo "Clarify cleared on $bead_id. Resume with: ralph run"

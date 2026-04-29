@@ -3915,8 +3915,9 @@ EOF
 }
 
 # Test: ralph msg reply prints a one-line resume hint after clearing clarify.
-# Covers both the matching-spec case (just `ralph run`) and the differing-spec
-# case (`ralph run -s <label>`).
+# Hint sources <label> from the cleared bead's spec:<label> label only;
+# state/current is not consulted. Falls back to bare 'ralph run' when the
+# bead has no spec:<label> (see specs/ralph-review.md §Msg).
 test_msg_reply_resume_hint() {
   CURRENT_TEST="msg_reply_resume_hint"
   test_header "ralph msg reply prints resume hint on clarify clear"
@@ -3935,16 +3936,10 @@ test_msg_reply_resume_hint() {
   local matching_output
   matching_output=$(ralph-msg -i "$matching_id" -a "use approach A" 2>&1)
 
-  if echo "$matching_output" | grep -qF "Clarify cleared on $matching_id. Resume with: ralph run"; then
-    test_pass "Reply hint matches expected text for current spec"
+  if echo "$matching_output" | grep -qF "Clarify cleared on $matching_id. Resume with: ralph run -s current-feature"; then
+    test_pass "Reply hint emits -s <label> from bead even when label matches state/current"
   else
-    test_fail "Reply hint missing expected text (got: $matching_output)"
-  fi
-
-  if echo "$matching_output" | grep -qE "Resume with: ralph run -s "; then
-    test_fail "Hint should not include -s flag when bead spec matches state/current"
-  else
-    test_pass "No -s flag in hint when bead spec matches current"
+    test_fail "Reply hint missing -s <label> from bead spec (got: $matching_output)"
   fi
 
   local has_label_after
@@ -3973,9 +3968,25 @@ test_msg_reply_resume_hint() {
   other_output=$(ralph-msg -i "$other_id" -a "go with option B" 2>&1)
 
   if echo "$other_output" | grep -qF "Clarify cleared on $other_id. Resume with: ralph run -s other-feature"; then
-    test_pass "Reply hint includes -s flag when bead spec differs from current"
+    test_pass "Reply hint includes -s flag from bead's spec label"
   else
     test_fail "Reply hint missing -s flag (got: $other_output)"
+  fi
+
+  local nospec_id
+  nospec_id=$(bd create --title="Spec-less question" --type=task \
+    --description="No spec label" \
+    --labels="ralph:clarify" --json 2>/dev/null | jq -r '.id')
+
+  local nospec_output
+  nospec_output=$(ralph-msg -i "$nospec_id" -a "use defaults" 2>&1)
+
+  if echo "$nospec_output" | grep -qE "Resume with: ralph run -s "; then
+    test_fail "Hint should NOT include -s when bead has no spec:<label> (got: $nospec_output)"
+  elif echo "$nospec_output" | grep -qF "Clarify cleared on $nospec_id. Resume with: ralph run"; then
+    test_pass "Hint falls back to bare 'ralph run' when bead lacks spec:<label>"
+  else
+    test_fail "Reply hint missing fallback text (got: $nospec_output)"
   fi
 
   teardown_test_env
