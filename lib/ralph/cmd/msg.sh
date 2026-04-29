@@ -256,8 +256,13 @@ render_clarify_list() {
   fi
   echo ""
 
-  printf " %2s  %-14s  %s\n" "#" "ID" "SUMMARY"
-  printf " %2s  %-14s  %s\n" "--" "--------------" "----------------------------------------"
+  if [ -n "$spec_label" ]; then
+    printf " %2s  %-14s  %s\n" "#" "ID" "SUMMARY"
+    printf " %2s  %-14s  %s\n" "--" "--------------" "----------------------------------------"
+  else
+    printf " %2s  %-14s  %-14s  %s\n" "#" "ID" "SPEC" "SUMMARY"
+    printf " %2s  %-14s  %-14s  %s\n" "--" "--------------" "--------------" "----------------------------------------"
+  fi
 
   local idx=0
   local line
@@ -273,12 +278,22 @@ render_clarify_list() {
       summary="${summary:0:57}..."
     fi
 
-    printf " %2d  %-14s  %s\n" "$idx" "$bead_id" "$summary"
+    if [ -n "$spec_label" ]; then
+      printf " %2d  %-14s  %s\n" "$idx" "$bead_id" "$summary"
+    else
+      local labels_json bead_spec
+      labels_json=$(echo "$line" | jq -c '.labels // []')
+      bead_spec=$(get_spec_from_labels "$labels_json")
+      printf " %2d  %-14s  %-14s  %s\n" "$idx" "$bead_id" "$bead_spec" "$summary"
+    fi
   done < <(echo "$questions_json" | jq -c '.[]')
 
   echo ""
   echo "Reply:"
   echo "  ralph msg -c                  # interactive triage + walk (container, Claude)"
+  if [ -z "$spec_label" ]; then
+    echo "  ralph msg -s <label>          # filter to one spec"
+  fi
   echo "  ralph msg -n <N>              # view clarify #N"
   echo "  ralph msg -n <N> -a <int>     # fast-reply: pick option <int>"
   echo "  ralph msg -n <N> -a \"text\"    # fast-reply: verbatim answer"

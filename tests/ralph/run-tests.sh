@@ -4062,6 +4062,102 @@ Body." \
   teardown_test_env
 }
 
+# Test: cross-spec `ralph msg` list renders a SPEC column sourced from each
+# bead's `spec:<label>` label, with `—` for spec-less beads. `-s <label>`
+# filtering drops the column (every row would carry the same value).
+# Spec: ralph-review.md §Msg / List output.
+test_msg_list_spec_column() {
+  CURRENT_TEST="msg_list_spec_column"
+  test_header "ralph msg list: SPEC column under cross-spec, dropped under -s"
+
+  setup_test_env "msg-list-spec-column"
+  init_beads
+
+  local profiles_id loop_id nospec_id
+  profiles_id=$(bd create --title="Profiles question" --type=task \
+    --description="Body" \
+    --labels="spec:profiles,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+  loop_id=$(bd create --title="Loop question" --type=task \
+    --description="Body" \
+    --labels="spec:ralph-loop,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+  nospec_id=$(bd create --title="No-spec question" --type=task \
+    --description="Body" \
+    --labels="ralph:clarify" --json 2>/dev/null | jq -r '.id')
+
+  local cross_output
+  cross_output=$(ralph-msg 2>&1)
+
+  if echo "$cross_output" | grep -qE '^[[:space:]]+#[[:space:]]+ID[[:space:]]+SPEC[[:space:]]+SUMMARY'; then
+    test_pass "Cross-spec list header includes SPEC column"
+  else
+    test_fail "Cross-spec list missing SPEC column header (got: $cross_output)"
+  fi
+
+  if echo "$cross_output" | grep -qE "^Outstanding clarifies \(3\):"; then
+    test_pass "Cross-spec header omits 'for <label>' suffix"
+  else
+    test_fail "Cross-spec header should be 'Outstanding clarifies (3):' (got: $cross_output)"
+  fi
+
+  local profiles_row loop_row nospec_row
+  profiles_row=$(echo "$cross_output" | grep -F "$profiles_id" || true)
+  loop_row=$(echo "$cross_output" | grep -F "$loop_id" || true)
+  nospec_row=$(echo "$cross_output" | grep -F "$nospec_id" || true)
+
+  if echo "$profiles_row" | grep -qE "${profiles_id}[[:space:]]+profiles[[:space:]]"; then
+    test_pass "SPEC column renders 'profiles' for spec:profiles bead"
+  else
+    test_fail "Expected 'profiles' in SPEC column for $profiles_id (got: $profiles_row)"
+  fi
+
+  if echo "$loop_row" | grep -qE "${loop_id}[[:space:]]+ralph-loop[[:space:]]"; then
+    test_pass "SPEC column renders 'ralph-loop' for spec:ralph-loop bead"
+  else
+    test_fail "Expected 'ralph-loop' in SPEC column for $loop_id (got: $loop_row)"
+  fi
+
+  if echo "$nospec_row" | grep -qE "${nospec_id}[[:space:]]+—[[:space:]]"; then
+    test_pass "SPEC column renders '—' for bead without spec:<label>"
+  else
+    test_fail "Expected '—' in SPEC column for spec-less $nospec_id (got: $nospec_row)"
+  fi
+
+  if echo "$cross_output" | grep -qE "ralph msg -s <label>"; then
+    test_pass "Cross-spec footer includes 'ralph msg -s <label>' example"
+  else
+    test_fail "Cross-spec footer missing '-s <label>' filter example (got: $cross_output)"
+  fi
+
+  local filtered_output
+  filtered_output=$(ralph-msg -s profiles 2>&1)
+
+  if echo "$filtered_output" | grep -qE '^[[:space:]]+#[[:space:]]+ID[[:space:]]+SUMMARY[[:space:]]*$'; then
+    test_pass "-s filtered list header omits SPEC column"
+  else
+    test_fail "-s filtered list should omit SPEC column header (got: $filtered_output)"
+  fi
+
+  if echo "$filtered_output" | grep -qE '^[[:space:]]+#[[:space:]]+ID[[:space:]]+SPEC'; then
+    test_fail "-s filtered list still has SPEC column header (got: $filtered_output)"
+  else
+    test_pass "-s filtered list does not render SPEC column"
+  fi
+
+  if echo "$filtered_output" | grep -qE "Outstanding clarifies for profiles \(1\):"; then
+    test_pass "-s filtered header keeps 'for <label>' suffix"
+  else
+    test_fail "-s filtered header should be 'Outstanding clarifies for profiles (1):' (got: $filtered_output)"
+  fi
+
+  if echo "$filtered_output" | grep -qE "ralph msg -s <label>"; then
+    test_fail "-s filtered footer should NOT advertise '-s <label>' (got: $filtered_output)"
+  else
+    test_pass "-s filtered footer omits '-s <label>' example"
+  fi
+
+  teardown_test_env
+}
+
 # Test: `ralph msg -c` launches the interactive Drafter (container path:
 # renders msg.md + calls claude), while bare `ralph msg` stays host-side
 # (no claude invocation). Tests run with wrapix filtered from PATH, so
@@ -17072,6 +17168,7 @@ ALL_TESTS=(
   test_add_clarify_resets_in_progress
   test_msg_reply_resume_hint
   test_msg_list_summary_fallback
+  test_msg_list_spec_column
   test_msg_interactive_container
   test_msg_partial_progress_clean
   test_msg_index_ordering
