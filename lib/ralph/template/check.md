@@ -106,9 +106,15 @@ A malformed bead breaks fast-reply with `-a <int>`.
 
 ### Handling Each Clash
 
+> **`spec:{{LABEL}}` label is REQUIRED on every clarify and fix-up bead you create.**
+> `ralph msg -s <label>` filters on it, and `ralph msg`'s resume hint reads it to
+> emit `Resume with: ralph run -s <label>`. A bead missing this label falls back
+> to bare `ralph run` and is invisible to scoped listings.
+
 For every invariant clash you detect, create a bead whose description contains the
-proposed options in the format above, attach the `ralph:clarify` label, then bond it
-to the molecule:
+proposed options in the format above, attach the `ralph:clarify` label **and the
+`spec:{{LABEL}}` label** (REQUIRED — see the note above), then bond it to the
+molecule:
 
 ```bash
 CLARIFY_ID=$(bd create \
@@ -161,8 +167,15 @@ The user will answer with a free-form choice or an integer option pick via `ralp
 ## Creating Fix-Up Beads
 
 For actionable issues that do NOT need human judgment (straightforward bugs, missing
-tests, typos), create follow-up beads directly — label them with the appropriate
-`profile:X` so the right executor picks them up:
+tests, typos), create follow-up beads directly. **The `spec:{{LABEL}}` label is
+REQUIRED on every fix-up bead** — same rule as clarify beads, same reason: `ralph
+msg -s <label>` filters on it, and the resume hint printed when a clarify clears
+reads it to emit `Resume with: ralph run -s <label>`. Without `spec:{{LABEL}}` the
+bead is invisible to scoped listings and the resume hint falls back to bare
+`ralph run`.
+
+Label fix-up beads with `spec:{{LABEL}}` and the appropriate `profile:X` so the
+right executor picks them up:
 
 ```bash
 NEW_ID=$(bd create \
