@@ -294,8 +294,8 @@ expose profile-specific configuration functions.
   [judge](../tests/judges/profiles.sh#test_host_sandbox_rustc_same_store_path)
 - [ ] `profile.toolchain` is exposed on both the default rust profile and `withToolchain { file; sha256; }`, and points at the same derivation referenced by the profile's `packages` and the `${toolchain}/bin` PATH prepend in `shellHook`
   [judge](../tests/judges/profiles.sh#test_rust_toolchain_field)
-- [ ] `profiles.rust` and `profiles.rust.withToolchain { ... }` closures contain zero `*-nightly-*` derivations after a fresh `nix flake update` (regression guard against reintroducing `fenix.packages.${system}.rust-analyzer`, which drags a nightly cargo/rustc/rust-std closure)
-  [judge](../tests/judges/profiles.sh#test_rust_profile_no_nightly_closure)
+- [ ] `profiles.rust` and `profiles.rust.withToolchain { ... }` closures contain zero `*-nightly-*` derivations after a fresh `nix flake update` (regression guard against reintroducing `fenix.packages.${system}.rust-analyzer`, which drags a nightly cargo/rustc/rust-std closure). Implemented as a deterministic shell test (nix-eval the toolchain `drvPath`, scan the closure for `*-nightly-*` paths, exit 0/1) — `[verify]` rather than `[judge]` because there is no rubric ambiguity for an LLM to judge.
+  [verify](../tests/profiles/no-nightly-closure.sh#test_no_nightly_closure)
 
 ## Out of Scope
 
