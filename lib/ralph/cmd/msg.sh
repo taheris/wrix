@@ -105,7 +105,7 @@ Modes:
 
 Flags:
   -c, --chat               Launch interactive Drafter (container, Claude)
-  -s, --spec <label>       Filter by spec label (default: state/current)
+  -s, --spec <label>       Filter by spec label (filter only — no default)
   -n, --num <N>            Target clarify by 1-based sequential index
   -i, --id <id>            Target clarify by bead ID
   -a, --answer <choice>    Store answer and clear label (int = option lookup)
@@ -537,21 +537,7 @@ do_dismiss() {
 # Mode: View, fast-reply, or dismiss a single clarify (host-side).
 #-----------------------------------------------------------------------------
 if { [ -n "$BEAD_ID" ] || [ -n "$NUM_TARGET" ]; } && [ "$CHAT" = "false" ]; then
-  # Resolve spec filter for index lookup. Same rules as list mode: explicit
-  # --spec, else state/current, else unfiltered.
-  resolved_filter=""
-  if [ -n "$SPEC_FILTER" ]; then
-    resolved_filter="$SPEC_FILTER"
-  else
-    current_file="$RALPH_DIR/state/current"
-    if [ -f "$current_file" ]; then
-      resolved_filter=$(<"$current_file")
-      resolved_filter="${resolved_filter#"${resolved_filter%%[![:space:]]*}"}"
-      resolved_filter="${resolved_filter%"${resolved_filter##*[![:space:]]}"}"
-    fi
-  fi
-
-  resolve_target_bead "$NUM_TARGET" "$BEAD_ID" "$resolved_filter"
+  resolve_target_bead "$NUM_TARGET" "$BEAD_ID" "$SPEC_FILTER"
 
   if [ "$ANSWER_SET" = "true" ]; then
     do_fast_reply "$TARGET_ID" "$ANSWER"
@@ -723,23 +709,7 @@ fi
 # Mode: List outstanding questions (default, host-side)
 #-----------------------------------------------------------------------------
 
-# Resolve spec label: --spec/-s if given, else state/current. Unlike the
-# container modes we tolerate a missing state/current here so `ralph msg`
-# in a fresh checkout prints a helpful "No outstanding questions" instead
-# of erroring out.
-resolved_label=""
-if [ -n "$SPEC_FILTER" ]; then
-  resolved_label="$SPEC_FILTER"
-else
-  current_file="$RALPH_DIR/state/current"
-  if [ -f "$current_file" ]; then
-    resolved_label=$(<"$current_file")
-    resolved_label="${resolved_label#"${resolved_label%%[![:space:]]*}"}"
-    resolved_label="${resolved_label%"${resolved_label##*[![:space:]]}"}"
-  fi
-fi
-
-QUESTIONS_JSON=$(get_sorted_clarify_beads "$resolved_label") || {
+QUESTIONS_JSON=$(get_sorted_clarify_beads "$SPEC_FILTER") || {
   echo "No outstanding questions."
   exit 0
 }
@@ -747,12 +717,12 @@ QUESTIONS_JSON=$(get_sorted_clarify_beads "$resolved_label") || {
 QUESTION_COUNT=$(echo "$QUESTIONS_JSON" | jq 'length' 2>/dev/null || echo 0)
 
 if [ "$QUESTION_COUNT" -eq 0 ]; then
-  if [ -n "$resolved_label" ]; then
-    echo "No outstanding clarifies for '$resolved_label'."
+  if [ -n "$SPEC_FILTER" ]; then
+    echo "No outstanding clarifies for '$SPEC_FILTER'."
   else
     echo "No outstanding questions."
   fi
   exit 0
 fi
 
-render_clarify_list "$QUESTIONS_JSON" "$resolved_label"
+render_clarify_list "$QUESTIONS_JSON" "$SPEC_FILTER"
