@@ -3918,9 +3918,9 @@ EOF
 # Hint sources <label> from the cleared bead's spec:<label> label only;
 # state/current is not consulted. Falls back to bare 'ralph run' when the
 # bead has no spec:<label> (see specs/ralph-review.md §Msg).
-test_msg_reply_resume_hint() {
-  CURRENT_TEST="msg_reply_resume_hint"
-  test_header "ralph msg reply prints resume hint on clarify clear"
+test_msg_reply_resume_hint_per_spec() {
+  CURRENT_TEST="msg_reply_resume_hint_per_spec"
+  test_header "ralph msg reply: 'Resume with: ralph run -s <label>' sourced from cleared bead's spec:<label>; falls back to bare 'ralph run' when label absent"
 
   setup_test_env "msg-resume-hint"
   init_beads
@@ -4057,6 +4057,172 @@ Body." \
     test_pass "SUMMARY falls back to title when ## Options section is absent"
   else
     test_fail "SUMMARY missing title fallback when no Options section (got: $no_options_row)"
+  fi
+
+  teardown_test_env
+}
+
+# Test: bare `ralph msg` lists every outstanding ralph:clarify bead across
+# all specs. state/current is not consulted — a clarify whose spec:<label>
+# does not match state/current must still appear in the list. Spec:
+# ralph-review.md §Clarify Resolution / Msg.
+test_msg_list_cross_spec_default() {
+  CURRENT_TEST="msg_list_cross_spec_default"
+  test_header "bare ralph msg lists every outstanding clarify across all specs (state/current ignored)"
+
+  setup_test_env "msg-list-cross-spec-default"
+  init_beads
+
+  # state/current points at a single spec; bare `ralph msg` must NOT filter
+  # by it. Any bead whose spec:<label> differs from state/current must still
+  # appear in the cross-spec list.
+  mkdir -p "$RALPH_DIR/state"
+  echo "current-spec" > "$RALPH_DIR/state/current"
+
+  local current_id other_id third_id nospec_id
+  current_id=$(bd create --title="Matches state/current" --type=task \
+    --description="Body" \
+    --labels="spec:current-spec,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+  other_id=$(bd create --title="Different spec" --type=task \
+    --description="Body" \
+    --labels="spec:other-spec,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+  third_id=$(bd create --title="Yet another spec" --type=task \
+    --description="Body" \
+    --labels="spec:third-spec,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+  nospec_id=$(bd create --title="No spec label" --type=task \
+    --description="Body" \
+    --labels="ralph:clarify" --json 2>/dev/null | jq -r '.id')
+
+  local list_output
+  list_output=$(ralph-msg 2>&1)
+
+  if echo "$list_output" | grep -qE "^Outstanding clarifies \(4\):"; then
+    test_pass "Cross-spec list header reports 4 outstanding clarifies"
+  else
+    test_fail "Expected 'Outstanding clarifies (4):' (got: $list_output)"
+  fi
+
+  local id
+  for id in "$current_id" "$other_id" "$third_id" "$nospec_id"; do
+    if echo "$list_output" | grep -qF "$id"; then
+      test_pass "Cross-spec list includes $id (state/current did not filter it out)"
+    else
+      test_fail "Cross-spec list missing $id (output: $list_output)"
+    fi
+  done
+
+  # Drop state/current entirely and re-run — list should be unchanged.
+  rm -f "$RALPH_DIR/state/current"
+
+  local nostate_output
+  nostate_output=$(ralph-msg 2>&1)
+
+  if echo "$nostate_output" | grep -qE "^Outstanding clarifies \(4\):"; then
+    test_pass "Cross-spec list unaffected when state/current is absent"
+  else
+    test_fail "Cross-spec list changed without state/current (got: $nostate_output)"
+  fi
+
+  for id in "$current_id" "$other_id" "$third_id" "$nospec_id"; do
+    if echo "$nostate_output" | grep -qF "$id"; then
+      test_pass "Without state/current: list still includes $id"
+    else
+      test_fail "Without state/current: list missing $id (output: $nostate_output)"
+    fi
+  done
+
+  teardown_test_env
+}
+
+# Test: `ralph msg -s <label>` filters the host list to clarifies carrying
+# the `spec:<label>` bead label. Beads with other spec labels (or no spec
+# label) are excluded. state/current is not consulted; -s is the only filter.
+# Spec: ralph-review.md §Clarify Resolution / Msg.
+test_msg_list_filter_by_spec_label() {
+  CURRENT_TEST="msg_list_filter_by_spec_label"
+  test_header "ralph msg -s <label> filters the host list to spec:<label> beads only"
+
+  setup_test_env "msg-list-filter-by-spec-label"
+  init_beads
+
+  # state/current set to an unrelated spec to prove -s, not state/current,
+  # drives filtering.
+  mkdir -p "$RALPH_DIR/state"
+  echo "unrelated-current" > "$RALPH_DIR/state/current"
+
+  local alpha1_id alpha2_id beta_id nospec_id
+  alpha1_id=$(bd create --title="Alpha question 1" --type=task \
+    --description="Body" \
+    --labels="spec:alpha,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+  alpha2_id=$(bd create --title="Alpha question 2" --type=task \
+    --description="Body" \
+    --labels="spec:alpha,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+  beta_id=$(bd create --title="Beta question" --type=task \
+    --description="Body" \
+    --labels="spec:beta,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+  nospec_id=$(bd create --title="No spec label" --type=task \
+    --description="Body" \
+    --labels="ralph:clarify" --json 2>/dev/null | jq -r '.id')
+
+  local alpha_output
+  alpha_output=$(ralph-msg -s alpha 2>&1)
+
+  if echo "$alpha_output" | grep -qE "Outstanding clarifies for alpha \(2\):"; then
+    test_pass "-s alpha header reports 2 alpha clarifies"
+  else
+    test_fail "Expected 'Outstanding clarifies for alpha (2):' (got: $alpha_output)"
+  fi
+
+  if echo "$alpha_output" | grep -qF "$alpha1_id"; then
+    test_pass "-s alpha includes $alpha1_id"
+  else
+    test_fail "-s alpha missing $alpha1_id (output: $alpha_output)"
+  fi
+  if echo "$alpha_output" | grep -qF "$alpha2_id"; then
+    test_pass "-s alpha includes $alpha2_id"
+  else
+    test_fail "-s alpha missing $alpha2_id (output: $alpha_output)"
+  fi
+  if echo "$alpha_output" | grep -qF "$beta_id"; then
+    test_fail "-s alpha should not include beta bead $beta_id (got: $alpha_output)"
+  else
+    test_pass "-s alpha excludes beta bead"
+  fi
+  if echo "$alpha_output" | grep -qF "$nospec_id"; then
+    test_fail "-s alpha should not include spec-less bead $nospec_id (got: $alpha_output)"
+  else
+    test_pass "-s alpha excludes spec-less bead"
+  fi
+
+  local beta_output
+  beta_output=$(ralph-msg -s beta 2>&1)
+
+  if echo "$beta_output" | grep -qE "Outstanding clarifies for beta \(1\):"; then
+    test_pass "-s beta header reports 1 beta clarify"
+  else
+    test_fail "Expected 'Outstanding clarifies for beta (1):' (got: $beta_output)"
+  fi
+
+  if echo "$beta_output" | grep -qF "$beta_id"; then
+    test_pass "-s beta includes $beta_id"
+  else
+    test_fail "-s beta missing $beta_id (output: $beta_output)"
+  fi
+  if echo "$beta_output" | grep -qF "$alpha1_id"; then
+    test_fail "-s beta should not include alpha1 bead (got: $beta_output)"
+  else
+    test_pass "-s beta excludes alpha1 bead"
+  fi
+
+  # -s with state/current matching some other spec: still filters by -s.
+  local current_output
+  current_output=$(ralph-msg -s unrelated-current 2>&1)
+
+  # No clarifies labeled spec:unrelated-current — should report empty.
+  if echo "$current_output" | grep -qF "No outstanding clarifies for 'unrelated-current'."; then
+    test_pass "-s unrelated-current reports no matches (state/current did not bypass the filter)"
+  else
+    test_fail "Expected empty list for -s unrelated-current (got: $current_output)"
   fi
 
   teardown_test_env
@@ -4248,6 +4414,142 @@ EOF
   teardown_test_env
 }
 
+# Test: `ralph msg -c` (no -s) reads every outstanding clarify regardless of
+# state/current; `ralph msg -c -s <label>` scopes the rendered prompt to
+# clarifies labeled spec:<label>. We capture the rendered Claude prompt in
+# the mock and assert which bead IDs appear in the CLARIFY_BEADS block.
+# Spec: ralph-review.md §Interactive session.
+test_msg_interactive_cross_spec_scope() {
+  CURRENT_TEST="msg_interactive_cross_spec_scope"
+  test_header "ralph msg -c is cross-spec by default; -s <label> scopes the rendered prompt"
+
+  setup_test_env "msg-interactive-cross-spec-scope"
+  init_beads
+
+  # state/current intentionally points at a single spec to prove that
+  # bare -c does NOT consult it. Specs alpha/beta differ from current.
+  local current_label="state-current-spec"
+  mkdir -p "$RALPH_DIR/state"
+  echo "$current_label" > "$RALPH_DIR/state/current"
+  cat > "$RALPH_DIR/state/${current_label}.json" <<JSON
+{"label":"$current_label","spec_path":"specs/${current_label}.md"}
+JSON
+  cat > "$TEST_DIR/specs/${current_label}.md" <<'SPEC'
+# State current spec
+SPEC
+  cat > "$RALPH_DIR/state/alpha.json" <<'JSON'
+{"label":"alpha","spec_path":"specs/alpha.md"}
+JSON
+  cat > "$TEST_DIR/specs/alpha.md" <<'SPEC'
+# Alpha spec
+SPEC
+  cat > "$RALPH_DIR/state/beta.json" <<'JSON'
+{"label":"beta","spec_path":"specs/beta.md"}
+JSON
+  cat > "$TEST_DIR/specs/beta.md" <<'SPEC'
+# Beta spec
+SPEC
+
+  local alpha_id beta_id current_id
+  alpha_id=$(bd create --title="Alpha clarify" --type=task \
+    --description="## Options — Alpha decision
+
+### Option 1 — One
+A." \
+    --labels="spec:alpha,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+  beta_id=$(bd create --title="Beta clarify" --type=task \
+    --description="## Options — Beta decision
+
+### Option 1 — One
+B." \
+    --labels="spec:beta,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+  current_id=$(bd create --title="State-current clarify" --type=task \
+    --description="## Options — Current decision
+
+### Option 1 — One
+C." \
+    --labels="spec:${current_label},ralph:clarify" --json 2>/dev/null | jq -r '.id')
+
+  # Mock claude captures the rendered prompt (last positional arg) for
+  # inspection. Exits 0 without clearing any labels.
+  local prompt_file="$TEST_DIR/claude-prompt.txt"
+  rm -f "$prompt_file" "$TEST_DIR/bin/claude"
+  cat > "$TEST_DIR/bin/claude" <<EOF
+#!/usr/bin/env bash
+printf '%s' "\${@: -1}" > "$prompt_file"
+exit 0
+EOF
+  chmod +x "$TEST_DIR/bin/claude"
+
+  # --- Cross-spec: bare -c reads every outstanding clarify ---
+  set +e
+  ralph-msg -c >/dev/null 2>&1
+  local cross_exit=$?
+  set -e
+
+  if [ "$cross_exit" -eq 0 ] && [ -s "$prompt_file" ]; then
+    test_pass "ralph msg -c invoked claude with a non-empty prompt"
+  else
+    test_fail "ralph msg -c failed (exit=$cross_exit, prompt empty)"
+    teardown_test_env
+    return
+  fi
+
+  if grep -qF "Scope: all outstanding clarifies (cross-spec)" "$prompt_file"; then
+    test_pass "Cross-spec prompt declares cross-spec scope"
+  else
+    test_fail "Cross-spec prompt missing cross-spec scope line"
+  fi
+
+  local id
+  for id in "$alpha_id" "$beta_id" "$current_id"; do
+    if grep -qF "$id" "$prompt_file"; then
+      test_pass "Cross-spec prompt includes bead $id"
+    else
+      test_fail "Cross-spec prompt missing bead $id (state/current did not filter it out)"
+    fi
+  done
+
+  # --- Scoped: -c -s alpha includes only spec:alpha clarifies ---
+  rm -f "$prompt_file"
+  set +e
+  ralph-msg -c -s alpha >/dev/null 2>&1
+  local scoped_exit=$?
+  set -e
+
+  if [ "$scoped_exit" -eq 0 ] && [ -s "$prompt_file" ]; then
+    test_pass "ralph msg -c -s alpha invoked claude with a non-empty prompt"
+  else
+    test_fail "ralph msg -c -s alpha failed (exit=$scoped_exit, prompt empty)"
+    teardown_test_env
+    return
+  fi
+
+  if grep -qF "Scope: clarifies labeled spec:alpha" "$prompt_file"; then
+    test_pass "Scoped prompt declares spec:alpha scope"
+  else
+    test_fail "Scoped prompt missing 'Scope: clarifies labeled spec:alpha' line"
+  fi
+
+  if grep -qF "$alpha_id" "$prompt_file"; then
+    test_pass "Scoped (-s alpha) prompt includes alpha bead $alpha_id"
+  else
+    test_fail "Scoped (-s alpha) prompt missing alpha bead $alpha_id"
+  fi
+  if grep -qF "$beta_id" "$prompt_file"; then
+    test_fail "Scoped (-s alpha) prompt should not include beta bead $beta_id"
+  else
+    test_pass "Scoped (-s alpha) prompt excludes beta bead"
+  fi
+  if grep -qF "$current_id" "$prompt_file"; then
+    test_fail "Scoped (-s alpha) prompt should not include state-current bead $current_id"
+  else
+    test_pass "Scoped (-s alpha) prompt excludes state-current bead"
+  fi
+
+  teardown_test_env
+}
+
 # Test: `ralph msg -c` treats mid-walk termination as a clean exit.
 # When claude emits RALPH_COMPLETE without clearing all clarifies, the
 # remaining beads stay labelled and visible to the next `ralph msg` list.
@@ -4343,64 +4645,94 @@ EOF
   teardown_test_env
 }
 
-# Test: the sequential index `#` in ralph msg list output is 1-based and
-# ordered by bead creation time ascending (first created = #1).
-test_msg_index_ordering() {
-  CURRENT_TEST="msg_index_ordering"
-  test_header "ralph msg list index is 1-based, ordered by creation time asc"
+# Test: the sequential index `#` in ralph msg list output orders the entire
+# visible set (cross-spec by default; scoped under -s) by bead creation time
+# ascending. Beads spanning multiple specs interleave by creation time, not by
+# spec. Spec: ralph-review.md §Sequential index.
+test_msg_index_cross_spec_ordering() {
+  CURRENT_TEST="msg_index_cross_spec_ordering"
+  test_header "ralph msg list index orders the entire visible set by creation time asc (cross-spec by default; scoped under -s)"
 
-  setup_test_env "msg-index-ordering"
+  setup_test_env "msg-index-cross-spec-ordering"
   init_beads
 
-  mkdir -p "$RALPH_DIR/state"
-  echo "demo" > "$RALPH_DIR/state/current"
+  # state/current is intentionally NOT set — bare `ralph msg` is cross-spec
+  # by design and must not consult it.
 
-  local first_id second_id third_id
-  first_id=$(bd create --title="First created" --type=task \
+  # Three beads, three specs, created in this order. set_monotonic_created_at
+  # below pins creation timestamps so ordering is deterministic.
+  local alpha_id bravo_id charlie_id
+  alpha_id=$(bd create --title="Alpha clarify" --type=task \
     --description="Body" \
-    --labels="spec:demo,ralph:clarify" --json 2>/dev/null | jq -r '.id')
-  second_id=$(bd create --title="Second created" --type=task \
+    --labels="spec:alpha,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+  bravo_id=$(bd create --title="Bravo clarify" --type=task \
     --description="Body" \
-    --labels="spec:demo,ralph:clarify" --json 2>/dev/null | jq -r '.id')
-  third_id=$(bd create --title="Third created" --type=task \
+    --labels="spec:bravo,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+  charlie_id=$(bd create --title="Charlie clarify" --type=task \
     --description="Body" \
-    --labels="spec:demo,ralph:clarify" --json 2>/dev/null | jq -r '.id')
-  set_monotonic_created_at "$first_id" "$second_id" "$third_id"
+    --labels="spec:alpha,ralph:clarify" --json 2>/dev/null | jq -r '.id')
+  set_monotonic_created_at "$alpha_id" "$bravo_id" "$charlie_id"
 
-  local list_output
-  list_output=$(ralph-msg 2>&1)
+  # Cross-spec list: indices interleave across specs by creation time.
+  local cross_output
+  cross_output=$(ralph-msg 2>&1)
 
-  local first_line second_line third_line
-  first_line=$(echo "$list_output" | grep -nF "$first_id" | head -1 | cut -d: -f1)
-  second_line=$(echo "$list_output" | grep -nF "$second_id" | head -1 | cut -d: -f1)
-  third_line=$(echo "$list_output" | grep -nF "$third_id" | head -1 | cut -d: -f1)
+  local alpha_line bravo_line charlie_line
+  alpha_line=$(echo "$cross_output" | grep -nF "$alpha_id" | head -1 | cut -d: -f1)
+  bravo_line=$(echo "$cross_output" | grep -nF "$bravo_id" | head -1 | cut -d: -f1)
+  charlie_line=$(echo "$cross_output" | grep -nF "$charlie_id" | head -1 | cut -d: -f1)
 
-  if [ -n "$first_line" ] && [ -n "$second_line" ] && [ -n "$third_line" ] \
-     && [ "$first_line" -lt "$second_line" ] && [ "$second_line" -lt "$third_line" ]; then
-    test_pass "List ordered by creation time ascending"
+  if [ -n "$alpha_line" ] && [ -n "$bravo_line" ] && [ -n "$charlie_line" ] \
+     && [ "$alpha_line" -lt "$bravo_line" ] && [ "$bravo_line" -lt "$charlie_line" ]; then
+    test_pass "Cross-spec list ordered by creation time ascending across specs"
   else
-    test_fail "List order wrong (first:$first_line second:$second_line third:$third_line; output: $list_output)"
+    test_fail "Cross-spec order wrong (alpha:$alpha_line bravo:$bravo_line charlie:$charlie_line; output: $cross_output)"
   fi
 
-  local first_row second_row third_row
-  first_row=$(echo "$list_output" | grep -F "$first_id" | head -1)
-  second_row=$(echo "$list_output" | grep -F "$second_id" | head -1)
-  third_row=$(echo "$list_output" | grep -F "$third_id" | head -1)
+  local alpha_row bravo_row charlie_row
+  alpha_row=$(echo "$cross_output" | grep -F "$alpha_id" | head -1)
+  bravo_row=$(echo "$cross_output" | grep -F "$bravo_id" | head -1)
+  charlie_row=$(echo "$cross_output" | grep -F "$charlie_id" | head -1)
 
-  if echo "$first_row" | grep -qE "^[[:space:]]+1[[:space:]]+$first_id"; then
-    test_pass "First-created bead has index 1"
+  if echo "$alpha_row" | grep -qE "^[[:space:]]+1[[:space:]]+$alpha_id"; then
+    test_pass "Cross-spec: oldest bead (across specs) has index 1"
   else
-    test_fail "Expected index 1 for $first_id (got: $first_row)"
+    test_fail "Expected cross-spec index 1 for $alpha_id (got: $alpha_row)"
   fi
-  if echo "$second_row" | grep -qE "^[[:space:]]+2[[:space:]]+$second_id"; then
-    test_pass "Second-created bead has index 2"
+  if echo "$bravo_row" | grep -qE "^[[:space:]]+2[[:space:]]+$bravo_id"; then
+    test_pass "Cross-spec: second-oldest bead (different spec) has index 2"
   else
-    test_fail "Expected index 2 for $second_id (got: $second_row)"
+    test_fail "Expected cross-spec index 2 for $bravo_id (got: $bravo_row)"
   fi
-  if echo "$third_row" | grep -qE "^[[:space:]]+3[[:space:]]+$third_id"; then
-    test_pass "Third-created bead has index 3"
+  if echo "$charlie_row" | grep -qE "^[[:space:]]+3[[:space:]]+$charlie_id"; then
+    test_pass "Cross-spec: third-oldest bead has index 3"
   else
-    test_fail "Expected index 3 for $third_id (got: $third_row)"
+    test_fail "Expected cross-spec index 3 for $charlie_id (got: $charlie_row)"
+  fi
+
+  # Scoped list: -s alpha shows only alpha beads, re-numbered by creation time.
+  local scoped_output
+  scoped_output=$(ralph-msg -s alpha 2>&1)
+
+  if echo "$scoped_output" | grep -qF "$bravo_id"; then
+    test_fail "Scoped list (-s alpha) should not include bravo bead $bravo_id (got: $scoped_output)"
+  else
+    test_pass "Scoped list (-s alpha) excludes bravo bead"
+  fi
+
+  local scoped_alpha_row scoped_charlie_row
+  scoped_alpha_row=$(echo "$scoped_output" | grep -F "$alpha_id" | head -1)
+  scoped_charlie_row=$(echo "$scoped_output" | grep -F "$charlie_id" | head -1)
+
+  if echo "$scoped_alpha_row" | grep -qE "^[[:space:]]+1[[:space:]]+$alpha_id"; then
+    test_pass "Scoped (-s alpha): oldest alpha bead has index 1"
+  else
+    test_fail "Expected scoped index 1 for $alpha_id (got: $scoped_alpha_row)"
+  fi
+  if echo "$scoped_charlie_row" | grep -qE "^[[:space:]]+2[[:space:]]+$charlie_id"; then
+    test_pass "Scoped (-s alpha): newer alpha bead has index 2"
+  else
+    test_fail "Expected scoped index 2 for $charlie_id (got: $scoped_charlie_row)"
   fi
 
   teardown_test_env
@@ -17166,12 +17498,15 @@ ALL_TESTS=(
   test_run_skips_awaiting_input
   test_clarify_label_helpers
   test_add_clarify_resets_in_progress
-  test_msg_reply_resume_hint
+  test_msg_reply_resume_hint_per_spec
   test_msg_list_summary_fallback
+  test_msg_list_cross_spec_default
+  test_msg_list_filter_by_spec_label
   test_msg_list_spec_column
   test_msg_interactive_container
+  test_msg_interactive_cross_spec_scope
   test_msg_partial_progress_clean
-  test_msg_index_ordering
+  test_msg_index_cross_spec_ordering
   test_msg_view_host_only
   test_msg_view_by_id
   test_msg_answer_option_lookup
