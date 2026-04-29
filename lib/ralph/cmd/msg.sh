@@ -305,16 +305,23 @@ build_clarify_beads_block() {
 
   local line
   while IFS= read -r line; do
-    local bead_id title description parsed options_count summary
+    local bead_id title description parsed options_count summary labels_json bead_spec spec_tag
     bead_id=$(echo "$line" | jq -r '.id // "—"')
     title=$(echo "$line" | jq -r '.title // ""')
     description=$(echo "$line" | jq -r '.description // ""')
+    labels_json=$(echo "$line" | jq -c '.labels // []')
+    bead_spec=$(get_spec_from_labels "$labels_json")
+    if [ -n "$bead_spec" ] && [ "$bead_spec" != "—" ]; then
+      spec_tag="spec:${bead_spec}"
+    else
+      spec_tag="spec:—"
+    fi
 
     parsed=$(parse_options_format "$description")
     summary=$(echo "$parsed" | jq -r '.summary // ""')
     options_count=$(echo "$parsed" | jq -r '.options | length')
 
-    block="${block}### ${bead_id} — ${title}"$'\n\n'
+    block="${block}### ${bead_id} — [${spec_tag}] ${title}"$'\n\n'
 
     if [ -n "$summary" ]; then
       block="${block}## Options — ${summary}"$'\n\n'
@@ -565,38 +572,58 @@ fi
 if [ "$CHAT" = "true" ]; then
   # HOST SIDE: re-launch in container
   if [ ! -f "${WRAPIX_CLAUDE_CONFIG:-/etc/wrapix/claude-config.json}" ] && command -v wrapix &>/dev/null; then
-    host_label=$(resolve_spec_label "$SPEC_FILTER")
-
-    echo "Ralph msg: interactive Drafter session for '$host_label'"
+    if [ -n "$SPEC_FILTER" ]; then
+      host_label=$(resolve_spec_label "$SPEC_FILTER")
+      echo "Ralph msg: interactive Drafter session for '$host_label'"
+    else
+      host_label=""
+      echo "Ralph msg: interactive Drafter session (cross-spec)"
+    fi
     echo ""
 
     # Pre-check: if no outstanding clarifies, don't bother launching the container.
     host_questions=$(get_sorted_clarify_beads "$host_label")
     host_count=$(echo "$host_questions" | jq 'length' 2>/dev/null || echo 0)
     if [ "$host_count" -eq 0 ]; then
-      echo "No outstanding clarifies for '$host_label'."
+      if [ -n "$host_label" ]; then
+        echo "No outstanding clarifies for '$host_label'."
+      else
+        echo "No outstanding clarifies."
+      fi
       exit 0
     fi
 
     export RALPH_MODE=1
     export RALPH_CMD=msg
-    export RALPH_ARGS="-c -s $host_label"
-
-    # Compaction re-pin hook: label/spec/molecule for orientation
-    host_state_file="$RALPH_DIR/state/${host_label}.json"
-    host_spec="specs/${host_label}.md"
-    [ -f "$RALPH_DIR/state/${host_label}.md" ] && host_spec="$RALPH_DIR/state/${host_label}.md"
-    host_molecule=""
-    if [ -f "$host_state_file" ]; then
-      host_molecule=$(jq -r '.molecule // empty' "$host_state_file" 2>/dev/null || true)
+    if [ -n "$host_label" ]; then
+      export RALPH_ARGS="-c -s $host_label"
+    else
+      export RALPH_ARGS="-c"
     fi
-    repin_content=$(build_repin_content "$host_label" msg \
+
+    # Compaction re-pin hook: synthetic 'msg' label when cross-spec, real spec
+    # label otherwise. Synthetic label keeps the runtime dir + hook coherent
+    # without lying about an anchor spec.
+    hook_label="${host_label:-msg}"
+    if [ -n "$host_label" ]; then
+      host_state_file="$RALPH_DIR/state/${host_label}.json"
+      host_spec="specs/${host_label}.md"
+      [ -f "$RALPH_DIR/state/${host_label}.md" ] && host_spec="$RALPH_DIR/state/${host_label}.md"
+      host_molecule=""
+      if [ -f "$host_state_file" ]; then
+        host_molecule=$(jq -r '.molecule // empty' "$host_state_file" 2>/dev/null || true)
+      fi
+    else
+      host_spec="(cross-spec)"
+      host_molecule=""
+    fi
+    repin_content=$(build_repin_content "$hook_label" msg \
       "spec=$host_spec" \
       "mode=interactive" \
       "molecule=$host_molecule")
-    install_repin_hook "$host_label" "$repin_content"
+    install_repin_hook "$hook_label" "$repin_content"
     # shellcheck disable=SC2064
-    trap "rm -rf '$RALPH_DIR/runtime/$host_label'" EXIT
+    trap "rm -rf '$RALPH_DIR/runtime/$hook_label'" EXIT
 
     wrapix
     wrapix_exit=$?
@@ -608,29 +635,27 @@ if [ "$CHAT" = "true" ]; then
   fi
 
   # CONTAINER SIDE: render msg.md, run Claude, push beads to Dolt
-  label=$(resolve_spec_label "$SPEC_FILTER")
+  if [ -n "$SPEC_FILTER" ]; then
+    label="$SPEC_FILTER"
+    scope="Scope: clarifies labeled spec:${label}"
+  else
+    label=""
+    scope="Scope: all outstanding clarifies (cross-spec)"
+  fi
 
   questions_json=$(get_sorted_clarify_beads "$label")
   question_count=$(echo "$questions_json" | jq 'length' 2>/dev/null || echo 0)
 
   if [ "$question_count" -eq 0 ]; then
-    echo "No outstanding clarifies for '$label'."
+    if [ -n "$label" ]; then
+      echo "No outstanding clarifies for '$label'."
+    else
+      echo "No outstanding clarifies."
+    fi
     exit 0
   fi
 
-  state_file="$RALPH_DIR/state/${label}.json"
-  spec_path="specs/${label}.md"
-  if [ -f "$state_file" ]; then
-    maybe_spec=$(jq -r '.spec_path // empty' "$state_file" 2>/dev/null || true)
-    [ -n "$maybe_spec" ] && spec_path="$maybe_spec"
-  fi
-
   clarify_beads=$(build_clarify_beads_block "$questions_json")
-
-  companions=""
-  if [ -f "$state_file" ]; then
-    companions=$(list_companion_paths "$state_file")
-  fi
 
   pinned_context_file=$(get_pinned_context_file)
   pinned_context=""
@@ -647,10 +672,8 @@ if [ "$CHAT" = "true" ]; then
   model_msg=$(resolve_model "msg" "$config")
 
   msg_prompt=$(render_template msg \
-    "SPEC_PATH=$spec_path" \
-    "LABEL=$label" \
+    "SCOPE=$scope" \
     "CLARIFY_BEADS=$clarify_beads" \
-    "COMPANION_PATHS=$companions" \
     "PINNED_CONTEXT=$pinned_context" \
     "EXIT_SIGNALS=")
 
