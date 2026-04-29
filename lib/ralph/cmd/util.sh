@@ -2179,7 +2179,6 @@ REPIN_SCRIPT_EOF
 # Accumulator variables for judge rubrics (set by judge_files/judge_criterion)
 JUDGE_FILES=""
 JUDGE_CRITERION=""
-JUDGE_DETERMINISTIC=""
 
 # Set source files for LLM evaluation
 # Usage: judge_files "lib/ralph/cmd/status.sh" "lib/ralph/cmd/util.sh"
@@ -2194,20 +2193,11 @@ judge_criterion() {
   JUDGE_CRITERION="$1"
 }
 
-# Record a deterministic PASS/FAIL verdict, bypassing the LLM in run_judge.
-# Usage: judge_assert PASS "rust toolchain closure has zero nightly derivations"
-judge_assert() {
-  JUDGE_VERDICT="$1"
-  JUDGE_REASONING="$2"
-  JUDGE_DETERMINISTIC="true"
-}
-
 # Reset judge state between test invocations
 # Usage: judge_reset
 judge_reset() {
   JUDGE_FILES=""
   JUDGE_CRITERION=""
-  JUDGE_DETERMINISTIC=""
 }
 
 # Run LLM judge evaluation
@@ -2222,11 +2212,6 @@ judge_reset() {
 # Output: Sets JUDGE_VERDICT (PASS or FAIL) and JUDGE_REASONING (text)
 # Returns: 0 on PASS, 1 on FAIL, 2 on error (LLM unavailable, missing files, etc.)
 run_judge() {
-  if [ "${JUDGE_DETERMINISTIC:-}" = "true" ]; then
-    [ "$JUDGE_VERDICT" = "PASS" ] && return 0
-    return 1
-  fi
-
   JUDGE_VERDICT=""
   JUDGE_REASONING=""
 
