@@ -182,7 +182,14 @@ let
       source = "computed";
       required = false;
       default = "";
-      description = "Markdown block of outstanding ralph:clarify beads (id, title, options) for ralph msg interactive session";
+      description = "Markdown block of outstanding ralph:clarify beads (id, spec:<label>, title, options) for ralph msg interactive session";
+    };
+
+    SCOPE = {
+      source = "computed";
+      required = false;
+      default = "";
+      description = "Cross-spec scope description for ralph msg interactive session (e.g. 'Scope: all outstanding clarifies (cross-spec)' or 'Scope: clarifies labeled spec:<label>')";
     };
   };
 
@@ -431,10 +438,8 @@ let
       body = ./msg.md;
       partials = partialFiles;
       variables = [
-        "COMPANION_PATHS"
         "PINNED_CONTEXT"
-        "SPEC_PATH"
-        "LABEL"
+        "SCOPE"
         "CLARIFY_BEADS"
         "EXIT_SIGNALS"
       ];

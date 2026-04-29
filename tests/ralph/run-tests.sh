@@ -4826,11 +4826,12 @@ test_msg_template_exit_signals() {
   fi
 }
 
-# Test: msg.md template structure — must include context-pinning, spec-header,
-# companions-context, exit-signals partials and the CLARIFY_BEADS variable.
+# Test: msg.md template structure — must include context-pinning + exit-signals
+# partials and the SCOPE + CLARIFY_BEADS variables. Cross-spec by design, so it
+# must NOT reference spec-header, companions-context, or {{LABEL}}.
 test_msg_template_structure() {
   CURRENT_TEST="msg_template_structure"
-  test_header "msg.md includes required partials and CLARIFY_BEADS variable"
+  test_header "msg.md is cross-spec: SCOPE + CLARIFY_BEADS, no spec-header/companions-context"
 
   local msg_tpl="$REPO_ROOT/lib/ralph/template/msg.md"
 
@@ -4840,13 +4841,27 @@ test_msg_template_structure() {
   fi
 
   local partial
-  for partial in context-pinning spec-header companions-context exit-signals; do
+  for partial in context-pinning exit-signals; do
     if grep -qF "{{> $partial}}" "$msg_tpl"; then
       test_pass "msg.md includes {{> $partial}} partial"
     else
       test_fail "msg.md missing {{> $partial}} partial"
     fi
   done
+
+  for partial in spec-header companions-context; do
+    if grep -qF "{{> $partial}}" "$msg_tpl"; then
+      test_fail "msg.md should not reference {{> $partial}} partial (cross-spec)"
+    else
+      test_pass "msg.md does not reference {{> $partial}} partial"
+    fi
+  done
+
+  if grep -qF '{{SCOPE}}' "$msg_tpl"; then
+    test_pass "msg.md references {{SCOPE}} variable"
+  else
+    test_fail "msg.md should reference {{SCOPE}} variable"
+  fi
 
   if grep -qF '{{CLARIFY_BEADS}}' "$msg_tpl"; then
     test_pass "msg.md references {{CLARIFY_BEADS}} variable"
@@ -4855,9 +4870,9 @@ test_msg_template_structure() {
   fi
 
   if grep -qF '{{LABEL}}' "$msg_tpl"; then
-    test_pass "msg.md references {{LABEL}} variable"
+    test_fail "msg.md should not reference {{LABEL}} variable (cross-spec)"
   else
-    test_fail "msg.md should reference {{LABEL}} variable"
+    test_pass "msg.md does not reference {{LABEL}} variable"
   fi
 }
 
