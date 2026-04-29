@@ -14779,7 +14779,7 @@ MOCK_EOF
 # Test: COMPANION_PATHS variable is available in plan-update, todo-new, todo-update, run, check, and msg templates
 test_companion_paths_template_variable() {
   CURRENT_TEST="companion_paths_template_variable"
-  test_header "COMPANION_PATHS variable in plan-update, todo-new, todo-update, run, check, msg templates"
+  test_header "COMPANION_PATHS variable in plan-update, todo-new, todo-update, run, check templates (msg is cross-spec, no companions)"
 
   setup_test_env "companion-template-var"
 
@@ -14879,21 +14879,6 @@ docs/api"
     test_pass "check template renders COMPANION_PATHS"
   else
     test_fail "check template should render COMPANION_PATHS"
-  fi
-
-  # Test msg template renders COMPANION_PATHS
-  output=$(render_template msg \
-    COMPANION_PATHS="$companion_paths" \
-    PINNED_CONTEXT="# Context" \
-    SPEC_PATH="specs/test-feature.md" \
-    LABEL="test-feature" \
-    CLARIFY_BEADS="" \
-    EXIT_SIGNALS="" 2>&1)
-
-  if echo "$output" | grep -qF "specs/e2e" && echo "$output" | grep -qF "docs/api"; then
-    test_pass "msg template renders COMPANION_PATHS"
-  else
-    test_fail "msg template should render COMPANION_PATHS"
   fi
 
   # Test that COMPANION_PATHS defaults to empty string when not provided
@@ -15453,8 +15438,7 @@ test_rendered_prompt_size_bound() {
   #                ISSUE_ID, TITLE, DESCRIPTION, EXIT_SIGNALS, PREVIOUS_FAILURE
   #   check:      COMPANION_PATHS, PINNED_CONTEXT, SPEC_PATH, LABEL, BEADS_SUMMARY,
   #                BASE_COMMIT, MOLECULE_ID, EXIT_SIGNALS
-  #   msg:         COMPANION_PATHS, PINNED_CONTEXT, SPEC_PATH, LABEL, CLARIFY_BEADS,
-  #                EXIT_SIGNALS
+  #   msg:         PINNED_CONTEXT, SCOPE, CLARIFY_BEADS, EXIT_SIGNALS
 
   local max_size=$((64 * 1024))
 
@@ -15546,10 +15530,8 @@ test_rendered_prompt_size_bound() {
         ;;
       msg)
         rendered=$(render_template msg \
-          COMPANION_PATHS="$companion_paths" \
           PINNED_CONTEXT="$pinned_context" \
-          SPEC_PATH="$spec_path" \
-          LABEL="$label" \
+          SCOPE="" \
           CLARIFY_BEADS="$clarify_beads" \
           EXIT_SIGNALS="$exit_signals") || {
           test_fail "render_template msg failed"
