@@ -480,6 +480,10 @@ let
       fi
       if [ -n "$WS" ]; then
         beads-dolt stop "$WS" || true
+        # Kill any bd-auto-started dolt server for this workspace.
+        if [ -f "$WS/.beads/dolt-server.pid" ]; then
+          kill "$(cat "$WS/.beads/dolt-server.pid")" || true
+        fi
       fi
       local _cleanup_names
       case "$CR" in
@@ -716,8 +720,9 @@ let
       # beads-dolt can serve.  Unlike gc init this needs no systemctl,
       # so the test works inside containers without systemd.
       bd init --prefix cg --skip-hooks --skip-agents --non-interactive --server
-      # bd init --server's dolt exits on its own; clean stale state files.
-      # bd config set types.custom is handled by entrypoint.sh after dolt starts.
+      # bd init --server auto-starts a persistent dolt; stop it before
+      # beads-dolt (container) takes over in entrypoint.sh.
+      bd dolt stop || true
       rm -f .beads/dolt-server.pid .beads/dolt-server.lock .beads/dolt-server.port
 
       # Pre-create .gc/ layout so gc start never runs auto-init
