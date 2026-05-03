@@ -34,6 +34,10 @@ pub struct PlanReport {
     pub label: SpecLabel,
     pub spec_path: PathBuf,
     pub companion_paths: Vec<String>,
+    /// `true` when the spec markdown contained a `## Companions` heading.
+    /// `false` lets the CLI distinguish "intentionally empty" from "interview
+    /// did not declare any" in the human-readable summary.
+    pub companions_section_present: bool,
 }
 
 /// Run `loom plan` against `workspace`.
@@ -56,6 +60,7 @@ pub fn run_with_timeout(
     timeout: Duration,
 ) -> Result<PlanReport, PlanError> {
     let label = opts.mode.label().clone();
+    let is_new = matches!(opts.mode, PlanMode::New(_));
 
     let lock_mgr = LockManager::new(workspace)?;
     let _guard = lock_mgr.acquire_spec_with_timeout(&label, timeout)?;
@@ -66,7 +71,7 @@ pub fn run_with_timeout(
     let spec_rel = format!("specs/{}.md", label.as_str());
     let spec_path = workspace.join(&spec_rel);
 
-    if matches!(opts.mode, PlanMode::Update(_)) && !spec_path.exists() {
+    if !is_new && !spec_path.exists() {
         return Err(PlanError::SpecMissing {
             path: spec_path.clone(),
         });
@@ -76,10 +81,10 @@ pub fn run_with_timeout(
     let exit_signals = render_exit_signals(&cfg.exit_signals);
 
     let db = StateDb::open(workspace.join(".wrapix/loom/state.db"))?;
-    let companion_paths = if matches!(opts.mode, PlanMode::Update(_)) {
-        db.companions(&label)?
-    } else {
+    let companion_paths = if is_new {
         Vec::new()
+    } else {
+        db.companions(&label)?
     };
 
     let prompt_body = render_prompt(PlanPromptInputs {
@@ -103,12 +108,19 @@ pub fn run_with_timeout(
         });
     }
 
-    let companion_paths = reconcile_companions(&db, &label, &spec_path)?;
+    if is_new && !spec_path.exists() {
+        return Err(PlanError::InterviewProducedNoSpec {
+            path: spec_path.clone(),
+        });
+    }
+
+    let outcome = reconcile_companions(&db, &label, &spec_path)?;
 
     Ok(PlanReport {
         label,
         spec_path,
-        companion_paths,
+        companion_paths: outcome.paths,
+        companions_section_present: outcome.section_present,
     })
 }
 
@@ -201,6 +213,7 @@ mod tests {
 
         assert_eq!(report.label.as_str(), "loom-harness");
         assert_eq!(report.companion_paths, vec!["lib/sandbox/"]);
+        assert!(report.companions_section_present);
 
         let argv_log = std::fs::read_to_string(dir.path().join("argv.log"))?;
         let lines: Vec<&str> = argv_log.lines().collect();
@@ -275,6 +288,56 @@ mod tests {
             }
             other => Err(anyhow::anyhow!("expected SpecMissing, got {other:?}")),
         }
+    }
+
+    #[test]
+    fn plan_new_errors_when_interview_writes_no_spec() -> Result<()> {
+        let dir = workspace_with_specs()?;
+        // Stub exits 0 without writing the spec — mimics the agent quitting
+        // the interview without saving the file.
+        let bin = install_wrapix_stub(dir.path(), None)?;
+
+        let result = run_with_timeout(
+            dir.path(),
+            PlanOpts {
+                mode: PlanMode::New(SpecLabel::new("loom-harness")),
+                wrapix_bin: Some(bin),
+            },
+            Duration::from_millis(100),
+        );
+        match result {
+            Err(PlanError::InterviewProducedNoSpec { path }) => {
+                assert!(path.ends_with("specs/loom-harness.md"));
+                Ok(())
+            }
+            other => Err(anyhow::anyhow!(
+                "expected InterviewProducedNoSpec, got {other:?}"
+            )),
+        }
+    }
+
+    #[test]
+    fn plan_new_flags_missing_companions_section() -> Result<()> {
+        let dir = workspace_with_specs()?;
+        let spec_path = dir.path().join("specs/loom-harness.md");
+        // Spec written, but the agent did not include `## Companions`.
+        let bin = install_wrapix_stub(
+            dir.path(),
+            Some((&spec_path, "# loom-harness\n\nNo companions yet.\n")),
+        )?;
+
+        let report = run_with_timeout(
+            dir.path(),
+            PlanOpts {
+                mode: PlanMode::New(SpecLabel::new("loom-harness")),
+                wrapix_bin: Some(bin),
+            },
+            Duration::from_millis(100),
+        )?;
+
+        assert!(report.companion_paths.is_empty());
+        assert!(!report.companions_section_present);
+        Ok(())
     }
 
     #[test]

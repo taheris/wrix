@@ -31,7 +31,7 @@ mod runner;
 
 pub use args::{PlanMode, parse_mode};
 pub use command::{WRAPIX_BIN, build_wrapix_argv};
-pub use companions::reconcile_companions;
+pub use companions::{CompanionReconciliation, reconcile_companions};
 pub use error::PlanError;
 pub use prompt::{PlanPromptInputs, render_prompt};
 pub use runner::{PlanOpts, PlanReport, run};

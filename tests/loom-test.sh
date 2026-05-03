@@ -1199,6 +1199,8 @@ test_no_sync_or_tune_command() {
 #-----------------------------------------------------------------------------
 test_plan_new() {
     aux_cargo_test plan::runner::tests::plan_new_invokes_wrapix_run_and_records_companions
+    aux_cargo_test plan::runner::tests::plan_new_errors_when_interview_writes_no_spec
+    aux_cargo_test plan::runner::tests::plan_new_flags_missing_companions_section
     aux_cargo_test plan::args::tests::parse_mode_accepts_new_only
     aux_cargo_test plan::args::tests::parse_mode_rejects_no_flags
     aux_cargo_test plan::args::tests::parse_mode_rejects_both_flags

@@ -251,7 +251,11 @@ fn run_plan(
     )?;
     println!("loom plan: spec={}", report.spec_path.display());
     if report.companion_paths.is_empty() {
-        println!("  companions: (none)");
+        if report.companions_section_present {
+            println!("  companions: (none)");
+        } else {
+            println!("  companions: (none — interview did not declare companions)");
+        }
     } else {
         println!("  companions:");
         for path in &report.companion_paths {

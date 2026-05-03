@@ -5,17 +5,29 @@ use loom_core::state::{StateDb, parse_companions};
 
 use super::error::PlanError;
 
+const COMPANIONS_HEADING: &str = "## Companions";
+
+/// Outcome of a companion-section reconciliation, returned by
+/// [`reconcile_companions`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompanionReconciliation {
+    pub paths: Vec<String>,
+    /// `true` when the spec markdown contained a `## Companions` heading.
+    /// Distinguishes "intentionally zero companions declared" from "section
+    /// missing entirely" so callers can warn the user when an interview
+    /// silently produced no declarations.
+    pub section_present: bool,
+}
+
 /// After the interactive interview exits, read the (possibly newly-created)
 /// spec markdown, parse its `## Companions` section, and replace the
 /// state-DB rows for `label`. Specs without a `## Companions` heading land
 /// zero rows, matching `parse_companions`'s tolerance.
-///
-/// Returns the parsed paths so callers can log/print what landed.
 pub fn reconcile_companions(
     db: &StateDb,
     label: &SpecLabel,
     spec_path: &Path,
-) -> Result<Vec<String>, PlanError> {
+) -> Result<CompanionReconciliation, PlanError> {
     let body = match std::fs::read_to_string(spec_path) {
         Ok(b) => b,
         Err(source) => {
@@ -26,8 +38,12 @@ pub fn reconcile_companions(
         }
     };
     let paths = parse_companions(&body);
+    let section_present = body.lines().any(|l| l == COMPANIONS_HEADING);
     db.replace_companions(label, spec_path, &paths)?;
-    Ok(paths)
+    Ok(CompanionReconciliation {
+        paths,
+        section_present,
+    })
 }
 
 #[cfg(test)]
@@ -49,9 +65,25 @@ mod tests {
         )?;
         let label = SpecLabel::new("foo");
 
-        let paths = reconcile_companions(&db, &label, &spec)?;
-        assert!(paths.is_empty());
+        let outcome = reconcile_companions(&db, &label, &spec)?;
+        assert!(outcome.paths.is_empty());
+        assert!(!outcome.section_present);
         assert!(db.companions(&label)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn empty_section_with_heading_reports_section_present() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let db = StateDb::open(dir.path().join("state.db"))?;
+        let spec = dir.path().join("specs/foo.md");
+        std::fs::create_dir_all(spec.parent().unwrap())?;
+        std::fs::write(&spec, "# Foo\n\n## Companions\n\n(intentionally none)\n")?;
+        let label = SpecLabel::new("foo");
+
+        let outcome = reconcile_companions(&db, &label, &spec)?;
+        assert!(outcome.paths.is_empty());
+        assert!(outcome.section_present);
         Ok(())
     }
 
@@ -67,8 +99,9 @@ mod tests {
         )?;
         let label = SpecLabel::new("foo");
 
-        let paths = reconcile_companions(&db, &label, &spec)?;
-        assert_eq!(paths, vec!["lib/sandbox/", "lib/ralph/template/"]);
+        let outcome = reconcile_companions(&db, &label, &spec)?;
+        assert_eq!(outcome.paths, vec!["lib/sandbox/", "lib/ralph/template/"]);
+        assert!(outcome.section_present);
         let stored = db.companions(&label)?;
         assert_eq!(stored, vec!["lib/ralph/template/", "lib/sandbox/"]);
         Ok(())

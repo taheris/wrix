@@ -19,6 +19,9 @@ pub enum PlanError {
     /// spec file not found at {path} (use `-n <label>` for a new spec)
     SpecMissing { path: PathBuf },
 
+    /// interview exited without writing the spec file at {path}
+    InterviewProducedNoSpec { path: PathBuf },
+
     /// failed to read pinned-context file at {path}
     ReadPinnedContext {
         path: PathBuf,
