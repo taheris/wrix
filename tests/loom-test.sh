@@ -549,6 +549,71 @@ test_template_output_parity() {
 }
 
 #-----------------------------------------------------------------------------
+# State database — each function dispatches into the matching cargo
+# integration test under `loom-core/tests/state_db.rs`. Sharing the cargo
+# binary keeps verify and `cargo test` exercising the same code paths.
+#-----------------------------------------------------------------------------
+state_db_cargo_test() {
+    cargo_run test -p loom-core --test state_db "$1" -- --exact --nocapture --quiet
+}
+
+#-----------------------------------------------------------------------------
+# test_state_db_init — `StateDb::open` creates `specs`, `molecules`,
+# `companions`, and `meta` tables and seeds `meta.schema_version`.
+#-----------------------------------------------------------------------------
+test_state_db_init() {
+    state_db_cargo_test state_db_init_creates_tables
+}
+
+#-----------------------------------------------------------------------------
+# test_state_db_rebuild — `StateDb::rebuild` writes one specs row per
+# spec markdown file and one molecules row per active molecule.
+#-----------------------------------------------------------------------------
+test_state_db_rebuild() {
+    state_db_cargo_test state_db_rebuild_populates_specs_and_molecules
+}
+
+#-----------------------------------------------------------------------------
+# test_state_db_rebuild_companions — `## Companions` parser extracts paths,
+# specs without the section contribute zero rows, malformed lines skip.
+#-----------------------------------------------------------------------------
+test_state_db_rebuild_companions() {
+    state_db_cargo_test state_db_rebuild_companions
+}
+
+#-----------------------------------------------------------------------------
+# test_state_db_rebuild_resets_counters — `iteration_count` returns to 0
+# after rebuild, even when previously incremented.
+#-----------------------------------------------------------------------------
+test_state_db_rebuild_resets_counters() {
+    state_db_cargo_test state_db_rebuild_resets_counters
+}
+
+#-----------------------------------------------------------------------------
+# test_state_current_spec — `set_current_spec` followed by `current_spec`
+# round-trips the same `SpecLabel`.
+#-----------------------------------------------------------------------------
+test_state_current_spec() {
+    state_db_cargo_test state_current_spec_round_trips
+}
+
+#-----------------------------------------------------------------------------
+# test_state_increment_iteration — `increment_iteration` returns the post-
+# increment value (1, 2, 3, ...).
+#-----------------------------------------------------------------------------
+test_state_increment_iteration() {
+    state_db_cargo_test state_increment_iteration_returns_updated_count
+}
+
+#-----------------------------------------------------------------------------
+# test_state_corruption_recovery — opening a non-SQLite blob fails; the
+# `recreate()` recovery path replaces the file and rebuild succeeds.
+#-----------------------------------------------------------------------------
+test_state_corruption_recovery() {
+    state_db_cargo_test state_corruption_recovery
+}
+
+#-----------------------------------------------------------------------------
 # Dispatch
 #-----------------------------------------------------------------------------
 if [ $# -eq 0 ]; then
