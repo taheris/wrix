@@ -1581,6 +1581,7 @@ dependencies = [
  "loom-agent",
  "loom-core",
  "loom-workflow",
+ "serde_json",
  "tempfile",
  "tokio",
  "tracing",

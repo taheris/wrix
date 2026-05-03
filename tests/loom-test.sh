@@ -351,6 +351,35 @@ test_per_bead_profile_spawn() {
 }
 
 #-----------------------------------------------------------------------------
+# test_wrapix_run_bead_spawn — drives `loom todo --agent pi` through a
+# shim wrapix that records argv, then asserts the loom binary handed the
+# wrapper exactly `run-bead --spawn-config <file> --stdio` and that the
+# JSON file carries the resolved profile image. The shim then exec's
+# mock-pi probe-ok so the backend's startup handshake completes and the
+# loom process exits 0 (otherwise the test would observe a hang/timeout
+# instead of the recorded argv).
+#-----------------------------------------------------------------------------
+test_wrapix_run_bead_spawn() {
+    cargo_run test -p loom --test spawn_dispatch -- --test-threads=1 \
+        wrapix_run_bead_invocation_records_correct_argv
+}
+
+#-----------------------------------------------------------------------------
+# test_container_stdio_pipe — the wrapix child receives stdin as a pipe
+# (not a TTY), and EOF on that pipe is what loom uses to signal "no more
+# input" to the agent. The shim records `[ -t 0 ]` and `[ -p /dev/stdin ]`
+# state into a sidecar file before handing off to mock-pi; the test reads
+# the file back and asserts stdin_is_tty=0 / stdin_is_pipe=1. The
+# round-trip through mock-pi (probe + prompt + agent_end) is the second
+# half of the contract: a tty-backed handle would either block forever
+# or feed wrong bytes, and the loom binary would never exit 0.
+#-----------------------------------------------------------------------------
+test_container_stdio_pipe() {
+    cargo_run test -p loom --test spawn_dispatch -- --test-threads=1 \
+        child_stdin_is_a_pipe_not_a_tty
+}
+
+#-----------------------------------------------------------------------------
 # Helpers for entrypoint dispatch tests.
 #
 # The entrypoint hardcodes /workspace and /etc/wrapix paths, so we don't run
@@ -506,26 +535,59 @@ test_entrypoint_shared_setup() {
 
 #-----------------------------------------------------------------------------
 # test_loom_does_not_invoke_podman — loom Rust sources never invoke podman
-# directly; only documentation/comments may reference it.
+# directly; only documentation/comments may reference it. Both backend
+# spawn paths (PiBackend, ClaudeBackend) MUST drive the wrapper via
+# `wrapix run-bead` — the positive contract that complements the negative
+# grep above. A future refactor that bypasses the wrapper to call podman
+# directly would either reintroduce a podman match or drop the run-bead
+# string; this test catches both.
 #-----------------------------------------------------------------------------
 test_loom_does_not_invoke_podman() {
-    local hits
     if [ ! -d "$LOOM_DIR/crates" ]; then
         echo "loom/crates not yet scaffolded" >&2
         return 77
     fi
-    # Match podman in any .rs source; allow only doc-comment lines (`///`,
-    # `//!`) and ordinary comments (`//`). Anything outside a comment is a
-    # rule violation.
-    hits=$(grep -rEn 'podman' "$LOOM_DIR/crates" --include='*.rs' || true)
-    if [ -z "$hits" ]; then
-        return 0
-    fi
-    if grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|/\*)' <<<"$hits" >/dev/null; then
-        echo "non-comment podman reference found in loom/crates:" >&2
-        grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|/\*)' <<<"$hits" >&2
+    # The contract is: loom never spawns a podman process. Look for the
+    # actual invocation patterns — Command::new("podman" or a bare
+    # "podman" string passed to a process spawn — rather than every
+    # mention of the word, so legitimate metadata (verify-deps mapping,
+    # doc-strings explaining what wrapix does on top) is not a false
+    # positive. Test files under */tests/* are excluded: they may legally
+    # describe podman in shim documentation.
+    local violations=0
+    while IFS= read -r -d '' file; do
+        case "$file" in
+            */tests/*) continue ;;
+        esac
+        local hits
+        hits=$(grep -nE 'Command::new\("podman"|spawn\("podman"|exec\("podman"|process::Command.*podman' "$file" || true)
+        if [ -n "$hits" ]; then
+            echo "podman invocation found in $file:" >&2
+            echo "$hits" >&2
+            violations=$((violations + 1))
+        fi
+    done < <(find "$LOOM_DIR/crates" -name '*.rs' -print0)
+    if [ "$violations" -ne 0 ]; then
         return 1
     fi
+
+    # Positive contract: each backend must spawn through `wrapix run-bead`.
+    # The literal "run-bead" appears as the first arg in both backends'
+    # Command construction; missing it would mean the backend bypassed the
+    # wrapper, which is the failure mode the negative grep alone could miss.
+    local backend
+    for backend in \
+        "$LOOM_DIR/crates/loom-agent/src/pi/backend.rs" \
+        "$LOOM_DIR/crates/loom-agent/src/claude/backend.rs"
+    do
+        if [ ! -f "$backend" ]; then
+            continue
+        fi
+        if ! grep -qE '"run-bead"' "$backend"; then
+            echo "$backend: missing \"run-bead\" arg — backend must spawn via wrapix wrapper" >&2
+            return 1
+        fi
+    done
 }
 
 #-----------------------------------------------------------------------------
