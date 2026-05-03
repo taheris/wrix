@@ -989,6 +989,74 @@ test_parallel_conflict_preserves_worktree() {
 }
 
 #-----------------------------------------------------------------------------
+# loom check / loom msg — same dispatch pattern as run: each function pins one
+# or more pure unit tests under `loom-workflow::{check,msg}`. The push-gate /
+# auto-iterate decision logic is exercised through the `CheckController` trait
+# under a `FakeController`, so no real container, bd binary, or `git push` is
+# spawned by these tests.
+#-----------------------------------------------------------------------------
+check_cargo_test() {
+    cargo_run test -p loom-workflow --lib "$1" -- --exact --nocapture --quiet
+}
+
+msg_cargo_test() {
+    cargo_run test -p loom-workflow --lib "$1" -- --exact --nocapture --quiet
+}
+
+#-----------------------------------------------------------------------------
+# test_check_push_gate — clean review (no new beads, no clarify) pushes once
+# and resets the iteration counter; a clarify present (new or pre-existing)
+# stops the gate without pushing.
+#-----------------------------------------------------------------------------
+test_check_push_gate() {
+    check_cargo_test check::runner::tests::clean_review_pushes_and_resets_counter
+    check_cargo_test check::runner::tests::clarify_present_stops_without_pushing
+    check_cargo_test check::runner::tests::pre_existing_clarify_blocks_push_even_when_no_new_beads
+}
+
+#-----------------------------------------------------------------------------
+# test_check_auto_iterate — fix-up beads under the iteration cap trigger an
+# `exec loom run` with the counter incremented; reaching the cap escalates the
+# newest fix-up bead to `ralph:clarify` instead of looping forever.
+#-----------------------------------------------------------------------------
+test_check_auto_iterate() {
+    check_cargo_test check::iteration::tests::default_cap_matches_spec
+    check_cargo_test check::iteration::tests::is_exhausted_true_at_or_above_cap
+    check_cargo_test check::runner::tests::fix_up_beads_under_cap_auto_iterate
+    check_cargo_test check::runner::tests::iteration_cap_escalates_newest_fix_up_to_clarify
+}
+
+#-----------------------------------------------------------------------------
+# test_msg_list — clarify list filters to `ralph:clarify`-labelled beads,
+# drops the SPEC column under a spec filter, and falls back to bead title when
+# the `## Options — <summary>` header is missing.
+#-----------------------------------------------------------------------------
+test_msg_list() {
+    msg_cargo_test msg::list::tests::filter_keeps_only_clarify_labelled_beads
+    msg_cargo_test msg::list::tests::filter_with_spec_label_keeps_only_matching
+    msg_cargo_test msg::list::tests::rows_drop_spec_column_under_filter
+    msg_cargo_test msg::list::tests::rows_carry_spec_column_when_unfiltered
+    msg_cargo_test msg::list::tests::summary_prefers_options_header_over_title
+    msg_cargo_test msg::list::tests::summary_falls_back_to_title_when_header_absent
+    msg_cargo_test msg::context::tests::rendered_msg_template_lists_each_clarify
+}
+
+#-----------------------------------------------------------------------------
+# test_msg_fast_reply — `-a <choice>` resolves a pure-integer to the matching
+# `### Option <N>` per the Options Format Contract; a missing index errors
+# with the available indices; non-integer choice is stored verbatim.
+#-----------------------------------------------------------------------------
+test_msg_fast_reply() {
+    msg_cargo_test msg::options::tests::options_em_dash_summary_and_three_options
+    msg_cargo_test msg::options::tests::separator_variants_all_strip_cleanly
+    msg_cargo_test msg::reply::tests::integer_choice_resolves_to_option_note
+    msg_cargo_test msg::reply::tests::missing_option_index_errors_with_available_list
+    msg_cargo_test msg::reply::tests::verbatim_string_passes_through_unchanged
+    msg_cargo_test msg::reply::tests::integer_with_no_options_section_errors
+    msg_cargo_test msg::reply::tests::empty_title_or_body_renders_partial_note
+}
+
+#-----------------------------------------------------------------------------
 # Dispatch
 #-----------------------------------------------------------------------------
 if [ $# -eq 0 ]; then

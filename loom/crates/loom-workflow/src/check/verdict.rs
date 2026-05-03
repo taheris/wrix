@@ -1,0 +1,89 @@
+use loom_core::identifier::BeadId;
+
+/// Snapshot of bead state taken on either side of the reviewer agent. The
+/// driver pre-counts beads with `spec:<label>`, runs the reviewer, then
+/// re-counts and inspects the same query for `ralph:clarify` membership.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BeadSnapshot {
+    /// Total number of beads carrying `spec:<label>`.
+    pub spec_total: u32,
+    /// IDs of beads currently labelled `ralph:clarify` within the spec.
+    pub clarify_ids: Vec<BeadId>,
+    /// IDs that appeared after the reviewer ran. Only populated for the
+    /// post-snapshot — set is computed by [`super::diff_snapshots`].
+    pub new_bead_ids: Vec<BeadId>,
+}
+
+/// The four post-review branches `loom check` can take. The driver computes
+/// this enum, then runs the side effects: push, set ralph:clarify, exec
+/// `loom run`, etc.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CheckVerdict {
+    /// No new beads + no `ralph:clarify` → push code + beads.
+    Clean,
+
+    /// `ralph:clarify` present (newly raised or pre-existing) → stop without
+    /// pushing; user resolves via `loom msg`.
+    Clarify { clarify_ids: Vec<BeadId> },
+
+    /// New fix-up beads, no clarify, iteration cap not reached → exec
+    /// `loom run` for another forward pass. The driver increments the
+    /// counter before returning this variant.
+    AutoIterate {
+        new_bead_ids: Vec<BeadId>,
+        next_iteration: u32,
+    },
+
+    /// New fix-up beads, no clarify, iteration cap exhausted → escalate the
+    /// newest fix-up bead to `ralph:clarify` and stop.
+    IterationCap {
+        new_bead_ids: Vec<BeadId>,
+        escalate_id: BeadId,
+        cap: u32,
+    },
+}
+
+/// Compute the post-review snapshot diff: which bead IDs in `after` are not
+/// present in `before`. Order is preserved from `after`.
+pub fn diff_new_bead_ids(before: &[BeadId], after: &[BeadId]) -> Vec<BeadId> {
+    use std::collections::HashSet;
+    let known: HashSet<&BeadId> = before.iter().collect();
+    after
+        .iter()
+        .filter(|id| !known.contains(id))
+        .cloned()
+        .collect()
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    fn b(id: &str) -> BeadId {
+        BeadId::new(id)
+    }
+
+    #[test]
+    fn diff_returns_only_new_ids_in_post_order() {
+        let before = vec![b("wx-a"), b("wx-b")];
+        let after = vec![b("wx-a"), b("wx-b"), b("wx-c"), b("wx-d")];
+        assert_eq!(
+            diff_new_bead_ids(&before, &after),
+            vec![b("wx-c"), b("wx-d")]
+        );
+    }
+
+    #[test]
+    fn diff_empty_when_no_new() {
+        let before = vec![b("wx-a"), b("wx-b")];
+        let after = vec![b("wx-a"), b("wx-b")];
+        assert!(diff_new_bead_ids(&before, &after).is_empty());
+    }
+
+    #[test]
+    fn diff_handles_empty_before() {
+        let after = vec![b("wx-a")];
+        assert_eq!(diff_new_bead_ids(&[], &after), vec![b("wx-a")]);
+    }
+}
