@@ -52,6 +52,7 @@ _:
           ;
         default = sandboxPkgs.sandbox;
         city-config = city.configDir;
+        loom = wrapix.loomPackage;
         ralph = wrapix.ralphPackage;
         tmux-mcp = import ../../lib/mcp/tmux/mcp-server.nix { inherit pkgs; };
         wrapix-builder = import ../../lib/builder { inherit pkgs linuxPkgs; };

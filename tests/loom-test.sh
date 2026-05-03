@@ -182,6 +182,52 @@ test_workspace_lints() {
 }
 
 #-----------------------------------------------------------------------------
+# test_nix_build — `nix build .#loom` succeeds and produces a loom binary.
+#-----------------------------------------------------------------------------
+test_nix_build() {
+    local out
+    out=$(nix build "$REPO_ROOT#loom" --no-link --print-out-paths)
+    if [ ! -x "$out/bin/loom" ]; then
+        echo "expected executable at $out/bin/loom" >&2
+        return 1
+    fi
+}
+
+#-----------------------------------------------------------------------------
+# test_devshell_includes_loom — loom binary on PATH inside `nix develop`,
+# alongside ralph (dual-path transition).
+#-----------------------------------------------------------------------------
+test_devshell_includes_loom() {
+    local paths
+    paths=$(nix develop "$REPO_ROOT" --command bash -c 'command -v loom; command -v ralph')
+    if ! grep -q '/loom$' <<<"$paths"; then
+        echo "loom not found on devShell PATH" >&2
+        echo "$paths" >&2
+        return 1
+    fi
+    if ! grep -q '/ralph$' <<<"$paths"; then
+        echo "ralph not found on devShell PATH (dual-path requires both)" >&2
+        echo "$paths" >&2
+        return 1
+    fi
+}
+
+#-----------------------------------------------------------------------------
+# test_clippy_clean — `cargo clippy --workspace` passes with workspace lints
+# (warnings denied).
+#-----------------------------------------------------------------------------
+test_clippy_clean() {
+    cargo_run clippy --workspace --all-targets -- -D warnings
+}
+
+#-----------------------------------------------------------------------------
+# test_cargo_test — `cargo test --workspace` passes for all crates.
+#-----------------------------------------------------------------------------
+test_cargo_test() {
+    cargo_run test --workspace
+}
+
+#-----------------------------------------------------------------------------
 # Dispatch
 #-----------------------------------------------------------------------------
 if [ $# -eq 0 ]; then

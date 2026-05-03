@@ -25,6 +25,7 @@ _:
           pkgs.flock
           pkgs.gh
           pkgs.podman
+          self'.packages.loom
           self'.packages.wrapix-notifyd
         ];
       };
