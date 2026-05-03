@@ -27,6 +27,9 @@ pin — keep it current when specs land or retire.
 | [sandbox.md](../specs/sandbox.md) | [`lib/sandbox/default.nix`](../lib/sandbox/default.nix) | — | Platform-agnostic container isolation |
 | [security-review.md](../specs/security-review.md) | — | wx-eok | Security tradeoffs and mitigations |
 | [tmux-mcp.md](../specs/tmux-mcp.md) | [`lib/mcp/tmux/`](../lib/mcp/tmux/) | wx-4f3g | AI-assisted debugging via tmux panes |
+| [loom-harness.md](../specs/loom-harness.md) | [`loom/`](../loom/) | — | Loom platform: crate structure, templates, workflow migration |
+| [loom-agent.md](../specs/loom-agent.md) | [`loom/crates/loom-agent/`](../loom/crates/loom-agent/) | — | Agent backend abstraction: pi-mono RPC + Claude Code stream-json |
+| [loom-tests.md](../specs/loom-tests.md) | [`tests/loom/`](../tests/loom/) | — | Test strategy: unit, integration, system tests for Loom |
 
 ## Terminology Index
 
@@ -43,6 +46,8 @@ pin — keep it current when specs land or retire.
 | **Gas City** | Multi-agent orchestration SDK integrated via `mkCity` |
 | **Judge** | Persistent city role: reviews Worker diffs, owns merge |
 | **Mayor** | Persistent city role: human's conversational interface, triage |
+| **Loom** | Rust agent driver replacing Ralph's bash scripts; supports pi-mono and Claude Code backends |
+| **NDJSON** | Newline-Delimited JSON — one JSON object per `\n`-terminated line; protocol framing for both pi-mono RPC and Claude stream-json |
 | **mkCity** | Nix function that generates a Gas City instance |
 | **Order** | gc event- or time-triggered workflow dispatcher |
 | **pasta** | Linux userspace networking for Podman containers |
