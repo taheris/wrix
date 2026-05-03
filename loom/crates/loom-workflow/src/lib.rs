@@ -11,9 +11,14 @@
 //! depending on `loom-core` directly each time.
 
 pub mod check;
+pub mod init;
+pub mod logs_cmd;
 pub mod msg;
 pub mod run;
+pub mod spec;
+pub mod status;
 pub mod todo;
+pub mod use_spec;
 
 pub use loom_core::agent::{
     Active, AgentBackend, AgentEvent, AgentKind, AgentSession, CompactionReason, Idle, LineParse,

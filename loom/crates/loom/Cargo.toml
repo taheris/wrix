@@ -11,6 +11,13 @@ name = "loom"
 path = "src/main.rs"
 
 [dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+loom-core = { workspace = true }
+loom-workflow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true

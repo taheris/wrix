@@ -1057,6 +1057,127 @@ test_msg_fast_reply() {
 }
 
 #-----------------------------------------------------------------------------
+# Auxiliary commands (init, status, use, logs, spec) — each function dispatches
+# into a unit test under loom-workflow/src/. Sharing the cargo binary keeps the
+# verify path and `cargo test` exercising the same code paths.
+#-----------------------------------------------------------------------------
+aux_cargo_test() {
+    cargo_run test -p loom-workflow --lib "$1" -- --exact --nocapture --quiet
+}
+
+#-----------------------------------------------------------------------------
+# test_init_creates_state — `loom init` creates `.wrapix/loom/config.toml`
+# (round-trips through `LoomConfig::default()`) and `.wrapix/loom/state.db`,
+# preserving an existing config file on subsequent invocations.
+#-----------------------------------------------------------------------------
+test_init_creates_state() {
+    aux_cargo_test init::tests::run_creates_config_and_state_db
+    aux_cargo_test init::tests::run_preserves_existing_config_file
+}
+
+#-----------------------------------------------------------------------------
+# test_init_rebuild — `loom init --rebuild` drops and repopulates the state
+# DB from `specs/*.md` plus the supplied molecule slice, and resets every
+# `iteration_count` to 0.
+#-----------------------------------------------------------------------------
+test_init_rebuild() {
+    aux_cargo_test init::tests::rebuild_drops_and_repopulates_state_db
+}
+
+#-----------------------------------------------------------------------------
+# test_status_command — `loom status` (read-only) renders `<unset>` when no
+# spec has been chosen, otherwise prints the active spec, molecule id, and
+# iteration counter. Sanity check confirms the call needs no lock.
+#-----------------------------------------------------------------------------
+test_status_command() {
+    aux_cargo_test status::tests::empty_state_reports_unset_spec
+    aux_cargo_test status::tests::populated_state_reports_label_and_iteration
+    aux_cargo_test status::tests::no_lock_required_to_call_load
+}
+
+#-----------------------------------------------------------------------------
+# test_use_command — `loom use <label>` acquires the per-spec lock, writes
+# `current_spec` to the state DB, and round-trips with `status::load`. A
+# spec lock held elsewhere causes `SpecBusy` after the configured timeout.
+#-----------------------------------------------------------------------------
+test_use_command() {
+    aux_cargo_test use_spec::tests::use_round_trips_with_status_load
+    aux_cargo_test use_spec::tests::use_acquires_per_spec_lock
+}
+
+#-----------------------------------------------------------------------------
+# test_logs_command — `loom logs` (read-only) walks `.wrapix/loom/logs/` two
+# levels deep, returns the most recent `*.ndjson`, applies an exact bead-id
+# prefix filter so `wx-1` does not collapse into `wx-10`, and rejects
+# non-ndjson files.
+#-----------------------------------------------------------------------------
+test_logs_command() {
+    aux_cargo_test logs_cmd::tests::empty_root_returns_no_logs
+    aux_cargo_test logs_cmd::tests::returns_most_recent_log_across_specs
+    aux_cargo_test logs_cmd::tests::bead_filter_matches_prefix_exactly
+    aux_cargo_test logs_cmd::tests::missing_bead_filter_returns_typed_error
+    aux_cargo_test logs_cmd::tests::ignores_non_ndjson_files
+}
+
+#-----------------------------------------------------------------------------
+# test_spec_query — `loom spec` parses `## Success Criteria` checkboxes and
+# pairs each with the following `[verify](path#fn)` / `[judge](path#fn)`
+# annotation. Fenced code blocks, the next `##` heading, and orphan
+# checkboxes (no annotation) are all handled per `parse_spec_annotations` in
+# `lib/ralph/cmd/util.sh`.
+#-----------------------------------------------------------------------------
+test_spec_query() {
+    aux_cargo_test spec::annotations::tests::returns_no_criteria_error_when_section_missing
+    aux_cargo_test spec::annotations::tests::pairs_checkbox_with_following_verify_link
+    aux_cargo_test spec::annotations::tests::checked_box_propagates
+    aux_cargo_test spec::annotations::tests::criterion_without_annotation_yields_none_kind
+    aux_cargo_test spec::annotations::tests::fenced_code_blocks_are_skipped
+    aux_cargo_test spec::annotations::tests::next_h2_terminates_section
+    aux_cargo_test spec::annotations::tests::relative_paths_normalize_against_spec_dir
+    aux_cargo_test spec::annotations::tests::legacy_double_colon_separator_supported
+    aux_cargo_test spec::tests::list_for_label_reads_spec_under_workspace
+}
+
+#-----------------------------------------------------------------------------
+# test_spec_deps — `loom spec --deps` mirrors `ralph sync --deps`: it scans
+# every `[verify]`/`[judge]` test file for known tool invocations (curl, jq,
+# rg, tmux, ssh, etc.), collapses aliases (`rg`/`ripgrep`, `ssh`/`scp`) to a
+# single nixpkgs name, and ignores substring matches such as "curling".
+#-----------------------------------------------------------------------------
+test_spec_deps() {
+    aux_cargo_test spec::deps::tests::maps_known_tools_to_nix_packages
+    aux_cargo_test spec::deps::tests::aliases_collapse_to_canonical_package
+    aux_cargo_test spec::deps::tests::ignores_substring_matches
+    aux_cargo_test spec::deps::tests::matches_after_pipes_and_command_subst
+    aux_cargo_test spec::deps::tests::ssh_and_scp_both_map_to_openssh
+    aux_cargo_test spec::deps::tests::collect_deps_ignores_missing_files
+    aux_cargo_test spec::deps::tests::collect_deps_skips_non_test_annotations
+    aux_cargo_test spec::tests::deps_for_label_aggregates_across_test_files
+}
+
+#-----------------------------------------------------------------------------
+# test_no_sync_or_tune_command — the loom binary must NOT expose `sync` or
+# `tune` subcommands. Askama compiled templates make per-project sync
+# unnecessary (see `specs/loom-harness.md`). The check greps the binary's
+# clap surface; if either name shows up as a subcommand identifier, the
+# binary has regressed.
+#-----------------------------------------------------------------------------
+test_no_sync_or_tune_command() {
+    local main="$LOOM_DIR/crates/loom/src/main.rs"
+    if [ ! -f "$main" ]; then
+        echo "loom binary not yet scaffolded" >&2
+        return 77
+    fi
+    local hits
+    hits=$(grep -nE '#\[command\(name[[:space:]]*=[[:space:]]*"(sync|tune)"\)\]|^\s*Sync\b|^\s*Tune\b' "$main" || true)
+    if [ -n "$hits" ]; then
+        echo "forbidden sync/tune subcommand surfaced in $main:" >&2
+        echo "$hits" >&2
+        return 1
+    fi
+}
+
+#-----------------------------------------------------------------------------
 # Dispatch
 #-----------------------------------------------------------------------------
 if [ $# -eq 0 ]; then

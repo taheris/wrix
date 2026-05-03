@@ -1,0 +1,44 @@
+pinned_context = "docs/README.md"
+
+[beads]
+priority = 2
+default_type = "task"
+
+[loop]
+max_iterations = 3
+max_retries = 2
+max_reviews = 2
+
+[logs]
+# Delete log files under .wrapix/loom/logs/ older than this many days on
+# `loom run` startup. 0 disables sweeping (keep forever).
+retention_days = 14
+
+[exit_signals]
+complete = "RALPH_COMPLETE"
+blocked = "RALPH_BLOCKED:"
+clarify = "RALPH_CLARIFY:"
+
+[agent]
+default = "claude"
+
+# Per-phase overrides: backend + model. Phases without overrides inherit default.
+# [agent.todo]
+# backend = "pi"
+# provider = "deepseek"
+# model_id = "deepseek-v3"
+#
+# [agent.check]
+# backend = "claude"
+
+[claude]
+# Seconds to wait for clean exit after `result` before SIGTERM. Mirrors
+# ralph's RALPH_CLAUDE_POST_RESULT_GRACE.
+post_result_grace_secs = 5
+
+[security]
+# Tool names to deny when Claude sends control_request. Claude-backend only —
+# pi has no host-side permission flow (tools execute internally, no
+# control_request analog). Empty by default — the container sandbox is the
+# trust boundary.
+# denied_tools = ["SomeNewHostTool"]
