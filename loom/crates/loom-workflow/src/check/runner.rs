@@ -1,4 +1,4 @@
-use loom_core::bd::Bead;
+use loom_core::bd::{Bead, Label};
 use loom_core::identifier::BeadId;
 
 use super::error::CheckError;
@@ -134,7 +134,7 @@ pub async fn check_loop<C: CheckController>(
     let new_ids = diff_new_bead_ids(&pre_ids, &post_ids);
     let clarify_ids: Vec<BeadId> = post
         .iter()
-        .filter(|b| b.labels.iter().any(|l| l == "ralph:clarify"))
+        .filter(|b| b.labels.iter().any(Label::is_clarify))
         .map(|b| b.id.clone())
         .collect();
 
@@ -294,7 +294,7 @@ mod tests {
             status: "open".into(),
             priority: 2,
             issue_type: "task".into(),
-            labels: labels.iter().map(|s| s.to_string()).collect(),
+            labels: labels.iter().map(|s| Label::new(*s)).collect(),
         }
     }
 

@@ -1,4 +1,4 @@
-use loom_core::bd::Bead;
+use loom_core::bd::{Bead, Label};
 use loom_core::identifier::SpecLabel;
 
 use super::options::parse_options;
@@ -26,13 +26,13 @@ pub struct ClarifyRow {
 pub fn filter_clarifies<'a>(beads: &'a [Bead], spec: Option<&SpecLabel>) -> Vec<&'a Bead> {
     beads
         .iter()
-        .filter(|b| b.labels.iter().any(|l| l == "ralph:clarify"))
+        .filter(|b| b.labels.iter().any(Label::is_clarify))
         .filter(|b| match spec {
             None => true,
             Some(label) => b
                 .labels
                 .iter()
-                .any(|l| l.strip_prefix("spec:") == Some(label.as_str())),
+                .any(|l| l.spec_label().as_ref() == Some(label)),
         })
         .collect()
 }
@@ -54,7 +54,11 @@ pub fn build_rows(beads: &[&Bead], spec_filter: Option<&SpecLabel>) -> Vec<Clari
             let spec = if spec_filter.is_some() {
                 None
             } else {
-                Some(spec_label_of(bead).unwrap_or_else(|| "—".to_string()))
+                Some(
+                    spec_label_of(bead)
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| "—".to_string()),
+                )
             };
             ClarifyRow {
                 index: u32::try_from(i + 1).unwrap_or(u32::MAX),
@@ -68,10 +72,8 @@ pub fn build_rows(beads: &[&Bead], spec_filter: Option<&SpecLabel>) -> Vec<Clari
 
 /// Extract the `spec:<label>` value from a bead's labels. `loom msg`'s
 /// resume hint reads this on every successful clarify clear.
-pub fn spec_label_of(bead: &Bead) -> Option<String> {
-    bead.labels
-        .iter()
-        .find_map(|l| l.strip_prefix("spec:").map(str::to_string))
+pub fn spec_label_of(bead: &Bead) -> Option<SpecLabel> {
+    bead.labels.iter().find_map(Label::spec_label)
 }
 
 #[cfg(test)]
@@ -88,7 +90,7 @@ mod tests {
             status: "open".into(),
             priority: 2,
             issue_type: "task".into(),
-            labels: labels.iter().map(|s| s.to_string()).collect(),
+            labels: labels.iter().map(|s| Label::new(*s)).collect(),
         }
     }
 

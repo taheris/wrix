@@ -17,7 +17,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use loom_core::bd::{BdClient, CommandRunner, ListOpts};
-use loom_core::identifier::{MoleculeId, SpecLabel};
+use loom_core::identifier::MoleculeId;
 use loom_core::lock::LockManager;
 use loom_core::state::{ActiveMolecule, RebuildReport, StateDb};
 
@@ -28,7 +28,6 @@ pub use error::InitError;
 /// a file that round-trips through `LoomConfig::default()`.
 pub const DEFAULT_CONFIG_TOML: &str = include_str!("default-config.toml");
 
-const SPEC_LABEL_PREFIX: &str = "spec:";
 const ACTIVE_LABEL: &str = "ralph:active";
 
 /// Options accepted by [`run`].
@@ -115,13 +114,13 @@ pub async fn fetch_active_molecules<R: CommandRunner>(
         let spec_label = bead
             .labels
             .iter()
-            .find_map(|l| l.strip_prefix(SPEC_LABEL_PREFIX))
+            .find_map(|l| l.spec_label())
             .ok_or_else(|| InitError::MissingSpecLabel {
                 id: bead.id.to_string(),
             })?;
         out.push(ActiveMolecule {
             id: MoleculeId::new(bead.id.as_str()),
-            spec_label: SpecLabel::new(spec_label.to_string()),
+            spec_label,
             base_commit: None,
         });
     }
@@ -134,6 +133,7 @@ mod tests {
     use super::*;
     use anyhow::Result;
     use loom_core::config::LoomConfig;
+    use loom_core::identifier::SpecLabel;
     use loom_core::lock::LockError;
 
     fn temp_workspace() -> Result<tempfile::TempDir> {

@@ -150,7 +150,7 @@ async fn process_one_bead<C: AgentLoopController>(
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use loom_core::bd::Bead;
+    use loom_core::bd::{Bead, Label};
     use loom_core::identifier::BeadId;
     use std::collections::VecDeque;
 
@@ -207,7 +207,7 @@ mod tests {
             status: "open".into(),
             priority: 2,
             issue_type: "task".into(),
-            labels: labels.iter().map(|s| s.to_string()).collect(),
+            labels: labels.iter().map(|s| Label::new(*s)).collect(),
         }
     }
 

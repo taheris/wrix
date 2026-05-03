@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use super::label::Label;
 use crate::identifier::{BeadId, MoleculeId};
 
 /// One bead as produced by `bd show --json` and `bd list --json`.
@@ -20,7 +21,7 @@ pub struct Bead {
     #[serde(default, rename = "issue_type")]
     pub issue_type: String,
     #[serde(default)]
-    pub labels: Vec<String>,
+    pub labels: Vec<Label>,
 }
 
 /// One molecule row. Beads exposes `bd mol show --json`; the shape is the

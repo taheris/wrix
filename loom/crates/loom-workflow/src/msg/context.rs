@@ -25,7 +25,7 @@ pub fn build_msg_context(
 
 fn to_clarify_bead(bead: &Bead) -> ClarifyBead {
     let parsed = parse_options(&bead.description);
-    let spec = spec_label_of(bead).unwrap_or_else(|| "—".to_string());
+    let spec_label = spec_label_of(bead).unwrap_or_else(|| SpecLabel::new("—"));
     let options_summary = if parsed.summary.is_empty() {
         None
     } else {
@@ -42,7 +42,7 @@ fn to_clarify_bead(bead: &Bead) -> ClarifyBead {
         .collect();
     ClarifyBead {
         id: bead.id.clone(),
-        spec_label: SpecLabel::new(spec),
+        spec_label,
         title: bead.title.clone(),
         options_summary,
         options,
@@ -95,6 +95,7 @@ pub fn resolve_target<'a>(
 mod tests {
     use super::*;
     use askama::Template;
+    use loom_core::bd::Label;
 
     fn bead(id: &str, title: &str, desc: &str, labels: &[&str]) -> Bead {
         Bead {
@@ -104,7 +105,7 @@ mod tests {
             status: "open".into(),
             priority: 2,
             issue_type: "task".into(),
-            labels: labels.iter().map(|s| s.to_string()).collect(),
+            labels: labels.iter().map(|s| Label::new(*s)).collect(),
         }
     }
 

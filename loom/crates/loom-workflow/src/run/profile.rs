@@ -1,8 +1,5 @@
+use loom_core::bd::Label;
 use loom_core::identifier::ProfileName;
-
-/// Bead label prefix that announces the wrapix profile a bead should run
-/// under (`profile:rust`, `profile:python`, `profile:base`).
-pub const PROFILE_LABEL_PREFIX: &str = "profile:";
 
 /// Profile used when a bead carries no `profile:X` label and no override is
 /// supplied. Matches the default in `lib/sandbox/profiles.nix`.
@@ -17,16 +14,14 @@ pub const DEFAULT_PROFILE: &str = "base";
 ///
 /// Pure function — the driver hands in the labels it already pulled from
 /// `bd show`.
-pub fn resolve_profile(bead_labels: &[String], override_: Option<&ProfileName>) -> ProfileName {
+pub fn resolve_profile(bead_labels: &[Label], override_: Option<&ProfileName>) -> ProfileName {
     if let Some(p) = override_ {
         return p.clone();
     }
-    for label in bead_labels {
-        if let Some(name) = label.strip_prefix(PROFILE_LABEL_PREFIX) {
-            return ProfileName::new(name);
-        }
-    }
-    ProfileName::new(DEFAULT_PROFILE)
+    bead_labels
+        .iter()
+        .find_map(Label::profile_name)
+        .unwrap_or_else(|| ProfileName::new(DEFAULT_PROFILE))
 }
 
 #[cfg(test)]
@@ -34,23 +29,27 @@ pub fn resolve_profile(bead_labels: &[String], override_: Option<&ProfileName>) 
 mod tests {
     use super::*;
 
+    fn labels(items: &[&str]) -> Vec<Label> {
+        items.iter().map(|s| Label::new(*s)).collect()
+    }
+
     #[test]
     fn resolve_profile_reads_label() {
-        let labels = vec!["spec:loom-harness".into(), "profile:rust".into()];
+        let labels = labels(&["spec:loom-harness", "profile:rust"]);
         let p = resolve_profile(&labels, None);
         assert_eq!(p, ProfileName::new("rust"));
     }
 
     #[test]
     fn resolve_profile_falls_back_to_base_without_label() {
-        let labels: Vec<String> = vec!["spec:loom-harness".into()];
+        let labels = labels(&["spec:loom-harness"]);
         let p = resolve_profile(&labels, None);
         assert_eq!(p, ProfileName::new(DEFAULT_PROFILE));
     }
 
     #[test]
     fn resolve_profile_uses_override() {
-        let labels = vec!["profile:rust".into()];
+        let labels = labels(&["profile:rust"]);
         let override_ = ProfileName::new("python");
         let p = resolve_profile(&labels, Some(&override_));
         assert_eq!(p, ProfileName::new("python"));
@@ -58,7 +57,7 @@ mod tests {
 
     #[test]
     fn resolve_profile_first_matching_label_wins() {
-        let labels = vec!["profile:rust".into(), "profile:python".into()];
+        let labels = labels(&["profile:rust", "profile:python"]);
         let p = resolve_profile(&labels, None);
         assert_eq!(p, ProfileName::new("rust"));
     }

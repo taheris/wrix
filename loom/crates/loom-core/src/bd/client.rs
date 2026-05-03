@@ -293,6 +293,7 @@ pub struct ReadyOpts {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+    use crate::bd::Label;
     use anyhow::{Result, anyhow};
     use std::collections::VecDeque;
     use std::sync::Mutex;
@@ -377,7 +378,7 @@ mod tests {
         assert_eq!(bead.issue_type, "task");
         assert_eq!(
             bead.labels,
-            vec!["profile:rust".to_string(), "spec:loom-harness".to_string()]
+            vec![Label::new("profile:rust"), Label::new("spec:loom-harness")]
         );
         let argv = argv_of(&client.runner, 0);
         assert_eq!(argv, vec!["show", "wx-3hhwq.5", "--json"]);
