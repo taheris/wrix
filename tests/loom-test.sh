@@ -1531,6 +1531,73 @@ test_claude_shutdown_watchdog() {
 }
 
 #-----------------------------------------------------------------------------
+# test_pi_two_phase_deser — `PiParser::parse_line` peeks the envelope and
+# re-deserializes the line into the matched concrete type. Exercised by
+# fixtures covering an envelope-only line with unknown extras, a full
+# response, a full event (id-absent path), and a full extension UI request.
+#-----------------------------------------------------------------------------
+test_pi_two_phase_deser() {
+    cargo_run test -p loom-agent --quiet -- \
+        pi::parser::tests::envelope_only_with_unknown_extras_classifies_as_event \
+        pi::parser::tests::full_response_classifies_and_re_deserializes \
+        pi::parser::tests::full_event_classifies_via_id_absent_path \
+        pi::parser::tests::full_ui_request_classifies_as_extension_ui_request \
+        pi::parser::tests::unknown_envelope_type_with_id_is_unknown_message_type
+}
+
+#-----------------------------------------------------------------------------
+# test_pi_event_mapping — each pi event variant maps to the AgentEvent the
+# spec table prescribes: message_update text/error deltas, tool_execution_*,
+# turn_end, agent_end (synthesized exit_code 0), compaction_start reason
+# coercion, compaction_end aborted flag, and trace-only events that yield no
+# AgentEvents.
+#-----------------------------------------------------------------------------
+test_pi_event_mapping() {
+    cargo_run test -p loom-agent --quiet -- \
+        pi::parser::tests::message_update_text_delta_yields_message_delta \
+        pi::parser::tests::message_update_error_delta_yields_error_event \
+        pi::parser::tests::message_update_unmapped_delta_is_silent \
+        pi::parser::tests::tool_execution_end_yields_tool_result \
+        pi::parser::tests::tool_execution_end_stringifies_non_string_result \
+        pi::parser::tests::turn_end_yields_turn_end_event \
+        pi::parser::tests::agent_end_yields_session_complete_with_synthesized_zero \
+        pi::parser::tests::compaction_start_threshold_maps_to_context_limit \
+        pi::parser::tests::compaction_start_overflow_maps_to_context_limit \
+        pi::parser::tests::compaction_start_manual_maps_to_user_requested \
+        pi::parser::tests::compaction_start_unknown_reason_maps_to_unknown \
+        pi::parser::tests::compaction_end_carries_aborted_flag \
+        pi::parser::tests::observability_only_events_yield_no_agent_events \
+        pi::parser::tests::unknown_event_type_via_serde_other_yields_no_events
+}
+
+#-----------------------------------------------------------------------------
+# test_pi_malformed_ndjson — a garbage line returns
+# `ProtocolError::InvalidJson`; the runner catches the error and continues
+# (defensive — pi v0.72+ has stdout discipline via takeOverStdout).
+#-----------------------------------------------------------------------------
+test_pi_malformed_ndjson() {
+    cargo_run test -p loom-agent --quiet -- \
+        pi::parser::tests::malformed_json_returns_invalid_json_error
+}
+
+#-----------------------------------------------------------------------------
+# test_pi_extension_ui_passthrough — an `extension_ui_request` whose method
+# requires a host response (`select`/`confirm`/`input`/`editor`) yields a
+# `ParsedLine::response` carrying `extension_ui_response { id, cancelled:
+# true }`. Methods that do not block the agent (`notify`, `setStatus`)
+# leave `ParsedLine::response` at None.
+#-----------------------------------------------------------------------------
+test_pi_extension_ui_passthrough() {
+    cargo_run test -p loom-agent --quiet -- \
+        pi::parser::tests::extension_ui_select_yields_auto_cancel_response \
+        pi::parser::tests::extension_ui_confirm_yields_auto_cancel_response \
+        pi::parser::tests::extension_ui_input_yields_auto_cancel_response \
+        pi::parser::tests::extension_ui_editor_yields_auto_cancel_response \
+        pi::parser::tests::extension_ui_notify_leaves_response_none \
+        pi::parser::tests::extension_ui_set_status_leaves_response_none
+}
+
+#-----------------------------------------------------------------------------
 # Dispatch
 #-----------------------------------------------------------------------------
 if [ $# -eq 0 ]; then
