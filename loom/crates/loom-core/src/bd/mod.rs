@@ -14,7 +14,7 @@ mod error;
 mod models;
 mod runner;
 
-pub use client::{BdClient, CreateOpts, ListOpts, UpdateOpts};
+pub use client::{BdClient, CreateOpts, ListOpts, ReadyOpts, UpdateOpts};
 pub use error::BdError;
 pub use models::{Bead, MolProgress, Molecule};
 pub use runner::{CommandRunner, RunOutput, TokioRunner};

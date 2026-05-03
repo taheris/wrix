@@ -162,6 +162,16 @@ impl GitClient {
         Ok(())
     }
 
+    /// Force-delete the named branch. Used by the parallel batch driver to
+    /// reclaim the per-bead branch after agent failure (the worktree has
+    /// already been removed by [`Self::remove_worktree`]). A non-existent
+    /// branch surfaces as [`GitError::GitCli`] — call only when the branch
+    /// is known to exist.
+    pub async fn delete_branch(&self, branch: &str) -> Result<(), GitError> {
+        run_git(&self.workdir, ["branch", "-D", branch], None).await?;
+        Ok(())
+    }
+
     /// Merge `branch` into the current driver branch. Returns
     /// [`MergeResult::Conflict`] when git reports merge conflicts; other
     /// failures surface as [`GitError`].

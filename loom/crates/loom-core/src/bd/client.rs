@@ -173,6 +173,30 @@ impl<R: CommandRunner> BdClient<R> {
         Ok(())
     }
 
+    /// `bd ready --json [--limit=N] [--label=<label>]` — beads ready to work
+    /// (open, no active blockers). Step (1) of the parallel batch driver:
+    /// pulls up to `limit` candidates per batch.
+    pub async fn ready(&self, opts: ReadyOpts) -> Result<Vec<Bead>, BdError> {
+        let mut args: Vec<OsString> = vec!["ready".into(), "--json".into()];
+        if let Some(n) = opts.limit {
+            args.push(format!("--limit={n}").into());
+        }
+        if let Some(label) = opts.label {
+            args.push(format!("--label={label}").into());
+        }
+        let out = self.invoke(args).await?;
+        if out.stdout.iter().all(u8::is_ascii_whitespace) {
+            return Ok(Vec::new());
+        }
+        let trimmed = std::str::from_utf8(&out.stdout)
+            .map(str::trim)
+            .unwrap_or_default();
+        if trimmed == "null" {
+            return Ok(Vec::new());
+        }
+        decode(&out.stdout, &out.args)
+    }
+
     /// `bd mol bond <left> <right>`. The polymorphic semantics of
     /// `bd mol bond` (formula+formula, formula+mol, etc.) are the
     /// caller's concern; this wrapper just forwards two operands.
@@ -253,6 +277,15 @@ pub struct UpdateOpts {
 #[derive(Debug, Clone, Default)]
 pub struct ListOpts {
     pub status: Option<String>,
+    pub label: Option<String>,
+}
+
+/// Filters accepted by `bd ready`. `limit` caps the result count
+/// (`--limit=N`); the parallel batch driver uses it to pull at most N ready
+/// beads per batch.
+#[derive(Debug, Clone, Default)]
+pub struct ReadyOpts {
+    pub limit: Option<u32>,
     pub label: Option<String>,
 }
 
@@ -532,6 +565,58 @@ mod tests {
         client.close(&BeadId::new("wx-x"), Some("dup")).await?;
         let argv = argv_of(&client.runner, 0);
         assert_eq!(argv, vec!["close", "wx-x", "--reason", "dup"]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ready_forwards_limit_and_label_filters() -> Result<()> {
+        let runner = CapturingRunner::new([ok(b"[]")]);
+        let client = BdClient::with_runner(runner);
+        client
+            .ready(ReadyOpts {
+                limit: Some(4),
+                label: Some("spec:loom-harness".into()),
+            })
+            .await?;
+        let argv = argv_of(&client.runner, 0);
+        assert_eq!(
+            argv,
+            vec![
+                "ready".to_string(),
+                "--json".into(),
+                "--limit=4".into(),
+                "--label=spec:loom-harness".into(),
+            ]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ready_handles_null_response_as_empty_vec() -> Result<()> {
+        let runner = CapturingRunner::new([ok(b"null\n")]);
+        let client = BdClient::with_runner(runner);
+        let beads = client.ready(ReadyOpts::default()).await?;
+        assert!(beads.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ready_parses_array_of_beads() -> Result<()> {
+        let json = br#"[
+            {"id":"a","title":"A","status":"open"},
+            {"id":"b","title":"B","status":"open"}
+        ]"#;
+        let runner = CapturingRunner::new([ok(json)]);
+        let client = BdClient::with_runner(runner);
+        let beads = client
+            .ready(ReadyOpts {
+                limit: Some(2),
+                label: None,
+            })
+            .await?;
+        assert_eq!(beads.len(), 2);
+        assert_eq!(beads[0].id, BeadId::new("a"));
+        assert_eq!(beads[1].id, BeadId::new("b"));
         Ok(())
     }
 

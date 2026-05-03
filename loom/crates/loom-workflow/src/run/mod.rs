@@ -20,12 +20,17 @@
 //! 6. on molecule completion (no more ready beads) execs `loom check` —
 //!    continuous mode only.
 //!
-//! `--parallel N > 1` (worktree parallelism) is `wx-3hhwq.16`. This module
-//! only owns the sequential path.
+//! `--parallel N > 1` (worktree parallelism) lives in [`parallel`]. The
+//! sequential and parallel paths share the [`AgentOutcome`] / retry vocabulary
+//! but split on dispatch: sequential spawns one container on the driver
+//! branch; parallel spawns N containers in disjoint worktrees and merges
+//! finished branches sequentially.
 
 mod context;
 mod error;
 mod outcome;
+mod parallel;
+mod parallelism;
 mod profile;
 mod retry;
 mod runner;
@@ -34,6 +39,11 @@ mod spawn;
 pub use context::{RunContextInputs, build_run_context};
 pub use error::RunError;
 pub use outcome::{AgentOutcome, BeadResult};
+pub use parallel::{
+    BatchOutcome, BatchResult, BatchSlot, WorktreeBead, create_worktrees, merge_back,
+    run_concurrent_spawns,
+};
+pub use parallelism::{Parallelism, ParallelismError};
 pub use profile::{DEFAULT_PROFILE, PROFILE_LABEL_PREFIX, resolve_profile};
 pub use retry::{RetryDecision, RetryPolicy};
 pub use runner::{AgentLoopController, RunMode, RunSummary, run_loop};

@@ -907,6 +907,88 @@ test_run_execs_check() {
 }
 
 #-----------------------------------------------------------------------------
+# Worktree parallelism — `--parallel N`. Pure-logic tests live in the
+# loom-workflow lib; tests that touch a real git repo live in the
+# `parallel` integration test.
+#-----------------------------------------------------------------------------
+parallel_lib_test() {
+    cargo_run test -p loom-workflow --lib "$1" -- --exact --nocapture --quiet
+}
+parallel_int_test() {
+    cargo_run test -p loom-workflow --test parallel "$1" -- --exact --nocapture --quiet
+}
+
+#-----------------------------------------------------------------------------
+# test_run_parallel_flag_validation — `Parallelism::from_str` accepts positive
+# integers and rejects 0, negatives, and non-integers with a clear error
+# (before any work begins).
+#-----------------------------------------------------------------------------
+test_run_parallel_flag_validation() {
+    parallel_lib_test run::parallelism::tests::default_is_one
+    parallel_lib_test run::parallelism::tests::parse_accepts_positive_integers
+    parallel_lib_test run::parallelism::tests::parse_rejects_zero_and_negatives_and_non_integers
+    parallel_lib_test run::parallelism::tests::is_one_false_for_n_greater_than_one
+    parallel_int_test run_parallel_flag_validation
+}
+
+#-----------------------------------------------------------------------------
+# test_parallel_one_no_worktree — `--parallel 1` (default) does not create
+# a worktree and works on the driver branch directly. The dispatch predicate
+# is `Parallelism::is_one()`; the integration test pins it.
+#-----------------------------------------------------------------------------
+test_parallel_one_no_worktree() {
+    parallel_int_test parallel_one_no_worktree
+}
+
+#-----------------------------------------------------------------------------
+# test_parallel_creates_worktrees — `--parallel N > 1` creates one worktree
+# per dispatched bead under `.wrapix/worktree/<label>/<bead-id>/` on a fresh
+# branch `loom/<label>/<bead-id>` based on HEAD.
+#-----------------------------------------------------------------------------
+test_parallel_creates_worktrees() {
+    parallel_int_test parallel_creates_worktrees
+}
+
+#-----------------------------------------------------------------------------
+# test_parallel_concurrent_spawns — `run_concurrent_spawns` joins futures via
+# `tokio::JoinSet` so wall-clock time for N concurrent dispatch slots is
+# dominated by a single slot's work, not the sum.
+#-----------------------------------------------------------------------------
+test_parallel_concurrent_spawns() {
+    parallel_lib_test run::parallel::tests::concurrent_spawns_overlap_in_wall_clock
+    parallel_lib_test run::parallel::tests::concurrent_spawns_collect_outcomes_for_every_slot
+}
+
+#-----------------------------------------------------------------------------
+# test_parallel_merge_back — successful bead branches are merged back to the
+# driver branch sequentially after the batch completes; the per-bead worktree
+# directory and branch are reclaimed on a clean merge.
+#-----------------------------------------------------------------------------
+test_parallel_merge_back() {
+    parallel_int_test parallel_merge_back
+}
+
+#-----------------------------------------------------------------------------
+# test_parallel_failure_cleanup — on agent failure the worktree branch is
+# deleted and the bead is queued for retry per the retry policy
+# (`BatchResult::AgentFailed` carries the error body the driver threads
+# back into the next attempt as `previous_failure`).
+#-----------------------------------------------------------------------------
+test_parallel_failure_cleanup() {
+    parallel_int_test parallel_failure_cleanup
+}
+
+#-----------------------------------------------------------------------------
+# test_parallel_conflict_preserves_worktree — on merge conflict the worktree
+# is preserved (not silently overwritten) and the bead is marked failed via
+# `BatchResult::Conflict`. The branch is not deleted; the path on disk
+# remains for human inspection.
+#-----------------------------------------------------------------------------
+test_parallel_conflict_preserves_worktree() {
+    parallel_int_test parallel_conflict_preserves_worktree
+}
+
+#-----------------------------------------------------------------------------
 # Dispatch
 #-----------------------------------------------------------------------------
 if [ $# -eq 0 ]; then

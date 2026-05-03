@@ -3,6 +3,7 @@ use thiserror::Error;
 
 use loom_core::agent::ProtocolError;
 use loom_core::bd::BdError;
+use loom_core::git::GitError;
 use loom_core::logging::LogError;
 
 /// Errors raised by the `loom run` driver.
@@ -19,6 +20,9 @@ pub enum RunError {
 
     /// log sink failure
     Log(#[from] LogError),
+
+    /// git operation failed (worktree, merge, branch)
+    Git(#[from] GitError),
 
     /// io operation failed
     Io(#[from] std::io::Error),
