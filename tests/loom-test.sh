@@ -1678,6 +1678,51 @@ test_pi_set_model_from_phase_config() {
 }
 
 #-----------------------------------------------------------------------------
+# test_per_phase_backend_config — config with [agent] default='claude' and
+# [agent.todo] backend='pi' must resolve agent_for(Todo) to Pi and
+# agent_for(Run) to Claude. Exercised in loom-core's config tests.
+#-----------------------------------------------------------------------------
+test_per_phase_backend_config() {
+    cargo_run test -p loom-core --quiet -- \
+        config::tests::agent_for_per_phase_resolves_override_and_default
+}
+
+#-----------------------------------------------------------------------------
+# test_backend_selection_flag — `loom run --agent pi` overrides phase config.
+# Verified at the binary surface: `loom --help` lists --agent, the value-enum
+# accepts pi, and the global flag flows into `run`'s help.
+#-----------------------------------------------------------------------------
+test_backend_selection_flag() {
+    cargo_run test -p loom --test agent_flag --quiet -- \
+        loom_help_lists_agent_global_flag \
+        loom_run_help_includes_agent_flag \
+        loom_accepts_agent_pi \
+        loom_accepts_agent_claude
+}
+
+#-----------------------------------------------------------------------------
+# test_backend_default_claude — empty config + no flag yields claude for
+# every phase (Plan/Todo/Run/Check/Msg).
+#-----------------------------------------------------------------------------
+test_backend_default_claude() {
+    cargo_run test -p loom-core --quiet -- \
+        config::tests::agent_for_default_is_claude_when_config_empty
+}
+
+#-----------------------------------------------------------------------------
+# test_backend_invalid_name — `loom --agent unknown status` fails with a
+# clap error that names the offending value and lists the valid choices.
+# Also verifies the config-side `UnknownBackend` error path.
+#-----------------------------------------------------------------------------
+test_backend_invalid_name() {
+    cargo_run test -p loom --test agent_flag --quiet -- \
+        loom_rejects_unknown_agent_value
+    cargo_run test -p loom-core --quiet -- \
+        config::tests::agent_for_unknown_backend_in_default_returns_error \
+        config::tests::agent_for_unknown_backend_in_phase_override_isolated_to_that_phase
+}
+
+#-----------------------------------------------------------------------------
 # Dispatch
 #-----------------------------------------------------------------------------
 if [ $# -eq 0 ]; then

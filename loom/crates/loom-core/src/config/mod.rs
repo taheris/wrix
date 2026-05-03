@@ -14,7 +14,10 @@ mod logs;
 mod loop_config;
 mod security;
 
-pub use agent::{AgentConfig, PhaseOverride};
+pub use agent::{
+    AgentConfig, AgentSelection, AgentSelectionError, ClaudeSettings, Phase, PhaseOverride,
+    parse_backend_name,
+};
 pub use beads::BeadsConfig;
 pub use claude::ClaudeConfig;
 pub use error::LoomConfigError;
@@ -63,6 +66,39 @@ impl LoomConfig {
         Ok(toml::from_str(src)?)
     }
 
+    /// Resolve the [`AgentSelection`] for `phase`. The lookup applies the
+    /// per-phase override on top of `[agent] default`; when the resolved
+    /// backend is [`crate::agent::AgentKind::Claude`] the claude-specific
+    /// settings are pulled from `[claude]` and `[security]` so call sites
+    /// receive everything in one struct.
+    ///
+    /// Returns [`AgentSelectionError::UnknownBackend`] when the backend name
+    /// (default or override) does not match `claude` or `pi` — surfacing the
+    /// validation lazily lets the TOML parser stay schema-free for unknown
+    /// `[agent.<phase>]` keys.
+    pub fn agent_for(&self, phase: Phase) -> Result<AgentSelection, AgentSelectionError> {
+        let override_ = self.agent.overrides.get(phase.as_str());
+        let backend_name = override_
+            .and_then(|o| o.backend.as_deref())
+            .unwrap_or(&self.agent.default);
+        let kind = parse_backend_name(backend_name)?;
+        let provider = override_.and_then(|o| o.provider.clone());
+        let model_id = override_.and_then(|o| o.model_id.clone());
+        let claude_settings = match kind {
+            crate::agent::AgentKind::Claude => Some(ClaudeSettings {
+                denied_tools: self.security.denied_tools.clone(),
+                post_result_grace_secs: self.claude.post_result_grace_secs,
+            }),
+            crate::agent::AgentKind::Pi => None,
+        };
+        Ok(AgentSelection {
+            kind,
+            provider,
+            model_id,
+            claude_settings,
+        })
+    }
+
     /// Load a config from disk. A missing file yields the default config so
     /// `.wrapix/loom/config.toml` is optional.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, LoomConfigError> {
@@ -79,6 +115,7 @@ impl LoomConfig {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use anyhow::Result;
@@ -228,5 +265,115 @@ denied_tools = ["WebFetch", "DangerousTool"]
     fn invalid_toml_returns_parse_error() {
         let result = LoomConfig::from_toml_str("not = = valid");
         assert!(matches!(result, Err(LoomConfigError::Parse(_))));
+    }
+
+    /// `[agent] default = "claude"` with `[agent.todo] backend = "pi"` →
+    /// `agent_for(Todo)` returns `Pi`, `agent_for(Run)` inherits `Claude`.
+    #[test]
+    fn agent_for_per_phase_resolves_override_and_default() -> Result<()> {
+        let src = r#"
+[agent]
+default = "claude"
+
+[agent.todo]
+backend = "pi"
+provider = "deepseek"
+model_id = "deepseek-v3"
+"#;
+        let cfg = LoomConfig::from_toml_str(src)?;
+
+        let todo = cfg.agent_for(Phase::Todo).expect("agent_for todo");
+        assert_eq!(todo.kind, crate::agent::AgentKind::Pi);
+        assert_eq!(todo.provider.as_deref(), Some("deepseek"));
+        assert_eq!(todo.model_id.as_deref(), Some("deepseek-v3"));
+        assert!(todo.claude_settings.is_none());
+
+        let run = cfg.agent_for(Phase::Run).expect("agent_for run");
+        assert_eq!(run.kind, crate::agent::AgentKind::Claude);
+        assert!(run.provider.is_none());
+        let claude = run.claude_settings.expect("claude_settings");
+        assert_eq!(claude.post_result_grace_secs, 5);
+        assert!(claude.denied_tools.is_empty());
+
+        Ok(())
+    }
+
+    /// Empty config (no `[agent]` table at all) resolves every phase to
+    /// `claude` — the documented default.
+    #[test]
+    fn agent_for_default_is_claude_when_config_empty() -> Result<()> {
+        let cfg = LoomConfig::default();
+        for phase in [
+            Phase::Plan,
+            Phase::Todo,
+            Phase::Run,
+            Phase::Check,
+            Phase::Msg,
+        ] {
+            let sel = cfg.agent_for(phase).expect("agent_for");
+            assert_eq!(sel.kind, crate::agent::AgentKind::Claude, "phase={phase:?}");
+            assert!(sel.claude_settings.is_some());
+        }
+        Ok(())
+    }
+
+    /// Unknown backend name in TOML surfaces as `UnknownBackend` — not a
+    /// parse error — so the message is precise about the offending value.
+    #[test]
+    fn agent_for_unknown_backend_in_default_returns_error() -> Result<()> {
+        let src = r#"
+[agent]
+default = "gpt"
+"#;
+        let cfg = LoomConfig::from_toml_str(src)?;
+        match cfg.agent_for(Phase::Run) {
+            Err(AgentSelectionError::UnknownBackend { name }) => assert_eq!(name, "gpt"),
+            other => panic!("expected UnknownBackend, got {other:?}"),
+        }
+        Ok(())
+    }
+
+    /// Unknown backend in a per-phase override surfaces only when that phase
+    /// is queried — other phases still resolve.
+    #[test]
+    fn agent_for_unknown_backend_in_phase_override_isolated_to_that_phase() -> Result<()> {
+        let src = r#"
+[agent]
+default = "claude"
+
+[agent.todo]
+backend = "ollama"
+"#;
+        let cfg = LoomConfig::from_toml_str(src)?;
+        match cfg.agent_for(Phase::Todo) {
+            Err(AgentSelectionError::UnknownBackend { name }) => assert_eq!(name, "ollama"),
+            other => panic!("expected UnknownBackend, got {other:?}"),
+        }
+        // Other phases unaffected.
+        let run = cfg.agent_for(Phase::Run).expect("run unaffected");
+        assert_eq!(run.kind, crate::agent::AgentKind::Claude);
+        Ok(())
+    }
+
+    /// Claude-specific settings (`[claude]` + `[security]`) flow through
+    /// `agent_for` when the resolved backend is claude.
+    #[test]
+    fn agent_for_threads_claude_specific_settings_when_kind_is_claude() -> Result<()> {
+        let src = r#"
+[agent]
+default = "claude"
+
+[claude]
+post_result_grace_secs = 12
+
+[security]
+denied_tools = ["WebFetch", "Other"]
+"#;
+        let cfg = LoomConfig::from_toml_str(src)?;
+        let sel = cfg.agent_for(Phase::Run).expect("agent_for");
+        let claude = sel.claude_settings.expect("claude_settings present");
+        assert_eq!(claude.post_result_grace_secs, 12);
+        assert_eq!(claude.denied_tools, vec!["WebFetch", "Other"]);
+        Ok(())
     }
 }

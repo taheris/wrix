@@ -5,6 +5,12 @@
 //! `wrapix run` (TTY attached) rather than `wrapix run-bead --stdio`. There
 //! is no subprocess capture, no NDJSON parsing, and no event tee.
 //!
+//! `[agent.plan]` is permitted in `LoomConfig` for symmetry with the other
+//! phase keys, but `loom plan` always shells to `wrapix run` today — the
+//! claude binary is the only frontend wired up for an interactive TTY
+//! session. Selecting `pi` for `[agent.plan]` is a no-op until pi grows an
+//! interactive frontend (the current `--mode rpc` entry point is non-TTY).
+//!
 //! Flow per `specs/loom-harness.md`:
 //!
 //! 1. parse `-n <label>` (new) or `-u <label>` (update) into [`PlanMode`];

@@ -9,9 +9,12 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
+use loom_agent::{ClaudeBackend, PiBackend};
+use loom_core::agent::{AgentKind, ProtocolError, SessionOutcome, SpawnConfig};
 use loom_core::bd::{BdClient, ListOpts, UpdateOpts};
+use loom_core::config::{LoomConfig, Phase};
 use loom_core::identifier::{BeadId, SpecLabel};
 use loom_core::lock::LockManager;
 use loom_core::state::StateDb;
@@ -23,6 +26,8 @@ use loom_workflow::msg::{
 use loom_workflow::run::{
     Parallelism, ProductionAgentLoopController, RetryPolicy, RunMode, run_loop,
 };
+use loom_workflow::run_agent;
+use loom_workflow::todo::{ProductionTodoController, run as run_todo_workflow};
 use loom_workflow::{init, logs_cmd, plan, spec, status, use_spec};
 
 /// Top-level CLI surface.
@@ -33,8 +38,34 @@ struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     workspace: Option<PathBuf>,
 
+    /// Override the agent backend for this invocation. Wins over per-phase
+    /// `[agent.<phase>] backend = ...` and `[agent] default = ...` in
+    /// `.wrapix/loom/config.toml`. Accepts `claude` or `pi`; any other
+    /// value triggers a clap parse error.
+    #[arg(long, global = true, value_enum, value_name = "BACKEND")]
+    agent: Option<AgentBackendArg>,
+
     #[command(subcommand)]
     command: Command,
+}
+
+/// CLI surface for `--agent`. Maps one-to-one with [`AgentKind`] so the
+/// dispatcher does not need to re-parse strings — clap's value-enum
+/// validation owns the rejection of unknown names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "lowercase")]
+enum AgentBackendArg {
+    Claude,
+    Pi,
+}
+
+impl From<AgentBackendArg> for AgentKind {
+    fn from(arg: AgentBackendArg) -> Self {
+        match arg {
+            AgentBackendArg::Claude => AgentKind::Claude,
+            AgentBackendArg::Pi => AgentKind::Pi,
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -144,6 +175,8 @@ fn main() -> ExitCode {
             }
         });
 
+    let agent_override = cli.agent.map(AgentKind::from);
+
     let result = match cli.command {
         Command::Init { rebuild } => run_init(&workspace, rebuild),
         Command::Status => run_status(&workspace),
@@ -156,7 +189,7 @@ fn main() -> ExitCode {
             parallel,
             profile,
             spec,
-        } => run_run(&workspace, once, parallel, profile, spec),
+        } => run_run(&workspace, once, parallel, profile, spec, agent_override),
         Command::Check { spec } => run_check(&workspace, spec),
         Command::Msg {
             spec,
@@ -165,7 +198,7 @@ fn main() -> ExitCode {
             answer,
             dismiss,
         } => run_msg(&workspace, spec, index, id, answer, dismiss),
-        Command::Todo { spec, since } => run_todo(&workspace, spec, since),
+        Command::Todo { spec, since } => run_todo(&workspace, spec, since, agent_override),
     };
 
     match result {
@@ -271,19 +304,36 @@ fn run_run(
     parallel: Parallelism,
     _profile: Option<String>,
     spec: Option<String>,
+    agent_override: Option<AgentKind>,
 ) -> anyhow::Result<()> {
-    if !parallel.is_one() {
-        anyhow::bail!(
-            "loom run --parallel N (N > 1) is not yet wired in the binary; the parallel \
-             dispatcher lives in loom_workflow::run::parallel and lands with the agent backend"
-        );
-    }
     let label = resolve_spec_label(workspace, spec)?;
     let lock_mgr = LockManager::new(workspace)?;
     let _guard = lock_mgr.acquire_spec(&label)?;
 
+    let config = LoomConfig::load(workspace.join(".wrapix/loom/config.toml"))?;
+    // Resolve the per-phase backend up front so an unknown backend name in
+    // the config (or via `--agent` — clap covers the latter) fails before
+    // any work begins. The resolution itself is the wiring; the dispatch
+    // closure handed to the parallel batch driver below is what consumes it.
+    let _selection = resolved_agent_for(&config, agent_override, Phase::Run)?;
+
     let loom_bin = current_loom_bin()?;
     let runtime = tokio::runtime::Runtime::new()?;
+
+    if !parallel.is_one() {
+        let parallel_n = parallel.get();
+        let workspace_buf = workspace.to_path_buf();
+        let label_for_async = label.clone();
+        let summary = runtime.block_on(async move {
+            run_parallel_run(workspace_buf, label_for_async, parallel_n, agent_override).await
+        })?;
+        println!(
+            "loom run --parallel {parallel_n}: merged {}, conflicted {}, failed {}",
+            summary.merged, summary.conflicted, summary.failed,
+        );
+        return Ok(());
+    }
+
     let mode = if once {
         RunMode::Once
     } else {
@@ -307,6 +357,123 @@ fn run_run(
         summary.execed_check,
     );
     Ok(())
+}
+
+/// Aggregate counts surfaced from `loom run --parallel N` for the human
+/// summary line.
+struct ParallelRunSummary {
+    merged: usize,
+    conflicted: usize,
+    failed: usize,
+}
+
+async fn run_parallel_run(
+    workspace: PathBuf,
+    label: SpecLabel,
+    parallel_n: u32,
+    agent_override: Option<AgentKind>,
+) -> anyhow::Result<ParallelRunSummary> {
+    use loom_core::git::GitClient;
+    use loom_workflow::run::{AgentOutcome, run_parallel_batch};
+
+    let bd = BdClient::new();
+    let beads = bd
+        .ready(loom_core::bd::ReadyOpts {
+            limit: Some(parallel_n),
+            label: Some(format!("spec:{}", label.as_str())),
+        })
+        .await?;
+    if beads.is_empty() {
+        return Ok(ParallelRunSummary {
+            merged: 0,
+            conflicted: 0,
+            failed: 0,
+        });
+    }
+
+    let git = GitClient::open(workspace.clone())?;
+    let outcome = run_parallel_batch(&git, &label, beads, move |slot| {
+        let workspace_inner = workspace.clone();
+        async move {
+            match dispatch_for_slot(&workspace_inner, agent_override, slot).await {
+                Ok(_) => AgentOutcome::Success,
+                Err(e) => AgentOutcome::Failure {
+                    error: format!("{e}"),
+                },
+            }
+        }
+    })
+    .await?;
+
+    Ok(ParallelRunSummary {
+        merged: outcome.merged_ids().len(),
+        conflicted: outcome.conflict_ids().len(),
+        failed: outcome.failure_ids().len(),
+    })
+}
+
+/// One slot's dispatch: resolve the per-phase backend and drive a single
+/// agent session against the slot's worktree. Surfaces protocol failures
+/// and config-resolution failures uniformly so the caller can convert them
+/// into [`AgentOutcome::Failure`].
+async fn dispatch_for_slot(
+    workspace: &Path,
+    agent_override: Option<AgentKind>,
+    slot: loom_workflow::run::WorktreeBead,
+) -> anyhow::Result<SessionOutcome> {
+    use loom_core::agent::RePinContent;
+
+    let config = LoomConfig::load(workspace.join(".wrapix/loom/config.toml"))?;
+    let selection = resolved_agent_for(&config, agent_override, Phase::Run)?;
+
+    let spawn_config = SpawnConfig {
+        image: "wrapix-base:latest".to_string(),
+        workspace: slot.worktree.path.clone(),
+        env: vec![],
+        initial_prompt: format!("loom run: bead {}", slot.bead.id),
+        agent_args: vec![],
+        repin: RePinContent {
+            orientation: String::new(),
+            pinned_context: String::new(),
+            partial_bodies: vec![],
+        },
+        model: None,
+    };
+
+    Ok(dispatch(selection.kind, &spawn_config).await?)
+}
+
+/// Backend-agnostic dispatcher. The match is the only place in the binary
+/// that knows the concrete backend types — `run_agent` is monomorphized once
+/// per arm at compile time, so the workflow modules never see them.
+async fn dispatch(kind: AgentKind, spawn: &SpawnConfig) -> Result<SessionOutcome, ProtocolError> {
+    match kind {
+        AgentKind::Pi => run_agent::<PiBackend>(spawn).await,
+        AgentKind::Claude => run_agent::<ClaudeBackend>(spawn).await,
+    }
+}
+
+/// Resolve `phase`'s [`AgentKind`] honoring the global `--agent` override.
+/// CLI override wins over `[agent.<phase>] backend` and `[agent] default`.
+/// Returns the full [`AgentSelection`] so callers retain access to provider /
+/// model / claude_settings.
+fn resolved_agent_for(
+    config: &LoomConfig,
+    agent_override: Option<AgentKind>,
+    phase: Phase,
+) -> anyhow::Result<loom_core::config::AgentSelection> {
+    let mut selection = config.agent_for(phase)?;
+    if let Some(kind) = agent_override {
+        selection.kind = kind;
+        selection.claude_settings = match kind {
+            AgentKind::Claude => Some(loom_core::config::ClaudeSettings {
+                denied_tools: config.security.denied_tools.clone(),
+                post_result_grace_secs: config.claude.post_result_grace_secs,
+            }),
+            AgentKind::Pi => None,
+        };
+    }
+    Ok(selection)
 }
 
 fn run_check(workspace: &Path, spec: Option<String>) -> anyhow::Result<()> {
@@ -440,20 +607,38 @@ fn run_msg_inner(
 }
 
 fn run_todo(
-    _workspace: &Path,
-    _spec: Option<String>,
+    workspace: &Path,
+    spec: Option<String>,
     _since: Option<String>,
+    agent_override: Option<AgentKind>,
 ) -> anyhow::Result<()> {
-    // The todo runner depends on the agent backend (it spawns a wrapix
-    // container to run the spec-decomposition prompt) plus a typed GitClient
-    // wrapper that's already in loom-core. Wiring the dispatch here without
-    // the agent backend would only exercise the four-tier detection path,
-    // which is already covered by `compute_spec_diff`'s unit tests
-    // (loom-workflow::todo::tier::tests). Surface that gap explicitly.
-    anyhow::bail!(
-        "loom todo: the spec-decomposition agent is deferred until loom-agent lands; \
-         the four-tier detection logic is exercised in loom-workflow::todo::tier::tests"
-    )
+    let label = resolve_spec_label(workspace, spec)?;
+    let lock_mgr = LockManager::new(workspace)?;
+    let _guard = lock_mgr.acquire_spec(&label)?;
+
+    let config = LoomConfig::load(workspace.join(".wrapix/loom/config.toml"))?;
+    let selection = resolved_agent_for(&config, agent_override, Phase::Todo)?;
+
+    let runtime = tokio::runtime::Runtime::new()?;
+    let workspace_buf = workspace.to_path_buf();
+    let label_for_async = label.clone();
+    let kind = selection.kind;
+    let summary = runtime.block_on(async move {
+        let mut controller = ProductionTodoController::new(
+            label_for_async,
+            workspace_buf,
+            "wrapix-base:latest".to_string(),
+        );
+        run_todo_workflow(&mut controller, |spawn_cfg| async move {
+            dispatch(kind, &spawn_cfg).await
+        })
+        .await
+    })?;
+    println!(
+        "loom todo: agent exited {}, cost_usd={:?}",
+        summary.exit_code, summary.cost_usd
+    );
+    Ok(())
 }
 
 fn resolve_spec_label(workspace: &Path, spec: Option<String>) -> anyhow::Result<SpecLabel> {

@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use displaydoc::Display;
+use loom_core::agent::ProtocolError;
 use thiserror::Error;
 
 /// Errors raised by the `loom todo` driver.
@@ -27,4 +28,7 @@ pub enum TodoError {
 
     /// io operation failed
     Io(#[from] std::io::Error),
+
+    /// agent backend protocol failure
+    Protocol(#[from] ProtocolError),
 }

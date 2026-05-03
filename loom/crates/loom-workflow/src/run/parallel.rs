@@ -89,6 +89,36 @@ impl BatchOutcome {
     }
 }
 
+/// Drive one parallel batch end-to-end: create worktrees, spawn agents
+/// concurrently via `spawn`, then merge the finished branches back to the
+/// driver branch sequentially.
+///
+/// `spawn` is the per-slot dispatcher — typically a closure that resolves
+/// the per-phase backend through the binary's `dispatch` function and runs
+/// `wrapix run-bead --spawn-config <file> --stdio` inside it. The closure
+/// returns an [`AgentOutcome`] so this driver does not need to know which
+/// backend ran or whether `LOOM_COMPLETE` / `LOOM_BLOCKED` was the verdict;
+/// that translation lives one layer up.
+///
+/// On any [`GitError`](loom_core::git::GitError) during worktree creation or
+/// merge-back, the function returns immediately and the partial batch is
+/// surfaced through the error — slots already merged stay merged, slots not
+/// yet merged stay in the worktree and require manual intervention.
+pub async fn run_parallel_batch<S, F>(
+    git: &GitClient,
+    label: &SpecLabel,
+    beads: Vec<Bead>,
+    spawn: S,
+) -> Result<BatchOutcome, RunError>
+where
+    S: Fn(WorktreeBead) -> F + Send + Sync + 'static,
+    F: std::future::Future<Output = AgentOutcome> + Send + 'static,
+{
+    let slots = create_worktrees(git, label, beads).await?;
+    let batch_slots = run_concurrent_spawns(slots, spawn).await;
+    merge_back(git, batch_slots).await
+}
+
 /// Step 1 of a parallel batch: create one worktree per bead.
 ///
 /// Worktree creation goes through `git worktree add -b loom/<label>/<id>`

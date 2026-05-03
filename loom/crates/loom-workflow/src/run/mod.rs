@@ -42,7 +42,7 @@ pub use error::RunError;
 pub use outcome::{AgentOutcome, BeadResult};
 pub use parallel::{
     BatchOutcome, BatchResult, BatchSlot, WorktreeBead, create_worktrees, merge_back,
-    run_concurrent_spawns,
+    run_concurrent_spawns, run_parallel_batch,
 };
 pub use parallelism::{Parallelism, ParallelismError};
 pub use production::{ProductionAgentLoopController, STUB_AGENT_ERROR, list_open_for_spec};

@@ -1578,6 +1578,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "loom-agent",
  "loom-core",
  "loom-workflow",
  "tempfile",
