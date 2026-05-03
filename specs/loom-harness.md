@@ -79,7 +79,7 @@ defined in [ralph-loop.md](ralph-loop.md) and
    ralph behavior). Same model as `lib/ralph/cmd/run.sh` (`run_parallel_batch`).
 7. **Retry with context** — on worker failure, retries with previous error
    output injected into the prompt. Configurable max retries per bead
-   (default 2). After max retries, applies `ralph:clarify` label.
+   (default 2). After max retries, applies `loom:clarify` label.
 8. **Auto-check handoff** — in continuous `run` mode, invokes `check` when the
    molecule completes (same exec semantics as current bash).
 9. **Push gate** — `check` only pushes on clean completion (no new beads, no
@@ -518,7 +518,12 @@ Template variables (sourced from
   interpolation into a shell command. This prevents injection of shell
   metacharacters from agent-controlled content.
 - Uses `--json` flag where available
-- Parses output into typed structs (`Bead`, `Molecule`, `MolProgress`)
+- Parses output into typed structs (`Bead`, `Molecule`, `MolProgress`).
+  Bead labels deserialize into a `Label` newtype that pre-parses the
+  `spec:`/`profile:`/`loom:clarify`/`loom:active` prefix families once at
+  the boundary, so call sites read through typed accessors
+  (`spec_label()`, `profile_name()`, `is_clarify()`, `is_active()`)
+  rather than re-doing `strip_prefix` walks
 - Maps CLI errors to typed error variants
 - All subprocess calls have a 60-second timeout (configurable). Prevents
   unbounded hangs from a stuck `bd` process.
@@ -583,7 +588,7 @@ repopulates from three sources:
 
 1. Glob `specs/*.md` → one `specs` row per file (label from filename, path
    from disk). ~10-20 files.
-2. `bd list --status=open --label=ralph:active` → active molecules only
+2. `bd list --status=open --label=loom:active` → active molecules only
    (typically 0-3). For each, `bd mol progress <id>` → one `molecules` row.
 3. Each spec markdown is parsed for a canonical `## Companions` section
    (see *Companion declaration in specs* below); each listed path becomes
@@ -1012,8 +1017,8 @@ default = "claude"
 # backend = "claude"
 
 [claude]
-# Seconds to wait for clean exit after `result` before SIGTERM. Mirrors
-# ralph's RALPH_CLAUDE_POST_RESULT_GRACE.
+# Seconds to wait for clean exit after `result` before SIGTERM (claude
+# backend shutdown watchdog).
 post_result_grace_secs = 5
 
 [security]

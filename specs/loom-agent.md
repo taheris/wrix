@@ -233,7 +233,8 @@ impl AgentSession<Idle> {
         self,
         msg: &str,
     ) -> Result<AgentSession<Active>, ProtocolError> {
-        // Write prompt as NDJSON command to stdin, transition to Active
+        // Ask the parser to encode the prompt; write the resulting line to
+        // stdin and transition to Active.
     }
 }
 
@@ -250,15 +251,19 @@ impl AgentSession<Active> {
         &mut self,
         msg: &str,
     ) -> Result<(), ProtocolError> {
-        // Pi: NDJSON steer command. Claude: stream-json user message.
+        // Parser encodes the wire payload (pi: NDJSON `steer` command;
+        // claude: stream-json user message). Session writes it.
     }
 
     pub async fn abort(
         self,
     ) -> Result<AgentSession<Idle>, ProtocolError> {
-        // Pi: send abort command, return to Idle (session reusable).
-        // Claude: kill process, return to Idle (session is dead — prompt
-        //   will fail with ProcessExit).
+        // If parser returns Some(abort_line), write it to stdin and return
+        //   to Idle (pi: session reusable).
+        // If parser returns None, the session is left to backend-level
+        //   process cleanup (claude: SIGTERM/SIGKILL via the shutdown
+        //   watchdog); the typestate still returns to Idle but a follow-up
+        //   prompt will fail with ProcessExit.
     }
 }
 ```
@@ -277,13 +282,29 @@ pub struct ParsedLine {
 }
 
 pub trait LineParse: Send {
+    /// Parse one NDJSON line received from the agent's stdout.
     fn parse_line(&self, line: &str) -> Result<ParsedLine, ProtocolError>;
+
+    /// Encode the initial prompt that opens the session. Returned string is
+    /// written to stdin verbatim — implementors include the trailing `\n`.
+    fn encode_prompt(&self, msg: &str) -> Result<String, ProtocolError>;
+
+    /// Encode a mid-session steering message. Same framing rules as
+    /// `encode_prompt`.
+    fn encode_steer(&self, msg: &str) -> Result<String, ProtocolError>;
+
+    /// Encode an abort command, or `None` if the backend has no abort wire
+    /// command (claude is killed via signals instead).
+    fn encode_abort(&self) -> Result<Option<String>, ProtocolError>;
 }
 ```
 
 Each backend (in loom-agent) provides its own `LineParse` implementation:
-`PiParser` and `ClaudeParser`. `Box<dyn LineParse>` inside the session keeps
-`AgentSession` a single concrete type that both backends share. The per-line
+`PiParser` and `ClaudeParser`. The trait carries **both directions of the
+wire** — parsing what comes in on stdout *and* encoding what goes out on
+stdin. Keeping the encoders alongside `parse_line` is what lets
+`AgentSession` stay a single concrete generic-free type (`Box<dyn LineParse>`
+inside): the session owns the IO; the parser owns the framing. The per-line
 vtable call is negligible next to the IO cost of reading from a subprocess
 pipe. Static dispatch on `AgentBackend` (the outer layer) eliminates the
 `async-trait` dependency; internal dyn on `LineParse` (the inner layer) avoids
