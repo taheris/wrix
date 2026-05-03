@@ -136,4 +136,12 @@ impl<S> AgentSession<S> {
     pub fn child_mut(&mut self) -> &mut Child {
         &mut self.child
     }
+
+    /// Decompose the session into the underlying child process and stdin
+    /// writer. Used by the claude backend's shutdown watchdog after a
+    /// `result` event: it must drop the writer (closing the pipe so claude
+    /// observes EOF) then wait/signal the child.
+    pub fn into_parts(self) -> (Child, BufWriter<ChildStdin>) {
+        (self.child, self.stdin)
+    }
 }

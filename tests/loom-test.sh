@@ -1486,6 +1486,51 @@ test_claude_permission_autoapprove() {
 }
 
 #-----------------------------------------------------------------------------
+# test_claude_repin_files — `ClaudeBackend` writes `repin.sh` and
+# `claude-settings.json` under `<workspace>/.wrapix/loom/runtime/` plus the
+# serialized `SpawnConfig` JSON before the launcher exec. Covered by a unit
+# test in claude/backend.rs that exercises `prepare_runtime` against a
+# tempdir workspace.
+#-----------------------------------------------------------------------------
+test_claude_repin_files() {
+    cargo_run test -p loom-agent --quiet -- \
+        claude::backend::tests::prepare_runtime_writes_repin_files_and_spawn_config
+}
+
+#-----------------------------------------------------------------------------
+# test_claude_supports_steering — the driver writes a stream-json user
+# message on stdin during the session via `AgentSession::steer`; the mock
+# claude observes it and emits an additional assistant turn that echoes
+# the steered payload, proving the wire round-trip. Covered by a unit
+# test in claude/backend.rs that drives a bash mock under
+# tests/loom/mock-claude/.
+#-----------------------------------------------------------------------------
+test_claude_supports_steering() {
+    if [ ! -x "$REPO_ROOT/tests/loom/mock-claude/claude.sh" ]; then
+        echo "missing mock claude binary: tests/loom/mock-claude/claude.sh" >&2
+        return 1
+    fi
+    cargo_run test -p loom-agent --quiet -- \
+        claude::backend::tests::steering_message_reaches_mock_and_emits_followup_turn
+}
+
+#-----------------------------------------------------------------------------
+# test_claude_shutdown_watchdog — after a `result` event the driver closes
+# its end of stdin; if the agent ignores the close and SIGTERM, the
+# watchdog escalates to SIGKILL. The mock under tests/loom/mock-claude/
+# traps SIGTERM so the test exercises the full SIGTERM → SIGKILL path
+# with an overridden small grace window.
+#-----------------------------------------------------------------------------
+test_claude_shutdown_watchdog() {
+    if [ ! -x "$REPO_ROOT/tests/loom/mock-claude/claude.sh" ]; then
+        echo "missing mock claude binary: tests/loom/mock-claude/claude.sh" >&2
+        return 1
+    fi
+    cargo_run test -p loom-agent --quiet -- \
+        claude::backend::tests::shutdown_watchdog_escalates_to_sigkill_when_child_ignores_stdin_close
+}
+
+#-----------------------------------------------------------------------------
 # Dispatch
 #-----------------------------------------------------------------------------
 if [ $# -eq 0 ]; then
