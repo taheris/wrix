@@ -7,6 +7,7 @@
 
 pub mod agent;
 pub mod bd;
+pub mod config;
 pub mod git;
 pub mod identifier;
 pub mod lock;
