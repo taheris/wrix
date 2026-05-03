@@ -80,5 +80,7 @@ After creating all tasks:
 
 {% include "partial/exit_signals.md" %}
 
-- `RALPH_COMPLETE` - All tasks created, dependencies set, molecule created
-- `RALPH_BLOCKED: <reason>` - Cannot decompose spec (missing information, unclear requirements)
+- `LOOM_COMPLETE` — All tasks created, dependencies set, molecule created. No payload.
+- `LOOM_BLOCKED` — Cannot decompose spec (missing information, unclear
+  requirements). Write the reason **before** the marker on its own line(s);
+  emit `LOOM_BLOCKED` as the final line with nothing after it.

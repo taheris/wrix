@@ -23,7 +23,7 @@ pub enum CheckError {
     /// io operation failed
     Io(#[from] std::io::Error),
 
-    /// reviewer agent did not emit RALPH_COMPLETE: {0}
+    /// reviewer agent did not emit LOOM_COMPLETE: {0}
     ReviewIncomplete(String),
 
     /// `git push` failed: {0}

@@ -15,7 +15,7 @@ use loom_templates::plan::{PlanNewContext, PlanUpdateContext};
 use loom_templates::run::{PREVIOUS_FAILURE_MAX_LEN, PreviousFailure, RunContext};
 use loom_templates::todo::{TodoNewContext, TodoUpdateContext};
 
-const EXIT_SIGNALS_BODY: &str = "- `RALPH_COMPLETE`\n- `RALPH_BLOCKED:`\n- `RALPH_CLARIFY:`";
+const EXIT_SIGNALS_BODY: &str = "- `LOOM_COMPLETE`\n- `LOOM_BLOCKED`\n- `LOOM_CLARIFY`";
 const PINNED_CONTEXT_BODY: &str = "# Project Overview\n\nLoom drives Ralph's workflow.";
 
 #[test]
@@ -32,7 +32,7 @@ fn plan_new_renders_partials_and_inputs() -> Result<()> {
     assert!(out.contains(PINNED_CONTEXT_BODY));
     assert!(out.contains("Label: loom-harness"));
     assert!(out.contains("Spec file: specs/loom-harness.md"));
-    assert!(out.contains("RALPH_COMPLETE"));
+    assert!(out.contains("LOOM_COMPLETE"));
     assert!(out.contains("Implementation Notes Section"));
     assert!(out.contains("Interview Modes"));
     Ok(())
@@ -133,7 +133,7 @@ fn run_wraps_agent_supplied_fields_in_agent_output() -> Result<()> {
         spec_path: "specs/loom-harness.md".to_string(),
         companion_paths: vec!["lib/sandbox/".into()],
         molecule_id: Some(MoleculeId::new("wx-3hhwq")),
-        issue_id: Some(BeadId::new("wx-3hhwq.10")),
+        issue_id: Some(BeadId::new("wx-3hhwq.10")?),
         title: Some("port templates".into()),
         description: Some("Migrate Ralph templates to Askama.".into()),
         previous_failure: Some(PreviousFailure::new("error: cargo test failed".to_string())),
@@ -197,7 +197,7 @@ fn msg_renders_clarify_beads_with_options() -> Result<()> {
     let ctx = MsgContext {
         pinned_context: PINNED_CONTEXT_BODY.to_string(),
         clarify_beads: vec![ClarifyBead {
-            id: BeadId::new("wx-clar.1"),
+            id: BeadId::new("wx-clar.1")?,
             spec_label: SpecLabel::new("loom-harness"),
             title: "State storage choice".into(),
             options_summary: Some("State JSON vs. dedicated table".into()),
@@ -256,11 +256,11 @@ fn run_output_parity_with_ralph_for_shared_inputs() -> Result<()> {
         spec_path: "specs/demo.md".into(),
         companion_paths: vec!["lib/demo/".into()],
         molecule_id: Some(MoleculeId::new("wx-mol")),
-        issue_id: Some(BeadId::new("wx-mol.1")),
+        issue_id: Some(BeadId::new("wx-mol.1")?),
         title: Some("the title".into()),
         description: Some("the description".into()),
         previous_failure: None,
-        exit_signals: "- `RALPH_COMPLETE`".into(),
+        exit_signals: "- `LOOM_COMPLETE`".into(),
     };
     let out = ctx.render()?;
 

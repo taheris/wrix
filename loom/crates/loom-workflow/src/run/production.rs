@@ -85,7 +85,7 @@ impl AgentLoopController for ProductionAgentLoopController {
             .update(
                 bead,
                 UpdateOpts {
-                    add_labels: vec!["ralph:clarify".to_string()],
+                    add_labels: vec!["loom:clarify".to_string()],
                     ..UpdateOpts::default()
                 },
             )

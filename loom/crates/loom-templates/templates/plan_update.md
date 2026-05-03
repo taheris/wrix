@@ -38,7 +38,7 @@ Read the existing spec at `{{ spec_path }}` for full context before refining.
    `specs/{{ label }}.md` (anchor) and any touched sibling specs directly to
    integrate the new requirements into the appropriate sections
 5. Commit the anchor and every touched sibling spec at end of session
-6. Output RALPH_COMPLETE when the user confirms
+6. Output LOOM_COMPLETE when the user confirms
 
 {% include "partial/invariant_clash.md" %}
 
@@ -71,6 +71,10 @@ When updating the spec, use the Edit tool to modify `specs/{{ label }}.md`
 
 {% include "partial/exit_signals.md" %}
 
-- `RALPH_COMPLETE` - Spec updated and committed
-- `RALPH_BLOCKED: <reason>` - Cannot proceed without additional information
-- `RALPH_CLARIFY: <question>` - Need clarification on something specific
+- `LOOM_COMPLETE` — Spec updated and committed. No payload.
+- `LOOM_BLOCKED` — Cannot proceed without more information. Write the reason
+  **before** the marker on its own line(s); emit `LOOM_BLOCKED` as the final
+  line with nothing after it.
+- `LOOM_CLARIFY` — Need clarification on something specific. Write the
+  question **before** the marker on its own line(s); emit `LOOM_CLARIFY` as
+  the final line with nothing after it.

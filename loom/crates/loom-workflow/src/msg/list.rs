@@ -19,7 +19,7 @@ pub struct ClarifyRow {
     pub summary: String,
 }
 
-/// Filter beads to those still labelled `ralph:clarify`. The spec filter,
+/// Filter beads to those still labelled `loom:clarify`. The spec filter,
 /// when supplied, restricts the result to beads carrying `spec:<label>`.
 /// Order is preserved from the input slice (the caller sorts by creation
 /// time before calling).
@@ -84,7 +84,7 @@ mod tests {
 
     fn bead(id: &str, title: &str, desc: &str, labels: &[&str]) -> Bead {
         Bead {
-            id: BeadId::new(id),
+            id: BeadId::new(id).expect("valid bead id"),
             title: title.into(),
             description: desc.into(),
             status: "open".into(),
@@ -102,31 +102,31 @@ mod tests {
                 "wx-2",
                 "with clarify",
                 "",
-                &["spec:loom-harness", "ralph:clarify"],
+                &["spec:loom-harness", "loom:clarify"],
             ),
             bead(
                 "wx-3",
                 "other spec clarify",
                 "",
-                &["spec:profiles", "ralph:clarify"],
+                &["spec:profiles", "loom:clarify"],
             ),
         ];
         let kept = filter_clarifies(&beads, None);
         assert_eq!(kept.len(), 2);
-        assert_eq!(kept[0].id, BeadId::new("wx-2"));
-        assert_eq!(kept[1].id, BeadId::new("wx-3"));
+        assert_eq!(kept[0].id, BeadId::new("wx-2").expect("valid"));
+        assert_eq!(kept[1].id, BeadId::new("wx-3").expect("valid"));
     }
 
     #[test]
     fn filter_with_spec_label_keeps_only_matching() {
         let beads = vec![
-            bead("wx-2", "loom", "", &["spec:loom-harness", "ralph:clarify"]),
-            bead("wx-3", "profiles", "", &["spec:profiles", "ralph:clarify"]),
+            bead("wx-2", "loom", "", &["spec:loom-harness", "loom:clarify"]),
+            bead("wx-3", "profiles", "", &["spec:profiles", "loom:clarify"]),
         ];
         let label = SpecLabel::new("loom-harness");
         let kept = filter_clarifies(&beads, Some(&label));
         assert_eq!(kept.len(), 1);
-        assert_eq!(kept[0].id, BeadId::new("wx-2"));
+        assert_eq!(kept[0].id, BeadId::new("wx-2").expect("valid"));
     }
 
     #[test]
@@ -135,7 +135,7 @@ mod tests {
             "wx-2",
             "title",
             "",
-            &["spec:loom-harness", "ralph:clarify"],
+            &["spec:loom-harness", "loom:clarify"],
         )];
         let label = SpecLabel::new("loom-harness");
         let kept = filter_clarifies(&beads, Some(&label));
@@ -151,7 +151,7 @@ mod tests {
             "wx-2",
             "title",
             "",
-            &["spec:loom-harness", "ralph:clarify"],
+            &["spec:loom-harness", "loom:clarify"],
         )];
         let kept = filter_clarifies(&beads, None);
         let rows = build_rows(&kept, None);
@@ -161,7 +161,7 @@ mod tests {
     #[test]
     fn summary_prefers_options_header_over_title() {
         let desc = "## Options — chosen summary\n\n### Option 1 — t\nbody\n";
-        let beads = vec![bead("wx-2", "fallback title", desc, &["ralph:clarify"])];
+        let beads = vec![bead("wx-2", "fallback title", desc, &["loom:clarify"])];
         let kept = filter_clarifies(&beads, None);
         let rows = build_rows(&kept, None);
         assert_eq!(rows[0].summary, "chosen summary");
@@ -173,7 +173,7 @@ mod tests {
             "wx-2",
             "the title",
             "no options here",
-            &["ralph:clarify"],
+            &["loom:clarify"],
         )];
         let kept = filter_clarifies(&beads, None);
         let rows = build_rows(&kept, None);
@@ -182,7 +182,7 @@ mod tests {
 
     #[test]
     fn missing_spec_label_renders_em_dash_in_cross_spec_view() {
-        let beads = vec![bead("wx-2", "t", "", &["ralph:clarify"])];
+        let beads = vec![bead("wx-2", "t", "", &["loom:clarify"])];
         let kept = filter_clarifies(&beads, None);
         let rows = build_rows(&kept, None);
         assert_eq!(rows[0].spec.as_deref(), Some("—"));

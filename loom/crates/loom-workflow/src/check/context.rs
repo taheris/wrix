@@ -59,7 +59,7 @@ mod tests {
 
     fn b(id: &str, title: &str, status: &str) -> Bead {
         Bead {
-            id: BeadId::new(id),
+            id: BeadId::new(id).expect("valid bead id"),
             title: title.into(),
             description: String::new(),
             status: status.into(),

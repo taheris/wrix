@@ -225,7 +225,7 @@ fn run_use(workspace: &std::path::Path, label: &str) -> anyhow::Result<()> {
 
 fn run_logs(workspace: &std::path::Path, bead: Option<&str>) -> anyhow::Result<()> {
     let logs_root = workspace.join(".wrapix/loom/logs");
-    let bead_id = bead.map(BeadId::new);
+    let bead_id = bead.map(BeadId::new).transpose()?;
     let path = logs_cmd::select_log(
         &logs_root,
         logs_cmd::LogsOpts {
@@ -360,7 +360,7 @@ fn run_msg_inner(
         let bd = BdClient::new();
         bd.list(ListOpts {
             status: None,
-            label: Some("ralph:clarify".to_string()),
+            label: Some("loom:clarify".to_string()),
         })
         .await
     })?;
@@ -404,7 +404,7 @@ fn run_msg_inner(
             bd.update(
                 &id_clone,
                 UpdateOpts {
-                    remove_labels: vec!["ralph:clarify".to_string()],
+                    remove_labels: vec!["loom:clarify".to_string()],
                     ..UpdateOpts::default()
                 },
             )
@@ -425,7 +425,7 @@ fn run_msg_inner(
             bd.update(
                 &id_clone,
                 UpdateOpts {
-                    remove_labels: vec!["ralph:clarify".to_string()],
+                    remove_labels: vec!["loom:clarify".to_string()],
                     ..UpdateOpts::default()
                 },
             )

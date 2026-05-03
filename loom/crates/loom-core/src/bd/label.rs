@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::identifier::{ProfileName, SpecLabel};
 
 /// One bead label. Wraps the raw `bd` string so the prefix families
-/// (`spec:<X>`, `profile:<X>`, `ralph:<X>`) parse exactly once at
+/// (`spec:<X>`, `profile:<X>`, `loom:<X>`) parse exactly once at
 /// deserialization time and call sites read through typed accessors instead
 /// of re-doing `strip_prefix` walks.
 ///
@@ -15,8 +15,8 @@ pub struct Label(String);
 
 const SPEC_PREFIX: &str = "spec:";
 const PROFILE_PREFIX: &str = "profile:";
-const CLARIFY: &str = "ralph:clarify";
-const ACTIVE: &str = "ralph:active";
+const CLARIFY: &str = "loom:clarify";
+const ACTIVE: &str = "loom:active";
 
 impl Label {
     pub fn new(s: impl Into<String>) -> Self {
@@ -37,12 +37,12 @@ impl Label {
         self.0.strip_prefix(PROFILE_PREFIX).map(ProfileName::new)
     }
 
-    /// `true` when the label is exactly `ralph:clarify`.
+    /// `true` when the label is exactly `loom:clarify`.
     pub fn is_clarify(&self) -> bool {
         self.0 == CLARIFY
     }
 
-    /// `true` when the label is exactly `ralph:active`.
+    /// `true` when the label is exactly `loom:active`.
     pub fn is_active(&self) -> bool {
         self.0 == ACTIVE
     }
@@ -77,12 +77,12 @@ mod tests {
     }
 
     #[test]
-    fn ralph_clarify_and_active_are_exact_match() {
-        assert!(Label::new("ralph:clarify").is_clarify());
-        assert!(Label::new("ralph:active").is_active());
-        assert!(!Label::new("ralph:clarify-soon").is_clarify());
-        assert!(!Label::new("ralph:active-tomorrow").is_active());
-        assert!(!Label::new("ralph:clarify").is_active());
+    fn loom_clarify_and_active_are_exact_match() {
+        assert!(Label::new("loom:clarify").is_clarify());
+        assert!(Label::new("loom:active").is_active());
+        assert!(!Label::new("loom:clarify-soon").is_clarify());
+        assert!(!Label::new("loom:active-tomorrow").is_active());
+        assert!(!Label::new("loom:clarify").is_active());
     }
 
     #[test]

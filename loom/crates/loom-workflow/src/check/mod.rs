@@ -14,7 +14,7 @@
 //! 3. snapshots beads again, computes new bead IDs and clarify membership;
 //! 4. branches: clean → `git push` + `beads-push`; clarify → stop;
 //!    fix-up + under cap → `exec loom run`; fix-up + at cap → escalate the
-//!    newest fix-up bead to `ralph:clarify`.
+//!    newest fix-up bead to `loom:clarify`.
 //!
 //! `loom run`'s auto-check handoff (`exec_check` in [`super::run`]) is
 //! wired by the binary to invoke this module.

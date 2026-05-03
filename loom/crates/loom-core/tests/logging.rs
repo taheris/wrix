@@ -56,7 +56,7 @@ fn open_sink(
     parallel: bool,
 ) -> Result<(LogSink, Arc<Mutex<Vec<u8>>>)> {
     let label = SpecLabel::new(spec);
-    let id = BeadId::new(bead);
+    let id = BeadId::new(bead)?;
     let (buf, sink) = captured();
     let renderer = TerminalRenderer::new(sink, mode, id.clone(), parallel, false);
     let when = SystemTime::UNIX_EPOCH + Duration::from_secs(when_secs);

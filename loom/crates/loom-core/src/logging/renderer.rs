@@ -300,7 +300,7 @@ mod tests {
                 inner: cell_for_writer,
             },
             mode,
-            BeadId::new("wx-1"),
+            BeadId::new("wx-1").expect("valid bead id"),
             parallel,
             color,
         );

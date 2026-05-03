@@ -441,41 +441,29 @@ everywhere downstream. No internal function re-checks or re-parses.
 6. **CLI output parsing** — `bd --json` output deserializes into typed structs
    (`Bead`, `Molecule`).
 
-**Newtype ID macro:**
+**Newtype IDs:**
+
+Each identifier in `loom-core::identifier` is hand-written (no shared macro)
+so per-type parse rules can be enforced at construction. The shape:
 
 ```rust
-macro_rules! newtype_id {
-    ($name:ident) => {
-        #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-        #[serde(transparent)]
-        pub struct $name(String);
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct $Name(String);
 
-        impl $name {
-            pub fn new(s: impl Into<String>) -> Self {
-                Self(s.into())
-            }
-
-            pub fn as_str(&self) -> &str {
-                &self.0
-            }
-        }
-
-        impl std::fmt::Display for $name {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str(&self.0)
-            }
-        }
-    };
+impl $Name {
+    pub fn as_str(&self) -> &str { &self.0 }
 }
 
-newtype_id!(BeadId);
-newtype_id!(SessionId);
-newtype_id!(ToolCallId);
-newtype_id!(RequestId);
-newtype_id!(SpecLabel);
-newtype_id!(MoleculeId);
-newtype_id!(ProfileName);
+impl std::fmt::Display for $Name { /* writes self.0 */ }
 ```
+
+`BeadId` additionally validates the canonical
+`<prefix>-<base32>(.<digits>)?` shape at every construction path: `new`
+returns `Result<Self, ParseBeadIdError>`, and `Deserialize` is hand-written
+to reject malformed input rather than constructing an invalid wrapper.
+Other newtypes (`SessionId`, `ToolCallId`, `RequestId`, `SpecLabel`,
+`MoleculeId`, `ProfileName`) keep a permissive `new(impl Into<String>)`.
 
 `#[serde(transparent)]` means the newtype serializes as a plain string — no
 wrapper object. `derive(From)` and `derive(Into)` are banned (NF-8) to prevent
@@ -1007,9 +995,9 @@ max_reviews = 2
 retention_days = 14
 
 [exit_signals]
-complete = "RALPH_COMPLETE"
-blocked = "RALPH_BLOCKED:"
-clarify = "RALPH_CLARIFY:"
+complete = "LOOM_COMPLETE"
+blocked = "LOOM_BLOCKED"
+clarify = "LOOM_CLARIFY"
 
 [agent]
 default = "claude"

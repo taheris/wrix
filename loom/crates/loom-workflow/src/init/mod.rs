@@ -6,7 +6,7 @@
 //! and repopulates it from `specs/*.md` plus a caller-supplied slice of
 //! active molecules.
 //!
-//! Subprocess work (calling `bd list --status=open --label=ralph:active`
+//! Subprocess work (calling `bd list --status=open --label=loom:active`
 //! to enumerate active molecules) is split out into
 //! [`fetch_active_molecules`] so the core init function stays sync and
 //! unit-testable without a real `bd` binary.
@@ -28,7 +28,7 @@ pub use error::InitError;
 /// a file that round-trips through `LoomConfig::default()`.
 pub const DEFAULT_CONFIG_TOML: &str = include_str!("default-config.toml");
 
-const ACTIVE_LABEL: &str = "ralph:active";
+const ACTIVE_LABEL: &str = "loom:active";
 
 /// Options accepted by [`run`].
 #[derive(Debug, Clone, Copy, Default)]
@@ -96,7 +96,7 @@ pub fn run(
     })
 }
 
-/// Enumerate active molecules via `bd list --status=open --label=ralph:active`.
+/// Enumerate active molecules via `bd list --status=open --label=loom:active`.
 /// Each returned bead's `spec:<label>` label resolves the [`SpecLabel`] for
 /// the rebuilt row; beads without a `spec:` label produce
 /// [`InitError::MissingSpecLabel`].

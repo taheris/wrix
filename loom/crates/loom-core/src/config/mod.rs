@@ -103,9 +103,9 @@ max_reviews = 2
 retention_days = 14
 
 [exit_signals]
-complete = "RALPH_COMPLETE"
-blocked = "RALPH_BLOCKED:"
-clarify = "RALPH_CLARIFY:"
+complete = "LOOM_COMPLETE"
+blocked = "LOOM_BLOCKED"
+clarify = "LOOM_CLARIFY"
 
 [agent]
 default = "claude"

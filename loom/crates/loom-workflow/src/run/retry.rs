@@ -18,7 +18,7 @@ impl Default for RetryPolicy {
 pub enum RetryDecision {
     /// Retry the bead with `previous_failure` injected into the next prompt.
     Retry { previous_failure: String },
-    /// Out of retries — apply `ralph:clarify` and stop processing this bead.
+    /// Out of retries — apply `loom:clarify` and stop processing this bead.
     GiveUp,
 }
 

@@ -113,5 +113,7 @@ planned as its own anchor in a future `loom plan -u <sibling>` session.
 
 {% include "partial/exit_signals.md" %}
 
-- `RALPH_COMPLETE` - New tasks created and dependencies set
-- `RALPH_BLOCKED: <reason>` - Cannot proceed (molecule not found, unclear requirements)
+- `LOOM_COMPLETE` — New tasks created and dependencies set. No payload.
+- `LOOM_BLOCKED` — Cannot proceed (molecule not found, unclear requirements).
+  Write the reason **before** the marker on its own line(s); emit
+  `LOOM_BLOCKED` as the final line with nothing after it.

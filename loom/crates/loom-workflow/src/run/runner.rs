@@ -20,7 +20,7 @@ pub enum RunMode {
 pub struct RunSummary {
     /// Beads that ran to a terminal state (closed or clarified).
     pub beads_processed: u32,
-    /// Beads that exhausted retries and got the `ralph:clarify` label.
+    /// Beads that exhausted retries and got the `loom:clarify` label.
     pub beads_clarified: u32,
     /// `bd ready` returned no candidate, signalling the molecule is complete.
     pub molecule_complete: bool,
@@ -38,7 +38,7 @@ pub struct RunSummary {
 /// - `run_bead` → render template, build SpawnConfig, drive `AgentBackend`,
 ///   tee `AgentEvent` stream into `LogSink`, parse exit signal
 /// - `close_bead` → `BdClient::close`
-/// - `apply_clarify` → `BdClient::update --add-label ralph:clarify`
+/// - `apply_clarify` → `BdClient::update --add-label loom:clarify`
 /// - `exec_check` → `tokio::process::Command::new("loom").arg("check")…`
 pub trait AgentLoopController: Send {
     /// Pull the next ready bead. Returns `None` when the molecule is done.
@@ -60,7 +60,7 @@ pub trait AgentLoopController: Send {
         bead: &BeadId,
     ) -> impl std::future::Future<Output = Result<(), RunError>> + Send;
 
-    /// Add the `ralph:clarify` label after retries are exhausted.
+    /// Add the `loom:clarify` label after retries are exhausted.
     fn apply_clarify(
         &mut self,
         bead: &BeadId,
@@ -201,7 +201,7 @@ mod tests {
 
     fn bead(id: &str, labels: &[&str]) -> Bead {
         Bead {
-            id: BeadId::new(id),
+            id: BeadId::new(id).expect("valid bead id"),
             title: format!("title for {id}"),
             description: "desc".into(),
             status: "open".into(),
@@ -221,7 +221,7 @@ mod tests {
         let summary = run_loop(&mut c, RunMode::Once, RetryPolicy::default()).await?;
 
         assert_eq!(summary.beads_processed, 1);
-        assert_eq!(c.closed, vec![BeadId::new("wx-1")]);
+        assert_eq!(c.closed, vec![BeadId::new("wx-1").expect("valid")]);
         assert_eq!(c.run_calls.len(), 1);
         assert!(c.clarified.is_empty());
         assert_eq!(c.check_calls, 0, "once mode never execs check");
@@ -246,9 +246,9 @@ mod tests {
         assert_eq!(
             c.closed,
             vec![
-                BeadId::new("wx-1"),
-                BeadId::new("wx-2"),
-                BeadId::new("wx-3"),
+                BeadId::new("wx-1").expect("valid"),
+                BeadId::new("wx-2").expect("valid"),
+                BeadId::new("wx-3").expect("valid"),
             ]
         );
         assert!(summary.molecule_complete);
@@ -299,7 +299,7 @@ mod tests {
         assert_eq!(c.run_calls[2].1.as_deref(), Some("err-1"));
 
         assert!(c.closed.is_empty());
-        assert_eq!(c.clarified, vec![BeadId::new("wx-1")]);
+        assert_eq!(c.clarified, vec![BeadId::new("wx-1").expect("valid")]);
         assert_eq!(summary.beads_clarified, 1);
         Ok(())
     }
@@ -317,7 +317,7 @@ mod tests {
 
         assert_eq!(c.run_calls.len(), 2);
         assert_eq!(c.run_calls[1].1.as_deref(), Some("boom"));
-        assert_eq!(c.closed, vec![BeadId::new("wx-1")]);
+        assert_eq!(c.closed, vec![BeadId::new("wx-1").expect("valid")]);
         assert!(c.clarified.is_empty());
         assert_eq!(summary.beads_clarified, 0);
         Ok(())

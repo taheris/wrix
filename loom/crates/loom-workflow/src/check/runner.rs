@@ -13,13 +13,13 @@ use super::verdict::{CheckVerdict, diff_new_bead_ids};
 /// the methods to:
 ///
 /// - `pre_snapshot` / `post_snapshot` → `BdClient::list { label: "spec:<L>" }`
-/// - `clarify_ids` → filter the same list for `ralph:clarify`
+/// - `clarify_ids` → filter the same list for `loom:clarify`
 /// - `run_review` → render check.md, build SpawnConfig, drive
 ///   `AgentBackend`, tee the event stream into the log sink, parse the
 ///   exit signal
 /// - `iteration_count` / `set_iteration_count` / `reset_iteration_count` →
 ///   the `iteration_count` column in `loom-core`'s state DB
-/// - `apply_clarify` → `BdClient::update --add-label ralph:clarify`
+/// - `apply_clarify` → `BdClient::update --add-label loom:clarify`
 /// - `git_push` / `beads_push` → `tokio::process::Command` shell-outs
 /// - `exec_run` → `tokio::process::Command::new("loom").arg("run")…`
 pub trait CheckController: Send {
@@ -53,7 +53,7 @@ pub trait CheckController: Send {
         &mut self,
     ) -> impl std::future::Future<Output = Result<(), CheckError>> + Send;
 
-    /// Add the `ralph:clarify` label to a fix-up bead with the cap-reached
+    /// Add the `loom:clarify` label to a fix-up bead with the cap-reached
     /// note in its update.
     fn apply_clarify(
         &mut self,
@@ -80,11 +80,11 @@ pub trait CheckController: Send {
 /// `Complete`; anything else aborts the gate before the post-snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReviewOutcome {
-    /// `RALPH_COMPLETE` observed; the reviewer finished cleanly.
+    /// `LOOM_COMPLETE` observed; the reviewer finished cleanly.
     Complete,
 
-    /// Agent terminated without `RALPH_COMPLETE` (crashed, hit budget,
-    /// emitted `RALPH_BLOCKED`/`RALPH_CLARIFY`). String body is surfaced
+    /// Agent terminated without `LOOM_COMPLETE` (crashed, hit budget,
+    /// emitted `LOOM_BLOCKED`/`LOOM_CLARIFY`). String body is surfaced
     /// in the [`CheckError::ReviewIncomplete`] variant.
     Incomplete { detail: String },
 }
@@ -105,7 +105,7 @@ pub enum CheckResult {
     /// continue testing under a fake.
     AutoIterated { next_iteration: u32 },
 
-    /// Iteration cap reached; newest fix-up bead got `ralph:clarify`.
+    /// Iteration cap reached; newest fix-up bead got `loom:clarify`.
     Escalated { escalate_id: BeadId, cap: u32 },
 }
 
@@ -156,19 +156,15 @@ async fn decide_verdict<C: CheckController>(
         });
     }
 
-    if new_ids.is_empty() {
+    let Some(newest) = new_ids.last() else {
         return Ok(CheckVerdict::Clean);
-    }
+    };
 
     let current = controller.iteration_count().await?;
     if cap.is_exhausted(current) {
-        let escalate_id = new_ids
-            .last()
-            .cloned()
-            .unwrap_or_else(|| BeadId::new("(unknown)"));
         return Ok(CheckVerdict::IterationCap {
             new_bead_ids: new_ids.to_vec(),
-            escalate_id,
+            escalate_id: newest.clone(),
             cap: cap.max,
         });
     }
@@ -288,7 +284,7 @@ mod tests {
 
     fn bead(id: &str, labels: &[&str]) -> Bead {
         Bead {
-            id: BeadId::new(id),
+            id: BeadId::new(id).expect("valid bead id"),
             title: format!("title for {id}"),
             description: String::new(),
             status: "open".into(),
@@ -322,7 +318,7 @@ mod tests {
             pre_beads: vec![bead("wx-1", &["spec:loom-harness"])],
             post_beads: vec![
                 bead("wx-1", &["spec:loom-harness"]),
-                bead("wx-2", &["spec:loom-harness", "ralph:clarify"]),
+                bead("wx-2", &["spec:loom-harness", "loom:clarify"]),
             ],
             ..FakeController::default()
         };
@@ -330,7 +326,7 @@ mod tests {
         let result = check_loop(&mut c, IterationCap::default()).await?;
         match result {
             CheckResult::Clarified { clarify_ids } => {
-                assert_eq!(clarify_ids, vec![BeadId::new("wx-2")]);
+                assert_eq!(clarify_ids, vec![BeadId::new("wx-2").expect("valid")]);
             }
             other => panic!("expected Clarified, got {other:?}"),
         }
@@ -343,8 +339,8 @@ mod tests {
     #[tokio::test]
     async fn pre_existing_clarify_blocks_push_even_when_no_new_beads() -> Result<(), CheckError> {
         let mut c = FakeController {
-            pre_beads: vec![bead("wx-1", &["spec:loom-harness", "ralph:clarify"])],
-            post_beads: vec![bead("wx-1", &["spec:loom-harness", "ralph:clarify"])],
+            pre_beads: vec![bead("wx-1", &["spec:loom-harness", "loom:clarify"])],
+            post_beads: vec![bead("wx-1", &["spec:loom-harness", "loom:clarify"])],
             ..FakeController::default()
         };
 
@@ -396,13 +392,20 @@ mod tests {
         let result = check_loop(&mut c, IterationCap::new(3)).await?;
         match result {
             CheckResult::Escalated { escalate_id, cap } => {
-                assert_eq!(escalate_id, BeadId::new("wx-3"), "newest fix-up");
+                assert_eq!(
+                    escalate_id,
+                    BeadId::new("wx-3").expect("valid"),
+                    "newest fix-up"
+                );
                 assert_eq!(cap, 3);
             }
             other => panic!("expected Escalated, got {other:?}"),
         }
         assert_eq!(c.apply_clarify_calls.len(), 1);
-        assert_eq!(c.apply_clarify_calls[0].0, BeadId::new("wx-3"));
+        assert_eq!(
+            c.apply_clarify_calls[0].0,
+            BeadId::new("wx-3").expect("valid")
+        );
         assert!(
             c.apply_clarify_calls[0].1.contains("Iteration cap"),
             "reason names the cap"

@@ -10,14 +10,14 @@ pub enum ExitSignal {
     /// without advancing state.
     Blocked { reason: String },
 
-    /// Agent needs human input; the driver applies the `ralph:clarify`
+    /// Agent needs human input; the driver applies the `loom:clarify`
     /// label and bails.
     Clarify { question: String },
 }
 
-const COMPLETE: &str = "RALPH_COMPLETE";
-const BLOCKED: &str = "RALPH_BLOCKED:";
-const CLARIFY: &str = "RALPH_CLARIFY:";
+const COMPLETE: &str = "LOOM_COMPLETE";
+const BLOCKED: &str = "LOOM_BLOCKED";
+const CLARIFY: &str = "LOOM_CLARIFY";
 
 /// Scan the agent's combined output (or the `result` field of the final
 /// stream-json line) for an exit signal.
@@ -27,23 +27,26 @@ const CLARIFY: &str = "RALPH_CLARIFY:";
 /// `None` means no signal was found and the caller should surface
 /// [`super::TodoError::MissingExitSignal`].
 ///
-/// The matchers are token-based, not exact-line: an agent that prints
-/// `Final result: RALPH_BLOCKED: missing schema` is treated the same way as
-/// a bare `RALPH_BLOCKED: missing schema` line. Reason text starts at the
-/// first non-space byte after the marker and runs to end-of-line.
+/// `LOOM_BLOCKED` and `LOOM_CLARIFY` are bare markers — no trailing colon,
+/// no trailing payload. The reason / question is read from the text
+/// **before** the marker:
+///
+/// 1. If the marker is preceded by non-whitespace text on the same line
+///    (e.g. `Final result: missing schema LOOM_BLOCKED`), that text is the
+///    reason.
+/// 2. Otherwise, the most recent non-empty line before the marker line is
+///    the reason.
+/// 3. If neither exists, the reason is empty.
 pub fn parse_exit_signal(output: &str) -> Option<ExitSignal> {
+    let lines: Vec<&str> = output.lines().collect();
     let mut last: Option<ExitSignal> = None;
-    for line in output.lines() {
-        if let Some(reason) = find_after(line, BLOCKED) {
-            last = Some(ExitSignal::Blocked {
-                reason: reason.to_string(),
-            });
+    for (i, line) in lines.iter().enumerate() {
+        if let Some(reason) = reason_for(BLOCKED, line, &lines[..i]) {
+            last = Some(ExitSignal::Blocked { reason });
             continue;
         }
-        if let Some(question) = find_after(line, CLARIFY) {
-            last = Some(ExitSignal::Clarify {
-                question: question.to_string(),
-            });
+        if let Some(question) = reason_for(CLARIFY, line, &lines[..i]) {
+            last = Some(ExitSignal::Clarify { question });
             continue;
         }
         if line.contains(COMPLETE) {
@@ -53,10 +56,19 @@ pub fn parse_exit_signal(output: &str) -> Option<ExitSignal> {
     last
 }
 
-fn find_after<'a>(line: &'a str, marker: &str) -> Option<&'a str> {
+fn reason_for(marker: &str, line: &str, prior: &[&str]) -> Option<String> {
     let idx = line.find(marker)?;
-    let tail = &line[idx + marker.len()..];
-    Some(tail.trim())
+    let same_line = line[..idx].trim();
+    if !same_line.is_empty() {
+        return Some(same_line.to_string());
+    }
+    for prev in prior.iter().rev() {
+        let trimmed = prev.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    Some(String::new())
 }
 
 #[cfg(test)]
@@ -67,14 +79,14 @@ mod tests {
     #[test]
     fn complete_on_bare_marker() {
         assert_eq!(
-            parse_exit_signal("ok\nRALPH_COMPLETE\n"),
+            parse_exit_signal("ok\nLOOM_COMPLETE\n"),
             Some(ExitSignal::Complete)
         );
     }
 
     #[test]
-    fn blocked_carries_reason_after_marker() {
-        let out = "doing things\nRALPH_BLOCKED: spec is missing the requirements section\n";
+    fn blocked_carries_reason_from_prior_line() {
+        let out = "doing things\nspec is missing the requirements section\nLOOM_BLOCKED\n";
         match parse_exit_signal(out) {
             Some(ExitSignal::Blocked { reason }) => {
                 assert_eq!(reason, "spec is missing the requirements section");
@@ -84,8 +96,8 @@ mod tests {
     }
 
     #[test]
-    fn clarify_carries_question() {
-        let out = "RALPH_CLARIFY: should the migration be additive only?";
+    fn clarify_carries_question_from_prior_line() {
+        let out = "should the migration be additive only?\nLOOM_CLARIFY";
         match parse_exit_signal(out) {
             Some(ExitSignal::Clarify { question }) => {
                 assert_eq!(question, "should the migration be additive only?");
@@ -105,16 +117,36 @@ mod tests {
     #[test]
     fn last_match_wins_when_multiple_present() {
         // Agent first declares blocked, then changes its mind and finishes.
-        let out = "RALPH_BLOCKED: tentative\nactually nevermind\nRALPH_COMPLETE";
+        let out = "tentative\nLOOM_BLOCKED\nactually nevermind\nLOOM_COMPLETE";
         assert_eq!(parse_exit_signal(out), Some(ExitSignal::Complete));
     }
 
     #[test]
     fn marker_recognized_inside_a_longer_line() {
-        let out = "Final result: RALPH_BLOCKED: missing schema\n";
+        let out = "Final result: missing schema LOOM_BLOCKED\n";
         match parse_exit_signal(out) {
-            Some(ExitSignal::Blocked { reason }) => assert_eq!(reason, "missing schema"),
+            Some(ExitSignal::Blocked { reason }) => {
+                assert_eq!(reason, "Final result: missing schema");
+            }
             other => panic!("expected Blocked, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn blank_lines_between_reason_and_marker_are_skipped() {
+        let out = "the actual reason\n\n\nLOOM_BLOCKED\n";
+        match parse_exit_signal(out) {
+            Some(ExitSignal::Blocked { reason }) => assert_eq!(reason, "the actual reason"),
+            other => panic!("expected Blocked, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn marker_at_start_with_no_prior_lines_yields_empty_reason() {
+        let out = "LOOM_BLOCKED";
+        match parse_exit_signal(out) {
+            Some(ExitSignal::Blocked { reason }) => assert!(reason.is_empty()),
+            other => panic!("expected Blocked with empty reason, got {other:?}"),
         }
     }
 }

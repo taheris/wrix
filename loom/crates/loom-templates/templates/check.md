@@ -112,7 +112,7 @@ A malformed bead breaks fast-reply with `-a <int>`.
 > to bare `loom run` and is invisible to scoped listings.
 
 For every invariant clash you detect, create a bead whose description contains the
-proposed options in the format above, attach the `ralph:clarify` label **and the
+proposed options in the format above, attach the `loom:clarify` label **and the
 `spec:{{ label }}` label** (REQUIRED — see the note above), then bond it to the
 molecule:
 
@@ -120,7 +120,7 @@ molecule:
 CLARIFY_ID=$(bd create \
   --title="Invariant clash: <short summary>" \
   --type=task \
-  --labels="spec:{{ label }},ralph:clarify,profile:base" \
+  --labels="spec:{{ label }},loom:clarify,profile:base" \
   --parent="{% match molecule_id %}{% when Some with (id) %}{{ id }}{% when None %}<molecule>{% endmatch %}" \
   --description="$(cat <<'EOF'
 ## Clash
@@ -180,11 +180,14 @@ bd human <id>
 
 ## Completion
 
-When your review is complete, emit RALPH_COMPLETE. The orchestrator determines
+When your review is complete, emit LOOM_COMPLETE. The orchestrator determines
 pass/fail by comparing bead counts before and after your review.
 
 {% include "partial/exit_signals.md" %}
 
-- `RALPH_COMPLETE` - Review finished
-- `RALPH_BLOCKED: <reason>` - Cannot proceed, explain why
-- `RALPH_CLARIFY: <question>` - Need human decision before proceeding
+- `LOOM_COMPLETE` — Review finished. No payload.
+- `LOOM_BLOCKED` — Cannot proceed. Write the reason **before** the marker on
+  its own line(s); emit `LOOM_BLOCKED` as the final line with nothing after it.
+- `LOOM_CLARIFY` — Need human decision. Write the question **before** the
+  marker on its own line(s); emit `LOOM_CLARIFY` as the final line with
+  nothing after it.

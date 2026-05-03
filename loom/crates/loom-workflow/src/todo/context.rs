@@ -112,7 +112,7 @@ mod tests {
             pinned_context: "PIN".to_string(),
             companion_paths: vec![],
             implementation_notes: vec![],
-            exit_signals: "RALPH_COMPLETE".to_string(),
+            exit_signals: "LOOM_COMPLETE".to_string(),
         }
     }
 

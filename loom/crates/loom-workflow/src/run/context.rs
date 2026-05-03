@@ -48,11 +48,11 @@ mod tests {
             pinned_context: "PIN".into(),
             companion_paths: vec![],
             molecule_id: Some(MoleculeId::new("wx-3hhwq")),
-            issue_id: BeadId::new("wx-3hhwq.15"),
+            issue_id: BeadId::new("wx-3hhwq.15").expect("valid bead id"),
             title: "Implement loom run".into(),
             description: "Per-bead loop".into(),
             previous_failure: None,
-            exit_signals: "RALPH_COMPLETE".into(),
+            exit_signals: "LOOM_COMPLETE".into(),
         }
     }
 

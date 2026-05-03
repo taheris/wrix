@@ -103,7 +103,7 @@ impl<R: CommandRunner> BdClient<R> {
         if trimmed.is_empty() {
             return Err(BdError::CreateMissingId);
         }
-        Ok(BeadId::parse(trimmed)?)
+        Ok(BeadId::new(trimmed)?)
     }
 
     /// `bd close <id>` (optionally with `--reason`).
@@ -371,8 +371,8 @@ mod tests {
     async fn show_parses_first_row_into_bead() -> Result<()> {
         let runner = CapturingRunner::new([ok(SHOW_FIXTURE.as_bytes())]);
         let client = BdClient::with_runner(runner);
-        let bead = client.show(&BeadId::new("wx-3hhwq.5")).await?;
-        assert_eq!(bead.id, BeadId::new("wx-3hhwq.5"));
+        let bead = client.show(&BeadId::new("wx-3hhwq.5")?).await?;
+        assert_eq!(bead.id, BeadId::new("wx-3hhwq.5")?);
         assert_eq!(bead.title, "BdClient");
         assert_eq!(bead.status, "in_progress");
         assert_eq!(bead.priority, 2);
@@ -391,7 +391,7 @@ mod tests {
         let runner = CapturingRunner::new([ok(b"[]")]);
         let client = BdClient::with_runner(runner);
         let err = client
-            .show(&BeadId::new("wx-missing"))
+            .show(&BeadId::new("wx-missing")?)
             .await
             .err()
             .ok_or_else(|| anyhow!("empty array must error"))?;
@@ -434,15 +434,15 @@ mod tests {
     #[tokio::test]
     async fn list_parses_array_of_beads() -> Result<()> {
         let json = br#"[
-            {"id":"a","title":"A","status":"open"},
-            {"id":"b","title":"B","status":"closed"}
+            {"id":"wx-a","title":"A","status":"open"},
+            {"id":"wx-b","title":"B","status":"closed"}
         ]"#;
         let runner = CapturingRunner::new([ok(json)]);
         let client = BdClient::with_runner(runner);
         let beads = client.list(ListOpts::default()).await?;
         assert_eq!(beads.len(), 2);
-        assert_eq!(beads[0].id, BeadId::new("a"));
-        assert_eq!(beads[1].id, BeadId::new("b"));
+        assert_eq!(beads[0].id, BeadId::new("wx-a")?);
+        assert_eq!(beads[1].id, BeadId::new("wx-b")?);
         Ok(())
     }
 
@@ -457,10 +457,10 @@ mod tests {
                 issue_type: Some("task".into()),
                 priority: Some(2),
                 labels: vec!["profile:rust".into()],
-                parent: Some(BeadId::new("wx-3hhwq")),
+                parent: Some(BeadId::new("wx-3hhwq")?),
             })
             .await?;
-        assert_eq!(id, BeadId::new("wx-new.7"));
+        assert_eq!(id, BeadId::new("wx-new.7")?);
         let argv = argv_of(&client.runner, 0);
         assert!(argv.starts_with(&["create".to_string(), "--silent".into()]));
         assert!(argv.contains(&"--title".to_string()));
@@ -510,10 +510,10 @@ mod tests {
 
     #[tokio::test]
     async fn cli_failure_maps_to_typed_error() -> Result<()> {
-        let runner = CapturingRunner::new([fail(1, "no issue found matching \"missing\"")]);
+        let runner = CapturingRunner::new([fail(1, "no issue found matching \"wx-miss\"")]);
         let client = BdClient::with_runner(runner);
         let err = client
-            .show(&BeadId::new("missing"))
+            .show(&BeadId::new("wx-miss")?)
             .await
             .err()
             .ok_or_else(|| anyhow!("non-zero exit must surface"))?;
@@ -527,7 +527,7 @@ mod tests {
         };
         assert_eq!(status, 1);
         assert!(args.contains("show"));
-        assert!(args.contains("missing"));
+        assert!(args.contains("wx-miss"));
         assert!(stderr.contains("no issue found"));
         Ok(())
     }
@@ -537,7 +537,7 @@ mod tests {
         let runner = CapturingRunner::new([ok(b"not json")]);
         let client = BdClient::with_runner(runner);
         let err = client
-            .show(&BeadId::new("wx-x"))
+            .show(&BeadId::new("wx-x")?)
             .await
             .err()
             .ok_or_else(|| anyhow!("garbage stdout must fail"))?;
@@ -555,7 +555,7 @@ mod tests {
         let client = BdClient::with_runner(runner);
         client
             .update(
-                &BeadId::new("wx-3hhwq.5"),
+                &BeadId::new("wx-3hhwq.5")?,
                 UpdateOpts {
                     claim: true,
                     status: Some("in_progress".into()),
@@ -581,7 +581,7 @@ mod tests {
     async fn close_with_reason_passes_flag() -> Result<()> {
         let runner = CapturingRunner::new([ok(b"")]);
         let client = BdClient::with_runner(runner);
-        client.close(&BeadId::new("wx-x"), Some("dup")).await?;
+        client.close(&BeadId::new("wx-x")?, Some("dup")).await?;
         let argv = argv_of(&client.runner, 0);
         assert_eq!(argv, vec!["close", "wx-x", "--reason", "dup"]);
         Ok(())
@@ -622,8 +622,8 @@ mod tests {
     #[tokio::test]
     async fn ready_parses_array_of_beads() -> Result<()> {
         let json = br#"[
-            {"id":"a","title":"A","status":"open"},
-            {"id":"b","title":"B","status":"open"}
+            {"id":"wx-a","title":"A","status":"open"},
+            {"id":"wx-b","title":"B","status":"open"}
         ]"#;
         let runner = CapturingRunner::new([ok(json)]);
         let client = BdClient::with_runner(runner);
@@ -634,8 +634,8 @@ mod tests {
             })
             .await?;
         assert_eq!(beads.len(), 2);
-        assert_eq!(beads[0].id, BeadId::new("a"));
-        assert_eq!(beads[1].id, BeadId::new("b"));
+        assert_eq!(beads[0].id, BeadId::new("wx-a")?);
+        assert_eq!(beads[1].id, BeadId::new("wx-b")?);
         Ok(())
     }
 
@@ -644,7 +644,7 @@ mod tests {
         let runner = CapturingRunner::new([ok(b"")]);
         let client = BdClient::with_runner(runner);
         client
-            .dep_add(&BeadId::new("wx-a"), &BeadId::new("wx-b"))
+            .dep_add(&BeadId::new("wx-a")?, &BeadId::new("wx-b")?)
             .await?;
         let argv = argv_of(&client.runner, 0);
         assert_eq!(argv, vec!["dep", "add", "wx-a", "wx-b"]);

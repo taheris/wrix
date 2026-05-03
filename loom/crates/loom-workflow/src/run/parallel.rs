@@ -227,7 +227,7 @@ mod tests {
 
     fn fake_bead(id: &str) -> Bead {
         Bead {
-            id: BeadId::new(id),
+            id: BeadId::new(id).expect("valid bead id"),
             title: format!("title-{id}"),
             description: "desc".into(),
             status: "open".into(),

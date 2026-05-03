@@ -24,7 +24,7 @@ pub use super::time::format_utc_timestamp;
 /// let path = bead_log_path(
 ///     Path::new("/ws/.wrapix/loom/logs"),
 ///     &SpecLabel::new("loom-harness"),
-///     &BeadId::new("wx-3hhwq.9"),
+///     &BeadId::new("wx-3hhwq.9").unwrap(),
 ///     UNIX_EPOCH + Duration::from_secs(1777811445),
 /// );
 /// assert_eq!(
@@ -55,7 +55,7 @@ mod tests {
         let path = bead_log_path(
             Path::new("/x/.wrapix/loom/logs"),
             &SpecLabel::new("alpha"),
-            &BeadId::new("wx-1"),
+            &BeadId::new("wx-1").expect("valid bead id"),
             UNIX_EPOCH + Duration::from_secs(0),
         );
         assert_eq!(
@@ -68,8 +68,9 @@ mod tests {
     fn distinct_spec_labels_yield_distinct_directories() {
         let root = Path::new("/r");
         let when = UNIX_EPOCH + Duration::from_secs(1777811445);
-        let p_a = bead_log_path(root, &SpecLabel::new("a"), &BeadId::new("wx-1"), when);
-        let p_b = bead_log_path(root, &SpecLabel::new("b"), &BeadId::new("wx-1"), when);
+        let bead = BeadId::new("wx-1").expect("valid bead id");
+        let p_a = bead_log_path(root, &SpecLabel::new("a"), &bead, when);
+        let p_b = bead_log_path(root, &SpecLabel::new("b"), &bead, when);
         assert_ne!(p_a.parent(), p_b.parent());
     }
 
@@ -77,8 +78,11 @@ mod tests {
     fn distinct_beads_in_same_spec_yield_distinct_files() {
         let root = Path::new("/r");
         let when = UNIX_EPOCH + Duration::from_secs(1777811445);
-        let p_a = bead_log_path(root, &SpecLabel::new("a"), &BeadId::new("wx-1"), when);
-        let p_b = bead_log_path(root, &SpecLabel::new("a"), &BeadId::new("wx-2"), when);
+        let label = SpecLabel::new("a");
+        let bead_a = BeadId::new("wx-1").expect("valid bead id");
+        let bead_b = BeadId::new("wx-2").expect("valid bead id");
+        let p_a = bead_log_path(root, &label, &bead_a, when);
+        let p_b = bead_log_path(root, &label, &bead_b, when);
         assert_eq!(p_a.parent(), p_b.parent());
         assert_ne!(p_a.file_name(), p_b.file_name());
     }

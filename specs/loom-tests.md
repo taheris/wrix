@@ -373,7 +373,7 @@ parse-once-use-everywhere contract:
 ```rust
 #[test]
 fn newtype_roundtrip() {
-    let id = BeadId::new("wx-abc123");
+    let id = BeadId::new("wx-abc123").unwrap();
     assert_eq!(id.as_str(), "wx-abc123");
     assert_eq!(id.to_string(), "wx-abc123");
 
@@ -381,6 +381,9 @@ fn newtype_roundtrip() {
     assert_eq!(json, r#""wx-abc123""#); // transparent, no wrapper
     let parsed: BeadId = serde_json::from_str(&json).unwrap();
     assert_eq!(parsed, id);
+
+    // Deserialize validates the canonical shape.
+    serde_json::from_str::<BeadId>(r#""not a bead""#).unwrap_err();
 }
 
 #[test]
@@ -515,7 +518,7 @@ fn run_template_parity() {
     let ctx = RunTemplate {
         label: SpecLabel::new("auth"),
         spec_path: "specs/auth.md".into(),
-        issue_id: Some(BeadId::new("wx-123")),
+        issue_id: Some(BeadId::new("wx-123").unwrap()),
         title: Some("Implement parser".into()),
         // ...
     };

@@ -99,7 +99,7 @@ mod tests {
 
     fn bead(id: &str, title: &str, desc: &str, labels: &[&str]) -> Bead {
         Bead {
-            id: BeadId::new(id),
+            id: BeadId::new(id).expect("valid bead id"),
             title: title.into(),
             description: desc.into(),
             status: "open".into(),
@@ -116,13 +116,13 @@ mod tests {
                 "wx-2",
                 "Title A",
                 "## Options — sum A\n\n### Option 1 — t1\nbody1\n",
-                &["spec:loom-harness", "ralph:clarify"],
+                &["spec:loom-harness", "loom:clarify"],
             ),
             bead(
                 "wx-3",
                 "Title B",
                 "no options",
-                &["spec:profiles", "ralph:clarify"],
+                &["spec:profiles", "loom:clarify"],
             ),
         ];
         let refs: Vec<&Bead> = beads.iter().collect();
@@ -138,30 +138,30 @@ mod tests {
     #[test]
     fn resolve_by_index_returns_bead_id() {
         let beads = [
-            bead("wx-2", "a", "", &["ralph:clarify"]),
-            bead("wx-3", "b", "", &["ralph:clarify"]),
+            bead("wx-2", "a", "", &["loom:clarify"]),
+            bead("wx-3", "b", "", &["loom:clarify"]),
         ];
         let refs: Vec<&Bead> = beads.iter().collect();
         let (id, pos) = resolve_target(&refs, Some(2), None).expect("resolve");
-        assert_eq!(id, BeadId::new("wx-3"));
+        assert_eq!(id, BeadId::new("wx-3").expect("valid"));
         assert_eq!(pos, Some(2));
     }
 
     #[test]
     fn resolve_by_id_returns_index() {
         let beads = [
-            bead("wx-2", "a", "", &["ralph:clarify"]),
-            bead("wx-3", "b", "", &["ralph:clarify"]),
+            bead("wx-2", "a", "", &["loom:clarify"]),
+            bead("wx-3", "b", "", &["loom:clarify"]),
         ];
         let refs: Vec<&Bead> = beads.iter().collect();
         let (id, pos) = resolve_target(&refs, None, Some("wx-3")).expect("resolve");
-        assert_eq!(id, BeadId::new("wx-3"));
+        assert_eq!(id, BeadId::new("wx-3").expect("valid"));
         assert_eq!(pos, Some(2));
     }
 
     #[test]
     fn resolve_missing_id_errors() {
-        let beads = [bead("wx-2", "a", "", &["ralph:clarify"])];
+        let beads = [bead("wx-2", "a", "", &["loom:clarify"])];
         let refs: Vec<&Bead> = beads.iter().collect();
         let err = resolve_target(&refs, None, Some("wx-9")).expect_err("expected BeadNotFound");
         assert!(matches!(
@@ -172,7 +172,7 @@ mod tests {
 
     #[test]
     fn resolve_zero_index_or_overflow_errors() {
-        let beads = [bead("wx-2", "a", "", &["ralph:clarify"])];
+        let beads = [bead("wx-2", "a", "", &["loom:clarify"])];
         let refs: Vec<&Bead> = beads.iter().collect();
         assert!(matches!(
             resolve_target(&refs, Some(0), None).err(),
@@ -186,7 +186,7 @@ mod tests {
 
     #[test]
     fn ambiguous_target_when_both_supplied() {
-        let beads = [bead("wx-2", "a", "", &["ralph:clarify"])];
+        let beads = [bead("wx-2", "a", "", &["loom:clarify"])];
         let refs: Vec<&Bead> = beads.iter().collect();
         assert!(matches!(
             resolve_target(&refs, Some(1), Some("wx-2")).err(),
@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn missing_spec_label_renders_em_dash_in_clarify_bead() {
-        let b = bead("wx-2", "t", "", &["ralph:clarify"]);
+        let b = bead("wx-2", "t", "", &["loom:clarify"]);
         let cb = to_clarify_bead(&b);
         assert_eq!(cb.spec_label.as_str(), "—");
     }

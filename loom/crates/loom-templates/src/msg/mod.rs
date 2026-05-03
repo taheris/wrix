@@ -12,7 +12,7 @@ pub struct MsgContext {
     pub exit_signals: String,
 }
 
-/// A single outstanding `ralph:clarify` bead surfaced to the drafter session.
+/// A single outstanding `loom:clarify` bead surfaced to the drafter session.
 ///
 /// Mirrors the shape `lib/ralph/cmd/msg.sh::build_clarify_beads_block` produces
 /// — id, owning spec, title, an optional `## Options — <summary>` framing,

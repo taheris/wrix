@@ -9,10 +9,10 @@ pub enum TodoError {
     /// the `--since {commit}` override does not refer to a reachable commit
     InvalidSinceCommit { commit: String },
 
-    /// agent supplied no exit signal — neither RALPH_COMPLETE nor RALPH_BLOCKED observed before session ended
+    /// agent supplied no exit signal — neither LOOM_COMPLETE nor LOOM_BLOCKED observed before session ended
     MissingExitSignal,
 
-    /// agent reported RALPH_BLOCKED: {reason}
+    /// agent reported LOOM_BLOCKED: {reason}
     AgentBlocked { reason: String },
 
     /// could not read spec file at {path}

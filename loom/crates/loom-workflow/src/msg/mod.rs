@@ -5,7 +5,7 @@
 //! `loom-core`'s typed `BdClient` and `loom-templates`' `msg.md` template.
 //! The command:
 //!
-//! 1. lists outstanding beads carrying `ralph:clarify`, optionally filtered
+//! 1. lists outstanding beads carrying `loom:clarify`, optionally filtered
 //!    to `spec:<label>` so the SPEC column collapses;
 //! 2. resolves an `-n <N>` / `-i <id>` selector to a [`BeadId`];
 //! 3. for `-a <choice>` either looks up `### Option <N>` per the Options
@@ -13,7 +13,7 @@
 //!    ([`reply::FastReply::Option`]), or stores the choice verbatim
 //!    ([`reply::FastReply::Verbatim`]);
 //! 4. for `-d` writes the canonical [`reply::DISMISS_NOTE`] and removes the
-//!    `ralph:clarify` label so the bead drops off the list.
+//!    `loom:clarify` label so the bead drops off the list.
 //!
 //! The render path uses [`build_msg_context`] to compose the typed
 //! [`MsgContext`](loom_templates::msg::MsgContext) the Askama template

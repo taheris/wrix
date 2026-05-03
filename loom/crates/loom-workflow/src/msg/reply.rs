@@ -80,7 +80,7 @@ Accept. Cost: debt.
 
     #[test]
     fn integer_choice_resolves_to_option_note() -> Result<(), MsgError> {
-        let bead = BeadId::new("wx-x");
+        let bead = BeadId::new("wx-x").expect("valid bead id");
         let reply = build_fast_reply(&bead, "1", desc())?;
         match reply {
             FastReply::Option { n, note } => {
@@ -96,7 +96,7 @@ Accept. Cost: debt.
 
     #[test]
     fn missing_option_index_errors_with_available_list() {
-        let bead = BeadId::new("wx-x");
+        let bead = BeadId::new("wx-x").expect("valid bead id");
         let err = build_fast_reply(&bead, "9", desc()).expect_err("expected error");
         match err {
             MsgError::OptionMissing {
@@ -114,7 +114,7 @@ Accept. Cost: debt.
 
     #[test]
     fn verbatim_string_passes_through_unchanged() -> Result<(), MsgError> {
-        let bead = BeadId::new("wx-x");
+        let bead = BeadId::new("wx-x").expect("valid bead id");
         let reply = build_fast_reply(&bead, "free-form answer", desc())?;
         match reply {
             FastReply::Verbatim { note } => assert_eq!(note, "free-form answer"),
@@ -125,7 +125,7 @@ Accept. Cost: debt.
 
     #[test]
     fn integer_with_no_options_section_errors() {
-        let bead = BeadId::new("wx-x");
+        let bead = BeadId::new("wx-x").expect("valid bead id");
         let err =
             build_fast_reply(&bead, "1", "no options at all").expect_err("expected missing option");
         assert!(matches!(err, MsgError::OptionMissing { .. }));
@@ -133,7 +133,7 @@ Accept. Cost: debt.
 
     #[test]
     fn empty_title_or_body_renders_partial_note() -> Result<(), MsgError> {
-        let bead = BeadId::new("wx-x");
+        let bead = BeadId::new("wx-x").expect("valid bead id");
         let no_title = "## Options\n\n### Option 1\nonly body\n";
         let reply = build_fast_reply(&bead, "1", no_title)?;
         match reply {

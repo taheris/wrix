@@ -27,7 +27,7 @@ the user's idea and create a comprehensive specification document.
    - Success criteria and test approach
 3. When you have enough information, say: "I have enough to write the spec"
 4. Write the spec file at `{{ spec_path }}`
-5. When the user confirms the spec looks good, output: RALPH_COMPLETE
+5. When the user confirms the spec looks good, output: LOOM_COMPLETE
 
 ## Spec File Format
 
@@ -68,6 +68,10 @@ When you have gathered enough information, create the spec file with:
 
 {% include "partial/exit_signals.md" %}
 
-- `RALPH_COMPLETE` - Interview finished, spec created
-- `RALPH_BLOCKED: <reason>` - Cannot proceed without additional information
-- `RALPH_CLARIFY: <question>` - Need clarification on something specific
+- `LOOM_COMPLETE` — Interview finished, spec created. No payload.
+- `LOOM_BLOCKED` — Cannot proceed without more information. Write the reason
+  **before** the marker on its own line(s); emit `LOOM_BLOCKED` as the final
+  line with nothing after it.
+- `LOOM_CLARIFY` — Need clarification on something specific. Write the
+  question **before** the marker on its own line(s); emit `LOOM_CLARIFY` as
+  the final line with nothing after it.

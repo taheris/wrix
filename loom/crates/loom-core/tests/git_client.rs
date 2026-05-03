@@ -42,7 +42,7 @@ async fn create_and_remove_worktree_round_trip() -> Result<()> {
     let client = GitClient::open(repo.path())?;
 
     let label = SpecLabel::new("loom-harness");
-    let bead = BeadId::new("wx-3hhwq.6");
+    let bead = BeadId::new("wx-3hhwq.6")?;
     let created = client.create_worktree(&label, &bead).await?;
 
     assert!(

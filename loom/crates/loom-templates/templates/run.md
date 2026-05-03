@@ -46,10 +46,10 @@ Title: <agent-output>{% match title %}{% when Some with (t) %}{{ t }}{% when Non
    - [ ] Lint checks pass
    - [ ] Changes committed
 6. **Blocked vs Waiting**: Distinguish dependency blocks from true blocks:
-   - Need user input? → `RALPH_BLOCKED: <reason>`
-   - Need other beads done? → Add dep with `bd dep add`, output `RALPH_COMPLETE`
+   - Need user input? → write the reason on a prior line, then `LOOM_BLOCKED`
+   - Need other beads done? → Add dep with `bd dep add`, output `LOOM_COMPLETE`
 7. **Already Implemented**: If the task's work is already done in the codebase,
-   verify correctness, close the issue, and move on with `RALPH_COMPLETE`
+   verify correctness, close the issue, and move on with `LOOM_COMPLETE`
 
 ## Spec Verifications
 
@@ -69,7 +69,7 @@ After implementing the issue, check the spec's Success Criteria for `[verify]` a
 
 ## Quality Gates
 
-Before outputting RALPH_COMPLETE:
+Before outputting LOOM_COMPLETE:
 - [ ] Tests written and passing
 - [ ] Lint checks pass
 - [ ] Changes staged (`git add`)
@@ -79,10 +79,13 @@ Post-step hooks verify compliance automatically.
 
 ## Land the Plane
 
-Before outputting RALPH_COMPLETE, follow the **Session Protocol** in `AGENTS.md`.
+Before outputting LOOM_COMPLETE, follow the **Session Protocol** in `AGENTS.md`.
 
 {% include "partial/exit_signals.md" %}
 
-- `RALPH_COMPLETE` - Task finished, all quality gates passed
-- `RALPH_BLOCKED: <reason>` - Cannot proceed, explain why
-- `RALPH_CLARIFY: <question>` - Need clarification before proceeding
+- `LOOM_COMPLETE` — Task finished, all quality gates passed. No payload.
+- `LOOM_BLOCKED` — Cannot proceed. Write the reason **before** the marker on
+  its own line(s); emit `LOOM_BLOCKED` as the final line with nothing after it.
+- `LOOM_CLARIFY` — Need clarification. Write the question **before** the
+  marker on its own line(s); emit `LOOM_CLARIFY` as the final line with
+  nothing after it.

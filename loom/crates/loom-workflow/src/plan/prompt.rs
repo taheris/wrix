@@ -53,7 +53,7 @@ mod tests {
             spec_path: "specs/loom-harness.md".into(),
             pinned_context: "PIN".into(),
             companion_paths: vec![],
-            exit_signals: "RALPH_COMPLETE".into(),
+            exit_signals: "LOOM_COMPLETE".into(),
         }
     }
 
@@ -63,7 +63,7 @@ mod tests {
             spec_path: "specs/loom-harness.md".into(),
             pinned_context: "PIN".into(),
             companion_paths: vec!["lib/sandbox/".into()],
-            exit_signals: "RALPH_COMPLETE".into(),
+            exit_signals: "LOOM_COMPLETE".into(),
         }
     }
 
@@ -72,7 +72,7 @@ mod tests {
         let body = render_prompt(inputs_new()).expect("render");
         assert!(body.contains("# Specification Interview"));
         assert!(body.contains("specs/loom-harness.md"));
-        assert!(body.contains("RALPH_COMPLETE"));
+        assert!(body.contains("LOOM_COMPLETE"));
     }
 
     #[test]

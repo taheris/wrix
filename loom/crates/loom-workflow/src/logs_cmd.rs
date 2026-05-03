@@ -161,7 +161,7 @@ mod tests {
         let path = select_log(
             &root,
             LogsOpts {
-                bead: Some(&BeadId::new("wx-1")),
+                bead: Some(&BeadId::new("wx-1")?),
             },
         )?;
         assert!(path.ends_with("wx-1-older.ndjson"), "{path:?}");
@@ -176,7 +176,7 @@ mod tests {
         let err = select_log(
             &root,
             LogsOpts {
-                bead: Some(&BeadId::new("wx-2")),
+                bead: Some(&BeadId::new("wx-2")?),
             },
         )
         .err()

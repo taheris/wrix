@@ -60,7 +60,7 @@ fn init_repo() -> Result<TempDir> {
 
 fn fake_bead(id: &str) -> Bead {
     Bead {
-        id: BeadId::new(id),
+        id: BeadId::new(id).expect("valid bead id"),
         title: format!("title-{id}"),
         description: "desc".into(),
         status: "open".into(),
@@ -133,7 +133,7 @@ async fn parallel_merge_back() -> Result<()> {
     let repo = init_repo()?;
     let client = GitClient::open(repo.path())?;
     let label = SpecLabel::new("loom-harness");
-    let beads = vec![fake_bead("wx-merge-a"), fake_bead("wx-merge-b")];
+    let beads = vec![fake_bead("wx-mergea"), fake_bead("wx-mergeb")];
 
     let slots = create_worktrees(&client, &label, beads.clone()).await?;
 
@@ -201,7 +201,7 @@ async fn parallel_failure_cleanup() -> Result<()> {
     let repo = init_repo()?;
     let client = GitClient::open(repo.path())?;
     let label = SpecLabel::new("loom-harness");
-    let beads = vec![fake_bead("wx-fail-a"), fake_bead("wx-fail-b")];
+    let beads = vec![fake_bead("wx-faila"), fake_bead("wx-failb")];
     let slots = create_worktrees(&client, &label, beads.clone()).await?;
 
     // Make at least one commit on the bead branch so `git branch -D` has

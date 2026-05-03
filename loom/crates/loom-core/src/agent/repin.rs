@@ -179,7 +179,7 @@ mod tests {
         let r = RePinContent {
             orientation: "loom run @ wx-3hhwq.8".to_string(),
             pinned_context: "Spec: specs/loom-harness.md".to_string(),
-            partial_bodies: vec!["exit signals: RALPH_COMPLETE".to_string()],
+            partial_bodies: vec!["exit signals: LOOM_COMPLETE".to_string()],
         };
         r.write_claude_files(dir.path())?;
 

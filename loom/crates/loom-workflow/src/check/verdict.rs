@@ -2,12 +2,12 @@ use loom_core::identifier::BeadId;
 
 /// Snapshot of bead state taken on either side of the reviewer agent. The
 /// driver pre-counts beads with `spec:<label>`, runs the reviewer, then
-/// re-counts and inspects the same query for `ralph:clarify` membership.
+/// re-counts and inspects the same query for `loom:clarify` membership.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BeadSnapshot {
     /// Total number of beads carrying `spec:<label>`.
     pub spec_total: u32,
-    /// IDs of beads currently labelled `ralph:clarify` within the spec.
+    /// IDs of beads currently labelled `loom:clarify` within the spec.
     pub clarify_ids: Vec<BeadId>,
     /// IDs that appeared after the reviewer ran. Only populated for the
     /// post-snapshot — set is computed by [`super::diff_snapshots`].
@@ -15,14 +15,14 @@ pub struct BeadSnapshot {
 }
 
 /// The four post-review branches `loom check` can take. The driver computes
-/// this enum, then runs the side effects: push, set ralph:clarify, exec
+/// this enum, then runs the side effects: push, set loom:clarify, exec
 /// `loom run`, etc.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CheckVerdict {
-    /// No new beads + no `ralph:clarify` → push code + beads.
+    /// No new beads + no `loom:clarify` → push code + beads.
     Clean,
 
-    /// `ralph:clarify` present (newly raised or pre-existing) → stop without
+    /// `loom:clarify` present (newly raised or pre-existing) → stop without
     /// pushing; user resolves via `loom msg`.
     Clarify { clarify_ids: Vec<BeadId> },
 
@@ -35,7 +35,7 @@ pub enum CheckVerdict {
     },
 
     /// New fix-up beads, no clarify, iteration cap exhausted → escalate the
-    /// newest fix-up bead to `ralph:clarify` and stop.
+    /// newest fix-up bead to `loom:clarify` and stop.
     IterationCap {
         new_bead_ids: Vec<BeadId>,
         escalate_id: BeadId,
@@ -61,7 +61,7 @@ mod tests {
     use super::*;
 
     fn b(id: &str) -> BeadId {
-        BeadId::new(id)
+        BeadId::new(id).expect("valid bead id")
     }
 
     #[test]

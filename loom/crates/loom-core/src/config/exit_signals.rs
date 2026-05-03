@@ -11,9 +11,9 @@ pub struct ExitSignalsConfig {
 impl Default for ExitSignalsConfig {
     fn default() -> Self {
         Self {
-            complete: "RALPH_COMPLETE".to_string(),
-            blocked: "RALPH_BLOCKED:".to_string(),
-            clarify: "RALPH_CLARIFY:".to_string(),
+            complete: "LOOM_COMPLETE".to_string(),
+            blocked: "LOOM_BLOCKED".to_string(),
+            clarify: "LOOM_CLARIFY".to_string(),
         }
     }
 }
