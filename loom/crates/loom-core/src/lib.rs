@@ -10,4 +10,5 @@ pub mod bd;
 pub mod git;
 pub mod identifier;
 pub mod lock;
+pub mod logging;
 pub mod state;

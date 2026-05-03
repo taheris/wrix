@@ -35,6 +35,15 @@ test_template_context_structs() {
     "Each Loom workflow template has a typed Rust context struct with #[derive(askama::Template)] and the correct #[template(path = ...)] attribute. Module structure is nested per template family — no central types.rs at the crate root, no shared error.rs; lib.rs only declares pub mod for plan, todo, run, check, msg. Domain identifier fields use the loom-core newtypes (BeadId, MoleculeId, SpecLabel) — never bare String — for issue_id, molecule_id, label. Optional fields use Option<T> (spec_diff, existing_tasks, molecule_id, issue_id, title, description, beads_summary, base_commit, previous_failure). Multi-valued fields use Vec<T> (companion_paths: Vec<String>, implementation_notes: Vec<String>, clarify_beads: Vec<ClarifyBead>). PreviousFailure is its own type that enforces the 4000-char truncation cap from the spec — RunContext stores Option<PreviousFailure>, not Option<String>. ClarifyBead and ClarifyOption live alongside MsgContext in msg/mod.rs (the only template that uses them). Templates declare escape = \"none\" so markdown bodies are not HTML-escaped."
 }
 
+test_run_single_event_sink() {
+  judge_files \
+    "loom/crates/loom-core/src/logging/mod.rs" \
+    "loom/crates/loom-core/src/logging/sink.rs" \
+    "loom/crates/loom-core/src/logging/renderer.rs"
+  judge_criterion \
+    "LogSink (loom/crates/loom-core/src/logging/sink.rs) is a single tee-style sink: one Self::emit method writes the AgentEvent to BOTH the on-disk NDJSON log file AND the TerminalRenderer in lockstep within the same call. There is no independent task, channel, thread, or background worker that drives the renderer or the file writer separately — both writers must observe the same event sequence by construction. Verify by inspecting sink.rs: the struct holds the BufWriter<File> and the TerminalRenderer as direct fields, and emit() dispatches to both inline. The renderer must NOT pull events from a queue or be wrapped in a separate Tokio task. The on-disk format is the serialized AgentEvent (one JSON object per line), so the renderer and the file writer agree on the event sequence."
+}
+
 test_newtypes_for_identifiers() {
   judge_files \
     "loom/crates/loom-core/src/identifier/mod.rs" \

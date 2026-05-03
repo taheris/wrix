@@ -1,10 +1,16 @@
+use serde::Serialize;
+
 use crate::identifier::ToolCallId;
 
 /// Backend-neutral event flowing from a running agent up to the workflow
 /// engine. Both pi and claude line parsers normalize their wire messages into
 /// this enum — once an `AgentEvent` flows downstream no code knows which
 /// backend produced it.
-#[derive(Debug)]
+///
+/// `Serialize` is derived so the on-disk NDJSON log file is the same event
+/// stream the terminal renderer consumes (see `logging::LogSink`).
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AgentEvent {
     /// Streaming text fragment from the agent.
     MessageDelta { text: String },
@@ -46,7 +52,8 @@ pub enum AgentEvent {
 }
 
 /// Why the agent compacted its context.
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CompactionReason {
     /// Approaching or exceeded the model context limit.
     ContextLimit,

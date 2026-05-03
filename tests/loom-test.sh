@@ -700,6 +700,82 @@ test_bd_error_handling() {
 }
 
 #-----------------------------------------------------------------------------
+# Run-time logging — each function dispatches into a cargo integration test
+# under `loom-core/tests/logging.rs`. Sharing the cargo binary keeps verify
+# and `cargo test` exercising the same code paths.
+#-----------------------------------------------------------------------------
+logging_cargo_test() {
+    cargo_run test -p loom-core --test logging "$1" -- --exact --nocapture --quiet
+}
+
+#-----------------------------------------------------------------------------
+# test_run_default_output_shape — default render mode prints one header line
+# per bead and one short line per tool call (assistant text deltas
+# suppressed); the closing line carries tool count + duration.
+#-----------------------------------------------------------------------------
+test_run_default_output_shape() {
+    logging_cargo_test run_default_output_shape
+}
+
+#-----------------------------------------------------------------------------
+# test_run_verbose_streams_text — verbose mode streams MessageDelta verbatim.
+#-----------------------------------------------------------------------------
+test_run_verbose_streams_text() {
+    logging_cargo_test run_verbose_streams_text
+}
+
+#-----------------------------------------------------------------------------
+# test_run_writes_per_bead_ndjson_log — every bead spawn writes the full
+# AgentEvent stream as NDJSON to
+# `<workspace>/.wrapix/loom/logs/<spec>/<bead>-<utc>.ndjson`, regardless of
+# terminal verbosity.
+#-----------------------------------------------------------------------------
+test_run_writes_per_bead_ndjson_log() {
+    logging_cargo_test run_writes_per_bead_ndjson_log
+}
+
+#-----------------------------------------------------------------------------
+# test_run_logs_log_path — opening a sink emits an info-level tracing event
+# whose `log_path` field carries the resolved file path.
+#-----------------------------------------------------------------------------
+test_run_logs_log_path() {
+    logging_cargo_test run_logs_log_path
+}
+
+#-----------------------------------------------------------------------------
+# test_parallel_logs_are_per_bead — running two beads against the same logs
+# root writes two distinct files (per-bead, not per-session), and the
+# contents never cross-contaminate even when `emit` is interleaved.
+#-----------------------------------------------------------------------------
+test_parallel_logs_are_per_bead() {
+    logging_cargo_test parallel_logs_are_per_bead
+}
+
+#-----------------------------------------------------------------------------
+# test_log_retention_sweep — `sweep_retention_at` deletes files older than
+# `[logs] retention_days` and preserves recent files.
+#-----------------------------------------------------------------------------
+test_log_retention_sweep() {
+    logging_cargo_test log_retention_sweep
+}
+
+#-----------------------------------------------------------------------------
+# test_log_retention_disabled — `retention_days = 0` disables sweeping.
+#-----------------------------------------------------------------------------
+test_log_retention_disabled() {
+    logging_cargo_test log_retention_disabled
+}
+
+#-----------------------------------------------------------------------------
+# test_log_retention_failure_tolerance — per-file delete failures (here: a
+# read-only directory) do not abort the sweep; survivors and failures are
+# both surfaced in the report.
+#-----------------------------------------------------------------------------
+test_log_retention_failure_tolerance() {
+    logging_cargo_test log_retention_failure_tolerance
+}
+
+#-----------------------------------------------------------------------------
 # Concurrency & locking — each function dispatches into a cargo integration
 # test under `loom-core/tests/lock_manager.rs` so verify and `cargo test`
 # exercise the same paths. The acceptance behaviour (per-spec serialization,
