@@ -98,11 +98,12 @@ impl<R: CommandRunner> BdClient<R> {
             args.push(opts.labels.join(",").into());
         }
         let out = self.invoke(args).await?;
-        let trimmed = String::from_utf8(out.stdout)?.trim().to_owned();
+        let stdout = String::from_utf8(out.stdout)?;
+        let trimmed = stdout.trim();
         if trimmed.is_empty() {
             return Err(BdError::CreateMissingId);
         }
-        Ok(BeadId::new(trimmed))
+        Ok(BeadId::parse(trimmed)?)
     }
 
     /// `bd close <id>` (optionally with `--reason`).
@@ -470,6 +471,23 @@ mod tests {
         assert!(argv.contains(&"wx-3hhwq".to_string()));
         assert!(argv.contains(&"--labels".to_string()));
         assert!(argv.contains(&"profile:rust".to_string()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_rejects_malformed_silent_output() -> Result<()> {
+        let runner = CapturingRunner::new([ok(b"warning: foo\nwx-abc123\n")]);
+        let client = BdClient::with_runner(runner);
+        let err = client
+            .create(CreateOpts {
+                title: "x".into(),
+                description: "y".into(),
+                ..CreateOpts::default()
+            })
+            .await
+            .err()
+            .ok_or_else(|| anyhow!("banner-prefixed stdout must error"))?;
+        assert!(matches!(err, BdError::CreateInvalidId(_)), "got {err:?}");
         Ok(())
     }
 

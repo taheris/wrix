@@ -18,7 +18,7 @@ mod session;
 mod spec;
 mod tool_call;
 
-pub use bead::BeadId;
+pub use bead::{BeadId, ParseBeadIdError};
 pub use molecule::MoleculeId;
 pub use profile::ProfileName;
 pub use request::RequestId;

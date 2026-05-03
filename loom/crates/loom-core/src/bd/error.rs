@@ -3,6 +3,8 @@ use std::io;
 use displaydoc::Display;
 use thiserror::Error;
 
+use crate::identifier::ParseBeadIdError;
+
 #[derive(Debug, Display, Error)]
 pub enum BdError {
     /// failed to spawn `bd`
@@ -30,6 +32,9 @@ pub enum BdError {
 
     /// `bd create --json` did not include an id
     CreateMissingId,
+
+    /// `bd create --silent` returned a malformed bead id: {0}
+    CreateInvalidId(#[from] ParseBeadIdError),
 
     /// invalid utf-8 in `bd` output
     Utf8(#[from] std::string::FromUtf8Error),
