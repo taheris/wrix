@@ -28,8 +28,11 @@ platform (crate structure, templates, workflow) is defined in
 ### Functional
 
 1. **Host-side execution** — Loom runs on the host, not inside containers. It
-   spawns per-bead containers via `podman run -i` and communicates with the
-   agent process inside via stdin/stdout pipes.
+   spawns per-bead containers by invoking `wrapix run-bead --spawn-config
+   <file> --stdio` (a thin wrapix subcommand that owns container construction)
+   and communicates with the agent process inside via stdin/stdout pipes.
+   Loom never calls `podman run` directly; see
+   [loom-harness.md — Process Architecture](loom-harness.md#process-architecture).
 2. **Agent backend trait** — an async Rust trait (`AgentBackend`) abstracting
    agent lifecycle: spawn a session and declare capabilities. Used via type
    parameter (`<B: AgentBackend>`) — the concrete backend is known at each
@@ -43,10 +46,17 @@ platform (crate structure, templates, workflow) is defined in
    - `set_model` — switch LLM provider/model mid-session
    - Streaming event parsing (message deltas, tool calls, tool results,
      completion, compaction, errors)
-4. **Claude backend** — launches `claude --output-format stream-json`, parses
-   NDJSON events from stdout. Supports `--input-format stream-json` for
-   bidirectional communication and `--permission-prompt-tool stdio` for
-   permission control flow. Steering via stdin is possible in stream-json mode.
+4. **Claude backend** — launches
+   `claude --print --input-format stream-json --output-format stream-json`,
+   parses NDJSON events from stdout, and writes user messages (initial
+   prompt, steering) as stream-json on stdin. `--permission-prompt-tool
+   stdio` enables the `control_request` / `control_response` flow. The
+   `--print` flag keeps the session non-interactive (runs to completion,
+   exits) while `--input-format stream-json` enables mid-session steering
+   via additional user messages. On observing a `result` event, loom closes
+   its end of stdin, waits `[claude] post_result_grace_secs` (default 5s)
+   for natural exit, then escalates SIGTERM → SIGKILL — same pattern as
+   Ralph's `run_claude_stream` watchdog (`lib/ralph/cmd/util.sh`).
 5. **Per-phase backend selection** — each workflow phase (plan, todo, run,
    check, msg) independently resolves its backend and model from config.
    The `default` key under `[agent]` sets the fallback (`claude`). Per-phase
@@ -71,11 +81,13 @@ platform (crate structure, templates, workflow) is defined in
 
 ### Non-Functional
 
-1. **No podman socket mounting** — the host-side driver launches containers
-   directly via `podman run -i`. No nested container support needed.
-2. **Graceful degradation** — if a backend-specific feature is unavailable (e.g.
-   certain steering modes), the driver continues without it. No hard failures
-   for missing optional capabilities.
+1. **No podman socket mounting** — `wrapix run-bead` invokes podman on the
+   host; the agent runs inside the resulting container with no access to the
+   podman socket. No nested container support needed.
+2. **Graceful degradation** — if a backend-specific feature is unavailable
+   (e.g. pi providers that don't support `set_thinking_level`, or pi
+   builds where manual `compact` is disabled), the driver continues
+   without it. No hard failures for missing optional capabilities.
 3. **Parse, Don't Validate** — raw protocol bytes are parsed into typed domain
    representations at the NDJSON boundary. All code downstream of the parser
    works with already-validated types. No re-parsing, no stringly-typed event
@@ -175,8 +187,6 @@ pub async fn run_agent<B: AgentBackend>(
 // loom-core
 
 pub trait AgentBackend: Send + Sync {
-    const SUPPORTS_STEERING: bool;
-
     async fn spawn(
         config: &SpawnConfig,
     ) -> Result<AgentSession<Idle>, ProtocolError>;
@@ -186,9 +196,14 @@ pub trait AgentBackend: Send + Sync {
 The trait is deliberately minimal — it only handles process lifecycle. Session
 interaction (prompt, steer, abort, event streaming) is on the typestate
 `AgentSession`, not the backend trait. The backend's job is to spawn a session;
-the session's job is to drive the conversation. `SUPPORTS_STEERING` is an
-associated constant because it's a fixed property of the backend type, not a
-runtime value.
+the session's job is to drive the conversation.
+
+Both backends support steering: pi via the native `steer` command, claude
+via `--input-format stream-json --output-format stream-json` (sends a
+stream-json user message on stdin during the session). No
+`SUPPORTS_STEERING` capability gate — `AgentSession::steer` works for both
+backends. If a future backend cannot support steering, reintroduce the
+constant.
 
 No `&self` — backends are ZSTs, so the type parameter carries all
 information. No `#[async_trait]` — `async fn` in traits is native with
@@ -361,7 +376,7 @@ pub enum ProtocolError {
 ### SpawnConfig
 
 ```rust
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SpawnConfig {
     pub image: String,
     pub workspace: PathBuf,
@@ -372,10 +387,16 @@ pub struct SpawnConfig {
 }
 ```
 
-`env` is an **explicit allowlist** — only listed variables are passed via
-`podman run -e`. The host environment is never inherited wholesale (no
-`--env-host`). The workflow engine constructs this list from known-needed
-variables:
+`SpawnConfig` is `Serialize` + `Deserialize` because loom writes it to a
+JSON file and `wrapix run-bead --spawn-config <file>` reads it back. This is
+the single serialization boundary between loom and the wrapper — preferred
+over a fat argv interface. The wrapper's JSON shape is the stable contract;
+loom and `wrapix run-bead` ship from the same flake and stay in lockstep.
+
+`env` is an **explicit allowlist** — only listed variables are forwarded
+into the container by `wrapix run-bead` (which materializes them as
+`podman run -e`). The host environment is never inherited wholesale. The
+workflow engine constructs this list from known-needed variables:
 
 | Variable | When | Purpose |
 |----------|------|---------|
@@ -383,7 +404,7 @@ variables:
 | `CLAUDE_CODE_OAUTH_TOKEN` | claude backend | Claude authentication |
 | `ANTHROPIC_API_KEY` | pi backend (Anthropic models) | LLM API key |
 | `TERM` | always | Terminal capability |
-| `BEADS_*` | always | Beads database connection |
+| `BEADS_DOLT_SERVER_SOCKET`, `BEADS_DOLT_AUTO_START` | always | Beads dolt-socket path (set to the bind-mount); auto-start disabled (host owns the server) |
 
 Provider-specific API keys for the pi backend (OpenAI, Google, etc.) are
 added only when the configured model requires them. Variable names are
@@ -400,24 +421,31 @@ pub struct SessionOutcome {
 ### Host-to-Container Communication
 
 ```
-loom (host)                         container
-    │                                   │
-    ├─ podman run -i ...               │
-    │   stdin ──────────────────────►  agent (pi --mode rpc / claude)
-    │   stdout ◄────────────────────  agent
-    │                                   │
-    ├─ writes NDJSON to stdin ─────►  agent processes command
-    │   (both backends)                 │
-    │                                   │
-    ├─ reads NDJSON from stdout ◄───  agent streams events
-    │   (both backends)                 │
-    │                                   │
-    └─ on exit: bd dolt pull           │
+loom (host)                                            container
+    │                                                       │
+    ├─ serialize SpawnConfig → /tmp/loom-<id>.json          │
+    ├─ wrapix run-bead --spawn-config <file> --stdio        │
+    │   └─ exec podman run [no TTY, stdio piped] ─►  entrypoint.sh
+    │                                                       │
+    │                                                  agent (pi --mode rpc / claude)
+    │   stdin ──────────────────────────────────────►  agent
+    │   stdout ◄──────────────────────────────────────  agent
+    │                                                       │
+    ├─ writes NDJSON to stdin ────────────────────────►  agent processes command
+    │   (both backends)                                     │
+    │                                                       │
+    ├─ reads NDJSON from stdout ◄─────────────────────  agent streams events
+    │   (both backends)                                     │
+    │                                                       │
+    └─ on exit: container teardown via wrapix              │
 ```
 
-Both backends use bidirectional NDJSON over stdin/stdout. The Claude backend uses
-`--input-format stream-json --output-format stream-json` for full bidirectional
-support.
+The wrapper hides container construction (mounts, env allowlist, krun
+runtime, network filter, deploy key, beads dolt socket) so loom owns only
+NDJSON framing and the typed `SpawnConfig` it serializes. Both backends use
+bidirectional NDJSON over stdin/stdout. The Claude backend uses
+`--input-format stream-json --output-format stream-json` for full
+bidirectional support.
 
 ### NDJSON Framing
 
@@ -476,11 +504,14 @@ accumulated further.
 
 Pi's `--mode rpc` uses NDJSON over stdin/stdout. The protocol has no version
 negotiation or handshake. After spawning the process, the Pi backend sends a
-`get_commands` probe and verifies the response contains the commands Loom
-depends on (`prompt`, `steer`, `abort`, `set_model`). If the response shape
-is unexpected or a required command is missing, the backend fails fast with a
-clear version-mismatch error before any workflow begins. After the probe
-succeeds, normal command flow starts.
+`get_commands` probe and verifies the response contains every command Loom
+depends on. The probe set is the union of commands actually used by the
+backend: at minimum `prompt`, `steer`, `abort`, `set_model`, plus `compact`
+(if manual compaction is wired up) and `get_session_stats` (if cost capture
+is enabled — see [Pi cost tracking](#pi-cost-tracking)). If the response
+shape is unexpected or a required command is missing, the backend fails fast
+with a clear version-mismatch error before any workflow begins. After the
+probe succeeds, normal command flow starts.
 
 Messages are classified by a two-phase deserialization strategy: peek at the
 `type` and `id` fields to determine the message category, then deserialize
@@ -592,7 +623,7 @@ dispatch on both levels.
 | `turn_start` | — | logged at `trace!`, skipped |
 | `turn_end` | `message`, `toolResults` | `AgentEvent::TurnEnd` |
 | `agent_start` | — | logged at `trace!`, skipped |
-| `agent_end` | `messages` | `AgentEvent::SessionComplete` (`exit_code: 0`; process stays alive) |
+| `agent_end` | `messages` | `AgentEvent::SessionComplete` (`exit_code: 0`) — see note below |
 | `compaction_start` | `reason` | `AgentEvent::CompactionStart` |
 | `compaction_end` | `aborted`, `reason`, `result?`, `willRetry`, `errorMessage?` | `AgentEvent::CompactionEnd` |
 | `queue_update` | `steering`, `followUp` | logged at `trace!`, skipped |
@@ -602,7 +633,15 @@ dispatch on both levels.
 
 **Compaction reasons:** Pi uses `"threshold"` (approaching limit) and
 `"overflow"` (already exceeded) — both map to `CompactionReason::ContextLimit`.
-`"manual"` (user-triggered) maps to `CompactionReason::UserRequested`.
+`"manual"` (user-triggered) maps to `CompactionReason::UserRequested`. These
+are the only reasons emitted by pi as of v0.72.
+
+**`agent_end` semantics:** In pi, `agent_end` signals "this prompt cycle is
+done" — the process keeps accepting commands. Loom's per-bead-container
+model maps this to `SessionComplete` because each container handles exactly
+one prompt; after `agent_end`, loom tears down the container rather than
+sending another command. If the per-bead model ever changes, this mapping
+must be revisited.
 
 **`message_update` delta mapping:**
 
@@ -620,16 +659,26 @@ by the top-level `tool_execution_*` and `turn_end` events.
 | `done` | logged at `trace!`, skipped (reasons: `"stop"`, `"length"`, `"toolUse"`) |
 
 **Extension UI passthrough:** Pi emits `extension_ui_request` messages for
-extension-defined UI. Loom logs these at `debug!` level and does not respond —
-no pi extensions are loaded in the wrapix sandbox. If an extension UI request
-requires a response and none is sent, pi times out gracefully. The protocol
-supports `extension_ui_response` messages on stdin (with `value`, `confirmed`,
-or `cancelled` fields), but Loom does not implement this.
+extension-defined UI. Loom logs these at `debug!` level — no pi extensions
+are loaded in the wrapix sandbox, so this should not arise in practice.
+However, the timeout on these requests is set by the *extension*, not
+enforced by pi: if an extension does not specify `timeout?` and the host
+does not respond, the extension's promise hangs forever and may stall the
+agent. As a defensive fallback, when loom observes an
+`extension_ui_request` whose `method` requires a response
+(`select`/`confirm`/`input`/`editor`), it replies with
+`{"type":"extension_ui_response","id":"<request_id>","cancelled":true}`.
+Methods that don't need a response (`notify`/`setStatus`/`setWidget`/
+`setTitle`/`set_editor_text`) are logged and ignored.
 
-**Stdout corruption risk:** Pi extensions can corrupt the NDJSON stream by
-writing directly to `process.stdout` (e.g., OSC escape sequences — see
-[pi-mono#2388](https://github.com/badlogic/pi-mono/issues/2388)). The NDJSON
-parser's malformed-line handling (log warning, skip line) covers this case.
+**Stdout discipline:** Pi v0.72+ calls `takeOverStdout()` at RPC startup —
+`process.stdout.write` is monkey-patched to redirect non-protocol writes to
+stderr, while protocol output uses a captured raw fd via `writeRawStdout`
+(see `output-guard.ts`). Extensions, libraries, and OSC escape sequences
+cannot corrupt the protocol stream. The earlier corruption issue
+([pi-mono#2388](https://github.com/badlogic/pi-mono/issues/2388)) was fixed
+in March 2026. The NDJSON parser's malformed-line handling (log warning,
+skip line) is retained as defensive coding, not a live mitigation.
 
 ### Claude Stream-JSON Protocol
 
@@ -704,17 +753,23 @@ tool types visible in logs.
 {"type": "control_response", "id": "<request_id>", "approved": true}
 ```
 
-Future: if Claude Code adds tool types that reach outside the container
-boundary (e.g., host filesystem, network proxy), a configurable deny-list
-(`denied_tools` in `config.toml`) can reject specific tool names. Until then,
-the sandbox is the trust boundary and logging is the mitigation.
+**Deny-list.** A configurable `denied_tools` list in `config.toml` rejects
+specific tool names with `approved: false`. Empty by default — the
+container sandbox is the trust boundary and logging is the primary
+mitigation. The slot exists today so a deny rule can be added without a
+loom release if Claude Code ships a tool type that reaches outside the
+container boundary.
 
 ### Compaction Handling
 
 Both backends use the same `RePinContent` struct (defined in loom-core — see
 [loom-harness.md](loom-harness.md#compaction-re-pin)) to restore agent context
 after compaction. The content is built once per session by the workflow engine.
-Only the delivery mechanism differs:
+**Content is unified; delivery is asymmetric** because Claude stream-json does
+not expose compaction events — Anthropic compacts internally with no protocol
+notification, so claude must use its own `SessionStart` hook system, while pi
+exposes compaction events natively in NDJSON. The asymmetry is fundamental
+to the products' compaction models, not a Loom design choice.
 
 **Claude backend:**
 - Before spawn, calls `repin.write_claude_files(runtime_dir)` to write
@@ -726,9 +781,21 @@ Only the delivery mechanism differs:
 - Holds `RePinContent` in memory.
 - When a `compaction_start` event arrives in the NDJSON stream, sends
   `repin.to_prompt()` via a `steer` command on stdin.
+- **Steer timing.** A `steer` command queues; pi delivers it after the
+  current assistant turn finishes its tool calls, before the next LLM call —
+  it does not inject content during compaction itself. The re-pin therefore
+  reaches the agent on the *next* turn after compaction completes, which is
+  the desired effect (post-compact context restoration).
+- **Overflow auto-retry.** When `compaction_start.reason == "overflow"` and
+  compaction succeeds, pi automatically retries the prompt
+  (`compaction_end.willRetry == true`). A steer queued during this window
+  interleaves with the auto-retry: it lands on the turn following the
+  retry's first response, not before. This is acceptable — the retry plus
+  re-pin combined still restore working context — but documented so the
+  behavior is not surprising in logs.
 - The subsequent `compaction_end` event confirms whether compaction succeeded
-  (`aborted: false`) or was abandoned. If pi retries compaction, another
-  `compaction_start` arrives and the driver re-pins again.
+  (`aborted: false`) or was abandoned. If pi retries compaction (a fresh
+  `compaction_start` arrives), the driver re-pins again.
 
 ## Agent Runtime Layer
 
@@ -824,7 +891,7 @@ The pi branch:
 
 ### Agent trait
 
-- [ ] `AgentBackend` trait defined in loom-core with associated `spawn` + `SUPPORTS_STEERING` constant
+- [ ] `AgentBackend` trait defined in loom-core with associated `spawn`; no `SUPPORTS_STEERING` constant (both backends steer)
   [verify](tests/loom-test.sh::test_agent_trait_exists)
 - [ ] `run_agent` compiles with both `PiBackend` and `ClaudeBackend` as concrete types
   [verify](tests/loom-test.sh::test_agent_trait_static_dispatch)
@@ -845,7 +912,7 @@ The pi branch:
   [verify](tests/loom-test.sh::test_pi_two_phase_deser)
 - [ ] Pi backend sends NDJSON commands to pi's stdin
   [verify](tests/loom-test.sh::test_pi_rpc_command_sending)
-- [ ] Pi backend supports steering (steer returns Ok, `SUPPORTS_STEERING` is `true`)
+- [ ] Pi backend supports steering (steer returns Ok and reaches the agent on the next turn)
   [verify](tests/loom-test.sh::test_pi_supports_steering)
 - [ ] Pi backend maps all pi event types to AgentEvent variants
   [verify](tests/loom-test.sh::test_pi_event_mapping)
@@ -872,6 +939,10 @@ The pi branch:
   [verify](tests/loom-test.sh::test_claude_repin_files)
 - [ ] Claude backend auto-approves permission requests via control_response
   [verify](tests/loom-test.sh::test_claude_permission_autoapprove)
+- [ ] Claude backend supports steering — sends a stream-json user message via stdin during the session and verifies the agent receives it
+  [verify](tests/loom-test.sh::test_claude_supports_steering)
+- [ ] Claude backend shutdown watchdog: on `result` event, loom closes stdin; if claude does not exit within grace period, sends SIGTERM then SIGKILL
+  [verify](tests/loom-test.sh::test_claude_shutdown_watchdog)
 
 ### Backend selection
 
@@ -888,8 +959,9 @@ The pi branch:
 
 ### Container integration
 
-- [ ] Loom spawns containers via `podman run -i` with correct profile image
-  [verify](tests/loom-test.sh::test_podman_spawn)
+- [ ] Loom spawns containers via `wrapix run-bead --spawn-config <file>
+      --stdio` with the correct profile image, never via `podman run` directly
+  [verify](tests/loom-test.sh::test_wrapix_run_bead_spawn)
 - [ ] Container receives agent stdin/stdout via pipe
   [verify](tests/loom-test.sh::test_container_stdio_pipe)
 - [ ] Entrypoint starts pi in RPC mode when `WRAPIX_AGENT=pi`
@@ -947,11 +1019,13 @@ canonical coordinates.
 
 ### Pi-mono version pinning
 
-Pi-mono has daily releases (v0.72.x in the repo as of May 2026; npm latest may
-lag behind at v0.70.x). Pin to a specific release in the Nix flake input.
-Update deliberately, not automatically. The RPC protocol has no formal
-versioning — there is no handshake or protocol version field. Stability is
-inferred from the `rpc-types.ts` type definitions in the source.
+As of May 2026, the npm `latest` and the GitHub `main` branch are in lockstep
+(both at 0.72.1). Pi-mono ships daily releases — pin to a specific version
+in the Nix flake input (`@mariozechner/pi-coding-agent@0.72.1`) and update
+deliberately, not automatically. The RPC protocol has no formal versioning —
+there is no handshake or protocol version field. Stability is inferred from
+the `rpc-types.ts` type definitions in the source. The startup `get_commands`
+probe detects breaking changes (missing commands) at session start.
 
 ### Claude stream-json format
 

@@ -41,6 +41,13 @@ state database tests.
    - `StateDb` schema creation on first open
    - `StateDb` query methods return typed rows (`SpecRow`, `MoleculeRow`)
    - `StateDb::rebuild` populates from spec files and mock `bd` output
+   - Companion-section parser: spec with a `## Companions` section
+     containing two backtick-delimited paths yields two `companions` rows;
+     spec without the section yields zero
+   - Parser ignores: text outside backticks on a bullet line, blank
+     bullets, multi-path bullets (skipped with warn, not error)
+   - Parser is case-sensitive on the heading: `## companions` (lowercase)
+     and `## Companion paths` are not recognized
    - `current_spec` / `set_current_spec` round-trip
    - `increment_iteration` returns updated count, starts at 0
    - `bd` CLI output parsing (JSON → typed structs)
@@ -49,6 +56,11 @@ state database tests.
      agent-crafted values with shell metacharacters are passed literally)
    - Config file loading (TOML parsing into `LoomConfig`), defaults when
      file is absent or fields are missing
+   - `SpawnConfig` JSON serialization round-trips with stable field ordering
+     and key names (the contract with `wrapix run-bead --spawn-config`).
+     Adding a field is non-breaking; renaming or removing one is — the test
+     pins the on-disk shape so changes surface as test failures, not silent
+     wire-format drift
 
    **loom-agent:**
    - Pi RPC command serialization (Rust struct → NDJSON line)
@@ -111,12 +123,119 @@ state database tests.
      retries)
    - Push gate logic (clean completion, fix-up beads, iteration cap)
    - Four-tier detection (git diff, molecule-based, README discovery, new)
-   - Container bead sync sequencing (push inside, pull outside)
+   - No per-bead `bd dolt push/pull` is invoked: assert `BdClient` exposes
+     no `dolt_push`/`dolt_pull` methods and the workflow paths do not
+     spawn `bd dolt …` subprocess calls (containers reach the authoritative
+     state via the bind-mounted Dolt socket)
+   - Parallel batch dispatch: given 3 ready beads and `--parallel 3`,
+     `run_parallel_batch` (or its Rust equivalent) creates 3 worktrees,
+     spawns 3 `wrapix run-bead` futures concurrently, and reports all
+     results before merge-back
+   - Parallel batch with N=1: no worktree is created; work runs on the
+     driver branch (parity with current ralph behavior)
+   - Merge-back ordering: branches merge to the driver branch sequentially,
+     not in parallel (avoids index lock races)
+   - On worker failure, the bead's worktree branch is deleted and the bead
+     is queued for retry per the retry policy
+   - On merge conflict, the worktree path is preserved and the bead is
+     marked failed (does not silently overwrite or auto-resolve)
+
+   **Concurrency & locking (loom-core):**
+   - `flock` wrapper acquires/releases an exclusive lock on a file path;
+     blocking variant returns when the lock is free, try-variant returns a
+     typed error if held
+   - Per-spec lock path resolution: `.wrapix/loom/locks/<label>.lock` is
+     created on first acquire, parent dirs created on demand
+   - Workspace lock path: `.wrapix/loom/locks/workspace.lock`
+   - Lock-class dispatch: `LockClass::None`, `LockClass::Spec(label)`,
+     `LockClass::Workspace` are derived from the parsed CLI command before
+     any side effects
+   - Two threads contending on the same per-spec lock: first wins, second
+     waits up to 5s then errors with a clear message naming the held label
+   - Crash test: spawn a child, have it acquire the lock, kill it; parent
+     re-acquires immediately (kernel released the flock)
+
+   **Auxiliary commands (loom-workflow):**
+   - `loom init` writes a default `config.toml` and creates `state.db` with
+     the expected schema (specs, molecules, companions, meta tables)
+   - `loom init` is idempotent: running twice does not clobber existing
+     `current_spec` or molecule rows
+   - `loom init --rebuild` drops and repopulates: spec rows from `specs/*.md`,
+     molecule rows from mock `bd list --label=ralph:active`, iteration
+     counters reset to 0
+   - `loom status` prints `current_spec`, active molecule id, iteration count
+     in a stable format (parseable line-by-line)
+   - `loom status` with no `current_spec` set exits 0 with a clear message,
+     not an error
+   - `loom use <label>` writes `current_spec` to the meta table; subsequent
+     `loom status` reflects the change
+   - `loom use <unknown>` errors when the spec row is missing
+   - `loom logs` (no flags) prints the path of, and tails, the most recent
+     file under `.wrapix/loom/logs/`
+   - `loom logs --bead <id>` finds the most recent log for that bead;
+     errors clearly if none exists
+   - `loom spec --deps` parses the active spec's `[verify]` / `[judge]`
+     annotations, opens each referenced test file, and prints the
+     deduplicated set of nixpkgs needed (port of `ralph sync --deps`)
+   - **CLI surface check**: `loom --help` lists exactly the v1 commands
+     (workflow + auxiliary) and does NOT list `sync`, `tune`, or `watch`
+
+   **Run UX renderer (loom-workflow):**
+   - Default mode: header line per bead, one line per tool call, no
+     streamed assistant text deltas
+   - `--verbose` / `-v` streams assistant text as it arrives
+   - Tool call rendering: tool name + truncated single-line summary; lines
+     longer than terminal width are clipped, never wrapped
+   - Status colors: green for `✓ done`, red for `✗ failed`, yellow for
+     retry; disabled when stdout is not a TTY (`NO_COLOR` honored)
+   - Parallel mode: tool-call lines are bead-id-prefixed so interleaved
+     output stays attributable
+
+   **Run logger (loom-workflow):**
+   - Every bead spawn produces a file at
+     `.wrapix/loom/logs/<spec-label>/<bead-id>-<timestamp>.ndjson` containing
+     the raw event stream as one JSON object per line
+   - File is written for every spawn, regardless of terminal verbosity
+     (renderer and logger both subscribe to the same `AgentEvent` stream;
+     verify by capturing both and asserting line-for-line equality on the
+     log side)
+   - With `--parallel N`, two concurrent spawns produce two distinct files;
+     no shared writer, no interleaving
+   - Log file path is logged at `info!` when the spawn starts so users can
+     `tail -f` it
+   - Retention sweep on `loom run` startup: with `retention_days = 14`,
+     files mtime'd 15+ days ago are deleted, files mtime'd today are kept
+   - `retention_days = 0` is a no-op (no files deleted, no walk)
+   - Best-effort: a single un-deletable file (read-only, locked) does not
+     abort the sweep — remaining deletable files are still removed
+
+   **GitClient (loom-core):**
+   - `GitClient::create_worktree(label, bead_id)` creates a worktree under
+     `.wrapix/worktree/<label>/<bead-id>/` on a fresh branch
+     `loom/<label>/<bead-id>` from HEAD
+   - `GitClient::list_worktrees` returns worktrees registered with the
+     repo (parity with `git worktree list --porcelain`)
+   - `GitClient::remove_worktree(path)` removes the worktree directory
+     and its registration; idempotent if already removed
+   - `GitClient::merge(branch)` merges a bead branch into the current
+     branch; returns a typed `MergeResult` distinguishing fast-forward,
+     non-conflicting merge commit, and conflict
+   - `GitClient::status` reports working-tree changes against HEAD
+   - Hybrid implementation: tests verify that whichever path is used
+     internally (gix vs `git` CLI) is encapsulated — callers see only
+     the typed Rust API. No `gix::` or `tokio::process::Command::new("git")`
+     references appear outside the `GitClient` module
+     (judge-style structural assertion)
 
 4. **Integration test coverage:**
    - Startup probe: mock pi responds to `get_commands`, verify driver
      proceeds; mock pi responds with missing required command, verify driver
      fails fast with version-mismatch error
+   - `wrapix run-bead` invocation: loom writes a `SpawnConfig` JSON to a
+     temp file, invokes a mock `wrapix-run-bead` (a script in `PATH` that
+     reads the JSON, asserts required fields, then exec's a mock agent).
+     Verifies the spawn-config contract end-to-end without needing a real
+     container runtime
    - Spawn mock pi process, send prompt via stdin, receive events via stdout,
      verify `AgentEvent` stream
    - Spawn mock claude process, read stream-json events from stdout, verify
@@ -134,6 +253,10 @@ state database tests.
      name at `info!` level
    - Permission deny-list: configure `denied_tools`, verify `control_request`
      for a listed tool is rejected with `approved: false`
+   - Parallel run end-to-end with mock agent: `loom run --parallel 2` with
+     two ready beads spawns two mock-agent processes concurrently (verified
+     via overlapping spawn timestamps captured by the mock), each in its
+     own temp git worktree, then merges both branches back
 
 5. **System test coverage:**
    - `loom plan -n <label>` with mock agent in container creates spec file
@@ -146,7 +269,9 @@ state database tests.
    - Runtime composition: `profile:rust` + `WRAPIX_AGENT=pi` produces image
      with both rust toolchain and pi binary
    - Agent switching: same test with `WRAPIX_AGENT=pi` and
-     `WRAPIX_AGENT=claude` produces equivalent end state
+     `WRAPIX_AGENT=claude` produces equivalent end state — same beads
+     closed, same files written, same final commit on the bead branch
+     (modulo agent-specific cost/timing fields)
 
 6. **State database tests:**
    - `StateDb::open` on nonexistent path creates DB with correct schema
@@ -516,6 +641,14 @@ fn run_template_parity() {
   [verify](tests/loom-test.sh::test_permission_autoapprove_flow)
 - [ ] Read timeout: no data for 5 min → warning logged, session continues
   [verify](tests/loom-test.sh::test_read_timeout_warning)
+- [ ] Parallel run end-to-end: `--parallel 2` with two ready beads dispatches
+      two mock-agent spawns concurrently and merges both branches back
+  [verify](tests/loom-test.sh::test_parallel_run_end_to_end)
+- [ ] `GitClient` API: create worktree, list, remove, status, merge round-trip
+      against a temp repo
+  [verify](tests/loom-test.sh::test_git_client_roundtrip)
+- [ ] `GitClient` is the only module importing `gix` or invoking the `git` CLI
+  [judge](tests/judges/loom.sh::test_git_client_encapsulation)
 
 ### System tests
 
@@ -535,7 +668,9 @@ fn run_template_parity() {
   [verify](tests/loom-test.sh::test_system_profile_selection)
 - [ ] Runtime composition: `profile:rust` + `WRAPIX_AGENT=pi` has both rust and pi
   [verify](tests/loom-test.sh::test_system_runtime_composition)
-- [ ] Agent switching: `WRAPIX_AGENT=pi` and `claude` produce equivalent state
+- [ ] Agent switching: `WRAPIX_AGENT=pi` and `claude` produce the same
+      beads closed, same files written, same final commit on the bead
+      branch (modulo agent-specific cost/timing fields)
   [verify](tests/loom-test.sh::test_system_agent_switching)
 - [ ] Full workflow: plan → todo → run → check end-to-end
   [verify](tests/loom-test.sh::test_system_full_workflow)
@@ -577,6 +712,10 @@ fn run_template_parity() {
   container testing is a follow-up.
 - **Mocking `bd`** — system tests use live `bd`, consistent with
   ralph-tests.md (see NFR #6).
+- **System-tier parallel-run coverage** — `loom run --parallel N` is fully
+  exercised at the integration tier (worktree creation, concurrent spawns,
+  merge-back). Repeating with real containers adds podman time without
+  catching new failure modes.
 
 ## Implementation Notes
 
