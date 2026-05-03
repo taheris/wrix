@@ -33,8 +33,10 @@ gix = { version = "0.83", default-features = false, features = [
     "blob-diff",
     "revision",
     "parallel",
+    "sha1",
 ] }
 fd-lock = "4"
+tempfile = "3"
 
 # Internal crates
 loom-core = { path = "crates/loom-core" }

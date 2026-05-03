@@ -226,7 +226,9 @@ typed Rust methods.
 | **Merge bead branch back** | `git merge` (CLI) | `gix-merge` writes a merged tree but cannot persist `MERGE_HEAD`/`MERGE_MSG` (unchecked); avoids reimplementing the index dance |
 
 `gix` 0.83+ is pinned with features `["status", "blob-diff", "revision",
-"parallel"]`. For tokio integration: `gix::Repository` is `!Sync`; loom holds a
+"parallel", "sha1"]` (the `sha1` feature is required for gix-hash to compile;
+without it the `Kind` enum has no variants). For tokio integration:
+`gix::Repository` is `!Sync`; loom holds a
 `ThreadSafeRepository` and clones a thread-local handle inside
 `spawn_blocking` per call. CLI shell-outs use `tokio::process::Command`
 with arguments passed via `.arg()` — never shell interpolation — and a
@@ -408,7 +410,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 toml = "0.8"
 askama = "0.16"
 clap = { version = "4", features = ["derive"] }
-gix = { version = "0.83", default-features = false, features = ["status", "blob-diff", "revision", "parallel"] }
+gix = { version = "0.83", default-features = false, features = ["status", "blob-diff", "revision", "parallel", "sha1"] }
 fd-lock = "4"
 ```
 

@@ -4,3 +4,6 @@
 //! state store, the typed `bd` CLI wrapper, and per-spec advisory locking.
 //! Subsequent issues populate each module; this crate currently exposes the
 //! module skeleton only.
+
+pub mod git;
+pub mod identifier;
