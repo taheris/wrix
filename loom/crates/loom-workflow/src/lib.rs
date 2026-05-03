@@ -10,6 +10,7 @@
 //! this module index so workflow phases can import the symbols without
 //! depending on `loom-core` directly each time.
 
+pub mod run;
 pub mod todo;
 
 pub use loom_core::agent::{

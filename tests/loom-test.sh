@@ -842,6 +842,71 @@ test_crash_releases_lock() {
 }
 
 #-----------------------------------------------------------------------------
+# loom run — each function dispatches into a cargo unit test under
+# `loom-workflow/src/run/`. Sharing the cargo binary keeps verify and
+# `cargo test` exercising the same code paths. The driver is exercised via
+# the `AgentLoopController` trait so the tests never need a real container,
+# bd binary, or `loom check` exec.
+#-----------------------------------------------------------------------------
+run_cargo_test() {
+    cargo_run test -p loom-workflow --lib "$1" -- --exact --nocapture --quiet
+}
+
+#-----------------------------------------------------------------------------
+# test_run_continuous — continuous mode pulls beads until `next_ready_bead`
+# returns `None`, closes each on success, and execs `loom check` exactly once
+# at molecule completion.
+#-----------------------------------------------------------------------------
+test_run_continuous() {
+    run_cargo_test run::runner::tests::continuous_loops_until_molecule_complete
+}
+
+#-----------------------------------------------------------------------------
+# test_run_once — `--once` processes a single bead then returns; subsequent
+# ready beads remain in the queue and `loom check` is never invoked.
+#-----------------------------------------------------------------------------
+test_run_once() {
+    run_cargo_test run::runner::tests::once_mode_processes_single_bead
+    run_cargo_test run::runner::tests::once_mode_does_not_exec_check_on_empty_queue
+}
+
+#-----------------------------------------------------------------------------
+# test_run_profile_selection — `resolve_profile` reads the bead's `profile:X`
+# label, falls back to `base` without a label, and honours the CLI override.
+#-----------------------------------------------------------------------------
+test_run_profile_selection() {
+    run_cargo_test run::profile::tests::resolve_profile_reads_label
+    run_cargo_test run::profile::tests::resolve_profile_falls_back_to_base_without_label
+    run_cargo_test run::profile::tests::resolve_profile_uses_override
+    run_cargo_test run::profile::tests::resolve_profile_first_matching_label_wins
+}
+
+#-----------------------------------------------------------------------------
+# test_run_retry_with_context — a failing bead retries with `previous_failure`
+# threaded into the next attempt, gives up after `max_retries`, and the
+# RetryPolicy decision math is asserted directly.
+#-----------------------------------------------------------------------------
+test_run_retry_with_context() {
+    run_cargo_test run::retry::tests::default_policy_is_two_retries
+    run_cargo_test run::retry::tests::retries_when_attempts_remain
+    run_cargo_test run::retry::tests::gives_up_after_max_retries
+    run_cargo_test run::retry::tests::zero_retries_gives_up_immediately
+    run_cargo_test run::runner::tests::failed_bead_retries_with_previous_failure_then_clarifies
+    run_cargo_test run::runner::tests::retry_succeeds_within_budget_and_closes
+    run_cargo_test run::context::tests::retry_input_wraps_previous_failure
+    run_cargo_test run::context::tests::rendered_retry_prompt_includes_previous_failure_body
+}
+
+#-----------------------------------------------------------------------------
+# test_run_execs_check — molecule completion in continuous mode triggers
+# exactly one `loom check` exec; once mode never does.
+#-----------------------------------------------------------------------------
+test_run_execs_check() {
+    run_cargo_test run::runner::tests::continuous_execs_check_on_molecule_complete
+    run_cargo_test run::runner::tests::once_mode_does_not_exec_check_on_empty_queue
+}
+
+#-----------------------------------------------------------------------------
 # Dispatch
 #-----------------------------------------------------------------------------
 if [ $# -eq 0 ]; then

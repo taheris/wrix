@@ -1,0 +1,40 @@
+//! `loom run` — per-bead execution loop.
+//!
+//! Implements the sequential (`--parallel 1`) shape of the run command per
+//! `specs/loom-harness.md` "Command set" / "Process Architecture" / "Run UX
+//! & Logging". The loop:
+//!
+//! 1. resolves the per-bead profile from the bead's `profile:X` label (or a
+//!    `--profile` override) and builds a typed [`SpawnConfig`](
+//!    loom_core::agent::SpawnConfig);
+//! 2. renders the [`RunContext`](loom_templates::run::RunContext) prompt with
+//!    the bead's id/title/description, threading the previous-failure body
+//!    (truncated to 4000 chars) on retries;
+//! 3. spawns `wrapix run-bead --spawn-config <file> --stdio` via an
+//!    [`AgentBackend`](loom_core::agent::AgentBackend) and tees the
+//!    [`AgentEvent`](loom_core::agent::AgentEvent) stream into the terminal
+//!    renderer + per-bead NDJSON log;
+//! 4. on agent failure retries with `previous_failure` injected up to
+//!    `max_retries` (default 2), then applies the `ralph:clarify` label;
+//! 5. on bead success closes the bead;
+//! 6. on molecule completion (no more ready beads) execs `loom check` —
+//!    continuous mode only.
+//!
+//! `--parallel N > 1` (worktree parallelism) is `wx-3hhwq.16`. This module
+//! only owns the sequential path.
+
+mod context;
+mod error;
+mod outcome;
+mod profile;
+mod retry;
+mod runner;
+mod spawn;
+
+pub use context::{RunContextInputs, build_run_context};
+pub use error::RunError;
+pub use outcome::{AgentOutcome, BeadResult};
+pub use profile::{DEFAULT_PROFILE, PROFILE_LABEL_PREFIX, resolve_profile};
+pub use retry::{RetryDecision, RetryPolicy};
+pub use runner::{AgentLoopController, RunMode, RunSummary, run_loop};
+pub use spawn::build_spawn_config;
