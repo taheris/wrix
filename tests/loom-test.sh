@@ -351,6 +351,160 @@ test_per_bead_profile_spawn() {
 }
 
 #-----------------------------------------------------------------------------
+# Helpers for entrypoint dispatch tests.
+#
+# The entrypoint hardcodes /workspace and /etc/wrapix paths, so we don't run
+# it directly. Instead, structural checks confirm the WRAPIX_AGENT branch
+# wires pi --mode rpc, gates claude config behind the claude branch, and
+# keeps git/beads/network setup ahead of the agent dispatch.
+#-----------------------------------------------------------------------------
+ENTRYPOINT_SH="$REPO_ROOT/lib/sandbox/linux/entrypoint.sh"
+
+# Print the first line number where the (extended) regex matches, or empty.
+entrypoint_line() {
+    grep -nE "$1" "$ENTRYPOINT_SH" | head -1 | cut -d: -f1
+}
+
+#-----------------------------------------------------------------------------
+# test_entrypoint_pi_mode — WRAPIX_AGENT=pi launches pi --mode rpc and
+# skips Claude config merging.
+#-----------------------------------------------------------------------------
+test_entrypoint_pi_mode() {
+    [ -f "$ENTRYPOINT_SH" ] || { echo "missing: $ENTRYPOINT_SH" >&2; return 1; }
+    bash -n "$ENTRYPOINT_SH" || { echo "syntax error" >&2; return 1; }
+
+    # Pi RPC mode invocation must be present.
+    local pi_ln
+    pi_ln=$(entrypoint_line 'pi[[:space:]]+--mode[[:space:]]+rpc')
+    [ -n "$pi_ln" ] || { echo "missing 'pi --mode rpc' invocation" >&2; return 1; }
+
+    # The pi invocation must be guarded by WRAPIX_AGENT=pi within the
+    # preceding 5 lines (covers the elif/case dispatch shape).
+    awk -v ln="$pi_ln" '
+        NR >= ln-5 && NR < ln && /WRAPIX_AGENT/ && /"pi"/ {found=1}
+        END {exit !found}
+    ' "$ENTRYPOINT_SH" \
+        || { echo "'pi --mode rpc' not gated by WRAPIX_AGENT=pi" >&2; return 1; }
+
+    # claude-config.json copy must live inside an `if "$WRAPIX_AGENT" =
+    # "claude"` block — pi must not trigger that copy.
+    local cp_ln guard_open guard_close
+    cp_ln=$(entrypoint_line 'cp[[:space:]]+/etc/wrapix/claude-config\.json')
+    [ -n "$cp_ln" ] || { echo "missing claude-config.json copy" >&2; return 1; }
+
+    guard_open=$(awk '
+        /^[[:space:]]*if[[:space:]]+\[[[:space:]]+"\$WRAPIX_AGENT"[[:space:]]+=[[:space:]]+"claude"[[:space:]]+\][[:space:]]*;[[:space:]]*then/ {print NR; exit}
+    ' "$ENTRYPOINT_SH")
+    [ -n "$guard_open" ] \
+        || { echo "no 'if [ \$WRAPIX_AGENT = claude ]; then' guard found" >&2; return 1; }
+
+    # Find the matching `fi` at the same indent (top-level fi line >= cp_ln).
+    guard_close=$(awk -v open="$guard_open" '
+        NR > open && /^fi$/ {print NR; exit}
+    ' "$ENTRYPOINT_SH")
+    [ -n "$guard_close" ] || { echo "claude guard 'fi' not found" >&2; return 1; }
+
+    if [ "$cp_ln" -le "$guard_open" ] || [ "$cp_ln" -ge "$guard_close" ]; then
+        echo "claude-config.json copy (line $cp_ln) not inside WRAPIX_AGENT=claude guard ($guard_open..$guard_close)" >&2
+        return 1
+    fi
+}
+
+#-----------------------------------------------------------------------------
+# test_entrypoint_claude_mode — WRAPIX_AGENT defaults to claude and the
+# existing claude launch (claude --dangerously-skip-permissions, config
+# merging) is preserved.
+#-----------------------------------------------------------------------------
+test_entrypoint_claude_mode() {
+    [ -f "$ENTRYPOINT_SH" ] || { echo "missing: $ENTRYPOINT_SH" >&2; return 1; }
+    bash -n "$ENTRYPOINT_SH" || { echo "syntax error" >&2; return 1; }
+
+    # Default value of WRAPIX_AGENT must be "claude" for backward compat.
+    grep -qE 'WRAPIX_AGENT="\$\{WRAPIX_AGENT:-claude\}"' "$ENTRYPOINT_SH" \
+        || { echo "WRAPIX_AGENT default 'claude' not set via \${WRAPIX_AGENT:-claude}" >&2; return 1; }
+
+    # Claude binary launch with --dangerously-skip-permissions still present.
+    grep -qE 'claude[[:space:]]+--dangerously-skip-permissions' "$ENTRYPOINT_SH" \
+        || { echo "missing 'claude --dangerously-skip-permissions' launch" >&2; return 1; }
+
+    # Claude config merge is preserved (jq-based settings.json merge).
+    grep -qE 'cp[[:space:]]+/etc/wrapix/claude-settings\.json' "$ENTRYPOINT_SH" \
+        || { echo "missing claude-settings.json copy" >&2; return 1; }
+    grep -qE 'cp[[:space:]]+/etc/wrapix/claude-config\.json' "$ENTRYPOINT_SH" \
+        || { echo "missing claude-config.json copy" >&2; return 1; }
+
+    # Symlink loop for persistent claude session data is preserved.
+    grep -qE 'projects[[:space:]]+plans[[:space:]]+todos' "$ENTRYPOINT_SH" \
+        || { echo "missing claude session data symlink loop" >&2; return 1; }
+
+    # Reject unknown WRAPIX_AGENT values — fail-fast diagnostic must exist.
+    grep -qE 'unknown[[:space:]]+WRAPIX_AGENT' "$ENTRYPOINT_SH" \
+        || { echo "missing fail-fast for unknown WRAPIX_AGENT value" >&2; return 1; }
+}
+
+#-----------------------------------------------------------------------------
+# test_entrypoint_shared_setup — git SSH, beads-dolt connection, and
+# network filtering all run before the agent dispatch (and therefore before
+# both pi and claude invocations).
+#-----------------------------------------------------------------------------
+test_entrypoint_shared_setup() {
+    [ -f "$ENTRYPOINT_SH" ] || { echo "missing: $ENTRYPOINT_SH" >&2; return 1; }
+
+    local git_ln beads_ln net_ln pi_ln claude_ln agent_dispatch_ln
+    git_ln=$(entrypoint_line '^\. /git-ssh-setup\.sh')
+    beads_ln=$(entrypoint_line '/workspace/\.beads/config\.yaml')
+    net_ln=$(entrypoint_line 'WRAPIX_NETWORK:-open')
+    pi_ln=$(entrypoint_line 'pi[[:space:]]+--mode[[:space:]]+rpc')
+    claude_ln=$(entrypoint_line 'claude[[:space:]]+--dangerously-skip-permissions')
+
+    [ -n "$git_ln" ] || { echo "git-ssh-setup not sourced" >&2; return 1; }
+    [ -n "$beads_ln" ] || { echo "beads-dolt config check missing" >&2; return 1; }
+    [ -n "$net_ln" ] || { echo "WRAPIX_NETWORK gate missing" >&2; return 1; }
+    [ -n "$pi_ln" ] || { echo "pi --mode rpc not present" >&2; return 1; }
+    [ -n "$claude_ln" ] || { echo "claude launch not present" >&2; return 1; }
+
+    # Earliest agent dispatch line — both branches must follow shared setup.
+    agent_dispatch_ln=$(( pi_ln < claude_ln ? pi_ln : claude_ln ))
+
+    if [ "$git_ln" -ge "$agent_dispatch_ln" ]; then
+        echo "git-ssh-setup (line $git_ln) runs after agent dispatch (line $agent_dispatch_ln)" >&2
+        return 1
+    fi
+    if [ "$beads_ln" -ge "$agent_dispatch_ln" ]; then
+        echo "beads-dolt setup (line $beads_ln) runs after agent dispatch (line $agent_dispatch_ln)" >&2
+        return 1
+    fi
+    if [ "$net_ln" -ge "$agent_dispatch_ln" ]; then
+        echo "network filtering (line $net_ln) runs after agent dispatch (line $agent_dispatch_ln)" >&2
+        return 1
+    fi
+
+    # Shared setup must be unconditional w.r.t. WRAPIX_AGENT — i.e. NOT
+    # nested inside the `if [ "$WRAPIX_AGENT" = "claude" ]; then ... fi`
+    # block. Find that block's range and assert the shared-setup lines fall
+    # outside it.
+    local guard_open guard_close
+    guard_open=$(awk '
+        /^[[:space:]]*if[[:space:]]+\[[[:space:]]+"\$WRAPIX_AGENT"[[:space:]]+=[[:space:]]+"claude"[[:space:]]+\][[:space:]]*;[[:space:]]*then/ {print NR; exit}
+    ' "$ENTRYPOINT_SH")
+    [ -n "$guard_open" ] || { echo "no top-level WRAPIX_AGENT=claude guard" >&2; return 1; }
+    guard_close=$(awk -v open="$guard_open" '
+        NR > open && /^fi$/ {print NR; exit}
+    ' "$ENTRYPOINT_SH")
+    [ -n "$guard_close" ] || { echo "WRAPIX_AGENT=claude guard 'fi' missing" >&2; return 1; }
+
+    local ln name
+    for pair in "git_ln=$git_ln" "beads_ln=$beads_ln" "net_ln=$net_ln"; do
+        name=${pair%=*}
+        ln=${pair#*=}
+        if [ "$ln" -gt "$guard_open" ] && [ "$ln" -lt "$guard_close" ]; then
+            echo "$name (line $ln) is inside WRAPIX_AGENT=claude guard ($guard_open..$guard_close); should be shared" >&2
+            return 1
+        fi
+    done
+}
+
+#-----------------------------------------------------------------------------
 # test_loom_does_not_invoke_podman — loom Rust sources never invoke podman
 # directly; only documentation/comments may reference it.
 #-----------------------------------------------------------------------------

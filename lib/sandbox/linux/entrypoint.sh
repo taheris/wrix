@@ -10,98 +10,112 @@ cd /workspace
 # shellcheck source=/dev/null
 . /git-ssh-setup.sh
 
-# Initialize Claude config and settings
-# ~/.claude is a container-local directory (tmpfs, not mounted from host) so that
-# user-level settings.json stays separate from project-level settings.json.
-# Persistent session data (history, projects, etc.) is symlinked from
-# /workspace/.claude which IS on the host via the /workspace bind mount.
-mkdir -p "$HOME/.claude"
-cp /etc/wrapix/claude-config.json "$HOME/.claude.json"
-cp /etc/wrapix/claude-settings.json "$HOME/.claude/settings.json"
-chmod 644 "$HOME/.claude.json" "$HOME/.claude/settings.json"
+# WRAPIX_AGENT selects the agent runtime. 'claude' (default) runs claude with
+# config merging and permission bypass; 'pi' runs pi-mono in NDJSON RPC mode
+# and skips Claude-specific config (pi has no permission system or settings.json).
+WRAPIX_AGENT="${WRAPIX_AGENT:-claude}"
+case "$WRAPIX_AGENT" in
+  claude|pi) ;;
+  *)
+    echo "Error: unknown WRAPIX_AGENT: $WRAPIX_AGENT (expected 'claude' or 'pi')" >&2
+    exit 1
+    ;;
+esac
 
-# Runtime MCP server selection
-# Images built with mcpRuntime=true include per-server configs in /etc/wrapix/mcp/.
-# WRAPIX_MCP selects which servers to enable (comma-separated, default: all).
-if [ -d /etc/wrapix/mcp ]; then
-  mcp_enabled="${WRAPIX_MCP:-all}"
-  mcp_servers="{}"
+if [ "$WRAPIX_AGENT" = "claude" ]; then
+  # Initialize Claude config and settings
+  # ~/.claude is a container-local directory (tmpfs, not mounted from host) so that
+  # user-level settings.json stays separate from project-level settings.json.
+  # Persistent session data (history, projects, etc.) is symlinked from
+  # /workspace/.claude which IS on the host via the /workspace bind mount.
+  mkdir -p "$HOME/.claude"
+  cp /etc/wrapix/claude-config.json "$HOME/.claude.json"
+  cp /etc/wrapix/claude-settings.json "$HOME/.claude/settings.json"
+  chmod 644 "$HOME/.claude.json" "$HOME/.claude/settings.json"
 
-  for config_file in /etc/wrapix/mcp/*.json; do
-    [ -f "$config_file" ] || continue
-    server_name=$(basename "$config_file" .json)
+  # Runtime MCP server selection
+  # Images built with mcpRuntime=true include per-server configs in /etc/wrapix/mcp/.
+  # WRAPIX_MCP selects which servers to enable (comma-separated, default: all).
+  if [ -d /etc/wrapix/mcp ]; then
+    mcp_enabled="${WRAPIX_MCP:-all}"
+    mcp_servers="{}"
 
-    # Filter by WRAPIX_MCP unless "all"
-    if [ "$mcp_enabled" != "all" ]; then
-      if ! echo ",$mcp_enabled," | grep -qF ",$server_name,"; then
-        continue
+    for config_file in /etc/wrapix/mcp/*.json; do
+      [ -f "$config_file" ] || continue
+      server_name=$(basename "$config_file" .json)
+
+      # Filter by WRAPIX_MCP unless "all"
+      if [ "$mcp_enabled" != "all" ]; then
+        if ! echo ",$mcp_enabled," | grep -qF ",$server_name,"; then
+          continue
+        fi
       fi
+
+      server_config=$(cat "$config_file")
+
+      # Apply runtime env var overrides
+      case "$server_name" in
+        tmux)
+          if [ -n "${WRAPIX_MCP_TMUX_AUDIT:-}" ]; then
+            server_config=$(echo "$server_config" | jq --arg v "$WRAPIX_MCP_TMUX_AUDIT" '.env.TMUX_DEBUG_AUDIT = $v')
+          fi
+          if [ -n "${WRAPIX_MCP_TMUX_AUDIT_FULL:-}" ]; then
+            server_config=$(echo "$server_config" | jq --arg v "$WRAPIX_MCP_TMUX_AUDIT_FULL" '.env.TMUX_DEBUG_AUDIT_FULL = $v')
+          fi
+          ;;
+      esac
+
+      mcp_servers=$(echo "$mcp_servers" | jq --arg name "$server_name" --argjson config "$server_config" '.[$name] = $config')
+    done
+
+    if [ "$mcp_servers" != "{}" ]; then
+      jq --argjson servers "$mcp_servers" '.mcpServers = $servers' \
+        "$HOME/.claude/settings.json" > "$HOME/.claude/settings.json.tmp"
+      mv "$HOME/.claude/settings.json.tmp" "$HOME/.claude/settings.json"
     fi
+  fi
 
-    server_config=$(cat "$config_file")
+  # Seed project-level settings if missing, then sync env vars from image
+  mkdir -p /workspace/.claude
+  if [ ! -f /workspace/.claude/settings.json ]; then
+    cp /etc/wrapix/claude-settings.json /workspace/.claude/settings.json
+  else
+    jq -s '.[1].env = (.[1].env // {}) * .[0].env | .[1]' \
+      /etc/wrapix/claude-settings.json /workspace/.claude/settings.json \
+      > /workspace/.claude/settings.json.tmp \
+      && mv /workspace/.claude/settings.json.tmp /workspace/.claude/settings.json
+  fi
 
-    # Apply runtime env var overrides
-    case "$server_name" in
-      tmux)
-        if [ -n "${WRAPIX_MCP_TMUX_AUDIT:-}" ]; then
-          server_config=$(echo "$server_config" | jq --arg v "$WRAPIX_MCP_TMUX_AUDIT" '.env.TMUX_DEBUG_AUDIT = $v')
-        fi
-        if [ -n "${WRAPIX_MCP_TMUX_AUDIT_FULL:-}" ]; then
-          server_config=$(echo "$server_config" | jq --arg v "$WRAPIX_MCP_TMUX_AUDIT_FULL" '.env.TMUX_DEBUG_AUDIT_FULL = $v')
-        fi
-        ;;
-    esac
-
-    mcp_servers=$(echo "$mcp_servers" | jq --arg name "$server_name" --argjson config "$server_config" '.[$name] = $config')
-  done
-
-  if [ "$mcp_servers" != "{}" ]; then
-    jq --argjson servers "$mcp_servers" '.mcpServers = $servers' \
-      "$HOME/.claude/settings.json" > "$HOME/.claude/settings.json.tmp"
+  # === ralph settings merge: start ===
+  # Deep-merge ralph runtime settings fragment (SessionStart[compact] re-pin hook)
+  # into ~/.claude/settings.json. Array entries under each hook event are
+  # concatenated so ralph's hooks coexist with the sandbox Notification hook.
+  if [ -n "${RALPH_RUNTIME_DIR:-}" ] && [ -f "$RALPH_RUNTIME_DIR/claude-settings.json" ]; then
+    jq -s '
+      .[0] as $base
+      | .[1] as $frag
+      | ($base.hooks // {}) as $bh
+      | ($frag.hooks // {}) as $fh
+      | $base
+      | .hooks = (
+          ($bh * $fh)
+          | with_entries(.value = (($bh[.key] // []) + ($fh[.key] // [])))
+        )
+    ' "$HOME/.claude/settings.json" "$RALPH_RUNTIME_DIR/claude-settings.json" \
+      > "$HOME/.claude/settings.json.tmp"
     mv "$HOME/.claude/settings.json.tmp" "$HOME/.claude/settings.json"
   fi
-fi
+  # === ralph settings merge: end ===
 
-# Seed project-level settings if missing, then sync env vars from image
-mkdir -p /workspace/.claude
-if [ ! -f /workspace/.claude/settings.json ]; then
-  cp /etc/wrapix/claude-settings.json /workspace/.claude/settings.json
-else
-  jq -s '.[1].env = (.[1].env // {}) * .[0].env | .[1]' \
-    /etc/wrapix/claude-settings.json /workspace/.claude/settings.json \
-    > /workspace/.claude/settings.json.tmp \
-    && mv /workspace/.claude/settings.json.tmp /workspace/.claude/settings.json
+  # Symlink persistent session data from workspace for /resume and /rename
+  for item in projects plans todos file-history paste-cache backups \
+              debug session-env plugins shell-snapshots \
+              history.jsonl settings.local.json stats-cache.json; do
+    if [ -e "/workspace/.claude/$item" ] && [ ! -e "$HOME/.claude/$item" ]; then
+      ln -s "/workspace/.claude/$item" "$HOME/.claude/$item"
+    fi
+  done
 fi
-
-# === ralph settings merge: start ===
-# Deep-merge ralph runtime settings fragment (SessionStart[compact] re-pin hook)
-# into ~/.claude/settings.json. Array entries under each hook event are
-# concatenated so ralph's hooks coexist with the sandbox Notification hook.
-if [ -n "${RALPH_RUNTIME_DIR:-}" ] && [ -f "$RALPH_RUNTIME_DIR/claude-settings.json" ]; then
-  jq -s '
-    .[0] as $base
-    | .[1] as $frag
-    | ($base.hooks // {}) as $bh
-    | ($frag.hooks // {}) as $fh
-    | $base
-    | .hooks = (
-        ($bh * $fh)
-        | with_entries(.value = (($bh[.key] // []) + ($fh[.key] // [])))
-      )
-  ' "$HOME/.claude/settings.json" "$RALPH_RUNTIME_DIR/claude-settings.json" \
-    > "$HOME/.claude/settings.json.tmp"
-  mv "$HOME/.claude/settings.json.tmp" "$HOME/.claude/settings.json"
-fi
-# === ralph settings merge: end ===
-
-# Symlink persistent session data from workspace for /resume and /rename
-for item in projects plans todos file-history paste-cache backups \
-            debug session-env plugins shell-snapshots \
-            history.jsonl settings.local.json stats-cache.json; do
-  if [ -e "/workspace/.claude/$item" ] && [ ! -e "$HOME/.claude/$item" ]; then
-    ln -s "/workspace/.claude/$item" "$HOME/.claude/$item"
-  fi
-done
 
 # Connect bd to the host's wrapix-beads dolt container via the mounted
 # unix socket. The host starts wrapix-beads (lib/beads/default.nix shellHook)
@@ -249,6 +263,10 @@ MAIN_EXIT=0
 if [ $# -gt 0 ]; then
   # Command override: run the specified command instead of Claude/Ralph
   "$@" || MAIN_EXIT=$?
+elif [ "$WRAPIX_AGENT" = "pi" ]; then
+  # Pi RPC mode: pi listens on stdin/stdout for NDJSON commands.
+  # Loom drives the session from the host via piped stdio.
+  pi --mode rpc || MAIN_EXIT=$?
 elif [ "${RALPH_MODE:-}" = "1" ]; then
   # RALPH_CMD and RALPH_ARGS set by launcher (default: help)
   # shellcheck disable=SC2086 # Intentional word splitting for RALPH_ARGS
