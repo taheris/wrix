@@ -16,7 +16,8 @@ use loom_templates::run::{PREVIOUS_FAILURE_MAX_LEN, PreviousFailure, RunContext}
 use loom_templates::todo::{TodoNewContext, TodoUpdateContext};
 
 const EXIT_SIGNALS_BODY: &str = "- `LOOM_COMPLETE`\n- `LOOM_BLOCKED`\n- `LOOM_CLARIFY`";
-const PINNED_CONTEXT_BODY: &str = "# Project Overview\n\nLoom drives Ralph's workflow.";
+const PINNED_CONTEXT_BODY: &str =
+    "# Project Overview\n\nLoom orchestrates the spec-to-implementation workflow.";
 
 #[test]
 fn plan_new_renders_partials_and_inputs() -> Result<()> {
@@ -135,7 +136,7 @@ fn run_wraps_agent_supplied_fields_in_agent_output() -> Result<()> {
         molecule_id: Some(MoleculeId::new("wx-3hhwq")),
         issue_id: Some(BeadId::new("wx-3hhwq.10")?),
         title: Some("port templates".into()),
-        description: Some("Migrate Ralph templates to Askama.".into()),
+        description: Some("Port templates to Askama.".into()),
         previous_failure: Some(PreviousFailure::new("error: cargo test failed".to_string())),
         exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
@@ -144,7 +145,7 @@ fn run_wraps_agent_supplied_fields_in_agent_output() -> Result<()> {
     assert!(out.contains("# Implementation Step"));
     assert!(out.contains("Issue: wx-3hhwq.10"));
     assert!(out.contains("Title: <agent-output>port templates</agent-output>"));
-    assert!(out.contains("Migrate Ralph templates to Askama."));
+    assert!(out.contains("Port templates to Askama."));
     assert!(out.contains("error: cargo test failed"));
     let count_open = out.matches("<agent-output>").count();
     let count_close = out.matches("</agent-output>").count();
@@ -242,14 +243,11 @@ fn msg_renders_with_no_clarify_beads() -> Result<()> {
     Ok(())
 }
 
-/// `test_template_output_parity` smoke check: rendered Loom output reproduces
-/// the same instruction sections, headers, and substituted values that Ralph's
-/// bash renderer emits for the same inputs. Bit-for-bit parity is not possible
-/// — Loom drops legacy variables (`README_INSTRUCTIONS`, `CURRENT_FILE`) and
-/// renames the driver from `ralph` to `loom` — but every section that appears
-/// in both templates must reproduce the same content with the same inputs.
+/// Smoke check: the rendered run prompt contains every instruction section,
+/// header, and substituted value the run.md template promises for shared
+/// inputs.
 #[test]
-fn run_output_parity_with_ralph_for_shared_inputs() -> Result<()> {
+fn run_renders_expected_sections_for_shared_inputs() -> Result<()> {
     let ctx = RunContext {
         pinned_context: "PIN".into(),
         label: SpecLabel::new("demo"),

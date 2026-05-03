@@ -57,8 +57,8 @@ fn resolve_option(bead: &BeadId, n: u32, parsed: &OptionsParse) -> Result<FastRe
     }
 }
 
-/// Note written by `-d` (dismiss). Mirrors ralph's wording so beads carry a
-/// recognisable marker after the label is removed.
+/// Note written by `-d` (dismiss) so the bead carries a recognisable marker
+/// after the label is removed.
 pub const DISMISS_NOTE: &str =
     "Dismissed via loom msg -d. Agent should work around the open question.";
 

@@ -8,8 +8,8 @@ use super::error::PlanError;
 /// Inputs threaded into the plan-new/plan-update context structs.
 ///
 /// Constructed once by the driver per `loom plan` call. `companion_paths`
-/// is consumed only by `Update`; `New` ignores it (matches Ralph's bash
-/// behaviour — companions are an update-only concept).
+/// is consumed only by `Update`; `New` ignores it — companions are an
+/// update-only concept.
 pub struct PlanPromptInputs {
     pub mode: PlanMode,
     pub spec_path: String,

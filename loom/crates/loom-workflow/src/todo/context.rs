@@ -24,7 +24,7 @@ pub struct TemplateBaseFields {
 ///
 /// - Tier 1 (Diff) → [`TodoUpdateContext`] with `spec_diff` set to the
 ///   formatted fan-out (each candidate prefixed with its `=== <path> ===`
-///   marker, matching ralph's bash output).
+///   marker).
 /// - Tier 2 (Tasks) → [`TodoUpdateContext`] with `existing_tasks` set; the
 ///   driver supplies the task list as a pre-rendered string.
 /// - Tier 4 (New) → [`TodoNewContext`].
@@ -80,8 +80,8 @@ pub fn build_template_context(
     }
 }
 
-/// Format the per-spec fan-out as ralph does: `=== <spec_path> ===` header
-/// followed by the diff body, each candidate separated by a blank line.
+/// Format the per-spec fan-out: `=== <spec_path> ===` header followed by
+/// the diff body, each candidate separated by a blank line.
 fn render_fanout_block(candidates: &[DiffCandidate]) -> String {
     let mut out = String::new();
     for (idx, cand) in candidates.iter().enumerate() {

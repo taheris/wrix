@@ -32,8 +32,7 @@ default = "claude"
 # backend = "claude"
 
 [claude]
-# Seconds to wait for clean exit after `result` before SIGTERM. Mirrors
-# ralph's RALPH_CLAUDE_POST_RESULT_GRACE.
+# Seconds to wait for clean exit after `result` before SIGTERM.
 post_result_grace_secs = 5
 
 [security]
