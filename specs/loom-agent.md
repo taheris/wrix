@@ -34,18 +34,20 @@ platform (crate structure, templates, workflow) is defined in
    Loom never calls `podman run` directly; see
    [loom-harness.md — Process Architecture](loom-harness.md#process-architecture).
 2. **Agent backend trait** — an async Rust trait (`AgentBackend`) abstracting
-   agent lifecycle: spawn a session and declare capabilities. Used via type
-   parameter (`<B: AgentBackend>`) — the concrete backend is known at each
-   call site.
+   agent lifecycle: spawn a session. Used via type parameter
+   (`<B: AgentBackend>`) — the concrete backend is known at each call site.
 3. **Pi backend** — speaks pi-mono's NDJSON RPC protocol over stdin/stdout.
-   Supports:
+   Commands:
    - `prompt` — send initial or follow-up prompts
    - `steer` — mid-session course correction
    - `abort` — terminate current operation
-   - `set_thinking_level` — adjust reasoning effort
+   - `set_thinking_level` — adjust reasoning effort (best-effort: not
+     included in the startup `get_commands` probe; sent only when the
+     phase config requests it, and silently skipped if pi rejects it)
    - `set_model` — switch LLM provider/model mid-session
-   - Streaming event parsing (message deltas, tool calls, tool results,
-     completion, compaction, errors)
+
+   Plus streaming event parsing for message deltas, tool calls, tool results,
+   completion, compaction, and errors.
 4. **Claude backend** — launches
    `claude --print --input-format stream-json --output-format stream-json`,
    parses NDJSON events from stdout, and writes user messages (initial
@@ -55,8 +57,7 @@ platform (crate structure, templates, workflow) is defined in
    exits) while `--input-format stream-json` enables mid-session steering
    via additional user messages. On observing a `result` event, loom closes
    its end of stdin, waits `[claude] post_result_grace_secs` (default 5s)
-   for natural exit, then escalates SIGTERM → SIGKILL — same pattern as
-   Ralph's `run_claude_stream` watchdog (`lib/ralph/cmd/util.sh`).
+   for natural exit, then escalates SIGTERM → SIGKILL.
 5. **Per-phase backend selection** — each workflow phase (plan, todo, run,
    check, msg) independently resolves its backend and model from config.
    The `default` key under `[agent]` sets the fallback (`claude`). Per-phase
@@ -65,8 +66,8 @@ platform (crate structure, templates, workflow) is defined in
 6. **Agent runtime layer** — the image builder composes two orthogonal axes:
    *workspace profile* (base, rust, python) and *agent runtime* (claude, pi).
    When `WRAPIX_AGENT=pi`, the pi runtime layer (Node.js + pi binary) is
-   added to whichever workspace profile the bead requires. No standalone
-   `profiles.pi` — no profile proliferation.
+   added to whichever workspace profile is configured for the bead. No
+   standalone `profiles.pi` — no profile proliferation.
 7. **Entrypoint agent selection** — `entrypoint.sh` checks `WRAPIX_AGENT` and:
    - `claude` (default): existing behavior (Claude config merging, hooks,
      `claude --dangerously-skip-permissions`)
@@ -100,6 +101,10 @@ platform (crate structure, templates, workflow) is defined in
    traits is stable and works directly with static dispatch.
 
 ## Architecture
+
+Throughout this section, **"driver"** refers to loom's backend-side code that
+drives the agent process over NDJSON — distinct from the agent (pi or claude)
+running inside the container.
 
 ### Dispatch: ZST Backends + Per-Phase Selection
 
@@ -155,8 +160,11 @@ backend = "claude"
 Phases without explicit config inherit `[agent] default`. The pi backend
 calls `set_model` after spawn if the phase config specifies a provider/model.
 
-**For testing:** mock backends are ZSTs too:
-`run_agent::<MockBackend>(&config)`.
+`[agent.plan]` is also a valid per-phase key, but the resolution path differs:
+`loom plan` is interactive (human-in-the-loop) and shells to the backend's
+interactive entry point rather than going through the `AgentBackend` trait.
+Today only `claude` is wired up there, via `wrapix run`; pi would need an
+interactive frontend before it could be selected for `plan`.
 
 ```rust
 // loom-workflow (simplified — real version handles retry, steering, logging)
@@ -180,6 +188,9 @@ pub async fn run_agent<B: AgentBackend>(
     }
 }
 ```
+
+Mock backends slot into the same dispatch: they are ZSTs too, so
+`run_agent::<MockBackend>(&config)` is the test-time entry point.
 
 ### Agent Backend Trait
 
@@ -273,6 +284,14 @@ loom-agent) because the `AgentBackend` trait returns `AgentSession<Idle>` —
 if these types lived in loom-agent, the trait would depend on its own
 implementor crate (circular dependency).
 
+The `pending` queue exists because a single NDJSON line can yield multiple
+`AgentEvent`s — `next_event` returns one at a time and buffers the rest.
+
+A state-agnostic `AgentSession::child_mut(&mut self) -> &mut tokio::process::Child`
+accessor lets backends borrow the underlying child without surrendering
+session ownership. This is the hook the claude backend's shutdown watchdog
+uses to drive the SIGTERM/SIGKILL escalation described in requirement #4.
+
 ```rust
 // loom-core
 
@@ -304,22 +323,31 @@ Each backend (in loom-agent) provides its own `LineParse` implementation:
 wire** — parsing what comes in on stdout *and* encoding what goes out on
 stdin. Keeping the encoders alongside `parse_line` is what lets
 `AgentSession` stay a single concrete generic-free type (`Box<dyn LineParse>`
-inside): the session owns the IO; the parser owns the framing. The per-line
+inside): the session owns the IO; the parser owns the framing.
+
+Static dispatch on `AgentBackend` (the outer layer) eliminates the
+`async-trait` dependency; internal dyn on `LineParse` (the inner layer)
+avoids leaking backend types through the session's public API. The per-line
 vtable call is negligible next to the IO cost of reading from a subprocess
-pipe. Static dispatch on `AgentBackend` (the outer layer) eliminates the
-`async-trait` dependency; internal dyn on `LineParse` (the inner layer) avoids
-leaking backend types through the session's public API.
+pipe.
+
 `ParsedLine::response` handles protocol control flow: when a parsed line
 requires a response on stdin (e.g., Claude's `control_request` auto-approve),
 the parser populates this field. `AgentSession::next_event` writes the
 response before yielding events — keeping response logic in the parser and IO
-in the session. `ParsedLine::events` is a `Vec` because some protocol messages map to
-multiple `AgentEvent`s: Claude's `result/success` produces `TurnEnd` +
-`SessionComplete`; `result/error` produces `Error` + `SessionComplete`.
-Pi's `turn_end` and `agent_end` are separate events that each map to a
-single `AgentEvent`.
+in the session. `ParsedLine::events` is a `Vec` because some protocol
+messages map to multiple `AgentEvent`s: Claude's `result/success` produces
+`TurnEnd` + `SessionComplete`; `result/error` produces `Error` +
+`SessionComplete`. Pi's `turn_end` and `agent_end` are separate events that
+each map to a single `AgentEvent`.
 
 ### AgentEvent
+
+`AgentEvent` and `CompactionReason` are serializable so the terminal renderer
+and the on-disk NDJSON log share a single tee'd sink (see
+[loom-harness — Run UX & Logging](loom-harness.md#run-ux--logging)). Variant
+names are emitted as snake_case (`message_delta`, `tool_call`, …) — that is
+the wire format consumed by log readers.
 
 ```rust
 #[derive(Debug)]
@@ -397,7 +425,7 @@ pub enum ProtocolError {
 ### SpawnConfig
 
 ```rust
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpawnConfig {
     pub image: String,
     pub workspace: PathBuf,
@@ -526,13 +554,13 @@ accumulated further.
 Pi's `--mode rpc` uses NDJSON over stdin/stdout. The protocol has no version
 negotiation or handshake. After spawning the process, the Pi backend sends a
 `get_commands` probe and verifies the response contains every command Loom
-depends on. The probe set is the union of commands actually used by the
-backend: at minimum `prompt`, `steer`, `abort`, `set_model`, plus `compact`
-(if manual compaction is wired up) and `get_session_stats` (if cost capture
-is enabled — see [Pi cost tracking](#pi-cost-tracking)). If the response
-shape is unexpected or a required command is missing, the backend fails fast
-with a clear version-mismatch error before any workflow begins. After the
-probe succeeds, normal command flow starts.
+depends on. The probe set is always `prompt`, `steer`, `abort`, `set_model`,
+optionally extended with `compact` (if manual compaction is wired up) and
+`get_session_stats` (if cost capture is enabled — see
+[Pi cost tracking](#pi-cost-tracking)). If the response shape is unexpected
+or a required command is missing, the backend fails fast with a clear
+version-mismatch error before any workflow begins. After the probe succeeds,
+normal command flow starts.
 
 Messages are classified by a two-phase deserialization strategy: peek at the
 `type` and `id` fields to determine the message category, then deserialize
@@ -555,24 +583,28 @@ pub enum PiMessage {
     ExtensionUiRequest(PiUiRequest),
 }
 
-pub fn parse_pi_line(line: &str) -> Result<PiMessage, ProtocolError> {
-    let env: PiEnvelope = serde_json::from_str(line)?;
-    match env.msg_type.as_deref() {
-        Some("response") => {
-            let resp: PiResponse = serde_json::from_str(line)?;
-            Ok(PiMessage::Response(resp))
+// Lives inside PiParser::parse_line; shown here in classifier form to focus
+// on the (type, id) dispatch.
+impl PiParser {
+    fn classify(&self, line: &str) -> Result<PiMessage, ProtocolError> {
+        let env: PiEnvelope = serde_json::from_str(line)?;
+        match env.msg_type.as_deref() {
+            Some("response") => {
+                let resp: PiResponse = serde_json::from_str(line)?;
+                Ok(PiMessage::Response(resp))
+            }
+            Some("extension_ui_request") => {
+                let req: PiUiRequest = serde_json::from_str(line)?;
+                Ok(PiMessage::ExtensionUiRequest(req))
+            }
+            _ if env.id.is_none() => {
+                let evt: PiEvent = serde_json::from_str(line)?;
+                Ok(PiMessage::Event(evt))
+            }
+            _ => Err(ProtocolError::UnknownMessageType(
+                env.msg_type.unwrap_or_default(),
+            )),
         }
-        Some("extension_ui_request") => {
-            let req: PiUiRequest = serde_json::from_str(line)?;
-            Ok(PiMessage::ExtensionUiRequest(req))
-        }
-        _ if env.id.is_none() => {
-            let evt: PiEvent = serde_json::from_str(line)?;
-            Ok(PiMessage::Event(evt))
-        }
-        _ => Err(ProtocolError::UnknownMessageType(
-            env.msg_type.unwrap_or_default(),
-        )),
     }
 }
 ```
@@ -580,8 +612,10 @@ pub fn parse_pi_line(line: &str) -> Result<PiMessage, ProtocolError> {
 **Why two-phase?** Pi messages don't follow a clean tagged union: responses have
 `type: "response"` plus an `id`, events carry their own `type` values (e.g.,
 `"message_update"`) without an `id`, and extension UI requests have
-`type: "extension_ui_request"`. The discriminant logic is `(type, id)` — a
-two-field dispatch that serde's built-in tag/content support can't express.
+`type: "extension_ui_request"`. The discriminant is `type` for the known
+message names, with id-absence as the fallback that classifies the remainder
+as events — a two-field dispatch that serde's built-in tag/content support
+can't express.
 
 The envelope parse is cheap (serde skips unknown fields), and the second parse
 deserializes into the exact target type.
@@ -644,7 +678,7 @@ dispatch on both levels.
 | `turn_start` | — | logged at `trace!`, skipped |
 | `turn_end` | `message`, `toolResults` | `AgentEvent::TurnEnd` |
 | `agent_start` | — | logged at `trace!`, skipped |
-| `agent_end` | `messages` | `AgentEvent::SessionComplete` (`exit_code: 0`) — see note below |
+| `agent_end` | `messages` | `AgentEvent::SessionComplete` (`exit_code: 0`, synthesized) — see note below |
 | `compaction_start` | `reason` | `AgentEvent::CompactionStart` |
 | `compaction_end` | `aborted`, `reason`, `result?`, `willRetry`, `errorMessage?` | `AgentEvent::CompactionEnd` |
 | `queue_update` | `steering`, `followUp` | logged at `trace!`, skipped |
@@ -661,8 +695,8 @@ are the only reasons emitted by pi as of v0.72.
 done" — the process keeps accepting commands. Loom's per-bead-container
 model maps this to `SessionComplete` because each container handles exactly
 one prompt; after `agent_end`, loom tears down the container rather than
-sending another command. If the per-bead model ever changes, this mapping
-must be revisited.
+sending another command. The mapping assumes one prompt per container; pi's
+`agent_end` carries no exit code, so loom synthesizes `0`.
 
 **`message_update` delta mapping:**
 
@@ -690,7 +724,10 @@ agent. As a defensive fallback, when loom observes an
 (`select`/`confirm`/`input`/`editor`), it replies with
 `{"type":"extension_ui_response","id":"<request_id>","cancelled":true}`.
 Methods that don't need a response (`notify`/`setStatus`/`setWidget`/
-`setTitle`/`set_editor_text`) are logged and ignored.
+`setTitle`/`set_editor_text`) are logged and ignored. The auto-cancel reply
+is built inside `PiParser::parse_line`, which populates `ParsedLine::response`
+with the encoded `extension_ui_response` line so the runner just writes it
+back to the agent's stdin — no policy lives in the workflow layer.
 
 **Stdout discipline:** Pi v0.72+ calls `takeOverStdout()` at RPC startup —
 `process.stdout.write` is monkey-patched to redirect non-protocol writes to
@@ -774,12 +811,12 @@ tool types visible in logs.
 {"type": "control_response", "id": "<request_id>", "approved": true}
 ```
 
-**Deny-list.** A configurable `denied_tools` list in `config.toml` rejects
-specific tool names with `approved: false`. Empty by default — the
-container sandbox is the trust boundary and logging is the primary
-mitigation. The slot exists today so a deny rule can be added without a
-loom release if Claude Code ships a tool type that reaches outside the
-container boundary.
+**Deny-list.** A configurable `denied_tools` list under `[agent.claude]` in
+`config.toml` (e.g. `denied_tools = ["WebFetch"]`) rejects specific tool
+names with `approved: false`. Empty by default — the container sandbox is
+the trust boundary and logging is the primary mitigation. The slot exists
+today so a deny rule can be added without a loom release if Claude Code
+ships a tool type that reaches outside the container boundary.
 
 ### Compaction Handling
 
@@ -1017,19 +1054,18 @@ The pi branch:
 - **macOS (Darwin) support for pi runtime layer** — initially Linux
   containers only. Darwin support is a follow-up.
 - **Multiple simultaneous backends** — one backend per phase invocation.
-  No parallel multi-backend sessions within a single phase.
+  No mixing of backends within a single phase; parallel sessions all use
+  the backend resolved for that phase.
 - **Claude Code RPC mode** — if Anthropic ships an RPC mode for Claude Code,
-  the Claude backend can be upgraded. Not designed for now.
+  the Claude backend can be upgraded. Not in scope today.
 
 ## Implementation Notes
 
 ### Anthropic subscription policy
 
-As of April 2026, Anthropic no longer allows third-party applications to consume
-Claude Pro/Max plan quota. Pi-mono backed by Claude must use API keys with
-separate billing. Users who want to use their Max subscription must use the
-Claude backend (which runs the `claude` binary directly). This is a policy
-constraint, not a technical one — document it in user-facing help text.
+The Pro/Max-quota constraint is described in [Problem Statement](#problem-statement).
+Surface it in user-facing help text so the choice between backends is informed by
+the billing reality, not just the technical capabilities.
 
 ### Pi-mono coordinates
 
@@ -1062,6 +1098,9 @@ The driver can send multiple `prompt` / `steer` / `follow_up` commands without
 restarting. This differs from Claude Code, which is a single-session process
 that exits after completion. The pi backend should handle both "session still
 active, send follow-up" and "session complete, process still running" states.
+Today only the second state is reached — the per-bead-container model tears
+down after `agent_end`, so multi-prompt reuse of a live pi process is
+forward-looking guidance, not current behavior.
 
 ### Pi cost tracking
 

@@ -119,7 +119,7 @@ state database tests.
      spec error)
    - Profile selection from bead labels (parse, fallback to base, flag
      override)
-   - Retry logic (failure count tracking, `ralph:clarify` label after max
+   - Retry logic (failure count tracking, `loom:clarify` label after max
      retries)
    - Push gate logic (clean completion, fix-up beads, iteration cap)
    - Four-tier detection (git diff, molecule-based, README discovery, new)
@@ -161,7 +161,7 @@ state database tests.
    - `loom init` is idempotent: running twice does not clobber existing
      `current_spec` or molecule rows
    - `loom init --rebuild` drops and repopulates: spec rows from `specs/*.md`,
-     molecule rows from mock `bd list --label=ralph:active`, iteration
+     molecule rows from mock `bd list --label=loom:active`, iteration
      counters reset to 0
    - `loom status` prints `current_spec`, active molecule id, iteration count
      in a stable format (parseable line-by-line)
@@ -311,42 +311,66 @@ state database tests.
 
 ### Test File Layout
 
+Each crate uses two complementary Rust test homes:
+
+- **Inline `#[cfg(test)] mod tests { … }`** at the bottom of each source file
+  — white-box tests with access to private impl details, kept next to the
+  code they exercise so changes land together.
+- **Cargo integration tests** under `loom/crates/<crate>/tests/*.rs` —
+  black-box tests that import the crate by its public API, exercising
+  cross-module behaviour and the surfaces that downstream crates also see.
+
 ```
 loom/
   crates/
     loom-core/
       src/
         state/
-          mod.rs              # StateDb typed API
-          tests.rs            # Unit tests for state database
-        beads/
-          mod.rs              # bd CLI wrapper
-          tests.rs            # Unit tests for bd output parsing
-        ...
+          db.rs               # StateDb impl + inline #[cfg(test)] mod tests
+          rebuild.rs          # rebuild logic + inline tests
+          companions.rs       # `## Companions` parser + inline tests
+        bd/
+          client.rs           # bd CLI wrapper + inline tests
+          label.rs            # Label newtype + inline tests
+        identifier/
+          bead.rs             # BeadId + inline tests (validation, serde)
+          ...                 # one file per id newtype, all with inline tests
+        agent/
+          repin.rs            # RePinContent + inline tests (doc-tested)
+          ...
+      tests/
+        state_db.rs           # Integration: StateDb across rebuild + queries
+        lock_manager.rs       # Integration: per-spec advisory locking
+        git_client.rs         # Integration: GitClient against a temp repo
+        logging.rs            # Integration: tee'd renderer + log sink
     loom-agent/
       src/
         pi/
           mod.rs
-          protocol.rs         # NDJSON serialization/deserialization
-          tests.rs            # Unit tests for pi protocol
+          protocol.rs         # NDJSON serialization/deserialization + inline tests
+          fixtures/           # captured pi NDJSON sessions
         claude/
           mod.rs
-          protocol.rs         # stream-json NDJSON event parsing
-          tests.rs            # Unit tests for claude protocol
+          protocol.rs         # stream-json NDJSON event parsing + inline tests
+          fixtures/           # captured claude stream-json sessions
         ...
     loom-workflow/
       src/
         run/
-          mod.rs
-          tests.rs            # Unit tests for run logic
+          mod.rs              # run loop + inline tests for unit-level helpers
         check/
-          mod.rs
-          tests.rs            # Unit tests for push gate logic
+          mod.rs              # push gate + inline tests
         ...
+      tests/
+        parallel.rs           # Integration: --parallel N worktree dispatch
     loom-templates/
       src/
-        tests.rs              # Template rendering tests
-      ...
+        ...                   # per-template module + inline rendering tests
+      tests/
+        render.rs             # Integration: full-template rendering parity
+    loom/
+      tests/
+        run_smoke.rs          # Integration: CLI smoke tests against the binary
 
 tests/
   loom-test.sh                # Top-level orchestrator (cargo test + system tests)
@@ -563,8 +587,8 @@ fn run_template_parity() {
 | File | Role |
 |------|------|
 | `tests/loom-test.sh` | Top-level test orchestrator ([verify] tag target) |
-| `loom/crates/*/src/**/tests.rs` | Per-module unit tests |
-| `loom/crates/loom-core/src/state/tests.rs` | SQLite state DB unit tests |
+| `loom/crates/*/src/**/*.rs` | Source files carry inline `#[cfg(test)] mod tests` blocks |
+| `loom/crates/*/tests/*.rs` | Per-crate cargo integration tests |
 | `loom/crates/loom-agent/src/*/fixtures/` | Protocol NDJSON fixtures (pi + claude) |
 | `loom/crates/loom-templates/src/fixtures/` | Bash-rendered template fixtures |
 | `tests/loom/default.nix` | Nix test derivation |
