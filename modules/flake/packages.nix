@@ -37,7 +37,7 @@ _:
           mcpRuntime = true;
         };
         debug = {
-          profile = profiles.base;
+          profile = profiles.rust;
           packages = [ linuxPkgs.podman ];
         };
       };
@@ -50,7 +50,7 @@ _:
           beads-push
           gc
           ;
-        default = sandboxPkgs.sandbox;
+        default = sandboxPkgs.sandbox-rust;
         city-config = city.configDir;
         loom = wrapix.loomPackage;
         ralph = wrapix.ralphPackage;

@@ -16,6 +16,7 @@ let
     cargo = toolchain;
     rustc = toolchain;
   };
+
 in
 rustPlatform.buildRustPackage {
   pname = "loom";
@@ -32,7 +33,7 @@ rustPlatform.buildRustPackage {
   nativeCheckInputs = [ pkgs.git ];
 
   meta = {
-    description = "Rust agent driver for the Wrapix workflow (replaces Ralph's bash scripts)";
+    description = "Rust agent driver for the Wrapix workflow";
     mainProgram = "loom";
   };
 }
