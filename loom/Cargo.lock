@@ -1489,6 +1489,9 @@ dependencies = [
 [[package]]
 name = "loom-workflow"
 version = "0.1.0"
+dependencies = [
+ "loom-core",
+]
 
 [[package]]
 name = "maybe-async"

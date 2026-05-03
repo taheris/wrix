@@ -1,34 +1,38 @@
 //! Agent backend abstraction surface owned by `loom-core`.
 //!
-//! Subsequent issues populate the `AgentBackend` trait, `AgentEvent` enum,
-//! and `AgentSession` state machine here. This file currently exposes only
-//! [`AgentKind`] — the discriminator the binary crate matches on to dispatch
-//! between concrete backend implementations in `loom-agent`.
+//! Defines the public types and traits that backends in `loom-agent`
+//! implement and that `loom-workflow` orchestrates over:
+//!
+//! - [`AgentBackend`] — minimal trait whose only job is to spawn an
+//!   [`AgentSession`] in the [`Idle`] state.
+//! - [`AgentSession`] — typestate-guarded conversation handle (`Idle` →
+//!   `Active` after `prompt`).
+//! - [`AgentEvent`] — the backend-neutral event enum the session yields.
+//! - [`LineParse`] / [`ParsedLine`] — backend-specific protocol bridge: line
+//!   parsing plus command encoding for prompt/steer/abort.
+//! - [`NdjsonReader`] — shared stdin line framing (10 MB max line cap).
+//! - [`RePinContent`] — re-pin payload format used by both backends after
+//!   compaction.
+//! - [`SpawnConfig`] / [`SessionOutcome`] — the contract between loom and
+//!   `wrapix run-bead`.
+//!
+//! Protocol-parsing of backend-specific message types (`PiMessage`,
+//! `ClaudeMessage`) lives in `loom-agent`, not here.
 
-use serde::{Deserialize, Serialize};
+mod backend;
+mod error;
+mod event;
+mod kind;
+mod ndjson;
+mod parse;
+mod repin;
+mod session;
 
-/// Selector for which agent backend should drive a phase.
-///
-/// Per spec NF-7 this is an enum, not a newtype: the variants are a closed
-/// set known at compile time and dispatch is via `match`, not parsing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum AgentKind {
-    Pi,
-    Claude,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::AgentKind;
-    use anyhow::Result;
-
-    #[test]
-    fn serde_uses_lowercase_variant_names() -> Result<()> {
-        assert_eq!(serde_json::to_string(&AgentKind::Pi)?, "\"pi\"");
-        assert_eq!(serde_json::to_string(&AgentKind::Claude)?, "\"claude\"");
-        let back: AgentKind = serde_json::from_str("\"claude\"")?;
-        assert_eq!(back, AgentKind::Claude);
-        Ok(())
-    }
-}
+pub use backend::{AgentBackend, SessionOutcome, SpawnConfig};
+pub use error::ProtocolError;
+pub use event::{AgentEvent, CompactionReason};
+pub use kind::AgentKind;
+pub use ndjson::{MAX_LINE_BYTES, NdjsonReader};
+pub use parse::{LineParse, ParsedLine};
+pub use repin::RePinContent;
+pub use session::{Active, AgentSession, Idle};
