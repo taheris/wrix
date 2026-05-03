@@ -55,6 +55,7 @@ in
       runtimeInputs = [
         crun-krun
         pkgs.beads-dolt
+        pkgs.jq
         pkgs.podman
       ];
       text = ''
@@ -68,12 +69,78 @@ in
         # XDG-compliant directories for staging and image cache
         XDG_CACHE_HOME="''${XDG_CACHE_HOME:-$HOME/.cache}"
         WRAPIX_CACHE="$XDG_CACHE_HOME/wrapix"
-        PROJECT_DIR="''${1:-$(pwd)}"
-        shift || true
-        # Remaining args override the container command (passed to entrypoint as $@)
-        CONTAINER_CMD=()
+
+        # Subcommand dispatch: `wrapix run` (interactive, TTY) vs
+        # `wrapix run-bead` (stdio, JSON spawn-config). Default with no
+        # subcommand keeps legacy positional invocation `wrapix [DIR] [CMD...]`.
+        SUBCOMMAND="run"
         if [ $# -gt 0 ]; then
-          CONTAINER_CMD=("$@")
+          case "$1" in
+            run|run-bead) SUBCOMMAND="$1"; shift ;;
+          esac
+        fi
+
+        SPAWN_CONFIG=""
+        USE_STDIO=0
+        IMAGE_OVERRIDE=""
+        CONTAINER_CMD=()
+        # SpawnConfig env allowlist: KEY=VALUE pairs (one per array slot)
+        SPAWN_ENV=()
+
+        if [ "$SUBCOMMAND" = "run-bead" ]; then
+          while [ $# -gt 0 ]; do
+            case "$1" in
+              --spawn-config)
+                [ $# -lt 2 ] && { echo "Error: --spawn-config requires <file>" >&2; exit 2; }
+                SPAWN_CONFIG="$2"; shift 2 ;;
+              --stdio) USE_STDIO=1; shift ;;
+              --) shift; break ;;
+              *) echo "Error: unknown wrapix run-bead flag: $1" >&2; exit 2 ;;
+            esac
+          done
+          if [ -z "$SPAWN_CONFIG" ]; then
+            echo "Error: wrapix run-bead requires --spawn-config <file>" >&2
+            exit 2
+          fi
+          if [ ! -f "$SPAWN_CONFIG" ]; then
+            echo "Error: spawn-config file not found: $SPAWN_CONFIG" >&2
+            exit 1
+          fi
+          # Stable JSON shape (loom-agent.md SpawnConfig): image, workspace,
+          # env, initial_prompt, agent_args, repin. Loom is the producer; we
+          # consume image, workspace, env, agent_args here. initial_prompt and
+          # repin are consumed in-container by the agent (loom writes the
+          # files into the workspace before spawn).
+          PROJECT_DIR=$(jq -r '.workspace' "$SPAWN_CONFIG")
+          IMAGE_OVERRIDE=$(jq -r '.image' "$SPAWN_CONFIG")
+          while IFS= read -r pair; do
+            [ -z "$pair" ] && continue
+            SPAWN_ENV+=("$pair")
+          done < <(jq -r '.env[]? | "\(.[0])=\(.[1])"' "$SPAWN_CONFIG")
+          while IFS= read -r arg; do
+            CONTAINER_CMD+=("$arg")
+          done < <(jq -r '.agent_args[]?' "$SPAWN_CONFIG")
+        else
+          PROJECT_DIR="''${1:-$(pwd)}"
+          shift || true
+          # Remaining args override the container command (passed to entrypoint as $@)
+          if [ $# -gt 0 ]; then
+            CONTAINER_CMD=("$@")
+          fi
+        fi
+
+        # WRAPIX_DRY_RUN=1: print resolved spawn state and exit without
+        # touching the filesystem or invoking podman. Used by tests to
+        # verify SpawnConfig parsing and per-bead profile selection
+        # without a container runtime.
+        if [ "''${WRAPIX_DRY_RUN:-}" = "1" ]; then
+          printf 'SUBCOMMAND=%s\n' "$SUBCOMMAND"
+          printf 'STDIO=%s\n' "$USE_STDIO"
+          printf 'WORKSPACE=%s\n' "$PROJECT_DIR"
+          printf 'IMAGE_OVERRIDE=%s\n' "$IMAGE_OVERRIDE"
+          for pair in "''${SPAWN_ENV[@]}"; do printf 'ENV=%s\n' "$pair"; done
+          for arg in "''${CONTAINER_CMD[@]}"; do printf 'CMD=%s\n' "$arg"; done
+          exit 0
         fi
 
         ${cleanStaleStagingDirs}
@@ -316,8 +383,49 @@ in
           CONTAINER_CMD=()
         fi
 
+        # Per-subcommand wiring:
+        #   run      — interactive: TTY allocated, host env passthrough.
+        #   run-bead — non-TTY: stdio piped, env strictly from SpawnConfig.
+        TTY_ARGS=()
+        ENV_ARGS=()
+        if [ "$SUBCOMMAND" = "run-bead" ]; then
+          [ "$USE_STDIO" = "1" ] && TTY_ARGS=(-i)
+          for pair in "''${SPAWN_ENV[@]}"; do
+            ENV_ARGS+=(-e "$pair")
+          done
+        else
+          TTY_ARGS=(-i -t)
+          ENV_ARGS+=(
+            -e "CLAUDE_CODE_OAUTH_TOKEN=''${CLAUDE_CODE_OAUTH_TOKEN:-}"
+            -e "RALPH_MODE=''${RALPH_MODE:-}"
+            -e "RALPH_CMD=''${RALPH_CMD:-}"
+            -e "RALPH_ARGS=''${RALPH_ARGS:-}"
+            -e "RALPH_DIR=''${RALPH_DIR:-}"
+            -e "RALPH_DEBUG=''${RALPH_DEBUG:-}"
+            -e "RALPH_RUNTIME_DIR=''${RALPH_RUNTIME_DIR:-}"
+            -e "WRAPIX_SESSION_ID=$WRAPIX_SESSION_ID"
+            -e "WRAPIX_VERBOSE=''${WRAPIX_VERBOSE:-}"
+          )
+          [ -n "''${WRAPIX_GIT_SIGN:-}" ] && ENV_ARGS+=(-e "WRAPIX_GIT_SIGN=$WRAPIX_GIT_SIGN")
+        fi
+        # Always-on container env: built from launcher state, not host passthrough.
+        ENV_ARGS+=(
+          -e "BD_NO_DAEMON=1"
+          -e "HOME=/home/wrapix"
+          -e "GIT_AUTHOR_NAME=$GIT_AUTHOR_NAME"
+          -e "GIT_AUTHOR_EMAIL=$GIT_AUTHOR_EMAIL"
+          -e "GIT_COMMITTER_NAME=$GIT_COMMITTER_NAME"
+          -e "GIT_COMMITTER_EMAIL=$GIT_COMMITTER_EMAIL"
+          -e "WRAPIX_NETWORK=$WRAPIX_NETWORK"
+          -e "WRAPIX_NETWORK_ALLOWLIST=${networkAllowlist}"
+        )
+        [ -n "$KRUN_CMD_ENV" ] && ENV_ARGS+=(-e "$KRUN_CMD_ENV")
+
+        RUN_IMAGE="$IMAGE_ID"
+        [ -n "$IMAGE_OVERRIDE" ] && RUN_IMAGE="$IMAGE_OVERRIDE"
+
         # shellcheck disable=SC2086 # Intentional word splitting for volume args
-        exec podman run --rm -it \
+        exec podman run --rm "''${TTY_ARGS[@]}" \
           $RUNTIME_ARGS \
           $KRUN_ENTRYPOINT_ARGS \
           $NETWORK_CAP_ARGS \
@@ -338,27 +446,9 @@ in
           $DEPLOY_KEY_ARGS \
           $PODMAN_SOCKET_ARGS \
           $KRUN_ENV_ARGS \
-          ''${KRUN_CMD_ENV:+-e "$KRUN_CMD_ENV"} \
-          -e "BD_NO_DAEMON=1" \
-          -e "CLAUDE_CODE_OAUTH_TOKEN=''${CLAUDE_CODE_OAUTH_TOKEN:-}" \
-          -e "RALPH_MODE=''${RALPH_MODE:-}" \
-          -e "RALPH_CMD=''${RALPH_CMD:-}" \
-          -e "RALPH_ARGS=''${RALPH_ARGS:-}" \
-          -e "RALPH_DIR=''${RALPH_DIR:-}" \
-          -e "RALPH_DEBUG=''${RALPH_DEBUG:-}" \
-          -e "RALPH_RUNTIME_DIR=''${RALPH_RUNTIME_DIR:-}" \
-          -e "HOME=/home/wrapix" \
-          -e "GIT_AUTHOR_NAME=$GIT_AUTHOR_NAME" \
-          -e "GIT_AUTHOR_EMAIL=$GIT_AUTHOR_EMAIL" \
-          -e "GIT_COMMITTER_NAME=$GIT_COMMITTER_NAME" \
-          -e "GIT_COMMITTER_EMAIL=$GIT_COMMITTER_EMAIL" \
-          -e "WRAPIX_SESSION_ID=$WRAPIX_SESSION_ID" \
-          -e "WRAPIX_VERBOSE=''${WRAPIX_VERBOSE:-}" \
-          -e "WRAPIX_NETWORK=$WRAPIX_NETWORK" \
-          -e "WRAPIX_NETWORK_ALLOWLIST=${networkAllowlist}" \
-          ''${WRAPIX_GIT_SIGN:+-e "WRAPIX_GIT_SIGN=$WRAPIX_GIT_SIGN"} \
+          "''${ENV_ARGS[@]}" \
           -w /workspace \
-          "$IMAGE_ID" \
+          "$RUN_IMAGE" \
           "''${CONTAINER_CMD[@]}"
       '';
     };

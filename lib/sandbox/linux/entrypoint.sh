@@ -125,12 +125,6 @@ if [ -f /workspace/.beads/config.yaml ]; then
       echo "  Start the host ${_repo:-repo}-beads container (enter the devShell) before launching this container." >&2
       exit 1
     fi
-  else
-    # best-effort: config.yaml without issue-prefix -> PREFIX empty, bd init skipped
-    PREFIX=$(yq -r '.["issue-prefix"] // ""' /workspace/.beads/config.yaml 2>/dev/null || echo "")
-    if [ -n "$PREFIX" ] && [ -f /workspace/.beads/issues.jsonl ]; then
-      bd init --prefix "$PREFIX" --from-jsonl --quiet --skip-hooks --skip-merge-driver
-    fi
   fi
 
   # best-effort: files may not exist or not be tracked; restoring them is idempotent cleanup

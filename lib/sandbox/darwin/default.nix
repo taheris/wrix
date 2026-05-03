@@ -52,12 +52,72 @@ in
             # XDG-compliant directories for staging and image cache
             XDG_CACHE_HOME="''${XDG_CACHE_HOME:-$HOME/.cache}"
             WRAPIX_CACHE="$XDG_CACHE_HOME/wrapix"
-            PROJECT_DIR="''${1:-$(pwd)}"
-            shift || true
-            # Remaining args override the container command (passed to entrypoint as $@)
-            CONTAINER_CMD=()
+
+            # Subcommand dispatch: `wrapix run` (interactive, TTY) vs
+            # `wrapix run-bead` (stdio, JSON spawn-config).
+            SUBCOMMAND="run"
             if [ $# -gt 0 ]; then
-              CONTAINER_CMD=("$@")
+              case "$1" in
+                run|run-bead) SUBCOMMAND="$1"; shift ;;
+              esac
+            fi
+
+            SPAWN_CONFIG=""
+            USE_STDIO=0
+            IMAGE_OVERRIDE=""
+            CONTAINER_CMD=()
+            SPAWN_ENV=()
+
+            if [ "$SUBCOMMAND" = "run-bead" ]; then
+              while [ $# -gt 0 ]; do
+                case "$1" in
+                  --spawn-config)
+                    [ $# -lt 2 ] && { echo "Error: --spawn-config requires <file>" >&2; exit 2; }
+                    SPAWN_CONFIG="$2"; shift 2 ;;
+                  --stdio) USE_STDIO=1; shift ;;
+                  --) shift; break ;;
+                  *) echo "Error: unknown wrapix run-bead flag: $1" >&2; exit 2 ;;
+                esac
+              done
+              if [ -z "$SPAWN_CONFIG" ]; then
+                echo "Error: wrapix run-bead requires --spawn-config <file>" >&2
+                exit 2
+              fi
+              if [ ! -f "$SPAWN_CONFIG" ]; then
+                echo "Error: spawn-config file not found: $SPAWN_CONFIG" >&2
+                exit 1
+              fi
+              # Stable JSON shape (loom-agent.md SpawnConfig): image, workspace,
+              # env, initial_prompt, agent_args, repin.
+              PROJECT_DIR=$(${pkgs.jq}/bin/jq -r '.workspace' "$SPAWN_CONFIG")
+              IMAGE_OVERRIDE=$(${pkgs.jq}/bin/jq -r '.image' "$SPAWN_CONFIG")
+              while IFS= read -r pair; do
+                [ -z "$pair" ] && continue
+                SPAWN_ENV+=("$pair")
+              done < <(${pkgs.jq}/bin/jq -r '.env[]? | "\(.[0])=\(.[1])"' "$SPAWN_CONFIG")
+              while IFS= read -r arg; do
+                CONTAINER_CMD+=("$arg")
+              done < <(${pkgs.jq}/bin/jq -r '.agent_args[]?' "$SPAWN_CONFIG")
+            else
+              PROJECT_DIR="''${1:-$(pwd)}"
+              shift || true
+              # Remaining args override the container command (passed to entrypoint as $@)
+              if [ $# -gt 0 ]; then
+                CONTAINER_CMD=("$@")
+              fi
+            fi
+
+            # WRAPIX_DRY_RUN=1: print resolved spawn state and exit without
+            # touching the filesystem or invoking the container CLI. Used by
+            # tests to verify SpawnConfig parsing without a runtime.
+            if [ "''${WRAPIX_DRY_RUN:-}" = "1" ]; then
+              printf 'SUBCOMMAND=%s\n' "$SUBCOMMAND"
+              printf 'STDIO=%s\n' "$USE_STDIO"
+              printf 'WORKSPACE=%s\n' "$PROJECT_DIR"
+              printf 'IMAGE_OVERRIDE=%s\n' "$IMAGE_OVERRIDE"
+              for pair in "''${SPAWN_ENV[@]}"; do printf 'ENV=%s\n' "$pair"; done
+              for arg in "''${CONTAINER_CMD[@]}"; do printf 'CMD=%s\n' "$arg"; done
+              exit 0
             fi
 
             # Check macOS version
@@ -278,22 +338,33 @@ in
             esac
 
             # Build environment arguments (use array to handle spaces in values)
+            # In run-bead mode env passthrough comes strictly from the
+            # SpawnConfig allowlist; interactive run keeps the historical
+            # host-env passthrough.
             ENV_ARGS=()
-            ENV_ARGS+=(-e "WRAPIX_VERBOSE=''${WRAPIX_VERBOSE:-}")
+            if [ "$SUBCOMMAND" = "run-bead" ]; then
+              for pair in "''${SPAWN_ENV[@]}"; do
+                ENV_ARGS+=(-e "$pair")
+              done
+            else
+              ENV_ARGS+=(-e "WRAPIX_VERBOSE=''${WRAPIX_VERBOSE:-}")
+              ENV_ARGS+=(-e "CLAUDE_CODE_OAUTH_TOKEN=''${CLAUDE_CODE_OAUTH_TOKEN:-}")
+              ENV_ARGS+=(-e "RALPH_MODE=''${RALPH_MODE:-}")
+              ENV_ARGS+=(-e "RALPH_CMD=''${RALPH_CMD:-}")
+              ENV_ARGS+=(-e "RALPH_ARGS=''${RALPH_ARGS:-}")
+              ENV_ARGS+=(-e "RALPH_DIR=''${RALPH_DIR:-}")
+              ENV_ARGS+=(-e "RALPH_DEBUG=''${RALPH_DEBUG:-}")
+              ENV_ARGS+=(-e "RALPH_RUNTIME_DIR=''${RALPH_RUNTIME_DIR:-}")
+              [ -n "''${WRAPIX_GIT_SIGN:-}" ] && ENV_ARGS+=(-e "WRAPIX_GIT_SIGN=$WRAPIX_GIT_SIGN")
+              ENV_ARGS+=(-e "WRAPIX_SESSION_ID=$WRAPIX_SESSION_ID")
+            fi
+            # Always-on container env: built from launcher state, not host passthrough.
             ENV_ARGS+=(-e "BD_NO_DAEMON=1")
-            ENV_ARGS+=(-e "CLAUDE_CODE_OAUTH_TOKEN=''${CLAUDE_CODE_OAUTH_TOKEN:-}")
-            ENV_ARGS+=(-e "RALPH_MODE=''${RALPH_MODE:-}")
-            ENV_ARGS+=(-e "RALPH_CMD=''${RALPH_CMD:-}")
-            ENV_ARGS+=(-e "RALPH_ARGS=''${RALPH_ARGS:-}")
-            ENV_ARGS+=(-e "RALPH_DIR=''${RALPH_DIR:-}")
-            ENV_ARGS+=(-e "RALPH_DEBUG=''${RALPH_DEBUG:-}")
-            ENV_ARGS+=(-e "RALPH_RUNTIME_DIR=''${RALPH_RUNTIME_DIR:-}")
             ENV_ARGS+=(-e "HOST_UID=$(id -u)")
             ENV_ARGS+=(-e "GIT_AUTHOR_NAME=$GIT_AUTHOR_NAME")
             ENV_ARGS+=(-e "GIT_AUTHOR_EMAIL=$GIT_AUTHOR_EMAIL")
             ENV_ARGS+=(-e "GIT_COMMITTER_NAME=$GIT_COMMITTER_NAME")
             ENV_ARGS+=(-e "GIT_COMMITTER_EMAIL=$GIT_COMMITTER_EMAIL")
-            [ -n "''${WRAPIX_GIT_SIGN:-}" ] && ENV_ARGS+=(-e "WRAPIX_GIT_SIGN=$WRAPIX_GIT_SIGN")
             [ -n "$DIR_MOUNTS" ] && ENV_ARGS+=(-e "WRAPIX_DIR_MOUNTS=$DIR_MOUNTS")
             [ -n "$FILE_MOUNTS" ] && ENV_ARGS+=(-e "WRAPIX_FILE_MOUNTS=$FILE_MOUNTS")
             [ -n "$SOCK_MOUNTS" ] && ENV_ARGS+=(-e "WRAPIX_SOCK_MOUNTS=$SOCK_MOUNTS")
@@ -303,8 +374,6 @@ in
             ENV_ARGS+=(-e "WRAPIX_NOTIFY_TCP=1")
             [ -n "$BEADS_DOLT_PORT" ] && ENV_ARGS+=(-e "BEADS_DOLT_SERVER_PORT=$BEADS_DOLT_PORT")
             [ -n "$BEADS_DOLT_PORT" ] && ENV_ARGS+=(-e "BEADS_DOLT_SERVER_HOST=192.168.64.1")
-            # Pass session ID for focus-aware notifications (empty if not in tmux)
-            ENV_ARGS+=(-e "WRAPIX_SESSION_ID=$WRAPIX_SESSION_ID")
             # Pass network mode and allowlist for WRAPIX_NETWORK=limit filtering
             ENV_ARGS+=(-e "WRAPIX_NETWORK=$WRAPIX_NETWORK")
             [ "$_vpn_conflict" = true ] && ENV_ARGS+=(-e "WRAPIX_WAIT_FOR_ROUTE=1")
@@ -339,7 +408,14 @@ in
             # avoiding Claude Code writing user-only properties (like
             # skipDangerousModePermissionPrompt) to the project settings path.
             TTY_ARGS=""
-            [ -t 0 ] && TTY_ARGS="-t -i"
+            if [ "$SUBCOMMAND" = "run-bead" ]; then
+              [ "$USE_STDIO" = "1" ] && TTY_ARGS="-i"
+            else
+              [ -t 0 ] && TTY_ARGS="-t -i"
+            fi
+
+            RUN_IMAGE="''${WRAPIX_IMAGE:-$PROFILE_IMAGE}"
+            [ -n "$IMAGE_OVERRIDE" ] && RUN_IMAGE="$IMAGE_OVERRIDE"
 
             CONTAINER_EXIT=0
             container run \
@@ -357,7 +433,7 @@ in
               "''${ENV_ARGS[@]}" \
               $DEPLOY_KEY_ARGS \
               -- \
-              "''${WRAPIX_IMAGE:-$PROFILE_IMAGE}" \
+              "$RUN_IMAGE" \
               "''${CONTAINER_CMD[@]}" \
               || CONTAINER_EXIT=$?
             exit $CONTAINER_EXIT
