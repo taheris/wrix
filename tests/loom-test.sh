@@ -614,6 +614,54 @@ test_state_corruption_recovery() {
 }
 
 #-----------------------------------------------------------------------------
+# Beads CLI wrapper — each function dispatches into a unit test under
+# loom-core/src/bd/client.rs::tests, so verify and `cargo test` exercise the
+# same code paths. Tests substitute a `CapturingRunner` to keep the verify
+# path independent of a real `bd` binary.
+#-----------------------------------------------------------------------------
+bd_client_cargo_test() {
+    cargo_run test -p loom-core --lib "$1" -- --exact --nocapture --quiet
+}
+
+#-----------------------------------------------------------------------------
+# test_bd_show_parsing — `bd show <id> --json` output deserializes into a
+# typed `Bead` value with the expected fields.
+#-----------------------------------------------------------------------------
+test_bd_show_parsing() {
+    bd_client_cargo_test bd::client::tests::show_parses_first_row_into_bead
+}
+
+#-----------------------------------------------------------------------------
+# test_bd_list_parsing — `bd list --json` output deserializes into a Vec<Bead>
+# and the `--status=` / `--label=` filters are forwarded to the CLI argv.
+#-----------------------------------------------------------------------------
+test_bd_list_parsing() {
+    bd_client_cargo_test bd::client::tests::list_parses_array_of_beads
+    bd_client_cargo_test bd::client::tests::list_filters_status_and_label
+    bd_client_cargo_test bd::client::tests::list_handles_null_response_as_empty_vec
+}
+
+#-----------------------------------------------------------------------------
+# test_bd_create_returns_id — `bd create --silent` stdout (a single id) is
+# parsed back into a `BeadId`; blank stdout maps to `BdError::CreateMissingId`.
+#-----------------------------------------------------------------------------
+test_bd_create_returns_id() {
+    bd_client_cargo_test bd::client::tests::create_returns_id_from_silent_output
+    bd_client_cargo_test bd::client::tests::create_errors_on_blank_silent_output
+}
+
+#-----------------------------------------------------------------------------
+# test_bd_error_handling — non-zero exits map to `BdError::Cli` with the
+# argv + stderr captured; malformed JSON maps to `BdError::Decode`; missing
+# rows map to `BdError::ShowEmpty`.
+#-----------------------------------------------------------------------------
+test_bd_error_handling() {
+    bd_client_cargo_test bd::client::tests::cli_failure_maps_to_typed_error
+    bd_client_cargo_test bd::client::tests::decode_failure_carries_args_context
+    bd_client_cargo_test bd::client::tests::show_returns_show_empty_for_zero_rows
+}
+
+#-----------------------------------------------------------------------------
 # Dispatch
 #-----------------------------------------------------------------------------
 if [ $# -eq 0 ]; then
