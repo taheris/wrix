@@ -29,6 +29,18 @@ rustPlatform.buildRustPackage {
 
   env.HOME = "/tmp";
 
+  # Test fixtures live at /workspace/tests/loom/{mock-pi,mock-claude} —
+  # outside the loom workspace src — but the integration tests in
+  # crates/loom/tests/ resolve them relative to CARGO_MANIFEST_DIR via
+  # `../../../tests/loom/...`. Materialize them next to the unpacked
+  # source so the paths line up inside the build sandbox.
+  postUnpack = ''
+    mkdir -p tests/loom
+    cp -r ${../../tests/loom/mock-pi} tests/loom/mock-pi
+    cp -r ${../../tests/loom/mock-claude} tests/loom/mock-claude
+    chmod -R u+w tests/loom
+  '';
+
   doCheck = true;
   nativeCheckInputs = [ pkgs.git ];
 

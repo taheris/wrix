@@ -7,13 +7,18 @@
 
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::mpsc;
+use std::sync::{Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
 use loom_core::identifier::SpecLabel;
 use loom_core::lock::{LockError, LockManager};
+
+/// Serializes tests that fork while another test is mid drop+reacquire of a
+/// spec lock — the child inherits the fd and `flock(2)` is per-OFD, so the
+/// "released" lock still appears held until execve closes CLOEXEC fds.
+static FORK_SERIALIZE: Mutex<()> = Mutex::new(());
 
 #[test]
 fn acquire_spec_creates_lock_file() -> Result<()> {
@@ -142,6 +147,7 @@ fn readonly_paths_unaffected_by_spec_lock() -> Result<()> {
 
 #[test]
 fn acquire_workspace_errors_when_spec_lock_held() -> Result<()> {
+    let _serialize = FORK_SERIALIZE.lock().expect("FORK_SERIALIZE poisoned");
     let dir = tempfile::tempdir()?;
     let mgr = LockManager::new(dir.path())?;
 
@@ -192,6 +198,7 @@ fn crash_helper_take_lock_then_exit() -> Result<()> {
 
 #[test]
 fn crash_releases_spec_lock() -> Result<()> {
+    let _serialize = FORK_SERIALIZE.lock().expect("FORK_SERIALIZE poisoned");
     let dir = tempfile::tempdir()?;
     let workspace = dir.path().to_path_buf();
     let label = "crash-test";

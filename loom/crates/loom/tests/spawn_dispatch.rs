@@ -22,6 +22,20 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Resolve the absolute path to `bash` from `PATH`. Used so the shim's
+/// shebang points at a concrete interpreter rather than `/usr/bin/env`,
+/// which is not present in the default nix-build sandbox (`sandbox = true`).
+fn find_bash() -> PathBuf {
+    let path_var = std::env::var_os("PATH").expect("PATH must be set");
+    for dir in std::env::split_paths(&path_var) {
+        let candidate = dir.join("bash");
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    panic!("bash not found in PATH");
+}
+
 /// Write the wrapix shim into `dir` and return its path. The shim records
 /// argv (one quoted token per line) and stdin TTY/pipe state into the two
 /// sibling files, copies the `--spawn-config` JSON aside (so the test can
@@ -35,8 +49,9 @@ fn install_wrapix_shim(
     mock_pi: &Path,
 ) -> PathBuf {
     let shim = dir.join("wrapix");
+    let bash = find_bash();
     let body = format!(
-        "#!/usr/bin/env bash\n\
+        "#!{bash}\n\
          set -euo pipefail\n\
          ARGV_FILE='{argv}'\n\
          STDIN_INFO='{stdin}'\n\
@@ -71,7 +86,8 @@ fn install_wrapix_shim(
          # Hand stdin/stdout to mock-pi for the protocol exchange. exec\n\
          # replaces this shell so the kernel-level pipe routing matches the\n\
          # production case where wrapix execs podman which execs the agent.\n\
-         exec bash \"$MOCK_PI\" probe-ok\n",
+         exec '{bash}' \"$MOCK_PI\" probe-ok\n",
+        bash = bash.display(),
         argv = argv_file.display(),
         stdin = stdin_info.display(),
         copy = spawn_config_copy.display(),
