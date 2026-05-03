@@ -1,0 +1,54 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/loom",
+    "crates/loom-core",
+    "crates/loom-agent",
+    "crates/loom-workflow",
+    "crates/loom-templates",
+]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+version = "0.1.0"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+thiserror = "2"
+displaydoc = "0.2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+toml = "0.8"
+askama = "0.16"
+clap = { version = "4", features = ["derive"] }
+gix = { version = "0.83", default-features = false, features = [
+    "status",
+    "blob-diff",
+    "revision",
+    "parallel",
+] }
+fd-lock = "4"
+
+# Internal crates
+loom-core = { path = "crates/loom-core" }
+loom-agent = { path = "crates/loom-agent" }
+loom-workflow = { path = "crates/loom-workflow" }
+loom-templates = { path = "crates/loom-templates" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+todo = "deny"
+unimplemented = "deny"
+panic = "deny"
+expect_used = "warn"
