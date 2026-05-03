@@ -53,6 +53,7 @@
         {
           beads = beadsFor final;
           gc = gcFor final;
+          pi-mono = final.callPackage ../../lib/pi-mono { };
         }
         // wrapixBeadsPkgs final final;
 
@@ -67,6 +68,7 @@
         {
           beads = beadsFor final;
           gc = gcFor final;
+          inherit (linuxPkgs) pi-mono;
         }
         // wrapixBeadsPkgs final linuxPkgs;
     in

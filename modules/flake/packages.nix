@@ -49,7 +49,9 @@ _:
           beads-dolt
           beads-push
           gc
+          pi-mono
           ;
+        nodejs = linuxPkgs.nodejs_22;
         default = sandboxPkgs.sandbox-rust;
         city-config = city.configDir;
         loom = wrapix.loomPackage;
