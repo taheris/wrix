@@ -48,6 +48,14 @@ impl ProductionCheckController {
     fn spec_label_filter(&self) -> String {
         format!("spec:{}", self.label.as_str())
     }
+
+    /// Push gate must invoke `beads-push`, NOT `bd dolt push` — only
+    /// `beads-push` syncs the `beads` git branch to GitHub.
+    fn beads_push_command(&self) -> Command {
+        let mut cmd = Command::new("beads-push");
+        cmd.current_dir(&self.workspace);
+        cmd
+    }
 }
 
 impl CheckController for ProductionCheckController {
@@ -112,10 +120,7 @@ impl CheckController for ProductionCheckController {
     }
 
     async fn beads_push(&mut self) -> Result<(), CheckError> {
-        let output = Command::new("beads-push")
-            .current_dir(&self.workspace)
-            .output()
-            .await?;
+        let output = self.beads_push_command().output().await?;
         if !output.status.success() {
             return Err(CheckError::BeadsPushFailed(
                 String::from_utf8_lossy(&output.stderr).into_owned(),
@@ -136,5 +141,41 @@ impl CheckController for ProductionCheckController {
             return Err(CheckError::RunHandoff(status.to_string()));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use std::ffi::OsStr;
+
+    fn controller(workspace: PathBuf) -> ProductionCheckController {
+        ProductionCheckController::new(
+            BdClient::new(),
+            SpecLabel::new("loom-harness"),
+            PathBuf::from("/usr/bin/loom"),
+            workspace,
+        )
+    }
+
+    #[test]
+    fn beads_push_argv_invokes_beads_push_not_bd_dolt_push() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctrl = controller(dir.path().to_path_buf());
+        let cmd = ctrl.beads_push_command();
+        let std_cmd = cmd.as_std();
+
+        assert_eq!(
+            std_cmd.get_program(),
+            OsStr::new("beads-push"),
+            "push gate must shell out to beads-push, not bd",
+        );
+        let argv: Vec<&OsStr> = std_cmd.get_args().collect();
+        assert!(
+            argv.is_empty(),
+            "no extra args; `bd dolt push` would surface as program=bd args=[dolt, push]: argv={argv:?}",
+        );
+        assert_eq!(std_cmd.get_current_dir(), Some(dir.path()));
     }
 }

@@ -1025,6 +1025,7 @@ test_check_push_gate() {
     check_cargo_test check::runner::tests::clean_review_pushes_and_resets_counter
     check_cargo_test check::runner::tests::clarify_present_stops_without_pushing
     check_cargo_test check::runner::tests::pre_existing_clarify_blocks_push_even_when_no_new_beads
+    check_cargo_test check::production::tests::beads_push_argv_invokes_beads_push_not_bd_dolt_push
 }
 
 #-----------------------------------------------------------------------------
