@@ -31,6 +31,7 @@ mod error;
 mod outcome;
 mod parallel;
 mod parallelism;
+mod production;
 mod profile;
 mod retry;
 mod runner;
@@ -44,6 +45,7 @@ pub use parallel::{
     run_concurrent_spawns,
 };
 pub use parallelism::{Parallelism, ParallelismError};
+pub use production::{ProductionAgentLoopController, STUB_AGENT_ERROR, list_open_for_spec};
 pub use profile::{DEFAULT_PROFILE, PROFILE_LABEL_PREFIX, resolve_profile};
 pub use retry::{RetryDecision, RetryPolicy};
 pub use runner::{AgentLoopController, RunMode, RunSummary, run_loop};

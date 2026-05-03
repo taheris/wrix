@@ -1574,6 +1574,7 @@ dependencies = [
  "clap",
  "loom-core",
  "loom-workflow",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

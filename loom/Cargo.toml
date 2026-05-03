@@ -16,18 +16,11 @@ license = "MIT"
 publish = false
 
 [workspace.dependencies]
-tokio = { version = "1", features = ["full"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["raw_value"] }
-thiserror = "2"
-displaydoc = "0.2"
 anyhow = "1"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
-toml = "0.8"
 askama = "0.16"
 clap = { version = "4", features = ["derive"] }
+displaydoc = "0.2"
+fd-lock = "4"
 gix = { version = "0.83", default-features = false, features = [
     "status",
     "blob-diff",
@@ -35,8 +28,15 @@ gix = { version = "0.83", default-features = false, features = [
     "parallel",
     "sha1",
 ] }
-fd-lock = "4"
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
 tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Internal crates
 loom-core = { path = "crates/loom-core" }

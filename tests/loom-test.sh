@@ -989,6 +989,19 @@ test_parallel_conflict_preserves_worktree() {
 }
 
 #-----------------------------------------------------------------------------
+# test_loom_run_smoke — end-to-end binary invocation. The spec acceptance
+# criterion for wx-3hhwq.20 demands `loom run --once` against a fake bd return
+# a meaningful exit code (not "unrecognized subcommand"). The integration test
+# stubs bd to print `[]` for any --json query, seeds the state DB with a
+# `current_spec`, then spawns the compiled `loom` binary and asserts exit 0
+# plus the empty-queue summary line. A second test pins `loom run --help` so
+# the regression where `run` is missing from the clap surface fails loudly.
+#-----------------------------------------------------------------------------
+test_loom_run_smoke() {
+    cargo_run test -p loom --test run_smoke -- --nocapture --quiet
+}
+
+#-----------------------------------------------------------------------------
 # loom check / loom msg — same dispatch pattern as run: each function pins one
 # or more pure unit tests under `loom-workflow::{check,msg}`. The push-gate /
 # auto-iterate decision logic is exercised through the `CheckController` trait

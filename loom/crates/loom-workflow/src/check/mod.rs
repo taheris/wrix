@@ -22,11 +22,13 @@
 mod context;
 mod error;
 mod iteration;
+mod production;
 mod runner;
 mod verdict;
 
 pub use context::{CheckContextInputs, beads_summary, build_check_context};
 pub use error::CheckError;
 pub use iteration::{DEFAULT_MAX_ITERATIONS, IterationCap};
+pub use production::{ProductionCheckController, STUB_REVIEW_DETAIL};
 pub use runner::{CheckController, CheckResult, ReviewOutcome, check_loop};
 pub use verdict::{BeadSnapshot, CheckVerdict, diff_new_bead_ids};
