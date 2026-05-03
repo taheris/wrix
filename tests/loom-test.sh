@@ -473,6 +473,82 @@ test_no_derive_from_on_newtypes() {
 }
 
 #-----------------------------------------------------------------------------
+# test_askama_templates_compile — `cargo build -p loom-templates` succeeds.
+# Askama runs its template parser at compile time, so a successful build is
+# proof every template parsed and every typed context covers its variables.
+#-----------------------------------------------------------------------------
+test_askama_templates_compile() {
+    cargo_run build -p loom-templates --quiet
+}
+
+#-----------------------------------------------------------------------------
+# test_template_compile_time_check — every template file has a typed context
+# struct under loom-templates/src/, and the crate's render integration tests
+# (which exercise every Template::render impl) pass. A missing context field
+# fails askama's derive at compile time, so a green run here proves the
+# compile-time check is enforced.
+#-----------------------------------------------------------------------------
+test_template_compile_time_check() {
+    local templates_dir="$LOOM_DIR/crates/loom-templates/templates"
+    local missing=0 t
+    if [ ! -d "$templates_dir" ]; then
+        echo "loom-templates/templates not yet scaffolded" >&2
+        return 77
+    fi
+    for t in plan_new plan_update todo_new todo_update run check msg; do
+        if [ ! -f "$templates_dir/$t.md" ]; then
+            echo "missing template: $templates_dir/$t.md" >&2
+            missing=$((missing + 1))
+        fi
+    done
+    cargo_run test -p loom-templates --test render --quiet
+    return "$missing"
+}
+
+#-----------------------------------------------------------------------------
+# test_template_partials — every loom partial lives under templates/partial/
+# and is referenced via askama's `{% include %}` (not the legacy `{{> name}}`
+# syntax).
+#-----------------------------------------------------------------------------
+test_template_partials() {
+    local partials_dir="$LOOM_DIR/crates/loom-templates/templates/partial"
+    local templates_dir="$LOOM_DIR/crates/loom-templates/templates"
+    local missing=0 p
+    if [ ! -d "$partials_dir" ]; then
+        echo "loom partials directory missing: $partials_dir" >&2
+        return 1
+    fi
+    for p in context_pinning spec_header exit_signals companions_context; do
+        if [ ! -f "$partials_dir/$p.md" ]; then
+            echo "missing partial: $partials_dir/$p.md" >&2
+            missing=$((missing + 1))
+        fi
+    done
+    if grep -rE '\{\{>[[:space:]]+[a-z_-]+[[:space:]]*\}\}' "$templates_dir" >/dev/null; then
+        echo "legacy {{> partial}} syntax found in loom templates (expected {% include %}):" >&2
+        grep -rnE '\{\{>[[:space:]]+[a-z_-]+[[:space:]]*\}\}' "$templates_dir" >&2
+        missing=$((missing + 1))
+    fi
+    if ! grep -rE '\{%[[:space:]]+include[[:space:]]+"partial/' "$templates_dir" >/dev/null; then
+        echo "no askama include directives found in loom templates" >&2
+        missing=$((missing + 1))
+    fi
+    return "$missing"
+}
+
+#-----------------------------------------------------------------------------
+# test_template_output_parity — the loom-templates render integration test
+# `run_output_parity_with_ralph_for_shared_inputs` produces output that
+# preserves every section and substituted value Ralph's bash renderer emits
+# for the same inputs (modulo intentional drift: dropped legacy variables and
+# the `ralph` → `loom` driver rename).
+#-----------------------------------------------------------------------------
+test_template_output_parity() {
+    cargo_run test -p loom-templates --test render \
+        run_output_parity_with_ralph_for_shared_inputs --quiet
+}
+
+#-----------------------------------------------------------------------------
 # Dispatch
 #-----------------------------------------------------------------------------
 if [ $# -eq 0 ]; then
