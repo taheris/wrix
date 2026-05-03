@@ -5,12 +5,13 @@
 //! internally-tagged enum handles dispatch directly, with `#[serde(other)]`
 //! catching any future variants without breaking the build.
 //!
-//! Inner content shapes (`assistant`/`user` `message` payloads, `result`
-//! tool-output extraction) and the matching parser pass land in wx-pkht8.7
-//! — this file declares the outer tagged-enum surface so subsequent passes
-//! have stable variant names to reference.
+//! Inner content blocks (`assistant` text/tool_use, `user` tool_result) are
+//! also tagged unions; the same `#[serde(tag = "type")]` pattern dispatches
+//! into [`AssistantBlock`] and [`UserBlock`] respectively. Unknown content
+//! types are absorbed by `#[serde(other)]` so a forward-compatible block
+//! shape (e.g. `thinking`) does not fail the parse.
 
-use loom_core::identifier::{RequestId, SessionId};
+use loom_core::identifier::{RequestId, SessionId, ToolCallId};
 use serde::Deserialize;
 
 /// Tagged union of every line type emitted by `claude --output-format
@@ -27,14 +28,13 @@ pub enum ClaudeMessage {
     },
 
     /// Assistant turn payload — text deltas and tool-use entries live in
-    /// `message`. Body destructuring lands in wx-pkht8.7.
+    /// `message.content`.
     #[serde(rename = "assistant")]
-    Assistant { message: serde_json::Value },
+    Assistant { message: AssistantContent },
 
-    /// User turn payload — tool results echoed back live in `message`.
-    /// Body destructuring lands in wx-pkht8.7.
+    /// User turn payload — tool results echoed back live in `message.content`.
     #[serde(rename = "user")]
-    User { message: serde_json::Value },
+    User { message: UserContent },
 
     /// Final-result line. `subtype: "success"` maps to `TurnEnd` followed by
     /// `SessionComplete`; `subtype: "error"` maps to `Error` followed by
@@ -63,6 +63,58 @@ pub enum ClaudeMessage {
 
     /// Forward-compatibility catch-all so a new claude message type does not
     /// fail the parse.
+    #[serde(other)]
+    Unknown,
+}
+
+/// Body of an `assistant` line — only `content` matters for event mapping;
+/// other fields (`role`, `id`, `usage`, …) are dropped by serde.
+#[derive(Debug, Deserialize)]
+pub struct AssistantContent {
+    pub content: Vec<AssistantBlock>,
+}
+
+/// One entry in an assistant message's `content` array. `text` blocks become
+/// [`AgentEvent::MessageDelta`](loom_core::agent::AgentEvent::MessageDelta);
+/// `tool_use` blocks become
+/// [`AgentEvent::ToolCall`](loom_core::agent::AgentEvent::ToolCall). Anything
+/// else (e.g. `thinking`) is logged at `trace!` and skipped via the
+/// catch-all variant.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AssistantBlock {
+    Text {
+        text: String,
+    },
+    ToolUse {
+        id: ToolCallId,
+        name: String,
+        input: serde_json::Value,
+    },
+    #[serde(other)]
+    Unknown,
+}
+
+/// Body of a `user` line — only `content` matters; the role field is dropped.
+#[derive(Debug, Deserialize)]
+pub struct UserContent {
+    pub content: Vec<UserBlock>,
+}
+
+/// One entry in a user message's `content` array. `tool_result` blocks become
+/// [`AgentEvent::ToolResult`](loom_core::agent::AgentEvent::ToolResult).
+/// `content` may be a plain string or a nested block array — the parser
+/// stringifies whichever shape arrives.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum UserBlock {
+    ToolResult {
+        tool_use_id: ToolCallId,
+        #[serde(default)]
+        content: serde_json::Value,
+        #[serde(default)]
+        is_error: bool,
+    },
     #[serde(other)]
     Unknown,
 }

@@ -1403,6 +1403,89 @@ test_protocol_error_variants() {
 }
 
 #-----------------------------------------------------------------------------
+# test_claude_stream_json_parsing — parser deserializes the four primary
+# claude stream-json line types (system/init, assistant text+tool_use, user
+# tool_result, result/success) into their typed shapes. Covered by unit
+# tests in claude/parser.rs that drive `ClaudeMessage` through fixtures.
+#-----------------------------------------------------------------------------
+test_claude_stream_json_parsing() {
+    cargo_run test -p loom-agent --quiet -- \
+        claude::parser::tests::parses_system_init \
+        claude::parser::tests::parses_assistant_text_and_tool_use \
+        claude::parser::tests::parses_user_tool_result_string_content \
+        claude::parser::tests::parses_result_success
+}
+
+#-----------------------------------------------------------------------------
+# test_claude_tagged_enum — `ClaudeMessage` uses serde's internally-tagged
+# enum form (`#[serde(tag = "type")]`) so dispatch is driven by the wire
+# `type` field rather than a hand-rolled match.
+#-----------------------------------------------------------------------------
+test_claude_tagged_enum() {
+    local f="$LOOM_DIR/crates/loom-agent/src/claude/messages.rs"
+    if [ ! -f "$f" ]; then
+        echo "missing: $f" >&2
+        return 1
+    fi
+    if ! awk '
+        /#\[serde\(tag[[:space:]]*=[[:space:]]*"type"\)\]/ { tagged = 1; next }
+        tagged && /^pub enum ClaudeMessage/ { found = 1; exit }
+        /^pub enum ClaudeMessage/ { tagged = 0 }
+        END { exit (found ? 0 : 1) }
+    ' "$f"; then
+        echo "ClaudeMessage is not annotated with #[serde(tag = \"type\")] in $f" >&2
+        return 1
+    fi
+}
+
+#-----------------------------------------------------------------------------
+# test_claude_event_mapping — `result/success` yields `TurnEnd` then
+# `SessionComplete`; `result/error` yields `Error` then `SessionComplete`.
+# Covered by fixture-driven unit tests in claude/parser.rs.
+#-----------------------------------------------------------------------------
+test_claude_event_mapping() {
+    cargo_run test -p loom-agent --quiet -- \
+        claude::parser::tests::result_success_yields_turn_end_then_session_complete \
+        claude::parser::tests::result_error_yields_error_then_session_complete
+}
+
+#-----------------------------------------------------------------------------
+# test_claude_cost_capture — a `result` event with `total_cost_usd: 0.42`
+# produces a `SessionComplete` whose `cost_usd` is `Some(0.42)`. Covered by
+# unit tests in claude/parser.rs.
+#-----------------------------------------------------------------------------
+test_claude_cost_capture() {
+    cargo_run test -p loom-agent --quiet -- \
+        claude::parser::tests::result_event_captures_cost_usd \
+        claude::parser::tests::result_event_without_cost_yields_none
+}
+
+#-----------------------------------------------------------------------------
+# test_claude_unknown_events — a line with an unrecognised `type` value
+# returns a `ParsedLine` with empty events (forward compatibility via
+# `#[serde(other)]`), not an error. Covered by a unit test in
+# claude/parser.rs.
+#-----------------------------------------------------------------------------
+test_claude_unknown_events() {
+    cargo_run test -p loom-agent --quiet -- \
+        claude::parser::tests::unknown_message_type_returns_empty_events
+}
+
+#-----------------------------------------------------------------------------
+# test_claude_permission_autoapprove — a `control_request` line yields a
+# `ParsedLine::response` carrying `control_response { id, approved: true }`
+# when the deny-list is empty; with `denied_tools = ["WebFetch"]`, a
+# WebFetch request yields `approved: false` while other tools remain
+# auto-approved. Covered by unit tests in claude/parser.rs.
+#-----------------------------------------------------------------------------
+test_claude_permission_autoapprove() {
+    cargo_run test -p loom-agent --quiet -- \
+        claude::parser::tests::control_request_autoapproves_when_denylist_empty \
+        claude::parser::tests::control_request_denied_when_tool_in_denylist \
+        claude::parser::tests::control_request_denylist_does_not_affect_other_tools
+}
+
+#-----------------------------------------------------------------------------
 # Dispatch
 #-----------------------------------------------------------------------------
 if [ $# -eq 0 ]; then
