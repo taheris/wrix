@@ -549,6 +549,44 @@ test_template_output_parity() {
 }
 
 #-----------------------------------------------------------------------------
+# Workflow commands — each function dispatches into the matching cargo unit
+# test under `loom-workflow`. Sharing the cargo binary keeps verify and
+# `cargo test` exercising the same code paths.
+#-----------------------------------------------------------------------------
+todo_cargo_test() {
+    cargo_run test -p loom-workflow --lib "$1" -- --exact --nocapture --quiet
+}
+
+#-----------------------------------------------------------------------------
+# test_todo_tier_detection — `compute_spec_diff` correctly classifies inputs
+# into the four tiers from `lib/ralph/cmd/util.sh::compute_spec_diff`:
+#   - Tier 1 (diff): molecule + valid base_commit → per-spec fan-out, with
+#     sibling overrides and orphan fallback to the anchor's base.
+#   - Tier 2 (tasks): molecule present but base_commit absent / orphaned /
+#     missing → fall back to existing-task comparison.
+#   - Tier 4 (new): no molecule recorded → fresh decomposition.
+#   - --since override: replaces the anchor's base for the anchor only;
+#     errors when the override commit is missing or orphaned.
+# (Tier 3 — README discovery — is the driver's responsibility before
+# `compute_spec_diff` runs; once it reconstructs a molecule, the call
+# proceeds as tier 2.)
+#-----------------------------------------------------------------------------
+test_todo_tier_detection() {
+    todo_cargo_test todo::tier::tests::tier_4_when_no_molecule_no_since
+    todo_cargo_test todo::tier::tests::tier_2_when_molecule_present_without_base_commit
+    todo_cargo_test todo::tier::tests::tier_2_when_base_commit_orphaned
+    todo_cargo_test todo::tier::tests::tier_2_when_base_commit_no_longer_exists
+    todo_cargo_test todo::tier::tests::tier_1_diff_with_empty_candidate_set
+    todo_cargo_test todo::tier::tests::tier_1_anchor_only_diff
+    todo_cargo_test todo::tier::tests::tier_1_fanout_uses_sibling_base_when_set
+    todo_cargo_test todo::tier::tests::tier_1_fanout_seeds_orphaned_sibling_from_anchor
+    todo_cargo_test todo::tier::tests::tier_1_skips_candidates_with_empty_diff
+    todo_cargo_test todo::tier::tests::since_override_replaces_anchor_base_for_anchor_only
+    todo_cargo_test todo::tier::tests::since_override_errors_when_commit_missing
+    todo_cargo_test todo::tier::tests::since_override_errors_when_commit_orphaned
+}
+
+#-----------------------------------------------------------------------------
 # State database — each function dispatches into the matching cargo
 # integration test under `loom-core/tests/state_db.rs`. Sharing the cargo
 # binary keeps verify and `cargo test` exercising the same code paths.

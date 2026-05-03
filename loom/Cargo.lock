@@ -1490,7 +1490,17 @@ dependencies = [
 name = "loom-workflow"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "askama",
+ "displaydoc",
  "loom-core",
+ "loom-templates",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
