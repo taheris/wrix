@@ -29,6 +29,7 @@ rustPlatform.buildRustPackage {
   env.HOME = "/tmp";
 
   doCheck = true;
+  nativeCheckInputs = [ pkgs.git ];
 
   meta = {
     description = "Rust agent driver for the Wrapix workflow (replaces Ralph's bash scripts)";
