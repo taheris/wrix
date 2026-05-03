@@ -49,5 +49,6 @@ fn sample_config() -> SpawnConfig {
             pinned_context: String::new(),
             partial_bodies: Vec::new(),
         },
+        model: None,
     }
 }

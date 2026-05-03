@@ -1598,6 +1598,86 @@ test_pi_extension_ui_passthrough() {
 }
 
 #-----------------------------------------------------------------------------
+# test_pi_startup_probe — `PiBackend::spawn` issues a `get_commands` request
+# immediately after launching the subprocess and verifies the response
+# carries every command Loom depends on (`prompt`, `steer`, `abort`,
+# `set_model`). Missing commands surface as `ProtocolError::Unsupported`
+# before any session work begins. The mock pi binary under
+# tests/loom/mock-pi/ exposes happy-path and missing-command modes.
+#-----------------------------------------------------------------------------
+test_pi_startup_probe() {
+    if [ ! -x "$REPO_ROOT/tests/loom/mock-pi/pi.sh" ]; then
+        echo "missing mock pi binary: tests/loom/mock-pi/pi.sh" >&2
+        return 1
+    fi
+    cargo_run test -p loom-agent --quiet -- \
+        pi::backend::tests::startup_probe_succeeds_when_required_commands_present \
+        pi::backend::tests::startup_probe_fails_fast_when_required_command_missing
+}
+
+#-----------------------------------------------------------------------------
+# test_pi_rpc_command_sending — the driver writes the initial prompt as an
+# NDJSON line on stdin via `AgentSession::prompt`; the mock pi observes the
+# line and echoes its `message` field back in a `message_update`/`text_delta`
+# event, proving the wire shape.
+#-----------------------------------------------------------------------------
+test_pi_rpc_command_sending() {
+    if [ ! -x "$REPO_ROOT/tests/loom/mock-pi/pi.sh" ]; then
+        echo "missing mock pi binary: tests/loom/mock-pi/pi.sh" >&2
+        return 1
+    fi
+    cargo_run test -p loom-agent --quiet -- \
+        pi::backend::tests::driver_sends_prompt_as_ndjson_line
+}
+
+#-----------------------------------------------------------------------------
+# test_pi_supports_steering — `AgentSession::steer` writes a `steer` NDJSON
+# line on stdin during an active session; the mock pi receives it,
+# acknowledges it as a follow-up assistant turn, and the driver observes
+# the corresponding `MessageDelta` + `TurnEnd` events.
+#-----------------------------------------------------------------------------
+test_pi_supports_steering() {
+    if [ ! -x "$REPO_ROOT/tests/loom/mock-pi/pi.sh" ]; then
+        echo "missing mock pi binary: tests/loom/mock-pi/pi.sh" >&2
+        return 1
+    fi
+    cargo_run test -p loom-agent --quiet -- \
+        pi::backend::tests::driver_steers_mid_session_and_mock_observes_payload
+}
+
+#-----------------------------------------------------------------------------
+# test_pi_compaction_repin — when the parser surfaces
+# `AgentEvent::CompactionStart`, the driver (workflow-layer responsibility,
+# exercised here by the test) sends `RePinContent::to_prompt` via
+# `AgentSession::steer`. The mock pi observes the steer line and echoes the
+# payload back as a `MessageDelta` so the test can verify the wire round-trip.
+#-----------------------------------------------------------------------------
+test_pi_compaction_repin() {
+    if [ ! -x "$REPO_ROOT/tests/loom/mock-pi/pi.sh" ]; then
+        echo "missing mock pi binary: tests/loom/mock-pi/pi.sh" >&2
+        return 1
+    fi
+    cargo_run test -p loom-agent --quiet -- \
+        pi::backend::tests::driver_repins_on_compaction_start_via_steer
+}
+
+#-----------------------------------------------------------------------------
+# test_pi_set_model_from_phase_config — `SpawnConfig::model` carries a
+# provider/model_id pair sourced from per-phase config (`[agent.todo]`).
+# `PiBackend::spawn` sends the matching `set_model { provider, modelId }`
+# RPC after the startup probe; the mock pi acknowledges and echoes the
+# fields back so the test can confirm both reached the agent.
+#-----------------------------------------------------------------------------
+test_pi_set_model_from_phase_config() {
+    if [ ! -x "$REPO_ROOT/tests/loom/mock-pi/pi.sh" ]; then
+        echo "missing mock pi binary: tests/loom/mock-pi/pi.sh" >&2
+        return 1
+    fi
+    cargo_run test -p loom-agent --quiet -- \
+        pi::backend::tests::set_model_from_phase_config_reaches_mock_pi
+}
+
+#-----------------------------------------------------------------------------
 # Dispatch
 #-----------------------------------------------------------------------------
 if [ $# -eq 0 ]; then

@@ -251,6 +251,7 @@ mod tests {
             initial_prompt: "hello".to_string(),
             agent_args: vec!["--print".into()],
             repin: sample_repin(),
+            model: None,
         };
 
         let spawn_config_path = prepare_runtime(&cfg).expect("prepare_runtime");

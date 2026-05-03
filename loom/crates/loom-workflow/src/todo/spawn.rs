@@ -26,6 +26,7 @@ pub fn build_spawn_config(
         initial_prompt,
         agent_args,
         repin,
+        model: None,
     }
 }
 

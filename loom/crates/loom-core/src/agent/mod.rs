@@ -28,7 +28,7 @@ mod parse;
 mod repin;
 mod session;
 
-pub use backend::{AgentBackend, SessionOutcome, SpawnConfig};
+pub use backend::{AgentBackend, ModelSelection, SessionOutcome, SpawnConfig};
 pub use error::ProtocolError;
 pub use event::{AgentEvent, CompactionReason};
 pub use kind::AgentKind;

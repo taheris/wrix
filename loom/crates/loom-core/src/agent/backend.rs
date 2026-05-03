@@ -21,6 +21,25 @@ pub struct SpawnConfig {
     pub initial_prompt: String,
     pub agent_args: Vec<String>,
     pub repin: RePinContent,
+    /// Optional post-spawn model override consumed by the host-side backend
+    /// (currently only [`PiBackend`](crate::agent::AgentBackend) — claude
+    /// receives its model via CLI flags). When present, the pi backend sends
+    /// a `set_model` RPC after the startup probe; failure is hard-fail.
+    /// Skipped during serialization when `None` so the wrapper's input JSON
+    /// remains identical to existing fixtures.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<ModelSelection>,
+}
+
+/// Per-session model override: pi RPC's `set_model { provider, modelId }`.
+///
+/// Lives on [`SpawnConfig`] rather than a backend-specific config object so
+/// the [`AgentBackend::spawn`] trait surface stays a single-argument call.
+/// The wrapper ignores this field; it is consumed only by host-side backends.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelSelection {
+    pub provider: String,
+    pub model_id: String,
 }
 
 /// Outcome of a completed agent session — what the workflow engine receives
