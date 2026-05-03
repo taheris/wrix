@@ -1583,6 +1583,15 @@ dependencies = [
 [[package]]
 name = "loom-agent"
 version = "0.1.0"
+dependencies = [
+ "displaydoc",
+ "loom-core",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "loom-core"

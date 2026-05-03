@@ -1233,6 +1233,176 @@ test_plan_uses_interactive_wrapix_run() {
 }
 
 #-----------------------------------------------------------------------------
+# Agent backend trait surface — pin the loom-core types and modules that
+# loom-agent depends on. Each grep test lives next to the file under test so
+# the failure message points directly at the source.
+#-----------------------------------------------------------------------------
+
+#-----------------------------------------------------------------------------
+# test_agent_trait_exists — `pub trait AgentBackend` declared in
+# loom-core/src/agent/backend.rs with a single `spawn` associated function
+# returning `impl Future<Output = Result<AgentSession<Idle>, ProtocolError>>
+# + Send`. There must be no `SUPPORTS_STEERING` constant: both backends
+# support steering (pi via `steer`, claude via stream-json user messages).
+#-----------------------------------------------------------------------------
+test_agent_trait_exists() {
+    local f="$LOOM_DIR/crates/loom-core/src/agent/backend.rs"
+    if [ ! -f "$f" ]; then
+        echo "missing: $f" >&2
+        return 1
+    fi
+    grep -E '^pub trait AgentBackend' "$f" >/dev/null \
+        || { echo "AgentBackend trait declaration missing in $f" >&2; return 1; }
+    grep -E 'fn spawn[[:space:]]*\(' "$f" >/dev/null \
+        || { echo "AgentBackend::spawn signature missing in $f" >&2; return 1; }
+    grep -E 'AgentSession<Idle>[[:space:]]*,[[:space:]]*ProtocolError' "$f" >/dev/null \
+        || { echo "spawn return type AgentSession<Idle>, ProtocolError missing in $f" >&2; return 1; }
+    grep -E 'impl[[:space:]]+(std::)?future::Future' "$f" >/dev/null \
+        || { echo "spawn does not return impl Future in $f" >&2; return 1; }
+    grep -E '\+[[:space:]]*Send' "$f" >/dev/null \
+        || { echo "spawn future is not + Send in $f" >&2; return 1; }
+    if grep -E '\bSUPPORTS_STEERING\b' "$f" >/dev/null; then
+        echo "AgentBackend declares forbidden SUPPORTS_STEERING constant in $f" >&2
+        return 1
+    fi
+}
+
+#-----------------------------------------------------------------------------
+# test_agent_trait_static_dispatch — the loom-agent compile-only dispatch
+# test (`tests/static_dispatch.rs`) instantiates `run_agent::<PiBackend>` and
+# `run_agent::<ClaudeBackend>`; `cargo build --workspace --tests` succeeding
+# is the assertion that the trait surface accepts both ZST backends.
+#-----------------------------------------------------------------------------
+test_agent_trait_static_dispatch() {
+    local f="$LOOM_DIR/crates/loom-agent/tests/static_dispatch.rs"
+    if [ ! -f "$f" ]; then
+        echo "missing: $f" >&2
+        return 1
+    fi
+    grep -E 'run_agent::<PiBackend>' "$f" >/dev/null \
+        || { echo "static_dispatch.rs does not reference run_agent::<PiBackend>" >&2; return 1; }
+    grep -E 'run_agent::<ClaudeBackend>' "$f" >/dev/null \
+        || { echo "static_dispatch.rs does not reference run_agent::<ClaudeBackend>" >&2; return 1; }
+    cargo_run build --workspace --tests --quiet
+}
+
+#-----------------------------------------------------------------------------
+# test_agent_event_variants — loom-core/src/agent/event.rs declares every
+# spec-listed `AgentEvent` variant.
+#-----------------------------------------------------------------------------
+test_agent_event_variants() {
+    local f="$LOOM_DIR/crates/loom-core/src/agent/event.rs"
+    if [ ! -f "$f" ]; then
+        echo "missing: $f" >&2
+        return 1
+    fi
+    if ! grep -E '^pub enum AgentEvent' "$f" >/dev/null; then
+        echo "AgentEvent enum declaration missing in $f" >&2
+        return 1
+    fi
+    local missing=0 v
+    for v in MessageDelta ToolCall ToolResult TurnEnd SessionComplete \
+             CompactionStart CompactionEnd Error; do
+        if ! grep -E "^[[:space:]]+${v}([[:space:]]|\{|,)" "$f" >/dev/null; then
+            echo "AgentEvent::${v} missing in $f" >&2
+            missing=$((missing + 1))
+        fi
+    done
+    return "$missing"
+}
+
+#-----------------------------------------------------------------------------
+# test_spawn_config_fields — loom-core/src/agent/backend.rs declares every
+# spec-listed `SpawnConfig` field. The struct is the stable JSON contract
+# between loom and `wrapix run-bead --spawn-config`.
+#-----------------------------------------------------------------------------
+test_spawn_config_fields() {
+    local f="$LOOM_DIR/crates/loom-core/src/agent/backend.rs"
+    if [ ! -f "$f" ]; then
+        echo "missing: $f" >&2
+        return 1
+    fi
+    if ! grep -E '^pub struct SpawnConfig' "$f" >/dev/null; then
+        echo "SpawnConfig struct missing in $f" >&2
+        return 1
+    fi
+    local missing=0 field
+    for field in image workspace env initial_prompt agent_args repin; do
+        if ! grep -E "^[[:space:]]+pub ${field}[[:space:]]*:" "$f" >/dev/null; then
+            echo "SpawnConfig.${field} missing in $f" >&2
+            missing=$((missing + 1))
+        fi
+    done
+    return "$missing"
+}
+
+#-----------------------------------------------------------------------------
+# test_typestate_transitions — loom-core/src/agent/session.rs splits the
+# session API by typestate: `impl AgentSession<Idle>` exposes `prompt`;
+# `impl AgentSession<Active>` exposes `next_event`, `steer`, and `abort`.
+# Together they enforce the Idle → Active → Idle protocol order at compile
+# time.
+#-----------------------------------------------------------------------------
+test_typestate_transitions() {
+    local f="$LOOM_DIR/crates/loom-core/src/agent/session.rs"
+    if [ ! -f "$f" ]; then
+        echo "missing: $f" >&2
+        return 1
+    fi
+    local missing=0
+    if ! awk '
+        /^impl AgentSession<Idle>/ { idle = 1; next }
+        idle && /^\}/ { idle = 0 }
+        idle && /pub async fn prompt[[:space:]]*\(/ { found = 1 }
+        END { exit (found ? 0 : 1) }
+    ' "$f"; then
+        echo "AgentSession<Idle>::prompt missing in $f" >&2
+        missing=$((missing + 1))
+    fi
+    local m
+    for m in next_event steer abort; do
+        if ! awk -v needle="pub async fn ${m}" '
+            /^impl AgentSession<Active>/ { active = 1; next }
+            active && /^\}/ { active = 0 }
+            active && index($0, needle) > 0 { found = 1 }
+            END { exit (found ? 0 : 1) }
+        ' "$f"; then
+            echo "AgentSession<Active>::${m} missing in $f" >&2
+            missing=$((missing + 1))
+        fi
+    done
+    return "$missing"
+}
+
+#-----------------------------------------------------------------------------
+# test_protocol_error_variants — loom-core/src/agent/error.rs declares every
+# spec-listed `ProtocolError` variant. The error covers the layers where
+# loom-core is the only code that knows about the wire (line framing, JSON
+# parse, subprocess IO) plus the small set of semantic outcomes a backend
+# `LineParse` reports back upward.
+#-----------------------------------------------------------------------------
+test_protocol_error_variants() {
+    local f="$LOOM_DIR/crates/loom-core/src/agent/error.rs"
+    if [ ! -f "$f" ]; then
+        echo "missing: $f" >&2
+        return 1
+    fi
+    if ! grep -E '^pub enum ProtocolError' "$f" >/dev/null; then
+        echo "ProtocolError enum declaration missing in $f" >&2
+        return 1
+    fi
+    local missing=0 v
+    for v in InvalidJson UnknownMessageType Io ProcessExit UnexpectedEof \
+             LineTooLong Unsupported; do
+        if ! grep -E "^[[:space:]]+${v}([[:space:]]|\(|\{|,)" "$f" >/dev/null; then
+            echo "ProtocolError::${v} missing in $f" >&2
+            missing=$((missing + 1))
+        fi
+    done
+    return "$missing"
+}
+
+#-----------------------------------------------------------------------------
 # Dispatch
 #-----------------------------------------------------------------------------
 if [ $# -eq 0 ]; then
