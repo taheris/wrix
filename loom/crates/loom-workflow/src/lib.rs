@@ -14,6 +14,7 @@ pub mod check;
 pub mod init;
 pub mod logs_cmd;
 pub mod msg;
+pub mod plan;
 pub mod run;
 pub mod spec;
 pub mod status;

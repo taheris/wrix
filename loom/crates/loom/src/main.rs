@@ -13,7 +13,7 @@ use clap::{Parser, Subcommand};
 
 use loom_core::bd::BdClient;
 use loom_core::identifier::{BeadId, SpecLabel};
-use loom_workflow::{init, logs_cmd, spec, status, use_spec};
+use loom_workflow::{init, logs_cmd, plan, spec, status, use_spec};
 
 /// Top-level CLI surface.
 #[derive(Debug, Parser)]
@@ -55,6 +55,15 @@ enum Command {
         #[arg(long)]
         deps: bool,
     },
+    /// Interactive spec interview (`-n <label>` new, `-u <label>` update).
+    Plan {
+        /// New-spec interview for `<label>`.
+        #[arg(short = 'n', value_name = "LABEL")]
+        new: Option<String>,
+        /// Update-spec interview for `<label>`.
+        #[arg(short = 'u', value_name = "LABEL")]
+        update: Option<String>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -83,6 +92,7 @@ fn main() -> ExitCode {
         Command::UseSpec { label } => run_use(&workspace, &label),
         Command::Logs { bead } => run_logs(&workspace, bead.as_deref()),
         Command::Spec { deps } => run_spec(&workspace, deps),
+        Command::Plan { new, update } => run_plan(&workspace, new, update),
     };
 
     match result {
@@ -150,6 +160,31 @@ fn run_logs(workspace: &std::path::Path, bead: Option<&str>) -> anyhow::Result<(
         },
     )?;
     println!("{}", path.display());
+    Ok(())
+}
+
+fn run_plan(
+    workspace: &std::path::Path,
+    new: Option<String>,
+    update: Option<String>,
+) -> anyhow::Result<()> {
+    let mode = plan::parse_mode(new, update)?;
+    let report = plan::run(
+        workspace,
+        plan::PlanOpts {
+            mode,
+            wrapix_bin: std::env::var_os("LOOM_WRAPIX_BIN").map(PathBuf::from),
+        },
+    )?;
+    println!("loom plan: spec={}", report.spec_path.display());
+    if report.companion_paths.is_empty() {
+        println!("  companions: (none)");
+    } else {
+        println!("  companions:");
+        for path in &report.companion_paths {
+            println!("    - {path}");
+        }
+    }
     Ok(())
 }
 

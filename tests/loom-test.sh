@@ -1178,6 +1178,45 @@ test_no_sync_or_tune_command() {
 }
 
 #-----------------------------------------------------------------------------
+# test_plan_new — `loom plan -n <label>` renders the new-spec template, shells
+# out to interactive `wrapix run` (NOT `run-bead --stdio`), waits for the
+# session to exit, then re-parses `## Companions` from the spec markdown the
+# interview wrote and replaces the companion rows for `<label>` in state.db.
+#-----------------------------------------------------------------------------
+test_plan_new() {
+    aux_cargo_test plan::runner::tests::plan_new_invokes_wrapix_run_and_records_companions
+    aux_cargo_test plan::args::tests::parse_mode_accepts_new_only
+    aux_cargo_test plan::args::tests::parse_mode_rejects_no_flags
+    aux_cargo_test plan::args::tests::parse_mode_rejects_both_flags
+}
+
+#-----------------------------------------------------------------------------
+# test_plan_update — `loom plan -u <label>` requires the spec to already
+# exist, threads the existing companion rows into the update template, and
+# reconciles companions from the spec markdown after the interactive session
+# exits.
+#-----------------------------------------------------------------------------
+test_plan_update() {
+    aux_cargo_test plan::runner::tests::plan_update_threads_existing_companions_into_prompt
+    aux_cargo_test plan::runner::tests::plan_update_errors_when_spec_missing
+    aux_cargo_test plan::args::tests::parse_mode_accepts_update_only
+    aux_cargo_test plan::companions::tests::rerun_replaces_previous_rows
+}
+
+#-----------------------------------------------------------------------------
+# test_plan_uses_interactive_wrapix_run — `loom plan` must shell out to the
+# interactive `wrapix run` subcommand with the user's TTY attached. It must
+# NEVER use `wrapix run-bead`, NEVER pass `--stdio`, and NEVER pass
+# `--spawn-config` — those are reserved for the NDJSON-driven phases.
+#-----------------------------------------------------------------------------
+test_plan_uses_interactive_wrapix_run() {
+    aux_cargo_test plan::command::tests::argv_starts_with_run_subcommand
+    aux_cargo_test plan::command::tests::argv_passes_prompt_to_claude_with_skip_permissions
+    aux_cargo_test plan::command::tests::argv_never_contains_run_bead_or_stdio_or_spawn_config
+    aux_cargo_test plan::runner::tests::plan_acquires_per_spec_lock
+}
+
+#-----------------------------------------------------------------------------
 # Dispatch
 #-----------------------------------------------------------------------------
 if [ $# -eq 0 ]; then

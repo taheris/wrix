@@ -148,6 +148,55 @@ impl StateDb {
         Ok(())
     }
 
+    /// Replace the companion rows for `label` with `paths`. Inserts a `specs`
+    /// row for `label` if none exists yet so a fresh `loom plan` cycle does
+    /// not fail before `loom todo` populates the rest of the row.
+    ///
+    /// Used by `loom plan` after the interactive interview exits to land the
+    /// declared `## Companions` paths in the state DB without rebuilding the
+    /// whole schema.
+    pub fn replace_companions(
+        &self,
+        label: &SpecLabel,
+        spec_path: &Path,
+        paths: &[String],
+    ) -> Result<(), StateError> {
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "INSERT INTO specs(label, spec_path, implementation_notes)
+             VALUES (?1, ?2, NULL)
+             ON CONFLICT(label) DO UPDATE SET spec_path = excluded.spec_path",
+            params![label.as_str(), spec_path.to_string_lossy()],
+        )?;
+        conn.execute(
+            "DELETE FROM companions WHERE spec_label = ?1",
+            params![label.as_str()],
+        )?;
+        for path in paths {
+            conn.execute(
+                "INSERT OR IGNORE INTO companions(spec_label, companion_path)
+                 VALUES (?1, ?2)",
+                params![label.as_str(), path],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Read all companion paths recorded for `label` (sorted for determinism).
+    pub fn companions(&self, label: &SpecLabel) -> Result<Vec<String>, StateError> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT companion_path FROM companions
+             WHERE spec_label = ?1 ORDER BY companion_path",
+        )?;
+        let rows = stmt.query_map(params![label.as_str()], |r| r.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
     /// Increment the iteration counter for `mol_id` and return the new value.
     pub fn increment_iteration(&self, mol_id: &MoleculeId) -> Result<u32, StateError> {
         let conn = self.lock_conn()?;
