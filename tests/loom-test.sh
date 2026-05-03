@@ -1877,6 +1877,103 @@ test_backend_invalid_name() {
 }
 
 #-----------------------------------------------------------------------------
+# Agent runtime layer — verifies the two-axis composition in
+# lib/sandbox/image.nix. The pi runtime layer adds Node.js + pi binary on top
+# of any workspace profile; the claude runtime layer is a no-op (claude is
+# already in the base image).
+#
+# Tests inspect the realized image closure rather than booting a container,
+# so they run on any host that can build a Linux image (Linux directly,
+# Darwin via the remote linux-builder).
+#-----------------------------------------------------------------------------
+
+# Build an image and emit its full closure (one store path per line).
+image_closure() {
+    local attr="$1" out
+    out=$(nix build "$REPO_ROOT#$attr" --no-link --print-out-paths) || return 1
+    nix-store --query --requisites "$out"
+}
+
+#-----------------------------------------------------------------------------
+# test_pi_runtime_layer — pi runtime adds Node.js + pi binary to whatever
+# workspace profile is selected. Verified by inspecting the image closure
+# for both the pi-mono package and a nodejs derivation.
+#-----------------------------------------------------------------------------
+test_pi_runtime_layer() {
+    local closure
+    closure=$(image_closure sandbox-pi) || return 1
+    if ! grep -q -- '-pi-mono-' <<<"$closure"; then
+        echo "pi-mono not in sandbox-pi closure (pi runtime layer missing)" >&2
+        return 1
+    fi
+    if ! grep -qE -- '-nodejs(-[0-9]|_)' <<<"$closure"; then
+        echo "nodejs not in sandbox-pi closure (pi runtime layer missing)" >&2
+        return 1
+    fi
+}
+
+#-----------------------------------------------------------------------------
+# test_pi_rust_composition — composing profile:rust with agent=pi yields a
+# buildable image. Verifies the two axes compose without name collisions or
+# missing dependencies.
+#-----------------------------------------------------------------------------
+test_pi_rust_composition() {
+    local closure
+    closure=$(image_closure sandbox-rust-pi) || return 1
+    grep -q -- '-pi-mono-' <<<"$closure" \
+        || { echo "pi-mono missing from sandbox-rust-pi closure" >&2; return 1; }
+    # Rust profile signature: cargo (or rustc) must remain present.
+    grep -qE -- '-(cargo|rustc)-' <<<"$closure" \
+        || { echo "rust toolchain missing from sandbox-rust-pi closure" >&2; return 1; }
+}
+
+#-----------------------------------------------------------------------------
+# test_pi_base_composition — composing profile:base with agent=pi builds.
+#-----------------------------------------------------------------------------
+test_pi_base_composition() {
+    local closure
+    closure=$(image_closure sandbox-pi) || return 1
+    grep -q -- '-pi-mono-' <<<"$closure" \
+        || { echo "pi-mono missing from sandbox-pi closure" >&2; return 1; }
+}
+
+#-----------------------------------------------------------------------------
+# test_pi_binary_in_container — the pi binary the runtime layer bundles is
+# functional: `pi --version` succeeds. Exercised against the pi-mono store
+# path that the layer pulls in.
+#-----------------------------------------------------------------------------
+test_pi_binary_in_container() {
+    local pi_pkg
+    pi_pkg=$(nix build "$REPO_ROOT#pi-mono" --no-link --print-out-paths) || return 1
+    [ -x "$pi_pkg/bin/pi" ] \
+        || { echo "pi binary missing at $pi_pkg/bin/pi" >&2; return 1; }
+    "$pi_pkg/bin/pi" --version >/dev/null \
+        || { echo "'pi --version' failed against $pi_pkg/bin/pi" >&2; return 1; }
+    # The same pi-mono store path must appear in a pi-runtime image, otherwise
+    # the layer is referencing a different binary than the one we just probed.
+    local closure
+    closure=$(image_closure sandbox-pi) || return 1
+    grep -qF "$pi_pkg" <<<"$closure" \
+        || { echo "pi binary $pi_pkg not in sandbox-pi closure" >&2; return 1; }
+}
+
+#-----------------------------------------------------------------------------
+# test_claude_runtime_noop — the default (claude) runtime adds nothing on top
+# of the base image: pi-mono is absent, and claude itself is still present
+# (sanity check that the base image's claude binary survived the refactor).
+#-----------------------------------------------------------------------------
+test_claude_runtime_noop() {
+    local closure
+    closure=$(image_closure sandbox) || return 1
+    if grep -q -- '-pi-mono-' <<<"$closure"; then
+        echo "pi-mono unexpectedly present in claude-runtime sandbox closure" >&2
+        return 1
+    fi
+    grep -q -- '-claude-code-' <<<"$closure" \
+        || { echo "claude-code missing from default sandbox closure (regression)" >&2; return 1; }
+}
+
+#-----------------------------------------------------------------------------
 # Dispatch
 #-----------------------------------------------------------------------------
 if [ $# -eq 0 ]; then

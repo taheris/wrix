@@ -3,8 +3,17 @@
 # This creates a layered container image with:
 # - Base packages + profile-specific packages
 # - Claude Code package
+# - Optional pi-mono runtime (Node.js + pi binary) when `agent == "pi"`
 # - CA certificates for HTTPS
 # - Platform-specific entrypoint script
+#
+# The image is composed from two orthogonal axes:
+#   - workspace profile (base | rust | python) — toolchain packages
+#   - agent runtime (claude | pi) — agent binary layer
+#
+# Claude is always present (it's part of the base image today), so the claude
+# runtime layer is a no-op. The pi runtime layer adds pkgs.pi-mono on top of
+# whichever profile is selected.
 #
 # Layer ordering: stable packages first, frequently-changing packages last.
 # This maximizes layer cache hits across rebuilds and profiles.
@@ -17,6 +26,10 @@
   claudeConfig,
   claudeSettings,
   mcpServerConfigs ? { },
+  # Agent runtime axis. "claude" (default) is a no-op. "pi" adds pi-mono
+  # (Node.js + pi binary) so the entrypoint can launch pi --mode rpc when
+  # WRAPIX_AGENT=pi.
+  agent ? "claude",
   # Use buildLayeredImage (tar in store) instead of streamLayeredImage (script).
   # Required on Darwin where the stream script's Linux Python shebang won't execute.
   asTarball ? false,
@@ -77,13 +90,24 @@ let
     wrapix:x:1000:
   '';
 
+  # Agent runtime layer. `claude` is a no-op (claudeCode is the entrypointPkg
+  # already baked into every image); `pi` adds pi-mono. New runtimes plug in
+  # by extending this lookup — no profile.pi or pi+rust special cases.
+  agentPackages =
+    {
+      claude = [ ];
+      pi = [ pkgs.pi-mono ];
+    }
+    .${agent} or (throw "lib/sandbox/image.nix: unknown agent '${agent}' (expected 'claude' or 'pi')");
+
   # Create a merged environment with all packages for proper PATH
   allPackages = [
     entrypointPkg
     notifyClient
     ralph.scripts
   ]
-  ++ (profile.packages or [ ]);
+  ++ (profile.packages or [ ])
+  ++ agentPackages;
 
   profileEnv = pkgs.buildEnv {
     name = "wrapix-profile-env";
@@ -99,7 +123,7 @@ let
     if asTarball then pkgs.dockerTools.buildLayeredImage else pkgs.dockerTools.streamLayeredImage;
 in
 buildImage {
-  name = "wrapix-${profile.name}";
+  name = "wrapix-${profile.name}${pkgs.lib.optionalString (agent != "claude") "-${agent}"}";
   tag = "latest";
   maxLayers = 100;
   includeNixDB = true;

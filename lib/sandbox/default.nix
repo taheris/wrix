@@ -96,6 +96,7 @@ let
       claudePkg ? linuxPkgs.claude-code,
       claudeSettings ? baseClaudeSettings,
       mcpServerConfigs ? { },
+      agent ? "claude",
       asTarball ? false,
     }:
     import ./image.nix {
@@ -107,6 +108,7 @@ let
         claudeConfig
         claudeSettings
         mcpServerConfigs
+        agent
         asTarball
         ;
       entrypointPkg = claudePkg;
@@ -165,6 +167,9 @@ let
       env ? { },
       mcp ? { },
       mcpRuntime ? false,
+      # Agent runtime axis composed onto the workspace profile. "claude"
+      # (default) is a no-op; "pi" adds the pi-mono runtime layer.
+      agent ? "claude",
       # Override the default ANTHROPIC_MODEL for this container (null = use default)
       model ? null,
     }:
@@ -227,7 +232,7 @@ let
               entrypointSh = ./linux/entrypoint.sh;
               krunSupport = true;
               claudeSettings = finalClaudeSettings;
-              inherit mcpServerConfigs;
+              inherit agent mcpServerConfigs;
             };
           }
         else if isDarwin then
@@ -244,7 +249,7 @@ let
               entrypointSh = ./darwin/entrypoint.sh;
               claudeSettings = finalClaudeSettings;
               asTarball = true;
-              inherit mcpServerConfigs;
+              inherit agent mcpServerConfigs;
             };
           }
         else
@@ -267,7 +272,7 @@ let
         krunSupport = isLinux;
         asTarball = isDarwin;
         claudeSettings = finalClaudeSettings;
-        inherit mcpServerConfigs;
+        inherit agent mcpServerConfigs;
       };
 
     in
