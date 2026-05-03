@@ -5,5 +5,6 @@
 //! Subsequent issues populate each module; this crate currently exposes the
 //! module skeleton only.
 
+pub mod agent;
 pub mod git;
 pub mod identifier;

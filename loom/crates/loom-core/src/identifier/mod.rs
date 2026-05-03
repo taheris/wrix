@@ -1,46 +1,58 @@
-//! Domain identifier newtypes.
+//! Domain and protocol identifier newtypes.
 //!
-//! Minimal `SpecLabel` and `BeadId` shipped with the GitClient surface. The
-//! full identifier set (`MoleculeId`, `ProfileName`, `SessionId`, `ToolCallId`,
-//! `RequestId`, plus the `newtype_id!` macro and `serde` derives) lands in
-//! wx-3hhwq.2.
+//! Each identifier lives in its own submodule so the family layout stays
+//! flat and additive (NF-5: nested module structure, no central `types.rs`).
+//! All newtypes are produced by the [`newtype_id!`] macro defined here:
+//! a `#[serde(transparent)]` tuple struct around `String` with `new()`,
+//! `as_str()`, and `Display`.
+//!
+//! `derive(From)` and `derive(Into)` are deliberately not exposed by the
+//! macro (NF-8) — values must enter the newtype through `new()` so that any
+//! future parsing logic added to a single id family cannot be bypassed.
 
-use std::fmt;
+mod bead;
+mod molecule;
+mod profile;
+mod request;
+mod session;
+mod spec;
+mod tool_call;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SpecLabel(String);
+pub use bead::BeadId;
+pub use molecule::MoleculeId;
+pub use profile::ProfileName;
+pub use request::RequestId;
+pub use session::SessionId;
+pub use spec::SpecLabel;
+pub use tool_call::ToolCallId;
 
-impl SpecLabel {
-    pub fn new(s: impl Into<String>) -> Self {
-        Self(s.into())
-    }
+/// Generate a `#[serde(transparent)]` newtype wrapper around `String`.
+///
+/// Produces `new(impl Into<String>) -> Self`, `as_str(&self) -> &str`, and
+/// `Display`. `From` / `Into` are intentionally NOT derived — see NF-8 in
+/// `specs/loom-harness.md`.
+macro_rules! newtype_id {
+    ($name:ident) => {
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, ::serde::Serialize, ::serde::Deserialize)]
+        #[serde(transparent)]
+        pub struct $name(String);
 
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
+        impl $name {
+            pub fn new(s: impl Into<String>) -> Self {
+                Self(s.into())
+            }
+
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl ::std::fmt::Display for $name {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str(&self.0)
+            }
+        }
+    };
 }
 
-impl fmt::Display for SpecLabel {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct BeadId(String);
-
-impl BeadId {
-    pub fn new(s: impl Into<String>) -> Self {
-        Self(s.into())
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for BeadId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
+pub(crate) use newtype_id;

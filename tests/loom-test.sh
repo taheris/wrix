@@ -375,6 +375,104 @@ test_loom_does_not_invoke_podman() {
 }
 
 #-----------------------------------------------------------------------------
+# test_no_panics_in_production — non-test Rust code under loom/crates/ contains
+# no `unwrap()`, `expect(...)`, `todo!()`, `unimplemented!()`, or `panic!()`
+# calls. Test code (`#[cfg(test)]` modules and files under `tests/`) is
+# excluded; the workspace clippy block already denies these in production.
+#-----------------------------------------------------------------------------
+test_no_panics_in_production() {
+    if [ ! -d "$LOOM_DIR/crates" ]; then
+        echo "loom/crates not yet scaffolded" >&2
+        return 77
+    fi
+    local hits violations=0
+    while IFS= read -r -d '' file; do
+        # Skip integration test directories entirely.
+        case "$file" in
+            */tests/*) continue ;;
+        esac
+        # Strip `#[cfg(test)] mod tests { ... }` blocks before scanning so
+        # unit tests under the same source file are excluded.
+        local body
+        body=$(awk '
+            BEGIN { skip = 0; depth = 0 }
+            /^[[:space:]]*#\[cfg\(test\)\][[:space:]]*$/ { skip = 1; next }
+            skip && /\{/ { depth += gsub(/\{/, "{") }
+            skip && /\}/ {
+                depth -= gsub(/\}/, "}")
+                if (depth <= 0) { skip = 0; depth = 0; next }
+            }
+            !skip { print }
+        ' "$file")
+        hits=$(grep -nE '\b(unwrap|expect|todo|unimplemented|panic)\s*\(' <<<"$body" || true)
+        # Filter out comment lines and the macro pattern in identifier/mod.rs
+        # where `unwrap`/`panic` could appear in doc strings.
+        hits=$(grep -vE '^[[:space:]]*[0-9]+:[[:space:]]*(//|/\*|\*)' <<<"$hits" || true)
+        if [ -n "$hits" ]; then
+            echo "panic-in-production candidate(s) in $file:" >&2
+            echo "$hits" >&2
+            violations=$((violations + 1))
+        fi
+    done < <(find "$LOOM_DIR/crates" -name '*.rs' -print0)
+    return "$violations"
+}
+
+#-----------------------------------------------------------------------------
+# test_no_allow_dead_code — non-test Rust code uses `#[expect(dead_code)]`,
+# never `#[allow(dead_code)]` (NF-9). `expect` fails the build if the warning
+# stops firing; `allow` silently rots.
+#-----------------------------------------------------------------------------
+test_no_allow_dead_code() {
+    if [ ! -d "$LOOM_DIR/crates" ]; then
+        echo "loom/crates not yet scaffolded" >&2
+        return 77
+    fi
+    local hits
+    hits=$(grep -rEn '#\[allow\(dead_code\)\]' "$LOOM_DIR/crates" --include='*.rs' || true)
+    if [ -n "$hits" ]; then
+        echo "forbidden #[allow(dead_code)] (use #[expect(dead_code)] instead):" >&2
+        echo "$hits" >&2
+        return 1
+    fi
+}
+
+#-----------------------------------------------------------------------------
+# test_no_derive_from_on_newtypes — the newtype_id! macro and any newtype
+# struct must not derive `From` or `Into` (NF-8: bypasses the newtype
+# boundary). `#[from]` is permitted only on error enum variants — guarded by
+# scoping the search to identifier/ submodules where the newtypes live.
+#-----------------------------------------------------------------------------
+test_no_derive_from_on_newtypes() {
+    local id_dir="$LOOM_DIR/crates/loom-core/src/identifier"
+    if [ ! -d "$id_dir" ]; then
+        echo "loom-core identifier module not yet scaffolded" >&2
+        return 77
+    fi
+    local hits
+    # Look at every #[derive(...)] line under identifier/ for a From or Into
+    # bare ident. Match on word boundaries so `TryFrom`, `IntoIterator`, etc.
+    # don't false-positive (none of those are valid in derive lists anyway).
+    hits=$(grep -rEn '#\[derive\([^)]*\b(From|Into)\b[^)]*\)\]' "$id_dir" --include='*.rs' || true)
+    if [ -n "$hits" ]; then
+        echo "forbidden derive(From) or derive(Into) on newtype:" >&2
+        echo "$hits" >&2
+        return 1
+    fi
+    # Same for the macro definition itself: the body must not splice From/Into
+    # into the derive list.
+    hits=$(awk '
+        /macro_rules![[:space:]]*newtype_id/ { in_macro = 1 }
+        in_macro && /#\[derive\(/ { print NR ": " $0 }
+        in_macro && /^[[:space:]]*\}[[:space:]]*$/ { in_macro = 0 }
+    ' "$id_dir/mod.rs" | grep -E '\b(From|Into)\b' || true)
+    if [ -n "$hits" ]; then
+        echo "newtype_id! macro derives From/Into:" >&2
+        echo "$hits" >&2
+        return 1
+    fi
+}
+
+#-----------------------------------------------------------------------------
 # Dispatch
 #-----------------------------------------------------------------------------
 if [ $# -eq 0 ]; then
