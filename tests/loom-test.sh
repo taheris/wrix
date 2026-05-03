@@ -662,6 +662,72 @@ test_bd_error_handling() {
 }
 
 #-----------------------------------------------------------------------------
+# Concurrency & locking — each function dispatches into a cargo integration
+# test under `loom-core/tests/lock_manager.rs` so verify and `cargo test`
+# exercise the same paths. The acceptance behaviour (per-spec serialization,
+# 5s timeout, cross-spec independence, read-only commands unblocked,
+# init/workspace exclusion, crash recovery) is asserted in those tests.
+#-----------------------------------------------------------------------------
+lock_cargo_test() {
+    cargo_run test -p loom-core --test lock_manager "$1" -- --exact --nocapture --quiet
+}
+
+#-----------------------------------------------------------------------------
+# test_per_spec_lock_acquired — `LockManager::acquire_spec` creates the per-
+# spec lock file and the guard releases on drop.
+#-----------------------------------------------------------------------------
+test_per_spec_lock_acquired() {
+    lock_cargo_test acquire_spec_creates_lock_file
+}
+
+#-----------------------------------------------------------------------------
+# test_per_spec_lock_serializes — a second mutating command on the same spec
+# waits up to 5s and then errors with `another loom command is operating on
+# <label>`. The fast contention path (250ms timeout) and the default 5s wait
+# are both asserted.
+#-----------------------------------------------------------------------------
+test_per_spec_lock_serializes() {
+    lock_cargo_test second_acquire_times_out_with_spec_busy
+    lock_cargo_test times_out_with_default_timeout
+}
+
+#-----------------------------------------------------------------------------
+# test_cross_spec_no_blocking — locks for distinct spec labels do not block
+# each other; both acquire effectively immediately.
+#-----------------------------------------------------------------------------
+test_cross_spec_no_blocking() {
+    lock_cargo_test cross_spec_locks_do_not_block
+}
+
+#-----------------------------------------------------------------------------
+# test_readonly_commands_unblocked — read-only commands acquire no lock; an
+# active spec lock does not block read-only inspection of the workspace.
+#-----------------------------------------------------------------------------
+test_readonly_commands_unblocked() {
+    lock_cargo_test readonly_paths_unaffected_by_spec_lock
+}
+
+#-----------------------------------------------------------------------------
+# test_init_workspace_lock — `acquire_workspace` errors immediately with
+# `WorkspaceBusy` if any per-spec lock is held; succeeds when none are; and
+# is exclusive against itself.
+#-----------------------------------------------------------------------------
+test_init_workspace_lock() {
+    lock_cargo_test acquire_workspace_errors_when_spec_lock_held
+    lock_cargo_test acquire_workspace_serializes_workspace_holders
+}
+
+#-----------------------------------------------------------------------------
+# test_crash_releases_lock — a crashed (process-exit) holder leaves no stale
+# lock; a fresh invocation acquires immediately. The integration test spawns
+# the cargo test binary as a child process, takes the lock, then exits via
+# `std::process::exit` so the kernel — not Rust's Drop — releases the flock.
+#-----------------------------------------------------------------------------
+test_crash_releases_lock() {
+    lock_cargo_test crash_releases_spec_lock
+}
+
+#-----------------------------------------------------------------------------
 # Dispatch
 #-----------------------------------------------------------------------------
 if [ $# -eq 0 ]; then
