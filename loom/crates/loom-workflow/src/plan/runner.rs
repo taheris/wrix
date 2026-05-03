@@ -150,7 +150,7 @@ mod tests {
         let bin = bin_dir.join("wrapix-stub");
         let log = dir.join("argv.log");
         let mut script = format!(
-            "#!/usr/bin/env bash\nset -e\n\
+            "#!/bin/sh\nset -e\n\
              # log argv one-per-line so tests can grep for individual flags\n\
              for a in \"$@\"; do printf '%s\\n' \"$a\" >> {log:?}; done\n\
              printf -- '---\\n' >> {log:?}\n",
