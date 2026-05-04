@@ -125,8 +125,11 @@ defined in [ralph-loop.md](ralph-loop.md) and
     Environment variable values and API keys are never logged — use a
     `Redacted(&str)` wrapper that implements `fmt::Debug` as `"[REDACTED]"`
     for any value that could contain secrets. Variable *names* may be logged.
-11. **Nix integration** — built via `buildRustPackage` or `crane` in the
-    existing flake. Binary included in the devShell alongside (not replacing)
+11. **Nix integration** — built via `wrapix.profiles.rust.buildPackage`
+    (crane-backed; see [profiles.md — Rust package builder](profiles.md#rust-profile)).
+    `packages.loom` consumes `.bin` so devshell rebuilds skip the clippy/nextest
+    passes; those land as separate `loom-clippy` / `loom-nextest` entries in
+    `nix flake check`. Binary included in the devShell alongside (not replacing)
     Ralph's bash scripts during transition.
 
 ## Architecture
