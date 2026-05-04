@@ -23,7 +23,10 @@
 //!    terminal ([`command::build_wrapix_argv`]);
 //! 5. after the interactive session exits, parse the resulting spec markdown
 //!    for `## Companions` and replace the companion rows for `label` in the
-//!    state DB ([`companions::reconcile_companions`]).
+//!    state DB ([`companions::reconcile_companions`]);
+//! 6. set `current_spec = label` in the state DB so subsequent commands
+//!    (`loom todo`, `loom run`, `loom spec`) resolve the spec without a
+//!    separate `loom use` call.
 //!
 //! Hidden specs (Ralph's `-h` flag) are deliberately not ported — keeping a
 //! spec out of git is covered by `.git/info/exclude` (see *Out of Scope* in

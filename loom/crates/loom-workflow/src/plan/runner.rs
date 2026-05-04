@@ -145,6 +145,7 @@ pub fn run_with_timeout(
     }
 
     let outcome = reconcile_companions(&db, &label, &spec_path)?;
+    db.set_current_spec(&label)?;
 
     Ok(PlanReport {
         label,
@@ -553,6 +554,30 @@ mod tests {
 
         assert!(report.companion_paths.is_empty());
         assert!(!report.companions_section_present);
+        Ok(())
+    }
+
+    #[test]
+    fn plan_sets_current_spec_so_subsequent_commands_resolve_label() -> Result<()> {
+        let dir = workspace_with_specs()?;
+        let spec_path = dir.path().join("specs/loom-harness.md");
+        let bin = install_wrapix_stub(
+            dir.path(),
+            Some((&spec_path, "# loom-harness\n\n## Companions\n\n")),
+        )?;
+        let manifest = three_profile_manifest(dir.path())?;
+
+        run_with_timeout(
+            dir.path(),
+            plan_opts_new("loom-harness", bin, manifest),
+            Duration::from_millis(100),
+        )?;
+
+        let db = StateDb::open(dir.path().join(".wrapix/loom/state.db"))?;
+        let current = db
+            .current_spec()?
+            .ok_or_else(|| anyhow::anyhow!("plan must set current_spec"))?;
+        assert_eq!(current.as_str(), "loom-harness");
         Ok(())
     }
 
