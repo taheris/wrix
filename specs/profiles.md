@@ -268,6 +268,58 @@ These live on the profile attrset itself, not on `deriveProfile`.
 Only the Rust profile has `withToolchain`. Other profiles (base, python) do not
 expose profile-specific configuration functions.
 
+## Profile-Image Manifest
+
+Loom and other multi-profile orchestrators need to dispatch to per-profile
+images at runtime — one bead might want `profile:rust`, the next
+`profile:python`. The launcher (`packages.wrapix`) is profile-agnostic, so
+the profile→image mapping lives outside it as a JSON manifest.
+
+`wrapix.lib.${system}.mkProfileImages` produces that manifest:
+
+```nix
+wrapix.lib.${system}.mkProfileImages {
+  base   = (wrapix.mkSandbox { profile = profiles.base;   }).image;
+  rust   = (wrapix.mkSandbox { profile = profiles.rust;   }).image;
+  python = (wrapix.mkSandbox { profile = profiles.python; }).image;
+  myCustom = (wrapix.mkSandbox { profile = myCustomProfile; }).image;
+}
+```
+
+The output is a `pkgs.writeText "profile-images.json" <…>` derivation whose
+content is a JSON object keyed by profile name. Each value is `{ ref,
+source }` — `ref` is the podman image reference (`localhost/wrapix-<name>:<hash>`),
+`source` is the Nix store path the launcher hands to `podman load`. Both
+fields are computed Nix-side from the image derivation so consumers never
+re-implement the tag logic. Loom maps the manifest entry's `ref` and
+`source` to `SpawnConfig.image_ref` and `SpawnConfig.image_source`
+respectively when building each spawn-config.
+
+The manifest is keyed by profile only. Agent runtime (claude vs pi) is
+selected at container start via `WRAPIX_AGENT` (see
+[loom-agent.md — Agent Runtime Layer](loom-agent.md#agent-runtime-layer)) —
+each profile image installs both runtimes, so a single
+`packages.image-<profile>` covers both agents.
+
+The repo's bundled manifest covering `base`, `rust`, `python` is exposed as
+`packages.profile-images`. External flakes adding custom profiles call
+`mkProfileImages` themselves to produce a manifest covering their full
+profile set, then point `LOOM_PROFILES_MANIFEST` at it.
+
+## Flake Outputs
+
+Profiles surface as three sibling output families:
+
+| Output | Shape | Use |
+|--------|-------|-----|
+| `packages.image-<profile>` | OCI artifact (Linux: `streamLayeredImage`; Darwin: tarball); both agent runtimes installed | `mkCity`-style consumers driving podman directly; manifest entries |
+| `packages.sandbox-<profile>[-pi]` | `makeWrapper` of `packages.wrapix` + `packages.image-<profile>`; bare form defaults to `WRAPIX_AGENT=claude`, `-pi` suffix sets `WRAPIX_AGENT=pi` | One-shot users (`nix run .#sandbox-rust`, `nix run .#sandbox-rust-pi`) |
+| `packages.profile-images` | JSON manifest from `mkProfileImages`, keyed by profile (not by profile×agent) | Loom (`LOOM_PROFILES_MANIFEST`) |
+
+`<profile>` covers the built-in profiles (`base`, `rust`, `python`). The
+`-mcp` axis (runtime MCP server selection) is independent of agent and
+remains its own family of outputs in `modules/flake/packages.nix`.
+
 ## Success Criteria
 
 - [ ] Base profile provides functional development environment
@@ -296,6 +348,10 @@ expose profile-specific configuration functions.
   [judge](../tests/judges/profiles.sh#test_rust_toolchain_field)
 - [ ] `profiles.rust` and `profiles.rust.withToolchain { ... }` closures contain zero `*-nightly-*` derivations after a fresh `nix flake update` (regression guard against reintroducing `fenix.packages.${system}.rust-analyzer`, which drags a nightly cargo/rustc/rust-std closure). Implemented as a deterministic shell test (nix-eval the toolchain `drvPath`, scan the closure for `*-nightly-*` paths, exit 0/1) — `[verify]` rather than `[judge]` because there is no rubric ambiguity for an LLM to judge.
   [verify](../tests/profiles/no-nightly-closure.sh#test_no_nightly_closure)
+- [ ] `mkProfileImages { rust = …; }` produces a JSON file whose entry for `rust` has both `ref` and `source` fields, with `source` resolving to the same store path as `(mkSandbox { profile = profiles.rust; }).image`
+  [verify](../tests/profiles/profile-images-manifest.sh#test_manifest_shape)
+- [ ] `packages.image-<name>`, `packages.sandbox-<name>`, and `packages.profile-images` all evaluate for each built-in profile
+  [verify](../tests/profiles/profile-images-manifest.sh#test_flake_outputs_present)
 
 ## Out of Scope
 

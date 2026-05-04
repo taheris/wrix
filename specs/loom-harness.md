@@ -69,9 +69,10 @@ defined in [ralph-loop.md](ralph-loop.md) and
 4. **Beads integration** — interacts with beads via the `bd` CLI (subprocess
    calls). Bead operations: create, show, close, update, list, dep add, mol
    bond, mol progress. CLI output parsed into typed Rust structs.
-5. **Profile selection** — reads `profile:X` labels from beads and spawns
-   containers with the corresponding wrapix profile (base, rust, python).
-   `--profile` flag overrides bead labels.
+5. **Profile selection** — reads `profile:X` labels from beads and resolves
+   each label to a profile image via the
+   [Profile-Image Manifest](#profile-image-manifest). Unknown labels fail
+   at dispatch (no silent default). `--profile` overrides bead labels.
 6. **Worktree parallelism** — `loom run --parallel N` (alias `-p N`) dispatches
    up to N ready beads concurrently, each in its own git worktree on a
    per-bead branch. After workers finish, branches are merged back to the
@@ -138,12 +139,12 @@ in-container loom loop. The two motivations:
 
 1. **Per-bead profile selection.** Beads carry `profile:rust` /
    `profile:python` / `profile:base` labels. Each bead must run in a container
-   built from the matching wrapix profile. A long-lived parent container can't
+   built from the matching profile image. A long-lived parent container can't
    change profile mid-run; per-bead spawn is the only clean way.
 2. **Trust boundary.** Loom (orchestrator, on host) is trusted; the agent
    (claude or pi, in container) is the sandboxed execution layer.
 
-**Container spawn is delegated to `wrapix run-bead`** — a thin wrapix
+**Container spawn is delegated to `wrapix spawn`** — a thin wrapix
 subcommand that owns container construction (mounts, env passthrough, krun
 runtime selection on aarch64 microVM, network filtering, deploy key, beads
 dolt socket). Loom never invokes `podman run` directly. Nix remains the source
@@ -153,10 +154,10 @@ hands to the wrapper.
 ```
 loom (host)
     │
-    ├─ build SpawnConfig (image, env allowlist, mounts, repin)
+    ├─ build SpawnConfig (image_ref, image_source, env allowlist, mounts, repin)
     ├─ serialize to /tmp/loom-<id>.json
     │
-    ├─ spawn: wrapix run-bead --spawn-config /tmp/loom-<id>.json --stdio
+    ├─ spawn: wrapix spawn --spawn-config /tmp/loom-<id>.json --stdio
     │   │
     │   └─ exec podman run [no -t, stdio piped] <image> <entrypoint>
     │       │
@@ -167,7 +168,7 @@ loom (host)
     └─ on bead completion: container exits, next bead → next spawn
 ```
 
-`wrapix run-bead --stdio` is the non-TTY counterpart of today's interactive
+`wrapix spawn --stdio` is the non-TTY counterpart of today's interactive
 `wrapix run` (which uses `podman run -it`). Both modes share container
 construction; they differ only in stdio attachment. The
 `--spawn-config <file>` flag accepts a JSON file that mirrors loom's typed
@@ -181,7 +182,7 @@ template-rendered prompt, sets environment, exec's `wrapix run`, and lets
 claude attach to the user's terminal. No subprocess capture, no JSONL.
 
 **Trade-off accepted:** parallelism is straightforward (N concurrent
-`wrapix run-bead` invocations) but per-bead container spawn cost (~1-2s on
+`wrapix spawn` invocations) but per-bead container spawn cost (~1-2s on
 podman) replaces ralph's per-iteration claude spawn inside one long-lived
 container. For typical bead sizes (minutes of agent work), this is dominated
 by agent runtime.
@@ -195,7 +196,7 @@ by agent runtime.
 2. For each bead, create a git worktree at
    `.wrapix/worktree/<label>/<bead-id>/` on a fresh branch
    `loom/<label>/<bead-id>` based on HEAD.
-3. Spawn one `wrapix run-bead --spawn-config <file> --stdio` per worktree
+3. Spawn one `wrapix spawn --spawn-config <file> --stdio` per worktree
    concurrently. Each container's workdir bind mount points at the worktree
    path, not the main checkout.
 4. `tokio::join!` (or `JoinSet`) on the futures; collect per-bead results.
@@ -236,6 +237,65 @@ with arguments passed via `.arg()` — never shell interpolation — and a
 
 The hybrid line is reviewed each loom release; gix operations migrate
 inward as the corresponding `crate-status.md` items become checked.
+
+### Profile-Image Manifest
+
+The *profile-image manifest* is a JSON file produced by Nix at flake-build
+time that maps each profile name to the podman ref and Nix store path
+needed to spawn its image. Loom reads it at startup and, for each bead,
+looks up the profile label to populate `SpawnConfig.image_ref` (the podman
+ref) and `SpawnConfig.image_source` (the store path handed to
+`podman load`).
+
+The file is a JSON object keyed by profile name, with two string fields
+per entry:
+
+```json
+{
+  "base":   { "ref": "localhost/wrapix-base:abc123",   "source": "/nix/store/...-image-base" },
+  "rust":   { "ref": "localhost/wrapix-rust:def456",   "source": "/nix/store/...-image-rust" },
+  "python": { "ref": "localhost/wrapix-python:ghi789", "source": "/nix/store/...-image-python" }
+}
+```
+
+Built by `wrapix.lib.${system}.mkProfileImages` (defined in
+[profiles.md](profiles.md)); the bundled flake output is
+`packages.profile-images`. External flakes that add custom profiles call
+`mkProfileImages` themselves to produce a manifest covering their full
+profile set.
+
+Loom reads the manifest path from the `LOOM_PROFILES_MANIFEST` environment
+variable. The bundled devshell sets it to `${self'.packages.profile-images}`;
+consumers integrating loom into their own flake set it the same way. If the
+variable is unset or the file is missing, loom errors at startup before any
+bead spawn — there is no implicit search path or fallback default. The
+manifest is parsed once at startup and held as a
+`BTreeMap<ProfileName, ImageEntry>` in `loom-core`.
+
+Per-bead dispatch is:
+
+1. Parse the bead's labels; pick the highest-precedence `profile:X` (or the
+   value of `--profile` if set on the CLI).
+2. Look up `X` in the parsed manifest. Missing key → typed
+   `ProfileError::UnknownProfile { name, manifest_path }`.
+3. Build `SpawnConfig` with `image_ref = entry.ref` and `image_source =
+   entry.source`. Hand it to `wrapix spawn`.
+
+Agent (claude vs pi) is selected at container start via the `WRAPIX_AGENT`
+env-allowlist entry the entrypoint switches on — see
+[loom-agent.md — Agent Runtime Layer](loom-agent.md#agent-runtime-layer).
+The manifest stays one-dimensional; each per-profile image carries both
+runtimes, and `mkSandbox` no longer takes an `agent` parameter at Nix-eval
+time.
+
+`loom plan` is interactive, so it shells out to `wrapix run` (TTY-attached)
+rather than `wrapix spawn`. To keep one resolution path, plan looks up its
+profile (per [Configuration](#configuration); default `base`) in the
+manifest and exports `WRAPIX_DEFAULT_IMAGE_REF=<entry.ref>` plus
+`WRAPIX_DEFAULT_IMAGE_SOURCE=<entry.source>` into the child environment
+before exec'ing `wrapix run`. The launcher reads those env vars when no
+`--spawn-config` is supplied — see
+[sandbox.md — Launcher Subcommands](sandbox.md#launcher-subcommands).
 
 ### Concurrency & Locking
 
@@ -440,6 +500,9 @@ everywhere downstream. No internal function re-checks or re-parses.
    No intermediate untyped step.
 6. **CLI output parsing** — `bd --json` output deserializes into typed structs
    (`Bead`, `Molecule`).
+7. **Profile-image manifest** — the JSON produced by `mkProfileImages`
+   deserializes into `BTreeMap<ProfileName, ImageEntry { ref, source }>` once
+   at loom startup. Downstream code receives `&ImageEntry`, never raw JSON.
 
 **Newtype IDs:**
 
@@ -704,10 +767,11 @@ During the transition period:
 | File | Change |
 |------|--------|
 | `flake.nix` | Add loom as a Rust package input |
-| `modules/flake/packages.nix` | Build and expose loom binary |
-| `modules/flake/devshell.nix` | Include loom in devShell |
-| `lib/sandbox/linux/default.nix` | Add `wrapix run-bead` subcommand: stdio (no `-it`), accepts `--spawn-config <file>`, otherwise reuses the existing container construction (mounts, env, krun, network filter, deploy key, beads socket) |
-| `lib/sandbox/darwin/default.nix` | Same `--spawn-config` plumbing for the Darwin path |
+| `modules/flake/packages.nix` | Build loom; expose `packages.wrapix`, `packages.image-<profile>`, `packages.sandbox-<profile>[-pi]`, `packages.profile-images` (see [profiles.md — Flake Outputs](profiles.md#flake-outputs)) |
+| `modules/flake/devshell.nix` | Include loom; set `LOOM_PROFILES_MANIFEST=${self'.packages.profile-images}` |
+| `lib/sandbox/default.nix` | Split `mkSandbox` into profile-agnostic launcher + per-profile images. Return shape `{ package, image, profile }` preserved. See [sandbox.md](sandbox.md) and [profiles.md](profiles.md) |
+| `lib/sandbox/linux/default.nix` | Rename `wrapix run-bead` → `wrapix spawn`; add `image_source` load step (idempotent); read `WRAPIX_DEFAULT_IMAGE_REF`/`WRAPIX_DEFAULT_IMAGE_SOURCE` for `wrapix run` |
+| `lib/sandbox/darwin/default.nix` | Darwin equivalent of the linux launcher changes (tarball image variant) |
 
 ### Unchanged (during dual-path phase)
 
@@ -760,15 +824,30 @@ During the transition period:
 - [ ] Loom never invokes `podman run` directly (grep `loom/crates/` for
       `podman` finds only documentation references)
   [verify](tests/loom-test.sh::test_loom_does_not_invoke_podman)
-- [ ] `wrapix run-bead --spawn-config <file> --stdio` accepts a JSON config,
+- [ ] `wrapix spawn --spawn-config <file> --stdio` accepts a JSON config,
       reuses container construction from existing `wrapix run`, omits TTY
-  [verify](tests/loom-test.sh::test_wrapix_run_bead_subcommand)
+  [verify](tests/loom-test.sh::test_wrapix_spawn_subcommand)
 - [ ] `SpawnConfig` JSON shape is stable: serialization round-trip preserves
-      all fields and key names
+      all fields and key names, including the `image_ref` and `image_source`
+      fields
   [verify](tests/loom-test.sh::test_spawn_config_json_stability)
+- [ ] `wrapix spawn` runs `podman load` from `image_source` (a Nix store
+      path) before invoking podman with `image_ref` as the ref; the load is
+      idempotent on the image's hash tag
+  [verify](tests/loom-test.sh::test_wrapix_spawn_loads_image_source)
 - [ ] Per-bead profile selection: two beads with different profile labels
-      result in two `wrapix run-bead` invocations with different `image`
+      result in two `wrapix spawn` invocations with different `image_ref`
+      and `image_source`
   [verify](tests/loom-test.sh::test_per_bead_profile_spawn)
+- [ ] Loom reads `LOOM_PROFILES_MANIFEST` at startup and parses it into
+      `BTreeMap<ProfileName, ImageEntry>`; missing env var or missing file
+      errors before any bead spawn
+  [verify](tests/loom-test.sh::test_profiles_manifest_required)
+- [ ] A bead with `profile:X` where `X` is not in the manifest fails with a
+      typed `ProfileError::UnknownProfile` naming the missing profile
+  [verify](tests/loom-test.sh::test_unknown_profile_errors)
+- [ ] `--profile` CLI override takes precedence over bead labels
+  [verify](tests/loom-test.sh::test_profile_cli_override)
 - [ ] `loom plan` shells out to interactive `wrapix run` (TTY attached); does
       not capture stdio for JSONL
   [verify](tests/loom-test.sh::test_plan_uses_interactive_wrapix_run)
@@ -829,7 +908,7 @@ During the transition period:
 - [ ] `loom run --parallel N` (N > 1) creates one worktree per dispatched bead
       under `.wrapix/worktree/<label>/<bead-id>/`
   [verify](tests/loom-test.sh::test_parallel_creates_worktrees)
-- [ ] Each worktree spawns its own `wrapix run-bead` and the spawns run
+- [ ] Each worktree spawns its own `wrapix spawn` and the spawns run
       concurrently (overlapping wall-clock)
   [verify](tests/loom-test.sh::test_parallel_concurrent_spawns)
 - [ ] Successful bead branches are merged back to the driver branch after
@@ -1004,28 +1083,33 @@ complete = "LOOM_COMPLETE"
 blocked = "LOOM_BLOCKED"
 clarify = "LOOM_CLARIFY"
 
-[agent]
-default = "claude"
+# Per-phase config. Resolution for any field: [phase.<name>] →
+# [phase.default] → built-in. `loom run` reads its profile from the
+# bead's `profile:X` label first, then [phase.run] / [phase.default];
+# the `--profile` CLI flag overrides everything.
+[phase.default]
+profile = "base"
+agent.backend = "claude"
 
-# Per-phase overrides: backend + model. Phases without overrides inherit default.
-# [agent.todo]
-# backend = "pi"
-# provider = "deepseek"
-# model_id = "deepseek-v3"
+# [phase.todo]
+# profile = "rust"
+# agent.backend = "pi"
+# agent.provider = "deepseek"
+# agent.model_id = "deepseek-v3"
 #
-# [agent.check]
-# backend = "claude"
+# [phase.check]
+# agent.backend = "claude"
 
 [claude]
-# Seconds to wait for clean exit after `result` before SIGTERM (claude
-# backend shutdown watchdog).
+# Agent-runtime settings, applied wherever claude is selected. Seconds to
+# wait for clean exit after `result` before SIGTERM (shutdown watchdog).
 post_result_grace_secs = 5
 
 [security]
-# Tool names to deny when Claude sends control_request. Claude-backend only —
+# Tool names to deny when claude sends control_request. Claude-only —
 # pi has no host-side permission flow (tools execute internally, no
-# control_request analog). Empty by default — the container sandbox is the
-# trust boundary.
+# control_request analog). Empty by default; the container sandbox is
+# the trust boundary.
 # denied_tools = ["SomeNewHostTool"]
 ```
 

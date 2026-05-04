@@ -14,7 +14,7 @@ Running AI coding assistants with unrestricted host access creates security risk
 
 ### Functional
 
-1. **Container Creation** - `mkSandbox` function creates runnable sandbox derivations
+1. **Container Creation** - `mkSandbox` function creates runnable sandbox derivations. Returns `{ package, image, profile }` where `image` is the per-profile OCI artifact and `package` is a `makeWrapper` composing the profile-agnostic launcher (`packages.wrapix`) with that image. Consumers driving podman themselves (e.g. `mkCity`) read `.image` directly; one-shot users invoke `.package`
 2. **Platform Dispatch** - Automatically selects Podman (Linux) or Apple container CLI (macOS)
 3. **Workspace Mounting** - Current directory mounted at `/workspace` with read-write access
 4. **User Namespace Mapping** - Files created in container have correct host UID/GID
@@ -43,6 +43,33 @@ Running AI coding assistants with unrestricted host access creates security risk
 - Uses vmnet for networking (open outbound, no inbound ports)
 - Uses virtio-fs for workspace mounting
 - Entrypoint creates user matching host UID
+
+## Launcher Subcommands
+
+The `wrapix` launcher binary (`packages.wrapix`, profile-agnostic) exposes
+two subcommands. Both share container construction (mounts, env passthrough,
+runtime selection, deploy key, beads socket); they differ only in stdio and
+where the spawn parameters come from.
+
+| Subcommand | Stdio | Configuration source | Use case |
+|------------|-------|----------------------|----------|
+| `wrapix run [DIR] [CMD…]` | TTY (`-it`) | Host environment + CLI args | Interactive sessions, `nix run .#sandbox-<profile>` |
+| `wrapix spawn --spawn-config <file> [--stdio]` | Piped (`--stdio`) or detached | JSON file (typed `SpawnConfig`) | Programmatic dispatch (loom; future orchestrators) |
+
+The `SpawnConfig` JSON has stable top-level fields: `image_ref` (podman ref),
+`image_source` (Nix store path the launcher loads via `podman load` before
+invoking podman; idempotent on the image's hash tag), `workspace`, `env`
+(allowlist of `[key, value]` pairs), `agent_args`, plus consumer-defined
+fields the entrypoint reads from inside the container. Loom is the only v1
+producer; the schema is documented in [loom-harness.md](loom-harness.md).
+
+`wrapix run` (interactive) has no `--spawn-config` so it reads two env
+vars to know which image to load: `WRAPIX_DEFAULT_IMAGE_REF` (podman ref)
+and `WRAPIX_DEFAULT_IMAGE_SOURCE` (Nix store path). The convenience flake
+outputs `packages.sandbox-<profile>` set both via `makeWrapper`; loom plan
+sets them programmatically from the profile-image manifest before exec.
+Without these vars set, `wrapix run` errors at startup — there is no
+implicit default image baked into the launcher.
 
 ## Affected Files
 

@@ -28,7 +28,7 @@ platform (crate structure, templates, workflow) is defined in
 ### Functional
 
 1. **Host-side execution** — Loom runs on the host, not inside containers. It
-   spawns per-bead containers by invoking `wrapix run-bead --spawn-config
+   spawns per-bead containers by invoking `wrapix spawn --spawn-config
    <file> --stdio` (a thin wrapix subcommand that owns container construction)
    and communicates with the agent process inside via stdin/stdout pipes.
    Loom never calls `podman run` directly; see
@@ -60,9 +60,10 @@ platform (crate structure, templates, workflow) is defined in
    for natural exit, then escalates SIGTERM → SIGKILL.
 5. **Per-phase backend selection** — each workflow phase (plan, todo, run,
    check, msg) independently resolves its backend and model from config.
-   The `default` key under `[agent]` sets the fallback (`claude`). Per-phase
-   overrides (e.g. `[agent.todo]`) specify backend + provider + model.
-   `--agent` CLI flag overrides all phase config for the current invocation.
+   `[phase.default].agent.backend` sets the fallback (`claude`). Per-phase
+   overrides (e.g. `[phase.todo]`) carry `agent.backend` plus optional
+   `agent.provider` and `agent.model_id`. `--agent` CLI flag overrides all
+   phase config for the current invocation.
 6. **Agent runtime layer** — the image builder composes two orthogonal axes:
    *workspace profile* (base, rust, python) and *agent runtime* (claude, pi).
    When `WRAPIX_AGENT=pi`, the pi runtime layer (Node.js + pi binary) is
@@ -82,7 +83,7 @@ platform (crate structure, templates, workflow) is defined in
 
 ### Non-Functional
 
-1. **No podman socket mounting** — `wrapix run-bead` invokes podman on the
+1. **No podman socket mounting** — `wrapix spawn` invokes podman on the
    host; the agent runs inside the resulting container with no access to the
    podman socket. No nested container support needed.
 2. **Graceful degradation** — if a backend-specific feature is unavailable
@@ -145,26 +146,27 @@ The compiler monomorphizes two copies of `run_agent`.
 `loom check` uses claude directly:
 
 ```toml
-[agent]
-default = "claude"
+[phase.default]
+agent.backend = "claude"
 
-[agent.todo]
-backend = "pi"
-provider = "deepseek"
-model_id = "deepseek-v3"
+[phase.todo]
+agent.backend = "pi"
+agent.provider = "deepseek"
+agent.model_id = "deepseek-v3"
 
-[agent.check]
-backend = "claude"
+[phase.check]
+agent.backend = "claude"
 ```
 
-Phases without explicit config inherit `[agent] default`. The pi backend
+Phases without explicit config inherit `[phase.default]`. The pi backend
 calls `set_model` after spawn if the phase config specifies a provider/model.
 
-`[agent.plan]` is also a valid per-phase key, but the resolution path differs:
-`loom plan` is interactive (human-in-the-loop) and shells to the backend's
-interactive entry point rather than going through the `AgentBackend` trait.
-Today only `claude` is wired up there, via `wrapix run`; pi would need an
-interactive frontend before it could be selected for `plan`.
+`[phase.plan]` is also a valid per-phase key, but the resolution path
+differs: `loom plan` is interactive (human-in-the-loop) and shells to the
+backend's interactive entry point rather than going through the
+`AgentBackend` trait. Today only `claude` is wired up there, via
+`wrapix run`; pi would need an interactive frontend before it could be
+selected for `plan`.
 
 ```rust
 // loom-workflow (simplified — real version handles retry, steering, logging)
@@ -427,7 +429,8 @@ pub enum ProtocolError {
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpawnConfig {
-    pub image: String,
+    pub image_ref: String,
+    pub image_source: PathBuf,
     pub workspace: PathBuf,
     pub env: Vec<(String, String)>,
     pub initial_prompt: String,
@@ -436,14 +439,20 @@ pub struct SpawnConfig {
 }
 ```
 
+`image_ref` is the podman image reference (e.g.
+`localhost/wrapix-rust:<hash>`); `image_source` is the Nix store path the
+launcher hands to `podman load` to materialize that ref. Both are populated
+by loom from the *profile-image manifest* at dispatch time — see
+[loom-harness.md — Profile-Image Manifest](loom-harness.md#profile-image-manifest).
+
 `SpawnConfig` is `Serialize` + `Deserialize` because loom writes it to a
-JSON file and `wrapix run-bead --spawn-config <file>` reads it back. This is
+JSON file and `wrapix spawn --spawn-config <file>` reads it back. This is
 the single serialization boundary between loom and the wrapper — preferred
 over a fat argv interface. The wrapper's JSON shape is the stable contract;
-loom and `wrapix run-bead` ship from the same flake and stay in lockstep.
+loom and `wrapix spawn` ship from the same flake and stay in lockstep.
 
 `env` is an **explicit allowlist** — only listed variables are forwarded
-into the container by `wrapix run-bead` (which materializes them as
+into the container by `wrapix spawn` (which materializes them as
 `podman run -e`). The host environment is never inherited wholesale. The
 workflow engine constructs this list from known-needed variables:
 
@@ -473,7 +482,7 @@ pub struct SessionOutcome {
 loom (host)                                            container
     │                                                       │
     ├─ serialize SpawnConfig → /tmp/loom-<id>.json          │
-    ├─ wrapix run-bead --spawn-config <file> --stdio        │
+    ├─ wrapix spawn --spawn-config <file> --stdio        │
     │   └─ exec podman run [no TTY, stdio piped] ─►  entrypoint.sh
     │                                                       │
     │                                                  agent (pi --mode rpc / claude)
@@ -811,7 +820,7 @@ tool types visible in logs.
 {"type": "control_response", "id": "<request_id>", "approved": true}
 ```
 
-**Deny-list.** A configurable `denied_tools` list under `[agent.claude]` in
+**Deny-list.** A configurable `denied_tools` list under `[security]` in
 `config.toml` (e.g. `denied_tools = ["WebFetch"]`) rejects specific tool
 names with `approved: false`. Empty by default — the container sandbox is
 the trust boundary and logging is the primary mitigation. The slot exists
@@ -955,7 +964,7 @@ The pi branch:
   [verify](tests/loom-test.sh::test_agent_trait_static_dispatch)
 - [ ] `AgentEvent` enum covers: MessageDelta, ToolCall, ToolResult, TurnEnd, SessionComplete, CompactionStart, CompactionEnd, Error
   [verify](tests/loom-test.sh::test_agent_event_variants)
-- [ ] `SpawnConfig` struct captures image, workspace, env, initial_prompt, agent_args, repin
+- [ ] `SpawnConfig` struct captures image_ref, image_source, workspace, env, initial_prompt, agent_args, repin
   [verify](tests/loom-test.sh::test_spawn_config_fields)
 - [ ] Typestate `AgentSession<Idle>` / `AgentSession<Active>` prevents invalid transitions
   [verify](tests/loom-test.sh::test_typestate_transitions)
@@ -1004,7 +1013,7 @@ The pi branch:
 
 ### Backend selection
 
-- [ ] Per-phase config resolves correct backend (`[agent.todo]` overrides `[agent] default`)
+- [ ] Per-phase config resolves correct backend (`[phase.todo].agent.backend` overrides `[phase.default].agent.backend`)
   [verify](tests/loom-test.sh::test_per_phase_backend_config)
 - [ ] `--agent` CLI flag overrides all phase config for the invocation
   [verify](tests/loom-test.sh::test_backend_selection_flag)
@@ -1017,9 +1026,9 @@ The pi branch:
 
 ### Container integration
 
-- [ ] Loom spawns containers via `wrapix run-bead --spawn-config <file>
+- [ ] Loom spawns containers via `wrapix spawn --spawn-config <file>
       --stdio` with the correct profile image, never via `podman run` directly
-  [verify](tests/loom-test.sh::test_wrapix_run_bead_spawn)
+  [verify](tests/loom-test.sh::test_wrapix_spawn_dispatch)
 - [ ] Container receives agent stdin/stdout via pipe
   [verify](tests/loom-test.sh::test_container_stdio_pipe)
 - [ ] Entrypoint starts pi in RPC mode when `WRAPIX_AGENT=pi`

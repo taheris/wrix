@@ -33,7 +33,7 @@ drift.
      mock agent processes over real pipes, no containers. Live in
      `loom/crates/<crate>/tests/*.rs`. Run as part of `nix flake check`.
    - **Container smoke** (`nix run .#test-loom`) — one happy-path scenario
-     that spawns a real podman container via `wrapix run-bead`, runs a mock
+     that spawns a real podman container via `wrapix spawn`, runs a mock
      agent *inside* the container, drives `loom run --once` against it, and
      asserts the bead closes. Validates host↔container plumbing
      (entrypoint.sh, bind mounts, `WRAPIX_AGENT` branching, container
@@ -86,7 +86,7 @@ drift.
    - Config file loading (TOML parsing into `LoomConfig`), defaults when
      file is absent or fields are missing
    - `SpawnConfig` JSON serialization round-trips with stable field ordering
-     and key names (the contract with `wrapix run-bead --spawn-config`).
+     and key names (the contract with `wrapix spawn --spawn-config`).
      Adding a field is non-breaking; renaming or removing one is — the test
      pins the on-disk shape so changes surface as test failures, not silent
      wire-format drift. Includes the optional
@@ -112,8 +112,8 @@ drift.
    - Claude stream-json event deserialization (`#[serde(tag = "type")]` →
      `ClaudeMessage`)
    - Claude `#[serde(other)]` catches unknown event types without error
-   - Per-phase backend resolution (`[agent.todo]` overrides `[agent] default`,
-     `--agent` flag overrides all phases)
+   - Per-phase backend resolution (`[phase.todo].agent.backend` overrides
+     `[phase.default].agent.backend`, `--agent` flag overrides all phases)
    - Malformed JSONL handling — specific test cases:
      - Truncated JSON (`{"type": "message_del`) → `ProtocolError::InvalidJson`
      - Valid JSON, wrong shape (`{"foo": 42}`) → `ProtocolError::UnknownMessageType`
@@ -165,7 +165,7 @@ drift.
      spawn `bd dolt …` subprocess calls (containers reach the authoritative
      state via the bind-mounted Dolt socket)
    - Parallel batch dispatch: given 3 ready beads and `--parallel 3`,
-     the dispatcher creates 3 worktrees, spawns 3 `wrapix run-bead`
+     the dispatcher creates 3 worktrees, spawns 3 `wrapix spawn`
      futures concurrently, and reports all results before merge-back
    - Parallel batch with N=1 (the default): no worktree is created;
      work runs on the driver branch directly
@@ -275,8 +275,8 @@ drift.
      with the full required set; loom proceeds. Mock pi replies with a
      missing required command; loom fails fast with a version-mismatch
      error.
-   - **`wrapix run-bead` argv contract** — loom writes a `SpawnConfig`
-     JSON, invokes a `wrapix-run-bead` shim that records the argv +
+   - **`wrapix spawn` argv contract** — loom writes a `SpawnConfig`
+     JSON, invokes a `wrapix-spawn` shim that records the argv +
      stdin properties (TTY vs pipe), then exec's a mock agent. Asserts
      the JSON shape, the `--spawn-config <file> --stdio` argv, and that
      stdin is a pipe (not a TTY).
@@ -304,7 +304,7 @@ drift.
    host↔container plumbing that the integration tier cannot reach: a
    temp `.beads/` is seeded with one ready bead labelled
    `profile:base`; a test image bundles `mock-pi` at a known path
-   inside the container; loom invokes `wrapix run-bead` with
+   inside the container; loom invokes `wrapix spawn` with
    `WRAPIX_AGENT=pi` and `MOCK_PI_SCENARIO=happy-path`; the smoke
    asserts the container exits clean and the bead closes.
    Workflow-level coverage (plan/todo/run/check/msg, profile selection,
@@ -477,7 +477,7 @@ loom/
       tests/
         run_smoke.rs          # Integration: CLI subcommand surface
         agent_flag.rs         # Integration: --agent flag parsing/validation
-        spawn_dispatch.rs     # Integration: shim-based wrapix run-bead argv
+        spawn_dispatch.rs     # Integration: shim-based wrapix spawn argv
                               #   contract + stdin-pipe-not-tty assertion
         style.rs              # AST + filesystem style enforcement (syn-based)
         annotations.rs        # Annotation-integrity gate (walks specs/*.md)
@@ -974,11 +974,11 @@ in Functional #4.
       → loom proceeds; mock pi missing `set_model` → loom fails fast
       with a version-mismatch error
   [verify](tests/loom-test.sh::test_startup_probe_roundtrip)
-- [ ] `wrapix run-bead` argv contract: loom invokes
-      `wrapix run-bead --spawn-config <file> --stdio` with stdin
+- [ ] `wrapix spawn` argv contract: loom invokes
+      `wrapix spawn --spawn-config <file> --stdio` with stdin
       attached as a pipe (not a TTY); recorded `SpawnConfig` JSON
       matches the on-disk shape
-  [verify](tests/loom-test.sh::test_wrapix_run_bead_argv_contract)
+  [verify](tests/loom-test.sh::test_wrapix_spawn_argv_contract)
 - [ ] Parallel run end-to-end: `loom run --parallel 2` with two ready
       beads dispatches two mock-agent spawns concurrently, each in its
       own worktree, then merges both branches back to driver
