@@ -2036,6 +2036,55 @@ test_claude_runtime_noop() {
 }
 
 #-----------------------------------------------------------------------------
+# test_fuzz_runner_exists — `nix run .#fuzz-loom` is wired up on Linux.
+# Per spec NFR §Property-Based Testing: cargo-fuzz is on-demand only and
+# not gated by `nix flake check`. The acceptance is that the app
+# attribute resolves; the fuzz targets themselves can land later.
+#-----------------------------------------------------------------------------
+test_fuzz_runner_exists() {
+    case "$(uname -s)" in
+        Linux) ;;
+        *)
+            # Linux-only: cargo-fuzz needs nightly LLVM sanitizers.
+            return 77
+            ;;
+    esac
+
+    local arch
+    arch=$(uname -m)
+    local nix_system
+    case "$arch" in
+        x86_64)  nix_system="x86_64-linux" ;;
+        aarch64) nix_system="aarch64-linux" ;;
+        *)
+            echo "unsupported arch for fuzz-loom: $arch" >&2
+            return 1
+            ;;
+    esac
+
+    nix eval "$REPO_ROOT#apps.$nix_system.fuzz-loom.program" --raw >/dev/null \
+        || { echo "nix eval .#apps.$nix_system.fuzz-loom failed" >&2; return 1; }
+}
+
+#-----------------------------------------------------------------------------
+# test_protocol_versions_pinned — both pi-mono and claude-code are pinned
+# in modules/flake/overlays.nix with documentation. Per spec NFR #9:
+# version bumps go through a checklist; the pin file is the single
+# discoverable point reviewers grep when bumping either dependency.
+#-----------------------------------------------------------------------------
+test_protocol_versions_pinned() {
+    local file="$REPO_ROOT/modules/flake/overlays.nix"
+    [ -f "$file" ] || { echo "missing overlays.nix: $file" >&2; return 1; }
+
+    grep -q "pi-mono" "$file" \
+        || { echo "no pi-mono pin reference in $file" >&2; return 1; }
+    grep -q "claude-code" "$file" \
+        || { echo "no claude-code pin reference in $file" >&2; return 1; }
+    grep -qiE "protocol[- ]bump checklist" "$file" \
+        || { echo "no protocol-bump checklist comment in $file" >&2; return 1; }
+}
+
+#-----------------------------------------------------------------------------
 # Dispatch
 #-----------------------------------------------------------------------------
 if [ $# -eq 0 ]; then
