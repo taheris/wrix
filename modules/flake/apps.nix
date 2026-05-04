@@ -53,6 +53,7 @@ _:
         ralph = city.ralph.app;
         test = test.app;
         test-city = test.apps.city;
+        test-loom = test.apps.loom;
         test-ralph = test.apps.ralph;
         test-ralph-container = test.apps.ralph-container;
       }

@@ -78,7 +78,16 @@ let
 
   # Loom unit + integration tests (cargo nextest run --workspace).
   # Per specs/loom-tests.md NFR #7, runs on all four supported systems.
-  loomTests = import ./loom { inherit pkgs fenix; };
+  loomDeriv = import ./loom {
+    inherit
+      pkgs
+      system
+      linuxPkgs
+      fenix
+      treefmt
+      ;
+  };
+  loomTests = { inherit (loomDeriv) loom-tests; };
 
   # Gas City integration test (shell-based, requires podman at runtime)
   cityIntegration = import ./city/integration.nix {
@@ -211,6 +220,19 @@ in
       meta.description = "Run ralph standalone container integration test (requires podman)";
       type = "app";
       program = "${ralphContainerIntegration.script}/bin/test-ralph-container";
+    };
+
+    # Loom container smoke (Linux: real podman smoke; Darwin: skip stub).
+    # Exposed regardless of platform so `nix run .#test-loom` resolves on
+    # every system; the Darwin variant exits 0 with a clear stderr message.
+    loom = {
+      meta.description = "Run loom container smoke test (Linux: requires podman; Darwin: no-op skip)";
+      type = "app";
+      program =
+        if isLinux then
+          "${loomDeriv.loomSmoke}/bin/test-loom"
+        else
+          "${loomDeriv.loomSmokeDarwinSkip}/bin/test-loom";
     };
   };
 

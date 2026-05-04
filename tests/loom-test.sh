@@ -2477,6 +2477,109 @@ test_renderer_no_insta_dependency() {
 }
 
 #-----------------------------------------------------------------------------
+# Container smoke tests (specs/loom-tests.md Functional #5, NFR #7).
+#
+# The smoke harness lives at tests/loom/run-tests.sh and is exposed as
+# `nix run .#test-loom` via tests/loom/default.nix and modules/flake/apps.nix.
+# The verifications below check (a) the harness file exists, (b) the Nix
+# wiring exposes the runner only on Linux, (c) Darwin gets a clear skip
+# message, and (d) Linux execution stays under the 30s wall-time budget.
+#-----------------------------------------------------------------------------
+
+# Linux-only: spawns the real podman container via `nix run .#test-loom`,
+# asserts exit 0 and bead closure. Skips on Darwin and when podman is
+# unavailable (exit 77 — both are environmental, not test failures).
+test_loom_smoke_real_container() {
+    if [ "$(uname -s)" = "Darwin" ]; then
+        echo "skip: container smoke is Linux-only" >&2
+        exit 77
+    fi
+    if ! command -v podman >/dev/null 2>&1; then
+        echo "skip: podman not on PATH" >&2
+        exit 77
+    fi
+    ( cd "$REPO_ROOT" && nix run --impure .#test-loom )
+}
+
+# `tests/loom/default.nix` must expose `loomSmoke` only when the host system
+# is Linux — the smoke depends on podman, which is not part of Darwin.
+test_smoke_linux_only() {
+    local file="$REPO_ROOT/tests/loom/default.nix"
+    [ -f "$file" ] || { echo "missing $file" >&2; return 1; }
+    grep -q 'isLinux' "$file" || {
+        echo "$file: missing isLinux gate around loomSmoke" >&2
+        return 1
+    }
+    grep -q 'loomSmoke =' "$file" || {
+        echo "$file: missing loomSmoke binding" >&2
+        return 1
+    }
+    grep -q 'loomSmokeDarwinSkip' "$file" || {
+        echo "$file: missing Darwin skip stub" >&2
+        return 1
+    }
+}
+
+# Darwin's `nix run .#test-loom` must print a clear "not available on
+# Darwin" message to stderr and exit 0. The message is asserted by string
+# match against the run-tests.sh skip branch and the Darwin stub in
+# tests/loom/default.nix.
+test_smoke_darwin_skip_message() {
+    local script="$REPO_ROOT/tests/loom/run-tests.sh"
+    [ -f "$script" ] || { echo "missing $script" >&2; return 1; }
+
+    grep -q 'uname -s.*Darwin' "$script" || {
+        echo "$script: missing Darwin uname check" >&2
+        return 1
+    }
+    grep -q 'container smoke not available on Darwin' "$script" || {
+        echo "$script: missing canonical Darwin skip message" >&2
+        return 1
+    }
+
+    local nix_file="$REPO_ROOT/tests/loom/default.nix"
+    [ -f "$nix_file" ] || { echo "missing $nix_file" >&2; return 1; }
+    grep -q 'container smoke not available on Darwin' "$nix_file" || {
+        echo "$nix_file: Darwin stub missing canonical skip message" >&2
+        return 1
+    }
+}
+
+# `nix run .#test-loom` must be exposed on Linux as a writeShellApplication
+# named `test-loom`. The Nix file binds the runner; modules/flake/apps.nix
+# registers it under apps.test-loom.
+test_system_runner_exists() {
+    local apps="$REPO_ROOT/modules/flake/apps.nix"
+    [ -f "$apps" ] || { echo "missing $apps" >&2; return 1; }
+    grep -q 'test-loom = test.apps.loom' "$apps" || {
+        echo "$apps: missing test-loom app registration" >&2
+        return 1
+    }
+
+    local nix_file="$REPO_ROOT/tests/loom/default.nix"
+    grep -q 'writeShellApplication' "$nix_file" || {
+        echo "$nix_file: loomSmoke is not a writeShellApplication" >&2
+        return 1
+    }
+    grep -q 'name = "test-loom"' "$nix_file" || {
+        echo "$nix_file: writeShellApplication name is not test-loom" >&2
+        return 1
+    }
+}
+
+# The smoke harness enforces a <30s wall-time budget per Functional #5.
+# Verify the script actually checks elapsed time against 30 seconds — if
+# this guard slips, regressions in startup cost go silent.
+test_smoke_timing() {
+    local script="$REPO_ROOT/tests/loom/run-tests.sh"
+    [ -f "$script" ] || { echo "missing $script" >&2; return 1; }
+    grep -qE 'ELAPSED.*-gt[[:space:]]+30' "$script" || {
+        echo "$script: missing 30s wall-time guard" >&2
+        return 1
+    }
+}
+
+#-----------------------------------------------------------------------------
 # Dispatch
 #-----------------------------------------------------------------------------
 if [ $# -eq 0 ]; then
