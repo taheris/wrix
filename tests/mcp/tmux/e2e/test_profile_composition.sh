@@ -77,10 +77,11 @@ if [[ ! -d "${PACKAGE_PATH}" ]]; then
     exit 1
 fi
 
-# Extract the image stream path from the wrapper script
-# The launcher pipes the stream script to podman: /nix/store/xxx | podman load -q
-IMAGE_PATH=$(grep -oP '/nix/store/\S+(?= \| podman load)' "${PACKAGE_PATH}/bin/wrapix" | head -1) || {
-    log_error "Could not find image stream path in wrapper script"
+# Extract the image stream path from the makeWrapper-generated wrapper.
+# Profile-specific sandboxes are built as `makeWrapper` over the bare
+# launcher that sets WRAPIX_DEFAULT_IMAGE_SOURCE='/nix/store/...'.
+IMAGE_PATH=$(grep -oP "WRAPIX_DEFAULT_IMAGE_SOURCE='\K[^']+" "${PACKAGE_PATH}/bin/wrapix" | head -1) || {
+    log_error "Could not find WRAPIX_DEFAULT_IMAGE_SOURCE in wrapper script"
     exit 1
 }
 

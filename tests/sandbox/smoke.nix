@@ -56,6 +56,11 @@ let
   };
   sandbox = sandboxLib.mkSandbox { profile = sandboxLib.profiles.base; };
   wrapix = sandbox.package;
+  # Underlying profile-baked launcher (no image env vars wrapper). Smoke
+  # tests that grep the script for krun / network / mount logic should
+  # target this — the `package` wrapper only sets WRAPIX_AGENT and the
+  # default image ref/source.
+  wrapixLauncher = sandbox.launcher;
 
 in
 {
@@ -97,6 +102,7 @@ in
       }
       ''
         echo "Checking bash syntax..."
+        bash -n ${wrapixLauncher}/bin/wrapix
         bash -n ${wrapix}/bin/wrapix
 
         echo "Script syntax validation passed"
@@ -324,7 +330,7 @@ in
         }
         ''
           echo "Checking krun microVM detection in wrapix script..."
-          SCRIPT="${wrapix}/bin/wrapix"
+          SCRIPT="${wrapixLauncher}/bin/wrapix"
 
           # Verify krun detection logic exists
           grep -q 'WRAPIX_MICROVM' "$SCRIPT" || { echo "FAIL: Missing WRAPIX_MICROVM env var check"; exit 1; }
@@ -392,7 +398,7 @@ in
         echo "PASS: Profile allowlists verified (pure Nix assertions)"
 
         # Launcher script checks (reuses base sandbox, no extra image build)
-        SCRIPT="${wrapix}/bin/wrapix"
+        SCRIPT="${wrapixLauncher}/bin/wrapix"
         grep -q 'WRAPIX_NETWORK' "$SCRIPT" || { echo "FAIL: Missing WRAPIX_NETWORK env var handling"; exit 1; }
         echo "PASS: WRAPIX_NETWORK env var handled in launcher"
 

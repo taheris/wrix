@@ -15,7 +15,6 @@ let
     stageBeads
     ;
 
-  imageTagLib = import ../../util/image-tag.nix { };
   knownHosts = import ../known-hosts.nix { inherit pkgs; };
   paths = import ../../util/path.nix { };
   shellLib = import ../../util/shell.nix { };
@@ -28,7 +27,6 @@ in
   mkSandbox =
     {
       profile,
-      profileImage,
       cpus ? null,
       memoryMb ? 4096,
       deployKey ? null,
@@ -141,25 +139,44 @@ in
 
             ${fixVmnetRoute}
 
-            # Load profile image using hash-based tag — no version file needed.
-            PROFILE_IMAGE="wrapix-${profile.name}:${imageTagLib.mkImageTag profileImage}"
-            if ! container image inspect "$PROFILE_IMAGE" >/dev/null 2>&1; then
+            # Image is supplied to the launcher at runtime, not baked in. For
+            # `wrapix run`, $WRAPIX_DEFAULT_IMAGE_REF and $WRAPIX_DEFAULT_IMAGE_SOURCE
+            # are set by the per-profile makeWrapper composition (or by an
+            # orchestrator like loom). For `wrapix run-bead`, the SpawnConfig
+            # carries the image reference.
+            IMAGE_REF=""
+            IMAGE_SOURCE=""
+            if [ "$SUBCOMMAND" = "run" ]; then
+              if [ -z "''${WRAPIX_DEFAULT_IMAGE_REF:-}" ] || [ -z "''${WRAPIX_DEFAULT_IMAGE_SOURCE:-}" ]; then
+                echo "Error: wrapix run requires WRAPIX_DEFAULT_IMAGE_REF and WRAPIX_DEFAULT_IMAGE_SOURCE" >&2
+                exit 1
+              fi
+              IMAGE_REF="$WRAPIX_DEFAULT_IMAGE_REF"
+              IMAGE_SOURCE="$WRAPIX_DEFAULT_IMAGE_SOURCE"
+            else
+              IMAGE_REF="$IMAGE_OVERRIDE"
+            fi
+
+            PROFILE_IMAGE="$IMAGE_REF"
+            if [ -n "$IMAGE_SOURCE" ] && ! container image inspect "$PROFILE_IMAGE" >/dev/null 2>&1; then
               verbose "Image hash changed or missing, reloading..."
               echo "Loading profile image..."
-              container image delete "wrapix-${profile.name}:latest" 2>/dev/null || true
+              # Drop the prior :latest alias so the new load can claim the same
+              # repo name; pruneStaleImages later cleans residual hash tags.
+              IMAGE_REPO="''${IMAGE_REF%:*}"
+              container image delete "$IMAGE_REPO:latest" 2>/dev/null || true
               # Convert Docker-format tar to OCI-archive for Apple container CLI.
               # --insecure-policy is safe: images are built locally from Nix
               # derivations (trusted source with cryptographic hashes).
               OCI_TAR="$WRAPIX_CACHE/profile-image-oci.tar"
               mkdir -p "$WRAPIX_CACHE"
-              ${pkgs.skopeo}/bin/skopeo --insecure-policy copy --quiet "docker-archive:${profileImage}" "oci-archive:$OCI_TAR"
+              ${pkgs.skopeo}/bin/skopeo --insecure-policy copy --quiet "docker-archive:$IMAGE_SOURCE" "oci-archive:$OCI_TAR"
               LOAD_OUTPUT=$(container image load --input "$OCI_TAR" 2>&1)
               LOADED_REF=$(echo "$LOAD_OUTPUT" | grep -oE 'untagged@sha256:[a-f0-9]+' | head -1)
               if [ -n "$LOADED_REF" ]; then
                 container image tag "$LOADED_REF" "$PROFILE_IMAGE"
-                # Maintain :latest as an alias so pruneStaleImages has a
-                # per-profile keep-anchor to compare hash tags against.
-                container image tag "$LOADED_REF" "wrapix-${profile.name}:latest"
+                # Maintain :latest as the keep-anchor for pruneStaleImages.
+                container image tag "$LOADED_REF" "$IMAGE_REPO:latest"
               fi
               rm -f "$OCI_TAR"
               container image prune
@@ -415,7 +432,6 @@ in
             fi
 
             RUN_IMAGE="''${WRAPIX_IMAGE:-$PROFILE_IMAGE}"
-            [ -n "$IMAGE_OVERRIDE" ] && RUN_IMAGE="$IMAGE_OVERRIDE"
 
             CONTAINER_EXIT=0
             container run \

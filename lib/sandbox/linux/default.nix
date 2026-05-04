@@ -14,7 +14,6 @@ let
     stageBeads
     ;
 
-  imageTagLib = import ../../util/image-tag.nix { };
   knownHosts = import ../known-hosts.nix { inherit pkgs; };
   paths = import ../../util/path.nix { };
   shellLib = import ../../util/shell.nix { };
@@ -39,7 +38,6 @@ in
   mkSandbox =
     {
       profile,
-      profileImage,
       cpus ? null,
       memoryMb ? 4096,
       deployKey ? null,
@@ -324,17 +322,36 @@ in
             ''
         }
 
-        # Load image using hash-based tag — no version file needed.
-        # The tag is derived from the Nix store path of the image
-        # derivation, which changes when any input changes.
-        IMAGE_ID="localhost/wrapix-${profile.name}:${imageTagLib.mkImageTag profileImage}"
-        if ! podman image exists "$IMAGE_ID" 2>/dev/null; then
-          verbose "Loading image from ${profileImage}..."
-          ${profileImage} | podman load -q >/dev/null
-          podman tag "localhost/wrapix-${profile.name}:latest" "$IMAGE_ID" 2>/dev/null || true
-          verbose "Loaded image $IMAGE_ID"
+        # Image is supplied to the launcher at runtime, not baked in. For
+        # `wrapix run`, $WRAPIX_DEFAULT_IMAGE_REF and $WRAPIX_DEFAULT_IMAGE_SOURCE
+        # are set by the per-profile makeWrapper composition (or by an
+        # orchestrator like loom). For `wrapix run-bead`, the SpawnConfig
+        # carries the image reference (legacy `.image` field; will switch to
+        # `.image_ref`/`.image_source` in a follow-up).
+        IMAGE_REF=""
+        IMAGE_SOURCE=""
+        if [ "$SUBCOMMAND" = "run" ]; then
+          if [ -z "''${WRAPIX_DEFAULT_IMAGE_REF:-}" ] || [ -z "''${WRAPIX_DEFAULT_IMAGE_SOURCE:-}" ]; then
+            echo "Error: wrapix run requires WRAPIX_DEFAULT_IMAGE_REF and WRAPIX_DEFAULT_IMAGE_SOURCE" >&2
+            exit 1
+          fi
+          IMAGE_REF="$WRAPIX_DEFAULT_IMAGE_REF"
+          IMAGE_SOURCE="$WRAPIX_DEFAULT_IMAGE_SOURCE"
         else
-          verbose "Using cached image $IMAGE_ID"
+          IMAGE_REF="$IMAGE_OVERRIDE"
+        fi
+
+        if [ -n "$IMAGE_SOURCE" ] && ! podman image exists "$IMAGE_REF" 2>/dev/null; then
+          verbose "Loading image from $IMAGE_SOURCE..."
+          "$IMAGE_SOURCE" | podman load -q >/dev/null
+          # streamLayeredImage tarball tags the loaded image as <repo>:latest;
+          # alias it under the caller-supplied hash tag so subsequent
+          # `podman image exists` checks short-circuit the reload.
+          IMAGE_REPO="''${IMAGE_REF%:*}"
+          podman tag "$IMAGE_REPO:latest" "$IMAGE_REF" 2>/dev/null || true
+          verbose "Loaded image $IMAGE_REF"
+        else
+          verbose "Using cached image $IMAGE_REF"
         fi
         # Prune stale wrapix-* tags from every profile on every invocation,
         # not just after a fresh load — otherwise a cached current profile
@@ -430,8 +447,7 @@ in
         )
         [ -n "$KRUN_CMD_ENV" ] && ENV_ARGS+=(-e "$KRUN_CMD_ENV")
 
-        RUN_IMAGE="$IMAGE_ID"
-        [ -n "$IMAGE_OVERRIDE" ] && RUN_IMAGE="$IMAGE_OVERRIDE"
+        RUN_IMAGE="$IMAGE_REF"
 
         # shellcheck disable=SC2086 # Intentional word splitting for volume args
         exec podman run --rm "''${TTY_ARGS[@]}" \

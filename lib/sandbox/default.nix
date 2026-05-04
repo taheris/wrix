@@ -28,6 +28,13 @@ let
   linuxSandbox = import ./linux { inherit pkgs; };
 
   manifest = import ./manifest.nix { inherit pkgs; };
+  imageTagLib = import ../util/image-tag.nix { };
+
+  # podman accepts `localhost/<name>:<tag>` refs; Apple's `container` CLI
+  # uses bare `<name>:<tag>`. Match the convention each launcher expects.
+  imageRefPrefix = if isDarwin then "" else "localhost/";
+
+  mkImageRef = image: "${imageRefPrefix}${image.imageName}:${imageTagLib.mkImageTag image}";
 
   # Profiles must use Linux packages (they contain Linux-only tools like iproute2)
   # hostPkgs is used only by profile.shellHook references.
@@ -228,7 +235,11 @@ let
       # Compute comma-separated network allowlist for WRAPIX_NETWORK=limit mode
       networkAllowlist = concatStringsSep "," (finalProfile.networkAllowlist or [ ]);
 
-      package =
+      # Profile-baked launcher (mounts, writableDirs, networkAllowlist) with
+      # no image interpolation. The launcher reads its image at runtime from
+      # WRAPIX_DEFAULT_IMAGE_REF / WRAPIX_DEFAULT_IMAGE_SOURCE (interactive
+      # `wrapix run`) or from SpawnConfig (`wrapix run-bead`/`wrapix spawn`).
+      launcher =
         if isLinux then
           linuxSandbox.mkSandbox {
             profile = finalProfile;
@@ -238,13 +249,6 @@ let
               deployKey
               networkAllowlist
               ;
-            profileImage = mkImage {
-              profile = finalProfile;
-              entrypointSh = ./linux/entrypoint.sh;
-              krunSupport = true;
-              claudeSettings = finalClaudeSettings;
-              inherit agent mcpServerConfigs;
-            };
           }
         else if isDarwin then
           darwinSandbox.mkSandbox {
@@ -255,13 +259,6 @@ let
               deployKey
               networkAllowlist
               ;
-            profileImage = mkImage {
-              profile = finalProfile;
-              entrypointSh = ./darwin/entrypoint.sh;
-              claudeSettings = finalClaudeSettings;
-              asTarball = true;
-              inherit agent mcpServerConfigs;
-            };
           }
         else
           throw "Unsupported system: ${system}";
@@ -286,9 +283,26 @@ let
         inherit agent mcpServerConfigs;
       };
 
+      # Profile-specific sandbox: makeWrapper composes launcher + image,
+      # baking in the agent-runtime selector and image ref/source as defaults
+      # so `wrapix run` works without the caller exporting env vars.
+      package =
+        pkgs.runCommand "wrapix-${finalProfile.name}${if agent != "claude" then "-${agent}" else ""}"
+          {
+            nativeBuildInputs = [ pkgs.makeWrapper ];
+            passthru = { inherit launcher image; };
+          }
+          ''
+            mkdir -p "$out/bin"
+            makeWrapper "${launcher}/bin/wrapix" "$out/bin/wrapix" \
+              --set WRAPIX_AGENT "${agent}" \
+              --set WRAPIX_DEFAULT_IMAGE_REF "${mkImageRef image}" \
+              --set WRAPIX_DEFAULT_IMAGE_SOURCE "${image}"
+          '';
+
     in
     {
-      inherit package image;
+      inherit package image launcher;
       profile = finalProfile;
     };
 
@@ -297,6 +311,7 @@ in
   inherit
     mkSandbox
     mkImage
+    mkImageRef
     profiles
     baseClaudeSettings
     ;

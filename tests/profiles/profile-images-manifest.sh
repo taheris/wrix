@@ -78,8 +78,28 @@ test_manifest_shape() {
 }
 
 test_flake_outputs_present() {
-    echo "stub: packages.image-<name>/sandbox-<name>/profile-images outputs not yet wired in modules/flake/packages.nix" >&2
-    return 77
+    local flake_url="git+file://$REPO_ROOT"
+
+    # `sandbox-base` is exposed as bare `sandbox`; `rust`/`python` keep the
+    # `sandbox-<name>` suffix.
+    local outputs=(
+        "image-base"
+        "image-rust"
+        "image-python"
+        "sandbox"
+        "sandbox-rust"
+        "sandbox-python"
+        "profile-images"
+        "wrapix"
+    )
+
+    local out
+    for out in "${outputs[@]}"; do
+        if ! nix eval --raw --no-warn-dirty "$flake_url#$out.outPath" >/dev/null 2>&1; then
+            echo "packages.$out failed to evaluate" >&2
+            return 1
+        fi
+    done
 }
 
 fn="${1:-test_manifest_shape}"
