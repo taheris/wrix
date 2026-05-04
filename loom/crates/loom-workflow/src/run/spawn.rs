@@ -255,6 +255,57 @@ mod tests {
         assert_ne!(labelled.image_ref, overridden.image_ref);
     }
 
+    /// wx-cmzob: sequential (`loom run`) and parallel (`loom run -p N`)
+    /// must produce identical SpawnConfigs for the same bead modulo the
+    /// workspace path — sequential dispatches against the repo root,
+    /// parallel against a per-bead worktree, but every other field
+    /// (image_ref, image_source, env, agent_args, prompt, repin) must
+    /// match. If either path adds an arg or rewrites the prompt format,
+    /// this test trips before the divergence reaches users.
+    #[test]
+    fn sequential_and_parallel_dispatch_produce_identical_spawn_configs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = three_profile_manifest(dir.path());
+        let bead = bead_with_labels("wx-1", &["spec:loom-harness", "profile:rust"]);
+        let prompt = format!("loom run: bead {}", bead.id);
+
+        let seq = build_spawn_config_from_manifest(
+            &manifest,
+            &bead,
+            None,
+            &base(),
+            PathBuf::from("/repo-root"),
+            prompt.clone(),
+            repin(),
+            vec![],
+            vec![],
+        )
+        .expect("sequential dispatch");
+        let par = build_spawn_config_from_manifest(
+            &manifest,
+            &bead,
+            None,
+            &base(),
+            PathBuf::from("/repo-root/.wrapix/worktree/wx-1"),
+            prompt,
+            repin(),
+            vec![],
+            vec![],
+        )
+        .expect("parallel dispatch");
+
+        assert_eq!(seq.image_ref, par.image_ref);
+        assert_eq!(seq.image_source, par.image_source);
+        assert_eq!(seq.env, par.env);
+        assert_eq!(seq.agent_args, par.agent_args);
+        assert_eq!(seq.initial_prompt, par.initial_prompt);
+        assert!(seq.model.is_none() && par.model.is_none());
+        assert_ne!(
+            seq.workspace, par.workspace,
+            "workspace MUST differ — parallel uses a per-bead worktree",
+        );
+    }
+
     /// A bead with a `profile:X` not declared in the manifest fails
     /// loudly with [`ProfileError::UnknownProfile`] — no silent default.
     #[test]

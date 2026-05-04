@@ -345,12 +345,13 @@ fn run_run(
         let manifest_for_async = Arc::clone(&manifest);
         let cli_profile_for_async = cli_profile.clone();
         let phase_default_for_async = phase_default.clone();
+        let kind = selection.kind;
         let summary = runtime.block_on(async move {
             run_parallel_run(
                 workspace_buf,
                 label_for_async,
                 parallel_n,
-                agent_override,
+                kind,
                 manifest_for_async,
                 cli_profile_for_async,
                 phase_default_for_async,
@@ -408,7 +409,7 @@ async fn run_parallel_run(
     workspace: PathBuf,
     label: SpecLabel,
     parallel_n: u32,
-    agent_override: Option<AgentKind>,
+    kind: AgentKind,
     manifest: Arc<ProfileImageManifest>,
     cli_profile: Option<ProfileName>,
     phase_default: ProfileName,
@@ -433,14 +434,12 @@ async fn run_parallel_run(
 
     let git = GitClient::open(workspace.clone())?;
     let outcome = run_parallel_batch(&git, &label, beads, move |slot| {
-        let workspace_inner = workspace.clone();
         let manifest_inner = Arc::clone(&manifest);
         let cli_profile_inner = cli_profile.clone();
         let phase_default_inner = phase_default.clone();
         async move {
             match dispatch_for_slot(
-                &workspace_inner,
-                agent_override,
+                kind,
                 slot,
                 &manifest_inner,
                 cli_profile_inner.as_ref(),
@@ -464,16 +463,19 @@ async fn run_parallel_run(
     })
 }
 
-/// One slot's dispatch: resolve the per-phase backend and the per-bead
-/// profile image, then drive a single agent session against the slot's
-/// worktree. A missing manifest entry surfaces as [`ProfileError::UnknownProfile`]
-/// (via `RunError::Profile`) so the caller converts it to a typed
-/// [`AgentOutcome::Failure`] without falling back to a silent default.
+/// One slot's dispatch: build the per-bead [`SpawnConfig`] against the
+/// slot's worktree and hand it to the same [`dispatch`] match the sequential
+/// path uses. The pre-resolved [`AgentKind`] from `run_run` is threaded down
+/// — this used to reload `LoomConfig` and re-resolve the backend per slot,
+/// which let the sequential and parallel paths drift if the on-disk config
+/// changed mid-run. A missing manifest entry surfaces as
+/// [`ProfileError::UnknownProfile`] (via `RunError::Profile`) so the caller
+/// converts it to a typed [`AgentOutcome::Failure`] without falling back to
+/// a silent default.
 ///
 /// [`ProfileError::UnknownProfile`]: loom_core::profile_manifest::ProfileError::UnknownProfile
 async fn dispatch_for_slot(
-    workspace: &Path,
-    agent_override: Option<AgentKind>,
+    kind: AgentKind,
     slot: loom_workflow::run::WorktreeBead,
     manifest: &ProfileImageManifest,
     cli_profile: Option<&ProfileName>,
@@ -481,9 +483,6 @@ async fn dispatch_for_slot(
 ) -> anyhow::Result<SessionOutcome> {
     use loom_core::agent::RePinContent;
     use loom_workflow::run::build_spawn_config_from_manifest;
-
-    let config = LoomConfig::load(workspace.join(".wrapix/loom/config.toml"))?;
-    let selection = resolved_agent_for(&config, agent_override, Phase::Run)?;
 
     let spawn_config = build_spawn_config_from_manifest(
         manifest,
@@ -501,7 +500,7 @@ async fn dispatch_for_slot(
         vec![],
     )?;
 
-    Ok(dispatch(selection.kind, &spawn_config).await?)
+    Ok(dispatch(kind, &spawn_config).await?)
 }
 
 /// Backend-agnostic dispatcher. The match is the only place in the binary
