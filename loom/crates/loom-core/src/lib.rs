@@ -13,5 +13,6 @@ pub mod git;
 pub mod identifier;
 pub mod lock;
 pub mod logging;
+pub mod profile_manifest;
 pub mod state;
 pub mod testing;

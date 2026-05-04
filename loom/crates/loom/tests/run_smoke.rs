@@ -65,6 +65,12 @@ fn loom_run_once_against_empty_bd_exits_zero() {
     path_entries.extend(std::env::split_paths(&path));
     let new_path = std::env::join_paths(path_entries).unwrap();
 
+    // The CLI requires LOOM_PROFILES_MANIFEST for spawn-bound subcommands
+    // (wx-3hhwq.32). Even on the empty-queue fast-path the manifest is read
+    // before spec resolution, so the smoke test must point at a real file.
+    let manifest_path = workspace.join("profile-images.json");
+    std::fs::write(&manifest_path, "{}").unwrap();
+
     let loom_bin = env!("CARGO_BIN_EXE_loom");
     let output = Command::new(loom_bin)
         .arg("--workspace")
@@ -72,6 +78,7 @@ fn loom_run_once_against_empty_bd_exits_zero() {
         .arg("run")
         .arg("--once")
         .env("PATH", new_path)
+        .env("LOOM_PROFILES_MANIFEST", &manifest_path)
         // The exec_check path is gated behind RunMode::Continuous; on the
         // empty-queue path we still set this so the binary can locate itself
         // if the loop ever changes shape.

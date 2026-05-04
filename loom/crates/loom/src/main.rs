@@ -17,6 +17,7 @@ use loom_core::bd::{BdClient, ListOpts, UpdateOpts};
 use loom_core::config::{LoomConfig, Phase};
 use loom_core::identifier::{BeadId, SpecLabel};
 use loom_core::lock::LockManager;
+use loom_core::profile_manifest::ProfileImageManifest;
 use loom_core::state::StateDb;
 use loom_workflow::check::{IterationCap, ProductionCheckController, check_loop as run_check_loop};
 use loom_workflow::msg::{
@@ -274,6 +275,7 @@ fn run_plan(
     new: Option<String>,
     update: Option<String>,
 ) -> anyhow::Result<()> {
+    let _manifest = ProfileImageManifest::from_env()?;
     let mode = plan::parse_mode(new, update)?;
     let report = plan::run(
         workspace,
@@ -306,6 +308,7 @@ fn run_run(
     spec: Option<String>,
     agent_override: Option<AgentKind>,
 ) -> anyhow::Result<()> {
+    let _manifest = ProfileImageManifest::from_env()?;
     let label = resolve_spec_label(workspace, spec)?;
     let lock_mgr = LockManager::new(workspace)?;
     let _guard = lock_mgr.acquire_spec(&label)?;
@@ -478,6 +481,7 @@ fn resolved_agent_for(
 }
 
 fn run_check(workspace: &Path, spec: Option<String>) -> anyhow::Result<()> {
+    let _manifest = ProfileImageManifest::from_env()?;
     let label = resolve_spec_label(workspace, spec)?;
     let lock_mgr = LockManager::new(workspace)?;
     let _guard = lock_mgr.acquire_spec(&label)?;
@@ -508,6 +512,7 @@ fn run_msg(
     answer: Option<String>,
     dismiss: bool,
 ) -> anyhow::Result<()> {
+    let _manifest = ProfileImageManifest::from_env()?;
     let spec_filter = spec.as_deref().map(SpecLabel::new);
     if let Some(label) = &spec_filter {
         let lock_mgr = LockManager::new(workspace)?;
@@ -619,6 +624,7 @@ fn run_todo(
     _since: Option<String>,
     agent_override: Option<AgentKind>,
 ) -> anyhow::Result<()> {
+    let _manifest = ProfileImageManifest::from_env()?;
     let label = resolve_spec_label(workspace, spec)?;
     let lock_mgr = LockManager::new(workspace)?;
     let _guard = lock_mgr.acquire_spec(&label)?;

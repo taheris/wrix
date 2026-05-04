@@ -380,25 +380,28 @@ test_wrapix_spawn_loads_image_source() {
 # test_profiles_manifest_required — loom reads `LOOM_PROFILES_MANIFEST` at
 # startup and parses it into `BTreeMap<ProfileName, ImageEntry>`; missing
 # env var or missing file errors before any bead spawn (no implicit search
-# path or fallback default). Stub: pending the manifest parsing in
-# loom-core. Implementation lands in a follow-up task; this stub satisfies
-# the annotation gate so the spec commit can land.
+# path or fallback default). The two paths (env unset, file missing) are
+# unit-tested under `loom-core::profile_manifest::manifest::tests`.
 #-----------------------------------------------------------------------------
 test_profiles_manifest_required() {
-    echo "stub: LOOM_PROFILES_MANIFEST loading not yet implemented in loom-core" >&2
-    return 77
+    cargo_run test -p loom-core --lib \
+        profile_manifest::manifest::tests::from_path_missing_file_returns_manifest_not_found \
+        -- --exact --nocapture --quiet
+    cargo_run test -p loom-core --lib \
+        profile_manifest::manifest::tests::from_path_parses_well_formed_manifest \
+        -- --exact --nocapture --quiet
 }
 
 #-----------------------------------------------------------------------------
 # test_unknown_profile_errors — a bead with `profile:X` where `X` is not
 # in the manifest fails with a typed `ProfileError::UnknownProfile` naming
-# the missing profile. Stub: pending the profile-resolution module in
-# loom-core. Implementation lands in a follow-up task; this stub satisfies
-# the annotation gate so the spec commit can land.
+# the missing profile. Verified by the lookup unit test under
+# `loom-core::profile_manifest::manifest::tests`.
 #-----------------------------------------------------------------------------
 test_unknown_profile_errors() {
-    echo "stub: ProfileError::UnknownProfile not yet implemented in loom-core" >&2
-    return 77
+    cargo_run test -p loom-core --lib \
+        profile_manifest::manifest::tests::lookup_unknown_profile_carries_manifest_path \
+        -- --exact --nocapture --quiet
 }
 
 #-----------------------------------------------------------------------------

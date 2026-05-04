@@ -112,6 +112,11 @@ fn mock_pi_path() -> PathBuf {
 /// shim wrapix and return the captured `Output`. Shared by both tests so
 /// the assertions stay focused on what they verify.
 fn drive_loom_todo_pi(workspace: &Path, shim: &Path, loom_bin: &str) -> std::process::Output {
+    // Spawn-bound subcommands (`todo` is one) read LOOM_PROFILES_MANIFEST at
+    // startup (wx-3hhwq.32). An empty `{}` manifest satisfies the parse step
+    // — these tests don't yet exercise per-bead profile resolution.
+    let manifest_path = workspace.join("profile-images.json");
+    std::fs::write(&manifest_path, "{}").expect("write manifest stub");
     Command::new(loom_bin)
         .arg("--workspace")
         .arg(workspace)
@@ -122,6 +127,7 @@ fn drive_loom_todo_pi(workspace: &Path, shim: &Path, loom_bin: &str) -> std::pro
         .arg("loom-agent")
         .env("LOOM_WRAPIX_BIN", shim)
         .env("LOOM_BIN", loom_bin)
+        .env("LOOM_PROFILES_MANIFEST", &manifest_path)
         .output()
         .expect("spawn loom")
 }
