@@ -1650,11 +1650,14 @@ dependencies = [
  "loom-agent",
  "loom-core",
  "loom-workflow",
+ "proc-macro2",
  "serde_json",
+ "syn",
  "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "walkdir",
 ]
 
 [[package]]

@@ -685,39 +685,44 @@ test_no_allow_dead_code() {
 }
 
 #-----------------------------------------------------------------------------
-# test_no_derive_from_on_newtypes — the newtype_id! macro and any newtype
-# struct must not derive `From` or `Into` (NF-8: bypasses the newtype
-# boundary). `#[from]` is permitted only on error enum variants — guarded by
-# scoping the search to identifier/ submodules where the newtypes live.
+# Style enforcement (specs/loom-tests.md §Architecture / Style Enforcement).
+#
+# Each function below shells to a single `cargo test -p loom --test style`
+# invocation that runs the AST + walkdir check named in the function. The
+# Rust source of truth is `loom/crates/loom/tests/style.rs`; per-rule
+# violations are printed there as `<path>:<line> <rule>` so reviewers can
+# click into the offending site.
 #-----------------------------------------------------------------------------
 test_no_derive_from_on_newtypes() {
-    local id_dir="$LOOM_DIR/crates/loom-core/src/identifier"
-    if [ ! -d "$id_dir" ]; then
-        echo "loom-core identifier module not yet scaffolded" >&2
-        return 77
-    fi
-    local hits
-    # Look at every #[derive(...)] line under identifier/ for a From or Into
-    # bare ident. Match on word boundaries so `TryFrom`, `IntoIterator`, etc.
-    # don't false-positive (none of those are valid in derive lists anyway).
-    hits=$(grep -rEn '#\[derive\([^)]*\b(From|Into)\b[^)]*\)\]' "$id_dir" --include='*.rs' || true)
-    if [ -n "$hits" ]; then
-        echo "forbidden derive(From) or derive(Into) on newtype:" >&2
-        echo "$hits" >&2
-        return 1
-    fi
-    # Same for the macro definition itself: the body must not splice From/Into
-    # into the derive list.
-    hits=$(awk '
-        /macro_rules![[:space:]]*newtype_id/ { in_macro = 1 }
-        in_macro && /#\[derive\(/ { print NR ": " $0 }
-        in_macro && /^[[:space:]]*\}[[:space:]]*$/ { in_macro = 0 }
-    ' "$id_dir/mod.rs" | grep -E '\b(From|Into)\b' || true)
-    if [ -n "$hits" ]; then
-        echo "newtype_id! macro derives From/Into:" >&2
-        echo "$hits" >&2
-        return 1
-    fi
+    cargo_run test -p loom --test style --quiet -- no_derive_from_on_newtypes
+}
+
+test_nested_module_structure() {
+    cargo_run test -p loom --test style --quiet -- nested_module_structure
+}
+
+test_git_client_encapsulation() {
+    cargo_run test -p loom --test style --quiet -- git_client_encapsulation
+}
+
+test_run_single_event_channel() {
+    cargo_run test -p loom --test style --quiet -- run_single_event_channel
+}
+
+test_newtypes_for_identifiers() {
+    cargo_run test -p loom --test style --quiet -- newtypes_for_identifiers
+}
+
+test_template_context_structs() {
+    cargo_run test -p loom --test style --quiet -- template_context_structs
+}
+
+test_no_hardcoded_tmp_paths() {
+    cargo_run test -p loom --test style --quiet -- no_hardcoded_tmp_paths
+}
+
+test_no_ignore_for_flake() {
+    cargo_run test -p loom --test style --quiet -- no_ignore_for_flake
 }
 
 #-----------------------------------------------------------------------------
@@ -2636,74 +2641,19 @@ _loom_filter_disallowed() {
 }
 
 test_no_thread_sleep() {
-    if [ ! -d "$LOOM_DIR/crates" ]; then
-        echo "loom/crates not yet scaffolded" >&2
-        return 77
-    fi
-    local hits
-    hits=$(grep -rEn '\bstd::thread::sleep\b' "$LOOM_DIR/crates" --include='*.rs' \
-        | grep -vE '/tests/' || true)
-    if [ -n "$hits" ]; then
-        echo "forbidden std::thread::sleep in production code:" >&2
-        echo "$hits" >&2
-        return 1
-    fi
+    cargo_run test -p loom --test style --quiet -- no_thread_sleep
 }
 
 test_no_tokio_sleep_outside_clock() {
-    if [ ! -d "$LOOM_DIR/crates" ]; then
-        echo "loom/crates not yet scaffolded" >&2
-        return 77
-    fi
-    local hits
-    hits=$(grep -rEn '\btokio::time::sleep\b' "$LOOM_DIR/crates" --include='*.rs' \
-        | grep -vE '/tests/' \
-        | grep -vF 'loom-core/src/clock/system.rs' \
-        | grep -vF 'loom-core/src/clock/mock.rs' || true)
-    if [ -n "$hits" ]; then
-        echo "forbidden tokio::time::sleep outside SystemClock/MockClock impl:" >&2
-        echo "$hits" >&2
-        return 1
-    fi
+    cargo_run test -p loom --test style --quiet -- no_tokio_sleep_outside_clock
 }
 
 test_no_tokio_timeout_outside_clock() {
-    if [ ! -d "$LOOM_DIR/crates" ]; then
-        echo "loom/crates not yet scaffolded" >&2
-        return 77
-    fi
-    local hits
-    hits=$(grep -rEn '\btokio::time::timeout\b' "$LOOM_DIR/crates" --include='*.rs' \
-        | grep -vE '/tests/' \
-        | grep -vF 'loom-core/src/clock/system.rs' \
-        | grep -vE '^[[:space:]]*[^:]+:[[:space:]]*[0-9]+:[[:space:]]*//' || true)
-    if [ -n "$hits" ]; then
-        echo "forbidden tokio::time::timeout outside SystemClock impl:" >&2
-        echo "$hits" >&2
-        return 1
-    fi
+    cargo_run test -p loom --test style --quiet -- no_tokio_timeout_outside_clock
 }
 
 test_no_real_clock_outside_system_clock() {
-    if [ ! -d "$LOOM_DIR/crates" ]; then
-        echo "loom/crates not yet scaffolded" >&2
-        return 77
-    fi
-    # `Instant::now()` and `SystemTime::now()` must live in SystemClock's
-    # impl; MockClock translates `tokio::time::Instant::now()` (a
-    # paused-time read, not a wall-clock read) into a std Instant for the
-    # public surface, so it stays in the allow-list.
-    local hits
-    hits=$(grep -rEn '(Instant|SystemTime)::now\(' "$LOOM_DIR/crates" --include='*.rs' \
-        | grep -vE '/tests/' \
-        | grep -vF 'loom-core/src/clock/system.rs' \
-        | grep -vF 'loom-core/src/clock/mock.rs' \
-        | grep -vE '^[[:space:]]*[^:]+:[[:space:]]*[0-9]+:[[:space:]]*//' || true)
-    if [ -n "$hits" ]; then
-        echo "forbidden Instant::now / SystemTime::now outside SystemClock impl:" >&2
-        echo "$hits" >&2
-        return 1
-    fi
+    cargo_run test -p loom --test style --quiet -- no_real_clock_outside_system_clock
 }
 
 #-----------------------------------------------------------------------------

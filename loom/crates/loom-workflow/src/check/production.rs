@@ -16,6 +16,7 @@
 use std::path::PathBuf;
 
 use loom_core::bd::{BdClient, Bead, ListOpts, UpdateOpts};
+use loom_core::git::GitClient;
 use loom_core::identifier::{BeadId, SpecLabel};
 use tokio::process::Command;
 use tracing::warn;
@@ -106,16 +107,12 @@ impl CheckController for ProductionCheckController {
     }
 
     async fn git_push(&mut self) -> Result<(), CheckError> {
-        let output = Command::new("git")
-            .current_dir(&self.workspace)
-            .arg("push")
-            .output()
-            .await?;
-        if !output.status.success() {
-            return Err(CheckError::GitPushFailed(
-                String::from_utf8_lossy(&output.stderr).into_owned(),
-            ));
-        }
+        let client = GitClient::open(&self.workspace)
+            .map_err(|e| CheckError::GitPushFailed(e.to_string()))?;
+        client
+            .push()
+            .await
+            .map_err(|e| CheckError::GitPushFailed(e.to_string()))?;
         Ok(())
     }
 

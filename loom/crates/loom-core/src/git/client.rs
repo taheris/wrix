@@ -205,6 +205,15 @@ impl GitClient {
         Ok(())
     }
 
+    /// Push the current branch to its configured remote (`git push`).
+    ///
+    /// Used by the push gate (`loom check`). Routed through this client so
+    /// `Command::new("git")` stays inside `loom-core/src/git/`, satisfying
+    /// the encapsulation rule asserted by `loom/crates/loom/tests/style.rs`.
+    pub async fn push(&self) -> Result<(), GitError> {
+        run_git(&self.workdir, self.clock.as_ref(), ["push"], None).await
+    }
+
     /// Merge `branch` into the current driver branch. Returns
     /// [`MergeResult::Conflict`] when git reports merge conflicts; other
     /// failures surface as [`GitError`].

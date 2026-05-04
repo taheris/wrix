@@ -34,6 +34,7 @@ proptest = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
+syn = { version = "2", features = ["full", "extra-traits", "visit"] }
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
@@ -41,6 +42,7 @@ tokio-test = "0.4"
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+walkdir = "2"
 
 # Internal crates
 loom-core = { path = "crates/loom-core" }
