@@ -978,12 +978,13 @@ test_run_verbose_streams_text() {
 }
 
 #-----------------------------------------------------------------------------
-# test_run_writes_per_bead_ndjson_log — every bead spawn writes the full
-# AgentEvent stream as NDJSON to
-# `<workspace>/.wrapix/loom/logs/<spec>/<bead>-<utc>.ndjson`, regardless of
-# terminal verbosity.
+# test_run_writes_per_bead_jsonl_log — every bead spawn writes the full
+# AgentEvent stream as JSONL to
+# `<workspace>/.wrapix/loom/logs/<spec>/<bead>-<utc>.jsonl`, regardless of
+# terminal verbosity. (The Rust test name retains `ndjson` for now —
+# JSONL and NDJSON are the same wire format; the spec/loom uses JSONL.)
 #-----------------------------------------------------------------------------
-test_run_writes_per_bead_ndjson_log() {
+test_run_writes_per_bead_jsonl_log() {
     logging_cargo_test run_writes_per_bead_ndjson_log
 }
 
@@ -1242,17 +1243,14 @@ test_parallel_conflict_preserves_worktree() {
 }
 
 #-----------------------------------------------------------------------------
-# test_loom_run_smoke — end-to-end binary invocation. The spec acceptance
-# criterion for wx-3hhwq.20 demands `loom run --once` against a fake bd return
-# a meaningful exit code (not "unrecognized subcommand"). The integration test
-# stubs bd to print `[]` for any --json query, seeds the state DB with a
-# `current_spec`, then spawns the compiled `loom` binary and asserts exit 0
-# plus the empty-queue summary line. A second test pins `loom run --help` so
-# the regression where `run` is missing from the clap surface fails loudly.
+# Note: the compiled-binary smoke for `loom run --once` lives at
+# `loom/crates/loom/tests/run_smoke.rs`; it runs via `cargo nextest run
+# --workspace` (and therefore under `nix flake check`). It does not
+# carry a verify-runner wrapper because no spec acceptance criterion
+# scopes it — it's a defensive regression test for the clap surface,
+# not a contract surface. If a spec gains a binary-smoke acceptance,
+# add a wrapper here that shells to it.
 #-----------------------------------------------------------------------------
-test_loom_run_smoke() {
-    cargo_run test -p loom --test run_smoke -- --nocapture --quiet
-}
 
 #-----------------------------------------------------------------------------
 # loom check / loom msg — same dispatch pattern as run: each function pins one
@@ -1824,11 +1822,11 @@ test_pi_event_mapping() {
 }
 
 #-----------------------------------------------------------------------------
-# test_pi_malformed_ndjson — a garbage line returns
+# test_pi_malformed_jsonl — a garbage line returns
 # `ProtocolError::InvalidJson`; the runner catches the error and continues
 # (defensive — pi v0.72+ has stdout discipline via takeOverStdout).
 #-----------------------------------------------------------------------------
-test_pi_malformed_ndjson() {
+test_pi_malformed_jsonl() {
     cargo_run test -p loom-agent --quiet -- \
         pi::parser::tests::malformed_json_returns_invalid_json_error
 }
