@@ -39,9 +39,9 @@ struct Cli {
     workspace: Option<PathBuf>,
 
     /// Override the agent backend for this invocation. Wins over per-phase
-    /// `[agent.<phase>] backend = ...` and `[agent] default = ...` in
-    /// `.wrapix/loom/config.toml`. Accepts `claude` or `pi`; any other
-    /// value triggers a clap parse error.
+    /// `[phase.<phase>] agent.backend = ...` and `[phase.default]
+    /// agent.backend = ...` in `.wrapix/loom/config.toml`. Accepts `claude`
+    /// or `pi`; any other value triggers a clap parse error.
     #[arg(long, global = true, value_enum, value_name = "BACKEND")]
     agent: Option<AgentBackendArg>,
 
@@ -454,9 +454,9 @@ async fn dispatch(kind: AgentKind, spawn: &SpawnConfig) -> Result<SessionOutcome
 }
 
 /// Resolve `phase`'s [`AgentKind`] honoring the global `--agent` override.
-/// CLI override wins over `[agent.<phase>] backend` and `[agent] default`.
-/// Returns the full [`AgentSelection`] so callers retain access to provider /
-/// model / claude_settings.
+/// CLI override wins over `[phase.<phase>] agent.backend` and
+/// `[phase.default] agent.backend`. Returns the full [`AgentSelection`] so
+/// callers retain access to profile / provider / model / claude_settings.
 fn resolved_agent_for(
     config: &LoomConfig,
     agent_override: Option<AgentKind>,

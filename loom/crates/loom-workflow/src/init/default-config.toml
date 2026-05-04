@@ -19,25 +19,31 @@ complete = "LOOM_COMPLETE"
 blocked = "LOOM_BLOCKED"
 clarify = "LOOM_CLARIFY"
 
-[agent]
-default = "claude"
+# Per-phase config. Resolution for any field: [phase.<name>] →
+# [phase.default] → built-in. `loom run` reads its profile from the
+# bead's `profile:X` label first, then [phase.run] / [phase.default];
+# the `--profile` CLI flag overrides everything.
+[phase.default]
+profile = "base"
+agent.backend = "claude"
 
-# Per-phase overrides: backend + model. Phases without overrides inherit default.
-# [agent.todo]
-# backend = "pi"
-# provider = "deepseek"
-# model_id = "deepseek-v3"
+# [phase.todo]
+# profile = "rust"
+# agent.backend = "pi"
+# agent.provider = "deepseek"
+# agent.model_id = "deepseek-v3"
 #
-# [agent.check]
-# backend = "claude"
+# [phase.check]
+# agent.backend = "claude"
 
 [claude]
-# Seconds to wait for clean exit after `result` before SIGTERM.
+# Agent-runtime settings, applied wherever claude is selected. Seconds to
+# wait for clean exit after `result` before SIGTERM (shutdown watchdog).
 post_result_grace_secs = 5
 
 [security]
-# Tool names to deny when Claude sends control_request. Claude-backend only —
+# Tool names to deny when claude sends control_request. Claude-only —
 # pi has no host-side permission flow (tools execute internally, no
-# control_request analog). Empty by default — the container sandbox is the
-# trust boundary.
+# control_request analog). Empty by default; the container sandbox is
+# the trust boundary.
 # denied_tools = ["SomeNewHostTool"]

@@ -38,8 +38,8 @@ const SPAWN_CONFIG_FILE: &str = "spawn-config.json";
 
 /// Default seconds to wait for claude to exit naturally after observing
 /// `result`. Per spec the value is configurable via
-/// `[agent.claude] post_result_grace_secs`; this constant is the fallback
-/// the dispatcher uses when no override is wired up yet.
+/// `[claude] post_result_grace_secs`; this constant is the fallback the
+/// dispatcher uses when no override is wired up yet.
 pub const DEFAULT_POST_RESULT_GRACE_SECS: u64 = 5;
 
 /// Env var that overrides the launcher binary. Production resolves

@@ -28,7 +28,7 @@ pub struct ClaudeParser {
 
 impl ClaudeParser {
     /// Build a parser with the configured deny-list. The list is loaded by
-    /// the workflow layer from `[agent.claude].denied_tools`; the parser
+    /// the workflow layer from `[security] denied_tools`; the parser
     /// owns no policy of its own.
     pub fn new(denied_tools: Vec<String>) -> Self {
         Self {

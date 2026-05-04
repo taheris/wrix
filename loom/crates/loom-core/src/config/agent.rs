@@ -5,31 +5,28 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::agent::AgentKind;
+use crate::identifier::ProfileName;
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(default)]
-pub struct AgentConfig {
-    /// Backend to use when no per-phase override applies.
-    pub default: String,
-
-    /// Per-phase overrides keyed by phase name (`run`, `check`, `todo`, ...).
-    /// Captured via `flatten` so the TOML keeps its `[agent.<phase>]` shape.
-    #[serde(flatten)]
-    pub overrides: BTreeMap<String, PhaseOverride>,
-}
-
-impl Default for AgentConfig {
-    fn default() -> Self {
-        Self {
-            default: "claude".to_string(),
-            overrides: BTreeMap::new(),
-        }
-    }
-}
-
+/// `[phase.<name>]` table from `.wrapix/loom/config.toml`. Each per-phase
+/// block deserializes into one of these; `[phase.default]` is the fallback
+/// applied to any field a per-phase table does not set.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default)]
-pub struct PhaseOverride {
+pub struct PhaseConfig {
+    /// Profile name (`base`, `rust`, `python`, …) used to select the
+    /// container image. Resolves through the same chain as the agent
+    /// fields when unset.
+    pub profile: Option<String>,
+    /// Agent-related fields. `agent.backend` / `agent.provider` /
+    /// `agent.model_id` flatten naturally as dotted keys in TOML.
+    pub agent: PhaseAgentConfig,
+}
+
+/// Agent fields nested under `[phase.<name>]`. Captured separately so
+/// `agent.backend = "..."` style keys parse natively.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct PhaseAgentConfig {
     pub backend: Option<String>,
     pub provider: Option<String>,
     pub model_id: Option<String>,
@@ -37,11 +34,12 @@ pub struct PhaseOverride {
 
 /// Workflow phase that resolves an [`AgentSelection`] from config.
 ///
-/// `[agent.<phase>]` table keys in TOML correspond one-to-one with this enum's
-/// snake_case variants: `plan`, `todo`, `run`, `check`, `msg`. The enum is the
-/// closed dispatch surface used by `LoomConfig::agent_for`; the BTreeMap that
-/// backs `[agent.*]` overrides remains string-keyed so unknown TOML keys
-/// surface at lookup time rather than at parse time.
+/// `[phase.<phase>]` table keys in TOML correspond one-to-one with this
+/// enum's lowercase variants: `plan`, `todo`, `run`, `check`, `msg`. The
+/// enum is the closed dispatch surface used by `LoomConfig::agent_for`;
+/// the `BTreeMap` that backs `[phase.*]` remains string-keyed so unknown
+/// TOML keys parse without error and the resolver's `[phase.default]`
+/// fallback is just another lookup against the same map.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Phase {
@@ -64,6 +62,19 @@ impl Phase {
     }
 }
 
+/// Phase-table key used as the resolver fallback. Every per-phase field
+/// chain ends with `[phase.default]` before falling through to the
+/// built-in defaults.
+pub const DEFAULT_PHASE_KEY: &str = "default";
+
+/// Built-in profile when neither `[phase.<name>]` nor `[phase.default]`
+/// declares one.
+pub const BUILT_IN_PROFILE: &str = "base";
+
+/// Built-in backend name when neither `[phase.<name>]` nor
+/// `[phase.default]` declares one.
+pub const BUILT_IN_BACKEND: &str = "claude";
+
 /// Claude-backend-specific runtime settings surfaced through
 /// [`AgentSelection::claude_settings`] when the resolved backend is
 /// [`AgentKind::Claude`]. Pi has no analog (no host-side permission flow).
@@ -72,21 +83,23 @@ pub struct ClaudeSettings {
     /// Tool names denied at host-side `control_request` time. Sourced from
     /// `[security] denied_tools`.
     pub denied_tools: Vec<String>,
-    /// Seconds to wait for clean exit after `result` before SIGTERM. Sourced
-    /// from `[claude] post_result_grace_secs`.
+    /// Seconds to wait for clean exit after `result` before SIGTERM.
+    /// Sourced from `[claude] post_result_grace_secs`.
     pub post_result_grace_secs: u32,
 }
 
-/// Backend + per-phase model selection resolved by [`super::LoomConfig::agent_for`].
+/// Per-phase selection resolved by [`super::LoomConfig::agent_for`].
 ///
-/// `kind` carries the selected backend (after applying any phase override on
-/// top of `[agent] default`). `provider` / `model_id` hold the per-phase
-/// model override for the pi backend (`set_model { provider, modelId }`).
-/// `claude_settings` is populated only when `kind == Claude` so call sites
-/// can wire the post-result grace period and denied-tools list without a
-/// second config lookup.
+/// `profile` carries the profile name after walking
+/// `[phase.<name>]` → `[phase.default]` → built-in. `kind` is the resolved
+/// backend. `provider` / `model_id` hold the per-phase model override for
+/// the pi backend (`set_model { provider, modelId }`). `claude_settings`
+/// is populated only when `kind == Claude` so call sites can wire the
+/// post-result grace period and denied-tools list without a second
+/// config lookup.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentSelection {
+    pub profile: ProfileName,
     pub kind: AgentKind,
     pub provider: Option<String>,
     pub model_id: Option<String>,
@@ -99,8 +112,8 @@ pub enum AgentSelectionError {
     UnknownBackend { name: String },
 }
 
-/// Convert a backend name string (from TOML `default` or `[agent.<phase>] backend`)
-/// into the typed [`AgentKind`].
+/// Convert a backend name string (from `[phase.<name>] agent.backend` or
+/// `[phase.default] agent.backend`) into the typed [`AgentKind`].
 pub fn parse_backend_name(name: &str) -> Result<AgentKind, AgentSelectionError> {
     match name {
         "claude" => Ok(AgentKind::Claude),
@@ -109,6 +122,23 @@ pub fn parse_backend_name(name: &str) -> Result<AgentKind, AgentSelectionError> 
             name: other.to_string(),
         }),
     }
+}
+
+/// Resolve a single optional phase field via the
+/// `[phase.<name>]` → `[phase.default]` chain. Returns `None` only when
+/// neither the named phase nor `default` populates the field.
+pub(super) fn lookup_phase_field<'a, T, F>(
+    phase: &'a BTreeMap<String, PhaseConfig>,
+    name: &str,
+    f: F,
+) -> Option<&'a T>
+where
+    F: Fn(&'a PhaseConfig) -> &'a Option<T>,
+{
+    phase
+        .get(name)
+        .and_then(|p| f(p).as_ref())
+        .or_else(|| phase.get(DEFAULT_PHASE_KEY).and_then(|p| f(p).as_ref()))
 }
 
 #[cfg(test)]
@@ -151,5 +181,47 @@ mod tests {
             Err(AgentSelectionError::UnknownBackend { name }) => assert_eq!(name, "gpt"),
             other => panic!("expected UnknownBackend, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn lookup_phase_field_prefers_named_over_default() {
+        let mut phase = BTreeMap::new();
+        phase.insert(
+            DEFAULT_PHASE_KEY.to_string(),
+            PhaseConfig {
+                profile: Some("base".to_string()),
+                ..PhaseConfig::default()
+            },
+        );
+        phase.insert(
+            "todo".to_string(),
+            PhaseConfig {
+                profile: Some("rust".to_string()),
+                ..PhaseConfig::default()
+            },
+        );
+        let resolved = lookup_phase_field(&phase, "todo", |p| &p.profile).unwrap();
+        assert_eq!(resolved, "rust");
+    }
+
+    #[test]
+    fn lookup_phase_field_falls_back_to_default_when_named_unset() {
+        let mut phase = BTreeMap::new();
+        phase.insert(
+            DEFAULT_PHASE_KEY.to_string(),
+            PhaseConfig {
+                profile: Some("base".to_string()),
+                ..PhaseConfig::default()
+            },
+        );
+        phase.insert("todo".to_string(), PhaseConfig::default());
+        let resolved = lookup_phase_field(&phase, "todo", |p| &p.profile).unwrap();
+        assert_eq!(resolved, "base");
+    }
+
+    #[test]
+    fn lookup_phase_field_returns_none_when_neither_set() {
+        let phase: BTreeMap<String, PhaseConfig> = BTreeMap::new();
+        assert!(lookup_phase_field(&phase, "todo", |p| &p.profile).is_none());
     }
 }

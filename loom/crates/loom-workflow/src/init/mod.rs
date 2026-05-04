@@ -131,7 +131,7 @@ pub async fn fetch_active_molecules<R: CommandRunner>(
 mod tests {
     use super::*;
     use anyhow::Result;
-    use loom_core::config::LoomConfig;
+    use loom_core::config::{LoomConfig, Phase};
     use loom_core::identifier::SpecLabel;
     use loom_core::lock::LockError;
 
@@ -152,10 +152,34 @@ mod tests {
             "config.toml must exist on disk"
         );
         assert!(report.state_db_path.exists(), "state.db must exist on disk");
-        // The default body must round-trip into the typed config.
+        // The default body must parse cleanly and resolve through `agent_for`
+        // identically to the empty-default config — the file writes the
+        // built-in `[phase.default]` values explicitly for documentation,
+        // which means the parsed `phase` map and `BTreeMap::new()` are not
+        // structurally equal but resolve to the same agent selection.
         let body = std::fs::read_to_string(&report.config_path)?;
         let parsed = LoomConfig::from_toml_str(&body)?;
-        assert_eq!(parsed, LoomConfig::default());
+        let empty = LoomConfig::default();
+        for phase in [
+            Phase::Plan,
+            Phase::Todo,
+            Phase::Run,
+            Phase::Check,
+            Phase::Msg,
+        ] {
+            assert_eq!(
+                parsed.agent_for(phase).map_err(anyhow::Error::from)?,
+                empty.agent_for(phase).map_err(anyhow::Error::from)?,
+                "phase={phase:?}",
+            );
+        }
+        assert_eq!(parsed.pinned_context, empty.pinned_context);
+        assert_eq!(parsed.beads, empty.beads);
+        assert_eq!(parsed.loop_, empty.loop_);
+        assert_eq!(parsed.logs, empty.logs);
+        assert_eq!(parsed.exit_signals, empty.exit_signals);
+        assert_eq!(parsed.claude, empty.claude);
+        assert_eq!(parsed.security, empty.security);
         // No rebuild on a plain init.
         assert!(report.rebuild.is_none());
         Ok(())

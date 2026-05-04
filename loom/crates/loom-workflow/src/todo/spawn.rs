@@ -8,8 +8,9 @@ use loom_core::identifier::ProfileName;
 ///
 /// `loom todo` runs **before** beads exist for the spec, so there is no per-
 /// bead `profile:X` label to read. The driver supplies the configured profile
-/// (typically `base`, overridable via `LoomConfig.agent.todo`). The image
-/// argument is the wrapix container reference resolved from that profile.
+/// (typically `base`, overridable via `[phase.todo] profile` in
+/// `.wrapix/loom/config.toml`). The image argument is the wrapix container
+/// reference resolved from that profile.
 pub fn build_spawn_config(
     image: String,
     workspace: PathBuf,

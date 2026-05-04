@@ -4,6 +4,11 @@
 //! field carries `#[serde(default)]` so a missing or empty file yields
 //! defaults that match Ralph's `.wrapix/ralph/config.nix`, letting users
 //! transition without writing a Loom config.
+//!
+//! Per-phase agent and profile selection lives in `[phase.<name>]` tables
+//! with `[phase.default]` as the fallback (see
+//! `specs/loom-harness.md` § Configuration). Resolution for any phase
+//! field walks `[phase.<name>]` → `[phase.default]` → built-in defaults.
 
 mod agent;
 mod beads;
@@ -15,8 +20,8 @@ mod loop_config;
 mod security;
 
 pub use agent::{
-    AgentConfig, AgentSelection, AgentSelectionError, ClaudeSettings, Phase, PhaseOverride,
-    parse_backend_name,
+    AgentSelection, AgentSelectionError, BUILT_IN_BACKEND, BUILT_IN_PROFILE, ClaudeSettings,
+    DEFAULT_PHASE_KEY, Phase, PhaseAgentConfig, PhaseConfig, parse_backend_name,
 };
 pub use beads::BeadsConfig;
 pub use claude::ClaudeConfig;
@@ -26,9 +31,14 @@ pub use logs::LogsConfig;
 pub use loop_config::LoopConfig;
 pub use security::SecurityConfig;
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::Deserialize;
+
+use crate::agent::AgentKind;
+use crate::identifier::ProfileName;
+use agent::lookup_phase_field;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
@@ -39,7 +49,10 @@ pub struct LoomConfig {
     pub loop_: LoopConfig,
     pub logs: LogsConfig,
     pub exit_signals: ExitSignalsConfig,
-    pub agent: AgentConfig,
+    /// `[phase.<name>]` tables keyed by phase name. The literal key
+    /// `default` is the fallback applied by [`LoomConfig::agent_for`] to
+    /// any field a per-phase table does not declare.
+    pub phase: BTreeMap<String, PhaseConfig>,
     pub claude: ClaudeConfig,
     pub security: SecurityConfig,
 }
@@ -52,7 +65,7 @@ impl Default for LoomConfig {
             loop_: LoopConfig::default(),
             logs: LogsConfig::default(),
             exit_signals: ExitSignalsConfig::default(),
-            agent: AgentConfig::default(),
+            phase: BTreeMap::new(),
             claude: ClaudeConfig::default(),
             security: SecurityConfig::default(),
         }
@@ -66,32 +79,36 @@ impl LoomConfig {
         Ok(toml::from_str(src)?)
     }
 
-    /// Resolve the [`AgentSelection`] for `phase`. The lookup applies the
-    /// per-phase override on top of `[agent] default`; when the resolved
-    /// backend is [`crate::agent::AgentKind::Claude`] the claude-specific
-    /// settings are pulled from `[claude]` and `[security]` so call sites
-    /// receive everything in one struct.
+    /// Resolve the [`AgentSelection`] for `phase`. Each field walks the
+    /// `[phase.<name>]` → `[phase.default]` → built-in chain; when the
+    /// resolved backend is [`crate::agent::AgentKind::Claude`] the
+    /// claude-specific settings are pulled from `[claude]` and `[security]`
+    /// so call sites receive everything in one struct.
     ///
     /// Returns [`AgentSelectionError::UnknownBackend`] when the backend name
-    /// (default or override) does not match `claude` or `pi` — surfacing the
-    /// validation lazily lets the TOML parser stay schema-free for unknown
-    /// `[agent.<phase>]` keys.
+    /// (per-phase or default) does not match `claude` or `pi` — surfacing
+    /// the validation lazily lets the TOML parser stay schema-free for
+    /// unknown `[phase.<phase>]` keys.
     pub fn agent_for(&self, phase: Phase) -> Result<AgentSelection, AgentSelectionError> {
-        let override_ = self.agent.overrides.get(phase.as_str());
-        let backend_name = override_
-            .and_then(|o| o.backend.as_deref())
-            .unwrap_or(&self.agent.default);
-        let kind = parse_backend_name(backend_name)?;
-        let provider = override_.and_then(|o| o.provider.clone());
-        let model_id = override_.and_then(|o| o.model_id.clone());
+        let key = phase.as_str();
+        let profile_str = lookup_phase_field(&self.phase, key, |p| &p.profile)
+            .map(String::as_str)
+            .unwrap_or(BUILT_IN_PROFILE);
+        let backend_str = lookup_phase_field(&self.phase, key, |p| &p.agent.backend)
+            .map(String::as_str)
+            .unwrap_or(BUILT_IN_BACKEND);
+        let kind = parse_backend_name(backend_str)?;
+        let provider = lookup_phase_field(&self.phase, key, |p| &p.agent.provider).cloned();
+        let model_id = lookup_phase_field(&self.phase, key, |p| &p.agent.model_id).cloned();
         let claude_settings = match kind {
-            crate::agent::AgentKind::Claude => Some(ClaudeSettings {
+            AgentKind::Claude => Some(ClaudeSettings {
                 denied_tools: self.security.denied_tools.clone(),
                 post_result_grace_secs: self.claude.post_result_grace_secs,
             }),
-            crate::agent::AgentKind::Pi => None,
+            AgentKind::Pi => None,
         };
         Ok(AgentSelection {
+            profile: ProfileName::new(profile_str),
             kind,
             provider,
             model_id,
@@ -124,9 +141,13 @@ mod tests {
     use super::*;
     use anyhow::Result;
 
-    /// The example TOML reproduced verbatim from the Configuration section of
-    /// `specs/loom-harness.md`. Lines are unmodified so the test guards
-    /// against drift between the spec and parser.
+    /// The example TOML reproduced verbatim from the Configuration section
+    /// of `specs/loom-harness.md`. Any drift between the parser and the
+    /// spec example surfaces here. Note the example explicitly writes the
+    /// built-in defaults under `[phase.default]`; we do not assert
+    /// `cfg == LoomConfig::default()` because the populated map and
+    /// `BTreeMap::new()` are not structurally equal — instead the test
+    /// asserts that `agent_for` resolves the same values either way.
     const SPEC_EXAMPLE: &str = r#"pinned_context = "docs/README.md"
 
 [beads]
@@ -148,27 +169,33 @@ complete = "LOOM_COMPLETE"
 blocked = "LOOM_BLOCKED"
 clarify = "LOOM_CLARIFY"
 
-[agent]
-default = "claude"
+# Per-phase config. Resolution for any field: [phase.<name>] →
+# [phase.default] → built-in. `loom run` reads its profile from the
+# bead's `profile:X` label first, then [phase.run] / [phase.default];
+# the `--profile` CLI flag overrides everything.
+[phase.default]
+profile = "base"
+agent.backend = "claude"
 
-# Per-phase overrides: backend + model. Phases without overrides inherit default.
-# [agent.todo]
-# backend = "pi"
-# provider = "deepseek"
-# model_id = "deepseek-v3"
+# [phase.todo]
+# profile = "rust"
+# agent.backend = "pi"
+# agent.provider = "deepseek"
+# agent.model_id = "deepseek-v3"
 #
-# [agent.check]
-# backend = "claude"
+# [phase.check]
+# agent.backend = "claude"
 
 [claude]
-# Seconds to wait for clean exit after `result` before SIGTERM.
+# Agent-runtime settings, applied wherever claude is selected. Seconds to
+# wait for clean exit after `result` before SIGTERM (shutdown watchdog).
 post_result_grace_secs = 5
 
 [security]
-# Tool names to deny when Claude sends control_request. Claude-backend only —
+# Tool names to deny when claude sends control_request. Claude-only —
 # pi has no host-side permission flow (tools execute internally, no
-# control_request analog). Empty by default — the container sandbox is the
-# trust boundary.
+# control_request analog). Empty by default; the container sandbox is
+# the trust boundary.
 # denied_tools = ["SomeNewHostTool"]
 "#;
 
@@ -179,10 +206,34 @@ post_result_grace_secs = 5
         Ok(())
     }
 
+    /// The spec example writes the built-in defaults explicitly under
+    /// `[phase.default]`; both that form and the empty config resolve to
+    /// the same values via `agent_for` for every phase.
     #[test]
-    fn spec_example_matches_defaults() -> Result<()> {
-        let cfg = LoomConfig::from_toml_str(SPEC_EXAMPLE)?;
-        assert_eq!(cfg, LoomConfig::default());
+    fn spec_example_resolves_to_built_in_defaults() -> Result<()> {
+        let from_spec = LoomConfig::from_toml_str(SPEC_EXAMPLE)?;
+        let empty = LoomConfig::default();
+        for phase in [
+            Phase::Plan,
+            Phase::Todo,
+            Phase::Run,
+            Phase::Check,
+            Phase::Msg,
+        ] {
+            let from_spec_sel = from_spec.agent_for(phase).expect("agent_for");
+            let empty_sel = empty.agent_for(phase).expect("agent_for");
+            assert_eq!(from_spec_sel, empty_sel, "phase={phase:?}");
+            assert_eq!(from_spec_sel.profile.as_str(), BUILT_IN_PROFILE);
+            assert_eq!(from_spec_sel.kind, AgentKind::Claude);
+        }
+        // Non-phase fields round-trip identically.
+        assert_eq!(from_spec.pinned_context, empty.pinned_context);
+        assert_eq!(from_spec.beads, empty.beads);
+        assert_eq!(from_spec.loop_, empty.loop_);
+        assert_eq!(from_spec.logs, empty.logs);
+        assert_eq!(from_spec.exit_signals, empty.exit_signals);
+        assert_eq!(from_spec.claude, empty.claude);
+        assert_eq!(from_spec.security, empty.security);
         Ok(())
     }
 
@@ -203,36 +254,45 @@ max_retries = 5
         // Whole sections that are absent stay at defaults.
         assert_eq!(cfg.beads, BeadsConfig::default());
         assert_eq!(cfg.exit_signals, ExitSignalsConfig::default());
-        assert_eq!(cfg.agent, AgentConfig::default());
+        assert!(cfg.phase.is_empty());
         assert_eq!(cfg.claude, ClaudeConfig::default());
         assert_eq!(cfg.security, SecurityConfig::default());
         Ok(())
     }
 
     #[test]
-    fn agent_overrides_collect_into_map() -> Result<()> {
+    fn phase_tables_collect_into_map() -> Result<()> {
         let src = r#"
-[agent]
-default = "pi"
+[phase.default]
+profile = "base"
+agent.backend = "pi"
 
-[agent.todo]
-backend = "pi"
-provider = "deepseek"
-model_id = "deepseek-v3"
+[phase.todo]
+profile = "rust"
+agent.backend = "pi"
+agent.provider = "deepseek"
+agent.model_id = "deepseek-v3"
 
-[agent.check]
-backend = "claude"
+[phase.check]
+agent.backend = "claude"
 "#;
         let cfg = LoomConfig::from_toml_str(src)?;
-        assert_eq!(cfg.agent.default, "pi");
-        assert_eq!(cfg.agent.overrides.len(), 2);
-        let todo = &cfg.agent.overrides["todo"];
-        assert_eq!(todo.backend.as_deref(), Some("pi"));
-        assert_eq!(todo.provider.as_deref(), Some("deepseek"));
-        assert_eq!(todo.model_id.as_deref(), Some("deepseek-v3"));
-        let check = &cfg.agent.overrides["check"];
-        assert_eq!(check.backend.as_deref(), Some("claude"));
-        assert!(check.provider.is_none());
+        assert_eq!(cfg.phase.len(), 3);
+
+        let default = &cfg.phase[DEFAULT_PHASE_KEY];
+        assert_eq!(default.profile.as_deref(), Some("base"));
+        assert_eq!(default.agent.backend.as_deref(), Some("pi"));
+
+        let todo = &cfg.phase["todo"];
+        assert_eq!(todo.profile.as_deref(), Some("rust"));
+        assert_eq!(todo.agent.backend.as_deref(), Some("pi"));
+        assert_eq!(todo.agent.provider.as_deref(), Some("deepseek"));
+        assert_eq!(todo.agent.model_id.as_deref(), Some("deepseek-v3"));
+
+        let check = &cfg.phase["check"];
+        assert!(check.profile.is_none());
+        assert_eq!(check.agent.backend.as_deref(), Some("claude"));
+        assert!(check.agent.provider.is_none());
         Ok(())
     }
 
@@ -271,29 +331,34 @@ denied_tools = ["WebFetch", "DangerousTool"]
         assert!(matches!(result, Err(LoomConfigError::Parse(_))));
     }
 
-    /// `[agent] default = "claude"` with `[agent.todo] backend = "pi"` →
-    /// `agent_for(Todo)` returns `Pi`, `agent_for(Run)` inherits `Claude`.
+    /// `[phase.default] agent.backend = "claude"` with `[phase.todo]
+    /// agent.backend = "pi"` → `agent_for(Todo)` returns `Pi`,
+    /// `agent_for(Run)` inherits `Claude` from default.
     #[test]
     fn agent_for_per_phase_resolves_override_and_default() -> Result<()> {
         let src = r#"
-[agent]
-default = "claude"
+[phase.default]
+profile = "base"
+agent.backend = "claude"
 
-[agent.todo]
-backend = "pi"
-provider = "deepseek"
-model_id = "deepseek-v3"
+[phase.todo]
+profile = "rust"
+agent.backend = "pi"
+agent.provider = "deepseek"
+agent.model_id = "deepseek-v3"
 "#;
         let cfg = LoomConfig::from_toml_str(src)?;
 
         let todo = cfg.agent_for(Phase::Todo).expect("agent_for todo");
-        assert_eq!(todo.kind, crate::agent::AgentKind::Pi);
+        assert_eq!(todo.profile.as_str(), "rust");
+        assert_eq!(todo.kind, AgentKind::Pi);
         assert_eq!(todo.provider.as_deref(), Some("deepseek"));
         assert_eq!(todo.model_id.as_deref(), Some("deepseek-v3"));
         assert!(todo.claude_settings.is_none());
 
         let run = cfg.agent_for(Phase::Run).expect("agent_for run");
-        assert_eq!(run.kind, crate::agent::AgentKind::Claude);
+        assert_eq!(run.profile.as_str(), "base");
+        assert_eq!(run.kind, AgentKind::Claude);
         assert!(run.provider.is_none());
         let claude = run.claude_settings.expect("claude_settings");
         assert_eq!(claude.post_result_grace_secs, 5);
@@ -302,8 +367,8 @@ model_id = "deepseek-v3"
         Ok(())
     }
 
-    /// Empty config (no `[agent]` table at all) resolves every phase to
-    /// `claude` — the documented default.
+    /// Empty config (no `[phase]` tables at all) resolves every phase to
+    /// `claude` with the built-in `base` profile — the documented defaults.
     #[test]
     fn agent_for_default_is_claude_when_config_empty() -> Result<()> {
         let cfg = LoomConfig::default();
@@ -315,9 +380,26 @@ model_id = "deepseek-v3"
             Phase::Msg,
         ] {
             let sel = cfg.agent_for(phase).expect("agent_for");
-            assert_eq!(sel.kind, crate::agent::AgentKind::Claude, "phase={phase:?}");
+            assert_eq!(sel.kind, AgentKind::Claude, "phase={phase:?}");
+            assert_eq!(sel.profile.as_str(), BUILT_IN_PROFILE, "phase={phase:?}");
             assert!(sel.claude_settings.is_some());
         }
+        Ok(())
+    }
+
+    /// `[phase.default]` without `agent.backend` still resolves to the
+    /// built-in `claude` backend; the per-field fallback chain reaches
+    /// past the partially-populated default into the built-in.
+    #[test]
+    fn agent_for_falls_through_partial_default_to_built_in() -> Result<()> {
+        let src = r#"
+[phase.default]
+profile = "base"
+"#;
+        let cfg = LoomConfig::from_toml_str(src)?;
+        let sel = cfg.agent_for(Phase::Run).expect("agent_for");
+        assert_eq!(sel.kind, AgentKind::Claude);
+        assert_eq!(sel.profile.as_str(), "base");
         Ok(())
     }
 
@@ -326,8 +408,8 @@ model_id = "deepseek-v3"
     #[test]
     fn agent_for_unknown_backend_in_default_returns_error() -> Result<()> {
         let src = r#"
-[agent]
-default = "gpt"
+[phase.default]
+agent.backend = "gpt"
 "#;
         let cfg = LoomConfig::from_toml_str(src)?;
         match cfg.agent_for(Phase::Run) {
@@ -342,11 +424,11 @@ default = "gpt"
     #[test]
     fn agent_for_unknown_backend_in_phase_override_isolated_to_that_phase() -> Result<()> {
         let src = r#"
-[agent]
-default = "claude"
+[phase.default]
+agent.backend = "claude"
 
-[agent.todo]
-backend = "ollama"
+[phase.todo]
+agent.backend = "ollama"
 "#;
         let cfg = LoomConfig::from_toml_str(src)?;
         match cfg.agent_for(Phase::Todo) {
@@ -355,7 +437,7 @@ backend = "ollama"
         }
         // Other phases unaffected.
         let run = cfg.agent_for(Phase::Run).expect("run unaffected");
-        assert_eq!(run.kind, crate::agent::AgentKind::Claude);
+        assert_eq!(run.kind, AgentKind::Claude);
         Ok(())
     }
 
@@ -364,9 +446,6 @@ backend = "ollama"
     #[test]
     fn agent_for_threads_claude_specific_settings_when_kind_is_claude() -> Result<()> {
         let src = r#"
-[agent]
-default = "claude"
-
 [claude]
 post_result_grace_secs = 12
 
@@ -378,6 +457,28 @@ denied_tools = ["WebFetch", "Other"]
         let claude = sel.claude_settings.expect("claude_settings present");
         assert_eq!(claude.post_result_grace_secs, 12);
         assert_eq!(claude.denied_tools, vec!["WebFetch", "Other"]);
+        Ok(())
+    }
+
+    /// A per-phase `profile` override wins over `[phase.default].profile`.
+    #[test]
+    fn agent_for_resolves_profile_per_phase() -> Result<()> {
+        let src = r#"
+[phase.default]
+profile = "base"
+
+[phase.todo]
+profile = "rust"
+"#;
+        let cfg = LoomConfig::from_toml_str(src)?;
+        assert_eq!(
+            cfg.agent_for(Phase::Todo).expect("todo").profile.as_str(),
+            "rust"
+        );
+        assert_eq!(
+            cfg.agent_for(Phase::Run).expect("run").profile.as_str(),
+            "base"
+        );
         Ok(())
     }
 }
