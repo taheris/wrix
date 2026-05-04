@@ -1,12 +1,13 @@
 //! Production [`CheckController`] used by the `loom check` binary.
 //!
-//! Wires `BdClient` for spec-bead snapshots and clarify, plus
+//! Wires `BdClient` for spec-bead snapshots and clarify,
 //! `tokio::process::Command` shell-outs for `git push`, `beads-push`, and
-//! the auto-iterate `loom run` handoff. The reviewer agent itself is
-//! **not yet implemented** (`loom-agent` is a placeholder crate as of
-//! wx-3hhwq.20); [`ProductionCheckController::run_review`] returns
-//! [`ReviewOutcome::Incomplete`] so `check_loop` aborts before touching
-//! the working tree.
+//! the auto-iterate `loom run` handoff, and a caller-provided dispatch
+//! closure for the reviewer agent invocation. The closure pattern keeps
+//! backend selection (`PiBackend` vs `ClaudeBackend`) inside the binary's
+//! `dispatch` match — `loom-workflow` never sees the concrete backend types,
+//! mirroring [`ProductionTodoController`](super::super::todo::ProductionTodoController)
+//! and [`ProductionAgentLoopController`](super::super::run::ProductionAgentLoopController).
 //!
 //! Iteration-counter accessors read/write `molecules.iteration_count` for
 //! the active molecule of `self.label`. `iteration_count` returns 0 when no
@@ -19,36 +20,51 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use askama::Template;
+use loom_core::agent::{ProtocolError, RePinContent, SessionOutcome, SpawnConfig};
 use loom_core::bd::{BdClient, Bead, ListOpts, UpdateOpts};
 use loom_core::git::GitClient;
-use loom_core::identifier::{BeadId, SpecLabel};
+use loom_core::identifier::{BeadId, ProfileName, SpecLabel};
+use loom_core::profile_manifest::ProfileImageManifest;
 use loom_core::state::StateDb;
+use loom_templates::check::CheckContext;
 use tokio::process::Command;
-use tracing::warn;
+use tracing::info;
 
+use super::context::beads_summary;
 use super::error::CheckError;
 use super::runner::{CheckController, ReviewOutcome};
 
-/// Stub detail returned by [`ProductionCheckController::run_review`] until
-/// the `loom-agent` backend lands. `check_loop` surfaces this through
-/// [`CheckError::ReviewIncomplete`].
-pub const STUB_REVIEW_DETAIL: &str = "loom-agent backend not yet implemented (wx-3hhwq.20)";
-
-pub struct ProductionCheckController {
+pub struct ProductionCheckController<S, F>
+where
+    S: Fn(SpawnConfig) -> F + Send + Sync,
+    F: std::future::Future<Output = Result<SessionOutcome, ProtocolError>> + Send,
+{
     bd: BdClient,
     label: SpecLabel,
     loom_bin: PathBuf,
     workspace: PathBuf,
     state: Arc<StateDb>,
+    manifest: Arc<ProfileImageManifest>,
+    phase_default: ProfileName,
+    spawn: S,
 }
 
-impl ProductionCheckController {
+impl<S, F> ProductionCheckController<S, F>
+where
+    S: Fn(SpawnConfig) -> F + Send + Sync,
+    F: std::future::Future<Output = Result<SessionOutcome, ProtocolError>> + Send,
+{
+    #[expect(clippy::too_many_arguments, reason = "controller construction surface")]
     pub fn new(
         bd: BdClient,
         label: SpecLabel,
         loom_bin: PathBuf,
         workspace: PathBuf,
         state: Arc<StateDb>,
+        manifest: Arc<ProfileImageManifest>,
+        phase_default: ProfileName,
+        spawn: S,
     ) -> Self {
         Self {
             bd,
@@ -56,6 +72,9 @@ impl ProductionCheckController {
             loom_bin,
             workspace,
             state,
+            manifest,
+            phase_default,
+            spawn,
         }
     }
 
@@ -70,17 +89,67 @@ impl ProductionCheckController {
         cmd.current_dir(&self.workspace);
         cmd
     }
+
+    async fn build_review_prompt(&self) -> Result<String, CheckError> {
+        let beads = self
+            .bd
+            .list(ListOpts {
+                status: None,
+                label: Some(self.spec_label_filter()),
+            })
+            .await?;
+        let active_mol = self.state.active_molecule(&self.label)?;
+        let molecule_id = active_mol.as_ref().map(|m| m.id.clone());
+        let base_commit = active_mol.and_then(|m| m.base_commit);
+        let ctx = CheckContext {
+            pinned_context: String::new(),
+            label: self.label.clone(),
+            spec_path: format!("specs/{}.md", self.label.as_str()),
+            companion_paths: vec![],
+            beads_summary: beads_summary(&beads),
+            base_commit,
+            molecule_id,
+            exit_signals: String::new(),
+        };
+        Ok(ctx.render()?)
+    }
 }
 
-impl CheckController for ProductionCheckController {
+impl<S, F> CheckController for ProductionCheckController<S, F>
+where
+    S: Fn(SpawnConfig) -> F + Send + Sync,
+    F: std::future::Future<Output = Result<SessionOutcome, ProtocolError>> + Send,
+{
     async fn run_review(&mut self) -> Result<ReviewOutcome, CheckError> {
-        warn!(
+        let prompt = self.build_review_prompt().await?;
+        let entry = self.manifest.lookup(&self.phase_default)?;
+        let spawn_config = SpawnConfig {
+            image_ref: entry.r#ref.clone(),
+            image_source: entry.source.clone(),
+            workspace: self.workspace.clone(),
+            env: vec![],
+            initial_prompt: prompt,
+            agent_args: vec![],
+            repin: RePinContent {
+                orientation: String::new(),
+                pinned_context: String::new(),
+                partial_bodies: vec![],
+            },
+            model: None,
+        };
+        info!(
             label = %self.label,
-            "loom check: agent backend stub — returning Incomplete (loom-agent crate is empty)",
+            image_ref = %spawn_config.image_ref,
+            "loom check: dispatching reviewer agent",
         );
-        Ok(ReviewOutcome::Incomplete {
-            detail: STUB_REVIEW_DETAIL.to_string(),
-        })
+        let outcome = (self.spawn)(spawn_config).await?;
+        if outcome.exit_code == 0 {
+            Ok(ReviewOutcome::Complete)
+        } else {
+            Ok(ReviewOutcome::Incomplete {
+                detail: format!("agent exited with code {}", outcome.exit_code),
+            })
+        }
     }
 
     async fn list_spec_beads(&mut self) -> Result<Vec<Bead>, CheckError> {
@@ -167,13 +236,36 @@ impl CheckController for ProductionCheckController {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, reason = "tests use panicking helpers")]
+#[expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "tests use panicking helpers"
+)]
 mod tests {
     use super::*;
     use crate::check::runner::CheckController;
     use loom_core::identifier::MoleculeId;
     use loom_core::state::ActiveMolecule;
     use std::ffi::OsStr;
+    use std::future::Ready;
+
+    type NoopSpawn = fn(SpawnConfig) -> Ready<Result<SessionOutcome, ProtocolError>>;
+
+    fn noop_spawn(_cfg: SpawnConfig) -> Ready<Result<SessionOutcome, ProtocolError>> {
+        std::future::ready(Ok(SessionOutcome {
+            exit_code: 0,
+            cost_usd: None,
+        }))
+    }
+
+    fn stub_manifest(dir: &std::path::Path) -> Arc<ProfileImageManifest> {
+        let body = r#"{
+          "base": { "ref": "localhost/wrapix-base:abc", "source": "/nix/store/aaa-image-base" }
+        }"#;
+        let path = dir.join("profile-images.json");
+        std::fs::write(&path, body).unwrap();
+        Arc::new(ProfileImageManifest::from_path(&path).unwrap())
+    }
 
     fn empty_state(workspace: &std::path::Path) -> Arc<StateDb> {
         Arc::new(StateDb::open(workspace.join(".wrapix/loom/state.db")).unwrap())
@@ -199,14 +291,20 @@ mod tests {
         Arc::new(db)
     }
 
-    fn controller(workspace: PathBuf) -> ProductionCheckController {
+    fn controller(
+        workspace: PathBuf,
+    ) -> ProductionCheckController<NoopSpawn, Ready<Result<SessionOutcome, ProtocolError>>> {
         let state = empty_state(&workspace);
+        let manifest = stub_manifest(&workspace);
         ProductionCheckController::new(
             BdClient::new(),
             SpecLabel::new("loom-harness"),
             PathBuf::from("/usr/bin/loom"),
             workspace,
             state,
+            manifest,
+            ProfileName::new("base"),
+            noop_spawn,
         )
     }
 
@@ -214,13 +312,17 @@ mod tests {
         workspace: PathBuf,
         label: &str,
         state: Arc<StateDb>,
-    ) -> ProductionCheckController {
+    ) -> ProductionCheckController<NoopSpawn, Ready<Result<SessionOutcome, ProtocolError>>> {
+        let manifest = stub_manifest(&workspace);
         ProductionCheckController::new(
             BdClient::new(),
             SpecLabel::new(label),
             PathBuf::from("/usr/bin/loom"),
             workspace,
             state,
+            manifest,
+            ProfileName::new("base"),
+            noop_spawn,
         )
     }
 
@@ -283,5 +385,75 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut ctrl = controller(dir.path().to_path_buf());
         ctrl.reset_iteration_count().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn run_review_translates_zero_exit_into_complete() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().to_path_buf();
+        let state = empty_state(&workspace);
+        let manifest = stub_manifest(&workspace);
+        let mut ctrl = ProductionCheckController::new(
+            BdClient::new(),
+            SpecLabel::new("loom-harness"),
+            PathBuf::from("/usr/bin/loom"),
+            workspace,
+            state,
+            manifest,
+            ProfileName::new("base"),
+            |_cfg: SpawnConfig| async move {
+                Ok(SessionOutcome {
+                    exit_code: 0,
+                    cost_usd: None,
+                })
+            },
+        );
+        // build_review_prompt calls bd; we bypass that path by stubbing the
+        // BdClient through the live `bd` binary on the host (tests in this
+        // crate use BdClient::new() identically). Skip if bd is unavailable.
+        let outcome = ctrl.run_review().await;
+        if let Err(CheckError::Bd(_)) = outcome {
+            return;
+        }
+        assert!(
+            matches!(outcome, Ok(ReviewOutcome::Complete)),
+            "expected Complete, got {outcome:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn run_review_translates_nonzero_exit_into_incomplete_with_code() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().to_path_buf();
+        let state = empty_state(&workspace);
+        let manifest = stub_manifest(&workspace);
+        let mut ctrl = ProductionCheckController::new(
+            BdClient::new(),
+            SpecLabel::new("loom-harness"),
+            PathBuf::from("/usr/bin/loom"),
+            workspace,
+            state,
+            manifest,
+            ProfileName::new("base"),
+            |_cfg: SpawnConfig| async move {
+                Ok(SessionOutcome {
+                    exit_code: 7,
+                    cost_usd: None,
+                })
+            },
+        );
+        let outcome = ctrl.run_review().await;
+        if let Err(CheckError::Bd(_)) = outcome {
+            return;
+        }
+        match outcome {
+            Ok(ReviewOutcome::Incomplete { detail }) => {
+                assert!(
+                    detail.contains('7'),
+                    "detail should mention exit 7: {detail}"
+                );
+            }
+            other => panic!("expected Incomplete, got {other:?}"),
+        }
     }
 }

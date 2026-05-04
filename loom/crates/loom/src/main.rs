@@ -201,7 +201,7 @@ fn main() -> ExitCode {
             profile,
             spec,
         } => run_run(&workspace, once, parallel, profile, spec, agent_override),
-        Command::Check { spec } => run_check(&workspace, spec),
+        Command::Check { spec } => run_check(&workspace, spec, agent_override),
         Command::Msg {
             spec,
             index,
@@ -537,23 +537,36 @@ fn resolved_agent_for(
     Ok(selection)
 }
 
-fn run_check(workspace: &Path, spec: Option<String>) -> anyhow::Result<()> {
-    let _manifest = ProfileImageManifest::from_env()?;
+fn run_check(
+    workspace: &Path,
+    spec: Option<String>,
+    agent_override: Option<AgentKind>,
+) -> anyhow::Result<()> {
+    let manifest = Arc::new(ProfileImageManifest::from_env()?);
     let label = resolve_spec_label(workspace, spec)?;
     let lock_mgr = LockManager::new(workspace)?;
     let _guard = lock_mgr.acquire_spec(&label)?;
 
+    let config = LoomConfig::load(workspace.join(".wrapix/loom/config.toml"))?;
+    let selection = resolved_agent_for(&config, agent_override, Phase::Check)?;
+    let phase_default = selection.profile.clone();
+    let kind = selection.kind;
+
     let loom_bin = current_loom_bin()?;
     let state = std::sync::Arc::new(StateDb::open(workspace.join(".wrapix/loom/state.db"))?);
     let runtime = tokio::runtime::Runtime::new()?;
+    let workspace_buf = workspace.to_path_buf();
     let result = runtime.block_on(async move {
         let bd = BdClient::new();
         let mut controller = ProductionCheckController::new(
             bd,
             label.clone(),
             loom_bin,
-            workspace.to_path_buf(),
+            workspace_buf,
             state,
+            manifest,
+            phase_default,
+            move |spawn_cfg: SpawnConfig| async move { dispatch(kind, &spawn_cfg).await },
         );
         run_check_loop(&mut controller, IterationCap::default()).await
     })?;
