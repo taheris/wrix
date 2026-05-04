@@ -1,0 +1,13 @@
+---
+source: crates/loom/tests/cli_help.rs
+expression: "loom_help(&[\"init\"])"
+---
+Initialize the workspace (create `.wrapix/loom/` config + state DB)
+
+Usage: loom init [OPTIONS]
+
+Options:
+      --rebuild           Drop and repopulate the state DB from `specs/*.md` and active beads
+      --workspace <PATH>  Workspace root. Defaults to the current working directory
+      --agent <BACKEND>   Override the agent backend for this invocation. Wins over per-phase `[agent.<phase>] backend = ...` and `[agent] default = ...` in `.wrapix/loom/config.toml`. Accepts `claude` or `pi`; any other value triggers a clap parse error [possible values: claude, pi]
+  -h, --help              Print help

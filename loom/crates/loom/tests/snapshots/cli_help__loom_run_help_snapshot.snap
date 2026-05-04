@@ -1,0 +1,16 @@
+---
+source: crates/loom/tests/cli_help.rs
+expression: "loom_help(&[\"run\"])"
+---
+Per-bead execution loop. Continuous by default; `--once` exits after one bead
+
+Usage: loom run [OPTIONS]
+
+Options:
+      --once                 Process a single bead then exit (no auto-handoff to `loom check`)
+      --workspace <PATH>     Workspace root. Defaults to the current working directory
+      --agent <BACKEND>      Override the agent backend for this invocation. Wins over per-phase `[agent.<phase>] backend = ...` and `[agent] default = ...` in `.wrapix/loom/config.toml`. Accepts `claude` or `pi`; any other value triggers a clap parse error [possible values: claude, pi]
+  -p, --parallel <PARALLEL>  Concurrent dispatch slots (`-p N` / `--parallel N`). Default 1 [default: 1]
+      --profile <PROFILE>    Override the per-bead `profile:X` label resolution
+  -s, --spec <LABEL>         Spec label override (defaults to `current_spec`)
+  -h, --help                 Print help

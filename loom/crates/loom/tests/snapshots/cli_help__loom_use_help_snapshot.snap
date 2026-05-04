@@ -1,0 +1,15 @@
+---
+source: crates/loom/tests/cli_help.rs
+expression: "loom_help(&[\"use\"])"
+---
+Set the active spec
+
+Usage: loom use [OPTIONS] <LABEL>
+
+Arguments:
+  <LABEL>  Spec label (matches `<workspace>/specs/<label>.md`)
+
+Options:
+      --workspace <PATH>  Workspace root. Defaults to the current working directory
+      --agent <BACKEND>   Override the agent backend for this invocation. Wins over per-phase `[agent.<phase>] backend = ...` and `[agent] default = ...` in `.wrapix/loom/config.toml`. Accepts `claude` or `pi`; any other value triggers a clap parse error [possible values: claude, pi]
+  -h, --help              Print help

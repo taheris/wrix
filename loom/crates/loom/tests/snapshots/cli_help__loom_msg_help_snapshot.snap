@@ -1,0 +1,17 @@
+---
+source: crates/loom/tests/cli_help.rs
+expression: "loom_help(&[\"msg\"])"
+---
+Resolve outstanding clarify beads
+
+Usage: loom msg [OPTIONS]
+
+Options:
+  -s, --spec <LABEL>      Filter to a specific spec label
+      --workspace <PATH>  Workspace root. Defaults to the current working directory
+      --agent <BACKEND>   Override the agent backend for this invocation. Wins over per-phase `[agent.<phase>] backend = ...` and `[agent] default = ...` in `.wrapix/loom/config.toml`. Accepts `claude` or `pi`; any other value triggers a clap parse error [possible values: claude, pi]
+  -n <N>                  Select clarify by 1-based index in the printed list
+  -i <ID>                 Select clarify by bead id
+  -a <CHOICE>             Fast-reply: integer chooses option N; anything else stored verbatim
+  -d                      Dismiss the clarify (write canonical note + remove the label)
+  -h, --help              Print help

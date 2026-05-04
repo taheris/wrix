@@ -1,0 +1,13 @@
+---
+source: crates/loom/tests/cli_help.rs
+expression: "loom_help(&[\"spec\"])"
+---
+Inspect spec annotations and tooling dependencies
+
+Usage: loom spec [OPTIONS]
+
+Options:
+      --deps              Print the unique nixpkgs names referenced by verify/judge tests
+      --workspace <PATH>  Workspace root. Defaults to the current working directory
+      --agent <BACKEND>   Override the agent backend for this invocation. Wins over per-phase `[agent.<phase>] backend = ...` and `[agent] default = ...` in `.wrapix/loom/config.toml`. Accepts `claude` or `pi`; any other value triggers a clap parse error [possible values: claude, pi]
+  -h, --help              Print help

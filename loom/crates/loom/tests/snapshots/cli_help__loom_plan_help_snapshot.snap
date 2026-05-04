@@ -1,0 +1,14 @@
+---
+source: crates/loom/tests/cli_help.rs
+expression: "loom_help(&[\"plan\"])"
+---
+Interactive spec interview (`-n <label>` new, `-u <label>` update)
+
+Usage: loom plan [OPTIONS]
+
+Options:
+  -n <LABEL>              New-spec interview for `<label>`
+      --workspace <PATH>  Workspace root. Defaults to the current working directory
+      --agent <BACKEND>   Override the agent backend for this invocation. Wins over per-phase `[agent.<phase>] backend = ...` and `[agent] default = ...` in `.wrapix/loom/config.toml`. Accepts `claude` or `pi`; any other value triggers a clap parse error [possible values: claude, pi]
+  -u <LABEL>              Update-spec interview for `<label>`
+  -h, --help              Print help

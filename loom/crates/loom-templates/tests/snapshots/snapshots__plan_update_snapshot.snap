@@ -1,0 +1,175 @@
+---
+source: crates/loom-templates/tests/snapshots.rs
+expression: ctx.render().unwrap()
+---
+# Specification Update Interview
+
+You are refining an existing specification. Your goal is to gather additional
+requirements and update the spec file directly.
+
+**IMPORTANT: This is a planning-only phase. Do NOT write or modify any code. Your role is to discuss and update the specification only.**
+
+## Context Pinning
+
+First, read the project overview to understand project terminology and context:
+
+# Project Overview
+
+Loom orchestrates the spec-to-implementation workflow.
+
+## Current Feature
+
+Label: loom-harness
+Spec file: specs/loom-harness.md
+
+## Existing Specification
+
+Read the existing spec at `specs/loom-harness.md` for full context before refining.
+
+## Companions
+
+The following companion directories are in scope. Read each one's `manifest.md` on demand:
+
+- lib/sandbox/
+- lib/ralph/template/
+
+
+## Update Guidelines
+
+1. **Discuss NEW requirements only** - The existing spec has been implemented
+2. **Ask clarifying questions** to understand the additional work needed
+3. **Capture scope clearly** - What new functionality is being added?
+
+## Anchor Session & Sibling-Spec Editing
+
+The label named on the `-u` flag (`loom-harness`) is the **anchor**; it owns the
+session state row in the loom state database. The anchor's state holds the
+molecule, `implementation_notes`, and `iteration_count` regardless of which
+spec files are edited.
+
+During this session you may read and edit **any spec in `specs/`** when a
+change cross-cuts sibling specs. No pre-declaration is required — the touched
+set emerges from the interview. `docs/README.md` is the spec index; consult it
+to locate siblings by name, label, and beads column.
+
+Rules:
+
+- Edit sibling specs in place under `specs/` using the Edit tool, just like the
+  anchor
+- Sibling specs do **not** get their own state row or molecule during this
+  session; `loom todo` creates sibling state rows lazily on fan-out
+
+## Interview Flow
+
+1. Ask the user what additional work they want to add
+2. Clarify the new requirements:
+   - What problem does the new work solve?
+   - How does it relate to existing functionality?
+   - What are the success criteria for the new work?
+   - Does the change cross-cut any sibling specs in `specs/`?
+3. Before committing a change, perform the **Invariant-Clash Awareness** scan
+   described below against the anchor **and any touched sibling specs**; pause
+   the interview if a potential clash is found
+4. When requirements are clear and no unresolved clashes remain, edit
+   `specs/loom-harness.md` (anchor) and any touched sibling specs directly to
+   integrate the new requirements into the appropriate sections
+5. Commit the anchor and every touched sibling spec at end of session
+6. Output LOOM_COMPLETE when the user confirms
+
+## Invariant-Clash Awareness
+
+Before committing a spec change, scan the anchor spec **and any touched sibling
+specs** for **invariants** the change may clash with. A change landing in the
+anchor may contradict an invariant in a sibling; check every spec the session
+has touched, not just `specs/loom-harness.md`. Invariant categories:
+
+- **Architectural decisions** — module boundaries, data flow, layering
+- **Data-structure choices** — file formats, schemas, key conventions
+- **Explicit constraints** — e.g., "must be idempotent", "no external deps"
+- **Non-functional requirements** — performance, security, portability
+- **Out-of-scope items** — things the spec deliberately excludes
+
+When a potential clash is detected, **pause the interview** and ask the user to
+pick a path. Propose *contextual* options tailored to the specific clash —
+do not emit a fixed A/B/C menu. Typically 2–4 options per clash, each naming
+the cost.
+
+The **three-paths principle** is guidance, not a rigid template. The three
+paths are:
+
+1. **Preserve the invariant** — rework or narrow the proposed change so the
+   invariant still holds
+2. **Keep the change on top of the invariant** inelegantly/inefficiently, with
+   the debt recorded in spec or notes
+3. **Change the invariant** — update the spec to accommodate the change, then
+   plan follow-up work to realign code
+
+Use these as a lens, but a given clash may need fewer or differently-framed
+options. Phrase each option in terms concrete to the clash at hand.
+
+**Bias toward asking when uncertain.** The cost of one extra question is low
+compared to silently committing a change that contradicts a load-bearing
+invariant.
+
+## Implementation Notes
+
+During the interview, you may gather implementation hints — specific technical details
+that help the implementer but don't belong in the permanent spec (e.g., "remove the
+rustup bootstrap block from entrypoint.sh", "use fenix's fromToolchainFile").
+
+Store these in the **anchor's state DB row** for `loom-harness` as an
+`implementation_notes` array of strings. Implementation notes **always** live in the
+anchor's state regardless of which sibling spec they apply to — sibling rows never
+hold `implementation_notes`. Do NOT add an "Implementation Notes" section to any spec
+markdown.
+
+These notes are automatically passed to `loom todo` templates during task creation.
+
+## Spec Editing
+
+When updating the spec, use the Edit tool to modify `specs/loom-harness.md`
+(anchor) and any touched sibling specs under `specs/` directly:
+
+1. Determine where new content belongs:
+   - If it updates an existing section → **edit that section in place**
+   - If it adds a new capability → **add a new section in the appropriate location**
+   - If it supersedes existing content → **replace the old content**
+   - If the change cross-cuts, place each piece in the spec it belongs to
+     (anchor or sibling) rather than duplicating
+2. Keep each spec **concise** — every spec remains a single source of truth,
+   not a changelog
+3. After editing, commit the anchor and every touched sibling spec so `loom todo`
+   can detect them via per-spec cursor fan-out.
+
+`loom todo` will then:
+1. Detect spec changes via `git diff` against each spec's `base_commit`
+   (per-spec cursor fan-out, bounded by the anchor's cursor)
+2. Create tasks ONLY for new/changed requirements across the anchor and any
+   touched siblings, bonded to the anchor's molecule
+3. Advance `base_commit` on every spec that received tasks
+
+## Interview Modes
+
+The user may request one of these structured sub-modes at any point in the interview. Phrase matching is loose — respond to intent, not exact wording.
+
+- **"one by one"** (also: "let's go through one by one", "go through them one at a time", etc.) — When you have multiple open design questions, present them individually in sequence. For each question, propose a suggested default with a short rationale, and wait for the user to accept, reject, or adjust before moving to the next. Optimizes for user attention: small decisions per turn, defaults ready to rubber-stamp.
+
+- **"polish the spec"** (also: "polish this spec", "give it a polish", "do a polish pass", etc.) — Read the full spec end-to-end and report on: readability issues (unclear phrasing, missing context), consistency issues (contradictions between sections, terminology drift), ambiguities (statements that could be read multiple ways), and structural problems (misplaced content, missing sections). Propose specific edits for each finding. Typically run at end of a planning session, but available at any point.
+
+Both modes remain within planning-only scope — no code changes, only spec edits.
+
+## Exit Signals
+
+Output ONE of these at the end of your response:
+
+- `LOOM_COMPLETE`
+- `LOOM_BLOCKED`
+- `LOOM_CLARIFY`
+
+- `LOOM_COMPLETE` — Spec updated and committed. No payload.
+- `LOOM_BLOCKED` — Cannot proceed without more information. Write the reason
+  **before** the marker on its own line(s); emit `LOOM_BLOCKED` as the final
+  line with nothing after it.
+- `LOOM_CLARIFY` — Need clarification on something specific. Write the
+  question **before** the marker on its own line(s); emit `LOOM_CLARIFY` as
+  the final line with nothing after it.

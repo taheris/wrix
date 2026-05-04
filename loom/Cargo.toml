@@ -28,6 +28,7 @@ gix = { version = "0.83", default-features = false, features = [
     "parallel",
     "sha1",
 ] }
+insta = "1"
 nix = { version = "0.29", default-features = false, features = ["signal"] }
 proptest = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }

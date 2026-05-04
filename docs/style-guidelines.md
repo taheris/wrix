@@ -45,3 +45,7 @@ the Mayor via `bd human` instead.
 - **TST-1** — Tests must execute the code under test, not grep for strings in source
 - **TST-2** — Mock external dependencies (podman, network), not internal logic
 - **TST-3** — Each test function tests one behavior and has a descriptive name
+- **TST-4** — Any PR that updates an `insta` snapshot under `*/tests/snapshots/`
+  must include a `snapshot updated because: <reason>` line in the PR
+  description. Snapshots cover contract surfaces (Askama templates, CLI
+  `--help`); silent diffs there are accidental drift, not a deliberate change.

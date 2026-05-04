@@ -2405,6 +2405,78 @@ test_proptest_case_count() {
 }
 
 #-----------------------------------------------------------------------------
+# Snapshot tests — `insta` snapshots for contract surfaces.
+#
+# Templates and CLI help are user-visible contracts where layout drift slips
+# silently past substring assertions. Snapshots fail loudly on any text
+# change; PR reviewers see the rendered diff. The run-time renderer is a
+# flexibility surface and is excluded by `renderer_no_insta_dependency`.
+#-----------------------------------------------------------------------------
+
+# Every typed Askama context has at least one `.snap` under
+# loom/crates/loom-templates/tests/snapshots/. Names are tied to the test
+# function via insta's default `<test-binary>__<test-name>.snap` shape.
+test_template_snapshots_exist() {
+    local snap_dir="$LOOM_DIR/crates/loom-templates/tests/snapshots"
+    [ -d "$snap_dir" ] || {
+        echo "missing snapshot dir: $snap_dir" >&2
+        return 1
+    }
+    local missing=0
+    # Each typed context gets one snapshot exercising representative inputs.
+    for ctx in plan_new plan_update todo_new todo_update run check msg; do
+        local snap="$snap_dir/snapshots__${ctx}_snapshot.snap"
+        if [ ! -f "$snap" ]; then
+            echo "missing snapshot for ${ctx}: $snap" >&2
+            missing=$((missing + 1))
+        fi
+    done
+    [ "$missing" -eq 0 ] || return 1
+    cargo_run test -p loom-templates --test snapshots --quiet
+}
+
+# Every `loom <subcommand> --help` surface has an insta snapshot. The list
+# below mirrors the v1 command surface in `crates/loom/src/main.rs::Command`.
+test_cli_help_snapshots_exist() {
+    local snap_dir="$LOOM_DIR/crates/loom/tests/snapshots"
+    [ -d "$snap_dir" ] || {
+        echo "missing snapshot dir: $snap_dir" >&2
+        return 1
+    }
+    local missing=0
+    local commands=(
+        loom_help
+        loom_init_help
+        loom_status_help
+        loom_use_help
+        loom_logs_help
+        loom_spec_help
+        loom_plan_help
+        loom_run_help
+        loom_check_help
+        loom_msg_help
+        loom_todo_help
+    )
+    for cmd in "${commands[@]}"; do
+        local snap="$snap_dir/cli_help__${cmd}_snapshot.snap"
+        if [ ! -f "$snap" ]; then
+            echo "missing CLI help snapshot: $snap" >&2
+            missing=$((missing + 1))
+        fi
+    done
+    [ "$missing" -eq 0 ] || return 1
+    cargo_run test -p loom --test cli_help --quiet
+}
+
+# Run-time renderer must NOT use `insta`. Per spec §Snapshot Testing, the
+# renderer is a flexibility surface — substring + structural assertions keep
+# layout decisions free to evolve. The Rust check lives at
+# `loom/crates/loom/tests/style.rs::renderer_no_insta_dependency`.
+test_renderer_no_insta_dependency() {
+    cargo_run test -p loom --test style --quiet -- renderer_no_insta_dependency
+}
+
+#-----------------------------------------------------------------------------
 # Dispatch
 #-----------------------------------------------------------------------------
 if [ $# -eq 0 ]; then
