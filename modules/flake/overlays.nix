@@ -6,7 +6,13 @@
     let
       inherit (inputs) nixpkgs;
 
-      linuxSystem = if system == "aarch64-darwin" then "aarch64-linux" else system;
+      linuxSystem =
+        if system == "aarch64-darwin" then
+          "aarch64-linux"
+        else if system == "x86_64-darwin" then
+          "x86_64-linux"
+        else
+          system;
 
       wrapixBeadsPkgs =
         hostPkgs_: linuxPkgs_:

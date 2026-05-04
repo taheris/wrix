@@ -5,6 +5,7 @@
   linuxPkgs,
   treefmt,
   src,
+  fenix ? null,
 }:
 
 let
@@ -75,6 +76,10 @@ let
   # Gas City tests (layered: eval, provider, lifecycle)
   cityTests = import ./city/unit.nix { inherit pkgs system treefmt; };
 
+  # Loom unit + integration tests (cargo nextest run --workspace).
+  # Per specs/loom-tests.md NFR #7, runs on all four supported systems.
+  loomTests = import ./loom { inherit pkgs fenix; };
+
   # Gas City integration test (shell-based, requires podman at runtime)
   cityIntegration = import ./city/integration.nix {
     inherit
@@ -106,6 +111,7 @@ let
     // darwinMountTests
     // darwinNetworkTests
     // darwinUidTests
+    // loomTests
     // ralphTemplatesCheck
     // ralphTests
     // readmeTest
@@ -215,6 +221,7 @@ in
     darwinMountTests
     darwinNetworkTests
     darwinUidTests
+    loomTests
     ralphContainerIntegration
     ralphTemplatesCheck
     ralphTests

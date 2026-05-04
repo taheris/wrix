@@ -2085,6 +2085,110 @@ test_protocol_versions_pinned() {
 }
 
 #-----------------------------------------------------------------------------
+# test_flake_check_includes_loom — `nix flake check` runs the loom-tests
+# derivation. Asserts `checks.<current-system>.loom-tests` evaluates to a
+# store path produced by the loom-tests derivation. This is the gate that
+# binds the unit + integration tier to CI.
+#-----------------------------------------------------------------------------
+test_flake_check_includes_loom() {
+    local arch kernel nix_system store
+    arch=$(uname -m)
+    case "$(uname -s)" in
+        Linux)  kernel="linux" ;;
+        Darwin) kernel="darwin" ;;
+        *)
+            echo "unsupported kernel: $(uname -s)" >&2
+            return 1
+            ;;
+    esac
+    case "$arch" in
+        x86_64)        nix_system="x86_64-$kernel" ;;
+        aarch64|arm64) nix_system="aarch64-$kernel" ;;
+        *)
+            echo "unsupported arch: $arch" >&2
+            return 1
+            ;;
+    esac
+
+    store=$(nix eval --raw "$REPO_ROOT#checks.$nix_system.loom-tests.outPath") \
+        || { echo "checks.$nix_system.loom-tests does not evaluate" >&2; return 1; }
+
+    case "$store" in
+        /nix/store/*-loom-tests-*) ;;
+        *)
+            echo "unexpected store path: $store" >&2
+            return 1
+            ;;
+    esac
+}
+
+#-----------------------------------------------------------------------------
+# test_flake_declares_loom_for_all_systems — per spec NFR #7 the unit +
+# integration tier is cross-platform. Asserts checks.<system>.loom-tests
+# evaluates for all four supported systems.
+#-----------------------------------------------------------------------------
+test_flake_declares_loom_for_all_systems() {
+    local sys missing=0 errlog
+    errlog=$(mktemp)
+    trap 'rm -f "$errlog"' RETURN
+    for sys in x86_64-linux aarch64-linux x86_64-darwin aarch64-darwin; do
+        if ! nix eval --raw "$REPO_ROOT#checks.$sys.loom-tests.outPath" \
+                >/dev/null 2>"$errlog"; then
+            echo "checks.$sys.loom-tests not declared:" >&2
+            sed 's/^/  /' "$errlog" >&2
+            missing=$((missing + 1))
+        fi
+    done
+    [ "$missing" -eq 0 ]
+}
+
+#-----------------------------------------------------------------------------
+# test_cargo_nextest_timing — soft <5s warm-cache target for
+# `cargo nextest run --workspace` per spec NFR #2. Guides PR review;
+# returns 0 with a WARN on stderr when exceeded (not a hard CI fail).
+# Skips when cargo or cargo-nextest is unavailable.
+#-----------------------------------------------------------------------------
+test_cargo_nextest_timing() {
+    if ! command -v cargo >/dev/null; then
+        echo "cargo not on PATH; skipping" >&2
+        return 77
+    fi
+    if ! command -v cargo-nextest >/dev/null; then
+        echo "cargo-nextest not on PATH; skipping" >&2
+        return 77
+    fi
+
+    local log
+    log=$(mktemp)
+    trap 'rm -f "$log"' RETURN
+
+    # Warm the cache so we measure run-time, not compile-time. Capture
+    # output so failures surface their actual cause rather than getting
+    # silenced.
+    if ! ( cd "$LOOM_DIR" && cargo nextest run --workspace --no-run ) >"$log" 2>&1; then
+        echo "warm-up build failed:" >&2
+        sed 's/^/  /' "$log" >&2
+        return 1
+    fi
+
+    local start_ns end_ns elapsed_ms
+    start_ns=$(date +%s%N)
+    if ! ( cd "$LOOM_DIR" && cargo nextest run --workspace ) >"$log" 2>&1; then
+        echo "cargo nextest run --workspace failed:" >&2
+        sed 's/^/  /' "$log" >&2
+        return 1
+    fi
+    end_ns=$(date +%s%N)
+    elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
+
+    echo "cargo nextest run --workspace: ${elapsed_ms}ms"
+    if [ "$elapsed_ms" -gt 5000 ]; then
+        echo "WARN: exceeds soft 5s target (${elapsed_ms}ms)" >&2
+    fi
+    return 0
+}
+
+#-----------------------------------------------------------------------------
 # Dispatch
 #-----------------------------------------------------------------------------
 if [ $# -eq 0 ]; then

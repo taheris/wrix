@@ -1,4 +1,4 @@
-{ self, ... }:
+{ self, inputs, ... }:
 
 {
   perSystem =
@@ -14,6 +14,7 @@
         inherit pkgs system linuxPkgs;
         treefmt = treefmtWrapper;
         src = self;
+        inherit (inputs) fenix;
       };
 
     in
