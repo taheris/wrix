@@ -188,12 +188,21 @@ in
           fi
 
           if [ -d "$src" ]; then
-            # Stage directory with cp -rL to dereference symlinks (e.g., nix store)
-            staging="$STAGING_ROOT/dir$dir_idx"
-            mkdir -p "$staging"
-            cp -rL "$src/." "$staging/"
-            dir_idx=$((dir_idx + 1))
-            VOLUME_ARGS="$VOLUME_ARGS -v $staging:$dest:$mode"
+            if [ "$mode" = "rw" ]; then
+              # rw caches (sccache, cargo registry/git, uv) must persist
+              # across container exits — bind-mount directly so writes land
+              # on the host. STAGING_ROOT is rm -rf'd on exit (lib/util/shell.nix),
+              # which would discard all cache writes.
+              VOLUME_ARGS="$VOLUME_ARGS -v $src:$dest:$mode"
+            else
+              # ro mounts may dereference into the nix store; stage with
+              # cp -rL so the container sees content, not dangling symlinks.
+              staging="$STAGING_ROOT/dir$dir_idx"
+              mkdir -p "$staging"
+              cp -rL "$src/." "$staging/"
+              dir_idx=$((dir_idx + 1))
+              VOLUME_ARGS="$VOLUME_ARGS -v $staging:$dest:$mode"
+            fi
           else
             # Files can be mounted directly
             VOLUME_ARGS="$VOLUME_ARGS -v $src:$dest:$mode"
