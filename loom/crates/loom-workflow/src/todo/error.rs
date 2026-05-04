@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use displaydoc::Display;
 use loom_core::agent::ProtocolError;
+use loom_core::profile_manifest::ProfileError;
+use loom_core::state::StateError;
 use thiserror::Error;
 
 /// Errors raised by the `loom todo` driver.
@@ -31,4 +33,10 @@ pub enum TodoError {
 
     /// agent backend protocol failure
     Protocol(#[from] ProtocolError),
+
+    /// state-db read/write failure
+    State(#[from] StateError),
+
+    /// profile-image manifest dispatch failed
+    Profile(#[from] ProfileError),
 }

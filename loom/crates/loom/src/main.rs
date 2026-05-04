@@ -694,26 +694,23 @@ fn run_todo(
     _since: Option<String>,
     agent_override: Option<AgentKind>,
 ) -> anyhow::Result<()> {
-    let _manifest = ProfileImageManifest::from_env()?;
+    let manifest = Arc::new(ProfileImageManifest::from_env()?);
     let label = resolve_spec_label(workspace, spec)?;
     let lock_mgr = LockManager::new(workspace)?;
     let _guard = lock_mgr.acquire_spec(&label)?;
 
     let config = LoomConfig::load(workspace.join(".wrapix/loom/config.toml"))?;
     let selection = resolved_agent_for(&config, agent_override, Phase::Todo)?;
+    let phase_default = selection.profile.clone();
+    let kind = selection.kind;
 
+    let state = Arc::new(StateDb::open(workspace.join(".wrapix/loom/state.db"))?);
     let runtime = tokio::runtime::Runtime::new()?;
     let workspace_buf = workspace.to_path_buf();
-    let label_for_async = label.clone();
-    let kind = selection.kind;
     let summary = runtime.block_on(async move {
-        let mut controller = ProductionTodoController::new(
-            label_for_async,
-            workspace_buf,
-            "wrapix-base:latest".to_string(),
-            PathBuf::from("/nix/store/placeholder-wrapix-base.tar"),
-        );
-        run_todo_workflow(&mut controller, |spawn_cfg| async move {
+        let mut controller =
+            ProductionTodoController::new(label, workspace_buf, state, manifest, phase_default);
+        run_todo_workflow(&mut controller, |spawn_cfg: SpawnConfig| async move {
             dispatch(kind, &spawn_cfg).await
         })
         .await

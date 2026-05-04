@@ -113,10 +113,19 @@ fn mock_pi_path() -> PathBuf {
 /// the assertions stay focused on what they verify.
 fn drive_loom_todo_pi(workspace: &Path, shim: &Path, loom_bin: &str) -> std::process::Output {
     // Spawn-bound subcommands (`todo` is one) read LOOM_PROFILES_MANIFEST at
-    // startup (wx-3hhwq.32). An empty `{}` manifest satisfies the parse step
-    // — these tests don't yet exercise per-bead profile resolution.
+    // startup (wx-3hhwq.32). The production todo controller now resolves the
+    // `base` profile through this manifest (wx-wlwv3), so it must contain a
+    // real entry — an empty `{}` would surface as ProfileError::UnknownProfile.
     let manifest_path = workspace.join("profile-images.json");
-    std::fs::write(&manifest_path, "{}").expect("write manifest stub");
+    let image_source = workspace.join("base.tar");
+    std::fs::write(&image_source, "").expect("write stub image source");
+    let manifest_body = format!(
+        r#"{{
+          "base": {{ "ref": "localhost/wrapix-base:test", "source": {source:?} }}
+        }}"#,
+        source = image_source.display().to_string(),
+    );
+    std::fs::write(&manifest_path, manifest_body).expect("write manifest stub");
     Command::new(loom_bin)
         .arg("--workspace")
         .arg(workspace)
@@ -190,15 +199,13 @@ fn wrapix_spawn_invocation_records_correct_argv() {
     );
 
     // The spawn-config JSON must round-trip through SpawnConfig and carry
-    // the production controller's image_ref + image_source. ProductionTodoController
-    // hard-codes `wrapix-base:latest` until per-bead profile resolution lands;
-    // this assertion will need updating then, but pinning the current contract
-    // catches accidental drops of either field.
+    // the resolved image_ref + image_source from the manifest written by
+    // `drive_loom_todo_pi` (`base` profile maps to `localhost/wrapix-base:test`).
     let bytes = std::fs::read(&spawn_copy).expect("shim should copy spawn-config aside");
     let cfg: loom_core::agent::SpawnConfig =
         serde_json::from_slice(&bytes).expect("spawn-config must deserialize");
     assert_eq!(
-        cfg.image_ref, "wrapix-base:latest",
+        cfg.image_ref, "localhost/wrapix-base:test",
         "spawn-config image_ref must match the resolved profile image",
     );
     assert!(
