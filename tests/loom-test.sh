@@ -2342,6 +2342,69 @@ test_template_rendering() {
 }
 
 #-----------------------------------------------------------------------------
+# Property-based tests — `proptest` invariants under
+# `loom/crates/{loom-core,loom-agent}/tests/properties.rs`. Each shell
+# function dispatches into the matching cargo integration test. CI runs
+# at `PROPTEST_CASES=32` (set in tests/loom/default.nix); local exhaustive
+# runs override via env var (`PROPTEST_CASES=2048+`).
+#-----------------------------------------------------------------------------
+
+# JSONL line parser invariants: never panics on arbitrary bytes, never emits
+# an `AgentEvent` from a malformed line, and `MAX_LINE_BYTES` matches the
+# spec's 10 MB cap. Exercises both PiParser and ClaudeParser since the
+# JSONL framing contract is shared between backends.
+test_jsonl_parser_invariants() {
+    cargo_run test -p loom-agent --test properties --quiet -- \
+        max_line_bytes_is_ten_megabytes \
+        jsonl_arbitrary_bytes_never_panic \
+        jsonl_malformed_line_emits_no_events
+}
+
+# Pi protocol parser invariants: round-trip identity for known shapes
+# (prompt/steer encoders), unknown message types surface as
+# `ProtocolError::UnknownMessageType`, never panics on arbitrary bytes.
+test_pi_parser_invariants() {
+    cargo_run test -p loom-agent --test properties --quiet -- \
+        pi_encode_prompt_round_trips \
+        pi_encode_steer_round_trips \
+        pi_unknown_message_type_surfaces_typed_error \
+        pi_arbitrary_bytes_never_panic
+}
+
+# Claude stream-json parser invariants: round-trip identity for known
+# shapes (System, Result, encoded user message), unknown shapes hit the
+# `Unknown` variant via `#[serde(other)]`, never panics on arbitrary bytes.
+test_claude_parser_invariants() {
+    cargo_run test -p loom-agent --test properties --quiet -- \
+        claude_system_round_trips \
+        claude_result_round_trips \
+        claude_unknown_type_falls_through_serde_other \
+        claude_encode_prompt_round_trips \
+        claude_arbitrary_bytes_never_panic
+}
+
+# State DB rebuild invariants: arbitrary spec content never corrupts the
+# schema, `recreate` always recovers from a corrupted DB file, and
+# round-trips of known molecule shapes are stable.
+test_state_db_rebuild_invariants() {
+    cargo_run test -p loom-core --test properties --quiet -- \
+        rebuild_never_corrupts_schema \
+        recreate_recovers_from_arbitrary_bytes \
+        rebuild_round_trips_known_shapes
+}
+
+# `PROPTEST_CASES=32` is configured for CI in tests/loom/default.nix and
+# is overridable via env var for local exhaustive runs (NFR §Property-
+# Based Testing). The tests/loom/default.nix derivation is the single
+# discoverable point; assert it sets the variable.
+test_proptest_case_count() {
+    local file="$REPO_ROOT/tests/loom/default.nix"
+    [ -f "$file" ] || { echo "missing $file" >&2; return 1; }
+    grep -qE 'PROPTEST_CASES *= *"32"' "$file" \
+        || { echo "PROPTEST_CASES=32 not set in $file" >&2; return 1; }
+}
+
+#-----------------------------------------------------------------------------
 # Dispatch
 #-----------------------------------------------------------------------------
 if [ $# -eq 0 ]; then
