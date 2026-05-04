@@ -238,6 +238,34 @@ fn state_set_and_reset_iteration_round_trip() -> Result<()> {
 }
 
 #[test]
+fn todo_cursor_round_trips_through_meta_table() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let db = StateDb::open(dir.path().join("state.db"))?;
+    let alpha = SpecLabel::new("alpha");
+    let beta = SpecLabel::new("beta");
+
+    assert_eq!(db.todo_cursor(&alpha)?, None);
+    db.set_todo_cursor(&alpha, "deadbeef")?;
+    assert_eq!(db.todo_cursor(&alpha)?, Some("deadbeef".to_string()));
+
+    db.set_todo_cursor(&alpha, "cafebabe")?;
+    assert_eq!(
+        db.todo_cursor(&alpha)?,
+        Some("cafebabe".to_string()),
+        "second set must overwrite — cursor moves forward as todo runs",
+    );
+
+    db.set_todo_cursor(&beta, "abc123")?;
+    assert_eq!(db.todo_cursor(&alpha)?, Some("cafebabe".to_string()));
+    assert_eq!(
+        db.todo_cursor(&beta)?,
+        Some("abc123".to_string()),
+        "cursors must be per-spec — namespacing by label keeps them disjoint",
+    );
+    Ok(())
+}
+
+#[test]
 fn state_corruption_recovery() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let db_path = dir.path().join("state.db");

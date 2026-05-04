@@ -1001,6 +1001,10 @@ During the transition period:
   [verify](tests/loom-test.sh::test_state_increment_iteration)
 - [ ] Corrupted DB file → `loom init --rebuild` recovers
   [verify](tests/loom-test.sh::test_state_corruption_recovery)
+- [ ] Per-spec `loom todo` cursor round-trips through the `meta` table —
+      `set_todo_cursor` overwrites prior values (cursor advances forward)
+      and per-label namespacing keeps distinct specs disjoint
+  [verify](tests/loom-test.sh::test_state_todo_cursor)
 
 ### Beads CLI wrapper
 

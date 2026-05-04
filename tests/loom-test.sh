@@ -979,6 +979,10 @@ todo_cargo_test() {
     cargo_run test -p loom-workflow --lib "$1" -- --exact --nocapture --quiet
 }
 
+todo_production_cargo_test() {
+    cargo_run test -p loom-workflow --test todo_production "$1" -- --exact --nocapture --quiet
+}
+
 #-----------------------------------------------------------------------------
 # test_todo_tier_detection — `compute_spec_diff` correctly classifies inputs
 # into the four tiers from `lib/ralph/cmd/util.sh::compute_spec_diff`:
@@ -1006,9 +1010,11 @@ test_todo_tier_detection() {
     todo_cargo_test todo::tier::tests::since_override_replaces_anchor_base_for_anchor_only
     todo_cargo_test todo::tier::tests::since_override_errors_when_commit_missing
     todo_cargo_test todo::tier::tests::since_override_errors_when_commit_orphaned
-    todo_cargo_test todo::production::tests::build_spawn_config_resolves_manifest_image_and_renders_new_template
-    todo_cargo_test todo::production::tests::build_spawn_config_uses_update_template_when_molecule_exists
-    todo_cargo_test todo::production::tests::build_spawn_config_surfaces_unknown_profile_as_profile_error
+    todo_production_cargo_test build_spawn_config_resolves_manifest_image_and_renders_new_template
+    todo_production_cargo_test build_spawn_config_uses_update_template_when_molecule_exists
+    todo_production_cargo_test build_spawn_config_surfaces_unknown_profile_as_profile_error
+    todo_production_cargo_test build_spawn_config_tier_1_renders_diff_from_base_commit
+    todo_production_cargo_test record_outcome_advances_cursor_only_on_clean_exit
 }
 
 #-----------------------------------------------------------------------------
@@ -1074,6 +1080,16 @@ test_state_increment_iteration() {
 #-----------------------------------------------------------------------------
 test_state_corruption_recovery() {
     state_db_cargo_test state_corruption_recovery
+}
+
+#-----------------------------------------------------------------------------
+# test_state_todo_cursor — `set_todo_cursor` / `todo_cursor` round-trip a
+# per-spec commit SHA through the `meta` table; subsequent writes overwrite
+# (cursor moves forward as `loom todo` runs); per-spec namespacing keeps
+# distinct labels disjoint.
+#-----------------------------------------------------------------------------
+test_state_todo_cursor() {
+    state_db_cargo_test todo_cursor_round_trips_through_meta_table
 }
 
 #-----------------------------------------------------------------------------

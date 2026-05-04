@@ -124,6 +124,35 @@ impl StateDb {
         .transpose()
     }
 
+    /// Read the per-spec todo cursor — the commit at which `loom todo` last
+    /// ran successfully for `label`. Used by tier-1 detection as the anchor
+    /// base when the molecule has no `base_commit` of its own. Returns `None`
+    /// if no cursor has been recorded yet.
+    pub fn todo_cursor(&self, label: &SpecLabel) -> Result<Option<String>, StateError> {
+        let conn = self.lock_conn()?;
+        let key = todo_cursor_key(label);
+        let value: Option<String> = conn
+            .query_row("SELECT value FROM meta WHERE key = ?1", params![key], |r| {
+                r.get::<_, String>(0)
+            })
+            .optional()?;
+        Ok(value)
+    }
+
+    /// Persist the per-spec todo cursor to `commit`. Called by `loom todo`'s
+    /// `record_outcome` when the agent exits cleanly so the next tier-1
+    /// detection diffs from a fresh anchor.
+    pub fn set_todo_cursor(&self, label: &SpecLabel, commit: &str) -> Result<(), StateError> {
+        let conn = self.lock_conn()?;
+        let key = todo_cursor_key(label);
+        conn.execute(
+            "INSERT INTO meta(key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, commit],
+        )?;
+        Ok(())
+    }
+
     /// Read the `current_spec` meta row.
     pub fn current_spec(&self) -> Result<Option<SpecLabel>, StateError> {
         let conn = self.lock_conn()?;
@@ -250,6 +279,10 @@ impl StateDb {
     fn lock_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, StateError> {
         self.conn.lock().map_err(|_| StateError::Poisoned)
     }
+}
+
+fn todo_cursor_key(label: &SpecLabel) -> String {
+    format!("todo_cursor:{}", label.as_str())
 }
 
 pub(super) fn drop_and_recreate(conn: &Connection) -> Result<(), StateError> {

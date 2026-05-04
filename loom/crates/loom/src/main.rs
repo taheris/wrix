@@ -16,6 +16,7 @@ use loom_agent::{ClaudeBackend, PiBackend};
 use loom_core::agent::{AgentKind, ProtocolError, SessionOutcome, SpawnConfig};
 use loom_core::bd::{BdClient, ListOpts, UpdateOpts};
 use loom_core::config::{LoomConfig, Phase};
+use loom_core::git::GitClient;
 use loom_core::identifier::{BeadId, ProfileName, SpecLabel};
 use loom_core::lock::LockManager;
 use loom_core::profile_manifest::ProfileImageManifest;
@@ -414,7 +415,6 @@ async fn run_parallel_run(
     cli_profile: Option<ProfileName>,
     phase_default: ProfileName,
 ) -> anyhow::Result<ParallelRunSummary> {
-    use loom_core::git::GitClient;
     use loom_workflow::run::{AgentOutcome, run_parallel_batch};
 
     let bd = BdClient::new();
@@ -690,7 +690,7 @@ fn run_msg_inner(
 fn run_todo(
     workspace: &Path,
     spec: Option<String>,
-    _since: Option<String>,
+    since: Option<String>,
     agent_override: Option<AgentKind>,
 ) -> anyhow::Result<()> {
     let manifest = Arc::new(ProfileImageManifest::from_env()?);
@@ -704,11 +704,19 @@ fn run_todo(
     let kind = selection.kind;
 
     let state = Arc::new(StateDb::open(workspace.join(".wrapix/loom/state.db"))?);
+    let git = Arc::new(GitClient::open(workspace)?);
     let runtime = tokio::runtime::Runtime::new()?;
     let workspace_buf = workspace.to_path_buf();
     let summary = runtime.block_on(async move {
-        let mut controller =
-            ProductionTodoController::new(label, workspace_buf, state, manifest, phase_default);
+        let mut controller = ProductionTodoController::new(
+            label,
+            workspace_buf,
+            state,
+            manifest,
+            phase_default,
+            git,
+            since,
+        );
         run_todo_workflow(&mut controller, |spawn_cfg: SpawnConfig| async move {
             dispatch(kind, &spawn_cfg).await
         })

@@ -129,3 +129,97 @@ async fn merge_branch_conflict_is_reported() -> Result<()> {
     assert_eq!(result, MergeResult::Conflict);
     Ok(())
 }
+
+#[tokio::test]
+async fn rev_exists_and_ancestor_walk_real_repo() -> Result<()> {
+    let repo = init_repo()?;
+    let path = repo.path();
+    let client = GitClient::open(path)?;
+
+    let initial = capture_head(path)?;
+    assert!(client.rev_exists(&initial).await?);
+    assert!(
+        !client
+            .rev_exists("0000000000000000000000000000000000000000")
+            .await?
+    );
+    assert!(client.is_ancestor_of_head(&initial).await?);
+
+    // Detach a commit on a side branch — exists but not an ancestor of main HEAD.
+    git(path, &["checkout", "-q", "-b", "side"])?;
+    std::fs::write(path.join("side.txt"), "side\n")?;
+    git(path, &["add", "side.txt"])?;
+    git(path, &["commit", "-q", "-m", "side"])?;
+    let side_sha = capture_head(path)?;
+    git(path, &["checkout", "-q", "main"])?;
+
+    assert!(client.rev_exists(&side_sha).await?);
+    assert!(!client.is_ancestor_of_head(&side_sha).await?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn changed_spec_files_and_diff_spec_pick_up_changes() -> Result<()> {
+    let repo = init_repo()?;
+    let path = repo.path();
+    std::fs::create_dir_all(path.join("specs"))?;
+    std::fs::write(path.join("specs/alpha.md"), "# alpha\n")?;
+    std::fs::write(path.join("specs/beta.md"), "# beta\n")?;
+    git(path, &["add", "specs"])?;
+    git(path, &["commit", "-q", "-m", "seed specs"])?;
+    let base = capture_head(path)?;
+
+    std::fs::write(path.join("specs/alpha.md"), "# alpha\n\nupdated\n")?;
+    std::fs::write(path.join("README.md"), "ignore me — non-spec change\n")?;
+    git(path, &["commit", "-q", "-am", "update alpha + readme"])?;
+
+    let client = GitClient::open(path)?;
+    let changed = client.changed_spec_files(&base).await?;
+    assert_eq!(
+        changed,
+        vec![std::path::PathBuf::from("specs/alpha.md")],
+        "only specs/ paths must surface — README ignored: got {changed:?}",
+    );
+
+    let alpha_diff = client
+        .diff_spec(&base, std::path::Path::new("specs/alpha.md"))
+        .await?;
+    assert!(
+        alpha_diff.contains("updated"),
+        "diff should contain the new line: {alpha_diff}",
+    );
+    let beta_diff = client
+        .diff_spec(&base, std::path::Path::new("specs/beta.md"))
+        .await?;
+    assert!(
+        beta_diff.is_empty(),
+        "untouched spec must produce empty diff: {beta_diff}",
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn head_commit_sha_round_trips_through_git() -> Result<()> {
+    let repo = init_repo()?;
+    let path = repo.path();
+    let client = GitClient::open(path)?;
+    let sha = client.head_commit_sha().await?;
+    let expected = capture_head(path)?;
+    assert_eq!(sha, expected);
+    assert_eq!(
+        sha.len(),
+        40,
+        "git rev-parse HEAD returns a 40-char SHA: {sha}"
+    );
+    Ok(())
+}
+
+fn capture_head(repo: &Path) -> Result<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["rev-parse", "HEAD"])
+        .output()?;
+    anyhow::ensure!(output.status.success(), "git rev-parse failed");
+    Ok(String::from_utf8(output.stdout)?.trim().to_string())
+}

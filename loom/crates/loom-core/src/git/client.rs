@@ -214,6 +214,99 @@ impl GitClient {
         run_git(&self.workdir, self.clock.as_ref(), ["push"], None).await
     }
 
+    /// `git rev-parse --verify <rev>^{commit}` — true iff `rev` resolves to
+    /// a commit object in this repository.
+    pub async fn rev_exists(&self, rev: &str) -> Result<bool, GitError> {
+        let output = run_git_raw(
+            &self.workdir,
+            self.clock.as_ref(),
+            [
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("{rev}^{{commit}}"),
+            ],
+            None,
+        )
+        .await?;
+        Ok(output.status.success())
+    }
+
+    /// `git merge-base --is-ancestor <rev> HEAD` — true iff `rev` is an
+    /// ancestor of the current `HEAD`.
+    pub async fn is_ancestor_of_head(&self, rev: &str) -> Result<bool, GitError> {
+        let output = run_git_raw(
+            &self.workdir,
+            self.clock.as_ref(),
+            ["merge-base", "--is-ancestor", rev, "HEAD"],
+            None,
+        )
+        .await?;
+        Ok(output.status.success())
+    }
+
+    /// `git diff <base> HEAD --name-only -- specs/` — repo-relative spec
+    /// file paths changed since `base`.
+    pub async fn changed_spec_files(&self, base: &str) -> Result<Vec<PathBuf>, GitError> {
+        let output = run_git_raw(
+            &self.workdir,
+            self.clock.as_ref(),
+            ["diff", "--name-only", base, "HEAD", "--", "specs/"],
+            None,
+        )
+        .await?;
+        if !output.status.success() {
+            return Err(GitError::GitCli {
+                status: output.status.code().unwrap_or(-1),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            });
+        }
+        let stdout = String::from_utf8(output.stdout)?;
+        Ok(stdout
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(PathBuf::from)
+            .collect())
+    }
+
+    /// `git diff <base> HEAD -- <spec_path>` — unified diff of one spec
+    /// file. Empty string when there is no diff.
+    pub async fn diff_spec(&self, base: &str, spec_path: &Path) -> Result<String, GitError> {
+        let path_str = spec_path.to_string_lossy().into_owned();
+        let output = run_git_raw(
+            &self.workdir,
+            self.clock.as_ref(),
+            ["diff", base, "HEAD", "--", &path_str],
+            None,
+        )
+        .await?;
+        if !output.status.success() {
+            return Err(GitError::GitCli {
+                status: output.status.code().unwrap_or(-1),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            });
+        }
+        Ok(String::from_utf8(output.stdout)?)
+    }
+
+    /// `git rev-parse HEAD` — full SHA of the current `HEAD`.
+    pub async fn head_commit_sha(&self) -> Result<String, GitError> {
+        let output = run_git_raw(
+            &self.workdir,
+            self.clock.as_ref(),
+            ["rev-parse", "HEAD"],
+            None,
+        )
+        .await?;
+        if !output.status.success() {
+            return Err(GitError::GitCli {
+                status: output.status.code().unwrap_or(-1),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            });
+        }
+        Ok(String::from_utf8(output.stdout)?.trim().to_string())
+    }
+
     /// Merge `branch` into the current driver branch. Returns
     /// [`MergeResult::Conflict`] when git reports merge conflicts; other
     /// failures surface as [`GitError`].

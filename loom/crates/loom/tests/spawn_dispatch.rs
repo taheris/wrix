@@ -126,6 +126,7 @@ fn drive_loom_todo_pi(workspace: &Path, shim: &Path, loom_bin: &str) -> std::pro
         source = image_source.display().to_string(),
     );
     std::fs::write(&manifest_path, manifest_body).expect("write manifest stub");
+    init_workspace_repo(workspace);
     Command::new(loom_bin)
         .arg("--workspace")
         .arg(workspace)
@@ -139,6 +140,34 @@ fn drive_loom_todo_pi(workspace: &Path, shim: &Path, loom_bin: &str) -> std::pro
         .env("LOOM_PROFILES_MANIFEST", &manifest_path)
         .output()
         .expect("spawn loom")
+}
+
+/// Seed the workspace as a real git repo. `loom todo` opens a `GitClient`
+/// during setup (wx-9z0nq) so the tier-1 detection has a real ref database
+/// to query — even when the test exits before any tier-1 work happens.
+fn init_workspace_repo(workspace: &Path) {
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &["config", "user.email", "test@example.com"][..],
+        &["config", "user.name", "Test"][..],
+        &["config", "commit.gpgsign", "false"][..],
+    ] {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(workspace)
+            .args(args)
+            .status()
+            .expect("git spawn");
+        assert!(status.success(), "git {args:?} failed: {status}");
+    }
+    std::fs::write(workspace.join(".gitignore"), "shim/\n*.tar\n").expect("write .gitignore");
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(workspace)
+        .args(["commit", "-q", "--allow-empty", "-m", "seed"])
+        .status()
+        .expect("git commit spawn");
+    assert!(status.success(), "git commit failed: {status}");
 }
 
 /// `tests/loom-test.sh::test_wrapix_spawn_dispatch` — loom hands the
