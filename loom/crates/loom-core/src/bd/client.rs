@@ -639,6 +639,53 @@ mod tests {
         Ok(())
     }
 
+    /// Shell metacharacters (`;`, backticks, `$()`) injected into bead-supplied
+    /// fields must reach `bd` as one argv element each — never expanded by a
+    /// shell. The `Command::arg()` boundary is the guarantee; this test pins
+    /// it by inspecting the recorded argv.
+    #[tokio::test]
+    async fn argv_passes_shell_metacharacters_literally() -> Result<()> {
+        let runner = CapturingRunner::new([ok(b"wx-new.1\n")]);
+        let client = BdClient::with_runner(runner);
+        let injected_title = "; rm -rf /";
+        let injected_desc = "`id`";
+        let injected_label = "$(whoami)";
+        client
+            .create(CreateOpts {
+                title: injected_title.into(),
+                description: injected_desc.into(),
+                labels: vec![injected_label.into()],
+                ..CreateOpts::default()
+            })
+            .await?;
+        let argv = argv_of(&client.runner, 0);
+        // Each metacharacter-bearing string lands as one argv element with
+        // no expansion. If any shell expanded these, the recorded argv
+        // would contain `rm`, `-rf`, `/` as separate elements.
+        assert!(
+            argv.contains(&injected_title.to_string()),
+            "title not literal: {argv:?}"
+        );
+        assert!(
+            argv.contains(&injected_desc.to_string()),
+            "description not literal: {argv:?}"
+        );
+        assert!(
+            argv.contains(&injected_label.to_string()),
+            "label not literal: {argv:?}"
+        );
+        // Negative: nothing got expanded into separate tokens.
+        assert!(
+            !argv.contains(&"rm".to_string()),
+            "shell expansion occurred"
+        );
+        assert!(
+            !argv.contains(&"id".to_string()),
+            "shell expansion occurred"
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn dep_add_argv_is_positional() -> Result<()> {
         let runner = CapturingRunner::new([ok(b"")]);

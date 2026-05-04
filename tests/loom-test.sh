@@ -2189,6 +2189,159 @@ test_cargo_nextest_timing() {
 }
 
 #-----------------------------------------------------------------------------
+# test_newtype_serde_roundtrip — every domain identifier newtype
+# (`BeadId`, `SpecLabel`, `MoleculeId`, `ProfileName`, `SessionId`,
+# `ToolCallId`, `RequestId`) round-trips through serde JSON without a
+# wrapper (`#[serde(transparent)]`) and rejects malformed input. Exercises
+# the inline `#[cfg(test)] mod tests` blocks in
+# `loom-core/src/identifier/*.rs`.
+#-----------------------------------------------------------------------------
+test_newtype_serde_roundtrip() {
+    cargo_run test -p loom-core --lib --quiet -- \
+        identifier::bead::tests::serde_round_trips_as_plain_string \
+        identifier::bead::tests::deserialize_rejects_malformed_string \
+        identifier::bead::tests::display_round_trips_with_as_str \
+        identifier::bead::tests::parse_accepts_canonical_shapes \
+        identifier::bead::tests::parse_rejects_malformed_inputs \
+        identifier::spec::tests::serde_round_trips_as_plain_string \
+        identifier::spec::tests::display_round_trips_with_as_str \
+        identifier::molecule::tests::serde_round_trips_as_plain_string \
+        identifier::molecule::tests::display_round_trips_with_as_str \
+        identifier::profile::tests::serde_round_trips_as_plain_string \
+        identifier::profile::tests::display_round_trips_with_as_str \
+        identifier::session::tests::serde_round_trips_as_plain_string \
+        identifier::session::tests::display_round_trips_with_as_str \
+        identifier::tool_call::tests::serde_round_trips_as_plain_string \
+        identifier::tool_call::tests::display_round_trips_with_as_str \
+        identifier::request::tests::serde_round_trips_as_plain_string \
+        identifier::request::tests::display_round_trips_with_as_str
+}
+
+#-----------------------------------------------------------------------------
+# test_state_db_roundtrip — `StateDb` covers spec, molecule, companions, and
+# meta-table operations end-to-end: open creates schema, rebuild populates
+# from `specs/*.md` + mock molecule list, `current_spec` round-trips,
+# `increment_iteration` returns the post-increment value (starting at 0
+# after rebuild), and `recreate` recovers from a corrupted file. Each cargo
+# integration test exercises one operation against a `tempfile::tempdir`.
+#-----------------------------------------------------------------------------
+test_state_db_roundtrip() {
+    state_db_cargo_test state_db_init_creates_tables
+    state_db_cargo_test state_db_rebuild_populates_specs_and_molecules
+    state_db_cargo_test state_db_rebuild_companions
+    state_db_cargo_test state_db_rebuild_resets_counters
+    state_db_cargo_test state_current_spec_round_trips
+    state_db_cargo_test state_increment_iteration_returns_updated_count
+    state_db_cargo_test state_corruption_recovery
+}
+
+#-----------------------------------------------------------------------------
+# test_pi_protocol_coverage — Pi RPC parser covers every documented field of
+# every documented message type for the pinned protocol version (per spec
+# NFR #9): two-phase deserialization, response success/failure with
+# `data` / `error` field mapping, `tool_execution_start` / `_end` field
+# mapping (`toolCallId` / `toolName` / `args` / `result` / `isError`),
+# `message_update` nested delta dispatch (text, error, unmapped),
+# compaction lifecycle reasons, observability-only events, malformed JSON,
+# extension UI auto-cancel, and command (prompt/steer/abort) serialization.
+#-----------------------------------------------------------------------------
+test_pi_protocol_coverage() {
+    cargo_run test -p loom-agent --lib --quiet -- \
+        pi::messages::tests::pi_response_success_populates_data_field \
+        pi::messages::tests::pi_response_failure_populates_error_field \
+        pi::messages::tests::pi_response_minimal_shape_omits_data_and_error \
+        pi::messages::tests::pi_event_tool_execution_start_maps_all_fields \
+        pi::messages::tests::pi_event_tool_execution_end_maps_all_fields \
+        pi::messages::tests::pi_ui_request_maps_id_and_method \
+        pi::messages::tests::command_structs_serialize_to_expected_type_field \
+        pi::parser::tests::envelope_only_with_unknown_extras_classifies_as_event \
+        pi::parser::tests::full_response_classifies_and_re_deserializes \
+        pi::parser::tests::full_event_classifies_via_id_absent_path \
+        pi::parser::tests::full_ui_request_classifies_as_extension_ui_request \
+        pi::parser::tests::unknown_envelope_type_with_id_is_unknown_message_type \
+        pi::parser::tests::message_update_text_delta_yields_message_delta \
+        pi::parser::tests::message_update_error_delta_yields_error_event \
+        pi::parser::tests::message_update_unmapped_delta_is_silent \
+        pi::parser::tests::tool_execution_end_yields_tool_result \
+        pi::parser::tests::tool_execution_end_stringifies_non_string_result \
+        pi::parser::tests::turn_end_yields_turn_end_event \
+        pi::parser::tests::agent_end_yields_session_complete_with_synthesized_zero \
+        pi::parser::tests::compaction_start_threshold_maps_to_context_limit \
+        pi::parser::tests::compaction_start_overflow_maps_to_context_limit \
+        pi::parser::tests::compaction_start_manual_maps_to_user_requested \
+        pi::parser::tests::compaction_start_unknown_reason_maps_to_unknown \
+        pi::parser::tests::compaction_end_carries_aborted_flag \
+        pi::parser::tests::observability_only_events_yield_no_agent_events \
+        pi::parser::tests::unknown_event_type_via_serde_other_yields_no_events \
+        pi::parser::tests::malformed_json_returns_invalid_json_error \
+        pi::parser::tests::extension_ui_select_yields_auto_cancel_response \
+        pi::parser::tests::extension_ui_confirm_yields_auto_cancel_response \
+        pi::parser::tests::extension_ui_input_yields_auto_cancel_response \
+        pi::parser::tests::extension_ui_editor_yields_auto_cancel_response \
+        pi::parser::tests::extension_ui_notify_leaves_response_none \
+        pi::parser::tests::extension_ui_set_status_leaves_response_none \
+        pi::parser::tests::encode_prompt_emits_prompt_command \
+        pi::parser::tests::encode_steer_emits_steer_command \
+        pi::parser::tests::encode_abort_emits_abort_command_some
+}
+
+#-----------------------------------------------------------------------------
+# test_claude_protocol_coverage — Claude stream-json parser covers every
+# documented field of every documented message type:
+# `#[serde(tag = "type")]` dispatch, `#[serde(other)]` → `Unknown` for
+# forward compatibility, `Result` with all six fields (`subtype`, `result`,
+# `total_cost_usd`, `duration_ms`, `num_turns`, `is_error`), `System` /
+# `ControlRequest` / assistant / user block field mappings, control_request
+# auto-approval keyed on the deny-list, and malformed-JSON handling.
+#-----------------------------------------------------------------------------
+test_claude_protocol_coverage() {
+    cargo_run test -p loom-agent --lib --quiet -- \
+        claude::parser::tests::parses_system_init \
+        claude::parser::tests::parses_assistant_text_and_tool_use \
+        claude::parser::tests::parses_user_tool_result_string_content \
+        claude::parser::tests::parses_result_success \
+        claude::parser::tests::result_success_yields_turn_end_then_session_complete \
+        claude::parser::tests::result_error_yields_error_then_session_complete \
+        claude::parser::tests::result_event_captures_cost_usd \
+        claude::parser::tests::result_event_without_cost_yields_none \
+        claude::parser::tests::unknown_message_type_returns_empty_events \
+        claude::parser::tests::control_request_autoapproves_when_denylist_empty \
+        claude::parser::tests::control_request_denied_when_tool_in_denylist \
+        claude::parser::tests::control_request_denylist_does_not_affect_other_tools \
+        claude::parser::tests::encode_prompt_emits_stream_json_user_message \
+        claude::parser::tests::encode_steer_emits_same_shape_as_prompt \
+        claude::parser::tests::encode_abort_returns_none \
+        claude::parser::tests::result_message_round_trips_every_documented_field \
+        claude::parser::tests::system_message_maps_subtype_and_session_id \
+        claude::parser::tests::control_request_message_round_trips_all_fields \
+        claude::parser::tests::assistant_block_text_and_tool_use_field_mapping \
+        claude::parser::tests::user_block_tool_result_field_mapping \
+        claude::parser::tests::malformed_json_returns_invalid_json_error
+}
+
+#-----------------------------------------------------------------------------
+# test_template_rendering — every Askama template renders cleanly with
+# representative inputs. Exercises the integration tests under
+# `loom-templates/tests/render.rs`, which assert on shared sections,
+# partials, agent-output wrapping, and `previous_failure` truncation.
+#-----------------------------------------------------------------------------
+test_template_rendering() {
+    cargo_run test -p loom-templates --test render --quiet -- \
+        plan_new_renders_partials_and_inputs \
+        plan_update_renders_partials_and_companions \
+        todo_new_renders_implementation_notes_when_present \
+        todo_new_omits_implementation_notes_section_when_empty \
+        todo_update_wraps_existing_tasks_in_agent_output \
+        run_wraps_agent_supplied_fields_in_agent_output \
+        run_renders_expected_sections_for_shared_inputs \
+        previous_failure_truncates_at_max_len \
+        previous_failure_preserves_short_input \
+        check_renders_review_context_fields \
+        msg_renders_clarify_beads_with_options \
+        msg_renders_with_no_clarify_beads
+}
+
+#-----------------------------------------------------------------------------
 # Dispatch
 #-----------------------------------------------------------------------------
 if [ $# -eq 0 ]; then

@@ -186,3 +186,130 @@ pub struct AbortCommand {
     #[serde(rename = "type")]
     pub kind: &'static str,
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    /// Successful response carries `id`, `command`, `success: true`, and an
+    /// optional `data` payload — every documented field round-trips into the
+    /// typed struct so a silent rename in pi v0.72+ surfaces as a test
+    /// failure rather than dropping data on the floor.
+    #[test]
+    fn pi_response_success_populates_data_field() {
+        let line =
+            r#"{"type":"response","id":"r-1","command":"prompt","success":true,"data":{"k":"v"}}"#;
+        let resp: PiResponse = serde_json::from_str(line).expect("parse");
+        assert_eq!(resp.id.as_str(), "r-1");
+        assert_eq!(resp.command, "prompt");
+        assert!(resp.success);
+        let data = resp.data.expect("data present on success");
+        assert_eq!(data["k"], "v");
+        assert!(resp.error.is_none());
+    }
+
+    /// Failure response carries `success: false` and an `error` string
+    /// (`data` may or may not be present).
+    #[test]
+    fn pi_response_failure_populates_error_field() {
+        let line = r#"{"type":"response","id":"r-2","command":"set_model","success":false,"error":"unsupported provider"}"#;
+        let resp: PiResponse = serde_json::from_str(line).expect("parse");
+        assert_eq!(resp.id.as_str(), "r-2");
+        assert_eq!(resp.command, "set_model");
+        assert!(!resp.success);
+        assert_eq!(resp.error.as_deref(), Some("unsupported provider"));
+        assert!(resp.data.is_none());
+    }
+
+    /// `data` and `error` are both optional via `#[serde(default)]` so a
+    /// minimal response (only the four required fields) parses without
+    /// either populated.
+    #[test]
+    fn pi_response_minimal_shape_omits_data_and_error() {
+        let line = r#"{"type":"response","id":"r-3","command":"abort","success":true}"#;
+        let resp: PiResponse = serde_json::from_str(line).expect("parse");
+        assert!(resp.data.is_none());
+        assert!(resp.error.is_none());
+    }
+
+    /// `tool_execution_start` field mapping: every documented field
+    /// (`toolCallId`, `toolName`, `args`) round-trips into the typed enum
+    /// variant. Pinning the wire names — including the camelCase rename —
+    /// catches a silent rename on pi's side.
+    #[test]
+    fn pi_event_tool_execution_start_maps_all_fields() {
+        let line = r#"{"type":"tool_execution_start","toolCallId":"tc-9","toolName":"Read","args":{"path":"/x"}}"#;
+        let event: PiEvent = serde_json::from_str(line).expect("parse");
+        match event {
+            PiEvent::ToolExecutionStart {
+                tool_call_id,
+                tool_name,
+                args,
+            } => {
+                assert_eq!(tool_call_id.as_str(), "tc-9");
+                assert_eq!(tool_name, "Read");
+                assert_eq!(args["path"], "/x");
+            }
+            other => panic!("expected ToolExecutionStart, got {other:?}"),
+        }
+    }
+
+    /// `tool_execution_end` field mapping: `toolCallId`, `result`, `isError`.
+    #[test]
+    fn pi_event_tool_execution_end_maps_all_fields() {
+        let line =
+            r#"{"type":"tool_execution_end","toolCallId":"tc-9","result":"ok","isError":true}"#;
+        let event: PiEvent = serde_json::from_str(line).expect("parse");
+        match event {
+            PiEvent::ToolExecutionEnd {
+                tool_call_id,
+                result,
+                is_error,
+            } => {
+                assert_eq!(tool_call_id.as_str(), "tc-9");
+                assert_eq!(result, serde_json::Value::String("ok".into()));
+                assert!(is_error);
+            }
+            other => panic!("expected ToolExecutionEnd, got {other:?}"),
+        }
+    }
+
+    /// `extension_ui_request` carries `id` and `method`; the `payload` is
+    /// dropped because Loom only needs the method to decide auto-cancel.
+    #[test]
+    fn pi_ui_request_maps_id_and_method() {
+        let line = r#"{"type":"extension_ui_request","id":"u-1","method":"select","payload":{}}"#;
+        let req: PiUiRequest = serde_json::from_str(line).expect("parse");
+        assert_eq!(req.id.as_str(), "u-1");
+        assert_eq!(req.method, "select");
+    }
+
+    /// Every command struct serializes to a JSONL line whose `type` field
+    /// matches the wire contract.
+    #[test]
+    fn command_structs_serialize_to_expected_type_field() {
+        let prompt = serde_json::to_string(&PromptCommand {
+            kind: "prompt",
+            message: "x",
+        })
+        .expect("serialize prompt");
+        let prompt_v: serde_json::Value = serde_json::from_str(&prompt).expect("parse");
+        assert_eq!(prompt_v["type"], "prompt");
+        assert_eq!(prompt_v["message"], "x");
+
+        let steer = serde_json::to_string(&SteerCommand {
+            kind: "steer",
+            message: "y",
+        })
+        .expect("serialize steer");
+        let steer_v: serde_json::Value = serde_json::from_str(&steer).expect("parse");
+        assert_eq!(steer_v["type"], "steer");
+        assert_eq!(steer_v["message"], "y");
+
+        let abort =
+            serde_json::to_string(&AbortCommand { kind: "abort" }).expect("serialize abort");
+        let abort_v: serde_json::Value = serde_json::from_str(&abort).expect("parse");
+        assert_eq!(abort_v["type"], "abort");
+    }
+}

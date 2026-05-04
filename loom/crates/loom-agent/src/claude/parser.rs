@@ -436,4 +436,128 @@ mod tests {
         let result = parser.encode_abort().expect("abort encoder should succeed");
         assert!(result.is_none());
     }
+
+    // -- field-level coverage ----------------------------------------------
+
+    /// `ClaudeMessage::Result` carries six fields. Pin every one — a renamed
+    /// `total_cost_usd` (e.g. → `cost_total`) or a moved `is_error` flag
+    /// would slip past the simpler success/error tests because they skip
+    /// over the unused fields.
+    #[test]
+    fn result_message_round_trips_every_documented_field() {
+        let line = r#"{"type":"result","subtype":"success","result":"ok body","total_cost_usd":1.25,"duration_ms":987,"num_turns":4,"is_error":false}"#;
+        let msg: super::super::messages::ClaudeMessage = serde_json::from_str(line).expect("parse");
+        match msg {
+            super::super::messages::ClaudeMessage::Result {
+                subtype,
+                result,
+                total_cost_usd,
+                duration_ms,
+                num_turns,
+                is_error,
+            } => {
+                assert_eq!(subtype, "success");
+                assert_eq!(result.as_deref(), Some("ok body"));
+                assert_eq!(total_cost_usd, Some(1.25));
+                assert_eq!(duration_ms, Some(987));
+                assert_eq!(num_turns, Some(4));
+                assert_eq!(is_error, Some(false));
+            }
+            other => panic!("expected Result, got {other:?}"),
+        }
+    }
+
+    /// `ClaudeMessage::System` carries `subtype` (always present) and an
+    /// optional `session_id`. Pin both — the parser logs `session_id` at
+    /// info; a silent rename would erase the audit trail.
+    #[test]
+    fn system_message_maps_subtype_and_session_id() {
+        let line = r#"{"type":"system","subtype":"init","session_id":"sess-xyz"}"#;
+        let msg: super::super::messages::ClaudeMessage = serde_json::from_str(line).expect("parse");
+        match msg {
+            super::super::messages::ClaudeMessage::System {
+                subtype,
+                session_id,
+            } => {
+                assert_eq!(subtype, "init");
+                assert_eq!(session_id.expect("session_id present").as_str(), "sess-xyz");
+            }
+            other => panic!("expected System, got {other:?}"),
+        }
+    }
+
+    /// `ClaudeMessage::ControlRequest` field mapping: `id`, `tool`, `input`.
+    /// Already exercised by `control_request_autoapproves_*` via parser
+    /// behavior; this version pins the typed shape so a renamed field
+    /// fails deserialization rather than silently changing the response.
+    #[test]
+    fn control_request_message_round_trips_all_fields() {
+        let line =
+            r#"{"type":"control_request","id":"req-7","tool":"Read","input":{"path":"/etc/x"}}"#;
+        let msg: super::super::messages::ClaudeMessage = serde_json::from_str(line).expect("parse");
+        match msg {
+            super::super::messages::ClaudeMessage::ControlRequest { id, tool, input } => {
+                assert_eq!(id.as_str(), "req-7");
+                assert_eq!(tool, "Read");
+                assert_eq!(input["path"], "/etc/x");
+            }
+            other => panic!("expected ControlRequest, got {other:?}"),
+        }
+    }
+
+    /// `AssistantBlock::ToolUse` and `Text` field-level: pin each documented
+    /// field (`text`, `id`, `name`, `input`).
+    #[test]
+    fn assistant_block_text_and_tool_use_field_mapping() {
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"abc"},{"type":"tool_use","id":"tu-1","name":"Bash","input":{"cmd":"ls"}}]}}"#;
+        let p = parse(&empty(), line);
+        assert_eq!(p.events.len(), 2);
+        match &p.events[0] {
+            AgentEvent::MessageDelta { text } => assert_eq!(text, "abc"),
+            other => panic!("expected MessageDelta, got {other:?}"),
+        }
+        match &p.events[1] {
+            AgentEvent::ToolCall { id, tool, params } => {
+                assert_eq!(id.as_str(), "tu-1");
+                assert_eq!(tool, "Bash");
+                assert_eq!(params["cmd"], "ls");
+            }
+            other => panic!("expected ToolCall, got {other:?}"),
+        }
+    }
+
+    /// `UserBlock::ToolResult` field-level: pin `tool_use_id`, `content`,
+    /// `is_error`. Non-string `content` is stringified per the parser
+    /// contract — covers the structured-output codepath.
+    #[test]
+    fn user_block_tool_result_field_mapping() {
+        let line = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu-2","content":{"k":"v"},"is_error":true}]}}"#;
+        let p = parse(&empty(), line);
+        assert_eq!(p.events.len(), 1);
+        match &p.events[0] {
+            AgentEvent::ToolResult {
+                id,
+                output,
+                is_error,
+            } => {
+                assert_eq!(id.as_str(), "tu-2");
+                assert!(output.contains("\"k\""));
+                assert!(*is_error);
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
+    }
+
+    /// Truncated JSON returns `ProtocolError::InvalidJson` — already covered
+    /// by the pi parser; mirror it for claude so both backends share the
+    /// malformed-line contract.
+    #[test]
+    fn malformed_json_returns_invalid_json_error() {
+        let parser = empty();
+        let err = parser
+            .parse_line(r#"{"type":"assistant","message":{"role":"#)
+            .err()
+            .expect("malformed JSON should fail");
+        assert!(matches!(err, ProtocolError::InvalidJson(_)));
+    }
 }
