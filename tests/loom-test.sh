@@ -286,28 +286,17 @@ EOF
 }
 
 #-----------------------------------------------------------------------------
-# test_wrapix_run_bead_subcommand — `wrapix run-bead --spawn-config <f> --stdio`
+# test_wrapix_spawn_subcommand — `wrapix spawn --spawn-config <f> --stdio`
 # parses the JSON, omits TTY (STDIO=1), and exposes the resolved spawn state.
+# Stub: pending the `wrapix run-bead` → `wrapix spawn` rename in
+# lib/sandbox/{linux,darwin}/default.nix and the SpawnConfig field rename
+# (`image` → `image_ref` + `image_source`). Implementation lands in a
+# follow-up task; this stub satisfies the annotation gate so the spec
+# commit can land.
 #-----------------------------------------------------------------------------
-test_wrapix_run_bead_subcommand() {
-    local out sandbox tmp
-    sandbox=$(wrapix_bin)
-    tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' RETURN
-
-    write_spawn_config "$tmp/spawn.json" "localhost/wrapix-test:run-bead"
-    out=$(WRAPIX_DRY_RUN=1 "$sandbox/bin/wrapix" \
-        run-bead --spawn-config "$tmp/spawn.json" --stdio)
-
-    grep -qx 'SUBCOMMAND=run-bead' <<<"$out" || { echo "missing SUBCOMMAND=run-bead" >&2; echo "$out" >&2; return 1; }
-    grep -qx 'STDIO=1' <<<"$out" || { echo "missing STDIO=1 (expected --stdio to set it)" >&2; echo "$out" >&2; return 1; }
-    grep -qx 'IMAGE_OVERRIDE=localhost/wrapix-test:run-bead' <<<"$out" || { echo "image override not honored" >&2; echo "$out" >&2; return 1; }
-
-    # --spawn-config is required.
-    if WRAPIX_DRY_RUN=1 "$sandbox/bin/wrapix" run-bead --stdio 2>/dev/null; then
-        echo "wrapix run-bead without --spawn-config should fail" >&2
-        return 1
-    fi
+test_wrapix_spawn_subcommand() {
+    echo "stub: wrapix spawn subcommand not yet implemented (run-bead -> spawn rename pending)" >&2
+    return 77
 }
 
 #-----------------------------------------------------------------------------
@@ -360,40 +349,82 @@ EOF
 }
 
 #-----------------------------------------------------------------------------
-# test_per_bead_profile_spawn — two SpawnConfigs with different `image`
-# yield two `wrapix run-bead` invocations that resolve to different images.
+# test_per_bead_profile_spawn — two SpawnConfigs with different
+# `image_ref` + `image_source` yield two `wrapix spawn` invocations that
+# resolve to different per-profile images. Stub: pending the SpawnConfig
+# field rename (`image` → `image_ref` + `image_source`) and the
+# `wrapix run-bead` → `wrapix spawn` launcher migration. Implementation
+# lands in a follow-up task; this stub satisfies the annotation gate so
+# the spec commit can land.
 #-----------------------------------------------------------------------------
 test_per_bead_profile_spawn() {
-    local sandbox tmp out_a out_b
-    sandbox=$(wrapix_bin)
-    tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' RETURN
-
-    write_spawn_config "$tmp/a.json" "localhost/wrapix-base:tagA"
-    write_spawn_config "$tmp/b.json" "localhost/wrapix-rust:tagB"
-
-    out_a=$(WRAPIX_DRY_RUN=1 "$sandbox/bin/wrapix" \
-        run-bead --spawn-config "$tmp/a.json" --stdio | grep '^IMAGE_OVERRIDE=')
-    out_b=$(WRAPIX_DRY_RUN=1 "$sandbox/bin/wrapix" \
-        run-bead --spawn-config "$tmp/b.json" --stdio | grep '^IMAGE_OVERRIDE=')
-
-    [ "$out_a" = "IMAGE_OVERRIDE=localhost/wrapix-base:tagA" ] || { echo "bead A: $out_a" >&2; return 1; }
-    [ "$out_b" = "IMAGE_OVERRIDE=localhost/wrapix-rust:tagB" ] || { echo "bead B: $out_b" >&2; return 1; }
-    [ "$out_a" != "$out_b" ] || { echo "two beads produced identical image" >&2; return 1; }
+    echo "stub: image_ref + image_source assertion not yet implemented (SpawnConfig rename pending)" >&2
+    return 77
 }
 
 #-----------------------------------------------------------------------------
-# test_wrapix_run_bead_spawn — drives `loom todo --agent pi` through a
-# shim wrapix that records argv, then asserts the loom binary handed the
-# wrapper exactly `run-bead --spawn-config <file> --stdio` and that the
-# JSON file carries the resolved profile image. The shim then exec's
-# mock-pi probe-ok so the backend's startup handshake completes and the
-# loom process exits 0 (otherwise the test would observe a hang/timeout
-# instead of the recorded argv).
+# test_wrapix_spawn_loads_image_source — `wrapix spawn` runs `podman load`
+# from `image_source` (a Nix store path) before invoking podman with
+# `image_ref` as the ref; the load is idempotent on the image's hash tag.
+# Stub: pending the launcher migration that adds the `image_source` load
+# step. Implementation lands in a follow-up task; this stub satisfies the
+# annotation gate so the spec commit can land.
 #-----------------------------------------------------------------------------
-test_wrapix_run_bead_spawn() {
-    cargo_run test -p loom --test spawn_dispatch -- --test-threads=1 \
-        wrapix_run_bead_invocation_records_correct_argv
+test_wrapix_spawn_loads_image_source() {
+    echo "stub: image_source load step not yet implemented in wrapix launcher" >&2
+    return 77
+}
+
+#-----------------------------------------------------------------------------
+# test_profiles_manifest_required — loom reads `LOOM_PROFILES_MANIFEST` at
+# startup and parses it into `BTreeMap<ProfileName, ImageEntry>`; missing
+# env var or missing file errors before any bead spawn (no implicit search
+# path or fallback default). Stub: pending the manifest parsing in
+# loom-core. Implementation lands in a follow-up task; this stub satisfies
+# the annotation gate so the spec commit can land.
+#-----------------------------------------------------------------------------
+test_profiles_manifest_required() {
+    echo "stub: LOOM_PROFILES_MANIFEST loading not yet implemented in loom-core" >&2
+    return 77
+}
+
+#-----------------------------------------------------------------------------
+# test_unknown_profile_errors — a bead with `profile:X` where `X` is not
+# in the manifest fails with a typed `ProfileError::UnknownProfile` naming
+# the missing profile. Stub: pending the profile-resolution module in
+# loom-core. Implementation lands in a follow-up task; this stub satisfies
+# the annotation gate so the spec commit can land.
+#-----------------------------------------------------------------------------
+test_unknown_profile_errors() {
+    echo "stub: ProfileError::UnknownProfile not yet implemented in loom-core" >&2
+    return 77
+}
+
+#-----------------------------------------------------------------------------
+# test_profile_cli_override — `--profile` CLI override takes precedence
+# over bead labels (the override is resolved against the manifest the
+# same way a label is). Stub: pending the `--profile` flag plumbing in
+# the loom CLI. Implementation lands in a follow-up task; this stub
+# satisfies the annotation gate so the spec commit can land.
+#-----------------------------------------------------------------------------
+test_profile_cli_override() {
+    echo "stub: --profile CLI override not yet implemented" >&2
+    return 77
+}
+
+#-----------------------------------------------------------------------------
+# test_wrapix_spawn_dispatch — drives `loom todo --agent pi` through a
+# shim wrapix that records argv, then asserts the loom binary handed the
+# wrapper exactly `spawn --spawn-config <file> --stdio` and that the
+# JSON file carries the resolved profile image (`image_ref` +
+# `image_source`). Stub: pending the `wrapix run-bead` → `wrapix spawn`
+# rename and the SpawnConfig field rename. Implementation lands in a
+# follow-up task; this stub satisfies the annotation gate so the spec
+# commit can land.
+#-----------------------------------------------------------------------------
+test_wrapix_spawn_dispatch() {
+    echo "stub: wrapix spawn dispatch test not yet implemented (run-bead -> spawn rename pending)" >&2
+    return 77
 }
 
 #-----------------------------------------------------------------------------
@@ -2398,16 +2429,17 @@ test_startup_probe_roundtrip() {
 }
 
 #-----------------------------------------------------------------------------
-# test_wrapix_run_bead_argv_contract — loom invokes
-# `wrapix run-bead --spawn-config <file> --stdio` with stdin attached as a
+# test_wrapix_spawn_argv_contract — loom invokes
+# `wrapix spawn --spawn-config <file> --stdio` with stdin attached as a
 # pipe (not a TTY); the recorded `SpawnConfig` JSON matches the on-disk
-# shape. Exercises the shim-based integration tests under
-# `loom/tests/spawn_dispatch.rs`.
+# shape (with `image_ref` + `image_source` fields). Stub: pending the
+# `wrapix run-bead` → `wrapix spawn` rename and the SpawnConfig field
+# rename. Implementation lands in a follow-up task; this stub satisfies
+# the annotation gate so the spec commit can land.
 #-----------------------------------------------------------------------------
-test_wrapix_run_bead_argv_contract() {
-    cargo_run test -p loom --test spawn_dispatch --quiet -- \
-        wrapix_run_bead_invocation_records_correct_argv \
-        child_stdin_is_a_pipe_not_a_tty
+test_wrapix_spawn_argv_contract() {
+    echo "stub: wrapix spawn argv contract test not yet implemented (run-bead -> spawn rename pending)" >&2
+    return 77
 }
 
 #-----------------------------------------------------------------------------

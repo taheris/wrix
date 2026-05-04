@@ -126,12 +126,15 @@ fn drive_loom_todo_pi(workspace: &Path, shim: &Path, loom_bin: &str) -> std::pro
         .expect("spawn loom")
 }
 
-/// `tests/loom-test.sh::test_wrapix_run_bead_spawn` — loom hands the
+/// `tests/loom-test.sh::test_wrapix_spawn_dispatch` — loom hands the
 /// wrapper exactly `wrapix run-bead --spawn-config <file> --stdio`, and
 /// the file resolves to a JSON [`SpawnConfig`] carrying the per-bead
 /// profile image. A future profile-resolution change that drops `image`
 /// or renames the subcommand will trip this assertion before the wrapper
-/// ever sees the malformed argv.
+/// ever sees the malformed argv. (The shell-side test was renamed when
+/// the `wrapix run-bead` → `wrapix spawn` rename landed in the spec; the
+/// Rust-side rename happens in the follow-up impl task that updates the
+/// launcher and SpawnConfig fields.)
 #[test]
 fn wrapix_run_bead_invocation_records_correct_argv() {
     let dir = tempfile::tempdir().unwrap();
