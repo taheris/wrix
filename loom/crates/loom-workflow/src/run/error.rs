@@ -5,6 +5,7 @@ use loom_core::agent::ProtocolError;
 use loom_core::bd::BdError;
 use loom_core::git::GitError;
 use loom_core::logging::LogError;
+use loom_core::profile_manifest::ProfileError;
 
 /// Errors raised by the `loom run` driver.
 #[derive(Debug, Display, Error)]
@@ -26,6 +27,9 @@ pub enum RunError {
 
     /// io operation failed
     Io(#[from] std::io::Error),
+
+    /// profile-image manifest dispatch failed
+    Profile(#[from] ProfileError),
 
     /// `loom check` handoff failed: {0}
     CheckHandoff(String),

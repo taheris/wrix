@@ -8,6 +8,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
@@ -15,7 +16,7 @@ use loom_agent::{ClaudeBackend, PiBackend};
 use loom_core::agent::{AgentKind, ProtocolError, SessionOutcome, SpawnConfig};
 use loom_core::bd::{BdClient, ListOpts, UpdateOpts};
 use loom_core::config::{LoomConfig, Phase};
-use loom_core::identifier::{BeadId, SpecLabel};
+use loom_core::identifier::{BeadId, ProfileName, SpecLabel};
 use loom_core::lock::LockManager;
 use loom_core::profile_manifest::ProfileImageManifest;
 use loom_core::state::StateDb;
@@ -304,11 +305,11 @@ fn run_run(
     workspace: &Path,
     once: bool,
     parallel: Parallelism,
-    _profile: Option<String>,
+    profile: Option<String>,
     spec: Option<String>,
     agent_override: Option<AgentKind>,
 ) -> anyhow::Result<()> {
-    let _manifest = ProfileImageManifest::from_env()?;
+    let manifest = Arc::new(ProfileImageManifest::from_env()?);
     let label = resolve_spec_label(workspace, spec)?;
     let lock_mgr = LockManager::new(workspace)?;
     let _guard = lock_mgr.acquire_spec(&label)?;
@@ -318,7 +319,9 @@ fn run_run(
     // the config (or via `--agent` — clap covers the latter) fails before
     // any work begins. The resolution itself is the wiring; the dispatch
     // closure handed to the parallel batch driver below is what consumes it.
-    let _selection = resolved_agent_for(&config, agent_override, Phase::Run)?;
+    let selection = resolved_agent_for(&config, agent_override, Phase::Run)?;
+    let phase_default = selection.profile.clone();
+    let cli_profile = profile.map(ProfileName::new);
 
     let loom_bin = current_loom_bin()?;
     let runtime = tokio::runtime::Runtime::new()?;
@@ -327,8 +330,20 @@ fn run_run(
         let parallel_n = parallel.get();
         let workspace_buf = workspace.to_path_buf();
         let label_for_async = label.clone();
+        let manifest_for_async = Arc::clone(&manifest);
+        let cli_profile_for_async = cli_profile.clone();
+        let phase_default_for_async = phase_default.clone();
         let summary = runtime.block_on(async move {
-            run_parallel_run(workspace_buf, label_for_async, parallel_n, agent_override).await
+            run_parallel_run(
+                workspace_buf,
+                label_for_async,
+                parallel_n,
+                agent_override,
+                manifest_for_async,
+                cli_profile_for_async,
+                phase_default_for_async,
+            )
+            .await
         })?;
         println!(
             "loom run --parallel {parallel_n}: merged {}, conflicted {}, failed {}",
@@ -342,6 +357,7 @@ fn run_run(
     } else {
         RunMode::Continuous
     };
+    let manifest_for_seq = Arc::clone(&manifest);
     let summary = runtime.block_on(async move {
         let bd = BdClient::new();
         let mut controller = ProductionAgentLoopController::new(
@@ -349,6 +365,9 @@ fn run_run(
             label.clone(),
             loom_bin,
             workspace.to_path_buf(),
+            manifest_for_seq,
+            cli_profile,
+            phase_default,
         );
         run_loop(&mut controller, mode, RetryPolicy::default()).await
     })?;
@@ -375,6 +394,9 @@ async fn run_parallel_run(
     label: SpecLabel,
     parallel_n: u32,
     agent_override: Option<AgentKind>,
+    manifest: Arc<ProfileImageManifest>,
+    cli_profile: Option<ProfileName>,
+    phase_default: ProfileName,
 ) -> anyhow::Result<ParallelRunSummary> {
     use loom_core::git::GitClient;
     use loom_workflow::run::{AgentOutcome, run_parallel_batch};
@@ -397,8 +419,20 @@ async fn run_parallel_run(
     let git = GitClient::open(workspace.clone())?;
     let outcome = run_parallel_batch(&git, &label, beads, move |slot| {
         let workspace_inner = workspace.clone();
+        let manifest_inner = Arc::clone(&manifest);
+        let cli_profile_inner = cli_profile.clone();
+        let phase_default_inner = phase_default.clone();
         async move {
-            match dispatch_for_slot(&workspace_inner, agent_override, slot).await {
+            match dispatch_for_slot(
+                &workspace_inner,
+                agent_override,
+                slot,
+                &manifest_inner,
+                cli_profile_inner.as_ref(),
+                &phase_default_inner,
+            )
+            .await
+            {
                 Ok(_) => AgentOutcome::Success,
                 Err(e) => AgentOutcome::Failure {
                     error: format!("{e}"),
@@ -415,34 +449,42 @@ async fn run_parallel_run(
     })
 }
 
-/// One slot's dispatch: resolve the per-phase backend and drive a single
-/// agent session against the slot's worktree. Surfaces protocol failures
-/// and config-resolution failures uniformly so the caller can convert them
-/// into [`AgentOutcome::Failure`].
+/// One slot's dispatch: resolve the per-phase backend and the per-bead
+/// profile image, then drive a single agent session against the slot's
+/// worktree. A missing manifest entry surfaces as [`ProfileError::UnknownProfile`]
+/// (via `RunError::Profile`) so the caller converts it to a typed
+/// [`AgentOutcome::Failure`] without falling back to a silent default.
+///
+/// [`ProfileError::UnknownProfile`]: loom_core::profile_manifest::ProfileError::UnknownProfile
 async fn dispatch_for_slot(
     workspace: &Path,
     agent_override: Option<AgentKind>,
     slot: loom_workflow::run::WorktreeBead,
+    manifest: &ProfileImageManifest,
+    cli_profile: Option<&ProfileName>,
+    phase_default: &ProfileName,
 ) -> anyhow::Result<SessionOutcome> {
     use loom_core::agent::RePinContent;
+    use loom_workflow::run::build_spawn_config_from_manifest;
 
     let config = LoomConfig::load(workspace.join(".wrapix/loom/config.toml"))?;
     let selection = resolved_agent_for(&config, agent_override, Phase::Run)?;
 
-    let spawn_config = SpawnConfig {
-        image_ref: "wrapix-base:latest".to_string(),
-        image_source: PathBuf::from("/nix/store/placeholder-wrapix-base.tar"),
-        workspace: slot.worktree.path.clone(),
-        env: vec![],
-        initial_prompt: format!("loom run: bead {}", slot.bead.id),
-        agent_args: vec![],
-        repin: RePinContent {
+    let spawn_config = build_spawn_config_from_manifest(
+        manifest,
+        &slot.bead,
+        cli_profile,
+        phase_default,
+        slot.worktree.path.clone(),
+        format!("loom run: bead {}", slot.bead.id),
+        RePinContent {
             orientation: String::new(),
             pinned_context: String::new(),
             partial_bodies: vec![],
         },
-        model: None,
-    };
+        vec![],
+        vec![],
+    )?;
 
     Ok(dispatch(selection.kind, &spawn_config).await?)
 }

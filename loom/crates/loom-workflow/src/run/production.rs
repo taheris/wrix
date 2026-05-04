@@ -7,17 +7,28 @@
 //! the retry policy will surface as a clarify after exhausting attempts. The
 //! `next_ready_bead → empty → exec_check` smoke path is fully wired and
 //! exercised end-to-end.
+//!
+//! Per-bead profile dispatch is wired through [`build_spawn_config_from_manifest`]:
+//! the manifest, CLI `--profile` override, and per-phase fallback all flow
+//! into the controller at construction time so `run_bead` resolves the
+//! per-bead `image_ref` + `image_source` against the parsed manifest before
+//! the (stubbed) agent invocation. A missing manifest entry surfaces as
+//! [`RunError::Profile`] — no silent fallback.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use loom_core::agent::RePinContent;
 use loom_core::bd::{BdClient, Bead, ListOpts, ReadyOpts, UpdateOpts};
-use loom_core::identifier::{BeadId, SpecLabel};
+use loom_core::identifier::{BeadId, ProfileName, SpecLabel};
+use loom_core::profile_manifest::ProfileImageManifest;
 use tokio::process::Command;
 use tracing::info;
 
 use super::error::RunError;
 use super::outcome::AgentOutcome;
 use super::runner::AgentLoopController;
+use super::spawn::build_spawn_config_from_manifest;
 
 /// Stub error body returned by [`ProductionAgentLoopController::run_bead`]
 /// until the `loom-agent` backend lands. The retry policy surfaces this as a
@@ -26,20 +37,40 @@ pub const STUB_AGENT_ERROR: &str = "loom-agent backend not yet implemented (wx-3
 
 /// Wires the [`AgentLoopController`] trait against the real `BdClient` and a
 /// child `loom check` exec for handoff.
+///
+/// `manifest` / `cli_profile` / `phase_default` are the inputs the per-bead
+/// profile resolver chain needs (see
+/// [`super::resolve_profile_image`]). They are stored on the controller so
+/// every `run_bead` call resolves the bead's `image_ref` + `image_source`
+/// from the same parsed manifest, never re-reading it from disk.
 pub struct ProductionAgentLoopController {
     bd: BdClient,
     label: SpecLabel,
     loom_bin: PathBuf,
     workspace: PathBuf,
+    manifest: Arc<ProfileImageManifest>,
+    cli_profile: Option<ProfileName>,
+    phase_default: ProfileName,
 }
 
 impl ProductionAgentLoopController {
-    pub fn new(bd: BdClient, label: SpecLabel, loom_bin: PathBuf, workspace: PathBuf) -> Self {
+    pub fn new(
+        bd: BdClient,
+        label: SpecLabel,
+        loom_bin: PathBuf,
+        workspace: PathBuf,
+        manifest: Arc<ProfileImageManifest>,
+        cli_profile: Option<ProfileName>,
+        phase_default: ProfileName,
+    ) -> Self {
         Self {
             bd,
             label,
             loom_bin,
             workspace,
+            manifest,
+            cli_profile,
+            phase_default,
         }
     }
 
@@ -65,8 +96,29 @@ impl AgentLoopController for ProductionAgentLoopController {
         bead: &Bead,
         previous_failure: Option<String>,
     ) -> Result<AgentOutcome, RunError> {
+        // Resolve the per-bead profile image up front so a missing manifest
+        // entry surfaces as a typed `RunError::Profile` (not as a stub
+        // agent failure) before the stub ever runs. The constructed
+        // SpawnConfig is otherwise unused until the loom-agent backend
+        // lands; logging the resolved ref keeps the dispatch auditable.
+        let spawn_config = build_spawn_config_from_manifest(
+            &self.manifest,
+            bead,
+            self.cli_profile.as_ref(),
+            &self.phase_default,
+            self.workspace.clone(),
+            format!("loom run: bead {}", bead.id),
+            RePinContent {
+                orientation: String::new(),
+                pinned_context: String::new(),
+                partial_bodies: vec![],
+            },
+            vec![],
+            vec![],
+        )?;
         info!(
             bead = %bead.id,
+            image_ref = %spawn_config.image_ref,
             retry = previous_failure.is_some(),
             "loom run: agent backend stub — returning Failure (loom-agent crate is empty)",
         );

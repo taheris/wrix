@@ -350,17 +350,19 @@ EOF
 }
 
 #-----------------------------------------------------------------------------
-# test_per_bead_profile_spawn — two SpawnConfigs with different
-# `image_ref` + `image_source` yield two `wrapix spawn` invocations that
-# resolve to different per-profile images. Stub: pending the SpawnConfig
-# field rename (`image` → `image_ref` + `image_source`) and the
-# `wrapix run-bead` → `wrapix spawn` launcher migration. Implementation
-# lands in a follow-up task; this stub satisfies the annotation gate so
-# the spec commit can land.
+# test_per_bead_profile_spawn — two beads with different `profile:X` labels
+# resolve through `build_spawn_config_from_manifest` to two SpawnConfigs with
+# different `image_ref` + `image_source`. Verified by the unit test in
+# `loom-workflow::run::spawn::tests`. The integration test in
+# `loom/tests/spawn_dispatch.rs` records the argv shape (`run-bead
+# --spawn-config <file> --stdio`) end-to-end against a wrapix shim.
 #-----------------------------------------------------------------------------
 test_per_bead_profile_spawn() {
-    echo "stub: image_ref + image_source assertion not yet implemented (SpawnConfig rename pending)" >&2
-    return 77
+    cargo_run test -p loom-workflow --lib \
+        run::spawn::tests::per_bead_profile_dispatch_produces_distinct_image_refs \
+        -- --exact --nocapture --quiet
+    cargo_run test -p loom --test spawn_dispatch -- --test-threads=1 \
+        wrapix_run_bead_invocation_records_correct_argv
 }
 
 #-----------------------------------------------------------------------------
@@ -406,29 +408,34 @@ test_unknown_profile_errors() {
 
 #-----------------------------------------------------------------------------
 # test_profile_cli_override — `--profile` CLI override takes precedence
-# over bead labels (the override is resolved against the manifest the
-# same way a label is). Stub: pending the `--profile` flag plumbing in
-# the loom CLI. Implementation lands in a follow-up task; this stub
-# satisfies the annotation gate so the spec commit can land.
+# over bead labels. The override flows through `loom run` → `dispatch_for_slot`
+# → `build_spawn_config_from_manifest`; the unit test in
+# `loom-workflow::run::spawn::tests::cli_override_swaps_resolved_image`
+# pins the resolution surface, while
+# `loom-workflow::run::profile::tests::resolve_profile_image_cli_override_wins_over_label`
+# pins the precedence chain (CLI > label > phase default).
 #-----------------------------------------------------------------------------
 test_profile_cli_override() {
-    echo "stub: --profile CLI override not yet implemented" >&2
-    return 77
+    cargo_run test -p loom-workflow --lib \
+        run::spawn::tests::cli_override_swaps_resolved_image \
+        -- --exact --nocapture --quiet
+    cargo_run test -p loom-workflow --lib \
+        run::profile::tests::resolve_profile_image_cli_override_wins_over_label \
+        -- --exact --nocapture --quiet
 }
 
 #-----------------------------------------------------------------------------
-# test_wrapix_spawn_dispatch — drives `loom todo --agent pi` through a
-# shim wrapix that records argv, then asserts the loom binary handed the
-# wrapper exactly `spawn --spawn-config <file> --stdio` and that the
-# JSON file carries the resolved profile image (`image_ref` +
-# `image_source`). Stub: pending the `wrapix run-bead` → `wrapix spawn`
-# rename and the SpawnConfig field rename. Implementation lands in a
-# follow-up task; this stub satisfies the annotation gate so the spec
-# commit can land.
+# test_wrapix_spawn_dispatch — drives `loom --agent pi todo` through a
+# shim wrapix that records argv and asserts the loom binary handed the
+# wrapper exactly `run-bead --spawn-config <file> --stdio`, with the JSON
+# file carrying the resolved profile image (`image_ref` + `image_source`).
+# The launcher rename (`wrapix run-bead` → `wrapix spawn`) lands in a
+# follow-up task; until then the assertion is on the current `run-bead`
+# token. The integration test lives in `loom/tests/spawn_dispatch.rs`.
 #-----------------------------------------------------------------------------
 test_wrapix_spawn_dispatch() {
-    echo "stub: wrapix spawn dispatch test not yet implemented (run-bead -> spawn rename pending)" >&2
-    return 77
+    cargo_run test -p loom --test spawn_dispatch -- --test-threads=1 \
+        wrapix_run_bead_invocation_records_correct_argv
 }
 
 #-----------------------------------------------------------------------------
