@@ -482,11 +482,17 @@ fn run_check(workspace: &Path, spec: Option<String>) -> anyhow::Result<()> {
     let _guard = lock_mgr.acquire_spec(&label)?;
 
     let loom_bin = current_loom_bin()?;
+    let state = std::sync::Arc::new(StateDb::open(workspace.join(".wrapix/loom/state.db"))?);
     let runtime = tokio::runtime::Runtime::new()?;
     let result = runtime.block_on(async move {
         let bd = BdClient::new();
-        let mut controller =
-            ProductionCheckController::new(bd, label.clone(), loom_bin, workspace.to_path_buf());
+        let mut controller = ProductionCheckController::new(
+            bd,
+            label.clone(),
+            loom_bin,
+            workspace.to_path_buf(),
+            state,
+        );
         run_check_loop(&mut controller, IterationCap::default()).await
     })?;
     println!("loom check: {result:?}");

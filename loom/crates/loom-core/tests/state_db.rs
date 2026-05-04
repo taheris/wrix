@@ -202,6 +202,42 @@ fn state_increment_iteration_returns_updated_count() -> Result<()> {
 }
 
 #[test]
+fn state_set_and_reset_iteration_round_trip() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let workspace = dir.path();
+    write_spec(workspace, "alpha", "# alpha\n")?;
+    let db = StateDb::open(workspace.join(".wrapix/loom/state.db"))?;
+    let molecules = vec![ActiveMolecule {
+        id: MoleculeId::new("wx-alpha"),
+        spec_label: SpecLabel::new("alpha"),
+        base_commit: None,
+    }];
+    db.rebuild(workspace, &molecules)?;
+
+    let mol_id = MoleculeId::new("wx-alpha");
+    db.set_iteration(&mol_id, 3)?;
+    assert_eq!(
+        db.active_molecule(&SpecLabel::new("alpha"))?
+            .context("molecule present")?
+            .iteration_count,
+        3
+    );
+
+    db.reset_iteration(&mol_id)?;
+    assert_eq!(
+        db.active_molecule(&SpecLabel::new("alpha"))?
+            .context("molecule present")?
+            .iteration_count,
+        0
+    );
+
+    let unknown = MoleculeId::new("wx-missing");
+    assert!(db.set_iteration(&unknown, 1).is_err());
+    assert!(db.reset_iteration(&unknown).is_err());
+    Ok(())
+}
+
+#[test]
 fn state_corruption_recovery() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let db_path = dir.path().join("state.db");

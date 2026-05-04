@@ -4,6 +4,7 @@ use thiserror::Error;
 use loom_core::agent::ProtocolError;
 use loom_core::bd::BdError;
 use loom_core::logging::LogError;
+use loom_core::state::StateError;
 
 /// Errors raised by the `loom check` driver.
 #[derive(Debug, Display, Error)]
@@ -37,4 +38,10 @@ pub enum CheckError {
 
     /// `loom run` handoff for auto-iteration failed: {0}
     RunHandoff(String),
+
+    /// state-db read/write failure
+    State(#[from] StateError),
+
+    /// no active molecule for spec {0} — run `loom todo` before `loom check`
+    NoActiveMolecule(String),
 }

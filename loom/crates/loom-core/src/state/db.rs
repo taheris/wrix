@@ -217,6 +217,27 @@ impl StateDb {
         Ok(count.max(0) as u32)
     }
 
+    /// Set the iteration counter for `mol_id` to `value`. Errors if no row
+    /// matches (consistent with [`Self::increment_iteration`]).
+    pub fn set_iteration(&self, mol_id: &MoleculeId, value: u32) -> Result<(), StateError> {
+        let conn = self.lock_conn()?;
+        let updated = conn.execute(
+            "UPDATE molecules SET iteration_count = ?1 WHERE id = ?2",
+            params![value, mol_id.as_str()],
+        )?;
+        if updated == 0 {
+            return Err(StateError::SpecNotFound {
+                label: mol_id.to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Reset the iteration counter for `mol_id` to zero.
+    pub fn reset_iteration(&self, mol_id: &MoleculeId) -> Result<(), StateError> {
+        self.set_iteration(mol_id, 0)
+    }
+
     /// Borrow the underlying connection for code inside `state/` only.
     pub(super) fn with_conn<R>(
         &self,
