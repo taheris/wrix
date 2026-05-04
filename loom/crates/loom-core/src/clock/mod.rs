@@ -24,7 +24,7 @@ pub use system::SystemClock;
 
 use std::future::Future;
 use std::pin::Pin;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 /// Returned by [`Clock::timeout`] when the deadline elapses before the
 /// inner future resolves.
@@ -47,6 +47,14 @@ pub trait Clock: Send + Sync + 'static {
     /// instant so successive calls reflect [`Clock::sleep`] advances under
     /// `#[tokio::test(start_paused = true)]`.
     fn now(&self) -> Instant;
+
+    /// Current wall-clock [`SystemTime`]. Used for filenames or other
+    /// surfaces that need to round-trip through the OS clock (e.g. log file
+    /// paths). [`SystemClock::wall_now`] delegates to
+    /// `std::time::SystemTime::now`; [`MockClock::wall_now`] returns
+    /// [`UNIX_EPOCH`](std::time::UNIX_EPOCH) so deterministic tests stay
+    /// pinned to a known stamp.
+    fn wall_now(&self) -> SystemTime;
 
     /// Resolve after at least `duration` has elapsed on this clock.
     fn sleep(&self, duration: Duration) -> BoxFuture<'_, ()>;

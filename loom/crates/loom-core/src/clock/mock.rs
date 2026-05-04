@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use super::{BoxFuture, Clock};
 
@@ -33,6 +33,10 @@ impl Clock for MockClock {
         // std::time::Instant preserves the paused-time view at the public
         // surface.
         tokio::time::Instant::now().into_std()
+    }
+
+    fn wall_now(&self) -> SystemTime {
+        UNIX_EPOCH
     }
 
     fn sleep(&self, duration: Duration) -> BoxFuture<'_, ()> {

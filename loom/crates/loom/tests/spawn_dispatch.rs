@@ -249,6 +249,95 @@ fn wrapix_spawn_invocation_records_correct_argv() {
     );
 }
 
+/// `tests/loom-test.sh::test_loom_todo_writes_ndjson_log` — the run-time
+/// promise from `specs/loom-harness.md` *Run UX & Logging* is that every
+/// `loom todo` invocation emits a per-phase NDJSON file under
+/// `<workspace>/.wrapix/loom/logs/<spec-label>/todo-<utc>.ndjson`. Without
+/// this gate the workflow happily ran agents to completion while
+/// `run_agent` discarded every event with a `trace!` call (wx-2emcs);
+/// users saw two INFO lines and an empty `loom logs`. The test drives the
+/// same mock-pi handshake as the dispatch tests above, then asserts the
+/// log file appears at the documented path with at least one valid event
+/// line that round-trips through `serde_json`. A future regression that
+/// removes the sink wiring trips this assertion before any user-visible
+/// breakage.
+#[test]
+fn loom_todo_writes_ndjson_log_under_workspace_logs_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path();
+
+    let shim_dir = dir.path().join("shim");
+    std::fs::create_dir_all(&shim_dir).unwrap();
+    let argv_file = shim_dir.join("argv.txt");
+    let stdin_info = shim_dir.join("stdin-info.txt");
+    let spawn_copy = shim_dir.join("spawn-config.json");
+    let shim = install_wrapix_shim(
+        &shim_dir,
+        &argv_file,
+        &stdin_info,
+        &spawn_copy,
+        &mock_pi_path(),
+    );
+
+    let loom_bin = env!("CARGO_BIN_EXE_loom");
+    let output = drive_loom_todo_pi(workspace, &shim, loom_bin);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "loom todo --agent pi must exit 0 against the mock pi shim. stdout={stdout} stderr={stderr}",
+    );
+
+    // The phase log path is `<workspace>/.wrapix/loom/logs/<spec>/todo-<utc>.ndjson`.
+    // Spec label was passed as `loom-agent` via `drive_loom_todo_pi`.
+    let logs_dir = workspace.join(".wrapix/loom/logs/loom-agent");
+    assert!(
+        logs_dir.is_dir(),
+        "phase log directory must exist after `loom todo`: {}\nstdout={stdout}\nstderr={stderr}",
+        logs_dir.display(),
+    );
+    let entries: Vec<_> = std::fs::read_dir(&logs_dir)
+        .expect("read logs dir")
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "ndjson"))
+        .collect();
+    assert_eq!(
+        entries.len(),
+        1,
+        "exactly one NDJSON file must appear under {}: got {entries:?}",
+        logs_dir.display(),
+    );
+    let log_path = &entries[0];
+    let stem = log_path.file_stem().and_then(|s| s.to_str()).unwrap();
+    assert!(
+        stem.starts_with("todo-"),
+        "phase log file stem must start with `todo-`: got {stem}",
+    );
+
+    let body = std::fs::read_to_string(log_path).expect("read log");
+    let lines: Vec<&str> = body.lines().filter(|l| !l.is_empty()).collect();
+    assert!(
+        !lines.is_empty(),
+        "log file must contain at least one event line, got empty body. path={}",
+        log_path.display(),
+    );
+    for (i, line) in lines.iter().enumerate() {
+        let v: serde_json::Value = serde_json::from_str(line)
+            .unwrap_or_else(|e| panic!("line {i} is not valid JSON: {e}\nline={line}"));
+        assert!(
+            v.get("kind").and_then(|k| k.as_str()).is_some(),
+            "every event must carry a `kind` field. line {i}: {line}",
+        );
+    }
+    let last: serde_json::Value = serde_json::from_str(lines.last().unwrap()).unwrap();
+    assert_eq!(
+        last["kind"], "session_complete",
+        "the final event must be session_complete. lines={lines:?}",
+    );
+}
+
 /// `tests/loom-test.sh::test_container_stdio_pipe` — the agent process
 /// receives stdin as a pipe, never a TTY. EOF on that pipe is the signal
 /// loom uses to tell the agent "no more input is coming"; if the

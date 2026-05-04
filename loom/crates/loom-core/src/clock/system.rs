@@ -1,5 +1,5 @@
 use std::future::Future;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use super::{BoxFuture, Clock, Elapsed};
 
@@ -16,6 +16,10 @@ impl SystemClock {
 impl Clock for SystemClock {
     fn now(&self) -> Instant {
         Instant::now()
+    }
+
+    fn wall_now(&self) -> SystemTime {
+        SystemTime::now()
     }
 
     fn sleep(&self, duration: Duration) -> BoxFuture<'_, ()> {

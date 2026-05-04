@@ -9,7 +9,7 @@ use crate::agent::AgentEvent;
 use crate::identifier::{BeadId, SpecLabel};
 
 use super::error::LogError;
-use super::path::bead_log_path;
+use super::path::{bead_log_path, phase_log_path};
 use super::renderer::{BeadOutcome, TerminalRenderer};
 
 /// Tee-style sink that drives the per-bead NDJSON log file *and* the
@@ -37,6 +37,48 @@ impl LogSink {
         when: SystemTime,
     ) -> Result<Self, LogError> {
         let log_path = bead_log_path(logs_root, spec_label, bead_id, when);
+        let sink = Self::open_at_path(log_path.clone(), Some(renderer))?;
+        info!(
+            target: "loom_core::logging::sink",
+            spec_label = spec_label.as_str(),
+            bead_id = bead_id.as_str(),
+            log_path = %log_path.display(),
+            "spawn started — log path",
+        );
+        Ok(sink)
+    }
+
+    /// Open a sink for a non-bead phase (`loom todo`, `loom plan`,
+    /// `loom check`). The path follows
+    /// `<logs_root>/<spec-label>/<phase>-<utc>.ndjson` so phase logs share the
+    /// same per-spec directory tree as bead logs without colliding.
+    ///
+    /// `renderer` is optional because phase logs may run in non-interactive
+    /// contexts (CI, scripted spawns) where the per-bead progress chrome is
+    /// noise; emitting only to the file is the lighter contract.
+    pub fn open_phase_at(
+        logs_root: &Path,
+        spec_label: &SpecLabel,
+        phase: &str,
+        renderer: Option<TerminalRenderer>,
+        when: SystemTime,
+    ) -> Result<Self, LogError> {
+        let log_path = phase_log_path(logs_root, spec_label, phase, when);
+        let sink = Self::open_at_path(log_path.clone(), renderer)?;
+        info!(
+            target: "loom_core::logging::sink",
+            spec_label = spec_label.as_str(),
+            phase = phase,
+            log_path = %log_path.display(),
+            "phase started — log path",
+        );
+        Ok(sink)
+    }
+
+    fn open_at_path(
+        log_path: PathBuf,
+        renderer: Option<TerminalRenderer>,
+    ) -> Result<Self, LogError> {
         if let Some(dir) = log_path.parent() {
             fs::create_dir_all(dir).map_err(|source| LogError::CreateDir {
                 path: dir.to_path_buf(),
@@ -51,16 +93,9 @@ impl LogSink {
                 path: log_path.clone(),
                 source,
             })?;
-        info!(
-            target: "loom_core::logging::sink",
-            spec_label = spec_label.as_str(),
-            bead_id = bead_id.as_str(),
-            log_path = %log_path.display(),
-            "spawn started — log path",
-        );
         Ok(Self {
             file: BufWriter::new(file),
-            renderer: Some(renderer),
+            renderer,
             log_path,
             finished: false,
         })
@@ -268,5 +303,29 @@ mod tests {
         )
         .expect("open");
         assert!(sink.log_path().parent().expect("parent").is_dir());
+    }
+
+    #[test]
+    fn phase_sink_writes_under_spec_directory_with_phase_prefix() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let logs = dir.path().join(".wrapix/loom/logs");
+        let label = SpecLabel::new("alpha");
+        let mut sink = LogSink::open_phase_at(
+            &logs,
+            &label,
+            "todo",
+            None,
+            SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
+        )
+        .expect("open phase sink");
+        sink.emit(&AgentEvent::TurnEnd).expect("emit");
+        let path = sink.log_path().to_path_buf();
+        sink.finish(BeadOutcome::Done).expect("finish");
+
+        assert_eq!(path.parent(), Some(logs.join("alpha").as_path()));
+        let stem = path.file_stem().and_then(|s| s.to_str()).expect("stem");
+        assert!(stem.starts_with("todo-"), "{stem:?}");
+        let lines = std::fs::read_to_string(&path).expect("read");
+        assert!(lines.contains("\"kind\":\"turn_end\""), "{lines:?}");
     }
 }

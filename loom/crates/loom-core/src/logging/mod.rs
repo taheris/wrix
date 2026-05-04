@@ -32,7 +32,7 @@ mod sink;
 mod time;
 
 pub use error::LogError;
-pub use path::{bead_log_path, format_utc_timestamp};
+pub use path::{bead_log_path, format_utc_timestamp, phase_log_path};
 pub use redacted::Redacted;
 pub use renderer::{BeadOutcome, RenderMode, TerminalRenderer};
 pub use retention::{RetentionReport, sweep_retention_at};

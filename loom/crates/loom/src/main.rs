@@ -15,10 +15,12 @@ use clap::{Parser, Subcommand, ValueEnum};
 use loom_agent::{ClaudeBackend, PiBackend};
 use loom_core::agent::{AgentKind, ProtocolError, SessionOutcome, SpawnConfig};
 use loom_core::bd::{BdClient, ListOpts, UpdateOpts};
+use loom_core::clock::{Clock, SystemClock};
 use loom_core::config::{LoomConfig, Phase};
 use loom_core::git::GitClient;
 use loom_core::identifier::{BeadId, ProfileName, SpecLabel};
 use loom_core::lock::LockManager;
+use loom_core::logging::LogSink;
 use loom_core::profile_manifest::ProfileImageManifest;
 use loom_core::state::StateDb;
 use loom_workflow::check::{IterationCap, ProductionCheckController, check_loop as run_check_loop};
@@ -384,7 +386,7 @@ fn run_run(
             manifest_for_seq,
             cli_profile,
             phase_default,
-            move |spawn_cfg: SpawnConfig| async move { dispatch(kind, &spawn_cfg).await },
+            move |spawn_cfg: SpawnConfig| async move { dispatch(kind, &spawn_cfg, None).await },
         );
         run_loop(&mut controller, mode, RetryPolicy::default()).await
     })?;
@@ -500,16 +502,25 @@ async fn dispatch_for_slot(
         vec![],
     )?;
 
-    Ok(dispatch(kind, &spawn_config).await?)
+    Ok(dispatch(kind, &spawn_config, None).await?)
 }
 
 /// Backend-agnostic dispatcher. The match is the only place in the binary
 /// that knows the concrete backend types — `run_agent` is monomorphized once
 /// per arm at compile time, so the workflow modules never see them.
-async fn dispatch(kind: AgentKind, spawn: &SpawnConfig) -> Result<SessionOutcome, ProtocolError> {
+///
+/// `sink` is consumed: ownership crosses into [`run_agent`], which finishes
+/// it before returning. Phase entry points open the sink before invoking
+/// dispatch so the on-disk NDJSON and the workflow outcome share one code
+/// path. Pass `None` from sites that have not yet been wired.
+async fn dispatch(
+    kind: AgentKind,
+    spawn: &SpawnConfig,
+    sink: Option<LogSink>,
+) -> Result<SessionOutcome, ProtocolError> {
     match kind {
-        AgentKind::Pi => run_agent::<PiBackend>(spawn).await,
-        AgentKind::Claude => run_agent::<ClaudeBackend>(spawn).await,
+        AgentKind::Pi => run_agent::<PiBackend>(spawn, sink).await,
+        AgentKind::Claude => run_agent::<ClaudeBackend>(spawn, sink).await,
     }
 }
 
@@ -565,7 +576,7 @@ fn run_check(
             state,
             manifest,
             phase_default,
-            move |spawn_cfg: SpawnConfig| async move { dispatch(kind, &spawn_cfg).await },
+            move |spawn_cfg: SpawnConfig| async move { dispatch(kind, &spawn_cfg, None).await },
         );
         run_check_loop(&mut controller, IterationCap::default()).await
     })?;
@@ -707,6 +718,8 @@ fn run_todo(
     let git = Arc::new(GitClient::open(workspace)?);
     let runtime = tokio::runtime::Runtime::new()?;
     let workspace_buf = workspace.to_path_buf();
+    let logs_root = workspace.join(".wrapix/loom/logs");
+    let label_for_sink = label.clone();
     let summary = runtime.block_on(async move {
         let mut controller = ProductionTodoController::new(
             label,
@@ -718,7 +731,15 @@ fn run_todo(
             since,
         );
         run_todo_workflow(&mut controller, |spawn_cfg: SpawnConfig| async move {
-            dispatch(kind, &spawn_cfg).await
+            let sink = LogSink::open_phase_at(
+                &logs_root,
+                &label_for_sink,
+                "todo",
+                None,
+                SystemClock::new().wall_now(),
+            )
+            .map_err(|e| ProtocolError::Io(std::io::Error::other(e.to_string())))?;
+            dispatch(kind, &spawn_cfg, Some(sink)).await
         })
         .await
     })?;

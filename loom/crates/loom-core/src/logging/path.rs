@@ -44,6 +44,26 @@ pub fn bead_log_path(
         .join(format!("{}-{}.ndjson", bead_id.as_str(), stamp))
 }
 
+/// Resolve the per-phase NDJSON log path under
+/// `<logs_root>/<spec-label>/<phase>-<utc-timestamp>.ndjson`.
+///
+/// `loom todo`, `loom plan`, and `loom check` operate against a spec rather
+/// than a single bead, so their event streams live alongside per-bead logs
+/// under the same `<spec-label>/` directory but use the phase name as the
+/// file-stem prefix. The function is pure: callers handle directory creation
+/// (see [`crate::logging::LogSink::open_phase_at`]).
+pub fn phase_log_path(
+    logs_root: &Path,
+    spec_label: &SpecLabel,
+    phase: &str,
+    when: SystemTime,
+) -> PathBuf {
+    let stamp = format_utc_timestamp(when);
+    logs_root
+        .join(spec_label.as_str())
+        .join(format!("{phase}-{stamp}.ndjson"))
+}
+
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "tests use panicking helpers")]
 mod tests {
@@ -85,5 +105,30 @@ mod tests {
         let p_b = bead_log_path(root, &label, &bead_b, when);
         assert_eq!(p_a.parent(), p_b.parent());
         assert_ne!(p_a.file_name(), p_b.file_name());
+    }
+
+    #[test]
+    fn phase_log_path_uses_phase_name_as_file_stem_prefix() {
+        let path = phase_log_path(
+            Path::new("/x/.wrapix/loom/logs"),
+            &SpecLabel::new("alpha"),
+            "todo",
+            UNIX_EPOCH + Duration::from_secs(1777811445),
+        );
+        assert_eq!(
+            path,
+            Path::new("/x/.wrapix/loom/logs/alpha/todo-20260503T123045Z.ndjson"),
+        );
+    }
+
+    #[test]
+    fn phase_log_path_nests_under_spec_label() {
+        let p = phase_log_path(
+            Path::new("/r"),
+            &SpecLabel::new("loom-harness"),
+            "check",
+            UNIX_EPOCH,
+        );
+        assert_eq!(p.parent(), Some(Path::new("/r/loom-harness")));
     }
 }
