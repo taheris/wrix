@@ -3,16 +3,18 @@
 #
 # Reads NDJSON commands on stdin, emits NDJSON responses+events on stdout.
 # The first argument selects a behavior mode used by the unit tests in
-# loom-agent/src/pi/backend.rs:
+# loom-agent/src/pi/backend.rs and the container smoke runner:
 #
 #   probe-ok                  — respond to get_commands with the full
-#                               required command set; then echo a prompt
-#                               as a message_delta + agent_end.
+#                               required command set, then exit. The
+#                               session-handshake test asserts loom
+#                               proceeds past the probe; nothing more
+#                               is exchanged.
 #   probe-missing-set-model   — respond to get_commands omitting
 #                               'set_model' so the driver fails fast.
-#   echo-prompt               — like probe-ok but the echoed message_delta
-#                               contains the literal prompt payload so the
-#                               test can assert the wire shape.
+#   echo-prompt               — probe ok, then echo the prompt payload
+#                               as a message_delta so the test can
+#                               assert the wire shape.
 #   steering                  — probe ok; on prompt emit a first turn +
 #                               turn_end; on the next stdin line (steer),
 #                               echo its payload back as a message_delta +
@@ -25,10 +27,14 @@
 #                               set_model) respond ok and echo the
 #                               provider/modelId pair into a later
 #                               message_delta after the prompt.
+#   happy-path                — probe ok, prompt → message_delta →
+#                               agent_end. Used by the container smoke
+#                               and any test that wants the full
+#                               single-turn lifecycle.
 #
-# Modes are deliberately small — this binary is exercised via cargo test
-# from the loom-agent crate; the surface is shaped to those tests, not to
-# real pi semantics.
+# Modes are deliberately small — every mode is shaped to exactly one
+# Rust test (or the smoke runner). The script is not a general-purpose
+# pi emulator.
 set -euo pipefail
 
 MODE="${1:-default}"
@@ -101,6 +107,10 @@ handle_probe() {
 }
 
 run_probe_ok() {
+    handle_probe 0
+}
+
+run_happy_path() {
     handle_probe 0
     local _prompt
     IFS= read -r _prompt
@@ -181,6 +191,9 @@ case "$MODE" in
         ;;
     set-model)
         run_set_model
+        ;;
+    happy-path)
+        run_happy_path
         ;;
     *)
         echo "mock-pi: unknown mode: $MODE" >&2

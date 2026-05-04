@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Mock claude binary for loom-agent tests.
+# Mock claude binary for loom-agent tests and the container smoke runner.
 #
 # Reads stream-json on stdin, emits stream-json on stdout. The first
 # argument selects a behavior mode used by the unit tests in
@@ -13,9 +13,13 @@
 #                    close so the test exercises the SIGTERM → SIGKILL
 #                    escalation in the shutdown watchdog.
 #
-# Modes are deliberately small — this binary is exercised via cargo test
-# from the loom-agent crate; the surface is shaped to those tests, not to
-# real claude semantics.
+#   happy-path     — system → assistant → result/success. Used by the
+#                    container smoke runner; covers the minimum
+#                    single-turn lifecycle.
+#
+# Modes are deliberately small — every mode is shaped to exactly one
+# Rust test (or the smoke runner). The script is not a general-purpose
+# claude emulator.
 set -euo pipefail
 
 MODE="${1:-default}"
@@ -27,6 +31,10 @@ exec 1> >(stdbuf -oL cat)
 
 emit() {
     printf '%s\n' "$1"
+}
+
+emit_system_init() {
+    emit '{"type":"system","subtype":"init","session_id":"mock-claude-session"}'
 }
 
 emit_assistant_text() {
@@ -67,8 +75,6 @@ case "$MODE" in
         exit 0
         ;;
     ignore-stdin)
-        # Read once so the test's prompt() call doesn't block.
-        IFS= read -r _initial || true
         emit_result_success
 
         # Trap SIGTERM and SIGPIPE so the test's shutdown watchdog must
@@ -78,6 +84,15 @@ case "$MODE" in
         while true; do
             sleep 0.1
         done
+        ;;
+    happy-path)
+        emit_system_init
+        # Read the prompt so the smoke runner's stdin write doesn't block
+        # when the driver pipe stays open longer than the agent loop.
+        IFS= read -r _initial
+        emit_assistant_text "ack"
+        emit_result_success
+        exit 0
         ;;
     *)
         echo "mock-claude: unknown mode: $MODE" >&2

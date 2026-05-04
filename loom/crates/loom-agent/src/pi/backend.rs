@@ -369,7 +369,7 @@ mod tests {
 
     #[tokio::test]
     async fn startup_probe_succeeds_when_required_commands_present() {
-        let session = spawn_with_handshake(mock_command("probe-ok"), None)
+        let session = spawn_with_handshake(mock_command("happy-path"), None)
             .await
             .expect("probe should succeed");
         // Drive a prompt to confirm the session is wired and the mock keeps

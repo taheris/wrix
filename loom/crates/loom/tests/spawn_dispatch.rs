@@ -40,7 +40,8 @@ fn find_bash() -> PathBuf {
 /// argv (one quoted token per line) and stdin TTY/pipe state into the two
 /// sibling files, copies the `--spawn-config` JSON aside (so the test can
 /// inspect it without racing the temp-file delete), then exec's mock-pi in
-/// `probe-ok` mode to satisfy the pi backend handshake.
+/// `happy-path` mode so the pi backend handshake AND the prompt round-trip
+/// complete; otherwise the loom binary would hang waiting for `agent_end`.
 fn install_wrapix_shim(
     dir: &Path,
     argv_file: &Path,
@@ -86,7 +87,7 @@ fn install_wrapix_shim(
          # Hand stdin/stdout to mock-pi for the protocol exchange. exec\n\
          # replaces this shell so the kernel-level pipe routing matches the\n\
          # production case where wrapix execs podman which execs the agent.\n\
-         exec '{bash}' \"$MOCK_PI\" probe-ok\n",
+         exec '{bash}' \"$MOCK_PI\" happy-path\n",
         bash = bash.display(),
         argv = argv_file.display(),
         stdin = stdin_info.display(),
