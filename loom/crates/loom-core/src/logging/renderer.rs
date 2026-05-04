@@ -267,7 +267,7 @@ fn truncate_to(s: &str, max: usize) -> String {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[expect(clippy::expect_used, reason = "tests use panicking helpers")]
 mod tests {
     use super::*;
     use crate::identifier::ToolCallId;

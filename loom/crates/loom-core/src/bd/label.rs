@@ -55,7 +55,6 @@ impl ::std::fmt::Display for Label {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use anyhow::Result;

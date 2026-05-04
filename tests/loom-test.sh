@@ -221,6 +221,38 @@ test_clippy_clean() {
 }
 
 #-----------------------------------------------------------------------------
+# test_workspace_clippy_lints — loom-tests spec Functional #6: clippy block
+# denies unwrap_used, expect_used, panic, todo, unimplemented; warns
+# allow_attributes (use `#[expect(...)]` over `#[allow(...)]`).
+#-----------------------------------------------------------------------------
+test_workspace_clippy_lints() {
+    local clippy_section
+    clippy_section=$(awk '
+        /^\[workspace\.lints\.clippy\][[:space:]]*$/ { in_section = 1; next }
+        in_section && /^\[/ { in_section = 0 }
+        in_section { print }
+    ' "$WORKSPACE_TOML")
+
+    if [ -z "$clippy_section" ]; then
+        echo "[workspace.lints.clippy] section missing in $WORKSPACE_TOML" >&2
+        return 1
+    fi
+
+    local missing=0 lint
+    for lint in unwrap_used expect_used panic todo unimplemented; do
+        if ! grep -E "^${lint}[[:space:]]*=[[:space:]]*\"deny\"" <<<"$clippy_section" >/dev/null; then
+            echo "clippy lint $lint not denied in $WORKSPACE_TOML" >&2
+            missing=$((missing + 1))
+        fi
+    done
+    if ! grep -E '^allow_attributes[[:space:]]*=[[:space:]]*"warn"' <<<"$clippy_section" >/dev/null; then
+        echo "clippy lint allow_attributes not warned in $WORKSPACE_TOML" >&2
+        missing=$((missing + 1))
+    fi
+    return "$missing"
+}
+
+#-----------------------------------------------------------------------------
 # test_cargo_test — `cargo test --workspace` passes for all crates.
 #-----------------------------------------------------------------------------
 test_cargo_test() {

@@ -112,7 +112,11 @@ pub fn parse_backend_name(name: &str) -> Result<AgentKind, AgentSelectionError> 
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "tests use panicking helpers"
+)]
 mod tests {
     use super::*;
 

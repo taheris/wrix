@@ -28,7 +28,6 @@ pub fn build_wrapix_argv(workspace: &Path, prompt_body: &str) -> Vec<String> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use std::path::PathBuf;

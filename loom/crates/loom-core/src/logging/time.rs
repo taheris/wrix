@@ -69,7 +69,6 @@ fn civil_from_days(days_since_epoch: i64) -> (i32, u32, u32) {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

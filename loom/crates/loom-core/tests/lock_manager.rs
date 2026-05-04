@@ -5,6 +5,8 @@
 //! `cargo test -p loom-core --test lock_manager <name>`, so the verify path
 //! exercises the same code as `cargo test`.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Mutex, mpsc};

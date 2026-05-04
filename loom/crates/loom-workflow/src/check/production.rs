@@ -145,7 +145,7 @@ impl CheckController for ProductionCheckController {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[expect(clippy::unwrap_used, reason = "tests use panicking helpers")]
 mod tests {
     use super::*;
     use std::ffi::OsStr;

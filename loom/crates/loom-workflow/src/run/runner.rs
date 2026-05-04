@@ -147,7 +147,7 @@ async fn process_one_bead<C: AgentLoopController>(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[expect(clippy::expect_used, reason = "tests use panicking helpers")]
 mod tests {
     use super::*;
     use loom_core::bd::{Bead, Label};

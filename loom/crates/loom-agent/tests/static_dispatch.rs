@@ -6,6 +6,8 @@
 //! Architecture section): a generic free function over `<B: AgentBackend>`
 //! that the binary monomorphizes once per concrete backend.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 use loom_agent::{ClaudeBackend, PiBackend};
 use loom_core::agent::{AgentBackend, ProtocolError, SessionOutcome, SpawnConfig};
 

@@ -67,7 +67,11 @@ impl<'de> Deserialize<'de> for BeadId {
 pub struct ParseBeadIdError(pub String);
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "tests use panicking helpers"
+)]
 mod tests {
     use super::{BeadId, ParseBeadIdError};
     use anyhow::Result;

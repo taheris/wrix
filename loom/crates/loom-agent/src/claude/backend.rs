@@ -214,7 +214,11 @@ fn send_signal(child: &Child, sig: Signal) {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "tests use panicking helpers"
+)]
 mod tests {
     use super::*;
     use loom_core::agent::{AgentEvent, RePinContent};

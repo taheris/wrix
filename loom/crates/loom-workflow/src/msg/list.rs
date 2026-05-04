@@ -77,7 +77,7 @@ pub fn spec_label_of(bead: &Bead) -> Option<SpecLabel> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[expect(clippy::expect_used, reason = "tests use panicking helpers")]
 mod tests {
     use super::*;
     use loom_core::identifier::BeadId;

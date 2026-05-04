@@ -8,7 +8,7 @@
 //! Snapshot updates require a "snapshot updated because: ..." line in the PR
 //! description so accidental drift is caught at review time.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::process::Command;
 

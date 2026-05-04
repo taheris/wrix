@@ -42,7 +42,7 @@ pub fn render_prompt(inputs: PlanPromptInputs) -> Result<String, PlanError> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[expect(clippy::expect_used, reason = "tests use panicking helpers")]
 mod tests {
     use super::*;
     use loom_core::identifier::SpecLabel;

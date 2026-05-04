@@ -141,7 +141,7 @@ fn render_exit_signals(cfg: &ExitSignalsConfig) -> String {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[expect(clippy::unwrap_used, reason = "tests use panicking helpers")]
 mod tests {
     use super::*;
     use anyhow::Result;

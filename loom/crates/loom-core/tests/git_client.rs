@@ -4,6 +4,8 @@
 //! binary, opens it through the typed client, and asserts the documented
 //! behaviour for create/remove worktree and merge-back.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 use std::path::Path;
 use std::process::Command;
 

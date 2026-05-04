@@ -12,7 +12,7 @@
 //! 2. `RunMode::Once` exits cleanly without invoking `loom check`,
 //! 3. binary returns exit code 0.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;

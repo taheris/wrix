@@ -25,7 +25,6 @@ pub fn resolve_profile(bead_labels: &[Label], override_: Option<&ProfileName>) -
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

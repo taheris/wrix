@@ -124,7 +124,7 @@ fn walk_and_sweep(dir: &Path, cutoff: SystemTime, report: &mut RetentionReport) 
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[expect(clippy::expect_used, reason = "tests use panicking helpers")]
 mod tests {
     use super::*;
     use std::fs;
