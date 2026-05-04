@@ -47,7 +47,7 @@ pin — keep it current when specs land or retire.
 | **Judge** | Persistent city role: reviews Worker diffs, owns merge |
 | **Mayor** | Persistent city role: human's conversational interface, triage |
 | **Loom** | Rust agent driver replacing Ralph's bash scripts; supports pi-mono and Claude Code backends |
-| **NDJSON** | Newline-Delimited JSON — one JSON object per `\n`-terminated line; protocol framing for both pi-mono RPC and Claude stream-json |
+| **JSONL** | JSON Lines — one complete JSON object per `\n`-terminated line (same format as NDJSON; JSONL is the term Loom uses); protocol framing for both pi-mono RPC and Claude stream-json |
 | **mkCity** | Nix function that generates a Gas City instance |
 | **Order** | gc event- or time-triggered workflow dispatcher |
 | **pasta** | Linux userspace networking for Podman containers |

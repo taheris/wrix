@@ -8,7 +8,7 @@ communication, and agent runtime layer for the pi runtime.
 Ralph's bash scripts launch Claude Code as the only agent runtime, creating
 vendor lock-in to Anthropic. Users with a Claude Max subscription need the
 `claude` binary; users who want LLM-agnostic switching need an alternative.
-Pi-mono provides 20+ LLM provider backends and an NDJSON RPC mode that enables
+Pi-mono provides 20+ LLM provider backends and an JSONL RPC mode that enables
 programmatic control — but it requires a different communication protocol than
 Claude Code's stream-json output mode.
 
@@ -36,7 +36,7 @@ platform (crate structure, templates, workflow) is defined in
 2. **Agent backend trait** — an async Rust trait (`AgentBackend`) abstracting
    agent lifecycle: spawn a session. Used via type parameter
    (`<B: AgentBackend>`) — the concrete backend is known at each call site.
-3. **Pi backend** — speaks pi-mono's NDJSON RPC protocol over stdin/stdout.
+3. **Pi backend** — speaks pi-mono's JSONL RPC protocol over stdin/stdout.
    Commands:
    - `prompt` — send initial or follow-up prompts
    - `steer` — mid-session course correction
@@ -50,7 +50,7 @@ platform (crate structure, templates, workflow) is defined in
    completion, compaction, and errors.
 4. **Claude backend** — launches
    `claude --print --input-format stream-json --output-format stream-json`,
-   parses NDJSON events from stdout, and writes user messages (initial
+   parses JSONL events from stdout, and writes user messages (initial
    prompt, steering) as stream-json on stdin. `--permission-prompt-tool
    stdio` enables the `control_request` / `control_response` flow. The
    `--print` flag keeps the session non-interactive (runs to completion,
@@ -75,8 +75,8 @@ platform (crate structure, templates, workflow) is defined in
      stdin/stdout
 8. **Event normalization** — both backends emit a common `AgentEvent` enum so
    the workflow engine does not need backend-specific event handling.
-9. **NDJSON framing** — both protocols use Newline-Delimited JSON (one complete
-   JSON object per line, separated by `\n`). The NDJSON reader splits on `\n`
+9. **JSONL framing** — both protocols use JSON Lines (one complete
+   JSON object per line, separated by `\n`). The JSONL reader splits on `\n`
    only, not Unicode line separators (U+2028, U+2029). Each line is
    independently parseable.
 
@@ -90,7 +90,7 @@ platform (crate structure, templates, workflow) is defined in
    builds where manual `compact` is disabled), the driver continues
    without it. No hard failures for missing optional capabilities.
 3. **Parse, Don't Validate** — raw protocol bytes are parsed into typed domain
-   representations at the NDJSON boundary. All code downstream of the parser
+   representations at the JSONL boundary. All code downstream of the parser
    works with already-validated types. No re-parsing, no stringly-typed event
    matching.
 4. **Static dispatch** — `AgentBackend` uses an explicit type parameter
@@ -103,7 +103,7 @@ platform (crate structure, templates, workflow) is defined in
 ## Architecture
 
 Throughout this section, **"driver"** refers to loom's backend-side code that
-drives the agent process over NDJSON — distinct from the agent (pi or claude)
+drives the agent process over JSONL — distinct from the agent (pi or claude)
 running inside the container.
 
 ### Dispatch: ZST Backends + Per-Phase Selection
@@ -233,7 +233,7 @@ pub struct Active;
 pub struct AgentSession<S> {
     child: tokio::process::Child,
     stdin: BufWriter<ChildStdin>,
-    reader: NdjsonReader,
+    reader: JsonlReader,
     parser: Box<dyn LineParse>,
     pending: VecDeque<AgentEvent>,
     _state: PhantomData<S>,
@@ -253,7 +253,7 @@ impl AgentSession<Active> {
     pub async fn next_event(
         &mut self,
     ) -> Result<Option<AgentEvent>, ProtocolError> {
-        // Drain self.pending first. Then read next NDJSON line, parse via
+        // Drain self.pending first. Then read next JSONL line, parse via
         // LineParse. If ParsedLine::response is Some, write it to stdin.
         // Push excess events into self.pending, return the first one.
     }
@@ -262,7 +262,7 @@ impl AgentSession<Active> {
         &mut self,
         msg: &str,
     ) -> Result<(), ProtocolError> {
-        // Parser encodes the wire payload (pi: NDJSON `steer` command;
+        // Parser encodes the wire payload (pi: JSONL `steer` command;
         // claude: stream-json user message). Session writes it.
     }
 
@@ -279,12 +279,12 @@ impl AgentSession<Active> {
 }
 ```
 
-`AgentSession`, `NdjsonReader`, and `LineParse` all live in loom-core (not
+`AgentSession`, `JsonlReader`, and `LineParse` all live in loom-core (not
 loom-agent) because the `AgentBackend` trait returns `AgentSession<Idle>` —
 if these types lived in loom-agent, the trait would depend on its own
 implementor crate (circular dependency).
 
-The `pending` queue exists because a single NDJSON line can yield multiple
+The `pending` queue exists because a single JSONL line can yield multiple
 `AgentEvent`s — `next_event` returns one at a time and buffers the rest.
 
 A state-agnostic `AgentSession::child_mut(&mut self) -> &mut tokio::process::Child`
@@ -301,7 +301,7 @@ pub struct ParsedLine {
 }
 
 pub trait LineParse: Send {
-    /// Parse one NDJSON line received from the agent's stdout.
+    /// Parse one JSONL line received from the agent's stdout.
     fn parse_line(&self, line: &str) -> Result<ParsedLine, ProtocolError>;
 
     /// Encode the initial prompt that opens the session. Returned string is
@@ -344,7 +344,7 @@ each map to a single `AgentEvent`.
 ### AgentEvent
 
 `AgentEvent` and `CompactionReason` are serializable so the terminal renderer
-and the on-disk NDJSON log share a single tee'd sink (see
+and the on-disk JSONL log share a single broadcast channel (see
 [loom-harness — Run UX & Logging](loom-harness.md#run-ux--logging)). Variant
 names are emitted as snake_case (`message_delta`, `tool_call`, …) — that is
 the wire format consumed by log readers.
@@ -414,7 +414,7 @@ pub enum ProtocolError {
     /// unexpected end of event stream
     UnexpectedEof,
 
-    /// NDJSON line too long: {len} bytes (max {max})
+    /// JSONL line too long: {len} bytes (max {max})
     LineTooLong { len: usize, max: usize },
 
     /// operation not supported by this backend
@@ -480,10 +480,10 @@ loom (host)                                            container
     │   stdin ──────────────────────────────────────►  agent
     │   stdout ◄──────────────────────────────────────  agent
     │                                                       │
-    ├─ writes NDJSON to stdin ────────────────────────►  agent processes command
+    ├─ writes JSONL to stdin ────────────────────────►  agent processes command
     │   (both backends)                                     │
     │                                                       │
-    ├─ reads NDJSON from stdout ◄─────────────────────  agent streams events
+    ├─ reads JSONL from stdout ◄─────────────────────  agent streams events
     │   (both backends)                                     │
     │                                                       │
     └─ on exit: container teardown via wrapix              │
@@ -491,14 +491,14 @@ loom (host)                                            container
 
 The wrapper hides container construction (mounts, env allowlist, krun
 runtime, network filter, deploy key, beads dolt socket) so loom owns only
-NDJSON framing and the typed `SpawnConfig` it serializes. Both backends use
-bidirectional NDJSON over stdin/stdout. The Claude backend uses
+JSONL framing and the typed `SpawnConfig` it serializes. Both backends use
+bidirectional JSONL over stdin/stdout. The Claude backend uses
 `--input-format stream-json --output-format stream-json` for full
 bidirectional support.
 
-### NDJSON Framing
+### JSONL Framing
 
-Newline-Delimited JSON (NDJSON/JSONL): each line is one complete JSON object,
+JSON Lines (JSONL, also known as NDJSON): each line is one complete JSON object,
 terminated by `\n` (0x0A). Both pi RPC and Claude stream-json use this framing.
 
 Parsing rules:
@@ -512,12 +512,12 @@ Parsing rules:
 ```rust
 const MAX_LINE_BYTES: usize = 10 * 1024 * 1024; // 10 MB
 
-pub struct NdjsonReader {
+pub struct JsonlReader {
     reader: BufReader<ChildStdout>,
     line_buf: String,
 }
 
-impl NdjsonReader {
+impl JsonlReader {
     pub async fn next_line(
         &mut self,
     ) -> Result<Option<&str>, ProtocolError> {
@@ -544,14 +544,14 @@ impl NdjsonReader {
 
 `MAX_LINE_BYTES` prevents a malicious or malfunctioning agent from exhausting
 host memory by sending a single line without a `\n` terminator. 10 MB is well
-above any legitimate NDJSON message (the largest are tool results with file
+above any legitimate JSONL message (the largest are tool results with file
 contents). The limit is checked after the read completes — `read_line` will
 still buffer the full line, but the error fires before the line is parsed or
 accumulated further.
 
 ### Pi-Mono RPC Protocol
 
-Pi's `--mode rpc` uses NDJSON over stdin/stdout. The protocol has no version
+Pi's `--mode rpc` uses JSONL over stdin/stdout. The protocol has no version
 negotiation or handshake. After spawning the process, the Pi backend sends a
 `get_commands` probe and verifies the response contains every command Loom
 depends on. The probe set is always `prompt`, `steer`, `abort`, `set_model`,
@@ -639,7 +639,7 @@ discriminates between a successful result (payload in `data`) and a failure
 
 **Commands (driver → pi, via stdin):**
 
-All commands are NDJSON objects with a `type` field. Every command supports an
+All commands are JSONL objects with a `type` field. Every command supports an
 optional `id: String` field for request-response correlation — if provided, the
 response echoes it back.
 
@@ -735,12 +735,12 @@ stderr, while protocol output uses a captured raw fd via `writeRawStdout`
 (see `output-guard.ts`). Extensions, libraries, and OSC escape sequences
 cannot corrupt the protocol stream. The earlier corruption issue
 ([pi-mono#2388](https://github.com/badlogic/pi-mono/issues/2388)) was fixed
-in March 2026. The NDJSON parser's malformed-line handling (log warning,
+in March 2026. The JSONL parser's malformed-line handling (log warning,
 skip line) is retained as defensive coding, not a live mitigation.
 
 ### Claude Stream-JSON Protocol
 
-Claude Code's `--output-format stream-json` emits NDJSON events.
+Claude Code's `--output-format stream-json` emits JSONL events.
 Combined with `--input-format stream-json`, communication is bidirectional.
 
 **Events (claude → driver, via stdout):**
@@ -826,7 +826,7 @@ after compaction. The content is built once per session by the workflow engine.
 **Content is unified; delivery is asymmetric** because Claude stream-json does
 not expose compaction events — Anthropic compacts internally with no protocol
 notification, so claude must use its own `SessionStart` hook system, while pi
-exposes compaction events natively in NDJSON. The asymmetry is fundamental
+exposes compaction events natively in JSONL. The asymmetry is fundamental
 to the products' compaction models, not a Loom design choice.
 
 **Claude backend:**
@@ -837,7 +837,7 @@ to the products' compaction models, not a Loom design choice.
 
 **Pi backend:**
 - Holds `RePinContent` in memory.
-- When a `compaction_start` event arrives in the NDJSON stream, sends
+- When a `compaction_start` event arrives in the JSONL stream, sends
   `repin.to_prompt()` via a `steer` command on stdin.
 - **Steer timing.** A `steer` command queues; pi delivers it after the
   current assistant turn finishes its tool calls, before the next LLM call —
@@ -966,9 +966,9 @@ The pi branch:
 
 - [ ] Pi backend sends `get_commands` probe on startup and fails fast if required commands are missing
   [verify](tests/loom-test.sh::test_pi_startup_probe)
-- [ ] Pi backend parses NDJSON events via two-phase deserialization
+- [ ] Pi backend parses JSONL events via two-phase deserialization
   [verify](tests/loom-test.sh::test_pi_two_phase_deser)
-- [ ] Pi backend sends NDJSON commands to pi's stdin
+- [ ] Pi backend sends JSONL commands to pi's stdin
   [verify](tests/loom-test.sh::test_pi_rpc_command_sending)
 - [ ] Pi backend supports steering (steer returns Ok and reaches the agent on the next turn)
   [verify](tests/loom-test.sh::test_pi_supports_steering)
@@ -976,14 +976,14 @@ The pi branch:
   [verify](tests/loom-test.sh::test_pi_event_mapping)
 - [ ] Pi backend detects CompactionStart event and sends `RePinContent::to_prompt` via steer
   [verify](tests/loom-test.sh::test_pi_compaction_repin)
-- [ ] Pi backend handles malformed NDJSON gracefully (logs warning, continues)
-  [verify](tests/loom-test.sh::test_pi_malformed_ndjson)
+- [ ] Pi backend handles malformed JSONL gracefully (logs warning, continues)
+  [verify](tests/loom-test.sh::test_pi_malformed_jsonl)
 - [ ] Pi backend logs extension_ui_request at debug level without responding
   [verify](tests/loom-test.sh::test_pi_extension_ui_passthrough)
 
 ### Claude backend
 
-- [ ] Claude backend parses stream-json NDJSON events from claude's stdout
+- [ ] Claude backend parses stream-json JSONL events from claude's stdout
   [verify](tests/loom-test.sh::test_claude_stream_json_parsing)
 - [ ] Claude backend uses `#[serde(tag = "type")]` for tagged enum deserialization
   [verify](tests/loom-test.sh::test_claude_tagged_enum)

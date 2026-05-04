@@ -47,7 +47,7 @@ defined in [ralph-loop.md](ralph-loop.md) and
      (trivial state DB query)
    - `loom use <label>` — set `current_spec` in the state DB; `loom status`
      reads it back
-   - `loom logs` — tail the most recent bead NDJSON log under
+   - `loom logs` — tail the most recent bead JSONL log under
      `.wrapix/loom/logs/`; `--bead <id>` selects a specific bead
 
    **Ralph commands deliberately NOT ported:**
@@ -162,7 +162,7 @@ loom (host)
     │       │
     │       └─ entrypoint.sh → agent (claude --print … / pi --mode rpc)
     │           ↑              ↓
-    │           └── NDJSON over stdin/stdout ─→ loom (parses events)
+    │           └── JSONL over stdin/stdout ─→ loom (parses events)
     │
     └─ on bead completion: container exits, next bead → next spawn
 ```
@@ -176,9 +176,9 @@ serialization boundary.
 
 **`loom plan` is the exception.** It is an interactive spec interview
 (human-in-the-loop terminal session), so it shells out to interactive
-`wrapix run` rather than driving an NDJSON session. Loom prepares the
+`wrapix run` rather than driving an JSONL session. Loom prepares the
 template-rendered prompt, sets environment, exec's `wrapix run`, and lets
-claude attach to the user's terminal. No subprocess capture, no NDJSON.
+claude attach to the user's terminal. No subprocess capture, no JSONL.
 
 **Trade-off accepted:** parallelism is straightforward (N concurrent
 `wrapix run-bead` invocations) but per-bead container spawn cost (~1-2s on
@@ -310,12 +310,12 @@ Rules:
   call lines are tagged with the bead id prefix so interleaved output
   remains attributable.
 
-**Log persistence.** Loom always writes the **full raw NDJSON** event stream
+**Log persistence.** Loom always writes the **full raw JSONL** event stream
 for every bead to disk, regardless of terminal verbosity. One file per bead
 spawn:
 
 ```
-.wrapix/loom/logs/<spec-label>/<bead-id>-<utc-timestamp>.ndjson
+.wrapix/loom/logs/<spec-label>/<bead-id>-<utc-timestamp>.jsonl
 ```
 
 Per-bead (not per-session) so parallel batches never interleave inside a
@@ -331,7 +331,7 @@ per `loom run` invocation, before any bead spawns; the cost is a single
 directory walk.
 
 The terminal renderer consumes the same `AgentEvent` stream that's written
-to disk — there's a single tee-style sink, not two parallel pipelines.
+to disk — both subscribe to the same broadcast channel, not two parallel pipelines.
 
 ### Crate Layout
 
@@ -344,7 +344,7 @@ loom/
         main.rs                 #   backends + workflow + templates
     loom-core/                  # shared types: BeadId, SpecLabel, MoleculeId,
       src/                      #   AgentBackend trait, AgentEvent enum,
-        lib.rs                  #   AgentSession, LineParse, NdjsonReader,
+        lib.rs                  #   AgentSession, LineParse, JsonlReader,
                                 #   state db, config, bd CLI wrapper
     loom-agent/                 # AgentBackend trait implementations
       src/                      #   (see loom-agent.md)
@@ -414,7 +414,7 @@ gix = { version = "0.83", default-features = false, features = ["status", "blob-
 fd-lock = "4"
 ```
 
-Fourteen dependencies. No NDJSON-specific crate — `serde_json` + `BufReader` line
+Fourteen dependencies. No JSONL-specific crate — `serde_json` + `BufReader` line
 splitting is sufficient. No `async-trait` — `async fn` in traits is stable and works
 natively with static dispatch. `gix` covers read-only git operations (status,
 diff, refs, commit graph, worktree iteration); worktree mutation and merge
@@ -427,7 +427,7 @@ everywhere downstream. No internal function re-checks or re-parses.
 
 **Boundary layers (outside → inside):**
 
-1. **NDJSON framing** — `BufReader::read_line` splits the byte stream into
+1. **JSONL framing** — `BufReader::read_line` splits the byte stream into
    lines. Each line is one JSON object.
 2. **Protocol parsing** — `serde_json::from_str` deserializes each line into a
    backend-specific message type (`PiMessage` or `ClaudeMessage`).
@@ -732,9 +732,9 @@ During the transition period:
 - [ ] All crates declare `[lints] workspace = true`
   [verify](tests/loom-test.sh::test_workspace_lints)
 - [ ] No `types.rs` or `error.rs` files at crate roots
-  [judge](tests/judges/loom.sh::test_nested_module_structure)
+  [verify](tests/loom-test.sh::test_nested_module_structure)
 - [ ] Domain identifiers use newtypes (BeadId, SpecLabel, MoleculeId, etc.)
-  [judge](tests/judges/loom.sh::test_newtypes_for_identifiers)
+  [verify](tests/loom-test.sh::test_newtypes_for_identifiers)
 - [ ] No `unwrap()`, `todo!()`, `panic!()`, `unimplemented!()` in non-test code
   [verify](tests/loom-test.sh::test_no_panics_in_production)
 - [ ] No `#[allow(dead_code)]` in non-test code
@@ -747,7 +747,7 @@ During the transition period:
 - [ ] All Ralph templates ported to Askama format
   [verify](tests/loom-test.sh::test_askama_templates_compile)
 - [ ] Each template has a typed context struct with all required variables
-  [judge](tests/judges/loom.sh::test_template_context_structs)
+  [verify](tests/loom-test.sh::test_template_context_structs)
 - [ ] Templates compile at build time (missing variables are compile errors)
   [verify](tests/loom-test.sh::test_template_compile_time_check)
 - [ ] Rendered output matches Ralph's bash-rendered output for identical inputs
@@ -770,7 +770,7 @@ During the transition period:
       result in two `wrapix run-bead` invocations with different `image`
   [verify](tests/loom-test.sh::test_per_bead_profile_spawn)
 - [ ] `loom plan` shells out to interactive `wrapix run` (TTY attached); does
-      not capture stdio for NDJSON
+      not capture stdio for JSONL
   [verify](tests/loom-test.sh::test_plan_uses_interactive_wrapix_run)
 
 ### Concurrency & locking
@@ -801,18 +801,18 @@ During the transition period:
   [verify](tests/loom-test.sh::test_run_default_output_shape)
 - [ ] `--verbose` / `-v` enables live assistant text streaming
   [verify](tests/loom-test.sh::test_run_verbose_streams_text)
-- [ ] Full raw NDJSON event stream is written to
-      `.wrapix/loom/logs/<spec-label>/<bead-id>-<timestamp>.ndjson` for every
+- [ ] Full raw JSONL event stream is written to
+      `.wrapix/loom/logs/<spec-label>/<bead-id>-<timestamp>.jsonl` for every
       bead spawn, regardless of terminal verbosity
-  [verify](tests/loom-test.sh::test_run_writes_per_bead_ndjson_log)
+  [verify](tests/loom-test.sh::test_run_writes_per_bead_jsonl_log)
 - [ ] Log path is logged at `info!` when the spawn starts
   [verify](tests/loom-test.sh::test_run_logs_log_path)
 - [ ] With `--parallel N > 1`, each bead writes to its own file (no
       interleaving in a single log)
   [verify](tests/loom-test.sh::test_parallel_logs_are_per_bead)
 - [ ] Terminal renderer and log writer consume the same `AgentEvent` stream
-      (single sink, not two pipelines)
-  [judge](tests/judges/loom.sh::test_run_single_event_sink)
+      (single channel, not two pipelines)
+  [verify](tests/loom-test.sh::test_run_single_event_channel)
 - [ ] On `loom run` startup, log files older than `[logs] retention_days`
       (default 14) are deleted; recent logs are preserved
   [verify](tests/loom-test.sh::test_log_retention_sweep)
@@ -843,7 +843,7 @@ During the transition period:
   [verify](tests/loom-test.sh::test_parallel_conflict_preserves_worktree)
 - [ ] `GitClient` is the only module that imports `gix` or invokes the `git`
       CLI; callers see typed Rust methods
-  [judge](tests/judges/loom.sh::test_git_client_encapsulation)
+  [verify](tests/loom-test.sh::test_git_client_encapsulation)
 
 ### Workflow commands
 
@@ -894,7 +894,7 @@ During the transition period:
 - [ ] `loom use <label>` sets `current_spec` in the state DB; round-trips
       with `loom status`
   [verify](tests/loom-test.sh::test_use_command)
-- [ ] `loom logs` tails the most recent NDJSON log under
+- [ ] `loom logs` tails the most recent JSONL log under
       `.wrapix/loom/logs/`; `--bead <id>` selects a specific bead's log
   [verify](tests/loom-test.sh::test_logs_command)
 - [ ] No `loom sync` / `loom tune` commands exist (compiled templates make
