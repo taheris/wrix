@@ -7,7 +7,7 @@
 //!
 //! 1. snapshots beads carrying `spec:<label>` (`pre`);
 //! 2. renders [`CheckContext`](loom_templates::check::CheckContext), spawns
-//!    `wrapix run-bead --spawn-config <file> --stdio`, drives an
+//!    `wrapix spawn --spawn-config <file> --stdio`, drives an
 //!    [`AgentBackend`](loom_core::agent::AgentBackend) and tees the
 //!    [`AgentEvent`](loom_core::agent::AgentEvent) stream into the
 //!    terminal renderer + per-bead NDJSON log;

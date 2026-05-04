@@ -3,7 +3,7 @@
 # specs/loom-tests.md Functional #5.
 #
 # What this exercises (host↔container plumbing):
-#   1. wrapix run-bead --spawn-config / --stdio argv branching reaches the
+#   1. wrapix spawn --spawn-config / --stdio argv branching reaches the
 #      Linux launcher, mounts the workspace, and runs entrypoint.sh.
 #   2. Entrypoint sees WRAPIX_AGENT=pi and execs `pi --mode rpc`. The
 #      launcher's per-bead PATH override resolves `pi` to mock-pi inside
@@ -164,7 +164,7 @@ MOCKPI
 chmod +x "$LOOM_TEST_BIN/pi"
 
 # Loom writes initial-prompt and re-pin files into the workspace before
-# invoking wrapix run-bead. Mock-pi happy-path doesn't read them — it just
+# invoking wrapix spawn. Mock-pi happy-path doesn't read them — it just
 # echoes a single message_delta — but creating empty placeholders matches
 # the contract so a future change to mock-pi (or the entrypoint) doesn't
 # break on missing inputs.
@@ -172,8 +172,12 @@ mkdir -p "$WORKSPACE/.wrapix/loom"
 : > "$WORKSPACE/.wrapix/loom/initial-prompt.md"
 
 #-----------------------------------------------------------------------------
-# SpawnConfig — the on-disk shape `wrapix run-bead --spawn-config` consumes.
+# SpawnConfig — the on-disk shape `wrapix spawn --spawn-config` consumes.
 # See loom-core/src/agent/backend.rs::SpawnConfig.
+#
+# image_source is "" because the test image is already loaded into podman
+# by the dev-shell wrapper before the smoke runs; the launcher's load
+# step short-circuits when image_source is empty.
 #
 # env is an explicit allowlist:
 #   WRAPIX_AGENT=pi             — entrypoint branches into `pi --mode rpc`
@@ -182,10 +186,11 @@ mkdir -p "$WORKSPACE/.wrapix/loom"
 #-----------------------------------------------------------------------------
 SPAWN_CONFIG="$WORKSPACE/.wrapix/loom/spawn-config.json"
 jq -n \
-    --arg image "$WRAPIX_LOOM_TEST_IMAGE_REF" \
+    --arg image_ref "$WRAPIX_LOOM_TEST_IMAGE_REF" \
     --arg workspace "$WORKSPACE" \
     '{
-        image: $image,
+        image_ref: $image_ref,
+        image_source: "",
         workspace: $workspace,
         env: [
             ["WRAPIX_AGENT", "pi"],
@@ -202,13 +207,13 @@ jq -n \
 # expects (probe + prompt). agent_end on stdout terminates the script;
 # the container exits clean.
 #-----------------------------------------------------------------------------
-echo "test-loom: invoking wrapix run-bead (image=$WRAPIX_LOOM_TEST_IMAGE_REF)"
+echo "test-loom: invoking wrapix spawn (image=$WRAPIX_LOOM_TEST_IMAGE_REF)"
 
 CONTAINER_RC=0
 {
     printf '%s\n' '{"type":"get_commands","id":"smoke-probe"}'
     printf '%s\n' '{"type":"prompt","id":"smoke-prompt","message":"hello"}'
-} | "$WRAPIX_LOOM_WRAPIX_BIN" run-bead \
+} | "$WRAPIX_LOOM_WRAPIX_BIN" spawn \
     --spawn-config "$SPAWN_CONFIG" \
     --stdio \
     > "$WORKSPACE/container.stdout" \

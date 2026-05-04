@@ -1,8 +1,8 @@
-//! Cross-cutting integration test: host -> wrapix run-bead -> agent dispatch.
+//! Cross-cutting integration test: host -> wrapix spawn -> agent dispatch.
 //!
 //! Verifies the contract loom owes the wrapix wrapper:
 //!
-//! 1. `wrapix run-bead --spawn-config <file> --stdio` is the only argv shape
+//! 1. `wrapix spawn --spawn-config <file> --stdio` is the only argv shape
 //!    loom hands to the wrapper. `<file>` resolves to a JSON-serialized
 //!    [`SpawnConfig`] containing the resolved profile image.
 //! 2. The container child receives stdin via a pipe (not a TTY) so NDJSON
@@ -60,7 +60,7 @@ fn install_wrapix_shim(
          MOCK_PI='{mock}'\n\
          \n\
          # Record argv (one token per line) so the test can pin the exact\n\
-         # invocation shape — `run-bead --spawn-config <file> --stdio`.\n\
+         # invocation shape — `spawn --spawn-config <file> --stdio`.\n\
          {{ for a in \"$@\"; do printf '%s\\n' \"$a\"; done; }} > \"$ARGV_FILE\"\n\
          \n\
          # Record stdin properties so the pipe-not-tty contract is\n\
@@ -133,16 +133,13 @@ fn drive_loom_todo_pi(workspace: &Path, shim: &Path, loom_bin: &str) -> std::pro
 }
 
 /// `tests/loom-test.sh::test_wrapix_spawn_dispatch` — loom hands the
-/// wrapper exactly `wrapix run-bead --spawn-config <file> --stdio`, and
+/// wrapper exactly `wrapix spawn --spawn-config <file> --stdio`, and
 /// the file resolves to a JSON [`SpawnConfig`] carrying the per-bead
-/// profile image. A future profile-resolution change that drops `image`
-/// or renames the subcommand will trip this assertion before the wrapper
-/// ever sees the malformed argv. (The shell-side test was renamed when
-/// the `wrapix run-bead` → `wrapix spawn` rename landed in the spec; the
-/// Rust-side rename happens in the follow-up impl task that updates the
-/// launcher and SpawnConfig fields.)
+/// profile image. A future profile-resolution change that drops the
+/// `image_ref`/`image_source` fields or renames the subcommand will trip
+/// this assertion before the wrapper ever sees the malformed argv.
 #[test]
-fn wrapix_run_bead_invocation_records_correct_argv() {
+fn wrapix_spawn_invocation_records_correct_argv() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = dir.path();
 
@@ -173,8 +170,8 @@ fn wrapix_run_bead_invocation_records_correct_argv() {
     let tokens: Vec<&str> = argv.lines().collect();
     assert_eq!(
         tokens.first().copied(),
-        Some("run-bead"),
-        "first arg must be run-bead. argv={tokens:?}",
+        Some("spawn"),
+        "first arg must be spawn. argv={tokens:?}",
     );
     let spawn_idx = tokens
         .iter()

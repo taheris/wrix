@@ -88,7 +88,7 @@ fn mock_pi_path() -> PathBuf {
 }
 
 /// Build a `Command` that exec's `bash mock-pi.sh <mode>`. Used as a
-/// drop-in for the production launcher (`wrapix run-bead --spawn-config
+/// drop-in for the production launcher (`wrapix spawn --spawn-config
 /// <file> --stdio`); the argv contract for that path is exercised by
 /// `loom/tests/spawn_dispatch.rs`. Here the test cares only about the
 /// handshake round-trip, so we bypass the wrapix shim.

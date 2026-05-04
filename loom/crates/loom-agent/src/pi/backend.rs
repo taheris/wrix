@@ -1,7 +1,7 @@
 //! Pi-mono RPC backend: spawn + startup probe + optional `set_model`.
 //!
 //! [`PiBackend::spawn`] serializes the [`SpawnConfig`] to a JSON file,
-//! execs `wrapix run-bead --spawn-config <file> --stdio` (the wrapper that
+//! execs `wrapix spawn --spawn-config <file> --stdio` (the wrapper that
 //! owns container construction), and drives the pi RPC handshake before
 //! handing back an [`AgentSession`] in the [`Idle`] state:
 //!
@@ -78,7 +78,7 @@ impl AgentBackend for PiBackend {
         );
 
         let mut cmd = Command::new(&wrapix_bin);
-        cmd.arg("run-bead")
+        cmd.arg("spawn")
             .arg("--spawn-config")
             .arg(&spawn_config_path)
             .arg("--stdio");
@@ -113,7 +113,7 @@ struct SetModelCommand<'a> {
 /// optional `set_model`), and return a session in the [`Idle`] state.
 ///
 /// Public so integration tests under `loom-agent/tests/` can substitute a
-/// mock pi binary in place of the real `wrapix run-bead` exec without going
+/// mock pi binary in place of the real `wrapix spawn` exec without going
 /// through the `LOOM_WRAPIX_BIN` env-var override (Rust 2024 makes
 /// `env::set_var` unsafe, and the workspace forbids `unsafe_code`).
 /// Production callers go through [`PiBackend::spawn`].
@@ -293,7 +293,7 @@ fn extract_commands(resp: &PiResponse) -> Result<Vec<String>, ProtocolError> {
 }
 
 /// Serialize `config` as JSON and write it to a uniquely-named tempfile
-/// under the system temp dir. The path is handed to `wrapix run-bead
+/// under the system temp dir. The path is handed to `wrapix spawn
 /// --spawn-config`; the wrapper reads it back and ignores any unknown
 /// fields (`model` is consumed by the host-side backend, not the wrapper).
 fn write_spawn_config(config: &SpawnConfig) -> Result<PathBuf, ProtocolError> {

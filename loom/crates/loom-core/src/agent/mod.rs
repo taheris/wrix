@@ -14,7 +14,7 @@
 //! - [`RePinContent`] — re-pin payload format used by both backends after
 //!   compaction.
 //! - [`SpawnConfig`] / [`SessionOutcome`] — the contract between loom and
-//!   `wrapix run-bead`.
+//!   `wrapix spawn`.
 //!
 //! Protocol-parsing of backend-specific message types (`PiMessage`,
 //! `ClaudeMessage`) lives in `loom-agent`, not here.

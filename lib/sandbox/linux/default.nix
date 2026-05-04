@@ -69,23 +69,24 @@ in
         WRAPIX_CACHE="$XDG_CACHE_HOME/wrapix"
 
         # Subcommand dispatch: `wrapix run` (interactive, TTY) vs
-        # `wrapix run-bead` (stdio, JSON spawn-config). Default with no
+        # `wrapix spawn` (stdio, JSON spawn-config). Default with no
         # subcommand keeps legacy positional invocation `wrapix [DIR] [CMD...]`.
         SUBCOMMAND="run"
         if [ $# -gt 0 ]; then
           case "$1" in
-            run|run-bead) SUBCOMMAND="$1"; shift ;;
+            run|spawn) SUBCOMMAND="$1"; shift ;;
           esac
         fi
 
         SPAWN_CONFIG=""
         USE_STDIO=0
-        IMAGE_OVERRIDE=""
+        IMAGE_OVERRIDE_REF=""
+        IMAGE_OVERRIDE_SOURCE=""
         CONTAINER_CMD=()
         # SpawnConfig env allowlist: KEY=VALUE pairs (one per array slot)
         SPAWN_ENV=()
 
-        if [ "$SUBCOMMAND" = "run-bead" ]; then
+        if [ "$SUBCOMMAND" = "spawn" ]; then
           while [ $# -gt 0 ]; do
             case "$1" in
               --spawn-config)
@@ -93,24 +94,29 @@ in
                 SPAWN_CONFIG="$2"; shift 2 ;;
               --stdio) USE_STDIO=1; shift ;;
               --) shift; break ;;
-              *) echo "Error: unknown wrapix run-bead flag: $1" >&2; exit 2 ;;
+              *) echo "Error: unknown wrapix spawn flag: $1" >&2; exit 2 ;;
             esac
           done
           if [ -z "$SPAWN_CONFIG" ]; then
-            echo "Error: wrapix run-bead requires --spawn-config <file>" >&2
+            echo "Error: wrapix spawn requires --spawn-config <file>" >&2
             exit 2
           fi
           if [ ! -f "$SPAWN_CONFIG" ]; then
             echo "Error: spawn-config file not found: $SPAWN_CONFIG" >&2
             exit 1
           fi
-          # Stable JSON shape (loom-agent.md SpawnConfig): image, workspace,
-          # env, initial_prompt, agent_args, repin. Loom is the producer; we
-          # consume image, workspace, env, agent_args here. initial_prompt and
-          # repin are consumed in-container by the agent (loom writes the
-          # files into the workspace before spawn).
+          # Stable JSON shape (loom-agent.md SpawnConfig): image_ref,
+          # image_source, workspace, env, initial_prompt, agent_args, repin.
+          # Loom is the producer; we consume image_ref, image_source,
+          # workspace, env, agent_args here. initial_prompt and repin are
+          # consumed in-container by the agent (loom writes the files into
+          # the workspace before spawn).
           PROJECT_DIR=$(jq -r '.workspace' "$SPAWN_CONFIG")
-          IMAGE_OVERRIDE=$(jq -r '.image' "$SPAWN_CONFIG")
+          # `// ""` coerces missing keys / explicit nulls to empty strings,
+          # so the load-step gate (`-n "$IMAGE_SOURCE"`) skips cleanly when
+          # the orchestrator provides only image_ref.
+          IMAGE_OVERRIDE_REF=$(jq -r '.image_ref // ""' "$SPAWN_CONFIG")
+          IMAGE_OVERRIDE_SOURCE=$(jq -r '.image_source // ""' "$SPAWN_CONFIG")
           while IFS= read -r pair; do
             [ -z "$pair" ] && continue
             SPAWN_ENV+=("$pair")
@@ -135,7 +141,8 @@ in
           printf 'SUBCOMMAND=%s\n' "$SUBCOMMAND"
           printf 'STDIO=%s\n' "$USE_STDIO"
           printf 'WORKSPACE=%s\n' "$PROJECT_DIR"
-          printf 'IMAGE_OVERRIDE=%s\n' "$IMAGE_OVERRIDE"
+          printf 'IMAGE_OVERRIDE_REF=%s\n' "$IMAGE_OVERRIDE_REF"
+          printf 'IMAGE_OVERRIDE_SOURCE=%s\n' "$IMAGE_OVERRIDE_SOURCE"
           for pair in "''${SPAWN_ENV[@]}"; do printf 'ENV=%s\n' "$pair"; done
           for arg in "''${CONTAINER_CMD[@]}"; do printf 'CMD=%s\n' "$arg"; done
           exit 0
@@ -325,9 +332,8 @@ in
         # Image is supplied to the launcher at runtime, not baked in. For
         # `wrapix run`, $WRAPIX_DEFAULT_IMAGE_REF and $WRAPIX_DEFAULT_IMAGE_SOURCE
         # are set by the per-profile makeWrapper composition (or by an
-        # orchestrator like loom). For `wrapix run-bead`, the SpawnConfig
-        # carries the image reference (legacy `.image` field; will switch to
-        # `.image_ref`/`.image_source` in a follow-up).
+        # orchestrator like loom). For `wrapix spawn`, the SpawnConfig
+        # carries `image_ref` and `image_source`.
         IMAGE_REF=""
         IMAGE_SOURCE=""
         if [ "$SUBCOMMAND" = "run" ]; then
@@ -338,7 +344,8 @@ in
           IMAGE_REF="$WRAPIX_DEFAULT_IMAGE_REF"
           IMAGE_SOURCE="$WRAPIX_DEFAULT_IMAGE_SOURCE"
         else
-          IMAGE_REF="$IMAGE_OVERRIDE"
+          IMAGE_REF="$IMAGE_OVERRIDE_REF"
+          IMAGE_SOURCE="$IMAGE_OVERRIDE_SOURCE"
         fi
 
         if [ -n "$IMAGE_SOURCE" ] && ! podman image exists "$IMAGE_REF" 2>/dev/null; then
@@ -410,11 +417,11 @@ in
         fi
 
         # Per-subcommand wiring:
-        #   run      — interactive: TTY allocated, host env passthrough.
-        #   run-bead — non-TTY: stdio piped, env strictly from SpawnConfig.
+        #   run   — interactive: TTY allocated, host env passthrough.
+        #   spawn — non-TTY: stdio piped, env strictly from SpawnConfig.
         TTY_ARGS=()
         ENV_ARGS=()
-        if [ "$SUBCOMMAND" = "run-bead" ]; then
+        if [ "$SUBCOMMAND" = "spawn" ]; then
           [ "$USE_STDIO" = "1" ] && TTY_ARGS=(-i)
           for pair in "''${SPAWN_ENV[@]}"; do
             ENV_ARGS+=(-e "$pair")

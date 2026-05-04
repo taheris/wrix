@@ -238,7 +238,7 @@ let
       # Profile-baked launcher (mounts, writableDirs, networkAllowlist) with
       # no image interpolation. The launcher reads its image at runtime from
       # WRAPIX_DEFAULT_IMAGE_REF / WRAPIX_DEFAULT_IMAGE_SOURCE (interactive
-      # `wrapix run`) or from SpawnConfig (`wrapix run-bead`/`wrapix spawn`).
+      # `wrapix run`) or from SpawnConfig (`wrapix spawn`).
       launcher =
         if isLinux then
           linuxSandbox.mkSandbox {

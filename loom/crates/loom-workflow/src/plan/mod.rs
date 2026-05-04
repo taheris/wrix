@@ -2,7 +2,7 @@
 //!
 //! `plan` is the exception to Loom's NDJSON-driven workflow. The interview is
 //! a human-in-the-loop terminal session, so loom shells out to interactive
-//! `wrapix run` (TTY attached) rather than `wrapix run-bead --stdio`. There
+//! `wrapix run` (TTY attached) rather than `wrapix spawn --stdio`. There
 //! is no subprocess capture, no NDJSON parsing, and no event tee.
 //!
 //! `[phase.plan]` is permitted in `LoomConfig` for symmetry with the other

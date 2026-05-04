@@ -6,11 +6,11 @@ use super::error::ProtocolError;
 use super::repin::RePinContent;
 use super::session::{AgentSession, Idle};
 
-/// Configuration `loom` hands to `wrapix run-bead` describing how to launch
+/// Configuration `loom` hands to `wrapix spawn` describing how to launch
 /// the per-bead container and what initial agent state to install.
 ///
 /// Serialized to a JSON file (`/tmp/loom-<id>.json`) and read back by
-/// `wrapix run-bead --spawn-config <file>` — this is the single stable
+/// `wrapix spawn --spawn-config <file>` — this is the single stable
 /// boundary between loom and the wrapper. `env` is an explicit allowlist;
 /// the wrapper never inherits the host environment wholesale.
 #[derive(Debug, Clone, Serialize, Deserialize)]

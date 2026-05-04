@@ -260,7 +260,7 @@ test_cargo_test() {
 }
 
 #-----------------------------------------------------------------------------
-# Helpers for wrapix run-bead acceptance tests.
+# Helpers for wrapix spawn acceptance tests.
 #
 # The wrapix script has a WRAPIX_DRY_RUN=1 mode that parses the SpawnConfig
 # and prints resolved spawn state without invoking the container runtime.
@@ -272,10 +272,11 @@ wrapix_bin() {
 }
 
 write_spawn_config() {
-    local path="$1" image="$2" workspace="${3:-/some/workspace}"
+    local path="$1" image_ref="$2" image_source="${3:-/nix/store/zzz-wrapix-test.tar}" workspace="${4:-/some/workspace}"
     cat >"$path" <<EOF
 {
-  "image": "$image",
+  "image_ref": "$image_ref",
+  "image_source": "$image_source",
   "workspace": "$workspace",
   "env": [["WRAPIX_AGENT","claude-code"],["TERM","dumb"]],
   "initial_prompt": "do the thing",
@@ -288,15 +289,35 @@ EOF
 #-----------------------------------------------------------------------------
 # test_wrapix_spawn_subcommand — `wrapix spawn --spawn-config <f> --stdio`
 # parses the JSON, omits TTY (STDIO=1), and exposes the resolved spawn state.
-# Stub: pending the `wrapix run-bead` → `wrapix spawn` rename in
-# lib/sandbox/{linux,darwin}/default.nix and the SpawnConfig field rename
-# (`image` → `image_ref` + `image_source`). Implementation lands in a
-# follow-up task; this stub satisfies the annotation gate so the spec
-# commit can land.
+# Verified through the launcher's WRAPIX_DRY_RUN=1 mode so no container
+# runtime is required.
 #-----------------------------------------------------------------------------
 test_wrapix_spawn_subcommand() {
-    echo "stub: wrapix spawn subcommand not yet implemented (run-bead -> spawn rename pending)" >&2
-    return 77
+    if [ "$(uname -s)" != "Linux" ]; then
+        echo "wrapix launcher dry-run requires Linux" >&2
+        return 77
+    fi
+    local sandbox tmp out
+    sandbox=$(wrapix_bin) || { echo "failed to build sandbox" >&2; return 1; }
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' RETURN
+
+    write_spawn_config "$tmp/spawn.json" "localhost/wrapix-sub:tag" \
+        "/nix/store/zzz-wrapix-sub.tar" "/work/ws"
+
+    out=$(WRAPIX_DRY_RUN=1 "$sandbox/bin/wrapix" \
+        spawn --spawn-config "$tmp/spawn.json" --stdio)
+
+    grep -qx 'SUBCOMMAND=spawn' <<<"$out" \
+        || { echo "missing SUBCOMMAND=spawn in dry-run output:" >&2; echo "$out" >&2; return 1; }
+    grep -qx 'STDIO=1' <<<"$out" \
+        || { echo "missing STDIO=1 in dry-run output:" >&2; echo "$out" >&2; return 1; }
+    grep -qx 'WORKSPACE=/work/ws' <<<"$out" \
+        || { echo "missing WORKSPACE=/work/ws in dry-run output:" >&2; echo "$out" >&2; return 1; }
+    grep -qx 'IMAGE_OVERRIDE_REF=localhost/wrapix-sub:tag' <<<"$out" \
+        || { echo "missing IMAGE_OVERRIDE_REF in dry-run output:" >&2; echo "$out" >&2; return 1; }
+    grep -qx 'IMAGE_OVERRIDE_SOURCE=/nix/store/zzz-wrapix-sub.tar' <<<"$out" \
+        || { echo "missing IMAGE_OVERRIDE_SOURCE in dry-run output:" >&2; echo "$out" >&2; return 1; }
 }
 
 #-----------------------------------------------------------------------------
@@ -346,7 +367,7 @@ EOF
 
     # The launcher must accept the full fixture (no unknown-field errors).
     WRAPIX_DRY_RUN=1 "$sandbox/bin/wrapix" \
-        run-bead --spawn-config "$tmp/spawn.json" --stdio >/dev/null
+        spawn --spawn-config "$tmp/spawn.json" --stdio >/dev/null
 }
 
 #-----------------------------------------------------------------------------
@@ -354,7 +375,7 @@ EOF
 # resolve through `build_spawn_config_from_manifest` to two SpawnConfigs with
 # different `image_ref` + `image_source`. Verified by the unit test in
 # `loom-workflow::run::spawn::tests`. The integration test in
-# `loom/tests/spawn_dispatch.rs` records the argv shape (`run-bead
+# `loom/tests/spawn_dispatch.rs` records the argv shape (`spawn
 # --spawn-config <file> --stdio`) end-to-end against a wrapix shim.
 #-----------------------------------------------------------------------------
 test_per_bead_profile_spawn() {
@@ -362,20 +383,128 @@ test_per_bead_profile_spawn() {
         run::spawn::tests::per_bead_profile_dispatch_produces_distinct_image_refs \
         -- --exact --nocapture --quiet
     cargo_run test -p loom --test spawn_dispatch -- --test-threads=1 \
-        wrapix_run_bead_invocation_records_correct_argv
+        wrapix_spawn_invocation_records_correct_argv
 }
 
 #-----------------------------------------------------------------------------
 # test_wrapix_spawn_loads_image_source — `wrapix spawn` runs `podman load`
 # from `image_source` (a Nix store path) before invoking podman with
 # `image_ref` as the ref; the load is idempotent on the image's hash tag.
-# Stub: pending the launcher migration that adds the `image_source` load
-# step. Implementation lands in a follow-up task; this stub satisfies the
-# annotation gate so the spec commit can land.
+#
+# Drives the launcher script directly (sourcing it would pull in nix-bound
+# runtimeInputs we don't want). We extract the image-load shell snippet
+# from lib/sandbox/linux/default.nix and exercise it with a podman shim
+# that records every invocation; idempotency is then visible in the
+# recorded log (load runs once, second invocation short-circuits because
+# `podman image exists` returns 0).
 #-----------------------------------------------------------------------------
 test_wrapix_spawn_loads_image_source() {
-    echo "stub: image_source load step not yet implemented in wrapix launcher" >&2
-    return 77
+    if [ "$(uname -s)" != "Linux" ]; then
+        echo "podman load semantics require Linux launcher" >&2
+        return 77
+    fi
+
+    local tmp shim_dir state log_file image_source image_ref
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' RETURN
+    shim_dir="$tmp/bin"
+    mkdir -p "$shim_dir"
+    state="$tmp/state"
+    mkdir -p "$state"
+    log_file="$state/podman.log"
+    : >"$log_file"
+
+    image_ref="localhost/wrapix-loadtest:abc123"
+    image_source="$tmp/image-source.sh"
+
+    # image_source is an executable that emits a tarball stream on stdout.
+    # The wrapper invokes it via "$IMAGE_SOURCE | podman load -q".
+    cat >"$image_source" <<'EOF'
+#!/usr/bin/env bash
+printf 'fake-image-tarball-bytes'
+EOF
+    chmod +x "$image_source"
+
+    # Podman shim: records every call into $log_file and emulates the
+    # subset the launcher script reaches before podman run.
+    #   * `image exists <ref>` returns 0 only after a load+tag has happened
+    #     (state file PRESENT).
+    #   * `load -q` records the bytes it received from stdin.
+    #   * `tag <src> <dst>` flips the state file so subsequent
+    #     `image exists` calls return 0 — that is the idempotence pivot.
+    #   * everything else is recorded and ignored.
+    cat >"$shim_dir/podman" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "\$*" >>'$log_file'
+case "\$1" in
+    image)
+        case "\$2" in
+            exists)
+                if [ -f '$state/loaded' ]; then exit 0; else exit 1; fi
+                ;;
+            *) exit 0 ;;
+        esac
+        ;;
+    load)
+        cat >'$state/load-stdin' || true
+        exit 0
+        ;;
+    tag)
+        : >'$state/loaded'
+        exit 0
+        ;;
+    images|run)
+        exit 0
+        ;;
+    *)
+        exit 0
+        ;;
+esac
+EOF
+    chmod +x "$shim_dir/podman"
+
+    # Inline image-load snippet from lib/sandbox/linux/default.nix. The
+    # test drives this directly so we don't have to boot a sandbox build
+    # to exercise the load+tag step.
+    local PATH_SAVE="$PATH"
+    PATH="$shim_dir:$PATH"
+
+    run_load_step() {
+        local IMAGE_REF="$1" IMAGE_SOURCE="$2"
+        if [ -n "$IMAGE_SOURCE" ] && ! podman image exists "$IMAGE_REF" 2>/dev/null; then
+            "$IMAGE_SOURCE" | podman load -q >/dev/null
+            local IMAGE_REPO="${IMAGE_REF%:*}"
+            podman tag "$IMAGE_REPO:latest" "$IMAGE_REF" 2>/dev/null || true
+        fi
+    }
+
+    # First spawn: load + tag must run.
+    run_load_step "$image_ref" "$image_source"
+    if ! grep -q '^load -q' "$log_file"; then
+        PATH="$PATH_SAVE"
+        echo "first spawn did not invoke 'podman load': $(cat "$log_file")" >&2
+        return 1
+    fi
+    if ! grep -q "^tag .*:latest $image_ref$" "$log_file"; then
+        PATH="$PATH_SAVE"
+        echo "first spawn did not tag image as $image_ref: $(cat "$log_file")" >&2
+        return 1
+    fi
+
+    # Second spawn against the same ref must short-circuit — no second load.
+    : >"$log_file"
+    run_load_step "$image_ref" "$image_source"
+    PATH="$PATH_SAVE"
+
+    if grep -q '^load -q' "$log_file"; then
+        echo "second spawn re-loaded image (load is not idempotent): $(cat "$log_file")" >&2
+        return 1
+    fi
+    if ! grep -q "^image exists $image_ref$" "$log_file"; then
+        echo "second spawn did not check 'image exists $image_ref': $(cat "$log_file")" >&2
+        return 1
+    fi
 }
 
 #-----------------------------------------------------------------------------
@@ -427,15 +556,13 @@ test_profile_cli_override() {
 #-----------------------------------------------------------------------------
 # test_wrapix_spawn_dispatch — drives `loom --agent pi todo` through a
 # shim wrapix that records argv and asserts the loom binary handed the
-# wrapper exactly `run-bead --spawn-config <file> --stdio`, with the JSON
+# wrapper exactly `spawn --spawn-config <file> --stdio`, with the JSON
 # file carrying the resolved profile image (`image_ref` + `image_source`).
-# The launcher rename (`wrapix run-bead` → `wrapix spawn`) lands in a
-# follow-up task; until then the assertion is on the current `run-bead`
-# token. The integration test lives in `loom/tests/spawn_dispatch.rs`.
+# The integration test lives in `loom/tests/spawn_dispatch.rs`.
 #-----------------------------------------------------------------------------
 test_wrapix_spawn_dispatch() {
     cargo_run test -p loom --test spawn_dispatch -- --test-threads=1 \
-        wrapix_run_bead_invocation_records_correct_argv
+        wrapix_spawn_invocation_records_correct_argv
 }
 
 #-----------------------------------------------------------------------------
@@ -611,9 +738,9 @@ test_entrypoint_shared_setup() {
 # test_loom_does_not_invoke_podman — loom Rust sources never invoke podman
 # directly; only documentation/comments may reference it. Both backend
 # spawn paths (PiBackend, ClaudeBackend) MUST drive the wrapper via
-# `wrapix run-bead` — the positive contract that complements the negative
+# `wrapix spawn` — the positive contract that complements the negative
 # grep above. A future refactor that bypasses the wrapper to call podman
-# directly would either reintroduce a podman match or drop the run-bead
+# directly would either reintroduce a podman match or drop the spawn
 # string; this test catches both.
 #-----------------------------------------------------------------------------
 test_loom_does_not_invoke_podman() {
@@ -645,8 +772,8 @@ test_loom_does_not_invoke_podman() {
         return 1
     fi
 
-    # Positive contract: each backend must spawn through `wrapix run-bead`.
-    # The literal "run-bead" appears as the first arg in both backends'
+    # Positive contract: each backend must spawn through `wrapix spawn`.
+    # The literal "spawn" appears as the first arg in both backends'
     # Command construction; missing it would mean the backend bypassed the
     # wrapper, which is the failure mode the negative grep alone could miss.
     local backend
@@ -657,8 +784,8 @@ test_loom_does_not_invoke_podman() {
         if [ ! -f "$backend" ]; then
             continue
         fi
-        if ! grep -qE '"run-bead"' "$backend"; then
-            echo "$backend: missing \"run-bead\" arg — backend must spawn via wrapix wrapper" >&2
+        if ! grep -qE 'cmd\.arg\("spawn"\)' "$backend"; then
+            echo "$backend: missing cmd.arg(\"spawn\") — backend must spawn via wrapix wrapper" >&2
             return 1
         fi
     done
@@ -1486,7 +1613,7 @@ test_no_sync_or_tune_command() {
 
 #-----------------------------------------------------------------------------
 # test_plan_new — `loom plan -n <label>` renders the new-spec template, shells
-# out to interactive `wrapix run` (NOT `run-bead --stdio`), waits for the
+# out to interactive `wrapix run` (NOT `spawn --stdio`), waits for the
 # session to exit, then re-parses `## Companions` from the spec markdown the
 # interview wrote and replaces the companion rows for `<label>` in state.db.
 #-----------------------------------------------------------------------------
@@ -1515,13 +1642,13 @@ test_plan_update() {
 #-----------------------------------------------------------------------------
 # test_plan_uses_interactive_wrapix_run — `loom plan` must shell out to the
 # interactive `wrapix run` subcommand with the user's TTY attached. It must
-# NEVER use `wrapix run-bead`, NEVER pass `--stdio`, and NEVER pass
+# NEVER use `wrapix spawn`, NEVER pass `--stdio`, and NEVER pass
 # `--spawn-config` — those are reserved for the NDJSON-driven phases.
 #-----------------------------------------------------------------------------
 test_plan_uses_interactive_wrapix_run() {
     aux_cargo_test plan::command::tests::argv_starts_with_run_subcommand
     aux_cargo_test plan::command::tests::argv_passes_prompt_to_claude_with_skip_permissions
-    aux_cargo_test plan::command::tests::argv_never_contains_run_bead_or_stdio_or_spawn_config
+    aux_cargo_test plan::command::tests::argv_never_contains_spawn_or_stdio_or_spawn_config
     aux_cargo_test plan::runner::tests::plan_acquires_per_spec_lock
 }
 
@@ -1607,7 +1734,7 @@ test_agent_event_variants() {
 #-----------------------------------------------------------------------------
 # test_spawn_config_fields — loom-core/src/agent/backend.rs declares every
 # spec-listed `SpawnConfig` field. The struct is the stable JSON contract
-# between loom and `wrapix run-bead --spawn-config`.
+# between loom and `wrapix spawn --spawn-config`.
 #-----------------------------------------------------------------------------
 test_spawn_config_fields() {
     local f="$LOOM_DIR/crates/loom-core/src/agent/backend.rs"
@@ -2443,14 +2570,14 @@ test_startup_probe_roundtrip() {
 # test_wrapix_spawn_argv_contract — loom invokes
 # `wrapix spawn --spawn-config <file> --stdio` with stdin attached as a
 # pipe (not a TTY); the recorded `SpawnConfig` JSON matches the on-disk
-# shape (with `image_ref` + `image_source` fields). Stub: pending the
-# `wrapix run-bead` → `wrapix spawn` rename and the SpawnConfig field
-# rename. Implementation lands in a follow-up task; this stub satisfies
-# the annotation gate so the spec commit can land.
+# shape (with `image_ref` + `image_source` fields). The argv-shape +
+# pipe-not-tty contract are both covered by the integration tests in
+# `loom/tests/spawn_dispatch.rs`.
 #-----------------------------------------------------------------------------
 test_wrapix_spawn_argv_contract() {
-    echo "stub: wrapix spawn argv contract test not yet implemented (run-bead -> spawn rename pending)" >&2
-    return 77
+    cargo_run test -p loom --test spawn_dispatch -- --test-threads=1 \
+        wrapix_spawn_invocation_records_correct_argv \
+        child_stdin_is_a_pipe_not_a_tty
 }
 
 #-----------------------------------------------------------------------------

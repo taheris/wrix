@@ -12,7 +12,7 @@ pub const WRAPIX_BIN: &str = "wrapix";
 /// wrapix run <workspace> claude --dangerously-skip-permissions <prompt>
 /// ```
 ///
-/// `wrapix run` (NOT `run-bead`) keeps the TTY attached and inherits the
+/// `wrapix run` (NOT `spawn`) keeps the TTY attached and inherits the
 /// user's terminal — there is no `--spawn-config` and no `--stdio` flag,
 /// matching the spec's "exception" carve-out for the interactive interview.
 /// Returns argv as a `Vec<String>` so callers (and tests) can inspect it
@@ -48,8 +48,9 @@ mod tests {
     }
 
     #[test]
-    fn argv_never_contains_run_bead_or_stdio_or_spawn_config() {
+    fn argv_never_contains_spawn_or_stdio_or_spawn_config() {
         let argv = build_wrapix_argv(&PathBuf::from("/work"), "PROMPT");
+        assert!(!argv.iter().any(|a| a == "spawn"));
         assert!(!argv.iter().any(|a| a == "run-bead"));
         assert!(!argv.iter().any(|a| a == "--stdio"));
         assert!(!argv.iter().any(|a| a == "--spawn-config"));

@@ -2,7 +2,7 @@
 //!
 //! [`ClaudeBackend::spawn`] writes the re-pin files into the workspace
 //! runtime dir, serializes the [`SpawnConfig`] to JSON, and execs `wrapix
-//! run-bead --spawn-config <file> --stdio` with stdin/stdout piped. The
+//! spawn --spawn-config <file> --stdio` with stdin/stdout piped. The
 //! watchdog ([`ClaudeBackend::shutdown_after_result`]) handles the
 //! post-`result` cleanup: drop the writer, wait `grace`, escalate
 //! SIGTERM → SIGKILL.
@@ -33,7 +33,7 @@ use super::parser::ClaudeParser;
 const RUNTIME_SUBDIR: &str = ".wrapix/loom/runtime";
 
 /// File name for the JSON-serialized [`SpawnConfig`] handed to
-/// `wrapix run-bead --spawn-config`.
+/// `wrapix spawn --spawn-config`.
 const SPAWN_CONFIG_FILE: &str = "spawn-config.json";
 
 /// Default seconds to wait for claude to exit naturally after observing
@@ -52,7 +52,7 @@ const ENV_WRAPIX_BIN: &str = "LOOM_WRAPIX_BIN";
 /// spawned [`AgentSession`] and the [`SpawnConfig`] passed to
 /// [`AgentBackend::spawn`]. The body launches `claude --print
 /// --input-format stream-json --output-format stream-json` (via
-/// `wrapix run-bead --stdio`) with `--permission-prompt-tool stdio` so
+/// `wrapix spawn --stdio`) with `--permission-prompt-tool stdio` so
 /// tool permissions flow over the same pipe.
 pub struct ClaudeBackend;
 
@@ -69,7 +69,7 @@ impl AgentBackend for ClaudeBackend {
         );
 
         let mut cmd = Command::new(&wrapix_bin);
-        cmd.arg("run-bead")
+        cmd.arg("spawn")
             .arg("--spawn-config")
             .arg(&spawn_config_path)
             .arg("--stdio");
@@ -146,7 +146,7 @@ pub(crate) fn prepare_runtime(config: &SpawnConfig) -> Result<PathBuf, ProtocolE
 ///
 /// Module-private — the public surface is [`ClaudeBackend::spawn`]. Tests
 /// call this through the `pub(crate)` re-export to substitute a mock claude
-/// binary in place of the real `wrapix run-bead` exec.
+/// binary in place of the real `wrapix spawn` exec.
 pub(crate) async fn spawn_session(
     mut cmd: Command,
     denied_tools: Vec<String>,

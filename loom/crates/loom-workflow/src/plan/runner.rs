@@ -218,6 +218,7 @@ mod tests {
         let argv_log = std::fs::read_to_string(dir.path().join("argv.log"))?;
         let lines: Vec<&str> = argv_log.lines().collect();
         assert_eq!(lines[0], "run", "first argv must be `run`");
+        assert!(!lines.contains(&"spawn"));
         assert!(!lines.contains(&"run-bead"));
         assert!(!lines.contains(&"--stdio"));
         assert!(!lines.contains(&"--spawn-config"));
