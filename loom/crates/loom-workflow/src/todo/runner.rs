@@ -95,7 +95,8 @@ mod tests {
     impl TodoController for FakeController {
         async fn build_spawn_config(&mut self) -> Result<SpawnConfig, TodoError> {
             Ok(SpawnConfig {
-                image: "wrapix-base:latest".into(),
+                image_ref: "wrapix-base:latest".into(),
+                image_source: PathBuf::from("/nix/store/zzz-wrapix-base.tar"),
                 workspace: PathBuf::from("/workspace"),
                 env: vec![],
                 initial_prompt: "todo prompt".into(),

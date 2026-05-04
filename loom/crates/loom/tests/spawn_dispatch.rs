@@ -187,16 +187,21 @@ fn wrapix_run_bead_invocation_records_correct_argv() {
     );
 
     // The spawn-config JSON must round-trip through SpawnConfig and carry
-    // the production controller's image. ProductionTodoController hard-codes
-    // `wrapix-base:latest` until per-bead profile resolution lands; this
-    // assertion will need updating then, but pinning the current contract
-    // catches accidental drops of the `image` field.
+    // the production controller's image_ref + image_source. ProductionTodoController
+    // hard-codes `wrapix-base:latest` until per-bead profile resolution lands;
+    // this assertion will need updating then, but pinning the current contract
+    // catches accidental drops of either field.
     let bytes = std::fs::read(&spawn_copy).expect("shim should copy spawn-config aside");
     let cfg: loom_core::agent::SpawnConfig =
         serde_json::from_slice(&bytes).expect("spawn-config must deserialize");
     assert_eq!(
-        cfg.image, "wrapix-base:latest",
-        "spawn-config image must match the resolved profile image",
+        cfg.image_ref, "wrapix-base:latest",
+        "spawn-config image_ref must match the resolved profile image",
+    );
+    assert!(
+        !cfg.image_source.as_os_str().is_empty(),
+        "spawn-config image_source must be populated. got={}",
+        cfg.image_source.display(),
     );
     assert!(
         cfg.initial_prompt.contains("loom-agent"),

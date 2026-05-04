@@ -22,15 +22,22 @@ use super::runner::TodoController;
 pub struct ProductionTodoController {
     label: SpecLabel,
     workspace: PathBuf,
-    image: String,
+    image_ref: String,
+    image_source: PathBuf,
 }
 
 impl ProductionTodoController {
-    pub fn new(label: SpecLabel, workspace: PathBuf, image: String) -> Self {
+    pub fn new(
+        label: SpecLabel,
+        workspace: PathBuf,
+        image_ref: String,
+        image_source: PathBuf,
+    ) -> Self {
         Self {
             label,
             workspace,
-            image,
+            image_ref,
+            image_source,
         }
     }
 }
@@ -40,11 +47,13 @@ impl TodoController for ProductionTodoController {
         info!(
             label = %self.label,
             workspace = %self.workspace.display(),
-            image = %self.image,
+            image_ref = %self.image_ref,
+            image_source = %self.image_source.display(),
             "loom todo: building stub spawn config (decomposition agent pending)",
         );
         Ok(SpawnConfig {
-            image: self.image.clone(),
+            image_ref: self.image_ref.clone(),
+            image_source: self.image_source.clone(),
             workspace: self.workspace.clone(),
             env: vec![],
             initial_prompt: format!("loom todo: decompose spec {}", self.label.as_str()),

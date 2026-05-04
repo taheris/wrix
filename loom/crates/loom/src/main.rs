@@ -427,7 +427,8 @@ async fn dispatch_for_slot(
     let selection = resolved_agent_for(&config, agent_override, Phase::Run)?;
 
     let spawn_config = SpawnConfig {
-        image: "wrapix-base:latest".to_string(),
+        image_ref: "wrapix-base:latest".to_string(),
+        image_source: PathBuf::from("/nix/store/placeholder-wrapix-base.tar"),
         workspace: slot.worktree.path.clone(),
         env: vec![],
         initial_prompt: format!("loom run: bead {}", slot.bead.id),
@@ -634,6 +635,7 @@ fn run_todo(
             label_for_async,
             workspace_buf,
             "wrapix-base:latest".to_string(),
+            PathBuf::from("/nix/store/placeholder-wrapix-base.tar"),
         );
         run_todo_workflow(&mut controller, |spawn_cfg| async move {
             dispatch(kind, &spawn_cfg).await

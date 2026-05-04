@@ -311,7 +311,8 @@ test_spawn_config_json_stability() {
 
     cat >"$tmp/spawn.json" <<'EOF'
 {
-  "image": "localhost/wrapix-stability:tag",
+  "image_ref": "localhost/wrapix-stability:tag",
+  "image_source": "/nix/store/zzz-wrapix-stability.tar",
   "workspace": "/work/ws",
   "env": [["A","1"],["B","2"]],
   "initial_prompt": "prompt body",
@@ -324,9 +325,9 @@ test_spawn_config_json_stability() {
 }
 EOF
 
-    # All six top-level keys must be present in the fixture itself.
+    # All seven top-level keys must be present in the fixture itself.
     keys=$(jq -r 'keys | sort | join(",")' "$tmp/spawn.json")
-    [ "$keys" = "agent_args,env,image,initial_prompt,repin,workspace" ] \
+    [ "$keys" = "agent_args,env,image_ref,image_source,initial_prompt,repin,workspace" ] \
         || { echo "fixture key set drifted: $keys" >&2; return 1; }
 
     # Round-trip via jq must preserve every key+value (jq -S sorts keys for diff).
@@ -1609,7 +1610,7 @@ test_spawn_config_fields() {
         return 1
     fi
     local missing=0 field
-    for field in image workspace env initial_prompt agent_args repin; do
+    for field in image_ref image_source workspace env initial_prompt agent_args repin; do
         if ! grep -E "^[[:space:]]+pub ${field}[[:space:]]*:" "$f" >/dev/null; then
             echo "SpawnConfig.${field} missing in $f" >&2
             missing=$((missing + 1))

@@ -259,7 +259,8 @@ mod tests {
     fn prepare_runtime_writes_repin_files_and_spawn_config() {
         let workspace = tempfile::tempdir().expect("tempdir");
         let cfg = SpawnConfig {
-            image: "localhost/wrapix-test:claude".to_string(),
+            image_ref: "localhost/wrapix-test:claude".to_string(),
+            image_source: PathBuf::from("/nix/store/zzz-wrapix-test-claude.tar"),
             workspace: workspace.path().to_path_buf(),
             env: vec![("WRAPIX_AGENT".into(), "claude".into())],
             initial_prompt: "hello".to_string(),
@@ -288,7 +289,8 @@ mod tests {
         // unchanged — the wrapper consumes this exact JSON.
         let bytes = std::fs::read(&spawn_config_path).expect("read");
         let decoded: SpawnConfig = serde_json::from_slice(&bytes).expect("decode");
-        assert_eq!(decoded.image, cfg.image);
+        assert_eq!(decoded.image_ref, cfg.image_ref);
+        assert_eq!(decoded.image_source, cfg.image_source);
         assert_eq!(decoded.initial_prompt, cfg.initial_prompt);
         assert_eq!(decoded.agent_args, cfg.agent_args);
     }

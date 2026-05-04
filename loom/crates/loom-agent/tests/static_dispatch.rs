@@ -63,7 +63,8 @@ fn pi_and_claude_dispatch_through_run_agent() {
 
 fn sample_config() -> SpawnConfig {
     SpawnConfig {
-        image: String::new(),
+        image_ref: String::new(),
+        image_source: PathBuf::new(),
         workspace: PathBuf::new(),
         env: Vec::new(),
         initial_prompt: String::new(),

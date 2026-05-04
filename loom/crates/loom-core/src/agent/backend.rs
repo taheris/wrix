@@ -15,7 +15,14 @@ use super::session::{AgentSession, Idle};
 /// the wrapper never inherits the host environment wholesale.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpawnConfig {
-    pub image: String,
+    /// Podman image reference (e.g. `localhost/wrapix-rust:<hash>`) — the
+    /// argument passed to `podman run`. Populated by loom from the
+    /// profile-image manifest at dispatch time.
+    pub image_ref: String,
+    /// Nix store path to a `podman load`-compatible archive that materializes
+    /// `image_ref`. The wrapper runs `podman load < image_source` before
+    /// `podman run`; the load is idempotent on the ref's hash tag.
+    pub image_source: PathBuf,
     pub workspace: PathBuf,
     pub env: Vec<(String, String)>,
     pub initial_prompt: String,
@@ -75,7 +82,8 @@ mod tests {
 
     fn sample_config(model: Option<ModelSelection>) -> SpawnConfig {
         SpawnConfig {
-            image: "localhost/wrapix-test:tag".into(),
+            image_ref: "localhost/wrapix-test:tag".into(),
+            image_source: PathBuf::from("/nix/store/zzz-wrapix-test.tar"),
             workspace: PathBuf::from("/workspace"),
             env: vec![("WRAPIX_AGENT".into(), "pi".into())],
             initial_prompt: "hello".into(),
@@ -104,10 +112,11 @@ mod tests {
             !obj.contains_key("model"),
             "model: None must be omitted, got JSON: {json}"
         );
-        // Six top-level keys remain — any silent rename or drop fails here.
+        // Seven top-level keys remain — any silent rename or drop fails here.
         let keys: Vec<&str> = obj.keys().map(String::as_str).collect();
         for required in [
-            "image",
+            "image_ref",
+            "image_source",
             "workspace",
             "env",
             "initial_prompt",
@@ -139,7 +148,8 @@ mod tests {
     #[test]
     fn spawn_config_legacy_fixture_without_model_key_parses() {
         let legacy = r#"{
-            "image": "localhost/img:tag",
+            "image_ref": "localhost/img:tag",
+            "image_source": "/nix/store/zzz-img.tar",
             "workspace": "/workspace",
             "env": [["A","1"]],
             "initial_prompt": "go",
@@ -148,7 +158,8 @@ mod tests {
         }"#;
         let cfg: SpawnConfig = serde_json::from_str(legacy).expect("legacy fixture parses");
         assert!(cfg.model.is_none());
-        assert_eq!(cfg.image, "localhost/img:tag");
+        assert_eq!(cfg.image_ref, "localhost/img:tag");
+        assert_eq!(cfg.image_source, PathBuf::from("/nix/store/zzz-img.tar"));
         assert_eq!(cfg.env, vec![("A".to_string(), "1".to_string())]);
     }
 }

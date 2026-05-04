@@ -342,7 +342,8 @@ mod tests {
 
     fn sample_config(model: Option<ModelSelection>) -> SpawnConfig {
         SpawnConfig {
-            image: "localhost/wrapix-test:pi".to_string(),
+            image_ref: "localhost/wrapix-test:pi".to_string(),
+            image_source: PathBuf::from("/nix/store/zzz-wrapix-test-pi.tar"),
             workspace: PathBuf::from("/workspace"),
             env: vec![("WRAPIX_AGENT".into(), "pi".into())],
             initial_prompt: "hello pi".to_string(),
@@ -363,7 +364,8 @@ mod tests {
         let path = write_spawn_config(&cfg).expect("write");
         let bytes = std::fs::read(&path).expect("read");
         let decoded: SpawnConfig = serde_json::from_slice(&bytes).expect("decode");
-        assert_eq!(decoded.image, cfg.image);
+        assert_eq!(decoded.image_ref, cfg.image_ref);
+        assert_eq!(decoded.image_source, cfg.image_source);
         assert_eq!(decoded.initial_prompt, cfg.initial_prompt);
         let model = decoded.model.expect("model present");
         assert_eq!(model.provider, "deepseek");
