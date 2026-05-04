@@ -106,6 +106,11 @@ enum Command {
         /// Update-spec interview for `<label>`.
         #[arg(short = 'u', value_name = "LABEL")]
         update: Option<String>,
+        /// Override the profile resolution chain. Wins over
+        /// `[phase.plan].profile` and `[phase.default].profile` in
+        /// `.wrapix/loom/config.toml` (default `base`).
+        #[arg(long, value_name = "PROFILE")]
+        profile: Option<String>,
     },
     /// Per-bead execution loop. Continuous by default; `--once` exits after one bead.
     Run {
@@ -185,7 +190,11 @@ fn main() -> ExitCode {
         Command::UseSpec { label } => run_use(&workspace, &label),
         Command::Logs { bead } => run_logs(&workspace, bead.as_deref()),
         Command::Spec { deps } => run_spec(&workspace, deps),
-        Command::Plan { new, update } => run_plan(&workspace, new, update),
+        Command::Plan {
+            new,
+            update,
+            profile,
+        } => run_plan(&workspace, new, update, profile),
         Command::Run {
             once,
             parallel,
@@ -275,14 +284,17 @@ fn run_plan(
     workspace: &std::path::Path,
     new: Option<String>,
     update: Option<String>,
+    profile: Option<String>,
 ) -> anyhow::Result<()> {
-    let _manifest = ProfileImageManifest::from_env()?;
+    let manifest = ProfileImageManifest::from_env()?;
     let mode = plan::parse_mode(new, update)?;
     let report = plan::run(
         workspace,
         plan::PlanOpts {
             mode,
             wrapix_bin: std::env::var_os("LOOM_WRAPIX_BIN").map(PathBuf::from),
+            cli_profile: profile.map(ProfileName::new),
+            manifest,
         },
     )?;
     println!("loom plan: spec={}", report.spec_path.display());

@@ -1643,13 +1643,21 @@ test_plan_update() {
 # test_plan_uses_interactive_wrapix_run — `loom plan` must shell out to the
 # interactive `wrapix run` subcommand with the user's TTY attached. It must
 # NEVER use `wrapix spawn`, NEVER pass `--stdio`, and NEVER pass
-# `--spawn-config` — those are reserved for the NDJSON-driven phases.
+# `--spawn-config` — those are reserved for the NDJSON-driven phases. The
+# launcher (lib/sandbox/linux/default.nix) refuses `wrapix run` without
+# `WRAPIX_DEFAULT_IMAGE_REF` / `WRAPIX_DEFAULT_IMAGE_SOURCE`, so plan must
+# resolve its profile against the parsed manifest and inject those env vars
+# into the child env before exec'ing.
 #-----------------------------------------------------------------------------
 test_plan_uses_interactive_wrapix_run() {
     aux_cargo_test plan::command::tests::argv_starts_with_run_subcommand
     aux_cargo_test plan::command::tests::argv_passes_prompt_to_claude_with_skip_permissions
     aux_cargo_test plan::command::tests::argv_never_contains_spawn_or_stdio_or_spawn_config
     aux_cargo_test plan::runner::tests::plan_acquires_per_spec_lock
+    aux_cargo_test plan::runner::tests::plan_exports_default_image_env_for_wrapix_run
+    aux_cargo_test plan::runner::tests::plan_cli_profile_override_picks_manifest_entry
+    aux_cargo_test plan::runner::tests::plan_phase_config_profile_picks_manifest_entry
+    aux_cargo_test plan::runner::tests::plan_unknown_profile_returns_typed_error
 }
 
 #-----------------------------------------------------------------------------

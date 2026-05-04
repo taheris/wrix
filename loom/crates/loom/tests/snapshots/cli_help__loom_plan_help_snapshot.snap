@@ -7,8 +7,9 @@ Interactive spec interview (`-n <label>` new, `-u <label>` update)
 Usage: loom plan [OPTIONS]
 
 Options:
-  -n <LABEL>              New-spec interview for `<label>`
-      --workspace <PATH>  Workspace root. Defaults to the current working directory
-      --agent <BACKEND>   Override the agent backend for this invocation. Wins over per-phase `[phase.<phase>] agent.backend = ...` and `[phase.default] agent.backend = ...` in `.wrapix/loom/config.toml`. Accepts `claude` or `pi`; any other value triggers a clap parse error [possible values: claude, pi]
-  -u <LABEL>              Update-spec interview for `<label>`
-  -h, --help              Print help
+  -n <LABEL>               New-spec interview for `<label>`
+      --workspace <PATH>   Workspace root. Defaults to the current working directory
+      --agent <BACKEND>    Override the agent backend for this invocation. Wins over per-phase `[phase.<phase>] agent.backend = ...` and `[phase.default] agent.backend = ...` in `.wrapix/loom/config.toml`. Accepts `claude` or `pi`; any other value triggers a clap parse error [possible values: claude, pi]
+  -u <LABEL>               Update-spec interview for `<label>`
+      --profile <PROFILE>  Override the profile resolution chain. Wins over `[phase.plan].profile` and `[phase.default].profile` in `.wrapix/loom/config.toml` (default `base`)
+  -h, --help               Print help

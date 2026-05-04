@@ -5,6 +5,7 @@ use displaydoc::Display;
 use thiserror::Error;
 
 use loom_core::lock::LockError;
+use loom_core::profile_manifest::ProfileError;
 use loom_core::state::StateError;
 
 /// Failures raised by [`super::run`] and the helpers it composes.
@@ -44,6 +45,12 @@ pub enum PlanError {
 
     /// state-db operation failed
     State(#[from] StateError),
+
+    /// profile-image manifest lookup failed
+    Profile(#[from] ProfileError),
+
+    /// agent-selection failed for `[phase.plan]`
+    AgentSelection(#[from] loom_core::config::AgentSelectionError),
 
     /// failed to spawn `wrapix run`
     Spawn {
