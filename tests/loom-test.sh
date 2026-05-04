@@ -1006,6 +1006,9 @@ test_todo_tier_detection() {
     todo_cargo_test todo::tier::tests::since_override_replaces_anchor_base_for_anchor_only
     todo_cargo_test todo::tier::tests::since_override_errors_when_commit_missing
     todo_cargo_test todo::tier::tests::since_override_errors_when_commit_orphaned
+    todo_cargo_test todo::production::tests::build_spawn_config_resolves_manifest_image_and_renders_new_template
+    todo_cargo_test todo::production::tests::build_spawn_config_uses_update_template_when_molecule_exists
+    todo_cargo_test todo::production::tests::build_spawn_config_surfaces_unknown_profile_as_profile_error
 }
 
 #-----------------------------------------------------------------------------
@@ -1282,6 +1285,7 @@ run_cargo_test() {
 #-----------------------------------------------------------------------------
 test_run_continuous() {
     run_cargo_test run::runner::tests::continuous_loops_until_molecule_complete
+    run_cargo_test run::production::tests::run_bead_invokes_dispatch_closure_with_resolved_spawn_config
 }
 
 #-----------------------------------------------------------------------------
@@ -1318,6 +1322,8 @@ test_run_retry_with_context() {
     run_cargo_test run::runner::tests::retry_succeeds_within_budget_and_closes
     run_cargo_test run::context::tests::retry_input_wraps_previous_failure
     run_cargo_test run::context::tests::rendered_retry_prompt_includes_previous_failure_body
+    run_cargo_test run::production::tests::run_bead_translates_nonzero_exit_code_into_failure_with_error_body
+    run_cargo_test run::production::tests::run_bead_surfaces_protocol_error_through_run_error
 }
 
 #-----------------------------------------------------------------------------
@@ -1446,6 +1452,8 @@ test_check_push_gate() {
     check_cargo_test check::runner::tests::clarify_present_stops_without_pushing
     check_cargo_test check::runner::tests::pre_existing_clarify_blocks_push_even_when_no_new_beads
     check_cargo_test check::production::tests::beads_push_argv_invokes_beads_push_not_bd_dolt_push
+    check_cargo_test check::production::tests::run_review_translates_zero_exit_into_complete
+    check_cargo_test check::production::tests::run_review_translates_nonzero_exit_into_incomplete_with_code
 }
 
 #-----------------------------------------------------------------------------
@@ -1458,6 +1466,10 @@ test_check_auto_iterate() {
     check_cargo_test check::iteration::tests::is_exhausted_true_at_or_above_cap
     check_cargo_test check::runner::tests::fix_up_beads_under_cap_auto_iterate
     check_cargo_test check::runner::tests::iteration_cap_escalates_newest_fix_up_to_clarify
+    check_cargo_test check::production::tests::iteration_counter_round_trips_through_state_db
+    check_cargo_test check::production::tests::iteration_count_is_zero_when_no_active_molecule
+    check_cargo_test check::production::tests::set_iteration_errors_when_no_active_molecule
+    check_cargo_test check::production::tests::reset_iteration_is_no_op_when_no_active_molecule
 }
 
 #-----------------------------------------------------------------------------
