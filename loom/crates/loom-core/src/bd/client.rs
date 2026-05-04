@@ -24,7 +24,7 @@ impl BdClient<TokioRunner> {
     /// Construct a client that shells out to the real `bd` binary.
     pub fn new() -> Self {
         Self {
-            runner: TokioRunner,
+            runner: TokioRunner::default(),
             timeout: DEFAULT_TIMEOUT,
         }
     }

@@ -1,9 +1,11 @@
 use std::ffi::OsString;
 use std::future::Future;
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::process::Command;
-use tokio::time::timeout;
+
+use crate::clock::{Clock, SystemClock};
 
 use super::error::BdError;
 
@@ -36,9 +38,32 @@ pub trait CommandRunner: Send + Sync + 'static {
 }
 
 /// Default runner: `tokio::process::Command::new("bd")` with each argument
-/// passed through `.arg()` so no shell is involved.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct TokioRunner;
+/// passed through `.arg()` so no shell is involved. The subprocess timeout is
+/// driven by the injected [`Clock`] so tests can substitute
+/// [`crate::clock::MockClock`].
+#[derive(Clone)]
+pub struct TokioRunner {
+    clock: Arc<dyn Clock>,
+}
+
+impl TokioRunner {
+    /// Build a runner that uses `clock` for the per-call timeout.
+    pub fn with_clock(clock: Arc<dyn Clock>) -> Self {
+        Self { clock }
+    }
+}
+
+impl Default for TokioRunner {
+    fn default() -> Self {
+        Self::with_clock(Arc::new(SystemClock::new()))
+    }
+}
+
+impl std::fmt::Debug for TokioRunner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokioRunner").finish_non_exhaustive()
+    }
+}
 
 impl CommandRunner for TokioRunner {
     async fn run(&self, args: Vec<OsString>, t: Duration) -> Result<RunOutput, BdError> {
@@ -47,14 +72,17 @@ impl CommandRunner for TokioRunner {
             cmd.arg(arg);
         }
         let fut = cmd.output();
-        match timeout(t, fut).await {
-            Ok(Ok(output)) => Ok(RunOutput {
-                status: output.status.code().unwrap_or(-1),
-                stdout: output.stdout,
-                stderr: output.stderr,
-            }),
-            Ok(Err(e)) => Err(BdError::Spawn(e)),
-            Err(_) => Err(BdError::Timeout {
+        let sleep = self.clock.sleep(t);
+        tokio::select! {
+            output = fut => match output {
+                Ok(output) => Ok(RunOutput {
+                    status: output.status.code().unwrap_or(-1),
+                    stdout: output.stdout,
+                    stderr: output.stderr,
+                }),
+                Err(e) => Err(BdError::Spawn(e)),
+            },
+            () = sleep => Err(BdError::Timeout {
                 args: render_args(&args),
             }),
         }

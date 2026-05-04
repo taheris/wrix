@@ -112,6 +112,13 @@ mod tests {
     use anyhow::Result;
     use std::time::Duration;
 
+    /// Pinned reference time used by mtime-driven tests so they don't read
+    /// wall clock — matches the rest of the loom test suite, which routes
+    /// every wall-time read through the `SystemClock` impl.
+    fn reference_now() -> SystemTime {
+        SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000)
+    }
+
     fn touch(path: &Path, mtime: SystemTime) -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -136,10 +143,9 @@ mod tests {
     fn returns_most_recent_log_across_specs() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let root = dir.path().join(".wrapix/loom/logs");
-        let now = SystemTime::now();
-        let older = now - Duration::from_secs(120);
+        let older = reference_now() - Duration::from_secs(120);
         touch(&root.join("alpha/wx-1-old.ndjson"), older)?;
-        touch(&root.join("beta/wx-2-newer.ndjson"), now)?;
+        touch(&root.join("beta/wx-2-newer.ndjson"), reference_now())?;
         let path = select_log(&root, LogsOpts::default())?;
         assert!(path.ends_with("wx-2-newer.ndjson"), "{path:?}");
         Ok(())
@@ -149,13 +155,12 @@ mod tests {
     fn bead_filter_matches_prefix_exactly() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let root = dir.path().join(".wrapix/loom/logs");
-        let now = SystemTime::now();
         // wx-1 and wx-10 are distinct beads — the filter must not collapse
         // them.
-        touch(&root.join("alpha/wx-10-newer.ndjson"), now)?;
+        touch(&root.join("alpha/wx-10-newer.ndjson"), reference_now())?;
         touch(
             &root.join("alpha/wx-1-older.ndjson"),
-            now - Duration::from_secs(60),
+            reference_now() - Duration::from_secs(60),
         )?;
         let path = select_log(
             &root,
@@ -171,7 +176,7 @@ mod tests {
     fn missing_bead_filter_returns_typed_error() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let root = dir.path().join(".wrapix/loom/logs");
-        touch(&root.join("alpha/wx-1-x.ndjson"), SystemTime::now())?;
+        touch(&root.join("alpha/wx-1-x.ndjson"), reference_now())?;
         let err = select_log(
             &root,
             LogsOpts {
@@ -188,7 +193,7 @@ mod tests {
     fn ignores_non_ndjson_files() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let root = dir.path().join(".wrapix/loom/logs");
-        touch(&root.join("alpha/wx-1-x.txt"), SystemTime::now())?;
+        touch(&root.join("alpha/wx-1-x.txt"), reference_now())?;
         let err = select_log(&root, LogsOpts::default())
             .err()
             .ok_or_else(|| anyhow::anyhow!("expected error"))?;

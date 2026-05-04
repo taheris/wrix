@@ -248,11 +248,12 @@ async fn merge_back_one(git: &GitClient, slot: BatchSlot) -> Result<BatchResult,
 mod tests {
     use super::*;
     use loom_core::bd::Bead;
+    use loom_core::clock::{Clock, MockClock};
     use loom_core::git::CreatedWorktree;
     use loom_core::identifier::BeadId;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
     use tokio::sync::Barrier;
 
     fn fake_bead(id: &str) -> Bead {
@@ -277,20 +278,27 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn concurrent_spawns_overlap_in_wall_clock() {
-        // Three slots, each spawn rendezvouses on a barrier then sleeps. If
-        // run sequentially the total wait would be ~3 * sleep; concurrent
-        // execution should finish in a single sleep window.
+        // Three slots, each spawn rendezvouses on a barrier then sleeps via
+        // the injected `MockClock`. Under `start_paused = true`, tokio
+        // auto-advances paused time when every task is blocked on a timer —
+        // so concurrent sleeps coalesce into one paused-time window.
+        // Sequential dispatch would advance time by `3 * sleep`; concurrent
+        // dispatch advances it by `~sleep`. We verify by reading
+        // `clock.now()` before and after.
         let sleep = Duration::from_millis(80);
         let barrier = Arc::new(Barrier::new(3));
+        let clock: Arc<dyn Clock> = Arc::new(MockClock::new());
         let spawn = {
             let barrier = Arc::clone(&barrier);
+            let clock = Arc::clone(&clock);
             move |slot: WorktreeBead| {
                 let barrier = Arc::clone(&barrier);
+                let clock = Arc::clone(&clock);
                 async move {
                     barrier.wait().await;
-                    tokio::time::sleep(sleep).await;
+                    clock.sleep(sleep).await;
                     let _ = slot.bead.id;
                     AgentOutcome::Success
                 }
@@ -298,9 +306,9 @@ mod tests {
         };
 
         let slots = vec![fake_slot("wx-a"), fake_slot("wx-b"), fake_slot("wx-c")];
-        let start = Instant::now();
+        let start = clock.now();
         let results = run_concurrent_spawns(slots, spawn).await;
-        let elapsed = start.elapsed();
+        let elapsed = clock.now().saturating_duration_since(start);
 
         assert_eq!(results.len(), 3);
         assert!(

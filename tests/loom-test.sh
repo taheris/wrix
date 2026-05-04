@@ -2612,6 +2612,101 @@ test_smoke_timing() {
 }
 
 #-----------------------------------------------------------------------------
+# Determinism — banned wall-clock primitives in production code.
+#
+# Each function below runs the issue-mandated grep over `loom/crates/*/src/`
+# and asserts the only matches live in `SystemClock`'s impl (and `MockClock`
+# for the tokio-time primitives, which the test backend must use to
+# participate in tokio's paused-time runtime).
+#-----------------------------------------------------------------------------
+
+# Allowed file paths for `tokio::time::sleep` matches.
+_loom_allowed_clock_files() {
+    cat <<'EOF'
+loom/crates/loom-core/src/clock/system.rs
+loom/crates/loom-core/src/clock/mock.rs
+EOF
+}
+
+# Filter `path:line:body` matches to those whose path is in the allow-list.
+_loom_filter_disallowed() {
+    local allow
+    allow=$(_loom_allowed_clock_files)
+    grep -vF -f <(printf '%s\n' "$allow") || true
+}
+
+test_no_thread_sleep() {
+    if [ ! -d "$LOOM_DIR/crates" ]; then
+        echo "loom/crates not yet scaffolded" >&2
+        return 77
+    fi
+    local hits
+    hits=$(grep -rEn '\bstd::thread::sleep\b' "$LOOM_DIR/crates" --include='*.rs' \
+        | grep -vE '/tests/' || true)
+    if [ -n "$hits" ]; then
+        echo "forbidden std::thread::sleep in production code:" >&2
+        echo "$hits" >&2
+        return 1
+    fi
+}
+
+test_no_tokio_sleep_outside_clock() {
+    if [ ! -d "$LOOM_DIR/crates" ]; then
+        echo "loom/crates not yet scaffolded" >&2
+        return 77
+    fi
+    local hits
+    hits=$(grep -rEn '\btokio::time::sleep\b' "$LOOM_DIR/crates" --include='*.rs' \
+        | grep -vE '/tests/' \
+        | grep -vF 'loom-core/src/clock/system.rs' \
+        | grep -vF 'loom-core/src/clock/mock.rs' || true)
+    if [ -n "$hits" ]; then
+        echo "forbidden tokio::time::sleep outside SystemClock/MockClock impl:" >&2
+        echo "$hits" >&2
+        return 1
+    fi
+}
+
+test_no_tokio_timeout_outside_clock() {
+    if [ ! -d "$LOOM_DIR/crates" ]; then
+        echo "loom/crates not yet scaffolded" >&2
+        return 77
+    fi
+    local hits
+    hits=$(grep -rEn '\btokio::time::timeout\b' "$LOOM_DIR/crates" --include='*.rs' \
+        | grep -vE '/tests/' \
+        | grep -vF 'loom-core/src/clock/system.rs' \
+        | grep -vE '^[[:space:]]*[^:]+:[[:space:]]*[0-9]+:[[:space:]]*//' || true)
+    if [ -n "$hits" ]; then
+        echo "forbidden tokio::time::timeout outside SystemClock impl:" >&2
+        echo "$hits" >&2
+        return 1
+    fi
+}
+
+test_no_real_clock_outside_system_clock() {
+    if [ ! -d "$LOOM_DIR/crates" ]; then
+        echo "loom/crates not yet scaffolded" >&2
+        return 77
+    fi
+    # `Instant::now()` and `SystemTime::now()` must live in SystemClock's
+    # impl; MockClock translates `tokio::time::Instant::now()` (a
+    # paused-time read, not a wall-clock read) into a std Instant for the
+    # public surface, so it stays in the allow-list.
+    local hits
+    hits=$(grep -rEn '(Instant|SystemTime)::now\(' "$LOOM_DIR/crates" --include='*.rs' \
+        | grep -vE '/tests/' \
+        | grep -vF 'loom-core/src/clock/system.rs' \
+        | grep -vF 'loom-core/src/clock/mock.rs' \
+        | grep -vE '^[[:space:]]*[^:]+:[[:space:]]*[0-9]+:[[:space:]]*//' || true)
+    if [ -n "$hits" ]; then
+        echo "forbidden Instant::now / SystemTime::now outside SystemClock impl:" >&2
+        echo "$hits" >&2
+        return 1
+    fi
+}
+
+#-----------------------------------------------------------------------------
 # Dispatch
 #-----------------------------------------------------------------------------
 if [ $# -eq 0 ]; then

@@ -1,9 +1,10 @@
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use fd_lock::RwLock;
 
+use crate::clock::{Clock, SystemClock};
 use crate::identifier::SpecLabel;
 
 use super::error::LockError;
@@ -59,6 +60,11 @@ impl LockManager {
 
     /// Acquire `<label>.lock` exclusively, waiting up to 5 seconds before
     /// erroring with [`LockError::SpecBusy`]. Releases on guard drop.
+    ///
+    /// Sync wrapper around [`Self::acquire_spec_async`]; spins up a small
+    /// `current_thread` tokio runtime under the hood so callers in sync
+    /// contexts (the binary, `loom plan`, `loom use`) need not thread async
+    /// through their stack just to take a lock.
     pub fn acquire_spec(&self, label: &SpecLabel) -> Result<LockGuard, LockError> {
         self.acquire_spec_with_timeout(label, DEFAULT_SPEC_TIMEOUT)
     }
@@ -70,13 +76,40 @@ impl LockManager {
         label: &SpecLabel,
         timeout: Duration,
     ) -> Result<LockGuard, LockError> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .map_err(LockError::RuntimeBuild)?;
+        runtime.block_on(self.acquire_spec_with_timeout_async(label, &SystemClock::new(), timeout))
+    }
+
+    /// Async variant of [`Self::acquire_spec`]. Tests pass [`crate::clock::MockClock`]
+    /// under `#[tokio::test(start_paused = true)]` so the polling loop
+    /// advances deterministic time instead of sleeping wall-clock.
+    pub async fn acquire_spec_async(
+        &self,
+        label: &SpecLabel,
+        clock: &dyn Clock,
+    ) -> Result<LockGuard, LockError> {
+        self.acquire_spec_with_timeout_async(label, clock, DEFAULT_SPEC_TIMEOUT)
+            .await
+    }
+
+    /// Async variant of [`Self::acquire_spec_with_timeout`].
+    pub async fn acquire_spec_with_timeout_async(
+        &self,
+        label: &SpecLabel,
+        clock: &dyn Clock,
+        timeout: Duration,
+    ) -> Result<LockGuard, LockError> {
         if label.as_str() == RESERVED_WORKSPACE_LABEL {
             return Err(LockError::ReservedLabel);
         }
         let path = self.spec_lock_path(label);
-        acquire_with_timeout(&path, timeout, || LockError::SpecBusy {
+        acquire_with_timeout(&path, timeout, clock, || LockError::SpecBusy {
             label: label.to_string(),
         })
+        .await
     }
 
     /// Acquire `workspace.lock` exclusively. Errors immediately with
@@ -137,9 +170,10 @@ impl LockManager {
     }
 }
 
-fn acquire_with_timeout<F>(
+async fn acquire_with_timeout<F>(
     path: &Path,
     timeout: Duration,
+    clock: &dyn Clock,
     on_busy: F,
 ) -> Result<LockGuard, LockError>
 where
@@ -147,15 +181,15 @@ where
 {
     let file = open_lock_file(path)?;
     let mut lock = Box::new(RwLock::new(file));
-    let deadline = Instant::now() + timeout;
+    let deadline = clock.now() + timeout;
     loop {
         if try_lock_and_forget(&mut lock) {
             return Ok(LockGuard { _lock: lock });
         }
-        if Instant::now() >= deadline {
+        if clock.now() >= deadline {
             return Err(on_busy());
         }
-        std::thread::sleep(POLL_INTERVAL);
+        clock.sleep(POLL_INTERVAL).await;
     }
 }
 
@@ -189,6 +223,7 @@ fn open_lock_file(path: &Path) -> Result<File, LockError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clock::MockClock;
     use anyhow::Result;
 
     #[test]
@@ -220,6 +255,48 @@ mod tests {
             let _g = mgr.acquire_spec(&label)?;
         }
         let _g2 = mgr.acquire_spec(&label)?;
+        Ok(())
+    }
+
+    /// Async polling loop: holding the spec lock causes the second async
+    /// acquire to error after the timeout passes — measured deterministically
+    /// via [`MockClock`] under `start_paused = true`. No real wall-clock
+    /// wait is performed.
+    #[tokio::test(start_paused = true)]
+    async fn acquire_spec_async_times_out_via_mock_clock() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let mgr = LockManager::new(dir.path())?;
+        let label = SpecLabel::new("contended");
+        let clock = MockClock::new();
+        // Hold the lock via the async path so we don't nest a `block_on` in
+        // the existing tokio runtime.
+        let _holder = mgr.acquire_spec_async(&label, &clock).await?;
+
+        let result = mgr
+            .acquire_spec_with_timeout_async(&label, &clock, Duration::from_millis(250))
+            .await;
+        match result {
+            Err(LockError::SpecBusy { label: ref l }) if l == "contended" => Ok(()),
+            other => Err(anyhow::anyhow!(
+                "expected SpecBusy(contended), got {other:?}"
+            )),
+        }
+    }
+
+    /// Async path observes lock release without polling wall-clock: drop the
+    /// holder then await — the next `try_lock` succeeds before the deadline.
+    #[tokio::test(start_paused = true)]
+    async fn acquire_spec_async_succeeds_after_holder_drops() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let mgr = LockManager::new(dir.path())?;
+        let label = SpecLabel::new("handoff");
+        let clock = MockClock::new();
+        let holder = mgr.acquire_spec_async(&label, &clock).await?;
+        drop(holder);
+
+        let _g = mgr
+            .acquire_spec_with_timeout_async(&label, &clock, Duration::from_secs(1))
+            .await?;
         Ok(())
     }
 }

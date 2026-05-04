@@ -1,9 +1,11 @@
 use std::io::{self, Write};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
 use crate::agent::AgentEvent;
+use crate::clock::{Clock, SystemClock};
 use crate::identifier::{BeadId, ProfileName};
 
 /// Final outcome of a bead spawn — drives the closing line color and glyph.
@@ -44,6 +46,7 @@ pub struct TerminalRenderer {
     bead_id: BeadId,
     parallel: bool,
     color: bool,
+    clock: Arc<dyn Clock>,
     started: Instant,
     tool_count: u32,
     header_printed: bool,
@@ -51,10 +54,8 @@ pub struct TerminalRenderer {
 }
 
 impl TerminalRenderer {
-    /// Build a renderer that writes to `out`. `parallel` controls whether
-    /// tool-call lines are prefixed with `[<bead-id>]`. `color` enables ANSI
-    /// status colors on the header/finish lines (tool-call lines stay plain
-    /// for grep-friendliness).
+    /// Build a renderer that writes to `out` using a [`SystemClock`] for the
+    /// elapsed-time line at finish.
     pub fn new(
         out: impl Write + Send + 'static,
         mode: RenderMode,
@@ -62,13 +63,36 @@ impl TerminalRenderer {
         parallel: bool,
         color: bool,
     ) -> Self {
+        Self::with_clock(
+            out,
+            mode,
+            bead_id,
+            parallel,
+            color,
+            Arc::new(SystemClock::new()),
+        )
+    }
+
+    /// Build a renderer with an explicit clock. Tests inject
+    /// [`crate::clock::MockClock`] so the elapsed-time output is deterministic
+    /// without wall-clock dependence.
+    pub fn with_clock(
+        out: impl Write + Send + 'static,
+        mode: RenderMode,
+        bead_id: BeadId,
+        parallel: bool,
+        color: bool,
+        clock: Arc<dyn Clock>,
+    ) -> Self {
+        let started = clock.now();
         Self {
             out: Box::new(out),
             mode,
             bead_id,
             parallel,
             color,
-            started: Instant::now(),
+            clock,
+            started,
             tool_count: 0,
             header_printed: false,
             closed: false,
@@ -146,7 +170,7 @@ impl TerminalRenderer {
     /// Status color is applied to the leading glyph + word only when
     /// `color = true`; the rest of the line is plain.
     pub fn finish(mut self, outcome: BeadOutcome) -> io::Result<()> {
-        let elapsed = self.started.elapsed();
+        let elapsed = self.clock.now().saturating_duration_since(self.started);
         self.write_finish(outcome, elapsed)
     }
 

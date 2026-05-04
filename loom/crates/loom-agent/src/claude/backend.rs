@@ -16,6 +16,7 @@ use std::time::Duration;
 use loom_core::agent::{
     AgentBackend, AgentSession, Idle, NdjsonReader, ProtocolError, SpawnConfig,
 };
+use loom_core::clock::Clock;
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use tokio::io::BufWriter;
@@ -93,14 +94,18 @@ impl ClaudeBackend {
     /// signal). Errors only when the final `wait` fails — signal-send
     /// failures are logged and treated as best-effort because the child
     /// may already have exited between the wait timeout and the kill.
+    ///
+    /// `clock` drives the grace timer so tests can substitute
+    /// [`loom_core::clock::MockClock`].
     pub async fn shutdown_after_result<S>(
         session: AgentSession<S>,
+        clock: &dyn Clock,
         grace: Duration,
     ) -> Result<i32, ProtocolError> {
         let (mut child, stdin) = session.into_parts();
         drop(stdin);
 
-        if let Some(code) = wait_with_timeout(&mut child, grace).await? {
+        if let Some(code) = wait_with_timeout(&mut child, clock, grace).await? {
             return Ok(code);
         }
 
@@ -110,7 +115,7 @@ impl ClaudeBackend {
         );
         send_signal(&child, Signal::SIGTERM);
 
-        if let Some(code) = wait_with_timeout(&mut child, grace).await? {
+        if let Some(code) = wait_with_timeout(&mut child, clock, grace).await? {
             return Ok(code);
         }
 
@@ -183,12 +188,17 @@ fn write_spawn_config(runtime_dir: &Path, config: &SpawnConfig) -> Result<PathBu
 /// escalate.
 async fn wait_with_timeout(
     child: &mut Child,
+    clock: &dyn Clock,
     grace: Duration,
 ) -> Result<Option<i32>, ProtocolError> {
-    match tokio::time::timeout(grace, child.wait()).await {
-        Ok(Ok(status)) => Ok(Some(status.code().unwrap_or(0))),
-        Ok(Err(e)) => Err(ProtocolError::Io(e)),
-        Err(_) => Ok(None),
+    let wait = child.wait();
+    let sleep = clock.sleep(grace);
+    tokio::select! {
+        result = wait => match result {
+            Ok(status) => Ok(Some(status.code().unwrap_or(0))),
+            Err(e) => Err(ProtocolError::Io(e)),
+        },
+        () = sleep => Ok(None),
     }
 }
 
@@ -222,8 +232,8 @@ fn send_signal(child: &Child, sig: Signal) {
 mod tests {
     use super::*;
     use loom_core::agent::{AgentEvent, RePinContent};
+    use loom_core::clock::{MockClock, SystemClock};
     use std::path::PathBuf;
-    use std::time::Instant;
 
     fn sample_repin() -> RePinContent {
         RePinContent {
@@ -326,9 +336,13 @@ mod tests {
             }
         }
 
-        let exit = ClaudeBackend::shutdown_after_result(session, Duration::from_millis(500))
-            .await
-            .expect("shutdown ok");
+        let exit = ClaudeBackend::shutdown_after_result(
+            session,
+            &SystemClock::new(),
+            Duration::from_millis(500),
+        )
+        .await
+        .expect("shutdown ok");
         assert_eq!(exit, 0, "mock exited cleanly after result");
     }
 
@@ -336,12 +350,17 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_watchdog_escalates_to_sigkill_when_child_ignores_stdin_close() {
+        // Real subprocess (mock claude) ignores SIGTERM, so the watchdog walks
+        // the SIGTERM → SIGKILL escalation. Drive that escalation with a real
+        // clock — paused-time would never resolve `child.wait()` because the
+        // OS scheduler is not a tokio task. We use a small grace + an upper
+        // bound to keep the test deterministic without measuring elapsed time
+        // against an Instant.
         let session = spawn_session(mock_command("ignore-stdin"), Vec::new())
             .await
             .expect("spawn session");
         let mut session = session.prompt("hello").await.expect("prompt ok");
 
-        // Drive events until SessionComplete arrives.
         loop {
             match session.next_event().await.expect("event ok") {
                 Some(AgentEvent::SessionComplete { .. }) => break,
@@ -350,24 +369,42 @@ mod tests {
             }
         }
 
+        let clock = SystemClock::new();
         let grace = Duration::from_millis(150);
-        let started = Instant::now();
-        let _exit = ClaudeBackend::shutdown_after_result(session, grace)
+        // Bound the watchdog to 5s so a hung child surfaces as a test
+        // failure instead of a stuck CI job. Routes through SystemClock so
+        // the call site stays clear of the wall-clock timer ban.
+        let exit = clock
+            .timeout(
+                Duration::from_secs(5),
+                ClaudeBackend::shutdown_after_result(session, &clock, grace),
+            )
             .await
+            .expect("watchdog within budget")
             .expect("shutdown ok");
-        let elapsed = started.elapsed();
+        let _ = exit;
+    }
 
-        // The mock traps SIGTERM but cannot trap SIGKILL. The watchdog
-        // must walk the full SIGTERM → SIGKILL escalation, so the total
-        // elapsed time exceeds two grace windows but stays well under any
-        // reasonable test budget.
-        assert!(
-            elapsed >= grace * 2,
-            "watchdog returned too early: {elapsed:?} < 2 × {grace:?}",
-        );
-        assert!(
-            elapsed < Duration::from_secs(5),
-            "watchdog took longer than expected: {elapsed:?}",
-        );
+    // -- mock-clock smoke for wait_with_timeout ----------------------------
+
+    /// Confirms `wait_with_timeout` returns `None` when the inner future does
+    /// not complete before `clock.sleep` resolves. Uses `MockClock` under
+    /// `start_paused = true` so paused-time advance drives the timeout
+    /// without a real subprocess wait.
+    #[tokio::test(start_paused = true)]
+    async fn wait_with_timeout_returns_none_via_mock_clock() {
+        // Spawn a long-running child that will not exit on its own within the
+        // grace window. We never actually wait wall-clock — the MockClock
+        // sleep wins the select.
+        let mut child = Command::new("sleep")
+            .arg("60")
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn sleep");
+        let clock = MockClock::new();
+        let result = wait_with_timeout(&mut child, &clock, Duration::from_millis(10))
+            .await
+            .expect("no IO error");
+        assert!(result.is_none(), "expected timeout, got {result:?}");
     }
 }

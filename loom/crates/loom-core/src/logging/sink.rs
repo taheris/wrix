@@ -29,20 +29,6 @@ pub struct LogSink {
 }
 
 impl LogSink {
-    /// Open `<logs_root>/<spec-label>/<bead-id>-<utc-stamp>.ndjson`, creating
-    /// any missing parent directories, and pair the file writer with
-    /// `renderer`. Logs the resolved path at `info!` (`log_path` field) so
-    /// users can `tail -f` it.
-    pub fn open_in(
-        logs_root: &Path,
-        spec_label: &SpecLabel,
-        bead_id: &BeadId,
-        renderer: TerminalRenderer,
-    ) -> Result<Self, LogError> {
-        Self::open_in_at(logs_root, spec_label, bead_id, renderer, SystemTime::now())
-    }
-
-    /// Test-friendly variant that takes the timestamp explicitly.
     pub fn open_in_at(
         logs_root: &Path,
         spec_label: &SpecLabel,

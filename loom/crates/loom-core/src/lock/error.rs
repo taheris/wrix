@@ -31,4 +31,7 @@ pub enum LockError {
 
     /// io failure while inspecting locks directory
     Io(#[from] io::Error),
+
+    /// failed to build a tokio runtime for the sync lock-acquire path
+    RuntimeBuild(#[source] io::Error),
 }

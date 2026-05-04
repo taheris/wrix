@@ -17,9 +17,11 @@
 //! `[REDACTED]` regardless of underlying content; variable *names* may still
 //! appear in tracing fields.
 //!
-//! [`sweep_retention`] is invoked once per `loom run` startup to delete log
-//! files older than the configured retention window. Failures (permission
-//! denied, in-use file) are logged at `debug!` and do not abort the run.
+//! [`sweep_retention_at`] is invoked once per `loom run` startup to delete log
+//! files older than the configured retention window. The caller passes the
+//! current `SystemTime` so tests can age files deterministically. Failures
+//! (permission denied, in-use file) are logged at `debug!` and do not abort
+//! the run.
 
 mod error;
 mod path;
@@ -33,5 +35,5 @@ pub use error::LogError;
 pub use path::{bead_log_path, format_utc_timestamp};
 pub use redacted::Redacted;
 pub use renderer::{BeadOutcome, RenderMode, TerminalRenderer};
-pub use retention::{RetentionReport, sweep_retention, sweep_retention_at};
+pub use retention::{RetentionReport, sweep_retention_at};
 pub use sink::LogSink;

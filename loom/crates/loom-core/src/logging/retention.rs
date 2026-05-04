@@ -20,14 +20,14 @@ pub struct RetentionReport {
 /// `retention_days = 0` disables sweeping entirely (returns an empty report).
 /// A missing `logs_root` is treated as "nothing to sweep".
 ///
+/// `now` is supplied by the caller — production code obtains it once at the
+/// binary entry point (via the wall clock) and passes it down; tests pass
+/// synthetic timestamps to express "this file is N days old" without aging
+/// real time.
+///
 /// Spec NF-10 forbids ignoring errors silently; the report carries every
 /// failure and the caller may surface counts at `info!`. The function never
 /// returns `Err` — it returns `Ok` with a report describing what happened.
-pub fn sweep_retention(logs_root: &Path, retention_days: u32) -> RetentionReport {
-    sweep_retention_at(logs_root, retention_days, SystemTime::now())
-}
-
-/// Test-friendly variant that takes the "now" instant explicitly.
 pub fn sweep_retention_at(
     logs_root: &Path,
     retention_days: u32,
@@ -184,7 +184,8 @@ mod tests {
     fn missing_root_is_no_op() {
         let dir = tempfile::tempdir().expect("tempdir");
         let missing = dir.path().join("does/not/exist");
-        let report = sweep_retention_at(&missing, 14, SystemTime::now());
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+        let report = sweep_retention_at(&missing, 14, now);
         assert!(report.deleted.is_empty());
         assert!(report.failed.is_empty());
     }

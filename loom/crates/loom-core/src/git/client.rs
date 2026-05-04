@@ -1,11 +1,12 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::process::Command;
 use tokio::task::spawn_blocking;
-use tokio::time::timeout;
 
+use crate::clock::{Clock, SystemClock};
 use crate::identifier::{BeadId, SpecLabel};
 
 use super::error::GitError;
@@ -20,14 +21,28 @@ const BRANCH_PREFIX: &str = "loom";
 /// diff, refs, commit graph, worktree iteration); the `git` CLI handles
 /// worktree mutation and merge-back. Callers see only the methods on this
 /// struct — neither `gix` nor `Command::new("git")` is exposed.
+///
+/// The injected [`Clock`] drives the per-subprocess timeout so tests can
+/// substitute [`crate::clock::MockClock`].
 pub struct GitClient {
     repo: gix::ThreadSafeRepository,
     workdir: PathBuf,
+    clock: Arc<dyn Clock>,
 }
 
 impl GitClient {
-    /// Open an existing repository at `path`.
+    /// Open an existing repository at `path` using a [`SystemClock`] for
+    /// subprocess timeouts.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, GitError> {
+        Self::open_with_clock(path, Arc::new(SystemClock::new()))
+    }
+
+    /// Open an existing repository at `path` with an explicit clock for
+    /// subprocess timeouts.
+    pub fn open_with_clock(
+        path: impl AsRef<Path>,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Self, GitError> {
         let path = path.as_ref();
         let repo = gix::ThreadSafeRepository::open(path).map_err(|source| GitError::OpenRepo {
             path: path.to_path_buf(),
@@ -37,7 +52,11 @@ impl GitClient {
             .work_dir()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| path.to_path_buf());
-        Ok(Self { repo, workdir })
+        Ok(Self {
+            repo,
+            workdir,
+            clock,
+        })
     }
 
     /// Working tree status against HEAD.
@@ -141,6 +160,7 @@ impl GitClient {
         let path_arg: OsString = path.clone().into();
         run_git(
             &self.workdir,
+            self.clock.as_ref(),
             ["worktree", "add", "-b", &branch],
             Some(&path_arg),
         )
@@ -154,11 +174,18 @@ impl GitClient {
         let path_str = path.to_string_lossy().into_owned();
         run_git(
             &self.workdir,
+            self.clock.as_ref(),
             ["worktree", "remove", "--force", &path_str],
             None,
         )
         .await?;
-        run_git(&self.workdir, ["worktree", "prune"], None).await?;
+        run_git(
+            &self.workdir,
+            self.clock.as_ref(),
+            ["worktree", "prune"],
+            None,
+        )
+        .await?;
         Ok(())
     }
 
@@ -168,7 +195,13 @@ impl GitClient {
     /// branch surfaces as [`GitError::GitCli`] — call only when the branch
     /// is known to exist.
     pub async fn delete_branch(&self, branch: &str) -> Result<(), GitError> {
-        run_git(&self.workdir, ["branch", "-D", branch], None).await?;
+        run_git(
+            &self.workdir,
+            self.clock.as_ref(),
+            ["branch", "-D", branch],
+            None,
+        )
+        .await?;
         Ok(())
     }
 
@@ -178,6 +211,7 @@ impl GitClient {
     pub async fn merge_branch(&self, branch: &str) -> Result<MergeResult, GitError> {
         let output = run_git_raw(
             &self.workdir,
+            self.clock.as_ref(),
             ["merge", "--no-ff", "--no-edit", branch],
             None,
         )
@@ -189,7 +223,13 @@ impl GitClient {
 
         // Conflict: git exits non-zero and leaves the index dirty. Detect via
         // `git ls-files --unmerged` rather than scraping merge stderr.
-        let unmerged = run_git_raw(&self.workdir, ["ls-files", "--unmerged"], None).await?;
+        let unmerged = run_git_raw(
+            &self.workdir,
+            self.clock.as_ref(),
+            ["ls-files", "--unmerged"],
+            None,
+        )
+        .await?;
         if unmerged.status.success() && !unmerged.stdout.is_empty() {
             return Ok(MergeResult::Conflict);
         }
@@ -251,12 +291,17 @@ pub enum MergeResult {
 
 /// Run `git` with an explicit `-C <workdir>`, no shell, 60s ceiling. Returns
 /// `Ok(())` only on a clean exit.
-async fn run_git<I, S>(workdir: &Path, args: I, trailing: Option<&OsString>) -> Result<(), GitError>
+async fn run_git<I, S>(
+    workdir: &Path,
+    clock: &dyn Clock,
+    args: I,
+    trailing: Option<&OsString>,
+) -> Result<(), GitError>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<std::ffi::OsStr>,
 {
-    let output = run_git_raw(workdir, args, trailing).await?;
+    let output = run_git_raw(workdir, clock, args, trailing).await?;
     if output.status.success() {
         return Ok(());
     }
@@ -269,6 +314,7 @@ where
 
 async fn run_git_raw<I, S>(
     workdir: &Path,
+    clock: &dyn Clock,
     args: I,
     trailing: Option<&OsString>,
 ) -> Result<std::process::Output, GitError>
@@ -289,10 +335,13 @@ where
     }
 
     let fut = cmd.output();
-    match timeout(GIT_TIMEOUT, fut).await {
-        Ok(Ok(output)) => Ok(output),
-        Ok(Err(e)) => Err(GitError::Spawn(e)),
-        Err(_) => Err(GitError::GitTimeout {
+    let sleep = clock.sleep(GIT_TIMEOUT);
+    tokio::select! {
+        result = fut => match result {
+            Ok(output) => Ok(output),
+            Err(e) => Err(GitError::Spawn(e)),
+        },
+        () = sleep => Err(GitError::GitTimeout {
             args: argv_for_log.join(" "),
         }),
     }
