@@ -1,24 +1,23 @@
 //! Production [`AgentLoopController`] used by the `loom run` binary.
 //!
-//! Wires `BdClient` for bead lookup/close/clarify and a `tokio::process::Command`
-//! shell-out for `exec_check`. The agent backend itself is **not yet
-//! implemented** (`loom-agent` is a placeholder crate as of wx-3hhwq.20), so
-//! [`ProductionAgentLoopController::run_bead`] returns a stub failure that
-//! the retry policy will surface as a clarify after exhausting attempts. The
-//! `next_ready_bead → empty → exec_check` smoke path is fully wired and
-//! exercised end-to-end.
+//! Wires `BdClient` for bead lookup/close/clarify, a `tokio::process::Command`
+//! shell-out for `exec_check`, and a caller-provided dispatch closure for the
+//! actual agent invocation. The closure pattern keeps backend selection
+//! (`PiBackend` vs `ClaudeBackend`) inside the binary's `dispatch` match —
+//! `loom-workflow` never sees the concrete backend types, mirroring the shape
+//! used by `ProductionTodoController` and `run_parallel_batch`.
 //!
 //! Per-bead profile dispatch is wired through [`build_spawn_config_from_manifest`]:
 //! the manifest, CLI `--profile` override, and per-phase fallback all flow
 //! into the controller at construction time so `run_bead` resolves the
 //! per-bead `image_ref` + `image_source` against the parsed manifest before
-//! the (stubbed) agent invocation. A missing manifest entry surfaces as
+//! the agent invocation. A missing manifest entry surfaces as
 //! [`RunError::Profile`] — no silent fallback.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use loom_core::agent::RePinContent;
+use loom_core::agent::{ProtocolError, RePinContent, SessionOutcome, SpawnConfig};
 use loom_core::bd::{BdClient, Bead, ListOpts, ReadyOpts, UpdateOpts};
 use loom_core::identifier::{BeadId, ProfileName, SpecLabel};
 use loom_core::profile_manifest::ProfileImageManifest;
@@ -30,20 +29,25 @@ use super::outcome::AgentOutcome;
 use super::runner::AgentLoopController;
 use super::spawn::build_spawn_config_from_manifest;
 
-/// Stub error body returned by [`ProductionAgentLoopController::run_bead`]
-/// until the `loom-agent` backend lands. The retry policy surfaces this as a
-/// clarify after the configured attempt count.
-pub const STUB_AGENT_ERROR: &str = "loom-agent backend not yet implemented (wx-3hhwq.20)";
-
-/// Wires the [`AgentLoopController`] trait against the real `BdClient` and a
-/// child `loom check` exec for handoff.
+/// Wires the [`AgentLoopController`] trait against the real `BdClient`, a
+/// caller-provided agent dispatch closure, and a child `loom check` exec for
+/// handoff.
 ///
 /// `manifest` / `cli_profile` / `phase_default` are the inputs the per-bead
 /// profile resolver chain needs (see
 /// [`super::resolve_profile_image`]). They are stored on the controller so
 /// every `run_bead` call resolves the bead's `image_ref` + `image_source`
 /// from the same parsed manifest, never re-reading it from disk.
-pub struct ProductionAgentLoopController {
+///
+/// `spawn` is the per-phase dispatch closure: the binary builds it from
+/// `dispatch(kind, &spawn_config)` so the workflow stays backend-agnostic.
+/// `run_bead` calls it on every retry attempt, so the closure must be `Fn`
+/// (callable repeatedly).
+pub struct ProductionAgentLoopController<S, F>
+where
+    S: Fn(SpawnConfig) -> F + Send,
+    F: std::future::Future<Output = Result<SessionOutcome, ProtocolError>> + Send,
+{
     bd: BdClient,
     label: SpecLabel,
     loom_bin: PathBuf,
@@ -51,9 +55,15 @@ pub struct ProductionAgentLoopController {
     manifest: Arc<ProfileImageManifest>,
     cli_profile: Option<ProfileName>,
     phase_default: ProfileName,
+    spawn: S,
 }
 
-impl ProductionAgentLoopController {
+impl<S, F> ProductionAgentLoopController<S, F>
+where
+    S: Fn(SpawnConfig) -> F + Send,
+    F: std::future::Future<Output = Result<SessionOutcome, ProtocolError>> + Send,
+{
+    #[expect(clippy::too_many_arguments, reason = "controller construction surface")]
     pub fn new(
         bd: BdClient,
         label: SpecLabel,
@@ -62,6 +72,7 @@ impl ProductionAgentLoopController {
         manifest: Arc<ProfileImageManifest>,
         cli_profile: Option<ProfileName>,
         phase_default: ProfileName,
+        spawn: S,
     ) -> Self {
         Self {
             bd,
@@ -71,6 +82,7 @@ impl ProductionAgentLoopController {
             manifest,
             cli_profile,
             phase_default,
+            spawn,
         }
     }
 
@@ -79,7 +91,11 @@ impl ProductionAgentLoopController {
     }
 }
 
-impl AgentLoopController for ProductionAgentLoopController {
+impl<S, F> AgentLoopController for ProductionAgentLoopController<S, F>
+where
+    S: Fn(SpawnConfig) -> F + Send,
+    F: std::future::Future<Output = Result<SessionOutcome, ProtocolError>> + Send,
+{
     async fn next_ready_bead(&mut self) -> Result<Option<Bead>, RunError> {
         let beads = self
             .bd
@@ -96,11 +112,6 @@ impl AgentLoopController for ProductionAgentLoopController {
         bead: &Bead,
         previous_failure: Option<String>,
     ) -> Result<AgentOutcome, RunError> {
-        // Resolve the per-bead profile image up front so a missing manifest
-        // entry surfaces as a typed `RunError::Profile` (not as a stub
-        // agent failure) before the stub ever runs. The constructed
-        // SpawnConfig is otherwise unused until the loom-agent backend
-        // lands; logging the resolved ref keeps the dispatch auditable.
         let spawn_config = build_spawn_config_from_manifest(
             &self.manifest,
             bead,
@@ -120,11 +131,16 @@ impl AgentLoopController for ProductionAgentLoopController {
             bead = %bead.id,
             image_ref = %spawn_config.image_ref,
             retry = previous_failure.is_some(),
-            "loom run: agent backend stub — returning Failure (loom-agent crate is empty)",
+            "loom run: dispatching agent",
         );
-        Ok(AgentOutcome::Failure {
-            error: STUB_AGENT_ERROR.to_string(),
-        })
+        let outcome = (self.spawn)(spawn_config).await?;
+        if outcome.exit_code == 0 {
+            Ok(AgentOutcome::Success)
+        } else {
+            Ok(AgentOutcome::Failure {
+                error: format!("agent exited with code {}", outcome.exit_code),
+            })
+        }
     }
 
     async fn close_bead(&mut self, bead: &BeadId) -> Result<(), RunError> {
@@ -171,4 +187,128 @@ pub async fn list_open_for_spec(bd: &BdClient, label: &SpecLabel) -> Result<Vec<
         })
         .await?;
     Ok(beads)
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "tests use panicking helpers"
+)]
+mod tests {
+    use super::*;
+    use loom_core::bd::Label;
+    use std::sync::Mutex;
+
+    fn write_manifest(dir: &std::path::Path) -> Arc<ProfileImageManifest> {
+        let body = r#"{
+          "base": { "ref": "localhost/wrapix-base:abc", "source": "/nix/store/aaa-image-base" }
+        }"#;
+        let path = dir.join("profile-images.json");
+        std::fs::write(&path, body).expect("write manifest");
+        Arc::new(ProfileImageManifest::from_path(&path).expect("parse manifest"))
+    }
+
+    fn bead(id: &str) -> Bead {
+        Bead {
+            id: BeadId::new(id).expect("valid bead id"),
+            title: format!("title-{id}"),
+            description: "desc".into(),
+            status: "open".into(),
+            priority: 2,
+            issue_type: "task".into(),
+            labels: vec![Label::new("profile:base")],
+        }
+    }
+
+    #[tokio::test]
+    async fn run_bead_invokes_dispatch_closure_with_resolved_spawn_config() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = write_manifest(dir.path());
+        let captured: Arc<Mutex<Option<SpawnConfig>>> = Arc::new(Mutex::new(None));
+        let captured_for_closure = Arc::clone(&captured);
+        let mut controller = ProductionAgentLoopController::new(
+            BdClient::new(),
+            SpecLabel::new("spec-x"),
+            PathBuf::from("/loom/bin"),
+            PathBuf::from("/workspace"),
+            manifest,
+            None,
+            ProfileName::new("base"),
+            move |cfg: SpawnConfig| {
+                let captured = Arc::clone(&captured_for_closure);
+                async move {
+                    *captured.lock().unwrap() = Some(cfg);
+                    Ok(SessionOutcome {
+                        exit_code: 0,
+                        cost_usd: None,
+                    })
+                }
+            },
+        );
+        let outcome = controller
+            .run_bead(&bead("wx-1"), None)
+            .await
+            .expect("run_bead ok");
+        assert_eq!(outcome, AgentOutcome::Success);
+        let cfg = captured.lock().unwrap().take().expect("closure called");
+        assert_eq!(cfg.image_ref, "localhost/wrapix-base:abc");
+        assert!(cfg.initial_prompt.contains("wx-1"));
+    }
+
+    #[tokio::test]
+    async fn run_bead_translates_nonzero_exit_code_into_failure_with_error_body() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = write_manifest(dir.path());
+        let mut controller = ProductionAgentLoopController::new(
+            BdClient::new(),
+            SpecLabel::new("spec-x"),
+            PathBuf::from("/loom/bin"),
+            PathBuf::from("/workspace"),
+            manifest,
+            None,
+            ProfileName::new("base"),
+            |_cfg: SpawnConfig| async move {
+                Ok(SessionOutcome {
+                    exit_code: 42,
+                    cost_usd: None,
+                })
+            },
+        );
+        let outcome = controller
+            .run_bead(&bead("wx-2"), None)
+            .await
+            .expect("run_bead ok");
+        match outcome {
+            AgentOutcome::Failure { error } => {
+                assert!(
+                    error.contains("42"),
+                    "error body should mention exit code 42: {error}"
+                );
+            }
+            AgentOutcome::Success => panic!("non-zero exit must produce Failure"),
+        }
+    }
+
+    #[tokio::test]
+    async fn run_bead_surfaces_protocol_error_through_run_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = write_manifest(dir.path());
+        let mut controller = ProductionAgentLoopController::new(
+            BdClient::new(),
+            SpecLabel::new("spec-x"),
+            PathBuf::from("/loom/bin"),
+            PathBuf::from("/workspace"),
+            manifest,
+            None,
+            ProfileName::new("base"),
+            |_cfg: SpawnConfig| async move { Err(ProtocolError::Unsupported) },
+        );
+        let result = controller.run_bead(&bead("wx-3"), None).await;
+        match result {
+            Err(RunError::Protocol(ProtocolError::Unsupported)) => {}
+            other => panic!("expected Protocol(Unsupported), got {other:?}"),
+        }
+    }
 }

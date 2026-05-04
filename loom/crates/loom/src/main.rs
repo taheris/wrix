@@ -370,16 +370,19 @@ fn run_run(
         RunMode::Continuous
     };
     let manifest_for_seq = Arc::clone(&manifest);
+    let kind = selection.kind;
+    let workspace_buf = workspace.to_path_buf();
     let summary = runtime.block_on(async move {
         let bd = BdClient::new();
         let mut controller = ProductionAgentLoopController::new(
             bd,
             label.clone(),
             loom_bin,
-            workspace.to_path_buf(),
+            workspace_buf,
             manifest_for_seq,
             cli_profile,
             phase_default,
+            move |spawn_cfg: SpawnConfig| async move { dispatch(kind, &spawn_cfg).await },
         );
         run_loop(&mut controller, mode, RetryPolicy::default()).await
     })?;

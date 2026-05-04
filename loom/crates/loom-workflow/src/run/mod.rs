@@ -45,7 +45,7 @@ pub use parallel::{
     run_concurrent_spawns, run_parallel_batch,
 };
 pub use parallelism::{Parallelism, ParallelismError};
-pub use production::{ProductionAgentLoopController, STUB_AGENT_ERROR, list_open_for_spec};
+pub use production::{ProductionAgentLoopController, list_open_for_spec};
 pub use profile::{DEFAULT_PROFILE, resolve_profile, resolve_profile_image};
 pub use retry::{RetryDecision, RetryPolicy};
 pub use runner::{AgentLoopController, RunMode, RunSummary, run_loop};
