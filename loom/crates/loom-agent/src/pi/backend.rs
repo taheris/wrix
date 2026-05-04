@@ -112,10 +112,12 @@ struct SetModelCommand<'a> {
 /// Spawn the launcher [`Command`], drive the startup handshake (probe +
 /// optional `set_model`), and return a session in the [`Idle`] state.
 ///
-/// Module-public so unit tests can substitute a mock pi binary in place
-/// of the real `wrapix run-bead` exec without going through the
-/// `LOOM_WRAPIX_BIN` env-var override.
-pub(crate) async fn spawn_with_handshake(
+/// Public so integration tests under `loom-agent/tests/` can substitute a
+/// mock pi binary in place of the real `wrapix run-bead` exec without going
+/// through the `LOOM_WRAPIX_BIN` env-var override (Rust 2024 makes
+/// `env::set_var` unsafe, and the workspace forbids `unsafe_code`).
+/// Production callers go through [`PiBackend::spawn`].
+pub async fn spawn_with_handshake(
     mut cmd: Command,
     model: Option<&ModelSelection>,
 ) -> Result<AgentSession<Idle>, ProtocolError> {

@@ -3,6 +3,14 @@
 //! Each test builds a throwaway repo in a `tempdir` via the system `git`
 //! binary, opens it through the typed client, and asserts the documented
 //! behaviour for create/remove worktree and merge-back.
+//!
+//! These tests spawn the system `git` binary instead of an in-process
+//! `LineParse + tokio::io::duplex` substitute (spec NFR #8): `GitClient`'s
+//! contract is precisely the typed wrapper around git's on-disk and
+//! ref-database state — branches, worktrees, merge results, and conflict
+//! detection are observable only through real refs, real index files, and
+//! real merge-resolution machinery. A duplex-pipe stand-in would skip the
+//! state mutations the tests exist to pin.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 

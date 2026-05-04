@@ -1,15 +1,38 @@
-//! Compile-only test pinning static dispatch over both backends.
+//! Integration tests for `loom-agent` backend dispatch + startup probe.
 //!
-//! The verify shell function runs `cargo build --workspace --tests`; this
-//! file failing to compile is the assertion. The local `run_agent` helper
-//! mirrors the dispatch shape that lives in `loom-workflow` (and the spec's
-//! Architecture section): a generic free function over `<B: AgentBackend>`
-//! that the binary monomorphizes once per concrete backend.
+//! Two complementary surfaces:
+//!
+//! 1. **Compile-only static dispatch** — both `PiBackend` and `ClaudeBackend`
+//!    instantiate a generic `<B: AgentBackend>` helper. The verify shell
+//!    function runs `cargo build --workspace --tests`; this file failing to
+//!    compile is the assertion. The local `run_agent` helper mirrors the
+//!    dispatch shape that lives in `loom-workflow` (and the spec's
+//!    Architecture section): a generic free function over `<B: AgentBackend>`
+//!    that the binary monomorphizes once per concrete backend.
+//!
+//! 2. **Startup probe round-trip** (spec Functional #4 first bullet) —
+//!    drives the pi handshake against `mock-pi.sh` in `probe-ok` and
+//!    `probe-missing-set-model` modes. The first must hand back an `Idle`
+//!    session; the second must surface [`ProtocolError::Unsupported`] (the
+//!    version-mismatch sentinel) before any conversation begins.
+//!
+//! The probe round-trip cannot be exercised in-process via
+//! `LineParse + tokio::io::duplex`: the round-trip is the kernel-level
+//! pipe + child-stdio plumbing between the pi handshake driver and the pi
+//! subprocess. Replacing it with `tokio::io::duplex` would skip the very
+//! lifecycle the contract pins (process spawn, NDJSON framing across a real
+//! pipe, EOF semantics on launcher exit). Per spec NFR #8.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use std::path::PathBuf;
+
+use loom_agent::pi::backend::spawn_with_handshake;
 use loom_agent::{ClaudeBackend, PiBackend};
-use loom_core::agent::{AgentBackend, ProtocolError, SessionOutcome, SpawnConfig};
+use loom_core::agent::{
+    AgentBackend, AgentEvent, ProtocolError, RePinContent, SessionOutcome, SpawnConfig,
+};
+use tokio::process::Command;
 
 async fn run_agent<B: AgentBackend>(config: &SpawnConfig) -> Result<SessionOutcome, ProtocolError> {
     let _session = B::spawn(config).await?;
@@ -39,10 +62,9 @@ fn pi_and_claude_dispatch_through_run_agent() {
 }
 
 fn sample_config() -> SpawnConfig {
-    use loom_core::agent::RePinContent;
     SpawnConfig {
         image: String::new(),
-        workspace: std::path::PathBuf::new(),
+        workspace: PathBuf::new(),
         env: Vec::new(),
         initial_prompt: String::new(),
         agent_args: Vec::new(),
@@ -52,5 +74,62 @@ fn sample_config() -> SpawnConfig {
             partial_bodies: Vec::new(),
         },
         model: None,
+    }
+}
+
+//---------------------------------------------------------------------------
+// Startup probe round-trip
+//---------------------------------------------------------------------------
+
+/// Locate `tests/loom/mock-pi/pi.sh` relative to the loom-agent crate.
+fn mock_pi_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/loom/mock-pi/pi.sh")
+}
+
+/// Build a `Command` that exec's `bash mock-pi.sh <mode>`. Used as a
+/// drop-in for the production launcher (`wrapix run-bead --spawn-config
+/// <file> --stdio`); the argv contract for that path is exercised by
+/// `loom/tests/spawn_dispatch.rs`. Here the test cares only about the
+/// handshake round-trip, so we bypass the wrapix shim.
+fn mock_command(mode: &str) -> Command {
+    let mut cmd = Command::new("bash");
+    cmd.arg(mock_pi_path()).arg(mode);
+    cmd
+}
+
+/// `mock-pi probe-ok` returns the full required command set; the backend
+/// handshake completes and yields an `Idle` session. Driving a single
+/// prompt through to `SessionComplete` verifies the session is wired and
+/// the launcher's stdin/stdout pipes round-trip JSONL frames.
+#[tokio::test]
+async fn pi_startup_probe_succeeds_with_required_commands() {
+    let session = spawn_with_handshake(mock_command("happy-path"), None)
+        .await
+        .expect("probe-ok handshake should succeed");
+
+    // Run one prompt round-trip to confirm the session is alive past the
+    // handshake. `happy-path` sends one message_delta then `agent_end`.
+    let mut session = session.prompt("ping").await.expect("prompt ok");
+    loop {
+        match session.next_event().await.expect("event ok") {
+            Some(AgentEvent::SessionComplete { .. }) => return,
+            Some(_) => continue,
+            None => panic!("unexpected EOF before SessionComplete"),
+        }
+    }
+}
+
+/// `mock-pi probe-missing-set-model` returns a command set that omits
+/// `set_model`, which is on `REQUIRED_COMMANDS`. The handshake must short
+/// circuit with `ProtocolError::Unsupported` *before* any prompt is sent —
+/// the version-mismatch contract that keeps Loom from running against an
+/// incompatible pi build.
+#[tokio::test]
+async fn pi_startup_probe_fails_with_missing_required_command() {
+    let result = spawn_with_handshake(mock_command("probe-missing-set-model"), None).await;
+    match result {
+        Err(ProtocolError::Unsupported) => {}
+        Err(other) => panic!("expected ProtocolError::Unsupported, got {other:?}"),
+        Ok(_) => panic!("probe should have failed when required command absent"),
     }
 }

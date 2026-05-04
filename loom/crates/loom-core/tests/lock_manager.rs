@@ -4,6 +4,16 @@
 //! `tests/loom-test.sh::test_*`. The shell harness invokes these via
 //! `cargo test -p loom-core --test lock_manager <name>`, so the verify path
 //! exercises the same code as `cargo test`.
+//!
+//! `crash_releases_spec_lock` re-execs the test binary as a child to take
+//! and abandon a lock (spec NFR #8): `flock(2)` release on process death
+//! is a kernel-level guarantee tied to fd close on exit. Asserting it
+//! requires a real, reaped subprocess; an in-process `LineParse +
+//! tokio::io::duplex` substitute cannot reach the kernel-side fd table
+//! that owns the OFD. The default-timeout test (5 s wall clock) lives at
+//! the integration tier so the *real* `acquire_spec` API is exercised
+//! end-to-end; the deterministic `MockClock`-driven variant lives inline
+//! at `loom-core/src/lock/manager.rs::tests`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 

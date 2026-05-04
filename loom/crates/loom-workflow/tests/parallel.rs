@@ -2,6 +2,13 @@
 //! `Parallelism` flag — anything that touches a real git repo lives here.
 //! Pure logic tests stay in `src/run/parallel.rs::tests` and
 //! `src/run/parallelism.rs::tests`.
+//!
+//! These tests spawn `git` to seed and inspect real repos (spec NFR #8):
+//! parallel dispatch's contract is the on-disk shape of worktrees, the
+//! per-bead branches `git worktree list` reports, and the index/merge
+//! state after `merge_back`. An in-process `LineParse + tokio::io::duplex`
+//! substitute can't observe those — git's index, refs database, and
+//! conflict resolution are what the tests assert on.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
