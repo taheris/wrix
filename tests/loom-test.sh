@@ -2379,6 +2379,129 @@ test_template_rendering() {
 }
 
 #-----------------------------------------------------------------------------
+# Integration tests — load-bearing flows from spec §Functional #4. Each
+# top-level wrapper corresponds to one acceptance criterion in
+# specs/loom-tests.md §Integration tests; the underlying cargo test names
+# are free to evolve, but the shell function names are pinned by the
+# annotation gate.
+#-----------------------------------------------------------------------------
+
+#-----------------------------------------------------------------------------
+# test_startup_probe_roundtrip — mock pi with the full required command set
+# lets loom proceed; mock pi missing `set_model` causes loom to fail fast
+# with a version-mismatch error. Exercises the integration tests under
+# `loom-agent/tests/static_dispatch.rs` driving the real mock-pi over a
+# real pipe.
+#-----------------------------------------------------------------------------
+test_startup_probe_roundtrip() {
+    cargo_run test -p loom-agent --test static_dispatch --quiet -- \
+        pi_startup_probe_succeeds_with_required_commands \
+        pi_startup_probe_fails_with_missing_required_command
+}
+
+#-----------------------------------------------------------------------------
+# test_wrapix_run_bead_argv_contract — loom invokes
+# `wrapix run-bead --spawn-config <file> --stdio` with stdin attached as a
+# pipe (not a TTY); the recorded `SpawnConfig` JSON matches the on-disk
+# shape. Exercises the shim-based integration tests under
+# `loom/tests/spawn_dispatch.rs`.
+#-----------------------------------------------------------------------------
+test_wrapix_run_bead_argv_contract() {
+    cargo_run test -p loom --test spawn_dispatch --quiet -- \
+        wrapix_run_bead_invocation_records_correct_argv \
+        child_stdin_is_a_pipe_not_a_tty
+}
+
+#-----------------------------------------------------------------------------
+# test_parallel_run_end_to_end — `loom run --parallel 2` with two ready
+# beads dispatches two mock-agent spawns concurrently, each in its own
+# worktree under `.wrapix/worktree/<label>/<bead-id>/`, then merges both
+# branches back to the driver branch sequentially. Aggregates the
+# integration tests under `loom-workflow/tests/parallel.rs` plus the
+# concurrency-overlap unit tests under `run::parallel`.
+#-----------------------------------------------------------------------------
+test_parallel_run_end_to_end() {
+    parallel_int_test parallel_creates_worktrees
+    parallel_int_test parallel_merge_back
+    parallel_lib_test run::parallel::tests::concurrent_spawns_overlap_in_wall_clock
+    parallel_lib_test run::parallel::tests::concurrent_spawns_collect_outcomes_for_every_slot
+}
+
+#-----------------------------------------------------------------------------
+# test_git_client_roundtrip — `GitClient` exercises create-worktree, list,
+# status, merge (clean / non-conflicting / conflict variants), and remove
+# against a temp repo via the typed Rust API. Cargo integration tests live
+# in `loom-core/tests/git_client.rs`.
+#-----------------------------------------------------------------------------
+test_git_client_roundtrip() {
+    cargo_run test -p loom-core --test git_client --quiet -- \
+        create_and_remove_worktree_round_trip \
+        merge_branch_clean_returns_ok \
+        merge_branch_conflict_is_reported
+}
+
+#-----------------------------------------------------------------------------
+# test_state_db_lifecycle — `StateDb::open` on a fresh path creates schema;
+# `rebuild` populates from `specs/*.md` plus mock `bd` output and resets
+# iteration counters; `recreate` recovers from a corrupted file. Aggregates
+# the lifecycle subset of `loom-core/tests/state_db.rs`.
+#-----------------------------------------------------------------------------
+test_state_db_lifecycle() {
+    state_db_cargo_test state_db_init_creates_tables
+    state_db_cargo_test state_db_rebuild_populates_specs_and_molecules
+    state_db_cargo_test state_db_rebuild_resets_counters
+    state_db_cargo_test state_corruption_recovery
+}
+
+#-----------------------------------------------------------------------------
+# test_per_spec_locking — two contending acquisitions on the same
+# `<label>.lock` serialize via `flock`; the second waits via `MockClock`
+# advance, then errors naming the held label. A crashed child releases the
+# lock immediately so the parent re-acquires. Aggregates the integration
+# tests under `loom-core/tests/lock_manager.rs`.
+#-----------------------------------------------------------------------------
+test_per_spec_locking() {
+    lock_cargo_test second_acquire_times_out_with_spec_busy
+    lock_cargo_test times_out_with_default_timeout
+    lock_cargo_test second_thread_unblocks_when_holder_drops
+    lock_cargo_test crash_releases_spec_lock
+}
+
+#-----------------------------------------------------------------------------
+# test_logging_tee_equality — renderer and on-disk `.jsonl` log subscribe
+# to the same `AgentEvent` stream; capturing both yields line-for-line
+# equality on the log side. Exercises the integration test under
+# `loom-core/tests/logging.rs::run_single_event_sink_property`.
+#-----------------------------------------------------------------------------
+test_logging_tee_equality() {
+    logging_cargo_test run_single_event_sink_property
+}
+
+#-----------------------------------------------------------------------------
+# Annotation gate — bidirectional integrity check on `specs/*.md`
+# annotations against `tests/loom-test.sh`. Implemented in
+# `loom/crates/loom/tests/annotations.rs` per spec §Architecture /
+# Annotation Integrity Gate.
+#-----------------------------------------------------------------------------
+
+# Forward direction: every `[verify]` / `[judge]` annotation in `specs/*.md`
+# resolves to an existing function in the named file. The gate walks the
+# spec corpus, regex-extracts annotations, and asserts each function
+# resolves; any `[judge]` annotation today is a hard error until the judge
+# runner ships (per spec Annotation Contract rule 2).
+test_acceptance_annotations_resolve() {
+    cargo_run test -p loom --test annotations --quiet -- acceptance_annotations_resolve
+}
+
+# Reverse direction: every top-level zero-argument `test_*` function in
+# `tests/loom-test.sh` is referenced by at least one annotation in some
+# spec. Helper functions named `_helper`, `_setup`, etc. are exempt by
+# the naming rule.
+test_no_orphan_test_functions() {
+    cargo_run test -p loom --test annotations --quiet -- no_orphan_test_functions
+}
+
+#-----------------------------------------------------------------------------
 # Property-based tests — `proptest` invariants under
 # `loom/crates/{loom-core,loom-agent}/tests/properties.rs`. Each shell
 # function dispatches into the matching cargo integration test. CI runs
