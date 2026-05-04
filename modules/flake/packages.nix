@@ -14,6 +14,11 @@ _:
       inherit (wrapix) profiles;
 
       mkSandboxPkg = cfg: (wrapix.mkSandbox cfg).package;
+
+      profileImages = mapAttrs (_: profile: (wrapix.mkSandbox { inherit profile; }).image) {
+        inherit (profiles) base rust python;
+      };
+
       sandboxPkgs = mapAttrs (_: mkSandboxPkg) {
         sandbox = {
           profile = profiles.base;
@@ -70,6 +75,7 @@ _:
         default = sandboxPkgs.sandbox-rust;
         city-config = city.configDir;
         loom = wrapix.loomPackage;
+        profile-images = wrapix.mkProfileImages profileImages;
         ralph = wrapix.ralphPackage;
         tmux-mcp = import ../../lib/mcp/tmux/mcp-server.nix { inherit pkgs; };
         wrapix-builder = import ../../lib/builder { inherit pkgs linuxPkgs; };

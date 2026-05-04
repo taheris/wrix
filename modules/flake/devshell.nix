@@ -17,6 +17,7 @@ _:
           if [ -e .git ]; then
             git config --local core.hooksPath lib/prek/hooks
           fi
+          export LOOM_PROFILES_MANIFEST=${self'.packages.profile-images}
         '';
 
         packages = wrapix.profiles.rust.packages ++ [
