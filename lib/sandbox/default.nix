@@ -57,6 +57,12 @@ let
   baseClaudeSettings = {
     "$schema" = "https://json.schemastore.org/claude-code-settings.json";
 
+    # Suppress the bypass-permissions acceptance dialog. Claude 2.1.x reads
+    # this from userSettings; the legacy bypassPermissionsModeAccepted in
+    # ~/.claude.json is migrated here at startup, but the entrypoint re-seeds
+    # settings.json each container, so the flag must live in the seed too.
+    skipDangerousModePermissionPrompt = true;
+
     attribution = {
       commit = "";
       pr = "";
