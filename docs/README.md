@@ -29,7 +29,7 @@ pin — keep it current when specs land or retire.
 | [tmux-mcp.md](../specs/tmux-mcp.md) | [`lib/mcp/tmux/`](../lib/mcp/tmux/) | wx-4f3g | AI-assisted debugging via tmux panes |
 | [loom-harness.md](../specs/loom-harness.md) | [`loom/`](../loom/) | wx-3hhwq | Loom platform: crate structure, templates, workflow migration |
 | [loom-agent.md](../specs/loom-agent.md) | [`loom/crates/loom-agent/`](../loom/crates/loom-agent/) | wx-pkht8 | Agent backend abstraction: pi-mono RPC + Claude Code stream-json |
-| [loom-tests.md](../specs/loom-tests.md) | [`tests/loom/`](../tests/loom/) | — | Test strategy: unit, integration, system tests for Loom |
+| [loom-tests.md](../specs/loom-tests.md) | [`tests/loom/`](../tests/loom/) | wx-lfuuh | Test strategy: unit, integration, system tests for Loom |
 
 ## Terminology Index
 

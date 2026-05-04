@@ -1174,28 +1174,3 @@ the rules:
   (no real sleeps, subprocess tests need justification, proptest case
   count bounded) but the test runner doesn't fail when the budget is
   exceeded; humans review timing in PRs.
-
-## Implementation Notes
-
-### Mock script ownership
-
-Mock-pi and mock-claude modes are 1:1 with the Rust tests that drive
-them. Adding a mode is a deliberate decision tied to a specific cargo
-test; the scripts are not general-purpose pi/claude emulators. Each
-mode runs until the conversation it encodes completes, then exits.
-
-### Test isolation for bd
-
-The container smoke uses the same isolation pattern as ralph-tests.md:
-snapshot-based `init_beads` that copies a pre-seeded `.beads/` directory
-into a tempdir before the run. The smoke gets its own embedded Dolt
-database, fully isolated from concurrent peers.
-
-### Verify-runner shape
-
-`tests/loom-test.sh::test_X` shells to a specific cargo test by name —
-either a per-crate integration test (`cargo nextest run -p <crate>
---test <file> <fn>`) or an inline `#[cfg(test)]` test addressed by
-module path. The runner is a thin wrapper; the actual assertions live
-in Rust. This means `ralph spec --verify` and `nix flake check` exercise
-the same underlying tests, surfaced by different entry points.
