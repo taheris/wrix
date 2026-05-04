@@ -58,11 +58,17 @@ let
     # Mirror lib/loom/default.nix: fixtures live outside the loom workspace
     # but are referenced from integration tests via CARGO_MANIFEST_DIR-relative
     # paths. Stage them next to the unpacked source.
+    #
+    # The annotation-integrity gate in `loom/crates/loom/tests/annotations.rs`
+    # also reads `specs/*.md` and `tests/loom-test.sh`; stage those at the
+    # repo-relative paths the gate looks for via ancestor walk.
     postUnpack = ''
       mkdir -p tests/loom
       cp -r ${../../tests/loom/mock-pi} tests/loom/mock-pi
       cp -r ${../../tests/loom/mock-claude} tests/loom/mock-claude
-      chmod -R u+w tests/loom
+      cp ${../../tests/loom-test.sh} tests/loom-test.sh
+      cp -r ${../../specs} specs
+      chmod -R u+w tests specs
     '';
 
     useNextest = true;

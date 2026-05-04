@@ -34,11 +34,17 @@ rustPlatform.buildRustPackage {
   # crates/loom/tests/ resolve them relative to CARGO_MANIFEST_DIR via
   # `../../../tests/loom/...`. Materialize them next to the unpacked
   # source so the paths line up inside the build sandbox.
+  #
+  # The annotation-integrity gate in `loom/crates/loom/tests/annotations.rs`
+  # also reads `specs/*.md` and `tests/loom-test.sh`; stage those at the
+  # repo-relative paths the gate looks for via ancestor walk.
   postUnpack = ''
     mkdir -p tests/loom
     cp -r ${../../tests/loom/mock-pi} tests/loom/mock-pi
     cp -r ${../../tests/loom/mock-claude} tests/loom/mock-claude
-    chmod -R u+w tests/loom
+    cp ${../../tests/loom-test.sh} tests/loom-test.sh
+    cp -r ${../../specs} specs
+    chmod -R u+w tests specs
   '';
 
   doCheck = true;

@@ -313,14 +313,27 @@ fn shell_function_exists(body: &str, name: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 fn repo_root() -> PathBuf {
-    // CARGO_MANIFEST_DIR is .../loom/crates/loom; the repo root is three
-    // levels up.
+    // Two layouts to handle:
+    //   - dev tree: `repo/loom/crates/loom/` is the manifest, `specs/` and
+    //     `tests/loom-test.sh` live under `repo/` (three levels up).
+    //   - nix sandbox: `src = ../../loom` so the build dir IS the loom
+    //     workspace root; `tests/loom/default.nix` stages `specs/` and
+    //     `tests/loom-test.sh` under that build dir (two levels up).
+    // Walk ancestors and pick the closest one that carries both
+    // anchors, so neither layout needs a sandbox-only env var.
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir
-        .ancestors()
-        .nth(3)
-        .map(Path::to_path_buf)
-        .expect("repo root above loom/crates/loom")
+    for ancestor in manifest_dir.ancestors() {
+        if ancestor.join("specs").is_dir() && ancestor.join(SHELL_RUNNER_PATH).is_file() {
+            return ancestor.to_path_buf();
+        }
+    }
+    panic!(
+        "could not locate repo root above {} — neither dev-tree nor \
+         nix-sandbox layout matched. Stage `specs/` and `{}` next to \
+         the loom workspace under the build dir.",
+        manifest_dir.display(),
+        SHELL_RUNNER_PATH,
+    );
 }
 
 fn spec_files(root: &Path) -> Vec<PathBuf> {
