@@ -25,9 +25,10 @@ Both platforms provide full network connectivity without elevated privileges. Th
 lib/
 ├── default.nix          # Top-level API: mkSandbox, mkCity, mkRalph, profiles
 ├── sandbox/             # Container isolation
-│   ├── default.nix      # Platform dispatcher, MCP integration
+│   ├── default.nix      # Platform dispatcher, MCP integration, mkProfileImages
 │   ├── profiles.nix     # Built-in profiles (base, rust, python)
 │   ├── image.nix        # OCI image builder
+│   ├── manifest.nix     # Profile→image JSON manifest (LOOM_PROFILES_MANIFEST)
 │   ├── linux/           # Podman implementation + krun microVM support
 │   └── darwin/          # Apple container implementation
 ├── beads/               # Per-workspace beads-dolt container management
@@ -55,9 +56,14 @@ lib/
 │   ├── tmux/            # tmux MCP server
 │   └── playwright/      # Playwright MCP server
 ├── ralph/               # Single-agent workflow orchestration
+├── loom/                # Rust loom orchestrator package wrapper
+├── pi-mono/             # Pi agent runtime layer (Node.js + pi binary)
+├── prek/                # Pre-commit hook shims (flock-wrapped)
 ├── builder/             # Linux builder for macOS
 ├── notify/              # Desktop notifications
 └── util/                # Shared utilities
+
+loom/                    # Rust workspace: loom orchestrator (crates/loom*, profile manifest, spawn)
 
 modules/
 └── city.nix             # NixOS module: services.wrapix.cities.<name>
@@ -73,7 +79,7 @@ docs/
 
 | Component | Purpose | Entry Point |
 |-----------|---------|-------------|
-| Sandbox | Container creation and lifecycle | `mkSandbox` |
+| Sandbox | Container creation and lifecycle (`wrapix run`/`spawn`) | `mkSandbox` |
 | Gas City | Multi-agent orchestration | `mkCity` |
 | Profiles | Pre-configured dev environments | `profiles.{base,rust,python}` |
 | MCP Servers | Optional capabilities (tmux, playwright) | `mcp.tmux`, `mcp.playwright` |
@@ -81,6 +87,25 @@ docs/
 | Notifications | Desktop alerts when Claude waits | `wrapix-notify`, `wrapix-notifyd` |
 | Linux Builder | Remote Nix builds on macOS | `wrapix-builder` |
 | Ralph | Spec-driven single-agent workflow | `ralph {start,plan,ready,step,loop}` |
+| Loom | Per-bead workflow runner; dispatches profiles via manifest | `loom {plan,run}` |
+
+## Sandbox Launcher
+
+The launcher and the OCI image are separate Nix outputs, composed at the consumer's discretion:
+
+| Output | Role |
+|--------|------|
+| `packages.wrapix` | Profile-agnostic launcher binary; reads image ref/source at runtime |
+| `packages.image-<profile>` | Per-profile OCI artifact (claude + pi runtimes both installed) |
+| `packages.sandbox-<profile>[-pi]` | `makeWrapper` of the launcher with image ref/source + `WRAPIX_AGENT` baked in — the user-facing `nix run .#sandbox-rust` target |
+| `packages.profile-images` | JSON manifest mapping profile → `{ref, source}` consumed by Loom (`LOOM_PROFILES_MANIFEST`) |
+
+The launcher exposes two subcommands sharing the same container construction (mounts, env passthrough, deploy key):
+
+- `wrapix run [DIR] [CMD…]` — interactive (TTY); reads `WRAPIX_DEFAULT_IMAGE_REF`/`WRAPIX_DEFAULT_IMAGE_SOURCE` from the env. The `sandbox-<profile>` wrappers set both; Loom's `plan` phase exports them programmatically from the profile-image manifest.
+- `wrapix spawn --spawn-config <file> [--stdio]` — programmatic dispatch (Loom). Reads image ref/source plus workspace, env allowlist, and agent args from a JSON `SpawnConfig`. The agent runtime (`claude` vs `pi`) is selected at container start via `WRAPIX_AGENT`, not baked per-image.
+
+See [specs/sandbox.md](../specs/sandbox.md) and [specs/profiles.md](../specs/profiles.md) for the full launcher and manifest contracts.
 
 ## Security Model
 

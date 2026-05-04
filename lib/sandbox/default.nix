@@ -286,11 +286,14 @@ let
       # Profile-specific sandbox: makeWrapper composes launcher + image,
       # baking in the agent-runtime selector and image ref/source as defaults
       # so `wrapix run` works without the caller exporting env vars.
+      packageName = "wrapix-${finalProfile.name}${packageSuffix}";
+      packageSuffix = if agent != "claude" then "-${agent}" else "";
       package =
-        pkgs.runCommand "wrapix-${finalProfile.name}${if agent != "claude" then "-${agent}" else ""}"
+        pkgs.runCommand packageName
           {
             nativeBuildInputs = [ pkgs.makeWrapper ];
             passthru = { inherit launcher image; };
+            meta.mainProgram = "wrapix";
           }
           ''
             mkdir -p "$out/bin"

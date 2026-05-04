@@ -81,9 +81,9 @@ Generates systemd units and a podman network per city.
 ## MCP Servers
 
 ```bash
-nix run github:taheris/wrapix#wrapix-mcp         # base + all MCP servers
-nix run github:taheris/wrapix#wrapix-rust-mcp    # rust + all MCP servers
-WRAPIX_MCP=tmux nix run .#wrapix-mcp             # select specific servers
+nix run github:taheris/wrapix#sandbox-mcp         # base + all MCP servers
+nix run github:taheris/wrapix#sandbox-rust-mcp    # rust + all MCP servers
+WRAPIX_MCP=tmux nix run .#sandbox-mcp             # select specific servers
 ```
 
 Available: [tmux](specs/tmux-mcp.md) (pane management for debugging), [playwright](specs/playwright-mcp.md) (browser automation). In flakes: `mcp.tmux = { }` or `mcpRuntime = true`.
