@@ -30,7 +30,7 @@ let
 
 in
 {
-  inherit (sandbox) profiles mkSandbox;
+  inherit (sandbox) profiles mkSandbox mkProfileImages;
   inherit (city) mkCity;
   inherit (ralph) mkRalph scripts;
   ralphPackage = ralph.package;

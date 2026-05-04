@@ -27,6 +27,8 @@ let
   darwinSandbox = import ./darwin { inherit pkgs; };
   linuxSandbox = import ./linux { inherit pkgs; };
 
+  manifest = import ./manifest.nix { inherit pkgs; };
+
   # Profiles must use Linux packages (they contain Linux-only tools like iproute2)
   # hostPkgs is used only by profile.shellHook references.
   profiles = import ./profiles.nix {
@@ -298,4 +300,5 @@ in
     profiles
     baseClaudeSettings
     ;
+  inherit (manifest) mkProfileImages;
 }

@@ -32,6 +32,7 @@
           deriveProfile
           mkCity
           mkDevShell
+          mkProfileImages
           mkRalph
           mkSandbox
           profiles
