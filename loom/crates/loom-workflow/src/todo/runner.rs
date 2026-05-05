@@ -107,6 +107,7 @@ mod tests {
                     partial_bodies: vec![],
                 },
                 model: None,
+                shutdown_grace: None,
             })
         }
 

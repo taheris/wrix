@@ -136,6 +136,7 @@ where
                 partial_bodies: vec![],
             },
             model: None,
+            shutdown_grace: None,
         };
         info!(
             label = %self.label,

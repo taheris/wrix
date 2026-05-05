@@ -13,8 +13,11 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use loom_core::agent::{AgentBackend, AgentSession, Idle, JsonlReader, ProtocolError, SpawnConfig};
+use loom_core::agent::{
+    Active, AgentBackend, AgentSession, Idle, JsonlReader, ProtocolError, SpawnConfig,
+};
 use loom_core::clock::Clock;
+use loom_core::clock::SystemClock;
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use tokio::io::BufWriter;
@@ -73,6 +76,21 @@ impl AgentBackend for ClaudeBackend {
             .arg("--stdio");
 
         spawn_session(cmd, Vec::new()).await
+    }
+
+    async fn after_session_complete(
+        session: AgentSession<Active>,
+        config: &SpawnConfig,
+    ) -> Result<(), ProtocolError> {
+        let grace = config
+            .shutdown_grace
+            .unwrap_or_else(|| Duration::from_secs(DEFAULT_POST_RESULT_GRACE_SECS));
+        debug!(
+            grace_secs = grace.as_secs(),
+            "claude session_complete observed; running shutdown watchdog",
+        );
+        Self::shutdown_after_result(session, &SystemClock::new(), grace).await?;
+        Ok(())
     }
 }
 
@@ -265,6 +283,7 @@ mod tests {
             agent_args: vec!["--print".into()],
             repin: sample_repin(),
             model: None,
+            shutdown_grace: None,
         };
 
         let spawn_config_path = prepare_runtime(&cfg).expect("prepare_runtime");

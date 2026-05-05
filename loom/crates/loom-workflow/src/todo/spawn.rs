@@ -35,6 +35,7 @@ pub fn build_spawn_config(
         agent_args,
         repin,
         model: None,
+        shutdown_grace: None,
     }
 }
 

@@ -77,6 +77,9 @@ pub async fn run_agent<B: AgentBackend>(
             } else {
                 BeadOutcome::Failed
             };
+            if let Err(e) = B::after_session_complete(session, config).await {
+                warn!(error = %e, "backend shutdown hook failed");
+            }
             finish_sink(sink, outcome);
             return Ok(SessionOutcome {
                 exit_code,

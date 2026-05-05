@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -36,6 +37,33 @@ pub struct SpawnConfig {
     /// remains identical to existing fixtures.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<ModelSelection>,
+    /// Grace window the workflow's `after_session_complete` hook waits for
+    /// the agent to exit on its own before escalating signals. Currently
+    /// consumed only by [`ClaudeBackend`](crate::agent::AgentBackend) — pi
+    /// exits naturally on `agent_end` so the field is unused for that
+    /// backend. `None` means the backend's own default applies. Skipped
+    /// during serialization when `None` so wrappers built before this
+    /// field round-trip identically.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "duration_secs_opt"
+    )]
+    pub shutdown_grace: Option<Duration>,
+}
+
+mod duration_secs_opt {
+    use std::time::Duration;
+
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(value: &Option<Duration>, ser: S) -> Result<S::Ok, S::Error> {
+        value.map(|d| d.as_secs()).serialize(ser)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(de: D) -> Result<Option<Duration>, D::Error> {
+        Option::<u64>::deserialize(de).map(|opt| opt.map(Duration::from_secs))
+    }
 }
 
 /// Per-session model override: pi RPC's `set_model { provider, modelId }`.
@@ -87,6 +115,27 @@ pub trait AgentBackend: Send + Sync {
     ) -> impl std::future::Future<Output = Result<(), ProtocolError>> + Send + 'a {
         async { Ok(()) }
     }
+
+    /// Per-backend hook invoked once after the workflow observes
+    /// `AgentEvent::SessionComplete`, before [`run_agent`] returns.
+    ///
+    /// Claude overrides this to drive the post-`result` shutdown watchdog
+    /// (close stdin, wait `config.shutdown_grace`, escalate SIGTERM →
+    /// SIGKILL) — without it the dispatcher leaves an unreaped child that
+    /// only `kill_on_drop` cleans up at session drop. Pi exits naturally
+    /// on `agent_end` so the default no-op stands.
+    ///
+    /// Takes the session by value because the watchdog must close stdin
+    /// (drop the writer) before signaling the child, which requires
+    /// owning the `AgentSession`.
+    ///
+    /// [`run_agent`]: ../../../loom_workflow/fn.run_agent.html
+    fn after_session_complete(
+        _session: AgentSession<Active>,
+        _config: &SpawnConfig,
+    ) -> impl std::future::Future<Output = Result<(), ProtocolError>> + Send {
+        async { Ok(()) }
+    }
 }
 
 #[cfg(test)]
@@ -109,6 +158,7 @@ mod tests {
                 partial_bodies: vec![],
             },
             model,
+            shutdown_grace: None,
         }
     }
 

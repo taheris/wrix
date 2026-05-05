@@ -132,6 +132,7 @@ impl TodoController for ProductionTodoController {
                 partial_bodies: vec![],
             },
             model: None,
+            shutdown_grace: None,
         })
     }
 

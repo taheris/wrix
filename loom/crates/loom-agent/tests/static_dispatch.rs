@@ -75,6 +75,7 @@ fn sample_config() -> SpawnConfig {
             partial_bodies: Vec::new(),
         },
         model: None,
+        shutdown_grace: None,
     }
 }
 

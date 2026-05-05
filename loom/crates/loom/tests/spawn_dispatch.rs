@@ -21,6 +21,7 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 /// Resolve the absolute path to `bash` from `PATH`. Used so the shim's
 /// shebang points at a concrete interpreter rather than `/usr/bin/env`,
@@ -47,8 +48,8 @@ fn install_wrapix_shim(
     argv_file: &Path,
     stdin_info: &Path,
     spawn_config_copy: &Path,
-    mock_pi: &Path,
-    mock_pi_mode: &str,
+    mock_agent: &Path,
+    mock_agent_mode: &str,
 ) -> PathBuf {
     let shim = dir.join("wrapix");
     let bash = find_bash();
@@ -58,25 +59,15 @@ fn install_wrapix_shim(
          ARGV_FILE='{argv}'\n\
          STDIN_INFO='{stdin}'\n\
          SPAWN_CONFIG_COPY='{copy}'\n\
-         MOCK_PI='{mock}'\n\
-         MOCK_PI_MODE='{mode}'\n\
+         MOCK_AGENT='{mock}'\n\
+         MOCK_AGENT_MODE='{mode}'\n\
          \n\
-         # Record argv (one token per line) so the test can pin the exact\n\
-         # invocation shape — `spawn --spawn-config <file> --stdio`.\n\
          {{ for a in \"$@\"; do printf '%s\\n' \"$a\"; done; }} > \"$ARGV_FILE\"\n\
          \n\
-         # Record stdin properties so the pipe-not-tty contract is\n\
-         # observable from inside the container. -t 0 returns 0 only when\n\
-         # fd 0 is a real terminal; -p /dev/stdin returns 0 only when fd 0\n\
-         # is a FIFO/pipe — together they distinguish pipe vs tty vs file.\n\
          {{ if [ -t 0 ]; then echo 'stdin_is_tty=1'; else echo 'stdin_is_tty=0'; fi\n\
             if [ -p /dev/stdin ]; then echo 'stdin_is_pipe=1'; else echo 'stdin_is_pipe=0'; fi\n\
          }} > \"$STDIN_INFO\"\n\
          \n\
-         # Pull the --spawn-config <path> out of argv and stash a copy so\n\
-         # the test can verify the JSON shape. PiBackend writes the file\n\
-         # under /tmp; the original path is fine to read but copying makes\n\
-         # the test independent of the loom binary's cleanup behavior.\n\
          prev=''\n\
          for a in \"$@\"; do\n\
              if [ \"$prev\" = '--spawn-config' ]; then\n\
@@ -86,16 +77,13 @@ fn install_wrapix_shim(
              prev=\"$a\"\n\
          done\n\
          \n\
-         # Hand stdin/stdout to mock-pi for the protocol exchange. exec\n\
-         # replaces this shell so the kernel-level pipe routing matches the\n\
-         # production case where wrapix execs podman which execs the agent.\n\
-         exec '{bash}' \"$MOCK_PI\" \"$MOCK_PI_MODE\"\n",
+         exec '{bash}' \"$MOCK_AGENT\" \"$MOCK_AGENT_MODE\"\n",
         bash = bash.display(),
         argv = argv_file.display(),
         stdin = stdin_info.display(),
         copy = spawn_config_copy.display(),
-        mock = mock_pi.display(),
-        mode = mock_pi_mode,
+        mock = mock_agent.display(),
+        mode = mock_agent_mode,
     );
     std::fs::write(&shim, body).unwrap();
     let mut perm = std::fs::metadata(&shim).unwrap().permissions();
@@ -109,6 +97,13 @@ fn install_wrapix_shim(
 /// drives the integration harness.
 fn mock_pi_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/loom/mock-pi/pi.sh")
+}
+
+/// Locate `tests/loom/mock-claude/claude.sh`. Used by the shutdown-watchdog
+/// gate to drive `loom todo --agent claude` end-to-end against a mock that
+/// emits stream-json then ignores SIGTERM/stdin close.
+fn mock_claude_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/loom/mock-claude/claude.sh")
 }
 
 /// Run `loom --workspace <ws> --agent pi todo -s loom-agent` against a
@@ -742,5 +737,103 @@ fn loom_todo_pi_compaction_drives_repin_steer_through_run_agent() {
         events.last().expect("at least one event")["kind"],
         "session_complete",
         "the final event must be session_complete. events={events:?}",
+    );
+}
+
+/// `wx-pkht8.12` gate — the spec promise (`specs/loom-agent.md` Functional
+/// #4 second bullet, verify marker `tests/loom-test.sh::test_claude_shutdown_watchdog`)
+/// is that the production driver runs the SIGTERM → SIGKILL escalation
+/// after observing `result`. The previous regression was silent because
+/// the only test of this behavior lived inside `loom-agent/src/claude/backend.rs`
+/// and called `ClaudeBackend::shutdown_after_result` directly — production
+/// wiring through `run_agent::<ClaudeBackend>` was missing without a
+/// failing test.
+///
+/// This test drives `loom todo --agent claude` end-to-end. The shim hands
+/// stdio to mock-claude in `ignore-stdin` mode, which emits `result/success`,
+/// then traps SIGTERM and loops forever. Without the wiring, `run_agent`
+/// returns immediately on SessionComplete and the loom binary exits in
+/// milliseconds; with the wiring, the watchdog waits `grace=1s` for the
+/// child to exit on its own, sends SIGTERM (ignored by the mock), waits
+/// another second, then escalates to SIGKILL — total elapsed ≥ ~2s.
+/// The elapsed-time assertion is what makes this test catch a regression.
+#[test]
+fn loom_todo_claude_runs_shutdown_watchdog_through_run_agent() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path();
+    init_workspace_repo(workspace);
+
+    let loom_dir = workspace.join(".wrapix/loom");
+    std::fs::create_dir_all(&loom_dir).unwrap();
+    std::fs::write(
+        loom_dir.join("config.toml"),
+        "[claude]\npost_result_grace_secs = 1\n",
+    )
+    .unwrap();
+
+    let manifest_path = workspace.join("profile-images.json");
+    let image_source = workspace.join("base.tar");
+    std::fs::write(&image_source, "").unwrap();
+    let manifest_body = format!(
+        r#"{{
+          "base": {{ "ref": "localhost/wrapix-base:test", "source": {source:?} }}
+        }}"#,
+        source = image_source.display().to_string(),
+    );
+    std::fs::write(&manifest_path, manifest_body).unwrap();
+
+    let shim_dir = workspace.join("shim");
+    std::fs::create_dir_all(&shim_dir).unwrap();
+    let argv_file = shim_dir.join("argv.txt");
+    let stdin_info = shim_dir.join("stdin-info.txt");
+    let spawn_copy = shim_dir.join("spawn-config.json");
+    let shim = install_wrapix_shim(
+        &shim_dir,
+        &argv_file,
+        &stdin_info,
+        &spawn_copy,
+        &mock_claude_path(),
+        "ignore-stdin",
+    );
+
+    let loom_bin = env!("CARGO_BIN_EXE_loom");
+    let started = std::time::Instant::now();
+    let output = Command::new(loom_bin)
+        .arg("--workspace")
+        .arg(workspace)
+        .arg("--agent")
+        .arg("claude")
+        .arg("todo")
+        .arg("-s")
+        .arg("loom-agent")
+        .env("LOOM_WRAPIX_BIN", &shim)
+        .env("LOOM_BIN", loom_bin)
+        .env("LOOM_PROFILES_MANIFEST", &manifest_path)
+        .env("RUST_LOG", "loom_agent=warn")
+        .output()
+        .expect("spawn loom");
+    let elapsed = started.elapsed();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "loom todo --agent claude must exit 0 against mock-claude ignore-stdin. \
+         stdout={stdout} stderr={stderr}",
+    );
+
+    assert!(
+        elapsed >= Duration::from_millis(1500),
+        "elapsed {elapsed:?} too short — the shutdown watchdog was not \
+         invoked from run_agent. With grace=1s the watchdog must wait once \
+         for stdin-close, escalate to SIGTERM (ignored), then SIGKILL — \
+         total ≥ ~2s. stderr={stderr}",
+    );
+
+    assert!(
+        stderr.contains("SIGKILL"),
+        "expected SIGKILL escalation log in stderr — mock-claude ignores \
+         SIGTERM so the watchdog must escalate. Absence means \
+         after_session_complete was not invoked. stderr={stderr}",
     );
 }

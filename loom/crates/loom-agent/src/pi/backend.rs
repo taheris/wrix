@@ -359,6 +359,7 @@ mod tests {
             agent_args: vec![],
             repin: sample_repin(),
             model,
+            shutdown_grace: None,
         }
     }
 

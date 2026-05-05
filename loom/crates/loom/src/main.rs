@@ -9,6 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::Duration;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
@@ -349,12 +350,14 @@ fn run_run(
         let cli_profile_for_async = cli_profile.clone();
         let phase_default_for_async = phase_default.clone();
         let kind = selection.kind;
+        let shutdown_grace = resolve_shutdown_grace(&selection);
         let summary = runtime.block_on(async move {
             run_parallel_run(
                 workspace_buf,
                 label_for_async,
                 parallel_n,
                 kind,
+                shutdown_grace,
                 manifest_for_async,
                 cli_profile_for_async,
                 phase_default_for_async,
@@ -375,6 +378,7 @@ fn run_run(
     };
     let manifest_for_seq = Arc::clone(&manifest);
     let kind = selection.kind;
+    let shutdown_grace = resolve_shutdown_grace(&selection);
     let workspace_buf = workspace.to_path_buf();
     let logs_root = workspace.join(".wrapix/loom/logs");
     let label_for_sink = label.clone();
@@ -393,7 +397,7 @@ fn run_run(
                 let label = label_for_sink.clone();
                 async move {
                     let sink = open_bead_sink(&logs_root, &label, &bead_id)?;
-                    dispatch(kind, &spawn_cfg, Some(sink)).await
+                    dispatch(kind, spawn_cfg, shutdown_grace, Some(sink)).await
                 }
             },
         );
@@ -422,6 +426,7 @@ async fn run_parallel_run(
     label: SpecLabel,
     parallel_n: u32,
     kind: AgentKind,
+    shutdown_grace: Option<Duration>,
     manifest: Arc<ProfileImageManifest>,
     cli_profile: Option<ProfileName>,
     phase_default: ProfileName,
@@ -455,6 +460,7 @@ async fn run_parallel_run(
         async move {
             match dispatch_for_slot(
                 kind,
+                shutdown_grace,
                 slot,
                 &manifest_inner,
                 cli_profile_inner.as_ref(),
@@ -493,6 +499,7 @@ async fn run_parallel_run(
 /// [`ProfileError::UnknownProfile`]: loom_core::profile_manifest::ProfileError::UnknownProfile
 async fn dispatch_for_slot(
     kind: AgentKind,
+    shutdown_grace: Option<Duration>,
     slot: loom_workflow::run::WorktreeBead,
     manifest: &ProfileImageManifest,
     cli_profile: Option<&ProfileName>,
@@ -520,7 +527,7 @@ async fn dispatch_for_slot(
     )?;
 
     let sink = open_bead_sink(logs_root, label, &slot.bead.id)?;
-    Ok(dispatch(kind, &spawn_config, Some(sink)).await?)
+    Ok(dispatch(kind, spawn_config, shutdown_grace, Some(sink)).await?)
 }
 
 /// Backend-agnostic dispatcher. The match is the only place in the binary
@@ -531,15 +538,36 @@ async fn dispatch_for_slot(
 /// it before returning. Phase entry points open the sink before invoking
 /// dispatch so the on-disk JSONL and the workflow outcome share one code
 /// path. Pass `None` from sites that have not yet been wired.
+///
+/// `shutdown_grace` is the configured `[claude] post_result_grace_secs`
+/// resolved from [`AgentSelection::claude_settings`]. It is patched into
+/// `spawn.shutdown_grace` only when the dispatched backend is claude and
+/// the field is not already set — pi exits naturally on `agent_end`, and
+/// upstream callers that pre-populate the field (tests, future per-bead
+/// overrides) are honored as-is.
 async fn dispatch(
     kind: AgentKind,
-    spawn: &SpawnConfig,
+    mut spawn: SpawnConfig,
+    shutdown_grace: Option<Duration>,
     sink: Option<LogSink>,
 ) -> Result<SessionOutcome, ProtocolError> {
-    match kind {
-        AgentKind::Pi => run_agent::<PiBackend>(spawn, sink).await,
-        AgentKind::Claude => run_agent::<ClaudeBackend>(spawn, sink).await,
+    if matches!(kind, AgentKind::Claude) && spawn.shutdown_grace.is_none() {
+        spawn.shutdown_grace = shutdown_grace;
     }
+    match kind {
+        AgentKind::Pi => run_agent::<PiBackend>(&spawn, sink).await,
+        AgentKind::Claude => run_agent::<ClaudeBackend>(&spawn, sink).await,
+    }
+}
+
+/// Resolve the configured shutdown grace from the active agent selection.
+/// Pi sessions return `None` because pi exits naturally on `agent_end`;
+/// claude sessions return the parsed `[claude] post_result_grace_secs`.
+fn resolve_shutdown_grace(selection: &loom_core::config::AgentSelection) -> Option<Duration> {
+    selection
+        .claude_settings
+        .as_ref()
+        .map(|s| Duration::from_secs(u64::from(s.post_result_grace_secs)))
 }
 
 /// Open the per-bead JSONL sink at the path the spec promises:
@@ -598,6 +626,7 @@ fn run_check(
     let selection = resolved_agent_for(&config, agent_override, Phase::Check)?;
     let phase_default = selection.profile.clone();
     let kind = selection.kind;
+    let shutdown_grace = resolve_shutdown_grace(&selection);
 
     let loom_bin = current_loom_bin()?;
     let state = std::sync::Arc::new(StateDb::open(workspace.join(".wrapix/loom/state.db"))?);
@@ -627,7 +656,7 @@ fn run_check(
                         SystemClock::new().wall_now(),
                     )
                     .map_err(|e| ProtocolError::Io(std::io::Error::other(e.to_string())))?;
-                    dispatch(kind, &spawn_cfg, Some(sink)).await
+                    dispatch(kind, spawn_cfg, shutdown_grace, Some(sink)).await
                 }
             },
         );
@@ -766,6 +795,7 @@ fn run_todo(
     let selection = resolved_agent_for(&config, agent_override, Phase::Todo)?;
     let phase_default = selection.profile.clone();
     let kind = selection.kind;
+    let shutdown_grace = resolve_shutdown_grace(&selection);
 
     let state = Arc::new(StateDb::open(workspace.join(".wrapix/loom/state.db"))?);
     let git = Arc::new(GitClient::open(workspace)?);
@@ -792,7 +822,7 @@ fn run_todo(
                 SystemClock::new().wall_now(),
             )
             .map_err(|e| ProtocolError::Io(std::io::Error::other(e.to_string())))?;
-            dispatch(kind, &spawn_cfg, Some(sink)).await
+            dispatch(kind, spawn_cfg, shutdown_grace, Some(sink)).await
         })
         .await
     })?;
