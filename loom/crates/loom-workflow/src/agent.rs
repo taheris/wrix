@@ -19,7 +19,8 @@
 use std::time::Duration;
 
 use loom_core::agent::{
-    AgentBackend, AgentEvent, DEFAULT_STALL_WARN_SECS, ProtocolError, SessionOutcome, SpawnConfig,
+    Active, AgentBackend, AgentEvent, AgentSession, DEFAULT_STALL_WARN_SECS, Idle, ProtocolError,
+    SessionOutcome, SpawnConfig,
 };
 use loom_core::clock::{Clock, SystemClock};
 use loom_core::logging::{BeadOutcome, LogSink};
@@ -42,20 +43,19 @@ pub async fn run_agent<B: AgentBackend>(
     config: &SpawnConfig,
     mut sink: Option<LogSink>,
 ) -> Result<SessionOutcome, ProtocolError> {
-    let session = B::spawn(config).await?;
-    info!(
-        prompt_chars = config.initial_prompt.chars().count(),
-        "agent spawned; sending initial prompt",
-    );
-    let mut session = session.prompt(&config.initial_prompt).await?;
     let stall_window = config
         .stall_warn_interval
         .unwrap_or_else(|| Duration::from_secs(DEFAULT_STALL_WARN_SECS));
     let clock = SystemClock::new();
+    let session = B::spawn(config).await?;
     info!(
+        prompt_chars = config.initial_prompt.chars().count(),
         stall_warn_secs = stall_window.as_secs(),
-        "prompt sent; awaiting agent events",
+        "agent spawned; sending initial prompt",
     );
+    let mut session =
+        prompt_with_stall_warn(session, &config.initial_prompt, stall_window, &clock).await?;
+    info!("prompt sent; awaiting agent events");
     loop {
         let next = next_event_with_stall_warn(&mut session, stall_window, &clock).await;
         let event = match next {
@@ -106,6 +106,37 @@ pub async fn run_agent<B: AgentBackend>(
     }
 }
 
+/// Drive [`AgentSession::prompt`] to completion while emitting a periodic
+/// `warn!` every `stall_window` that the write hasn't returned. Closes the
+/// visibility gap between `B::spawn` returning and the first agent event:
+/// for the claude backend that window is the container starting up and
+/// claude opening stdin, and a slow consumer can leave the pipe write
+/// blocked with no log output. `stall_window == Duration::ZERO` disables
+/// the watchdog (used by tests).
+async fn prompt_with_stall_warn(
+    session: AgentSession<Idle>,
+    msg: &str,
+    stall_window: Duration,
+    clock: &dyn Clock,
+) -> Result<AgentSession<Active>, ProtocolError> {
+    let fut = session.prompt(msg);
+    if stall_window.is_zero() {
+        return fut.await;
+    }
+    tokio::pin!(fut);
+    loop {
+        let sleep = clock.sleep(stall_window);
+        tokio::select! {
+            biased;
+            result = &mut fut => return result,
+            () = sleep => warn!(
+                stall_secs = stall_window.as_secs(),
+                "still writing initial prompt to agent — agent stdin not draining yet",
+            ),
+        }
+    }
+}
+
 /// Poll [`AgentSession::next_event`] while emitting a periodic `warn!`
 /// every `stall_window` of silence. The warning does not abort the run —
 /// claude can legitimately think for minutes — but it ends the silent
@@ -115,7 +146,7 @@ pub async fn run_agent<B: AgentBackend>(
 /// fresh `clock.sleep(stall_window)` is created on every loop iteration so
 /// each warning resets the silence window.
 async fn next_event_with_stall_warn(
-    session: &mut loom_core::agent::AgentSession<loom_core::agent::Active>,
+    session: &mut AgentSession<Active>,
     stall_window: Duration,
     clock: &dyn Clock,
 ) -> Result<Option<AgentEvent>, ProtocolError> {
