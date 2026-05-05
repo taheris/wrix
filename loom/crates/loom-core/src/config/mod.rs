@@ -14,7 +14,6 @@ mod agent;
 mod beads;
 mod claude;
 mod error;
-mod exit_signals;
 mod logs;
 mod loop_config;
 mod security;
@@ -26,7 +25,6 @@ pub use agent::{
 pub use beads::BeadsConfig;
 pub use claude::ClaudeConfig;
 pub use error::LoomConfigError;
-pub use exit_signals::ExitSignalsConfig;
 pub use logs::LogsConfig;
 pub use loop_config::LoopConfig;
 pub use security::SecurityConfig;
@@ -48,7 +46,6 @@ pub struct LoomConfig {
     #[serde(rename = "loop")]
     pub loop_: LoopConfig,
     pub logs: LogsConfig,
-    pub exit_signals: ExitSignalsConfig,
     /// `[phase.<name>]` tables keyed by phase name. The literal key
     /// `default` is the fallback applied by [`LoomConfig::agent_for`] to
     /// any field a per-phase table does not declare.
@@ -64,7 +61,6 @@ impl Default for LoomConfig {
             beads: BeadsConfig::default(),
             loop_: LoopConfig::default(),
             logs: LogsConfig::default(),
-            exit_signals: ExitSignalsConfig::default(),
             phase: BTreeMap::new(),
             claude: ClaudeConfig::default(),
             security: SecurityConfig::default(),
@@ -164,11 +160,6 @@ max_reviews = 2
 # `loom run` startup. 0 disables sweeping (keep forever).
 retention_days = 14
 
-[exit_signals]
-complete = "LOOM_COMPLETE"
-blocked = "LOOM_BLOCKED"
-clarify = "LOOM_CLARIFY"
-
 # Per-phase config. Resolution for any field: [phase.<name>] →
 # [phase.default] → built-in. `loom run` reads its profile from the
 # bead's `profile:X` label first, then [phase.run] / [phase.default];
@@ -231,7 +222,6 @@ post_result_grace_secs = 5
         assert_eq!(from_spec.beads, empty.beads);
         assert_eq!(from_spec.loop_, empty.loop_);
         assert_eq!(from_spec.logs, empty.logs);
-        assert_eq!(from_spec.exit_signals, empty.exit_signals);
         assert_eq!(from_spec.claude, empty.claude);
         assert_eq!(from_spec.security, empty.security);
         Ok(())
@@ -253,7 +243,6 @@ max_retries = 5
         assert_eq!(cfg.loop_.max_reviews, 2);
         // Whole sections that are absent stay at defaults.
         assert_eq!(cfg.beads, BeadsConfig::default());
-        assert_eq!(cfg.exit_signals, ExitSignalsConfig::default());
         assert!(cfg.phase.is_empty());
         assert_eq!(cfg.claude, ClaudeConfig::default());
         assert_eq!(cfg.security, SecurityConfig::default());

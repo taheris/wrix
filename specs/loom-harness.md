@@ -1085,11 +1085,6 @@ max_reviews = 2
 # `loom run` startup. 0 disables sweeping (keep forever).
 retention_days = 14
 
-[exit_signals]
-complete = "LOOM_COMPLETE"
-blocked = "LOOM_BLOCKED"
-clarify = "LOOM_CLARIFY"
-
 # Per-phase config. Resolution for any field: [phase.<name>] →
 # [phase.default] → built-in. `loom run` reads its profile from the
 # bead's `profile:X` label first, then [phase.run] / [phase.default];

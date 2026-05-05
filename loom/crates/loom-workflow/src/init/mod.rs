@@ -177,7 +177,6 @@ mod tests {
         assert_eq!(parsed.beads, empty.beads);
         assert_eq!(parsed.loop_, empty.loop_);
         assert_eq!(parsed.logs, empty.logs);
-        assert_eq!(parsed.exit_signals, empty.exit_signals);
         assert_eq!(parsed.claude, empty.claude);
         assert_eq!(parsed.security, empty.security);
         // No rebuild on a plain init.

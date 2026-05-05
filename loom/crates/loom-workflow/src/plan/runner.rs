@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use tracing::info;
 
-use loom_core::config::{ExitSignalsConfig, LoomConfig, Phase};
+use loom_core::config::{LoomConfig, Phase};
 use loom_core::identifier::{ProfileName, SpecLabel};
 use loom_core::lock::LockManager;
 use loom_core::profile_manifest::{ImageEntry, ProfileImageManifest};
@@ -99,7 +99,7 @@ pub fn run_with_timeout(
     }
 
     let pinned_context = read_pinned_context(workspace, &cfg.pinned_context)?;
-    let exit_signals = render_exit_signals(&cfg.exit_signals);
+    let exit_signals = render_exit_signals();
 
     let db = StateDb::open(workspace.join(".wrapix/loom/state.db"))?;
     let companion_paths = if is_new {
@@ -186,11 +186,8 @@ fn read_pinned_context(workspace: &Path, rel: &str) -> Result<String, PlanError>
     }
 }
 
-fn render_exit_signals(cfg: &ExitSignalsConfig) -> String {
-    format!(
-        "- `{}`\n- `{}`\n- `{}`",
-        cfg.complete, cfg.blocked, cfg.clarify
-    )
+fn render_exit_signals() -> String {
+    "- `LOOM_COMPLETE`\n- `LOOM_BLOCKED`\n- `LOOM_CLARIFY`".to_string()
 }
 
 #[cfg(test)]
