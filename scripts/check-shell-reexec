@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Lint: shell scripts that re-exec themselves must invoke an interpreter
+# explicitly. The kernel resolves the script's shebang on `exec "$0"`, and
+# `#!/usr/bin/env bash` fails with ENOENT in a real nix-build sandbox
+# (`/usr/bin/env` is not on `sandbox-paths`). Applies repo-wide because
+# any script can end up staged into a nix-build derivation. Caught the
+# hard way by commit 5531020 — see specs/security-review.md
+# "Nix Build Sandbox Disabled" for why this gap exists locally.
+#
+# This script's own shebang is fine: it runs in the dev environment, never
+# inside a nix-build derivation.
+#
+# Bad:  exec stdbuf -oL "$0" "$@"
+# Good: exec stdbuf -oL bash "$0" "$@"
+set -euo pipefail
+
+# `^[^#]*exec` skips commented examples (including this script's own
+# docs). The whitelist is anchored to `exec` so the filename's `.sh`
+# suffix in the `file:line:` prefix doesn't match \b(bash|sh)\b and
+# accidentally pass the bad pattern through.
+bad=$(grep -HnE '^[^#]*exec[^"]*"\$0"' "$@" | grep -vE 'exec[^"]*\b(bash|sh)\b[^"]*"\$0"' || true)
+if [ -n "$bad" ]; then
+    printf '%s\n' "$bad" >&2
+    echo "" >&2
+    echo "fixture re-exec must invoke bash/sh explicitly — kernel shebang" >&2
+    echo "resolution fails in nix-build sandbox (no /usr/bin/env)." >&2
+    echo "  bad:  exec stdbuf -oL \"\$0\" \"\$@\"" >&2
+    echo "  good: exec stdbuf -oL bash \"\$0\" \"\$@\"" >&2
+    exit 1
+fi
