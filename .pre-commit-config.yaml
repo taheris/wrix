@@ -28,15 +28,9 @@ repos:
         stages: [pre-commit]
 
       # Pre-push hooks (~10s)
-      #
-      # Force sandbox=true so the gate matches the upstream CI / fresh-nix
-      # behaviour on developer machines that have sandbox disabled in
-      # /etc/nix/nix.conf (e.g. nested containers without user-namespace
-      # support). Without this, fixture scripts that depend on
-      # `/usr/bin/env` silently pass locally and fail in CI.
       - id: nix-flake-check
         name: nix flake check
-        entry: nix flake check --option sandbox true
+        entry: nix flake check
         language: system
         pass_filenames: false
         always_run: true
