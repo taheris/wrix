@@ -554,10 +554,30 @@ async fn dispatch(
     if matches!(kind, AgentKind::Claude) && spawn.shutdown_grace.is_none() {
         spawn.shutdown_grace = shutdown_grace;
     }
+    if spawn.handshake_timeout.is_none()
+        && let Some(d) = duration_env_ms("LOOM_HANDSHAKE_TIMEOUT_MS")
+    {
+        spawn.handshake_timeout = Some(d);
+    }
+    if spawn.stall_warn_interval.is_none()
+        && let Some(d) = duration_env_ms("LOOM_STALL_WARN_MS")
+    {
+        spawn.stall_warn_interval = Some(d);
+    }
     match kind {
         AgentKind::Pi => run_agent::<PiBackend>(&spawn, sink).await,
         AgentKind::Claude => run_agent::<ClaudeBackend>(&spawn, sink).await,
     }
+}
+
+/// Test seam: read a millisecond budget from `name` if set. Production
+/// runs leave the env vars unset and SpawnConfig falls back to the
+/// constants in `loom_core::agent` (30s handshake / 60s stall warn).
+fn duration_env_ms(name: &str) -> Option<Duration> {
+    std::env::var(name)
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(Duration::from_millis)
 }
 
 /// Resolve the configured shutdown grace from the active agent selection.

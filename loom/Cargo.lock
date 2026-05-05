@@ -1650,6 +1650,7 @@ dependencies = [
  "loom-agent",
  "loom-core",
  "loom-workflow",
+ "nix",
  "proc-macro2",
  "serde_json",
  "syn",

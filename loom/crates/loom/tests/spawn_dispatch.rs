@@ -18,10 +18,17 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use std::io::{BufRead, BufReader};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::Duration;
+use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use nix::sys::signal::{Signal, kill};
+use nix::unistd::Pid;
 
 /// Resolve the absolute path to `bash` from `PATH`. Used so the shim's
 /// shebang points at a concrete interpreter rather than `/usr/bin/env`,
@@ -835,5 +842,179 @@ fn loom_todo_claude_runs_shutdown_watchdog_through_run_agent() {
         "expected SIGKILL escalation log in stderr — mock-claude ignores \
          SIGTERM so the watchdog must escalate. Absence means \
          after_session_complete was not invoked. stderr={stderr}",
+    );
+}
+
+/// `wx-dnhyj` gate — pi handshake against an unresponsive launcher must
+/// surface `ProtocolError::HandshakeTimeout` within the configured budget
+/// instead of hanging silently. mock-pi `hang-probe` reads the
+/// `get_commands` line and then sleeps; without the bounded handshake the
+/// loom binary would block forever waiting for the response.
+#[test]
+fn loom_todo_pi_hang_probe_surfaces_handshake_timeout() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path();
+    init_workspace_repo(workspace);
+
+    let manifest_path = workspace.join("profile-images.json");
+    let image_source = workspace.join("base.tar");
+    std::fs::write(&image_source, "").unwrap();
+    let manifest_body = format!(
+        r#"{{
+          "base": {{ "ref": "localhost/wrapix-base:test", "source": {source:?} }}
+        }}"#,
+        source = image_source.display().to_string(),
+    );
+    std::fs::write(&manifest_path, manifest_body).unwrap();
+
+    let shim_dir = workspace.join("shim");
+    std::fs::create_dir_all(&shim_dir).unwrap();
+    let argv_file = shim_dir.join("argv.txt");
+    let stdin_info = shim_dir.join("stdin-info.txt");
+    let spawn_copy = shim_dir.join("spawn-config.json");
+    let shim = install_wrapix_shim(
+        &shim_dir,
+        &argv_file,
+        &stdin_info,
+        &spawn_copy,
+        &mock_pi_path(),
+        "hang-probe",
+    );
+
+    let loom_bin = env!("CARGO_BIN_EXE_loom");
+    let started = Instant::now();
+    let output = Command::new(loom_bin)
+        .arg("--workspace")
+        .arg(workspace)
+        .arg("--agent")
+        .arg("pi")
+        .arg("todo")
+        .arg("-s")
+        .arg("loom-agent")
+        .env("LOOM_WRAPIX_BIN", &shim)
+        .env("LOOM_BIN", loom_bin)
+        .env("LOOM_PROFILES_MANIFEST", &manifest_path)
+        .env("LOOM_HANDSHAKE_TIMEOUT_MS", "500")
+        .env("RUST_LOG", "loom_agent=warn")
+        .output()
+        .expect("spawn loom");
+    let elapsed = started.elapsed();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        !output.status.success(),
+        "loom todo must fail when the pi probe hangs — exited successfully \
+         which means the timeout is not wired. stdout={stdout} stderr={stderr}",
+    );
+    assert!(
+        elapsed < Duration::from_secs(15),
+        "loom todo must surface HandshakeTimeout within the configured \
+         budget — elapsed {elapsed:?} suggests a hung probe. stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("pi handshake timed out") || stderr.contains("HandshakeTimeout"),
+        "expected handshake-timeout signal in stderr; got stderr={stderr}",
+    );
+}
+
+/// `wx-dnhyj` gate — mid-session silence must trip the run_agent stall
+/// heartbeat. mock-pi `stall-mid-session` answers the probe and acks one
+/// prompt, then sleeps; with `LOOM_STALL_WARN_MS=300` the run loop must
+/// emit `"no agent event for stall window"` to stderr while the agent
+/// remains spawned. The test kills loom after observing the warning so
+/// the never-exiting mock does not stretch the suite.
+#[test]
+fn loom_todo_pi_stall_mid_session_emits_stall_warning() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path();
+    init_workspace_repo(workspace);
+
+    let manifest_path = workspace.join("profile-images.json");
+    let image_source = workspace.join("base.tar");
+    std::fs::write(&image_source, "").unwrap();
+    let manifest_body = format!(
+        r#"{{
+          "base": {{ "ref": "localhost/wrapix-base:test", "source": {source:?} }}
+        }}"#,
+        source = image_source.display().to_string(),
+    );
+    std::fs::write(&manifest_path, manifest_body).unwrap();
+
+    let shim_dir = workspace.join("shim");
+    std::fs::create_dir_all(&shim_dir).unwrap();
+    let argv_file = shim_dir.join("argv.txt");
+    let stdin_info = shim_dir.join("stdin-info.txt");
+    let spawn_copy = shim_dir.join("spawn-config.json");
+    let shim = install_wrapix_shim(
+        &shim_dir,
+        &argv_file,
+        &stdin_info,
+        &spawn_copy,
+        &mock_pi_path(),
+        "stall-mid-session",
+    );
+
+    // Spawn loom as the leader of a fresh process group so the cleanup
+    // step at the end can kill the entire group. The mock-pi `exec sleep`
+    // grandchild inherits stderr from loom; without group-kill it would
+    // outlive `child.kill()` (SIGKILL doesn't run loom's drop chain, so
+    // tokio's `kill_on_drop` doesn't fire on the grandchild) and keep the
+    // stderr pipe open, hanging `reader.join()` forever.
+    let loom_bin = env!("CARGO_BIN_EXE_loom");
+    let mut child = Command::new(loom_bin)
+        .arg("--workspace")
+        .arg(workspace)
+        .arg("--agent")
+        .arg("pi")
+        .arg("todo")
+        .arg("-s")
+        .arg("loom-agent")
+        .env("LOOM_WRAPIX_BIN", &shim)
+        .env("LOOM_BIN", loom_bin)
+        .env("LOOM_PROFILES_MANIFEST", &manifest_path)
+        .env("LOOM_STALL_WARN_MS", "300")
+        .env("RUST_LOG", "loom_workflow=warn")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .expect("spawn loom");
+
+    let pgid = Pid::from_raw(-(child.id() as i32));
+
+    let stderr = child.stderr.take().expect("stderr piped");
+    let buf: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    let buf_thread = Arc::clone(&buf);
+    let reader = thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            let mut g = buf_thread.lock().unwrap();
+            g.push_str(&line);
+            g.push('\n');
+        }
+    });
+
+    let needle = "no agent event for stall window";
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut saw_warning = false;
+    while Instant::now() < deadline {
+        if buf.lock().unwrap().contains(needle) {
+            saw_warning = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    let _ = kill(pgid, Signal::SIGKILL);
+    let _ = child.wait();
+    let _ = reader.join();
+
+    let body = buf.lock().unwrap().clone();
+    assert!(
+        saw_warning,
+        "expected stall warning `{needle}` within 10s of LOOM_STALL_WARN_MS=300 \
+         — absence means the heartbeat is not wired through run_agent. \
+         stderr=\n{body}",
     );
 }
