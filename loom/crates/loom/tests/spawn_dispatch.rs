@@ -338,6 +338,262 @@ fn loom_todo_writes_ndjson_log_under_workspace_logs_dir() {
     );
 }
 
+/// `wx-kzr54` gate — the spec promise (`specs/loom-harness.md` *Run UX &
+/// Logging*) is that every bead processed by `loom run` writes a per-bead
+/// NDJSON log under `<workspace>/.wrapix/loom/logs/<spec>/<bead-id>-<utc>.ndjson`.
+/// Before the wiring fix the production sequential controller passed
+/// `None` for the sink, so the agent ran to completion while every event
+/// was discarded — `loom logs` showed nothing for any bead. The bd stub
+/// returns one ready bead so `RunMode::Once` exercises the full
+/// `next_ready_bead` → `run_bead` → `close_bead` path; the wrapix shim
+/// + mock-pi finish the protocol so the sink reaches `session_complete`
+/// before being dropped.
+#[test]
+fn loom_run_once_writes_per_bead_ndjson_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path();
+    init_workspace_repo(workspace);
+
+    let manifest_path = workspace.join("profile-images.json");
+    let image_source = workspace.join("base.tar");
+    std::fs::write(&image_source, "").unwrap();
+    let manifest_body = format!(
+        r#"{{
+          "base": {{ "ref": "localhost/wrapix-base:test", "source": {source:?} }}
+        }}"#,
+        source = image_source.display().to_string(),
+    );
+    std::fs::write(&manifest_path, manifest_body).unwrap();
+
+    let shim_dir = workspace.join("shim");
+    std::fs::create_dir_all(&shim_dir).unwrap();
+    let argv_file = shim_dir.join("argv.txt");
+    let stdin_info = shim_dir.join("stdin-info.txt");
+    let spawn_copy = shim_dir.join("spawn-config.json");
+    let shim = install_wrapix_shim(
+        &shim_dir,
+        &argv_file,
+        &stdin_info,
+        &spawn_copy,
+        &mock_pi_path(),
+    );
+
+    let bead_json = r#"[{"id":"wx-runtest","title":"run gate bead","description":"","status":"open","priority":2,"issue_type":"task","labels":["spec:loom-agent","profile:base"]}]"#;
+    let bd_bin_dir = install_bd_bead_stub(workspace, bead_json);
+
+    let path_var = std::env::var_os("PATH").unwrap_or_default();
+    let mut path_entries = vec![bd_bin_dir];
+    path_entries.extend(std::env::split_paths(&path_var));
+    let new_path = std::env::join_paths(path_entries).unwrap();
+
+    let loom_bin = env!("CARGO_BIN_EXE_loom");
+    let output = Command::new(loom_bin)
+        .arg("--workspace")
+        .arg(workspace)
+        .arg("--agent")
+        .arg("pi")
+        .arg("run")
+        .arg("--once")
+        .arg("-s")
+        .arg("loom-agent")
+        .env("PATH", new_path)
+        .env("LOOM_WRAPIX_BIN", &shim)
+        .env("LOOM_BIN", loom_bin)
+        .env("LOOM_PROFILES_MANIFEST", &manifest_path)
+        .output()
+        .expect("spawn loom");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "loom run --once must exit 0 against the bd + wrapix stubs. stdout={stdout} stderr={stderr}",
+    );
+
+    let logs_dir = workspace.join(".wrapix/loom/logs/loom-agent");
+    assert!(
+        logs_dir.is_dir(),
+        "per-bead log directory must exist after `loom run --once`: {}\nstdout={stdout}\nstderr={stderr}",
+        logs_dir.display(),
+    );
+    let entries: Vec<_> = std::fs::read_dir(&logs_dir)
+        .expect("read logs dir")
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "ndjson"))
+        .filter(|p| {
+            p.file_stem()
+                .and_then(|s| s.to_str())
+                .is_some_and(|s| s.starts_with("wx-runtest-"))
+        })
+        .collect();
+    assert_eq!(
+        entries.len(),
+        1,
+        "exactly one per-bead NDJSON file must appear at `<logs>/loom-agent/wx-runtest-*.ndjson`: got {entries:?}",
+    );
+
+    let body = std::fs::read_to_string(&entries[0]).expect("read log");
+    let lines: Vec<&str> = body.lines().filter(|l| !l.is_empty()).collect();
+    assert!(
+        !lines.is_empty(),
+        "bead log must contain at least one event line. path={}",
+        entries[0].display(),
+    );
+    for (i, line) in lines.iter().enumerate() {
+        let _: serde_json::Value = serde_json::from_str(line)
+            .unwrap_or_else(|e| panic!("line {i} is not valid JSON: {e}\nline={line}"));
+    }
+    let last: serde_json::Value = serde_json::from_str(lines.last().unwrap()).unwrap();
+    assert_eq!(
+        last["kind"], "session_complete",
+        "the final event must be session_complete. lines={lines:?}",
+    );
+}
+
+/// `wx-g66xo` gate — `loom check` must write its phase log under
+/// `<workspace>/.wrapix/loom/logs/<spec>/check-<utc>.ndjson` (same spec
+/// section as the run gate). Before the wiring fix the production check
+/// controller passed `None` for the sink, so the reviewer agent's events
+/// were discarded. The bd stub returns one bead carrying `loom:clarify`
+/// so the post-snapshot diff yields `CheckVerdict::Clarify` and the gate
+/// exits without touching `git push` / `beads-push` / `loom run` — keeping
+/// the test environment-independent.
+#[test]
+fn loom_check_writes_phase_ndjson_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path();
+    init_workspace_repo(workspace);
+
+    let manifest_path = workspace.join("profile-images.json");
+    let image_source = workspace.join("base.tar");
+    std::fs::write(&image_source, "").unwrap();
+    let manifest_body = format!(
+        r#"{{
+          "base": {{ "ref": "localhost/wrapix-base:test", "source": {source:?} }}
+        }}"#,
+        source = image_source.display().to_string(),
+    );
+    std::fs::write(&manifest_path, manifest_body).unwrap();
+
+    let shim_dir = workspace.join("shim");
+    std::fs::create_dir_all(&shim_dir).unwrap();
+    let argv_file = shim_dir.join("argv.txt");
+    let stdin_info = shim_dir.join("stdin-info.txt");
+    let spawn_copy = shim_dir.join("spawn-config.json");
+    let shim = install_wrapix_shim(
+        &shim_dir,
+        &argv_file,
+        &stdin_info,
+        &spawn_copy,
+        &mock_pi_path(),
+    );
+
+    // `loom:clarify` on the post-snapshot bead → CheckVerdict::Clarify →
+    // CheckResult::Clarified, no push gates fire.
+    let bead_json = r#"[{"id":"wx-checktest","title":"check gate bead","description":"","status":"open","priority":2,"issue_type":"task","labels":["spec:loom-agent","loom:clarify"]}]"#;
+    let bd_bin_dir = install_bd_bead_stub(workspace, bead_json);
+
+    let path_var = std::env::var_os("PATH").unwrap_or_default();
+    let mut path_entries = vec![bd_bin_dir];
+    path_entries.extend(std::env::split_paths(&path_var));
+    let new_path = std::env::join_paths(path_entries).unwrap();
+
+    let loom_bin = env!("CARGO_BIN_EXE_loom");
+    let output = Command::new(loom_bin)
+        .arg("--workspace")
+        .arg(workspace)
+        .arg("--agent")
+        .arg("pi")
+        .arg("check")
+        .arg("-s")
+        .arg("loom-agent")
+        .env("PATH", new_path)
+        .env("LOOM_WRAPIX_BIN", &shim)
+        .env("LOOM_BIN", loom_bin)
+        .env("LOOM_PROFILES_MANIFEST", &manifest_path)
+        .output()
+        .expect("spawn loom");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "loom check must exit 0 against the bd + wrapix stubs. stdout={stdout} stderr={stderr}",
+    );
+
+    let logs_dir = workspace.join(".wrapix/loom/logs/loom-agent");
+    assert!(
+        logs_dir.is_dir(),
+        "phase log directory must exist after `loom check`: {}\nstdout={stdout}\nstderr={stderr}",
+        logs_dir.display(),
+    );
+    let entries: Vec<_> = std::fs::read_dir(&logs_dir)
+        .expect("read logs dir")
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "ndjson"))
+        .filter(|p| {
+            p.file_stem()
+                .and_then(|s| s.to_str())
+                .is_some_and(|s| s.starts_with("check-"))
+        })
+        .collect();
+    assert_eq!(
+        entries.len(),
+        1,
+        "exactly one phase NDJSON file must appear at `<logs>/loom-agent/check-*.ndjson`: got {entries:?}",
+    );
+
+    let body = std::fs::read_to_string(&entries[0]).expect("read log");
+    let lines: Vec<&str> = body.lines().filter(|l| !l.is_empty()).collect();
+    assert!(
+        !lines.is_empty(),
+        "phase log must contain at least one event line. path={}",
+        entries[0].display(),
+    );
+    for (i, line) in lines.iter().enumerate() {
+        let _: serde_json::Value = serde_json::from_str(line)
+            .unwrap_or_else(|e| panic!("line {i} is not valid JSON: {e}\nline={line}"));
+    }
+    let last: serde_json::Value = serde_json::from_str(lines.last().unwrap()).unwrap();
+    assert_eq!(
+        last["kind"], "session_complete",
+        "the final event must be session_complete. lines={lines:?}",
+    );
+}
+
+/// Install a `bd` shim that returns `bead_json` for any `--json`-flagged
+/// subcommand (`bd ready`, `bd list`) and exits 0 silently for everything
+/// else (`bd close`, `bd update`). Returns the bin directory the caller
+/// should prepend to PATH.
+fn install_bd_bead_stub(dir: &Path, bead_json: &str) -> PathBuf {
+    let bin_dir = dir.join("bd-bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let bd = bin_dir.join("bd");
+    let bash = find_bash();
+    let body = format!(
+        "#!{bash}\n\
+         set -euo pipefail\n\
+         for arg in \"$@\"; do\n\
+             if [ \"$arg\" = '--json' ]; then\n\
+                 cat <<'__BD_BEAD_JSON__'\n\
+{bead}\n\
+__BD_BEAD_JSON__\n\
+                 exit 0\n\
+             fi\n\
+         done\n\
+         exit 0\n",
+        bash = bash.display(),
+        bead = bead_json,
+    );
+    std::fs::write(&bd, body).unwrap();
+    let mut perm = std::fs::metadata(&bd).unwrap().permissions();
+    perm.set_mode(0o755);
+    std::fs::set_permissions(&bd, perm).unwrap();
+    bin_dir
+}
+
 /// `tests/loom-test.sh::test_container_stdio_pipe` — the agent process
 /// receives stdin as a pipe, never a TTY. EOF on that pipe is the signal
 /// loom uses to tell the agent "no more input is coming"; if the

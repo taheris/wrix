@@ -42,10 +42,12 @@ use super::spawn::build_spawn_config_from_manifest;
 /// `spawn` is the per-phase dispatch closure: the binary builds it from
 /// `dispatch(kind, &spawn_config)` so the workflow stays backend-agnostic.
 /// `run_bead` calls it on every retry attempt, so the closure must be `Fn`
-/// (callable repeatedly).
+/// (callable repeatedly). It receives `(SpawnConfig, BeadId)` — the bead id
+/// is passed alongside the spawn config so the closure can open the per-bead
+/// NDJSON [`LogSink`](loom_core::logging::LogSink) before dispatch.
 pub struct ProductionAgentLoopController<S, F>
 where
-    S: Fn(SpawnConfig) -> F + Send,
+    S: Fn(SpawnConfig, BeadId) -> F + Send,
     F: std::future::Future<Output = Result<SessionOutcome, ProtocolError>> + Send,
 {
     bd: BdClient,
@@ -60,7 +62,7 @@ where
 
 impl<S, F> ProductionAgentLoopController<S, F>
 where
-    S: Fn(SpawnConfig) -> F + Send,
+    S: Fn(SpawnConfig, BeadId) -> F + Send,
     F: std::future::Future<Output = Result<SessionOutcome, ProtocolError>> + Send,
 {
     #[expect(clippy::too_many_arguments, reason = "controller construction surface")]
@@ -93,7 +95,7 @@ where
 
 impl<S, F> AgentLoopController for ProductionAgentLoopController<S, F>
 where
-    S: Fn(SpawnConfig) -> F + Send,
+    S: Fn(SpawnConfig, BeadId) -> F + Send,
     F: std::future::Future<Output = Result<SessionOutcome, ProtocolError>> + Send,
 {
     async fn next_ready_bead(&mut self) -> Result<Option<Bead>, RunError> {
@@ -133,7 +135,7 @@ where
             retry = previous_failure.is_some(),
             "loom run: dispatching agent",
         );
-        let outcome = (self.spawn)(spawn_config).await?;
+        let outcome = (self.spawn)(spawn_config, bead.id.clone()).await?;
         if outcome.exit_code == 0 {
             Ok(AgentOutcome::Success)
         } else {
@@ -236,7 +238,7 @@ mod tests {
             manifest,
             None,
             ProfileName::new("base"),
-            move |cfg: SpawnConfig| {
+            move |cfg: SpawnConfig, _bead_id: BeadId| {
                 let captured = Arc::clone(&captured_for_closure);
                 async move {
                     *captured.lock().unwrap() = Some(cfg);
@@ -269,7 +271,7 @@ mod tests {
             manifest,
             None,
             ProfileName::new("base"),
-            |_cfg: SpawnConfig| async move {
+            |_cfg: SpawnConfig, _bead_id: BeadId| async move {
                 Ok(SessionOutcome {
                     exit_code: 42,
                     cost_usd: None,
@@ -303,7 +305,7 @@ mod tests {
             manifest,
             None,
             ProfileName::new("base"),
-            |_cfg: SpawnConfig| async move { Err(ProtocolError::Unsupported) },
+            |_cfg: SpawnConfig, _bead_id: BeadId| async move { Err(ProtocolError::Unsupported) },
         );
         let result = controller.run_bead(&bead("wx-3"), None).await;
         match result {

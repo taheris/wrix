@@ -376,6 +376,8 @@ fn run_run(
     let manifest_for_seq = Arc::clone(&manifest);
     let kind = selection.kind;
     let workspace_buf = workspace.to_path_buf();
+    let logs_root = workspace.join(".wrapix/loom/logs");
+    let label_for_sink = label.clone();
     let summary = runtime.block_on(async move {
         let bd = BdClient::new();
         let mut controller = ProductionAgentLoopController::new(
@@ -386,7 +388,14 @@ fn run_run(
             manifest_for_seq,
             cli_profile,
             phase_default,
-            move |spawn_cfg: SpawnConfig| async move { dispatch(kind, &spawn_cfg, None).await },
+            move |spawn_cfg: SpawnConfig, bead_id: BeadId| {
+                let logs_root = logs_root.clone();
+                let label = label_for_sink.clone();
+                async move {
+                    let sink = open_bead_sink(&logs_root, &label, &bead_id)?;
+                    dispatch(kind, &spawn_cfg, Some(sink)).await
+                }
+            },
         );
         run_loop(&mut controller, mode, RetryPolicy::default()).await
     })?;
@@ -435,10 +444,14 @@ async fn run_parallel_run(
     }
 
     let git = GitClient::open(workspace.clone())?;
+    let logs_root = workspace.join(".wrapix/loom/logs");
+    let label_for_closure = label.clone();
     let outcome = run_parallel_batch(&git, &label, beads, move |slot| {
         let manifest_inner = Arc::clone(&manifest);
         let cli_profile_inner = cli_profile.clone();
         let phase_default_inner = phase_default.clone();
+        let logs_root_inner = logs_root.clone();
+        let label_inner = label_for_closure.clone();
         async move {
             match dispatch_for_slot(
                 kind,
@@ -446,6 +459,8 @@ async fn run_parallel_run(
                 &manifest_inner,
                 cli_profile_inner.as_ref(),
                 &phase_default_inner,
+                &logs_root_inner,
+                &label_inner,
             )
             .await
             {
@@ -482,6 +497,8 @@ async fn dispatch_for_slot(
     manifest: &ProfileImageManifest,
     cli_profile: Option<&ProfileName>,
     phase_default: &ProfileName,
+    logs_root: &Path,
+    label: &SpecLabel,
 ) -> anyhow::Result<SessionOutcome> {
     use loom_core::agent::RePinContent;
     use loom_workflow::run::build_spawn_config_from_manifest;
@@ -502,7 +519,8 @@ async fn dispatch_for_slot(
         vec![],
     )?;
 
-    Ok(dispatch(kind, &spawn_config, None).await?)
+    let sink = open_bead_sink(logs_root, label, &slot.bead.id)?;
+    Ok(dispatch(kind, &spawn_config, Some(sink)).await?)
 }
 
 /// Backend-agnostic dispatcher. The match is the only place in the binary
@@ -522,6 +540,25 @@ async fn dispatch(
         AgentKind::Pi => run_agent::<PiBackend>(spawn, sink).await,
         AgentKind::Claude => run_agent::<ClaudeBackend>(spawn, sink).await,
     }
+}
+
+/// Open the per-bead NDJSON sink at the path the spec promises:
+/// `<logs_root>/<spec>/<bead-id>-<utc>.ndjson`. Renderer is `None` because
+/// the sequential and parallel run dispatchers run non-interactively (the
+/// human-facing summary is written by the `loom run` outer-loop print).
+fn open_bead_sink(
+    logs_root: &Path,
+    label: &SpecLabel,
+    bead_id: &BeadId,
+) -> Result<LogSink, ProtocolError> {
+    LogSink::open_in_at(
+        logs_root,
+        label,
+        bead_id,
+        None,
+        SystemClock::new().wall_now(),
+    )
+    .map_err(|e| ProtocolError::Io(std::io::Error::other(e.to_string())))
 }
 
 /// Resolve `phase`'s [`AgentKind`] honoring the global `--agent` override.
@@ -566,6 +603,8 @@ fn run_check(
     let state = std::sync::Arc::new(StateDb::open(workspace.join(".wrapix/loom/state.db"))?);
     let runtime = tokio::runtime::Runtime::new()?;
     let workspace_buf = workspace.to_path_buf();
+    let logs_root = workspace.join(".wrapix/loom/logs");
+    let label_for_sink = label.clone();
     let result = runtime.block_on(async move {
         let bd = BdClient::new();
         let mut controller = ProductionCheckController::new(
@@ -576,7 +615,21 @@ fn run_check(
             state,
             manifest,
             phase_default,
-            move |spawn_cfg: SpawnConfig| async move { dispatch(kind, &spawn_cfg, None).await },
+            move |spawn_cfg: SpawnConfig| {
+                let logs_root = logs_root.clone();
+                let label = label_for_sink.clone();
+                async move {
+                    let sink = LogSink::open_phase_at(
+                        &logs_root,
+                        &label,
+                        "check",
+                        None,
+                        SystemClock::new().wall_now(),
+                    )
+                    .map_err(|e| ProtocolError::Io(std::io::Error::other(e.to_string())))?;
+                    dispatch(kind, &spawn_cfg, Some(sink)).await
+                }
+            },
         );
         run_check_loop(&mut controller, IterationCap::default()).await
     })?;

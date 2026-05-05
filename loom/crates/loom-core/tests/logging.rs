@@ -60,7 +60,7 @@ fn open_sink(
     let (buf, sink) = captured();
     let renderer = TerminalRenderer::new(sink, mode, id.clone(), parallel, false);
     let when = SystemTime::UNIX_EPOCH + Duration::from_secs(when_secs);
-    let s = LogSink::open_in_at(logs_root, &label, &id, renderer, when)?;
+    let s = LogSink::open_in_at(logs_root, &label, &id, Some(renderer), when)?;
     Ok((s, buf))
 }
 

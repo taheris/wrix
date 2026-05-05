@@ -29,15 +29,20 @@ pub struct LogSink {
 }
 
 impl LogSink {
+    /// Open a per-bead sink under
+    /// `<logs_root>/<spec-label>/<bead-id>-<utc>.ndjson`. `renderer` is
+    /// optional so non-interactive callers (the run/parallel dispatch closure
+    /// in the binary) can write only the on-disk NDJSON without instantiating
+    /// a `TerminalRenderer`.
     pub fn open_in_at(
         logs_root: &Path,
         spec_label: &SpecLabel,
         bead_id: &BeadId,
-        renderer: TerminalRenderer,
+        renderer: Option<TerminalRenderer>,
         when: SystemTime,
     ) -> Result<Self, LogError> {
         let log_path = bead_log_path(logs_root, spec_label, bead_id, when);
-        let sink = Self::open_at_path(log_path.clone(), Some(renderer))?;
+        let sink = Self::open_at_path(log_path.clone(), renderer)?;
         info!(
             target: "loom_core::logging::sink",
             spec_label = spec_label.as_str(),
@@ -202,7 +207,7 @@ pub(crate) fn open_sink_with_sink_writer(
         false,
         false,
     );
-    let sink = LogSink::open_in_at(logs_root, spec_label, bead_id, renderer, when)?;
+    let sink = LogSink::open_in_at(logs_root, spec_label, bead_id, Some(renderer), when)?;
     Ok((sink, buf))
 }
 
