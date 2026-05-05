@@ -36,6 +36,15 @@ agent.backend = "claude"
 # wait for clean exit after `result` before SIGTERM (shutdown watchdog).
 post_result_grace_secs = 5
 
+# Backend-agnostic liveness knobs. `handshake_timeout_secs` bounds the pi
+# startup probe + optional set_model response — a non-responsive launcher
+# fails fast with `HandshakeTimeout` instead of hanging. `stall_warn_secs`
+# emits a `warn!` every N seconds of agent silence on the run loop without
+# aborting; claude can legitimately think for minutes, so this is a
+# heartbeat, not a deadline. Defaults: 30s / 60s.
+# handshake_timeout_secs = 30
+# stall_warn_secs = 60
+
 [security]
 # Tool names to deny when claude sends control_request. Claude-only —
 # pi has no host-side permission flow (tools execute internally, no

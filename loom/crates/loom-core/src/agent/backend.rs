@@ -50,7 +50,39 @@ pub struct SpawnConfig {
         with = "duration_secs_opt"
     )]
     pub shutdown_grace: Option<Duration>,
+    /// Maximum time the pi handshake (probe + optional `set_model`) is
+    /// allowed to take before returning [`ProtocolError::HandshakeTimeout`].
+    /// Claude has no host-side handshake, so this field is unused there.
+    /// `None` means the backend's [`DEFAULT_HANDSHAKE_TIMEOUT_SECS`] applies.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "duration_secs_opt"
+    )]
+    pub handshake_timeout: Option<Duration>,
+    /// Cadence for the run-loop stall watchdog: when no agent event arrives
+    /// within this window, [`run_agent`] emits a `warn!` line and keeps
+    /// waiting. `Some(Duration::ZERO)` disables the watchdog explicitly;
+    /// `None` means the workflow's [`DEFAULT_STALL_WARN_SECS`] applies.
+    ///
+    /// [`run_agent`]: ../../../loom_workflow/fn.run_agent.html
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "duration_secs_opt"
+    )]
+    pub stall_warn_interval: Option<Duration>,
 }
+
+/// Default budget for the pi handshake (probe + optional `set_model`). Used
+/// when [`SpawnConfig::handshake_timeout`] is `None`.
+pub const DEFAULT_HANDSHAKE_TIMEOUT_SECS: u64 = 30;
+
+/// Default cadence for the [`run_agent`] stall watchdog. Used when
+/// [`SpawnConfig::stall_warn_interval`] is `None`.
+///
+/// [`run_agent`]: ../../../loom_workflow/fn.run_agent.html
+pub const DEFAULT_STALL_WARN_SECS: u64 = 60;
 
 mod duration_secs_opt {
     use std::time::Duration;
@@ -159,6 +191,8 @@ mod tests {
             },
             model,
             shutdown_grace: None,
+            handshake_timeout: None,
+            stall_warn_interval: None,
         }
     }
 

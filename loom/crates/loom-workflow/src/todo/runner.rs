@@ -108,6 +108,8 @@ mod tests {
                 },
                 model: None,
                 shutdown_grace: None,
+                handshake_timeout: None,
+                stall_warn_interval: None,
             })
         }
 

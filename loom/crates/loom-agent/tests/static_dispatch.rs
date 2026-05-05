@@ -26,12 +26,14 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use loom_agent::pi::backend::spawn_with_handshake;
 use loom_agent::{ClaudeBackend, PiBackend};
 use loom_core::agent::{
     AgentBackend, AgentEvent, ProtocolError, RePinContent, SessionOutcome, SpawnConfig,
 };
+use loom_core::clock::SystemClock;
 use tokio::process::Command;
 
 async fn run_agent<B: AgentBackend>(config: &SpawnConfig) -> Result<SessionOutcome, ProtocolError> {
@@ -76,6 +78,8 @@ fn sample_config() -> SpawnConfig {
         },
         model: None,
         shutdown_grace: None,
+        handshake_timeout: None,
+        stall_warn_interval: None,
     }
 }
 
@@ -105,9 +109,14 @@ fn mock_command(mode: &str) -> Command {
 /// the launcher's stdin/stdout pipes round-trip JSONL frames.
 #[tokio::test]
 async fn pi_startup_probe_succeeds_with_required_commands() {
-    let session = spawn_with_handshake(mock_command("happy-path"), None)
-        .await
-        .expect("probe-ok handshake should succeed");
+    let session = spawn_with_handshake(
+        mock_command("happy-path"),
+        None,
+        Duration::from_secs(5),
+        &SystemClock::new(),
+    )
+    .await
+    .expect("probe-ok handshake should succeed");
 
     // Run one prompt round-trip to confirm the session is alive past the
     // handshake. `happy-path` sends one message_delta then `agent_end`.
@@ -128,7 +137,13 @@ async fn pi_startup_probe_succeeds_with_required_commands() {
 /// incompatible pi build.
 #[tokio::test]
 async fn pi_startup_probe_fails_with_missing_required_command() {
-    let result = spawn_with_handshake(mock_command("probe-missing-set-model"), None).await;
+    let result = spawn_with_handshake(
+        mock_command("probe-missing-set-model"),
+        None,
+        Duration::from_secs(5),
+        &SystemClock::new(),
+    )
+    .await;
     match result {
         Err(ProtocolError::Unsupported) => {}
         Err(other) => panic!("expected ProtocolError::Unsupported, got {other:?}"),

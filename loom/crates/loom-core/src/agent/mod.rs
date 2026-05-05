@@ -28,7 +28,10 @@ mod parse;
 mod repin;
 mod session;
 
-pub use backend::{AgentBackend, ModelSelection, SessionOutcome, SpawnConfig};
+pub use backend::{
+    AgentBackend, DEFAULT_HANDSHAKE_TIMEOUT_SECS, DEFAULT_STALL_WARN_SECS, ModelSelection,
+    SessionOutcome, SpawnConfig,
+};
 pub use error::ProtocolError;
 pub use event::{AgentEvent, CompactionReason};
 pub use jsonl::{JsonlReader, MAX_LINE_BYTES};

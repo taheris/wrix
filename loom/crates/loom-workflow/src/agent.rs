@@ -16,7 +16,12 @@
 //! calls [`LogSink::finish`] before returning so callers can rely on the
 //! file being closed and flushed regardless of the exit path.
 
-use loom_core::agent::{AgentBackend, AgentEvent, ProtocolError, SessionOutcome, SpawnConfig};
+use std::time::Duration;
+
+use loom_core::agent::{
+    AgentBackend, AgentEvent, DEFAULT_STALL_WARN_SECS, ProtocolError, SessionOutcome, SpawnConfig,
+};
+use loom_core::clock::{Clock, SystemClock};
 use loom_core::logging::{BeadOutcome, LogSink};
 use tracing::{info, warn};
 
@@ -43,9 +48,16 @@ pub async fn run_agent<B: AgentBackend>(
         "agent spawned; sending initial prompt",
     );
     let mut session = session.prompt(&config.initial_prompt).await?;
-    info!("prompt sent; awaiting agent events");
+    let stall_window = config
+        .stall_warn_interval
+        .unwrap_or_else(|| Duration::from_secs(DEFAULT_STALL_WARN_SECS));
+    let clock = SystemClock::new();
+    info!(
+        stall_warn_secs = stall_window.as_secs(),
+        "prompt sent; awaiting agent events",
+    );
     loop {
-        let next = session.next_event().await;
+        let next = next_event_with_stall_warn(&mut session, stall_window, &clock).await;
         let event = match next {
             Ok(Some(event)) => event,
             Ok(None) => {
@@ -90,6 +102,37 @@ pub async fn run_agent<B: AgentBackend>(
                 exit_code,
                 cost_usd,
             });
+        }
+    }
+}
+
+/// Poll [`AgentSession::next_event`] while emitting a periodic `warn!`
+/// every `stall_window` of silence. The warning does not abort the run —
+/// claude can legitimately think for minutes — but it ends the silent
+/// stare at the terminal so the operator can decide whether to intervene.
+///
+/// `stall_window == Duration::ZERO` disables the watchdog explicitly. A
+/// fresh `clock.sleep(stall_window)` is created on every loop iteration so
+/// each warning resets the silence window.
+async fn next_event_with_stall_warn(
+    session: &mut loom_core::agent::AgentSession<loom_core::agent::Active>,
+    stall_window: Duration,
+    clock: &dyn Clock,
+) -> Result<Option<AgentEvent>, ProtocolError> {
+    let next = session.next_event();
+    if stall_window.is_zero() {
+        return next.await;
+    }
+    tokio::pin!(next);
+    loop {
+        let sleep = clock.sleep(stall_window);
+        tokio::select! {
+            biased;
+            result = &mut next => return result,
+            () = sleep => warn!(
+                stall_secs = stall_window.as_secs(),
+                "no agent event for stall window — still waiting",
+            ),
         }
     }
 }

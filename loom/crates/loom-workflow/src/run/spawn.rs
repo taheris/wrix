@@ -36,6 +36,8 @@ pub fn build_spawn_config(
         repin,
         model: None,
         shutdown_grace: None,
+        handshake_timeout: None,
+        stall_warn_interval: None,
     }
 }
 

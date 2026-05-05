@@ -1,4 +1,5 @@
 use std::io;
+use std::time::Duration;
 
 use displaydoc::Display;
 use thiserror::Error;
@@ -30,4 +31,10 @@ pub enum ProtocolError {
 
     /// operation not supported by this backend
     Unsupported,
+
+    /// handshake stage `{stage}` did not complete within {after:?}
+    HandshakeTimeout {
+        stage: &'static str,
+        after: Duration,
+    },
 }

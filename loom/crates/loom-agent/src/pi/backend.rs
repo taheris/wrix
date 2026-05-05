@@ -23,15 +23,17 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use loom_core::agent::{
-    Active, AgentBackend, AgentSession, Idle, JsonlReader, ModelSelection, ProtocolError,
-    SpawnConfig,
+    Active, AgentBackend, AgentSession, DEFAULT_HANDSHAKE_TIMEOUT_SECS, Idle, JsonlReader,
+    ModelSelection, ProtocolError, SpawnConfig,
 };
+use loom_core::clock::{Clock, SystemClock};
 use serde::Serialize;
 use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::process::{ChildStdin, Command};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use super::messages::{PiEnvelope, PiResponse};
 use super::parser::PiParser;
@@ -72,9 +74,13 @@ impl AgentBackend for PiBackend {
 
         let wrapix_bin =
             std::env::var_os(ENV_WRAPIX_BIN).unwrap_or_else(|| OsString::from("wrapix"));
+        let handshake_budget = config
+            .handshake_timeout
+            .unwrap_or_else(|| Duration::from_secs(DEFAULT_HANDSHAKE_TIMEOUT_SECS));
         info!(
             wrapix = %wrapix_bin.to_string_lossy(),
             spawn_config = %spawn_config_path.display(),
+            handshake_timeout_secs = handshake_budget.as_secs(),
             "pi backend spawn",
         );
 
@@ -84,7 +90,13 @@ impl AgentBackend for PiBackend {
             .arg(&spawn_config_path)
             .arg("--stdio");
 
-        spawn_with_handshake(cmd, config.model.as_ref()).await
+        spawn_with_handshake(
+            cmd,
+            config.model.as_ref(),
+            handshake_budget,
+            &SystemClock::new(),
+        )
+        .await
     }
 
     async fn on_compaction_start(
@@ -129,6 +141,8 @@ struct SetModelCommand<'a> {
 pub async fn spawn_with_handshake(
     mut cmd: Command,
     model: Option<&ModelSelection>,
+    handshake_timeout: Duration,
+    clock: &dyn Clock,
 ) -> Result<AgentSession<Idle>, ProtocolError> {
     cmd.stdin(Stdio::piped());
     cmd.stdout(Stdio::piped());
@@ -148,10 +162,10 @@ pub async fn spawn_with_handshake(
     let mut writer = BufWriter::new(stdin);
     let mut reader = JsonlReader::new(stdout);
 
-    run_probe(&mut writer, &mut reader).await?;
+    run_probe(&mut writer, &mut reader, handshake_timeout, clock).await?;
 
     if let Some(model) = model {
-        run_set_model(&mut writer, &mut reader, model).await?;
+        run_set_model(&mut writer, &mut reader, model, handshake_timeout, clock).await?;
     }
 
     let parser = PiParser::new();
@@ -165,6 +179,8 @@ pub async fn spawn_with_handshake(
 async fn run_probe(
     writer: &mut BufWriter<ChildStdin>,
     reader: &mut JsonlReader,
+    budget: Duration,
+    clock: &dyn Clock,
 ) -> Result<(), ProtocolError> {
     let cmd = GetCommandsCommand {
         kind: "get_commands",
@@ -173,7 +189,7 @@ async fn run_probe(
     info!(id = PROBE_REQUEST_ID, "pi probe: sending get_commands");
     write_command(writer, &cmd).await?;
 
-    let resp = await_response(reader, PROBE_REQUEST_ID).await?;
+    let resp = bounded_await_response(reader, PROBE_REQUEST_ID, budget, "probe", clock).await?;
     if !resp.success {
         error!(
             error = ?resp.error,
@@ -207,6 +223,8 @@ async fn run_set_model(
     writer: &mut BufWriter<ChildStdin>,
     reader: &mut JsonlReader,
     model: &ModelSelection,
+    budget: Duration,
+    clock: &dyn Clock,
 ) -> Result<(), ProtocolError> {
     let cmd = SetModelCommand {
         kind: "set_model",
@@ -222,7 +240,8 @@ async fn run_set_model(
     );
     write_command(writer, &cmd).await?;
 
-    let resp = await_response(reader, SET_MODEL_REQUEST_ID).await?;
+    let resp =
+        bounded_await_response(reader, SET_MODEL_REQUEST_ID, budget, "set_model", clock).await?;
     if !resp.success {
         error!(
             error = ?resp.error,
@@ -282,6 +301,40 @@ async fn await_response(
                 msg_type = ?env.msg_type,
                 "pi handshake observed non-response line — discarding",
             );
+        }
+    }
+}
+
+/// [`await_response`] with a [`Clock`]-driven budget. Surfaces
+/// [`ProtocolError::HandshakeTimeout`] when the budget elapses so loom
+/// breaks out of a non-responsive pi process instead of blocking forever.
+/// The reader is *not* re-used after timeout — the connection is torn down
+/// by the caller (`spawn_with_handshake` returns the error and the child
+/// drops, which kills the process via `kill_on_drop`). Uses
+/// `clock.sleep(...)` in a `tokio::select!` rather than `Clock::timeout`
+/// because the trait object surface (`&dyn Clock`) is not `Sized`, but
+/// `Clock::timeout` carries a `Self: Sized` bound.
+async fn bounded_await_response(
+    reader: &mut JsonlReader,
+    expected_id: &str,
+    budget: Duration,
+    stage: &'static str,
+    clock: &dyn Clock,
+) -> Result<PiResponse, ProtocolError> {
+    let response = await_response(reader, expected_id);
+    let sleep = clock.sleep(budget);
+    tokio::select! {
+        result = response => result,
+        () = sleep => {
+            warn!(
+                stage,
+                budget_secs = budget.as_secs(),
+                "pi handshake timed out — agent process did not reply",
+            );
+            Err(ProtocolError::HandshakeTimeout {
+                stage,
+                after: budget,
+            })
         }
     }
 }
@@ -356,6 +409,10 @@ mod tests {
         }
     }
 
+    /// Mock-pi scenarios all reply within ~50ms; 5 s is comfortably above
+    /// any legitimate jitter without making a hung scenario stall the suite.
+    const TEST_HANDSHAKE_BUDGET: Duration = Duration::from_secs(5);
+
     fn sample_config(model: Option<ModelSelection>) -> SpawnConfig {
         SpawnConfig {
             image_ref: "localhost/wrapix-test:pi".to_string(),
@@ -367,6 +424,8 @@ mod tests {
             repin: sample_repin(),
             model,
             shutdown_grace: None,
+            handshake_timeout: None,
+            stall_warn_interval: None,
         }
     }
 
@@ -394,9 +453,14 @@ mod tests {
 
     #[tokio::test]
     async fn startup_probe_succeeds_when_required_commands_present() {
-        let session = spawn_with_handshake(mock_command("happy-path"), None)
-            .await
-            .expect("probe should succeed");
+        let session = spawn_with_handshake(
+            mock_command("happy-path"),
+            None,
+            TEST_HANDSHAKE_BUDGET,
+            &SystemClock::new(),
+        )
+        .await
+        .expect("probe should succeed");
         // Drive a prompt to confirm the session is wired and the mock keeps
         // running past the probe.
         let mut session = session.prompt("ping").await.expect("prompt ok");
@@ -411,7 +475,13 @@ mod tests {
 
     #[tokio::test]
     async fn startup_probe_fails_fast_when_required_command_missing() {
-        let result = spawn_with_handshake(mock_command("probe-missing-set-model"), None).await;
+        let result = spawn_with_handshake(
+            mock_command("probe-missing-set-model"),
+            None,
+            TEST_HANDSHAKE_BUDGET,
+            &SystemClock::new(),
+        )
+        .await;
         match result {
             Err(ProtocolError::Unsupported) => {}
             Err(other) => panic!("expected Unsupported, got {other:?}"),
@@ -423,9 +493,14 @@ mod tests {
 
     #[tokio::test]
     async fn driver_sends_prompt_as_jsonl_line() {
-        let session = spawn_with_handshake(mock_command("echo-prompt"), None)
-            .await
-            .expect("spawn");
+        let session = spawn_with_handshake(
+            mock_command("echo-prompt"),
+            None,
+            TEST_HANDSHAKE_BUDGET,
+            &SystemClock::new(),
+        )
+        .await
+        .expect("spawn");
         let mut session = session.prompt("HELLO_PROMPT").await.expect("prompt ok");
 
         let mut saw_echo = false;
@@ -448,9 +523,14 @@ mod tests {
 
     #[tokio::test]
     async fn driver_steers_mid_session_and_mock_observes_payload() {
-        let session = spawn_with_handshake(mock_command("steering"), None)
-            .await
-            .expect("spawn");
+        let session = spawn_with_handshake(
+            mock_command("steering"),
+            None,
+            TEST_HANDSHAKE_BUDGET,
+            &SystemClock::new(),
+        )
+        .await
+        .expect("spawn");
         let mut session = session.prompt("first prompt").await.expect("prompt ok");
 
         // Drain events from the first turn until turn_end so the session is
@@ -488,9 +568,14 @@ mod tests {
 
     #[tokio::test]
     async fn driver_repins_on_compaction_start_via_steer() {
-        let session = spawn_with_handshake(mock_command("compaction"), None)
-            .await
-            .expect("spawn");
+        let session = spawn_with_handshake(
+            mock_command("compaction"),
+            None,
+            TEST_HANDSHAKE_BUDGET,
+            &SystemClock::new(),
+        )
+        .await
+        .expect("spawn");
         let repin_text = "REPIN_PAYLOAD_TEXT";
         let mut session = session.prompt("kickoff").await.expect("prompt ok");
 
@@ -527,9 +612,14 @@ mod tests {
             provider: "deepseek".into(),
             model_id: "deepseek-v3".into(),
         };
-        let session = spawn_with_handshake(mock_command("set-model"), Some(&model))
-            .await
-            .expect("spawn with model");
+        let session = spawn_with_handshake(
+            mock_command("set-model"),
+            Some(&model),
+            TEST_HANDSHAKE_BUDGET,
+            &SystemClock::new(),
+        )
+        .await
+        .expect("spawn with model");
 
         // The mock echoes provider/modelId via a MessageDelta on the first
         // prompt so the test can assert the values reached pi.

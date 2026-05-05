@@ -133,6 +133,8 @@ impl TodoController for ProductionTodoController {
             },
             model: None,
             shutdown_grace: None,
+            handshake_timeout: None,
+            stall_warn_interval: None,
         })
     }
 

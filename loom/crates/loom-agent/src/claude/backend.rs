@@ -284,6 +284,8 @@ mod tests {
             repin: sample_repin(),
             model: None,
             shutdown_grace: None,
+            handshake_timeout: None,
+            stall_warn_interval: None,
         };
 
         let spawn_config_path = prepare_runtime(&cfg).expect("prepare_runtime");
