@@ -267,6 +267,16 @@ elif [ "$WRAPIX_AGENT" = "pi" ]; then
   # Pi RPC mode: pi listens on stdin/stdout for JSONL commands.
   # Loom drives the session from the host via piped stdio.
   pi --mode rpc || MAIN_EXIT=$?
+elif [ "$WRAPIX_AGENT" = "claude" ] && [ "${WRAPIX_STDIO:-}" = "1" ]; then
+  # Claude stream-json mode: loom drives the session from the host via piped
+  # stdio. Symmetric to the pi branch above. Canonical claude args live here
+  # (single source of truth) so workflow code doesn't have to thread them.
+  claude \
+    --dangerously-skip-permissions \
+    --print \
+    --input-format stream-json \
+    --output-format stream-json \
+    || MAIN_EXIT=$?
 elif [ "${RALPH_MODE:-}" = "1" ]; then
   # RALPH_CMD and RALPH_ARGS set by launcher (default: help)
   # shellcheck disable=SC2086 # Intentional word splitting for RALPH_ARGS

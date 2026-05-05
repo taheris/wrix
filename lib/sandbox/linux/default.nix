@@ -426,6 +426,11 @@ in
           for pair in "''${SPAWN_ENV[@]}"; do
             ENV_ARGS+=(-e "$pair")
           done
+          # Mark stream-json mode so the entrypoint dispatches into the
+          # claude --print --input-format stream-json branch instead of the
+          # interactive TTY fallback. Symmetric to the pi RPC branch which
+          # is gated on WRAPIX_AGENT=pi.
+          [ "$USE_STDIO" = "1" ] && ENV_ARGS+=(-e "WRAPIX_STDIO=1")
         else
           TTY_ARGS=(-i -t)
           ENV_ARGS+=(
