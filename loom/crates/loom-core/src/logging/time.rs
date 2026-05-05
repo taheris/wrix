@@ -1,8 +1,8 @@
 //! Tiny UTC formatter for log filenames.
 //!
 //! Loom does not depend on `chrono` or `time`. The only formatting need in
-//! this module is a sortable timestamp suffix for per-bead NDJSON log files
-//! (`<bead-id>-<utc>.ndjson`); the algorithm here is the classic Howard
+//! this module is a sortable timestamp suffix for per-bead JSONL log files
+//! (`<bead-id>-<utc>.jsonl`); the algorithm here is the classic Howard
 //! Hinnant `civil_from_days` plus a wall-clock seconds split.
 //!
 //! Output shape: ISO 8601 *basic* format `YYYYMMDDTHHMMSSZ`. No separators,

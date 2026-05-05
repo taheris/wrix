@@ -1,14 +1,14 @@
 use super::error::ProtocolError;
 use super::event::AgentEvent;
 
-/// Result of parsing a single NDJSON line received from an agent.
+/// Result of parsing a single JSONL line received from an agent.
 ///
 /// `events` carries zero-or-more normalized [`AgentEvent`]s. A `Vec` is used
 /// because some protocol messages map to multiple events (claude's
 /// `result/success` produces both `TurnEnd` and `SessionComplete`); other
 /// lines (e.g. claude's `system/init`) produce zero.
 ///
-/// `response` carries an optional NDJSON line that the session must write back
+/// `response` carries an optional JSONL line that the session must write back
 /// on the agent's stdin in response to the parsed line. The canonical case is
 /// claude's `control_request` auto-approve flow: the parser produces the
 /// `control_response` payload and the session is responsible for the IO.
@@ -26,12 +26,12 @@ pub struct ParsedLine {
 /// which backend produced it.
 ///
 /// `encode_*` methods serialize driver-side commands (initial prompt, mid-
-/// session steering, abort) into NDJSON lines for the session to write to the
+/// session steering, abort) into JSONL lines for the session to write to the
 /// agent's stdin. They live alongside `parse_line` because both directions of
 /// the wire are backend-specific and a single trait keeps the session a
 /// concrete generic-free type.
 pub trait LineParse: Send {
-    /// Parse one NDJSON line received from the agent's stdout.
+    /// Parse one JSONL line received from the agent's stdout.
     fn parse_line(&self, line: &str) -> Result<ParsedLine, ProtocolError>;
 
     /// Encode the initial prompt that opens the session. Returned string is

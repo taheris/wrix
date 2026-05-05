@@ -1169,11 +1169,10 @@ test_run_verbose_streams_text() {
 # test_run_writes_per_bead_jsonl_log — every bead spawn writes the full
 # AgentEvent stream as JSONL to
 # `<workspace>/.wrapix/loom/logs/<spec>/<bead>-<utc>.jsonl`, regardless of
-# terminal verbosity. (The Rust test name retains `ndjson` for now —
-# JSONL and NDJSON are the same wire format; the spec/loom uses JSONL.)
+# terminal verbosity.
 #-----------------------------------------------------------------------------
 test_run_writes_per_bead_jsonl_log() {
-    logging_cargo_test run_writes_per_bead_ndjson_log
+    logging_cargo_test run_writes_per_bead_jsonl_log
 }
 
 #-----------------------------------------------------------------------------
@@ -1569,16 +1568,16 @@ test_use_command() {
 
 #-----------------------------------------------------------------------------
 # test_logs_command — `loom logs` (read-only) walks `.wrapix/loom/logs/` two
-# levels deep, returns the most recent `*.ndjson`, applies an exact bead-id
+# levels deep, returns the most recent `*.jsonl`, applies an exact bead-id
 # prefix filter so `wx-1` does not collapse into `wx-10`, and rejects
-# non-ndjson files.
+# non-jsonl files.
 #-----------------------------------------------------------------------------
 test_logs_command() {
     aux_cargo_test logs_cmd::tests::empty_root_returns_no_logs
     aux_cargo_test logs_cmd::tests::returns_most_recent_log_across_specs
     aux_cargo_test logs_cmd::tests::bead_filter_matches_prefix_exactly
     aux_cargo_test logs_cmd::tests::missing_bead_filter_returns_typed_error
-    aux_cargo_test logs_cmd::tests::ignores_non_ndjson_files
+    aux_cargo_test logs_cmd::tests::ignores_non_jsonl_files
 }
 
 #-----------------------------------------------------------------------------
@@ -1671,7 +1670,7 @@ test_plan_update() {
 # test_plan_uses_interactive_wrapix_run — `loom plan` must shell out to the
 # interactive `wrapix run` subcommand with the user's TTY attached. It must
 # NEVER use `wrapix spawn`, NEVER pass `--stdio`, and NEVER pass
-# `--spawn-config` — those are reserved for the NDJSON-driven phases. The
+# `--spawn-config` — those are reserved for the JSONL-driven phases. The
 # launcher (lib/sandbox/linux/default.nix) refuses `wrapix run` without
 # `WRAPIX_DEFAULT_IMAGE_REF` / `WRAPIX_DEFAULT_IMAGE_SOURCE`, so plan must
 # resolve its profile against the parsed manifest and inject those env vars
@@ -2073,7 +2072,7 @@ test_pi_startup_probe() {
 
 #-----------------------------------------------------------------------------
 # test_pi_rpc_command_sending — the driver writes the initial prompt as an
-# NDJSON line on stdin via `AgentSession::prompt`; the mock pi observes the
+# JSONL line on stdin via `AgentSession::prompt`; the mock pi observes the
 # line and echoes its `message` field back in a `message_update`/`text_delta`
 # event, proving the wire shape.
 #-----------------------------------------------------------------------------
@@ -2083,11 +2082,11 @@ test_pi_rpc_command_sending() {
         return 1
     fi
     cargo_run test -p loom-agent --quiet -- \
-        pi::backend::tests::driver_sends_prompt_as_ndjson_line
+        pi::backend::tests::driver_sends_prompt_as_jsonl_line
 }
 
 #-----------------------------------------------------------------------------
-# test_pi_supports_steering — `AgentSession::steer` writes a `steer` NDJSON
+# test_pi_supports_steering — `AgentSession::steer` writes a `steer` JSONL
 # line on stdin during an active session; the mock pi receives it,
 # acknowledges it as a follow-up assistant turn, and the driver observes
 # the corresponding `MessageDelta` + `TurnEnd` events.

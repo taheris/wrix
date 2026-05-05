@@ -13,7 +13,7 @@
 //! 3. spawns `wrapix spawn --spawn-config <file> --stdio` via an
 //!    [`AgentBackend`](loom_core::agent::AgentBackend) and tees the
 //!    [`AgentEvent`](loom_core::agent::AgentEvent) stream into the terminal
-//!    renderer + per-bead NDJSON log;
+//!    renderer + per-bead JSONL log;
 //! 4. on agent failure retries with `previous_failure` injected up to
 //!    `max_retries` (default 2), then applies the `loom:clarify` label;
 //! 5. on bead success closes the bead;

@@ -24,7 +24,7 @@ pub mod use_spec;
 
 pub use agent::run_agent;
 pub use loom_core::agent::{
-    Active, AgentBackend, AgentEvent, AgentKind, AgentSession, CompactionReason, Idle, LineParse,
-    MAX_LINE_BYTES, NdjsonReader, ParsedLine, ProtocolError, RePinContent, SessionOutcome,
+    Active, AgentBackend, AgentEvent, AgentKind, AgentSession, CompactionReason, Idle, JsonlReader,
+    LineParse, MAX_LINE_BYTES, ParsedLine, ProtocolError, RePinContent, SessionOutcome,
     SpawnConfig,
 };

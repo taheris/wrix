@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Mock pi binary for loom-agent tests.
 #
-# Reads NDJSON commands on stdin, emits NDJSON responses+events on stdout.
+# Reads JSONL commands on stdin, emits JSONL responses+events on stdout.
 # The first argument selects a behavior mode used by the unit tests in
 # loom-agent/src/pi/backend.rs and the container smoke runner:
 #
@@ -39,7 +39,7 @@ set -euo pipefail
 
 MODE="${1:-default}"
 
-# pi RPC framing is NDJSON: one complete object per line. Unbuffer stdout
+# pi RPC framing is JSONL: one complete object per line. Unbuffer stdout
 # so the consumer sees each line as soon as it is written.
 exec 1> >(stdbuf -oL cat)
 

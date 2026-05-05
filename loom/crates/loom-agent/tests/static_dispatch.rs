@@ -20,7 +20,7 @@
 //! `LineParse + tokio::io::duplex`: the round-trip is the kernel-level
 //! pipe + child-stdio plumbing between the pi handshake driver and the pi
 //! subprocess. Replacing it with `tokio::io::duplex` would skip the very
-//! lifecycle the contract pins (process spawn, NDJSON framing across a real
+//! lifecycle the contract pins (process spawn, JSONL framing across a real
 //! pipe, EOF semantics on launcher exit). Per spec NFR #8.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]

@@ -10,7 +10,7 @@
 use loom_core::identifier::{RequestId, ToolCallId};
 use serde::{Deserialize, Serialize};
 
-/// First-pass peek of a pi NDJSON line. Carries only the discriminating
+/// First-pass peek of a pi JSONL line. Carries only the discriminating
 /// fields; the parser re-deserializes into the appropriate concrete type
 /// once the message category is known.
 #[derive(Debug, Deserialize)]

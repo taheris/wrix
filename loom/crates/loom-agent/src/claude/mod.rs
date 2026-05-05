@@ -4,7 +4,7 @@
 //!
 //! - [`messages`] — typed protocol messages (the `ClaudeMessage` tagged
 //!   enum that mirrors `claude --output-format stream-json`).
-//! - [`parser`] — `LineParse` impl that turns NDJSON lines from claude's
+//! - [`parser`] — `LineParse` impl that turns JSONL lines from claude's
 //!   stdout into [`AgentEvent`](loom_core::agent::AgentEvent)s and encodes
 //!   driver-side stream-json user messages (initial prompt, steering).
 //! - [`backend`] — the [`ClaudeBackend`] zero-sized type plus its

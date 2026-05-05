@@ -1,5 +1,5 @@
 /// Result of one agent invocation against a bead. The driver translates
-/// session-level signals (NDJSON `result/success`, non-zero process exit,
+/// session-level signals (JSONL `result/success`, non-zero process exit,
 /// `LOOM_BLOCKED` / `LOOM_CLARIFY` markers) into one of these.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentOutcome {

@@ -3,7 +3,7 @@ use std::io;
 use displaydoc::Display;
 use thiserror::Error;
 
-/// Errors raised at the NDJSON / agent-protocol boundary.
+/// Errors raised at the JSONL / agent-protocol boundary.
 ///
 /// The variants cover the layers where loom-core is the only code that knows
 /// about the wire (line framing, JSON parse, subprocess IO) plus the small set
@@ -25,7 +25,7 @@ pub enum ProtocolError {
     /// unexpected end of agent event stream
     UnexpectedEof,
 
-    /// NDJSON line too long: {len} bytes (max {max})
+    /// JSONL line too long: {len} bytes (max {max})
     LineTooLong { len: usize, max: usize },
 
     /// operation not supported by this backend

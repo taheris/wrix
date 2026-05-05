@@ -2,7 +2,7 @@
 source: crates/loom/tests/cli_help.rs
 expression: "loom_help(&[\"logs\"])"
 ---
-Tail the most recent per-bead NDJSON log
+Tail the most recent per-bead JSONL log
 
 Usage: loom logs [OPTIONS]
 

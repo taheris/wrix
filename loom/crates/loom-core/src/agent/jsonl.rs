@@ -3,10 +3,10 @@ use tokio::process::ChildStdout;
 
 use super::error::ProtocolError;
 
-/// Maximum size in bytes of a single NDJSON line accepted from an agent.
+/// Maximum size in bytes of a single JSONL line accepted from an agent.
 ///
 /// Caps memory pressure from a malicious or malfunctioning agent that emits a
-/// line without a `\n` terminator. 10 MB is well above any legitimate NDJSON
+/// line without a `\n` terminator. 10 MB is well above any legitimate JSONL
 /// message — the largest are tool results carrying file contents.
 pub const MAX_LINE_BYTES: usize = 10 * 1024 * 1024;
 
@@ -16,12 +16,12 @@ pub const MAX_LINE_BYTES: usize = 10 * 1024 * 1024;
 /// through as part of the JSON content. Trailing `\r` is stripped so CRLF
 /// survives. Empty lines (blank between objects) are silently skipped — only
 /// non-empty lines are returned to the caller.
-pub struct NdjsonReader {
+pub struct JsonlReader {
     reader: BufReader<ChildStdout>,
     line_buf: String,
 }
 
-impl NdjsonReader {
+impl JsonlReader {
     /// Wrap a child stdout pipe in a fresh reader. Internally allocates a
     /// reusable line buffer that grows up to [`MAX_LINE_BYTES`].
     pub fn new(stdout: ChildStdout) -> Self {

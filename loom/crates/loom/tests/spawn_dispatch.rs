@@ -5,7 +5,7 @@
 //! 1. `wrapix spawn --spawn-config <file> --stdio` is the only argv shape
 //!    loom hands to the wrapper. `<file>` resolves to a JSON-serialized
 //!    [`SpawnConfig`] containing the resolved profile image.
-//! 2. The container child receives stdin via a pipe (not a TTY) so NDJSON
+//! 2. The container child receives stdin via a pipe (not a TTY) so JSONL
 //!    framing flows correctly and EOF semantics work when loom closes its
 //!    end of the pipe.
 //!
@@ -249,10 +249,10 @@ fn wrapix_spawn_invocation_records_correct_argv() {
     );
 }
 
-/// `tests/loom-test.sh::test_loom_todo_writes_ndjson_log` — the run-time
+/// `tests/loom-test.sh::test_loom_todo_writes_jsonl_log` — the run-time
 /// promise from `specs/loom-harness.md` *Run UX & Logging* is that every
-/// `loom todo` invocation emits a per-phase NDJSON file under
-/// `<workspace>/.wrapix/loom/logs/<spec-label>/todo-<utc>.ndjson`. Without
+/// `loom todo` invocation emits a per-phase JSONL file under
+/// `<workspace>/.wrapix/loom/logs/<spec-label>/todo-<utc>.jsonl`. Without
 /// this gate the workflow happily ran agents to completion while
 /// `run_agent` discarded every event with a `trace!` call (wx-2emcs);
 /// users saw two INFO lines and an empty `loom logs`. The test drives the
@@ -262,7 +262,7 @@ fn wrapix_spawn_invocation_records_correct_argv() {
 /// removes the sink wiring trips this assertion before any user-visible
 /// breakage.
 #[test]
-fn loom_todo_writes_ndjson_log_under_workspace_logs_dir() {
+fn loom_todo_writes_jsonl_log_under_workspace_logs_dir() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = dir.path();
 
@@ -289,7 +289,7 @@ fn loom_todo_writes_ndjson_log_under_workspace_logs_dir() {
         "loom todo --agent pi must exit 0 against the mock pi shim. stdout={stdout} stderr={stderr}",
     );
 
-    // The phase log path is `<workspace>/.wrapix/loom/logs/<spec>/todo-<utc>.ndjson`.
+    // The phase log path is `<workspace>/.wrapix/loom/logs/<spec>/todo-<utc>.jsonl`.
     // Spec label was passed as `loom-agent` via `drive_loom_todo_pi`.
     let logs_dir = workspace.join(".wrapix/loom/logs/loom-agent");
     assert!(
@@ -301,12 +301,12 @@ fn loom_todo_writes_ndjson_log_under_workspace_logs_dir() {
         .expect("read logs dir")
         .filter_map(Result::ok)
         .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|e| e == "ndjson"))
+        .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
         .collect();
     assert_eq!(
         entries.len(),
         1,
-        "exactly one NDJSON file must appear under {}: got {entries:?}",
+        "exactly one JSONL file must appear under {}: got {entries:?}",
         logs_dir.display(),
     );
     let log_path = &entries[0];
@@ -340,7 +340,7 @@ fn loom_todo_writes_ndjson_log_under_workspace_logs_dir() {
 
 /// `wx-kzr54` gate — the spec promise (`specs/loom-harness.md` *Run UX &
 /// Logging*) is that every bead processed by `loom run` writes a per-bead
-/// NDJSON log under `<workspace>/.wrapix/loom/logs/<spec>/<bead-id>-<utc>.ndjson`.
+/// JSONL log under `<workspace>/.wrapix/loom/logs/<spec>/<bead-id>-<utc>.jsonl`.
 /// Before the wiring fix the production sequential controller passed
 /// `None` for the sink, so the agent ran to completion while every event
 /// was discarded — `loom logs` showed nothing for any bead. The bd stub
@@ -349,7 +349,7 @@ fn loom_todo_writes_ndjson_log_under_workspace_logs_dir() {
 /// + mock-pi finish the protocol so the sink reaches `session_complete`
 /// before being dropped.
 #[test]
-fn loom_run_once_writes_per_bead_ndjson_log() {
+fn loom_run_once_writes_per_bead_jsonl_log() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = dir.path();
     init_workspace_repo(workspace);
@@ -420,7 +420,7 @@ fn loom_run_once_writes_per_bead_ndjson_log() {
         .expect("read logs dir")
         .filter_map(Result::ok)
         .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|e| e == "ndjson"))
+        .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
         .filter(|p| {
             p.file_stem()
                 .and_then(|s| s.to_str())
@@ -430,7 +430,7 @@ fn loom_run_once_writes_per_bead_ndjson_log() {
     assert_eq!(
         entries.len(),
         1,
-        "exactly one per-bead NDJSON file must appear at `<logs>/loom-agent/wx-runtest-*.ndjson`: got {entries:?}",
+        "exactly one per-bead JSONL file must appear at `<logs>/loom-agent/wx-runtest-*.jsonl`: got {entries:?}",
     );
 
     let body = std::fs::read_to_string(&entries[0]).expect("read log");
@@ -452,7 +452,7 @@ fn loom_run_once_writes_per_bead_ndjson_log() {
 }
 
 /// `wx-g66xo` gate — `loom check` must write its phase log under
-/// `<workspace>/.wrapix/loom/logs/<spec>/check-<utc>.ndjson` (same spec
+/// `<workspace>/.wrapix/loom/logs/<spec>/check-<utc>.jsonl` (same spec
 /// section as the run gate). Before the wiring fix the production check
 /// controller passed `None` for the sink, so the reviewer agent's events
 /// were discarded. The bd stub returns one bead carrying `loom:clarify`
@@ -460,7 +460,7 @@ fn loom_run_once_writes_per_bead_ndjson_log() {
 /// exits without touching `git push` / `beads-push` / `loom run` — keeping
 /// the test environment-independent.
 #[test]
-fn loom_check_writes_phase_ndjson_log() {
+fn loom_check_writes_phase_jsonl_log() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = dir.path();
     init_workspace_repo(workspace);
@@ -532,7 +532,7 @@ fn loom_check_writes_phase_ndjson_log() {
         .expect("read logs dir")
         .filter_map(Result::ok)
         .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|e| e == "ndjson"))
+        .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
         .filter(|p| {
             p.file_stem()
                 .and_then(|s| s.to_str())
@@ -542,7 +542,7 @@ fn loom_check_writes_phase_ndjson_log() {
     assert_eq!(
         entries.len(),
         1,
-        "exactly one phase NDJSON file must appear at `<logs>/loom-agent/check-*.ndjson`: got {entries:?}",
+        "exactly one phase JSONL file must appear at `<logs>/loom-agent/check-*.jsonl`: got {entries:?}",
     );
 
     let body = std::fs::read_to_string(&entries[0]).expect("read log");

@@ -1,6 +1,6 @@
 //! Claude Code stream-json protocol message types.
 //!
-//! Unlike pi, claude's NDJSON messages follow a clean tagged union: every
+//! Unlike pi, claude's JSONL messages follow a clean tagged union: every
 //! line carries a `type` field that uniquely identifies the variant. Serde's
 //! internally-tagged enum handles dispatch directly, with `#[serde(other)]`
 //! catching any future variants without breaking the build.
@@ -15,7 +15,7 @@ use loom_core::identifier::{RequestId, SessionId, ToolCallId};
 use serde::Deserialize;
 
 /// Tagged union of every line type emitted by `claude --output-format
-/// stream-json`. Discriminated by the `type` field on each NDJSON message.
+/// stream-json`. Discriminated by the `type` field on each JSONL message.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
 pub enum ClaudeMessage {

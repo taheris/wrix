@@ -89,7 +89,7 @@ enum Command {
         /// Spec label (matches `<workspace>/specs/<label>.md`).
         label: String,
     },
-    /// Tail the most recent per-bead NDJSON log.
+    /// Tail the most recent per-bead JSONL log.
     Logs {
         /// Restrict the search to a specific bead id.
         #[arg(long)]
@@ -529,7 +529,7 @@ async fn dispatch_for_slot(
 ///
 /// `sink` is consumed: ownership crosses into [`run_agent`], which finishes
 /// it before returning. Phase entry points open the sink before invoking
-/// dispatch so the on-disk NDJSON and the workflow outcome share one code
+/// dispatch so the on-disk JSONL and the workflow outcome share one code
 /// path. Pass `None` from sites that have not yet been wired.
 async fn dispatch(
     kind: AgentKind,
@@ -542,8 +542,8 @@ async fn dispatch(
     }
 }
 
-/// Open the per-bead NDJSON sink at the path the spec promises:
-/// `<logs_root>/<spec>/<bead-id>-<utc>.ndjson`. Renderer is `None` because
+/// Open the per-bead JSONL sink at the path the spec promises:
+/// `<logs_root>/<spec>/<bead-id>-<utc>.jsonl`. Renderer is `None` because
 /// the sequential and parallel run dispatchers run non-interactively (the
 /// human-facing summary is written by the `loom run` outer-loop print).
 fn open_bead_sink(

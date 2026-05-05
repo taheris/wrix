@@ -7,7 +7,7 @@ use crate::identifier::ToolCallId;
 /// this enum — once an `AgentEvent` flows downstream no code knows which
 /// backend produced it.
 ///
-/// `Serialize` is derived so the on-disk NDJSON log file is the same event
+/// `Serialize` is derived so the on-disk JSONL log file is the same event
 /// stream the terminal renderer consumes (see `logging::LogSink`).
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

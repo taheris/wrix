@@ -165,11 +165,11 @@ fn run_verbose_streams_text() -> Result<()> {
 }
 
 //---------------------------------------------------------------------------
-// test_run_writes_per_bead_ndjson_log — full event stream is persisted to
-// `<logs_root>/<spec>/<bead>-<utc>.ndjson`, one JSON object per line.
+// test_run_writes_per_bead_jsonl_log — full event stream is persisted to
+// `<logs_root>/<spec>/<bead>-<utc>.jsonl`, one JSON object per line.
 //---------------------------------------------------------------------------
 #[test]
-fn run_writes_per_bead_ndjson_log() -> Result<()> {
+fn run_writes_per_bead_jsonl_log() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let (mut sink, _) = open_sink(
         dir.path(),
@@ -208,7 +208,7 @@ fn run_writes_per_bead_ndjson_log() -> Result<()> {
     let lines: Vec<&str> = body.lines().collect();
     if lines.len() != 3 {
         return Err(anyhow!(
-            "expected 3 NDJSON lines, got {}: {body:?}",
+            "expected 3 JSONL lines, got {}: {body:?}",
             lines.len()
         ));
     }
@@ -411,8 +411,8 @@ fn log_retention_sweep() -> Result<()> {
     let stale = now - Duration::from_secs(20 * 86_400);
     let recent = now - Duration::from_secs(2 * 86_400);
 
-    let p_stale = dir.path().join("alpha/wx-stale.ndjson");
-    let p_recent = dir.path().join("alpha/wx-recent.ndjson");
+    let p_stale = dir.path().join("alpha/wx-stale.jsonl");
+    let p_recent = dir.path().join("alpha/wx-recent.jsonl");
     touch(&p_stale, "stale");
     touch(&p_recent, "recent");
     set_mtime(&p_stale, stale);
@@ -439,7 +439,7 @@ fn log_retention_disabled() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000);
     let very_old = now - Duration::from_secs(365 * 86_400);
-    let p = dir.path().join("alpha/wx-1.ndjson");
+    let p = dir.path().join("alpha/wx-1.jsonl");
     touch(&p, "ancient");
     set_mtime(&p, very_old);
 
@@ -468,8 +468,8 @@ fn log_retention_failure_tolerance() -> Result<()> {
     // unlink fails for that file; the second subdir remains writable.
     let locked_dir = dir.path().join("alpha");
     let writable_dir = dir.path().join("beta");
-    let locked_file = locked_dir.join("wx-locked.ndjson");
-    let writable_file = writable_dir.join("wx-free.ndjson");
+    let locked_file = locked_dir.join("wx-locked.jsonl");
+    let writable_file = writable_dir.join("wx-free.jsonl");
     touch(&locked_file, "x");
     touch(&writable_file, "y");
     set_mtime(&locked_file, stale);

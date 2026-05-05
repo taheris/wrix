@@ -24,7 +24,7 @@ set -euo pipefail
 
 MODE="${1:-default}"
 
-# stream-json envelopes are NDJSON: one complete object per line. unbuffer
+# stream-json envelopes are JSONL: one complete object per line. unbuffer
 # stdout (stdbuf -oL) so the consumer reads each line as soon as it is
 # written rather than waiting on the default block-buffered flush.
 exec 1> >(stdbuf -oL cat)

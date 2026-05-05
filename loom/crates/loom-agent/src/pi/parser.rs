@@ -1,6 +1,6 @@
 //! Pi-mono RPC line parser.
 //!
-//! Two-phase NDJSON deserialization (envelope peek → typed re-parse),
+//! Two-phase JSONL deserialization (envelope peek → typed re-parse),
 //! event mapping per the spec table, command encoding for stdin
 //! (`prompt`/`steer`/`abort`), and the `extension_ui_request` auto-cancel
 //! reply that protects loom from a stalled extension.
@@ -18,7 +18,7 @@ use super::messages::{
 ///
 /// Stateless dispatch layer between
 /// [`AgentSession`](loom_core::agent::AgentSession) and
-/// [`messages`](super::messages). The parser owns NDJSON framing on
+/// [`messages`](super::messages). The parser owns JSONL framing on
 /// stdout (line in → [`ParsedLine`]) and command encoding for stdin
 /// (`encode_prompt`/`encode_steer`/`encode_abort`).
 pub struct PiParser;
@@ -494,7 +494,7 @@ mod tests {
         assert!(p.response.is_none());
     }
 
-    // -- test_pi_malformed_ndjson -----------------------------------------
+    // -- test_pi_malformed_jsonl -----------------------------------------
 
     #[test]
     fn malformed_json_returns_invalid_json_error() {

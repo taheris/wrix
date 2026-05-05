@@ -12,7 +12,7 @@ use super::error::LogError;
 use super::path::{bead_log_path, phase_log_path};
 use super::renderer::{BeadOutcome, TerminalRenderer};
 
-/// Tee-style sink that drives the per-bead NDJSON log file *and* the
+/// Tee-style sink that drives the per-bead JSONL log file *and* the
 /// [`TerminalRenderer`] from the same `emit` call.
 ///
 /// Spec contract (`Run UX & Logging`): "the terminal renderer consumes the
@@ -30,9 +30,9 @@ pub struct LogSink {
 
 impl LogSink {
     /// Open a per-bead sink under
-    /// `<logs_root>/<spec-label>/<bead-id>-<utc>.ndjson`. `renderer` is
+    /// `<logs_root>/<spec-label>/<bead-id>-<utc>.jsonl`. `renderer` is
     /// optional so non-interactive callers (the run/parallel dispatch closure
-    /// in the binary) can write only the on-disk NDJSON without instantiating
+    /// in the binary) can write only the on-disk JSONL without instantiating
     /// a `TerminalRenderer`.
     pub fn open_in_at(
         logs_root: &Path,
@@ -55,7 +55,7 @@ impl LogSink {
 
     /// Open a sink for a non-bead phase (`loom todo`, `loom plan`,
     /// `loom check`). The path follows
-    /// `<logs_root>/<spec-label>/<phase>-<utc>.ndjson` so phase logs share the
+    /// `<logs_root>/<spec-label>/<phase>-<utc>.jsonl` so phase logs share the
     /// same per-spec directory tree as bead logs without colliding.
     ///
     /// `renderer` is optional because phase logs may run in non-interactive
@@ -106,7 +106,7 @@ impl LogSink {
         })
     }
 
-    /// Write `event` to the on-disk NDJSON log AND drive the terminal
+    /// Write `event` to the on-disk JSONL log AND drive the terminal
     /// renderer in a single call.
     ///
     /// File-write order: serialize → append `\n` → write → flush. Renderer
@@ -225,7 +225,7 @@ mod tests {
     }
 
     #[test]
-    fn emit_writes_ndjson_line_per_event_and_drives_renderer() {
+    fn emit_writes_jsonl_line_per_event_and_drives_renderer() {
         let dir = tempfile::tempdir().expect("tempdir");
         let label = SpecLabel::new("alpha");
         let bead = BeadId::new("wx-1").expect("valid bead id");

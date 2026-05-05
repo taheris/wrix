@@ -6,7 +6,7 @@ use tokio::process::{Child, ChildStdin};
 
 use super::error::ProtocolError;
 use super::event::AgentEvent;
-use super::ndjson::NdjsonReader;
+use super::jsonl::JsonlReader;
 use super::parse::LineParse;
 
 /// Typestate marker — session has been spawned but no prompt has been sent.
@@ -22,7 +22,7 @@ pub struct Active;
 pub struct AgentSession<S> {
     child: Child,
     stdin: BufWriter<ChildStdin>,
-    reader: NdjsonReader,
+    reader: JsonlReader,
     parser: Box<dyn LineParse + Send>,
     pending: VecDeque<AgentEvent>,
     _state: PhantomData<S>,
@@ -35,7 +35,7 @@ impl AgentSession<Idle> {
     pub fn new(
         child: Child,
         stdin: BufWriter<ChildStdin>,
-        reader: NdjsonReader,
+        reader: JsonlReader,
         parser: Box<dyn LineParse + Send>,
     ) -> Self {
         Self {
@@ -70,7 +70,7 @@ impl AgentSession<Active> {
     /// Read the next [`AgentEvent`] from the stream.
     ///
     /// Drains buffered events from prior multi-event lines first. Otherwise
-    /// reads NDJSON lines until one yields at least one event, writing any
+    /// reads JSONL lines until one yields at least one event, writing any
     /// `ParsedLine::response` payload back to stdin in between (the canonical
     /// case is claude's `control_request` auto-approve). Returns `Ok(None)`
     /// on clean EOF.
@@ -100,7 +100,7 @@ impl AgentSession<Active> {
     }
 
     /// Send a mid-session steering message. The parser encodes the wire
-    /// payload (pi: NDJSON `steer` command, claude: stream-json user message).
+    /// payload (pi: JSONL `steer` command, claude: stream-json user message).
     pub async fn steer(&mut self, msg: &str) -> Result<(), ProtocolError> {
         let line = self.parser.encode_steer(msg)?;
         self.stdin.write_all(line.as_bytes()).await?;

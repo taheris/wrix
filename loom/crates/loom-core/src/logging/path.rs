@@ -5,8 +5,8 @@ use crate::identifier::{BeadId, SpecLabel};
 
 pub use super::time::format_utc_timestamp;
 
-/// Resolve the per-bead NDJSON log path under
-/// `<logs_root>/<spec-label>/<bead-id>-<utc-timestamp>.ndjson`.
+/// Resolve the per-bead JSONL log path under
+/// `<logs_root>/<spec-label>/<bead-id>-<utc-timestamp>.jsonl`.
 ///
 /// `logs_root` is typically `<workspace>/.wrapix/loom/logs`. Per-bead — not
 /// per-session — so concurrent batches never interleave inside a single file
@@ -29,7 +29,7 @@ pub use super::time::format_utc_timestamp;
 /// );
 /// assert_eq!(
 ///     path,
-///     Path::new("/ws/.wrapix/loom/logs/loom-harness/wx-3hhwq.9-20260503T123045Z.ndjson"),
+///     Path::new("/ws/.wrapix/loom/logs/loom-harness/wx-3hhwq.9-20260503T123045Z.jsonl"),
 /// );
 /// ```
 pub fn bead_log_path(
@@ -41,11 +41,11 @@ pub fn bead_log_path(
     let stamp = format_utc_timestamp(when);
     logs_root
         .join(spec_label.as_str())
-        .join(format!("{}-{}.ndjson", bead_id.as_str(), stamp))
+        .join(format!("{}-{}.jsonl", bead_id.as_str(), stamp))
 }
 
-/// Resolve the per-phase NDJSON log path under
-/// `<logs_root>/<spec-label>/<phase>-<utc-timestamp>.ndjson`.
+/// Resolve the per-phase JSONL log path under
+/// `<logs_root>/<spec-label>/<phase>-<utc-timestamp>.jsonl`.
 ///
 /// `loom todo`, `loom plan`, and `loom check` operate against a spec rather
 /// than a single bead, so their event streams live alongside per-bead logs
@@ -61,7 +61,7 @@ pub fn phase_log_path(
     let stamp = format_utc_timestamp(when);
     logs_root
         .join(spec_label.as_str())
-        .join(format!("{phase}-{stamp}.ndjson"))
+        .join(format!("{phase}-{stamp}.jsonl"))
 }
 
 #[cfg(test)]
@@ -80,7 +80,7 @@ mod tests {
         );
         assert_eq!(
             path,
-            Path::new("/x/.wrapix/loom/logs/alpha/wx-1-19700101T000000Z.ndjson"),
+            Path::new("/x/.wrapix/loom/logs/alpha/wx-1-19700101T000000Z.jsonl"),
         );
     }
 
@@ -117,7 +117,7 @@ mod tests {
         );
         assert_eq!(
             path,
-            Path::new("/x/.wrapix/loom/logs/alpha/todo-20260503T123045Z.ndjson"),
+            Path::new("/x/.wrapix/loom/logs/alpha/todo-20260503T123045Z.jsonl"),
         );
     }
 

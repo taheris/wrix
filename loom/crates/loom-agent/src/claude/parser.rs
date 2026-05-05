@@ -1,6 +1,6 @@
 //! Claude Code stream-json line parser.
 //!
-//! [`LineParse`] impl that turns NDJSON lines from `claude --output-format
+//! [`LineParse`] impl that turns JSONL lines from `claude --output-format
 //! stream-json` into [`AgentEvent`]s and encodes driver-side stream-json
 //! user messages (initial prompt, mid-session steering). Auto-approval of
 //! `control_request` lines is keyed off a `denied_tools` set passed in by

@@ -1,9 +1,9 @@
 //! `loom plan` — interactive spec interview.
 //!
-//! `plan` is the exception to Loom's NDJSON-driven workflow. The interview is
+//! `plan` is the exception to Loom's JSONL-driven workflow. The interview is
 //! a human-in-the-loop terminal session, so loom shells out to interactive
 //! `wrapix run` (TTY attached) rather than `wrapix spawn --stdio`. There
-//! is no subprocess capture, no NDJSON parsing, and no event tee.
+//! is no subprocess capture, no JSONL parsing, and no event tee.
 //!
 //! `[phase.plan]` is permitted in `LoomConfig` for symmetry with the other
 //! phase keys, but `loom plan` always shells to `wrapix run` today — the

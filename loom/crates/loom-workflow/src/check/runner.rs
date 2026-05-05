@@ -25,7 +25,7 @@ use super::verdict::{CheckVerdict, diff_new_bead_ids};
 pub trait CheckController: Send {
     /// Run the reviewer agent. Returns when the agent emits a terminal
     /// signal or fails. The implementation tees the event stream into the
-    /// per-bead NDJSON log alongside the terminal renderer.
+    /// per-bead JSONL log alongside the terminal renderer.
     fn run_review(
         &mut self,
     ) -> impl std::future::Future<Output = Result<ReviewOutcome, CheckError>> + Send;

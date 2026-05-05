@@ -4,7 +4,7 @@
 //!
 //! - [`messages`] — typed protocol messages (envelope, response, event,
 //!   extension UI request, command bodies).
-//! - [`parser`] — `LineParse` impl that turns NDJSON lines from pi's stdout
+//! - [`parser`] — `LineParse` impl that turns JSONL lines from pi's stdout
 //!   into [`AgentEvent`](loom_core::agent::AgentEvent)s and encodes
 //!   driver-side commands.
 //! - [`backend`] — the [`PiBackend`] zero-sized type plus its

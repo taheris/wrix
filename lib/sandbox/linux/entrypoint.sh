@@ -11,7 +11,7 @@ cd /workspace
 . /git-ssh-setup.sh
 
 # WRAPIX_AGENT selects the agent runtime. 'claude' (default) runs claude with
-# config merging and permission bypass; 'pi' runs pi-mono in NDJSON RPC mode
+# config merging and permission bypass; 'pi' runs pi-mono in JSONL RPC mode
 # and skips Claude-specific config (pi has no permission system or settings.json).
 WRAPIX_AGENT="${WRAPIX_AGENT:-claude}"
 case "$WRAPIX_AGENT" in
@@ -264,7 +264,7 @@ if [ $# -gt 0 ]; then
   # Command override: run the specified command instead of Claude/Ralph
   "$@" || MAIN_EXIT=$?
 elif [ "$WRAPIX_AGENT" = "pi" ]; then
-  # Pi RPC mode: pi listens on stdin/stdout for NDJSON commands.
+  # Pi RPC mode: pi listens on stdin/stdout for JSONL commands.
   # Loom drives the session from the host via piped stdio.
   pi --mode rpc || MAIN_EXIT=$?
 elif [ "${RALPH_MODE:-}" = "1" ]; then

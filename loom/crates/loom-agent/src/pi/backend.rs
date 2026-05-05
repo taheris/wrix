@@ -25,7 +25,7 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use loom_core::agent::{
-    AgentBackend, AgentSession, Idle, ModelSelection, NdjsonReader, ProtocolError, SpawnConfig,
+    AgentBackend, AgentSession, Idle, JsonlReader, ModelSelection, ProtocolError, SpawnConfig,
 };
 use serde::Serialize;
 use tokio::io::{AsyncWriteExt, BufWriter};
@@ -137,7 +137,7 @@ pub async fn spawn_with_handshake(
         .ok_or_else(|| ProtocolError::Io(io::Error::other("pi child stdout not piped")))?;
 
     let mut writer = BufWriter::new(stdin);
-    let mut reader = NdjsonReader::new(stdout);
+    let mut reader = JsonlReader::new(stdout);
 
     run_probe(&mut writer, &mut reader).await?;
 
@@ -155,7 +155,7 @@ pub async fn spawn_with_handshake(
 /// correlated response arrives.
 async fn run_probe(
     writer: &mut BufWriter<ChildStdin>,
-    reader: &mut NdjsonReader,
+    reader: &mut JsonlReader,
 ) -> Result<(), ProtocolError> {
     let cmd = GetCommandsCommand {
         kind: "get_commands",
@@ -195,7 +195,7 @@ async fn run_probe(
 /// effect before the workflow begins.
 async fn run_set_model(
     writer: &mut BufWriter<ChildStdin>,
-    reader: &mut NdjsonReader,
+    reader: &mut JsonlReader,
     model: &ModelSelection,
 ) -> Result<(), ProtocolError> {
     let cmd = SetModelCommand {
@@ -225,7 +225,7 @@ async fn run_set_model(
     Ok(())
 }
 
-/// Encode `payload` as NDJSON and flush it to pi's stdin.
+/// Encode `payload` as JSONL and flush it to pi's stdin.
 async fn write_command<T: Serialize>(
     writer: &mut BufWriter<ChildStdin>,
     payload: &T,
@@ -237,12 +237,12 @@ async fn write_command<T: Serialize>(
     Ok(())
 }
 
-/// Read NDJSON lines until one classifies as the `response` matching
+/// Read JSONL lines until one classifies as the `response` matching
 /// `expected_id`. Other lines (events, unrelated responses, extension UI
 /// requests) are observed and dropped — request/response correlation is
 /// the only contract this loop enforces.
 async fn await_response(
-    reader: &mut NdjsonReader,
+    reader: &mut JsonlReader,
     expected_id: &str,
 ) -> Result<PiResponse, ProtocolError> {
     loop {
@@ -405,7 +405,7 @@ mod tests {
     // -- test_pi_rpc_command_sending --------------------------------------
 
     #[tokio::test]
-    async fn driver_sends_prompt_as_ndjson_line() {
+    async fn driver_sends_prompt_as_jsonl_line() {
         let session = spawn_with_handshake(mock_command("echo-prompt"), None)
             .await
             .expect("spawn");

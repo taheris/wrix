@@ -10,7 +10,7 @@ Commands:
   init    Initialize the workspace (create `.wrapix/loom/` config + state DB)
   status  Print the active spec, current molecule, and iteration counter
   use     Set the active spec
-  logs    Tail the most recent per-bead NDJSON log
+  logs    Tail the most recent per-bead JSONL log
   spec    Inspect spec annotations and tooling dependencies
   plan    Interactive spec interview (`-n <label>` new, `-u <label>` update)
   run     Per-bead execution loop. Continuous by default; `--once` exits after one bead

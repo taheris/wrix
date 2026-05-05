@@ -44,7 +44,7 @@ use super::spawn::build_spawn_config_from_manifest;
 /// `run_bead` calls it on every retry attempt, so the closure must be `Fn`
 /// (callable repeatedly). It receives `(SpawnConfig, BeadId)` — the bead id
 /// is passed alongside the spawn config so the closure can open the per-bead
-/// NDJSON [`LogSink`](loom_core::logging::LogSink) before dispatch.
+/// JSONL [`LogSink`](loom_core::logging::LogSink) before dispatch.
 pub struct ProductionAgentLoopController<S, F>
 where
     S: Fn(SpawnConfig, BeadId) -> F + Send,

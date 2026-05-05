@@ -4,8 +4,8 @@
 //! values per bead. Each bead spawn opens a [`LogSink`] that tees the same
 //! event stream into two destinations:
 //!
-//! 1. A per-bead NDJSON file under
-//!    `<workspace>/.wrapix/loom/logs/<spec-label>/<bead-id>-<utc>.ndjson`.
+//! 1. A per-bead JSONL file under
+//!    `<workspace>/.wrapix/loom/logs/<spec-label>/<bead-id>-<utc>.jsonl`.
 //! 2. A [`TerminalRenderer`] that draws human-friendly progress lines on
 //!    stdout (default) or full assistant text streams (`--verbose`).
 //!

@@ -10,7 +10,7 @@
 //! - [`AgentEvent`] — the backend-neutral event enum the session yields.
 //! - [`LineParse`] / [`ParsedLine`] — backend-specific protocol bridge: line
 //!   parsing plus command encoding for prompt/steer/abort.
-//! - [`NdjsonReader`] — shared stdin line framing (10 MB max line cap).
+//! - [`JsonlReader`] — shared stdin line framing (10 MB max line cap).
 //! - [`RePinContent`] — re-pin payload format used by both backends after
 //!   compaction.
 //! - [`SpawnConfig`] / [`SessionOutcome`] — the contract between loom and
@@ -22,8 +22,8 @@
 mod backend;
 mod error;
 mod event;
+mod jsonl;
 mod kind;
-mod ndjson;
 mod parse;
 mod repin;
 mod session;
@@ -31,8 +31,8 @@ mod session;
 pub use backend::{AgentBackend, ModelSelection, SessionOutcome, SpawnConfig};
 pub use error::ProtocolError;
 pub use event::{AgentEvent, CompactionReason};
+pub use jsonl::{JsonlReader, MAX_LINE_BYTES};
 pub use kind::AgentKind;
-pub use ndjson::{MAX_LINE_BYTES, NdjsonReader};
 pub use parse::{LineParse, ParsedLine};
 pub use repin::RePinContent;
 pub use session::{Active, AgentSession, Idle};

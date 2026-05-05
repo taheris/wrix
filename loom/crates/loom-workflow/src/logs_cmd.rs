@@ -1,8 +1,8 @@
-//! `loom logs` — locate the most recent per-bead NDJSON log on disk.
+//! `loom logs` — locate the most recent per-bead JSONL log on disk.
 //!
 //! Read-only, no lock acquired (per the lock matrix in
 //! `specs/loom-harness.md`). Walks `<workspace>/.wrapix/loom/logs/` for
-//! `*.ndjson` files and returns the path with the largest mtime; with
+//! `*.jsonl` files and returns the path with the largest mtime; with
 //! `--bead <id>` set, only files whose stem starts with `<id>-` are
 //! considered.
 //!
@@ -18,7 +18,7 @@ use thiserror::Error;
 
 use loom_core::identifier::BeadId;
 
-const LOG_EXTENSION: &str = "ndjson";
+const LOG_EXTENSION: &str = "jsonl";
 
 /// Options for [`select_log`].
 #[derive(Debug, Clone, Default)]
@@ -42,8 +42,8 @@ pub enum LogsError {
 }
 
 /// Walk `logs_root` (typically `<workspace>/.wrapix/loom/logs/`) and return
-/// the most recent `*.ndjson` log. The traversal is two levels deep —
-/// `<root>/<spec-label>/<bead-id>-<utc>.ndjson` per the path layout in
+/// the most recent `*.jsonl` log. The traversal is two levels deep —
+/// `<root>/<spec-label>/<bead-id>-<utc>.jsonl` per the path layout in
 /// `specs/loom-harness.md` *Run UX & Logging*.
 pub fn select_log(logs_root: &Path, opts: LogsOpts<'_>) -> Result<PathBuf, LogsError> {
     let bead_filter = opts.bead.map(|b| b.as_str().to_string());
@@ -144,10 +144,10 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let root = dir.path().join(".wrapix/loom/logs");
         let older = reference_now() - Duration::from_secs(120);
-        touch(&root.join("alpha/wx-1-old.ndjson"), older)?;
-        touch(&root.join("beta/wx-2-newer.ndjson"), reference_now())?;
+        touch(&root.join("alpha/wx-1-old.jsonl"), older)?;
+        touch(&root.join("beta/wx-2-newer.jsonl"), reference_now())?;
         let path = select_log(&root, LogsOpts::default())?;
-        assert!(path.ends_with("wx-2-newer.ndjson"), "{path:?}");
+        assert!(path.ends_with("wx-2-newer.jsonl"), "{path:?}");
         Ok(())
     }
 
@@ -157,9 +157,9 @@ mod tests {
         let root = dir.path().join(".wrapix/loom/logs");
         // wx-1 and wx-10 are distinct beads — the filter must not collapse
         // them.
-        touch(&root.join("alpha/wx-10-newer.ndjson"), reference_now())?;
+        touch(&root.join("alpha/wx-10-newer.jsonl"), reference_now())?;
         touch(
-            &root.join("alpha/wx-1-older.ndjson"),
+            &root.join("alpha/wx-1-older.jsonl"),
             reference_now() - Duration::from_secs(60),
         )?;
         let path = select_log(
@@ -168,7 +168,7 @@ mod tests {
                 bead: Some(&BeadId::new("wx-1")?),
             },
         )?;
-        assert!(path.ends_with("wx-1-older.ndjson"), "{path:?}");
+        assert!(path.ends_with("wx-1-older.jsonl"), "{path:?}");
         Ok(())
     }
 
@@ -176,7 +176,7 @@ mod tests {
     fn missing_bead_filter_returns_typed_error() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let root = dir.path().join(".wrapix/loom/logs");
-        touch(&root.join("alpha/wx-1-x.ndjson"), reference_now())?;
+        touch(&root.join("alpha/wx-1-x.jsonl"), reference_now())?;
         let err = select_log(
             &root,
             LogsOpts {
@@ -190,7 +190,7 @@ mod tests {
     }
 
     #[test]
-    fn ignores_non_ndjson_files() -> Result<()> {
+    fn ignores_non_jsonl_files() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let root = dir.path().join(".wrapix/loom/logs");
         touch(&root.join("alpha/wx-1-x.txt"), reference_now())?;

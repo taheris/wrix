@@ -13,9 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use loom_core::agent::{
-    AgentBackend, AgentSession, Idle, NdjsonReader, ProtocolError, SpawnConfig,
-};
+use loom_core::agent::{AgentBackend, AgentSession, Idle, JsonlReader, ProtocolError, SpawnConfig};
 use loom_core::clock::Clock;
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
@@ -170,7 +168,7 @@ pub(crate) async fn spawn_session(
     Ok(AgentSession::new(
         child,
         BufWriter::new(stdin),
-        NdjsonReader::new(stdout),
+        JsonlReader::new(stdout),
         Box::new(parser),
     ))
 }
