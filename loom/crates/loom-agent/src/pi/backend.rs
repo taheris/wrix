@@ -170,6 +170,7 @@ async fn run_probe(
         kind: "get_commands",
         id: PROBE_REQUEST_ID,
     };
+    info!(id = PROBE_REQUEST_ID, "pi probe: sending get_commands");
     write_command(writer, &cmd).await?;
 
     let resp = await_response(reader, PROBE_REQUEST_ID).await?;
@@ -195,7 +196,7 @@ async fn run_probe(
         return Err(ProtocolError::Unsupported);
     }
 
-    debug!(commands = ?commands, "pi get_commands probe succeeded");
+    info!(commands = ?commands, "pi probe: get_commands succeeded");
     Ok(())
 }
 
@@ -213,6 +214,12 @@ async fn run_set_model(
         provider: &model.provider,
         model_id: &model.model_id,
     };
+    info!(
+        id = SET_MODEL_REQUEST_ID,
+        provider = %model.provider,
+        model_id = %model.model_id,
+        "pi handshake: sending set_model",
+    );
     write_command(writer, &cmd).await?;
 
     let resp = await_response(reader, SET_MODEL_REQUEST_ID).await?;

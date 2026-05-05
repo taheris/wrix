@@ -85,7 +85,7 @@ impl AgentBackend for ClaudeBackend {
         let grace = config
             .shutdown_grace
             .unwrap_or_else(|| Duration::from_secs(DEFAULT_POST_RESULT_GRACE_SECS));
-        debug!(
+        info!(
             grace_secs = grace.as_secs(),
             "claude session_complete observed; running shutdown watchdog",
         );

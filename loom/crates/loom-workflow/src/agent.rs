@@ -18,7 +18,7 @@
 
 use loom_core::agent::{AgentBackend, AgentEvent, ProtocolError, SessionOutcome, SpawnConfig};
 use loom_core::logging::{BeadOutcome, LogSink};
-use tracing::{trace, warn};
+use tracing::{info, warn};
 
 /// Drive `B` through one full session: spawn, prompt, then consume events
 /// until `SessionComplete` arrives. Returns the resulting [`SessionOutcome`]
@@ -38,7 +38,12 @@ pub async fn run_agent<B: AgentBackend>(
     mut sink: Option<LogSink>,
 ) -> Result<SessionOutcome, ProtocolError> {
     let session = B::spawn(config).await?;
+    info!(
+        prompt_chars = config.initial_prompt.chars().count(),
+        "agent spawned; sending initial prompt",
+    );
     let mut session = session.prompt(&config.initial_prompt).await?;
+    info!("prompt sent; awaiting agent events");
     loop {
         let next = session.next_event().await;
         let event = match next {
@@ -52,7 +57,7 @@ pub async fn run_agent<B: AgentBackend>(
                 return Err(err);
             }
         };
-        trace!(?event, "agent event");
+        info!(event = %summarize_event(&event), "agent event");
         if let Some(s) = sink.as_mut()
             && let Err(e) = s.emit(&event)
         {
@@ -94,5 +99,30 @@ fn finish_sink(sink: Option<LogSink>, outcome: BeadOutcome) {
         && let Err(e) = s.finish(outcome)
     {
         warn!(error = %e, "log sink finish failed");
+    }
+}
+
+fn summarize_event(event: &AgentEvent) -> String {
+    match event {
+        AgentEvent::MessageDelta { text } => {
+            format!("message_delta ({} chars)", text.chars().count())
+        }
+        AgentEvent::ToolCall { id, tool, .. } => format!("tool_call {tool} (id={id})"),
+        AgentEvent::ToolResult {
+            id,
+            output,
+            is_error,
+        } => format!(
+            "tool_result (id={id}, is_error={is_error}, {} chars)",
+            output.chars().count(),
+        ),
+        AgentEvent::TurnEnd => "turn_end".to_string(),
+        AgentEvent::SessionComplete {
+            exit_code,
+            cost_usd,
+        } => format!("session_complete (exit_code={exit_code}, cost_usd={cost_usd:?})",),
+        AgentEvent::CompactionStart { reason } => format!("compaction_start ({reason:?})"),
+        AgentEvent::CompactionEnd { aborted } => format!("compaction_end (aborted={aborted})"),
+        AgentEvent::Error { message } => format!("error: {message}"),
     }
 }
