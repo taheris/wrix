@@ -36,6 +36,7 @@ fi
 : "${WRAPIX_LOOM_MOCK_PI_SCRIPT:?must be set by the Nix wrapper to mock-pi/pi.sh}"
 : "${WRAPIX_LOOM_WRAPIX_BIN:?must be set by the Nix wrapper to a wrapix launcher path}"
 : "${WRAPIX_LOOM_TEST_IMAGE_REF:?must be set by the Nix wrapper to the test image tag}"
+: "${WRAPIX_LOOM_TEST_IMAGE_SOURCE:?must be set by the Nix wrapper to the streamLayeredImage path}"
 
 if ! command -v podman >/dev/null 2>&1; then
     echo "test-loom: podman not on PATH; smoke requires podman" >&2
@@ -172,12 +173,36 @@ mkdir -p "$WORKSPACE/.wrapix/loom"
 : > "$WORKSPACE/.wrapix/loom/initial-prompt.md"
 
 #-----------------------------------------------------------------------------
+# Preload the test image. The launcher's first-run load path tags
+# `<repo>:latest` → IMAGE_REF and falls back to a registry pull when the
+# source tag is missing — flaky for agent-suffixed `:latest` images that
+# streamLayeredImage publishes without the `localhost/` prefix the launcher
+# expects. Loading explicitly here removes that variable: the launcher's
+# `podman image exists` short-circuits, and the smoke validates only the
+# wrapix dispatch + entrypoint, not the launcher's image-resolution quirk.
+#
+# Capture `podman load`'s stdout — it prints `Loaded image: <name>:<tag>`
+# with the canonical name podman actually stored. Re-tag from there to
+# guarantee IMAGE_REF (`localhost/<name>:latest`) resolves on `podman run`,
+# regardless of version-specific canonicalization behaviour.
+if ! podman image exists "$WRAPIX_LOOM_TEST_IMAGE_REF"; then
+    LOAD_OUT="$("$WRAPIX_LOOM_TEST_IMAGE_SOURCE" | podman load)"
+    LOADED_IMAGE="$(printf '%s\n' "$LOAD_OUT" | sed -n 's/^Loaded image: //p' | head -n1)"
+    if [ -z "$LOADED_IMAGE" ]; then
+        echo "test-loom: podman load did not report a loaded image:" >&2
+        printf '%s\n' "$LOAD_OUT" >&2
+        exit 1
+    fi
+    if [ "$LOADED_IMAGE" != "$WRAPIX_LOOM_TEST_IMAGE_REF" ]; then
+        podman tag "$LOADED_IMAGE" "$WRAPIX_LOOM_TEST_IMAGE_REF"
+    fi
+fi
+
 # SpawnConfig — the on-disk shape `wrapix spawn --spawn-config` consumes.
 # See loom-core/src/agent/backend.rs::SpawnConfig.
 #
-# image_source is "" because the test image is already loaded into podman
-# by the dev-shell wrapper before the smoke runs; the launcher's load
-# step short-circuits when image_source is empty.
+# image_source is "" because the harness preloaded the image above; the
+# launcher's load step short-circuits on the `podman image exists` check.
 #
 # env is an explicit allowlist:
 #   WRAPIX_AGENT=pi             — entrypoint branches into `pi --mode rpc`

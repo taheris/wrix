@@ -134,12 +134,27 @@ let
         # launcher's image-resolution quirk on the first run.
         smokeImageRef = "localhost/wrapix-${smokeSandbox.profile.name}-pi:latest";
 
+        # Claude variant: same shape, but `agent = "claude"` so the image
+        # carries the claude binary and the entrypoint takes the
+        # WRAPIX_AGENT=claude && WRAPIX_STDIO=1 stream-json branch.
+        claudeSmokeProfile = sandbox.profiles.base // {
+          name = "loom-claude-smoke";
+        };
+
+        claudeSmokeSandbox = sandbox.mkSandbox {
+          profile = claudeSmokeProfile;
+          agent = "claude";
+        };
+
+        claudeSmokeImageRef = "localhost/wrapix-${claudeSmokeSandbox.profile.name}-claude:latest";
+
         beadsModule = import ../../lib/beads { inherit pkgs linuxPkgs; };
       in
       pkgs.writeShellApplication {
         name = "test-loom";
         runtimeInputs = [
           smokeSandbox.package
+          claudeSmokeSandbox.package
           pkgs.beads
           beadsModule.dolt
           pkgs.dolt
@@ -150,9 +165,18 @@ let
         ];
         text = ''
           export WRAPIX_LOOM_MOCK_PI_SCRIPT=${../loom/mock-pi/pi.sh}
+          export WRAPIX_LOOM_MOCK_CLAUDE_SCRIPT=${../loom/mock-claude/claude.sh}
           export WRAPIX_LOOM_WRAPIX_BIN=${smokeSandbox.package}/bin/wrapix
           export WRAPIX_LOOM_TEST_IMAGE_REF=${lib.escapeShellArg smokeImageRef}
-          exec ${./run-tests.sh} "$@"
+          export WRAPIX_LOOM_TEST_IMAGE_SOURCE=${smokeSandbox.image}
+          ${./run-tests.sh}
+
+          # Claude smoke uses its own wrapix package + image (the launcher
+          # binary is per-sandbox, baked from mkSandbox, so we swap both).
+          export WRAPIX_LOOM_WRAPIX_BIN=${claudeSmokeSandbox.package}/bin/wrapix
+          export WRAPIX_LOOM_TEST_IMAGE_REF=${lib.escapeShellArg claudeSmokeImageRef}
+          export WRAPIX_LOOM_TEST_IMAGE_SOURCE=${claudeSmokeSandbox.image}
+          exec ${./run-claude-tests.sh}
         '';
       };
 
