@@ -50,9 +50,15 @@ set -euo pipefail
 # `hang-probe` / `stall-mid-session` modes are killed externally and any
 # leftover `cat` subshell would keep the test's stderr pipe open and
 # cause `Command::output()` to hang forever.
+#
+# Invoke bash explicitly on $0 instead of relying on the kernel's shebang
+# resolver — the script's `#!/usr/bin/env bash` line is not honourable in
+# the default nix-build sandbox (`sandbox = true`) where `/usr/bin/env`
+# is absent. Running `bash "$0"` reads pi.sh as a plain script and
+# bypasses the kernel-level interpreter lookup entirely.
 if [ -z "${MOCK_PI_REEXEC:-}" ]; then
     export MOCK_PI_REEXEC=1
-    exec stdbuf -oL "$0" "$@"
+    exec stdbuf -oL bash "$0" "$@"
 fi
 
 MODE="${1:-default}"
