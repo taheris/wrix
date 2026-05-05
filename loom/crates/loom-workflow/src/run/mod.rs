@@ -49,4 +49,4 @@ pub use production::{ProductionAgentLoopController, list_open_for_spec};
 pub use profile::{DEFAULT_PROFILE, resolve_profile, resolve_profile_image};
 pub use retry::{RetryDecision, RetryPolicy};
 pub use runner::{AgentLoopController, RunMode, RunSummary, run_loop};
-pub use spawn::{build_spawn_config, build_spawn_config_from_manifest};
+pub use spawn::build_spawn_config_from_manifest;

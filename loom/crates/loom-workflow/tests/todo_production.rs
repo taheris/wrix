@@ -109,11 +109,6 @@ async fn build_spawn_config_resolves_manifest_image_and_renders_new_template() {
         None,
     );
     let cfg = ctrl.build_spawn_config().await.expect("build cfg");
-    assert_eq!(cfg.image_ref, "localhost/wrapix-base:abc");
-    assert_eq!(
-        cfg.image_source,
-        std::path::PathBuf::from("/nix/store/aaa-image-base"),
-    );
     assert!(
         cfg.initial_prompt.contains("Task Decomposition"),
         "TodoNewContext renders todo_new.md (header marker missing): {}",

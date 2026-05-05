@@ -19,7 +19,6 @@ mod error;
 mod exit;
 mod production;
 mod runner;
-mod spawn;
 mod tier;
 
 pub use context::{TemplateBaseFields, TodoTemplateContext, build_template_context};
@@ -27,7 +26,6 @@ pub use error::TodoError;
 pub use exit::{ExitSignal, parse_exit_signal};
 pub use production::ProductionTodoController;
 pub use runner::{TodoController, TodoSummary, run};
-pub use spawn::build_spawn_config;
 pub use tier::{
     DiffCandidate, GitDiffSource, MoleculeState, TierDecision, TierInputs, compute_spec_diff,
 };
