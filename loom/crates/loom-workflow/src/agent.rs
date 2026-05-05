@@ -60,6 +60,13 @@ pub async fn run_agent<B: AgentBackend>(
             finish_sink(sink, BeadOutcome::Failed);
             return Err(ProtocolError::Io(std::io::Error::other(e.to_string())));
         }
+        if matches!(event, AgentEvent::CompactionStart { .. })
+            && let Err(e) = B::on_compaction_start(&mut session, config).await
+        {
+            warn!(error = %e, "backend compaction handler failed");
+            finish_sink(sink, BeadOutcome::Failed);
+            return Err(e);
+        }
         if let AgentEvent::SessionComplete {
             exit_code,
             cost_usd,

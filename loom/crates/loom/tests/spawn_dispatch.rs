@@ -48,6 +48,7 @@ fn install_wrapix_shim(
     stdin_info: &Path,
     spawn_config_copy: &Path,
     mock_pi: &Path,
+    mock_pi_mode: &str,
 ) -> PathBuf {
     let shim = dir.join("wrapix");
     let bash = find_bash();
@@ -58,6 +59,7 @@ fn install_wrapix_shim(
          STDIN_INFO='{stdin}'\n\
          SPAWN_CONFIG_COPY='{copy}'\n\
          MOCK_PI='{mock}'\n\
+         MOCK_PI_MODE='{mode}'\n\
          \n\
          # Record argv (one token per line) so the test can pin the exact\n\
          # invocation shape — `spawn --spawn-config <file> --stdio`.\n\
@@ -87,12 +89,13 @@ fn install_wrapix_shim(
          # Hand stdin/stdout to mock-pi for the protocol exchange. exec\n\
          # replaces this shell so the kernel-level pipe routing matches the\n\
          # production case where wrapix execs podman which execs the agent.\n\
-         exec '{bash}' \"$MOCK_PI\" happy-path\n",
+         exec '{bash}' \"$MOCK_PI\" \"$MOCK_PI_MODE\"\n",
         bash = bash.display(),
         argv = argv_file.display(),
         stdin = stdin_info.display(),
         copy = spawn_config_copy.display(),
         mock = mock_pi.display(),
+        mode = mock_pi_mode,
     );
     std::fs::write(&shim, body).unwrap();
     let mut perm = std::fs::metadata(&shim).unwrap().permissions();
@@ -192,6 +195,7 @@ fn wrapix_spawn_invocation_records_correct_argv() {
         &stdin_info,
         &spawn_copy,
         &mock_pi_path(),
+        "happy-path",
     );
 
     let loom_bin = env!("CARGO_BIN_EXE_loom");
@@ -277,6 +281,7 @@ fn loom_todo_writes_jsonl_log_under_workspace_logs_dir() {
         &stdin_info,
         &spawn_copy,
         &mock_pi_path(),
+        "happy-path",
     );
 
     let loom_bin = env!("CARGO_BIN_EXE_loom");
@@ -376,6 +381,7 @@ fn loom_run_once_writes_per_bead_jsonl_log() {
         &stdin_info,
         &spawn_copy,
         &mock_pi_path(),
+        "happy-path",
     );
 
     let bead_json = r#"[{"id":"wx-runtest","title":"run gate bead","description":"","status":"open","priority":2,"issue_type":"task","labels":["spec:loom-agent","profile:base"]}]"#;
@@ -487,6 +493,7 @@ fn loom_check_writes_phase_jsonl_log() {
         &stdin_info,
         &spawn_copy,
         &mock_pi_path(),
+        "happy-path",
     );
 
     // `loom:clarify` on the post-snapshot bead → CheckVerdict::Clarify →
@@ -615,6 +622,7 @@ fn child_stdin_is_a_pipe_not_a_tty() {
         &stdin_info,
         &spawn_copy,
         &mock_pi_path(),
+        "happy-path",
     );
 
     let loom_bin = env!("CARGO_BIN_EXE_loom");
@@ -647,5 +655,92 @@ fn child_stdin_is_a_pipe_not_a_tty() {
         stdout.contains("loom todo:"),
         "expected the loom todo summary line, indicating the agent reached agent_end. \
          stdout={stdout} stderr={stderr}",
+    );
+}
+
+/// `wx-pkht8.11` gate — the spec promise (`specs/loom-agent.md` lines
+/// 847-852, verify marker `tests/loom-test.sh::test_pi_compaction_repin`)
+/// is that the production driver detects `compaction_start` and sends
+/// `RePinContent::to_prompt()` via `steer`. The previous regression was
+/// silent because the only test of this behavior lived inside
+/// `loom-agent/src/pi/backend.rs` and stood in for the workflow layer:
+/// the test itself called `session.steer(...)` instead of driving through
+/// `run_agent`. Production wiring was missing for months without a
+/// failing test.
+///
+/// This test drives `loom todo --agent pi` end-to-end through `dispatch`
+/// → `run_agent::<PiBackend>` → `PiBackend::on_compaction_start`. The
+/// shim hands stdio to `mock-pi compaction`, which BLOCKS on `read` until
+/// it observes the steer carrying the re-pin payload. If the production
+/// `run_agent` event loop fails to call `on_compaction_start`, the mock
+/// reads no steer line, never emits `agent_end`, and the loom binary
+/// hangs — the wall-clock timeout below converts that hang into a clean
+/// test failure.
+#[test]
+fn loom_todo_pi_compaction_drives_repin_steer_through_run_agent() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path();
+
+    let shim_dir = dir.path().join("shim");
+    std::fs::create_dir_all(&shim_dir).unwrap();
+    let argv_file = shim_dir.join("argv.txt");
+    let stdin_info = shim_dir.join("stdin-info.txt");
+    let spawn_copy = shim_dir.join("spawn-config.json");
+    let shim = install_wrapix_shim(
+        &shim_dir,
+        &argv_file,
+        &stdin_info,
+        &spawn_copy,
+        &mock_pi_path(),
+        "compaction",
+    );
+
+    let loom_bin = env!("CARGO_BIN_EXE_loom");
+    let output = drive_loom_todo_pi(workspace, &shim, loom_bin);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "loom todo --agent pi must exit 0 against mock-pi compaction. \
+         If this hangs/fails, the production driver is not sending the \
+         re-pin steer on CompactionStart. stdout={stdout} stderr={stderr}",
+    );
+
+    // The mock echoes "repin: <payload>" as a message_delta after it
+    // observes the steer. The on-disk JSONL log contains every event the
+    // driver consumed, so we can confirm both the compaction_start event
+    // arrived and the steer reached the mock by inspecting the log.
+    let logs_dir = workspace.join(".wrapix/loom/logs/loom-agent");
+    let log_path = std::fs::read_dir(&logs_dir)
+        .expect("read logs dir")
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| p.extension().is_some_and(|e| e == "jsonl"))
+        .expect("phase log file should exist after loom todo");
+    let body = std::fs::read_to_string(&log_path).expect("read log");
+    let lines: Vec<&str> = body.lines().filter(|l| !l.is_empty()).collect();
+    let events: Vec<serde_json::Value> = lines
+        .iter()
+        .map(|l| serde_json::from_str(l).expect("valid JSON"))
+        .collect();
+
+    assert!(
+        events.iter().any(|e| e["kind"] == "compaction_start"),
+        "compaction_start event must appear in the log. events={events:?}",
+    );
+    assert!(
+        events.iter().any(|e| {
+            e["kind"] == "message_delta"
+                && e["text"].as_str().is_some_and(|t| t.starts_with("repin: "))
+        }),
+        "mock-pi must echo the re-pin payload back as a message_delta — \
+         absence means the production driver did not steer on CompactionStart. \
+         events={events:?}",
+    );
+    assert_eq!(
+        events.last().expect("at least one event")["kind"],
+        "session_complete",
+        "the final event must be session_complete. events={events:?}",
     );
 }

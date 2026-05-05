@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::error::ProtocolError;
 use super::repin::RePinContent;
-use super::session::{AgentSession, Idle};
+use super::session::{Active, AgentSession, Idle};
 
 /// Configuration `loom` hands to `wrapix spawn` describing how to launch
 /// the per-bead container and what initial agent state to install.
@@ -72,6 +72,21 @@ pub trait AgentBackend: Send + Sync {
     fn spawn(
         config: &SpawnConfig,
     ) -> impl std::future::Future<Output = Result<AgentSession<Idle>, ProtocolError>> + Send;
+
+    /// Per-backend handler for `AgentEvent::CompactionStart`.
+    ///
+    /// Pi overrides this to send `config.repin.to_prompt()` via `steer` —
+    /// the spec requires the driver to re-pin context as soon as compaction
+    /// begins so the next turn after `compaction_end` reaches the agent
+    /// with orientation restored. Claude's default no-op stands: claude
+    /// installs a `SessionStart` hook pre-spawn that re-pins inside the
+    /// agent process, so the workflow driver has nothing to do here.
+    fn on_compaction_start<'a>(
+        _session: &'a mut AgentSession<Active>,
+        _config: &'a SpawnConfig,
+    ) -> impl std::future::Future<Output = Result<(), ProtocolError>> + Send + 'a {
+        async { Ok(()) }
+    }
 }
 
 #[cfg(test)]

@@ -25,7 +25,8 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use loom_core::agent::{
-    AgentBackend, AgentSession, Idle, JsonlReader, ModelSelection, ProtocolError, SpawnConfig,
+    Active, AgentBackend, AgentSession, Idle, JsonlReader, ModelSelection, ProtocolError,
+    SpawnConfig,
 };
 use serde::Serialize;
 use tokio::io::{AsyncWriteExt, BufWriter};
@@ -84,6 +85,14 @@ impl AgentBackend for PiBackend {
             .arg("--stdio");
 
         spawn_with_handshake(cmd, config.model.as_ref()).await
+    }
+
+    async fn on_compaction_start(
+        session: &mut AgentSession<Active>,
+        config: &SpawnConfig,
+    ) -> Result<(), ProtocolError> {
+        debug!("pi compaction_start observed; sending re-pin via steer");
+        session.steer(&config.repin.to_prompt()).await
     }
 }
 
