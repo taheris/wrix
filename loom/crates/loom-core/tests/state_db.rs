@@ -68,7 +68,7 @@ fn state_db_init_creates_tables() -> Result<()> {
     )?;
     assert_eq!(
         meta,
-        vec![vec!["schema_version".to_string(), "1".to_string()]]
+        vec![vec!["schema_version".to_string(), "2".to_string()]]
     );
     Ok(())
 }
@@ -92,7 +92,7 @@ fn state_db_rebuild_populates_specs_and_molecules() -> Result<()> {
     assert_eq!(report.molecules, 1);
 
     let alpha = db.spec(&SpecLabel::new("alpha"))?;
-    assert_eq!(alpha.spec_path.to_str(), Some("specs/alpha.md"));
+    assert_eq!(alpha.label.as_str(), "alpha");
     assert!(alpha.implementation_notes.is_none());
 
     let mol = db
@@ -262,6 +262,88 @@ fn todo_cursor_round_trips_through_meta_table() -> Result<()> {
         Some("abc123".to_string()),
         "cursors must be per-spec — namespacing by label keeps them disjoint",
     );
+    Ok(())
+}
+
+#[test]
+fn state_db_open_migrates_v1_to_v2() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let db_path = dir.path().join("state.db");
+
+    // Hand-build a v1 DB matching the pre-migration shape (specs has spec_path
+    // NOT NULL, schema_version='1'). The new open() must drop spec_path and
+    // bump schema_version to '2' without losing any rows.
+    {
+        let conn = rusqlite::Connection::open(&db_path)?;
+        conn.execute_batch(
+            "CREATE TABLE specs (
+                label                TEXT PRIMARY KEY,
+                spec_path            TEXT NOT NULL,
+                implementation_notes TEXT
+            );
+            CREATE TABLE molecules (
+                id              TEXT PRIMARY KEY,
+                spec_label      TEXT NOT NULL REFERENCES specs(label),
+                base_commit     TEXT,
+                iteration_count INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE companions (
+                spec_label     TEXT NOT NULL REFERENCES specs(label),
+                companion_path TEXT NOT NULL,
+                PRIMARY KEY (spec_label, companion_path)
+            );
+            CREATE TABLE meta (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            INSERT INTO meta(key, value) VALUES ('schema_version', '1');
+            INSERT INTO specs(label, spec_path, implementation_notes)
+              VALUES ('alpha', 'specs/alpha.md', NULL);
+            INSERT INTO companions(spec_label, companion_path)
+              VALUES ('alpha', 'lib/a/');",
+        )?;
+    }
+
+    let db = StateDb::open(&db_path)?;
+
+    let meta = list_table(
+        &db_path,
+        "SELECT value FROM meta WHERE key='schema_version'",
+    )?;
+    assert_eq!(meta, vec![vec!["2".to_string()]]);
+
+    let cols = list_table(&db_path, "PRAGMA table_info(specs)")?;
+    let names: Vec<&str> = cols.iter().map(|r| r[1].as_str()).collect();
+    assert!(
+        !names.contains(&"spec_path"),
+        "spec_path column should be dropped: {names:?}",
+    );
+    assert!(names.contains(&"label"));
+    assert!(names.contains(&"implementation_notes"));
+
+    let alpha = db.spec(&SpecLabel::new("alpha"))?;
+    assert_eq!(alpha.label.as_str(), "alpha");
+    assert_eq!(db.companions(&SpecLabel::new("alpha"))?, vec!["lib/a/"]);
+    Ok(())
+}
+
+#[test]
+fn state_db_open_is_idempotent_after_migration() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let db_path = dir.path().join("state.db");
+
+    // Fresh open lands at v2; a second open must be a no-op rather than
+    // re-running the v1->v2 ALTER (which would fail because the column is
+    // already gone).
+    {
+        let _ = StateDb::open(&db_path)?;
+    }
+    let _db = StateDb::open(&db_path)?;
+    let meta = list_table(
+        &db_path,
+        "SELECT value FROM meta WHERE key='schema_version'",
+    )?;
+    assert_eq!(meta, vec![vec!["2".to_string()]]);
     Ok(())
 }
 

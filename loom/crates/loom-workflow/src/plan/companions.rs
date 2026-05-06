@@ -39,7 +39,7 @@ pub fn reconcile_companions(
     };
     let paths = parse_companions(&body);
     let section_present = body.lines().any(|l| l == COMPANIONS_HEADING);
-    db.replace_companions(label, spec_path, &paths)?;
+    db.replace_companions(label, &paths)?;
     Ok(CompanionReconciliation {
         paths,
         section_present,

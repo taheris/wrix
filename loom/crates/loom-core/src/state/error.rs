@@ -29,6 +29,9 @@ pub enum StateError {
     /// no spec found with label {label}
     SpecNotFound { label: String },
 
+    /// unknown state-db schema_version {version}; expected a value this build of loom can migrate from
+    UnknownSchemaVersion { version: String },
+
     /// io failure
     Io(#[from] io::Error),
 }

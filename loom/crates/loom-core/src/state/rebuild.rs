@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use rusqlite::params;
 use tracing::{debug, warn};
@@ -53,11 +53,11 @@ impl StateDb {
             drop_and_recreate(conn)?;
             let mut report = RebuildReport::default();
 
-            for (label, rel_path, content) in &spec_files {
+            for (label, content) in &spec_files {
                 conn.execute(
-                    "INSERT INTO specs(label, spec_path, implementation_notes)
-                     VALUES (?1, ?2, NULL)",
-                    params![label.as_str(), rel_path.to_string_lossy()],
+                    "INSERT INTO specs(label, implementation_notes)
+                     VALUES (?1, NULL)",
+                    params![label.as_str()],
                 )?;
                 report.specs += 1;
 
@@ -72,7 +72,7 @@ impl StateDb {
             }
 
             for mol in molecules {
-                if !spec_files.iter().any(|(l, _, _)| l == &mol.spec_label) {
+                if !spec_files.iter().any(|(l, _)| l == &mol.spec_label) {
                     warn!(
                         molecule = %mol.id,
                         spec = %mol.spec_label,
@@ -94,7 +94,7 @@ impl StateDb {
     }
 }
 
-fn collect_spec_files(specs_dir: &Path) -> Result<Vec<(SpecLabel, PathBuf, String)>, StateError> {
+fn collect_spec_files(specs_dir: &Path) -> Result<Vec<(SpecLabel, String)>, StateError> {
     if !specs_dir.exists() {
         return Ok(Vec::new());
     }
@@ -112,8 +112,7 @@ fn collect_spec_files(specs_dir: &Path) -> Result<Vec<(SpecLabel, PathBuf, Strin
             continue;
         };
         let content = std::fs::read_to_string(&path)?;
-        let rel = PathBuf::from("specs").join(format!("{stem}.md"));
-        out.push((SpecLabel::new(stem.to_string()), rel, content));
+        out.push((SpecLabel::new(stem.to_string()), content));
     }
     out.sort_by(|a, b| a.0.as_str().cmp(b.0.as_str()));
     Ok(out)

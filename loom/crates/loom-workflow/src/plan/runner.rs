@@ -465,7 +465,6 @@ mod tests {
         let db = StateDb::open(dir.path().join(".wrapix/loom/state.db"))?;
         db.replace_companions(
             &SpecLabel::new("loom-harness"),
-            &spec_path,
             &["lib/sandbox/".to_string()],
         )?;
         drop(db);

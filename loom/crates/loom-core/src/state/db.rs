@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -7,12 +7,11 @@ use crate::identifier::{MoleculeId, SpecLabel};
 
 use super::error::StateError;
 
-const SCHEMA_VERSION: &str = "1";
+const SCHEMA_VERSION: &str = "2";
 
-const MIGRATION_V1: &str = "
+const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS specs (
     label                TEXT PRIMARY KEY,
-    spec_path            TEXT NOT NULL,
     implementation_notes TEXT
 );
 CREATE TABLE IF NOT EXISTS molecules (
@@ -32,6 +31,8 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 ";
 
+const MIGRATE_V1_TO_V2: &str = "ALTER TABLE specs DROP COLUMN spec_path;";
+
 const DROP_AND_RECREATE: &str = "
 DROP TABLE IF EXISTS companions;
 DROP TABLE IF EXISTS molecules;
@@ -50,7 +51,6 @@ pub struct StateDb {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpecRow {
     pub label: SpecLabel,
-    pub spec_path: PathBuf,
     pub implementation_notes: Option<Vec<String>>,
 }
 
@@ -74,11 +74,8 @@ impl StateDb {
             path: path.to_path_buf(),
             source,
         })?;
-        conn.execute_batch(MIGRATION_V1)?;
-        conn.execute(
-            "INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?1)",
-            params![SCHEMA_VERSION],
-        )?;
+        conn.execute_batch(SCHEMA)?;
+        apply_migrations(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -100,7 +97,7 @@ impl StateDb {
     pub fn spec(&self, label: &SpecLabel) -> Result<SpecRow, StateError> {
         let conn = self.lock_conn()?;
         conn.query_row(
-            "SELECT label, spec_path, implementation_notes FROM specs WHERE label = ?1",
+            "SELECT label, implementation_notes FROM specs WHERE label = ?1",
             params![label.as_str()],
             row_to_spec,
         )
@@ -187,15 +184,13 @@ impl StateDb {
     pub fn replace_companions(
         &self,
         label: &SpecLabel,
-        spec_path: &Path,
         paths: &[String],
     ) -> Result<(), StateError> {
         let conn = self.lock_conn()?;
         conn.execute(
-            "INSERT INTO specs(label, spec_path, implementation_notes)
-             VALUES (?1, ?2, NULL)
-             ON CONFLICT(label) DO UPDATE SET spec_path = excluded.spec_path",
-            params![label.as_str(), spec_path.to_string_lossy()],
+            "INSERT OR IGNORE INTO specs(label, implementation_notes)
+             VALUES (?1, NULL)",
+            params![label.as_str()],
         )?;
         conn.execute(
             "DELETE FROM companions WHERE spec_label = ?1",
@@ -287,18 +282,52 @@ fn todo_cursor_key(label: &SpecLabel) -> String {
 
 pub(super) fn drop_and_recreate(conn: &Connection) -> Result<(), StateError> {
     conn.execute_batch(DROP_AND_RECREATE)?;
-    conn.execute_batch(MIGRATION_V1)?;
+    conn.execute_batch(SCHEMA)?;
+    write_schema_version(conn, SCHEMA_VERSION)?;
+    Ok(())
+}
+
+fn apply_migrations(conn: &Connection) -> Result<(), StateError> {
+    let from = read_schema_version(conn)?;
+    match from.as_deref() {
+        None => write_schema_version(conn, SCHEMA_VERSION)?,
+        Some("1") => {
+            conn.execute_batch(MIGRATE_V1_TO_V2)?;
+            write_schema_version(conn, "2")?;
+        }
+        Some("2") => {}
+        Some(other) => {
+            return Err(StateError::UnknownSchemaVersion {
+                version: other.to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn read_schema_version(conn: &Connection) -> Result<Option<String>, StateError> {
+    let value: Option<String> = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'schema_version'",
+            [],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?;
+    Ok(value)
+}
+
+fn write_schema_version(conn: &Connection, version: &str) -> Result<(), StateError> {
     conn.execute(
-        "INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?1)",
-        params![SCHEMA_VERSION],
+        "INSERT INTO meta(key, value) VALUES ('schema_version', ?1)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![version],
     )?;
     Ok(())
 }
 
 fn row_to_spec(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<SpecRow, StateError>> {
     let label: String = row.get(0)?;
-    let spec_path: String = row.get(1)?;
-    let notes_raw: Option<String> = row.get(2)?;
+    let notes_raw: Option<String> = row.get(1)?;
     let notes = match notes_raw {
         None => None,
         Some(s) => match serde_json::from_str::<Vec<String>>(&s) {
@@ -313,7 +342,6 @@ fn row_to_spec(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<SpecRow, Stat
     };
     Ok(Ok(SpecRow {
         label: SpecLabel::new(label),
-        spec_path: PathBuf::from(spec_path),
         implementation_notes: notes,
     }))
 }
