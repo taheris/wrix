@@ -109,41 +109,20 @@ running inside the container.
 
 ### Dispatch: ZST Backends + Per-Phase Selection
 
-Backends are zero-sized types — all runtime state lives in `AgentSession` and
-`SpawnConfig`. The type parameter alone carries the dispatch:
-
-```rust
-pub struct PiBackend;
-pub struct ClaudeBackend;
-```
-
-No instances, no `new()`. Trait methods are associated functions (no `&self`).
+Backends are zero-sized types — `PiBackend` and `ClaudeBackend`. All
+runtime state lives in the session and `SpawnConfig`; the backend type
+parameter alone carries dispatch. No instances, no constructor.
 
 The backend is resolved **per phase** from config, not once at startup.
 Each workflow command (plan, todo, run, check, msg) independently selects
-its backend + model. A `dispatch` function in the binary crate closes over
-the concrete types:
+its backend + model. The binary crate exposes a single `dispatch`
+function that matches on the per-phase choice and forwards to a generic
+helper parameterized by backend type. The workflow engine receives that
+helper as a parameter and never touches concrete backend types — static
+dispatch is preserved inside each match arm.
 
-```rust
-// main.rs — the only place that knows PiBackend and ClaudeBackend
-async fn dispatch(
-    phase: Phase,
-    config: &LoomConfig,
-    spawn: &SpawnConfig,
-) -> Result<SessionOutcome, ProtocolError> {
-    match config.agent_for(phase) {
-        AgentKind::Pi => run_agent::<PiBackend>(spawn).await,
-        AgentKind::Claude => run_agent::<ClaudeBackend>(spawn).await,
-    }
-}
-```
-
-The workflow engine receives `dispatch` as a parameter — it never touches
-concrete backend types. Static dispatch is preserved inside each match arm.
-The compiler monomorphizes two copies of `run_agent`.
-
-**Per-phase config example:** `loom todo` uses a cheap model via pi, while
-`loom check` uses claude directly:
+**Per-phase config example:** `loom todo` uses a cheap model via pi,
+while `loom check` uses claude directly:
 
 ```toml
 [phase.default]
@@ -159,302 +138,172 @@ agent.backend = "claude"
 ```
 
 Phases without explicit config inherit `[phase.default]`. The pi backend
-calls `set_model` after spawn if the phase config specifies a provider/model.
+calls `set_model` after spawn if the phase config specifies a
+provider/model.
 
 `[phase.plan]` is also a valid per-phase key, but the resolution path
-differs: `loom plan` is interactive (human-in-the-loop) and shells to the
-backend's interactive entry point rather than going through the
-`AgentBackend` trait. Today only `claude` is wired up there, via
+differs: `loom plan` is interactive (human-in-the-loop) and shells to
+the backend's interactive entry point rather than going through the
+agent-backend abstraction. Today only claude is wired up there, via
 `wrapix run`; pi would need an interactive frontend before it could be
 selected for `plan`.
 
-```rust
-// loom-workflow (simplified — real version handles retry, steering, logging)
-pub async fn run_agent<B: AgentBackend>(
-    config: &SpawnConfig,
-) -> Result<SessionOutcome, ProtocolError> {
-    let session = B::spawn(config).await?;
-    let mut session = session.prompt(&config.initial_prompt).await?;
-    loop {
-        match session.next_event().await? {
-            Some(AgentEvent::SessionComplete { exit_code, cost_usd }) => {
-                return Ok(SessionOutcome { exit_code, cost_usd });
-            }
-            Some(event) => {
-                tracing::debug!(?event, "agent event");
-            }
-            None => {
-                return Err(ProtocolError::UnexpectedEof);
-            }
-        }
-    }
-}
-```
-
-Mock backends slot into the same dispatch: they are ZSTs too, so
-`run_agent::<MockBackend>(&config)` is the test-time entry point.
+Mock backends slot into the same dispatch — they are ZSTs too, so a
+test-time entry parameterized with `MockBackend` works without any
+production code change.
 
 ### Agent Backend Trait
 
-```rust
-// loom-core
-
-pub trait AgentBackend: Send + Sync {
-    async fn spawn(
-        config: &SpawnConfig,
-    ) -> Result<AgentSession<Idle>, ProtocolError>;
-}
-```
-
-The trait is deliberately minimal — it only handles process lifecycle. Session
-interaction (prompt, steer, abort, event streaming) is on the typestate
-`AgentSession`, not the backend trait. The backend's job is to spawn a session;
+The agent-backend abstraction is deliberately minimal: it exposes a
+single asynchronous `spawn` operation that consumes a `SpawnConfig` and
+yields an idle session. Process lifecycle is its only concern. Session
+interaction (prompt, steer, abort, event streaming) lives on the session
+type, not the backend trait — the backend's job is to spawn a session;
 the session's job is to drive the conversation.
 
-Both backends support steering: pi via the native `steer` command, claude
-via `--input-format stream-json --output-format stream-json` (sends a
-stream-json user message on stdin during the session). No
-`SUPPORTS_STEERING` capability gate — `AgentSession::steer` works for both
-backends. If a future backend cannot support steering, reintroduce the
-constant.
+Both backends support steering: pi via the native `steer` command,
+claude via `--input-format stream-json --output-format stream-json`
+(sends a stream-json user message on stdin during the session). There is
+no capability gate — steering works for both backends. If a future
+backend cannot support steering, a capability constant can be
+reintroduced.
 
-No `&self` — backends are ZSTs, so the type parameter carries all
-information. No `#[async_trait]` — `async fn` in traits is native with
-edition 2024 and static dispatch.
+Backends carry no per-instance state — the type parameter conveys all
+information. The implementation uses native `async fn` in traits
+(edition 2024) with static dispatch, avoiding the `async-trait` crate.
 
 ### Typestate Session
 
-Invalid protocol transitions are compile errors. An `AgentSession<Idle>` must be
-prompted before events can be read. An `AgentSession<Active>` cannot be prompted
-again — it must complete or be aborted first.
+Invalid protocol transitions are compile errors. A session is in one of
+two states — **idle** or **active** — and the state is encoded in the
+session's type parameter. Operations only available in one state are not
+even callable in the other.
 
-```rust
-pub struct Idle;
-pub struct Active;
+State-machine rules:
 
-pub struct AgentSession<S> {
-    child: tokio::process::Child,
-    stdin: BufWriter<ChildStdin>,
-    reader: JsonlReader,
-    parser: Box<dyn LineParse>,
-    pending: VecDeque<AgentEvent>,
-    _state: PhantomData<S>,
-}
+- **Idle session** must be prompted before events can be read. The
+  prompt operation consumes the idle session and yields an active one.
+- **Active session** exposes `next_event`, `steer`, and `abort`. It
+  cannot be prompted again — only completed or aborted.
+- **Aborting** returns to idle: if the backend has a wire abort command
+  (pi), the parser encodes it and the session is reusable; if not
+  (claude), the typestate still returns to idle but the underlying
+  process is left to backend-level shutdown (SIGTERM/SIGKILL via the
+  watchdog), so a follow-up prompt fails with a process-exit error.
 
-impl AgentSession<Idle> {
-    pub async fn prompt(
-        self,
-        msg: &str,
-    ) -> Result<AgentSession<Active>, ProtocolError> {
-        // Ask the parser to encode the prompt; write the resulting line to
-        // stdin and transition to Active.
-    }
-}
+The session type and the parser abstraction both live in `loom-core` —
+not in `loom-agent` — because the agent-backend trait returns a session,
+and the inverse dependency would be a cycle.
 
-impl AgentSession<Active> {
-    pub async fn next_event(
-        &mut self,
-    ) -> Result<Option<AgentEvent>, ProtocolError> {
-        // Drain self.pending first. Then read next JSONL line, parse via
-        // LineParse. If ParsedLine::response is Some, write it to stdin.
-        // Push excess events into self.pending, return the first one.
-    }
+A single inbound protocol line can yield multiple events. The session
+buffers excess events and returns one per call to `next_event`. A
+state-agnostic accessor lets backends borrow the underlying child
+process without surrendering session ownership; this is the hook the
+claude backend's shutdown watchdog uses to drive the SIGTERM/SIGKILL
+escalation described in requirement #4.
 
-    pub async fn steer(
-        &mut self,
-        msg: &str,
-    ) -> Result<(), ProtocolError> {
-        // Parser encodes the wire payload (pi: JSONL `steer` command;
-        // claude: stream-json user message). Session writes it.
-    }
-
-    pub async fn abort(
-        self,
-    ) -> Result<AgentSession<Idle>, ProtocolError> {
-        // If parser returns Some(abort_line), write it to stdin and return
-        //   to Idle (pi: session reusable).
-        // If parser returns None, the session is left to backend-level
-        //   process cleanup (claude: SIGTERM/SIGKILL via the shutdown
-        //   watchdog); the typestate still returns to Idle but a follow-up
-        //   prompt will fail with ProcessExit.
-    }
-}
-```
-
-`AgentSession`, `JsonlReader`, and `LineParse` all live in loom-core (not
-loom-agent) because the `AgentBackend` trait returns `AgentSession<Idle>` —
-if these types lived in loom-agent, the trait would depend on its own
-implementor crate (circular dependency).
-
-The `pending` queue exists because a single JSONL line can yield multiple
-`AgentEvent`s — `next_event` returns one at a time and buffers the rest.
-
-A state-agnostic `AgentSession::child_mut(&mut self) -> &mut tokio::process::Child`
-accessor lets backends borrow the underlying child without surrendering
-session ownership. This is the hook the claude backend's shutdown watchdog
-uses to drive the SIGTERM/SIGKILL escalation described in requirement #4.
-
-```rust
-// loom-core
-
-pub struct ParsedLine {
-    pub events: Vec<AgentEvent>,
-    pub response: Option<String>,
-}
-
-pub trait LineParse: Send {
-    /// Parse one JSONL line received from the agent's stdout.
-    fn parse_line(&self, line: &str) -> Result<ParsedLine, ProtocolError>;
-
-    /// Encode the initial prompt that opens the session. Returned string is
-    /// written to stdin verbatim — implementors include the trailing `\n`.
-    fn encode_prompt(&self, msg: &str) -> Result<String, ProtocolError>;
-
-    /// Encode a mid-session steering message. Same framing rules as
-    /// `encode_prompt`.
-    fn encode_steer(&self, msg: &str) -> Result<String, ProtocolError>;
-
-    /// Encode an abort command, or `None` if the backend has no abort wire
-    /// command (claude is killed via signals instead).
-    fn encode_abort(&self) -> Result<Option<String>, ProtocolError>;
-}
-```
-
-Each backend (in loom-agent) provides its own `LineParse` implementation:
-`PiParser` and `ClaudeParser`. The trait carries **both directions of the
-wire** — parsing what comes in on stdout *and* encoding what goes out on
-stdin. Keeping the encoders alongside `parse_line` is what lets
-`AgentSession` stay a single concrete generic-free type (`Box<dyn LineParse>`
-inside): the session owns the IO; the parser owns the framing.
-
-Static dispatch on `AgentBackend` (the outer layer) eliminates the
-`async-trait` dependency; internal dyn on `LineParse` (the inner layer)
-avoids leaking backend types through the session's public API. The per-line
-vtable call is negligible next to the IO cost of reading from a subprocess
+**Line parsing.** Each backend provides a parser that owns **both
+directions of the wire** — decoding inbound JSONL lines into events, and
+encoding outbound commands (initial prompt, steer, abort) for stdin. The
+parser is held internally by the session via dynamic dispatch so the
+session itself stays a single concrete type, free of backend generics.
+Static dispatch on the outer agent-backend layer plus dynamic dispatch
+on the inner parser layer is the deliberate split — the per-line vtable
+call is negligible next to the IO cost of reading from a subprocess
 pipe.
 
-`ParsedLine::response` handles protocol control flow: when a parsed line
-requires a response on stdin (e.g., Claude's `control_request` auto-approve),
-the parser populates this field. `AgentSession::next_event` writes the
-response before yielding events — keeping response logic in the parser and IO
-in the session. `ParsedLine::events` is a `Vec` because some protocol
-messages map to multiple `AgentEvent`s: Claude's `result/success` produces
-`TurnEnd` + `SessionComplete`; `result/error` produces `Error` +
-`SessionComplete`. Pi's `turn_end` and `agent_end` are separate events that
-each map to a single `AgentEvent`.
+The parser's decoded output carries two fields: a list of events to
+yield, and an optional response string the session should write back to
+stdin before yielding those events. The response slot handles protocol
+control flow such as claude's `control_request` auto-approve: the
+parser populates the field; the session does the IO. The list of events
+is a list (not a single event) because some inbound messages map to
+multiple events — claude's `result/success` produces `TurnEnd` +
+`SessionComplete`; `result/error` produces `Error` + `SessionComplete`.
+Pi's `turn_end` and `agent_end` are separate inbound events that each
+map to one outbound event.
 
 ### AgentEvent
 
-`AgentEvent` and `CompactionReason` are serializable so the terminal renderer
-and the on-disk JSONL log share a single broadcast channel (see
-[loom-harness — Run UX & Logging](loom-harness.md#run-ux--logging)). Variant
-names are emitted as snake_case (`message_delta`, `tool_call`, …) — that is
-the wire format consumed by log readers.
+The session emits a stream of typed events. Event names are part of the
+wire format: they are serialized as snake_case (`message_delta`,
+`tool_call`, …) when the terminal renderer and on-disk JSONL log share
+the broadcast channel (see [loom-harness — Run UX &
+Logging](loom-harness.md#run-ux--logging)). Log readers consume those
+names directly.
 
-```rust
-#[derive(Debug)]
-pub enum AgentEvent {
-    /// Streaming text fragment from the agent.
-    MessageDelta { text: String },
+| Event | Payload | Meaning |
+|-------|---------|---------|
+| `message_delta` | `text` | Streaming text fragment from the agent. |
+| `tool_call` | `id`, `tool`, `params` | Agent invoked a tool. |
+| `tool_result` | `id`, `output`, `is_error` | Tool execution completed. |
+| `turn_end` | — | One turn finished; the session may have more turns. |
+| `session_complete` | `exit_code`, `cost_usd?` | Process exiting or final result received. |
+| `compaction_start` | `reason` | Context compaction beginning. |
+| `compaction_end` | `aborted` | Compaction finished. |
+| `error` | `message` | Agent reported an error. |
 
-    /// Agent invoked a tool.
-    ToolCall {
-        id: ToolCallId,
-        tool: String,
-        params: serde_json::Value,
-    },
+`reason` is one of `context_limit`, `user_requested`, or `unknown`. Pi's
+`threshold` and `overflow` both map to `context_limit`; `manual` maps to
+`user_requested`.
 
-    /// Tool execution completed.
-    ToolResult {
-        id: ToolCallId,
-        output: String,
-        is_error: bool,
-    },
-
-    /// Agent finished one turn (may have more turns in a multi-turn session).
-    TurnEnd,
-
-    /// Agent session completed — process exiting or final result received.
-    SessionComplete {
-        exit_code: i32,
-        cost_usd: Option<f64>,
-    },
-
-    /// Agent context was compacted.
-    CompactionStart { reason: CompactionReason },
-    CompactionEnd { aborted: bool },
-
-    /// Agent reported an error.
-    Error { message: String },
-}
-
-#[derive(Debug)]
-pub enum CompactionReason {
-    ContextLimit,
-    UserRequested,
-    Unknown,
-}
-```
+The session's terminal outcome — exit code and optional reported cost —
+flows out via the `session_complete` event; nothing further is needed
+from the workflow engine to learn how a session ended.
 
 ### ProtocolError
 
-```rust
-#[derive(Debug, displaydoc::Display, thiserror::Error)]
-pub enum ProtocolError {
-    /// invalid JSON on protocol line
-    InvalidJson(#[from] serde_json::Error),
+Operations against an active session can fail with one of a small,
+closed set of error categories:
 
-    /// unknown message type: {0}
-    UnknownMessageType(String),
+- **Invalid JSON** on a protocol line — the inbound line did not parse.
+- **Unknown message type** — JSON parsed, but the discriminator is one
+  the backend does not recognize.
+- **IO error** — the underlying stdin/stdout channel returned a system
+  IO failure.
+- **Process exit** — the agent process terminated; the captured exit
+  code is reported.
+- **Unexpected EOF** — the event stream ended without a terminating
+  `session_complete`.
+- **Line too long** — an inbound JSONL line exceeded the framing budget
+  (10 MB; see [JSONL Framing](#jsonl-framing)).
+- **Unsupported** — the backend cannot perform the requested operation
+  (e.g., a future backend without steering).
 
-    /// IO error
-    Io(#[from] std::io::Error),
-
-    /// agent process exited with code {0}
-    ProcessExit(i32),
-
-    /// unexpected end of event stream
-    UnexpectedEof,
-
-    /// JSONL line too long: {len} bytes (max {max})
-    LineTooLong { len: usize, max: usize },
-
-    /// operation not supported by this backend
-    Unsupported,
-}
-```
+These are the only protocol-level error classes. Backend-specific
+failures (model errors, container teardown failures, etc.) surface
+through the same channel and are mapped onto these categories at the
+parser boundary.
 
 ### SpawnConfig
 
-```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SpawnConfig {
-    pub image_ref: String,
-    pub image_source: PathBuf,
-    pub workspace: PathBuf,
-    pub env: Vec<(String, String)>,
-    pub initial_prompt: String,
-    pub agent_args: Vec<String>,
-    pub repin: RePinContent,
-}
-```
-
-`image_ref` is the podman image reference (e.g.
-`localhost/wrapix-rust:<hash>`); `image_source` is the Nix store path the
-launcher hands to `podman load` to materialize that ref. Both are populated
-by loom from the *profile-image manifest* at dispatch time — see
-[loom-harness.md — Profile-Image Manifest](loom-harness.md#profile-image-manifest).
-
-`SpawnConfig` is `Serialize` + `Deserialize` because loom writes it to a
-JSON file and `wrapix spawn --spawn-config <file>` reads it back. This is
-the single serialization boundary between loom and the wrapper — preferred
-over a fat argv interface. The wrapper's JSON shape is the stable contract;
+The harness writes a `SpawnConfig` to a JSON file at dispatch time, and
+`wrapix spawn --spawn-config <file>` reads it back. This is the single
+serialization boundary between loom and the wrapper — preferred over a
+fat argv interface. The wrapper's JSON shape is the stable contract;
 loom and `wrapix spawn` ship from the same flake and stay in lockstep.
 
-`env` is an **explicit allowlist** — only listed variables are forwarded
-into the container by `wrapix spawn` (which materializes them as
-`podman run -e`). The host environment is never inherited wholesale. The
-workflow engine constructs this list from known-needed variables:
+Required fields:
+
+- `image_ref` — podman image reference (e.g. `localhost/wrapix-rust:<hash>`).
+- `image_source` — Nix store path the launcher hands to `podman load`
+  to materialize that ref.
+- `workspace` — host path bind-mounted into the container at
+  `/workspace`.
+- `env` — explicit env allowlist (table below); the host environment is
+  never inherited wholesale.
+- `initial_prompt` — prompt rendered from the phase template.
+- `agent_args` — extra argv to pass to the agent binary.
+- `scratch_dir` — per-key scratch directory the agent backend reads on
+  compaction events; see [loom-harness.md § Compaction
+  Recovery](loom-harness.md#compaction-recovery).
+
+`image_ref` and `image_source` come from the profile-image manifest at
+dispatch time — see [loom-harness.md — Profile-Image
+Manifest](loom-harness.md#profile-image-manifest).
+
+The env allowlist is constructed by the workflow engine from
+known-needed variables:
 
 | Variable | When | Purpose |
 |----------|------|---------|
@@ -463,18 +312,11 @@ workflow engine constructs this list from known-needed variables:
 | `ANTHROPIC_API_KEY` | pi backend (Anthropic models) | LLM API key |
 | `TERM` | always | Terminal capability |
 | `BEADS_DOLT_SERVER_SOCKET`, `BEADS_DOLT_AUTO_START` | always | Beads dolt-socket path (set to the bind-mount); auto-start disabled (host owns the server) |
+| `LOOM_INSIDE` | always | Set to `1`; trips the nested-loom guard if the agent invokes `loom` inside the container — see [loom-harness.md — Nested-Loom Guard](loom-harness.md#nested-loom-guard) |
 
 Provider-specific API keys for the pi backend (OpenAI, Google, etc.) are
 added only when the configured model requires them. Variable names are
 logged at `info!` level during spawn; values are never logged.
-
-```rust
-#[derive(Debug)]
-pub struct SessionOutcome {
-    pub exit_code: i32,
-    pub cost_usd: Option<f64>,
-}
-```
 
 ### Host-to-Container Communication
 
@@ -516,47 +358,15 @@ Parsing rules:
 - U+2028 and U+2029 are NOT line terminators — they pass through as JSON content.
 - Empty lines (blank between objects) are silently skipped.
 - Each non-empty line is independently parsed as JSON.
-- A line that fails JSON parsing is a `ProtocolError::InvalidJson`.
+- A line that fails JSON parsing is an "invalid JSON" protocol error.
 
-```rust
-const MAX_LINE_BYTES: usize = 10 * 1024 * 1024; // 10 MB
-
-pub struct JsonlReader {
-    reader: BufReader<ChildStdout>,
-    line_buf: String,
-}
-
-impl JsonlReader {
-    pub async fn next_line(
-        &mut self,
-    ) -> Result<Option<&str>, ProtocolError> {
-        loop {
-            self.line_buf.clear();
-            let n = self.reader.read_line(&mut self.line_buf).await?;
-            if n == 0 {
-                return Ok(None);
-            }
-            if self.line_buf.len() > MAX_LINE_BYTES {
-                return Err(ProtocolError::LineTooLong {
-                    len: self.line_buf.len(),
-                    max: MAX_LINE_BYTES,
-                });
-            }
-            let trimmed = self.line_buf.trim_end_matches(['\n', '\r']);
-            if !trimmed.is_empty() {
-                return Ok(Some(trimmed));
-            }
-        }
-    }
-}
-```
-
-`MAX_LINE_BYTES` prevents a malicious or malfunctioning agent from exhausting
-host memory by sending a single line without a `\n` terminator. 10 MB is well
-above any legitimate JSONL message (the largest are tool results with file
-contents). The limit is checked after the read completes — `read_line` will
-still buffer the full line, but the error fires before the line is parsed or
-accumulated further.
+A per-line byte budget of **10 MB** prevents a malicious or
+malfunctioning agent from exhausting host memory by sending a single
+line without a `\n` terminator. 10 MB is well above any legitimate JSONL
+message (the largest are tool results with file contents). The limit is
+checked after the read completes — the reader will still buffer the full
+line, but the error fires before the line is parsed or accumulated
+further.
 
 ### Pi-Mono RPC Protocol
 
@@ -571,80 +381,34 @@ or a required command is missing, the backend fails fast with a clear
 version-mismatch error before any workflow begins. After the probe succeeds,
 normal command flow starts.
 
-Messages are classified by a two-phase deserialization strategy: peek at the
-`type` and `id` fields to determine the message category, then deserialize
-the full payload into the correct type.
+Messages are classified by **two-phase deserialization**: peek at the
+`type` and `id` fields to determine the message category, then
+deserialize the full payload into the correct type.
 
-**Two-phase deserialization:**
+The classifier rules:
 
-```rust
-#[derive(Debug, Deserialize)]
-struct PiEnvelope {
-    #[serde(rename = "type")]
-    msg_type: Option<String>,
-    id: Option<RequestId>,
-}
+- A `type` of `"response"` → a response message (carries an `id`).
+- A `type` of `"extension_ui_request"` → a UI extension request.
+- Any other line lacking an `id` → an event (events carry their own
+  `type` values like `"message_update"` and never have an `id`).
+- Any other line with an `id` but an unrecognized `type` → an
+  unknown-message-type protocol error.
 
-#[derive(Debug)]
-pub enum PiMessage {
-    Response(PiResponse),
-    Event(PiEvent),
-    ExtensionUiRequest(PiUiRequest),
-}
+**Why two-phase?** Pi messages don't follow a clean tagged union:
+responses have `type: "response"` plus an `id`, events carry their own
+`type` values without an `id`, and extension UI requests have a distinct
+`type`. The discriminant is `type` for the known message names, with
+id-absence as the fallback for events — a two-field dispatch that
+serde's built-in tag/content support can't express. The envelope parse
+is cheap (unknown fields are skipped); the second parse deserializes
+into the exact target type.
 
-// Lives inside PiParser::parse_line; shown here in classifier form to focus
-// on the (type, id) dispatch.
-impl PiParser {
-    fn classify(&self, line: &str) -> Result<PiMessage, ProtocolError> {
-        let env: PiEnvelope = serde_json::from_str(line)?;
-        match env.msg_type.as_deref() {
-            Some("response") => {
-                let resp: PiResponse = serde_json::from_str(line)?;
-                Ok(PiMessage::Response(resp))
-            }
-            Some("extension_ui_request") => {
-                let req: PiUiRequest = serde_json::from_str(line)?;
-                Ok(PiMessage::ExtensionUiRequest(req))
-            }
-            _ if env.id.is_none() => {
-                let evt: PiEvent = serde_json::from_str(line)?;
-                Ok(PiMessage::Event(evt))
-            }
-            _ => Err(ProtocolError::UnknownMessageType(
-                env.msg_type.unwrap_or_default(),
-            )),
-        }
-    }
-}
-```
-
-**Why two-phase?** Pi messages don't follow a clean tagged union: responses have
-`type: "response"` plus an `id`, events carry their own `type` values (e.g.,
-`"message_update"`) without an `id`, and extension UI requests have
-`type: "extension_ui_request"`. The discriminant is `type` for the known
-message names, with id-absence as the fallback that classifies the remainder
-as events — a two-field dispatch that serde's built-in tag/content support
-can't express.
-
-The envelope parse is cheap (serde skips unknown fields), and the second parse
-deserializes into the exact target type.
-
-**Response envelope:**
-
-```rust
-#[derive(Debug, Deserialize)]
-pub struct PiResponse {
-    pub id: RequestId,
-    pub command: String,
-    pub success: bool,
-    pub data: Option<serde_json::Value>,
-    pub error: Option<String>,
-}
-```
-
-The `command` field echoes back the command name. The `success` boolean
-discriminates between a successful result (payload in `data`) and a failure
-(message in `error`). The driver checks `success` before accessing `data`.
+**Response envelope.** Every response carries `id`, `command`, `success`,
+optional `data` (success payload), and optional `error` (failure
+message). The `command` field echoes back the command name. The
+`success` boolean discriminates between a successful result (payload in
+`data`) and a failure (message in `error`); the driver checks `success`
+before accessing `data`.
 
 **Commands (driver → pi, via stdin):**
 
@@ -752,49 +516,23 @@ skip line) is retained as defensive coding, not a live mitigation.
 Claude Code's `--output-format stream-json` emits JSONL events.
 Combined with `--input-format stream-json`, communication is bidirectional.
 
-**Events (claude → driver, via stdout):**
+**Events (claude → driver, via stdout).** Unlike pi, claude messages
+follow a clean tagged union: every message has a `type` field that
+uniquely identifies the variant, so a single-pass deserialization with
+the `type` field as discriminator suffices (no two-phase classifier
+needed). The wire types and their payload shapes:
 
-```rust
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type")]
-pub enum ClaudeMessage {
-    #[serde(rename = "system")]
-    System {
-        subtype: String,
-        session_id: Option<SessionId>,
-    },
+| `type` | Payload |
+|--------|---------|
+| `system` | `subtype`, optional `session_id` |
+| `assistant` | message content (text or tool_use) |
+| `user` | message content (tool_result) |
+| `result` | `subtype`, optional `result`, optional `total_cost_usd`, optional `duration_ms`, optional `num_turns`, optional `is_error` |
+| `control_request` | `id`, `tool`, `input` |
 
-    #[serde(rename = "assistant")]
-    Assistant { message: AssistantContent },
-
-    #[serde(rename = "user")]
-    User { message: UserContent },
-
-    #[serde(rename = "result")]
-    Result {
-        subtype: String,
-        result: Option<String>,
-        total_cost_usd: Option<f64>,
-        duration_ms: Option<u64>,
-        num_turns: Option<u32>,
-        is_error: Option<bool>,
-    },
-
-    #[serde(rename = "control_request")]
-    ControlRequest {
-        id: RequestId,
-        tool: String,
-        input: serde_json::Value,
-    },
-
-    #[serde(other)]
-    Unknown,
-}
-```
-
-**Why `#[serde(tag = "type")]` works here:** Unlike pi, Claude messages follow a
-clean tagged union — every message has a `type` field that uniquely identifies
-the variant. Serde's internally-tagged enum handles this directly.
+Any `type` value the parser does not recognize is logged at `debug!` and
+skipped — claude can introduce new event types without breaking the
+session.
 
 **Event mapping:**
 
@@ -829,40 +567,51 @@ ships a tool type that reaches outside the container boundary.
 
 ### Compaction Handling
 
-Both backends use the same `RePinContent` struct (defined in loom-core — see
-[loom-harness.md](loom-harness.md#compaction-re-pin)) to restore agent context
-after compaction. The content is built once per session by the workflow engine.
-**Content is unified; delivery is asymmetric** because Claude stream-json does
-not expose compaction events — Anthropic compacts internally with no protocol
-notification, so claude must use its own `SessionStart` hook system, while pi
-exposes compaction events natively in JSONL. The asymmetry is fundamental
-to the products' compaction models, not a Loom design choice.
+The harness creates a per-session scratch directory containing the
+rendered prompt and a live scratchpad — see [loom-harness.md § Compaction
+Recovery](loom-harness.md#compaction-recovery) for the file layout and
+lifecycle. This section describes only how each backend delivers the
+recovery content to the agent.
+
+**Delivery is asymmetric** because claude stream-json does not expose
+compaction events — Anthropic compacts internally with no protocol
+notification, so claude must use its own `SessionStart` hook system, while
+pi exposes compaction events natively in JSONL. The asymmetry is
+fundamental to the products' compaction models, not a Loom design choice.
 
 **Claude backend:**
-- Before spawn, calls `repin.write_claude_files(runtime_dir)` to write
-  `repin.sh` + `claude-settings.json` into the container's runtime directory.
-- Claude Code's `SessionStart` hook reads these files automatically on each
-  compaction. The driver is not involved at compaction time.
+- Before spawn, the harness writes `repin.sh` and a `claude-settings.json`
+  fragment registering it under `SessionStart[matcher: compact]` into the
+  container's runtime directory.
+- Claude Code's hook system runs `repin.sh` on each compaction; the
+  script emits a JSON envelope assembled from the scratch directory's
+  `prompt.txt` and `scratch.md`. The driver is not involved at compaction
+  time.
 
 **Pi backend:**
-- Holds `RePinContent` in memory.
-- When a `compaction_start` event arrives in the JSONL stream, sends
-  `repin.to_prompt()` via a `steer` command on stdin.
+- Knows the per-key scratch directory path from the harness's
+  `SpawnConfig`.
+- When a `compaction_start` event arrives in the JSONL stream, reads
+  `prompt.txt` + `scratch.md` from the scratch directory and sends the
+  concatenated content via a `steer` command on stdin.
 - **Steer timing.** A `steer` command queues; pi delivers it after the
-  current assistant turn finishes its tool calls, before the next LLM call —
-  it does not inject content during compaction itself. The re-pin therefore
-  reaches the agent on the *next* turn after compaction completes, which is
-  the desired effect (post-compact context restoration).
-- **Overflow auto-retry.** When `compaction_start.reason == "overflow"` and
-  compaction succeeds, pi automatically retries the prompt
+  current assistant turn finishes its tool calls, before the next LLM
+  call — it does not inject content during compaction itself. The re-pin
+  therefore reaches the agent on the *next* turn after compaction
+  completes, which is the desired effect (post-compact context
+  restoration).
+- **Overflow auto-retry.** When `compaction_start.reason == "overflow"`
+  and compaction succeeds, pi automatically retries the prompt
   (`compaction_end.willRetry == true`). A steer queued during this window
   interleaves with the auto-retry: it lands on the turn following the
-  retry's first response, not before. This is acceptable — the retry plus
-  re-pin combined still restore working context — but documented so the
-  behavior is not surprising in logs.
-- The subsequent `compaction_end` event confirms whether compaction succeeded
-  (`aborted: false`) or was abandoned. If pi retries compaction (a fresh
-  `compaction_start` arrives), the driver re-pins again.
+  retry's first response, not before. This is acceptable — the retry
+  plus re-pin combined still restore working context — but documented so
+  the behavior is not surprising in logs.
+- The subsequent `compaction_end` event confirms whether compaction
+  succeeded (`aborted: false`) or was abandoned. If pi retries compaction
+  (a fresh `compaction_start` arrives), the driver re-reads the scratch
+  directory and re-pins again — the scratchpad may have grown between
+  compactions.
 
 ## Agent Runtime Layer
 
@@ -964,7 +713,7 @@ The pi branch:
   [verify](tests/loom-test.sh::test_agent_trait_static_dispatch)
 - [ ] `AgentEvent` enum covers: MessageDelta, ToolCall, ToolResult, TurnEnd, SessionComplete, CompactionStart, CompactionEnd, Error
   [verify](tests/loom-test.sh::test_agent_event_variants)
-- [ ] `SpawnConfig` struct captures image_ref, image_source, workspace, env, initial_prompt, agent_args, repin
+- [ ] `SpawnConfig` struct captures image_ref, image_source, workspace, env, initial_prompt, agent_args, scratch_dir
   [verify](tests/loom-test.sh::test_spawn_config_fields)
 - [ ] Typestate `AgentSession<Idle>` / `AgentSession<Active>` prevents invalid transitions
   [verify](tests/loom-test.sh::test_typestate_transitions)
@@ -983,7 +732,7 @@ The pi branch:
   [verify](tests/loom-test.sh::test_pi_supports_steering)
 - [ ] Pi backend maps all pi event types to AgentEvent variants
   [verify](tests/loom-test.sh::test_pi_event_mapping)
-- [ ] Pi backend detects CompactionStart event and sends `RePinContent::to_prompt` via steer
+- [ ] Pi backend detects CompactionStart event, reads `prompt.txt` + `scratch.md` from the per-key scratch directory, and sends the concatenated content via steer
   [verify](tests/loom-test.sh::test_pi_compaction_repin)
 - [ ] Pi backend handles malformed JSONL gracefully (logs warning, continues)
   [verify](tests/loom-test.sh::test_pi_malformed_jsonl)
@@ -1002,8 +751,8 @@ The pi branch:
   [verify](tests/loom-test.sh::test_claude_cost_capture)
 - [ ] Claude backend handles unknown event types via `#[serde(other)]`
   [verify](tests/loom-test.sh::test_claude_unknown_events)
-- [ ] Claude backend writes re-pin files via `RePinContent::write_claude_files` before spawn
-  [verify](tests/loom-test.sh::test_claude_repin_files)
+- [ ] Claude backend's `repin.sh` is registered under `SessionStart[matcher: compact]` before spawn, and the script emits a JSON envelope containing the scratch directory's `prompt.txt` + `scratch.md` when fired
+  [verify](tests/loom-test.sh::test_claude_repin_hook_registered)
 - [ ] Claude backend auto-approves permission requests via control_response
   [verify](tests/loom-test.sh::test_claude_permission_autoapprove)
 - [ ] Claude backend supports steering — sends a stream-json user message via stdin during the session and verifies the agent receives it
