@@ -33,7 +33,7 @@ use loom_workflow::run::{
     Parallelism, ProductionAgentLoopController, RetryPolicy, RunMode, run_loop,
 };
 use loom_workflow::run_agent;
-use loom_workflow::todo::{ProductionTodoController, run as run_todo_workflow};
+use loom_workflow::todo::{ProductionTodoController, parse_exit_signal, run as run_todo_workflow};
 use loom_workflow::{init, logs_cmd, plan, spec, status, use_spec};
 
 /// Top-level CLI surface.
@@ -402,7 +402,7 @@ fn run_run(
                 let label = label_for_sink.clone();
                 async move {
                     let sink = open_bead_sink(&logs_root, &label, &bead_id)?;
-                    dispatch(kind, spawn_cfg, shutdown_grace, Some(sink)).await
+                    dispatch(kind, spawn_cfg, shutdown_grace, Some(sink), None).await
                 }
             },
         )
@@ -545,7 +545,7 @@ async fn dispatch_for_slot(
     )?;
 
     let sink = open_bead_sink(logs_root, label, &slot.bead.id)?;
-    let result = dispatch(kind, spawn_config, shutdown_grace, Some(sink)).await;
+    let result = dispatch(kind, spawn_config, shutdown_grace, Some(sink), None).await;
     drop(scratch);
     Ok(result?)
 }
@@ -570,6 +570,7 @@ async fn dispatch(
     mut spawn: SpawnConfig,
     shutdown_grace: Option<Duration>,
     sink: Option<LogSink>,
+    text_capture: Option<&mut String>,
 ) -> Result<SessionOutcome, ProtocolError> {
     if matches!(kind, AgentKind::Claude) && spawn.shutdown_grace.is_none() {
         spawn.shutdown_grace = shutdown_grace;
@@ -585,8 +586,8 @@ async fn dispatch(
         spawn.stall_warn_interval = Some(d);
     }
     match kind {
-        AgentKind::Pi => run_agent::<PiBackend>(&spawn, sink).await,
-        AgentKind::Claude => run_agent::<ClaudeBackend>(&spawn, sink).await,
+        AgentKind::Pi => run_agent::<PiBackend>(&spawn, sink, text_capture).await,
+        AgentKind::Claude => run_agent::<ClaudeBackend>(&spawn, sink, text_capture).await,
     }
 }
 
@@ -696,7 +697,7 @@ fn run_check(
                         SystemClock::new().wall_now(),
                     )
                     .map_err(|e| ProtocolError::Io(std::io::Error::other(e.to_string())))?;
-                    dispatch(kind, spawn_cfg, shutdown_grace, Some(sink)).await
+                    dispatch(kind, spawn_cfg, shutdown_grace, Some(sink), None).await
                 }
             },
         )
@@ -863,7 +864,17 @@ fn run_todo(
                 SystemClock::new().wall_now(),
             )
             .map_err(|e| ProtocolError::Io(std::io::Error::other(e.to_string())))?;
-            dispatch(kind, spawn_cfg, shutdown_grace, Some(sink)).await
+            let mut output = String::new();
+            let outcome = dispatch(
+                kind,
+                spawn_cfg,
+                shutdown_grace,
+                Some(sink),
+                Some(&mut output),
+            )
+            .await?;
+            let marker = parse_exit_signal(&output);
+            Ok((outcome, marker))
         })
         .await
     })?;

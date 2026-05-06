@@ -20,7 +20,7 @@ use loom_core::git::GitClient;
 use loom_core::identifier::{MoleculeId, ProfileName, SpecLabel};
 use loom_core::profile_manifest::ProfileImageManifest;
 use loom_core::state::{ActiveMolecule, StateDb};
-use loom_workflow::todo::{ProductionTodoController, TodoController, TodoError};
+use loom_workflow::todo::{ExitSignal, ProductionTodoController, TodoController, TodoError};
 
 fn run_git(workspace: &Path, args: &[&str]) {
     let status = Command::new("git")
@@ -217,7 +217,7 @@ async fn build_spawn_config_tier_1_renders_diff_from_base_commit() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn record_outcome_advances_cursor_only_on_clean_exit() {
+async fn record_outcome_advances_cursor_only_on_complete_marker_and_clean_exit() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = dir.path().to_path_buf();
     let state = seeded_state(&workspace, "alpha", "wx-mol", None);
@@ -235,10 +235,13 @@ async fn record_outcome_advances_cursor_only_on_clean_exit() {
         None,
     );
 
-    ctrl.record_outcome(&SessionOutcome {
-        exit_code: 1,
-        cost_usd: None,
-    })
+    ctrl.record_outcome(
+        &SessionOutcome {
+            exit_code: 1,
+            cost_usd: None,
+        },
+        Some(&ExitSignal::Complete),
+    )
     .await
     .expect("record outcome (failure)");
     assert_eq!(
@@ -247,15 +250,33 @@ async fn record_outcome_advances_cursor_only_on_clean_exit() {
         "nonzero exit must NOT advance the cursor",
     );
 
-    ctrl.record_outcome(&SessionOutcome {
-        exit_code: 0,
-        cost_usd: Some(0.42),
-    })
+    ctrl.record_outcome(
+        &SessionOutcome {
+            exit_code: 0,
+            cost_usd: Some(0.42),
+        },
+        None,
+    )
+    .await
+    .expect("record outcome (missing marker)");
+    assert_eq!(
+        state.todo_cursor(&label).expect("cursor lookup"),
+        None,
+        "missing marker must NOT advance the cursor even on exit 0",
+    );
+
+    ctrl.record_outcome(
+        &SessionOutcome {
+            exit_code: 0,
+            cost_usd: Some(0.42),
+        },
+        Some(&ExitSignal::Complete),
+    )
     .await
     .expect("record outcome (success)");
     assert_eq!(
         state.todo_cursor(&label).expect("cursor lookup"),
         Some(head_before),
-        "clean exit must record HEAD as the per-spec cursor",
+        "complete marker + clean exit must record HEAD as the per-spec cursor",
     );
 }

@@ -20,6 +20,7 @@ use loom_core::profile_manifest::ProfileImageManifest;
 use loom_core::state::StateDb;
 use tracing::{debug, info, warn};
 
+use super::ExitSignal;
 use super::context::{TemplateBaseFields, TodoTemplateContext, build_template_context};
 use super::error::TodoError;
 use super::runner::{TodoController, TodoSession};
@@ -152,12 +153,17 @@ impl TodoController for ProductionTodoController {
         })
     }
 
-    async fn record_outcome(&mut self, outcome: &SessionOutcome) -> Result<(), TodoError> {
-        if outcome.exit_code != 0 {
+    async fn record_outcome(
+        &mut self,
+        outcome: &SessionOutcome,
+        marker: Option<&ExitSignal>,
+    ) -> Result<(), TodoError> {
+        if !cursor_should_advance(outcome.exit_code, marker) {
             info!(
                 label = %self.label,
                 exit_code = outcome.exit_code,
-                "loom todo: nonzero exit — cursor not advanced",
+                marker = ?marker,
+                "loom todo: cursor not advanced — gate requires exit_code==0 AND LOOM_COMPLETE/LOOM_NOOP",
             );
             return Ok(());
         }
@@ -167,6 +173,7 @@ impl TodoController for ProductionTodoController {
                 info!(
                     label = %self.label,
                     head = %head,
+                    marker = ?marker,
                     "loom todo: cursor advanced to HEAD",
                 );
             }
@@ -180,6 +187,12 @@ impl TodoController for ProductionTodoController {
         }
         Ok(())
     }
+}
+
+/// Cursor-advance gate per `specs/loom-harness.md` lines 902-918: both
+/// `exit_code == 0` and a `LOOM_COMPLETE`/`LOOM_NOOP` marker required.
+fn cursor_should_advance(exit_code: i32, marker: Option<&ExitSignal>) -> bool {
+    exit_code == 0 && matches!(marker, Some(ExitSignal::Complete | ExitSignal::Noop))
 }
 
 /// Bridge `compute_spec_diff`'s sync [`GitDiffSource`] surface to the async
@@ -235,5 +248,46 @@ impl GitDiffSource for LiveGitDiffSource {
                     .unwrap_or_default()
             })
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Five terminal marker shapes × two exit codes — ten rows, two
+    /// truths: only `LOOM_COMPLETE`/`LOOM_NOOP` paired with `exit_code==0`
+    /// advances the cursor (`specs/loom-harness.md` lines 902-918).
+    #[test]
+    fn cursor_gate_advances_only_on_complete_or_noop_with_clean_exit() {
+        let blocked = ExitSignal::Blocked {
+            reason: "missing schema".into(),
+        };
+        let clarify = ExitSignal::Clarify {
+            question: "additive only?".into(),
+        };
+        let cases: &[(Option<&ExitSignal>, i32, bool, &str)] = &[
+            // Clean exit: only Complete and Noop advance the cursor.
+            (Some(&ExitSignal::Complete), 0, true, "complete + exit 0"),
+            (Some(&ExitSignal::Noop), 0, true, "noop + exit 0"),
+            (Some(&blocked), 0, false, "blocked + exit 0"),
+            (Some(&clarify), 0, false, "clarify + exit 0"),
+            (None, 0, false, "no marker + exit 0"),
+            // Nonzero exit: gate refuses regardless of marker — covers
+            // the swallowed-marker and backend-error paths called out in
+            // the spec (529 overload, network drop, watchdog timeout).
+            (Some(&ExitSignal::Complete), 1, false, "complete + exit 1"),
+            (Some(&ExitSignal::Noop), 1, false, "noop + exit 1"),
+            (Some(&blocked), 1, false, "blocked + exit 1"),
+            (Some(&clarify), 1, false, "clarify + exit 1"),
+            (None, 1, false, "no marker + exit 1"),
+        ];
+        for (marker, exit_code, expected, label) in cases {
+            assert_eq!(
+                cursor_should_advance(*exit_code, *marker),
+                *expected,
+                "case `{label}`: expected advance={expected}",
+            );
+        }
     }
 }

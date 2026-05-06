@@ -11,6 +11,7 @@
 use loom_core::agent::{ProtocolError, SessionOutcome, SpawnConfig};
 use loom_core::scratch::ScratchSession;
 
+use super::ExitSignal;
 use super::error::TodoError;
 
 /// Bundle of the spawn config and the scratch-session guard that owns
@@ -39,10 +40,14 @@ pub trait TodoController: Send {
     ) -> impl std::future::Future<Output = Result<TodoSession, TodoError>> + Send;
 
     /// Persist the agent outcome — write per-spec cursors, commit the spec
-    /// file, etc. Called once after the agent session completes.
+    /// file, etc. Called once after the agent session completes. `marker`
+    /// is the exit signal parsed from the agent's final turn so
+    /// implementations can gate cursor writes per
+    /// `specs/loom-harness.md` lines 902-918.
     fn record_outcome(
         &mut self,
         outcome: &SessionOutcome,
+        marker: Option<&ExitSignal>,
     ) -> impl std::future::Future<Output = Result<(), TodoError>> + Send;
 }
 
@@ -66,13 +71,13 @@ pub async fn run<C, S, F>(controller: &mut C, spawn: S) -> Result<TodoSummary, T
 where
     C: TodoController + ?Sized,
     S: FnOnce(SpawnConfig) -> F,
-    F: std::future::Future<Output = Result<SessionOutcome, ProtocolError>>,
+    F: std::future::Future<Output = Result<(SessionOutcome, Option<ExitSignal>), ProtocolError>>,
 {
     let TodoSession { config, scratch } = controller.build_session().await?;
     let result = spawn(config).await;
     drop(scratch);
-    let outcome = result?;
-    controller.record_outcome(&outcome).await?;
+    let (outcome, marker) = result?;
+    controller.record_outcome(&outcome, marker.as_ref()).await?;
     Ok(TodoSummary {
         exit_code: outcome.exit_code,
         cost_usd: outcome.cost_usd,
@@ -96,6 +101,7 @@ mod tests {
         workspace: tempfile::TempDir,
         recorded: AtomicU32,
         last_exit: std::sync::Mutex<Option<i32>>,
+        last_marker: std::sync::Mutex<Option<ExitSignal>>,
     }
 
     impl FakeController {
@@ -104,6 +110,7 @@ mod tests {
                 workspace: tempfile::tempdir().unwrap(),
                 recorded: AtomicU32::new(0),
                 last_exit: std::sync::Mutex::new(None),
+                last_marker: std::sync::Mutex::new(None),
             }
         }
     }
@@ -141,9 +148,14 @@ mod tests {
             })
         }
 
-        async fn record_outcome(&mut self, outcome: &SessionOutcome) -> Result<(), TodoError> {
+        async fn record_outcome(
+            &mut self,
+            outcome: &SessionOutcome,
+            marker: Option<&ExitSignal>,
+        ) -> Result<(), TodoError> {
             self.recorded.fetch_add(1, Ordering::SeqCst);
             *self.last_exit.lock().unwrap() = Some(outcome.exit_code);
+            *self.last_marker.lock().unwrap() = marker.cloned();
             Ok(())
         }
     }
@@ -154,10 +166,13 @@ mod tests {
         let summary = run(&mut controller, |cfg: SpawnConfig| {
             assert_eq!(cfg.initial_prompt, "todo prompt");
             async move {
-                Ok(SessionOutcome {
-                    exit_code: 0,
-                    cost_usd: Some(0.42),
-                })
+                Ok((
+                    SessionOutcome {
+                        exit_code: 0,
+                        cost_usd: Some(0.42),
+                    },
+                    Some(ExitSignal::Complete),
+                ))
             }
         })
         .await
@@ -166,6 +181,10 @@ mod tests {
         assert_eq!(summary.cost_usd, Some(0.42));
         assert_eq!(controller.recorded.load(Ordering::SeqCst), 1);
         assert_eq!(*controller.last_exit.lock().unwrap(), Some(0));
+        assert_eq!(
+            *controller.last_marker.lock().unwrap(),
+            Some(ExitSignal::Complete),
+        );
     }
 
     #[tokio::test]

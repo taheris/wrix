@@ -42,6 +42,7 @@ use tracing::{info, warn};
 pub async fn run_agent<B: AgentBackend>(
     config: &SpawnConfig,
     mut sink: Option<LogSink>,
+    mut text_capture: Option<&mut String>,
 ) -> Result<SessionOutcome, ProtocolError> {
     let stall_window = config
         .stall_warn_interval
@@ -70,6 +71,11 @@ pub async fn run_agent<B: AgentBackend>(
             }
         };
         info!(event = %summarize_event(&event), "agent event");
+        if let AgentEvent::MessageDelta { text } = &event
+            && let Some(buf) = text_capture.as_deref_mut()
+        {
+            buf.push_str(text);
+        }
         if let Some(s) = sink.as_mut()
             && let Err(e) = s.emit(&event)
         {
