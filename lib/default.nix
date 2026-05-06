@@ -40,7 +40,7 @@ in
   inherit (ralph) mkRalph scripts;
   ralphPackage = ralph.package;
   ralphInitApp = ralph.initApp;
-  loomPackage = loom.bin;
+  loomPackage = loom;
   inherit beads;
 
   deriveProfile =
