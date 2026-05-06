@@ -154,9 +154,17 @@ let
       propagatedBuildInputs ? [ ],
       nativeBuildInputs ? [ ],
       meta ? { },
+      srcFilter ? null,
     }:
     let
-      cleanedSrc = craneLib.cleanCargoSource src;
+      cleanedSrc =
+        if srcFilter == null then
+          craneLib.cleanCargoSource src
+        else
+          pkgs.lib.cleanSourceWith {
+            inherit src;
+            filter = srcFilter;
+          };
 
       commonArgs = {
         src = cleanedSrc;

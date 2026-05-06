@@ -28,7 +28,10 @@ let
     inherit (sandbox) mkSandbox profiles baseClaudeSettings;
     inherit (ralph) mkRalph;
   };
-  loom = import ./loom { inherit pkgs fenix; };
+  loom = import ./loom {
+    pkgs = linuxPkgs;
+    rustProfile = sandbox.profiles.rust;
+  };
 
 in
 {
@@ -37,7 +40,7 @@ in
   inherit (ralph) mkRalph scripts;
   ralphPackage = ralph.package;
   ralphInitApp = ralph.initApp;
-  loomPackage = loom;
+  loomPackage = loom.bin;
   inherit beads;
 
   deriveProfile =

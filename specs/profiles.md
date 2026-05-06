@@ -133,7 +133,7 @@ Signature:
 
 ```nix
 profile.buildPackage {
-  src;                            # main source; filtered via crane.cleanCargoSource
+  src;                            # main source; filtered via crane.cleanCargoSource (or srcFilter when set)
   cargoLock;                      # path to Cargo.lock
   extraSrcs ? { };                # { "rel/dest" = ./abs-source; ... } — staged for clippy + nextest only
   cargoArtifacts ? null;          # optional pre-computed artifacts; default: derived from src + cargoLock
@@ -142,6 +142,7 @@ profile.buildPackage {
   propagatedBuildInputs ? [ ];
   nativeBuildInputs ? [ ];
   meta ? { };
+  srcFilter ? null;               # optional path-type predicate; replaces filterCargoSources when set
 }
 => { bin; clippy; nextest; cargoArtifacts; }
 ```
@@ -149,6 +150,7 @@ profile.buildPackage {
 - `bin` is the output a `packages.<name>` entry consumes; it has **no** dependency edge on `clippy` or `nextest`. Because of that missing edge, consumers depending only on `bin` (e.g. the devshell) realize only `bin` on workspace edits; `clippy` and `nextest` have separate, unrealized store paths until `nix flake check` asks for them.
 - `clippy` and `nextest` are independent derivations the flake wires into `nix flake check` (one entry per check in `tests/default.nix`); they are the only outputs that see `extraSrcs`. `cargoArtifacts` and `bin` close over `src` only.
 - `extraSrcs` exists for test inputs the harness reads from outside the workspace (e.g. loom's `crates/loom/tests/annotations.rs` reads `specs/*.md` and `tests/loom-test.sh`). Editing files in `extraSrcs` invalidates `clippy`/`nextest` but leaves `bin` and `cargoArtifacts` untouched — devshell-style consumers stay warm across test-fixture edits (e.g. `specs/*.md` changes).
+- `srcFilter` is the escape hatch for crates that need non-Rust files in `src` at compile time (e.g. loom-templates' askama `#[template(path = ...)]` reads `templates/*.md`). The default `null` keeps the spec invariant that editing `src/README.md` does not invalidate `bin`; passing a custom predicate lets the consumer broaden it (`craneLib.filterCargoSources` is exposed via `profile.craneLib` so callers can compose: `path: type: (craneFilter path type) || (lib.hasInfix "/templates/" path)`).
 - `cargoArtifacts` is exposed as an output and accepted as an input so workspaces with multiple binaries can share dep compilation across calls. Single-binary callers ignore both directions.
 - `buildPackage` closes over `profile.toolchain` via crane's `overrideToolchain`, so `bin`/`clippy`/`nextest` resolve `rustc` to the same `/nix/store/...` path as the sandbox image and the host devshell PATH. `withToolchain` rebuilds `buildPackage` against the custom toolchain alongside `packages`/`env`/`shellHook`/`toolchain`.
 - Builds are pure — Nix-sandboxed, no `__noChroot`. Sccache covers the host/sandbox/sibling-app cargo paths (where it's mounted from `~/.cache/sccache` and persists across runs); `cargoArtifacts` is the equivalent caching layer for build-sandbox cargo invocations. The two layers do not overlap and do not share cache state.
