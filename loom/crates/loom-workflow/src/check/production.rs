@@ -25,6 +25,7 @@ use loom_core::agent::{ProtocolError, RePinContent, SessionOutcome, SpawnConfig}
 use loom_core::bd::{BdClient, Bead, ListOpts, UpdateOpts};
 use loom_core::git::GitClient;
 use loom_core::identifier::{BeadId, ProfileName, SpecLabel};
+use loom_core::lock::LockGuard;
 use loom_core::profile_manifest::ProfileImageManifest;
 use loom_core::state::StateDb;
 use loom_templates::check::CheckContext;
@@ -48,6 +49,8 @@ where
     manifest: Arc<ProfileImageManifest>,
     phase_default: ProfileName,
     spawn: S,
+    /// Spec lock dropped before exec'ing `loom run` so the child can take it.
+    lock: Option<LockGuard>,
 }
 
 impl<S, F> ProductionCheckController<S, F>
@@ -75,7 +78,15 @@ where
             manifest,
             phase_default,
             spawn,
+            lock: None,
         }
+    }
+
+    /// Hand the spec lock to the controller so `exec_run` can drop it
+    /// before spawning the `loom run` child (which acquires the same lock).
+    pub fn with_handoff_lock(mut self, guard: LockGuard) -> Self {
+        self.lock = Some(guard);
+        self
     }
 
     fn spec_label_filter(&self) -> String {
@@ -224,6 +235,9 @@ where
     }
 
     async fn exec_run(&mut self) -> Result<(), CheckError> {
+        // Release the spec lock before spawning the child — `loom run`
+        // acquires the same lock and would otherwise time out behind us.
+        self.lock.take();
         let status = Command::new(&self.loom_bin)
             .current_dir(&self.workspace)
             .arg("run")
@@ -241,6 +255,7 @@ where
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::expect_used,
     clippy::panic,
     reason = "tests use panicking helpers"
 )]
@@ -458,5 +473,54 @@ mod tests {
             }
             other => panic!("expected Incomplete, got {other:?}"),
         }
+    }
+
+    /// Regression: `exec_run` (the check → run handoff for auto-iterate)
+    /// must release the spec lock before spawning, so the `loom run` child
+    /// can acquire it. Mirror of the run-side test in `run/production.rs`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn exec_run_releases_lock_before_spawning_child() {
+        use loom_core::clock::SystemClock;
+        use loom_core::lock::LockManager;
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().to_path_buf();
+        let state = empty_state(&workspace);
+        let manifest = stub_manifest(&workspace);
+        let mgr = LockManager::new(&workspace).unwrap();
+        let label = SpecLabel::new("alpha");
+        let clock = SystemClock::new();
+        let guard = mgr.acquire_spec_async(&label, &clock).await.unwrap();
+
+        // Stand-in for the `loom` binary; /bin/true is absent on NixOS.
+        let stub = dir.path().join("loom-stub.sh");
+        std::fs::write(&stub, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut ctrl = ProductionCheckController::new(
+            BdClient::new(),
+            label.clone(),
+            stub,
+            workspace,
+            state,
+            manifest,
+            ProfileName::new("base"),
+            |_cfg: SpawnConfig| async move {
+                Ok(SessionOutcome {
+                    exit_code: 0,
+                    cost_usd: None,
+                })
+            },
+        )
+        .with_handoff_lock(guard);
+
+        ctrl.exec_run().await.expect("exec_run ok");
+
+        let _reacquired = mgr
+            .acquire_spec_with_timeout_async(&label, &clock, Duration::from_millis(100))
+            .await
+            .expect("lock must be reacquirable after exec_run");
     }
 }

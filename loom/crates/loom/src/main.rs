@@ -328,7 +328,7 @@ fn run_run(
     let manifest = Arc::new(ProfileImageManifest::from_env()?);
     let label = resolve_spec_label(workspace, spec)?;
     let lock_mgr = LockManager::new(workspace)?;
-    let _guard = lock_mgr.acquire_spec(&label)?;
+    let guard = lock_mgr.acquire_spec(&label)?;
 
     let config = LoomConfig::load(workspace.join(".wrapix/loom/config.toml"))?;
     // Resolve the per-phase backend up front so an unknown backend name in
@@ -400,7 +400,8 @@ fn run_run(
                     dispatch(kind, spawn_cfg, shutdown_grace, Some(sink)).await
                 }
             },
-        );
+        )
+        .with_handoff_lock(guard);
         run_loop(&mut controller, mode, RetryPolicy::default()).await
     })?;
     println!(
@@ -640,7 +641,7 @@ fn run_check(
     let manifest = Arc::new(ProfileImageManifest::from_env()?);
     let label = resolve_spec_label(workspace, spec)?;
     let lock_mgr = LockManager::new(workspace)?;
-    let _guard = lock_mgr.acquire_spec(&label)?;
+    let guard = lock_mgr.acquire_spec(&label)?;
 
     let config = LoomConfig::load(workspace.join(".wrapix/loom/config.toml"))?;
     let selection = resolved_agent_for(&config, agent_override, Phase::Check)?;
@@ -679,7 +680,8 @@ fn run_check(
                     dispatch(kind, spawn_cfg, shutdown_grace, Some(sink)).await
                 }
             },
-        );
+        )
+        .with_handoff_lock(guard);
         run_check_loop(&mut controller, IterationCap::default()).await
     })?;
     println!("loom check: {result:?}");

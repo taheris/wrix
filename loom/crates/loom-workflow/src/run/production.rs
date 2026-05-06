@@ -20,6 +20,7 @@ use std::sync::Arc;
 use loom_core::agent::{ProtocolError, RePinContent, SessionOutcome, SpawnConfig};
 use loom_core::bd::{BdClient, Bead, ListOpts, ReadyOpts, UpdateOpts};
 use loom_core::identifier::{BeadId, ProfileName, SpecLabel};
+use loom_core::lock::LockGuard;
 use loom_core::profile_manifest::ProfileImageManifest;
 use tokio::process::Command;
 use tracing::info;
@@ -58,6 +59,8 @@ where
     cli_profile: Option<ProfileName>,
     phase_default: ProfileName,
     spawn: S,
+    /// Spec lock dropped before exec'ing `loom check` so the child can take it.
+    lock: Option<LockGuard>,
 }
 
 impl<S, F> ProductionAgentLoopController<S, F>
@@ -85,7 +88,15 @@ where
             cli_profile,
             phase_default,
             spawn,
+            lock: None,
         }
+    }
+
+    /// Hand the spec lock to the controller so `exec_check` can drop it
+    /// before spawning the `loom check` child (which acquires the same lock).
+    pub fn with_handoff_lock(mut self, guard: LockGuard) -> Self {
+        self.lock = Some(guard);
+        self
     }
 
     fn spec_label_filter(&self) -> String {
@@ -164,6 +175,9 @@ where
     }
 
     async fn exec_check(&mut self) -> Result<(), RunError> {
+        // Release the spec lock before spawning the child — `loom check`
+        // acquires the same lock and would otherwise time out behind us.
+        self.lock.take();
         let status = Command::new(&self.loom_bin)
             .current_dir(&self.workspace)
             .arg("check")
@@ -312,5 +326,63 @@ mod tests {
             Err(RunError::Protocol(ProtocolError::Unsupported)) => {}
             other => panic!("expected Protocol(Unsupported), got {other:?}"),
         }
+    }
+
+    /// Regression: `loom run` used to hold the spec lock for its whole
+    /// lifetime, so the `loom check` child it spawned at the molecule-complete
+    /// handoff timed out trying to acquire the same lock. `exec_check` must
+    /// drop the held [`LockGuard`] before spawning, leaving the kernel-level
+    /// `flock(2)` available to the child. Verified end-to-end: after a stub
+    /// child exits, the lock is reacquirable on a fresh attempt.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn exec_check_releases_lock_before_spawning_child() {
+        use loom_core::clock::SystemClock;
+        use loom_core::lock::LockManager;
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = write_manifest(dir.path());
+        let mgr = LockManager::new(dir.path()).expect("lock manager");
+        let label = SpecLabel::new("alpha");
+        let clock = SystemClock::new();
+        let guard = mgr
+            .acquire_spec_async(&label, &clock)
+            .await
+            .expect("first acquire");
+
+        // Stand-in for the `loom` binary: ignores all args and exits 0.
+        // /bin/true does not exist on NixOS, so we ship a script.
+        let stub = dir.path().join("loom-stub.sh");
+        std::fs::write(&stub, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut controller = ProductionAgentLoopController::new(
+            BdClient::new(),
+            label.clone(),
+            stub,
+            dir.path().to_path_buf(),
+            manifest,
+            None,
+            ProfileName::new("base"),
+            |_cfg: SpawnConfig, _bead_id: BeadId| async move {
+                Ok(SessionOutcome {
+                    exit_code: 0,
+                    cost_usd: None,
+                })
+            },
+        )
+        .with_handoff_lock(guard);
+
+        controller.exec_check().await.expect("exec_check ok");
+
+        // The child has exited and the controller's guard was dropped before
+        // the spawn — the lock must be free. A short timeout keeps the test
+        // fast on the regression (held-lock) path: it would error in <100ms
+        // rather than wait the default 5s.
+        let _reacquired = mgr
+            .acquire_spec_with_timeout_async(&label, &clock, Duration::from_millis(100))
+            .await
+            .expect("lock must be reacquirable after exec_check");
     }
 }
