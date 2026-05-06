@@ -203,6 +203,18 @@ let
     exec ${pkgs.nix}/bin/nix flake check "$@"
   '';
 
+  # profiles.rust.buildPackage hash invariant verifies (specs/profiles.md).
+  # Driven via `nix eval` against the live flake, so it runs outside the build
+  # sandbox like the other tests/profiles/*.sh scripts. Wrapper resolves
+  # REPO_ROOT from the caller's git toplevel and threads jq + nix onto PATH.
+  testProfilesBuildPackage = writeShellScriptBin "test-profiles-build-package" ''
+    set -euo pipefail
+    : "''${REPO_ROOT:=$(${pkgs.git}/bin/git -C "''${PWD}" rev-parse --show-toplevel)}"
+    export REPO_ROOT
+    export PATH="${pkgs.jq}/bin:${pkgs.git}/bin:${pkgs.nix}/bin:$PATH"
+    exec ${pkgs.bash}/bin/bash "$REPO_ROOT/tests/profiles/build-package.sh" "$@"
+  '';
+
 in
 {
   # Checks for `nix flake check`
@@ -249,6 +261,15 @@ in
           "${loomDeriv.loomSmoke}/bin/test-loom"
         else
           "${loomDeriv.loomSmokeDarwinSkip}/bin/test-loom";
+    };
+
+    # profiles.rust.buildPackage [verify] hash invariants (specs/profiles.md
+    # success criteria 414-427). Runs all 7 test functions in
+    # tests/profiles/build-package.sh.
+    profiles-build-package = {
+      meta.description = "Verify profiles.rust.buildPackage hash invariants (bin/clippy/nextest/cargoArtifacts)";
+      type = "app";
+      program = "${testProfilesBuildPackage}/bin/test-profiles-build-package";
     };
   };
 

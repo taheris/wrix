@@ -54,6 +54,7 @@ _:
         test = test.app;
         test-city = test.apps.city;
         test-loom = test.apps.loom;
+        test-profiles-build-package = test.apps.profiles-build-package;
         test-ralph = test.apps.ralph;
         test-ralph-container = test.apps.ralph-container;
       }
