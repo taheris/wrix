@@ -17,7 +17,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use loom_core::agent::{ProtocolError, RePinContent, SessionOutcome, SpawnConfig};
+use loom_core::agent::{ProtocolError, RePinContent, SpawnConfig};
 use loom_core::bd::{BdClient, Bead, ListOpts, ReadyOpts, UpdateOpts};
 use loom_core::identifier::{BeadId, ProfileName, SpecLabel};
 use loom_core::lock::LockGuard;
@@ -26,7 +26,7 @@ use tokio::process::Command;
 use tracing::info;
 
 use super::error::RunError;
-use super::outcome::AgentOutcome;
+use super::outcome::{AgentOutcome, SessionResult};
 use super::runner::AgentLoopController;
 use super::spawn::build_spawn_config_from_manifest;
 
@@ -49,7 +49,7 @@ use super::spawn::build_spawn_config_from_manifest;
 pub struct ProductionAgentLoopController<S, F>
 where
     S: Fn(SpawnConfig, BeadId) -> F + Send,
-    F: std::future::Future<Output = Result<SessionOutcome, ProtocolError>> + Send,
+    F: std::future::Future<Output = SessionResult> + Send,
 {
     bd: BdClient,
     label: SpecLabel,
@@ -66,7 +66,7 @@ where
 impl<S, F> ProductionAgentLoopController<S, F>
 where
     S: Fn(SpawnConfig, BeadId) -> F + Send,
-    F: std::future::Future<Output = Result<SessionOutcome, ProtocolError>> + Send,
+    F: std::future::Future<Output = SessionResult> + Send,
 {
     #[expect(clippy::too_many_arguments, reason = "controller construction surface")]
     pub fn new(
@@ -107,7 +107,7 @@ where
 impl<S, F> AgentLoopController for ProductionAgentLoopController<S, F>
 where
     S: Fn(SpawnConfig, BeadId) -> F + Send,
-    F: std::future::Future<Output = Result<SessionOutcome, ProtocolError>> + Send,
+    F: std::future::Future<Output = SessionResult> + Send,
 {
     async fn next_ready_bead(&mut self) -> Result<Option<Bead>, RunError> {
         let beads = self
@@ -156,18 +156,23 @@ where
             retry = previous_failure.is_some(),
             "loom run: dispatching agent",
         );
-        let outcome = (self.spawn)(spawn_config, bead.id.clone()).await;
+        let session = (self.spawn)(spawn_config, bead.id.clone()).await;
         // Drop happens here at end of scope — scratch dir cleaned up on
         // every exit path (success, failure, panic).
         drop(scratch);
-        let outcome = outcome?;
-        if outcome.exit_code == 0 {
-            Ok(AgentOutcome::Success)
-        } else {
-            Ok(AgentOutcome::Failure {
-                error: format!("agent exited with code {}", outcome.exit_code),
-            })
-        }
+        Ok(match session {
+            SessionResult::Complete(outcome) => {
+                if outcome.exit_code == 0 {
+                    AgentOutcome::Success
+                } else {
+                    AgentOutcome::Failure {
+                        error: format!("agent exited with code {}", outcome.exit_code),
+                    }
+                }
+            }
+            SessionResult::PreflightFailed { error } => AgentOutcome::InfraPreflight { error },
+            SessionResult::MidSessionFailed { error } => AgentOutcome::InfraMidSession { error },
+        })
     }
 
     async fn close_bead(&mut self, bead: &BeadId) -> Result<(), RunError> {
@@ -181,6 +186,36 @@ where
                 bead,
                 UpdateOpts {
                     add_labels: vec!["loom:clarify".to_string()],
+                    ..UpdateOpts::default()
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn apply_blocked(
+        &mut self,
+        bead: &BeadId,
+        cause: &str,
+        error: &str,
+    ) -> Result<(), RunError> {
+        // Notes layout pins the cause string at the head so `bd show
+        // --notes` greps cleanly for `infra-preflight` / `infra-repeated`
+        // even when the raw error body is multi-line. Spec
+        // (`loom-harness.md` §"Verdict Gate · Infra failures") names the
+        // cause as the routing identifier; the error detail is for human
+        // triage only.
+        let notes = if error.is_empty() {
+            cause.to_string()
+        } else {
+            format!("{cause}: {error}")
+        };
+        self.bd
+            .update(
+                bead,
+                UpdateOpts {
+                    add_labels: vec!["loom:blocked".to_string()],
+                    notes: Some(notes),
                     ..UpdateOpts::default()
                 },
             )
@@ -228,6 +263,7 @@ pub async fn list_open_for_spec(bd: &BdClient, label: &SpecLabel) -> Result<Vec<
 )]
 mod tests {
     use super::*;
+    use loom_core::agent::SessionOutcome;
     use loom_core::bd::Label;
     use std::sync::Mutex;
 
@@ -270,7 +306,7 @@ mod tests {
                 let captured = Arc::clone(&captured_for_closure);
                 async move {
                     *captured.lock().unwrap() = Some(cfg);
-                    Ok(SessionOutcome {
+                    SessionResult::Complete(SessionOutcome {
                         exit_code: 0,
                         cost_usd: None,
                     })
@@ -300,7 +336,7 @@ mod tests {
             None,
             ProfileName::new("base"),
             |_cfg: SpawnConfig, _bead_id: BeadId| async move {
-                Ok(SessionOutcome {
+                SessionResult::Complete(SessionOutcome {
                     exit_code: 42,
                     cost_usd: None,
                 })
@@ -317,12 +353,17 @@ mod tests {
                     "error body should mention exit code 42: {error}"
                 );
             }
-            AgentOutcome::Success => panic!("non-zero exit must produce Failure"),
+            other => panic!("non-zero exit must produce Failure, got {other:?}"),
         }
     }
 
+    /// Spec gate: a [`SessionResult::PreflightFailed`] from the dispatch
+    /// closure must surface as [`AgentOutcome::InfraPreflight`] so
+    /// `process_one_bead` routes it straight to `loom:blocked` cause
+    /// `infra-preflight`. Dual to the run-loop unit test — verifies the
+    /// production controller plumbing carries the variant intact.
     #[tokio::test]
-    async fn run_bead_surfaces_protocol_error_through_run_error() {
+    async fn run_bead_translates_preflight_failure_into_infra_preflight() {
         let dir = tempfile::tempdir().expect("tempdir");
         let manifest = write_manifest(dir.path());
         let mut controller = ProductionAgentLoopController::new(
@@ -333,12 +374,60 @@ mod tests {
             manifest,
             None,
             ProfileName::new("base"),
-            |_cfg: SpawnConfig, _bead_id: BeadId| async move { Err(ProtocolError::Unsupported) },
+            |_cfg: SpawnConfig, _bead_id: BeadId| async move {
+                SessionResult::PreflightFailed {
+                    error: "podman load failed: image archive missing".into(),
+                }
+            },
         );
-        let result = controller.run_bead(&bead("wx-3"), None).await;
-        match result {
-            Err(RunError::Protocol(ProtocolError::Unsupported)) => {}
-            other => panic!("expected Protocol(Unsupported), got {other:?}"),
+        let outcome = controller
+            .run_bead(&bead("wx-3"), None)
+            .await
+            .expect("run_bead ok");
+        match outcome {
+            AgentOutcome::InfraPreflight { error } => {
+                assert!(
+                    error.contains("podman load"),
+                    "preflight error must carry detail: {error}",
+                );
+            }
+            other => panic!("expected InfraPreflight, got {other:?}"),
+        }
+    }
+
+    /// Spec gate: a [`SessionResult::MidSessionFailed`] from the dispatch
+    /// closure must surface as [`AgentOutcome::InfraMidSession`] so the
+    /// driver-memory budget can absorb one occurrence per `loom run`.
+    #[tokio::test]
+    async fn run_bead_translates_midsession_failure_into_infra_midsession() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = write_manifest(dir.path());
+        let mut controller = ProductionAgentLoopController::new(
+            BdClient::new(),
+            SpecLabel::new("spec-x"),
+            PathBuf::from("/loom/bin"),
+            PathBuf::from("/workspace"),
+            manifest,
+            None,
+            ProfileName::new("base"),
+            |_cfg: SpawnConfig, _bead_id: BeadId| async move {
+                SessionResult::MidSessionFailed {
+                    error: "agent stdout closed: exit 137 (OOM)".into(),
+                }
+            },
+        );
+        let outcome = controller
+            .run_bead(&bead("wx-4"), None)
+            .await
+            .expect("run_bead ok");
+        match outcome {
+            AgentOutcome::InfraMidSession { error } => {
+                assert!(
+                    error.contains("OOM"),
+                    "mid-session error must carry detail: {error}",
+                );
+            }
+            other => panic!("expected InfraMidSession, got {other:?}"),
         }
     }
 
@@ -380,7 +469,7 @@ mod tests {
             None,
             ProfileName::new("base"),
             |_cfg: SpawnConfig, _bead_id: BeadId| async move {
-                Ok(SessionOutcome {
+                SessionResult::Complete(SessionOutcome {
                     exit_code: 0,
                     cost_usd: None,
                 })

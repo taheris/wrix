@@ -39,7 +39,7 @@ mod spawn;
 
 pub use context::{RunContextInputs, build_run_context};
 pub use error::RunError;
-pub use outcome::{AgentOutcome, BeadResult};
+pub use outcome::{AgentOutcome, BeadResult, SessionResult};
 pub use parallel::{
     BatchOutcome, BatchResult, BatchSlot, WorktreeBead, create_worktrees, merge_back,
     run_concurrent_spawns, run_parallel_batch,
@@ -48,5 +48,7 @@ pub use parallelism::{Parallelism, ParallelismError};
 pub use production::{ProductionAgentLoopController, list_open_for_spec};
 pub use profile::{DEFAULT_PROFILE, resolve_profile, resolve_profile_image};
 pub use retry::{RetryDecision, RetryPolicy};
-pub use runner::{AgentLoopController, RunMode, RunSummary, run_loop};
+pub use runner::{
+    AgentLoopController, INFRA_PREFLIGHT_CAUSE, INFRA_REPEATED_CAUSE, RunMode, RunSummary, run_loop,
+};
 pub use spawn::build_spawn_config_from_manifest;

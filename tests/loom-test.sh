@@ -3025,9 +3025,19 @@ test_gate_review_flag_names_concern()  { echo "not yet implemented (review flag 
 test_recovery_under_max()              { echo "not yet implemented (recovery under max)" >&2; return 77; }
 test_recovery_exhaustion_applies_blocked() { echo "not yet implemented (recovery exhaustion)" >&2; return 77; }
 test_iteration_count_persists()        { echo "not yet implemented (iteration count)" >&2; return 77; }
-test_infra_preflight_fail_fast()       { echo "not yet implemented (infra preflight)" >&2; return 77; }
-test_infra_midsession_one_retry()      { echo "not yet implemented (infra midsession retry)" >&2; return 77; }
-test_infra_retry_counter_separate()    { echo "not yet implemented (infra retry counter)" >&2; return 77; }
+test_infra_preflight_fail_fast() {
+    check_cargo_test run::runner::tests::infra_preflight_routes_to_blocked_without_retry
+    check_cargo_test run::production::tests::run_bead_translates_preflight_failure_into_infra_preflight
+}
+test_infra_midsession_one_retry() {
+    check_cargo_test run::runner::tests::infra_midsession_one_retry_then_blocks_on_repeat
+    check_cargo_test run::runner::tests::infra_midsession_retry_succeeds_within_budget
+    check_cargo_test run::runner::tests::infra_budget_is_per_run_not_per_bead
+    check_cargo_test run::production::tests::run_bead_translates_midsession_failure_into_infra_midsession
+}
+test_infra_retry_counter_separate() {
+    check_cargo_test run::runner::tests::infra_retry_counter_does_not_consume_max_retries
+}
 test_push_gate_refuses_unresolved() {
     check_cargo_test check::runner::tests::clarify_present_stops_without_pushing
     check_cargo_test check::runner::tests::pre_existing_clarify_blocks_push_even_when_no_new_beads

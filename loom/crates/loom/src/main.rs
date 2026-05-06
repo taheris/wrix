@@ -30,11 +30,11 @@ use loom_workflow::msg::{
     spec_label_of,
 };
 use loom_workflow::run::{
-    Parallelism, ProductionAgentLoopController, RetryPolicy, RunMode, run_loop,
+    Parallelism, ProductionAgentLoopController, RetryPolicy, RunMode, SessionResult, run_loop,
 };
-use loom_workflow::run_agent;
 use loom_workflow::todo::{ProductionTodoController, parse_exit_signal, run as run_todo_workflow};
 use loom_workflow::{init, logs_cmd, plan, spec, status, use_spec};
+use loom_workflow::{run_agent, run_agent_classified};
 
 /// Top-level CLI surface.
 #[derive(Debug, Parser)]
@@ -401,8 +401,20 @@ fn run_run(
                 let logs_root = logs_root.clone();
                 let label = label_for_sink.clone();
                 async move {
-                    let sink = open_bead_sink(&logs_root, &label, &bead_id)?;
-                    dispatch(kind, spawn_cfg, shutdown_grace, Some(sink), None).await
+                    // A sink-open failure is pre-spawn — the bead's
+                    // JSONL log location is part of the workflow's
+                    // pre-flight setup. Bubble it through the same
+                    // `infra-preflight` path so `bd update` records the
+                    // cause instead of the error tearing down `loom run`.
+                    let sink = match open_bead_sink(&logs_root, &label, &bead_id) {
+                        Ok(s) => Some(s),
+                        Err(err) => {
+                            return SessionResult::PreflightFailed {
+                                error: format!("open log sink: {err}"),
+                            };
+                        }
+                    };
+                    dispatch_classified(kind, spawn_cfg, shutdown_grace, sink).await
                 }
             },
         )
@@ -410,9 +422,11 @@ fn run_run(
         run_loop(&mut controller, mode, RetryPolicy::default()).await
     })?;
     println!(
-        "loom run: processed {} bead(s), clarified {}, molecule_complete={}, execed_check={}",
+        "loom run: processed {} bead(s), clarified {}, blocked {}, molecule_complete={}, \
+         execed_check={}",
         summary.beads_processed,
         summary.beads_clarified,
+        summary.beads_blocked,
         summary.molecule_complete,
         summary.execed_check,
     );
@@ -588,6 +602,35 @@ async fn dispatch(
     match kind {
         AgentKind::Pi => run_agent::<PiBackend>(&spawn, sink, text_capture).await,
         AgentKind::Claude => run_agent::<ClaudeBackend>(&spawn, sink, text_capture).await,
+    }
+}
+
+/// Same as [`dispatch`] but preserves the preflight-vs-mid-session split via
+/// [`SessionResult`]. The `loom run` driver consumes this so the verdict gate
+/// can route preflight failures to `infra-preflight` immediately and grant
+/// mid-session failures one driver-memory retry per `loom run`.
+async fn dispatch_classified(
+    kind: AgentKind,
+    mut spawn: SpawnConfig,
+    shutdown_grace: Option<Duration>,
+    sink: Option<LogSink>,
+) -> SessionResult {
+    if matches!(kind, AgentKind::Claude) && spawn.shutdown_grace.is_none() {
+        spawn.shutdown_grace = shutdown_grace;
+    }
+    if spawn.handshake_timeout.is_none()
+        && let Some(d) = duration_env_ms("LOOM_HANDSHAKE_TIMEOUT_MS")
+    {
+        spawn.handshake_timeout = Some(d);
+    }
+    if spawn.stall_warn_interval.is_none()
+        && let Some(d) = duration_env_ms("LOOM_STALL_WARN_MS")
+    {
+        spawn.stall_warn_interval = Some(d);
+    }
+    match kind {
+        AgentKind::Pi => run_agent_classified::<PiBackend>(&spawn, sink, None).await,
+        AgentKind::Claude => run_agent_classified::<ClaudeBackend>(&spawn, sink, None).await,
     }
 }
 

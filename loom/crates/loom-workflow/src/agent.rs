@@ -26,6 +26,8 @@ use loom_core::clock::{Clock, SystemClock};
 use loom_core::logging::{BeadOutcome, LogSink};
 use tracing::{info, warn};
 
+use crate::run::SessionResult;
+
 /// Drive `B` through one full session: spawn, prompt, then consume events
 /// until `SessionComplete` arrives. Returns the resulting [`SessionOutcome`]
 /// (exit code + cost, when surfaced by the backend).
@@ -41,21 +43,67 @@ use tracing::{info, warn};
 /// session ended abnormally and the outcome is not trustworthy.
 pub async fn run_agent<B: AgentBackend>(
     config: &SpawnConfig,
+    sink: Option<LogSink>,
+    text_capture: Option<&mut String>,
+) -> Result<SessionOutcome, ProtocolError> {
+    match run_agent_classified::<B>(config, sink, text_capture).await {
+        SessionResult::Complete(outcome) => Ok(outcome),
+        // Callers that only accept the legacy `Result` shape (todo, plan,
+        // msg, batch dispatch) treat both infra phases as a single failure
+        // surface. The run-loop dispatch path in `main.rs` calls
+        // `run_agent_classified` directly so it can preserve the
+        // preflight/mid-session distinction the verdict gate relies on.
+        SessionResult::PreflightFailed { error } | SessionResult::MidSessionFailed { error } => {
+            Err(ProtocolError::Io(std::io::Error::other(error)))
+        }
+    }
+}
+
+/// Same as [`run_agent`] but preserves the preflight vs mid-session
+/// distinction in its return type. Used by the `loom run` driver so the
+/// verdict gate can route pre-flight failures to `loom:blocked` cause
+/// `infra-preflight` immediately and grant mid-session failures one
+/// driver-memory retry per `loom run`.
+pub async fn run_agent_classified<B: AgentBackend>(
+    config: &SpawnConfig,
     mut sink: Option<LogSink>,
     mut text_capture: Option<&mut String>,
-) -> Result<SessionOutcome, ProtocolError> {
+) -> SessionResult {
     let stall_window = config
         .stall_warn_interval
         .unwrap_or_else(|| Duration::from_secs(DEFAULT_STALL_WARN_SECS));
     let clock = SystemClock::new();
-    let session = B::spawn(config).await?;
+    let session = match B::spawn(config).await {
+        Ok(session) => session,
+        Err(err) => {
+            // Spec: "Pre-flight failures (image load, container start) →
+            // exit immediately as blocked with cause infra-preflight —
+            // there is no agent output to evaluate." `B::spawn` is the
+            // boundary that owns image load + container construction; any
+            // failure here lands in the preflight bucket regardless of
+            // backend.
+            warn!(error = %err, "agent spawn failed before session became live");
+            finish_sink(sink, BeadOutcome::Failed);
+            return SessionResult::PreflightFailed {
+                error: err.to_string(),
+            };
+        }
+    };
     info!(
         prompt_chars = config.initial_prompt.chars().count(),
         stall_warn_secs = stall_window.as_secs(),
         "agent spawned; sending initial prompt",
     );
     let mut session =
-        prompt_with_stall_warn(session, &config.initial_prompt, stall_window, &clock).await?;
+        match prompt_with_stall_warn(session, &config.initial_prompt, stall_window, &clock).await {
+            Ok(s) => s,
+            Err(err) => {
+                finish_sink(sink, BeadOutcome::Failed);
+                return SessionResult::MidSessionFailed {
+                    error: err.to_string(),
+                };
+            }
+        };
     info!("prompt sent; awaiting agent events");
     loop {
         let next = next_event_with_stall_warn(&mut session, stall_window, &clock).await;
@@ -63,11 +111,15 @@ pub async fn run_agent<B: AgentBackend>(
             Ok(Some(event)) => event,
             Ok(None) => {
                 finish_sink(sink, BeadOutcome::Failed);
-                return Err(ProtocolError::UnexpectedEof);
+                return SessionResult::MidSessionFailed {
+                    error: ProtocolError::UnexpectedEof.to_string(),
+                };
             }
             Err(err) => {
                 finish_sink(sink, BeadOutcome::Failed);
-                return Err(err);
+                return SessionResult::MidSessionFailed {
+                    error: err.to_string(),
+                };
             }
         };
         info!(event = %summarize_event(&event), "agent event");
@@ -81,14 +133,18 @@ pub async fn run_agent<B: AgentBackend>(
         {
             warn!(error = %e, "log sink emit failed");
             finish_sink(sink, BeadOutcome::Failed);
-            return Err(ProtocolError::Io(std::io::Error::other(e.to_string())));
+            return SessionResult::MidSessionFailed {
+                error: format!("log sink emit failed: {e}"),
+            };
         }
         if matches!(event, AgentEvent::CompactionStart { .. })
             && let Err(e) = B::on_compaction_start(&mut session, config).await
         {
             warn!(error = %e, "backend compaction handler failed");
             finish_sink(sink, BeadOutcome::Failed);
-            return Err(e);
+            return SessionResult::MidSessionFailed {
+                error: e.to_string(),
+            };
         }
         if let AgentEvent::SessionComplete {
             exit_code,
@@ -104,7 +160,7 @@ pub async fn run_agent<B: AgentBackend>(
                 warn!(error = %e, "backend shutdown hook failed");
             }
             finish_sink(sink, outcome);
-            return Ok(SessionOutcome {
+            return SessionResult::Complete(SessionOutcome {
                 exit_code,
                 cost_usd,
             });

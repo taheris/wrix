@@ -140,6 +140,10 @@ impl<R: CommandRunner> BdClient<R> {
             args.push("--remove-label".into());
             args.push(label.into());
         }
+        if let Some(notes) = opts.notes {
+            args.push("--notes".into());
+            args.push(notes.into());
+        }
         self.invoke(args).await?;
         Ok(())
     }
@@ -271,6 +275,10 @@ pub struct UpdateOpts {
     pub priority: Option<u8>,
     pub add_labels: Vec<String>,
     pub remove_labels: Vec<String>,
+    /// Free-text body forwarded to `bd update --notes <text>`. Used by the
+    /// run-loop infra-failure path to record `infra-preflight` /
+    /// `infra-repeated` causes alongside the `loom:blocked` label.
+    pub notes: Option<String>,
 }
 
 /// Filters accepted by `bd list`. Both fields are optional; passing
@@ -573,6 +581,34 @@ mod tests {
         assert!(argv.contains(&"urgent".to_string()));
         assert!(!argv.contains(&"--priority".to_string()));
         assert!(!argv.contains(&"--remove-label".to_string()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_emits_notes_flag_when_set() -> Result<()> {
+        let runner = CapturingRunner::new([ok(b"")]);
+        let client = BdClient::with_runner(runner);
+        client
+            .update(
+                &BeadId::new("wx-x")?,
+                UpdateOpts {
+                    add_labels: vec!["loom:blocked".into()],
+                    notes: Some("infra-preflight: image load failed".into()),
+                    ..UpdateOpts::default()
+                },
+            )
+            .await?;
+        let argv = argv_of(&client.runner, 0);
+        assert_eq!(argv[0], "update");
+        assert_eq!(argv[1], "wx-x");
+        let notes_idx = argv
+            .iter()
+            .position(|a| a == "--notes")
+            .ok_or_else(|| anyhow!("--notes flag missing in argv: {argv:?}"))?;
+        assert_eq!(argv[notes_idx + 1], "infra-preflight: image load failed");
+        // The label and notes must travel together.
+        assert!(argv.contains(&"--add-label".to_string()));
+        assert!(argv.contains(&"loom:blocked".to_string()));
         Ok(())
     }
 

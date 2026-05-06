@@ -14,14 +14,32 @@ pub enum RunMode {
     Continuous,
 }
 
+/// Spec-table cause string written to `bd update --notes` when a pre-flight
+/// infra failure routes a bead to `loom:blocked`.
+pub const INFRA_PREFLIGHT_CAUSE: &str = "infra-preflight";
+
+/// Spec-table cause string written to `bd update --notes` when the
+/// driver-memory infra-retry budget is exhausted by a second mid-session
+/// infra failure inside the same `loom run` invocation.
+pub const INFRA_REPEATED_CAUSE: &str = "infra-repeated";
+
+/// Driver-memory budget for mid-session infra retries. Spec
+/// (`specs/loom-harness.md` §"Verdict Gate · Infra failures bypass the gate"):
+/// "one free retry per `loom run`". The counter is separate from
+/// `[loop] max_iterations` and resets on every fresh `loom run` invocation.
+const INFRA_MIDSESSION_RETRY_BUDGET: u32 = 1;
+
 /// Summary of one [`run_loop`] invocation. Surfaces what happened so callers
 /// can return a meaningful exit code and tests can assert on the path taken.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct RunSummary {
-    /// Beads that ran to a terminal state (closed or clarified).
+    /// Beads that ran to a terminal state (closed or clarified or blocked).
     pub beads_processed: u32,
     /// Beads that exhausted retries and got the `loom:clarify` label.
     pub beads_clarified: u32,
+    /// Beads routed to `loom:blocked` (pre-flight or repeated mid-session
+    /// infra failure).
+    pub beads_blocked: u32,
     /// `bd ready` returned no candidate, signalling the molecule is complete.
     pub molecule_complete: bool,
     /// `loom check` was exec'd (continuous mode + molecule complete).
@@ -39,6 +57,7 @@ pub struct RunSummary {
 ///   tee `AgentEvent` stream into `LogSink`, parse exit signal
 /// - `close_bead` → `BdClient::close`
 /// - `apply_clarify` → `BdClient::update --add-label loom:clarify`
+/// - `apply_blocked` → `BdClient::update --add-label loom:blocked --notes <cause>`
 /// - `exec_check` → `tokio::process::Command::new("loom").arg("check")…`
 pub trait AgentLoopController: Send {
     /// Pull the next ready bead. Returns `None` when the molecule is done.
@@ -66,6 +85,16 @@ pub trait AgentLoopController: Send {
         bead: &BeadId,
     ) -> impl std::future::Future<Output = Result<(), RunError>> + Send;
 
+    /// Add the `loom:blocked` label and write `cause` (plus any error
+    /// detail) to `bd update --notes`. Called when an infra failure
+    /// routes the bead straight to blocked per the verdict-gate spec.
+    fn apply_blocked(
+        &mut self,
+        bead: &BeadId,
+        cause: &str,
+        error: &str,
+    ) -> impl std::future::Future<Output = Result<(), RunError>> + Send;
+
     /// Hand off to `loom check` on molecule completion (continuous mode).
     fn exec_check(&mut self) -> impl std::future::Future<Output = Result<(), RunError>> + Send;
 }
@@ -76,15 +105,21 @@ pub trait AgentLoopController: Send {
 /// a small `Copy` value) but it is generic over [`AgentLoopController`] so the
 /// binary and tests can supply different concrete impls. Returns when:
 ///
-/// - `mode == Once` and one bead finished (success or clarify), or
+/// - `mode == Once` and one bead finished (success / clarify / blocked), or
 /// - `mode == Continuous` and `next_ready_bead` returned `None` (molecule
 ///   complete) — `exec_check` is invoked before returning.
+///
+/// `infra_retries_used` is driver-memory only: it lives on the stack of
+/// this single `run_loop` invocation and is **not** persisted. A new
+/// `loom run` starts with a fresh budget per spec §"Verdict Gate · Infra
+/// failures bypass the gate".
 pub async fn run_loop<C: AgentLoopController>(
     controller: &mut C,
     mode: RunMode,
     policy: RetryPolicy,
 ) -> Result<RunSummary, RunError> {
     let mut summary = RunSummary::default();
+    let mut infra_retries_used: u32 = 0;
     loop {
         let bead = match controller.next_ready_bead().await? {
             Some(b) => b,
@@ -98,7 +133,7 @@ pub async fn run_loop<C: AgentLoopController>(
             }
         };
 
-        let result = process_one_bead(controller, &bead, policy).await?;
+        let result = process_one_bead(controller, &bead, policy, &mut infra_retries_used).await?;
         summary.beads_processed += 1;
 
         match result {
@@ -108,6 +143,10 @@ pub async fn run_loop<C: AgentLoopController>(
             BeadResult::Clarified { .. } => {
                 controller.apply_clarify(&bead.id).await?;
                 summary.beads_clarified += 1;
+            }
+            BeadResult::Blocked { cause, error } => {
+                controller.apply_blocked(&bead.id, &cause, &error).await?;
+                summary.beads_blocked += 1;
             }
         }
 
@@ -119,10 +158,20 @@ pub async fn run_loop<C: AgentLoopController>(
 }
 
 /// Run a single bead through the retry state machine.
+///
+/// Pre-flight infra failures exit immediately as
+/// [`BeadResult::Blocked`] with cause [`INFRA_PREFLIGHT_CAUSE`]; agent
+/// output is never evaluated. Mid-session infra failures consume a slot in
+/// the caller-owned `infra_retries_used` counter (capped at
+/// [`INFRA_MIDSESSION_RETRY_BUDGET`] across the entire `loom run`); a
+/// second occurrence routes to [`BeadResult::Blocked`] with cause
+/// [`INFRA_REPEATED_CAUSE`]. Neither path consumes the agent-side
+/// `[loop] max_iterations` retry budget owned by [`RetryPolicy`].
 async fn process_one_bead<C: AgentLoopController>(
     controller: &mut C,
     bead: &Bead,
     policy: RetryPolicy,
+    infra_retries_used: &mut u32,
 ) -> Result<BeadResult, RunError> {
     let mut retries_used: u32 = 0;
     let mut previous_failure: Option<String> = None;
@@ -142,6 +191,24 @@ async fn process_one_bead<C: AgentLoopController>(
                     });
                 }
             },
+            AgentOutcome::InfraPreflight { error } => {
+                return Ok(BeadResult::Blocked {
+                    cause: INFRA_PREFLIGHT_CAUSE.to_string(),
+                    error,
+                });
+            }
+            AgentOutcome::InfraMidSession { error } => {
+                if *infra_retries_used >= INFRA_MIDSESSION_RETRY_BUDGET {
+                    return Ok(BeadResult::Blocked {
+                        cause: INFRA_REPEATED_CAUSE.to_string(),
+                        error,
+                    });
+                }
+                *infra_retries_used += 1;
+                // Infra retry does NOT consume `policy.max_retries` and
+                // does NOT thread `previous_failure` — the agent never
+                // produced a meaningful failure body, the container died.
+            }
         }
     }
 }
@@ -163,6 +230,7 @@ mod tests {
         run_calls: Vec<(BeadId, Option<String>)>,
         closed: Vec<BeadId>,
         clarified: Vec<BeadId>,
+        blocked: Vec<(BeadId, String, String)>,
         check_calls: u32,
     }
 
@@ -190,6 +258,17 @@ mod tests {
 
         async fn apply_clarify(&mut self, bead: &BeadId) -> Result<(), RunError> {
             self.clarified.push(bead.clone());
+            Ok(())
+        }
+
+        async fn apply_blocked(
+            &mut self,
+            bead: &BeadId,
+            cause: &str,
+            error: &str,
+        ) -> Result<(), RunError> {
+            self.blocked
+                .push((bead.clone(), cause.to_string(), error.to_string()));
             Ok(())
         }
 
@@ -320,6 +399,171 @@ mod tests {
         assert_eq!(c.closed, vec![BeadId::new("wx-1").expect("valid")]);
         assert!(c.clarified.is_empty());
         assert_eq!(summary.beads_clarified, 0);
+        Ok(())
+    }
+
+    /// Spec gate: pre-flight infra failures bypass retry entirely and
+    /// route the bead to `loom:blocked` cause `infra-preflight` on the
+    /// first occurrence. No agent output is ever evaluated.
+    /// `tests/loom-test.sh::test_infra_preflight_fail_fast`.
+    #[tokio::test]
+    async fn infra_preflight_routes_to_blocked_without_retry() -> Result<(), RunError> {
+        let mut c = FakeController::default();
+        c.ready_queue.push_back(bead("wx-1", &[]));
+        c.agent_outcomes.push_back(AgentOutcome::InfraPreflight {
+            error: "image load failed".into(),
+        });
+        // If the gate ever falls through, this Success would close the bead
+        // and the assertion below would fail.
+        c.agent_outcomes.push_back(AgentOutcome::Success);
+
+        let summary = run_loop(&mut c, RunMode::Once, RetryPolicy { max_retries: 2 }).await?;
+
+        assert_eq!(c.run_calls.len(), 1, "preflight must not retry");
+        assert!(c.closed.is_empty());
+        assert!(c.clarified.is_empty());
+        assert_eq!(c.blocked.len(), 1);
+        assert_eq!(c.blocked[0].0, BeadId::new("wx-1").expect("valid"));
+        assert_eq!(c.blocked[0].1, INFRA_PREFLIGHT_CAUSE);
+        assert!(
+            c.blocked[0].2.contains("image load failed"),
+            "blocked notes must carry the raw error: {:?}",
+            c.blocked[0].2,
+        );
+        assert_eq!(summary.beads_blocked, 1);
+        Ok(())
+    }
+
+    /// Spec gate: the first mid-session infra failure inside a `loom run`
+    /// gets one free retry; the second one routes to `loom:blocked`
+    /// cause `infra-repeated`. Both occurrences here happen on the same
+    /// bead so the per-run counter is the only thing distinguishing them.
+    /// `tests/loom-test.sh::test_infra_midsession_one_retry`.
+    #[tokio::test]
+    async fn infra_midsession_one_retry_then_blocks_on_repeat() -> Result<(), RunError> {
+        let mut c = FakeController::default();
+        c.ready_queue.push_back(bead("wx-1", &[]));
+        c.agent_outcomes.push_back(AgentOutcome::InfraMidSession {
+            error: "process exit 137 (OOM)".into(),
+        });
+        c.agent_outcomes.push_back(AgentOutcome::InfraMidSession {
+            error: "io timeout".into(),
+        });
+
+        let summary = run_loop(&mut c, RunMode::Once, RetryPolicy { max_retries: 2 }).await?;
+
+        assert_eq!(
+            c.run_calls.len(),
+            2,
+            "first mid-session failure consumes the one free retry"
+        );
+        // Infra retries do NOT thread previous_failure into the agent
+        // prompt — the spec calls them out as driver-memory state, not
+        // agent-visible signal.
+        assert_eq!(c.run_calls[0].1, None);
+        assert_eq!(c.run_calls[1].1, None);
+        assert_eq!(c.blocked.len(), 1);
+        assert_eq!(c.blocked[0].1, INFRA_REPEATED_CAUSE);
+        assert!(
+            c.blocked[0].2.contains("io timeout"),
+            "blocked notes must carry the second error body: {:?}",
+            c.blocked[0].2,
+        );
+        assert_eq!(summary.beads_blocked, 1);
+        Ok(())
+    }
+
+    /// Spec gate: a successful retry after one mid-session failure consumes
+    /// the budget without touching `[loop] max_iterations`. Verifies the
+    /// happy path of the one-free-retry rule.
+    #[tokio::test]
+    async fn infra_midsession_retry_succeeds_within_budget() -> Result<(), RunError> {
+        let mut c = FakeController::default();
+        c.ready_queue.push_back(bead("wx-1", &[]));
+        c.agent_outcomes.push_back(AgentOutcome::InfraMidSession {
+            error: "stdout closed early".into(),
+        });
+        c.agent_outcomes.push_back(AgentOutcome::Success);
+
+        let summary = run_loop(&mut c, RunMode::Once, RetryPolicy { max_retries: 2 }).await?;
+
+        assert_eq!(c.run_calls.len(), 2);
+        assert_eq!(c.closed, vec![BeadId::new("wx-1").expect("valid")]);
+        assert!(c.blocked.is_empty(), "successful retry must not block");
+        assert_eq!(summary.beads_blocked, 0);
+        Ok(())
+    }
+
+    /// Spec gate: the infra-retry counter is driver-memory and does NOT
+    /// consume slots in `[loop] max_iterations`. After absorbing one
+    /// mid-session infra failure, the agent-side retry policy still has
+    /// its full budget for genuine `AgentOutcome::Failure` retries.
+    /// `tests/loom-test.sh::test_infra_retry_counter_separate`.
+    #[tokio::test]
+    async fn infra_retry_counter_does_not_consume_max_retries() -> Result<(), RunError> {
+        let mut c = FakeController::default();
+        c.ready_queue.push_back(bead("wx-1", &[]));
+        // 1 infra mid-session, then `max_retries=2` worth of agent failures
+        // (initial attempt + 2 retries = 3 agent attempts) before clarify.
+        c.agent_outcomes.push_back(AgentOutcome::InfraMidSession {
+            error: "kernel oom".into(),
+        });
+        for i in 0..3 {
+            c.agent_outcomes.push_back(AgentOutcome::Failure {
+                error: format!("agent-err-{i}"),
+            });
+        }
+
+        let summary = run_loop(&mut c, RunMode::Once, RetryPolicy { max_retries: 2 }).await?;
+
+        assert_eq!(
+            c.run_calls.len(),
+            4,
+            "1 infra retry + 3 agent attempts (initial + 2 max_retries)",
+        );
+        // First attempt: no previous_failure.
+        assert_eq!(c.run_calls[0].1, None);
+        // Second attempt is the infra retry — also no previous_failure
+        // (driver-memory only, never threaded to agent).
+        assert_eq!(c.run_calls[1].1, None);
+        // Third attempt sees the first agent-side failure body.
+        assert_eq!(c.run_calls[2].1.as_deref(), Some("agent-err-0"));
+        assert_eq!(c.run_calls[3].1.as_deref(), Some("agent-err-1"));
+        // The bead exhausts agent retries and clarifies — never blocks.
+        assert!(c.blocked.is_empty(), "clarify path must not block");
+        assert_eq!(c.clarified, vec![BeadId::new("wx-1").expect("valid")]);
+        assert_eq!(summary.beads_clarified, 1);
+        Ok(())
+    }
+
+    /// Companion to the counter-separate test: the budget is per
+    /// `loom run` invocation, not per bead. A second bead's first
+    /// mid-session failure inside the same run hits the spent budget
+    /// and routes straight to `infra-repeated`.
+    #[tokio::test]
+    async fn infra_budget_is_per_run_not_per_bead() -> Result<(), RunError> {
+        let mut c = FakeController::default();
+        c.ready_queue.push_back(bead("wx-a", &[]));
+        c.ready_queue.push_back(bead("wx-b", &[]));
+        // Bead A: one infra mid-session, then succeeds (consumes budget).
+        c.agent_outcomes.push_back(AgentOutcome::InfraMidSession {
+            error: "first".into(),
+        });
+        c.agent_outcomes.push_back(AgentOutcome::Success);
+        // Bead B: first attempt is a mid-session infra failure with no
+        // budget left → blocked cause `infra-repeated`.
+        c.agent_outcomes.push_back(AgentOutcome::InfraMidSession {
+            error: "second".into(),
+        });
+
+        let summary = run_loop(&mut c, RunMode::Continuous, RetryPolicy::default()).await?;
+
+        assert_eq!(c.run_calls.len(), 3);
+        assert_eq!(c.closed, vec![BeadId::new("wx-a").expect("valid")]);
+        assert_eq!(c.blocked.len(), 1);
+        assert_eq!(c.blocked[0].0, BeadId::new("wx-b").expect("valid"));
+        assert_eq!(c.blocked[0].1, INFRA_REPEATED_CAUSE);
+        assert_eq!(summary.beads_blocked, 1);
         Ok(())
     }
 }

@@ -22,7 +22,7 @@ pub mod status;
 pub mod todo;
 pub mod use_spec;
 
-pub use agent::run_agent;
+pub use agent::{run_agent, run_agent_classified};
 pub use loom_core::agent::{
     Active, AgentBackend, AgentEvent, AgentKind, AgentSession, CompactionReason, Idle, JsonlReader,
     LineParse, MAX_LINE_BYTES, ParsedLine, ProtocolError, RePinContent, SessionOutcome,

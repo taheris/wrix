@@ -231,7 +231,9 @@ async fn merge_back_one(git: &GitClient, slot: BatchSlot) -> Result<BatchResult,
                 })
             }
         },
-        AgentOutcome::Failure { error } => {
+        AgentOutcome::Failure { error }
+        | AgentOutcome::InfraPreflight { error }
+        | AgentOutcome::InfraMidSession { error } => {
             warn!(bead = %bead.id, %error, "agent failed — cleaning up worktree");
             git.remove_worktree(&worktree.path).await?;
             git.delete_branch(&worktree.branch).await?;
