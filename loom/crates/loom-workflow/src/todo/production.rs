@@ -22,7 +22,7 @@ use tracing::{debug, info, warn};
 
 use super::context::{TemplateBaseFields, TodoTemplateContext, build_template_context};
 use super::error::TodoError;
-use super::runner::TodoController;
+use super::runner::{TodoController, TodoSession};
 use super::tier::{GitDiffSource, MoleculeState, TierInputs, compute_spec_diff};
 
 pub struct ProductionTodoController {
@@ -110,31 +110,45 @@ impl ProductionTodoController {
 }
 
 impl TodoController for ProductionTodoController {
-    async fn build_spawn_config(&mut self) -> Result<SpawnConfig, TodoError> {
+    async fn build_session(&mut self) -> Result<TodoSession, TodoError> {
         let prompt = self.build_prompt()?;
         let entry = self.manifest.lookup(&self.phase_default)?;
+        let banner = format!("loom todo @ {}", self.label);
+        let scratch = loom_core::scratch::ScratchSession::open(
+            &self.workspace,
+            self.label.as_str(),
+            &prompt,
+            &banner,
+        )
+        .map_err(|source| TodoError::Protocol(loom_core::agent::ProtocolError::Io(source)))?;
         info!(
             label = %self.label,
             workspace = %self.workspace.display(),
             image_ref = %entry.r#ref,
+            scratch_dir = %scratch.path().display(),
             "loom todo: building spawn config",
         );
-        Ok(SpawnConfig {
-            image_ref: entry.r#ref.clone(),
-            image_source: entry.source.clone(),
-            workspace: self.workspace.clone(),
-            env: vec![],
-            initial_prompt: prompt,
-            agent_args: vec![],
-            repin: RePinContent {
-                orientation: String::new(),
-                pinned_context: String::new(),
-                partial_bodies: vec![],
+        let scratch_dir = scratch.path().to_path_buf();
+        Ok(TodoSession {
+            config: SpawnConfig {
+                image_ref: entry.r#ref.clone(),
+                image_source: entry.source.clone(),
+                workspace: self.workspace.clone(),
+                env: vec![],
+                initial_prompt: prompt,
+                agent_args: vec![],
+                repin: RePinContent {
+                    orientation: banner,
+                    pinned_context: String::new(),
+                    partial_bodies: vec![],
+                },
+                scratch_dir,
+                model: None,
+                shutdown_grace: None,
+                handshake_timeout: None,
+                stall_warn_interval: None,
             },
-            model: None,
-            shutdown_grace: None,
-            handshake_timeout: None,
-            stall_warn_interval: None,
+            scratch,
         })
     }
 

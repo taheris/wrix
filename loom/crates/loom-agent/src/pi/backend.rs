@@ -433,6 +433,7 @@ mod tests {
             initial_prompt: "hello pi".to_string(),
             agent_args: vec![],
             repin: sample_repin(),
+            scratch_dir: PathBuf::from("/workspace/.wrapix/loom/scratch/test"),
             model,
             shutdown_grace: None,
             handshake_timeout: None,

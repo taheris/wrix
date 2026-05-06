@@ -26,15 +26,13 @@ use tracing::{debug, info, warn};
 
 use super::parser::ClaudeParser;
 
-/// Subdirectory under the workspace where loom writes claude's runtime
-/// files (`repin.sh`, `claude-settings.json`, `spawn-config.json`). The
-/// wrapper bind-mounts the workspace into the container at `/workspace`,
-/// so the same relative path is visible inside the container — the
-/// `SessionStart` hook reads its inputs from `/workspace/.wrapix/loom/runtime`.
-const RUNTIME_SUBDIR: &str = ".wrapix/loom/runtime";
-
 /// File name for the JSON-serialized [`SpawnConfig`] handed to
-/// `wrapix spawn --spawn-config`.
+/// `wrapix spawn --spawn-config`. Written into the per-session
+/// [`SpawnConfig::scratch_dir`] alongside `repin.sh` and
+/// `claude-settings.json` (which the workflow code wrote earlier via
+/// [`ScratchSession`]).
+///
+/// [`ScratchSession`]: loom_core::scratch::ScratchSession
 const SPAWN_CONFIG_FILE: &str = "spawn-config.json";
 
 /// Default seconds to wait for claude to exit naturally after observing
@@ -95,13 +93,6 @@ impl AgentBackend for ClaudeBackend {
 }
 
 impl ClaudeBackend {
-    /// Runtime directory used for the re-pin files and serialized
-    /// [`SpawnConfig`]. Resolves to a workspace-relative path that the
-    /// wrapper bind-mounts into the container.
-    pub fn runtime_dir(workspace: &Path) -> PathBuf {
-        workspace.join(RUNTIME_SUBDIR)
-    }
-
     /// Run the post-`result` shutdown watchdog: drop the stdin writer (so
     /// claude sees EOF), wait up to `grace` for the child to exit on its
     /// own, then escalate SIGTERM, then SIGKILL.
@@ -143,23 +134,22 @@ impl ClaudeBackend {
     }
 }
 
-/// Write the re-pin files and serialize the [`SpawnConfig`] into the
-/// workspace runtime dir. Returns the path of the written spawn-config.
+/// Serialize the [`SpawnConfig`] into the per-session
+/// [`SpawnConfig::scratch_dir`] alongside the `repin.sh` and
+/// `claude-settings.json` files the workflow already wrote there via
+/// [`ScratchSession`]. Returns the path of the written spawn-config.
 ///
 /// Module-public so tests can verify the side effects independently of
 /// the launcher exec (which would otherwise require the real `wrapix`
 /// wrapper on `PATH`).
+///
+/// [`ScratchSession`]: loom_core::scratch::ScratchSession
 pub(crate) fn prepare_runtime(config: &SpawnConfig) -> Result<PathBuf, ProtocolError> {
-    let runtime_dir = ClaudeBackend::runtime_dir(&config.workspace);
-    config
-        .repin
-        .write_claude_files(&runtime_dir)
-        .map_err(ProtocolError::Io)?;
     let mut config = config.clone();
     if let Ok(token) = std::env::var("CLAUDE_CODE_OAUTH_TOKEN") {
         upsert_env(&mut config.env, "CLAUDE_CODE_OAUTH_TOKEN", &token);
     }
-    write_spawn_config(&runtime_dir, &config)
+    write_spawn_config(&config.scratch_dir, &config)
 }
 
 fn upsert_env(env: &mut Vec<(String, String)>, key: &str, value: &str) {
@@ -295,8 +285,15 @@ mod tests {
     // -- test_claude_repin_files -------------------------------------------
 
     #[test]
-    fn prepare_runtime_writes_repin_files_and_spawn_config() {
+    fn prepare_runtime_writes_spawn_config_into_scratch_dir() {
         let workspace = tempfile::tempdir().expect("tempdir");
+        let scratch = loom_core::scratch::ScratchSession::open(
+            workspace.path(),
+            "wx-test",
+            "hello",
+            "loom run @ wx-test",
+        )
+        .expect("open scratch");
         let cfg = SpawnConfig {
             image_ref: "localhost/wrapix-test:claude".to_string(),
             image_source: PathBuf::from("/nix/store/zzz-wrapix-test-claude.tar"),
@@ -305,6 +302,7 @@ mod tests {
             initial_prompt: "hello".to_string(),
             agent_args: vec!["--print".into()],
             repin: sample_repin(),
+            scratch_dir: scratch.path().to_path_buf(),
             model: None,
             shutdown_grace: None,
             handshake_timeout: None,
@@ -313,18 +311,16 @@ mod tests {
 
         let spawn_config_path = prepare_runtime(&cfg).expect("prepare_runtime");
 
-        let runtime_dir = ClaudeBackend::runtime_dir(workspace.path());
+        // Scratch session pre-populated repin.sh + claude-settings.json.
         assert!(
-            runtime_dir.join("repin.sh").exists(),
-            "repin.sh missing under {}",
-            runtime_dir.display(),
+            scratch.repin_script().exists(),
+            "repin.sh missing in scratch dir",
         );
         assert!(
-            runtime_dir.join("claude-settings.json").exists(),
-            "claude-settings.json missing under {}",
-            runtime_dir.display(),
+            scratch.claude_settings().exists(),
+            "claude-settings.json missing in scratch dir",
         );
-        assert_eq!(spawn_config_path, runtime_dir.join(SPAWN_CONFIG_FILE));
+        assert_eq!(spawn_config_path, scratch.path().join(SPAWN_CONFIG_FILE));
         assert!(spawn_config_path.exists());
 
         // Round-trip the spawn-config file to confirm it carries the input

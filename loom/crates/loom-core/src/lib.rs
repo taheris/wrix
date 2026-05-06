@@ -14,5 +14,6 @@ pub mod identifier;
 pub mod lock;
 pub mod logging;
 pub mod profile_manifest;
+pub mod scratch;
 pub mod state;
 pub mod testing;

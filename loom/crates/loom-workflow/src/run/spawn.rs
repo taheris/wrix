@@ -11,12 +11,14 @@ use super::profile::resolve_profile_image;
 /// [`build_spawn_config_from_manifest`] — callers should never construct a
 /// `SpawnConfig` field-by-field, because doing so silently bypasses the
 /// profile-image resolution and the canonical claude/pi env wiring.
+#[expect(clippy::too_many_arguments, reason = "explicit dispatch surface")]
 fn build_spawn_config(
     image_ref: String,
     image_source: PathBuf,
     workspace: PathBuf,
     initial_prompt: String,
     repin: RePinContent,
+    scratch_dir: PathBuf,
     extra_env: Vec<(String, String)>,
     agent_args: Vec<String>,
 ) -> SpawnConfig {
@@ -28,6 +30,7 @@ fn build_spawn_config(
         initial_prompt,
         agent_args,
         repin,
+        scratch_dir,
         model: None,
         shutdown_grace: None,
         handshake_timeout: None,
@@ -55,6 +58,7 @@ pub fn build_spawn_config_from_manifest(
     workspace: PathBuf,
     initial_prompt: String,
     repin: RePinContent,
+    scratch_dir: PathBuf,
     extra_env: Vec<(String, String)>,
     agent_args: Vec<String>,
 ) -> Result<SpawnConfig, ProfileError> {
@@ -65,6 +69,7 @@ pub fn build_spawn_config_from_manifest(
         workspace,
         initial_prompt,
         repin,
+        scratch_dir,
         extra_env,
         agent_args,
     ))
@@ -137,6 +142,7 @@ mod tests {
             PathBuf::from("/work/wx-1"),
             "rust prompt".into(),
             repin(),
+            dir.path().join("scratch"),
             vec![],
             vec![],
         )
@@ -149,6 +155,7 @@ mod tests {
             PathBuf::from("/work/wx-2"),
             "python prompt".into(),
             repin(),
+            dir.path().join("scratch"),
             vec![],
             vec![],
         )
@@ -185,6 +192,7 @@ mod tests {
             PathBuf::from("/work/wx-1"),
             "p".into(),
             repin(),
+            dir.path().join("scratch"),
             vec![],
             vec![],
         )
@@ -197,6 +205,7 @@ mod tests {
             PathBuf::from("/work/wx-1"),
             "p".into(),
             repin(),
+            dir.path().join("scratch"),
             vec![],
             vec![],
         )
@@ -229,6 +238,7 @@ mod tests {
             PathBuf::from("/repo-root"),
             prompt.clone(),
             repin(),
+            dir.path().join("scratch"),
             vec![],
             vec![],
         )
@@ -241,6 +251,7 @@ mod tests {
             PathBuf::from("/repo-root/.wrapix/worktree/wx-1"),
             prompt,
             repin(),
+            dir.path().join("scratch"),
             vec![],
             vec![],
         )
@@ -274,6 +285,7 @@ mod tests {
             PathBuf::from("/work"),
             "p".into(),
             repin(),
+            dir.path().join("scratch"),
             vec![],
             vec![],
         )

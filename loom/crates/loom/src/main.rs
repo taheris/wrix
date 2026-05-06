@@ -509,26 +509,40 @@ async fn dispatch_for_slot(
     label: &SpecLabel,
 ) -> anyhow::Result<SessionOutcome> {
     use loom_core::agent::RePinContent;
+    use loom_core::scratch::ScratchSession;
     use loom_workflow::run::build_spawn_config_from_manifest;
 
+    let initial_prompt = format!("loom run: bead {}", slot.bead.id);
+    let banner = format!("loom run @ {}", slot.bead.id);
+    // `<key>` is the bead id — parallel run workers on different beads
+    // therefore get independent scratch dirs even when sharing a workspace.
+    let scratch = ScratchSession::open(
+        &slot.worktree.path,
+        slot.bead.id.as_str(),
+        &initial_prompt,
+        &banner,
+    )?;
     let spawn_config = build_spawn_config_from_manifest(
         manifest,
         &slot.bead,
         cli_profile,
         phase_default,
         slot.worktree.path.clone(),
-        format!("loom run: bead {}", slot.bead.id),
+        initial_prompt,
         RePinContent {
-            orientation: String::new(),
+            orientation: banner,
             pinned_context: String::new(),
             partial_bodies: vec![],
         },
+        scratch.path().to_path_buf(),
         vec![],
         vec![],
     )?;
 
     let sink = open_bead_sink(logs_root, label, &slot.bead.id)?;
-    Ok(dispatch(kind, spawn_config, shutdown_grace, Some(sink)).await?)
+    let result = dispatch(kind, spawn_config, shutdown_grace, Some(sink)).await;
+    drop(scratch);
+    Ok(result?)
 }
 
 /// Backend-agnostic dispatcher. The match is the only place in the binary

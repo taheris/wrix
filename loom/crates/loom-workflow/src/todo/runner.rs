@@ -9,8 +9,18 @@
 //! the backend type.
 
 use loom_core::agent::{ProtocolError, SessionOutcome, SpawnConfig};
+use loom_core::scratch::ScratchSession;
 
 use super::error::TodoError;
+
+/// Bundle of the spawn config and the scratch-session guard that owns
+/// `.wrapix/loom/scratch/<label>/` for the duration of the dispatch. The
+/// runner drops the guard after the agent returns so cleanup runs on
+/// every exit path (success, failure, panic).
+pub struct TodoSession {
+    pub config: SpawnConfig,
+    pub scratch: ScratchSession,
+}
 
 /// Side-effect surface the [`run`] driver depends on.
 ///
@@ -20,11 +30,13 @@ use super::error::TodoError;
 /// (the binary's `dispatch` function owns that) while letting tests substitute
 /// fakes for the bd/state/git surface.
 pub trait TodoController: Send {
-    /// Compute the per-bead [`SpawnConfig`] for the upcoming todo session —
-    /// resolve the tier decision, render the prompt, build the env allowlist.
-    fn build_spawn_config(
+    /// Open the per-session scratch dir and compute the spawn config for
+    /// the upcoming todo session — resolve the tier decision, render the
+    /// prompt, build the env allowlist, and pin the scratch dir into the
+    /// returned [`TodoSession`].
+    fn build_session(
         &mut self,
-    ) -> impl std::future::Future<Output = Result<SpawnConfig, TodoError>> + Send;
+    ) -> impl std::future::Future<Output = Result<TodoSession, TodoError>> + Send;
 
     /// Persist the agent outcome — write per-spec cursors, commit the spec
     /// file, etc. Called once after the agent session completes.
@@ -56,8 +68,10 @@ where
     S: FnOnce(SpawnConfig) -> F,
     F: std::future::Future<Output = Result<SessionOutcome, ProtocolError>>,
 {
-    let cfg = controller.build_spawn_config().await?;
-    let outcome = spawn(cfg).await?;
+    let TodoSession { config, scratch } = controller.build_session().await?;
+    let result = spawn(config).await;
+    drop(scratch);
+    let outcome = result?;
     controller.record_outcome(&outcome).await?;
     Ok(TodoSummary {
         exit_code: outcome.exit_code,
@@ -79,6 +93,7 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     struct FakeController {
+        workspace: tempfile::TempDir,
         recorded: AtomicU32,
         last_exit: std::sync::Mutex<Option<i32>>,
     }
@@ -86,6 +101,7 @@ mod tests {
     impl FakeController {
         fn new() -> Self {
             Self {
+                workspace: tempfile::tempdir().unwrap(),
                 recorded: AtomicU32::new(0),
                 last_exit: std::sync::Mutex::new(None),
             }
@@ -93,23 +109,35 @@ mod tests {
     }
 
     impl TodoController for FakeController {
-        async fn build_spawn_config(&mut self) -> Result<SpawnConfig, TodoError> {
-            Ok(SpawnConfig {
-                image_ref: "wrapix-base:latest".into(),
-                image_source: PathBuf::from("/nix/store/zzz-wrapix-base.tar"),
-                workspace: PathBuf::from("/workspace"),
-                env: vec![],
-                initial_prompt: "todo prompt".into(),
-                agent_args: vec![],
-                repin: RePinContent {
-                    orientation: String::new(),
-                    pinned_context: String::new(),
-                    partial_bodies: vec![],
+        async fn build_session(&mut self) -> Result<TodoSession, TodoError> {
+            let scratch = ScratchSession::open(
+                self.workspace.path(),
+                "test-spec",
+                "todo prompt",
+                "loom todo @ test-spec",
+            )
+            .unwrap();
+            let scratch_dir = scratch.path().to_path_buf();
+            Ok(TodoSession {
+                config: SpawnConfig {
+                    image_ref: "wrapix-base:latest".into(),
+                    image_source: PathBuf::from("/nix/store/zzz-wrapix-base.tar"),
+                    workspace: self.workspace.path().to_path_buf(),
+                    env: vec![],
+                    initial_prompt: "todo prompt".into(),
+                    agent_args: vec![],
+                    repin: RePinContent {
+                        orientation: String::new(),
+                        pinned_context: String::new(),
+                        partial_bodies: vec![],
+                    },
+                    scratch_dir,
+                    model: None,
+                    shutdown_grace: None,
+                    handshake_timeout: None,
+                    stall_warn_interval: None,
                 },
-                model: None,
-                shutdown_grace: None,
-                handshake_timeout: None,
-                stall_warn_interval: None,
+                scratch,
             })
         }
 

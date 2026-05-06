@@ -108,7 +108,8 @@ async fn build_spawn_config_resolves_manifest_image_and_renders_new_template() {
         git,
         None,
     );
-    let cfg = ctrl.build_spawn_config().await.expect("build cfg");
+    let session = ctrl.build_session().await.expect("build cfg");
+    let cfg = &session.config;
     assert!(
         cfg.initial_prompt.contains("Task Decomposition"),
         "TodoNewContext renders todo_new.md (header marker missing): {}",
@@ -137,7 +138,8 @@ async fn build_spawn_config_uses_update_template_when_molecule_exists() {
         git,
         None,
     );
-    let cfg = ctrl.build_spawn_config().await.expect("build cfg");
+    let session = ctrl.build_session().await.expect("build cfg");
+    let cfg = &session.config;
     assert!(
         cfg.initial_prompt.contains("wx-mol"),
         "molecule id must thread into update template: {}",
@@ -161,10 +163,10 @@ async fn build_spawn_config_surfaces_unknown_profile_as_profile_error() {
         git,
         None,
     );
-    let err = ctrl
-        .build_spawn_config()
-        .await
-        .expect_err("missing profile");
+    let err = match ctrl.build_session().await {
+        Ok(_) => panic!("expected Profile error, got Ok"),
+        Err(e) => e,
+    };
     assert!(
         matches!(err, TodoError::Profile(_)),
         "expected Profile, got {err:?}",
@@ -200,7 +202,8 @@ async fn build_spawn_config_tier_1_renders_diff_from_base_commit() {
         git,
         None,
     );
-    let cfg = ctrl.build_spawn_config().await.expect("build cfg");
+    let session = ctrl.build_session().await.expect("build cfg");
+    let cfg = &session.config;
     assert!(
         cfg.initial_prompt.contains("=== specs/alpha.md ==="),
         "tier-1 prompt must carry the per-spec diff header: {}",

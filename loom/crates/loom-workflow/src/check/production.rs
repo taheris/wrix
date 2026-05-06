@@ -134,6 +134,14 @@ where
     async fn run_review(&mut self) -> Result<ReviewOutcome, CheckError> {
         let prompt = self.build_review_prompt().await?;
         let entry = self.manifest.lookup(&self.phase_default)?;
+        let banner = format!("loom check @ {}", self.label);
+        let scratch = loom_core::scratch::ScratchSession::open(
+            &self.workspace,
+            self.label.as_str(),
+            &prompt,
+            &banner,
+        )
+        .map_err(|source| CheckError::Protocol(ProtocolError::Io(source)))?;
         let spawn_config = SpawnConfig {
             image_ref: entry.r#ref.clone(),
             image_source: entry.source.clone(),
@@ -142,10 +150,11 @@ where
             initial_prompt: prompt,
             agent_args: vec![],
             repin: RePinContent {
-                orientation: String::new(),
+                orientation: banner,
                 pinned_context: String::new(),
                 partial_bodies: vec![],
             },
+            scratch_dir: scratch.path().to_path_buf(),
             model: None,
             shutdown_grace: None,
             handshake_timeout: None,
@@ -156,7 +165,9 @@ where
             image_ref = %spawn_config.image_ref,
             "loom check: dispatching reviewer agent",
         );
-        let outcome = (self.spawn)(spawn_config).await?;
+        let outcome = (self.spawn)(spawn_config).await;
+        drop(scratch);
+        let outcome = outcome?;
         if outcome.exit_code == 0 {
             Ok(ReviewOutcome::Complete)
         } else {

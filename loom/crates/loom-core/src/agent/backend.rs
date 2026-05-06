@@ -29,6 +29,16 @@ pub struct SpawnConfig {
     pub initial_prompt: String,
     pub agent_args: Vec<String>,
     pub repin: RePinContent,
+    /// Pre-populated `.wrapix/loom/scratch/<key>/` for this session. Owned
+    /// by the workflow code through a [`ScratchSession`] guard whose
+    /// lifetime spans the spawn; backends read `repin.sh` and
+    /// `claude-settings.json` from here and write their own
+    /// `spawn-config.json` alongside. Spec: `loom-harness.md` § Compaction
+    /// Recovery.
+    ///
+    /// [`ScratchSession`]: crate::scratch::ScratchSession
+    #[serde(default)]
+    pub scratch_dir: PathBuf,
     /// Optional post-spawn model override consumed by the host-side backend
     /// (currently only [`PiBackend`](crate::agent::AgentBackend) — claude
     /// receives its model via CLI flags). When present, the pi backend sends
@@ -189,6 +199,7 @@ mod tests {
                 pinned_context: "pc".into(),
                 partial_bodies: vec![],
             },
+            scratch_dir: PathBuf::from("/workspace/.wrapix/loom/scratch/test"),
             model,
             shutdown_grace: None,
             handshake_timeout: None,

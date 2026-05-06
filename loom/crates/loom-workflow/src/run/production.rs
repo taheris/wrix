@@ -125,18 +125,28 @@ where
         bead: &Bead,
         previous_failure: Option<String>,
     ) -> Result<AgentOutcome, RunError> {
+        let initial_prompt = format!("loom run: bead {}", bead.id);
+        let banner = format!("loom run @ {}", bead.id);
+        let scratch = loom_core::scratch::ScratchSession::open(
+            &self.workspace,
+            bead.id.as_str(),
+            &initial_prompt,
+            &banner,
+        )
+        .map_err(|source| RunError::Protocol(ProtocolError::Io(source)))?;
         let spawn_config = build_spawn_config_from_manifest(
             &self.manifest,
             bead,
             self.cli_profile.as_ref(),
             &self.phase_default,
             self.workspace.clone(),
-            format!("loom run: bead {}", bead.id),
+            initial_prompt,
             RePinContent {
-                orientation: String::new(),
+                orientation: banner,
                 pinned_context: String::new(),
                 partial_bodies: vec![],
             },
+            scratch.path().to_path_buf(),
             vec![],
             vec![],
         )?;
@@ -146,7 +156,11 @@ where
             retry = previous_failure.is_some(),
             "loom run: dispatching agent",
         );
-        let outcome = (self.spawn)(spawn_config, bead.id.clone()).await?;
+        let outcome = (self.spawn)(spawn_config, bead.id.clone()).await;
+        // Drop happens here at end of scope — scratch dir cleaned up on
+        // every exit path (success, failure, panic).
+        drop(scratch);
+        let outcome = outcome?;
         if outcome.exit_code == 0 {
             Ok(AgentOutcome::Success)
         } else {

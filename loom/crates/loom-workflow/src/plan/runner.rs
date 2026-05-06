@@ -8,6 +8,7 @@ use loom_core::config::{LoomConfig, Phase};
 use loom_core::identifier::{ProfileName, SpecLabel};
 use loom_core::lock::LockManager;
 use loom_core::profile_manifest::{ImageEntry, ProfileImageManifest};
+use loom_core::scratch::ScratchSession;
 use loom_core::state::StateDb;
 
 use super::args::PlanMode;
@@ -120,6 +121,10 @@ pub fn run_with_timeout(
     // crash) does not leave current_spec pointing at a stale prior spec.
     db.set_current_spec(&label)?;
 
+    let banner = format!("loom plan @ {}", label);
+    let scratch = ScratchSession::open(workspace, label.as_str(), &prompt_body, &banner)
+        .map_err(|source| PlanError::Spawn { source })?;
+
     let argv = build_wrapix_argv(workspace, &prompt_body);
     let bin: PathBuf = opts.wrapix_bin.unwrap_or_else(|| PathBuf::from(WRAPIX_BIN));
     info!(
@@ -128,6 +133,7 @@ pub fn run_with_timeout(
         image_ref = %image.r#ref,
         image_source = %image.source.display(),
         wrapix_bin = %bin.display(),
+        scratch_dir = %scratch.path().display(),
         "loom plan: shelling out to interactive wrapix run",
     );
     let status = Command::new(&bin)
@@ -136,6 +142,7 @@ pub fn run_with_timeout(
         .env(WRAPIX_DEFAULT_IMAGE_SOURCE, &image.source)
         .status()
         .map_err(|source| PlanError::Spawn { source })?;
+    drop(scratch);
     if !status.success() {
         return Err(PlanError::WrapixExit {
             status: status.to_string(),

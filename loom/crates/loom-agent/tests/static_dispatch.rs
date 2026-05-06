@@ -76,6 +76,7 @@ fn sample_config() -> SpawnConfig {
             pinned_context: String::new(),
             partial_bodies: Vec::new(),
         },
+        scratch_dir: PathBuf::new(),
         model: None,
         shutdown_grace: None,
         handshake_timeout: None,
