@@ -1488,24 +1488,28 @@ test_check_auto_iterate() {
 }
 
 #-----------------------------------------------------------------------------
-# test_msg_list — clarify list filters to `ralph:clarify`-labelled beads,
-# drops the SPEC column under a spec filter, and falls back to bead title when
-# the `## Options — <summary>` header is missing.
+# test_msg_list — message list filters to `loom:clarify`- and `loom:blocked`-
+# labelled beads, drops the SPEC column under a spec filter, and falls back to
+# bead title when the `## Options — <summary>` header is missing.
 #-----------------------------------------------------------------------------
 test_msg_list() {
     msg_cargo_test msg::list::tests::filter_keeps_only_clarify_labelled_beads
+    msg_cargo_test msg::list::tests::filter_keeps_blocked_alongside_clarify
     msg_cargo_test msg::list::tests::filter_with_spec_label_keeps_only_matching
     msg_cargo_test msg::list::tests::rows_drop_spec_column_under_filter
     msg_cargo_test msg::list::tests::rows_carry_spec_column_when_unfiltered
     msg_cargo_test msg::list::tests::summary_prefers_options_header_over_title
     msg_cargo_test msg::list::tests::summary_falls_back_to_title_when_header_absent
+    msg_cargo_test msg::list::tests::kind_of_prefers_blocked_when_both_labels_present
+    msg_cargo_test msg::list::tests::msg_kind_label_and_tag_round_trip
     msg_cargo_test msg::context::tests::rendered_msg_template_lists_each_clarify
 }
 
 #-----------------------------------------------------------------------------
 # test_msg_fast_reply — `-a <choice>` resolves a pure-integer to the matching
-# `### Option <N>` per the Options Format Contract; a missing index errors
-# with the available indices; non-integer choice is stored verbatim.
+# `### Option <N>` per the Options Format Contract for clarify beads; a
+# missing index errors with the available indices; non-integer choice is
+# stored verbatim. Blocked beads always store verbatim (free-form).
 #-----------------------------------------------------------------------------
 test_msg_fast_reply() {
     msg_cargo_test msg::options::tests::options_em_dash_summary_and_three_options
@@ -1515,6 +1519,8 @@ test_msg_fast_reply() {
     msg_cargo_test msg::reply::tests::verbatim_string_passes_through_unchanged
     msg_cargo_test msg::reply::tests::integer_with_no_options_section_errors
     msg_cargo_test msg::reply::tests::empty_title_or_body_renders_partial_note
+    msg_cargo_test msg::reply::tests::blocked_integer_choice_is_always_verbatim
+    msg_cargo_test msg::reply::tests::blocked_free_form_passes_through_unchanged
 }
 
 #-----------------------------------------------------------------------------

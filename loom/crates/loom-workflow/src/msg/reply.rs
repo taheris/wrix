@@ -1,6 +1,7 @@
 use loom_core::identifier::BeadId;
 
 use super::error::MsgError;
+use super::list::MsgKind;
 use super::options::{OptionsParse, parse_options};
 
 /// What `loom msg -a <choice>` should write to the bead. `Option` is the
@@ -14,16 +15,22 @@ pub enum FastReply {
 
 /// Compose the bead note for a `-a <choice>` fast-reply.
 ///
-/// - Pure-integer `choice` → look up `### Option <choice>` in the parsed
-///   options. Match → `FastReply::Option`; miss → [`MsgError::OptionMissing`]
-///   carrying the available indices for the user-facing error message.
-/// - Anything else → `FastReply::Verbatim` (stored unchanged in notes).
+/// - `MsgKind::Clarify`:
+///     - Pure-integer `choice` → look up `### Option <choice>` in the parsed
+///       options. Match → `FastReply::Option`; miss → [`MsgError::OptionMissing`]
+///       carrying the available indices for the user-facing error message.
+///     - Anything else → `FastReply::Verbatim`.
+/// - `MsgKind::Blocked` → always `FastReply::Verbatim` (free-form per
+///   `specs/loom-harness.md` lines 1204-1205).
 pub fn build_fast_reply(
     bead: &BeadId,
     choice: &str,
     description: &str,
+    kind: MsgKind,
 ) -> Result<FastReply, MsgError> {
-    if let Ok(n) = choice.parse::<u32>() {
+    if matches!(kind, MsgKind::Clarify)
+        && let Ok(n) = choice.parse::<u32>()
+    {
         let parsed = parse_options(description);
         return resolve_option(bead, n, &parsed);
     }
@@ -85,7 +92,7 @@ Accept. Cost: debt.
     #[test]
     fn integer_choice_resolves_to_option_note() -> Result<(), MsgError> {
         let bead = BeadId::new("wx-x").expect("valid bead id");
-        let reply = build_fast_reply(&bead, "1", desc())?;
+        let reply = build_fast_reply(&bead, "1", desc(), MsgKind::Clarify)?;
         match reply {
             FastReply::Option { n, note } => {
                 assert_eq!(n, 1);
@@ -101,7 +108,8 @@ Accept. Cost: debt.
     #[test]
     fn missing_option_index_errors_with_available_list() {
         let bead = BeadId::new("wx-x").expect("valid bead id");
-        let err = build_fast_reply(&bead, "9", desc()).expect_err("expected error");
+        let err =
+            build_fast_reply(&bead, "9", desc(), MsgKind::Clarify).expect_err("expected error");
         match err {
             MsgError::OptionMissing {
                 bead,
@@ -119,7 +127,7 @@ Accept. Cost: debt.
     #[test]
     fn verbatim_string_passes_through_unchanged() -> Result<(), MsgError> {
         let bead = BeadId::new("wx-x").expect("valid bead id");
-        let reply = build_fast_reply(&bead, "free-form answer", desc())?;
+        let reply = build_fast_reply(&bead, "free-form answer", desc(), MsgKind::Clarify)?;
         match reply {
             FastReply::Verbatim { note } => assert_eq!(note, "free-form answer"),
             other => panic!("expected Verbatim, got {other:?}"),
@@ -130,8 +138,8 @@ Accept. Cost: debt.
     #[test]
     fn integer_with_no_options_section_errors() {
         let bead = BeadId::new("wx-x").expect("valid bead id");
-        let err =
-            build_fast_reply(&bead, "1", "no options at all").expect_err("expected missing option");
+        let err = build_fast_reply(&bead, "1", "no options at all", MsgKind::Clarify)
+            .expect_err("expected missing option");
         assert!(matches!(err, MsgError::OptionMissing { .. }));
     }
 
@@ -139,13 +147,40 @@ Accept. Cost: debt.
     fn empty_title_or_body_renders_partial_note() -> Result<(), MsgError> {
         let bead = BeadId::new("wx-x").expect("valid bead id");
         let no_title = "## Options\n\n### Option 1\nonly body\n";
-        let reply = build_fast_reply(&bead, "1", no_title)?;
+        let reply = build_fast_reply(&bead, "1", no_title, MsgKind::Clarify)?;
         match reply {
             FastReply::Option { note, .. } => {
                 assert!(note.contains("Chose option 1"));
                 assert!(note.contains("only body"));
             }
             other => panic!("expected Option, got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn blocked_integer_choice_is_always_verbatim() -> Result<(), MsgError> {
+        let bead = BeadId::new("wx-x").expect("valid bead id");
+        let reply = build_fast_reply(&bead, "1", desc(), MsgKind::Blocked)?;
+        match reply {
+            FastReply::Verbatim { note } => assert_eq!(note, "1"),
+            other => panic!("expected Verbatim, got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn blocked_free_form_passes_through_unchanged() -> Result<(), MsgError> {
+        let bead = BeadId::new("wx-x").expect("valid bead id");
+        let reply = build_fast_reply(
+            &bead,
+            "use the staging endpoint",
+            "no options here",
+            MsgKind::Blocked,
+        )?;
+        match reply {
+            FastReply::Verbatim { note } => assert_eq!(note, "use the staging endpoint"),
+            other => panic!("expected Verbatim, got {other:?}"),
         }
         Ok(())
     }

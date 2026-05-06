@@ -26,8 +26,8 @@ use loom_core::profile_manifest::ProfileImageManifest;
 use loom_core::state::StateDb;
 use loom_workflow::check::{IterationCap, ProductionCheckController, check_loop as run_check_loop};
 use loom_workflow::msg::{
-    DISMISS_NOTE, FastReply, build_fast_reply, build_rows, filter_clarifies, resolve_target,
-    spec_label_of,
+    DISMISS_NOTE, FastReply, build_fast_reply, build_rows, filter_msg_beads, kind_of,
+    resolve_target, spec_label_of,
 };
 use loom_workflow::run::{
     Parallelism, ProductionAgentLoopController, RetryPolicy, RunMode, SessionResult, run_loop,
@@ -137,21 +137,22 @@ enum Command {
         #[arg(long, short = 's', value_name = "LABEL")]
         spec: Option<String>,
     },
-    /// Resolve outstanding clarify beads.
+    /// Resolve outstanding `loom:clarify` and `loom:blocked` beads.
     Msg {
         /// Filter to a specific spec label.
         #[arg(long, short = 's', value_name = "LABEL")]
         spec: Option<String>,
-        /// Select clarify by 1-based index in the printed list.
+        /// Select bead by 1-based index in the printed list.
         #[arg(short = 'n', value_name = "N")]
         index: Option<u32>,
-        /// Select clarify by bead id.
+        /// Select bead by id.
         #[arg(short = 'i', value_name = "ID")]
         id: Option<String>,
-        /// Fast-reply: integer chooses option N; anything else stored verbatim.
+        /// Fast-reply: integer chooses option N for clarify beads; anything
+        /// else (and any choice for blocked beads) is stored verbatim.
         #[arg(short = 'a', value_name = "CHOICE")]
         answer: Option<String>,
-        /// Dismiss the clarify (write canonical note + remove the label).
+        /// Dismiss the bead (write canonical note + remove the loom:* label).
         #[arg(short = 'd')]
         dismiss: bool,
     },
@@ -786,25 +787,36 @@ fn run_msg_inner(
         let bd = BdClient::new();
         bd.list(ListOpts {
             status: None,
-            label: Some("loom:clarify".to_string()),
+            label: None,
+            label_any: vec!["loom:clarify".to_string(), "loom:blocked".to_string()],
         })
         .await
     })?;
-    let kept = filter_clarifies(&beads, spec_filter.as_ref());
+    let kept = filter_msg_beads(&beads, spec_filter.as_ref());
 
     if answer.is_none() && !dismiss {
         let rows = build_rows(&kept, spec_filter.as_ref());
         if rows.is_empty() {
-            println!("(no outstanding clarifies)");
+            println!("(no outstanding clarify or blocked beads)");
             return Ok(());
         }
         for row in rows {
             match row.spec {
                 Some(s) => println!(
-                    "{:>3}. {} [spec:{}] {}",
-                    row.index, row.bead_id, s, row.summary
+                    "{:>3}. {} [{}] [spec:{}] {}",
+                    row.index,
+                    row.bead_id,
+                    row.kind.tag(),
+                    s,
+                    row.summary
                 ),
-                None => println!("{:>3}. {} {}", row.index, row.bead_id, row.summary),
+                None => println!(
+                    "{:>3}. {} [{}] {}",
+                    row.index,
+                    row.bead_id,
+                    row.kind.tag(),
+                    row.summary
+                ),
             }
         }
         return Ok(());
@@ -816,9 +828,13 @@ fn run_msg_inner(
         .find(|b| b.id == target)
         .copied()
         .ok_or_else(|| anyhow::anyhow!("bead {target} not in filtered list"))?;
+    let kind = kind_of(bead).ok_or_else(|| {
+        anyhow::anyhow!("bead {target} carries neither loom:clarify nor loom:blocked")
+    })?;
+    let label_to_remove = kind.label().to_string();
 
     if let Some(choice) = answer {
-        let reply = build_fast_reply(&target, &choice, &bead.description)?;
+        let reply = build_fast_reply(&target, &choice, &bead.description, kind)?;
         let note = match &reply {
             FastReply::Option { note, .. } => note.clone(),
             FastReply::Verbatim { note } => note.clone(),
@@ -830,7 +846,7 @@ fn run_msg_inner(
             bd.update(
                 &id_clone,
                 UpdateOpts {
-                    remove_labels: vec!["loom:clarify".to_string()],
+                    remove_labels: vec![label_to_remove],
                     ..UpdateOpts::default()
                 },
             )
@@ -851,7 +867,7 @@ fn run_msg_inner(
             bd.update(
                 &id_clone,
                 UpdateOpts {
-                    remove_labels: vec!["loom:clarify".to_string()],
+                    remove_labels: vec![label_to_remove],
                     ..UpdateOpts::default()
                 },
             )

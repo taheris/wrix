@@ -157,6 +157,9 @@ impl<R: CommandRunner> BdClient<R> {
         if let Some(label) = opts.label {
             args.push(format!("--label={label}").into());
         }
+        for label in opts.label_any {
+            args.push(format!("--label-any={label}").into());
+        }
         let out = self.invoke(args).await?;
         // `bd list --json` returns `null` when the result set is empty.
         if out.stdout.iter().all(u8::is_ascii_whitespace) {
@@ -281,12 +284,16 @@ pub struct UpdateOpts {
     pub notes: Option<String>,
 }
 
-/// Filters accepted by `bd list`. Both fields are optional; passing
-/// neither lists every open bead (matching the CLI default).
+/// Filters accepted by `bd list`. All fields are optional; passing none
+/// lists every open bead (matching the CLI default). `label` (AND
+/// semantics) and `label_any` (OR semantics) compose as `bd` does.
 #[derive(Debug, Clone, Default)]
 pub struct ListOpts {
     pub status: Option<String>,
     pub label: Option<String>,
+    /// `bd list --label-any=<L>` — beads carrying at least one of these
+    /// labels. Forwarded as a repeated flag so multiple labels OR together.
+    pub label_any: Vec<String>,
 }
 
 /// Filters accepted by `bd ready`. `limit` caps the result count
@@ -414,6 +421,7 @@ mod tests {
             .list(ListOpts {
                 status: Some("open".into()),
                 label: Some("spec:loom-harness".into()),
+                label_any: Vec::new(),
             })
             .await?;
         let argv = argv_of(&client.runner, 0);
@@ -424,6 +432,30 @@ mod tests {
                 "--json".into(),
                 "--status=open".into(),
                 "--label=spec:loom-harness".into(),
+            ]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_label_any_forwards_repeated_flag() -> Result<()> {
+        let runner = CapturingRunner::new([ok(b"[]")]);
+        let client = BdClient::with_runner(runner);
+        client
+            .list(ListOpts {
+                status: None,
+                label: None,
+                label_any: vec!["loom:clarify".into(), "loom:blocked".into()],
+            })
+            .await?;
+        let argv = argv_of(&client.runner, 0);
+        assert_eq!(
+            argv,
+            vec![
+                "list".to_string(),
+                "--json".into(),
+                "--label-any=loom:clarify".into(),
+                "--label-any=loom:blocked".into(),
             ]
         );
         Ok(())

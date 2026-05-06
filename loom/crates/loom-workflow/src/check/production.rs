@@ -107,6 +107,7 @@ where
             .list(ListOpts {
                 status: None,
                 label: Some(self.spec_label_filter()),
+                ..ListOpts::default()
             })
             .await?;
         let active_mol = self.state.active_molecule(&self.label)?;
@@ -183,6 +184,7 @@ where
             .list(ListOpts {
                 status: None,
                 label: Some(self.spec_label_filter()),
+                ..ListOpts::default()
             })
             .await?;
         Ok(beads)

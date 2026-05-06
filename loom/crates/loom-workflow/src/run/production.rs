@@ -249,6 +249,7 @@ pub async fn list_open_for_spec(bd: &BdClient, label: &SpecLabel) -> Result<Vec<
         .list(ListOpts {
             status: Some("open".to_string()),
             label: Some(format!("spec:{}", label.as_str())),
+            ..ListOpts::default()
         })
         .await?;
     Ok(beads)

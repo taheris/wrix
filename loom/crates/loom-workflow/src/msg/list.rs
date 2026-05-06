@@ -3,10 +3,38 @@ use loom_core::identifier::SpecLabel;
 
 use super::options::parse_options;
 
-/// One row of the outstanding-clarify list. Built from a [`Bead`] plus
+/// Which `loom:*` flow a bead belongs to in the `loom msg` queue. Drives
+/// the printed kind tag and the fast-reply mode (`Clarify` allows option
+/// lookup; `Blocked` is always free-form per
+/// `specs/loom-harness.md` lines 1202-1206).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MsgKind {
+    Clarify,
+    Blocked,
+}
+
+impl MsgKind {
+    /// Label removed by `-a` / `-d` after the note is written.
+    pub fn label(self) -> &'static str {
+        match self {
+            MsgKind::Clarify => "loom:clarify",
+            MsgKind::Blocked => "loom:blocked",
+        }
+    }
+
+    /// Short tag printed alongside each row.
+    pub fn tag(self) -> &'static str {
+        match self {
+            MsgKind::Clarify => "clarify",
+            MsgKind::Blocked => "blocked",
+        }
+    }
+}
+
+/// One row of the outstanding-message list. Built from a [`Bead`] plus
 /// (optionally) a spec filter that drops the SPEC column.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ClarifyRow {
+pub struct MsgRow {
     /// 1-based sequential index, ordered by bead creation. Stable only
     /// until the visible set changes.
     pub index: u32,
@@ -17,16 +45,30 @@ pub struct ClarifyRow {
     /// Summary from `## Options — <summary>`; falls back to the bead title
     /// when the header is absent or empty.
     pub summary: String,
+    pub kind: MsgKind,
 }
 
-/// Filter beads to those still labelled `loom:clarify`. The spec filter,
-/// when supplied, restricts the result to beads carrying `spec:<label>`.
-/// Order is preserved from the input slice (the caller sorts by creation
-/// time before calling).
-pub fn filter_clarifies<'a>(beads: &'a [Bead], spec: Option<&SpecLabel>) -> Vec<&'a Bead> {
+/// Classify a bead's `loom:*` membership. `loom:blocked` wins when both
+/// labels are set so the operator sees the more severe state; in practice
+/// the two labels are mutually exclusive (per the verdict gate).
+pub fn kind_of(bead: &Bead) -> Option<MsgKind> {
+    if bead.labels.iter().any(Label::is_blocked) {
+        Some(MsgKind::Blocked)
+    } else if bead.labels.iter().any(Label::is_clarify) {
+        Some(MsgKind::Clarify)
+    } else {
+        None
+    }
+}
+
+/// Filter beads to those carrying `loom:clarify` or `loom:blocked`. The
+/// spec filter, when supplied, restricts the result to beads carrying
+/// `spec:<label>`. Order is preserved from the input slice (the caller
+/// sorts by creation time before calling).
+pub fn filter_msg_beads<'a>(beads: &'a [Bead], spec: Option<&SpecLabel>) -> Vec<&'a Bead> {
     beads
         .iter()
-        .filter(|b| b.labels.iter().any(Label::is_clarify))
+        .filter(|b| kind_of(b).is_some())
         .filter(|b| match spec {
             None => true,
             Some(label) => b
@@ -37,10 +79,10 @@ pub fn filter_clarifies<'a>(beads: &'a [Bead], spec: Option<&SpecLabel>) -> Vec<
         .collect()
 }
 
-/// Build the rendered [`ClarifyRow`] table. `spec_filter` controls whether
+/// Build the rendered [`MsgRow`] table. `spec_filter` controls whether
 /// the SPEC column is populated — `None` keeps it (cross-spec list) and
 /// `Some(_)` drops it (the column would carry the same value for every row).
-pub fn build_rows(beads: &[&Bead], spec_filter: Option<&SpecLabel>) -> Vec<ClarifyRow> {
+pub fn build_rows(beads: &[&Bead], spec_filter: Option<&SpecLabel>) -> Vec<MsgRow> {
     beads
         .iter()
         .enumerate()
@@ -60,18 +102,20 @@ pub fn build_rows(beads: &[&Bead], spec_filter: Option<&SpecLabel>) -> Vec<Clari
                         .unwrap_or_else(|| "—".to_string()),
                 )
             };
-            ClarifyRow {
+            let kind = kind_of(bead).unwrap_or(MsgKind::Clarify);
+            MsgRow {
                 index: u32::try_from(i + 1).unwrap_or(u32::MAX),
                 bead_id: bead.id.to_string(),
                 spec,
                 summary,
+                kind,
             }
         })
         .collect()
 }
 
 /// Extract the `spec:<label>` value from a bead's labels. `loom msg`'s
-/// resume hint reads this on every successful clarify clear.
+/// resume hint reads this on every successful clear.
 pub fn spec_label_of(bead: &Bead) -> Option<SpecLabel> {
     bead.labels.iter().find_map(Label::spec_label)
 }
@@ -111,10 +155,34 @@ mod tests {
                 &["spec:profiles", "loom:clarify"],
             ),
         ];
-        let kept = filter_clarifies(&beads, None);
+        let kept = filter_msg_beads(&beads, None);
         assert_eq!(kept.len(), 2);
         assert_eq!(kept[0].id, BeadId::new("wx-2").expect("valid"));
         assert_eq!(kept[1].id, BeadId::new("wx-3").expect("valid"));
+    }
+
+    #[test]
+    fn filter_keeps_blocked_alongside_clarify() {
+        let beads = vec![
+            bead("wx-1", "no msg", "", &["spec:loom-harness"]),
+            bead(
+                "wx-2",
+                "clarify",
+                "",
+                &["spec:loom-harness", "loom:clarify"],
+            ),
+            bead(
+                "wx-3",
+                "blocked",
+                "",
+                &["spec:loom-harness", "loom:blocked"],
+            ),
+        ];
+        let kept = filter_msg_beads(&beads, None);
+        assert_eq!(kept.len(), 2);
+        let rows = build_rows(&kept, None);
+        assert_eq!(rows[0].kind, MsgKind::Clarify);
+        assert_eq!(rows[1].kind, MsgKind::Blocked);
     }
 
     #[test]
@@ -122,9 +190,10 @@ mod tests {
         let beads = vec![
             bead("wx-2", "loom", "", &["spec:loom-harness", "loom:clarify"]),
             bead("wx-3", "profiles", "", &["spec:profiles", "loom:clarify"]),
+            bead("wx-4", "blocked", "", &["spec:profiles", "loom:blocked"]),
         ];
         let label = SpecLabel::new("loom-harness");
-        let kept = filter_clarifies(&beads, Some(&label));
+        let kept = filter_msg_beads(&beads, Some(&label));
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].id, BeadId::new("wx-2").expect("valid"));
     }
@@ -138,7 +207,7 @@ mod tests {
             &["spec:loom-harness", "loom:clarify"],
         )];
         let label = SpecLabel::new("loom-harness");
-        let kept = filter_clarifies(&beads, Some(&label));
+        let kept = filter_msg_beads(&beads, Some(&label));
         let rows = build_rows(&kept, Some(&label));
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].index, 1);
@@ -153,7 +222,7 @@ mod tests {
             "",
             &["spec:loom-harness", "loom:clarify"],
         )];
-        let kept = filter_clarifies(&beads, None);
+        let kept = filter_msg_beads(&beads, None);
         let rows = build_rows(&kept, None);
         assert_eq!(rows[0].spec.as_deref(), Some("loom-harness"));
     }
@@ -162,7 +231,7 @@ mod tests {
     fn summary_prefers_options_header_over_title() {
         let desc = "## Options — chosen summary\n\n### Option 1 — t\nbody\n";
         let beads = vec![bead("wx-2", "fallback title", desc, &["loom:clarify"])];
-        let kept = filter_clarifies(&beads, None);
+        let kept = filter_msg_beads(&beads, None);
         let rows = build_rows(&kept, None);
         assert_eq!(rows[0].summary, "chosen summary");
     }
@@ -175,7 +244,7 @@ mod tests {
             "no options here",
             &["loom:clarify"],
         )];
-        let kept = filter_clarifies(&beads, None);
+        let kept = filter_msg_beads(&beads, None);
         let rows = build_rows(&kept, None);
         assert_eq!(rows[0].summary, "the title");
     }
@@ -183,8 +252,22 @@ mod tests {
     #[test]
     fn missing_spec_label_renders_em_dash_in_cross_spec_view() {
         let beads = vec![bead("wx-2", "t", "", &["loom:clarify"])];
-        let kept = filter_clarifies(&beads, None);
+        let kept = filter_msg_beads(&beads, None);
         let rows = build_rows(&kept, None);
         assert_eq!(rows[0].spec.as_deref(), Some("—"));
+    }
+
+    #[test]
+    fn kind_of_prefers_blocked_when_both_labels_present() {
+        let b = bead("wx-2", "t", "", &["loom:clarify", "loom:blocked"]);
+        assert_eq!(kind_of(&b), Some(MsgKind::Blocked));
+    }
+
+    #[test]
+    fn msg_kind_label_and_tag_round_trip() {
+        assert_eq!(MsgKind::Clarify.label(), "loom:clarify");
+        assert_eq!(MsgKind::Blocked.label(), "loom:blocked");
+        assert_eq!(MsgKind::Clarify.tag(), "clarify");
+        assert_eq!(MsgKind::Blocked.tag(), "blocked");
     }
 }

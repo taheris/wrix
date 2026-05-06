@@ -107,6 +107,7 @@ pub async fn fetch_active_molecules<R: CommandRunner>(
         .list(ListOpts {
             status: Some("open".into()),
             label: Some(ACTIVE_LABEL.into()),
+            ..ListOpts::default()
         })
         .await?;
     let mut out = Vec::with_capacity(beads.len());
