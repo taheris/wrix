@@ -12,9 +12,11 @@
 mod companions;
 mod db;
 mod error;
+mod implementation_notes;
 mod rebuild;
 
 pub use companions::parse_companions;
 pub use db::{MoleculeRow, SpecRow, StateDb};
 pub use error::StateError;
+pub use implementation_notes::parse_implementation_notes;
 pub use rebuild::{ActiveMolecule, RebuildReport};

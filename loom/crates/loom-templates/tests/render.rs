@@ -48,6 +48,7 @@ fn plan_update_renders_partials_and_companions() -> Result<()> {
         label: SpecLabel::new("loom-harness"),
         spec_path: "specs/loom-harness.md".to_string(),
         companion_paths: vec!["lib/sandbox/".into(), "lib/ralph/template/".into()],
+        existing_implementation_notes: vec!["existing note one".into()],
         exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
     let out = ctx.render()?;
@@ -58,6 +59,7 @@ fn plan_update_renders_partials_and_companions() -> Result<()> {
     assert!(out.contains("Anchor Session & Sibling-Spec Editing"));
     assert!(out.contains("Invariant-Clash Awareness"));
     assert!(out.contains("Implementation Notes"));
+    assert!(out.contains("- existing note one"));
     Ok(())
 }
 

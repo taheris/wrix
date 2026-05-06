@@ -60,6 +60,15 @@ impl ProductionTodoController {
     fn build_prompt(&self) -> Result<String, TodoError> {
         let active_mol = self.state.active_molecule(&self.label)?;
         let molecule_id = active_mol.as_ref().map(|m| m.id.clone());
+        // Notes carry transient implementer hints from the most recent
+        // `loom plan`. Missing-row is tolerated: the spec may not have been
+        // through `plan` yet (tier-4 first-touch), in which case there are
+        // simply no notes to render.
+        let implementation_notes = match self.state.spec(&self.label) {
+            Ok(row) => row.implementation_notes.unwrap_or_default(),
+            Err(loom_core::state::StateError::SpecNotFound { .. }) => Vec::new(),
+            Err(e) => return Err(TodoError::State(e)),
+        };
 
         // Layer the per-spec todo cursor over the molecule's stored
         // `base_commit`: the cursor moves forward after every successful
@@ -98,7 +107,7 @@ impl ProductionTodoController {
             spec_path: spec_path.to_string_lossy().into_owned(),
             pinned_context: String::new(),
             companion_paths: vec![],
-            implementation_notes: vec![],
+            implementation_notes,
             exit_signals: String::new(),
         };
         let ctx = build_template_context(&tier, base, None, molecule_id);
@@ -184,6 +193,21 @@ impl TodoController for ProductionTodoController {
                     "loom todo: could not resolve HEAD — cursor unchanged",
                 );
             }
+        }
+        // Same gate as the cursor: notes are transient implementer hints
+        // consumed once into the bead body and only meaningfully "consumed"
+        // when the agent reported productive completion. Tolerate the
+        // missing-row case because tier-4 first-touch may not have a row
+        // yet (no `loom plan` run before this `loom todo`).
+        match self.state.clear_implementation_notes(&self.label) {
+            Ok(()) => {
+                info!(
+                    label = %self.label,
+                    "loom todo: implementation_notes cleared after consume",
+                );
+            }
+            Err(loom_core::state::StateError::SpecNotFound { .. }) => {}
+            Err(e) => return Err(TodoError::State(e)),
         }
         Ok(())
     }

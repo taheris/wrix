@@ -348,6 +348,88 @@ fn state_db_open_is_idempotent_after_migration() -> Result<()> {
 }
 
 #[test]
+fn state_implementation_notes_set_and_clear_round_trip() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let workspace = dir.path();
+    write_spec(workspace, "alpha", "# alpha\n")?;
+    let db = StateDb::open(workspace.join(".wrapix/loom/state.db"))?;
+    db.rebuild(workspace, &[])?;
+    let label = SpecLabel::new("alpha");
+
+    assert!(db.spec(&label)?.implementation_notes.is_none());
+
+    let notes = vec!["touch lib/foo".to_string(), "see wx-123".to_string()];
+    db.set_implementation_notes(&label, &notes)?;
+    assert_eq!(
+        db.spec(&label)?.implementation_notes.as_deref(),
+        Some(notes.as_slice())
+    );
+
+    db.clear_implementation_notes(&label)?;
+    assert!(
+        db.spec(&label)?.implementation_notes.is_none(),
+        "clear must drive notes back to NULL so loom todo's consume step is observable",
+    );
+
+    let row_count = list_table(
+        &workspace.join(".wrapix/loom/state.db"),
+        "SELECT COUNT(*) FROM specs WHERE label='alpha'",
+    )?;
+    assert_eq!(
+        row_count,
+        vec![vec!["1".to_string()]],
+        "clear must NOT delete the row — molecules and companions still reference it",
+    );
+    Ok(())
+}
+
+#[test]
+fn state_implementation_notes_set_replaces_existing() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let workspace = dir.path();
+    write_spec(workspace, "alpha", "# alpha\n")?;
+    let db = StateDb::open(workspace.join(".wrapix/loom/state.db"))?;
+    db.rebuild(workspace, &[])?;
+    let label = SpecLabel::new("alpha");
+
+    db.set_implementation_notes(&label, &["one".to_string()])?;
+    db.set_implementation_notes(&label, &["two".to_string(), "three".to_string()])?;
+    assert_eq!(
+        db.spec(&label)?.implementation_notes.as_deref(),
+        Some(["two".to_string(), "three".to_string()].as_slice()),
+    );
+    Ok(())
+}
+
+#[test]
+fn state_implementation_notes_set_empty_writes_empty_array() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let workspace = dir.path();
+    write_spec(workspace, "alpha", "# alpha\n")?;
+    let db = StateDb::open(workspace.join(".wrapix/loom/state.db"))?;
+    db.rebuild(workspace, &[])?;
+    let label = SpecLabel::new("alpha");
+
+    db.set_implementation_notes(&label, &[])?;
+    assert_eq!(
+        db.spec(&label)?.implementation_notes.as_deref(),
+        Some([].as_slice()),
+        "empty slice writes []; clearing to NULL is the distinct mutation",
+    );
+    Ok(())
+}
+
+#[test]
+fn state_implementation_notes_set_unknown_label_errors() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let db = StateDb::open(dir.path().join("state.db"))?;
+    let unknown = SpecLabel::new("never-rebuilt");
+    assert!(db.set_implementation_notes(&unknown, &[]).is_err());
+    assert!(db.clear_implementation_notes(&unknown).is_err());
+    Ok(())
+}
+
+#[test]
 fn state_corruption_recovery() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let db_path = dir.path().join("state.db");

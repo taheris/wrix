@@ -216,6 +216,118 @@ async fn build_spawn_config_tier_1_renders_diff_from_base_commit() {
     );
 }
 
+#[tokio::test]
+async fn build_spawn_config_renders_implementation_notes_from_db() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().to_path_buf();
+    let state = seeded_state(&workspace, "alpha", "wx-mol", None);
+    state
+        .set_implementation_notes(
+            &SpecLabel::new("alpha"),
+            &[
+                "carry over: touch lib/foo".into(),
+                "watch out for the wrapix env contract".into(),
+            ],
+        )
+        .expect("seed notes");
+    let manifest = stub_manifest(&workspace);
+    let git = init_repo(&workspace);
+    let mut ctrl = ProductionTodoController::new(
+        SpecLabel::new("alpha"),
+        workspace,
+        state,
+        manifest,
+        ProfileName::new("base"),
+        git,
+        None,
+    );
+
+    let session = ctrl.build_session().await.expect("build cfg");
+    let prompt = &session.config.initial_prompt;
+    assert!(
+        prompt.contains("## Implementation Notes"),
+        "todo prompt must render the section header when notes are present: {prompt}",
+    );
+    assert!(
+        prompt.contains("- carry over: touch lib/foo"),
+        "first note must be rendered as a bullet: {prompt}",
+    );
+    assert!(
+        prompt.contains("- watch out for the wrapix env contract"),
+        "second note must be rendered as a bullet: {prompt}",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn record_outcome_clears_notes_on_success_but_not_on_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().to_path_buf();
+    let state = seeded_state(&workspace, "alpha", "wx-mol", None);
+    let label = SpecLabel::new("alpha");
+    state
+        .set_implementation_notes(&label, &["one".into(), "two".into()])
+        .expect("seed notes");
+    let manifest = stub_manifest(&workspace);
+    let git = init_repo(&workspace);
+    let mut ctrl = ProductionTodoController::new(
+        label.clone(),
+        workspace.clone(),
+        Arc::clone(&state),
+        manifest,
+        ProfileName::new("base"),
+        git,
+        None,
+    );
+
+    ctrl.record_outcome(
+        &SessionOutcome {
+            exit_code: 1,
+            cost_usd: None,
+        },
+        Some(&ExitSignal::Complete),
+    )
+    .await
+    .expect("record outcome (nonzero exit)");
+    assert_eq!(
+        state.spec(&label).expect("spec row").implementation_notes,
+        Some(vec!["one".to_string(), "two".to_string()]),
+        "nonzero exit must NOT clear notes — gate matches the cursor gate",
+    );
+
+    ctrl.record_outcome(
+        &SessionOutcome {
+            exit_code: 0,
+            cost_usd: None,
+        },
+        None,
+    )
+    .await
+    .expect("record outcome (missing marker)");
+    assert_eq!(
+        state.spec(&label).expect("spec row").implementation_notes,
+        Some(vec!["one".to_string(), "two".to_string()]),
+        "missing marker must NOT clear notes — gate matches the cursor gate",
+    );
+
+    ctrl.record_outcome(
+        &SessionOutcome {
+            exit_code: 0,
+            cost_usd: None,
+        },
+        Some(&ExitSignal::Complete),
+    )
+    .await
+    .expect("record outcome (success)");
+    let row = state.spec(&label).expect("spec row");
+    assert!(
+        row.implementation_notes.is_none(),
+        "complete marker + clean exit must drive notes back to NULL: {:?}",
+        row.implementation_notes,
+    );
+    // Row itself must persist — molecules and companions reference it.
+    assert_eq!(row.label, label, "spec row must remain after notes clear");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn record_outcome_advances_cursor_only_on_complete_marker_and_clean_exit() {
     let dir = tempfile::tempdir().unwrap();

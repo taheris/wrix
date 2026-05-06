@@ -40,6 +40,10 @@ fn plan_update_snapshot() {
         label: SpecLabel::new("loom-harness"),
         spec_path: "specs/loom-harness.md".to_string(),
         companion_paths: vec!["lib/sandbox/".into(), "lib/ralph/template/".into()],
+        existing_implementation_notes: vec![
+            "Touch lib/sandbox/entrypoint.sh".into(),
+            "Bug wx-9999: race in repin.sh".into(),
+        ],
         exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
     insta::assert_snapshot!(ctx.render().unwrap());

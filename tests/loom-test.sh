@@ -3047,8 +3047,38 @@ test_push_gate_refuses_unresolved() {
 }
 
 # Plan / Todo
-test_plan_new_writes_implementation_notes() { echo "not yet implemented (plan new notes)" >&2; return 77; }
-test_todo_consumes_and_clears_notes()  { echo "not yet implemented (todo consumes notes)" >&2; return 77; }
+#-----------------------------------------------------------------------------
+# test_plan_new_writes_implementation_notes — `loom plan -n` parses the spec's
+# `## Implementation Notes` section after the interview exits and lands the
+# array on `specs.implementation_notes`. Pinned to the runner integration test
+# that drives a stub wrapix and asserts the DB row.
+#-----------------------------------------------------------------------------
+test_plan_new_writes_implementation_notes() {
+    cargo_run test -p loom-workflow --lib \
+        plan::runner::tests::plan_new_persists_implementation_notes_from_interview \
+        -- --exact --nocapture --quiet
+    cargo_run test -p loom-workflow --lib \
+        plan::runner::tests::plan_new_no_notes_section_leaves_column_untouched \
+        -- --exact --nocapture --quiet
+    cargo_run test -p loom-workflow --lib \
+        plan::runner::tests::plan_update_threads_existing_notes_into_prompt_and_persists_merge \
+        -- --exact --nocapture --quiet
+}
+
+#-----------------------------------------------------------------------------
+# test_todo_consumes_and_clears_notes — `loom todo` reads notes from
+# `specs.implementation_notes`, renders them into the prompt, then clears the
+# column on success (same gate as the per-spec todo cursor). Pinned to the
+# integration tests under `loom-workflow/tests/todo_production.rs`.
+#-----------------------------------------------------------------------------
+test_todo_consumes_and_clears_notes() {
+    cargo_run test -p loom-workflow --test todo_production \
+        build_spawn_config_renders_implementation_notes_from_db \
+        -- --exact --nocapture --quiet
+    cargo_run test -p loom-workflow --test todo_production \
+        record_outcome_clears_notes_on_success_but_not_on_failure \
+        -- --exact --nocapture --quiet
+}
 test_routine_commands_never_delete_spec_row() { echo "not yet implemented (spec row preservation)" >&2; return 77; }
 test_todo_cursor_advance_requires_marker() { echo "not yet implemented (cursor advance precondition)" >&2; return 77; }
 

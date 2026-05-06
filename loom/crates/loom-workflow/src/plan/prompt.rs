@@ -15,6 +15,11 @@ pub struct PlanPromptInputs {
     pub spec_path: String,
     pub pinned_context: String,
     pub companion_paths: Vec<String>,
+    /// Existing notes pulled from `specs.implementation_notes` for the
+    /// `Update` mode so the agent can perform the merge required by
+    /// `specs/loom-harness.md` § Implementation-notes lifecycle. Ignored for
+    /// `New`, where the row does not yet exist.
+    pub existing_implementation_notes: Vec<String>,
     pub exit_signals: String,
 }
 
@@ -34,6 +39,7 @@ pub fn render_prompt(inputs: PlanPromptInputs) -> Result<String, PlanError> {
             label,
             spec_path: inputs.spec_path,
             companion_paths: inputs.companion_paths,
+            existing_implementation_notes: inputs.existing_implementation_notes,
             exit_signals: inputs.exit_signals,
         }
         .render()?,
@@ -53,6 +59,7 @@ mod tests {
             spec_path: "specs/loom-harness.md".into(),
             pinned_context: "PIN".into(),
             companion_paths: vec![],
+            existing_implementation_notes: vec![],
             exit_signals: "LOOM_COMPLETE".into(),
         }
     }
@@ -63,6 +70,7 @@ mod tests {
             spec_path: "specs/loom-harness.md".into(),
             pinned_context: "PIN".into(),
             companion_paths: vec!["lib/sandbox/".into()],
+            existing_implementation_notes: vec!["touch lib/foo".into()],
             exit_signals: "LOOM_COMPLETE".into(),
         }
     }
@@ -80,5 +88,14 @@ mod tests {
         let body = render_prompt(inputs_update()).expect("render");
         assert!(body.contains("# Specification Update Interview"));
         assert!(body.contains("- lib/sandbox/"));
+    }
+
+    #[test]
+    fn update_renders_existing_implementation_notes_for_merge() {
+        let body = render_prompt(inputs_update()).expect("render");
+        assert!(
+            body.contains("touch lib/foo"),
+            "existing notes must be threaded into the prompt so the agent can merge",
+        );
     }
 }

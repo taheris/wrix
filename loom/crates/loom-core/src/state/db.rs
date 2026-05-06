@@ -206,6 +206,54 @@ impl StateDb {
         Ok(())
     }
 
+    /// Replace `implementation_notes` for `label` with `notes` (encoded as a
+    /// JSON array). The row must already exist — `set_implementation_notes`
+    /// does not create one. Used by `loom plan -n`/`-u` after the interview
+    /// to land the agent-merged note set onto the existing `specs` row.
+    ///
+    /// An empty `notes` slice writes `[]` rather than `NULL`; clearing is the
+    /// distinct [`Self::clear_implementation_notes`] mutation reserved for
+    /// `loom todo`'s consume-and-clear step.
+    pub fn set_implementation_notes(
+        &self,
+        label: &SpecLabel,
+        notes: &[String],
+    ) -> Result<(), StateError> {
+        let conn = self.lock_conn()?;
+        let json = serde_json::to_string(notes).map_err(|source| StateError::Json {
+            column: "implementation_notes",
+            source,
+        })?;
+        let updated = conn.execute(
+            "UPDATE specs SET implementation_notes = ?2 WHERE label = ?1",
+            params![label.as_str(), json],
+        )?;
+        if updated == 0 {
+            return Err(StateError::SpecNotFound {
+                label: label.to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Set `implementation_notes` to `NULL` for `label`. The row itself is
+    /// preserved — molecules and companions still reference it. Used by
+    /// `loom todo` after rendering notes into a fresh bead body so the
+    /// transient hints do not bleed into a later run.
+    pub fn clear_implementation_notes(&self, label: &SpecLabel) -> Result<(), StateError> {
+        let conn = self.lock_conn()?;
+        let updated = conn.execute(
+            "UPDATE specs SET implementation_notes = NULL WHERE label = ?1",
+            params![label.as_str()],
+        )?;
+        if updated == 0 {
+            return Err(StateError::SpecNotFound {
+                label: label.to_string(),
+            });
+        }
+        Ok(())
+    }
+
     /// Read all companion paths recorded for `label` (sorted for determinism).
     pub fn companions(&self, label: &SpecLabel) -> Result<Vec<String>, StateError> {
         let conn = self.lock_conn()?;
