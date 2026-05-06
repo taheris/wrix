@@ -3028,7 +3028,13 @@ test_iteration_count_persists()        { echo "not yet implemented (iteration co
 test_infra_preflight_fail_fast()       { echo "not yet implemented (infra preflight)" >&2; return 77; }
 test_infra_midsession_one_retry()      { echo "not yet implemented (infra midsession retry)" >&2; return 77; }
 test_infra_retry_counter_separate()    { echo "not yet implemented (infra retry counter)" >&2; return 77; }
-test_push_gate_refuses_unresolved()    { echo "not yet implemented (push gate)" >&2; return 77; }
+test_push_gate_refuses_unresolved() {
+    check_cargo_test check::runner::tests::clarify_present_stops_without_pushing
+    check_cargo_test check::runner::tests::pre_existing_clarify_blocks_push_even_when_no_new_beads
+    check_cargo_test check::runner::tests::blocked_present_stops_without_pushing
+    check_cargo_test check::runner::tests::pre_existing_blocked_blocks_push_even_when_no_new_beads
+    check_cargo_test check::runner::tests::blocked_and_clarify_together_surface_both_lists
+}
 
 # Plan / Todo
 test_plan_new_writes_implementation_notes() { echo "not yet implemented (plan new notes)" >&2; return 77; }

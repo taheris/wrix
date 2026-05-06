@@ -2,11 +2,14 @@ use loom_core::identifier::BeadId;
 
 /// Snapshot of bead state taken on either side of the reviewer agent. The
 /// driver pre-counts beads with `spec:<label>`, runs the reviewer, then
-/// re-counts and inspects the same query for `loom:clarify` membership.
+/// re-counts and inspects the same query for `loom:blocked`/`loom:clarify`
+/// membership.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BeadSnapshot {
     /// Total number of beads carrying `spec:<label>`.
     pub spec_total: u32,
+    /// IDs of beads currently labelled `loom:blocked` within the spec.
+    pub blocked_ids: Vec<BeadId>,
     /// IDs of beads currently labelled `loom:clarify` within the spec.
     pub clarify_ids: Vec<BeadId>,
     /// IDs that appeared after the reviewer ran. Only populated for the
@@ -19,14 +22,21 @@ pub struct BeadSnapshot {
 /// `loom run`, etc.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CheckVerdict {
-    /// No new beads + no `loom:clarify` → push code + beads.
+    /// No new beads + no `loom:blocked` + no `loom:clarify` → push code +
+    /// beads.
     Clean,
 
-    /// `loom:clarify` present (newly raised or pre-existing) → stop without
-    /// pushing; user resolves via `loom msg`.
-    Clarify { clarify_ids: Vec<BeadId> },
+    /// `loom:blocked` and/or `loom:clarify` present (newly raised or
+    /// pre-existing) → stop without pushing; user resolves via `loom msg`.
+    /// Per `specs/loom-harness.md` (Verdict gate success criteria) the push
+    /// gate refuses to push while either label is set on any bead in the
+    /// molecule.
+    PushBlocked {
+        blocked_ids: Vec<BeadId>,
+        clarify_ids: Vec<BeadId>,
+    },
 
-    /// New fix-up beads, no clarify, iteration cap not reached → exec
+    /// New fix-up beads, no blocked/clarify, iteration cap not reached → exec
     /// `loom run` for another forward pass. The driver increments the
     /// counter before returning this variant.
     AutoIterate {
@@ -34,8 +44,8 @@ pub enum CheckVerdict {
         next_iteration: u32,
     },
 
-    /// New fix-up beads, no clarify, iteration cap exhausted → escalate the
-    /// newest fix-up bead to `loom:clarify` and stop.
+    /// New fix-up beads, no blocked/clarify, iteration cap exhausted →
+    /// escalate the newest fix-up bead to `loom:clarify` and stop.
     IterationCap {
         new_bead_ids: Vec<BeadId>,
         escalate_id: BeadId,

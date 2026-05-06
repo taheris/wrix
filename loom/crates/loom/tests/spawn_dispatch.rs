@@ -483,7 +483,7 @@ fn loom_run_once_writes_per_bead_jsonl_log() {
 /// section as the run gate). Before the wiring fix the production check
 /// controller passed `None` for the sink, so the reviewer agent's events
 /// were discarded. The bd stub returns one bead carrying `loom:clarify`
-/// so the post-snapshot diff yields `CheckVerdict::Clarify` and the gate
+/// so the post-snapshot diff yields `CheckVerdict::PushBlocked` and the gate
 /// exits without touching `git push` / `beads-push` / `loom run` — keeping
 /// the test environment-independent.
 #[test]
@@ -517,8 +517,8 @@ fn loom_check_writes_phase_jsonl_log() {
         "happy-path",
     );
 
-    // `loom:clarify` on the post-snapshot bead → CheckVerdict::Clarify →
-    // CheckResult::Clarified, no push gates fire.
+    // `loom:clarify` on the post-snapshot bead → CheckVerdict::PushBlocked →
+    // CheckResult::PushBlocked, no push gates fire.
     let bead_json = r#"[{"id":"wx-checktest","title":"check gate bead","description":"","status":"open","priority":2,"issue_type":"task","labels":["spec:loom-agent","loom:clarify"]}]"#;
     let bd_bin_dir = install_bd_bead_stub(workspace, bead_json);
 

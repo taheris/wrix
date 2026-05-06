@@ -13,7 +13,8 @@ use super::verdict::{CheckVerdict, diff_new_bead_ids};
 /// the methods to:
 ///
 /// - `pre_snapshot` / `post_snapshot` → `BdClient::list { label: "spec:<L>" }`
-/// - `clarify_ids` → filter the same list for `loom:clarify`
+/// - `blocked_ids` / `clarify_ids` → filter the same list for `loom:blocked`
+///   and `loom:clarify` respectively
 /// - `run_review` → render check.md, build SpawnConfig, drive
 ///   `AgentBackend`, tee the event stream into the log sink, parse the
 ///   exit signal
@@ -95,9 +96,14 @@ pub enum CheckResult {
     /// Push succeeded; iteration counter was reset.
     Pushed,
 
-    /// `Clarify` verdict — gate stopped without pushing. Caller surfaces
-    /// the IDs to the user via the `loom msg` pointer.
-    Clarified { clarify_ids: Vec<BeadId> },
+    /// `PushBlocked` verdict — gate stopped without pushing because at
+    /// least one molecule bead carries `loom:blocked` or `loom:clarify`.
+    /// Caller surfaces both ID lists to the user via the `loom msg`
+    /// pointer.
+    PushBlocked {
+        blocked_ids: Vec<BeadId>,
+        clarify_ids: Vec<BeadId>,
+    },
 
     /// Auto-iteration was triggered. The driver execs `loom run`; if the
     /// `exec` future resolves at all (i.e. didn't replace this process)
@@ -132,13 +138,18 @@ pub async fn check_loop<C: CheckController>(
     let post = controller.list_spec_beads().await?;
     let post_ids: Vec<BeadId> = post.iter().map(|b| b.id.clone()).collect();
     let new_ids = diff_new_bead_ids(&pre_ids, &post_ids);
+    let blocked_ids: Vec<BeadId> = post
+        .iter()
+        .filter(|b| b.labels.iter().any(Label::is_blocked))
+        .map(|b| b.id.clone())
+        .collect();
     let clarify_ids: Vec<BeadId> = post
         .iter()
         .filter(|b| b.labels.iter().any(Label::is_clarify))
         .map(|b| b.id.clone())
         .collect();
 
-    let verdict = decide_verdict(&new_ids, &clarify_ids, cap, controller).await?;
+    let verdict = decide_verdict(&new_ids, &blocked_ids, &clarify_ids, cap, controller).await?;
     apply_verdict(controller, verdict).await
 }
 
@@ -146,12 +157,14 @@ pub async fn check_loop<C: CheckController>(
 /// snapshot diff plus the persisted iteration counter.
 async fn decide_verdict<C: CheckController>(
     new_ids: &[BeadId],
+    blocked_ids: &[BeadId],
     clarify_ids: &[BeadId],
     cap: IterationCap,
     controller: &mut C,
 ) -> Result<CheckVerdict, CheckError> {
-    if !clarify_ids.is_empty() {
-        return Ok(CheckVerdict::Clarify {
+    if !blocked_ids.is_empty() || !clarify_ids.is_empty() {
+        return Ok(CheckVerdict::PushBlocked {
+            blocked_ids: blocked_ids.to_vec(),
             clarify_ids: clarify_ids.to_vec(),
         });
     }
@@ -186,7 +199,13 @@ async fn apply_verdict<C: CheckController>(
             controller.beads_push().await?;
             Ok(CheckResult::Pushed)
         }
-        CheckVerdict::Clarify { clarify_ids } => Ok(CheckResult::Clarified { clarify_ids }),
+        CheckVerdict::PushBlocked {
+            blocked_ids,
+            clarify_ids,
+        } => Ok(CheckResult::PushBlocked {
+            blocked_ids,
+            clarify_ids,
+        }),
         CheckVerdict::AutoIterate { next_iteration, .. } => {
             controller.set_iteration_count(next_iteration).await?;
             controller.exec_run().await?;
@@ -329,10 +348,14 @@ mod tests {
 
         let result = check_loop(&mut c, IterationCap::default()).await?;
         match result {
-            CheckResult::Clarified { clarify_ids } => {
+            CheckResult::PushBlocked {
+                blocked_ids,
+                clarify_ids,
+            } => {
+                assert!(blocked_ids.is_empty(), "no blocked beads in this scenario");
                 assert_eq!(clarify_ids, vec![BeadId::new("wx-2").expect("valid")]);
             }
-            other => panic!("expected Clarified, got {other:?}"),
+            other => panic!("expected PushBlocked, got {other:?}"),
         }
         assert_eq!(c.git_push_calls, 0, "clarify never pushes");
         assert_eq!(c.beads_push_calls, 0, "clarify never beads-pushes");
@@ -349,8 +372,88 @@ mod tests {
         };
 
         let result = check_loop(&mut c, IterationCap::default()).await?;
-        assert!(matches!(result, CheckResult::Clarified { .. }));
+        assert!(matches!(result, CheckResult::PushBlocked { .. }));
         assert_eq!(c.git_push_calls, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn blocked_present_stops_without_pushing() -> Result<(), CheckError> {
+        let mut c = FakeController {
+            pre_beads: vec![bead("wx-1", &["spec:loom-harness"])],
+            post_beads: vec![
+                bead("wx-1", &["spec:loom-harness"]),
+                bead("wx-2", &["spec:loom-harness", "loom:blocked"]),
+            ],
+            ..FakeController::default()
+        };
+
+        let result = check_loop(&mut c, IterationCap::default()).await?;
+        match result {
+            CheckResult::PushBlocked {
+                blocked_ids,
+                clarify_ids,
+            } => {
+                assert_eq!(blocked_ids, vec![BeadId::new("wx-2").expect("valid")]);
+                assert!(clarify_ids.is_empty(), "no clarify beads in this scenario");
+            }
+            other => panic!("expected PushBlocked, got {other:?}"),
+        }
+        assert_eq!(c.git_push_calls, 0, "blocked never pushes");
+        assert_eq!(c.beads_push_calls, 0, "blocked never beads-pushes");
+        assert_eq!(c.exec_run_calls, 0, "blocked never auto-iterates");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn pre_existing_blocked_blocks_push_even_when_no_new_beads() -> Result<(), CheckError> {
+        let mut c = FakeController {
+            pre_beads: vec![bead("wx-1", &["spec:loom-harness", "loom:blocked"])],
+            post_beads: vec![bead("wx-1", &["spec:loom-harness", "loom:blocked"])],
+            ..FakeController::default()
+        };
+
+        let result = check_loop(&mut c, IterationCap::default()).await?;
+        match result {
+            CheckResult::PushBlocked {
+                blocked_ids,
+                clarify_ids,
+            } => {
+                assert_eq!(blocked_ids, vec![BeadId::new("wx-1").expect("valid")]);
+                assert!(clarify_ids.is_empty());
+            }
+            other => panic!("expected PushBlocked, got {other:?}"),
+        }
+        assert_eq!(c.git_push_calls, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn blocked_and_clarify_together_surface_both_lists() -> Result<(), CheckError> {
+        let mut c = FakeController {
+            pre_beads: vec![bead("wx-1", &["spec:loom-harness"])],
+            post_beads: vec![
+                bead("wx-1", &["spec:loom-harness"]),
+                bead("wx-2", &["spec:loom-harness", "loom:blocked"]),
+                bead("wx-3", &["spec:loom-harness", "loom:clarify"]),
+            ],
+            ..FakeController::default()
+        };
+
+        let result = check_loop(&mut c, IterationCap::default()).await?;
+        match result {
+            CheckResult::PushBlocked {
+                blocked_ids,
+                clarify_ids,
+            } => {
+                assert_eq!(blocked_ids, vec![BeadId::new("wx-2").expect("valid")]);
+                assert_eq!(clarify_ids, vec![BeadId::new("wx-3").expect("valid")]);
+            }
+            other => panic!("expected PushBlocked, got {other:?}"),
+        }
+        assert_eq!(c.git_push_calls, 0);
+        assert_eq!(c.beads_push_calls, 0);
+        assert_eq!(c.exec_run_calls, 0);
         Ok(())
     }
 
