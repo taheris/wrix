@@ -273,17 +273,9 @@ let
 
 in
 {
-  # Build the tmux-mcp Rust crate and run unit tests
-  # Uses rustPlatform.buildRustPackage for proper offline cargo builds
-  tmux-mcp-unit-tests = runCommandLocal "tmux-mcp-unit-tests" { } ''
-    echo "Verifying tmux-mcp builds and tests pass..."
-    # The package build with doCheck=true already ran tests
-    test -x ${tmuxDebugMcp}/bin/tmux-mcp
-    echo "tmux-mcp binary exists and tests passed"
-    mkdir $out
-  '';
-
   # Verify integration test shell scripts have valid syntax
+  # (Crate build + unit tests are covered by tmux-mcp-clippy / tmux-mcp-nextest
+  # in tests/default.nix, wired from wrapix.tmuxMcpPackage.)
   tmux-mcp-integration-syntax =
     runCommandLocal "tmux-mcp-integration-syntax"
       {
@@ -332,14 +324,6 @@ in
         echo "All test scripts pass syntax checks"
         mkdir $out
       '';
-
-  # Verify the Rust crate builds (this is the actual build artifact)
-  tmux-mcp-builds = runCommandLocal "tmux-mcp-builds" { } ''
-    echo "Verifying tmux-mcp builds..."
-    test -x ${tmuxDebugMcp}/bin/tmux-mcp
-    echo "tmux-mcp compiles successfully"
-    mkdir $out
-  '';
 }
 // integrationTests
 // e2eTests

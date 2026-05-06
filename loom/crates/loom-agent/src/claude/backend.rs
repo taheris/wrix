@@ -272,7 +272,18 @@ mod tests {
     }
 
     fn mock_claude_path() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/loom/mock-claude/claude.sh")
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        for ancestor in manifest_dir.ancestors() {
+            let candidate = ancestor.join("tests/loom/mock-claude/claude.sh");
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+        panic!(
+            "could not locate tests/loom/mock-claude/claude.sh above {} — \
+             neither dev-tree nor nix-sandbox layout matched.",
+            manifest_dir.display(),
+        );
     }
 
     fn mock_command(mode: &str) -> Command {

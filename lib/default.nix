@@ -32,6 +32,10 @@ let
     pkgs = linuxPkgs;
     rustProfile = sandbox.profiles.rust;
   };
+  tmuxMcp = import ./mcp/tmux/mcp-server.nix {
+    pkgs = linuxPkgs;
+    rustProfile = sandbox.profiles.rust;
+  };
 
 in
 {
@@ -41,6 +45,7 @@ in
   ralphPackage = ralph.package;
   ralphInitApp = ralph.initApp;
   loomPackage = loom;
+  tmuxMcpPackage = tmuxMcp;
   inherit beads;
 
   deriveProfile =

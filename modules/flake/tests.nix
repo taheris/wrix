@@ -7,11 +7,17 @@
       system,
       linuxPkgs,
       treefmtWrapper,
+      wrapix,
       ...
     }:
     let
       test = import ../../tests {
-        inherit pkgs system linuxPkgs;
+        inherit
+          pkgs
+          system
+          linuxPkgs
+          wrapix
+          ;
         treefmt = treefmtWrapper;
         src = self;
         inherit (inputs) fenix;

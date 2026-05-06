@@ -9,7 +9,14 @@ let
   craneFilter = rustProfile.craneLib.filterCargoSources;
 
   # askama #[template(path = ...)] reads templates/*.md at compile time; crane's default strips them.
-  srcFilter = path: type: (craneFilter path type) || (lib.hasInfix "/loom-templates/templates/" path);
+  # `insta` snapshot files (`crates/*/tests/snapshots/*.snap`) live next to the test sources and
+  # are read at test time — the cli_help / loom-templates suites rely on them, so widen the filter
+  # to keep them in nextest's view.
+  srcFilter =
+    path: type:
+    (craneFilter path type)
+    || (lib.hasInfix "/loom-templates/templates/" path)
+    || (lib.hasSuffix ".snap" path);
 in
 
 rustProfile.buildPackage {

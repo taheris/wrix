@@ -5,6 +5,7 @@
   linuxPkgs,
   treefmt,
   src,
+  wrapix,
   fenix ? null,
 }:
 
@@ -76,8 +77,11 @@ let
   # Gas City tests (layered: eval, provider, lifecycle)
   cityTests = import ./city/unit.nix { inherit pkgs system treefmt; };
 
-  # Loom unit + integration tests (cargo nextest run --workspace).
-  # Per specs/loom-tests.md NFR #7, runs on all four supported systems.
+  # Loom container smoke runner (Linux: real podman smoke; Darwin: skip stub).
+  # Unit + integration coverage for loom comes from the loom-clippy /
+  # loom-nextest entries below, which reuse the cargoArtifacts of
+  # wrapix.loomPackage so flake check shares dep compilation with the
+  # devshell's packages.loom build.
   loomDeriv = import ./loom {
     inherit
       pkgs
@@ -87,7 +91,19 @@ let
       treefmt
       ;
   };
-  loomTests = { inherit (loomDeriv) loom-tests; };
+
+  # Per specs/profiles.md, the rust profile's buildPackage emits separate
+  # clippy/nextest derivations from the same buildPackage call that produces
+  # packages.loom / packages.tmux-mcp; cargoArtifacts is shared so editing a
+  # workspace .rs file invalidates lint/test/bin together but reuses the dep
+  # cache, and editing a file under extraSrcs (e.g. tests/loom/mock-pi)
+  # invalidates only loom-clippy/loom-nextest.
+  rustChecks = {
+    loom-clippy = wrapix.loomPackage.clippy;
+    loom-nextest = wrapix.loomPackage.nextest;
+    tmux-mcp-clippy = wrapix.tmuxMcpPackage.clippy;
+    tmux-mcp-nextest = wrapix.tmuxMcpPackage.nextest;
+  };
 
   # Gas City integration test (shell-based, requires podman at runtime)
   cityIntegration = import ./city/integration.nix {
@@ -120,10 +136,10 @@ let
     // darwinMountTests
     // darwinNetworkTests
     // darwinUidTests
-    // loomTests
     // ralphTemplatesCheck
     // ralphTests
     // readmeTest
+    // rustChecks
     // sandboxIntegrationTests
     // shellTests
     // smokeTests
@@ -243,11 +259,11 @@ in
     darwinMountTests
     darwinNetworkTests
     darwinUidTests
-    loomTests
     ralphContainerIntegration
     ralphTemplatesCheck
     ralphTests
     readmeTest
+    rustChecks
     sandboxIntegrationTests
     shellTests
     smokeTests

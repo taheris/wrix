@@ -1,15 +1,10 @@
-# Loom unit + integration tests as a `nix flake check` gate, plus the
-# Linux-only container smoke runner.
+# Loom container smoke runner — Linux only.
 #
-# Per specs/loom-tests.md (Architecture / Nix Integration):
-#   - `loom-tests`  — runs `cargo nextest run --workspace` under the build
-#                     sandbox. Cross-platform (NFR #7).
-#   - `loom-smoke`  — Linux-only `writeShellApplication` exposed as
-#                     `nix run .#test-loom`. Excluded from `flake check`
-#                     because it needs podman at runtime.
-#
-# Reuses the same fenix-pinned toolchain as lib/loom/default.nix so tests
-# run against the same compiler the production binary is built with.
+# Unit + integration coverage now comes from `loom-clippy` and `loom-nextest`
+# wired in `tests/default.nix` from `wrapix.loomPackage` (the rust profile's
+# buildPackage outputs); this file is just the podman-bound smoke runner that
+# `nix run .#test-loom` resolves to. Excluded from `flake check` because it
+# needs podman at runtime.
 {
   pkgs,
   system,
@@ -25,70 +20,6 @@ let
     "x86_64-linux"
     "aarch64-linux"
   ];
-
-  fenixPkgs =
-    if fenix == null then
-      throw "tests/loom/default.nix: requires the fenix input"
-    else
-      fenix.packages.${pkgs.stdenv.hostPlatform.system};
-
-  toolchain = fenixPkgs.stable.defaultToolchain;
-
-  rustPlatform = pkgs.makeRustPlatform {
-    cargo = toolchain;
-    rustc = toolchain;
-  };
-
-  loomTests = rustPlatform.buildRustPackage {
-    pname = "loom-tests";
-    version = "0.1.0";
-    src = ../../loom;
-
-    cargoLock = {
-      lockFile = ../../loom/Cargo.lock;
-    };
-
-    env = {
-      HOME = "/tmp";
-      # Per spec NFR §Property-Based Testing — proptest case count for CI.
-      # Local exhaustive runs override via `PROPTEST_CASES=2048+`.
-      PROPTEST_CASES = "32";
-    };
-
-    # Mirror lib/loom/default.nix: fixtures live outside the loom workspace
-    # but are referenced from integration tests via CARGO_MANIFEST_DIR-relative
-    # paths. Stage them next to the unpacked source.
-    #
-    # The annotation-integrity gate in `loom/crates/loom/tests/annotations.rs`
-    # also reads `specs/*.md` and `tests/loom-test.sh`; stage those at the
-    # repo-relative paths the gate looks for via ancestor walk.
-    postUnpack = ''
-      mkdir -p tests/loom
-      cp -r ${../../tests/loom/mock-pi} tests/loom/mock-pi
-      cp -r ${../../tests/loom/mock-claude} tests/loom/mock-claude
-      cp ${../../tests/loom-test.sh} tests/loom-test.sh
-      cp -r ${../../specs} specs
-      chmod -R u+w tests specs
-    '';
-
-    useNextest = true;
-    nativeCheckInputs = [ pkgs.git ];
-    cargoTestFlags = [ "--workspace" ];
-    doCheck = true;
-
-    # This derivation exists for its tests; the binary is built and
-    # installed by lib/loom/default.nix. Drop the install step and emit a
-    # passing-marker so the check has an output path.
-    installPhase = ''
-      runHook preInstall
-      mkdir -p $out
-      runHook postInstall
-    '';
-
-    meta = {
-      description = "Loom unit + integration tests (cargo nextest --workspace)";
-    };
-  };
 
   # Container smoke — Linux only. Uses a dedicated wrapix sandbox built with
   # `agent = "pi"` so the image carries pi-mono; the harness then prepends
@@ -194,9 +125,5 @@ let
 
 in
 {
-  inherit loomTests loomSmoke loomSmokeDarwinSkip;
-
-  # `loom-tests` is the cargo nextest gate consumed by `tests/default.nix`'s
-  # checks set; cross-platform per NFR #7.
-  loom-tests = loomTests;
+  inherit loomSmoke loomSmokeDarwinSkip;
 }

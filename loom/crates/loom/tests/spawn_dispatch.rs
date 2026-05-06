@@ -99,18 +99,37 @@ fn install_wrapix_shim(
     shim
 }
 
+/// Locate a shim script under `tests/loom/<rel>` by walking ancestors of the
+/// crate manifest dir. Two layouts are supported transparently:
+///   - dev tree: `repo/loom/crates/loom/` is the manifest dir, mock scripts
+///     live under `repo/tests/loom/`.
+///   - nix sandbox (crane buildPackage): the loom workspace IS the staged
+///     root and mock scripts live next to it under `<staged>/tests/loom/`.
+fn locate_mock(rel: &str) -> PathBuf {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for ancestor in manifest_dir.ancestors() {
+        let candidate = ancestor.join("tests/loom").join(rel);
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    panic!(
+        "could not locate tests/loom/{rel} above {} — neither dev-tree nor \
+         nix-sandbox layout matched.",
+        manifest_dir.display(),
+    );
+}
+
 /// Locate `tests/loom/mock-pi/pi.sh` relative to the loom-binary crate.
-/// Mirrors the helper used by the loom-agent unit tests so the same mock
-/// drives the integration harness.
 fn mock_pi_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/loom/mock-pi/pi.sh")
+    locate_mock("mock-pi/pi.sh")
 }
 
 /// Locate `tests/loom/mock-claude/claude.sh`. Used by the shutdown-watchdog
 /// gate to drive `loom todo --agent claude` end-to-end against a mock that
 /// emits stream-json then ignores SIGTERM/stdin close.
 fn mock_claude_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/loom/mock-claude/claude.sh")
+    locate_mock("mock-claude/claude.sh")
 }
 
 /// Run `loom --workspace <ws> --agent pi todo -s loom-agent` against a

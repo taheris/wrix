@@ -2324,10 +2324,11 @@ test_protocol_versions_pinned() {
 }
 
 #-----------------------------------------------------------------------------
-# test_flake_check_includes_loom — `nix flake check` runs the loom-tests
-# derivation. Asserts `checks.<current-system>.loom-tests` evaluates to a
-# store path produced by the loom-tests derivation. This is the gate that
-# binds the unit + integration tier to CI.
+# test_flake_check_includes_loom — `nix flake check` runs both Rust gates
+# from the rust profile's buildPackage outputs. Asserts
+# `checks.<current-system>.loom-clippy` and `checks.<current-system>.loom-nextest`
+# evaluate to store paths from the matching crane derivations. This is the
+# gate that binds the unit + integration tier to CI.
 #-----------------------------------------------------------------------------
 test_flake_check_includes_loom() {
     local arch kernel nix_system store
@@ -2349,13 +2350,22 @@ test_flake_check_includes_loom() {
             ;;
     esac
 
-    store=$(nix eval --raw "$REPO_ROOT#checks.$nix_system.loom-tests.outPath") \
-        || { echo "checks.$nix_system.loom-tests does not evaluate" >&2; return 1; }
-
+    store=$(nix eval --raw "$REPO_ROOT#checks.$nix_system.loom-clippy.outPath") \
+        || { echo "checks.$nix_system.loom-clippy does not evaluate" >&2; return 1; }
     case "$store" in
-        /nix/store/*-loom-tests-*) ;;
+        /nix/store/*-clippy-*) ;;
         *)
-            echo "unexpected store path: $store" >&2
+            echo "unexpected loom-clippy store path: $store" >&2
+            return 1
+            ;;
+    esac
+
+    store=$(nix eval --raw "$REPO_ROOT#checks.$nix_system.loom-nextest.outPath") \
+        || { echo "checks.$nix_system.loom-nextest does not evaluate" >&2; return 1; }
+    case "$store" in
+        /nix/store/*-nextest-*) ;;
+        *)
+            echo "unexpected loom-nextest store path: $store" >&2
             return 1
             ;;
     esac
@@ -2363,20 +2373,22 @@ test_flake_check_includes_loom() {
 
 #-----------------------------------------------------------------------------
 # test_flake_declares_loom_for_all_systems — per spec NFR #7 the unit +
-# integration tier is cross-platform. Asserts checks.<system>.loom-tests
-# evaluates for all four supported systems.
+# integration tier is cross-platform. Asserts checks.<system>.loom-clippy
+# and checks.<system>.loom-nextest evaluate for all four supported systems.
 #-----------------------------------------------------------------------------
 test_flake_declares_loom_for_all_systems() {
-    local sys missing=0 errlog
+    local sys check missing=0 errlog
     errlog=$(mktemp)
     trap 'rm -f "$errlog"' RETURN
     for sys in x86_64-linux aarch64-linux x86_64-darwin aarch64-darwin; do
-        if ! nix eval --raw "$REPO_ROOT#checks.$sys.loom-tests.outPath" \
-                >/dev/null 2>"$errlog"; then
-            echo "checks.$sys.loom-tests not declared:" >&2
-            sed 's/^/  /' "$errlog" >&2
-            missing=$((missing + 1))
-        fi
+        for check in loom-clippy loom-nextest; do
+            if ! nix eval --raw "$REPO_ROOT#checks.$sys.$check.outPath" \
+                    >/dev/null 2>"$errlog"; then
+                echo "checks.$sys.$check not declared:" >&2
+                sed 's/^/  /' "$errlog" >&2
+                missing=$((missing + 1))
+            fi
+        done
     done
     [ "$missing" -eq 0 ]
 }
