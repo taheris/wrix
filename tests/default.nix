@@ -91,6 +91,8 @@ let
       fenix
       treefmt
       ;
+    inherit (wrapix) loomPackage;
+    rustProfile = wrapix.profiles.rust;
   };
 
   # Per specs/profiles.md, the rust profile's buildPackage emits separate
@@ -101,7 +103,7 @@ let
   # invalidates only loom-clippy/loom-nextest.
   rustChecks = {
     loom-clippy = wrapix.loomPackage.clippy;
-    loom-nextest = wrapix.loomPackage.nextest;
+    loom-nextest = loomDeriv.nextestFast;
     tmux-mcp-clippy = wrapix.tmuxMcpPackage.clippy;
     tmux-mcp-nextest = wrapix.tmuxMcpPackage.nextest;
   };
@@ -251,17 +253,12 @@ in
       program = "${ralphContainerIntegration.script}/bin/test-ralph-container";
     };
 
-    # Loom container smoke (Linux: real podman smoke; Darwin: skip stub).
-    # Exposed regardless of platform so `nix run .#test-loom` resolves on
-    # every system; the Darwin variant exits 0 with a clear stderr message.
+    # Loom property tests + container smoke. Property tests run everywhere;
+    # the smoke runs on Linux only (Darwin prints a skip notice).
     loom = {
-      meta.description = "Run loom container smoke test (Linux: requires podman; Darwin: no-op skip)";
+      meta.description = "Run loom property tests + container smoke (Linux: requires podman; Darwin: smoke skipped)";
       type = "app";
-      program =
-        if isLinux then
-          "${loomDeriv.loomSmoke}/bin/test-loom"
-        else
-          "${loomDeriv.loomSmokeDarwinSkip}/bin/test-loom";
+      program = "${loomDeriv.testLoom}/bin/test-loom";
     };
 
     # profiles.rust.buildPackage [verify] hash invariants (specs/profiles.md
