@@ -116,6 +116,10 @@ pub fn run_with_timeout(
         exit_signals,
     })?;
 
+    // Set before wrapix runs so a non-zero interactive exit (Ctrl-C, agent
+    // crash) does not leave current_spec pointing at a stale prior spec.
+    db.set_current_spec(&label)?;
+
     let argv = build_wrapix_argv(workspace, &prompt_body);
     let bin: PathBuf = opts.wrapix_bin.unwrap_or_else(|| PathBuf::from(WRAPIX_BIN));
     info!(
@@ -145,7 +149,6 @@ pub fn run_with_timeout(
     }
 
     let outcome = reconcile_companions(&db, &label, &spec_path)?;
-    db.set_current_spec(&label)?;
 
     Ok(PlanReport {
         label,
