@@ -14,7 +14,11 @@
 //!
 //! Separators between `Options` / `Option N` and the trailing summary or
 //! title may be em-dash `—`, en-dash `–`, single hyphen `-`, or double
-//! hyphen `--`. The parser tolerates any of these.
+//! hyphen `--`. The parser tolerates any of these. Headings inside fenced
+//! code blocks are ignored.
+
+use loom_core::markdown::{Event, HeadingLevel, Tag, TagEnd, parser};
+use pulldown_cmark::OffsetIter;
 
 /// Result of parsing one bead description against the contract.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -37,6 +41,13 @@ pub struct OptionEntry {
     pub body: String,
 }
 
+struct SubHead {
+    n: u32,
+    title: String,
+    body_start: usize,
+    body_end: usize,
+}
+
 /// Parse an `## Options` block from a bead description per the contract.
 ///
 /// Behaviour:
@@ -48,69 +59,104 @@ pub struct OptionEntry {
 ///   `### Option` or the next `##` heading (whichever comes first).
 pub fn parse_options(description: &str) -> OptionsParse {
     let mut parse = OptionsParse::default();
-    let mut in_options = false;
-    let mut current: Option<OptionEntry> = None;
-    let mut current_body_lines: Vec<&str> = Vec::new();
+    let mut iter = parser(description).into_offset_iter();
 
-    for line in description.lines() {
-        if !in_options {
-            if let Some(rest) = match_options_heading(line) {
-                in_options = true;
-                parse.summary = strip_separator(rest);
+    let Some(summary_raw) = find_options_summary(&mut iter) else {
+        return parse;
+    };
+    parse.summary = strip_separator(&summary_raw);
+
+    let mut subheadings: Vec<SubHead> = Vec::new();
+    let mut section_end = description.len();
+
+    while let Some((event, range)) = iter.next() {
+        let Event::Start(Tag::Heading { level, .. }) = event else {
+            continue;
+        };
+        if level == HeadingLevel::H2 {
+            if let Some(last) = subheadings.last_mut() {
+                last.body_end = range.start;
             }
+            section_end = range.start;
+            break;
+        }
+        if level != HeadingLevel::H3 {
+            consume_to_heading_end(&mut iter);
             continue;
         }
-
-        if let Some((n, rest)) = match_option_heading(line) {
-            if let Some(mut entry) = current.take() {
-                entry.body = join_body(&current_body_lines);
-                parse.options.push(entry);
-                current_body_lines.clear();
+        let mut text = String::new();
+        let mut heading_end = range.end;
+        for (e, r) in iter.by_ref() {
+            if matches!(e, Event::End(TagEnd::Heading(_))) {
+                heading_end = r.end;
+                break;
             }
-            current = Some(OptionEntry {
+            if let Event::Text(t) | Event::Code(t) = e {
+                text.push_str(&t);
+            }
+        }
+        if let Some((n, rest)) = parse_option_heading(&text) {
+            if let Some(last) = subheadings.last_mut() {
+                last.body_end = range.start;
+            }
+            subheadings.push(SubHead {
                 n,
                 title: strip_separator(rest),
-                body: String::new(),
+                body_start: heading_end,
+                body_end: section_end,
             });
-            continue;
-        }
-
-        if is_next_h2(line) {
-            if let Some(mut entry) = current.take() {
-                entry.body = join_body(&current_body_lines);
-                parse.options.push(entry);
-                current_body_lines.clear();
-            }
-            in_options = false;
-            continue;
-        }
-
-        if current.is_some() {
-            current_body_lines.push(line);
         }
     }
-
-    if let Some(mut entry) = current.take() {
-        entry.body = join_body(&current_body_lines);
-        parse.options.push(entry);
+    if let Some(last) = subheadings.last_mut()
+        && last.body_end > section_end
+    {
+        last.body_end = section_end;
     }
 
+    parse.options = subheadings
+        .into_iter()
+        .map(|s| OptionEntry {
+            n: s.n,
+            title: s.title,
+            body: trim_blank_lines(description.get(s.body_start..s.body_end).unwrap_or("")),
+        })
+        .collect();
     parse
 }
 
-fn match_options_heading(line: &str) -> Option<&str> {
-    let rest = line.strip_prefix("## ")?;
-    let rest = rest.strip_prefix("Options")?;
-    if rest.is_empty() || rest.starts_with(char::is_whitespace) {
-        Some(rest.trim_start())
-    } else {
-        None
+fn find_options_summary(iter: &mut OffsetIter<'_>) -> Option<String> {
+    while let Some((event, _)) = iter.next() {
+        let Event::Start(Tag::Heading {
+            level: HeadingLevel::H2,
+            ..
+        }) = event
+        else {
+            continue;
+        };
+        let mut text = String::new();
+        for (e, _) in iter.by_ref() {
+            if matches!(e, Event::End(TagEnd::Heading(_))) {
+                break;
+            }
+            if let Event::Text(t) | Event::Code(t) = e {
+                text.push_str(&t);
+            }
+        }
+        let trimmed = text.trim_start();
+        let Some(rest) = trimmed.strip_prefix("Options") else {
+            continue;
+        };
+        if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+            continue;
+        }
+        return Some(rest.trim_start().to_string());
     }
+    None
 }
 
-fn match_option_heading(line: &str) -> Option<(u32, &str)> {
-    let rest = line.strip_prefix("### ")?;
-    let rest = rest.strip_prefix("Option")?;
+fn parse_option_heading(text: &str) -> Option<(u32, &str)> {
+    let trimmed = text.trim_start();
+    let rest = trimmed.strip_prefix("Option")?;
     let rest = rest.strip_prefix(' ')?;
     let trimmed = rest.trim_start();
     let (digits, after) = take_digits(trimmed);
@@ -152,19 +198,23 @@ fn strip_separator(rest: &str) -> String {
     after.trim().to_string()
 }
 
-fn is_next_h2(line: &str) -> bool {
-    line.starts_with("## ") && !line.starts_with("### ")
+fn trim_blank_lines(s: &str) -> String {
+    let mut out = s.to_string();
+    while out.ends_with('\n') || out.ends_with('\r') {
+        out.pop();
+    }
+    while out.starts_with('\n') || out.starts_with('\r') {
+        out.remove(0);
+    }
+    out
 }
 
-fn join_body(lines: &[&str]) -> String {
-    let mut s = lines.join("\n");
-    while s.ends_with('\n') {
-        s.pop();
+fn consume_to_heading_end(iter: &mut OffsetIter<'_>) {
+    for (e, _) in iter.by_ref() {
+        if matches!(e, Event::End(TagEnd::Heading(_))) {
+            break;
+        }
     }
-    while s.starts_with('\n') {
-        s.remove(0);
-    }
-    s
 }
 
 #[cfg(test)]
@@ -260,5 +310,29 @@ ignored
         assert_eq!(parse.options.len(), 1);
         assert_eq!(parse.options[0].title, "");
         assert_eq!(parse.options[0].body, "body only");
+    }
+
+    #[test]
+    fn fenced_options_example_inside_description_is_ignored() {
+        let desc = "\
+Setup paragraph.
+
+```markdown
+## Options — fake summary
+
+### Option 1 — fake title
+fake body
+```
+
+## Options — real
+
+### Option 1 — real title
+real body
+";
+        let parse = parse_options(desc);
+        assert_eq!(parse.summary, "real");
+        assert_eq!(parse.options.len(), 1);
+        assert_eq!(parse.options[0].title, "real title");
+        assert_eq!(parse.options[0].body, "real body");
     }
 }

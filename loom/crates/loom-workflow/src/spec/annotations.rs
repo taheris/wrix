@@ -1,13 +1,15 @@
 //! Parse `## Success Criteria` checklists in spec markdown.
 //!
-//! Mirrors `parse_spec_annotations` in `lib/ralph/cmd/util.sh`: walks the
-//! file, ignores fenced code blocks, and pairs each `- [ ]`/`- [x]` checklist
-//! entry with the `[verify](path#fn)` or `[judge](path#fn)` link on the next
-//! non-blank line. Criteria without an annotation become entries of type
-//! [`AnnotationKind::None`].
+//! Each `- [ ]`/`- [x]` checklist entry pairs with the first
+//! `[verify](path#fn)` or `[judge](path#fn)` link inside the same list item.
+//! Items without an annotation become entries of type
+//! [`AnnotationKind::None`]. Headings inside fenced code blocks are skipped
+//! by the structural parser.
 
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use loom_core::markdown::{Event, HeadingLevel, Tag, TagEnd, section_events};
 
 use super::error::SpecError;
 
@@ -47,153 +49,130 @@ pub fn parse_spec_annotations(spec_path: &Path) -> Result<Vec<Annotation>, SpecE
 }
 
 fn parse_body(body: &str, spec_dir: &Path) -> Option<Vec<Annotation>> {
+    let events = section_events(body, HeadingLevel::H2, |t| {
+        t.starts_with("Success Criteria")
+    })?;
+
     let mut out = Vec::new();
-    let mut in_criteria = false;
-    let mut in_fence = false;
-    let mut pending: Option<(String, bool)> = None;
-    let mut saw_criteria = false;
+    let mut list_depth: usize = 0;
+    let mut item: Option<ItemState> = None;
 
-    for raw in body.lines() {
-        let line = raw;
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("```") {
-            in_fence = !in_fence;
-            continue;
-        }
-        if in_fence {
-            continue;
-        }
-        if is_success_criteria_heading(line) {
-            in_criteria = true;
-            continue;
-        }
-        if in_criteria && is_other_h2(line) {
-            if let Some((text, checked)) = pending.take() {
-                out.push(Annotation {
-                    criterion: text,
-                    kind: AnnotationKind::None,
-                    file: None,
-                    function: None,
-                    checked,
-                });
+    for (event, _) in events {
+        match event {
+            Event::Start(Tag::List(_)) => list_depth += 1,
+            Event::End(TagEnd::List(_)) => list_depth = list_depth.saturating_sub(1),
+            Event::Start(Tag::Item) if list_depth == 1 => {
+                item = Some(ItemState::default());
             }
-            break;
-        }
-        if !in_criteria {
-            continue;
-        }
-        if let Some((checked, text)) = parse_checkbox(line) {
-            if let Some((prev, prev_checked)) = pending.take() {
-                out.push(Annotation {
-                    criterion: prev,
-                    kind: AnnotationKind::None,
-                    file: None,
-                    function: None,
-                    checked: prev_checked,
-                });
-            }
-            pending = Some((text, checked));
-            saw_criteria = true;
-            continue;
-        }
-        if let Some((text, checked)) = pending.as_ref()
-            && let Some((kind, target)) = parse_annotation_line(line)
-        {
-            let (file, function) = resolve_annotation_link(&target, spec_dir);
-            out.push(Annotation {
-                criterion: text.clone(),
-                kind,
-                file: Some(file),
-                function,
-                checked: *checked,
-            });
-            pending = None;
-        }
-    }
-    if let Some((text, checked)) = pending {
-        out.push(Annotation {
-            criterion: text,
-            kind: AnnotationKind::None,
-            file: None,
-            function: None,
-            checked,
-        });
-    }
-    saw_criteria.then_some(out)
-}
-
-fn is_success_criteria_heading(line: &str) -> bool {
-    let stripped = line.trim_start();
-    let Some(rest) = stripped.strip_prefix("##") else {
-        return false;
-    };
-    let rest = rest.trim_start_matches(' ');
-    rest.trim_start().starts_with("Success Criteria") || rest.starts_with("Success Criteria")
-}
-
-fn is_other_h2(line: &str) -> bool {
-    let stripped = line.trim_start();
-    let Some(rest) = stripped.strip_prefix("##") else {
-        return false;
-    };
-    if rest.starts_with('#') {
-        return false;
-    }
-    let rest = rest.trim_start_matches(' ');
-    !rest.starts_with("Success Criteria")
-}
-
-fn parse_checkbox(line: &str) -> Option<(bool, String)> {
-    let trimmed = line.trim_start();
-    let rest = trimmed.strip_prefix("- ")?;
-    let rest = rest.strip_prefix('[')?;
-    let mark = rest.chars().next()?;
-    let after_mark = &rest[mark.len_utf8()..];
-    let after_close = after_mark.strip_prefix(']')?;
-    let text = after_close.strip_prefix(' ').unwrap_or(after_close);
-    let checked = match mark {
-        ' ' => false,
-        'x' | 'X' => true,
-        _ => return None,
-    };
-    Some((checked, text.to_string()))
-}
-
-fn parse_annotation_line(line: &str) -> Option<(AnnotationKind, String)> {
-    let trimmed = line.trim_start();
-    for (prefix, kind) in [
-        ("[verify](", AnnotationKind::Verify),
-        ("[judge](", AnnotationKind::Judge),
-    ] {
-        if let Some(rest) = trimmed.strip_prefix(prefix)
-            && let Some(target) = capture_balanced(rest)
-        {
-            return Some((kind, target));
-        }
-    }
-    None
-}
-
-fn capture_balanced(rest: &str) -> Option<String> {
-    let mut depth = 1usize;
-    let mut out = String::new();
-    for ch in rest.chars() {
-        match ch {
-            '(' => {
-                depth += 1;
-                out.push(ch);
-            }
-            ')' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(out);
+            Event::End(TagEnd::Item) if list_depth == 1 => {
+                if let Some(state) = item.take()
+                    && let Some(annotation) = state.into_annotation(spec_dir)
+                {
+                    out.push(annotation);
                 }
-                out.push(ch);
             }
-            _ => out.push(ch),
+            Event::TaskListMarker(checked) => {
+                if let Some(state) = item.as_mut() {
+                    state.is_checkbox = true;
+                    state.checked = checked;
+                }
+            }
+            Event::Start(Tag::Link { dest_url, .. }) => {
+                if let Some(state) = item.as_mut() {
+                    state.start_link(dest_url.into_string());
+                }
+            }
+            Event::End(TagEnd::Link) => {
+                if let Some(state) = item.as_mut() {
+                    state.end_link();
+                }
+            }
+            Event::Text(text) | Event::Code(text) => {
+                if let Some(state) = item.as_mut() {
+                    state.push_text(&text);
+                }
+            }
+            Event::SoftBreak | Event::HardBreak => {
+                if let Some(state) = item.as_mut() {
+                    state.push_text(" ");
+                }
+            }
+            _ => {}
         }
     }
-    None
+    Some(out)
+}
+
+#[derive(Default)]
+struct ItemState {
+    is_checkbox: bool,
+    checked: bool,
+    criterion: String,
+    pending_link_text: Option<String>,
+    pending_link_url: Option<String>,
+    annotation: Option<(AnnotationKind, String)>,
+}
+
+impl ItemState {
+    fn start_link(&mut self, url: String) {
+        self.pending_link_text = Some(String::new());
+        self.pending_link_url = Some(url);
+    }
+
+    fn end_link(&mut self) {
+        let (Some(text), Some(url)) = (self.pending_link_text.take(), self.pending_link_url.take())
+        else {
+            return;
+        };
+        if self.annotation.is_none() {
+            let kind = match text.as_str() {
+                "verify" => Some(AnnotationKind::Verify),
+                "judge" => Some(AnnotationKind::Judge),
+                _ => None,
+            };
+            if let Some(k) = kind {
+                self.annotation = Some((k, url));
+                return;
+            }
+        }
+        if !text.is_empty() {
+            self.criterion.push_str(&text);
+        }
+    }
+
+    fn push_text(&mut self, text: &str) {
+        if let Some(buf) = self.pending_link_text.as_mut() {
+            buf.push_str(text);
+        } else {
+            self.criterion.push_str(text);
+        }
+    }
+
+    fn into_annotation(self, spec_dir: &Path) -> Option<Annotation> {
+        if !self.is_checkbox {
+            return None;
+        }
+        let criterion = self.criterion.trim().to_string();
+        match self.annotation {
+            Some((kind, target)) => {
+                let (file, function) = resolve_annotation_link(&target, spec_dir);
+                Some(Annotation {
+                    criterion,
+                    kind,
+                    file: Some(file),
+                    function,
+                    checked: self.checked,
+                })
+            }
+            None => Some(Annotation {
+                criterion,
+                kind: AnnotationKind::None,
+                file: None,
+                function: None,
+                checked: self.checked,
+            }),
+        }
+    }
 }
 
 fn resolve_annotation_link(target: &str, spec_dir: &Path) -> (PathBuf, Option<String>) {
@@ -334,6 +313,31 @@ mod tests {
         let path = write_spec(dir.path(), "x.md", body)?;
         let rows = parse_spec_annotations(&path)?;
         assert_eq!(rows[0].function.as_deref(), Some("test_a"));
+        Ok(())
+    }
+
+    #[test]
+    fn fenced_success_criteria_example_does_not_anchor() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let body = "\
+# X
+
+````markdown
+## Success Criteria
+
+- [ ] fake entry
+  [verify](fake.sh#x)
+````
+
+## Success Criteria
+
+- [ ] real
+  [verify](t.sh#x)
+";
+        let path = write_spec(dir.path(), "x.md", body)?;
+        let rows = parse_spec_annotations(&path)?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].criterion, "real");
         Ok(())
     }
 }

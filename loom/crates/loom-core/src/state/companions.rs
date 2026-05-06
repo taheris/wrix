@@ -1,63 +1,77 @@
 use tracing::warn;
 
-const HEADING: &str = "## Companions";
+use crate::markdown::{Event, HeadingLevel, Tag, TagEnd, section_events};
 
 /// Parse a spec's `## Companions` section per the rules in
 /// `specs/loom-harness.md`:
 ///
 /// - Heading must be exactly `## Companions` (case-sensitive, level 2).
-/// - Body is a flat bullet list of `- ` lines.
-/// - Each path is the single token between a pair of backticks.
+/// - Body is the first flat bullet list inside the section.
+/// - Each path is the single inline-code span on that bullet line.
 /// - Paths normalized to repo-relative POSIX (leading `/` stripped).
 /// - Missing section yields zero rows.
-/// - Malformed lines are skipped with a `warn!` rather than aborting.
+/// - Malformed bullets are skipped with a `warn!` rather than aborting.
+///
+/// The structural parser (pulldown-cmark) ignores fenced code blocks,
+/// blockquotes, and indented code, so the spec's own ```markdown ...```
+/// example does not anchor the section.
 pub fn parse_companions(content: &str) -> Vec<String> {
-    let lines: Vec<&str> = content.lines().collect();
-    let Some(start) = lines.iter().position(|l| *l == HEADING) else {
+    let Some(events) = section_events(content, HeadingLevel::H2, |t| t == "Companions") else {
         return Vec::new();
     };
 
     let mut paths = Vec::new();
-    for line in &lines[start + 1..] {
-        if is_heading(line) {
-            break;
-        }
-        let trimmed = line.trim_start();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if !trimmed.starts_with("- ") {
-            continue;
-        }
-        match extract_backtick_path(&trimmed[2..]) {
-            Ok(p) => paths.push(p),
-            Err(reason) => warn!(line = %line, reason, "skipping malformed companion entry"),
+    let mut list_depth: usize = 0;
+    let mut first_list_finished = false;
+    let mut item_codes: Vec<String> = Vec::new();
+    let mut in_top_item = false;
+
+    for (event, _) in events {
+        match event {
+            Event::Start(Tag::List(_)) => {
+                if list_depth == 0 && first_list_finished {
+                    break;
+                }
+                list_depth += 1;
+            }
+            Event::End(TagEnd::List(_)) => {
+                list_depth = list_depth.saturating_sub(1);
+                if list_depth == 0 {
+                    first_list_finished = true;
+                }
+            }
+            Event::Start(Tag::Item) if list_depth == 1 => {
+                in_top_item = true;
+                item_codes.clear();
+            }
+            Event::End(TagEnd::Item) if list_depth == 1 && in_top_item => {
+                in_top_item = false;
+                match item_codes.len() {
+                    1 => {
+                        let raw = &item_codes[0];
+                        if raw.is_empty() {
+                            warn!(reason = "empty path", "skipping malformed companion entry");
+                        } else {
+                            paths.push(normalize(raw));
+                        }
+                    }
+                    0 => warn!(
+                        reason = "no backticks",
+                        "skipping malformed companion entry"
+                    ),
+                    _ => warn!(
+                        reason = "expected exactly one backticked path",
+                        "skipping malformed companion entry"
+                    ),
+                }
+            }
+            Event::Code(text) if list_depth == 1 && in_top_item => {
+                item_codes.push(text.into_string());
+            }
+            _ => {}
         }
     }
     paths
-}
-
-fn is_heading(line: &str) -> bool {
-    let trimmed = line.trim_start();
-    let hash_count = trimmed.bytes().take_while(|b| *b == b'#').count();
-    hash_count > 0 && trimmed[hash_count..].starts_with(' ')
-}
-
-fn extract_backtick_path(body: &str) -> Result<String, &'static str> {
-    let backtick_count = body.chars().filter(|c| *c == '`').count();
-    if backtick_count == 0 {
-        return Err("no backticks");
-    }
-    if backtick_count != 2 {
-        return Err("expected exactly one backticked path");
-    }
-    let start = body.find('`').ok_or("no opening backtick")?;
-    let end_rel = body[start + 1..].find('`').ok_or("no closing backtick")?;
-    let raw = &body[start + 1..start + 1 + end_rel];
-    if raw.is_empty() {
-        return Err("empty path");
-    }
-    Ok(normalize(raw))
 }
 
 fn normalize(raw: &str) -> String {
@@ -137,5 +151,40 @@ mod tests {
 - `should/not/parse/`
 ";
         assert_eq!(parse_companions(md), vec!["a/"]);
+    }
+
+    #[test]
+    fn fenced_companions_example_inside_spec_is_ignored() {
+        let md = "\
+# Loom Harness
+
+```markdown
+## Companions
+
+- `lib/sandbox/`
+- `lib/ralph/template/`
+```
+
+Body text.
+
+## Companions
+
+- `real/path/`
+";
+        assert_eq!(parse_companions(md), vec!["real/path/"]);
+    }
+
+    #[test]
+    fn fenced_only_with_no_real_section_yields_zero() {
+        let md = "\
+# Spec
+
+```markdown
+## Companions
+
+- `not/real/`
+```
+";
+        assert!(parse_companions(md).is_empty());
     }
 }

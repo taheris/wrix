@@ -1,11 +1,10 @@
 use std::path::Path;
 
 use loom_core::identifier::SpecLabel;
+use loom_core::markdown::{HeadingLevel, section_events};
 use loom_core::state::{StateDb, parse_companions};
 
 use super::error::PlanError;
-
-const COMPANIONS_HEADING: &str = "## Companions";
 
 /// Outcome of a companion-section reconciliation, returned by
 /// [`reconcile_companions`].
@@ -38,7 +37,7 @@ pub fn reconcile_companions(
         }
     };
     let paths = parse_companions(&body);
-    let section_present = body.lines().any(|l| l == COMPANIONS_HEADING);
+    let section_present = section_events(&body, HeadingLevel::H2, |t| t == "Companions").is_some();
     db.replace_companions(label, &paths)?;
     Ok(CompanionReconciliation {
         paths,
