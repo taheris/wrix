@@ -20,6 +20,8 @@ Read the anchor spec at `{{ spec_path }}` for the full current contents before i
 
 {% include "partial/companions_context.md" %}
 
+{% include "partial/scratchpad.md" %}
+
 {% if implementation_notes.is_empty() %}{% else %}## Implementation Notes
 
 {% for note in implementation_notes %}- {{ note }}

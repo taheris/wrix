@@ -6,6 +6,8 @@
 
 {% include "partial/companions_context.md" %}
 
+{% include "partial/scratchpad.md" %}
+
 ## Current Spec
 
 Read: {{ spec_path }}

@@ -12,6 +12,8 @@ that bead is on deck.
 
 {% include "partial/context_pinning.md" %}
 
+{% include "partial/scratchpad.md" %}
+
 ## Outstanding Clarifies
 
 Each entry below is a `loom:clarify` bead the reviewer raised. The header line

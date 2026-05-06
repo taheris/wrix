@@ -9,6 +9,8 @@ the user's idea and create a comprehensive specification document.
 
 {% include "partial/spec_header.md" %}
 
+{% include "partial/scratchpad.md" %}
+
 ## Interview Guidelines
 
 1. **Ask ONE focused question at a time** - Don't overwhelm with multiple questions
