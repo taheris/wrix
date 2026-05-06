@@ -132,13 +132,93 @@ let
   # crane.mkLib is bound to pkgs (build-sandbox cargo target) and overridden
   # with the rust profile's resolved toolchain so build-sandbox `rustc` resolves
   # to the same /nix/store/... path as the sandbox image and host devshell PATH.
-  # buildPackage (added in a follow-up) closes over this craneLib.
+  # buildPackage closes over this craneLib.
   mkCraneLib =
     toolchain:
     if crane == null then
       throw "lib/sandbox/profiles.nix: profiles.rust requires the crane input; pass `crane` to this file"
     else
       (crane.mkLib pkgs).overrideToolchain (_: toolchain);
+
+  # bin closes over src + cargoArtifacts only — no edge to clippy/nextest, no
+  # extraSrcs — so devshell consumers stay warm across test-fixture edits.
+  mkBuildPackageFn =
+    craneLib:
+    {
+      src,
+      cargoLock,
+      extraSrcs ? { },
+      cargoArtifacts ? null,
+      cargoExtraArgs ? "",
+      buildInputs ? [ ],
+      propagatedBuildInputs ? [ ],
+      nativeBuildInputs ? [ ],
+      meta ? { },
+    }:
+    let
+      cleanedSrc = craneLib.cleanCargoSource src;
+
+      commonArgs = {
+        src = cleanedSrc;
+        inherit
+          cargoLock
+          cargoExtraArgs
+          buildInputs
+          propagatedBuildInputs
+          nativeBuildInputs
+          meta
+          ;
+      };
+
+      resolvedCargoArtifacts =
+        if cargoArtifacts != null then cargoArtifacts else craneLib.buildDepsOnly commonArgs;
+
+      stagedSrc =
+        if extraSrcs == { } then
+          cleanedSrc
+        else
+          pkgs.runCommand "rust-src-with-extras" { } (
+            ''
+              cp -r ${cleanedSrc} $out
+              chmod -R u+w $out
+            ''
+            + pkgs.lib.concatStringsSep "\n" (
+              pkgs.lib.mapAttrsToList (rel: abs: ''
+                mkdir -p "$(dirname "$out/${rel}")"
+                cp -r ${abs} "$out/${rel}"
+              '') extraSrcs
+            )
+          );
+
+      bin = craneLib.buildPackage (
+        commonArgs
+        // {
+          cargoArtifacts = resolvedCargoArtifacts;
+          doCheck = false;
+        }
+      );
+
+      clippy = craneLib.cargoClippy (
+        commonArgs
+        // {
+          src = stagedSrc;
+          cargoArtifacts = resolvedCargoArtifacts;
+          cargoClippyExtraArgs = "--all-targets";
+        }
+      );
+
+      nextest = craneLib.cargoNextest (
+        commonArgs
+        // {
+          src = stagedSrc;
+          cargoArtifacts = resolvedCargoArtifacts;
+        }
+      );
+    in
+    {
+      inherit bin clippy nextest;
+      cargoArtifacts = resolvedCargoArtifacts;
+    };
 
   # Build a Rust profile attrset from a given toolchain
   mkRustProfile =
@@ -222,10 +302,15 @@ let
         export CARGO_INCREMENTAL="''${CARGO_INCREMENTAL:-0}"
       '';
     }
-    // {
-      inherit toolchain;
-      craneLib = mkCraneLib toolchain;
-    };
+    // (
+      let
+        craneLib = mkCraneLib toolchain;
+      in
+      {
+        inherit toolchain craneLib;
+        buildPackage = mkBuildPackageFn craneLib;
+      }
+    );
 
   # Build a toolchain from a rust-toolchain.toml file. fenix requires a sha256
   # of the downloaded components for purity, so callers must pass { file, sha256 }.
