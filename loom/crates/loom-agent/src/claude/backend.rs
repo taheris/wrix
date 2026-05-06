@@ -155,7 +155,19 @@ pub(crate) fn prepare_runtime(config: &SpawnConfig) -> Result<PathBuf, ProtocolE
         .repin
         .write_claude_files(&runtime_dir)
         .map_err(ProtocolError::Io)?;
-    write_spawn_config(&runtime_dir, config)
+    let mut config = config.clone();
+    if let Ok(token) = std::env::var("CLAUDE_CODE_OAUTH_TOKEN") {
+        upsert_env(&mut config.env, "CLAUDE_CODE_OAUTH_TOKEN", &token);
+    }
+    write_spawn_config(&runtime_dir, &config)
+}
+
+fn upsert_env(env: &mut Vec<(String, String)>, key: &str, value: &str) {
+    if let Some(slot) = env.iter_mut().find(|(k, _)| k == key) {
+        slot.1 = value.to_string();
+    } else {
+        env.push((key.to_string(), value.to_string()));
+    }
 }
 
 /// Build an [`AgentSession`] from a launcher [`Command`].

@@ -274,6 +274,7 @@ elif [ "$WRAPIX_AGENT" = "claude" ] && [ "${WRAPIX_STDIO:-}" = "1" ]; then
   claude \
     --dangerously-skip-permissions \
     --print \
+    --verbose \
     --input-format stream-json \
     --output-format stream-json \
     || MAIN_EXIT=$?
