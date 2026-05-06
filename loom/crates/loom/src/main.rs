@@ -21,7 +21,7 @@ use loom_core::config::{LoomConfig, Phase};
 use loom_core::git::GitClient;
 use loom_core::identifier::{BeadId, ProfileName, SpecLabel};
 use loom_core::lock::LockManager;
-use loom_core::logging::LogSink;
+use loom_core::logging::{LogSink, sweep_retention_at};
 use loom_core::profile_manifest::ProfileImageManifest;
 use loom_core::state::StateDb;
 use loom_workflow::check::{IterationCap, ProductionCheckController, check_loop as run_check_loop};
@@ -331,6 +331,11 @@ fn run_run(
     let guard = lock_mgr.acquire_spec(&label)?;
 
     let config = LoomConfig::load(workspace.join(".wrapix/loom/config.toml"))?;
+    sweep_retention_at(
+        &workspace.join(".wrapix/loom/logs"),
+        config.logs.retention_days,
+        SystemClock::new().wall_now(),
+    );
     // Resolve the per-phase backend up front so an unknown backend name in
     // the config (or via `--agent` — clap covers the latter) fails before
     // any work begins. The resolution itself is the wiring; the dispatch
