@@ -22,6 +22,23 @@
         "url": "ssh://git@github.com/gastownhall/beads.git"
       }
     },
+    "crane": {
+      "locked": {
+        "lastModified": 1777830388,
+        "narHash": "sha256-2uoQAqUk2H0ijQtGiWAyNeQYGYc6yfAcRRLlJAz4Gp8=",
+        "ref": "master",
+        "rev": "d459c1350e96ce1a7e3859c513ef5e9869d67d6f",
+        "shallow": true,
+        "type": "git",
+        "url": "https://github.com/ipetkov/crane.git"
+      },
+      "original": {
+        "ref": "master",
+        "shallow": true,
+        "type": "git",
+        "url": "https://github.com/ipetkov/crane.git"
+      }
+    },
     "fenix": {
       "inputs": {
         "nixpkgs": [
@@ -105,6 +122,7 @@
     "root": {
       "inputs": {
         "beads": "beads",
+        "crane": "crane",
         "fenix": "fenix",
         "flake-parts": "flake-parts",
         "gascity": "gascity",

@@ -16,7 +16,7 @@
     let
       wrapix = import ../../lib {
         inherit pkgs system linuxPkgs;
-        inherit (inputs) fenix;
+        inherit (inputs) crane fenix;
         treefmt = treefmtWrapper;
       };
 

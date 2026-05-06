@@ -2,6 +2,7 @@
   pkgs,
   system,
   linuxPkgs,
+  crane ? null,
   fenix ? null,
   treefmt ? null,
 }:
@@ -41,7 +42,7 @@ let
   profiles = import ./profiles.nix {
     pkgs = linuxPkgs;
     hostPkgs = pkgs;
-    inherit fenix treefmt;
+    inherit crane fenix treefmt;
   };
 
   # MCP server registry (uses Linux packages for server binaries)

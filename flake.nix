@@ -9,6 +9,10 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    crane = {
+      url = "git+https://github.com/ipetkov/crane.git?ref=master&shallow=1";
+    };
+
     fenix = {
       url = "git+https://github.com/nix-community/fenix.git?ref=main&shallow=1";
       inputs.nixpkgs.follows = "nixpkgs";

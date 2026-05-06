@@ -2,6 +2,7 @@
   pkgs,
   system,
   linuxPkgs ? pkgs,
+  crane ? null,
   fenix ? null,
   treefmt ? null,
 }:
@@ -12,6 +13,7 @@ let
       pkgs
       system
       linuxPkgs
+      crane
       fenix
       treefmt
       ;

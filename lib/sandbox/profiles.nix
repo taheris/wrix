@@ -1,6 +1,7 @@
 {
   pkgs,
   hostPkgs ? pkgs,
+  crane ? null,
   fenix ? null,
   treefmt ? null,
 }:
@@ -128,6 +129,17 @@ let
   # rustup-equivalent "default" set (rustc + cargo + rust-std + clippy + rustfmt + rust-docs).
   defaultRustToolchain = mkRustToolchain fenixPkgs.stable.defaultToolchain;
 
+  # crane.mkLib is bound to pkgs (build-sandbox cargo target) and overridden
+  # with the rust profile's resolved toolchain so build-sandbox `rustc` resolves
+  # to the same /nix/store/... path as the sandbox image and host devshell PATH.
+  # buildPackage (added in a follow-up) closes over this craneLib.
+  mkCraneLib =
+    toolchain:
+    if crane == null then
+      throw "lib/sandbox/profiles.nix: profiles.rust requires the crane input; pass `crane` to this file"
+    else
+      (crane.mkLib pkgs).overrideToolchain (_: toolchain);
+
   # Build a Rust profile attrset from a given toolchain
   mkRustProfile =
     toolchain:
@@ -212,6 +224,7 @@ let
     }
     // {
       inherit toolchain;
+      craneLib = mkCraneLib toolchain;
     };
 
   # Build a toolchain from a rust-toolchain.toml file. fenix requires a sha256
