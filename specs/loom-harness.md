@@ -1247,11 +1247,11 @@ During the transition period:
 - [ ] Review's primary concern is live-path coverage: at least one
       `[verify]` on the bead must exercise the live path (same binary,
       same argv shape, same env). All-mock `[verify]` sets are flagged
-  [judge](tests/judges/loom-review.sh::judge_live_path_coverage)
+  [judge](tests/judges/loom.sh::judge_live_path_coverage)
 - [ ] Review flags mocks that stand in for the very thing the test
       claims to test (e.g. mocking the agent backend in an
       agent-integration test)
-  [judge](tests/judges/loom-review.sh::judge_mock_discipline)
+  [judge](tests/judges/loom.sh::judge_mock_discipline)
 - [ ] Review's secondary concerns are scope appropriateness and
       `[judge]` rubric satisfaction
   [verify](tests/loom-test.sh::test_review_inputs_include_judge_rubrics)
@@ -1335,7 +1335,7 @@ During the transition period:
 - [ ] `loom plan -u <label>` reads the existing `implementation_notes`,
       and writes back a merged array (interview-driven keep/drop/add —
       not blind append, not blind replace)
-  [judge](tests/judges/loom-plan.sh::judge_plan_update_merges_notes)
+  [judge](tests/judges/loom.sh::judge_plan_update_merges_notes)
 - [ ] `loom todo` reads `implementation_notes` from the anchor row,
       renders them into each new bead body, then clears the column
       (`UPDATE … SET implementation_notes = NULL`); the row itself stays
@@ -1368,7 +1368,7 @@ During the transition period:
 - [ ] `partial/scratchpad.md` instructs the agent that the scratchpad is
       agent-lifecycle-only and points at durable destinations for
       long-term records
-  [judge](tests/judges/loom-harness.sh::test_scratchpad_partial_clarity)
+  [judge](tests/judges/loom.sh::test_scratchpad_partial_clarity)
 
 ### Beads CLI wrapper
 

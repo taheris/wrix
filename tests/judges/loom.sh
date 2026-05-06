@@ -58,3 +58,39 @@ test_newtypes_for_identifiers() {
   judge_criterion \
     "Domain and protocol identifiers are newtype wrappers, not bare strings. The newtype_id! macro in identifier/mod.rs produces a #[serde(transparent)] tuple struct around String with new(impl Into<String>) -> Self, as_str(&self) -> &str, and a Display impl that writes the inner string. Each id family lives in its own submodule under identifier/ — bead.rs (BeadId), spec.rs (SpecLabel), molecule.rs (MoleculeId), profile.rs (ProfileName), session.rs (SessionId), tool_call.rs (ToolCallId), request.rs (RequestId) — and invokes newtype_id! exactly once. AgentKind in agent/mod.rs is a plain enum { Pi, Claude } with serde derive (NOT a newtype) — variants serialize as 'pi'/'claude'. The macro must NOT emit derive(From) or derive(Into) (NF-8 forbids them); values must enter via new() so future per-family validation can be added without bypass paths."
 }
+
+judge_live_path_coverage() {
+  judge_files \
+    "loom/crates/loom-templates/templates/check.md" \
+    "loom/crates/loom-workflow/src/check/runner.rs" \
+    "loom/crates/loom-workflow/src/check/phase_verdict.rs"
+  judge_criterion \
+    "The review prompt (check.md) and review-gate code (check/runner.rs, check/phase_verdict.rs) treat live-path coverage as the reviewer's primary concern: at least one [verify] annotation on the bead must exercise the live path — same binary, same argv shape, same env as production. The reviewer is instructed to flag a bead whose entire [verify] set is mock-only (no live invocation), and that flag resolves to RecoveryCause::ReviewFlag with the concern named 'live-path' in the flag detail (so the gate's recovery path is observable). Inspect check.md: the prompt must state this expectation explicitly and tell the reviewer what to do when an all-mock set is observed; inspect runner.rs / phase_verdict.rs: the live-path concern must be representable as one of the named flag concerns the gate emits, not buried in free-form text."
+}
+
+judge_mock_discipline() {
+  judge_files \
+    "loom/crates/loom-templates/templates/check.md" \
+    "loom/crates/loom-workflow/src/check/runner.rs" \
+    "loom/crates/loom-workflow/src/check/phase_verdict.rs"
+  judge_criterion \
+    "The review prompt (check.md) instructs the reviewer to flag mocks that stand in for the very thing under test — for example, mocking the agent backend in an agent-integration test, or stubbing the database in a test whose stated purpose is to exercise schema migrations. The rubric the reviewer applies is: identify what the test claims to validate (from its name, location, or [verify] criterion text), then check whether the test mocks that exact subsystem. When the answer is 'yes', the reviewer raises a flag, the gate resolves to RecoveryCause::ReviewFlag, and the flag detail names 'mock' as the triggering concern (mirrors how 'live-path' is named). Mocks of unrelated dependencies are NOT in scope; only mocks of the system-under-test are flagged."
+}
+
+judge_plan_update_merges_notes() {
+  judge_files \
+    "loom/crates/loom-templates/templates/plan_update.md" \
+    "loom/crates/loom-templates/templates/partial/implementation_notes_state.md" \
+    "loom/crates/loom-workflow/src/plan/runner.rs" \
+    "loom/crates/loom-workflow/src/plan/prompt.rs" \
+    "loom/crates/loom-core/src/state/implementation_notes.rs"
+  judge_criterion \
+    "The plan_update.md prompt (via partial/implementation_notes_state.md) renders the existing implementation_notes array from the spec's state-DB row into the interview, and explicitly instructs the agent to MERGE — keep notes still relevant, drop notes a new decision invalidates, add fresh notes — rather than blind append or blind replace. The prompt names all three operations (keep / drop / add) and frames the merge as the agent's judgement during the interview. The runner (plan/runner.rs) reads the existing array before launching the interview, passes it into the rendered context, and after the interview persists the agent-produced merged array back to the same state-DB row (overwriting the prior value, not appending). No code path silently appends or silently replaces; the merge is mediated by the interview output."
+}
+
+test_scratchpad_partial_clarity() {
+  judge_files \
+    "loom/crates/loom-templates/templates/partial/scratchpad.md"
+  judge_criterion \
+    "partial/scratchpad.md tells the agent that the scratchpad is agent-lifecycle-only — the file is created at session start, removed at session end on every exit path, and is a compaction-recovery aid rather than durable storage. It explicitly enumerates durable destinations for anything that must outlive the session: bead notes (bd update --notes), the spec file (specs/<label>.md), the commit message, CLAUDE.md / companion docs, or a new bead (bd create). The partial directs the agent to write to those destinations BEFORE session end if the thought is worth keeping, so a future agent reading the bead, spec, or commit history can find the durable record. Vague guidance like 'write important things down' without naming the durable destination is insufficient — the partial must enumerate them."
+}
