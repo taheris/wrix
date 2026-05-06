@@ -4,11 +4,12 @@
   system,
   treefmt,
   src,
+  wrapix,
 }:
 
 let
   inherit (builtins) elem pathExists;
-  inherit (pkgs) bash runCommandLocal rustPlatform;
+  inherit (pkgs) bash runCommandLocal;
 
   isLinux = elem system [
     "x86_64-linux"
@@ -19,26 +20,7 @@ let
   # This is impure - requires `nix flake check --impure`
   hasKvm = pathExists "/dev/kvm";
 
-  cratePath = ../../../lib/mcp/tmux/tmux-mcp;
-
-  # Build the tmux-mcp package using rustPlatform
-  # This properly handles cargo dependency fetching in the nix sandbox
-  tmuxDebugMcp = rustPlatform.buildRustPackage {
-    pname = "tmux-mcp";
-    version = "0.1.0";
-    src = cratePath;
-
-    cargoLock = {
-      lockFile = ../../../lib/mcp/tmux/tmux-mcp/Cargo.lock;
-    };
-
-    # Run tests as part of the build
-    doCheck = true;
-
-    meta = {
-      description = "MCP server providing tmux pane management for AI-assisted debugging";
-    };
-  };
+  tmuxDebugMcp = wrapix.tmuxMcpPackage.bin;
 
   # Copy test directory to store for use in VM tests
   testDir = runCommandLocal "tmux-mcp-test-dir" { } ''

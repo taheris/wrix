@@ -68,6 +68,7 @@ let
       system
       treefmt
       src
+      wrapix
       ;
   };
 
