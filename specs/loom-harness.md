@@ -899,6 +899,24 @@ Clearing notes (`UPDATE … SET implementation_notes = NULL`) is the only
 mutation `loom todo` performs on the row; the row itself remains as a
 foreign-key target for molecules and companions until rebuild.
 
+**Todo cursor advancement.** `meta.todo_cursor:<label>` records the
+last commit at which `loom todo` ran for a spec. Tier-2 detection uses
+the cursor to scan only commits since the last run. Advancing it
+prematurely silently demotes future invocations to no-ops on real work
+the agent never saw, so the cursor is **only** advanced when the
+session demonstrates productive completion:
+
+- The agent emitted a `LOOM_COMPLETE` or `LOOM_NOOP` marker on its
+  final turn (verdict-gate-recognised completion shapes).
+- The session's `exit_code == 0`.
+
+A zero exit alone is not enough — backend errors (529 overload,
+network drop, watchdog timeout) and swallowed-marker turns also exit
+zero, and treating those as success would skip the spec's commit
+range on the next `loom todo` run. On any other terminal state
+(`LOOM_BLOCKED`, `LOOM_CLARIFY`, missing marker, nonzero exit) the
+cursor stays put so the next invocation reprocesses the same range.
+
 **Container exposure:** The state DB is inside the workspace bind-mounted
 into containers. A malicious agent could modify it directly. This is an
 accepted risk — the DB is reconstructable via `loom init --rebuild`, the
@@ -1306,6 +1324,11 @@ During the transition period:
       `set_todo_cursor` overwrites prior values (cursor advances forward)
       and per-label namespacing keeps distinct specs disjoint
   [verify](tests/loom-test.sh::test_state_todo_cursor)
+- [ ] `loom todo` advances the cursor only when the session emitted a
+      `LOOM_COMPLETE` or `LOOM_NOOP` marker AND `exit_code == 0`; any
+      other terminal state (no marker, nonzero exit, `LOOM_BLOCKED`,
+      `LOOM_CLARIFY`) leaves the cursor untouched
+  [verify](tests/loom-test.sh::test_todo_cursor_advance_requires_marker)
 - [ ] `loom plan -n <label>` inserts a `specs` row and populates
       `implementation_notes` from the interview
   [verify](tests/loom-test.sh::test_plan_new_writes_implementation_notes)

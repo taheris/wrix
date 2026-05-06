@@ -3034,6 +3034,7 @@ test_push_gate_refuses_unresolved()    { echo "not yet implemented (push gate)" 
 test_plan_new_writes_implementation_notes() { echo "not yet implemented (plan new notes)" >&2; return 77; }
 test_todo_consumes_and_clears_notes()  { echo "not yet implemented (todo consumes notes)" >&2; return 77; }
 test_routine_commands_never_delete_spec_row() { echo "not yet implemented (spec row preservation)" >&2; return 77; }
+test_todo_cursor_advance_requires_marker() { echo "not yet implemented (cursor advance precondition)" >&2; return 77; }
 
 # Compaction Recovery (scratch dir)
 test_scratch_dir_created()             { echo "not yet implemented (scratch dir created)" >&2; return 77; }
