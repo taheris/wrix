@@ -212,12 +212,13 @@ where
         Ok(())
     }
 
-    async fn apply_clarify(&mut self, bead: &BeadId, _reason: &str) -> Result<(), CheckError> {
+    async fn apply_clarify(&mut self, bead: &BeadId, reason: &str) -> Result<(), CheckError> {
         self.bd
             .update(
                 bead,
                 UpdateOpts {
                     add_labels: vec!["loom:clarify".to_string()],
+                    notes: Some(reason.to_string()),
                     ..UpdateOpts::default()
                 },
             )
