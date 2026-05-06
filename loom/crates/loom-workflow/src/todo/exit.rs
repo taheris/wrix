@@ -6,6 +6,11 @@ pub enum ExitSignal {
     /// commits the spec file.
     Complete,
 
+    /// Agent finished cleanly but the phase intentionally produced an
+    /// empty diff — the work was already done. Without this signal an
+    /// empty diff is treated as zero-progress.
+    Noop,
+
     /// Agent could not proceed; the driver surfaces the reason to the user
     /// without advancing state.
     Blocked { reason: String },
@@ -16,6 +21,7 @@ pub enum ExitSignal {
 }
 
 const COMPLETE: &str = "LOOM_COMPLETE";
+const NOOP: &str = "LOOM_NOOP";
 const BLOCKED: &str = "LOOM_BLOCKED";
 const CLARIFY: &str = "LOOM_CLARIFY";
 
@@ -51,6 +57,10 @@ pub fn parse_exit_signal(output: &str) -> Option<ExitSignal> {
         }
         if line.contains(COMPLETE) {
             last = Some(ExitSignal::Complete);
+            continue;
+        }
+        if line.contains(NOOP) {
+            last = Some(ExitSignal::Noop);
         }
     }
     last
@@ -81,6 +91,14 @@ mod tests {
         assert_eq!(
             parse_exit_signal("ok\nLOOM_COMPLETE\n"),
             Some(ExitSignal::Complete)
+        );
+    }
+
+    #[test]
+    fn noop_on_bare_marker() {
+        assert_eq!(
+            parse_exit_signal("already done\nLOOM_NOOP\n"),
+            Some(ExitSignal::Noop)
         );
     }
 
