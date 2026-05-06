@@ -10,10 +10,13 @@ members = [
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.95"
 version = "0.1.0"
 license = "MIT"
 publish = false
+
+[workspace.metadata.crane]
+name = "loom"
 
 [workspace.dependencies]
 anyhow = "1"
