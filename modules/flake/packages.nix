@@ -97,7 +97,11 @@ _:
           loom = wrapix.loomPackage;
           profile-images = wrapix.mkProfileImages profileImages;
           ralph = wrapix.ralphPackage;
-          tmux-mcp = import ../../lib/mcp/tmux/mcp-server.nix { inherit pkgs; };
+          tmux-mcp =
+            (import ../../lib/mcp/tmux/mcp-server.nix {
+              pkgs = linuxPkgs;
+              rustProfile = profiles.rust;
+            }).bin;
           wrapix = wrapixLauncher;
           wrapix-builder = import ../../lib/builder { inherit pkgs linuxPkgs; };
           wrapix-notifyd = import ../../lib/notify/daemon.nix { inherit pkgs; };

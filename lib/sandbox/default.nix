@@ -46,7 +46,10 @@ let
   };
 
   # MCP server registry (uses Linux packages for server binaries)
-  mcpRegistry = import ../mcp { pkgs = linuxPkgs; };
+  mcpRegistry = import ../mcp {
+    pkgs = linuxPkgs;
+    rustProfile = profiles.rust;
+  };
 
   # Claude config (~/.claude.json) - onboarding state and runtime flags
   claudeConfig = {

@@ -8,29 +8,15 @@
 # - tmux_list_panes: List active panes
 #
 # Usage: nix build .#tmux-mcp
-{ pkgs }:
+{ pkgs, rustProfile }:
 
-pkgs.rustPlatform.buildRustPackage {
-  pname = "tmux-mcp";
-  version = "0.1.0";
+rustProfile.buildPackage {
   src = ./tmux-mcp;
+  cargoLock = ./tmux-mcp/Cargo.lock;
 
-  cargoLock = {
-    lockFile = ./tmux-mcp/Cargo.lock;
-  };
-
-  # Prevent cargo from creating /homeless-shelter/.cargo/ when building
-  # without Nix sandbox (e.g., inside containers where sandbox = false)
-  env.HOME = "/tmp";
-
-  # tmux is required at runtime for pane management
+  # tmux must be on PATH at runtime; propagate so consumers pick it up.
   buildInputs = [ pkgs.tmux ];
-
-  # Propagate tmux so it's available in PATH when package is installed
   propagatedBuildInputs = [ pkgs.tmux ];
-
-  # Run tests during build
-  doCheck = true;
 
   meta = {
     description = "MCP server providing tmux pane management for AI-assisted debugging";
