@@ -14,7 +14,7 @@ use std::time::Duration;
 use clap::{Parser, Subcommand, ValueEnum};
 
 use loom_agent::{ClaudeBackend, PiBackend};
-use loom_core::agent::{AgentKind, ProtocolError, SessionOutcome, SpawnConfig};
+use loom_core::agent::{AgentKind, LOOM_INSIDE_ENV, ProtocolError, SessionOutcome, SpawnConfig};
 use loom_core::bd::{BdClient, ListOpts, UpdateOpts};
 use loom_core::clock::{Clock, SystemClock};
 use loom_core::config::{LoomConfig, Phase};
@@ -167,6 +167,25 @@ enum Command {
     },
 }
 
+impl Command {
+    /// `true` when this subcommand spawns containers or mutates workspace
+    /// state — those are refused under `LOOM_INSIDE=1` to prevent a nested
+    /// driver. Read-only subcommands (`status`, `logs`, `spec`) return
+    /// `false`. Spec: `loom-harness.md` § Nested-Loom Guard.
+    fn refused_inside_loom(&self) -> bool {
+        match self {
+            Command::Status | Command::Logs { .. } | Command::Spec { .. } => false,
+            Command::Init { .. }
+            | Command::UseSpec { .. }
+            | Command::Plan { .. }
+            | Command::Run { .. }
+            | Command::Check { .. }
+            | Command::Msg { .. }
+            | Command::Todo { .. } => true,
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
@@ -177,6 +196,14 @@ fn main() -> ExitCode {
         .try_init();
 
     let cli = Cli::parse();
+
+    if std::env::var_os(LOOM_INSIDE_ENV).is_some() && cli.command.refused_inside_loom() {
+        eprintln!(
+            "error: loom cannot run inside a loom-managed container\n  this command spawns containers or mutates workspace state, which\n  would create a nested driver. read-only commands (status, logs,\n  spec) are still available."
+        );
+        return ExitCode::from(2);
+    }
+
     let workspace = cli
         .workspace
         .unwrap_or_else(|| match std::env::current_dir() {

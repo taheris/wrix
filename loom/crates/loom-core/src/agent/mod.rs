@@ -29,8 +29,8 @@ mod repin;
 mod session;
 
 pub use backend::{
-    AgentBackend, DEFAULT_HANDSHAKE_TIMEOUT_SECS, DEFAULT_STALL_WARN_SECS, ModelSelection,
-    SessionOutcome, SpawnConfig,
+    AgentBackend, DEFAULT_HANDSHAKE_TIMEOUT_SECS, DEFAULT_STALL_WARN_SECS, LOOM_INSIDE_ENV,
+    ModelSelection, SessionOutcome, SpawnConfig, set_loom_inside,
 };
 pub use error::ProtocolError;
 pub use event::{AgentEvent, CompactionReason};

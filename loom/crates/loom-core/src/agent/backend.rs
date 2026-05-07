@@ -84,6 +84,22 @@ pub struct SpawnConfig {
     pub stall_warn_interval: Option<Duration>,
 }
 
+/// Env var name set by the driver in every bead container's
+/// [`SpawnConfig::env`] allowlist; checked at CLI entry to refuse nested-loom
+/// invocations (`specs/loom-harness.md` § Nested-Loom Guard).
+pub const LOOM_INSIDE_ENV: &str = "LOOM_INSIDE";
+
+/// Append `LOOM_INSIDE=1` to a [`SpawnConfig::env`] allowlist if not already
+/// present. Idempotent so dispatch helpers can apply it without first
+/// checking, and downstream code can re-apply it without duplicating the
+/// entry.
+pub fn set_loom_inside(env: &mut Vec<(String, String)>) {
+    if env.iter().any(|(k, _)| k == LOOM_INSIDE_ENV) {
+        return;
+    }
+    env.push((LOOM_INSIDE_ENV.to_string(), "1".to_string()));
+}
+
 /// Default budget for the pi handshake (probe + optional `set_model`). Used
 /// when [`SpawnConfig::handshake_timeout`] is `None`.
 pub const DEFAULT_HANDSHAKE_TIMEOUT_SECS: u64 = 30;
@@ -251,6 +267,33 @@ mod tests {
         let model = back.model.expect("model present");
         assert_eq!(model.provider, "deepseek");
         assert_eq!(model.model_id, "deepseek-v3");
+    }
+
+    /// `set_loom_inside` appends `LOOM_INSIDE=1` when missing and is a no-op
+    /// when already present. Spec: `loom-harness.md` § Nested-Loom Guard.
+    #[test]
+    fn set_loom_inside_appends_when_missing() {
+        let mut env = vec![("WRAPIX_AGENT".into(), "claude".into())];
+        set_loom_inside(&mut env);
+        assert_eq!(
+            env,
+            vec![
+                ("WRAPIX_AGENT".into(), "claude".into()),
+                ("LOOM_INSIDE".into(), "1".into()),
+            ],
+        );
+    }
+
+    #[test]
+    fn set_loom_inside_is_idempotent() {
+        let mut env = vec![("LOOM_INSIDE".into(), "1".into())];
+        set_loom_inside(&mut env);
+        set_loom_inside(&mut env);
+        assert_eq!(
+            env.iter().filter(|(k, _)| k == "LOOM_INSIDE").count(),
+            1,
+            "duplicate LOOM_INSIDE entries: {env:?}",
+        );
     }
 
     /// JSON without a `model` key still parses (treated as `None`) — this is

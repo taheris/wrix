@@ -3009,9 +3009,18 @@ test_no_real_clock_outside_system_clock() {
 # Filesystem Lock Map
 test_locks_outside_workspace()        { echo "not yet implemented (filesystem lock map)" >&2; return 77; }
 test_container_cannot_rm_host_lock()  { echo "not yet implemented (lock isolation)" >&2; return 77; }
-test_loom_inside_env_set()            { echo "not yet implemented (LOOM_INSIDE env)" >&2; return 77; }
-test_nested_loom_guard_refuses()      { echo "not yet implemented (nested loom guard)" >&2; return 77; }
-test_nested_loom_guard_allows_readonly() { echo "not yet implemented (readonly nested loom)" >&2; return 77; }
+test_loom_inside_env_set() {
+    cargo_run test -p loom-workflow --lib --quiet -- \
+        run::spawn::tests::spawn_config_env_includes_loom_inside_marker
+}
+test_nested_loom_guard_refuses() {
+    cargo_run test -p loom --test nested_loom_guard --quiet -- \
+        mutating_subcommands_refuse_with_loom_inside_set
+}
+test_nested_loom_guard_allows_readonly() {
+    cargo_run test -p loom --test nested_loom_guard --quiet -- \
+        readonly_subcommands_run_under_loom_inside_set
+}
 
 # Verdict Gate
 test_verdict_gate_mechanical_signals() { echo "not yet implemented (verdict gate)" >&2; return 77; }

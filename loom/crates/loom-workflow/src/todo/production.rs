@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use askama::Template;
-use loom_core::agent::{RePinContent, SessionOutcome, SpawnConfig};
+use loom_core::agent::{RePinContent, SessionOutcome, SpawnConfig, set_loom_inside};
 use loom_core::git::GitClient;
 use loom_core::identifier::{ProfileName, SpecLabel};
 use loom_core::profile_manifest::ProfileImageManifest;
@@ -139,12 +139,14 @@ impl TodoController for ProductionTodoController {
             "loom todo: building spawn config",
         );
         let scratch_dir = scratch.path().to_path_buf();
+        let mut env = Vec::new();
+        set_loom_inside(&mut env);
         Ok(TodoSession {
             config: SpawnConfig {
                 image_ref: entry.r#ref.clone(),
                 image_source: entry.source.clone(),
                 workspace: self.workspace.clone(),
-                env: vec![],
+                env,
                 initial_prompt: prompt,
                 agent_args: vec![],
                 repin: RePinContent {

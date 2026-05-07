@@ -21,7 +21,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use askama::Template;
-use loom_core::agent::{ProtocolError, RePinContent, SessionOutcome, SpawnConfig};
+use loom_core::agent::{ProtocolError, RePinContent, SessionOutcome, SpawnConfig, set_loom_inside};
 use loom_core::bd::{BdClient, Bead, ListOpts, UpdateOpts};
 use loom_core::git::GitClient;
 use loom_core::identifier::{BeadId, ProfileName, SpecLabel};
@@ -143,11 +143,13 @@ where
             &banner,
         )
         .map_err(|source| CheckError::Protocol(ProtocolError::Io(source)))?;
+        let mut env = Vec::new();
+        set_loom_inside(&mut env);
         let spawn_config = SpawnConfig {
             image_ref: entry.r#ref.clone(),
             image_source: entry.source.clone(),
             workspace: self.workspace.clone(),
-            env: vec![],
+            env,
             initial_prompt: prompt,
             agent_args: vec![],
             repin: RePinContent {

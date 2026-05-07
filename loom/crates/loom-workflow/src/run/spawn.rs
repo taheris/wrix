@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use loom_core::agent::{RePinContent, SpawnConfig};
+use loom_core::agent::{RePinContent, SpawnConfig, set_loom_inside};
 use loom_core::bd::Bead;
 use loom_core::identifier::ProfileName;
 use loom_core::profile_manifest::{ProfileError, ProfileImageManifest};
@@ -22,11 +22,13 @@ fn build_spawn_config(
     extra_env: Vec<(String, String)>,
     agent_args: Vec<String>,
 ) -> SpawnConfig {
+    let mut env = extra_env;
+    set_loom_inside(&mut env);
     SpawnConfig {
         image_ref,
         image_source,
         workspace,
-        env: extra_env,
+        env,
         initial_prompt,
         agent_args,
         repin,
@@ -266,6 +268,44 @@ mod tests {
         assert_ne!(
             seq.workspace, par.workspace,
             "workspace MUST differ — parallel uses a per-bead worktree",
+        );
+    }
+
+    /// Every dispatched bead container receives `LOOM_INSIDE=1` via
+    /// [`SpawnConfig::env`] so the nested-loom guard at CLI entry can
+    /// refuse mutating subcommands. Spec: `loom-harness.md` § Nested-Loom
+    /// Guard, success criterion `test_loom_inside_env_set`.
+    #[test]
+    fn spawn_config_env_includes_loom_inside_marker() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = three_profile_manifest(dir.path());
+        let bead = bead_with_labels("wx-1", &["profile:rust"]);
+
+        let cfg = build_spawn_config_from_manifest(
+            &manifest,
+            &bead,
+            None,
+            &base(),
+            PathBuf::from("/work"),
+            "p".into(),
+            repin(),
+            dir.path().join("scratch"),
+            vec![("WRAPIX_AGENT".into(), "claude".into())],
+            vec![],
+        )
+        .expect("dispatch");
+        assert!(
+            cfg.env.iter().any(|(k, v)| k == "LOOM_INSIDE" && v == "1"),
+            "SpawnConfig.env missing LOOM_INSIDE=1: {:?}",
+            cfg.env,
+        );
+        // Caller-supplied env entries must survive the injection.
+        assert!(
+            cfg.env
+                .iter()
+                .any(|(k, v)| k == "WRAPIX_AGENT" && v == "claude"),
+            "SpawnConfig.env dropped caller env: {:?}",
+            cfg.env,
         );
     }
 
