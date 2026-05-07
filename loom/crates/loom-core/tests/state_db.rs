@@ -430,6 +430,44 @@ fn state_implementation_notes_set_unknown_label_errors() -> Result<()> {
 }
 
 #[test]
+fn routine_commands_never_delete_spec_row() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let workspace = dir.path();
+    write_spec(workspace, "alpha", "# alpha\n")?;
+    let db = StateDb::open(workspace.join(".wrapix/loom/state.db"))?;
+    let molecules = vec![ActiveMolecule {
+        id: MoleculeId::new("wx-alpha"),
+        spec_label: SpecLabel::new("alpha"),
+        base_commit: None,
+    }];
+    db.rebuild(workspace, &molecules)?;
+    let label = SpecLabel::new("alpha");
+    let mol_id = MoleculeId::new("wx-alpha");
+
+    db.set_current_spec(&label)?;
+    db.set_todo_cursor(&label, "deadbeef")?;
+    db.set_todo_cursor(&label, "cafebabe")?;
+    db.set_iteration(&mol_id, 2)?;
+    db.increment_iteration(&mol_id)?;
+    db.reset_iteration(&mol_id)?;
+    db.replace_companions(&label, &["lib/foo/".into(), "lib/bar/".into()])?;
+    db.set_implementation_notes(&label, &["touch lib/foo".to_string()])?;
+    db.clear_implementation_notes(&label)?;
+
+    let row_count = list_table(
+        &workspace.join(".wrapix/loom/state.db"),
+        "SELECT COUNT(*) FROM specs WHERE label='alpha'",
+    )?;
+    assert_eq!(
+        row_count,
+        vec![vec!["1".to_string()]],
+        "routine commands must never DELETE a specs row — only `loom init --rebuild` may",
+    );
+    assert_eq!(db.spec(&label)?.label.as_str(), "alpha");
+    Ok(())
+}
+
+#[test]
 fn state_corruption_recovery() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let db_path = dir.path().join("state.db");

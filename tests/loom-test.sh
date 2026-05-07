@@ -3023,23 +3023,61 @@ test_nested_loom_guard_allows_readonly() {
 }
 
 # Verdict Gate
-test_verdict_gate_mechanical_signals() { echo "not yet implemented (verdict gate)" >&2; return 77; }
-test_gate_loom_blocked_marker()        { echo "not yet implemented (LOOM_BLOCKED)" >&2; return 77; }
-test_gate_loom_clarify_marker()        { echo "not yet implemented (LOOM_CLARIFY)" >&2; return 77; }
-test_gate_swallowed_marker()           { echo "not yet implemented (swallowed marker)" >&2; return 77; }
-test_gate_incomplete_signaling()       { echo "not yet implemented (incomplete signal)" >&2; return 77; }
-test_gate_zero_progress()              { echo "not yet implemented (zero progress)" >&2; return 77; }
-test_gate_loom_noop_empty_diff()       { echo "not yet implemented (LOOM_NOOP empty diff)" >&2; return 77; }
-test_gate_runs_all_verify_scripts()    { echo "not yet implemented (gate runs all verify)" >&2; return 77; }
-test_gate_verify_fail_collects_all()   { echo "not yet implemented (verify-fail collection)" >&2; return 77; }
-test_review_runs_on_verify_fail()      { echo "not yet implemented (review on verify-fail)" >&2; return 77; }
-test_review_inputs_include_judge_rubrics() { echo "not yet implemented (review judge rubrics)" >&2; return 77; }
-test_gate_review_flag_names_concern()  { echo "not yet implemented (review flag concern)" >&2; return 77; }
+test_verdict_gate_mechanical_signals() {
+    check_cargo_test check::phase_verdict::tests::recovery_cause_labels_match_spec_strings
+    check_cargo_test check::phase_verdict::tests::complete_clean_routes_to_done
+}
+test_gate_loom_blocked_marker() {
+    check_cargo_test check::phase_verdict::tests::blocked_marker_routes_to_blocked_with_reason
+}
+test_gate_loom_clarify_marker() {
+    check_cargo_test check::phase_verdict::tests::clarify_marker_routes_to_clarify_with_question
+}
+test_gate_swallowed_marker() {
+    check_cargo_test check::phase_verdict::tests::missing_marker_routes_to_swallowed_marker_recovery
+}
+test_gate_incomplete_signaling() {
+    check_cargo_test check::phase_verdict::tests::complete_without_bd_closed_routes_to_incomplete_signaling
+    check_cargo_test check::phase_verdict::tests::noop_without_bd_closed_routes_to_incomplete_signaling
+}
+test_gate_zero_progress() {
+    check_cargo_test check::phase_verdict::tests::complete_with_empty_diff_routes_to_zero_progress
+}
+test_gate_loom_noop_empty_diff() {
+    check_cargo_test check::phase_verdict::tests::noop_with_empty_diff_and_clean_review_is_done_not_zero_progress
+    check_cargo_test check::phase_verdict::tests::noop_with_non_empty_diff_and_clean_review_is_done
+}
+test_gate_runs_all_verify_scripts() {
+    check_cargo_test check::phase_verdict::tests::complete_with_verify_fail_routes_to_verify_fail
+    check_cargo_test check::phase_verdict::tests::noop_with_verify_fail_routes_to_verify_fail
+}
+test_gate_verify_fail_collects_all() {
+    check_cargo_test check::phase_verdict::tests::complete_with_verify_fail_routes_to_verify_fail
+    check_cargo_test check::phase_verdict::tests::noop_with_verify_fail_routes_to_verify_fail
+}
+test_review_runs_on_verify_fail() {
+    check_cargo_test check::phase_verdict::tests::complete_with_verify_fail_routes_to_verify_fail
+    check_cargo_test check::phase_verdict::tests::complete_with_review_flag_routes_to_review_flag
+}
+test_review_inputs_include_judge_rubrics() {
+    cargo_run test -p loom-templates --test render check_renders_review_context_fields \
+        -- --exact --nocapture --quiet
+}
+test_gate_review_flag_names_concern() {
+    check_cargo_test check::phase_verdict::tests::complete_with_review_flag_routes_to_review_flag
+    check_cargo_test check::phase_verdict::tests::noop_with_review_flag_routes_to_review_flag
+}
 
 # Recovery & Iteration
-test_recovery_under_max()              { echo "not yet implemented (recovery under max)" >&2; return 77; }
-test_recovery_exhaustion_applies_blocked() { echo "not yet implemented (recovery exhaustion)" >&2; return 77; }
-test_iteration_count_persists()        { echo "not yet implemented (iteration count)" >&2; return 77; }
+test_recovery_under_max() {
+    check_cargo_test check::runner::tests::fix_up_beads_under_cap_auto_iterate
+}
+test_recovery_exhaustion_applies_blocked() {
+    check_cargo_test check::runner::tests::iteration_cap_escalates_newest_fix_up_to_clarify
+}
+test_iteration_count_persists() {
+    check_cargo_test check::production::tests::iteration_counter_round_trips_through_state_db
+}
 test_infra_preflight_fail_fast() {
     check_cargo_test run::runner::tests::infra_preflight_routes_to_blocked_without_retry
     check_cargo_test run::production::tests::run_bead_translates_preflight_failure_into_infra_preflight
@@ -3094,16 +3132,26 @@ test_todo_consumes_and_clears_notes() {
         record_outcome_clears_notes_on_success_but_not_on_failure \
         -- --exact --nocapture --quiet
 }
-test_routine_commands_never_delete_spec_row() { echo "not yet implemented (spec row preservation)" >&2; return 77; }
-test_todo_cursor_advance_requires_marker() { echo "not yet implemented (cursor advance precondition)" >&2; return 77; }
+test_routine_commands_never_delete_spec_row() {
+    cargo_run test -p loom-core --test state_db routine_commands_never_delete_spec_row \
+        -- --exact --nocapture --quiet
+}
+test_todo_cursor_advance_requires_marker() {
+    cargo_run test -p loom-workflow --lib \
+        todo::production::tests::cursor_gate_advances_only_on_complete_or_noop_with_clean_exit \
+        -- --exact --nocapture --quiet
+}
 
 # Compaction Recovery (scratch dir)
-test_scratch_dir_created()             { echo "not yet implemented (scratch dir created)" >&2; return 77; }
-test_scratch_key_naming()              { echo "not yet implemented (scratch key naming)" >&2; return 77; }
-test_repin_envelope()                  { echo "not yet implemented (re-pin envelope)" >&2; return 77; }
-test_repin_hook_registered()           { echo "not yet implemented (re-pin hook registered)" >&2; return 77; }
-test_scratch_dir_cleanup()             { echo "not yet implemented (scratch dir cleanup)" >&2; return 77; }
-test_parallel_scratch_isolation()      { echo "not yet implemented (parallel scratch isolation)" >&2; return 77; }
+scratch_cargo_test() {
+    cargo_run test -p loom-core --lib "scratch::tests::$1" -- --exact --nocapture --quiet
+}
+test_scratch_dir_created()        { scratch_cargo_test open_creates_layout_and_drop_removes_it; }
+test_scratch_key_naming()         { scratch_cargo_test parallel_keys_get_independent_dirs; }
+test_repin_envelope()             { scratch_cargo_test repin_script_runs_jq_envelope_against_files; }
+test_repin_hook_registered()      { scratch_cargo_test claude_settings_registers_repin_under_session_start_compact; }
+test_scratch_dir_cleanup()        { scratch_cargo_test close_removes_dir_and_is_idempotent_with_drop; }
+test_parallel_scratch_isolation() { scratch_cargo_test parallel_keys_get_independent_dirs; }
 
 #-----------------------------------------------------------------------------
 # Dispatch
