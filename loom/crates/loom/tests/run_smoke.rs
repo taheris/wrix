@@ -83,6 +83,7 @@ fn loom_run_once_against_empty_bd_exits_zero() {
         // empty-queue path we still set this so the binary can locate itself
         // if the loop ever changes shape.
         .env("LOOM_BIN", loom_bin)
+        .env("XDG_STATE_HOME", workspace.join(".loom-test-state"))
         .output()
         .expect("spawn loom");
 

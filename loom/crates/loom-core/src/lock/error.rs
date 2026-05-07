@@ -34,4 +34,17 @@ pub enum LockError {
 
     /// failed to build a tokio runtime for the sync lock-acquire path
     RuntimeBuild(#[source] io::Error),
+
+    /// cannot resolve XDG_STATE_HOME: HOME is unset and no override given
+    HomeUnset,
+
+    /// failed to canonicalize workspace path {path}
+    CanonicalizeWorkspace {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
+    /// workspace path {path} has no basename
+    WorkspaceNoBasename { path: PathBuf },
 }

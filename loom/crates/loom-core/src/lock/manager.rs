@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -17,9 +18,10 @@ pub const RESERVED_WORKSPACE_LABEL: &str = "workspace";
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const DEFAULT_SPEC_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Resolves lock-file paths under `<workspace>/.wrapix/loom/locks/` and
-/// hands out RAII guards. Cheap to clone-by-construction (only stores the
-/// resolved directory).
+/// Resolves lock-file paths under
+/// `$XDG_STATE_HOME/loom/locks/<workspace-basename>/` and hands out RAII
+/// guards. Cheap to clone-by-construction (only stores the resolved
+/// directory).
 pub struct LockManager {
     locks_dir: PathBuf,
 }
@@ -42,10 +44,25 @@ impl std::fmt::Debug for LockGuard {
 }
 
 impl LockManager {
-    /// Build a manager rooted at `<workspace>/.wrapix/loom/locks/`, creating
-    /// the directory if it doesn't yet exist.
+    /// Build a manager rooted at
+    /// `$XDG_STATE_HOME/loom/locks/<workspace-basename>/` (default
+    /// `~/.local/state/loom/locks/<basename>/`), creating the directory if
+    /// it doesn't yet exist. Locks live outside the workspace bind-mount so
+    /// a bead container cannot `rm` them out from under the host driver.
     pub fn new(workspace: impl AsRef<Path>) -> Result<Self, LockError> {
-        let locks_dir = workspace.as_ref().join(".wrapix/loom/locks");
+        let state_home = resolve_xdg_state_home()?;
+        Self::with_state_home(workspace, state_home)
+    }
+
+    /// Build a manager with an explicit state-home root. Production callers
+    /// use [`Self::new`]; tests pass an isolated tempdir to avoid touching
+    /// the real `~/.local/state`.
+    pub fn with_state_home(
+        workspace: impl AsRef<Path>,
+        state_home: impl AsRef<Path>,
+    ) -> Result<Self, LockError> {
+        let basename = workspace_basename(workspace.as_ref())?;
+        let locks_dir = state_home.as_ref().join("loom/locks").join(&basename);
         fs::create_dir_all(&locks_dir).map_err(|source| LockError::CreateDir {
             path: locks_dir.clone(),
             source,
@@ -170,6 +187,34 @@ impl LockManager {
     }
 }
 
+/// Per XDG Base Directory: honor `XDG_STATE_HOME` when set and non-empty,
+/// otherwise fall back to `$HOME/.local/state`.
+fn resolve_xdg_state_home() -> Result<PathBuf, LockError> {
+    if let Some(val) = std::env::var_os("XDG_STATE_HOME")
+        && !val.is_empty()
+    {
+        return Ok(PathBuf::from(val));
+    }
+    let home = std::env::var_os("HOME").ok_or(LockError::HomeUnset)?;
+    Ok(PathBuf::from(home).join(".local/state"))
+}
+
+fn workspace_basename(workspace: &Path) -> Result<OsString, LockError> {
+    let canonical =
+        workspace
+            .canonicalize()
+            .map_err(|source| LockError::CanonicalizeWorkspace {
+                path: workspace.to_path_buf(),
+                source,
+            })?;
+    canonical
+        .file_name()
+        .map(|n| n.to_os_string())
+        .ok_or_else(|| LockError::WorkspaceNoBasename {
+            path: canonical.clone(),
+        })
+}
+
 async fn acquire_with_timeout<F>(
     path: &Path,
     timeout: Duration,
@@ -227,18 +272,29 @@ mod tests {
     use anyhow::Result;
 
     #[test]
-    fn new_creates_locks_directory() -> Result<()> {
-        let dir = tempfile::tempdir()?;
-        let mgr = LockManager::new(dir.path())?;
+    fn with_state_home_creates_locks_directory_outside_workspace() -> Result<()> {
+        let workspace = tempfile::tempdir()?;
+        let state_home = tempfile::tempdir()?;
+        let mgr = LockManager::with_state_home(workspace.path(), state_home.path())?;
+
         assert!(mgr.locks_dir().is_dir());
-        assert!(mgr.locks_dir().ends_with(".wrapix/loom/locks"));
+        let basename = workspace
+            .path()
+            .canonicalize()?
+            .file_name()
+            .map(|n| n.to_os_string())
+            .ok_or_else(|| anyhow::anyhow!("workspace tempdir has no basename"))?;
+        let expected = state_home.path().join("loom/locks").join(&basename);
+        assert_eq!(mgr.locks_dir(), expected.as_path());
+        assert!(!mgr.locks_dir().starts_with(workspace.path()));
         Ok(())
     }
 
     #[test]
     fn acquire_spec_rejects_reserved_label() -> Result<()> {
-        let dir = tempfile::tempdir()?;
-        let mgr = LockManager::new(dir.path())?;
+        let workspace = tempfile::tempdir()?;
+        let state_home = tempfile::tempdir()?;
+        let mgr = LockManager::with_state_home(workspace.path(), state_home.path())?;
         let result = mgr.acquire_spec(&SpecLabel::new(RESERVED_WORKSPACE_LABEL));
         match result {
             Err(LockError::ReservedLabel) => Ok(()),
@@ -248,8 +304,9 @@ mod tests {
 
     #[test]
     fn drop_releases_so_reacquire_succeeds() -> Result<()> {
-        let dir = tempfile::tempdir()?;
-        let mgr = LockManager::new(dir.path())?;
+        let workspace = tempfile::tempdir()?;
+        let state_home = tempfile::tempdir()?;
+        let mgr = LockManager::with_state_home(workspace.path(), state_home.path())?;
         let label = SpecLabel::new("alpha");
         {
             let _g = mgr.acquire_spec(&label)?;
@@ -264,8 +321,9 @@ mod tests {
     /// wait is performed.
     #[tokio::test(start_paused = true)]
     async fn acquire_spec_async_times_out_via_mock_clock() -> Result<()> {
-        let dir = tempfile::tempdir()?;
-        let mgr = LockManager::new(dir.path())?;
+        let workspace = tempfile::tempdir()?;
+        let state_home = tempfile::tempdir()?;
+        let mgr = LockManager::with_state_home(workspace.path(), state_home.path())?;
         let label = SpecLabel::new("contended");
         let clock = MockClock::new();
         // Hold the lock via the async path so we don't nest a `block_on` in
@@ -287,8 +345,9 @@ mod tests {
     /// holder then await — the next `try_lock` succeeds before the deadline.
     #[tokio::test(start_paused = true)]
     async fn acquire_spec_async_succeeds_after_holder_drops() -> Result<()> {
-        let dir = tempfile::tempdir()?;
-        let mgr = LockManager::new(dir.path())?;
+        let workspace = tempfile::tempdir()?;
+        let state_home = tempfile::tempdir()?;
+        let mgr = LockManager::with_state_home(workspace.path(), state_home.path())?;
         let label = SpecLabel::new("handoff");
         let clock = MockClock::new();
         let holder = mgr.acquire_spec_async(&label, &clock).await?;

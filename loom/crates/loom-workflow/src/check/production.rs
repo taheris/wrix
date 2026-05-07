@@ -502,10 +502,11 @@ mod tests {
         use std::time::Duration;
 
         let dir = tempfile::tempdir().unwrap();
+        let state_home = tempfile::tempdir().unwrap();
         let workspace = dir.path().to_path_buf();
         let state = empty_state(&workspace);
         let manifest = stub_manifest(&workspace);
-        let mgr = LockManager::new(&workspace).unwrap();
+        let mgr = LockManager::with_state_home(&workspace, state_home.path()).unwrap();
         let label = SpecLabel::new("alpha");
         let clock = SystemClock::new();
         let guard = mgr.acquire_spec_async(&label, &clock).await.unwrap();

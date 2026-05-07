@@ -3007,8 +3007,8 @@ test_no_real_clock_outside_system_clock() {
 #-----------------------------------------------------------------------------
 
 # Filesystem Lock Map
-test_locks_outside_workspace()        { echo "not yet implemented (filesystem lock map)" >&2; return 77; }
-test_container_cannot_rm_host_lock()  { echo "not yet implemented (lock isolation)" >&2; return 77; }
+test_locks_outside_workspace()        { lock_cargo_test locks_outside_workspace; }
+test_container_cannot_rm_host_lock()  { lock_cargo_test container_cannot_rm_host_lock; }
 test_loom_inside_env_set() {
     cargo_run test -p loom-workflow --lib --quiet -- \
         run::spawn::tests::spawn_config_env_includes_loom_inside_marker

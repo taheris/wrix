@@ -45,6 +45,14 @@ let
     cargoLock = ../../loom/Cargo.lock;
     inherit (loomPackage) cargoArtifacts;
     nativeBuildInputs = [ pkgs.git ];
+    # The nix sandbox sets HOME=/homeless-shelter (read-only) by default. The
+    # lock manager resolves `$XDG_STATE_HOME/loom/locks/<basename>/` under
+    # `~/.local/state` (per spec); production tests fail to create that
+    # directory inside the sandbox without a writable HOME. Point both
+    # workspace-test integration suites at the writable build tmpdir.
+    preCheck = ''
+      export HOME=$(mktemp -d)
+    '';
   };
 
   nextestFast = craneLib.cargoNextest (

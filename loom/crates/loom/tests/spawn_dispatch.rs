@@ -162,6 +162,7 @@ fn drive_loom_todo_pi(workspace: &Path, shim: &Path, loom_bin: &str) -> std::pro
         .env("LOOM_WRAPIX_BIN", shim)
         .env("LOOM_BIN", loom_bin)
         .env("LOOM_PROFILES_MANIFEST", &manifest_path)
+        .env("XDG_STATE_HOME", workspace.join(".loom-test-state"))
         .output()
         .expect("spawn loom")
 }
@@ -427,6 +428,7 @@ fn loom_run_once_writes_per_bead_jsonl_log() {
         .env("LOOM_WRAPIX_BIN", &shim)
         .env("LOOM_BIN", loom_bin)
         .env("LOOM_PROFILES_MANIFEST", &manifest_path)
+        .env("XDG_STATE_HOME", workspace.join(".loom-test-state"))
         .output()
         .expect("spawn loom");
 
@@ -540,6 +542,7 @@ fn loom_check_writes_phase_jsonl_log() {
         .env("LOOM_WRAPIX_BIN", &shim)
         .env("LOOM_BIN", loom_bin)
         .env("LOOM_PROFILES_MANIFEST", &manifest_path)
+        .env("XDG_STATE_HOME", workspace.join(".loom-test-state"))
         .output()
         .expect("spawn loom");
 
@@ -836,6 +839,7 @@ fn loom_todo_claude_runs_shutdown_watchdog_through_run_agent() {
         .env("LOOM_BIN", loom_bin)
         .env("LOOM_PROFILES_MANIFEST", &manifest_path)
         .env("RUST_LOG", "loom_agent=warn")
+        .env("XDG_STATE_HOME", workspace.join(".loom-test-state"))
         .output()
         .expect("spawn loom");
     let elapsed = started.elapsed();
@@ -915,6 +919,7 @@ fn loom_todo_pi_hang_probe_surfaces_handshake_timeout() {
         .env("LOOM_PROFILES_MANIFEST", &manifest_path)
         .env("LOOM_HANDSHAKE_TIMEOUT_MS", "500")
         .env("RUST_LOG", "loom_agent=warn")
+        .env("XDG_STATE_HOME", workspace.join(".loom-test-state"))
         .output()
         .expect("spawn loom");
     let elapsed = started.elapsed();
@@ -995,6 +1000,7 @@ fn loom_todo_pi_stall_mid_session_emits_stall_warning() {
         .env("LOOM_PROFILES_MANIFEST", &manifest_path)
         .env("LOOM_STALL_WARN_MS", "300")
         .env("RUST_LOG", "loom_workflow=warn")
+        .env("XDG_STATE_HOME", workspace.join(".loom-test-state"))
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .process_group(0)
