@@ -228,7 +228,7 @@ map to one outbound event.
 The session emits a stream of typed events. Event names are part of the
 wire format: they are serialized as snake_case (`message_delta`,
 `tool_call`, …) when the terminal renderer and on-disk JSONL log share
-the broadcast channel (see [loom-harness — Run UX &
+the tee-style sink (see [loom-harness — Run UX &
 Logging](loom-harness.md#run-ux--logging)). Log readers consume those
 names directly.
 

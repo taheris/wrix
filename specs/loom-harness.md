@@ -439,7 +439,7 @@ per `loom run` invocation, before any bead spawns; the cost is a single
 directory walk.
 
 The terminal renderer consumes the same `AgentEvent` stream that's written
-to disk — both subscribe to the same broadcast channel, not two parallel pipelines.
+to disk — there's a single tee-style sink, not two parallel pipelines.
 
 ### Verdict Gate
 
