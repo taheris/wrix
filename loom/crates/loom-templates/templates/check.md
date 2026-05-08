@@ -25,6 +25,35 @@ Read: {{ spec_path }}
 - **Base commit**: {% match base_commit %}{% when Some with (commit) %}{{ commit }}{% when None %}—{% endmatch %}
 - **Molecule**: {% match molecule_id %}{% when Some with (id) %}{{ id }}{% when None %}—{% endmatch %}
 
+## `[verify]` Sources
+
+The verdict gate just ran these `[verify]` scripts. Their full source is
+reproduced below so you can judge live-path coverage and mock discipline
+without re-reading them from disk.
+
+{% if verify_sources.is_empty() %}—
+{% else %}{% for source in verify_sources %}### {{ source.path }}
+
+```
+{{ source.body }}
+```
+
+{% endfor %}{% endif %}
+## `[judge]` Rubrics
+
+These `[judge]` annotations name LLM-judgement criteria the deliverable
+must satisfy. Each rubric file's body follows; locate the function
+referenced by the annotation to read the per-criterion rubric.
+
+{% if judge_rubrics.is_empty() %}—
+{% else %}{% for source in judge_rubrics %}### {{ source.path }}
+
+```
+{{ source.body }}
+```
+
+{% endfor %}{% endif %}
+
 ## Instructions
 
 1. **Read the spec** at `{{ spec_path }}` thoroughly

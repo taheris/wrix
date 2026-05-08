@@ -494,6 +494,16 @@ fn loom_check_writes_phase_jsonl_log() {
     let workspace = dir.path();
     init_workspace_repo(workspace);
 
+    // build_review_prompt loads `[verify]`/`[judge]` sources from
+    // specs/<label>.md; seed an empty Success Criteria section so the
+    // loader succeeds with no bodies.
+    std::fs::create_dir_all(workspace.join("specs")).unwrap();
+    std::fs::write(
+        workspace.join("specs/loom-agent.md"),
+        "## Success Criteria\n\n",
+    )
+    .unwrap();
+
     let manifest_path = workspace.join("profile-images.json");
     let image_source = workspace.join("base.tar");
     std::fs::write(&image_source, "").unwrap();

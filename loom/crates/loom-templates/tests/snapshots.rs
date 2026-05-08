@@ -12,7 +12,7 @@
 
 use askama::Template;
 use loom_core::identifier::{BeadId, MoleculeId, SpecLabel};
-use loom_templates::check::CheckContext;
+use loom_templates::check::{CheckContext, ReviewSource};
 use loom_templates::msg::{ClarifyBead, ClarifyOption, MsgContext};
 use loom_templates::plan::{PlanNewContext, PlanUpdateContext};
 use loom_templates::run::{PreviousFailure, RunContext};
@@ -108,6 +108,14 @@ fn check_snapshot() {
         beads_summary: Some("- wx-3hhwq.10: closed".into()),
         base_commit: Some("abc1234".into()),
         molecule_id: Some(MoleculeId::new("wx-3hhwq")),
+        verify_sources: vec![ReviewSource {
+            path: "tests/loom-test.sh".into(),
+            body: "test_review_inputs() { :; }\n".into(),
+        }],
+        judge_rubrics: vec![ReviewSource {
+            path: "tests/judges/loom.sh".into(),
+            body: "judge_live_path_coverage() { :; }\n".into(),
+        }],
         exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
     insta::assert_snapshot!(ctx.render().unwrap());

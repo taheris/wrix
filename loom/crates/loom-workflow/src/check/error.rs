@@ -7,6 +7,8 @@ use loom_core::logging::LogError;
 use loom_core::profile_manifest::ProfileError;
 use loom_core::state::StateError;
 
+use crate::spec::SpecError;
+
 /// Errors raised by the `loom check` driver.
 #[derive(Debug, Display, Error)]
 pub enum CheckError {
@@ -48,4 +50,7 @@ pub enum CheckError {
 
     /// no active molecule for spec {0} — run `loom todo` before `loom check`
     NoActiveMolecule(String),
+
+    /// failed to load `[verify]`/`[judge]` sources for review prompt
+    Spec(#[from] SpecError),
 }

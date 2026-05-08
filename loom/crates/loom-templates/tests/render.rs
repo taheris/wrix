@@ -185,6 +185,8 @@ fn check_renders_review_context_fields() -> Result<()> {
         beads_summary: Some("- wx-3hhwq.10: closed".into()),
         base_commit: Some("abc1234".into()),
         molecule_id: Some(MoleculeId::new("wx-3hhwq")),
+        verify_sources: vec![],
+        judge_rubrics: vec![],
         exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
     let out = ctx.render()?;

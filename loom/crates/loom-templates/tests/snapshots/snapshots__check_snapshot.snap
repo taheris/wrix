@@ -1,5 +1,6 @@
 ---
 source: crates/loom-templates/tests/snapshots.rs
+assertion_line: 121
 expression: ctx.render().unwrap()
 ---
 # Post-Epic Review
@@ -84,6 +85,35 @@ Read: specs/loom-harness.md
 
 - **Base commit**: abc1234
 - **Molecule**: wx-3hhwq
+
+## `[verify]` Sources
+
+The verdict gate just ran these `[verify]` scripts. Their full source is
+reproduced below so you can judge live-path coverage and mock discipline
+without re-reading them from disk.
+
+### tests/loom-test.sh
+
+```
+test_review_inputs() { :; }
+
+```
+
+
+## `[judge]` Rubrics
+
+These `[judge]` annotations name LLM-judgement criteria the deliverable
+must satisfy. Each rubric file's body follows; locate the function
+referenced by the annotation to read the per-criterion rubric.
+
+### tests/judges/loom.sh
+
+```
+judge_live_path_coverage() { :; }
+
+```
+
+
 
 ## Instructions
 

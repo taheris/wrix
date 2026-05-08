@@ -27,7 +27,7 @@ mod production;
 mod runner;
 mod verdict;
 
-pub use context::{CheckContextInputs, beads_summary, build_check_context};
+pub use context::{CheckContextInputs, beads_summary, build_check_context, load_review_sources};
 pub use error::CheckError;
 pub use iteration::{DEFAULT_MAX_ITERATIONS, IterationCap};
 pub use phase_verdict::{GateInputs, PhaseVerdict, RecoveryCause, decide};

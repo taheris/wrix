@@ -32,7 +32,7 @@ use loom_templates::check::CheckContext;
 use tokio::process::Command;
 use tracing::info;
 
-use super::context::beads_summary;
+use super::context::{beads_summary, load_review_sources};
 use super::error::CheckError;
 use super::runner::{CheckController, ReviewOutcome};
 
@@ -113,14 +113,19 @@ where
         let active_mol = self.state.active_molecule(&self.label)?;
         let molecule_id = active_mol.as_ref().map(|m| m.id.clone());
         let base_commit = active_mol.and_then(|m| m.base_commit);
+        let spec_path = format!("specs/{}.md", self.label.as_str());
+        let (verify_sources, judge_rubrics) =
+            load_review_sources(&self.workspace, &self.workspace.join(&spec_path))?;
         let ctx = CheckContext {
             pinned_context: String::new(),
             label: self.label.clone(),
-            spec_path: format!("specs/{}.md", self.label.as_str()),
+            spec_path,
             companion_paths: vec![],
             beads_summary: beads_summary(&beads),
             base_commit,
             molecule_id,
+            verify_sources,
+            judge_rubrics,
             exit_signals: String::new(),
         };
         Ok(ctx.render()?)
@@ -421,10 +426,20 @@ mod tests {
         ctrl.reset_iteration_count().await.unwrap();
     }
 
+    /// Seed a stub spec file at `specs/<label>.md` with an empty
+    /// `## Success Criteria` section so `load_review_sources` succeeds in
+    /// tests that don't exercise verify/judge bodies.
+    fn seed_empty_spec(workspace: &std::path::Path, label: &str) {
+        let path = workspace.join(format!("specs/{label}.md"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "## Success Criteria\n\n").unwrap();
+    }
+
     #[tokio::test]
     async fn run_review_translates_zero_exit_into_complete() {
         let dir = tempfile::tempdir().unwrap();
         let workspace = dir.path().to_path_buf();
+        seed_empty_spec(&workspace, "loom-harness");
         let state = empty_state(&workspace);
         let manifest = stub_manifest(&workspace);
         let mut ctrl = ProductionCheckController::new(
@@ -442,9 +457,6 @@ mod tests {
                 })
             },
         );
-        // build_review_prompt calls bd; we bypass that path by stubbing the
-        // BdClient through the live `bd` binary on the host (tests in this
-        // crate use BdClient::new() identically). Skip if bd is unavailable.
         let outcome = ctrl.run_review().await;
         if let Err(CheckError::Bd(_)) = outcome {
             return;
@@ -459,6 +471,7 @@ mod tests {
     async fn run_review_translates_nonzero_exit_into_incomplete_with_code() {
         let dir = tempfile::tempdir().unwrap();
         let workspace = dir.path().to_path_buf();
+        seed_empty_spec(&workspace, "loom-harness");
         let state = empty_state(&workspace);
         let manifest = stub_manifest(&workspace);
         let mut ctrl = ProductionCheckController::new(
@@ -489,6 +502,49 @@ mod tests {
             }
             other => panic!("expected Incomplete, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn build_review_prompt_inlines_verify_and_judge_bodies() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path();
+        let label = "alpha";
+        std::fs::create_dir_all(workspace.join("specs")).unwrap();
+        std::fs::create_dir_all(workspace.join("tests/judges")).unwrap();
+        std::fs::write(
+            workspace.join(format!("specs/{label}.md")),
+            "## Success Criteria\n\n\
+             - [ ] one\n  [verify](tests/alpha.sh#test_one)\n\
+             - [ ] two\n  [judge](tests/judges/alpha.sh#judge_two)\n",
+        )
+        .unwrap();
+        std::fs::write(workspace.join("tests/alpha.sh"), "VERIFY_BODY_MARKER\n").unwrap();
+        std::fs::write(
+            workspace.join("tests/judges/alpha.sh"),
+            "JUDGE_BODY_MARKER\n",
+        )
+        .unwrap();
+        let state = empty_state(workspace);
+        let manifest = stub_manifest(workspace);
+        let ctrl = ProductionCheckController::new(
+            BdClient::new(),
+            SpecLabel::new(label),
+            PathBuf::from("/usr/bin/loom"),
+            workspace.to_path_buf(),
+            state,
+            manifest,
+            ProfileName::new("base"),
+            noop_spawn,
+        );
+        let prompt = match ctrl.build_review_prompt().await {
+            Ok(p) => p,
+            Err(CheckError::Bd(_)) => return,
+            Err(e) => panic!("unexpected error: {e:?}"),
+        };
+        assert!(prompt.contains("VERIFY_BODY_MARKER"), "{prompt}");
+        assert!(prompt.contains("JUDGE_BODY_MARKER"), "{prompt}");
+        assert!(prompt.contains("tests/alpha.sh"), "{prompt}");
+        assert!(prompt.contains("tests/judges/alpha.sh"), "{prompt}");
     }
 
     /// Regression: `exec_run` (the check → run handoff for auto-iterate)
