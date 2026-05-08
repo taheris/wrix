@@ -26,5 +26,6 @@ pub struct CheckContext {
     pub molecule_id: Option<MoleculeId>,
     pub verify_sources: Vec<ReviewSource>,
     pub judge_rubrics: Vec<ReviewSource>,
+    pub scratchpad_path: String,
     pub exit_signals: String,
 }

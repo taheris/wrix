@@ -127,12 +127,16 @@ pub fn run_with_timeout(
         }
     };
 
+    let scratchpad_path = ScratchSession::scratchpad_path_for(workspace, label.as_str())
+        .to_string_lossy()
+        .into_owned();
     let prompt_body = render_prompt(PlanPromptInputs {
         mode: opts.mode,
         spec_path: spec_rel.clone(),
         pinned_context,
         companion_paths,
         existing_implementation_notes,
+        scratchpad_path,
         exit_signals,
     })?;
 

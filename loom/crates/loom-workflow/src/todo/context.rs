@@ -17,6 +17,10 @@ pub struct TemplateBaseFields {
     pub pinned_context: String,
     pub companion_paths: Vec<String>,
     pub implementation_notes: Vec<String>,
+    /// Absolute path to `.wrapix/loom/scratch/<spec-label>/scratch.md` for
+    /// this todo session. Embedded in the rendered prompt so the agent can
+    /// write to the correct file under compaction recovery.
+    pub scratchpad_path: String,
     pub exit_signals: String,
 }
 
@@ -40,6 +44,7 @@ pub fn build_template_context(
         pinned_context,
         companion_paths,
         implementation_notes,
+        scratchpad_path,
         exit_signals,
     } = base;
 
@@ -55,6 +60,7 @@ pub fn build_template_context(
                 spec_diff: Some(spec_diff),
                 existing_tasks: None,
                 molecule_id,
+                scratchpad_path,
                 exit_signals,
             })
         }
@@ -67,6 +73,7 @@ pub fn build_template_context(
             spec_diff: None,
             existing_tasks,
             molecule_id: Some(molecule.clone()),
+            scratchpad_path,
             exit_signals,
         }),
         TierDecision::New => TodoTemplateContext::New(TodoNewContext {
@@ -75,6 +82,7 @@ pub fn build_template_context(
             spec_path,
             companion_paths,
             implementation_notes,
+            scratchpad_path,
             exit_signals,
         }),
     }
@@ -116,6 +124,7 @@ mod tests {
             pinned_context: "PIN".to_string(),
             companion_paths: vec![],
             implementation_notes: vec![],
+            scratchpad_path: "/workspace/.wrapix/loom/scratch/alpha/scratch.md".to_string(),
             exit_signals: "LOOM_COMPLETE".to_string(),
         }
     }

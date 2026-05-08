@@ -20,6 +20,10 @@ pub struct CheckContextInputs {
     pub beads_summary: Option<String>,
     pub verify_sources: Vec<ReviewSource>,
     pub judge_rubrics: Vec<ReviewSource>,
+    /// Absolute path to `.wrapix/loom/scratch/<spec-label>/scratch.md` for
+    /// this reviewer session. Embedded in the rendered prompt so the agent
+    /// can write to the correct file under compaction recovery.
+    pub scratchpad_path: String,
     pub exit_signals: String,
 }
 
@@ -35,6 +39,7 @@ pub fn build_check_context(inputs: CheckContextInputs) -> CheckContext {
         molecule_id: inputs.molecule_id,
         verify_sources: inputs.verify_sources,
         judge_rubrics: inputs.judge_rubrics,
+        scratchpad_path: inputs.scratchpad_path,
         exit_signals: inputs.exit_signals,
     }
 }
@@ -149,6 +154,7 @@ mod tests {
             beads_summary: Some("- wx-1: First [open]".into()),
             verify_sources: vec![],
             judge_rubrics: vec![],
+            scratchpad_path: "/workspace/.wrapix/loom/scratch/loom-harness/scratch.md".into(),
             exit_signals: String::new(),
         }
     }

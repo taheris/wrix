@@ -116,6 +116,12 @@ where
         let spec_path = format!("specs/{}.md", self.label.as_str());
         let (verify_sources, judge_rubrics) =
             load_review_sources(&self.workspace, &self.workspace.join(&spec_path))?;
+        let scratchpad_path = loom_core::scratch::ScratchSession::scratchpad_path_for(
+            &self.workspace,
+            self.label.as_str(),
+        )
+        .to_string_lossy()
+        .into_owned();
         let ctx = CheckContext {
             pinned_context: String::new(),
             label: self.label.clone(),
@@ -126,6 +132,7 @@ where
             molecule_id,
             verify_sources,
             judge_rubrics,
+            scratchpad_path,
             exit_signals: String::new(),
         };
         Ok(ctx.render()?)

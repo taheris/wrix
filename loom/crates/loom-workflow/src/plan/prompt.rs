@@ -20,6 +20,10 @@ pub struct PlanPromptInputs {
     /// `specs/loom-harness.md` § Implementation-notes lifecycle. Ignored for
     /// `New`, where the row does not yet exist.
     pub existing_implementation_notes: Vec<String>,
+    /// Absolute path to `.wrapix/loom/scratch/<key>/scratch.md` for this
+    /// session. Embedded in the rendered prompt so the agent can write to
+    /// the correct file under compaction recovery.
+    pub scratchpad_path: String,
     pub exit_signals: String,
 }
 
@@ -31,6 +35,7 @@ pub fn render_prompt(inputs: PlanPromptInputs) -> Result<String, PlanError> {
             pinned_context: inputs.pinned_context,
             label,
             spec_path: inputs.spec_path,
+            scratchpad_path: inputs.scratchpad_path,
             exit_signals: inputs.exit_signals,
         }
         .render()?,
@@ -40,6 +45,7 @@ pub fn render_prompt(inputs: PlanPromptInputs) -> Result<String, PlanError> {
             spec_path: inputs.spec_path,
             companion_paths: inputs.companion_paths,
             existing_implementation_notes: inputs.existing_implementation_notes,
+            scratchpad_path: inputs.scratchpad_path,
             exit_signals: inputs.exit_signals,
         }
         .render()?,
@@ -60,6 +66,7 @@ mod tests {
             pinned_context: "PIN".into(),
             companion_paths: vec![],
             existing_implementation_notes: vec![],
+            scratchpad_path: "/workspace/.wrapix/loom/scratch/loom-harness/scratch.md".into(),
             exit_signals: "LOOM_COMPLETE".into(),
         }
     }
@@ -71,6 +78,7 @@ mod tests {
             pinned_context: "PIN".into(),
             companion_paths: vec!["lib/sandbox/".into()],
             existing_implementation_notes: vec!["touch lib/foo".into()],
+            scratchpad_path: "/workspace/.wrapix/loom/scratch/loom-harness/scratch.md".into(),
             exit_signals: "LOOM_COMPLETE".into(),
         }
     }

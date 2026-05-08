@@ -35,6 +35,14 @@ pub struct ScratchSession {
 }
 
 impl ScratchSession {
+    /// Compute the absolute path to `scratch.md` for `key` without opening
+    /// a session. The path is deterministic so phase render contexts that
+    /// need to embed it in the rendered prompt can resolve it before
+    /// [`ScratchSession::open`] writes the on-disk layout.
+    pub fn scratchpad_path_for(workspace: &Path, key: &str) -> PathBuf {
+        workspace.join(SCRATCH_SUBDIR).join(key).join("scratch.md")
+    }
+
     /// Open a fresh scratch session for `key`. Removes any leftover
     /// directory from a crashed prior session, recreates the layout, and
     /// writes `prompt.txt`, an empty `scratch.md`, an executable

@@ -14,11 +14,13 @@ use super::options::parse_options;
 pub fn build_msg_context(
     pinned_context: String,
     beads: &[&Bead],
+    scratchpad_path: String,
     exit_signals: String,
 ) -> MsgContext {
     MsgContext {
         pinned_context,
         clarify_beads: beads.iter().map(|b| to_clarify_bead(b)).collect(),
+        scratchpad_path,
         exit_signals,
     }
 }
@@ -126,7 +128,12 @@ mod tests {
             ),
         ];
         let refs: Vec<&Bead> = beads.iter().collect();
-        let ctx = build_msg_context("PIN".into(), &refs, "EXIT".into());
+        let ctx = build_msg_context(
+            "PIN".into(),
+            &refs,
+            "/workspace/.wrapix/loom/scratch/msg/scratch.md".into(),
+            "EXIT".into(),
+        );
         let body = ctx.render().expect("render");
         assert!(body.contains("wx-2"), "{body}");
         assert!(body.contains("wx-3"), "{body}");

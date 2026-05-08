@@ -102,12 +102,19 @@ impl ProductionTodoController {
         let tier = compute_spec_diff(&live_git, &inputs)?;
         debug!(label = %self.label, ?tier, "tier decision");
 
+        let scratchpad_path = loom_core::scratch::ScratchSession::scratchpad_path_for(
+            &self.workspace,
+            self.label.as_str(),
+        )
+        .to_string_lossy()
+        .into_owned();
         let base = TemplateBaseFields {
             label: self.label.clone(),
             spec_path: spec_path.to_string_lossy().into_owned(),
             pinned_context: String::new(),
             companion_paths: vec![],
             implementation_notes,
+            scratchpad_path,
             exit_signals: String::new(),
         };
         let ctx = build_template_context(&tier, base, None, molecule_id);

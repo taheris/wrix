@@ -13,5 +13,6 @@ pub struct TodoUpdateContext {
     pub spec_diff: Option<String>,
     pub existing_tasks: Option<String>,
     pub molecule_id: Option<MoleculeId>,
+    pub scratchpad_path: String,
     pub exit_signals: String,
 }

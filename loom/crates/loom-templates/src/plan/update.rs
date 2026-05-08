@@ -15,5 +15,6 @@ pub struct PlanUpdateContext {
     /// lifecycle. Empty in tier-fresh paths or when notes were just
     /// consumed by `loom todo`.
     pub existing_implementation_notes: Vec<String>,
+    pub scratchpad_path: String,
     pub exit_signals: String,
 }

@@ -9,6 +9,7 @@ use loom_core::identifier::{BeadId, SpecLabel};
 pub struct MsgContext {
     pub pinned_context: String,
     pub clarify_beads: Vec<ClarifyBead>,
+    pub scratchpad_path: String,
     pub exit_signals: String,
 }
 

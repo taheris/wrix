@@ -56,5 +56,6 @@ pub struct RunContext {
     pub title: Option<String>,
     pub description: Option<String>,
     pub previous_failure: Option<PreviousFailure>,
+    pub scratchpad_path: String,
     pub exit_signals: String,
 }

@@ -20,6 +20,7 @@ use loom_templates::todo::{TodoNewContext, TodoUpdateContext};
 const EXIT_SIGNALS_BODY: &str = "- `LOOM_COMPLETE`\n- `LOOM_BLOCKED`\n- `LOOM_CLARIFY`";
 const PINNED_CONTEXT_BODY: &str =
     "# Project Overview\n\nLoom orchestrates the spec-to-implementation workflow.";
+const SCRATCHPAD_PATH_BODY: &str = "/workspace/.wrapix/loom/scratch/loom-harness/scratch.md";
 
 #[test]
 fn plan_new_renders_partials_and_inputs() -> Result<()> {
@@ -27,6 +28,7 @@ fn plan_new_renders_partials_and_inputs() -> Result<()> {
         pinned_context: PINNED_CONTEXT_BODY.to_string(),
         label: SpecLabel::new("loom-harness"),
         spec_path: "specs/loom-harness.md".to_string(),
+        scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
         exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
     let out = ctx.render()?;
@@ -49,6 +51,7 @@ fn plan_update_renders_partials_and_companions() -> Result<()> {
         spec_path: "specs/loom-harness.md".to_string(),
         companion_paths: vec!["lib/sandbox/".into(), "lib/ralph/template/".into()],
         existing_implementation_notes: vec!["existing note one".into()],
+        scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
         exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
     let out = ctx.render()?;
@@ -74,6 +77,7 @@ fn todo_new_renders_implementation_notes_when_present() -> Result<()> {
             "Remove rustup bootstrap block".to_string(),
             "Use fenix fromToolchainFile".to_string(),
         ],
+        scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
         exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
     let out = ctx.render()?;
@@ -94,6 +98,7 @@ fn todo_new_omits_implementation_notes_section_when_empty() -> Result<()> {
         spec_path: "specs/loom-harness.md".to_string(),
         companion_paths: vec![],
         implementation_notes: vec![],
+        scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
         exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
     let out = ctx.render()?;
@@ -113,6 +118,7 @@ fn todo_update_wraps_existing_tasks_in_agent_output() -> Result<()> {
         spec_diff: Some("=== specs/loom-harness.md ===\n+ new requirement".into()),
         existing_tasks: Some("- wx-3hhwq.1: scaffold workspace".into()),
         molecule_id: Some(MoleculeId::new("wx-3hhwq")),
+        scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
         exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
     let out = ctx.render()?;
@@ -142,6 +148,7 @@ fn run_wraps_agent_supplied_fields_in_agent_output() -> Result<()> {
         title: Some("port templates".into()),
         description: Some("Port templates to Askama.".into()),
         previous_failure: Some(PreviousFailure::new("error: cargo test failed".to_string())),
+        scratchpad_path: "/workspace/.wrapix/loom/scratch/wx-3hhwq.10/scratch.md".to_string(),
         exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
     let out = ctx.render()?;
@@ -187,6 +194,7 @@ fn check_renders_review_context_fields() -> Result<()> {
         molecule_id: Some(MoleculeId::new("wx-3hhwq")),
         verify_sources: vec![],
         judge_rubrics: vec![],
+        scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
         exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
     let out = ctx.render()?;
@@ -221,6 +229,7 @@ fn msg_renders_clarify_beads_with_options() -> Result<()> {
                 },
             ],
         }],
+        scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
         exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
     let out = ctx.render()?;
@@ -240,6 +249,7 @@ fn msg_renders_with_no_clarify_beads() -> Result<()> {
     let ctx = MsgContext {
         pinned_context: PINNED_CONTEXT_BODY.to_string(),
         clarify_beads: vec![],
+        scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
         exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
     let out = ctx.render()?;
@@ -264,6 +274,7 @@ fn run_renders_expected_sections_for_shared_inputs() -> Result<()> {
         title: Some("the title".into()),
         description: Some("the description".into()),
         previous_failure: None,
+        scratchpad_path: "/workspace/.wrapix/loom/scratch/wx-mol.1/scratch.md".into(),
         exit_signals: "- `LOOM_COMPLETE`".into(),
     };
     let out = ctx.render()?;
