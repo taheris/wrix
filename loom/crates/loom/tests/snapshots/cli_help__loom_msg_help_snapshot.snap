@@ -7,11 +7,13 @@ Resolve outstanding `loom:clarify` and `loom:blocked` beads
 Usage: loom msg [OPTIONS]
 
 Options:
-  -s, --spec <LABEL>      Filter to a specific spec label
-      --workspace <PATH>  Workspace root. Defaults to the current working directory
-      --agent <BACKEND>   Override the agent backend for this invocation. Wins over per-phase `[phase.<phase>] agent.backend = ...` and `[phase.default] agent.backend = ...` in `.wrapix/loom/config.toml`. Accepts `claude` or `pi`; any other value triggers a clap parse error [possible values: claude, pi]
-  -n <N>                  Select bead by 1-based index in the printed list
-  -i <ID>                 Select bead by id
-  -a <CHOICE>             Fast-reply: integer chooses option N for clarify beads; anything else (and any choice for blocked beads) is stored verbatim
-  -d                      Dismiss the bead (write canonical note + remove the loom:* label)
+  -w, --workspace <PATH>  Workspace root. Defaults to the current working directory
+  -A, --agent <BACKEND>   Override the agent backend for this invocation [possible values: claude, pi]
   -h, --help              Print help
+
+Workflow:
+  -s, --spec <LABEL>  Filter to a specific spec label
+  -n <N>              Select bead by 1-based index in the printed list
+  -i <ID>             Select bead by id
+  -a <CHOICE>         Fast-reply: integer chooses option N for clarify beads; anything else (and any choice for blocked beads) is stored verbatim
+  -d                  Dismiss the bead (write canonical note + remove the loom:* label)

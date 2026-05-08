@@ -41,14 +41,11 @@ use loom_workflow::{run_agent, run_agent_classified};
 #[command(name = "loom", version, about = "Loom harness CLI")]
 struct Cli {
     /// Workspace root. Defaults to the current working directory.
-    #[arg(long, global = true, value_name = "PATH")]
+    #[arg(long, short = 'w', global = true, value_name = "PATH")]
     workspace: Option<PathBuf>,
 
-    /// Override the agent backend for this invocation. Wins over per-phase
-    /// `[phase.<phase>] agent.backend = ...` and `[phase.default]
-    /// agent.backend = ...` in `.wrapix/loom/config.toml`. Accepts `claude`
-    /// or `pi`; any other value triggers a clap parse error.
-    #[arg(long, global = true, value_enum, value_name = "BACKEND")]
+    /// Override the agent backend for this invocation.
+    #[arg(long, short = 'A', global = true, value_enum, value_name = "BACKEND")]
     agent: Option<AgentBackendArg>,
 
     #[command(subcommand)]
@@ -77,32 +74,37 @@ impl From<AgentBackendArg> for AgentKind {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Initialize the workspace (create `.wrapix/loom/` config + state DB).
+    #[command(next_help_heading = "Workspace")]
     Init {
         /// Drop and repopulate the state DB from `specs/*.md` and active beads.
         #[arg(long)]
         rebuild: bool,
     },
     /// Print the active spec, current molecule, and iteration counter.
+    #[command(next_help_heading = "Inspect")]
     Status,
     /// Set the active spec.
-    #[command(name = "use")]
+    #[command(name = "use", next_help_heading = "Workspace")]
     UseSpec {
         /// Spec label (matches `<workspace>/specs/<label>.md`).
         label: String,
     },
     /// Tail the most recent per-bead JSONL log.
+    #[command(next_help_heading = "Inspect")]
     Logs {
         /// Restrict the search to a specific bead id.
         #[arg(long)]
         bead: Option<String>,
     },
     /// Inspect spec annotations and tooling dependencies.
+    #[command(next_help_heading = "Inspect")]
     Spec {
         /// Print the unique nixpkgs names referenced by verify/judge tests.
         #[arg(long)]
         deps: bool,
     },
     /// Interactive spec interview (`-n <label>` new, `-u <label>` update).
+    #[command(next_help_heading = "Workflow")]
     Plan {
         /// New-spec interview for `<label>`.
         #[arg(short = 'n', value_name = "LABEL")]
@@ -117,6 +119,7 @@ enum Command {
         profile: Option<String>,
     },
     /// Per-bead execution loop. Continuous by default; `--once` exits after one bead.
+    #[command(next_help_heading = "Workflow")]
     Run {
         /// Process a single bead then exit (no auto-handoff to `loom check`).
         #[arg(long)]
@@ -132,12 +135,14 @@ enum Command {
         spec: Option<String>,
     },
     /// Post-loop reviewer + push gate.
+    #[command(next_help_heading = "Workflow")]
     Check {
         /// Spec label override (defaults to `current_spec`).
         #[arg(long, short = 's', value_name = "LABEL")]
         spec: Option<String>,
     },
     /// Resolve outstanding `loom:clarify` and `loom:blocked` beads.
+    #[command(next_help_heading = "Workflow")]
     Msg {
         /// Filter to a specific spec label.
         #[arg(long, short = 's', value_name = "LABEL")]
@@ -157,6 +162,7 @@ enum Command {
         dismiss: bool,
     },
     /// Decompose the active spec into beads (four-tier detection).
+    #[command(next_help_heading = "Workflow")]
     Todo {
         /// Spec label override (defaults to `current_spec`).
         #[arg(long, short = 's', value_name = "LABEL")]

@@ -7,6 +7,6 @@ Print the active spec, current molecule, and iteration counter
 Usage: loom status [OPTIONS]
 
 Options:
-      --workspace <PATH>  Workspace root. Defaults to the current working directory
-      --agent <BACKEND>   Override the agent backend for this invocation. Wins over per-phase `[phase.<phase>] agent.backend = ...` and `[phase.default] agent.backend = ...` in `.wrapix/loom/config.toml`. Accepts `claude` or `pi`; any other value triggers a clap parse error [possible values: claude, pi]
+  -w, --workspace <PATH>  Workspace root. Defaults to the current working directory
+  -A, --agent <BACKEND>   Override the agent backend for this invocation [possible values: claude, pi]
   -h, --help              Print help
