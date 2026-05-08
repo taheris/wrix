@@ -1,3 +1,4 @@
+use askama::Template;
 use loom_core::identifier::{BeadId, MoleculeId, SpecLabel};
 use loom_templates::run::{PreviousFailure, RunContext};
 
@@ -38,6 +39,12 @@ pub fn build_run_context(inputs: RunContextInputs) -> RunContext {
         scratchpad_path: inputs.scratchpad_path,
         exit_signals: inputs.exit_signals,
     }
+}
+
+/// Render the run prompt for `inputs` so binaries that lack a direct askama
+/// dependency can build the same prompt as the workflow's own controllers.
+pub fn render_run_prompt(inputs: RunContextInputs) -> Result<String, askama::Error> {
+    build_run_context(inputs).render()
 }
 
 #[cfg(test)]

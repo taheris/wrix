@@ -562,13 +562,29 @@ async fn dispatch_for_slot(
     logs_root: &Path,
     label: &SpecLabel,
 ) -> anyhow::Result<SessionOutcome> {
-    use loom_core::agent::RePinContent;
     use loom_core::scratch::ScratchSession;
-    use loom_workflow::run::build_spawn_config_from_manifest;
+    use loom_workflow::run::{
+        RunContextInputs, build_spawn_config_from_manifest, render_run_prompt,
+    };
 
-    let initial_prompt = format!("loom run: bead {}", slot.bead.id);
     let banner = format!("loom run @ {}", slot.bead.id);
     let key = resolve_scratch_key(Phase::Run, label, Some(&slot.bead.id));
+    let scratchpad_path = ScratchSession::scratchpad_path_for(&slot.worktree.path, &key)
+        .to_string_lossy()
+        .into_owned();
+    let initial_prompt = render_run_prompt(RunContextInputs {
+        label: label.clone(),
+        spec_path: format!("specs/{}.md", label.as_str()),
+        pinned_context: String::new(),
+        companion_paths: vec![],
+        molecule_id: None,
+        issue_id: slot.bead.id.clone(),
+        title: slot.bead.title.clone(),
+        description: slot.bead.description.clone(),
+        previous_failure: None,
+        scratchpad_path,
+        exit_signals: String::new(),
+    })?;
     let scratch = ScratchSession::open(&slot.worktree.path, &key, &initial_prompt, &banner)?;
     let spawn_config = build_spawn_config_from_manifest(
         manifest,
@@ -577,11 +593,6 @@ async fn dispatch_for_slot(
         phase_default,
         slot.worktree.path.clone(),
         initial_prompt,
-        RePinContent {
-            orientation: banner,
-            pinned_context: String::new(),
-            partial_bodies: vec![],
-        },
         scratch.path().to_path_buf(),
         vec![],
         vec![],

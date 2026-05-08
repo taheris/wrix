@@ -37,7 +37,7 @@ mod retry;
 mod runner;
 mod spawn;
 
-pub use context::{RunContextInputs, build_run_context};
+pub use context::{RunContextInputs, build_run_context, render_run_prompt};
 pub use error::RunError;
 pub use outcome::{AgentOutcome, BeadResult, SessionResult};
 pub use parallel::{

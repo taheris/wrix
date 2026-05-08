@@ -17,7 +17,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use loom_core::agent::{ProtocolError, RePinContent, SpawnConfig};
+use loom_core::agent::{ProtocolError, SpawnConfig};
 use loom_core::bd::{BdClient, Bead, ListOpts, ReadyOpts, UpdateOpts};
 use loom_core::config::Phase;
 use loom_core::identifier::{BeadId, ProfileName, SpecLabel};
@@ -27,6 +27,7 @@ use loom_core::scratch::resolve_scratch_key;
 use tokio::process::Command;
 use tracing::info;
 
+use super::context::{RunContextInputs, render_run_prompt};
 use super::error::RunError;
 use super::outcome::{AgentOutcome, SessionResult};
 use super::runner::AgentLoopController;
@@ -127,9 +128,27 @@ where
         bead: &Bead,
         previous_failure: Option<String>,
     ) -> Result<AgentOutcome, RunError> {
-        let initial_prompt = format!("loom run: bead {}", bead.id);
         let banner = format!("loom run @ {}", bead.id);
+        let is_retry = previous_failure.is_some();
         let key = resolve_scratch_key(Phase::Run, &self.label, Some(&bead.id));
+        let scratchpad_path =
+            loom_core::scratch::ScratchSession::scratchpad_path_for(&self.workspace, &key)
+                .to_string_lossy()
+                .into_owned();
+        let initial_prompt = render_run_prompt(RunContextInputs {
+            label: self.label.clone(),
+            spec_path: format!("specs/{}.md", self.label.as_str()),
+            pinned_context: String::new(),
+            companion_paths: vec![],
+            molecule_id: None,
+            issue_id: bead.id.clone(),
+            title: bead.title.clone(),
+            description: bead.description.clone(),
+            previous_failure,
+            scratchpad_path,
+            exit_signals: String::new(),
+        })
+        .map_err(|e| RunError::Protocol(ProtocolError::Io(std::io::Error::other(e))))?;
         let scratch = loom_core::scratch::ScratchSession::open(
             &self.workspace,
             &key,
@@ -144,11 +163,6 @@ where
             &self.phase_default,
             self.workspace.clone(),
             initial_prompt,
-            RePinContent {
-                orientation: banner,
-                pinned_context: String::new(),
-                partial_bodies: vec![],
-            },
             scratch.path().to_path_buf(),
             vec![],
             vec![],
@@ -156,7 +170,7 @@ where
         info!(
             bead = %bead.id,
             image_ref = %spawn_config.image_ref,
-            retry = previous_failure.is_some(),
+            retry = is_retry,
             "loom run: dispatching agent",
         );
         let session = (self.spawn)(spawn_config, bead.id.clone()).await;
@@ -325,6 +339,84 @@ mod tests {
         let cfg = captured.lock().unwrap().take().expect("closure called");
         assert_eq!(cfg.image_ref, "localhost/wrapix-base:abc");
         assert!(cfg.initial_prompt.contains("wx-1"));
+    }
+
+    /// wx-hcolw.4 gate: `loom run` must dispatch with the rendered
+    /// [`RunContext`] template — bead title/description, scratchpad path,
+    /// and spec_path all reach the agent prompt — and the same body must
+    /// land in `<scratch_dir>/prompt.txt` so post-compaction `repin.sh`
+    /// can re-emit the actual phase prompt.
+    #[tokio::test]
+    async fn run_bead_dispatches_rendered_run_template_and_writes_prompt_txt() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = write_manifest(dir.path());
+        let workspace = dir.path().join("ws");
+        std::fs::create_dir_all(&workspace).expect("ws dir");
+        let captured: Arc<Mutex<Option<SpawnConfig>>> = Arc::new(Mutex::new(None));
+        let captured_for_closure = Arc::clone(&captured);
+        let prompt_seen: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let prompt_seen_inner = Arc::clone(&prompt_seen);
+        let mut controller = ProductionAgentLoopController::new(
+            BdClient::new(),
+            SpecLabel::new("loom-harness"),
+            PathBuf::from("/loom/bin"),
+            workspace.clone(),
+            manifest,
+            None,
+            ProfileName::new("base"),
+            move |cfg: SpawnConfig, _bead_id: BeadId| {
+                let captured = Arc::clone(&captured_for_closure);
+                let prompt_seen = Arc::clone(&prompt_seen_inner);
+                async move {
+                    // Read prompt.txt mid-session, while the ScratchSession
+                    // guard is still alive — Drop removes the dir on return.
+                    let txt = std::fs::read_to_string(cfg.scratch_dir.join("prompt.txt"))
+                        .expect("prompt.txt readable");
+                    *prompt_seen.lock().unwrap() = Some(txt);
+                    *captured.lock().unwrap() = Some(cfg);
+                    SessionResult::Complete(SessionOutcome {
+                        exit_code: 0,
+                        cost_usd: None,
+                    })
+                }
+            },
+        );
+        let bead = Bead {
+            id: BeadId::new("wx-99").expect("bead id"),
+            title: "Implement the harness".into(),
+            description: "wire the per-bead loop".into(),
+            status: "open".into(),
+            priority: 2,
+            issue_type: "task".into(),
+            labels: vec![Label::new("profile:base")],
+        };
+        controller.run_bead(&bead, None).await.expect("run_bead ok");
+        let cfg = captured.lock().unwrap().take().expect("closure called");
+        // Rendered template body, not the legacy "loom run: bead <id>" stub.
+        assert!(
+            cfg.initial_prompt.contains("# Implementation Step"),
+            "prompt missing template heading: {}",
+            cfg.initial_prompt,
+        );
+        assert!(
+            cfg.initial_prompt.contains("Implement the harness"),
+            "prompt missing bead title: {}",
+            cfg.initial_prompt,
+        );
+        assert!(
+            cfg.initial_prompt.contains("wire the per-bead loop"),
+            "prompt missing bead description: {}",
+            cfg.initial_prompt,
+        );
+        assert!(
+            cfg.initial_prompt.contains("specs/loom-harness.md"),
+            "prompt missing spec path: {}",
+            cfg.initial_prompt,
+        );
+        // prompt.txt must hold the same rendered body so repin.sh
+        // surfaces the phase prompt under compaction recovery.
+        let written = prompt_seen.lock().unwrap().take().expect("prompt.txt seen");
+        assert_eq!(written, cfg.initial_prompt);
     }
 
     #[tokio::test]

@@ -17,7 +17,6 @@ fn build_spawn_config(
     image_source: PathBuf,
     workspace: PathBuf,
     initial_prompt: String,
-    repin: RePinContent,
     scratch_dir: PathBuf,
     extra_env: Vec<(String, String)>,
     agent_args: Vec<String>,
@@ -31,7 +30,11 @@ fn build_spawn_config(
         env,
         initial_prompt,
         agent_args,
-        repin,
+        repin: RePinContent {
+            orientation: String::new(),
+            pinned_context: String::new(),
+            partial_bodies: vec![],
+        },
         scratch_dir,
         model: None,
         shutdown_grace: None,
@@ -59,7 +62,6 @@ pub fn build_spawn_config_from_manifest(
     phase_default: &ProfileName,
     workspace: PathBuf,
     initial_prompt: String,
-    repin: RePinContent,
     scratch_dir: PathBuf,
     extra_env: Vec<(String, String)>,
     agent_args: Vec<String>,
@@ -70,7 +72,6 @@ pub fn build_spawn_config_from_manifest(
         entry.source.clone(),
         workspace,
         initial_prompt,
-        repin,
         scratch_dir,
         extra_env,
         agent_args,
@@ -87,14 +88,6 @@ mod tests {
     use super::*;
     use loom_core::bd::Label;
     use loom_core::identifier::BeadId;
-
-    fn repin() -> RePinContent {
-        RePinContent {
-            orientation: "ori".into(),
-            pinned_context: "ctx".into(),
-            partial_bodies: vec![],
-        }
-    }
 
     fn bead_with_labels(id: &str, labels: &[&str]) -> Bead {
         Bead {
@@ -143,7 +136,6 @@ mod tests {
             &base(),
             PathBuf::from("/work/wx-1"),
             "rust prompt".into(),
-            repin(),
             dir.path().join("scratch"),
             vec![],
             vec![],
@@ -156,7 +148,6 @@ mod tests {
             &base(),
             PathBuf::from("/work/wx-2"),
             "python prompt".into(),
-            repin(),
             dir.path().join("scratch"),
             vec![],
             vec![],
@@ -193,7 +184,6 @@ mod tests {
             &base(),
             PathBuf::from("/work/wx-1"),
             "p".into(),
-            repin(),
             dir.path().join("scratch"),
             vec![],
             vec![],
@@ -206,7 +196,6 @@ mod tests {
             &base(),
             PathBuf::from("/work/wx-1"),
             "p".into(),
-            repin(),
             dir.path().join("scratch"),
             vec![],
             vec![],
@@ -222,7 +211,7 @@ mod tests {
     /// must produce identical SpawnConfigs for the same bead modulo the
     /// workspace path — sequential dispatches against the repo root,
     /// parallel against a per-bead worktree, but every other field
-    /// (image_ref, image_source, env, agent_args, prompt, repin) must
+    /// (image_ref, image_source, env, agent_args, prompt) must
     /// match. If either path adds an arg or rewrites the prompt format,
     /// this test trips before the divergence reaches users.
     #[test]
@@ -239,7 +228,6 @@ mod tests {
             &base(),
             PathBuf::from("/repo-root"),
             prompt.clone(),
-            repin(),
             dir.path().join("scratch"),
             vec![],
             vec![],
@@ -252,7 +240,6 @@ mod tests {
             &base(),
             PathBuf::from("/repo-root/.wrapix/worktree/wx-1"),
             prompt,
-            repin(),
             dir.path().join("scratch"),
             vec![],
             vec![],
@@ -288,7 +275,6 @@ mod tests {
             &base(),
             PathBuf::from("/work"),
             "p".into(),
-            repin(),
             dir.path().join("scratch"),
             vec![("WRAPIX_AGENT".into(), "claude".into())],
             vec![],
@@ -324,7 +310,6 @@ mod tests {
             &base(),
             PathBuf::from("/work"),
             "p".into(),
-            repin(),
             dir.path().join("scratch"),
             vec![],
             vec![],
