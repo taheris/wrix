@@ -38,5 +38,6 @@ pub use production::ProductionCheckController;
 pub use runner::{CheckController, CheckResult, ReviewOutcome, check_loop};
 pub use verdict::{BeadSnapshot, CheckVerdict, diff_new_bead_ids};
 pub use verify_fail::{
-    PREVIOUS_FAILURE_BUDGET, STDERR_TAIL_LINES, VerifyFailure, format_previous_failure,
+    PREVIOUS_FAILURE_BUDGET, REVIEW_NOTES_BUDGET, STDERR_TAIL_LINES, VerifyFailure,
+    format_previous_failure,
 };

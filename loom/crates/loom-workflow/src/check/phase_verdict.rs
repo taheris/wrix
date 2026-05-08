@@ -70,8 +70,17 @@ pub enum RecoveryCause {
     ZeroProgress,
     /// At least one `[verify]` script failed. Carries every failure so the
     /// downstream `previous_failure` builder can format them into a single
-    /// budget-bounded body — none short-circuit each other.
-    VerifyFail { failures: Vec<VerifyFailure> },
+    /// budget-bounded body — none short-circuit each other. `review_notes`
+    /// holds the review LLM's flag, if any: review still runs on verify-fail
+    /// (`specs/loom-harness.md` §"Push gate · Review always runs") so the
+    /// agent gets verify failures *and* live-path/mock/scope/judge feedback in
+    /// one `previous_failure` round trip — appended under a `Review notes:`
+    /// heading by the formatter. The cause label stays `verify-fail`
+    /// (mechanical trumps semantic).
+    VerifyFail {
+        failures: Vec<VerifyFailure>,
+        review_notes: Option<ReviewFlag>,
+    },
     /// Verify passed but the reviewer raised a flag. Carries the structured
     /// concern + reasoning emitted by the review LLM so downstream surfaces
     /// (`bd update --notes`, `previous_failure`) can name which concern
@@ -164,6 +173,7 @@ fn decide_progress_marker(is_noop: bool, inputs: GateInputs) -> PhaseVerdict {
         return PhaseVerdict::Recovery {
             cause: RecoveryCause::VerifyFail {
                 failures: inputs.verify_failures,
+                review_notes: inputs.review_flag,
             },
         };
     }
@@ -327,12 +337,46 @@ mod tests {
         );
         match result {
             PhaseVerdict::Recovery {
-                cause: RecoveryCause::VerifyFail { failures },
+                cause:
+                    RecoveryCause::VerifyFail {
+                        failures,
+                        review_notes,
+                    },
             } => {
                 assert_eq!(failures.len(), 1, "carries every failure block");
                 assert_eq!(failures[0].exit_code, 1);
+                assert!(review_notes.is_none(), "no review flag in this row");
             }
             other => panic!("expected Recovery::VerifyFail, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn complete_with_verify_fail_and_review_flag_threads_both_into_recovery_cause() {
+        // Spec rule: when verify fails, the cause is `verify-fail` (mechanical
+        // trumps semantic) but review's reasoning still has to ride along so
+        // the downstream formatter can append it under `Review notes:`.
+        let detail = "test mocks the agent backend instead of spawning it";
+        let g = GateInputs {
+            bd_closed: true,
+            diff_empty: false,
+            verify_failures: vec![sample_failure()],
+            review_flag: Some(flag(ReviewConcern::LivePath, detail)),
+        };
+        match decide(Some(&ExitSignal::Complete), g) {
+            PhaseVerdict::Recovery {
+                cause:
+                    RecoveryCause::VerifyFail {
+                        failures,
+                        review_notes,
+                    },
+            } => {
+                assert_eq!(failures.len(), 1);
+                let notes = review_notes.expect("review flag threaded into cause");
+                assert_eq!(notes.concern, ReviewConcern::LivePath);
+                assert_eq!(notes.detail, detail);
+            }
+            other => panic!("expected Recovery::VerifyFail with review_notes, got {other:?}"),
         }
     }
 
@@ -361,7 +405,10 @@ mod tests {
         };
         match decide(Some(&ExitSignal::Complete), g) {
             PhaseVerdict::Recovery {
-                cause: RecoveryCause::VerifyFail { failures: carried },
+                cause:
+                    RecoveryCause::VerifyFail {
+                        failures: carried, ..
+                    },
             } => {
                 assert_eq!(carried, failures, "every failure threaded through");
             }
@@ -422,7 +469,7 @@ mod tests {
             );
             match result {
                 PhaseVerdict::Recovery {
-                    cause: RecoveryCause::VerifyFail { failures },
+                    cause: RecoveryCause::VerifyFail { failures, .. },
                 } => {
                     assert_eq!(failures.len(), 1, "diff_empty={diff_empty}");
                 }
@@ -478,8 +525,21 @@ mod tests {
         );
         assert_eq!(RecoveryCause::ZeroProgress.as_str(), "zero-progress");
         assert_eq!(
-            RecoveryCause::VerifyFail { failures: vec![] }.as_str(),
+            RecoveryCause::VerifyFail {
+                failures: vec![],
+                review_notes: None,
+            }
+            .as_str(),
             "verify-fail",
+        );
+        assert_eq!(
+            RecoveryCause::VerifyFail {
+                failures: vec![],
+                review_notes: Some(flag(ReviewConcern::Mock, "x")),
+            }
+            .as_str(),
+            "verify-fail",
+            "label is mechanical-only — review-notes piggyback never relabels",
         );
         assert_eq!(
             RecoveryCause::ReviewFlag(flag(ReviewConcern::Judge, "")).as_str(),

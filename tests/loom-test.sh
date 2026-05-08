@@ -3062,6 +3062,11 @@ test_gate_verify_fail_collects_all() {
 test_review_runs_on_verify_fail() {
     check_cargo_test check::phase_verdict::tests::complete_with_verify_fail_routes_to_verify_fail
     check_cargo_test check::phase_verdict::tests::complete_with_review_flag_routes_to_review_flag
+    check_cargo_test check::phase_verdict::tests::complete_with_verify_fail_and_review_flag_threads_both_into_recovery_cause
+    check_cargo_test check::verify_fail::tests::review_notes_appended_under_heading_when_review_flagged
+    check_cargo_test check::verify_fail::tests::review_notes_truncated_when_detail_exceeds_budget
+    check_cargo_test check::verify_fail::tests::review_notes_budget_is_separate_from_verify_budget
+    check_cargo_test check::verify_fail::tests::no_review_notes_section_when_review_flag_absent
 }
 test_review_inputs_include_judge_rubrics() {
     cargo_run test -p loom-templates --test render check_renders_review_context_fields \
