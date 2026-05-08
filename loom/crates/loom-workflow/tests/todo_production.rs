@@ -92,6 +92,59 @@ fn seeded_state(
     Arc::new(db)
 }
 
+/// wx-hcolw.6 gate: `loom todo` must build a `SpawnConfig` whose
+/// `initial_prompt` carries the rendered phase template body (with the
+/// scratchpad path partial), whose `RePinContent` is an empty placeholder
+/// — the rendered phase prompt now flows from `<scratch_dir>/prompt.txt`
+/// via post-compaction `repin.sh`, not from the `repin` field — and whose
+/// scratch dir holds a `prompt.txt` whose contents equal `initial_prompt`.
+/// Mirror of the `loom check` and `loom run` dispatch-shape tests
+/// (`src/check/production.rs`, `src/run/production.rs`).
+#[tokio::test]
+async fn build_session_dispatches_rendered_todo_template_and_writes_prompt_txt() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().to_path_buf();
+    let state = empty_state(&workspace);
+    let manifest = stub_manifest(&workspace);
+    let git = init_repo(&workspace);
+    let mut ctrl = ProductionTodoController::new(
+        SpecLabel::new("loom-harness"),
+        workspace,
+        state,
+        manifest,
+        ProfileName::new("base"),
+        git,
+        None,
+    );
+    let session = ctrl.build_session().await.expect("build cfg");
+    let cfg = &session.config;
+    assert!(
+        cfg.initial_prompt.contains("# Task Decomposition"),
+        "prompt missing template heading: {}",
+        cfg.initial_prompt,
+    );
+    assert!(
+        cfg.initial_prompt.contains("specs/loom-harness.md"),
+        "prompt missing spec path: {}",
+        cfg.initial_prompt,
+    );
+    assert!(
+        cfg.initial_prompt.contains(".wrapix/loom/scratch"),
+        "prompt missing scratchpad partial: {}",
+        cfg.initial_prompt,
+    );
+    assert!(
+        cfg.repin.orientation.is_empty()
+            && cfg.repin.pinned_context.is_empty()
+            && cfg.repin.partial_bodies.is_empty(),
+        "RePinContent must be empty placeholder; rendered template lives in prompt.txt: {:?}",
+        cfg.repin,
+    );
+    let written =
+        std::fs::read_to_string(cfg.scratch_dir.join("prompt.txt")).expect("prompt.txt readable");
+    assert_eq!(written, cfg.initial_prompt);
+}
+
 #[tokio::test]
 async fn build_spawn_config_resolves_manifest_image_and_renders_new_template() {
     let dir = tempfile::tempdir().unwrap();

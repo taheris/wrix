@@ -157,7 +157,7 @@ impl TodoController for ProductionTodoController {
                 initial_prompt: prompt,
                 agent_args: vec![],
                 repin: RePinContent {
-                    orientation: banner,
+                    orientation: String::new(),
                     pinned_context: String::new(),
                     partial_bodies: vec![],
                 },
