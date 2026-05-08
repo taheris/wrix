@@ -1154,14 +1154,14 @@ logging_cargo_test() {
 # per bead and one short line per tool call (assistant text deltas
 # suppressed); the closing line carries tool count + duration.
 #-----------------------------------------------------------------------------
-test_run_default_output_shape() {
+test_pretty_selected_on_tty() {
     logging_cargo_test run_default_output_shape
 }
 
 #-----------------------------------------------------------------------------
 # test_run_verbose_streams_text — verbose mode streams MessageDelta verbatim.
 #-----------------------------------------------------------------------------
-test_run_verbose_streams_text() {
+test_verbose_full_output() {
     logging_cargo_test run_verbose_streams_text
 }
 
@@ -1345,7 +1345,7 @@ test_run_retry_with_context() {
 # test_run_execs_check — molecule completion in continuous mode triggers
 # exactly one `loom check` exec; once mode never does.
 #-----------------------------------------------------------------------------
-test_run_execs_check() {
+test_run_execs_review() {
     run_cargo_test run::runner::tests::continuous_execs_check_on_molecule_complete
     run_cargo_test run::runner::tests::once_mode_does_not_exec_check_on_empty_queue
 }
@@ -1462,7 +1462,7 @@ msg_cargo_test() {
 # and resets the iteration counter; a clarify present (new or pre-existing)
 # stops the gate without pushing.
 #-----------------------------------------------------------------------------
-test_check_push_gate() {
+test_review_push_gate() {
     check_cargo_test check::runner::tests::clean_review_pushes_and_resets_counter
     check_cargo_test check::runner::tests::clarify_present_stops_without_pushing
     check_cargo_test check::runner::tests::pre_existing_clarify_blocks_push_even_when_no_new_beads
@@ -1476,7 +1476,7 @@ test_check_push_gate() {
 # `exec loom run` with the counter incremented; reaching the cap escalates the
 # newest fix-up bead to `ralph:clarify` instead of looping forever.
 #-----------------------------------------------------------------------------
-test_check_auto_iterate() {
+test_review_auto_iterate() {
     check_cargo_test check::iteration::tests::default_cap_matches_spec
     check_cargo_test check::iteration::tests::is_exhausted_true_at_or_above_cap
     check_cargo_test check::runner::tests::fix_up_beads_under_cap_auto_iterate
@@ -1492,7 +1492,7 @@ test_check_auto_iterate() {
 # labelled beads, drops the SPEC column under a spec filter, and falls back to
 # bead title when the `## Options — <summary>` header is missing.
 #-----------------------------------------------------------------------------
-test_msg_list() {
+test_msg_list_cross_spec_default() {
     msg_cargo_test msg::list::tests::filter_keeps_only_clarify_labelled_beads
     msg_cargo_test msg::list::tests::filter_keeps_blocked_alongside_clarify
     msg_cargo_test msg::list::tests::filter_with_spec_label_keeps_only_matching
@@ -1511,7 +1511,7 @@ test_msg_list() {
 # missing index errors with the available indices; non-integer choice is
 # stored verbatim. Blocked beads always store verbatim (free-form).
 #-----------------------------------------------------------------------------
-test_msg_fast_reply() {
+test_msg_reply_verbatim() {
     msg_cargo_test msg::options::tests::options_em_dash_summary_and_three_options
     msg_cargo_test msg::options::tests::separator_variants_all_strip_cleanly
     msg_cargo_test msg::reply::tests::integer_choice_resolves_to_option_note
@@ -1578,7 +1578,7 @@ test_use_command() {
 # prefix filter so `wx-1` does not collapse into `wx-10`, and rejects
 # non-jsonl files.
 #-----------------------------------------------------------------------------
-test_logs_command() {
+test_logs_default_renders_and_exits() {
     aux_cargo_test logs_cmd::tests::empty_root_returns_no_logs
     aux_cargo_test logs_cmd::tests::returns_most_recent_log_across_specs
     aux_cargo_test logs_cmd::tests::bead_filter_matches_prefix_exactly
@@ -3119,12 +3119,16 @@ test_plan_new_writes_implementation_notes() {
 }
 
 #-----------------------------------------------------------------------------
-# test_todo_consumes_and_clears_notes — `loom todo` reads notes from
-# `specs.implementation_notes`, renders them into the prompt, then clears the
-# column on success (same gate as the per-spec todo cursor). Pinned to the
-# integration tests under `loom-workflow/tests/todo_production.rs`.
+# test_todo_renders_notes_into_beads — `loom todo` reads implementation
+# notes from the anchor spec and renders each note's text into every new
+# bead body created during the run. Pinned to the integration tests under
+# `loom-workflow/tests/todo_production.rs`. (Today these still hit the
+# legacy `specs.implementation_notes` column; once the `notes` table +
+# `loom note` CLI migration lands, the underlying Rust tests get rewritten
+# against `notes` rows but this dispatcher stays — see the *Stub-to-real
+# review gate* section in `specs/loom-harness.md`.)
 #-----------------------------------------------------------------------------
-test_todo_consumes_and_clears_notes() {
+test_todo_renders_notes_into_beads() {
     cargo_run test -p loom-workflow --test todo_production \
         build_spawn_config_renders_implementation_notes_from_db \
         -- --exact --nocapture --quiet
@@ -3152,6 +3156,83 @@ test_repin_envelope()             { scratch_cargo_test repin_script_runs_jq_enve
 test_repin_hook_registered()      { scratch_cargo_test claude_settings_registers_repin_under_session_start_compact; }
 test_scratch_dir_cleanup()        { scratch_cargo_test close_removes_dir_and_is_idempotent_with_drop; }
 test_parallel_scratch_isolation() { scratch_cargo_test parallel_keys_get_independent_dirs; }
+
+#-----------------------------------------------------------------------------
+# Pending-implementation stubs
+#
+# Each stub satisfies the bidirectional annotation-integrity gate
+# (`loom/crates/loom/tests/annotations.rs`) by existing at column 0 with
+# a `test_*` name, but signals "not implemented yet" by exiting 77 (the
+# de-facto POSIX "skipped" code, also used by Automake test runners).
+# Promotion path: when the implementation lands, replace the stub body
+# with a real dispatcher into the corresponding Rust test (drop the
+# `_pending_stub` call). The review gate (specs/loom-harness.md
+# §"Stub-to-real review gate") rejects PRs that land implementation
+# work while the matching stub is still here.
+#-----------------------------------------------------------------------------
+_pending_stub() {
+    echo "test_${1}: pending implementation — see specs/loom-harness.md §Stub-to-real review gate" >&2
+    exit 77
+}
+
+test_agent_event_deserialize_round_trip() { _pending_stub agent_event_deserialize_round_trip; }
+test_agent_start_fields() { _pending_stub agent_start_fields; }
+test_cancellation_clean_close() { _pending_stub cancellation_clean_close; }
+test_common_envelope_fields() { _pending_stub common_envelope_fields; }
+test_driver_event_kinds_present() { _pending_stub driver_event_kinds_present; }
+test_driver_events_rendered() { _pending_stub driver_events_rendered; }
+test_edit_write_imara_diff() { _pending_stub edit_write_imara_diff; }
+test_fixup_bead_bonded_to_molecule() { _pending_stub fixup_bead_bonded_to_molecule; }
+test_fixup_refuses_unbonded_origin() { _pending_stub fixup_refuses_unbonded_origin; }
+test_flat_variant_shape() { _pending_stub flat_variant_shape; }
+test_in_place_indicator_disabled_when_inappropriate() { _pending_stub in_place_indicator_disabled_when_inappropriate; }
+test_in_place_running_indicator() { _pending_stub in_place_running_indicator; }
+test_json_mode_pretty_prints() { _pending_stub json_mode_pretty_prints; }
+test_live_vs_replay_distinction() { _pending_stub live_vs_replay_distinction; }
+test_log_sink_per_event_flush() { _pending_stub log_sink_per_event_flush; }
+test_logs_empty_directory() { _pending_stub logs_empty_directory; }
+test_logs_follow_blocks_on_eof() { _pending_stub logs_follow_blocks_on_eof; }
+test_logs_path_short_circuits() { _pending_stub logs_path_short_circuits; }
+test_logs_raw_and_follow_compose() { _pending_stub logs_raw_and_follow_compose; }
+test_logs_reuses_renderer() { _pending_stub logs_reuses_renderer; }
+test_logs_shares_renderer_with_run() { _pending_stub logs_shares_renderer_with_run; }
+test_logs_verbose_streams_deltas() { _pending_stub logs_verbose_streams_deltas; }
+test_loom_events_is_leaf() { _pending_stub loom_events_is_leaf; }
+test_loom_events_minimal_deps() { _pending_stub loom_events_minimal_deps; }
+test_loom_note_add() { _pending_stub loom_note_add; }
+test_loom_note_clear() { _pending_stub loom_note_clear; }
+test_loom_note_kind_defaults_implementation() { _pending_stub loom_note_kind_defaults_implementation; }
+test_loom_note_list_chronological() { _pending_stub loom_note_list_chronological; }
+test_loom_note_rm() { _pending_stub loom_note_rm; }
+test_loom_note_set_atomic() { _pending_stub loom_note_set_atomic; }
+test_loom_render_deps() { _pending_stub loom_render_deps; }
+test_msg_chat_exit_signals() { _pending_stub msg_chat_exit_signals; }
+test_msg_chat_launches_container() { _pending_stub msg_chat_launches_container; }
+test_msg_chat_partial_progress() { _pending_stub msg_chat_partial_progress; }
+test_msg_chat_scope() { _pending_stub msg_chat_scope; }
+test_msg_chat_writes_notes() { _pending_stub msg_chat_writes_notes; }
+test_msg_dismiss() { _pending_stub msg_dismiss; }
+test_msg_flag_exclusivity() { _pending_stub msg_flag_exclusivity; }
+test_msg_option_validates() { _pending_stub msg_option_validates; }
+test_msg_spec_filter() { _pending_stub msg_spec_filter; }
+test_msg_view_modes() { _pending_stub msg_view_modes; }
+test_notes_cascade_on_spec_delete() { _pending_stub notes_cascade_on_spec_delete; }
+test_osc8_hyperlinks() { _pending_stub osc8_hyperlinks; }
+test_path_normalization_display() { _pending_stub path_normalization_display; }
+test_per_tool_summary_cells() { _pending_stub per_tool_summary_cells; }
+test_plain_selected_on_non_tty() { _pending_stub plain_selected_on_non_tty; }
+test_push_gate_sees_fixup_beads() { _pending_stub push_gate_sees_fixup_beads; }
+test_raw_mode_passthrough() { _pending_stub raw_mode_passthrough; }
+test_rebuild_drops_all_notes() { _pending_stub rebuild_drops_all_notes; }
+test_renderer_modes_present() { _pending_stub renderer_modes_present; }
+test_seq_monotonic() { _pending_stub seq_monotonic; }
+test_task_subagent_nesting() { _pending_stub task_subagent_nesting; }
+test_todo_delete_notes_atomic_with_cursor() { _pending_stub todo_delete_notes_atomic_with_cursor; }
+test_tool_body_truncation_policy() { _pending_stub tool_body_truncation_policy; }
+test_tool_call_result_pairing() { _pending_stub tool_call_result_pairing; }
+test_unknown_driver_kind_renders() { _pending_stub unknown_driver_kind_renders; }
+test_unknown_tool_fallback() { _pending_stub unknown_tool_fallback; }
+test_unknown_variants_tolerated() { _pending_stub unknown_variants_tolerated; }
 
 #-----------------------------------------------------------------------------
 # Dispatch

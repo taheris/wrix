@@ -122,7 +122,7 @@ helper as a parameter and never touches concrete backend types — static
 dispatch is preserved inside each match arm.
 
 **Per-phase config example:** `loom todo` uses a cheap model via pi,
-while `loom check` uses claude directly:
+while `loom review` uses claude directly:
 
 ```toml
 [phase.default]
@@ -133,7 +133,7 @@ agent.backend = "pi"
 agent.provider = "deepseek"
 agent.model_id = "deepseek-v3"
 
-[phase.check]
+[phase.review]
 agent.backend = "claude"
 ```
 
