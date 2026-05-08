@@ -23,6 +23,7 @@ use loom_core::identifier::{BeadId, ProfileName, SpecLabel};
 use loom_core::lock::LockManager;
 use loom_core::logging::{LogSink, sweep_retention_at};
 use loom_core::profile_manifest::ProfileImageManifest;
+use loom_core::scratch::resolve_scratch_key;
 use loom_core::state::StateDb;
 use loom_workflow::check::{IterationCap, ProductionCheckController, check_loop as run_check_loop};
 use loom_workflow::msg::{
@@ -567,14 +568,8 @@ async fn dispatch_for_slot(
 
     let initial_prompt = format!("loom run: bead {}", slot.bead.id);
     let banner = format!("loom run @ {}", slot.bead.id);
-    // `<key>` is the bead id — parallel run workers on different beads
-    // therefore get independent scratch dirs even when sharing a workspace.
-    let scratch = ScratchSession::open(
-        &slot.worktree.path,
-        slot.bead.id.as_str(),
-        &initial_prompt,
-        &banner,
-    )?;
+    let key = resolve_scratch_key(Phase::Run, label, Some(&slot.bead.id));
+    let scratch = ScratchSession::open(&slot.worktree.path, &key, &initial_prompt, &banner)?;
     let spawn_config = build_spawn_config_from_manifest(
         manifest,
         &slot.bead,

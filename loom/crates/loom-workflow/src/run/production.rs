@@ -19,9 +19,11 @@ use std::sync::Arc;
 
 use loom_core::agent::{ProtocolError, RePinContent, SpawnConfig};
 use loom_core::bd::{BdClient, Bead, ListOpts, ReadyOpts, UpdateOpts};
+use loom_core::config::Phase;
 use loom_core::identifier::{BeadId, ProfileName, SpecLabel};
 use loom_core::lock::LockGuard;
 use loom_core::profile_manifest::ProfileImageManifest;
+use loom_core::scratch::resolve_scratch_key;
 use tokio::process::Command;
 use tracing::info;
 
@@ -127,9 +129,10 @@ where
     ) -> Result<AgentOutcome, RunError> {
         let initial_prompt = format!("loom run: bead {}", bead.id);
         let banner = format!("loom run @ {}", bead.id);
+        let key = resolve_scratch_key(Phase::Run, &self.label, Some(&bead.id));
         let scratch = loom_core::scratch::ScratchSession::open(
             &self.workspace,
-            bead.id.as_str(),
+            &key,
             &initial_prompt,
             &banner,
         )

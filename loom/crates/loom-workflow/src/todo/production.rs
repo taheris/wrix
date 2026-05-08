@@ -14,9 +14,11 @@ use std::sync::Arc;
 
 use askama::Template;
 use loom_core::agent::{RePinContent, SessionOutcome, SpawnConfig, set_loom_inside};
+use loom_core::config::Phase;
 use loom_core::git::GitClient;
 use loom_core::identifier::{ProfileName, SpecLabel};
 use loom_core::profile_manifest::ProfileImageManifest;
+use loom_core::scratch::resolve_scratch_key;
 use loom_core::state::StateDb;
 use tracing::{debug, info, warn};
 
@@ -102,12 +104,11 @@ impl ProductionTodoController {
         let tier = compute_spec_diff(&live_git, &inputs)?;
         debug!(label = %self.label, ?tier, "tier decision");
 
-        let scratchpad_path = loom_core::scratch::ScratchSession::scratchpad_path_for(
-            &self.workspace,
-            self.label.as_str(),
-        )
-        .to_string_lossy()
-        .into_owned();
+        let key = resolve_scratch_key(Phase::Todo, &self.label, None);
+        let scratchpad_path =
+            loom_core::scratch::ScratchSession::scratchpad_path_for(&self.workspace, &key)
+                .to_string_lossy()
+                .into_owned();
         let base = TemplateBaseFields {
             label: self.label.clone(),
             spec_path: spec_path.to_string_lossy().into_owned(),
@@ -131,13 +132,12 @@ impl TodoController for ProductionTodoController {
         let prompt = self.build_prompt()?;
         let entry = self.manifest.lookup(&self.phase_default)?;
         let banner = format!("loom todo @ {}", self.label);
-        let scratch = loom_core::scratch::ScratchSession::open(
-            &self.workspace,
-            self.label.as_str(),
-            &prompt,
-            &banner,
-        )
-        .map_err(|source| TodoError::Protocol(loom_core::agent::ProtocolError::Io(source)))?;
+        let key = resolve_scratch_key(Phase::Todo, &self.label, None);
+        let scratch =
+            loom_core::scratch::ScratchSession::open(&self.workspace, &key, &prompt, &banner)
+                .map_err(|source| {
+                    TodoError::Protocol(loom_core::agent::ProtocolError::Io(source))
+                })?;
         info!(
             label = %self.label,
             workspace = %self.workspace.display(),

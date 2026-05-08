@@ -23,10 +23,12 @@ use std::sync::Arc;
 use askama::Template;
 use loom_core::agent::{ProtocolError, RePinContent, SessionOutcome, SpawnConfig, set_loom_inside};
 use loom_core::bd::{BdClient, Bead, ListOpts, UpdateOpts};
+use loom_core::config::Phase;
 use loom_core::git::GitClient;
 use loom_core::identifier::{BeadId, ProfileName, SpecLabel};
 use loom_core::lock::LockGuard;
 use loom_core::profile_manifest::ProfileImageManifest;
+use loom_core::scratch::resolve_scratch_key;
 use loom_core::state::StateDb;
 use loom_templates::check::CheckContext;
 use tokio::process::Command;
@@ -116,12 +118,11 @@ where
         let spec_path = format!("specs/{}.md", self.label.as_str());
         let (verify_sources, judge_rubrics) =
             load_review_sources(&self.workspace, &self.workspace.join(&spec_path))?;
-        let scratchpad_path = loom_core::scratch::ScratchSession::scratchpad_path_for(
-            &self.workspace,
-            self.label.as_str(),
-        )
-        .to_string_lossy()
-        .into_owned();
+        let key = resolve_scratch_key(Phase::Check, &self.label, None);
+        let scratchpad_path =
+            loom_core::scratch::ScratchSession::scratchpad_path_for(&self.workspace, &key)
+                .to_string_lossy()
+                .into_owned();
         let ctx = CheckContext {
             pinned_context: String::new(),
             label: self.label.clone(),
@@ -148,13 +149,10 @@ where
         let prompt = self.build_review_prompt().await?;
         let entry = self.manifest.lookup(&self.phase_default)?;
         let banner = format!("loom check @ {}", self.label);
-        let scratch = loom_core::scratch::ScratchSession::open(
-            &self.workspace,
-            self.label.as_str(),
-            &prompt,
-            &banner,
-        )
-        .map_err(|source| CheckError::Protocol(ProtocolError::Io(source)))?;
+        let key = resolve_scratch_key(Phase::Check, &self.label, None);
+        let scratch =
+            loom_core::scratch::ScratchSession::open(&self.workspace, &key, &prompt, &banner)
+                .map_err(|source| CheckError::Protocol(ProtocolError::Io(source)))?;
         let mut env = Vec::new();
         set_loom_inside(&mut env);
         let spawn_config = SpawnConfig {

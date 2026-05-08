@@ -8,7 +8,7 @@ use loom_core::config::{LoomConfig, Phase};
 use loom_core::identifier::{ProfileName, SpecLabel};
 use loom_core::lock::LockManager;
 use loom_core::profile_manifest::{ImageEntry, ProfileImageManifest};
-use loom_core::scratch::ScratchSession;
+use loom_core::scratch::{ScratchSession, resolve_scratch_key};
 use loom_core::state::{StateDb, parse_implementation_notes};
 
 use super::args::PlanMode;
@@ -127,7 +127,8 @@ pub fn run_with_timeout(
         }
     };
 
-    let scratchpad_path = ScratchSession::scratchpad_path_for(workspace, label.as_str())
+    let key = resolve_scratch_key(Phase::Plan, &label, None);
+    let scratchpad_path = ScratchSession::scratchpad_path_for(workspace, &key)
         .to_string_lossy()
         .into_owned();
     let prompt_body = render_prompt(PlanPromptInputs {
@@ -145,7 +146,7 @@ pub fn run_with_timeout(
     db.set_current_spec(&label)?;
 
     let banner = format!("loom plan @ {}", label);
-    let scratch = ScratchSession::open(workspace, label.as_str(), &prompt_body, &banner)
+    let scratch = ScratchSession::open(workspace, &key, &prompt_body, &banner)
         .map_err(|source| PlanError::Spawn { source })?;
 
     let argv = build_wrapix_argv(workspace, &prompt_body);

@@ -25,7 +25,26 @@ use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
+use crate::config::Phase;
+use crate::identifier::{BeadId, SpecLabel};
+
 const SCRATCH_SUBDIR: &str = ".wrapix/loom/scratch";
+
+/// Resolve the per-session scratch-dir key for `phase`. Single source of
+/// truth for the spec-label-vs-bead-id choice documented in
+/// `specs/loom-harness.md`: spec label for `loom plan` / `loom todo`,
+/// bead id for `loom run` / `loom check` / `loom msg`. `loom check`
+/// currently runs once per molecule and has no bead at the call site —
+/// when `bead_id` is `None` for a bead-scoped phase the helper falls
+/// back to the spec label so the on-disk path stays deterministic.
+pub fn resolve_scratch_key(phase: Phase, label: &SpecLabel, bead_id: Option<&BeadId>) -> String {
+    match phase {
+        Phase::Plan | Phase::Todo => label.as_str().to_string(),
+        Phase::Run | Phase::Check | Phase::Msg => {
+            bead_id.map_or_else(|| label.as_str().to_string(), |b| b.as_str().to_string())
+        }
+    }
+}
 
 /// Owns a `.wrapix/loom/scratch/<key>/` directory for the duration of an
 /// agent session. Drops the directory when the guard goes out of scope.
@@ -349,5 +368,54 @@ mod tests {
         assert_eq!(bash_single_quote(""), "''");
         assert_eq!(bash_single_quote("plain"), "'plain'");
         assert_eq!(bash_single_quote("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn resolve_scratch_key_picks_label_for_spec_scoped_phases() {
+        let label = SpecLabel::new("loom-harness");
+        let bead = BeadId::new("wx-3hhwq.15").unwrap();
+        assert_eq!(
+            resolve_scratch_key(Phase::Plan, &label, Some(&bead)),
+            "loom-harness",
+        );
+        assert_eq!(
+            resolve_scratch_key(Phase::Todo, &label, Some(&bead)),
+            "loom-harness",
+        );
+        assert_eq!(
+            resolve_scratch_key(Phase::Plan, &label, None),
+            "loom-harness",
+        );
+    }
+
+    #[test]
+    fn resolve_scratch_key_picks_bead_id_for_bead_scoped_phases() {
+        let label = SpecLabel::new("loom-harness");
+        let bead = BeadId::new("wx-3hhwq.15").unwrap();
+        assert_eq!(
+            resolve_scratch_key(Phase::Run, &label, Some(&bead)),
+            "wx-3hhwq.15",
+        );
+        assert_eq!(
+            resolve_scratch_key(Phase::Check, &label, Some(&bead)),
+            "wx-3hhwq.15",
+        );
+        assert_eq!(
+            resolve_scratch_key(Phase::Msg, &label, Some(&bead)),
+            "wx-3hhwq.15",
+        );
+    }
+
+    #[test]
+    fn resolve_scratch_key_falls_back_to_label_when_bead_missing() {
+        let label = SpecLabel::new("loom-harness");
+        assert_eq!(
+            resolve_scratch_key(Phase::Check, &label, None),
+            "loom-harness",
+        );
+        assert_eq!(
+            resolve_scratch_key(Phase::Run, &label, None),
+            "loom-harness",
+        );
     }
 }
