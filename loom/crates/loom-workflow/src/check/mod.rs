@@ -30,7 +30,9 @@ mod verdict;
 pub use context::{CheckContextInputs, beads_summary, build_check_context, load_review_sources};
 pub use error::CheckError;
 pub use iteration::{DEFAULT_MAX_ITERATIONS, IterationCap};
-pub use phase_verdict::{GateInputs, PhaseVerdict, RecoveryCause, decide};
+pub use phase_verdict::{
+    GateInputs, PhaseVerdict, RecoveryCause, ReviewConcern, ReviewFlag, decide, parse_review_flag,
+};
 pub use production::ProductionCheckController;
 pub use runner::{CheckController, CheckResult, ReviewOutcome, check_loop};
 pub use verdict::{BeadSnapshot, CheckVerdict, diff_new_bead_ids};

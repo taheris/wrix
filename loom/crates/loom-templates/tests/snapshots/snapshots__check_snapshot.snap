@@ -310,6 +310,29 @@ For ambiguous items that need human judgment outside the three-paths flow:
 bd human <id>
 ```
 
+## Flag Emission Schema
+
+If your review surfaces a flag, emit it on its own line **before** the
+completion marker, in this exact shape:
+
+```text
+LOOM_REVIEW_FLAG: <concern> -- <one-sentence reasoning>
+```
+
+`<concern>` is one of the following enum tokens (lowercase, hyphenated):
+
+- `live-path` — at least one `[verify]` on the bead must exercise the live
+  path; the bead's full `[verify]` set is entirely mocks.
+- `mock` — a mock stands in for the very thing the test claims to test.
+- `scope` — diff strays from the bead's intent or `## Affected Files`.
+- `judge` — a `[judge]` rubric is not satisfied.
+
+Do NOT free-form the cause or paraphrase the concern; the orchestrator
+parses this line verbatim to populate `previous_failure` and `bd update
+--notes` without re-reading your prose. If multiple findings exist, emit
+the strongest one — only the last well-formed `LOOM_REVIEW_FLAG:` line is
+kept. If your review is clean, omit the marker entirely.
+
 ## Completion
 
 When your review is complete, emit LOOM_COMPLETE. The orchestrator determines
