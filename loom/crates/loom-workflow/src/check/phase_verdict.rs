@@ -10,6 +10,7 @@
 //! plumbing that produces them and the recovery-loop dispatch on the other
 //! side.
 
+use super::verify_fail::VerifyFailure;
 use crate::todo::ExitSignal;
 
 /// Which concern in the review LLM's structured response triggered the flag.
@@ -67,8 +68,10 @@ pub enum RecoveryCause {
     /// `LOOM_COMPLETE` with an empty worktree diff. `LOOM_NOOP` is the
     /// legitimate path for an empty diff and never produces this cause.
     ZeroProgress,
-    /// At least one `[verify]` script failed.
-    VerifyFail,
+    /// At least one `[verify]` script failed. Carries every failure so the
+    /// downstream `previous_failure` builder can format them into a single
+    /// budget-bounded body — none short-circuit each other.
+    VerifyFail { failures: Vec<VerifyFailure> },
     /// Verify passed but the reviewer raised a flag. Carries the structured
     /// concern + reasoning emitted by the review LLM so downstream surfaces
     /// (`bd update --notes`, `previous_failure`) can name which concern
@@ -85,7 +88,7 @@ impl RecoveryCause {
             Self::SwallowedMarker => "swallowed-marker",
             Self::IncompleteSignaling => "incomplete-signaling",
             Self::ZeroProgress => "zero-progress",
-            Self::VerifyFail => "verify-fail",
+            Self::VerifyFail { .. } => "verify-fail",
             Self::ReviewFlag(_) => "review-flag",
         }
     }
@@ -114,8 +117,11 @@ pub struct GateInputs {
     pub bd_closed: bool,
     /// `git diff` against the driver branch produced no output.
     pub diff_empty: bool,
-    /// Every attached `[verify]` script exited 0.
-    pub verify_pass: bool,
+    /// Failure record for every `[verify]` script that exited non-zero.
+    /// Empty when every script passed; the gate routes to
+    /// [`RecoveryCause::VerifyFail`] when this is non-empty and threads the
+    /// list through so downstream surfaces can format `previous_failure`.
+    pub verify_failures: Vec<VerifyFailure>,
     /// Parsed reviewer flag, or `None` for a clean review.
     pub review_flag: Option<ReviewFlag>,
 }
@@ -154,9 +160,11 @@ fn decide_progress_marker(is_noop: bool, inputs: GateInputs) -> PhaseVerdict {
             cause: RecoveryCause::ZeroProgress,
         };
     }
-    if !inputs.verify_pass {
+    if !inputs.verify_failures.is_empty() {
         return PhaseVerdict::Recovery {
-            cause: RecoveryCause::VerifyFail,
+            cause: RecoveryCause::VerifyFail {
+                failures: inputs.verify_failures,
+            },
         };
     }
     if let Some(flag) = inputs.review_flag {
@@ -221,11 +229,24 @@ mod tests {
         verify_pass: bool,
         review_flag: Option<ReviewFlag>,
     ) -> GateInputs {
+        let verify_failures = if verify_pass {
+            Vec::new()
+        } else {
+            vec![sample_failure()]
+        };
         GateInputs {
             bd_closed,
             diff_empty,
-            verify_pass,
+            verify_failures,
             review_flag,
+        }
+    }
+
+    fn sample_failure() -> VerifyFailure {
+        VerifyFailure {
+            script_path: std::path::PathBuf::from("tests/sample.sh"),
+            exit_code: 1,
+            stderr: "boom\n".into(),
         }
     }
 
@@ -300,15 +321,52 @@ mod tests {
 
     #[test]
     fn complete_with_verify_fail_routes_to_verify_fail() {
-        assert_eq!(
-            decide(
-                Some(&ExitSignal::Complete),
-                inputs(true, false, false, None)
-            ),
-            PhaseVerdict::Recovery {
-                cause: RecoveryCause::VerifyFail,
-            },
+        let result = decide(
+            Some(&ExitSignal::Complete),
+            inputs(true, false, false, None),
         );
+        match result {
+            PhaseVerdict::Recovery {
+                cause: RecoveryCause::VerifyFail { failures },
+            } => {
+                assert_eq!(failures.len(), 1, "carries every failure block");
+                assert_eq!(failures[0].exit_code, 1);
+            }
+            other => panic!("expected Recovery::VerifyFail, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verify_fail_carries_every_failure_block_for_previous_failure() {
+        // Spec gate: `previous_failure` carries every failure (not just the
+        // first). The recovery-cause payload is the channel — downstream
+        // formatter splits the 4000-char budget across them.
+        let failures = vec![
+            VerifyFailure {
+                script_path: std::path::PathBuf::from("tests/a.sh"),
+                exit_code: 1,
+                stderr: "boom-a".into(),
+            },
+            VerifyFailure {
+                script_path: std::path::PathBuf::from("tests/b.sh"),
+                exit_code: 2,
+                stderr: "boom-b".into(),
+            },
+        ];
+        let g = GateInputs {
+            bd_closed: true,
+            diff_empty: false,
+            verify_failures: failures.clone(),
+            review_flag: None,
+        };
+        match decide(Some(&ExitSignal::Complete), g) {
+            PhaseVerdict::Recovery {
+                cause: RecoveryCause::VerifyFail { failures: carried },
+            } => {
+                assert_eq!(carried, failures, "every failure threaded through");
+            }
+            other => panic!("expected Recovery::VerifyFail, got {other:?}"),
+        }
     }
 
     #[test]
@@ -357,19 +415,20 @@ mod tests {
     #[test]
     fn noop_with_verify_fail_routes_to_verify_fail() {
         // Empty diff allowed under Noop; verify failure still recovers.
-        assert_eq!(
-            decide(Some(&ExitSignal::Noop), inputs(true, true, false, None)),
-            PhaseVerdict::Recovery {
-                cause: RecoveryCause::VerifyFail,
-            },
-        );
-        // Non-empty diff with verify-fail also recovers.
-        assert_eq!(
-            decide(Some(&ExitSignal::Noop), inputs(true, false, false, None)),
-            PhaseVerdict::Recovery {
-                cause: RecoveryCause::VerifyFail,
-            },
-        );
+        for diff_empty in [true, false] {
+            let result = decide(
+                Some(&ExitSignal::Noop),
+                inputs(true, diff_empty, false, None),
+            );
+            match result {
+                PhaseVerdict::Recovery {
+                    cause: RecoveryCause::VerifyFail { failures },
+                } => {
+                    assert_eq!(failures.len(), 1, "diff_empty={diff_empty}");
+                }
+                other => panic!("expected VerifyFail (diff_empty={diff_empty}), got {other:?}"),
+            }
+        }
     }
 
     #[test]
@@ -418,7 +477,10 @@ mod tests {
             "incomplete-signaling",
         );
         assert_eq!(RecoveryCause::ZeroProgress.as_str(), "zero-progress");
-        assert_eq!(RecoveryCause::VerifyFail.as_str(), "verify-fail");
+        assert_eq!(
+            RecoveryCause::VerifyFail { failures: vec![] }.as_str(),
+            "verify-fail",
+        );
         assert_eq!(
             RecoveryCause::ReviewFlag(flag(ReviewConcern::Judge, "")).as_str(),
             "review-flag",

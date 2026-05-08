@@ -3050,10 +3050,14 @@ test_gate_loom_noop_empty_diff() {
 test_gate_runs_all_verify_scripts() {
     check_cargo_test check::phase_verdict::tests::complete_with_verify_fail_routes_to_verify_fail
     check_cargo_test check::phase_verdict::tests::noop_with_verify_fail_routes_to_verify_fail
+    check_cargo_test check::phase_verdict::tests::verify_fail_carries_every_failure_block_for_previous_failure
 }
 test_gate_verify_fail_collects_all() {
-    check_cargo_test check::phase_verdict::tests::complete_with_verify_fail_routes_to_verify_fail
-    check_cargo_test check::phase_verdict::tests::noop_with_verify_fail_routes_to_verify_fail
+    check_cargo_test check::phase_verdict::tests::verify_fail_carries_every_failure_block_for_previous_failure
+    check_cargo_test check::verify_fail::tests::multiple_failures_all_within_budget_are_all_included
+    check_cargo_test check::verify_fail::tests::later_failures_truncate_when_budget_exhausted
+    check_cargo_test check::verify_fail::tests::fully_omitted_failures_are_counted_in_marker
+    check_cargo_test check::verify_fail::tests::budget_is_respected_within_marker_overhead
 }
 test_review_runs_on_verify_fail() {
     check_cargo_test check::phase_verdict::tests::complete_with_verify_fail_routes_to_verify_fail

@@ -26,6 +26,7 @@ mod phase_verdict;
 mod production;
 mod runner;
 mod verdict;
+mod verify_fail;
 
 pub use context::{CheckContextInputs, beads_summary, build_check_context, load_review_sources};
 pub use error::CheckError;
@@ -36,3 +37,6 @@ pub use phase_verdict::{
 pub use production::ProductionCheckController;
 pub use runner::{CheckController, CheckResult, ReviewOutcome, check_loop};
 pub use verdict::{BeadSnapshot, CheckVerdict, diff_new_bead_ids};
+pub use verify_fail::{
+    PREVIOUS_FAILURE_BUDGET, STDERR_TAIL_LINES, VerifyFailure, format_previous_failure,
+};
