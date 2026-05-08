@@ -781,6 +781,124 @@ mod tests {
         Ok(())
     }
 
+    /// wx-hcolw.7 gate: before the interactive `wrapix run` exec, the runner
+    /// must have installed the per-key scratch directory with `prompt.txt`
+    /// (rendered plan template), `repin.sh` (executable), and the
+    /// `claude-settings.json` fragment registering `repin.sh` under
+    /// `SessionStart[matcher: compact]`. The scratch dir is removed by Drop
+    /// after exec, so the wrapix stub snapshots the three files mid-run for
+    /// the assertions below.
+    #[test]
+    fn plan_installs_scratch_dir_before_wrapix_exec() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = workspace_with_specs()?;
+        let spec_path = dir.path().join("specs/loom-harness.md");
+        let snap_dir = dir.path().join("scratch-snap");
+        std::fs::create_dir_all(&snap_dir)?;
+        let bin_dir = dir.path().join("bin");
+        std::fs::create_dir_all(&bin_dir)?;
+        let bin = bin_dir.join("wrapix-stub");
+        let scratch_root = "$2/.wrapix/loom/scratch/loom-harness";
+        let script = format!(
+            "#!/bin/sh\nset -e\n\
+             cp {scratch_root}/prompt.txt {snap_dir:?}/prompt.txt\n\
+             cp {scratch_root}/claude-settings.json {snap_dir:?}/claude-settings.json\n\
+             cp {scratch_root}/repin.sh {snap_dir:?}/repin.sh\n\
+             test -x {scratch_root}/repin.sh\n\
+             cat > {spec_path:?} <<'WRAPIX_EOF'\n# loom-harness\n\n## Companions\n\nWRAPIX_EOF\n",
+            scratch_root = scratch_root,
+            snap_dir = snap_dir,
+            spec_path = spec_path,
+        );
+        std::fs::write(&bin, script)?;
+        let mut perm = std::fs::metadata(&bin)?.permissions();
+        perm.set_mode(0o755);
+        std::fs::set_permissions(&bin, perm)?;
+
+        let manifest = three_profile_manifest(dir.path())?;
+        run_with_timeout(
+            dir.path(),
+            plan_opts_new("loom-harness", bin, manifest),
+            Duration::from_millis(100),
+        )?;
+
+        let prompt = std::fs::read_to_string(snap_dir.join("prompt.txt"))?;
+        assert!(
+            prompt.contains("# Specification Interview"),
+            "prompt.txt must hold the rendered plan_new template body: {prompt}",
+        );
+        let settings: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(
+            snap_dir.join("claude-settings.json"),
+        )?)?;
+        let hook = &settings["hooks"]["SessionStart"][0];
+        assert_eq!(hook["matcher"], "compact");
+        let cmd = hook["hooks"][0]["command"].as_str().unwrap();
+        assert!(
+            cmd.ends_with("repin.sh"),
+            "claude-settings hook must invoke repin.sh: {cmd}",
+        );
+        let repin = std::fs::read_to_string(snap_dir.join("repin.sh"))?;
+        assert!(repin.contains("hookSpecificOutput"));
+        assert!(repin.contains("SessionStart"));
+
+        // Drop must have cleaned the scratch dir after exec returned.
+        assert!(
+            !dir.path()
+                .join(".wrapix/loom/scratch/loom-harness")
+                .exists(),
+            "scratch dir must be cleaned up after wrapix returns",
+        );
+        Ok(())
+    }
+
+    /// Mirror of `plan_installs_scratch_dir_before_wrapix_exec` for the
+    /// update branch — the prompt.txt body must be the `plan_update`
+    /// template, not `plan_new`, when an existing spec is being revised.
+    #[test]
+    fn plan_update_installs_scratch_dir_with_update_template() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = workspace_with_specs()?;
+        let spec_path = dir.path().join("specs/loom-harness.md");
+        std::fs::write(
+            &spec_path,
+            "# loom-harness\n\n## Companions\n\n- `lib/sandbox/`\n",
+        )?;
+        let snap_dir = dir.path().join("scratch-snap");
+        std::fs::create_dir_all(&snap_dir)?;
+        let bin_dir = dir.path().join("bin");
+        std::fs::create_dir_all(&bin_dir)?;
+        let bin = bin_dir.join("wrapix-stub");
+        let scratch_root = "$2/.wrapix/loom/scratch/loom-harness";
+        let script = format!(
+            "#!/bin/sh\nset -e\n\
+             cp {scratch_root}/prompt.txt {snap_dir:?}/prompt.txt\n\
+             cat > {spec_path:?} <<'WRAPIX_EOF'\n# loom-harness\n\n## Companions\n\n- `lib/sandbox/`\nWRAPIX_EOF\n",
+            scratch_root = scratch_root,
+            snap_dir = snap_dir,
+            spec_path = spec_path,
+        );
+        std::fs::write(&bin, script)?;
+        let mut perm = std::fs::metadata(&bin)?.permissions();
+        perm.set_mode(0o755);
+        std::fs::set_permissions(&bin, perm)?;
+
+        let manifest = three_profile_manifest(dir.path())?;
+        run_with_timeout(
+            dir.path(),
+            plan_opts_update("loom-harness", bin, manifest),
+            Duration::from_millis(100),
+        )?;
+
+        let prompt = std::fs::read_to_string(snap_dir.join("prompt.txt"))?;
+        assert!(
+            prompt.contains("# Specification Update Interview"),
+            "prompt.txt must hold the rendered plan_update template body: {prompt}",
+        );
+        Ok(())
+    }
+
     #[test]
     fn plan_acquires_per_spec_lock() -> Result<()> {
         let dir = workspace_with_specs()?;
