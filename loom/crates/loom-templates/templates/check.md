@@ -42,6 +42,8 @@ Assess the deliverable against these dimensions:
 - **Coherence** — Do all the pieces fit together? Are there inconsistencies?
 - **Invariant clashes** — Does the change conflict with existing design invariants? (see next section)
 
+{% include "partial/review_rubric.md" %}
+
 ## Invariant-Clash Detection
 
 An **invariant** is any established design constraint the project has committed to.
