@@ -103,9 +103,26 @@ impl AgentBackend for PiBackend {
         session: &mut AgentSession<Active>,
         config: &SpawnConfig,
     ) -> Result<(), ProtocolError> {
-        debug!("pi compaction_start observed; sending re-pin via steer");
-        session.steer(&config.repin.to_prompt()).await
+        debug!(
+            scratch_dir = %config.scratch_dir.display(),
+            "pi compaction_start observed; reading scratch dir for re-pin payload",
+        );
+        let payload = build_repin_payload(&config.scratch_dir)?;
+        session.steer(&payload).await
     }
+}
+
+/// Read `prompt.txt` and `scratch.md` from the per-session scratch dir and
+/// concatenate them into the `steer` payload. Same source files Claude
+/// reads through `repin.sh` (see [`ScratchSession`]'s `repin.sh` in
+/// `loom-core/src/scratch.rs`); pi's transport is `steer` rather than a
+/// JSON envelope, but the text content matches.
+///
+/// [`ScratchSession`]: loom_core::scratch::ScratchSession
+fn build_repin_payload(scratch_dir: &Path) -> Result<String, ProtocolError> {
+    let prompt = std::fs::read_to_string(scratch_dir.join("prompt.txt"))?;
+    let scratch = std::fs::read_to_string(scratch_dir.join("scratch.md"))?;
+    Ok(format!("{prompt}\n\n{scratch}"))
 }
 
 /// `get_commands` request body. Sent on stdin during the startup handshake
@@ -614,6 +631,81 @@ mod tests {
         }
         assert!(sent_repin, "compaction_start was not observed");
         assert!(saw_repin_echo, "mock did not echo the re-pin payload");
+    }
+
+    #[tokio::test]
+    async fn on_compaction_start_steers_concatenated_scratch_files() {
+        let scratch = tempfile::tempdir().expect("tempdir");
+        std::fs::write(scratch.path().join("prompt.txt"), "PROMPT_FILE_BODY")
+            .expect("write prompt.txt");
+        std::fs::write(scratch.path().join("scratch.md"), "SCRATCH_FILE_BODY")
+            .expect("write scratch.md");
+
+        let mut config = sample_config(None);
+        config.scratch_dir = scratch.path().to_path_buf();
+
+        let session = spawn_with_handshake(
+            mock_command("compaction"),
+            None,
+            TEST_HANDSHAKE_BUDGET,
+            &SystemClock::new(),
+        )
+        .await
+        .expect("spawn");
+        let mut session = session.prompt("kickoff").await.expect("prompt ok");
+
+        let mut handler_called = false;
+        let mut saw_prompt_echo = false;
+        let mut saw_scratch_echo = false;
+        loop {
+            match session.next_event().await.expect("event ok") {
+                Some(AgentEvent::CompactionStart { .. }) if !handler_called => {
+                    PiBackend::on_compaction_start(&mut session, &config)
+                        .await
+                        .expect("on_compaction_start ok");
+                    handler_called = true;
+                }
+                Some(AgentEvent::MessageDelta { text }) => {
+                    if text.contains("PROMPT_FILE_BODY") {
+                        saw_prompt_echo = true;
+                    }
+                    if text.contains("SCRATCH_FILE_BODY") {
+                        saw_scratch_echo = true;
+                    }
+                }
+                Some(AgentEvent::SessionComplete { .. }) => break,
+                Some(_) => continue,
+                None => panic!("unexpected EOF before SessionComplete"),
+            }
+        }
+        assert!(handler_called, "compaction_start was not observed");
+        assert!(
+            saw_prompt_echo,
+            "prompt.txt content missing from steer payload"
+        );
+        assert!(
+            saw_scratch_echo,
+            "scratch.md content missing from steer payload"
+        );
+    }
+
+    #[test]
+    fn build_repin_payload_concatenates_prompt_then_scratch() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("prompt.txt"), "the prompt").expect("write prompt.txt");
+        std::fs::write(dir.path().join("scratch.md"), "the scratch").expect("write scratch.md");
+        let payload = build_repin_payload(dir.path()).expect("build payload");
+        assert_eq!(payload, "the prompt\n\nthe scratch");
+    }
+
+    #[test]
+    fn build_repin_payload_surfaces_io_error_when_files_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let err = build_repin_payload(dir.path()).expect_err("missing files must error");
+        match err {
+            ProtocolError::Io(_) => {}
+            other => panic!("expected Io error, got {other:?}"),
+        }
     }
 
     // -- test_pi_set_model_from_phase_config ------------------------------
