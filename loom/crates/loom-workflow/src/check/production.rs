@@ -163,7 +163,7 @@ where
             initial_prompt: prompt,
             agent_args: vec![],
             repin: RePinContent {
-                orientation: banner,
+                orientation: String::new(),
                 pinned_context: String::new(),
                 partial_bodies: vec![],
             },
@@ -550,6 +550,81 @@ mod tests {
         assert!(prompt.contains("JUDGE_BODY_MARKER"), "{prompt}");
         assert!(prompt.contains("tests/alpha.sh"), "{prompt}");
         assert!(prompt.contains("tests/judges/alpha.sh"), "{prompt}");
+    }
+
+    /// wx-hcolw.5 gate: `loom check` must dispatch with the rendered
+    /// `CheckContext` template — `# Post-Epic Review` heading, spec_path,
+    /// and scratchpad path all reach the agent prompt — and the same body
+    /// must land in `<scratch_dir>/prompt.txt` so post-compaction
+    /// `repin.sh` can re-emit the actual phase prompt. Mirror of the
+    /// run-side test in `run/production.rs`.
+    #[tokio::test]
+    async fn run_review_dispatches_rendered_check_template_and_writes_prompt_txt() {
+        use std::sync::Mutex;
+
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().to_path_buf();
+        let label = "loom-harness";
+        seed_empty_spec(&workspace, label);
+        let state = empty_state(&workspace);
+        let manifest = stub_manifest(&workspace);
+        let captured: Arc<Mutex<Option<SpawnConfig>>> = Arc::new(Mutex::new(None));
+        let captured_for_closure = Arc::clone(&captured);
+        let prompt_seen: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let prompt_seen_inner = Arc::clone(&prompt_seen);
+        let mut ctrl = ProductionCheckController::new(
+            BdClient::new(),
+            SpecLabel::new(label),
+            PathBuf::from("/usr/bin/loom"),
+            workspace,
+            state,
+            manifest,
+            ProfileName::new("base"),
+            move |cfg: SpawnConfig| {
+                let captured = Arc::clone(&captured_for_closure);
+                let prompt_seen = Arc::clone(&prompt_seen_inner);
+                async move {
+                    let txt = std::fs::read_to_string(cfg.scratch_dir.join("prompt.txt"))
+                        .expect("prompt.txt readable");
+                    *prompt_seen.lock().unwrap() = Some(txt);
+                    *captured.lock().unwrap() = Some(cfg);
+                    Ok(SessionOutcome {
+                        exit_code: 0,
+                        cost_usd: None,
+                    })
+                }
+            },
+        );
+        let outcome = ctrl.run_review().await;
+        if let Err(CheckError::Bd(_)) = outcome {
+            return;
+        }
+        outcome.expect("run_review ok");
+        let cfg = captured.lock().unwrap().take().expect("closure called");
+        assert!(
+            cfg.initial_prompt.contains("# Post-Epic Review"),
+            "prompt missing template heading: {}",
+            cfg.initial_prompt,
+        );
+        assert!(
+            cfg.initial_prompt.contains("specs/loom-harness.md"),
+            "prompt missing spec path: {}",
+            cfg.initial_prompt,
+        );
+        assert!(
+            cfg.initial_prompt.contains(".wrapix/loom/scratch"),
+            "prompt missing scratchpad partial: {}",
+            cfg.initial_prompt,
+        );
+        assert!(
+            cfg.repin.orientation.is_empty()
+                && cfg.repin.pinned_context.is_empty()
+                && cfg.repin.partial_bodies.is_empty(),
+            "RePinContent must be empty placeholder; rendered template lives in prompt.txt: {:?}",
+            cfg.repin,
+        );
+        let written = prompt_seen.lock().unwrap().take().expect("prompt.txt seen");
+        assert_eq!(written, cfg.initial_prompt);
     }
 
     /// Regression: `exec_run` (the check → run handoff for auto-iterate)
