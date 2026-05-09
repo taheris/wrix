@@ -79,19 +79,19 @@ _:
       [[ "$_default_if" == utun* ]] || return 0
       _vpn_conflict=true
       _prefix="''${_net%.*}"
-      netstat -rn | grep -q "^$_prefix.*bridge" && return 0
+      netstat -rn | grep -q "^''${_prefix}\.128.*bridge" && return 0
       _vmnet_if=$(ifconfig 2>/dev/null \
         | grep -B5 "192.168.64" \
         | grep -oE '^[a-z][a-z0-9]+' | head -1)
       if [[ -n "$_vmnet_if" ]]; then
         echo "Adding vmnet route (VPN detected on $_default_if)" >&2
         sudo route add -net "$_net/25" \
-          -interface "$_vmnet_if" 2>/dev/null || true
+          -interface "$_vmnet_if"
         sudo route add -net "''${_net%.*}.128/25" \
-          -interface "$_vmnet_if" 2>/dev/null || true
+          -interface "$_vmnet_if"
       fi
     }
-    _fix_vmnet_route || true
+    _fix_vmnet_route
   '';
 
   # Generate deploy key name expression

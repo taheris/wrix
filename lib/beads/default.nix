@@ -211,23 +211,30 @@ let
     }
 
     # Detect and evict a non-container process squatting on our port.
-    # Linux-only: uses ss and /proc which don't exist on Darwin.
     _evict_port_squatter() {
-      local port="$1"
-      command -v ss >/dev/null 2>&1 || return 0
+      local port="$1" pid="" exe=""
 
-      local info
-      info=$(ss -tlnp "sport = :$port" 2>/dev/null) || true
+      if command -v ss >/dev/null 2>&1; then
+        local info
+        info=$(ss -tlnp "sport = :$port" 2>/dev/null) || true
+        local rest="''${info#*pid=}"
+        [ "$rest" = "$info" ] && return 0
+        pid="''${rest%%[!0-9]*}"
+        [ -z "$pid" ] && return 0
+        exe=$(readlink "/proc/$pid/exe" 2>/dev/null) || true
+      elif command -v lsof >/dev/null 2>&1; then
+        local line
+        line=$(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | grep -v '^COMMAND' | head -1) || true
+        [ -z "$line" ] && return 0
+        pid=$(echo "$line" | awk '{print $2}')
+        exe=$(echo "$line" | awk '{print $1}')
+        [ -z "$pid" ] && return 0
+      else
+        return 0
+      fi
 
-      local rest="''${info#*pid=}"
-      [ "$rest" = "$info" ] && return 0
-      local pid="''${rest%%[!0-9]*}"
-      [ -z "$pid" ] && return 0
-
-      local exe
-      exe=$(readlink "/proc/$pid/exe" 2>/dev/null) || true
       case "$exe" in
-        */dolt) ;;
+        *dolt*) ;;
         *) return 0 ;;
       esac
 
@@ -237,7 +244,11 @@ let
 
       local w=20
       while [ $w -gt 0 ]; do
-        ss -tlnp "sport = :$port" 2>/dev/null | grep -q "pid=" || return 0
+        if command -v ss >/dev/null 2>&1; then
+          ss -tlnp "sport = :$port" 2>/dev/null | grep -q "pid=" || return 0
+        else
+          lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | grep -q dolt || return 0
+        fi
         sleep 0.2
         w=$((w - 1))
       done
@@ -307,6 +318,16 @@ let
           cr_rm "$name"
         elif cr_is_running "$name" \
              && _dolt_reachable "$name" "$port" "$ws"; then
+          ${
+            if isDarwin then
+              ''
+                if [[ "$CR" == "container" ]]; then
+                  ${shellLib.fixVmnetRoute}
+                fi
+              ''
+            else
+              ""
+          }
           return 0
         else
           cr_rm "$name"
@@ -492,7 +513,10 @@ let
             echo "beads: .beads/dolt exists but no container runtime is available — cannot start dolt server" >&2
             return 1 2>/dev/null || exit 1
           fi
-          ${beadsDolt}/bin/beads-dolt start "$PWD"
+          if ! ${beadsDolt}/bin/beads-dolt start "$PWD"; then
+            echo "beads: beads-dolt start failed — dolt will not be available" >&2
+            return 1 2>/dev/null || exit 1
+          fi
           ${waitAndExport}
         fi
       ''
@@ -503,7 +527,10 @@ let
             echo "beads: .beads/dolt exists but podman is not on PATH — cannot start dolt server" >&2
             return 1 2>/dev/null || exit 1
           fi
-          ${beadsDolt}/bin/beads-dolt start "$PWD"
+          if ! ${beadsDolt}/bin/beads-dolt start "$PWD"; then
+            echo "beads: beads-dolt start failed — dolt will not be available" >&2
+            return 1 2>/dev/null || exit 1
+          fi
           ${waitAndExport}
         fi
       '';
