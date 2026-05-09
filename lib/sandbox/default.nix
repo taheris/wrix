@@ -48,7 +48,7 @@ let
   # MCP server registry (uses Linux packages for server binaries)
   mcpRegistry = import ../mcp {
     pkgs = linuxPkgs;
-    rustProfile = profiles.rust;
+    inherit crane fenix;
   };
 
   # Claude config (~/.claude.json) - onboarding state and runtime flags

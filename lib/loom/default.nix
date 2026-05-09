@@ -1,28 +1,42 @@
 {
   pkgs,
-  rustProfile,
+  crane,
+  fenix,
 }:
 
 let
   inherit (pkgs) lib;
 
-  craneFilter = rustProfile.craneLib.filterCargoSources;
+  fenixPkgs = fenix.packages.${pkgs.stdenv.hostPlatform.system};
+  toolchain = fenixPkgs.combine [
+    fenixPkgs.stable.defaultToolchain
+  ];
+  craneLib = (crane.mkLib pkgs).overrideToolchain (_: toolchain);
 
-  # askama #[template(path = ...)] reads templates/*.md at compile time; crane's default strips them.
-  # `insta` snapshot files (`crates/*/tests/snapshots/*.snap`) live next to the test sources and
-  # are read at test time — the cli_help / loom-templates suites rely on them, so widen the filter
-  # to keep them in nextest's view.
+  craneFilter = craneLib.filterCargoSources;
+
   srcFilter =
     path: type:
     (craneFilter path type)
     || (lib.hasInfix "/loom-templates/templates/" path)
     || (lib.hasSuffix ".snap" path);
-in
 
-rustProfile.buildPackage {
-  src = ../../loom;
-  cargoLock = ../../loom/Cargo.lock;
-  inherit srcFilter;
+  cleanedSrc = lib.cleanSourceWith {
+    src = ../../loom;
+    filter = srcFilter;
+  };
+
+  commonArgs = {
+    src = cleanedSrc;
+    cargoLock = ../../loom/Cargo.lock;
+    nativeBuildInputs = [ pkgs.git ];
+    meta = {
+      description = "Rust agent driver for the Wrapix workflow";
+      mainProgram = "loom";
+    };
+  };
+
+  cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
   extraSrcs = {
     "tests/loom/mock-pi" = ../../tests/loom/mock-pi;
@@ -31,10 +45,50 @@ rustProfile.buildPackage {
     "specs" = ../../specs;
   };
 
-  nativeBuildInputs = [ pkgs.git ];
+  stagedSrc = pkgs.runCommand "rust-src-with-extras" { } (
+    ''
+      cp -r ${cleanedSrc} $out
+      chmod -R u+w $out
+    ''
+    + lib.concatStringsSep "\n" (
+      lib.mapAttrsToList (rel: abs: ''
+        mkdir -p "$(dirname "$out/${rel}")"
+        cp -r ${abs} "$out/${rel}"
+      '') extraSrcs
+    )
+  );
 
-  meta = {
-    description = "Rust agent driver for the Wrapix workflow";
-    mainProgram = "loom";
-  };
+  bin = craneLib.buildPackage (
+    commonArgs
+    // {
+      inherit cargoArtifacts;
+      doCheck = false;
+    }
+  );
+
+  clippy = craneLib.cargoClippy (
+    commonArgs
+    // {
+      src = stagedSrc;
+      inherit cargoArtifacts;
+      cargoClippyExtraArgs = "--all-targets";
+    }
+  );
+
+  nextest = craneLib.cargoNextest (
+    commonArgs
+    // {
+      src = stagedSrc;
+      inherit cargoArtifacts;
+    }
+  );
+in
+{
+  inherit
+    bin
+    clippy
+    nextest
+    cargoArtifacts
+    craneLib
+    ;
 }

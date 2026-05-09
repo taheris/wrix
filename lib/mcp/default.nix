@@ -14,12 +14,16 @@
 # and merge their packages and configs.
 #
 # Spec: specs/tmux-mcp.md
-{ pkgs, rustProfile }:
+{
+  pkgs,
+  crane,
+  fenix,
+}:
 
 {
   # tmux: MCP server for tmux pane management
   # Provides tools for AI-assisted debugging (create_pane, send_keys, capture_pane, etc.)
-  tmux = import ./tmux { inherit pkgs rustProfile; };
+  tmux = import ./tmux { inherit pkgs crane fenix; };
 
   # playwright: MCP server for browser automation
   # Provides tools for AI-assisted frontend development (screenshots, navigation, interaction, etc.)

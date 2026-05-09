@@ -92,7 +92,6 @@ let
       treefmt
       ;
     inherit (wrapix) loomPackage;
-    rustProfile = wrapix.profiles.rust;
   };
 
   # Per specs/profiles.md, the rust profile's buildPackage emits separate

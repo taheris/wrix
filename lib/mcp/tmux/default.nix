@@ -13,14 +13,18 @@
 #   - auditFull: Path to directory for full capture logging (optional)
 #
 # Spec: specs/tmux-mcp.md
-{ pkgs, rustProfile }:
+{
+  pkgs,
+  crane,
+  fenix,
+}:
 
 {
   name = "tmux";
 
   # tmux must be listed explicitly: buildEnv doesn't follow propagatedBuildInputs
   packages = [
-    (import ./mcp-server.nix { inherit pkgs rustProfile; }).bin
+    (import ./mcp-server.nix { inherit pkgs crane fenix; }).bin
     pkgs.tmux
   ];
 

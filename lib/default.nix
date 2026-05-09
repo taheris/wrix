@@ -29,13 +29,27 @@ let
     inherit (ralph) mkRalph;
   };
   loom = import ./loom {
-    pkgs = linuxPkgs;
-    rustProfile = sandbox.profiles.rust;
+    inherit pkgs crane fenix;
   };
   tmuxMcp = import ./mcp/tmux/mcp-server.nix {
-    pkgs = linuxPkgs;
-    rustProfile = sandbox.profiles.rust;
+    inherit pkgs crane fenix;
   };
+
+  # Host-native Rust toolchain for the devShell (includes rust-analyzer + src
+  # for IDE support).  Container images use the Linux toolchain from
+  # sandbox.profiles.rust; this is its macOS/host counterpart.
+  devToolchain =
+    if fenix != null then
+      let
+        hostFenixPkgs = fenix.packages.${system};
+      in
+      hostFenixPkgs.combine [
+        hostFenixPkgs.stable.defaultToolchain
+        hostFenixPkgs.stable.rust-analyzer-preview
+        hostFenixPkgs.stable.rust-src
+      ]
+    else
+      null;
 
 in
 {
@@ -46,7 +60,7 @@ in
   ralphInitApp = ralph.initApp;
   loomPackage = loom;
   tmuxMcpPackage = tmuxMcp;
-  inherit beads;
+  inherit beads devToolchain;
 
   deriveProfile =
     baseProfile: extensions:

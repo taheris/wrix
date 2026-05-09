@@ -4,13 +4,12 @@
   linuxPkgs,
   fenix,
   loomPackage,
-  rustProfile,
   treefmt ? null,
 }:
 
 let
   inherit (pkgs) lib;
-  inherit (rustProfile) craneLib;
+  inherit (loomPackage) craneLib;
 
   isLinux = lib.elem system [
     "x86_64-linux"
