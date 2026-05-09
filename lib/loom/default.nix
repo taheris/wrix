@@ -80,6 +80,9 @@ let
     // {
       src = stagedSrc;
       inherit cargoArtifacts;
+      preCheck = ''
+        export HOME=$(mktemp -d)
+      '';
     }
   );
 in
