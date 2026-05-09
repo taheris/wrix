@@ -309,6 +309,8 @@ mod tests {
     #[tokio::test]
     async fn run_bead_invokes_dispatch_closure_with_resolved_spawn_config() {
         let dir = tempfile::tempdir().expect("tempdir");
+        let workspace = dir.path().join("ws");
+        std::fs::create_dir_all(&workspace).expect("ws dir");
         let manifest = write_manifest(dir.path());
         let captured: Arc<Mutex<Option<SpawnConfig>>> = Arc::new(Mutex::new(None));
         let captured_for_closure = Arc::clone(&captured);
@@ -316,7 +318,7 @@ mod tests {
             BdClient::new(),
             SpecLabel::new("spec-x"),
             PathBuf::from("/loom/bin"),
-            PathBuf::from("/workspace"),
+            workspace,
             manifest,
             None,
             ProfileName::new("base"),
@@ -422,12 +424,14 @@ mod tests {
     #[tokio::test]
     async fn run_bead_translates_nonzero_exit_code_into_failure_with_error_body() {
         let dir = tempfile::tempdir().expect("tempdir");
+        let workspace = dir.path().join("ws");
+        std::fs::create_dir_all(&workspace).expect("ws dir");
         let manifest = write_manifest(dir.path());
         let mut controller = ProductionAgentLoopController::new(
             BdClient::new(),
             SpecLabel::new("spec-x"),
             PathBuf::from("/loom/bin"),
-            PathBuf::from("/workspace"),
+            workspace,
             manifest,
             None,
             ProfileName::new("base"),
@@ -461,12 +465,14 @@ mod tests {
     #[tokio::test]
     async fn run_bead_translates_preflight_failure_into_infra_preflight() {
         let dir = tempfile::tempdir().expect("tempdir");
+        let workspace = dir.path().join("ws");
+        std::fs::create_dir_all(&workspace).expect("ws dir");
         let manifest = write_manifest(dir.path());
         let mut controller = ProductionAgentLoopController::new(
             BdClient::new(),
             SpecLabel::new("spec-x"),
             PathBuf::from("/loom/bin"),
-            PathBuf::from("/workspace"),
+            workspace,
             manifest,
             None,
             ProfileName::new("base"),
@@ -497,12 +503,14 @@ mod tests {
     #[tokio::test]
     async fn run_bead_translates_midsession_failure_into_infra_midsession() {
         let dir = tempfile::tempdir().expect("tempdir");
+        let workspace = dir.path().join("ws");
+        std::fs::create_dir_all(&workspace).expect("ws dir");
         let manifest = write_manifest(dir.path());
         let mut controller = ProductionAgentLoopController::new(
             BdClient::new(),
             SpecLabel::new("spec-x"),
             PathBuf::from("/loom/bin"),
-            PathBuf::from("/workspace"),
+            workspace,
             manifest,
             None,
             ProfileName::new("base"),
