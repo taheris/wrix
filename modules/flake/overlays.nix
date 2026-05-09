@@ -37,7 +37,7 @@
               args
               // {
                 proxyVendor = true;
-                vendorHash = "sha256-S/NavjGH6VSPU+rCtqtviOcGhgXc6VZUXCUhasSdUGU=";
+                vendorHash = "sha256-FjO7mUTB9FJL5ShVzEj+dEr1Hpzb23JO5QjNLPc5sLQ=";
               }
             );
         };
