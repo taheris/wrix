@@ -34,7 +34,7 @@ defined in [ralph-loop.md](ralph-loop.md) and
      git via `.git/info/exclude` rather than a separate spec home.
    - `loom todo` — spec-to-beads decomposition
    - `loom run` — execute beads in loop (continuous or `--once`)
-   - `loom review` — review gate + push control
+   - `loom check` — review gate + push control
    - `loom msg` — clarify resolution
    - `loom spec` — query spec annotations; supports `--deps` to print
      nixpkgs required by the spec's `[verify]` / `[judge]` test files
@@ -84,14 +84,14 @@ defined in [ralph-loop.md](ralph-loop.md) and
    Configurable max retries per bead (default 2). After in-session retries
    exhaust, the phase ends; the verdict is delegated to the
    [Verdict Gate](#verdict-gate).
-8. **Verdict gate per phase** — `loom review` evaluates each phase's result
+8. **Verdict gate per phase** — `loom check` evaluates each phase's result
    through the verdict gate (see [Verdict Gate](#verdict-gate)) before the
    bead's state can advance. Mechanical signals (marker, closure, diff) and
    a single agent-judged review step feed the decision. Driver-detected
    gate failures enter a bounded recovery loop; agent self-reports
    (`LOOM_BLOCKED` / `LOOM_CLARIFY`) escalate directly to the human via
    `loom msg`.
-9. **Push gate** — `loom review` pushes only when every bead in the molecule
+9. **Push gate** — `loom check` pushes only when every bead in the molecule
    has reached `[done]` (no `loom:blocked` or `loom:clarify` outstanding).
    Auto-iterates on fix-up beads up to max iterations before refusing.
 10. **Beads via shared Dolt socket** — every container has the host's
@@ -344,7 +344,7 @@ there are no stale locks to clean up.
 | Class | Commands | Lock acquired |
 |-------|----------|---------------|
 | Read-only | `status`, `logs` (incl. `-f` follow), `spec` | none |
-| Spec-scoped mutating | `plan`, `todo`, `run`, `review`, `msg`, `use` | exclusive on `<label>.lock` |
+| Spec-scoped mutating | `plan`, `todo`, `run`, `check`, `msg`, `use` | exclusive on `<label>.lock` |
 | Workspace-exclusive | `init`, `init --rebuild` | exclusive on `workspace.lock` |
 
 A spec-scoped command on label `X` waits up to 5 seconds for `<X>.lock`,
@@ -358,11 +358,11 @@ collide briefly at merge-back and push:
 
 - Concurrent `git merge` is serialized by git's own `index.lock`; the
   losing process surfaces a clear error and retries.
-- Concurrent `git push` from `loom review` produces non-fast-forward on
-  the second push; `review`'s push gate re-fetches and retries.
+- Concurrent `git push` from `loom check` produces non-fast-forward on
+  the second push; `check`'s push gate re-fetches and retries.
 
 These are accepted, recoverable failure modes — not silent corruption —
-which is why a workspace-wide lock is *not* required for `run`/`review`.
+which is why a workspace-wide lock is *not* required for `run`/`check`.
 
 ### Nested-Loom Guard
 
@@ -379,7 +379,7 @@ error: loom cannot run inside a loom-managed container
   spec) are still available.
 ```
 
-**Refused inside container:** `run`, `init`, `plan`, `review`, `todo`,
+**Refused inside container:** `run`, `init`, `plan`, `check`, `todo`,
 `msg`, `use`.
 
 **Allowed inside container:** `status`, `logs`, `spec` (read-only;
@@ -775,7 +775,7 @@ mental model already in muscle memory.
 
 ### Verdict Gate
 
-After every agent phase ends, `loom review` evaluates the result through a
+After every agent phase ends, `loom check` evaluates the result through a
 deterministic gate before the bead's state can advance. The gate combines
 mechanical signals (cheap, no LLM call) with a single agent-judged review
 step. Driver-detected failures enter a bounded recovery loop; agent
@@ -803,6 +803,15 @@ review verdict — and produces one of four outcomes (`done`, `blocked`,
 In the table above, `—` means the signal isn't inspected because an
 earlier signal already determined the outcome (e.g. an agent self-report
 short-circuits before review runs); `*` means any value is accepted.
+
+**Closure is the agent's responsibility.** The driver never calls
+`bd close` on a bead it dispatched. The `bd-closed` column is an
+*observable* — the agent invokes `bd close <id>` itself per the run-phase
+prompt contract — not a driver action. A driver that auto-closes on
+`exit_code == 0` collapses every marker into `done` and silently masks
+`LOOM_BLOCKED` / `LOOM_CLARIFY` self-reports, which is why marker
+parsing (not exit_code) must be the primary outcome signal for every
+phase that spawns an agent.
 
 `recovery` resolves to `retry` if the bead's iteration counter is below
 `[loop] max_iterations` (default 3), otherwise `blocked` with the cause
@@ -1055,7 +1064,7 @@ loom/
         lib.rs                  #   wire schemas into loom-events variants;
                                 #   synthesize parent_tool_call_id by
                                 #   tracking the active Task call stack.
-    loom-workflow/              # workflow engine: plan, todo, run, review,
+    loom-workflow/              # workflow engine: plan, todo, run, check,
       src/                      #   msg, spec — owns the orchestration loop,
         lib.rs                  #   bead lifecycle, retry logic, push gate,
                                 #   verdict gate, driver-event emission.
@@ -1068,7 +1077,7 @@ loom/
         todo_new.md
         todo_update.md
         run.md
-        review.md
+        check.md
         msg.md
         partial/
           context_pinning.md
@@ -1145,18 +1154,42 @@ owo-colors = { version = "4", features = ["supports-colors"] }
 colored_json = "5"
 ```
 
-Eighteen dependencies. New entries scoped to `loom-render`: `imara-diff`
-(faster successor to `similar` for `Edit`/`Write` body diffs), `crossterm`
-(TTY detection, terminal width, `\r` + clear-to-EOL for the in-place
-running indicator, OSC 8 capability detection), `owo-colors` with the
-`supports-colors` feature (color discipline + `NO_COLOR` honoring),
-`colored_json` (the `Json` renderer mode pretty-prints with color when
-TTY, plain when piped). No JSONL-specific crate — `serde_json` +
-`BufReader` line splitting is sufficient. No `async-trait` — `async fn`
-in traits is stable. `gix` covers read-only git operations; worktree
-mutation and merge shell out to the system `git` CLI — see *Worktree
-Parallelism* for the split. **Not in `loom-events`:** none of the four
-new deps. The contract crate stays at three deps.
+Eighteen runtime dependencies. New entries scoped to `loom-render`:
+`imara-diff` (faster successor to `similar` for `Edit`/`Write` body
+diffs), `crossterm` (TTY detection, terminal width, `\r` + clear-to-EOL
+for the in-place running indicator, OSC 8 capability detection),
+`owo-colors` with the `supports-colors` feature (color discipline +
+`NO_COLOR` honoring), `colored_json` (the `Json` renderer mode
+pretty-prints with color when TTY, plain when piped). No JSONL-specific
+crate — `serde_json` + `BufReader` line splitting is sufficient. No
+`async-trait` — `async fn` in traits is stable. `gix` covers read-only
+git operations; worktree mutation and merge shell out to the system
+`git` CLI — see *Worktree Parallelism* for the split. **Not in
+`loom-events`:** none of the four new deps. The contract crate stays at
+three deps.
+
+In addition to the eighteen runtime crates, the workspace pins a small
+set of test/dev-only crates that don't appear in the runtime dependency
+graph but are needed by the build, lint, or test passes. These ride in
+`[workspace.dependencies]` so member crates use `workspace = true` for
+them too:
+
+- `insta` — snapshot testing (template render parity, CLI help text).
+- `proptest` — property tests for parsers and identifier round-trips.
+- `tempfile` — scratch directories in integration tests.
+- `tokio-test` — async test scaffolding.
+- `walkdir` — used by the workspace-internal annotation-integrity test
+  binary (`loom/crates/loom/tests/annotations.rs`).
+- `pulldown-cmark` — parses spec markdown (`## Companions`, `## Success
+  Criteria` annotations) inside `loom-driver` / `loom-templates`.
+- `syn` — parses Rust sources for the bidirectional annotation gate
+  (`loom/crates/loom/tests/annotations.rs`) which walks every
+  `[verify]` / `[judge]` annotation against an existing test function.
+- `nix` (the BSD-style POSIX wrapper, not the package manager) — `signal`
+  feature, used for SIGINT/SIGTERM handling on cancellation.
+
+Adding a new third-party crate that isn't in either list is a spec
+change.
 
 ### Parse, Don't Validate
 
@@ -1227,15 +1260,15 @@ Template variables (sourced from
 | `label` | `SpecLabel` | all |
 | `spec_diff` | `Option<String>` | todo-update |
 | `existing_tasks` | `Option<String>` | todo-update |
-| `companion_paths` | `Vec<String>` | plan-update, todo-*, run, review, msg |
+| `companion_paths` | `Vec<String>` | plan-update, todo-*, run, check, msg |
 | `clarify_beads` | `Vec<ClarifyBead>` | msg |
 | `implementation_notes` | `Vec<String>` | todo-new, todo-update [^impl-notes] |
 | `molecule_id` | `Option<MoleculeId>` | todo-update, run |
 | `issue_id` | `Option<BeadId>` | run |
 | `title` | `Option<String>` | run |
 | `description` | `Option<String>` | run |
-| `beads_summary` | `Option<String>` | review |
-| `base_commit` | `Option<String>` | review |
+| `beads_summary` | `Option<String>` | check |
+| `base_commit` | `Option<String>` | check |
 | `previous_failure` | `Option<String>` | run (retry only, truncated to 4000 chars) |
 | `exit_signals` | `String` | all (via partial) |
 | `scratchpad_path` | `String` | all (via partial) |
@@ -1466,7 +1499,7 @@ session — joined by a hook script that re-injects both after compaction.
 
 `<key>` is the session concurrency unit, matching the existing locks:
 spec **label** for `loom plan -n` / `loom plan -u` / `loom todo`; **bead
-ID** for `loom run` / `loom review` / `loom msg`. Two parallel run
+ID** for `loom run` / `loom check` / `loom msg`. Two parallel run
 workers on different beads of the same molecule get independent scratch
 directories.
 
@@ -1514,7 +1547,7 @@ During the transition period:
 | `loom/crates/loom-driver/` | Host-side runtime: `AgentBackend` trait, `AgentSession`, `LineParse`, `JsonlReader`, `StateDb`, `Config`, `BdClient`, `Clock`, profile manifest, lock files, scratch dir, git ops. |
 | `loom/crates/loom-render/` | `Renderer` trait + `Pretty`/`Plain`/`Json`/`Raw` impls; `LogSink` (tee-style writer driving disk JSONL + renderer in lockstep); per-tool summary cells, `imara-diff` for `Edit`/`Write`, OSC 8 hyperlinks, in-place running indicator, subagent (Task) nesting, color discipline. |
 | `loom/crates/loom-agent/` | AgentBackend implementations (see [loom-agent.md](loom-agent.md)). Adapters flatten backend wire schemas into `loom-events` variants. |
-| `loom/crates/loom-workflow/` | Workflow engine (plan, todo, run, review, msg, spec) — emits `driver_event` variants for verdict gate, retry dispatch, push gate. |
+| `loom/crates/loom-workflow/` | Workflow engine (plan, todo, run, check, msg, spec) — emits `driver_event` variants for verdict gate, retry dispatch, push gate. |
 | `loom/crates/loom-templates/` | Askama templates ported from Ralph |
 | `.wrapix/loom/config.toml` | Loom config (TOML, independent of Ralph's Nix config) |
 | `.wrapix/loom/state.db` | SQLite state database (created on first run) |
@@ -1536,6 +1569,7 @@ During the transition period:
 |------|--------|
 | `loom/crates/loom-driver/src/state/implementation_notes.rs` [^impl-notes-path] | Markdown `## Implementation Notes` parser (157-line `parse_implementation_notes()` + tests). Notes now write directly to the `notes` table via the `loom note` CLI; nothing parses markdown for notes anymore. |
 | `loom/crates/loom-templates/templates/partial/implementation_notes_spec.md` | Partial that instructed the agent to write a `## Implementation Notes` section into the spec markdown. The markdown→parse path is gone. |
+| `loom/crates/loom-templates/templates/partial/implementation_notes_state.md` | Sibling partial that rendered the parsed `implementation_notes` markdown blob into bead bodies during `loom todo`. With notes living in the `notes` table and rendered via the typed lifecycle, the partial has no caller. |
 
 [^impl-notes-path]: Lives at `loom/crates/loom-core/src/state/implementation_notes.rs` in the live tree until the `loom-core` → `loom-driver` rename lands as part of this migration.
 
@@ -1682,7 +1716,7 @@ v1-complete signal for this spec.
       `SpawnConfig.env` allowlist
   [verify](tests/loom-test.sh::test_loom_inside_env_set)
 - [ ] With `LOOM_INSIDE=1`, mutating subcommands (`run`, `init`, `plan`,
-      `review`, `todo`, `msg`, `use`) refuse with a clear error
+      `check`, `todo`, `msg`, `use`) refuse with a clear error
   [verify](tests/loom-test.sh::test_nested_loom_guard_refuses)
 - [ ] With `LOOM_INSIDE=1`, read-only subcommands (`status`, `logs`,
       `spec`) still run normally
@@ -1840,11 +1874,11 @@ v1-complete signal for this spec.
   [verify](tests/loom-test.sh::test_run_profile_selection)
 - [ ] `loom run` retries failed beads with previous error context
   [verify](tests/loom-test.sh::test_run_retry_with_context)
-- [ ] `loom run` execs `loom review` on molecule completion
+- [ ] `loom run` execs `loom check` on molecule completion
   [verify](tests/loom-test.sh::test_run_execs_review)
-- [ ] `loom review` implements push gate (push only on clean completion)
+- [ ] `loom check` implements push gate (push only on clean completion)
   [verify](tests/loom-test.sh::test_review_push_gate)
-- [ ] `loom review` auto-iterates on fix-up beads (up to max iterations)
+- [ ] `loom check` auto-iterates on fix-up beads (up to max iterations)
   [verify](tests/loom-test.sh::test_review_auto_iterate)
 - [ ] Bare `loom msg` lists every outstanding `loom:blocked` and
       `loom:clarify` bead across all specs (cross-spec default); the
@@ -1898,10 +1932,16 @@ v1-complete signal for this spec.
 
 ### Verdict gate
 
-- [ ] After every agent phase, `loom review` evaluates the result against
+- [ ] After every agent phase, `loom check` evaluates the result against
       the verdict-gate decision table; mechanical signals (marker,
       bd-closed, diff) make no LLM call
   [verify](tests/loom-test.sh::test_verdict_gate_mechanical_signals)
+- [ ] `loom run` never invokes `bd close` on a bead it dispatched;
+      closure is the agent's responsibility and the `bd-closed` column
+      is observed post-hoc. Verified by stubbing an agent that emits
+      `LOOM_BLOCKED` / `LOOM_CLARIFY` without calling `bd close` and
+      asserting the bead remains open after the run finishes.
+  [verify](tests/loom-test.sh::test_run_does_not_close_bead)
 - [ ] `LOOM_BLOCKED` agent marker → bead transitions to `[blocked]`,
       recovery loop is skipped
   [verify](tests/loom-test.sh::test_gate_loom_blocked_marker)
@@ -1957,7 +1997,7 @@ v1-complete signal for this spec.
       `loom:blocked` with cause `unbonded-origin` to surface the
       upstream inconsistency
   [verify](tests/loom-test.sh::test_fixup_refuses_unbonded_origin)
-- [ ] `loom review` push gate walks `bd mol progress <id>` and refuses
+- [ ] `loom check` push gate walks `bd mol progress <id>` and refuses
       to push when any bead in the molecule — including bonded fix-up
       beads — carries `loom:blocked` or `loom:clarify`; an orphan
       fix-up bead would slip past this check, so the bond invariant
@@ -1979,7 +2019,7 @@ v1-complete signal for this spec.
 - [ ] Infra-retry counter is driver-memory only; resets on a fresh
       `loom run` invocation; does not consume `[loop] max_iterations`
   [verify](tests/loom-test.sh::test_infra_retry_counter_separate)
-- [ ] `loom review` push gate refuses to push while any bead in the
+- [ ] `loom check` push gate refuses to push while any bead in the
       molecule carries `loom:blocked` or `loom:clarify`
   [verify](tests/loom-test.sh::test_push_gate_refuses_unresolved)
 
@@ -2108,10 +2148,10 @@ v1-complete signal for this spec.
 
 - [ ] At session start, `.wrapix/loom/scratch/<key>/` contains
       `prompt.txt`, `scratch.md`, `repin.sh` for every phase command
-      (plan, todo, run, review, msg)
+      (plan, todo, run, check, msg)
   [verify](tests/loom-test.sh::test_scratch_dir_created)
 - [ ] `<key>` is the spec label for plan/todo phases and the bead ID for
-      run/review/msg phases
+      run/check/msg phases
   [verify](tests/loom-test.sh::test_scratch_key_naming)
 - [ ] Running `repin.sh` emits a valid `SessionStart[compact]` JSON
       envelope containing banner + `prompt.txt` + `scratch.md` contents
@@ -2222,7 +2262,7 @@ agent.backend = "claude"
 # agent.provider = "deepseek"
 # agent.model_id = "deepseek-v3"
 #
-# [phase.review]
+# [phase.check]
 # agent.backend = "claude"
 
 [claude]
@@ -2251,3 +2291,47 @@ Defaults match Ralph's so users can transition without configuring Loom
 separately. Settings Ralph has that Loom doesn't need (output display,
 hooks, watch, failure patterns) are omitted — Loom handles those concerns
 in Rust code, not config.
+
+## Implementation Notes
+
+- `loom msg` fast-reply (`-a` in current impl, spec documents `-o`/`-r`)
+  builds the composed answer but never persists it. Fix at
+  `loom/crates/loom/src/main.rs:885-892`: add `notes` (the `FastReply`'s
+  composed text) to `UpdateOpts` alongside the existing `remove_labels`
+  field, so the single `bd update` call carries both writes.
+- `loom run` decides `AgentOutcome` purely on `exit_code` at
+  `loom/crates/loom-workflow/src/run/production.rs:181-188`, ignoring the
+  agent's `LOOM_BLOCKED` / `LOOM_CLARIFY` marker. Add `Blocked { reason }`
+  and `Clarify { question }` variants to `AgentOutcome` in
+  `loom/crates/loom-workflow/src/run/outcome.rs`, parse the marker (the
+  parser already exists — `loom todo` uses it at `todo/production.rs:228`
+  and `loom check` at `check/phase_verdict.rs:142`), and route through
+  `BeadResult::Blocked` / a new `Clarified` self-report variant so
+  `apply_blocked` / `apply_clarify` add the right label and the bead
+  stays open. `BeadResult::Clarified` is currently documented as
+  "retries exhausted" — keep that meaning, add a separate variant for
+  agent self-reports.
+- Audit `loom run`'s bead lifecycle for any path that calls `bd close`
+  on the dispatched bead; remove it. Closure is the agent's job per the
+  run-phase prompt contract; the gate only observes.
+- Promote the matching `exit 77` stubs to real end-to-end tests so this
+  regression cannot recur silently:
+  - `test_msg_option_validates` / `test_msg_reply_verbatim` — after the
+    fast-reply call, assert `bd show <id> --json` returns the composed
+    note in the `notes` field AND the label is gone.
+  - `test_gate_loom_blocked_marker` / `test_gate_loom_clarify_marker` —
+    stub agent stdout to emit only the marker (no `bd close`); after the
+    run, assert the bead is open and carries the right label.
+  - `test_run_does_not_close_bead` — same stub harness, assert the
+    driver issued no `bd close` for the dispatched bead.
+- Spec/impl flag-surface drift on `loom msg`: spec documents
+  `-n`/`-b`/`-o`/`-r`/`-d`/`-c`/`-s` with `-o` (option, validated) and
+  `-r` (verbatim) as mutually-exclusive flags; impl has
+  `-n`/`-i`/`-a`/`-d`/`-s` (no `-c`/`--chat` at all) with `-a`
+  collapsing both jobs (integer → option N for clarify, anything else
+  → verbatim). The reconciliation decision (per A1) is **spec stands**:
+  bead I1 splits the impl back into `-n`/`-b`/`-o`/`-r`/`-d`/`-c`/`-s`
+  matching the spec. Until I1 lands, the criteria
+  `test_msg_option_validates`, `test_msg_reply_verbatim`,
+  `test_msg_flag_exclusivity`, `test_msg_chat_*` cannot be promoted
+  past their `_pending_stub` form.
