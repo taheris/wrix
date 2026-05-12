@@ -3234,6 +3234,7 @@ test_push_gate_sees_fixup_beads() { _pending_stub push_gate_sees_fixup_beads; }
 test_raw_mode_passthrough() { _pending_stub raw_mode_passthrough; }
 test_rebuild_drops_all_notes() { _pending_stub rebuild_drops_all_notes; }
 test_renderer_modes_present() { _pending_stub renderer_modes_present; }
+test_run_does_not_close_bead() { _pending_stub run_does_not_close_bead; }
 test_seq_monotonic() { _pending_stub seq_monotonic; }
 test_task_subagent_nesting() { _pending_stub task_subagent_nesting; }
 test_todo_delete_notes_atomic_with_cursor() { _pending_stub todo_delete_notes_atomic_with_cursor; }
