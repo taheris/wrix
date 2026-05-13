@@ -3213,15 +3213,68 @@ test_logs_raw_and_follow_compose() { _pending_stub logs_raw_and_follow_compose; 
 test_logs_reuses_renderer() { _pending_stub logs_reuses_renderer; }
 test_logs_shares_renderer_with_run() { _pending_stub logs_shares_renderer_with_run; }
 test_logs_verbose_streams_deltas() { _pending_stub logs_verbose_streams_deltas; }
-test_loom_events_is_leaf() { _pending_stub loom_events_is_leaf; }
-test_loom_events_minimal_deps() { _pending_stub loom_events_minimal_deps; }
+test_loom_events_is_leaf() {
+    local cargo_toml="$REPO_ROOT/loom/crates/loom-events/Cargo.toml"
+    if [ ! -f "$cargo_toml" ]; then
+        echo "FAIL: $cargo_toml does not exist" >&2
+        return 1
+    fi
+    if grep -qE '^loom-(driver|render|agent|workflow|templates)' "$cargo_toml"; then
+        echo "FAIL: loom-events depends on internal crate(s):" >&2
+        grep -E '^loom-(driver|render|agent|workflow|templates)' "$cargo_toml" >&2
+        return 1
+    fi
+}
+test_loom_events_minimal_deps() {
+    local cargo_toml="$REPO_ROOT/loom/crates/loom-events/Cargo.toml"
+    if [ ! -f "$cargo_toml" ]; then
+        echo "FAIL: $cargo_toml does not exist" >&2
+        return 1
+    fi
+    local runtime
+    runtime="$(awk '
+        /^\[dependencies\]/ { in_deps=1; next }
+        /^\[/ { in_deps=0; next }
+        in_deps && /^[a-zA-Z]/ { print $1 }
+    ' "$cargo_toml" | sort)"
+    local want
+    want="$(printf '%s\n' serde serde_json thiserror | sort)"
+    if [ "$runtime" != "$want" ]; then
+        echo "FAIL: loom-events [dependencies] drift." >&2
+        echo "got:"; printf '%s\n' "$runtime" >&2
+        echo "want:"; printf '%s\n' "$want" >&2
+        return 1
+    fi
+    for forbidden in chrono ulid uuid; do
+        if grep -qE "^$forbidden\b" "$cargo_toml"; then
+            echo "FAIL: loom-events must not depend on $forbidden" >&2
+            return 1
+        fi
+    done
+}
 test_loom_note_add() { _pending_stub loom_note_add; }
 test_loom_note_clear() { _pending_stub loom_note_clear; }
 test_loom_note_kind_defaults_implementation() { _pending_stub loom_note_kind_defaults_implementation; }
 test_loom_note_list_chronological() { _pending_stub loom_note_list_chronological; }
 test_loom_note_rm() { _pending_stub loom_note_rm; }
 test_loom_note_set_atomic() { _pending_stub loom_note_set_atomic; }
-test_loom_render_deps() { _pending_stub loom_render_deps; }
+test_loom_render_deps() {
+    local cargo_toml="$REPO_ROOT/loom/crates/loom-render/Cargo.toml"
+    if [ ! -f "$cargo_toml" ]; then
+        echo "FAIL: $cargo_toml does not exist" >&2
+        return 1
+    fi
+    if ! grep -qE '^loom-events' "$cargo_toml"; then
+        echo "FAIL: loom-render must depend on loom-events" >&2
+        return 1
+    fi
+    for forbidden in loom-driver loom-workflow; do
+        if grep -qE "^$forbidden\b" "$cargo_toml"; then
+            echo "FAIL: loom-render must not depend on $forbidden" >&2
+            return 1
+        fi
+    done
+}
 test_msg_chat_exit_signals() { _pending_stub msg_chat_exit_signals; }
 test_msg_chat_launches_container() { _pending_stub msg_chat_launches_container; }
 test_msg_chat_partial_progress() { _pending_stub msg_chat_partial_progress; }
