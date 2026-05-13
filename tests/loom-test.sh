@@ -3343,7 +3343,12 @@ test_plain_selected_on_non_tty() {
     cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
         renderer::tests::plain_selected_on_non_tty
 }
-test_push_gate_sees_fixup_beads() { _pending_stub push_gate_sees_fixup_beads; }
+test_push_gate_sees_fixup_beads() {
+    check_cargo_test check::runner::tests::fix_up_beads_under_cap_auto_iterate
+    check_cargo_test check::runner::tests::iteration_cap_escalates_newest_fix_up_to_clarify
+    check_cargo_test check::verdict::tests::diff_returns_only_new_ids_in_post_order
+    check_cargo_test check::verdict::tests::diff_handles_empty_before
+}
 test_raw_mode_passthrough() {
     cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
         renderer::tests::raw_mode_passthrough
