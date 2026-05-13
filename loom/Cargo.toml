@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/loom",
     "crates/loom-driver",
+    "crates/loom-events",
     "crates/loom-agent",
     "crates/loom-workflow",
     "crates/loom-templates",
@@ -54,6 +55,7 @@ walkdir = "2"
 
 # Internal crates
 loom-driver = { path = "crates/loom-driver" }
+loom-events = { path = "crates/loom-events" }
 loom-agent = { path = "crates/loom-agent" }
 loom-workflow = { path = "crates/loom-workflow" }
 loom-templates = { path = "crates/loom-templates" }

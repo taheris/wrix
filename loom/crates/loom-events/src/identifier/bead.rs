@@ -1,6 +1,5 @@
 use std::fmt;
 
-use displaydoc::Display;
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 
@@ -62,8 +61,8 @@ impl<'de> Deserialize<'de> for BeadId {
     }
 }
 
-/// invalid bead id `{0}`: expected `<prefix>-<base32>(.<digits>)?`
-#[derive(Debug, Display, Error, PartialEq, Eq)]
+#[derive(Debug, Error, PartialEq, Eq)]
+#[error("invalid bead id `{0}`: expected `<prefix>-<base32>(.<digits>)?`")]
 pub struct ParseBeadIdError(pub String);
 
 #[cfg(test)]

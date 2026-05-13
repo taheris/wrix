@@ -21,7 +21,6 @@
 
 mod backend;
 mod error;
-mod event;
 mod jsonl;
 mod kind;
 mod parse;
@@ -33,9 +32,17 @@ pub use backend::{
     ModelSelection, SessionOutcome, SpawnConfig, set_loom_inside,
 };
 pub use error::ProtocolError;
-pub use event::{AgentEvent, CompactionReason};
 pub use jsonl::{JsonlReader, MAX_LINE_BYTES};
 pub use kind::AgentKind;
 pub use parse::{LineParse, ParsedLine};
 pub use repin::RePinContent;
 pub use session::{Active, AgentSession, Idle};
+
+/// `AgentEvent` + `CompactionReason` live in `loom-events` now, since
+/// they're part of the public contract leaf consumers depend on. The
+/// driver re-exports them so the `agent::event::AgentEvent` path keeps
+/// resolving for existing call sites.
+pub mod event {
+    pub use loom_events::event::*;
+}
+pub use loom_events::event::{AgentEvent, CompactionReason};
