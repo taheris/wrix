@@ -8,7 +8,7 @@ use std::fmt;
 /// bytes. Variable *names* may still be logged through tracing fields.
 ///
 /// ```
-/// use loom_core::logging::Redacted;
+/// use loom_driver::logging::Redacted;
 ///
 /// let token = Redacted("super-secret-api-key");
 /// assert_eq!(format!("{token:?}"), "[REDACTED]");

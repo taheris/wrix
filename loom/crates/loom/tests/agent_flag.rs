@@ -5,7 +5,7 @@
 //! - `test_backend_invalid_name` — `--agent unknown` fails with a clear error
 //!
 //! Default-resolution and per-phase config behaviour live in
-//! `loom-core/src/config/mod.rs::tests` so they can assert on the typed
+//! `loom-driver/src/config/mod.rs::tests` so they can assert on the typed
 //! `AgentSelection` directly. This file pins the binary's clap surface.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]

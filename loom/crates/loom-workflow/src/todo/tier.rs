@@ -1,11 +1,11 @@
 use std::path::{Path, PathBuf};
 
-use loom_core::identifier::{MoleculeId, SpecLabel};
+use loom_driver::identifier::{MoleculeId, SpecLabel};
 
 use super::error::TodoError;
 
 /// Pluggable git surface used by [`compute_spec_diff`]. Real callers wire
-/// this to the `GitClient` in `loom-core`; tests substitute a fake.
+/// this to the `GitClient` in `loom-driver`; tests substitute a fake.
 ///
 /// Operations are sync because the driver runs them under a single tokio
 /// task — concurrency comes from the agent session, not from these probes.

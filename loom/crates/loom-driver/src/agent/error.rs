@@ -6,7 +6,7 @@ use thiserror::Error;
 
 /// Errors raised at the JSONL / agent-protocol boundary.
 ///
-/// The variants cover the layers where loom-core is the only code that knows
+/// The variants cover the layers where loom-driver is the only code that knows
 /// about the wire (line framing, JSON parse, subprocess IO) plus the small set
 /// of semantic outcomes a backend `LineParse` reports back upward.
 #[derive(Debug, Display, Error)]

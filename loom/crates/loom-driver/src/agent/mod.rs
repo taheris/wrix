@@ -1,4 +1,4 @@
-//! Agent backend abstraction surface owned by `loom-core`.
+//! Agent backend abstraction surface owned by `loom-driver`.
 //!
 //! Defines the public types and traits that backends in `loom-agent`
 //! implement and that `loom-workflow` orchestrates over:

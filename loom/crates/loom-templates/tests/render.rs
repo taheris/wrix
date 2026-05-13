@@ -10,7 +10,7 @@
 
 use anyhow::Result;
 use askama::Template;
-use loom_core::identifier::{BeadId, MoleculeId, SpecLabel};
+use loom_driver::identifier::{BeadId, MoleculeId, SpecLabel};
 use loom_templates::check::CheckContext;
 use loom_templates::msg::{ClarifyBead, ClarifyOption, MsgContext};
 use loom_templates::plan::{PlanNewContext, PlanUpdateContext};

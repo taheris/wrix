@@ -1,4 +1,4 @@
-//! Property-based tests for `loom-core` invariants.
+//! Property-based tests for `loom-driver` invariants.
 //!
 //! Per `specs/loom-tests.md` (Architecture / Property-Based Testing), this
 //! crate owns invariants for the types it defines. The state DB is the
@@ -11,8 +11,8 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use loom_core::identifier::{MoleculeId, SpecLabel};
-use loom_core::state::{ActiveMolecule, StateDb};
+use loom_driver::identifier::{MoleculeId, SpecLabel};
+use loom_driver::state::{ActiveMolecule, StateDb};
 use proptest::prelude::*;
 
 /// Acceptable label characters: ASCII letters, digits, dash, underscore.

@@ -11,7 +11,7 @@
 //! types are absorbed by `#[serde(other)]` so a forward-compatible block
 //! shape (e.g. `thinking`) does not fail the parse.
 
-use loom_core::identifier::{RequestId, SessionId, ToolCallId};
+use loom_driver::identifier::{RequestId, SessionId, ToolCallId};
 use serde::Deserialize;
 
 /// Tagged union of every line type emitted by `claude --output-format
@@ -39,7 +39,7 @@ pub enum ClaudeMessage {
     /// Final-result line. `subtype: "success"` maps to `TurnEnd` followed by
     /// `SessionComplete`; `subtype: "error"` maps to `Error` followed by
     /// `SessionComplete`. `total_cost_usd` is captured into
-    /// [`SessionOutcome::cost_usd`](loom_core::agent::SessionOutcome::cost_usd).
+    /// [`SessionOutcome::cost_usd`](loom_driver::agent::SessionOutcome::cost_usd).
     #[serde(rename = "result")]
     Result {
         subtype: String,
@@ -75,9 +75,9 @@ pub struct AssistantContent {
 }
 
 /// One entry in an assistant message's `content` array. `text` blocks become
-/// [`AgentEvent::MessageDelta`](loom_core::agent::AgentEvent::MessageDelta);
+/// [`AgentEvent::MessageDelta`](loom_driver::agent::AgentEvent::MessageDelta);
 /// `tool_use` blocks become
-/// [`AgentEvent::ToolCall`](loom_core::agent::AgentEvent::ToolCall). Anything
+/// [`AgentEvent::ToolCall`](loom_driver::agent::AgentEvent::ToolCall). Anything
 /// else (e.g. `thinking`) is logged at `trace!` and skipped via the
 /// catch-all variant.
 #[derive(Debug, Deserialize)]
@@ -102,7 +102,7 @@ pub struct UserContent {
 }
 
 /// One entry in a user message's `content` array. `tool_result` blocks become
-/// [`AgentEvent::ToolResult`](loom_core::agent::AgentEvent::ToolResult).
+/// [`AgentEvent::ToolResult`](loom_driver::agent::AgentEvent::ToolResult).
 /// `content` may be a plain string or a nested block array — the parser
 /// stringifies whichever shape arrives.
 #[derive(Debug, Deserialize)]

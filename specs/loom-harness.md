@@ -1571,7 +1571,7 @@ During the transition period:
 | `loom/crates/loom-templates/templates/partial/implementation_notes_spec.md` | Partial that instructed the agent to write a `## Implementation Notes` section into the spec markdown. The markdown→parse path is gone. |
 | `loom/crates/loom-templates/templates/partial/implementation_notes_state.md` | Sibling partial that rendered the parsed `implementation_notes` markdown blob into bead bodies during `loom todo`. With notes living in the `notes` table and rendered via the typed lifecycle, the partial has no caller. |
 
-[^impl-notes-path]: Lives at `loom/crates/loom-core/src/state/implementation_notes.rs` in the live tree until the `loom-core` → `loom-driver` rename lands as part of this migration.
+[^impl-notes-path]: Lives at `loom/crates/loom-driver/src/state/implementation_notes.rs` in the live tree until the `loom-driver` → `loom-driver` rename lands as part of this migration.
 
 ### Unchanged (during dual-path phase)
 

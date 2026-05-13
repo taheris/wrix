@@ -1,5 +1,5 @@
-use loom_core::bd::Bead;
-use loom_core::identifier::BeadId;
+use loom_driver::bd::Bead;
+use loom_driver::identifier::BeadId;
 
 use super::error::RunError;
 use super::outcome::{AgentOutcome, BeadResult};
@@ -241,8 +241,8 @@ async fn process_one_bead<C: AgentLoopController>(
 #[expect(clippy::expect_used, reason = "tests use panicking helpers")]
 mod tests {
     use super::*;
-    use loom_core::bd::{Bead, Label};
-    use loom_core::identifier::BeadId;
+    use loom_driver::bd::{Bead, Label};
+    use loom_driver::identifier::BeadId;
     use std::collections::VecDeque;
 
     /// Capturing fake controller. Drives [`run_loop`] without touching real

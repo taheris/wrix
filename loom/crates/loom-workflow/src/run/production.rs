@@ -17,13 +17,13 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use loom_core::agent::{ProtocolError, SpawnConfig};
-use loom_core::bd::{BdClient, Bead, ListOpts, ReadyOpts, UpdateOpts};
-use loom_core::config::Phase;
-use loom_core::identifier::{BeadId, ProfileName, SpecLabel};
-use loom_core::lock::LockGuard;
-use loom_core::profile_manifest::ProfileImageManifest;
-use loom_core::scratch::resolve_scratch_key;
+use loom_driver::agent::{ProtocolError, SpawnConfig};
+use loom_driver::bd::{BdClient, Bead, ListOpts, ReadyOpts, UpdateOpts};
+use loom_driver::config::Phase;
+use loom_driver::identifier::{BeadId, ProfileName, SpecLabel};
+use loom_driver::lock::LockGuard;
+use loom_driver::profile_manifest::ProfileImageManifest;
+use loom_driver::scratch::resolve_scratch_key;
 use tokio::process::Command;
 use tracing::info;
 
@@ -49,7 +49,7 @@ use crate::todo::ExitSignal;
 /// `run_bead` calls it on every retry attempt, so the closure must be `Fn`
 /// (callable repeatedly). It receives `(SpawnConfig, BeadId)` — the bead id
 /// is passed alongside the spawn config so the closure can open the per-bead
-/// JSONL [`LogSink`](loom_core::logging::LogSink) before dispatch.
+/// JSONL [`LogSink`](loom_driver::logging::LogSink) before dispatch.
 pub struct ProductionAgentLoopController<S, F>
 where
     S: Fn(SpawnConfig, BeadId) -> F + Send,
@@ -133,7 +133,7 @@ where
         let is_retry = previous_failure.is_some();
         let key = resolve_scratch_key(Phase::Run, &self.label, Some(&bead.id));
         let scratchpad_path =
-            loom_core::scratch::ScratchSession::scratchpad_path_for(&self.workspace, &key)
+            loom_driver::scratch::ScratchSession::scratchpad_path_for(&self.workspace, &key)
                 .to_string_lossy()
                 .into_owned();
         let initial_prompt = render_run_prompt(RunContextInputs {
@@ -150,7 +150,7 @@ where
             exit_signals: String::new(),
         })
         .map_err(|e| RunError::Protocol(ProtocolError::Io(std::io::Error::other(e))))?;
-        let scratch = loom_core::scratch::ScratchSession::open(
+        let scratch = loom_driver::scratch::ScratchSession::open(
             &self.workspace,
             &key,
             &initial_prompt,
@@ -299,8 +299,8 @@ pub async fn list_open_for_spec(bd: &BdClient, label: &SpecLabel) -> Result<Vec<
 )]
 mod tests {
     use super::*;
-    use loom_core::agent::SessionOutcome;
-    use loom_core::bd::Label;
+    use loom_driver::agent::SessionOutcome;
+    use loom_driver::bd::Label;
     use std::sync::Mutex;
 
     fn write_manifest(dir: &std::path::Path) -> Arc<ProfileImageManifest> {
@@ -579,8 +579,8 @@ mod tests {
     /// child exits, the lock is reacquirable on a fresh attempt.
     #[tokio::test(flavor = "multi_thread")]
     async fn exec_check_releases_lock_before_spawning_child() {
-        use loom_core::clock::SystemClock;
-        use loom_core::lock::LockManager;
+        use loom_driver::clock::SystemClock;
+        use loom_driver::lock::LockManager;
         use std::os::unix::fs::PermissionsExt;
         use std::time::Duration;
 

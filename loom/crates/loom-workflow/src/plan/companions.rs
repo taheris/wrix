@@ -1,8 +1,8 @@
 use std::path::Path;
 
-use loom_core::identifier::SpecLabel;
-use loom_core::markdown::{HeadingLevel, section_events};
-use loom_core::state::{StateDb, parse_companions};
+use loom_driver::identifier::SpecLabel;
+use loom_driver::markdown::{HeadingLevel, section_events};
+use loom_driver::state::{StateDb, parse_companions};
 
 use super::error::PlanError;
 
@@ -50,7 +50,7 @@ pub fn reconcile_companions(
 mod tests {
     use super::*;
     use anyhow::Result;
-    use loom_core::state::StateDb;
+    use loom_driver::state::StateDb;
 
     #[test]
     fn empty_spec_lands_zero_rows() -> Result<()> {

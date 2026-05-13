@@ -1,5 +1,5 @@
-use loom_core::bd::Bead;
-use loom_core::identifier::{BeadId, SpecLabel};
+use loom_driver::bd::Bead;
+use loom_driver::identifier::{BeadId, SpecLabel};
 use loom_templates::msg::{ClarifyBead, ClarifyOption, MsgContext};
 
 use super::list::spec_label_of;
@@ -97,7 +97,7 @@ pub fn resolve_target<'a>(
 mod tests {
     use super::*;
     use askama::Template;
-    use loom_core::bd::Label;
+    use loom_driver::bd::Label;
 
     fn bead(id: &str, title: &str, desc: &str, labels: &[&str]) -> Bead {
         Bead {

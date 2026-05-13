@@ -8,8 +8,8 @@
 
 use std::collections::HashSet;
 
-use loom_core::agent::{AgentEvent, LineParse, ParsedLine, ProtocolError};
-use loom_core::identifier::RequestId;
+use loom_driver::agent::{AgentEvent, LineParse, ParsedLine, ProtocolError};
+use loom_driver::identifier::RequestId;
 use serde::Serialize;
 use tracing::{info, trace};
 
@@ -18,7 +18,7 @@ use super::messages::{AssistantBlock, ClaudeMessage, UserBlock};
 /// Claude Code stream-json line parser.
 ///
 /// Stateless dispatch layer between
-/// [`AgentSession`](loom_core::agent::AgentSession) and
+/// [`AgentSession`](loom_driver::agent::AgentSession) and
 /// [`messages::ClaudeMessage`](super::messages::ClaudeMessage). Auto-approves
 /// every tool-permission `control_request` whose tool name is **not** in
 /// `denied_tools`; denied tools receive `approved: false`.
@@ -231,7 +231,7 @@ fn encode_user_message(msg: &str) -> Result<String, ProtocolError> {
 )]
 mod tests {
     use super::*;
-    use loom_core::agent::AgentEvent;
+    use loom_driver::agent::AgentEvent;
 
     fn parse(parser: &ClaudeParser, line: &str) -> ParsedLine {
         parser

@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
-use loom_core::bd::Bead;
-use loom_core::identifier::{MoleculeId, SpecLabel};
+use loom_driver::bd::Bead;
+use loom_driver::identifier::{MoleculeId, SpecLabel};
 use loom_templates::check::{CheckContext, ReviewSource};
 
 use crate::spec::{Annotation, AnnotationKind, SpecError, parse_spec_annotations};
@@ -129,7 +129,7 @@ pub fn beads_summary(beads: &[Bead]) -> Option<String> {
 mod tests {
     use super::*;
     use askama::Template;
-    use loom_core::identifier::BeadId;
+    use loom_driver::identifier::BeadId;
 
     fn b(id: &str, title: &str, status: &str) -> Bead {
         Bead {

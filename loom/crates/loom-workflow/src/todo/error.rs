@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
 use displaydoc::Display;
-use loom_core::agent::ProtocolError;
-use loom_core::profile_manifest::ProfileError;
-use loom_core::state::StateError;
+use loom_driver::agent::ProtocolError;
+use loom_driver::profile_manifest::ProfileError;
+use loom_driver::state::StateError;
 use thiserror::Error;
 
 /// Errors raised by the `loom todo` driver.

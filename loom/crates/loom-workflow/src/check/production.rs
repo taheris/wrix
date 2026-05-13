@@ -21,15 +21,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use askama::Template;
-use loom_core::agent::{ProtocolError, RePinContent, SessionOutcome, SpawnConfig, set_loom_inside};
-use loom_core::bd::{BdClient, Bead, ListOpts, UpdateOpts};
-use loom_core::config::Phase;
-use loom_core::git::GitClient;
-use loom_core::identifier::{BeadId, ProfileName, SpecLabel};
-use loom_core::lock::LockGuard;
-use loom_core::profile_manifest::ProfileImageManifest;
-use loom_core::scratch::resolve_scratch_key;
-use loom_core::state::StateDb;
+use loom_driver::agent::{
+    ProtocolError, RePinContent, SessionOutcome, SpawnConfig, set_loom_inside,
+};
+use loom_driver::bd::{BdClient, Bead, ListOpts, UpdateOpts};
+use loom_driver::config::Phase;
+use loom_driver::git::GitClient;
+use loom_driver::identifier::{BeadId, ProfileName, SpecLabel};
+use loom_driver::lock::LockGuard;
+use loom_driver::profile_manifest::ProfileImageManifest;
+use loom_driver::scratch::resolve_scratch_key;
+use loom_driver::state::StateDb;
 use loom_templates::check::CheckContext;
 use tokio::process::Command;
 use tracing::info;
@@ -120,7 +122,7 @@ where
             load_review_sources(&self.workspace, &self.workspace.join(&spec_path))?;
         let key = resolve_scratch_key(Phase::Check, &self.label, None);
         let scratchpad_path =
-            loom_core::scratch::ScratchSession::scratchpad_path_for(&self.workspace, &key)
+            loom_driver::scratch::ScratchSession::scratchpad_path_for(&self.workspace, &key)
                 .to_string_lossy()
                 .into_owned();
         let ctx = CheckContext {
@@ -151,7 +153,7 @@ where
         let banner = format!("loom check @ {}", self.label);
         let key = resolve_scratch_key(Phase::Check, &self.label, None);
         let scratch =
-            loom_core::scratch::ScratchSession::open(&self.workspace, &key, &prompt, &banner)
+            loom_driver::scratch::ScratchSession::open(&self.workspace, &key, &prompt, &banner)
                 .map_err(|source| CheckError::Protocol(ProtocolError::Io(source)))?;
         let mut env = Vec::new();
         set_loom_inside(&mut env);
@@ -288,8 +290,8 @@ where
 mod tests {
     use super::*;
     use crate::check::runner::CheckController;
-    use loom_core::identifier::MoleculeId;
-    use loom_core::state::ActiveMolecule;
+    use loom_driver::identifier::MoleculeId;
+    use loom_driver::state::ActiveMolecule;
     use std::ffi::OsStr;
     use std::future::Ready;
 
@@ -632,8 +634,8 @@ mod tests {
     /// can acquire it. Mirror of the run-side test in `run/production.rs`.
     #[tokio::test(flavor = "multi_thread")]
     async fn exec_run_releases_lock_before_spawning_child() {
-        use loom_core::clock::SystemClock;
-        use loom_core::lock::LockManager;
+        use loom_driver::clock::SystemClock;
+        use loom_driver::lock::LockManager;
         use std::os::unix::fs::PermissionsExt;
         use std::time::Duration;
 

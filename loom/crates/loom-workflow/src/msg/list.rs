@@ -1,5 +1,5 @@
-use loom_core::bd::{Bead, Label};
-use loom_core::identifier::SpecLabel;
+use loom_driver::bd::{Bead, Label};
+use loom_driver::identifier::SpecLabel;
 
 use super::options::parse_options;
 
@@ -124,7 +124,7 @@ pub fn spec_label_of(bead: &Bead) -> Option<SpecLabel> {
 #[expect(clippy::expect_used, reason = "tests use panicking helpers")]
 mod tests {
     use super::*;
-    use loom_core::identifier::BeadId;
+    use loom_driver::identifier::BeadId;
 
     fn bead(id: &str, title: &str, desc: &str, labels: &[&str]) -> Bead {
         Bead {

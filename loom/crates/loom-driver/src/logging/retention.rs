@@ -36,7 +36,7 @@ pub fn sweep_retention_at(
     let mut report = RetentionReport::default();
     if retention_days == 0 {
         debug!(
-            target: "loom_core::logging::retention",
+            target: "loom_driver::logging::retention",
             "retention_days = 0 — sweep disabled"
         );
         return report;
@@ -49,7 +49,7 @@ pub fn sweep_retention_at(
         Some(c) => c,
         None => {
             debug!(
-                target: "loom_core::logging::retention",
+                target: "loom_driver::logging::retention",
                 retention_days,
                 "cutoff would precede UNIX epoch — skipping sweep"
             );
@@ -58,7 +58,7 @@ pub fn sweep_retention_at(
     };
     walk_and_sweep(logs_root, cutoff, &mut report);
     debug!(
-        target: "loom_core::logging::retention",
+        target: "loom_driver::logging::retention",
         deleted = report.deleted.len(),
         failed = report.failed.len(),
         skipped_recent = report.skipped_recent,
@@ -72,7 +72,7 @@ fn walk_and_sweep(dir: &Path, cutoff: SystemTime, report: &mut RetentionReport) 
         Ok(it) => it,
         Err(e) => {
             debug!(
-                target: "loom_core::logging::retention",
+                target: "loom_driver::logging::retention",
                 dir = %dir.display(),
                 kind = ?e.kind(),
                 "read_dir failed; skipping subtree"
@@ -112,7 +112,7 @@ fn walk_and_sweep(dir: &Path, cutoff: SystemTime, report: &mut RetentionReport) 
             Ok(()) => report.deleted.push(path),
             Err(e) => {
                 debug!(
-                    target: "loom_core::logging::retention",
+                    target: "loom_driver::logging::retention",
                     path = %path.display(),
                     kind = ?e.kind(),
                     "delete failed — best-effort sweep continues"

@@ -4,9 +4,9 @@ use std::path::PathBuf;
 use displaydoc::Display;
 use thiserror::Error;
 
-use loom_core::lock::LockError;
-use loom_core::profile_manifest::ProfileError;
-use loom_core::state::StateError;
+use loom_driver::lock::LockError;
+use loom_driver::profile_manifest::ProfileError;
+use loom_driver::state::StateError;
 
 /// Failures raised by [`super::run`] and the helpers it composes.
 #[derive(Debug, Display, Error)]
@@ -50,7 +50,7 @@ pub enum PlanError {
     Profile(#[from] ProfileError),
 
     /// agent-selection failed for `[phase.plan]`
-    AgentSelection(#[from] loom_core::config::AgentSelectionError),
+    AgentSelection(#[from] loom_driver::config::AgentSelectionError),
 
     /// failed to spawn `wrapix run`
     Spawn {

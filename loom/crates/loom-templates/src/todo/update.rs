@@ -1,5 +1,5 @@
 use askama::Template;
-use loom_core::identifier::{MoleculeId, SpecLabel};
+use loom_driver::identifier::{MoleculeId, SpecLabel};
 
 /// Context for `loom todo` adding tasks to an existing molecule (anchor + siblings).
 #[derive(Template)]

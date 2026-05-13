@@ -10,7 +10,7 @@ LOOM_DIR="$REPO_ROOT/loom"
 WORKSPACE_TOML="$LOOM_DIR/Cargo.toml"
 
 # Member crates expected at loom/crates/<name>/.
-LOOM_CRATES=(loom loom-core loom-agent loom-workflow loom-templates)
+LOOM_CRATES=(loom loom-driver loom-agent loom-workflow loom-templates)
 
 # Workspace-pinned third-party deps (14, per spec).
 LOOM_DEPS=(
@@ -512,13 +512,13 @@ EOF
 # startup and parses it into `BTreeMap<ProfileName, ImageEntry>`; missing
 # env var or missing file errors before any bead spawn (no implicit search
 # path or fallback default). The two paths (env unset, file missing) are
-# unit-tested under `loom-core::profile_manifest::manifest::tests`.
+# unit-tested under `loom-driver::profile_manifest::manifest::tests`.
 #-----------------------------------------------------------------------------
 test_profiles_manifest_required() {
-    cargo_run test -p loom-core --lib \
+    cargo_run test -p loom-driver --lib \
         profile_manifest::manifest::tests::from_path_missing_file_returns_manifest_not_found \
         -- --exact --nocapture --quiet
-    cargo_run test -p loom-core --lib \
+    cargo_run test -p loom-driver --lib \
         profile_manifest::manifest::tests::from_path_parses_well_formed_manifest \
         -- --exact --nocapture --quiet
 }
@@ -527,10 +527,10 @@ test_profiles_manifest_required() {
 # test_unknown_profile_errors — a bead with `profile:X` where `X` is not
 # in the manifest fails with a typed `ProfileError::UnknownProfile` naming
 # the missing profile. Verified by the lookup unit test under
-# `loom-core::profile_manifest::manifest::tests`.
+# `loom-driver::profile_manifest::manifest::tests`.
 #-----------------------------------------------------------------------------
 test_unknown_profile_errors() {
-    cargo_run test -p loom-core --lib \
+    cargo_run test -p loom-driver --lib \
         profile_manifest::manifest::tests::lookup_unknown_profile_carries_manifest_path \
         -- --exact --nocapture --quiet
 }
@@ -1019,11 +1019,11 @@ test_todo_tier_detection() {
 
 #-----------------------------------------------------------------------------
 # State database — each function dispatches into the matching cargo
-# integration test under `loom-core/tests/state_db.rs`. Sharing the cargo
+# integration test under `loom-driver/tests/state_db.rs`. Sharing the cargo
 # binary keeps verify and `cargo test` exercising the same code paths.
 #-----------------------------------------------------------------------------
 state_db_cargo_test() {
-    cargo_run test -p loom-core --test state_db "$1" -- --exact --nocapture --quiet
+    cargo_run test -p loom-driver --test state_db "$1" -- --exact --nocapture --quiet
 }
 
 #-----------------------------------------------------------------------------
@@ -1094,12 +1094,12 @@ test_state_todo_cursor() {
 
 #-----------------------------------------------------------------------------
 # Beads CLI wrapper — each function dispatches into a unit test under
-# loom-core/src/bd/client.rs::tests, so verify and `cargo test` exercise the
+# loom-driver/src/bd/client.rs::tests, so verify and `cargo test` exercise the
 # same code paths. Tests substitute a `CapturingRunner` to keep the verify
 # path independent of a real `bd` binary.
 #-----------------------------------------------------------------------------
 bd_client_cargo_test() {
-    cargo_run test -p loom-core --lib "$1" -- --exact --nocapture --quiet
+    cargo_run test -p loom-driver --lib "$1" -- --exact --nocapture --quiet
 }
 
 #-----------------------------------------------------------------------------
@@ -1142,11 +1142,11 @@ test_bd_error_handling() {
 
 #-----------------------------------------------------------------------------
 # Run-time logging — each function dispatches into a cargo integration test
-# under `loom-core/tests/logging.rs`. Sharing the cargo binary keeps verify
+# under `loom-driver/tests/logging.rs`. Sharing the cargo binary keeps verify
 # and `cargo test` exercising the same code paths.
 #-----------------------------------------------------------------------------
 logging_cargo_test() {
-    cargo_run test -p loom-core --test logging "$1" -- --exact --nocapture --quiet
+    cargo_run test -p loom-driver --test logging "$1" -- --exact --nocapture --quiet
 }
 
 #-----------------------------------------------------------------------------
@@ -1218,13 +1218,13 @@ test_log_retention_failure_tolerance() {
 
 #-----------------------------------------------------------------------------
 # Concurrency & locking — each function dispatches into a cargo integration
-# test under `loom-core/tests/lock_manager.rs` so verify and `cargo test`
+# test under `loom-driver/tests/lock_manager.rs` so verify and `cargo test`
 # exercise the same paths. The acceptance behaviour (per-spec serialization,
 # 5s timeout, cross-spec independence, read-only commands unblocked,
 # init/workspace exclusion, crash recovery) is asserted in those tests.
 #-----------------------------------------------------------------------------
 lock_cargo_test() {
-    cargo_run test -p loom-core --test lock_manager "$1" -- --exact --nocapture --quiet
+    cargo_run test -p loom-driver --test lock_manager "$1" -- --exact --nocapture --quiet
 }
 
 #-----------------------------------------------------------------------------
@@ -1697,20 +1697,20 @@ test_plan_uses_interactive_wrapix_run() {
 }
 
 #-----------------------------------------------------------------------------
-# Agent backend trait surface — pin the loom-core types and modules that
+# Agent backend trait surface — pin the loom-driver types and modules that
 # loom-agent depends on. Each grep test lives next to the file under test so
 # the failure message points directly at the source.
 #-----------------------------------------------------------------------------
 
 #-----------------------------------------------------------------------------
 # test_agent_trait_exists — `pub trait AgentBackend` declared in
-# loom-core/src/agent/backend.rs with a single `spawn` associated function
+# loom-driver/src/agent/backend.rs with a single `spawn` associated function
 # returning `impl Future<Output = Result<AgentSession<Idle>, ProtocolError>>
 # + Send`. There must be no `SUPPORTS_STEERING` constant: both backends
 # support steering (pi via `steer`, claude via stream-json user messages).
 #-----------------------------------------------------------------------------
 test_agent_trait_exists() {
-    local f="$LOOM_DIR/crates/loom-core/src/agent/backend.rs"
+    local f="$LOOM_DIR/crates/loom-driver/src/agent/backend.rs"
     if [ ! -f "$f" ]; then
         echo "missing: $f" >&2
         return 1
@@ -1751,11 +1751,11 @@ test_agent_trait_static_dispatch() {
 }
 
 #-----------------------------------------------------------------------------
-# test_agent_event_variants — loom-core/src/agent/event.rs declares every
+# test_agent_event_variants — loom-driver/src/agent/event.rs declares every
 # spec-listed `AgentEvent` variant.
 #-----------------------------------------------------------------------------
 test_agent_event_variants() {
-    local f="$LOOM_DIR/crates/loom-core/src/agent/event.rs"
+    local f="$LOOM_DIR/crates/loom-driver/src/agent/event.rs"
     if [ ! -f "$f" ]; then
         echo "missing: $f" >&2
         return 1
@@ -1776,12 +1776,12 @@ test_agent_event_variants() {
 }
 
 #-----------------------------------------------------------------------------
-# test_spawn_config_fields — loom-core/src/agent/backend.rs declares every
+# test_spawn_config_fields — loom-driver/src/agent/backend.rs declares every
 # spec-listed `SpawnConfig` field. The struct is the stable JSON contract
 # between loom and `wrapix spawn --spawn-config`.
 #-----------------------------------------------------------------------------
 test_spawn_config_fields() {
-    local f="$LOOM_DIR/crates/loom-core/src/agent/backend.rs"
+    local f="$LOOM_DIR/crates/loom-driver/src/agent/backend.rs"
     if [ ! -f "$f" ]; then
         echo "missing: $f" >&2
         return 1
@@ -1801,14 +1801,14 @@ test_spawn_config_fields() {
 }
 
 #-----------------------------------------------------------------------------
-# test_typestate_transitions — loom-core/src/agent/session.rs splits the
+# test_typestate_transitions — loom-driver/src/agent/session.rs splits the
 # session API by typestate: `impl AgentSession<Idle>` exposes `prompt`;
 # `impl AgentSession<Active>` exposes `next_event`, `steer`, and `abort`.
 # Together they enforce the Idle → Active → Idle protocol order at compile
 # time.
 #-----------------------------------------------------------------------------
 test_typestate_transitions() {
-    local f="$LOOM_DIR/crates/loom-core/src/agent/session.rs"
+    local f="$LOOM_DIR/crates/loom-driver/src/agent/session.rs"
     if [ ! -f "$f" ]; then
         echo "missing: $f" >&2
         return 1
@@ -1839,14 +1839,14 @@ test_typestate_transitions() {
 }
 
 #-----------------------------------------------------------------------------
-# test_protocol_error_variants — loom-core/src/agent/error.rs declares every
+# test_protocol_error_variants — loom-driver/src/agent/error.rs declares every
 # spec-listed `ProtocolError` variant. The error covers the layers where
-# loom-core is the only code that knows about the wire (line framing, JSON
+# loom-driver is the only code that knows about the wire (line framing, JSON
 # parse, subprocess IO) plus the small set of semantic outcomes a backend
 # `LineParse` reports back upward.
 #-----------------------------------------------------------------------------
 test_protocol_error_variants() {
-    local f="$LOOM_DIR/crates/loom-core/src/agent/error.rs"
+    local f="$LOOM_DIR/crates/loom-driver/src/agent/error.rs"
     if [ ! -f "$f" ]; then
         echo "missing: $f" >&2
         return 1
@@ -2144,10 +2144,10 @@ test_pi_set_model_from_phase_config() {
 #-----------------------------------------------------------------------------
 # test_per_phase_backend_config — config with [agent] default='claude' and
 # [agent.todo] backend='pi' must resolve agent_for(Todo) to Pi and
-# agent_for(Run) to Claude. Exercised in loom-core's config tests.
+# agent_for(Run) to Claude. Exercised in loom-driver's config tests.
 #-----------------------------------------------------------------------------
 test_per_phase_backend_config() {
-    cargo_run test -p loom-core --quiet -- \
+    cargo_run test -p loom-driver --quiet -- \
         config::tests::agent_for_per_phase_resolves_override_and_default
 }
 
@@ -2169,7 +2169,7 @@ test_backend_selection_flag() {
 # every phase (Plan/Todo/Run/Check/Msg).
 #-----------------------------------------------------------------------------
 test_backend_default_claude() {
-    cargo_run test -p loom-core --quiet -- \
+    cargo_run test -p loom-driver --quiet -- \
         config::tests::agent_for_default_is_claude_when_config_empty
 }
 
@@ -2181,7 +2181,7 @@ test_backend_default_claude() {
 test_backend_invalid_name() {
     cargo_run test -p loom --test agent_flag --quiet -- \
         loom_rejects_unknown_agent_value
-    cargo_run test -p loom-core --quiet -- \
+    cargo_run test -p loom-driver --quiet -- \
         config::tests::agent_for_unknown_backend_in_default_returns_error \
         config::tests::agent_for_unknown_backend_in_phase_override_isolated_to_that_phase
 }
@@ -2454,10 +2454,10 @@ test_cargo_nextest_timing() {
 # `ToolCallId`, `RequestId`) round-trips through serde JSON without a
 # wrapper (`#[serde(transparent)]`) and rejects malformed input. Exercises
 # the inline `#[cfg(test)] mod tests` blocks in
-# `loom-core/src/identifier/*.rs`.
+# `loom-driver/src/identifier/*.rs`.
 #-----------------------------------------------------------------------------
 test_newtype_serde_roundtrip() {
-    cargo_run test -p loom-core --lib --quiet -- \
+    cargo_run test -p loom-driver --lib --quiet -- \
         identifier::bead::tests::serde_round_trips_as_plain_string \
         identifier::bead::tests::deserialize_rejects_malformed_string \
         identifier::bead::tests::display_round_trips_with_as_str \
@@ -2655,10 +2655,10 @@ test_parallel_run_end_to_end() {
 # test_git_client_roundtrip — `GitClient` exercises create-worktree, list,
 # status, merge (clean / non-conflicting / conflict variants), and remove
 # against a temp repo via the typed Rust API. Cargo integration tests live
-# in `loom-core/tests/git_client.rs`.
+# in `loom-driver/tests/git_client.rs`.
 #-----------------------------------------------------------------------------
 test_git_client_roundtrip() {
-    cargo_run test -p loom-core --test git_client --quiet -- \
+    cargo_run test -p loom-driver --test git_client --quiet -- \
         create_and_remove_worktree_round_trip \
         merge_branch_clean_returns_ok \
         merge_branch_conflict_is_reported
@@ -2668,7 +2668,7 @@ test_git_client_roundtrip() {
 # test_state_db_lifecycle — `StateDb::open` on a fresh path creates schema;
 # `rebuild` populates from `specs/*.md` plus mock `bd` output and resets
 # iteration counters; `recreate` recovers from a corrupted file. Aggregates
-# the lifecycle subset of `loom-core/tests/state_db.rs`.
+# the lifecycle subset of `loom-driver/tests/state_db.rs`.
 #-----------------------------------------------------------------------------
 test_state_db_lifecycle() {
     state_db_cargo_test state_db_init_creates_tables
@@ -2682,7 +2682,7 @@ test_state_db_lifecycle() {
 # `<label>.lock` serialize via `flock`; the second waits via `MockClock`
 # advance, then errors naming the held label. A crashed child releases the
 # lock immediately so the parent re-acquires. Aggregates the integration
-# tests under `loom-core/tests/lock_manager.rs`.
+# tests under `loom-driver/tests/lock_manager.rs`.
 #-----------------------------------------------------------------------------
 test_per_spec_locking() {
     lock_cargo_test second_acquire_times_out_with_spec_busy
@@ -2695,7 +2695,7 @@ test_per_spec_locking() {
 # test_logging_tee_equality — renderer and on-disk `.jsonl` log subscribe
 # to the same `AgentEvent` stream; capturing both yields line-for-line
 # equality on the log side. Exercises the integration test under
-# `loom-core/tests/logging.rs::run_single_event_sink_property`.
+# `loom-driver/tests/logging.rs::run_single_event_sink_property`.
 #-----------------------------------------------------------------------------
 test_logging_tee_equality() {
     logging_cargo_test run_single_event_sink_property
@@ -2727,7 +2727,7 @@ test_no_orphan_test_functions() {
 
 #-----------------------------------------------------------------------------
 # Property-based tests — `proptest` invariants under
-# `loom/crates/{loom-core,loom-agent}/tests/properties.rs`. Each shell
+# `loom/crates/{loom-driver,loom-agent}/tests/properties.rs`. Each shell
 # function dispatches into the matching cargo integration test. CI runs
 # at `PROPTEST_CASES=32` (set in tests/loom/default.nix); local exhaustive
 # runs override via env var (`PROPTEST_CASES=2048+`).
@@ -2771,7 +2771,7 @@ test_claude_parser_invariants() {
 # schema, `recreate` always recovers from a corrupted DB file, and
 # round-trips of known molecule shapes are stable.
 test_state_db_rebuild_invariants() {
-    cargo_run test -p loom-core --test properties --quiet -- \
+    cargo_run test -p loom-driver --test properties --quiet -- \
         rebuild_never_corrupts_schema \
         recreate_recovers_from_arbitrary_bytes \
         rebuild_round_trips_known_shapes
@@ -2975,8 +2975,8 @@ test_smoke_timing() {
 # Allowed file paths for `tokio::time::sleep` matches.
 _loom_allowed_clock_files() {
     cat <<'EOF'
-loom/crates/loom-core/src/clock/system.rs
-loom/crates/loom-core/src/clock/mock.rs
+loom/crates/loom-driver/src/clock/system.rs
+loom/crates/loom-driver/src/clock/mock.rs
 EOF
 }
 
@@ -3153,7 +3153,7 @@ test_todo_renders_notes_into_beads() {
         -- --exact --nocapture --quiet
 }
 test_routine_commands_never_delete_spec_row() {
-    cargo_run test -p loom-core --test state_db routine_commands_never_delete_spec_row \
+    cargo_run test -p loom-driver --test state_db routine_commands_never_delete_spec_row \
         -- --exact --nocapture --quiet
 }
 test_todo_cursor_advance_requires_marker() {
@@ -3164,7 +3164,7 @@ test_todo_cursor_advance_requires_marker() {
 
 # Compaction Recovery (scratch dir)
 scratch_cargo_test() {
-    cargo_run test -p loom-core --lib "scratch::tests::$1" -- --exact --nocapture --quiet
+    cargo_run test -p loom-driver --lib "scratch::tests::$1" -- --exact --nocapture --quiet
 }
 test_scratch_dir_created()        { scratch_cargo_test open_creates_layout_and_drop_removes_it; }
 test_scratch_key_naming()         { scratch_cargo_test parallel_keys_get_independent_dirs; }

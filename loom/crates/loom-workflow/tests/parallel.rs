@@ -17,9 +17,9 @@ use std::process::Command;
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
-use loom_core::bd::Bead;
-use loom_core::git::GitClient;
-use loom_core::identifier::{BeadId, SpecLabel};
+use loom_driver::bd::Bead;
+use loom_driver::git::GitClient;
+use loom_driver::identifier::{BeadId, SpecLabel};
 use loom_workflow::run::{
     AgentOutcome, BatchResult, BatchSlot, Parallelism, ParallelismError, create_worktrees,
     merge_back,

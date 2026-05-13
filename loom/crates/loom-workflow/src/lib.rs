@@ -1,14 +1,14 @@
 //! Loom workflow engine.
 //!
 //! Implements the workflow phases (`plan`, `todo`, `run`, `check`, `msg`,
-//! `spec`) on top of `loom-core`'s typed surface and `loom-templates`'
+//! `spec`) on top of `loom-driver`'s typed surface and `loom-templates`'
 //! Askama-rendered prompts. Subsequent issues populate each phase module;
 //! this crate currently exposes the skeleton only.
 //!
-//! The agent surface from `loom-core` (`AgentBackend`, `AgentEvent`,
+//! The agent surface from `loom-driver` (`AgentBackend`, `AgentEvent`,
 //! `AgentSession`, `RePinContent`, `SpawnConfig`) is re-exported through
 //! this module index so workflow phases can import the symbols without
-//! depending on `loom-core` directly each time.
+//! depending on `loom-driver` directly each time.
 
 pub mod agent;
 pub mod check;
@@ -23,7 +23,7 @@ pub mod todo;
 pub mod use_spec;
 
 pub use agent::{run_agent, run_agent_classified};
-pub use loom_core::agent::{
+pub use loom_driver::agent::{
     Active, AgentBackend, AgentEvent, AgentKind, AgentSession, CompactionReason, Idle, JsonlReader,
     LineParse, MAX_LINE_BYTES, ParsedLine, ProtocolError, RePinContent, SessionOutcome,
     SpawnConfig,

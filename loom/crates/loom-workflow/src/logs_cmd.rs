@@ -16,7 +16,7 @@ use std::time::SystemTime;
 use displaydoc::Display;
 use thiserror::Error;
 
-use loom_core::identifier::BeadId;
+use loom_driver::identifier::BeadId;
 
 const LOG_EXTENSION: &str = "jsonl";
 

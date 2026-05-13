@@ -18,12 +18,12 @@
 
 use std::time::Duration;
 
-use loom_core::agent::{
+use loom_driver::agent::{
     Active, AgentBackend, AgentEvent, AgentSession, DEFAULT_STALL_WARN_SECS, Idle, ProtocolError,
     SessionOutcome, SpawnConfig,
 };
-use loom_core::clock::{Clock, SystemClock};
-use loom_core::logging::{BeadOutcome, LogSink};
+use loom_driver::clock::{Clock, SystemClock};
+use loom_driver::logging::{BeadOutcome, LogSink};
 use tracing::{info, warn};
 
 use crate::run::SessionResult;

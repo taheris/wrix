@@ -1,8 +1,8 @@
-//! Integration tests for `loom_core::lock::LockManager`.
+//! Integration tests for `loom_driver::lock::LockManager`.
 //!
 //! Each test name maps onto a shell-level acceptance test in
 //! `tests/loom-test.sh::test_*`. The shell harness invokes these via
-//! `cargo test -p loom-core --test lock_manager <name>`, so the verify path
+//! `cargo test -p loom-driver --test lock_manager <name>`, so the verify path
 //! exercises the same code as `cargo test`.
 //!
 //! `crash_releases_spec_lock` re-execs the test binary as a child to take
@@ -13,7 +13,7 @@
 //! that owns the OFD. The default-timeout test (5 s wall clock) lives at
 //! the integration tier so the *real* `acquire_spec` API is exercised
 //! end-to-end; the deterministic `MockClock`-driven variant lives inline
-//! at `loom-core/src/lock/manager.rs::tests`.
+//! at `loom-driver/src/lock/manager.rs::tests`.
 //!
 //! Tests construct managers via `LockManager::with_state_home(workspace,
 //! state_home)` so the lock directory lives under an isolated tempdir
@@ -30,8 +30,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
-use loom_core::identifier::SpecLabel;
-use loom_core::lock::{LockError, LockManager};
+use loom_driver::identifier::SpecLabel;
+use loom_driver::lock::{LockError, LockManager};
 
 /// Serializes tests that fork while another test is mid drop+reacquire of a
 /// spec lock — the child inherits the fd and `flock(2)` is per-OFD, so the

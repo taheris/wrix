@@ -30,7 +30,7 @@ impl RePinContent {
     /// framing — the caller wraps this in the appropriate command envelope.
     ///
     /// ```
-    /// use loom_core::agent::RePinContent;
+    /// use loom_driver::agent::RePinContent;
     ///
     /// let r = RePinContent {
     ///     orientation: "loom run @ wx-1".to_string(),

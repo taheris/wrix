@@ -1,4 +1,4 @@
-//! Integration tests for `loom_core::git::GitClient`.
+//! Integration tests for `loom_driver::git::GitClient`.
 //!
 //! Each test builds a throwaway repo in a `tempdir` via the system `git`
 //! binary, opens it through the typed client, and asserts the documented
@@ -18,8 +18,8 @@ use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result};
-use loom_core::git::{GitClient, MergeResult};
-use loom_core::identifier::{BeadId, SpecLabel};
+use loom_driver::git::{GitClient, MergeResult};
+use loom_driver::identifier::{BeadId, SpecLabel};
 use tempfile::TempDir;
 
 fn git(repo: &Path, args: &[&str]) -> Result<()> {

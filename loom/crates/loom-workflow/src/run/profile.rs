@@ -1,6 +1,6 @@
-use loom_core::bd::Label;
-use loom_core::identifier::ProfileName;
-use loom_core::profile_manifest::{ImageEntry, ProfileError, ProfileImageManifest};
+use loom_driver::bd::Label;
+use loom_driver::identifier::ProfileName;
+use loom_driver::profile_manifest::{ImageEntry, ProfileError, ProfileImageManifest};
 
 /// Built-in profile name used when neither `[phase.run]` nor
 /// `[phase.default]` declares a profile in `.wrapix/loom/config.toml`.
@@ -13,14 +13,14 @@ pub const DEFAULT_PROFILE: &str = "base";
 /// 1. CLI `--profile` override (`override_`).
 /// 2. The first `profile:X` label on the bead.
 /// 3. `phase_default` — the per-phase fallback resolved by
-///    [`loom_core::config::LoomConfig::agent_for`] for [`Phase::Run`]
+///    [`loom_driver::config::LoomConfig::agent_for`] for [`Phase::Run`]
 ///    (which itself walks `[phase.run]` → `[phase.default]` → built-in
 ///    `base`).
 ///
 /// Pure function — the driver hands in the labels it already pulled from
 /// `bd show`.
 ///
-/// [`Phase::Run`]: loom_core::config::Phase::Run
+/// [`Phase::Run`]: loom_driver::config::Phase::Run
 pub fn resolve_profile(
     bead_labels: &[Label],
     override_: Option<&ProfileName>,

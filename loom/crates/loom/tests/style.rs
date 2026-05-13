@@ -29,7 +29,7 @@ use walkdir::WalkDir;
 // assertions are the contract, not snapshot diffs).
 // ---------------------------------------------------------------------------
 
-const RENDERER_TEST_FILES: &[&str] = &["crates/loom-core/tests/logging.rs"];
+const RENDERER_TEST_FILES: &[&str] = &["crates/loom-driver/tests/logging.rs"];
 
 #[test]
 fn renderer_no_insta_dependency() {
@@ -145,7 +145,7 @@ fn nested_module_structure() {
 }
 
 // ---------------------------------------------------------------------------
-// Rule: `gix::*` and `Command::new("git")` only inside `loom-core/src/git/`.
+// Rule: `gix::*` and `Command::new("git")` only inside `loom-driver/src/git/`.
 // Production code outside that module must reach git through `GitClient`.
 // Tests are exempted: `git_client.rs` and `parallel.rs` seed real repos by
 // invoking the system `git` binary, which is the only way to assert against
@@ -155,7 +155,7 @@ fn nested_module_structure() {
 #[test]
 fn git_client_encapsulation() {
     let root = loom_workspace_root();
-    let allowed_prefix = Path::new("crates/loom-core/src/git/");
+    let allowed_prefix = Path::new("crates/loom-driver/src/git/");
     let mut violations: Vec<String> = Vec::new();
     for path in src_files(&root) {
         let rel_path = rel(&root, &path);
@@ -170,14 +170,14 @@ fn git_client_encapsulation() {
             if line.contains("Command::new(\"git\")") {
                 violations.push(format!(
                     "{}:{} `Command::new(\"git\")` — route through \
-                     `loom_core::git::GitClient`",
+                     `loom_driver::git::GitClient`",
                     rel_path,
                     lineno + 1,
                 ));
             }
             if has_gix_import(line) {
                 violations.push(format!(
-                    "{}:{} `gix` import — only `loom-core/src/git/` may \
+                    "{}:{} `gix` import — only `loom-driver/src/git/` may \
                      depend on `gix`",
                     rel_path,
                     lineno + 1,
@@ -212,7 +212,7 @@ fn has_gix_import(line: &str) -> bool {
 #[test]
 fn run_single_event_channel() {
     let root = loom_workspace_root();
-    let sink_path = root.join("crates/loom-core/src/logging/sink.rs");
+    let sink_path = root.join("crates/loom-driver/src/logging/sink.rs");
     let source = read_to_string(&sink_path);
     let rel_path = rel(&root, &sink_path);
     let file =
@@ -303,7 +303,7 @@ fn source_slice<T: syn::spanned::Spanned>(source: &str, node: &T) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Rule: domain identifiers in `loom-core/src/identifier/` are tuple-struct
+// Rule: domain identifiers in `loom-driver/src/identifier/` are tuple-struct
 // newtypes wrapping a single inner field (no record structs, no tuple
 // structs with multiple fields). Error structs (`*Error`) are exempted
 // because the identifier crate also defines `Parse*Error` payload structs.
@@ -312,7 +312,7 @@ fn source_slice<T: syn::spanned::Spanned>(source: &str, node: &T) -> String {
 #[test]
 fn newtypes_for_identifiers() {
     let root = loom_workspace_root();
-    let dir = root.join("crates/loom-core/src/identifier");
+    let dir = root.join("crates/loom-driver/src/identifier");
     let mut violations: Vec<String> = Vec::new();
     for path in rs_files_in(&dir) {
         let file_name = path
@@ -341,7 +341,7 @@ fn newtypes_for_identifiers() {
         }
     }
     assert_violations(
-        "domain identifiers under `loom-core/src/identifier/` are \
+        "domain identifiers under `loom-driver/src/identifier/` are \
          tuple-struct newtypes (specs/loom-tests.md §Style Enforcement)",
         &violations,
     );
@@ -575,8 +575,8 @@ fn no_thread_sleep() {
 #[test]
 fn no_tokio_sleep_outside_clock() {
     let allowed = &[
-        Path::new("crates/loom-core/src/clock/system.rs"),
-        Path::new("crates/loom-core/src/clock/mock.rs"),
+        Path::new("crates/loom-driver/src/clock/system.rs"),
+        Path::new("crates/loom-driver/src/clock/mock.rs"),
     ];
     assert_violations(
         "no `tokio::time::sleep` outside `SystemClock`/`MockClock` impls \
@@ -592,7 +592,7 @@ fn no_tokio_sleep_outside_clock() {
 
 #[test]
 fn no_tokio_timeout_outside_clock() {
-    let allowed = &[Path::new("crates/loom-core/src/clock/system.rs")];
+    let allowed = &[Path::new("crates/loom-driver/src/clock/system.rs")];
     assert_violations(
         "no `tokio::time::timeout` outside `SystemClock` impl (use \
          `Clock::timeout` injected via `<C: Clock>`)",
@@ -610,8 +610,8 @@ fn no_tokio_timeout_outside_clock() {
 fn no_real_clock_outside_system_clock() {
     let root = loom_workspace_root();
     let allowed: &[&Path] = &[
-        Path::new("crates/loom-core/src/clock/system.rs"),
-        Path::new("crates/loom-core/src/clock/mock.rs"),
+        Path::new("crates/loom-driver/src/clock/system.rs"),
+        Path::new("crates/loom-driver/src/clock/mock.rs"),
     ];
     let mut violations: Vec<String> = Vec::new();
     for path in src_files(&root) {
@@ -652,7 +652,7 @@ fn no_real_clock_outside_system_clock() {
 // ---------------------------------------------------------------------------
 
 const IGNORE_ALLOWLIST: &[(&str, &str)] = &[(
-    "crates/loom-core/tests/lock_manager.rs",
+    "crates/loom-driver/tests/lock_manager.rs",
     "crash_helper_take_lock_then_exit",
 )];
 

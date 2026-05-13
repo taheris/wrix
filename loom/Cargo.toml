@@ -2,7 +2,7 @@
 resolver = "3"
 members = [
     "crates/loom",
-    "crates/loom-core",
+    "crates/loom-driver",
     "crates/loom-agent",
     "crates/loom-workflow",
     "crates/loom-templates",
@@ -49,7 +49,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 walkdir = "2"
 
 # Internal crates
-loom-core = { path = "crates/loom-core" }
+loom-driver = { path = "crates/loom-driver" }
 loom-agent = { path = "crates/loom-agent" }
 loom-workflow = { path = "crates/loom-workflow" }
 loom-templates = { path = "crates/loom-templates" }

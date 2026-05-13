@@ -44,7 +44,7 @@ impl LogSink {
         let log_path = bead_log_path(logs_root, spec_label, bead_id, when);
         let sink = Self::open_at_path(log_path.clone(), renderer)?;
         info!(
-            target: "loom_core::logging::sink",
+            target: "loom_driver::logging::sink",
             spec_label = spec_label.as_str(),
             bead_id = bead_id.as_str(),
             log_path = %log_path.display(),
@@ -71,7 +71,7 @@ impl LogSink {
         let log_path = phase_log_path(logs_root, spec_label, phase, when);
         let sink = Self::open_at_path(log_path.clone(), renderer)?;
         info!(
-            target: "loom_core::logging::sink",
+            target: "loom_driver::logging::sink",
             spec_label = spec_label.as_str(),
             phase = phase,
             log_path = %log_path.display(),

@@ -1,5 +1,5 @@
 use askama::Template;
-use loom_core::identifier::SpecLabel;
+use loom_driver::identifier::SpecLabel;
 
 /// Context for `loom todo` decomposing a fresh spec into a new molecule.
 #[derive(Template)]

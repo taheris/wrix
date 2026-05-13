@@ -5,7 +5,7 @@
 //! (`prompt`/`steer`/`abort`), and the `extension_ui_request` auto-cancel
 //! reply that protects loom from a stalled extension.
 
-use loom_core::agent::{AgentEvent, CompactionReason, LineParse, ParsedLine, ProtocolError};
+use loom_driver::agent::{AgentEvent, CompactionReason, LineParse, ParsedLine, ProtocolError};
 use serde::Serialize;
 use tracing::{debug, trace, warn};
 
@@ -17,7 +17,7 @@ use super::messages::{
 /// Pi-mono RPC line parser.
 ///
 /// Stateless dispatch layer between
-/// [`AgentSession`](loom_core::agent::AgentSession) and
+/// [`AgentSession`](loom_driver::agent::AgentSession) and
 /// [`messages`](super::messages). The parser owns JSONL framing on
 /// stdout (line in → [`ParsedLine`]) and command encoding for stdin
 /// (`encode_prompt`/`encode_steer`/`encode_abort`).
@@ -240,7 +240,7 @@ impl LineParse for PiParser {
 )]
 mod tests {
     use super::*;
-    use loom_core::agent::{AgentEvent, CompactionReason, ProtocolError};
+    use loom_driver::agent::{AgentEvent, CompactionReason, ProtocolError};
 
     fn parse(line: &str) -> ParsedLine {
         PiParser::new()

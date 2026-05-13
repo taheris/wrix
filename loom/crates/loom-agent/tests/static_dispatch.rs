@@ -30,10 +30,10 @@ use std::time::Duration;
 
 use loom_agent::pi::backend::spawn_with_handshake;
 use loom_agent::{ClaudeBackend, PiBackend};
-use loom_core::agent::{
+use loom_driver::agent::{
     AgentBackend, AgentEvent, ProtocolError, RePinContent, SessionOutcome, SpawnConfig,
 };
-use loom_core::clock::SystemClock;
+use loom_driver::clock::SystemClock;
 use tokio::process::Command;
 
 async fn run_agent<B: AgentBackend>(config: &SpawnConfig) -> Result<SessionOutcome, ProtocolError> {

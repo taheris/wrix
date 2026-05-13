@@ -6,13 +6,13 @@
 //!
 //! 1. resolves the per-bead profile from the bead's `profile:X` label (or a
 //!    `--profile` override) and builds a typed [`SpawnConfig`](
-//!    loom_core::agent::SpawnConfig);
+//!    loom_driver::agent::SpawnConfig);
 //! 2. renders the [`RunContext`](loom_templates::run::RunContext) prompt with
 //!    the bead's id/title/description, threading the previous-failure body
 //!    (truncated to 4000 chars) on retries;
 //! 3. spawns `wrapix spawn --spawn-config <file> --stdio` via an
-//!    [`AgentBackend`](loom_core::agent::AgentBackend) and tees the
-//!    [`AgentEvent`](loom_core::agent::AgentEvent) stream into the terminal
+//!    [`AgentBackend`](loom_driver::agent::AgentBackend) and tees the
+//!    [`AgentEvent`](loom_driver::agent::AgentEvent) stream into the terminal
 //!    renderer + per-bead JSONL log;
 //! 4. on agent failure retries with `previous_failure` injected up to
 //!    `max_retries` (default 2), then applies the `loom:clarify` label;

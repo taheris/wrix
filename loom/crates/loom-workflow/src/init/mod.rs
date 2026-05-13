@@ -16,10 +16,10 @@ mod error;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use loom_core::bd::{BdClient, CommandRunner, ListOpts};
-use loom_core::identifier::MoleculeId;
-use loom_core::lock::LockManager;
-use loom_core::state::{ActiveMolecule, RebuildReport, StateDb};
+use loom_driver::bd::{BdClient, CommandRunner, ListOpts};
+use loom_driver::identifier::MoleculeId;
+use loom_driver::lock::LockManager;
+use loom_driver::state::{ActiveMolecule, RebuildReport, StateDb};
 
 pub use error::InitError;
 
@@ -132,9 +132,9 @@ pub async fn fetch_active_molecules<R: CommandRunner>(
 mod tests {
     use super::*;
     use anyhow::Result;
-    use loom_core::config::{LoomConfig, Phase};
-    use loom_core::identifier::SpecLabel;
-    use loom_core::lock::LockError;
+    use loom_driver::config::{LoomConfig, Phase};
+    use loom_driver::identifier::SpecLabel;
+    use loom_driver::lock::LockError;
 
     fn temp_workspace() -> Result<tempfile::TempDir> {
         let dir = tempfile::tempdir()?;

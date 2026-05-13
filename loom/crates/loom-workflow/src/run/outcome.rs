@@ -1,4 +1,4 @@
-use loom_core::agent::SessionOutcome;
+use loom_driver::agent::SessionOutcome;
 
 /// Result of one agent invocation against a bead. The driver translates
 /// session-level signals (JSONL `result/success`, non-zero process exit,

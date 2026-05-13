@@ -13,8 +13,8 @@ use crate::clock::MockClock;
 /// Convenience scaffolding for tests that just need a one-line setup:
 ///
 /// ```
-/// use loom_core::clock::Clock;
-/// use loom_core::testing::with_mock_clock;
+/// use loom_driver::clock::Clock;
+/// use loom_driver::testing::with_mock_clock;
 /// use std::time::Duration;
 ///
 /// #[tokio::test(start_paused = true)]

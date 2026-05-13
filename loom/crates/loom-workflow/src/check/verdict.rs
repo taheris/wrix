@@ -1,4 +1,4 @@
-use loom_core::identifier::BeadId;
+use loom_driver::identifier::BeadId;
 
 /// Snapshot of bead state taken on either side of the reviewer agent. The
 /// driver pre-counts beads with `spec:<label>`, runs the reviewer, then

@@ -13,7 +13,7 @@ use super::error::StateError;
 ///
 /// `rebuild` consumes pre-fetched values rather than calling `bd` itself —
 /// the caller (e.g. `loom init --rebuild` wiring `BdClient`) is responsible
-/// for issuing the CLI calls. Keeps `loom-core` free of subprocess
+/// for issuing the CLI calls. Keeps `loom-driver` free of subprocess
 /// orchestration and makes rebuild testable without a real `bd` binary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActiveMolecule {

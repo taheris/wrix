@@ -57,8 +57,8 @@ fn readonly_subcommands_run_under_loom_inside_set() {
     std::fs::create_dir_all(workspace.join(".wrapix/loom")).unwrap();
     std::fs::create_dir_all(workspace.join("specs")).unwrap();
     std::fs::write(workspace.join("specs/dummy.md"), "# dummy\n").unwrap();
-    let db = loom_core::state::StateDb::open(workspace.join(".wrapix/loom/state.db")).unwrap();
-    db.set_current_spec(&loom_core::identifier::SpecLabel::new("dummy"))
+    let db = loom_driver::state::StateDb::open(workspace.join(".wrapix/loom/state.db")).unwrap();
+    db.set_current_spec(&loom_driver::identifier::SpecLabel::new("dummy"))
         .unwrap();
     drop(db);
 

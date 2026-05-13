@@ -1,8 +1,8 @@
-//! Integration tests for `loom_core::state::StateDb`.
+//! Integration tests for `loom_driver::state::StateDb`.
 //!
 //! Each test name maps 1:1 onto a shell-level acceptance test in
 //! `tests/loom-test.sh::test_state_*`. The shell harness invokes these via
-//! `cargo test -p loom-core --test state_db <name>` so the verify path runs
+//! `cargo test -p loom-driver --test state_db <name>` so the verify path runs
 //! the real implementation, not a stub.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -10,8 +10,8 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow};
-use loom_core::identifier::{MoleculeId, SpecLabel};
-use loom_core::state::{ActiveMolecule, StateDb};
+use loom_driver::identifier::{MoleculeId, SpecLabel};
+use loom_driver::state::{ActiveMolecule, StateDb};
 
 fn write_spec(workspace: &Path, label: &str, body: &str) -> Result<()> {
     let specs = workspace.join("specs");

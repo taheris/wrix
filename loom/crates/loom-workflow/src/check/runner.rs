@@ -1,5 +1,5 @@
-use loom_core::bd::{Bead, Label};
-use loom_core::identifier::BeadId;
+use loom_driver::bd::{Bead, Label};
+use loom_driver::identifier::BeadId;
 
 use super::error::CheckError;
 use super::iteration::IterationCap;
@@ -19,7 +19,7 @@ use super::verdict::{CheckVerdict, diff_new_bead_ids};
 ///   `AgentBackend`, tee the event stream into the log sink, parse the
 ///   exit signal
 /// - `iteration_count` / `set_iteration_count` / `reset_iteration_count` →
-///   the `iteration_count` column in `loom-core`'s state DB
+///   the `iteration_count` column in `loom-driver`'s state DB
 /// - `apply_clarify` → `BdClient::update --add-label loom:clarify`
 /// - `git_push` / `beads_push` → `tokio::process::Command` shell-outs
 /// - `exec_run` → `tokio::process::Command::new("loom").arg("run")…`
@@ -236,7 +236,7 @@ async fn apply_verdict<C: CheckController>(
 )]
 mod tests {
     use super::*;
-    use loom_core::bd::Bead;
+    use loom_driver::bd::Bead;
 
     #[derive(Default)]
     struct FakeController {

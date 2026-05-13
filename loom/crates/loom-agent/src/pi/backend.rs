@@ -25,11 +25,11 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use loom_core::agent::{
+use loom_driver::agent::{
     Active, AgentBackend, AgentSession, DEFAULT_HANDSHAKE_TIMEOUT_SECS, Idle, JsonlReader,
     ModelSelection, ProtocolError, SpawnConfig,
 };
-use loom_core::clock::{Clock, SystemClock};
+use loom_driver::clock::{Clock, SystemClock};
 use serde::Serialize;
 use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::process::{ChildStdin, Command};
@@ -115,10 +115,10 @@ impl AgentBackend for PiBackend {
 /// Read `prompt.txt` and `scratch.md` from the per-session scratch dir and
 /// concatenate them into the `steer` payload. Same source files Claude
 /// reads through `repin.sh` (see [`ScratchSession`]'s `repin.sh` in
-/// `loom-core/src/scratch.rs`); pi's transport is `steer` rather than a
+/// `loom-driver/src/scratch.rs`); pi's transport is `steer` rather than a
 /// JSON envelope, but the text content matches.
 ///
-/// [`ScratchSession`]: loom_core::scratch::ScratchSession
+/// [`ScratchSession`]: loom_driver::scratch::ScratchSession
 fn build_repin_payload(scratch_dir: &Path) -> Result<String, ProtocolError> {
     let prompt = std::fs::read_to_string(scratch_dir.join("prompt.txt"))?;
     let scratch = std::fs::read_to_string(scratch_dir.join("scratch.md"))?;
@@ -405,7 +405,7 @@ fn write_spawn_config_to(path: &Path, config: &SpawnConfig) -> Result<(), Protoc
 )]
 mod tests {
     use super::*;
-    use loom_core::agent::{AgentEvent, RePinContent};
+    use loom_driver::agent::{AgentEvent, RePinContent};
     use std::path::PathBuf;
 
     fn mock_pi_path() -> PathBuf {

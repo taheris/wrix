@@ -1,5 +1,5 @@
 use askama::Template;
-use loom_core::identifier::{BeadId, MoleculeId, SpecLabel};
+use loom_driver::identifier::{BeadId, MoleculeId, SpecLabel};
 use loom_templates::run::{PreviousFailure, RunContext};
 
 /// Inputs for [`build_run_context`]. Constructed once per bead spawn — for

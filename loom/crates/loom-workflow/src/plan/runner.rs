@@ -4,12 +4,12 @@ use std::time::Duration;
 
 use tracing::info;
 
-use loom_core::config::{LoomConfig, Phase};
-use loom_core::identifier::{ProfileName, SpecLabel};
-use loom_core::lock::LockManager;
-use loom_core::profile_manifest::{ImageEntry, ProfileImageManifest};
-use loom_core::scratch::{ScratchSession, resolve_scratch_key};
-use loom_core::state::{StateDb, parse_implementation_notes};
+use loom_driver::config::{LoomConfig, Phase};
+use loom_driver::identifier::{ProfileName, SpecLabel};
+use loom_driver::lock::LockManager;
+use loom_driver::profile_manifest::{ImageEntry, ProfileImageManifest};
+use loom_driver::scratch::{ScratchSession, resolve_scratch_key};
+use loom_driver::state::{StateDb, parse_implementation_notes};
 
 use super::args::PlanMode;
 use super::command::{WRAPIX_BIN, build_wrapix_argv};
@@ -122,7 +122,7 @@ pub fn run_with_timeout(
     } else {
         match db.spec(&label) {
             Ok(row) => row.implementation_notes.unwrap_or_default(),
-            Err(loom_core::state::StateError::SpecNotFound { .. }) => Vec::new(),
+            Err(loom_driver::state::StateError::SpecNotFound { .. }) => Vec::new(),
             Err(e) => return Err(PlanError::State(e)),
         }
     };
@@ -202,7 +202,7 @@ fn reconcile_implementation_notes(
     label: &SpecLabel,
     spec_path: &Path,
 ) -> Result<Option<Vec<String>>, PlanError> {
-    use loom_core::markdown::{HeadingLevel, section_events};
+    use loom_driver::markdown::{HeadingLevel, section_events};
 
     let body = std::fs::read_to_string(spec_path).map_err(|source| PlanError::ReadSpec {
         path: spec_path.to_path_buf(),
@@ -258,8 +258,8 @@ fn render_exit_signals() -> String {
 mod tests {
     use super::*;
     use anyhow::Result;
-    use loom_core::lock::LockError;
-    use loom_core::profile_manifest::ProfileError;
+    use loom_driver::lock::LockError;
+    use loom_driver::profile_manifest::ProfileError;
     use std::os::unix::fs::PermissionsExt;
 
     /// Three-profile manifest stub matching the `mkProfileImages` flake

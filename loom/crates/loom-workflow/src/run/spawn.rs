@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
-use loom_core::agent::{RePinContent, SpawnConfig, set_loom_inside};
-use loom_core::bd::Bead;
-use loom_core::identifier::ProfileName;
-use loom_core::profile_manifest::{ProfileError, ProfileImageManifest};
+use loom_driver::agent::{RePinContent, SpawnConfig, set_loom_inside};
+use loom_driver::bd::Bead;
+use loom_driver::identifier::ProfileName;
+use loom_driver::profile_manifest::{ProfileError, ProfileImageManifest};
 
 use super::profile::resolve_profile_image;
 
@@ -86,8 +86,8 @@ pub fn build_spawn_config_from_manifest(
 )]
 mod tests {
     use super::*;
-    use loom_core::bd::Label;
-    use loom_core::identifier::BeadId;
+    use loom_driver::bd::Label;
+    use loom_driver::identifier::BeadId;
 
     fn bead_with_labels(id: &str, labels: &[&str]) -> Bead {
         Bead {

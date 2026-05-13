@@ -1,4 +1,4 @@
-use loom_core::identifier::BeadId;
+use loom_driver::identifier::BeadId;
 
 use super::error::MsgError;
 use super::list::MsgKind;

@@ -9,7 +9,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use loom_core::markdown::{Event, HeadingLevel, Tag, TagEnd, section_events};
+use loom_driver::markdown::{Event, HeadingLevel, Tag, TagEnd, section_events};
 
 use super::error::SpecError;
 

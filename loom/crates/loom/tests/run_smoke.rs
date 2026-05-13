@@ -54,8 +54,8 @@ fn loom_run_once_against_empty_bd_exits_zero() {
 
     // Seed state DB + active spec so resolve_spec_label returns Some(label)
     // without the caller having to pass -s.
-    let db = loom_core::state::StateDb::open(workspace.join(".wrapix/loom/state.db")).unwrap();
-    db.set_current_spec(&loom_core::identifier::SpecLabel::new("loom-harness"))
+    let db = loom_driver::state::StateDb::open(workspace.join(".wrapix/loom/state.db")).unwrap();
+    db.set_current_spec(&loom_driver::identifier::SpecLabel::new("loom-harness"))
         .unwrap();
     drop(db);
 

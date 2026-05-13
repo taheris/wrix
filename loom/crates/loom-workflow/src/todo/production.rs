@@ -13,13 +13,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use askama::Template;
-use loom_core::agent::{RePinContent, SessionOutcome, SpawnConfig, set_loom_inside};
-use loom_core::config::Phase;
-use loom_core::git::GitClient;
-use loom_core::identifier::{ProfileName, SpecLabel};
-use loom_core::profile_manifest::ProfileImageManifest;
-use loom_core::scratch::resolve_scratch_key;
-use loom_core::state::StateDb;
+use loom_driver::agent::{RePinContent, SessionOutcome, SpawnConfig, set_loom_inside};
+use loom_driver::config::Phase;
+use loom_driver::git::GitClient;
+use loom_driver::identifier::{ProfileName, SpecLabel};
+use loom_driver::profile_manifest::ProfileImageManifest;
+use loom_driver::scratch::resolve_scratch_key;
+use loom_driver::state::StateDb;
 use tracing::{debug, info, warn};
 
 use super::ExitSignal;
@@ -68,7 +68,7 @@ impl ProductionTodoController {
         // simply no notes to render.
         let implementation_notes = match self.state.spec(&self.label) {
             Ok(row) => row.implementation_notes.unwrap_or_default(),
-            Err(loom_core::state::StateError::SpecNotFound { .. }) => Vec::new(),
+            Err(loom_driver::state::StateError::SpecNotFound { .. }) => Vec::new(),
             Err(e) => return Err(TodoError::State(e)),
         };
 
@@ -106,7 +106,7 @@ impl ProductionTodoController {
 
         let key = resolve_scratch_key(Phase::Todo, &self.label, None);
         let scratchpad_path =
-            loom_core::scratch::ScratchSession::scratchpad_path_for(&self.workspace, &key)
+            loom_driver::scratch::ScratchSession::scratchpad_path_for(&self.workspace, &key)
                 .to_string_lossy()
                 .into_owned();
         let base = TemplateBaseFields {
@@ -134,9 +134,9 @@ impl TodoController for ProductionTodoController {
         let banner = format!("loom todo @ {}", self.label);
         let key = resolve_scratch_key(Phase::Todo, &self.label, None);
         let scratch =
-            loom_core::scratch::ScratchSession::open(&self.workspace, &key, &prompt, &banner)
+            loom_driver::scratch::ScratchSession::open(&self.workspace, &key, &prompt, &banner)
                 .map_err(|source| {
-                    TodoError::Protocol(loom_core::agent::ProtocolError::Io(source))
+                    TodoError::Protocol(loom_driver::agent::ProtocolError::Io(source))
                 })?;
         info!(
             label = %self.label,
@@ -215,7 +215,7 @@ impl TodoController for ProductionTodoController {
                     "loom todo: implementation_notes cleared after consume",
                 );
             }
-            Err(loom_core::state::StateError::SpecNotFound { .. }) => {}
+            Err(loom_driver::state::StateError::SpecNotFound { .. }) => {}
             Err(e) => return Err(TodoError::State(e)),
         }
         Ok(())

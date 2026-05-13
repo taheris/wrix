@@ -1648,7 +1648,7 @@ dependencies = [
  "clap",
  "insta",
  "loom-agent",
- "loom-core",
+ "loom-driver",
  "loom-workflow",
  "nix",
  "proc-macro2",
@@ -1666,7 +1666,7 @@ name = "loom-agent"
 version = "0.1.0"
 dependencies = [
  "displaydoc",
- "loom-core",
+ "loom-driver",
  "nix",
  "proptest",
  "serde",
@@ -1678,7 +1678,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "loom-core"
+name = "loom-driver"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1707,7 +1707,7 @@ dependencies = [
  "askama",
  "displaydoc",
  "insta",
- "loom-core",
+ "loom-driver",
  "serde",
  "thiserror",
 ]
@@ -1719,7 +1719,7 @@ dependencies = [
  "anyhow",
  "askama",
  "displaydoc",
- "loom-core",
+ "loom-driver",
  "loom-templates",
  "pulldown-cmark",
  "serde",

@@ -1,7 +1,7 @@
 //! `loom run` template: the per-bead implementation prompt with retry context.
 
 use askama::Template;
-use loom_core::identifier::{BeadId, MoleculeId, SpecLabel};
+use loom_driver::identifier::{BeadId, MoleculeId, SpecLabel};
 
 /// Maximum length of the agent-supplied previous-failure body before truncation.
 ///

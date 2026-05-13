@@ -2,14 +2,14 @@
 //!
 //! Implements the review-gate semantics defined in
 //! `specs/ralph-review.md` ("Push gate" / "Auto-iteration loop") on top of
-//! `loom-core`'s typed surface and `loom-templates`' `check.md` template.
+//! `loom-driver`'s typed surface and `loom-templates`' `check.md` template.
 //! The gate:
 //!
 //! 1. snapshots beads carrying `spec:<label>` (`pre`);
 //! 2. renders [`CheckContext`](loom_templates::check::CheckContext), spawns
 //!    `wrapix spawn --spawn-config <file> --stdio`, drives an
-//!    [`AgentBackend`](loom_core::agent::AgentBackend) and tees the
-//!    [`AgentEvent`](loom_core::agent::AgentEvent) stream into the
+//!    [`AgentBackend`](loom_driver::agent::AgentBackend) and tees the
+//!    [`AgentEvent`](loom_driver::agent::AgentEvent) stream into the
 //!    terminal renderer + per-bead JSONL log;
 //! 3. snapshots beads again, computes new bead IDs and clarify membership;
 //! 4. branches: clean → `git push` + `beads-push`; clarify → stop;

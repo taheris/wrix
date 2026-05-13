@@ -1,4 +1,4 @@
-use loom_core::identifier::SpecLabel;
+use loom_driver::identifier::SpecLabel;
 
 use super::error::PlanError;
 

@@ -14,7 +14,7 @@
 use loom_agent::claude::messages::ClaudeMessage;
 use loom_agent::claude::parser::ClaudeParser;
 use loom_agent::pi::parser::PiParser;
-use loom_core::agent::{LineParse, MAX_LINE_BYTES, ProtocolError};
+use loom_driver::agent::{LineParse, MAX_LINE_BYTES, ProtocolError};
 use proptest::prelude::*;
 
 fn pi_parser() -> PiParser {

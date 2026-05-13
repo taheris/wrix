@@ -1,4 +1,4 @@
-use loom_core::identifier::{MoleculeId, SpecLabel};
+use loom_driver::identifier::{MoleculeId, SpecLabel};
 use loom_templates::todo::{TodoNewContext, TodoUpdateContext};
 
 use super::tier::{DiffCandidate, TierDecision};

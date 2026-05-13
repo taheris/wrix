@@ -1,11 +1,11 @@
 use displaydoc::Display;
 use thiserror::Error;
 
-use loom_core::agent::ProtocolError;
-use loom_core::bd::BdError;
-use loom_core::logging::LogError;
-use loom_core::profile_manifest::ProfileError;
-use loom_core::state::StateError;
+use loom_driver::agent::ProtocolError;
+use loom_driver::bd::BdError;
+use loom_driver::logging::LogError;
+use loom_driver::profile_manifest::ProfileError;
+use loom_driver::state::StateError;
 
 use crate::spec::SpecError;
 

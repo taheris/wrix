@@ -62,7 +62,7 @@ drift.
    `tests/*.rs`. The lists below are the contract surfaces, not an
    exhaustive enumeration; specific edge cases live in the test code.
 
-   #### loom-core
+   #### loom-driver
    - Newtype construction and serde round-trips (`BeadId`, `SpecLabel`,
      `MoleculeId`, `ProfileName`)
    - `StateDb` schema creation on first open
@@ -176,7 +176,7 @@ drift.
    - On merge conflict, the worktree path is preserved and the bead is
      marked failed (does not silently overwrite or auto-resolve)
 
-   #### Concurrency & locking (loom-core)
+   #### Concurrency & locking (loom-driver)
    - `flock` wrapper acquires/releases an exclusive lock on a file path;
      blocking variant returns when the lock is free, try-variant returns a
      typed error if held
@@ -248,7 +248,7 @@ drift.
    - Best-effort: a single un-deletable file (read-only, locked) does not
      abort the sweep — remaining deletable files are still removed
 
-   #### GitClient (loom-core)
+   #### GitClient (loom-driver)
    - `GitClient::create_worktree(label, bead_id)` creates a worktree under
      `.wrapix/worktree/<label>/<bead-id>/` on a fresh branch
      `loom/<label>/<bead-id>` from HEAD
@@ -423,7 +423,7 @@ Each crate uses two complementary Rust test homes:
 ```
 loom/
   crates/
-    loom-core/
+    loom-driver/
       src/
         state/
           db.rs               # StateDb impl + inline #[cfg(test)] mod tests
@@ -581,7 +581,7 @@ watchdog grace, JSONL read-line timeout, log retention sweep, bd /
 git subprocess timeouts — make tests flaky when they touch real wall
 time on a loaded CI runner. The design eliminates real-time waits.
 
-**`Clock` trait in `loom-core`** with `now()`, `sleep(Duration)`,
+**`Clock` trait in `loom-driver`** with `now()`, `sleep(Duration)`,
 `timeout(Duration, Future)` async surface. Two implementations:
 
 - `SystemClock` — production. Wraps tokio's real timers.
@@ -609,7 +609,7 @@ AST check):
 
 Tests that need to advance time construct a `MockClock` directly
 (`MockClock::new()` or via a small `with_mock_clock` helper in
-`loom-core::testing`) and pass it as `&dyn Clock` into whatever
+`loom-driver::testing`) and pass it as `&dyn Clock` into whatever
 component is under test. There is no other opt-out path; the bans
 apply uniformly across `src/` and `tests/`.
 
@@ -641,9 +641,9 @@ AST patterns and `walkdir` for filesystem-shape rules:
 |------|-----------|
 | no `derive(From)` / `derive(Into)` on tuple structs | `syn::ItemStruct` walk over `loom/crates/*/src/**/*.rs` |
 | no `loom/crates/*/src/{types,error}.rs` files | `walkdir` filter on `loom/crates/*/src/` |
-| `GitClient` is the only `gix` / `git` CLI importer | `syn` walk asserting `use gix::*` and `Command::new("git")` appear only in `loom-core/src/git/` |
+| `GitClient` is the only `gix` / `git` CLI importer | `syn` walk asserting `use gix::*` and `Command::new("git")` appear only in `loom-driver/src/git/` |
 | renderer + log writer share one `AgentEvent` channel | `syn` walk asserting both subscribe to the same `tokio::sync::broadcast` (or `mpsc`) sender |
-| domain identifiers are tuple-struct newtypes | `syn::ItemStruct` walk over `loom-core/src/identifier/` |
+| domain identifiers are tuple-struct newtypes | `syn::ItemStruct` walk over `loom-driver/src/identifier/` |
 | each Askama template has a typed context struct | `syn` walk pairing `#[derive(Template)]` structs in `loom-templates/src/` with their `templates/*.md` files |
 | tests use `tempfile::tempdir`, never hardcoded `/tmp/...` | `syn` literal walk over `loom/crates/*/tests/**/*.rs` and `#[cfg(test)]` blocks |
 
@@ -739,7 +739,7 @@ Each boundary layer pins the parse-once-use-everywhere contract with
 a dedicated test. Three illustrative examples below — newtype
 construction, two-phase envelope parsing, and `#[serde(other)]`
 catchall behavior. JSONL framing and SQLite row mapping have
-analogous tests in `loom-core/src/{agent,state}` that follow the
+analogous tests in `loom-driver/src/{agent,state}` that follow the
 same shape:
 
 ```rust
@@ -922,7 +922,7 @@ so it gates PRs in CI. `loom-smoke` is exposed as an app on Linux only.
 | `loom/crates/*/tests/*.rs` | Per-crate cargo integration tests |
 | `loom/crates/loom/tests/style.rs` | Clippy + `syn`-based AST + filesystem style enforcement |
 | `loom/crates/loom/tests/annotations.rs` | Bidirectional annotation-integrity gate |
-| `loom/crates/<crate>/tests/properties.rs` | Per-crate `proptest` invariants — `loom-core` for state DB, `loom-agent` for protocol parsers; binary-crate `loom/crates/loom/tests/properties.rs` reserved for future cross-crate invariants |
+| `loom/crates/<crate>/tests/properties.rs` | Per-crate `proptest` invariants — `loom-driver` for state DB, `loom-agent` for protocol parsers; binary-crate `loom/crates/loom/tests/properties.rs` reserved for future cross-crate invariants |
 | `loom/crates/loom-templates/tests/snapshots/` | `insta` snapshot files for templates |
 | `tests/loom/default.nix` | Nix derivation: `cargo nextest run --workspace` + container smoke app |
 | `tests/loom/run-tests.sh` | Container smoke harness (single happy-path scenario) |
@@ -937,9 +937,9 @@ so it gates PRs in CI. `loom-smoke` is exposed as an app on Linux only.
 | `flake.nix` | Expose `test-loom` app on Linux only; expose `fuzz-loom` app for on-demand fuzz runs |
 | `loom/Cargo.toml` | Add `[workspace.lints.clippy]` denying `unwrap_used`, `expect_used`, `panic`, `todo`, `unimplemented`; warning `allow_attributes` |
 | `loom/crates/loom/Cargo.toml` | Add `[dev-dependencies]` for `syn`, `walkdir`, `filetime` (used by `style.rs`, `annotations.rs`, `properties.rs`) |
-| `loom/crates/loom-core/Cargo.toml` | Add `[dev-dependencies]` for `proptest`, `tokio-test` (used by `MockClock` and per-crate property tests) |
+| `loom/crates/loom-driver/Cargo.toml` | Add `[dev-dependencies]` for `proptest`, `tokio-test` (used by `MockClock` and per-crate property tests) |
 | `loom/crates/loom-templates/Cargo.toml` | Add `[dev-dependencies]` for `insta` |
-| `loom/crates/loom-core/src/` | Add `Clock` trait + `SystemClock` / `MockClock` impls |
+| `loom/crates/loom-driver/src/` | Add `Clock` trait + `SystemClock` / `MockClock` impls |
 
 ## Success Criteria
 

@@ -10,9 +10,9 @@ use std::time::Duration;
 use displaydoc::Display;
 use thiserror::Error;
 
-use loom_core::identifier::SpecLabel;
-use loom_core::lock::{LockError, LockManager};
-use loom_core::state::{StateDb, StateError};
+use loom_driver::identifier::SpecLabel;
+use loom_driver::lock::{LockError, LockManager};
+use loom_driver::state::{StateDb, StateError};
 
 /// Default timeout used by [`run`]. Mirrors `LockManager::acquire_spec`'s
 /// 5-second wait so the binary surfaces `SpecBusy` after the same delay as

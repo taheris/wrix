@@ -1,8 +1,8 @@
-//! Integration tests for `loom_core::logging`.
+//! Integration tests for `loom_driver::logging`.
 //!
 //! Each test name maps onto a shell-level acceptance test in
 //! `tests/loom-test.sh::test_*`. The shell harness invokes these via
-//! `cargo test -p loom-core --test logging <name>` so the verify path
+//! `cargo test -p loom-driver --test logging <name>` so the verify path
 //! exercises the same code as `cargo test`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -14,9 +14,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Result, anyhow};
-use loom_core::agent::AgentEvent;
-use loom_core::identifier::{BeadId, SpecLabel, ToolCallId};
-use loom_core::logging::{BeadOutcome, LogSink, RenderMode, TerminalRenderer, sweep_retention_at};
+use loom_driver::agent::AgentEvent;
+use loom_driver::identifier::{BeadId, SpecLabel, ToolCallId};
+use loom_driver::logging::{
+    BeadOutcome, LogSink, RenderMode, TerminalRenderer, sweep_retention_at,
+};
 use serde_json::{Value, json};
 
 /// `Write` adapter that pushes into a shared in-memory buffer so tests can

@@ -191,7 +191,7 @@ State-machine rules:
   process is left to backend-level shutdown (SIGTERM/SIGKILL via the
   watchdog), so a follow-up prompt fails with a process-exit error.
 
-The session type and the parser abstraction both live in `loom-core` —
+The session type and the parser abstraction both live in `loom-driver` —
 not in `loom-agent` — because the agent-backend trait returns a session,
 and the inverse dependency would be a cycle.
 
@@ -707,7 +707,7 @@ The pi branch:
 
 ### Agent trait
 
-- [ ] `AgentBackend` trait defined in loom-core with associated `spawn`; no `SUPPORTS_STEERING` constant (both backends steer)
+- [ ] `AgentBackend` trait defined in loom-driver with associated `spawn`; no `SUPPORTS_STEERING` constant (both backends steer)
   [verify](tests/loom-test.sh::test_agent_trait_exists)
 - [ ] `run_agent` compiles with both `PiBackend` and `ClaudeBackend` as concrete types
   [verify](tests/loom-test.sh::test_agent_trait_static_dispatch)

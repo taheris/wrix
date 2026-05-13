@@ -18,7 +18,7 @@ pub use annotations::{Annotation, AnnotationKind, parse_spec_annotations};
 pub use deps::{collect_deps, scan_file_body};
 pub use error::SpecError;
 
-use loom_core::identifier::SpecLabel;
+use loom_driver::identifier::SpecLabel;
 
 /// Convenience: locate the spec file for `label` under `<workspace>/specs/`
 /// and parse its annotations.

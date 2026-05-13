@@ -7,7 +7,7 @@
 //! therefore peeks at `(type, id)` via [`PiEnvelope`] and re-deserializes the
 //! line into the matched concrete type.
 
-use loom_core::identifier::{RequestId, ToolCallId};
+use loom_driver::identifier::{RequestId, ToolCallId};
 use serde::{Deserialize, Serialize};
 
 /// First-pass peek of a pi JSONL line. Carries only the discriminating
@@ -51,7 +51,7 @@ pub struct PiResponse {
 pub enum PiEvent {
     /// Streaming assistant message update; the inner
     /// [`AssistantMessageDelta`] dispatch determines what (if anything) is
-    /// emitted as an [`AgentEvent`](loom_core::agent::AgentEvent).
+    /// emitted as an [`AgentEvent`](loom_driver::agent::AgentEvent).
     MessageUpdate {
         #[serde(rename = "assistantMessageEvent")]
         delta: AssistantMessageDelta,
@@ -118,7 +118,7 @@ pub enum PiEvent {
 /// Inner `assistantMessageEvent` delta carried by
 /// [`PiEvent::MessageUpdate`]. Dispatched on the nested `type` field —
 /// most variants are observability-only; only `text_delta` and `error`
-/// surface as [`AgentEvent`](loom_core::agent::AgentEvent)s.
+/// surface as [`AgentEvent`](loom_driver::agent::AgentEvent)s.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AssistantMessageDelta {

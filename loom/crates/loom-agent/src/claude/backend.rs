@@ -13,11 +13,11 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use loom_core::agent::{
+use loom_driver::agent::{
     Active, AgentBackend, AgentSession, Idle, JsonlReader, ProtocolError, SpawnConfig,
 };
-use loom_core::clock::Clock;
-use loom_core::clock::SystemClock;
+use loom_driver::clock::Clock;
+use loom_driver::clock::SystemClock;
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use tokio::io::BufWriter;
@@ -32,7 +32,7 @@ use super::parser::ClaudeParser;
 /// `claude-settings.json` (which the workflow code wrote earlier via
 /// [`ScratchSession`]).
 ///
-/// [`ScratchSession`]: loom_core::scratch::ScratchSession
+/// [`ScratchSession`]: loom_driver::scratch::ScratchSession
 const SPAWN_CONFIG_FILE: &str = "spawn-config.json";
 
 /// Default seconds to wait for claude to exit naturally after observing
@@ -103,7 +103,7 @@ impl ClaudeBackend {
     /// may already have exited between the wait timeout and the kill.
     ///
     /// `clock` drives the grace timer so tests can substitute
-    /// [`loom_core::clock::MockClock`].
+    /// [`loom_driver::clock::MockClock`].
     pub async fn shutdown_after_result<S>(
         session: AgentSession<S>,
         clock: &dyn Clock,
@@ -143,7 +143,7 @@ impl ClaudeBackend {
 /// the launcher exec (which would otherwise require the real `wrapix`
 /// wrapper on `PATH`).
 ///
-/// [`ScratchSession`]: loom_core::scratch::ScratchSession
+/// [`ScratchSession`]: loom_driver::scratch::ScratchSession
 pub(crate) fn prepare_runtime(config: &SpawnConfig) -> Result<PathBuf, ProtocolError> {
     let mut config = config.clone();
     if let Ok(token) = std::env::var("CLAUDE_CODE_OAUTH_TOKEN") {
@@ -249,8 +249,8 @@ fn send_signal(child: &Child, sig: Signal) {
 )]
 mod tests {
     use super::*;
-    use loom_core::agent::{AgentEvent, RePinContent};
-    use loom_core::clock::{MockClock, SystemClock};
+    use loom_driver::agent::{AgentEvent, RePinContent};
+    use loom_driver::clock::{MockClock, SystemClock};
     use std::path::PathBuf;
 
     fn sample_repin() -> RePinContent {
@@ -287,7 +287,7 @@ mod tests {
     #[test]
     fn prepare_runtime_writes_spawn_config_into_scratch_dir() {
         let workspace = tempfile::tempdir().expect("tempdir");
-        let scratch = loom_core::scratch::ScratchSession::open(
+        let scratch = loom_driver::scratch::ScratchSession::open(
             workspace.path(),
             "wx-test",
             "hello",

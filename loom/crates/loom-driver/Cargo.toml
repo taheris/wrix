@@ -1,5 +1,5 @@
 [package]
-name = "loom-core"
+name = "loom-driver"
 edition.workspace = true
 rust-version.workspace = true
 version.workspace = true

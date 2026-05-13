@@ -2,7 +2,7 @@
 //!
 //! Implements the `ralph msg`-style clarify flow defined in
 //! `specs/ralph-review.md` ("Clarify resolution / `ralph msg`") on top of
-//! `loom-core`'s typed `BdClient` and `loom-templates`' `msg.md` template.
+//! `loom-driver`'s typed `BdClient` and `loom-templates`' `msg.md` template.
 //! The command:
 //!
 //! 1. lists outstanding beads carrying `loom:clarify`, optionally filtered

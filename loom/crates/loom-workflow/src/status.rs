@@ -8,7 +8,7 @@
 //! [`render`] formats the status to a `String` so the binary can route it to
 //! stdout or the test harness can assert on the body verbatim.
 
-use loom_core::state::{MoleculeRow, StateDb, StateError};
+use loom_driver::state::{MoleculeRow, StateDb, StateError};
 
 use displaydoc::Display;
 use thiserror::Error;
@@ -68,8 +68,8 @@ pub fn render(report: &StatusReport) -> String {
 mod tests {
     use super::*;
     use anyhow::Result;
-    use loom_core::identifier::{MoleculeId, SpecLabel};
-    use loom_core::state::ActiveMolecule;
+    use loom_driver::identifier::{MoleculeId, SpecLabel};
+    use loom_driver::state::ActiveMolecule;
 
     fn fresh_db(workspace: &std::path::Path) -> Result<StateDb> {
         Ok(StateDb::open(workspace.join(".wrapix/loom/state.db"))?)
@@ -128,7 +128,7 @@ mod tests {
     #[test]
     fn no_lock_required_to_call_load() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let mgr = loom_core::lock::LockManager::new(dir.path())?;
+        let mgr = loom_driver::lock::LockManager::new(dir.path())?;
         let _spec_guard = mgr.acquire_spec(&SpecLabel::new("alpha"))?;
         let db = fresh_db(dir.path())?;
         let _ = load(&db)?;

@@ -5,10 +5,10 @@
 //! - [`messages`] — typed protocol messages (envelope, response, event,
 //!   extension UI request, command bodies).
 //! - [`parser`] — `LineParse` impl that turns JSONL lines from pi's stdout
-//!   into [`AgentEvent`](loom_core::agent::AgentEvent)s and encodes
+//!   into [`AgentEvent`](loom_driver::agent::AgentEvent)s and encodes
 //!   driver-side commands.
 //! - [`backend`] — the [`PiBackend`] zero-sized type plus its
-//!   [`AgentBackend`](loom_core::agent::AgentBackend) impl.
+//!   [`AgentBackend`](loom_driver::agent::AgentBackend) impl.
 
 pub mod backend;
 pub mod messages;

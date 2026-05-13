@@ -17,7 +17,7 @@
 //! hyphen `--`. The parser tolerates any of these. Headings inside fenced
 //! code blocks are ignored.
 
-use loom_core::markdown::{Event, HeadingLevel, Tag, TagEnd, parser};
+use loom_driver::markdown::{Event, HeadingLevel, Tag, TagEnd, parser};
 use pulldown_cmark::OffsetIter;
 
 /// Result of parsing one bead description against the contract.

@@ -4,9 +4,9 @@ use std::path::PathBuf;
 use displaydoc::Display;
 use thiserror::Error;
 
-use loom_core::bd::BdError;
-use loom_core::lock::LockError;
-use loom_core::state::StateError;
+use loom_driver::bd::BdError;
+use loom_driver::lock::LockError;
+use loom_driver::state::StateError;
 
 /// Failures raised by [`super::run`] and [`super::fetch_active_molecules`].
 #[derive(Debug, Display, Error)]

@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use loom_core::bd::Bead;
-use loom_core::git::{CreatedWorktree, GitClient, MergeResult};
-use loom_core::identifier::{BeadId, SpecLabel};
+use loom_driver::bd::Bead;
+use loom_driver::git::{CreatedWorktree, GitClient, MergeResult};
+use loom_driver::identifier::{BeadId, SpecLabel};
 use tokio::task::JoinSet;
 use tracing::{info, warn};
 
@@ -133,7 +133,7 @@ impl BatchOutcome {
 /// backend ran or whether `LOOM_COMPLETE` / `LOOM_BLOCKED` was the verdict;
 /// that translation lives one layer up.
 ///
-/// On any [`GitError`](loom_core::git::GitError) during worktree creation or
+/// On any [`GitError`](loom_driver::git::GitError) during worktree creation or
 /// merge-back, the function returns immediately and the partial batch is
 /// surfaced through the error — slots already merged stay merged, slots not
 /// yet merged stay in the worktree and require manual intervention.
@@ -300,10 +300,10 @@ async fn merge_back_one(git: &GitClient, slot: BatchSlot) -> Result<BatchResult,
 #[expect(clippy::expect_used, reason = "tests use panicking helpers")]
 mod tests {
     use super::*;
-    use loom_core::bd::Bead;
-    use loom_core::clock::{Clock, MockClock};
-    use loom_core::git::CreatedWorktree;
-    use loom_core::identifier::BeadId;
+    use loom_driver::bd::Bead;
+    use loom_driver::clock::{Clock, MockClock};
+    use loom_driver::git::CreatedWorktree;
+    use loom_driver::identifier::BeadId;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::Duration;

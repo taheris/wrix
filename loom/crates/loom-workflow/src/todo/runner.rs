@@ -8,8 +8,8 @@
 //! concrete backend inside its `dispatch` match, and this driver never sees
 //! the backend type.
 
-use loom_core::agent::{ProtocolError, SessionOutcome, SpawnConfig};
-use loom_core::scratch::ScratchSession;
+use loom_driver::agent::{ProtocolError, SessionOutcome, SpawnConfig};
+use loom_driver::scratch::ScratchSession;
 
 use super::ExitSignal;
 use super::error::TodoError;
@@ -93,7 +93,7 @@ where
 )]
 mod tests {
     use super::*;
-    use loom_core::agent::RePinContent;
+    use loom_driver::agent::RePinContent;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU32, Ordering};
 

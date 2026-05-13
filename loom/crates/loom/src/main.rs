@@ -14,17 +14,17 @@ use std::time::Duration;
 use clap::{Parser, Subcommand, ValueEnum};
 
 use loom_agent::{ClaudeBackend, PiBackend};
-use loom_core::agent::{AgentKind, LOOM_INSIDE_ENV, ProtocolError, SessionOutcome, SpawnConfig};
-use loom_core::bd::{BdClient, ListOpts, UpdateOpts};
-use loom_core::clock::{Clock, SystemClock};
-use loom_core::config::{LoomConfig, Phase};
-use loom_core::git::GitClient;
-use loom_core::identifier::{BeadId, ProfileName, SpecLabel};
-use loom_core::lock::LockManager;
-use loom_core::logging::{LogSink, sweep_retention_at};
-use loom_core::profile_manifest::ProfileImageManifest;
-use loom_core::scratch::resolve_scratch_key;
-use loom_core::state::StateDb;
+use loom_driver::agent::{AgentKind, LOOM_INSIDE_ENV, ProtocolError, SessionOutcome, SpawnConfig};
+use loom_driver::bd::{BdClient, ListOpts, UpdateOpts};
+use loom_driver::clock::{Clock, SystemClock};
+use loom_driver::config::{LoomConfig, Phase};
+use loom_driver::git::GitClient;
+use loom_driver::identifier::{BeadId, ProfileName, SpecLabel};
+use loom_driver::lock::LockManager;
+use loom_driver::logging::{LogSink, sweep_retention_at};
+use loom_driver::profile_manifest::ProfileImageManifest;
+use loom_driver::scratch::resolve_scratch_key;
+use loom_driver::state::StateDb;
 use loom_workflow::check::{IterationCap, ProductionCheckController, check_loop as run_check_loop};
 use loom_workflow::msg::{
     DISMISS_NOTE, FastReply, build_fast_reply, build_rows, filter_msg_beads, kind_of,
@@ -294,7 +294,7 @@ fn run_init(workspace: &std::path::Path, rebuild: bool) -> anyhow::Result<()> {
 }
 
 fn run_status(workspace: &std::path::Path) -> anyhow::Result<()> {
-    let db = loom_core::state::StateDb::open(workspace.join(".wrapix/loom/state.db"))?;
+    let db = loom_driver::state::StateDb::open(workspace.join(".wrapix/loom/state.db"))?;
     let report = status::load(&db)?;
     print!("{}", status::render(&report));
     Ok(())
@@ -501,12 +501,12 @@ async fn run_parallel_run(
     cli_profile: Option<ProfileName>,
     phase_default: ProfileName,
 ) -> anyhow::Result<ParallelRunSummary> {
-    use loom_core::bd::UpdateOpts;
+    use loom_driver::bd::UpdateOpts;
     use loom_workflow::run::{AgentOutcome, run_parallel_batch};
 
     let bd = BdClient::new();
     let beads = bd
-        .ready(loom_core::bd::ReadyOpts {
+        .ready(loom_driver::bd::ReadyOpts {
             limit: Some(parallel_n),
             label: Some(format!("spec:{}", label.as_str())),
         })
@@ -627,7 +627,7 @@ async fn run_parallel_run(
 /// converts it to a typed [`AgentOutcome::Failure`] without falling back to
 /// a silent default.
 ///
-/// [`ProfileError::UnknownProfile`]: loom_core::profile_manifest::ProfileError::UnknownProfile
+/// [`ProfileError::UnknownProfile`]: loom_driver::profile_manifest::ProfileError::UnknownProfile
 async fn dispatch_for_slot(
     kind: AgentKind,
     shutdown_grace: Option<Duration>,
@@ -638,7 +638,7 @@ async fn dispatch_for_slot(
     logs_root: &Path,
     label: &SpecLabel,
 ) -> anyhow::Result<(SessionOutcome, Option<ExitSignal>)> {
-    use loom_core::scratch::ScratchSession;
+    use loom_driver::scratch::ScratchSession;
     use loom_workflow::run::{
         RunContextInputs, build_spawn_config_from_manifest, render_run_prompt,
     };
@@ -765,7 +765,7 @@ async fn dispatch_classified(
 
 /// Test seam: read a millisecond budget from `name` if set. Production
 /// runs leave the env vars unset and SpawnConfig falls back to the
-/// constants in `loom_core::agent` (30s handshake / 60s stall warn).
+/// constants in `loom_driver::agent` (30s handshake / 60s stall warn).
 fn duration_env_ms(name: &str) -> Option<Duration> {
     std::env::var(name)
         .ok()
@@ -776,7 +776,7 @@ fn duration_env_ms(name: &str) -> Option<Duration> {
 /// Resolve the configured shutdown grace from the active agent selection.
 /// Pi sessions return `None` because pi exits naturally on `agent_end`;
 /// claude sessions return the parsed `[claude] post_result_grace_secs`.
-fn resolve_shutdown_grace(selection: &loom_core::config::AgentSelection) -> Option<Duration> {
+fn resolve_shutdown_grace(selection: &loom_driver::config::AgentSelection) -> Option<Duration> {
     selection
         .claude_settings
         .as_ref()
@@ -810,12 +810,12 @@ fn resolved_agent_for(
     config: &LoomConfig,
     agent_override: Option<AgentKind>,
     phase: Phase,
-) -> anyhow::Result<loom_core::config::AgentSelection> {
+) -> anyhow::Result<loom_driver::config::AgentSelection> {
     let mut selection = config.agent_for(phase)?;
     if let Some(kind) = agent_override {
         selection.kind = kind;
         selection.claude_settings = match kind {
-            AgentKind::Claude => Some(loom_core::config::ClaudeSettings {
+            AgentKind::Claude => Some(loom_driver::config::ClaudeSettings {
                 denied_tools: config.security.denied_tools.clone(),
                 post_result_grace_secs: config.claude.post_result_grace_secs,
             }),
@@ -1093,7 +1093,7 @@ fn current_loom_bin() -> anyhow::Result<PathBuf> {
 }
 
 fn run_spec(workspace: &std::path::Path, deps: bool) -> anyhow::Result<()> {
-    let db = loom_core::state::StateDb::open(workspace.join(".wrapix/loom/state.db"))?;
+    let db = loom_driver::state::StateDb::open(workspace.join(".wrapix/loom/state.db"))?;
     let label = db
         .current_spec()?
         .ok_or_else(|| anyhow::anyhow!("no active spec — run `loom use <label>`"))?;

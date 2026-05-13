@@ -2,10 +2,10 @@
 //!
 //! Houses two zero-sized backends — [`PiBackend`] for pi-mono RPC and
 //! [`ClaudeBackend`] for Claude Code stream-json — that implement the
-//! [`AgentBackend`](loom_core::agent::AgentBackend) trait declared in
-//! `loom-core`. The trait's job is process lifecycle only; conversation
+//! [`AgentBackend`](loom_driver::agent::AgentBackend) trait declared in
+//! `loom-driver`. The trait's job is process lifecycle only; conversation
 //! driving (prompt, steer, abort, event streaming) lives on
-//! [`AgentSession`](loom_core::agent::AgentSession), which both backends
+//! [`AgentSession`](loom_driver::agent::AgentSession), which both backends
 //! return in the `Idle` state.
 //!
 //! Subsequent issues populate each backend module:
@@ -17,7 +17,7 @@
 //!
 //! This crate currently exposes the skeleton: the ZST types, the module
 //! layout, and `AgentBackend` impls that fail closed with
-//! [`ProtocolError::Unsupported`](loom_core::agent::ProtocolError::Unsupported)
+//! [`ProtocolError::Unsupported`](loom_driver::agent::ProtocolError::Unsupported)
 //! so a half-wired call site cannot accidentally drive a real container.
 
 pub mod claude;

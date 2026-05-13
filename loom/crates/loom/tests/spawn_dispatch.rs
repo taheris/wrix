@@ -257,7 +257,7 @@ fn wrapix_spawn_invocation_records_correct_argv() {
     // the resolved image_ref + image_source from the manifest written by
     // `drive_loom_todo_pi` (`base` profile maps to `localhost/wrapix-base:test`).
     let bytes = std::fs::read(&spawn_copy).expect("shim should copy spawn-config aside");
-    let cfg: loom_core::agent::SpawnConfig =
+    let cfg: loom_driver::agent::SpawnConfig =
         serde_json::from_slice(&bytes).expect("spawn-config must deserialize");
     assert_eq!(
         cfg.image_ref, "localhost/wrapix-base:test",

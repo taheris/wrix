@@ -20,7 +20,7 @@ pub struct ParsedLine {
 /// Backend-specific protocol bridge.
 ///
 /// Implementors live in `loom-agent` (one for pi-mono RPC, one for claude
-/// stream-json) and translate between backend wire formats and loom-core's
+/// stream-json) and translate between backend wire formats and loom-driver's
 /// neutral surface. The session only knows about `LineParse` — once the
 /// parser converts a line into a [`ParsedLine`], no downstream code can tell
 /// which backend produced it.

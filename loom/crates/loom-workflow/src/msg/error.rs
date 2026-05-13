@@ -1,7 +1,7 @@
 use displaydoc::Display;
 use thiserror::Error;
 
-use loom_core::bd::BdError;
+use loom_driver::bd::BdError;
 
 /// Errors raised by the `loom msg` command.
 #[derive(Debug, Display, Error)]

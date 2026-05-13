@@ -16,8 +16,8 @@ pub use super::time::format_utc_timestamp;
 /// (`LogSink::open_in`) handle directory creation.
 ///
 /// ```
-/// use loom_core::identifier::{BeadId, SpecLabel};
-/// use loom_core::logging::bead_log_path;
+/// use loom_driver::identifier::{BeadId, SpecLabel};
+/// use loom_driver::logging::bead_log_path;
 /// use std::path::Path;
 /// use std::time::{Duration, UNIX_EPOCH};
 ///

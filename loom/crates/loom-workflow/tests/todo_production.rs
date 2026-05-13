@@ -6,7 +6,7 @@
 //!
 //! These tests spawn the system `git` binary to seed and inspect a real
 //! workspace (spec NFR #8): tier-1 fan-out and the per-spec cursor write
-//! resolve through `LiveGitDiffSource` over `loom_core::git::GitClient`,
+//! resolve through `LiveGitDiffSource` over `loom_driver::git::GitClient`,
 //! which only has anything to observe against real refs/index/diff state.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -15,11 +15,11 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 
-use loom_core::agent::SessionOutcome;
-use loom_core::git::GitClient;
-use loom_core::identifier::{MoleculeId, ProfileName, SpecLabel};
-use loom_core::profile_manifest::ProfileImageManifest;
-use loom_core::state::{ActiveMolecule, StateDb};
+use loom_driver::agent::SessionOutcome;
+use loom_driver::git::GitClient;
+use loom_driver::identifier::{MoleculeId, ProfileName, SpecLabel};
+use loom_driver::profile_manifest::ProfileImageManifest;
+use loom_driver::state::{ActiveMolecule, StateDb};
 use loom_workflow::todo::{ExitSignal, ProductionTodoController, TodoController, TodoError};
 
 fn run_git(workspace: &Path, args: &[&str]) {
