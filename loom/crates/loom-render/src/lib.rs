@@ -22,5 +22,8 @@ mod time;
 pub use clock::{Clock, SystemClock};
 pub use path::{bead_log_path, format_utc_timestamp, phase_log_path};
 pub use redacted::Redacted;
-pub use renderer::{BeadOutcome, RenderMode, TerminalRenderer};
+pub use renderer::{
+    BeadOutcome, JsonRenderer, PlainRenderer, PrettyRenderer, RawRenderer, RenderMode, Renderer,
+    TerminalRenderer, build_renderer,
+};
 pub use sink::{LogError, LogSink};

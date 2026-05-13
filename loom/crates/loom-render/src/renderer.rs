@@ -19,12 +19,59 @@ pub enum BeadOutcome {
     Retry,
 }
 
-/// Output verbosity. `Default` prints one short line per tool call;
-/// `Verbose` additionally streams assistant text deltas and tool args inline.
+/// Output mode for the renderer trait. Drives the per-impl selection
+/// in [`select_renderer`] and the CLI flag wiring in `loom run` /
+/// `loom logs`. Mode is the format dimension; verbosity is orthogonal.
+///
+/// Selection logic per spec (`H2` table):
+/// - TTY + no `--plain`/`--json`/`--raw` + no `NO_COLOR` → `Pretty`
+/// - non-TTY OR `NO_COLOR` set OR `--plain` → `Plain`
+/// - `--json` → `Json`
+/// - `--raw` → `Raw`
+///
+/// `--json` and `--raw` are mutually exclusive; `--raw` is mutually
+/// exclusive with `-v/--verbose`. The CLI surface enforces these via
+/// clap `conflicts_with`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderMode {
+    /// Internal "verbose pretty" — kept so the existing per-bead
+    /// `TerminalRenderer` path stays compatible. New code should
+    /// consume the [`Renderer`] trait, not match on this.
     Default,
+    /// Internal "verbose pretty" — same caveat.
     Verbose,
+    /// Colored, glyph-decorated output for an interactive terminal.
+    Pretty,
+    /// ASCII glyphs, no color, no OSC 8 — pipe-safe.
+    Plain,
+    /// One pretty-printed JSON object per line; pure data, no chrome.
+    Json,
+    /// Passthrough JSONL: each event serialized as one compact JSON
+    /// line. Used by `loom logs --raw` to reproduce the on-disk shape.
+    Raw,
+}
+
+impl RenderMode {
+    /// Auto-select the right mode for a given (TTY, flags, env) state.
+    /// Pure function — every input is a parameter so tests can pin
+    /// behavior without env mutation.
+    pub fn select(
+        tty: bool,
+        no_color_env: bool,
+        flag_plain: bool,
+        flag_json: bool,
+        flag_raw: bool,
+    ) -> RenderMode {
+        if flag_raw {
+            RenderMode::Raw
+        } else if flag_json {
+            RenderMode::Json
+        } else if flag_plain || !tty || no_color_env {
+            RenderMode::Plain
+        } else {
+            RenderMode::Pretty
+        }
+    }
 }
 
 const ANSI_RESET: &str = "\x1b[0m";
@@ -283,6 +330,155 @@ fn truncate_to(s: &str, max: usize) -> String {
     }
 }
 
+/// Output target for one bead's event stream. Four concrete impls
+/// (Pretty/Plain/Json/Raw) sit behind this trait; selection happens
+/// once per spawn via [`RenderMode::select`] and the chosen impl is
+/// handed to [`crate::LogSink`] as `Box<dyn Renderer>`.
+///
+/// `loom run` and `loom logs` share these impls — the `live` /
+/// replay distinction is encoded in how they feed events to the
+/// renderer, not in the renderer itself. H3-H6 add per-tool body
+/// rendering, in-place running indicators, OSC 8 hyperlinks, and
+/// Task subagent nesting on top of this trait.
+pub trait Renderer: Send {
+    /// Optional per-bead header — `Pretty`/`Plain` print it; `Json`/`Raw`
+    /// suppress (header is chrome, not data). Default impl is a no-op
+    /// so simpler impls don't have to override.
+    fn header(&mut self, _title: &str, _profile: &ProfileName) -> io::Result<()> {
+        Ok(())
+    }
+
+    /// Render one event. The renderer owns its `Write` sink.
+    fn render_event(&mut self, event: &AgentEvent) -> io::Result<()>;
+
+    /// Close the renderer with the bead outcome. `&mut self` (not
+    /// consuming) so trait-object call through `Box<dyn Renderer>`
+    /// stays straightforward without `Box<Self>` indirection.
+    fn finish(&mut self, outcome: BeadOutcome, elapsed: Duration) -> io::Result<()>;
+}
+
+/// `Pretty` mode — colored, glyph-decorated output for an interactive
+/// terminal. Thin wrapper that delegates to the existing
+/// [`TerminalRenderer`] with `color = true`.
+pub struct PrettyRenderer {
+    inner: TerminalRenderer,
+}
+
+impl PrettyRenderer {
+    pub fn new(out: impl Write + Send + 'static, bead_id: BeadId, parallel: bool) -> Self {
+        Self {
+            inner: TerminalRenderer::new(out, RenderMode::Default, bead_id, parallel, true),
+        }
+    }
+}
+
+impl Renderer for PrettyRenderer {
+    fn header(&mut self, title: &str, profile: &ProfileName) -> io::Result<()> {
+        self.inner.header(title, profile)
+    }
+    fn render_event(&mut self, event: &AgentEvent) -> io::Result<()> {
+        self.inner.render_event(event)
+    }
+    fn finish(&mut self, outcome: BeadOutcome, elapsed: Duration) -> io::Result<()> {
+        self.inner.write_finish(outcome, elapsed)
+    }
+}
+
+/// `Plain` mode — same shape as `Pretty` but with `color = false`.
+/// Pipe-safe; no ANSI escapes; no OSC 8.
+pub struct PlainRenderer {
+    inner: TerminalRenderer,
+}
+
+impl PlainRenderer {
+    pub fn new(out: impl Write + Send + 'static, bead_id: BeadId, parallel: bool) -> Self {
+        Self {
+            inner: TerminalRenderer::new(out, RenderMode::Default, bead_id, parallel, false),
+        }
+    }
+}
+
+impl Renderer for PlainRenderer {
+    fn header(&mut self, title: &str, profile: &ProfileName) -> io::Result<()> {
+        self.inner.header(title, profile)
+    }
+    fn render_event(&mut self, event: &AgentEvent) -> io::Result<()> {
+        self.inner.render_event(event)
+    }
+    fn finish(&mut self, outcome: BeadOutcome, elapsed: Duration) -> io::Result<()> {
+        self.inner.write_finish(outcome, elapsed)
+    }
+}
+
+/// `Json` mode — one pretty-printed JSON object per line. No header,
+/// no closing line; the consumer is expected to parse the stream.
+pub struct JsonRenderer {
+    out: Box<dyn Write + Send>,
+}
+
+impl JsonRenderer {
+    pub fn new(out: impl Write + Send + 'static) -> Self {
+        Self { out: Box::new(out) }
+    }
+}
+
+impl Renderer for JsonRenderer {
+    fn render_event(&mut self, event: &AgentEvent) -> io::Result<()> {
+        let line = serde_json::to_string_pretty(event)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        self.out.write_all(line.as_bytes())?;
+        self.out.write_all(b"\n")?;
+        self.out.flush()
+    }
+    fn finish(&mut self, _outcome: BeadOutcome, _elapsed: Duration) -> io::Result<()> {
+        self.out.flush()
+    }
+}
+
+/// `Raw` mode — one compact JSON line per event. Used by
+/// `loom logs --raw` to reproduce the on-disk shape exactly.
+pub struct RawRenderer {
+    out: Box<dyn Write + Send>,
+}
+
+impl RawRenderer {
+    pub fn new(out: impl Write + Send + 'static) -> Self {
+        Self { out: Box::new(out) }
+    }
+}
+
+impl Renderer for RawRenderer {
+    fn render_event(&mut self, event: &AgentEvent) -> io::Result<()> {
+        let line = serde_json::to_string(event)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        self.out.write_all(line.as_bytes())?;
+        self.out.write_all(b"\n")?;
+        self.out.flush()
+    }
+    fn finish(&mut self, _outcome: BeadOutcome, _elapsed: Duration) -> io::Result<()> {
+        self.out.flush()
+    }
+}
+
+/// Construct the right [`Renderer`] for a given mode. Production
+/// callers in `loom run` / `loom logs` pass a `Box<dyn Write + Send>`
+/// (typically `io::stdout()` or a buffered wrapper).
+pub fn build_renderer(
+    mode: RenderMode,
+    out: Box<dyn Write + Send>,
+    bead_id: BeadId,
+    parallel: bool,
+) -> Box<dyn Renderer> {
+    match mode {
+        RenderMode::Pretty => Box::new(PrettyRenderer::new(out, bead_id, parallel)),
+        RenderMode::Plain | RenderMode::Default | RenderMode::Verbose => {
+            Box::new(PlainRenderer::new(out, bead_id, parallel))
+        }
+        RenderMode::Json => Box::new(JsonRenderer::new(out)),
+        RenderMode::Raw => Box::new(RawRenderer::new(out)),
+    }
+}
+
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "tests use panicking helpers")]
 mod tests {
@@ -447,5 +643,155 @@ mod tests {
         let s = truncate_to("0123456789ABCDEF", 8);
         assert_eq!(s.chars().count(), 8);
         assert!(s.ends_with('…'));
+    }
+
+    // -- H2 tests ----------------------------------------------------------
+
+    fn captured() -> (
+        std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+        impl Write + Send + 'static,
+    ) {
+        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let writer = SharedWriter(buf.clone());
+        (buf, writer)
+    }
+
+    struct SharedWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl Write for SharedWriter {
+        fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+            self.0
+                .lock()
+                .map_err(|_| io::Error::other("poisoned"))?
+                .extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn captured_str(buf: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>) -> String {
+        let g = buf.lock().expect("not poisoned");
+        String::from_utf8(g.clone()).expect("utf-8")
+    }
+
+    fn sample_text_delta() -> AgentEvent {
+        AgentEvent::TextDelta {
+            envelope: EventEnvelope::default(),
+            text: "hello".into(),
+        }
+    }
+
+    fn sample_tool_call() -> AgentEvent {
+        AgentEvent::ToolCall {
+            envelope: EventEnvelope::default(),
+            id: ToolCallId::new("t1"),
+            tool: "Read".into(),
+            params: json!({"file_path": "src/lib.rs"}),
+            parent_tool_call_id: None,
+        }
+    }
+
+    /// All four spec'd render modes are present and `build_renderer`
+    /// dispatches to a concrete impl for each.
+    #[test]
+    fn renderer_modes_present() {
+        let bead = BeadId::new("wx-1").expect("valid id");
+        for mode in [
+            RenderMode::Pretty,
+            RenderMode::Plain,
+            RenderMode::Json,
+            RenderMode::Raw,
+        ] {
+            let (_, writer) = captured();
+            let r = build_renderer(mode, Box::new(writer), bead.clone(), false);
+            drop(r); // sanity — each mode constructs without panic
+        }
+    }
+
+    /// TTY + no env / flags → Pretty.
+    #[test]
+    fn pretty_selected_on_tty() {
+        assert_eq!(
+            RenderMode::select(true, false, false, false, false),
+            RenderMode::Pretty,
+        );
+    }
+
+    /// Non-TTY → Plain (NO_COLOR-agnostic).
+    #[test]
+    fn plain_selected_on_non_tty() {
+        assert_eq!(
+            RenderMode::select(false, false, false, false, false),
+            RenderMode::Plain,
+        );
+    }
+
+    /// `NO_COLOR=1` on TTY → Plain (no-color.org contract).
+    #[test]
+    fn plain_selected_when_no_color_env() {
+        assert_eq!(
+            RenderMode::select(true, true, false, false, false),
+            RenderMode::Plain,
+        );
+    }
+
+    /// `--json` beats TTY-detect → Json regardless of env.
+    #[test]
+    fn json_flag_wins_over_tty() {
+        assert_eq!(
+            RenderMode::select(true, false, false, true, false),
+            RenderMode::Json,
+        );
+    }
+
+    /// `--raw` beats `--json` per the spec's exclusivity contract.
+    /// (clap enforces this at parse time but the selector is
+    /// defensive: raw > json > plain > pretty.)
+    #[test]
+    fn raw_flag_wins_over_json() {
+        assert_eq!(
+            RenderMode::select(true, false, false, true, true),
+            RenderMode::Raw,
+        );
+    }
+
+    /// `JsonRenderer` writes pretty-printed JSON, one object per line.
+    /// Pretty-printing means newlines INSIDE the object, then the
+    /// terminator newline.
+    #[test]
+    fn json_mode_pretty_prints() {
+        let (buf, writer) = captured();
+        let mut r = JsonRenderer::new(writer);
+        r.render_event(&sample_text_delta()).expect("render");
+        let out = captured_str(&buf);
+        assert!(out.starts_with('{'), "json must start with `{{`: {out}");
+        // Pretty-printing keeps fields on separate lines.
+        assert!(
+            out.contains("\n  \"kind\""),
+            "json output must be pretty-printed: {out}",
+        );
+        assert!(out.ends_with('\n'));
+    }
+
+    /// `RawRenderer` writes a compact JSON line — no embedded newlines
+    /// in the object, terminator newline at end. Round-trips back to
+    /// `AgentEvent` cleanly.
+    #[test]
+    fn raw_mode_passthrough() {
+        let (buf, writer) = captured();
+        let mut r = RawRenderer::new(writer);
+        r.render_event(&sample_tool_call()).expect("render");
+        let out = captured_str(&buf);
+        let trimmed = out.trim_end_matches('\n');
+        // Compact form has no internal newlines.
+        assert!(
+            !trimmed.contains('\n'),
+            "raw output must be one compact line: {out}",
+        );
+        // Parses back to the same variant.
+        let back: AgentEvent = serde_json::from_str(trimmed).expect("parse back");
+        assert!(matches!(back, AgentEvent::ToolCall { .. }));
     }
 }

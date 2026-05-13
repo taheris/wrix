@@ -1156,6 +1156,8 @@ logging_cargo_test() {
 #-----------------------------------------------------------------------------
 test_pretty_selected_on_tty() {
     logging_cargo_test run_default_output_shape
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        renderer::tests::pretty_selected_on_tty
 }
 
 #-----------------------------------------------------------------------------
@@ -3215,7 +3217,10 @@ test_flat_variant_shape() {
 }
 test_in_place_indicator_disabled_when_inappropriate() { _pending_stub in_place_indicator_disabled_when_inappropriate; }
 test_in_place_running_indicator() { _pending_stub in_place_running_indicator; }
-test_json_mode_pretty_prints() { _pending_stub json_mode_pretty_prints; }
+test_json_mode_pretty_prints() {
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        renderer::tests::json_mode_pretty_prints
+}
 test_live_vs_replay_distinction() { _pending_stub live_vs_replay_distinction; }
 test_log_sink_per_event_flush() { _pending_stub log_sink_per_event_flush; }
 test_logs_empty_directory() { _pending_stub logs_empty_directory; }
@@ -3313,11 +3318,20 @@ test_per_tool_summary_cells() {
     cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
         event::tests::every_spec_variant_present
 }
-test_plain_selected_on_non_tty() { _pending_stub plain_selected_on_non_tty; }
+test_plain_selected_on_non_tty() {
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        renderer::tests::plain_selected_on_non_tty
+}
 test_push_gate_sees_fixup_beads() { _pending_stub push_gate_sees_fixup_beads; }
-test_raw_mode_passthrough() { _pending_stub raw_mode_passthrough; }
+test_raw_mode_passthrough() {
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        renderer::tests::raw_mode_passthrough
+}
 test_rebuild_drops_all_notes() { _pending_stub rebuild_drops_all_notes; }
-test_renderer_modes_present() { _pending_stub renderer_modes_present; }
+test_renderer_modes_present() {
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        renderer::tests::renderer_modes_present
+}
 test_run_does_not_close_bead() {
     cargo_run test -p loom --test marker_gate -- --test-threads=1 \
         loom_run_never_invokes_bd_close_on_dispatched_bead_across_all_markers
