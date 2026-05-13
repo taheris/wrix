@@ -3222,7 +3222,11 @@ test_msg_chat_scope() { _pending_stub msg_chat_scope; }
 test_msg_chat_writes_notes() { _pending_stub msg_chat_writes_notes; }
 test_msg_dismiss() { _pending_stub msg_dismiss; }
 test_msg_flag_exclusivity() { _pending_stub msg_flag_exclusivity; }
-test_msg_option_validates() { _pending_stub msg_option_validates; }
+test_msg_option_validates() {
+    cargo_run test -p loom --test msg_persist -- --test-threads=1 \
+        msg_option_fast_reply_persists_note_via_bd_show \
+        msg_option_out_of_range_errors_and_leaves_bead_unchanged
+}
 test_msg_spec_filter() { _pending_stub msg_spec_filter; }
 test_msg_view_modes() { _pending_stub msg_view_modes; }
 test_notes_cascade_on_spec_delete() { _pending_stub notes_cascade_on_spec_delete; }
