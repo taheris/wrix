@@ -199,7 +199,7 @@ if ! podman image exists "$WRAPIX_LOOM_TEST_IMAGE_REF"; then
 fi
 
 # SpawnConfig — the on-disk shape `wrapix spawn --spawn-config` consumes.
-# See loom-core/src/agent/backend.rs::SpawnConfig.
+# See loom-driver/src/agent/backend.rs::SpawnConfig.
 #
 # image_source is "" because the harness preloaded the image above; the
 # launcher's load step short-circuits on the `podman image exists` check.

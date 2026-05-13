@@ -7,16 +7,16 @@
 
 test_git_client_encapsulation() {
   judge_files \
-    "loom/crates/loom-core/src/git/mod.rs" \
-    "loom/crates/loom-core/src/git/client.rs" \
-    "loom/crates/loom-core/src/git/error.rs" \
-    "loom/crates/loom-core/src/lib.rs" \
+    "loom/crates/loom-driver/src/git/mod.rs" \
+    "loom/crates/loom-driver/src/git/client.rs" \
+    "loom/crates/loom-driver/src/git/error.rs" \
+    "loom/crates/loom-driver/src/lib.rs" \
     "loom/crates/loom/src/main.rs" \
     "loom/crates/loom-agent/src/lib.rs" \
     "loom/crates/loom-workflow/src/lib.rs" \
     "loom/crates/loom-templates/src/lib.rs"
   judge_criterion \
-    "GitClient (loom/crates/loom-core/src/git/) is the ONLY module that imports the gix crate or invokes the git CLI (Command::new(\"git\") or shell-out). Outside the git module, no source file may 'use gix' or spawn git directly. Callers see only typed Rust methods (status, diff_head_parent, worktrees, create_worktree, remove_worktree, merge_branch). Verify by inspecting every listed file: only files under loom-core/src/git/ may reference gix or invoke git; the other crates and lib.rs / main.rs must not."
+    "GitClient (loom/crates/loom-driver/src/git/) is the ONLY module that imports the gix crate or invokes the git CLI (Command::new(\"git\") or shell-out). Outside the git module, no source file may 'use gix' or spawn git directly. Callers see only typed Rust methods (status, diff_head_parent, worktrees, create_worktree, remove_worktree, merge_branch). Verify by inspecting every listed file: only files under loom-driver/src/git/ may reference gix or invoke git; the other crates and lib.rs / main.rs must not."
 }
 
 test_template_context_structs() {
@@ -32,29 +32,29 @@ test_template_context_structs() {
     "loom/crates/loom-templates/src/check/mod.rs" \
     "loom/crates/loom-templates/src/msg/mod.rs"
   judge_criterion \
-    "Each Loom workflow template has a typed Rust context struct with #[derive(askama::Template)] and the correct #[template(path = ...)] attribute. Module structure is nested per template family — no central types.rs at the crate root, no shared error.rs; lib.rs only declares pub mod for plan, todo, run, check, msg. Domain identifier fields use the loom-core newtypes (BeadId, MoleculeId, SpecLabel) — never bare String — for issue_id, molecule_id, label. Optional fields use Option<T> (spec_diff, existing_tasks, molecule_id, issue_id, title, description, beads_summary, base_commit, previous_failure). Multi-valued fields use Vec<T> (companion_paths: Vec<String>, implementation_notes: Vec<String>, clarify_beads: Vec<ClarifyBead>). PreviousFailure is its own type that enforces the 4000-char truncation cap from the spec — RunContext stores Option<PreviousFailure>, not Option<String>. ClarifyBead and ClarifyOption live alongside MsgContext in msg/mod.rs (the only template that uses them). Templates declare escape = \"none\" so markdown bodies are not HTML-escaped."
+    "Each Loom workflow template has a typed Rust context struct with #[derive(askama::Template)] and the correct #[template(path = ...)] attribute. Module structure is nested per template family — no central types.rs at the crate root, no shared error.rs; lib.rs only declares pub mod for plan, todo, run, check, msg. Domain identifier fields use the loom-driver newtypes (BeadId, MoleculeId, SpecLabel) — never bare String — for issue_id, molecule_id, label. Optional fields use Option<T> (spec_diff, existing_tasks, molecule_id, issue_id, title, description, beads_summary, base_commit, previous_failure). Multi-valued fields use Vec<T> (companion_paths: Vec<String>, implementation_notes: Vec<String>, clarify_beads: Vec<ClarifyBead>). PreviousFailure is its own type that enforces the 4000-char truncation cap from the spec — RunContext stores Option<PreviousFailure>, not Option<String>. ClarifyBead and ClarifyOption live alongside MsgContext in msg/mod.rs (the only template that uses them). Templates declare escape = \"none\" so markdown bodies are not HTML-escaped."
 }
 
 test_run_single_event_sink() {
   judge_files \
-    "loom/crates/loom-core/src/logging/mod.rs" \
-    "loom/crates/loom-core/src/logging/sink.rs" \
-    "loom/crates/loom-core/src/logging/renderer.rs"
+    "loom/crates/loom-driver/src/logging/mod.rs" \
+    "loom/crates/loom-driver/src/logging/sink.rs" \
+    "loom/crates/loom-driver/src/logging/renderer.rs"
   judge_criterion \
-    "LogSink (loom/crates/loom-core/src/logging/sink.rs) is a single tee-style sink: one Self::emit method writes the AgentEvent to BOTH the on-disk JSONL log file AND the TerminalRenderer in lockstep within the same call. There is no independent task, channel, thread, or background worker that drives the renderer or the file writer separately — both writers must observe the same event sequence by construction. Verify by inspecting sink.rs: the struct holds the BufWriter<File> and the TerminalRenderer as direct fields, and emit() dispatches to both inline. The renderer must NOT pull events from a queue or be wrapped in a separate Tokio task. The on-disk format is the serialized AgentEvent (one JSON object per line), so the renderer and the file writer agree on the event sequence."
+    "LogSink (loom/crates/loom-driver/src/logging/sink.rs) is a single tee-style sink: one Self::emit method writes the AgentEvent to BOTH the on-disk JSONL log file AND the TerminalRenderer in lockstep within the same call. There is no independent task, channel, thread, or background worker that drives the renderer or the file writer separately — both writers must observe the same event sequence by construction. Verify by inspecting sink.rs: the struct holds the BufWriter<File> and the TerminalRenderer as direct fields, and emit() dispatches to both inline. The renderer must NOT pull events from a queue or be wrapped in a separate Tokio task. The on-disk format is the serialized AgentEvent (one JSON object per line), so the renderer and the file writer agree on the event sequence."
 }
 
 test_newtypes_for_identifiers() {
   judge_files \
-    "loom/crates/loom-core/src/identifier/mod.rs" \
-    "loom/crates/loom-core/src/identifier/bead.rs" \
-    "loom/crates/loom-core/src/identifier/spec.rs" \
-    "loom/crates/loom-core/src/identifier/molecule.rs" \
-    "loom/crates/loom-core/src/identifier/profile.rs" \
-    "loom/crates/loom-core/src/identifier/session.rs" \
-    "loom/crates/loom-core/src/identifier/tool_call.rs" \
-    "loom/crates/loom-core/src/identifier/request.rs" \
-    "loom/crates/loom-core/src/agent/mod.rs"
+    "loom/crates/loom-driver/src/identifier/mod.rs" \
+    "loom/crates/loom-driver/src/identifier/bead.rs" \
+    "loom/crates/loom-driver/src/identifier/spec.rs" \
+    "loom/crates/loom-driver/src/identifier/molecule.rs" \
+    "loom/crates/loom-driver/src/identifier/profile.rs" \
+    "loom/crates/loom-driver/src/identifier/session.rs" \
+    "loom/crates/loom-driver/src/identifier/tool_call.rs" \
+    "loom/crates/loom-driver/src/identifier/request.rs" \
+    "loom/crates/loom-driver/src/agent/mod.rs"
   judge_criterion \
     "Domain and protocol identifiers are newtype wrappers, not bare strings. The newtype_id! macro in identifier/mod.rs produces a #[serde(transparent)] tuple struct around String with new(impl Into<String>) -> Self, as_str(&self) -> &str, and a Display impl that writes the inner string. Each id family lives in its own submodule under identifier/ — bead.rs (BeadId), spec.rs (SpecLabel), molecule.rs (MoleculeId), profile.rs (ProfileName), session.rs (SessionId), tool_call.rs (ToolCallId), request.rs (RequestId) — and invokes newtype_id! exactly once. AgentKind in agent/mod.rs is a plain enum { Pi, Claude } with serde derive (NOT a newtype) — variants serialize as 'pi'/'claude'. The macro must NOT emit derive(From) or derive(Into) (NF-8 forbids them); values must enter via new() so future per-family validation can be added without bypass paths."
 }
@@ -83,7 +83,7 @@ judge_plan_update_merges_notes() {
     "loom/crates/loom-templates/templates/partial/implementation_notes_state.md" \
     "loom/crates/loom-workflow/src/plan/runner.rs" \
     "loom/crates/loom-workflow/src/plan/prompt.rs" \
-    "loom/crates/loom-core/src/state/implementation_notes.rs"
+    "loom/crates/loom-driver/src/state/implementation_notes.rs"
   judge_criterion \
     "The plan_update.md prompt (via partial/implementation_notes_state.md) renders the existing implementation_notes array from the spec's state-DB row into the interview, and explicitly instructs the agent to MERGE — keep notes still relevant, drop notes a new decision invalidates, add fresh notes — rather than blind append or blind replace. The prompt names all three operations (keep / drop / add) and frames the merge as the agent's judgement during the interview. The runner (plan/runner.rs) reads the existing array before launching the interview, passes it into the rendered context, and after the interview persists the agent-produced merged array back to the same state-DB row (overwriting the prior value, not appending). No code path silently appends or silently replaces; the merge is mediated by the interview output."
 }

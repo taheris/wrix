@@ -83,7 +83,7 @@ chmod +x "$LOOM_TEST_BIN/claude"
 
 mkdir -p "$WORKSPACE/.wrapix/loom"
 
-# SpawnConfig — see loom-core/src/agent/backend.rs::SpawnConfig.
+# SpawnConfig — see loom-driver/src/agent/backend.rs::SpawnConfig.
 #
 # env:
 #   WRAPIX_AGENT=claude         — entrypoint dispatch
