@@ -20,6 +20,7 @@ mod redacted;
 mod renderer;
 mod sink;
 mod time;
+pub mod tool_body;
 
 pub use clock::{Clock, SystemClock};
 pub use path::{bead_log_path, format_utc_timestamp, phase_log_path};

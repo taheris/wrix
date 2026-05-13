@@ -15,6 +15,7 @@ publish.workspace = true
 # at the workspace level; H2 onwards wires them through this crate.
 [dependencies]
 displaydoc = { workspace = true }
+imara-diff = { workspace = true }
 loom-events = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

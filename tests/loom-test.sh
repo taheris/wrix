@@ -3334,10 +3334,12 @@ test_osc8_hyperlinks() {
 }
 test_path_normalization_display() { _pending_stub path_normalization_display; }
 test_per_tool_summary_cells() {
-    # G3 lands the variant + tag (`tool_progress`); H3 (wx-h15kl) extends
-    # this dispatcher to assert renderer behavior.
+    # G3 — variant + tag presence.
     cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
         event::tests::every_spec_variant_present
+    # H3 — per-tool summary cell formatters.
+    cargo_run test -p loom-render --lib -- --nocapture --quiet \
+        tool_body::tests
 }
 test_plain_selected_on_non_tty() {
     cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
@@ -3375,7 +3377,14 @@ test_task_subagent_nesting() {
         renderer::tests::task_subagent_nesting_indents_nested_tool_calls
 }
 test_todo_delete_notes_atomic_with_cursor() { _pending_stub todo_delete_notes_atomic_with_cursor; }
-test_tool_body_truncation_policy() { _pending_stub tool_body_truncation_policy; }
+test_tool_body_truncation_policy() {
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        tool_body::tests::cap_body_keeps_short_bodies_unchanged
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        tool_body::tests::cap_body_truncates_long_bodies_with_recovery_hint
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        tool_body::tests::cap_body_respects_byte_cap
+}
 test_tool_call_result_pairing() { _pending_stub tool_call_result_pairing; }
 test_unknown_driver_kind_renders() {
     # G3 lands the `driver_event` variant accepting arbitrary `driver_kind`;
