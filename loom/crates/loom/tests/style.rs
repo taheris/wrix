@@ -646,6 +646,92 @@ fn no_real_clock_outside_system_clock() {
 }
 
 // ---------------------------------------------------------------------------
+// Rule (R1, wx-cqzxh): `EventEnvelope::default()` is the parser's interim
+// shape — the parser stamps a placeholder envelope per event because it
+// doesn't see the live bead/molecule context. Every other production
+// caller (driver, workflow, dispatch, sink) must overwrite the
+// placeholder via `EnvelopeBuilder::build()` before any consumer reads
+// the event. A `Default::default()` slipping into non-parser code is a
+// regression — the on-disk JSONL would carry sentinel `wx-pending` and
+// `seq=0` for that event, silently corrupting replay.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn no_envelope_default_outside_parser() {
+    let root = loom_workspace_root();
+    let allowed: &[&Path] = &[
+        // Parser stamps the placeholder; the session layer overwrites it.
+        Path::new("crates/loom-agent/src/pi/parser.rs"),
+        Path::new("crates/loom-agent/src/claude/parser.rs"),
+        // The impl Default block lives here.
+        Path::new("crates/loom-events/src/event.rs"),
+    ];
+    let mut violations: Vec<String> = Vec::new();
+    for path in src_files(&root) {
+        let rel_path = rel(&root, &path);
+        if allowed.iter().any(|a| Path::new(&rel_path) == *a) {
+            continue;
+        }
+        let body = read_to_string(&path);
+        let cfg_test_spans = cfg_test_mod_line_spans(&path);
+        for (lineno, line) in body.lines().enumerate() {
+            if is_comment(line) {
+                continue;
+            }
+            let line_no = lineno + 1;
+            if cfg_test_spans
+                .iter()
+                .any(|(start, end)| line_no >= *start && line_no <= *end)
+            {
+                continue;
+            }
+            if line.contains("EventEnvelope::default(") {
+                violations.push(format!(
+                    "{}:{} `EventEnvelope::default()` — overwrite via \
+                     `EnvelopeBuilder::build()` so the event carries a real \
+                     `bead_id`/`seq`/`ts_ms`",
+                    rel_path, line_no,
+                ));
+            }
+        }
+    }
+    assert_violations(
+        "no `EventEnvelope::default()` outside parsers / definition (R1, wx-cqzxh — \
+         driver/session code must stamp a real envelope via `EnvelopeBuilder`)",
+        &violations,
+    );
+}
+
+/// Inclusive `(start_line, end_line)` ranges for each `#[cfg(test)] mod ... { ... }`
+/// at the top level of `path`. Inner items inside such a module are excluded from
+/// production-code style rules — they're test fixtures, not driver code.
+fn cfg_test_mod_line_spans(path: &Path) -> Vec<(usize, usize)> {
+    use syn::spanned::Spanned;
+    let file = parse_rs(path);
+    let mut out = Vec::new();
+    for item in &file.items {
+        if let syn::Item::Mod(m) = item
+            && m.attrs.iter().any(is_cfg_test_attr)
+        {
+            let span = m.span();
+            out.push((span.start().line, span.end().line));
+        }
+    }
+    out
+}
+
+fn is_cfg_test_attr(attr: &Attribute) -> bool {
+    if !attr.path().is_ident("cfg") {
+        return false;
+    }
+    // `#[cfg(test)]` — parse the meta list and look for a single `test` ident.
+    let Meta::List(list) = &attr.meta else {
+        return false;
+    };
+    list.tokens.to_string().trim() == "test"
+}
+
+// ---------------------------------------------------------------------------
 // Rule: no `#[ignore]` outside the container smoke runner. `#[ignore]` for
 // "this flakes sometimes" is forbidden; the only legitimate use is opt-in
 // child-process helpers that the parent invokes directly via the test

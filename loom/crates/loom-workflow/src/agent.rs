@@ -46,7 +46,7 @@ pub async fn run_agent<B: AgentBackend>(
     sink: Option<LogSink>,
     text_capture: Option<&mut String>,
 ) -> Result<SessionOutcome, ProtocolError> {
-    match run_agent_classified::<B>(config, sink, text_capture).await {
+    match run_agent_classified::<B>(config, sink, text_capture, None).await {
         SessionResult::Complete(outcome) => Ok(outcome),
         // Callers that only accept the legacy `Result` shape (todo, plan,
         // msg, batch dispatch) treat both infra phases as a single failure
@@ -64,10 +64,18 @@ pub async fn run_agent<B: AgentBackend>(
 /// verdict gate can route pre-flight failures to `loom:blocked` cause
 /// `infra-preflight` immediately and grant mid-session failures one
 /// driver-memory retry per `loom run`.
+///
+/// `envelope_builder` is the R1 (wx-cqzxh) plumbing: when `Some`, every
+/// event emitted by the parser has its placeholder envelope replaced
+/// with a real per-spawn envelope (monotonic `seq`, real `bead_id`,
+/// real wall-clock `ts_ms`). When `None`, events flow with whatever
+/// the parser produced (currently `EventEnvelope::default()` per G1's
+/// interim shape); used by tests and the legacy `run_agent` wrapper.
 pub async fn run_agent_classified<B: AgentBackend>(
     config: &SpawnConfig,
     mut sink: Option<LogSink>,
     mut text_capture: Option<&mut String>,
+    mut envelope_builder: Option<loom_events::EnvelopeBuilder>,
 ) -> SessionResult {
     let stall_window = config
         .stall_warn_interval
@@ -107,7 +115,7 @@ pub async fn run_agent_classified<B: AgentBackend>(
     info!("prompt sent; awaiting agent events");
     loop {
         let next = next_event_with_stall_warn(&mut session, stall_window, &clock).await;
-        let event = match next {
+        let mut event = match next {
             Ok(Some(event)) => event,
             Ok(None) => {
                 finish_sink(sink, BeadOutcome::Failed);
@@ -122,6 +130,12 @@ pub async fn run_agent_classified<B: AgentBackend>(
                 };
             }
         };
+        // R1 (wx-cqzxh): stamp the real per-spawn envelope onto each
+        // event before any consumer sees it. Parser produced a
+        // placeholder; this is where the live bead context lands.
+        if let Some(builder) = envelope_builder.as_mut() {
+            *event.envelope_mut() = builder.build();
+        }
         info!(event = %summarize_event(&event), "agent event");
         if let AgentEvent::TextDelta { text, .. } = &event
             && let Some(buf) = text_capture.as_deref_mut()

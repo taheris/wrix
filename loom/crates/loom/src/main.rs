@@ -647,12 +647,14 @@ fn run_run(
                         }
                     };
                     let mut output = String::new();
+                    let envelope_builder = build_envelope_builder(bead_id.clone());
                     let session = dispatch_classified(
                         kind,
                         spawn_cfg,
                         shutdown_grace,
                         sink,
                         Some(&mut output),
+                        Some(envelope_builder),
                     )
                     .await;
                     let marker = parse_exit_signal(&output);
@@ -933,6 +935,7 @@ async fn dispatch_classified(
     shutdown_grace: Option<Duration>,
     sink: Option<LogSink>,
     text_capture: Option<&mut String>,
+    envelope_builder: Option<loom_events::EnvelopeBuilder>,
 ) -> SessionResult {
     if matches!(kind, AgentKind::Claude) && spawn.shutdown_grace.is_none() {
         spawn.shutdown_grace = shutdown_grace;
@@ -948,11 +951,31 @@ async fn dispatch_classified(
         spawn.stall_warn_interval = Some(d);
     }
     match kind {
-        AgentKind::Pi => run_agent_classified::<PiBackend>(&spawn, sink, text_capture).await,
+        AgentKind::Pi => {
+            run_agent_classified::<PiBackend>(&spawn, sink, text_capture, envelope_builder).await
+        }
         AgentKind::Claude => {
-            run_agent_classified::<ClaudeBackend>(&spawn, sink, text_capture).await
+            run_agent_classified::<ClaudeBackend>(&spawn, sink, text_capture, envelope_builder)
+                .await
         }
     }
+}
+
+/// Build a per-spawn [`loom_events::EnvelopeBuilder`] so every event the
+/// session emits carries the live bead id, monotonic `seq`, and real
+/// wall-clock `ts_ms` instead of the parser's `EventEnvelope::default()`
+/// sentinel. `molecule_id` and `iteration` are zero until the driver
+/// threads them through — R2/R7 follow-ups will widen this once the
+/// dispatcher reads them from the bead context.
+fn build_envelope_builder(bead_id: BeadId) -> loom_events::EnvelopeBuilder {
+    let clock = SystemClock::new();
+    loom_events::EnvelopeBuilder::new(bead_id, None, 0, loom_events::Source::Agent, move || {
+        clock
+            .wall_now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64
+    })
 }
 
 /// Test seam: read a millisecond budget from `name` if set. Production

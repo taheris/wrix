@@ -282,6 +282,35 @@ impl AgentEvent {
             | AgentEvent::DriverEvent { envelope, .. } => envelope,
         }
     }
+
+    /// Mutable accessor for the common envelope. The session layer uses
+    /// this to overwrite the parser's placeholder envelope with the real
+    /// per-spawn values (bead/molecule/iteration/source/ts_ms/seq). R1
+    /// (wx-cqzxh) wires the actual stamping; without this accessor the
+    /// parser would need to know the session context, which would force
+    /// every backend test to construct a real envelope.
+    pub fn envelope_mut(&mut self) -> &mut EventEnvelope {
+        match self {
+            AgentEvent::AgentStart { envelope, .. }
+            | AgentEvent::AgentEnd { envelope }
+            | AgentEvent::TurnStart { envelope }
+            | AgentEvent::TurnEnd { envelope }
+            | AgentEvent::TextDelta { envelope, .. }
+            | AgentEvent::TextEnd { envelope }
+            | AgentEvent::ThinkingDelta { envelope, .. }
+            | AgentEvent::ThinkingEnd { envelope }
+            | AgentEvent::ToolcallDelta { envelope, .. }
+            | AgentEvent::ToolCall { envelope, .. }
+            | AgentEvent::ToolResult { envelope, .. }
+            | AgentEvent::ToolProgress { envelope, .. }
+            | AgentEvent::SessionComplete { envelope, .. }
+            | AgentEvent::CompactionStart { envelope, .. }
+            | AgentEvent::CompactionEnd { envelope, .. }
+            | AgentEvent::AutoRetry { envelope, .. }
+            | AgentEvent::Error { envelope, .. }
+            | AgentEvent::DriverEvent { envelope, .. } => envelope,
+        }
+    }
 }
 
 /// Per-session monotonic envelope factory. Threads bead/molecule
