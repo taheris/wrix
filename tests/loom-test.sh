@@ -3340,7 +3340,14 @@ test_seq_monotonic() {
     cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
         event::tests::seq_advances_monotonically
 }
-test_task_subagent_nesting() { _pending_stub task_subagent_nesting; }
+test_task_subagent_nesting() {
+    # Parser half — G4 (wx-b2f7k) — pins parent_tool_call_id threading.
+    cargo_run test -p loom-agent --lib -- --exact --nocapture --quiet \
+        pi::parser::tests::task_subagent_nesting_threads_parent_tool_call_id
+    # Renderer half — H6 (wx-46jgi) — pins indent-by-depth on output.
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        renderer::tests::task_subagent_nesting_indents_nested_tool_calls
+}
 test_todo_delete_notes_atomic_with_cursor() { _pending_stub todo_delete_notes_atomic_with_cursor; }
 test_tool_body_truncation_policy() { _pending_stub tool_body_truncation_policy; }
 test_tool_call_result_pairing() { _pending_stub tool_call_result_pairing; }

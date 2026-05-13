@@ -96,6 +96,12 @@ pub struct TerminalRenderer {
     clock: Arc<dyn Clock>,
     started: Instant,
     tool_count: u32,
+    /// Per-tool-call nesting depth. Populated when a `ToolCall` arrives
+    /// — depth = parent's depth + 1 when `parent_tool_call_id` is set,
+    /// 0 otherwise. The renderer indents the rendered line by
+    /// `depth * 2` spaces (H6, wx-46jgi). Cleared lazily; entries only
+    /// matter while the corresponding tool is in flight.
+    indent_by_tool: std::collections::HashMap<loom_events::identifier::ToolCallId, usize>,
     header_printed: bool,
     closed: bool,
 }
@@ -134,6 +140,7 @@ impl TerminalRenderer {
             clock,
             started,
             tool_count: 0,
+            indent_by_tool: std::collections::HashMap::new(),
             header_printed: false,
             closed: false,
         }
@@ -168,17 +175,32 @@ impl TerminalRenderer {
     /// (no newline injection) and includes the tool-call args inline.
     pub fn render_event(&mut self, event: &AgentEvent) -> io::Result<()> {
         match event {
-            AgentEvent::ToolCall { tool, params, .. } => {
+            AgentEvent::ToolCall {
+                id,
+                tool,
+                params,
+                parent_tool_call_id,
+                ..
+            } => {
                 self.tool_count += 1;
+                // H6 — compute the indent for this call: parent's depth
+                // + 1 when nested, 0 otherwise. Cache for this tool so
+                // a matching ToolResult/ToolProgress lines up.
+                let depth = match parent_tool_call_id {
+                    Some(parent) => self.indent_by_tool.get(parent).copied().unwrap_or(0) + 1,
+                    None => 0,
+                };
+                self.indent_by_tool.insert(id.clone(), depth);
                 let summary = if matches!(self.mode, RenderMode::Verbose) {
                     format!("{} {}", short_summary(tool, params), inline_args(params))
                 } else {
                     short_summary(tool, params)
                 };
+                let indent: String = "  ".repeat(depth);
                 let line = if self.parallel {
-                    format!("  [{}] {summary}\n", self.bead_id.as_str())
+                    format!("  [{}] {indent}{summary}\n", self.bead_id.as_str())
                 } else {
-                    format!("  {summary}\n")
+                    format!("  {indent}{summary}\n")
                 };
                 self.out.write_all(line.as_bytes())?;
                 self.out.flush()?;
@@ -773,6 +795,41 @@ mod tests {
             "json output must be pretty-printed: {out}",
         );
         assert!(out.ends_with('\n'));
+    }
+
+    /// H6 — when a `ToolCall` carries `parent_tool_call_id = Some(parent)`,
+    /// the renderer prints it indented by 2 spaces beyond the parent.
+    /// Tracks indent depth per tool_call_id so nested chains layer
+    /// correctly (Task → Read → Edit etc.).
+    #[test]
+    fn task_subagent_nesting_indents_nested_tool_calls() {
+        let out = capture(RenderMode::Default, false, false, |r| {
+            // Top-level Task call — no parent, depth 0.
+            r.render_event(&AgentEvent::ToolCall {
+                envelope: EventEnvelope::default(),
+                id: ToolCallId::new("task1"),
+                tool: "Task".into(),
+                params: json!({}),
+                parent_tool_call_id: None,
+            })
+            .expect("render task");
+            // Nested call inside the Task — depth 1, prefixed with two
+            // extra spaces.
+            r.render_event(&AgentEvent::ToolCall {
+                envelope: EventEnvelope::default(),
+                id: ToolCallId::new("read1"),
+                tool: "Read".into(),
+                params: json!({"file_path": "a"}),
+                parent_tool_call_id: Some(ToolCallId::new("task1")),
+            })
+            .expect("render nested");
+        });
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 2, "expected 2 lines, got: {out:?}");
+        // Top-level: 2-space prefix (the renderer's base indent).
+        assert!(lines[0].starts_with("  Task"), "{}", lines[0]);
+        // Nested: base 2 + indent 2 = 4 spaces before the tool name.
+        assert!(lines[1].starts_with("    Read"), "{}", lines[1]);
     }
 
     /// `RawRenderer` writes a compact JSON line — no embedded newlines
