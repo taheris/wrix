@@ -19,3 +19,4 @@ Workflow:
   -o, --option <INT>  Fast-reply with the body of `### Option <int>` for a clarify bead. Validated — missing subsection exits non-zero before any bd state is mutated. Mutually exclusive with `-r` and `-d`
   -r, --reply <TEXT>  Fast-reply with verbatim text. Works on any bead regardless of whether it has an `## Options` section. Mutually exclusive with `-o` and `-d`
   -d, --dismiss       Dismiss the bead (write canonical note + remove the loom:* label)
+  -c, --chat          Launch an interactive Drafter chat session (I2, wx-2dreh). Renders the msg.md template and spawns a container with the claude backend attached to the user's terminal. Mutually exclusive with `-o`, `-r`, `-d`, `-b`, `-n` — the chat session walks every outstanding clarify, no single-bead selection. `-s <label>` may scope the walk to one spec

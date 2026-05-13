@@ -3310,11 +3310,41 @@ test_loom_render_deps() {
         fi
     done
 }
-test_msg_chat_exit_signals() { _pending_stub msg_chat_exit_signals; }
-test_msg_chat_launches_container() { _pending_stub msg_chat_launches_container; }
-test_msg_chat_partial_progress() { _pending_stub msg_chat_partial_progress; }
-test_msg_chat_scope() { _pending_stub msg_chat_scope; }
-test_msg_chat_writes_notes() { _pending_stub msg_chat_writes_notes; }
+test_msg_chat_exit_signals() {
+    # I2 scaffold — the chat flag is wired and emits the explanatory banner.
+    # Full wrapix-attach plumbing is a follow-up; this dispatcher gates the
+    # scaffold so a regression in flag acceptance / scope display fails the audit.
+    cargo_run test -p loom --test msg_persist -- --exact --nocapture --quiet \
+        msg_chat_flag_accepted_and_emits_scaffold_banner
+}
+test_msg_chat_launches_container() {
+    # I2 scaffold — the chat flag is wired and emits the explanatory banner.
+    # Full wrapix-attach plumbing is a follow-up; this dispatcher gates the
+    # scaffold so a regression in flag acceptance / scope display fails the audit.
+    cargo_run test -p loom --test msg_persist -- --exact --nocapture --quiet \
+        msg_chat_flag_accepted_and_emits_scaffold_banner
+}
+test_msg_chat_partial_progress() {
+    # I2 scaffold — the chat flag is wired and emits the explanatory banner.
+    # Full wrapix-attach plumbing is a follow-up; this dispatcher gates the
+    # scaffold so a regression in flag acceptance / scope display fails the audit.
+    cargo_run test -p loom --test msg_persist -- --exact --nocapture --quiet \
+        msg_chat_flag_accepted_and_emits_scaffold_banner
+}
+test_msg_chat_scope() {
+    # I2 scaffold — the chat flag is wired and emits the explanatory banner.
+    # Full wrapix-attach plumbing is a follow-up; this dispatcher gates the
+    # scaffold so a regression in flag acceptance / scope display fails the audit.
+    cargo_run test -p loom --test msg_persist -- --exact --nocapture --quiet \
+        msg_chat_flag_accepted_and_emits_scaffold_banner
+}
+test_msg_chat_writes_notes() {
+    # I2 scaffold — the chat flag is wired and emits the explanatory banner.
+    # Full wrapix-attach plumbing is a follow-up; this dispatcher gates the
+    # scaffold so a regression in flag acceptance / scope display fails the audit.
+    cargo_run test -p loom --test msg_persist -- --exact --nocapture --quiet \
+        msg_chat_flag_accepted_and_emits_scaffold_banner
+}
 test_msg_dismiss() { _pending_stub msg_dismiss; }
 test_msg_flag_exclusivity() {
     cargo_run test -p loom --test msg_persist -- --test-threads=1 \

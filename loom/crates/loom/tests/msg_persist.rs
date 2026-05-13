@@ -401,6 +401,56 @@ fn msg_blocked_integer_input_persists_verbatim_not_as_option() {
 // I1 — `test_msg_flag_exclusivity`
 // -------------------------------------------------------------------
 
+// -------------------------------------------------------------------
+// I2 — `loom msg --chat` scaffold
+// -------------------------------------------------------------------
+
+/// `loom msg --chat` is the entry point for the interactive Drafter
+/// session (I2). The current scaffold prints an explanation banner
+/// and exits 0; the wrapix-run / claude-attach plumbing is a
+/// follow-up. This test pins:
+/// - the flag is recognized (clap accepts `--chat` / `-c`)
+/// - the command exits 0 (scaffold path, not failure)
+/// - the output mentions the wrapix-container intent
+/// - `-s <label>` scopes the scaffold output
+#[test]
+fn msg_chat_flag_accepted_and_emits_scaffold_banner() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path();
+    let state_dir = workspace.join("bd-state");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    let bin_dir = install_bd_shim(workspace);
+    let manifest = write_minimal_manifest(workspace);
+
+    // Bare --chat
+    let output = run_loom_msg(workspace, &bin_dir, &state_dir, &manifest, &["--chat"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "loom msg --chat must exit 0: stdout={stdout}\nstderr={:?}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        stdout.contains("interactive Drafter") && stdout.contains("wrapix container"),
+        "scaffold banner must explain the chat-session intent: {stdout}",
+    );
+
+    // --chat -s <label>
+    let output = run_loom_msg(
+        workspace,
+        &bin_dir,
+        &state_dir,
+        &manifest,
+        &["--chat", "-s", "loom-harness"],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success());
+    assert!(
+        stdout.contains("spec:loom-harness"),
+        "scaffold must reflect -s scope: {stdout}",
+    );
+}
+
 /// `clap` enforces mutual exclusion at parse time: `-o` xor `-r`, neither
 /// with `-d`, `-n` xor `-b`. Each forbidden combination must exit
 /// non-zero with a parse error, BEFORE any bd call. The shim doesn't
