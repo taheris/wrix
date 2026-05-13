@@ -12,6 +12,7 @@
 
 pub mod agent;
 pub mod check;
+pub mod doctor;
 pub mod init;
 pub mod logs_cmd;
 pub mod msg;

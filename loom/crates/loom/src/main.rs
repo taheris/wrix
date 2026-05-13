@@ -36,7 +36,7 @@ use loom_workflow::run::{
 use loom_workflow::todo::{
     ExitSignal, ProductionTodoController, parse_exit_signal, run as run_todo_workflow,
 };
-use loom_workflow::{init, logs_cmd, plan, spec, status, use_spec};
+use loom_workflow::{doctor, init, logs_cmd, plan, spec, status, use_spec};
 use loom_workflow::{run_agent, run_agent_classified};
 
 /// Top-level CLI surface.
@@ -191,6 +191,19 @@ enum Command {
         #[arg(long, value_name = "COMMIT")]
         since: Option<String>,
     },
+    /// Audit spec criteria against test dispatchers (`[verify]` → stub-or-real).
+    #[command(next_help_heading = "Inspect")]
+    Doctor {
+        /// Which audit to run. Currently only `criteria` (stub-or-real
+        /// checks for `[verify](tests/loom-test.sh::test_X)` annotations).
+        #[arg(long, default_value = "criteria")]
+        check: String,
+        /// Promote warning-severity findings (e.g. orphan stubs) to
+        /// errors. Hard errors (stub-checked, missing dispatcher) always
+        /// fail regardless.
+        #[arg(long)]
+        strict: bool,
+    },
 }
 
 impl Command {
@@ -200,7 +213,10 @@ impl Command {
     /// `false`. Spec: `loom-harness.md` § Nested-Loom Guard.
     fn refused_inside_loom(&self) -> bool {
         match self {
-            Command::Status | Command::Logs { .. } | Command::Spec { .. } => false,
+            Command::Status
+            | Command::Logs { .. }
+            | Command::Spec { .. }
+            | Command::Doctor { .. } => false,
             Command::Init { .. }
             | Command::UseSpec { .. }
             | Command::Plan { .. }
@@ -269,6 +285,7 @@ fn main() -> ExitCode {
             dismiss,
         } => run_msg(&workspace, spec, number, bead, option, reply, dismiss),
         Command::Todo { spec, since } => run_todo(&workspace, spec, since, agent_override),
+        Command::Doctor { check, strict } => run_doctor(&workspace, &check, strict),
     };
 
     match result {
@@ -307,6 +324,20 @@ fn run_init(workspace: &std::path::Path, rebuild: bool) -> anyhow::Result<()> {
             "  rebuilt {} spec(s), {} molecule(s), {} companion(s)",
             rb.specs, rb.molecules, rb.companions,
         );
+    }
+    Ok(())
+}
+
+fn run_doctor(workspace: &std::path::Path, check: &str, strict: bool) -> anyhow::Result<()> {
+    if check != "criteria" {
+        anyhow::bail!("unsupported --check value `{check}` (only `criteria` is implemented)");
+    }
+    let specs_dir = workspace.join("specs");
+    let dispatcher = workspace.join("tests/loom-test.sh");
+    let findings = doctor::audit(&specs_dir, &dispatcher)?;
+    let code = doctor::report(&findings, strict);
+    if code != 0 {
+        std::process::exit(code);
     }
     Ok(())
 }
