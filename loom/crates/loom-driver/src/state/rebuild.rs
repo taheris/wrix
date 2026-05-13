@@ -39,8 +39,7 @@ impl StateDb {
     /// 3. Each spec's `## Companions` section — one `companions` row per
     ///    listed path. Specs without the section contribute zero rows.
     ///
-    /// Iteration counters reset to 0; implementation notes are lost (the only
-    /// field with no external source of truth).
+    /// Iteration counters reset to 0.
     pub fn rebuild(
         &self,
         workspace: &Path,
@@ -55,8 +54,7 @@ impl StateDb {
 
             for (label, content) in &spec_files {
                 conn.execute(
-                    "INSERT INTO specs(label, implementation_notes)
-                     VALUES (?1, NULL)",
+                    "INSERT INTO specs(label) VALUES (?1)",
                     params![label.as_str()],
                 )?;
                 report.specs += 1;

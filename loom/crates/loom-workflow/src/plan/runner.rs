@@ -599,8 +599,8 @@ mod tests {
     // for `## Implementation Notes`, persist to `specs.implementation_notes`,
     // thread back for merge). D1 (wx-2ytty) removes that path entirely; the
     // loom note CLI (D2) replaces it with a SQLite `notes` table the agent
-    // mutates directly. The `specs.implementation_notes` column is no longer
-    // written by the runner.
+    // mutates directly. R9 (wx-42teo) dropped the now-unused
+    // `specs.implementation_notes` column from the schema.
 
     /// wx-hcolw.7 gate: before the interactive `wrapix run` exec, the runner
     /// must have installed the per-key scratch directory with `prompt.txt`

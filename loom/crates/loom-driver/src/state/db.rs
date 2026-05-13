@@ -7,12 +7,11 @@ use crate::identifier::{MoleculeId, SpecLabel};
 
 use super::error::StateError;
 
-const SCHEMA_VERSION: &str = "3";
+const SCHEMA_VERSION: &str = "4";
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS specs (
-    label                TEXT PRIMARY KEY,
-    implementation_notes TEXT
+    label TEXT PRIMARY KEY
 );
 CREATE TABLE IF NOT EXISTS molecules (
     id              TEXT PRIMARY KEY,
@@ -54,6 +53,11 @@ CREATE TABLE IF NOT EXISTS notes (
 );
 CREATE INDEX IF NOT EXISTS idx_notes_spec_kind ON notes(spec_label, kind);
 ";
+// R9 (wx-42teo): spec target schema is `specs(label TEXT PRIMARY KEY)`
+// — drop the deprecated implementation_notes column now that the `notes`
+// table (D2, wx-b1f1p) is the canonical store and `loom plan` no longer
+// writes the column.
+const MIGRATE_V3_TO_V4: &str = "ALTER TABLE specs DROP COLUMN implementation_notes;";
 
 const DROP_AND_RECREATE: &str = "
 DROP TABLE IF EXISTS companions;
@@ -73,7 +77,6 @@ pub struct StateDb {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpecRow {
     pub label: SpecLabel,
-    pub implementation_notes: Option<Vec<String>>,
 }
 
 /// One row of the `notes` table (D2, wx-b1f1p). `kind` is free-form
@@ -131,14 +134,14 @@ impl StateDb {
     pub fn spec(&self, label: &SpecLabel) -> Result<SpecRow, StateError> {
         let conn = self.lock_conn()?;
         conn.query_row(
-            "SELECT label, implementation_notes FROM specs WHERE label = ?1",
+            "SELECT label FROM specs WHERE label = ?1",
             params![label.as_str()],
             row_to_spec,
         )
         .optional()?
         .ok_or_else(|| StateError::SpecNotFound {
             label: label.to_string(),
-        })?
+        })
     }
 
     /// Most recent active molecule for the given spec, or `None` if there is
@@ -222,8 +225,7 @@ impl StateDb {
     ) -> Result<(), StateError> {
         let conn = self.lock_conn()?;
         conn.execute(
-            "INSERT OR IGNORE INTO specs(label, implementation_notes)
-             VALUES (?1, NULL)",
+            "INSERT OR IGNORE INTO specs(label) VALUES (?1)",
             params![label.as_str()],
         )?;
         conn.execute(
@@ -240,10 +242,6 @@ impl StateDb {
         Ok(())
     }
 
-    /// Replace `implementation_notes` for `label` with `notes` (encoded as a
-    /// JSON array). The row must already exist — `set_implementation_notes`
-    /// does not create one. Used by `loom plan -n`/`-u` after the interview
-    /// to land the agent-merged note set onto the existing `specs` row.
     // -----------------------------------------------------------------
     // D2 (wx-b1f1p) — `notes` table CRUD. Backs the `loom note` CLI.
     // -----------------------------------------------------------------
@@ -383,50 +381,6 @@ impl StateDb {
         Ok(())
     }
 
-    ///
-    /// An empty `notes` slice writes `[]` rather than `NULL`; clearing is the
-    /// distinct [`Self::clear_implementation_notes`] mutation reserved for
-    /// `loom todo`'s consume-and-clear step.
-    pub fn set_implementation_notes(
-        &self,
-        label: &SpecLabel,
-        notes: &[String],
-    ) -> Result<(), StateError> {
-        let conn = self.lock_conn()?;
-        let json = serde_json::to_string(notes).map_err(|source| StateError::Json {
-            column: "implementation_notes",
-            source,
-        })?;
-        let updated = conn.execute(
-            "UPDATE specs SET implementation_notes = ?2 WHERE label = ?1",
-            params![label.as_str(), json],
-        )?;
-        if updated == 0 {
-            return Err(StateError::SpecNotFound {
-                label: label.to_string(),
-            });
-        }
-        Ok(())
-    }
-
-    /// Set `implementation_notes` to `NULL` for `label`. The row itself is
-    /// preserved — molecules and companions still reference it. Used by
-    /// `loom todo` after rendering notes into a fresh bead body so the
-    /// transient hints do not bleed into a later run.
-    pub fn clear_implementation_notes(&self, label: &SpecLabel) -> Result<(), StateError> {
-        let conn = self.lock_conn()?;
-        let updated = conn.execute(
-            "UPDATE specs SET implementation_notes = NULL WHERE label = ?1",
-            params![label.as_str()],
-        )?;
-        if updated == 0 {
-            return Err(StateError::SpecNotFound {
-                label: label.to_string(),
-            });
-        }
-        Ok(())
-    }
-
     /// Read all companion paths recorded for `label` (sorted for determinism).
     pub fn companions(&self, label: &SpecLabel) -> Result<Vec<String>, StateError> {
         let conn = self.lock_conn()?;
@@ -515,13 +469,19 @@ fn apply_migrations(conn: &Connection) -> Result<(), StateError> {
         Some("1") => {
             conn.execute_batch(MIGRATE_V1_TO_V2)?;
             conn.execute_batch(MIGRATE_V2_TO_V3)?;
+            conn.execute_batch(MIGRATE_V3_TO_V4)?;
             write_schema_version(conn, SCHEMA_VERSION)?;
         }
         Some("2") => {
             conn.execute_batch(MIGRATE_V2_TO_V3)?;
+            conn.execute_batch(MIGRATE_V3_TO_V4)?;
             write_schema_version(conn, SCHEMA_VERSION)?;
         }
-        Some("3") => {}
+        Some("3") => {
+            conn.execute_batch(MIGRATE_V3_TO_V4)?;
+            write_schema_version(conn, SCHEMA_VERSION)?;
+        }
+        Some("4") => {}
         Some(other) => {
             return Err(StateError::UnknownSchemaVersion {
                 version: other.to_string(),
@@ -551,25 +511,11 @@ fn write_schema_version(conn: &Connection, version: &str) -> Result<(), StateErr
     Ok(())
 }
 
-fn row_to_spec(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<SpecRow, StateError>> {
+fn row_to_spec(row: &rusqlite::Row<'_>) -> rusqlite::Result<SpecRow> {
     let label: String = row.get(0)?;
-    let notes_raw: Option<String> = row.get(1)?;
-    let notes = match notes_raw {
-        None => None,
-        Some(s) => match serde_json::from_str::<Vec<String>>(&s) {
-            Ok(v) => Some(v),
-            Err(source) => {
-                return Ok(Err(StateError::Json {
-                    column: "implementation_notes",
-                    source,
-                }));
-            }
-        },
-    };
-    Ok(Ok(SpecRow {
+    Ok(SpecRow {
         label: SpecLabel::new(label),
-        implementation_notes: notes,
-    }))
+    })
 }
 
 fn row_to_molecule(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<MoleculeRow, StateError>> {

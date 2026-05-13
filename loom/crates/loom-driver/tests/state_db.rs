@@ -68,7 +68,7 @@ fn state_db_init_creates_tables() -> Result<()> {
     )?;
     assert_eq!(
         meta,
-        vec![vec!["schema_version".to_string(), "3".to_string()]]
+        vec![vec!["schema_version".to_string(), "4".to_string()]]
     );
     Ok(())
 }
@@ -93,7 +93,6 @@ fn state_db_rebuild_populates_specs_and_molecules() -> Result<()> {
 
     let alpha = db.spec(&SpecLabel::new("alpha"))?;
     assert_eq!(alpha.label.as_str(), "alpha");
-    assert!(alpha.implementation_notes.is_none());
 
     let mol = db
         .active_molecule(&SpecLabel::new("alpha"))?
@@ -310,7 +309,7 @@ fn state_db_open_migrates_v1_to_v2() -> Result<()> {
         &db_path,
         "SELECT value FROM meta WHERE key='schema_version'",
     )?;
-    assert_eq!(meta, vec![vec!["3".to_string()]]);
+    assert_eq!(meta, vec![vec!["4".to_string()]]);
 
     let cols = list_table(&db_path, "PRAGMA table_info(specs)")?;
     let names: Vec<&str> = cols.iter().map(|r| r[1].as_str()).collect();
@@ -319,7 +318,10 @@ fn state_db_open_migrates_v1_to_v2() -> Result<()> {
         "spec_path column should be dropped: {names:?}",
     );
     assert!(names.contains(&"label"));
-    assert!(names.contains(&"implementation_notes"));
+    assert!(
+        !names.contains(&"implementation_notes"),
+        "implementation_notes column should be dropped (R9, wx-42teo): {names:?}",
+    );
 
     let alpha = db.spec(&SpecLabel::new("alpha"))?;
     assert_eq!(alpha.label.as_str(), "alpha");
@@ -332,9 +334,9 @@ fn state_db_open_is_idempotent_after_migration() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let db_path = dir.path().join("state.db");
 
-    // Fresh open lands at v2; a second open must be a no-op rather than
-    // re-running the v1->v2 ALTER (which would fail because the column is
-    // already gone).
+    // Fresh open lands at the current schema; a second open must be a
+    // no-op rather than re-running any ALTER (which would fail because
+    // the columns are already in their final shape).
     {
         let _ = StateDb::open(&db_path)?;
     }
@@ -343,89 +345,7 @@ fn state_db_open_is_idempotent_after_migration() -> Result<()> {
         &db_path,
         "SELECT value FROM meta WHERE key='schema_version'",
     )?;
-    assert_eq!(meta, vec![vec!["3".to_string()]]);
-    Ok(())
-}
-
-#[test]
-fn state_implementation_notes_set_and_clear_round_trip() -> Result<()> {
-    let dir = tempfile::tempdir()?;
-    let workspace = dir.path();
-    write_spec(workspace, "alpha", "# alpha\n")?;
-    let db = StateDb::open(workspace.join(".wrapix/loom/state.db"))?;
-    db.rebuild(workspace, &[])?;
-    let label = SpecLabel::new("alpha");
-
-    assert!(db.spec(&label)?.implementation_notes.is_none());
-
-    let notes = vec!["touch lib/foo".to_string(), "see wx-123".to_string()];
-    db.set_implementation_notes(&label, &notes)?;
-    assert_eq!(
-        db.spec(&label)?.implementation_notes.as_deref(),
-        Some(notes.as_slice())
-    );
-
-    db.clear_implementation_notes(&label)?;
-    assert!(
-        db.spec(&label)?.implementation_notes.is_none(),
-        "clear must drive notes back to NULL so loom todo's consume step is observable",
-    );
-
-    let row_count = list_table(
-        &workspace.join(".wrapix/loom/state.db"),
-        "SELECT COUNT(*) FROM specs WHERE label='alpha'",
-    )?;
-    assert_eq!(
-        row_count,
-        vec![vec!["1".to_string()]],
-        "clear must NOT delete the row — molecules and companions still reference it",
-    );
-    Ok(())
-}
-
-#[test]
-fn state_implementation_notes_set_replaces_existing() -> Result<()> {
-    let dir = tempfile::tempdir()?;
-    let workspace = dir.path();
-    write_spec(workspace, "alpha", "# alpha\n")?;
-    let db = StateDb::open(workspace.join(".wrapix/loom/state.db"))?;
-    db.rebuild(workspace, &[])?;
-    let label = SpecLabel::new("alpha");
-
-    db.set_implementation_notes(&label, &["one".to_string()])?;
-    db.set_implementation_notes(&label, &["two".to_string(), "three".to_string()])?;
-    assert_eq!(
-        db.spec(&label)?.implementation_notes.as_deref(),
-        Some(["two".to_string(), "three".to_string()].as_slice()),
-    );
-    Ok(())
-}
-
-#[test]
-fn state_implementation_notes_set_empty_writes_empty_array() -> Result<()> {
-    let dir = tempfile::tempdir()?;
-    let workspace = dir.path();
-    write_spec(workspace, "alpha", "# alpha\n")?;
-    let db = StateDb::open(workspace.join(".wrapix/loom/state.db"))?;
-    db.rebuild(workspace, &[])?;
-    let label = SpecLabel::new("alpha");
-
-    db.set_implementation_notes(&label, &[])?;
-    assert_eq!(
-        db.spec(&label)?.implementation_notes.as_deref(),
-        Some([].as_slice()),
-        "empty slice writes []; clearing to NULL is the distinct mutation",
-    );
-    Ok(())
-}
-
-#[test]
-fn state_implementation_notes_set_unknown_label_errors() -> Result<()> {
-    let dir = tempfile::tempdir()?;
-    let db = StateDb::open(dir.path().join("state.db"))?;
-    let unknown = SpecLabel::new("never-rebuilt");
-    assert!(db.set_implementation_notes(&unknown, &[]).is_err());
-    assert!(db.clear_implementation_notes(&unknown).is_err());
+    assert_eq!(meta, vec![vec!["4".to_string()]]);
     Ok(())
 }
 
@@ -451,8 +371,13 @@ fn routine_commands_never_delete_spec_row() -> Result<()> {
     db.increment_iteration(&mol_id)?;
     db.reset_iteration(&mol_id)?;
     db.replace_companions(&label, &["lib/foo/".into(), "lib/bar/".into()])?;
-    db.set_implementation_notes(&label, &["touch lib/foo".to_string()])?;
-    db.clear_implementation_notes(&label)?;
+    db.notes_set(
+        &label,
+        "implementation",
+        &["touch lib/foo".to_string()],
+        100,
+    )?;
+    db.notes_clear(&label, Some("implementation"))?;
 
     let row_count = list_table(
         &workspace.join(".wrapix/loom/state.db"),
