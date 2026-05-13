@@ -7,16 +7,15 @@
 //! 1. **Stub criteria with checked boxes** — a `[x]` criterion whose
 //!    dispatcher still calls `_pending_stub`. Hard error.
 //! 2. **Unit-test masquerade** — a checked criterion whose dispatcher
-//!    targets a `#[cfg(test)] mod tests` symbol inside the production
-//!    crate. Warning by default, error in `--strict`. **Not implemented
-//!    in this MVP** — requires Rust AST inspection; deferred to a
-//!    follow-up. Will surface as `loom doctor --check=criteria-strict`.
+//!    runs a `--lib` profile test whose function path contains
+//!    `::tests::`, i.e. a `#[cfg(test)] mod tests` block inside the
+//!    production crate. Warning by default, error in `--strict`. R10
+//!    (wx-2pbxe). Suppressed by the per-annotation `@unit-ok` marker:
+//!    `[verify](tests/loom-test.sh::test_fn @unit-ok)`.
 //! 3. **Missing dispatcher** — `[verify](tests/loom-test.sh::test_X)`
 //!    where `test_X` is not defined. Hard error.
 //! 4. **Orphan stubs** — a function in `tests/loom-test.sh` that no
-//!    criterion references. **Not implemented in this MVP** — requires
-//!    every annotation parsed across every spec; the framework is here
-//!    and the check is a small follow-up.
+//!    criterion references. Warning. R10 (wx-2pbxe).
 //!
 //! `loom doctor --check=criteria` exits 0 when no violations are found,
 //! `1` for any hard error, `2` for arg parsing problems.
@@ -71,6 +70,10 @@ pub struct VerifyAnnotation {
     pub dispatcher_fn: String,
     /// `true` when the preceding criterion checkbox is `[x]`.
     pub checked: bool,
+    /// `true` when the annotation carries the `@unit-ok` opt-out
+    /// marker (R10, wx-2pbxe). Suppresses unit-test masquerade
+    /// warnings for criteria that legitimately target unit logic.
+    pub unit_ok: bool,
 }
 
 /// Walk `specs_dir` for `.md` files and extract every `[verify]`
@@ -126,24 +129,50 @@ fn parse_verify_from_body(spec_file: &Path, body: &str, out: &mut Vec<VerifyAnno
         if let Some(start) = line.find(marker) {
             let after = &line[start + marker.len()..];
             if let Some(end) = after.find(')') {
-                let fn_name = &after[..end];
+                let raw = &after[..end];
+                // R10 — `@unit-ok` is a space-separated trailing marker
+                // that suppresses the unit-masquerade warning for the
+                // criterion. Strip it before recording the fn name.
+                let (fn_name, unit_ok) = match raw.split_once(" @unit-ok") {
+                    Some((name, _)) => (name.trim(), true),
+                    None => (raw.trim(), false),
+                };
                 out.push(VerifyAnnotation {
                     spec_file: spec_file.to_path_buf(),
                     line_no: idx + 1,
                     dispatcher_fn: fn_name.to_string(),
                     checked: last_checked.unwrap_or(false),
+                    unit_ok,
                 });
             }
         }
     }
 }
 
-/// Collect every `test_<name>() { … }` symbol defined in `tests/loom-test.sh`
-/// and bucket each as `_pending_stub` vs real. Returns
-/// `(stubs, real_names)` sets.
-pub fn parse_dispatcher(
-    dispatcher_path: &Path,
-) -> Result<(HashSet<String>, HashSet<String>), DoctorError> {
+/// Parsed dispatcher map: per-function classification plus the body
+/// text the audit walks to detect unit-test masquerade (R10).
+#[derive(Debug, Default)]
+pub struct DispatcherIndex {
+    /// Functions whose body calls `_pending_stub`.
+    pub stubs: HashSet<String>,
+    /// Functions whose body is a real test invocation.
+    pub real: HashSet<String>,
+    /// Per-function body text for masquerade inspection. Keyed by
+    /// `test_<name>`; value is the lines between the opening `{` and
+    /// the matching closing `}` (newline-joined).
+    pub bodies: std::collections::HashMap<String, String>,
+}
+
+/// Collect every `test_<name>() { … }` symbol defined in `tests/loom-test.sh`,
+/// bucket each as `_pending_stub` vs real, and capture each body so the
+/// audit can inspect it for masquerade signatures.
+///
+/// Bodies are captured by reading forward from the function header until
+/// the next `test_<name>()` header or the end of file. Brace counting in
+/// real-world bash mismatches because of `{`/`}` characters inside
+/// strings, here-docs, and comments — line-based segmentation is simpler
+/// and correct enough for the heuristic checks the audit needs.
+pub fn parse_dispatcher(dispatcher_path: &Path) -> Result<DispatcherIndex, DoctorError> {
     if !dispatcher_path.is_file() {
         return Err(DoctorError::NoDispatcher(dispatcher_path.to_path_buf()));
     }
@@ -151,60 +180,134 @@ pub fn parse_dispatcher(
         path: dispatcher_path.to_path_buf(),
         source,
     })?;
-    let mut stubs = HashSet::new();
-    let mut real = HashSet::new();
+    let mut out = DispatcherIndex::default();
     let lines: Vec<&str> = body.lines().collect();
-    for (idx, line) in lines.iter().enumerate() {
-        let trimmed = line.trim_start();
-        if let Some(rest) = trimmed.strip_prefix("test_") {
-            // Format: `test_<name>() { … }` or `test_<name>() {<newline>` …
-            if let Some(paren_at) = rest.find('(') {
-                let fn_name = format!("test_{}", &rest[..paren_at]);
-                // Inspect the body — same-line `_pending_stub` or
-                // first body line that's `_pending_stub`.
-                let mut is_stub = false;
-                if line.contains("_pending_stub") {
-                    is_stub = true;
-                } else if let Some(next) = lines.get(idx + 1) {
-                    if next.trim_start().starts_with("_pending_stub") {
-                        is_stub = true;
-                    }
-                }
-                if is_stub {
-                    stubs.insert(fn_name);
-                } else {
-                    real.insert(fn_name);
-                }
+    let starts: Vec<(usize, String)> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, line)| {
+            let trimmed = line.trim_start();
+            let rest = trimmed.strip_prefix("test_")?;
+            let paren_at = rest.find('(')?;
+            // Reject names that have spaces or other separators before the
+            // paren — those are call sites (`test_foo arg`), not headers.
+            let name_segment = &rest[..paren_at];
+            if name_segment
+                .chars()
+                .any(|c| !(c.is_ascii_alphanumeric() || c == '_'))
+            {
+                return None;
             }
+            Some((idx, format!("test_{name_segment}")))
+        })
+        .collect();
+    for (i, (start, fn_name)) in starts.iter().enumerate() {
+        let end = starts
+            .get(i + 1)
+            .map(|(next_start, _)| *next_start)
+            .unwrap_or(lines.len());
+        let body_text = lines[*start..end].join("\n");
+        let is_stub = body_text.contains("_pending_stub");
+        if is_stub {
+            out.stubs.insert(fn_name.clone());
+        } else {
+            out.real.insert(fn_name.clone());
+        }
+        out.bodies.insert(fn_name.clone(), body_text);
+    }
+    Ok(out)
+}
+
+/// Heuristic: does the dispatcher body look like it runs a unit-test
+/// masquerade — a `--lib` profile test whose path contains `::tests::`?
+/// That's the signal that the criterion is verified by a
+/// `#[cfg(test)] mod tests {}` block inside the production crate
+/// rather than an integration test. R10 (wx-2pbxe).
+pub fn is_unit_masquerade(body: &str) -> bool {
+    let mut saw_lib = false;
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') {
+            continue;
+        }
+        if trimmed.contains(" --lib ")
+            || trimmed.contains(" --lib\\")
+            || trimmed.ends_with(" --lib")
+        {
+            saw_lib = true;
+        }
+        // The `::tests::` segment is the giveaway — `cargo test` paths
+        // include the module chain, and a unit-test inside the
+        // canonical `#[cfg(test)] mod tests` lives at `<crate>::tests::<fn>`
+        // (or `<module>::tests::<fn>` for nested modules).
+        if saw_lib && trimmed.contains("::tests::") {
+            return true;
         }
     }
-    Ok((stubs, real))
+    false
 }
 
 /// Run the criteria audit. Returns the collected `Finding`s — empty
 /// vec means clean.
 pub fn audit(specs_dir: &Path, dispatcher_path: &Path) -> Result<Vec<Finding>, DoctorError> {
     let annotations = parse_verify_annotations(specs_dir)?;
-    let (stubs, real) = parse_dispatcher(dispatcher_path)?;
+    let index = parse_dispatcher(dispatcher_path)?;
     let mut findings = Vec::new();
+    let mut referenced: HashSet<String> = HashSet::new();
     for ann in &annotations {
         let fn_name = &ann.dispatcher_fn;
+        referenced.insert(fn_name.clone());
         let where_at = format!("{}:{}", ann.spec_file.display(), ann.line_no,);
-        if !stubs.contains(fn_name) && !real.contains(fn_name) {
-            // Condition 3: missing dispatcher — hard error.
+        if !index.stubs.contains(fn_name) && !index.real.contains(fn_name) {
             findings.push(Finding {
                 severity: Severity::Error,
                 location: where_at,
                 message: format!("missing dispatcher `{fn_name}` (referenced in `[verify]`)",),
             });
-        } else if ann.checked && stubs.contains(fn_name) {
-            // Condition 1: stub + checked box — hard error.
+            continue;
+        }
+        if ann.checked && index.stubs.contains(fn_name) {
             findings.push(Finding {
                 severity: Severity::Error,
-                location: where_at,
+                location: where_at.clone(),
                 message: format!(
                     "criterion is checked `[x]` but dispatcher `{fn_name}` \
                      still calls `_pending_stub`",
+                ),
+            });
+        }
+        // Condition 2 (R10): unit-test masquerade. Skip stub
+        // dispatchers — by definition they don't run anything — and
+        // honor the `@unit-ok` opt-out.
+        if !ann.unit_ok
+            && index.real.contains(fn_name)
+            && let Some(body) = index.bodies.get(fn_name)
+            && is_unit_masquerade(body)
+        {
+            findings.push(Finding {
+                severity: Severity::Warning,
+                location: where_at,
+                message: format!(
+                    "unit-test masquerade: `{fn_name}` runs a `--lib` test whose \
+                     path contains `::tests::` (production-crate unit test). \
+                     Add `@unit-ok` to the annotation if the unit-level coverage \
+                     is intentional.",
+                ),
+            });
+        }
+    }
+    // Condition 4 (R10): orphan stubs/reals. Any dispatcher function
+    // that no `[verify]` annotation references is dead weight.
+    let mut all_fns: Vec<&String> = index.stubs.iter().chain(index.real.iter()).collect();
+    all_fns.sort();
+    for fn_name in all_fns {
+        if !referenced.contains(fn_name) {
+            findings.push(Finding {
+                severity: Severity::Warning,
+                location: format!("{}", dispatcher_path.display()),
+                message: format!(
+                    "orphan dispatcher `{fn_name}`: defined in the test runner \
+                     but no `[verify]` annotation references it",
                 ),
             });
         }
@@ -291,11 +394,122 @@ test_three() {
 }
 ";
         fs::write(&path, body).expect("write dispatcher");
-        let (stubs, real) = parse_dispatcher(&path).expect("parse");
-        assert!(stubs.contains("test_one"));
-        assert!(stubs.contains("test_three"));
-        assert!(real.contains("test_two"));
-        assert_eq!(stubs.len() + real.len(), 3);
+        let index = parse_dispatcher(&path).expect("parse");
+        assert!(index.stubs.contains("test_one"));
+        assert!(index.stubs.contains("test_three"));
+        assert!(index.real.contains("test_two"));
+        assert_eq!(index.stubs.len() + index.real.len(), 3);
+        // R10 — body capture preserves the cargo invocation.
+        assert!(index.bodies["test_two"].contains("cargo test"));
+    }
+
+    /// R10 — masquerade heuristic flags a `--lib` + `::tests::` pair.
+    #[test]
+    fn unit_masquerade_detects_lib_tests_path() {
+        let body = "    cargo_run test -p loom-render --lib -- renderer::tests::pretty_mode";
+        assert!(is_unit_masquerade(body));
+    }
+
+    /// R10 — integration test (`--test <name>` or no `--lib`) does not
+    /// trigger the masquerade signal.
+    #[test]
+    fn unit_masquerade_skips_integration_tests() {
+        let body = "    cargo_run test -p loom-driver --test logging -- run_default_output_shape";
+        assert!(!is_unit_masquerade(body));
+    }
+
+    /// R10 — `@unit-ok` marker round-trips through the annotation parser.
+    #[test]
+    fn annotation_parser_extracts_unit_ok_marker() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let body = "- [x] keep this checked\n  [verify](tests/loom-test.sh::test_fn @unit-ok)\n";
+        write_spec(dir.path(), "demo.md", body);
+        let ann = parse_verify_annotations(dir.path()).expect("parse");
+        assert_eq!(ann.len(), 1);
+        assert_eq!(ann[0].dispatcher_fn, "test_fn");
+        assert!(ann[0].unit_ok, "unit-ok marker must round-trip");
+    }
+
+    /// R10 — audit emits a Warning when the dispatcher body shows the
+    /// masquerade signal.
+    #[test]
+    fn audit_warns_on_unit_test_masquerade() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let specs = dir.path().join("specs");
+        fs::create_dir_all(&specs).expect("specs dir");
+        write_spec(
+            &specs,
+            "a.md",
+            "- [x] checked\n  [verify](tests/loom-test.sh::test_unit)\n",
+        );
+        let dispatcher = dir.path().join("loom-test.sh");
+        fs::write(
+            &dispatcher,
+            "test_unit() {\n    cargo_run test -p loom-render --lib -- renderer::tests::x\n}\n",
+        )
+        .expect("write");
+        let findings = audit(&specs, &dispatcher).expect("audit");
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.severity == Severity::Warning && f.message.contains("masquerade")),
+            "expected masquerade warning, got: {findings:?}",
+        );
+    }
+
+    /// R10 — `@unit-ok` opt-out silences the masquerade warning.
+    #[test]
+    fn audit_unit_ok_marker_silences_masquerade_warning() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let specs = dir.path().join("specs");
+        fs::create_dir_all(&specs).expect("specs dir");
+        write_spec(
+            &specs,
+            "a.md",
+            "- [x] intentional unit test\n  [verify](tests/loom-test.sh::test_unit @unit-ok)\n",
+        );
+        let dispatcher = dir.path().join("loom-test.sh");
+        fs::write(
+            &dispatcher,
+            "test_unit() {\n    cargo_run test -p loom-render --lib -- renderer::tests::x\n}\n",
+        )
+        .expect("write");
+        let findings = audit(&specs, &dispatcher).expect("audit");
+        assert!(
+            !findings.iter().any(|f| f.message.contains("masquerade")),
+            "@unit-ok must silence masquerade warning: {findings:?}",
+        );
+    }
+
+    /// R10 — orphan stubs in the dispatcher emit a Warning.
+    #[test]
+    fn audit_warns_on_orphan_dispatcher() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let specs = dir.path().join("specs");
+        fs::create_dir_all(&specs).expect("specs dir");
+        // The spec references one dispatcher; the dispatcher defines two.
+        // The unreferenced one is an orphan.
+        write_spec(
+            &specs,
+            "a.md",
+            "- [ ] not yet\n  [verify](tests/loom-test.sh::test_referenced)\n",
+        );
+        let dispatcher = dir.path().join("loom-test.sh");
+        fs::write(
+            &dispatcher,
+            "test_referenced() { _pending_stub r; }\n\
+             test_orphan() { _pending_stub o; }\n",
+        )
+        .expect("write");
+        let findings = audit(&specs, &dispatcher).expect("audit");
+        assert!(
+            findings.iter().any(|f| {
+                f.severity == Severity::Warning
+                    && f.message.contains("orphan")
+                    && f.message.contains("test_orphan")
+            }),
+            "expected orphan warning, got: {findings:?}",
+        );
     }
 
     #[test]

@@ -57,3 +57,15 @@ the Mayor via `bd human` instead.
   either violation. Reasoning: a `[x]` paired with a stub means the spec
   claims a guarantee the test layer doesn't enforce, which is exactly
   the drift the audit exists to surface.
+- **TST-6** — A dispatcher whose body runs a `--lib` profile test path
+  containing `::tests::` is a **unit-test masquerade**: the criterion is
+  verified by a `#[cfg(test)] mod tests {}` block inside the production
+  crate, not an integration test. `loom doctor --check=criteria` reports
+  it as a Warning; `--strict` promotes it to a hard error. When the
+  unit-level coverage is intentional (for example, criteria pinning
+  a pure-function shape), append the `@unit-ok` marker to the
+  annotation to silence the warning:
+  `[verify](tests/loom-test.sh::test_X @unit-ok)`. Orphan dispatcher
+  functions (defined in `tests/loom-test.sh` but referenced by no
+  spec annotation) are flagged the same way — delete them or wire a
+  spec annotation that uses them.
