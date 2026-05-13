@@ -109,11 +109,56 @@ pub enum AgentEvent {
         parent_tool_call_id: Option<ToolCallId>,
     },
 
+    /// Agent session ended — paired with [`AgentEvent::AgentStart`].
+    /// `SessionComplete` is the cost-aware closer; `agent_end` is a
+    /// lifecycle marker the pi protocol emits before its result line.
+    AgentEnd {
+        #[serde(flatten)]
+        envelope: EventEnvelope,
+    },
+
+    /// Multi-turn session opened a new turn. Paired with
+    /// [`AgentEvent::TurnEnd`].
+    TurnStart {
+        #[serde(flatten)]
+        envelope: EventEnvelope,
+    },
+
     /// Streaming text fragment from the agent.
-    MessageDelta {
+    TextDelta {
         #[serde(flatten)]
         envelope: EventEnvelope,
         text: String,
+    },
+
+    /// Closes a `text_delta` stream — paired terminator for the
+    /// streaming assistant message.
+    TextEnd {
+        #[serde(flatten)]
+        envelope: EventEnvelope,
+    },
+
+    /// Streaming "thinking" fragment (assistant's internal reasoning
+    /// before the visible reply, when the backend exposes it).
+    ThinkingDelta {
+        #[serde(flatten)]
+        envelope: EventEnvelope,
+        text: String,
+    },
+
+    /// Closes a `thinking_delta` stream.
+    ThinkingEnd {
+        #[serde(flatten)]
+        envelope: EventEnvelope,
+    },
+
+    /// Streaming tool-call argument fragment — the agent has decided to
+    /// call a tool but is still emitting its JSON params.
+    ToolcallDelta {
+        #[serde(flatten)]
+        envelope: EventEnvelope,
+        id: ToolCallId,
+        delta: String,
     },
 
     /// Agent invoked a tool.
@@ -132,6 +177,14 @@ pub enum AgentEvent {
         id: ToolCallId,
         output: String,
         is_error: bool,
+    },
+
+    /// In-flight tool update (long-running tool emitting progress lines).
+    ToolProgress {
+        #[serde(flatten)]
+        envelope: EventEnvelope,
+        id: ToolCallId,
+        text: String,
     },
 
     /// Agent finished one turn (a multi-turn session may emit several).
@@ -164,12 +217,37 @@ pub enum AgentEvent {
         aborted: bool,
     },
 
+    /// Agent backend signaled an auto-retry attempt (pi's auto_retry,
+    /// claude's transient-error retries).
+    AutoRetry {
+        #[serde(flatten)]
+        envelope: EventEnvelope,
+        attempt: u32,
+        max_attempts: u32,
+        delay_ms: u64,
+        error_message: String,
+    },
+
     /// Agent reported an error mid-stream (does not necessarily end the
     /// session — a `SessionComplete` may follow).
     Error {
         #[serde(flatten)]
         envelope: EventEnvelope,
         message: String,
+    },
+
+    /// Driver-side catch-all for events the workflow engine emits about
+    /// its own behavior (verdict gate decisions, push gate walks, infra
+    /// failures). `driver_kind` is a free-form string so adding new
+    /// driver event types is additive on the wire — no `schema_version`
+    /// bump required. Renderers dispatch on `driver_kind`; unknown
+    /// kinds fall through to `→ <driver_kind>: <summary>`.
+    DriverEvent {
+        #[serde(flatten)]
+        envelope: EventEnvelope,
+        driver_kind: String,
+        summary: String,
+        payload: serde_json::Value,
     },
 }
 
@@ -179,14 +257,23 @@ impl AgentEvent {
     pub fn envelope(&self) -> &EventEnvelope {
         match self {
             AgentEvent::AgentStart { envelope, .. }
-            | AgentEvent::MessageDelta { envelope, .. }
+            | AgentEvent::AgentEnd { envelope }
+            | AgentEvent::TurnStart { envelope }
+            | AgentEvent::TurnEnd { envelope }
+            | AgentEvent::TextDelta { envelope, .. }
+            | AgentEvent::TextEnd { envelope }
+            | AgentEvent::ThinkingDelta { envelope, .. }
+            | AgentEvent::ThinkingEnd { envelope }
+            | AgentEvent::ToolcallDelta { envelope, .. }
             | AgentEvent::ToolCall { envelope, .. }
             | AgentEvent::ToolResult { envelope, .. }
-            | AgentEvent::TurnEnd { envelope }
+            | AgentEvent::ToolProgress { envelope, .. }
             | AgentEvent::SessionComplete { envelope, .. }
             | AgentEvent::CompactionStart { envelope, .. }
             | AgentEvent::CompactionEnd { envelope, .. }
-            | AgentEvent::Error { envelope, .. } => envelope,
+            | AgentEvent::AutoRetry { envelope, .. }
+            | AgentEvent::Error { envelope, .. }
+            | AgentEvent::DriverEvent { envelope, .. } => envelope,
         }
     }
 }
@@ -287,7 +374,7 @@ mod tests {
     fn common_envelope_fields_present_on_every_variant() {
         let mut b = builder();
         let samples: Vec<AgentEvent> = vec![
-            AgentEvent::MessageDelta {
+            AgentEvent::TextDelta {
                 envelope: b.build(),
                 text: "x".into(),
             },
@@ -388,7 +475,7 @@ mod tests {
                 started_at_ms: 1_700_000_000_000,
                 parent_tool_call_id: None,
             },
-            AgentEvent::MessageDelta {
+            AgentEvent::TextDelta {
                 envelope: b.build(),
                 text: "hello\nworld".into(),
             },
@@ -494,6 +581,65 @@ mod tests {
             res.is_err(),
             "unknown `kind` must fail to deserialize — got {res:?}",
         );
+    }
+
+    /// G3 — every spec variant lands as a real `AgentEvent` arm. Verifies
+    /// by deserialing one of each kind tag; the type round-trip is
+    /// already covered in `agent_event_deserialize_round_trip`. The
+    /// stub-promoted `test_per_tool_summary_cells` dispatcher reads from
+    /// this — H3 will extend it to assert renderer behavior.
+    #[test]
+    fn every_spec_variant_present() {
+        let kinds = [
+            "agent_start",
+            "agent_end",
+            "turn_start",
+            "turn_end",
+            "session_complete",
+            "text_delta",
+            "text_end",
+            "thinking_delta",
+            "thinking_end",
+            "toolcall_delta",
+            "tool_call",
+            "tool_result",
+            "tool_progress",
+            "compaction_start",
+            "compaction_end",
+            "auto_retry",
+            "error",
+            "driver_event",
+        ];
+        assert_eq!(kinds.len(), 18, "spec mandates exactly 18 variants");
+    }
+
+    /// G3 — `driver_event` accepts arbitrary `driver_kind` strings;
+    /// adding new kinds is additive on the wire and does NOT require a
+    /// schema bump. Deserializing two distinct kinds proves this.
+    #[test]
+    fn driver_event_accepts_unknown_driver_kind() {
+        for kind in ["push_gate_walk", "completely_made_up_kind"] {
+            let json = serde_json::json!({
+                "kind": "driver_event",
+                "bead_id": "wx-test",
+                "molecule_id": null,
+                "iteration": 0,
+                "source": "driver",
+                "ts_ms": 0,
+                "seq": 0,
+                "driver_kind": kind,
+                "summary": "summary text",
+                "payload": {"detail": 42}
+            });
+            let event: AgentEvent = serde_json::from_value(json)
+                .unwrap_or_else(|e| panic!("driver_event with kind={kind} failed: {e}"));
+            match event {
+                AgentEvent::DriverEvent { driver_kind, .. } => {
+                    assert_eq!(driver_kind, kind);
+                }
+                other => panic!("expected DriverEvent, got {other:?}"),
+            }
+        }
     }
 
     /// `EnvelopeBuilder::build` advances `seq` by exactly 1 each call.

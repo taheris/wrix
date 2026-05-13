@@ -76,7 +76,7 @@ fn parse_event(event: PiEvent) -> ParsedLine {
     match event {
         PiEvent::MessageUpdate { delta } => match delta {
             AssistantMessageDelta::TextDelta { text } => ParsedLine {
-                events: vec![AgentEvent::MessageDelta {
+                events: vec![AgentEvent::TextDelta {
                     envelope: EventEnvelope::default(),
                     text,
                 }],
@@ -346,7 +346,7 @@ mod tests {
         let p = parse(line);
         assert_eq!(p.events.len(), 1);
         match &p.events[0] {
-            AgentEvent::MessageDelta { text, .. } => assert_eq!(text, "hello"),
+            AgentEvent::TextDelta { text, .. } => assert_eq!(text, "hello"),
             other => panic!("expected MessageDelta, got {other:?}"),
         }
     }

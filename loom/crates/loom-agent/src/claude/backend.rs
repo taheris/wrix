@@ -344,7 +344,7 @@ mod tests {
 
         // First assistant turn — proves the mock saw the prompt.
         match session.next_event().await.expect("event ok") {
-            Some(AgentEvent::MessageDelta { text, .. }) => {
+            Some(AgentEvent::TextDelta { text, .. }) => {
                 assert!(text.contains("first turn"), "unexpected text: {text}");
             }
             other => panic!("expected first MessageDelta, got {other:?}"),
@@ -357,7 +357,7 @@ mod tests {
 
         // Second assistant turn — proves steering reached the mock.
         match session.next_event().await.expect("event ok") {
-            Some(AgentEvent::MessageDelta { text, .. }) => {
+            Some(AgentEvent::TextDelta { text, .. }) => {
                 assert!(
                     text.contains("STEERED_TEXT"),
                     "second turn did not echo steer: {text}",

@@ -535,7 +535,7 @@ mod tests {
         let mut saw_echo = false;
         loop {
             match session.next_event().await.expect("event ok") {
-                Some(AgentEvent::MessageDelta { text, .. }) => {
+                Some(AgentEvent::TextDelta { text, .. }) => {
                     if text.contains("HELLO_PROMPT") {
                         saw_echo = true;
                     }
@@ -580,7 +580,7 @@ mod tests {
         let mut saw_steer_echo = false;
         loop {
             match session.next_event().await.expect("event ok") {
-                Some(AgentEvent::MessageDelta { text, .. }) => {
+                Some(AgentEvent::TextDelta { text, .. }) => {
                     if text.contains("STEERED_TEXT") {
                         saw_steer_echo = true;
                     }
@@ -619,7 +619,7 @@ mod tests {
                     session.steer(repin_text).await.expect("steer ok");
                     sent_repin = true;
                 }
-                Some(AgentEvent::MessageDelta { text, .. }) => {
+                Some(AgentEvent::TextDelta { text, .. }) => {
                     if text.contains(repin_text) {
                         saw_repin_echo = true;
                     }
@@ -665,7 +665,7 @@ mod tests {
                         .expect("on_compaction_start ok");
                     handler_called = true;
                 }
-                Some(AgentEvent::MessageDelta { text, .. }) => {
+                Some(AgentEvent::TextDelta { text, .. }) => {
                     if text.contains("PROMPT_FILE_BODY") {
                         saw_prompt_echo = true;
                     }
@@ -732,7 +732,7 @@ mod tests {
         let mut saw_model_id = false;
         loop {
             match session.next_event().await.expect("event ok") {
-                Some(AgentEvent::MessageDelta { text, .. }) => {
+                Some(AgentEvent::TextDelta { text, .. }) => {
                     if text.contains("deepseek") {
                         saw_provider = true;
                     }

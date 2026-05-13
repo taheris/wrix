@@ -82,7 +82,7 @@ impl LineParse for ClaudeParser {
                 for block in message.content {
                     match block {
                         AssistantBlock::Text { text } => {
-                            events.push(AgentEvent::MessageDelta {
+                            events.push(AgentEvent::TextDelta {
                                 envelope: EventEnvelope::default(),
                                 text,
                             });
@@ -270,7 +270,7 @@ mod tests {
         let p = parse(&empty(), line);
         assert_eq!(p.events.len(), 2);
         match &p.events[0] {
-            AgentEvent::MessageDelta { text, .. } => assert_eq!(text, "hi"),
+            AgentEvent::TextDelta { text, .. } => assert_eq!(text, "hi"),
             other => panic!("expected MessageDelta, got {other:?}"),
         }
         match &p.events[1] {
@@ -533,7 +533,7 @@ mod tests {
         let p = parse(&empty(), line);
         assert_eq!(p.events.len(), 2);
         match &p.events[0] {
-            AgentEvent::MessageDelta { text, .. } => assert_eq!(text, "abc"),
+            AgentEvent::TextDelta { text, .. } => assert_eq!(text, "abc"),
             other => panic!("expected MessageDelta, got {other:?}"),
         }
         match &p.events[1] {

@@ -75,7 +75,7 @@ pub struct AssistantContent {
 }
 
 /// One entry in an assistant message's `content` array. `text` blocks become
-/// [`AgentEvent::MessageDelta`](loom_driver::agent::AgentEvent::MessageDelta);
+/// [`AgentEvent::TextDelta`](loom_driver::agent::AgentEvent::TextDelta);
 /// `tool_use` blocks become
 /// [`AgentEvent::ToolCall`](loom_driver::agent::AgentEvent::ToolCall). Anything
 /// else (e.g. `thinking`) is logged at `trace!` and skipped via the

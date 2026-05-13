@@ -741,7 +741,7 @@ fn loom_todo_pi_compaction_drives_repin_steer_through_run_agent() {
          re-pin steer on CompactionStart. stdout={stdout} stderr={stderr}",
     );
 
-    // The mock echoes "repin: <payload>" as a message_delta after it
+    // The mock echoes "repin: <payload>" as a text_delta after it
     // observes the steer. The on-disk JSONL log contains every event the
     // driver consumed, so we can confirm both the compaction_start event
     // arrived and the steer reached the mock by inspecting the log.
@@ -765,10 +765,10 @@ fn loom_todo_pi_compaction_drives_repin_steer_through_run_agent() {
     );
     assert!(
         events.iter().any(|e| {
-            e["kind"] == "message_delta"
+            e["kind"] == "text_delta"
                 && e["text"].as_str().is_some_and(|t| t.starts_with("repin: "))
         }),
-        "mock-pi must echo the re-pin payload back as a message_delta — \
+        "mock-pi must echo the re-pin payload back as a text_delta — \
          absence means the production driver did not steer on CompactionStart. \
          events={events:?}",
     );

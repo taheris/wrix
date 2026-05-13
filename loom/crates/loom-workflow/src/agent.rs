@@ -123,7 +123,7 @@ pub async fn run_agent_classified<B: AgentBackend>(
             }
         };
         info!(event = %summarize_event(&event), "agent event");
-        if let AgentEvent::MessageDelta { text, .. } = &event
+        if let AgentEvent::TextDelta { text, .. } = &event
             && let Some(buf) = text_capture.as_deref_mut()
         {
             buf.push_str(text);
@@ -244,7 +244,7 @@ fn summarize_event(event: &AgentEvent) -> String {
         AgentEvent::AgentStart { title, profile, .. } => {
             format!("agent_start ({title}, profile={profile})")
         }
-        AgentEvent::MessageDelta { text, .. } => {
+        AgentEvent::TextDelta { text, .. } => {
             format!("message_delta ({} chars)", text.chars().count())
         }
         AgentEvent::ToolCall { id, tool, .. } => format!("tool_call {tool} (id={id})"),
@@ -268,5 +268,28 @@ fn summarize_event(event: &AgentEvent) -> String {
             format!("compaction_end (aborted={aborted})")
         }
         AgentEvent::Error { message, .. } => format!("error: {message}"),
+        AgentEvent::AgentEnd { .. } => "agent_end".to_string(),
+        AgentEvent::TurnStart { .. } => "turn_start".to_string(),
+        AgentEvent::TextEnd { .. } => "text_end".to_string(),
+        AgentEvent::ThinkingDelta { text, .. } => {
+            format!("thinking_delta ({} chars)", text.chars().count())
+        }
+        AgentEvent::ThinkingEnd { .. } => "thinking_end".to_string(),
+        AgentEvent::ToolcallDelta { id, delta, .. } => {
+            format!("toolcall_delta (id={id}, {} chars)", delta.chars().count())
+        }
+        AgentEvent::ToolProgress { id, text, .. } => {
+            format!("tool_progress (id={id}, {} chars)", text.chars().count())
+        }
+        AgentEvent::AutoRetry {
+            attempt,
+            max_attempts,
+            ..
+        } => format!("auto_retry (attempt={attempt}/{max_attempts})"),
+        AgentEvent::DriverEvent {
+            driver_kind,
+            summary,
+            ..
+        } => format!("driver_event {driver_kind}: {summary}"),
     }
 }

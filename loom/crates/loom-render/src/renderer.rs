@@ -136,7 +136,7 @@ impl TerminalRenderer {
                 self.out.write_all(line.as_bytes())?;
                 self.out.flush()?;
             }
-            AgentEvent::MessageDelta { text, .. } if matches!(self.mode, RenderMode::Verbose) => {
+            AgentEvent::TextDelta { text, .. } if matches!(self.mode, RenderMode::Verbose) => {
                 self.out.write_all(text.as_bytes())?;
                 self.out.flush()?;
             }
@@ -329,7 +329,7 @@ mod tests {
     #[test]
     fn default_mode_suppresses_message_deltas() {
         let out = capture(RenderMode::Default, false, false, |r| {
-            r.render_event(&AgentEvent::MessageDelta {
+            r.render_event(&AgentEvent::TextDelta {
                 envelope: EventEnvelope::default(),
                 text: "hello world".to_string(),
             })
@@ -341,12 +341,12 @@ mod tests {
     #[test]
     fn verbose_mode_streams_message_deltas_verbatim() {
         let out = capture(RenderMode::Verbose, false, false, |r| {
-            r.render_event(&AgentEvent::MessageDelta {
+            r.render_event(&AgentEvent::TextDelta {
                 envelope: EventEnvelope::default(),
                 text: "hel".to_string(),
             })
             .expect("render");
-            r.render_event(&AgentEvent::MessageDelta {
+            r.render_event(&AgentEvent::TextDelta {
                 envelope: EventEnvelope::default(),
                 text: "lo".to_string(),
             })

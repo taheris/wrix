@@ -105,7 +105,7 @@ fn run_default_output_shape() -> Result<()> {
         tool: "Read".to_string(),
         params: json!({"file_path": "src/lib.rs"}),
     })?;
-    sink.emit(&AgentEvent::MessageDelta {
+    sink.emit(&AgentEvent::TextDelta {
         envelope: EventEnvelope::default(),
         text: "I will not appear on the terminal".to_string(),
     })?;
@@ -155,11 +155,11 @@ fn run_verbose_streams_text() -> Result<()> {
         false,
     )?;
 
-    sink.emit(&AgentEvent::MessageDelta {
+    sink.emit(&AgentEvent::TextDelta {
         envelope: EventEnvelope::default(),
         text: "Hello, ".to_string(),
     })?;
-    sink.emit(&AgentEvent::MessageDelta {
+    sink.emit(&AgentEvent::TextDelta {
         envelope: EventEnvelope::default(),
         text: "world!\n".to_string(),
     })?;
@@ -198,7 +198,7 @@ fn run_writes_per_bead_jsonl_log() -> Result<()> {
     // MessageDelta is suppressed by the default renderer, but it MUST appear
     // in the on-disk log (the file gets the full raw event stream regardless
     // of terminal verbosity).
-    sink.emit(&AgentEvent::MessageDelta {
+    sink.emit(&AgentEvent::TextDelta {
         envelope: EventEnvelope::default(),
         text: "secret thoughts".to_string(),
     })?;
@@ -231,7 +231,7 @@ fn run_writes_per_bead_jsonl_log() -> Result<()> {
             Ok(v["kind"].as_str().unwrap_or("").to_string())
         })
         .collect::<Result<_>>()?;
-    if kinds != vec!["tool_call", "message_delta", "turn_end"] {
+    if kinds != vec!["tool_call", "text_delta", "turn_end"] {
         return Err(anyhow!("unexpected event kinds in log: {kinds:?}"));
     }
     if !body.contains("secret thoughts") {
