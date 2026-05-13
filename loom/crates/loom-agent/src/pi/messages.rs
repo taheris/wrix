@@ -77,8 +77,18 @@ pub enum PiEvent {
         is_error: bool,
     },
 
-    /// Streaming tool-call progress update — observability only.
-    ToolExecutionUpdate,
+    /// Streaming tool-call progress update — long-running tools emit
+    /// these to report partial output. Surfaced as
+    /// [`AgentEvent::ToolProgress`](loom_driver::agent::AgentEvent::ToolProgress)
+    /// (R8, wx-n06xn) so renderers can keep the user oriented.
+    ToolExecutionUpdate {
+        #[serde(rename = "toolCallId")]
+        tool_call_id: ToolCallId,
+        /// Pi sends the partial as a JSON value; the parser stringifies
+        /// when it isn't already a string for the renderer body.
+        #[serde(default, rename = "partialResult")]
+        partial_result: serde_json::Value,
+    },
 
     /// Turn boundaries — payload is dropped.
     TurnStart,
@@ -102,8 +112,21 @@ pub enum PiEvent {
     /// Per-stream queue change — observability only.
     QueueUpdate,
 
-    /// Auto-retry telemetry — observability only.
-    AutoRetryStart,
+    /// Auto-retry telemetry — surfaced as
+    /// [`AgentEvent::AutoRetry`](loom_driver::agent::AgentEvent::AutoRetry)
+    /// (R8, wx-n06xn) so the renderer can show transient-failure
+    /// progress. `attempt`/`maxAttempts` are 1-indexed; `delayMs` is
+    /// the back-off the next try will wait.
+    AutoRetryStart {
+        #[serde(default)]
+        attempt: u32,
+        #[serde(default, rename = "maxAttempts")]
+        max_attempts: u32,
+        #[serde(default, rename = "delayMs")]
+        delay_ms: u64,
+        #[serde(default, rename = "errorMessage")]
+        error_message: String,
+    },
     AutoRetryEnd,
 
     /// Extension reported an error — observability only.
@@ -116,14 +139,33 @@ pub enum PiEvent {
 }
 
 /// Inner `assistantMessageEvent` delta carried by
-/// [`PiEvent::MessageUpdate`]. Dispatched on the nested `type` field —
-/// most variants are observability-only; only `text_delta` and `error`
-/// surface as [`AgentEvent`](loom_driver::agent::AgentEvent)s.
+/// [`PiEvent::MessageUpdate`]. Dispatched on the nested `type` field.
+/// Each variant maps to an [`AgentEvent`](loom_driver::agent::AgentEvent)
+/// the renderer / log replayer consumes; the `Unknown` catch-all keeps
+/// forward-compat for delta types pi adds later.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AssistantMessageDelta {
     /// Streaming text fragment.
     TextDelta { text: String },
+
+    /// Closes a `text_delta` stream — paired terminator.
+    TextEnd,
+
+    /// Streaming "thinking" fragment (extended-thinking models).
+    ThinkingDelta { text: String },
+
+    /// Closes a `thinking_delta` stream.
+    ThinkingEnd,
+
+    /// Streaming tool-call argument fragment — pi has decided to call
+    /// a tool but is still emitting its JSON params one chunk at a
+    /// time. The `toolCallId` field comes camelCased on the wire.
+    ToolcallDelta {
+        #[serde(rename = "toolCallId")]
+        tool_call_id: ToolCallId,
+        delta: String,
+    },
 
     /// Mid-stream error from the agent. Pi populates `reason`
     /// (`"aborted"` / `"error"`) and may include a `message` with
@@ -136,8 +178,8 @@ pub enum AssistantMessageDelta {
     },
 
     /// Forward-compatibility catch-all for delta types Loom does not
-    /// consume (`start`, `text_start`, `text_end`, `thinking_*`,
-    /// `toolcall_*`, `done`, …). Logged at trace level by the parser.
+    /// yet consume (`start`, `text_start`, `toolcall_start`,
+    /// `toolcall_end`, `done`, …). Logged at trace level by the parser.
     #[serde(other)]
     Unknown,
 }

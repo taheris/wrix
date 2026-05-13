@@ -77,9 +77,11 @@ pub struct AssistantContent {
 /// One entry in an assistant message's `content` array. `text` blocks become
 /// [`AgentEvent::TextDelta`](loom_driver::agent::AgentEvent::TextDelta);
 /// `tool_use` blocks become
-/// [`AgentEvent::ToolCall`](loom_driver::agent::AgentEvent::ToolCall). Anything
-/// else (e.g. `thinking`) is logged at `trace!` and skipped via the
-/// catch-all variant.
+/// [`AgentEvent::ToolCall`](loom_driver::agent::AgentEvent::ToolCall).
+/// `thinking` blocks — emitted when the model uses extended thinking —
+/// map to [`AgentEvent::ThinkingDelta`](loom_driver::agent::AgentEvent::ThinkingDelta)
+/// (R8, wx-n06xn). Anything else lands in the catch-all and is logged
+/// at `trace!`.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AssistantBlock {
@@ -90,6 +92,11 @@ pub enum AssistantBlock {
         id: ToolCallId,
         name: String,
         input: serde_json::Value,
+    },
+    /// Extended-thinking content block. Claude streams the model's
+    /// pre-reply reasoning here when the model supports it.
+    Thinking {
+        thinking: String,
     },
     #[serde(other)]
     Unknown,

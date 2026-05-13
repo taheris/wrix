@@ -126,6 +126,12 @@ impl LineParse for ClaudeParser {
                                 self.push_task(id);
                             }
                         }
+                        AssistantBlock::Thinking { thinking } => {
+                            events.push(AgentEvent::ThinkingDelta {
+                                envelope: EventEnvelope::default(),
+                                text: thinking,
+                            });
+                        }
                         AssistantBlock::Unknown => {
                             trace!("unknown assistant content block");
                         }
@@ -317,6 +323,22 @@ mod tests {
                 assert_eq!(params["path"], "/tmp/x");
             }
             other => panic!("expected ToolCall, got {other:?}"),
+        }
+    }
+
+    /// R8 (wx-n06xn) — claude's extended-thinking content block lands
+    /// as `AgentEvent::ThinkingDelta` so the renderer can surface the
+    /// model's pre-reply reasoning when the user opts in.
+    #[test]
+    fn parses_assistant_thinking_block_as_thinking_delta() {
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"weighing options"}]}}"#;
+        let p = parse(&empty(), line);
+        assert_eq!(p.events.len(), 1);
+        match &p.events[0] {
+            AgentEvent::ThinkingDelta { text, .. } => {
+                assert_eq!(text, "weighing options");
+            }
+            other => panic!("expected ThinkingDelta, got {other:?}"),
         }
     }
 

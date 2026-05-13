@@ -109,6 +109,36 @@ fn parse_event(parser: &PiParser, event: PiEvent) -> ParsedLine {
                 }],
                 response: None,
             },
+            AssistantMessageDelta::TextEnd => ParsedLine {
+                events: vec![AgentEvent::TextEnd {
+                    envelope: EventEnvelope::default(),
+                }],
+                response: None,
+            },
+            AssistantMessageDelta::ThinkingDelta { text } => ParsedLine {
+                events: vec![AgentEvent::ThinkingDelta {
+                    envelope: EventEnvelope::default(),
+                    text,
+                }],
+                response: None,
+            },
+            AssistantMessageDelta::ThinkingEnd => ParsedLine {
+                events: vec![AgentEvent::ThinkingEnd {
+                    envelope: EventEnvelope::default(),
+                }],
+                response: None,
+            },
+            AssistantMessageDelta::ToolcallDelta {
+                tool_call_id,
+                delta,
+            } => ParsedLine {
+                events: vec![AgentEvent::ToolcallDelta {
+                    envelope: EventEnvelope::default(),
+                    id: tool_call_id,
+                    delta,
+                }],
+                response: None,
+            },
             AssistantMessageDelta::Error { reason, message } => {
                 let message = message.or(reason).unwrap_or_default();
                 ParsedLine {
@@ -200,14 +230,44 @@ fn parse_event(parser: &PiParser, event: PiEvent) -> ParsedLine {
             }],
             response: None,
         },
-        PiEvent::ToolExecutionUpdate
-        | PiEvent::TurnStart
-        | PiEvent::AgentStart
-        | PiEvent::QueueUpdate => {
+        PiEvent::ToolExecutionUpdate {
+            tool_call_id,
+            partial_result,
+        } => {
+            let text = match partial_result {
+                serde_json::Value::String(s) => s,
+                serde_json::Value::Null => String::new(),
+                other => other.to_string(),
+            };
+            ParsedLine {
+                events: vec![AgentEvent::ToolProgress {
+                    envelope: EventEnvelope::default(),
+                    id: tool_call_id,
+                    text,
+                }],
+                response: None,
+            }
+        }
+        PiEvent::AutoRetryStart {
+            attempt,
+            max_attempts,
+            delay_ms,
+            error_message,
+        } => ParsedLine {
+            events: vec![AgentEvent::AutoRetry {
+                envelope: EventEnvelope::default(),
+                attempt,
+                max_attempts,
+                delay_ms,
+                error_message,
+            }],
+            response: None,
+        },
+        PiEvent::TurnStart | PiEvent::AgentStart | PiEvent::QueueUpdate => {
             trace!("pi event ignored");
             empty()
         }
-        PiEvent::AutoRetryStart | PiEvent::AutoRetryEnd | PiEvent::ExtensionError => {
+        PiEvent::AutoRetryEnd | PiEvent::ExtensionError => {
             debug!("pi event ignored");
             empty()
         }
@@ -469,8 +529,52 @@ mod tests {
     }
 
     #[test]
-    fn message_update_unmapped_delta_is_silent() {
+    fn message_update_thinking_delta_yields_thinking_delta_event() {
+        // R8 (wx-n06xn) — thinking_delta now maps to AgentEvent::ThinkingDelta.
         let line = r#"{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","text":"…"}}"#;
+        let p = parse(line);
+        assert_eq!(p.events.len(), 1);
+        match &p.events[0] {
+            AgentEvent::ThinkingDelta { text, .. } => assert_eq!(text, "…"),
+            other => panic!("expected ThinkingDelta, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn message_update_text_end_yields_text_end_event() {
+        // R8 — text_end is the paired terminator for text_delta.
+        let line = r#"{"type":"message_update","assistantMessageEvent":{"type":"text_end"}}"#;
+        let p = parse(line);
+        assert!(matches!(p.events[..], [AgentEvent::TextEnd { .. }]));
+    }
+
+    #[test]
+    fn message_update_thinking_end_yields_thinking_end_event() {
+        // R8 — thinking_end pairs with thinking_delta.
+        let line = r#"{"type":"message_update","assistantMessageEvent":{"type":"thinking_end"}}"#;
+        let p = parse(line);
+        assert!(matches!(p.events[..], [AgentEvent::ThinkingEnd { .. }]));
+    }
+
+    #[test]
+    fn message_update_toolcall_delta_yields_toolcall_delta_event() {
+        // R8 — toolcall_delta surfaces with the tool call id + raw chunk.
+        let line = r#"{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","toolCallId":"tc-9","delta":"{\"file_path\":\"a\"}"}}"#;
+        let p = parse(line);
+        assert_eq!(p.events.len(), 1);
+        match &p.events[0] {
+            AgentEvent::ToolcallDelta { id, delta, .. } => {
+                assert_eq!(id.as_str(), "tc-9");
+                assert_eq!(delta, r#"{"file_path":"a"}"#);
+            }
+            other => panic!("expected ToolcallDelta, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn message_update_genuinely_unknown_delta_is_silent() {
+        // Forward-compat: a brand-new delta type does not fail the parse.
+        let line = r#"{"type":"message_update","assistantMessageEvent":{"type":"mystery_delta","field":1}}"#;
         let p = parse(line);
         assert!(p.events.is_empty());
     }
@@ -600,20 +704,61 @@ mod tests {
 
     #[test]
     fn observability_only_events_yield_no_agent_events() {
-        // Skipped events: tool_execution_update, turn_start, agent_start,
-        // queue_update, auto_retry_start, auto_retry_end, extension_error.
+        // R8 (wx-n06xn) trimmed this list — tool_execution_update and
+        // auto_retry_start now surface as AgentEvent::ToolProgress and
+        // AgentEvent::AutoRetry respectively. The pinned set here is
+        // the residual observability-only PiEvents.
         for line in [
-            r#"{"type":"tool_execution_update","toolCallId":"tc","partialResult":{}}"#,
             r#"{"type":"turn_start"}"#,
             r#"{"type":"agent_start"}"#,
             r#"{"type":"queue_update","steering":[],"followUp":[]}"#,
-            r#"{"type":"auto_retry_start","attempt":1,"maxAttempts":3,"delayMs":1000,"errorMessage":"x"}"#,
             r#"{"type":"auto_retry_end","success":true,"attempt":1}"#,
             r#"{"type":"extension_error","extensionPath":"/x","event":"y","error":"z"}"#,
         ] {
             let p = parse(line);
             assert!(p.events.is_empty(), "expected no events for {line}");
             assert!(p.response.is_none(), "expected no response for {line}");
+        }
+    }
+
+    #[test]
+    fn pi_tool_execution_update_yields_tool_progress() {
+        // R8 — long-running tools emit `tool_execution_update` with a
+        // partial result; surface as AgentEvent::ToolProgress so the
+        // renderer can keep the user oriented.
+        let line = r#"{"type":"tool_execution_update","toolCallId":"tc-7","partialResult":"50%"}"#;
+        let p = parse(line);
+        assert_eq!(p.events.len(), 1);
+        match &p.events[0] {
+            AgentEvent::ToolProgress { id, text, .. } => {
+                assert_eq!(id.as_str(), "tc-7");
+                assert_eq!(text, "50%");
+            }
+            other => panic!("expected ToolProgress, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pi_auto_retry_start_yields_auto_retry_event() {
+        // R8 — pi auto_retry telemetry surfaces so the renderer can
+        // show transient-failure progress (attempt/N + delay + reason).
+        let line = r#"{"type":"auto_retry_start","attempt":2,"maxAttempts":5,"delayMs":1500,"errorMessage":"transient"}"#;
+        let p = parse(line);
+        assert_eq!(p.events.len(), 1);
+        match &p.events[0] {
+            AgentEvent::AutoRetry {
+                attempt,
+                max_attempts,
+                delay_ms,
+                error_message,
+                ..
+            } => {
+                assert_eq!(*attempt, 2);
+                assert_eq!(*max_attempts, 5);
+                assert_eq!(*delay_ms, 1500);
+                assert_eq!(error_message, "transient");
+            }
+            other => panic!("expected AutoRetry, got {other:?}"),
         }
     }
 
