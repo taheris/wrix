@@ -75,6 +75,16 @@ pub trait CheckController: Send {
     /// `exec` (replace process) on success; the future resolves only on
     /// failure to launch.
     fn exec_run(&mut self) -> impl std::future::Future<Output = Result<(), CheckError>> + Send;
+
+    /// Emit a driver-side event into the controller's event sink (the
+    /// per-spec phase JSONL log + terminal renderer). Driver events
+    /// carry `Source::Driver` and a free-form `kind` so the renderer's
+    /// fallback path can show them without a per-kind handler. R7
+    /// (wx-r9tmc) routes the four spec'd `push_gate_*` kinds through
+    /// here. Production callers thread an `EnvelopeBuilder` (R1) for
+    /// the live envelope; the default impl is a no-op so test fakes
+    /// that don't care about event emission keep working.
+    fn emit_driver_event(&mut self, _kind: &str, _summary: &str, _payload: serde_json::Value) {}
 }
 
 /// What the reviewer agent produced. The driver only branches on
@@ -192,8 +202,22 @@ async fn apply_verdict<C: CheckController>(
     controller: &mut C,
     verdict: CheckVerdict,
 ) -> Result<CheckResult, CheckError> {
+    // R7 (wx-r9tmc): every gate walk emits `push_gate_walk` first so
+    // the JSONL replay carries a fence between the reviewer's output
+    // and the verdict-application sequence below. The four kind-
+    // specific events follow per the spec table in E1.
+    controller.emit_driver_event(
+        "push_gate_walk",
+        "push gate evaluating verdict",
+        serde_json::json!({"verdict": verdict_label(&verdict)}),
+    );
     match verdict {
         CheckVerdict::Clean => {
+            controller.emit_driver_event(
+                "push_gate_clean",
+                "verdict clean — pushing code + beads, resetting iteration counter",
+                serde_json::json!({}),
+            );
             controller.reset_iteration_count().await?;
             controller.git_push().await?;
             controller.beads_push().await?;
@@ -202,11 +226,32 @@ async fn apply_verdict<C: CheckController>(
         CheckVerdict::PushBlocked {
             blocked_ids,
             clarify_ids,
-        } => Ok(CheckResult::PushBlocked {
-            blocked_ids,
-            clarify_ids,
-        }),
-        CheckVerdict::AutoIterate { next_iteration, .. } => {
+        } => {
+            controller.emit_driver_event(
+                "push_gate_refuse",
+                "verdict push-blocked — molecule beads carry loom:blocked or loom:clarify",
+                serde_json::json!({
+                    "blocked_ids": blocked_ids.iter().map(|b| b.to_string()).collect::<Vec<_>>(),
+                    "clarify_ids": clarify_ids.iter().map(|b| b.to_string()).collect::<Vec<_>>(),
+                }),
+            );
+            Ok(CheckResult::PushBlocked {
+                blocked_ids,
+                clarify_ids,
+            })
+        }
+        CheckVerdict::AutoIterate {
+            next_iteration,
+            new_bead_ids,
+        } => {
+            controller.emit_driver_event(
+                "push_gate_walk",
+                "verdict auto-iterate — fix-up beads detected, re-entering loom run",
+                serde_json::json!({
+                    "next_iteration": next_iteration,
+                    "new_bead_ids": new_bead_ids.iter().map(|b| b.to_string()).collect::<Vec<_>>(),
+                }),
+            );
             controller.set_iteration_count(next_iteration).await?;
             controller.exec_run().await?;
             Ok(CheckResult::AutoIterated { next_iteration })
@@ -219,12 +264,32 @@ async fn apply_verdict<C: CheckController>(
             let reason = format!(
                 "Iteration cap ({cap_value}) reached: review kept finding fix-up work. Human input needed before resuming."
             );
+            controller.emit_driver_event(
+                "push_gate_exhausted",
+                "verdict cap-reached — escalating to clarify",
+                serde_json::json!({
+                    "escalate_id": escalate_id.to_string(),
+                    "cap": cap_value,
+                }),
+            );
             controller.apply_clarify(&escalate_id, &reason).await?;
             Ok(CheckResult::Escalated {
                 escalate_id,
                 cap: cap_value,
             })
         }
+    }
+}
+
+/// Compact label describing the verdict shape — used as the `verdict`
+/// field on the leading `push_gate_walk` event so a replay can tell at
+/// a glance which branch the gate took.
+fn verdict_label(verdict: &CheckVerdict) -> &'static str {
+    match verdict {
+        CheckVerdict::Clean => "clean",
+        CheckVerdict::PushBlocked { .. } => "push_blocked",
+        CheckVerdict::AutoIterate { .. } => "auto_iterate",
+        CheckVerdict::IterationCap { .. } => "iteration_cap",
     }
 }
 
@@ -251,6 +316,10 @@ mod tests {
         git_push_calls: u32,
         beads_push_calls: u32,
         exec_run_calls: u32,
+        /// R7 — capture the (kind, summary, payload) tuple for every
+        /// `emit_driver_event` so tests can pin the verdict-gate
+        /// emission sequence.
+        driver_events: Vec<(String, String, serde_json::Value)>,
     }
 
     impl CheckController for FakeController {
@@ -303,6 +372,11 @@ mod tests {
             self.exec_run_calls += 1;
             Ok(())
         }
+
+        fn emit_driver_event(&mut self, kind: &str, summary: &str, payload: serde_json::Value) {
+            self.driver_events
+                .push((kind.to_string(), summary.to_string(), payload));
+        }
     }
 
     fn bead(id: &str, labels: &[&str]) -> Bead {
@@ -332,6 +406,70 @@ mod tests {
         assert_eq!(c.beads_push_calls, 1);
         assert_eq!(c.reset_iter_calls, 1, "counter resets on clean push");
         assert_eq!(c.exec_run_calls, 0, "no auto-iterate on clean push");
+        // R7 (wx-r9tmc) — the verdict-gate fence emits `push_gate_walk`
+        // first, then `push_gate_clean` for the clean-push branch.
+        let kinds: Vec<&str> = c.driver_events.iter().map(|(k, _, _)| k.as_str()).collect();
+        assert_eq!(kinds, vec!["push_gate_walk", "push_gate_clean"]);
+        Ok(())
+    }
+
+    /// R7 — the `PushBlocked` verdict emits `push_gate_walk` then
+    /// `push_gate_refuse` carrying both ID lists in its payload.
+    #[tokio::test]
+    async fn push_blocked_emits_refuse_with_id_payload() -> Result<(), CheckError> {
+        let mut c = FakeController {
+            pre_beads: vec![bead("wx-1", &["spec:loom-harness"])],
+            post_beads: vec![
+                bead("wx-1", &["spec:loom-harness"]),
+                bead("wx-2", &["spec:loom-harness", "loom:blocked"]),
+                bead("wx-3", &["spec:loom-harness", "loom:clarify"]),
+            ],
+            ..FakeController::default()
+        };
+        let _ = check_loop(&mut c, IterationCap::default()).await?;
+        let kinds: Vec<&str> = c.driver_events.iter().map(|(k, _, _)| k.as_str()).collect();
+        assert_eq!(kinds, vec!["push_gate_walk", "push_gate_refuse"]);
+        let refuse = c
+            .driver_events
+            .iter()
+            .find(|(k, _, _)| k == "push_gate_refuse")
+            .expect("refuse event present");
+        assert!(
+            refuse.2["blocked_ids"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|v| v == "wx-2")),
+        );
+        assert!(
+            refuse.2["clarify_ids"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|v| v == "wx-3")),
+        );
+        Ok(())
+    }
+
+    /// R7 — the `IterationCap` verdict emits `push_gate_walk` then
+    /// `push_gate_exhausted` carrying the escalate-id and the cap.
+    #[tokio::test]
+    async fn iteration_cap_emits_exhausted_with_cap_payload() -> Result<(), CheckError> {
+        let mut c = FakeController {
+            iter_count: 3,
+            pre_beads: vec![bead("wx-1", &["spec:loom-harness"])],
+            post_beads: vec![
+                bead("wx-1", &["spec:loom-harness"]),
+                bead("wx-cap", &["spec:loom-harness"]),
+            ],
+            ..FakeController::default()
+        };
+        let _ = check_loop(&mut c, IterationCap { max: 3 }).await?;
+        let kinds: Vec<&str> = c.driver_events.iter().map(|(k, _, _)| k.as_str()).collect();
+        assert_eq!(kinds, vec!["push_gate_walk", "push_gate_exhausted"]);
+        let exhausted = c
+            .driver_events
+            .iter()
+            .find(|(k, _, _)| k == "push_gate_exhausted")
+            .expect("exhausted event present");
+        assert_eq!(exhausted.2["escalate_id"].as_str(), Some("wx-cap"));
+        assert_eq!(exhausted.2["cap"].as_u64(), Some(3));
         Ok(())
     }
 
