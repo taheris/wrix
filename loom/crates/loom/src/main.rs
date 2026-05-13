@@ -27,11 +27,12 @@ use loom_driver::scratch::resolve_scratch_key;
 use loom_driver::state::StateDb;
 use loom_workflow::check::{IterationCap, ProductionCheckController, check_loop as run_check_loop};
 use loom_workflow::msg::{
-    DISMISS_NOTE, build_rows, compose_option_note, filter_msg_beads, kind_of, resolve_target,
-    spec_label_of,
+    DISMISS_NOTE, build_msg_context, build_rows, compose_option_note, filter_msg_beads, kind_of,
+    resolve_target, spec_label_of,
 };
 use loom_workflow::run::{
-    Parallelism, ProductionAgentLoopController, RetryPolicy, RunMode, SessionResult, run_loop,
+    Parallelism, ProductionAgentLoopController, RetryPolicy, RunMode, SessionResult,
+    build_spawn_config_from_manifest, run_loop,
 };
 use loom_workflow::todo::{
     ExitSignal, ProductionTodoController, parse_exit_signal, run as run_todo_workflow,
@@ -384,7 +385,17 @@ fn main() -> ExitCode {
             reply,
             dismiss,
             chat,
-        } => run_msg(&workspace, spec, number, bead, option, reply, dismiss, chat),
+        } => run_msg(
+            &workspace,
+            spec,
+            number,
+            bead,
+            option,
+            reply,
+            dismiss,
+            chat,
+            agent_override,
+        ),
         Command::Todo { spec, since } => run_todo(&workspace, spec, since, agent_override),
         Command::Note { action } => run_note(&workspace, action),
         Command::Doctor { check, strict } => run_doctor(&workspace, &check, strict),
@@ -1249,6 +1260,7 @@ fn run_check(
     Ok(())
 }
 
+#[expect(clippy::too_many_arguments, reason = "explicit dispatch surface")]
 fn run_msg(
     workspace: &Path,
     spec: Option<String>,
@@ -1258,12 +1270,13 @@ fn run_msg(
     reply: Option<String>,
     dismiss: bool,
     chat: bool,
+    agent_override: Option<AgentKind>,
 ) -> anyhow::Result<()> {
-    let _manifest = ProfileImageManifest::from_env()?;
     let spec_filter = spec.as_deref().map(SpecLabel::new);
     if chat {
-        return run_msg_chat(workspace, spec_filter);
+        return run_msg_chat(workspace, spec_filter, agent_override);
     }
+    let _manifest = ProfileImageManifest::from_env()?;
     if let Some(label) = &spec_filter {
         let lock_mgr = LockManager::new(workspace)?;
         let _guard = lock_mgr.acquire_spec(label)?;
@@ -1273,38 +1286,156 @@ fn run_msg(
     }
 }
 
-/// `loom msg -c [-s <label>]` — interactive Drafter chat session.
+/// `loom msg -c [-s <label>]` — interactive Drafter chat session
+/// (R6, wx-ibgar).
 ///
-/// Walks every outstanding clarify/blocked bead under the optional
-/// spec filter and hands them to an interactive claude session via
-/// the wrapix sandbox + msg.md template. The session writes resolution
-/// notes via `bd update --notes` and clears the label via
-/// `bd update --remove-label` per resolved bead.
+/// Renders the `msg.md` template against the outstanding `loom:clarify`
+/// (and `loom:blocked`) beads, spawns the agent via the same dispatch
+/// surface `loom todo` uses, and parses the session's exit signal. Per
+/// the spec, `LOOM_COMPLETE` is the only valid terminator — partial
+/// progress is clean (remaining clarifies persist for the next call),
+/// but `LOOM_BLOCKED`/`LOOM_CLARIFY` from inside the chat surfaces as
+/// a hard error.
 ///
-/// **Status:** scaffold only. The chat flag is recognized and the
-/// command branches into this function, but the wrapix-run /
-/// claude-attach plumbing is a focused follow-up — needs PTY
-/// passthrough, signal handling, and the msg.md template wired
-/// against the same controller surface `loom run` uses. The
-/// non-interactive `loom msg -o/-r/-d` paths (B1, I1) cover the
-/// programmatic case in the meantime.
-fn run_msg_chat(workspace: &Path, spec_filter: Option<SpecLabel>) -> anyhow::Result<()> {
-    let scope = spec_filter
-        .as_ref()
-        .map(|l| format!(" filtered to spec:{}", l.as_str()))
-        .unwrap_or_default();
-    println!(
-        "loom msg --chat: interactive Drafter session{scope} — not yet implemented.\n\
-         The chat session would render the msg.md template against the outstanding\n\
-         clarify/blocked beads and spawn a wrapix container running claude attached\n\
-         to this terminal. Resolution notes flow back via `bd update --notes` and\n\
-         the loom:* labels clear on confirmation.\n\
-         In the meantime, use `loom msg -o <N> -b <id>` for option fast-reply or\n\
-         `loom msg -r \"<text>\" -b <id>` for verbatim reply.\n\
-         Workspace: {workspace}",
-        workspace = workspace.display(),
-    );
-    Ok(())
+/// Resolution itself is the agent's responsibility: the rendered
+/// template tells claude to call `bd update <id> --notes "…"` and
+/// `bd update <id> --remove-label=loom:clarify` per bead. The driver
+/// only renders the prompt, dispatches the session, and reports back.
+fn run_msg_chat(
+    workspace: &Path,
+    spec_filter: Option<SpecLabel>,
+    agent_override: Option<AgentKind>,
+) -> anyhow::Result<()> {
+    let manifest = ProfileImageManifest::from_env()?;
+    let config = LoomConfig::load(workspace.join(".wrapix/loom/config.toml"))?;
+    let selection = resolved_agent_for(&config, agent_override, Phase::Msg)?;
+    let kind = selection.kind;
+    let shutdown_grace = resolve_shutdown_grace(&selection);
+    let phase_default = selection.profile.clone();
+
+    let runtime = tokio::runtime::Runtime::new()?;
+    let workspace_buf = workspace.to_path_buf();
+    let scope_label = spec_filter
+        .clone()
+        .unwrap_or_else(|| SpecLabel::new("msg-chat"));
+
+    runtime.block_on(async move {
+        let bd = BdClient::new();
+        let beads = bd
+            .list(ListOpts {
+                status: None,
+                label: None,
+                label_any: vec!["loom:clarify".to_string(), "loom:blocked".to_string()],
+            })
+            .await?;
+        let kept: Vec<&loom_driver::bd::Bead> = filter_msg_beads(&beads, spec_filter.as_ref())
+            .iter()
+            .copied()
+            .collect();
+        if kept.is_empty() {
+            println!("(no outstanding clarify or blocked beads)");
+            return Ok::<(), anyhow::Error>(());
+        }
+
+        let key = resolve_scratch_key(Phase::Msg, &scope_label, None);
+        let scratchpad_path =
+            loom_driver::scratch::ScratchSession::scratchpad_path_for(&workspace_buf, &key)
+                .to_string_lossy()
+                .into_owned();
+        let ctx = build_msg_context(String::new(), &kept, scratchpad_path, String::new());
+        let initial_prompt =
+            askama::Template::render(&ctx).map_err(|e| anyhow::anyhow!("render msg.md: {e}"))?;
+
+        // Build a synthetic bead for profile resolution so msg --chat
+        // can reach the `base` profile without a per-bead label. The
+        // bead carries `profile:<phase_default>` so the manifest
+        // lookup hits the configured msg-phase default.
+        let synthetic_label = format!("profile:{}", phase_default.as_str());
+        let dispatch_bead = loom_driver::bd::Bead {
+            id: loom_driver::identifier::BeadId::new("wx-msg")
+                .map_err(|e| anyhow::anyhow!("bead id: {e}"))?,
+            title: "loom msg --chat".to_string(),
+            description: String::new(),
+            status: "open".to_string(),
+            priority: 0,
+            issue_type: "task".to_string(),
+            labels: vec![loom_driver::bd::Label::new(&synthetic_label)],
+        };
+        let banner = "loom msg --chat".to_string();
+        let scratch = loom_driver::scratch::ScratchSession::open(
+            &workspace_buf,
+            &key,
+            &initial_prompt,
+            &banner,
+        )?;
+        let spawn_config = build_spawn_config_from_manifest(
+            &manifest,
+            &dispatch_bead,
+            None,
+            &phase_default,
+            workspace_buf.clone(),
+            initial_prompt,
+            scratch.path().to_path_buf(),
+            vec![],
+            vec![],
+        )?;
+
+        let logs_root = workspace_buf.join(".wrapix/loom/logs");
+        let sink = LogSink::open_phase_at(
+            &logs_root,
+            &scope_label,
+            "msg-chat",
+            None,
+            SystemClock::new().wall_now(),
+        )
+        .map_err(|e| anyhow::anyhow!("open log sink: {e}"))?;
+
+        let mut output = String::new();
+        let outcome = dispatch(
+            kind,
+            spawn_config,
+            shutdown_grace,
+            Some(sink),
+            Some(&mut output),
+        )
+        .await?;
+        drop(scratch);
+
+        let marker = parse_exit_signal(&output);
+        match marker {
+            Some(ExitSignal::Complete) => {
+                println!(
+                    "loom msg --chat: agent exited {}, cost_usd={:?}",
+                    outcome.exit_code, outcome.cost_usd,
+                );
+                Ok(())
+            }
+            Some(ExitSignal::Noop) => {
+                // The agent ran but emitted no marker line; treat as a
+                // clean no-op exit so partial-progress sessions (the
+                // user typed `LOOM_COMPLETE` themselves and the marker
+                // just didn't appear in the captured text) don't fail.
+                println!(
+                    "loom msg --chat: agent exited {} without LOOM_COMPLETE marker (clean exit)",
+                    outcome.exit_code,
+                );
+                Ok(())
+            }
+            Some(ExitSignal::Blocked { reason }) => Err(anyhow::anyhow!(
+                "loom msg --chat: agent emitted LOOM_BLOCKED — clarifies are resolved \
+                 in this session, not raised. reason: {reason}",
+            )),
+            Some(ExitSignal::Clarify { question }) => Err(anyhow::anyhow!(
+                "loom msg --chat: agent emitted LOOM_CLARIFY — this session resolves \
+                 clarifies, it does not create new ones. question: {question}",
+            )),
+            None => Err(anyhow::anyhow!(
+                "loom msg --chat: agent exited {} without a LOOM_* marker — session \
+                 ended unexpectedly",
+                outcome.exit_code,
+            )),
+        }
+    })
 }
 
 fn run_msg_inner(

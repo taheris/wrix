@@ -3314,39 +3314,35 @@ test_loom_render_deps() {
     done
 }
 test_msg_chat_exit_signals() {
-    # I2 scaffold — the chat flag is wired and emits the explanatory banner.
-    # Full wrapix-attach plumbing is a follow-up; this dispatcher gates the
-    # scaffold so a regression in flag acceptance / scope display fails the audit.
-    cargo_run test -p loom --test msg_persist -- --exact --nocapture --quiet \
-        msg_chat_flag_accepted_and_emits_scaffold_banner
+    # R6 (wx-ibgar) — chat session rejects LOOM_BLOCKED / LOOM_CLARIFY;
+    # only LOOM_COMPLETE is a valid terminator for msg --chat.
+    cargo_run test -p loom --test msg_chat -- --exact --nocapture --quiet \
+        loom_msg_chat_rejects_non_complete_exit_signal
 }
 test_msg_chat_launches_container() {
-    # I2 scaffold — the chat flag is wired and emits the explanatory banner.
-    # Full wrapix-attach plumbing is a follow-up; this dispatcher gates the
-    # scaffold so a regression in flag acceptance / scope display fails the audit.
-    cargo_run test -p loom --test msg_persist -- --exact --nocapture --quiet \
-        msg_chat_flag_accepted_and_emits_scaffold_banner
+    # R6 — `loom msg --chat` dispatches through wrapix-spawn into the
+    # agent; the bd-shim invocation log records the dispatch path.
+    cargo_run test -p loom --test msg_chat -- --exact --nocapture --quiet \
+        loom_msg_chat_launches_container
 }
 test_msg_chat_partial_progress() {
-    # I2 scaffold — the chat flag is wired and emits the explanatory banner.
-    # Full wrapix-attach plumbing is a follow-up; this dispatcher gates the
-    # scaffold so a regression in flag acceptance / scope display fails the audit.
-    cargo_run test -p loom --test msg_persist -- --exact --nocapture --quiet \
-        msg_chat_flag_accepted_and_emits_scaffold_banner
+    # R6 — partial-progress is clean: a session that emits LOOM_COMPLETE
+    # without resolving every clarify leaves the remaining beads open.
+    cargo_run test -p loom --test msg_chat -- --exact --nocapture --quiet \
+        loom_msg_chat_partial_progress_leaves_unresolved_clarifies_open
 }
 test_msg_chat_scope() {
-    # I2 scaffold — the chat flag is wired and emits the explanatory banner.
-    # Full wrapix-attach plumbing is a follow-up; this dispatcher gates the
-    # scaffold so a regression in flag acceptance / scope display fails the audit.
-    cargo_run test -p loom --test msg_persist -- --exact --nocapture --quiet \
-        msg_chat_flag_accepted_and_emits_scaffold_banner
+    # R6 — `-s <label>` filters the rendered prompt to that spec's
+    # clarifies; out-of-scope beads must not appear.
+    cargo_run test -p loom --test msg_chat -- --exact --nocapture --quiet \
+        loom_msg_chat_scope_filters_to_spec
 }
 test_msg_chat_writes_notes() {
-    # I2 scaffold — the chat flag is wired and emits the explanatory banner.
-    # Full wrapix-attach plumbing is a follow-up; this dispatcher gates the
-    # scaffold so a regression in flag acceptance / scope display fails the audit.
-    cargo_run test -p loom --test msg_persist -- --exact --nocapture --quiet \
-        msg_chat_flag_accepted_and_emits_scaffold_banner
+    # R6 — chat-resolve-all forks `bd update --notes --remove-label`
+    # per clarify; bd-shim logs the calls and the bead state reflects
+    # the resolution.
+    cargo_run test -p loom --test msg_chat -- --exact --nocapture --quiet \
+        loom_msg_chat_writes_notes_and_clears_labels
 }
 test_msg_dismiss() { _pending_stub msg_dismiss; }
 test_msg_flag_exclusivity() {
