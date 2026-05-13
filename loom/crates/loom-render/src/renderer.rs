@@ -124,6 +124,10 @@ pub struct TerminalRenderer {
     /// the writer is known to be non-TTY. The CLI surface decides this
     /// per spec (R5, wx-zorjk wires it through `RenderMode::select`).
     indicator_enabled: bool,
+    /// OSC 8 hyperlink wrapping for path-bearing summary cells (R4,
+    /// wx-iuw22). Default is disabled; callers in supported terminals
+    /// enable via [`TerminalRenderer::with_osc8`].
+    osc8: tool_body::Osc8Context,
     header_printed: bool,
     closed: bool,
 }
@@ -170,9 +174,20 @@ impl TerminalRenderer {
             // TTY, single-bead". Tests pass `color=false` to disable
             // the indicator so captured-buffer assertions stay stable.
             indicator_enabled: color && !parallel,
+            osc8: tool_body::Osc8Context::disabled(),
             header_printed: false,
             closed: false,
         }
+    }
+
+    /// Enable OSC 8 hyperlink wrapping for path-bearing summary cells.
+    /// Production callers in `loom run` probe `TERM_PROGRAM` / `TERM`
+    /// via [`crate::osc8::supports_osc8`] and pass the workspace root
+    /// as `cwd`. Tests pin both branches without env mutation by
+    /// passing the boolean directly. Chainable; returns the renderer.
+    pub fn with_osc8(mut self, ctx: tool_body::Osc8Context) -> Self {
+        self.osc8 = ctx;
+        self
     }
 
     /// Print the per-bead header line.
@@ -222,7 +237,7 @@ impl TerminalRenderer {
                 self.indent_by_tool.insert(id.clone(), depth);
                 self.tool_context
                     .insert(id.clone(), (tool.clone(), params.clone()));
-                let summary = tool_body::summary_cell(tool, params);
+                let summary = tool_body::summary_cell(tool, params, &self.osc8);
                 let indent: String = "  ".repeat(depth);
                 if self.indicator_enabled
                     && parent_tool_call_id.is_none()
@@ -806,6 +821,89 @@ mod tests {
         });
         assert!(out.contains("Bash"), "{out:?}");
         assert!(!out.contains("result body"), "{out:?}");
+    }
+
+    /// R4 — Renderer wraps `ToolCall` summary cells in OSC 8 hyperlinks
+    /// when the OSC 8 context is enabled. Cmd-click on `src/lib.rs` in
+    /// the rendered line opens the file in the user's editor.
+    #[test]
+    fn tool_call_line_wraps_paths_in_osc8_when_enabled() {
+        let buf: Vec<u8> = Vec::new();
+        let cell = std::sync::Arc::new(std::sync::Mutex::new(buf));
+        let cell_for_writer = cell.clone();
+        struct Sink {
+            inner: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+        }
+        impl Write for Sink {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.inner
+                    .lock()
+                    .map_err(|_| io::Error::other("poisoned"))?
+                    .extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut r = TerminalRenderer::new(
+            Sink {
+                inner: cell_for_writer,
+            },
+            RenderMode::Default,
+            BeadId::new("wx-1").expect("valid bead id"),
+            false,
+            false,
+        )
+        .with_osc8(tool_body::Osc8Context::enabled(std::path::PathBuf::from(
+            "/workspace",
+        )));
+        r.render_event(&AgentEvent::ToolCall {
+            envelope: EventEnvelope::default(),
+            id: ToolCallId::new("e1"),
+            tool: "Edit".into(),
+            params: json!({
+                "file_path": "src/lib.rs",
+                "old_string": "old\n",
+                "new_string": "new\n",
+            }),
+            parent_tool_call_id: None,
+        })
+        .expect("render");
+        let out = String::from_utf8(cell.lock().expect("not poisoned").clone()).expect("utf-8");
+        assert!(
+            out.contains("\x1b]8;;file:///workspace/src/lib.rs"),
+            "Edit summary cell must wrap the path in OSC 8: {out:?}",
+        );
+        assert!(
+            out.contains("src/lib.rs"),
+            "display text still present: {out:?}"
+        );
+    }
+
+    /// R4 — Without OSC 8 (default), the rendered line contains plain
+    /// text with no escape bytes around the path. Silent degradation.
+    #[test]
+    fn tool_call_line_no_osc8_by_default() {
+        let out = capture(RenderMode::Default, false, false, |r| {
+            r.render_event(&AgentEvent::ToolCall {
+                envelope: EventEnvelope::default(),
+                id: ToolCallId::new("e1"),
+                tool: "Edit".into(),
+                params: json!({
+                    "file_path": "src/lib.rs",
+                    "old_string": "old\n",
+                    "new_string": "new\n",
+                }),
+                parent_tool_call_id: None,
+            })
+            .expect("render");
+        });
+        assert!(out.contains("src/lib.rs"), "{out:?}");
+        assert!(
+            !out.contains("\x1b]8;;"),
+            "default context must not emit OSC 8 escapes: {out:?}",
+        );
     }
 
     /// Verbose mode marks tool-error results with a `[tool error]` line

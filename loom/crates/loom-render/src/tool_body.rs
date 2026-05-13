@@ -21,31 +21,79 @@
 //!
 //! Unknown tools fall through to a generic `<tool>` cell.
 
+use std::path::{Path, PathBuf};
+
 use serde_json::Value;
+
+use crate::osc8;
 
 /// Body cap policy for the default render mode.
 pub const BODY_CAP_LINES: usize = 10;
 pub const BODY_CAP_BYTES: usize = 2048;
 
+/// OSC 8 wrapping context for summary cells. When `supported = true`,
+/// path-bearing tools (Read/Edit/Write/Grep/WebFetch) wrap the path or
+/// URL in the OSC 8 hyperlink escape so cmd-click opens the editor or
+/// browser. `cwd` is the workspace root used to compute absolute
+/// `file://` URLs from relative paths (R4, wx-iuw22).
+///
+/// Constructed once per renderer at session start — environment
+/// detection lives at the call site, not inside this struct, so tests
+/// can pin both branches without env mutation.
+#[derive(Debug, Clone)]
+pub struct Osc8Context {
+    pub supported: bool,
+    pub cwd: PathBuf,
+}
+
+impl Osc8Context {
+    /// OSC 8 wrapping suppressed — every `wrap` call returns the
+    /// display string unchanged. Used by non-Pretty render modes and
+    /// the default case when no terminal capability has been probed.
+    pub fn disabled() -> Self {
+        Self {
+            supported: false,
+            cwd: PathBuf::new(),
+        }
+    }
+
+    /// OSC 8 wrapping active. `cwd` is the workspace root, used to
+    /// turn relative paths into absolute `file://` URLs so cmd-click
+    /// resolves correctly regardless of the terminal's working dir.
+    pub fn enabled(cwd: PathBuf) -> Self {
+        Self {
+            supported: true,
+            cwd,
+        }
+    }
+}
+
+impl Default for Osc8Context {
+    fn default() -> Self {
+        Self::disabled()
+    }
+}
+
 /// Build the one-line summary cell for a tool call. `tool` is the
-/// builtin name; `params` is the call's argument JSON. Pure function
-/// so tests can pin per-tool shape without the renderer state.
-pub fn summary_cell(tool: &str, params: &Value) -> String {
+/// builtin name; `params` is the call's argument JSON; `osc8` controls
+/// hyperlink wrapping for path-bearing cells. Pure function so tests
+/// can pin per-tool shape without the renderer state.
+pub fn summary_cell(tool: &str, params: &Value, osc8: &Osc8Context) -> String {
     match tool {
-        "Read" => read_summary(params),
-        "Edit" => edit_summary(params),
-        "Write" => write_summary(params),
-        "Grep" => grep_or_glob_summary(tool, params),
-        "Glob" => grep_or_glob_summary(tool, params),
+        "Read" => read_summary(params, osc8),
+        "Edit" => edit_summary(params, osc8),
+        "Write" => write_summary(params, osc8),
+        "Grep" => grep_or_glob_summary(tool, params, osc8),
+        "Glob" => grep_or_glob_summary(tool, params, osc8),
         "Bash" => bash_summary(params),
-        "WebFetch" => webfetch_summary(params),
+        "WebFetch" => webfetch_summary(params, osc8),
         "WebSearch" => websearch_summary(params),
         "Task" => task_summary(params),
         other => other.to_string(),
     }
 }
 
-fn read_summary(params: &Value) -> String {
+fn read_summary(params: &Value, osc8: &Osc8Context) -> String {
     let path = params
         .get("file_path")
         .and_then(Value::as_str)
@@ -57,10 +105,13 @@ fn read_summary(params: &Value) -> String {
         (Some(o), None) => format!(":{o}-"),
         _ => String::new(),
     };
-    format!("Read   {path}{range}")
+    let display = format!("{path}{range}");
+    let line = offset.and_then(|o| u32::try_from(o).ok());
+    let wrapped = wrap_path(osc8, path, line, &display);
+    format!("Read   {wrapped}")
 }
 
-fn edit_summary(params: &Value) -> String {
+fn edit_summary(params: &Value, osc8: &Osc8Context) -> String {
     let path = params
         .get("file_path")
         .and_then(Value::as_str)
@@ -74,23 +125,26 @@ fn edit_summary(params: &Value) -> String {
         .and_then(Value::as_str)
         .unwrap_or("");
     let (add, del) = diff_counts(old, new);
-    format!("Edit   {path}   +{add} -{del}   diff↓")
+    let wrapped = wrap_path(osc8, path, None, path);
+    format!("Edit   {wrapped}   +{add} -{del}   diff↓")
 }
 
-fn write_summary(params: &Value) -> String {
+fn write_summary(params: &Value, osc8: &Osc8Context) -> String {
     let path = params
         .get("file_path")
         .and_then(Value::as_str)
         .unwrap_or("");
     let content = params.get("content").and_then(Value::as_str).unwrap_or("");
     let lines = content.lines().count();
-    format!("Write   {path}   +{lines}   new file")
+    let wrapped = wrap_path(osc8, path, None, path);
+    format!("Write   {wrapped}   +{lines}   new file")
 }
 
-fn grep_or_glob_summary(tool: &str, params: &Value) -> String {
+fn grep_or_glob_summary(tool: &str, params: &Value, osc8: &Osc8Context) -> String {
     let pattern = params.get("pattern").and_then(Value::as_str).unwrap_or("");
     let path = params.get("path").and_then(Value::as_str).unwrap_or("");
-    format!("{tool}   \"{pattern}\" in {path}")
+    let wrapped = wrap_path(osc8, path, None, path);
+    format!("{tool}   \"{pattern}\" in {wrapped}")
 }
 
 fn bash_summary(params: &Value) -> String {
@@ -99,9 +153,22 @@ fn bash_summary(params: &Value) -> String {
     format!("Bash   {truncated}")
 }
 
-fn webfetch_summary(params: &Value) -> String {
+fn webfetch_summary(params: &Value, osc8: &Osc8Context) -> String {
     let url = params.get("url").and_then(Value::as_str).unwrap_or("");
-    format!("WebFetch   {url}")
+    let wrapped = if osc8.supported && !url.is_empty() {
+        osc8::wrap(url, url, true)
+    } else {
+        url.to_string()
+    };
+    format!("WebFetch   {wrapped}")
+}
+
+fn wrap_path(osc8: &Osc8Context, path: &str, line: Option<u32>, display: &str) -> String {
+    if !osc8.supported || path.is_empty() {
+        return display.to_string();
+    }
+    let url = osc8::file_url(Path::new(&osc8.cwd), path, line);
+    osc8::wrap(&url, display, true)
 }
 
 fn websearch_summary(params: &Value) -> String {
@@ -199,11 +266,16 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn disabled() -> Osc8Context {
+        Osc8Context::disabled()
+    }
+
     #[test]
     fn read_summary_includes_path_and_range() {
         let cell = summary_cell(
             "Read",
             &json!({"file_path": "src/lib.rs", "offset": 10, "limit": 20}),
+            &disabled(),
         );
         assert!(cell.contains("src/lib.rs"), "{cell}");
         assert!(cell.contains(":10-30"), "{cell}");
@@ -218,6 +290,7 @@ mod tests {
                 "old_string": "fn old() {}\n",
                 "new_string": "fn new() {}\nfn extra() {}\n",
             }),
+            &disabled(),
         );
         assert!(cell.contains("src/lib.rs"));
         assert!(cell.contains("+"));
@@ -230,6 +303,7 @@ mod tests {
         let cell = summary_cell(
             "Write",
             &json!({"file_path": "src/new.rs", "content": "a\nb\nc\n"}),
+            &disabled(),
         );
         assert!(cell.contains("src/new.rs"));
         assert!(cell.contains("+3"));
@@ -239,7 +313,7 @@ mod tests {
     #[test]
     fn bash_summary_truncates_long_commands() {
         let cmd = "echo ".to_owned() + &"x".repeat(100);
-        let cell = summary_cell("Bash", &json!({"command": cmd}));
+        let cell = summary_cell("Bash", &json!({"command": cmd}), &disabled());
         assert!(cell.contains("Bash"));
         // 60-char cap leaves room for the leading "Bash   "
         let body_part = cell.trim_start_matches("Bash").trim();
@@ -254,6 +328,7 @@ mod tests {
                 "description": "Review changes",
                 "subagent_type": "code-reviewer",
             }),
+            &disabled(),
         );
         assert!(cell.contains("Task"));
         assert!(cell.contains("Review changes"));
@@ -262,7 +337,58 @@ mod tests {
 
     #[test]
     fn unknown_tool_falls_through_to_name() {
-        assert_eq!(summary_cell("CustomTool", &json!({})), "CustomTool");
+        assert_eq!(
+            summary_cell("CustomTool", &json!({}), &disabled()),
+            "CustomTool",
+        );
+    }
+
+    /// R4 — Read/Edit/Write/Grep paths wrap in OSC 8 when supported.
+    /// The display text stays the same; the escape brackets it.
+    #[test]
+    fn enabled_osc8_wraps_read_path() {
+        let ctx = Osc8Context::enabled(PathBuf::from("/workspace"));
+        let cell = summary_cell(
+            "Read",
+            &json!({"file_path": "src/lib.rs", "offset": 42, "limit": 0}),
+            &ctx,
+        );
+        // OSC 8 wrap brackets the path; the start marker carries the
+        // file URL with the line-number fragment from `offset`.
+        assert!(
+            cell.contains("\x1b]8;;file:///workspace/src/lib.rs#L42"),
+            "{cell:?}"
+        );
+        assert!(cell.contains("src/lib.rs"), "{cell:?}");
+        // BEL terminator after the display string.
+        assert!(cell.contains("\x07"), "{cell:?}");
+    }
+
+    /// R4 — WebFetch URL wraps the same URL as both target and display
+    /// so cmd-click opens the browser at the visible URL.
+    #[test]
+    fn enabled_osc8_wraps_webfetch_url() {
+        let ctx = Osc8Context::enabled(PathBuf::from("/workspace"));
+        let cell = summary_cell(
+            "WebFetch",
+            &json!({"url": "https://example.com/page"}),
+            &ctx,
+        );
+        assert!(
+            cell.contains("\x1b]8;;https://example.com/page"),
+            "{cell:?}",
+        );
+    }
+
+    /// R4 — Disabled context returns plain text — no escape bytes.
+    #[test]
+    fn disabled_osc8_leaves_text_unchanged() {
+        let cell = summary_cell(
+            "Read",
+            &json!({"file_path": "src/lib.rs", "offset": 42, "limit": 0}),
+            &disabled(),
+        );
+        assert!(!cell.contains('\x1b'), "no escapes when disabled: {cell:?}");
     }
 
     #[test]
