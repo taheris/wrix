@@ -212,7 +212,7 @@ fn has_gix_import(line: &str) -> bool {
 #[test]
 fn run_single_event_channel() {
     let root = loom_workspace_root();
-    let sink_path = root.join("crates/loom-driver/src/logging/sink.rs");
+    let sink_path = root.join("crates/loom-render/src/sink/mod.rs");
     let source = read_to_string(&sink_path);
     let rel_path = rel(&root, &sink_path);
     let file =
@@ -612,6 +612,10 @@ fn no_real_clock_outside_system_clock() {
     let allowed: &[&Path] = &[
         Path::new("crates/loom-driver/src/clock/system.rs"),
         Path::new("crates/loom-driver/src/clock/mock.rs"),
+        // loom-render carries its own minimal `Clock` trait + `SystemClock`
+        // impl so the renderer crate stays free of the tokio dep that the
+        // driver's full Clock trait pulls in (F3 — wx-9y7cq).
+        Path::new("crates/loom-render/src/clock.rs"),
     ];
     let mut violations: Vec<String> = Vec::new();
     for path in src_files(&root) {

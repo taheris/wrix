@@ -4,9 +4,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use crate::agent::AgentEvent;
 use crate::clock::{Clock, SystemClock};
-use crate::identifier::{BeadId, ProfileName};
+use loom_events::AgentEvent;
+use loom_events::identifier::{BeadId, ProfileName};
 
 /// Final outcome of a bead spawn — drives the closing line color and glyph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,14 +63,7 @@ impl TerminalRenderer {
         parallel: bool,
         color: bool,
     ) -> Self {
-        Self::with_clock(
-            out,
-            mode,
-            bead_id,
-            parallel,
-            color,
-            Arc::new(SystemClock::new()),
-        )
+        Self::with_clock(out, mode, bead_id, parallel, color, SystemClock::new())
     }
 
     /// Build a renderer with an explicit clock. Tests inject
@@ -294,7 +287,7 @@ fn truncate_to(s: &str, max: usize) -> String {
 #[expect(clippy::expect_used, reason = "tests use panicking helpers")]
 mod tests {
     use super::*;
-    use crate::identifier::ToolCallId;
+    use loom_events::identifier::ToolCallId;
     use serde_json::json;
 
     fn capture<F>(mode: RenderMode, parallel: bool, color: bool, f: F) -> String

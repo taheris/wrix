@@ -1,39 +1,24 @@
-//! Run-time event sink, terminal renderer, and log retention sweep.
+//! Disk-retention sweep for log files plus re-exports from `loom-render`.
 //!
-//! `loom run` produces a stream of [`AgentEvent`](crate::agent::AgentEvent)
-//! values per bead. Each bead spawn opens a [`LogSink`] that tees the same
-//! event stream into two destinations:
+//! The renderer, log sink, and path helpers now live in `loom-render`
+//! (F3, wx-9y7cq) — keeping them out of the driver lets `loom logs`,
+//! SSE bridges, and external log analyzers depend on the renderer
+//! without pulling in the driver runtime. This module re-exports them
+//! so existing call sites (`use loom_driver::logging::LogSink`) keep
+//! resolving.
 //!
-//! 1. A per-bead JSONL file under
-//!    `<workspace>/.wrapix/loom/logs/<spec-label>/<bead-id>-<utc>.jsonl`.
-//! 2. A [`TerminalRenderer`] that draws human-friendly progress lines on
-//!    stdout (default) or full assistant text streams (`--verbose`).
-//!
-//! Both writers are driven from the same `LogSink::emit` call — there is no
-//! independent renderer task pulling events in parallel — so the renderer and
-//! the on-disk log are guaranteed to observe the same event sequence.
-//!
-//! [`Redacted`] wraps any value that may contain secrets so it logs as
-//! `[REDACTED]` regardless of underlying content; variable *names* may still
-//! appear in tracing fields.
-//!
-//! [`sweep_retention_at`] is invoked once per `loom run` startup to delete log
-//! files older than the configured retention window. The caller passes the
-//! current `SystemTime` so tests can age files deterministically. Failures
-//! (permission denied, in-use file) are logged at `debug!` and do not abort
-//! the run.
+//! `sweep_retention_at` stays driver-side — it scans the filesystem,
+//! deletes stale files, and uses `tracing` for failure reporting; it
+//! is the one logging concern that's tied to the driver runtime rather
+//! than to event rendering.
 
-mod error;
-mod path;
-mod redacted;
-mod renderer;
 mod retention;
-mod sink;
-mod time;
 
-pub use error::LogError;
-pub use path::{bead_log_path, format_utc_timestamp, phase_log_path};
-pub use redacted::Redacted;
-pub use renderer::{BeadOutcome, RenderMode, TerminalRenderer};
 pub use retention::{RetentionReport, sweep_retention_at};
-pub use sink::LogSink;
+
+// Re-export from loom-render so the driver's logging module surface is
+// unchanged for existing call sites.
+pub use loom_render::{
+    BeadOutcome, LogError, LogSink, Redacted, RenderMode, TerminalRenderer, bead_log_path,
+    format_utc_timestamp, phase_log_path,
+};

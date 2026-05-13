@@ -1686,6 +1686,7 @@ dependencies = [
  "fd-lock",
  "gix",
  "loom-events",
+ "loom-render",
  "proptest",
  "pulldown-cmark",
  "rusqlite",
@@ -1708,6 +1709,19 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "loom-render"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "displaydoc",
+ "loom-events",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tracing",
 ]
 
 [[package]]

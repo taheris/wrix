@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::identifier::{BeadId, SpecLabel};
+use loom_events::identifier::{BeadId, SpecLabel};
 
 pub use super::time::format_utc_timestamp;
 
@@ -16,8 +16,8 @@ pub use super::time::format_utc_timestamp;
 /// (`LogSink::open_in`) handle directory creation.
 ///
 /// ```
-/// use loom_driver::identifier::{BeadId, SpecLabel};
-/// use loom_driver::logging::bead_log_path;
+/// use loom_events::identifier::{BeadId, SpecLabel};
+/// use loom_render::bead_log_path;
 /// use std::path::Path;
 /// use std::time::{Duration, UNIX_EPOCH};
 ///

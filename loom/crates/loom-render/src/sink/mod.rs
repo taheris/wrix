@@ -5,12 +5,15 @@ use std::time::SystemTime;
 
 use tracing::info;
 
-use crate::agent::AgentEvent;
-use crate::identifier::{BeadId, SpecLabel};
+use loom_events::AgentEvent;
+use loom_events::identifier::{BeadId, SpecLabel};
 
-use super::error::LogError;
-use super::path::{bead_log_path, phase_log_path};
-use super::renderer::{BeadOutcome, TerminalRenderer};
+mod error;
+
+pub use error::LogError;
+
+use crate::path::{bead_log_path, phase_log_path};
+use crate::renderer::{BeadOutcome, TerminalRenderer};
 
 /// Tee-style sink that drives the per-bead JSONL log file *and* the
 /// [`TerminalRenderer`] from the same `emit` call.
@@ -182,7 +185,7 @@ pub(crate) fn open_sink_with_sink_writer(
 ) -> Result<(LogSink, SharedBuffer), LogError> {
     use std::io;
 
-    use crate::logging::renderer::RenderMode;
+    use crate::renderer::RenderMode;
     let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
     let writer_buf = buf.clone();
     struct Sink {
@@ -215,8 +218,8 @@ pub(crate) fn open_sink_with_sink_writer(
 #[expect(clippy::expect_used, reason = "tests use panicking helpers")]
 mod tests {
     use super::*;
-    use crate::agent::CompactionReason;
-    use crate::identifier::ToolCallId;
+    use loom_events::event::CompactionReason;
+    use loom_events::identifier::ToolCallId;
     use serde_json::{Value, json};
 
     fn read_lines(path: &Path) -> Vec<String> {

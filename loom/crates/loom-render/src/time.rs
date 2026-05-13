@@ -17,7 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// back to the epoch.
 ///
 /// ```
-/// use loom_driver::logging::format_utc_timestamp;
+/// use loom_render::format_utc_timestamp;
 /// use std::time::{Duration, UNIX_EPOCH};
 ///
 /// // 2026-05-03 12:30:45 UTC = 1777811445 seconds since epoch.
