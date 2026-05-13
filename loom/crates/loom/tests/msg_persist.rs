@@ -145,6 +145,13 @@ fn read_invocation_log(state_dir: &Path) -> String {
     std::fs::read_to_string(state_dir.join(".invocations.log")).unwrap_or_default()
 }
 
+/// Description for a blocked bead carrying a free-form prompt — no
+/// Options section. `build_fast_reply` always returns `FastReply::Verbatim`
+/// for blocked kind regardless of input shape (integer-looking or not).
+const BLOCKED_DESC: &str = "Need a deploy key for the runner image — \
+which key path should it mount?
+";
+
 // -------------------------------------------------------------------
 // B3 — `test_msg_option_validates`
 // -------------------------------------------------------------------
@@ -269,5 +276,123 @@ fn msg_option_out_of_range_errors_and_leaves_bead_unchanged() {
         has_clarify,
         "loom:clarify must remain when validation fails (no label drift on error). labels={labels:?}\n\
          bd-shim log:\n{log}",
+    );
+}
+
+// -------------------------------------------------------------------
+// B4 — `test_msg_reply_verbatim` integration half
+// -------------------------------------------------------------------
+
+/// `-a "<free text>"` on a `loom:blocked` bead persists the verbatim
+/// text as notes and clears the `loom:blocked` label in the same
+/// update. The unit test `blocked_free_form_passes_through_unchanged`
+/// only proved `build_fast_reply` returns the right `FastReply` enum;
+/// this test pins that the enum's note actually reaches the bead.
+#[test]
+fn msg_blocked_verbatim_text_persists_via_bd_show() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path();
+    let state_dir = workspace.join("bd-state");
+    std::fs::create_dir_all(&state_dir).unwrap();
+
+    seed_bead(
+        &state_dir,
+        "wx-blockt",
+        "deploy key path",
+        BLOCKED_DESC,
+        &["loom:blocked"],
+    );
+
+    let bin_dir = install_bd_shim(workspace);
+    let manifest = write_minimal_manifest(workspace);
+
+    let output = run_loom_msg(
+        workspace,
+        &bin_dir,
+        &state_dir,
+        &manifest,
+        &["-a", "use /run/secrets/deploy_key", "-i", "wx-blockt"],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let log = read_invocation_log(&state_dir);
+    assert!(
+        output.status.success(),
+        "loom msg -a \"<text>\" on blocked bead must exit 0.\n\
+         stdout={stdout}\nstderr={stderr}\nbd-shim log:\n{log}",
+    );
+
+    let bead = run_bd_show(&bin_dir, &state_dir, "wx-blockt");
+    let notes = bead
+        .get("notes")
+        .and_then(serde_json::Value::as_str)
+        .expect("notes field present and string");
+    assert_eq!(
+        notes, "use /run/secrets/deploy_key",
+        "bd show --json .notes must carry the verbatim free-form reply.\n\
+         stdout={stdout}\nstderr={stderr}\nbd-shim log:\n{log}",
+    );
+
+    let labels = bead
+        .get("labels")
+        .and_then(serde_json::Value::as_array)
+        .expect("labels field is array");
+    let has_blocked = labels.iter().any(|v| v.as_str() == Some("loom:blocked"));
+    assert!(
+        !has_blocked,
+        "loom:blocked label must be removed by the same update call. labels={labels:?}\n\
+         bd-shim log:\n{log}",
+    );
+}
+
+/// `-a "1"` on a `loom:blocked` bead does NOT resolve as integer option
+/// (blocked beads have no Options section); the literal `"1"` is
+/// persisted as verbatim per `blocked_integer_choice_is_always_verbatim`.
+/// Pins the kind-discriminator in the persist path — integer-looking
+/// input on a blocked bead must not accidentally trigger the option
+/// validator.
+#[test]
+fn msg_blocked_integer_input_persists_verbatim_not_as_option() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path();
+    let state_dir = workspace.join("bd-state");
+    std::fs::create_dir_all(&state_dir).unwrap();
+
+    seed_bead(
+        &state_dir,
+        "wx-blocki",
+        "free-form blocked prompt",
+        BLOCKED_DESC,
+        &["loom:blocked"],
+    );
+
+    let bin_dir = install_bd_shim(workspace);
+    let manifest = write_minimal_manifest(workspace);
+
+    let output = run_loom_msg(
+        workspace,
+        &bin_dir,
+        &state_dir,
+        &manifest,
+        &["-a", "1", "-i", "wx-blocki"],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let log = read_invocation_log(&state_dir);
+    assert!(
+        output.status.success(),
+        "loom msg -a 1 on blocked bead must exit 0 (verbatim, not option).\n\
+         stdout={stdout}\nstderr={stderr}\nbd-shim log:\n{log}",
+    );
+
+    let bead = run_bd_show(&bin_dir, &state_dir, "wx-blocki");
+    let notes = bead
+        .get("notes")
+        .and_then(serde_json::Value::as_str)
+        .expect("notes field present and string");
+    assert_eq!(
+        notes, "1",
+        "blocked-bead integer input must persist verbatim, not as Option N composition.\n\
+         stdout={stdout}\nstderr={stderr}\nbd-shim log:\n{log}",
     );
 }

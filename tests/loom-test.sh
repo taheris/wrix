@@ -1521,6 +1521,9 @@ test_msg_reply_verbatim() {
     msg_cargo_test msg::reply::tests::empty_title_or_body_renders_partial_note
     msg_cargo_test msg::reply::tests::blocked_integer_choice_is_always_verbatim
     msg_cargo_test msg::reply::tests::blocked_free_form_passes_through_unchanged
+    cargo_run test -p loom --test msg_persist -- --test-threads=1 \
+        msg_blocked_verbatim_text_persists_via_bd_show \
+        msg_blocked_integer_input_persists_verbatim_not_as_option
 }
 
 #-----------------------------------------------------------------------------
