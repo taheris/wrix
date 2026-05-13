@@ -1936,16 +1936,16 @@ v1-complete signal for this spec.
       the verdict-gate decision table; mechanical signals (marker,
       bd-closed, diff) make no LLM call
   [verify](tests/loom-test.sh::test_verdict_gate_mechanical_signals)
-- [ ] `loom run` never invokes `bd close` on a bead it dispatched;
+- [x] `loom run` never invokes `bd close` on a bead it dispatched;
       closure is the agent's responsibility and the `bd-closed` column
       is observed post-hoc. Verified by stubbing an agent that emits
       `LOOM_BLOCKED` / `LOOM_CLARIFY` without calling `bd close` and
       asserting the bead remains open after the run finishes.
   [verify](tests/loom-test.sh::test_run_does_not_close_bead)
-- [ ] `LOOM_BLOCKED` agent marker → bead transitions to `[blocked]`,
+- [x] `LOOM_BLOCKED` agent marker → bead transitions to `[blocked]`,
       recovery loop is skipped
   [verify](tests/loom-test.sh::test_gate_loom_blocked_marker)
-- [ ] `LOOM_CLARIFY` agent marker → bead transitions to `[clarify]`,
+- [x] `LOOM_CLARIFY` agent marker → bead transitions to `[clarify]`,
       recovery loop is skipped
   [verify](tests/loom-test.sh::test_gate_loom_clarify_marker)
 - [ ] No marker emitted → recovery with cause `swallowed-marker`

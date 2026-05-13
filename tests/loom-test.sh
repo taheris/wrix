@@ -3032,9 +3032,13 @@ test_verdict_gate_mechanical_signals() {
 }
 test_gate_loom_blocked_marker() {
     check_cargo_test check::phase_verdict::tests::blocked_marker_routes_to_blocked_with_reason
+    cargo_run test -p loom --test marker_gate -- --test-threads=1 \
+        loom_run_once_routes_blocked_marker_to_label_and_leaves_bead_open
 }
 test_gate_loom_clarify_marker() {
     check_cargo_test check::phase_verdict::tests::clarify_marker_routes_to_clarify_with_question
+    cargo_run test -p loom --test marker_gate -- --test-threads=1 \
+        loom_run_once_routes_clarify_marker_to_label_and_leaves_bead_open
 }
 test_gate_swallowed_marker() {
     check_cargo_test check::phase_verdict::tests::missing_marker_routes_to_swallowed_marker_recovery
@@ -3241,7 +3245,10 @@ test_push_gate_sees_fixup_beads() { _pending_stub push_gate_sees_fixup_beads; }
 test_raw_mode_passthrough() { _pending_stub raw_mode_passthrough; }
 test_rebuild_drops_all_notes() { _pending_stub rebuild_drops_all_notes; }
 test_renderer_modes_present() { _pending_stub renderer_modes_present; }
-test_run_does_not_close_bead() { _pending_stub run_does_not_close_bead; }
+test_run_does_not_close_bead() {
+    cargo_run test -p loom --test marker_gate -- --test-threads=1 \
+        loom_run_never_invokes_bd_close_on_dispatched_bead_across_all_markers
+}
 test_seq_monotonic() { _pending_stub seq_monotonic; }
 test_task_subagent_nesting() { _pending_stub task_subagent_nesting; }
 test_todo_delete_notes_atomic_with_cursor() { _pending_stub todo_delete_notes_atomic_with_cursor; }

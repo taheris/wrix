@@ -21,6 +21,7 @@
 //! `loom msg` actually invoke):
 //!
 //! - `bd list --json [--label-any=<L> …]`
+//! - `bd ready --json [--limit=N] [--label=<L>]`
 //! - `bd show <id> --json`
 //! - `bd update <id> [--notes <t>] [--remove-label <l>] [--add-label <l>] [--status <s>] [--priority <n>] [--claim]`
 //! - `bd close <id>` — sets status to closed; recorded in the invocation log
@@ -67,6 +68,7 @@ fn main() -> ExitCode {
     let rest = &args[2..];
     match sub.as_str() {
         "list" => cmd_list(&state_dir, rest),
+        "ready" => cmd_ready(&state_dir, rest),
         "show" => cmd_show(&state_dir, rest),
         "update" => cmd_update(&state_dir, rest),
         "close" => cmd_close(&state_dir, rest),
@@ -206,6 +208,62 @@ fn cmd_list(state_dir: &Path, args: &[String]) -> ExitCode {
             continue;
         }
         out.push(bead_to_json(state_dir, &id));
+    }
+    println!("{}", serde_json::Value::Array(out));
+    ExitCode::SUCCESS
+}
+
+fn cmd_ready(state_dir: &Path, args: &[String]) -> ExitCode {
+    // `bd ready --json [--limit=N] [--label=<L>]` — beads with status=open
+    // and the named label (when given). The shim doesn't model blocker
+    // dependencies; status + label match is sufficient for the run-gate tests.
+    let mut limit: Option<usize> = None;
+    let mut label_eq: Option<String> = None;
+    let mut want_json = false;
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        if let Some(v) = a.strip_prefix("--limit=") {
+            limit = v.parse().ok();
+            i += 1;
+        } else if let Some(v) = a.strip_prefix("--label=") {
+            label_eq = Some(v.to_string());
+            i += 1;
+        } else if a == "--json" {
+            want_json = true;
+            i += 1;
+        } else if a == "--limit" {
+            limit = args.get(i + 1).and_then(|s| s.parse().ok());
+            i += 2;
+        } else if a == "--label" {
+            label_eq = Some(args.get(i + 1).cloned().unwrap_or_default());
+            i += 2;
+        } else {
+            eprintln!("bd-shim: ready: unsupported flag {a}");
+            return ExitCode::from(2);
+        }
+    }
+    if !want_json {
+        eprintln!("bd-shim: ready: --json required (production code always passes it)");
+        return ExitCode::from(2);
+    }
+    let mut out = Vec::new();
+    for id in list_bead_ids(state_dir) {
+        if read_field(state_dir, &id, "status").trim() != "open" {
+            continue;
+        }
+        let labels = read_labels(state_dir, &id);
+        if let Some(want) = &label_eq
+            && !labels.iter().any(|l| l == want)
+        {
+            continue;
+        }
+        out.push(bead_to_json(state_dir, &id));
+        if let Some(n) = limit
+            && out.len() >= n
+        {
+            break;
+        }
     }
     println!("{}", serde_json::Value::Array(out));
     ExitCode::SUCCESS
