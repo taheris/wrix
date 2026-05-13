@@ -18,23 +18,27 @@
 //! freshly-init'd workspace.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 
 use askama::Template;
 use loom_driver::agent::{
     ProtocolError, RePinContent, SessionOutcome, SpawnConfig, set_loom_inside,
 };
 use loom_driver::bd::{BdClient, Bead, ListOpts, UpdateOpts};
+use loom_driver::clock::{Clock, SystemClock};
 use loom_driver::config::Phase;
 use loom_driver::git::GitClient;
 use loom_driver::identifier::{BeadId, ProfileName, SpecLabel};
 use loom_driver::lock::LockGuard;
+use loom_driver::logging::{BeadOutcome, LogSink};
 use loom_driver::profile_manifest::ProfileImageManifest;
 use loom_driver::scratch::resolve_scratch_key;
 use loom_driver::state::StateDb;
+use loom_events::{AgentEvent, EnvelopeBuilder, Source};
 use loom_templates::check::CheckContext;
 use tokio::process::Command;
-use tracing::info;
+use tracing::{info, warn};
 
 use super::context::{beads_summary, load_review_sources};
 use super::error::CheckError;
@@ -55,6 +59,22 @@ where
     spawn: S,
     /// Spec lock dropped before exec'ing `loom run` so the child can take it.
     lock: Option<LockGuard>,
+    /// Phase log root + start timestamp. R7 (wx-r9tmc) — the verdict
+    /// gate emits `push_gate_*` driver events into the same JSONL log
+    /// file the reviewer agent writes to, so a replay can replay the
+    /// full check phase. Both writers compute the file path from
+    /// `(phase_log_root, label, "check", phase_log_when)`, which is
+    /// deterministic — append-mode opens share one file.
+    phase_log_root: Option<PathBuf>,
+    phase_log_when: SystemTime,
+    /// Per-phase envelope builder. The check phase isn't bead-scoped,
+    /// so the envelope carries the synthetic `wx-check` bead id; the
+    /// builder tracks `seq` across every `emit_driver_event` call so
+    /// replay code can reorder events deterministically. Wrapped in
+    /// `Mutex` because `EnvelopeBuilder`'s clock closure is `Send`
+    /// but not `Sync` — the trait's `Send`-future bound requires the
+    /// controller itself to be `Sync` across `&self` borrows.
+    envelope_builder: Mutex<Option<EnvelopeBuilder>>,
 }
 
 impl<S, F> ProductionCheckController<S, F>
@@ -83,6 +103,9 @@ where
             phase_default,
             spawn,
             lock: None,
+            phase_log_root: None,
+            phase_log_when: SystemClock::new().wall_now(),
+            envelope_builder: Mutex::new(None),
         }
     }
 
@@ -91,6 +114,24 @@ where
     pub fn with_handoff_lock(mut self, guard: LockGuard) -> Self {
         self.lock = Some(guard);
         self
+    }
+
+    /// Pin the phase log file the verdict gate's driver events stream
+    /// into. R7 (wx-r9tmc) — the spawn closure inside `run_review`
+    /// MUST use the same `when` when it opens its agent-event sink
+    /// or the two writers land in separate files. Tests and the CLI
+    /// share this via `phase_log_when()`.
+    pub fn with_phase_log(mut self, logs_root: PathBuf, when: SystemTime) -> Self {
+        self.phase_log_root = Some(logs_root);
+        self.phase_log_when = when;
+        self
+    }
+
+    /// The pinned phase log timestamp — read by the binary's spawn
+    /// closure so its agent-event `LogSink` lands in the same file
+    /// the controller's driver events append to.
+    pub fn phase_log_when(&self) -> SystemTime {
+        self.phase_log_when
     }
 
     fn spec_label_filter(&self) -> String {
@@ -277,6 +318,73 @@ where
             return Err(CheckError::RunHandoff(status.to_string()));
         }
         Ok(())
+    }
+
+    fn emit_driver_event(&mut self, kind: &str, summary: &str, payload: serde_json::Value) {
+        // R7 (wx-r9tmc) — open a transient LogSink at the same phase
+        // log path the reviewer agent's sink uses (same `when`, same
+        // `phase_log_root`, no renderer), write one `DriverEvent`,
+        // finish. The file is opened in append mode so co-writing
+        // with the agent-event sink lands both event streams in one
+        // file. When no phase log is configured (test fakes, sink-
+        // less callers) this is a silent no-op.
+        let Some(logs_root) = self.phase_log_root.clone() else {
+            return;
+        };
+        let mut guard = match self.envelope_builder.lock() {
+            Ok(g) => g,
+            Err(_) => {
+                warn!("check controller: envelope builder mutex poisoned");
+                return;
+            }
+        };
+        if guard.is_none() {
+            let synthetic_bead = match BeadId::new("wx-check") {
+                Ok(id) => id,
+                Err(e) => {
+                    warn!(error = %e, "check controller: synthetic bead id invalid");
+                    return;
+                }
+            };
+            let clock = SystemClock::new();
+            *guard = Some(EnvelopeBuilder::new(
+                synthetic_bead,
+                None,
+                0,
+                Source::Driver,
+                move || {
+                    clock
+                        .wall_now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as i64
+                },
+            ));
+        }
+        let envelope = guard.as_mut().expect("just initialized").build();
+        drop(guard);
+        let event = AgentEvent::DriverEvent {
+            envelope,
+            driver_kind: kind.to_string(),
+            summary: summary.to_string(),
+            payload,
+        };
+        let sink_result =
+            LogSink::open_phase_at(&logs_root, &self.label, "check", None, self.phase_log_when);
+        match sink_result {
+            Ok(mut sink) => {
+                if let Err(e) = sink.emit(&event) {
+                    warn!(error = %e, "check controller: emit driver event failed");
+                }
+                // Finish is idempotent — the agent-event sink (opened
+                // separately in run_review) reaches the same file and
+                // will run finish itself with the bead outcome.
+                let _ = sink.finish(BeadOutcome::Done);
+            }
+            Err(e) => {
+                warn!(error = %e, "check controller: open phase sink for driver event failed");
+            }
+        }
     }
 }
 

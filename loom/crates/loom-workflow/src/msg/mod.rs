@@ -19,6 +19,7 @@
 //! [`MsgContext`](loom_templates::msg::MsgContext) the Askama template
 //! consumes.
 
+pub mod chat;
 mod context;
 mod error;
 mod list;

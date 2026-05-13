@@ -25,17 +25,6 @@
 //!   `bd close` itself, but the test asserts the *driver* doesn't.
 //! - `no-marker`       — emit a plain message and `agent_end` without
 //!   any `LOOM_*` line. Exercises the swallowed-marker recovery path.
-//! - `chat-resolve-all` — R6 (wx-ibgar). Parse the received prompt for
-//!   `### <bead-id> — …` lines, fork `bd update <id> --notes "resolved" \
-//!   --remove-label=loom:clarify` for each, then emit `LOOM_COMPLETE`.
-//!   Tests assert the bd-shim invocation log carries the right calls.
-//! - `chat-resolve-none` — R6. Emit `LOOM_COMPLETE` without resolving
-//!   anything; exercises the "partial-progress is clean" path.
-//! - `chat-emit-blocked` — R6. Emit `LOOM_BLOCKED` so the driver
-//!   rejects the session (only `LOOM_COMPLETE` is valid for msg).
-//! - `chat-prompt-dump` — R6. Write the received prompt verbatim to
-//!   `$LOOM_TEST_PROMPT_DUMP`, then `LOOM_COMPLETE`. Tests inspect the
-//!   dump to assert scope filtering and template rendering.
 
 #![allow(
     clippy::unwrap_used,
@@ -52,10 +41,6 @@ const MODE_BLOCKED: &str = "blocked-marker";
 const MODE_CLARIFY: &str = "clarify-marker";
 const MODE_COMPLETE: &str = "complete-marker";
 const MODE_NO_MARKER: &str = "no-marker";
-const MODE_CHAT_RESOLVE_ALL: &str = "chat-resolve-all";
-const MODE_CHAT_RESOLVE_NONE: &str = "chat-resolve-none";
-const MODE_CHAT_EMIT_BLOCKED: &str = "chat-emit-blocked";
-const MODE_CHAT_PROMPT_DUMP: &str = "chat-prompt-dump";
 
 const BLOCKED_REASON: &str = "spec section is missing the schema for this bead";
 const CLARIFY_QUESTION: &str = "which deploy-key path should the runner image mount?";
@@ -83,10 +68,9 @@ fn main() -> ExitCode {
     );
     emit(&mut stdout, &probe_response);
 
-    // Step 2 — read the prompt line. R6 chat modes parse it for the
-    // outstanding clarify bead IDs; non-chat modes ignore it.
-    let prompt_line = read_line(&stdin).unwrap_or_default();
-    let prompt_text = extract_prompt_message(&prompt_line);
+    // Step 2 — read the prompt line. We don't need its contents; the
+    // mode env var carries the test's intent already.
+    let _prompt = read_line(&stdin);
 
     // Step 3 — emit the marker as a message_delta. parse_exit_signal
     // scans the accumulated text for `LOOM_BLOCKED` / `LOOM_CLARIFY` /
@@ -107,46 +91,6 @@ fn main() -> ExitCode {
         }
         MODE_NO_MARKER => {
             emit_message_delta(&mut stdout, "ran without emitting a verdict");
-        }
-        MODE_CHAT_RESOLVE_ALL => {
-            // R6 — walk every clarify the prompt enumerates and shell
-            // out to `bd update` for each. `bd` resolves via PATH so the
-            // test must place a `bd-shim` on PATH (the existing
-            // marker_gate / msg_persist helpers already do this).
-            let ids = extract_clarify_bead_ids(&prompt_text);
-            for id in &ids {
-                let mut update_args = vec![
-                    "update".to_string(),
-                    id.clone(),
-                    "--notes".to_string(),
-                    format!("resolved via msg --chat (mock {id})"),
-                    "--remove-label".to_string(),
-                    "loom:clarify".to_string(),
-                ];
-                shell_out_bd(&mut update_args);
-            }
-            emit_message_delta(
-                &mut stdout,
-                &format!("resolved {} clarify bead(s)", ids.len()),
-            );
-            emit_message_delta(&mut stdout, "LOOM_COMPLETE");
-        }
-        MODE_CHAT_RESOLVE_NONE => {
-            emit_message_delta(&mut stdout, "user exited early; no clarifies resolved");
-            emit_message_delta(&mut stdout, "LOOM_COMPLETE");
-        }
-        MODE_CHAT_EMIT_BLOCKED => {
-            emit_message_delta(&mut stdout, "mock cannot resolve any clarifies");
-            emit_message_delta(&mut stdout, "LOOM_BLOCKED");
-        }
-        MODE_CHAT_PROMPT_DUMP => {
-            // Dump the prompt verbatim so the test can assert what the
-            // renderer produced (scope filtering, template shape).
-            if let Ok(path) = env::var("LOOM_TEST_PROMPT_DUMP") {
-                let _ = std::fs::write(&path, &prompt_text);
-            }
-            emit_message_delta(&mut stdout, "prompt dumped");
-            emit_message_delta(&mut stdout, "LOOM_COMPLETE");
         }
         other => {
             eprintln!("mock-loom-agent: unknown LOOM_TEST_AGENT_MODE {other}");
@@ -204,86 +148,4 @@ fn extract_field(field: &str, line: &str) -> Option<String> {
     let rest = &line[start..];
     let end = rest.find('"')?;
     Some(rest[..end].to_string())
-}
-
-/// Pull the prompt body out of pi's `prompt` command line. Pi wraps the
-/// user-facing prompt in `{"type":"command","name":"prompt","args":{
-/// "message":"<body>"}}` — well, in practice with the wrapix wrapper
-/// the layout differs slightly. We do a tolerant parse: find the first
-/// `"message":` field, then JSON-decode its string value. R6 chat
-/// modes work on the decoded plaintext.
-fn extract_prompt_message(line: &str) -> String {
-    let Some(start) = line.find("\"message\":\"") else {
-        return String::new();
-    };
-    let body_start = start + "\"message\":\"".len();
-    let mut out = String::new();
-    let mut chars = line[body_start..].chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '"' => return out,
-            '\\' => match chars.next() {
-                Some('n') => out.push('\n'),
-                Some('t') => out.push('\t'),
-                Some('r') => out.push('\r'),
-                Some('"') => out.push('"'),
-                Some('\\') => out.push('\\'),
-                Some(other) => out.push(other),
-                None => break,
-            },
-            other => out.push(other),
-        }
-    }
-    out
-}
-
-/// Parse the rendered msg.md prompt for `### <bead-id> — [spec:…] <title>`
-/// lines and return every bead id in source order. The template emits
-/// one per outstanding clarify bead; this is how the mock walks the
-/// queue without bouncing through bd-list itself.
-fn extract_clarify_bead_ids(prompt: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    for line in prompt.lines() {
-        let trimmed = line.trim_start();
-        let Some(after_hash) = trimmed.strip_prefix("### ") else {
-            continue;
-        };
-        // The bead id is the first whitespace-delimited token after `### `.
-        // A trailing `—` may abut without a space when titles are tight,
-        // so split on ASCII whitespace and accept the first non-empty.
-        let id = after_hash
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .trim_end_matches(',');
-        if id.starts_with("wx-") || id.starts_with("bd-") {
-            out.push(id.to_string());
-        }
-    }
-    out
-}
-
-/// Shell out to `bd <args>` so the chat-resolve-all mode can write
-/// notes + clear labels through the same bd surface a real claude
-/// session would. PATH lookup finds whatever `bd` (or `bd-shim` in
-/// tests) the parent installed. Failures are reported on stderr but
-/// don't fail the session — the integration test asserts the
-/// invocation log, not the exit code of every individual update.
-fn shell_out_bd(args: &mut [String]) {
-    use std::process::Command;
-    let result = Command::new("bd")
-        .args(args.iter().map(String::as_str))
-        .output();
-    match result {
-        Ok(out) if !out.status.success() => {
-            eprintln!(
-                "mock-loom-agent: bd {:?} exited {} stderr={}",
-                args,
-                out.status.code().unwrap_or(-1),
-                String::from_utf8_lossy(&out.stderr),
-            );
-        }
-        Err(e) => eprintln!("mock-loom-agent: bd spawn failed: {e}"),
-        _ => {}
-    }
 }

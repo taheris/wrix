@@ -20,7 +20,6 @@ path = "src/bin/mock-loom-agent.rs"
 
 [dependencies]
 anyhow = { workspace = true }
-askama = { workspace = true }
 clap = { workspace = true }
 loom-agent = { workspace = true }
 loom-driver = { workspace = true }

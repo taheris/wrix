@@ -593,14 +593,40 @@ fn loom_check_writes_phase_jsonl_log() {
         "phase log must contain at least one event line. path={}",
         entries[0].display(),
     );
-    for (i, line) in lines.iter().enumerate() {
-        let _: serde_json::Value = serde_json::from_str(line)
-            .unwrap_or_else(|e| panic!("line {i} is not valid JSON: {e}\nline={line}"));
-    }
-    let last: serde_json::Value = serde_json::from_str(lines.last().unwrap()).unwrap();
+    let parsed: Vec<serde_json::Value> = lines
+        .iter()
+        .enumerate()
+        .map(|(i, line)| {
+            serde_json::from_str(line)
+                .unwrap_or_else(|e| panic!("line {i} is not valid JSON: {e}\nline={line}"))
+        })
+        .collect();
+    // The reviewer agent emits `session_complete` once when its session
+    // ends; R7 (wx-r9tmc) then has the verdict gate append one or more
+    // `driver_event` records (push_gate_walk + the branch event) AFTER
+    // session_complete. Both contracts must hold:
+    let session_complete_count = parsed
+        .iter()
+        .filter(|v| v["kind"] == "session_complete")
+        .count();
     assert_eq!(
-        last["kind"], "session_complete",
-        "the final event must be session_complete. lines={lines:?}",
+        session_complete_count, 1,
+        "exactly one session_complete must appear in the phase log. lines={lines:?}",
+    );
+    let driver_events: Vec<&serde_json::Value> = parsed
+        .iter()
+        .filter(|v| v["kind"] == "driver_event")
+        .collect();
+    assert!(
+        !driver_events.is_empty(),
+        "verdict gate must emit at least one push_gate_* driver event after session_complete. lines={lines:?}",
+    );
+    // The first driver event is always `push_gate_walk` — the fence
+    // every branch shares.
+    assert_eq!(
+        driver_events[0]["driver_kind"], "push_gate_walk",
+        "first driver event must be push_gate_walk (R7 fence). got: {}",
+        driver_events[0],
     );
 }
 

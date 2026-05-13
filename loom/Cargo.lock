@@ -1685,7 +1685,6 @@ name = "loom"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "askama",
  "clap",
  "insta",
  "loom-agent",
