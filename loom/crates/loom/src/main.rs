@@ -74,6 +74,49 @@ impl From<AgentBackendArg> for AgentKind {
     }
 }
 
+/// Subcommands of `loom note`.
+#[derive(Debug, Subcommand)]
+enum NoteAction {
+    /// Atomically replace every note for `<label>` under `--kind`.
+    Set {
+        label: String,
+        /// JSON array of note strings: `'["note 1", "note 2"]'`.
+        #[arg(long)]
+        json: String,
+        /// Note kind (default `implementation`).
+        #[arg(long, default_value = "implementation")]
+        kind: String,
+    },
+    /// Append a single note.
+    Add {
+        label: String,
+        #[arg(long)]
+        text: String,
+        #[arg(long, default_value = "implementation")]
+        kind: String,
+    },
+    /// Delete notes for `<label>`. By default just the
+    /// `--kind implementation` rows; `--all-kinds` widens to every kind.
+    Clear {
+        label: String,
+        #[arg(long, default_value = "implementation", conflicts_with = "all_kinds")]
+        kind: String,
+        #[arg(long)]
+        all_kinds: bool,
+    },
+    /// List notes by `(label, kind)`. Omitting `<label>` widens to
+    /// every spec; `--all-kinds` widens beyond the default kind.
+    List {
+        label: Option<String>,
+        #[arg(long, default_value = "implementation", conflicts_with = "all_kinds")]
+        kind: String,
+        #[arg(long)]
+        all_kinds: bool,
+    },
+    /// Remove a single note by its row id.
+    Rm { id: i64 },
+}
+
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Initialize the workspace (create `.wrapix/loom/` config + state DB).
@@ -191,6 +234,14 @@ enum Command {
         #[arg(long, value_name = "COMMIT")]
         since: Option<String>,
     },
+    /// Manage SQLite-backed notes for a spec — replacement for the
+    /// deprecated `## Implementation Notes` markdown path (D2,
+    /// wx-b1f1p).
+    #[command(next_help_heading = "Workspace")]
+    Note {
+        #[command(subcommand)]
+        action: NoteAction,
+    },
     /// Audit spec criteria against test dispatchers (`[verify]` → stub-or-real).
     #[command(next_help_heading = "Inspect")]
     Doctor {
@@ -223,6 +274,7 @@ impl Command {
             | Command::Run { .. }
             | Command::Check { .. }
             | Command::Msg { .. }
+            | Command::Note { .. }
             | Command::Todo { .. } => true,
         }
     }
@@ -285,6 +337,7 @@ fn main() -> ExitCode {
             dismiss,
         } => run_msg(&workspace, spec, number, bead, option, reply, dismiss),
         Command::Todo { spec, since } => run_todo(&workspace, spec, since, agent_override),
+        Command::Note { action } => run_note(&workspace, action),
         Command::Doctor { check, strict } => run_doctor(&workspace, &check, strict),
     };
 
@@ -324,6 +377,83 @@ fn run_init(workspace: &std::path::Path, rebuild: bool) -> anyhow::Result<()> {
             "  rebuilt {} spec(s), {} molecule(s), {} companion(s)",
             rb.specs, rb.molecules, rb.companions,
         );
+    }
+    Ok(())
+}
+
+fn run_note(workspace: &std::path::Path, action: NoteAction) -> anyhow::Result<()> {
+    let db = loom_driver::state::StateDb::open(workspace.join(".wrapix/loom/state.db"))?;
+    let clock = SystemClock::new();
+    let now_ms = clock
+        .wall_now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    match action {
+        NoteAction::Set { label, json, kind } => {
+            let label = SpecLabel::new(&label);
+            let notes: Vec<String> = serde_json::from_str(&json)
+                .map_err(|e| anyhow::anyhow!("--json must be a JSON array of strings: {e}"))?;
+            db.notes_set(&label, &kind, &notes, now_ms)?;
+            println!(
+                "loom note set: replaced {} note(s) for spec {} (kind {kind})",
+                notes.len(),
+                label.as_str(),
+            );
+        }
+        NoteAction::Add { label, text, kind } => {
+            let label = SpecLabel::new(&label);
+            let id = db.notes_add(&label, &kind, &text, now_ms)?;
+            println!(
+                "loom note add: id={id} spec={label} kind={kind}",
+                label = label.as_str(),
+            );
+        }
+        NoteAction::Clear {
+            label,
+            kind,
+            all_kinds,
+        } => {
+            let label = SpecLabel::new(&label);
+            let kind_arg = if all_kinds { None } else { Some(kind.as_str()) };
+            db.notes_clear(&label, kind_arg)?;
+            println!(
+                "loom note clear: spec={} kind={}",
+                label.as_str(),
+                if all_kinds { "<all>" } else { kind.as_str() },
+            );
+        }
+        NoteAction::List {
+            label,
+            kind,
+            all_kinds,
+        } => {
+            let label_obj = label.as_deref().map(SpecLabel::new);
+            let kind_arg = if all_kinds { None } else { Some(kind.as_str()) };
+            let rows = db.notes_list(label_obj.as_ref(), kind_arg)?;
+            for row in rows {
+                if all_kinds {
+                    println!(
+                        "{id:>5} [{spec}/{kind}] {text}",
+                        id = row.id,
+                        spec = row.spec_label,
+                        kind = row.kind,
+                        text = row.text,
+                    );
+                } else {
+                    println!(
+                        "{id:>5} [{spec}] {text}",
+                        id = row.id,
+                        spec = row.spec_label,
+                        text = row.text,
+                    );
+                }
+            }
+        }
+        NoteAction::Rm { id } => {
+            db.notes_rm(id)?;
+            println!("loom note rm: removed id={id}");
+        }
     }
     Ok(())
 }

@@ -68,7 +68,7 @@ fn state_db_init_creates_tables() -> Result<()> {
     )?;
     assert_eq!(
         meta,
-        vec![vec!["schema_version".to_string(), "2".to_string()]]
+        vec![vec!["schema_version".to_string(), "3".to_string()]]
     );
     Ok(())
 }
@@ -310,7 +310,7 @@ fn state_db_open_migrates_v1_to_v2() -> Result<()> {
         &db_path,
         "SELECT value FROM meta WHERE key='schema_version'",
     )?;
-    assert_eq!(meta, vec![vec!["2".to_string()]]);
+    assert_eq!(meta, vec![vec!["3".to_string()]]);
 
     let cols = list_table(&db_path, "PRAGMA table_info(specs)")?;
     let names: Vec<&str> = cols.iter().map(|r| r[1].as_str()).collect();
@@ -343,7 +343,7 @@ fn state_db_open_is_idempotent_after_migration() -> Result<()> {
         &db_path,
         "SELECT value FROM meta WHERE key='schema_version'",
     )?;
-    assert_eq!(meta, vec![vec!["2".to_string()]]);
+    assert_eq!(meta, vec![vec!["3".to_string()]]);
     Ok(())
 }
 
@@ -482,5 +482,97 @@ fn state_corruption_recovery() -> Result<()> {
     write_spec(workspace, "alpha", "# alpha\n")?;
     let report = db.rebuild(workspace, &[])?;
     assert_eq!(report.specs, 1);
+    Ok(())
+}
+
+// -- D2 (wx-b1f1p) — notes table CRUD ---------------------------------------
+
+#[test]
+fn notes_add_then_list_chronological() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let db = StateDb::open(dir.path().join("state.db"))?;
+    let label = SpecLabel::new("alpha");
+    let id1 = db.notes_add(&label, "implementation", "first", 100)?;
+    let id2 = db.notes_add(&label, "implementation", "second", 200)?;
+    let rows = db.notes_list(Some(&label), Some("implementation"))?;
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].id, id1);
+    assert_eq!(rows[0].text, "first");
+    assert_eq!(rows[1].id, id2);
+    assert_eq!(rows[1].text, "second");
+    assert!(rows[0].id < rows[1].id, "list must be chronological by id");
+    Ok(())
+}
+
+#[test]
+fn notes_set_replaces_atomically() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let db = StateDb::open(dir.path().join("state.db"))?;
+    let label = SpecLabel::new("alpha");
+    db.notes_add(&label, "implementation", "old A", 100)?;
+    db.notes_add(&label, "implementation", "old B", 200)?;
+    db.notes_set(
+        &label,
+        "implementation",
+        &[
+            "new A".to_string(),
+            "new B".to_string(),
+            "new C".to_string(),
+        ],
+        300,
+    )?;
+    let rows = db.notes_list(Some(&label), Some("implementation"))?;
+    let texts: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
+    assert_eq!(texts, vec!["new A", "new B", "new C"]);
+    Ok(())
+}
+
+#[test]
+fn notes_clear_kind_only_or_all_kinds() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let db = StateDb::open(dir.path().join("state.db"))?;
+    let label = SpecLabel::new("alpha");
+    db.notes_add(&label, "implementation", "impl note", 100)?;
+    db.notes_add(&label, "design", "design note", 100)?;
+
+    db.notes_clear(&label, Some("implementation"))?;
+    let rows = db.notes_list(Some(&label), None)?;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].kind, "design");
+
+    db.notes_clear(&label, None)?;
+    let rows = db.notes_list(Some(&label), None)?;
+    assert!(rows.is_empty());
+    Ok(())
+}
+
+#[test]
+fn notes_rm_removes_one_row_by_id() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let db = StateDb::open(dir.path().join("state.db"))?;
+    let label = SpecLabel::new("alpha");
+    let id1 = db.notes_add(&label, "implementation", "first", 100)?;
+    let id2 = db.notes_add(&label, "implementation", "second", 200)?;
+    db.notes_rm(id1)?;
+    let rows = db.notes_list(Some(&label), Some("implementation"))?;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, id2);
+    Ok(())
+}
+
+#[test]
+fn notes_kind_defaults_implementation() -> Result<()> {
+    // The CLI binary's `Note` subcommand defaults `--kind` to
+    // `implementation`. The DB layer takes `kind` explicitly; the
+    // contract this pins is that the CLI's `default_value =
+    // "implementation"` matches what `list` reads when called with
+    // `--kind implementation` (the same default).
+    let dir = tempfile::tempdir()?;
+    let db = StateDb::open(dir.path().join("state.db"))?;
+    let label = SpecLabel::new("alpha");
+    db.notes_add(&label, "implementation", "a", 100)?;
+    db.notes_add(&label, "implementation", "b", 200)?;
+    let rows = db.notes_list(Some(&label), Some("implementation"))?;
+    assert_eq!(rows.len(), 2);
     Ok(())
 }

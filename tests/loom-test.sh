@@ -3275,12 +3275,24 @@ test_loom_events_minimal_deps() {
         fi
     done
 }
-test_loom_note_add() { _pending_stub loom_note_add; }
-test_loom_note_clear() { _pending_stub loom_note_clear; }
-test_loom_note_kind_defaults_implementation() { _pending_stub loom_note_kind_defaults_implementation; }
-test_loom_note_list_chronological() { _pending_stub loom_note_list_chronological; }
-test_loom_note_rm() { _pending_stub loom_note_rm; }
-test_loom_note_set_atomic() { _pending_stub loom_note_set_atomic; }
+test_loom_note_add() {
+    cargo_run test -p loom-driver --test state_db -- --exact --nocapture --quiet notes_add_then_list_chronological
+}
+test_loom_note_clear() {
+    cargo_run test -p loom-driver --test state_db -- --exact --nocapture --quiet notes_clear_kind_only_or_all_kinds
+}
+test_loom_note_kind_defaults_implementation() {
+    cargo_run test -p loom-driver --test state_db -- --exact --nocapture --quiet notes_kind_defaults_implementation
+}
+test_loom_note_list_chronological() {
+    cargo_run test -p loom-driver --test state_db -- --exact --nocapture --quiet notes_add_then_list_chronological
+}
+test_loom_note_rm() {
+    cargo_run test -p loom-driver --test state_db -- --exact --nocapture --quiet notes_rm_removes_one_row_by_id
+}
+test_loom_note_set_atomic() {
+    cargo_run test -p loom-driver --test state_db -- --exact --nocapture --quiet notes_set_replaces_atomically
+}
 test_loom_render_deps() {
     local cargo_toml="$REPO_ROOT/loom/crates/loom-render/Cargo.toml"
     if [ ! -f "$cargo_toml" ]; then

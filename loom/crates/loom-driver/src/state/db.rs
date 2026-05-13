@@ -7,7 +7,7 @@ use crate::identifier::{MoleculeId, SpecLabel};
 
 use super::error::StateError;
 
-const SCHEMA_VERSION: &str = "2";
+const SCHEMA_VERSION: &str = "3";
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS specs (
@@ -25,6 +25,18 @@ CREATE TABLE IF NOT EXISTS companions (
     companion_path TEXT NOT NULL,
     PRIMARY KEY (spec_label, companion_path)
 );
+-- D2 (wx-b1f1p): notes table — replaces the deprecated markdown
+-- implementation-notes path. `kind` lets one bead carry multiple
+-- categories of notes (default `implementation`); the `loom note`
+-- CLI is the only writer.
+CREATE TABLE IF NOT EXISTS notes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    spec_label TEXT NOT NULL REFERENCES specs(label) ON DELETE CASCADE,
+    kind       TEXT NOT NULL,
+    text       TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_notes_spec_kind ON notes(spec_label, kind);
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -32,6 +44,16 @@ CREATE TABLE IF NOT EXISTS meta (
 ";
 
 const MIGRATE_V1_TO_V2: &str = "ALTER TABLE specs DROP COLUMN spec_path;";
+const MIGRATE_V2_TO_V3: &str = "
+CREATE TABLE IF NOT EXISTS notes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    spec_label TEXT NOT NULL REFERENCES specs(label) ON DELETE CASCADE,
+    kind       TEXT NOT NULL,
+    text       TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_notes_spec_kind ON notes(spec_label, kind);
+";
 
 const DROP_AND_RECREATE: &str = "
 DROP TABLE IF EXISTS companions;
@@ -52,6 +74,18 @@ pub struct StateDb {
 pub struct SpecRow {
     pub label: SpecLabel,
     pub implementation_notes: Option<Vec<String>>,
+}
+
+/// One row of the `notes` table (D2, wx-b1f1p). `kind` is free-form
+/// (default `implementation`); `created_at_ms` is unix-epoch
+/// milliseconds for chronological ordering on `list`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoteRow {
+    pub id: i64,
+    pub spec_label: String,
+    pub kind: String,
+    pub text: String,
+    pub created_at_ms: i64,
 }
 
 /// One row of the `molecules` table.
@@ -210,6 +244,145 @@ impl StateDb {
     /// JSON array). The row must already exist — `set_implementation_notes`
     /// does not create one. Used by `loom plan -n`/`-u` after the interview
     /// to land the agent-merged note set onto the existing `specs` row.
+    // -----------------------------------------------------------------
+    // D2 (wx-b1f1p) — `notes` table CRUD. Backs the `loom note` CLI.
+    // -----------------------------------------------------------------
+
+    /// Atomically replace every note for `(spec_label, kind)` with the
+    /// supplied set. Performs `DELETE` + N `INSERT` in a single tx so a
+    /// partial failure leaves the prior set intact.
+    pub fn notes_set(
+        &self,
+        spec_label: &SpecLabel,
+        kind: &str,
+        notes: &[String],
+        created_at_ms: i64,
+    ) -> Result<(), StateError> {
+        self.ensure_spec_row(spec_label)?;
+        let mut conn = self.conn.lock().map_err(|_| StateError::Poisoned)?;
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM notes WHERE spec_label = ?1 AND kind = ?2",
+            params![spec_label.as_str(), kind],
+        )?;
+        for text in notes {
+            tx.execute(
+                "INSERT INTO notes(spec_label, kind, text, created_at) VALUES (?1, ?2, ?3, ?4)",
+                params![spec_label.as_str(), kind, text.as_str(), created_at_ms],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Append a single note. Returns its row id.
+    pub fn notes_add(
+        &self,
+        spec_label: &SpecLabel,
+        kind: &str,
+        text: &str,
+        created_at_ms: i64,
+    ) -> Result<i64, StateError> {
+        self.ensure_spec_row(spec_label)?;
+        let conn = self.conn.lock().map_err(|_| StateError::Poisoned)?;
+        conn.execute(
+            "INSERT INTO notes(spec_label, kind, text, created_at) VALUES (?1, ?2, ?3, ?4)",
+            params![spec_label.as_str(), kind, text, created_at_ms],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Delete every note for `(spec_label, kind)`. Pass `kind = None`
+    /// to clear all kinds.
+    pub fn notes_clear(
+        &self,
+        spec_label: &SpecLabel,
+        kind: Option<&str>,
+    ) -> Result<(), StateError> {
+        let conn = self.conn.lock().map_err(|_| StateError::Poisoned)?;
+        if let Some(k) = kind {
+            conn.execute(
+                "DELETE FROM notes WHERE spec_label = ?1 AND kind = ?2",
+                params![spec_label.as_str(), k],
+            )?;
+        } else {
+            conn.execute(
+                "DELETE FROM notes WHERE spec_label = ?1",
+                params![spec_label.as_str()],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// List notes by `(spec_label, kind)`. `spec_label = None` widens
+    /// to all specs; `kind = None` widens to all kinds. Always ordered
+    /// by `id` ascending (chronological).
+    pub fn notes_list(
+        &self,
+        spec_label: Option<&SpecLabel>,
+        kind: Option<&str>,
+    ) -> Result<Vec<NoteRow>, StateError> {
+        let conn = self.conn.lock().map_err(|_| StateError::Poisoned)?;
+        let (sql, args) = match (spec_label, kind) {
+            (Some(label), Some(k)) => (
+                "SELECT id, spec_label, kind, text, created_at FROM notes \
+                 WHERE spec_label = ?1 AND kind = ?2 ORDER BY id ASC",
+                vec![label.as_str().to_string(), k.to_string()],
+            ),
+            (Some(label), None) => (
+                "SELECT id, spec_label, kind, text, created_at FROM notes \
+                 WHERE spec_label = ?1 ORDER BY id ASC",
+                vec![label.as_str().to_string()],
+            ),
+            (None, Some(k)) => (
+                "SELECT id, spec_label, kind, text, created_at FROM notes \
+                 WHERE kind = ?1 ORDER BY id ASC",
+                vec![k.to_string()],
+            ),
+            (None, None) => (
+                "SELECT id, spec_label, kind, text, created_at FROM notes \
+                 ORDER BY id ASC",
+                vec![],
+            ),
+        };
+        let mut stmt = conn.prepare(sql)?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(args), |row| {
+                Ok(NoteRow {
+                    id: row.get(0)?,
+                    spec_label: row.get::<_, String>(1)?,
+                    kind: row.get(2)?,
+                    text: row.get(3)?,
+                    created_at_ms: row.get(4)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Remove a single note by its row id.
+    pub fn notes_rm(&self, id: i64) -> Result<(), StateError> {
+        let conn = self.conn.lock().map_err(|_| StateError::Poisoned)?;
+        let n = conn.execute("DELETE FROM notes WHERE id = ?1", params![id])?;
+        if n == 0 {
+            return Err(StateError::SpecNotFound {
+                label: format!("note id {id}"),
+            });
+        }
+        Ok(())
+    }
+
+    /// Ensure a `specs` row exists for `label` — the foreign-key
+    /// constraint on `notes.spec_label` requires it. Idempotent.
+    fn ensure_spec_row(&self, label: &SpecLabel) -> Result<(), StateError> {
+        let conn = self.conn.lock().map_err(|_| StateError::Poisoned)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO specs(label) VALUES (?1)",
+            params![label.as_str()],
+        )?;
+        Ok(())
+    }
+
     ///
     /// An empty `notes` slice writes `[]` rather than `NULL`; clearing is the
     /// distinct [`Self::clear_implementation_notes`] mutation reserved for
@@ -341,9 +514,14 @@ fn apply_migrations(conn: &Connection) -> Result<(), StateError> {
         None => write_schema_version(conn, SCHEMA_VERSION)?,
         Some("1") => {
             conn.execute_batch(MIGRATE_V1_TO_V2)?;
-            write_schema_version(conn, "2")?;
+            conn.execute_batch(MIGRATE_V2_TO_V3)?;
+            write_schema_version(conn, SCHEMA_VERSION)?;
         }
-        Some("2") => {}
+        Some("2") => {
+            conn.execute_batch(MIGRATE_V2_TO_V3)?;
+            write_schema_version(conn, SCHEMA_VERSION)?;
+        }
+        Some("3") => {}
         Some(other) => {
             return Err(StateError::UnknownSchemaVersion {
                 version: other.to_string(),
