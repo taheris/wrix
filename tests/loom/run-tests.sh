@@ -87,9 +87,38 @@ trap cleanup EXIT
 # `.beads/` outside the wrapix workspace tree.
 #
 # Real bd, real Dolt — per NFR #6. tempfile::tempdir-style isolation per NFR #3.
+#
+# Wrapix-sandbox handling: when run-tests.sh runs inside a wrapix sandbox
+# (HOSTNAME == container id, `podman inspect` returns the bind-mount source
+# for `/workspace`), the script's `/tmp` is private to the sandbox and NOT
+# visible to host podman — podman runs in the host filesystem context and
+# fails `statfs` on any path the sandbox owns. Two-path strategy: create
+# the tempdir under `/workspace` (which IS visible to host podman via the
+# bind-mount), keep using the sandbox path for local file ops, and pass
+# the **host path** to wrapix spawn for the actual bind-mount source.
+# Outside a sandbox, both paths collapse to the same `/tmp`-based dir.
 #-----------------------------------------------------------------------------
-TEST_DIR="$(mktemp -d -t loom-smoke-XXXXXX)"
+HOST_WORKSPACE=""
+if [ -n "${HOSTNAME:-}" ] && command -v podman >/dev/null 2>&1; then
+    HOST_WORKSPACE=$(
+        podman inspect \
+            --format '{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}' \
+            "$HOSTNAME" 2>/dev/null \
+            || true
+    )
+fi
+
+if [ -n "$HOST_WORKSPACE" ] && [ -d /workspace ]; then
+    # Inside a wrapix sandbox — anchor the tempdir under /workspace so
+    # podman's view of the path (via the host bind-mount source) resolves.
+    TEST_DIR="$(mktemp -d -p /workspace .loom-smoke-XXXXXX)"
+    TEST_DIR_HOST="$HOST_WORKSPACE/$(basename "$TEST_DIR")"
+else
+    TEST_DIR="$(mktemp -d -t loom-smoke-XXXXXX)"
+    TEST_DIR_HOST="$TEST_DIR"
+fi
 WORKSPACE="$TEST_DIR/workspace"
+WORKSPACE_HOST="$TEST_DIR_HOST/workspace"
 mkdir -p "$WORKSPACE"
 
 cd "$TEST_DIR"
@@ -212,7 +241,7 @@ fi
 SPAWN_CONFIG="$WORKSPACE/.wrapix/loom/spawn-config.json"
 jq -n \
     --arg image_ref "$WRAPIX_LOOM_TEST_IMAGE_REF" \
-    --arg workspace "$WORKSPACE" \
+    --arg workspace "$WORKSPACE_HOST" \
     '{
         image_ref: $image_ref,
         image_source: "",

@@ -49,8 +49,25 @@ cleanup() {
 }
 trap cleanup EXIT
 
-TEST_DIR="$(mktemp -d -t loom-claude-smoke-XXXXXX)"
+HOST_WORKSPACE=""
+if [ -n "${HOSTNAME:-}" ] && command -v podman >/dev/null 2>&1; then
+    HOST_WORKSPACE=$(
+        podman inspect \
+            --format '{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}' \
+            "$HOSTNAME" 2>/dev/null \
+            || true
+    )
+fi
+
+if [ -n "$HOST_WORKSPACE" ] && [ -d /workspace ]; then
+    TEST_DIR="$(mktemp -d -p /workspace .loom-claude-smoke-XXXXXX)"
+    TEST_DIR_HOST="$HOST_WORKSPACE/$(basename "$TEST_DIR")"
+else
+    TEST_DIR="$(mktemp -d -t loom-claude-smoke-XXXXXX)"
+    TEST_DIR_HOST="$TEST_DIR"
+fi
 WORKSPACE="$TEST_DIR/workspace"
+WORKSPACE_HOST="$TEST_DIR_HOST/workspace"
 mkdir -p "$WORKSPACE"
 cd "$TEST_DIR"
 export HOME="$TEST_DIR/home"
@@ -111,7 +128,7 @@ fi
 SPAWN_CONFIG="$WORKSPACE/.wrapix/loom/spawn-config.json"
 jq -n \
     --arg image_ref "$WRAPIX_LOOM_TEST_IMAGE_REF" \
-    --arg workspace "$WORKSPACE" \
+    --arg workspace "$WORKSPACE_HOST" \
     '{
         image_ref: $image_ref,
         image_source: "",

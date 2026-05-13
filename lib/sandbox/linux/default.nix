@@ -174,8 +174,25 @@ in
         VOLUME_ARGS="-v $PROJECT_DIR:/workspace:rw"
 
         # Ensure project .claude dir exists for session persistence (/resume, /rename)
-        # ~/.claude is container-local (tmpfs); entrypoint symlinks persistent items
-        mkdir -p "$PROJECT_DIR/.claude"
+        # ~/.claude is container-local (tmpfs); entrypoint symlinks persistent items.
+        # The dir is best-effort: when `wrapix spawn` is invoked from inside
+        # another wrapix sandbox (e.g. `nix run .#test-loom` from a dev
+        # container), $PROJECT_DIR is the host path and is not visible to the
+        # caller's filesystem. Skip on permission errors — the container's
+        # entrypoint creates the dir again when WRAPIX_AGENT=claude.
+        if ! mkdir -p "$PROJECT_DIR/.claude" 2>/tmp/wrapix-mkdir-err; then
+            mkdir_err=$(cat /tmp/wrapix-mkdir-err)
+            case "$mkdir_err" in
+                *"Permission denied"*)
+                    verbose "Skipping host-side .claude prep — $PROJECT_DIR not accessible from this context: $mkdir_err"
+                    ;;
+                *)
+                    echo "wrapix: mkdir $PROJECT_DIR/.claude failed: $mkdir_err" >&2
+                    exit 1
+                    ;;
+            esac
+        fi
+        rm -f /tmp/wrapix-mkdir-err
 
         dir_idx=0
 
