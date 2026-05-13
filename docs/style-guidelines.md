@@ -49,3 +49,11 @@ the Mayor via `bd human` instead.
   must include a `snapshot updated because: <reason>` line in the PR
   description. Snapshots cover contract surfaces (Askama templates, CLI
   `--help`); silent diffs there are accidental drift, not a deliberate change.
+- **TST-5** — Spec `[verify](tests/loom-test.sh::test_X)` annotations must
+  point at a real `test_X()` dispatcher, and a checked criterion (`[x]`)
+  must NOT route through `_pending_stub`. The pre-commit `loom-doctor`
+  hook runs `loom doctor --check=criteria` on every change to `specs/`,
+  `tests/loom-test.sh`, or `loom/crates/*/` and fails the commit on
+  either violation. Reasoning: a `[x]` paired with a stub means the spec
+  claims a guarantee the test layer doesn't enforce, which is exactly
+  the drift the audit exists to surface.
