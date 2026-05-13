@@ -33,7 +33,9 @@ use loom_workflow::msg::{
 use loom_workflow::run::{
     Parallelism, ProductionAgentLoopController, RetryPolicy, RunMode, SessionResult, run_loop,
 };
-use loom_workflow::todo::{ProductionTodoController, parse_exit_signal, run as run_todo_workflow};
+use loom_workflow::todo::{
+    ExitSignal, ProductionTodoController, parse_exit_signal, run as run_todo_workflow,
+};
 use loom_workflow::{init, logs_cmd, plan, spec, status, use_spec};
 use loom_workflow::{run_agent, run_agent_classified};
 
@@ -444,12 +446,25 @@ fn run_run(
                     let sink = match open_bead_sink(&logs_root, &label, &bead_id) {
                         Ok(s) => Some(s),
                         Err(err) => {
-                            return SessionResult::PreflightFailed {
-                                error: format!("open log sink: {err}"),
-                            };
+                            return (
+                                SessionResult::PreflightFailed {
+                                    error: format!("open log sink: {err}"),
+                                },
+                                None,
+                            );
                         }
                     };
-                    dispatch_classified(kind, spawn_cfg, shutdown_grace, sink).await
+                    let mut output = String::new();
+                    let session = dispatch_classified(
+                        kind,
+                        spawn_cfg,
+                        shutdown_grace,
+                        sink,
+                        Some(&mut output),
+                    )
+                    .await;
+                    let marker = parse_exit_signal(&output);
+                    (session, marker)
                 }
             },
         )
@@ -486,6 +501,7 @@ async fn run_parallel_run(
     cli_profile: Option<ProfileName>,
     phase_default: ProfileName,
 ) -> anyhow::Result<ParallelRunSummary> {
+    use loom_core::bd::UpdateOpts;
     use loom_workflow::run::{AgentOutcome, run_parallel_batch};
 
     let bd = BdClient::new();
@@ -513,6 +529,9 @@ async fn run_parallel_run(
         let logs_root_inner = logs_root.clone();
         let label_inner = label_for_closure.clone();
         async move {
+            // Marker is the primary signal here too — without it, parallel
+            // mode would swallow `LOOM_BLOCKED` / `LOOM_CLARIFY` self-reports
+            // the same way the sequential path used to.
             match dispatch_for_slot(
                 kind,
                 shutdown_grace,
@@ -525,7 +544,25 @@ async fn run_parallel_run(
             )
             .await
             {
-                Ok(_) => AgentOutcome::Success,
+                Ok((session, marker)) => match (marker, session.exit_code) {
+                    (Some(ExitSignal::Blocked { reason }), _) => AgentOutcome::Blocked { reason },
+                    (Some(ExitSignal::Clarify { question }), _) => {
+                        AgentOutcome::Clarify { question }
+                    }
+                    (Some(ExitSignal::Complete | ExitSignal::Noop), 0) => AgentOutcome::Success,
+                    (Some(ExitSignal::Complete | ExitSignal::Noop), code) => {
+                        AgentOutcome::Failure {
+                            error: format!("agent emitted COMPLETE/NOOP but exited code {code}"),
+                        }
+                    }
+                    (None, 0) => AgentOutcome::Failure {
+                        error: "agent exited 0 without LOOM_* marker (swallowed marker)"
+                            .to_string(),
+                    },
+                    (None, code) => AgentOutcome::Failure {
+                        error: format!("agent exited with code {code}"),
+                    },
+                },
                 Err(e) => AgentOutcome::Failure {
                     error: format!("{e}"),
                 },
@@ -533,6 +570,45 @@ async fn run_parallel_run(
         }
     })
     .await?;
+
+    // Apply labels for marker self-reports. The bd-side cleanup mirrors the
+    // sequential path's `apply_clarify` / `apply_blocked` so a clarify in
+    // parallel mode is indistinguishable from one in sequential mode.
+    let bd_label = BdClient::new();
+    for (bead, question) in outcome.clarified() {
+        let notes = if question.is_empty() {
+            None
+        } else {
+            Some(question)
+        };
+        bd_label
+            .update(
+                &bead,
+                UpdateOpts {
+                    add_labels: vec!["loom:clarify".to_string()],
+                    notes,
+                    ..UpdateOpts::default()
+                },
+            )
+            .await?;
+    }
+    for (bead, reason) in outcome.blocked() {
+        let notes = if reason.is_empty() {
+            "agent-blocked".to_string()
+        } else {
+            format!("agent-blocked: {reason}")
+        };
+        bd_label
+            .update(
+                &bead,
+                UpdateOpts {
+                    add_labels: vec!["loom:blocked".to_string()],
+                    notes: Some(notes),
+                    ..UpdateOpts::default()
+                },
+            )
+            .await?;
+    }
 
     Ok(ParallelRunSummary {
         merged: outcome.merged_ids().len(),
@@ -561,7 +637,7 @@ async fn dispatch_for_slot(
     phase_default: &ProfileName,
     logs_root: &Path,
     label: &SpecLabel,
-) -> anyhow::Result<SessionOutcome> {
+) -> anyhow::Result<(SessionOutcome, Option<ExitSignal>)> {
     use loom_core::scratch::ScratchSession;
     use loom_workflow::run::{
         RunContextInputs, build_spawn_config_from_manifest, render_run_prompt,
@@ -599,9 +675,19 @@ async fn dispatch_for_slot(
     )?;
 
     let sink = open_bead_sink(logs_root, label, &slot.bead.id)?;
-    let result = dispatch(kind, spawn_config, shutdown_grace, Some(sink), None).await;
+    let mut output = String::new();
+    let result = dispatch(
+        kind,
+        spawn_config,
+        shutdown_grace,
+        Some(sink),
+        Some(&mut output),
+    )
+    .await;
     drop(scratch);
-    Ok(result?)
+    let outcome = result?;
+    let marker = parse_exit_signal(&output);
+    Ok((outcome, marker))
 }
 
 /// Backend-agnostic dispatcher. The match is the only place in the binary
@@ -654,6 +740,7 @@ async fn dispatch_classified(
     mut spawn: SpawnConfig,
     shutdown_grace: Option<Duration>,
     sink: Option<LogSink>,
+    text_capture: Option<&mut String>,
 ) -> SessionResult {
     if matches!(kind, AgentKind::Claude) && spawn.shutdown_grace.is_none() {
         spawn.shutdown_grace = shutdown_grace;
@@ -669,8 +756,10 @@ async fn dispatch_classified(
         spawn.stall_warn_interval = Some(d);
     }
     match kind {
-        AgentKind::Pi => run_agent_classified::<PiBackend>(&spawn, sink, None).await,
-        AgentKind::Claude => run_agent_classified::<ClaudeBackend>(&spawn, sink, None).await,
+        AgentKind::Pi => run_agent_classified::<PiBackend>(&spawn, sink, text_capture).await,
+        AgentKind::Claude => {
+            run_agent_classified::<ClaudeBackend>(&spawn, sink, text_capture).await
+        }
     }
 }
 
@@ -880,12 +969,14 @@ fn run_msg_inner(
         };
         let runtime = tokio::runtime::Runtime::new()?;
         let id_clone = target.clone();
+        let note_for_bd = note.clone();
         runtime.block_on(async move {
             let bd = BdClient::new();
             bd.update(
                 &id_clone,
                 UpdateOpts {
                     remove_labels: vec![label_to_remove],
+                    notes: Some(note_for_bd),
                     ..UpdateOpts::default()
                 },
             )
@@ -907,6 +998,7 @@ fn run_msg_inner(
                 &id_clone,
                 UpdateOpts {
                     remove_labels: vec![label_to_remove],
+                    notes: Some(DISMISS_NOTE.to_string()),
                     ..UpdateOpts::default()
                 },
             )

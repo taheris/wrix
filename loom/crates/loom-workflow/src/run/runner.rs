@@ -55,10 +55,16 @@ pub struct RunSummary {
 /// - `next_ready_bead` → `BdClient::list` filtered by ready label
 /// - `run_bead` → render template, build SpawnConfig, drive `AgentBackend`,
 ///   tee `AgentEvent` stream into `LogSink`, parse exit signal
-/// - `close_bead` → `BdClient::close`
-/// - `apply_clarify` → `BdClient::update --add-label loom:clarify`
+/// - `apply_clarify` → `BdClient::update --add-label loom:clarify --notes <q>`
 /// - `apply_blocked` → `BdClient::update --add-label loom:blocked --notes <cause>`
 /// - `exec_check` → `tokio::process::Command::new("loom").arg("check")…`
+///
+/// **No `close_bead`.** `bd close` is the agent's responsibility, not the
+/// driver's, per `specs/loom-harness.md`'s verdict-gate table where
+/// `bd-closed` is treated as an *observable* (the gate checks whether the
+/// agent did it). A driver that auto-closes on `exit_code == 0` collapses
+/// every marker into `done` and silently masks `LOOM_BLOCKED` /
+/// `LOOM_CLARIFY` self-reports — the bug that motivated this trait shape.
 pub trait AgentLoopController: Send {
     /// Pull the next ready bead. Returns `None` when the molecule is done.
     fn next_ready_bead(
@@ -73,21 +79,20 @@ pub trait AgentLoopController: Send {
         previous_failure: Option<String>,
     ) -> impl std::future::Future<Output = Result<AgentOutcome, RunError>> + Send;
 
-    /// `bd close <id>` after a successful bead.
-    fn close_bead(
-        &mut self,
-        bead: &BeadId,
-    ) -> impl std::future::Future<Output = Result<(), RunError>> + Send;
-
-    /// Add the `loom:clarify` label after retries are exhausted.
+    /// Add the `loom:clarify` label. `question` is the agent's clarify
+    /// detail (or the last retry's failure body when retries were
+    /// exhausted) — written to `bd update --notes` so the next session
+    /// can read the prior context. An empty `question` writes no notes.
     fn apply_clarify(
         &mut self,
         bead: &BeadId,
+        question: &str,
     ) -> impl std::future::Future<Output = Result<(), RunError>> + Send;
 
     /// Add the `loom:blocked` label and write `cause` (plus any error
-    /// detail) to `bd update --notes`. Called when an infra failure
-    /// routes the bead straight to blocked per the verdict-gate spec.
+    /// detail) to `bd update --notes`. Called when an infra failure or
+    /// an agent `LOOM_BLOCKED` self-report routes the bead straight to
+    /// blocked per the verdict-gate spec.
     fn apply_blocked(
         &mut self,
         bead: &BeadId,
@@ -98,6 +103,12 @@ pub trait AgentLoopController: Send {
     /// Hand off to `loom check` on molecule completion (continuous mode).
     fn exec_check(&mut self) -> impl std::future::Future<Output = Result<(), RunError>> + Send;
 }
+
+/// Stable cause string for an agent self-reported `LOOM_BLOCKED`. Pinned at
+/// the head of the notes string so `bd show --notes` greps cleanly. The raw
+/// reason from the agent follows after a `:` separator (or stands alone if
+/// the agent did not provide one).
+pub const AGENT_BLOCKED_CAUSE: &str = "agent-blocked";
 
 /// Run the per-bead loop.
 ///
@@ -138,10 +149,14 @@ pub async fn run_loop<C: AgentLoopController>(
 
         match result {
             BeadResult::Done => {
-                controller.close_bead(&bead.id).await?;
+                // No driver-side `bd close`. The agent owns closure (per the
+                // verdict-gate table's `bd-closed` observable); if it
+                // forgot to call `bd close` on `LOOM_COMPLETE`, `loom check`
+                // routes that to `incomplete-signaling` recovery on its
+                // next walk.
             }
-            BeadResult::Clarified { .. } => {
-                controller.apply_clarify(&bead.id).await?;
+            BeadResult::Clarified { note } => {
+                controller.apply_clarify(&bead.id, &note).await?;
                 summary.beads_clarified += 1;
             }
             BeadResult::Blocked { cause, error } => {
@@ -187,10 +202,19 @@ async fn process_one_bead<C: AgentLoopController>(
                 }
                 RetryDecision::GiveUp => {
                     return Ok(BeadResult::Clarified {
-                        last_error: previous_failure.unwrap_or_default(),
+                        note: previous_failure.unwrap_or_default(),
                     });
                 }
             },
+            AgentOutcome::Blocked { reason } => {
+                return Ok(BeadResult::Blocked {
+                    cause: AGENT_BLOCKED_CAUSE.to_string(),
+                    error: reason,
+                });
+            }
+            AgentOutcome::Clarify { question } => {
+                return Ok(BeadResult::Clarified { note: question });
+            }
             AgentOutcome::InfraPreflight { error } => {
                 return Ok(BeadResult::Blocked {
                     cause: INFRA_PREFLIGHT_CAUSE.to_string(),
@@ -223,13 +247,17 @@ mod tests {
 
     /// Capturing fake controller. Drives [`run_loop`] without touching real
     /// bd / agent / check binaries.
+    ///
+    /// `closed` is deliberately absent: the driver no longer calls
+    /// `bd close` on dispatched beads (closure is the agent's
+    /// responsibility per spec). Tests verify Done by exclusion: a bead
+    /// processed without entries in `clarified` or `blocked` reached Done.
     #[derive(Default)]
     struct FakeController {
         ready_queue: VecDeque<Bead>,
         agent_outcomes: VecDeque<AgentOutcome>,
         run_calls: Vec<(BeadId, Option<String>)>,
-        closed: Vec<BeadId>,
-        clarified: Vec<BeadId>,
+        clarified: Vec<(BeadId, String)>,
         blocked: Vec<(BeadId, String, String)>,
         check_calls: u32,
     }
@@ -251,13 +279,8 @@ mod tests {
                 .unwrap_or(AgentOutcome::Success))
         }
 
-        async fn close_bead(&mut self, bead: &BeadId) -> Result<(), RunError> {
-            self.closed.push(bead.clone());
-            Ok(())
-        }
-
-        async fn apply_clarify(&mut self, bead: &BeadId) -> Result<(), RunError> {
-            self.clarified.push(bead.clone());
+        async fn apply_clarify(&mut self, bead: &BeadId, question: &str) -> Result<(), RunError> {
+            self.clarified.push((bead.clone(), question.to_string()));
             Ok(())
         }
 
@@ -300,9 +323,11 @@ mod tests {
         let summary = run_loop(&mut c, RunMode::Once, RetryPolicy::default()).await?;
 
         assert_eq!(summary.beads_processed, 1);
-        assert_eq!(c.closed, vec![BeadId::new("wx-1").expect("valid")]);
         assert_eq!(c.run_calls.len(), 1);
+        // Driver does NOT call bd close — closure is the agent's job.
+        // Done is verified by exclusion: not clarified, not blocked.
         assert!(c.clarified.is_empty());
+        assert!(c.blocked.is_empty());
         assert_eq!(c.check_calls, 0, "once mode never execs check");
         // Second bead remains in the queue; run_loop did not pull it.
         assert_eq!(c.ready_queue.len(), 1);
@@ -322,14 +347,9 @@ mod tests {
         let summary = run_loop(&mut c, RunMode::Continuous, RetryPolicy::default()).await?;
 
         assert_eq!(summary.beads_processed, 3);
-        assert_eq!(
-            c.closed,
-            vec![
-                BeadId::new("wx-1").expect("valid"),
-                BeadId::new("wx-2").expect("valid"),
-                BeadId::new("wx-3").expect("valid"),
-            ]
-        );
+        // All three reach Done; driver does not call bd close.
+        assert!(c.clarified.is_empty());
+        assert!(c.blocked.is_empty());
         assert!(summary.molecule_complete);
         assert!(summary.execed_check);
         Ok(())
@@ -377,14 +397,14 @@ mod tests {
         assert_eq!(c.run_calls[1].1.as_deref(), Some("err-0"));
         assert_eq!(c.run_calls[2].1.as_deref(), Some("err-1"));
 
-        assert!(c.closed.is_empty());
-        assert_eq!(c.clarified, vec![BeadId::new("wx-1").expect("valid")]);
+        assert_eq!(c.clarified.len(), 1);
+        assert_eq!(c.clarified[0].0, BeadId::new("wx-1").expect("valid"));
         assert_eq!(summary.beads_clarified, 1);
         Ok(())
     }
 
     #[tokio::test]
-    async fn retry_succeeds_within_budget_and_closes() -> Result<(), RunError> {
+    async fn retry_succeeds_within_budget_reaches_done() -> Result<(), RunError> {
         let mut c = FakeController::default();
         c.ready_queue.push_back(bead("wx-1", &[]));
         c.agent_outcomes.push_back(AgentOutcome::Failure {
@@ -396,8 +416,9 @@ mod tests {
 
         assert_eq!(c.run_calls.len(), 2);
         assert_eq!(c.run_calls[1].1.as_deref(), Some("boom"));
-        assert_eq!(c.closed, vec![BeadId::new("wx-1").expect("valid")]);
+        // Done — driver does not close, no clarify, no blocked.
         assert!(c.clarified.is_empty());
+        assert!(c.blocked.is_empty());
         assert_eq!(summary.beads_clarified, 0);
         Ok(())
     }
@@ -420,7 +441,6 @@ mod tests {
         let summary = run_loop(&mut c, RunMode::Once, RetryPolicy { max_retries: 2 }).await?;
 
         assert_eq!(c.run_calls.len(), 1, "preflight must not retry");
-        assert!(c.closed.is_empty());
         assert!(c.clarified.is_empty());
         assert_eq!(c.blocked.len(), 1);
         assert_eq!(c.blocked[0].0, BeadId::new("wx-1").expect("valid"));
@@ -488,7 +508,8 @@ mod tests {
         let summary = run_loop(&mut c, RunMode::Once, RetryPolicy { max_retries: 2 }).await?;
 
         assert_eq!(c.run_calls.len(), 2);
-        assert_eq!(c.closed, vec![BeadId::new("wx-1").expect("valid")]);
+        // Done — driver does not close, no blocked.
+        assert!(c.clarified.is_empty());
         assert!(c.blocked.is_empty(), "successful retry must not block");
         assert_eq!(summary.beads_blocked, 0);
         Ok(())
@@ -531,7 +552,8 @@ mod tests {
         assert_eq!(c.run_calls[3].1.as_deref(), Some("agent-err-1"));
         // The bead exhausts agent retries and clarifies — never blocks.
         assert!(c.blocked.is_empty(), "clarify path must not block");
-        assert_eq!(c.clarified, vec![BeadId::new("wx-1").expect("valid")]);
+        assert_eq!(c.clarified.len(), 1);
+        assert_eq!(c.clarified[0].0, BeadId::new("wx-1").expect("valid"));
         assert_eq!(summary.beads_clarified, 1);
         Ok(())
     }
@@ -559,7 +581,8 @@ mod tests {
         let summary = run_loop(&mut c, RunMode::Continuous, RetryPolicy::default()).await?;
 
         assert_eq!(c.run_calls.len(), 3);
-        assert_eq!(c.closed, vec![BeadId::new("wx-a").expect("valid")]);
+        // Bead A reaches Done (no clarify, no blocked for it).
+        assert!(c.clarified.is_empty());
         assert_eq!(c.blocked.len(), 1);
         assert_eq!(c.blocked[0].0, BeadId::new("wx-b").expect("valid"));
         assert_eq!(c.blocked[0].1, INFRA_REPEATED_CAUSE);

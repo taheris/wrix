@@ -5,13 +5,22 @@ use loom_core::agent::SessionOutcome;
 /// `LOOM_BLOCKED` / `LOOM_CLARIFY` markers) into one of these.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentOutcome {
-    /// Agent finished cleanly (`LOOM_COMPLETE`).
+    /// Agent finished cleanly (`LOOM_COMPLETE` or `LOOM_NOOP`, exit 0).
     Success,
 
     /// Agent exited with a non-zero `SessionComplete` code or surfaced a
     /// recoverable failure body. The string carries the body the driver
     /// should inject into the next retry's prompt as `previous_failure`.
     Failure { error: String },
+
+    /// Agent emitted `LOOM_BLOCKED` — self-reported it cannot proceed.
+    /// Routes straight to `loom:blocked` without retry (re-running the same
+    /// prompt won't recover; the human resolves via `loom msg`).
+    Blocked { reason: String },
+
+    /// Agent emitted `LOOM_CLARIFY` — self-reported it needs a human answer.
+    /// Routes straight to `loom:clarify` without retry.
+    Clarify { question: String },
 
     /// Pre-flight infra failure (image load, container start) — `B::spawn`
     /// returned an error before the agent process produced any output.
@@ -28,21 +37,30 @@ pub enum AgentOutcome {
 }
 
 /// Final state of one bead after retries have been exhausted (or the agent
-/// succeeded on first try). Drives the bd-side cleanup: success → `bd close`,
-/// clarified → `bd update --add-label loom:clarify`, blocked →
+/// succeeded on first try). Drives the bd-side cleanup: success → driver
+/// observes the agent's own `bd close` (no driver-side close), clarified →
+/// `bd update --add-label loom:clarify --notes <question>`, blocked →
 /// `bd update --add-label loom:blocked --notes <cause>`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BeadResult {
-    /// Bead succeeded — caller closes it.
+    /// Bead succeeded. The driver does **not** call `bd close` — closure is
+    /// the agent's responsibility per `specs/loom-harness.md`'s verdict-gate
+    /// table, where `bd-closed` is an observable rather than a driver
+    /// action. If the agent forgot to close on `LOOM_COMPLETE`, the next
+    /// `loom check` invocation routes that to `incomplete-signaling`
+    /// recovery.
     Done,
 
-    /// Retries exhausted — caller flags the bead with `loom:clarify`.
-    Clarified { last_error: String },
+    /// Agent self-reported `LOOM_CLARIFY` or retries exhausted — caller
+    /// flags the bead with `loom:clarify` and writes `note` as
+    /// `bd update --notes`. For self-reports `note` is the question; for
+    /// retry-exhaustion it is the last failure body.
+    Clarified { note: String },
 
-    /// Infra failure routed straight to `loom:blocked`. `cause` is the
-    /// stable spec-table label (`infra-preflight` or `infra-repeated`)
-    /// the driver writes into `bd update --notes`; `error` carries the
-    /// raw failure body for human triage.
+    /// Routed to `loom:blocked`. `cause` is the stable identifier
+    /// (`infra-preflight`, `infra-repeated`, `agent-blocked`) the driver
+    /// writes into `bd update --notes`; `error` carries the raw failure
+    /// body or agent reason for human triage.
     Blocked { cause: String, error: String },
 }
 

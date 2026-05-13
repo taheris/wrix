@@ -28,8 +28,11 @@ pub struct BatchSlot {
 }
 
 /// Per-bead result after merge-back. Drives the bd-side cleanup the caller
-/// will perform: `Merged` → close, `Conflict` → mark failed (worktree
-/// preserved), `AgentFailed` → re-queue per the retry policy.
+/// will perform: `Merged` → driver observes the agent's `bd close` (no
+/// driver-side close), `Conflict` → mark failed (worktree preserved),
+/// `AgentFailed` → re-queue per the retry policy, `AgentBlocked` /
+/// `AgentClarify` → apply the matching `loom:*` label with the agent's
+/// reason / question as notes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BatchResult {
     /// Agent finished cleanly and the bead branch merged into the driver
@@ -49,6 +52,14 @@ pub enum BatchResult {
     /// for retry per the configured policy (the caller owns retry budget
     /// accounting).
     AgentFailed { bead: BeadId, error: String },
+
+    /// Agent emitted `LOOM_BLOCKED`. Worktree + branch were deleted; the
+    /// caller applies `loom:blocked` and writes `reason` to notes.
+    AgentBlocked { bead: BeadId, reason: String },
+
+    /// Agent emitted `LOOM_CLARIFY`. Worktree + branch were deleted; the
+    /// caller applies `loom:clarify` and writes `question` to notes.
+    AgentClarify { bead: BeadId, question: String },
 }
 
 /// Aggregate outcome of one parallel batch.
@@ -83,6 +94,28 @@ impl BatchOutcome {
             .iter()
             .filter_map(|r| match r {
                 BatchResult::AgentFailed { bead, .. } => Some(bead.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn blocked(&self) -> Vec<(BeadId, String)> {
+        self.results
+            .iter()
+            .filter_map(|r| match r {
+                BatchResult::AgentBlocked { bead, reason } => Some((bead.clone(), reason.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn clarified(&self) -> Vec<(BeadId, String)> {
+        self.results
+            .iter()
+            .filter_map(|r| match r {
+                BatchResult::AgentClarify { bead, question } => {
+                    Some((bead.clone(), question.clone()))
+                }
                 _ => None,
             })
             .collect()
@@ -240,6 +273,24 @@ async fn merge_back_one(git: &GitClient, slot: BatchSlot) -> Result<BatchResult,
             Ok(BatchResult::AgentFailed {
                 bead: bead.id,
                 error,
+            })
+        }
+        AgentOutcome::Blocked { reason } => {
+            warn!(bead = %bead.id, %reason, "agent emitted LOOM_BLOCKED — cleaning up worktree");
+            git.remove_worktree(&worktree.path).await?;
+            git.delete_branch(&worktree.branch).await?;
+            Ok(BatchResult::AgentBlocked {
+                bead: bead.id,
+                reason,
+            })
+        }
+        AgentOutcome::Clarify { question } => {
+            warn!(bead = %bead.id, %question, "agent emitted LOOM_CLARIFY — cleaning up worktree");
+            git.remove_worktree(&worktree.path).await?;
+            git.delete_branch(&worktree.branch).await?;
+            Ok(BatchResult::AgentClarify {
+                bead: bead.id,
+                question,
             })
         }
     }

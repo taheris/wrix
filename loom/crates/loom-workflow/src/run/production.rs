@@ -32,6 +32,7 @@ use super::error::RunError;
 use super::outcome::{AgentOutcome, SessionResult};
 use super::runner::AgentLoopController;
 use super::spawn::build_spawn_config_from_manifest;
+use crate::todo::ExitSignal;
 
 /// Wires the [`AgentLoopController`] trait against the real `BdClient`, a
 /// caller-provided agent dispatch closure, and a child `loom check` exec for
@@ -52,7 +53,7 @@ use super::spawn::build_spawn_config_from_manifest;
 pub struct ProductionAgentLoopController<S, F>
 where
     S: Fn(SpawnConfig, BeadId) -> F + Send,
-    F: std::future::Future<Output = SessionResult> + Send,
+    F: std::future::Future<Output = (SessionResult, Option<ExitSignal>)> + Send,
 {
     bd: BdClient,
     label: SpecLabel,
@@ -69,7 +70,7 @@ where
 impl<S, F> ProductionAgentLoopController<S, F>
 where
     S: Fn(SpawnConfig, BeadId) -> F + Send,
-    F: std::future::Future<Output = SessionResult> + Send,
+    F: std::future::Future<Output = (SessionResult, Option<ExitSignal>)> + Send,
 {
     #[expect(clippy::too_many_arguments, reason = "controller construction surface")]
     pub fn new(
@@ -110,7 +111,7 @@ where
 impl<S, F> AgentLoopController for ProductionAgentLoopController<S, F>
 where
     S: Fn(SpawnConfig, BeadId) -> F + Send,
-    F: std::future::Future<Output = SessionResult> + Send,
+    F: std::future::Future<Output = (SessionResult, Option<ExitSignal>)> + Send,
 {
     async fn next_ready_bead(&mut self) -> Result<Option<Bead>, RunError> {
         let beads = self
@@ -173,36 +174,25 @@ where
             retry = is_retry,
             "loom run: dispatching agent",
         );
-        let session = (self.spawn)(spawn_config, bead.id.clone()).await;
+        let (session, marker) = (self.spawn)(spawn_config, bead.id.clone()).await;
         // Drop happens here at end of scope — scratch dir cleaned up on
         // every exit path (success, failure, panic).
         drop(scratch);
-        Ok(match session {
-            SessionResult::Complete(outcome) => {
-                if outcome.exit_code == 0 {
-                    AgentOutcome::Success
-                } else {
-                    AgentOutcome::Failure {
-                        error: format!("agent exited with code {}", outcome.exit_code),
-                    }
-                }
-            }
-            SessionResult::PreflightFailed { error } => AgentOutcome::InfraPreflight { error },
-            SessionResult::MidSessionFailed { error } => AgentOutcome::InfraMidSession { error },
-        })
+        Ok(classify_session(session, marker))
     }
 
-    async fn close_bead(&mut self, bead: &BeadId) -> Result<(), RunError> {
-        self.bd.close(bead, None).await?;
-        Ok(())
-    }
-
-    async fn apply_clarify(&mut self, bead: &BeadId) -> Result<(), RunError> {
+    async fn apply_clarify(&mut self, bead: &BeadId, question: &str) -> Result<(), RunError> {
+        let notes = if question.is_empty() {
+            None
+        } else {
+            Some(question.to_string())
+        };
         self.bd
             .update(
                 bead,
                 UpdateOpts {
                     add_labels: vec!["loom:clarify".to_string()],
+                    notes,
                     ..UpdateOpts::default()
                 },
             )
@@ -255,6 +245,34 @@ where
             return Err(RunError::CheckHandoff(status.to_string()));
         }
         Ok(())
+    }
+}
+
+/// Translate a `(SessionResult, Option<ExitSignal>)` pair into an
+/// [`AgentOutcome`]. The agent's exit marker is the primary signal; exit code
+/// only matters when no marker is present. A `LOOM_BLOCKED` / `LOOM_CLARIFY`
+/// marker short-circuits the exit code: re-running the same prompt won't
+/// recover, so the bead routes straight to its terminal label.
+pub fn classify_session(session: SessionResult, marker: Option<ExitSignal>) -> AgentOutcome {
+    match session {
+        SessionResult::Complete(outcome) => match (marker, outcome.exit_code) {
+            (Some(ExitSignal::Blocked { reason }), _) => AgentOutcome::Blocked { reason },
+            (Some(ExitSignal::Clarify { question }), _) => AgentOutcome::Clarify { question },
+            (Some(ExitSignal::Complete | ExitSignal::Noop), 0) => AgentOutcome::Success,
+            (Some(ExitSignal::Complete | ExitSignal::Noop), code) => AgentOutcome::Failure {
+                error: format!("agent emitted COMPLETE/NOOP but exited code {code}"),
+            },
+            (None, 0) => AgentOutcome::Failure {
+                error: "agent exited 0 without LOOM_COMPLETE / LOOM_NOOP / LOOM_BLOCKED / \
+                        LOOM_CLARIFY marker (swallowed marker)"
+                    .to_string(),
+            },
+            (None, code) => AgentOutcome::Failure {
+                error: format!("agent exited with code {code}"),
+            },
+        },
+        SessionResult::PreflightFailed { error } => AgentOutcome::InfraPreflight { error },
+        SessionResult::MidSessionFailed { error } => AgentOutcome::InfraMidSession { error },
     }
 }
 
@@ -326,10 +344,13 @@ mod tests {
                 let captured = Arc::clone(&captured_for_closure);
                 async move {
                     *captured.lock().unwrap() = Some(cfg);
-                    SessionResult::Complete(SessionOutcome {
-                        exit_code: 0,
-                        cost_usd: None,
-                    })
+                    (
+                        SessionResult::Complete(SessionOutcome {
+                            exit_code: 0,
+                            cost_usd: None,
+                        }),
+                        Some(ExitSignal::Complete),
+                    )
                 }
             },
         );
@@ -376,10 +397,13 @@ mod tests {
                         .expect("prompt.txt readable");
                     *prompt_seen.lock().unwrap() = Some(txt);
                     *captured.lock().unwrap() = Some(cfg);
-                    SessionResult::Complete(SessionOutcome {
-                        exit_code: 0,
-                        cost_usd: None,
-                    })
+                    (
+                        SessionResult::Complete(SessionOutcome {
+                            exit_code: 0,
+                            cost_usd: None,
+                        }),
+                        Some(ExitSignal::Complete),
+                    )
                 }
             },
         );
@@ -436,10 +460,16 @@ mod tests {
             None,
             ProfileName::new("base"),
             |_cfg: SpawnConfig, _bead_id: BeadId| async move {
-                SessionResult::Complete(SessionOutcome {
-                    exit_code: 42,
-                    cost_usd: None,
-                })
+                // Nonzero exit + no marker = swallowed marker; we want to
+                // verify the exit_code path. Pass None marker so the
+                // classifier hits the `(None, code) => Failure` branch.
+                (
+                    SessionResult::Complete(SessionOutcome {
+                        exit_code: 42,
+                        cost_usd: None,
+                    }),
+                    None,
+                )
             },
         );
         let outcome = controller
@@ -477,9 +507,12 @@ mod tests {
             None,
             ProfileName::new("base"),
             |_cfg: SpawnConfig, _bead_id: BeadId| async move {
-                SessionResult::PreflightFailed {
-                    error: "podman load failed: image archive missing".into(),
-                }
+                (
+                    SessionResult::PreflightFailed {
+                        error: "podman load failed: image archive missing".into(),
+                    },
+                    None,
+                )
             },
         );
         let outcome = controller
@@ -515,9 +548,12 @@ mod tests {
             None,
             ProfileName::new("base"),
             |_cfg: SpawnConfig, _bead_id: BeadId| async move {
-                SessionResult::MidSessionFailed {
-                    error: "agent stdout closed: exit 137 (OOM)".into(),
-                }
+                (
+                    SessionResult::MidSessionFailed {
+                        error: "agent stdout closed: exit 137 (OOM)".into(),
+                    },
+                    None,
+                )
             },
         );
         let outcome = controller
@@ -573,10 +609,13 @@ mod tests {
             None,
             ProfileName::new("base"),
             |_cfg: SpawnConfig, _bead_id: BeadId| async move {
-                SessionResult::Complete(SessionOutcome {
-                    exit_code: 0,
-                    cost_usd: None,
-                })
+                (
+                    SessionResult::Complete(SessionOutcome {
+                        exit_code: 0,
+                        cost_usd: None,
+                    }),
+                    Some(ExitSignal::Complete),
+                )
             },
         )
         .with_handoff_lock(guard);
