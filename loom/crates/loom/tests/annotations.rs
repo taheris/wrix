@@ -230,10 +230,16 @@ fn find_subslice(haystack: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
 
 /// `path::fn` split on the LAST `::`. The path portion may contain
 /// further `::` (unlikely for filesystem paths, but cheap to allow).
+/// A trailing space-prefixed `@unit-ok` marker is stripped off — that's
+/// R10 (wx-2pbxe) doctor opt-out syntax, not part of the function name.
 fn split_path_fn(inner: &str) -> Option<(&str, &str)> {
     let idx = inner.rfind("::")?;
     let path = &inner[..idx];
-    let fn_name = &inner[idx + 2..];
+    let raw_fn = &inner[idx + 2..];
+    let fn_name = match raw_fn.split_once(" @unit-ok") {
+        Some((name, _)) => name.trim_end(),
+        None => raw_fn,
+    };
     if path.is_empty() || fn_name.is_empty() {
         return None;
     }

@@ -948,7 +948,7 @@ so it gates PRs in CI. `loom-smoke` is exposed as an app on Linux only.
 - [ ] Newtype serde round-trip tests cover all ID types (`BeadId`,
       `SpecLabel`, `MoleculeId`, `ProfileName`, `SessionId`,
       `ToolCallId`, `RequestId`)
-  [verify](tests/loom-test.sh::test_newtype_serde_roundtrip)
+  [verify](tests/loom-test.sh::test_newtype_serde_roundtrip @unit-ok)
 - [ ] State database round-trip tests cover spec, molecule, and meta
       operations
   [verify](tests/loom-test.sh::test_state_db_roundtrip)
@@ -956,11 +956,11 @@ so it gates PRs in CI. `loom-smoke` is exposed as an app on Linux only.
       in the pi v0.72 protocol table, asserting on every documented
       field (not just type discrimination) so a renamed field fails
       deserialization at test time
-  [verify](tests/loom-test.sh::test_pi_protocol_coverage)
+  [verify](tests/loom-test.sh::test_pi_protocol_coverage @unit-ok)
 - [ ] Claude stream-json protocol tests cover all `ClaudeMessage`
       variants including `Unknown` via `#[serde(other)]`, with
       field-level assertions on each variant
-  [verify](tests/loom-test.sh::test_claude_protocol_coverage)
+  [verify](tests/loom-test.sh::test_claude_protocol_coverage @unit-ok)
 - [ ] Template rendering tests cover every Askama template with
       representative inputs
   [verify](tests/loom-test.sh::test_template_rendering)

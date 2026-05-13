@@ -3119,22 +3119,15 @@ test_push_gate_refuses_unresolved() {
 
 # Plan / Todo
 #-----------------------------------------------------------------------------
-# test_plan_new_writes_implementation_notes — `loom plan -n` parses the spec's
-# `## Implementation Notes` section after the interview exits and lands the
-# array on `specs.implementation_notes`. Pinned to the runner integration test
-# that drives a stub wrapix and asserts the DB row.
+# test_plan_new_writes_implementation_notes — `loom plan -n` should seed
+# implementation notes via `loom note set` (the SQLite notes table the D2
+# work shipped). The old `specs.implementation_notes` column path was
+# dropped by R9 (wx-42teo) and the three unit tests that pinned that path
+# went with it. A new integration test against the notes-table flow is a
+# focused follow-up; until then this stays a pending stub so the doctor
+# audit doesn't claim coverage we don't have.
 #-----------------------------------------------------------------------------
-test_plan_new_writes_implementation_notes() {
-    cargo_run test -p loom-workflow --lib \
-        plan::runner::tests::plan_new_persists_implementation_notes_from_interview \
-        -- --exact --nocapture --quiet
-    cargo_run test -p loom-workflow --lib \
-        plan::runner::tests::plan_new_no_notes_section_leaves_column_untouched \
-        -- --exact --nocapture --quiet
-    cargo_run test -p loom-workflow --lib \
-        plan::runner::tests::plan_update_threads_existing_notes_into_prompt_and_persists_merge \
-        -- --exact --nocapture --quiet
-}
+test_plan_new_writes_implementation_notes() { _pending_stub plan_new_writes_implementation_notes; }
 
 #-----------------------------------------------------------------------------
 # test_todo_renders_notes_into_beads — `loom todo` reads implementation

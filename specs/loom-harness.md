@@ -1670,16 +1670,16 @@ v1-complete signal for this spec.
 - [ ] Per-bead profile selection: two beads with different profile labels
       result in two `wrapix spawn` invocations with different `image_ref`
       and `image_source`
-  [verify](tests/loom-test.sh::test_per_bead_profile_spawn)
+  [verify](tests/loom-test.sh::test_per_bead_profile_spawn @unit-ok)
 - [ ] Loom reads `LOOM_PROFILES_MANIFEST` at startup and parses it into
       `BTreeMap<ProfileName, ImageEntry>`; missing env var or missing file
       errors before any bead spawn
-  [verify](tests/loom-test.sh::test_profiles_manifest_required)
+  [verify](tests/loom-test.sh::test_profiles_manifest_required @unit-ok)
 - [ ] A bead with `profile:X` where `X` is not in the manifest fails with a
       typed `ProfileError::UnknownProfile` naming the missing profile
-  [verify](tests/loom-test.sh::test_unknown_profile_errors)
+  [verify](tests/loom-test.sh::test_unknown_profile_errors @unit-ok)
 - [ ] `--profile` CLI override takes precedence over bead labels
-  [verify](tests/loom-test.sh::test_profile_cli_override)
+  [verify](tests/loom-test.sh::test_profile_cli_override @unit-ok)
 - [ ] `loom plan` shells out to interactive `wrapix run` (TTY attached); does
       not capture stdio for JSONL
   [verify](tests/loom-test.sh::test_plan_uses_interactive_wrapix_run)
@@ -1714,7 +1714,7 @@ v1-complete signal for this spec.
   [verify](tests/loom-test.sh::test_container_cannot_rm_host_lock)
 - [ ] Driver sets `LOOM_INSIDE=1` in every bead container's env via the
       `SpawnConfig.env` allowlist
-  [verify](tests/loom-test.sh::test_loom_inside_env_set)
+  [verify](tests/loom-test.sh::test_loom_inside_env_set @unit-ok)
 - [ ] With `LOOM_INSIDE=1`, mutating subcommands (`run`, `init`, `plan`,
       `check`, `todo`, `msg`, `use`) refuse with a clear error
   [verify](tests/loom-test.sh::test_nested_loom_guard_refuses)
@@ -1727,28 +1727,28 @@ v1-complete signal for this spec.
 **Renderer modes**
 
 - [ ] Four renderer modes implemented: `Pretty`, `Plain`, `Json`, `Raw`
-  [verify](tests/loom-test.sh::test_renderer_modes_present)
+  [verify](tests/loom-test.sh::test_renderer_modes_present @unit-ok)
 - [ ] `Pretty` is selected when stdout is a TTY and no `--plain`/`--json`/`--raw` flag is set
-  [verify](tests/loom-test.sh::test_pretty_selected_on_tty)
+  [verify](tests/loom-test.sh::test_pretty_selected_on_tty @unit-ok)
 - [ ] `Plain` is auto-selected on non-TTY stdout (pipe/redirect), `NO_COLOR=1`, or `--plain`
-  [verify](tests/loom-test.sh::test_plain_selected_on_non_tty)
+  [verify](tests/loom-test.sh::test_plain_selected_on_non_tty @unit-ok)
 - [ ] `Json` mode emits one pretty-printed JSON object per line; colorized when TTY, plain when piped
-  [verify](tests/loom-test.sh::test_json_mode_pretty_prints)
+  [verify](tests/loom-test.sh::test_json_mode_pretty_prints @unit-ok)
 - [ ] `Raw` mode passes through the original JSONL bytes unparsed
-  [verify](tests/loom-test.sh::test_raw_mode_passthrough)
+  [verify](tests/loom-test.sh::test_raw_mode_passthrough @unit-ok)
 
 **Per-tool rendering**
 
 - [ ] Each builtin (`Read`, `Edit`, `Write`, `Grep`, `Glob`, `Bash`, `WebFetch`, `WebSearch`, `Task`) renders its tailored summary cell
-  [verify](tests/loom-test.sh::test_per_tool_summary_cells)
+  [verify](tests/loom-test.sh::test_per_tool_summary_cells @unit-ok)
 - [ ] Unknown tools fall through to a generic `<name>  <truncated args>` row
   [verify](tests/loom-test.sh::test_unknown_tool_fallback)
 - [ ] Tool body is capped at 10 lines or 2 KB (whichever first); cap line names recovery `[N more lines — loom logs -b <id> --tool <id>]`
-  [verify](tests/loom-test.sh::test_tool_body_truncation_policy)
+  [verify](tests/loom-test.sh::test_tool_body_truncation_policy @unit-ok)
 - [ ] `Edit` and `Write` render unified diffs via `imara-diff`; `+<add> -<del>` counts on the summary cell
   [verify](tests/loom-test.sh::test_edit_write_imara_diff)
 - [ ] Subagent (`Task`) tool nests inner events under the parent at deeper indent via `parent_tool_call_id`
-  [verify](tests/loom-test.sh::test_task_subagent_nesting)
+  [verify](tests/loom-test.sh::test_task_subagent_nesting @unit-ok)
 - [ ] `tool_call` and `tool_result` collapse into one rendered block; duration computed from `ts_ms` delta
   [verify](tests/loom-test.sh::test_tool_call_result_pairing)
 
@@ -1759,14 +1759,14 @@ v1-complete signal for this spec.
 - [ ] Verdict gate, retry dispatch, push gate walk/refuse/clean, container spawn/oom all emit `driver_event`
   [verify](tests/loom-test.sh::test_driver_event_kinds_present)
 - [ ] Unknown `driver_kind` values render as generic `→ <kind>: <summary>` (additive without schema bump)
-  [verify](tests/loom-test.sh::test_unknown_driver_kind_renders)
+  [verify](tests/loom-test.sh::test_unknown_driver_kind_renders @unit-ok)
 
 **Live UX**
 
 - [ ] In-place running indicator updates duration via `\r` + clear-to-EOL while a tool is in flight
   [verify](tests/loom-test.sh::test_in_place_running_indicator)
 - [ ] In-place running indicator is auto-disabled in non-TTY modes and with `--parallel N > 1`
-  [verify](tests/loom-test.sh::test_in_place_indicator_disabled_when_inappropriate)
+  [verify](tests/loom-test.sh::test_in_place_indicator_disabled_when_inappropriate @unit-ok)
 - [ ] `-v` / `--verbose` disables tool-body truncation, streams `text_delta`/`thinking_delta` live, and shows `thinking` blocks (`◆`)
   [verify](tests/loom-test.sh::test_verbose_full_output)
 - [ ] Cancellation (Ctrl-C / SIGINT) collapses the in-place indicator and emits a `⚠ interrupted` closing block with partial-diff size
@@ -1783,22 +1783,22 @@ v1-complete signal for this spec.
 - [ ] Live-vs-replay distinction: `Pretty` renderer takes a `live: bool` parameter; replay suppresses the in-place running indicator and computes durations from `ts_ms` deltas
   [verify](tests/loom-test.sh::test_live_vs_replay_distinction)
 - [ ] `AgentEvent` derives `Deserialize` so `loom logs` reads its own JSONL files back through the same enum it writes
-  [verify](tests/loom-test.sh::test_agent_event_deserialize_round_trip)
+  [verify](tests/loom-test.sh::test_agent_event_deserialize_round_trip @unit-ok)
 
 **Event schema**
 
 - [ ] Every event carries common envelope fields: `kind`, `bead_id`, `molecule_id`, `iteration`, `source`, `ts_ms` (i64 unix millis), `seq` (u64 monotonic per-bead-spawn)
-  [verify](tests/loom-test.sh::test_common_envelope_fields)
+  [verify](tests/loom-test.sh::test_common_envelope_fields @unit-ok)
 - [ ] `agent_start` carries `schema_version: u32` (currently `1`), `title`, `profile`, `spec_label`, `started_at_ms`
-  [verify](tests/loom-test.sh::test_agent_start_fields)
+  [verify](tests/loom-test.sh::test_agent_start_fields @unit-ok)
 - [ ] `seq` is monotonic per bead spawn, starting at `0`
-  [verify](tests/loom-test.sh::test_seq_monotonic)
+  [verify](tests/loom-test.sh::test_seq_monotonic @unit-ok)
 - [ ] Variant set is flat (no nested `message_update { delta: ... }`) — top-level `text_delta` / `thinking_delta` / `toolcall_delta` are siblings of `tool_call` / `tool_result`
-  [verify](tests/loom-test.sh::test_flat_variant_shape)
+  [verify](tests/loom-test.sh::test_flat_variant_shape @unit-ok)
 - [ ] `loom-events` crate has exactly three deps: `serde`, `serde_json`, `thiserror` (no `chrono`, no `ulid`, no `uuid`)
   [verify](tests/loom-test.sh::test_loom_events_minimal_deps)
 - [ ] Unknown event variants are accepted gracefully (deserialized as a fallback or skipped, never error)
-  [verify](tests/loom-test.sh::test_unknown_variants_tolerated)
+  [verify](tests/loom-test.sh::test_unknown_variants_tolerated @unit-ok)
 
 **Disk log**
 
@@ -2093,7 +2093,7 @@ v1-complete signal for this spec.
       `LOOM_COMPLETE` or `LOOM_NOOP` marker **and** `exit_code == 0`;
       any other terminal state (no marker, nonzero exit, `LOOM_BLOCKED`,
       `LOOM_CLARIFY`) leaves the cursor untouched
-  [verify](tests/loom-test.sh::test_todo_cursor_advance_requires_marker)
+  [verify](tests/loom-test.sh::test_todo_cursor_advance_requires_marker @unit-ok)
 - [ ] The implementation-notes delete and the cursor advance share one
       SQLite transaction, both gated on productive completion; a
       non-productive terminal state leaves both intact

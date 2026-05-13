@@ -361,7 +361,13 @@ where
                 },
             ));
         }
-        let envelope = guard.as_mut().expect("just initialized").build();
+        // Lazy-init above guarantees `guard` is `Some` here; fall back
+        // to a silent no-op if a future refactor breaks that invariant
+        // rather than panicking inside the verdict-gate hot path.
+        let envelope = match guard.as_mut() {
+            Some(builder) => builder.build(),
+            None => return,
+        };
         drop(guard);
         let event = AgentEvent::DriverEvent {
             envelope,
