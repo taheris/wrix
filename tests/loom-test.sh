@@ -3192,9 +3192,15 @@ _pending_stub() {
 }
 
 test_agent_event_deserialize_round_trip() { _pending_stub agent_event_deserialize_round_trip; }
-test_agent_start_fields() { _pending_stub agent_start_fields; }
+test_agent_start_fields() {
+    cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
+        event::tests::agent_start_fields_present
+}
 test_cancellation_clean_close() { _pending_stub cancellation_clean_close; }
-test_common_envelope_fields() { _pending_stub common_envelope_fields; }
+test_common_envelope_fields() {
+    cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
+        event::tests::common_envelope_fields_present_on_every_variant
+}
 test_driver_event_kinds_present() { _pending_stub driver_event_kinds_present; }
 test_driver_events_rendered() { _pending_stub driver_events_rendered; }
 test_edit_write_imara_diff() { _pending_stub edit_write_imara_diff; }
@@ -3305,7 +3311,10 @@ test_run_does_not_close_bead() {
     cargo_run test -p loom --test marker_gate -- --test-threads=1 \
         loom_run_never_invokes_bd_close_on_dispatched_bead_across_all_markers
 }
-test_seq_monotonic() { _pending_stub seq_monotonic; }
+test_seq_monotonic() {
+    cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
+        event::tests::seq_advances_monotonically
+}
 test_task_subagent_nesting() { _pending_stub task_subagent_nesting; }
 test_todo_delete_notes_atomic_with_cursor() { _pending_stub todo_delete_notes_atomic_with_cursor; }
 test_tool_body_truncation_policy() { _pending_stub tool_body_truncation_policy; }

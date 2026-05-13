@@ -123,7 +123,7 @@ pub async fn run_agent_classified<B: AgentBackend>(
             }
         };
         info!(event = %summarize_event(&event), "agent event");
-        if let AgentEvent::MessageDelta { text } = &event
+        if let AgentEvent::MessageDelta { text, .. } = &event
             && let Some(buf) = text_capture.as_deref_mut()
         {
             buf.push_str(text);
@@ -149,6 +149,7 @@ pub async fn run_agent_classified<B: AgentBackend>(
         if let AgentEvent::SessionComplete {
             exit_code,
             cost_usd,
+            ..
         } = event
         {
             let outcome = if exit_code == 0 {
@@ -240,7 +241,10 @@ fn finish_sink(sink: Option<LogSink>, outcome: BeadOutcome) {
 
 fn summarize_event(event: &AgentEvent) -> String {
     match event {
-        AgentEvent::MessageDelta { text } => {
+        AgentEvent::AgentStart { title, profile, .. } => {
+            format!("agent_start ({title}, profile={profile})")
+        }
+        AgentEvent::MessageDelta { text, .. } => {
             format!("message_delta ({} chars)", text.chars().count())
         }
         AgentEvent::ToolCall { id, tool, .. } => format!("tool_call {tool} (id={id})"),
@@ -248,17 +252,21 @@ fn summarize_event(event: &AgentEvent) -> String {
             id,
             output,
             is_error,
+            ..
         } => format!(
             "tool_result (id={id}, is_error={is_error}, {} chars)",
             output.chars().count(),
         ),
-        AgentEvent::TurnEnd => "turn_end".to_string(),
+        AgentEvent::TurnEnd { .. } => "turn_end".to_string(),
         AgentEvent::SessionComplete {
             exit_code,
             cost_usd,
+            ..
         } => format!("session_complete (exit_code={exit_code}, cost_usd={cost_usd:?})",),
-        AgentEvent::CompactionStart { reason } => format!("compaction_start ({reason:?})"),
-        AgentEvent::CompactionEnd { aborted } => format!("compaction_end (aborted={aborted})"),
-        AgentEvent::Error { message } => format!("error: {message}"),
+        AgentEvent::CompactionStart { reason, .. } => format!("compaction_start ({reason:?})"),
+        AgentEvent::CompactionEnd { aborted, .. } => {
+            format!("compaction_end (aborted={aborted})")
+        }
+        AgentEvent::Error { message, .. } => format!("error: {message}"),
     }
 }

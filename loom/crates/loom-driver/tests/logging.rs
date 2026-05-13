@@ -19,6 +19,7 @@ use loom_driver::identifier::{BeadId, SpecLabel, ToolCallId};
 use loom_driver::logging::{
     BeadOutcome, LogSink, RenderMode, TerminalRenderer, sweep_retention_at,
 };
+use loom_events::EventEnvelope;
 use serde_json::{Value, json};
 
 /// `Write` adapter that pushes into a shared in-memory buffer so tests can
@@ -99,14 +100,17 @@ fn run_default_output_shape() -> Result<()> {
     )?;
 
     sink.emit(&AgentEvent::ToolCall {
+        envelope: EventEnvelope::default(),
         id: ToolCallId::new("t1"),
         tool: "Read".to_string(),
         params: json!({"file_path": "src/lib.rs"}),
     })?;
     sink.emit(&AgentEvent::MessageDelta {
+        envelope: EventEnvelope::default(),
         text: "I will not appear on the terminal".to_string(),
     })?;
     sink.emit(&AgentEvent::ToolCall {
+        envelope: EventEnvelope::default(),
         id: ToolCallId::new("t2"),
         tool: "Bash".to_string(),
         params: json!({"command": "cargo build"}),
@@ -152,9 +156,11 @@ fn run_verbose_streams_text() -> Result<()> {
     )?;
 
     sink.emit(&AgentEvent::MessageDelta {
+        envelope: EventEnvelope::default(),
         text: "Hello, ".to_string(),
     })?;
     sink.emit(&AgentEvent::MessageDelta {
+        envelope: EventEnvelope::default(),
         text: "world!\n".to_string(),
     })?;
     sink.finish(BeadOutcome::Done)?;
@@ -184,6 +190,7 @@ fn run_writes_per_bead_jsonl_log() -> Result<()> {
     let log_path = sink.log_path().to_path_buf();
 
     sink.emit(&AgentEvent::ToolCall {
+        envelope: EventEnvelope::default(),
         id: ToolCallId::new("t1"),
         tool: "Read".to_string(),
         params: json!({"file_path": "a"}),
@@ -192,9 +199,12 @@ fn run_writes_per_bead_jsonl_log() -> Result<()> {
     // in the on-disk log (the file gets the full raw event stream regardless
     // of terminal verbosity).
     sink.emit(&AgentEvent::MessageDelta {
+        envelope: EventEnvelope::default(),
         text: "secret thoughts".to_string(),
     })?;
-    sink.emit(&AgentEvent::TurnEnd)?;
+    sink.emit(&AgentEvent::TurnEnd {
+        envelope: EventEnvelope::default(),
+    })?;
     sink.finish(BeadOutcome::Done)?;
 
     let parent = log_path
@@ -378,17 +388,23 @@ fn parallel_logs_are_per_bead() -> Result<()> {
 
     // Interleave emits and verify each file only carries its own bead's events.
     a.emit(&AgentEvent::ToolCall {
+        envelope: EventEnvelope::default(),
         id: ToolCallId::new("ta"),
         tool: "Read".to_string(),
         params: json!({"file_path": "a-only"}),
     })?;
     b.emit(&AgentEvent::ToolCall {
+        envelope: EventEnvelope::default(),
         id: ToolCallId::new("tb"),
         tool: "Read".to_string(),
         params: json!({"file_path": "b-only"}),
     })?;
-    a.emit(&AgentEvent::TurnEnd)?;
-    b.emit(&AgentEvent::TurnEnd)?;
+    a.emit(&AgentEvent::TurnEnd {
+        envelope: EventEnvelope::default(),
+    })?;
+    b.emit(&AgentEvent::TurnEnd {
+        envelope: EventEnvelope::default(),
+    })?;
     a.finish(BeadOutcome::Done)?;
     b.finish(BeadOutcome::Done)?;
 
@@ -533,11 +549,13 @@ fn run_single_event_sink_property() -> Result<()> {
 
     let events = [
         AgentEvent::ToolCall {
+            envelope: EventEnvelope::default(),
             id: ToolCallId::new("t1"),
             tool: "Read".to_string(),
             params: json!({"file_path": "src/a.rs"}),
         },
         AgentEvent::ToolCall {
+            envelope: EventEnvelope::default(),
             id: ToolCallId::new("t2"),
             tool: "Edit".to_string(),
             params: json!({"file_path": "src/b.rs"}),

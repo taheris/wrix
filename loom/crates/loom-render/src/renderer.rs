@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use crate::clock::{Clock, SystemClock};
-use loom_events::AgentEvent;
 use loom_events::identifier::{BeadId, ProfileName};
+use loom_events::{AgentEvent, EventEnvelope};
 
 /// Final outcome of a bead spawn — drives the closing line color and glyph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,11 +136,11 @@ impl TerminalRenderer {
                 self.out.write_all(line.as_bytes())?;
                 self.out.flush()?;
             }
-            AgentEvent::MessageDelta { text } if matches!(self.mode, RenderMode::Verbose) => {
+            AgentEvent::MessageDelta { text, .. } if matches!(self.mode, RenderMode::Verbose) => {
                 self.out.write_all(text.as_bytes())?;
                 self.out.flush()?;
             }
-            AgentEvent::Error { message } => {
+            AgentEvent::Error { message, .. } => {
                 let line = if self.parallel {
                     format!("  [{}] error: {message}\n", self.bead_id.as_str())
                 } else {
@@ -330,6 +330,7 @@ mod tests {
     fn default_mode_suppresses_message_deltas() {
         let out = capture(RenderMode::Default, false, false, |r| {
             r.render_event(&AgentEvent::MessageDelta {
+                envelope: EventEnvelope::default(),
                 text: "hello world".to_string(),
             })
             .expect("render");
@@ -341,10 +342,12 @@ mod tests {
     fn verbose_mode_streams_message_deltas_verbatim() {
         let out = capture(RenderMode::Verbose, false, false, |r| {
             r.render_event(&AgentEvent::MessageDelta {
+                envelope: EventEnvelope::default(),
                 text: "hel".to_string(),
             })
             .expect("render");
             r.render_event(&AgentEvent::MessageDelta {
+                envelope: EventEnvelope::default(),
                 text: "lo".to_string(),
             })
             .expect("render");
@@ -356,6 +359,7 @@ mod tests {
     fn tool_call_line_in_default_mode_shows_path() {
         let out = capture(RenderMode::Default, false, false, |r| {
             r.render_event(&AgentEvent::ToolCall {
+                envelope: EventEnvelope::default(),
                 id: ToolCallId::new("t1"),
                 tool: "Read".to_string(),
                 params: json!({"file_path": "src/lib.rs"}),
@@ -371,6 +375,7 @@ mod tests {
     fn parallel_mode_prefixes_tool_lines_with_bead_id() {
         let out = capture(RenderMode::Default, true, false, |r| {
             r.render_event(&AgentEvent::ToolCall {
+                envelope: EventEnvelope::default(),
                 id: ToolCallId::new("t1"),
                 tool: "Bash".to_string(),
                 params: json!({"command": "cargo build"}),
@@ -397,12 +402,14 @@ mod tests {
     fn finish_done_includes_tool_count_and_secs() {
         let out = capture(RenderMode::Default, false, false, |r| {
             r.render_event(&AgentEvent::ToolCall {
+                envelope: EventEnvelope::default(),
                 id: ToolCallId::new("t1"),
                 tool: "Read".to_string(),
                 params: json!({"file_path": "a"}),
             })
             .expect("render");
             r.render_event(&AgentEvent::ToolCall {
+                envelope: EventEnvelope::default(),
                 id: ToolCallId::new("t2"),
                 tool: "Edit".to_string(),
                 params: json!({"file_path": "b"}),

@@ -10,6 +10,7 @@ use std::collections::HashSet;
 
 use loom_driver::agent::{AgentEvent, LineParse, ParsedLine, ProtocolError};
 use loom_driver::identifier::RequestId;
+use loom_events::EventEnvelope;
 use serde::Serialize;
 use tracing::{info, trace};
 
@@ -81,10 +82,14 @@ impl LineParse for ClaudeParser {
                 for block in message.content {
                     match block {
                         AssistantBlock::Text { text } => {
-                            events.push(AgentEvent::MessageDelta { text });
+                            events.push(AgentEvent::MessageDelta {
+                                envelope: EventEnvelope::default(),
+                                text,
+                            });
                         }
                         AssistantBlock::ToolUse { id, name, input } => {
                             events.push(AgentEvent::ToolCall {
+                                envelope: EventEnvelope::default(),
                                 id,
                                 tool: name,
                                 params: input,
@@ -115,6 +120,7 @@ impl LineParse for ClaudeParser {
                                 other => other.to_string(),
                             };
                             events.push(AgentEvent::ToolResult {
+                                envelope: EventEnvelope::default(),
                                 id: tool_use_id,
                                 output,
                                 is_error,
@@ -138,17 +144,22 @@ impl LineParse for ClaudeParser {
             } => {
                 let events = match subtype.as_str() {
                     "success" => vec![
-                        AgentEvent::TurnEnd,
+                        AgentEvent::TurnEnd {
+                            envelope: EventEnvelope::default(),
+                        },
                         AgentEvent::SessionComplete {
+                            envelope: EventEnvelope::default(),
                             exit_code: 0,
                             cost_usd: total_cost_usd,
                         },
                     ],
                     "error" => vec![
                         AgentEvent::Error {
+                            envelope: EventEnvelope::default(),
                             message: result.unwrap_or_default(),
                         },
                         AgentEvent::SessionComplete {
+                            envelope: EventEnvelope::default(),
                             exit_code: 1,
                             cost_usd: total_cost_usd,
                         },
@@ -259,11 +270,13 @@ mod tests {
         let p = parse(&empty(), line);
         assert_eq!(p.events.len(), 2);
         match &p.events[0] {
-            AgentEvent::MessageDelta { text } => assert_eq!(text, "hi"),
+            AgentEvent::MessageDelta { text, .. } => assert_eq!(text, "hi"),
             other => panic!("expected MessageDelta, got {other:?}"),
         }
         match &p.events[1] {
-            AgentEvent::ToolCall { id, tool, params } => {
+            AgentEvent::ToolCall {
+                id, tool, params, ..
+            } => {
                 assert_eq!(id.as_str(), "toolu_01");
                 assert_eq!(tool, "Read");
                 assert_eq!(params["path"], "/tmp/x");
@@ -282,6 +295,7 @@ mod tests {
                 id,
                 output,
                 is_error,
+                ..
             } => {
                 assert_eq!(id.as_str(), "toolu_01");
                 assert_eq!(output, "file contents");
@@ -304,11 +318,12 @@ mod tests {
     fn result_success_yields_turn_end_then_session_complete() {
         let line = r#"{"type":"result","subtype":"success","total_cost_usd":0.10}"#;
         let p = parse(&empty(), line);
-        assert!(matches!(p.events[0], AgentEvent::TurnEnd));
+        assert!(matches!(p.events[0], AgentEvent::TurnEnd { .. }));
         match &p.events[1] {
             AgentEvent::SessionComplete {
                 exit_code,
                 cost_usd,
+                ..
             } => {
                 assert_eq!(*exit_code, 0);
                 assert_eq!(*cost_usd, Some(0.10));
@@ -323,13 +338,14 @@ mod tests {
         let p = parse(&empty(), line);
         assert_eq!(p.events.len(), 2);
         match &p.events[0] {
-            AgentEvent::Error { message } => assert_eq!(message, "boom"),
+            AgentEvent::Error { message, .. } => assert_eq!(message, "boom"),
             other => panic!("expected Error, got {other:?}"),
         }
         match &p.events[1] {
             AgentEvent::SessionComplete {
                 exit_code,
                 cost_usd,
+                ..
             } => {
                 assert_eq!(*exit_code, 1);
                 assert_eq!(*cost_usd, Some(0.05));
@@ -517,11 +533,13 @@ mod tests {
         let p = parse(&empty(), line);
         assert_eq!(p.events.len(), 2);
         match &p.events[0] {
-            AgentEvent::MessageDelta { text } => assert_eq!(text, "abc"),
+            AgentEvent::MessageDelta { text, .. } => assert_eq!(text, "abc"),
             other => panic!("expected MessageDelta, got {other:?}"),
         }
         match &p.events[1] {
-            AgentEvent::ToolCall { id, tool, params } => {
+            AgentEvent::ToolCall {
+                id, tool, params, ..
+            } => {
                 assert_eq!(id.as_str(), "tu-1");
                 assert_eq!(tool, "Bash");
                 assert_eq!(params["cmd"], "ls");
@@ -543,6 +561,7 @@ mod tests {
                 id,
                 output,
                 is_error,
+                ..
             } => {
                 assert_eq!(id.as_str(), "tu-2");
                 assert!(output.contains("\"k\""));

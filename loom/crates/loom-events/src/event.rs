@@ -1,22 +1,118 @@
 use serde::Serialize;
 
-use crate::identifier::ToolCallId;
+use crate::identifier::{BeadId, MoleculeId, ProfileName, SpecLabel, ToolCallId};
+
+/// Common envelope every [`AgentEvent`] carries. Serialized flat at the
+/// top level via `#[serde(flatten)]` — consumers see one discriminator
+/// (`kind`) plus the envelope fields plus variant-specific payload, all
+/// at the same nesting level. No nested `message_update { delta: { ... } }`
+/// wrappers — every consumer dispatches with one `match` (Rust) or one
+/// `switch (event.kind)` (TypeScript).
+///
+/// `seq` is monotonic per `(bead_id, spawn)` pair: the producer side
+/// (parser or driver-event emitter) maintains a per-session counter and
+/// stamps each emitted event with the next value. Replay code groups
+/// events into runs by sorting on `(bead_id, seq)`.
+#[derive(Debug, Clone, Serialize)]
+pub struct EventEnvelope {
+    pub bead_id: BeadId,
+    /// Optional because driver-emitted events tied to a molecule that has
+    /// no bead-level scope may omit it.
+    pub molecule_id: Option<MoleculeId>,
+    /// Iteration counter for the bead's molecule — bumped each time
+    /// `loom check` enters another `loom run` round.
+    pub iteration: u32,
+    pub source: Source,
+    /// Unix-epoch milliseconds when the event was produced.
+    pub ts_ms: i64,
+    /// Monotonic per-bead-spawn counter. `0` at session start.
+    pub seq: u64,
+}
+
+impl Default for EventEnvelope {
+    /// Placeholder envelope used by call sites that don't yet have a
+    /// session-level [`EnvelopeBuilder`] threaded through (parsers,
+    /// test fixtures). `bead_id` is the well-known sentinel `wx-pending`;
+    /// production code that emits an event without overwriting this is a
+    /// bug. G2/G3 follow-ups tighten the call sites.
+    fn default() -> Self {
+        // BeadId::new is fallible but `"wx-pending"` is a known-good
+        // sentinel literal. The unwrap_or is paranoia — if it ever fires
+        // a non-default `wx-x` value still parses and downstream code
+        // surfaces the placeholder loudly.
+        let bead_id = BeadId::new("wx-pending")
+            .unwrap_or_else(|_| BeadId::new("wx-x").unwrap_or_else(|_| unreachable!()));
+        Self {
+            bead_id,
+            molecule_id: None,
+            iteration: 0,
+            source: Source::Agent,
+            ts_ms: 0,
+            seq: 0,
+        }
+    }
+}
+
+/// Where the event originated. Driver-side events (verdict gate, push
+/// gate, infra failures) carry `Driver`; agent-side events (tool calls,
+/// message deltas, etc.) carry `Agent`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Source {
+    Agent,
+    Driver,
+}
 
 /// Backend-neutral event flowing from a running agent up to the workflow
-/// engine. Both pi and claude line parsers normalize their wire messages into
-/// this enum — once an `AgentEvent` flows downstream no code knows which
-/// backend produced it.
+/// engine. Both pi and claude line parsers normalize their wire messages
+/// into this enum — once an `AgentEvent` flows downstream no code knows
+/// which backend produced it.
 ///
 /// `Serialize` is derived so the on-disk JSONL log file is the same event
-/// stream the terminal renderer consumes (see `logging::LogSink`).
-#[derive(Debug, Serialize)]
+/// stream the terminal renderer consumes (see [`crate::lib`] consumers).
+/// G2 (wx-gl3mq) adds the matching `Deserialize` impl so `loom logs` can
+/// replay its own output.
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AgentEvent {
+    /// Session start — the first event in any agent log. Carries the
+    /// per-spawn metadata the renderer/log-replayer needs to label the
+    /// stream. `schema_version` lets readers reject incompatible wire
+    /// shapes.
+    AgentStart {
+        #[serde(flatten)]
+        envelope: EventEnvelope,
+        /// Wire-format schema version. Adding new variants or fields is
+        /// minor (consumers ignore unknowns). Renaming / removing /
+        /// repurposing fields requires bumping this.
+        schema_version: u32,
+        /// Bead title, mirrored at session start for renderer headers.
+        title: String,
+        /// Profile (`base`, `rust`, …) the bead is running under.
+        profile: ProfileName,
+        /// Spec label this session belongs to.
+        spec_label: SpecLabel,
+        /// Unix-epoch milliseconds the session began. Distinct from
+        /// `envelope.ts_ms` (which stamps the event itself) so a single
+        /// log replay can recover both "when the session started" and
+        /// "when this start event was emitted".
+        started_at_ms: i64,
+        /// `Task` parent for subagent sessions. Populated by G4
+        /// (wx-b2f7k); `None` until then.
+        parent_tool_call_id: Option<ToolCallId>,
+    },
+
     /// Streaming text fragment from the agent.
-    MessageDelta { text: String },
+    MessageDelta {
+        #[serde(flatten)]
+        envelope: EventEnvelope,
+        text: String,
+    },
 
     /// Agent invoked a tool.
     ToolCall {
+        #[serde(flatten)]
+        envelope: EventEnvelope,
         id: ToolCallId,
         tool: String,
         params: serde_json::Value,
@@ -24,35 +120,261 @@ pub enum AgentEvent {
 
     /// Tool execution completed.
     ToolResult {
+        #[serde(flatten)]
+        envelope: EventEnvelope,
         id: ToolCallId,
         output: String,
         is_error: bool,
     },
 
     /// Agent finished one turn (a multi-turn session may emit several).
-    TurnEnd,
+    TurnEnd {
+        #[serde(flatten)]
+        envelope: EventEnvelope,
+    },
 
-    /// Agent session completed — the underlying process is exiting or the
-    /// final result line was observed.
+    /// Agent session completed — the underlying process is exiting or
+    /// the final result line was observed.
     SessionComplete {
+        #[serde(flatten)]
+        envelope: EventEnvelope,
         exit_code: i32,
         cost_usd: Option<f64>,
     },
 
     /// Agent context compaction has begun.
-    CompactionStart { reason: CompactionReason },
+    CompactionStart {
+        #[serde(flatten)]
+        envelope: EventEnvelope,
+        reason: CompactionReason,
+    },
 
-    /// Agent context compaction has ended; `aborted` distinguishes "compacted
-    /// successfully" from "compaction abandoned".
-    CompactionEnd { aborted: bool },
+    /// Agent context compaction has ended; `aborted` distinguishes
+    /// "compacted successfully" from "compaction abandoned".
+    CompactionEnd {
+        #[serde(flatten)]
+        envelope: EventEnvelope,
+        aborted: bool,
+    },
 
     /// Agent reported an error mid-stream (does not necessarily end the
     /// session — a `SessionComplete` may follow).
-    Error { message: String },
+    Error {
+        #[serde(flatten)]
+        envelope: EventEnvelope,
+        message: String,
+    },
+}
+
+impl AgentEvent {
+    /// Borrow the common envelope. All variants carry one — exhaustive
+    /// match keeps this in sync as new variants land (G3, wx-5au0d).
+    pub fn envelope(&self) -> &EventEnvelope {
+        match self {
+            AgentEvent::AgentStart { envelope, .. }
+            | AgentEvent::MessageDelta { envelope, .. }
+            | AgentEvent::ToolCall { envelope, .. }
+            | AgentEvent::ToolResult { envelope, .. }
+            | AgentEvent::TurnEnd { envelope }
+            | AgentEvent::SessionComplete { envelope, .. }
+            | AgentEvent::CompactionStart { envelope, .. }
+            | AgentEvent::CompactionEnd { envelope, .. }
+            | AgentEvent::Error { envelope, .. } => envelope,
+        }
+    }
+}
+
+/// Per-session monotonic envelope factory. Threads bead/molecule
+/// identity, iteration count, and source through every event the
+/// session emits, and stamps each one with the next `seq` value.
+///
+/// The `ts_ms` clock is injected so tests can pin time. Production
+/// callers pass a closure that returns the current `SystemTime` as unix
+/// millis; tests pass a counter-backed stub. Keeping the clock as a
+/// function (not a trait) avoids pulling tokio/chrono into the leaf
+/// `loom-events` crate.
+pub struct EnvelopeBuilder {
+    bead_id: BeadId,
+    molecule_id: Option<MoleculeId>,
+    iteration: u32,
+    source: Source,
+    seq: u64,
+    now_ms: Box<dyn FnMut() -> i64 + Send>,
+}
+
+impl EnvelopeBuilder {
+    /// New builder with `seq` starting at 0. `now` returns unix-epoch
+    /// milliseconds — typically `|| { SystemTime::now().duration_since(UNIX_EPOCH).as_millis() as i64 }`
+    /// at the driver boundary; tests pass a closure over a counter.
+    pub fn new<F>(
+        bead_id: BeadId,
+        molecule_id: Option<MoleculeId>,
+        iteration: u32,
+        source: Source,
+        now_ms: F,
+    ) -> Self
+    where
+        F: FnMut() -> i64 + Send + 'static,
+    {
+        Self {
+            bead_id,
+            molecule_id,
+            iteration,
+            source,
+            seq: 0,
+            now_ms: Box::new(now_ms),
+        }
+    }
+
+    /// Build the next envelope. `seq` advances by 1 each call. Named
+    /// `build` (not `next`) to avoid the `Iterator::next` shadowing
+    /// confusion clippy flags.
+    pub fn build(&mut self) -> EventEnvelope {
+        let ts_ms = (self.now_ms)();
+        let envelope = EventEnvelope {
+            bead_id: self.bead_id.clone(),
+            molecule_id: self.molecule_id.clone(),
+            iteration: self.iteration,
+            source: self.source,
+            ts_ms,
+            seq: self.seq,
+        };
+        self.seq += 1;
+        envelope
+    }
+
+    /// Borrow the current seq counter without advancing it. Tests use
+    /// this to assert monotonicity.
+    pub fn current_seq(&self) -> u64 {
+        self.seq
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used, reason = "tests use panicking helpers")]
+mod tests {
+    use super::*;
+
+    fn builder() -> EnvelopeBuilder {
+        let mut clock = 0_i64;
+        EnvelopeBuilder::new(
+            BeadId::new("wx-test").expect("valid id"),
+            None,
+            0,
+            Source::Agent,
+            move || {
+                clock += 1;
+                clock
+            },
+        )
+    }
+
+    /// Every `AgentEvent` variant carries the same envelope fields. Test
+    /// the schema by serializing one of each and asserting the top-level
+    /// JSON keys include the six envelope fields (plus `kind`).
+    #[test]
+    fn common_envelope_fields_present_on_every_variant() {
+        let mut b = builder();
+        let samples: Vec<AgentEvent> = vec![
+            AgentEvent::MessageDelta {
+                envelope: b.build(),
+                text: "x".into(),
+            },
+            AgentEvent::ToolCall {
+                envelope: b.build(),
+                id: ToolCallId::new("t1"),
+                tool: "Read".into(),
+                params: serde_json::Value::Null,
+            },
+            AgentEvent::ToolResult {
+                envelope: b.build(),
+                id: ToolCallId::new("t1"),
+                output: String::new(),
+                is_error: false,
+            },
+            AgentEvent::TurnEnd {
+                envelope: b.build(),
+            },
+            AgentEvent::SessionComplete {
+                envelope: b.build(),
+                exit_code: 0,
+                cost_usd: None,
+            },
+            AgentEvent::CompactionStart {
+                envelope: b.build(),
+                reason: CompactionReason::ContextLimit,
+            },
+            AgentEvent::CompactionEnd {
+                envelope: b.build(),
+                aborted: false,
+            },
+            AgentEvent::Error {
+                envelope: b.build(),
+                message: "boom".into(),
+            },
+        ];
+        for event in &samples {
+            let v = serde_json::to_value(event).expect("serialize");
+            let obj = v.as_object().expect("event serializes as object");
+            for key in ["kind", "bead_id", "iteration", "source", "ts_ms", "seq"] {
+                assert!(
+                    obj.contains_key(key),
+                    "event missing envelope key `{key}`: {event:?}\nserialized: {v}",
+                );
+            }
+            // molecule_id is `Option`; it's serialized as `null` when None
+            // but the key is still present.
+            assert!(
+                obj.contains_key("molecule_id"),
+                "event missing envelope key `molecule_id`: {event:?}",
+            );
+        }
+    }
+
+    /// `agent_start` carries the extras spec calls out: schema_version,
+    /// title, profile, spec_label, started_at_ms, parent_tool_call_id.
+    #[test]
+    fn agent_start_fields_present() {
+        let mut b = builder();
+        let event = AgentEvent::AgentStart {
+            envelope: b.build(),
+            schema_version: 1,
+            title: "smoke".into(),
+            profile: ProfileName::new("base"),
+            spec_label: SpecLabel::new("loom-harness"),
+            started_at_ms: 1_700_000_000_000,
+            parent_tool_call_id: None,
+        };
+        let v = serde_json::to_value(&event).expect("serialize");
+        let obj = v.as_object().expect("object");
+        for key in [
+            "schema_version",
+            "title",
+            "profile",
+            "spec_label",
+            "started_at_ms",
+            "parent_tool_call_id",
+        ] {
+            assert!(obj.contains_key(key), "agent_start missing `{key}`: {v}",);
+        }
+        assert_eq!(obj["kind"], "agent_start");
+        assert_eq!(obj["schema_version"], 1);
+    }
+
+    /// `EnvelopeBuilder::next` advances `seq` by exactly 1 each call.
+    /// Replay code reorders events by `(bead_id, seq)`; off-by-one or
+    /// reset bugs in the producer would break replay silently.
+    #[test]
+    fn seq_advances_monotonically() {
+        let mut b = builder();
+        let seqs: Vec<u64> = (0..10).map(|_| b.build().seq).collect();
+        let expected: Vec<u64> = (0..10).collect();
+        assert_eq!(seqs, expected);
+    }
 }
 
 /// Why the agent compacted its context.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CompactionReason {
     /// Approaching or exceeded the model context limit.

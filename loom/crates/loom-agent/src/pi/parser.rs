@@ -6,6 +6,7 @@
 //! reply that protects loom from a stalled extension.
 
 use loom_driver::agent::{AgentEvent, CompactionReason, LineParse, ParsedLine, ProtocolError};
+use loom_events::EventEnvelope;
 use serde::Serialize;
 use tracing::{debug, trace, warn};
 
@@ -69,16 +70,25 @@ fn encode_command<T: Serialize>(payload: &T) -> Result<String, ProtocolError> {
 }
 
 fn parse_event(event: PiEvent) -> ParsedLine {
+    // Parser-side events use the placeholder envelope; the session layer
+    // overwrites it with the real per-spawn envelope before emit. See
+    // `EventEnvelope::default` for the sentinel `wx-pending` bead id.
     match event {
         PiEvent::MessageUpdate { delta } => match delta {
             AssistantMessageDelta::TextDelta { text } => ParsedLine {
-                events: vec![AgentEvent::MessageDelta { text }],
+                events: vec![AgentEvent::MessageDelta {
+                    envelope: EventEnvelope::default(),
+                    text,
+                }],
                 response: None,
             },
             AssistantMessageDelta::Error { reason, message } => {
                 let message = message.or(reason).unwrap_or_default();
                 ParsedLine {
-                    events: vec![AgentEvent::Error { message }],
+                    events: vec![AgentEvent::Error {
+                        envelope: EventEnvelope::default(),
+                        message,
+                    }],
                     response: None,
                 }
             }
@@ -93,6 +103,7 @@ fn parse_event(event: PiEvent) -> ParsedLine {
             args,
         } => ParsedLine {
             events: vec![AgentEvent::ToolCall {
+                envelope: EventEnvelope::default(),
                 id: tool_call_id,
                 tool: tool_name,
                 params: args,
@@ -111,6 +122,7 @@ fn parse_event(event: PiEvent) -> ParsedLine {
             };
             ParsedLine {
                 events: vec![AgentEvent::ToolResult {
+                    envelope: EventEnvelope::default(),
                     id: tool_call_id,
                     output,
                     is_error,
@@ -119,11 +131,14 @@ fn parse_event(event: PiEvent) -> ParsedLine {
             }
         }
         PiEvent::TurnEnd => ParsedLine {
-            events: vec![AgentEvent::TurnEnd],
+            events: vec![AgentEvent::TurnEnd {
+                envelope: EventEnvelope::default(),
+            }],
             response: None,
         },
         PiEvent::AgentEnd => ParsedLine {
             events: vec![AgentEvent::SessionComplete {
+                envelope: EventEnvelope::default(),
                 exit_code: 0,
                 cost_usd: None,
             }],
@@ -131,12 +146,16 @@ fn parse_event(event: PiEvent) -> ParsedLine {
         },
         PiEvent::CompactionStart { reason } => ParsedLine {
             events: vec![AgentEvent::CompactionStart {
+                envelope: EventEnvelope::default(),
                 reason: map_compaction_reason(reason.as_deref()),
             }],
             response: None,
         },
         PiEvent::CompactionEnd { aborted } => ParsedLine {
-            events: vec![AgentEvent::CompactionEnd { aborted }],
+            events: vec![AgentEvent::CompactionEnd {
+                envelope: EventEnvelope::default(),
+                aborted,
+            }],
             response: None,
         },
         PiEvent::ToolExecutionUpdate
@@ -284,7 +303,9 @@ mod tests {
         let p = parse(line);
         assert_eq!(p.events.len(), 1);
         match &p.events[0] {
-            AgentEvent::ToolCall { id, tool, params } => {
+            AgentEvent::ToolCall {
+                id, tool, params, ..
+            } => {
                 assert_eq!(id.as_str(), "tc-1");
                 assert_eq!(tool, "Read");
                 assert_eq!(params["path"], "/a");
@@ -325,7 +346,7 @@ mod tests {
         let p = parse(line);
         assert_eq!(p.events.len(), 1);
         match &p.events[0] {
-            AgentEvent::MessageDelta { text } => assert_eq!(text, "hello"),
+            AgentEvent::MessageDelta { text, .. } => assert_eq!(text, "hello"),
             other => panic!("expected MessageDelta, got {other:?}"),
         }
     }
@@ -336,7 +357,7 @@ mod tests {
         let p = parse(line);
         assert_eq!(p.events.len(), 1);
         match &p.events[0] {
-            AgentEvent::Error { message } => assert_eq!(message, "user aborted"),
+            AgentEvent::Error { message, .. } => assert_eq!(message, "user aborted"),
             other => panic!("expected Error, got {other:?}"),
         }
     }
@@ -358,6 +379,7 @@ mod tests {
                 id,
                 output,
                 is_error,
+                ..
             } => {
                 assert_eq!(id.as_str(), "tc-2");
                 assert_eq!(output, "ok");
@@ -386,7 +408,7 @@ mod tests {
     fn turn_end_yields_turn_end_event() {
         let line = r#"{"type":"turn_end","message":{"x":1},"toolResults":[]}"#;
         let p = parse(line);
-        assert!(matches!(p.events[..], [AgentEvent::TurnEnd]));
+        assert!(matches!(p.events[..], [AgentEvent::TurnEnd { .. }]));
     }
 
     #[test]
@@ -398,6 +420,7 @@ mod tests {
             AgentEvent::SessionComplete {
                 exit_code,
                 cost_usd,
+                ..
             } => {
                 assert_eq!(*exit_code, 0);
                 assert!(cost_usd.is_none());
@@ -413,7 +436,8 @@ mod tests {
         assert!(matches!(
             p.events[..],
             [AgentEvent::CompactionStart {
-                reason: CompactionReason::ContextLimit
+                reason: CompactionReason::ContextLimit,
+                ..
             }]
         ));
     }
@@ -425,7 +449,8 @@ mod tests {
         assert!(matches!(
             p.events[..],
             [AgentEvent::CompactionStart {
-                reason: CompactionReason::ContextLimit
+                reason: CompactionReason::ContextLimit,
+                ..
             }]
         ));
     }
@@ -437,7 +462,8 @@ mod tests {
         assert!(matches!(
             p.events[..],
             [AgentEvent::CompactionStart {
-                reason: CompactionReason::UserRequested
+                reason: CompactionReason::UserRequested,
+                ..
             }]
         ));
     }
@@ -449,7 +475,8 @@ mod tests {
         assert!(matches!(
             p.events[..],
             [AgentEvent::CompactionStart {
-                reason: CompactionReason::Unknown
+                reason: CompactionReason::Unknown,
+                ..
             }]
         ));
     }
@@ -461,7 +488,7 @@ mod tests {
         let p = parse(line);
         assert!(matches!(
             p.events[..],
-            [AgentEvent::CompactionEnd { aborted: true }]
+            [AgentEvent::CompactionEnd { aborted: true, .. }]
         ));
     }
 

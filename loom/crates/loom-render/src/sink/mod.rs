@@ -5,8 +5,8 @@ use std::time::SystemTime;
 
 use tracing::info;
 
-use loom_events::AgentEvent;
 use loom_events::identifier::{BeadId, SpecLabel};
+use loom_events::{AgentEvent, EventEnvelope};
 
 mod error;
 
@@ -237,12 +237,16 @@ mod tests {
             open_sink_with_sink_writer(dir.path(), &label, &bead, when).expect("open");
 
         sink.emit(&AgentEvent::ToolCall {
+            envelope: EventEnvelope::default(),
             id: ToolCallId::new("t1"),
             tool: "Read".to_string(),
             params: json!({"file_path": "src/lib.rs"}),
         })
         .expect("emit");
-        sink.emit(&AgentEvent::TurnEnd).expect("emit");
+        sink.emit(&AgentEvent::TurnEnd {
+            envelope: EventEnvelope::default(),
+        })
+        .expect("emit");
 
         let path = sink.log_path().to_path_buf();
         sink.finish(BeadOutcome::Done).expect("finish");
@@ -274,6 +278,7 @@ mod tests {
         )
         .expect("open");
         sink.emit(&AgentEvent::CompactionStart {
+            envelope: EventEnvelope::default(),
             reason: CompactionReason::ContextLimit,
         })
         .expect("emit");
@@ -326,7 +331,10 @@ mod tests {
             SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
         )
         .expect("open phase sink");
-        sink.emit(&AgentEvent::TurnEnd).expect("emit");
+        sink.emit(&AgentEvent::TurnEnd {
+            envelope: EventEnvelope::default(),
+        })
+        .expect("emit");
         let path = sink.log_path().to_path_buf();
         sink.finish(BeadOutcome::Done).expect("finish");
 
