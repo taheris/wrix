@@ -3201,7 +3201,10 @@ test_agent_start_fields() {
     cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
         event::tests::agent_start_fields_present
 }
-test_cancellation_clean_close() { _pending_stub cancellation_clean_close; }
+test_cancellation_clean_close() {
+    cargo_run test -p loom-driver --test logging -- --exact --nocapture --quiet \
+        run_finish_finalizes_dangling_running_indicator
+}
 test_common_envelope_fields() {
     cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
         event::tests::common_envelope_fields_present_on_every_variant

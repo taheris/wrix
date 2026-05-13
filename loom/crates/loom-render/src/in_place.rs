@@ -24,12 +24,26 @@
 //! Callers must call [`end`] explicitly from every exit path; the
 //! renderer's outer shutdown sequence is the right place.
 
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 
 /// The ANSI escape that clears from cursor to end-of-line. Used after
 /// `\r` to wipe the previously-rendered indicator before writing the
 /// updated text.
 pub const CLEAR_TO_EOL: &str = "\x1b[K";
+
+/// Probe stdout for TTY-attached + size-reachable state. The CLI flips
+/// the in-place running indicator on when this returns `true` and the
+/// user did not pass `--plain`/`--json`/`--raw`. We use crossterm's
+/// `terminal::size` rather than just `IsTerminal::is_terminal` because
+/// some CI runners attach a pseudo-tty but report a 0-width terminal —
+/// the indicator's `\r` overwrite pattern requires a real width to
+/// avoid mangling output. R3 (wx-mpci2).
+pub fn stdout_supports_indicator() -> bool {
+    if !io::stdout().is_terminal() {
+        return false;
+    }
+    matches!(crossterm::terminal::size(), Ok((cols, _)) if cols > 0)
+}
 
 /// Active in-place running indicator. Constructed when a tool starts
 /// running; the caller invokes [`tick`] to refresh the elapsed-time

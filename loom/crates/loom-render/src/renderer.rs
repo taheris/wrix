@@ -5,9 +5,10 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use crate::clock::{Clock, SystemClock};
+use crate::in_place::CLEAR_TO_EOL;
 use crate::tool_body;
 use loom_events::AgentEvent;
-use loom_events::identifier::{BeadId, ProfileName};
+use loom_events::identifier::{BeadId, ProfileName, ToolCallId};
 
 /// Final outcome of a bead spawn — drives the closing line color and glyph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,6 +111,19 @@ pub struct TerminalRenderer {
     /// a 200-line `Read` payload or a 5-line `Bash` stderr — the
     /// `cap_body` recovery hint loses its tool context.
     tool_context: std::collections::HashMap<loom_events::identifier::ToolCallId, (String, Value)>,
+    /// In-place "running indicator" state for the top-level tool call
+    /// currently in-flight (R3, wx-mpci2). When `Some((id, started,
+    /// summary, indent))`, a `\r`-overwritable line has been written
+    /// for that call and the matching `ToolResult` should finalize it.
+    /// Any other event must clear/finalize the line first so it does
+    /// not interleave with running-state text.
+    running: Option<(ToolCallId, Instant, String, String)>,
+    /// `true` when the renderer should drive the in-place running
+    /// indicator. Disabled in `Plain`/`Json`/`Raw` modes, when running
+    /// in parallel (multiple `\r` regions don't compose), and when
+    /// the writer is known to be non-TTY. The CLI surface decides this
+    /// per spec (R5, wx-zorjk wires it through `RenderMode::select`).
+    indicator_enabled: bool,
     header_printed: bool,
     closed: bool,
 }
@@ -150,6 +164,12 @@ impl TerminalRenderer {
             tool_count: 0,
             indent_by_tool: std::collections::HashMap::new(),
             tool_context: std::collections::HashMap::new(),
+            running: None,
+            // Indicator is enabled by default when color is on and we're
+            // not in parallel mode — both are proxies for "interactive
+            // TTY, single-bead". Tests pass `color=false` to disable
+            // the indicator so captured-buffer assertions stay stable.
+            indicator_enabled: color && !parallel,
             header_printed: false,
             closed: false,
         }
@@ -191,6 +211,9 @@ impl TerminalRenderer {
                 parent_tool_call_id,
                 ..
             } => {
+                // R3 — if another tool's running line is open, finalize
+                // it before laying down a nested or sibling call.
+                self.finalize_running_with_glyph("…")?;
                 self.tool_count += 1;
                 let depth = match parent_tool_call_id {
                     Some(parent) => self.indent_by_tool.get(parent).copied().unwrap_or(0) + 1,
@@ -201,42 +224,80 @@ impl TerminalRenderer {
                     .insert(id.clone(), (tool.clone(), params.clone()));
                 let summary = tool_body::summary_cell(tool, params);
                 let indent: String = "  ".repeat(depth);
-                let line = if self.parallel {
-                    format!("  [{}] {indent}{summary}\n", self.bead_id.as_str())
+                if self.indicator_enabled
+                    && parent_tool_call_id.is_none()
+                    && !matches!(self.mode, RenderMode::Verbose)
+                {
+                    // Default-mode + top-level + TTY: open the in-place
+                    // running indicator. Subsequent events overwrite this
+                    // line via `\r` + clear-to-EOL until ToolResult fires.
+                    let head = format!("  {indent}{summary}");
+                    let running_line = format!("{head}   running... 0.0s");
+                    self.out.write_all(running_line.as_bytes())?;
+                    self.out.flush()?;
+                    self.running = Some((
+                        id.clone(),
+                        self.clock.now(),
+                        summary.clone(),
+                        indent.clone(),
+                    ));
                 } else {
-                    format!("  {indent}{summary}\n")
-                };
-                self.out.write_all(line.as_bytes())?;
-                self.out.flush()?;
+                    let line = if self.parallel {
+                        format!("  [{}] {indent}{summary}\n", self.bead_id.as_str())
+                    } else {
+                        format!("  {indent}{summary}\n")
+                    };
+                    self.out.write_all(line.as_bytes())?;
+                    self.out.flush()?;
+                }
             }
             AgentEvent::ToolResult {
                 id,
                 output,
                 is_error,
                 ..
-            } if matches!(self.mode, RenderMode::Verbose) => {
-                let depth = self.indent_by_tool.get(id).copied().unwrap_or(0);
-                let indent: String = "  ".repeat(depth + 1);
-                let capped = tool_body::cap_body(output, self.bead_id.as_str(), id.as_str());
-                for body_line in capped.lines() {
-                    let line = if self.parallel {
-                        format!("  [{}] {indent}{body_line}\n", self.bead_id.as_str(),)
-                    } else {
-                        format!("{indent}{body_line}\n")
-                    };
-                    self.out.write_all(line.as_bytes())?;
+            } => {
+                // R3 — finalize the running indicator if this result
+                // matches the open call. Non-matching results (which
+                // shouldn't happen in practice but might under nesting)
+                // close any open running line first to avoid orphaned
+                // `\r` regions.
+                let matches_running = self
+                    .running
+                    .as_ref()
+                    .is_some_and(|(running_id, _, _, _)| running_id == id);
+                if matches_running {
+                    let glyph = if *is_error { "✗" } else { "✓" };
+                    self.finalize_running_with_glyph(glyph)?;
+                } else {
+                    self.finalize_running_with_glyph("…")?;
                 }
-                if *is_error {
-                    let marker = format!("{indent}[tool error]\n");
-                    self.out.write_all(marker.as_bytes())?;
+                if matches!(self.mode, RenderMode::Verbose) {
+                    let depth = self.indent_by_tool.get(id).copied().unwrap_or(0);
+                    let indent: String = "  ".repeat(depth + 1);
+                    let capped = tool_body::cap_body(output, self.bead_id.as_str(), id.as_str());
+                    for body_line in capped.lines() {
+                        let line = if self.parallel {
+                            format!("  [{}] {indent}{body_line}\n", self.bead_id.as_str(),)
+                        } else {
+                            format!("{indent}{body_line}\n")
+                        };
+                        self.out.write_all(line.as_bytes())?;
+                    }
+                    if *is_error {
+                        let marker = format!("{indent}[tool error]\n");
+                        self.out.write_all(marker.as_bytes())?;
+                    }
+                    self.out.flush()?;
                 }
-                self.out.flush()?;
             }
             AgentEvent::TextDelta { text, .. } if matches!(self.mode, RenderMode::Verbose) => {
+                self.finalize_running_with_glyph("…")?;
                 self.out.write_all(text.as_bytes())?;
                 self.out.flush()?;
             }
             AgentEvent::Error { message, .. } => {
+                self.finalize_running_with_glyph("✗")?;
                 let line = if self.parallel {
                     format!("  [{}] error: {message}\n", self.bead_id.as_str())
                 } else {
@@ -247,6 +308,34 @@ impl TerminalRenderer {
             }
             _ => {}
         }
+        Ok(())
+    }
+
+    /// Close the in-place running line — if one is open — with a final
+    /// `\r` + clear-to-EOL + `<summary>   <glyph> Ns\n` line. `glyph` is
+    /// `✓` on clean ToolResult, `✗` on errored ToolResult, `…` when an
+    /// intervening event preempted the result (a long-running tool
+    /// that emitted unrelated state mid-flight). Idempotent — calling
+    /// against `running = None` is a no-op so cleanup paths can call
+    /// unconditionally.
+    fn finalize_running_with_glyph(&mut self, glyph: &str) -> io::Result<()> {
+        let Some((_, started, summary, indent)) = self.running.take() else {
+            return Ok(());
+        };
+        let elapsed = self.clock.now().saturating_duration_since(started);
+        let secs = elapsed.as_secs_f64();
+        self.out.write_all(b"\r")?;
+        self.out.write_all(CLEAR_TO_EOL.as_bytes())?;
+        let final_line = if self.parallel {
+            format!(
+                "  [{}] {indent}{summary}   {glyph} {secs:.1}s\n",
+                self.bead_id.as_str(),
+            )
+        } else {
+            format!("  {indent}{summary}   {glyph} {secs:.1}s\n")
+        };
+        self.out.write_all(final_line.as_bytes())?;
+        self.out.flush()?;
         Ok(())
     }
 
@@ -264,6 +353,15 @@ impl TerminalRenderer {
     }
 
     fn write_finish(&mut self, outcome: BeadOutcome, elapsed: Duration) -> io::Result<()> {
+        // R3 — close out any open running line before the bead's
+        // closing summary so a cancelled / failed bead doesn't leave a
+        // dangling `\r` region for the next renderer to inherit.
+        let cleanup_glyph = match outcome {
+            BeadOutcome::Done => "✓",
+            BeadOutcome::Failed => "✗",
+            BeadOutcome::Retry => "↻",
+        };
+        self.finalize_running_with_glyph(cleanup_glyph)?;
         let (glyph, word, color) = match outcome {
             BeadOutcome::Done => ("✓", "done", ANSI_GREEN),
             BeadOutcome::Failed => ("✗", "failed", ANSI_RED),
@@ -298,6 +396,18 @@ impl TerminalRenderer {
     /// Whether the header line has been printed.
     pub fn header_printed(&self) -> bool {
         self.header_printed
+    }
+}
+
+impl Drop for TerminalRenderer {
+    /// Best-effort cleanup of any open in-place running line so a
+    /// panicking / dropped renderer never leaves a dangling `\r`
+    /// region. The explicit cleanup contract still lives in
+    /// [`finish`] — Drop is the safety net.
+    fn drop(&mut self) {
+        if self.running.is_some() {
+            let _ = self.finalize_running_with_glyph("⚠");
+        }
     }
 }
 

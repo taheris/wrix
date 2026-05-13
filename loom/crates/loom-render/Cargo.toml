@@ -14,6 +14,7 @@ publish.workspace = true
 # H1 (wx-x3vg3) staged imara-diff / crossterm / owo-colors / colored_json
 # at the workspace level; H2 onwards wires them through this crate.
 [dependencies]
+crossterm = { workspace = true }
 displaydoc = { workspace = true }
 imara-diff = { workspace = true }
 loom-events = { workspace = true }

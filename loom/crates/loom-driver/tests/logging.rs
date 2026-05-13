@@ -67,6 +67,26 @@ fn open_sink(
     Ok((s, buf))
 }
 
+/// Open a sink whose `TerminalRenderer` has `color=true` so the R3
+/// in-place running indicator is active. Used by the cancellation /
+/// running-indicator tests that need to assert `\r` + clear-to-EOL
+/// sequences appear in the captured buffer.
+fn open_sink_with_indicator(
+    logs_root: &Path,
+    spec: &str,
+    bead: &str,
+    when_secs: u64,
+    mode: RenderMode,
+) -> Result<(LogSink, Arc<Mutex<Vec<u8>>>)> {
+    let label = SpecLabel::new(spec);
+    let id = BeadId::new(bead)?;
+    let (buf, sink) = captured();
+    let renderer = TerminalRenderer::new(sink, mode, id.clone(), false, true);
+    let when = SystemTime::UNIX_EPOCH + Duration::from_secs(when_secs);
+    let s = LogSink::open_in_at(logs_root, &label, &id, Some(renderer), when)?;
+    Ok((s, buf))
+}
+
 fn touch(path: &Path, body: &str) {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).expect("mkdir");
@@ -670,6 +690,122 @@ fn run_default_renders_per_tool_summary_cells() -> Result<()> {
     if !term.contains("Bash") || !term.contains("cargo build") {
         return Err(anyhow!(
             "Bash line missing summary cell with truncated cmd: {term:?}",
+        ));
+    }
+    Ok(())
+}
+
+//---------------------------------------------------------------------------
+// R3 (wx-mpci2) — `loom run`'s default mode opens an in-place running
+// indicator for top-level tool calls. ToolCall writes `<summary> running...`
+// without a newline; the matching ToolResult overwrites with `\r` +
+// clear-to-EOL + `<summary> ✓ Ns\n`. Pin this end-to-end through LogSink.
+//---------------------------------------------------------------------------
+#[test]
+fn run_default_indicator_emits_overwrite_pattern_on_tool_result() -> Result<()> {
+    use loom_render::in_place::CLEAR_TO_EOL;
+
+    let dir = tempfile::tempdir()?;
+    let (mut sink, buf) = open_sink_with_indicator(
+        dir.path(),
+        "alpha",
+        "wx-r3a",
+        1_700_000_000,
+        RenderMode::Default,
+    )?;
+
+    sink.emit(&AgentEvent::ToolCall {
+        envelope: EventEnvelope::default(),
+        id: ToolCallId::new("b1"),
+        tool: "Bash".to_string(),
+        params: json!({"command": "cargo test"}),
+        parent_tool_call_id: None,
+    })?;
+    sink.emit(&AgentEvent::ToolResult {
+        envelope: EventEnvelope::default(),
+        id: ToolCallId::new("b1"),
+        output: "ok".to_string(),
+        is_error: false,
+    })?;
+    sink.finish(BeadOutcome::Done)?;
+
+    let term = captured_str(&buf);
+    if !term.contains("running...") {
+        return Err(anyhow!(
+            "indicator must open with `running...` text: {term:?}",
+        ));
+    }
+    if !term.contains('\r') {
+        return Err(anyhow!(
+            "ToolResult must overwrite running line with `\\r`: {term:?}",
+        ));
+    }
+    if !term.contains(CLEAR_TO_EOL) {
+        return Err(anyhow!(
+            "ToolResult overwrite must include CLEAR_TO_EOL escape: {term:?}",
+        ));
+    }
+    if !term.contains("✓") {
+        return Err(anyhow!(
+            "successful ToolResult must finalize with ✓: {term:?}",
+        ));
+    }
+    Ok(())
+}
+
+//---------------------------------------------------------------------------
+// R3 stub promotion — `test_cancellation_clean_close`. The sink can be
+// finalized mid-tool (cancel / panic / signal). Renderer must NOT leave
+// a dangling `\r` region — `finish` finalizes any open running line with
+// a glyph that matches the outcome, and the captured buffer ends with a
+// closing newline so the next renderer (if any) starts on a fresh line.
+//---------------------------------------------------------------------------
+#[test]
+fn run_finish_finalizes_dangling_running_indicator() -> Result<()> {
+    use loom_render::in_place::CLEAR_TO_EOL;
+
+    let dir = tempfile::tempdir()?;
+    let (mut sink, buf) = open_sink_with_indicator(
+        dir.path(),
+        "alpha",
+        "wx-r3b",
+        1_700_000_000,
+        RenderMode::Default,
+    )?;
+
+    sink.emit(&AgentEvent::ToolCall {
+        envelope: EventEnvelope::default(),
+        id: ToolCallId::new("b1"),
+        tool: "Bash".to_string(),
+        params: json!({"command": "sleep 60"}),
+        parent_tool_call_id: None,
+    })?;
+    // No ToolResult arrives — simulate cancellation. The bead is being
+    // closed mid-tool: `finish` must clean up the indicator region.
+    sink.finish(BeadOutcome::Failed)?;
+
+    let term = captured_str(&buf);
+    if !term.ends_with('\n') {
+        return Err(anyhow!(
+            "captured buffer must end with `\\n` so the next renderer starts on a fresh \
+             line — got: {term:?}",
+        ));
+    }
+    if !term.contains(CLEAR_TO_EOL) {
+        return Err(anyhow!(
+            "indicator cleanup must emit CLEAR_TO_EOL before the closing line: {term:?}",
+        ));
+    }
+    // The finish line marks the bead as failed; the running indicator's
+    // own finalization glyph (✗) appears on its own line above.
+    if !term.contains("failed") {
+        return Err(anyhow!(
+            "bead closing line must read `failed` on cancelled finish: {term:?}",
+        ));
+    }
+    if !term.contains("✗") {
+        return Err(anyhow!(
+            "cancelled tool's running line must finalize with ✗: {term:?}",
         ));
     }
     Ok(())
