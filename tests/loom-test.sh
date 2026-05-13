@@ -3191,7 +3191,10 @@ _pending_stub() {
     exit 77
 }
 
-test_agent_event_deserialize_round_trip() { _pending_stub agent_event_deserialize_round_trip; }
+test_agent_event_deserialize_round_trip() {
+    cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
+        event::tests::agent_event_deserialize_round_trip
+}
 test_agent_start_fields() {
     cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
         event::tests::agent_start_fields_present
@@ -3206,7 +3209,10 @@ test_driver_events_rendered() { _pending_stub driver_events_rendered; }
 test_edit_write_imara_diff() { _pending_stub edit_write_imara_diff; }
 test_fixup_bead_bonded_to_molecule() { _pending_stub fixup_bead_bonded_to_molecule; }
 test_fixup_refuses_unbonded_origin() { _pending_stub fixup_refuses_unbonded_origin; }
-test_flat_variant_shape() { _pending_stub flat_variant_shape; }
+test_flat_variant_shape() {
+    cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
+        event::tests::flat_variant_shape_has_no_nested_envelopes
+}
 test_in_place_indicator_disabled_when_inappropriate() { _pending_stub in_place_indicator_disabled_when_inappropriate; }
 test_in_place_running_indicator() { _pending_stub in_place_running_indicator; }
 test_json_mode_pretty_prints() { _pending_stub json_mode_pretty_prints; }
@@ -3321,7 +3327,10 @@ test_tool_body_truncation_policy() { _pending_stub tool_body_truncation_policy; 
 test_tool_call_result_pairing() { _pending_stub tool_call_result_pairing; }
 test_unknown_driver_kind_renders() { _pending_stub unknown_driver_kind_renders; }
 test_unknown_tool_fallback() { _pending_stub unknown_tool_fallback; }
-test_unknown_variants_tolerated() { _pending_stub unknown_variants_tolerated; }
+test_unknown_variants_tolerated() {
+    cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
+        event::tests::unknown_variants_fail_with_a_loud_error
+}
 
 #-----------------------------------------------------------------------------
 # Dispatch

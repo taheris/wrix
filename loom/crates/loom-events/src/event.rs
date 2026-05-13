@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::identifier::{BeadId, MoleculeId, ProfileName, SpecLabel, ToolCallId};
 
@@ -13,7 +13,7 @@ use crate::identifier::{BeadId, MoleculeId, ProfileName, SpecLabel, ToolCallId};
 /// (parser or driver-event emitter) maintains a per-session counter and
 /// stamps each emitted event with the next value. Replay code groups
 /// events into runs by sorting on `(bead_id, seq)`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EventEnvelope {
     pub bead_id: BeadId,
     /// Optional because driver-emitted events tied to a molecule that has
@@ -56,7 +56,7 @@ impl Default for EventEnvelope {
 /// Where the event originated. Driver-side events (verdict gate, push
 /// gate, infra failures) carry `Driver`; agent-side events (tool calls,
 /// message deltas, etc.) carry `Agent`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Source {
     Agent,
@@ -72,7 +72,14 @@ pub enum Source {
 /// stream the terminal renderer consumes (see [`crate::lib`] consumers).
 /// G2 (wx-gl3mq) adds the matching `Deserialize` impl so `loom logs` can
 /// replay its own output.
-#[derive(Debug, Clone, Serialize)]
+/// **Deserialize support.** G2 (wx-gl3mq) adds `Deserialize` so `loom logs`
+/// can replay its own JSONL output through the same enum it wrote. Each
+/// variant is a struct-style `#[serde(flatten)]`-onto-envelope, so the
+/// wire shape is flat and every consumer dispatches on `kind`. Unknown
+/// `kind` values fail deserialization — `loom logs` is the only intended
+/// consumer today, and a quietly-dropped variant is worse than a loud
+/// failure when the log format drifts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AgentEvent {
     /// Session start — the first event in any agent log. Carries the
@@ -251,7 +258,11 @@ impl EnvelopeBuilder {
 }
 
 #[cfg(test)]
-#[expect(clippy::expect_used, reason = "tests use panicking helpers")]
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "tests use panicking helpers"
+)]
 mod tests {
     use super::*;
 
@@ -361,7 +372,131 @@ mod tests {
         assert_eq!(obj["schema_version"], 1);
     }
 
-    /// `EnvelopeBuilder::next` advances `seq` by exactly 1 each call.
+    /// G2 — every variant must serialize-then-deserialize back to the
+    /// same value. Catches any `#[serde(flatten)]` / `#[serde(tag)]`
+    /// interaction bugs that would corrupt the wire shape.
+    #[test]
+    fn agent_event_deserialize_round_trip() {
+        let mut b = builder();
+        let samples: Vec<AgentEvent> = vec![
+            AgentEvent::AgentStart {
+                envelope: b.build(),
+                schema_version: 1,
+                title: "smoke".into(),
+                profile: ProfileName::new("base"),
+                spec_label: SpecLabel::new("loom-harness"),
+                started_at_ms: 1_700_000_000_000,
+                parent_tool_call_id: None,
+            },
+            AgentEvent::MessageDelta {
+                envelope: b.build(),
+                text: "hello\nworld".into(),
+            },
+            AgentEvent::ToolCall {
+                envelope: b.build(),
+                id: ToolCallId::new("t1"),
+                tool: "Read".into(),
+                params: serde_json::json!({"file_path": "src/lib.rs"}),
+            },
+            AgentEvent::ToolResult {
+                envelope: b.build(),
+                id: ToolCallId::new("t1"),
+                output: "ok".into(),
+                is_error: false,
+            },
+            AgentEvent::TurnEnd {
+                envelope: b.build(),
+            },
+            AgentEvent::SessionComplete {
+                envelope: b.build(),
+                exit_code: 0,
+                cost_usd: Some(0.5),
+            },
+            AgentEvent::CompactionStart {
+                envelope: b.build(),
+                reason: CompactionReason::ContextLimit,
+            },
+            AgentEvent::CompactionEnd {
+                envelope: b.build(),
+                aborted: false,
+            },
+            AgentEvent::Error {
+                envelope: b.build(),
+                message: "boom".into(),
+            },
+        ];
+        for event in samples {
+            let json = serde_json::to_string(&event).expect("serialize");
+            let back: AgentEvent = serde_json::from_str(&json).unwrap_or_else(|e| {
+                panic!("round-trip parse failed for {event:?}: {e}\njson={json}")
+            });
+            assert_eq!(back, event, "round-trip mismatch\njson={json}");
+        }
+    }
+
+    /// G2 — the wire shape is flat: one `kind` discriminator + envelope
+    /// fields + variant-specific payload, all at the same nesting level.
+    /// No `delta: { ... }` sub-objects. Pin this with an explicit
+    /// per-variant JSON shape check.
+    #[test]
+    fn flat_variant_shape_has_no_nested_envelopes() {
+        let mut b = builder();
+        let event = AgentEvent::ToolCall {
+            envelope: b.build(),
+            id: ToolCallId::new("t1"),
+            tool: "Read".into(),
+            params: serde_json::json!({"file_path": "src/lib.rs"}),
+        };
+        let v = serde_json::to_value(&event).expect("serialize");
+        let obj = v.as_object().expect("object");
+        // Top-level must have envelope fields directly — no nesting.
+        for key in [
+            "kind",
+            "bead_id",
+            "iteration",
+            "source",
+            "ts_ms",
+            "seq",
+            "id",
+            "tool",
+            "params",
+        ] {
+            assert!(obj.contains_key(key), "flat key `{key}` missing from {v}",);
+        }
+        // Anti-test: there must NOT be any wrapping `delta`/`payload`/
+        // `assistantMessageEvent` keys that would indicate nesting.
+        for forbidden in ["delta", "payload", "assistantMessageEvent"] {
+            assert!(
+                !obj.contains_key(forbidden),
+                "forbidden wrapper key `{forbidden}` present in {v}",
+            );
+        }
+    }
+
+    /// G2 — unknown `kind` values must fail deserialization loudly. The
+    /// log format is small and well-known; a silent skip on unknown
+    /// variants would mask the on-disk format drifting from the in-code
+    /// enum. Other producers (driver-side `driver_event` from G3) must
+    /// declare themselves as variants here before they appear in logs.
+    #[test]
+    fn unknown_variants_fail_with_a_loud_error() {
+        let bogus = serde_json::json!({
+            "kind": "this_kind_does_not_exist_yet",
+            "bead_id": "wx-test",
+            "molecule_id": null,
+            "iteration": 0,
+            "source": "agent",
+            "ts_ms": 0,
+            "seq": 0
+        });
+        let res: Result<AgentEvent, _> = serde_json::from_value(bogus);
+        assert!(
+            res.is_err(),
+            "unknown `kind` must fail to deserialize — got {res:?}",
+        );
+    }
+
+    /// `EnvelopeBuilder::build` advances `seq` by exactly 1 each call.
     /// Replay code reorders events by `(bead_id, seq)`; off-by-one or
     /// reset bugs in the producer would break replay silently.
     #[test]
@@ -374,7 +509,7 @@ mod tests {
 }
 
 /// Why the agent compacted its context.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CompactionReason {
     /// Approaching or exceeded the model context limit.
