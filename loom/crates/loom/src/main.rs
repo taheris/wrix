@@ -27,8 +27,8 @@ use loom_driver::scratch::resolve_scratch_key;
 use loom_driver::state::StateDb;
 use loom_workflow::check::{IterationCap, ProductionCheckController, check_loop as run_check_loop};
 use loom_workflow::msg::{
-    DISMISS_NOTE, FastReply, build_fast_reply, build_rows, filter_msg_beads, kind_of,
-    resolve_target, spec_label_of,
+    DISMISS_NOTE, build_rows, compose_option_note, filter_msg_beads, kind_of, resolve_target,
+    spec_label_of,
 };
 use loom_workflow::run::{
     Parallelism, ProductionAgentLoopController, RetryPolicy, RunMode, SessionResult, run_loop,
@@ -150,18 +150,35 @@ enum Command {
         /// Filter to a specific spec label.
         #[arg(long, short = 's', value_name = "LABEL")]
         spec: Option<String>,
-        /// Select bead by 1-based index in the printed list.
-        #[arg(short = 'n', value_name = "N")]
-        index: Option<u32>,
-        /// Select bead by id.
-        #[arg(short = 'i', value_name = "ID")]
-        id: Option<String>,
-        /// Fast-reply: integer chooses option N for clarify beads; anything
-        /// else (and any choice for blocked beads) is stored verbatim.
-        #[arg(short = 'a', value_name = "CHOICE")]
-        answer: Option<String>,
+        /// Select bead by 1-based index in the printed list. Mutually
+        /// exclusive with `-b`.
+        #[arg(long, short = 'n', value_name = "N", conflicts_with = "bead")]
+        number: Option<u32>,
+        /// Select bead by id. Mutually exclusive with `-n`.
+        #[arg(long, short = 'b', value_name = "ID")]
+        bead: Option<String>,
+        /// Fast-reply with the body of `### Option <int>` for a clarify
+        /// bead. Validated — missing subsection exits non-zero before any
+        /// bd state is mutated. Mutually exclusive with `-r` and `-d`.
+        #[arg(
+            long,
+            short = 'o',
+            value_name = "INT",
+            conflicts_with_all = ["reply", "dismiss"]
+        )]
+        option: Option<u32>,
+        /// Fast-reply with verbatim text. Works on any bead regardless of
+        /// whether it has an `## Options` section. Mutually exclusive with
+        /// `-o` and `-d`.
+        #[arg(
+            long,
+            short = 'r',
+            value_name = "TEXT",
+            conflicts_with_all = ["option", "dismiss"]
+        )]
+        reply: Option<String>,
         /// Dismiss the bead (write canonical note + remove the loom:* label).
-        #[arg(short = 'd')]
+        #[arg(long, short = 'd')]
         dismiss: bool,
     },
     /// Decompose the active spec into beads (four-tier detection).
@@ -245,11 +262,12 @@ fn main() -> ExitCode {
         Command::Check { spec } => run_check(&workspace, spec, agent_override),
         Command::Msg {
             spec,
-            index,
-            id,
-            answer,
+            number,
+            bead,
+            option,
+            reply,
             dismiss,
-        } => run_msg(&workspace, spec, index, id, answer, dismiss),
+        } => run_msg(&workspace, spec, number, bead, option, reply, dismiss),
         Command::Todo { spec, since } => run_todo(&workspace, spec, since, agent_override),
     };
 
@@ -883,9 +901,10 @@ fn run_check(
 fn run_msg(
     workspace: &Path,
     spec: Option<String>,
-    index: Option<u32>,
-    id: Option<String>,
-    answer: Option<String>,
+    number: Option<u32>,
+    bead: Option<String>,
+    option: Option<u32>,
+    reply: Option<String>,
     dismiss: bool,
 ) -> anyhow::Result<()> {
     let _manifest = ProfileImageManifest::from_env()?;
@@ -893,22 +912,21 @@ fn run_msg(
     if let Some(label) = &spec_filter {
         let lock_mgr = LockManager::new(workspace)?;
         let _guard = lock_mgr.acquire_spec(label)?;
-        run_msg_inner(answer, dismiss, index, id, spec_filter)
+        run_msg_inner(number, bead, option, reply, dismiss, spec_filter)
     } else {
-        run_msg_inner(answer, dismiss, index, id, None)
+        run_msg_inner(number, bead, option, reply, dismiss, None)
     }
 }
 
 fn run_msg_inner(
-    answer: Option<String>,
+    number: Option<u32>,
+    bead: Option<String>,
+    option: Option<u32>,
+    reply: Option<String>,
     dismiss: bool,
-    index: Option<u32>,
-    id: Option<String>,
     spec_filter: Option<SpecLabel>,
 ) -> anyhow::Result<()> {
-    if answer.is_some() && dismiss {
-        anyhow::bail!("use either -a <choice> or -d, not both");
-    }
+    let has_action = option.is_some() || reply.is_some() || dismiss;
 
     let runtime = tokio::runtime::Runtime::new()?;
     let beads = runtime.block_on(async {
@@ -922,7 +940,7 @@ fn run_msg_inner(
     })?;
     let kept = filter_msg_beads(&beads, spec_filter.as_ref());
 
-    if answer.is_none() && !dismiss {
+    if !has_action {
         let rows = build_rows(&kept, spec_filter.as_ref());
         if rows.is_empty() {
             println!("(no outstanding clarify or blocked beads)");
@@ -950,23 +968,23 @@ fn run_msg_inner(
         return Ok(());
     }
 
-    let (target, _pos) = resolve_target(&kept, index, id.as_deref())?;
-    let bead = kept
+    let (target, _pos) = resolve_target(&kept, number, bead.as_deref())?;
+    let target_bead = kept
         .iter()
         .find(|b| b.id == target)
         .copied()
         .ok_or_else(|| anyhow::anyhow!("bead {target} not in filtered list"))?;
-    let kind = kind_of(bead).ok_or_else(|| {
+    let kind = kind_of(target_bead).ok_or_else(|| {
         anyhow::anyhow!("bead {target} carries neither loom:clarify nor loom:blocked")
     })?;
     let label_to_remove = kind.label().to_string();
 
-    if let Some(choice) = answer {
-        let reply = build_fast_reply(&target, &choice, &bead.description, kind)?;
-        let note = match &reply {
-            FastReply::Option { note, .. } => note.clone(),
-            FastReply::Verbatim { note } => note.clone(),
-        };
+    if let Some(opt_idx) = option {
+        // `-o <int>` strict option lookup: parse the bead's description,
+        // require `### Option <int>` to exist, compose the canonical
+        // `"Chose option N — title: body"` note. Validation runs before
+        // any bd state mutation per the I1 acceptance.
+        let note = compose_option_note(&target, opt_idx, &target_bead.description)?;
         let runtime = tokio::runtime::Runtime::new()?;
         let id_clone = target.clone();
         let note_for_bd = note.clone();
@@ -983,7 +1001,32 @@ fn run_msg_inner(
             .await
         })?;
         println!("answered {target}: {note}");
-        if let Some(label) = spec_label_of(bead) {
+        if let Some(label) = spec_label_of(target_bead) {
+            println!("resume: loom run -s {label}");
+        }
+        return Ok(());
+    }
+
+    if let Some(text) = reply {
+        // `-r <text>` verbatim: store the raw text on the bead, drop the
+        // loom:* label. Works on any bead kind regardless of Options.
+        let runtime = tokio::runtime::Runtime::new()?;
+        let id_clone = target.clone();
+        let text_for_bd = text.clone();
+        runtime.block_on(async move {
+            let bd = BdClient::new();
+            bd.update(
+                &id_clone,
+                UpdateOpts {
+                    remove_labels: vec![label_to_remove],
+                    notes: Some(text_for_bd),
+                    ..UpdateOpts::default()
+                },
+            )
+            .await
+        })?;
+        println!("answered {target}: {text}");
+        if let Some(label) = spec_label_of(target_bead) {
             println!("resume: loom run -s {label}");
         }
         return Ok(());
@@ -1005,7 +1048,7 @@ fn run_msg_inner(
             .await
         })?;
         println!("dismissed {target}: {DISMISS_NOTE}");
-        if let Some(label) = spec_label_of(bead) {
+        if let Some(label) = spec_label_of(target_bead) {
             println!("resume: loom run -s {label}");
         }
     }

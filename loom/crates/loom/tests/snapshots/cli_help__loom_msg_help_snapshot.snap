@@ -1,5 +1,6 @@
 ---
 source: crates/loom/tests/cli_help.rs
+assertion_line: 81
 expression: "loom_help(&[\"msg\"])"
 ---
 Resolve outstanding `loom:clarify` and `loom:blocked` beads
@@ -13,7 +14,8 @@ Options:
 
 Workflow:
   -s, --spec <LABEL>  Filter to a specific spec label
-  -n <N>              Select bead by 1-based index in the printed list
-  -i <ID>             Select bead by id
-  -a <CHOICE>         Fast-reply: integer chooses option N for clarify beads; anything else (and any choice for blocked beads) is stored verbatim
-  -d                  Dismiss the bead (write canonical note + remove the loom:* label)
+  -n, --number <N>    Select bead by 1-based index in the printed list. Mutually exclusive with `-b`
+  -b, --bead <ID>     Select bead by id. Mutually exclusive with `-n`
+  -o, --option <INT>  Fast-reply with the body of `### Option <int>` for a clarify bead. Validated — missing subsection exits non-zero before any bd state is mutated. Mutually exclusive with `-r` and `-d`
+  -r, --reply <TEXT>  Fast-reply with verbatim text. Works on any bead regardless of whether it has an `## Options` section. Mutually exclusive with `-o` and `-d`
+  -d, --dismiss       Dismiss the bead (write canonical note + remove the loom:* label)

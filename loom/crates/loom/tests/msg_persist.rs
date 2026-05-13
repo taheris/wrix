@@ -183,7 +183,7 @@ fn msg_option_fast_reply_persists_note_via_bd_show() {
         &bin_dir,
         &state_dir,
         &manifest,
-        &["-a", "1", "-i", "wx-testa"],
+        &["-o", "1", "-b", "wx-testa"],
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -243,7 +243,7 @@ fn msg_option_out_of_range_errors_and_leaves_bead_unchanged() {
         &bin_dir,
         &state_dir,
         &manifest,
-        &["-a", "99", "-i", "wx-testb"],
+        &["-o", "99", "-b", "wx-testb"],
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -311,7 +311,7 @@ fn msg_blocked_verbatim_text_persists_via_bd_show() {
         &bin_dir,
         &state_dir,
         &manifest,
-        &["-a", "use /run/secrets/deploy_key", "-i", "wx-blockt"],
+        &["-r", "use /run/secrets/deploy_key", "-b", "wx-blockt"],
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -345,7 +345,7 @@ fn msg_blocked_verbatim_text_persists_via_bd_show() {
     );
 }
 
-/// `-a "1"` on a `loom:blocked` bead does NOT resolve as integer option
+/// `-r "1"` on a `loom:blocked` bead does NOT resolve as integer option
 /// (blocked beads have no Options section); the literal `"1"` is
 /// persisted as verbatim per `blocked_integer_choice_is_always_verbatim`.
 /// Pins the kind-discriminator in the persist path — integer-looking
@@ -374,7 +374,7 @@ fn msg_blocked_integer_input_persists_verbatim_not_as_option() {
         &bin_dir,
         &state_dir,
         &manifest,
-        &["-a", "1", "-i", "wx-blocki"],
+        &["-r", "1", "-b", "wx-blocki"],
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -394,5 +394,60 @@ fn msg_blocked_integer_input_persists_verbatim_not_as_option() {
         notes, "1",
         "blocked-bead integer input must persist verbatim, not as Option N composition.\n\
          stdout={stdout}\nstderr={stderr}\nbd-shim log:\n{log}",
+    );
+}
+
+// -------------------------------------------------------------------
+// I1 — `test_msg_flag_exclusivity`
+// -------------------------------------------------------------------
+
+/// `clap` enforces mutual exclusion at parse time: `-o` xor `-r`, neither
+/// with `-d`, `-n` xor `-b`. Each forbidden combination must exit
+/// non-zero with a parse error, BEFORE any bd call. The shim doesn't
+/// even get invoked.
+#[test]
+fn msg_flag_exclusivity_enforced_at_parse_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path();
+    let state_dir = workspace.join("bd-state");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    let bin_dir = install_bd_shim(workspace);
+    let manifest = write_minimal_manifest(workspace);
+
+    // Each row exercises one of the I1 mutual-exclusion rules.
+    let forbidden: &[&[&str]] = &[
+        &["-o", "1", "-r", "foo", "-b", "wx-aaa"],
+        &["-o", "1", "-d", "-b", "wx-aaa"],
+        &["-r", "foo", "-d", "-b", "wx-aaa"],
+        &["-n", "1", "-b", "wx-aaa", "-r", "foo"],
+    ];
+
+    for argv in forbidden {
+        let output = run_loom_msg(workspace, &bin_dir, &state_dir, &manifest, argv);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success(),
+            "loom msg {argv:?} must reject mutually exclusive flags.\n\
+             stdout={stdout}\nstderr={stderr}",
+        );
+        // clap's error mentions the conflicting argument by name.
+        let combined = format!("{stdout}{stderr}");
+        let mentions_conflict = combined.contains("cannot be used")
+            || combined.contains("conflicts with")
+            || combined.contains("cannot");
+        assert!(
+            mentions_conflict,
+            "stderr must explain the conflict (clap-shape error).\nargs={argv:?}\nstderr={stderr}",
+        );
+    }
+
+    // Sanity: a *legal* combination still parses (the bd shim returns
+    // no beads → "(no outstanding clarify or blocked beads)" exit 0).
+    let output = run_loom_msg(workspace, &bin_dir, &state_dir, &manifest, &[]);
+    assert!(
+        output.status.success(),
+        "bare `loom msg` (no flags) must parse cleanly.\nstderr={:?}",
+        String::from_utf8_lossy(&output.stderr),
     );
 }

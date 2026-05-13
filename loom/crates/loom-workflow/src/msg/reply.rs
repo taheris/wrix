@@ -39,6 +39,22 @@ pub fn build_fast_reply(
     })
 }
 
+/// Compose the bead note for a `loom msg -o <int> -b <id>` invocation.
+///
+/// Parses `description` for the `## Options` block, looks up
+/// `### Option <n>`, and returns the composed note text — independent of
+/// bead kind (Clarify vs Blocked). A missing subsection produces
+/// [`MsgError::OptionMissing`] carrying the available indices for the
+/// user-facing error message. Used by the I1 flag-split surface where
+/// `-o` does strict option-lookup; the legacy `-a <choice>` path that
+/// kind-discriminates lives in [`build_fast_reply`].
+pub fn compose_option_note(bead: &BeadId, n: u32, description: &str) -> Result<String, MsgError> {
+    let parsed = parse_options(description);
+    match resolve_option(bead, n, &parsed)? {
+        FastReply::Option { note, .. } | FastReply::Verbatim { note } => Ok(note),
+    }
+}
+
 fn resolve_option(bead: &BeadId, n: u32, parsed: &OptionsParse) -> Result<FastReply, MsgError> {
     if let Some(opt) = parsed.options.iter().find(|o| o.n == n) {
         let note = if opt.title.is_empty() {

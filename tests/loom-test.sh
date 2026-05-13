@@ -3281,7 +3281,10 @@ test_msg_chat_partial_progress() { _pending_stub msg_chat_partial_progress; }
 test_msg_chat_scope() { _pending_stub msg_chat_scope; }
 test_msg_chat_writes_notes() { _pending_stub msg_chat_writes_notes; }
 test_msg_dismiss() { _pending_stub msg_dismiss; }
-test_msg_flag_exclusivity() { _pending_stub msg_flag_exclusivity; }
+test_msg_flag_exclusivity() {
+    cargo_run test -p loom --test msg_persist -- --test-threads=1 \
+        msg_flag_exclusivity_enforced_at_parse_time
+}
 test_msg_option_validates() {
     cargo_run test -p loom --test msg_persist -- --test-threads=1 \
         msg_option_fast_reply_persists_note_via_bd_show \

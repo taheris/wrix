@@ -29,4 +29,4 @@ pub use context::{build_msg_context, resolve_target};
 pub use error::MsgError;
 pub use list::{MsgKind, MsgRow, build_rows, filter_msg_beads, kind_of, spec_label_of};
 pub use options::{OptionEntry, OptionsParse, parse_options};
-pub use reply::{DISMISS_NOTE, FastReply, build_fast_reply};
+pub use reply::{DISMISS_NOTE, FastReply, build_fast_reply, compose_option_note};
