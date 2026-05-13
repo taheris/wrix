@@ -13,6 +13,7 @@
 //! bridges, external log analyzers — depend on this crate directly.
 
 pub mod clock;
+pub mod osc8;
 mod path;
 mod redacted;
 mod renderer;

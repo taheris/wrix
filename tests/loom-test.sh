@@ -3310,7 +3310,10 @@ test_msg_option_validates() {
 test_msg_spec_filter() { _pending_stub msg_spec_filter; }
 test_msg_view_modes() { _pending_stub msg_view_modes; }
 test_notes_cascade_on_spec_delete() { _pending_stub notes_cascade_on_spec_delete; }
-test_osc8_hyperlinks() { _pending_stub osc8_hyperlinks; }
+test_osc8_hyperlinks() {
+    cargo_run test -p loom-render --lib -- --nocapture --quiet \
+        osc8::tests
+}
 test_path_normalization_display() { _pending_stub path_normalization_display; }
 test_per_tool_summary_cells() {
     # G3 lands the variant + tag (`tool_progress`); H3 (wx-h15kl) extends
