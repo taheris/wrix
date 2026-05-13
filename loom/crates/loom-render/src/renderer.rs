@@ -5,8 +5,9 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use crate::clock::{Clock, SystemClock};
+use crate::tool_body;
+use loom_events::AgentEvent;
 use loom_events::identifier::{BeadId, ProfileName};
-use loom_events::{AgentEvent, EventEnvelope};
 
 /// Final outcome of a bead spawn — drives the closing line color and glyph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,6 +103,13 @@ pub struct TerminalRenderer {
     /// `depth * 2` spaces (H6, wx-46jgi). Cleared lazily; entries only
     /// matter while the corresponding tool is in flight.
     indent_by_tool: std::collections::HashMap<loom_events::identifier::ToolCallId, usize>,
+    /// Per-tool-call `(tool_name, params)` snapshot captured at
+    /// `ToolCall` time so the matching `ToolResult` body can be
+    /// formatted by the same renderer state (R2, wx-k7tg5). Without
+    /// this, verbose mode can't tell whether a `ToolResult` body was
+    /// a 200-line `Read` payload or a 5-line `Bash` stderr — the
+    /// `cap_body` recovery hint loses its tool context.
+    tool_context: std::collections::HashMap<loom_events::identifier::ToolCallId, (String, Value)>,
     header_printed: bool,
     closed: bool,
 }
@@ -141,6 +149,7 @@ impl TerminalRenderer {
             started,
             tool_count: 0,
             indent_by_tool: std::collections::HashMap::new(),
+            tool_context: std::collections::HashMap::new(),
             header_printed: false,
             closed: false,
         }
@@ -183,19 +192,14 @@ impl TerminalRenderer {
                 ..
             } => {
                 self.tool_count += 1;
-                // H6 — compute the indent for this call: parent's depth
-                // + 1 when nested, 0 otherwise. Cache for this tool so
-                // a matching ToolResult/ToolProgress lines up.
                 let depth = match parent_tool_call_id {
                     Some(parent) => self.indent_by_tool.get(parent).copied().unwrap_or(0) + 1,
                     None => 0,
                 };
                 self.indent_by_tool.insert(id.clone(), depth);
-                let summary = if matches!(self.mode, RenderMode::Verbose) {
-                    format!("{} {}", short_summary(tool, params), inline_args(params))
-                } else {
-                    short_summary(tool, params)
-                };
+                self.tool_context
+                    .insert(id.clone(), (tool.clone(), params.clone()));
+                let summary = tool_body::summary_cell(tool, params);
                 let indent: String = "  ".repeat(depth);
                 let line = if self.parallel {
                     format!("  [{}] {indent}{summary}\n", self.bead_id.as_str())
@@ -203,6 +207,29 @@ impl TerminalRenderer {
                     format!("  {indent}{summary}\n")
                 };
                 self.out.write_all(line.as_bytes())?;
+                self.out.flush()?;
+            }
+            AgentEvent::ToolResult {
+                id,
+                output,
+                is_error,
+                ..
+            } if matches!(self.mode, RenderMode::Verbose) => {
+                let depth = self.indent_by_tool.get(id).copied().unwrap_or(0);
+                let indent: String = "  ".repeat(depth + 1);
+                let capped = tool_body::cap_body(output, self.bead_id.as_str(), id.as_str());
+                for body_line in capped.lines() {
+                    let line = if self.parallel {
+                        format!("  [{}] {indent}{body_line}\n", self.bead_id.as_str(),)
+                    } else {
+                        format!("{indent}{body_line}\n")
+                    };
+                    self.out.write_all(line.as_bytes())?;
+                }
+                if *is_error {
+                    let marker = format!("{indent}[tool error]\n");
+                    self.out.write_all(marker.as_bytes())?;
+                }
                 self.out.flush()?;
             }
             AgentEvent::TextDelta { text, .. } if matches!(self.mode, RenderMode::Verbose) => {
@@ -271,84 +298,6 @@ impl TerminalRenderer {
     /// Whether the header line has been printed.
     pub fn header_printed(&self) -> bool {
         self.header_printed
-    }
-}
-
-/// Build the "<tool> <short-arg>" summary used by both modes.
-///
-/// - `Read`/`Edit`/`Write` use the `file_path` field, optionally suffixed with
-///   the line range (`+<offset>-<limit>`).
-/// - `Bash` uses the first 60 chars of `command`.
-/// - Anything else falls back to just the tool name.
-fn short_summary(tool: &str, params: &Value) -> String {
-    let arg: Option<String> = match tool {
-        "Read" => path_with_range(params, "file_path", "offset", "limit"),
-        "Edit" | "Write" => path_summary(params, "file_path"),
-        "Bash" => bash_summary(params),
-        "Grep" => grep_summary(params),
-        _ => None,
-    };
-    arg.map(|a| format!("{tool:<7} {a}"))
-        .unwrap_or_else(|| format!("{tool:<7}"))
-}
-
-fn path_summary(params: &Value, field: &str) -> Option<String> {
-    params
-        .get(field)
-        .and_then(Value::as_str)
-        .map(truncate_one_line)
-}
-
-fn path_with_range(
-    params: &Value,
-    path_field: &str,
-    offset_field: &str,
-    limit_field: &str,
-) -> Option<String> {
-    let path = params.get(path_field).and_then(Value::as_str)?;
-    let offset = params.get(offset_field).and_then(Value::as_u64);
-    let limit = params.get(limit_field).and_then(Value::as_u64);
-    let suffix = match (offset, limit) {
-        (Some(o), Some(l)) => format!(" +{o}-{l}"),
-        (Some(o), None) => format!(" +{o}"),
-        _ => String::new(),
-    };
-    Some(format!("{}{suffix}", truncate_one_line(path)))
-}
-
-fn bash_summary(params: &Value) -> Option<String> {
-    let cmd = params.get("command").and_then(Value::as_str)?;
-    Some(truncate_to(cmd, 60))
-}
-
-fn grep_summary(params: &Value) -> Option<String> {
-    let pattern = params.get("pattern").and_then(Value::as_str)?;
-    let path = params
-        .get("path")
-        .and_then(Value::as_str)
-        .map(|p| format!(" in {p}"))
-        .unwrap_or_default();
-    Some(format!("{}{path}", truncate_to(pattern, 40)))
-}
-
-/// Render the full args dict on one line for `--verbose` tool-call lines.
-fn inline_args(params: &Value) -> String {
-    let s = serde_json::to_string(params).unwrap_or_default();
-    truncate_to(&s, 200)
-}
-
-fn truncate_one_line(s: &str) -> String {
-    truncate_to(s, 80)
-}
-
-fn truncate_to(s: &str, max: usize) -> String {
-    let cleaned: String = s.chars().take_while(|c| *c != '\n').collect();
-    if cleaned.len() <= max {
-        cleaned
-    } else {
-        let mut out: String = cleaned.chars().take(max.saturating_sub(1)).collect();
-        out.push('…');
-        out
     }
 }
 
@@ -505,6 +454,7 @@ pub fn build_renderer(
 #[expect(clippy::expect_used, reason = "tests use panicking helpers")]
 mod tests {
     use super::*;
+    use loom_events::EventEnvelope;
     use loom_events::identifier::ToolCallId;
     use serde_json::json;
 
@@ -655,16 +605,121 @@ mod tests {
         assert!(out.contains(ANSI_RESET));
     }
 
+    // -- R2 tests ----------------------------------------------------------
+
+    /// `ToolCall` lines use the per-tool spec cell — `Read   <path>:<range>`,
+    /// `Edit   <path>   +N -M   diff↓`, `Bash   <cmd>`. The cell shape comes
+    /// from `tool_body::summary_cell`; this test pins that the renderer
+    /// dispatches through it (R2, wx-k7tg5).
     #[test]
-    fn truncate_collapses_newlines_to_first_line() {
-        assert_eq!(truncate_to("a\nb\nc", 10), "a");
+    fn tool_call_line_uses_summary_cell_shape() {
+        let out = capture(RenderMode::Default, false, false, |r| {
+            r.render_event(&AgentEvent::ToolCall {
+                envelope: EventEnvelope::default(),
+                id: ToolCallId::new("e1"),
+                tool: "Edit".into(),
+                params: json!({
+                    "file_path": "src/lib.rs",
+                    "old_string": "fn old() {}\n",
+                    "new_string": "fn new() {}\nfn extra() {}\n",
+                }),
+                parent_tool_call_id: None,
+            })
+            .expect("render");
+        });
+        assert!(out.contains("Edit"), "{out:?}");
+        assert!(out.contains("src/lib.rs"), "{out:?}");
+        assert!(out.contains("+"), "{out:?}");
+        assert!(out.contains("-"), "{out:?}");
+        assert!(out.contains("diff"), "{out:?}");
     }
 
+    /// Verbose mode emits the `ToolResult` body, capped to 10 lines, with
+    /// the spec'd recovery hint when truncated.
     #[test]
-    fn truncate_to_caps_long_input_with_ellipsis() {
-        let s = truncate_to("0123456789ABCDEF", 8);
-        assert_eq!(s.chars().count(), 8);
-        assert!(s.ends_with('…'));
+    fn verbose_mode_renders_capped_tool_result_body_with_recovery_hint() {
+        let big_body: String = (1..=15)
+            .map(|i| format!("output-line-{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let out = capture(RenderMode::Verbose, false, false, |r| {
+            r.render_event(&AgentEvent::ToolCall {
+                envelope: EventEnvelope::default(),
+                id: ToolCallId::new("b1"),
+                tool: "Bash".into(),
+                params: json!({"command": "echo hi"}),
+                parent_tool_call_id: None,
+            })
+            .expect("render call");
+            r.render_event(&AgentEvent::ToolResult {
+                envelope: EventEnvelope::default(),
+                id: ToolCallId::new("b1"),
+                output: big_body,
+                is_error: false,
+            })
+            .expect("render result");
+        });
+        assert!(out.contains("output-line-1"), "{out:?}");
+        assert!(out.contains("output-line-10"), "{out:?}");
+        assert!(
+            !out.contains("output-line-11"),
+            "body cap should drop line 11: {out:?}",
+        );
+        assert!(out.contains("more lines"), "missing recovery hint: {out:?}",);
+        assert!(
+            out.contains("loom logs -b wx-1 --tool b1"),
+            "recovery hint must reference the bead and tool call id: {out:?}",
+        );
+    }
+
+    /// Default mode does NOT render `ToolResult` bodies — only the
+    /// `ToolCall` summary line. Pin this so verbose-only behavior
+    /// doesn't leak into the default render path.
+    #[test]
+    fn default_mode_suppresses_tool_result_body() {
+        let out = capture(RenderMode::Default, false, false, |r| {
+            r.render_event(&AgentEvent::ToolCall {
+                envelope: EventEnvelope::default(),
+                id: ToolCallId::new("b1"),
+                tool: "Bash".into(),
+                params: json!({"command": "echo hi"}),
+                parent_tool_call_id: None,
+            })
+            .expect("render call");
+            r.render_event(&AgentEvent::ToolResult {
+                envelope: EventEnvelope::default(),
+                id: ToolCallId::new("b1"),
+                output: "result body".into(),
+                is_error: false,
+            })
+            .expect("render result");
+        });
+        assert!(out.contains("Bash"), "{out:?}");
+        assert!(!out.contains("result body"), "{out:?}");
+    }
+
+    /// Verbose mode marks tool-error results with a `[tool error]` line
+    /// after the body. Used by the renderer-driven failure UI.
+    #[test]
+    fn verbose_mode_flags_tool_errors_after_body() {
+        let out = capture(RenderMode::Verbose, false, false, |r| {
+            r.render_event(&AgentEvent::ToolCall {
+                envelope: EventEnvelope::default(),
+                id: ToolCallId::new("b1"),
+                tool: "Bash".into(),
+                params: json!({"command": "false"}),
+                parent_tool_call_id: None,
+            })
+            .expect("render call");
+            r.render_event(&AgentEvent::ToolResult {
+                envelope: EventEnvelope::default(),
+                id: ToolCallId::new("b1"),
+                output: "exit 1".into(),
+                is_error: true,
+            })
+            .expect("render result");
+        });
+        assert!(out.contains("[tool error]"), "{out:?}");
     }
 
     // -- H2 tests ----------------------------------------------------------

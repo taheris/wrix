@@ -5,8 +5,8 @@ use std::time::SystemTime;
 
 use tracing::info;
 
+use loom_events::AgentEvent;
 use loom_events::identifier::{BeadId, SpecLabel};
-use loom_events::{AgentEvent, EventEnvelope};
 
 mod error;
 
@@ -218,6 +218,7 @@ pub(crate) fn open_sink_with_sink_writer(
 #[expect(clippy::expect_used, reason = "tests use panicking helpers")]
 mod tests {
     use super::*;
+    use loom_events::EventEnvelope;
     use loom_events::event::CompactionReason;
     use loom_events::identifier::ToolCallId;
     use serde_json::{Value, json};

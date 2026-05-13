@@ -602,3 +602,124 @@ fn run_single_event_sink_property() -> Result<()> {
     }
     Ok(())
 }
+
+//---------------------------------------------------------------------------
+// R2 (wx-k7tg5) — Read + Edit + Bash drive through `LogSink::emit` and the
+// rendered terminal carries the per-tool spec table shape: `Read <path>:range`,
+// `Edit <path> +N -M diff↓`, and `Bash <cmd-truncated>`. Plus: a large
+// `ToolResult` body in Verbose mode is capped and the `[N more lines —
+// loom logs -b … --tool …]` recovery hint shows up.
+//---------------------------------------------------------------------------
+#[test]
+fn run_default_renders_per_tool_summary_cells() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let (mut sink, buf) = open_sink(
+        dir.path(),
+        "alpha",
+        "wx-1",
+        1_700_000_000,
+        RenderMode::Default,
+        false,
+    )?;
+
+    sink.emit(&AgentEvent::ToolCall {
+        envelope: EventEnvelope::default(),
+        id: ToolCallId::new("r1"),
+        tool: "Read".to_string(),
+        params: json!({
+            "file_path": "src/lib.rs",
+            "offset": 10,
+            "limit": 20,
+        }),
+        parent_tool_call_id: None,
+    })?;
+    sink.emit(&AgentEvent::ToolCall {
+        envelope: EventEnvelope::default(),
+        id: ToolCallId::new("e1"),
+        tool: "Edit".to_string(),
+        params: json!({
+            "file_path": "src/lib.rs",
+            "old_string": "old line\n",
+            "new_string": "new line A\nnew line B\n",
+        }),
+        parent_tool_call_id: None,
+    })?;
+    sink.emit(&AgentEvent::ToolCall {
+        envelope: EventEnvelope::default(),
+        id: ToolCallId::new("b1"),
+        tool: "Bash".to_string(),
+        params: json!({"command": "cargo build --release --all-features"}),
+        parent_tool_call_id: None,
+    })?;
+    sink.finish(BeadOutcome::Done)?;
+
+    let term = captured_str(&buf);
+    if !term.contains("Read") || !term.contains("src/lib.rs:10-30") {
+        return Err(anyhow!(
+            "Read line missing summary cell shape `Read <path>:<offset-end>`: {term:?}",
+        ));
+    }
+    if !term.contains("Edit") || !term.contains("+2") || !term.contains("-1") {
+        return Err(anyhow!(
+            "Edit line missing summary cell shape `Edit <path> +N -M diff↓`: {term:?}",
+        ));
+    }
+    if !term.contains("diff") {
+        return Err(anyhow!("Edit cell must carry `diff↓` marker: {term:?}"));
+    }
+    if !term.contains("Bash") || !term.contains("cargo build") {
+        return Err(anyhow!(
+            "Bash line missing summary cell with truncated cmd: {term:?}",
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn run_verbose_caps_tool_result_body_with_recovery_hint() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let (mut sink, buf) = open_sink(
+        dir.path(),
+        "alpha",
+        "wx-2",
+        1_700_000_000,
+        RenderMode::Verbose,
+        false,
+    )?;
+
+    sink.emit(&AgentEvent::ToolCall {
+        envelope: EventEnvelope::default(),
+        id: ToolCallId::new("b1"),
+        tool: "Bash".to_string(),
+        params: json!({"command": "ls -la"}),
+        parent_tool_call_id: None,
+    })?;
+    let big_output: String = (1..=15)
+        .map(|i| format!("file-{i:03}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    sink.emit(&AgentEvent::ToolResult {
+        envelope: EventEnvelope::default(),
+        id: ToolCallId::new("b1"),
+        output: big_output,
+        is_error: false,
+    })?;
+    sink.finish(BeadOutcome::Done)?;
+
+    let term = captured_str(&buf);
+    if !term.contains("file-001") || !term.contains("file-010") {
+        return Err(anyhow!("body cap dropped early lines: {term:?}"));
+    }
+    if term.contains("file-011") {
+        return Err(anyhow!("body cap should drop line 11+: {term:?}"));
+    }
+    if !term.contains("5 more lines") {
+        return Err(anyhow!("missing `<N> more lines` recovery hint: {term:?}"));
+    }
+    if !term.contains("loom logs -b wx-2 --tool b1") {
+        return Err(anyhow!(
+            "recovery hint must reference bead id + tool call id: {term:?}",
+        ));
+    }
+    Ok(())
+}
