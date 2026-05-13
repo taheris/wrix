@@ -22,11 +22,38 @@ use super::messages::{
 /// [`messages`](super::messages). The parser owns JSONL framing on
 /// stdout (line in → [`ParsedLine`]) and command encoding for stdin
 /// (`encode_prompt`/`encode_steer`/`encode_abort`).
-pub struct PiParser;
+/// Pi-mono line parser. Holds a per-session `Task` stack so nested
+/// tool calls (inside a `Task` subagent) carry the parent's id —
+/// see G4 (wx-b2f7k). The stack uses interior mutability (`Mutex`)
+/// because [`LineParse::parse_line`] is `&self`; one parser instance
+/// per agent session, so contention is non-existent.
+pub struct PiParser {
+    task_stack: std::sync::Mutex<Vec<loom_events::identifier::ToolCallId>>,
+}
 
 impl PiParser {
     pub fn new() -> Self {
-        Self
+        Self {
+            task_stack: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    fn current_parent(&self) -> Option<loom_events::identifier::ToolCallId> {
+        self.task_stack.lock().ok()?.last().cloned()
+    }
+
+    fn push_task(&self, id: loom_events::identifier::ToolCallId) {
+        if let Ok(mut stack) = self.task_stack.lock() {
+            stack.push(id);
+        }
+    }
+
+    fn pop_task_if_matches(&self, id: &loom_events::identifier::ToolCallId) {
+        if let Ok(mut stack) = self.task_stack.lock()
+            && stack.last() == Some(id)
+        {
+            stack.pop();
+        }
     }
 }
 
@@ -69,7 +96,7 @@ fn encode_command<T: Serialize>(payload: &T) -> Result<String, ProtocolError> {
     Ok(line)
 }
 
-fn parse_event(event: PiEvent) -> ParsedLine {
+fn parse_event(parser: &PiParser, event: PiEvent) -> ParsedLine {
     // Parser-side events use the placeholder envelope; the session layer
     // overwrites it with the real per-spawn envelope before emit. See
     // `EventEnvelope::default` for the sentinel `wx-pending` bead id.
@@ -101,15 +128,26 @@ fn parse_event(event: PiEvent) -> ParsedLine {
             tool_call_id,
             tool_name,
             args,
-        } => ParsedLine {
-            events: vec![AgentEvent::ToolCall {
+        } => {
+            // Snapshot the current parent BEFORE pushing — a `Task`
+            // tool_call is a child of whatever Task (if any) was open at
+            // the time of its emission, not its own child.
+            let parent = parser.current_parent();
+            let event = AgentEvent::ToolCall {
                 envelope: EventEnvelope::default(),
-                id: tool_call_id,
-                tool: tool_name,
+                id: tool_call_id.clone(),
+                tool: tool_name.clone(),
                 params: args,
-            }],
-            response: None,
-        },
+                parent_tool_call_id: parent,
+            };
+            if tool_name == "Task" {
+                parser.push_task(tool_call_id);
+            }
+            ParsedLine {
+                events: vec![event],
+                response: None,
+            }
+        }
         PiEvent::ToolExecutionEnd {
             tool_call_id,
             result,
@@ -120,6 +158,10 @@ fn parse_event(event: PiEvent) -> ParsedLine {
                 serde_json::Value::Null => String::new(),
                 other => other.to_string(),
             };
+            // Pop the Task stack BEFORE building the event — a Task's
+            // own tool_result closes that subagent, and subsequent tool
+            // calls are siblings of the Task, not children.
+            parser.pop_task_if_matches(&tool_call_id);
             ParsedLine {
                 events: vec![AgentEvent::ToolResult {
                     envelope: EventEnvelope::default(),
@@ -224,7 +266,7 @@ impl LineParse for PiParser {
             }
             _ if env.id.is_none() => {
                 let evt: PiEvent = serde_json::from_str(line)?;
-                Ok(parse_event(evt))
+                Ok(parse_event(self, evt))
             }
             other => Err(ProtocolError::UnknownMessageType(
                 other.unwrap_or("").to_string(),
@@ -265,6 +307,70 @@ mod tests {
         PiParser::new()
             .parse_line(line)
             .expect("fixture line should parse cleanly")
+    }
+
+    /// G4 — when a `Task` tool_call is open, subsequent tool_calls
+    /// carry `parent_tool_call_id = Some(<task-id>)`. The matching
+    /// tool_result closes the stack.
+    #[test]
+    fn task_subagent_nesting_threads_parent_tool_call_id() {
+        let parser = PiParser::new();
+
+        // Open a Task — its own tool_call has no parent.
+        let task_start =
+            r#"{"type":"tool_execution_start","toolCallId":"tc-task","toolName":"Task","args":{}}"#;
+        let p = parser.parse_line(task_start).expect("task start");
+        match &p.events[0] {
+            AgentEvent::ToolCall {
+                tool,
+                parent_tool_call_id,
+                ..
+            } => {
+                assert_eq!(tool, "Task");
+                assert!(parent_tool_call_id.is_none());
+            }
+            other => panic!("expected ToolCall, got {other:?}"),
+        }
+
+        // Tool call inside the Task — parent is the Task's id.
+        let nested = r#"{"type":"tool_execution_start","toolCallId":"tc-read","toolName":"Read","args":{"file_path":"a"}}"#;
+        let p = parser.parse_line(nested).expect("nested");
+        match &p.events[0] {
+            AgentEvent::ToolCall {
+                tool,
+                parent_tool_call_id,
+                ..
+            } => {
+                assert_eq!(tool, "Read");
+                assert_eq!(
+                    parent_tool_call_id.as_ref().map(|id| id.as_str()),
+                    Some("tc-task"),
+                );
+            }
+            other => panic!("expected ToolCall, got {other:?}"),
+        }
+
+        // Close the Task — its matching tool_result pops the stack.
+        let task_end = r#"{"type":"tool_execution_end","toolCallId":"tc-task","toolName":"Task","result":"ok","isError":false}"#;
+        parser.parse_line(task_end).expect("task end");
+
+        // Sibling tool_call after Task closed — back to no parent.
+        let sibling = r#"{"type":"tool_execution_start","toolCallId":"tc-bash","toolName":"Bash","args":{"command":"ls"}}"#;
+        let p = parser.parse_line(sibling).expect("sibling");
+        match &p.events[0] {
+            AgentEvent::ToolCall {
+                tool,
+                parent_tool_call_id,
+                ..
+            } => {
+                assert_eq!(tool, "Bash");
+                assert!(
+                    parent_tool_call_id.is_none(),
+                    "stack should be empty post-Task"
+                );
+            }
+            other => panic!("expected ToolCall, got {other:?}"),
+        }
     }
 
     fn parse_err(line: &str) -> ProtocolError {

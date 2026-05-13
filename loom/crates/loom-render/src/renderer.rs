@@ -363,6 +363,7 @@ mod tests {
                 id: ToolCallId::new("t1"),
                 tool: "Read".to_string(),
                 params: json!({"file_path": "src/lib.rs"}),
+                parent_tool_call_id: None,
             })
             .expect("render");
         });
@@ -379,6 +380,7 @@ mod tests {
                 id: ToolCallId::new("t1"),
                 tool: "Bash".to_string(),
                 params: json!({"command": "cargo build"}),
+                parent_tool_call_id: None,
             })
             .expect("render");
         });
@@ -406,6 +408,7 @@ mod tests {
                 id: ToolCallId::new("t1"),
                 tool: "Read".to_string(),
                 params: json!({"file_path": "a"}),
+                parent_tool_call_id: None,
             })
             .expect("render");
             r.render_event(&AgentEvent::ToolCall {
@@ -413,6 +416,7 @@ mod tests {
                 id: ToolCallId::new("t2"),
                 tool: "Edit".to_string(),
                 params: json!({"file_path": "b"}),
+                parent_tool_call_id: None,
             })
             .expect("render");
             r.write_finish(BeadOutcome::Done, std::time::Duration::from_secs(47))

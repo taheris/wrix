@@ -241,6 +241,7 @@ mod tests {
             id: ToolCallId::new("t1"),
             tool: "Read".to_string(),
             params: json!({"file_path": "src/lib.rs"}),
+            parent_tool_call_id: None,
         })
         .expect("emit");
         sink.emit(&AgentEvent::TurnEnd {

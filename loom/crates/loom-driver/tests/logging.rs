@@ -104,6 +104,7 @@ fn run_default_output_shape() -> Result<()> {
         id: ToolCallId::new("t1"),
         tool: "Read".to_string(),
         params: json!({"file_path": "src/lib.rs"}),
+        parent_tool_call_id: None,
     })?;
     sink.emit(&AgentEvent::TextDelta {
         envelope: EventEnvelope::default(),
@@ -114,6 +115,7 @@ fn run_default_output_shape() -> Result<()> {
         id: ToolCallId::new("t2"),
         tool: "Bash".to_string(),
         params: json!({"command": "cargo build"}),
+        parent_tool_call_id: None,
     })?;
     sink.finish(BeadOutcome::Done)?;
 
@@ -194,6 +196,7 @@ fn run_writes_per_bead_jsonl_log() -> Result<()> {
         id: ToolCallId::new("t1"),
         tool: "Read".to_string(),
         params: json!({"file_path": "a"}),
+        parent_tool_call_id: None,
     })?;
     // MessageDelta is suppressed by the default renderer, but it MUST appear
     // in the on-disk log (the file gets the full raw event stream regardless
@@ -392,12 +395,14 @@ fn parallel_logs_are_per_bead() -> Result<()> {
         id: ToolCallId::new("ta"),
         tool: "Read".to_string(),
         params: json!({"file_path": "a-only"}),
+        parent_tool_call_id: None,
     })?;
     b.emit(&AgentEvent::ToolCall {
         envelope: EventEnvelope::default(),
         id: ToolCallId::new("tb"),
         tool: "Read".to_string(),
         params: json!({"file_path": "b-only"}),
+        parent_tool_call_id: None,
     })?;
     a.emit(&AgentEvent::TurnEnd {
         envelope: EventEnvelope::default(),
@@ -553,12 +558,14 @@ fn run_single_event_sink_property() -> Result<()> {
             id: ToolCallId::new("t1"),
             tool: "Read".to_string(),
             params: json!({"file_path": "src/a.rs"}),
+            parent_tool_call_id: None,
         },
         AgentEvent::ToolCall {
             envelope: EventEnvelope::default(),
             id: ToolCallId::new("t2"),
             tool: "Edit".to_string(),
             params: json!({"file_path": "src/b.rs"}),
+            parent_tool_call_id: None,
         },
     ];
     for e in &events {

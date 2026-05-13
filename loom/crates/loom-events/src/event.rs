@@ -168,6 +168,12 @@ pub enum AgentEvent {
         id: ToolCallId,
         tool: String,
         params: serde_json::Value,
+        /// Set when this tool call is nested inside a `Task` subagent
+        /// invocation — the renderer indents nested calls under their
+        /// parent. Populated by the parser's per-session `Task` stack
+        /// (G4, wx-b2f7k). `None` for top-level calls.
+        #[serde(default)]
+        parent_tool_call_id: Option<ToolCallId>,
     },
 
     /// Tool execution completed.
@@ -383,6 +389,7 @@ mod tests {
                 id: ToolCallId::new("t1"),
                 tool: "Read".into(),
                 params: serde_json::Value::Null,
+                parent_tool_call_id: None,
             },
             AgentEvent::ToolResult {
                 envelope: b.build(),
@@ -484,6 +491,7 @@ mod tests {
                 id: ToolCallId::new("t1"),
                 tool: "Read".into(),
                 params: serde_json::json!({"file_path": "src/lib.rs"}),
+                parent_tool_call_id: None,
             },
             AgentEvent::ToolResult {
                 envelope: b.build(),
@@ -533,6 +541,7 @@ mod tests {
             id: ToolCallId::new("t1"),
             tool: "Read".into(),
             params: serde_json::json!({"file_path": "src/lib.rs"}),
+            parent_tool_call_id: None,
         };
         let v = serde_json::to_value(&event).expect("serialize");
         let obj = v.as_object().expect("object");

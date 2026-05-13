@@ -25,6 +25,10 @@ use super::messages::{AssistantBlock, ClaudeMessage, UserBlock};
 /// `denied_tools`; denied tools receive `approved: false`.
 pub struct ClaudeParser {
     denied_tools: HashSet<String>,
+    /// Per-session `Task` subagent stack — G4 (wx-b2f7k). Same shape
+    /// as the pi parser's. `&self` LineParse trait requires interior
+    /// mutability; one parser per session means contention is nil.
+    task_stack: std::sync::Mutex<Vec<loom_events::identifier::ToolCallId>>,
 }
 
 impl ClaudeParser {
@@ -34,6 +38,25 @@ impl ClaudeParser {
     pub fn new(denied_tools: Vec<String>) -> Self {
         Self {
             denied_tools: denied_tools.into_iter().collect(),
+            task_stack: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    fn current_parent(&self) -> Option<loom_events::identifier::ToolCallId> {
+        self.task_stack.lock().ok()?.last().cloned()
+    }
+
+    fn push_task(&self, id: loom_events::identifier::ToolCallId) {
+        if let Ok(mut stack) = self.task_stack.lock() {
+            stack.push(id);
+        }
+    }
+
+    fn pop_task_if_matches(&self, id: &loom_events::identifier::ToolCallId) {
+        if let Ok(mut stack) = self.task_stack.lock()
+            && stack.last() == Some(id)
+        {
+            stack.pop();
         }
     }
 }
@@ -88,12 +111,20 @@ impl LineParse for ClaudeParser {
                             });
                         }
                         AssistantBlock::ToolUse { id, name, input } => {
+                            // Snapshot parent BEFORE push — a Task call
+                            // is a child of any outer Task, not its own.
+                            let parent = self.current_parent();
+                            let is_task = name == "Task";
                             events.push(AgentEvent::ToolCall {
                                 envelope: EventEnvelope::default(),
-                                id,
+                                id: id.clone(),
                                 tool: name,
                                 params: input,
+                                parent_tool_call_id: parent,
                             });
+                            if is_task {
+                                self.push_task(id);
+                            }
                         }
                         AssistantBlock::Unknown => {
                             trace!("unknown assistant content block");
@@ -119,6 +150,10 @@ impl LineParse for ClaudeParser {
                                 serde_json::Value::Null => String::new(),
                                 other => other.to_string(),
                             };
+                            // Pop the Task stack BEFORE building the
+                            // event — a Task's tool_result closes that
+                            // subagent.
+                            self.pop_task_if_matches(&tool_use_id);
                             events.push(AgentEvent::ToolResult {
                                 envelope: EventEnvelope::default(),
                                 id: tool_use_id,
