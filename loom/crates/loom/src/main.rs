@@ -179,6 +179,25 @@ enum Command {
         /// Spec label override (defaults to `current_spec`).
         #[arg(long, short = 's', value_name = "LABEL")]
         spec: Option<String>,
+        /// ASCII output, no color, no OSC 8. Pipe-safe. Implied when
+        /// stdout is not a TTY or `NO_COLOR` is set. Mutually exclusive
+        /// with `--json` and `--raw`.
+        #[arg(long, conflicts_with_all = ["json", "raw"])]
+        plain: bool,
+        /// Emit one pretty-printed JSON object per line on stdout.
+        /// Mutually exclusive with `--plain` and `--raw`.
+        #[arg(long, conflicts_with_all = ["plain", "raw"])]
+        json: bool,
+        /// Emit one compact JSON line per event on stdout — same as
+        /// the on-disk JSONL shape. Mutually exclusive with `--plain`,
+        /// `--json`, and `-v/--verbose`.
+        #[arg(long, conflicts_with_all = ["plain", "json", "verbose"])]
+        raw: bool,
+        /// Widen the rendered text: streams `TextDelta` verbatim and
+        /// renders each `ToolResult` body capped at 10 lines with a
+        /// recovery hint. Mutually exclusive with `--raw`.
+        #[arg(long, short = 'v', conflicts_with = "raw")]
+        verbose: bool,
     },
     /// Post-loop reviewer + push gate.
     #[command(next_help_heading = "Workflow")]
@@ -338,7 +357,24 @@ fn main() -> ExitCode {
             parallel,
             profile,
             spec,
-        } => run_run(&workspace, once, parallel, profile, spec, agent_override),
+            plain,
+            json,
+            raw,
+            verbose,
+        } => run_run(
+            &workspace,
+            once,
+            parallel,
+            profile,
+            spec,
+            agent_override,
+            RenderFlags {
+                plain,
+                json,
+                raw,
+                verbose,
+            },
+        ),
         Command::Check { spec } => run_check(&workspace, spec, agent_override),
         Command::Msg {
             spec,
@@ -546,6 +582,18 @@ fn run_plan(
     Ok(())
 }
 
+/// CLI-level render mode flags for `loom run`. Resolved into a
+/// [`loom_render::RenderMode`] at sink-open time via
+/// [`loom_render::RenderMode::select`]; the latter takes a TTY bool +
+/// the spec'd flag table and decides Pretty/Plain/Json/Raw.
+#[derive(Debug, Clone, Copy)]
+struct RenderFlags {
+    plain: bool,
+    json: bool,
+    raw: bool,
+    verbose: bool,
+}
+
 fn run_run(
     workspace: &Path,
     once: bool,
@@ -553,6 +601,7 @@ fn run_run(
     profile: Option<String>,
     spec: Option<String>,
     agent_override: Option<AgentKind>,
+    render_flags: RenderFlags,
 ) -> anyhow::Result<()> {
     let manifest = Arc::new(ProfileImageManifest::from_env()?);
     let label = resolve_spec_label(workspace, spec)?;
@@ -614,8 +663,10 @@ fn run_run(
     let kind = selection.kind;
     let shutdown_grace = resolve_shutdown_grace(&selection);
     let workspace_buf = workspace.to_path_buf();
+    let workspace_for_renderer = workspace.to_path_buf();
     let logs_root = workspace.join(".wrapix/loom/logs");
     let label_for_sink = label.clone();
+    let render_mode = resolve_render_mode(render_flags);
     let summary = runtime.block_on(async move {
         let bd = BdClient::new();
         let mut controller = ProductionAgentLoopController::new(
@@ -629,13 +680,21 @@ fn run_run(
             move |spawn_cfg: SpawnConfig, bead_id: BeadId| {
                 let logs_root = logs_root.clone();
                 let label = label_for_sink.clone();
+                let workspace = workspace_for_renderer.clone();
                 async move {
                     // A sink-open failure is pre-spawn — the bead's
                     // JSONL log location is part of the workflow's
                     // pre-flight setup. Bubble it through the same
                     // `infra-preflight` path so `bd update` records the
                     // cause instead of the error tearing down `loom run`.
-                    let sink = match open_bead_sink(&logs_root, &label, &bead_id) {
+                    let sink = match open_bead_sink_with_renderer(
+                        &logs_root,
+                        &label,
+                        &bead_id,
+                        render_mode,
+                        &workspace,
+                        false,
+                    ) {
                         Ok(s) => Some(s),
                         Err(err) => {
                             return (
@@ -1015,6 +1074,101 @@ fn open_bead_sink(
         SystemClock::new().wall_now(),
     )
     .map_err(|e| ProtocolError::Io(std::io::Error::other(e.to_string())))
+}
+
+/// Same as [`open_bead_sink`] but constructs a terminal renderer from
+/// the resolved [`RenderMode`] and hands it to the sink so events tee
+/// into both the on-disk JSONL and the user's terminal. R5 (wx-zorjk).
+fn open_bead_sink_with_renderer(
+    logs_root: &Path,
+    label: &SpecLabel,
+    bead_id: &BeadId,
+    render_mode: loom_render::RenderMode,
+    workspace: &Path,
+    parallel: bool,
+) -> Result<LogSink, ProtocolError> {
+    let renderer = build_stdout_renderer(render_mode, bead_id, workspace, parallel);
+    LogSink::open_in_at(
+        logs_root,
+        label,
+        bead_id,
+        Some(renderer),
+        SystemClock::new().wall_now(),
+    )
+    .map_err(|e| ProtocolError::Io(std::io::Error::other(e.to_string())))
+}
+
+/// Resolve a [`loom_render::RenderMode`] from the CLI flag tuple and
+/// the runtime TTY / `NO_COLOR` environment. Spec table:
+/// `--raw` > `--json` > `--plain` or non-TTY or `NO_COLOR` > Pretty.
+fn resolve_render_mode(flags: RenderFlags) -> loom_render::RenderMode {
+    let tty = loom_render::in_place::stdout_supports_indicator();
+    let no_color = std::env::var_os("NO_COLOR").is_some();
+    let base = loom_render::RenderMode::select(tty, no_color, flags.plain, flags.json, flags.raw);
+    if flags.verbose
+        && matches!(
+            base,
+            loom_render::RenderMode::Pretty | loom_render::RenderMode::Plain
+        )
+    {
+        loom_render::RenderMode::Verbose
+    } else {
+        base
+    }
+}
+
+/// Build the right [`loom_render::Renderer`] for the resolved mode and
+/// wrap it in a `Box<dyn Renderer>` so the sink can hold any concrete
+/// impl. The writer is `io::stdout()` so the user sees the rendered
+/// stream; each per-bead renderer carries its own handle.
+fn build_stdout_renderer(
+    mode: loom_render::RenderMode,
+    bead_id: &BeadId,
+    workspace: &Path,
+    parallel: bool,
+) -> Box<dyn loom_render::Renderer> {
+    let osc8_supported = loom_render::osc8::supports_osc8(
+        std::env::var("TERM_PROGRAM").ok().as_deref(),
+        std::env::var("TERM").ok().as_deref(),
+    );
+    let osc8 = if osc8_supported {
+        loom_render::tool_body::Osc8Context::enabled(workspace.to_path_buf())
+    } else {
+        loom_render::tool_body::Osc8Context::disabled()
+    };
+    match mode {
+        loom_render::RenderMode::Verbose => Box::new(
+            loom_render::TerminalRenderer::new(
+                std::io::stdout(),
+                loom_render::RenderMode::Verbose,
+                bead_id.clone(),
+                parallel,
+                !parallel,
+            )
+            .with_osc8(osc8),
+        ),
+        loom_render::RenderMode::Pretty | loom_render::RenderMode::Default => Box::new(
+            loom_render::TerminalRenderer::new(
+                std::io::stdout(),
+                loom_render::RenderMode::Default,
+                bead_id.clone(),
+                parallel,
+                true,
+            )
+            .with_osc8(osc8),
+        ),
+        loom_render::RenderMode::Plain => Box::new(loom_render::TerminalRenderer::new(
+            std::io::stdout(),
+            loom_render::RenderMode::Default,
+            bead_id.clone(),
+            parallel,
+            false,
+        )),
+        loom_render::RenderMode::Json => {
+            Box::new(loom_render::JsonRenderer::new(std::io::stdout()))
+        }
+        loom_render::RenderMode::Raw => Box::new(loom_render::RawRenderer::new(std::io::stdout())),
+    }
 }
 
 /// Resolve `phase`'s [`AgentKind`] honoring the global `--agent` override.

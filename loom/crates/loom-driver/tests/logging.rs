@@ -61,7 +61,13 @@ fn open_sink(
     let label = SpecLabel::new(spec);
     let id = BeadId::new(bead)?;
     let (buf, sink) = captured();
-    let renderer = TerminalRenderer::new(sink, mode, id.clone(), parallel, false);
+    let renderer: Box<dyn loom_render::Renderer> = Box::new(TerminalRenderer::new(
+        sink,
+        mode,
+        id.clone(),
+        parallel,
+        false,
+    ));
     let when = SystemTime::UNIX_EPOCH + Duration::from_secs(when_secs);
     let s = LogSink::open_in_at(logs_root, &label, &id, Some(renderer), when)?;
     Ok((s, buf))
@@ -81,7 +87,8 @@ fn open_sink_with_indicator(
     let label = SpecLabel::new(spec);
     let id = BeadId::new(bead)?;
     let (buf, sink) = captured();
-    let renderer = TerminalRenderer::new(sink, mode, id.clone(), false, true);
+    let renderer: Box<dyn loom_render::Renderer> =
+        Box::new(TerminalRenderer::new(sink, mode, id.clone(), false, true));
     let when = SystemTime::UNIX_EPOCH + Duration::from_secs(when_secs);
     let s = LogSink::open_in_at(logs_root, &label, &id, Some(renderer), when)?;
     Ok((s, buf))

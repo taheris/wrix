@@ -453,6 +453,18 @@ pub trait Renderer: Send {
     fn finish(&mut self, outcome: BeadOutcome, elapsed: Duration) -> io::Result<()>;
 }
 
+impl Renderer for TerminalRenderer {
+    fn header(&mut self, title: &str, profile: &ProfileName) -> io::Result<()> {
+        TerminalRenderer::header(self, title, profile)
+    }
+    fn render_event(&mut self, event: &AgentEvent) -> io::Result<()> {
+        TerminalRenderer::render_event(self, event)
+    }
+    fn finish(&mut self, outcome: BeadOutcome, elapsed: Duration) -> io::Result<()> {
+        self.write_finish(outcome, elapsed)
+    }
+}
+
 /// `Pretty` mode — colored, glyph-decorated output for an interactive
 /// terminal. Thin wrapper that delegates to the existing
 /// [`TerminalRenderer`] with `color = true`.

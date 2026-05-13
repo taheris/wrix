@@ -1,5 +1,6 @@
 ---
 source: crates/loom/tests/cli_help.rs
+assertion_line: 71
 expression: "loom_help(&[\"run\"])"
 ---
 Per-bead execution loop. Continuous by default; `--once` exits after one bead
@@ -16,3 +17,7 @@ Workflow:
   -p, --parallel <PARALLEL>  Concurrent dispatch slots (`-p N` / `--parallel N`). Default 1 [default: 1]
       --profile <PROFILE>    Override the per-bead `profile:X` label resolution
   -s, --spec <LABEL>         Spec label override (defaults to `current_spec`)
+      --plain                ASCII output, no color, no OSC 8. Pipe-safe. Implied when stdout is not a TTY or `NO_COLOR` is set. Mutually exclusive with `--json` and `--raw`
+      --json                 Emit one pretty-printed JSON object per line on stdout. Mutually exclusive with `--plain` and `--raw`
+      --raw                  Emit one compact JSON line per event on stdout — same as the on-disk JSONL shape. Mutually exclusive with `--plain`, `--json`, and `-v/--verbose`
+  -v, --verbose              Widen the rendered text: streams `TextDelta` verbatim and renders each `ToolResult` body capped at 10 lines with a recovery hint. Mutually exclusive with `--raw`

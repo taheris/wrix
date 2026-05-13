@@ -1,7 +1,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use tracing::info;
 
@@ -12,8 +12,9 @@ mod error;
 
 pub use error::LogError;
 
+use crate::clock::{Clock, SystemClock};
 use crate::path::{bead_log_path, phase_log_path};
-use crate::renderer::{BeadOutcome, TerminalRenderer};
+use crate::renderer::{BeadOutcome, Renderer};
 
 /// Tee-style sink that drives the per-bead JSONL log file *and* the
 /// [`TerminalRenderer`] from the same `emit` call.
@@ -26,8 +27,9 @@ use crate::renderer::{BeadOutcome, TerminalRenderer};
 /// log.
 pub struct LogSink {
     file: BufWriter<File>,
-    renderer: Option<TerminalRenderer>,
+    renderer: Option<Box<dyn Renderer>>,
     log_path: PathBuf,
+    started: Instant,
     finished: bool,
 }
 
@@ -41,7 +43,7 @@ impl LogSink {
         logs_root: &Path,
         spec_label: &SpecLabel,
         bead_id: &BeadId,
-        renderer: Option<TerminalRenderer>,
+        renderer: Option<Box<dyn Renderer>>,
         when: SystemTime,
     ) -> Result<Self, LogError> {
         let log_path = bead_log_path(logs_root, spec_label, bead_id, when);
@@ -68,7 +70,7 @@ impl LogSink {
         logs_root: &Path,
         spec_label: &SpecLabel,
         phase: &str,
-        renderer: Option<TerminalRenderer>,
+        renderer: Option<Box<dyn Renderer>>,
         when: SystemTime,
     ) -> Result<Self, LogError> {
         let log_path = phase_log_path(logs_root, spec_label, phase, when);
@@ -85,7 +87,7 @@ impl LogSink {
 
     fn open_at_path(
         log_path: PathBuf,
-        renderer: Option<TerminalRenderer>,
+        renderer: Option<Box<dyn Renderer>>,
     ) -> Result<Self, LogError> {
         if let Some(dir) = log_path.parent() {
             fs::create_dir_all(dir).map_err(|source| LogError::CreateDir {
@@ -101,10 +103,12 @@ impl LogSink {
                 path: log_path.clone(),
                 source,
             })?;
+        let clock = SystemClock::new();
         Ok(Self {
             file: BufWriter::new(file),
             renderer,
             log_path,
+            started: clock.now(),
             finished: false,
         })
     }
@@ -146,11 +150,14 @@ impl LogSink {
             path: self.log_path.clone(),
             source,
         })?;
-        if let Some(renderer) = self.renderer.take() {
-            renderer.finish(outcome).map_err(|source| LogError::Write {
-                path: self.log_path.clone(),
-                source,
-            })?;
+        let elapsed = self.started.elapsed();
+        if let Some(mut renderer) = self.renderer.take() {
+            renderer
+                .finish(outcome, elapsed)
+                .map_err(|source| LogError::Write {
+                    path: self.log_path.clone(),
+                    source,
+                })?;
         }
         Ok(())
     }
@@ -203,13 +210,14 @@ pub(crate) fn open_sink_with_sink_writer(
             Ok(())
         }
     }
-    let renderer = TerminalRenderer::new(
+    use crate::renderer::TerminalRenderer;
+    let renderer: Box<dyn Renderer> = Box::new(TerminalRenderer::new(
         Sink { inner: writer_buf },
         RenderMode::Default,
         bead_id.clone(),
         false,
         false,
-    );
+    ));
     let sink = LogSink::open_in_at(logs_root, spec_label, bead_id, Some(renderer), when)?;
     Ok((sink, buf))
 }

@@ -1690,6 +1690,7 @@ dependencies = [
  "loom-agent",
  "loom-driver",
  "loom-events",
+ "loom-render",
  "loom-workflow",
  "nix",
  "proc-macro2",
