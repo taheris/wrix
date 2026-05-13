@@ -3215,8 +3215,14 @@ test_flat_variant_shape() {
     cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
         event::tests::flat_variant_shape_has_no_nested_envelopes
 }
-test_in_place_indicator_disabled_when_inappropriate() { _pending_stub in_place_indicator_disabled_when_inappropriate; }
-test_in_place_running_indicator() { _pending_stub in_place_running_indicator; }
+test_in_place_indicator_disabled_when_inappropriate() {
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        in_place::tests::disabled_indicator_writes_nothing
+}
+test_in_place_running_indicator() {
+    cargo_run test -p loom-render --lib -- --nocapture --quiet \
+        in_place::tests
+}
 test_json_mode_pretty_prints() {
     cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
         renderer::tests::json_mode_pretty_prints
