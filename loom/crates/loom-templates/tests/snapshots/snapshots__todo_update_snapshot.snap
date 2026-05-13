@@ -1,5 +1,6 @@
 ---
 source: crates/loom-templates/tests/snapshots.rs
+assertion_line: 77
 expression: ctx.render().unwrap()
 ---
 # Add Tasks to Existing Molecule
@@ -80,8 +81,6 @@ keeping past session end, write it to one of the durable destinations above
 `echo "..." >> .wrapix/loom/scratch/<key>/scratch.md` or via the Edit tool.
 Do not rewrite or truncate prior contents; the recovery payload is the full
 running log.
-
-
 
 ## Spec Changes
 

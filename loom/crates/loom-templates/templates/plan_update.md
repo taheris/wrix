@@ -44,8 +44,6 @@ Read the existing spec at `{{ spec_path }}` for full context before refining.
 
 {% include "partial/invariant_clash.md" %}
 
-{% include "partial/implementation_notes_state.md" %}
-
 ## Spec Editing
 
 When updating the spec, use the Edit tool to modify `specs/{{ label }}.md`

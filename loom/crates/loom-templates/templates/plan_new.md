@@ -64,8 +64,6 @@ When you have gathered enough information, create the spec file with:
      implement them during the implementation phase.
 6. **Out of scope** - What this feature will NOT do (important for boundaries)
 
-{% include "partial/implementation_notes_spec.md" %}
-
 {% include "partial/interview_modes.md" %}
 
 {% include "partial/exit_signals.md" %}

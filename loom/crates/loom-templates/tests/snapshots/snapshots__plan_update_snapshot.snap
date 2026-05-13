@@ -1,5 +1,6 @@
 ---
 source: crates/loom-templates/tests/snapshots.rs
+assertion_line: 48
 expression: ctx.render().unwrap()
 ---
 # Specification Update Interview
@@ -154,30 +155,6 @@ options. Phrase each option in terms concrete to the clash at hand.
 **Bias toward asking when uncertain.** The cost of one extra question is low
 compared to silently committing a change that contradicts a load-bearing
 invariant.
-
-## Implementation Notes
-
-During the interview, you may gather implementation hints — specific technical
-details that help the implementer but don't belong in the permanent spec
-(e.g., "remove the rustup bootstrap block from entrypoint.sh", "use fenix's
-fromToolchainFile").
-
-Existing notes for `loom-harness` (the merge basis):
-
-- Touch lib/sandbox/entrypoint.sh
-- Bug wx-9999: race in repin.sh
-
-
-Merge those existing notes with anything new from this interview — keep notes
-still relevant, drop ones a new decision invalidates, and add fresh ones. The
-merge is your judgement, not a blind append or replace. Then write the merged
-set as a `## Implementation Notes` section at the very end of the anchor spec
-`specs/loom-harness.md` — `loom plan` parses that section after the interview
-exits and persists the array to the anchor's state-DB row. Sibling specs do
-**not** carry implementation notes.
-
-These notes are automatically passed to `loom todo` templates during task
-creation and cleared from the row once consumed.
 
 ## Spec Editing
 

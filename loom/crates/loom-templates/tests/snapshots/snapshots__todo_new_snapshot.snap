@@ -1,5 +1,6 @@
 ---
 source: crates/loom-templates/tests/snapshots.rs
+assertion_line: 61
 expression: ctx.render().unwrap()
 ---
 # Task Decomposition
@@ -74,12 +75,6 @@ keeping past session end, write it to one of the durable destinations above
 `echo "..." >> .wrapix/loom/scratch/<key>/scratch.md` or via the Edit tool.
 Do not rewrite or truncate prior contents; the recovery payload is the full
 running log.
-
-## Implementation Notes
-
-- Remove rustup bootstrap block
-- Use fenix fromToolchainFile
-
 
 ## Task Breakdown Guidelines
 

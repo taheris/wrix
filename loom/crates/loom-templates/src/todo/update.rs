@@ -9,7 +9,6 @@ pub struct TodoUpdateContext {
     pub label: SpecLabel,
     pub spec_path: String,
     pub companion_paths: Vec<String>,
-    pub implementation_notes: Vec<String>,
     pub spec_diff: Option<String>,
     pub existing_tasks: Option<String>,
     pub molecule_id: Option<MoleculeId>,

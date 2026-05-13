@@ -22,11 +22,6 @@ Read the anchor spec at `{{ spec_path }}` for the full current contents before i
 
 {% include "partial/scratchpad.md" %}
 
-{% if implementation_notes.is_empty() %}{% else %}## Implementation Notes
-
-{% for note in implementation_notes %}- {{ note }}
-{% endfor %}{% endif %}
-
 ## Spec Changes
 
 If `spec_diff` is provided, use that to identify new requirements **across all

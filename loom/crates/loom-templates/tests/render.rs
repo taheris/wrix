@@ -38,7 +38,6 @@ fn plan_new_renders_partials_and_inputs() -> Result<()> {
     assert!(out.contains("Label: loom-harness"));
     assert!(out.contains("Spec file: specs/loom-harness.md"));
     assert!(out.contains("LOOM_COMPLETE"));
-    assert!(out.contains("Implementation Notes Section"));
     assert!(out.contains("Interview Modes"));
     Ok(())
 }
@@ -50,7 +49,6 @@ fn plan_update_renders_partials_and_companions() -> Result<()> {
         label: SpecLabel::new("loom-harness"),
         spec_path: "specs/loom-harness.md".to_string(),
         companion_paths: vec!["lib/sandbox/".into(), "lib/ralph/template/".into()],
-        existing_implementation_notes: vec!["existing note one".into()],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
         exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
@@ -61,49 +59,26 @@ fn plan_update_renders_partials_and_companions() -> Result<()> {
     assert!(out.contains("- lib/ralph/template/"));
     assert!(out.contains("Anchor Session & Sibling-Spec Editing"));
     assert!(out.contains("Invariant-Clash Awareness"));
-    assert!(out.contains("Implementation Notes"));
-    assert!(out.contains("- existing note one"));
     Ok(())
 }
 
 #[test]
-fn todo_new_renders_implementation_notes_when_present() -> Result<()> {
+fn todo_new_renders_spec_label_marker() -> Result<()> {
     let ctx = TodoNewContext {
         pinned_context: PINNED_CONTEXT_BODY.to_string(),
         label: SpecLabel::new("loom-harness"),
         spec_path: "specs/loom-harness.md".to_string(),
         companion_paths: vec!["lib/sandbox/".into()],
-        implementation_notes: vec![
-            "Remove rustup bootstrap block".to_string(),
-            "Use fenix fromToolchainFile".to_string(),
-        ],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
         exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
     let out = ctx.render()?;
 
     assert!(out.contains("# Task Decomposition"));
-    assert!(out.contains("## Implementation Notes"));
-    assert!(out.contains("- Remove rustup bootstrap block"));
-    assert!(out.contains("- Use fenix fromToolchainFile"));
     assert!(out.contains("spec:loom-harness"));
-    Ok(())
-}
-
-#[test]
-fn todo_new_omits_implementation_notes_section_when_empty() -> Result<()> {
-    let ctx = TodoNewContext {
-        pinned_context: PINNED_CONTEXT_BODY.to_string(),
-        label: SpecLabel::new("loom-harness"),
-        spec_path: "specs/loom-harness.md".to_string(),
-        companion_paths: vec![],
-        implementation_notes: vec![],
-        scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
-        exit_signals: EXIT_SIGNALS_BODY.to_string(),
-    };
-    let out = ctx.render()?;
-
-    assert!(!out.contains("## Implementation Notes\n\n-"));
+    // Implementation Notes section no longer rendered into todo prompts —
+    // see D1 (wx-2ytty). The loom note CLI (D2) owns that surface.
+    assert!(!out.contains("## Implementation Notes"));
     Ok(())
 }
 
@@ -114,7 +89,6 @@ fn todo_update_wraps_existing_tasks_in_agent_output() -> Result<()> {
         label: SpecLabel::new("loom-harness"),
         spec_path: "specs/loom-harness.md".to_string(),
         companion_paths: vec![],
-        implementation_notes: vec![],
         spec_diff: Some("=== specs/loom-harness.md ===\n+ new requirement".into()),
         existing_tasks: Some("- wx-3hhwq.1: scaffold workspace".into()),
         molecule_id: Some(MoleculeId::new("wx-3hhwq")),

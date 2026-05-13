@@ -15,11 +15,6 @@ Read the spec at `{{ spec_path }}` for full content before decomposing.
 
 {% include "partial/scratchpad.md" %}
 
-{% if implementation_notes.is_empty() %}{% else %}## Implementation Notes
-
-{% for note in implementation_notes %}- {{ note }}
-{% endfor %}{% endif %}
-
 ## Task Breakdown Guidelines
 
 - Each task should be **self-contained** with enough context for a fresh agent

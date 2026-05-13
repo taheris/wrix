@@ -9,7 +9,7 @@ use loom_driver::identifier::{ProfileName, SpecLabel};
 use loom_driver::lock::LockManager;
 use loom_driver::profile_manifest::{ImageEntry, ProfileImageManifest};
 use loom_driver::scratch::{ScratchSession, resolve_scratch_key};
-use loom_driver::state::{StateDb, parse_implementation_notes};
+use loom_driver::state::StateDb;
 
 use super::args::PlanMode;
 use super::command::{WRAPIX_BIN, build_wrapix_argv};
@@ -57,11 +57,6 @@ pub struct PlanReport {
     /// `false` lets the CLI distinguish "intentionally empty" from "interview
     /// did not declare any" in the human-readable summary.
     pub companions_section_present: bool,
-    /// Implementation notes the runner persisted to the state DB after the
-    /// interview, or `None` when the spec contained no `## Implementation
-    /// Notes` section (in which case the DB column is left untouched so
-    /// `loom plan -u` does not destroy notes the agent declined to re-state).
-    pub implementation_notes: Option<Vec<String>>,
 }
 
 /// Run `loom plan` against `workspace`.
@@ -117,16 +112,6 @@ pub fn run_with_timeout(
     // (`specs/loom-harness.md` § Implementation-notes lifecycle: "interview
     //  reads existing, writes back merged"). For -n the row does not exist
     // yet so there are no notes to read.
-    let existing_implementation_notes = if is_new {
-        Vec::new()
-    } else {
-        match db.spec(&label) {
-            Ok(row) => row.implementation_notes.unwrap_or_default(),
-            Err(loom_driver::state::StateError::SpecNotFound { .. }) => Vec::new(),
-            Err(e) => return Err(PlanError::State(e)),
-        }
-    };
-
     let key = resolve_scratch_key(Phase::Plan, &label, None);
     let scratchpad_path = ScratchSession::scratchpad_path_for(workspace, &key)
         .to_string_lossy()
@@ -136,7 +121,6 @@ pub fn run_with_timeout(
         spec_path: spec_rel.clone(),
         pinned_context,
         companion_paths,
-        existing_implementation_notes,
         scratchpad_path,
         exit_signals,
     })?;
@@ -180,42 +164,13 @@ pub fn run_with_timeout(
     }
 
     let outcome = reconcile_companions(&db, &label, &spec_path)?;
-    let notes_outcome = reconcile_implementation_notes(&db, &label, &spec_path)?;
 
     Ok(PlanReport {
         label,
         spec_path,
         companion_paths: outcome.paths,
         companions_section_present: outcome.section_present,
-        implementation_notes: notes_outcome,
     })
-}
-
-/// Read the spec's `## Implementation Notes` section (if present) and
-/// persist it to `specs.implementation_notes` for `label`. Missing section
-/// → no DB write (preserves the existing column so `loom plan -u` does not
-/// destroy notes the agent declined to re-state). Heading present with
-/// zero bullets → writes `[]`, distinguishing "intentionally cleared" from
-/// "untouched".
-fn reconcile_implementation_notes(
-    db: &StateDb,
-    label: &SpecLabel,
-    spec_path: &Path,
-) -> Result<Option<Vec<String>>, PlanError> {
-    use loom_driver::markdown::{HeadingLevel, section_events};
-
-    let body = std::fs::read_to_string(spec_path).map_err(|source| PlanError::ReadSpec {
-        path: spec_path.to_path_buf(),
-        source,
-    })?;
-    let section_present =
-        section_events(&body, HeadingLevel::H2, |t| t == "Implementation Notes").is_some();
-    if !section_present {
-        return Ok(None);
-    }
-    let notes = parse_implementation_notes(&body);
-    db.set_implementation_notes(label, &notes)?;
-    Ok(Some(notes))
 }
 
 /// Resolve the profile that `loom plan` should pass through to the launcher.
@@ -640,146 +595,12 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn plan_new_persists_implementation_notes_from_interview() -> Result<()> {
-        let dir = workspace_with_specs()?;
-        let spec_path = dir.path().join("specs/loom-harness.md");
-        // Stub spec body the wrapix-stub will write after the interview:
-        // companions section + the implementation notes the agent decided
-        // on. The runner must parse both and land them in the state DB.
-        let bin = install_wrapix_stub(
-            dir.path(),
-            Some((
-                &spec_path,
-                "# loom-harness\n\n\
-                 ## Companions\n\n\
-                 - `lib/sandbox/`\n\n\
-                 ## Implementation Notes\n\n\
-                 - Touch lib/sandbox/entrypoint.sh\n\
-                 - Bug wx-9999: race in repin.sh\n",
-            )),
-        )?;
-        let manifest = three_profile_manifest(dir.path())?;
-
-        let report = run_with_timeout(
-            dir.path(),
-            plan_opts_new("loom-harness", bin, manifest),
-            Duration::from_millis(100),
-        )?;
-
-        assert_eq!(
-            report.implementation_notes,
-            Some(vec![
-                "Touch lib/sandbox/entrypoint.sh".to_string(),
-                "Bug wx-9999: race in repin.sh".to_string(),
-            ]),
-        );
-
-        let db = StateDb::open(dir.path().join(".wrapix/loom/state.db"))?;
-        let row = db.spec(&SpecLabel::new("loom-harness"))?;
-        assert_eq!(
-            row.implementation_notes,
-            Some(vec![
-                "Touch lib/sandbox/entrypoint.sh".to_string(),
-                "Bug wx-9999: race in repin.sh".to_string(),
-            ]),
-            "plan -n must persist parsed notes onto the specs row",
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn plan_new_no_notes_section_leaves_column_untouched() -> Result<()> {
-        let dir = workspace_with_specs()?;
-        let spec_path = dir.path().join("specs/loom-harness.md");
-        let bin = install_wrapix_stub(
-            dir.path(),
-            Some((&spec_path, "# loom-harness\n\n## Companions\n\n")),
-        )?;
-        let manifest = three_profile_manifest(dir.path())?;
-
-        let report = run_with_timeout(
-            dir.path(),
-            plan_opts_new("loom-harness", bin, manifest),
-            Duration::from_millis(100),
-        )?;
-
-        assert!(
-            report.implementation_notes.is_none(),
-            "missing section must be reported as None — the runner must not write []",
-        );
-        let db = StateDb::open(dir.path().join(".wrapix/loom/state.db"))?;
-        let row = db.spec(&SpecLabel::new("loom-harness"))?;
-        assert!(
-            row.implementation_notes.is_none(),
-            "DB column must stay NULL when the spec omits the section",
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn plan_update_threads_existing_notes_into_prompt_and_persists_merge() -> Result<()> {
-        let dir = workspace_with_specs()?;
-        let spec_path = dir.path().join("specs/loom-harness.md");
-        std::fs::write(
-            &spec_path,
-            "# loom-harness\n\n## Companions\n\n- `lib/sandbox/`\n",
-        )?;
-        let label = SpecLabel::new("loom-harness");
-        let db = StateDb::open(dir.path().join(".wrapix/loom/state.db"))?;
-        db.replace_companions(&label, &["lib/sandbox/".to_string()])?;
-        db.set_implementation_notes(
-            &label,
-            &["pre-existing: keep me".to_string(), "drop me".to_string()],
-        )?;
-        drop(db);
-
-        // Stub interview rewrites the spec with a merged notes section: keeps
-        // one existing note, drops one, adds a fresh one. The runner must
-        // surface the existing notes in the prompt AND replace the row with
-        // the merged set.
-        let bin = install_wrapix_stub(
-            dir.path(),
-            Some((
-                &spec_path,
-                "# loom-harness\n\n\
-                 ## Companions\n\n\
-                 - `lib/sandbox/`\n\n\
-                 ## Implementation Notes\n\n\
-                 - pre-existing: keep me\n\
-                 - new: added during merge\n",
-            )),
-        )?;
-        let manifest = three_profile_manifest(dir.path())?;
-
-        run_with_timeout(
-            dir.path(),
-            plan_opts_update("loom-harness", bin, manifest),
-            Duration::from_millis(100),
-        )?;
-
-        let argv_log = std::fs::read_to_string(dir.path().join("argv.log"))?;
-        assert!(
-            argv_log.contains("- pre-existing: keep me"),
-            "existing notes must be threaded into the prompt for merge: {argv_log}",
-        );
-        assert!(
-            argv_log.contains("- drop me"),
-            "all existing notes must be visible to the merge logic: {argv_log}",
-        );
-
-        let db = StateDb::open(dir.path().join(".wrapix/loom/state.db"))?;
-        let row = db.spec(&label)?;
-        assert_eq!(
-            row.implementation_notes,
-            Some(vec![
-                "pre-existing: keep me".to_string(),
-                "new: added during merge".to_string(),
-            ]),
-            "plan -u must persist the merged note set, not append or duplicate",
-        );
-        Ok(())
-    }
+    // Deleted: three tests covered the markdown-notes path (parse spec body
+    // for `## Implementation Notes`, persist to `specs.implementation_notes`,
+    // thread back for merge). D1 (wx-2ytty) removes that path entirely; the
+    // loom note CLI (D2) replaces it with a SQLite `notes` table the agent
+    // mutates directly. The `specs.implementation_notes` column is no longer
+    // written by the runner.
 
     /// wx-hcolw.7 gate: before the interactive `wrapix run` exec, the runner
     /// must have installed the per-key scratch directory with `prompt.txt`
