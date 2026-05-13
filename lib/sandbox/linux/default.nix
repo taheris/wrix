@@ -180,8 +180,14 @@ in
         # container), $PROJECT_DIR is the host path and is not visible to the
         # caller's filesystem. Skip on permission errors — the container's
         # entrypoint creates the dir again when WRAPIX_AGENT=claude.
-        if ! mkdir -p "$PROJECT_DIR/.claude" 2>/tmp/wrapix-mkdir-err; then
-            mkdir_err=$(cat /tmp/wrapix-mkdir-err)
+        #
+        # mktemp the error-capture file so concurrent `wrapix spawn`
+        # invocations don't race on a shared `/tmp/wrapix-mkdir-err`
+        # path (wx-w4h5e).
+        mkdir_err_file=$(mktemp)
+        trap 'rm -f "$mkdir_err_file"' EXIT INT TERM
+        if ! mkdir -p "$PROJECT_DIR/.claude" 2>"$mkdir_err_file"; then
+            mkdir_err=$(cat "$mkdir_err_file")
             case "$mkdir_err" in
                 *"Permission denied"*)
                     verbose "Skipping host-side .claude prep — $PROJECT_DIR not accessible from this context: $mkdir_err"
@@ -192,7 +198,8 @@ in
                     ;;
             esac
         fi
-        rm -f /tmp/wrapix-mkdir-err
+        rm -f "$mkdir_err_file"
+        trap - EXIT INT TERM
 
         dir_idx=0
 
