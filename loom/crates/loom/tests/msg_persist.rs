@@ -110,6 +110,12 @@ fn run_loom_msg(
         .env("LOOM_PROFILES_MANIFEST", manifest)
         .env("BD_STATE_DIR", state_dir)
         .env("XDG_STATE_HOME", workspace.join(".loom-state"))
+        // The nested-loom guard refuses mutating `loom msg` invocations
+        // when LOOM_INSIDE=1. The cargo test runner inherits LOOM_INSIDE
+        // when this suite is executed inside a loom-managed container,
+        // which would block the child `loom msg` invocation before it
+        // reached the persist path under test.
+        .env_remove("LOOM_INSIDE")
         .output()
         .expect("spawn loom")
 }

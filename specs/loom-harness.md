@@ -1863,19 +1863,19 @@ Criteria.
 - [ ] `loom msg -n <N>` / `loom msg -b <id>` (long forms `--number` /
       `--bead`) views a clarify host-side without launching a container
   [verify](tests/loom-test.sh::test_msg_view_modes)
-- [ ] `loom msg -n <N> -o <int>` (long form `--option`) writes the bead's
+- [x] `loom msg -n <N> -o <int>` (long form `--option`) writes the bead's
       `### Option <int>` body to notes and clears the label; errors
       `option <int> not found in bead <id>` and exits non-zero if the
       subsection is missing
   [verify](tests/loom-test.sh::test_msg_option_validates)
-- [ ] `loom msg -n <N> -r <text>` (long form `--reply`) writes verbatim
+- [x] `loom msg -n <N> -r <text>` (long form `--reply`) writes verbatim
       text to notes and clears the label, regardless of whether the bead
       has an Options section
   [verify](tests/loom-test.sh::test_msg_reply_verbatim)
 - [ ] `loom msg -n <N> -d` (long form `--dismiss`) clears the label with
       a work-around note, host-side
   [verify](tests/loom-test.sh::test_msg_dismiss)
-- [ ] `-o` and `-r` are mutually exclusive; `-d` is mutually exclusive
+- [x] `-o` and `-r` are mutually exclusive; `-d` is mutually exclusive
       with both; `-n` and `-b` are mutually exclusive; passing
       conflicting flags errors before any side effects
   [verify](tests/loom-test.sh::test_msg_flag_exclusivity)
