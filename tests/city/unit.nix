@@ -623,7 +623,7 @@ in
 
                 # Create docs and task file
                 echo "Project uses Nix for builds." > "$TMPDIR/docs/README.md"
-                echo "Use set -euo pipefail in shell." > "$TMPDIR/docs/style-guidelines.md"
+                echo "Use set -euo pipefail in shell." > "$TMPDIR/docs/style-rules.md"
                 echo "Fix the broken auth module." > "$TMPDIR/task.md"
 
                 # Mock claude to echo the prompt it receives
@@ -642,7 +642,7 @@ in
                   bash "$AGENT" run 2>&1)"
 
                 echo "$output" | grep -q "Project uses Nix" || { echo "FAIL: docs/README.md missing from prompt"; exit 1; }
-                echo "$output" | grep -q "set -euo pipefail" || { echo "FAIL: docs/style-guidelines.md missing from prompt"; exit 1; }
+                echo "$output" | grep -q "set -euo pipefail" || { echo "FAIL: docs/style-rules.md missing from prompt"; exit 1; }
                 echo "$output" | grep -q "Fix the broken auth" || { echo "FAIL: task file missing from prompt"; exit 1; }
 
                 # Missing prompt file should fail
@@ -1350,8 +1350,8 @@ in
         grep -q 'worktree' "$DIR/scout.formula.toml" || { echo "FAIL: scout housekeeping missing worktree cleanup"; exit 1; }
         echo "  PASS: scout has housekeeping step"
 
-        # Judge must reference style-guidelines.md for enforcement
-        grep -q 'style-guidelines.md' "$DIR/judge.formula.toml" || { echo "FAIL: judge no style-guidelines.md"; exit 1; }
+        # Judge must reference style-rules.md for enforcement
+        grep -q 'style-rules.md' "$DIR/judge.formula.toml" || { echo "FAIL: judge no style-rules.md"; exit 1; }
 
         echo "PASS: All role formulas valid"
         mkdir $out

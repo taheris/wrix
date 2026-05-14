@@ -959,18 +959,6 @@ test_template_partials() {
 }
 
 #-----------------------------------------------------------------------------
-# test_template_output_parity — the loom-templates render integration test
-# `run_output_parity_with_ralph_for_shared_inputs` produces output that
-# preserves every section and substituted value Ralph's bash renderer emits
-# for the same inputs (modulo intentional drift: dropped legacy variables and
-# the `ralph` → `loom` driver rename).
-#-----------------------------------------------------------------------------
-test_template_output_parity() {
-    cargo_run test -p loom-templates --test render \
-        run_output_parity_with_ralph_for_shared_inputs --quiet
-}
-
-#-----------------------------------------------------------------------------
 # Workflow commands — each function dispatches into the matching cargo unit
 # test under `loom-workflow`. Sharing the cargo binary keeps verify and
 # `cargo test` exercising the same code paths.

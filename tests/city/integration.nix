@@ -350,6 +350,17 @@ let
           printf '%s\n' "$podman_probe" | sed 's/^/         /'
           exit 77
         fi
+        # `podman load` needs policy.json; `podman info` doesn't probe it.
+        if ! { [[ -e "''${HOME:-}/.config/containers/policy.json" ]] || \
+               [[ -e "/etc/containers/policy.json" ]] || \
+               [[ -e "/usr/share/containers/policy.json" ]]; }; then
+          echo "SKIP: podman is on PATH but no policy.json is configured."
+          echo "       \`podman load\` would fail. Checked:"
+          echo "       \$HOME/.config/containers/policy.json,"
+          echo "       /etc/containers/policy.json,"
+          echo "       /usr/share/containers/policy.json."
+          exit 77
+        fi
         ;;
     esac
 
@@ -755,7 +766,7 @@ let
       for f in ${prompts}/*; do cp -f "$f" .wrapix/city/current/prompts/; done
 
       printf "## Scout Rules\nimmediate: FATAL|PANIC\nbatched: ERROR\n## Auto-deploy\nLow-risk: docs only\n" > docs/orchestration.md
-      printf "# Style Guidelines\nSH-1: Use set -euo pipefail\n" > docs/style-guidelines.md
+      printf "# Style Rules\nSH-1: Use set -euo pipefail\n" > docs/style-rules.md
       printf "<!-- expires: 2025-01-01 -->\nTemporary: freeze deploys during migration\n" > .wrapix/orchestration.md
       git add -A && git commit -m "setup: formulas and scripts"
     }
