@@ -11,7 +11,7 @@
 use anyhow::Result;
 use askama::Template;
 use loom_driver::identifier::{BeadId, MoleculeId, SpecLabel};
-use loom_templates::check::CheckContext;
+use loom_templates::check::{CheckContext, ReviewSource};
 use loom_templates::msg::{ClarifyBead, ClarifyOption, MsgContext};
 use loom_templates::plan::{PlanNewContext, PlanUpdateContext};
 use loom_templates::run::{PREVIOUS_FAILURE_MAX_LEN, PreviousFailure, RunContext};
@@ -158,6 +158,11 @@ fn previous_failure_preserves_short_input() {
 
 #[test]
 fn check_renders_review_context_fields() -> Result<()> {
+    let verify_path = "tests/loom-test.sh";
+    let verify_body = "test_review_inputs_include_judge_rubrics_signature() { :; }\n";
+    let judge_path = "tests/judges/loom.sh";
+    let judge_body = "judge_live_path_coverage_signature() { :; }\n";
+
     let ctx = CheckContext {
         pinned_context: PINNED_CONTEXT_BODY.to_string(),
         label: SpecLabel::new("loom-harness"),
@@ -166,8 +171,14 @@ fn check_renders_review_context_fields() -> Result<()> {
         beads_summary: Some("- wx-3hhwq.10: closed".into()),
         base_commit: Some("abc1234".into()),
         molecule_id: Some(MoleculeId::new("wx-3hhwq")),
-        verify_sources: vec![],
-        judge_rubrics: vec![],
+        verify_sources: vec![ReviewSource {
+            path: verify_path.into(),
+            body: verify_body.into(),
+        }],
+        judge_rubrics: vec![ReviewSource {
+            path: judge_path.into(),
+            body: judge_body.into(),
+        }],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
         exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
@@ -178,6 +189,17 @@ fn check_renders_review_context_fields() -> Result<()> {
     assert!(out.contains("Molecule**: wx-3hhwq"));
     assert!(out.contains("git diff abc1234..HEAD"));
     assert!(out.contains("- wx-3hhwq.10: closed"));
+
+    assert!(out.contains("## `[verify]` Sources"));
+    assert!(out.contains(verify_path), "verify path missing: {out}");
+    assert!(
+        out.contains(verify_body.trim()),
+        "verify body missing: {out}"
+    );
+
+    assert!(out.contains("## `[judge]` Rubrics"));
+    assert!(out.contains(judge_path), "judge path missing: {out}");
+    assert!(out.contains(judge_body.trim()), "judge body missing: {out}");
     Ok(())
 }
 

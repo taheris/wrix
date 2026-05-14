@@ -1905,7 +1905,7 @@ Criteria.
 
 ### Verdict gate
 
-- [ ] After every agent phase, `loom check` evaluates the result against
+- [x] After every agent phase, `loom check` evaluates the result against
       the verdict-gate decision table; mechanical signals (marker,
       bd-closed, diff) make no LLM call
   [verify](tests/loom-test.sh::test_verdict_gate_mechanical_signals)
@@ -1921,25 +1921,25 @@ Criteria.
 - [x] `LOOM_CLARIFY` agent marker → bead transitions to `[clarify]`,
       recovery loop is skipped
   [verify](tests/loom-test.sh::test_gate_loom_clarify_marker)
-- [ ] No marker emitted → recovery with cause `swallowed-marker`
+- [x] No marker emitted → recovery with cause `swallowed-marker`
   [verify](tests/loom-test.sh::test_gate_swallowed_marker)
-- [ ] `LOOM_COMPLETE` + bead not bd-closed → recovery with cause
+- [x] `LOOM_COMPLETE` + bead not bd-closed → recovery with cause
       `incomplete-signaling`
   [verify](tests/loom-test.sh::test_gate_incomplete_signaling)
-- [ ] `LOOM_COMPLETE` + closed + empty diff → recovery with cause
+- [x] `LOOM_COMPLETE` + closed + empty diff → recovery with cause
       `zero-progress`
   [verify](tests/loom-test.sh::test_gate_zero_progress)
-- [ ] `LOOM_NOOP` + closed + empty diff → review runs (legitimate no-op
+- [x] `LOOM_NOOP` + closed + empty diff → review runs (legitimate no-op
       proceeds to semantic review rather than zero-progress)
   [verify](tests/loom-test.sh::test_gate_loom_noop_empty_diff)
-- [ ] All `[verify]` scripts on the bead's success criteria run; none
+- [x] All `[verify]` scripts on the bead's success criteria run; none
       short-circuit each other; per-script pass/fail + stderr is captured
   [verify](tests/loom-test.sh::test_gate_runs_all_verify_scripts)
-- [ ] One or more `[verify]` failures → recovery with cause
+- [x] One or more `[verify]` failures → recovery with cause
       `verify-fail`; `previous_failure` carries every failure (not just
       the first), with a 4000-char budget split across them
   [verify](tests/loom-test.sh::test_gate_verify_fail_collects_all)
-- [ ] Review (LLM step) runs regardless of `[verify]` result; on
+- [x] Review (LLM step) runs regardless of `[verify]` result; on
       verify-fail, review's flag reasoning is appended to
       `previous_failure` under `Review notes:`
   [verify](tests/loom-test.sh::test_review_runs_on_verify_fail)
@@ -1951,10 +1951,10 @@ Criteria.
       claims to test (e.g. mocking the agent backend in an
       agent-integration test)
   [judge](tests/judges/loom.sh::judge_mock_discipline)
-- [ ] Review's secondary concerns are scope appropriateness and
+- [x] Review's secondary concerns are scope appropriateness and
       `[judge]` rubric satisfaction
   [verify](tests/loom-test.sh::test_review_inputs_include_judge_rubrics)
-- [ ] Review flag → recovery with cause `review-flag`; the flag detail
+- [x] Review flag → recovery with cause `review-flag`; the flag detail
       names which concern triggered (live-path / mock / scope / judge)
   [verify](tests/loom-test.sh::test_gate_review_flag_names_concern)
 - [ ] Recovery iter < `[loop] max_iterations` (default 3) → spawns
@@ -1979,7 +1979,7 @@ Criteria.
 - [ ] Recovery iter ≥ max_iterations → applies `loom:blocked` with cause
       in `bd update --notes`
   [verify](tests/loom-test.sh::test_recovery_exhaustion_applies_blocked)
-- [ ] Iteration count is bead-level state and survives `retry →
+- [x] Iteration count is bead-level state and survives `retry →
       [running]` round-trips
   [verify](tests/loom-test.sh::test_iteration_count_persists)
 - [ ] Pre-flight infra failures (image load, container start) exit
