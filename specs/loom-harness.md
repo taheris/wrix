@@ -1640,18 +1640,18 @@ Criteria.
       path) before invoking podman with `image_ref` as the ref; the load is
       idempotent on the image's hash tag
   [verify](tests/loom-test.sh::test_wrapix_spawn_loads_image_source)
-- [ ] Per-bead profile selection: two beads with different profile labels
+- [x] Per-bead profile selection: two beads with different profile labels
       result in two `wrapix spawn` invocations with different `image_ref`
       and `image_source`
   [verify](tests/loom-test.sh::test_per_bead_profile_spawn)
-- [ ] Loom reads `LOOM_PROFILES_MANIFEST` at startup and parses it into
+- [x] Loom reads `LOOM_PROFILES_MANIFEST` at startup and parses it into
       `BTreeMap<ProfileName, ImageEntry>`; missing env var or missing file
       errors before any bead spawn
   [verify](tests/loom-test.sh::test_profiles_manifest_required)
-- [ ] A bead with `profile:X` where `X` is not in the manifest fails with a
+- [x] A bead with `profile:X` where `X` is not in the manifest fails with a
       typed `ProfileError::UnknownProfile` naming the missing profile
   [verify](tests/loom-test.sh::test_unknown_profile_errors)
-- [ ] `--profile` CLI override takes precedence over bead labels
+- [x] `--profile` CLI override takes precedence over bead labels
   [verify](tests/loom-test.sh::test_profile_cli_override)
 - [ ] `loom plan` shells out to interactive `wrapix run` (TTY attached); does
       not capture stdio for JSONL
