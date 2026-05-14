@@ -1806,22 +1806,22 @@ Criteria.
 
 ### Worktree parallelism
 
-- [ ] `loom run --parallel 1` (default) does not create a worktree and works
+- [x] `loom run --parallel 1` (default) does not create a worktree and works
       on the driver branch directly
   [verify](tests/loom-test.sh::test_parallel_one_no_worktree)
-- [ ] `loom run --parallel N` (N > 1) creates one worktree per dispatched bead
+- [x] `loom run --parallel N` (N > 1) creates one worktree per dispatched bead
       under `.wrapix/worktree/<label>/<bead-id>/`
   [verify](tests/loom-test.sh::test_parallel_creates_worktrees)
-- [ ] Each worktree spawns its own `wrapix spawn` and the spawns run
+- [x] Each worktree spawns its own `wrapix spawn` and the spawns run
       concurrently (overlapping wall-clock)
   [verify](tests/loom-test.sh::test_parallel_concurrent_spawns)
-- [ ] Successful bead branches are merged back to the driver branch after
+- [x] Successful bead branches are merged back to the driver branch after
       the batch completes
   [verify](tests/loom-test.sh::test_parallel_merge_back)
-- [ ] On worker failure, the bead worktree branch is cleaned up and the bead
+- [x] On worker failure, the bead worktree branch is cleaned up and the bead
       is queued for retry per the retry policy
   [verify](tests/loom-test.sh::test_parallel_failure_cleanup)
-- [ ] On merge conflict, the worktree is preserved and the bead is marked
+- [x] On merge conflict, the worktree is preserved and the bead is marked
       failed (not silently overwritten)
   [verify](tests/loom-test.sh::test_parallel_conflict_preserves_worktree)
 - [ ] `GitClient` is the only module that imports `gix` or invokes the `git`
@@ -1840,7 +1840,7 @@ Criteria.
   [verify](tests/loom-test.sh::test_run_continuous)
 - [ ] `loom run --once` processes single bead then exits
   [verify](tests/loom-test.sh::test_run_once)
-- [ ] `loom run --parallel N` (alias `-p N`) accepts a positive integer; non-
+- [x] `loom run --parallel N` (alias `-p N`) accepts a positive integer; non-
       positive or non-integer values fail with a clear error
   [verify](tests/loom-test.sh::test_run_parallel_flag_validation)
 - [ ] `loom run` reads profile from bead label and spawns correct container
