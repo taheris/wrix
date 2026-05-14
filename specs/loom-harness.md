@@ -1998,10 +1998,10 @@ Criteria.
 
 ### Auxiliary commands
 
-- [ ] `loom init` creates `.wrapix/loom/config.toml` and `.wrapix/loom/state.db`
+- [x] `loom init` creates `.wrapix/loom/config.toml` and `.wrapix/loom/state.db`
       with the default schema
   [verify](tests/loom-test.sh::test_init_creates_state)
-- [ ] `loom init --rebuild` repopulates the state DB from `specs/*.md`
+- [x] `loom init --rebuild` repopulates the state DB from `specs/*.md`
       and active beads
   [verify](tests/loom-test.sh::test_init_rebuild)
 - [ ] `loom status` prints active spec, current molecule, iteration count
@@ -2044,13 +2044,13 @@ Criteria.
 
 - [ ] `StateDb::open` creates tables on first open
   [verify](tests/loom-test.sh::test_state_db_init)
-- [ ] `StateDb::rebuild` populates from spec files and active beads
+- [x] `StateDb::rebuild` populates from spec files and active beads
   [verify](tests/loom-test.sh::test_state_db_rebuild)
-- [ ] `StateDb::rebuild` parses each spec's `## Companions` section and
+- [x] `StateDb::rebuild` parses each spec's `## Companions` section and
       writes one `companions` row per listed path; specs without the
       section contribute zero rows (not an error)
   [verify](tests/loom-test.sh::test_state_db_rebuild_companions)
-- [ ] `StateDb::rebuild` resets iteration counters to 0
+- [x] `StateDb::rebuild` resets iteration counters to 0
   [verify](tests/loom-test.sh::test_state_db_rebuild_resets_counters)
 - [ ] `current_spec` / `set_current_spec` round-trips correctly
   [verify](tests/loom-test.sh::test_state_current_spec)
@@ -2062,12 +2062,12 @@ Criteria.
       `set_todo_cursor` overwrites prior values (cursor advances forward)
       and per-label namespacing keeps distinct specs disjoint
   [verify](tests/loom-test.sh::test_state_todo_cursor)
-- [ ] `loom todo` advances the cursor only when the session emitted a
+- [x] `loom todo` advances the cursor only when the session emitted a
       `LOOM_COMPLETE` or `LOOM_NOOP` marker **and** `exit_code == 0`;
       any other terminal state (no marker, nonzero exit, `LOOM_BLOCKED`,
       `LOOM_CLARIFY`) leaves the cursor untouched
   [verify](tests/loom-test.sh::test_todo_cursor_advance_requires_marker)
-- [ ] The implementation-notes delete and the cursor advance share one
+- [x] The implementation-notes delete and the cursor advance share one
       SQLite transaction, both gated on productive completion; a
       non-productive terminal state leaves both intact
   [verify](tests/loom-test.sh::test_todo_delete_notes_atomic_with_cursor)
@@ -2105,15 +2105,15 @@ Criteria.
       accepts it, so `loom note add my-spec --text "…"` is the
       common-case shorthand
   [verify](tests/loom-test.sh::test_loom_note_kind_defaults_implementation)
-- [ ] `loom init --rebuild` drops and recreates the `notes` table —
+- [x] `loom init --rebuild` drops and recreates the `notes` table —
       no notes survive a rebuild, regardless of `kind`
   [verify](tests/loom-test.sh::test_rebuild_drops_all_notes)
-- [ ] `notes.spec_label` is declared with `ON DELETE CASCADE`; an
+- [x] `notes.spec_label` is declared with `ON DELETE CASCADE`; an
       explicit `DELETE FROM specs WHERE label = ?` removes the notes in
       the same statement. No routine command takes that path today —
       this verifies the FK clause itself
   [verify](tests/loom-test.sh::test_notes_cascade_on_spec_delete)
-- [ ] Routine commands never DELETE a `specs` row; row removal happens
+- [x] Routine commands never DELETE a `specs` row; row removal happens
       only via `loom init --rebuild`
   [verify](tests/loom-test.sh::test_routine_commands_never_delete_spec_row)
 

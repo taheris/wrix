@@ -60,6 +60,7 @@ CREATE INDEX IF NOT EXISTS idx_notes_spec_kind ON notes(spec_label, kind);
 const MIGRATE_V3_TO_V4: &str = "ALTER TABLE specs DROP COLUMN implementation_notes;";
 
 const DROP_AND_RECREATE: &str = "
+DROP TABLE IF EXISTS notes;
 DROP TABLE IF EXISTS companions;
 DROP TABLE IF EXISTS molecules;
 DROP TABLE IF EXISTS specs;
@@ -111,6 +112,7 @@ impl StateDb {
             path: path.to_path_buf(),
             source,
         })?;
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
         conn.execute_batch(SCHEMA)?;
         apply_migrations(&conn)?;
         Ok(Self {
@@ -356,6 +358,37 @@ impl StateDb {
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    /// Atomically delete every `kind = 'implementation'` note for `label`
+    /// and write `new_cursor` into `meta.todo_cursor:<label>`. Both writes
+    /// share a single SQLite transaction so calling code cannot perform one
+    /// without the other — the productive-completion gate in `loom todo`
+    /// is single-pointed through this API.
+    ///
+    /// Spec: `loom-harness.md` *Todo cursor advancement* — "The cursor
+    /// advance and the implementation-notes delete are two writes against
+    /// the same productive-completion gate, so they must be a single
+    /// SQLite transaction."
+    pub fn consume_notes_and_advance_cursor(
+        &self,
+        label: &SpecLabel,
+        new_cursor: &str,
+    ) -> Result<(), StateError> {
+        let mut conn = self.conn.lock().map_err(|_| StateError::Poisoned)?;
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM notes WHERE spec_label = ?1 AND kind = 'implementation'",
+            params![label.as_str()],
+        )?;
+        let key = todo_cursor_key(label);
+        tx.execute(
+            "INSERT INTO meta(key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, new_cursor],
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// Remove a single note by its row id.

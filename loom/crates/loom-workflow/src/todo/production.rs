@@ -185,25 +185,23 @@ impl TodoController for ProductionTodoController {
         }
         match self.git.head_commit_sha().await {
             Ok(head) => {
-                self.state.set_todo_cursor(&self.label, &head)?;
+                self.state
+                    .consume_notes_and_advance_cursor(&self.label, &head)?;
                 info!(
                     label = %self.label,
                     head = %head,
                     marker = ?marker,
-                    "loom todo: cursor advanced to HEAD",
+                    "loom todo: implementation notes consumed and cursor advanced atomically",
                 );
             }
             Err(e) => {
                 warn!(
                     label = %self.label,
                     error = %e,
-                    "loom todo: could not resolve HEAD — cursor unchanged",
+                    "loom todo: could not resolve HEAD — cursor and notes unchanged",
                 );
             }
         }
-        // Notes are no longer cleared on todo consume — the loom note CLI
-        // (D2) owns the SQLite notes table directly, and a successful todo
-        // run does not flush them.
         Ok(())
     }
 }

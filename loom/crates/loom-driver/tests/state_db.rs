@@ -501,3 +501,107 @@ fn notes_kind_defaults_implementation() -> Result<()> {
     assert_eq!(rows.len(), 2);
     Ok(())
 }
+
+#[test]
+fn rebuild_drops_all_notes() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let workspace = dir.path();
+    write_spec(workspace, "alpha", "# alpha\n")?;
+    let db = StateDb::open(workspace.join(".wrapix/loom/state.db"))?;
+    let label = SpecLabel::new("alpha");
+    db.notes_add(&label, "implementation", "impl 1", 100)?;
+    db.notes_add(&label, "implementation", "impl 2", 200)?;
+    db.notes_add(&label, "design", "design 1", 300)?;
+    db.notes_add(&label, "review", "review 1", 400)?;
+    assert_eq!(db.notes_list(Some(&label), None)?.len(), 4);
+
+    db.rebuild(workspace, &[])?;
+    let rows = db.notes_list(Some(&label), None)?;
+    assert!(
+        rows.is_empty(),
+        "rebuild must drop and recreate the notes table — no notes survive regardless of kind",
+    );
+
+    let table_rows = list_table(
+        &workspace.join(".wrapix/loom/state.db"),
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='notes'",
+    )?;
+    assert_eq!(
+        table_rows,
+        vec![vec!["notes".to_string()]],
+        "notes table must be recreated after rebuild so subsequent inserts succeed",
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_cascade_on_spec_delete() -> Result<()> {
+    // Verifies the `ON DELETE CASCADE` clause on `notes.spec_label` actually
+    // fires when foreign keys are enabled — the spec acknowledges this is a
+    // dormant guarantee (no routine command DELETEs from `specs`) but the
+    // clause must work if a future code path ever takes that route.
+    let dir = tempfile::tempdir()?;
+    let db_path = dir.path().join("state.db");
+    let db = StateDb::open(&db_path)?;
+    let label = SpecLabel::new("alpha");
+    db.notes_add(&label, "implementation", "n1", 100)?;
+    db.notes_add(&label, "design", "n2", 200)?;
+    assert_eq!(db.notes_list(Some(&label), None)?.len(), 2);
+
+    // Drop the StateDb handle so its connection lock cannot collide with
+    // the side-channel connection below. The cascade depends on
+    // PRAGMA foreign_keys = ON, which StateDb::open already enables for
+    // its own connection — the side-channel must enable it explicitly.
+    drop(db);
+    let conn = rusqlite::Connection::open(&db_path)?;
+    conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+    let removed = conn.execute(
+        "DELETE FROM specs WHERE label = ?1",
+        rusqlite::params![label.as_str()],
+    )?;
+    assert_eq!(removed, 1, "exactly one specs row must be deleted");
+    drop(conn);
+
+    let db = StateDb::open(&db_path)?;
+    let surviving = db.notes_list(Some(&label), None)?;
+    assert!(
+        surviving.is_empty(),
+        "ON DELETE CASCADE must wipe child notes in the same statement; got {} rows",
+        surviving.len(),
+    );
+    Ok(())
+}
+
+#[test]
+fn consume_notes_and_advance_cursor_is_atomic() -> Result<()> {
+    // Pins the single-pointed gate API `StateDb::consume_notes_and_advance_cursor`:
+    // a successful call deletes implementation notes AND advances the cursor;
+    // other-kind notes survive (the spec consumes only `kind=implementation`).
+    let dir = tempfile::tempdir()?;
+    let db = StateDb::open(dir.path().join("state.db"))?;
+    let label = SpecLabel::new("alpha");
+    db.notes_add(&label, "implementation", "impl 1", 100)?;
+    db.notes_add(&label, "implementation", "impl 2", 200)?;
+    db.notes_add(&label, "design", "design 1", 300)?;
+    db.set_todo_cursor(&label, "old-cursor")?;
+
+    db.consume_notes_and_advance_cursor(&label, "new-cursor")?;
+
+    let impl_rows = db.notes_list(Some(&label), Some("implementation"))?;
+    assert!(
+        impl_rows.is_empty(),
+        "implementation notes must be deleted on productive completion",
+    );
+    let design_rows = db.notes_list(Some(&label), Some("design"))?;
+    assert_eq!(
+        design_rows.len(),
+        1,
+        "non-implementation kinds must not be touched by todo's consume gate",
+    );
+    assert_eq!(
+        db.todo_cursor(&label)?,
+        Some("new-cursor".to_string()),
+        "cursor must advance to the new value atomically with the notes delete",
+    );
+    Ok(())
+}

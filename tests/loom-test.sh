@@ -38,6 +38,26 @@ toml_grep() {
 }
 
 #-----------------------------------------------------------------------------
+# Pending-implementation stub helper. Defined at the top of the file (above
+# all real test_* dispatchers) so the `loom doctor` body-capture heuristic
+# in `loom-workflow/src/doctor.rs::parse_dispatcher` — which reads forward
+# from each `test_<name>()` header until the next `test_<name>()` header —
+# cannot confuse this helper's textual occurrence with a real dispatcher
+# that has been promoted to `[x]` in the spec. Stub dispatchers call this
+# helper to mark themselves "not implemented yet" by exiting 77 (the
+# de-facto POSIX "skipped" code, also used by Automake test runners).
+# Promotion path: when the implementation lands, replace the stub body
+# with a real dispatcher into the corresponding Rust test (drop the
+# `_pending_stub` call). The review gate (specs/loom-harness.md
+# §"Stub-to-real review gate") rejects PRs that land implementation
+# work while the matching stub is still here.
+#-----------------------------------------------------------------------------
+_pending_stub() {
+    echo "test_${1}: pending implementation — see specs/loom-harness.md §Stub-to-real review gate" >&2
+    exit 77
+}
+
+#-----------------------------------------------------------------------------
 # test_workspace_builds — `cargo build` from loom/ root succeeds.
 #-----------------------------------------------------------------------------
 test_workspace_builds() {
@@ -3152,24 +3172,6 @@ test_todo_cursor_advance_requires_marker() {
         -- --exact --nocapture --quiet
 }
 
-#-----------------------------------------------------------------------------
-# Pending-implementation stubs
-#
-# Each stub satisfies the bidirectional annotation-integrity gate
-# (`loom/crates/loom/tests/annotations.rs`) by existing at column 0 with
-# a `test_*` name, but signals "not implemented yet" by exiting 77 (the
-# de-facto POSIX "skipped" code, also used by Automake test runners).
-# Promotion path: when the implementation lands, replace the stub body
-# with a real dispatcher into the corresponding Rust test (drop the
-# `_pending_stub` call). The review gate (specs/loom-harness.md
-# §"Stub-to-real review gate") rejects PRs that land implementation
-# work while the matching stub is still here.
-#-----------------------------------------------------------------------------
-_pending_stub() {
-    echo "test_${1}: pending implementation — see specs/loom-harness.md §Stub-to-real review gate" >&2
-    exit 77
-}
-
 test_agent_event_deserialize_round_trip() {
     cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
         event::tests::agent_event_deserialize_round_trip
@@ -3338,7 +3340,9 @@ test_msg_option_validates() {
 }
 test_msg_spec_filter() { _pending_stub msg_spec_filter; }
 test_msg_view_modes() { _pending_stub msg_view_modes; }
-test_notes_cascade_on_spec_delete() { _pending_stub notes_cascade_on_spec_delete; }
+test_notes_cascade_on_spec_delete() {
+    cargo_run test -p loom-driver --test state_db -- --exact --nocapture --quiet notes_cascade_on_spec_delete
+}
 test_osc8_hyperlinks() {
     cargo_run test -p loom-render --lib -- --nocapture --quiet \
         osc8::tests
@@ -3366,7 +3370,9 @@ test_raw_mode_passthrough() {
     cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
         renderer::tests::raw_mode_passthrough
 }
-test_rebuild_drops_all_notes() { _pending_stub rebuild_drops_all_notes; }
+test_rebuild_drops_all_notes() {
+    cargo_run test -p loom-driver --test state_db -- --exact --nocapture --quiet rebuild_drops_all_notes
+}
 test_renderer_modes_present() {
     cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
         renderer::tests::renderer_modes_present
@@ -3387,7 +3393,12 @@ test_task_subagent_nesting() {
     cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
         renderer::tests::task_subagent_nesting_indents_nested_tool_calls
 }
-test_todo_delete_notes_atomic_with_cursor() { _pending_stub todo_delete_notes_atomic_with_cursor; }
+test_todo_delete_notes_atomic_with_cursor() {
+    cargo_run test -p loom-driver --test state_db -- --exact --nocapture --quiet \
+        consume_notes_and_advance_cursor_is_atomic
+    cargo_run test -p loom-workflow --test todo_production -- --exact --nocapture --quiet \
+        record_outcome_consumes_notes_and_advances_cursor_atomically
+}
 test_tool_body_truncation_policy() {
     cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
         tool_body::tests::cap_body_keeps_short_bodies_unchanged
