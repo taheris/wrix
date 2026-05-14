@@ -3225,6 +3225,13 @@ test_driver_event_kinds_present() {
         check::runner::tests::clean_review_pushes_and_resets_counter
     cargo_run test -p loom-workflow --lib -- --exact --nocapture --quiet \
         run::runner::tests::retry_emits_retry_dispatch_driver_event
+    # wx-fgp9j.35: container_spawn / container_oom / infra_failure emission
+    # at the agent.rs session driver boundary. The unit-level tests pin the
+    # routing helper + the end-to-end preflight wire-up reaches the sink.
+    cargo_run test -p loom-workflow --lib -- --exact --nocapture --quiet \
+        agent::tests::midsession_failure_kind_routes_oom_versus_generic_infra
+    cargo_run test -p loom-workflow --lib -- --exact --nocapture --quiet \
+        agent::tests::preflight_failure_emits_infra_failure_driver_event
 }
 test_driver_events_rendered() {
     cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \

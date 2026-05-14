@@ -24,6 +24,7 @@ use loom_driver::agent::{
 };
 use loom_driver::clock::{Clock, SystemClock};
 use loom_driver::logging::{BeadOutcome, LogSink};
+use loom_events::{EnvelopeBuilder, Source};
 use tracing::{info, warn};
 
 use crate::run::SessionResult;
@@ -82,7 +83,27 @@ pub async fn run_agent_classified<B: AgentBackend>(
         .unwrap_or_else(|| Duration::from_secs(DEFAULT_STALL_WARN_SECS));
     let clock = SystemClock::new();
     let session = match B::spawn(config).await {
-        Ok(session) => session,
+        Ok(session) => {
+            // Container/agent process is up. Emit a `container_spawn`
+            // driver_event so replay and live UX can announce the
+            // boundary between pre-flight setup and the agent's own
+            // event stream.
+            emit_driver_event(
+                sink.as_mut(),
+                envelope_builder.as_mut(),
+                "container_spawn",
+                &format!(
+                    "container spawn ok: {image} for {workspace}",
+                    image = config.image_ref,
+                    workspace = config.workspace.display(),
+                ),
+                serde_json::json!({
+                    "image_ref": config.image_ref,
+                    "workspace": config.workspace.to_string_lossy(),
+                }),
+            );
+            session
+        }
         Err(err) => {
             // Spec: "Pre-flight failures (image load, container start) →
             // exit immediately as blocked with cause infra-preflight —
@@ -91,10 +112,19 @@ pub async fn run_agent_classified<B: AgentBackend>(
             // failure here lands in the preflight bucket regardless of
             // backend.
             warn!(error = %err, "agent spawn failed before session became live");
+            let error_str = err.to_string();
+            emit_driver_event(
+                sink.as_mut(),
+                envelope_builder.as_mut(),
+                "infra_failure",
+                &format!("preflight infra failure: {error_str}"),
+                serde_json::json!({
+                    "phase": "preflight",
+                    "error": error_str,
+                }),
+            );
             finish_sink(sink, BeadOutcome::Failed);
-            return SessionResult::PreflightFailed {
-                error: err.to_string(),
-            };
+            return SessionResult::PreflightFailed { error: error_str };
         }
     };
     info!(
@@ -106,10 +136,10 @@ pub async fn run_agent_classified<B: AgentBackend>(
         match prompt_with_stall_warn(session, &config.initial_prompt, stall_window, &clock).await {
             Ok(s) => s,
             Err(err) => {
+                let error_str = err.to_string();
+                emit_midsession_failure_event(sink.as_mut(), envelope_builder.as_mut(), &error_str);
                 finish_sink(sink, BeadOutcome::Failed);
-                return SessionResult::MidSessionFailed {
-                    error: err.to_string(),
-                };
+                return SessionResult::MidSessionFailed { error: error_str };
             }
         };
     info!("prompt sent; awaiting agent events");
@@ -118,16 +148,16 @@ pub async fn run_agent_classified<B: AgentBackend>(
         let mut event = match next {
             Ok(Some(event)) => event,
             Ok(None) => {
+                let error_str = ProtocolError::UnexpectedEof.to_string();
+                emit_midsession_failure_event(sink.as_mut(), envelope_builder.as_mut(), &error_str);
                 finish_sink(sink, BeadOutcome::Failed);
-                return SessionResult::MidSessionFailed {
-                    error: ProtocolError::UnexpectedEof.to_string(),
-                };
+                return SessionResult::MidSessionFailed { error: error_str };
             }
             Err(err) => {
+                let error_str = err.to_string();
+                emit_midsession_failure_event(sink.as_mut(), envelope_builder.as_mut(), &error_str);
                 finish_sink(sink, BeadOutcome::Failed);
-                return SessionResult::MidSessionFailed {
-                    error: err.to_string(),
-                };
+                return SessionResult::MidSessionFailed { error: error_str };
             }
         };
         // R1 (wx-cqzxh): stamp the real per-spawn envelope onto each
@@ -253,6 +283,79 @@ fn finish_sink(sink: Option<LogSink>, outcome: BeadOutcome) {
     }
 }
 
+/// Emit a single `driver_event` into `sink` carrying `source: driver`.
+///
+/// Pulled out so the three failure-handling sites in `run_agent_classified`
+/// (preflight, prompt failure, event-loop failure) share one code path
+/// and write through the same envelope-builder seq counter as the agent
+/// events that surround them. Silent no-op when either the sink or the
+/// envelope builder is absent — tests and the legacy `run_agent` wrapper
+/// pass `None` and must not be required to wire driver events.
+fn emit_driver_event(
+    sink: Option<&mut LogSink>,
+    builder: Option<&mut EnvelopeBuilder>,
+    kind: &str,
+    summary: &str,
+    payload: serde_json::Value,
+) {
+    let (Some(sink), Some(builder)) = (sink, builder) else {
+        return;
+    };
+    let envelope = builder.build_with_source(Source::Driver);
+    let event = AgentEvent::DriverEvent {
+        envelope,
+        driver_kind: kind.to_string(),
+        summary: summary.to_string(),
+        payload,
+    };
+    if let Err(e) = sink.emit(&event) {
+        warn!(error = %e, kind, "driver event emit failed");
+    }
+}
+
+/// Classify a mid-session failure string into a `driver_kind`. OOM signals
+/// (exit 137 from the container's SIGKILL, "Killed" / "OOM" in the
+/// rendered error) surface as `container_oom`; everything else lands in
+/// the generic `infra_failure` bucket per the verdict-gate spec's
+/// container-lifecycle row.
+fn midsession_failure_kind(error: &str) -> &'static str {
+    if is_oom_error(error) {
+        "container_oom"
+    } else {
+        "infra_failure"
+    }
+}
+
+fn is_oom_error(error: &str) -> bool {
+    // The Display impl of `ProtocolError::ProcessExit(137)` renders as
+    // "agent process exited with code 137"; podman / kernel OOM logs use
+    // "Killed" / "OOM". Case-insensitive match keeps backend phrasing
+    // tolerant.
+    let lower = error.to_ascii_lowercase();
+    error.contains("code 137")
+        || lower.contains("killed")
+        || lower.contains("oom")
+        || lower.contains("out of memory")
+}
+
+fn emit_midsession_failure_event(
+    sink: Option<&mut LogSink>,
+    builder: Option<&mut EnvelopeBuilder>,
+    error: &str,
+) {
+    let kind = midsession_failure_kind(error);
+    emit_driver_event(
+        sink,
+        builder,
+        kind,
+        &format!("mid-session {kind}: {error}"),
+        serde_json::json!({
+            "phase": "midsession",
+            "error": error,
+        }),
+    );
+}
+
 fn summarize_event(event: &AgentEvent) -> String {
     match event {
         AgentEvent::AgentStart { title, profile, .. } => {
@@ -305,5 +408,185 @@ fn summarize_event(event: &AgentEvent) -> String {
             summary,
             ..
         } => format!("driver_event {driver_kind}: {summary}"),
+    }
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "tests use panicking helpers"
+)]
+mod tests {
+    use super::*;
+    use loom_driver::agent::RePinContent;
+    use loom_driver::logging::LogSink;
+    use loom_events::identifier::{BeadId, SpecLabel};
+    use std::path::PathBuf;
+    use std::time::SystemTime;
+
+    #[test]
+    fn is_oom_error_matches_exit_137_and_killed_phrasings() {
+        assert!(is_oom_error("agent process exited with code 137"));
+        assert!(is_oom_error("io failure on agent stdio: process Killed"));
+        assert!(is_oom_error("OOM killer claimed agent"));
+        assert!(is_oom_error("out of memory"));
+        assert!(!is_oom_error("agent process exited with code 1"));
+        assert!(!is_oom_error("io timeout"));
+        assert!(!is_oom_error("unexpected end of agent event stream"));
+    }
+
+    #[test]
+    fn midsession_failure_kind_routes_oom_versus_generic_infra() {
+        assert_eq!(
+            midsession_failure_kind("agent process exited with code 137"),
+            "container_oom",
+        );
+        assert_eq!(
+            midsession_failure_kind("unexpected end of agent event stream"),
+            "infra_failure",
+        );
+    }
+
+    fn builder() -> EnvelopeBuilder {
+        let bead = BeadId::new("wx-emit").expect("bead id");
+        let mut clock = 0_i64;
+        EnvelopeBuilder::new(bead, None, 0, Source::Agent, move || {
+            clock += 1;
+            clock
+        })
+    }
+
+    fn read_jsonl(path: &std::path::Path) -> Vec<serde_json::Value> {
+        let body = std::fs::read_to_string(path).expect("read log");
+        body.lines()
+            .map(|l| serde_json::from_str(l).expect("json line"))
+            .collect()
+    }
+
+    fn open_test_sink(dir: &std::path::Path) -> (LogSink, std::path::PathBuf) {
+        let label = SpecLabel::new("emit-test");
+        let bead = BeadId::new("wx-emit").expect("bead id");
+        let sink = LogSink::open_in_at(dir, &label, &bead, None, SystemTime::UNIX_EPOCH)
+            .expect("open sink");
+        let path = sink.log_path().to_path_buf();
+        (sink, path)
+    }
+
+    #[test]
+    fn emit_driver_event_writes_one_jsonl_line_with_source_driver() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut sink, path) = open_test_sink(dir.path());
+        let mut b = builder();
+        emit_driver_event(
+            Some(&mut sink),
+            Some(&mut b),
+            "container_spawn",
+            "container spawn ok: img:tag",
+            serde_json::json!({"image_ref": "img:tag"}),
+        );
+        sink.finish(BeadOutcome::Done).expect("finish");
+        let events = read_jsonl(&path);
+        assert_eq!(events.len(), 1, "exactly one driver event emitted");
+        assert_eq!(events[0]["kind"], "driver_event");
+        assert_eq!(events[0]["driver_kind"], "container_spawn");
+        assert_eq!(events[0]["source"], "driver");
+        assert_eq!(events[0]["payload"]["image_ref"], "img:tag");
+    }
+
+    #[test]
+    fn emit_driver_event_is_silent_noop_when_sink_or_builder_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut sink, path) = open_test_sink(dir.path());
+        let mut b = builder();
+        emit_driver_event(
+            None,
+            Some(&mut b),
+            "container_spawn",
+            "no sink",
+            serde_json::json!({}),
+        );
+        emit_driver_event(
+            Some(&mut sink),
+            None,
+            "container_spawn",
+            "no builder",
+            serde_json::json!({}),
+        );
+        sink.finish(BeadOutcome::Done).expect("finish");
+        assert!(
+            read_jsonl(&path).is_empty(),
+            "no events should land in the sink when either dep is missing",
+        );
+        // Builder seq must NOT advance when emission is suppressed.
+        assert_eq!(
+            b.current_seq(),
+            0,
+            "seq counter must not advance on suppressed emissions",
+        );
+    }
+
+    /// `B::spawn` returning `Err` is the preflight failure path. The
+    /// driver must emit a `driver_event { kind: infra_failure }` into
+    /// the sink BEFORE finishing it, so a replay can show the cause
+    /// rather than just the empty log + closing line.
+    #[tokio::test]
+    async fn preflight_failure_emits_infra_failure_driver_event() {
+        struct FailingBackend;
+        impl AgentBackend for FailingBackend {
+            async fn spawn(_config: &SpawnConfig) -> Result<AgentSession<Idle>, ProtocolError> {
+                Err(ProtocolError::Io(std::io::Error::other(
+                    "podman load failed: image archive missing",
+                )))
+            }
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (sink, path) = open_test_sink(dir.path());
+        let b = builder();
+        let cfg = SpawnConfig {
+            image_ref: "localhost/img:tag".into(),
+            image_source: PathBuf::from("/nix/store/none.tar"),
+            workspace: PathBuf::from("/workspace"),
+            env: vec![],
+            initial_prompt: String::new(),
+            agent_args: vec![],
+            repin: RePinContent {
+                orientation: String::new(),
+                pinned_context: String::new(),
+                partial_bodies: vec![],
+            },
+            scratch_dir: dir.path().join("scratch"),
+            model: None,
+            shutdown_grace: None,
+            handshake_timeout: None,
+            stall_warn_interval: Some(Duration::ZERO),
+        };
+        let result = run_agent_classified::<FailingBackend>(&cfg, Some(sink), None, Some(b)).await;
+        match result {
+            crate::run::SessionResult::PreflightFailed { error } => {
+                assert!(
+                    error.contains("io failure"),
+                    "preflight error must carry the ProtocolError display: {error}",
+                );
+            }
+            other => panic!("expected PreflightFailed, got {other:?}"),
+        }
+        let events = read_jsonl(&path);
+        assert_eq!(
+            events.len(),
+            1,
+            "preflight path emits exactly one driver event: {events:?}",
+        );
+        assert_eq!(events[0]["kind"], "driver_event");
+        assert_eq!(events[0]["driver_kind"], "infra_failure");
+        assert_eq!(events[0]["source"], "driver");
+        assert_eq!(events[0]["payload"]["phase"], "preflight");
+        assert!(
+            events[0]["payload"]["error"]
+                .as_str()
+                .is_some_and(|s| s.contains("io failure")),
+            "payload error body must carry the ProtocolError display: {:?}",
+            events[0]["payload"],
+        );
     }
 }

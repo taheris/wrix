@@ -359,12 +359,23 @@ impl EnvelopeBuilder {
     /// `build` (not `next`) to avoid the `Iterator::next` shadowing
     /// confusion clippy flags.
     pub fn build(&mut self) -> EventEnvelope {
+        let source = self.source;
+        self.build_with_source(source)
+    }
+
+    /// Build the next envelope with `source` overriding the builder's
+    /// configured source. Used when a single `EnvelopeBuilder` emits
+    /// both agent-sourced events (the streamed parser output) and
+    /// driver-sourced events (container lifecycle / infra failure)
+    /// inside the same session — the seq counter must keep advancing
+    /// across both streams so replay can order them.
+    pub fn build_with_source(&mut self, source: Source) -> EventEnvelope {
         let ts_ms = (self.now_ms)();
         let envelope = EventEnvelope {
             bead_id: self.bead_id.clone(),
             molecule_id: self.molecule_id.clone(),
             iteration: self.iteration,
-            source: self.source,
+            source,
             ts_ms,
             seq: self.seq,
         };
@@ -746,6 +757,28 @@ mod tests {
         let seqs: Vec<u64> = (0..10).map(|_| b.build().seq).collect();
         let expected: Vec<u64> = (0..10).collect();
         assert_eq!(seqs, expected);
+    }
+
+    /// `build_with_source` overrides the builder's configured source for
+    /// one envelope while still advancing the shared seq counter. This
+    /// is the path the session driver uses to interleave driver-sourced
+    /// container/infra events with the agent-sourced parser stream
+    /// without spinning up a second builder.
+    #[test]
+    fn build_with_source_overrides_source_and_shares_seq() {
+        let mut b = builder();
+        let agent_env = b.build();
+        assert_eq!(agent_env.source, Source::Agent);
+        assert_eq!(agent_env.seq, 0);
+        let driver_env = b.build_with_source(Source::Driver);
+        assert_eq!(driver_env.source, Source::Driver);
+        assert_eq!(
+            driver_env.seq, 1,
+            "build_with_source shares the same seq counter as build",
+        );
+        let next_agent = b.build();
+        assert_eq!(next_agent.source, Source::Agent);
+        assert_eq!(next_agent.seq, 2);
     }
 }
 
