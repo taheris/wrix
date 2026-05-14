@@ -208,7 +208,10 @@ fn run_loom_msg_chat_with_extra_env(
         .env("LOOM_BIN", loom_bin)
         .env("LOOM_PROFILES_MANIFEST", &env.manifest)
         .env("BD_STATE_DIR", &env.state_dir)
-        .env("XDG_STATE_HOME", env.workspace.join(".loom-test-state"));
+        .env("XDG_STATE_HOME", env.workspace.join(".loom-test-state"))
+        // Bypass the nested-loom guard so cargo test inside a loom container
+        // still reaches the msg --chat dispatch path under test.
+        .env_remove("LOOM_INSIDE");
     for (k, v) in extra_env {
         cmd.env(k, v);
     }

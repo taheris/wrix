@@ -95,6 +95,9 @@ fn run_loom_with_flag(
         .env("LOOM_PROFILES_MANIFEST", manifest)
         .env("BD_STATE_DIR", state_dir)
         .env("XDG_STATE_HOME", workspace.join(".loom-test-state"))
+        // Bypass the nested-loom guard so cargo test inside a loom container
+        // still reaches the run dispatch path under test.
+        .env_remove("LOOM_INSIDE")
         .output()
         .expect("spawn loom")
 }

@@ -84,6 +84,9 @@ fn loom_run_once_against_empty_bd_exits_zero() {
         // if the loop ever changes shape.
         .env("LOOM_BIN", loom_bin)
         .env("XDG_STATE_HOME", workspace.join(".loom-test-state"))
+        // Bypass the nested-loom guard so cargo test inside a loom container
+        // still reaches the run dispatch path under test.
+        .env_remove("LOOM_INSIDE")
         .output()
         .expect("spawn loom");
 
