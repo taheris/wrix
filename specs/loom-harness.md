@@ -2145,13 +2145,13 @@ Criteria.
 
 ### Beads CLI wrapper
 
-- [ ] `bd show` output parsed into typed `Bead` struct
+- [x] `bd show` output parsed into typed `Bead` struct
   [verify](tests/loom-test.sh::test_bd_show_parsing)
-- [ ] `bd list` output parsed with label and status filtering
+- [x] `bd list` output parsed with label and status filtering
   [verify](tests/loom-test.sh::test_bd_list_parsing)
-- [ ] `bd create` returns created bead ID
+- [x] `bd create` returns created bead ID
   [verify](tests/loom-test.sh::test_bd_create_returns_id)
-- [ ] CLI errors mapped to typed error variants
+- [x] CLI errors mapped to typed error variants
   [verify](tests/loom-test.sh::test_bd_error_handling)
 
 ### Nix integration
