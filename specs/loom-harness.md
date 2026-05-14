@@ -2119,23 +2119,23 @@ Criteria.
 
 ### Compaction recovery
 
-- [ ] At session start, `.wrapix/loom/scratch/<key>/` contains
+- [x] At session start, `.wrapix/loom/scratch/<key>/` contains
       `prompt.txt`, `scratch.md`, `repin.sh` for every phase command
       (plan, todo, run, check, msg)
   [verify](tests/loom-test.sh::test_scratch_dir_created)
-- [ ] `<key>` is the spec label for plan/todo phases and the bead ID for
+- [x] `<key>` is the spec label for plan/todo phases and the bead ID for
       run/check/msg phases
   [verify](tests/loom-test.sh::test_scratch_key_naming)
-- [ ] Running `repin.sh` emits a valid `SessionStart[compact]` JSON
+- [x] Running `repin.sh` emits a valid `SessionStart[compact]` JSON
       envelope containing banner + `prompt.txt` + `scratch.md` contents
   [verify](tests/loom-test.sh::test_repin_envelope)
-- [ ] `claude-settings.json` registers `repin.sh` under
+- [x] `claude-settings.json` registers `repin.sh` under
       `SessionStart[matcher: compact]`
   [verify](tests/loom-test.sh::test_repin_hook_registered)
-- [ ] On session end (success or failure), the per-key scratch directory
+- [x] On session end (success or failure), the per-key scratch directory
       is removed
   [verify](tests/loom-test.sh::test_scratch_dir_cleanup)
-- [ ] Two parallel `loom run` workers on different beads use independent
+- [x] Two parallel `loom run` workers on different beads use independent
       scratch directories and do not collide
   [verify](tests/loom-test.sh::test_parallel_scratch_isolation)
 - [ ] `partial/scratchpad.md` instructs the agent that the scratchpad is

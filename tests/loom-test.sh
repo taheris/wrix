@@ -3145,17 +3145,6 @@ test_todo_cursor_advance_requires_marker() {
         -- --exact --nocapture --quiet
 }
 
-# Compaction Recovery (scratch dir)
-scratch_cargo_test() {
-    cargo_run test -p loom-driver --lib "scratch::tests::$1" -- --exact --nocapture --quiet
-}
-test_scratch_dir_created()        { scratch_cargo_test open_creates_layout_and_drop_removes_it; }
-test_scratch_key_naming()         { scratch_cargo_test parallel_keys_get_independent_dirs; }
-test_repin_envelope()             { scratch_cargo_test repin_script_runs_jq_envelope_against_files; }
-test_repin_hook_registered()      { scratch_cargo_test claude_settings_registers_repin_under_session_start_compact; }
-test_scratch_dir_cleanup()        { scratch_cargo_test close_removes_dir_and_is_idempotent_with_drop; }
-test_parallel_scratch_isolation() { scratch_cargo_test parallel_keys_get_independent_dirs; }
-
 #-----------------------------------------------------------------------------
 # Pending-implementation stubs
 #
@@ -3423,6 +3412,25 @@ test_loom_config_empty_path_rejected() { _pending_stub loom_config_empty_path_re
 test_agent_output_markers_present() { _pending_stub agent_output_markers_present; }
 test_template_snapshot_coverage() { _pending_stub template_snapshot_coverage; }
 test_snapshots_no_crate_root_allows() { _pending_stub snapshots_no_crate_root_allows; }
+
+# Compaction Recovery (scratch dir). Kept at the tail of the test
+# functions so the loom-doctor body-slicing heuristic — which scans
+# from each `test_*(` header to the next `test_*(` for `_pending_stub`
+# substrings — does not pick up the `_pending_stub()` helper definition
+# above and flag these promoted-to-real dispatchers as still stubbed.
+scratch_cargo_test() {
+    cargo_run test -p loom-driver --lib "scratch::tests::$1" -- --exact --nocapture --quiet
+}
+test_scratch_dir_created()        { scratch_cargo_test open_creates_layout_and_drop_removes_it; }
+test_scratch_key_naming() {
+    scratch_cargo_test resolve_scratch_key_picks_label_for_spec_scoped_phases
+    scratch_cargo_test resolve_scratch_key_picks_bead_id_for_bead_scoped_phases
+    scratch_cargo_test resolve_scratch_key_falls_back_to_label_when_bead_missing
+}
+test_repin_envelope()             { scratch_cargo_test repin_script_runs_jq_envelope_against_files; }
+test_repin_hook_registered()      { scratch_cargo_test claude_settings_registers_repin_under_session_start_compact; }
+test_scratch_dir_cleanup()        { scratch_cargo_test close_removes_dir_and_is_idempotent_with_drop; }
+test_parallel_scratch_isolation() { scratch_cargo_test parallel_keys_get_independent_dirs; }
 
 #-----------------------------------------------------------------------------
 # Dispatch
