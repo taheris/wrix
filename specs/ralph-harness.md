@@ -213,7 +213,7 @@ Synchronizes local templates with packaged versions:
 4. Scaffolds project documentation (skip-if-exists):
    - `docs/README.md` — spec index stub with Specs/Beads/Purpose table
    - `docs/architecture.md` — architecture overview stub
-   - `docs/style-guidelines.md` — code style guidelines stub
+   - `docs/style-rules.md` — code style rules stub
    - `AGENTS.md` — agent instructions pointing at the docs above
 
 **`--diff` mode**: Shows changes between local templates and packaged versions. Pipe to `ralph tune` for integration:
@@ -291,7 +291,7 @@ ralph init                            # from inside a devShell
 | `.gitignore` | append-missing of `.direnv/`, `.wrapix/`, `result`, `result-*` | all entries present |
 | `.pre-commit-config.yaml` | `lib/ralph/template/pre-commit-config.yaml` | file exists |
 | `.beads/` | `bd init` | `.beads/` directory exists |
-| `docs/README.md`, `docs/architecture.md`, `docs/style-guidelines.md` | `scaffold_docs` (shared with sync) | file exists |
+| `docs/README.md`, `docs/architecture.md`, `docs/style-rules.md` | `scaffold_docs` (shared with sync) | file exists |
 | `AGENTS.md` | `scaffold_agents` (shared with sync) | file exists |
 | `CLAUDE.md` | `ln -sf AGENTS.md CLAUDE.md` | `CLAUDE.md` exists (file or symlink) |
 | `.wrapix/ralph/template/` + `partial/` | `scaffold_templates` (shared with sync) | directory exists |
@@ -438,7 +438,7 @@ Created:
   CLAUDE.md (-> AGENTS.md)
   docs/README.md
   docs/architecture.md
-  docs/style-guidelines.md
+  docs/style-rules.md
   .wrapix/ralph/template/
 Skipped:
   .beads/  (already initialized)
@@ -1041,7 +1041,7 @@ Ralph uses `bd mol` for work tracking:
   [verify](../tests/ralph/run-tests.sh#test_init_precommit_stages)
 - [ ] `ralph init` runs `bd init` when `.beads/` is absent, skips otherwise
   [verify](../tests/ralph/run-tests.sh#test_init_bd_init_idempotent)
-- [ ] `ralph init` creates `docs/README.md`, `docs/architecture.md`, `docs/style-guidelines.md` via shared `scaffold_docs`
+- [ ] `ralph init` creates `docs/README.md`, `docs/architecture.md`, `docs/style-rules.md` via shared `scaffold_docs`
   [verify](../tests/ralph/run-tests.sh#test_init_scaffolds_docs)
 - [ ] `ralph init` creates `AGENTS.md` via shared `scaffold_agents`
   [verify](../tests/ralph/run-tests.sh#test_init_creates_agents)

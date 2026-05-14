@@ -72,7 +72,7 @@ docs/
 ├── README.md            # Project overview, terminology (always pinned)
 ├── architecture.md      # This file (on demand)
 ├── orchestration.md     # Ops config, Scout rules, deploy commands (on demand)
-└── style-guidelines.md  # Code standards the Judge enforces (on demand)
+└── style-rules.md  # Code standards the Judge enforces (on demand)
 ```
 
 ## Component Overview
@@ -134,7 +134,7 @@ Scout (watching) → creates bead → Worker (fixes) → Judge (reviews)
 | Mayor | Human's conversational interface, triage, approved actions | Persistent |
 | Scout | Watches services, detects errors, creates beads, housekeeping | Persistent |
 | Worker | Picks up a bead, writes the fix in a git worktree | Ephemeral |
-| Judge | Reviews diffs against `docs/style-guidelines.md`, owns merge | Persistent |
+| Judge | Reviews diffs against `docs/style-rules.md`, owns merge | Persistent |
 
 **Key design decisions:**
 
@@ -159,7 +159,7 @@ Scout (watching) → creates bead → Worker (fixes) → Judge (reviews)
 | `docs/README.md` | Always | Project overview, terminology |
 | `docs/architecture.md` | On demand | System design |
 | `docs/orchestration.md` | On demand | Ops config, Scout rules, deploy commands |
-| `docs/style-guidelines.md` | On demand | Code standards the Judge enforces |
+| `docs/style-rules.md` | On demand | Code standards the Judge enforces |
 | `.wrapix/orchestration.md` | On demand | Dynamic/temporal overrides (local, tool-managed) |
 
 ## MCP Integration

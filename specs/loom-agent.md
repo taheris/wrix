@@ -5,12 +5,13 @@ communication, and agent runtime layer for the pi runtime.
 
 ## Problem Statement
 
-Ralph's bash scripts launch Claude Code as the only agent runtime, creating
-vendor lock-in to Anthropic. Users with a Claude Max subscription need the
-`claude` binary; users who want LLM-agnostic switching need an alternative.
-Pi-mono provides 20+ LLM provider backends and an JSONL RPC mode that enables
-programmatic control — but it requires a different communication protocol than
-Claude Code's stream-json output mode.
+Single-runtime designs that bind the workflow to one agent binary
+create vendor lock-in. Users with a Claude Max subscription need the
+`claude` binary; users who want LLM-agnostic switching need an
+alternative. Pi-mono provides 20+ LLM provider backends and a JSONL
+RPC mode that enables programmatic control — but it requires a
+different communication protocol than Claude Code's stream-json
+output mode.
 
 As of April 2026, Anthropic no longer allows third-party applications to consume
 Claude Pro/Max subscription quota. This means pi-mono cannot use a Max

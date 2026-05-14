@@ -3421,6 +3421,21 @@ test_unknown_variants_tolerated() {
         event::tests::unknown_variants_fail_with_a_loud_error
 }
 
+# Stubs added during the loom-gate planning session — pending
+# implementation of style_rules pinning + per-phase pinning policy
+# (specs/loom-templates.md).
+test_template_snapshots_stable() { _pending_stub template_snapshots_stable; }
+test_style_rules_partial_exists() { _pending_stub style_rules_partial_exists; }
+test_run_pins_style_rules() { _pending_stub run_pins_style_rules; }
+test_check_pins_style_rules() { _pending_stub check_pins_style_rules; }
+test_style_rules_not_pinned_elsewhere() { _pending_stub style_rules_not_pinned_elsewhere; }
+test_style_rules_field_scope() { _pending_stub style_rules_field_scope; }
+test_loom_config_style_rules_default() { _pending_stub loom_config_style_rules_default; }
+test_loom_config_empty_path_rejected() { _pending_stub loom_config_empty_path_rejected; }
+test_agent_output_markers_present() { _pending_stub agent_output_markers_present; }
+test_template_snapshot_coverage() { _pending_stub template_snapshot_coverage; }
+test_snapshots_no_crate_root_allows() { _pending_stub snapshots_no_crate_root_allows; }
+
 #-----------------------------------------------------------------------------
 # Dispatch
 #-----------------------------------------------------------------------------

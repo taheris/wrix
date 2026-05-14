@@ -1,8 +1,8 @@
 description = """
-Judge patrol loop — reviews worker output, enforces style guidelines, and owns merge.
+Judge patrol loop — reviews worker output, enforces style rules, and owns merge.
 
 Persistent session that receives nudges from the gate condition script when
-a worker completes. Reviews the diff against docs/style-guidelines.md,
+a worker completes. Reviews the diff against docs/style-rules.md,
 sets review_verdict on the bead metadata (approve/reject), and flags
 non-documented-rule issues for director review via bd human.
 
@@ -15,7 +15,7 @@ Also periodically sweeps .wrapix/orchestration.md for stale dynamic context
 
 ## Context
 
-Pins docs/README.md and docs/style-guidelines.md always. Loads
+Pins docs/README.md and docs/style-rules.md always. Loads
 .wrapix/orchestration.md on demand for dynamic context.
 
 ## Variables
@@ -45,7 +45,7 @@ bd prime
 **2. Read pinned context:**
 
 Read `docs/README.md` for project overview.
-Read `docs/style-guidelines.md` — these are the rules you enforce.
+Read `docs/style-rules.md` — these are the rules you enforce.
 Internalize every rule. You will apply them mechanically.
 
 **3. Check inbox for review requests:**
@@ -60,7 +60,7 @@ ID when a worker completes. Read the nudge to get:
 
 If no review pending, proceed to sweep step.
 
-**Exit criteria:** Style guidelines loaded, review assignment known (or none)."""
+**Exit criteria:** Style rules loaded, review assignment known (or none)."""
 
 [[steps]]
 id = "finalize"
@@ -78,7 +78,7 @@ git log --oneline $COMMIT_RANGE
 The bead ID is available via the `$GC_BEAD_ID` environment variable
 (injected by the formula env, not runtime.Config).
 
-**2. Review mechanically against docs/style-guidelines.md:**
+**2. Review mechanically against docs/style-rules.md:**
 
 For each rule in the style guide, check if the diff violates it.
 Be precise — only flag violations of DOCUMENTED rules.
@@ -109,7 +109,7 @@ GC_BEAD_ID=$BEAD_ID GC_WORKSPACE=$GC_WORKSPACE bash .gc/scripts/judge-merge.sh r
   "SH-1 violated at line 15: missing set -euo pipefail; SH-2 violated at line 23: unquoted $foo"
 ```
 Include specific rule IDs (e.g. SH-1, NX-2, GIT-1) and line numbers from
-docs/style-guidelines.md so the next worker iteration can address them
+docs/style-rules.md so the next worker iteration can address them
 precisely.
 
 The script handles, in a single flow:

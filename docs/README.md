@@ -27,8 +27,10 @@ pin — keep it current when specs land or retire.
 | [sandbox.md](../specs/sandbox.md) | [`lib/sandbox/default.nix`](../lib/sandbox/default.nix) | — | Platform-agnostic container isolation |
 | [security-review.md](../specs/security-review.md) | — | wx-eok | Security tradeoffs and mitigations |
 | [tmux-mcp.md](../specs/tmux-mcp.md) | [`lib/mcp/tmux/`](../lib/mcp/tmux/) | wx-4f3g | AI-assisted debugging via tmux panes |
-| [loom-harness.md](../specs/loom-harness.md) | [`loom/`](../loom/) | wx-3hhwq | Loom platform: crate structure, templates, workflow migration |
+| [loom-harness.md](../specs/loom-harness.md) | [`loom/`](../loom/) | wx-3hhwq | Loom platform: crate structure, workspace lints, process architecture, state store, command set |
 | [loom-agent.md](../specs/loom-agent.md) | [`loom/crates/loom-agent/`](../loom/crates/loom-agent/) | wx-pkht8 | Agent backend abstraction: pi-mono RPC + Claude Code stream-json |
+| [loom-templates.md](../specs/loom-templates.md) | [`loom/crates/loom-templates/`](../loom/crates/loom-templates/) | wx-z28qe | Askama templates, partials inventory, per-phase pinning policy |
+| [loom-gate.md](../specs/loom-gate.md) | [`loom/crates/loom-workflow/src/check/`](../loom/crates/loom-workflow/src/check/) | — | Quality gate: conformance + style + test-quality dimensions, plan/per-diff/standing stages, `loom check` (deterministic) + `loom review` (LLM judge) |
 | [loom-tests.md](../specs/loom-tests.md) | [`tests/loom/`](../tests/loom/) | wx-lfuuh | Test strategy: unit, integration, system tests for Loom |
 
 ## Terminology Index

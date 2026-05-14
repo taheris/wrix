@@ -3,7 +3,7 @@
 //! The rendered template body is the contract we ship to the agent — layout
 //! drift slips silently past substring assertions. Snapshots surface the diff
 //! in PR review. Updates require an explicit "snapshot updated because: ..."
-//! line in the PR description (see `docs/style-guidelines.md`).
+//! line in the PR description (see `docs/style-rules.md`).
 //!
 //! One snapshot per typed context struct, named after the test function via
 //! `insta::assert_snapshot!`'s default file naming.

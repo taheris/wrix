@@ -100,7 +100,7 @@ Four agent roles in the ops loop (city government theme):
 | **Mayor** | Human's conversational interface — triage, status briefing, executes approved actions | Persistent | Read-only + `.beads/` rw | None | Controller socket + mail |
 | **Scout** | Watches service containers, detects errors, creates beads, system housekeeping | Persistent | Read-only + `.beads/` rw | Read-only podman (logs, inspect) | Controller socket + mail |
 | **Worker** | Picks up a bead, investigates, writes the fix | Ephemeral (per bead) | Read-write (own worktree) | None | Controller socket + mail |
-| **Judge** | Reviews every worker's output, enforces style guidelines, owns merge | Persistent | Read-write (for merge) + `.beads/` rw | None | Controller socket + mail |
+| **Judge** | Reviews every worker's output, enforces style rules, owns merge | Persistent | Read-write (for merge) + `.beads/` rw | None | Controller socket + mail |
 
 The human interacts primarily through the Mayor via `gc session attach mayor`.
 Direct CLI access (`gc`, `bd`, `ralph`) is always available as a bypass.
@@ -154,7 +154,7 @@ Scout (watching) --> creates bead --> Worker (fixes) --> Judge (reviews + merges
   An event-gated order (`on: convergence.terminated`) triggers
   the post-gate logic (notify judge to merge, deploy bead) when
   convergence approves.
-- Judge enforces `docs/style-guidelines.md` mechanically; flags anything
+- Judge enforces `docs/style-rules.md` mechanically; flags anything
   outside documented rules for human review via `bd label add <id> human`
 - After judge approval, deploy is gated by risk tier (see Deploy section)
 
@@ -229,7 +229,7 @@ one at a time.
 - If rebase has conflicts: reject back to a new worker with conflict details
   as context — no automatic conflict resolution
 - Judge does not run tests — it reviews code quality against
-  `docs/style-guidelines.md` only. `prek` runs tests during rebase.
+  `docs/style-rules.md` only. `prek` runs tests during rebase.
 - After merge: `rm -rf .wrapix/worktree/<bead-id>` + `git worktree prune`
   and `git branch -d <bead-id>`. `git worktree remove` cannot be used
   because the provider rewrites the worktree's `.git` file with a
@@ -266,7 +266,7 @@ convergence escalates to the mayor, who presents the situation to the human
 conversationally.
 
 The judge reads the bead from `.beads/`, diffs the commits, and reviews
-against `docs/style-guidelines.md`. Bead ID and role type are injected via
+against `docs/style-rules.md`. Bead ID and role type are injected via
 the formula's `env` configuration, not `runtime.Config` directly.
 
 ### Notifications
@@ -336,12 +336,12 @@ must not be called directly (it blocks).
 | `docs/README.md` | git | Always (baked into formulas) | Project overview, terminology |
 | `docs/architecture.md` | git | On demand (referenced by formulas when needed) | System design |
 | `docs/orchestration.md` | git | On demand (loaded by ops formulas at session start) | Ops config, deploy commands, role rules |
-| `docs/style-guidelines.md` | git | On demand (loaded by judge formula at session start) | Code standards the judge enforces |
+| `docs/style-rules.md` | git | On demand (loaded by judge formula at session start) | Code standards the judge enforces |
 | `.wrapix/orchestration.md` | local | On demand (loaded by ops formulas at session start) | Dynamic/temporal overrides |
 
 - `ralph sync` always scaffolds missing docs files for any project:
   `docs/README.md` (project overview), `docs/architecture.md` (system design),
-  `docs/style-guidelines.md` (code standards). These are useful with or
+  `docs/style-rules.md` (code standards). These are useful with or
   without Gas City.
 - When `ralph sync` detects `mkCity` in the flake, it additionally scaffolds
   `docs/orchestration.md` from the built city config with placeholder sections
@@ -356,9 +356,9 @@ must not be called directly (it blocks).
 
 ### Anti-Slop
 
-- Judge enforces `docs/style-guidelines.md` mechanically
+- Judge enforces `docs/style-rules.md` mechanically
 - Changes outside documented rules are flagged for human (via mayor), not auto-decided
-- Human decisions feed back into `docs/style-guidelines.md`, growing the rules
+- Human decisions feed back into `docs/style-rules.md`, growing the rules
   organically
 - Judge also sweeps `.wrapix/orchestration.md` for stale dynamic context
   (expired dated entries, undated entries older than 7 days)
@@ -835,7 +835,7 @@ discovers the provider from `city.toml`.
 - [x] Service packages are built into OCI images via `dockerTools.streamLayeredImage`
   [verify](tests/city/unit.nix::city-service-images)
 - [ ] Cooldown pacing delays task dispatch by configured duration
-- [ ] Judge enforces `docs/style-guidelines.md` rules
+- [ ] Judge enforces `docs/style-rules.md` rules
   [judge]
 - [x] Provider script is clean, minimal shell with no Go dependencies
   [judge]

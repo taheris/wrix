@@ -4,14 +4,14 @@ Test strategy and infrastructure for the Loom agent driver.
 
 ## Problem Statement
 
-Loom is a Rust binary replacing Ralph's bash workflow scripts with a
-multi-crate workspace. Testing has to cover three things at once: protocol
-parsing across two agent backends (pi-mono RPC, Claude stream-json), workflow
-orchestration (state DB, locking, worktree parallelism, push gate), and
-host↔container plumbing (entrypoint branching, bind mounts, profile
-selection). The Ralph test suite ([ralph-tests.md](ralph-tests.md))
-validates bash behavior with a mock Claude; Loom needs equivalent
-coverage in a Rust-native framework with first-class state-DB tests.
+Loom is a Rust binary that orchestrates per-bead agent sessions
+across a multi-crate workspace. Testing has to cover three things at
+once: protocol parsing across two agent backends (pi-mono RPC, Claude
+stream-json), workflow orchestration (state DB, locking, worktree
+parallelism, push gate), and host↔container plumbing (entrypoint
+branching, bind mounts, profile selection). All three need
+first-class coverage in a Rust-native test framework with explicit
+state-DB and protocol-parser tests.
 
 This spec designs the test strategy across three tiers — unit, integration,
 container smoke — and the design rules that make tests deterministic and
@@ -213,10 +213,10 @@ drift.
      log exists
    - `loom spec --deps` parses the active spec's `[verify]` / `[judge]`
      annotations, opens each referenced test file, and prints the
-     deduplicated set of nixpkgs needed (port of `ralph sync --deps`)
+     deduplicated set of nixpkgs needed
    - CLI surface: `loom --help` lists every v1 command (`plan`,
-     `todo`, `run`, `check`, `msg`, `spec`, `init`, `status`, `use`,
-     `logs`) and does NOT list `sync`, `tune`, or `watch`
+     `todo`, `run`, `check`, `review`, `msg`, `spec`, `init`, `status`,
+     `use`, `logs`, `note`)
 
    #### Run UX renderer (loom-workflow)
    - Default mode: header line per bead, one line per tool call, no
@@ -374,8 +374,10 @@ drift.
    via a single Nix derivation that invokes `cargo nextest run
    --workspace`. The container smoke is exposed as a separate `nix run
    .#test-loom` app because it needs podman at runtime.
-6. **Real bd** — the container smoke runs against live `bd` (not a mock),
-   consistent with ralph-tests.md's approach.
+6. **Real bd** — the container smoke runs against live `bd` (not a
+   mock). The integration tier may mock `bd` where the test concern
+   is orthogonal to the issue tracker, but the smoke validates that
+   loom and `bd` interact correctly under realistic conditions.
 7. **Cross-platform** — unit and integration tests pass on Linux *and*
    Darwin (`x86_64`/`aarch64` for both). The container smoke is
    Linux-only (podman dependency); on Darwin the `test-loom` app exits
@@ -485,7 +487,7 @@ loom/
 
 tests/
   loom-test.sh                # [verify] runner — invoked per-function by
-                              #   `ralph spec --verify`; each function shells
+                              #   `loom spec --verify`; each function shells
                               #   to a specific cargo test
   loom/
     default.nix               # Nix derivation: cargo nextest run --workspace
@@ -948,7 +950,7 @@ so it gates PRs in CI. `loom-smoke` is exposed as an app on Linux only.
 - [ ] Newtype serde round-trip tests cover all ID types (`BeadId`,
       `SpecLabel`, `MoleculeId`, `ProfileName`, `SessionId`,
       `ToolCallId`, `RequestId`)
-  [verify](tests/loom-test.sh::test_newtype_serde_roundtrip @unit-ok)
+  [verify](tests/loom-test.sh::test_newtype_serde_roundtrip)
 - [ ] State database round-trip tests cover spec, molecule, and meta
       operations
   [verify](tests/loom-test.sh::test_state_db_roundtrip)
@@ -956,11 +958,11 @@ so it gates PRs in CI. `loom-smoke` is exposed as an app on Linux only.
       in the pi v0.72 protocol table, asserting on every documented
       field (not just type discrimination) so a renamed field fails
       deserialization at test time
-  [verify](tests/loom-test.sh::test_pi_protocol_coverage @unit-ok)
+  [verify](tests/loom-test.sh::test_pi_protocol_coverage)
 - [ ] Claude stream-json protocol tests cover all `ClaudeMessage`
       variants including `Unknown` via `#[serde(other)]`, with
       field-level assertions on each variant
-  [verify](tests/loom-test.sh::test_claude_protocol_coverage @unit-ok)
+  [verify](tests/loom-test.sh::test_claude_protocol_coverage)
 - [ ] Template rendering tests cover every Askama template with
       representative inputs
   [verify](tests/loom-test.sh::test_template_rendering)
@@ -1133,13 +1135,9 @@ the rules:
   CI. Pinned versions in `modules/flake/overlays.nix` plus parser
   tests with field-level coverage catch silent protocol drift on
   bumps.
-- **Ralph bash test migration** — ralph-tests.md tests remain as-is.
-  They validate bash behavior; Loom tests validate Rust behavior. No
-  migration is required.
 - **macOS container smoke** — the smoke requires `podman` (Linux). Darwin
   container testing is a follow-up.
-- **Mocking `bd`** — the container smoke uses live `bd`, consistent with
-  ralph-tests.md (see NFR #6).
+- **Mocking `bd`** — the container smoke uses live `bd` (see NFR #6).
 - **Broader system-tier scenario library** — `tests/loom/scenarios/` with
   steering, compaction, error-recovery scripts. The integration tier
   already covers these flows via shim-based mocks; repeating them with
@@ -1149,10 +1147,10 @@ the rules:
   with replay scripts. Parser tests use inline string literals, which are
   easier to read in PR diffs and don't bit-rot when pi/claude release new
   event shapes.
-- **Bash-rendered template parity fixtures** — Ralph's bash templates are
-  slated for removal once Loom reaches parity, so capturing them as
-  compatibility fixtures creates a fixture set that becomes irrelevant
-  the moment Ralph is removed.
+- **External-template parity fixtures** — any compatibility-fixture
+  set tied to a predecessor templating system that is itself
+  scheduled for removal. Such fixtures become irrelevant the moment
+  the predecessor is removed; capturing them is wasted work.
 - **Pi cost capture** — deferred to loom-agent. When pi's
   `get_session_stats` is wired up after the startup probe, loom-tests
   gains one acceptance criterion: a round-trip test asserting that

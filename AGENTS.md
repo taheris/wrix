@@ -64,8 +64,8 @@ do not create a corresponding file under `specs/`.
 
 ## Code Style
 
-Read `docs/style-guidelines.md` before writing or reviewing code — it contains
-the authoritative, enforceable rules (prefixed SH-, NX-, DOC-, GIT-, TST-).
+Read `docs/style-rules.md` before writing or reviewing code — it contains
+the authoritative, enforceable rules (prefixed SH-, NX-, DOC-, GIT-, TST-, RS-, COM-).
 
 Hooks enforce formatting automatically (nixfmt, shellcheck).
 
