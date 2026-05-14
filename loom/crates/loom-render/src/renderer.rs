@@ -81,6 +81,33 @@ const ANSI_GREEN: &str = "\x1b[32m";
 const ANSI_RED: &str = "\x1b[31m";
 const ANSI_YELLOW: &str = "\x1b[33m";
 
+/// Convert a `ts_ms` delta (signed millis) to a non-negative
+/// [`Duration`]. Negative deltas (clock skew across producers, malformed
+/// logs) saturate to zero so the renderer never panics on `from_millis`.
+fn ts_ms_delta(start: i64, end: i64) -> Duration {
+    let delta = end.saturating_sub(start);
+    Duration::from_millis(u64::try_from(delta).unwrap_or(0))
+}
+
+/// State captured at `ToolCall` time so the matching `ToolResult` can
+/// finalize the pair with the same context. The spec calls this out
+/// explicitly as the `HashMap<ToolCallId, PendingToolCall>` that lets a
+/// `tool_call` + `tool_result` collapse into one rendered block with a
+/// duration computed from `envelope.ts_ms` deltas. The `tool`/`params`
+/// fields are reserved for per-tool body formatting in verbose mode
+/// (the spec's "Body (-v)" column); currently only `ts_ms` is read.
+#[derive(Debug, Clone)]
+struct PendingToolCall {
+    #[expect(dead_code, reason = "reserved for per-tool verbose body formatting")]
+    tool: String,
+    #[expect(dead_code, reason = "reserved for per-tool verbose body formatting")]
+    params: Value,
+    /// `envelope.ts_ms` of the originating `ToolCall`. Used to compute
+    /// the pair's duration on `ToolResult` without consulting the wall
+    /// clock — same code path for live and replay.
+    ts_ms: i64,
+}
+
 /// Per-bead terminal renderer.
 ///
 /// One renderer is constructed per bead spawn. The driver creates it via
@@ -104,13 +131,12 @@ pub struct TerminalRenderer {
     /// `depth * 2` spaces (H6, wx-46jgi). Cleared lazily; entries only
     /// matter while the corresponding tool is in flight.
     indent_by_tool: std::collections::HashMap<loom_events::identifier::ToolCallId, usize>,
-    /// Per-tool-call `(tool_name, params)` snapshot captured at
-    /// `ToolCall` time so the matching `ToolResult` body can be
-    /// formatted by the same renderer state (R2, wx-k7tg5). Without
-    /// this, verbose mode can't tell whether a `ToolResult` body was
-    /// a 200-line `Read` payload or a 5-line `Bash` stderr — the
-    /// `cap_body` recovery hint loses its tool context.
-    tool_context: std::collections::HashMap<loom_events::identifier::ToolCallId, (String, Value)>,
+    /// Per-tool-call state captured at `ToolCall` time so the matching
+    /// `ToolResult` can finalize the pair (R2, wx-k7tg5 + H2). Stores
+    /// `(tool, params, ts_ms)` — params drives `cap_body` formatting in
+    /// verbose mode, `ts_ms` lets the result line render its duration
+    /// from the event envelope rather than wall clock.
+    pending_calls: std::collections::HashMap<loom_events::identifier::ToolCallId, PendingToolCall>,
     /// In-place "running indicator" state for the top-level tool call
     /// currently in-flight (R3, wx-mpci2). When `Some((id, started,
     /// summary, indent))`, a `\r`-overwritable line has been written
@@ -118,6 +144,13 @@ pub struct TerminalRenderer {
     /// Any other event must clear/finalize the line first so it does
     /// not interleave with running-state text.
     running: Option<(ToolCallId, Instant, String, String)>,
+    /// `true` for `loom run` (events arrive in real time) and `false`
+    /// for `loom logs` replay. Replay mode suppresses the in-place
+    /// running indicator entirely — every event already has its
+    /// matching `ToolResult` on disk so the spinner has nothing to
+    /// represent — and pair durations come from `ts_ms` deltas instead
+    /// of the local clock.
+    live: bool,
     /// `true` when the renderer should drive the in-place running
     /// indicator. Disabled in `Plain`/`Json`/`Raw` modes, when running
     /// in parallel (multiple `\r` regions don't compose), and when
@@ -134,7 +167,9 @@ pub struct TerminalRenderer {
 
 impl TerminalRenderer {
     /// Build a renderer that writes to `out` using a [`SystemClock`] for the
-    /// elapsed-time line at finish.
+    /// elapsed-time line at finish. Defaults to `live = true` — events
+    /// stream from a running agent. Replay callers (`loom logs`) use
+    /// [`TerminalRenderer::new_replay`] to flip the `live` bool.
     pub fn new(
         out: impl Write + Send + 'static,
         mode: RenderMode,
@@ -142,7 +177,37 @@ impl TerminalRenderer {
         parallel: bool,
         color: bool,
     ) -> Self {
-        Self::with_clock(out, mode, bead_id, parallel, color, SystemClock::new())
+        Self::with_clock(
+            out,
+            mode,
+            bead_id,
+            parallel,
+            color,
+            true,
+            SystemClock::new(),
+        )
+    }
+
+    /// Build a renderer in replay mode — events are read from a saved
+    /// JSONL log rather than a running agent, so the in-place running
+    /// indicator is suppressed and pair durations come from `ts_ms`
+    /// deltas. The spec's "live: bool" parameter (H2/H6) lives here.
+    pub fn new_replay(
+        out: impl Write + Send + 'static,
+        mode: RenderMode,
+        bead_id: BeadId,
+        parallel: bool,
+        color: bool,
+    ) -> Self {
+        Self::with_clock(
+            out,
+            mode,
+            bead_id,
+            parallel,
+            color,
+            false,
+            SystemClock::new(),
+        )
     }
 
     /// Build a renderer with an explicit clock. Tests inject
@@ -154,6 +219,7 @@ impl TerminalRenderer {
         bead_id: BeadId,
         parallel: bool,
         color: bool,
+        live: bool,
         clock: Arc<dyn Clock>,
     ) -> Self {
         let started = clock.now();
@@ -167,13 +233,17 @@ impl TerminalRenderer {
             started,
             tool_count: 0,
             indent_by_tool: std::collections::HashMap::new(),
-            tool_context: std::collections::HashMap::new(),
+            pending_calls: std::collections::HashMap::new(),
             running: None,
-            // Indicator is enabled by default when color is on and we're
-            // not in parallel mode — both are proxies for "interactive
-            // TTY, single-bead". Tests pass `color=false` to disable
-            // the indicator so captured-buffer assertions stay stable.
-            indicator_enabled: color && !parallel,
+            // Indicator is enabled by default when color is on, we're
+            // not in parallel mode, and events arrive live. Each
+            // condition is a proxy for a real constraint: color → TTY,
+            // !parallel → single \r-region on screen, live → there's
+            // something to spin while we wait for. Tests pass
+            // `color=false` to disable the indicator so captured-buffer
+            // assertions stay stable.
+            indicator_enabled: color && !parallel && live,
+            live,
             osc8: tool_body::Osc8Context::disabled(),
             header_printed: false,
             closed: false,
@@ -220,11 +290,11 @@ impl TerminalRenderer {
     pub fn render_event(&mut self, event: &AgentEvent) -> io::Result<()> {
         match event {
             AgentEvent::ToolCall {
+                envelope,
                 id,
                 tool,
                 params,
                 parent_tool_call_id,
-                ..
             } => {
                 // R3 — if another tool's running line is open, finalize
                 // it before laying down a nested or sibling call.
@@ -235,8 +305,14 @@ impl TerminalRenderer {
                     None => 0,
                 };
                 self.indent_by_tool.insert(id.clone(), depth);
-                self.tool_context
-                    .insert(id.clone(), (tool.clone(), params.clone()));
+                self.pending_calls.insert(
+                    id.clone(),
+                    PendingToolCall {
+                        tool: tool.clone(),
+                        params: params.clone(),
+                        ts_ms: envelope.ts_ms,
+                    },
+                );
                 let summary = tool_body::summary_cell(tool, params, &self.osc8);
                 let indent: String = "  ".repeat(depth);
                 if self.indicator_enabled
@@ -267,10 +343,10 @@ impl TerminalRenderer {
                 }
             }
             AgentEvent::ToolResult {
+                envelope,
                 id,
                 output,
                 is_error,
-                ..
             } => {
                 // R3 — finalize the running indicator if this result
                 // matches the open call. Non-matching results (which
@@ -281,11 +357,33 @@ impl TerminalRenderer {
                     .running
                     .as_ref()
                     .is_some_and(|(running_id, _, _, _)| running_id == id);
+                let pair_duration = self
+                    .pending_calls
+                    .remove(id)
+                    .map(|p| ts_ms_delta(p.ts_ms, envelope.ts_ms));
                 if matches_running {
                     let glyph = if *is_error { "✗" } else { "✓" };
-                    self.finalize_running_with_glyph(glyph)?;
+                    self.finalize_running_with_glyph_dur(glyph, pair_duration)?;
                 } else {
-                    self.finalize_running_with_glyph("…")?;
+                    self.finalize_running_with_glyph_dur("…", None)?;
+                    // R3 + H2 — replay (non-indicator) path still needs
+                    // to surface the pair's final glyph + duration so
+                    // `loom logs` shows the same information as `loom
+                    // run`. Emit one indented closer line under the
+                    // already-printed tool-call summary.
+                    if !self.live {
+                        let glyph = if *is_error { "✗" } else { "✓" };
+                        let depth = self.indent_by_tool.get(id).copied().unwrap_or(0);
+                        let indent: String = "  ".repeat(depth + 1);
+                        let secs = pair_duration.unwrap_or(Duration::ZERO).as_secs_f64();
+                        let line = if self.parallel {
+                            format!("  [{}] {indent}{glyph} {secs:.1}s\n", self.bead_id.as_str())
+                        } else {
+                            format!("  {indent}{glyph} {secs:.1}s\n")
+                        };
+                        self.out.write_all(line.as_bytes())?;
+                        self.out.flush()?;
+                    }
                 }
                 if matches!(self.mode, RenderMode::Verbose) {
                     let depth = self.indent_by_tool.get(id).copied().unwrap_or(0);
@@ -334,10 +432,24 @@ impl TerminalRenderer {
     /// against `running = None` is a no-op so cleanup paths can call
     /// unconditionally.
     fn finalize_running_with_glyph(&mut self, glyph: &str) -> io::Result<()> {
+        self.finalize_running_with_glyph_dur(glyph, None)
+    }
+
+    /// Same as [`finalize_running_with_glyph`] but lets the caller pass
+    /// a duration derived from `ts_ms` deltas instead of falling back
+    /// to the local clock. `loom logs` replay drives this with the
+    /// event envelope's `ts_ms` so the rendered duration matches what
+    /// the producer recorded, not how fast the replayer reads the file.
+    fn finalize_running_with_glyph_dur(
+        &mut self,
+        glyph: &str,
+        pair_duration: Option<Duration>,
+    ) -> io::Result<()> {
         let Some((_, started, summary, indent)) = self.running.take() else {
             return Ok(());
         };
-        let elapsed = self.clock.now().saturating_duration_since(started);
+        let elapsed =
+            pair_duration.unwrap_or_else(|| self.clock.now().saturating_duration_since(started));
         let secs = elapsed.as_secs_f64();
         self.out.write_all(b"\r")?;
         self.out.write_all(CLEAR_TO_EOL.as_bytes())?;
@@ -467,16 +579,27 @@ impl Renderer for TerminalRenderer {
 
 /// `Pretty` mode — colored, glyph-decorated output for an interactive
 /// terminal. Thin wrapper that delegates to the existing
-/// [`TerminalRenderer`] with `color = true`.
+/// [`TerminalRenderer`] with `color = true`. `live` distinguishes
+/// `loom run` (events arrive in real time, in-place indicator spins)
+/// from `loom logs` (replay; indicator suppressed, durations from
+/// `ts_ms` deltas).
 pub struct PrettyRenderer {
     inner: TerminalRenderer,
 }
 
 impl PrettyRenderer {
-    pub fn new(out: impl Write + Send + 'static, bead_id: BeadId, parallel: bool) -> Self {
-        Self {
-            inner: TerminalRenderer::new(out, RenderMode::Default, bead_id, parallel, true),
-        }
+    pub fn new(
+        out: impl Write + Send + 'static,
+        bead_id: BeadId,
+        parallel: bool,
+        live: bool,
+    ) -> Self {
+        let inner = if live {
+            TerminalRenderer::new(out, RenderMode::Default, bead_id, parallel, true)
+        } else {
+            TerminalRenderer::new_replay(out, RenderMode::Default, bead_id, parallel, true)
+        };
+        Self { inner }
     }
 }
 
@@ -493,16 +616,25 @@ impl Renderer for PrettyRenderer {
 }
 
 /// `Plain` mode — same shape as `Pretty` but with `color = false`.
-/// Pipe-safe; no ANSI escapes; no OSC 8.
+/// Pipe-safe; no ANSI escapes; no OSC 8. The `live` parameter follows
+/// the same contract as [`PrettyRenderer::new`].
 pub struct PlainRenderer {
     inner: TerminalRenderer,
 }
 
 impl PlainRenderer {
-    pub fn new(out: impl Write + Send + 'static, bead_id: BeadId, parallel: bool) -> Self {
-        Self {
-            inner: TerminalRenderer::new(out, RenderMode::Default, bead_id, parallel, false),
-        }
+    pub fn new(
+        out: impl Write + Send + 'static,
+        bead_id: BeadId,
+        parallel: bool,
+        live: bool,
+    ) -> Self {
+        let inner = if live {
+            TerminalRenderer::new(out, RenderMode::Default, bead_id, parallel, false)
+        } else {
+            TerminalRenderer::new_replay(out, RenderMode::Default, bead_id, parallel, false)
+        };
+        Self { inner }
     }
 }
 
@@ -570,17 +702,21 @@ impl Renderer for RawRenderer {
 
 /// Construct the right [`Renderer`] for a given mode. Production
 /// callers in `loom run` / `loom logs` pass a `Box<dyn Write + Send>`
-/// (typically `io::stdout()` or a buffered wrapper).
+/// (typically `io::stdout()` or a buffered wrapper). `live` is `true`
+/// for `loom run` (in-place indicator + wall-clock fallback) and
+/// `false` for `loom logs` replay (indicator suppressed, durations
+/// from `ts_ms` deltas).
 pub fn build_renderer(
     mode: RenderMode,
     out: Box<dyn Write + Send>,
     bead_id: BeadId,
     parallel: bool,
+    live: bool,
 ) -> Box<dyn Renderer> {
     match mode {
-        RenderMode::Pretty => Box::new(PrettyRenderer::new(out, bead_id, parallel)),
+        RenderMode::Pretty => Box::new(PrettyRenderer::new(out, bead_id, parallel, live)),
         RenderMode::Plain | RenderMode::Default | RenderMode::Verbose => {
-            Box::new(PlainRenderer::new(out, bead_id, parallel))
+            Box::new(PlainRenderer::new(out, bead_id, parallel, live))
         }
         RenderMode::Json => Box::new(JsonRenderer::new(out)),
         RenderMode::Raw => Box::new(RawRenderer::new(out)),
@@ -1002,7 +1138,7 @@ mod tests {
             RenderMode::Raw,
         ] {
             let (_, writer) = captured();
-            let r = build_renderer(mode, Box::new(writer), bead.clone(), false);
+            let r = build_renderer(mode, Box::new(writer), bead.clone(), false, true);
             drop(r); // sanity — each mode constructs without panic
         }
     }
@@ -1125,5 +1261,170 @@ mod tests {
         // Parses back to the same variant.
         let back: AgentEvent = serde_json::from_str(trimmed).expect("parse back");
         assert!(matches!(back, AgentEvent::ToolCall { .. }));
+    }
+
+    /// Build a `ToolCall` + `ToolResult` pair with explicit `ts_ms`
+    /// values so the test can pin pair duration without touching
+    /// either the wall clock or the renderer's `Clock` injection.
+    fn tool_pair_with_ts(
+        id: &str,
+        tool: &str,
+        params: serde_json::Value,
+        call_ts: i64,
+        result_ts: i64,
+    ) -> (AgentEvent, AgentEvent) {
+        let call_env = EventEnvelope {
+            ts_ms: call_ts,
+            ..EventEnvelope::default()
+        };
+        let result_env = EventEnvelope {
+            ts_ms: result_ts,
+            ..EventEnvelope::default()
+        };
+        (
+            AgentEvent::ToolCall {
+                envelope: call_env,
+                id: ToolCallId::new(id),
+                tool: tool.to_string(),
+                params,
+                parent_tool_call_id: None,
+            },
+            AgentEvent::ToolResult {
+                envelope: result_env,
+                id: ToolCallId::new(id),
+                output: String::new(),
+                is_error: false,
+            },
+        )
+    }
+
+    /// H2 + spec criterion `test_tool_call_result_pairing` — a paired
+    /// `tool_call` + `tool_result` renders as a single closing line
+    /// whose `Ns` duration comes from the events' `ts_ms` delta. We
+    /// use the live + indicator path (color=true) because that is the
+    /// branch where pair collapse is visible — the in-place line is
+    /// rewritten with the final glyph + duration.
+    #[test]
+    fn tool_call_result_pairing_collapses_with_ts_ms_duration() {
+        // color=true → indicator on (live + non-parallel). Pair the
+        // result with a 3.5s ts_ms delta so the test can pin the
+        // rendered duration independent of wall clock.
+        let out = capture(RenderMode::Default, false, true, |r| {
+            let (call, result) = tool_pair_with_ts(
+                "t1",
+                "Bash",
+                serde_json::json!({"command": "cargo test"}),
+                1_000,
+                4_500,
+            );
+            r.render_event(&call).expect("render call");
+            r.render_event(&result).expect("render result");
+        });
+        // After ToolResult, the running line is finalized — `\r` +
+        // clear-to-EOL + the closing summary with the pair duration.
+        assert!(out.contains("Bash"), "{out:?}");
+        assert!(out.contains("cargo test"), "{out:?}");
+        // ts_ms delta = 3500ms → "3.5s".
+        assert!(out.contains("3.5s"), "expected pair duration 3.5s: {out:?}");
+        // Single combined block: only one trailing newline after the
+        // final summary, i.e. no separate ToolResult line.
+        let trailing_newlines = out.chars().rev().take_while(|c| *c == '\n').count();
+        assert_eq!(trailing_newlines, 1, "{out:?}");
+    }
+
+    /// H2 + spec criterion `test_live_vs_replay_distinction` — the
+    /// `PrettyRenderer` (and `TerminalRenderer`) take a `live: bool`
+    /// switch. Live emits the in-place `running...` indicator while a
+    /// tool is in flight; replay suppresses it entirely and computes
+    /// the pair's duration from `ts_ms` deltas.
+    #[test]
+    fn live_vs_replay_distinction_pretty_renderer() {
+        // Live path: indicator appears between ToolCall and ToolResult.
+        let (live_buf, live_writer) = captured();
+        let mut live_pretty =
+            PrettyRenderer::new(live_writer, BeadId::new("wx-1").expect("id"), false, true);
+        let (call, result) = tool_pair_with_ts(
+            "t1",
+            "Bash",
+            serde_json::json!({"command": "sleep 3"}),
+            0,
+            3_000,
+        );
+        live_pretty.render_event(&call).expect("live call");
+        // Snapshot mid-pair: the running line is present.
+        let mid = captured_str(&live_buf);
+        assert!(
+            mid.contains("running..."),
+            "live mode must emit in-place running indicator: {mid:?}",
+        );
+        live_pretty.render_event(&result).expect("live result");
+        let live_final = captured_str(&live_buf);
+        assert!(live_final.contains("3.0s"), "{live_final:?}");
+
+        // Replay path: indicator is suppressed; the ToolCall summary
+        // prints once and the ToolResult appends a closing line under
+        // it with the ts_ms-derived duration.
+        let (replay_buf, replay_writer) = captured();
+        let mut replay_pretty = PrettyRenderer::new(
+            replay_writer,
+            BeadId::new("wx-1").expect("id"),
+            false,
+            false,
+        );
+        replay_pretty.render_event(&call).expect("replay call");
+        let mid_replay = captured_str(&replay_buf);
+        assert!(
+            !mid_replay.contains("running..."),
+            "replay must NOT emit the running indicator: {mid_replay:?}",
+        );
+        replay_pretty.render_event(&result).expect("replay result");
+        let replay_final = captured_str(&replay_buf);
+        assert!(
+            replay_final.contains("3.0s"),
+            "replay duration from ts_ms delta: {replay_final:?}",
+        );
+    }
+
+    /// Spec criterion `test_logs_reuses_renderer` — the `Renderer`
+    /// trait + impls are reused between `loom run` and `loom logs`. We
+    /// pin this by deserializing events from a JSONL line (the on-disk
+    /// shape `loom logs` reads) and feeding them through the same
+    /// `build_renderer` path `loom run` uses. The renderer trait
+    /// object is the only contract both share.
+    #[test]
+    fn logs_reuses_renderer_via_jsonl_round_trip() {
+        let bead = BeadId::new("wx-1").expect("id");
+        let (call, result) = tool_pair_with_ts(
+            "t1",
+            "Bash",
+            serde_json::json!({"command": "echo hi"}),
+            0,
+            2_000,
+        );
+        // Round-trip through JSONL — same path `loom logs` would take
+        // when replaying a saved log file.
+        let lines = [
+            serde_json::to_string(&call).expect("ser call"),
+            serde_json::to_string(&result).expect("ser result"),
+        ];
+        let replayed: Vec<AgentEvent> = lines
+            .iter()
+            .map(|s| serde_json::from_str::<AgentEvent>(s).expect("deser"))
+            .collect();
+
+        // Build via `build_renderer` (the public selection function
+        // shared by `loom run` and `loom logs`) with `live=false`.
+        let (buf, writer) = captured();
+        let mut r = build_renderer(RenderMode::Plain, Box::new(writer), bead, false, false);
+        for ev in &replayed {
+            r.render_event(ev).expect("render");
+        }
+        r.finish(BeadOutcome::Done, Duration::from_secs(2))
+            .expect("finish");
+        let out = captured_str(&buf);
+        assert!(out.contains("Bash"), "{out:?}");
+        // Replay path emits a closing glyph + ts_ms-derived duration
+        // for the pair.
+        assert!(out.contains("2.0s"), "{out:?}");
     }
 }

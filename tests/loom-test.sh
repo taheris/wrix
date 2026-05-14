@@ -3190,7 +3190,16 @@ test_common_envelope_fields() {
 }
 test_driver_event_kinds_present() { _pending_stub driver_event_kinds_present; }
 test_driver_events_rendered() { _pending_stub driver_events_rendered; }
-test_edit_write_imara_diff() { _pending_stub edit_write_imara_diff; }
+test_edit_write_imara_diff() {
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        tool_body::tests::edit_summary_includes_added_removed_counts
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        tool_body::tests::write_summary_includes_path_and_line_count
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        tool_body::tests::diff_counts_tracks_simple_replacement
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        tool_body::tests::diff_counts_handles_pure_additions
+}
 test_fixup_bead_bonded_to_molecule() {
     check_cargo_test check::fixup::tests::spawned_outcome_bonds_to_origins_parent_molecule
     check_cargo_test check::fixup::tests::chokepoint_returns_only_after_bond_completes
@@ -3214,13 +3223,19 @@ test_json_mode_pretty_prints() {
     cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
         renderer::tests::json_mode_pretty_prints
 }
-test_live_vs_replay_distinction() { _pending_stub live_vs_replay_distinction; }
+test_live_vs_replay_distinction() {
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        renderer::tests::live_vs_replay_distinction_pretty_renderer
+}
 test_log_sink_per_event_flush() { _pending_stub log_sink_per_event_flush; }
 test_logs_empty_directory() { _pending_stub logs_empty_directory; }
 test_logs_follow_blocks_on_eof() { _pending_stub logs_follow_blocks_on_eof; }
 test_logs_path_short_circuits() { _pending_stub logs_path_short_circuits; }
 test_logs_raw_and_follow_compose() { _pending_stub logs_raw_and_follow_compose; }
-test_logs_reuses_renderer() { _pending_stub logs_reuses_renderer; }
+test_logs_reuses_renderer() {
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        renderer::tests::logs_reuses_renderer_via_jsonl_round_trip
+}
 test_logs_shares_renderer_with_run() { _pending_stub logs_shares_renderer_with_run; }
 test_logs_verbose_streams_deltas() { _pending_stub logs_verbose_streams_deltas; }
 test_loom_events_is_leaf() {
@@ -3407,7 +3422,10 @@ test_tool_body_truncation_policy() {
     cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
         tool_body::tests::cap_body_respects_byte_cap
 }
-test_tool_call_result_pairing() { _pending_stub tool_call_result_pairing; }
+test_tool_call_result_pairing() {
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        renderer::tests::tool_call_result_pairing_collapses_with_ts_ms_duration
+}
 test_unknown_driver_kind_renders() {
     # G3 lands the `driver_event` variant accepting arbitrary `driver_kind`;
     # H2 (wx-26zjb) extends this to assert the renderer's unknown-kind
@@ -3415,7 +3433,10 @@ test_unknown_driver_kind_renders() {
     cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
         event::tests::driver_event_accepts_unknown_driver_kind
 }
-test_unknown_tool_fallback() { _pending_stub unknown_tool_fallback; }
+test_unknown_tool_fallback() {
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        tool_body::tests::unknown_tool_falls_through_to_name
+}
 test_unknown_variants_tolerated() {
     cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
         event::tests::unknown_variants_fail_with_a_loud_error

@@ -1699,30 +1699,30 @@ Criteria.
 
 **Renderer modes**
 
-- [ ] Four renderer modes implemented: `Pretty`, `Plain`, `Json`, `Raw`
+- [x] Four renderer modes implemented: `Pretty`, `Plain`, `Json`, `Raw`
   [verify](tests/loom-test.sh::test_renderer_modes_present)
-- [ ] `Pretty` is selected when stdout is a TTY and no `--plain`/`--json`/`--raw` flag is set
+- [x] `Pretty` is selected when stdout is a TTY and no `--plain`/`--json`/`--raw` flag is set
   [verify](tests/loom-test.sh::test_pretty_selected_on_tty)
-- [ ] `Plain` is auto-selected on non-TTY stdout (pipe/redirect), `NO_COLOR=1`, or `--plain`
+- [x] `Plain` is auto-selected on non-TTY stdout (pipe/redirect), `NO_COLOR=1`, or `--plain`
   [verify](tests/loom-test.sh::test_plain_selected_on_non_tty)
-- [ ] `Json` mode emits one pretty-printed JSON object per line; colorized when TTY, plain when piped
+- [x] `Json` mode emits one pretty-printed JSON object per line; colorized when TTY, plain when piped
   [verify](tests/loom-test.sh::test_json_mode_pretty_prints)
-- [ ] `Raw` mode passes through the original JSONL bytes unparsed
+- [x] `Raw` mode passes through the original JSONL bytes unparsed
   [verify](tests/loom-test.sh::test_raw_mode_passthrough)
 
 **Per-tool rendering**
 
-- [ ] Each builtin (`Read`, `Edit`, `Write`, `Grep`, `Glob`, `Bash`, `WebFetch`, `WebSearch`, `Task`) renders its tailored summary cell
+- [x] Each builtin (`Read`, `Edit`, `Write`, `Grep`, `Glob`, `Bash`, `WebFetch`, `WebSearch`, `Task`) renders its tailored summary cell
   [verify](tests/loom-test.sh::test_per_tool_summary_cells)
-- [ ] Unknown tools fall through to a generic `<name>  <truncated args>` row
+- [x] Unknown tools fall through to a generic `<name>  <truncated args>` row
   [verify](tests/loom-test.sh::test_unknown_tool_fallback)
-- [ ] Tool body is capped at 10 lines or 2 KB (whichever first); cap line names recovery `[N more lines — loom logs -b <id> --tool <id>]`
+- [x] Tool body is capped at 10 lines or 2 KB (whichever first); cap line names recovery `[N more lines — loom logs -b <id> --tool <id>]`
   [verify](tests/loom-test.sh::test_tool_body_truncation_policy)
-- [ ] `Edit` and `Write` render unified diffs via `imara-diff`; `+<add> -<del>` counts on the summary cell
+- [x] `Edit` and `Write` render unified diffs via `imara-diff`; `+<add> -<del>` counts on the summary cell
   [verify](tests/loom-test.sh::test_edit_write_imara_diff)
-- [ ] Subagent (`Task`) tool nests inner events under the parent at deeper indent via `parent_tool_call_id`
+- [x] Subagent (`Task`) tool nests inner events under the parent at deeper indent via `parent_tool_call_id`
   [verify](tests/loom-test.sh::test_task_subagent_nesting)
-- [ ] `tool_call` and `tool_result` collapse into one rendered block; duration computed from `ts_ms` delta
+- [x] `tool_call` and `tool_result` collapse into one rendered block; duration computed from `ts_ms` delta
   [verify](tests/loom-test.sh::test_tool_call_result_pairing)
 
 **Driver events**
@@ -1751,9 +1751,9 @@ Criteria.
 
 **Replay**
 
-- [ ] `loom logs` reuses the same `Renderer` trait + impls as `loom run` (no second formatter)
+- [x] `loom logs` reuses the same `Renderer` trait + impls as `loom run` (no second formatter)
   [verify](tests/loom-test.sh::test_logs_reuses_renderer)
-- [ ] Live-vs-replay distinction: `Pretty` renderer takes a `live: bool` parameter; replay suppresses the in-place running indicator and computes durations from `ts_ms` deltas
+- [x] Live-vs-replay distinction: `Pretty` renderer takes a `live: bool` parameter; replay suppresses the in-place running indicator and computes durations from `ts_ms` deltas
   [verify](tests/loom-test.sh::test_live_vs_replay_distinction)
 - [ ] `AgentEvent` derives `Deserialize` so `loom logs` reads its own JSONL files back through the same enum it writes
   [verify](tests/loom-test.sh::test_agent_event_deserialize_round_trip)
