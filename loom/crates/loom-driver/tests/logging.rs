@@ -560,6 +560,72 @@ fn log_retention_failure_tolerance() -> Result<()> {
 }
 
 //---------------------------------------------------------------------------
+// test_log_sink_per_event_flush — every `LogSink::emit` call must flush the
+// underlying file so `tail -f` and file-watching SSE consumers see events at
+// emit time, not at the BufWriter's natural cadence. Proof: open an
+// independent read handle after each emit (with no `finish`/drop) and verify
+// the event is already on disk.
+//---------------------------------------------------------------------------
+#[test]
+fn log_sink_per_event_flush() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let (mut sink, _) = open_sink(
+        dir.path(),
+        "alpha",
+        "wx-1",
+        1_700_000_000,
+        RenderMode::Default,
+        false,
+    )?;
+    let log_path = sink.log_path().to_path_buf();
+
+    sink.emit(&AgentEvent::ToolCall {
+        envelope: EventEnvelope::default(),
+        id: ToolCallId::new("t1"),
+        tool: "Read".to_string(),
+        params: json!({"file_path": "first.rs"}),
+        parent_tool_call_id: None,
+    })?;
+
+    let after_first = fs::read_to_string(&log_path)?;
+    let first_lines: Vec<&str> = after_first.lines().collect();
+    if first_lines.len() != 1 {
+        return Err(anyhow!(
+            "expected exactly 1 line flushed mid-stream, got {}: {after_first:?}",
+            first_lines.len()
+        ));
+    }
+    let first: Value = serde_json::from_str(first_lines[0])?;
+    if first["kind"] != "tool_call" || first["tool"] != "Read" {
+        return Err(anyhow!(
+            "first flushed line missing tool_call/Read content: {after_first:?}"
+        ));
+    }
+
+    sink.emit(&AgentEvent::TurnEnd {
+        envelope: EventEnvelope::default(),
+    })?;
+
+    let after_second = fs::read_to_string(&log_path)?;
+    let second_lines: Vec<&str> = after_second.lines().collect();
+    if second_lines.len() != 2 {
+        return Err(anyhow!(
+            "expected 2 lines flushed mid-stream, got {}: {after_second:?}",
+            second_lines.len()
+        ));
+    }
+    let second: Value = serde_json::from_str(second_lines[1])?;
+    if second["kind"] != "turn_end" {
+        return Err(anyhow!(
+            "second flushed line missing turn_end content: {after_second:?}"
+        ));
+    }
+
+    sink.finish(BeadOutcome::Done)?;
+    Ok(())
+}
+
+//---------------------------------------------------------------------------
 // test_run_single_event_sink_property — the LogSink::emit method drives both
 // the file writer and the terminal renderer from the same call. There is no
 // independent path through which one writer could observe an event the other

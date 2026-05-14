@@ -1775,33 +1775,33 @@ Criteria.
 
 **Disk log**
 
-- [ ] Full raw JSONL event stream is written to
+- [x] Full raw JSONL event stream is written to
       `.wrapix/loom/logs/<spec-label>/<bead-id>-<timestamp>.jsonl` for every
       bead spawn, regardless of terminal verbosity
   [verify](tests/loom-test.sh::test_run_writes_per_bead_jsonl_log)
-- [ ] Per-event flush: every `LogSink::emit` call calls `flush()` so `tail -f` and SSE-via-file-watcher consumers see events at emit time
+- [x] Per-event flush: every `LogSink::emit` call calls `flush()` so `tail -f` and SSE-via-file-watcher consumers see events at emit time
   [verify](tests/loom-test.sh::test_log_sink_per_event_flush)
-- [ ] Log path is logged at `info!` when the spawn starts
+- [x] Log path is logged at `info!` when the spawn starts
   [verify](tests/loom-test.sh::test_run_logs_log_path)
-- [ ] With `--parallel N > 1`, each bead writes to its own file (no
+- [x] With `--parallel N > 1`, each bead writes to its own file (no
       interleaving in a single log)
   [verify](tests/loom-test.sh::test_parallel_logs_are_per_bead)
-- [ ] Terminal renderer and log writer consume the same `AgentEvent` stream
+- [x] Terminal renderer and log writer consume the same `AgentEvent` stream
       (single tee-style sink, not two parallel pipelines)
   [verify](tests/loom-test.sh::test_run_single_event_channel)
-- [ ] On `loom run` startup, log files older than `[logs] retention_days`
+- [x] On `loom run` startup, log files older than `[logs] retention_days`
       (default 14) are deleted; recent logs are preserved
   [verify](tests/loom-test.sh::test_log_retention_sweep)
-- [ ] `[logs] retention_days = 0` disables sweeping (no files deleted)
+- [x] `[logs] retention_days = 0` disables sweeping (no files deleted)
   [verify](tests/loom-test.sh::test_log_retention_disabled)
-- [ ] Sweep failures (permission denied, in-use file) do not abort the run
+- [x] Sweep failures (permission denied, in-use file) do not abort the run
   [verify](tests/loom-test.sh::test_log_retention_failure_tolerance)
 
 **Crate boundary**
 
 - [ ] `loom-events` is a leaf crate — no internal deps on `loom-driver` / `loom-render` / `loom-workflow` / `loom-templates`
   [verify](tests/loom-test.sh::test_loom_events_is_leaf)
-- [ ] `loom-render` depends on `loom-events` only (no `loom-driver`)
+- [x] `loom-render` depends on `loom-events` only (no `loom-driver`)
   [verify](tests/loom-test.sh::test_loom_render_deps)
 
 ### Worktree parallelism

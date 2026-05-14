@@ -3239,7 +3239,9 @@ test_live_vs_replay_distinction() {
     cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
         renderer::tests::live_vs_replay_distinction_pretty_renderer
 }
-test_log_sink_per_event_flush() { _pending_stub log_sink_per_event_flush; }
+test_log_sink_per_event_flush() {
+    logging_cargo_test log_sink_per_event_flush
+}
 #-----------------------------------------------------------------------------
 # Bare `loom logs` against an empty `.wrapix/loom/logs/` exits 0 with a
 # "No bead logs yet" message; `--path` against the same state exits non-zero.
