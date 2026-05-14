@@ -1653,7 +1653,7 @@ Criteria.
   [verify](tests/loom-test.sh::test_unknown_profile_errors)
 - [x] `--profile` CLI override takes precedence over bead labels
   [verify](tests/loom-test.sh::test_profile_cli_override)
-- [ ] `loom plan` shells out to interactive `wrapix run` (TTY attached); does
+- [x] `loom plan` shells out to interactive `wrapix run` (TTY attached); does
       not capture stdio for JSONL
   [verify](tests/loom-test.sh::test_plan_uses_interactive_wrapix_run)
 
@@ -1830,9 +1830,9 @@ Criteria.
 
 ### Workflow commands
 
-- [ ] `loom plan -n <label>` spawns container with base profile, runs spec interview
+- [x] `loom plan -n <label>` spawns container with base profile, runs spec interview
   [verify](tests/loom-test.sh::test_plan_new)
-- [ ] `loom plan -u <label>` updates existing spec with anchor/sibling support
+- [x] `loom plan -u <label>` updates existing spec with anchor/sibling support
   [verify](tests/loom-test.sh::test_plan_update)
 - [x] `loom todo` implements four-tier detection with per-spec cursor fan-out
   [verify](tests/loom-test.sh::test_todo_tier_detection)
@@ -2071,10 +2071,10 @@ Criteria.
       SQLite transaction, both gated on productive completion; a
       non-productive terminal state leaves both intact
   [verify](tests/loom-test.sh::test_todo_delete_notes_atomic_with_cursor)
-- [ ] `loom plan -n <label>` inserts a `specs` row and seeds
+- [x] `loom plan -n <label>` inserts a `specs` row and seeds
       implementation notes via `loom note set` from the interview
   [verify](tests/loom-test.sh::test_plan_new_writes_implementation_notes)
-- [ ] `loom plan -u <label>` reads the existing implementation notes
+- [x] `loom plan -u <label>` reads the existing implementation notes
       via `loom note list`, and writes back a merged array via
       `loom note set` (interview-driven keep/drop/add — not blind
       append, not blind replace)

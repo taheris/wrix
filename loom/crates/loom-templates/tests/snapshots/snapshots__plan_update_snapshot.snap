@@ -1,6 +1,6 @@
 ---
 source: crates/loom-templates/tests/snapshots.rs
-assertion_line: 48
+assertion_line: 52
 expression: ctx.render().unwrap()
 ---
 # Specification Update Interview
@@ -78,6 +78,39 @@ keeping past session end, write it to one of the durable destinations above
 `echo "..." >> .wrapix/loom/scratch/<key>/scratch.md` or via the Edit tool.
 Do not rewrite or truncate prior contents; the recovery payload is the full
 running log.
+
+## Existing Implementation Notes
+
+The following implementation notes are currently attached to this spec (the
+`notes` rows where `kind = 'implementation'`). They are transient context
+seeded by the prior `loom plan` and consumed by `loom todo`. **Review them
+in light of the changes you are about to make and rewrite the set as a
+merge**, not a blind append and not a blind replace:
+
+- **Keep** notes whose hint or constraint still holds after this update.
+- **Drop** notes that the new decisions invalidate or supersede.
+- **Add** fresh notes that capture hidden constraints, file paths, or
+  trade-offs the new requirements introduce.
+
+<implementation-note>
+Read `specs/loom-harness.md` end-to-end before touching the parser
+</implementation-note>
+<implementation-note>
+Retry policy is described in `## Recovery & Retry`
+</implementation-note>
+
+
+Before exiting, write the **merged** array back via:
+
+```bash
+loom note set loom-harness --kind implementation --json '["merged note 1", …]'
+```
+
+`loom note set` is atomic: it replaces every `kind = implementation` row
+for `loom-harness` with the supplied array in a single transaction. Pass the
+full merged array, not a delta — `set` is by-design destructive against the
+prior set. Pass `'[]'` if the merge result is empty (every prior note was
+dropped and no new note belongs).
 
 ## Update Guidelines
 

@@ -49,6 +49,7 @@ fn plan_update_renders_partials_and_companions() -> Result<()> {
         label: SpecLabel::new("loom-harness"),
         spec_path: "specs/loom-harness.md".to_string(),
         companion_paths: vec!["lib/sandbox/".into(), "lib/ralph/template/".into()],
+        implementation_notes: vec![],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
         exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };

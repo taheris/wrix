@@ -17,6 +17,38 @@ Read the existing spec at `{{ spec_path }}` for full context before refining.
 
 {% include "partial/scratchpad.md" %}
 
+## Existing Implementation Notes
+
+The following implementation notes are currently attached to this spec (the
+`notes` rows where `kind = 'implementation'`). They are transient context
+seeded by the prior `loom plan` and consumed by `loom todo`. **Review them
+in light of the changes you are about to make and rewrite the set as a
+merge**, not a blind append and not a blind replace:
+
+- **Keep** notes whose hint or constraint still holds after this update.
+- **Drop** notes that the new decisions invalidate or supersede.
+- **Add** fresh notes that capture hidden constraints, file paths, or
+  trade-offs the new requirements introduce.
+
+{% if implementation_notes.is_empty() %}
+_(no implementation notes are currently attached to this spec)_
+{% else %}{% for note in implementation_notes %}<implementation-note>
+{{ note }}
+</implementation-note>
+{% endfor %}{% endif %}
+
+Before exiting, write the **merged** array back via:
+
+```bash
+loom note set {{ label }} --kind implementation --json '["merged note 1", …]'
+```
+
+`loom note set` is atomic: it replaces every `kind = implementation` row
+for `{{ label }}` with the supplied array in a single transaction. Pass the
+full merged array, not a delta — `set` is by-design destructive against the
+prior set. Pass `'[]'` if the merge result is empty (every prior note was
+dropped and no new note belongs).
+
 ## Update Guidelines
 
 1. **Discuss NEW requirements only** - The existing spec has been implemented

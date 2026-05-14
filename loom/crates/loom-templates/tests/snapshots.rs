@@ -42,6 +42,10 @@ fn plan_update_snapshot() {
         label: SpecLabel::new("loom-harness"),
         spec_path: "specs/loom-harness.md".to_string(),
         companion_paths: vec!["lib/sandbox/".into(), "lib/ralph/template/".into()],
+        implementation_notes: vec![
+            "Read `specs/loom-harness.md` end-to-end before touching the parser".into(),
+            "Retry policy is described in `## Recovery & Retry`".into(),
+        ],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
         exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };

@@ -80,12 +80,11 @@ judge_mock_discipline() {
 judge_plan_update_merges_notes() {
   judge_files \
     "loom/crates/loom-templates/templates/plan_update.md" \
-    "loom/crates/loom-templates/templates/partial/implementation_notes_state.md" \
+    "loom/crates/loom-templates/src/plan/update.rs" \
     "loom/crates/loom-workflow/src/plan/runner.rs" \
-    "loom/crates/loom-workflow/src/plan/prompt.rs" \
-    "loom/crates/loom-driver/src/state/implementation_notes.rs"
+    "loom/crates/loom-workflow/src/plan/prompt.rs"
   judge_criterion \
-    "The plan_update.md prompt (via partial/implementation_notes_state.md) renders the existing implementation_notes array from the spec's state-DB row into the interview, and explicitly instructs the agent to MERGE — keep notes still relevant, drop notes a new decision invalidates, add fresh notes — rather than blind append or blind replace. The prompt names all three operations (keep / drop / add) and frames the merge as the agent's judgement during the interview. The runner (plan/runner.rs) reads the existing array before launching the interview, passes it into the rendered context, and after the interview persists the agent-produced merged array back to the same state-DB row (overwriting the prior value, not appending). No code path silently appends or silently replaces; the merge is mediated by the interview output."
+    "The plan_update.md prompt renders the existing implementation-notes array from the spec's notes table (the typed PlanUpdateContext.implementation_notes field) into the interview, and explicitly instructs the agent to MERGE: keep notes still relevant, drop notes a new decision invalidates, add fresh notes, rather than blind append or blind replace. The prompt names all three operations (keep / drop / add) and frames the merge as the agent's judgement during the interview. The runner in plan/runner.rs reads the existing array via StateDb::notes_list before launching the interview and passes it into the rendered context through plan/prompt.rs. The agent persists the merged array back via 'loom note set LABEL --kind implementation --json ARRAY', which atomically replaces the prior set in a single SQLite transaction (StateDb::notes_set performs DELETE plus INSERTs in one transaction). No code path silently appends or silently replaces; the merge is mediated by the interview output, and the prompt directs the agent at the exact CLI invocation."
 }
 
 test_scratchpad_partial_clarity() {

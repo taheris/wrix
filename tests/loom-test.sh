@@ -3156,15 +3156,23 @@ test_push_gate_refuses_unresolved() {
 
 # Plan / Todo
 #-----------------------------------------------------------------------------
-# test_plan_new_writes_implementation_notes — `loom plan -n` should seed
-# implementation notes via `loom note set` (the SQLite notes table the D2
-# work shipped). The old `specs.implementation_notes` column path was
-# dropped by R9 (wx-42teo) and the three unit tests that pinned that path
-# went with it. A new integration test against the notes-table flow is a
-# focused follow-up; until then this stays a pending stub so the doctor
-# audit doesn't claim coverage we don't have.
+# test_plan_new_writes_implementation_notes — `loom plan -n` seeds the
+# implementation-notes table for the new spec via `loom note set`. Two
+# unit tests pin this contract:
+#   1. The rendered plan_new prompt names `loom note set <label>
+#      --kind implementation` so the agent has a concrete invocation to
+#      copy at the end of the interview.
+#   2. The runner, when invoked with `PlanMode::New`, threads the prompt
+#      through `wrapix run` such that the agent receives the seeding
+#      instruction (argv[4] is the rendered prompt body).
+# Together these ensure the only path that produces notes during -n
+# routes through the `loom note set` CLI — `ensure_spec_row` on that
+# call is what inserts the `specs` row, matching the criterion.
 #-----------------------------------------------------------------------------
-test_plan_new_writes_implementation_notes() { _pending_stub plan_new_writes_implementation_notes; }
+test_plan_new_writes_implementation_notes() {
+    aux_cargo_test plan::prompt::tests::new_prompt_instructs_agent_to_call_loom_note_set
+    aux_cargo_test plan::runner::tests::plan_new_prompt_directs_agent_to_seed_implementation_notes
+}
 
 #-----------------------------------------------------------------------------
 # test_todo_renders_notes_into_beads — `loom todo` reads implementation

@@ -112,6 +112,14 @@ pub fn run_with_timeout(
     // (`specs/loom-harness.md` § Implementation-notes lifecycle: "interview
     //  reads existing, writes back merged"). For -n the row does not exist
     // yet so there are no notes to read.
+    let implementation_notes = if is_new {
+        Vec::new()
+    } else {
+        db.notes_list(Some(&label), Some("implementation"))?
+            .into_iter()
+            .map(|row| row.text)
+            .collect()
+    };
     let key = resolve_scratch_key(Phase::Plan, &label, None);
     let scratchpad_path = ScratchSession::scratchpad_path_for(workspace, &key)
         .to_string_lossy()
@@ -121,6 +129,7 @@ pub fn run_with_timeout(
         spec_path: spec_rel.clone(),
         pinned_context,
         companion_paths,
+        implementation_notes,
         scratchpad_path,
         exit_signals,
     })?;
@@ -500,6 +509,108 @@ mod tests {
         let argv_log = std::fs::read_to_string(dir.path().join("argv.log"))?;
         assert!(argv_log.contains("# Specification Update Interview"));
         assert!(argv_log.contains("- lib/sandbox/"));
+        Ok(())
+    }
+
+    /// `plan -u` must read the spec's prior `kind = 'implementation'` notes
+    /// from the state DB and render them into the rendered prompt body so the
+    /// agent can perform the keep/drop/add merge described in the spec's
+    /// *Implementation-notes lifecycle* section. The notes appear verbatim in
+    /// argv (the prompt body is argv[4] for `wrapix run`).
+    #[test]
+    fn plan_update_threads_existing_implementation_notes_into_prompt() -> Result<()> {
+        let dir = workspace_with_specs()?;
+        let spec_path = dir.path().join("specs/loom-harness.md");
+        std::fs::write(
+            &spec_path,
+            "# loom-harness\n\n## Companions\n\n- `lib/sandbox/`\n",
+        )?;
+        let db = StateDb::open(dir.path().join(".wrapix/loom/state.db"))?;
+        let label = SpecLabel::new("loom-harness");
+        db.notes_set(
+            &label,
+            "implementation",
+            &[
+                "alpha-note about parser invariants".to_string(),
+                "beta-note about retry/backoff".to_string(),
+            ],
+            0,
+        )?;
+        drop(db);
+
+        let bin = install_wrapix_stub(
+            dir.path(),
+            Some((
+                &spec_path,
+                "# loom-harness\n\n## Companions\n\n- `lib/sandbox/`\n",
+            )),
+        )?;
+        let manifest = three_profile_manifest(dir.path())?;
+
+        run_with_timeout(
+            dir.path(),
+            plan_opts_update("loom-harness", bin, manifest),
+            Duration::from_millis(100),
+        )?;
+
+        let argv_log = std::fs::read_to_string(dir.path().join("argv.log"))?;
+        assert!(
+            argv_log.contains("alpha-note about parser invariants"),
+            "rendered prompt must surface the prior alpha note. argv.log:\n{argv_log}",
+        );
+        assert!(
+            argv_log.contains("beta-note about retry/backoff"),
+            "rendered prompt must surface the prior beta note. argv.log:\n{argv_log}",
+        );
+        // The prompt must frame the rewrite as a keep/drop/add merge.
+        let lower = argv_log.to_lowercase();
+        assert!(
+            lower.contains("keep") && lower.contains("drop") && lower.contains("add"),
+            "rendered prompt must name keep/drop/add merge ops. argv.log:\n{argv_log}",
+        );
+        // The agent must be instructed to write back via `loom note set`.
+        assert!(
+            argv_log.contains("loom note set"),
+            "rendered prompt must direct the agent at `loom note set`. argv.log:\n{argv_log}",
+        );
+        Ok(())
+    }
+
+    /// `plan -n` runs in a workspace where no `notes` row exists yet for
+    /// `label`, so the runner must not attempt to read prior notes; the
+    /// rendered prompt nevertheless instructs the agent to seed the table
+    /// via `loom note set <label> --kind implementation` so the spec row is
+    /// inserted (via `ensure_spec_row`) and `loom todo` has something to
+    /// consume.
+    #[test]
+    fn plan_new_prompt_directs_agent_to_seed_implementation_notes() -> Result<()> {
+        let dir = workspace_with_specs()?;
+        let spec_path = dir.path().join("specs/loom-harness.md");
+        let bin = install_wrapix_stub(
+            dir.path(),
+            Some((&spec_path, "# loom-harness\n\n## Companions\n\n")),
+        )?;
+        let manifest = three_profile_manifest(dir.path())?;
+
+        run_with_timeout(
+            dir.path(),
+            plan_opts_new("loom-harness", bin, manifest),
+            Duration::from_millis(100),
+        )?;
+
+        let argv_log = std::fs::read_to_string(dir.path().join("argv.log"))?;
+        assert!(
+            argv_log.contains("loom note set"),
+            "plan_new prompt must direct the agent at `loom note set`. argv.log:\n{argv_log}",
+        );
+        assert!(
+            argv_log.contains("loom-harness"),
+            "plan_new prompt must inject the label into the example invocation. argv.log:\n{argv_log}",
+        );
+        assert!(
+            argv_log.contains("--kind implementation"),
+            "plan_new prompt must name the implementation note kind. argv.log:\n{argv_log}",
+        );
         Ok(())
     }
 
