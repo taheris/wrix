@@ -10,7 +10,7 @@ LOOM_DIR="$REPO_ROOT/loom"
 WORKSPACE_TOML="$LOOM_DIR/Cargo.toml"
 
 # Member crates expected at loom/crates/<name>/.
-LOOM_CRATES=(loom loom-driver loom-agent loom-workflow loom-templates)
+LOOM_CRATES=(loom loom-events loom-driver loom-render loom-agent loom-workflow loom-templates)
 
 # Workspace-pinned third-party deps (14, per spec).
 LOOM_DEPS=(
@@ -198,6 +198,22 @@ test_workspace_lints() {
             missing=$((missing + 1))
         fi
     done
+
+    # Spec RS-3 (Workspace Lints): loom/clippy.toml must opt tests out of
+    # the panic-family restriction lints via the `allow-*-in-tests` knobs.
+    local clippy_toml="$LOOM_DIR/clippy.toml"
+    if [ ! -f "$clippy_toml" ]; then
+        echo "missing $clippy_toml (spec RS-3 requires allow-*-in-tests flags)" >&2
+        missing=$((missing + 1))
+    else
+        local flag
+        for flag in allow-expect-in-tests allow-panic-in-tests allow-unwrap-in-tests allow-print-in-tests allow-dbg-in-tests; do
+            if ! grep -E "^${flag}[[:space:]]*=[[:space:]]*true" "$clippy_toml" >/dev/null; then
+                echo "$flag not set to true in $clippy_toml" >&2
+                missing=$((missing + 1))
+            fi
+        done
+    fi
 
     return "$missing"
 }
@@ -828,9 +844,12 @@ test_no_panics_in_production() {
     fi
     local hits violations=0
     while IFS= read -r -d '' file; do
-        # Skip integration test directories entirely.
+        # bd-shim and mock-loom-agent are integration-test fixtures
+        # cargo-declared as bins so tests can `Command::new()` them.
         case "$file" in
             */tests/*) continue ;;
+            */src/bin/bd-shim.rs) continue ;;
+            */src/bin/mock-loom-agent.rs) continue ;;
         esac
         # Strip `#[cfg(test)] mod tests { ... }` blocks before scanning so
         # unit tests under the same source file are excluded.
@@ -849,6 +868,9 @@ test_no_panics_in_production() {
         # Filter out comment lines and the macro pattern in identifier/mod.rs
         # where `unwrap`/`panic` could appear in doc strings.
         hits=$(grep -vE '^[[:space:]]*[0-9]+:[[:space:]]*(//|/\*|\*)' <<<"$hits" || true)
+        # Filter out attribute lines like `#[expect(clippy::xxx, ...)]` or
+        # `#[allow(dead_code)]` — these are lint attributes, not call sites.
+        hits=$(grep -vE '^[[:space:]]*[0-9]+:[[:space:]]*#\[(expect|allow|warn|deny|forbid)\(' <<<"$hits" || true)
         if [ -n "$hits" ]; then
             echo "panic-in-production candidate(s) in $file:" >&2
             echo "$hits" >&2

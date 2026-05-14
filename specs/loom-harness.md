@@ -1598,25 +1598,25 @@ the v1-complete signal for this spec.
 
 ### Crate structure
 
-- [ ] Workspace builds with `cargo build` from `loom/` root
+- [x] Workspace builds with `cargo build` from `loom/` root
   [verify](tests/loom-test.sh::test_workspace_builds)
-- [ ] All seven crates present: loom, loom-events, loom-driver, loom-render, loom-agent, loom-workflow, loom-templates
+- [x] All seven crates present: loom, loom-events, loom-driver, loom-render, loom-agent, loom-workflow, loom-templates
   [verify](tests/loom-test.sh::test_crate_structure)
-- [ ] Workspace uses edition 2024 and resolver "3"
+- [x] Workspace uses edition 2024 and resolver "3"
   [verify](tests/loom-test.sh::test_workspace_edition)
-- [ ] All dependencies pinned under `[workspace.dependencies]`
+- [x] All dependencies pinned under `[workspace.dependencies]`
   [verify](tests/loom-test.sh::test_workspace_deps_pinned)
-- [ ] All crates declare `[lints] workspace = true`
+- [x] All crates declare `[lints] workspace = true`
   [verify](tests/loom-test.sh::test_workspace_lints)
-- [ ] No `types.rs` or `error.rs` files at crate roots
+- [x] No `types.rs` or `error.rs` files at crate roots
   [verify](tests/loom-test.sh::test_nested_module_structure)
-- [ ] Domain identifiers use newtypes (BeadId, SpecLabel, MoleculeId, etc.)
+- [x] Domain identifiers use newtypes (BeadId, SpecLabel, MoleculeId, etc.)
   [verify](tests/loom-test.sh::test_newtypes_for_identifiers)
-- [ ] No `unwrap()`, `todo!()`, `panic!()`, `unimplemented!()` in non-test code
+- [x] No `unwrap()`, `todo!()`, `panic!()`, `unimplemented!()` in non-test code
   [verify](tests/loom-test.sh::test_no_panics_in_production)
-- [ ] No `#[allow(dead_code)]` in non-test code
+- [x] No `#[allow(dead_code)]` in non-test code
   [verify](tests/loom-test.sh::test_no_allow_dead_code)
-- [ ] No `derive(From)` or `derive(Into)` on newtype structs
+- [x] No `derive(From)` or `derive(Into)` on newtype structs
   [verify](tests/loom-test.sh::test_no_derive_from_on_newtypes)
 
 ### Templates
