@@ -2083,25 +2083,25 @@ Criteria.
       rows and renders each note's text into every new bead body
       created during the run
   [verify](tests/loom-test.sh::test_todo_renders_notes_into_beads)
-- [ ] `loom note set <label> --kind <k> --json '[…]'` is atomic —
+- [x] `loom note set <label> --kind <k> --json '[…]'` is atomic —
       `DELETE WHERE spec_label=? AND kind=?` plus N `INSERT`s in one
       transaction; partial failure leaves the prior set intact
   [verify](tests/loom-test.sh::test_loom_note_set_atomic)
-- [ ] `loom note add <label> --kind <k> --text "…"` appends a single
+- [x] `loom note add <label> --kind <k> --text "…"` appends a single
       row to `notes`
   [verify](tests/loom-test.sh::test_loom_note_add)
-- [ ] `loom note rm <id>` deletes by primary key
+- [x] `loom note rm <id>` deletes by primary key
   [verify](tests/loom-test.sh::test_loom_note_rm)
-- [ ] `loom note list [<label>]` returns rows for the spec/kind pair
+- [x] `loom note list [<label>]` returns rows for the spec/kind pair
       (default kind: `implementation`) ordered by `id` ascending
       (chronological); `--all-kinds` widens to every kind and includes
       the `kind` column in output
   [verify](tests/loom-test.sh::test_loom_note_list_chronological)
-- [ ] `loom note clear <label>` deletes rows for the spec/kind pair
+- [x] `loom note clear <label>` deletes rows for the spec/kind pair
       (default kind: `implementation`); `--all-kinds` wipes every kind
       for the spec in one statement
   [verify](tests/loom-test.sh::test_loom_note_clear)
-- [ ] `--kind` defaults to `implementation` on every subcommand that
+- [x] `--kind` defaults to `implementation` on every subcommand that
       accepts it, so `loom note add my-spec --text "…"` is the
       common-case shorthand
   [verify](tests/loom-test.sh::test_loom_note_kind_defaults_implementation)
