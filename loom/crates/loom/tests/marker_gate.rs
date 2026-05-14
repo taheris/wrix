@@ -102,6 +102,13 @@ fn run_loom_run_once(
         .env("LOOM_PROFILES_MANIFEST", manifest)
         .env("BD_STATE_DIR", state_dir)
         .env("XDG_STATE_HOME", workspace.join(".loom-test-state"))
+        // The nested-loom guard refuses `loom run` when LOOM_INSIDE=1.
+        // The cargo test runner inherits LOOM_INSIDE when this suite is
+        // executed inside a loom-managed container, which would block
+        // the child `loom run` invocation before it reached the marker
+        // routing under test. Strip it so the test exercises the live
+        // dispatch path the spec criterion pins.
+        .env_remove("LOOM_INSIDE")
         .output()
         .expect("spawn loom")
 }
