@@ -1982,14 +1982,14 @@ Criteria.
 - [x] Iteration count is bead-level state and survives `retry →
       [running]` round-trips
   [verify](tests/loom-test.sh::test_iteration_count_persists)
-- [ ] Pre-flight infra failures (image load, container start) exit
+- [x] Pre-flight infra failures (image load, container start) exit
       immediately as `loom:blocked` with cause `infra-preflight`; no retry
   [verify](tests/loom-test.sh::test_infra_preflight_fail_fast)
-- [ ] Mid-session infra failures (agent process exit non-zero, container
+- [x] Mid-session infra failures (agent process exit non-zero, container
       OOM, IO errors) get one free retry per `loom run`; second mid-
       session failure → `loom:blocked` with cause `infra-repeated`
   [verify](tests/loom-test.sh::test_infra_midsession_one_retry)
-- [ ] Infra-retry counter is driver-memory only; resets on a fresh
+- [x] Infra-retry counter is driver-memory only; resets on a fresh
       `loom run` invocation; does not consume `[loop] max_iterations`
   [verify](tests/loom-test.sh::test_infra_retry_counter_separate)
 - [x] `loom check` push gate refuses to push while any bead in the
