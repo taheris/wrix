@@ -1836,18 +1836,18 @@ Criteria.
   [verify](tests/loom-test.sh::test_plan_update)
 - [x] `loom todo` implements four-tier detection with per-spec cursor fan-out
   [verify](tests/loom-test.sh::test_todo_tier_detection)
-- [ ] `loom run` continuous mode processes beads until molecule complete
+- [x] `loom run` continuous mode processes beads until molecule complete
   [verify](tests/loom-test.sh::test_run_continuous)
-- [ ] `loom run --once` processes single bead then exits
+- [x] `loom run --once` processes single bead then exits
   [verify](tests/loom-test.sh::test_run_once)
 - [x] `loom run --parallel N` (alias `-p N`) accepts a positive integer; non-
       positive or non-integer values fail with a clear error
   [verify](tests/loom-test.sh::test_run_parallel_flag_validation)
-- [ ] `loom run` reads profile from bead label and spawns correct container
+- [x] `loom run` reads profile from bead label and spawns correct container
   [verify](tests/loom-test.sh::test_run_profile_selection)
-- [ ] `loom run` retries failed beads with previous error context
+- [x] `loom run` retries failed beads with previous error context
   [verify](tests/loom-test.sh::test_run_retry_with_context)
-- [ ] `loom run` execs `loom check` on molecule completion
+- [x] `loom run` execs `loom check` on molecule completion
   [verify](tests/loom-test.sh::test_run_execs_review)
 - [x] `loom check` implements push gate (push only on clean completion)
   [verify](tests/loom-test.sh::test_review_push_gate)

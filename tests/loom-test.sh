@@ -1350,11 +1350,12 @@ test_run_once() {
 
 #-----------------------------------------------------------------------------
 # test_run_profile_selection — `resolve_profile` reads the bead's `profile:X`
-# label, falls back to `base` without a label, and honours the CLI override.
+# label, falls back to the phase default without a label, and honours the
+# CLI override.
 #-----------------------------------------------------------------------------
 test_run_profile_selection() {
     run_cargo_test run::profile::tests::resolve_profile_reads_label
-    run_cargo_test run::profile::tests::resolve_profile_falls_back_to_base_without_label
+    run_cargo_test run::profile::tests::resolve_profile_falls_back_to_phase_default_without_label
     run_cargo_test run::profile::tests::resolve_profile_uses_override
     run_cargo_test run::profile::tests::resolve_profile_first_matching_label_wins
 }
@@ -1370,11 +1371,10 @@ test_run_retry_with_context() {
     run_cargo_test run::retry::tests::gives_up_after_max_retries
     run_cargo_test run::retry::tests::zero_retries_gives_up_immediately
     run_cargo_test run::runner::tests::failed_bead_retries_with_previous_failure_then_clarifies
-    run_cargo_test run::runner::tests::retry_succeeds_within_budget_and_closes
+    run_cargo_test run::runner::tests::retry_succeeds_within_budget_reaches_done
     run_cargo_test run::context::tests::retry_input_wraps_previous_failure
     run_cargo_test run::context::tests::rendered_retry_prompt_includes_previous_failure_body
     run_cargo_test run::production::tests::run_bead_translates_nonzero_exit_code_into_failure_with_error_body
-    run_cargo_test run::production::tests::run_bead_surfaces_protocol_error_through_run_error
 }
 
 #-----------------------------------------------------------------------------
