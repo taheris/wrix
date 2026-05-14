@@ -1897,9 +1897,9 @@ Criteria.
       clarifies labeled `spec:<label>`; without `-s`, the session sees
       every outstanding clarify regardless of `current_spec`
   [verify](tests/loom-test.sh::test_msg_chat_scope)
-- [ ] `loom spec` queries spec annotations (verify/judge)
+- [x] `loom spec` queries spec annotations (verify/judge)
   [verify](tests/loom-test.sh::test_spec_query)
-- [ ] `loom spec --deps` scans verify/judge test files in the active spec
+- [x] `loom spec --deps` scans verify/judge test files in the active spec
       and prints required nixpkgs
   [verify](tests/loom-test.sh::test_spec_deps)
 
