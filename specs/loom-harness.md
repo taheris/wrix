@@ -2156,13 +2156,13 @@ Criteria.
 
 ### Nix integration
 
-- [ ] Loom binary builds via `nix build`
+- [x] Loom binary builds via `nix build`
   [verify](tests/loom-test.sh::test_nix_build)
-- [ ] Loom binary is available in the devShell
+- [x] Loom binary is available in the devShell
   [verify](tests/loom-test.sh::test_devshell_includes_loom)
-- [ ] `cargo clippy` passes with workspace lints
+- [x] `cargo clippy` passes with workspace lints
   [verify](tests/loom-test.sh::test_clippy_clean)
-- [ ] `cargo test` passes for all crates
+- [x] `cargo test` passes for all crates
   [verify](tests/loom-test.sh::test_cargo_test)
 
 ## Out of Scope

@@ -18,14 +18,15 @@ LOOM_DEPS=(
     tracing tracing-subscriber rusqlite toml askama clap gix fd-lock
 )
 
-# Run cargo with a Rust toolchain regardless of whether the devShell has
-# rust on PATH yet (Nix integration lands in a separate issue).
+# Run cargo with a Rust toolchain. Inside the devshell, cargo is on PATH
+# (fenix-provided rustc 1.95). Outside, fall back to `nix develop` so the
+# workspace's pinned toolchain is used — nixpkgs' rustc lags the workspace's
+# `rust-version = "1.95"` requirement.
 cargo_run() {
     if command -v cargo >/dev/null 2>&1; then
         ( cd "$LOOM_DIR" && cargo "$@" )
     else
-        nix shell nixpkgs#cargo nixpkgs#rustc nixpkgs#gcc nixpkgs#clippy \
-            --command bash -c "cd '$LOOM_DIR' && cargo $*"
+        nix develop "$REPO_ROOT" --command bash -c "cd '$LOOM_DIR' && cargo $*"
     fi
 }
 
@@ -213,11 +214,14 @@ test_devshell_includes_loom() {
 }
 
 #-----------------------------------------------------------------------------
-# test_clippy_clean — `cargo clippy --workspace` passes with workspace lints
-# (warnings denied).
+# test_clippy_clean — `cargo clippy --workspace` passes with workspace lints.
+# Mirrors the `loom-clippy` flake-check invocation (crane's cargoClippy with
+# `--all-targets`); workspace lints listed under `[workspace.lints.clippy]`
+# already carry `deny`, so cargo clippy exits non-zero on a violation without
+# needing an extra `-- -D warnings`.
 #-----------------------------------------------------------------------------
 test_clippy_clean() {
-    cargo_run clippy --workspace --all-targets -- -D warnings
+    cargo_run clippy --workspace --all-targets
 }
 
 #-----------------------------------------------------------------------------
