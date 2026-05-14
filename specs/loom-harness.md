@@ -1755,22 +1755,22 @@ Criteria.
   [verify](tests/loom-test.sh::test_logs_reuses_renderer)
 - [x] Live-vs-replay distinction: `Pretty` renderer takes a `live: bool` parameter; replay suppresses the in-place running indicator and computes durations from `ts_ms` deltas
   [verify](tests/loom-test.sh::test_live_vs_replay_distinction)
-- [ ] `AgentEvent` derives `Deserialize` so `loom logs` reads its own JSONL files back through the same enum it writes
+- [x] `AgentEvent` derives `Deserialize` so `loom logs` reads its own JSONL files back through the same enum it writes
   [verify](tests/loom-test.sh::test_agent_event_deserialize_round_trip)
 
 **Event schema**
 
-- [ ] Every event carries common envelope fields: `kind`, `bead_id`, `molecule_id`, `iteration`, `source`, `ts_ms` (i64 unix millis), `seq` (u64 monotonic per-bead-spawn)
+- [x] Every event carries common envelope fields: `kind`, `bead_id`, `molecule_id`, `iteration`, `source`, `ts_ms` (i64 unix millis), `seq` (u64 monotonic per-bead-spawn)
   [verify](tests/loom-test.sh::test_common_envelope_fields)
-- [ ] `agent_start` carries `schema_version: u32` (currently `1`), `title`, `profile`, `spec_label`, `started_at_ms`
+- [x] `agent_start` carries `schema_version: u32` (currently `1`), `title`, `profile`, `spec_label`, `started_at_ms`
   [verify](tests/loom-test.sh::test_agent_start_fields)
-- [ ] `seq` is monotonic per bead spawn, starting at `0`
+- [x] `seq` is monotonic per bead spawn, starting at `0`
   [verify](tests/loom-test.sh::test_seq_monotonic)
-- [ ] Variant set is flat (no nested `message_update { delta: ... }`) — top-level `text_delta` / `thinking_delta` / `toolcall_delta` are siblings of `tool_call` / `tool_result`
+- [x] Variant set is flat (no nested `message_update { delta: ... }`) — top-level `text_delta` / `thinking_delta` / `toolcall_delta` are siblings of `tool_call` / `tool_result`
   [verify](tests/loom-test.sh::test_flat_variant_shape)
-- [ ] `loom-events` crate has exactly three deps: `serde`, `serde_json`, `thiserror` (no `chrono`, no `ulid`, no `uuid`)
+- [x] `loom-events` crate has exactly three deps: `serde`, `serde_json`, `thiserror` (no `chrono`, no `ulid`, no `uuid`)
   [verify](tests/loom-test.sh::test_loom_events_minimal_deps)
-- [ ] Unknown event variants are accepted gracefully (deserialized as a fallback or skipped, never error)
+- [x] Unknown event variants are accepted gracefully (deserialized as a fallback or skipped, never error)
   [verify](tests/loom-test.sh::test_unknown_variants_tolerated)
 
 **Disk log**
@@ -1799,7 +1799,7 @@ Criteria.
 
 **Crate boundary**
 
-- [ ] `loom-events` is a leaf crate — no internal deps on `loom-driver` / `loom-render` / `loom-workflow` / `loom-templates`
+- [x] `loom-events` is a leaf crate — no internal deps on `loom-driver` / `loom-render` / `loom-workflow` / `loom-templates`
   [verify](tests/loom-test.sh::test_loom_events_is_leaf)
 - [x] `loom-render` depends on `loom-events` only (no `loom-driver`)
   [verify](tests/loom-test.sh::test_loom_render_deps)
