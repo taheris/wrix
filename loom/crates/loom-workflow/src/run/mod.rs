@@ -16,7 +16,9 @@
 //!    renderer + per-bead JSONL log;
 //! 4. on agent failure retries with `previous_failure` injected up to
 //!    `max_retries` (default 2), then applies the `loom:clarify` label;
-//! 5. on bead success closes the bead;
+//! 5. on bead success observes the agent's own `bd close` — the driver
+//!    never closes a dispatched bead (closure is the agent's job per the
+//!    verdict-gate `bd-closed` observable);
 //! 6. on molecule completion (no more ready beads) execs `loom check` —
 //!    continuous mode only.
 //!
