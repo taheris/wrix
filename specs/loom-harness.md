@@ -1626,17 +1626,17 @@ Criteria.
 
 ### Process architecture
 
-- [ ] Loom never invokes `podman run` directly (grep `loom/crates/` for
+- [x] Loom never invokes `podman run` directly (grep `loom/crates/` for
       `podman` finds only documentation references)
   [verify](tests/loom-test.sh::test_loom_does_not_invoke_podman)
-- [ ] `wrapix spawn --spawn-config <file> --stdio` accepts a JSON config,
+- [x] `wrapix spawn --spawn-config <file> --stdio` accepts a JSON config,
       reuses container construction from existing `wrapix run`, omits TTY
   [verify](tests/loom-test.sh::test_wrapix_spawn_subcommand)
-- [ ] `SpawnConfig` JSON shape is stable: serialization round-trip preserves
+- [x] `SpawnConfig` JSON shape is stable: serialization round-trip preserves
       all fields and key names, including the `image_ref` and `image_source`
       fields
   [verify](tests/loom-test.sh::test_spawn_config_json_stability)
-- [ ] `wrapix spawn` runs `podman load` from `image_source` (a Nix store
+- [x] `wrapix spawn` runs `podman load` from `image_source` (a Nix store
       path) before invoking podman with `image_ref` as the ref; the load is
       idempotent on the image's hash tag
   [verify](tests/loom-test.sh::test_wrapix_spawn_loads_image_source)
