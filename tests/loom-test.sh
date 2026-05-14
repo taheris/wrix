@@ -1026,7 +1026,7 @@ test_todo_tier_detection() {
     todo_production_cargo_test build_spawn_config_uses_update_template_when_molecule_exists
     todo_production_cargo_test build_spawn_config_surfaces_unknown_profile_as_profile_error
     todo_production_cargo_test build_spawn_config_tier_1_renders_diff_from_base_commit
-    todo_production_cargo_test record_outcome_advances_cursor_only_on_clean_exit
+    todo_production_cargo_test record_outcome_advances_cursor_only_on_complete_marker_and_clean_exit
 }
 
 #-----------------------------------------------------------------------------
@@ -3146,20 +3146,20 @@ test_plan_new_writes_implementation_notes() { _pending_stub plan_new_writes_impl
 
 #-----------------------------------------------------------------------------
 # test_todo_renders_notes_into_beads — `loom todo` reads implementation
-# notes from the anchor spec and renders each note's text into every new
-# bead body created during the run. Pinned to the integration tests under
-# `loom-workflow/tests/todo_production.rs`. (Today these still hit the
-# legacy `specs.implementation_notes` column; once the `notes` table +
-# `loom note` CLI migration lands, the underlying Rust tests get rewritten
-# against `notes` rows but this dispatcher stays — see the *Stub-to-real
-# review gate* section in `specs/loom-harness.md`.)
+# notes from the anchor's `notes` rows (kind = 'implementation') and renders
+# each note's text into the prompt so the agent copies them into every new
+# bead body. Productive completion atomically consumes the notes and advances
+# the cursor via `StateDb::consume_notes_and_advance_cursor`.
 #-----------------------------------------------------------------------------
 test_todo_renders_notes_into_beads() {
     cargo_run test -p loom-workflow --test todo_production \
         build_spawn_config_renders_implementation_notes_from_db \
         -- --exact --nocapture --quiet
     cargo_run test -p loom-workflow --test todo_production \
-        record_outcome_clears_notes_on_success_but_not_on_failure \
+        build_spawn_config_omits_notes_section_when_notes_empty \
+        -- --exact --nocapture --quiet
+    cargo_run test -p loom-workflow --test todo_production \
+        record_outcome_consumes_notes_and_advances_cursor_atomically \
         -- --exact --nocapture --quiet
 }
 test_routine_commands_never_delete_spec_row() {

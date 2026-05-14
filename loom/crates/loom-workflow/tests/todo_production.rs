@@ -269,11 +269,91 @@ async fn build_spawn_config_tier_1_renders_diff_from_base_commit() {
     );
 }
 
-// Deleted: `build_spawn_config_renders_implementation_notes_from_db` and
-// `record_outcome_clears_notes_on_success_but_not_on_failure`. Both covered
-// the markdown notes path (read `specs.implementation_notes`, render via
-// template, clear on consume). D1 (wx-2ytty) removes that flow entirely;
-// the loom note CLI (D2) replaces it with a SQLite `notes` table.
+/// Spec criterion `test_todo_renders_notes_into_beads`: `loom todo` reads
+/// implementation notes from the anchor's `notes` rows (kind =
+/// 'implementation') and renders each note's text into the prompt so the
+/// agent copies them into every new bead body it creates.
+#[tokio::test]
+async fn build_spawn_config_renders_implementation_notes_from_db() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().to_path_buf();
+    let state = seeded_state(&workspace, "alpha", "wx-mol", None);
+    let label = SpecLabel::new("alpha");
+    state
+        .notes_add(&label, "implementation", "touch lib/foo/bar.rs", 100)
+        .unwrap();
+    state
+        .notes_add(&label, "implementation", "beware FK cascade ordering", 200)
+        .unwrap();
+    // Non-implementation kinds must NOT bleed into the todo prompt.
+    state
+        .notes_add(&label, "design", "design-only context", 300)
+        .unwrap();
+    let manifest = stub_manifest(&workspace);
+    let git = init_repo(&workspace);
+    let mut ctrl = ProductionTodoController::new(
+        label,
+        workspace,
+        state,
+        manifest,
+        ProfileName::new("base"),
+        git,
+        None,
+    );
+    let session = ctrl.build_session().await.expect("build cfg");
+    let prompt = &session.config.initial_prompt;
+    assert!(
+        prompt.contains("## Implementation Notes"),
+        "prompt missing Implementation Notes header: {prompt}",
+    );
+    assert!(
+        prompt.contains("touch lib/foo/bar.rs"),
+        "prompt missing first impl note: {prompt}",
+    );
+    assert!(
+        prompt.contains("beware FK cascade ordering"),
+        "prompt missing second impl note: {prompt}",
+    );
+    assert!(
+        !prompt.contains("design-only context"),
+        "prompt must NOT include design-kind notes: {prompt}",
+    );
+    assert_eq!(
+        prompt.matches("<implementation-note>").count(),
+        2,
+        "expected 2 implementation-note markers, got prompt: {prompt}",
+    );
+}
+
+/// Empty notes table → prompt omits the Implementation Notes section entirely
+/// (no empty `## Implementation Notes` header). Guards against the section
+/// rendering with a stale header when no notes have been recorded.
+#[tokio::test]
+async fn build_spawn_config_omits_notes_section_when_notes_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().to_path_buf();
+    let state = seeded_state(&workspace, "alpha", "wx-mol", None);
+    let manifest = stub_manifest(&workspace);
+    let git = init_repo(&workspace);
+    let mut ctrl = ProductionTodoController::new(
+        SpecLabel::new("alpha"),
+        workspace,
+        state,
+        manifest,
+        ProfileName::new("base"),
+        git,
+        None,
+    );
+    let session = ctrl.build_session().await.expect("build cfg");
+    assert!(
+        !session
+            .config
+            .initial_prompt
+            .contains("## Implementation Notes"),
+        "empty notes must omit the Implementation Notes section: {}",
+        session.config.initial_prompt,
+    );
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn record_outcome_advances_cursor_only_on_complete_marker_and_clean_exit() {

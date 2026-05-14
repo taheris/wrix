@@ -63,13 +63,19 @@ impl ProductionTodoController {
         let active_mol = self.state.active_molecule(&self.label)?;
         let molecule_id = active_mol.as_ref().map(|m| m.id.clone());
         // Tolerate a missing spec row — tier-4 first-touch doesn't run plan
-        // before todo. Notes are no longer threaded into the todo prompt;
-        // the loom note CLI (D2) reads the SQLite notes table directly.
+        // before todo. Notes are sourced from the `notes` table below.
         match self.state.spec(&self.label) {
             Ok(_) => (),
             Err(loom_driver::state::StateError::SpecNotFound { .. }) => (),
             Err(e) => return Err(TodoError::State(e)),
         }
+
+        let implementation_notes = self
+            .state
+            .notes_list(Some(&self.label), Some("implementation"))?
+            .into_iter()
+            .map(|row| row.text)
+            .collect::<Vec<_>>();
 
         // Layer the per-spec todo cursor over the molecule's stored
         // `base_commit`: the cursor moves forward after every successful
@@ -113,6 +119,7 @@ impl ProductionTodoController {
             spec_path: spec_path.to_string_lossy().into_owned(),
             pinned_context: String::new(),
             companion_paths: vec![],
+            implementation_notes,
             scratchpad_path,
             exit_signals: String::new(),
         };

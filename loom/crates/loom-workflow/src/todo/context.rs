@@ -16,6 +16,11 @@ pub struct TemplateBaseFields {
     pub spec_path: String,
     pub pinned_context: String,
     pub companion_paths: Vec<String>,
+    /// Implementation notes pulled from `notes` rows where
+    /// `kind = 'implementation'`, in chronological (id ascending) order.
+    /// Rendered into every new bead body so each implementation agent
+    /// receives the full planning context independent of external state.
+    pub implementation_notes: Vec<String>,
     /// Absolute path to `.wrapix/loom/scratch/<spec-label>/scratch.md` for
     /// this todo session. Embedded in the rendered prompt so the agent can
     /// write to the correct file under compaction recovery.
@@ -42,6 +47,7 @@ pub fn build_template_context(
         spec_path,
         pinned_context,
         companion_paths,
+        implementation_notes,
         scratchpad_path,
         exit_signals,
     } = base;
@@ -57,6 +63,7 @@ pub fn build_template_context(
                 spec_diff: Some(spec_diff),
                 existing_tasks: None,
                 molecule_id,
+                implementation_notes,
                 scratchpad_path,
                 exit_signals,
             })
@@ -69,6 +76,7 @@ pub fn build_template_context(
             spec_diff: None,
             existing_tasks,
             molecule_id: Some(molecule.clone()),
+            implementation_notes,
             scratchpad_path,
             exit_signals,
         }),
@@ -77,6 +85,7 @@ pub fn build_template_context(
             label,
             spec_path,
             companion_paths,
+            implementation_notes,
             scratchpad_path,
             exit_signals,
         }),
@@ -118,6 +127,7 @@ mod tests {
             spec_path: "specs/alpha.md".to_string(),
             pinned_context: "PIN".to_string(),
             companion_paths: vec![],
+            implementation_notes: vec![],
             scratchpad_path: "/workspace/.wrapix/loom/scratch/alpha/scratch.md".to_string(),
             exit_signals: "LOOM_COMPLETE".to_string(),
         }
@@ -145,6 +155,39 @@ mod tests {
                 assert!(u.spec_diff.is_none());
                 assert_eq!(u.existing_tasks.as_deref(), Some("- existing"));
                 assert_eq!(u.molecule_id, Some(mol));
+            }
+            _ => panic!("expected Update"),
+        }
+    }
+
+    #[test]
+    fn notes_thread_into_new_tier_context() {
+        let mut base = base_fields();
+        base.implementation_notes = vec!["note one".into(), "note two".into()];
+        let ctx = build_template_context(&TierDecision::New, base, None, None);
+        match ctx {
+            TodoTemplateContext::New(n) => {
+                assert_eq!(n.implementation_notes, vec!["note one", "note two"]);
+            }
+            _ => panic!("expected New"),
+        }
+    }
+
+    #[test]
+    fn notes_thread_into_update_tier_context() {
+        let mut base = base_fields();
+        base.implementation_notes = vec!["seeded note".into()];
+        let ctx = build_template_context(
+            &TierDecision::Tasks {
+                molecule: MoleculeId::new("wx-mol"),
+            },
+            base,
+            None,
+            Some(MoleculeId::new("wx-mol")),
+        );
+        match ctx {
+            TodoTemplateContext::Update(u) => {
+                assert_eq!(u.implementation_notes, vec!["seeded note"]);
             }
             _ => panic!("expected Update"),
         }

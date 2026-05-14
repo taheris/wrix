@@ -55,6 +55,7 @@ fn todo_new_snapshot() {
         label: SpecLabel::new("loom-harness"),
         spec_path: "specs/loom-harness.md".to_string(),
         companion_paths: vec!["lib/sandbox/".into()],
+        implementation_notes: vec![],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
         exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
@@ -71,6 +72,7 @@ fn todo_update_snapshot() {
         spec_diff: Some("=== specs/loom-harness.md ===\n+ new requirement".into()),
         existing_tasks: Some("- wx-3hhwq.1: scaffold workspace".into()),
         molecule_id: Some(MoleculeId::new("wx-3hhwq")),
+        implementation_notes: vec![],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
         exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };

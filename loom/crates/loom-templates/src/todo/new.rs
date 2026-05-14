@@ -9,6 +9,7 @@ pub struct TodoNewContext {
     pub label: SpecLabel,
     pub spec_path: String,
     pub companion_paths: Vec<String>,
+    pub implementation_notes: Vec<String>,
     pub scratchpad_path: String,
     pub exit_signals: String,
 }

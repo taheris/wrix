@@ -69,6 +69,7 @@ fn todo_new_renders_spec_label_marker() -> Result<()> {
         label: SpecLabel::new("loom-harness"),
         spec_path: "specs/loom-harness.md".to_string(),
         companion_paths: vec!["lib/sandbox/".into()],
+        implementation_notes: vec![],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
         exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
@@ -76,9 +77,53 @@ fn todo_new_renders_spec_label_marker() -> Result<()> {
 
     assert!(out.contains("# Task Decomposition"));
     assert!(out.contains("spec:loom-harness"));
-    // Implementation Notes section no longer rendered into todo prompts —
-    // see D1 (wx-2ytty). The loom note CLI (D2) owns that surface.
+    // Empty notes → the section header is suppressed entirely (no empty
+    // "## Implementation Notes" header in the prompt).
     assert!(!out.contains("## Implementation Notes"));
+    Ok(())
+}
+
+#[test]
+fn todo_new_renders_implementation_notes_when_present() -> Result<()> {
+    let ctx = TodoNewContext {
+        pinned_context: PINNED_CONTEXT_BODY.to_string(),
+        label: SpecLabel::new("loom-harness"),
+        spec_path: "specs/loom-harness.md".to_string(),
+        companion_paths: vec![],
+        implementation_notes: vec![
+            "Hidden constraint: touch lib/sandbox/linux/default.nix".into(),
+            "Design trade-off: prefer single FK over join table".into(),
+        ],
+        scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+        exit_signals: EXIT_SIGNALS_BODY.to_string(),
+    };
+    let out = ctx.render()?;
+    assert!(out.contains("## Implementation Notes"));
+    assert!(out.contains("Hidden constraint: touch lib/sandbox/linux/default.nix"));
+    assert!(out.contains("Design trade-off: prefer single FK over join table"));
+    assert_eq!(out.matches("<implementation-note>").count(), 2);
+    assert_eq!(out.matches("</implementation-note>").count(), 2);
+    Ok(())
+}
+
+#[test]
+fn todo_update_renders_implementation_notes_when_present() -> Result<()> {
+    let ctx = TodoUpdateContext {
+        pinned_context: PINNED_CONTEXT_BODY.to_string(),
+        label: SpecLabel::new("loom-harness"),
+        spec_path: "specs/loom-harness.md".to_string(),
+        companion_paths: vec![],
+        spec_diff: Some("=== specs/loom-harness.md ===\n+ change".into()),
+        existing_tasks: None,
+        molecule_id: Some(MoleculeId::new("wx-mol")),
+        implementation_notes: vec!["beware FK cascade ordering".into()],
+        scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+        exit_signals: EXIT_SIGNALS_BODY.to_string(),
+    };
+    let out = ctx.render()?;
+    assert!(out.contains("## Implementation Notes"));
+    assert!(out.contains("beware FK cascade ordering"));
+    assert!(out.contains("<implementation-note>"));
     Ok(())
 }
 
@@ -92,6 +137,7 @@ fn todo_update_wraps_existing_tasks_in_agent_output() -> Result<()> {
         spec_diff: Some("=== specs/loom-harness.md ===\n+ new requirement".into()),
         existing_tasks: Some("- wx-3hhwq.1: scaffold workspace".into()),
         molecule_id: Some(MoleculeId::new("wx-3hhwq")),
+        implementation_notes: vec![],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
         exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };

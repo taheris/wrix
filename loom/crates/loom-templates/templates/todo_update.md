@@ -21,7 +21,20 @@ Read the anchor spec at `{{ spec_path }}` for the full current contents before i
 {% include "partial/companions_context.md" %}
 
 {% include "partial/scratchpad.md" %}
+{% if !implementation_notes.is_empty() %}
+## Implementation Notes
 
+The following implementation notes were captured during planning. They carry
+hidden constraints, file paths, and design context that every implementation
+agent must see. **Copy every note's text verbatim into the `--description` of
+every bead you create in this session**, so each implementation agent receives
+the full context independent of any external state:
+
+{% for note in implementation_notes %}<implementation-note>
+{{ note }}
+</implementation-note>
+{% endfor %}
+{% endif %}
 ## Spec Changes
 
 If `spec_diff` is provided, use that to identify new requirements **across all

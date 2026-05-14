@@ -1834,7 +1834,7 @@ Criteria.
   [verify](tests/loom-test.sh::test_plan_new)
 - [ ] `loom plan -u <label>` updates existing spec with anchor/sibling support
   [verify](tests/loom-test.sh::test_plan_update)
-- [ ] `loom todo` implements four-tier detection with per-spec cursor fan-out
+- [x] `loom todo` implements four-tier detection with per-spec cursor fan-out
   [verify](tests/loom-test.sh::test_todo_tier_detection)
 - [ ] `loom run` continuous mode processes beads until molecule complete
   [verify](tests/loom-test.sh::test_run_continuous)
@@ -2079,7 +2079,7 @@ Criteria.
       `loom note set` (interview-driven keep/drop/add — not blind
       append, not blind replace)
   [judge](tests/judges/loom.sh::judge_plan_update_merges_notes)
-- [ ] `loom todo` reads implementation notes from the anchor's `notes`
+- [x] `loom todo` reads implementation notes from the anchor's `notes`
       rows and renders each note's text into every new bead body
       created during the run
   [verify](tests/loom-test.sh::test_todo_renders_notes_into_beads)
