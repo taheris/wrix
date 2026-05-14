@@ -467,3 +467,197 @@ fn msg_flag_exclusivity_enforced_at_parse_time() {
         String::from_utf8_lossy(&output.stderr),
     );
 }
+
+// -------------------------------------------------------------------
+// `test_msg_dismiss` — `-d` writes DISMISS_NOTE and removes the label
+// -------------------------------------------------------------------
+
+#[test]
+fn msg_dismiss_writes_canonical_note_and_clears_label() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path();
+    let state_dir = workspace.join("bd-state");
+    std::fs::create_dir_all(&state_dir).unwrap();
+
+    seed_bead(
+        &state_dir,
+        "wx-dism",
+        "dismiss path",
+        CLARIFY_DESC,
+        &["loom:clarify"],
+    );
+
+    let bin_dir = install_bd_shim(workspace);
+    let manifest = write_minimal_manifest(workspace);
+
+    let output = run_loom_msg(
+        workspace,
+        &bin_dir,
+        &state_dir,
+        &manifest,
+        &["-b", "wx-dism", "-d"],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let log = read_invocation_log(&state_dir);
+    assert!(
+        output.status.success(),
+        "loom msg -d must exit 0.\nstdout={stdout}\nstderr={stderr}\nbd-shim log:\n{log}",
+    );
+
+    let bead = run_bd_show(&bin_dir, &state_dir, "wx-dism");
+    let notes = bead
+        .get("notes")
+        .and_then(serde_json::Value::as_str)
+        .expect("notes field present and string");
+    assert!(
+        notes.contains("Dismissed via loom msg"),
+        "bd show --json .notes must carry the canonical dismiss note. got={notes:?}\nlog={log}",
+    );
+    let labels = bead
+        .get("labels")
+        .and_then(serde_json::Value::as_array)
+        .expect("labels field is array");
+    let has_clarify = labels.iter().any(|v| v.as_str() == Some("loom:clarify"));
+    assert!(
+        !has_clarify,
+        "loom:clarify must be removed by the dismiss update. labels={labels:?}\nlog={log}",
+    );
+}
+
+// -------------------------------------------------------------------
+// `test_msg_spec_filter` — `-s <label>` narrows list output to spec
+// -------------------------------------------------------------------
+
+#[test]
+fn msg_spec_filter_narrows_list_to_matching_spec() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path();
+    let state_dir = workspace.join("bd-state");
+    std::fs::create_dir_all(&state_dir).unwrap();
+
+    seed_bead(
+        &state_dir,
+        "wx-sfa",
+        "alpha clarify",
+        CLARIFY_DESC,
+        &["loom:clarify", "spec:alpha"],
+    );
+    seed_bead(
+        &state_dir,
+        "wx-sfb",
+        "beta clarify",
+        CLARIFY_DESC,
+        &["loom:clarify", "spec:beta"],
+    );
+
+    let bin_dir = install_bd_shim(workspace);
+    let manifest = write_minimal_manifest(workspace);
+
+    // Bare invocation lists both.
+    let output = run_loom_msg(workspace, &bin_dir, &state_dir, &manifest, &[]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "bare loom msg must exit 0");
+    assert!(
+        stdout.contains("wx-sfa") && stdout.contains("wx-sfb"),
+        "cross-spec list must show both beads. stdout={stdout}",
+    );
+
+    // -s alpha filters out the beta bead.
+    let output = run_loom_msg(workspace, &bin_dir, &state_dir, &manifest, &["-s", "alpha"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "loom msg -s alpha must exit 0.\nstdout={stdout}\nstderr={stderr}",
+    );
+    assert!(
+        stdout.contains("wx-sfa"),
+        "spec-filter must include alpha bead. stdout={stdout}",
+    );
+    assert!(
+        !stdout.contains("wx-sfb"),
+        "spec-filter must exclude beta bead. stdout={stdout}",
+    );
+}
+
+// -------------------------------------------------------------------
+// `test_msg_view_modes` — `-n <N>` and `-b <id>` render the bead host-side
+// -------------------------------------------------------------------
+
+#[test]
+fn msg_view_modes_render_bead_host_side() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path();
+    let state_dir = workspace.join("bd-state");
+    std::fs::create_dir_all(&state_dir).unwrap();
+
+    seed_bead(
+        &state_dir,
+        "wx-viewa",
+        "alpha view",
+        CLARIFY_DESC,
+        &["loom:clarify", "spec:alpha"],
+    );
+
+    let bin_dir = install_bd_shim(workspace);
+    let manifest = write_minimal_manifest(workspace);
+
+    // -b <id> view: prints title, description, and does not mutate state.
+    let output = run_loom_msg(
+        workspace,
+        &bin_dir,
+        &state_dir,
+        &manifest,
+        &["-b", "wx-viewa"],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let log = read_invocation_log(&state_dir);
+    assert!(
+        output.status.success(),
+        "loom msg -b view must exit 0.\nstdout={stdout}\nstderr={stderr}",
+    );
+    assert!(
+        stdout.contains("wx-viewa"),
+        "view output must include bead id. stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("alpha view"),
+        "view output must include bead title. stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("### Option 1"),
+        "view output must include the description body. stdout={stdout}",
+    );
+
+    // -b view must NOT call bd update — only bd list.
+    assert!(
+        !log.contains("update wx-viewa"),
+        "view mode must not mutate the bead. log={log}",
+    );
+
+    // Label remains.
+    let bead = run_bd_show(&bin_dir, &state_dir, "wx-viewa");
+    let labels = bead
+        .get("labels")
+        .and_then(serde_json::Value::as_array)
+        .expect("labels array");
+    assert!(
+        labels.iter().any(|v| v.as_str() == Some("loom:clarify")),
+        "view must leave loom:clarify label intact. labels={labels:?}",
+    );
+
+    // -n 1 view: same content via 1-based addressing.
+    let output = run_loom_msg(workspace, &bin_dir, &state_dir, &manifest, &["-n", "1"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "loom msg -n 1 view must exit 0.\nstdout={stdout}\nstderr={stderr}",
+    );
+    assert!(
+        stdout.contains("wx-viewa") && stdout.contains("### Option 1"),
+        "view by -n must render the same bead body. stdout={stdout}",
+    );
+}

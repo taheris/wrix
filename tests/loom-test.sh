@@ -3454,7 +3454,10 @@ test_msg_chat_writes_notes() {
     cargo_run test -p loom --test msg_chat -- --exact --nocapture --quiet \
         loom_msg_chat_writes_notes_and_clears_labels
 }
-test_msg_dismiss() { _pending_stub msg_dismiss; }
+test_msg_dismiss() {
+    cargo_run test -p loom --test msg_persist -- --test-threads=1 \
+        msg_dismiss_writes_canonical_note_and_clears_label
+}
 test_msg_flag_exclusivity() {
     cargo_run test -p loom --test msg_persist -- --test-threads=1 \
         msg_flag_exclusivity_enforced_at_parse_time
@@ -3464,8 +3467,14 @@ test_msg_option_validates() {
         msg_option_fast_reply_persists_note_via_bd_show \
         msg_option_out_of_range_errors_and_leaves_bead_unchanged
 }
-test_msg_spec_filter() { _pending_stub msg_spec_filter; }
-test_msg_view_modes() { _pending_stub msg_view_modes; }
+test_msg_spec_filter() {
+    cargo_run test -p loom --test msg_persist -- --test-threads=1 \
+        msg_spec_filter_narrows_list_to_matching_spec
+}
+test_msg_view_modes() {
+    cargo_run test -p loom --test msg_persist -- --test-threads=1 \
+        msg_view_modes_render_bead_host_side
+}
 test_notes_cascade_on_spec_delete() {
     cargo_run test -p loom-driver --test state_db -- --exact --nocapture --quiet notes_cascade_on_spec_delete
 }

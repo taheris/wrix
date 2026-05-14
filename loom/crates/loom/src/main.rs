@@ -1442,8 +1442,9 @@ fn run_msg_inner(
         .await
     })?;
     let kept = filter_msg_beads(&beads, spec_filter.as_ref());
+    let has_target = number.is_some() || bead.is_some();
 
-    if !has_action {
+    if !has_action && !has_target {
         let rows = build_rows(&kept, spec_filter.as_ref());
         if rows.is_empty() {
             println!("(no outstanding clarify or blocked beads)");
@@ -1468,6 +1469,26 @@ fn run_msg_inner(
                 ),
             }
         }
+        return Ok(());
+    }
+
+    if !has_action {
+        let (target, _pos) = resolve_target(&kept, number, bead.as_deref())?;
+        let target_bead = kept
+            .iter()
+            .find(|b| b.id == target)
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("bead {target} not in filtered list"))?;
+        let kind = kind_of(target_bead).ok_or_else(|| {
+            anyhow::anyhow!("bead {target} carries neither loom:clarify nor loom:blocked")
+        })?;
+        println!("{target} [{}]", kind.tag());
+        println!("title: {}", target_bead.title);
+        if let Some(label) = spec_label_of(target_bead) {
+            println!("spec: {label}");
+        }
+        println!();
+        println!("{}", target_bead.description);
         return Ok(());
     }
 

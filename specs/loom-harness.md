@@ -1853,14 +1853,14 @@ Criteria.
   [verify](tests/loom-test.sh::test_review_push_gate)
 - [x] `loom check` auto-iterates on fix-up beads (up to max iterations)
   [verify](tests/loom-test.sh::test_review_auto_iterate)
-- [ ] Bare `loom msg` lists every outstanding `loom:blocked` and
+- [x] Bare `loom msg` lists every outstanding `loom:blocked` and
       `loom:clarify` bead across all specs (cross-spec default); the
       `current_spec` meta value is not consulted
   [verify](tests/loom-test.sh::test_msg_list_cross_spec_default)
-- [ ] `loom msg -s <label>` (alias `--spec`) filters the list to
+- [x] `loom msg -s <label>` (alias `--spec`) filters the list to
       clarifies carrying the `spec:<label>` bead label
   [verify](tests/loom-test.sh::test_msg_spec_filter)
-- [ ] `loom msg -n <N>` / `loom msg -b <id>` (long forms `--number` /
+- [x] `loom msg -n <N>` / `loom msg -b <id>` (long forms `--number` /
       `--bead`) views a clarify host-side without launching a container
   [verify](tests/loom-test.sh::test_msg_view_modes)
 - [x] `loom msg -n <N> -o <int>` (long form `--option`) writes the bead's
@@ -1872,28 +1872,28 @@ Criteria.
       text to notes and clears the label, regardless of whether the bead
       has an Options section
   [verify](tests/loom-test.sh::test_msg_reply_verbatim)
-- [ ] `loom msg -n <N> -d` (long form `--dismiss`) clears the label with
+- [x] `loom msg -n <N> -d` (long form `--dismiss`) clears the label with
       a work-around note, host-side
   [verify](tests/loom-test.sh::test_msg_dismiss)
 - [x] `-o` and `-r` are mutually exclusive; `-d` is mutually exclusive
       with both; `-n` and `-b` are mutually exclusive; passing
       conflicting flags errors before any side effects
   [verify](tests/loom-test.sh::test_msg_flag_exclusivity)
-- [ ] `loom msg -c` (long form `--chat`) launches an interactive
+- [x] `loom msg -c` (long form `--chat`) launches an interactive
       Drafter session in a container with the base profile, using the
       `msg.md` template; bare `loom msg` stays host-side
   [verify](tests/loom-test.sh::test_msg_chat_launches_container)
-- [ ] The chat session writes resolution notes via `bd update --notes`
+- [x] The chat session writes resolution notes via `bd update --notes`
       and clears the label via `bd update --remove-label=loom:clarify`
       (or `loom:blocked`) per resolved bead
   [verify](tests/loom-test.sh::test_msg_chat_writes_notes)
-- [ ] The chat session ending mid-walk is a clean `LOOM_COMPLETE`;
+- [x] The chat session ending mid-walk is a clean `LOOM_COMPLETE`;
       unresolved clarifies remain visible in the next session
   [verify](tests/loom-test.sh::test_msg_chat_partial_progress)
-- [ ] The chat session's only valid exit signal is `LOOM_COMPLETE`
+- [x] The chat session's only valid exit signal is `LOOM_COMPLETE`
       (no `LOOM_BLOCKED`, no `LOOM_CLARIFY`, no `LOOM_NOOP`)
   [verify](tests/loom-test.sh::test_msg_chat_exit_signals)
-- [ ] `loom msg -c` with `-s <label>` scopes the chat session to
+- [x] `loom msg -c` with `-s <label>` scopes the chat session to
       clarifies labeled `spec:<label>`; without `-s`, the session sees
       every outstanding clarify regardless of `current_spec`
   [verify](tests/loom-test.sh::test_msg_chat_scope)
@@ -2298,14 +2298,3 @@ parameters.
     run, assert the bead is open and carries the right label.
   - `test_run_does_not_close_bead` — same stub harness, assert the
     driver issued no `bd close` for the dispatched bead.
-- Spec/impl flag-surface drift on `loom msg`: spec documents
-  `-n`/`-b`/`-o`/`-r`/`-d`/`-c`/`-s` with `-o` (option, validated) and
-  `-r` (verbatim) as mutually-exclusive flags; impl has
-  `-n`/`-i`/`-a`/`-d`/`-s` (no `-c`/`--chat` at all) with `-a`
-  collapsing both jobs (integer → option N for clarify, anything else
-  → verbatim). The reconciliation decision (per A1) is **spec stands**:
-  bead I1 splits the impl back into `-n`/`-b`/`-o`/`-r`/`-d`/`-c`/`-s`
-  matching the spec. Until I1 lands, the criteria
-  `test_msg_option_validates`, `test_msg_reply_verbatim`,
-  `test_msg_flag_exclusivity`, `test_msg_chat_*` cannot be promoted
-  past their `_pending_stub` form.
