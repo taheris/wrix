@@ -1791,6 +1791,7 @@ dependencies = [
  "displaydoc",
  "loom-driver",
  "loom-events",
+ "loom-render",
  "loom-templates",
  "pulldown-cmark",
  "serde",

@@ -715,8 +715,22 @@ pub fn build_renderer(
 ) -> Box<dyn Renderer> {
     match mode {
         RenderMode::Pretty => Box::new(PrettyRenderer::new(out, bead_id, parallel, live)),
-        RenderMode::Plain | RenderMode::Default | RenderMode::Verbose => {
+        RenderMode::Plain | RenderMode::Default => {
             Box::new(PlainRenderer::new(out, bead_id, parallel, live))
+        }
+        // `Verbose` is a real mode at the TerminalRenderer level — it
+        // streams `TextDelta` verbatim and renders capped tool bodies.
+        // Construct the underlying renderer with `RenderMode::Verbose`
+        // directly so the verbose dispatch in `render_event` triggers;
+        // `color=true` is safe because the writer is opaque (TTY-vs-pipe
+        // is the caller's concern via `RenderMode::select`).
+        RenderMode::Verbose => {
+            let inner = if live {
+                TerminalRenderer::new(out, RenderMode::Verbose, bead_id, parallel, true)
+            } else {
+                TerminalRenderer::new_replay(out, RenderMode::Verbose, bead_id, parallel, true)
+            };
+            Box::new(inner)
         }
         RenderMode::Json => Box::new(JsonRenderer::new(out)),
         RenderMode::Raw => Box::new(RawRenderer::new(out)),

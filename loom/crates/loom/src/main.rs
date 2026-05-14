@@ -135,12 +135,29 @@ enum Command {
         /// Spec label (matches `<workspace>/specs/<label>.md`).
         label: String,
     },
-    /// Tail the most recent per-bead JSONL log.
+    /// Render (or tail) the most recent per-bead JSONL log.
     #[command(next_help_heading = "Inspect")]
     Logs {
         /// Restrict the search to a specific bead id.
-        #[arg(long)]
+        #[arg(long, short = 'b', value_name = "ID")]
         bead: Option<String>,
+        /// Tail the selected log: block on EOF until the file grows or
+        /// the user interrupts.
+        #[arg(long, short = 'f')]
+        follow: bool,
+        /// Emit raw JSONL bytes verbatim (no parsing). Composes with
+        /// `-f` to tail raw JSONL. Mutually exclusive with `-v` and
+        /// `--path`.
+        #[arg(long, conflicts_with_all = ["verbose", "path"])]
+        raw: bool,
+        /// Stream assistant text deltas during render — equivalent to
+        /// `loom run -v`. Mutually exclusive with `--raw` and `--path`.
+        #[arg(long, short = 'v', conflicts_with_all = ["raw", "path"])]
+        verbose: bool,
+        /// Print the resolved log file path and exit. Mutually
+        /// exclusive with `-f`, `-v`, `--raw`.
+        #[arg(long, conflicts_with_all = ["follow", "raw", "verbose"])]
+        path: bool,
     },
     /// Inspect spec annotations and tooling dependencies.
     #[command(next_help_heading = "Inspect")]
@@ -345,7 +362,13 @@ fn main() -> ExitCode {
         Command::Init { rebuild } => run_init(&workspace, rebuild),
         Command::Status => run_status(&workspace),
         Command::UseSpec { label } => run_use(&workspace, &label),
-        Command::Logs { bead } => run_logs(&workspace, bead.as_deref()),
+        Command::Logs {
+            bead,
+            follow,
+            raw,
+            verbose,
+            path,
+        } => run_logs(&workspace, bead.as_deref(), follow, raw, verbose, path),
         Command::Spec { deps } => run_spec(&workspace, deps),
         Command::Plan {
             new,
@@ -546,17 +569,88 @@ fn run_use(workspace: &std::path::Path, label: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn run_logs(workspace: &std::path::Path, bead: Option<&str>) -> anyhow::Result<()> {
+fn run_logs(
+    workspace: &std::path::Path,
+    bead: Option<&str>,
+    follow: bool,
+    raw: bool,
+    verbose: bool,
+    path_only: bool,
+) -> anyhow::Result<()> {
     let logs_root = workspace.join(".wrapix/loom/logs");
     let bead_id = bead.map(BeadId::new).transpose()?;
-    let path = logs_cmd::select_log(
+    let path = match logs_cmd::select_log(
         &logs_root,
         logs_cmd::LogsOpts {
             bead: bead_id.as_ref(),
         },
-    )?;
-    println!("{}", path.display());
+    ) {
+        Ok(p) => p,
+        // Bare `loom logs` with an empty directory is the steady state
+        // on a fresh workspace — render a one-liner and exit 0 instead
+        // of a typed error. `--path` keeps the typed error so scripts
+        // can detect the missing-file case cheaply.
+        Err(logs_cmd::LogsError::NoLogs { .. }) if !path_only => {
+            println!("No bead logs yet");
+            return Ok(());
+        }
+        Err(e) => return Err(e.into()),
+    };
+    if path_only {
+        println!("{}", path.display());
+        return Ok(());
+    }
+    // Derive a renderer bead id from the selected file's stem so the
+    // renderer chrome (header, recovery hints) carries the right id
+    // even when `--bead` is not passed. Falls back to a sentinel when
+    // the stem doesn't parse — we still render successfully.
+    let renderer_bead = bead_id
+        .clone()
+        .or_else(|| derive_bead_id_from_path(&path))
+        .unwrap_or_else(|| BeadId::new("wx-x").unwrap_or_else(|_| unreachable!()));
+    let mode = resolve_replay_mode(raw, verbose);
+    let clock: Arc<dyn loom_driver::clock::Clock> = Arc::new(loom_driver::clock::SystemClock);
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(logs_cmd::replay(
+        logs_cmd::ReplayOpts {
+            path: &path,
+            bead_id: renderer_bead,
+            mode,
+            follow,
+            follow_poll: None,
+            follow_max_polls: None,
+        },
+        Box::new(std::io::stdout()),
+        clock,
+    ))?;
     Ok(())
+}
+
+fn derive_bead_id_from_path(path: &Path) -> Option<BeadId> {
+    let stem = path.file_stem().and_then(|s| s.to_str())?;
+    // Stem layout: `<bead-id>-<UTC timestamp>`. Stamp shape:
+    // `YYYYMMDDTHHMMSSZ` — split on the final `-` and reparse.
+    let (head, _) = stem.rsplit_once('-')?;
+    BeadId::new(head).ok()
+}
+
+fn resolve_replay_mode(raw: bool, verbose: bool) -> logs_cmd::ReplayMode {
+    if raw {
+        return logs_cmd::ReplayMode::Raw;
+    }
+    let tty = loom_render::in_place::stdout_supports_indicator();
+    let no_color = std::env::var_os("NO_COLOR").is_some();
+    let base = loom_render::RenderMode::select(tty, no_color, false, false, false);
+    if verbose
+        && matches!(
+            base,
+            loom_render::RenderMode::Pretty | loom_render::RenderMode::Plain
+        )
+    {
+        logs_cmd::ReplayMode::Render(loom_render::RenderMode::Verbose)
+    } else {
+        logs_cmd::ReplayMode::Render(base)
+    }
 }
 
 fn run_plan(

@@ -2004,39 +2004,39 @@ Criteria.
 - [x] `loom init --rebuild` repopulates the state DB from `specs/*.md`
       and active beads
   [verify](tests/loom-test.sh::test_init_rebuild)
-- [ ] `loom status` prints active spec, current molecule, iteration count
+- [x] `loom status` prints active spec, current molecule, iteration count
       from the state DB
   [verify](tests/loom-test.sh::test_status_command)
-- [ ] `loom use <label>` sets `current_spec` in the state DB; round-trips
+- [x] `loom use <label>` sets `current_spec` in the state DB; round-trips
       with `loom status`
   [verify](tests/loom-test.sh::test_use_command)
-- [ ] Bare `loom logs` pretty-renders the most recent bead's full log
+- [x] Bare `loom logs` pretty-renders the most recent bead's full log
       via the same `AgentEvent` renderer used by `loom run`, then
       exits at EOF (no implicit follow); `-b <id>` (long form
       `--bead`) selects a specific bead's log
   [verify](tests/loom-test.sh::test_logs_default_renders_and_exits)
-- [ ] `loom logs -f` (long form `--follow`) tails the selected log,
+- [x] `loom logs -f` (long form `--follow`) tails the selected log,
       blocking on EOF until the file grows or the user interrupts
   [verify](tests/loom-test.sh::test_logs_follow_blocks_on_eof)
-- [ ] `loom logs --raw` emits raw JSONL bytes from the file, unparsed;
+- [x] `loom logs --raw` emits raw JSONL bytes from the file, unparsed;
       `loom logs -f --raw` tails raw JSONL (composes with follow)
   [verify](tests/loom-test.sh::test_logs_raw_and_follow_compose)
-- [ ] `loom logs --path` prints the resolved log file path and exits;
+- [x] `loom logs --path` prints the resolved log file path and exits;
       mutually exclusive with `-f`, `-v`, and `--raw` (passing any of
       those alongside `--path` errors before opening the file)
   [verify](tests/loom-test.sh::test_logs_path_short_circuits)
-- [ ] `loom logs -v` (long form `--verbose`) streams assistant text
+- [x] `loom logs -v` (long form `--verbose`) streams assistant text
       deltas during render, matching `loom run -v` output
   [verify](tests/loom-test.sh::test_logs_verbose_streams_deltas)
-- [ ] Bare `loom logs` against an empty `.wrapix/loom/logs/` exits 0
+- [x] Bare `loom logs` against an empty `.wrapix/loom/logs/` exits 0
       with a one-line "No bead logs yet" message; `loom logs --path`
       in the same state exits non-zero with a clear error
   [verify](tests/loom-test.sh::test_logs_empty_directory)
-- [ ] `loom logs` and `loom run` share a single renderer; the
+- [x] `loom logs` and `loom run` share a single renderer; the
       `AgentEvent` consumer used to format live output is the same
       module used to replay saved logs (no second formatter)
   [verify](tests/loom-test.sh::test_logs_shares_renderer_with_run)
-- [ ] No `loom sync` / `loom tune` commands exist (compiled templates make
+- [x] No `loom sync` / `loom tune` commands exist (compiled templates make
       them unnecessary)
   [verify](tests/loom-test.sh::test_no_sync_or_tune_command)
 

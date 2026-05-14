@@ -3228,16 +3228,91 @@ test_live_vs_replay_distinction() {
         renderer::tests::live_vs_replay_distinction_pretty_renderer
 }
 test_log_sink_per_event_flush() { _pending_stub log_sink_per_event_flush; }
-test_logs_empty_directory() { _pending_stub logs_empty_directory; }
-test_logs_follow_blocks_on_eof() { _pending_stub logs_follow_blocks_on_eof; }
-test_logs_path_short_circuits() { _pending_stub logs_path_short_circuits; }
-test_logs_raw_and_follow_compose() { _pending_stub logs_raw_and_follow_compose; }
+#-----------------------------------------------------------------------------
+# Bare `loom logs` against an empty `.wrapix/loom/logs/` exits 0 with a
+# "No bead logs yet" message; `--path` against the same state exits non-zero.
+# Runs the binary via `cargo run` so the empty-logs branch is exercised
+# end-to-end (`run_logs` translates `LogsError::NoLogs` into the friendly
+# message for the bare path and the typed error for `--path`).
+#-----------------------------------------------------------------------------
+test_logs_empty_directory() {
+    local ws
+    ws=$(mktemp -d)
+    mkdir -p "$ws/.wrapix/loom/logs"
+
+    local out
+    if ! out=$(cargo_run run --quiet -p loom --bin loom -- -w "$ws" logs 2>&1); then
+        echo "loom logs on empty dir exited non-zero: $out" >&2
+        return 1
+    fi
+    if ! printf '%s\n' "$out" | grep -qF "No bead logs yet"; then
+        echo "missing friendly empty-logs message: $out" >&2
+        return 1
+    fi
+
+    if cargo_run run --quiet -p loom --bin loom -- -w "$ws" logs --path >/dev/null 2>&1; then
+        echo "loom logs --path on empty dir should fail" >&2
+        return 1
+    fi
+}
+
+#-----------------------------------------------------------------------------
+# `loom logs -f` keeps reading past EOF until interrupted. The unit test
+# under loom-workflow drives a paused-time tokio runtime that proves the
+# poll loop advances Clock::sleep after EOF — the same code path the
+# binary takes with a real SystemClock and no follow_max_polls cap.
+#-----------------------------------------------------------------------------
+test_logs_follow_blocks_on_eof() {
+    aux_cargo_test logs_cmd::tests::follow_blocks_past_eof_until_budget_expires
+}
+
+#-----------------------------------------------------------------------------
+# `--path` is mutually exclusive with `-f`, `-v`, `--raw` (clap-enforced).
+# The pinned `cli_help` snapshot for `loom logs --help` already records the
+# `Mutually exclusive` notes; this dispatcher pins runtime rejection by
+# running the binary with conflicting flag pairs and asserting non-zero exit.
+#-----------------------------------------------------------------------------
+test_logs_path_short_circuits() {
+    cargo_run test -p loom --test cli_help -- --exact --nocapture --quiet \
+        loom_logs_help_snapshot
+    for combo in "-f --path" "-v --path" "--raw --path"; do
+        # shellcheck disable=SC2086
+        if cargo_run run --quiet -p loom --bin loom -- logs $combo >/dev/null 2>&1; then
+            echo "expected clap to reject conflicting flags: $combo" >&2
+            return 1
+        fi
+    done
+}
+
+#-----------------------------------------------------------------------------
+# `--raw` copies file bytes verbatim and `-f --raw` polls past EOF.
+#-----------------------------------------------------------------------------
+test_logs_raw_and_follow_compose() {
+    aux_cargo_test logs_cmd::tests::replay_raw_copies_bytes_verbatim
+    aux_cargo_test logs_cmd::tests::follow_raw_blocks_past_eof_until_budget_expires
+}
+
+#-----------------------------------------------------------------------------
+# Same renderer types fed by `loom run` are constructed by `loom logs`.
+# Pinning both: the unit-test round-trip through JSONL exercises
+# `loom_render::build_renderer`, and the workflow-level test exercises
+# the same `build_renderer` selection inside `logs_cmd::replay`.
+#-----------------------------------------------------------------------------
 test_logs_reuses_renderer() {
     cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
         renderer::tests::logs_reuses_renderer_via_jsonl_round_trip
 }
-test_logs_shares_renderer_with_run() { _pending_stub logs_shares_renderer_with_run; }
-test_logs_verbose_streams_deltas() { _pending_stub logs_verbose_streams_deltas; }
+test_logs_shares_renderer_with_run() {
+    aux_cargo_test logs_cmd::tests::replay_renders_via_shared_renderer
+}
+
+#-----------------------------------------------------------------------------
+# `-v` streams `TextDelta` text verbatim during render — same widening as
+# `loom run -v` (the renderer's `Verbose` mode handles both call sites).
+#-----------------------------------------------------------------------------
+test_logs_verbose_streams_deltas() {
+    aux_cargo_test logs_cmd::tests::replay_verbose_streams_text_deltas
+}
 test_loom_events_is_leaf() {
     local cargo_toml="$REPO_ROOT/loom/crates/loom-events/Cargo.toml"
     if [ ! -f "$cargo_toml" ]; then
