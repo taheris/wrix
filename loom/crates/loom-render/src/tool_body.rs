@@ -35,7 +35,9 @@ pub const BODY_CAP_BYTES: usize = 2048;
 /// path-bearing tools (Read/Edit/Write/Grep/WebFetch) wrap the path or
 /// URL in the OSC 8 hyperlink escape so cmd-click opens the editor or
 /// browser. `cwd` is the workspace root used to compute absolute
-/// `file://` URLs from relative paths (R4, wx-iuw22).
+/// `file://` URLs from relative paths (R4, wx-iuw22) and to normalize
+/// absolute workspace paths to repo-relative form in the displayed
+/// summary cell (R6, wx-fgp9j.13).
 ///
 /// Constructed once per renderer at session start — environment
 /// detection lives at the call site, not inside this struct, so tests
@@ -65,6 +67,14 @@ impl Osc8Context {
             supported: true,
             cwd,
         }
+    }
+
+    /// Set the workspace root on a context built via [`disabled`]. Used
+    /// when OSC 8 is unsupported but path normalization should still
+    /// strip the workspace prefix from absolute paths in summary cells.
+    pub fn with_cwd(mut self, cwd: PathBuf) -> Self {
+        self.cwd = cwd;
+        self
     }
 }
 
@@ -105,7 +115,8 @@ fn read_summary(params: &Value, osc8: &Osc8Context) -> String {
         (Some(o), None) => format!(":{o}-"),
         _ => String::new(),
     };
-    let display = format!("{path}{range}");
+    let display_path = normalize_for_display(&osc8.cwd, path);
+    let display = format!("{display_path}{range}");
     let line = offset.and_then(|o| u32::try_from(o).ok());
     let wrapped = wrap_path(osc8, path, line, &display);
     format!("Read   {wrapped}")
@@ -125,7 +136,8 @@ fn edit_summary(params: &Value, osc8: &Osc8Context) -> String {
         .and_then(Value::as_str)
         .unwrap_or("");
     let (add, del) = diff_counts(old, new);
-    let wrapped = wrap_path(osc8, path, None, path);
+    let display = normalize_for_display(&osc8.cwd, path);
+    let wrapped = wrap_path(osc8, path, None, &display);
     format!("Edit   {wrapped}   +{add} -{del}   diff↓")
 }
 
@@ -136,14 +148,16 @@ fn write_summary(params: &Value, osc8: &Osc8Context) -> String {
         .unwrap_or("");
     let content = params.get("content").and_then(Value::as_str).unwrap_or("");
     let lines = content.lines().count();
-    let wrapped = wrap_path(osc8, path, None, path);
+    let display = normalize_for_display(&osc8.cwd, path);
+    let wrapped = wrap_path(osc8, path, None, &display);
     format!("Write   {wrapped}   +{lines}   new file")
 }
 
 fn grep_or_glob_summary(tool: &str, params: &Value, osc8: &Osc8Context) -> String {
     let pattern = params.get("pattern").and_then(Value::as_str).unwrap_or("");
     let path = params.get("path").and_then(Value::as_str).unwrap_or("");
-    let wrapped = wrap_path(osc8, path, None, path);
+    let display = normalize_for_display(&osc8.cwd, path);
+    let wrapped = wrap_path(osc8, path, None, &display);
     format!("{tool}   \"{pattern}\" in {wrapped}")
 }
 
@@ -169,6 +183,31 @@ fn wrap_path(osc8: &Osc8Context, path: &str, line: Option<u32>, display: &str) -
     }
     let url = osc8::file_url(Path::new(&osc8.cwd), path, line);
     osc8::wrap(&url, display, true)
+}
+
+/// Strip the workspace-root prefix from `path` for display purposes
+/// only — the agent's invocation still uses the absolute form. Returns
+/// the input unchanged when `cwd` is empty, when `path` is not absolute,
+/// or when `path` does not start with `cwd`.
+pub fn normalize_for_display(cwd: &Path, path: &str) -> String {
+    if path.is_empty() || cwd.as_os_str().is_empty() {
+        return path.to_string();
+    }
+    let abs = Path::new(path);
+    if !abs.is_absolute() {
+        return path.to_string();
+    }
+    match abs.strip_prefix(cwd) {
+        Ok(rel) => {
+            let rel_str = rel.to_string_lossy();
+            if rel_str.is_empty() {
+                ".".to_string()
+            } else {
+                rel_str.into_owned()
+            }
+        }
+        Err(_) => path.to_string(),
+    }
 }
 
 fn websearch_summary(params: &Value) -> String {
@@ -377,6 +416,111 @@ mod tests {
         assert!(
             cell.contains("\x1b]8;;https://example.com/page"),
             "{cell:?}",
+        );
+    }
+
+    /// R6 — `normalize_for_display` strips a leading workspace prefix
+    /// so summary cells render repo-relative paths. The agent still
+    /// uses the absolute form internally; this is display-only.
+    #[test]
+    fn normalize_for_display_strips_workspace_prefix() {
+        let cwd = PathBuf::from("/workspace");
+        assert_eq!(
+            normalize_for_display(&cwd, "/workspace/src/lib.rs"),
+            "src/lib.rs",
+        );
+        assert_eq!(
+            normalize_for_display(&cwd, "/workspace/tests/foo.rs"),
+            "tests/foo.rs",
+        );
+    }
+
+    /// R6 — Already-relative paths pass through unchanged. Used by the
+    /// agent's own relative-path calls.
+    #[test]
+    fn normalize_for_display_passes_relative_paths_through() {
+        let cwd = PathBuf::from("/workspace");
+        assert_eq!(normalize_for_display(&cwd, "src/lib.rs"), "src/lib.rs");
+    }
+
+    /// R6 — Paths outside the workspace render as-is (no aggressive
+    /// "../" rewriting; absolute paths the agent uses for /tmp or system
+    /// files stay readable).
+    #[test]
+    fn normalize_for_display_keeps_non_workspace_paths() {
+        let cwd = PathBuf::from("/workspace");
+        assert_eq!(normalize_for_display(&cwd, "/tmp/x.rs"), "/tmp/x.rs");
+        assert_eq!(normalize_for_display(&cwd, "/etc/hosts"), "/etc/hosts");
+    }
+
+    /// R6 — Empty cwd disables normalization. Used by the `disabled`
+    /// context when no workspace root has been configured.
+    #[test]
+    fn normalize_for_display_passthrough_when_cwd_empty() {
+        let cwd = PathBuf::new();
+        assert_eq!(
+            normalize_for_display(&cwd, "/workspace/src/lib.rs"),
+            "/workspace/src/lib.rs",
+        );
+    }
+
+    /// R6 — Summary cells emit repo-relative paths even when the agent
+    /// passes the absolute `/workspace/...` form. Pin the end-to-end
+    /// path through `summary_cell` for the Read tool.
+    #[test]
+    fn read_summary_normalizes_absolute_workspace_path() {
+        let ctx = Osc8Context::disabled().with_cwd(PathBuf::from("/workspace"));
+        let cell = summary_cell("Read", &json!({"file_path": "/workspace/src/lib.rs"}), &ctx);
+        assert!(cell.contains("src/lib.rs"), "{cell:?}");
+        assert!(
+            !cell.contains("/workspace/"),
+            "absolute workspace prefix must be stripped: {cell:?}",
+        );
+    }
+
+    /// R6 — Edit/Write/Grep cells also normalize. Walk each one with
+    /// the same /workspace/... input to pin the consistent contract.
+    #[test]
+    fn edit_write_grep_summaries_normalize_paths() {
+        let ctx = Osc8Context::disabled().with_cwd(PathBuf::from("/workspace"));
+        for (tool, params) in [
+            (
+                "Edit",
+                json!({
+                    "file_path": "/workspace/a.rs",
+                    "old_string": "x\n",
+                    "new_string": "y\n",
+                }),
+            ),
+            (
+                "Write",
+                json!({"file_path": "/workspace/a.rs", "content": "x"}),
+            ),
+            ("Grep", json!({"pattern": "TODO", "path": "/workspace/src"})),
+        ] {
+            let cell = summary_cell(tool, &params, &ctx);
+            assert!(
+                !cell.contains("/workspace/"),
+                "{tool} cell still carries absolute workspace prefix: {cell:?}",
+            );
+        }
+    }
+
+    /// R6 — When OSC 8 is enabled, the URL must keep the absolute path
+    /// (cmd-click needs to resolve it without depending on the
+    /// terminal's cwd) but the display text is the relative form.
+    #[test]
+    fn osc8_enabled_keeps_absolute_url_with_relative_display() {
+        let ctx = Osc8Context::enabled(PathBuf::from("/workspace"));
+        let cell = summary_cell("Read", &json!({"file_path": "/workspace/src/lib.rs"}), &ctx);
+        assert!(
+            cell.contains("\x1b]8;;file:///workspace/src/lib.rs"),
+            "OSC 8 URL must keep absolute path: {cell:?}",
+        );
+        // The display text after the BEL terminator is relative.
+        assert!(
+            cell.contains("\x07src/lib.rs\x1b]8;;"),
+            "display text must be repo-relative: {cell:?}",
         );
     }
 

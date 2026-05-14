@@ -3437,7 +3437,23 @@ test_osc8_hyperlinks() {
     cargo_run test -p loom-render --lib -- --nocapture --quiet \
         osc8::tests
 }
-test_path_normalization_display() { _pending_stub path_normalization_display; }
+test_path_normalization_display() {
+    # R6 (wx-fgp9j.13) — absolute /workspace/... paths in summary cells
+    # render repo-relative. Walks Read end-to-end plus the explicit
+    # normalizer helper to pin both the per-tool and the shared path.
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        tool_body::tests::normalize_for_display_strips_workspace_prefix
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        tool_body::tests::normalize_for_display_passes_relative_paths_through
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        tool_body::tests::normalize_for_display_keeps_non_workspace_paths
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        tool_body::tests::read_summary_normalizes_absolute_workspace_path
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        tool_body::tests::edit_write_grep_summaries_normalize_paths
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        tool_body::tests::osc8_enabled_keeps_absolute_url_with_relative_display
+}
 test_per_tool_summary_cells() {
     # G3 — variant + tag presence.
     cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \

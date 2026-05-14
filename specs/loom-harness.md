@@ -1736,17 +1736,17 @@ Criteria.
 
 **Live UX**
 
-- [ ] In-place running indicator updates duration via `\r` + clear-to-EOL while a tool is in flight
+- [x] In-place running indicator updates duration via `\r` + clear-to-EOL while a tool is in flight
   [verify](tests/loom-test.sh::test_in_place_running_indicator)
-- [ ] In-place running indicator is auto-disabled in non-TTY modes and with `--parallel N > 1`
+- [x] In-place running indicator is auto-disabled in non-TTY modes and with `--parallel N > 1`
   [verify](tests/loom-test.sh::test_in_place_indicator_disabled_when_inappropriate)
-- [ ] `-v` / `--verbose` disables tool-body truncation, streams `text_delta`/`thinking_delta` live, and shows `thinking` blocks (`◆`)
+- [x] `-v` / `--verbose` disables tool-body truncation, streams `text_delta`/`thinking_delta` live, and shows `thinking` blocks (`◆`)
   [verify](tests/loom-test.sh::test_verbose_full_output)
-- [ ] Cancellation (Ctrl-C / SIGINT) collapses the in-place indicator and emits a `⚠ interrupted` closing block with partial-diff size
+- [x] Cancellation (Ctrl-C / SIGINT) collapses the in-place indicator and emits a `⚠ interrupted` closing block with partial-diff size
   [verify](tests/loom-test.sh::test_cancellation_clean_close)
-- [ ] OSC 8 hyperlinks emitted for paths/URLs when terminal supports it (iTerm2, Kitty, WezTerm, recent VS Code, Alacritty, GNOME Terminal); auto-degrades silently on unsupported terminals
+- [x] OSC 8 hyperlinks emitted for paths/URLs when terminal supports it (iTerm2, Kitty, WezTerm, recent VS Code, Alacritty, GNOME Terminal); auto-degrades silently on unsupported terminals
   [verify](tests/loom-test.sh::test_osc8_hyperlinks)
-- [ ] Path normalization: absolute `/workspace/...` paths render repo-relative in tool summary cells
+- [x] Path normalization: absolute `/workspace/...` paths render repo-relative in tool summary cells
   [verify](tests/loom-test.sh::test_path_normalization_display)
 
 **Replay**

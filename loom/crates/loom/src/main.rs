@@ -1238,7 +1238,7 @@ fn build_stdout_renderer(
     let osc8 = if osc8_supported {
         loom_render::tool_body::Osc8Context::enabled(workspace.to_path_buf())
     } else {
-        loom_render::tool_body::Osc8Context::disabled()
+        loom_render::tool_body::Osc8Context::disabled().with_cwd(workspace.to_path_buf())
     };
     match mode {
         loom_render::RenderMode::Verbose => Box::new(
