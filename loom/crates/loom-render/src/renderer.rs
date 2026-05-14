@@ -419,6 +419,20 @@ impl TerminalRenderer {
                 self.out.write_all(line.as_bytes())?;
                 self.out.flush()?;
             }
+            AgentEvent::DriverEvent {
+                driver_kind,
+                summary,
+                ..
+            } => {
+                self.finalize_running_with_glyph("…")?;
+                let line = if self.parallel {
+                    format!("  [{}] → {driver_kind}: {summary}\n", self.bead_id.as_str(),)
+                } else {
+                    format!("  → {driver_kind}: {summary}\n")
+                };
+                self.out.write_all(line.as_bytes())?;
+                self.out.flush()?;
+            }
             _ => {}
         }
         Ok(())
@@ -1440,5 +1454,90 @@ mod tests {
         // Replay path emits a closing glyph + ts_ms-derived duration
         // for the pair.
         assert!(out.contains("2.0s"), "{out:?}");
+    }
+
+    fn driver_event(kind: &str, summary: &str, payload: serde_json::Value) -> AgentEvent {
+        AgentEvent::DriverEvent {
+            envelope: EventEnvelope {
+                source: loom_events::Source::Driver,
+                ..EventEnvelope::default()
+            },
+            driver_kind: kind.to_string(),
+            summary: summary.to_string(),
+            payload,
+        }
+    }
+
+    /// `driver_event` variants render with the `→` arrow glyph followed by
+    /// `<driver_kind>: <summary>`. Pins the rendered shape for every
+    /// known driver_kind the spec enumerates.
+    #[test]
+    fn driver_event_renders_arrow_glyph() {
+        for kind in [
+            "verdict_gate",
+            "retry_dispatch",
+            "push_gate_walk",
+            "push_gate_refuse",
+            "push_gate_clean",
+            "container_spawn",
+            "container_oom",
+            "infra_failure",
+        ] {
+            let out = capture(RenderMode::Default, false, false, |r| {
+                r.render_event(&driver_event(kind, "summary text", json!({})))
+                    .expect("render");
+            });
+            assert!(
+                out.contains('→'),
+                "driver_event must render with `→` glyph for kind={kind}: {out:?}",
+            );
+            assert!(
+                out.contains(kind),
+                "driver_event line must include kind {kind}: {out:?}",
+            );
+            assert!(
+                out.contains("summary text"),
+                "driver_event line must include summary: {out:?}",
+            );
+        }
+    }
+
+    /// Unknown `driver_kind` strings — new event types added without
+    /// schema bumps — render as the same generic `→ <kind>: <summary>`
+    /// fallback as known kinds. Renderer never errors on an unrecognized
+    /// driver_kind.
+    #[test]
+    fn unknown_driver_kind_renders_generic_arrow_summary() {
+        let out = capture(RenderMode::Default, false, false, |r| {
+            r.render_event(&driver_event(
+                "totally_new_driver_kind",
+                "future event body",
+                json!({"detail": 7}),
+            ))
+            .expect("render");
+        });
+        assert!(out.contains('→'), "unknown kind needs arrow glyph: {out:?}");
+        assert!(
+            out.contains("totally_new_driver_kind: future event body"),
+            "fallback line is `<kind>: <summary>`: {out:?}",
+        );
+    }
+
+    /// Driver events render in `Parallel` mode with the bead-id prefix
+    /// just like tool-call lines, so multi-bead UIs attribute the event
+    /// to its source bead.
+    #[test]
+    fn driver_event_parallel_mode_prefixes_bead_id() {
+        let out = capture(RenderMode::Default, true, false, |r| {
+            r.render_event(&driver_event(
+                "push_gate_walk",
+                "evaluating verdict",
+                json!({}),
+            ))
+            .expect("render");
+        });
+        assert!(out.contains("[wx-1]"), "{out:?}");
+        assert!(out.contains("→"), "{out:?}");
+        assert!(out.contains("push_gate_walk"), "{out:?}");
     }
 }

@@ -211,6 +211,15 @@ async fn apply_verdict<C: CheckController>(
         "push gate evaluating verdict",
         serde_json::json!({"verdict": verdict_label(&verdict)}),
     );
+    // The verdict_gate event surfaces the decision itself, separate from
+    // the push_gate_walk fence. Consumers that index on the four-kind
+    // verdict table see one row per check-loop run regardless of which
+    // push_gate_* branch follows.
+    controller.emit_driver_event(
+        "verdict_gate",
+        &format!("verdict gate → {}", verdict_label(&verdict)),
+        serde_json::json!({"outcome": verdict_label(&verdict)}),
+    );
     match verdict {
         CheckVerdict::Clean => {
             controller.emit_driver_event(
@@ -408,9 +417,13 @@ mod tests {
         assert_eq!(c.reset_iter_calls, 1, "counter resets on clean push");
         assert_eq!(c.exec_run_calls, 0, "no auto-iterate on clean push");
         // R7 (wx-r9tmc) — the verdict-gate fence emits `push_gate_walk`
-        // first, then `push_gate_clean` for the clean-push branch.
+        // first, then the `verdict_gate` decision event, then
+        // `push_gate_clean` for the clean-push branch.
         let kinds: Vec<&str> = c.driver_events.iter().map(|(k, _, _)| k.as_str()).collect();
-        assert_eq!(kinds, vec!["push_gate_walk", "push_gate_clean"]);
+        assert_eq!(
+            kinds,
+            vec!["push_gate_walk", "verdict_gate", "push_gate_clean"],
+        );
         Ok(())
     }
 
@@ -429,7 +442,10 @@ mod tests {
         };
         let _ = check_loop(&mut c, IterationCap::default()).await?;
         let kinds: Vec<&str> = c.driver_events.iter().map(|(k, _, _)| k.as_str()).collect();
-        assert_eq!(kinds, vec!["push_gate_walk", "push_gate_refuse"]);
+        assert_eq!(
+            kinds,
+            vec!["push_gate_walk", "verdict_gate", "push_gate_refuse"],
+        );
         let refuse = c
             .driver_events
             .iter()
@@ -463,7 +479,10 @@ mod tests {
         };
         let _ = check_loop(&mut c, IterationCap { max: 3 }).await?;
         let kinds: Vec<&str> = c.driver_events.iter().map(|(k, _, _)| k.as_str()).collect();
-        assert_eq!(kinds, vec!["push_gate_walk", "push_gate_exhausted"]);
+        assert_eq!(
+            kinds,
+            vec!["push_gate_walk", "verdict_gate", "push_gate_exhausted"],
+        );
         let exhausted = c
             .driver_events
             .iter()

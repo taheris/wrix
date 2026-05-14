@@ -1727,11 +1727,11 @@ Criteria.
 
 **Driver events**
 
-- [ ] `driver_event` variants emit with `source: "driver"` discriminator and render with `→` glyph
+- [x] `driver_event` variants emit with `source: "driver"` discriminator and render with `→` glyph
   [verify](tests/loom-test.sh::test_driver_events_rendered)
-- [ ] Verdict gate, retry dispatch, push gate walk/refuse/clean, container spawn/oom all emit `driver_event`
+- [x] Verdict gate, retry dispatch, push gate walk/refuse/clean, container spawn/oom all emit `driver_event`
   [verify](tests/loom-test.sh::test_driver_event_kinds_present)
-- [ ] Unknown `driver_kind` values render as generic `→ <kind>: <summary>` (additive without schema bump)
+- [x] Unknown `driver_kind` values render as generic `→ <kind>: <summary>` (additive without schema bump)
   [verify](tests/loom-test.sh::test_unknown_driver_kind_renders)
 
 **Live UX**

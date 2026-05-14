@@ -680,6 +680,63 @@ mod tests {
         }
     }
 
+    /// Every spec-enumerated `driver_kind` round-trips as a `DriverEvent`
+    /// carrying `source: "driver"`. Pins the event-schema contract:
+    /// verdict gate, retry dispatch, push gate (walk/refuse/clean), and
+    /// container lifecycle (spawn/oom) plus the catch-all infra failure
+    /// all live as additive `driver_kind` strings under the same variant.
+    /// Acts as the rust-side check that the emission sites have a wire
+    /// shape to emit into.
+    #[test]
+    fn driver_kinds_present_for_spec_emission_sites() {
+        let kinds = [
+            "verdict_gate",
+            "retry_dispatch",
+            "push_gate_walk",
+            "push_gate_refuse",
+            "push_gate_clean",
+            "container_spawn",
+            "container_oom",
+            "infra_failure",
+        ];
+        for kind in kinds {
+            let json = serde_json::json!({
+                "kind": "driver_event",
+                "bead_id": "wx-test",
+                "molecule_id": null,
+                "iteration": 0,
+                "source": "driver",
+                "ts_ms": 0,
+                "seq": 0,
+                "driver_kind": kind,
+                "summary": format!("{kind} summary"),
+                "payload": {}
+            });
+            let event: AgentEvent = serde_json::from_value(json)
+                .unwrap_or_else(|e| panic!("driver_event kind={kind} failed: {e}"));
+            match event {
+                AgentEvent::DriverEvent {
+                    envelope,
+                    driver_kind,
+                    summary,
+                    ..
+                } => {
+                    assert_eq!(driver_kind, kind);
+                    assert_eq!(
+                        envelope.source,
+                        Source::Driver,
+                        "driver-emitted events carry Source::Driver",
+                    );
+                    assert!(
+                        !summary.is_empty(),
+                        "summary always present so unknown-kind renderer fallback works",
+                    );
+                }
+                other => panic!("expected DriverEvent for kind={kind}, got {other:?}"),
+            }
+        }
+    }
+
     /// `EnvelopeBuilder::build` advances `seq` by exactly 1 each call.
     /// Replay code reorders events by `(bead_id, seq)`; off-by-one or
     /// reset bugs in the producer would break replay silently.

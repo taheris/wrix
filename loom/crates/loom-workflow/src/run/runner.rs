@@ -102,6 +102,13 @@ pub trait AgentLoopController: Send {
 
     /// Hand off to `loom check` on molecule completion (continuous mode).
     fn exec_check(&mut self) -> impl std::future::Future<Output = Result<(), RunError>> + Send;
+
+    /// Emit a driver-side event into the controller's event sink. The
+    /// run loop fires `retry_dispatch` here when it re-dispatches a bead
+    /// after a recoverable failure; production controllers thread an
+    /// envelope builder + phase log sink, while test fakes default to a
+    /// no-op so most call sites stay terse.
+    fn emit_driver_event(&mut self, _kind: &str, _summary: &str, _payload: serde_json::Value) {}
 }
 
 /// Stable cause string for an agent self-reported `LOOM_BLOCKED`. Pinned at
@@ -198,6 +205,19 @@ async fn process_one_bead<C: AgentLoopController>(
                     previous_failure: pf,
                 } => {
                     retries_used += 1;
+                    controller.emit_driver_event(
+                        "retry_dispatch",
+                        &format!(
+                            "retry dispatch — attempt {retries_used}/{max} for bead {bead_id}",
+                            max = policy.max_retries,
+                            bead_id = bead.id,
+                        ),
+                        serde_json::json!({
+                            "bead_id": bead.id.to_string(),
+                            "attempt": retries_used,
+                            "max_attempts": policy.max_retries,
+                        }),
+                    );
                     previous_failure = Some(pf);
                 }
                 RetryDecision::GiveUp => {
@@ -260,6 +280,7 @@ mod tests {
         clarified: Vec<(BeadId, String)>,
         blocked: Vec<(BeadId, String, String)>,
         check_calls: u32,
+        driver_events: Vec<(String, String, serde_json::Value)>,
     }
 
     impl AgentLoopController for FakeController {
@@ -298,6 +319,11 @@ mod tests {
         async fn exec_check(&mut self) -> Result<(), RunError> {
             self.check_calls += 1;
             Ok(())
+        }
+
+        fn emit_driver_event(&mut self, kind: &str, summary: &str, payload: serde_json::Value) {
+            self.driver_events
+                .push((kind.to_string(), summary.to_string(), payload));
         }
     }
 
@@ -421,6 +447,37 @@ mod tests {
         assert!(c.clarified.is_empty());
         assert!(c.blocked.is_empty());
         assert_eq!(summary.beads_clarified, 0);
+        Ok(())
+    }
+
+    /// Every retry inside the run loop emits a `retry_dispatch` driver
+    /// event carrying the bead id + attempt count, so a replay surface
+    /// can show which retry round triggered the next dispatch without
+    /// re-deriving it from `previous_failure` heuristics.
+    #[tokio::test]
+    async fn retry_emits_retry_dispatch_driver_event() -> Result<(), RunError> {
+        let mut c = FakeController::default();
+        c.ready_queue.push_back(bead("wx-1", &[]));
+        c.agent_outcomes.push_back(AgentOutcome::Failure {
+            error: "err-0".into(),
+        });
+        c.agent_outcomes.push_back(AgentOutcome::Failure {
+            error: "err-1".into(),
+        });
+        c.agent_outcomes.push_back(AgentOutcome::Success);
+
+        run_loop(&mut c, RunMode::Once, RetryPolicy { max_retries: 3 }).await?;
+
+        let kinds: Vec<&str> = c.driver_events.iter().map(|(k, _, _)| k.as_str()).collect();
+        assert_eq!(
+            kinds,
+            vec!["retry_dispatch", "retry_dispatch"],
+            "two retries → two retry_dispatch events; success is not announced",
+        );
+        let first = &c.driver_events[0];
+        assert_eq!(first.2["bead_id"].as_str(), Some("wx-1"));
+        assert_eq!(first.2["attempt"].as_u64(), Some(1));
+        assert_eq!(first.2["max_attempts"].as_u64(), Some(3));
         Ok(())
     }
 

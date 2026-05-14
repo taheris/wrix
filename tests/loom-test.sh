@@ -3188,8 +3188,20 @@ test_common_envelope_fields() {
     cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
         event::tests::common_envelope_fields_present_on_every_variant
 }
-test_driver_event_kinds_present() { _pending_stub driver_event_kinds_present; }
-test_driver_events_rendered() { _pending_stub driver_events_rendered; }
+test_driver_event_kinds_present() {
+    cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
+        event::tests::driver_kinds_present_for_spec_emission_sites
+    cargo_run test -p loom-workflow --lib -- --exact --nocapture --quiet \
+        check::runner::tests::clean_review_pushes_and_resets_counter
+    cargo_run test -p loom-workflow --lib -- --exact --nocapture --quiet \
+        run::runner::tests::retry_emits_retry_dispatch_driver_event
+}
+test_driver_events_rendered() {
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        renderer::tests::driver_event_renders_arrow_glyph
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        renderer::tests::driver_event_parallel_mode_prefixes_bead_id
+}
 test_edit_write_imara_diff() {
     cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
         tool_body::tests::edit_summary_includes_added_removed_counts
@@ -3520,9 +3532,12 @@ test_tool_call_result_pairing() {
 test_unknown_driver_kind_renders() {
     # G3 lands the `driver_event` variant accepting arbitrary `driver_kind`;
     # H2 (wx-26zjb) extends this to assert the renderer's unknown-kind
-    # fallback path.
+    # fallback path — both layers pinned so the unknown-kind contract
+    # holds end-to-end.
     cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
         event::tests::driver_event_accepts_unknown_driver_kind
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        renderer::tests::unknown_driver_kind_renders_generic_arrow_summary
 }
 test_unknown_tool_fallback() {
     cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
