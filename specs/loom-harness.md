@@ -1849,9 +1849,9 @@ Criteria.
   [verify](tests/loom-test.sh::test_run_retry_with_context)
 - [ ] `loom run` execs `loom check` on molecule completion
   [verify](tests/loom-test.sh::test_run_execs_review)
-- [ ] `loom check` implements push gate (push only on clean completion)
+- [x] `loom check` implements push gate (push only on clean completion)
   [verify](tests/loom-test.sh::test_review_push_gate)
-- [ ] `loom check` auto-iterates on fix-up beads (up to max iterations)
+- [x] `loom check` auto-iterates on fix-up beads (up to max iterations)
   [verify](tests/loom-test.sh::test_review_auto_iterate)
 - [ ] Bare `loom msg` lists every outstanding `loom:blocked` and
       `loom:clarify` bead across all specs (cross-spec default); the
@@ -1970,7 +1970,7 @@ Criteria.
       `loom:blocked` with cause `unbonded-origin` to surface the
       upstream inconsistency
   [verify](tests/loom-test.sh::test_fixup_refuses_unbonded_origin)
-- [ ] `loom check` push gate walks `bd mol progress <id>` and refuses
+- [x] `loom check` push gate walks `bd mol progress <id>` and refuses
       to push when any bead in the molecule — including bonded fix-up
       beads — carries `loom:blocked` or `loom:clarify`; an orphan
       fix-up bead would slip past this check, so the bond invariant
@@ -1992,7 +1992,7 @@ Criteria.
 - [ ] Infra-retry counter is driver-memory only; resets on a fresh
       `loom run` invocation; does not consume `[loop] max_iterations`
   [verify](tests/loom-test.sh::test_infra_retry_counter_separate)
-- [ ] `loom check` push gate refuses to push while any bead in the
+- [x] `loom check` push gate refuses to push while any bead in the
       molecule carries `loom:blocked` or `loom:clarify`
   [verify](tests/loom-test.sh::test_push_gate_refuses_unresolved)
 
