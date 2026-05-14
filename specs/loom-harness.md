@@ -1957,15 +1957,15 @@ Criteria.
 - [x] Review flag → recovery with cause `review-flag`; the flag detail
       names which concern triggered (live-path / mock / scope / judge)
   [verify](tests/loom-test.sh::test_gate_review_flag_names_concern)
-- [ ] Recovery iter < `[loop] max_iterations` (default 3) → spawns
+- [x] Recovery iter < `[loop] max_iterations` (default 3) → spawns
       fix-up bead OR retries the bead with prior failure context
   [verify](tests/loom-test.sh::test_recovery_under_max)
-- [ ] Every fix-up bead spawned by the verdict gate is bonded to the
+- [x] Every fix-up bead spawned by the verdict gate is bonded to the
       originating bead's molecule via `bd mol bond` before becoming
       eligible for `loom run` dispatch; the bond is atomic with bead
       creation (no transient orphan window)
   [verify](tests/loom-test.sh::test_fixup_bead_bonded_to_molecule)
-- [ ] If the originating bead is unbonded (no molecule), the verdict
+- [x] If the originating bead is unbonded (no molecule), the verdict
       gate refuses to spawn a fix-up bead and instead applies
       `loom:blocked` with cause `unbonded-origin` to surface the
       upstream inconsistency
@@ -1976,7 +1976,7 @@ Criteria.
       fix-up bead would slip past this check, so the bond invariant
       is what makes the gate sound
   [verify](tests/loom-test.sh::test_push_gate_sees_fixup_beads)
-- [ ] Recovery iter ≥ max_iterations → applies `loom:blocked` with cause
+- [x] Recovery iter ≥ max_iterations → applies `loom:blocked` with cause
       in `bd update --notes`
   [verify](tests/loom-test.sh::test_recovery_exhaustion_applies_blocked)
 - [x] Iteration count is bead-level state and survives `retry →

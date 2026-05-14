@@ -22,6 +22,13 @@ pub struct Bead {
     pub issue_type: String,
     #[serde(default)]
     pub labels: Vec<Label>,
+    /// Parent bead id from `bd show --json`'s `parent` field. For a bead
+    /// bonded to a molecule the parent is the molecule id; `None` means
+    /// the bead is unbonded — fix-up spawning refuses unbonded origins
+    /// per `specs/loom-harness.md` §"Verdict gate · Fix-up beads bond to
+    /// the originating molecule".
+    #[serde(default)]
+    pub parent: Option<BeadId>,
 }
 
 /// One molecule row. Beads exposes `bd mol show --json`; the shape is the

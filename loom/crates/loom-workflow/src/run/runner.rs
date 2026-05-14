@@ -310,6 +310,7 @@ mod tests {
             priority: 2,
             issue_type: "task".into(),
             labels: labels.iter().map(|s| Label::new(*s)).collect(),
+            parent: None,
         }
     }
 

@@ -318,6 +318,7 @@ mod tests {
             priority: 2,
             issue_type: "task".into(),
             labels: vec![],
+            parent: None,
         }
     }
 

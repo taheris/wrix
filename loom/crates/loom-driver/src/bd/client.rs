@@ -400,6 +400,40 @@ mod tests {
         Ok(())
     }
 
+    /// `bd show --json` includes the bead's `parent` (the molecule bond
+    /// when bonded). The verdict-gate fix-up chokepoint reads it to look
+    /// up the originating molecule per `specs/loom-harness.md` §"Verdict
+    /// gate · Fix-up beads bond to the originating molecule". A bead
+    /// without a parent (unbonded) deserializes to `parent: None`.
+    #[tokio::test]
+    async fn show_parses_parent_field_when_present() -> Result<()> {
+        let json = br#"[
+          {
+            "id": "wx-fgp9j.5",
+            "title": "child of molecule",
+            "status": "open",
+            "priority": 2,
+            "issue_type": "task",
+            "parent": "wx-fgp9j",
+            "labels": []
+          }
+        ]"#;
+        let runner = CapturingRunner::new([ok(json)]);
+        let client = BdClient::with_runner(runner);
+        let bead = client.show(&BeadId::new("wx-fgp9j.5")?).await?;
+        assert_eq!(bead.parent, Some(BeadId::new("wx-fgp9j")?));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn show_parent_field_is_none_when_absent() -> Result<()> {
+        let runner = CapturingRunner::new([ok(SHOW_FIXTURE.as_bytes())]);
+        let client = BdClient::with_runner(runner);
+        let bead = client.show(&BeadId::new("wx-3hhwq.5")?).await?;
+        assert_eq!(bead.parent, None, "no `parent` key ⇒ unbonded");
+        Ok(())
+    }
+
     #[tokio::test]
     async fn show_returns_show_empty_for_zero_rows() -> Result<()> {
         let runner = CapturingRunner::new([ok(b"[]")]);

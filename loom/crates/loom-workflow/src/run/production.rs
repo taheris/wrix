@@ -321,6 +321,7 @@ mod tests {
             priority: 2,
             issue_type: "task".into(),
             labels: vec![Label::new("profile:base")],
+            parent: None,
         }
     }
 
@@ -415,6 +416,7 @@ mod tests {
             priority: 2,
             issue_type: "task".into(),
             labels: vec![Label::new("profile:base")],
+            parent: None,
         };
         controller.run_bead(&bead, None).await.expect("run_bead ok");
         let cfg = captured.lock().unwrap().take().expect("closure called");

@@ -3080,10 +3080,13 @@ test_gate_review_flag_names_concern() {
 
 # Recovery & Iteration
 test_recovery_under_max() {
-    check_cargo_test check::runner::tests::fix_up_beads_under_cap_auto_iterate
+    check_cargo_test check::recovery::tests::under_max_recovers_with_previous_failure
+    check_cargo_test check::recovery::tests::under_max_at_two_still_recovers_with_previous_failure
 }
 test_recovery_exhaustion_applies_blocked() {
-    check_cargo_test check::runner::tests::iteration_cap_escalates_newest_fix_up_to_clarify
+    check_cargo_test check::recovery::tests::at_or_above_max_applies_blocked_with_retry_exhausted_cause
+    check_cargo_test check::recovery::tests::review_flag_cause_round_trips_through_notes
+    check_cargo_test check::recovery::tests::zero_max_exhausts_immediately
 }
 test_iteration_count_persists() {
     check_cargo_test check::production::tests::iteration_counter_round_trips_through_state_db
@@ -3186,8 +3189,13 @@ test_common_envelope_fields() {
 test_driver_event_kinds_present() { _pending_stub driver_event_kinds_present; }
 test_driver_events_rendered() { _pending_stub driver_events_rendered; }
 test_edit_write_imara_diff() { _pending_stub edit_write_imara_diff; }
-test_fixup_bead_bonded_to_molecule() { _pending_stub fixup_bead_bonded_to_molecule; }
-test_fixup_refuses_unbonded_origin() { _pending_stub fixup_refuses_unbonded_origin; }
+test_fixup_bead_bonded_to_molecule() {
+    check_cargo_test check::fixup::tests::spawned_outcome_bonds_to_origins_parent_molecule
+    check_cargo_test check::fixup::tests::chokepoint_returns_only_after_bond_completes
+}
+test_fixup_refuses_unbonded_origin() {
+    check_cargo_test check::fixup::tests::refused_outcome_applies_unbonded_origin_blocked_to_origin
+}
 test_flat_variant_shape() {
     cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
         event::tests::flat_variant_shape_has_no_nested_envelopes
