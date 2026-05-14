@@ -646,14 +646,18 @@ fn no_real_clock_outside_system_clock() {
 }
 
 // ---------------------------------------------------------------------------
-// Rule (R1, wx-cqzxh): `EventEnvelope::default()` is the parser's interim
-// shape — the parser stamps a placeholder envelope per event because it
-// doesn't see the live bead/molecule context. Every other production
-// caller (driver, workflow, dispatch, sink) must overwrite the
+// Rule (R1, wx-cqzxh): `EventEnvelope::placeholder()` is the parser's
+// interim shape — the parser stamps a placeholder envelope per event
+// because it doesn't see the live bead/molecule context. Every other
+// production caller (driver, workflow, dispatch, sink) must overwrite the
 // placeholder via `EnvelopeBuilder::build()` before any consumer reads
-// the event. A `Default::default()` slipping into non-parser code is a
-// regression — the on-disk JSONL would carry sentinel `wx-pending` and
-// `seq=0` for that event, silently corrupting replay.
+// the event. A `placeholder()` slipping into non-parser production code is
+// a regression — the on-disk JSONL would carry the sentinel `wx-pending`
+// bead id and `seq=0` for that event, silently corrupting replay.
+//
+// Also bans `EventEnvelope::default()` outright (RS-13, wx-7tde8) — the
+// `impl Default` was ripped out because it required callers to overwrite
+// before use.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -663,7 +667,7 @@ fn no_envelope_default_outside_parser() {
         // Parser stamps the placeholder; the session layer overwrites it.
         Path::new("crates/loom-agent/src/pi/parser.rs"),
         Path::new("crates/loom-agent/src/claude/parser.rs"),
-        // The impl Default block lives here.
+        // The placeholder constructor lives here.
         Path::new("crates/loom-events/src/event.rs"),
     ];
     let mut violations: Vec<String> = Vec::new();
@@ -685,19 +689,28 @@ fn no_envelope_default_outside_parser() {
             {
                 continue;
             }
-            if line.contains("EventEnvelope::default(") {
+            if line.contains("EventEnvelope::placeholder(") {
                 violations.push(format!(
-                    "{}:{} `EventEnvelope::default()` — overwrite via \
+                    "{}:{} `EventEnvelope::placeholder()` — overwrite via \
                      `EnvelopeBuilder::build()` so the event carries a real \
                      `bead_id`/`seq`/`ts_ms`",
+                    rel_path, line_no,
+                ));
+            }
+            if line.contains("EventEnvelope::default(") {
+                violations.push(format!(
+                    "{}:{} `EventEnvelope::default()` — `impl Default` was \
+                     removed (RS-13); use `EventEnvelope::placeholder()` only \
+                     in parser code, real `EnvelopeBuilder::build()` elsewhere",
                     rel_path, line_no,
                 ));
             }
         }
     }
     assert_violations(
-        "no `EventEnvelope::default()` outside parsers / definition (R1, wx-cqzxh — \
-         driver/session code must stamp a real envelope via `EnvelopeBuilder`)",
+        "no `EventEnvelope::placeholder()` / `EventEnvelope::default()` outside \
+         parsers / definition (R1, wx-cqzxh + RS-13, wx-7tde8 — driver/session \
+         code must stamp a real envelope via `EnvelopeBuilder`)",
         &violations,
     );
 }

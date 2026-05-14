@@ -38,22 +38,35 @@ impl PiParser {
         }
     }
 
-    fn current_parent(&self) -> Option<loom_events::identifier::ToolCallId> {
-        self.task_stack.lock().ok()?.last().cloned()
+    fn current_parent(&self) -> Result<Option<loom_events::identifier::ToolCallId>, ProtocolError> {
+        let stack = self
+            .task_stack
+            .lock()
+            .map_err(|_| ProtocolError::LockPoisoned)?;
+        Ok(stack.last().cloned())
     }
 
-    fn push_task(&self, id: loom_events::identifier::ToolCallId) {
-        if let Ok(mut stack) = self.task_stack.lock() {
-            stack.push(id);
-        }
+    fn push_task(&self, id: loom_events::identifier::ToolCallId) -> Result<(), ProtocolError> {
+        let mut stack = self
+            .task_stack
+            .lock()
+            .map_err(|_| ProtocolError::LockPoisoned)?;
+        stack.push(id);
+        Ok(())
     }
 
-    fn pop_task_if_matches(&self, id: &loom_events::identifier::ToolCallId) {
-        if let Ok(mut stack) = self.task_stack.lock()
-            && stack.last() == Some(id)
-        {
+    fn pop_task_if_matches(
+        &self,
+        id: &loom_events::identifier::ToolCallId,
+    ) -> Result<(), ProtocolError> {
+        let mut stack = self
+            .task_stack
+            .lock()
+            .map_err(|_| ProtocolError::LockPoisoned)?;
+        if stack.last() == Some(id) {
             stack.pop();
         }
+        Ok(())
     }
 }
 
@@ -96,35 +109,35 @@ fn encode_command<T: Serialize>(payload: &T) -> Result<String, ProtocolError> {
     Ok(line)
 }
 
-fn parse_event(parser: &PiParser, event: PiEvent) -> ParsedLine {
+fn parse_event(parser: &PiParser, event: PiEvent) -> Result<ParsedLine, ProtocolError> {
     // Parser-side events use the placeholder envelope; the session layer
     // overwrites it with the real per-spawn envelope before emit. See
-    // `EventEnvelope::default` for the sentinel `wx-pending` bead id.
-    match event {
+    // `EventEnvelope::placeholder` for the well-known placeholder bead id.
+    Ok(match event {
         PiEvent::MessageUpdate { delta } => match delta {
             AssistantMessageDelta::TextDelta { text } => ParsedLine {
                 events: vec![AgentEvent::TextDelta {
-                    envelope: EventEnvelope::default(),
+                    envelope: EventEnvelope::placeholder(),
                     text,
                 }],
                 response: None,
             },
             AssistantMessageDelta::TextEnd => ParsedLine {
                 events: vec![AgentEvent::TextEnd {
-                    envelope: EventEnvelope::default(),
+                    envelope: EventEnvelope::placeholder(),
                 }],
                 response: None,
             },
             AssistantMessageDelta::ThinkingDelta { text } => ParsedLine {
                 events: vec![AgentEvent::ThinkingDelta {
-                    envelope: EventEnvelope::default(),
+                    envelope: EventEnvelope::placeholder(),
                     text,
                 }],
                 response: None,
             },
             AssistantMessageDelta::ThinkingEnd => ParsedLine {
                 events: vec![AgentEvent::ThinkingEnd {
-                    envelope: EventEnvelope::default(),
+                    envelope: EventEnvelope::placeholder(),
                 }],
                 response: None,
             },
@@ -133,7 +146,7 @@ fn parse_event(parser: &PiParser, event: PiEvent) -> ParsedLine {
                 delta,
             } => ParsedLine {
                 events: vec![AgentEvent::ToolcallDelta {
-                    envelope: EventEnvelope::default(),
+                    envelope: EventEnvelope::placeholder(),
                     id: tool_call_id,
                     delta,
                 }],
@@ -143,7 +156,7 @@ fn parse_event(parser: &PiParser, event: PiEvent) -> ParsedLine {
                 let message = message.or(reason).unwrap_or_default();
                 ParsedLine {
                     events: vec![AgentEvent::Error {
-                        envelope: EventEnvelope::default(),
+                        envelope: EventEnvelope::placeholder(),
                         message,
                     }],
                     response: None,
@@ -162,16 +175,16 @@ fn parse_event(parser: &PiParser, event: PiEvent) -> ParsedLine {
             // Snapshot the current parent BEFORE pushing — a `Task`
             // tool_call is a child of whatever Task (if any) was open at
             // the time of its emission, not its own child.
-            let parent = parser.current_parent();
+            let parent = parser.current_parent()?;
             let event = AgentEvent::ToolCall {
-                envelope: EventEnvelope::default(),
+                envelope: EventEnvelope::placeholder(),
                 id: tool_call_id.clone(),
                 tool: tool_name.clone(),
                 params: args,
                 parent_tool_call_id: parent,
             };
             if tool_name == "Task" {
-                parser.push_task(tool_call_id);
+                parser.push_task(tool_call_id)?;
             }
             ParsedLine {
                 events: vec![event],
@@ -191,10 +204,10 @@ fn parse_event(parser: &PiParser, event: PiEvent) -> ParsedLine {
             // Pop the Task stack BEFORE building the event — a Task's
             // own tool_result closes that subagent, and subsequent tool
             // calls are siblings of the Task, not children.
-            parser.pop_task_if_matches(&tool_call_id);
+            parser.pop_task_if_matches(&tool_call_id)?;
             ParsedLine {
                 events: vec![AgentEvent::ToolResult {
-                    envelope: EventEnvelope::default(),
+                    envelope: EventEnvelope::placeholder(),
                     id: tool_call_id,
                     output,
                     is_error,
@@ -204,13 +217,13 @@ fn parse_event(parser: &PiParser, event: PiEvent) -> ParsedLine {
         }
         PiEvent::TurnEnd => ParsedLine {
             events: vec![AgentEvent::TurnEnd {
-                envelope: EventEnvelope::default(),
+                envelope: EventEnvelope::placeholder(),
             }],
             response: None,
         },
         PiEvent::AgentEnd => ParsedLine {
             events: vec![AgentEvent::SessionComplete {
-                envelope: EventEnvelope::default(),
+                envelope: EventEnvelope::placeholder(),
                 exit_code: 0,
                 cost_usd: None,
             }],
@@ -218,14 +231,14 @@ fn parse_event(parser: &PiParser, event: PiEvent) -> ParsedLine {
         },
         PiEvent::CompactionStart { reason } => ParsedLine {
             events: vec![AgentEvent::CompactionStart {
-                envelope: EventEnvelope::default(),
+                envelope: EventEnvelope::placeholder(),
                 reason: map_compaction_reason(reason.as_deref()),
             }],
             response: None,
         },
         PiEvent::CompactionEnd { aborted } => ParsedLine {
             events: vec![AgentEvent::CompactionEnd {
-                envelope: EventEnvelope::default(),
+                envelope: EventEnvelope::placeholder(),
                 aborted,
             }],
             response: None,
@@ -241,7 +254,7 @@ fn parse_event(parser: &PiParser, event: PiEvent) -> ParsedLine {
             };
             ParsedLine {
                 events: vec![AgentEvent::ToolProgress {
-                    envelope: EventEnvelope::default(),
+                    envelope: EventEnvelope::placeholder(),
                     id: tool_call_id,
                     text,
                 }],
@@ -255,7 +268,7 @@ fn parse_event(parser: &PiParser, event: PiEvent) -> ParsedLine {
             error_message,
         } => ParsedLine {
             events: vec![AgentEvent::AutoRetry {
-                envelope: EventEnvelope::default(),
+                envelope: EventEnvelope::placeholder(),
                 attempt,
                 max_attempts,
                 delay_ms,
@@ -275,7 +288,7 @@ fn parse_event(parser: &PiParser, event: PiEvent) -> ParsedLine {
             trace!("unknown pi event type");
             empty()
         }
-    }
+    })
 }
 
 fn parse_ui_request(req: PiUiRequest) -> Result<ParsedLine, ProtocolError> {
@@ -326,7 +339,7 @@ impl LineParse for PiParser {
             }
             _ if env.id.is_none() => {
                 let evt: PiEvent = serde_json::from_str(line)?;
-                Ok(parse_event(self, evt))
+                parse_event(self, evt)
             }
             other => Err(ProtocolError::UnknownMessageType(
                 other.unwrap_or("").to_string(),

@@ -42,22 +42,35 @@ impl ClaudeParser {
         }
     }
 
-    fn current_parent(&self) -> Option<loom_events::identifier::ToolCallId> {
-        self.task_stack.lock().ok()?.last().cloned()
+    fn current_parent(&self) -> Result<Option<loom_events::identifier::ToolCallId>, ProtocolError> {
+        let stack = self
+            .task_stack
+            .lock()
+            .map_err(|_| ProtocolError::LockPoisoned)?;
+        Ok(stack.last().cloned())
     }
 
-    fn push_task(&self, id: loom_events::identifier::ToolCallId) {
-        if let Ok(mut stack) = self.task_stack.lock() {
-            stack.push(id);
-        }
+    fn push_task(&self, id: loom_events::identifier::ToolCallId) -> Result<(), ProtocolError> {
+        let mut stack = self
+            .task_stack
+            .lock()
+            .map_err(|_| ProtocolError::LockPoisoned)?;
+        stack.push(id);
+        Ok(())
     }
 
-    fn pop_task_if_matches(&self, id: &loom_events::identifier::ToolCallId) {
-        if let Ok(mut stack) = self.task_stack.lock()
-            && stack.last() == Some(id)
-        {
+    fn pop_task_if_matches(
+        &self,
+        id: &loom_events::identifier::ToolCallId,
+    ) -> Result<(), ProtocolError> {
+        let mut stack = self
+            .task_stack
+            .lock()
+            .map_err(|_| ProtocolError::LockPoisoned)?;
+        if stack.last() == Some(id) {
             stack.pop();
         }
+        Ok(())
     }
 }
 
@@ -106,29 +119,29 @@ impl LineParse for ClaudeParser {
                     match block {
                         AssistantBlock::Text { text } => {
                             events.push(AgentEvent::TextDelta {
-                                envelope: EventEnvelope::default(),
+                                envelope: EventEnvelope::placeholder(),
                                 text,
                             });
                         }
                         AssistantBlock::ToolUse { id, name, input } => {
                             // Snapshot parent BEFORE push — a Task call
                             // is a child of any outer Task, not its own.
-                            let parent = self.current_parent();
+                            let parent = self.current_parent()?;
                             let is_task = name == "Task";
                             events.push(AgentEvent::ToolCall {
-                                envelope: EventEnvelope::default(),
+                                envelope: EventEnvelope::placeholder(),
                                 id: id.clone(),
                                 tool: name,
                                 params: input,
                                 parent_tool_call_id: parent,
                             });
                             if is_task {
-                                self.push_task(id);
+                                self.push_task(id)?;
                             }
                         }
                         AssistantBlock::Thinking { thinking } => {
                             events.push(AgentEvent::ThinkingDelta {
-                                envelope: EventEnvelope::default(),
+                                envelope: EventEnvelope::placeholder(),
                                 text: thinking,
                             });
                         }
@@ -159,9 +172,9 @@ impl LineParse for ClaudeParser {
                             // Pop the Task stack BEFORE building the
                             // event — a Task's tool_result closes that
                             // subagent.
-                            self.pop_task_if_matches(&tool_use_id);
+                            self.pop_task_if_matches(&tool_use_id)?;
                             events.push(AgentEvent::ToolResult {
-                                envelope: EventEnvelope::default(),
+                                envelope: EventEnvelope::placeholder(),
                                 id: tool_use_id,
                                 output,
                                 is_error,
@@ -186,21 +199,21 @@ impl LineParse for ClaudeParser {
                 let events = match subtype.as_str() {
                     "success" => vec![
                         AgentEvent::TurnEnd {
-                            envelope: EventEnvelope::default(),
+                            envelope: EventEnvelope::placeholder(),
                         },
                         AgentEvent::SessionComplete {
-                            envelope: EventEnvelope::default(),
+                            envelope: EventEnvelope::placeholder(),
                             exit_code: 0,
                             cost_usd: total_cost_usd,
                         },
                     ],
                     "error" => vec![
                         AgentEvent::Error {
-                            envelope: EventEnvelope::default(),
+                            envelope: EventEnvelope::placeholder(),
                             message: result.unwrap_or_default(),
                         },
                         AgentEvent::SessionComplete {
-                            envelope: EventEnvelope::default(),
+                            envelope: EventEnvelope::placeholder(),
                             exit_code: 1,
                             cost_usd: total_cost_usd,
                         },

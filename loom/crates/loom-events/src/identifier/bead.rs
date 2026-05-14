@@ -46,6 +46,16 @@ impl BeadId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Parser-side placeholder bead id, paired with
+    /// [`crate::EventEnvelope::placeholder`]. The session layer overwrites
+    /// every parser-emitted envelope (including this `bead_id`) before any
+    /// consumer reads the event; this constructor exists because the
+    /// `LineParse` trait cannot see the live bead context at parse time.
+    /// NEVER appears in consumer-visible output.
+    pub fn placeholder() -> Self {
+        Self(String::from("wx-pending"))
+    }
 }
 
 impl fmt::Display for BeadId {

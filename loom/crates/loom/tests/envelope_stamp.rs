@@ -1,7 +1,7 @@
 //! R1 (wx-cqzxh) — every `AgentEvent` emitted by `loom run` carries a
 //! per-spawn envelope (real `bead_id`, monotonic `seq`, real `ts_ms`).
 //!
-//! Pre-R1 the parser stamped `EventEnvelope::default()` (sentinel
+//! Pre-R1 the parser stamped `EventEnvelope::placeholder()` (sentinel
 //! `wx-pending`, `seq=0` everywhere) and no driver code overwrote it
 //! before the on-disk JSONL was written. This test pins the fix end-to-
 //! end: drive `loom run --once` against the mock pi agent in

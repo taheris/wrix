@@ -8,8 +8,6 @@
 //! One snapshot per typed context struct, named after the test function via
 //! `insta::assert_snapshot!`'s default file naming.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-
 use askama::Template;
 use loom_driver::identifier::{BeadId, MoleculeId, SpecLabel};
 use loom_templates::check::{CheckContext, ReviewSource};

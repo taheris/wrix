@@ -127,18 +127,18 @@ fn run_default_output_shape() -> Result<()> {
     )?;
 
     sink.emit(&AgentEvent::ToolCall {
-        envelope: EventEnvelope::default(),
+        envelope: EventEnvelope::placeholder(),
         id: ToolCallId::new("t1"),
         tool: "Read".to_string(),
         params: json!({"file_path": "src/lib.rs"}),
         parent_tool_call_id: None,
     })?;
     sink.emit(&AgentEvent::TextDelta {
-        envelope: EventEnvelope::default(),
+        envelope: EventEnvelope::placeholder(),
         text: "I will not appear on the terminal".to_string(),
     })?;
     sink.emit(&AgentEvent::ToolCall {
-        envelope: EventEnvelope::default(),
+        envelope: EventEnvelope::placeholder(),
         id: ToolCallId::new("t2"),
         tool: "Bash".to_string(),
         params: json!({"command": "cargo build"}),
@@ -185,11 +185,11 @@ fn run_verbose_streams_text() -> Result<()> {
     )?;
 
     sink.emit(&AgentEvent::TextDelta {
-        envelope: EventEnvelope::default(),
+        envelope: EventEnvelope::placeholder(),
         text: "Hello, ".to_string(),
     })?;
     sink.emit(&AgentEvent::TextDelta {
-        envelope: EventEnvelope::default(),
+        envelope: EventEnvelope::placeholder(),
         text: "world!\n".to_string(),
     })?;
     sink.finish(BeadOutcome::Done)?;
@@ -219,7 +219,7 @@ fn run_writes_per_bead_jsonl_log() -> Result<()> {
     let log_path = sink.log_path().to_path_buf();
 
     sink.emit(&AgentEvent::ToolCall {
-        envelope: EventEnvelope::default(),
+        envelope: EventEnvelope::placeholder(),
         id: ToolCallId::new("t1"),
         tool: "Read".to_string(),
         params: json!({"file_path": "a"}),
@@ -229,11 +229,11 @@ fn run_writes_per_bead_jsonl_log() -> Result<()> {
     // in the on-disk log (the file gets the full raw event stream regardless
     // of terminal verbosity).
     sink.emit(&AgentEvent::TextDelta {
-        envelope: EventEnvelope::default(),
+        envelope: EventEnvelope::placeholder(),
         text: "secret thoughts".to_string(),
     })?;
     sink.emit(&AgentEvent::TurnEnd {
-        envelope: EventEnvelope::default(),
+        envelope: EventEnvelope::placeholder(),
     })?;
     sink.finish(BeadOutcome::Done)?;
 
@@ -418,24 +418,24 @@ fn parallel_logs_are_per_bead() -> Result<()> {
 
     // Interleave emits and verify each file only carries its own bead's events.
     a.emit(&AgentEvent::ToolCall {
-        envelope: EventEnvelope::default(),
+        envelope: EventEnvelope::placeholder(),
         id: ToolCallId::new("ta"),
         tool: "Read".to_string(),
         params: json!({"file_path": "a-only"}),
         parent_tool_call_id: None,
     })?;
     b.emit(&AgentEvent::ToolCall {
-        envelope: EventEnvelope::default(),
+        envelope: EventEnvelope::placeholder(),
         id: ToolCallId::new("tb"),
         tool: "Read".to_string(),
         params: json!({"file_path": "b-only"}),
         parent_tool_call_id: None,
     })?;
     a.emit(&AgentEvent::TurnEnd {
-        envelope: EventEnvelope::default(),
+        envelope: EventEnvelope::placeholder(),
     })?;
     b.emit(&AgentEvent::TurnEnd {
-        envelope: EventEnvelope::default(),
+        envelope: EventEnvelope::placeholder(),
     })?;
     a.finish(BeadOutcome::Done)?;
     b.finish(BeadOutcome::Done)?;
@@ -580,7 +580,7 @@ fn log_sink_per_event_flush() -> Result<()> {
     let log_path = sink.log_path().to_path_buf();
 
     sink.emit(&AgentEvent::ToolCall {
-        envelope: EventEnvelope::default(),
+        envelope: EventEnvelope::placeholder(),
         id: ToolCallId::new("t1"),
         tool: "Read".to_string(),
         params: json!({"file_path": "first.rs"}),
@@ -603,7 +603,7 @@ fn log_sink_per_event_flush() -> Result<()> {
     }
 
     sink.emit(&AgentEvent::TurnEnd {
-        envelope: EventEnvelope::default(),
+        envelope: EventEnvelope::placeholder(),
     })?;
 
     let after_second = fs::read_to_string(&log_path)?;
@@ -647,14 +647,14 @@ fn run_single_event_sink_property() -> Result<()> {
 
     let events = [
         AgentEvent::ToolCall {
-            envelope: EventEnvelope::default(),
+            envelope: EventEnvelope::placeholder(),
             id: ToolCallId::new("t1"),
             tool: "Read".to_string(),
             params: json!({"file_path": "src/a.rs"}),
             parent_tool_call_id: None,
         },
         AgentEvent::ToolCall {
-            envelope: EventEnvelope::default(),
+            envelope: EventEnvelope::placeholder(),
             id: ToolCallId::new("t2"),
             tool: "Edit".to_string(),
             params: json!({"file_path": "src/b.rs"}),
@@ -716,7 +716,7 @@ fn run_default_renders_per_tool_summary_cells() -> Result<()> {
     )?;
 
     sink.emit(&AgentEvent::ToolCall {
-        envelope: EventEnvelope::default(),
+        envelope: EventEnvelope::placeholder(),
         id: ToolCallId::new("r1"),
         tool: "Read".to_string(),
         params: json!({
@@ -727,7 +727,7 @@ fn run_default_renders_per_tool_summary_cells() -> Result<()> {
         parent_tool_call_id: None,
     })?;
     sink.emit(&AgentEvent::ToolCall {
-        envelope: EventEnvelope::default(),
+        envelope: EventEnvelope::placeholder(),
         id: ToolCallId::new("e1"),
         tool: "Edit".to_string(),
         params: json!({
@@ -738,7 +738,7 @@ fn run_default_renders_per_tool_summary_cells() -> Result<()> {
         parent_tool_call_id: None,
     })?;
     sink.emit(&AgentEvent::ToolCall {
-        envelope: EventEnvelope::default(),
+        envelope: EventEnvelope::placeholder(),
         id: ToolCallId::new("b1"),
         tool: "Bash".to_string(),
         params: json!({"command": "cargo build --release --all-features"}),
@@ -788,14 +788,14 @@ fn run_default_indicator_emits_overwrite_pattern_on_tool_result() -> Result<()> 
     )?;
 
     sink.emit(&AgentEvent::ToolCall {
-        envelope: EventEnvelope::default(),
+        envelope: EventEnvelope::placeholder(),
         id: ToolCallId::new("b1"),
         tool: "Bash".to_string(),
         params: json!({"command": "cargo test"}),
         parent_tool_call_id: None,
     })?;
     sink.emit(&AgentEvent::ToolResult {
-        envelope: EventEnvelope::default(),
+        envelope: EventEnvelope::placeholder(),
         id: ToolCallId::new("b1"),
         output: "ok".to_string(),
         is_error: false,
@@ -847,7 +847,7 @@ fn run_finish_finalizes_dangling_running_indicator() -> Result<()> {
     )?;
 
     sink.emit(&AgentEvent::ToolCall {
-        envelope: EventEnvelope::default(),
+        envelope: EventEnvelope::placeholder(),
         id: ToolCallId::new("b1"),
         tool: "Bash".to_string(),
         params: json!({"command": "sleep 60"}),
@@ -897,7 +897,7 @@ fn run_verbose_caps_tool_result_body_with_recovery_hint() -> Result<()> {
     )?;
 
     sink.emit(&AgentEvent::ToolCall {
-        envelope: EventEnvelope::default(),
+        envelope: EventEnvelope::placeholder(),
         id: ToolCallId::new("b1"),
         tool: "Bash".to_string(),
         params: json!({"command": "ls -la"}),
@@ -908,7 +908,7 @@ fn run_verbose_caps_tool_result_body_with_recovery_hint() -> Result<()> {
         .collect::<Vec<_>>()
         .join("\n");
     sink.emit(&AgentEvent::ToolResult {
-        envelope: EventEnvelope::default(),
+        envelope: EventEnvelope::placeholder(),
         id: ToolCallId::new("b1"),
         output: big_output,
         is_error: false,

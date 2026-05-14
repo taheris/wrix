@@ -6,8 +6,6 @@
 //! `{% include %}`, agent-supplied content is wrapped in `<agent-output>` and
 //! `previous_failure` truncates at [`PREVIOUS_FAILURE_MAX_LEN`].
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-
 use anyhow::Result;
 use askama::Template;
 use loom_driver::identifier::{BeadId, MoleculeId, SpecLabel};

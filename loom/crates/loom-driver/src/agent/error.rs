@@ -37,4 +37,7 @@ pub enum ProtocolError {
         stage: &'static str,
         after: Duration,
     },
+
+    /// parser-internal mutex was poisoned by a panicking thread
+    LockPoisoned,
 }

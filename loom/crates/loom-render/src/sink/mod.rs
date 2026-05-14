@@ -246,7 +246,7 @@ mod tests {
             open_sink_with_sink_writer(dir.path(), &label, &bead, when).expect("open");
 
         sink.emit(&AgentEvent::ToolCall {
-            envelope: EventEnvelope::default(),
+            envelope: EventEnvelope::placeholder(),
             id: ToolCallId::new("t1"),
             tool: "Read".to_string(),
             params: json!({"file_path": "src/lib.rs"}),
@@ -254,7 +254,7 @@ mod tests {
         })
         .expect("emit");
         sink.emit(&AgentEvent::TurnEnd {
-            envelope: EventEnvelope::default(),
+            envelope: EventEnvelope::placeholder(),
         })
         .expect("emit");
 
@@ -288,7 +288,7 @@ mod tests {
         )
         .expect("open");
         sink.emit(&AgentEvent::CompactionStart {
-            envelope: EventEnvelope::default(),
+            envelope: EventEnvelope::placeholder(),
             reason: CompactionReason::ContextLimit,
         })
         .expect("emit");
@@ -342,7 +342,7 @@ mod tests {
         )
         .expect("open phase sink");
         sink.emit(&AgentEvent::TurnEnd {
-            envelope: EventEnvelope::default(),
+            envelope: EventEnvelope::placeholder(),
         })
         .expect("emit");
         let path = sink.log_path().to_path_buf();

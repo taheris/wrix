@@ -29,21 +29,17 @@ pub struct EventEnvelope {
     pub seq: u64,
 }
 
-impl Default for EventEnvelope {
-    /// Placeholder envelope used by call sites that don't yet have a
-    /// session-level [`EnvelopeBuilder`] threaded through (parsers,
-    /// test fixtures). `bead_id` is the well-known sentinel `wx-pending`;
-    /// production code that emits an event without overwriting this is a
-    /// bug. G2/G3 follow-ups tighten the call sites.
-    fn default() -> Self {
-        // BeadId::new is fallible but `"wx-pending"` is a known-good
-        // sentinel literal. The unwrap_or is paranoia — if it ever fires
-        // a non-default `wx-x` value still parses and downstream code
-        // surfaces the placeholder loudly.
-        let bead_id = BeadId::new("wx-pending")
-            .unwrap_or_else(|_| BeadId::new("wx-x").unwrap_or_else(|_| unreachable!()));
+impl EventEnvelope {
+    /// Parser-side placeholder envelope. The `LineParse` impls call this
+    /// because they cannot see the live bead/molecule context; the
+    /// session layer overwrites the envelope (via [`AgentEvent::envelope_mut`])
+    /// with real per-spawn fields before any consumer reads the event.
+    /// Named `placeholder` (not `default`) per RS-13 — the value is not
+    /// safe to consume as-is, callers must overwrite. Test fixtures may
+    /// also use this to stand in for the session-layer stamp.
+    pub fn placeholder() -> Self {
         Self {
-            bead_id,
+            bead_id: BeadId::placeholder(),
             molecule_id: None,
             iteration: 0,
             source: Source::Agent,

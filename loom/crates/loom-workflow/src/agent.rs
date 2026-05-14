@@ -70,7 +70,7 @@ pub async fn run_agent<B: AgentBackend>(
 /// event emitted by the parser has its placeholder envelope replaced
 /// with a real per-spawn envelope (monotonic `seq`, real `bead_id`,
 /// real wall-clock `ts_ms`). When `None`, events flow with whatever
-/// the parser produced (currently `EventEnvelope::default()` per G1's
+/// the parser produced (currently `EventEnvelope::placeholder()` per G1's
 /// interim shape); used by tests and the legacy `run_agent` wrapper.
 pub async fn run_agent_classified<B: AgentBackend>(
     config: &SpawnConfig,

@@ -799,7 +799,7 @@ mod tests {
     fn default_mode_suppresses_message_deltas() {
         let out = capture(RenderMode::Default, false, false, |r| {
             r.render_event(&AgentEvent::TextDelta {
-                envelope: EventEnvelope::default(),
+                envelope: EventEnvelope::placeholder(),
                 text: "hello world".to_string(),
             })
             .expect("render");
@@ -811,12 +811,12 @@ mod tests {
     fn verbose_mode_streams_message_deltas_verbatim() {
         let out = capture(RenderMode::Verbose, false, false, |r| {
             r.render_event(&AgentEvent::TextDelta {
-                envelope: EventEnvelope::default(),
+                envelope: EventEnvelope::placeholder(),
                 text: "hel".to_string(),
             })
             .expect("render");
             r.render_event(&AgentEvent::TextDelta {
-                envelope: EventEnvelope::default(),
+                envelope: EventEnvelope::placeholder(),
                 text: "lo".to_string(),
             })
             .expect("render");
@@ -828,7 +828,7 @@ mod tests {
     fn tool_call_line_in_default_mode_shows_path() {
         let out = capture(RenderMode::Default, false, false, |r| {
             r.render_event(&AgentEvent::ToolCall {
-                envelope: EventEnvelope::default(),
+                envelope: EventEnvelope::placeholder(),
                 id: ToolCallId::new("t1"),
                 tool: "Read".to_string(),
                 params: json!({"file_path": "src/lib.rs"}),
@@ -845,7 +845,7 @@ mod tests {
     fn parallel_mode_prefixes_tool_lines_with_bead_id() {
         let out = capture(RenderMode::Default, true, false, |r| {
             r.render_event(&AgentEvent::ToolCall {
-                envelope: EventEnvelope::default(),
+                envelope: EventEnvelope::placeholder(),
                 id: ToolCallId::new("t1"),
                 tool: "Bash".to_string(),
                 params: json!({"command": "cargo build"}),
@@ -873,7 +873,7 @@ mod tests {
     fn finish_done_includes_tool_count_and_secs() {
         let out = capture(RenderMode::Default, false, false, |r| {
             r.render_event(&AgentEvent::ToolCall {
-                envelope: EventEnvelope::default(),
+                envelope: EventEnvelope::placeholder(),
                 id: ToolCallId::new("t1"),
                 tool: "Read".to_string(),
                 params: json!({"file_path": "a"}),
@@ -881,7 +881,7 @@ mod tests {
             })
             .expect("render");
             r.render_event(&AgentEvent::ToolCall {
-                envelope: EventEnvelope::default(),
+                envelope: EventEnvelope::placeholder(),
                 id: ToolCallId::new("t2"),
                 tool: "Edit".to_string(),
                 params: json!({"file_path": "b"}),
@@ -916,7 +916,7 @@ mod tests {
     fn tool_call_line_uses_summary_cell_shape() {
         let out = capture(RenderMode::Default, false, false, |r| {
             r.render_event(&AgentEvent::ToolCall {
-                envelope: EventEnvelope::default(),
+                envelope: EventEnvelope::placeholder(),
                 id: ToolCallId::new("e1"),
                 tool: "Edit".into(),
                 params: json!({
@@ -945,7 +945,7 @@ mod tests {
             .join("\n");
         let out = capture(RenderMode::Verbose, false, false, |r| {
             r.render_event(&AgentEvent::ToolCall {
-                envelope: EventEnvelope::default(),
+                envelope: EventEnvelope::placeholder(),
                 id: ToolCallId::new("b1"),
                 tool: "Bash".into(),
                 params: json!({"command": "echo hi"}),
@@ -953,7 +953,7 @@ mod tests {
             })
             .expect("render call");
             r.render_event(&AgentEvent::ToolResult {
-                envelope: EventEnvelope::default(),
+                envelope: EventEnvelope::placeholder(),
                 id: ToolCallId::new("b1"),
                 output: big_body,
                 is_error: false,
@@ -980,7 +980,7 @@ mod tests {
     fn default_mode_suppresses_tool_result_body() {
         let out = capture(RenderMode::Default, false, false, |r| {
             r.render_event(&AgentEvent::ToolCall {
-                envelope: EventEnvelope::default(),
+                envelope: EventEnvelope::placeholder(),
                 id: ToolCallId::new("b1"),
                 tool: "Bash".into(),
                 params: json!({"command": "echo hi"}),
@@ -988,7 +988,7 @@ mod tests {
             })
             .expect("render call");
             r.render_event(&AgentEvent::ToolResult {
-                envelope: EventEnvelope::default(),
+                envelope: EventEnvelope::placeholder(),
                 id: ToolCallId::new("b1"),
                 output: "result body".into(),
                 is_error: false,
@@ -1035,7 +1035,7 @@ mod tests {
             "/workspace",
         )));
         r.render_event(&AgentEvent::ToolCall {
-            envelope: EventEnvelope::default(),
+            envelope: EventEnvelope::placeholder(),
             id: ToolCallId::new("e1"),
             tool: "Edit".into(),
             params: json!({
@@ -1063,7 +1063,7 @@ mod tests {
     fn tool_call_line_no_osc8_by_default() {
         let out = capture(RenderMode::Default, false, false, |r| {
             r.render_event(&AgentEvent::ToolCall {
-                envelope: EventEnvelope::default(),
+                envelope: EventEnvelope::placeholder(),
                 id: ToolCallId::new("e1"),
                 tool: "Edit".into(),
                 params: json!({
@@ -1088,7 +1088,7 @@ mod tests {
     fn verbose_mode_flags_tool_errors_after_body() {
         let out = capture(RenderMode::Verbose, false, false, |r| {
             r.render_event(&AgentEvent::ToolCall {
-                envelope: EventEnvelope::default(),
+                envelope: EventEnvelope::placeholder(),
                 id: ToolCallId::new("b1"),
                 tool: "Bash".into(),
                 params: json!({"command": "false"}),
@@ -1096,7 +1096,7 @@ mod tests {
             })
             .expect("render call");
             r.render_event(&AgentEvent::ToolResult {
-                envelope: EventEnvelope::default(),
+                envelope: EventEnvelope::placeholder(),
                 id: ToolCallId::new("b1"),
                 output: "exit 1".into(),
                 is_error: true,
@@ -1139,14 +1139,14 @@ mod tests {
 
     fn sample_text_delta() -> AgentEvent {
         AgentEvent::TextDelta {
-            envelope: EventEnvelope::default(),
+            envelope: EventEnvelope::placeholder(),
             text: "hello".into(),
         }
     }
 
     fn sample_tool_call() -> AgentEvent {
         AgentEvent::ToolCall {
-            envelope: EventEnvelope::default(),
+            envelope: EventEnvelope::placeholder(),
             id: ToolCallId::new("t1"),
             tool: "Read".into(),
             params: json!({"file_path": "src/lib.rs"}),
@@ -1245,7 +1245,7 @@ mod tests {
         let out = capture(RenderMode::Default, false, false, |r| {
             // Top-level Task call — no parent, depth 0.
             r.render_event(&AgentEvent::ToolCall {
-                envelope: EventEnvelope::default(),
+                envelope: EventEnvelope::placeholder(),
                 id: ToolCallId::new("task1"),
                 tool: "Task".into(),
                 params: json!({}),
@@ -1255,7 +1255,7 @@ mod tests {
             // Nested call inside the Task — depth 1, prefixed with two
             // extra spaces.
             r.render_event(&AgentEvent::ToolCall {
-                envelope: EventEnvelope::default(),
+                envelope: EventEnvelope::placeholder(),
                 id: ToolCallId::new("read1"),
                 tool: "Read".into(),
                 params: json!({"file_path": "a"}),
@@ -1303,11 +1303,11 @@ mod tests {
     ) -> (AgentEvent, AgentEvent) {
         let call_env = EventEnvelope {
             ts_ms: call_ts,
-            ..EventEnvelope::default()
+            ..EventEnvelope::placeholder()
         };
         let result_env = EventEnvelope {
             ts_ms: result_ts,
-            ..EventEnvelope::default()
+            ..EventEnvelope::placeholder()
         };
         (
             AgentEvent::ToolCall {
@@ -1460,7 +1460,7 @@ mod tests {
         AgentEvent::DriverEvent {
             envelope: EventEnvelope {
                 source: loom_events::Source::Driver,
-                ..EventEnvelope::default()
+                ..EventEnvelope::placeholder()
             },
             driver_kind: kind.to_string(),
             summary: summary.to_string(),

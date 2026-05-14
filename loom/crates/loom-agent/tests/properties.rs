@@ -9,8 +9,6 @@
 //! `PROPTEST_CASES=32` under `nix flake check`; local exhaustive runs
 //! override via env var (`PROPTEST_CASES=2048+`).
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-
 use loom_agent::claude::messages::ClaudeMessage;
 use loom_agent::claude::parser::ClaudeParser;
 use loom_agent::pi::parser::PiParser;

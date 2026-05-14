@@ -21,8 +21,6 @@
 //! threads the state-home tempdir through to the child process via the
 //! `LOOM_LOCK_TEST_STATE_HOME` env var.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Mutex, mpsc};

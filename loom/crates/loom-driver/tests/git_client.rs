@@ -12,8 +12,6 @@
 //! real merge-resolution machinery. A duplex-pipe stand-in would skip the
 //! state mutations the tests exist to pin.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-
 use std::path::Path;
 use std::process::Command;
 

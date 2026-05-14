@@ -1126,7 +1126,7 @@ async fn dispatch_classified(
 
 /// Build a per-spawn [`loom_events::EnvelopeBuilder`] so every event the
 /// session emits carries the live bead id, monotonic `seq`, and real
-/// wall-clock `ts_ms` instead of the parser's `EventEnvelope::default()`
+/// wall-clock `ts_ms` instead of the parser's `EventEnvelope::placeholder()`
 /// sentinel. `molecule_id` and `iteration` are zero until the driver
 /// threads them through — R2/R7 follow-ups will widen this once the
 /// dispatcher reads them from the bead context.

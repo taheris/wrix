@@ -433,9 +433,9 @@ mod tests {
     }
 
     fn sample_tool_pair() -> Vec<AgentEvent> {
-        let mut call_env = EventEnvelope::default();
+        let mut call_env = EventEnvelope::placeholder();
         call_env.ts_ms = 1_000;
-        let mut result_env = EventEnvelope::default();
+        let mut result_env = EventEnvelope::placeholder();
         result_env.ts_ms = 4_000;
         vec![
             AgentEvent::ToolCall {
@@ -521,11 +521,11 @@ mod tests {
         let path = dir.path().join("alpha/wx-1-x.jsonl");
         let events = vec![
             AgentEvent::TextDelta {
-                envelope: EventEnvelope::default(),
+                envelope: EventEnvelope::placeholder(),
                 text: "hel".into(),
             },
             AgentEvent::TextDelta {
-                envelope: EventEnvelope::default(),
+                envelope: EventEnvelope::placeholder(),
                 text: "lo".into(),
             },
         ];

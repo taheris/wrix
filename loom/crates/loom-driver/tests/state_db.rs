@@ -5,8 +5,6 @@
 //! `cargo test -p loom-driver --test state_db <name>` so the verify path runs
 //! the real implementation, not a stub.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow};
