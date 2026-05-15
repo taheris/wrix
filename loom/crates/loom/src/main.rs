@@ -376,6 +376,9 @@ const HELP_GROUPS: &[(&str, &[&str])] = &[
 /// `loom run --help` or `loom help run` — returns `false` so clap handles
 /// the per-subcommand help unchanged.
 fn args_request_top_level_help(args: &[String]) -> bool {
+    if args.is_empty() {
+        return true;
+    }
     let known_subcommands = [
         "init", "status", "use", "logs", "spec", "plan", "run", "check", "review", "msg", "todo",
         "note", "help",

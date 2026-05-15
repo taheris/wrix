@@ -31,6 +31,25 @@ fn loom_help(args: &[&str]) -> String {
     String::from_utf8(output.stdout).expect("utf-8")
 }
 
+/// Bare `loom` (no args) must render the same grouped help as `loom --help`.
+/// Spec: `loom-harness.md` § Functional #1.
+#[test]
+fn loom_bare_matches_help() {
+    let loom_bin = env!("CARGO_BIN_EXE_loom");
+    let output = Command::new(loom_bin)
+        .env("COLUMNS", "100")
+        .env("CLAP_TERM_WIDTH", "100")
+        .output()
+        .expect("spawn loom");
+    assert!(
+        output.status.success(),
+        "bare `loom` exited non-zero: stderr={}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let bare = String::from_utf8(output.stdout).expect("utf-8");
+    assert_eq!(bare, loom_help(&[]));
+}
+
 #[test]
 fn loom_help_snapshot() {
     insta::assert_snapshot!(loom_help(&[]));
