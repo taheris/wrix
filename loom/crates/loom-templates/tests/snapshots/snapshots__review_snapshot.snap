@@ -139,20 +139,75 @@ Assess the deliverable against these dimensions:
 - **Coherence** — Do all the pieces fit together? Are there inconsistencies?
 - **Invariant clashes** — Does the change conflict with existing design invariants? (see next section)
 
-## Live-Path Coverage and Mock Discipline
+## Verifier Honesty
 
-The verdict-gate review's primary concern is **live-path coverage**, governed
-by two rules:
+The verdict-gate review's primary concern is **verifier honesty**: a
+`[verify]` test is honest iff it satisfies all four sub-checks below.
+Walk each sub-check against every `[verify]` the diff adds or modifies;
+at `--tree` scope, re-walk every existing `[verify]` against current
+spec/code to catch drift. Failure on any sub-check is a hard fail with
+the matching concern token.
 
-**Rule 1 — Coverage.** At least one `[verify]` test on the bead must
-exercise the live path: same binary, same argv shape, same env as the
-real invocation. The bead's full `[verify]` set being entirely mocks is
-a flag — *somewhere* in the set, the live path has to run.
+**Sub-check 1 — `verifier-bypass`.** Does the verifier actually exercise
+the live path? At least one `[verify]` on the bead must hit the same
+binary, same argv shape, same env as the real invocation. Bypass shapes
+to flag:
 
-**Rule 2 — Mock discipline.** Mocks are not forbidden. Each mock needs a
-discernible reason: cost, flakiness, isolating an orthogonal concern,
-driving a hard-to-trigger error path. A mock standing in for the very
-thing the test claims to test is a flag.
+- The bead's full `[verify]` set is entirely mocks — no script runs the
+  live path end-to-end.
+- A test that asserts `result/bin/loom` exists instead of *running* the
+  binary at that path.
+- A `cargo build` / `cargo check` standing in for a behavioural test on
+  a module the diff never imports.
+
+**Sub-check 2 — `fabricated-result`.** Does the verifier's pass rely on
+a value the test itself synthesized? Fabrication shapes to flag:
+
+- A test constructs the expected output, feeds it through a thin
+  identity wrapper, and asserts the wrapper returned it unchanged.
+- A test stubs the system-under-test to return the answer the assertion
+  then checks.
+- A round-trip test whose serializer and deserializer are both mocks of
+  the production codecs.
+
+**Sub-check 3 — `weak-assertion`.** Does the assertion meaningfully
+constrain the result, or does it tautologically pass? Weak-assertion
+shapes to flag:
+
+- `assert!(result.is_some() || result.is_none())`, `assert_eq!(x, x)`,
+  or any predicate that holds for every possible value of the variable.
+- A test whose only assertion is "no panic" on a code path that never
+  panics.
+- An assertion that the call returned (without checking *what* it
+  returned) on a function whose only error case is unreachable in the
+  test fixture.
+
+**Sub-check 4 — `coincidental-pass`.** Does the test pass for the right
+reason, or because of an unrelated property of the system?
+Coincidental-pass shapes to flag:
+
+- A fixture that diverges from the live invocation derivation
+  (different env vars, different argv, different working directory) so
+  the assertion holds for a fixture reason, not a behaviour reason.
+- A test ending with `|| true`, silent `2>/dev/null`, or any swallowed
+  exit code that lets the script return 0 regardless of the real
+  outcome.
+- A test that passes today only because a dispatcher silently routes
+  every call to a default branch — change the dispatcher and the test
+  no longer means what it claims to mean.
+
+A test that satisfies all four sub-checks is honest. Emit one
+`LOOM_REVIEW_FLAG` per failing sub-check with the matching concern
+token (`verifier-bypass`, `fabricated-result`, `weak-assertion`,
+`coincidental-pass`); cite the offending test path and the spec claim
+it purports to verify.
+
+## Mock Discipline
+
+Mocks are not forbidden. Each mock needs a discernible reason: cost,
+flakiness, isolating an orthogonal concern, driving a hard-to-trigger
+error path. A mock standing in for the very thing the test claims to
+test flags `mock`.
 
 **Acceptable mocks (no flag):**
 
@@ -163,21 +218,97 @@ thing the test claims to test is a flag.
 - Mocking a third-party service to drive an error path that's hard to
   trigger live.
 
-**Flagged mocks and dead tests:**
+**Flagged mocks:**
 
-- A bead's full `[verify]` set is entirely mocks — no test in the set
-  exercises the live path end-to-end.
 - Mocking the agent backend in a test that claims to test agent
-  integration.
-- A test whose fixture diverges from the live invocation derivation
-  (different env vars, different argv, different working directory).
-- Asserting `result/bin/loom` exists instead of *running* the binary
-  at that path.
-- A `cargo build` / `cargo check` standing in for a behaviour test on a
-  module the diff never imports — green build, dead code path.
-- A test ending with `|| true`, silent `2>/dev/null`, or any swallowed
-  exit code that lets the script return 0 regardless of the real
-  outcome.
+  integration — the mock IS the thing under test.
+- Mocking the database in an integration test where the test's stated
+  scope includes schema or migration behaviour.
+
+## Invariant-Clash Anchors
+
+When scanning each touched spec section for load-bearing invariants the
+diff may contradict, use spec conventions as anchors:
+
+- **`## Out of Scope` sections** — items here are explicit non-goals; a
+  diff that implements one is a clash.
+- **`## Non-Functional` sections / NFR-prefixed items** — performance,
+  isolation, security, portability commitments. A diff that breaks any
+  is a clash.
+- **Imperative-keyword sentences** — prose using `MUST`, `MUST NOT`,
+  `NEVER`, `ALWAYS`, "is the single source of truth", "is the only
+  caller". Each such sentence is an invariant statement; check the diff
+  against it.
+- **Architectural claims** — phrasings like *"X never calls Y"*, *"Z is
+  reconstructable from the on-disk state"*, *"the binary has no `foo`
+  subcommand"*. A diff that violates the claim is a clash.
+- **Schema / data-structure declarations** — type signatures, table
+  definitions, JSON shapes, decision-table rows embedded in the spec. A
+  diff that changes the shape silently is a clash.
+
+These are anchors, not an exhaustive checklist. Also catch **prose-only
+invariants** that lack a structural anchor — a paragraph in the body of
+a section can carry an invariant claim without an `## Out of Scope`
+heading or a `MUST` keyword. When uncertain whether a section is
+load-bearing, treat it as one and ask; false positives are cheaper than
+misses.
+
+## Surface Conformance (deterministic, not LLM-judged)
+
+Command / flag / grouping / removed-surface drift is **not** an LLM
+rubric dimension — `loom check surface` is the deterministic audit (see
+FR13 in `specs/loom-harness.md` and *Surface-conformance audit* in
+`specs/loom-gate.md`). Do not duplicate it in the LLM walk.
+
+Surface-drift findings produced by `loom check surface` are still part
+of this review's input set. If a surface failure appears in the gate
+inputs alongside the diff, surface it as `surface-drift` in the flag
+emission with the offending command / flag named in the detail.
+
+## Cross-Spec Walk (`--tree` scope only)
+
+When this review runs at `--tree` scope, walk every spec under `specs/`
+and flag contradictions **between** specs. Per the *Single source of
+truth* rule in `docs/spec-conventions.md`:
+
+- If a fact appears in two specs identically, one is wrong (drift
+  incoming) — flag `cross-spec-clash` and name the spec that should
+  cross-reference the other.
+- If two specs state the same fact in different words, one is
+  paraphrasing — flag `cross-spec-clash` and name the spec to be
+  rewritten as a cross-reference.
+- If two specs disagree on a fact, the contradiction is a flag.
+
+At `--bead` or `--diff` scope this walk is out of scope; only the
+touched spec section + bonded sibling specs are in view, and any
+cross-spec discrepancy noticed there falls under the per-section
+invariant-clash walk above.
+
+## Spec-Conventions Walk (for spec edits)
+
+When the diff edits spec markdown under `specs/` (not just code), the
+touched spec sections **must** comply with `docs/spec-conventions.md`.
+Walk the convention's *In scope* / *Out of scope* / *Section structure*
+/ *Trust tiers* / *Single source of truth* / *Length guidance* sections
+against each edited spec section:
+
+- Status checkboxes (`[ ]` / `[x]`) inside Success Criteria → flag.
+- `## Affected Files` listing an in-flight change → flag (the
+  convention permits the section only when it enumerates files the spec
+  *owns* as source of truth).
+- `## Implementation Notes` / `## Decisions Log` / `## Changelog` /
+  `## History` sections in the spec body → flag.
+- Internal file paths, line numbers, or module-layout claims with no
+  architectural role → flag.
+- A `[verify]` annotation on a claim that requires judgement (mock
+  discipline, scope, prose style rule) — tier-skip → flag.
+- A criterion bullet with no annotation, or whose annotation points at
+  a missing or stubbed verifier → already a `loom check criteria` flag;
+  surface it here too if the edit introduces it.
+
+Each violation emits `LOOM_REVIEW_FLAG: spec-conventions-violation --
+<summary>`. The visible body cites the convention section by name and
+the offending spec file/line range.
 
 ## Style-Rule Conformance
 
@@ -361,16 +492,44 @@ completion marker, in this exact shape:
 LOOM_REVIEW_FLAG: <concern> -- <one-sentence reasoning>
 ```
 
-`<concern>` is one of the following enum tokens (lowercase, hyphenated):
+`<concern>` is one of the following enum tokens (lowercase, hyphenated).
+The first four are the verifier-honesty sub-checks (Verifier Honesty
+above) — one flag per failing sub-check, cited against the offending
+test path:
 
-- `live-path` — at least one `[verify]` on the bead must exercise the live
-  path; the bead's full `[verify]` set is entirely mocks.
+- `verifier-bypass` — at least one `[verify]` on the bead must exercise
+  the live path; the bead's full set bypasses it (entirely mocks,
+  asserting binary existence instead of running it, `cargo build` as
+  behaviour proxy).
+- `fabricated-result` — the verifier's pass relies on a value the test
+  itself synthesized (round-trip through a mock, identity-wrapper
+  assertions, stubbed-classifier replays).
+- `weak-assertion` — the assertion tautologically passes (`x == x`,
+  "no panic on a non-panicking branch", `Option` matched against
+  `is_some() || is_none()`).
+- `coincidental-pass` — the test passes for the wrong reason (fixture
+  diverges from live derivation, swallowed exit code, dispatcher
+  default branch masks the real route).
+
+The remaining tokens cover the other rubric dimensions:
+
 - `mock` — a mock stands in for the very thing the test claims to test.
-- `scope` — diff strays from the bead's intent or `## Affected Files`.
+- `scope` — diff strays from the bead's stated intent (title /
+  description / success criteria) or the spec sections it claims to
+  implement.
 - `judge` — a `[judge]` rubric is not satisfied.
 - `style-rule` — the diff violates a rule in `docs/style-rules.md`; the
   detail names the violating rule id (e.g. `RS-12`) and the visible
   review body lists each violation with rule id + file/line range.
+- `surface-drift` — `loom check surface` found command / flag /
+  grouping / removed-surface drift between the spec and the binary;
+  detail names the offending command or flag.
+- `cross-spec-clash` — at `--tree` scope, two specs under `specs/`
+  contradict each other (single-source-of-truth rule from
+  `docs/spec-conventions.md`); detail names both specs.
+- `spec-conventions-violation` — the diff edits a spec section in a
+  way that violates `docs/spec-conventions.md`; detail names the
+  convention section and the offending spec file/line range.
 
 Do NOT free-form the cause or paraphrase the concern; the orchestrator
 parses this line verbatim to populate `previous_failure` and `bd update
@@ -380,8 +539,16 @@ kept. If your review is clean, omit the marker entirely.
 
 ## Completion
 
-When your review is complete, emit LOOM_COMPLETE. The orchestrator determines
-pass/fail by comparing bead counts before and after your review.
+When your review is complete, emit LOOM_COMPLETE. The orchestrator runs
+your output through the verdict gate's decision function
+(`phase_verdict::decide()` in `loom-workflow`): it consumes the parsed
+exit marker, the `bd-closed` status of beads in the molecule, the
+worktree-diff emptiness, and any `LOOM_REVIEW_FLAG` you emitted, and
+routes the phase to `Done`, `Blocked`, `Clarify`, or `Recovery`. A clean
+review with no flag → `Done`. A flag emission → `Recovery` with the
+parsed concern threaded into `previous_failure` for the next iteration.
+There is no bead-count diffing — the gate is a pure function of the
+marker plus the mechanical signals.
 
 ## Exit Signals
 

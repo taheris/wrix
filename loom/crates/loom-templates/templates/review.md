@@ -222,16 +222,44 @@ completion marker, in this exact shape:
 LOOM_REVIEW_FLAG: <concern> -- <one-sentence reasoning>
 ```
 
-`<concern>` is one of the following enum tokens (lowercase, hyphenated):
+`<concern>` is one of the following enum tokens (lowercase, hyphenated).
+The first four are the verifier-honesty sub-checks (Verifier Honesty
+above) — one flag per failing sub-check, cited against the offending
+test path:
 
-- `live-path` — at least one `[verify]` on the bead must exercise the live
-  path; the bead's full `[verify]` set is entirely mocks.
+- `verifier-bypass` — at least one `[verify]` on the bead must exercise
+  the live path; the bead's full set bypasses it (entirely mocks,
+  asserting binary existence instead of running it, `cargo build` as
+  behaviour proxy).
+- `fabricated-result` — the verifier's pass relies on a value the test
+  itself synthesized (round-trip through a mock, identity-wrapper
+  assertions, stubbed-classifier replays).
+- `weak-assertion` — the assertion tautologically passes (`x == x`,
+  "no panic on a non-panicking branch", `Option` matched against
+  `is_some() || is_none()`).
+- `coincidental-pass` — the test passes for the wrong reason (fixture
+  diverges from live derivation, swallowed exit code, dispatcher
+  default branch masks the real route).
+
+The remaining tokens cover the other rubric dimensions:
+
 - `mock` — a mock stands in for the very thing the test claims to test.
-- `scope` — diff strays from the bead's intent or `## Affected Files`.
+- `scope` — diff strays from the bead's stated intent (title /
+  description / success criteria) or the spec sections it claims to
+  implement.
 - `judge` — a `[judge]` rubric is not satisfied.
 - `style-rule` — the diff violates a rule in `{{ style_rules }}`; the
   detail names the violating rule id (e.g. `RS-12`) and the visible
   review body lists each violation with rule id + file/line range.
+- `surface-drift` — `loom check surface` found command / flag /
+  grouping / removed-surface drift between the spec and the binary;
+  detail names the offending command or flag.
+- `cross-spec-clash` — at `--tree` scope, two specs under `specs/`
+  contradict each other (single-source-of-truth rule from
+  `docs/spec-conventions.md`); detail names both specs.
+- `spec-conventions-violation` — the diff edits a spec section in a
+  way that violates `docs/spec-conventions.md`; detail names the
+  convention section and the offending spec file/line range.
 
 Do NOT free-form the cause or paraphrase the concern; the orchestrator
 parses this line verbatim to populate `previous_failure` and `bd update
@@ -241,7 +269,15 @@ kept. If your review is clean, omit the marker entirely.
 
 ## Completion
 
-When your review is complete, emit LOOM_COMPLETE. The orchestrator determines
-pass/fail by comparing bead counts before and after your review.
+When your review is complete, emit LOOM_COMPLETE. The orchestrator runs
+your output through the verdict gate's decision function
+(`phase_verdict::decide()` in `loom-workflow`): it consumes the parsed
+exit marker, the `bd-closed` status of beads in the molecule, the
+worktree-diff emptiness, and any `LOOM_REVIEW_FLAG` you emitted, and
+routes the phase to `Done`, `Blocked`, `Clarify`, or `Recovery`. A clean
+review with no flag → `Done`. A flag emission → `Recovery` with the
+parsed concern threaded into `previous_failure` for the next iteration.
+There is no bead-count diffing — the gate is a pure function of the
+marker plus the mechanical signals.
 
 {% include "partial/exit_signals.md" %}
