@@ -81,12 +81,80 @@ const ANSI_GREEN: &str = "\x1b[32m";
 const ANSI_RED: &str = "\x1b[31m";
 const ANSI_YELLOW: &str = "\x1b[33m";
 
+/// Three-space gap between left-edge summary content and the right-edge
+/// duration / status column on a single-line summary cell.
+const SUMMARY_SEPARATOR: &str = "   ";
+
+/// Worst-case display width reserved for the right-edge column when
+/// deciding whether a single-line summary cell fits. Covers the longest
+/// in-flight indicator text we ever emit (`"running... 999.9s"` = 17
+/// columns) so an indicator that opens single-line stays single-line
+/// for the entire duration without wrapping at the terminal edge.
+const RIGHT_COL_RESERVE: usize = 17;
+
+/// Fallback terminal width used when `crossterm::terminal::size` fails
+/// or returns 0 — both legitimate "no real width" states (pipes, CI
+/// runners without a pty). 80 keeps the math sensible without aborting
+/// rendering.
+const FALLBACK_TERM_WIDTH: usize = 80;
+
 /// Convert a `ts_ms` delta (signed millis) to a non-negative
 /// [`Duration`]. Negative deltas (clock skew across producers, malformed
 /// logs) saturate to zero so the renderer never panics on `from_millis`.
 fn ts_ms_delta(start: i64, end: i64) -> Duration {
     let delta = end.saturating_sub(start);
     Duration::from_millis(u64::try_from(delta).unwrap_or(0))
+}
+
+/// Detect terminal width via crossterm. Returns the column count of the
+/// underlying tty or [`FALLBACK_TERM_WIDTH`] when no real width is
+/// available.
+fn detect_term_width() -> usize {
+    crossterm::terminal::size()
+        .ok()
+        .and_then(|(cols, _)| (cols > 0).then_some(usize::from(cols)))
+        .unwrap_or(FALLBACK_TERM_WIDTH)
+}
+
+/// Visible width of `s` in terminal columns. Skips ANSI CSI escapes
+/// (`\x1b[...<alpha>`) and OSC 8 hyperlink envelopes
+/// (`\x1b]8;;url\x07display\x1b]8;;\x07`) so the count reflects what the
+/// user sees, not the raw byte length. Multi-column characters are
+/// counted as one column — sufficient for the ASCII-and-symbol summary
+/// cells the renderer produces today.
+fn display_width(s: &str) -> usize {
+    let mut width = 0usize;
+    let mut iter = s.chars().peekable();
+    while let Some(c) = iter.next() {
+        match c {
+            '\x1b' => match iter.peek() {
+                Some(']') => {
+                    iter.next();
+                    while let Some(c2) = iter.next() {
+                        if c2 == '\x07' {
+                            break;
+                        }
+                        if c2 == '\x1b' && iter.peek() == Some(&'\\') {
+                            iter.next();
+                            break;
+                        }
+                    }
+                }
+                Some('[') => {
+                    iter.next();
+                    for c2 in iter.by_ref() {
+                        if c2.is_ascii_alphabetic() {
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            },
+            '\x07' => {}
+            _ => width += 1,
+        }
+    }
+    width
 }
 
 /// State captured at `ToolCall` time so the matching `ToolResult` can
@@ -144,6 +212,15 @@ pub struct TerminalRenderer {
     /// Any other event must clear/finalize the line first so it does
     /// not interleave with running-state text.
     running: Option<(ToolCallId, Instant, String, String)>,
+    /// Top-level call whose summary cell would not fit on the same line
+    /// as the right-edge column at the current terminal width. The
+    /// renderer suppresses the in-place indicator for the call entirely
+    /// — emitting nothing at `ToolCall` time — and writes a two-line
+    /// layout (right-edge column right-aligned on line 1, full summary
+    /// on a body-indented continuation line on line 2) when the matching
+    /// `ToolResult` arrives. Mutually exclusive with [`running`]: each
+    /// top-level call lands in one bucket or the other.
+    buffered_overflow: Option<(ToolCallId, Instant, String, String)>,
     /// `true` for `loom run` (events arrive in real time) and `false`
     /// for `loom logs` replay. Replay mode suppresses the in-place
     /// running indicator entirely — every event already has its
@@ -161,6 +238,12 @@ pub struct TerminalRenderer {
     /// wx-iuw22). Default is disabled; callers in supported terminals
     /// enable via [`TerminalRenderer::with_osc8`].
     osc8: tool_body::Osc8Context,
+    /// Override for the detected terminal width. Tests inject a fixed
+    /// width via [`TerminalRenderer::with_term_width`] so the overflow
+    /// behavior pins deterministically without a real terminal. `None`
+    /// in production — each emission queries crossterm so SIGWINCH
+    /// resizes take effect immediately.
+    term_width_override: Option<usize>,
     header_printed: bool,
     closed: bool,
 }
@@ -235,6 +318,7 @@ impl TerminalRenderer {
             indent_by_tool: std::collections::HashMap::new(),
             pending_calls: std::collections::HashMap::new(),
             running: None,
+            buffered_overflow: None,
             // Indicator is enabled by default when color is on, we're
             // not in parallel mode, and events arrive live. Each
             // condition is a proxy for a real constraint: color → TTY,
@@ -245,8 +329,37 @@ impl TerminalRenderer {
             indicator_enabled: color && !parallel && live,
             live,
             osc8: tool_body::Osc8Context::disabled(),
+            term_width_override: None,
             header_printed: false,
             closed: false,
+        }
+    }
+
+    /// Pin the terminal width used for summary-cell overflow decisions.
+    /// Production callers omit this — the renderer queries crossterm on
+    /// every emission so the layout adapts to SIGWINCH. Tests use it to
+    /// reproduce a narrow terminal (e.g. 40 columns) without spawning a
+    /// real pty.
+    pub fn with_term_width(mut self, width: usize) -> Self {
+        self.term_width_override = Some(width);
+        self
+    }
+
+    /// Resolve the terminal width for overflow decisions. Honors the
+    /// test override when set; otherwise queries crossterm with the
+    /// 80-column fallback for non-TTY paths.
+    fn term_width(&self) -> usize {
+        self.term_width_override.unwrap_or_else(detect_term_width)
+    }
+
+    /// Line prefix shared by every tool-summary line. `Parallel` mode
+    /// adds the bead-id bracket for cross-bead attribution; otherwise
+    /// just the two-space base indent.
+    fn prefix_str(&self) -> String {
+        if self.parallel {
+            format!("  [{}] ", self.bead_id.as_str())
+        } else {
+            "  ".to_string()
         }
     }
 
@@ -296,9 +409,10 @@ impl TerminalRenderer {
                 params,
                 parent_tool_call_id,
             } => {
-                // R3 — if another tool's running line is open, finalize
-                // it before laying down a nested or sibling call.
-                self.finalize_running_with_glyph("…")?;
+                // R3 — if another tool's running line (or buffered
+                // overflow) is in flight, finalize it before laying down
+                // a nested or sibling call.
+                self.close_in_flight("…")?;
                 self.tool_count += 1;
                 let depth = match parent_tool_call_id {
                     Some(parent) => self.indent_by_tool.get(parent).copied().unwrap_or(0) + 1,
@@ -315,29 +429,40 @@ impl TerminalRenderer {
                 );
                 let summary = tool_body::summary_cell(tool, params, &self.osc8);
                 let indent: String = "  ".repeat(depth);
-                if self.indicator_enabled
+                let use_indicator = self.indicator_enabled
                     && parent_tool_call_id.is_none()
-                    && !matches!(self.mode, RenderMode::Verbose)
-                {
-                    // Default-mode + top-level + TTY: open the in-place
-                    // running indicator. Subsequent events overwrite this
-                    // line via `\r` + clear-to-EOL until ToolResult fires.
-                    let head = format!("  {indent}{summary}");
-                    let running_line = format!("{head}   running... 0.0s");
-                    self.out.write_all(running_line.as_bytes())?;
-                    self.out.flush()?;
-                    self.running = Some((
-                        id.clone(),
-                        self.clock.now(),
-                        summary.clone(),
-                        indent.clone(),
-                    ));
-                } else {
-                    let line = if self.parallel {
-                        format!("  [{}] {indent}{summary}\n", self.bead_id.as_str())
+                    && !matches!(self.mode, RenderMode::Verbose);
+                if use_indicator {
+                    // Decide between the single-line indicator (summary
+                    // shares its row with the right-edge column) and the
+                    // buffered overflow case (right-edge column gets its
+                    // own row at result time, summary wraps below).
+                    let prefix = self.prefix_str();
+                    let single_width = display_width(&prefix)
+                        + display_width(&indent)
+                        + display_width(&summary)
+                        + SUMMARY_SEPARATOR.len()
+                        + RIGHT_COL_RESERVE;
+                    if single_width <= self.term_width() {
+                        let running_line =
+                            format!("{prefix}{indent}{summary}{SUMMARY_SEPARATOR}running... 0.0s");
+                        self.out.write_all(running_line.as_bytes())?;
+                        self.out.flush()?;
+                        self.running = Some((id.clone(), self.clock.now(), summary, indent));
                     } else {
-                        format!("  {indent}{summary}\n")
-                    };
+                        // Suppress the indicator: writing `running...` on
+                        // the same line would mangle the \r-overwrite
+                        // region once the terminal wrapped the long
+                        // summary. Defer the entire summary cell until
+                        // result time and emit the spec'd two-line layout
+                        // there (right column first, indented continuation
+                        // beneath).
+                        self.buffered_overflow =
+                            Some((id.clone(), self.clock.now(), summary, indent));
+                    }
+                } else {
+                    let prefix = self.prefix_str();
+                    let line = format!("{prefix}{indent}{summary}\n");
                     self.out.write_all(line.as_bytes())?;
                     self.out.flush()?;
                 }
@@ -357,6 +482,10 @@ impl TerminalRenderer {
                     .running
                     .as_ref()
                     .is_some_and(|(running_id, _, _, _)| running_id == id);
+                let matches_buffered = self
+                    .buffered_overflow
+                    .as_ref()
+                    .is_some_and(|(buffered_id, _, _, _)| buffered_id == id);
                 let pair_duration = self
                     .pending_calls
                     .remove(id)
@@ -364,8 +493,11 @@ impl TerminalRenderer {
                 if matches_running {
                     let glyph = if *is_error { "✗" } else { "✓" };
                     self.finalize_running_with_glyph_dur(glyph, pair_duration)?;
+                } else if matches_buffered {
+                    let glyph = if *is_error { "✗" } else { "✓" };
+                    self.finalize_buffered_with_glyph_dur(glyph, pair_duration)?;
                 } else {
-                    self.finalize_running_with_glyph_dur("…", None)?;
+                    self.close_in_flight("…")?;
                     // R3 + H2 — replay (non-indicator) path still needs
                     // to surface the pair's final glyph + duration so
                     // `loom logs` shows the same information as `loom
@@ -405,12 +537,12 @@ impl TerminalRenderer {
                 }
             }
             AgentEvent::TextDelta { text, .. } if matches!(self.mode, RenderMode::Verbose) => {
-                self.finalize_running_with_glyph("…")?;
+                self.close_in_flight("…")?;
                 self.out.write_all(text.as_bytes())?;
                 self.out.flush()?;
             }
             AgentEvent::Error { message, .. } => {
-                self.finalize_running_with_glyph("✗")?;
+                self.close_in_flight("✗")?;
                 let line = if self.parallel {
                     format!("  [{}] error: {message}\n", self.bead_id.as_str())
                 } else {
@@ -424,7 +556,7 @@ impl TerminalRenderer {
                 summary,
                 ..
             } => {
-                self.finalize_running_with_glyph("…")?;
+                self.close_in_flight("…")?;
                 let line = if self.parallel {
                     format!("  [{}] → {driver_kind}: {summary}\n", self.bead_id.as_str(),)
                 } else {
@@ -441,19 +573,12 @@ impl TerminalRenderer {
     /// Close the in-place running line — if one is open — with a final
     /// `\r` + clear-to-EOL + `<summary>   <glyph> Ns\n` line. `glyph` is
     /// `✓` on clean ToolResult, `✗` on errored ToolResult, `…` when an
-    /// intervening event preempted the result (a long-running tool
-    /// that emitted unrelated state mid-flight). Idempotent — calling
-    /// against `running = None` is a no-op so cleanup paths can call
-    /// unconditionally.
-    fn finalize_running_with_glyph(&mut self, glyph: &str) -> io::Result<()> {
-        self.finalize_running_with_glyph_dur(glyph, None)
-    }
-
-    /// Same as [`finalize_running_with_glyph`] but lets the caller pass
-    /// a duration derived from `ts_ms` deltas instead of falling back
-    /// to the local clock. `loom logs` replay drives this with the
-    /// event envelope's `ts_ms` so the rendered duration matches what
-    /// the producer recorded, not how fast the replayer reads the file.
+    /// intervening event preempted the result. The caller may pass a
+    /// duration derived from `ts_ms` deltas instead of falling back to
+    /// the local clock; `loom logs` replay drives this with the event
+    /// envelope's `ts_ms` so the rendered duration matches what the
+    /// producer recorded. Idempotent — a `running = None` call is a
+    /// no-op so cleanup paths can invoke unconditionally.
     fn finalize_running_with_glyph_dur(
         &mut self,
         glyph: &str,
@@ -467,15 +592,54 @@ impl TerminalRenderer {
         let secs = elapsed.as_secs_f64();
         self.out.write_all(b"\r")?;
         self.out.write_all(CLEAR_TO_EOL.as_bytes())?;
-        let final_line = if self.parallel {
-            format!(
-                "  [{}] {indent}{summary}   {glyph} {secs:.1}s\n",
-                self.bead_id.as_str(),
-            )
-        } else {
-            format!("  {indent}{summary}   {glyph} {secs:.1}s\n")
-        };
+        let prefix = self.prefix_str();
+        let final_line =
+            format!("{prefix}{indent}{summary}{SUMMARY_SEPARATOR}{glyph} {secs:.1}s\n");
         self.out.write_all(final_line.as_bytes())?;
+        self.out.flush()?;
+        Ok(())
+    }
+
+    /// Close any in-flight summary cell — running indicator OR buffered
+    /// overflow case — with the given glyph. Both inner finalizers are
+    /// idempotent no-ops when their state is empty, so callers can
+    /// invoke unconditionally before laying down a new event line.
+    fn close_in_flight(&mut self, glyph: &str) -> io::Result<()> {
+        self.finalize_running_with_glyph_dur(glyph, None)?;
+        self.finalize_buffered_with_glyph_dur(glyph, None)
+    }
+
+    /// Emit the two-line summary cell for a buffered (overflow) top-level
+    /// tool call: right-edge column right-aligned on line 1 so it stays
+    /// fully visible at the terminal edge, followed by the full left-edge
+    /// summary on a body-indented continuation line. Mirrors the spec's
+    /// "right-edge column alone on the first line, full content wraps
+    /// onto a single indented continuation line beneath it" rule.
+    fn finalize_buffered_with_glyph_dur(
+        &mut self,
+        glyph: &str,
+        pair_duration: Option<Duration>,
+    ) -> io::Result<()> {
+        let Some((_, started, summary, indent)) = self.buffered_overflow.take() else {
+            return Ok(());
+        };
+        let elapsed =
+            pair_duration.unwrap_or_else(|| self.clock.now().saturating_duration_since(started));
+        let secs = elapsed.as_secs_f64();
+        let right_col = format!("{glyph} {secs:.1}s");
+        let prefix = self.prefix_str();
+        let prefix_w = display_width(&prefix);
+        let right_w = display_width(&right_col);
+        let pad_w = self.term_width().saturating_sub(prefix_w + right_w);
+        let pad = " ".repeat(pad_w);
+        // Continuation indent matches the body indent used for tool
+        // bodies in verbose mode — one extra level deeper than the
+        // summary's depth indent.
+        let body_indent = format!("{indent}  ");
+        let line1 = format!("{prefix}{pad}{right_col}\n");
+        let line2 = format!("{prefix}{body_indent}{summary}\n");
+        self.out.write_all(line1.as_bytes())?;
+        self.out.write_all(line2.as_bytes())?;
         self.out.flush()?;
         Ok(())
     }
@@ -502,7 +666,7 @@ impl TerminalRenderer {
             BeadOutcome::Failed => "✗",
             BeadOutcome::Retry => "↻",
         };
-        self.finalize_running_with_glyph(cleanup_glyph)?;
+        self.close_in_flight(cleanup_glyph)?;
         let (glyph, word, color) = match outcome {
             BeadOutcome::Done => ("✓", "done", ANSI_GREEN),
             BeadOutcome::Failed => ("✗", "failed", ANSI_RED),
@@ -546,8 +710,8 @@ impl Drop for TerminalRenderer {
     /// region. The explicit cleanup contract still lives in
     /// [`finish`] — Drop is the safety net.
     fn drop(&mut self) {
-        if self.running.is_some() {
-            let _ = self.finalize_running_with_glyph("⚠");
+        if self.running.is_some() || self.buffered_overflow.is_some() {
+            let _ = self.close_in_flight("⚠");
         }
     }
 }
@@ -1539,5 +1703,306 @@ mod tests {
         assert!(out.contains("[wx-1]"), "{out:?}");
         assert!(out.contains("→"), "{out:?}");
         assert!(out.contains("push_gate_walk"), "{out:?}");
+    }
+
+    // -- Summary-cell overflow tests (wx-ywdnz.3) --------------------------
+
+    /// Run a `TerminalRenderer` callback against a captured buffer with
+    /// a pinned terminal width — the overflow tests depend on knowing
+    /// exactly how many columns are available without relying on the
+    /// host pty.
+    fn capture_with_width<F>(parallel: bool, color: bool, width: usize, live: bool, f: F) -> String
+    where
+        F: FnOnce(&mut TerminalRenderer),
+    {
+        let buf: Vec<u8> = Vec::new();
+        let cell = std::sync::Arc::new(std::sync::Mutex::new(buf));
+        let cell_for_writer = cell.clone();
+        struct Sink {
+            inner: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+        }
+        impl Write for Sink {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.inner
+                    .lock()
+                    .map_err(|_| io::Error::other("poisoned"))?
+                    .extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let sink = Sink {
+            inner: cell_for_writer,
+        };
+        let renderer = if live {
+            TerminalRenderer::new(
+                sink,
+                RenderMode::Default,
+                BeadId::new("wx-1").expect("id"),
+                parallel,
+                color,
+            )
+        } else {
+            TerminalRenderer::new_replay(
+                sink,
+                RenderMode::Default,
+                BeadId::new("wx-1").expect("id"),
+                parallel,
+                color,
+            )
+        };
+        let mut r = renderer.with_term_width(width);
+        f(&mut r);
+        let guard = cell.lock().expect("not poisoned");
+        String::from_utf8(guard.clone()).expect("utf-8")
+    }
+
+    /// A short Bash command with the indicator on (live, color, single-
+    /// bead) lays the summary cell + right-edge column on one line — the
+    /// "fits as today" case from the spec. Terminal width is wide enough
+    /// to hold the full single-line form, so no continuation appears.
+    #[test]
+    fn summary_overflow_short_command_stays_single_line() {
+        let out = capture_with_width(false, true, 120, true, |r| {
+            let (call, result) = tool_pair_with_ts("t1", "Bash", json!({"command": "ls"}), 0, 500);
+            r.render_event(&call).expect("call");
+            r.render_event(&result).expect("result");
+        });
+        // Single-line layout: summary + spacer + right-edge column on
+        // one row. The pair collapses into one printed line (one final
+        // newline) after the \r overwrite.
+        assert!(out.contains("Bash"), "{out:?}");
+        assert!(out.contains("ls"), "{out:?}");
+        assert!(out.contains("0.5s"), "{out:?}");
+        let lines: Vec<&str> = out.split('\n').filter(|l| !l.is_empty()).collect();
+        assert_eq!(lines.len(), 1, "fits case must be single line: {out:?}");
+        assert!(
+            lines[0].contains("ls") && lines[0].contains("0.5s"),
+            "summary and right-col must share the line: {out:?}",
+        );
+    }
+
+    /// When the summary cell + right-edge column would overrun the
+    /// terminal width, the renderer suppresses the in-place indicator
+    /// and emits a two-line layout at result time: right-edge column
+    /// alone on line 1 (right-aligned so the duration / glyph stays at
+    /// the terminal edge), full summary on a body-indented continuation
+    /// line beneath it.
+    #[test]
+    fn summary_overflow_wraps_to_continuation_line() {
+        // 40-col terminal — narrow enough that a long Bash command can't
+        // share a row with the right-edge column.
+        let out = capture_with_width(false, true, 40, true, |r| {
+            let (call, result) = tool_pair_with_ts(
+                "t1",
+                "Bash",
+                json!({
+                    "command": "cargo test --workspace --all-features",
+                }),
+                0,
+                1_200,
+            );
+            r.render_event(&call).expect("call");
+            r.render_event(&result).expect("result");
+        });
+        let lines: Vec<&str> = out.split('\n').filter(|l| !l.is_empty()).collect();
+        assert_eq!(
+            lines.len(),
+            2,
+            "overflow case must emit right-col line + continuation: {out:?}",
+        );
+        // Line 1: right-edge column right-aligned to the terminal width.
+        // Line 2: full summary on the body-indented continuation line.
+        assert!(
+            lines[0].trim_end().ends_with("1.2s"),
+            "line 1 must end with the duration / right-edge column: {out:?}",
+        );
+        assert!(
+            lines[0].contains('✓'),
+            "line 1 must carry the status glyph: {out:?}",
+        );
+        assert!(
+            !lines[0].contains("cargo"),
+            "line 1 must NOT carry the summary content: {out:?}",
+        );
+        assert!(
+            lines[1].contains("cargo test --workspace --all-features"),
+            "line 2 must carry the full summary: {out:?}",
+        );
+        // Right-edge column must stay within the terminal width — the
+        // hard spec contract.
+        let line1_width = display_width(lines[0]);
+        assert!(
+            line1_width <= 40,
+            "right-edge column line must not exceed terminal width: {line1_width} > 40 in {out:?}",
+        );
+        // Continuation indent — the summary sits at one level deeper
+        // than the top-level depth indent ("  " + "  " = 4 leading
+        // spaces for a depth-0 call).
+        assert!(
+            lines[1].starts_with("    "),
+            "continuation line must use the body indent (4 spaces for depth 0): {out:?}",
+        );
+    }
+
+    /// Every per-tool summary cell goes through the same overflow path.
+    /// Walk Read / Edit / Write / Grep / Glob / Bash / WebFetch /
+    /// WebSearch / Task / a custom unknown tool and pin that the
+    /// right-edge column survives intact when the left content blows
+    /// past the terminal width.
+    #[test]
+    fn summary_overflow_applies_to_every_per_tool_cell() {
+        let long = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        let cases: Vec<(&str, serde_json::Value)> = vec![
+            (
+                "Read",
+                json!({"file_path": format!("very/deep/path/to/some/{long}.rs")}),
+            ),
+            (
+                "Edit",
+                json!({
+                    "file_path": format!("deep/{long}.rs"),
+                    "old_string": "x\n",
+                    "new_string": "y\n",
+                }),
+            ),
+            (
+                "Write",
+                json!({"file_path": format!("deep/{long}.rs"), "content": "a"}),
+            ),
+            ("Grep", json!({"pattern": long, "path": "src"})),
+            ("Glob", json!({"pattern": long, "path": "src"})),
+            ("Bash", json!({"command": format!("echo {long}")})),
+            (
+                "WebFetch",
+                json!({"url": format!("https://example.com/{long}")}),
+            ),
+            ("WebSearch", json!({"query": long})),
+            (
+                "Task",
+                json!({"description": long, "subagent_type": "general-purpose"}),
+            ),
+            // Generic fallback path — unknown tools render as the tool
+            // name verbatim, so the overflow trigger is a long name.
+            (
+                "ACustomUnknownToolWithAnExceptionallyLongIdentifier",
+                json!({"anything": long}),
+            ),
+        ];
+        for (tool, params) in cases {
+            let mut env_a = EventEnvelope::placeholder();
+            env_a.ts_ms = 0;
+            let mut env_b = EventEnvelope::placeholder();
+            env_b.ts_ms = 1_000;
+            let call = AgentEvent::ToolCall {
+                envelope: env_a,
+                id: ToolCallId::new("t1"),
+                tool: tool.to_string(),
+                params,
+                parent_tool_call_id: None,
+            };
+            let result = AgentEvent::ToolResult {
+                envelope: env_b,
+                id: ToolCallId::new("t1"),
+                output: String::new(),
+                is_error: false,
+            };
+            let out = capture_with_width(false, true, 40, true, |r| {
+                r.render_event(&call).expect("call");
+                r.render_event(&result).expect("result");
+            });
+            let lines: Vec<&str> = out.split('\n').filter(|l| !l.is_empty()).collect();
+            assert!(
+                lines.len() >= 2,
+                "{tool} overflow must produce >=2 lines: {out:?}",
+            );
+            // Right-edge column visible on the first line and within
+            // the terminal width.
+            assert!(
+                lines[0].contains('✓') && lines[0].contains("1.0s"),
+                "{tool} right-edge column missing on line 1: {out:?}",
+            );
+            let line1_width = display_width(lines[0]);
+            assert!(
+                line1_width <= 40,
+                "{tool} right-edge column line overflows terminal width \
+                 ({line1_width} > 40): {out:?}",
+            );
+            // Tool name surfaces on the continuation line (for the
+            // generic / custom case, this is just the tool string).
+            assert!(
+                lines[1].contains(tool),
+                "{tool} continuation line must carry the tool name: {out:?}",
+            );
+        }
+    }
+
+    /// Once the in-place indicator decides the line fits, it must keep
+    /// fitting for the duration of the call — i.e. the reserve covers
+    /// the running counter's worst case. Pin this by checking that the
+    /// initial `running... 0.0s` line never exceeds the terminal width
+    /// when the renderer chose the single-line path.
+    #[test]
+    fn summary_overflow_indicator_reserve_covers_running_text() {
+        // Choose a summary length that just barely fits the threshold
+        // at 40 cols. With prefix=2, separator=3, reserve=17 the
+        // summary budget is 40 - 22 = 18 cols. A `Bash   echo hi`
+        // summary (15 cols) sits below that.
+        let out = capture_with_width(false, true, 40, true, |r| {
+            r.render_event(&AgentEvent::ToolCall {
+                envelope: EventEnvelope::placeholder(),
+                id: ToolCallId::new("t1"),
+                tool: "Bash".to_string(),
+                params: json!({"command": "echo hi"}),
+                parent_tool_call_id: None,
+            })
+            .expect("call");
+        });
+        // The indicator opened — the line carries `running...` text
+        // and stays within 40 columns including the right column.
+        assert!(out.contains("running..."), "indicator must open: {out:?}");
+        let line_width = display_width(out.trim_end_matches('\n'));
+        assert!(
+            line_width <= 40,
+            "running line width {line_width} must fit in 40 cols: {out:?}",
+        );
+    }
+
+    /// Buffered overflow plays well with sibling preemption: if a new
+    /// tool call arrives before the result of the buffered one, the
+    /// renderer flushes the buffered cell with `…` so the user sees the
+    /// in-flight tool was preempted rather than silently dropping it.
+    #[test]
+    fn summary_overflow_preempts_buffered_call_on_sibling() {
+        let out = capture_with_width(false, true, 40, true, |r| {
+            // First call: long Bash → buffered.
+            r.render_event(&AgentEvent::ToolCall {
+                envelope: EventEnvelope::placeholder(),
+                id: ToolCallId::new("t1"),
+                tool: "Bash".to_string(),
+                params: json!({"command": "echo this command is far too long for 40 cols"}),
+                parent_tool_call_id: None,
+            })
+            .expect("first call");
+            // Second call: short, fits — preempts the first.
+            r.render_event(&AgentEvent::ToolCall {
+                envelope: EventEnvelope::placeholder(),
+                id: ToolCallId::new("t2"),
+                tool: "Read".to_string(),
+                params: json!({"file_path": "a"}),
+                parent_tool_call_id: None,
+            })
+            .expect("second call");
+        });
+        assert!(
+            out.contains('…'),
+            "preempted buffered cell must carry the preempt glyph: {out:?}",
+        );
+        assert!(
+            out.contains("echo this command is far too long for 40 cols"),
+            "preempted summary must still print on the continuation line: {out:?}",
+        );
     }
 }
