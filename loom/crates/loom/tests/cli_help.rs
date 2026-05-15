@@ -129,6 +129,58 @@ fn loom_check_help_snapshot() {
 }
 
 #[test]
+fn loom_check_rejects_unknown_check_selector() {
+    let loom_bin = env!("CARGO_BIN_EXE_loom");
+    let output = Command::new(loom_bin)
+        .args(["check", "--check=bogus"])
+        .env("COLUMNS", "100")
+        .env("CLAP_TERM_WIDTH", "100")
+        .output()
+        .expect("spawn loom");
+    assert!(
+        !output.status.success(),
+        "loom check --check=bogus must exit non-zero",
+    );
+    let stderr = String::from_utf8(output.stderr).expect("utf-8");
+    assert!(
+        stderr.contains("invalid value 'bogus'"),
+        "stderr must name the invalid value, got: {stderr}",
+    );
+    for selector in ["criteria", "removals", "infrastructure", "cross-spec"] {
+        assert!(
+            stderr.contains(selector),
+            "stderr must list `{selector}` as an allowed selector, got: {stderr}",
+        );
+    }
+}
+
+#[test]
+fn loom_check_scope_flags_are_mutually_exclusive() {
+    let loom_bin = env!("CARGO_BIN_EXE_loom");
+    for args in [
+        vec!["check", "--bead", "wx-1", "--diff", "HEAD~1..HEAD"],
+        vec!["check", "--bead", "wx-1", "--tree"],
+        vec!["check", "--diff", "HEAD~1..HEAD", "--tree"],
+    ] {
+        let output = Command::new(loom_bin)
+            .args(&args)
+            .env("COLUMNS", "100")
+            .env("CLAP_TERM_WIDTH", "100")
+            .output()
+            .expect("spawn loom");
+        assert!(
+            !output.status.success(),
+            "loom {args:?} must exit non-zero (scope flags are mutually exclusive)",
+        );
+        let stderr = String::from_utf8(output.stderr).expect("utf-8");
+        assert!(
+            stderr.contains("cannot be used with"),
+            "stderr must explain mutual exclusion, got: {stderr}",
+        );
+    }
+}
+
+#[test]
 fn loom_msg_help_snapshot() {
     insta::assert_snapshot!(loom_help(&["msg"]));
 }

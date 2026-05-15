@@ -74,6 +74,16 @@ impl From<AgentBackendArg> for AgentKind {
     }
 }
 
+/// Sub-audit selector for `loom check --check=<name>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+enum CheckAudit {
+    Criteria,
+    Removals,
+    Infrastructure,
+    CrossSpec,
+}
+
 /// Subcommands of `loom note`.
 #[derive(Debug, Subcommand)]
 enum NoteAction {
@@ -221,11 +231,28 @@ enum Command {
         #[arg(long, short = 'v', conflicts_with = "raw")]
         verbose: bool,
     },
-    /// Post-loop reviewer + push gate.
+    /// Deterministic audits — `[verify]` scripts, style linters, and `--check=<name>` sub-audits.
     Check {
         /// Spec label override (defaults to `current_spec`).
         #[arg(long, short = 's', value_name = "LABEL")]
         spec: Option<String>,
+        /// Sub-audit to run (`criteria`, `removals`, `infrastructure`,
+        /// `cross-spec`); omit to run the full deterministic pass.
+        #[arg(long, value_name = "NAME")]
+        check: Option<CheckAudit>,
+        /// Restrict the audit scope to one bead.
+        #[arg(long, short = 'b', value_name = "ID", conflicts_with_all = ["diff", "tree"])]
+        bead: Option<String>,
+        /// Restrict the audit scope to a git diff range.
+        #[arg(long, value_name = "RANGE", conflicts_with_all = ["bead", "tree"])]
+        diff: Option<String>,
+        /// Audit the entire spec tree × implementation.
+        #[arg(long, conflicts_with_all = ["bead", "diff"])]
+        tree: bool,
+        /// Promote warning-severity findings (e.g. orphan stubs) to errors.
+        /// Applies to `--check=criteria`.
+        #[arg(long)]
+        strict: bool,
     },
     /// Resolve outstanding `loom:clarify` and `loom:blocked` beads.
     Msg {
@@ -315,6 +342,7 @@ impl Command {
             | Command::Logs { .. }
             | Command::Spec { .. }
             | Command::Doctor { .. } => false,
+            Command::Check { check: Some(_), .. } => false,
             Command::Init { .. }
             | Command::UseSpec { .. }
             | Command::Plan { .. }
@@ -515,7 +543,25 @@ fn main() -> ExitCode {
                 verbose,
             },
         ),
-        Command::Check { spec } => run_check(&workspace, spec, agent_override),
+        Command::Check {
+            spec,
+            check,
+            bead,
+            diff,
+            tree,
+            strict,
+        } => run_check(
+            &workspace,
+            spec,
+            agent_override,
+            CheckOpts {
+                audit: check,
+                bead,
+                diff,
+                tree,
+                strict,
+            },
+        ),
         Command::Msg {
             spec,
             number,
@@ -661,14 +707,29 @@ fn run_doctor(workspace: &std::path::Path, check: &str, strict: bool) -> anyhow:
     if check != "criteria" {
         anyhow::bail!("unsupported --check value `{check}` (only `criteria` is implemented)");
     }
-    let specs_dir = workspace.join("specs");
-    let dispatcher = workspace.join("tests/loom-test.sh");
-    let findings = doctor::audit(&specs_dir, &dispatcher)?;
-    let code = doctor::report(&findings, strict);
-    if code != 0 {
-        std::process::exit(code);
+    run_check_audit(workspace, CheckAudit::Criteria, strict)
+}
+
+fn run_check_audit(
+    workspace: &std::path::Path,
+    audit: CheckAudit,
+    strict: bool,
+) -> anyhow::Result<()> {
+    match audit {
+        CheckAudit::Criteria => {
+            let specs_dir = workspace.join("specs");
+            let dispatcher = workspace.join("tests/loom-test.sh");
+            let findings = doctor::audit(&specs_dir, &dispatcher)?;
+            let code = doctor::report(&findings, strict);
+            if code != 0 {
+                std::process::exit(code);
+            }
+            Ok(())
+        }
+        CheckAudit::Removals | CheckAudit::Infrastructure | CheckAudit::CrossSpec => {
+            anyhow::bail!("audit not yet implemented")
+        }
     }
-    Ok(())
 }
 
 fn run_status(workspace: &std::path::Path) -> anyhow::Result<()> {
@@ -1416,11 +1477,29 @@ fn resolved_agent_for(
     Ok(selection)
 }
 
+struct CheckOpts {
+    audit: Option<CheckAudit>,
+    bead: Option<String>,
+    diff: Option<String>,
+    tree: bool,
+    strict: bool,
+}
+
 fn run_check(
     workspace: &Path,
     spec: Option<String>,
     agent_override: Option<AgentKind>,
+    opts: CheckOpts,
 ) -> anyhow::Result<()> {
+    if let Some(audit) = opts.audit {
+        return run_check_audit(workspace, audit, opts.strict);
+    }
+    if opts.bead.is_some() || opts.diff.is_some() || opts.tree {
+        anyhow::bail!(
+            "scope flags (`--bead`, `--diff`, `--tree`) require `--check=<name>` until the \
+             full deterministic pass is implemented"
+        );
+    }
     let manifest = Arc::new(ProfileImageManifest::from_env()?);
     let label = resolve_spec_label(workspace, spec)?;
     let lock_mgr = LockManager::new(workspace)?;
