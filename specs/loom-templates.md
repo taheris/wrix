@@ -5,8 +5,9 @@ policy, and snapshot-test contract for the Loom workflow.
 
 ## Problem Statement
 
-Loom's workflow phase prompts (`plan`, `todo`, `run`, `check`,
-`msg`) are rendered from Askama templates compiled into the binary.
+Loom's agent-bearing workflow phase prompts (`plan`, `todo`, `run`,
+`review`, `msg`) are rendered from Askama templates compiled into
+the binary. `loom check` is deterministic and renders no template.
 The template surface is its own concern: which partials exist,
 which template renders which partial in which phase, which context
 struct each template binds to, and what the snapshot gate looks
@@ -22,7 +23,15 @@ One template per phase, plus per-mode variants:
 
 - `plan_new.md`, `plan_update.md`
 - `todo_new.md`, `todo_update.md`
-- `run.md`, `check.md`, `msg.md`
+- `run.md`, `review.md`, `msg.md`
+
+`loom check` is deterministic — it runs verifiers, audits, and
+linters without rendering any agent prompt — so it has no template.
+`loom review` is the LLM-judged counterpart and has its own
+template, distinct from `run.md` because the review session has
+different inputs (diff, bead intent, sibling diffs, prior `loom
+check` results) and a rubric-walk objective rather than an
+implement-the-bead objective.
 
 Each template has a matching `#[derive(Template)]` context struct
 in the same crate. The Askama build verifies every variable
@@ -53,7 +62,7 @@ Current set:
 
 Each partial is included by an explicit set of templates:
 
-| Partial | `plan_new` | `plan_update` | `todo_new` | `todo_update` | `run` | `check` | `msg` |
+| Partial | `plan_new` | `plan_update` | `todo_new` | `todo_update` | `run` | `review` | `msg` |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
 | `context_pinning.md` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `style_rules.md` |  |  |  |  | ✓ | ✓ |  |
@@ -67,10 +76,11 @@ Each partial is included by an explicit set of templates:
 | `review_rubric.md` |  |  |  |  |  | ✓ |  |
 | `sibling_spec_editing.md` |  | ✓ |  |  |  |  |  |
 
-**`style_rules.md` is pinned only in `run` and `check`** — the two
-phases that write or evaluate Rust code. Other phases (planning,
-decomposition, clarify resolution) don't write code, so pinning the
-rules there would inflate prompt size without buying enforcement.
+**`style_rules.md` is pinned only in `run` and `review`** — the two
+phases that write or evaluate code (`run` produces it, `review`
+judges it). Other phases (planning, decomposition, clarify
+resolution) don't write or evaluate code, so pinning the rules
+there would inflate prompt size without buying enforcement.
 
 **`spec_conventions.md` is pinned only in `plan_new` and
 `plan_update`** — the two phases that author spec content. Other
@@ -86,12 +96,12 @@ through the parse-don't-validate boundary defined in
 | Variable | Type | Used By |
 |----------|------|---------|
 | `pinned_context` | `String` | all |
-| `style_rules` | `String` | `run`, `check` |
+| `style_rules` | `String` | `run`, `review` |
 | `spec_conventions` | `String` | `plan_new`, `plan_update` |
 | `label` | `SpecLabel` | all |
 | `spec_diff` | `Option<String>` | `todo_update` |
 | `existing_tasks` | `Option<String>` | `todo_update` |
-| `companion_paths` | `Vec<String>` | `plan_update`, `todo_*`, `run`, `check`, `msg` |
+| `companion_paths` | `Vec<String>` | `plan_update`, `todo_*`, `run`, `review`, `msg` |
 | `clarify_beads` | `Vec<ClarifyBead>` | `msg` |
 | `implementation_notes` | `Vec<String>` | `todo_new`, `todo_update` |
 | `molecule_id` | `Option<MoleculeId>` | `todo_update`, `run` |
@@ -99,8 +109,8 @@ through the parse-don't-validate boundary defined in
 | `title` | `Option<String>` | `run` |
 | `description` | `Option<String>` | `run` |
 | `previous_failure` | `Option<String>` | `run` (retry only, truncated to 4000 chars) |
-| `beads_summary` | `Option<String>` | `check` |
-| `base_commit` | `Option<String>` | `check` |
+| `beads_summary` | `Option<String>` | `review` |
+| `base_commit` | `Option<String>` | `review` |
 | `exit_signals` | `String` | all |
 | `scratchpad_path` | `String` | all |
 
@@ -228,13 +238,13 @@ documents in front of the agent with zero configuration.
 
 - `style_rules.md` partial renders the `style_rules` variable
   [verify](tests/loom-test.sh::test_style_rules_partial_exists)
-- `run.md` and `check.md` include `style_rules.md`; no other
+- `run.md` and `review.md` include `style_rules.md`; no other
   phase template does
   [verify](tests/loom-test.sh::test_style_rules_pinning_matrix)
 - `spec_conventions.md` partial renders the `spec_conventions`
   variable; included only by `plan_new` and `plan_update`
   [verify](tests/loom-test.sh::test_spec_conventions_pinning_matrix)
-- `RunContext` and `CheckContext` carry `style_rules: String`;
+- `RunContext` and `ReviewContext` carry `style_rules: String`;
   other phase contexts do not
   [verify](tests/loom-test.sh::test_style_rules_field_scope)
 - `PlanNewContext` and `PlanUpdateContext` carry
@@ -295,7 +305,7 @@ documents in front of the agent with zero configuration.
    `#[derive(Template)]` struct with one field per variable. The
    variable set is enumerated in *Template Variables*.
 5. **Per-phase pinning.** Partial inclusion follows *Pinning
-   Policy*; `style_rules.md` is pinned in `run` and `check` only;
+   Policy*; `style_rules.md` is pinned in `run` and `review` only;
    `spec_conventions.md` is pinned in `plan_new` and `plan_update`
    only.
 6. **Rule-family agnosticism.** The `style_rules.md` and
