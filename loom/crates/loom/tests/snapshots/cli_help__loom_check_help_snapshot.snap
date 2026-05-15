@@ -7,9 +7,7 @@ Post-loop reviewer + push gate
 Usage: loom check [OPTIONS]
 
 Options:
+  -s, --spec <LABEL>      Spec label override (defaults to `current_spec`)
   -w, --workspace <PATH>  Workspace root. Defaults to the current working directory
   -A, --agent <BACKEND>   Override the agent backend for this invocation [possible values: claude, pi]
   -h, --help              Print help
-
-Workflow:
-  -s, --spec <LABEL>  Spec label override (defaults to `current_spec`)

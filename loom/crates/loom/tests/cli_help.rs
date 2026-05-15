@@ -36,6 +36,58 @@ fn loom_help_snapshot() {
     insta::assert_snapshot!(loom_help(&[]));
 }
 
+/// Independent of the snapshot: assert the spec-required section order and
+/// per-section subcommand membership in `loom --help`. The snapshot test
+/// catches any wording or layout drift; this test fails loudly if the
+/// section ordering itself regresses, with a more specific diagnostic.
+/// Spec: `loom-harness.md` § Functional #1.
+#[test]
+fn loom_help_groups_workflow_inspection_state_in_order() {
+    let out = loom_help(&[]);
+    let workflow = out.find("Workflow:").expect("Workflow heading missing");
+    let inspection = out.find("Inspection:").expect("Inspection heading missing");
+    let state = out.find("State:").expect("State heading missing");
+    assert!(
+        workflow < inspection && inspection < state,
+        "headings must appear in order Workflow → Inspection → State, got {workflow} / {inspection} / {state}",
+    );
+
+    let workflow_section = &out[workflow..inspection];
+    for sub in ["plan", "todo", "run", "check", "msg"] {
+        assert!(
+            workflow_section.contains(&format!("  {sub} "))
+                || workflow_section.contains(&format!("  {sub}\n")),
+            "Workflow section is missing `{sub}` row:\n{workflow_section}",
+        );
+    }
+
+    let inspection_section = &out[inspection..state];
+    for sub in ["status", "logs", "spec"] {
+        assert!(
+            inspection_section.contains(&format!("  {sub} "))
+                || inspection_section.contains(&format!("  {sub}\n")),
+            "Inspection section is missing `{sub}` row:\n{inspection_section}",
+        );
+    }
+
+    let state_section = &out[state..];
+    for sub in ["init", "use", "note"] {
+        assert!(
+            state_section.contains(&format!("  {sub} "))
+                || state_section.contains(&format!("  {sub}\n")),
+            "State section is missing `{sub}` row:\n{state_section}",
+        );
+    }
+
+    // `doctor` was folded into `loom check --check=<name>` and must not
+    // surface in the top-level help — its absence is part of the user
+    // contract (spec § Functional #1).
+    assert!(
+        !out.contains("\n  doctor "),
+        "`doctor` must not appear in `loom --help` output:\n{out}",
+    );
+}
+
 #[test]
 fn loom_init_help_snapshot() {
     insta::assert_snapshot!(loom_help(&["init"]));

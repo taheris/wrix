@@ -11,7 +11,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 
 use loom_agent::{ClaudeBackend, PiBackend};
 use loom_driver::agent::{AgentKind, LOOM_INSIDE_ENV, ProtocolError, SessionOutcome, SpawnConfig};
@@ -131,23 +131,20 @@ enum NoteAction {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Initialize the workspace (create `.wrapix/loom/` config + state DB).
-    #[command(next_help_heading = "Workspace")]
     Init {
         /// Drop and repopulate the state DB from `specs/*.md` and active beads.
         #[arg(long)]
         rebuild: bool,
     },
     /// Print the active spec, current molecule, and iteration counter.
-    #[command(next_help_heading = "Inspect")]
     Status,
     /// Set the active spec.
-    #[command(name = "use", next_help_heading = "Workspace")]
+    #[command(name = "use")]
     UseSpec {
         /// Spec label (matches `<workspace>/specs/<label>.md`).
         label: String,
     },
     /// Render (or tail) the most recent per-bead JSONL log.
-    #[command(next_help_heading = "Inspect")]
     Logs {
         /// Restrict the search to a specific bead id.
         #[arg(long, short = 'b', value_name = "ID")]
@@ -171,14 +168,12 @@ enum Command {
         path: bool,
     },
     /// Inspect spec annotations and tooling dependencies.
-    #[command(next_help_heading = "Inspect")]
     Spec {
         /// Print the unique nixpkgs names referenced by verify/judge tests.
         #[arg(long)]
         deps: bool,
     },
     /// Interactive spec interview (`-n <label>` new, `-u <label>` update).
-    #[command(next_help_heading = "Workflow")]
     Plan {
         /// New-spec interview for `<label>`.
         #[arg(short = 'n', value_name = "LABEL")]
@@ -193,7 +188,6 @@ enum Command {
         profile: Option<String>,
     },
     /// Per-bead execution loop. Continuous by default; `--once` exits after one bead.
-    #[command(next_help_heading = "Workflow")]
     Run {
         /// Process a single bead then exit (no auto-handoff to `loom check`).
         #[arg(long)]
@@ -228,14 +222,12 @@ enum Command {
         verbose: bool,
     },
     /// Post-loop reviewer + push gate.
-    #[command(next_help_heading = "Workflow")]
     Check {
         /// Spec label override (defaults to `current_spec`).
         #[arg(long, short = 's', value_name = "LABEL")]
         spec: Option<String>,
     },
     /// Resolve outstanding `loom:clarify` and `loom:blocked` beads.
-    #[command(next_help_heading = "Workflow")]
     Msg {
         /// Filter to a specific spec label.
         #[arg(long, short = 's', value_name = "LABEL")]
@@ -284,7 +276,6 @@ enum Command {
         chat: bool,
     },
     /// Decompose the active spec into beads (four-tier detection).
-    #[command(next_help_heading = "Workflow")]
     Todo {
         /// Spec label override (defaults to `current_spec`).
         #[arg(long, short = 's', value_name = "LABEL")]
@@ -294,13 +285,12 @@ enum Command {
         since: Option<String>,
     },
     /// Manage notes for a spec.
-    #[command(next_help_heading = "Workspace")]
     Note {
         #[command(subcommand)]
         action: NoteAction,
     },
     /// Audit spec criteria against test dispatchers (`[verify]` → stub-or-real).
-    #[command(next_help_heading = "Inspect")]
+    #[command(hide = true)]
     Doctor {
         /// Which audit to run. Currently only `criteria` (stub-or-real
         /// checks for `[verify](tests/loom-test.sh::test_X)` annotations).
@@ -337,6 +327,118 @@ impl Command {
     }
 }
 
+/// Subcommand groups rendered in `loom --help`, in spec order. Spec
+/// reference: `loom-harness.md` § Functional #1. Clap's
+/// `next_help_heading` applies to flags, not subcommands, so the binary
+/// regroups the auto-generated `Commands:` block instead.
+const HELP_GROUPS: &[(&str, &[&str])] = &[
+    ("Workflow", &["plan", "todo", "run", "check", "msg"]),
+    ("Inspection", &["status", "logs", "spec"]),
+    ("State", &["init", "use", "note"]),
+];
+
+/// Returns `true` when the raw process args request help for the *top-level*
+/// command (e.g. `loom --help`, `loom -h`, `loom help` with no further
+/// subcommand). Anything that names a subcommand first — including
+/// `loom run --help` or `loom help run` — returns `false` so clap handles
+/// the per-subcommand help unchanged.
+fn args_request_top_level_help(args: &[String]) -> bool {
+    let known_subcommands = [
+        "init", "status", "use", "logs", "spec", "plan", "run", "check", "msg", "todo", "note",
+        "doctor", "help",
+    ];
+    for (idx, arg) in args.iter().enumerate() {
+        if known_subcommands.contains(&arg.as_str()) {
+            return arg == "help" && idx == args.len() - 1;
+        }
+        if arg == "--help" || arg == "-h" {
+            return true;
+        }
+    }
+    false
+}
+
+/// Render `loom --help` with the spec-required Workflow / Inspection /
+/// State sections instead of clap's flat `Commands:` block. Reuses
+/// clap-rendered everything-else (about line, usage, options) so flag
+/// changes flow through automatically — only the subcommand listing is
+/// regrouped.
+fn print_grouped_help() {
+    use std::fmt::Write;
+    let mut cmd = Cli::command();
+    let default_help = cmd.render_help().to_string();
+
+    let grouped_names: Vec<&str> = HELP_GROUPS
+        .iter()
+        .flat_map(|(_, names)| names.iter().copied())
+        .collect();
+    let width = grouped_names
+        .iter()
+        .copied()
+        .chain(std::iter::once("help"))
+        .map(str::len)
+        .max()
+        .unwrap_or(0);
+
+    let mut grouped = String::new();
+    for (heading, names) in HELP_GROUPS {
+        let _ = writeln!(grouped, "{heading}:");
+        for name in *names {
+            let about = cmd
+                .get_subcommands()
+                .find(|s| s.get_name() == *name)
+                .and_then(|s| s.get_about().map(|d| d.to_string()))
+                .unwrap_or_default();
+            let _ = writeln!(grouped, "  {name:<width$}  {about}", width = width);
+        }
+        grouped.push('\n');
+    }
+    let help_about = cmd
+        .get_subcommands()
+        .find(|s| s.get_name() == "help")
+        .and_then(|s| s.get_about().map(|d| d.to_string()))
+        .unwrap_or_else(|| "Print this message or the help of the given subcommand(s)".to_string());
+    let _ = writeln!(
+        grouped,
+        "  {help:<width$}  {help_about}",
+        help = "help",
+        width = width
+    );
+
+    print!("{}", replace_commands_section(&default_help, &grouped));
+}
+
+/// Replace clap's auto-generated `Commands:` block in `help` with `grouped`.
+/// The block starts at the literal line `Commands:` and ends at the blank
+/// line that precedes the next top-level section (`Options:`, `Arguments:`,
+/// etc.) — or EOF if none follows.
+fn replace_commands_section(help: &str, grouped: &str) -> String {
+    let lines: Vec<&str> = help.split_inclusive('\n').collect();
+    let Some(start) = lines.iter().position(|l| *l == "Commands:\n") else {
+        return help.to_string();
+    };
+    let mut end = lines.len();
+    for i in (start + 1)..lines.len() {
+        let line = lines[i];
+        if !line.starts_with(' ') && !line.is_empty() && line.trim_end().ends_with(':') {
+            end = i;
+            while end > start + 1 && lines[end - 1].trim().is_empty() {
+                end -= 1;
+            }
+            break;
+        }
+    }
+    let mut out = String::new();
+    for l in &lines[..start] {
+        out.push_str(l);
+    }
+    out.push_str(grouped);
+    for l in &lines[end..] {
+        out.push_str(l);
+    }
+    out
+}
+
 fn main() -> ExitCode {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
@@ -345,6 +447,12 @@ fn main() -> ExitCode {
         )
         .with_writer(std::io::stderr)
         .try_init();
+
+    let raw_args: Vec<String> = std::env::args().skip(1).collect();
+    if args_request_top_level_help(&raw_args) {
+        print_grouped_help();
+        return ExitCode::SUCCESS;
+    }
 
     let cli = Cli::parse();
 
