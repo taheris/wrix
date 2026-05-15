@@ -161,12 +161,13 @@ fn display_width(s: &str) -> usize {
 /// finalize the pair with the same context. The spec calls this out
 /// explicitly as the `HashMap<ToolCallId, PendingToolCall>` that lets a
 /// `tool_call` + `tool_result` collapse into one rendered block with a
-/// duration computed from `envelope.ts_ms` deltas. The `tool`/`params`
-/// fields are reserved for per-tool body formatting in verbose mode
-/// (the spec's "Body (-v)" column); currently only `ts_ms` is read.
+/// duration computed from `envelope.ts_ms` deltas.
 #[derive(Debug, Clone)]
 struct PendingToolCall {
-    #[expect(dead_code, reason = "reserved for per-tool verbose body formatting")]
+    /// Builtin tool name (e.g. `"Bash"`, `"Edit"`). Drives per-tool body
+    /// rendering policy at `ToolResult` time — the spec's per-tool body
+    /// table varies the default-mode body by tool (e.g. Bash hides on
+    /// `exit == 0` but renders the first 10 lines on `exit != 0`).
     tool: String,
     #[expect(dead_code, reason = "reserved for per-tool verbose body formatting")]
     params: Value,
@@ -486,10 +487,11 @@ impl TerminalRenderer {
                     .buffered_overflow
                     .as_ref()
                     .is_some_and(|(buffered_id, _, _, _)| buffered_id == id);
-                let pair_duration = self
-                    .pending_calls
-                    .remove(id)
+                let pending = self.pending_calls.remove(id);
+                let pair_duration = pending
+                    .as_ref()
                     .map(|p| ts_ms_delta(p.ts_ms, envelope.ts_ms));
+                let tool_name = pending.as_ref().map(|p| p.tool.as_str()).unwrap_or("");
                 if matches_running {
                     let glyph = if *is_error { "✗" } else { "✓" };
                     self.finalize_running_with_glyph_dur(glyph, pair_duration)?;
@@ -517,7 +519,15 @@ impl TerminalRenderer {
                         self.out.flush()?;
                     }
                 }
-                if matches!(self.mode, RenderMode::Verbose) {
+                let render_body = match self.mode {
+                    RenderMode::Verbose => true,
+                    // Bash: hide on exit == 0 (is_error=false), render
+                    // first 10 lines on exit != 0 (is_error=true). All
+                    // other tools default to hidden in non-verbose mode.
+                    RenderMode::Default => tool_name == "Bash" && *is_error,
+                    _ => false,
+                };
+                if render_body {
                     let depth = self.indent_by_tool.get(id).copied().unwrap_or(0);
                     let indent: String = "  ".repeat(depth + 1);
                     let capped = tool_body::cap_body(output, self.bead_id.as_str(), id.as_str());
@@ -529,7 +539,7 @@ impl TerminalRenderer {
                         };
                         self.out.write_all(line.as_bytes())?;
                     }
-                    if *is_error {
+                    if *is_error && matches!(self.mode, RenderMode::Verbose) {
                         let marker = format!("{indent}[tool error]\n");
                         self.out.write_all(marker.as_bytes())?;
                     }
@@ -1137,11 +1147,11 @@ mod tests {
         );
     }
 
-    /// Default mode does NOT render `ToolResult` bodies — only the
-    /// `ToolCall` summary line. Pin this so verbose-only behavior
-    /// doesn't leak into the default render path.
+    /// Default mode hides the Bash body when `exit == 0` (is_error=false).
+    /// Per the spec's per-tool body table — a clean Bash invocation is
+    /// summary-cell only so the eye learns the shape.
     #[test]
-    fn default_mode_suppresses_tool_result_body() {
+    fn default_mode_hides_bash_body_on_success() {
         let out = capture(RenderMode::Default, false, false, |r| {
             r.render_event(&AgentEvent::ToolCall {
                 envelope: EventEnvelope::placeholder(),
@@ -1161,6 +1171,101 @@ mod tests {
         });
         assert!(out.contains("Bash"), "{out:?}");
         assert!(!out.contains("result body"), "{out:?}");
+    }
+
+    /// Default mode renders the Bash body when `exit != 0` (is_error=true),
+    /// capped at 10 lines with the standard recovery hint when the output
+    /// exceeds the cap. Pin both the kept-line set and the cap line.
+    #[test]
+    fn default_mode_renders_bash_body_on_error_capped_at_ten_lines() {
+        let big_body: String = (1..=15)
+            .map(|i| format!("output-line-{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let out = capture(RenderMode::Default, false, false, |r| {
+            r.render_event(&AgentEvent::ToolCall {
+                envelope: EventEnvelope::placeholder(),
+                id: ToolCallId::new("b1"),
+                tool: "Bash".into(),
+                params: json!({"command": "false"}),
+                parent_tool_call_id: None,
+            })
+            .expect("render call");
+            r.render_event(&AgentEvent::ToolResult {
+                envelope: EventEnvelope::placeholder(),
+                id: ToolCallId::new("b1"),
+                output: big_body,
+                is_error: true,
+            })
+            .expect("render result");
+        });
+        assert!(out.contains("output-line-1"), "{out:?}");
+        assert!(out.contains("output-line-10"), "{out:?}");
+        assert!(
+            !out.contains("output-line-11"),
+            "default Bash error body must cap at 10 lines: {out:?}",
+        );
+        assert!(out.contains("more lines"), "missing cap line: {out:?}");
+        assert!(
+            out.contains("loom logs -b wx-1 --tool b1"),
+            "cap line must reference the bead and tool call id: {out:?}",
+        );
+    }
+
+    /// Default mode renders the full Bash body when `exit != 0` and the
+    /// output is at or under the 10-line cap — no cap line is emitted.
+    #[test]
+    fn default_mode_renders_bash_body_on_error_short_output_no_cap_line() {
+        let body = "line1\nline2\nline3";
+        let out = capture(RenderMode::Default, false, false, |r| {
+            r.render_event(&AgentEvent::ToolCall {
+                envelope: EventEnvelope::placeholder(),
+                id: ToolCallId::new("b1"),
+                tool: "Bash".into(),
+                params: json!({"command": "false"}),
+                parent_tool_call_id: None,
+            })
+            .expect("render call");
+            r.render_event(&AgentEvent::ToolResult {
+                envelope: EventEnvelope::placeholder(),
+                id: ToolCallId::new("b1"),
+                output: body.into(),
+                is_error: true,
+            })
+            .expect("render result");
+        });
+        assert!(out.contains("line1"), "{out:?}");
+        assert!(out.contains("line3"), "{out:?}");
+        assert!(
+            !out.contains("more lines"),
+            "no cap line when body is at or below the 10-line cap: {out:?}",
+        );
+    }
+
+    /// Default mode keeps non-Bash error bodies hidden — only Bash gets
+    /// the "first 10 lines on exit != 0" treatment in this bead's scope.
+    /// Other tools' default-mode body policy lives in separate beads.
+    #[test]
+    fn default_mode_hides_non_bash_error_body() {
+        let out = capture(RenderMode::Default, false, false, |r| {
+            r.render_event(&AgentEvent::ToolCall {
+                envelope: EventEnvelope::placeholder(),
+                id: ToolCallId::new("r1"),
+                tool: "Read".into(),
+                params: json!({"file_path": "src/lib.rs"}),
+                parent_tool_call_id: None,
+            })
+            .expect("render call");
+            r.render_event(&AgentEvent::ToolResult {
+                envelope: EventEnvelope::placeholder(),
+                id: ToolCallId::new("r1"),
+                output: "file-contents".into(),
+                is_error: true,
+            })
+            .expect("render result");
+        });
+        assert!(out.contains("Read"), "{out:?}");
+        assert!(!out.contains("file-contents"), "{out:?}");
     }
 
     /// R4 — Renderer wraps `ToolCall` summary cells in OSC 8 hyperlinks

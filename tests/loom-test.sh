@@ -3529,6 +3529,17 @@ test_per_tool_summary_cells() {
     # H3 — per-tool summary cell formatters.
     cargo_run test -p loom-render --lib -- --nocapture --quiet \
         tool_body::tests
+    # H3 — Bash body default policy: hidden on exit==0, first 10 lines on
+    # exit!=0 with the standard cap line. Non-Bash bodies stay hidden in
+    # default mode.
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        renderer::tests::default_mode_hides_bash_body_on_success
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        renderer::tests::default_mode_renders_bash_body_on_error_capped_at_ten_lines
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        renderer::tests::default_mode_renders_bash_body_on_error_short_output_no_cap_line
+    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
+        renderer::tests::default_mode_hides_non_bash_error_body
 }
 test_plain_selected_on_non_tty() {
     cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
