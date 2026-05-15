@@ -19,7 +19,7 @@
 //! 5. on bead success observes the agent's own `bd close` — the driver
 //!    never closes a dispatched bead (closure is the agent's job per the
 //!    verdict-gate `bd-closed` observable);
-//! 6. on molecule completion (no more ready beads) execs `loom check` —
+//! 6. on molecule completion (no more ready beads) execs `loom review` —
 //!    continuous mode only.
 //!
 //! `--parallel N > 1` (worktree parallelism) lives in [`parallel`]. The

@@ -1,4 +1,4 @@
-//! `loom check` template: the post-epic reviewer prompt.
+//! `loom review` template: the LLM-judged rubric prompt.
 
 use askama::Template;
 use loom_driver::identifier::{MoleculeId, SpecLabel};
@@ -13,10 +13,10 @@ pub struct ReviewSource {
     pub body: String,
 }
 
-/// Context for `loom check` reviewing a completed molecule.
+/// Context for `loom review` reviewing a completed molecule.
 #[derive(Template)]
-#[template(path = "check.md", escape = "none")]
-pub struct CheckContext {
+#[template(path = "review.md", escape = "none")]
+pub struct ReviewContext {
     pub pinned_context: String,
     pub label: SpecLabel,
     pub spec_path: String,

@@ -11,12 +11,12 @@
 //! depending on `loom-driver` directly each time.
 
 pub mod agent;
-pub mod check;
 pub mod doctor;
 pub mod init;
 pub mod logs_cmd;
 pub mod msg;
 pub mod plan;
+pub mod review;
 pub mod run;
 pub mod spec;
 pub mod status;

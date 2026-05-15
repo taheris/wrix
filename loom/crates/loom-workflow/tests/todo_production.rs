@@ -98,8 +98,8 @@ fn seeded_state(
 /// — the rendered phase prompt now flows from `<scratch_dir>/prompt.txt`
 /// via post-compaction `repin.sh`, not from the `repin` field — and whose
 /// scratch dir holds a `prompt.txt` whose contents equal `initial_prompt`.
-/// Mirror of the `loom check` and `loom run` dispatch-shape tests
-/// (`src/check/production.rs`, `src/run/production.rs`).
+/// Mirror of the `loom review` and `loom run` dispatch-shape tests
+/// (`src/review/production.rs`, `src/run/production.rs`).
 #[tokio::test]
 async fn build_session_dispatches_rendered_todo_template_and_writes_prompt_txt() {
     let dir = tempfile::tempdir().unwrap();

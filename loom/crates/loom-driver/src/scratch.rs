@@ -40,7 +40,7 @@ const SCRATCH_SUBDIR: &str = ".wrapix/loom/scratch";
 pub fn resolve_scratch_key(phase: Phase, label: &SpecLabel, bead_id: Option<&BeadId>) -> String {
     match phase {
         Phase::Plan | Phase::Todo => label.as_str().to_string(),
-        Phase::Run | Phase::Check | Phase::Msg => {
+        Phase::Run | Phase::Check | Phase::Review | Phase::Msg => {
             bead_id.map_or_else(|| label.as_str().to_string(), |b| b.as_str().to_string())
         }
     }

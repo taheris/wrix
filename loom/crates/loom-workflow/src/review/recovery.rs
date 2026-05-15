@@ -95,8 +95,8 @@ pub fn resolve_recovery(cause: &RecoveryCause, iter: u32, max: u32) -> RecoveryR
 #[expect(clippy::panic, reason = "tests use panicking helpers")]
 mod tests {
     use super::*;
-    use crate::check::phase_verdict::{ReviewConcern, ReviewFlag};
-    use crate::check::verify_fail::VerifyFailure;
+    use crate::review::phase_verdict::{ReviewConcern, ReviewFlag};
+    use crate::review::verify_fail::VerifyFailure;
 
     fn verify_fail_cause() -> RecoveryCause {
         RecoveryCause::VerifyFail {

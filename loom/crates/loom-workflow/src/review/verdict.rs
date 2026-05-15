@@ -17,11 +17,11 @@ pub struct BeadSnapshot {
     pub new_bead_ids: Vec<BeadId>,
 }
 
-/// The four post-review branches `loom check` can take. The driver computes
+/// The four post-review branches `loom review` can take. The driver computes
 /// this enum, then runs the side effects: push, set loom:clarify, exec
 /// `loom run`, etc.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CheckVerdict {
+pub enum ReviewVerdict {
     /// No new beads + no `loom:blocked` + no `loom:clarify` → push code +
     /// beads.
     Clean,

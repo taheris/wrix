@@ -174,7 +174,7 @@ fn floor_char_boundary(s: &str, mut idx: usize) -> usize {
 #[expect(clippy::expect_used, reason = "tests use panicking helpers")]
 mod tests {
     use super::*;
-    use crate::check::phase_verdict::ReviewConcern;
+    use crate::review::phase_verdict::ReviewConcern;
 
     fn failure(path: &str, exit_code: i32, stderr: &str) -> VerifyFailure {
         VerifyFailure {

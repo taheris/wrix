@@ -166,6 +166,7 @@ mod tests {
             Phase::Todo,
             Phase::Run,
             Phase::Check,
+            Phase::Review,
             Phase::Msg,
         ] {
             assert_eq!(

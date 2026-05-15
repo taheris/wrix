@@ -209,6 +209,7 @@ post_result_grace_secs = 5
             Phase::Todo,
             Phase::Run,
             Phase::Check,
+            Phase::Review,
             Phase::Msg,
         ] {
             let from_spec_sel = from_spec.agent_for(phase).expect("agent_for");
@@ -366,6 +367,7 @@ agent.model_id = "deepseek-v3"
             Phase::Todo,
             Phase::Run,
             Phase::Check,
+            Phase::Review,
             Phase::Msg,
         ] {
             let sel = cfg.agent_for(phase).expect("agent_for");

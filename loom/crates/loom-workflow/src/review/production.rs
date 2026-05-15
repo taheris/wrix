@@ -1,4 +1,4 @@
-//! Production [`CheckController`] used by the `loom check` binary.
+//! Production [`ReviewController`] used by the `loom review` binary.
 //!
 //! Wires `BdClient` for spec-bead snapshots and clarify,
 //! `tokio::process::Command` shell-outs for `git push`, `beads-push`, and
@@ -36,15 +36,15 @@ use loom_driver::profile_manifest::ProfileImageManifest;
 use loom_driver::scratch::resolve_scratch_key;
 use loom_driver::state::StateDb;
 use loom_events::{AgentEvent, DriverKind, EnvelopeBuilder, Source};
-use loom_templates::check::CheckContext;
+use loom_templates::review::ReviewContext;
 use tokio::process::Command;
 use tracing::{info, warn};
 
 use super::context::{beads_summary, load_review_sources};
-use super::error::CheckError;
-use super::runner::{CheckController, ReviewOutcome};
+use super::error::ReviewError;
+use super::runner::{ReviewController, ReviewOutcome};
 
-pub struct ProductionCheckController<S, F>
+pub struct ProductionReviewController<S, F>
 where
     S: Fn(SpawnConfig) -> F + Send + Sync,
     F: std::future::Future<Output = Result<SessionOutcome, ProtocolError>> + Send,
@@ -62,13 +62,13 @@ where
     /// Phase log root + start timestamp. R7 (wx-r9tmc) — the verdict
     /// gate emits `push_gate_*` driver events into the same JSONL log
     /// file the reviewer agent writes to, so a replay can replay the
-    /// full check phase. Both writers compute the file path from
-    /// `(phase_log_root, label, "check", phase_log_when)`, which is
+    /// full review phase. Both writers compute the file path from
+    /// `(phase_log_root, label, "review", phase_log_when)`, which is
     /// deterministic — append-mode opens share one file.
     phase_log_root: Option<PathBuf>,
     phase_log_when: SystemTime,
-    /// Per-phase envelope builder. The check phase isn't bead-scoped,
-    /// so the envelope carries the synthetic `wx-check` bead id; the
+    /// Per-phase envelope builder. The review phase isn't bead-scoped,
+    /// so the envelope carries the synthetic `wx-review` bead id; the
     /// builder tracks `seq` across every `emit_driver_event` call so
     /// replay code can reorder events deterministically. Wrapped in
     /// `Mutex` because `EnvelopeBuilder`'s clock closure is `Send`
@@ -77,7 +77,7 @@ where
     envelope_builder: Mutex<Option<EnvelopeBuilder>>,
 }
 
-impl<S, F> ProductionCheckController<S, F>
+impl<S, F> ProductionReviewController<S, F>
 where
     S: Fn(SpawnConfig) -> F + Send + Sync,
     F: std::future::Future<Output = Result<SessionOutcome, ProtocolError>> + Send,
@@ -146,7 +146,7 @@ where
         cmd
     }
 
-    async fn build_review_prompt(&self) -> Result<String, CheckError> {
+    async fn build_review_prompt(&self) -> Result<String, ReviewError> {
         let beads = self
             .bd
             .list(ListOpts {
@@ -161,12 +161,12 @@ where
         let spec_path = format!("specs/{}.md", self.label.as_str());
         let (verify_sources, judge_rubrics) =
             load_review_sources(&self.workspace, &self.workspace.join(&spec_path))?;
-        let key = resolve_scratch_key(Phase::Check, &self.label, None);
+        let key = resolve_scratch_key(Phase::Review, &self.label, None);
         let scratchpad_path =
             loom_driver::scratch::ScratchSession::scratchpad_path_for(&self.workspace, &key)
                 .to_string_lossy()
                 .into_owned();
-        let ctx = CheckContext {
+        let ctx = ReviewContext {
             pinned_context: String::new(),
             label: self.label.clone(),
             spec_path,
@@ -184,19 +184,19 @@ where
     }
 }
 
-impl<S, F> CheckController for ProductionCheckController<S, F>
+impl<S, F> ReviewController for ProductionReviewController<S, F>
 where
     S: Fn(SpawnConfig) -> F + Send + Sync,
     F: std::future::Future<Output = Result<SessionOutcome, ProtocolError>> + Send,
 {
-    async fn run_review(&mut self) -> Result<ReviewOutcome, CheckError> {
+    async fn run_review(&mut self) -> Result<ReviewOutcome, ReviewError> {
         let prompt = self.build_review_prompt().await?;
         let entry = self.manifest.lookup(&self.phase_default)?;
-        let banner = format!("loom check @ {}", self.label);
-        let key = resolve_scratch_key(Phase::Check, &self.label, None);
+        let banner = format!("loom review @ {}", self.label);
+        let key = resolve_scratch_key(Phase::Review, &self.label, None);
         let scratch =
             loom_driver::scratch::ScratchSession::open(&self.workspace, &key, &prompt, &banner)
-                .map_err(|source| CheckError::Protocol(ProtocolError::Io(source)))?;
+                .map_err(|source| ReviewError::Protocol(ProtocolError::Io(source)))?;
         let mut env = Vec::new();
         set_loom_inside(&mut env);
         let spawn_config = SpawnConfig {
@@ -220,7 +220,7 @@ where
         info!(
             label = %self.label,
             image_ref = %spawn_config.image_ref,
-            "loom check: dispatching reviewer agent",
+            "loom review: dispatching reviewer agent",
         );
         let outcome = (self.spawn)(spawn_config).await;
         drop(scratch);
@@ -234,7 +234,7 @@ where
         }
     }
 
-    async fn list_spec_beads(&mut self) -> Result<Vec<Bead>, CheckError> {
+    async fn list_spec_beads(&mut self) -> Result<Vec<Bead>, ReviewError> {
         let beads = self
             .bd
             .list(ListOpts {
@@ -246,7 +246,7 @@ where
         Ok(beads)
     }
 
-    async fn iteration_count(&mut self) -> Result<u32, CheckError> {
+    async fn iteration_count(&mut self) -> Result<u32, ReviewError> {
         Ok(self
             .state
             .active_molecule(&self.label)?
@@ -254,23 +254,23 @@ where
             .unwrap_or(0))
     }
 
-    async fn set_iteration_count(&mut self, next: u32) -> Result<(), CheckError> {
+    async fn set_iteration_count(&mut self, next: u32) -> Result<(), ReviewError> {
         let mol = self
             .state
             .active_molecule(&self.label)?
-            .ok_or_else(|| CheckError::NoActiveMolecule(self.label.to_string()))?;
+            .ok_or_else(|| ReviewError::NoActiveMolecule(self.label.to_string()))?;
         self.state.set_iteration(&mol.id, next)?;
         Ok(())
     }
 
-    async fn reset_iteration_count(&mut self) -> Result<(), CheckError> {
+    async fn reset_iteration_count(&mut self) -> Result<(), ReviewError> {
         if let Some(mol) = self.state.active_molecule(&self.label)? {
             self.state.reset_iteration(&mol.id)?;
         }
         Ok(())
     }
 
-    async fn apply_clarify(&mut self, bead: &BeadId, reason: &str) -> Result<(), CheckError> {
+    async fn apply_clarify(&mut self, bead: &BeadId, reason: &str) -> Result<(), ReviewError> {
         self.bd
             .update(
                 bead,
@@ -284,27 +284,27 @@ where
         Ok(())
     }
 
-    async fn git_push(&mut self) -> Result<(), CheckError> {
+    async fn git_push(&mut self) -> Result<(), ReviewError> {
         let client = GitClient::open(&self.workspace)
-            .map_err(|e| CheckError::GitPushFailed(e.to_string()))?;
+            .map_err(|e| ReviewError::GitPushFailed(e.to_string()))?;
         client
             .push()
             .await
-            .map_err(|e| CheckError::GitPushFailed(e.to_string()))?;
+            .map_err(|e| ReviewError::GitPushFailed(e.to_string()))?;
         Ok(())
     }
 
-    async fn beads_push(&mut self) -> Result<(), CheckError> {
+    async fn beads_push(&mut self) -> Result<(), ReviewError> {
         let output = self.beads_push_command().output().await?;
         if !output.status.success() {
-            return Err(CheckError::BeadsPushFailed(
+            return Err(ReviewError::BeadsPushFailed(
                 String::from_utf8_lossy(&output.stderr).into_owned(),
             ));
         }
         Ok(())
     }
 
-    async fn exec_run(&mut self) -> Result<(), CheckError> {
+    async fn exec_run(&mut self) -> Result<(), ReviewError> {
         // Release the spec lock before spawning the child — `loom run`
         // acquires the same lock and would otherwise time out behind us.
         self.lock.take();
@@ -316,7 +316,7 @@ where
             .status()
             .await?;
         if !status.success() {
-            return Err(CheckError::RunHandoff(status.to_string()));
+            return Err(ReviewError::RunHandoff(status.to_string()));
         }
         Ok(())
     }
@@ -335,15 +335,15 @@ where
         let mut guard = match self.envelope_builder.lock() {
             Ok(g) => g,
             Err(_) => {
-                warn!("check controller: envelope builder mutex poisoned");
+                warn!("review controller: envelope builder mutex poisoned");
                 return;
             }
         };
         if guard.is_none() {
-            let synthetic_bead = match BeadId::new("wx-check") {
+            let synthetic_bead = match BeadId::new("wx-review") {
                 Ok(id) => id,
                 Err(e) => {
-                    warn!(error = %e, "check controller: synthetic bead id invalid");
+                    warn!(error = %e, "review controller: synthetic bead id invalid");
                     return;
                 }
             };
@@ -377,11 +377,11 @@ where
             payload,
         };
         let sink_result =
-            LogSink::open_phase_at(&logs_root, &self.label, "check", None, self.phase_log_when);
+            LogSink::open_phase_at(&logs_root, &self.label, "review", None, self.phase_log_when);
         match sink_result {
             Ok(mut sink) => {
                 if let Err(e) = sink.emit(&event) {
-                    warn!(error = %e, "check controller: emit driver event failed");
+                    warn!(error = %e, "review controller: emit driver event failed");
                 }
                 // Finish is idempotent — the agent-event sink (opened
                 // separately in run_review) reaches the same file and
@@ -389,7 +389,7 @@ where
                 let _ = sink.finish(BeadOutcome::Done);
             }
             Err(e) => {
-                warn!(error = %e, "check controller: open phase sink for driver event failed");
+                warn!(error = %e, "review controller: open phase sink for driver event failed");
             }
         }
     }
@@ -404,7 +404,7 @@ where
 )]
 mod tests {
     use super::*;
-    use crate::check::runner::CheckController;
+    use crate::review::runner::ReviewController;
     use loom_driver::identifier::MoleculeId;
     use loom_driver::state::ActiveMolecule;
     use std::ffi::OsStr;
@@ -454,10 +454,10 @@ mod tests {
 
     fn controller(
         workspace: PathBuf,
-    ) -> ProductionCheckController<NoopSpawn, Ready<Result<SessionOutcome, ProtocolError>>> {
+    ) -> ProductionReviewController<NoopSpawn, Ready<Result<SessionOutcome, ProtocolError>>> {
         let state = empty_state(&workspace);
         let manifest = stub_manifest(&workspace);
-        ProductionCheckController::new(
+        ProductionReviewController::new(
             BdClient::new(),
             SpecLabel::new("loom-harness"),
             PathBuf::from("/usr/bin/loom"),
@@ -473,9 +473,9 @@ mod tests {
         workspace: PathBuf,
         label: &str,
         state: Arc<StateDb>,
-    ) -> ProductionCheckController<NoopSpawn, Ready<Result<SessionOutcome, ProtocolError>>> {
+    ) -> ProductionReviewController<NoopSpawn, Ready<Result<SessionOutcome, ProtocolError>>> {
         let manifest = stub_manifest(&workspace);
-        ProductionCheckController::new(
+        ProductionReviewController::new(
             BdClient::new(),
             SpecLabel::new(label),
             PathBuf::from("/usr/bin/loom"),
@@ -536,7 +536,7 @@ mod tests {
         let mut ctrl = controller(dir.path().to_path_buf());
         let err = ctrl.set_iteration_count(1).await.unwrap_err();
         assert!(
-            matches!(err, CheckError::NoActiveMolecule(ref s) if s == "loom-harness"),
+            matches!(err, ReviewError::NoActiveMolecule(ref s) if s == "loom-harness"),
             "expected NoActiveMolecule(loom-harness), got {err:?}",
         );
     }
@@ -564,7 +564,7 @@ mod tests {
         seed_empty_spec(&workspace, "loom-harness");
         let state = empty_state(&workspace);
         let manifest = stub_manifest(&workspace);
-        let mut ctrl = ProductionCheckController::new(
+        let mut ctrl = ProductionReviewController::new(
             BdClient::new(),
             SpecLabel::new("loom-harness"),
             PathBuf::from("/usr/bin/loom"),
@@ -580,7 +580,7 @@ mod tests {
             },
         );
         let outcome = ctrl.run_review().await;
-        if let Err(CheckError::Bd(_)) = outcome {
+        if let Err(ReviewError::Bd(_)) = outcome {
             return;
         }
         assert!(
@@ -596,7 +596,7 @@ mod tests {
         seed_empty_spec(&workspace, "loom-harness");
         let state = empty_state(&workspace);
         let manifest = stub_manifest(&workspace);
-        let mut ctrl = ProductionCheckController::new(
+        let mut ctrl = ProductionReviewController::new(
             BdClient::new(),
             SpecLabel::new("loom-harness"),
             PathBuf::from("/usr/bin/loom"),
@@ -612,7 +612,7 @@ mod tests {
             },
         );
         let outcome = ctrl.run_review().await;
-        if let Err(CheckError::Bd(_)) = outcome {
+        if let Err(ReviewError::Bd(_)) = outcome {
             return;
         }
         match outcome {
@@ -629,7 +629,7 @@ mod tests {
     /// The review prompt must instruct the reviewer to walk
     /// `docs/style-rules.md` rule by rule and cite rule id + file/line for
     /// each violation. This is the load-bearing surface for style-rule
-    /// conformance — `loom check`'s mechanical audits cannot enforce the
+    /// conformance — `loom check`'s deterministic audits cannot enforce the
     /// prose rules, so the LLM-judged rubric is the only line of defence.
     #[tokio::test]
     async fn build_review_prompt_includes_style_rule_conformance_walkthrough() {
@@ -639,7 +639,7 @@ mod tests {
         seed_empty_spec(workspace, label);
         let state = empty_state(workspace);
         let manifest = stub_manifest(workspace);
-        let ctrl = ProductionCheckController::new(
+        let ctrl = ProductionReviewController::new(
             BdClient::new(),
             SpecLabel::new(label),
             PathBuf::from("/usr/bin/loom"),
@@ -651,7 +651,7 @@ mod tests {
         );
         let prompt = match ctrl.build_review_prompt().await {
             Ok(p) => p,
-            Err(CheckError::Bd(_)) => return,
+            Err(ReviewError::Bd(_)) => return,
             Err(e) => panic!("unexpected error: {e:?}"),
         };
         assert!(
@@ -707,7 +707,7 @@ mod tests {
         .unwrap();
         let state = empty_state(workspace);
         let manifest = stub_manifest(workspace);
-        let ctrl = ProductionCheckController::new(
+        let ctrl = ProductionReviewController::new(
             BdClient::new(),
             SpecLabel::new(label),
             PathBuf::from("/usr/bin/loom"),
@@ -719,7 +719,7 @@ mod tests {
         );
         let prompt = match ctrl.build_review_prompt().await {
             Ok(p) => p,
-            Err(CheckError::Bd(_)) => return,
+            Err(ReviewError::Bd(_)) => return,
             Err(e) => panic!("unexpected error: {e:?}"),
         };
         assert!(prompt.contains("VERIFY_BODY_MARKER"), "{prompt}");
@@ -728,14 +728,14 @@ mod tests {
         assert!(prompt.contains("tests/judges/alpha.sh"), "{prompt}");
     }
 
-    /// wx-hcolw.5 gate: `loom check` must dispatch with the rendered
-    /// `CheckContext` template — `# Post-Epic Review` heading, spec_path,
+    /// wx-hcolw.5 gate: `loom review` must dispatch with the rendered
+    /// `ReviewContext` template — `# Post-Epic Review` heading, spec_path,
     /// and scratchpad path all reach the agent prompt — and the same body
     /// must land in `<scratch_dir>/prompt.txt` so post-compaction
     /// `repin.sh` can re-emit the actual phase prompt. Mirror of the
     /// run-side test in `run/production.rs`.
     #[tokio::test]
-    async fn run_review_dispatches_rendered_check_template_and_writes_prompt_txt() {
+    async fn run_review_dispatches_rendered_review_template_and_writes_prompt_txt() {
         use std::sync::Mutex;
 
         let dir = tempfile::tempdir().unwrap();
@@ -748,7 +748,7 @@ mod tests {
         let captured_for_closure = Arc::clone(&captured);
         let prompt_seen: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let prompt_seen_inner = Arc::clone(&prompt_seen);
-        let mut ctrl = ProductionCheckController::new(
+        let mut ctrl = ProductionReviewController::new(
             BdClient::new(),
             SpecLabel::new(label),
             PathBuf::from("/usr/bin/loom"),
@@ -772,7 +772,7 @@ mod tests {
             },
         );
         let outcome = ctrl.run_review().await;
-        if let Err(CheckError::Bd(_)) = outcome {
+        if let Err(ReviewError::Bd(_)) = outcome {
             return;
         }
         outcome.expect("run_review ok");
@@ -803,7 +803,7 @@ mod tests {
         assert_eq!(written, cfg.initial_prompt);
     }
 
-    /// Regression: `exec_run` (the check → run handoff for auto-iterate)
+    /// Regression: `exec_run` (the review → run handoff for auto-iterate)
     /// must release the spec lock before spawning, so the `loom run` child
     /// can acquire it. Mirror of the run-side test in `run/production.rs`.
     #[tokio::test(flavor = "multi_thread")]
@@ -828,7 +828,7 @@ mod tests {
         std::fs::write(&stub, "#!/bin/sh\nexit 0\n").unwrap();
         std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-        let mut ctrl = ProductionCheckController::new(
+        let mut ctrl = ProductionReviewController::new(
             BdClient::new(),
             label.clone(),
             stub,

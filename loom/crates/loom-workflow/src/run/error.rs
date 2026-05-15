@@ -31,6 +31,6 @@ pub enum RunError {
     /// profile-image manifest dispatch failed
     Profile(#[from] ProfileError),
 
-    /// `loom check` handoff failed: {0}
-    CheckHandoff(String),
+    /// `loom review` handoff failed: {0}
+    ReviewHandoff(String),
 }

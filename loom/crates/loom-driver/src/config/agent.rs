@@ -47,6 +47,7 @@ pub enum Phase {
     Todo,
     Run,
     Check,
+    Review,
     Msg,
 }
 
@@ -57,6 +58,7 @@ impl Phase {
             Phase::Todo => "todo",
             Phase::Run => "run",
             Phase::Check => "check",
+            Phase::Review => "review",
             Phase::Msg => "msg",
         }
     }
@@ -157,6 +159,7 @@ mod tests {
             (Phase::Todo, "todo"),
             (Phase::Run, "run"),
             (Phase::Check, "check"),
+            (Phase::Review, "review"),
             (Phase::Msg, "msg"),
         ] {
             assert_eq!(

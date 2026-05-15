@@ -9,9 +9,9 @@
 use anyhow::Result;
 use askama::Template;
 use loom_driver::identifier::{BeadId, MoleculeId, SpecLabel};
-use loom_templates::check::{CheckContext, ReviewSource};
 use loom_templates::msg::{ClarifyBead, ClarifyOption, MsgContext};
 use loom_templates::plan::{PlanNewContext, PlanUpdateContext};
+use loom_templates::review::{ReviewContext, ReviewSource};
 use loom_templates::run::{PREVIOUS_FAILURE_MAX_LEN, PreviousFailure, RunContext};
 use loom_templates::todo::{TodoNewContext, TodoUpdateContext};
 
@@ -202,13 +202,13 @@ fn previous_failure_preserves_short_input() {
 }
 
 #[test]
-fn check_renders_review_context_fields() -> Result<()> {
+fn review_renders_review_context_fields() -> Result<()> {
     let verify_path = "tests/loom-test.sh";
     let verify_body = "test_review_inputs_include_judge_rubrics_signature() { :; }\n";
     let judge_path = "tests/judges/loom.sh";
     let judge_body = "judge_live_path_coverage_signature() { :; }\n";
 
-    let ctx = CheckContext {
+    let ctx = ReviewContext {
         pinned_context: PINNED_CONTEXT_BODY.to_string(),
         label: SpecLabel::new("loom-harness"),
         spec_path: "specs/loom-harness.md".to_string(),
@@ -253,8 +253,8 @@ fn check_renders_review_context_fields() -> Result<()> {
 /// require rule-id + file/line citations. This test pins the rubric's
 /// directives so a future refactor cannot silently drop them.
 #[test]
-fn check_renders_style_rule_conformance_walkthrough() -> Result<()> {
-    let ctx = CheckContext {
+fn review_renders_style_rule_conformance_walkthrough() -> Result<()> {
+    let ctx = ReviewContext {
         pinned_context: PINNED_CONTEXT_BODY.to_string(),
         label: SpecLabel::new("loom-harness"),
         spec_path: "specs/loom-harness.md".to_string(),

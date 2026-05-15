@@ -9,7 +9,7 @@
 //! path through `run_loop`:
 //!
 //! 1. `next_ready_bead` → `bd ready --label spec:<X>` → empty slice → `None`,
-//! 2. `RunMode::Once` exits cleanly without invoking `loom check`,
+//! 2. `RunMode::Once` exits cleanly without invoking `loom review`,
 //! 3. binary returns exit code 0.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -79,7 +79,7 @@ fn loom_run_once_against_empty_bd_exits_zero() {
         .arg("--once")
         .env("PATH", new_path)
         .env("LOOM_PROFILES_MANIFEST", &manifest_path)
-        // The exec_check path is gated behind RunMode::Continuous; on the
+        // The exec_review path is gated behind RunMode::Continuous; on the
         // empty-queue path we still set this so the binary can locate itself
         // if the loop ever changes shape.
         .env("LOOM_BIN", loom_bin)
@@ -105,8 +105,8 @@ fn loom_run_once_against_empty_bd_exits_zero() {
         "empty queue must mark the molecule complete. stdout={stdout}",
     );
     assert!(
-        stdout.contains("execed_check=false"),
-        "--once must NOT exec check. stdout={stdout}",
+        stdout.contains("execed_review=false"),
+        "--once must NOT exec review. stdout={stdout}",
     );
 }
 

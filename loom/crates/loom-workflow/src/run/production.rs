@@ -1,7 +1,7 @@
 //! Production [`AgentLoopController`] used by the `loom run` binary.
 //!
 //! Wires `BdClient` for bead lookup/close/clarify, a `tokio::process::Command`
-//! shell-out for `exec_check`, and a caller-provided dispatch closure for the
+//! shell-out for `exec_review`, and a caller-provided dispatch closure for the
 //! actual agent invocation. The closure pattern keeps backend selection
 //! (`PiBackend` vs `ClaudeBackend`) inside the binary's `dispatch` match —
 //! `loom-workflow` never sees the concrete backend types, mirroring the shape
@@ -35,7 +35,7 @@ use super::spawn::build_spawn_config_from_manifest;
 use crate::todo::ExitSignal;
 
 /// Wires the [`AgentLoopController`] trait against the real `BdClient`, a
-/// caller-provided agent dispatch closure, and a child `loom check` exec for
+/// caller-provided agent dispatch closure, and a child `loom review` exec for
 /// handoff.
 ///
 /// `manifest` / `cli_profile` / `phase_default` are the inputs the per-bead
@@ -63,7 +63,7 @@ where
     cli_profile: Option<ProfileName>,
     phase_default: ProfileName,
     spawn: S,
-    /// Spec lock dropped before exec'ing `loom check` so the child can take it.
+    /// Spec lock dropped before exec'ing `loom review` so the child can take it.
     lock: Option<LockGuard>,
 }
 
@@ -96,8 +96,8 @@ where
         }
     }
 
-    /// Hand the spec lock to the controller so `exec_check` can drop it
-    /// before spawning the `loom check` child (which acquires the same lock).
+    /// Hand the spec lock to the controller so `exec_review` can drop it
+    /// before spawning the `loom review` child (which acquires the same lock).
     pub fn with_handoff_lock(mut self, guard: LockGuard) -> Self {
         self.lock = Some(guard);
         self
@@ -230,19 +230,19 @@ where
         Ok(())
     }
 
-    async fn exec_check(&mut self) -> Result<(), RunError> {
-        // Release the spec lock before spawning the child — `loom check`
+    async fn exec_review(&mut self) -> Result<(), RunError> {
+        // Release the spec lock before spawning the child — `loom review`
         // acquires the same lock and would otherwise time out behind us.
         self.lock.take();
         let status = Command::new(&self.loom_bin)
             .current_dir(&self.workspace)
-            .arg("check")
+            .arg("review")
             .arg("-s")
             .arg(self.label.as_str())
             .status()
             .await?;
         if !status.success() {
-            return Err(RunError::CheckHandoff(status.to_string()));
+            return Err(RunError::ReviewHandoff(status.to_string()));
         }
         Ok(())
     }
@@ -574,13 +574,13 @@ mod tests {
     }
 
     /// Regression: `loom run` used to hold the spec lock for its whole
-    /// lifetime, so the `loom check` child it spawned at the molecule-complete
-    /// handoff timed out trying to acquire the same lock. `exec_check` must
+    /// lifetime, so the `loom review` child it spawned at the molecule-complete
+    /// handoff timed out trying to acquire the same lock. `exec_review` must
     /// drop the held [`LockGuard`] before spawning, leaving the kernel-level
     /// `flock(2)` available to the child. Verified end-to-end: after a stub
     /// child exits, the lock is reacquirable on a fresh attempt.
     #[tokio::test(flavor = "multi_thread")]
-    async fn exec_check_releases_lock_before_spawning_child() {
+    async fn exec_review_releases_lock_before_spawning_child() {
         use loom_driver::clock::SystemClock;
         use loom_driver::lock::LockManager;
         use std::os::unix::fs::PermissionsExt;
@@ -622,7 +622,7 @@ mod tests {
         )
         .with_handoff_lock(guard);
 
-        controller.exec_check().await.expect("exec_check ok");
+        controller.exec_review().await.expect("exec_review ok");
 
         // The child has exited and the controller's guard was dropped before
         // the spawn — the lock must be free. A short timeout keeps the test
@@ -631,6 +631,6 @@ mod tests {
         let _reacquired = mgr
             .acquire_spec_with_timeout_async(&label, &clock, Duration::from_millis(100))
             .await
-            .expect("lock must be reacquirable after exec_check");
+            .expect("lock must be reacquirable after exec_review");
     }
 }

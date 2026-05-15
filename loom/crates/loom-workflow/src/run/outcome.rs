@@ -47,7 +47,7 @@ pub enum BeadResult {
     /// the agent's responsibility per `specs/loom-harness.md`'s verdict-gate
     /// table, where `bd-closed` is an observable rather than a driver
     /// action. If the agent forgot to close on `LOOM_COMPLETE`, the next
-    /// `loom check` invocation routes that to `incomplete-signaling`
+    /// `loom review` invocation routes that to `incomplete-signaling`
     /// recovery.
     Done,
 

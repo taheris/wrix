@@ -59,7 +59,7 @@ impl LogSink {
     }
 
     /// Open a sink for a non-bead phase (`loom todo`, `loom plan`,
-    /// `loom check`). The path follows
+    /// `loom review`). The path follows
     /// `<logs_root>/<spec-label>/<phase>-<utc>.jsonl` so phase logs share the
     /// same per-spec directory tree as bead logs without colliding.
     ///

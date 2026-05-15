@@ -486,16 +486,16 @@ fn loom_run_once_writes_per_bead_jsonl_log() {
     );
 }
 
-/// `wx-g66xo` gate — `loom check` must write its phase log under
-/// `<workspace>/.wrapix/loom/logs/<spec>/check-<utc>.jsonl` (same spec
-/// section as the run gate). Before the wiring fix the production check
+/// `wx-g66xo` gate — `loom review` must write its phase log under
+/// `<workspace>/.wrapix/loom/logs/<spec>/review-<utc>.jsonl` (same spec
+/// section as the run gate). Before the wiring fix the production review
 /// controller passed `None` for the sink, so the reviewer agent's events
 /// were discarded. The bd stub returns one bead carrying `loom:clarify`
-/// so the post-snapshot diff yields `CheckVerdict::PushBlocked` and the gate
+/// so the post-snapshot diff yields `ReviewVerdict::PushBlocked` and the gate
 /// exits without touching `git push` / `beads-push` / `loom run` — keeping
 /// the test environment-independent.
 #[test]
-fn loom_check_writes_phase_jsonl_log() {
+fn loom_review_writes_phase_jsonl_log() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = dir.path();
     init_workspace_repo(workspace);
@@ -535,9 +535,9 @@ fn loom_check_writes_phase_jsonl_log() {
         "happy-path",
     );
 
-    // `loom:clarify` on the post-snapshot bead → CheckVerdict::PushBlocked →
-    // CheckResult::PushBlocked, no push gates fire.
-    let bead_json = r#"[{"id":"wx-checktest","title":"check gate bead","description":"","status":"open","priority":2,"issue_type":"task","labels":["spec:loom-agent","loom:clarify"]}]"#;
+    // `loom:clarify` on the post-snapshot bead → ReviewVerdict::PushBlocked →
+    // ReviewResult::PushBlocked, no push gates fire.
+    let bead_json = r#"[{"id":"wx-reviewtest","title":"review gate bead","description":"","status":"open","priority":2,"issue_type":"task","labels":["spec:loom-agent","loom:clarify"]}]"#;
     let bd_bin_dir = install_bd_bead_stub(workspace, bead_json);
 
     let path_var = std::env::var_os("PATH").unwrap_or_default();
@@ -551,7 +551,7 @@ fn loom_check_writes_phase_jsonl_log() {
         .arg(workspace)
         .arg("--agent")
         .arg("pi")
-        .arg("check")
+        .arg("review")
         .arg("-s")
         .arg("loom-agent")
         .env("PATH", new_path)
@@ -560,7 +560,7 @@ fn loom_check_writes_phase_jsonl_log() {
         .env("LOOM_PROFILES_MANIFEST", &manifest_path)
         .env("XDG_STATE_HOME", workspace.join(".loom-test-state"))
         // Bypass the nested-loom guard so cargo test inside a loom container
-        // still reaches the check dispatch path under test.
+        // still reaches the review dispatch path under test.
         .env_remove("LOOM_INSIDE")
         .output()
         .expect("spawn loom");
@@ -569,13 +569,13 @@ fn loom_check_writes_phase_jsonl_log() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         output.status.success(),
-        "loom check must exit 0 against the bd + wrapix stubs. stdout={stdout} stderr={stderr}",
+        "loom review must exit 0 against the bd + wrapix stubs. stdout={stdout} stderr={stderr}",
     );
 
     let logs_dir = workspace.join(".wrapix/loom/logs/loom-agent");
     assert!(
         logs_dir.is_dir(),
-        "phase log directory must exist after `loom check`: {}\nstdout={stdout}\nstderr={stderr}",
+        "phase log directory must exist after `loom review`: {}\nstdout={stdout}\nstderr={stderr}",
         logs_dir.display(),
     );
     let entries: Vec<_> = std::fs::read_dir(&logs_dir)
@@ -586,13 +586,13 @@ fn loom_check_writes_phase_jsonl_log() {
         .filter(|p| {
             p.file_stem()
                 .and_then(|s| s.to_str())
-                .is_some_and(|s| s.starts_with("check-"))
+                .is_some_and(|s| s.starts_with("review-"))
         })
         .collect();
     assert_eq!(
         entries.len(),
         1,
-        "exactly one phase JSONL file must appear at `<logs>/loom-agent/check-*.jsonl`: got {entries:?}",
+        "exactly one phase JSONL file must appear at `<logs>/loom-agent/review-*.jsonl`: got {entries:?}",
     );
 
     let body = std::fs::read_to_string(&entries[0]).expect("read log");

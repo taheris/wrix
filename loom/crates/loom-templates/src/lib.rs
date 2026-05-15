@@ -8,8 +8,8 @@
 //! `existing_tasks`) is wrapped in `<agent-output>...</agent-output>` markers
 //! in the template bodies as a best-effort prompt-injection mitigation.
 
-pub mod check;
 pub mod msg;
 pub mod plan;
+pub mod review;
 pub mod run;
 pub mod todo;

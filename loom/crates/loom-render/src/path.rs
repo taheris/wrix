@@ -47,7 +47,7 @@ pub fn bead_log_path(
 /// Resolve the per-phase JSONL log path under
 /// `<logs_root>/<spec-label>/<phase>-<utc-timestamp>.jsonl`.
 ///
-/// `loom todo`, `loom plan`, and `loom check` operate against a spec rather
+/// `loom todo`, `loom plan`, and `loom review` operate against a spec rather
 /// than a single bead, so their event streams live alongside per-bead logs
 /// under the same `<spec-label>/` directory but use the phase name as the
 /// file-stem prefix. The function is pure: callers handle directory creation

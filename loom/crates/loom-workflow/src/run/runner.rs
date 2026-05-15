@@ -8,7 +8,7 @@ use super::retry::{RetryDecision, RetryPolicy};
 
 /// Loop-termination policy for `loom run`. `Continuous` is the default — the
 /// loop pulls beads until the molecule is complete, then hands off to
-/// `loom check`. `Once` exits after the first bead.
+/// `loom review`. `Once` exits after the first bead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunMode {
     Once,
@@ -43,8 +43,8 @@ pub struct RunSummary {
     pub beads_blocked: u32,
     /// `bd ready` returned no candidate, signalling the molecule is complete.
     pub molecule_complete: bool,
-    /// `loom check` was exec'd (continuous mode + molecule complete).
-    pub execed_check: bool,
+    /// `loom review` was exec'd (continuous mode + molecule complete).
+    pub execed_review: bool,
 }
 
 /// Side-effect surface the [`run_loop`] driver depends on.
@@ -58,7 +58,7 @@ pub struct RunSummary {
 ///   tee `AgentEvent` stream into `LogSink`, parse exit signal
 /// - `apply_clarify` → `BdClient::update --add-label loom:clarify --notes <q>`
 /// - `apply_blocked` → `BdClient::update --add-label loom:blocked --notes <cause>`
-/// - `exec_check` → `tokio::process::Command::new("loom").arg("check")…`
+/// - `exec_review` → `tokio::process::Command::new("loom").arg("review")…`
 ///
 /// **No `close_bead`.** `bd close` is the agent's responsibility, not the
 /// driver's, per `specs/loom-harness.md`'s verdict-gate table where
@@ -101,8 +101,8 @@ pub trait AgentLoopController: Send {
         error: &str,
     ) -> impl std::future::Future<Output = Result<(), RunError>> + Send;
 
-    /// Hand off to `loom check` on molecule completion (continuous mode).
-    fn exec_check(&mut self) -> impl std::future::Future<Output = Result<(), RunError>> + Send;
+    /// Hand off to `loom review` on molecule completion (continuous mode).
+    fn exec_review(&mut self) -> impl std::future::Future<Output = Result<(), RunError>> + Send;
 
     /// Emit a driver-side event into the controller's event sink. The
     /// run loop fires `retry_dispatch` here when it re-dispatches a bead
@@ -132,7 +132,7 @@ pub const AGENT_BLOCKED_CAUSE: &str = "agent-blocked";
 ///
 /// - `mode == Once` and one bead finished (success / clarify / blocked), or
 /// - `mode == Continuous` and `next_ready_bead` returned `None` (molecule
-///   complete) — `exec_check` is invoked before returning.
+///   complete) — `exec_review` is invoked before returning.
 ///
 /// `infra_retries_used` is driver-memory only: it lives on the stack of
 /// this single `run_loop` invocation and is **not** persisted. A new
@@ -151,8 +151,8 @@ pub async fn run_loop<C: AgentLoopController>(
             None => {
                 summary.molecule_complete = true;
                 if matches!(mode, RunMode::Continuous) {
-                    controller.exec_check().await?;
-                    summary.execed_check = true;
+                    controller.exec_review().await?;
+                    summary.execed_review = true;
                 }
                 break;
             }
@@ -165,7 +165,7 @@ pub async fn run_loop<C: AgentLoopController>(
             BeadResult::Done => {
                 // No driver-side `bd close`. The agent owns closure (per the
                 // verdict-gate table's `bd-closed` observable); if it
-                // forgot to call `bd close` on `LOOM_COMPLETE`, `loom check`
+                // forgot to call `bd close` on `LOOM_COMPLETE`, `loom review`
                 // routes that to `incomplete-signaling` recovery on its
                 // next walk.
             }
@@ -273,7 +273,7 @@ mod tests {
     use std::collections::VecDeque;
 
     /// Capturing fake controller. Drives [`run_loop`] without touching real
-    /// bd / agent / check binaries.
+    /// bd / agent / review binaries.
     ///
     /// `closed` is deliberately absent: the driver no longer calls
     /// `bd close` on dispatched beads (closure is the agent's
@@ -286,7 +286,7 @@ mod tests {
         run_calls: Vec<(BeadId, Option<String>)>,
         clarified: Vec<(BeadId, String)>,
         blocked: Vec<(BeadId, String, String)>,
-        check_calls: u32,
+        review_calls: u32,
         driver_events: Vec<(String, String, serde_json::Value)>,
     }
 
@@ -323,8 +323,8 @@ mod tests {
             Ok(())
         }
 
-        async fn exec_check(&mut self) -> Result<(), RunError> {
-            self.check_calls += 1;
+        async fn exec_review(&mut self) -> Result<(), RunError> {
+            self.review_calls += 1;
             Ok(())
         }
 
@@ -367,7 +367,7 @@ mod tests {
         // Done is verified by exclusion: not clarified, not blocked.
         assert!(c.clarified.is_empty());
         assert!(c.blocked.is_empty());
-        assert_eq!(c.check_calls, 0, "once mode never execs check");
+        assert_eq!(c.review_calls, 0, "once mode never execs review");
         // Second bead remains in the queue; run_loop did not pull it.
         assert_eq!(c.ready_queue.len(), 1);
         Ok(())
@@ -390,29 +390,29 @@ mod tests {
         assert!(c.clarified.is_empty());
         assert!(c.blocked.is_empty());
         assert!(summary.molecule_complete);
-        assert!(summary.execed_check);
+        assert!(summary.execed_review);
         Ok(())
     }
 
     #[tokio::test]
-    async fn continuous_execs_check_on_molecule_complete() -> Result<(), RunError> {
-        // Empty ready queue → first iteration sees None → exec check.
+    async fn continuous_execs_review_on_molecule_complete() -> Result<(), RunError> {
+        // Empty ready queue → first iteration sees None → exec review.
         let mut c = FakeController::default();
         let summary = run_loop(&mut c, RunMode::Continuous, RetryPolicy::default()).await?;
         assert_eq!(summary.beads_processed, 0);
         assert!(summary.molecule_complete);
-        assert!(summary.execed_check);
-        assert_eq!(c.check_calls, 1);
+        assert!(summary.execed_review);
+        assert_eq!(c.review_calls, 1);
         Ok(())
     }
 
     #[tokio::test]
-    async fn once_mode_does_not_exec_check_on_empty_queue() -> Result<(), RunError> {
+    async fn once_mode_does_not_exec_review_on_empty_queue() -> Result<(), RunError> {
         let mut c = FakeController::default();
         let summary = run_loop(&mut c, RunMode::Once, RetryPolicy::default()).await?;
         assert!(summary.molecule_complete);
-        assert!(!summary.execed_check, "once mode never execs check");
-        assert_eq!(c.check_calls, 0);
+        assert!(!summary.execed_review, "once mode never execs review");
+        assert_eq!(c.review_calls, 0);
         Ok(())
     }
 

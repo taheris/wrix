@@ -23,7 +23,7 @@
 use loom_driver::bd::Bead;
 use loom_driver::identifier::{BeadId, MoleculeId};
 
-use super::error::CheckError;
+use super::error::ReviewError;
 
 /// Cause string written to `bd update --notes` when the verdict gate
 /// refuses to spawn a fix-up bead because the originating bead is itself
@@ -79,20 +79,20 @@ pub trait FixupContext: Send {
     fn show_origin(
         &mut self,
         origin: &BeadId,
-    ) -> impl std::future::Future<Output = Result<Bead, CheckError>> + Send;
+    ) -> impl std::future::Future<Output = Result<Bead, ReviewError>> + Send;
 
     fn create_and_bond(
         &mut self,
         molecule: &MoleculeId,
         request: FixupRequest,
-    ) -> impl std::future::Future<Output = Result<BeadId, CheckError>> + Send;
+    ) -> impl std::future::Future<Output = Result<BeadId, ReviewError>> + Send;
 
     fn apply_blocked(
         &mut self,
         bead: &BeadId,
         cause: &str,
         detail: &str,
-    ) -> impl std::future::Future<Output = Result<(), CheckError>> + Send;
+    ) -> impl std::future::Future<Output = Result<(), ReviewError>> + Send;
 }
 
 /// Spawn a fix-up bead under the verdict gate's atomic-bond invariant.
@@ -110,7 +110,7 @@ pub async fn spawn_fixup_bead<C: FixupContext>(
     ctx: &mut C,
     origin: &BeadId,
     request: FixupRequest,
-) -> Result<FixupOutcome, CheckError> {
+) -> Result<FixupOutcome, ReviewError> {
     let bead = ctx.show_origin(origin).await?;
     let Some(molecule_parent) = bead.parent.clone() else {
         let detail = format!(
@@ -154,18 +154,18 @@ mod tests {
     }
 
     impl FixupContext for FakeContext {
-        async fn show_origin(&mut self, origin: &BeadId) -> Result<Bead, CheckError> {
+        async fn show_origin(&mut self, origin: &BeadId) -> Result<Bead, ReviewError> {
             self.origins
                 .get(origin.as_str())
                 .cloned()
-                .ok_or_else(|| CheckError::ReviewIncomplete(format!("no origin {origin}")))
+                .ok_or_else(|| ReviewError::ReviewIncomplete(format!("no origin {origin}")))
         }
 
         async fn create_and_bond(
             &mut self,
             molecule: &MoleculeId,
             request: FixupRequest,
-        ) -> Result<BeadId, CheckError> {
+        ) -> Result<BeadId, ReviewError> {
             self.create_calls.push((molecule.clone(), request));
             Ok(self
                 .next_ids
@@ -178,7 +178,7 @@ mod tests {
             bead: &BeadId,
             cause: &str,
             detail: &str,
-        ) -> Result<(), CheckError> {
+        ) -> Result<(), ReviewError> {
             self.blocked_calls
                 .push((bead.clone(), cause.to_string(), detail.to_string()));
             Ok(())

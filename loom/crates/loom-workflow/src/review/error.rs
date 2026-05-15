@@ -9,16 +9,16 @@ use loom_driver::state::StateError;
 
 use crate::spec::SpecError;
 
-/// Errors raised by the `loom check` driver.
+/// Errors raised by the `loom review` driver.
 #[derive(Debug, Display, Error)]
-pub enum CheckError {
+pub enum ReviewError {
     /// agent backend protocol failure
     Protocol(#[from] ProtocolError),
 
     /// bd CLI failure
     Bd(#[from] BdError),
 
-    /// rendering the check.md template failed
+    /// rendering the review.md template failed
     Render(#[from] askama::Error),
 
     /// log sink failure
@@ -48,7 +48,7 @@ pub enum CheckError {
     /// profile-image manifest dispatch failed
     Profile(#[from] ProfileError),
 
-    /// no active molecule for spec {0} — run `loom todo` before `loom check`
+    /// no active molecule for spec {0} — run `loom todo` before `loom review`
     NoActiveMolecule(String),
 
     /// failed to load `[verify]`/`[judge]` sources for review prompt

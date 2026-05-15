@@ -3,7 +3,7 @@
 pub const DEFAULT_MAX_ITERATIONS: u32 = 3;
 
 /// Bound on the run/check auto-iteration loop. After `max` unsuccessful
-/// reviews (each creating fix-up beads without a clarify), `loom check`
+/// reviews (each creating fix-up beads without a clarify), `loom review`
 /// escalates the newest fix-up bead to `loom:clarify` instead of looping.
 #[derive(Debug, Clone, Copy)]
 pub struct IterationCap {

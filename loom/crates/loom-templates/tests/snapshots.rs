@@ -10,9 +10,9 @@
 
 use askama::Template;
 use loom_driver::identifier::{BeadId, MoleculeId, SpecLabel};
-use loom_templates::check::{CheckContext, ReviewSource};
 use loom_templates::msg::{ClarifyBead, ClarifyOption, MsgContext};
 use loom_templates::plan::{PlanNewContext, PlanUpdateContext};
+use loom_templates::review::{ReviewContext, ReviewSource};
 use loom_templates::run::{PreviousFailure, RunContext};
 use loom_templates::todo::{TodoNewContext, TodoUpdateContext};
 
@@ -100,8 +100,8 @@ fn run_snapshot() {
 }
 
 #[test]
-fn check_snapshot() {
-    let ctx = CheckContext {
+fn review_snapshot() {
+    let ctx = ReviewContext {
         pinned_context: PINNED_CONTEXT_BODY.to_string(),
         label: SpecLabel::new("loom-harness"),
         spec_path: "specs/loom-harness.md".to_string(),

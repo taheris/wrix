@@ -1323,7 +1323,7 @@ test_crash_releases_lock() {
 # `loom-workflow/src/run/`. Sharing the cargo binary keeps verify and
 # `cargo test` exercising the same code paths. The driver is exercised via
 # the `AgentLoopController` trait so the tests never need a real container,
-# bd binary, or `loom check` exec.
+# bd binary, or `loom review` exec.
 #-----------------------------------------------------------------------------
 run_cargo_test() {
     cargo_run test -p loom-workflow --lib "$1" -- --exact --nocapture --quiet
@@ -1331,7 +1331,7 @@ run_cargo_test() {
 
 #-----------------------------------------------------------------------------
 # test_run_continuous — continuous mode pulls beads until `next_ready_bead`
-# returns `None`, closes each on success, and execs `loom check` exactly once
+# returns `None`, closes each on success, and execs `loom review` exactly once
 # at molecule completion.
 #-----------------------------------------------------------------------------
 test_run_continuous() {
@@ -1341,11 +1341,11 @@ test_run_continuous() {
 
 #-----------------------------------------------------------------------------
 # test_run_once — `--once` processes a single bead then returns; subsequent
-# ready beads remain in the queue and `loom check` is never invoked.
+# ready beads remain in the queue and `loom review` is never invoked.
 #-----------------------------------------------------------------------------
 test_run_once() {
     run_cargo_test run::runner::tests::once_mode_processes_single_bead
-    run_cargo_test run::runner::tests::once_mode_does_not_exec_check_on_empty_queue
+    run_cargo_test run::runner::tests::once_mode_does_not_exec_review_on_empty_queue
 }
 
 #-----------------------------------------------------------------------------
@@ -1378,12 +1378,12 @@ test_run_retry_with_context() {
 }
 
 #-----------------------------------------------------------------------------
-# test_run_execs_check — molecule completion in continuous mode triggers
-# exactly one `loom check` exec; once mode never does.
+# test_run_execs_review — molecule completion in continuous mode triggers
+# exactly one `loom review` exec; once mode never does.
 #-----------------------------------------------------------------------------
 test_run_execs_review() {
-    run_cargo_test run::runner::tests::continuous_execs_check_on_molecule_complete
-    run_cargo_test run::runner::tests::once_mode_does_not_exec_check_on_empty_queue
+    run_cargo_test run::runner::tests::continuous_execs_review_on_molecule_complete
+    run_cargo_test run::runner::tests::once_mode_does_not_exec_review_on_empty_queue
 }
 
 #-----------------------------------------------------------------------------
@@ -1479,9 +1479,9 @@ test_parallel_conflict_preserves_worktree() {
 #-----------------------------------------------------------------------------
 
 #-----------------------------------------------------------------------------
-# loom check / loom msg — same dispatch pattern as run: each function pins one
-# or more pure unit tests under `loom-workflow::{check,msg}`. The push-gate /
-# auto-iterate decision logic is exercised through the `CheckController` trait
+# loom review / loom msg — same dispatch pattern as run: each function pins one
+# or more pure unit tests under `loom-workflow::{review,msg}`. The push-gate /
+# auto-iterate decision logic is exercised through the `ReviewController` trait
 # under a `FakeController`, so no real container, bd binary, or `git push` is
 # spawned by these tests.
 #-----------------------------------------------------------------------------
@@ -1499,12 +1499,12 @@ msg_cargo_test() {
 # stops the gate without pushing.
 #-----------------------------------------------------------------------------
 test_review_push_gate() {
-    check_cargo_test check::runner::tests::clean_review_pushes_and_resets_counter
-    check_cargo_test check::runner::tests::clarify_present_stops_without_pushing
-    check_cargo_test check::runner::tests::pre_existing_clarify_blocks_push_even_when_no_new_beads
-    check_cargo_test check::production::tests::beads_push_argv_invokes_beads_push_not_bd_dolt_push
-    check_cargo_test check::production::tests::run_review_translates_zero_exit_into_complete
-    check_cargo_test check::production::tests::run_review_translates_nonzero_exit_into_incomplete_with_code
+    check_cargo_test review::runner::tests::clean_review_pushes_and_resets_counter
+    check_cargo_test review::runner::tests::clarify_present_stops_without_pushing
+    check_cargo_test review::runner::tests::pre_existing_clarify_blocks_push_even_when_no_new_beads
+    check_cargo_test review::production::tests::beads_push_argv_invokes_beads_push_not_bd_dolt_push
+    check_cargo_test review::production::tests::run_review_translates_zero_exit_into_complete
+    check_cargo_test review::production::tests::run_review_translates_nonzero_exit_into_incomplete_with_code
 }
 
 #-----------------------------------------------------------------------------
@@ -1513,14 +1513,14 @@ test_review_push_gate() {
 # newest fix-up bead to `ralph:clarify` instead of looping forever.
 #-----------------------------------------------------------------------------
 test_review_auto_iterate() {
-    check_cargo_test check::iteration::tests::default_cap_matches_spec
-    check_cargo_test check::iteration::tests::is_exhausted_true_at_or_above_cap
-    check_cargo_test check::runner::tests::fix_up_beads_under_cap_auto_iterate
-    check_cargo_test check::runner::tests::iteration_cap_escalates_newest_fix_up_to_clarify
-    check_cargo_test check::production::tests::iteration_counter_round_trips_through_state_db
-    check_cargo_test check::production::tests::iteration_count_is_zero_when_no_active_molecule
-    check_cargo_test check::production::tests::set_iteration_errors_when_no_active_molecule
-    check_cargo_test check::production::tests::reset_iteration_is_no_op_when_no_active_molecule
+    check_cargo_test review::iteration::tests::default_cap_matches_spec
+    check_cargo_test review::iteration::tests::is_exhausted_true_at_or_above_cap
+    check_cargo_test review::runner::tests::fix_up_beads_under_cap_auto_iterate
+    check_cargo_test review::runner::tests::iteration_cap_escalates_newest_fix_up_to_clarify
+    check_cargo_test review::production::tests::iteration_counter_round_trips_through_state_db
+    check_cargo_test review::production::tests::iteration_count_is_zero_when_no_active_molecule
+    check_cargo_test review::production::tests::set_iteration_errors_when_no_active_molecule
+    check_cargo_test review::production::tests::reset_iteration_is_no_op_when_no_active_molecule
 }
 
 #-----------------------------------------------------------------------------
@@ -3063,83 +3063,83 @@ test_nested_loom_guard_allows_readonly() {
 
 # Verdict Gate
 test_verdict_gate_mechanical_signals() {
-    check_cargo_test check::phase_verdict::tests::recovery_cause_labels_match_spec_strings
-    check_cargo_test check::phase_verdict::tests::complete_clean_routes_to_done
+    check_cargo_test review::phase_verdict::tests::recovery_cause_labels_match_spec_strings
+    check_cargo_test review::phase_verdict::tests::complete_clean_routes_to_done
 }
 test_gate_loom_blocked_marker() {
-    check_cargo_test check::phase_verdict::tests::blocked_marker_routes_to_blocked_with_reason
+    check_cargo_test review::phase_verdict::tests::blocked_marker_routes_to_blocked_with_reason
     cargo_run test -p loom --test marker_gate -- --test-threads=1 \
         loom_run_once_routes_blocked_marker_to_label_and_leaves_bead_open
 }
 test_gate_loom_clarify_marker() {
-    check_cargo_test check::phase_verdict::tests::clarify_marker_routes_to_clarify_with_question
+    check_cargo_test review::phase_verdict::tests::clarify_marker_routes_to_clarify_with_question
     cargo_run test -p loom --test marker_gate -- --test-threads=1 \
         loom_run_once_routes_clarify_marker_to_label_and_leaves_bead_open
 }
 test_gate_swallowed_marker() {
-    check_cargo_test check::phase_verdict::tests::missing_marker_routes_to_swallowed_marker_recovery
+    check_cargo_test review::phase_verdict::tests::missing_marker_routes_to_swallowed_marker_recovery
 }
 test_gate_incomplete_signaling() {
-    check_cargo_test check::phase_verdict::tests::complete_without_bd_closed_routes_to_incomplete_signaling
-    check_cargo_test check::phase_verdict::tests::noop_without_bd_closed_routes_to_incomplete_signaling
+    check_cargo_test review::phase_verdict::tests::complete_without_bd_closed_routes_to_incomplete_signaling
+    check_cargo_test review::phase_verdict::tests::noop_without_bd_closed_routes_to_incomplete_signaling
 }
 test_gate_zero_progress() {
-    check_cargo_test check::phase_verdict::tests::complete_with_empty_diff_routes_to_zero_progress
+    check_cargo_test review::phase_verdict::tests::complete_with_empty_diff_routes_to_zero_progress
 }
 test_gate_loom_noop_empty_diff() {
-    check_cargo_test check::phase_verdict::tests::noop_with_empty_diff_and_clean_review_is_done_not_zero_progress
-    check_cargo_test check::phase_verdict::tests::noop_with_non_empty_diff_and_clean_review_is_done
+    check_cargo_test review::phase_verdict::tests::noop_with_empty_diff_and_clean_review_is_done_not_zero_progress
+    check_cargo_test review::phase_verdict::tests::noop_with_non_empty_diff_and_clean_review_is_done
 }
 test_gate_runs_all_verify_scripts() {
-    check_cargo_test check::phase_verdict::tests::complete_with_verify_fail_routes_to_verify_fail
-    check_cargo_test check::phase_verdict::tests::noop_with_verify_fail_routes_to_verify_fail
-    check_cargo_test check::phase_verdict::tests::verify_fail_carries_every_failure_block_for_previous_failure
+    check_cargo_test review::phase_verdict::tests::complete_with_verify_fail_routes_to_verify_fail
+    check_cargo_test review::phase_verdict::tests::noop_with_verify_fail_routes_to_verify_fail
+    check_cargo_test review::phase_verdict::tests::verify_fail_carries_every_failure_block_for_previous_failure
 }
 test_gate_verify_fail_collects_all() {
-    check_cargo_test check::phase_verdict::tests::verify_fail_carries_every_failure_block_for_previous_failure
-    check_cargo_test check::verify_fail::tests::multiple_failures_all_within_budget_are_all_included
-    check_cargo_test check::verify_fail::tests::later_failures_truncate_when_budget_exhausted
-    check_cargo_test check::verify_fail::tests::fully_omitted_failures_are_counted_in_marker
-    check_cargo_test check::verify_fail::tests::budget_is_respected_within_marker_overhead
+    check_cargo_test review::phase_verdict::tests::verify_fail_carries_every_failure_block_for_previous_failure
+    check_cargo_test review::verify_fail::tests::multiple_failures_all_within_budget_are_all_included
+    check_cargo_test review::verify_fail::tests::later_failures_truncate_when_budget_exhausted
+    check_cargo_test review::verify_fail::tests::fully_omitted_failures_are_counted_in_marker
+    check_cargo_test review::verify_fail::tests::budget_is_respected_within_marker_overhead
 }
 test_review_runs_on_verify_fail() {
-    check_cargo_test check::phase_verdict::tests::complete_with_verify_fail_routes_to_verify_fail
-    check_cargo_test check::phase_verdict::tests::complete_with_review_flag_routes_to_review_flag
-    check_cargo_test check::phase_verdict::tests::complete_with_verify_fail_and_review_flag_threads_both_into_recovery_cause
-    check_cargo_test check::verify_fail::tests::review_notes_appended_under_heading_when_review_flagged
-    check_cargo_test check::verify_fail::tests::review_notes_truncated_when_detail_exceeds_budget
-    check_cargo_test check::verify_fail::tests::review_notes_budget_is_separate_from_verify_budget
-    check_cargo_test check::verify_fail::tests::no_review_notes_section_when_review_flag_absent
+    check_cargo_test review::phase_verdict::tests::complete_with_verify_fail_routes_to_verify_fail
+    check_cargo_test review::phase_verdict::tests::complete_with_review_flag_routes_to_review_flag
+    check_cargo_test review::phase_verdict::tests::complete_with_verify_fail_and_review_flag_threads_both_into_recovery_cause
+    check_cargo_test review::verify_fail::tests::review_notes_appended_under_heading_when_review_flagged
+    check_cargo_test review::verify_fail::tests::review_notes_truncated_when_detail_exceeds_budget
+    check_cargo_test review::verify_fail::tests::review_notes_budget_is_separate_from_verify_budget
+    check_cargo_test review::verify_fail::tests::no_review_notes_section_when_review_flag_absent
 }
 test_review_inputs_include_judge_rubrics() {
-    cargo_run test -p loom-templates --test render check_renders_review_context_fields \
+    cargo_run test -p loom-templates --test render review_renders_review_context_fields \
         -- --exact --nocapture --quiet
 }
 test_review_walks_style_rules() {
     cargo_run test -p loom-templates --test render \
-        check_renders_style_rule_conformance_walkthrough \
+        review_renders_style_rule_conformance_walkthrough \
         -- --exact --nocapture --quiet
     check_cargo_test \
-        check::production::tests::build_review_prompt_includes_style_rule_conformance_walkthrough
+        review::production::tests::build_review_prompt_includes_style_rule_conformance_walkthrough
 }
 test_gate_review_flag_names_concern() {
-    check_cargo_test check::phase_verdict::tests::complete_with_review_flag_routes_to_review_flag
-    check_cargo_test check::phase_verdict::tests::noop_with_review_flag_routes_to_review_flag
-    check_cargo_test check::phase_verdict::tests::complete_with_style_rule_flag_routes_to_review_flag_with_rule_id
+    check_cargo_test review::phase_verdict::tests::complete_with_review_flag_routes_to_review_flag
+    check_cargo_test review::phase_verdict::tests::noop_with_review_flag_routes_to_review_flag
+    check_cargo_test review::phase_verdict::tests::complete_with_style_rule_flag_routes_to_review_flag_with_rule_id
 }
 
 # Recovery & Iteration
 test_recovery_under_max() {
-    check_cargo_test check::recovery::tests::under_max_recovers_with_previous_failure
-    check_cargo_test check::recovery::tests::under_max_at_two_still_recovers_with_previous_failure
+    check_cargo_test review::recovery::tests::under_max_recovers_with_previous_failure
+    check_cargo_test review::recovery::tests::under_max_at_two_still_recovers_with_previous_failure
 }
 test_recovery_exhaustion_applies_blocked() {
-    check_cargo_test check::recovery::tests::at_or_above_max_applies_blocked_with_retry_exhausted_cause
-    check_cargo_test check::recovery::tests::review_flag_cause_round_trips_through_notes
-    check_cargo_test check::recovery::tests::zero_max_exhausts_immediately
+    check_cargo_test review::recovery::tests::at_or_above_max_applies_blocked_with_retry_exhausted_cause
+    check_cargo_test review::recovery::tests::review_flag_cause_round_trips_through_notes
+    check_cargo_test review::recovery::tests::zero_max_exhausts_immediately
 }
 test_iteration_count_persists() {
-    check_cargo_test check::production::tests::iteration_counter_round_trips_through_state_db
+    check_cargo_test review::production::tests::iteration_counter_round_trips_through_state_db
 }
 test_infra_preflight_fail_fast() {
     check_cargo_test run::runner::tests::infra_preflight_routes_to_blocked_without_retry
@@ -3155,11 +3155,11 @@ test_infra_retry_counter_separate() {
     check_cargo_test run::runner::tests::infra_retry_counter_does_not_consume_max_retries
 }
 test_push_gate_refuses_unresolved() {
-    check_cargo_test check::runner::tests::clarify_present_stops_without_pushing
-    check_cargo_test check::runner::tests::pre_existing_clarify_blocks_push_even_when_no_new_beads
-    check_cargo_test check::runner::tests::blocked_present_stops_without_pushing
-    check_cargo_test check::runner::tests::pre_existing_blocked_blocks_push_even_when_no_new_beads
-    check_cargo_test check::runner::tests::blocked_and_clarify_together_surface_both_lists
+    check_cargo_test review::runner::tests::clarify_present_stops_without_pushing
+    check_cargo_test review::runner::tests::pre_existing_clarify_blocks_push_even_when_no_new_beads
+    check_cargo_test review::runner::tests::blocked_present_stops_without_pushing
+    check_cargo_test review::runner::tests::pre_existing_blocked_blocks_push_even_when_no_new_beads
+    check_cargo_test review::runner::tests::blocked_and_clarify_together_surface_both_lists
 }
 
 # Plan / Todo
@@ -3230,7 +3230,7 @@ test_driver_event_kinds_present() {
     cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
         event::tests::driver_kinds_present_for_spec_emission_sites
     cargo_run test -p loom-workflow --lib -- --exact --nocapture --quiet \
-        check::runner::tests::clean_review_pushes_and_resets_counter
+        review::runner::tests::clean_review_pushes_and_resets_counter
     cargo_run test -p loom-workflow --lib -- --exact --nocapture --quiet \
         run::runner::tests::retry_emits_retry_dispatch_driver_event
     # wx-fgp9j.35: container_spawn / container_oom / infra_failure emission
@@ -3258,11 +3258,11 @@ test_edit_write_imara_diff() {
         tool_body::tests::diff_counts_handles_pure_additions
 }
 test_fixup_bead_bonded_to_molecule() {
-    check_cargo_test check::fixup::tests::spawned_outcome_bonds_to_origins_parent_molecule
-    check_cargo_test check::fixup::tests::chokepoint_returns_only_after_bond_completes
+    check_cargo_test review::fixup::tests::spawned_outcome_bonds_to_origins_parent_molecule
+    check_cargo_test review::fixup::tests::chokepoint_returns_only_after_bond_completes
 }
 test_fixup_refuses_unbonded_origin() {
-    check_cargo_test check::fixup::tests::refused_outcome_applies_unbonded_origin_blocked_to_origin
+    check_cargo_test review::fixup::tests::refused_outcome_applies_unbonded_origin_blocked_to_origin
 }
 test_flat_variant_shape() {
     cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
@@ -3546,10 +3546,10 @@ test_plain_selected_on_non_tty() {
         renderer::tests::plain_selected_on_non_tty
 }
 test_push_gate_sees_fixup_beads() {
-    check_cargo_test check::runner::tests::fix_up_beads_under_cap_auto_iterate
-    check_cargo_test check::runner::tests::iteration_cap_escalates_newest_fix_up_to_clarify
-    check_cargo_test check::verdict::tests::diff_returns_only_new_ids_in_post_order
-    check_cargo_test check::verdict::tests::diff_handles_empty_before
+    check_cargo_test review::runner::tests::fix_up_beads_under_cap_auto_iterate
+    check_cargo_test review::runner::tests::iteration_cap_escalates_newest_fix_up_to_clarify
+    check_cargo_test review::verdict::tests::diff_returns_only_new_ids_in_post_order
+    check_cargo_test review::verdict::tests::diff_handles_empty_before
 }
 test_raw_mode_passthrough() {
     cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \

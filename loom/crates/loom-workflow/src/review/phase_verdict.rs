@@ -1,6 +1,6 @@
 //! Per-phase verdict gate (`specs/loom-harness.md` lines 444-470).
 //!
-//! After every agent phase ends, `loom check` evaluates the result through
+//! After every agent phase ends, `loom review` evaluates the result through
 //! this deterministic gate before the bead's state can advance. The gate
 //! combines four mechanical/agent-judged signals — exit marker, bd-closed,
 //! diff emptiness, and the review verdict — into one of `done`, `blocked`,

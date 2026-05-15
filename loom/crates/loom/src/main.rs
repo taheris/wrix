@@ -25,10 +25,12 @@ use loom_driver::logging::{LogSink, sweep_retention_at};
 use loom_driver::profile_manifest::ProfileImageManifest;
 use loom_driver::scratch::resolve_scratch_key;
 use loom_driver::state::StateDb;
-use loom_workflow::check::{IterationCap, ProductionCheckController, check_loop as run_check_loop};
 use loom_workflow::msg::{
     DISMISS_NOTE, build_rows, compose_option_note, filter_msg_beads, kind_of, resolve_target,
     spec_label_of,
+};
+use loom_workflow::review::{
+    IterationCap, ProductionReviewController, review_loop as run_review_loop,
 };
 use loom_workflow::run::{
     Parallelism, ProductionAgentLoopController, RetryPolicy, RunMode, SessionResult, run_loop,
@@ -1014,12 +1016,12 @@ fn run_run(
     })?;
     println!(
         "loom run: processed {} bead(s), clarified {}, blocked {}, molecule_complete={}, \
-         execed_check={}",
+         execed_review={}",
         summary.beads_processed,
         summary.beads_clarified,
         summary.beads_blocked,
         summary.molecule_complete,
-        summary.execed_check,
+        summary.execed_review,
     );
     Ok(())
 }
@@ -1493,8 +1495,8 @@ struct CheckOpts {
 
 fn run_check(
     workspace: &Path,
-    spec: Option<String>,
-    agent_override: Option<AgentKind>,
+    _spec: Option<String>,
+    _agent_override: Option<AgentKind>,
     opts: CheckOpts,
 ) -> anyhow::Result<()> {
     if let Some(audit) = opts.audit {
@@ -1506,13 +1508,36 @@ fn run_check(
              full deterministic pass is implemented"
         );
     }
+    anyhow::bail!(
+        "loom check (no flags): full deterministic pass not yet implemented; \
+         use `loom check --check=<name>` for individual sub-audits, or `loom review` \
+         for the LLM-judged rubric"
+    )
+}
+
+#[expect(
+    dead_code,
+    reason = "scope flags parsed by clap; consumed once per-bead/diff/tree scoping lands"
+)]
+struct ReviewOpts {
+    bead: Option<String>,
+    diff: Option<String>,
+    tree: bool,
+}
+
+fn run_review(
+    workspace: &Path,
+    spec: Option<String>,
+    agent_override: Option<AgentKind>,
+    _opts: ReviewOpts,
+) -> anyhow::Result<()> {
     let manifest = Arc::new(ProfileImageManifest::from_env()?);
     let label = resolve_spec_label(workspace, spec)?;
     let lock_mgr = LockManager::new(workspace)?;
     let guard = lock_mgr.acquire_spec(&label)?;
 
     let config = LoomConfig::load(workspace.join(".wrapix/loom/config.toml"))?;
-    let selection = resolved_agent_for(&config, agent_override, Phase::Check)?;
+    let selection = resolved_agent_for(&config, agent_override, Phase::Review)?;
     let phase_default = selection.profile.clone();
     let kind = selection.kind;
     let shutdown_grace = resolve_shutdown_grace(&selection);
@@ -1526,12 +1551,12 @@ fn run_check(
     // R7 (wx-r9tmc) — pin one phase timestamp so the verdict gate's
     // `push_gate_*` driver events and the reviewer agent's events
     // land in the same JSONL log file. Both writers compute the path
-    // from `(logs_root, label, "check", phase_when)`.
+    // from `(logs_root, label, "review", phase_when)`.
     let phase_when = SystemClock::new().wall_now();
     let logs_root_for_spawn = logs_root.clone();
     let result = runtime.block_on(async move {
         let bd = BdClient::new();
-        let mut controller = ProductionCheckController::new(
+        let mut controller = ProductionReviewController::new(
             bd,
             label.clone(),
             loom_bin,
@@ -1544,7 +1569,7 @@ fn run_check(
                 let label = label_for_sink.clone();
                 async move {
                     let sink =
-                        LogSink::open_phase_at(&logs_root, &label, "check", None, phase_when)
+                        LogSink::open_phase_at(&logs_root, &label, "review", None, phase_when)
                             .map_err(|e| ProtocolError::Io(std::io::Error::other(e.to_string())))?;
                     dispatch(kind, spawn_cfg, shutdown_grace, Some(sink), None).await
                 }
@@ -1552,29 +1577,10 @@ fn run_check(
         )
         .with_handoff_lock(guard)
         .with_phase_log(logs_root, phase_when);
-        run_check_loop(&mut controller, IterationCap::default()).await
+        run_review_loop(&mut controller, IterationCap::default()).await
     })?;
-    println!("loom check: {result:?}");
+    println!("loom review: {result:?}");
     Ok(())
-}
-
-#[expect(
-    dead_code,
-    reason = "scope flags parsed by clap; consumed once rubric driver lands"
-)]
-struct ReviewOpts {
-    bead: Option<String>,
-    diff: Option<String>,
-    tree: bool,
-}
-
-fn run_review(
-    _workspace: &Path,
-    _spec: Option<String>,
-    _agent_override: Option<AgentKind>,
-    _opts: ReviewOpts,
-) -> anyhow::Result<()> {
-    anyhow::bail!("loom review: not yet implemented")
 }
 
 #[expect(clippy::too_many_arguments, reason = "explicit dispatch surface")]

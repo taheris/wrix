@@ -4,13 +4,13 @@ use std::path::Path;
 
 use loom_driver::bd::Bead;
 use loom_driver::identifier::{MoleculeId, SpecLabel};
-use loom_templates::check::{CheckContext, ReviewSource};
+use loom_templates::review::{ReviewContext, ReviewSource};
 
 use crate::spec::{Annotation, AnnotationKind, SpecError, parse_spec_annotations};
 
-/// Inputs for [`build_check_context`]. Constructed once per `loom check`
+/// Inputs for [`build_review_context`]. Constructed once per `loom review`
 /// invocation; the reviewer only runs once per molecule per gate pass.
-pub struct CheckContextInputs {
+pub struct ReviewContextInputs {
     pub label: SpecLabel,
     pub spec_path: String,
     pub pinned_context: String,
@@ -30,9 +30,9 @@ pub struct CheckContextInputs {
     pub style_rules: String,
 }
 
-/// Render the typed [`CheckContext`] used by the `check.md` Askama template.
-pub fn build_check_context(inputs: CheckContextInputs) -> CheckContext {
-    CheckContext {
+/// Render the typed [`ReviewContext`] used by the `review.md` Askama template.
+pub fn build_review_context(inputs: ReviewContextInputs) -> ReviewContext {
+    ReviewContext {
         pinned_context: inputs.pinned_context,
         label: inputs.label,
         spec_path: inputs.spec_path,
@@ -148,8 +148,8 @@ mod tests {
         }
     }
 
-    fn inputs() -> CheckContextInputs {
-        CheckContextInputs {
+    fn inputs() -> ReviewContextInputs {
+        ReviewContextInputs {
             label: SpecLabel::new("loom-harness"),
             spec_path: "specs/loom-harness.md".into(),
             pinned_context: "PIN".into(),
@@ -181,7 +181,7 @@ mod tests {
 
     #[test]
     fn rendered_template_includes_label_and_base_commit() {
-        let ctx = build_check_context(inputs());
+        let ctx = build_review_context(inputs());
         let body = ctx.render().expect("render");
         assert!(body.contains("loom-harness"), "{body}");
         assert!(body.contains("abc123"), "{body}");
@@ -192,9 +192,9 @@ mod tests {
     fn rendered_template_renders_em_dash_for_missing_base_commit() {
         let mut i = inputs();
         i.base_commit = None;
-        let ctx = build_check_context(i);
+        let ctx = build_review_context(i);
         let body = ctx.render().expect("render");
-        // The check.md template uses an em-dash placeholder for the None
+        // The review.md template uses an em-dash placeholder for the None
         // arm of base_commit / molecule_id.
         assert!(body.contains("Base commit**: —"), "{body}");
     }
@@ -295,7 +295,7 @@ mod tests {
             path: "tests/judges/alpha.sh".into(),
             body: "JUDGE_BODY_MARKER".into(),
         }];
-        let ctx = build_check_context(i);
+        let ctx = build_review_context(i);
         let body = ctx.render().expect("render");
         assert!(body.contains("tests/alpha.sh"), "{body}");
         assert!(body.contains("VERIFY_BODY_MARKER"), "{body}");
@@ -305,7 +305,7 @@ mod tests {
 
     #[test]
     fn rendered_template_renders_em_dash_when_no_review_sources() {
-        let ctx = build_check_context(inputs());
+        let ctx = build_review_context(inputs());
         let body = ctx.render().expect("render");
         assert!(
             body.contains("## `[verify]` Sources"),

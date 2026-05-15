@@ -2,11 +2,11 @@ use loom_driver::bd::{Bead, Label};
 use loom_driver::identifier::BeadId;
 use loom_events::DriverKind;
 
-use super::error::CheckError;
+use super::error::ReviewError;
 use super::iteration::IterationCap;
-use super::verdict::{CheckVerdict, diff_new_bead_ids};
+use super::verdict::{ReviewVerdict, diff_new_bead_ids};
 
-/// Side-effect surface the [`check_loop`] driver depends on.
+/// Side-effect surface the [`review_loop`] driver depends on.
 ///
 /// The trait abstracts the BdClient + AgentBackend + git wiring so the
 /// verdict logic stays pure-ish and is exercised under a fake without
@@ -16,7 +16,7 @@ use super::verdict::{CheckVerdict, diff_new_bead_ids};
 /// - `pre_snapshot` / `post_snapshot` → `BdClient::list { label: "spec:<L>" }`
 /// - `blocked_ids` / `clarify_ids` → filter the same list for `loom:blocked`
 ///   and `loom:clarify` respectively
-/// - `run_review` → render check.md, build SpawnConfig, drive
+/// - `run_review` → render review.md, build SpawnConfig, drive
 ///   `AgentBackend`, tee the event stream into the log sink, parse the
 ///   exit signal
 /// - `iteration_count` / `set_iteration_count` / `reset_iteration_count` →
@@ -24,36 +24,36 @@ use super::verdict::{CheckVerdict, diff_new_bead_ids};
 /// - `apply_clarify` → `BdClient::update --add-label loom:clarify`
 /// - `git_push` / `beads_push` → `tokio::process::Command` shell-outs
 /// - `exec_run` → `tokio::process::Command::new("loom").arg("run")…`
-pub trait CheckController: Send {
+pub trait ReviewController: Send {
     /// Run the reviewer agent. Returns when the agent emits a terminal
     /// signal or fails. The implementation tees the event stream into the
     /// per-bead JSONL log alongside the terminal renderer.
     fn run_review(
         &mut self,
-    ) -> impl std::future::Future<Output = Result<ReviewOutcome, CheckError>> + Send;
+    ) -> impl std::future::Future<Output = Result<ReviewOutcome, ReviewError>> + Send;
 
     /// Return every bead carrying `spec:<label>` at this moment. Order is
     /// stable (creation order) so the driver's `before`/`after` diff is
     /// deterministic.
     fn list_spec_beads(
         &mut self,
-    ) -> impl std::future::Future<Output = Result<Vec<Bead>, CheckError>> + Send;
+    ) -> impl std::future::Future<Output = Result<Vec<Bead>, ReviewError>> + Send;
 
     /// Read the persisted iteration counter for the active spec.
     fn iteration_count(
         &mut self,
-    ) -> impl std::future::Future<Output = Result<u32, CheckError>> + Send;
+    ) -> impl std::future::Future<Output = Result<u32, ReviewError>> + Send;
 
     /// Persist the next iteration counter value.
     fn set_iteration_count(
         &mut self,
         next: u32,
-    ) -> impl std::future::Future<Output = Result<(), CheckError>> + Send;
+    ) -> impl std::future::Future<Output = Result<(), ReviewError>> + Send;
 
     /// Reset the iteration counter to zero (clean push path).
     fn reset_iteration_count(
         &mut self,
-    ) -> impl std::future::Future<Output = Result<(), CheckError>> + Send;
+    ) -> impl std::future::Future<Output = Result<(), ReviewError>> + Send;
 
     /// Add the `loom:clarify` label to a fix-up bead with the cap-reached
     /// note in its update.
@@ -61,21 +61,21 @@ pub trait CheckController: Send {
         &mut self,
         bead: &BeadId,
         reason: &str,
-    ) -> impl std::future::Future<Output = Result<(), CheckError>> + Send;
+    ) -> impl std::future::Future<Output = Result<(), ReviewError>> + Send;
 
     /// `git push` — code-only push. Errors map to
-    /// [`CheckError::GitPushFailed`] or [`CheckError::DetachedHead`].
-    fn git_push(&mut self) -> impl std::future::Future<Output = Result<(), CheckError>> + Send;
+    /// [`ReviewError::GitPushFailed`] or [`ReviewError::DetachedHead`].
+    fn git_push(&mut self) -> impl std::future::Future<Output = Result<(), ReviewError>> + Send;
 
     /// `beads-push` (Dolt branch sync). Errors map to
-    /// [`CheckError::BeadsPushFailed`] — `git push` already succeeded by
+    /// [`ReviewError::BeadsPushFailed`] — `git push` already succeeded by
     /// the time this runs, so the caller treats this as a separate exit.
-    fn beads_push(&mut self) -> impl std::future::Future<Output = Result<(), CheckError>> + Send;
+    fn beads_push(&mut self) -> impl std::future::Future<Output = Result<(), ReviewError>> + Send;
 
     /// `exec loom run -s <label>` for auto-iteration. Implementations
     /// `exec` (replace process) on success; the future resolves only on
     /// failure to launch.
-    fn exec_run(&mut self) -> impl std::future::Future<Output = Result<(), CheckError>> + Send;
+    fn exec_run(&mut self) -> impl std::future::Future<Output = Result<(), ReviewError>> + Send;
 
     /// Emit a driver-side event into the controller's event sink (the
     /// per-spec phase JSONL log + terminal renderer). Driver events
@@ -103,13 +103,13 @@ pub enum ReviewOutcome {
 
     /// Agent terminated without `LOOM_COMPLETE` (crashed, hit budget,
     /// emitted `LOOM_BLOCKED`/`LOOM_CLARIFY`). String body is surfaced
-    /// in the [`CheckError::ReviewIncomplete`] variant.
+    /// in the [`ReviewError::ReviewIncomplete`] variant.
     Incomplete { detail: String },
 }
 
 /// Final state after the gate runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CheckResult {
+pub enum ReviewResult {
     /// Push succeeded; iteration counter was reset.
     Pushed,
 
@@ -132,23 +132,23 @@ pub enum CheckResult {
     Escalated { escalate_id: BeadId, cap: u32 },
 }
 
-/// Drive one `loom check` invocation through the gate.
+/// Drive one `loom review` invocation through the gate.
 ///
 /// 1. Snapshot beads carrying `spec:<label>` (`pre`).
 /// 2. Run the reviewer agent.
 /// 3. Snapshot again (`post`); compute new bead IDs and clarify membership.
 /// 4. Apply the verdict (push / clarify-stop / auto-iterate / escalate).
-pub async fn check_loop<C: CheckController>(
+pub async fn review_loop<C: ReviewController>(
     controller: &mut C,
     cap: IterationCap,
-) -> Result<CheckResult, CheckError> {
+) -> Result<ReviewResult, ReviewError> {
     let pre = controller.list_spec_beads().await?;
     let pre_ids: Vec<BeadId> = pre.iter().map(|b| b.id.clone()).collect();
 
     match controller.run_review().await? {
         ReviewOutcome::Complete => {}
         ReviewOutcome::Incomplete { detail } => {
-            return Err(CheckError::ReviewIncomplete(detail));
+            return Err(ReviewError::ReviewIncomplete(detail));
         }
     }
 
@@ -172,43 +172,43 @@ pub async fn check_loop<C: CheckController>(
 
 /// Pure-ish branch picker: resolves the four verdict shapes from the
 /// snapshot diff plus the persisted iteration counter.
-async fn decide_verdict<C: CheckController>(
+async fn decide_verdict<C: ReviewController>(
     new_ids: &[BeadId],
     blocked_ids: &[BeadId],
     clarify_ids: &[BeadId],
     cap: IterationCap,
     controller: &mut C,
-) -> Result<CheckVerdict, CheckError> {
+) -> Result<ReviewVerdict, ReviewError> {
     if !blocked_ids.is_empty() || !clarify_ids.is_empty() {
-        return Ok(CheckVerdict::PushBlocked {
+        return Ok(ReviewVerdict::PushBlocked {
             blocked_ids: blocked_ids.to_vec(),
             clarify_ids: clarify_ids.to_vec(),
         });
     }
 
     let Some(newest) = new_ids.last() else {
-        return Ok(CheckVerdict::Clean);
+        return Ok(ReviewVerdict::Clean);
     };
 
     let current = controller.iteration_count().await?;
     if cap.is_exhausted(current) {
-        return Ok(CheckVerdict::IterationCap {
+        return Ok(ReviewVerdict::IterationCap {
             new_bead_ids: new_ids.to_vec(),
             escalate_id: newest.clone(),
             cap: cap.max,
         });
     }
 
-    Ok(CheckVerdict::AutoIterate {
+    Ok(ReviewVerdict::AutoIterate {
         new_bead_ids: new_ids.to_vec(),
         next_iteration: current + 1,
     })
 }
 
-async fn apply_verdict<C: CheckController>(
+async fn apply_verdict<C: ReviewController>(
     controller: &mut C,
-    verdict: CheckVerdict,
-) -> Result<CheckResult, CheckError> {
+    verdict: ReviewVerdict,
+) -> Result<ReviewResult, ReviewError> {
     // R7 (wx-r9tmc): every gate walk emits `push_gate_walk` first so
     // the JSONL replay carries a fence between the reviewer's output
     // and the verdict-application sequence below. The four kind-
@@ -228,7 +228,7 @@ async fn apply_verdict<C: CheckController>(
         serde_json::json!({"outcome": verdict_label(&verdict)}),
     );
     match verdict {
-        CheckVerdict::Clean => {
+        ReviewVerdict::Clean => {
             controller.emit_driver_event(
                 DriverKind::PushGateClean,
                 "verdict clean — pushing code + beads, resetting iteration counter",
@@ -237,9 +237,9 @@ async fn apply_verdict<C: CheckController>(
             controller.reset_iteration_count().await?;
             controller.git_push().await?;
             controller.beads_push().await?;
-            Ok(CheckResult::Pushed)
+            Ok(ReviewResult::Pushed)
         }
-        CheckVerdict::PushBlocked {
+        ReviewVerdict::PushBlocked {
             blocked_ids,
             clarify_ids,
         } => {
@@ -251,12 +251,12 @@ async fn apply_verdict<C: CheckController>(
                     "clarify_ids": clarify_ids.iter().map(|b| b.to_string()).collect::<Vec<_>>(),
                 }),
             );
-            Ok(CheckResult::PushBlocked {
+            Ok(ReviewResult::PushBlocked {
                 blocked_ids,
                 clarify_ids,
             })
         }
-        CheckVerdict::AutoIterate {
+        ReviewVerdict::AutoIterate {
             next_iteration,
             new_bead_ids,
         } => {
@@ -270,9 +270,9 @@ async fn apply_verdict<C: CheckController>(
             );
             controller.set_iteration_count(next_iteration).await?;
             controller.exec_run().await?;
-            Ok(CheckResult::AutoIterated { next_iteration })
+            Ok(ReviewResult::AutoIterated { next_iteration })
         }
-        CheckVerdict::IterationCap {
+        ReviewVerdict::IterationCap {
             escalate_id,
             cap: cap_value,
             ..
@@ -289,7 +289,7 @@ async fn apply_verdict<C: CheckController>(
                 }),
             );
             controller.apply_clarify(&escalate_id, &reason).await?;
-            Ok(CheckResult::Escalated {
+            Ok(ReviewResult::Escalated {
                 escalate_id,
                 cap: cap_value,
             })
@@ -300,12 +300,12 @@ async fn apply_verdict<C: CheckController>(
 /// Compact label describing the verdict shape — used as the `verdict`
 /// field on the leading `push_gate_walk` event so a replay can tell at
 /// a glance which branch the gate took.
-fn verdict_label(verdict: &CheckVerdict) -> &'static str {
+fn verdict_label(verdict: &ReviewVerdict) -> &'static str {
     match verdict {
-        CheckVerdict::Clean => "clean",
-        CheckVerdict::PushBlocked { .. } => "push_blocked",
-        CheckVerdict::AutoIterate { .. } => "auto_iterate",
-        CheckVerdict::IterationCap { .. } => "iteration_cap",
+        ReviewVerdict::Clean => "clean",
+        ReviewVerdict::PushBlocked { .. } => "push_blocked",
+        ReviewVerdict::AutoIterate { .. } => "auto_iterate",
+        ReviewVerdict::IterationCap { .. } => "iteration_cap",
     }
 }
 
@@ -338,12 +338,12 @@ mod tests {
         driver_events: Vec<(String, String, serde_json::Value)>,
     }
 
-    impl CheckController for FakeController {
-        async fn run_review(&mut self) -> Result<ReviewOutcome, CheckError> {
+    impl ReviewController for FakeController {
+        async fn run_review(&mut self) -> Result<ReviewOutcome, ReviewError> {
             Ok(self.review.clone().unwrap_or(ReviewOutcome::Complete))
         }
 
-        async fn list_spec_beads(&mut self) -> Result<Vec<Bead>, CheckError> {
+        async fn list_spec_beads(&mut self) -> Result<Vec<Bead>, ReviewError> {
             self.list_calls += 1;
             if self.list_calls == 1 {
                 Ok(self.pre_beads.clone())
@@ -352,39 +352,39 @@ mod tests {
             }
         }
 
-        async fn iteration_count(&mut self) -> Result<u32, CheckError> {
+        async fn iteration_count(&mut self) -> Result<u32, ReviewError> {
             Ok(self.iter_count)
         }
 
-        async fn set_iteration_count(&mut self, next: u32) -> Result<(), CheckError> {
+        async fn set_iteration_count(&mut self, next: u32) -> Result<(), ReviewError> {
             self.set_iter_calls.push(next);
             self.iter_count = next;
             Ok(())
         }
 
-        async fn reset_iteration_count(&mut self) -> Result<(), CheckError> {
+        async fn reset_iteration_count(&mut self) -> Result<(), ReviewError> {
             self.reset_iter_calls += 1;
             self.iter_count = 0;
             Ok(())
         }
 
-        async fn apply_clarify(&mut self, bead: &BeadId, reason: &str) -> Result<(), CheckError> {
+        async fn apply_clarify(&mut self, bead: &BeadId, reason: &str) -> Result<(), ReviewError> {
             self.apply_clarify_calls
                 .push((bead.clone(), reason.to_string()));
             Ok(())
         }
 
-        async fn git_push(&mut self) -> Result<(), CheckError> {
+        async fn git_push(&mut self) -> Result<(), ReviewError> {
             self.git_push_calls += 1;
             Ok(())
         }
 
-        async fn beads_push(&mut self) -> Result<(), CheckError> {
+        async fn beads_push(&mut self) -> Result<(), ReviewError> {
             self.beads_push_calls += 1;
             Ok(())
         }
 
-        async fn exec_run(&mut self) -> Result<(), CheckError> {
+        async fn exec_run(&mut self) -> Result<(), ReviewError> {
             self.exec_run_calls += 1;
             Ok(())
         }
@@ -414,7 +414,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn clean_review_pushes_and_resets_counter() -> Result<(), CheckError> {
+    async fn clean_review_pushes_and_resets_counter() -> Result<(), ReviewError> {
         let mut c = FakeController {
             iter_count: 2,
             pre_beads: vec![bead("wx-1", &["spec:loom-harness"])],
@@ -422,8 +422,8 @@ mod tests {
             ..FakeController::default()
         };
 
-        let result = check_loop(&mut c, IterationCap::default()).await?;
-        assert_eq!(result, CheckResult::Pushed);
+        let result = review_loop(&mut c, IterationCap::default()).await?;
+        assert_eq!(result, ReviewResult::Pushed);
         assert_eq!(c.git_push_calls, 1);
         assert_eq!(c.beads_push_calls, 1);
         assert_eq!(c.reset_iter_calls, 1, "counter resets on clean push");
@@ -442,7 +442,7 @@ mod tests {
     /// R7 — the `PushBlocked` verdict emits `push_gate_walk` then
     /// `push_gate_refuse` carrying both ID lists in its payload.
     #[tokio::test]
-    async fn push_blocked_emits_refuse_with_id_payload() -> Result<(), CheckError> {
+    async fn push_blocked_emits_refuse_with_id_payload() -> Result<(), ReviewError> {
         let mut c = FakeController {
             pre_beads: vec![bead("wx-1", &["spec:loom-harness"])],
             post_beads: vec![
@@ -452,7 +452,7 @@ mod tests {
             ],
             ..FakeController::default()
         };
-        let _ = check_loop(&mut c, IterationCap::default()).await?;
+        let _ = review_loop(&mut c, IterationCap::default()).await?;
         let kinds: Vec<&str> = c.driver_events.iter().map(|(k, _, _)| k.as_str()).collect();
         assert_eq!(
             kinds,
@@ -479,7 +479,7 @@ mod tests {
     /// R7 — the `IterationCap` verdict emits `push_gate_walk` then
     /// `push_gate_exhausted` carrying the escalate-id and the cap.
     #[tokio::test]
-    async fn iteration_cap_emits_exhausted_with_cap_payload() -> Result<(), CheckError> {
+    async fn iteration_cap_emits_exhausted_with_cap_payload() -> Result<(), ReviewError> {
         let mut c = FakeController {
             iter_count: 3,
             pre_beads: vec![bead("wx-1", &["spec:loom-harness"])],
@@ -489,7 +489,7 @@ mod tests {
             ],
             ..FakeController::default()
         };
-        let _ = check_loop(&mut c, IterationCap { max: 3 }).await?;
+        let _ = review_loop(&mut c, IterationCap { max: 3 }).await?;
         let kinds: Vec<&str> = c.driver_events.iter().map(|(k, _, _)| k.as_str()).collect();
         assert_eq!(
             kinds,
@@ -506,7 +506,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn clarify_present_stops_without_pushing() -> Result<(), CheckError> {
+    async fn clarify_present_stops_without_pushing() -> Result<(), ReviewError> {
         let mut c = FakeController {
             pre_beads: vec![bead("wx-1", &["spec:loom-harness"])],
             post_beads: vec![
@@ -516,9 +516,9 @@ mod tests {
             ..FakeController::default()
         };
 
-        let result = check_loop(&mut c, IterationCap::default()).await?;
+        let result = review_loop(&mut c, IterationCap::default()).await?;
         match result {
-            CheckResult::PushBlocked {
+            ReviewResult::PushBlocked {
                 blocked_ids,
                 clarify_ids,
             } => {
@@ -534,21 +534,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pre_existing_clarify_blocks_push_even_when_no_new_beads() -> Result<(), CheckError> {
+    async fn pre_existing_clarify_blocks_push_even_when_no_new_beads() -> Result<(), ReviewError> {
         let mut c = FakeController {
             pre_beads: vec![bead("wx-1", &["spec:loom-harness", "loom:clarify"])],
             post_beads: vec![bead("wx-1", &["spec:loom-harness", "loom:clarify"])],
             ..FakeController::default()
         };
 
-        let result = check_loop(&mut c, IterationCap::default()).await?;
-        assert!(matches!(result, CheckResult::PushBlocked { .. }));
+        let result = review_loop(&mut c, IterationCap::default()).await?;
+        assert!(matches!(result, ReviewResult::PushBlocked { .. }));
         assert_eq!(c.git_push_calls, 0);
         Ok(())
     }
 
     #[tokio::test]
-    async fn blocked_present_stops_without_pushing() -> Result<(), CheckError> {
+    async fn blocked_present_stops_without_pushing() -> Result<(), ReviewError> {
         let mut c = FakeController {
             pre_beads: vec![bead("wx-1", &["spec:loom-harness"])],
             post_beads: vec![
@@ -558,9 +558,9 @@ mod tests {
             ..FakeController::default()
         };
 
-        let result = check_loop(&mut c, IterationCap::default()).await?;
+        let result = review_loop(&mut c, IterationCap::default()).await?;
         match result {
-            CheckResult::PushBlocked {
+            ReviewResult::PushBlocked {
                 blocked_ids,
                 clarify_ids,
             } => {
@@ -576,16 +576,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pre_existing_blocked_blocks_push_even_when_no_new_beads() -> Result<(), CheckError> {
+    async fn pre_existing_blocked_blocks_push_even_when_no_new_beads() -> Result<(), ReviewError> {
         let mut c = FakeController {
             pre_beads: vec![bead("wx-1", &["spec:loom-harness", "loom:blocked"])],
             post_beads: vec![bead("wx-1", &["spec:loom-harness", "loom:blocked"])],
             ..FakeController::default()
         };
 
-        let result = check_loop(&mut c, IterationCap::default()).await?;
+        let result = review_loop(&mut c, IterationCap::default()).await?;
         match result {
-            CheckResult::PushBlocked {
+            ReviewResult::PushBlocked {
                 blocked_ids,
                 clarify_ids,
             } => {
@@ -599,7 +599,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn blocked_and_clarify_together_surface_both_lists() -> Result<(), CheckError> {
+    async fn blocked_and_clarify_together_surface_both_lists() -> Result<(), ReviewError> {
         let mut c = FakeController {
             pre_beads: vec![bead("wx-1", &["spec:loom-harness"])],
             post_beads: vec![
@@ -610,9 +610,9 @@ mod tests {
             ..FakeController::default()
         };
 
-        let result = check_loop(&mut c, IterationCap::default()).await?;
+        let result = review_loop(&mut c, IterationCap::default()).await?;
         match result {
-            CheckResult::PushBlocked {
+            ReviewResult::PushBlocked {
                 blocked_ids,
                 clarify_ids,
             } => {
@@ -628,7 +628,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fix_up_beads_under_cap_auto_iterate() -> Result<(), CheckError> {
+    async fn fix_up_beads_under_cap_auto_iterate() -> Result<(), ReviewError> {
         let mut c = FakeController {
             iter_count: 0,
             pre_beads: vec![bead("wx-1", &["spec:loom-harness"])],
@@ -639,9 +639,9 @@ mod tests {
             ..FakeController::default()
         };
 
-        let result = check_loop(&mut c, IterationCap::new(3)).await?;
+        let result = review_loop(&mut c, IterationCap::new(3)).await?;
         match result {
-            CheckResult::AutoIterated { next_iteration } => {
+            ReviewResult::AutoIterated { next_iteration } => {
                 assert_eq!(next_iteration, 1);
             }
             other => panic!("expected AutoIterated, got {other:?}"),
@@ -654,7 +654,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn iteration_cap_escalates_newest_fix_up_to_clarify() -> Result<(), CheckError> {
+    async fn iteration_cap_escalates_newest_fix_up_to_clarify() -> Result<(), ReviewError> {
         let mut c = FakeController {
             iter_count: 3,
             pre_beads: vec![bead("wx-1", &["spec:loom-harness"])],
@@ -666,9 +666,9 @@ mod tests {
             ..FakeController::default()
         };
 
-        let result = check_loop(&mut c, IterationCap::new(3)).await?;
+        let result = review_loop(&mut c, IterationCap::new(3)).await?;
         match result {
-            CheckResult::Escalated { escalate_id, cap } => {
+            ReviewResult::Escalated { escalate_id, cap } => {
                 assert_eq!(
                     escalate_id,
                     BeadId::new("wx-3").expect("valid"),
@@ -693,7 +693,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn review_incomplete_aborts_before_post_snapshot() -> Result<(), CheckError> {
+    async fn review_incomplete_aborts_before_post_snapshot() -> Result<(), ReviewError> {
         let mut c = FakeController {
             review: Some(ReviewOutcome::Incomplete {
                 detail: "no result line".into(),
@@ -703,8 +703,8 @@ mod tests {
             ..FakeController::default()
         };
 
-        let err = check_loop(&mut c, IterationCap::default()).await.err();
-        assert!(matches!(err, Some(CheckError::ReviewIncomplete(_))));
+        let err = review_loop(&mut c, IterationCap::default()).await.err();
+        assert!(matches!(err, Some(ReviewError::ReviewIncomplete(_))));
         assert_eq!(c.list_calls, 1, "post snapshot not taken on review failure");
         assert_eq!(c.git_push_calls, 0);
         Ok(())
