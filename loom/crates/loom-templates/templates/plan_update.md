@@ -65,10 +65,11 @@ dropped and no new note belongs).
    - How does it relate to existing functionality?
    - What are the success criteria for the new work?
    - Does the change cross-cut any sibling specs in `specs/`?
-3. Before applying a change to the spec, perform the **Invariant-Clash
-   Awareness** scan described below against the anchor **and any touched
-   sibling specs**; pause the interview if a potential clash is found
-4. When requirements are clear and no unresolved clashes remain, edit
+3. Before applying a change to the spec, run the **Plan-Stage Rubric**
+   described below — completeness, internal coherence, and invariant-clash
+   checks against the anchor **and any touched sibling specs**. Pause the
+   interview if any check flags.
+4. When requirements are clear and no unresolved flags remain, edit
    `specs/{{ label }}.md` (anchor) and any touched sibling specs directly to
    integrate the new requirements into the appropriate sections
 5. Do not `git add`. Do not `git commit`. Leave the edits as modified
@@ -85,7 +86,7 @@ dropped and no new note belongs).
    `AGENTS.md`: stage the anchor and every touched sibling spec,
    commit, push, run `beads-push`, then output LOOM_COMPLETE.
 
-{% include "partial/invariant_clash.md" %}
+{% include "partial/plan_stage_rubric.md" %}
 
 ## Spec Editing
 

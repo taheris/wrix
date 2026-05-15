@@ -165,10 +165,11 @@ explicit trigger.
    - How does it relate to existing functionality?
    - What are the success criteria for the new work?
    - Does the change cross-cut any sibling specs in `specs/`?
-3. Before applying a change to the spec, perform the **Invariant-Clash
-   Awareness** scan described below against the anchor **and any touched
-   sibling specs**; pause the interview if a potential clash is found
-4. When requirements are clear and no unresolved clashes remain, edit
+3. Before applying a change to the spec, run the **Plan-Stage Rubric**
+   described below — completeness, internal coherence, and invariant-clash
+   checks against the anchor **and any touched sibling specs**. Pause the
+   interview if any check flags.
+4. When requirements are clear and no unresolved flags remain, edit
    `specs/loom-harness.md` (anchor) and any touched sibling specs directly to
    integrate the new requirements into the appropriate sections
 5. Do not `git add`. Do not `git commit`. Leave the edits as modified
@@ -184,6 +185,51 @@ explicit trigger.
 8. On an explicit trigger, run the full session-close flow per
    `AGENTS.md`: stage the anchor and every touched sibling spec,
    commit, push, run `beads-push`, then output LOOM_COMPLETE.
+
+## Plan-Stage Rubric
+
+Before the interview can land a commit, three checks must satisfy. Each is
+the agent's responsibility — the gate IS this rubric, there is no separate
+`loom check` to lean on at this stage. A failing check keeps the interview
+open until the user resolves it.
+
+### 1. Completeness check
+
+Every requirement the user expressed must have a checkable surface in the
+spec:
+
+- A *Success Criteria* bullet carrying a `[verify]` or `[judge]` annotation
+- A lifecycle / decision / contract table row
+- An explicit `## Out of Scope` declaration
+
+Implicit assumptions must be surfaced — do not let one slide into the spec
+unexamined. For each surfaced assumption, either make it testable (promote
+it to a Success Criteria bullet with a verifier annotation) or mark it
+**non-testable with a reason** so a future reader knows why no verifier
+exists.
+
+A requirement that maps to no bullet, no row, and no out-of-scope
+declaration is the failure mode this check catches. Pause and resolve
+before exiting.
+
+### 2. Internal coherence check
+
+Read the spec under interview end-to-end and scan for internal
+contradictions:
+
+- Two sections saying different things about the same surface
+- Decision-table rows that conflict with each other
+- Prose claims that cannot both be true
+- Terminology used inconsistently across sections
+
+When a contradiction is found, pause and ask the user which side stands.
+Do not silently pick a winner — the contradiction itself is signal that
+the spec's intent is undecided.
+
+### 3. Invariant-clash scan
+
+The third check covers invariants. The detailed three-paths resolution
+protocol follows below.
 
 ## Invariant-Clash Awareness
 

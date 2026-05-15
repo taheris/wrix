@@ -15,9 +15,8 @@ the user's idea and create a comprehensive specification document.
 
 1. **Ask ONE focused question at a time** - Don't overwhelm with multiple questions
 2. **Capture terminology** - Note any project-specific terms and their definitions
-3. **Identify code locations** - Ask about files/modules that will be affected
-4. **Clarify scope** - Understand what's in and out of scope
-5. **Define success criteria** - What does "done" look like?
+3. **Clarify scope** - Understand what's in and out of scope
+4. **Define success criteria** - What does "done" look like?
 
 ## Interview Flow
 
@@ -25,7 +24,6 @@ the user's idea and create a comprehensive specification document.
 2. Ask clarifying questions to understand:
    - The problem being solved
    - Key requirements and constraints
-   - Affected parts of the codebase
    - Success criteria and test approach
 3. When you have enough information, say: "I have enough to write the spec"
 4. Write the spec file at `{{ spec_path }}`
@@ -69,36 +67,25 @@ to record notes; the markdown holds the durable design only.
 
 ## Spec File Format
 
-When you have gathered enough information, create the spec file with:
+The spec format — required sections, success-criteria annotation syntax,
+out-of-scope conventions — is defined in `docs/spec-conventions.md`. Read
+it before authoring the spec and follow it. That document is the single
+source of truth for what a spec must contain; this template does not
+re-describe it.
 
-1. **Title and overview** - Feature name and brief description
-2. **Problem statement** - Why this feature is needed
-3. **Requirements** - Functional and non-functional requirements
-4. **Affected files/modules** - What parts of the codebase will change
-5. **Success criteria** - Checkboxes for what "done" looks like. Each criterion should
-   include a verification annotation on the line below it:
-   - `[verify](tests/<label>-test.sh::test_function_name)` for criteria testable with a
-     shell script (exit 0 = pass, non-zero = fail)
-   - `[judge](tests/judges/<label>.sh::test_function_name)` for criteria requiring LLM
-     evaluation of source code
-   - Use `[verify]` when the criterion can be checked programmatically (output format,
-     exit codes, file existence, CLI behavior)
-   - Use `[judge]` when the criterion requires reading source code and evaluating
-     qualities (code structure, error handling, documentation clarity)
-   - Example:
-     ```markdown
-     ## Success Criteria
+A few interview-flow specifics this template owns (everything else lives in
+the conventions document):
 
-     - [ ] CLI accepts --format flag with json and table options
-       [verify](tests/my-feature-test.sh::test_format_flag)
-     - [ ] Error messages are clear and actionable
-       [judge](tests/judges/my-feature.sh::test_clear_errors)
-     ```
-   - Test paths are relative to the repo root
-   - Function names use `test_` prefix and snake_case
-   - Do NOT create the test files — just define the annotations. `loom run` will
-     implement them during the implementation phase.
-6. **Out of scope** - What this feature will NOT do (important for boundaries)
+- Each success criterion gets a verifier annotation on the line below it.
+  `[verify](tests/<label>-test.sh::test_function_name)` for criteria
+  testable with a shell script; `[judge](tests/judges/<label>.sh::test_function_name)`
+  for criteria requiring LLM evaluation of source code.
+- Test paths are relative to the repo root; function names use the
+  `test_` prefix and snake_case.
+- Do NOT create the test files during this interview — just write the
+  annotations. `loom run` implements them during the implementation phase.
+
+{% include "partial/plan_stage_rubric.md" %}
 
 {% include "partial/interview_modes.md" %}
 

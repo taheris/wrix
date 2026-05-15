@@ -58,6 +58,84 @@ fn plan_update_renders_partials_and_companions() -> Result<()> {
     Ok(())
 }
 
+/// Pins the three Plan-stage rubric checks (completeness, internal
+/// coherence, invariant-clash) into both planning templates per
+/// `specs/loom-gate.md` § Plan-stage checks. A future refactor must not
+/// silently drop any of the three from the prompt.
+#[test]
+fn plan_templates_render_three_plan_stage_checks() -> Result<()> {
+    let new_out = PlanNewContext {
+        pinned_context: PINNED_CONTEXT_BODY.to_string(),
+        label: SpecLabel::new("loom-harness"),
+        spec_path: "specs/loom-harness.md".to_string(),
+        scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+    }
+    .render()?;
+    let update_out = PlanUpdateContext {
+        pinned_context: PINNED_CONTEXT_BODY.to_string(),
+        label: SpecLabel::new("loom-harness"),
+        spec_path: "specs/loom-harness.md".to_string(),
+        companion_paths: vec![],
+        implementation_notes: vec![],
+        scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+    }
+    .render()?;
+
+    for (name, out) in [("plan_new", &new_out), ("plan_update", &update_out)] {
+        assert!(
+            out.contains("Plan-Stage Rubric"),
+            "{name}: rubric heading missing"
+        );
+        assert!(
+            out.contains("Completeness check"),
+            "{name}: completeness check missing"
+        );
+        assert!(
+            out.contains("Internal coherence check"),
+            "{name}: internal coherence check missing"
+        );
+        assert!(
+            out.contains("Invariant-clash scan") || out.contains("Invariant-Clash Awareness"),
+            "{name}: invariant-clash check missing"
+        );
+        assert!(
+            out.contains("three-paths"),
+            "{name}: invariant-clash three-paths protocol not described"
+        );
+    }
+    Ok(())
+}
+
+/// FR14 compliance: plan_new.md must not teach `[ ]` / `[x]` checkbox
+/// syntax, must not instruct an `Affected Files` section, and must defer
+/// the spec format to `docs/spec-conventions.md` rather than re-describing
+/// it. Pins the audit findings (TA-1, TA-2, TA-7) so a refactor cannot
+/// regress them.
+#[test]
+fn plan_new_defers_spec_format_to_conventions_doc() -> Result<()> {
+    let out = PlanNewContext {
+        pinned_context: PINNED_CONTEXT_BODY.to_string(),
+        label: SpecLabel::new("loom-harness"),
+        spec_path: "specs/loom-harness.md".to_string(),
+        scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+    }
+    .render()?;
+
+    assert!(
+        out.contains("docs/spec-conventions.md"),
+        "plan_new must defer to docs/spec-conventions.md"
+    );
+    assert!(
+        !out.contains("[ ] CLI") && !out.contains("[ ] Error"),
+        "plan_new must not teach `[ ]` checkbox examples"
+    );
+    assert!(
+        !out.contains("Affected files/modules") && !out.contains("Affected Files"),
+        "plan_new must not instruct an Affected Files section"
+    );
+    Ok(())
+}
+
 #[test]
 fn todo_new_renders_spec_label_marker() -> Result<()> {
     let ctx = TodoNewContext {

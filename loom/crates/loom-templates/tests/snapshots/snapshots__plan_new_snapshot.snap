@@ -70,9 +70,8 @@ running log.
 
 1. **Ask ONE focused question at a time** - Don't overwhelm with multiple questions
 2. **Capture terminology** - Note any project-specific terms and their definitions
-3. **Identify code locations** - Ask about files/modules that will be affected
-4. **Clarify scope** - Understand what's in and out of scope
-5. **Define success criteria** - What does "done" look like?
+3. **Clarify scope** - Understand what's in and out of scope
+4. **Define success criteria** - What does "done" look like?
 
 ## Interview Flow
 
@@ -80,7 +79,6 @@ running log.
 2. Ask clarifying questions to understand:
    - The problem being solved
    - Key requirements and constraints
-   - Affected parts of the codebase
    - Success criteria and test approach
 3. When you have enough information, say: "I have enough to write the spec"
 4. Write the spec file at `specs/loom-harness.md`
@@ -124,36 +122,103 @@ to record notes; the markdown holds the durable design only.
 
 ## Spec File Format
 
-When you have gathered enough information, create the spec file with:
+The spec format — required sections, success-criteria annotation syntax,
+out-of-scope conventions — is defined in `docs/spec-conventions.md`. Read
+it before authoring the spec and follow it. That document is the single
+source of truth for what a spec must contain; this template does not
+re-describe it.
 
-1. **Title and overview** - Feature name and brief description
-2. **Problem statement** - Why this feature is needed
-3. **Requirements** - Functional and non-functional requirements
-4. **Affected files/modules** - What parts of the codebase will change
-5. **Success criteria** - Checkboxes for what "done" looks like. Each criterion should
-   include a verification annotation on the line below it:
-   - `[verify](tests/<label>-test.sh::test_function_name)` for criteria testable with a
-     shell script (exit 0 = pass, non-zero = fail)
-   - `[judge](tests/judges/<label>.sh::test_function_name)` for criteria requiring LLM
-     evaluation of source code
-   - Use `[verify]` when the criterion can be checked programmatically (output format,
-     exit codes, file existence, CLI behavior)
-   - Use `[judge]` when the criterion requires reading source code and evaluating
-     qualities (code structure, error handling, documentation clarity)
-   - Example:
-     ```markdown
-     ## Success Criteria
+A few interview-flow specifics this template owns (everything else lives in
+the conventions document):
 
-     - [ ] CLI accepts --format flag with json and table options
-       [verify](tests/my-feature-test.sh::test_format_flag)
-     - [ ] Error messages are clear and actionable
-       [judge](tests/judges/my-feature.sh::test_clear_errors)
-     ```
-   - Test paths are relative to the repo root
-   - Function names use `test_` prefix and snake_case
-   - Do NOT create the test files — just define the annotations. `loom run` will
-     implement them during the implementation phase.
-6. **Out of scope** - What this feature will NOT do (important for boundaries)
+- Each success criterion gets a verifier annotation on the line below it.
+  `[verify](tests/<label>-test.sh::test_function_name)` for criteria
+  testable with a shell script; `[judge](tests/judges/<label>.sh::test_function_name)`
+  for criteria requiring LLM evaluation of source code.
+- Test paths are relative to the repo root; function names use the
+  `test_` prefix and snake_case.
+- Do NOT create the test files during this interview — just write the
+  annotations. `loom run` implements them during the implementation phase.
+
+## Plan-Stage Rubric
+
+Before the interview can land a commit, three checks must satisfy. Each is
+the agent's responsibility — the gate IS this rubric, there is no separate
+`loom check` to lean on at this stage. A failing check keeps the interview
+open until the user resolves it.
+
+### 1. Completeness check
+
+Every requirement the user expressed must have a checkable surface in the
+spec:
+
+- A *Success Criteria* bullet carrying a `[verify]` or `[judge]` annotation
+- A lifecycle / decision / contract table row
+- An explicit `## Out of Scope` declaration
+
+Implicit assumptions must be surfaced — do not let one slide into the spec
+unexamined. For each surfaced assumption, either make it testable (promote
+it to a Success Criteria bullet with a verifier annotation) or mark it
+**non-testable with a reason** so a future reader knows why no verifier
+exists.
+
+A requirement that maps to no bullet, no row, and no out-of-scope
+declaration is the failure mode this check catches. Pause and resolve
+before exiting.
+
+### 2. Internal coherence check
+
+Read the spec under interview end-to-end and scan for internal
+contradictions:
+
+- Two sections saying different things about the same surface
+- Decision-table rows that conflict with each other
+- Prose claims that cannot both be true
+- Terminology used inconsistently across sections
+
+When a contradiction is found, pause and ask the user which side stands.
+Do not silently pick a winner — the contradiction itself is signal that
+the spec's intent is undecided.
+
+### 3. Invariant-clash scan
+
+The third check covers invariants. The detailed three-paths resolution
+protocol follows below.
+
+## Invariant-Clash Awareness
+
+Before committing a spec change, scan the anchor spec **and any touched sibling
+specs** for **invariants** the change may clash with. A change landing in the
+anchor may contradict an invariant in a sibling; check every spec the session
+has touched, not just `specs/loom-harness.md`. Invariant categories:
+
+- **Architectural decisions** — module boundaries, data flow, layering
+- **Data-structure choices** — file formats, schemas, key conventions
+- **Explicit constraints** — e.g., "must be idempotent", "no external deps"
+- **Non-functional requirements** — performance, security, portability
+- **Out-of-scope items** — things the spec deliberately excludes
+
+When a potential clash is detected, **pause the interview** and ask the user to
+pick a path. Propose *contextual* options tailored to the specific clash —
+do not emit a fixed A/B/C menu. Typically 2–4 options per clash, each naming
+the cost.
+
+The **three-paths principle** is guidance, not a rigid template. The three
+paths are:
+
+1. **Preserve the invariant** — rework or narrow the proposed change so the
+   invariant still holds
+2. **Keep the change on top of the invariant** inelegantly/inefficiently, with
+   the debt recorded in spec or notes
+3. **Change the invariant** — update the spec to accommodate the change, then
+   plan follow-up work to realign code
+
+Use these as a lens, but a given clash may need fewer or differently-framed
+options. Phrase each option in terms concrete to the clash at hand.
+
+**Bias toward asking when uncertain.** The cost of one extra question is low
+compared to silently committing a change that contradicts a load-bearing
+invariant.
 
 ## Interview Modes
 
