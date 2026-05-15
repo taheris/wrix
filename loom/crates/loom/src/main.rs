@@ -77,44 +77,55 @@ impl From<AgentBackendArg> for AgentKind {
 /// Subcommands of `loom note`.
 #[derive(Debug, Subcommand)]
 enum NoteAction {
-    /// Atomically replace every note for `<label>` under `--kind`.
+    /// Replace all notes for the spec.
     Set {
+        /// Spec label.
         label: String,
         /// JSON array of note strings: `'["note 1", "note 2"]'`.
         #[arg(long)]
         json: String,
-        /// Note kind (default `implementation`).
+        /// Note kind.
         #[arg(long, default_value = "implementation")]
         kind: String,
     },
-    /// Append a single note.
+    /// Append a single note to the spec.
     Add {
+        /// Spec label.
         label: String,
+        /// Note text.
         #[arg(long)]
         text: String,
+        /// Note kind.
         #[arg(long, default_value = "implementation")]
         kind: String,
     },
-    /// Delete notes for `<label>`. By default just the
-    /// `--kind implementation` rows; `--all-kinds` widens to every kind.
+    /// Delete notes for the spec.
     Clear {
+        /// Spec label.
         label: String,
+        /// Note kind.
         #[arg(long, default_value = "implementation", conflicts_with = "all_kinds")]
         kind: String,
+        /// Clear notes across every kind.
         #[arg(long)]
         all_kinds: bool,
     },
-    /// List notes by `(label, kind)`. Omitting `<label>` widens to
-    /// every spec; `--all-kinds` widens beyond the default kind.
+    /// List notes for the spec.
     List {
+        /// Spec label; omit to list every spec.
         label: Option<String>,
+        /// Note kind.
         #[arg(long, default_value = "implementation", conflicts_with = "all_kinds")]
         kind: String,
+        /// List notes across every kind.
         #[arg(long)]
         all_kinds: bool,
     },
-    /// Remove a single note by its row id.
-    Rm { id: i64 },
+    /// Remove a single note by id.
+    Rm {
+        /// Note id.
+        id: i64,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -282,9 +293,7 @@ enum Command {
         #[arg(long, value_name = "COMMIT")]
         since: Option<String>,
     },
-    /// Manage SQLite-backed notes for a spec — replacement for the
-    /// deprecated `## Implementation Notes` markdown path (D2,
-    /// wx-b1f1p).
+    /// Manage notes for a spec.
     #[command(next_help_heading = "Workspace")]
     Note {
         #[command(subcommand)]

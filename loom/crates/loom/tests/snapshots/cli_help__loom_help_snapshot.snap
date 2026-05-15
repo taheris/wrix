@@ -18,7 +18,7 @@ Commands:
   check   Post-loop reviewer + push gate
   msg     Resolve outstanding `loom:clarify` and `loom:blocked` beads
   todo    Decompose the active spec into beads (four-tier detection)
-  note    Manage SQLite-backed notes for a spec — replacement for the deprecated `## Implementation Notes` markdown path (D2, wx-b1f1p)
+  note    Manage notes for a spec
   doctor  Audit spec criteria against test dispatchers (`[verify]` → stub-or-real)
   help    Print this message or the help of the given subcommand(s)
 

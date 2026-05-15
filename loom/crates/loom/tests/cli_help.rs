@@ -85,3 +85,33 @@ fn loom_msg_help_snapshot() {
 fn loom_todo_help_snapshot() {
     insta::assert_snapshot!(loom_help(&["todo"]));
 }
+
+#[test]
+fn loom_note_help_snapshot() {
+    insta::assert_snapshot!(loom_help(&["note"]));
+}
+
+#[test]
+fn loom_note_set_help_snapshot() {
+    insta::assert_snapshot!(loom_help(&["note", "set"]));
+}
+
+#[test]
+fn loom_note_add_help_snapshot() {
+    insta::assert_snapshot!(loom_help(&["note", "add"]));
+}
+
+#[test]
+fn loom_note_clear_help_snapshot() {
+    insta::assert_snapshot!(loom_help(&["note", "clear"]));
+}
+
+#[test]
+fn loom_note_list_help_snapshot() {
+    insta::assert_snapshot!(loom_help(&["note", "list"]));
+}
+
+#[test]
+fn loom_note_rm_help_snapshot() {
+    insta::assert_snapshot!(loom_help(&["note", "rm"]));
+}
