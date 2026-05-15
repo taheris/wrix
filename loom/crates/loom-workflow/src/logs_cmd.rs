@@ -306,10 +306,25 @@ mod tests {
     use super::*;
     use anyhow::Result;
     use loom_events::EventEnvelope;
+    use loom_events::Source;
     use loom_events::identifier::ToolCallId;
     use serde_json::json;
     use std::io;
     use std::sync::{Arc, Mutex};
+
+    /// Fixture envelope for `loom logs` replay tests. Bead id `wx-1`
+    /// matches the path-builder fixtures so the replay code paths see
+    /// the expected on-disk shape.
+    fn sample_envelope() -> EventEnvelope {
+        EventEnvelope {
+            bead_id: BeadId::new("wx-1").expect("valid bead id"),
+            molecule_id: None,
+            iteration: 0,
+            source: Source::Agent,
+            ts_ms: 0,
+            seq: 0,
+        }
+    }
 
     /// Pinned reference time used by mtime-driven tests so they don't read
     /// wall clock — matches the rest of the loom test suite, which routes
@@ -433,9 +448,9 @@ mod tests {
     }
 
     fn sample_tool_pair() -> Vec<AgentEvent> {
-        let mut call_env = EventEnvelope::placeholder();
+        let mut call_env = sample_envelope();
         call_env.ts_ms = 1_000;
-        let mut result_env = EventEnvelope::placeholder();
+        let mut result_env = sample_envelope();
         result_env.ts_ms = 4_000;
         vec![
             AgentEvent::ToolCall {
@@ -521,11 +536,11 @@ mod tests {
         let path = dir.path().join("alpha/wx-1-x.jsonl");
         let events = vec![
             AgentEvent::TextDelta {
-                envelope: EventEnvelope::placeholder(),
+                envelope: sample_envelope(),
                 text: "hel".into(),
             },
             AgentEvent::TextDelta {
-                envelope: EventEnvelope::placeholder(),
+                envelope: sample_envelope(),
                 text: "lo".into(),
             },
         ];

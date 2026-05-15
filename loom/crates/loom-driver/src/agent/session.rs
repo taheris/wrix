@@ -5,9 +5,9 @@ use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::process::{Child, ChildStdin};
 
 use super::error::ProtocolError;
-use super::event::AgentEvent;
 use super::jsonl::JsonlReader;
 use super::parse::LineParse;
+use loom_events::ParsedAgentEvent;
 
 /// Typestate marker — session has been spawned but no prompt has been sent.
 pub struct Idle;
@@ -24,7 +24,7 @@ pub struct AgentSession<S> {
     stdin: BufWriter<ChildStdin>,
     reader: JsonlReader,
     parser: Box<dyn LineParse + Send>,
-    pending: VecDeque<AgentEvent>,
+    pending: VecDeque<ParsedAgentEvent>,
     _state: PhantomData<S>,
 }
 
@@ -67,14 +67,18 @@ impl AgentSession<Idle> {
 }
 
 impl AgentSession<Active> {
-    /// Read the next [`AgentEvent`] from the stream.
+    /// Read the next [`ParsedAgentEvent`] from the stream.
     ///
     /// Drains buffered events from prior multi-event lines first. Otherwise
     /// reads JSONL lines until one yields at least one event, writing any
     /// `ParsedLine::response` payload back to stdin in between (the canonical
     /// case is claude's `control_request` auto-approve). Returns `Ok(None)`
     /// on clean EOF.
-    pub async fn next_event(&mut self) -> Result<Option<AgentEvent>, ProtocolError> {
+    ///
+    /// Per RS-12 the session yields the unstamped parser payload; the
+    /// workflow layer joins each event with the per-spawn `EventEnvelope`
+    /// via `AgentEvent::from_parsed` before any consumer sees it.
+    pub async fn next_event(&mut self) -> Result<Option<ParsedAgentEvent>, ProtocolError> {
         if let Some(evt) = self.pending.pop_front() {
             return Ok(Some(evt));
         }

@@ -405,7 +405,8 @@ fn write_spawn_config_to(path: &Path, config: &SpawnConfig) -> Result<(), Protoc
 )]
 mod tests {
     use super::*;
-    use loom_driver::agent::{AgentEvent, RePinContent};
+    use loom_driver::agent::RePinContent;
+    use loom_events::ParsedAgentEvent;
     use std::path::PathBuf;
 
     fn mock_pi_path() -> PathBuf {
@@ -495,7 +496,7 @@ mod tests {
         let mut session = session.prompt("ping").await.expect("prompt ok");
         loop {
             match session.next_event().await.expect("event ok") {
-                Some(AgentEvent::SessionComplete { .. }) => break,
+                Some(ParsedAgentEvent::SessionComplete { .. }) => break,
                 Some(_) => continue,
                 None => panic!("unexpected EOF"),
             }
@@ -535,12 +536,12 @@ mod tests {
         let mut saw_echo = false;
         loop {
             match session.next_event().await.expect("event ok") {
-                Some(AgentEvent::TextDelta { text, .. }) => {
+                Some(ParsedAgentEvent::TextDelta { text, .. }) => {
                     if text.contains("HELLO_PROMPT") {
                         saw_echo = true;
                     }
                 }
-                Some(AgentEvent::SessionComplete { .. }) => break,
+                Some(ParsedAgentEvent::SessionComplete { .. }) => break,
                 Some(_) => continue,
                 None => panic!("unexpected EOF"),
             }
@@ -566,7 +567,7 @@ mod tests {
         // ready for a steer.
         loop {
             match session.next_event().await.expect("event ok") {
-                Some(AgentEvent::TurnEnd { .. }) => break,
+                Some(ParsedAgentEvent::TurnEnd) => break,
                 Some(_) => continue,
                 None => panic!("unexpected EOF before first TurnEnd"),
             }
@@ -580,12 +581,12 @@ mod tests {
         let mut saw_steer_echo = false;
         loop {
             match session.next_event().await.expect("event ok") {
-                Some(AgentEvent::TextDelta { text, .. }) => {
+                Some(ParsedAgentEvent::TextDelta { text, .. }) => {
                     if text.contains("STEERED_TEXT") {
                         saw_steer_echo = true;
                     }
                 }
-                Some(AgentEvent::SessionComplete { .. }) => break,
+                Some(ParsedAgentEvent::SessionComplete { .. }) => break,
                 Some(_) => continue,
                 None => panic!("unexpected EOF before SessionComplete"),
             }
@@ -615,16 +616,16 @@ mod tests {
         let mut saw_repin_echo = false;
         loop {
             match session.next_event().await.expect("event ok") {
-                Some(AgentEvent::CompactionStart { .. }) if !sent_repin => {
+                Some(ParsedAgentEvent::CompactionStart { .. }) if !sent_repin => {
                     session.steer(repin_text).await.expect("steer ok");
                     sent_repin = true;
                 }
-                Some(AgentEvent::TextDelta { text, .. }) => {
+                Some(ParsedAgentEvent::TextDelta { text, .. }) => {
                     if text.contains(repin_text) {
                         saw_repin_echo = true;
                     }
                 }
-                Some(AgentEvent::SessionComplete { .. }) => break,
+                Some(ParsedAgentEvent::SessionComplete { .. }) => break,
                 Some(_) => continue,
                 None => panic!("unexpected EOF before SessionComplete"),
             }
@@ -659,13 +660,13 @@ mod tests {
         let mut saw_scratch_echo = false;
         loop {
             match session.next_event().await.expect("event ok") {
-                Some(AgentEvent::CompactionStart { .. }) if !handler_called => {
+                Some(ParsedAgentEvent::CompactionStart { .. }) if !handler_called => {
                     PiBackend::on_compaction_start(&mut session, &config)
                         .await
                         .expect("on_compaction_start ok");
                     handler_called = true;
                 }
-                Some(AgentEvent::TextDelta { text, .. }) => {
+                Some(ParsedAgentEvent::TextDelta { text, .. }) => {
                     if text.contains("PROMPT_FILE_BODY") {
                         saw_prompt_echo = true;
                     }
@@ -673,7 +674,7 @@ mod tests {
                         saw_scratch_echo = true;
                     }
                 }
-                Some(AgentEvent::SessionComplete { .. }) => break,
+                Some(ParsedAgentEvent::SessionComplete { .. }) => break,
                 Some(_) => continue,
                 None => panic!("unexpected EOF before SessionComplete"),
             }
@@ -732,7 +733,7 @@ mod tests {
         let mut saw_model_id = false;
         loop {
             match session.next_event().await.expect("event ok") {
-                Some(AgentEvent::TextDelta { text, .. }) => {
+                Some(ParsedAgentEvent::TextDelta { text, .. }) => {
                     if text.contains("deepseek") {
                         saw_provider = true;
                     }
@@ -740,7 +741,7 @@ mod tests {
                         saw_model_id = true;
                     }
                 }
-                Some(AgentEvent::SessionComplete { .. }) => break,
+                Some(ParsedAgentEvent::SessionComplete { .. }) => break,
                 Some(_) => continue,
                 None => panic!("unexpected EOF"),
             }

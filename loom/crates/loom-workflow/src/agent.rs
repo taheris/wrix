@@ -24,7 +24,7 @@ use loom_driver::agent::{
 };
 use loom_driver::clock::{Clock, SystemClock};
 use loom_driver::logging::{BeadOutcome, LogSink};
-use loom_events::{EnvelopeBuilder, Source};
+use loom_events::{EnvelopeBuilder, ParsedAgentEvent, Source};
 use tracing::{info, warn};
 
 use crate::run::SessionResult;
@@ -66,12 +66,15 @@ pub async fn run_agent<B: AgentBackend>(
 /// `infra-preflight` immediately and grant mid-session failures one
 /// driver-memory retry per `loom run`.
 ///
-/// `envelope_builder` is the R1 (wx-cqzxh) plumbing: when `Some`, every
-/// event emitted by the parser has its placeholder envelope replaced
-/// with a real per-spawn envelope (monotonic `seq`, real `bead_id`,
-/// real wall-clock `ts_ms`). When `None`, events flow with whatever
-/// the parser produced (currently `EventEnvelope::placeholder()` per G1's
-/// interim shape); used by tests and the legacy `run_agent` wrapper.
+/// `envelope_builder` is the R1 (wx-cqzxh) / RS-12 plumbing: each
+/// `ParsedAgentEvent` the session yields is joined with the next
+/// per-spawn envelope (monotonic `seq`, real `bead_id`, real wall-clock
+/// `ts_ms`) via `AgentEvent::from_parsed`. The session layer is the
+/// sole constructor of `AgentEvent`; parsers cannot reach a stamped
+/// event by any other path. When `None`, the loop falls back to
+/// `phase_envelope_builder` so phase spawns (todo / plan / msg) without
+/// a bead context still produce fully-valid envelopes (bead id
+/// `wx-phase`).
 pub async fn run_agent_classified<B: AgentBackend>(
     config: &SpawnConfig,
     mut sink: Option<LogSink>,
@@ -145,7 +148,7 @@ pub async fn run_agent_classified<B: AgentBackend>(
     info!("prompt sent; awaiting agent events");
     loop {
         let next = next_event_with_stall_warn(&mut session, stall_window, &clock).await;
-        let mut event = match next {
+        let parsed = match next {
             Ok(Some(event)) => event,
             Ok(None) => {
                 let error_str = ProtocolError::UnexpectedEof.to_string();
@@ -160,12 +163,13 @@ pub async fn run_agent_classified<B: AgentBackend>(
                 return SessionResult::MidSessionFailed { error: error_str };
             }
         };
-        // R1 (wx-cqzxh): stamp the real per-spawn envelope onto each
-        // event before any consumer sees it. Parser produced a
-        // placeholder; this is where the live bead context lands.
-        if let Some(builder) = envelope_builder.as_mut() {
-            *event.envelope_mut() = builder.build();
-        }
+        // RS-12: the session yields the parser's payload only; the
+        // workflow layer joins it with the per-spawn envelope to
+        // produce the consumer-visible `AgentEvent`.
+        let envelope = envelope_builder
+            .get_or_insert_with(phase_envelope_builder)
+            .build();
+        let event = AgentEvent::from_parsed(parsed, envelope);
         info!(event = %summarize_event(&event), "agent event");
         if let AgentEvent::TextDelta { text, .. } = &event
             && let Some(buf) = text_capture.as_deref_mut()
@@ -256,7 +260,7 @@ async fn next_event_with_stall_warn(
     session: &mut AgentSession<Active>,
     stall_window: Duration,
     clock: &dyn Clock,
-) -> Result<Option<AgentEvent>, ProtocolError> {
+) -> Result<Option<ParsedAgentEvent>, ProtocolError> {
     let next = session.next_event();
     if stall_window.is_zero() {
         return next.await;
@@ -273,6 +277,28 @@ async fn next_event_with_stall_warn(
             ),
         }
     }
+}
+
+/// Fallback `EnvelopeBuilder` for phase-level spawns (todo/check/msg)
+/// that do not own a per-bead context yet. Stamps events with the
+/// synthetic but fully-valid `wx-phase` bead id; replay tools that key
+/// on `bead_id` see it as a distinct stream rather than an invalid
+/// sentinel. The `ts_ms` closure samples the wall clock so events stay
+/// monotonic.
+fn phase_envelope_builder() -> EnvelopeBuilder {
+    let bead = loom_events::identifier::BeadId::new("wx-phase").unwrap_or_else(|err| {
+        // `wx-phase` is a compile-time constant that passes BeadId
+        // validation; failure means BeadId rules drifted incompatibly.
+        unreachable!("`wx-phase` must parse as a BeadId: {err}")
+    });
+    let clock = SystemClock::new();
+    EnvelopeBuilder::new(bead, None, 0, Source::Agent, move || {
+        clock
+            .wall_now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64
+    })
 }
 
 fn finish_sink(sink: Option<LogSink>, outcome: BeadOutcome) {

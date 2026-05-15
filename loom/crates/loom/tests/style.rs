@@ -646,102 +646,58 @@ fn no_real_clock_outside_system_clock() {
 }
 
 // ---------------------------------------------------------------------------
-// Rule (R1, wx-cqzxh): `EventEnvelope::placeholder()` is the parser's
-// interim shape — the parser stamps a placeholder envelope per event
-// because it doesn't see the live bead/molecule context. Every other
-// production caller (driver, workflow, dispatch, sink) must overwrite the
-// placeholder via `EnvelopeBuilder::build()` before any consumer reads
-// the event. A `placeholder()` slipping into non-parser production code is
-// a regression — the on-disk JSONL would carry the sentinel `wx-pending`
-// bead id and `seq=0` for that event, silently corrupting replay.
+// Rule (RS-12, wx-ywdnz.1): `EventEnvelope`, `BeadId`, and `AgentEvent`
+// carry no `placeholder()` / `default()` constructor. The parser-to-stamper
+// split moved unstamped events to the sibling `ParsedAgentEvent` type, and
+// the session layer is the only constructor of `AgentEvent` (via
+// `AgentEvent::from_parsed`). Re-introducing a sentinel constructor would
+// reopen the "sentinel `wx-pending` bead id slipping into production logs"
+// regression class. The compiler enforces the structural rule; this test
+// guards against the named constructors getting added back.
 //
-// Also bans `EventEnvelope::default()` outright (RS-13, wx-7tde8) — the
-// `impl Default` was ripped out because it required callers to overwrite
-// before use.
+// Also bans `EventEnvelope::default()` (RS-13, wx-7tde8) — `impl Default`
+// requires callers to overwrite before use, which is the same
+// sentinel-by-another-name pattern.
 // ---------------------------------------------------------------------------
 
 #[test]
 fn no_envelope_default_outside_parser() {
     let root = loom_workspace_root();
-    let allowed: &[&Path] = &[
-        // Parser stamps the placeholder; the session layer overwrites it.
-        Path::new("crates/loom-agent/src/pi/parser.rs"),
-        Path::new("crates/loom-agent/src/claude/parser.rs"),
-        // The placeholder constructor lives here.
-        Path::new("crates/loom-events/src/event.rs"),
-    ];
     let mut violations: Vec<String> = Vec::new();
     for path in src_files(&root) {
         let rel_path = rel(&root, &path);
-        if allowed.iter().any(|a| Path::new(&rel_path) == *a) {
-            continue;
-        }
         let body = read_to_string(&path);
-        let cfg_test_spans = cfg_test_mod_line_spans(&path);
         for (lineno, line) in body.lines().enumerate() {
             if is_comment(line) {
                 continue;
             }
             let line_no = lineno + 1;
-            if cfg_test_spans
-                .iter()
-                .any(|(start, end)| line_no >= *start && line_no <= *end)
+            if line.contains("EventEnvelope::placeholder(")
+                || line.contains("BeadId::placeholder(")
+                || line.contains("AgentEvent::placeholder(")
             {
-                continue;
-            }
-            if line.contains("EventEnvelope::placeholder(") {
                 violations.push(format!(
-                    "{}:{} `EventEnvelope::placeholder()` — overwrite via \
-                     `EnvelopeBuilder::build()` so the event carries a real \
-                     `bead_id`/`seq`/`ts_ms`",
+                    "{}:{} `*::placeholder()` — RS-12 removed sentinel \
+                     constructors; parser emits `ParsedAgentEvent` and \
+                     session layer joins via `AgentEvent::from_parsed`",
                     rel_path, line_no,
                 ));
             }
             if line.contains("EventEnvelope::default(") {
                 violations.push(format!(
                     "{}:{} `EventEnvelope::default()` — `impl Default` was \
-                     removed (RS-13); use `EventEnvelope::placeholder()` only \
-                     in parser code, real `EnvelopeBuilder::build()` elsewhere",
+                     removed (RS-13); construct an `EventEnvelope` via \
+                     `EnvelopeBuilder` or struct-literal in test fixtures",
                     rel_path, line_no,
                 ));
             }
         }
     }
     assert_violations(
-        "no `EventEnvelope::placeholder()` / `EventEnvelope::default()` outside \
-         parsers / definition (R1, wx-cqzxh + RS-13, wx-7tde8 — driver/session \
-         code must stamp a real envelope via `EnvelopeBuilder`)",
+        "no `*::placeholder()` constructors on event types (RS-12, \
+         wx-ywdnz.1) and no `EventEnvelope::default()` (RS-13, wx-7tde8)",
         &violations,
     );
-}
-
-/// Inclusive `(start_line, end_line)` ranges for each `#[cfg(test)] mod ... { ... }`
-/// at the top level of `path`. Inner items inside such a module are excluded from
-/// production-code style rules — they're test fixtures, not driver code.
-fn cfg_test_mod_line_spans(path: &Path) -> Vec<(usize, usize)> {
-    use syn::spanned::Spanned;
-    let file = parse_rs(path);
-    let mut out = Vec::new();
-    for item in &file.items {
-        if let syn::Item::Mod(m) = item
-            && m.attrs.iter().any(is_cfg_test_attr)
-        {
-            let span = m.span();
-            out.push((span.start().line, span.end().line));
-        }
-    }
-    out
-}
-
-fn is_cfg_test_attr(attr: &Attribute) -> bool {
-    if !attr.path().is_ident("cfg") {
-        return false;
-    }
-    // `#[cfg(test)]` — parse the meta list and look for a single `test` ident.
-    let Meta::List(list) = &attr.meta else {
-        return false;
-    };
-    list.tokens.to_string().trim() == "test"
 }
 
 // ---------------------------------------------------------------------------

@@ -5,8 +5,8 @@
 //! (`prompt`/`steer`/`abort`), and the `extension_ui_request` auto-cancel
 //! reply that protects loom from a stalled extension.
 
-use loom_driver::agent::{AgentEvent, CompactionReason, LineParse, ParsedLine, ProtocolError};
-use loom_events::EventEnvelope;
+use loom_driver::agent::{CompactionReason, LineParse, ParsedLine, ProtocolError};
+use loom_events::ParsedAgentEvent;
 use serde::Serialize;
 use tracing::{debug, trace, warn};
 
@@ -110,43 +110,29 @@ fn encode_command<T: Serialize>(payload: &T) -> Result<String, ProtocolError> {
 }
 
 fn parse_event(parser: &PiParser, event: PiEvent) -> Result<ParsedLine, ProtocolError> {
-    // Parser-side events use the placeholder envelope; the session layer
-    // overwrites it with the real per-spawn envelope before emit. See
-    // `EventEnvelope::placeholder` for the well-known placeholder bead id.
     Ok(match event {
         PiEvent::MessageUpdate { delta } => match delta {
             AssistantMessageDelta::TextDelta { text } => ParsedLine {
-                events: vec![AgentEvent::TextDelta {
-                    envelope: EventEnvelope::placeholder(),
-                    text,
-                }],
+                events: vec![ParsedAgentEvent::TextDelta { text }],
                 response: None,
             },
             AssistantMessageDelta::TextEnd => ParsedLine {
-                events: vec![AgentEvent::TextEnd {
-                    envelope: EventEnvelope::placeholder(),
-                }],
+                events: vec![ParsedAgentEvent::TextEnd],
                 response: None,
             },
             AssistantMessageDelta::ThinkingDelta { text } => ParsedLine {
-                events: vec![AgentEvent::ThinkingDelta {
-                    envelope: EventEnvelope::placeholder(),
-                    text,
-                }],
+                events: vec![ParsedAgentEvent::ThinkingDelta { text }],
                 response: None,
             },
             AssistantMessageDelta::ThinkingEnd => ParsedLine {
-                events: vec![AgentEvent::ThinkingEnd {
-                    envelope: EventEnvelope::placeholder(),
-                }],
+                events: vec![ParsedAgentEvent::ThinkingEnd],
                 response: None,
             },
             AssistantMessageDelta::ToolcallDelta {
                 tool_call_id,
                 delta,
             } => ParsedLine {
-                events: vec![AgentEvent::ToolcallDelta {
-                    envelope: EventEnvelope::placeholder(),
+                events: vec![ParsedAgentEvent::ToolcallDelta {
                     id: tool_call_id,
                     delta,
                 }],
@@ -155,10 +141,7 @@ fn parse_event(parser: &PiParser, event: PiEvent) -> Result<ParsedLine, Protocol
             AssistantMessageDelta::Error { reason, message } => {
                 let message = message.or(reason).unwrap_or_default();
                 ParsedLine {
-                    events: vec![AgentEvent::Error {
-                        envelope: EventEnvelope::placeholder(),
-                        message,
-                    }],
+                    events: vec![ParsedAgentEvent::Error { message }],
                     response: None,
                 }
             }
@@ -176,8 +159,7 @@ fn parse_event(parser: &PiParser, event: PiEvent) -> Result<ParsedLine, Protocol
             // tool_call is a child of whatever Task (if any) was open at
             // the time of its emission, not its own child.
             let parent = parser.current_parent()?;
-            let event = AgentEvent::ToolCall {
-                envelope: EventEnvelope::placeholder(),
+            let event = ParsedAgentEvent::ToolCall {
                 id: tool_call_id.clone(),
                 tool: tool_name.clone(),
                 params: args,
@@ -206,8 +188,7 @@ fn parse_event(parser: &PiParser, event: PiEvent) -> Result<ParsedLine, Protocol
             // calls are siblings of the Task, not children.
             parser.pop_task_if_matches(&tool_call_id)?;
             ParsedLine {
-                events: vec![AgentEvent::ToolResult {
-                    envelope: EventEnvelope::placeholder(),
+                events: vec![ParsedAgentEvent::ToolResult {
                     id: tool_call_id,
                     output,
                     is_error,
@@ -216,31 +197,24 @@ fn parse_event(parser: &PiParser, event: PiEvent) -> Result<ParsedLine, Protocol
             }
         }
         PiEvent::TurnEnd => ParsedLine {
-            events: vec![AgentEvent::TurnEnd {
-                envelope: EventEnvelope::placeholder(),
-            }],
+            events: vec![ParsedAgentEvent::TurnEnd],
             response: None,
         },
         PiEvent::AgentEnd => ParsedLine {
-            events: vec![AgentEvent::SessionComplete {
-                envelope: EventEnvelope::placeholder(),
+            events: vec![ParsedAgentEvent::SessionComplete {
                 exit_code: 0,
                 cost_usd: None,
             }],
             response: None,
         },
         PiEvent::CompactionStart { reason } => ParsedLine {
-            events: vec![AgentEvent::CompactionStart {
-                envelope: EventEnvelope::placeholder(),
+            events: vec![ParsedAgentEvent::CompactionStart {
                 reason: map_compaction_reason(reason.as_deref()),
             }],
             response: None,
         },
         PiEvent::CompactionEnd { aborted } => ParsedLine {
-            events: vec![AgentEvent::CompactionEnd {
-                envelope: EventEnvelope::placeholder(),
-                aborted,
-            }],
+            events: vec![ParsedAgentEvent::CompactionEnd { aborted }],
             response: None,
         },
         PiEvent::ToolExecutionUpdate {
@@ -253,8 +227,7 @@ fn parse_event(parser: &PiParser, event: PiEvent) -> Result<ParsedLine, Protocol
                 other => other.to_string(),
             };
             ParsedLine {
-                events: vec![AgentEvent::ToolProgress {
-                    envelope: EventEnvelope::placeholder(),
+                events: vec![ParsedAgentEvent::ToolProgress {
                     id: tool_call_id,
                     text,
                 }],
@@ -267,8 +240,7 @@ fn parse_event(parser: &PiParser, event: PiEvent) -> Result<ParsedLine, Protocol
             delay_ms,
             error_message,
         } => ParsedLine {
-            events: vec![AgentEvent::AutoRetry {
-                envelope: EventEnvelope::placeholder(),
+            events: vec![ParsedAgentEvent::AutoRetry {
                 attempt,
                 max_attempts,
                 delay_ms,
@@ -374,7 +346,8 @@ impl LineParse for PiParser {
 )]
 mod tests {
     use super::*;
-    use loom_driver::agent::{AgentEvent, CompactionReason, ProtocolError};
+    use loom_driver::agent::{CompactionReason, ProtocolError};
+    use loom_events::ParsedAgentEvent;
 
     fn parse(line: &str) -> ParsedLine {
         PiParser::new()
@@ -394,7 +367,7 @@ mod tests {
             r#"{"type":"tool_execution_start","toolCallId":"tc-task","toolName":"Task","args":{}}"#;
         let p = parser.parse_line(task_start).expect("task start");
         match &p.events[0] {
-            AgentEvent::ToolCall {
+            ParsedAgentEvent::ToolCall {
                 tool,
                 parent_tool_call_id,
                 ..
@@ -409,7 +382,7 @@ mod tests {
         let nested = r#"{"type":"tool_execution_start","toolCallId":"tc-read","toolName":"Read","args":{"file_path":"a"}}"#;
         let p = parser.parse_line(nested).expect("nested");
         match &p.events[0] {
-            AgentEvent::ToolCall {
+            ParsedAgentEvent::ToolCall {
                 tool,
                 parent_tool_call_id,
                 ..
@@ -431,7 +404,7 @@ mod tests {
         let sibling = r#"{"type":"tool_execution_start","toolCallId":"tc-bash","toolName":"Bash","args":{"command":"ls"}}"#;
         let p = parser.parse_line(sibling).expect("sibling");
         match &p.events[0] {
-            AgentEvent::ToolCall {
+            ParsedAgentEvent::ToolCall {
                 tool,
                 parent_tool_call_id,
                 ..
@@ -482,7 +455,7 @@ mod tests {
         let p = parse(line);
         assert_eq!(p.events.len(), 1);
         match &p.events[0] {
-            AgentEvent::ToolCall {
+            ParsedAgentEvent::ToolCall {
                 id, tool, params, ..
             } => {
                 assert_eq!(id.as_str(), "tc-1");
@@ -525,7 +498,7 @@ mod tests {
         let p = parse(line);
         assert_eq!(p.events.len(), 1);
         match &p.events[0] {
-            AgentEvent::TextDelta { text, .. } => assert_eq!(text, "hello"),
+            ParsedAgentEvent::TextDelta { text, .. } => assert_eq!(text, "hello"),
             other => panic!("expected MessageDelta, got {other:?}"),
         }
     }
@@ -536,19 +509,19 @@ mod tests {
         let p = parse(line);
         assert_eq!(p.events.len(), 1);
         match &p.events[0] {
-            AgentEvent::Error { message, .. } => assert_eq!(message, "user aborted"),
+            ParsedAgentEvent::Error { message, .. } => assert_eq!(message, "user aborted"),
             other => panic!("expected Error, got {other:?}"),
         }
     }
 
     #[test]
     fn message_update_thinking_delta_yields_thinking_delta_event() {
-        // R8 (wx-n06xn) — thinking_delta now maps to AgentEvent::ThinkingDelta.
+        // R8 (wx-n06xn) — thinking_delta now maps to ParsedAgentEvent::ThinkingDelta.
         let line = r#"{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","text":"…"}}"#;
         let p = parse(line);
         assert_eq!(p.events.len(), 1);
         match &p.events[0] {
-            AgentEvent::ThinkingDelta { text, .. } => assert_eq!(text, "…"),
+            ParsedAgentEvent::ThinkingDelta { text, .. } => assert_eq!(text, "…"),
             other => panic!("expected ThinkingDelta, got {other:?}"),
         }
     }
@@ -558,7 +531,7 @@ mod tests {
         // R8 — text_end is the paired terminator for text_delta.
         let line = r#"{"type":"message_update","assistantMessageEvent":{"type":"text_end"}}"#;
         let p = parse(line);
-        assert!(matches!(p.events[..], [AgentEvent::TextEnd { .. }]));
+        assert!(matches!(p.events[..], [ParsedAgentEvent::TextEnd]));
     }
 
     #[test]
@@ -566,7 +539,7 @@ mod tests {
         // R8 — thinking_end pairs with thinking_delta.
         let line = r#"{"type":"message_update","assistantMessageEvent":{"type":"thinking_end"}}"#;
         let p = parse(line);
-        assert!(matches!(p.events[..], [AgentEvent::ThinkingEnd { .. }]));
+        assert!(matches!(p.events[..], [ParsedAgentEvent::ThinkingEnd]));
     }
 
     #[test]
@@ -576,7 +549,7 @@ mod tests {
         let p = parse(line);
         assert_eq!(p.events.len(), 1);
         match &p.events[0] {
-            AgentEvent::ToolcallDelta { id, delta, .. } => {
+            ParsedAgentEvent::ToolcallDelta { id, delta, .. } => {
                 assert_eq!(id.as_str(), "tc-9");
                 assert_eq!(delta, r#"{"file_path":"a"}"#);
             }
@@ -598,7 +571,7 @@ mod tests {
         let p = parse(line);
         assert_eq!(p.events.len(), 1);
         match &p.events[0] {
-            AgentEvent::ToolResult {
+            ParsedAgentEvent::ToolResult {
                 id,
                 output,
                 is_error,
@@ -617,7 +590,7 @@ mod tests {
         let line = r#"{"type":"tool_execution_end","toolCallId":"tc-3","toolName":"Read","result":{"x":1},"isError":true}"#;
         let p = parse(line);
         match &p.events[0] {
-            AgentEvent::ToolResult {
+            ParsedAgentEvent::ToolResult {
                 output, is_error, ..
             } => {
                 assert!(output.contains("\"x\""));
@@ -631,7 +604,7 @@ mod tests {
     fn turn_end_yields_turn_end_event() {
         let line = r#"{"type":"turn_end","message":{"x":1},"toolResults":[]}"#;
         let p = parse(line);
-        assert!(matches!(p.events[..], [AgentEvent::TurnEnd { .. }]));
+        assert!(matches!(p.events[..], [ParsedAgentEvent::TurnEnd]));
     }
 
     #[test]
@@ -640,7 +613,7 @@ mod tests {
         let p = parse(line);
         assert_eq!(p.events.len(), 1);
         match &p.events[0] {
-            AgentEvent::SessionComplete {
+            ParsedAgentEvent::SessionComplete {
                 exit_code,
                 cost_usd,
                 ..
@@ -658,9 +631,8 @@ mod tests {
         let p = parse(line);
         assert!(matches!(
             p.events[..],
-            [AgentEvent::CompactionStart {
+            [ParsedAgentEvent::CompactionStart {
                 reason: CompactionReason::ContextLimit,
-                ..
             }]
         ));
     }
@@ -671,9 +643,8 @@ mod tests {
         let p = parse(line);
         assert!(matches!(
             p.events[..],
-            [AgentEvent::CompactionStart {
+            [ParsedAgentEvent::CompactionStart {
                 reason: CompactionReason::ContextLimit,
-                ..
             }]
         ));
     }
@@ -684,9 +655,8 @@ mod tests {
         let p = parse(line);
         assert!(matches!(
             p.events[..],
-            [AgentEvent::CompactionStart {
+            [ParsedAgentEvent::CompactionStart {
                 reason: CompactionReason::UserRequested,
-                ..
             }]
         ));
     }
@@ -697,9 +667,8 @@ mod tests {
         let p = parse(line);
         assert!(matches!(
             p.events[..],
-            [AgentEvent::CompactionStart {
+            [ParsedAgentEvent::CompactionStart {
                 reason: CompactionReason::Unknown,
-                ..
             }]
         ));
     }
@@ -711,16 +680,16 @@ mod tests {
         let p = parse(line);
         assert!(matches!(
             p.events[..],
-            [AgentEvent::CompactionEnd { aborted: true, .. }]
+            [ParsedAgentEvent::CompactionEnd { aborted: true }]
         ));
     }
 
     #[test]
     fn observability_only_events_yield_no_agent_events() {
         // R8 (wx-n06xn) trimmed this list — tool_execution_update and
-        // auto_retry_start now surface as AgentEvent::ToolProgress and
-        // AgentEvent::AutoRetry respectively. The pinned set here is
-        // the residual observability-only PiEvents.
+        // auto_retry_start now surface as ParsedAgentEvent::ToolProgress
+        // and ParsedAgentEvent::AutoRetry respectively. The pinned set
+        // here is the residual observability-only PiEvents.
         for line in [
             r#"{"type":"turn_start"}"#,
             r#"{"type":"agent_start"}"#,
@@ -737,13 +706,13 @@ mod tests {
     #[test]
     fn pi_tool_execution_update_yields_tool_progress() {
         // R8 — long-running tools emit `tool_execution_update` with a
-        // partial result; surface as AgentEvent::ToolProgress so the
-        // renderer can keep the user oriented.
+        // partial result; surface as ParsedAgentEvent::ToolProgress so
+        // the renderer can keep the user oriented.
         let line = r#"{"type":"tool_execution_update","toolCallId":"tc-7","partialResult":"50%"}"#;
         let p = parse(line);
         assert_eq!(p.events.len(), 1);
         match &p.events[0] {
-            AgentEvent::ToolProgress { id, text, .. } => {
+            ParsedAgentEvent::ToolProgress { id, text, .. } => {
                 assert_eq!(id.as_str(), "tc-7");
                 assert_eq!(text, "50%");
             }
@@ -759,7 +728,7 @@ mod tests {
         let p = parse(line);
         assert_eq!(p.events.len(), 1);
         match &p.events[0] {
-            AgentEvent::AutoRetry {
+            ParsedAgentEvent::AutoRetry {
                 attempt,
                 max_attempts,
                 delay_ms,

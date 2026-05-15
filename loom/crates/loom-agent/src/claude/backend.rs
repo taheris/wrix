@@ -249,8 +249,9 @@ fn send_signal(child: &Child, sig: Signal) {
 )]
 mod tests {
     use super::*;
-    use loom_driver::agent::{AgentEvent, RePinContent};
+    use loom_driver::agent::RePinContent;
     use loom_driver::clock::{MockClock, SystemClock};
+    use loom_events::ParsedAgentEvent;
     use std::path::PathBuf;
 
     fn sample_repin() -> RePinContent {
@@ -344,7 +345,7 @@ mod tests {
 
         // First assistant turn — proves the mock saw the prompt.
         match session.next_event().await.expect("event ok") {
-            Some(AgentEvent::TextDelta { text, .. }) => {
+            Some(ParsedAgentEvent::TextDelta { text, .. }) => {
                 assert!(text.contains("first turn"), "unexpected text: {text}");
             }
             other => panic!("expected first MessageDelta, got {other:?}"),
@@ -357,7 +358,7 @@ mod tests {
 
         // Second assistant turn — proves steering reached the mock.
         match session.next_event().await.expect("event ok") {
-            Some(AgentEvent::TextDelta { text, .. }) => {
+            Some(ParsedAgentEvent::TextDelta { text, .. }) => {
                 assert!(
                     text.contains("STEERED_TEXT"),
                     "second turn did not echo steer: {text}",
@@ -370,7 +371,7 @@ mod tests {
         // a result to consume.
         loop {
             match session.next_event().await.expect("event ok") {
-                Some(AgentEvent::SessionComplete { .. }) => break,
+                Some(ParsedAgentEvent::SessionComplete { .. }) => break,
                 Some(_) => continue,
                 None => panic!("unexpected EOF before SessionComplete"),
             }
@@ -403,7 +404,7 @@ mod tests {
 
         loop {
             match session.next_event().await.expect("event ok") {
-                Some(AgentEvent::SessionComplete { .. }) => break,
+                Some(ParsedAgentEvent::SessionComplete { .. }) => break,
                 Some(_) => continue,
                 None => panic!("unexpected EOF before SessionComplete"),
             }

@@ -227,9 +227,24 @@ pub(crate) fn open_sink_with_sink_writer(
 mod tests {
     use super::*;
     use loom_events::EventEnvelope;
+    use loom_events::Source;
     use loom_events::event::CompactionReason;
     use loom_events::identifier::ToolCallId;
     use serde_json::{Value, json};
+
+    /// Fixture envelope shared by the sink emission tests. Bead id is
+    /// `wx-test`; ts_ms / seq stay at zero so on-disk JSONL shapes are
+    /// trivially comparable.
+    fn sample_envelope() -> EventEnvelope {
+        EventEnvelope {
+            bead_id: BeadId::new("wx-test").expect("valid bead id"),
+            molecule_id: None,
+            iteration: 0,
+            source: Source::Agent,
+            ts_ms: 0,
+            seq: 0,
+        }
+    }
 
     fn read_lines(path: &Path) -> Vec<String> {
         let body = std::fs::read_to_string(path).expect("read");
@@ -246,7 +261,7 @@ mod tests {
             open_sink_with_sink_writer(dir.path(), &label, &bead, when).expect("open");
 
         sink.emit(&AgentEvent::ToolCall {
-            envelope: EventEnvelope::placeholder(),
+            envelope: sample_envelope(),
             id: ToolCallId::new("t1"),
             tool: "Read".to_string(),
             params: json!({"file_path": "src/lib.rs"}),
@@ -254,7 +269,7 @@ mod tests {
         })
         .expect("emit");
         sink.emit(&AgentEvent::TurnEnd {
-            envelope: EventEnvelope::placeholder(),
+            envelope: sample_envelope(),
         })
         .expect("emit");
 
@@ -288,7 +303,7 @@ mod tests {
         )
         .expect("open");
         sink.emit(&AgentEvent::CompactionStart {
-            envelope: EventEnvelope::placeholder(),
+            envelope: sample_envelope(),
             reason: CompactionReason::ContextLimit,
         })
         .expect("emit");
@@ -342,7 +357,7 @@ mod tests {
         )
         .expect("open phase sink");
         sink.emit(&AgentEvent::TurnEnd {
-            envelope: EventEnvelope::placeholder(),
+            envelope: sample_envelope(),
         })
         .expect("emit");
         let path = sink.log_path().to_path_buf();

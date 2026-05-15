@@ -29,26 +29,6 @@ pub struct EventEnvelope {
     pub seq: u64,
 }
 
-impl EventEnvelope {
-    /// Parser-side placeholder envelope. The `LineParse` impls call this
-    /// because they cannot see the live bead/molecule context; the
-    /// session layer overwrites the envelope (via [`AgentEvent::envelope_mut`])
-    /// with real per-spawn fields before any consumer reads the event.
-    /// Named `placeholder` (not `default`) per RS-13 — the value is not
-    /// safe to consume as-is, callers must overwrite. Test fixtures may
-    /// also use this to stand in for the session-layer stamp.
-    pub fn placeholder() -> Self {
-        Self {
-            bead_id: BeadId::placeholder(),
-            molecule_id: None,
-            iteration: 0,
-            source: Source::Agent,
-            ts_ms: 0,
-            seq: 0,
-        }
-    }
-}
-
 /// Where the event originated. Driver-side events (verdict gate, push
 /// gate, infra failures) carry `Driver`; agent-side events (tool calls,
 /// message deltas, etc.) carry `Agent`.
@@ -279,34 +259,142 @@ impl AgentEvent {
         }
     }
 
-    /// Mutable accessor for the common envelope. The session layer uses
-    /// this to overwrite the parser's placeholder envelope with the real
-    /// per-spawn values (bead/molecule/iteration/source/ts_ms/seq). R1
-    /// (wx-cqzxh) wires the actual stamping; without this accessor the
-    /// parser would need to know the session context, which would force
-    /// every backend test to construct a real envelope.
-    pub fn envelope_mut(&mut self) -> &mut EventEnvelope {
-        match self {
-            AgentEvent::AgentStart { envelope, .. }
-            | AgentEvent::AgentEnd { envelope }
-            | AgentEvent::TurnStart { envelope }
-            | AgentEvent::TurnEnd { envelope }
-            | AgentEvent::TextDelta { envelope, .. }
-            | AgentEvent::TextEnd { envelope }
-            | AgentEvent::ThinkingDelta { envelope, .. }
-            | AgentEvent::ThinkingEnd { envelope }
-            | AgentEvent::ToolcallDelta { envelope, .. }
-            | AgentEvent::ToolCall { envelope, .. }
-            | AgentEvent::ToolResult { envelope, .. }
-            | AgentEvent::ToolProgress { envelope, .. }
-            | AgentEvent::SessionComplete { envelope, .. }
-            | AgentEvent::CompactionStart { envelope, .. }
-            | AgentEvent::CompactionEnd { envelope, .. }
-            | AgentEvent::AutoRetry { envelope, .. }
-            | AgentEvent::Error { envelope, .. }
-            | AgentEvent::DriverEvent { envelope, .. } => envelope,
+    /// Join a parser-emitted [`ParsedAgentEvent`] with the per-spawn
+    /// `envelope` the session layer owns. This is the **only** way to
+    /// construct an `AgentEvent` from a parser's output — the type
+    /// system enforces RS-12's "parsers cannot emit unstamped events"
+    /// rule by giving them no path that produces `AgentEvent` directly.
+    pub fn from_parsed(parsed: ParsedAgentEvent, envelope: EventEnvelope) -> Self {
+        match parsed {
+            ParsedAgentEvent::AgentEnd => AgentEvent::AgentEnd { envelope },
+            ParsedAgentEvent::TurnStart => AgentEvent::TurnStart { envelope },
+            ParsedAgentEvent::TextDelta { text } => AgentEvent::TextDelta { envelope, text },
+            ParsedAgentEvent::TextEnd => AgentEvent::TextEnd { envelope },
+            ParsedAgentEvent::ThinkingDelta { text } => {
+                AgentEvent::ThinkingDelta { envelope, text }
+            }
+            ParsedAgentEvent::ThinkingEnd => AgentEvent::ThinkingEnd { envelope },
+            ParsedAgentEvent::ToolcallDelta { id, delta } => AgentEvent::ToolcallDelta {
+                envelope,
+                id,
+                delta,
+            },
+            ParsedAgentEvent::ToolCall {
+                id,
+                tool,
+                params,
+                parent_tool_call_id,
+            } => AgentEvent::ToolCall {
+                envelope,
+                id,
+                tool,
+                params,
+                parent_tool_call_id,
+            },
+            ParsedAgentEvent::ToolResult {
+                id,
+                output,
+                is_error,
+            } => AgentEvent::ToolResult {
+                envelope,
+                id,
+                output,
+                is_error,
+            },
+            ParsedAgentEvent::ToolProgress { id, text } => {
+                AgentEvent::ToolProgress { envelope, id, text }
+            }
+            ParsedAgentEvent::TurnEnd => AgentEvent::TurnEnd { envelope },
+            ParsedAgentEvent::SessionComplete {
+                exit_code,
+                cost_usd,
+            } => AgentEvent::SessionComplete {
+                envelope,
+                exit_code,
+                cost_usd,
+            },
+            ParsedAgentEvent::CompactionStart { reason } => {
+                AgentEvent::CompactionStart { envelope, reason }
+            }
+            ParsedAgentEvent::CompactionEnd { aborted } => {
+                AgentEvent::CompactionEnd { envelope, aborted }
+            }
+            ParsedAgentEvent::AutoRetry {
+                attempt,
+                max_attempts,
+                delay_ms,
+                error_message,
+            } => AgentEvent::AutoRetry {
+                envelope,
+                attempt,
+                max_attempts,
+                delay_ms,
+                error_message,
+            },
+            ParsedAgentEvent::Error { message } => AgentEvent::Error { envelope, message },
         }
     }
+}
+
+/// Parser-emitted event prior to envelope stamping. The parser layer has
+/// no visibility into the live bead / molecule / iteration / source /
+/// ts_ms / seq context — the session layer joins this payload with the
+/// per-spawn [`EventEnvelope`] via [`AgentEvent::from_parsed`].
+///
+/// Variants are exactly the subset of [`AgentEvent`] a backend parser
+/// can produce — `AgentStart` and `DriverEvent` are driver-emitted and
+/// never appear here.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParsedAgentEvent {
+    AgentEnd,
+    TurnStart,
+    TextDelta {
+        text: String,
+    },
+    TextEnd,
+    ThinkingDelta {
+        text: String,
+    },
+    ThinkingEnd,
+    ToolcallDelta {
+        id: ToolCallId,
+        delta: String,
+    },
+    ToolCall {
+        id: ToolCallId,
+        tool: String,
+        params: serde_json::Value,
+        parent_tool_call_id: Option<ToolCallId>,
+    },
+    ToolResult {
+        id: ToolCallId,
+        output: String,
+        is_error: bool,
+    },
+    ToolProgress {
+        id: ToolCallId,
+        text: String,
+    },
+    TurnEnd,
+    SessionComplete {
+        exit_code: i32,
+        cost_usd: Option<f64>,
+    },
+    CompactionStart {
+        reason: CompactionReason,
+    },
+    CompactionEnd {
+        aborted: bool,
+    },
+    AutoRetry {
+        attempt: u32,
+        max_attempts: u32,
+        delay_ms: u64,
+        error_message: String,
+    },
+    Error {
+        message: String,
+    },
 }
 
 /// Per-session monotonic envelope factory. Threads bead/molecule
@@ -387,11 +475,6 @@ impl EnvelopeBuilder {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "tests use panicking helpers"
-)]
 mod tests {
     use super::*;
 
@@ -775,6 +858,38 @@ mod tests {
         let next_agent = b.build();
         assert_eq!(next_agent.source, Source::Agent);
         assert_eq!(next_agent.seq, 2);
+    }
+
+    /// `AgentEvent::from_parsed` joins each `ParsedAgentEvent` variant
+    /// with the supplied envelope without altering the payload. This is
+    /// the type-system gate on RS-12 — parsers cannot reach a stamped
+    /// `AgentEvent` except via this constructor.
+    #[test]
+    fn from_parsed_round_trips_payload_fields() {
+        let mut b = builder();
+        let env = b.build();
+        let parsed = ParsedAgentEvent::ToolCall {
+            id: ToolCallId::new("t1"),
+            tool: "Bash".into(),
+            params: serde_json::json!({"command": "ls"}),
+            parent_tool_call_id: None,
+        };
+        match AgentEvent::from_parsed(parsed, env.clone()) {
+            AgentEvent::ToolCall {
+                envelope,
+                id,
+                tool,
+                params,
+                parent_tool_call_id,
+            } => {
+                assert_eq!(envelope, env);
+                assert_eq!(id.as_str(), "t1");
+                assert_eq!(tool, "Bash");
+                assert_eq!(params["command"], "ls");
+                assert!(parent_tool_call_id.is_none());
+            }
+            other => panic!("expected ToolCall, got {other:?}"),
+        }
     }
 }
 

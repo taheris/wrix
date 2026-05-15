@@ -30,10 +30,9 @@ use std::time::Duration;
 
 use loom_agent::pi::backend::spawn_with_handshake;
 use loom_agent::{ClaudeBackend, PiBackend};
-use loom_driver::agent::{
-    AgentBackend, AgentEvent, ProtocolError, RePinContent, SessionOutcome, SpawnConfig,
-};
+use loom_driver::agent::{AgentBackend, ProtocolError, RePinContent, SessionOutcome, SpawnConfig};
 use loom_driver::clock::SystemClock;
+use loom_events::ParsedAgentEvent;
 use tokio::process::Command;
 
 async fn run_agent<B: AgentBackend>(config: &SpawnConfig) -> Result<SessionOutcome, ProtocolError> {
@@ -138,7 +137,7 @@ async fn pi_startup_probe_succeeds_with_required_commands() {
     let mut session = session.prompt("ping").await.expect("prompt ok");
     loop {
         match session.next_event().await.expect("event ok") {
-            Some(AgentEvent::SessionComplete { .. }) => return,
+            Some(ParsedAgentEvent::SessionComplete { .. }) => return,
             Some(_) => continue,
             None => panic!("unexpected EOF before SessionComplete"),
         }

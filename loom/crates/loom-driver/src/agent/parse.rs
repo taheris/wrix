@@ -1,9 +1,12 @@
 use super::error::ProtocolError;
-use super::event::AgentEvent;
+use loom_events::ParsedAgentEvent;
 
 /// Result of parsing a single JSONL line received from an agent.
 ///
-/// `events` carries zero-or-more normalized [`AgentEvent`]s. A `Vec` is used
+/// `events` carries zero-or-more [`ParsedAgentEvent`]s — the parser-visible
+/// payload prior to envelope stamping. The session layer joins each one
+/// with the per-spawn `EventEnvelope` (bead id / iteration / source /
+/// ts_ms / seq) via `AgentEvent::from_parsed` (RS-12). A `Vec` is used
 /// because some protocol messages map to multiple events (claude's
 /// `result/success` produces both `TurnEnd` and `SessionComplete`); other
 /// lines (e.g. claude's `system/init`) produce zero.
@@ -13,7 +16,7 @@ use super::event::AgentEvent;
 /// claude's `control_request` auto-approve flow: the parser produces the
 /// `control_response` payload and the session is responsible for the IO.
 pub struct ParsedLine {
-    pub events: Vec<AgentEvent>,
+    pub events: Vec<ParsedAgentEvent>,
     pub response: Option<String>,
 }
 

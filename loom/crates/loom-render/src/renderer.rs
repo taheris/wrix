@@ -930,8 +930,24 @@ pub fn build_renderer(
 mod tests {
     use super::*;
     use loom_events::EventEnvelope;
+    use loom_events::Source;
     use loom_events::identifier::ToolCallId;
     use serde_json::json;
+
+    /// Fixture envelope for renderer tests. Carries a fully-valid
+    /// `wx-test` bead id; the renderer reads `ts_ms` / `seq` / `source`
+    /// but does not dispatch on `bead_id`, so the fixture is reused
+    /// across every test that does not need to vary the envelope.
+    fn sample_envelope() -> EventEnvelope {
+        EventEnvelope {
+            bead_id: BeadId::new("wx-test").expect("valid bead id"),
+            molecule_id: None,
+            iteration: 0,
+            source: Source::Agent,
+            ts_ms: 0,
+            seq: 0,
+        }
+    }
 
     fn capture<F>(mode: RenderMode, parallel: bool, color: bool, f: F) -> String
     where
@@ -973,7 +989,7 @@ mod tests {
     fn default_mode_suppresses_message_deltas() {
         let out = capture(RenderMode::Default, false, false, |r| {
             r.render_event(&AgentEvent::TextDelta {
-                envelope: EventEnvelope::placeholder(),
+                envelope: sample_envelope(),
                 text: "hello world".to_string(),
             })
             .expect("render");
@@ -985,12 +1001,12 @@ mod tests {
     fn verbose_mode_streams_message_deltas_verbatim() {
         let out = capture(RenderMode::Verbose, false, false, |r| {
             r.render_event(&AgentEvent::TextDelta {
-                envelope: EventEnvelope::placeholder(),
+                envelope: sample_envelope(),
                 text: "hel".to_string(),
             })
             .expect("render");
             r.render_event(&AgentEvent::TextDelta {
-                envelope: EventEnvelope::placeholder(),
+                envelope: sample_envelope(),
                 text: "lo".to_string(),
             })
             .expect("render");
@@ -1002,7 +1018,7 @@ mod tests {
     fn tool_call_line_in_default_mode_shows_path() {
         let out = capture(RenderMode::Default, false, false, |r| {
             r.render_event(&AgentEvent::ToolCall {
-                envelope: EventEnvelope::placeholder(),
+                envelope: sample_envelope(),
                 id: ToolCallId::new("t1"),
                 tool: "Read".to_string(),
                 params: json!({"file_path": "src/lib.rs"}),
@@ -1019,7 +1035,7 @@ mod tests {
     fn parallel_mode_prefixes_tool_lines_with_bead_id() {
         let out = capture(RenderMode::Default, true, false, |r| {
             r.render_event(&AgentEvent::ToolCall {
-                envelope: EventEnvelope::placeholder(),
+                envelope: sample_envelope(),
                 id: ToolCallId::new("t1"),
                 tool: "Bash".to_string(),
                 params: json!({"command": "cargo build"}),
@@ -1047,7 +1063,7 @@ mod tests {
     fn finish_done_includes_tool_count_and_secs() {
         let out = capture(RenderMode::Default, false, false, |r| {
             r.render_event(&AgentEvent::ToolCall {
-                envelope: EventEnvelope::placeholder(),
+                envelope: sample_envelope(),
                 id: ToolCallId::new("t1"),
                 tool: "Read".to_string(),
                 params: json!({"file_path": "a"}),
@@ -1055,7 +1071,7 @@ mod tests {
             })
             .expect("render");
             r.render_event(&AgentEvent::ToolCall {
-                envelope: EventEnvelope::placeholder(),
+                envelope: sample_envelope(),
                 id: ToolCallId::new("t2"),
                 tool: "Edit".to_string(),
                 params: json!({"file_path": "b"}),
@@ -1090,7 +1106,7 @@ mod tests {
     fn tool_call_line_uses_summary_cell_shape() {
         let out = capture(RenderMode::Default, false, false, |r| {
             r.render_event(&AgentEvent::ToolCall {
-                envelope: EventEnvelope::placeholder(),
+                envelope: sample_envelope(),
                 id: ToolCallId::new("e1"),
                 tool: "Edit".into(),
                 params: json!({
@@ -1119,7 +1135,7 @@ mod tests {
             .join("\n");
         let out = capture(RenderMode::Verbose, false, false, |r| {
             r.render_event(&AgentEvent::ToolCall {
-                envelope: EventEnvelope::placeholder(),
+                envelope: sample_envelope(),
                 id: ToolCallId::new("b1"),
                 tool: "Bash".into(),
                 params: json!({"command": "echo hi"}),
@@ -1127,7 +1143,7 @@ mod tests {
             })
             .expect("render call");
             r.render_event(&AgentEvent::ToolResult {
-                envelope: EventEnvelope::placeholder(),
+                envelope: sample_envelope(),
                 id: ToolCallId::new("b1"),
                 output: big_body,
                 is_error: false,
@@ -1154,7 +1170,7 @@ mod tests {
     fn default_mode_hides_bash_body_on_success() {
         let out = capture(RenderMode::Default, false, false, |r| {
             r.render_event(&AgentEvent::ToolCall {
-                envelope: EventEnvelope::placeholder(),
+                envelope: sample_envelope(),
                 id: ToolCallId::new("b1"),
                 tool: "Bash".into(),
                 params: json!({"command": "echo hi"}),
@@ -1162,7 +1178,7 @@ mod tests {
             })
             .expect("render call");
             r.render_event(&AgentEvent::ToolResult {
-                envelope: EventEnvelope::placeholder(),
+                envelope: sample_envelope(),
                 id: ToolCallId::new("b1"),
                 output: "result body".into(),
                 is_error: false,
@@ -1184,7 +1200,7 @@ mod tests {
             .join("\n");
         let out = capture(RenderMode::Default, false, false, |r| {
             r.render_event(&AgentEvent::ToolCall {
-                envelope: EventEnvelope::placeholder(),
+                envelope: sample_envelope(),
                 id: ToolCallId::new("b1"),
                 tool: "Bash".into(),
                 params: json!({"command": "false"}),
@@ -1192,7 +1208,7 @@ mod tests {
             })
             .expect("render call");
             r.render_event(&AgentEvent::ToolResult {
-                envelope: EventEnvelope::placeholder(),
+                envelope: sample_envelope(),
                 id: ToolCallId::new("b1"),
                 output: big_body,
                 is_error: true,
@@ -1219,7 +1235,7 @@ mod tests {
         let body = "line1\nline2\nline3";
         let out = capture(RenderMode::Default, false, false, |r| {
             r.render_event(&AgentEvent::ToolCall {
-                envelope: EventEnvelope::placeholder(),
+                envelope: sample_envelope(),
                 id: ToolCallId::new("b1"),
                 tool: "Bash".into(),
                 params: json!({"command": "false"}),
@@ -1227,7 +1243,7 @@ mod tests {
             })
             .expect("render call");
             r.render_event(&AgentEvent::ToolResult {
-                envelope: EventEnvelope::placeholder(),
+                envelope: sample_envelope(),
                 id: ToolCallId::new("b1"),
                 output: body.into(),
                 is_error: true,
@@ -1249,7 +1265,7 @@ mod tests {
     fn default_mode_hides_non_bash_error_body() {
         let out = capture(RenderMode::Default, false, false, |r| {
             r.render_event(&AgentEvent::ToolCall {
-                envelope: EventEnvelope::placeholder(),
+                envelope: sample_envelope(),
                 id: ToolCallId::new("r1"),
                 tool: "Read".into(),
                 params: json!({"file_path": "src/lib.rs"}),
@@ -1257,7 +1273,7 @@ mod tests {
             })
             .expect("render call");
             r.render_event(&AgentEvent::ToolResult {
-                envelope: EventEnvelope::placeholder(),
+                envelope: sample_envelope(),
                 id: ToolCallId::new("r1"),
                 output: "file-contents".into(),
                 is_error: true,
@@ -1304,7 +1320,7 @@ mod tests {
             "/workspace",
         )));
         r.render_event(&AgentEvent::ToolCall {
-            envelope: EventEnvelope::placeholder(),
+            envelope: sample_envelope(),
             id: ToolCallId::new("e1"),
             tool: "Edit".into(),
             params: json!({
@@ -1332,7 +1348,7 @@ mod tests {
     fn tool_call_line_no_osc8_by_default() {
         let out = capture(RenderMode::Default, false, false, |r| {
             r.render_event(&AgentEvent::ToolCall {
-                envelope: EventEnvelope::placeholder(),
+                envelope: sample_envelope(),
                 id: ToolCallId::new("e1"),
                 tool: "Edit".into(),
                 params: json!({
@@ -1357,7 +1373,7 @@ mod tests {
     fn verbose_mode_flags_tool_errors_after_body() {
         let out = capture(RenderMode::Verbose, false, false, |r| {
             r.render_event(&AgentEvent::ToolCall {
-                envelope: EventEnvelope::placeholder(),
+                envelope: sample_envelope(),
                 id: ToolCallId::new("b1"),
                 tool: "Bash".into(),
                 params: json!({"command": "false"}),
@@ -1365,7 +1381,7 @@ mod tests {
             })
             .expect("render call");
             r.render_event(&AgentEvent::ToolResult {
-                envelope: EventEnvelope::placeholder(),
+                envelope: sample_envelope(),
                 id: ToolCallId::new("b1"),
                 output: "exit 1".into(),
                 is_error: true,
@@ -1408,14 +1424,14 @@ mod tests {
 
     fn sample_text_delta() -> AgentEvent {
         AgentEvent::TextDelta {
-            envelope: EventEnvelope::placeholder(),
+            envelope: sample_envelope(),
             text: "hello".into(),
         }
     }
 
     fn sample_tool_call() -> AgentEvent {
         AgentEvent::ToolCall {
-            envelope: EventEnvelope::placeholder(),
+            envelope: sample_envelope(),
             id: ToolCallId::new("t1"),
             tool: "Read".into(),
             params: json!({"file_path": "src/lib.rs"}),
@@ -1514,7 +1530,7 @@ mod tests {
         let out = capture(RenderMode::Default, false, false, |r| {
             // Top-level Task call — no parent, depth 0.
             r.render_event(&AgentEvent::ToolCall {
-                envelope: EventEnvelope::placeholder(),
+                envelope: sample_envelope(),
                 id: ToolCallId::new("task1"),
                 tool: "Task".into(),
                 params: json!({}),
@@ -1524,7 +1540,7 @@ mod tests {
             // Nested call inside the Task — depth 1, prefixed with two
             // extra spaces.
             r.render_event(&AgentEvent::ToolCall {
-                envelope: EventEnvelope::placeholder(),
+                envelope: sample_envelope(),
                 id: ToolCallId::new("read1"),
                 tool: "Read".into(),
                 params: json!({"file_path": "a"}),
@@ -1572,11 +1588,11 @@ mod tests {
     ) -> (AgentEvent, AgentEvent) {
         let call_env = EventEnvelope {
             ts_ms: call_ts,
-            ..EventEnvelope::placeholder()
+            ..sample_envelope()
         };
         let result_env = EventEnvelope {
             ts_ms: result_ts,
-            ..EventEnvelope::placeholder()
+            ..sample_envelope()
         };
         (
             AgentEvent::ToolCall {
@@ -1729,7 +1745,7 @@ mod tests {
         AgentEvent::DriverEvent {
             envelope: EventEnvelope {
                 source: loom_events::Source::Driver,
-                ..EventEnvelope::placeholder()
+                ..sample_envelope()
             },
             driver_kind: kind.to_string(),
             summary: summary.to_string(),
@@ -1997,9 +2013,9 @@ mod tests {
             ),
         ];
         for (tool, params) in cases {
-            let mut env_a = EventEnvelope::placeholder();
+            let mut env_a = sample_envelope();
             env_a.ts_ms = 0;
-            let mut env_b = EventEnvelope::placeholder();
+            let mut env_b = sample_envelope();
             env_b.ts_ms = 1_000;
             let call = AgentEvent::ToolCall {
                 envelope: env_a,
@@ -2057,7 +2073,7 @@ mod tests {
         // summary (15 cols) sits below that.
         let out = capture_with_width(false, true, 40, true, |r| {
             r.render_event(&AgentEvent::ToolCall {
-                envelope: EventEnvelope::placeholder(),
+                envelope: sample_envelope(),
                 id: ToolCallId::new("t1"),
                 tool: "Bash".to_string(),
                 params: json!({"command": "echo hi"}),
@@ -2084,7 +2100,7 @@ mod tests {
         let out = capture_with_width(false, true, 40, true, |r| {
             // First call: long Bash → buffered.
             r.render_event(&AgentEvent::ToolCall {
-                envelope: EventEnvelope::placeholder(),
+                envelope: sample_envelope(),
                 id: ToolCallId::new("t1"),
                 tool: "Bash".to_string(),
                 params: json!({"command": "echo this command is far too long for 40 cols"}),
@@ -2093,7 +2109,7 @@ mod tests {
             .expect("first call");
             // Second call: short, fits — preempts the first.
             r.render_event(&AgentEvent::ToolCall {
-                envelope: EventEnvelope::placeholder(),
+                envelope: sample_envelope(),
                 id: ToolCallId::new("t2"),
                 tool: "Read".to_string(),
                 params: json!({"file_path": "a"}),

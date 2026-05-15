@@ -1,16 +1,16 @@
 //! Claude Code stream-json line parser.
 //!
 //! [`LineParse`] impl that turns JSONL lines from `claude --output-format
-//! stream-json` into [`AgentEvent`]s and encodes driver-side stream-json
+//! stream-json` into [`ParsedAgentEvent`]s and encodes driver-side stream-json
 //! user messages (initial prompt, mid-session steering). Auto-approval of
 //! `control_request` lines is keyed off a `denied_tools` set passed in by
 //! the workflow layer (config-driven).
 
 use std::collections::HashSet;
 
-use loom_driver::agent::{AgentEvent, LineParse, ParsedLine, ProtocolError};
+use loom_driver::agent::{LineParse, ParsedLine, ProtocolError};
 use loom_driver::identifier::RequestId;
-use loom_events::EventEnvelope;
+use loom_events::ParsedAgentEvent;
 use serde::Serialize;
 use tracing::{info, trace};
 
@@ -118,18 +118,14 @@ impl LineParse for ClaudeParser {
                 for block in message.content {
                     match block {
                         AssistantBlock::Text { text } => {
-                            events.push(AgentEvent::TextDelta {
-                                envelope: EventEnvelope::placeholder(),
-                                text,
-                            });
+                            events.push(ParsedAgentEvent::TextDelta { text });
                         }
                         AssistantBlock::ToolUse { id, name, input } => {
                             // Snapshot parent BEFORE push — a Task call
                             // is a child of any outer Task, not its own.
                             let parent = self.current_parent()?;
                             let is_task = name == "Task";
-                            events.push(AgentEvent::ToolCall {
-                                envelope: EventEnvelope::placeholder(),
+                            events.push(ParsedAgentEvent::ToolCall {
                                 id: id.clone(),
                                 tool: name,
                                 params: input,
@@ -140,10 +136,7 @@ impl LineParse for ClaudeParser {
                             }
                         }
                         AssistantBlock::Thinking { thinking } => {
-                            events.push(AgentEvent::ThinkingDelta {
-                                envelope: EventEnvelope::placeholder(),
-                                text: thinking,
-                            });
+                            events.push(ParsedAgentEvent::ThinkingDelta { text: thinking });
                         }
                         AssistantBlock::Unknown => {
                             trace!("unknown assistant content block");
@@ -173,8 +166,7 @@ impl LineParse for ClaudeParser {
                             // event — a Task's tool_result closes that
                             // subagent.
                             self.pop_task_if_matches(&tool_use_id)?;
-                            events.push(AgentEvent::ToolResult {
-                                envelope: EventEnvelope::placeholder(),
+                            events.push(ParsedAgentEvent::ToolResult {
                                 id: tool_use_id,
                                 output,
                                 is_error,
@@ -198,22 +190,17 @@ impl LineParse for ClaudeParser {
             } => {
                 let events = match subtype.as_str() {
                     "success" => vec![
-                        AgentEvent::TurnEnd {
-                            envelope: EventEnvelope::placeholder(),
-                        },
-                        AgentEvent::SessionComplete {
-                            envelope: EventEnvelope::placeholder(),
+                        ParsedAgentEvent::TurnEnd,
+                        ParsedAgentEvent::SessionComplete {
                             exit_code: 0,
                             cost_usd: total_cost_usd,
                         },
                     ],
                     "error" => vec![
-                        AgentEvent::Error {
-                            envelope: EventEnvelope::placeholder(),
+                        ParsedAgentEvent::Error {
                             message: result.unwrap_or_default(),
                         },
-                        AgentEvent::SessionComplete {
-                            envelope: EventEnvelope::placeholder(),
+                        ParsedAgentEvent::SessionComplete {
                             exit_code: 1,
                             cost_usd: total_cost_usd,
                         },
@@ -296,7 +283,7 @@ fn encode_user_message(msg: &str) -> Result<String, ProtocolError> {
 )]
 mod tests {
     use super::*;
-    use loom_driver::agent::AgentEvent;
+    use loom_events::ParsedAgentEvent;
 
     fn parse(parser: &ClaudeParser, line: &str) -> ParsedLine {
         parser
@@ -324,11 +311,11 @@ mod tests {
         let p = parse(&empty(), line);
         assert_eq!(p.events.len(), 2);
         match &p.events[0] {
-            AgentEvent::TextDelta { text, .. } => assert_eq!(text, "hi"),
-            other => panic!("expected MessageDelta, got {other:?}"),
+            ParsedAgentEvent::TextDelta { text } => assert_eq!(text, "hi"),
+            other => panic!("expected TextDelta, got {other:?}"),
         }
         match &p.events[1] {
-            AgentEvent::ToolCall {
+            ParsedAgentEvent::ToolCall {
                 id, tool, params, ..
             } => {
                 assert_eq!(id.as_str(), "toolu_01");
@@ -340,15 +327,15 @@ mod tests {
     }
 
     /// R8 (wx-n06xn) — claude's extended-thinking content block lands
-    /// as `AgentEvent::ThinkingDelta` so the renderer can surface the
-    /// model's pre-reply reasoning when the user opts in.
+    /// as `ParsedAgentEvent::ThinkingDelta` so the renderer can surface
+    /// the model's pre-reply reasoning when the user opts in.
     #[test]
     fn parses_assistant_thinking_block_as_thinking_delta() {
         let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"weighing options"}]}}"#;
         let p = parse(&empty(), line);
         assert_eq!(p.events.len(), 1);
         match &p.events[0] {
-            AgentEvent::ThinkingDelta { text, .. } => {
+            ParsedAgentEvent::ThinkingDelta { text, .. } => {
                 assert_eq!(text, "weighing options");
             }
             other => panic!("expected ThinkingDelta, got {other:?}"),
@@ -361,7 +348,7 @@ mod tests {
         let p = parse(&empty(), line);
         assert_eq!(p.events.len(), 1);
         match &p.events[0] {
-            AgentEvent::ToolResult {
+            ParsedAgentEvent::ToolResult {
                 id,
                 output,
                 is_error,
@@ -388,9 +375,9 @@ mod tests {
     fn result_success_yields_turn_end_then_session_complete() {
         let line = r#"{"type":"result","subtype":"success","total_cost_usd":0.10}"#;
         let p = parse(&empty(), line);
-        assert!(matches!(p.events[0], AgentEvent::TurnEnd { .. }));
+        assert!(matches!(p.events[0], ParsedAgentEvent::TurnEnd));
         match &p.events[1] {
-            AgentEvent::SessionComplete {
+            ParsedAgentEvent::SessionComplete {
                 exit_code,
                 cost_usd,
                 ..
@@ -408,11 +395,11 @@ mod tests {
         let p = parse(&empty(), line);
         assert_eq!(p.events.len(), 2);
         match &p.events[0] {
-            AgentEvent::Error { message, .. } => assert_eq!(message, "boom"),
+            ParsedAgentEvent::Error { message, .. } => assert_eq!(message, "boom"),
             other => panic!("expected Error, got {other:?}"),
         }
         match &p.events[1] {
-            AgentEvent::SessionComplete {
+            ParsedAgentEvent::SessionComplete {
                 exit_code,
                 cost_usd,
                 ..
@@ -432,7 +419,7 @@ mod tests {
         let p = parse(&empty(), line);
         let last = p.events.last().expect("session complete present");
         match last {
-            AgentEvent::SessionComplete { cost_usd, .. } => {
+            ParsedAgentEvent::SessionComplete { cost_usd, .. } => {
                 assert_eq!(*cost_usd, Some(0.42));
             }
             other => panic!("expected SessionComplete, got {other:?}"),
@@ -444,7 +431,7 @@ mod tests {
         let line = r#"{"type":"result","subtype":"success"}"#;
         let p = parse(&empty(), line);
         match p.events.last() {
-            Some(AgentEvent::SessionComplete { cost_usd, .. }) => {
+            Some(ParsedAgentEvent::SessionComplete { cost_usd, .. }) => {
                 assert!(cost_usd.is_none());
             }
             other => panic!("expected SessionComplete, got {other:?}"),
@@ -603,11 +590,11 @@ mod tests {
         let p = parse(&empty(), line);
         assert_eq!(p.events.len(), 2);
         match &p.events[0] {
-            AgentEvent::TextDelta { text, .. } => assert_eq!(text, "abc"),
-            other => panic!("expected MessageDelta, got {other:?}"),
+            ParsedAgentEvent::TextDelta { text } => assert_eq!(text, "abc"),
+            other => panic!("expected TextDelta, got {other:?}"),
         }
         match &p.events[1] {
-            AgentEvent::ToolCall {
+            ParsedAgentEvent::ToolCall {
                 id, tool, params, ..
             } => {
                 assert_eq!(id.as_str(), "tu-1");
@@ -627,7 +614,7 @@ mod tests {
         let p = parse(&empty(), line);
         assert_eq!(p.events.len(), 1);
         match &p.events[0] {
-            AgentEvent::ToolResult {
+            ParsedAgentEvent::ToolResult {
                 id,
                 output,
                 is_error,

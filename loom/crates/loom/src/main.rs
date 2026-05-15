@@ -1243,10 +1243,11 @@ async fn dispatch_classified(
 
 /// Build a per-spawn [`loom_events::EnvelopeBuilder`] so every event the
 /// session emits carries the live bead id, monotonic `seq`, and real
-/// wall-clock `ts_ms` instead of the parser's `EventEnvelope::placeholder()`
-/// sentinel. `molecule_id` and `iteration` are zero until the driver
-/// threads them through — R2/R7 follow-ups will widen this once the
-/// dispatcher reads them from the bead context.
+/// wall-clock `ts_ms`. The workflow layer joins each `ParsedAgentEvent`
+/// with the builder's output via `AgentEvent::from_parsed` (RS-12).
+/// `molecule_id` and `iteration` are zero until the driver threads them
+/// through — R2/R7 follow-ups will widen this once the dispatcher reads
+/// them from the bead context.
 fn build_envelope_builder(bead_id: BeadId) -> loom_events::EnvelopeBuilder {
     let clock = SystemClock::new();
     loom_events::EnvelopeBuilder::new(bead_id, None, 0, loom_events::Source::Agent, move || {
