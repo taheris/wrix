@@ -11,6 +11,7 @@ Workflow:
   todo    Decompose the active spec into beads (four-tier detection)
   run     Per-bead execution loop. Continuous by default; `--once` exits after one bead
   check   Deterministic audits — `[verify]` scripts, style linters, and `--check=<name>` sub-audits
+  review  LLM-judged review pass over the gate scope
   msg     Resolve outstanding `loom:clarify` and `loom:blocked` beads
 
 Inspection:

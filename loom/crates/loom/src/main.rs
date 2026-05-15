@@ -199,7 +199,7 @@ enum Command {
     },
     /// Per-bead execution loop. Continuous by default; `--once` exits after one bead.
     Run {
-        /// Process a single bead then exit (no auto-handoff to `loom check`).
+        /// Process a single bead then exit (no auto-handoff to `loom check` / `loom review`).
         #[arg(long)]
         once: bool,
         /// Concurrent dispatch slots (`-p N` / `--parallel N`). Default 1.
@@ -253,6 +253,21 @@ enum Command {
         /// Applies to `--check=criteria`.
         #[arg(long)]
         strict: bool,
+    },
+    /// LLM-judged review pass over the gate scope.
+    Review {
+        /// Spec label override (defaults to `current_spec`).
+        #[arg(long, short = 's', value_name = "LABEL")]
+        spec: Option<String>,
+        /// Restrict the review scope to one bead.
+        #[arg(long, short = 'b', value_name = "ID", conflicts_with_all = ["diff", "tree"])]
+        bead: Option<String>,
+        /// Restrict the review scope to a git diff range.
+        #[arg(long, value_name = "RANGE", conflicts_with_all = ["bead", "tree"])]
+        diff: Option<String>,
+        /// Review the entire spec tree × implementation.
+        #[arg(long, conflicts_with_all = ["bead", "diff"])]
+        tree: bool,
     },
     /// Resolve outstanding `loom:clarify` and `loom:blocked` beads.
     Msg {
@@ -332,6 +347,7 @@ impl Command {
             | Command::Plan { .. }
             | Command::Run { .. }
             | Command::Check { .. }
+            | Command::Review { .. }
             | Command::Msg { .. }
             | Command::Note { .. }
             | Command::Todo { .. } => true,
@@ -344,7 +360,10 @@ impl Command {
 /// `next_help_heading` applies to flags, not subcommands, so the binary
 /// regroups the auto-generated `Commands:` block instead.
 const HELP_GROUPS: &[(&str, &[&str])] = &[
-    ("Workflow", &["plan", "todo", "run", "check", "msg"]),
+    (
+        "Workflow",
+        &["plan", "todo", "run", "check", "review", "msg"],
+    ),
     ("Inspection", &["status", "logs", "spec"]),
     ("State", &["init", "use", "note"]),
 ];
@@ -356,8 +375,8 @@ const HELP_GROUPS: &[(&str, &[&str])] = &[
 /// the per-subcommand help unchanged.
 fn args_request_top_level_help(args: &[String]) -> bool {
     let known_subcommands = [
-        "init", "status", "use", "logs", "spec", "plan", "run", "check", "msg", "todo", "note",
-        "help",
+        "init", "status", "use", "logs", "spec", "plan", "run", "check", "review", "msg", "todo",
+        "note", "help",
     ];
     for (idx, arg) in args.iter().enumerate() {
         if known_subcommands.contains(&arg.as_str()) {
@@ -545,6 +564,17 @@ fn main() -> ExitCode {
                 tree,
                 strict,
             },
+        ),
+        Command::Review {
+            spec,
+            bead,
+            diff,
+            tree,
+        } => run_review(
+            &workspace,
+            spec,
+            agent_override,
+            ReviewOpts { bead, diff, tree },
         ),
         Command::Msg {
             spec,
@@ -1526,6 +1556,25 @@ fn run_check(
     })?;
     println!("loom check: {result:?}");
     Ok(())
+}
+
+#[expect(
+    dead_code,
+    reason = "scope flags parsed by clap; consumed once rubric driver lands"
+)]
+struct ReviewOpts {
+    bead: Option<String>,
+    diff: Option<String>,
+    tree: bool,
+}
+
+fn run_review(
+    _workspace: &Path,
+    _spec: Option<String>,
+    _agent_override: Option<AgentKind>,
+    _opts: ReviewOpts,
+) -> anyhow::Result<()> {
+    anyhow::bail!("loom review: not yet implemented")
 }
 
 #[expect(clippy::too_many_arguments, reason = "explicit dispatch surface")]
