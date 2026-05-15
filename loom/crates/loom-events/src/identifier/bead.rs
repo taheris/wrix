@@ -1,4 +1,5 @@
 use std::fmt;
+use std::str::FromStr;
 
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
@@ -51,6 +52,14 @@ impl BeadId {
 impl fmt::Display for BeadId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
+    }
+}
+
+impl FromStr for BeadId {
+    type Err = ParseBeadIdError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::new(s)
     }
 }
 

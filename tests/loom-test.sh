@@ -2481,9 +2481,22 @@ test_cargo_nextest_timing() {
 # `ToolCallId`, `RequestId`) round-trips through serde JSON without a
 # wrapper (`#[serde(transparent)]`) and rejects malformed input. Exercises
 # the inline `#[cfg(test)] mod tests` blocks in
-# `loom-driver/src/identifier/*.rs`.
+# `loom-events/src/identifier/*.rs` (re-exported via
+# `loom_driver::identifier`). Each module pins the five parse-boundary
+# tests: `serde_round_trips_as_plain_string`,
+# `deserialize_rejects_malformed_string`, `display_round_trips_with_as_str`,
+# `parse_accepts_canonical_shapes`, `parse_rejects_malformed_inputs`.
 #-----------------------------------------------------------------------------
-test_newtype_serde_roundtrip() { _pending_stub newtype_serde_roundtrip; }
+test_newtype_serde_roundtrip() {
+    cargo_run test -p loom-events --lib --quiet -- \
+        identifier::bead::tests \
+        identifier::molecule::tests \
+        identifier::profile::tests \
+        identifier::request::tests \
+        identifier::session::tests \
+        identifier::spec::tests \
+        identifier::tool_call::tests
+}
 
 #-----------------------------------------------------------------------------
 # test_state_db_roundtrip — `StateDb` covers spec, molecule, companions, and
