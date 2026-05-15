@@ -3610,10 +3610,17 @@ test_unknown_variants_tolerated() {
         event::tests::unknown_variants_fail_with_a_loud_error
 }
 
-# Stubs added during the loom-gate planning session — pending
-# implementation of style_rules pinning + per-phase pinning policy
-# (specs/loom-templates.md).
-test_template_snapshots_stable() { _pending_stub template_snapshots_stable; }
+#-----------------------------------------------------------------------------
+# test_template_snapshots_stable — render every Askama template twice with
+# identical inputs and assert byte equality (specs/loom-templates.md § Engine).
+# Pins template-render determinism: HashMap ordering, time reads, or env
+# leakage would surface as a render-vs-render diff rather than waiting for
+# the next `cargo insta` review.
+#-----------------------------------------------------------------------------
+test_template_snapshots_stable() {
+    cargo_run test -p loom-templates --test render -- --exact --nocapture --quiet \
+        template_renders_are_byte_stable_across_runs
+}
 #-----------------------------------------------------------------------------
 # test_style_rules_partial_exists — partial/style_rules.md ships under
 # templates/partial/ and renders the `{{ style_rules }}` variable. The body
@@ -3663,9 +3670,57 @@ test_style_rules_field_scope() {
     return "$missing"
 }
 test_loom_config_empty_path_rejected() { _pending_stub loom_config_empty_path_rejected; }
-test_agent_output_markers_present() { _pending_stub agent_output_markers_present; }
-test_template_snapshot_coverage() { _pending_stub template_snapshot_coverage; }
-test_snapshots_no_crate_root_allows() { _pending_stub snapshots_no_crate_root_allows; }
+
+#-----------------------------------------------------------------------------
+# test_agent_output_markers_present — every agent-supplied field
+# (`title`, `description`, `previous_failure` in run.md; `existing_tasks`
+# in todo_update.md) renders inside an `<agent-output>` ... `</agent-output>`
+# span, not merely somewhere in the prompt. Per specs/loom-templates.md
+# § Agent-Output Markers.
+#-----------------------------------------------------------------------------
+test_agent_output_markers_present() {
+    cargo_run test -p loom-templates --test render -- --exact --nocapture --quiet \
+        agent_output_markers_wrap_each_agent_supplied_field
+}
+
+#-----------------------------------------------------------------------------
+# test_template_snapshot_coverage — every Askama template under
+# templates/<name>.md has at least one `insta` snapshot file under
+# tests/snapshots/snapshots__<name>_snapshot.snap. Per specs/loom-templates.md
+# § Snapshot Tests.
+#-----------------------------------------------------------------------------
+test_template_snapshot_coverage() {
+    local templates_dir="$LOOM_DIR/crates/loom-templates/templates"
+    local snapshots_dir="$LOOM_DIR/crates/loom-templates/tests/snapshots"
+    local missing=0 path stem snap
+    for path in "$templates_dir"/*.md; do
+        stem="$(basename "$path" .md)"
+        snap="$snapshots_dir/snapshots__${stem}_snapshot.snap"
+        if [ ! -f "$snap" ]; then
+            echo "missing snapshot for template $stem: $snap" >&2
+            missing=$((missing + 1))
+        fi
+    done
+    return "$missing"
+}
+
+#-----------------------------------------------------------------------------
+# test_snapshots_no_crate_root_allows — the snapshot tests must inherit the
+# workspace clippy exemptions in loom/clippy.toml (allow-*-in-tests = true)
+# rather than re-declare a crate-root `#![allow(clippy::unwrap_used, ...)]`.
+# Per specs/loom-templates.md § Snapshot Tests + workspace policy.
+#-----------------------------------------------------------------------------
+test_snapshots_no_crate_root_allows() {
+    local f="$LOOM_DIR/crates/loom-templates/tests/snapshots.rs"
+    if [ ! -f "$f" ]; then
+        echo "missing snapshot test file: $f" >&2
+        return 1
+    fi
+    if grep -nE '^#!\[allow' "$f"; then
+        echo "crate-root #![allow(...)] in $f: must rely on workspace clippy.toml exemptions" >&2
+        return 1
+    fi
+}
 
 # Stubs added by the spec-authoring-conventions planning session —
 # pending implementation of: --tree handoff, outer-loop iteration,

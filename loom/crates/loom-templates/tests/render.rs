@@ -396,3 +396,202 @@ fn run_renders_expected_sections_for_shared_inputs() -> Result<()> {
     }
     Ok(())
 }
+
+/// Returns true when `needle` falls inside any `<agent-output>...</agent-output>`
+/// span in `haystack`. Used to assert that each agent-supplied field is
+/// delimited by the markers, not merely that the markers appear somewhere in
+/// the rendered prompt.
+fn contained_within_agent_output(haystack: &str, needle: &str) -> bool {
+    const OPEN: &str = "<agent-output>";
+    const CLOSE: &str = "</agent-output>";
+    let mut cursor = 0;
+    while let Some(open_rel) = haystack[cursor..].find(OPEN) {
+        let span_start = cursor + open_rel + OPEN.len();
+        let Some(close_rel) = haystack[span_start..].find(CLOSE) else {
+            return false;
+        };
+        let span_end = span_start + close_rel;
+        if haystack[span_start..span_end].contains(needle) {
+            return true;
+        }
+        cursor = span_end + CLOSE.len();
+    }
+    false
+}
+
+/// Pins the per-field agent-output wrapping: each of the four agent-supplied
+/// fields (`title`, `description`, `previous_failure`, `existing_tasks`) is
+/// rendered inside an `<agent-output>` span, not merely in the same prompt.
+#[test]
+fn agent_output_markers_wrap_each_agent_supplied_field() -> Result<()> {
+    let run = RunContext {
+        pinned_context: PINNED_CONTEXT_BODY.to_string(),
+        label: SpecLabel::new("loom-harness"),
+        spec_path: "specs/loom-harness.md".to_string(),
+        companion_paths: vec![],
+        molecule_id: Some(MoleculeId::new("wx-3hhwq")),
+        issue_id: Some(BeadId::new("wx-3hhwq.10")?),
+        title: Some("AGENTOUT_TITLE_TOKEN".into()),
+        description: Some("AGENTOUT_DESC_TOKEN".into()),
+        previous_failure: Some(PreviousFailure::new("AGENTOUT_FAILURE_TOKEN".to_string())),
+        scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+        style_rules: "docs/style-rules.md".to_string(),
+    }
+    .render()?;
+    for token in [
+        "AGENTOUT_TITLE_TOKEN",
+        "AGENTOUT_DESC_TOKEN",
+        "AGENTOUT_FAILURE_TOKEN",
+    ] {
+        assert!(
+            contained_within_agent_output(&run, token),
+            "run.md: {token} not enclosed in <agent-output>: {run}",
+        );
+    }
+
+    let todo_update = TodoUpdateContext {
+        pinned_context: PINNED_CONTEXT_BODY.to_string(),
+        label: SpecLabel::new("loom-harness"),
+        spec_path: "specs/loom-harness.md".to_string(),
+        companion_paths: vec![],
+        spec_diff: Some("=== specs/loom-harness.md ===\n+ change".into()),
+        existing_tasks: Some("AGENTOUT_TASKS_TOKEN".into()),
+        molecule_id: Some(MoleculeId::new("wx-3hhwq")),
+        implementation_notes: vec![],
+        scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+    }
+    .render()?;
+    assert!(
+        contained_within_agent_output(&todo_update, "AGENTOUT_TASKS_TOKEN"),
+        "todo_update.md: existing_tasks not enclosed in <agent-output>: {todo_update}",
+    );
+    Ok(())
+}
+
+/// Pins template-render determinism: every context renders byte-identically
+/// twice in a row from identical inputs. Catches non-determinism (HashMap
+/// ordering, time, env reads) that snapshots would only flag on the next
+/// snapshot review.
+#[test]
+fn template_renders_are_byte_stable_across_runs() -> Result<()> {
+    fn assert_stable<T: Template>(name: &str, ctx: T) -> Result<()> {
+        let first = ctx.render()?;
+        let second = ctx.render()?;
+        assert_eq!(
+            first, second,
+            "{name}: render output differs between two consecutive renders with identical inputs",
+        );
+        Ok(())
+    }
+
+    assert_stable(
+        "plan_new",
+        PlanNewContext {
+            pinned_context: PINNED_CONTEXT_BODY.to_string(),
+            label: SpecLabel::new("loom-harness"),
+            spec_path: "specs/loom-harness.md".to_string(),
+            scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+        },
+    )?;
+    assert_stable(
+        "plan_update",
+        PlanUpdateContext {
+            pinned_context: PINNED_CONTEXT_BODY.to_string(),
+            label: SpecLabel::new("loom-harness"),
+            spec_path: "specs/loom-harness.md".to_string(),
+            companion_paths: vec!["lib/sandbox/".into()],
+            implementation_notes: vec!["pin: stability check".into()],
+            scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+        },
+    )?;
+    assert_stable(
+        "todo_new",
+        TodoNewContext {
+            pinned_context: PINNED_CONTEXT_BODY.to_string(),
+            label: SpecLabel::new("loom-harness"),
+            spec_path: "specs/loom-harness.md".to_string(),
+            companion_paths: vec!["lib/sandbox/".into()],
+            implementation_notes: vec![],
+            scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+        },
+    )?;
+    assert_stable(
+        "todo_update",
+        TodoUpdateContext {
+            pinned_context: PINNED_CONTEXT_BODY.to_string(),
+            label: SpecLabel::new("loom-harness"),
+            spec_path: "specs/loom-harness.md".to_string(),
+            companion_paths: vec![],
+            spec_diff: Some("=== specs/loom-harness.md ===\n+ stability".into()),
+            existing_tasks: Some("- wx-3hhwq.1: scaffold".into()),
+            molecule_id: Some(MoleculeId::new("wx-3hhwq")),
+            implementation_notes: vec![],
+            scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+        },
+    )?;
+    assert_stable(
+        "run",
+        RunContext {
+            pinned_context: PINNED_CONTEXT_BODY.to_string(),
+            label: SpecLabel::new("loom-harness"),
+            spec_path: "specs/loom-harness.md".to_string(),
+            companion_paths: vec!["lib/sandbox/".into()],
+            molecule_id: Some(MoleculeId::new("wx-3hhwq")),
+            issue_id: Some(BeadId::new("wx-3hhwq.10")?),
+            title: Some("port templates".into()),
+            description: Some("Port templates to Askama.".into()),
+            previous_failure: Some(PreviousFailure::new("error: cargo test failed".to_string())),
+            scratchpad_path: "/workspace/.wrapix/loom/scratch/wx-3hhwq.10/scratch.md".to_string(),
+            style_rules: "docs/style-rules.md".to_string(),
+        },
+    )?;
+    assert_stable(
+        "review",
+        ReviewContext {
+            pinned_context: PINNED_CONTEXT_BODY.to_string(),
+            label: SpecLabel::new("loom-harness"),
+            spec_path: "specs/loom-harness.md".to_string(),
+            companion_paths: vec!["lib/sandbox/".into()],
+            beads_summary: Some("- wx-3hhwq.10: closed".into()),
+            base_commit: Some("abc1234".into()),
+            molecule_id: Some(MoleculeId::new("wx-3hhwq")),
+            verify_sources: vec![ReviewSource {
+                path: "tests/loom-test.sh".into(),
+                body: "test_review_inputs() { :; }\n".into(),
+            }],
+            judge_rubrics: vec![ReviewSource {
+                path: "tests/judges/loom.sh".into(),
+                body: "judge_live_path_coverage() { :; }\n".into(),
+            }],
+            scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+            style_rules: "docs/style-rules.md".to_string(),
+        },
+    )?;
+    assert_stable(
+        "msg",
+        MsgContext {
+            pinned_context: PINNED_CONTEXT_BODY.to_string(),
+            companion_paths: vec!["lib/sandbox/".into()],
+            clarify_beads: vec![ClarifyBead {
+                id: BeadId::new("wx-clar.1")?,
+                spec_label: SpecLabel::new("loom-harness"),
+                title: "State storage choice".into(),
+                options_summary: Some("State JSON vs. dedicated table".into()),
+                options: vec![
+                    ClarifyOption {
+                        n: 1,
+                        title: Some("Keep state in JSON".into()),
+                        body: Some("Add a companions array.".into()),
+                    },
+                    ClarifyOption {
+                        n: 2,
+                        title: Some("Migrate to a table".into()),
+                        body: Some("Use a SQLite table.".into()),
+                    },
+                ],
+            }],
+            scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+        },
+    )?;
+    Ok(())
+}
