@@ -15,6 +15,8 @@ Read the existing spec at `{{ spec_path }}` for full context before refining.
 
 {% include "partial/companions_context.md" %}
 
+{% include "partial/spec_conventions.md" %}
+
 {% include "partial/scratchpad.md" %}
 
 ## Existing Implementation Notes

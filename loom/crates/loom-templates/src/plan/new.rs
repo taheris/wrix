@@ -9,4 +9,8 @@ pub struct PlanNewContext {
     pub label: SpecLabel,
     pub spec_path: String,
     pub scratchpad_path: String,
+    /// Workspace-relative path to the spec-authoring conventions document
+    /// (`docs/spec-conventions.md` by default). Pinned in the planning
+    /// prompt so the agent reads the conventions before authoring the spec.
+    pub spec_conventions: String,
 }

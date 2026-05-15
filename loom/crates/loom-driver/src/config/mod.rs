@@ -42,6 +42,15 @@ use agent::lookup_phase_field;
 #[serde(default)]
 pub struct LoomConfig {
     pub pinned_context: String,
+    /// Workspace-relative path to the style-rules document. Pinned in the
+    /// `run` and `review` phases via `partial/style_rules.md` (see
+    /// `specs/loom-templates.md` § Style-Rules Partial).
+    pub style_rules: String,
+    /// Workspace-relative path to the spec-authoring conventions document.
+    /// Pinned in the `plan_new` and `plan_update` phases via
+    /// `partial/spec_conventions.md` (see `specs/loom-templates.md`
+    /// § Spec-Conventions Partial).
+    pub spec_conventions: String,
     pub beads: BeadsConfig,
     #[serde(rename = "loop")]
     pub loop_: LoopConfig,
@@ -58,6 +67,8 @@ impl Default for LoomConfig {
     fn default() -> Self {
         Self {
             pinned_context: "docs/README.md".to_string(),
+            style_rules: "docs/style-rules.md".to_string(),
+            spec_conventions: "docs/spec-conventions.md".to_string(),
             beads: BeadsConfig::default(),
             loop_: LoopConfig::default(),
             logs: LogsConfig::default(),
@@ -71,8 +82,23 @@ impl Default for LoomConfig {
 impl LoomConfig {
     /// Parse a `LoomConfig` from a TOML string. An empty string yields the
     /// full default config.
+    ///
+    /// Pin-path fields (`pinned_context`, `style_rules`, `spec_conventions`)
+    /// are rejected when empty: blanking a config does not disable the
+    /// pin — to genuinely drop a pin, remove the corresponding
+    /// `{% include %}` from the relevant template.
     pub fn from_toml_str(src: &str) -> Result<Self, LoomConfigError> {
-        Ok(toml::from_str(src)?)
+        let cfg: Self = toml::from_str(src)?;
+        for (field, value) in [
+            ("pinned_context", &cfg.pinned_context),
+            ("style_rules", &cfg.style_rules),
+            ("spec_conventions", &cfg.spec_conventions),
+        ] {
+            if value.is_empty() {
+                return Err(LoomConfigError::EmptyPath { field });
+            }
+        }
+        Ok(cfg)
     }
 
     /// Resolve the [`AgentSelection`] for `phase`. Each field walks the
@@ -195,6 +221,44 @@ post_result_grace_secs = 5
         let cfg = LoomConfig::from_toml_str("")?;
         assert_eq!(cfg, LoomConfig::default());
         Ok(())
+    }
+
+    /// The three pin-path fields default to the bundled documents — see
+    /// `specs/loom-templates.md` § Configuration. A user transitioning
+    /// without writing a config file should still get pins pointing at the
+    /// canonical paths.
+    #[test]
+    fn pin_paths_default_to_bundled_docs() {
+        let cfg = LoomConfig::default();
+        assert_eq!(cfg.pinned_context, "docs/README.md");
+        assert_eq!(cfg.style_rules, "docs/style-rules.md");
+        assert_eq!(cfg.spec_conventions, "docs/spec-conventions.md");
+    }
+
+    /// Empty values for any pin-path field are rejected at parse time —
+    /// blanking the value does not disable the pin (the template would still
+    /// render an empty path). The error names the offending field so the
+    /// user can find it in their config.
+    #[test]
+    fn empty_pin_path_returns_empty_path_error() {
+        for (toml_field, expected_field) in [
+            ("pinned_context", "pinned_context"),
+            ("style_rules", "style_rules"),
+            ("spec_conventions", "spec_conventions"),
+        ] {
+            let src = format!("{toml_field} = \"\"\n");
+            match LoomConfig::from_toml_str(&src) {
+                Err(LoomConfigError::EmptyPath { field }) => {
+                    assert_eq!(
+                        field, expected_field,
+                        "wrong field reported for {toml_field}"
+                    );
+                }
+                other => panic!(
+                    "expected EmptyPath {{ field: {expected_field} }} for empty {toml_field}, got {other:?}"
+                ),
+            }
+        }
     }
 
     /// The spec example writes the built-in defaults explicitly under

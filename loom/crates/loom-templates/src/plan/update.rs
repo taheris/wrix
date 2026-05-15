@@ -17,4 +17,8 @@ pub struct PlanUpdateContext {
     /// `loom note set <label> --kind implementation --json '[…]'`.
     pub implementation_notes: Vec<String>,
     pub scratchpad_path: String,
+    /// Workspace-relative path to the spec-authoring conventions document
+    /// (`docs/spec-conventions.md` by default). Pinned in the planning
+    /// prompt so the agent edits the spec in line with the conventions.
+    pub spec_conventions: String,
 }

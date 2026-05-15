@@ -65,13 +65,7 @@ the spec row in the state DB so subsequent `loom todo` / `loom plan -u`
 calls have something to attach notes to. Do **not** edit the spec markdown
 to record notes; the markdown holds the durable design only.
 
-## Spec File Format
-
-The spec format — required sections, success-criteria annotation syntax,
-out-of-scope conventions — is defined in `docs/spec-conventions.md`. Read
-it before authoring the spec and follow it. That document is the single
-source of truth for what a spec must contain; this template does not
-re-describe it.
+{% include "partial/spec_conventions.md" %}
 
 A few interview-flow specifics this template owns (everything else lives in
 the conventions document):

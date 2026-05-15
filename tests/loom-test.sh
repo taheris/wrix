@@ -3669,7 +3669,17 @@ test_style_rules_field_scope() {
     done
     return "$missing"
 }
-test_loom_config_empty_path_rejected() { _pending_stub loom_config_empty_path_rejected; }
+#-----------------------------------------------------------------------------
+# test_loom_config_empty_path_rejected — blanking any of the three pin-path
+# fields (pinned_context, style_rules, spec_conventions) at the TOML layer
+# surfaces as `LoomConfigError::EmptyPath { field }` naming the offending
+# field. Verified by the unit test under `loom-driver::config::tests`.
+#-----------------------------------------------------------------------------
+test_loom_config_empty_path_rejected() {
+    cargo_run test -p loom-driver --lib \
+        config::tests::empty_pin_path_returns_empty_path_error \
+        -- --exact --nocapture --quiet
+}
 
 #-----------------------------------------------------------------------------
 # test_agent_output_markers_present — every agent-supplied field
@@ -3764,9 +3774,90 @@ test_style_rules_pinning_matrix() {
     done
     return "$missing"
 }
-test_spec_conventions_pinning_matrix() { _pending_stub spec_conventions_pinning_matrix; }
-test_spec_conventions_field_scope() { _pending_stub spec_conventions_field_scope; }
-test_loom_config_pin_defaults() { _pending_stub loom_config_pin_defaults; }
+#-----------------------------------------------------------------------------
+# test_spec_conventions_pinning_matrix — plan_new.md and plan_update.md
+# include partial/spec_conventions.md; the other phase templates (todo_new,
+# todo_update, run, review, msg) do NOT include it. Matches the pinning
+# matrix in specs/loom-templates.md.
+#-----------------------------------------------------------------------------
+test_spec_conventions_pinning_matrix() {
+    local templates_dir="$LOOM_DIR/crates/loom-templates/templates"
+    local include_re='\{%[[:space:]]+include[[:space:]]+"partial/spec_conventions\.md"[[:space:]]*%\}'
+    local partial="$templates_dir/partial/spec_conventions.md"
+    local missing=0 t f
+    if [ ! -f "$partial" ]; then
+        echo "missing partial: $partial" >&2
+        missing=$((missing + 1))
+    elif ! grep -qE '\{\{[[:space:]]*spec_conventions[[:space:]]*\}\}' "$partial"; then
+        echo "partial does not render {{ spec_conventions }}: $partial" >&2
+        missing=$((missing + 1))
+    fi
+    for t in plan_new plan_update; do
+        f="$templates_dir/$t.md"
+        if [ ! -f "$f" ]; then
+            echo "missing template: $f" >&2
+            missing=$((missing + 1))
+            continue
+        fi
+        if ! grep -qE "$include_re" "$f"; then
+            echo "template $t.md must include partial/spec_conventions.md" >&2
+            missing=$((missing + 1))
+        fi
+    done
+    for t in todo_new todo_update run review msg; do
+        f="$templates_dir/$t.md"
+        if [ -f "$f" ] && grep -qE "$include_re" "$f"; then
+            echo "template $t.md must NOT include partial/spec_conventions.md" >&2
+            missing=$((missing + 1))
+        fi
+    done
+    return "$missing"
+}
+
+#-----------------------------------------------------------------------------
+# test_spec_conventions_field_scope — PlanNewContext + PlanUpdateContext
+# carry `spec_conventions: String`; no other phase context does. Per pinning
+# matrix in specs/loom-templates.md, the pin is exclusive to the two phases
+# that author spec content.
+#-----------------------------------------------------------------------------
+test_spec_conventions_field_scope() {
+    local src="$LOOM_DIR/crates/loom-templates/src"
+    local field_re='spec_conventions:[[:space:]]*String'
+    local missing=0 f
+    for f in "$src/plan/new.rs" "$src/plan/update.rs"; do
+        if [ ! -f "$f" ]; then
+            echo "missing source: $f" >&2
+            missing=$((missing + 1))
+            continue
+        fi
+        if ! grep -qE "$field_re" "$f"; then
+            echo "expected spec_conventions: String field in $f" >&2
+            missing=$((missing + 1))
+        fi
+    done
+    for f in "$src/run/mod.rs" "$src/review/mod.rs" "$src/todo/new.rs" \
+        "$src/todo/update.rs" "$src/msg/mod.rs"; do
+        if [ -f "$f" ] && grep -qE "$field_re" "$f"; then
+            echo "unexpected spec_conventions field in $f" >&2
+            missing=$((missing + 1))
+        fi
+    done
+    return "$missing"
+}
+
+#-----------------------------------------------------------------------------
+# test_loom_config_pin_defaults — LoomConfig::default() populates the three
+# pin-path fields with the bundled docs:
+#   pinned_context = "docs/README.md"
+#   style_rules = "docs/style-rules.md"
+#   spec_conventions = "docs/spec-conventions.md"
+# Verified by the unit test under `loom-driver::config::tests`.
+#-----------------------------------------------------------------------------
+test_loom_config_pin_defaults() {
+    cargo_run test -p loom-driver --lib \
+        config::tests::pin_paths_default_to_bundled_docs \
+        -- --exact --nocapture --quiet
+}
 #-----------------------------------------------------------------------------
 # test_style_rules_partials_are_family_agnostic — neither partial/style_rules.md
 # nor partial/review_rubric.md enumerates fixed rule-family prefix markers

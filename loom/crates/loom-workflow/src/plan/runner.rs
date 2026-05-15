@@ -130,6 +130,7 @@ pub fn run_with_timeout(
         companion_paths,
         implementation_notes,
         scratchpad_path,
+        spec_conventions: cfg.spec_conventions.clone(),
     })?;
 
     // Set before wrapix runs so a non-zero interactive exit (Ctrl-C, agent

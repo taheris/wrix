@@ -924,6 +924,7 @@ fn run_run(
         let phase_default_for_async = phase_default.clone();
         let kind = selection.kind;
         let shutdown_grace = resolve_shutdown_grace(&selection);
+        let style_rules_for_async = config.style_rules.clone();
         let summary = runtime.block_on(async move {
             run_parallel_run(
                 workspace_buf,
@@ -934,6 +935,7 @@ fn run_run(
                 manifest_for_async,
                 cli_profile_for_async,
                 phase_default_for_async,
+                style_rules_for_async,
             )
             .await
         })?;
@@ -957,6 +959,7 @@ fn run_run(
     let logs_root = workspace.join(".wrapix/loom/logs");
     let label_for_sink = label.clone();
     let render_mode = resolve_render_mode(render_flags);
+    let style_rules_for_run = config.style_rules.clone();
     let summary = runtime.block_on(async move {
         let bd = BdClient::new();
         let mut controller = ProductionAgentLoopController::new(
@@ -1011,7 +1014,8 @@ fn run_run(
                 }
             },
         )
-        .with_handoff_lock(guard);
+        .with_handoff_lock(guard)
+        .with_style_rules(style_rules_for_run);
         run_loop(&mut controller, mode, RetryPolicy::default()).await
     })?;
     println!(
@@ -1034,6 +1038,7 @@ struct ParallelRunSummary {
     failed: usize,
 }
 
+#[expect(clippy::too_many_arguments, reason = "fan-out wiring surface")]
 async fn run_parallel_run(
     workspace: PathBuf,
     label: SpecLabel,
@@ -1043,6 +1048,7 @@ async fn run_parallel_run(
     manifest: Arc<ProfileImageManifest>,
     cli_profile: Option<ProfileName>,
     phase_default: ProfileName,
+    style_rules: String,
 ) -> anyhow::Result<ParallelRunSummary> {
     use loom_driver::bd::UpdateOpts;
     use loom_workflow::run::{AgentOutcome, run_parallel_batch};
@@ -1071,6 +1077,7 @@ async fn run_parallel_run(
         let phase_default_inner = phase_default.clone();
         let logs_root_inner = logs_root.clone();
         let label_inner = label_for_closure.clone();
+        let style_rules_inner = style_rules.clone();
         async move {
             // Marker is the primary signal here too — without it, parallel
             // mode would swallow `LOOM_BLOCKED` / `LOOM_CLARIFY` self-reports
@@ -1084,6 +1091,7 @@ async fn run_parallel_run(
                 &phase_default_inner,
                 &logs_root_inner,
                 &label_inner,
+                &style_rules_inner,
             )
             .await
             {
@@ -1171,6 +1179,7 @@ async fn run_parallel_run(
 /// a silent default.
 ///
 /// [`ProfileError::UnknownProfile`]: loom_driver::profile_manifest::ProfileError::UnknownProfile
+#[expect(clippy::too_many_arguments, reason = "fan-out wiring surface")]
 async fn dispatch_for_slot(
     kind: AgentKind,
     shutdown_grace: Option<Duration>,
@@ -1180,6 +1189,7 @@ async fn dispatch_for_slot(
     phase_default: &ProfileName,
     logs_root: &Path,
     label: &SpecLabel,
+    style_rules: &str,
 ) -> anyhow::Result<(SessionOutcome, Option<ExitSignal>)> {
     use loom_driver::scratch::ScratchSession;
     use loom_workflow::run::{
@@ -1202,7 +1212,7 @@ async fn dispatch_for_slot(
         description: slot.bead.description.clone(),
         previous_failure: None,
         scratchpad_path,
-        style_rules: String::new(),
+        style_rules: style_rules.to_string(),
     })?;
     let scratch = ScratchSession::open(&slot.worktree.path, &key, &initial_prompt, &banner)?;
     let spawn_config = build_spawn_config_from_manifest(
@@ -1554,6 +1564,7 @@ fn run_review(
     // from `(logs_root, label, "review", phase_when)`.
     let phase_when = SystemClock::new().wall_now();
     let logs_root_for_spawn = logs_root.clone();
+    let style_rules_for_review = config.style_rules.clone();
     let result = runtime.block_on(async move {
         let bd = BdClient::new();
         let mut controller = ProductionReviewController::new(
@@ -1576,7 +1587,8 @@ fn run_review(
             },
         )
         .with_handoff_lock(guard)
-        .with_phase_log(logs_root, phase_when);
+        .with_phase_log(logs_root, phase_when)
+        .with_style_rules(style_rules_for_review);
         run_review_loop(&mut controller, IterationCap::default()).await
     })?;
     println!("loom review: {result:?}");

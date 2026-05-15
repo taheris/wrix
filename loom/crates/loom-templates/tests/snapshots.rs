@@ -27,6 +27,7 @@ fn plan_new_snapshot() {
         label: SpecLabel::new("loom-harness"),
         spec_path: "specs/loom-harness.md".to_string(),
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+        spec_conventions: "docs/spec-conventions.md".to_string(),
     };
     insta::assert_snapshot!(ctx.render().unwrap());
 }
@@ -43,6 +44,7 @@ fn plan_update_snapshot() {
             "Retry policy is described in `## Recovery & Retry`".into(),
         ],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+        spec_conventions: "docs/spec-conventions.md".to_string(),
     };
     insta::assert_snapshot!(ctx.render().unwrap());
 }

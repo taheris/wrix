@@ -26,6 +26,11 @@ pub struct PlanPromptInputs {
     /// session. Embedded in the rendered prompt so the agent can write to
     /// the correct file under compaction recovery.
     pub scratchpad_path: String,
+    /// Workspace-relative path to the spec-authoring conventions document.
+    /// Pinned in both planning templates via `partial/spec_conventions.md`
+    /// so the agent reads the conventions before authoring or editing the
+    /// spec.
+    pub spec_conventions: String,
 }
 
 /// Render the appropriate Askama template for `inputs.mode`. Returns the
@@ -37,6 +42,7 @@ pub fn render_prompt(inputs: PlanPromptInputs) -> Result<String, PlanError> {
             label,
             spec_path: inputs.spec_path,
             scratchpad_path: inputs.scratchpad_path,
+            spec_conventions: inputs.spec_conventions,
         }
         .render()?,
         PlanMode::Update(label) => PlanUpdateContext {
@@ -46,6 +52,7 @@ pub fn render_prompt(inputs: PlanPromptInputs) -> Result<String, PlanError> {
             companion_paths: inputs.companion_paths,
             implementation_notes: inputs.implementation_notes,
             scratchpad_path: inputs.scratchpad_path,
+            spec_conventions: inputs.spec_conventions,
         }
         .render()?,
     };
@@ -66,6 +73,7 @@ mod tests {
             companion_paths: vec![],
             implementation_notes: vec![],
             scratchpad_path: "/workspace/.wrapix/loom/scratch/loom-harness/scratch.md".into(),
+            spec_conventions: "docs/spec-conventions.md".into(),
         }
     }
 
@@ -77,6 +85,7 @@ mod tests {
             companion_paths: vec!["lib/sandbox/".into()],
             implementation_notes: vec![],
             scratchpad_path: "/workspace/.wrapix/loom/scratch/loom-harness/scratch.md".into(),
+            spec_conventions: "docs/spec-conventions.md".into(),
         }
     }
 
@@ -131,6 +140,7 @@ mod tests {
                 "note-beta covers retry/backoff".into(),
             ],
             scratchpad_path: "/workspace/.wrapix/loom/scratch/loom-harness/scratch.md".into(),
+            spec_conventions: "docs/spec-conventions.md".into(),
         };
         let body = render_prompt(inputs).expect("render");
         assert!(
@@ -161,6 +171,7 @@ mod tests {
             companion_paths: vec![],
             implementation_notes: vec![],
             scratchpad_path: "/workspace/.wrapix/loom/scratch/loom-harness/scratch.md".into(),
+            spec_conventions: "docs/spec-conventions.md".into(),
         };
         let body = render_prompt(inputs).expect("render");
         assert!(body.contains("loom note set"));

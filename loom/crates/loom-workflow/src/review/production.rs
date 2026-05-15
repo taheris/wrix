@@ -75,6 +75,11 @@ where
     /// but not `Sync` — the trait's `Send`-future bound requires the
     /// controller itself to be `Sync` across `&self` borrows.
     envelope_builder: Mutex<Option<EnvelopeBuilder>>,
+    /// Workspace-relative path to the style-rules document pinned in the
+    /// review prompt. Sourced from `LoomConfig.style_rules` at construction
+    /// via [`Self::with_style_rules`]; defaults to the built-in path so
+    /// test fakes that skip the builder still render a valid prompt.
+    style_rules: String,
 }
 
 impl<S, F> ProductionReviewController<S, F>
@@ -106,6 +111,7 @@ where
             phase_log_root: None,
             phase_log_when: SystemClock::new().wall_now(),
             envelope_builder: Mutex::new(None),
+            style_rules: "docs/style-rules.md".to_string(),
         }
     }
 
@@ -113,6 +119,14 @@ where
     /// before spawning the `loom run` child (which acquires the same lock).
     pub fn with_handoff_lock(mut self, guard: LockGuard) -> Self {
         self.lock = Some(guard);
+        self
+    }
+
+    /// Override the style-rules pin used in the rendered review prompt.
+    /// Production callers thread this from `LoomConfig.style_rules`; tests
+    /// rely on the built-in default.
+    pub fn with_style_rules(mut self, path: String) -> Self {
+        self.style_rules = path;
         self
     }
 
@@ -177,7 +191,7 @@ where
             verify_sources,
             judge_rubrics,
             scratchpad_path,
-            style_rules: "docs/style-rules.md".to_string(),
+            style_rules: self.style_rules.clone(),
         };
         Ok(ctx.render()?)
     }

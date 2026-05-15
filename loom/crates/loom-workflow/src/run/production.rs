@@ -65,6 +65,11 @@ where
     spawn: S,
     /// Spec lock dropped before exec'ing `loom review` so the child can take it.
     lock: Option<LockGuard>,
+    /// Workspace-relative path to the style-rules document pinned in the
+    /// run prompt. Sourced from `LoomConfig.style_rules` at construction
+    /// time via [`Self::with_style_rules`]; defaults to the built-in path
+    /// so test fakes that skip the builder still render a valid prompt.
+    style_rules: String,
 }
 
 impl<S, F> ProductionAgentLoopController<S, F>
@@ -93,6 +98,7 @@ where
             phase_default,
             spawn,
             lock: None,
+            style_rules: "docs/style-rules.md".to_string(),
         }
     }
 
@@ -100,6 +106,14 @@ where
     /// before spawning the `loom review` child (which acquires the same lock).
     pub fn with_handoff_lock(mut self, guard: LockGuard) -> Self {
         self.lock = Some(guard);
+        self
+    }
+
+    /// Override the style-rules pin used in the rendered run prompt.
+    /// Production callers thread this from `LoomConfig.style_rules`; tests
+    /// rely on the built-in default.
+    pub fn with_style_rules(mut self, path: String) -> Self {
+        self.style_rules = path;
         self
     }
 
@@ -147,7 +161,7 @@ where
             description: bead.description.clone(),
             previous_failure,
             scratchpad_path,
-            style_rules: String::new(),
+            style_rules: self.style_rules.clone(),
         })
         .map_err(|e| RunError::Protocol(ProtocolError::Io(std::io::Error::other(e))))?;
         let scratch = loom_driver::scratch::ScratchSession::open(

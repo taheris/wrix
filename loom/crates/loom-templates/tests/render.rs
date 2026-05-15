@@ -26,6 +26,7 @@ fn plan_new_renders_partials_and_inputs() -> Result<()> {
         label: SpecLabel::new("loom-harness"),
         spec_path: "specs/loom-harness.md".to_string(),
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+        spec_conventions: "docs/spec-conventions.md".to_string(),
     };
     let out = ctx.render()?;
 
@@ -47,6 +48,7 @@ fn plan_update_renders_partials_and_companions() -> Result<()> {
         companion_paths: vec!["lib/sandbox/".into(), "lib/ralph/template/".into()],
         implementation_notes: vec![],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+        spec_conventions: "docs/spec-conventions.md".to_string(),
     };
     let out = ctx.render()?;
 
@@ -69,6 +71,7 @@ fn plan_templates_render_three_plan_stage_checks() -> Result<()> {
         label: SpecLabel::new("loom-harness"),
         spec_path: "specs/loom-harness.md".to_string(),
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+        spec_conventions: "docs/spec-conventions.md".to_string(),
     }
     .render()?;
     let update_out = PlanUpdateContext {
@@ -78,6 +81,7 @@ fn plan_templates_render_three_plan_stage_checks() -> Result<()> {
         companion_paths: vec![],
         implementation_notes: vec![],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+        spec_conventions: "docs/spec-conventions.md".to_string(),
     }
     .render()?;
 
@@ -118,6 +122,7 @@ fn plan_new_defers_spec_format_to_conventions_doc() -> Result<()> {
         label: SpecLabel::new("loom-harness"),
         spec_path: "specs/loom-harness.md".to_string(),
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+        spec_conventions: "docs/spec-conventions.md".to_string(),
     }
     .render()?;
 
@@ -569,6 +574,7 @@ fn template_renders_are_byte_stable_across_runs() -> Result<()> {
             label: SpecLabel::new("loom-harness"),
             spec_path: "specs/loom-harness.md".to_string(),
             scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+            spec_conventions: "docs/spec-conventions.md".to_string(),
         },
     )?;
     assert_stable(
@@ -580,6 +586,7 @@ fn template_renders_are_byte_stable_across_runs() -> Result<()> {
             companion_paths: vec!["lib/sandbox/".into()],
             implementation_notes: vec!["pin: stability check".into()],
             scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+            spec_conventions: "docs/spec-conventions.md".to_string(),
         },
     )?;
     assert_stable(
