@@ -112,14 +112,20 @@ error: cargo test failed
      - **Independent**: No dep needed—`bd ready` will surface it when unblocked
    - Do NOT implement discovered tasks in this session—stay focused
 5. **Quality Gates**: Before completing, ensure:
-   - [ ] All tests pass
-   - [ ] Lint checks pass
-   - [ ] Changes committed
+   - All tests pass
+   - Lint checks pass
+   - Changes committed
 6. **Blocked vs Waiting**: Distinguish dependency blocks from true blocks:
    - Need user input? → write the reason on a prior line, then `LOOM_BLOCKED`
    - Need other beads done? → Add dep with `bd dep add`, output `LOOM_COMPLETE`
 7. **Already Implemented**: If the task's work is already done in the codebase,
-   verify correctness, close the issue, and move on with `LOOM_COMPLETE`
+   verify correctness, run `bd close wx-3hhwq.10`,
+   and emit `LOOM_NOOP` (empty diff means no-op, not zero-progress).
+8. **Closing the bead**: After committing your changes and before emitting
+   `LOOM_COMPLETE`, run `bd close wx-3hhwq.10`.
+   The verdict gate observes `bd-closed` as the agent's responsibility — a
+   `LOOM_COMPLETE` without a closed bead is treated as `incomplete-signaling`
+   and enters recovery.
 
 ## Spec Verifications
 
@@ -140,10 +146,11 @@ After implementing the issue, check the spec's Success Criteria for `[verify]` a
 ## Quality Gates
 
 Before outputting LOOM_COMPLETE:
-- [ ] Tests written and passing
-- [ ] Lint checks pass
-- [ ] Changes staged (`git add`)
-- [ ] Spec verification test files created for relevant criteria
+- Tests written and passing
+- Lint checks pass
+- Changes staged (`git add`)
+- Spec verification test files created for relevant criteria
+- Bead closed (`bd close wx-3hhwq.10`)
 
 Post-step hooks verify compliance automatically.
 
@@ -159,7 +166,12 @@ Output ONE of these at the end of your response:
 - `LOOM_BLOCKED`
 - `LOOM_CLARIFY`
 
-- `LOOM_COMPLETE` — Task finished, all quality gates passed. No payload.
+- `LOOM_COMPLETE` — Task finished with a non-empty diff and the bead
+  closed via `bd close`. All quality gates passed. No payload.
+- `LOOM_NOOP` — The work was already done in tree and the phase produced
+  an empty diff. Close the bead with `bd close` before emitting. Use this
+  instead of `LOOM_COMPLETE` whenever the diff is empty — an empty diff
+  with `LOOM_COMPLETE` is treated as `zero-progress` and enters recovery.
 - `LOOM_BLOCKED` — Cannot proceed. Write the reason **before** the marker on
   its own line(s); emit `LOOM_BLOCKED` as the final line with nothing after it.
 - `LOOM_CLARIFY` — Need clarification. Write the question **before** the
