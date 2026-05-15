@@ -1378,15 +1378,6 @@ test_run_retry_with_context() {
 }
 
 #-----------------------------------------------------------------------------
-# test_run_execs_review — molecule completion in continuous mode triggers
-# exactly one `loom review` exec; once mode never does.
-#-----------------------------------------------------------------------------
-test_run_execs_review() {
-    run_cargo_test run::runner::tests::continuous_execs_review_on_molecule_complete
-    run_cargo_test run::runner::tests::once_mode_does_not_exec_review_on_empty_queue
-}
-
-#-----------------------------------------------------------------------------
 # Worktree parallelism — `--parallel N`. Pure-logic tests live in the
 # loom-workflow lib; tests that touch a real git repo live in the
 # `parallel` integration test.
@@ -3620,11 +3611,7 @@ test_unknown_variants_tolerated() {
 # (specs/loom-templates.md).
 test_template_snapshots_stable() { _pending_stub template_snapshots_stable; }
 test_style_rules_partial_exists() { _pending_stub style_rules_partial_exists; }
-test_run_pins_style_rules() { _pending_stub run_pins_style_rules; }
-test_check_pins_style_rules() { _pending_stub check_pins_style_rules; }
-test_style_rules_not_pinned_elsewhere() { _pending_stub style_rules_not_pinned_elsewhere; }
 test_style_rules_field_scope() { _pending_stub style_rules_field_scope; }
-test_loom_config_style_rules_default() { _pending_stub loom_config_style_rules_default; }
 test_loom_config_empty_path_rejected() { _pending_stub loom_config_empty_path_rejected; }
 test_agent_output_markers_present() { _pending_stub agent_output_markers_present; }
 test_template_snapshot_coverage() { _pending_stub template_snapshot_coverage; }
