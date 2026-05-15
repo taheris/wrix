@@ -338,10 +338,10 @@ pub fn report(findings: &[Finding], strict: bool) -> i32 {
         );
     }
     if findings.is_empty() {
-        eprintln!("loom doctor: no violations");
+        eprintln!("loom check --check=criteria: no violations");
     } else {
         eprintln!(
-            "loom doctor: {n} findings ({hard_count} hard)",
+            "loom check --check=criteria: {n} findings ({hard_count} hard)",
             n = findings.len(),
         );
     }

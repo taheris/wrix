@@ -35,13 +35,14 @@ repos:
         pass_filenames: true
         stages: [pre-commit]
 
-      # loom doctor — spec ↔ test stub-and-integration audit. Fast (~ms).
-      # Files filter triggers on changes to any spec or to the dispatcher,
-      # which is the surface the audit cross-references. `always_run: false`
-      # so unrelated commits skip the check.
-      - id: loom-doctor
-        name: loom doctor --check=criteria
-        entry: nix run .#loom -- doctor --check=criteria
+      # loom check --check=criteria — spec ↔ test stub-and-integration
+      # audit. Fast (~ms). Files filter triggers on changes to any spec
+      # or to the dispatcher, which is the surface the audit
+      # cross-references. `always_run: false` so unrelated commits skip
+      # the check.
+      - id: loom-check-criteria
+        name: loom check --check=criteria
+        entry: nix run .#loom -- check --check=criteria
         language: system
         pass_filenames: false
         files: ^(specs/|tests/loom-test\.sh$|loom/crates/[^/]+/)

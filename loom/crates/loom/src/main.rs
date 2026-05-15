@@ -316,19 +316,6 @@ enum Command {
         #[command(subcommand)]
         action: NoteAction,
     },
-    /// Audit spec criteria against test dispatchers (`[verify]` → stub-or-real).
-    #[command(hide = true)]
-    Doctor {
-        /// Which audit to run. Currently only `criteria` (stub-or-real
-        /// checks for `[verify](tests/loom-test.sh::test_X)` annotations).
-        #[arg(long, default_value = "criteria")]
-        check: String,
-        /// Promote warning-severity findings (e.g. orphan stubs) to
-        /// errors. Hard errors (stub-checked, missing dispatcher) always
-        /// fail regardless.
-        #[arg(long)]
-        strict: bool,
-    },
 }
 
 impl Command {
@@ -338,10 +325,7 @@ impl Command {
     /// `false`. Spec: `loom-harness.md` § Nested-Loom Guard.
     fn refused_inside_loom(&self) -> bool {
         match self {
-            Command::Status
-            | Command::Logs { .. }
-            | Command::Spec { .. }
-            | Command::Doctor { .. } => false,
+            Command::Status | Command::Logs { .. } | Command::Spec { .. } => false,
             Command::Check { check: Some(_), .. } => false,
             Command::Init { .. }
             | Command::UseSpec { .. }
@@ -373,7 +357,7 @@ const HELP_GROUPS: &[(&str, &[&str])] = &[
 fn args_request_top_level_help(args: &[String]) -> bool {
     let known_subcommands = [
         "init", "status", "use", "logs", "spec", "plan", "run", "check", "msg", "todo", "note",
-        "doctor", "help",
+        "help",
     ];
     for (idx, arg) in args.iter().enumerate() {
         if known_subcommands.contains(&arg.as_str()) {
@@ -583,7 +567,6 @@ fn main() -> ExitCode {
         ),
         Command::Todo { spec, since } => run_todo(&workspace, spec, since, agent_override),
         Command::Note { action } => run_note(&workspace, action),
-        Command::Doctor { check, strict } => run_doctor(&workspace, &check, strict),
     };
 
     match result {
@@ -701,13 +684,6 @@ fn run_note(workspace: &std::path::Path, action: NoteAction) -> anyhow::Result<(
         }
     }
     Ok(())
-}
-
-fn run_doctor(workspace: &std::path::Path, check: &str, strict: bool) -> anyhow::Result<()> {
-    if check != "criteria" {
-        anyhow::bail!("unsupported --check value `{check}` (only `criteria` is implemented)");
-    }
-    run_check_audit(workspace, CheckAudit::Criteria, strict)
 }
 
 fn run_check_audit(
