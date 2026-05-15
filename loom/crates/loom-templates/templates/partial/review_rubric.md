@@ -46,26 +46,20 @@ enforce — most rules in the document are prose, and the LLM judge is what
 enforces them. *"Style looks fine"* is not an acceptable answer; the
 output must enumerate which rules were checked.
 
-**How to walk the document.** Open `{{ style_rules }}` and walk every
-rule family in order, rule by rule:
-
-- **SH-** (Shell)
-- **NX-** (Nix)
-- **DOC-** (Documentation)
-- **GIT-** (Git)
-- **TST-** (Testing)
-- **RS-** (Rust)
-- **COM-** (Comments)
-- **CLI-** (CLI surface)
+**How to walk the document.** Open `{{ style_rules }}` and walk every rule
+family the document defines, in order, rule by rule. Discover the families
+from the document itself; do not assume a fixed prefix list.
 
 For each rule, judge whether the diff satisfies it. A rule that does not
-apply to this diff (e.g. `SH-1` against a pure-Rust diff) is *checked
-and dismissed*, not skipped silently — say so in the output.
+apply to this diff (for instance, a shell-family rule against a pure-Rust
+diff) is *checked and dismissed*, not skipped silently — say so in the
+output.
 
 **Citation contract.** For every violation you identify, the output
 **must** cite both:
 
-- the **rule id** — e.g. `RS-12`, `COM-1`, `SH-6`
+- the **rule id** — e.g. `<FAMILY>-<N>`, using the family prefix and number
+  exactly as they appear in `{{ style_rules }}`
 - the **offending file and line range** — e.g.
   `loom/crates/loom-driver/src/agent/parser.rs:142-156`
 

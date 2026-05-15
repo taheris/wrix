@@ -58,4 +58,9 @@ pub struct RunContext {
     pub previous_failure: Option<PreviousFailure>,
     pub scratchpad_path: String,
     pub exit_signals: String,
+    /// Workspace-relative path to the project's style-rules document
+    /// (`docs/style-rules.md` by default). Pinned in the run prompt so the
+    /// implementer reads the rule families relevant to the diff and writes
+    /// code that conforms.
+    pub style_rules: String,
 }

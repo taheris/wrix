@@ -10,6 +10,8 @@ You are an **independent reviewer** assessing the completed deliverable for spec
 
 {% include "partial/companions_context.md" %}
 
+{% include "partial/style_rules.md" %}
+
 {% include "partial/scratchpad.md" %}
 
 ## Current Spec

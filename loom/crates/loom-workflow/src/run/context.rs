@@ -21,6 +21,10 @@ pub struct RunContextInputs {
     /// the correct file under compaction recovery.
     pub scratchpad_path: String,
     pub exit_signals: String,
+    /// Workspace-relative path to the project's style-rules document. Pinned
+    /// in the rendered prompt so the implementer reads applicable rules
+    /// before writing code.
+    pub style_rules: String,
 }
 
 /// Build the typed [`RunContext`] for a single bead spawn from the driver's
@@ -38,6 +42,7 @@ pub fn build_run_context(inputs: RunContextInputs) -> RunContext {
         previous_failure: inputs.previous_failure.map(PreviousFailure::new),
         scratchpad_path: inputs.scratchpad_path,
         exit_signals: inputs.exit_signals,
+        style_rules: inputs.style_rules,
     }
 }
 
@@ -66,6 +71,7 @@ mod tests {
             previous_failure: None,
             scratchpad_path: "/workspace/.wrapix/loom/scratch/wx-3hhwq.15/scratch.md".into(),
             exit_signals: "LOOM_COMPLETE".into(),
+            style_rules: "docs/style-rules.md".into(),
         }
     }
 

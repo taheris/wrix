@@ -95,6 +95,7 @@ fn run_snapshot() {
         previous_failure: Some(PreviousFailure::new("error: cargo test failed".to_string())),
         scratchpad_path: "/workspace/.wrapix/loom/scratch/wx-3hhwq.10/scratch.md".to_string(),
         exit_signals: EXIT_SIGNALS_BODY.to_string(),
+        style_rules: "docs/style-rules.md".to_string(),
     };
     insta::assert_snapshot!(ctx.render().unwrap());
 }

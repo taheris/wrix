@@ -169,6 +169,7 @@ fn run_wraps_agent_supplied_fields_in_agent_output() -> Result<()> {
         previous_failure: Some(PreviousFailure::new("error: cargo test failed".to_string())),
         scratchpad_path: "/workspace/.wrapix/loom/scratch/wx-3hhwq.10/scratch.md".to_string(),
         exit_signals: EXIT_SIGNALS_BODY.to_string(),
+        style_rules: "docs/style-rules.md".to_string(),
     };
     let out = ctx.render()?;
 
@@ -249,9 +250,12 @@ fn review_renders_review_context_fields() -> Result<()> {
     Ok(())
 }
 
-/// The review rubric must walk `docs/style-rules.md` rule by rule and
-/// require rule-id + file/line citations. This test pins the rubric's
-/// directives so a future refactor cannot silently drop them.
+/// The review rubric must walk `{{ style_rules }}` rule by rule and require
+/// rule-id + file/line citations. Per `specs/loom-templates.md` *Style-Rules
+/// Partial*, the rubric is **rule-family-agnostic**: it tells the judge to
+/// discover families from the pinned document rather than enumerate them in
+/// the prompt. This test pins those directives so a future refactor cannot
+/// silently drop them.
 #[test]
 fn review_renders_style_rule_conformance_walkthrough() -> Result<()> {
     let ctx = ReviewContext {
@@ -278,14 +282,10 @@ fn review_renders_style_rule_conformance_walkthrough() -> Result<()> {
         out.contains("docs/style-rules.md"),
         "style_rules path not pinned: {out}",
     );
-    for family in [
-        "**SH-**", "**NX-**", "**DOC-**", "**GIT-**", "**TST-**", "**RS-**", "**COM-**", "**CLI-**",
-    ] {
-        assert!(
-            out.contains(family),
-            "rule family marker missing ({family}): {out}",
-        );
-    }
+    assert!(
+        out.contains("Discover the families") && out.contains("do not assume a fixed prefix list"),
+        "family-discovery instruction missing: {out}",
+    );
     assert!(
         out.contains("rule id"),
         "citation contract (rule id) not described: {out}",
@@ -302,6 +302,12 @@ fn review_renders_style_rule_conformance_walkthrough() -> Result<()> {
         out.contains("`style-rule`"),
         "style-rule concern token missing from flag schema: {out}",
     );
+    for forbidden in ["**SH-**", "**NX-**", "**RS-**", "**COM-**", "**CLI-**"] {
+        assert!(
+            !out.contains(forbidden),
+            "rule-family marker {forbidden} leaked into prompt: {out}",
+        );
+    }
     Ok(())
 }
 
@@ -378,6 +384,7 @@ fn run_renders_expected_sections_for_shared_inputs() -> Result<()> {
         previous_failure: None,
         scratchpad_path: "/workspace/.wrapix/loom/scratch/wx-mol.1/scratch.md".into(),
         exit_signals: "- `LOOM_COMPLETE`".into(),
+        style_rules: "docs/style-rules.md".into(),
     };
     let out = ctx.render()?;
 

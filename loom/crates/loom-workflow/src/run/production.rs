@@ -148,6 +148,7 @@ where
             previous_failure,
             scratchpad_path,
             exit_signals: String::new(),
+            style_rules: String::new(),
         })
         .map_err(|e| RunError::Protocol(ProtocolError::Io(std::io::Error::other(e))))?;
         let scratch = loom_driver::scratch::ScratchSession::open(

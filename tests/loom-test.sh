@@ -3614,8 +3614,54 @@ test_unknown_variants_tolerated() {
 # implementation of style_rules pinning + per-phase pinning policy
 # (specs/loom-templates.md).
 test_template_snapshots_stable() { _pending_stub template_snapshots_stable; }
-test_style_rules_partial_exists() { _pending_stub style_rules_partial_exists; }
-test_style_rules_field_scope() { _pending_stub style_rules_field_scope; }
+#-----------------------------------------------------------------------------
+# test_style_rules_partial_exists — partial/style_rules.md ships under
+# templates/partial/ and renders the `{{ style_rules }}` variable. The body
+# is rule-family-agnostic (see test_style_rules_partials_are_family_agnostic
+# below); this dispatcher only proves the file exists and pins the variable.
+#-----------------------------------------------------------------------------
+test_style_rules_partial_exists() {
+    local partial="$LOOM_DIR/crates/loom-templates/templates/partial/style_rules.md"
+    if [ ! -f "$partial" ]; then
+        echo "missing partial: $partial" >&2
+        return 1
+    fi
+    if ! grep -qE '\{\{[[:space:]]*style_rules[[:space:]]*\}\}' "$partial"; then
+        echo "partial does not render {{ style_rules }}: $partial" >&2
+        return 1
+    fi
+}
+
+#-----------------------------------------------------------------------------
+# test_style_rules_field_scope — RunContext + ReviewContext carry
+# `style_rules: String`; no other phase context does. Per pinning matrix in
+# specs/loom-templates.md, the pin is exclusive to the two phases that write
+# or evaluate code.
+#-----------------------------------------------------------------------------
+test_style_rules_field_scope() {
+    local src="$LOOM_DIR/crates/loom-templates/src"
+    local field_re='style_rules:[[:space:]]*String'
+    local missing=0 f
+    for f in "$src/run/mod.rs" "$src/review/mod.rs"; do
+        if [ ! -f "$f" ]; then
+            echo "missing source: $f" >&2
+            missing=$((missing + 1))
+            continue
+        fi
+        if ! grep -qE "$field_re" "$f"; then
+            echo "expected style_rules: String field in $f" >&2
+            missing=$((missing + 1))
+        fi
+    done
+    for f in "$src/plan/new.rs" "$src/plan/update.rs" "$src/todo/new.rs" \
+        "$src/todo/update.rs" "$src/msg/mod.rs"; do
+        if [ -f "$f" ] && grep -qE "$field_re" "$f"; then
+            echo "unexpected style_rules field in $f" >&2
+            missing=$((missing + 1))
+        fi
+    done
+    return "$missing"
+}
 test_loom_config_empty_path_rejected() { _pending_stub loom_config_empty_path_rejected; }
 test_agent_output_markers_present() { _pending_stub agent_output_markers_present; }
 test_template_snapshot_coverage() { _pending_stub template_snapshot_coverage; }
@@ -3632,11 +3678,67 @@ test_run_outer_loop_iterates_on_fixups() { _pending_stub run_outer_loop_iterates
 test_push_gate_refuses_on_tree_review_flag() { _pending_stub push_gate_refuses_on_tree_review_flag; }
 test_bare_loom_produces_grouped_help() { _pending_stub bare_loom_produces_grouped_help; }
 test_phase_verdict_decide_called_from_production() { _pending_stub phase_verdict_decide_called_from_production; }
-test_style_rules_pinning_matrix() { _pending_stub style_rules_pinning_matrix; }
+#-----------------------------------------------------------------------------
+# test_style_rules_pinning_matrix — run.md and review.md include
+# partial/style_rules.md; the other phase templates (plan_new, plan_update,
+# todo_new, todo_update, msg) do NOT include it. Matches the pinning matrix
+# in specs/loom-templates.md.
+#-----------------------------------------------------------------------------
+test_style_rules_pinning_matrix() {
+    local templates_dir="$LOOM_DIR/crates/loom-templates/templates"
+    local include_re='\{%[[:space:]]+include[[:space:]]+"partial/style_rules\.md"[[:space:]]*%\}'
+    local missing=0 t f
+    for t in run review; do
+        f="$templates_dir/$t.md"
+        if [ ! -f "$f" ]; then
+            echo "missing template: $f" >&2
+            missing=$((missing + 1))
+            continue
+        fi
+        if ! grep -qE "$include_re" "$f"; then
+            echo "template $t.md must include partial/style_rules.md" >&2
+            missing=$((missing + 1))
+        fi
+    done
+    for t in plan_new plan_update todo_new todo_update msg; do
+        f="$templates_dir/$t.md"
+        if [ -f "$f" ] && grep -qE "$include_re" "$f"; then
+            echo "template $t.md must NOT include partial/style_rules.md" >&2
+            missing=$((missing + 1))
+        fi
+    done
+    return "$missing"
+}
 test_spec_conventions_pinning_matrix() { _pending_stub spec_conventions_pinning_matrix; }
 test_spec_conventions_field_scope() { _pending_stub spec_conventions_field_scope; }
 test_loom_config_pin_defaults() { _pending_stub loom_config_pin_defaults; }
-test_style_rules_partials_are_family_agnostic() { _pending_stub style_rules_partials_are_family_agnostic; }
+#-----------------------------------------------------------------------------
+# test_style_rules_partials_are_family_agnostic — neither partial/style_rules.md
+# nor partial/review_rubric.md enumerates fixed rule-family prefix markers
+# (e.g. **SH-**, **RS-**). Downstream consumers of loom maintain their own
+# style-rules.md with their own conventions; the partial bodies must instruct
+# the agent to discover families from the pinned document rather than rely
+# on a hardcoded prefix list (specs/loom-templates.md § Style-Rules Partial).
+#-----------------------------------------------------------------------------
+test_style_rules_partials_are_family_agnostic() {
+    local partials_dir="$LOOM_DIR/crates/loom-templates/templates/partial"
+    local forbidden_re='\*\*(SH|NX|DOC|GIT|TST|RS|COM|CLI)-\*\*'
+    local missing=0 partial f
+    for partial in style_rules review_rubric; do
+        f="$partials_dir/$partial.md"
+        if [ ! -f "$f" ]; then
+            echo "missing partial: $f" >&2
+            missing=$((missing + 1))
+            continue
+        fi
+        if grep -qE "$forbidden_re" "$f"; then
+            echo "partial $partial.md enumerates rule-family prefixes (must be discovered from {{ style_rules }} instead):" >&2
+            grep -nE "$forbidden_re" "$f" >&2
+            missing=$((missing + 1))
+        fi
+    done
+    return "$missing"
+}
 
 # Compaction Recovery (scratch dir). Kept at the tail of the test
 # functions so the loom-doctor body-slicing heuristic — which scans

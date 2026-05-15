@@ -6,6 +6,8 @@
 
 {% include "partial/companions_context.md" %}
 
+{% include "partial/style_rules.md" %}
+
 {% include "partial/scratchpad.md" %}
 
 ## Current Spec

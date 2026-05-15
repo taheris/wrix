@@ -662,13 +662,15 @@ mod tests {
             prompt.contains("docs/style-rules.md"),
             "style_rules path not pinned in review prompt: {prompt}",
         );
-        for family in [
-            "**SH-**", "**NX-**", "**DOC-**", "**GIT-**", "**TST-**", "**RS-**", "**COM-**",
-            "**CLI-**",
-        ] {
+        assert!(
+            prompt.contains("Discover the families")
+                && prompt.contains("do not assume a fixed prefix list"),
+            "family-discovery instruction missing: {prompt}",
+        );
+        for forbidden in ["**SH-**", "**NX-**", "**RS-**", "**COM-**", "**CLI-**"] {
             assert!(
-                prompt.contains(family),
-                "rule family marker missing ({family}): {prompt}",
+                !prompt.contains(forbidden),
+                "rule-family marker {forbidden} leaked into review prompt: {prompt}",
             );
         }
         assert!(
