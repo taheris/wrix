@@ -133,6 +133,7 @@ where
             .ready(ReadyOpts {
                 limit: Some(1),
                 label: Some(self.spec_label_filter()),
+                exclude_label: vec!["loom:clarify".into(), "loom:blocked".into()],
             })
             .await?;
         Ok(beads.into_iter().next())

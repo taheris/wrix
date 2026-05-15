@@ -21,7 +21,7 @@
 //! `loom msg` actually invoke):
 //!
 //! - `bd list --json [--label-any=<L> …]`
-//! - `bd ready --json [--limit=N] [--label=<L>]`
+//! - `bd ready --json [--limit=N] [--label=<L>] [--exclude-label=<L> …]`
 //! - `bd show <id> --json`
 //! - `bd update <id> [--notes <t>] [--remove-label <l>] [--add-label <l>] [--status <s>] [--priority <n>] [--claim]`
 //! - `bd close <id>` — sets status to closed; recorded in the invocation log
@@ -214,11 +214,14 @@ fn cmd_list(state_dir: &Path, args: &[String]) -> ExitCode {
 }
 
 fn cmd_ready(state_dir: &Path, args: &[String]) -> ExitCode {
-    // `bd ready --json [--limit=N] [--label=<L>]` — beads with status=open
-    // and the named label (when given). The shim doesn't model blocker
-    // dependencies; status + label match is sufficient for the run-gate tests.
+    // `bd ready --json [--limit=N] [--label=<L>] [--exclude-label=<L> …]` —
+    // beads with status=open, carrying the named label (when given), and
+    // **not** carrying any of the excluded labels. The shim doesn't model
+    // blocker dependencies; status + label match is sufficient for the
+    // run-gate tests.
     let mut limit: Option<usize> = None;
     let mut label_eq: Option<String> = None;
+    let mut exclude_labels: Vec<String> = Vec::new();
     let mut want_json = false;
     let mut i = 0;
     while i < args.len() {
@@ -229,6 +232,9 @@ fn cmd_ready(state_dir: &Path, args: &[String]) -> ExitCode {
         } else if let Some(v) = a.strip_prefix("--label=") {
             label_eq = Some(v.to_string());
             i += 1;
+        } else if let Some(v) = a.strip_prefix("--exclude-label=") {
+            exclude_labels.push(v.to_string());
+            i += 1;
         } else if a == "--json" {
             want_json = true;
             i += 1;
@@ -237,6 +243,9 @@ fn cmd_ready(state_dir: &Path, args: &[String]) -> ExitCode {
             i += 2;
         } else if a == "--label" {
             label_eq = Some(args.get(i + 1).cloned().unwrap_or_default());
+            i += 2;
+        } else if a == "--exclude-label" {
+            exclude_labels.push(args.get(i + 1).cloned().unwrap_or_default());
             i += 2;
         } else {
             eprintln!("bd-shim: ready: unsupported flag {a}");
@@ -256,6 +265,9 @@ fn cmd_ready(state_dir: &Path, args: &[String]) -> ExitCode {
         if let Some(want) = &label_eq
             && !labels.iter().any(|l| l == want)
         {
+            continue;
+        }
+        if labels.iter().any(|l| exclude_labels.contains(l)) {
             continue;
         }
         out.push(bead_to_json(state_dir, &id));
