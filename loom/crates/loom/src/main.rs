@@ -1061,7 +1061,7 @@ async fn run_parallel_run(
         .ready(loom_driver::bd::ReadyOpts {
             limit: Some(parallel_n),
             label: Some(format!("spec:{}", label.as_str())),
-            exclude_label: Vec::new(),
+            exclude_label: vec!["loom:clarify".into(), "loom:blocked".into()],
         })
         .await?;
     if beads.is_empty() {
