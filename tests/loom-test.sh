@@ -2047,7 +2047,7 @@ test_pi_event_mapping() {
     cargo_run test -p loom-agent --quiet -- \
         pi::parser::tests::message_update_text_delta_yields_message_delta \
         pi::parser::tests::message_update_error_delta_yields_error_event \
-        pi::parser::tests::message_update_unmapped_delta_is_silent \
+        pi::parser::tests::message_update_genuinely_unknown_delta_is_silent \
         pi::parser::tests::tool_execution_end_yields_tool_result \
         pi::parser::tests::tool_execution_end_stringifies_non_string_result \
         pi::parser::tests::turn_end_yields_turn_end_event \
@@ -2483,26 +2483,7 @@ test_cargo_nextest_timing() {
 # the inline `#[cfg(test)] mod tests` blocks in
 # `loom-driver/src/identifier/*.rs`.
 #-----------------------------------------------------------------------------
-test_newtype_serde_roundtrip() {
-    cargo_run test -p loom-driver --lib --quiet -- \
-        identifier::bead::tests::serde_round_trips_as_plain_string \
-        identifier::bead::tests::deserialize_rejects_malformed_string \
-        identifier::bead::tests::display_round_trips_with_as_str \
-        identifier::bead::tests::parse_accepts_canonical_shapes \
-        identifier::bead::tests::parse_rejects_malformed_inputs \
-        identifier::spec::tests::serde_round_trips_as_plain_string \
-        identifier::spec::tests::display_round_trips_with_as_str \
-        identifier::molecule::tests::serde_round_trips_as_plain_string \
-        identifier::molecule::tests::display_round_trips_with_as_str \
-        identifier::profile::tests::serde_round_trips_as_plain_string \
-        identifier::profile::tests::display_round_trips_with_as_str \
-        identifier::session::tests::serde_round_trips_as_plain_string \
-        identifier::session::tests::display_round_trips_with_as_str \
-        identifier::tool_call::tests::serde_round_trips_as_plain_string \
-        identifier::tool_call::tests::display_round_trips_with_as_str \
-        identifier::request::tests::serde_round_trips_as_plain_string \
-        identifier::request::tests::display_round_trips_with_as_str
-}
+test_newtype_serde_roundtrip() { _pending_stub newtype_serde_roundtrip; }
 
 #-----------------------------------------------------------------------------
 # test_state_db_roundtrip — `StateDb` covers spec, molecule, companions, and
@@ -2548,7 +2529,7 @@ test_pi_protocol_coverage() {
         pi::parser::tests::unknown_envelope_type_with_id_is_unknown_message_type \
         pi::parser::tests::message_update_text_delta_yields_message_delta \
         pi::parser::tests::message_update_error_delta_yields_error_event \
-        pi::parser::tests::message_update_unmapped_delta_is_silent \
+        pi::parser::tests::message_update_genuinely_unknown_delta_is_silent \
         pi::parser::tests::tool_execution_end_yields_tool_result \
         pi::parser::tests::tool_execution_end_stringifies_non_string_result \
         pi::parser::tests::turn_end_yields_turn_end_event \
@@ -2617,13 +2598,12 @@ test_template_rendering() {
         plan_new_renders_partials_and_inputs \
         plan_update_renders_partials_and_companions \
         todo_new_renders_implementation_notes_when_present \
-        todo_new_omits_implementation_notes_section_when_empty \
         todo_update_wraps_existing_tasks_in_agent_output \
         run_wraps_agent_supplied_fields_in_agent_output \
         run_renders_expected_sections_for_shared_inputs \
         previous_failure_truncates_at_max_len \
         previous_failure_preserves_short_input \
-        check_renders_review_context_fields \
+        review_renders_review_context_fields \
         msg_renders_clarify_beads_with_options \
         msg_renders_with_no_clarify_beads
 }
@@ -2750,6 +2730,17 @@ test_acceptance_annotations_resolve() {
 # the naming rule.
 test_no_orphan_test_functions() {
     cargo_run test -p loom --test annotations --quiet -- no_orphan_test_functions
+}
+
+# Cargo-resolution direction: every cargo test name invoked from a
+# dispatcher (directly via `cargo_run test ...` or transitively through a
+# helper like `lock_cargo_test`) must match at least one `#[test]` /
+# `#[tokio::test]` function in the named cargo target. Without this check
+# a stale rename (`cargo test ... -- nonexistent`) silently exits 0,
+# letting a dispatcher report PASS without exercising any code — the
+# wx-xad18 failure mode.
+test_dispatcher_cargo_tests_resolve() {
+    cargo_run test -p loom --test annotations --quiet -- dispatcher_cargo_tests_resolve
 }
 
 #-----------------------------------------------------------------------------

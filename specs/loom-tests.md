@@ -154,17 +154,14 @@ reports what currently does.
 
 ### Annotation Integrity Gate
 
-A bidirectional gate enforces the annotation contract:
+A tridirectional gate enforces the annotation contract:
 
 **Forward direction** — every `[verify]` / `[judge]` annotation in
 `specs/*.md` must resolve to an existing function in the named file:
 
 - **Shell paths** (e.g., `tests/loom-test.sh::test_X`) — file must
   exist; the regex `^test_X\(\)` must match a function definition.
-- **Cargo paths** — the gate doesn't transitively follow cargo
-  invocations. The shell function must exist; *its body* is the
-  contract. If the shell function shells to a non-existent cargo
-  test, that surfaces when CI invokes it.
+- **Cargo paths** — see *Cargo-resolution direction* below.
 
 **Reverse direction** — every top-level zero-argument function in
 `tests/loom-test.sh` whose name starts with `test_` must be
@@ -174,11 +171,33 @@ Stale verify functions are a code smell: either the criterion is
 missing from a spec, the function name is wrong, or the function
 should be deleted.
 
+**Cargo-resolution direction** — every cargo test name invoked from
+a dispatcher must match a defined `#[test]` / `#[tokio::test]`
+function in the named cargo target. The dispatcher's body is parsed
+(direct `cargo_run test ...` lines and helper calls like
+`lock_cargo_test foo` that expand to `cargo_run test ...`); the
+positional name arguments are then substring-matched against the
+fully-qualified test paths reconstructed from the target's Rust
+sources (file-derived module path + `mod foo { … }` nesting + fn
+name, with `proptest! { #[test] fn … }` macro bodies handled by a
+text fallback that syn doesn't descend into).
+
+This direction is load-bearing because `cargo test -- <name>` exits
+0 silently when `<name>` matches nothing — without the check, a
+stale rename or typo lets a dispatcher claim coverage that cargo
+ran for zero tests (the wx-xad18 failure mode). The gate is the
+class-level fix for that class of bug.
+
 **Implementation**: `loom/crates/loom/tests/annotations.rs` walks
 `specs/*.md`, regex-extracts annotations, asserts each function
-resolves, and asserts every shell-runner function is referenced.
-Output on failure: `<spec>:<line>: annotation [verify](...) — function
-not found`. Runs under `nix flake check`.
+resolves, asserts every shell-runner function is referenced, and
+asserts every dispatcher's cargo test names resolve. Output on
+failure: `<spec>:<line>: annotation [verify](...) — function not
+found` (forward), `tests/loom-test.sh:<line>: orphan test function`
+(reverse), or `tests/loom-test.sh:<line>: dispatcher … invokes
+cargo test <name> in -p <crate> <target> which does not match any
+defined #[test] function` (cargo-resolution). Runs under `nix flake
+check`.
 
 The gate verifies itself: this spec's acceptance criterion for the
 gate carries
@@ -650,6 +669,10 @@ the rules:
 - Every `test_*` function in `tests/loom-test.sh` is referenced by
       at least one annotation in some spec
   [verify](tests/loom-test.sh::test_no_orphan_test_functions)
+- Every cargo test name invoked by a dispatcher in
+      `tests/loom-test.sh` resolves to a defined `#[test]` /
+      `#[tokio::test]` function in the named cargo target
+  [verify](tests/loom-test.sh::test_dispatcher_cargo_tests_resolve)
 
 ### Property-based testing
 
