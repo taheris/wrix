@@ -14,37 +14,57 @@ use super::verify_fail::VerifyFailure;
 use crate::todo::ExitSignal;
 
 /// Which concern in the review LLM's structured response triggered the flag.
-/// Mirrors the concerns the spec enumerates (`specs/loom-harness.md`
-/// §"Push gate · Review always runs"): live-path coverage, mock discipline,
-/// scope appropriateness, `[judge]` rubric satisfaction, and style-rule
-/// conformance against `docs/style-rules.md`.
+/// Mirrors the per-diff rubric flag causes enumerated in
+/// `specs/loom-gate.md` ("Per-diff stage checks") and the flag-emission
+/// schema in `loom-templates/templates/review.md`: the four verifier-honesty
+/// sub-checks, mock discipline, scope appropriateness, `[judge]` rubric
+/// satisfaction, style-rule conformance, plus the standing/tree-scope
+/// concerns (surface drift, cross-spec clash, spec-conventions violation).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReviewConcern {
-    LivePath,
+    VerifierBypass,
+    FabricatedResult,
+    WeakAssertion,
+    CoincidentalPass,
     Mock,
     Scope,
     Judge,
     StyleRule,
+    SurfaceDrift,
+    CrossSpecClash,
+    SpecConventionsViolation,
 }
 
 impl ReviewConcern {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::LivePath => "live-path",
+            Self::VerifierBypass => "verifier-bypass",
+            Self::FabricatedResult => "fabricated-result",
+            Self::WeakAssertion => "weak-assertion",
+            Self::CoincidentalPass => "coincidental-pass",
             Self::Mock => "mock",
             Self::Scope => "scope",
             Self::Judge => "judge",
             Self::StyleRule => "style-rule",
+            Self::SurfaceDrift => "surface-drift",
+            Self::CrossSpecClash => "cross-spec-clash",
+            Self::SpecConventionsViolation => "spec-conventions-violation",
         }
     }
 
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim() {
-            "live-path" => Some(Self::LivePath),
+            "verifier-bypass" => Some(Self::VerifierBypass),
+            "fabricated-result" => Some(Self::FabricatedResult),
+            "weak-assertion" => Some(Self::WeakAssertion),
+            "coincidental-pass" => Some(Self::CoincidentalPass),
             "mock" => Some(Self::Mock),
             "scope" => Some(Self::Scope),
             "judge" => Some(Self::Judge),
             "style-rule" => Some(Self::StyleRule),
+            "surface-drift" => Some(Self::SurfaceDrift),
+            "cross-spec-clash" => Some(Self::CrossSpecClash),
+            "spec-conventions-violation" => Some(Self::SpecConventionsViolation),
             _ => None,
         }
     }
@@ -195,10 +215,12 @@ fn decide_progress_marker(is_noop: bool, inputs: GateInputs) -> PhaseVerdict {
 /// LOOM_REVIEW_FLAG: <concern> -- <detail>
 /// ```
 ///
-/// `<concern>` is one of `live-path`, `mock`, `scope`, `judge`. `<detail>`
-/// is free-form one-line reasoning. The marker lives on its own line; if the
-/// LLM emits it multiple times only the last well-formed occurrence wins,
-/// matching [`crate::todo::parse_exit_signal`]'s last-match policy.
+/// `<concern>` is one of the [`ReviewConcern`] tokens — see its `as_str`
+/// arms for the canonical set, which mirrors the flag-emission schema in
+/// `loom-templates/templates/review.md`. `<detail>` is free-form one-line
+/// reasoning. The marker lives on its own line; if the LLM emits it multiple
+/// times only the last well-formed occurrence wins, matching
+/// [`crate::todo::parse_exit_signal`]'s last-match policy.
 const REVIEW_FLAG_MARKER: &str = "LOOM_REVIEW_FLAG:";
 const REVIEW_FLAG_SEPARATOR: &str = "--";
 
@@ -365,7 +387,7 @@ mod tests {
             bd_closed: true,
             diff_empty: false,
             verify_failures: vec![sample_failure()],
-            review_flag: Some(flag(ReviewConcern::LivePath, detail)),
+            review_flag: Some(flag(ReviewConcern::VerifierBypass, detail)),
         };
         match decide(Some(&ExitSignal::Complete), g) {
             PhaseVerdict::Recovery {
@@ -377,7 +399,7 @@ mod tests {
             } => {
                 assert_eq!(failures.len(), 1);
                 let notes = review_notes.expect("review flag threaded into cause");
-                assert_eq!(notes.concern, ReviewConcern::LivePath);
+                assert_eq!(notes.concern, ReviewConcern::VerifierBypass);
                 assert_eq!(notes.detail, detail);
             }
             other => panic!("expected Recovery::VerifyFail with review_notes, got {other:?}"),
@@ -429,14 +451,14 @@ mod tests {
                 true,
                 false,
                 true,
-                Some(flag(ReviewConcern::LivePath, detail)),
+                Some(flag(ReviewConcern::VerifierBypass, detail)),
             ),
         );
         match result {
             PhaseVerdict::Recovery {
                 cause: RecoveryCause::ReviewFlag(parsed),
             } => {
-                assert_eq!(parsed.concern, ReviewConcern::LivePath);
+                assert_eq!(parsed.concern, ReviewConcern::VerifierBypass);
                 assert_eq!(parsed.detail, detail);
             }
             other => panic!("expected Recovery::ReviewFlag, got {other:?}"),
@@ -580,21 +602,42 @@ mod tests {
 
     #[test]
     fn review_concern_labels_match_spec_vocabulary() {
-        assert_eq!(ReviewConcern::LivePath.as_str(), "live-path");
+        assert_eq!(ReviewConcern::VerifierBypass.as_str(), "verifier-bypass");
+        assert_eq!(
+            ReviewConcern::FabricatedResult.as_str(),
+            "fabricated-result",
+        );
+        assert_eq!(ReviewConcern::WeakAssertion.as_str(), "weak-assertion");
+        assert_eq!(
+            ReviewConcern::CoincidentalPass.as_str(),
+            "coincidental-pass"
+        );
         assert_eq!(ReviewConcern::Mock.as_str(), "mock");
         assert_eq!(ReviewConcern::Scope.as_str(), "scope");
         assert_eq!(ReviewConcern::Judge.as_str(), "judge");
         assert_eq!(ReviewConcern::StyleRule.as_str(), "style-rule");
+        assert_eq!(ReviewConcern::SurfaceDrift.as_str(), "surface-drift");
+        assert_eq!(ReviewConcern::CrossSpecClash.as_str(), "cross-spec-clash");
+        assert_eq!(
+            ReviewConcern::SpecConventionsViolation.as_str(),
+            "spec-conventions-violation",
+        );
     }
 
     #[test]
     fn review_concern_parse_round_trips_each_variant() {
         for c in [
-            ReviewConcern::LivePath,
+            ReviewConcern::VerifierBypass,
+            ReviewConcern::FabricatedResult,
+            ReviewConcern::WeakAssertion,
+            ReviewConcern::CoincidentalPass,
             ReviewConcern::Mock,
             ReviewConcern::Scope,
             ReviewConcern::Judge,
             ReviewConcern::StyleRule,
+            ReviewConcern::SurfaceDrift,
+            ReviewConcern::CrossSpecClash,
+            ReviewConcern::SpecConventionsViolation,
         ] {
             assert_eq!(ReviewConcern::parse(c.as_str()), Some(c));
         }
@@ -602,7 +645,10 @@ mod tests {
 
     #[test]
     fn review_concern_parse_rejects_unknown_token() {
-        assert_eq!(ReviewConcern::parse("livepath"), None);
+        // `live-path` is the pre-rubric-expansion umbrella token; it must
+        // read as unknown rather than silently round-trip to a sub-check.
+        assert_eq!(ReviewConcern::parse("live-path"), None);
+        assert_eq!(ReviewConcern::parse("verifierbypass"), None);
         assert_eq!(ReviewConcern::parse("nit"), None);
         assert_eq!(ReviewConcern::parse(""), None);
     }
@@ -617,20 +663,29 @@ mod tests {
 
     #[test]
     fn parse_review_flag_extracts_concern_and_detail_from_marker() {
-        let out = "preamble\nLOOM_REVIEW_FLAG: live-path -- test mocks the agent backend\nLOOM_COMPLETE\n";
+        let out = "preamble\nLOOM_REVIEW_FLAG: verifier-bypass -- test mocks the agent backend\nLOOM_COMPLETE\n";
         let parsed = parse_review_flag(out).expect("flag parsed");
-        assert_eq!(parsed.concern, ReviewConcern::LivePath);
+        assert_eq!(parsed.concern, ReviewConcern::VerifierBypass);
         assert_eq!(parsed.detail, "test mocks the agent backend");
     }
 
     #[test]
     fn parse_review_flag_supports_each_concern_variant() {
         for (token, expected) in [
-            ("live-path", ReviewConcern::LivePath),
+            ("verifier-bypass", ReviewConcern::VerifierBypass),
+            ("fabricated-result", ReviewConcern::FabricatedResult),
+            ("weak-assertion", ReviewConcern::WeakAssertion),
+            ("coincidental-pass", ReviewConcern::CoincidentalPass),
             ("mock", ReviewConcern::Mock),
             ("scope", ReviewConcern::Scope),
             ("judge", ReviewConcern::Judge),
             ("style-rule", ReviewConcern::StyleRule),
+            ("surface-drift", ReviewConcern::SurfaceDrift),
+            ("cross-spec-clash", ReviewConcern::CrossSpecClash),
+            (
+                "spec-conventions-violation",
+                ReviewConcern::SpecConventionsViolation,
+            ),
         ] {
             let out = format!("LOOM_REVIEW_FLAG: {token} -- because\n");
             let parsed = parse_review_flag(&out).expect("flag parsed");

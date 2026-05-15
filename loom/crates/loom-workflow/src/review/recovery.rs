@@ -186,13 +186,17 @@ mod tests {
         // detail; both must survive into the blocked notes when the
         // recovery loop gives up on a flag.
         let cause = RecoveryCause::ReviewFlag(ReviewFlag {
-            concern: ReviewConcern::LivePath,
+            concern: ReviewConcern::VerifierBypass,
             detail: "test mocks the agent backend".into(),
         });
         match resolve_recovery(&cause, 3, 3) {
             RecoveryResolution::Blocked { cause, notes } => {
                 assert_eq!(cause, "retry-exhausted");
                 assert!(notes.contains("review-flag"), "notes name original cause");
+                assert!(
+                    notes.contains("[verifier-bypass]"),
+                    "concern token preserved verbatim: {notes}",
+                );
                 assert!(
                     notes.contains("test mocks the agent backend"),
                     "review reasoning is preserved verbatim: {notes}",

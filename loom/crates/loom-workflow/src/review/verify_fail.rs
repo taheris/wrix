@@ -302,7 +302,10 @@ mod tests {
         // reasoning is appended to `previous_failure` under a separate
         // `Review notes:` heading.
         let f = failure("tests/a.sh", 1, "boom\n");
-        let rf = flag(ReviewConcern::LivePath, "test mocks the agent backend");
+        let rf = flag(
+            ReviewConcern::VerifierBypass,
+            "test mocks the agent backend",
+        );
         let body = format_previous_failure(&[f], Some(&rf));
         // Verify-fail block still present.
         assert!(body.contains("tests/a.sh"), "{body}");
@@ -310,7 +313,7 @@ mod tests {
         assert!(body.contains("Review notes:\n"), "heading missing: {body}");
         // Concern + detail both surface so the agent knows which review rule
         // tripped, not just the prose.
-        assert!(body.contains("[live-path]"), "concern token: {body}");
+        assert!(body.contains("[verifier-bypass]"), "concern token: {body}");
         assert!(
             body.contains("test mocks the agent backend"),
             "detail: {body}",
