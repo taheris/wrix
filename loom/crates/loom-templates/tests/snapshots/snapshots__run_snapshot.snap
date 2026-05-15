@@ -54,7 +54,7 @@ in a durable destination, not the scratchpad:
 
 - Decisions, design rationale, or open questions that future sessions need →
   bead notes (`bd update <id> --notes "..."`) or the spec file (`specs/<label>.md`).
-- Implementation context for future agents → spec file or `CLAUDE.md` /
+- Implementation context for future agents → spec file or `AGENTS.md` /
   companion docs.
 - Why a change was made → the commit message.
 - Cross-session follow-up work → a new bead (`bd create ...`).

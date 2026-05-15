@@ -1,6 +1,5 @@
 ---
 source: crates/loom-templates/tests/snapshots.rs
-assertion_line: 121
 expression: ctx.render().unwrap()
 ---
 # Post-Epic Review
@@ -59,7 +58,7 @@ in a durable destination, not the scratchpad:
 
 - Decisions, design rationale, or open questions that future sessions need →
   bead notes (`bd update <id> --notes "..."`) or the spec file (`specs/<label>.md`).
-- Implementation context for future agents → spec file or `CLAUDE.md` /
+- Implementation context for future agents → spec file or `AGENTS.md` /
   companion docs.
 - Why a change was made → the commit message.
 - Cross-session follow-up work → a new bead (`bd create ...`).
@@ -118,7 +117,7 @@ judge_live_path_coverage() { :; }
 ## Instructions
 
 1. **Read the spec** at `specs/loom-harness.md` thoroughly
-2. **Explore the codebase** — read implementation code, test files, `CLAUDE.md`, and related specs as needed
+2. **Explore the codebase** — read implementation code, test files, `AGENTS.md`, and related specs as needed
 3. **Run `git diff abc1234..HEAD`** to see all changes made during implementation
 4. **Run `git log abc1234..HEAD --oneline`** to understand the commit history
 
