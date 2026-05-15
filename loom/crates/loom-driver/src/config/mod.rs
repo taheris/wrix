@@ -177,9 +177,13 @@ priority = 2
 default_type = "task"
 
 [loop]
-max_iterations = 3
+# Molecule-level: bounds `loom run`'s outer loop on fix-up beads. Each
+# full molecule pass — initial pass plus every verdict-gate-produced
+# fix-up pass — consumes one slot.
+max_iterations = 10
+# In-session: per-bead retry-with-`previous_failure` budget inside one
+# `process_one_bead` call. Independent of `max_iterations`.
 max_retries = 2
-max_reviews = 2
 
 [logs]
 # Delete log files under .wrapix/loom/logs/ older than this many days on
@@ -304,8 +308,7 @@ max_retries = 5
         assert_eq!(cfg.pinned_context, "AGENTS.md");
         assert_eq!(cfg.loop_.max_retries, 5);
         // Other [loop] fields fall back to defaults.
-        assert_eq!(cfg.loop_.max_iterations, 3);
-        assert_eq!(cfg.loop_.max_reviews, 2);
+        assert_eq!(cfg.loop_.max_iterations, 10);
         // Whole sections that are absent stay at defaults.
         assert_eq!(cfg.beads, BeadsConfig::default());
         assert!(cfg.phase.is_empty());

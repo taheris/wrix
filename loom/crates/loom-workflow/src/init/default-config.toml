@@ -5,9 +5,13 @@ priority = 2
 default_type = "task"
 
 [loop]
-max_iterations = 3
+# Molecule-level: bounds `loom run`'s outer loop on fix-up beads. Each
+# full molecule pass — initial pass plus every verdict-gate-produced
+# fix-up pass — consumes one slot.
+max_iterations = 10
+# In-session: per-bead retry-with-`previous_failure` budget inside one
+# `process_one_bead` call. Independent of `max_iterations`.
 max_retries = 2
-max_reviews = 2
 
 [logs]
 # Delete log files under .wrapix/loom/logs/ older than this many days on
