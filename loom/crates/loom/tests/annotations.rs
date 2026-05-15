@@ -948,7 +948,7 @@ struct TargetIndex {
 }
 
 fn collect_test_names(root: &Path, crate_name: &str, target: &TestTarget) -> TargetIndex {
-    let crate_dir = root.join("loom").join("crates").join(crate_name);
+    let crate_dir = crate_dir(root, crate_name);
     let mut index = TargetIndex::default();
     match target {
         TestTarget::Lib => collect_lib(&crate_dir, &mut index),
@@ -978,6 +978,17 @@ fn collect_test_names(root: &Path, crate_name: &str, target: &TestTarget) -> Tar
         }
     }
     index
+}
+
+/// Resolve a crate's source directory across both layouts `repo_root`
+/// can return: the dev tree (`<repo>/loom/crates/<name>`) and the nix
+/// sandbox where the loom workspace IS the root (`<root>/crates/<name>`).
+fn crate_dir(root: &Path, crate_name: &str) -> PathBuf {
+    let dev = root.join("loom").join("crates").join(crate_name);
+    if dev.is_dir() {
+        return dev;
+    }
+    root.join("crates").join(crate_name)
 }
 
 fn collect_lib(crate_dir: &Path, index: &mut TargetIndex) {
