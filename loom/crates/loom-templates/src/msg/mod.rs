@@ -8,6 +8,7 @@ use loom_driver::identifier::{BeadId, SpecLabel};
 #[template(path = "msg.md", escape = "none")]
 pub struct MsgContext {
     pub pinned_context: String,
+    pub companion_paths: Vec<String>,
     pub clarify_beads: Vec<ClarifyBead>,
     pub scratchpad_path: String,
     pub exit_signals: String,

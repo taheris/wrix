@@ -12,6 +12,8 @@ that bead is on deck.
 
 {% include "partial/context_pinning.md" %}
 
+{% include "partial/companions_context.md" %}
+
 {% include "partial/scratchpad.md" %}
 
 ## Outstanding Clarifies

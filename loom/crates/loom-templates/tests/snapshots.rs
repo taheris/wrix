@@ -128,6 +128,7 @@ fn review_snapshot() {
 fn msg_snapshot() {
     let ctx = MsgContext {
         pinned_context: PINNED_CONTEXT_BODY.to_string(),
+        companion_paths: vec!["lib/sandbox/".into()],
         clarify_beads: vec![ClarifyBead {
             id: BeadId::new("wx-clar.1").unwrap(),
             spec_label: SpecLabel::new("loom-harness"),

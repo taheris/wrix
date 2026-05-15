@@ -28,11 +28,12 @@ use loom_driver::identifier::{BeadId, ProfileName, SpecLabel};
 use loom_driver::lock::{LockGuard, LockManager};
 use loom_driver::profile_manifest::{ImageEntry, ProfileError, ProfileImageManifest};
 use loom_driver::scratch::{ScratchSession, resolve_scratch_key};
+use loom_driver::state::StateDb;
 use thiserror::Error;
 use tracing::info;
 
 use super::context::build_msg_context;
-use super::list::filter_msg_beads;
+use super::list::{filter_msg_beads, spec_label_of};
 
 /// Default name of the wrapix launcher binary on PATH. Tests override
 /// via the `LOOM_WRAPIX_BIN` env var resolved by the CLI caller.
@@ -83,6 +84,8 @@ pub enum ChatError {
     BdList(String),
     #[error("render msg.md template: {0}")]
     Render(String),
+    #[error("state db: {0}")]
+    State(#[from] loom_driver::state::StateError),
     #[error("scratch session: {0}")]
     Scratch(#[from] std::io::Error),
     #[error("lock manager: {0}")]
@@ -153,7 +156,14 @@ pub fn run(workspace: &Path, opts: ChatOpts) -> Result<ChatReport, ChatError> {
     let scratchpad_path = ScratchSession::scratchpad_path_for(workspace, &key)
         .to_string_lossy()
         .into_owned();
-    let ctx = build_msg_context(String::new(), &kept, scratchpad_path, String::new());
+    let companion_paths = load_companion_paths(workspace, opts.spec_filter.as_ref(), &kept)?;
+    let ctx = build_msg_context(
+        String::new(),
+        companion_paths,
+        &kept,
+        scratchpad_path,
+        String::new(),
+    );
     let prompt_body = ctx.render().map_err(|e| ChatError::Render(e.to_string()))?;
 
     let banner = "loom msg --chat".to_string();
@@ -220,6 +230,37 @@ pub fn build_wrapix_argv(workspace: &Path, prompt_body: &str) -> Vec<String> {
         "--dangerously-skip-permissions".to_string(),
         prompt_body.to_string(),
     ]
+}
+
+/// Aggregate companion paths from the state DB across every spec label
+/// represented in the surfaced clarify queue. `msg --chat` is cross-spec by
+/// default, so the queue may carry beads from multiple specs; under a
+/// `--spec <label>` filter the union collapses to that single spec. Returns
+/// a sorted, deduplicated list.
+fn load_companion_paths(
+    workspace: &Path,
+    spec_filter: Option<&SpecLabel>,
+    beads: &[&Bead],
+) -> Result<Vec<String>, ChatError> {
+    let db = StateDb::open(workspace.join(".wrapix/loom/state.db"))?;
+    let mut labels: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    if let Some(label) = spec_filter {
+        labels.insert(label.as_str().to_string());
+    } else {
+        for bead in beads {
+            if let Some(label) = spec_label_of(bead) {
+                labels.insert(label.as_str().to_string());
+            }
+        }
+    }
+    let mut paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for label in &labels {
+        let spec_label = SpecLabel::new(label);
+        for path in db.companions(&spec_label)? {
+            paths.insert(path);
+        }
+    }
+    Ok(paths.into_iter().collect())
 }
 
 /// Resolve the profile `loom msg --chat` should pass to the launcher.

@@ -13,12 +13,14 @@ use super::options::parse_options;
 /// per filtered bead via the Options Format Contract parser.
 pub fn build_msg_context(
     pinned_context: String,
+    companion_paths: Vec<String>,
     beads: &[&Bead],
     scratchpad_path: String,
     exit_signals: String,
 ) -> MsgContext {
     MsgContext {
         pinned_context,
+        companion_paths,
         clarify_beads: beads.iter().map(|b| to_clarify_bead(b)).collect(),
         scratchpad_path,
         exit_signals,
@@ -131,6 +133,7 @@ mod tests {
         let refs: Vec<&Bead> = beads.iter().collect();
         let ctx = build_msg_context(
             "PIN".into(),
+            vec!["lib/sandbox/".into()],
             &refs,
             "/workspace/.wrapix/loom/scratch/msg/scratch.md".into(),
             "EXIT".into(),
@@ -141,6 +144,7 @@ mod tests {
         assert!(body.contains("spec:loom-harness"), "{body}");
         assert!(body.contains("Title A"), "{body}");
         assert!(body.contains("sum A"), "{body}");
+        assert!(body.contains("- lib/sandbox/"), "{body}");
     }
 
     #[test]

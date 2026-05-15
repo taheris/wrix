@@ -1,5 +1,6 @@
 ---
 source: crates/loom-templates/tests/snapshots.rs
+assertion_line: 153
 expression: ctx.render().unwrap()
 ---
 # Clarify Resolution — Drafter Session
@@ -21,6 +22,13 @@ First, read the project overview to understand project terminology and context:
 # Project Overview
 
 Loom orchestrates the spec-to-implementation workflow.
+
+## Companions
+
+The following companion directories are in scope. Read each one's `manifest.md` on demand:
+
+- lib/sandbox/
+
 
 ## Scratchpad
 

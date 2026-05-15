@@ -309,6 +309,7 @@ fn review_renders_style_rule_conformance_walkthrough() -> Result<()> {
 fn msg_renders_clarify_beads_with_options() -> Result<()> {
     let ctx = MsgContext {
         pinned_context: PINNED_CONTEXT_BODY.to_string(),
+        companion_paths: vec!["lib/sandbox/".into()],
         clarify_beads: vec![ClarifyBead {
             id: BeadId::new("wx-clar.1")?,
             spec_label: SpecLabel::new("loom-harness"),
@@ -339,6 +340,8 @@ fn msg_renders_clarify_beads_with_options() -> Result<()> {
     assert!(out.contains("Add a companions array."));
     assert!(out.contains("#### Option 2 — Migrate to a table"));
     assert!(out.contains("Use a SQLite table."));
+    assert!(out.contains("## Companions"));
+    assert!(out.contains("- lib/sandbox/"));
     Ok(())
 }
 
@@ -346,6 +349,7 @@ fn msg_renders_clarify_beads_with_options() -> Result<()> {
 fn msg_renders_with_no_clarify_beads() -> Result<()> {
     let ctx = MsgContext {
         pinned_context: PINNED_CONTEXT_BODY.to_string(),
+        companion_paths: vec![],
         clarify_beads: vec![],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
         exit_signals: EXIT_SIGNALS_BODY.to_string(),
