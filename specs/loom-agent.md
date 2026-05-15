@@ -24,84 +24,6 @@ entrypoint) that make pi-mono available inside wrapix containers. The Loom
 platform (crate structure, templates, workflow) is defined in
 [loom-harness.md](loom-harness.md).
 
-## Requirements
-
-### Functional
-
-1. **Host-side execution** — Loom runs on the host, not inside containers. It
-   spawns per-bead containers by invoking `wrapix spawn --spawn-config
-   <file> --stdio` (a thin wrapix subcommand that owns container construction)
-   and communicates with the agent process inside via stdin/stdout pipes.
-   Loom never calls `podman run` directly; see
-   [loom-harness.md — Process Architecture](loom-harness.md#process-architecture).
-2. **Agent backend trait** — an async Rust trait (`AgentBackend`) abstracting
-   agent lifecycle: spawn a session. Used via type parameter
-   (`<B: AgentBackend>`) — the concrete backend is known at each call site.
-3. **Pi backend** — speaks pi-mono's JSONL RPC protocol over stdin/stdout.
-   Commands:
-   - `prompt` — send initial or follow-up prompts
-   - `steer` — mid-session course correction
-   - `abort` — terminate current operation
-   - `set_thinking_level` — adjust reasoning effort (best-effort: not
-     included in the startup `get_commands` probe; sent only when the
-     phase config requests it, and silently skipped if pi rejects it)
-   - `set_model` — switch LLM provider/model mid-session
-
-   Plus streaming event parsing for message deltas, tool calls, tool results,
-   completion, compaction, and errors.
-4. **Claude backend** — launches
-   `claude --print --input-format stream-json --output-format stream-json`,
-   parses JSONL events from stdout, and writes user messages (initial
-   prompt, steering) as stream-json on stdin. `--permission-prompt-tool
-   stdio` enables the `control_request` / `control_response` flow. The
-   `--print` flag keeps the session non-interactive (runs to completion,
-   exits) while `--input-format stream-json` enables mid-session steering
-   via additional user messages. On observing a `result` event, loom closes
-   its end of stdin, waits `[claude] post_result_grace_secs` (default 5s)
-   for natural exit, then escalates SIGTERM → SIGKILL.
-5. **Per-phase backend selection** — each workflow phase (plan, todo, run,
-   check, msg) independently resolves its backend and model from config.
-   `[phase.default].agent.backend` sets the fallback (`claude`). Per-phase
-   overrides (e.g. `[phase.todo]`) carry `agent.backend` plus optional
-   `agent.provider` and `agent.model_id`. `--agent` CLI flag overrides all
-   phase config for the current invocation.
-6. **Agent runtime layer** — the image builder composes two orthogonal axes:
-   *workspace profile* (base, rust, python) and *agent runtime* (claude, pi).
-   When `WRAPIX_AGENT=pi`, the pi runtime layer (Node.js + pi binary) is
-   added to whichever workspace profile is configured for the bead. No
-   standalone `profiles.pi` — no profile proliferation.
-7. **Entrypoint agent selection** — `entrypoint.sh` checks `WRAPIX_AGENT` and:
-   - `claude` (default): existing behavior (Claude config merging, hooks,
-     `claude --dangerously-skip-permissions`)
-   - `pi`: skips Claude-specific config, starts `pi --mode rpc` listening on
-     stdin/stdout
-8. **Event normalization** — both backends emit a common `AgentEvent` enum so
-   the workflow engine does not need backend-specific event handling.
-9. **JSONL framing** — both protocols use JSON Lines (one complete
-   JSON object per line, separated by `\n`). The JSONL reader splits on `\n`
-   only, not Unicode line separators (U+2028, U+2029). Each line is
-   independently parseable.
-
-### Non-Functional
-
-1. **No podman socket mounting** — `wrapix spawn` invokes podman on the
-   host; the agent runs inside the resulting container with no access to the
-   podman socket. No nested container support needed.
-2. **Graceful degradation** — if a backend-specific feature is unavailable
-   (e.g. pi providers that don't support `set_thinking_level`, or pi
-   builds where manual `compact` is disabled), the driver continues
-   without it. No hard failures for missing optional capabilities.
-3. **Parse, Don't Validate** — raw protocol bytes are parsed into typed domain
-   representations at the JSONL boundary. All code downstream of the parser
-   works with already-validated types. No re-parsing, no stringly-typed event
-   matching.
-4. **Static dispatch** — `AgentBackend` uses an explicit type parameter
-   (`<B: AgentBackend>`), not a trait object. Backends are zero-sized types
-   with associated functions (no `&self`). A `dispatch` function in the
-   binary crate matches on `AgentKind` per phase and calls
-   `run_agent::<ConcreteType>`. No `async-trait` needed — `async fn` in
-   traits is stable and works directly with static dispatch.
-
 ## Architecture
 
 Throughout this section, **"driver"** refers to loom's backend-side code that
@@ -503,14 +425,11 @@ is built inside `PiParser::parse_line`, which populates `ParsedLine::response`
 with the encoded `extension_ui_response` line so the runner just writes it
 back to the agent's stdin — no policy lives in the workflow layer.
 
-**Stdout discipline:** Pi v0.72+ calls `takeOverStdout()` at RPC startup —
-`process.stdout.write` is monkey-patched to redirect non-protocol writes to
-stderr, while protocol output uses a captured raw fd via `writeRawStdout`
-(see `output-guard.ts`). Extensions, libraries, and OSC escape sequences
-cannot corrupt the protocol stream. The earlier corruption issue
-([pi-mono#2388](https://github.com/badlogic/pi-mono/issues/2388)) was fixed
-in March 2026. The JSONL parser's malformed-line handling (log warning,
-skip line) is retained as defensive coding, not a live mitigation.
+**Stdout discipline:** Pi v0.72+ guards its protocol stdout so
+extensions, libraries, and OSC escape sequences cannot corrupt the
+protocol stream. The JSONL parser's malformed-line handling (log
+warning, skip line) is retained as defensive coding against any
+future stdout corruption regression.
 
 ### Claude Stream-JSON Protocol
 
@@ -614,192 +533,207 @@ fundamental to the products' compaction models, not a Loom design choice.
   directory and re-pins again — the scratchpad may have grown between
   compactions.
 
-## Agent Runtime Layer
-
 ### Two-Axis Composition
 
-Container images are composed from two independent axes:
+Container images compose from two independent axes:
 
 | Axis | Options | Determines |
 |------|---------|------------|
 | **Workspace profile** | base, rust, python | Toolchain packages (cargo, python, etc.) |
 | **Agent runtime** | claude, pi | Agent binary and its dependencies |
 
-The image builder (`lib/sandbox/image.nix`) combines the selected profile
-with the selected runtime. Examples:
+Selected profile × selected runtime → one composed image. No
+standalone `profiles.pi`; no `pi+rust` / `pi+python` proliferation.
+The claude runtime layer is empty (claude is already in the base
+image today); the pi runtime layer adds Node.js and the pi binary.
 
-- `profile:rust` + `WRAPIX_AGENT=claude` → rust toolchain + claude binary (current default)
-- `profile:rust` + `WRAPIX_AGENT=pi` → rust toolchain + Node.js + pi binary
-- `profile:base` + `WRAPIX_AGENT=pi` → base packages + Node.js + pi binary
+### Entrypoint Agent Selection
 
-No standalone `profiles.pi`. No `pi+rust` / `pi+python` proliferation. The
-claude runtime layer is empty (claude is already in the base image today).
+The container entrypoint branches on `WRAPIX_AGENT`:
 
-### Pi Runtime Layer
+- `claude` (default): existing Claude config merging, hooks,
+  launching the claude binary.
+- `pi`: skips Claude-specific config merging and the Claude
+  permission flag; starts pi in RPC mode listening on
+  stdin/stdout.
 
-The pi runtime layer adds:
-
-| Addition | Details |
-|----------|---------|
-| Node.js | `nodejs_22` (or current LTS) |
-| Pi binary | `@mariozechner/pi-coding-agent` built via `buildNpmPackage` |
-
-The layer does NOT include pi's web-ui, development dependencies, or test
-infrastructure. Only the runtime binary and its production dependencies.
-
-### Nix Packaging
-
-Pi-mono is a Node.js application distributed via npm:
-
-- Use `buildNpmPackage` to build from source (preferred for reproducibility).
-  `npmDepsHash` pins the exact dependency tree — a changed hash fails the
-  build, preventing silent supply chain updates.
-- Audit `postinstall` scripts before version bumps — npm packages can
-  execute arbitrary code at install time. Review the diff of
-  `package.json` and any lifecycle scripts.
-- Pi-mono runs inside the container, not on the host — a compromised
-  runtime's blast radius is limited to the sandbox boundary.
-- Alternative: Bun compilation to standalone binary (eliminates Node.js
-  dependency but adds Bun to build inputs)
-- The `pi` binary is the entry point from `@mariozechner/pi-coding-agent`
-- Pin to a specific release tag for stability (pi-mono has daily releases)
-
-### Entrypoint Changes
-
-`lib/sandbox/linux/entrypoint.sh` gains an agent selection branch:
-
-```bash
-case "${WRAPIX_AGENT:-claude}" in
-  claude)
-    # existing behavior: Claude config merge, hooks, launch claude
-    ;;
-  pi)
-    # skip Claude-specific config merging
-    # start pi in RPC mode, listening on stdin/stdout
-    exec pi --mode rpc
-    ;;
-esac
-```
-
-The pi branch:
-- Skips `claude-config.json` and `claude-settings.json` merging
-- Skips Claude plugin configuration
-- Skips `--dangerously-skip-permissions` (pi has no permission system)
-- Preserves: git SSH setup, beads-dolt connection, network filtering,
-  session audit logging
-
-## Affected Files
-
-### New
-
-| File | Role |
-|------|------|
-| `loom/crates/loom-agent/` | Pi and Claude backend implementations (PiBackend, ClaudeBackend, parsers) |
-
-### Modified
-
-| File | Change |
-|------|--------|
-| `lib/sandbox/image.nix` | Agent runtime layer composition (profile × runtime) |
-| `lib/sandbox/linux/entrypoint.sh` | Agent selection via `WRAPIX_AGENT` |
-| `modules/flake/overlays.nix` | Pi-mono package overlay |
+Both branches preserve shared setup: git SSH, beads-dolt
+connection, network filtering, session audit logging.
 
 ## Success Criteria
 
 ### Agent trait
 
-- [ ] `AgentBackend` trait defined in loom-driver with associated `spawn`; no `SUPPORTS_STEERING` constant (both backends steer)
+- `AgentBackend` trait defined in loom-driver with associated `spawn`; no `SUPPORTS_STEERING` constant (both backends steer)
   [verify](tests/loom-test.sh::test_agent_trait_exists)
-- [ ] `run_agent` compiles with both `PiBackend` and `ClaudeBackend` as concrete types
+- `run_agent` compiles with both `PiBackend` and `ClaudeBackend` as concrete types
   [verify](tests/loom-test.sh::test_agent_trait_static_dispatch)
-- [ ] `AgentEvent` enum covers: MessageDelta, ToolCall, ToolResult, TurnEnd, SessionComplete, CompactionStart, CompactionEnd, Error
+- `AgentEvent` enum covers: MessageDelta, ToolCall, ToolResult, TurnEnd, SessionComplete, CompactionStart, CompactionEnd, Error
   [verify](tests/loom-test.sh::test_agent_event_variants)
-- [ ] `SpawnConfig` struct captures image_ref, image_source, workspace, env, initial_prompt, agent_args, scratch_dir
+- `SpawnConfig` struct captures image_ref, image_source, workspace, env, initial_prompt, agent_args, scratch_dir
   [verify](tests/loom-test.sh::test_spawn_config_fields)
-- [ ] Typestate `AgentSession<Idle>` / `AgentSession<Active>` prevents invalid transitions
+- Typestate `AgentSession<Idle>` / `AgentSession<Active>` prevents invalid transitions
   [verify](tests/loom-test.sh::test_typestate_transitions)
-- [ ] `ProtocolError` variants cover InvalidJson, UnknownMessageType, Io, ProcessExit, UnexpectedEof, LineTooLong, Unsupported
+- `ProtocolError` variants cover InvalidJson, UnknownMessageType, Io, ProcessExit, UnexpectedEof, LineTooLong, Unsupported
   [verify](tests/loom-test.sh::test_protocol_error_variants)
 
 ### Pi backend
 
-- [ ] Pi backend sends `get_commands` probe on startup and fails fast if required commands are missing
+- Pi backend sends `get_commands` probe on startup and fails fast if required commands are missing
   [verify](tests/loom-test.sh::test_pi_startup_probe)
-- [ ] Pi backend parses JSONL events via two-phase deserialization
+- Pi backend parses JSONL events via two-phase deserialization
   [verify](tests/loom-test.sh::test_pi_two_phase_deser)
-- [ ] Pi backend sends JSONL commands to pi's stdin
+- Pi backend sends JSONL commands to pi's stdin
   [verify](tests/loom-test.sh::test_pi_rpc_command_sending)
-- [ ] Pi backend supports steering (steer returns Ok and reaches the agent on the next turn)
+- Pi backend supports steering (steer returns Ok and reaches the agent on the next turn)
   [verify](tests/loom-test.sh::test_pi_supports_steering)
-- [ ] Pi backend maps all pi event types to AgentEvent variants
+- Pi backend maps all pi event types to AgentEvent variants
   [verify](tests/loom-test.sh::test_pi_event_mapping)
-- [ ] Pi backend detects CompactionStart event, reads `prompt.txt` + `scratch.md` from the per-key scratch directory, and sends the concatenated content via steer
+- Pi backend detects CompactionStart event, reads `prompt.txt` + `scratch.md` from the per-key scratch directory, and sends the concatenated content via steer
   [verify](tests/loom-test.sh::test_pi_compaction_repin)
-- [ ] Pi backend handles malformed JSONL gracefully (logs warning, continues)
+- Pi backend handles malformed JSONL gracefully (logs warning, continues)
   [verify](tests/loom-test.sh::test_pi_malformed_jsonl)
-- [ ] Pi backend logs extension_ui_request at debug level without responding
+- Pi backend logs extension_ui_request at debug level without responding
   [verify](tests/loom-test.sh::test_pi_extension_ui_passthrough)
 
 ### Claude backend
 
-- [ ] Claude backend parses stream-json JSONL events from claude's stdout
+- Claude backend parses stream-json JSONL events from claude's stdout
   [verify](tests/loom-test.sh::test_claude_stream_json_parsing)
-- [ ] Claude backend uses `#[serde(tag = "type")]` for tagged enum deserialization
+- Claude backend uses `#[serde(tag = "type")]` for tagged enum deserialization
   [verify](tests/loom-test.sh::test_claude_tagged_enum)
-- [ ] Claude backend maps claude event types to AgentEvent variants
+- Claude backend maps claude event types to AgentEvent variants
   [verify](tests/loom-test.sh::test_claude_event_mapping)
-- [ ] Claude backend captures cost_usd from result events
+- Claude backend captures cost_usd from result events
   [verify](tests/loom-test.sh::test_claude_cost_capture)
-- [ ] Claude backend handles unknown event types via `#[serde(other)]`
+- Claude backend handles unknown event types via `#[serde(other)]`
   [verify](tests/loom-test.sh::test_claude_unknown_events)
-- [ ] Claude backend's `repin.sh` is registered under `SessionStart[matcher: compact]` before spawn, and the script emits a JSON envelope containing the scratch directory's `prompt.txt` + `scratch.md` when fired
+- Claude backend's `repin.sh` is registered under `SessionStart[matcher: compact]` before spawn, and the script emits a JSON envelope containing the scratch directory's `prompt.txt` + `scratch.md` when fired
   [verify](tests/loom-test.sh::test_claude_repin_hook_registered)
-- [ ] Claude backend auto-approves permission requests via control_response
+- Claude backend auto-approves permission requests via control_response
   [verify](tests/loom-test.sh::test_claude_permission_autoapprove)
-- [ ] Claude backend supports steering — sends a stream-json user message via stdin during the session and verifies the agent receives it
+- Claude backend supports steering — sends a stream-json user message via stdin during the session and verifies the agent receives it
   [verify](tests/loom-test.sh::test_claude_supports_steering)
-- [ ] Claude backend shutdown watchdog: on `result` event, loom closes stdin; if claude does not exit within grace period, sends SIGTERM then SIGKILL
+- Claude backend shutdown watchdog: on `result` event, loom closes stdin; if claude does not exit within grace period, sends SIGTERM then SIGKILL
   [verify](tests/loom-test.sh::test_claude_shutdown_watchdog)
 
 ### Backend selection
 
-- [ ] Per-phase config resolves correct backend (`[phase.todo].agent.backend` overrides `[phase.default].agent.backend`)
+- Per-phase config resolves correct backend (`[phase.todo].agent.backend` overrides `[phase.default].agent.backend`)
   [verify](tests/loom-test.sh::test_per_phase_backend_config)
-- [ ] `--agent` CLI flag overrides all phase config for the invocation
+- `--agent` CLI flag overrides all phase config for the invocation
   [verify](tests/loom-test.sh::test_backend_selection_flag)
-- [ ] Default (no phase config, no flag) selects claude
+- Default (no phase config, no flag) selects claude
   [verify](tests/loom-test.sh::test_backend_default_claude)
-- [ ] Invalid backend name produces clear error
+- Invalid backend name produces clear error
   [verify](tests/loom-test.sh::test_backend_invalid_name)
-- [ ] Pi backend calls `set_model` after spawn when phase config specifies provider/model
+- Pi backend calls `set_model` after spawn when phase config specifies provider/model
   [verify](tests/loom-test.sh::test_pi_set_model_from_phase_config)
 
 ### Container integration
 
-- [ ] Loom spawns containers via `wrapix spawn --spawn-config <file>
+- Loom spawns containers via `wrapix spawn --spawn-config <file>
       --stdio` with the correct profile image, never via `podman run` directly
   [verify](tests/loom-test.sh::test_wrapix_spawn_dispatch)
-- [ ] Container receives agent stdin/stdout via pipe
+- Container receives agent stdin/stdout via pipe
   [verify](tests/loom-test.sh::test_container_stdio_pipe)
-- [ ] Entrypoint starts pi in RPC mode when `WRAPIX_AGENT=pi`
+- Entrypoint starts pi in RPC mode when `WRAPIX_AGENT=pi`
   [verify](tests/loom-test.sh::test_entrypoint_pi_mode)
-- [ ] Entrypoint starts claude normally when `WRAPIX_AGENT=claude`
+- Entrypoint starts claude normally when `WRAPIX_AGENT=claude`
   [verify](tests/loom-test.sh::test_entrypoint_claude_mode)
-- [ ] Entrypoint preserves git SSH, beads, network filtering for both agents
+- Entrypoint preserves git SSH, beads, network filtering for both agents
   [verify](tests/loom-test.sh::test_entrypoint_shared_setup)
 
 ### Agent runtime layer
 
-- [ ] Pi runtime layer adds Node.js and pi binary to any workspace profile
+- Pi runtime layer adds Node.js and pi binary to any workspace profile
   [verify](tests/loom-test.sh::test_pi_runtime_layer)
-- [ ] Image builds with `profile:rust` + `WRAPIX_AGENT=pi` (composition works)
+- Image builds with `profile:rust` + `WRAPIX_AGENT=pi` (composition works)
   [verify](tests/loom-test.sh::test_pi_rust_composition)
-- [ ] Image builds with `profile:base` + `WRAPIX_AGENT=pi`
+- Image builds with `profile:base` + `WRAPIX_AGENT=pi`
   [verify](tests/loom-test.sh::test_pi_base_composition)
-- [ ] Pi binary is functional inside container (`pi --version` succeeds)
+- Pi binary is functional inside container (`pi --version` succeeds)
   [verify](tests/loom-test.sh::test_pi_binary_in_container)
-- [ ] Claude runtime adds nothing (claude already in base image)
+- Claude runtime adds nothing (claude already in base image)
   [verify](tests/loom-test.sh::test_claude_runtime_noop)
+
+## Requirements
+
+### Functional
+
+1. **Host-side execution** — Loom runs on the host, not inside containers. It
+   spawns per-bead containers by invoking `wrapix spawn --spawn-config
+   <file> --stdio` (a thin wrapix subcommand that owns container construction)
+   and communicates with the agent process inside via stdin/stdout pipes.
+   Loom never calls `podman run` directly; see
+   [loom-harness.md — Process Architecture](loom-harness.md#process-architecture).
+2. **Agent backend trait** — an async Rust trait (`AgentBackend`) abstracting
+   agent lifecycle: spawn a session. Used via type parameter
+   (`<B: AgentBackend>`) — the concrete backend is known at each call site.
+3. **Pi backend** — speaks pi-mono's JSONL RPC protocol over stdin/stdout.
+   Commands:
+   - `prompt` — send initial or follow-up prompts
+   - `steer` — mid-session course correction
+   - `abort` — terminate current operation
+   - `set_thinking_level` — adjust reasoning effort (best-effort: not
+     included in the startup `get_commands` probe; sent only when the
+     phase config requests it, and silently skipped if pi rejects it)
+   - `set_model` — switch LLM provider/model mid-session
+
+   Plus streaming event parsing for message deltas, tool calls, tool results,
+   completion, compaction, and errors.
+4. **Claude backend** — launches
+   `claude --print --input-format stream-json --output-format stream-json`,
+   parses JSONL events from stdout, and writes user messages (initial
+   prompt, steering) as stream-json on stdin. `--permission-prompt-tool
+   stdio` enables the `control_request` / `control_response` flow. The
+   `--print` flag keeps the session non-interactive (runs to completion,
+   exits) while `--input-format stream-json` enables mid-session steering
+   via additional user messages. On observing a `result` event, loom closes
+   its end of stdin, waits `[claude] post_result_grace_secs` (default 5s)
+   for natural exit, then escalates SIGTERM → SIGKILL.
+5. **Per-phase backend selection** — each workflow phase (plan, todo, run,
+   check, msg) independently resolves its backend and model from config.
+   `[phase.default].agent.backend` sets the fallback (`claude`). Per-phase
+   overrides (e.g. `[phase.todo]`) carry `agent.backend` plus optional
+   `agent.provider` and `agent.model_id`. `--agent` CLI flag overrides all
+   phase config for the current invocation.
+6. **Agent runtime layer** — the image builder composes two orthogonal axes:
+   *workspace profile* (base, rust, python) and *agent runtime* (claude, pi).
+   When `WRAPIX_AGENT=pi`, the pi runtime layer (Node.js + pi binary) is
+   added to whichever workspace profile is configured for the bead. No
+   standalone `profiles.pi` — no profile proliferation.
+7. **Entrypoint agent selection** — `entrypoint.sh` checks `WRAPIX_AGENT` and:
+   - `claude` (default): existing behavior (Claude config merging, hooks,
+     `claude --dangerously-skip-permissions`)
+   - `pi`: skips Claude-specific config, starts `pi --mode rpc` listening on
+     stdin/stdout
+8. **Event normalization** — both backends emit a common `AgentEvent` enum so
+   the workflow engine does not need backend-specific event handling.
+9. **JSONL framing** — both protocols use JSON Lines (one complete
+   JSON object per line, separated by `\n`). The JSONL reader splits on `\n`
+   only, not Unicode line separators (U+2028, U+2029). Each line is
+   independently parseable.
+
+### Non-Functional
+
+1. **No podman socket mounting** — `wrapix spawn` invokes podman on the
+   host; the agent runs inside the resulting container with no access to the
+   podman socket. No nested container support needed.
+2. **Graceful degradation** — if a backend-specific feature is unavailable
+   (e.g. pi providers that don't support `set_thinking_level`, or pi
+   builds where manual `compact` is disabled), the driver continues
+   without it. No hard failures for missing optional capabilities.
+3. **Parse, Don't Validate** — raw protocol bytes are parsed into typed domain
+   representations at the JSONL boundary. All code downstream of the parser
+   works with already-validated types. No re-parsing, no stringly-typed event
+   matching.
+4. **Static dispatch** — `AgentBackend` uses an explicit type parameter
+   (`<B: AgentBackend>`), not a trait object. Backends are zero-sized types
+   with associated functions (no `&self`). A `dispatch` function in the
+   binary crate matches on `AgentKind` per phase and calls
+   `run_agent::<ConcreteType>`. No `async-trait` needed — `async fn` in
+   traits is stable and works directly with static dispatch.
 
 ## Out of Scope
 

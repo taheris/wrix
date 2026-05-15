@@ -21,6 +21,698 @@ enforcement, snapshot testing for contract surfaces, property-based testing
 for protocol parsers, and Nix-pinned protocol versions to catch upstream
 drift.
 
+## Architecture
+
+### Test File Layout
+
+Each crate uses two complementary Rust test homes:
+
+- **Inline `#[cfg(test)] mod tests { … }`** at the bottom of each source file
+  — white-box tests with access to private impl details, kept next to the
+  code they exercise so changes land together.
+- **Cargo integration tests** under `loom/crates/<crate>/tests/*.rs` —
+  black-box tests that import the crate by its public API, exercising
+  cross-module behaviour and the surfaces that downstream crates also see.
+
+```
+loom/
+  crates/
+    loom-driver/
+      src/
+        state/
+          db.rs               # StateDb impl + inline #[cfg(test)] mod tests
+          rebuild.rs          # rebuild logic + inline tests
+          companions.rs       # `## Companions` parser + inline tests
+        bd/
+          client.rs           # bd CLI wrapper + inline tests
+          label.rs            # Label newtype + inline tests
+        identifier/
+          bead.rs             # BeadId + inline tests (validation, serde)
+          ...                 # one file per id newtype, all with inline tests
+        agent/
+          repin.rs            # RePinContent + inline tests (doc-tested)
+          ...
+      tests/
+        state_db.rs           # Integration: StateDb across rebuild + queries
+        lock_manager.rs       # Integration: per-spec advisory locking
+        git_client.rs         # Integration: GitClient against a temp repo
+        logging.rs            # Integration: shared renderer + log channel
+        properties.rs         # proptest invariants for state DB rebuild
+    loom-agent/
+      src/
+        pi/
+          mod.rs
+          parser.rs           # JSONL parsing + inline tests (string literals)
+          backend.rs          # spawn / lifecycle + inline tests driving mock-pi
+          messages.rs
+        claude/
+          mod.rs
+          parser.rs           # stream-json parsing + inline tests (string literals)
+          backend.rs          # spawn / lifecycle + inline tests driving mock-claude
+          messages.rs
+      tests/
+        static_dispatch.rs    # Compile-time check: both backends impl AgentBackend
+        properties.rs         # proptest invariants for pi/claude protocol parsers
+    loom-workflow/
+      src/
+        run/
+          mod.rs              # run loop + inline tests for unit-level helpers
+        check/
+          mod.rs              # push gate + inline tests
+        ...
+      tests/
+        parallel.rs           # Integration: --parallel N worktree dispatch
+    loom-templates/
+      src/
+        ...                   # per-template module + inline rendering tests
+      tests/
+        render.rs             # Integration: every template renders with partials
+    loom/
+      tests/
+        run_smoke.rs          # Integration: CLI subcommand surface
+        agent_flag.rs         # Integration: --agent flag parsing/validation
+        spawn_dispatch.rs     # Integration: shim-based wrapix spawn argv
+                              #   contract + stdin-pipe-not-tty assertion
+        style.rs              # AST + filesystem style enforcement (syn-based)
+        annotations.rs        # Annotation-integrity gate (walks specs/*.md)
+        properties.rs         # proptest invariants (pi/claude parsers, state DB)
+
+tests/
+  loom-test.sh                # [verify] runner — invoked per-function by
+                              #   `loom spec --verify`; each function shells
+                              #   to a specific cargo test
+  loom/
+    default.nix               # Nix derivation: cargo nextest run --workspace
+    run-tests.sh              # Container smoke harness (single happy-path)
+    mock-pi/pi.sh             # Mock pi (scoped scenario modes)
+    mock-claude/claude.sh     # Mock claude (scoped scenario modes)
+```
+
+### Annotation Contract
+
+Every acceptance criterion in any spec under `specs/` is a plain
+bullet (no `[ ]` / `[x]` prefix) carrying one annotation:
+
+```
+- Criterion text
+  [verify](path/to/file.sh::test_function_name)
+- Criterion text
+  [judge](path/to/file.sh::test_function_name)
+```
+
+**No checkboxes ever.** Per [loom-harness.md FR14](loom-harness.md#functional),
+criterion status is verifier-driven: a property of running the
+annotated verifier against the current code, not a value stored in
+the spec. The spec defines what must hold; `loom check criteria`
+reports what currently does.
+
+**Rules:**
+
+1. **Every annotation MUST resolve.** The named function exists in the
+   named file. Enforced by a CI gate (see *Annotation Integrity Gate*
+   below).
+2. **`[verify]` vs `[judge]` is mechanical.** `[verify]` means a
+   deterministic check (Rust test, AST walk, filesystem assertion,
+   shell exit code). `[judge]` means a check that *requires* LLM
+   evaluation — code-quality criteria like "error messages are
+   actionable" or "naming is consistent." Anything reducible to AST
+   patterns or filesystem state is `[verify]`, not `[judge]`.
+   Loom-tests v1 has no `[judge]` criteria, and the integrity gate
+   actively enforces this: any `[judge]` annotation in any spec is a
+   hard error until the judge runner is set up. The mechanism for
+   future use is documented in *Judge Mechanism*.
+3. **Atomic acceptances.** One acceptance → exactly one annotation.
+   Forbidden: one acceptance with two `[verify]` markers (ambiguous
+   pass/fail when one passes and the other fails). If a criterion
+   needs multiple tests, split it into multiple atomic criteria.
+4. **N→1 sharing allowed.** Multiple acceptances may point to the same
+   function when one test asserts multiple behaviors. The spec lists
+   them as separate criteria because they're separately documented
+   requirements.
+5. **Cross-spec sharing allowed.** One function may be referenced from
+   multiple specs.
+
+### Annotation Integrity Gate
+
+A bidirectional gate enforces the annotation contract:
+
+**Forward direction** — every `[verify]` / `[judge]` annotation in
+`specs/*.md` must resolve to an existing function in the named file:
+
+- **Shell paths** (e.g., `tests/loom-test.sh::test_X`) — file must
+  exist; the regex `^test_X\(\)` must match a function definition.
+- **Cargo paths** — the gate doesn't transitively follow cargo
+  invocations. The shell function must exist; *its body* is the
+  contract. If the shell function shells to a non-existent cargo
+  test, that surfaces when CI invokes it.
+
+**Reverse direction** — every top-level zero-argument function in
+`tests/loom-test.sh` whose name starts with `test_` must be
+referenced by at least one annotation in some spec. Helper functions
+named `_helper`, `_setup`, etc. are exempt by the naming rule.
+Stale verify functions are a code smell: either the criterion is
+missing from a spec, the function name is wrong, or the function
+should be deleted.
+
+**Implementation**: `loom/crates/loom/tests/annotations.rs` walks
+`specs/*.md`, regex-extracts annotations, asserts each function
+resolves, and asserts every shell-runner function is referenced.
+Output on failure: `<spec>:<line>: annotation [verify](...) — function
+not found`. Runs under `nix flake check`.
+
+The gate verifies itself: this spec's acceptance criterion for the
+gate carries
+`[verify](tests/loom-test.sh::test_acceptance_annotations_resolve)`,
+which resolves to the gate's implementation. Each CI run therefore
+includes the gate's own integrity check.
+
+**Scope**: walks `specs/*.md` for annotations; only validates
+annotations pointing into `tests/loom-test.sh`. Other test runners
+(e.g., a future `tests/sandbox-test.sh`) own their own annotation
+gates. Per Annotation Contract rule 2, any `[judge]` annotation
+encountered today fails the gate; when the judge runner is set up
+(at `tests/judges/loom.sh` or equivalent), the gate's resolution
+logic extends to that path.
+
+### Determinism Through Clock Injection
+
+Time-dependent components — lock acquisition timeout, shutdown
+watchdog grace, JSONL read-line timeout, log retention sweep, bd /
+git subprocess timeouts — make tests flaky when they touch real wall
+time on a loaded CI runner. The design eliminates real-time waits.
+
+**`Clock` trait in `loom-driver`** with `now()`, `sleep(Duration)`,
+`timeout(Duration, Future)` async surface. Two implementations:
+
+- `SystemClock` — production. Wraps tokio's real timers.
+- `MockClock` — tests. Deterministic advance under
+  `#[tokio::test(start_paused = true)]`.
+
+Components touching time take `&dyn Clock` or `<C: Clock>`. Functions
+comparing against external timestamps (e.g., the log retention sweep
+comparing against filesystem mtime) take `now: Instant` as a
+parameter. Tests pass synthetic `now` values to age files; production
+passes `clock.now()`.
+
+**Filesystem mtime in tests** is set via the `filetime` crate. Real
+wall time stays zero; tests can express "this file is 15 days old"
+without sleeping.
+
+**Banned patterns** (enforced by `loom/crates/loom/tests/style.rs`
+AST check):
+
+- `std::thread::sleep` — anywhere, no exceptions.
+- `tokio::time::sleep` outside `SystemClock::sleep`'s implementation.
+- `tokio::time::timeout` outside `SystemClock::timeout`'s
+  implementation.
+- `Instant::now()` / `SystemTime::now()` outside `SystemClock::now()`.
+
+Tests that need to advance time construct a `MockClock` directly
+(`MockClock::new()` or via a small `with_mock_clock` helper in
+`loom-driver::testing`) and pass it as `&dyn Clock` into whatever
+component is under test. There is no other opt-out path; the bans
+apply uniformly across `src/` and `tests/`.
+
+### Style Enforcement
+
+Two complementary mechanisms in
+`loom/crates/loom/tests/style.rs`:
+
+**Workspace clippy lints** for what clippy supports natively:
+
+| Rule | Lint |
+|------|------|
+| no `unwrap()` | `clippy::unwrap_used = "deny"` |
+| no `expect()` | `clippy::expect_used = "deny"` |
+| no `panic!()` | `clippy::panic = "deny"` |
+| no `todo!()` | `clippy::todo = "deny"` |
+| no `unimplemented!()` | `clippy::unimplemented = "deny"` |
+| no `#[allow(dead_code)]` (use `#[expect]`) | `clippy::allow_attributes = "warn"` |
+
+Tests opt out via per-file `#![allow(clippy::unwrap_used, ...)]` at
+the top of `loom/crates/*/tests/*.rs` and inside `#[cfg(test)] mod
+tests` blocks. Already the convention in the workspace.
+
+**Source-walking checks** for rules clippy can't express. One test
+covers both style rules and architectural assertions, using `syn` for
+AST patterns and `walkdir` for filesystem-shape rules:
+
+| Rule | Mechanism |
+|------|-----------|
+| no `derive(From)` / `derive(Into)` on tuple structs | `syn::ItemStruct` walk over `loom/crates/*/src/**/*.rs` |
+| no `loom/crates/*/src/{types,error}.rs` files | `walkdir` filter on `loom/crates/*/src/` |
+| `GitClient` is the only `gix` / `git` CLI importer | `syn` walk asserting `use gix::*` and `Command::new("git")` appear only in `loom-driver/src/git/` |
+| renderer + log writer share one `AgentEvent` channel | `syn` walk asserting both subscribe to the same `tokio::sync::broadcast` (or `mpsc`) sender |
+| domain identifiers are tuple-struct newtypes | `syn::ItemStruct` walk over `loom-driver/src/identifier/` |
+| each Askama template has a typed context struct | `syn` walk pairing `#[derive(Template)]` structs in `loom-templates/src/` with their `templates/*.md` files |
+| tests use `tempfile::tempdir`, never hardcoded `/tmp/...` | `syn` literal walk over `loom/crates/*/tests/**/*.rs` and `#[cfg(test)]` blocks |
+
+`syn` and `walkdir` are `[dev-dependencies]` of the binary crate
+(no propagation to dependents). Output on failure: `<path>:<line>
+<rule>` so reviewers can click directly into the violation.
+
+### Property-Based Testing
+
+`proptest` for invariants on four targets:
+
+| Target | Invariants |
+|--------|------------|
+| JSONL line parser | never panics on arbitrary bytes; respects `MAX_LINE_BYTES`; never emits `AgentEvent` from a malformed line |
+| Pi protocol parser | round-trip identity for known shapes; unknown shapes map to `ProtocolError::UnknownMessageType`; never panics |
+| Claude protocol parser | round-trip identity for known shapes; unknown shapes map to the `Unknown` variant via `#[serde(other)]`; never panics |
+| State DB rebuild | never panics on arbitrary spec file content; schema invariants always hold; corrupted DB always recovers via `recreate` |
+
+**CI configuration**: `PROPTEST_CASES=32` for `nix flake check`,
+overridable via env var to `2048+` for local exhaustive runs.
+Property tests live in `loom/crates/<crate>/tests/properties.rs` —
+each crate owns the invariants for the types it defines. The binary
+crate's `loom/crates/loom/tests/properties.rs` is reserved for
+cross-crate invariants if any arise.
+
+**No `cargo fuzz` under `nix flake check`.** If a fuzz target later
+proves valuable for byte-level edge cases proptest misses (e.g.,
+JSONL framing under adversarial input), it's exposed as
+`nix run .#fuzz-loom` for on-demand or nightly use, never gating PRs.
+
+### Snapshot Testing
+
+`insta` snapshots for **contract surfaces** — outputs whose shape is
+the contract:
+
+- Templates (`loom-templates`) — every Askama template × representative
+  input set produces a `.snap` checked into
+  `loom/crates/loom-templates/tests/snapshots/`. Reviewers see the
+  rendered diff in PRs.
+- CLI help text (`loom --help`, `loom run --help`, etc.) — `--help`
+  output *is* the user contract.
+
+Substring + structural assertions for **flexibility surfaces** —
+outputs with intentional cosmetic latitude:
+
+- Run-time renderer (terminal tool-call lines, status colors,
+  truncation). Tests assert bullet count, presence of key markers,
+  and color-disabled-when-NO_COLOR; layout decisions remain free to
+  evolve without churning a snapshot.
+
+**Snapshot update policy**: a snapshot diff in a PR requires explicit
+acknowledgment in the PR description ("snapshot updated because:
+..."). Forces intentional regression vs. accidental drift.
+
+### Judge Mechanism
+
+`[judge]` annotations are reserved for criteria that genuinely require
+LLM evaluation — code-quality dimensions that AST walks can't capture:
+
+- "error messages are clear and actionable"
+- "doc comments explain *why* non-obviously"
+- "API surface is ergonomic for typical call patterns"
+- "naming is consistent with codebase conventions"
+
+Loom-tests v1 has no `[judge]` criteria; the mechanism below is
+documented for future use.
+
+**Runner**: separate from `cargo test`. Invocation:
+`loom judge run --annotation <spec.md::criterion>` (or `bd judge` once
+that command exists). The runner sends the named source files plus the
+criterion text to Claude via the existing agent abstraction and
+captures a structured verdict.
+
+**Output**: a bead comment with the verdict. Advisory only — judges
+do not gate CI.
+
+**Why advisory**: judges are non-deterministic, paid, and
+network-dependent. They do NOT run under `nix flake check`; they run
+on demand or in a nightly job. A `[judge]` verdict that disagrees with
+human judgement is a prompt to either rewrite the criterion as
+`[verify]` (if the property is reducible to a structural check) or
+accept the disagreement (if the property is genuinely subjective).
+
+### Test Patterns
+
+Concrete patterns for writing tests against the design rules above. Each
+pattern is one short example; the verify-runner and integration tests
+own the full coverage.
+
+#### Parse, Don't Validate boundaries
+
+Each boundary layer pins the parse-once-use-everywhere contract with
+a dedicated test. Three illustrative examples below — newtype
+construction, two-phase envelope parsing, and `#[serde(other)]`
+catchall behavior. JSONL framing and SQLite row mapping have
+analogous tests in `loom-driver/src/{agent,state}` that follow the
+same shape:
+
+```rust
+#[test]
+fn newtype_roundtrip() {
+    let id = BeadId::new("wx-abc123").unwrap();
+    assert_eq!(id.as_str(), "wx-abc123");
+    assert_eq!(id.to_string(), "wx-abc123");
+
+    let json = serde_json::to_string(&id).unwrap();
+    assert_eq!(json, r#""wx-abc123""#); // transparent, no wrapper
+    let parsed: BeadId = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed, id);
+
+    // Deserialize validates the canonical shape.
+    serde_json::from_str::<BeadId>(r#""not a bead""#).unwrap_err();
+}
+
+#[test]
+fn pi_envelope_ignores_unknown_fields() {
+    // Two-phase: envelope parse must succeed even with extra fields
+    let line = r#"{"type":"response","id":"42","extra":"ignored"}"#;
+    let env: PiEnvelope = serde_json::from_str(line).unwrap();
+    assert_eq!(env.msg_type.as_deref(), Some("response"));
+}
+
+#[test]
+fn claude_unknown_event_type_does_not_error() {
+    // #[serde(other)] catches new event types from future Claude versions
+    let line = r#"{"type":"new_feature_event","data":"something"}"#;
+    let msg: ClaudeMessage = serde_json::from_str(line).unwrap();
+    assert!(matches!(msg, ClaudeMessage::Unknown));
+}
+```
+
+#### State database
+
+Round-trip and corruption-recovery tests use real on-disk SQLite
+files inside `tempfile::tempdir`. The `:memory:` mode is deliberately
+not used — it skips the file-IO codepaths that production runs hit
+(open, fsync, corruption recovery), so an in-memory test passing
+gives false confidence.
+
+```rust
+#[test]
+fn state_db_rebuild() {
+    let dir = tempdir().unwrap();
+
+    // Seed spec files
+    std::fs::create_dir_all(dir.path().join("specs")).unwrap();
+    std::fs::write(dir.path().join("specs/auth.md"), "# Auth\n").unwrap();
+    std::fs::write(dir.path().join("specs/api.md"), "# API\n").unwrap();
+
+    let db = StateDb::open(&dir.path().join("state.db")).unwrap();
+    let report = db.rebuild(dir.path(), &mock_bd_client()).unwrap();
+
+    assert_eq!(report.specs_found, 2);
+    assert!(report.counters_reset);
+
+    let spec = db.spec(&SpecLabel::new("auth")).unwrap();
+    assert_eq!(spec.spec_path, "specs/auth.md");
+}
+
+#[test]
+fn state_db_corruption_recovery() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("state.db");
+
+    // Write garbage to the DB file
+    std::fs::write(&db_path, b"not a sqlite db").unwrap();
+
+    // open detects corruption, rebuild recovers
+    let db = StateDb::open(&db_path).unwrap();
+    let report = db.rebuild(dir.path(), &mock_bd_client()).unwrap();
+    assert_eq!(report.specs_found, 0); // no spec files in tempdir
+}
+```
+
+#### Template render contract
+
+Render tests assert on the contract (partials included, agent content
+wrapped, truncation applied) rather than full string parity. Contract
+shape comes from the typed `RunContext` struct; layout regressions are
+caught by `insta` snapshots (see *Snapshot Testing*).
+
+```rust
+#[test]
+fn run_wraps_agent_supplied_fields_in_agent_output() -> Result<()> {
+    let ctx = RunContext {
+        pinned_context: PINNED_CONTEXT_BODY.into(),
+        label: SpecLabel::new("loom-harness"),
+        spec_path: "specs/loom-harness.md".into(),
+        issue_id: BeadId::new("wx-abc.1")?,
+        title: "Implement parser".into(),
+        description: "agent-supplied body".into(),
+        previous_failure: None,
+        // ...
+    };
+    let out = ctx.render()?;
+
+    assert!(out.contains("<agent-output>"));
+    assert!(out.contains("</agent-output>"));
+    assert!(out.contains("agent-supplied body"));
+    Ok(())
+}
+```
+
+### Mock Pi Design
+
+Mock pi is a shell script that frames pi-mono's RPC protocol as JSONL
+on stdin/stdout. Its job is to exercise *process-level* paths the
+parser unit tests cannot reach — round-tripping through real pipes,
+stdin write-back from `ParsedLine::response`, and child reaping. Each
+mode is shaped to exactly one Rust test that drives it; the script is
+not a general-purpose pi emulator.
+
+Modes (selected via `argv[1]`):
+
+| Mode | Used by | Wire behavior |
+|------|---------|---------------|
+| `probe-ok` | startup probe round-trip test | Replies to `get_commands` with the full required set |
+| `probe-missing-set-model` | startup probe failure test | Replies to `get_commands` omitting `set_model` |
+| `echo-prompt` | wire-shape assertion test | Probe ok, then echoes the prompt payload as a `message_delta` |
+| `steering` | mid-session steer test | Probe ok, prompt → first turn, then echoes the steer payload on the next turn |
+| `compaction` | re-pin-via-steer test | Probe ok, emits `compaction_start`, expects the re-pin steer, echoes it back, emits `compaction_end` |
+| `set-model` | per-phase model override test | Probe ok, expects `set_model { provider, modelId }`, echoes the pair into a later `message_delta` |
+| `happy-path` | container smoke | Probe ok, prompt → `message_delta` → `agent_end` |
+
+Each mode is single-shot: the script runs until the conversation it
+encodes completes, then exits. The Rust test owns the assertions; the
+mock owns the wire framing.
+
+### Mock Claude Design
+
+Mock claude follows the same pattern as mock pi but speaks Claude
+Code's stream-json framing (also JSONL) on stdin/stdout.
+
+| Mode | Used by | Wire behavior |
+|------|---------|---------------|
+| `steering` | mid-session steer test | Emits one assistant turn, waits for a stream-json user message on stdin, emits a second assistant turn echoing the steer payload, then `result/success` |
+| `ignore-stdin` | shutdown watchdog test | Emits `result/success`, ignores SIGTERM and stdin close so the test exercises the SIGTERM → SIGKILL escalation |
+| `happy-path` | container smoke | system → assistant → `result/success` |
+
+### Nix Integration
+
+```nix
+# tests/loom/default.nix
+{ pkgs, loom, bd, ... }:
+{
+  # Unit + integration tests — run under `nix flake check`.
+  loom-tests = pkgs.runCommandLocal "loom-tests" {
+    nativeBuildInputs = [ loom.cargoDeps loom.rustToolchain pkgs.cargo-nextest ];
+  } ''
+    cd ${loom.src}
+    cargo nextest run --workspace
+    mkdir -p $out
+  '';
+
+  # Container smoke — invoked via `nix run .#test-loom`. Excluded from
+  # `flake check` because it needs podman at runtime.
+  loom-smoke = pkgs.writeShellApplication {
+    name = "test-loom";
+    runtimeInputs = [ loom bd pkgs.podman pkgs.jq ];
+    text = builtins.readFile ./run-tests.sh;
+  };
+}
+```
+
+`loom-tests` is included in the checks set exposed by `tests/default.nix`
+so it gates PRs in CI. `loom-smoke` is exposed as an app on Linux only.
+
+## Success Criteria
+
+### Unit tests
+
+- Newtype serde round-trip tests cover all ID types (`BeadId`,
+      `SpecLabel`, `MoleculeId`, `ProfileName`, `SessionId`,
+      `ToolCallId`, `RequestId`)
+  [verify](tests/loom-test.sh::test_newtype_serde_roundtrip)
+- State database round-trip tests cover spec, molecule, and meta
+      operations
+  [verify](tests/loom-test.sh::test_state_db_roundtrip)
+- Pi RPC protocol tests cover every command and every event type
+      in the pi v0.72 protocol table, asserting on every documented
+      field (not just type discrimination) so a renamed field fails
+      deserialization at test time
+  [verify](tests/loom-test.sh::test_pi_protocol_coverage)
+- Claude stream-json protocol tests cover all `ClaudeMessage`
+      variants including `Unknown` via `#[serde(other)]`, with
+      field-level assertions on each variant
+  [verify](tests/loom-test.sh::test_claude_protocol_coverage)
+- Template rendering tests cover every Askama template with
+      representative inputs
+  [verify](tests/loom-test.sh::test_template_rendering)
+
+### Integration tests
+
+Each criterion below corresponds to one of the seven load-bearing flows
+in Functional #4.
+
+- Startup probe round-trip: mock pi with full required command set
+      → loom proceeds; mock pi missing `set_model` → loom fails fast
+      with a version-mismatch error
+  [verify](tests/loom-test.sh::test_startup_probe_roundtrip)
+- `wrapix spawn` argv contract: loom invokes
+      `wrapix spawn --spawn-config <file> --stdio` with stdin
+      attached as a pipe (not a TTY); recorded `SpawnConfig` JSON
+      matches the on-disk shape
+  [verify](tests/loom-test.sh::test_wrapix_spawn_argv_contract)
+- Parallel run end-to-end: `loom run --parallel 2` with two ready
+      beads dispatches two mock-agent spawns concurrently, each in its
+      own worktree, then merges both branches back to driver
+  [verify](tests/loom-test.sh::test_parallel_run_end_to_end)
+- `GitClient` round-trip: create worktree, list, status, merge
+      (clean / non-conflicting / conflict variants), remove — all
+      against a temp repo via the typed Rust API
+  [verify](tests/loom-test.sh::test_git_client_roundtrip)
+- State DB lifecycle: `open` on fresh path creates schema;
+      `rebuild` populates from `specs/*.md` plus mock `bd` output,
+      resetting iteration counters; `recreate` recovers from a
+      corrupted file
+  [verify](tests/loom-test.sh::test_state_db_lifecycle)
+- Per-spec advisory locking: two contending acquisitions on the
+      same `<label>.lock` serialize via `flock`; the second waits
+      via `MockClock` advance, then errors naming the held label.
+      Crashed child releases lock immediately for parent
+  [verify](tests/loom-test.sh::test_per_spec_locking)
+- Logging tee: renderer and on-disk `.jsonl` log subscribe to the
+      same `AgentEvent` stream — capturing both yields line-for-line
+      equality on the log side
+  [verify](tests/loom-test.sh::test_logging_tee_equality)
+
+### Container smoke
+
+- `nix run .#test-loom` spawns a real podman container, runs
+      `loom run --once` against a bead with `WRAPIX_AGENT=pi`
+      `MOCK_PI_SCENARIO=happy-path`, exits 0 with the bead closed
+  [verify](tests/loom-test.sh::test_loom_smoke_real_container)
+
+### Style enforcement
+
+**Configuration** — these tests check that the rules are *declared*:
+
+- `[workspace.lints.clippy]` denies `unwrap_used`, `expect_used`,
+      `panic`, `todo`, `unimplemented`; warns `allow_attributes`
+  [verify](tests/loom-test.sh::test_workspace_clippy_lints)
+
+**Outcome** — these tests check that the *codebase complies* with
+the rules:
+
+- `cargo clippy --workspace` passes (the gate that catches lint
+      violations as they happen)
+  [verify](tests/loom-test.sh::test_clippy_clean)
+- No `derive(From)` / `derive(Into)` on tuple-struct newtypes
+  [verify](tests/loom-test.sh::test_no_derive_from_on_newtypes)
+- No `loom/crates/*/src/{types,error}.rs` files at crate roots
+  [verify](tests/loom-test.sh::test_nested_module_structure)
+- `GitClient` is the only module importing `gix` or invoking the
+      `git` CLI
+  [verify](tests/loom-test.sh::test_git_client_encapsulation)
+- Renderer + log writer subscribe to the same `AgentEvent` channel
+  [verify](tests/loom-test.sh::test_run_single_event_channel)
+- Domain identifiers are tuple-struct newtypes
+  [verify](tests/loom-test.sh::test_newtypes_for_identifiers)
+- Each Askama template has a typed context struct
+  [verify](tests/loom-test.sh::test_template_context_structs)
+- Tests use `tempfile::tempdir`, never hardcoded `/tmp/...` paths
+  [verify](tests/loom-test.sh::test_no_hardcoded_tmp_paths)
+
+### Determinism
+
+- No `std::thread::sleep` in any source file
+  [verify](tests/loom-test.sh::test_no_thread_sleep)
+- No `tokio::time::sleep` outside `SystemClock::sleep`
+  [verify](tests/loom-test.sh::test_no_tokio_sleep_outside_clock)
+- No `tokio::time::timeout` outside `SystemClock::timeout`
+  [verify](tests/loom-test.sh::test_no_tokio_timeout_outside_clock)
+- No `Instant::now()` / `SystemTime::now()` outside `SystemClock`
+  [verify](tests/loom-test.sh::test_no_real_clock_outside_system_clock)
+- No `#[ignore]` outside the container smoke runner
+  [verify](tests/loom-test.sh::test_no_ignore_for_flake)
+
+### Annotation gate
+
+- Every `[verify]` / `[judge]` annotation in `specs/*.md` resolves
+      to an existing function in the named file
+  [verify](tests/loom-test.sh::test_acceptance_annotations_resolve)
+- Every `test_*` function in `tests/loom-test.sh` is referenced by
+      at least one annotation in some spec
+  [verify](tests/loom-test.sh::test_no_orphan_test_functions)
+
+### Property-based testing
+
+- JSONL line parser proptest: never panics on arbitrary bytes,
+      respects `MAX_LINE_BYTES`, never emits `AgentEvent` from a
+      malformed line
+  [verify](tests/loom-test.sh::test_jsonl_parser_invariants)
+- Pi protocol parser proptest: round-trip identity for known
+      shapes, unknown shapes map to typed errors, never panics
+  [verify](tests/loom-test.sh::test_pi_parser_invariants)
+- Claude stream-json parser proptest: round-trip identity for
+      known shapes, `Unknown` variant catches unknown types, never
+      panics
+  [verify](tests/loom-test.sh::test_claude_parser_invariants)
+- State DB rebuild proptest: arbitrary spec content never
+      corrupts schema; corrupted DB always recovers via `recreate`
+  [verify](tests/loom-test.sh::test_state_db_rebuild_invariants)
+- `PROPTEST_CASES=32` for CI; overridable via env var
+  [verify](tests/loom-test.sh::test_proptest_case_count)
+
+### Snapshot testing
+
+- Every Askama template has at least one `insta` snapshot under
+      `loom/crates/loom-templates/tests/snapshots/`
+  [verify](tests/loom-test.sh::test_template_snapshots_exist)
+- `loom --help` and every subcommand `--help` have `insta`
+      snapshots
+  [verify](tests/loom-test.sh::test_cli_help_snapshots_exist)
+- Run-time renderer uses substring + structural assertions, not
+      `insta` (ensures terminal-output flexibility)
+  [verify](tests/loom-test.sh::test_renderer_no_insta_dependency)
+
+### Cross-platform
+
+- `flake.nix` declares `loom-tests` under `checks.<system>` for
+      `x86_64-linux`, `aarch64-linux`, `x86_64-darwin`, `aarch64-darwin`
+  [verify](tests/loom-test.sh::test_flake_declares_loom_for_all_systems)
+- `nix run .#test-loom` is exposed only on Linux systems
+  [verify](tests/loom-test.sh::test_smoke_linux_only)
+- `nix run .#test-loom` on Darwin exits 0 with a clear "not
+      available on Darwin" message
+  [verify](tests/loom-test.sh::test_smoke_darwin_skip_message)
+
+### CI integration
+
+- `nix flake check` includes the loom-tests derivation that runs
+      `cargo nextest run --workspace`
+  [verify](tests/loom-test.sh::test_flake_check_includes_loom)
+- `nix run .#test-loom` exists as a `writeShellApplication` exposed
+      on Linux platforms
+  [verify](tests/loom-test.sh::test_system_runner_exists)
+- `nix run .#fuzz-loom` exists for on-demand `cargo fuzz` runs
+      (not gated by `nix flake check`)
+  [verify](tests/loom-test.sh::test_fuzz_runner_exists)
+- Warm-cache `cargo nextest run --workspace` completes in <5s
+      (soft target, not hard NFR)
+  [verify](tests/loom-test.sh::test_cargo_nextest_timing)
+- Container smoke completes in <30s
+  [verify](tests/loom-test.sh::test_smoke_timing)
+- pi-mono and Claude Code versions pinned in
+      `modules/flake/overlays.nix`
+  [verify](tests/loom-test.sh::test_protocol_versions_pinned)
+
 ## Requirements
 
 ### Functional
@@ -408,722 +1100,6 @@ drift.
     require explicit opt-in (e.g., the container smoke needing podman).
     A CI flake opens a `loom-flake` P1 bead naming the failing test;
     the test is fixed before any further work on the affected crate.
-
-## Architecture
-
-### Test File Layout
-
-Each crate uses two complementary Rust test homes:
-
-- **Inline `#[cfg(test)] mod tests { … }`** at the bottom of each source file
-  — white-box tests with access to private impl details, kept next to the
-  code they exercise so changes land together.
-- **Cargo integration tests** under `loom/crates/<crate>/tests/*.rs` —
-  black-box tests that import the crate by its public API, exercising
-  cross-module behaviour and the surfaces that downstream crates also see.
-
-```
-loom/
-  crates/
-    loom-driver/
-      src/
-        state/
-          db.rs               # StateDb impl + inline #[cfg(test)] mod tests
-          rebuild.rs          # rebuild logic + inline tests
-          companions.rs       # `## Companions` parser + inline tests
-        bd/
-          client.rs           # bd CLI wrapper + inline tests
-          label.rs            # Label newtype + inline tests
-        identifier/
-          bead.rs             # BeadId + inline tests (validation, serde)
-          ...                 # one file per id newtype, all with inline tests
-        agent/
-          repin.rs            # RePinContent + inline tests (doc-tested)
-          ...
-      tests/
-        state_db.rs           # Integration: StateDb across rebuild + queries
-        lock_manager.rs       # Integration: per-spec advisory locking
-        git_client.rs         # Integration: GitClient against a temp repo
-        logging.rs            # Integration: shared renderer + log channel
-        properties.rs         # proptest invariants for state DB rebuild
-    loom-agent/
-      src/
-        pi/
-          mod.rs
-          parser.rs           # JSONL parsing + inline tests (string literals)
-          backend.rs          # spawn / lifecycle + inline tests driving mock-pi
-          messages.rs
-        claude/
-          mod.rs
-          parser.rs           # stream-json parsing + inline tests (string literals)
-          backend.rs          # spawn / lifecycle + inline tests driving mock-claude
-          messages.rs
-      tests/
-        static_dispatch.rs    # Compile-time check: both backends impl AgentBackend
-        properties.rs         # proptest invariants for pi/claude protocol parsers
-    loom-workflow/
-      src/
-        run/
-          mod.rs              # run loop + inline tests for unit-level helpers
-        check/
-          mod.rs              # push gate + inline tests
-        ...
-      tests/
-        parallel.rs           # Integration: --parallel N worktree dispatch
-    loom-templates/
-      src/
-        ...                   # per-template module + inline rendering tests
-      tests/
-        render.rs             # Integration: every template renders with partials
-    loom/
-      tests/
-        run_smoke.rs          # Integration: CLI subcommand surface
-        agent_flag.rs         # Integration: --agent flag parsing/validation
-        spawn_dispatch.rs     # Integration: shim-based wrapix spawn argv
-                              #   contract + stdin-pipe-not-tty assertion
-        style.rs              # AST + filesystem style enforcement (syn-based)
-        annotations.rs        # Annotation-integrity gate (walks specs/*.md)
-        properties.rs         # proptest invariants (pi/claude parsers, state DB)
-
-tests/
-  loom-test.sh                # [verify] runner — invoked per-function by
-                              #   `loom spec --verify`; each function shells
-                              #   to a specific cargo test
-  loom/
-    default.nix               # Nix derivation: cargo nextest run --workspace
-    run-tests.sh              # Container smoke harness (single happy-path)
-    mock-pi/pi.sh             # Mock pi (scoped scenario modes)
-    mock-claude/claude.sh     # Mock claude (scoped scenario modes)
-```
-
-### Annotation Contract
-
-Every acceptance criterion in any spec under `specs/` carries one
-annotation in one of these forms:
-
-```
-- [ ] Criterion text
-  [verify](path/to/file.sh::test_function_name)
-- [ ] Criterion text
-  [judge](path/to/file.sh::test_function_name)
-```
-
-**Rules:**
-
-1. **Every annotation MUST resolve.** The named function exists in the
-   named file. Enforced by a CI gate (see *Annotation Integrity Gate*
-   below).
-2. **`[verify]` vs `[judge]` is mechanical.** `[verify]` means a
-   deterministic check (Rust test, AST walk, filesystem assertion,
-   shell exit code). `[judge]` means a check that *requires* LLM
-   evaluation — code-quality criteria like "error messages are
-   actionable" or "naming is consistent." Anything reducible to AST
-   patterns or filesystem state is `[verify]`, not `[judge]`.
-   Loom-tests v1 has no `[judge]` criteria, and the integrity gate
-   actively enforces this: any `[judge]` annotation in any spec is a
-   hard error until the judge runner is set up. The mechanism for
-   future use is documented in *Judge Mechanism*.
-3. **Atomic acceptances.** One acceptance → exactly one annotation.
-   Forbidden: one acceptance with two `[verify]` markers (ambiguous
-   pass/fail when one passes and the other fails). If a criterion
-   needs multiple tests, split it into multiple atomic criteria.
-4. **N→1 sharing allowed.** Multiple acceptances may point to the same
-   function when one test asserts multiple behaviors. The spec lists
-   them as separate criteria because they're separately documented
-   requirements.
-5. **Cross-spec sharing allowed.** One function may be referenced from
-   multiple specs.
-
-### Annotation Integrity Gate
-
-A bidirectional gate enforces the annotation contract:
-
-**Forward direction** — every `[verify]` / `[judge]` annotation in
-`specs/*.md` must resolve to an existing function in the named file:
-
-- **Shell paths** (e.g., `tests/loom-test.sh::test_X`) — file must
-  exist; the regex `^test_X\(\)` must match a function definition.
-- **Cargo paths** — the gate doesn't transitively follow cargo
-  invocations. The shell function must exist; *its body* is the
-  contract. If the shell function shells to a non-existent cargo
-  test, that surfaces when CI invokes it.
-
-**Reverse direction** — every top-level zero-argument function in
-`tests/loom-test.sh` whose name starts with `test_` must be
-referenced by at least one annotation in some spec. Helper functions
-named `_helper`, `_setup`, etc. are exempt by the naming rule.
-Stale verify functions are a code smell: either the criterion is
-missing from a spec, the function name is wrong, or the function
-should be deleted.
-
-**Implementation**: `loom/crates/loom/tests/annotations.rs` walks
-`specs/*.md`, regex-extracts annotations, asserts each function
-resolves, and asserts every shell-runner function is referenced.
-Output on failure: `<spec>:<line>: annotation [verify](...) — function
-not found`. Runs under `nix flake check`.
-
-The gate verifies itself: this spec's acceptance criterion for the
-gate carries
-`[verify](tests/loom-test.sh::test_acceptance_annotations_resolve)`,
-which resolves to the gate's implementation. Each CI run therefore
-includes the gate's own integrity check.
-
-**Scope**: walks `specs/*.md` for annotations; only validates
-annotations pointing into `tests/loom-test.sh`. Other test runners
-(e.g., a future `tests/sandbox-test.sh`) own their own annotation
-gates. Per Annotation Contract rule 2, any `[judge]` annotation
-encountered today fails the gate; when the judge runner is set up
-(at `tests/judges/loom.sh` or equivalent), the gate's resolution
-logic extends to that path.
-
-### Determinism Through Clock Injection
-
-Time-dependent components — lock acquisition timeout, shutdown
-watchdog grace, JSONL read-line timeout, log retention sweep, bd /
-git subprocess timeouts — make tests flaky when they touch real wall
-time on a loaded CI runner. The design eliminates real-time waits.
-
-**`Clock` trait in `loom-driver`** with `now()`, `sleep(Duration)`,
-`timeout(Duration, Future)` async surface. Two implementations:
-
-- `SystemClock` — production. Wraps tokio's real timers.
-- `MockClock` — tests. Deterministic advance under
-  `#[tokio::test(start_paused = true)]`.
-
-Components touching time take `&dyn Clock` or `<C: Clock>`. Functions
-comparing against external timestamps (e.g., the log retention sweep
-comparing against filesystem mtime) take `now: Instant` as a
-parameter. Tests pass synthetic `now` values to age files; production
-passes `clock.now()`.
-
-**Filesystem mtime in tests** is set via the `filetime` crate. Real
-wall time stays zero; tests can express "this file is 15 days old"
-without sleeping.
-
-**Banned patterns** (enforced by `loom/crates/loom/tests/style.rs`
-AST check):
-
-- `std::thread::sleep` — anywhere, no exceptions.
-- `tokio::time::sleep` outside `SystemClock::sleep`'s implementation.
-- `tokio::time::timeout` outside `SystemClock::timeout`'s
-  implementation.
-- `Instant::now()` / `SystemTime::now()` outside `SystemClock::now()`.
-
-Tests that need to advance time construct a `MockClock` directly
-(`MockClock::new()` or via a small `with_mock_clock` helper in
-`loom-driver::testing`) and pass it as `&dyn Clock` into whatever
-component is under test. There is no other opt-out path; the bans
-apply uniformly across `src/` and `tests/`.
-
-### Style Enforcement
-
-Two complementary mechanisms in
-`loom/crates/loom/tests/style.rs`:
-
-**Workspace clippy lints** for what clippy supports natively:
-
-| Rule | Lint |
-|------|------|
-| no `unwrap()` | `clippy::unwrap_used = "deny"` |
-| no `expect()` | `clippy::expect_used = "deny"` |
-| no `panic!()` | `clippy::panic = "deny"` |
-| no `todo!()` | `clippy::todo = "deny"` |
-| no `unimplemented!()` | `clippy::unimplemented = "deny"` |
-| no `#[allow(dead_code)]` (use `#[expect]`) | `clippy::allow_attributes = "warn"` |
-
-Tests opt out via per-file `#![allow(clippy::unwrap_used, ...)]` at
-the top of `loom/crates/*/tests/*.rs` and inside `#[cfg(test)] mod
-tests` blocks. Already the convention in the workspace.
-
-**Source-walking checks** for rules clippy can't express. One test
-covers both style rules and architectural assertions, using `syn` for
-AST patterns and `walkdir` for filesystem-shape rules:
-
-| Rule | Mechanism |
-|------|-----------|
-| no `derive(From)` / `derive(Into)` on tuple structs | `syn::ItemStruct` walk over `loom/crates/*/src/**/*.rs` |
-| no `loom/crates/*/src/{types,error}.rs` files | `walkdir` filter on `loom/crates/*/src/` |
-| `GitClient` is the only `gix` / `git` CLI importer | `syn` walk asserting `use gix::*` and `Command::new("git")` appear only in `loom-driver/src/git/` |
-| renderer + log writer share one `AgentEvent` channel | `syn` walk asserting both subscribe to the same `tokio::sync::broadcast` (or `mpsc`) sender |
-| domain identifiers are tuple-struct newtypes | `syn::ItemStruct` walk over `loom-driver/src/identifier/` |
-| each Askama template has a typed context struct | `syn` walk pairing `#[derive(Template)]` structs in `loom-templates/src/` with their `templates/*.md` files |
-| tests use `tempfile::tempdir`, never hardcoded `/tmp/...` | `syn` literal walk over `loom/crates/*/tests/**/*.rs` and `#[cfg(test)]` blocks |
-
-`syn` and `walkdir` are `[dev-dependencies]` of the binary crate
-(no propagation to dependents). Output on failure: `<path>:<line>
-<rule>` so reviewers can click directly into the violation.
-
-### Property-Based Testing
-
-`proptest` for invariants on four targets:
-
-| Target | Invariants |
-|--------|------------|
-| JSONL line parser | never panics on arbitrary bytes; respects `MAX_LINE_BYTES`; never emits `AgentEvent` from a malformed line |
-| Pi protocol parser | round-trip identity for known shapes; unknown shapes map to `ProtocolError::UnknownMessageType`; never panics |
-| Claude protocol parser | round-trip identity for known shapes; unknown shapes map to the `Unknown` variant via `#[serde(other)]`; never panics |
-| State DB rebuild | never panics on arbitrary spec file content; schema invariants always hold; corrupted DB always recovers via `recreate` |
-
-**CI configuration**: `PROPTEST_CASES=32` for `nix flake check`,
-overridable via env var to `2048+` for local exhaustive runs.
-Property tests live in `loom/crates/<crate>/tests/properties.rs` —
-each crate owns the invariants for the types it defines. The binary
-crate's `loom/crates/loom/tests/properties.rs` is reserved for
-cross-crate invariants if any arise.
-
-**No `cargo fuzz` under `nix flake check`.** If a fuzz target later
-proves valuable for byte-level edge cases proptest misses (e.g.,
-JSONL framing under adversarial input), it's exposed as
-`nix run .#fuzz-loom` for on-demand or nightly use, never gating PRs.
-
-### Snapshot Testing
-
-`insta` snapshots for **contract surfaces** — outputs whose shape is
-the contract:
-
-- Templates (`loom-templates`) — every Askama template × representative
-  input set produces a `.snap` checked into
-  `loom/crates/loom-templates/tests/snapshots/`. Reviewers see the
-  rendered diff in PRs.
-- CLI help text (`loom --help`, `loom run --help`, etc.) — `--help`
-  output *is* the user contract.
-
-Substring + structural assertions for **flexibility surfaces** —
-outputs with intentional cosmetic latitude:
-
-- Run-time renderer (terminal tool-call lines, status colors,
-  truncation). Tests assert bullet count, presence of key markers,
-  and color-disabled-when-NO_COLOR; layout decisions remain free to
-  evolve without churning a snapshot.
-
-**Snapshot update policy**: a snapshot diff in a PR requires explicit
-acknowledgment in the PR description ("snapshot updated because:
-..."). Forces intentional regression vs. accidental drift.
-
-### Judge Mechanism
-
-`[judge]` annotations are reserved for criteria that genuinely require
-LLM evaluation — code-quality dimensions that AST walks can't capture:
-
-- "error messages are clear and actionable"
-- "doc comments explain *why* non-obviously"
-- "API surface is ergonomic for typical call patterns"
-- "naming is consistent with codebase conventions"
-
-Loom-tests v1 has no `[judge]` criteria; the mechanism below is
-documented for future use.
-
-**Runner**: separate from `cargo test`. Invocation:
-`loom judge run --annotation <spec.md::criterion>` (or `bd judge` once
-that command exists). The runner sends the named source files plus the
-criterion text to Claude via the existing agent abstraction and
-captures a structured verdict.
-
-**Output**: a bead comment with the verdict. Advisory only — judges
-do not gate CI.
-
-**Why advisory**: judges are non-deterministic, paid, and
-network-dependent. They do NOT run under `nix flake check`; they run
-on demand or in a nightly job. A `[judge]` verdict that disagrees with
-human judgement is a prompt to either rewrite the criterion as
-`[verify]` (if the property is reducible to a structural check) or
-accept the disagreement (if the property is genuinely subjective).
-
-### Test Patterns
-
-Concrete patterns for writing tests against the design rules above. Each
-pattern is one short example; the verify-runner and integration tests
-own the full coverage.
-
-#### Parse, Don't Validate boundaries
-
-Each boundary layer pins the parse-once-use-everywhere contract with
-a dedicated test. Three illustrative examples below — newtype
-construction, two-phase envelope parsing, and `#[serde(other)]`
-catchall behavior. JSONL framing and SQLite row mapping have
-analogous tests in `loom-driver/src/{agent,state}` that follow the
-same shape:
-
-```rust
-#[test]
-fn newtype_roundtrip() {
-    let id = BeadId::new("wx-abc123").unwrap();
-    assert_eq!(id.as_str(), "wx-abc123");
-    assert_eq!(id.to_string(), "wx-abc123");
-
-    let json = serde_json::to_string(&id).unwrap();
-    assert_eq!(json, r#""wx-abc123""#); // transparent, no wrapper
-    let parsed: BeadId = serde_json::from_str(&json).unwrap();
-    assert_eq!(parsed, id);
-
-    // Deserialize validates the canonical shape.
-    serde_json::from_str::<BeadId>(r#""not a bead""#).unwrap_err();
-}
-
-#[test]
-fn pi_envelope_ignores_unknown_fields() {
-    // Two-phase: envelope parse must succeed even with extra fields
-    let line = r#"{"type":"response","id":"42","extra":"ignored"}"#;
-    let env: PiEnvelope = serde_json::from_str(line).unwrap();
-    assert_eq!(env.msg_type.as_deref(), Some("response"));
-}
-
-#[test]
-fn claude_unknown_event_type_does_not_error() {
-    // #[serde(other)] catches new event types from future Claude versions
-    let line = r#"{"type":"new_feature_event","data":"something"}"#;
-    let msg: ClaudeMessage = serde_json::from_str(line).unwrap();
-    assert!(matches!(msg, ClaudeMessage::Unknown));
-}
-```
-
-#### State database
-
-Round-trip and corruption-recovery tests use real on-disk SQLite
-files inside `tempfile::tempdir`. The `:memory:` mode is deliberately
-not used — it skips the file-IO codepaths that production runs hit
-(open, fsync, corruption recovery), so an in-memory test passing
-gives false confidence.
-
-```rust
-#[test]
-fn state_db_rebuild() {
-    let dir = tempdir().unwrap();
-
-    // Seed spec files
-    std::fs::create_dir_all(dir.path().join("specs")).unwrap();
-    std::fs::write(dir.path().join("specs/auth.md"), "# Auth\n").unwrap();
-    std::fs::write(dir.path().join("specs/api.md"), "# API\n").unwrap();
-
-    let db = StateDb::open(&dir.path().join("state.db")).unwrap();
-    let report = db.rebuild(dir.path(), &mock_bd_client()).unwrap();
-
-    assert_eq!(report.specs_found, 2);
-    assert!(report.counters_reset);
-
-    let spec = db.spec(&SpecLabel::new("auth")).unwrap();
-    assert_eq!(spec.spec_path, "specs/auth.md");
-}
-
-#[test]
-fn state_db_corruption_recovery() {
-    let dir = tempdir().unwrap();
-    let db_path = dir.path().join("state.db");
-
-    // Write garbage to the DB file
-    std::fs::write(&db_path, b"not a sqlite db").unwrap();
-
-    // open detects corruption, rebuild recovers
-    let db = StateDb::open(&db_path).unwrap();
-    let report = db.rebuild(dir.path(), &mock_bd_client()).unwrap();
-    assert_eq!(report.specs_found, 0); // no spec files in tempdir
-}
-```
-
-#### Template render contract
-
-Render tests assert on the contract (partials included, agent content
-wrapped, truncation applied) rather than full string parity. Contract
-shape comes from the typed `RunContext` struct; layout regressions are
-caught by `insta` snapshots (see *Snapshot Testing*).
-
-```rust
-#[test]
-fn run_wraps_agent_supplied_fields_in_agent_output() -> Result<()> {
-    let ctx = RunContext {
-        pinned_context: PINNED_CONTEXT_BODY.into(),
-        label: SpecLabel::new("loom-harness"),
-        spec_path: "specs/loom-harness.md".into(),
-        issue_id: BeadId::new("wx-3hhwq.6")?,
-        title: "Implement parser".into(),
-        description: "agent-supplied body".into(),
-        previous_failure: None,
-        // ...
-    };
-    let out = ctx.render()?;
-
-    assert!(out.contains("<agent-output>"));
-    assert!(out.contains("</agent-output>"));
-    assert!(out.contains("agent-supplied body"));
-    Ok(())
-}
-```
-
-### Mock Pi Design
-
-Mock pi is a shell script that frames pi-mono's RPC protocol as JSONL
-on stdin/stdout. Its job is to exercise *process-level* paths the
-parser unit tests cannot reach — round-tripping through real pipes,
-stdin write-back from `ParsedLine::response`, and child reaping. Each
-mode is shaped to exactly one Rust test that drives it; the script is
-not a general-purpose pi emulator.
-
-Modes (selected via `argv[1]`):
-
-| Mode | Used by | Wire behavior |
-|------|---------|---------------|
-| `probe-ok` | startup probe round-trip test | Replies to `get_commands` with the full required set |
-| `probe-missing-set-model` | startup probe failure test | Replies to `get_commands` omitting `set_model` |
-| `echo-prompt` | wire-shape assertion test | Probe ok, then echoes the prompt payload as a `message_delta` |
-| `steering` | mid-session steer test | Probe ok, prompt → first turn, then echoes the steer payload on the next turn |
-| `compaction` | re-pin-via-steer test | Probe ok, emits `compaction_start`, expects the re-pin steer, echoes it back, emits `compaction_end` |
-| `set-model` | per-phase model override test | Probe ok, expects `set_model { provider, modelId }`, echoes the pair into a later `message_delta` |
-| `happy-path` | container smoke | Probe ok, prompt → `message_delta` → `agent_end` |
-
-Each mode is single-shot: the script runs until the conversation it
-encodes completes, then exits. The Rust test owns the assertions; the
-mock owns the wire framing.
-
-### Mock Claude Design
-
-Mock claude follows the same pattern as mock pi but speaks Claude
-Code's stream-json framing (also JSONL) on stdin/stdout.
-
-| Mode | Used by | Wire behavior |
-|------|---------|---------------|
-| `steering` | mid-session steer test | Emits one assistant turn, waits for a stream-json user message on stdin, emits a second assistant turn echoing the steer payload, then `result/success` |
-| `ignore-stdin` | shutdown watchdog test | Emits `result/success`, ignores SIGTERM and stdin close so the test exercises the SIGTERM → SIGKILL escalation |
-| `happy-path` | container smoke | system → assistant → `result/success` |
-
-### Nix Integration
-
-```nix
-# tests/loom/default.nix
-{ pkgs, loom, bd, ... }:
-{
-  # Unit + integration tests — run under `nix flake check`.
-  loom-tests = pkgs.runCommandLocal "loom-tests" {
-    nativeBuildInputs = [ loom.cargoDeps loom.rustToolchain pkgs.cargo-nextest ];
-  } ''
-    cd ${loom.src}
-    cargo nextest run --workspace
-    mkdir -p $out
-  '';
-
-  # Container smoke — invoked via `nix run .#test-loom`. Excluded from
-  # `flake check` because it needs podman at runtime.
-  loom-smoke = pkgs.writeShellApplication {
-    name = "test-loom";
-    runtimeInputs = [ loom bd pkgs.podman pkgs.jq ];
-    text = builtins.readFile ./run-tests.sh;
-  };
-}
-```
-
-`loom-tests` is included in the checks set exposed by `tests/default.nix`
-so it gates PRs in CI. `loom-smoke` is exposed as an app on Linux only.
-
-## Affected Files
-
-### New
-
-| File | Role |
-|------|------|
-| `tests/loom-test.sh` | Per-function `[verify]` runner — each function shells to a specific cargo test |
-| `loom/crates/*/src/**/*.rs` | Source files carry inline `#[cfg(test)] mod tests` blocks |
-| `loom/crates/*/tests/*.rs` | Per-crate cargo integration tests |
-| `loom/crates/loom/tests/style.rs` | Clippy + `syn`-based AST + filesystem style enforcement |
-| `loom/crates/loom/tests/annotations.rs` | Bidirectional annotation-integrity gate |
-| `loom/crates/<crate>/tests/properties.rs` | Per-crate `proptest` invariants — `loom-driver` for state DB, `loom-agent` for protocol parsers; binary-crate `loom/crates/loom/tests/properties.rs` reserved for future cross-crate invariants |
-| `loom/crates/loom-templates/tests/snapshots/` | `insta` snapshot files for templates |
-| `tests/loom/default.nix` | Nix derivation: `cargo nextest run --workspace` + container smoke app |
-| `tests/loom/run-tests.sh` | Container smoke harness (single happy-path scenario) |
-| `tests/loom/mock-pi/pi.sh` | Mock pi (scoped scenario modes) |
-| `tests/loom/mock-claude/claude.sh` | Mock claude (scoped scenario modes) |
-
-### Modified
-
-| File | Change |
-|------|--------|
-| `tests/default.nix` | Wire `loom-tests` into the checks set |
-| `flake.nix` | Expose `test-loom` app on Linux only; expose `fuzz-loom` app for on-demand fuzz runs |
-| `loom/Cargo.toml` | Add `[workspace.lints.clippy]` denying `unwrap_used`, `expect_used`, `panic`, `todo`, `unimplemented`; warning `allow_attributes` |
-| `loom/crates/loom/Cargo.toml` | Add `[dev-dependencies]` for `syn`, `walkdir`, `filetime` (used by `style.rs`, `annotations.rs`, `properties.rs`) |
-| `loom/crates/loom-driver/Cargo.toml` | Add `[dev-dependencies]` for `proptest`, `tokio-test` (used by `MockClock` and per-crate property tests) |
-| `loom/crates/loom-templates/Cargo.toml` | Add `[dev-dependencies]` for `insta` |
-| `loom/crates/loom-driver/src/` | Add `Clock` trait + `SystemClock` / `MockClock` impls |
-
-## Success Criteria
-
-### Unit tests
-
-- [ ] Newtype serde round-trip tests cover all ID types (`BeadId`,
-      `SpecLabel`, `MoleculeId`, `ProfileName`, `SessionId`,
-      `ToolCallId`, `RequestId`)
-  [verify](tests/loom-test.sh::test_newtype_serde_roundtrip)
-- [ ] State database round-trip tests cover spec, molecule, and meta
-      operations
-  [verify](tests/loom-test.sh::test_state_db_roundtrip)
-- [ ] Pi RPC protocol tests cover every command and every event type
-      in the pi v0.72 protocol table, asserting on every documented
-      field (not just type discrimination) so a renamed field fails
-      deserialization at test time
-  [verify](tests/loom-test.sh::test_pi_protocol_coverage)
-- [ ] Claude stream-json protocol tests cover all `ClaudeMessage`
-      variants including `Unknown` via `#[serde(other)]`, with
-      field-level assertions on each variant
-  [verify](tests/loom-test.sh::test_claude_protocol_coverage)
-- [ ] Template rendering tests cover every Askama template with
-      representative inputs
-  [verify](tests/loom-test.sh::test_template_rendering)
-
-### Integration tests
-
-Each criterion below corresponds to one of the seven load-bearing flows
-in Functional #4.
-
-- [ ] Startup probe round-trip: mock pi with full required command set
-      → loom proceeds; mock pi missing `set_model` → loom fails fast
-      with a version-mismatch error
-  [verify](tests/loom-test.sh::test_startup_probe_roundtrip)
-- [ ] `wrapix spawn` argv contract: loom invokes
-      `wrapix spawn --spawn-config <file> --stdio` with stdin
-      attached as a pipe (not a TTY); recorded `SpawnConfig` JSON
-      matches the on-disk shape
-  [verify](tests/loom-test.sh::test_wrapix_spawn_argv_contract)
-- [ ] Parallel run end-to-end: `loom run --parallel 2` with two ready
-      beads dispatches two mock-agent spawns concurrently, each in its
-      own worktree, then merges both branches back to driver
-  [verify](tests/loom-test.sh::test_parallel_run_end_to_end)
-- [ ] `GitClient` round-trip: create worktree, list, status, merge
-      (clean / non-conflicting / conflict variants), remove — all
-      against a temp repo via the typed Rust API
-  [verify](tests/loom-test.sh::test_git_client_roundtrip)
-- [ ] State DB lifecycle: `open` on fresh path creates schema;
-      `rebuild` populates from `specs/*.md` plus mock `bd` output,
-      resetting iteration counters; `recreate` recovers from a
-      corrupted file
-  [verify](tests/loom-test.sh::test_state_db_lifecycle)
-- [ ] Per-spec advisory locking: two contending acquisitions on the
-      same `<label>.lock` serialize via `flock`; the second waits
-      via `MockClock` advance, then errors naming the held label.
-      Crashed child releases lock immediately for parent
-  [verify](tests/loom-test.sh::test_per_spec_locking)
-- [ ] Logging tee: renderer and on-disk `.jsonl` log subscribe to the
-      same `AgentEvent` stream — capturing both yields line-for-line
-      equality on the log side
-  [verify](tests/loom-test.sh::test_logging_tee_equality)
-
-### Container smoke
-
-- [ ] `nix run .#test-loom` spawns a real podman container, runs
-      `loom run --once` against a bead with `WRAPIX_AGENT=pi`
-      `MOCK_PI_SCENARIO=happy-path`, exits 0 with the bead closed
-  [verify](tests/loom-test.sh::test_loom_smoke_real_container)
-
-### Style enforcement
-
-**Configuration** — these tests check that the rules are *declared*:
-
-- [ ] `[workspace.lints.clippy]` denies `unwrap_used`, `expect_used`,
-      `panic`, `todo`, `unimplemented`; warns `allow_attributes`
-  [verify](tests/loom-test.sh::test_workspace_clippy_lints)
-
-**Outcome** — these tests check that the *codebase complies* with
-the rules:
-
-- [ ] `cargo clippy --workspace` passes (the gate that catches lint
-      violations as they happen)
-  [verify](tests/loom-test.sh::test_clippy_clean)
-- [ ] No `derive(From)` / `derive(Into)` on tuple-struct newtypes
-  [verify](tests/loom-test.sh::test_no_derive_from_on_newtypes)
-- [ ] No `loom/crates/*/src/{types,error}.rs` files at crate roots
-  [verify](tests/loom-test.sh::test_nested_module_structure)
-- [ ] `GitClient` is the only module importing `gix` or invoking the
-      `git` CLI
-  [verify](tests/loom-test.sh::test_git_client_encapsulation)
-- [ ] Renderer + log writer subscribe to the same `AgentEvent` channel
-  [verify](tests/loom-test.sh::test_run_single_event_channel)
-- [ ] Domain identifiers are tuple-struct newtypes
-  [verify](tests/loom-test.sh::test_newtypes_for_identifiers)
-- [ ] Each Askama template has a typed context struct
-  [verify](tests/loom-test.sh::test_template_context_structs)
-- [ ] Tests use `tempfile::tempdir`, never hardcoded `/tmp/...` paths
-  [verify](tests/loom-test.sh::test_no_hardcoded_tmp_paths)
-
-### Determinism
-
-- [ ] No `std::thread::sleep` in any source file
-  [verify](tests/loom-test.sh::test_no_thread_sleep)
-- [ ] No `tokio::time::sleep` outside `SystemClock::sleep`
-  [verify](tests/loom-test.sh::test_no_tokio_sleep_outside_clock)
-- [ ] No `tokio::time::timeout` outside `SystemClock::timeout`
-  [verify](tests/loom-test.sh::test_no_tokio_timeout_outside_clock)
-- [ ] No `Instant::now()` / `SystemTime::now()` outside `SystemClock`
-  [verify](tests/loom-test.sh::test_no_real_clock_outside_system_clock)
-- [ ] No `#[ignore]` outside the container smoke runner
-  [verify](tests/loom-test.sh::test_no_ignore_for_flake)
-
-### Annotation gate
-
-- [ ] Every `[verify]` / `[judge]` annotation in `specs/*.md` resolves
-      to an existing function in the named file
-  [verify](tests/loom-test.sh::test_acceptance_annotations_resolve)
-- [ ] Every `test_*` function in `tests/loom-test.sh` is referenced by
-      at least one annotation in some spec
-  [verify](tests/loom-test.sh::test_no_orphan_test_functions)
-
-### Property-based testing
-
-- [ ] JSONL line parser proptest: never panics on arbitrary bytes,
-      respects `MAX_LINE_BYTES`, never emits `AgentEvent` from a
-      malformed line
-  [verify](tests/loom-test.sh::test_jsonl_parser_invariants)
-- [ ] Pi protocol parser proptest: round-trip identity for known
-      shapes, unknown shapes map to typed errors, never panics
-  [verify](tests/loom-test.sh::test_pi_parser_invariants)
-- [ ] Claude stream-json parser proptest: round-trip identity for
-      known shapes, `Unknown` variant catches unknown types, never
-      panics
-  [verify](tests/loom-test.sh::test_claude_parser_invariants)
-- [ ] State DB rebuild proptest: arbitrary spec content never
-      corrupts schema; corrupted DB always recovers via `recreate`
-  [verify](tests/loom-test.sh::test_state_db_rebuild_invariants)
-- [ ] `PROPTEST_CASES=32` for CI; overridable via env var
-  [verify](tests/loom-test.sh::test_proptest_case_count)
-
-### Snapshot testing
-
-- [ ] Every Askama template has at least one `insta` snapshot under
-      `loom/crates/loom-templates/tests/snapshots/`
-  [verify](tests/loom-test.sh::test_template_snapshots_exist)
-- [ ] `loom --help` and every subcommand `--help` have `insta`
-      snapshots
-  [verify](tests/loom-test.sh::test_cli_help_snapshots_exist)
-- [ ] Run-time renderer uses substring + structural assertions, not
-      `insta` (ensures terminal-output flexibility)
-  [verify](tests/loom-test.sh::test_renderer_no_insta_dependency)
-
-### Cross-platform
-
-- [ ] `flake.nix` declares `loom-tests` under `checks.<system>` for
-      `x86_64-linux`, `aarch64-linux`, `x86_64-darwin`, `aarch64-darwin`
-  [verify](tests/loom-test.sh::test_flake_declares_loom_for_all_systems)
-- [ ] `nix run .#test-loom` is exposed only on Linux systems
-  [verify](tests/loom-test.sh::test_smoke_linux_only)
-- [ ] `nix run .#test-loom` on Darwin exits 0 with a clear "not
-      available on Darwin" message
-  [verify](tests/loom-test.sh::test_smoke_darwin_skip_message)
-
-### CI integration
-
-- [ ] `nix flake check` includes the loom-tests derivation that runs
-      `cargo nextest run --workspace`
-  [verify](tests/loom-test.sh::test_flake_check_includes_loom)
-- [ ] `nix run .#test-loom` exists as a `writeShellApplication` exposed
-      on Linux platforms
-  [verify](tests/loom-test.sh::test_system_runner_exists)
-- [ ] `nix run .#fuzz-loom` exists for on-demand `cargo fuzz` runs
-      (not gated by `nix flake check`)
-  [verify](tests/loom-test.sh::test_fuzz_runner_exists)
-- [ ] Warm-cache `cargo nextest run --workspace` completes in <5s
-      (soft target, not hard NFR)
-  [verify](tests/loom-test.sh::test_cargo_nextest_timing)
-- [ ] Container smoke completes in <30s
-  [verify](tests/loom-test.sh::test_smoke_timing)
-- [ ] pi-mono and Claude Code versions pinned in
-      `modules/flake/overlays.nix`
-  [verify](tests/loom-test.sh::test_protocol_versions_pinned)
 
 ## Out of Scope
 

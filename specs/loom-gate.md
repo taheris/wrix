@@ -9,53 +9,38 @@ LLM-judged). Distinct from the *Verdict Gate* execution layer in
 mechanics that wrap the gate; this spec owns the rubric, the
 invariants, the lanes, and the stages.
 
-> **Status: design settled; implementation pending.** All design
-> questions raised during the initial design of this spec are
-> resolved (see Decisions Log at the bottom). Downstream
-> implementation work — renaming `loom-workflow/src/doctor.rs` to
-> `check.rs`, wiring the `loom review` subcommand, building the
-> `--check=*` audit set — is tracked separately as beads.
-
 ## Problem Statement
 
-Before this spec, the review machinery in loom was fragmented across
-multiple specs: a *Verdict Gate* in [loom-harness.md](loom-harness.md)
-(per-bead, per-diff, narrowly scoped), style rules in
-[`docs/style-rules.md`](../docs/style-rules.md) (mechanical lints),
-test strategy in [loom-tests.md](loom-tests.md). Each piece did its
-part. The gaps *between* them — cross-file incoherence, contracts
-no individual bead owned, omissions where no PR was responsible for
-the integration — were structurally invisible. That gap was where
-the Notes lifecycle orphaned, where `unreachable!()` slipped into
-`EventEnvelope::default`, where two parsers' `task_stack` mutex sites
-silently swallowed poison. None of those were mysterious bugs; they
-were the predictable output of a review surface that had no
-consolidated job description.
+Loom's review machinery has multiple participants: a verdict gate
+in [loom-harness.md](loom-harness.md) (per-bead, per-diff,
+narrowly scoped), style rules in
+[`docs/style-rules.md`](../docs/style-rules.md) (mechanical
+lints), test strategy in [loom-tests.md](loom-tests.md). Each
+carries part of the load. The gaps *between* them — cross-file
+incoherence, multi-component contracts no individual bead owns,
+omissions where no PR is the natural owner of the integration —
+are structurally invisible without a consolidated review surface.
 
-The case for consolidation: omissions are the dominant failure mode
-in autonomous development — more common than incoherence, more
-common than systematic errors. File-scoped review detects none of
-the cross-file incoherence. Coherence-only or file-scoped gates
-structurally cannot catch the dominant failure modes. The loom review
-surface before this spec was both coherence-only *and* file-scoped —
-which exactly predicted the bugs above.
+Omissions are the dominant failure mode in autonomous development —
+more common than incoherence, more common than systematic errors.
+File-scoped review detects none of the cross-file incoherence.
+Coherence-only or file-scoped gates structurally cannot catch the
+dominant failure modes.
 
-This spec gives one place one responsibility: catch divergences before
-they ship.
+This spec gives one place one responsibility: catch divergences
+before they ship.
 
 ## Invariants — what must never happen
 
 The five failure classes the gate guarantees against. These are the
 gate's reason for existing; everything below them is mechanism.
 
-1. **A spec claim is false in the code.** If a spec says X must happen,
-   the implementation must make X happen. If a spec bans Y, the
-   implementation must not contain Y. Includes multi-component
-   contracts: parts {a, b, c} of a lifecycle either all land in the
-   implementation, or the unfinished parts have a bonded successor
-   doing the remaining work. *Canonical instances: Notes lifecycle
-   orphaned; `unreachable!()` in `EventEnvelope::default`;
-   `task_stack` mutex-poison swallows.*
+1. **A spec claim is false in the code.** If a spec says X must
+   happen, the implementation must make X happen. If a spec bans
+   Y, the implementation must not contain Y. Includes
+   multi-component contracts: parts {a, b, c} of a lifecycle
+   either all land in the implementation, or the unfinished parts
+   have a bonded successor doing the remaining work.
 
 2. **A passing verifier is dishonest.** A `[verify]` test that asserts
    a tautology, mocks the thing it claims to test, or passes for the
@@ -65,13 +50,11 @@ gate's reason for existing; everything below them is mechanism.
    enforced*.
 
 3. **A template directs agents toward spec-contradicting behaviour.**
-   Planning, decomposition, and review templates are themselves system
-   artefacts. They must operate consistently with the specs they drive.
-   *Canonical instance: a planning template instructing the agent to
-   write `implementation_notes` to a deprecated state-file path,
-   against a spec that had already replaced that mechanism with a
-   different one — producing cascading damage when the agent followed
-   the template literally instead of the spec.*
+   Planning, decomposition, and review templates are themselves
+   system artefacts. They must operate consistently with the specs
+   they drive — a template whose instructions contradict its spec
+   produces cascading damage as the agent follows the template
+   literally instead of the contract.
 
 4. **A divergence sits in the working tree undetected, regardless of
    whether any merge is in flight.** Per-diff review can only see
@@ -150,12 +133,11 @@ The gate splits into two CLI commands by *kind* of check:
 
 | Command | Kind | Purpose |
 |---|---|---|
-| **`loom check`** | Deterministic | Runs all mechanical audits — `[verify]` scripts, style linters (`cargo clippy`, `nix fmt`, `shellcheck`), the `--check=criteria` / `--check=removals` / `--check=infrastructure` / `--check=cross-spec` sub-audits, marker parsing, `bd-closed` lookup, diff shape. Cheap. Run frequently (pre-commit, on save, every CI commit). |
+| **`loom check`** | Deterministic | Runs all mechanical audits — `[verify]` scripts, style linters (`cargo clippy`, `nix fmt`, `shellcheck`), the `criteria` and `surface` sub-audits (each runnable individually as `loom check <audit>`), marker parsing, `bd-closed` lookup, diff shape. Cheap. Run frequently (pre-commit, on save, every CI commit). |
 | **`loom review`** | LLM judge | Runs the LLM rubric — conformance trace, contract closure, verifier honesty, mock discipline, invariant-clash scan. Expensive. Run selectively (bead completion, on demand, scheduled). Consumes `loom check` results as input. |
 
 Both commands take scope flags: `--bead <id>`, `--diff <range>`, or
-`--tree`. The previous `loom doctor` command is removed; its
-subchecks fold into `loom check --check=<name>`.
+`--tree`.
 
 ## Stages
 
@@ -166,7 +148,7 @@ underlying check is the same.
 |---|---|---|---|---|
 | **Plan** | `loom plan -n` / `loom plan -u` | Spec under interview | Lowest — no code yet | Missing claims, weak claims, missing verifier surfaces, invariant clashes in proposed spec changes |
 | **Per-diff** | `loom check --bead <id>` then `loom review --bead <id>` | Spec sections the diff touches; the diff itself; tests in the diff | Medium — one bead's worth | Conformance gaps in diff, lint violations, weak verifiers, contract gaps inside one diff's reach, invariant clashes in proposed code changes |
-| **Standing** | `loom check --tree` + `loom review --tree` (on-demand, CI, scheduled) | Entire spec tree × entire implementation | Highest — deployed code | Cross-file incoherence, contracts orphaned across PRs, omissions that never had an owner, accumulated style/test regressions, invariant clashes that slipped past prior reviews, template-vs-spec drift (Invariant 3) |
+| **Standing** | `loom check --tree` + `loom review --tree` (on-demand, CI, scheduled, **and unconditionally on `loom run` molecule completion — see [loom-harness.md FR1 + FR9](loom-harness.md#functional)**) | Entire spec tree × entire implementation | Highest — deployed code, **blocks push** when triggered by molecule completion | Cross-file incoherence, contracts orphaned across PRs, omissions that never had an owner, accumulated style/test regressions, invariant clashes that slipped past prior reviews, template-vs-spec drift (Invariant 3), surface drift (commands/flags spec lists but binary lacks, or vice-versa) |
 
 The plan stage has no separate command invocation — the agent runs
 the rubric inline during the planning interview, and `loom plan` is
@@ -179,14 +161,16 @@ dominant cross-component failure mode is structurally invisible.
 
 ### Plan-stage checks
 
-The plan stage runs inside the planning interview — the agent's
-rubric. Three checks must satisfy before the interview can commit:
+The plan stage is first-class: errors caught before code exists
+are cheapest. The stage runs inside the planning interview — the
+agent's rubric. Three checks must satisfy before the interview can
+commit:
 
 1. **Completeness check.** Every requirement the user expressed has a
-   checkable surface: a `[ ]` Success Criteria entry with `[verify]`
-   or `[judge]`, a lifecycle / decision / contract table row, or an
-   explicit `## Out of Scope` declaration. Implicit assumptions are
-   surfaced; the agent either makes them testable or marks them
+   checkable surface: a Success Criteria bullet with a `[verify]` or
+   `[judge]` annotation, a lifecycle / decision / contract table row,
+   or an explicit `## Out of Scope` declaration. Implicit assumptions
+   are surfaced; the agent either makes them testable or marks them
    non-testable with a reason.
 2. **Internal coherence check.** The spec under interview is scanned
    for internal contradiction — two sections saying different things,
@@ -217,7 +201,7 @@ sequence.
 parsing, `bd-closed` lookup, diff non-empty / empty, every `[verify]`
 script attached to the bead's criteria (none short-circuits another),
 style linters (`cargo clippy -- -D warnings`, `nix fmt --check`,
-`shellcheck`), and the mechanical `--check=*` sub-audits.
+`shellcheck`), and the mechanical `loom check <audit>` sub-audits.
 
 Any `loom check` failure routes into the existing hard-fail recovery
 loop (`previous_failure` + `[loop] max_iterations`). Recovery doesn't
@@ -228,7 +212,7 @@ sufficient grounds.
 
 - the diff
 - the bead's intent (title, description, success criteria)
-- the *full* touched spec sections (not just `## Affected Files`)
+- the *full* touched spec sections (not only the bullets the diff lines map to)
 - the diffs and criteria of sibling beads bonded to the same molecule
 - `[verify]` script sources
 - `[judge]` rubric texts
@@ -240,22 +224,25 @@ Rubric checks:
 |---|---|---|---|
 | **Conformance trace** — for every claim in touched spec sections, find a true code path (verifier-pass *or* LLM trace through current code). Scope includes the *full* touched spec sections — command-set tables, interface specs, decision tables, prose constraints — not only the bullets a diff line maps to. | Conformance | Hard fail | `spec-coherence-fail: <claim>` |
 | **Contract closure** — for every multi-component contract the diff touches, verify completion in this diff or in bonded sibling diffs | Conformance | Hard fail | `orphan-integration: <contract>` |
-| **Style-rule conformance** — diff complies with every rule in `docs/style-rules.md` that linters cannot enforce mechanically (e.g. RS-12, RS-13, RS-17, COM-1..3, CLI-1); judge cites rule id + file/line for each violation. | Style | Hard fail | `style-rule-violation: <rule-id>` |
-| **Verifier honesty** — each `[verify]` the diff adds/modifies must support the claim it cites (no tautology, no mocking the thing under test) | Test quality | Hard fail | `tautological-assert: <test>` / `dishonest-verifier: <test>` |
+| **Style-rule conformance** — diff complies with every rule in the consumer's pinned `{{ style_rules }}` document that linters cannot enforce mechanically. The judge discovers rule families from the document itself (no fixed prefix list — adapts to whatever convention the consuming project uses) and cites the rule id + file/line for each violation. | Style | Hard fail | `style-rule-violation: <rule-id>` |
+| **Verifier honesty** — each `[verify]` the diff adds/modifies must support the claim it cites. Decomposed into four sub-checks; a test is honest iff it satisfies all four. (a) **verifier-bypass** — does the verifier actually exercise the live path? (b) **fabricated-result** — does the verifier's pass rely on a value the test itself synthesized? (c) **weak-assertion** — does the assertion meaningfully constrain the result, or does it tautologically pass? (d) **coincidental-pass** — does the test pass for the right reason, or because of an unrelated property of the system? Standing stage re-checks existing `[verify]`s against current spec/code to detect drift. | Test quality | Hard fail | `verifier-bypass: <test>` / `fabricated-result: <test>` / `weak-assertion: <test>` / `coincidental-pass: <test>` |
 | **Mock discipline** — mocks have a discernible reason; mock isn't the thing under test | Test quality | Hard fail | `mock-discipline: <test>` |
 | **Cross-component verifier sufficiency** — multi-component contracts need a verifier that exercises the seam, not one side | Test quality | Hard fail | `verifier-too-narrow: <criterion>` |
 | **Concurrency coverage** — production code introducing or modifying `Mutex`/`RwLock`/`Arc<Mutex<T>>` etc. needs at least one concurrent-load test | Test quality | Hard fail | `concurrency-untested: <lock-site>` |
-| **Scope appropriateness** — diff matches bead's intent and stays close to `## Affected Files` | Conformance | Hard fail | `scope-creep` / `scope-shortfall` |
+| **Scope appropriateness** — diff matches the bead's stated intent (title, description, success criteria) and the spec sections it claims to implement; touching files unrelated to that intent is creep, missing files necessary to satisfy the criteria is shortfall | Conformance | Hard fail | `scope-creep` / `scope-shortfall` |
 | **`[judge]` rubrics** — work satisfies each LLM-judgement criterion on the bead | Conformance | Hard fail | `judge-flag: <criterion>` |
-| **Invariant clash** — for each touched spec section (anchor + sibling), scan for load-bearing invariants the diff contradicts | (cross-cutting) | **Clarify** (three paths) | `invariant-clash: <invariant>` |
+| **Invariant clash** — for each touched spec section (anchor + sibling), scan for load-bearing invariants the diff contradicts. The judge uses spec conventions as anchors (`## Out of Scope` and `## Non-Functional` sections, imperative-keyword sentences, architectural claims like *"X never calls Y"*, schema / data-structure declarations) and also catches prose-only invariants that lack a structural anchor. | (cross-cutting) | **Clarify** (three paths) | `invariant-clash: <invariant>` |
 
 The style-rule-conformance check is the load-bearing defense for any
 rule that cannot be expressed as a clippy / lint pattern. Most rules
-in `docs/style-rules.md` are prose; the LLM judge is what enforces
-them. The rubric requires walking the document concretely — for every
-rule, the judge either finds the supporting code or flags the
-violation with the rule id. "Style looks fine" is not an acceptable
-answer; the output must enumerate which rules were checked.
+in a typical `style-rules.md` are prose; the LLM judge is what
+enforces them. The rubric requires walking the document concretely —
+for every rule discovered in the pinned `{{ style_rules }}` document,
+the judge either finds the supporting code or flags the violation
+with the rule id. "Style looks fine" is not an acceptable answer; the
+output must enumerate which rules were checked. The rule-family
+prefixes vary per consuming project; the judge must adapt to whatever
+the document uses rather than expecting a fixed set.
 
 Verdict: any hard-fail flag → recovery loop. Invariant-clash flag →
 `loom:clarify` on the flagged bead. The clarified bead is skipped by
@@ -270,7 +257,7 @@ continue running. Push is held until the clarify is resolved via
 mechanical-only is fast and frequent, full sweep is rarer.
 
 `loom check --tree` exercises every audit at tree scope: all
-`[verify]` scripts, all linters, all `--check=*` sub-audits walking
+`[verify]` scripts, all linters, all `loom check <audit>` sub-audits walking
 every spec and every implementation file.
 
 `loom review --tree` runs the LLM rubric against the whole spec set
@@ -288,6 +275,23 @@ Standing-stage flags become `bd` issues bonded to the relevant spec
 section. Invariant clashes surfaced at standing stage raise
 `loom:clarify`.
 
+### Surface-conformance audit (`loom check surface`)
+
+A deterministic sub-audit (no LLM call) that diffs the consumer's
+spec-declared user-facing surface against the compiled binary.
+Closes the class of failure where the spec mandates a command or
+flag the binary never grew (or fails to remove one the spec marked
+removed). See [loom-harness.md FR13](loom-harness.md#functional)
+for the four hard-fail dimensions and audit triggers.
+
+**Boundary with `loom review`'s style-rule walk.** Help-text wording
+is **not** a surface-audit dimension. CLI-style requirements (e.g. a
+short single-sentence help line, no implementation references) live
+under the LLM-judged style-rule walk so spec prose can be polished
+without churning a deterministic gate. The surface audit checks that
+commands and flags exist with the right names and grouping —
+nothing about how they describe themselves.
+
 ## Mechanisms
 
 How conformance / style / test-quality are evaluated:
@@ -303,13 +307,6 @@ How conformance / style / test-quality are evaluated:
   invariants like *"loom never invokes `podman run` directly"*).
 
 If both paths are available, both run. Failure on either → flag.
-
-`## Affected Files` entries in specs are *planning scaffolding*, not
-review-rubric surfaces. Whether `New` / `Modified` / `Removed` paths
-are in the spec'd state is checked mechanically by
-`loom check --check=criteria`, separately from the LLM rubric. The
-rubric cares about *what the code does*, not *which files the diff
-touches*.
 
 ## Options Format Contract
 
@@ -375,20 +372,20 @@ Per-stage flag handling:
   surfaced, clash resolved, or explicitly out-of-scope'd). User
   authorisation required to ship a spec with unresolved gaps.
 - **Per-diff** — hard-fail flags enter the existing recovery loop
-  (`[loop] max_iterations`, default 3) with `previous_failure`
-  rendered into the next prompt. Iterations 1–2 are same-agent
-  retries with cumulative `previous_failure`. Iteration 3 (the final
-  attempt) uses a **fresh agent**: new container, new agent process,
-  blank scratchpad; receives the spec, the bead's criteria, the
-  cumulative `previous_failure`, and the current state of the
-  worktree — but *not* the prior session's transcript or in-memory
-  context. Rationale: same-agent retry has a low recovery rate
-  and a high re-fail rate; the final attempt gets failure evidence
-  without the failed approach. Invariant clashes raise `loom:clarify` on the
-  flagged bead; that bead is skipped by `bd ready` on subsequent
-  ticks while non-dependent beads in the molecule continue running.
-  `loom msg` resolves the clarify. Clashes never trigger fresh-agent
-  retry.
+  bounded by `[loop] max_iterations` with `previous_failure`
+  rendered into the next prompt. All iterations except the last
+  are same-agent retries with cumulative `previous_failure`; the
+  final iteration uses a **fresh agent**: new container, new agent
+  process, blank scratchpad; receives the spec, the bead's
+  criteria, the cumulative `previous_failure`, and the current
+  state of the worktree — but *not* the prior session's transcript
+  or in-memory context. Rationale: same-agent retry has a low
+  recovery rate and a high re-fail rate; the final attempt gets
+  failure evidence without the failed approach. Invariant clashes
+  raise `loom:clarify` on the flagged bead; that bead is skipped
+  by `bd ready` on subsequent ticks while non-dependent beads in
+  the molecule continue running. `loom msg` resolves the clarify.
+  Clashes never trigger fresh-agent retry.
 - **Standing** — a `bd` issue is created per gap, bonded to the
   relevant spec section. Tracked separately from in-flight molecules;
   picked up by any future `loom todo` run. Invariant clashes surface
@@ -408,75 +405,3 @@ The gate enforces; it does not own:
   properties the gate evaluates.
 - The `loom:clarify` resolution channel itself — `loom msg` is the
   surface, defined in [loom-harness.md](loom-harness.md) Msg Modes.
-
-## Design rationale
-
-Empirical observations from this project's autonomous development
-runs inform several design choices:
-
-- **Omissions dominate** — omissions are the most common failure mode,
-  more common than incoherence or systematic errors. The gate must
-  check completeness explicitly, not just coherence. → Invariant 1
-  (multi-component contracts), Standing stage.
-- **File-scoped review is blind to cross-file errors** — per-file
-  review misses cross-file incoherence entirely. → Standing stage is
-  non-optional; per-diff alone is insufficient.
-- **Plan-stage has highest ROI** — errors caught before code exists
-  are cheapest. → Plan stage is a first-class gate, not implicit.
-- **Same-agent retry is weak** — same-agent retry has a low recovery
-  rate and high re-fail rate. → Recovery bounds iterations at
-  `[loop] max_iterations` (default 3); iteration 3 is a fresh agent
-  rather than same-agent retry.
-- **Trust ledger framing** — gate runs are trust evidence, not
-  alignment proofs. → Framing adopted; persistence implication
-  rejected. `bd` issues and git commits are the durable record.
-
-## Decisions Log
-
-All design questions raised during the initial design of this spec
-are resolved. Kept here for traceability so a future reader can see
-why each piece of the gate is shaped the way it is.
-
-1. ~~**Invariant recognition in spec prose.**~~ Resolved: LLM
-   judgement, anchored by conventions (`## Out of Scope` and
-   `## Non-Functional` sections, imperative-keyword sentences,
-   architectural claims like *"X never calls Y"*, schema /
-   data-structure declarations). The LLM uses anchors as a strong
-   starting point and catches prose-only invariants in addition.
-2. ~~**Honest-verifier mechanism.**~~ Resolved: four-sub-check refactor
-   of the verifier-honesty rubric — `verifier-bypass`,
-   `fabricated-result`, `weak-assertion`, `coincidental-pass`. A test
-   is honest iff it satisfies all four. Standing stage re-checks
-   existing `[verify]`s against current spec/code to detect drift.
-3. ~~**Recovery semantics, fresh-agent retry.**~~ Resolved: per
-   iteration, not per cause. Iterations 1–2 are same-agent with
-   cumulative `previous_failure`. Iteration 3 (final attempt) is a
-   fresh agent that gets failure evidence but not prior-session
-   transcript / scratchpad.
-4. ~~**Interaction with `loom-harness.md` Verdict Gate.**~~ Resolved
-   and executed during initial design: this spec owns the rubric
-   and the gate-as-concept; `loom-harness.md` owns the execution
-   layer
-   (decision table, recovery mechanics, markers, labels,
-   infra-failure handling). The seven-Concerns expansion and the
-   Molecule-Level Closure Gate section have been removed from
-   `loom-harness.md`. Functional command set updated: `loom check`
-   subsumes the former `loom doctor`; `loom review` added.
-5. ~~**Style-rules references to `loom doctor`.**~~ Resolved:
-   `loom doctor --check=*` → `loom check --check=*` globally swept
-   in the consumer's style-rules document. Test-quality rule content
-   unchanged; only the command name in references was updated.
-6. **Pre-commit hook updates.** *Deferred to implementation.* The
-   `.pre-commit-config.yaml` hook currently calls `loom doctor
-   --check=criteria`. The spec calls for the `--check=<name>` flags
-   to move from `loom doctor` to `loom check` (and for the `doctor.rs`
-   module to be renamed to `check.rs`). The hook config edit needs to
-   land **after** the binary surface rename, not before — otherwise
-   the hook breaks on the existing binary. Tracked as part of the
-   broader `loom check / loom review` implementation work that will be
-   decomposed by `loom todo`.
-7. ~~**Naming.**~~ Resolved: spec named `loom-gate.md`, titled "Loom
-   Gate." The LLM command remains `loom review`. The deterministic
-   command remains `loom check`. The umbrella concept is "the gate"
-   (or "the Loom Gate"), separate from the *Verdict Gate* execution
-   layer in `loom-harness.md` and from the *push gate*.

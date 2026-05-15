@@ -3630,6 +3630,23 @@ test_agent_output_markers_present() { _pending_stub agent_output_markers_present
 test_template_snapshot_coverage() { _pending_stub template_snapshot_coverage; }
 test_snapshots_no_crate_root_allows() { _pending_stub snapshots_no_crate_root_allows; }
 
+# Stubs added by the spec-authoring-conventions planning session —
+# pending implementation of: --tree handoff, outer-loop iteration,
+# tree-review push-gate blocking, bare-loom grouped help, gate
+# decision function production wiring, consolidated pinning matrix
+# verifications, spec_conventions partial + LoomConfig field,
+# rule-family-agnostic partials.
+test_run_execs_check_then_review_tree() { _pending_stub run_execs_check_then_review_tree; }
+test_run_outer_loop_iterates_on_fixups() { _pending_stub run_outer_loop_iterates_on_fixups; }
+test_push_gate_refuses_on_tree_review_flag() { _pending_stub push_gate_refuses_on_tree_review_flag; }
+test_bare_loom_produces_grouped_help() { _pending_stub bare_loom_produces_grouped_help; }
+test_phase_verdict_decide_called_from_production() { _pending_stub phase_verdict_decide_called_from_production; }
+test_style_rules_pinning_matrix() { _pending_stub style_rules_pinning_matrix; }
+test_spec_conventions_pinning_matrix() { _pending_stub spec_conventions_pinning_matrix; }
+test_spec_conventions_field_scope() { _pending_stub spec_conventions_field_scope; }
+test_loom_config_pin_defaults() { _pending_stub loom_config_pin_defaults; }
+test_style_rules_partials_are_family_agnostic() { _pending_stub style_rules_partials_are_family_agnostic; }
+
 # Compaction Recovery (scratch dir). Kept at the tail of the test
 # functions so the loom-doctor body-slicing heuristic — which scans
 # from each `test_*(` header to the next `test_*(` for `_pending_stub`

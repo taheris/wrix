@@ -3,6 +3,14 @@
 Wrapix provides sandboxed containers and multi-agent orchestration for AI-driven
 development. See `docs/architecture.md` for system design.
 
+## Authoring Conventions
+
+- [`docs/spec-conventions.md`](spec-conventions.md) — what a spec is and isn't,
+  trust tiers, standard section structure. Pinned by `loom plan` sessions.
+- [`docs/style-rules.md`](style-rules.md) — code-style and test-quality rules
+  organized by rule family (SH-, NX-, DOC-, GIT-, TST-, RS-, COM-, CLI-).
+  Pinned by `loom run` and `loom check` sessions.
+
 ## Specs
 
 Individual spec files live in [`../specs/`](../specs/). This table is the session-start
