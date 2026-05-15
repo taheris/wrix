@@ -16,14 +16,12 @@ pub fn build_msg_context(
     companion_paths: Vec<String>,
     beads: &[&Bead],
     scratchpad_path: String,
-    exit_signals: String,
 ) -> MsgContext {
     MsgContext {
         pinned_context,
         companion_paths,
         clarify_beads: beads.iter().map(|b| to_clarify_bead(b)).collect(),
         scratchpad_path,
-        exit_signals,
     }
 }
 
@@ -136,7 +134,6 @@ mod tests {
             vec!["lib/sandbox/".into()],
             &refs,
             "/workspace/.wrapix/loom/scratch/msg/scratch.md".into(),
-            "EXIT".into(),
         );
         let body = ctx.render().expect("render");
         assert!(body.contains("wx-2"), "{body}");

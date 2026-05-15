@@ -100,7 +100,6 @@ pub fn run_with_timeout(
     }
 
     let pinned_context = read_pinned_context(workspace, &cfg.pinned_context)?;
-    let exit_signals = render_exit_signals();
 
     let db = StateDb::open(workspace.join(".wrapix/loom/state.db"))?;
     let companion_paths = if is_new {
@@ -131,7 +130,6 @@ pub fn run_with_timeout(
         companion_paths,
         implementation_notes,
         scratchpad_path,
-        exit_signals,
     })?;
 
     // Set before wrapix runs so a non-zero interactive exit (Ctrl-C, agent
@@ -211,10 +209,6 @@ fn read_pinned_context(workspace: &Path, rel: &str) -> Result<String, PlanError>
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
         Err(source) => Err(PlanError::ReadPinnedContext { path, source }),
     }
-}
-
-fn render_exit_signals() -> String {
-    "- `LOOM_COMPLETE`\n- `LOOM_BLOCKED`\n- `LOOM_CLARIFY`".to_string()
 }
 
 #[cfg(test)]

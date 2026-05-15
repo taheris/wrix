@@ -15,7 +15,6 @@ use loom_templates::review::{ReviewContext, ReviewSource};
 use loom_templates::run::{PREVIOUS_FAILURE_MAX_LEN, PreviousFailure, RunContext};
 use loom_templates::todo::{TodoNewContext, TodoUpdateContext};
 
-const EXIT_SIGNALS_BODY: &str = "- `LOOM_COMPLETE`\n- `LOOM_BLOCKED`\n- `LOOM_CLARIFY`";
 const PINNED_CONTEXT_BODY: &str =
     "# Project Overview\n\nLoom orchestrates the spec-to-implementation workflow.";
 const SCRATCHPAD_PATH_BODY: &str = "/workspace/.wrapix/loom/scratch/loom-harness/scratch.md";
@@ -27,7 +26,6 @@ fn plan_new_renders_partials_and_inputs() -> Result<()> {
         label: SpecLabel::new("loom-harness"),
         spec_path: "specs/loom-harness.md".to_string(),
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
-        exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
     let out = ctx.render()?;
 
@@ -49,7 +47,6 @@ fn plan_update_renders_partials_and_companions() -> Result<()> {
         companion_paths: vec!["lib/sandbox/".into(), "lib/ralph/template/".into()],
         implementation_notes: vec![],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
-        exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
     let out = ctx.render()?;
 
@@ -70,7 +67,6 @@ fn todo_new_renders_spec_label_marker() -> Result<()> {
         companion_paths: vec!["lib/sandbox/".into()],
         implementation_notes: vec![],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
-        exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
     let out = ctx.render()?;
 
@@ -94,7 +90,6 @@ fn todo_new_renders_implementation_notes_when_present() -> Result<()> {
             "Design trade-off: prefer single FK over join table".into(),
         ],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
-        exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
     let out = ctx.render()?;
     assert!(out.contains("## Implementation Notes"));
@@ -117,7 +112,6 @@ fn todo_update_renders_implementation_notes_when_present() -> Result<()> {
         molecule_id: Some(MoleculeId::new("wx-mol")),
         implementation_notes: vec!["beware FK cascade ordering".into()],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
-        exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
     let out = ctx.render()?;
     assert!(out.contains("## Implementation Notes"));
@@ -138,7 +132,6 @@ fn todo_update_wraps_existing_tasks_in_agent_output() -> Result<()> {
         molecule_id: Some(MoleculeId::new("wx-3hhwq")),
         implementation_notes: vec![],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
-        exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
     let out = ctx.render()?;
 
@@ -168,7 +161,6 @@ fn run_wraps_agent_supplied_fields_in_agent_output() -> Result<()> {
         description: Some("Port templates to Askama.".into()),
         previous_failure: Some(PreviousFailure::new("error: cargo test failed".to_string())),
         scratchpad_path: "/workspace/.wrapix/loom/scratch/wx-3hhwq.10/scratch.md".to_string(),
-        exit_signals: EXIT_SIGNALS_BODY.to_string(),
         style_rules: "docs/style-rules.md".to_string(),
     };
     let out = ctx.render()?;
@@ -226,7 +218,6 @@ fn review_renders_review_context_fields() -> Result<()> {
             body: judge_body.into(),
         }],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
-        exit_signals: EXIT_SIGNALS_BODY.to_string(),
         style_rules: "docs/style-rules.md".to_string(),
     };
     let out = ctx.render()?;
@@ -269,7 +260,6 @@ fn review_renders_style_rule_conformance_walkthrough() -> Result<()> {
         verify_sources: vec![],
         judge_rubrics: vec![],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
-        exit_signals: EXIT_SIGNALS_BODY.to_string(),
         style_rules: "docs/style-rules.md".to_string(),
     };
     let out = ctx.render()?;
@@ -335,7 +325,6 @@ fn msg_renders_clarify_beads_with_options() -> Result<()> {
             ],
         }],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
-        exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
     let out = ctx.render()?;
 
@@ -358,7 +347,6 @@ fn msg_renders_with_no_clarify_beads() -> Result<()> {
         companion_paths: vec![],
         clarify_beads: vec![],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
-        exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
     let out = ctx.render()?;
 
@@ -383,7 +371,6 @@ fn run_renders_expected_sections_for_shared_inputs() -> Result<()> {
         description: Some("the description".into()),
         previous_failure: None,
         scratchpad_path: "/workspace/.wrapix/loom/scratch/wx-mol.1/scratch.md".into(),
-        exit_signals: "- `LOOM_COMPLETE`".into(),
         style_rules: "docs/style-rules.md".into(),
     };
     let out = ctx.render()?;

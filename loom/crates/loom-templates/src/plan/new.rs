@@ -9,5 +9,4 @@ pub struct PlanNewContext {
     pub label: SpecLabel,
     pub spec_path: String,
     pub scratchpad_path: String,
-    pub exit_signals: String,
 }

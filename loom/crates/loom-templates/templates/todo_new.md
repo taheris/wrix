@@ -89,8 +89,3 @@ After creating all tasks:
 3. Confirm the molecule was created
 
 {% include "partial/exit_signals.md" %}
-
-- `LOOM_COMPLETE` — All tasks created, dependencies set, molecule created. No payload.
-- `LOOM_BLOCKED` — Cannot decompose spec (missing information, unclear
-  requirements). Write the reason **before** the marker on its own line(s);
-  emit `LOOM_BLOCKED` as the final line with nothing after it.

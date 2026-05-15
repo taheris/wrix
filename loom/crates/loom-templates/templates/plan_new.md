@@ -103,11 +103,3 @@ When you have gathered enough information, create the spec file with:
 {% include "partial/interview_modes.md" %}
 
 {% include "partial/exit_signals.md" %}
-
-- `LOOM_COMPLETE` — Interview finished, spec created. No payload.
-- `LOOM_BLOCKED` — Cannot proceed without more information. Write the reason
-  **before** the marker on its own line(s); emit `LOOM_BLOCKED` as the final
-  line with nothing after it.
-- `LOOM_CLARIFY` — Need clarification on something specific. Write the
-  question **before** the marker on its own line(s); emit `LOOM_CLARIFY` as
-  the final line with nothing after it.

@@ -177,7 +177,6 @@ where
             verify_sources,
             judge_rubrics,
             scratchpad_path,
-            exit_signals: String::new(),
             style_rules: "docs/style-rules.md".to_string(),
         };
         Ok(ctx.render()?)

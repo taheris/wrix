@@ -16,7 +16,6 @@ use loom_templates::review::{ReviewContext, ReviewSource};
 use loom_templates::run::{PreviousFailure, RunContext};
 use loom_templates::todo::{TodoNewContext, TodoUpdateContext};
 
-const EXIT_SIGNALS_BODY: &str = "- `LOOM_COMPLETE`\n- `LOOM_BLOCKED`\n- `LOOM_CLARIFY`";
 const PINNED_CONTEXT_BODY: &str =
     "# Project Overview\n\nLoom orchestrates the spec-to-implementation workflow.";
 const SCRATCHPAD_PATH_BODY: &str = "/workspace/.wrapix/loom/scratch/loom-harness/scratch.md";
@@ -28,7 +27,6 @@ fn plan_new_snapshot() {
         label: SpecLabel::new("loom-harness"),
         spec_path: "specs/loom-harness.md".to_string(),
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
-        exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
     insta::assert_snapshot!(ctx.render().unwrap());
 }
@@ -45,7 +43,6 @@ fn plan_update_snapshot() {
             "Retry policy is described in `## Recovery & Retry`".into(),
         ],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
-        exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
     insta::assert_snapshot!(ctx.render().unwrap());
 }
@@ -59,7 +56,6 @@ fn todo_new_snapshot() {
         companion_paths: vec!["lib/sandbox/".into()],
         implementation_notes: vec![],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
-        exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
     insta::assert_snapshot!(ctx.render().unwrap());
 }
@@ -76,7 +72,6 @@ fn todo_update_snapshot() {
         molecule_id: Some(MoleculeId::new("wx-3hhwq")),
         implementation_notes: vec![],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
-        exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
     insta::assert_snapshot!(ctx.render().unwrap());
 }
@@ -94,7 +89,6 @@ fn run_snapshot() {
         description: Some("Port templates to Askama.".into()),
         previous_failure: Some(PreviousFailure::new("error: cargo test failed".to_string())),
         scratchpad_path: "/workspace/.wrapix/loom/scratch/wx-3hhwq.10/scratch.md".to_string(),
-        exit_signals: EXIT_SIGNALS_BODY.to_string(),
         style_rules: "docs/style-rules.md".to_string(),
     };
     insta::assert_snapshot!(ctx.render().unwrap());
@@ -119,7 +113,6 @@ fn review_snapshot() {
             body: "judge_live_path_coverage() { :; }\n".into(),
         }],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
-        exit_signals: EXIT_SIGNALS_BODY.to_string(),
         style_rules: "docs/style-rules.md".to_string(),
     };
     insta::assert_snapshot!(ctx.render().unwrap());
@@ -149,7 +142,6 @@ fn msg_snapshot() {
             ],
         }],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
-        exit_signals: EXIT_SIGNALS_BODY.to_string(),
     };
     insta::assert_snapshot!(ctx.render().unwrap());
 }

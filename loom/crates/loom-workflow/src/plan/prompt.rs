@@ -26,7 +26,6 @@ pub struct PlanPromptInputs {
     /// session. Embedded in the rendered prompt so the agent can write to
     /// the correct file under compaction recovery.
     pub scratchpad_path: String,
-    pub exit_signals: String,
 }
 
 /// Render the appropriate Askama template for `inputs.mode`. Returns the
@@ -38,7 +37,6 @@ pub fn render_prompt(inputs: PlanPromptInputs) -> Result<String, PlanError> {
             label,
             spec_path: inputs.spec_path,
             scratchpad_path: inputs.scratchpad_path,
-            exit_signals: inputs.exit_signals,
         }
         .render()?,
         PlanMode::Update(label) => PlanUpdateContext {
@@ -48,7 +46,6 @@ pub fn render_prompt(inputs: PlanPromptInputs) -> Result<String, PlanError> {
             companion_paths: inputs.companion_paths,
             implementation_notes: inputs.implementation_notes,
             scratchpad_path: inputs.scratchpad_path,
-            exit_signals: inputs.exit_signals,
         }
         .render()?,
     };
@@ -69,7 +66,6 @@ mod tests {
             companion_paths: vec![],
             implementation_notes: vec![],
             scratchpad_path: "/workspace/.wrapix/loom/scratch/loom-harness/scratch.md".into(),
-            exit_signals: "LOOM_COMPLETE".into(),
         }
     }
 
@@ -81,7 +77,6 @@ mod tests {
             companion_paths: vec!["lib/sandbox/".into()],
             implementation_notes: vec![],
             scratchpad_path: "/workspace/.wrapix/loom/scratch/loom-harness/scratch.md".into(),
-            exit_signals: "LOOM_COMPLETE".into(),
         }
     }
 
@@ -136,7 +131,6 @@ mod tests {
                 "note-beta covers retry/backoff".into(),
             ],
             scratchpad_path: "/workspace/.wrapix/loom/scratch/loom-harness/scratch.md".into(),
-            exit_signals: "LOOM_COMPLETE".into(),
         };
         let body = render_prompt(inputs).expect("render");
         assert!(
@@ -167,7 +161,6 @@ mod tests {
             companion_paths: vec![],
             implementation_notes: vec![],
             scratchpad_path: "/workspace/.wrapix/loom/scratch/loom-harness/scratch.md".into(),
-            exit_signals: "LOOM_COMPLETE".into(),
         };
         let body = render_prompt(inputs).expect("render");
         assert!(body.contains("loom note set"));

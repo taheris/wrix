@@ -121,7 +121,6 @@ impl ProductionTodoController {
             companion_paths: vec![],
             implementation_notes,
             scratchpad_path,
-            exit_signals: String::new(),
         };
         let ctx = build_template_context(&tier, base, None, molecule_id);
         let body = match ctx {

@@ -93,15 +93,3 @@ Post-step hooks verify compliance automatically.
 Before outputting LOOM_COMPLETE, follow the **Session Protocol** in `AGENTS.md`.
 
 {% include "partial/exit_signals.md" %}
-
-- `LOOM_COMPLETE` — Task finished with a non-empty diff and the bead
-  closed via `bd close`. All quality gates passed. No payload.
-- `LOOM_NOOP` — The work was already done in tree and the phase produced
-  an empty diff. Close the bead with `bd close` before emitting. Use this
-  instead of `LOOM_COMPLETE` whenever the diff is empty — an empty diff
-  with `LOOM_COMPLETE` is treated as `zero-progress` and enters recovery.
-- `LOOM_BLOCKED` — Cannot proceed. Write the reason **before** the marker on
-  its own line(s); emit `LOOM_BLOCKED` as the final line with nothing after it.
-- `LOOM_CLARIFY` — Need clarification. Write the question **before** the
-  marker on its own line(s); emit `LOOM_CLARIFY` as the final line with
-  nothing after it.

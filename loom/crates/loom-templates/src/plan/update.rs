@@ -17,5 +17,4 @@ pub struct PlanUpdateContext {
     /// `loom note set <label> --kind implementation --json '[…]'`.
     pub implementation_notes: Vec<String>,
     pub scratchpad_path: String,
-    pub exit_signals: String,
 }

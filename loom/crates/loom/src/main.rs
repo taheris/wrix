@@ -1202,7 +1202,6 @@ async fn dispatch_for_slot(
         description: slot.bead.description.clone(),
         previous_failure: None,
         scratchpad_path,
-        exit_signals: String::new(),
         style_rules: String::new(),
     })?;
     let scratch = ScratchSession::open(&slot.worktree.path, &key, &initial_prompt, &banner)?;

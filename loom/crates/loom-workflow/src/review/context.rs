@@ -24,7 +24,6 @@ pub struct ReviewContextInputs {
     /// this reviewer session. Embedded in the rendered prompt so the agent
     /// can write to the correct file under compaction recovery.
     pub scratchpad_path: String,
-    pub exit_signals: String,
     /// Workspace-relative path to the style-rules document the reviewer
     /// must walk rule-by-rule when judging the diff.
     pub style_rules: String,
@@ -43,7 +42,6 @@ pub fn build_review_context(inputs: ReviewContextInputs) -> ReviewContext {
         verify_sources: inputs.verify_sources,
         judge_rubrics: inputs.judge_rubrics,
         scratchpad_path: inputs.scratchpad_path,
-        exit_signals: inputs.exit_signals,
         style_rules: inputs.style_rules,
     }
 }
@@ -160,7 +158,6 @@ mod tests {
             verify_sources: vec![],
             judge_rubrics: vec![],
             scratchpad_path: "/workspace/.wrapix/loom/scratch/loom-harness/scratch.md".into(),
-            exit_signals: String::new(),
             style_rules: "docs/style-rules.md".into(),
         }
     }

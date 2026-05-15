@@ -25,7 +25,6 @@ pub struct TemplateBaseFields {
     /// this todo session. Embedded in the rendered prompt so the agent can
     /// write to the correct file under compaction recovery.
     pub scratchpad_path: String,
-    pub exit_signals: String,
 }
 
 /// Build the appropriate template context for a given [`TierDecision`].
@@ -49,7 +48,6 @@ pub fn build_template_context(
         companion_paths,
         implementation_notes,
         scratchpad_path,
-        exit_signals,
     } = base;
 
     match tier {
@@ -65,7 +63,6 @@ pub fn build_template_context(
                 molecule_id,
                 implementation_notes,
                 scratchpad_path,
-                exit_signals,
             })
         }
         TierDecision::Tasks { molecule } => TodoTemplateContext::Update(TodoUpdateContext {
@@ -78,7 +75,6 @@ pub fn build_template_context(
             molecule_id: Some(molecule.clone()),
             implementation_notes,
             scratchpad_path,
-            exit_signals,
         }),
         TierDecision::New => TodoTemplateContext::New(TodoNewContext {
             pinned_context,
@@ -87,7 +83,6 @@ pub fn build_template_context(
             companion_paths,
             implementation_notes,
             scratchpad_path,
-            exit_signals,
         }),
     }
 }
@@ -129,7 +124,6 @@ mod tests {
             companion_paths: vec![],
             implementation_notes: vec![],
             scratchpad_path: "/workspace/.wrapix/loom/scratch/alpha/scratch.md".to_string(),
-            exit_signals: "LOOM_COMPLETE".to_string(),
         }
     }
 

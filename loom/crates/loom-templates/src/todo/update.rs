@@ -14,5 +14,4 @@ pub struct TodoUpdateContext {
     pub molecule_id: Option<MoleculeId>,
     pub implementation_notes: Vec<String>,
     pub scratchpad_path: String,
-    pub exit_signals: String,
 }

@@ -20,7 +20,6 @@ pub struct RunContextInputs {
     /// session. Embedded in the rendered prompt so the agent can write to
     /// the correct file under compaction recovery.
     pub scratchpad_path: String,
-    pub exit_signals: String,
     /// Workspace-relative path to the project's style-rules document. Pinned
     /// in the rendered prompt so the implementer reads applicable rules
     /// before writing code.
@@ -41,7 +40,6 @@ pub fn build_run_context(inputs: RunContextInputs) -> RunContext {
         description: Some(inputs.description),
         previous_failure: inputs.previous_failure.map(PreviousFailure::new),
         scratchpad_path: inputs.scratchpad_path,
-        exit_signals: inputs.exit_signals,
         style_rules: inputs.style_rules,
     }
 }
@@ -70,7 +68,6 @@ mod tests {
             description: "Per-bead loop".into(),
             previous_failure: None,
             scratchpad_path: "/workspace/.wrapix/loom/scratch/wx-3hhwq.15/scratch.md".into(),
-            exit_signals: "LOOM_COMPLETE".into(),
             style_rules: "docs/style-rules.md".into(),
         }
     }

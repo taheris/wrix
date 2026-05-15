@@ -157,13 +157,7 @@ pub fn run(workspace: &Path, opts: ChatOpts) -> Result<ChatReport, ChatError> {
         .to_string_lossy()
         .into_owned();
     let companion_paths = load_companion_paths(workspace, opts.spec_filter.as_ref(), &kept)?;
-    let ctx = build_msg_context(
-        String::new(),
-        companion_paths,
-        &kept,
-        scratchpad_path,
-        String::new(),
-    );
+    let ctx = build_msg_context(String::new(), companion_paths, &kept, scratchpad_path);
     let prompt_body = ctx.render().map_err(|e| ChatError::Render(e.to_string()))?;
 
     let banner = "loom msg --chat".to_string();

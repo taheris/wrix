@@ -245,10 +245,3 @@ When your review is complete, emit LOOM_COMPLETE. The orchestrator determines
 pass/fail by comparing bead counts before and after your review.
 
 {% include "partial/exit_signals.md" %}
-
-- `LOOM_COMPLETE` — Review finished. No payload.
-- `LOOM_BLOCKED` — Cannot proceed. Write the reason **before** the marker on
-  its own line(s); emit `LOOM_BLOCKED` as the final line with nothing after it.
-- `LOOM_CLARIFY` — Need human decision. Write the question **before** the
-  marker on its own line(s); emit `LOOM_CLARIFY` as the final line with
-  nothing after it.

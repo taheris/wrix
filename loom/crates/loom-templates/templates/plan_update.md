@@ -114,11 +114,3 @@ When updating the spec, use the Edit tool to modify `specs/{{ label }}.md`
 {% include "partial/interview_modes.md" %}
 
 {% include "partial/exit_signals.md" %}
-
-- `LOOM_COMPLETE` — Spec updated and committed. No payload.
-- `LOOM_BLOCKED` — Cannot proceed without more information. Write the reason
-  **before** the marker on its own line(s); emit `LOOM_BLOCKED` as the final
-  line with nothing after it.
-- `LOOM_CLARIFY` — Need clarification on something specific. Write the
-  question **before** the marker on its own line(s); emit `LOOM_CLARIFY` as
-  the final line with nothing after it.

@@ -99,8 +99,10 @@ You are a **Drafter with Researcher affordances**:
 
 {% include "partial/exit_signals.md" %}
 
-- `LOOM_COMPLETE` — Session finished. Partial progress is clean — remaining
-  clarifies persist for the next `loom msg` session. There is no `LOOM_BLOCKED`
-  (the user is in the room with you) and no `LOOM_CLARIFY` (the session's
-  purpose is *resolving* clarifies, not creating them; new clarifies belong to
-  the worker or reviewer templates).
+**Chat-session restrictions.** Emit `LOOM_COMPLETE` only. `LOOM_NOOP` does
+not apply — chat is not a worker phase. `LOOM_BLOCKED` does not apply — the
+user is in the room with you, so block-on-human is unnecessary. `LOOM_CLARIFY`
+does not apply either — this session's purpose is *resolving* clarifies, not
+creating them; new clarifies belong to the worker or reviewer templates.
+Partial progress is clean: remaining clarifies persist for the next
+`loom msg` session.

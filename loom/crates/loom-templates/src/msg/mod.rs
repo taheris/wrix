@@ -11,7 +11,6 @@ pub struct MsgContext {
     pub companion_paths: Vec<String>,
     pub clarify_beads: Vec<ClarifyBead>,
     pub scratchpad_path: String,
-    pub exit_signals: String,
 }
 
 /// A single outstanding `loom:clarify` bead surfaced to the drafter session.
