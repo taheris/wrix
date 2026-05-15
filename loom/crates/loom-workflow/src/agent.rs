@@ -24,7 +24,7 @@ use loom_driver::agent::{
 };
 use loom_driver::clock::{Clock, SystemClock};
 use loom_driver::logging::{BeadOutcome, LogSink};
-use loom_events::{EnvelopeBuilder, ParsedAgentEvent, Source};
+use loom_events::{DriverKind, EnvelopeBuilder, ParsedAgentEvent, Source};
 use tracing::{info, warn};
 
 use crate::run::SessionResult;
@@ -94,7 +94,7 @@ pub async fn run_agent_classified<B: AgentBackend>(
             emit_driver_event(
                 sink.as_mut(),
                 envelope_builder.as_mut(),
-                "container_spawn",
+                DriverKind::ContainerSpawn,
                 &format!(
                     "container spawn ok: {image} for {workspace}",
                     image = config.image_ref,
@@ -119,7 +119,7 @@ pub async fn run_agent_classified<B: AgentBackend>(
             emit_driver_event(
                 sink.as_mut(),
                 envelope_builder.as_mut(),
-                "infra_failure",
+                DriverKind::InfraFailure,
                 &format!("preflight infra failure: {error_str}"),
                 serde_json::json!({
                     "phase": "preflight",
@@ -320,7 +320,7 @@ fn finish_sink(sink: Option<LogSink>, outcome: BeadOutcome) {
 fn emit_driver_event(
     sink: Option<&mut LogSink>,
     builder: Option<&mut EnvelopeBuilder>,
-    kind: &str,
+    kind: DriverKind,
     summary: &str,
     payload: serde_json::Value,
 ) {
@@ -328,27 +328,28 @@ fn emit_driver_event(
         return;
     };
     let envelope = builder.build_with_source(Source::Driver);
+    let wire = kind.as_wire().to_string();
     let event = AgentEvent::DriverEvent {
         envelope,
-        driver_kind: kind.to_string(),
+        driver_kind: kind,
         summary: summary.to_string(),
         payload,
     };
     if let Err(e) = sink.emit(&event) {
-        warn!(error = %e, kind, "driver event emit failed");
+        warn!(error = %e, kind = %wire, "driver event emit failed");
     }
 }
 
-/// Classify a mid-session failure string into a `driver_kind`. OOM signals
+/// Classify a mid-session failure string into a [`DriverKind`]. OOM signals
 /// (exit 137 from the container's SIGKILL, "Killed" / "OOM" in the
-/// rendered error) surface as `container_oom`; everything else lands in
-/// the generic `infra_failure` bucket per the verdict-gate spec's
+/// rendered error) surface as `ContainerOom`; everything else lands in
+/// the generic `InfraFailure` bucket per the verdict-gate spec's
 /// container-lifecycle row.
-fn midsession_failure_kind(error: &str) -> &'static str {
+fn midsession_failure_kind(error: &str) -> DriverKind {
     if is_oom_error(error) {
-        "container_oom"
+        DriverKind::ContainerOom
     } else {
-        "infra_failure"
+        DriverKind::InfraFailure
     }
 }
 
@@ -370,11 +371,12 @@ fn emit_midsession_failure_event(
     error: &str,
 ) {
     let kind = midsession_failure_kind(error);
+    let summary = format!("mid-session {kind}: {error}");
     emit_driver_event(
         sink,
         builder,
         kind,
-        &format!("mid-session {kind}: {error}"),
+        &summary,
         serde_json::json!({
             "phase": "midsession",
             "error": error,
@@ -433,7 +435,10 @@ fn summarize_event(event: &AgentEvent) -> String {
             driver_kind,
             summary,
             ..
-        } => format!("driver_event {driver_kind}: {summary}"),
+        } => format!(
+            "driver_event {kind}: {summary}",
+            kind = driver_kind.as_wire()
+        ),
     }
 }
 
@@ -466,11 +471,11 @@ mod tests {
     fn midsession_failure_kind_routes_oom_versus_generic_infra() {
         assert_eq!(
             midsession_failure_kind("agent process exited with code 137"),
-            "container_oom",
+            DriverKind::ContainerOom,
         );
         assert_eq!(
             midsession_failure_kind("unexpected end of agent event stream"),
-            "infra_failure",
+            DriverKind::InfraFailure,
         );
     }
 
@@ -507,7 +512,7 @@ mod tests {
         emit_driver_event(
             Some(&mut sink),
             Some(&mut b),
-            "container_spawn",
+            DriverKind::ContainerSpawn,
             "container spawn ok: img:tag",
             serde_json::json!({"image_ref": "img:tag"}),
         );
@@ -528,14 +533,14 @@ mod tests {
         emit_driver_event(
             None,
             Some(&mut b),
-            "container_spawn",
+            DriverKind::ContainerSpawn,
             "no sink",
             serde_json::json!({}),
         );
         emit_driver_event(
             Some(&mut sink),
             None,
-            "container_spawn",
+            DriverKind::ContainerSpawn,
             "no builder",
             serde_json::json!({}),
         );

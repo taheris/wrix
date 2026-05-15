@@ -1,5 +1,6 @@
 use loom_driver::bd::{Bead, Label};
 use loom_driver::identifier::BeadId;
+use loom_events::DriverKind;
 
 use super::error::CheckError;
 use super::iteration::IterationCap;
@@ -84,7 +85,13 @@ pub trait CheckController: Send {
     /// here. Production callers thread an `EnvelopeBuilder` (R1) for
     /// the live envelope; the default impl is a no-op so test fakes
     /// that don't care about event emission keep working.
-    fn emit_driver_event(&mut self, _kind: &str, _summary: &str, _payload: serde_json::Value) {}
+    fn emit_driver_event(
+        &mut self,
+        _kind: DriverKind,
+        _summary: &str,
+        _payload: serde_json::Value,
+    ) {
+    }
 }
 
 /// What the reviewer agent produced. The driver only branches on
@@ -207,7 +214,7 @@ async fn apply_verdict<C: CheckController>(
     // and the verdict-application sequence below. The four kind-
     // specific events follow per the spec table in E1.
     controller.emit_driver_event(
-        "push_gate_walk",
+        DriverKind::PushGateWalk,
         "push gate evaluating verdict",
         serde_json::json!({"verdict": verdict_label(&verdict)}),
     );
@@ -216,14 +223,14 @@ async fn apply_verdict<C: CheckController>(
     // verdict table see one row per check-loop run regardless of which
     // push_gate_* branch follows.
     controller.emit_driver_event(
-        "verdict_gate",
+        DriverKind::VerdictGate,
         &format!("verdict gate → {}", verdict_label(&verdict)),
         serde_json::json!({"outcome": verdict_label(&verdict)}),
     );
     match verdict {
         CheckVerdict::Clean => {
             controller.emit_driver_event(
-                "push_gate_clean",
+                DriverKind::PushGateClean,
                 "verdict clean — pushing code + beads, resetting iteration counter",
                 serde_json::json!({}),
             );
@@ -237,7 +244,7 @@ async fn apply_verdict<C: CheckController>(
             clarify_ids,
         } => {
             controller.emit_driver_event(
-                "push_gate_refuse",
+                DriverKind::PushGateRefuse,
                 "verdict push-blocked — molecule beads carry loom:blocked or loom:clarify",
                 serde_json::json!({
                     "blocked_ids": blocked_ids.iter().map(|b| b.to_string()).collect::<Vec<_>>(),
@@ -254,7 +261,7 @@ async fn apply_verdict<C: CheckController>(
             new_bead_ids,
         } => {
             controller.emit_driver_event(
-                "push_gate_walk",
+                DriverKind::PushGateWalk,
                 "verdict auto-iterate — fix-up beads detected, re-entering loom run",
                 serde_json::json!({
                     "next_iteration": next_iteration,
@@ -274,7 +281,7 @@ async fn apply_verdict<C: CheckController>(
                 "Iteration cap ({cap_value}) reached: review kept finding fix-up work. Human input needed before resuming."
             );
             controller.emit_driver_event(
-                "push_gate_exhausted",
+                DriverKind::Other("push_gate_exhausted".to_string()),
                 "verdict cap-reached — escalating to clarify",
                 serde_json::json!({
                     "escalate_id": escalate_id.to_string(),
@@ -382,9 +389,14 @@ mod tests {
             Ok(())
         }
 
-        fn emit_driver_event(&mut self, kind: &str, summary: &str, payload: serde_json::Value) {
+        fn emit_driver_event(
+            &mut self,
+            kind: DriverKind,
+            summary: &str,
+            payload: serde_json::Value,
+        ) {
             self.driver_events
-                .push((kind.to_string(), summary.to_string(), payload));
+                .push((kind.as_wire().to_string(), summary.to_string(), payload));
         }
     }
 

@@ -17,4 +17,4 @@
 pub mod event;
 pub mod identifier;
 
-pub use event::{AgentEvent, EnvelopeBuilder, EventEnvelope, ParsedAgentEvent, Source};
+pub use event::{AgentEvent, DriverKind, EnvelopeBuilder, EventEnvelope, ParsedAgentEvent, Source};

@@ -7,8 +7,8 @@ use serde_json::Value;
 use crate::clock::{Clock, SystemClock};
 use crate::in_place::CLEAR_TO_EOL;
 use crate::tool_body;
-use loom_events::AgentEvent;
 use loom_events::identifier::{BeadId, ProfileName, ToolCallId};
+use loom_events::{AgentEvent, DriverKind};
 
 /// Final outcome of a bead spawn — drives the closing line color and glyph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -567,10 +567,21 @@ impl TerminalRenderer {
                 ..
             } => {
                 self.close_in_flight("…")?;
+                let kind_wire = match driver_kind {
+                    DriverKind::VerdictGate
+                    | DriverKind::RetryDispatch
+                    | DriverKind::PushGateWalk
+                    | DriverKind::PushGateRefuse
+                    | DriverKind::PushGateClean
+                    | DriverKind::ContainerSpawn
+                    | DriverKind::ContainerOom
+                    | DriverKind::InfraFailure => driver_kind.as_wire(),
+                    DriverKind::Other(name) => name.as_str(),
+                };
                 let line = if self.parallel {
-                    format!("  [{}] → {driver_kind}: {summary}\n", self.bead_id.as_str(),)
+                    format!("  [{}] → {kind_wire}: {summary}\n", self.bead_id.as_str(),)
                 } else {
-                    format!("  → {driver_kind}: {summary}\n")
+                    format!("  → {kind_wire}: {summary}\n")
                 };
                 self.out.write_all(line.as_bytes())?;
                 self.out.flush()?;
@@ -1747,7 +1758,7 @@ mod tests {
                 source: loom_events::Source::Driver,
                 ..sample_envelope()
             },
-            driver_kind: kind.to_string(),
+            driver_kind: DriverKind::from_wire(kind),
             summary: summary.to_string(),
             payload,
         }

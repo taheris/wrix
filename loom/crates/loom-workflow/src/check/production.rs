@@ -35,7 +35,7 @@ use loom_driver::logging::{BeadOutcome, LogSink};
 use loom_driver::profile_manifest::ProfileImageManifest;
 use loom_driver::scratch::resolve_scratch_key;
 use loom_driver::state::StateDb;
-use loom_events::{AgentEvent, EnvelopeBuilder, Source};
+use loom_events::{AgentEvent, DriverKind, EnvelopeBuilder, Source};
 use loom_templates::check::CheckContext;
 use tokio::process::Command;
 use tracing::{info, warn};
@@ -321,7 +321,7 @@ where
         Ok(())
     }
 
-    fn emit_driver_event(&mut self, kind: &str, summary: &str, payload: serde_json::Value) {
+    fn emit_driver_event(&mut self, kind: DriverKind, summary: &str, payload: serde_json::Value) {
         // R7 (wx-r9tmc) — open a transient LogSink at the same phase
         // log path the reviewer agent's sink uses (same `when`, same
         // `phase_log_root`, no renderer), write one `DriverEvent`,
@@ -372,7 +372,7 @@ where
         drop(guard);
         let event = AgentEvent::DriverEvent {
             envelope,
-            driver_kind: kind.to_string(),
+            driver_kind: kind,
             summary: summary.to_string(),
             payload,
         };

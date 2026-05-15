@@ -1,5 +1,6 @@
 use loom_driver::bd::Bead;
 use loom_driver::identifier::BeadId;
+use loom_events::DriverKind;
 
 use super::error::RunError;
 use super::outcome::{AgentOutcome, BeadResult};
@@ -108,7 +109,13 @@ pub trait AgentLoopController: Send {
     /// after a recoverable failure; production controllers thread an
     /// envelope builder + phase log sink, while test fakes default to a
     /// no-op so most call sites stay terse.
-    fn emit_driver_event(&mut self, _kind: &str, _summary: &str, _payload: serde_json::Value) {}
+    fn emit_driver_event(
+        &mut self,
+        _kind: DriverKind,
+        _summary: &str,
+        _payload: serde_json::Value,
+    ) {
+    }
 }
 
 /// Stable cause string for an agent self-reported `LOOM_BLOCKED`. Pinned at
@@ -206,7 +213,7 @@ async fn process_one_bead<C: AgentLoopController>(
                 } => {
                     retries_used += 1;
                     controller.emit_driver_event(
-                        "retry_dispatch",
+                        DriverKind::RetryDispatch,
                         &format!(
                             "retry dispatch — attempt {retries_used}/{max} for bead {bead_id}",
                             max = policy.max_retries,
@@ -321,9 +328,14 @@ mod tests {
             Ok(())
         }
 
-        fn emit_driver_event(&mut self, kind: &str, summary: &str, payload: serde_json::Value) {
+        fn emit_driver_event(
+            &mut self,
+            kind: DriverKind,
+            summary: &str,
+            payload: serde_json::Value,
+        ) {
             self.driver_events
-                .push((kind.to_string(), summary.to_string(), payload));
+                .push((kind.as_wire().to_string(), summary.to_string(), payload));
         }
     }
 

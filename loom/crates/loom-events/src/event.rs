@@ -1,6 +1,87 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::identifier::{BeadId, MoleculeId, ProfileName, SpecLabel, ToolCallId};
+
+/// Driver-side event subtype carried on [`AgentEvent::DriverEvent`].
+///
+/// On the wire `driver_kind` is a snake_case string for forward
+/// compatibility — older consumers see unknown kinds as
+/// [`DriverKind::Other`] rather than failing deserialization. Producers
+/// pass the enum, so they cannot typo a known kind; consumers match
+/// exhaustively over the spec-enumerated arms with a single catch-all
+/// `Other` for additive growth.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DriverKind {
+    VerdictGate,
+    RetryDispatch,
+    PushGateWalk,
+    PushGateRefuse,
+    PushGateClean,
+    ContainerSpawn,
+    ContainerOom,
+    InfraFailure,
+    /// Forward-compat fallback: any wire `driver_kind` string that does
+    /// not match a known variant lands here. Known variants never fall
+    /// through.
+    Other(String),
+}
+
+impl DriverKind {
+    /// Snake_case wire representation. `Other` round-trips the carried
+    /// string verbatim so unknown producers stay legible in JSONL logs.
+    pub fn as_wire(&self) -> &str {
+        match self {
+            DriverKind::VerdictGate => "verdict_gate",
+            DriverKind::RetryDispatch => "retry_dispatch",
+            DriverKind::PushGateWalk => "push_gate_walk",
+            DriverKind::PushGateRefuse => "push_gate_refuse",
+            DriverKind::PushGateClean => "push_gate_clean",
+            DriverKind::ContainerSpawn => "container_spawn",
+            DriverKind::ContainerOom => "container_oom",
+            DriverKind::InfraFailure => "infra_failure",
+            DriverKind::Other(s) => s.as_str(),
+        }
+    }
+
+    /// Parse a wire string into the enum. Known variants take precedence
+    /// over `Other`; unknown strings land in `Other`.
+    pub fn from_wire(s: &str) -> Self {
+        match s {
+            "verdict_gate" => DriverKind::VerdictGate,
+            "retry_dispatch" => DriverKind::RetryDispatch,
+            "push_gate_walk" => DriverKind::PushGateWalk,
+            "push_gate_refuse" => DriverKind::PushGateRefuse,
+            "push_gate_clean" => DriverKind::PushGateClean,
+            "container_spawn" => DriverKind::ContainerSpawn,
+            "container_oom" => DriverKind::ContainerOom,
+            "infra_failure" => DriverKind::InfraFailure,
+            other => DriverKind::Other(other.to_string()),
+        }
+    }
+}
+
+impl std::fmt::Display for DriverKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_wire())
+    }
+}
+
+impl Serialize for DriverKind {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_wire())
+    }
+}
+
+impl<'de> Deserialize<'de> for DriverKind {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        // `Cow<str>` borrows zero-copy from a `&str`-backed deserializer
+        // (the JSONL streaming case) and owns the bytes when the
+        // deserializer can only supply a `String` (e.g.
+        // `serde_json::from_value`). Either path lands in `from_wire`.
+        let s = std::borrow::Cow::<'_, str>::deserialize(d)?;
+        Ok(DriverKind::from_wire(&s))
+    }
+}
 
 /// Common envelope every [`AgentEvent`] carries. Serialized flat at the
 /// top level via `#[serde(flatten)]` — consumers see one discriminator
@@ -220,14 +301,15 @@ pub enum AgentEvent {
 
     /// Driver-side catch-all for events the workflow engine emits about
     /// its own behavior (verdict gate decisions, push gate walks, infra
-    /// failures). `driver_kind` is a free-form string so adding new
-    /// driver event types is additive on the wire — no `schema_version`
-    /// bump required. Renderers dispatch on `driver_kind`; unknown
-    /// kinds fall through to `→ <driver_kind>: <summary>`.
+    /// failures). [`DriverKind`] keeps the wire string forward-compatible
+    /// — unknown kinds deserialize to [`DriverKind::Other`] rather than
+    /// failing — while still giving consumers an exhaustive `match` over
+    /// the spec-enumerated arms. Renderers dispatch on the variant;
+    /// `Other` falls through to `→ <driver_kind>: <summary>`.
     DriverEvent {
         #[serde(flatten)]
         envelope: EventEnvelope,
-        driver_kind: String,
+        driver_kind: DriverKind,
         summary: String,
         payload: serde_json::Value,
     },
@@ -763,7 +845,7 @@ mod tests {
                 .unwrap_or_else(|e| panic!("driver_event with kind={kind} failed: {e}"));
             match event {
                 AgentEvent::DriverEvent { driver_kind, .. } => {
-                    assert_eq!(driver_kind, kind);
+                    assert_eq!(driver_kind.as_wire(), kind);
                 }
                 other => panic!("expected DriverEvent, got {other:?}"),
             }
@@ -811,7 +893,7 @@ mod tests {
                     summary,
                     ..
                 } => {
-                    assert_eq!(driver_kind, kind);
+                    assert_eq!(driver_kind.as_wire(), kind);
                     assert_eq!(
                         envelope.source,
                         Source::Driver,
@@ -858,6 +940,40 @@ mod tests {
         let next_agent = b.build();
         assert_eq!(next_agent.source, Source::Agent);
         assert_eq!(next_agent.seq, 2);
+    }
+
+    /// RS-17 — every spec-enumerated wire string maps to its known
+    /// `DriverKind` variant and round-trips back to the same wire string.
+    /// Unknown strings deserialize to `DriverKind::Other` so additive
+    /// growth on the producer side never breaks older consumers.
+    #[test]
+    fn driver_kind_round_trips_known_and_unknown_wire_strings() {
+        let known = [
+            ("verdict_gate", DriverKind::VerdictGate),
+            ("retry_dispatch", DriverKind::RetryDispatch),
+            ("push_gate_walk", DriverKind::PushGateWalk),
+            ("push_gate_refuse", DriverKind::PushGateRefuse),
+            ("push_gate_clean", DriverKind::PushGateClean),
+            ("container_spawn", DriverKind::ContainerSpawn),
+            ("container_oom", DriverKind::ContainerOom),
+            ("infra_failure", DriverKind::InfraFailure),
+        ];
+        for (wire, variant) in known {
+            assert_eq!(DriverKind::from_wire(wire), variant);
+            assert_eq!(variant.as_wire(), wire);
+            let json = serde_json::to_string(&variant).expect("ser");
+            let back: DriverKind = serde_json::from_str(&json).expect("de");
+            assert_eq!(back, variant);
+        }
+        let unknown = DriverKind::from_wire("push_gate_exhausted");
+        assert_eq!(
+            unknown,
+            DriverKind::Other("push_gate_exhausted".to_string()),
+        );
+        let json = serde_json::to_string(&unknown).expect("ser");
+        assert_eq!(json, "\"push_gate_exhausted\"");
+        let back: DriverKind = serde_json::from_str(&json).expect("de");
+        assert_eq!(back, unknown);
     }
 
     /// `AgentEvent::from_parsed` joins each `ParsedAgentEvent` variant
