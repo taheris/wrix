@@ -31,10 +31,12 @@ Verdict Gate sections below.
 
 ### Functional
 
-1. **Command set** — workflow commands implementing the loom phases,
-   plus a small set of auxiliary state / log management commands:
+1. **Command set** — commands fall into three groups that MUST be
+   rendered as separate sections under those headings in
+   `loom --help` output (in this order). Order within each group is
+   as listed.
 
-   **Workflow commands (driver phases):**
+   **Workflow** — the loom loop, in execution order:
    - `loom plan` — spec interview (interactive agent session); flags
      `-n <label>` for a new spec and `-u <label>` for updating an existing
      one. No hidden-spec flag: scratch / private specs are kept out of
@@ -57,25 +59,35 @@ Verdict Gate sections below.
      former `loom doctor` command. See
      [loom-gate.md](loom-gate.md) for the gate's semantics.
    - `loom review` — LLM-judged review rubric (conformance trace,
-     contract closure, verifier honesty, mock discipline, invariant
-     clashes). Scope flags: `--bead <id>`, `--diff <range>`, `--tree`.
-     Reads `loom check` results as input; runs only after `loom
-     check` passes the same scope. See [loom-gate.md](loom-gate.md)
-     for the rubric.
+     contract closure, style-rule conformance, verifier honesty, mock
+     discipline, invariant clashes). Scope flags: `--bead <id>`,
+     `--diff <range>`, `--tree`. Reads `loom check` results as input;
+     runs only after `loom check` passes the same scope. See
+     [loom-gate.md](loom-gate.md) for the rubric.
    - `loom msg` — clarify resolution
-   - `loom spec` — query spec annotations; supports `--deps` to print
-     nixpkgs required by the spec's `[verify]` / `[judge]` test files
 
-   **Auxiliary commands (state / log management):**
-   - `loom init` — create `.wrapix/loom/` config + state DB; `--rebuild`
-     repopulates the state DB from `specs/*.md` and active beads
+   **Inspection** — read-only views over state and logs:
    - `loom status` — print active spec, current molecule, iteration count
      (trivial state DB query)
-   - `loom use <label>` — set `current_spec` in the state DB; `loom status`
-     reads it back
    - `loom logs` — pretty-render a bead's JSONL log under
      `.wrapix/loom/logs/` via the same `AgentEvent` renderer used by
      `loom run`. Full flag set in [Logs UX](#logs-ux).
+   - `loom spec` — query spec annotations; supports `--deps` to print
+     nixpkgs required by the spec's `[verify]` / `[judge]` test files
+
+   **State** — workspace lifecycle and persisted state:
+   - `loom init` — create `.wrapix/loom/` config + state DB; `--rebuild`
+     repopulates the state DB from `specs/*.md` and active beads
+   - `loom use <label>` — set `current_spec` in the state DB; `loom status`
+     reads it back
+   - `loom note` — manage spec notes
+
+   The single-line help text for every command follows CLI-1: one
+   short sentence describing current behavior, no implementation
+   details / migration history / decision references / bead ids.
+   `loom doctor` does **not** appear in the binary — it was folded
+   into `loom check --check=<name>` and its absence is part of the
+   surface area.
 
 2. **Compiled templates** — Askama engine, per-phase templates, partials,
    and per-phase pinning policy live in
@@ -127,16 +139,23 @@ Verdict Gate sections below.
 ### Non-Functional
 
 1. **Rust style** — all loom crates follow
-   [`docs/style-rules.md`](../docs/style-rules.md) RS-1..RS-16: workspace
-   deps, workspace-root lint config (`[workspace.lints.*]` + `clippy.toml`),
-   `thiserror` + `displaydoc` error enums, nested module structure,
-   parse-don't-validate at boundaries, newtypes for IDs, no
-   `derive(From)`/`derive(Into)` on newtypes, no panicking macros (incl.
-   `unreachable!()`), no silent error swallows, no sentinel newtypes,
-   `Default` only when the zero-value is safe, no test-fixture shape in
+   [`docs/style-rules.md`](../docs/style-rules.md) RS-1..RS-17 plus
+   COM-1..COM-3 and CLI-1: workspace deps, workspace-root lint config
+   (`[workspace.lints.*]` + `clippy.toml`), `thiserror` + `displaydoc`
+   error enums, nested module structure, parse-don't-validate at
+   boundaries, newtypes for IDs, no `derive(From)`/`derive(Into)` on
+   newtypes, no panicking macros (incl. `unreachable!()`), no silent
+   error swallows, no placeholder/sentinel values in production data
+   types (RS-12 — applies to newtypes, structs, and enums alike),
+   `Default` only when the zero-value is safe (RS-13 — named-placeholder
+   constructors are `#[cfg(test)]`-only), no test-fixture shape in
    production trait impls, structured `tracing` logging, avoid stutter
-   naming. Per-site `#[expect(...)]` requires a substantive
-   `reason = "..."` (RS-3).
+   naming, enums for closed sets (RS-17 — `Other(String)` fallback
+   permitted for wire-additive cases such as `driver_kind`), no
+   multi-line body comments / no doc comments that describe
+   implementation / no volatile coordinates in comments (COM-1..COM-3),
+   CLI help text is one short sentence (CLI-1). Per-site
+   `#[expect(...)]` requires a substantive `reason = "..."` (RS-3).
 2. **Required newtypes** — `BeadId`, `SpecLabel`, `MoleculeId`,
    `ProfileName` for domain identifiers; `SessionId`, `ToolCallId`,
    `RequestId` for protocol identifiers. No bare `String` for typed IDs.
@@ -450,7 +469,7 @@ generic `<name>  <truncated args>` row.
 | `Write` | `<repo-relative-path>   +<lines>   new file` | first 10 lines | full content |
 | `Grep` | `"<pattern>" in <path>   <N> files` | first 10 matches | full matches |
 | `Glob` | `"<pattern>" in <path>   <N> files` | first 10 paths | full list |
-| `Bash` | `<command-truncated>   <duration> <✓|✗ exit=N>` | first 10 stdout/stderr lines | full output |
+| `Bash` | `<command>   <duration> <✓|✗ exit=N>` | hidden on `exit == 0`; first 10 stdout/stderr lines on `exit != 0` | full output |
 | `WebFetch` | `<url>   <bytes> <duration> <✓|✗>` | first 10 lines of response | full body |
 | `WebSearch` | `"<query>"   <N> results` | first 10 result titles | full list |
 | `Task` | `<description>   [agent:<subagent-type>]   <duration> <✓|✗>` | nested events at deeper indent | nested events at deeper indent |
@@ -461,6 +480,14 @@ hits first. The cap line names the recovery: `[N more lines — loom logs -b
 terminal hard-truncate at terminal width with `…`; bash output that's
 truncated upstream (`bashExecution.truncated` from pi-mono) surfaces the
 flag verbatim, never re-truncated.
+
+**Summary-cell overflow.** Every summary cell carries a right-edge
+column (duration + status glyph + optional `exit=N`). When the
+left-edge content (command, path, query, etc.) fits, it shares the
+line. When it doesn't fit, the right-edge column renders alone on
+the first line and the full left-edge content wraps onto a single
+indented continuation line beneath it. The right-edge column is
+never overrun — duration / status must remain visible.
 
 **Subagent (`Task`) tool nesting.** When the agent calls `Task`, the
 nested session's events render under the parent with two extra indent
@@ -671,14 +698,18 @@ the renderer is one indent computation, not a state-machine inference.
   "iteration": 2, "ts_ms": 1746715929123, "seq": 99 }
 ```
 
-`driver_kind` (e.g. `verdict_gate`, `retry_dispatch`, `push_gate_walk`,
-`push_gate_refuse`, `push_gate_clean`, `container_spawn`,
-`container_oom`, `infra_failure`) is a free-form string. Adding new
-driver event types is **additive on the wire** — no `schema_version`
-bump required. The renderer dispatches on `driver_kind`; unknown kinds
-fall through to a generic `→ <driver_kind>: <summary>` line. `summary`
-is always present so even unknown driver events render meaningfully;
-`payload` is a structured `serde_json::Value` for typed consumers.
+`driver_kind` is a **string on the wire** (e.g. `verdict_gate`,
+`retry_dispatch`, `push_gate_walk`, `push_gate_refuse`,
+`push_gate_clean`, `container_spawn`, `container_oom`,
+`infra_failure`) and a **Rust enum** (`DriverKind`) in the
+`loom-events` API per RS-17 — see the DriverKind paragraph below
+("**`driver_kind` is a Rust enum (RS-17).**") for the type-level rules.
+Adding a new producing variant is additive on the wire: older
+consumers deserialize the unknown string as `DriverKind::Other(...)`
+and the renderer falls through to a generic `→ <driver_kind>:
+<summary>` line. No `schema_version` bump. `summary` is always
+present so even unknown driver events render meaningfully; `payload`
+is a structured `serde_json::Value` for typed consumers.
 
 **Schema versioning.**
 
@@ -708,6 +739,32 @@ JSONL files back through the same enum it writes, and the renderer is
 the same code path live or replay. No second formatter, no drift. ID
 newtypes (`BeadId`, `MoleculeId`, `ToolCallId`) live in `loom-events`,
 all `#[serde(transparent)]` over `String`.
+
+**Parser-to-stamper split (RS-12).** The parser layer cannot see the
+live bead / molecule / iteration context, so it does not construct
+`AgentEvent` directly — it emits a sibling type `ParsedAgentEvent`
+that carries only what the parser knows (the variant payload plus
+parser-derived fields like `parent_tool_call_id`). The session layer
+is the **only** constructor of `AgentEvent`: it takes a
+`ParsedAgentEvent` plus the per-spawn `Envelope` (bead id, molecule
+id, iteration, source, ts_ms, seq) and produces an `AgentEvent`. The
+compiler then makes "unstamped event reaches a consumer"
+unrepresentable.
+
+No placeholder constructor on `AgentEvent`, on its envelope fields,
+or on `BeadId` — every value of these types is fully valid. Test
+fixtures use `AgentEvent::from_parsed(parsed, envelope)` with
+`#[cfg(test)]`-only sample envelopes.
+
+**`driver_kind` is a Rust enum (RS-17).** On the wire `driver_kind`
+stays a string for forward compatibility, but the Rust API uses an
+enum (`DriverKind::VerdictGate`, `DriverKind::RetryDispatch`,
+`DriverKind::PushGateWalk`, …) with a `DriverKind::Other(String)`
+fallback arm captured via `#[serde(other)]` (or equivalent). Adding
+a new variant on the producing side is additive on the wire (older
+consumers see `Other`); deserializing a known variant never falls
+through. Producers cannot typo a kind; consumers get exhaustive
+`match` over the known set.
 
 **`loom-events` dependencies — three crates total.**
 `serde` + `serde_json` + `thiserror`. No `chrono` (timestamps are `i64`

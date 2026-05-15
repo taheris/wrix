@@ -32,15 +32,13 @@ silently swallowed poison. None of those were mysterious bugs; they
 were the predictable output of a review surface that had no
 consolidated job description.
 
-The empirical case for consolidation (Rothrock 2026, 5,109 gate
-checks across a 97-day autonomous-development study): omissions
-account for ~49% of rejected work — roughly 4× more common than
-incoherence and more common than systematic errors. File-scoped
-review detects 0% of cross-file incoherence. Coherence-only or
-file-scoped gates structurally cannot catch the dominant failure
-modes. The loom review surface before this spec was both
-coherence-only *and* file-scoped — which exactly predicted the bugs
-above.
+The case for consolidation: omissions are the dominant failure mode
+in autonomous development — more common than incoherence, more
+common than systematic errors. File-scoped review detects none of
+the cross-file incoherence. Coherence-only or file-scoped gates
+structurally cannot catch the dominant failure modes. The loom review
+surface before this spec was both coherence-only *and* file-scoped —
+which exactly predicted the bugs above.
 
 This spec gives one place one responsibility: catch divergences before
 they ship.
@@ -175,10 +173,9 @@ the rubric inline during the planning interview, and `loom plan` is
 the surface that opens that interview. The other two stages compose
 `loom check` and `loom review` as listed.
 
-The standing stage is **non-optional**. Per Rothrock 2026, file-scoped
-review catches 0% of cross-file incoherence; without project-scoped
-review, the dominant cross-component failure mode is structurally
-invisible.
+The standing stage is **non-optional**. File-scoped review catches
+0% of cross-file incoherence; without project-scoped review, the
+dominant cross-component failure mode is structurally invisible.
 
 ### Plan-stage checks
 
@@ -241,8 +238,9 @@ Rubric checks:
 
 | Check | Dimension | Lane | Flag cause |
 |---|---|---|---|
-| **Conformance trace** — for every claim in touched spec sections, find a true code path (verifier-pass *or* LLM trace through current code) | Conformance | Hard fail | `spec-coherence-fail: <claim>` |
+| **Conformance trace** — for every claim in touched spec sections, find a true code path (verifier-pass *or* LLM trace through current code). Scope includes the *full* touched spec sections — command-set tables, interface specs, decision tables, prose constraints — not only the bullets a diff line maps to. | Conformance | Hard fail | `spec-coherence-fail: <claim>` |
 | **Contract closure** — for every multi-component contract the diff touches, verify completion in this diff or in bonded sibling diffs | Conformance | Hard fail | `orphan-integration: <contract>` |
+| **Style-rule conformance** — diff complies with every rule in `docs/style-rules.md` that linters cannot enforce mechanically (e.g. RS-12, RS-13, RS-17, COM-1..3, CLI-1); judge cites rule id + file/line for each violation. | Style | Hard fail | `style-rule-violation: <rule-id>` |
 | **Verifier honesty** — each `[verify]` the diff adds/modifies must support the claim it cites (no tautology, no mocking the thing under test) | Test quality | Hard fail | `tautological-assert: <test>` / `dishonest-verifier: <test>` |
 | **Mock discipline** — mocks have a discernible reason; mock isn't the thing under test | Test quality | Hard fail | `mock-discipline: <test>` |
 | **Cross-component verifier sufficiency** — multi-component contracts need a verifier that exercises the seam, not one side | Test quality | Hard fail | `verifier-too-narrow: <criterion>` |
@@ -250,6 +248,14 @@ Rubric checks:
 | **Scope appropriateness** — diff matches bead's intent and stays close to `## Affected Files` | Conformance | Hard fail | `scope-creep` / `scope-shortfall` |
 | **`[judge]` rubrics** — work satisfies each LLM-judgement criterion on the bead | Conformance | Hard fail | `judge-flag: <criterion>` |
 | **Invariant clash** — for each touched spec section (anchor + sibling), scan for load-bearing invariants the diff contradicts | (cross-cutting) | **Clarify** (three paths) | `invariant-clash: <invariant>` |
+
+The style-rule-conformance check is the load-bearing defense for any
+rule that cannot be expressed as a clippy / lint pattern. Most rules
+in `docs/style-rules.md` are prose; the LLM judge is what enforces
+them. The rubric requires walking the document concretely — for every
+rule, the judge either finds the supporting code or flags the
+violation with the rule id. "Style looks fine" is not an acceptable
+answer; the output must enumerate which rules were checked.
 
 Verdict: any hard-fail flag → recovery loop. Invariant-clash flag →
 `loom:clarify` on the flagged bead. The clarified bead is skipped by
@@ -376,10 +382,9 @@ Per-stage flag handling:
   blank scratchpad; receives the spec, the bead's criteria, the
   cumulative `previous_failure`, and the current state of the
   worktree — but *not* the prior session's transcript or in-memory
-  context. Rationale: Rothrock 2026 (see *Empirical grounding*
-  below) measured same-agent retry at 31.5% recovery rate (54.8%
-  re-fail); the final attempt gets failure evidence without the
-  failed approach. Invariant clashes raise `loom:clarify` on the
+  context. Rationale: same-agent retry has a low recovery rate
+  and a high re-fail rate; the final attempt gets failure evidence
+  without the failed approach. Invariant clashes raise `loom:clarify` on the
   flagged bead; that bead is skipped by `bd ready` on subsequent
   ticks while non-dependent beads in the molecule continue running.
   `loom msg` resolves the clarify. Clashes never trigger fresh-agent
@@ -404,24 +409,22 @@ The gate enforces; it does not own:
 - The `loom:clarify` resolution channel itself — `loom msg` is the
   surface, defined in [loom-harness.md](loom-harness.md) Msg Modes.
 
-## Empirical grounding
+## Design rationale
 
-Rothrock 2026, *Gate Analysis* (5,109 gate checks across a 97-day
-autonomous-development study), provides the empirical backbone for
-several design choices:
+Empirical observations from this project's autonomous development
+runs inform several design choices:
 
-- **Omissions dominate** — ~49% of rejected work is omission, ~4× more
-  common than incoherence (13%) and more common than systematic errors
-  (38%). The gate must check completeness explicitly, not just
-  coherence. → Invariant 1 (multi-component contracts), Standing stage.
-- **File-scoped review is blind to cross-file errors** — 0% incoherence
-  detection. → Standing stage is non-optional; per-diff alone is
-  insufficient.
-- **Plan-stage has highest rejection rate (~61%) and highest ROI** —
-  errors caught before code exists are cheapest. → Plan stage is a
-  first-class gate, not implicit.
-- **Revision-cycle is the weakest link** — only 31.5% of rejected work
-  passes on retry; 54.8% re-fails. → Recovery bounds iterations at
+- **Omissions dominate** — omissions are the most common failure mode,
+  more common than incoherence or systematic errors. The gate must
+  check completeness explicitly, not just coherence. → Invariant 1
+  (multi-component contracts), Standing stage.
+- **File-scoped review is blind to cross-file errors** — per-file
+  review misses cross-file incoherence entirely. → Standing stage is
+  non-optional; per-diff alone is insufficient.
+- **Plan-stage has highest ROI** — errors caught before code exists
+  are cheapest. → Plan stage is a first-class gate, not implicit.
+- **Same-agent retry is weak** — same-agent retry has a low recovery
+  rate and high re-fail rate. → Recovery bounds iterations at
   `[loop] max_iterations` (default 3); iteration 3 is a fresh agent
   rather than same-agent retry.
 - **Trust ledger framing** — gate runs are trust evidence, not

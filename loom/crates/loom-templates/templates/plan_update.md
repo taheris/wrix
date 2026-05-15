@@ -65,14 +65,25 @@ dropped and no new note belongs).
    - How does it relate to existing functionality?
    - What are the success criteria for the new work?
    - Does the change cross-cut any sibling specs in `specs/`?
-3. Before committing a change, perform the **Invariant-Clash Awareness** scan
-   described below against the anchor **and any touched sibling specs**; pause
-   the interview if a potential clash is found
+3. Before applying a change to the spec, perform the **Invariant-Clash
+   Awareness** scan described below against the anchor **and any touched
+   sibling specs**; pause the interview if a potential clash is found
 4. When requirements are clear and no unresolved clashes remain, edit
    `specs/{{ label }}.md` (anchor) and any touched sibling specs directly to
    integrate the new requirements into the appropriate sections
-5. Commit the anchor and every touched sibling spec at end of session
-6. Output LOOM_COMPLETE when the user confirms
+5. Do not `git add`. Do not `git commit`. Leave the edits as modified
+   files in the working tree.
+6. The session continues until the user gives an **explicit instruction
+   to commit / close the session**. "Land the plane" is this project's
+   canonical phrase (see `AGENTS.md`) for the full session-close flow;
+   `commit it` and `push it` work too. The trigger must name the action.
+7. Acknowledgements ("ok", "yes", "looks good", "sounds right", "go
+   ahead", "done") are agreement to whatever was just discussed — they
+   are NOT commit triggers, even when the prior turn was about
+   committing. If unclear, ask "Ready to land the plane?" and wait.
+8. On an explicit trigger, run the full session-close flow per
+   `AGENTS.md`: stage the anchor and every touched sibling spec,
+   commit, push, run `beads-push`, then output LOOM_COMPLETE.
 
 {% include "partial/invariant_clash.md" %}
 
@@ -89,8 +100,9 @@ When updating the spec, use the Edit tool to modify `specs/{{ label }}.md`
      (anchor or sibling) rather than duplicating
 2. Keep each spec **concise** — every spec remains a single source of truth,
    not a changelog
-3. After editing, commit the anchor and every touched sibling spec so `loom todo`
-   can detect them via per-spec cursor fan-out.
+3. After editing, leave the files as modified in the working tree — do
+   not `git add`, do not `git commit`. `loom todo` detects them via
+   per-spec cursor fan-out once the user commits.
 
 `loom todo` will then:
 1. Detect spec changes via `git diff` against each spec's `base_commit`

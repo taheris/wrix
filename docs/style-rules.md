@@ -210,17 +210,23 @@ the Mayor via `bd human` instead.
   *Trap to watch:* `mutex.lock().ok()?` turns "another thread
   panicked holding this mutex" into "no value" — map to a
   `LockPoisoned` variant and `?` instead.
-- **RS-12** — *No placeholder / sentinel values inside newtypes.* A
-  newtype's invariants must hold for every instance. "Must be
-  overwritten before use" is a type-system failure, not a runtime
-  contract — thread the real value through (or refactor the type)
-  rather than manufacturing a poison-pill instance.
+- **RS-12** — *No placeholder / sentinel values in production data
+  types.* Every instance of a production type must be valid on its
+  own; "must be overwritten before use" is a type-system failure, not
+  a runtime contract. If a value has two lifecycle stages
+  (parser-emitted vs. session-stamped, partial vs. complete, etc.),
+  give each stage its own type and let the constructor that combines
+  them be the only path to the downstream type (see RS-13 for the
+  test-only escape hatch). The compiler then makes "unstamped value
+  reaches a consumer" unrepresentable. Applies to newtypes *and*
+  structs *and* enums — anywhere production code can hold the value.
 - **RS-13** — *`Default` only when the zero-value is safe to use.*
-  If a value must be overwritten before use, it's not a default —
-  name the constructor for what it is (`placeholder()`, `pending()`,
-  `for_test()`) so call sites read honestly. `Type::default()` must
-  mean "the caller accepts the default", not "I owe a real value
-  later".
+  If a value must be overwritten before use, it's not a default. The
+  named-constructor escape hatch (`placeholder()`, `pending()`,
+  `for_test()`) is for `#[cfg(test)]` constructors only — production
+  code does not get a "poison instance with an honest name" loophole;
+  it must split the type per RS-12. `Type::default()` must mean "the
+  caller accepts the default", not "I owe a real value later".
 - **RS-14** — *No test-fixture shape in production trait impls.*
   Test-only constructors live behind `#[cfg(test)]` (or in
   `tests/common/`); production types do not carry shape that exists
@@ -255,6 +261,20 @@ the Mayor via `bd human` instead.
   re-exported at crate root where the module prefix isn't visible),
   but the `reason` must name that call-site context.
 
+### Closed sets (RS-17)
+
+- **RS-17** — *Enums for closed sets, not strings.* A parameter or
+  field whose valid values are a fixed set owned by this codebase
+  (note `kind`, `driver_kind`, render mode, log level, etc.) must be
+  an enum, never `&str` / `String`. The obverse of RS-7: identifiers
+  are open sets parsed at the boundary; closed sets are enumerated by
+  the type system so the compiler catches typos and refactors are
+  mechanical via exhaustive `match`. For wire-additive cases where
+  unknown variants must round-trip (forward compat across versions),
+  the enum carries an `Other(String)` (or `#[serde(other)]`) fallback
+  arm — the Rust API stays closed at the call site, the wire stays
+  open.
+
 ## Comments (COM-)
 
 Cross-language: applies to shell, nix, rust, and any other source we keep here.
@@ -273,3 +293,28 @@ Cross-language: applies to shell, nix, rust, and any other source we keep here.
   that's the code's job. Keep them concise; no multi-paragraph
   prose. Doc-comment messages on `thiserror` error variants follow
   RS-4 (`Display` text in doc comments, not `#[error("...")]`).
+- **COM-3** — *No volatile coordinates in comments.* A comment must
+  not reference content that moves independently of the comment.
+  Banned: line numbers in any file (`see foo.rs:123-145`), call-site
+  lists (`used by X, Y, Z`), commit SHAs, bead/issue IDs in code,
+  decision-log refs (`per D2`), "added for the X flow". These rot
+  silently because nothing breaks when the target moves. Acceptable
+  references: a stable section name when load-bearing, an
+  RFC/spec citation that names the document not its layout
+  (`per RFC 7230 §3.2`, `per specs/loom-harness.md Event Schema`).
+  Best is no cross-reference at all — describe what the code itself
+  asserts.
+
+## CLI (CLI-)
+
+Cross-language: applies to any user-facing CLI we ship.
+
+- **CLI-1** — *Command help text is one short sentence describing
+  current behavior.* The single-line help string visible in
+  `<tool> --help` and `<tool> help <cmd>` lists is for orienting
+  users, not documenting internals. Banned: implementation details
+  (storage backends, frameworks, file formats), migration history
+  ("replacement for the deprecated …"), decision references
+  ("per D2"), bead/issue IDs, and any other COM-3 volatile
+  coordinate. One sentence, end with a period. Long-form context
+  belongs in the spec.

@@ -57,7 +57,7 @@ referenced by the annotation to read the per-criterion rubric.
 ## Instructions
 
 1. **Read the spec** at `{{ spec_path }}` thoroughly
-2. **Explore the codebase** — read implementation code, test files, `CLAUDE.md`, and related specs as needed
+2. **Explore the codebase** — read implementation code, test files, `AGENTS.md`, and related specs as needed
 3. **Run `git diff {% match base_commit %}{% when Some with (commit) %}{{ commit }}{% when None %}<base>{% endmatch %}..HEAD`** to see all changes made during implementation
 4. **Run `git log {% match base_commit %}{% when Some with (commit) %}{{ commit }}{% when None %}<base>{% endmatch %}..HEAD --oneline`** to understand the commit history
 

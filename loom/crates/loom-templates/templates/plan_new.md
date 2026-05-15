@@ -31,7 +31,19 @@ the user's idea and create a comprehensive specification document.
 4. Write the spec file at `{{ spec_path }}`
 5. Seed the implementation-notes table for this spec (see *Implementation
    Notes* below).
-6. When the user confirms the spec looks good, output: LOOM_COMPLETE
+6. Do not `git add`. Do not `git commit`. Leave the new spec file as an
+   untracked file in the working tree.
+7. The session continues until the user gives an **explicit instruction
+   to commit / close the session**. "Land the plane" is this project's
+   canonical phrase (see `AGENTS.md`) for the full session-close flow;
+   `commit it` and `push it` work too. The trigger must name the action.
+8. Acknowledgements ("ok", "yes", "looks good", "sounds right", "go
+   ahead", "done") are agreement to whatever was just discussed — they
+   are NOT commit triggers, even when the prior turn was about
+   committing. If unclear, ask "Ready to land the plane?" and wait.
+9. On an explicit trigger, run the full session-close flow per
+   `AGENTS.md`: stage the new spec, commit, push, run `beads-push`, then
+   output LOOM_COMPLETE.
 
 ## Implementation Notes
 
