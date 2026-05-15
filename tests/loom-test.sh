@@ -3115,9 +3115,17 @@ test_review_inputs_include_judge_rubrics() {
     cargo_run test -p loom-templates --test render check_renders_review_context_fields \
         -- --exact --nocapture --quiet
 }
+test_review_walks_style_rules() {
+    cargo_run test -p loom-templates --test render \
+        check_renders_style_rule_conformance_walkthrough \
+        -- --exact --nocapture --quiet
+    check_cargo_test \
+        check::production::tests::build_review_prompt_includes_style_rule_conformance_walkthrough
+}
 test_gate_review_flag_names_concern() {
     check_cargo_test check::phase_verdict::tests::complete_with_review_flag_routes_to_review_flag
     check_cargo_test check::phase_verdict::tests::noop_with_review_flag_routes_to_review_flag
+    check_cargo_test check::phase_verdict::tests::complete_with_style_rule_flag_routes_to_review_flag_with_rule_id
 }
 
 # Recovery & Iteration

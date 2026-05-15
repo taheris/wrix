@@ -2011,8 +2011,14 @@ Criteria.
 - [x] Review's secondary concerns are scope appropriateness and
       `[judge]` rubric satisfaction
   [verify](tests/loom-test.sh::test_review_inputs_include_judge_rubrics)
+- [x] Review walks `docs/style-rules.md` rule by rule (SH-, NX-, DOC-,
+      GIT-, TST-, RS-, COM-, CLI- families); each violation cites the
+      rule id and the offending file/line range. The prompt pins
+      `{{ style_rules }}` so the LLM has the rules in its context.
+  [verify](tests/loom-test.sh::test_review_walks_style_rules)
 - [x] Review flag → recovery with cause `review-flag`; the flag detail
-      names which concern triggered (live-path / mock / scope / judge)
+      names which concern triggered (live-path / mock / scope / judge /
+      style-rule)
   [verify](tests/loom-test.sh::test_gate_review_flag_names_concern)
 - [x] Recovery iter < `[loop] max_iterations` (default 3) → spawns
       fix-up bead OR retries the bead with prior failure context

@@ -226,6 +226,7 @@ fn check_renders_review_context_fields() -> Result<()> {
         }],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
         exit_signals: EXIT_SIGNALS_BODY.to_string(),
+        style_rules: "docs/style-rules.md".to_string(),
     };
     let out = ctx.render()?;
 
@@ -245,6 +246,62 @@ fn check_renders_review_context_fields() -> Result<()> {
     assert!(out.contains("## `[judge]` Rubrics"));
     assert!(out.contains(judge_path), "judge path missing: {out}");
     assert!(out.contains(judge_body.trim()), "judge body missing: {out}");
+    Ok(())
+}
+
+/// The review rubric must walk `docs/style-rules.md` rule by rule and
+/// require rule-id + file/line citations. This test pins the rubric's
+/// directives so a future refactor cannot silently drop them.
+#[test]
+fn check_renders_style_rule_conformance_walkthrough() -> Result<()> {
+    let ctx = CheckContext {
+        pinned_context: PINNED_CONTEXT_BODY.to_string(),
+        label: SpecLabel::new("loom-harness"),
+        spec_path: "specs/loom-harness.md".to_string(),
+        companion_paths: vec![],
+        beads_summary: None,
+        base_commit: None,
+        molecule_id: None,
+        verify_sources: vec![],
+        judge_rubrics: vec![],
+        scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+        exit_signals: EXIT_SIGNALS_BODY.to_string(),
+        style_rules: "docs/style-rules.md".to_string(),
+    };
+    let out = ctx.render()?;
+
+    assert!(
+        out.contains("## Style-Rule Conformance"),
+        "rubric section heading missing: {out}",
+    );
+    assert!(
+        out.contains("docs/style-rules.md"),
+        "style_rules path not pinned: {out}",
+    );
+    for family in [
+        "**SH-**", "**NX-**", "**DOC-**", "**GIT-**", "**TST-**", "**RS-**", "**COM-**", "**CLI-**",
+    ] {
+        assert!(
+            out.contains(family),
+            "rule family marker missing ({family}): {out}",
+        );
+    }
+    assert!(
+        out.contains("rule id"),
+        "citation contract (rule id) not described: {out}",
+    );
+    assert!(
+        out.contains("file and line range") || out.contains("file/line range"),
+        "citation contract (file/line range) not described: {out}",
+    );
+    assert!(
+        out.contains("LOOM_REVIEW_FLAG: style-rule"),
+        "style-rule flag marker not documented: {out}",
+    );
+    assert!(
+        out.contains("`style-rule`"),
+        "style-rule concern token missing from flag schema: {out}",
+    );
     Ok(())
 }
 

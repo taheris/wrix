@@ -28,4 +28,9 @@ pub struct CheckContext {
     pub judge_rubrics: Vec<ReviewSource>,
     pub scratchpad_path: String,
     pub exit_signals: String,
+    /// Workspace-relative path to the project's style-rules document
+    /// (`docs/style-rules.md` by default). Pinned in the review prompt so
+    /// the LLM walks the rules rule-by-rule and cites each violation by
+    /// rule id + file/line.
+    pub style_rules: String,
 }

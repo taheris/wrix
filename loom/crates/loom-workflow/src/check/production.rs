@@ -178,6 +178,7 @@ where
             judge_rubrics,
             scratchpad_path,
             exit_signals: String::new(),
+            style_rules: "docs/style-rules.md".to_string(),
         };
         Ok(ctx.render()?)
     }
@@ -623,6 +624,65 @@ mod tests {
             }
             other => panic!("expected Incomplete, got {other:?}"),
         }
+    }
+
+    /// The review prompt must instruct the reviewer to walk
+    /// `docs/style-rules.md` rule by rule and cite rule id + file/line for
+    /// each violation. This is the load-bearing surface for style-rule
+    /// conformance — `loom check`'s mechanical audits cannot enforce the
+    /// prose rules, so the LLM-judged rubric is the only line of defence.
+    #[tokio::test]
+    async fn build_review_prompt_includes_style_rule_conformance_walkthrough() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path();
+        let label = "alpha";
+        seed_empty_spec(workspace, label);
+        let state = empty_state(workspace);
+        let manifest = stub_manifest(workspace);
+        let ctrl = ProductionCheckController::new(
+            BdClient::new(),
+            SpecLabel::new(label),
+            PathBuf::from("/usr/bin/loom"),
+            workspace.to_path_buf(),
+            state,
+            manifest,
+            ProfileName::new("base"),
+            noop_spawn,
+        );
+        let prompt = match ctrl.build_review_prompt().await {
+            Ok(p) => p,
+            Err(CheckError::Bd(_)) => return,
+            Err(e) => panic!("unexpected error: {e:?}"),
+        };
+        assert!(
+            prompt.contains("## Style-Rule Conformance"),
+            "rubric heading missing: {prompt}",
+        );
+        assert!(
+            prompt.contains("docs/style-rules.md"),
+            "style_rules path not pinned in review prompt: {prompt}",
+        );
+        for family in [
+            "**SH-**", "**NX-**", "**DOC-**", "**GIT-**", "**TST-**", "**RS-**", "**COM-**",
+            "**CLI-**",
+        ] {
+            assert!(
+                prompt.contains(family),
+                "rule family marker missing ({family}): {prompt}",
+            );
+        }
+        assert!(
+            prompt.contains("LOOM_REVIEW_FLAG: style-rule"),
+            "flag marker not documented in review prompt: {prompt}",
+        );
+        assert!(
+            prompt.contains("rule id"),
+            "citation contract (rule id) not described: {prompt}",
+        );
+        assert!(
+            prompt.contains("file and line range") || prompt.contains("file/line range"),
+            "citation contract (file/line range) not described: {prompt}",
+        );
     }
 
     #[tokio::test]

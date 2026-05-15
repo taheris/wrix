@@ -227,6 +227,9 @@ LOOM_REVIEW_FLAG: <concern> -- <one-sentence reasoning>
 - `mock` — a mock stands in for the very thing the test claims to test.
 - `scope` — diff strays from the bead's intent or `## Affected Files`.
 - `judge` — a `[judge]` rubric is not satisfied.
+- `style-rule` — the diff violates a rule in `{{ style_rules }}`; the
+  detail names the violating rule id (e.g. `RS-12`) and the visible
+  review body lists each violation with rule id + file/line range.
 
 Do NOT free-form the cause or paraphrase the concern; the orchestrator
 parses this line verbatim to populate `previous_failure` and `bd update

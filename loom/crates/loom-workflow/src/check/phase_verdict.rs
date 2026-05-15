@@ -14,15 +14,17 @@ use super::verify_fail::VerifyFailure;
 use crate::todo::ExitSignal;
 
 /// Which concern in the review LLM's structured response triggered the flag.
-/// Mirrors the four concerns the spec enumerates (`specs/loom-harness.md`
+/// Mirrors the concerns the spec enumerates (`specs/loom-harness.md`
 /// §"Push gate · Review always runs"): live-path coverage, mock discipline,
-/// scope appropriateness, and `[judge]` rubric satisfaction.
+/// scope appropriateness, `[judge]` rubric satisfaction, and style-rule
+/// conformance against `docs/style-rules.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReviewConcern {
     LivePath,
     Mock,
     Scope,
     Judge,
+    StyleRule,
 }
 
 impl ReviewConcern {
@@ -32,6 +34,7 @@ impl ReviewConcern {
             Self::Mock => "mock",
             Self::Scope => "scope",
             Self::Judge => "judge",
+            Self::StyleRule => "style-rule",
         }
     }
 
@@ -41,6 +44,7 @@ impl ReviewConcern {
             "mock" => Some(Self::Mock),
             "scope" => Some(Self::Scope),
             "judge" => Some(Self::Judge),
+            "style-rule" => Some(Self::StyleRule),
             _ => None,
         }
     }
@@ -440,6 +444,33 @@ mod tests {
     }
 
     #[test]
+    fn complete_with_style_rule_flag_routes_to_review_flag_with_rule_id() {
+        // The style-rule conformance rubric surfaces as a `review-flag`
+        // cause whose concern is `style-rule`. The detail names the
+        // violating rule id (e.g. `RS-12`) so downstream surfaces can
+        // render it without re-parsing the LLM's prose.
+        let detail = "RS-12 placeholder reaches consumer in src/agent/parser.rs:142-156";
+        let result = decide(
+            Some(&ExitSignal::Complete),
+            inputs(
+                true,
+                false,
+                true,
+                Some(flag(ReviewConcern::StyleRule, detail)),
+            ),
+        );
+        match result {
+            PhaseVerdict::Recovery {
+                cause: RecoveryCause::ReviewFlag(parsed),
+            } => {
+                assert_eq!(parsed.concern, ReviewConcern::StyleRule);
+                assert_eq!(parsed.detail, detail);
+            }
+            other => panic!("expected Recovery::ReviewFlag(style-rule), got {other:?}"),
+        }
+    }
+
+    #[test]
     fn complete_clean_routes_to_done() {
         assert_eq!(
             decide(Some(&ExitSignal::Complete), inputs(true, false, true, None)),
@@ -553,6 +584,7 @@ mod tests {
         assert_eq!(ReviewConcern::Mock.as_str(), "mock");
         assert_eq!(ReviewConcern::Scope.as_str(), "scope");
         assert_eq!(ReviewConcern::Judge.as_str(), "judge");
+        assert_eq!(ReviewConcern::StyleRule.as_str(), "style-rule");
     }
 
     #[test]
@@ -562,6 +594,7 @@ mod tests {
             ReviewConcern::Mock,
             ReviewConcern::Scope,
             ReviewConcern::Judge,
+            ReviewConcern::StyleRule,
         ] {
             assert_eq!(ReviewConcern::parse(c.as_str()), Some(c));
         }
@@ -597,6 +630,7 @@ mod tests {
             ("mock", ReviewConcern::Mock),
             ("scope", ReviewConcern::Scope),
             ("judge", ReviewConcern::Judge),
+            ("style-rule", ReviewConcern::StyleRule),
         ] {
             let out = format!("LOOM_REVIEW_FLAG: {token} -- because\n");
             let parsed = parse_review_flag(&out).expect("flag parsed");
