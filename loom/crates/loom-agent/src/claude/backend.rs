@@ -42,7 +42,7 @@ const SPAWN_CONFIG_FILE: &str = "spawn-config.json";
 pub const DEFAULT_POST_RESULT_GRACE_SECS: u64 = 5;
 
 /// Env var that overrides the launcher binary. Production resolves
-/// `wrapix` from `PATH`; per-phase config wiring lands in wx-pkht8.9.
+/// `wrapix` from `PATH`.
 const ENV_WRAPIX_BIN: &str = "LOOM_WRAPIX_BIN";
 
 /// Zero-sized marker for the Claude Code stream-json backend.

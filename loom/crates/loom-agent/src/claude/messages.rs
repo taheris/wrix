@@ -80,8 +80,8 @@ pub struct AssistantContent {
 /// [`AgentEvent::ToolCall`](loom_driver::agent::AgentEvent::ToolCall).
 /// `thinking` blocks — emitted when the model uses extended thinking —
 /// map to [`AgentEvent::ThinkingDelta`](loom_driver::agent::AgentEvent::ThinkingDelta)
-/// (R8, wx-n06xn). Anything else lands in the catch-all and is logged
-/// at `trace!`.
+/// when the model uses extended thinking. Anything else lands in the
+/// catch-all and is logged at `trace!`.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AssistantBlock {

@@ -125,17 +125,15 @@ pub enum Source {
 /// into this enum — once an `AgentEvent` flows downstream no code knows
 /// which backend produced it.
 ///
-/// `Serialize` is derived so the on-disk JSONL log file is the same event
-/// stream the terminal renderer consumes (see [`crate::lib`] consumers).
-/// G2 (wx-gl3mq) adds the matching `Deserialize` impl so `loom logs` can
-/// replay its own output.
-/// **Deserialize support.** G2 (wx-gl3mq) adds `Deserialize` so `loom logs`
-/// can replay its own JSONL output through the same enum it wrote. Each
-/// variant is a struct-style `#[serde(flatten)]`-onto-envelope, so the
-/// wire shape is flat and every consumer dispatches on `kind`. Unknown
-/// `kind` values fail deserialization — `loom logs` is the only intended
-/// consumer today, and a quietly-dropped variant is worse than a loud
-/// failure when the log format drifts.
+/// `Serialize` is derived so the on-disk JSONL log file is the same
+/// event stream the terminal renderer consumes (see [`crate::lib`]
+/// consumers). The matching `Deserialize` impl lets `loom logs` replay
+/// its own JSONL output through the same enum it wrote. Each variant
+/// is a struct-style `#[serde(flatten)]`-onto-envelope, so the wire
+/// shape is flat and every consumer dispatches on `kind`. Unknown
+/// `kind` values fail deserialization — `loom logs` is the only
+/// intended consumer today, and a quietly-dropped variant is worse than
+/// a loud failure when the log format drifts.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AgentEvent {
@@ -161,8 +159,7 @@ pub enum AgentEvent {
         /// log replay can recover both "when the session started" and
         /// "when this start event was emitted".
         started_at_ms: i64,
-        /// `Task` parent for subagent sessions. Populated by G4
-        /// (wx-b2f7k); `None` until then.
+        /// `Task` parent for subagent sessions; `None` for top-level.
         parent_tool_call_id: Option<ToolCallId>,
     },
 
@@ -227,8 +224,8 @@ pub enum AgentEvent {
         params: serde_json::Value,
         /// Set when this tool call is nested inside a `Task` subagent
         /// invocation — the renderer indents nested calls under their
-        /// parent. Populated by the parser's per-session `Task` stack
-        /// (G4, wx-b2f7k). `None` for top-level calls.
+        /// parent. Populated by the parser's per-session `Task` stack.
+        /// `None` for top-level calls.
         #[serde(default)]
         parent_tool_call_id: Option<ToolCallId>,
     },
@@ -317,7 +314,7 @@ pub enum AgentEvent {
 
 impl AgentEvent {
     /// Borrow the common envelope. All variants carry one — exhaustive
-    /// match keeps this in sync as new variants land (G3, wx-5au0d).
+    /// match keeps this in sync as new variants land.
     pub fn envelope(&self) -> &EventEnvelope {
         match self {
             AgentEvent::AgentStart { envelope, .. }

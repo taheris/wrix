@@ -1,6 +1,6 @@
 //! In-place running indicator — keeps the cursor on the tool's header
 //! line and updates a duration counter via `\r` + clear-to-EOL until
-//! the tool result arrives. Spec H4 (wx-q6gs5).
+//! the tool result arrives.
 //!
 //! ```text
 //!   Bash   cargo test --lib                           running... 4.2s
@@ -37,7 +37,7 @@ pub const CLEAR_TO_EOL: &str = "\x1b[K";
 /// `terminal::size` rather than just `IsTerminal::is_terminal` because
 /// some CI runners attach a pseudo-tty but report a 0-width terminal —
 /// the indicator's `\r` overwrite pattern requires a real width to
-/// avoid mangling output. R3 (wx-mpci2).
+/// avoid mangling output.
 pub fn stdout_supports_indicator() -> bool {
     if !io::stdout().is_terminal() {
         return false;
@@ -175,7 +175,7 @@ mod tests {
         );
     }
 
-    /// H4 — when `enabled = false` (non-TTY or parallel modes), the
+    /// When `enabled = false` (non-TTY or parallel modes), the
     /// indicator must write nothing. Pin this with a buffer that stays
     /// empty after `tick`+`end`.
     #[test]

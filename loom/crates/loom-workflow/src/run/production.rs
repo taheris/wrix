@@ -504,7 +504,7 @@ mod tests {
         assert!(cfg.initial_prompt.contains("wx-1"));
     }
 
-    /// wx-hcolw.4 gate: `loom run` must dispatch with the rendered
+    /// `loom run` must dispatch with the rendered
     /// [`RunContext`] template — bead title/description, scratchpad path,
     /// and spec_path all reach the agent prompt — and the same body must
     /// land in `<scratch_dir>/prompt.txt` so post-compaction `repin.sh`

@@ -1,13 +1,12 @@
-//! R1 (wx-cqzxh) — every `AgentEvent` emitted by `loom run` carries a
-//! per-spawn envelope (real `bead_id`, monotonic `seq`, real `ts_ms`).
+//! Every `AgentEvent` emitted by `loom run` carries a per-spawn
+//! envelope (real `bead_id`, monotonic `seq`, real `ts_ms`).
 //!
-//! Pre-R1 the parser stamped `EventEnvelope::placeholder()` (sentinel
-//! `wx-pending`, `seq=0` everywhere) and no driver code overwrote it
-//! before the on-disk JSONL was written. This test pins the fix end-to-
-//! end: drive `loom run --once` against the mock pi agent in
-//! `complete-marker` mode, locate the per-bead JSONL log, and assert
+//! Drives `loom run --once` against the mock pi agent in
+//! `complete-marker` mode, locates the per-bead JSONL log, and asserts
 //! that every recorded event carries the seeded bead id and that `seq`
-//! advances by exactly one per event starting at zero.
+//! advances by exactly one per event starting at zero. Guards against
+//! regression to `EventEnvelope::placeholder()` (sentinel `wx-pending`,
+//! `seq=0` everywhere).
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -132,7 +131,7 @@ fn loom_run_stamps_real_bead_id_and_monotonic_seq_on_every_event() {
         &state_dir,
         bead,
         "envelope stamping",
-        "Drive the mock agent and inspect the JSONL envelope — pins R1 wiring.\n",
+        "Drive the mock agent and inspect the JSONL envelope.\n",
         &[&format!("spec:{spec}"), "profile:base"],
     );
 
@@ -177,7 +176,7 @@ fn loom_run_stamps_real_bead_id_and_monotonic_seq_on_every_event() {
         assert_eq!(
             actual_bead, bead,
             "line {i} carries bead_id={actual_bead:?}, expected {bead:?} (sentinel \
-             `wx-pending` here means R1 wiring regressed)\nline={line}",
+             `wx-pending` here means envelope wiring regressed)\nline={line}",
         );
         let seq = obj
             .get("seq")

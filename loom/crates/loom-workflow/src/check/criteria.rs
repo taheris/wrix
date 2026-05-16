@@ -25,11 +25,11 @@
 //! The audit also surfaces two structural warnings that don't attach to
 //! a single criterion:
 //!
-//! - **Unit-test masquerade** (R10) — a real dispatcher whose body runs
+//! - **Unit-test masquerade** — a real dispatcher whose body runs
 //!   `cargo test --lib` against a `::tests::` path (a `#[cfg(test)] mod
 //!   tests` block inside the production crate). Suppressed by the
 //!   per-annotation `@unit-ok` marker.
-//! - **Orphan dispatcher** (R10) — a `test_<name>` defined in
+//! - **Orphan dispatcher** — a `test_<name>` defined in
 //!   `tests/loom-test.sh` that no `[verify]` annotation references.
 //!
 //! ## Exit code
@@ -81,8 +81,8 @@ pub struct VerifyAnnotation {
     /// `test_<fn>` — the dispatcher function name (without the
     /// `tests/loom-test.sh::` prefix).
     pub dispatcher_fn: String,
-    /// `@unit-ok` opt-out marker (R10, wx-2pbxe). Suppresses unit-test
-    /// masquerade warnings for criteria that legitimately target unit logic.
+    /// `@unit-ok` opt-out marker. Suppresses unit-test masquerade
+    /// warnings for criteria that legitimately target unit logic.
     pub unit_ok: bool,
 }
 
@@ -399,7 +399,7 @@ pub fn audit_filtered<R: DispatcherRunner>(
             verdict,
         });
 
-        // R10: masquerade is a structural finding about the dispatcher,
+        // Masquerade is a structural finding about the dispatcher,
         // not part of the per-criterion verdict.
         if !ann.unit_ok
             && index.real.contains(fn_name)
@@ -419,7 +419,7 @@ pub fn audit_filtered<R: DispatcherRunner>(
         }
     }
 
-    // R10: orphan dispatchers — defined but unreferenced. Use the global
+    // Orphan dispatchers — defined but unreferenced. Use the global
     // annotation set so a scoped audit (e.g. `--bead`) does not flag
     // dispatchers that other specs reference.
     let mut all_fns: Vec<&String> = index.stubs.iter().chain(index.real.iter()).collect();
@@ -817,8 +817,8 @@ test_three() {
         assert_eq!(report(&r, true), 1);
     }
 
-    /// R10 — masquerade warning still surfaces alongside the
-    /// per-criterion verdict.
+    /// Masquerade warning still surfaces alongside the per-criterion
+    /// verdict.
     #[test]
     fn audit_warns_on_unit_test_masquerade() {
         let (_dir, specs, dispatcher) = workspace_with(

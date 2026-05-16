@@ -25,9 +25,9 @@ use super::messages::{AssistantBlock, ClaudeMessage, UserBlock};
 /// `denied_tools`; denied tools receive `approved: false`.
 pub struct ClaudeParser {
     denied_tools: HashSet<String>,
-    /// Per-session `Task` subagent stack — G4 (wx-b2f7k). Same shape
-    /// as the pi parser's. `&self` LineParse trait requires interior
-    /// mutability; one parser per session means contention is nil.
+    /// Per-session `Task` subagent stack. Same shape as the pi
+    /// parser's. `&self` LineParse trait requires interior mutability;
+    /// one parser per session means contention is nil.
     task_stack: std::sync::Mutex<Vec<loom_events::identifier::ToolCallId>>,
 }
 
@@ -257,7 +257,7 @@ impl LineParse for ClaudeParser {
 
     fn encode_abort(&self) -> Result<Option<String>, ProtocolError> {
         // claude has no abort wire command — shutdown is via SIGTERM/SIGKILL
-        // driven by the backend's watchdog (see wx-pkht8.8).
+        // driven by the backend's watchdog.
         Ok(None)
     }
 }
@@ -326,8 +326,8 @@ mod tests {
         }
     }
 
-    /// R8 (wx-n06xn) — claude's extended-thinking content block lands
-    /// as `ParsedAgentEvent::ThinkingDelta` so the renderer can surface
+    /// Claude's extended-thinking content block lands as
+    /// `ParsedAgentEvent::ThinkingDelta` so the renderer can surface
     /// the model's pre-reply reasoning when the user opts in.
     #[test]
     fn parses_assistant_thinking_block_as_thinking_delta() {

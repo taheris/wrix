@@ -24,10 +24,8 @@ CREATE TABLE IF NOT EXISTS companions (
     companion_path TEXT NOT NULL,
     PRIMARY KEY (spec_label, companion_path)
 );
--- D2 (wx-b1f1p): notes table — replaces the deprecated markdown
--- implementation-notes path. `kind` lets one bead carry multiple
--- categories of notes (default `implementation`); the `loom note`
--- CLI is the only writer.
+-- `kind` lets one bead carry multiple categories of notes (default
+-- `implementation`); the `loom note` CLI is the only writer.
 CREATE TABLE IF NOT EXISTS notes (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     spec_label TEXT NOT NULL REFERENCES specs(label) ON DELETE CASCADE,
@@ -53,10 +51,6 @@ CREATE TABLE IF NOT EXISTS notes (
 );
 CREATE INDEX IF NOT EXISTS idx_notes_spec_kind ON notes(spec_label, kind);
 ";
-// R9 (wx-42teo): spec target schema is `specs(label TEXT PRIMARY KEY)`
-// — drop the deprecated implementation_notes column now that the `notes`
-// table (D2, wx-b1f1p) is the canonical store and `loom plan` no longer
-// writes the column.
 const MIGRATE_V3_TO_V4: &str = "ALTER TABLE specs DROP COLUMN implementation_notes;";
 
 const DROP_AND_RECREATE: &str = "
@@ -80,9 +74,9 @@ pub struct SpecRow {
     pub label: SpecLabel,
 }
 
-/// One row of the `notes` table (D2, wx-b1f1p). `kind` is free-form
-/// (default `implementation`); `created_at_ms` is unix-epoch
-/// milliseconds for chronological ordering on `list`.
+/// One row of the `notes` table. `kind` is free-form (default
+/// `implementation`); `created_at_ms` is unix-epoch milliseconds for
+/// chronological ordering on `list`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NoteRow {
     pub id: i64,
@@ -245,7 +239,7 @@ impl StateDb {
     }
 
     // -----------------------------------------------------------------
-    // D2 (wx-b1f1p) — `notes` table CRUD. Backs the `loom note` CLI.
+    // `notes` table CRUD. Backs the `loom note` CLI.
     // -----------------------------------------------------------------
 
     /// Atomically replace every note for `(spec_label, kind)` with the

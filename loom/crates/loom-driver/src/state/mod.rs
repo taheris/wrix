@@ -6,7 +6,7 @@
 //!
 //! The state DB is reconstructable from spec files on disk and active beads
 //! via [`StateDb::rebuild`]; iteration counters reset to 0. Notes are owned
-//! by the `loom note` CLI (D2) and live in the SQLite `notes` table; there
+//! by the `loom note` CLI and live in the SQLite `notes` table; there
 //! is no markdown source of truth for them anymore.
 
 mod companions;

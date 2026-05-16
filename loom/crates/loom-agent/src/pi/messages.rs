@@ -80,7 +80,7 @@ pub enum PiEvent {
     /// Streaming tool-call progress update — long-running tools emit
     /// these to report partial output. Surfaced as
     /// [`AgentEvent::ToolProgress`](loom_driver::agent::AgentEvent::ToolProgress)
-    /// (R8, wx-n06xn) so renderers can keep the user oriented.
+    /// so renderers can keep the user oriented.
     ToolExecutionUpdate {
         #[serde(rename = "toolCallId")]
         tool_call_id: ToolCallId,
@@ -114,9 +114,9 @@ pub enum PiEvent {
 
     /// Auto-retry telemetry — surfaced as
     /// [`AgentEvent::AutoRetry`](loom_driver::agent::AgentEvent::AutoRetry)
-    /// (R8, wx-n06xn) so the renderer can show transient-failure
-    /// progress. `attempt`/`maxAttempts` are 1-indexed; `delayMs` is
-    /// the back-off the next try will wait.
+    /// so the renderer can show transient-failure progress.
+    /// `attempt`/`maxAttempts` are 1-indexed; `delayMs` is the back-off
+    /// the next try will wait.
     AutoRetryStart {
         #[serde(default)]
         attempt: u32,

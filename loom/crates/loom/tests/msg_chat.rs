@@ -1,4 +1,4 @@
-//! R6 (wx-ibgar) — `loom msg --chat` integration tests.
+//! `loom msg --chat` integration tests.
 //!
 //! `loom msg --chat` mirrors `loom plan`'s shape: a single `wrapix run
 //! <workspace> claude --dangerously-skip-permissions <prompt>` shell-out

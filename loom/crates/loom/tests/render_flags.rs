@@ -1,6 +1,6 @@
-//! R5 (wx-zorjk) — `loom run` reaches the `Renderer` trait via
-//! `--json` / `--raw` / `--plain` CLI flags and the on-disk JSONL stays
-//! identical regardless of which mode drives the terminal.
+//! `loom run` reaches the `Renderer` trait via `--json` / `--raw` /
+//! `--plain` CLI flags and the on-disk JSONL stays identical regardless
+//! of which mode drives the terminal.
 //!
 //! Each test spawns `loom run --once` against the mock pi agent in
 //! `complete-marker` mode with one of the new flags, then parses

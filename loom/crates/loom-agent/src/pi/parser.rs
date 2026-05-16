@@ -23,10 +23,10 @@ use super::messages::{
 /// stdout (line in → [`ParsedLine`]) and command encoding for stdin
 /// (`encode_prompt`/`encode_steer`/`encode_abort`).
 /// Pi-mono line parser. Holds a per-session `Task` stack so nested
-/// tool calls (inside a `Task` subagent) carry the parent's id —
-/// see G4 (wx-b2f7k). The stack uses interior mutability (`Mutex`)
-/// because [`LineParse::parse_line`] is `&self`; one parser instance
-/// per agent session, so contention is non-existent.
+/// tool calls (inside a `Task` subagent) carry the parent's id. The
+/// stack uses interior mutability (`Mutex`) because
+/// [`LineParse::parse_line`] is `&self`; one parser instance per agent
+/// session, so contention is non-existent.
 pub struct PiParser {
     task_stack: std::sync::Mutex<Vec<loom_events::identifier::ToolCallId>>,
 }
@@ -516,7 +516,7 @@ mod tests {
 
     #[test]
     fn message_update_thinking_delta_yields_thinking_delta_event() {
-        // R8 (wx-n06xn) — thinking_delta now maps to ParsedAgentEvent::ThinkingDelta.
+        // thinking_delta maps to ParsedAgentEvent::ThinkingDelta.
         let line = r#"{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","text":"…"}}"#;
         let p = parse(line);
         assert_eq!(p.events.len(), 1);
@@ -528,7 +528,7 @@ mod tests {
 
     #[test]
     fn message_update_text_end_yields_text_end_event() {
-        // R8 — text_end is the paired terminator for text_delta.
+        // text_end is the paired terminator for text_delta.
         let line = r#"{"type":"message_update","assistantMessageEvent":{"type":"text_end"}}"#;
         let p = parse(line);
         assert!(matches!(p.events[..], [ParsedAgentEvent::TextEnd]));
@@ -536,7 +536,7 @@ mod tests {
 
     #[test]
     fn message_update_thinking_end_yields_thinking_end_event() {
-        // R8 — thinking_end pairs with thinking_delta.
+        // thinking_end pairs with thinking_delta.
         let line = r#"{"type":"message_update","assistantMessageEvent":{"type":"thinking_end"}}"#;
         let p = parse(line);
         assert!(matches!(p.events[..], [ParsedAgentEvent::ThinkingEnd]));
@@ -544,7 +544,7 @@ mod tests {
 
     #[test]
     fn message_update_toolcall_delta_yields_toolcall_delta_event() {
-        // R8 — toolcall_delta surfaces with the tool call id + raw chunk.
+        // toolcall_delta surfaces with the tool call id + raw chunk.
         let line = r#"{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","toolCallId":"tc-9","delta":"{\"file_path\":\"a\"}"}}"#;
         let p = parse(line);
         assert_eq!(p.events.len(), 1);
@@ -686,10 +686,10 @@ mod tests {
 
     #[test]
     fn observability_only_events_yield_no_agent_events() {
-        // R8 (wx-n06xn) trimmed this list — tool_execution_update and
-        // auto_retry_start now surface as ParsedAgentEvent::ToolProgress
-        // and ParsedAgentEvent::AutoRetry respectively. The pinned set
-        // here is the residual observability-only PiEvents.
+        // tool_execution_update and auto_retry_start surface as
+        // ParsedAgentEvent::ToolProgress and ParsedAgentEvent::AutoRetry
+        // respectively. The pinned set here is the residual
+        // observability-only PiEvents.
         for line in [
             r#"{"type":"turn_start"}"#,
             r#"{"type":"agent_start"}"#,
@@ -705,7 +705,7 @@ mod tests {
 
     #[test]
     fn pi_tool_execution_update_yields_tool_progress() {
-        // R8 — long-running tools emit `tool_execution_update` with a
+        // Long-running tools emit `tool_execution_update` with a
         // partial result; surface as ParsedAgentEvent::ToolProgress so
         // the renderer can keep the user oriented.
         let line = r#"{"type":"tool_execution_update","toolCallId":"tc-7","partialResult":"50%"}"#;
@@ -722,8 +722,8 @@ mod tests {
 
     #[test]
     fn pi_auto_retry_start_yields_auto_retry_event() {
-        // R8 — pi auto_retry telemetry surfaces so the renderer can
-        // show transient-failure progress (attempt/N + delay + reason).
+        // pi auto_retry telemetry surfaces so the renderer can show
+        // transient-failure progress (attempt/N + delay + reason).
         let line = r#"{"type":"auto_retry_start","attempt":2,"maxAttempts":5,"delayMs":1500,"errorMessage":"transient"}"#;
         let p = parse(line);
         assert_eq!(p.events.len(), 1);

@@ -318,7 +318,7 @@ fn state_db_open_migrates_v1_to_v2() -> Result<()> {
     assert!(names.contains(&"label"));
     assert!(
         !names.contains(&"implementation_notes"),
-        "implementation_notes column should be dropped (R9, wx-42teo): {names:?}",
+        "implementation_notes column should be dropped: {names:?}",
     );
 
     let alpha = db.spec(&SpecLabel::new("alpha"))?;
@@ -408,7 +408,7 @@ fn state_corruption_recovery() -> Result<()> {
     Ok(())
 }
 
-// -- D2 (wx-b1f1p) — notes table CRUD ---------------------------------------
+// -- notes table CRUD -------------------------------------------------------
 
 #[test]
 fn notes_add_then_list_chronological() -> Result<()> {

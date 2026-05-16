@@ -11,11 +11,11 @@
 //! `tokio::process::Command::new("bd")` invocation path the production
 //! driver uses.
 //!
-//! Bug A (wx-ljvjg) lived for months while
-//! `msg::reply::tests::integer_choice_resolves_to_option_note` passed
-//! — the bug was in the `UpdateOpts` literal in `loom/src/main.rs`
-//! that fed the composed note into `println!` but never into the bd
-//! call. This test exists so that bug shape cannot recur silently.
+//! A prior bug in the `UpdateOpts` literal in `loom/src/main.rs` fed
+//! the composed note into `println!` but never into the bd call. The
+//! `msg::reply::tests::integer_choice_resolves_to_option_note` unit
+//! test passed throughout. This integration test exists so that bug
+//! shape cannot recur silently.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -404,18 +404,12 @@ fn msg_blocked_integer_input_persists_verbatim_not_as_option() {
 }
 
 // -------------------------------------------------------------------
-// I1 — `test_msg_flag_exclusivity`
-// -------------------------------------------------------------------
-
-// -------------------------------------------------------------------
-// I2 — `loom msg --chat` scaffold
+// `test_msg_flag_exclusivity`
 // -------------------------------------------------------------------
 //
-// The I2 scaffold-banner test was retired by R6 (wx-ibgar). The real
-// dispatch is now exercised end-to-end against the mock pi agent in
-// `crates/loom/tests/msg_chat.rs`. See those five tests for the
-// behavior the dispatcher pins (launches container, writes notes,
-// partial progress, exit signals, scope filtering).
+// `loom msg --chat` dispatch is exercised end-to-end against the mock
+// pi agent in `crates/loom/tests/msg_chat.rs` (launches container,
+// writes notes, partial progress, exit signals, scope filtering).
 
 /// `clap` enforces mutual exclusion at parse time: `-o` xor `-r`, neither
 /// with `-d`, `-n` xor `-b`. Each forbidden combination must exit
@@ -430,7 +424,7 @@ fn msg_flag_exclusivity_enforced_at_parse_time() {
     let bin_dir = install_bd_shim(workspace);
     let manifest = write_minimal_manifest(workspace);
 
-    // Each row exercises one of the I1 mutual-exclusion rules.
+    // Each row exercises one of the mutual-exclusion rules.
     let forbidden: &[&[&str]] = &[
         &["-o", "1", "-r", "foo", "-b", "wx-aaa"],
         &["-o", "1", "-d", "-b", "wx-aaa"],

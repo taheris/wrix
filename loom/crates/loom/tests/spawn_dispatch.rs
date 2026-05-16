@@ -137,9 +137,9 @@ fn mock_claude_path() -> PathBuf {
 /// the assertions stay focused on what they verify.
 fn drive_loom_todo_pi(workspace: &Path, shim: &Path, loom_bin: &str) -> std::process::Output {
     // Spawn-bound subcommands (`todo` is one) read LOOM_PROFILES_MANIFEST at
-    // startup (wx-3hhwq.32). The production todo controller now resolves the
-    // `base` profile through this manifest (wx-wlwv3), so it must contain a
-    // real entry — an empty `{}` would surface as ProfileError::UnknownProfile.
+    // startup. The production todo controller resolves the `base` profile
+    // through this manifest, so it must contain a real entry — an empty
+    // `{}` would surface as ProfileError::UnknownProfile.
     let manifest_path = workspace.join("profile-images.json");
     let image_source = workspace.join("base.tar");
     std::fs::write(&image_source, "").expect("write stub image source");
@@ -171,8 +171,8 @@ fn drive_loom_todo_pi(workspace: &Path, shim: &Path, loom_bin: &str) -> std::pro
 }
 
 /// Seed the workspace as a real git repo. `loom todo` opens a `GitClient`
-/// during setup (wx-9z0nq) so the tier-1 detection has a real ref database
-/// to query — even when the test exits before any tier-1 work happens.
+/// during setup so the tier-1 detection has a real ref database to
+/// query — even when the test exits before any tier-1 work happens.
 fn init_workspace_repo(workspace: &Path) {
     for args in [
         &["init", "-q", "-b", "main"][..],
@@ -283,7 +283,7 @@ fn wrapix_spawn_invocation_records_correct_argv() {
 /// `loom todo` invocation emits a per-phase JSONL file under
 /// `<workspace>/.wrapix/loom/logs/<spec-label>/todo-<utc>.jsonl`. Without
 /// this gate the workflow happily ran agents to completion while
-/// `run_agent` discarded every event with a `trace!` call (wx-2emcs);
+/// `run_agent` previously discarded every event with a `trace!` call;
 /// users saw two INFO lines and an empty `loom logs`. The test drives the
 /// same mock-pi handshake as the dispatch tests above, then asserts the
 /// log file appears at the documented path with at least one valid event
@@ -368,13 +368,12 @@ fn loom_todo_writes_jsonl_log_under_workspace_logs_dir() {
     );
 }
 
-/// `wx-kzr54` gate — the spec promise (`specs/loom-harness.md` *Run UX &
-/// Logging*) is that every bead processed by `loom run` writes a per-bead
-/// JSONL log under `<workspace>/.wrapix/loom/logs/<spec>/<bead-id>-<utc>.jsonl`.
-/// Before the wiring fix the production sequential controller passed
-/// `None` for the sink, so the agent ran to completion while every event
-/// was discarded — `loom logs` showed nothing for any bead. The bd stub
-/// returns one ready bead so `RunMode::Once` exercises the full
+/// Spec promise (`specs/loom-harness.md` *Run UX & Logging*): every
+/// bead processed by `loom run` writes a per-bead JSONL log under
+/// `<workspace>/.wrapix/loom/logs/<spec>/<bead-id>-<utc>.jsonl`. Guards
+/// against the regression where the production sequential controller
+/// passed `None` for the sink and every agent event was discarded. The
+/// bd stub returns one ready bead so `RunMode::Once` exercises the full
 /// `next_ready_bead` → `run_bead` → `close_bead` path; the wrapix shim
 /// + mock-pi finish the protocol so the sink reaches `session_complete`
 /// before being dropped.
@@ -486,12 +485,13 @@ fn loom_run_once_writes_per_bead_jsonl_log() {
     );
 }
 
-/// `wx-g66xo` gate — `loom review` must write its phase log under
+/// `loom review` must write its phase log under
 /// `<workspace>/.wrapix/loom/logs/<spec>/review-<utc>.jsonl` (same spec
-/// section as the run gate). Before the wiring fix the production review
-/// controller passed `None` for the sink, so the reviewer agent's events
-/// were discarded. The bd stub returns one bead carrying `loom:clarify`
-/// so the post-snapshot diff yields `ReviewVerdict::PushBlocked` and the gate
+/// section as the run gate). Guards against the regression where the
+/// production review controller passed `None` for the sink and the
+/// reviewer agent's events were discarded. The bd stub returns one bead
+/// carrying `loom:clarify` so the post-snapshot diff yields
+/// `ReviewVerdict::PushBlocked` and the gate
 /// exits without touching `git push` / `beads-push` / `loom run` — keeping
 /// the test environment-independent.
 #[test]
@@ -611,8 +611,8 @@ fn loom_review_writes_phase_jsonl_log() {
         })
         .collect();
     // The reviewer agent emits `session_complete` once when its session
-    // ends; R7 (wx-r9tmc) then has the verdict gate append one or more
-    // `driver_event` records (push_gate_walk + the branch event) AFTER
+    // ends; the verdict gate then appends one or more `driver_event`
+    // records (push_gate_walk + the branch event) AFTER
     // session_complete. Both contracts must hold:
     let session_complete_count = parsed
         .iter()
@@ -634,7 +634,7 @@ fn loom_review_writes_phase_jsonl_log() {
     // every branch shares.
     assert_eq!(
         driver_events[0]["driver_kind"], "push_gate_walk",
-        "first driver event must be push_gate_walk (R7 fence). got: {}",
+        "first driver event must be push_gate_walk. got: {}",
         driver_events[0],
     );
 }
@@ -727,13 +727,13 @@ fn child_stdin_is_a_pipe_not_a_tty() {
     );
 }
 
-/// `wx-pkht8.11` gate — the spec promise (`specs/loom-agent.md` lines
-/// 847-852, verify marker `tests/loom-test.sh::test_pi_compaction_repin`)
-/// is that the production driver detects `compaction_start` and sends
-/// `RePinContent::to_prompt()` via `steer`. The previous regression was
-/// silent because the only test of this behavior lived inside
-/// `loom-agent/src/pi/backend.rs` and stood in for the workflow layer:
-/// the test itself called `session.steer(...)` instead of driving through
+/// Spec promise (`specs/loom-agent.md` Compaction repin, verify marker
+/// `tests/loom-test.sh::test_pi_compaction_repin`): the production
+/// driver detects `compaction_start` and sends `RePinContent::to_prompt()`
+/// via `steer`. A prior regression was silent because the only test of
+/// this behavior lived inside `loom-agent/src/pi/backend.rs` and stood
+/// in for the workflow layer: the test itself called `session.steer(...)`
+/// instead of driving through
 /// `run_agent`. Production wiring was missing for months without a
 /// failing test.
 ///
@@ -814,14 +814,14 @@ fn loom_todo_pi_compaction_drives_repin_steer_through_run_agent() {
     );
 }
 
-/// `wx-pkht8.12` gate — the spec promise (`specs/loom-agent.md` Functional
-/// #4 second bullet, verify marker `tests/loom-test.sh::test_claude_shutdown_watchdog`)
-/// is that the production driver runs the SIGTERM → SIGKILL escalation
-/// after observing `result`. The previous regression was silent because
-/// the only test of this behavior lived inside `loom-agent/src/claude/backend.rs`
-/// and called `ClaudeBackend::shutdown_after_result` directly — production
-/// wiring through `run_agent::<ClaudeBackend>` was missing without a
-/// failing test.
+/// Spec promise (`specs/loom-agent.md` Functional #4 second bullet,
+/// verify marker `tests/loom-test.sh::test_claude_shutdown_watchdog`):
+/// the production driver runs the SIGTERM → SIGKILL escalation after
+/// observing `result`. A prior regression was silent because the only
+/// test of this behavior lived inside `loom-agent/src/claude/backend.rs`
+/// and called `ClaudeBackend::shutdown_after_result` directly —
+/// production wiring through `run_agent::<ClaudeBackend>` was missing
+/// without a failing test.
 ///
 /// This test drives `loom todo --agent claude` end-to-end. The shim hands
 /// stdio to mock-claude in `ignore-stdin` mode, which emits `result/success`,
@@ -916,8 +916,8 @@ fn loom_todo_claude_runs_shutdown_watchdog_through_run_agent() {
     );
 }
 
-/// `wx-dnhyj` gate — pi handshake against an unresponsive launcher must
-/// surface `ProtocolError::HandshakeTimeout` within the configured budget
+/// Pi handshake against an unresponsive launcher must surface
+/// `ProtocolError::HandshakeTimeout` within the configured budget
 /// instead of hanging silently. mock-pi `hang-probe` reads the
 /// `get_commands` line and then sleeps; without the bounded handshake the
 /// loom binary would block forever waiting for the response.
@@ -994,8 +994,8 @@ fn loom_todo_pi_hang_probe_surfaces_handshake_timeout() {
     );
 }
 
-/// `wx-dnhyj` gate — mid-session silence must trip the run_agent stall
-/// heartbeat. mock-pi `stall-mid-session` answers the probe and acks one
+/// Mid-session silence must trip the run_agent stall heartbeat.
+/// mock-pi `stall-mid-session` answers the probe and acks one
 /// prompt, then sleeps; with `LOOM_STALL_WARN_MS=300` the run loop must
 /// emit `"no agent event for stall window"` to stderr while the agent
 /// remains spawned. The test kills loom after observing the warning so

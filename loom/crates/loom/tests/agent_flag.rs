@@ -1,6 +1,5 @@
 //! CLI surface tests for the global `--agent` flag.
 //!
-//! Spec acceptance criteria (wx-pkht8.9):
 //! - `test_backend_selection_flag` — `--agent pi` parses; `--help` lists it
 //! - `test_backend_invalid_name` — `--agent unknown` fails with a clear error
 //!

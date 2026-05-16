@@ -614,7 +614,7 @@ fn no_real_clock_outside_system_clock() {
         Path::new("crates/loom-driver/src/clock/mock.rs"),
         // loom-render carries its own minimal `Clock` trait + `SystemClock`
         // impl so the renderer crate stays free of the tokio dep that the
-        // driver's full Clock trait pulls in (F3 — wx-9y7cq).
+        // driver's full Clock trait pulls in.
         Path::new("crates/loom-render/src/clock.rs"),
     ];
     let mut violations: Vec<String> = Vec::new();
@@ -646,16 +646,17 @@ fn no_real_clock_outside_system_clock() {
 }
 
 // ---------------------------------------------------------------------------
-// Rule (RS-12, wx-ywdnz.1): `EventEnvelope`, `BeadId`, and `AgentEvent`
-// carry no `placeholder()` / `default()` constructor. The parser-to-stamper
-// split moved unstamped events to the sibling `ParsedAgentEvent` type, and
-// the session layer is the only constructor of `AgentEvent` (via
-// `AgentEvent::from_parsed`). Re-introducing a sentinel constructor would
-// reopen the "sentinel `wx-pending` bead id slipping into production logs"
-// regression class. The compiler enforces the structural rule; this test
-// guards against the named constructors getting added back.
+// Rule RS-12: `EventEnvelope`, `BeadId`, and `AgentEvent` carry no
+// `placeholder()` / `default()` constructor. The parser-to-stamper
+// split moved unstamped events to the sibling `ParsedAgentEvent` type,
+// and the session layer is the only constructor of `AgentEvent` (via
+// `AgentEvent::from_parsed`). Re-introducing a sentinel constructor
+// would reopen the "sentinel `wx-pending` bead id slipping into
+// production logs" regression class. The compiler enforces the
+// structural rule; this test guards against the named constructors
+// getting added back.
 //
-// Also bans `EventEnvelope::default()` (RS-13, wx-7tde8) — `impl Default`
+// Also bans `EventEnvelope::default()` (RS-13) — `impl Default`
 // requires callers to overwrite before use, which is the same
 // sentinel-by-another-name pattern.
 // ---------------------------------------------------------------------------
@@ -694,8 +695,8 @@ fn no_envelope_default_outside_parser() {
         }
     }
     assert_violations(
-        "no `*::placeholder()` constructors on event types (RS-12, \
-         wx-ywdnz.1) and no `EventEnvelope::default()` (RS-13, wx-7tde8)",
+        "no `*::placeholder()` constructors on event types (RS-12) and \
+         no `EventEnvelope::default()` (RS-13)",
         &violations,
     );
 }

@@ -1,7 +1,7 @@
 //! End-to-end smoke test for `loom run --once`.
 //!
-//! Spec acceptance criterion (wx-3hhwq.20): "loom run --once against a fake
-//! bd returns a meaningful exit code (not unrecognized subcommand)".
+//! Pins that `loom run --once` against a fake bd returns a meaningful
+//! exit code (not unrecognized subcommand).
 //!
 //! The test installs a stub `bd` on PATH that prints `[]` for every `ready` /
 //! `list` query (emulating an empty molecule), seeds a state DB so spec
@@ -92,9 +92,9 @@ fn loom_run_once_against_empty_bd_exits_zero() {
     path_entries.extend(std::env::split_paths(&path));
     let new_path = std::env::join_paths(path_entries).unwrap();
 
-    // The CLI requires LOOM_PROFILES_MANIFEST for spawn-bound subcommands
-    // (wx-3hhwq.32). Even on the empty-queue fast-path the manifest is read
-    // before spec resolution, so the smoke test must point at a real file.
+    // The CLI requires LOOM_PROFILES_MANIFEST for spawn-bound subcommands.
+    // Even on the empty-queue fast-path the manifest is read before spec
+    // resolution, so the smoke test must point at a real file.
     let manifest_path = workspace.join("profile-images.json");
     std::fs::write(&manifest_path, "{}").unwrap();
 
@@ -137,7 +137,7 @@ fn loom_run_once_against_empty_bd_exits_zero() {
     );
 }
 
-/// FR1 (wx-3hhwq.63): the `--parallel N` path of `loom run` must call
+/// FR1: the `--parallel N` path of `loom run` must call
 /// `bd ready` with `--exclude-label=loom:clarify --exclude-label=loom:blocked`,
 /// matching the sequential path's behavior. Without these flags, beads
 /// parked for human resolution would be re-dispatched on every loop. The
@@ -210,9 +210,8 @@ fn loom_run_parallel_passes_exclude_label_to_bd_ready() {
 
 #[test]
 fn loom_run_recognizes_subcommand() {
-    // Regression guard: before wx-3hhwq.20 the binary did not expose `run`,
-    // so `loom run --help` printed "unrecognized subcommand: run". This test
-    // pins the inverse — `--help` for the new subcommand exits cleanly.
+    // Regression guard: `loom run --help` must exit cleanly. A binary
+    // that does not expose `run` prints "unrecognized subcommand: run".
     let loom_bin = env!("CARGO_BIN_EXE_loom");
     let output = Command::new(loom_bin)
         .arg("run")

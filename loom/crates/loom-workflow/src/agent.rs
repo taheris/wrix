@@ -66,14 +66,13 @@ pub async fn run_agent<B: AgentBackend>(
 /// `infra-preflight` immediately and grant mid-session failures one
 /// driver-memory retry per `loom run`.
 ///
-/// `envelope_builder` is the R1 (wx-cqzxh) / RS-12 plumbing: each
-/// `ParsedAgentEvent` the session yields is joined with the next
-/// per-spawn envelope (monotonic `seq`, real `bead_id`, real wall-clock
-/// `ts_ms`) via `AgentEvent::from_parsed`. The session layer is the
-/// sole constructor of `AgentEvent`; parsers cannot reach a stamped
-/// event by any other path. When `None`, the loop falls back to
-/// `phase_envelope_builder` so phase spawns (todo / plan / msg) without
-/// a bead context still produce fully-valid envelopes (bead id
+/// `envelope_builder` joins each `ParsedAgentEvent` the session yields
+/// with the next per-spawn envelope (monotonic `seq`, real `bead_id`,
+/// real wall-clock `ts_ms`) via `AgentEvent::from_parsed`. The session
+/// layer is the sole constructor of `AgentEvent`; parsers cannot reach
+/// a stamped event by any other path. When `None`, the loop falls back
+/// to `phase_envelope_builder` so phase spawns (todo / plan / msg)
+/// without a bead context still produce fully-valid envelopes (bead id
 /// `wx-phase`).
 pub async fn run_agent_classified<B: AgentBackend>(
     config: &SpawnConfig,

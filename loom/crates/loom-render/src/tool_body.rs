@@ -1,4 +1,4 @@
-//! Per-tool summary cells + body formatters. Spec H3 (wx-h15kl).
+//! Per-tool summary cells + body formatters.
 //!
 //! Each builtin tool gets a tailored one-line summary cell; verbose
 //! mode (`-v`) widens the body cap to "full content". The default
@@ -35,9 +35,9 @@ pub const BODY_CAP_BYTES: usize = 2048;
 /// path-bearing tools (Read/Edit/Write/Grep/WebFetch) wrap the path or
 /// URL in the OSC 8 hyperlink escape so cmd-click opens the editor or
 /// browser. `cwd` is the workspace root used to compute absolute
-/// `file://` URLs from relative paths (R4, wx-iuw22) and to normalize
-/// absolute workspace paths to repo-relative form in the displayed
-/// summary cell (R6, wx-fgp9j.13).
+/// `file://` URLs from relative paths and to normalize absolute
+/// workspace paths to repo-relative form in the displayed summary
+/// cell.
 ///
 /// Constructed once per renderer at session start — environment
 /// detection lives at the call site, not inside this struct, so tests
@@ -382,8 +382,8 @@ mod tests {
         );
     }
 
-    /// R4 — Read/Edit/Write/Grep paths wrap in OSC 8 when supported.
-    /// The display text stays the same; the escape brackets it.
+    /// Read/Edit/Write/Grep paths wrap in OSC 8 when supported. The
+    /// display text stays the same; the escape brackets it.
     #[test]
     fn enabled_osc8_wraps_read_path() {
         let ctx = Osc8Context::enabled(PathBuf::from("/workspace"));
@@ -403,8 +403,8 @@ mod tests {
         assert!(cell.contains("\x07"), "{cell:?}");
     }
 
-    /// R4 — WebFetch URL wraps the same URL as both target and display
-    /// so cmd-click opens the browser at the visible URL.
+    /// WebFetch URL wraps the same URL as both target and display so
+    /// cmd-click opens the browser at the visible URL.
     #[test]
     fn enabled_osc8_wraps_webfetch_url() {
         let ctx = Osc8Context::enabled(PathBuf::from("/workspace"));
@@ -419,9 +419,9 @@ mod tests {
         );
     }
 
-    /// R6 — `normalize_for_display` strips a leading workspace prefix
-    /// so summary cells render repo-relative paths. The agent still
-    /// uses the absolute form internally; this is display-only.
+    /// `normalize_for_display` strips a leading workspace prefix so
+    /// summary cells render repo-relative paths. The agent still uses
+    /// the absolute form internally; this is display-only.
     #[test]
     fn normalize_for_display_strips_workspace_prefix() {
         let cwd = PathBuf::from("/workspace");
@@ -435,7 +435,7 @@ mod tests {
         );
     }
 
-    /// R6 — Already-relative paths pass through unchanged. Used by the
+    /// Already-relative paths pass through unchanged. Used by the
     /// agent's own relative-path calls.
     #[test]
     fn normalize_for_display_passes_relative_paths_through() {
@@ -443,8 +443,8 @@ mod tests {
         assert_eq!(normalize_for_display(&cwd, "src/lib.rs"), "src/lib.rs");
     }
 
-    /// R6 — Paths outside the workspace render as-is (no aggressive
-    /// "../" rewriting; absolute paths the agent uses for /tmp or system
+    /// Paths outside the workspace render as-is (no aggressive "../"
+    /// rewriting; absolute paths the agent uses for /tmp or system
     /// files stay readable).
     #[test]
     fn normalize_for_display_keeps_non_workspace_paths() {
@@ -453,7 +453,7 @@ mod tests {
         assert_eq!(normalize_for_display(&cwd, "/etc/hosts"), "/etc/hosts");
     }
 
-    /// R6 — Empty cwd disables normalization. Used by the `disabled`
+    /// Empty cwd disables normalization. Used by the `disabled`
     /// context when no workspace root has been configured.
     #[test]
     fn normalize_for_display_passthrough_when_cwd_empty() {
@@ -464,7 +464,7 @@ mod tests {
         );
     }
 
-    /// R6 — Summary cells emit repo-relative paths even when the agent
+    /// Summary cells emit repo-relative paths even when the agent
     /// passes the absolute `/workspace/...` form. Pin the end-to-end
     /// path through `summary_cell` for the Read tool.
     #[test]
@@ -478,8 +478,8 @@ mod tests {
         );
     }
 
-    /// R6 — Edit/Write/Grep cells also normalize. Walk each one with
-    /// the same /workspace/... input to pin the consistent contract.
+    /// Edit/Write/Grep cells also normalize. Walk each one with the
+    /// same /workspace/... input to pin the consistent contract.
     #[test]
     fn edit_write_grep_summaries_normalize_paths() {
         let ctx = Osc8Context::disabled().with_cwd(PathBuf::from("/workspace"));
@@ -506,7 +506,7 @@ mod tests {
         }
     }
 
-    /// R6 — When OSC 8 is enabled, the URL must keep the absolute path
+    /// When OSC 8 is enabled, the URL must keep the absolute path
     /// (cmd-click needs to resolve it without depending on the
     /// terminal's cwd) but the display text is the relative form.
     #[test]
@@ -524,7 +524,7 @@ mod tests {
         );
     }
 
-    /// R4 — Disabled context returns plain text — no escape bytes.
+    /// Disabled context returns plain text — no escape bytes.
     #[test]
     fn disabled_osc8_leaves_text_unchanged() {
         let cell = summary_cell(

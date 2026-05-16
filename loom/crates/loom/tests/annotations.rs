@@ -130,7 +130,7 @@ fn no_orphan_test_functions() {
 
 /// Verifies dispatchers in `tests/loom-test.sh` invoke cargo tests whose
 /// names actually resolve. `cargo test ... -- <name>` exits 0 silently when
-/// `<name>` matches nothing, so a stale rename (wx-xad18) or a typo lets a
+/// `<name>` matches nothing, so a stale rename or a typo lets a
 /// dispatcher claim coverage without exercising any code.
 ///
 /// For each top-level `test_*` dispatcher: parse the body, extract cargo
@@ -163,8 +163,7 @@ fn dispatcher_cargo_tests_resolve() {
                          (`cargo test ... -- <name>` exits 0 silently \
                          when the name resolves to nothing, so this \
                          dispatcher claims coverage without exercising \
-                         any code — see wx-xad18 for the canonical \
-                         instance)",
+                         any code)",
                         SHELL_RUNNER_PATH,
                         dispatcher.line,
                         dispatcher.name,
@@ -295,7 +294,7 @@ fn find_subslice(haystack: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
 /// `path::fn` split on the LAST `::`. The path portion may contain
 /// further `::` (unlikely for filesystem paths, but cheap to allow).
 /// A trailing space-prefixed `@unit-ok` marker is stripped off — that's
-/// R10 (wx-2pbxe) doctor opt-out syntax, not part of the function name.
+/// the doctor opt-out syntax, not part of the function name.
 fn split_path_fn(inner: &str) -> Option<(&str, &str)> {
     let idx = inner.rfind("::")?;
     let path = &inner[..idx];
@@ -1553,7 +1552,7 @@ helper() {
 
     #[test]
     fn cargo_name_resolves_rejects_stale_rename() {
-        // wx-xad18 — old dispatcher name pointed at a rename target.
+        // Stale dispatcher name pointing at a renamed target.
         let index = index_with_fqs(&["render::tests::review_renders_review_context_fields"]);
         assert!(!cargo_name_resolves(
             &index,

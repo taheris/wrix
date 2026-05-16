@@ -88,7 +88,7 @@ fn open_sink(
     Ok((s, buf))
 }
 
-/// Open a sink whose `TerminalRenderer` has `color=true` so the R3
+/// Open a sink whose `TerminalRenderer` has `color=true` so the
 /// in-place running indicator is active. Used by the cancellation /
 /// running-indicator tests that need to assert `\r` + clear-to-EOL
 /// sequences appear in the captured buffer.
@@ -712,8 +712,8 @@ fn run_single_event_sink_property() -> Result<()> {
 }
 
 //---------------------------------------------------------------------------
-// R2 (wx-k7tg5) — Read + Edit + Bash drive through `LogSink::emit` and the
-// rendered terminal carries the per-tool spec table shape: `Read <path>:range`,
+// Read + Edit + Bash drive through `LogSink::emit` and the rendered
+// terminal carries the per-tool summary cell shape: `Read <path>:range`,
 // `Edit <path> +N -M diff↓`, and `Bash <cmd-truncated>`. Plus: a large
 // `ToolResult` body in Verbose mode is capped and the `[N more lines —
 // loom logs -b … --tool …]` recovery hint shows up.
@@ -784,10 +784,10 @@ fn run_default_renders_per_tool_summary_cells() -> Result<()> {
 }
 
 //---------------------------------------------------------------------------
-// R3 (wx-mpci2) — `loom run`'s default mode opens an in-place running
-// indicator for top-level tool calls. ToolCall writes `<summary> running...`
-// without a newline; the matching ToolResult overwrites with `\r` +
-// clear-to-EOL + `<summary> ✓ Ns\n`. Pin this end-to-end through LogSink.
+// `loom run`'s default mode opens an in-place running indicator for
+// top-level tool calls. ToolCall writes `<summary> running...` without a
+// newline; the matching ToolResult overwrites with `\r` + clear-to-EOL
+// + `<summary> ✓ Ns\n`. Pin this end-to-end through LogSink.
 //---------------------------------------------------------------------------
 #[test]
 fn run_default_indicator_emits_overwrite_pattern_on_tool_result() -> Result<()> {
@@ -842,9 +842,9 @@ fn run_default_indicator_emits_overwrite_pattern_on_tool_result() -> Result<()> 
 }
 
 //---------------------------------------------------------------------------
-// R3 stub promotion — `test_cancellation_clean_close`. The sink can be
-// finalized mid-tool (cancel / panic / signal). Renderer must NOT leave
-// a dangling `\r` region — `finish` finalizes any open running line with
+// `test_cancellation_clean_close` — the sink can be finalized mid-tool
+// (cancel / panic / signal). Renderer must NOT leave a dangling `\r`
+// region — `finish` finalizes any open running line with
 // a glyph that matches the outcome, and the captured buffer ends with a
 // closing newline so the next renderer (if any) starts on a fresh line.
 //---------------------------------------------------------------------------

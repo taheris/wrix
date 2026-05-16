@@ -1,6 +1,6 @@
 //! OSC 8 hyperlinks — wrap link targets in the terminal-hyperlink
 //! escape sequence so cmd-click in supporting terminals opens the
-//! target. Spec H5 (wx-zapf5).
+//! target.
 //!
 //! OSC 8 format: `\x1b]8;;<url>\x07<display>\x1b]8;;\x07`. The empty
 //! parameter slot (`;;`) is for hyperlink ids and is unused here. The

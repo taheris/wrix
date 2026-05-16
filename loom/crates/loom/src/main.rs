@@ -312,7 +312,7 @@ enum Command {
         /// Dismiss the bead (write canonical note + remove the loom:* label).
         #[arg(long, short = 'd')]
         dismiss: bool,
-        /// Launch an interactive Drafter chat session (I2, wx-2dreh).
+        /// Launch an interactive Drafter chat session.
         /// Renders the msg.md template and spawns a container with the
         /// claude backend attached to the user's terminal. Mutually
         /// exclusive with `-o`, `-r`, `-d`, `-b`, `-n` — the chat
@@ -1373,8 +1373,7 @@ async fn dispatch_classified(
 /// wall-clock `ts_ms`. The workflow layer joins each `ParsedAgentEvent`
 /// with the builder's output via `AgentEvent::from_parsed` (RS-12).
 /// `molecule_id` and `iteration` are zero until the driver threads them
-/// through — R2/R7 follow-ups will widen this once the dispatcher reads
-/// them from the bead context.
+/// through.
 fn build_envelope_builder(bead_id: BeadId) -> loom_events::EnvelopeBuilder {
     let clock = SystemClock::new();
     loom_events::EnvelopeBuilder::new(bead_id, None, 0, loom_events::Source::Agent, move || {
@@ -1427,7 +1426,7 @@ fn open_bead_sink(
 
 /// Same as [`open_bead_sink`] but constructs a terminal renderer from
 /// the resolved [`RenderMode`] and hands it to the sink so events tee
-/// into both the on-disk JSONL and the user's terminal. R5 (wx-zorjk).
+/// into both the on-disk JSONL and the user's terminal.
 fn open_bead_sink_with_renderer(
     logs_root: &Path,
     label: &SpecLabel,
@@ -1708,10 +1707,10 @@ fn run_review(
     let workspace_buf = workspace.to_path_buf();
     let logs_root = workspace.join(".wrapix/loom/logs");
     let label_for_sink = label.clone();
-    // R7 (wx-r9tmc) — pin one phase timestamp so the verdict gate's
-    // `push_gate_*` driver events and the reviewer agent's events
-    // land in the same JSONL log file. Both writers compute the path
-    // from `(logs_root, label, "review", phase_when)`.
+    // Pin one phase timestamp so the verdict gate's `push_gate_*`
+    // driver events and the reviewer agent's events land in the same
+    // JSONL log file. Both writers compute the path from
+    // `(logs_root, label, "review", phase_when)`.
     let phase_when = SystemClock::new().wall_now();
     let logs_root_for_spawn = logs_root.clone();
     let style_rules_for_review = config.style_rules.clone();
@@ -1781,8 +1780,7 @@ fn run_msg(
     }
 }
 
-/// `loom msg -c [-s <label>]` — interactive Drafter chat session
-/// (R6, wx-ibgar).
+/// `loom msg -c [-s <label>]` — interactive Drafter chat session.
 ///
 /// Renders the `msg.md` template against the outstanding `loom:clarify`
 /// (and `loom:blocked`) beads, spawns the agent via the same dispatch
@@ -1907,7 +1905,7 @@ fn run_msg_inner(
         // `-o <int>` strict option lookup: parse the bead's description,
         // require `### Option <int>` to exist, compose the canonical
         // `"Chose option N — title: body"` note. Validation runs before
-        // any bd state mutation per the I1 acceptance.
+        // any bd state mutation.
         let note = compose_option_note(&target, opt_idx, &target_bead.description)?;
         let runtime = tokio::runtime::Runtime::new()?;
         let id_clone = target.clone();

@@ -92,7 +92,7 @@ fn seeded_state(
     Arc::new(db)
 }
 
-/// wx-hcolw.6 gate: `loom todo` must build a `SpawnConfig` whose
+/// `loom todo` must build a `SpawnConfig` whose
 /// `initial_prompt` carries the rendered phase template body (with the
 /// scratchpad path partial), whose `RePinContent` is an empty placeholder
 /// — the rendered phase prompt now flows from `<scratch_dir>/prompt.txt`

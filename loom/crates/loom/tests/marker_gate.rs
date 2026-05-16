@@ -11,13 +11,12 @@
 //! `bd close` — closure is the agent's responsibility per
 //! `specs/loom-harness.md` § Verdict gate.
 //!
-//! Bug B (wx-l094z) collapsed every clean-exit session to
+//! A prior bug collapsed every clean-exit session to
 //! `AgentOutcome::Success → bd close`, ignoring markers entirely. The
-//! pre-fix unit tests on `phase_verdict::decide` passed throughout
-//! that bug's lifetime because they never exercised `loom run`'s
-//! actual marker-routing wiring. This file pins both halves of the
-//! fix end-to-end: marker → label, and driver-side `bd close` never
-//! fires on a dispatched bead.
+//! unit tests on `phase_verdict::decide` passed throughout because they
+//! never exercised `loom run`'s actual marker-routing wiring. This file
+//! pins both halves of the contract end-to-end: marker → label, and
+//! driver-side `bd close` never fires on a dispatched bead.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -287,7 +286,7 @@ fn loom_run_never_invokes_bd_close_on_dispatched_bead_across_all_markers() {
             &state_dir,
             id,
             "no-driver-close gate",
-            "Driver must not call bd close on this bead — verifies wx-l094z fix.\n",
+            "Driver must not call bd close on this bead.\n",
             &["spec:noclostest", "profile:base"],
         );
 

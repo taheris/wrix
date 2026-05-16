@@ -25,7 +25,7 @@ pub enum BeadOutcome {
 /// in [`select_renderer`] and the CLI flag wiring in `loom run` /
 /// `loom logs`. Mode is the format dimension; verbosity is orthogonal.
 ///
-/// Selection logic per spec (`H2` table):
+/// Selection logic:
 /// - TTY + no `--plain`/`--json`/`--raw` + no `NO_COLOR` → `Pretty`
 /// - non-TTY OR `NO_COLOR` set OR `--plain` → `Plain`
 /// - `--json` → `Json`
@@ -197,19 +197,19 @@ pub struct TerminalRenderer {
     /// Per-tool-call nesting depth. Populated when a `ToolCall` arrives
     /// — depth = parent's depth + 1 when `parent_tool_call_id` is set,
     /// 0 otherwise. The renderer indents the rendered line by
-    /// `depth * 2` spaces (H6, wx-46jgi). Cleared lazily; entries only
-    /// matter while the corresponding tool is in flight.
+    /// `depth * 2` spaces. Cleared lazily; entries only matter while
+    /// the corresponding tool is in flight.
     indent_by_tool: std::collections::HashMap<loom_events::identifier::ToolCallId, usize>,
     /// Per-tool-call state captured at `ToolCall` time so the matching
-    /// `ToolResult` can finalize the pair (R2, wx-k7tg5 + H2). Stores
-    /// `(tool, params, ts_ms)` — params drives `cap_body` formatting in
-    /// verbose mode, `ts_ms` lets the result line render its duration
-    /// from the event envelope rather than wall clock.
+    /// `ToolResult` can finalize the pair. Stores `(tool, params,
+    /// ts_ms)` — params drives `cap_body` formatting in verbose mode,
+    /// `ts_ms` lets the result line render its duration from the event
+    /// envelope rather than wall clock.
     pending_calls: std::collections::HashMap<loom_events::identifier::ToolCallId, PendingToolCall>,
     /// In-place "running indicator" state for the top-level tool call
-    /// currently in-flight (R3, wx-mpci2). When `Some((id, started,
-    /// summary, indent))`, a `\r`-overwritable line has been written
-    /// for that call and the matching `ToolResult` should finalize it.
+    /// currently in-flight. When `Some((id, started, summary, indent))`,
+    /// a `\r`-overwritable line has been written for that call and the
+    /// matching `ToolResult` should finalize it.
     /// Any other event must clear/finalize the line first so it does
     /// not interleave with running-state text.
     running: Option<(ToolCallId, Instant, String, String)>,
@@ -233,11 +233,11 @@ pub struct TerminalRenderer {
     /// indicator. Disabled in `Plain`/`Json`/`Raw` modes, when running
     /// in parallel (multiple `\r` regions don't compose), and when
     /// the writer is known to be non-TTY. The CLI surface decides this
-    /// per spec (R5, wx-zorjk wires it through `RenderMode::select`).
+    /// and wires it through `RenderMode::select`.
     indicator_enabled: bool,
-    /// OSC 8 hyperlink wrapping for path-bearing summary cells (R4,
-    /// wx-iuw22). Default is disabled; callers in supported terminals
-    /// enable via [`TerminalRenderer::with_osc8`].
+    /// OSC 8 hyperlink wrapping for path-bearing summary cells.
+    /// Default is disabled; callers in supported terminals enable via
+    /// [`TerminalRenderer::with_osc8`].
     osc8: tool_body::Osc8Context,
     /// Override for the detected terminal width. Tests inject a fixed
     /// width via [`TerminalRenderer::with_term_width`] so the overflow
@@ -275,7 +275,7 @@ impl TerminalRenderer {
     /// Build a renderer in replay mode — events are read from a saved
     /// JSONL log rather than a running agent, so the in-place running
     /// indicator is suppressed and pair durations come from `ts_ms`
-    /// deltas. The spec's "live: bool" parameter (H2/H6) lives here.
+    /// deltas. The "live: bool" parameter lives here.
     pub fn new_replay(
         out: impl Write + Send + 'static,
         mode: RenderMode,
@@ -410,9 +410,9 @@ impl TerminalRenderer {
                 params,
                 parent_tool_call_id,
             } => {
-                // R3 — if another tool's running line (or buffered
-                // overflow) is in flight, finalize it before laying down
-                // a nested or sibling call.
+                // If another tool's running line (or buffered overflow)
+                // is in flight, finalize it before laying down a nested
+                // or sibling call.
                 self.close_in_flight("…")?;
                 self.tool_count += 1;
                 let depth = match parent_tool_call_id {
@@ -474,11 +474,11 @@ impl TerminalRenderer {
                 output,
                 is_error,
             } => {
-                // R3 — finalize the running indicator if this result
-                // matches the open call. Non-matching results (which
-                // shouldn't happen in practice but might under nesting)
-                // close any open running line first to avoid orphaned
-                // `\r` regions.
+                // Finalize the running indicator if this result matches
+                // the open call. Non-matching results (which shouldn't
+                // happen in practice but might under nesting) close any
+                // open running line first to avoid orphaned `\r`
+                // regions.
                 let matches_running = self
                     .running
                     .as_ref()
@@ -500,8 +500,8 @@ impl TerminalRenderer {
                     self.finalize_buffered_with_glyph_dur(glyph, pair_duration)?;
                 } else {
                     self.close_in_flight("…")?;
-                    // R3 + H2 — replay (non-indicator) path still needs
-                    // to surface the pair's final glyph + duration so
+                    // Replay (non-indicator) path still needs to
+                    // surface the pair's final glyph + duration so
                     // `loom logs` shows the same information as `loom
                     // run`. Emit one indented closer line under the
                     // already-printed tool-call summary.
@@ -679,9 +679,9 @@ impl TerminalRenderer {
     }
 
     fn write_finish(&mut self, outcome: BeadOutcome, elapsed: Duration) -> io::Result<()> {
-        // R3 — close out any open running line before the bead's
-        // closing summary so a cancelled / failed bead doesn't leave a
-        // dangling `\r` region for the next renderer to inherit.
+        // Close out any open running line before the bead's closing
+        // summary so a cancelled / failed bead doesn't leave a dangling
+        // `\r` region for the next renderer to inherit.
         let cleanup_glyph = match outcome {
             BeadOutcome::Done => "✓",
             BeadOutcome::Failed => "✗",
@@ -1107,12 +1107,12 @@ mod tests {
         assert!(out.contains(ANSI_RESET));
     }
 
-    // -- R2 tests ----------------------------------------------------------
+    // -- summary-cell tests ------------------------------------------------
 
     /// `ToolCall` lines use the per-tool spec cell — `Read   <path>:<range>`,
     /// `Edit   <path>   +N -M   diff↓`, `Bash   <cmd>`. The cell shape comes
     /// from `tool_body::summary_cell`; this test pins that the renderer
-    /// dispatches through it (R2, wx-k7tg5).
+    /// dispatches through it.
     #[test]
     fn tool_call_line_uses_summary_cell_shape() {
         let out = capture(RenderMode::Default, false, false, |r| {
@@ -1295,9 +1295,9 @@ mod tests {
         assert!(!out.contains("file-contents"), "{out:?}");
     }
 
-    /// R4 — Renderer wraps `ToolCall` summary cells in OSC 8 hyperlinks
-    /// when the OSC 8 context is enabled. Cmd-click on `src/lib.rs` in
-    /// the rendered line opens the file in the user's editor.
+    /// Renderer wraps `ToolCall` summary cells in OSC 8 hyperlinks when
+    /// the OSC 8 context is enabled. Cmd-click on `src/lib.rs` in the
+    /// rendered line opens the file in the user's editor.
     #[test]
     fn tool_call_line_wraps_paths_in_osc8_when_enabled() {
         let buf: Vec<u8> = Vec::new();
@@ -1353,8 +1353,8 @@ mod tests {
         );
     }
 
-    /// R4 — Without OSC 8 (default), the rendered line contains plain
-    /// text with no escape bytes around the path. Silent degradation.
+    /// Without OSC 8 (default), the rendered line contains plain text
+    /// with no escape bytes around the path. Silent degradation.
     #[test]
     fn tool_call_line_no_osc8_by_default() {
         let out = capture(RenderMode::Default, false, false, |r| {
@@ -1837,7 +1837,7 @@ mod tests {
         assert!(out.contains("push_gate_walk"), "{out:?}");
     }
 
-    // -- Summary-cell overflow tests (wx-ywdnz.3) --------------------------
+    // -- Summary-cell overflow tests ---------------------------------------
 
     /// Run a `TerminalRenderer` callback against a captured buffer with
     /// a pinned terminal width — the overflow tests depend on knowing
