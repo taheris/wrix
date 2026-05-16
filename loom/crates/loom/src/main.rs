@@ -1002,6 +1002,10 @@ fn run_run(
     let label_for_sink = label.clone();
     let render_mode = resolve_render_mode(render_flags);
     let style_rules_for_run = config.style_rules.clone();
+    let retry_policy = RetryPolicy {
+        max_retries: config.loop_.max_retries,
+    };
+    let max_iterations = config.loop_.max_iterations;
     let summary = runtime.block_on(async move {
         let bd = BdClient::new();
         let mut controller = ProductionAgentLoopController::new(
@@ -1058,16 +1062,17 @@ fn run_run(
         )
         .with_handoff_lock(guard)
         .with_style_rules(style_rules_for_run);
-        run_loop(&mut controller, mode, RetryPolicy::default()).await
+        run_loop(&mut controller, mode, retry_policy, max_iterations).await
     })?;
     println!(
         "loom run: processed {} bead(s), clarified {}, blocked {}, molecule_complete={}, \
-         execed_review={}",
+         execed_review={}, outer_iterations={}",
         summary.beads_processed,
         summary.beads_clarified,
         summary.beads_blocked,
         summary.molecule_complete,
         summary.execed_review,
+        summary.outer_iterations,
     );
     Ok(())
 }

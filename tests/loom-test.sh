@@ -3738,8 +3738,30 @@ test_snapshots_no_crate_root_allows() {
 # decision function production wiring, consolidated pinning matrix
 # verifications, spec_conventions partial + LoomConfig field,
 # rule-family-agnostic partials.
-test_run_execs_check_then_review_tree() { _pending_stub run_execs_check_then_review_tree; }
-test_run_outer_loop_iterates_on_fixups() { _pending_stub run_outer_loop_iterates_on_fixups; }
+#-----------------------------------------------------------------------------
+# test_run_execs_check_then_review_tree — FR1 molecule-completion handoff:
+# `loom run`'s outer loop invokes `loom check --tree -s <label>` first,
+# then `loom review --tree -s <label>`, both unconditionally. The check-
+# then-review ordering and the `--tree` scope on both invocations are
+# asserted by a recording stub script in the production test.
+#-----------------------------------------------------------------------------
+test_run_execs_check_then_review_tree() {
+    run_cargo_test run::production::tests::exec_review_invokes_loom_check_tree_then_loom_review_tree
+    run_cargo_test run::production::tests::exec_review_continues_to_review_when_check_exits_nonzero
+}
+
+#-----------------------------------------------------------------------------
+# test_run_outer_loop_iterates_on_fixups — FR1 outer loop: after the
+# molecule-completion handoff returns, `run_loop` re-polls `bd ready`,
+# processes any newly-ready fix-up beads, and only exits when (a) no new
+# fix-ups appear after a handoff (stall), or (b) the `[loop]
+# max_iterations` counter is exhausted.
+#-----------------------------------------------------------------------------
+test_run_outer_loop_iterates_on_fixups() {
+    run_cargo_test run::runner::tests::continuous_outer_loop_processes_fix_up_bead_then_exits_on_stall
+    run_cargo_test run::runner::tests::continuous_outer_loop_bounded_by_max_iterations
+    run_cargo_test run::runner::tests::continuous_outer_loop_exits_on_stall_when_no_fixups_appear
+}
 test_push_gate_refuses_on_tree_review_flag() { _pending_stub push_gate_refuses_on_tree_review_flag; }
 test_bare_loom_produces_grouped_help() { _pending_stub bare_loom_produces_grouped_help; }
 #-----------------------------------------------------------------------------

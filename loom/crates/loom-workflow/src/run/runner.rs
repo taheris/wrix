@@ -1,6 +1,7 @@
 use loom_driver::bd::Bead;
 use loom_driver::identifier::BeadId;
 use loom_events::DriverKind;
+use tracing::info;
 
 use super::error::RunError;
 use super::outcome::{AgentOutcome, BeadResult};
@@ -45,6 +46,10 @@ pub struct RunSummary {
     pub molecule_complete: bool,
     /// `loom review` was exec'd (continuous mode + molecule complete).
     pub execed_review: bool,
+    /// Outer-loop passes consumed (each pass = one molecule-completion
+    /// handoff invoking `loom check --tree` + `loom review --tree`). Bounded
+    /// by `[loop] max_iterations` per FR1.
+    pub outer_iterations: u32,
 }
 
 /// Side-effect surface the [`run_loop`] driver depends on.
@@ -58,7 +63,9 @@ pub struct RunSummary {
 ///   tee `AgentEvent` stream into `LogSink`, parse exit signal
 /// - `apply_clarify` → `BdClient::update --add-label loom:clarify --notes <q>`
 /// - `apply_blocked` → `BdClient::update --add-label loom:blocked --notes <cause>`
-/// - `exec_review` → `tokio::process::Command::new("loom").arg("review")…`
+/// - `exec_review` → `tokio::process::Command` invocations of
+///   `loom check --tree` then `loom review --tree` (FR1 molecule-completion
+///   handoff).
 ///
 /// **No `close_bead`.** `bd close` is the agent's responsibility, not the
 /// driver's, per `specs/loom-harness.md`'s verdict-gate table where
@@ -101,7 +108,10 @@ pub trait AgentLoopController: Send {
         error: &str,
     ) -> impl std::future::Future<Output = Result<(), RunError>> + Send;
 
-    /// Hand off to `loom review` on molecule completion (continuous mode).
+    /// Molecule-completion handoff (FR1). Invokes `loom check --tree`
+    /// followed by `loom review --tree`; both are unconditional and the
+    /// non-zero exit codes that signal concerns do not bubble up as errors
+    /// here — they drive fix-up beads onto the next outer-loop pass.
     fn exec_review(&mut self) -> impl std::future::Future<Output = Result<(), RunError>> + Send;
 
     /// Emit a driver-side event into the controller's event sink. The
@@ -131,8 +141,11 @@ pub const AGENT_BLOCKED_CAUSE: &str = "agent-blocked";
 /// binary and tests can supply different concrete impls. Returns when:
 ///
 /// - `mode == Once` and one bead finished (success / clarify / blocked), or
-/// - `mode == Continuous` and `next_ready_bead` returned `None` (molecule
-///   complete) — `exec_review` is invoked before returning.
+/// - `mode == Continuous` and the molecule-completion handoff produced no
+///   new ready beads (push gate fired clean or molecule fully stuck), or
+/// - `mode == Continuous` and the outer-loop counter reached
+///   `max_iterations` per FR1 (each pass = process ready queue + invoke
+///   `exec_review`).
 ///
 /// `infra_retries_used` is driver-memory only: it lives on the stack of
 /// this single `run_loop` invocation and is **not** persisted. A new
@@ -142,46 +155,76 @@ pub async fn run_loop<C: AgentLoopController>(
     controller: &mut C,
     mode: RunMode,
     policy: RetryPolicy,
+    max_iterations: u32,
 ) -> Result<RunSummary, RunError> {
     let mut summary = RunSummary::default();
     let mut infra_retries_used: u32 = 0;
-    loop {
-        let bead = match controller.next_ready_bead().await? {
-            Some(b) => b,
-            None => {
-                summary.molecule_complete = true;
-                if matches!(mode, RunMode::Continuous) {
-                    controller.exec_review().await?;
-                    summary.execed_review = true;
+    'outer: loop {
+        let mut beads_this_pass: u32 = 0;
+        // Drain the ready queue; fix-up beads bonded during this pass become
+        // eligible on the next `bd ready` call.
+        loop {
+            let bead = match controller.next_ready_bead().await? {
+                Some(b) => b,
+                None => break,
+            };
+
+            let result =
+                process_one_bead(controller, &bead, policy, &mut infra_retries_used).await?;
+            summary.beads_processed += 1;
+            beads_this_pass += 1;
+
+            match result {
+                BeadResult::Done => {
+                    // No driver-side `bd close`. The agent owns closure (per
+                    // the verdict-gate table's `bd-closed` observable); if
+                    // it forgot to call `bd close` on `LOOM_COMPLETE`,
+                    // `loom review` routes that to `incomplete-signaling`
+                    // recovery on its next walk.
                 }
-                break;
+                BeadResult::Clarified { note } => {
+                    controller.apply_clarify(&bead.id, &note).await?;
+                    summary.beads_clarified += 1;
+                }
+                BeadResult::Blocked { cause, error } => {
+                    controller.apply_blocked(&bead.id, &cause, &error).await?;
+                    summary.beads_blocked += 1;
+                }
             }
-        };
 
-        let result = process_one_bead(controller, &bead, policy, &mut infra_retries_used).await?;
-        summary.beads_processed += 1;
-
-        match result {
-            BeadResult::Done => {
-                // No driver-side `bd close`. The agent owns closure (per the
-                // verdict-gate table's `bd-closed` observable); if it
-                // forgot to call `bd close` on `LOOM_COMPLETE`, `loom review`
-                // routes that to `incomplete-signaling` recovery on its
-                // next walk.
-            }
-            BeadResult::Clarified { note } => {
-                controller.apply_clarify(&bead.id, &note).await?;
-                summary.beads_clarified += 1;
-            }
-            BeadResult::Blocked { cause, error } => {
-                controller.apply_blocked(&bead.id, &cause, &error).await?;
-                summary.beads_blocked += 1;
+            if matches!(mode, RunMode::Once) {
+                return Ok(summary);
             }
         }
 
-        if matches!(mode, RunMode::Once) {
-            break;
+        summary.molecule_complete = true;
+
+        if !matches!(mode, RunMode::Continuous) {
+            break 'outer;
         }
+
+        // Stall: a prior handoff produced no fix-ups → molecule is either
+        // fully done (push fired clean inside `loom check`) or fully stuck
+        // (remaining work parked under `loom:blocked` / `loom:clarify`).
+        if beads_this_pass == 0 && summary.execed_review {
+            info!(
+                outer_iterations = summary.outer_iterations,
+                "loom run: outer loop exiting — no new ready beads after handoff",
+            );
+            break 'outer;
+        }
+
+        if summary.outer_iterations >= max_iterations {
+            info!(
+                outer_iterations = summary.outer_iterations,
+                max_iterations, "loom run: outer-loop counter exhausted",
+            );
+            break 'outer;
+        }
+
+        controller.exec_review().await?;
+        summary.execed_review = true;
+        summary.outer_iterations += 1;
     }
     Ok(summary)
 }
@@ -287,6 +330,11 @@ mod tests {
         clarified: Vec<(BeadId, String)>,
         blocked: Vec<(BeadId, String, String)>,
         review_calls: u32,
+        /// Beads pushed onto `ready_queue` on each `exec_review` call. One
+        /// entry per call; an empty entry means the handoff produced no
+        /// fix-ups (e.g., push gate fired clean). Excess `exec_review`
+        /// calls beyond the scripted plan inject nothing.
+        review_injects: VecDeque<Vec<Bead>>,
         driver_events: Vec<(String, String, serde_json::Value)>,
     }
 
@@ -325,6 +373,11 @@ mod tests {
 
         async fn exec_review(&mut self) -> Result<(), RunError> {
             self.review_calls += 1;
+            if let Some(fixups) = self.review_injects.pop_front() {
+                for b in fixups {
+                    self.ready_queue.push_back(b);
+                }
+            }
             Ok(())
         }
 
@@ -359,7 +412,7 @@ mod tests {
         c.ready_queue.push_back(bead("wx-2", &[]));
         c.agent_outcomes.push_back(AgentOutcome::Success);
 
-        let summary = run_loop(&mut c, RunMode::Once, RetryPolicy::default()).await?;
+        let summary = run_loop(&mut c, RunMode::Once, RetryPolicy::default(), 10).await?;
 
         assert_eq!(summary.beads_processed, 1);
         assert_eq!(c.run_calls.len(), 1);
@@ -383,7 +436,7 @@ mod tests {
             c.agent_outcomes.push_back(AgentOutcome::Success);
         }
 
-        let summary = run_loop(&mut c, RunMode::Continuous, RetryPolicy::default()).await?;
+        let summary = run_loop(&mut c, RunMode::Continuous, RetryPolicy::default(), 10).await?;
 
         assert_eq!(summary.beads_processed, 3);
         // All three reach Done; driver does not call bd close.
@@ -398,7 +451,7 @@ mod tests {
     async fn continuous_execs_review_on_molecule_complete() -> Result<(), RunError> {
         // Empty ready queue → first iteration sees None → exec review.
         let mut c = FakeController::default();
-        let summary = run_loop(&mut c, RunMode::Continuous, RetryPolicy::default()).await?;
+        let summary = run_loop(&mut c, RunMode::Continuous, RetryPolicy::default(), 10).await?;
         assert_eq!(summary.beads_processed, 0);
         assert!(summary.molecule_complete);
         assert!(summary.execed_review);
@@ -409,7 +462,7 @@ mod tests {
     #[tokio::test]
     async fn once_mode_does_not_exec_review_on_empty_queue() -> Result<(), RunError> {
         let mut c = FakeController::default();
-        let summary = run_loop(&mut c, RunMode::Once, RetryPolicy::default()).await?;
+        let summary = run_loop(&mut c, RunMode::Once, RetryPolicy::default(), 10).await?;
         assert!(summary.molecule_complete);
         assert!(!summary.execed_review, "once mode never execs review");
         assert_eq!(c.review_calls, 0);
@@ -427,7 +480,7 @@ mod tests {
             });
         }
 
-        let summary = run_loop(&mut c, RunMode::Once, RetryPolicy { max_retries: 2 }).await?;
+        let summary = run_loop(&mut c, RunMode::Once, RetryPolicy { max_retries: 2 }, 10).await?;
 
         assert_eq!(c.run_calls.len(), 3, "initial + 2 retries");
         // Attempt 1 has no previous_failure.
@@ -451,7 +504,7 @@ mod tests {
         });
         c.agent_outcomes.push_back(AgentOutcome::Success);
 
-        let summary = run_loop(&mut c, RunMode::Once, RetryPolicy { max_retries: 2 }).await?;
+        let summary = run_loop(&mut c, RunMode::Once, RetryPolicy { max_retries: 2 }, 10).await?;
 
         assert_eq!(c.run_calls.len(), 2);
         assert_eq!(c.run_calls[1].1.as_deref(), Some("boom"));
@@ -478,7 +531,7 @@ mod tests {
         });
         c.agent_outcomes.push_back(AgentOutcome::Success);
 
-        run_loop(&mut c, RunMode::Once, RetryPolicy { max_retries: 3 }).await?;
+        run_loop(&mut c, RunMode::Once, RetryPolicy { max_retries: 3 }, 10).await?;
 
         let kinds: Vec<&str> = c.driver_events.iter().map(|(k, _, _)| k.as_str()).collect();
         assert_eq!(
@@ -508,7 +561,7 @@ mod tests {
         // and the assertion below would fail.
         c.agent_outcomes.push_back(AgentOutcome::Success);
 
-        let summary = run_loop(&mut c, RunMode::Once, RetryPolicy { max_retries: 2 }).await?;
+        let summary = run_loop(&mut c, RunMode::Once, RetryPolicy { max_retries: 2 }, 10).await?;
 
         assert_eq!(c.run_calls.len(), 1, "preflight must not retry");
         assert!(c.clarified.is_empty());
@@ -540,7 +593,7 @@ mod tests {
             error: "io timeout".into(),
         });
 
-        let summary = run_loop(&mut c, RunMode::Once, RetryPolicy { max_retries: 2 }).await?;
+        let summary = run_loop(&mut c, RunMode::Once, RetryPolicy { max_retries: 2 }, 10).await?;
 
         assert_eq!(
             c.run_calls.len(),
@@ -575,7 +628,7 @@ mod tests {
         });
         c.agent_outcomes.push_back(AgentOutcome::Success);
 
-        let summary = run_loop(&mut c, RunMode::Once, RetryPolicy { max_retries: 2 }).await?;
+        let summary = run_loop(&mut c, RunMode::Once, RetryPolicy { max_retries: 2 }, 10).await?;
 
         assert_eq!(c.run_calls.len(), 2);
         // Done — driver does not close, no blocked.
@@ -605,7 +658,7 @@ mod tests {
             });
         }
 
-        let summary = run_loop(&mut c, RunMode::Once, RetryPolicy { max_retries: 2 }).await?;
+        let summary = run_loop(&mut c, RunMode::Once, RetryPolicy { max_retries: 2 }, 10).await?;
 
         assert_eq!(
             c.run_calls.len(),
@@ -648,7 +701,7 @@ mod tests {
             error: "second".into(),
         });
 
-        let summary = run_loop(&mut c, RunMode::Continuous, RetryPolicy::default()).await?;
+        let summary = run_loop(&mut c, RunMode::Continuous, RetryPolicy::default(), 10).await?;
 
         assert_eq!(c.run_calls.len(), 3);
         // Bead A reaches Done (no clarify, no blocked for it).
@@ -657,6 +710,101 @@ mod tests {
         assert_eq!(c.blocked[0].0, BeadId::new("wx-b").expect("valid"));
         assert_eq!(c.blocked[0].1, INFRA_REPEATED_CAUSE);
         assert_eq!(summary.beads_blocked, 1);
+        Ok(())
+    }
+
+    /// FR1 outer loop. After the molecule-completion handoff produces a
+    /// fix-up bead, `run_loop` MUST re-poll `bd ready` and process it —
+    /// not break after the first `exec_review` call. The push gate fires
+    /// clean (no fix-ups) only after the second handoff, at which point
+    /// the loop exits via stall detection. Both passes consume one
+    /// `[loop] max_iterations` slot.
+    #[tokio::test]
+    async fn continuous_outer_loop_processes_fix_up_bead_then_exits_on_stall()
+    -> Result<(), RunError> {
+        let mut c = FakeController::default();
+        c.ready_queue.push_back(bead("wx-initial", &[]));
+        c.agent_outcomes.push_back(AgentOutcome::Success);
+        // First handoff injects a fix-up bead; second handoff produces nothing
+        // (push gate clean), so the outer loop stalls and exits.
+        c.review_injects
+            .push_back(vec![bead("wx-fixup", &["loom:fixup"])]);
+        c.review_injects.push_back(vec![]);
+        c.agent_outcomes.push_back(AgentOutcome::Success);
+
+        let summary = run_loop(&mut c, RunMode::Continuous, RetryPolicy::default(), 10).await?;
+
+        assert_eq!(c.run_calls.len(), 2, "initial + fix-up processed");
+        assert_eq!(c.run_calls[0].0, BeadId::new("wx-initial").expect("valid"),);
+        assert_eq!(c.run_calls[1].0, BeadId::new("wx-fixup").expect("valid"));
+        assert_eq!(summary.beads_processed, 2);
+        assert_eq!(
+            c.review_calls, 2,
+            "one handoff per pass (initial + fix-up pass)",
+        );
+        assert_eq!(summary.outer_iterations, 2);
+        assert!(summary.molecule_complete);
+        assert!(summary.execed_review);
+        assert!(c.clarified.is_empty());
+        assert!(c.blocked.is_empty());
+        Ok(())
+    }
+
+    /// FR1 outer-loop bound. When every handoff continues to produce fresh
+    /// fix-up beads, the loop MUST stop after `max_iterations` passes
+    /// rather than spinning forever — the spec calls this out as
+    /// "counter exhaustion" as an exit condition.
+    #[tokio::test]
+    async fn continuous_outer_loop_bounded_by_max_iterations() -> Result<(), RunError> {
+        let mut c = FakeController::default();
+        c.ready_queue.push_back(bead("wx-0", &[]));
+        // Three passes scripted: each handoff injects one more fix-up bead.
+        // With max_iterations = 3 the loop processes 3 fix-ups (passes 2-4)
+        // plus the initial pass — but only 3 exec_review calls fire.
+        for i in 1..=5 {
+            c.review_injects
+                .push_back(vec![bead(&format!("wx-{i}"), &[])]);
+        }
+        // Agent always succeeds.
+        for _ in 0..6 {
+            c.agent_outcomes.push_back(AgentOutcome::Success);
+        }
+
+        let summary = run_loop(&mut c, RunMode::Continuous, RetryPolicy::default(), 3).await?;
+
+        // Pass 1 processes wx-0; exec_review 1 injects wx-1.
+        // Pass 2 processes wx-1; exec_review 2 injects wx-2.
+        // Pass 3 processes wx-2; exec_review 3 injects wx-3.
+        // Pass 4 processes wx-3; counter (3) reached → no exec_review 4 → break.
+        assert_eq!(summary.outer_iterations, 3);
+        assert_eq!(c.review_calls, 3);
+        assert_eq!(summary.beads_processed, 4);
+        assert!(summary.molecule_complete);
+        Ok(())
+    }
+
+    /// FR1 outer-loop stall. A fully-clarified (or fully-stuck) molecule
+    /// MUST exit on the second pass: the first pass drains the ready
+    /// queue (which may be empty from the start), invokes `exec_review`,
+    /// the second pass observes no new fix-ups and breaks. No spurious
+    /// extra `exec_review` after the stall trigger.
+    #[tokio::test]
+    async fn continuous_outer_loop_exits_on_stall_when_no_fixups_appear() -> Result<(), RunError> {
+        let mut c = FakeController::default();
+        // Empty ready queue; no fix-ups scripted on either review call.
+        c.review_injects.push_back(vec![]);
+        c.review_injects.push_back(vec![]);
+
+        let summary = run_loop(&mut c, RunMode::Continuous, RetryPolicy::default(), 10).await?;
+
+        assert_eq!(summary.beads_processed, 0);
+        assert_eq!(
+            c.review_calls, 1,
+            "one handoff fires; the stall blocks a second",
+        );
+        assert_eq!(summary.outer_iterations, 1);
+        assert!(summary.molecule_complete);
+        assert!(summary.execed_review);
         Ok(())
     }
 }

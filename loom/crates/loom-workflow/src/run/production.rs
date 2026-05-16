@@ -247,19 +247,41 @@ where
     }
 
     async fn exec_review(&mut self) -> Result<(), RunError> {
-        // Release the spec lock before spawning the child — `loom review`
-        // acquires the same lock and would otherwise time out behind us.
+        // Release the spec lock before spawning the child — `loom check` and
+        // `loom review` acquire the same lock and would otherwise time out
+        // behind us.
         self.lock.take();
-        let status = Command::new(&self.loom_bin)
+        // Molecule-completion handoff (FR1): unconditional `--tree` scope on
+        // both, check first then review. Non-zero exit codes are NOT fatal
+        // to `run_loop` — they signal concerns that the outer loop drives
+        // toward via fix-up beads on the next pass. Spawn failures (the
+        // child never started) DO surface as `RunError::Io`.
+        let check_status = Command::new(&self.loom_bin)
             .current_dir(&self.workspace)
-            .arg("review")
+            .arg("check")
+            .arg("--tree")
             .arg("-s")
             .arg(self.label.as_str())
             .status()
             .await?;
-        if !status.success() {
-            return Err(RunError::ReviewHandoff(status.to_string()));
-        }
+        info!(
+            spec = %self.label.as_str(),
+            exit_code = check_status.code().unwrap_or(-1),
+            "loom run: molecule handoff — loom check --tree finished",
+        );
+        let review_status = Command::new(&self.loom_bin)
+            .current_dir(&self.workspace)
+            .arg("review")
+            .arg("--tree")
+            .arg("-s")
+            .arg(self.label.as_str())
+            .status()
+            .await?;
+        info!(
+            spec = %self.label.as_str(),
+            exit_code = review_status.code().unwrap_or(-1),
+            "loom run: molecule handoff — loom review --tree finished",
+        );
         Ok(())
     }
 }
@@ -749,5 +771,126 @@ mod tests {
             .acquire_spec_with_timeout_async(&label, &clock, Duration::from_millis(100))
             .await
             .expect("lock must be reacquirable after exec_review");
+    }
+
+    /// FR1: the molecule-completion handoff invokes `loom check --tree`
+    /// THEN `loom review --tree` — both unconditionally `--tree`-scoped,
+    /// in that order, and both with the spec label threaded through `-s`.
+    /// The stub script records each invocation so the test can assert on
+    /// the exact argv sequence the production controller emits.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn exec_review_invokes_loom_check_tree_then_loom_review_tree() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = write_manifest(dir.path());
+        let label = SpecLabel::new("alpha");
+
+        // Recording stub: appends every invocation's argv (one per line,
+        // tab-separated) to argv.log so the test can replay the call order.
+        let argv_log = dir.path().join("argv.log");
+        let stub = dir.path().join("loom-stub.sh");
+        let stub_body = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {log}\nexit 0\n",
+            log = argv_log.to_string_lossy(),
+        );
+        std::fs::write(&stub, stub_body).unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut controller = ProductionAgentLoopController::new(
+            BdClient::new(),
+            label.clone(),
+            stub,
+            dir.path().to_path_buf(),
+            manifest,
+            None,
+            ProfileName::new("base"),
+            |_cfg: SpawnConfig, _bead_id: BeadId| async move {
+                (
+                    SessionResult::Complete(SessionOutcome {
+                        exit_code: 0,
+                        cost_usd: None,
+                    }),
+                    Some(ExitSignal::Complete),
+                )
+            },
+        );
+
+        controller.exec_review().await.expect("exec_review ok");
+
+        let recorded = std::fs::read_to_string(&argv_log).expect("argv log readable");
+        let lines: Vec<&str> = recorded.lines().collect();
+        assert_eq!(
+            lines.len(),
+            2,
+            "exec_review must spawn exactly two children (check then review): {recorded:?}",
+        );
+        assert_eq!(
+            lines[0], "check --tree -s alpha",
+            "first child must be `loom check --tree -s <label>`",
+        );
+        assert_eq!(
+            lines[1], "review --tree -s alpha",
+            "second child must be `loom review --tree -s <label>`",
+        );
+    }
+
+    /// FR1: non-zero exit from `loom check` MUST NOT abort the handoff —
+    /// it signals concerns that the outer loop drives toward via fix-up
+    /// beads on the next pass. The production controller still spawns
+    /// `loom review --tree` after check fails, and `exec_review` returns
+    /// `Ok` so `run_loop` can re-poll `bd ready` rather than tearing
+    /// down the whole `loom run`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn exec_review_continues_to_review_when_check_exits_nonzero() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = write_manifest(dir.path());
+        let label = SpecLabel::new("beta");
+
+        // Stub: `check` exits 1 (concerns), every other invocation exits 0.
+        // First argv token selects the branch.
+        let argv_log = dir.path().join("argv.log");
+        let stub = dir.path().join("loom-stub.sh");
+        let stub_body = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {log}\n\
+             case \"$1\" in\n  check) exit 1 ;;\n  *) exit 0 ;;\nesac\n",
+            log = argv_log.to_string_lossy(),
+        );
+        std::fs::write(&stub, stub_body).unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut controller = ProductionAgentLoopController::new(
+            BdClient::new(),
+            label.clone(),
+            stub,
+            dir.path().to_path_buf(),
+            manifest,
+            None,
+            ProfileName::new("base"),
+            |_cfg: SpawnConfig, _bead_id: BeadId| async move {
+                (
+                    SessionResult::Complete(SessionOutcome {
+                        exit_code: 0,
+                        cost_usd: None,
+                    }),
+                    Some(ExitSignal::Complete),
+                )
+            },
+        );
+
+        controller
+            .exec_review()
+            .await
+            .expect("non-zero check exit must not produce RunError");
+
+        let recorded = std::fs::read_to_string(&argv_log).expect("argv log readable");
+        let lines: Vec<&str> = recorded.lines().collect();
+        assert_eq!(
+            lines,
+            vec!["check --tree -s beta", "review --tree -s beta"],
+            "review must still run even when check signals concerns",
+        );
     }
 }
