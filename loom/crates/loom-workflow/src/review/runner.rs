@@ -80,11 +80,11 @@ pub trait ReviewController: Send {
     /// Emit a driver-side event into the controller's event sink (the
     /// per-spec phase JSONL log + terminal renderer). Driver events
     /// carry `Source::Driver` and a free-form `kind` so the renderer's
-    /// fallback path can show them without a per-kind handler. R7
-    /// (wx-r9tmc) routes the four spec'd `push_gate_*` kinds through
-    /// here. Production callers thread an `EnvelopeBuilder` (R1) for
-    /// the live envelope; the default impl is a no-op so test fakes
-    /// that don't care about event emission keep working.
+    /// fallback path can show them without a per-kind handler. The
+    /// verdict gate routes the four spec'd `push_gate_*` kinds through
+    /// here. Production callers thread an `EnvelopeBuilder` for the
+    /// live envelope; the default impl is a no-op so test fakes that
+    /// don't care about event emission keep working.
     fn emit_driver_event(
         &mut self,
         _kind: DriverKind,
@@ -209,10 +209,10 @@ async fn apply_verdict<C: ReviewController>(
     controller: &mut C,
     verdict: ReviewVerdict,
 ) -> Result<ReviewResult, ReviewError> {
-    // R7 (wx-r9tmc): every gate walk emits `push_gate_walk` first so
-    // the JSONL replay carries a fence between the reviewer's output
-    // and the verdict-application sequence below. The four kind-
-    // specific events follow per the spec table in E1.
+    // Every gate walk emits `push_gate_walk` first so the JSONL replay
+    // carries a fence between the reviewer's output and the verdict-
+    // application sequence below. The four kind-specific events follow
+    // per the push-gate event table in specs/loom-harness.md.
     controller.emit_driver_event(
         DriverKind::PushGateWalk,
         "push gate evaluating verdict",
@@ -332,7 +332,7 @@ mod tests {
         git_push_calls: u32,
         beads_push_calls: u32,
         exec_run_calls: u32,
-        /// R7 — capture the (kind, summary, payload) tuple for every
+        /// Capture the (kind, summary, payload) tuple for every
         /// `emit_driver_event` so tests can pin the verdict-gate
         /// emission sequence.
         driver_events: Vec<(String, String, serde_json::Value)>,
@@ -428,9 +428,9 @@ mod tests {
         assert_eq!(c.beads_push_calls, 1);
         assert_eq!(c.reset_iter_calls, 1, "counter resets on clean push");
         assert_eq!(c.exec_run_calls, 0, "no auto-iterate on clean push");
-        // R7 (wx-r9tmc) — the verdict-gate fence emits `push_gate_walk`
-        // first, then the `verdict_gate` decision event, then
-        // `push_gate_clean` for the clean-push branch.
+        // The verdict-gate fence emits `push_gate_walk` first, then the
+        // `verdict_gate` decision event, then `push_gate_clean` for the
+        // clean-push branch.
         let kinds: Vec<&str> = c.driver_events.iter().map(|(k, _, _)| k.as_str()).collect();
         assert_eq!(
             kinds,
@@ -439,7 +439,7 @@ mod tests {
         Ok(())
     }
 
-    /// R7 — the `PushBlocked` verdict emits `push_gate_walk` then
+    /// The `PushBlocked` verdict emits `push_gate_walk` then
     /// `push_gate_refuse` carrying both ID lists in its payload.
     #[tokio::test]
     async fn push_blocked_emits_refuse_with_id_payload() -> Result<(), ReviewError> {
@@ -476,7 +476,7 @@ mod tests {
         Ok(())
     }
 
-    /// R7 — the `IterationCap` verdict emits `push_gate_walk` then
+    /// The `IterationCap` verdict emits `push_gate_walk` then
     /// `push_gate_exhausted` carrying the escalate-id and the cap.
     #[tokio::test]
     async fn iteration_cap_emits_exhausted_with_cap_payload() -> Result<(), ReviewError> {

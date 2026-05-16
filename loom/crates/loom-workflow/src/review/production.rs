@@ -62,10 +62,10 @@ where
     spawn: S,
     /// Spec lock dropped before exec'ing `loom run` so the child can take it.
     lock: Option<LockGuard>,
-    /// Phase log root + start timestamp. R7 (wx-r9tmc) — the verdict
-    /// gate emits `push_gate_*` driver events into the same JSONL log
-    /// file the reviewer agent writes to, so a replay can replay the
-    /// full review phase. Both writers compute the file path from
+    /// Phase log root + start timestamp. The verdict gate emits
+    /// `push_gate_*` driver events into the same JSONL log file the
+    /// reviewer agent writes to, so a replay can replay the full review
+    /// phase. Both writers compute the file path from
     /// `(phase_log_root, label, "review", phase_log_when)`, which is
     /// deterministic — append-mode opens share one file.
     phase_log_root: Option<PathBuf>,
@@ -135,10 +135,10 @@ where
     }
 
     /// Pin the phase log file the verdict gate's driver events stream
-    /// into. R7 (wx-r9tmc) — the spawn closure inside `run_review`
-    /// MUST use the same `when` when it opens its agent-event sink
-    /// or the two writers land in separate files. Tests and the CLI
-    /// share this via `phase_log_when()`.
+    /// into. The spawn closure inside `run_review` MUST use the same
+    /// `when` when it opens its agent-event sink or the two writers
+    /// land in separate files. Tests and the CLI share this via
+    /// `phase_log_when()`.
     pub fn with_phase_log(mut self, logs_root: PathBuf, when: SystemTime) -> Self {
         self.phase_log_root = Some(logs_root);
         self.phase_log_when = when;
@@ -378,13 +378,13 @@ where
     }
 
     fn emit_driver_event(&mut self, kind: DriverKind, summary: &str, payload: serde_json::Value) {
-        // R7 (wx-r9tmc) — open a transient LogSink at the same phase
-        // log path the reviewer agent's sink uses (same `when`, same
-        // `phase_log_root`, no renderer), write one `DriverEvent`,
-        // finish. The file is opened in append mode so co-writing
-        // with the agent-event sink lands both event streams in one
-        // file. When no phase log is configured (test fakes, sink-
-        // less callers) this is a silent no-op.
+        // Open a transient LogSink at the same phase log path the
+        // reviewer agent's sink uses (same `when`, same `phase_log_root`,
+        // no renderer), write one `DriverEvent`, finish. The file is
+        // opened in append mode so co-writing with the agent-event sink
+        // lands both event streams in one file. When no phase log is
+        // configured (test fakes, sink-less callers) this is a silent
+        // no-op.
         let Some(logs_root) = self.phase_log_root.clone() else {
             return;
         };
@@ -859,9 +859,9 @@ mod tests {
         assert!(prompt.contains("tests/judges/alpha.sh"), "{prompt}");
     }
 
-    /// wx-hcolw.5 gate: `loom review` must dispatch with the rendered
-    /// `ReviewContext` template — `# Post-Epic Review` heading, spec_path,
-    /// and scratchpad path all reach the agent prompt — and the same body
+    /// `loom review` must dispatch with the rendered `ReviewContext`
+    /// template — `# Post-Epic Review` heading, spec_path, and
+    /// scratchpad path all reach the agent prompt — and the same body
     /// must land in `<scratch_dir>/prompt.txt` so post-compaction
     /// `repin.sh` can re-emit the actual phase prompt. Mirror of the
     /// run-side test in `run/production.rs`.
