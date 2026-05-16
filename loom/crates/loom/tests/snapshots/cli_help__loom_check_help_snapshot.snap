@@ -15,4 +15,5 @@ Options:
       --diff <RANGE>      Restrict the audit scope to a git diff range
       --tree              Audit the entire spec tree × implementation
       --strict            Promote warning-severity findings (e.g. orphan stubs) to errors. Applies to `--check=criteria`
+      --no-run            Skip executing live verifiers — only run structural checks (stubbed, missing-dispatcher, orphan, masquerade). Applies to `--check=criteria` and is intended for the pre-commit hook path where the full live audit is too slow
   -h, --help              Print help

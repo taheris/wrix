@@ -256,6 +256,12 @@ enum Command {
         /// Applies to `--check=criteria`.
         #[arg(long)]
         strict: bool,
+        /// Skip executing live verifiers — only run structural checks
+        /// (stubbed, missing-dispatcher, orphan, masquerade). Applies to
+        /// `--check=criteria` and is intended for the pre-commit hook
+        /// path where the full live audit is too slow.
+        #[arg(long)]
+        no_run: bool,
     },
     /// LLM-judged review pass over the gate scope.
     Review {
@@ -559,6 +565,7 @@ fn main() -> ExitCode {
             diff,
             tree,
             strict,
+            no_run,
         } => run_check(
             &workspace,
             spec,
@@ -569,6 +576,7 @@ fn main() -> ExitCode {
                 diff,
                 tree,
                 strict,
+                no_run,
             },
         ),
         Command::Review {
@@ -726,13 +734,16 @@ fn run_check_audit(
     workspace: &std::path::Path,
     audit: CheckAudit,
     strict: bool,
+    no_run: bool,
 ) -> anyhow::Result<()> {
     match audit {
         CheckAudit::Criteria => {
             let specs_dir = workspace.join("specs");
             let dispatcher = workspace.join("tests/loom-test.sh");
-            let findings = check::criteria::audit(&specs_dir, &dispatcher)?;
-            let code = check::criteria::report(&findings, strict);
+            let runner = check::criteria::ShellRunner::new(dispatcher.clone());
+            let runner_arg = if no_run { None } else { Some(&runner) };
+            let audit = check::criteria::audit(&specs_dir, &dispatcher, runner_arg)?;
+            let code = check::criteria::report(&audit, strict);
             if code != 0 {
                 std::process::exit(code);
             }
@@ -1506,6 +1517,7 @@ struct CheckOpts {
     diff: Option<String>,
     tree: bool,
     strict: bool,
+    no_run: bool,
 }
 
 fn run_check(
@@ -1515,7 +1527,7 @@ fn run_check(
     opts: CheckOpts,
 ) -> anyhow::Result<()> {
     if let Some(audit) = opts.audit {
-        return run_check_audit(workspace, audit, opts.strict);
+        return run_check_audit(workspace, audit, opts.strict, opts.no_run);
     }
     if opts.bead.is_some() || opts.diff.is_some() || opts.tree {
         anyhow::bail!(
