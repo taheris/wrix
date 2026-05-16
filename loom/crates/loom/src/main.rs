@@ -759,7 +759,16 @@ fn run_check_audit(
             Ok(())
         }
         CheckAudit::Surface => {
-            anyhow::bail!("audit not yet implemented")
+            let spec_path = workspace.join("specs/loom-harness.md");
+            let loom_bin = current_loom_bin()?;
+            let spec = check::surface::parse_spec_surface(&spec_path)?;
+            let provider = check::surface::BinaryHelp::new(loom_bin);
+            let findings = check::surface::audit(&spec, &provider)?;
+            let code = check::surface::report(&findings);
+            if code != 0 {
+                std::process::exit(code);
+            }
+            Ok(())
         }
     }
 }

@@ -3965,6 +3965,20 @@ test_parallel_scratch_isolation() { scratch_cargo_test parallel_keys_get_indepen
 test_pinning_matrix_audit() { cargo_run run --quiet --bin loom -- --workspace "$REPO_ROOT" check matrix; }
 
 #-----------------------------------------------------------------------------
+# test_check_surface_detects_drift — FR13 surface audit. The dispatcher pins
+# both the live binary path (`loom check surface` exits 0 on the current
+# code-spec pair) AND the per-drift unit tests under
+# `loom-workflow::check::surface`. The unit tests cover each FR13 dimension
+# (command set, flag set, removed surface, grouping order); the live binary
+# run is the production-path smoke test that catches drift in the wiring or
+# spec markdown.
+#-----------------------------------------------------------------------------
+test_check_surface_detects_drift() {
+    cargo_run run --quiet --bin loom -- --workspace "$REPO_ROOT" check surface
+    cargo_run test -p loom-workflow --lib check::surface -- --quiet
+}
+
+#-----------------------------------------------------------------------------
 # Dispatch
 #-----------------------------------------------------------------------------
 if [ $# -eq 0 ]; then

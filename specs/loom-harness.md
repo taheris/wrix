@@ -1416,6 +1416,10 @@ Criteria.
   [verify](tests/loom-test.sh::test_push_gate_refuses_on_tree_review_flag)
 - `loom check` auto-iterates on fix-up beads (up to max iterations)
   [verify](tests/loom-test.sh::test_review_auto_iterate)
+- `loom check surface` hard-fails when the binary's surface drifts
+      from FR1 (command set, flag set, removed surface, grouping order)
+      and exits 0 when spec and binary agree
+  [verify](tests/loom-test.sh::test_check_surface_detects_drift)
 - Bare `loom` (no args) renders the same Workflow / Inspection /
       State grouped sections (in spec order) as `loom --help`,
       `loom -h`, and `loom help` — clap's flat default-help fallback
@@ -1808,6 +1812,17 @@ Criteria.
    details / migration history / decision references / bead ids.
    The binary has no `loom doctor` subcommand; its absence is part
    of the surface contract (the surface audit flags reintroduction).
+
+   **Removed surface.** The table below lists user-facing surface
+   explicitly removed from the binary. `loom check surface` parses it
+   and hard-fails if any listed command resurfaces as a subcommand of
+   `loom`.
+
+   | Surface | Removed because |
+   |---------|-----------------|
+   | `loom doctor` | replaced by `loom check` sub-audits |
+   | `loom sync` | Askama-compiled templates make per-project sync unnecessary |
+   | `loom tune` | Askama-compiled templates make per-project tune unnecessary |
 
 2. **Compiled templates** — Askama engine, per-phase templates, partials,
    and per-phase pinning policy live in
