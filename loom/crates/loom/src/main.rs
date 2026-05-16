@@ -729,34 +729,47 @@ fn run_note(workspace: &std::path::Path, action: NoteAction) -> anyhow::Result<(
     Ok(())
 }
 
+impl CheckAudit {
+    fn tag(&self) -> &'static str {
+        match self {
+            CheckAudit::Criteria => "criteria",
+            CheckAudit::Matrix => "matrix",
+            CheckAudit::Surface => "surface",
+        }
+    }
+}
+
+/// Run one audit and return its exit code (0 ↔ clean, 1 ↔ drift). The
+/// caller (bare or positional) decides whether to `process::exit`.
+///
+/// `criteria_scope` is the resolved spec-file filter for criteria; the
+/// surface and matrix audits are scope-independent and ignore it.
 fn run_check_audit(
     workspace: &std::path::Path,
     audit: CheckAudit,
     strict: bool,
     no_run: bool,
-) -> anyhow::Result<()> {
+    criteria_scope: &check::CriteriaScope,
+) -> anyhow::Result<i32> {
     match audit {
         CheckAudit::Criteria => {
             let specs_dir = workspace.join("specs");
             let dispatcher = workspace.join("tests/loom-test.sh");
             let runner = check::criteria::ShellRunner::new(dispatcher.clone());
             let runner_arg = if no_run { None } else { Some(&runner) };
-            let audit = check::criteria::audit(&specs_dir, &dispatcher, runner_arg)?;
-            let code = check::criteria::report(&audit, strict);
-            if code != 0 {
-                std::process::exit(code);
-            }
-            Ok(())
+            let report = check::criteria::audit_filtered(
+                &specs_dir,
+                &dispatcher,
+                runner_arg,
+                criteria_scope.spec_files.as_ref(),
+            )?;
+            Ok(check::criteria::report(&report, strict))
         }
         CheckAudit::Matrix => {
             let spec_path = workspace.join("specs/loom-templates.md");
             let templates_dir = workspace.join("loom/crates/loom-templates/templates");
             let findings = check::matrix::audit(&spec_path, &templates_dir)?;
-            let code = check::matrix::report(&findings);
-            if code != 0 {
-                std::process::exit(code);
-            }
-            Ok(())
+            Ok(check::matrix::report(&findings))
         }
         CheckAudit::Surface => {
             let spec_path = workspace.join("specs/loom-harness.md");
@@ -764,11 +777,7 @@ fn run_check_audit(
             let spec = check::surface::parse_spec_surface(&spec_path)?;
             let provider = check::surface::BinaryHelp::new(loom_bin);
             let findings = check::surface::audit(&spec, &provider)?;
-            let code = check::surface::report(&findings);
-            if code != 0 {
-                std::process::exit(code);
-            }
-            Ok(())
+            Ok(check::surface::report(&findings))
         }
     }
 }
@@ -1538,26 +1547,127 @@ struct CheckOpts {
     no_run: bool,
 }
 
+/// FR1: bare `loom check` runs every audit; `loom check <audit>` runs
+/// one. Scope flags (`--bead`, `--diff`, `--tree`) compose with both
+/// forms. Aggregate exit is the OR of individual audit exit codes.
 fn run_check(
     workspace: &Path,
     _spec: Option<String>,
     _agent_override: Option<AgentKind>,
     opts: CheckOpts,
 ) -> anyhow::Result<()> {
-    if let Some(audit) = opts.audit {
-        return run_check_audit(workspace, audit, opts.strict, opts.no_run);
-    }
-    if opts.bead.is_some() || opts.diff.is_some() || opts.tree {
-        anyhow::bail!(
-            "scope flags (`--bead`, `--diff`, `--tree`) require a positional `<audit>` \
-             argument until the full deterministic pass is implemented"
+    let scope = build_scope(opts.bead.as_deref(), opts.diff.as_deref(), opts.tree)?;
+    let criteria_scope = resolve_criteria_scope(workspace, &scope)?;
+
+    let audits: Vec<CheckAudit> = match opts.audit {
+        Some(a) => vec![a],
+        // FR1: bare `loom check` runs every audit. The spec enumerates
+        // `criteria` and `surface` as the audits today; `matrix` is its
+        // own audit, runnable individually but not part of the bare set.
+        None => vec![CheckAudit::Criteria, CheckAudit::Surface],
+    };
+    let aggregate = audits.len() > 1;
+
+    if aggregate && scope.is_narrow() {
+        eprintln!(
+            "loom check: scope = {scope_tag}; surface and matrix audits are scope-independent",
+            scope_tag = scope_tag(&scope),
         );
     }
-    anyhow::bail!(
-        "loom check (no audit): full deterministic pass not yet implemented; \
-         use `loom check <audit>` for individual sub-audits, or `loom review` \
-         for the LLM-judged rubric"
-    )
+
+    let mut combined: i32 = 0;
+    let mut clean = 0usize;
+    for a in &audits {
+        if aggregate {
+            eprintln!("--- loom check {audit} ---", audit = a.tag());
+        }
+        let code = run_check_audit(workspace, *a, opts.strict, opts.no_run, &criteria_scope)?;
+        if code == 0 {
+            clean += 1;
+        } else {
+            combined = 1;
+        }
+    }
+    if aggregate {
+        eprintln!(
+            "loom check: {clean}/{total} audit{plural} clean",
+            total = audits.len(),
+            plural = if audits.len() == 1 { "" } else { "s" },
+        );
+    }
+    if combined != 0 {
+        std::process::exit(combined);
+    }
+    Ok(())
+}
+
+fn build_scope(bead: Option<&str>, diff: Option<&str>, tree: bool) -> anyhow::Result<check::Scope> {
+    if tree {
+        Ok(check::Scope::Tree)
+    } else if let Some(id) = bead {
+        Ok(check::Scope::Bead(BeadId::new(id)?))
+    } else if let Some(range) = diff {
+        Ok(check::Scope::Diff(range.to_string()))
+    } else {
+        Ok(check::Scope::Default)
+    }
+}
+
+fn scope_tag(scope: &check::Scope) -> String {
+    match scope {
+        check::Scope::Default => "default".to_string(),
+        check::Scope::Tree => "tree".to_string(),
+        check::Scope::Bead(id) => format!("bead {id}"),
+        check::Scope::Diff(range) => format!("diff {range}"),
+    }
+}
+
+/// Translate a [`check::Scope`] into a per-spec filter for the criteria
+/// audit. Default and Tree map to "no filter" (walk every spec). Bead
+/// scopes resolve the bead's `spec:<label>` and narrow to that one
+/// spec file. Diff scopes shell out to `git diff --name-only` over the
+/// `specs/` subtree and narrow to those files.
+fn resolve_criteria_scope(
+    workspace: &Path,
+    scope: &check::Scope,
+) -> anyhow::Result<check::CriteriaScope> {
+    match scope {
+        check::Scope::Default | check::Scope::Tree => Ok(check::CriteriaScope::unfiltered()),
+        check::Scope::Bead(id) => {
+            let runtime = tokio::runtime::Runtime::new()?;
+            let bead = runtime.block_on(async {
+                let bd = BdClient::new();
+                bd.show(id).await
+            })?;
+            let label = bead
+                .labels
+                .iter()
+                .find_map(|l| l.spec_label())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "bead {id} carries no `spec:<label>` label; cannot scope criteria \
+                         audit to a single spec",
+                    )
+                })?;
+            let spec_file = workspace.join(format!("specs/{label}.md", label = label.as_str()));
+            if !spec_file.is_file() {
+                anyhow::bail!(
+                    "bead {id} references spec `{label}` but {path} does not exist",
+                    label = label.as_str(),
+                    path = spec_file.display(),
+                );
+            }
+            Ok(check::CriteriaScope::from_files([spec_file]))
+        }
+        check::Scope::Diff(range) => {
+            let runtime = tokio::runtime::Runtime::new()?;
+            let git = GitClient::open(workspace)?;
+            let rel_files = runtime
+                .block_on(async { git.changed_files_in_range(range, Some("specs/")).await })?;
+            let files: Vec<PathBuf> = rel_files.into_iter().map(|p| workspace.join(p)).collect();
+            Ok(check::CriteriaScope::from_files(files))
+        }
+    }
 }
 
 #[expect(

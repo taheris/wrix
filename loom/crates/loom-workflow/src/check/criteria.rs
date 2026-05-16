@@ -336,14 +336,40 @@ pub fn audit<R: DispatcherRunner>(
     dispatcher_path: &Path,
     runner: Option<&R>,
 ) -> Result<AuditReport, CriteriaError> {
-    let annotations = parse_verify_annotations(specs_dir)?;
+    audit_filtered(specs_dir, dispatcher_path, runner, None)
+}
+
+/// Like [`audit`] but optionally narrows the per-criterion walk to a
+/// subset of spec files. The orphan-dispatcher check still uses the
+/// global annotation set so it does not flag dispatchers covered by
+/// out-of-scope specs.
+///
+/// `spec_filter: Some(set)` keeps only annotations whose `spec_file`
+/// appears in `set`. `None` is identical to [`audit`].
+pub fn audit_filtered<R: DispatcherRunner>(
+    specs_dir: &Path,
+    dispatcher_path: &Path,
+    runner: Option<&R>,
+    spec_filter: Option<&HashSet<PathBuf>>,
+) -> Result<AuditReport, CriteriaError> {
+    let all_annotations = parse_verify_annotations(specs_dir)?;
     let index = parse_dispatcher(dispatcher_path)?;
     let mut report = AuditReport::default();
-    let mut referenced: HashSet<String> = HashSet::new();
+    let mut globally_referenced: HashSet<String> = HashSet::new();
+    for ann in &all_annotations {
+        globally_referenced.insert(ann.dispatcher_fn.clone());
+    }
 
-    for ann in &annotations {
+    let in_scope: Vec<&VerifyAnnotation> = all_annotations
+        .iter()
+        .filter(|ann| match spec_filter {
+            None => true,
+            Some(set) => set.contains(&ann.spec_file),
+        })
+        .collect();
+
+    for ann in &in_scope {
         let fn_name = &ann.dispatcher_fn;
-        referenced.insert(fn_name.clone());
 
         let verdict = if !index.stubs.contains(fn_name) && !index.real.contains(fn_name) {
             CriterionVerdict::MissingDispatcher
@@ -393,11 +419,13 @@ pub fn audit<R: DispatcherRunner>(
         }
     }
 
-    // R10: orphan dispatchers — defined but unreferenced.
+    // R10: orphan dispatchers — defined but unreferenced. Use the global
+    // annotation set so a scoped audit (e.g. `--bead`) does not flag
+    // dispatchers that other specs reference.
     let mut all_fns: Vec<&String> = index.stubs.iter().chain(index.real.iter()).collect();
     all_fns.sort();
     for fn_name in all_fns {
-        if !referenced.contains(fn_name) {
+        if !globally_referenced.contains(fn_name) {
             report.findings.push(Finding {
                 severity: Severity::Warning,
                 location: format!("{}", dispatcher_path.display()),
@@ -896,5 +924,103 @@ test_three() {
             verdict: CriterionVerdict::Skipped,
         });
         assert_eq!(report(&r, false), 0);
+    }
+
+    /// `--bead` / `--diff` scope narrows the criteria walk to the
+    /// supplied spec files. Annotations from out-of-scope specs are
+    /// dropped from the per-criterion report.
+    #[test]
+    fn audit_filtered_keeps_only_in_scope_specs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let specs = dir.path().join("specs");
+        fs::create_dir_all(&specs).expect("specs dir");
+        write_spec(
+            &specs,
+            "in.md",
+            "- in scope\n  [verify](tests/loom-test.sh::test_in)\n",
+        );
+        write_spec(
+            &specs,
+            "out.md",
+            "- out of scope\n  [verify](tests/loom-test.sh::test_out)\n",
+        );
+        let dispatcher = dir.path().join("loom-test.sh");
+        fs::write(
+            &dispatcher,
+            "test_in() { cargo_run test in; }\n\
+             test_out() { cargo_run test out; }\n",
+        )
+        .expect("write dispatcher");
+
+        let runner = FakeRunner::new()
+            .with("test_in", 0, "")
+            .with("test_out", 0, "");
+        let mut filter = HashSet::new();
+        filter.insert(specs.join("in.md"));
+        let r = audit_filtered(&specs, &dispatcher, Some(&runner), Some(&filter)).expect("audit");
+
+        let fns: Vec<&String> = r.criteria.iter().map(|c| &c.dispatcher_fn).collect();
+        assert_eq!(fns, vec!["test_in"]);
+        assert_eq!(
+            runner.calls.borrow().as_slice(),
+            &["test_in".to_string()],
+            "out-of-scope dispatchers must not run",
+        );
+    }
+
+    /// Scope-narrowed audit must NOT flag the out-of-scope spec's
+    /// dispatcher as orphan: orphan detection consults the global
+    /// annotation set so a per-bead audit doesn't emit false drift.
+    #[test]
+    fn audit_filtered_does_not_flag_dispatchers_referenced_by_out_of_scope_specs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let specs = dir.path().join("specs");
+        fs::create_dir_all(&specs).expect("specs dir");
+        write_spec(
+            &specs,
+            "in.md",
+            "- in\n  [verify](tests/loom-test.sh::test_in)\n",
+        );
+        write_spec(
+            &specs,
+            "out.md",
+            "- out\n  [verify](tests/loom-test.sh::test_out)\n",
+        );
+        let dispatcher = dir.path().join("loom-test.sh");
+        fs::write(
+            &dispatcher,
+            "test_in() { cargo_run test in; }\n\
+             test_out() { cargo_run test out; }\n",
+        )
+        .expect("write dispatcher");
+
+        let runner = FakeRunner::new();
+        let mut filter = HashSet::new();
+        filter.insert(specs.join("in.md"));
+        let r = audit_filtered(&specs, &dispatcher, Some(&runner), Some(&filter)).expect("audit");
+
+        assert!(
+            !r.findings.iter().any(|f| f.message.contains("orphan")),
+            "test_out is referenced by out.md; scoped audit must not flag it as orphan: {:?}",
+            r.findings,
+        );
+    }
+
+    /// `audit_filtered(_, _, _, None)` must be observably identical to
+    /// the legacy `audit(...)` entry point.
+    #[test]
+    fn audit_filtered_none_matches_legacy_audit() {
+        let (_dir, specs, dispatcher) = workspace_with(
+            "test_a() { cargo_run test a; }\n",
+            "- one\n  [verify](tests/loom-test.sh::test_a)\n",
+        );
+        let runner_a = FakeRunner::new().with("test_a", 0, "");
+        let runner_b = FakeRunner::new().with("test_a", 0, "");
+        let legacy = audit(&specs, &dispatcher, Some(&runner_a)).expect("audit");
+        let filtered =
+            audit_filtered(&specs, &dispatcher, Some(&runner_b), None).expect("audit_filtered");
+        let legacy_tags: Vec<&str> = legacy.criteria.iter().map(|c| c.verdict.tag()).collect();
+        let filtered_tags: Vec<&str> = filtered.criteria.iter().map(|c| c.verdict.tag()).collect();
+        assert_eq!(legacy_tags, filtered_tags);
     }
 }

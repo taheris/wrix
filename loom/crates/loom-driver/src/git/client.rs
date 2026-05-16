@@ -269,6 +269,36 @@ impl GitClient {
             .collect())
     }
 
+    /// `git diff --name-only <range> -- <pathspec>` — repo-relative paths
+    /// changed across the supplied diff range, optionally filtered by a
+    /// pathspec (e.g. `"specs/"`). `range` is forwarded verbatim, so any
+    /// shape `git diff` accepts works (`A..B`, `A...B`, `A B`, etc.).
+    pub async fn changed_files_in_range(
+        &self,
+        range: &str,
+        pathspec: Option<&str>,
+    ) -> Result<Vec<PathBuf>, GitError> {
+        let mut args: Vec<&str> = vec!["diff", "--name-only", range];
+        if let Some(p) = pathspec {
+            args.push("--");
+            args.push(p);
+        }
+        let output =
+            run_git_raw(&self.workdir, self.clock.as_ref(), args.into_iter(), None).await?;
+        if !output.status.success() {
+            return Err(GitError::GitCli {
+                status: output.status.code().unwrap_or(-1),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            });
+        }
+        let stdout = String::from_utf8(output.stdout)?;
+        Ok(stdout
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(PathBuf::from)
+            .collect())
+    }
+
     /// `git diff <base> HEAD -- <spec_path>` — unified diff of one spec
     /// file. Empty string when there is no diff.
     pub async fn diff_spec(&self, base: &str, spec_path: &Path) -> Result<String, GitError> {
