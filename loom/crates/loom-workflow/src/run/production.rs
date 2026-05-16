@@ -32,6 +32,7 @@ use super::error::RunError;
 use super::outcome::{AgentOutcome, SessionResult};
 use super::runner::AgentLoopController;
 use super::spawn::build_spawn_config_from_manifest;
+use crate::review::{GateInputs, PhaseVerdict, RecoveryCause, decide};
 use crate::todo::ExitSignal;
 
 /// Wires the [`AgentLoopController`] trait against the real `BdClient`, a
@@ -264,30 +265,72 @@ where
 }
 
 /// Translate a `(SessionResult, Option<ExitSignal>)` pair into an
-/// [`AgentOutcome`]. The agent's exit marker is the primary signal; exit code
-/// only matters when no marker is present. A `LOOM_BLOCKED` / `LOOM_CLARIFY`
-/// marker short-circuits the exit code: re-running the same prompt won't
-/// recover, so the bead routes straight to its terminal label.
+/// [`AgentOutcome`]. Marker → outcome routing goes through the canonical
+/// [`crate::review::decide`] gate function (FR12 — single source of truth);
+/// `bd_closed` / `diff_empty` / verify / review observables are not queried
+/// at the per-bead exit (they belong to `loom check`'s deterministic pass),
+/// so neutral inputs are passed and the gate's output reduces to marker-only
+/// routing. A defensive guard for `LOOM_COMPLETE`/`LOOM_NOOP` paired with a
+/// non-zero exit code predates the gate call because the spec's decision
+/// table does not consider exit code: a marker that disagrees with the
+/// kernel's view is surfaced as a failure rather than trusted blindly.
 pub fn classify_session(session: SessionResult, marker: Option<ExitSignal>) -> AgentOutcome {
     match session {
-        SessionResult::Complete(outcome) => match (marker, outcome.exit_code) {
-            (Some(ExitSignal::Blocked { reason }), _) => AgentOutcome::Blocked { reason },
-            (Some(ExitSignal::Clarify { question }), _) => AgentOutcome::Clarify { question },
-            (Some(ExitSignal::Complete | ExitSignal::Noop), 0) => AgentOutcome::Success,
-            (Some(ExitSignal::Complete | ExitSignal::Noop), code) => AgentOutcome::Failure {
-                error: format!("agent emitted COMPLETE/NOOP but exited code {code}"),
-            },
-            (None, 0) => AgentOutcome::Failure {
-                error: "agent exited 0 without LOOM_COMPLETE / LOOM_NOOP / LOOM_BLOCKED / \
-                        LOOM_CLARIFY marker (swallowed marker)"
-                    .to_string(),
-            },
-            (None, code) => AgentOutcome::Failure {
-                error: format!("agent exited with code {code}"),
-            },
-        },
         SessionResult::PreflightFailed { error } => AgentOutcome::InfraPreflight { error },
         SessionResult::MidSessionFailed { error } => AgentOutcome::InfraMidSession { error },
+        SessionResult::Complete(outcome) => {
+            if matches!(marker, Some(ExitSignal::Complete | ExitSignal::Noop))
+                && outcome.exit_code != 0
+            {
+                return AgentOutcome::Failure {
+                    error: format!(
+                        "agent emitted COMPLETE/NOOP but exited code {}",
+                        outcome.exit_code,
+                    ),
+                };
+            }
+            verdict_to_outcome(
+                decide(marker.as_ref(), neutral_gate_inputs()),
+                outcome.exit_code,
+            )
+        }
+    }
+}
+
+/// Inputs threaded into [`decide`] when classifying the per-bead exit. The
+/// run-phase classifier only knows the marker; bd-closed, diff, verify, and
+/// review live in `loom check`'s downstream pass. Passing neutral defaults
+/// reduces the gate to marker-only routing — the spec table rows for
+/// `COMPLETE`/`NOOP` collapse to `Done` and `None` to `SwallowedMarker`,
+/// which is what the in-session classifier needs.
+fn neutral_gate_inputs() -> GateInputs {
+    GateInputs {
+        bd_closed: true,
+        diff_empty: false,
+        verify_failures: vec![],
+        review_flag: None,
+    }
+}
+
+fn verdict_to_outcome(verdict: PhaseVerdict, exit_code: i32) -> AgentOutcome {
+    match verdict {
+        PhaseVerdict::Done => AgentOutcome::Success,
+        PhaseVerdict::Blocked { reason } => AgentOutcome::Blocked { reason },
+        PhaseVerdict::Clarify { question } => AgentOutcome::Clarify { question },
+        PhaseVerdict::Recovery {
+            cause: RecoveryCause::SwallowedMarker,
+        } => AgentOutcome::Failure {
+            error: if exit_code == 0 {
+                "agent exited 0 without LOOM_COMPLETE / LOOM_NOOP / LOOM_BLOCKED / \
+                 LOOM_CLARIFY marker (swallowed marker)"
+                    .to_string()
+            } else {
+                format!("agent exited with code {exit_code}")
+            },
+        },
+        PhaseVerdict::Recovery { cause } => AgentOutcome::Failure {
+            error: format!("unexpected gate verdict: {}", cause.as_str()),
+        },
     }
 }
 
@@ -317,6 +360,65 @@ mod tests {
     use loom_driver::agent::SessionOutcome;
     use loom_driver::bd::Label;
     use std::sync::Mutex;
+
+    /// FR12 — `loom run`'s per-bead exit MUST route the agent's marker
+    /// through the canonical [`crate::review::decide`] gate function rather
+    /// than its own ad-hoc `match`. This test pins the marker → outcome
+    /// mapping that `decide()` produces under neutral run-phase inputs:
+    /// `BLOCKED`/`CLARIFY` short-circuit, `COMPLETE`/`NOOP` reach Done, and
+    /// a missing marker routes to `swallowed-marker` recovery (mapped to
+    /// `Failure`). A regression that resurrects an inline classifier here
+    /// would only fail this test if it diverged from `decide()`'s output —
+    /// but combined with the source-level `decide()` import in
+    /// `classify_session`, the two together fence the FR12 contract.
+    #[test]
+    fn classify_session_routes_marker_through_phase_verdict_decide() {
+        let session_ok = || {
+            SessionResult::Complete(SessionOutcome {
+                exit_code: 0,
+                cost_usd: None,
+            })
+        };
+        // `BLOCKED` self-report → terminal `Blocked` (gate row 1).
+        match classify_session(
+            session_ok(),
+            Some(ExitSignal::Blocked {
+                reason: "missing schema".into(),
+            }),
+        ) {
+            AgentOutcome::Blocked { reason } => assert_eq!(reason, "missing schema"),
+            other => panic!("expected Blocked, got {other:?}"),
+        }
+        // `CLARIFY` self-report → terminal `Clarify` (gate row 2).
+        match classify_session(
+            session_ok(),
+            Some(ExitSignal::Clarify {
+                question: "additive only?".into(),
+            }),
+        ) {
+            AgentOutcome::Clarify { question } => assert_eq!(question, "additive only?"),
+            other => panic!("expected Clarify, got {other:?}"),
+        }
+        // `COMPLETE` + clean exit → `Success` (gate row "Done" with neutral inputs).
+        assert_eq!(
+            classify_session(session_ok(), Some(ExitSignal::Complete)),
+            AgentOutcome::Success,
+        );
+        // `NOOP` + clean exit → `Success` (gate row "Done" with neutral inputs).
+        assert_eq!(
+            classify_session(session_ok(), Some(ExitSignal::Noop)),
+            AgentOutcome::Success,
+        );
+        // None marker → `Recovery::SwallowedMarker` → `Failure` carrying
+        // the spec's swallowed-marker phrasing.
+        match classify_session(session_ok(), None) {
+            AgentOutcome::Failure { error } => assert!(
+                error.contains("swallowed marker"),
+                "swallowed-marker text missing: {error}",
+            ),
+            other => panic!("expected Failure, got {other:?}"),
+        }
+    }
 
     fn write_manifest(dir: &std::path::Path) -> Arc<ProfileImageManifest> {
         let body = r#"{

@@ -42,12 +42,15 @@ use tracing::{info, warn};
 
 use super::context::{beads_summary, load_review_sources};
 use super::error::ReviewError;
+use super::phase_verdict::{GateInputs, PhaseVerdict, RecoveryCause, decide};
 use super::runner::{ReviewController, ReviewOutcome};
+use crate::todo::ExitSignal;
 
 pub struct ProductionReviewController<S, F>
 where
     S: Fn(SpawnConfig) -> F + Send + Sync,
-    F: std::future::Future<Output = Result<SessionOutcome, ProtocolError>> + Send,
+    F: std::future::Future<Output = Result<(SessionOutcome, Option<ExitSignal>), ProtocolError>>
+        + Send,
 {
     bd: BdClient,
     label: SpecLabel,
@@ -85,7 +88,8 @@ where
 impl<S, F> ProductionReviewController<S, F>
 where
     S: Fn(SpawnConfig) -> F + Send + Sync,
-    F: std::future::Future<Output = Result<SessionOutcome, ProtocolError>> + Send,
+    F: std::future::Future<Output = Result<(SessionOutcome, Option<ExitSignal>), ProtocolError>>
+        + Send,
 {
     #[expect(clippy::too_many_arguments, reason = "controller construction surface")]
     pub fn new(
@@ -197,10 +201,55 @@ where
     }
 }
 
+/// Map the reviewer agent's `(marker, exit_code)` into a [`ReviewOutcome`]
+/// (FR12 — single source of truth). Marker → outcome routing goes through
+/// the canonical [`decide`] gate function; the review phase isn't bead-
+/// scoped, so `bd_closed` / `diff_empty` / verify / review observables are
+/// neutral defaults that reduce the gate to marker-only routing. The
+/// defensive `COMPLETE`/`NOOP` + non-zero exit guard predates `decide`
+/// because the gate's decision table does not consider exit code.
+fn classify_review_phase(marker: Option<&ExitSignal>, exit_code: i32) -> ReviewOutcome {
+    if matches!(marker, Some(ExitSignal::Complete | ExitSignal::Noop)) && exit_code != 0 {
+        return ReviewOutcome::Incomplete {
+            detail: format!("agent emitted COMPLETE/NOOP but exited code {exit_code}"),
+        };
+    }
+    let inputs = GateInputs {
+        bd_closed: true,
+        diff_empty: false,
+        verify_failures: vec![],
+        review_flag: None,
+    };
+    match decide(marker, inputs) {
+        PhaseVerdict::Done => ReviewOutcome::Complete,
+        PhaseVerdict::Blocked { reason } => ReviewOutcome::Incomplete {
+            detail: format!("LOOM_BLOCKED: {reason}"),
+        },
+        PhaseVerdict::Clarify { question } => ReviewOutcome::Incomplete {
+            detail: format!("LOOM_CLARIFY: {question}"),
+        },
+        PhaseVerdict::Recovery {
+            cause: RecoveryCause::SwallowedMarker,
+        } => ReviewOutcome::Incomplete {
+            detail: if exit_code == 0 {
+                "agent exited 0 without LOOM_COMPLETE / LOOM_BLOCKED / LOOM_CLARIFY marker \
+                 (swallowed marker)"
+                    .to_string()
+            } else {
+                format!("agent exited with code {exit_code}")
+            },
+        },
+        PhaseVerdict::Recovery { cause } => ReviewOutcome::Incomplete {
+            detail: format!("unexpected gate verdict: {}", cause.as_str()),
+        },
+    }
+}
+
 impl<S, F> ReviewController for ProductionReviewController<S, F>
 where
     S: Fn(SpawnConfig) -> F + Send + Sync,
-    F: std::future::Future<Output = Result<SessionOutcome, ProtocolError>> + Send,
+    F: std::future::Future<Output = Result<(SessionOutcome, Option<ExitSignal>), ProtocolError>>
+        + Send,
 {
     async fn run_review(&mut self) -> Result<ReviewOutcome, ReviewError> {
         let prompt = self.build_review_prompt().await?;
@@ -235,16 +284,10 @@ where
             image_ref = %spawn_config.image_ref,
             "loom review: dispatching reviewer agent",
         );
-        let outcome = (self.spawn)(spawn_config).await;
+        let result = (self.spawn)(spawn_config).await;
         drop(scratch);
-        let outcome = outcome?;
-        if outcome.exit_code == 0 {
-            Ok(ReviewOutcome::Complete)
-        } else {
-            Ok(ReviewOutcome::Incomplete {
-                detail: format!("agent exited with code {}", outcome.exit_code),
-            })
-        }
+        let (outcome, marker) = result?;
+        Ok(classify_review_phase(marker.as_ref(), outcome.exit_code))
     }
 
     async fn list_spec_beads(&mut self) -> Result<Vec<Bead>, ReviewError> {
@@ -423,13 +466,79 @@ mod tests {
     use std::ffi::OsStr;
     use std::future::Ready;
 
-    type NoopSpawn = fn(SpawnConfig) -> Ready<Result<SessionOutcome, ProtocolError>>;
+    type SpawnFuture = Ready<Result<(SessionOutcome, Option<ExitSignal>), ProtocolError>>;
+    type NoopSpawn = fn(SpawnConfig) -> SpawnFuture;
+    type NoopController = ProductionReviewController<NoopSpawn, SpawnFuture>;
 
-    fn noop_spawn(_cfg: SpawnConfig) -> Ready<Result<SessionOutcome, ProtocolError>> {
-        std::future::ready(Ok(SessionOutcome {
-            exit_code: 0,
-            cost_usd: None,
-        }))
+    fn noop_spawn(_cfg: SpawnConfig) -> SpawnFuture {
+        std::future::ready(Ok((
+            SessionOutcome {
+                exit_code: 0,
+                cost_usd: None,
+            },
+            Some(ExitSignal::Complete),
+        )))
+    }
+
+    /// FR12 — `loom review`'s phase-end MUST route the reviewer's marker
+    /// through the canonical [`decide`] gate function rather than its own
+    /// ad-hoc `match` on `exit_code`. This test pins the marker → outcome
+    /// mapping that `decide()` produces for the review phase: `COMPLETE`
+    /// reaches `Complete`, `BLOCKED`/`CLARIFY` self-reports surface as
+    /// `Incomplete` carrying the marker text, and a missing marker routes
+    /// to `swallowed-marker` recovery (mapped to `Incomplete`). Combined
+    /// with the source-level `decide()` import in `classify_review_phase`,
+    /// the two together fence the FR12 contract.
+    #[test]
+    fn classify_review_phase_routes_marker_through_phase_verdict_decide() {
+        // `COMPLETE` + clean exit → review phase passes.
+        assert_eq!(
+            classify_review_phase(Some(&ExitSignal::Complete), 0),
+            ReviewOutcome::Complete,
+        );
+        // `BLOCKED` self-report surfaces as `Incomplete` carrying the marker.
+        match classify_review_phase(
+            Some(&ExitSignal::Blocked {
+                reason: "missing schema".into(),
+            }),
+            0,
+        ) {
+            ReviewOutcome::Incomplete { detail } => assert!(
+                detail.contains("LOOM_BLOCKED") && detail.contains("missing schema"),
+                "blocked detail missing reason: {detail}",
+            ),
+            other => panic!("expected Incomplete, got {other:?}"),
+        }
+        // `CLARIFY` self-report surfaces as `Incomplete` carrying the question.
+        match classify_review_phase(
+            Some(&ExitSignal::Clarify {
+                question: "additive only?".into(),
+            }),
+            0,
+        ) {
+            ReviewOutcome::Incomplete { detail } => assert!(
+                detail.contains("LOOM_CLARIFY") && detail.contains("additive only?"),
+                "clarify detail missing question: {detail}",
+            ),
+            other => panic!("expected Incomplete, got {other:?}"),
+        }
+        // None marker → `Recovery::SwallowedMarker` → `Incomplete` carrying
+        // the swallowed-marker phrasing.
+        match classify_review_phase(None, 0) {
+            ReviewOutcome::Incomplete { detail } => assert!(
+                detail.contains("swallowed marker"),
+                "swallowed-marker text missing: {detail}",
+            ),
+            other => panic!("expected Incomplete, got {other:?}"),
+        }
+        // None marker + non-zero exit → exit code surfaces in detail.
+        match classify_review_phase(None, 7) {
+            ReviewOutcome::Incomplete { detail } => assert!(
+                detail.contains('7'),
+                "exit code missing from detail: {detail}",
+            ),
+            other => panic!("expected Incomplete, got {other:?}"),
+        }
     }
 
     fn stub_manifest(dir: &std::path::Path) -> Arc<ProfileImageManifest> {
@@ -465,9 +574,7 @@ mod tests {
         Arc::new(db)
     }
 
-    fn controller(
-        workspace: PathBuf,
-    ) -> ProductionReviewController<NoopSpawn, Ready<Result<SessionOutcome, ProtocolError>>> {
+    fn controller(workspace: PathBuf) -> NoopController {
         let state = empty_state(&workspace);
         let manifest = stub_manifest(&workspace);
         ProductionReviewController::new(
@@ -486,7 +593,7 @@ mod tests {
         workspace: PathBuf,
         label: &str,
         state: Arc<StateDb>,
-    ) -> ProductionReviewController<NoopSpawn, Ready<Result<SessionOutcome, ProtocolError>>> {
+    ) -> NoopController {
         let manifest = stub_manifest(&workspace);
         ProductionReviewController::new(
             BdClient::new(),
@@ -586,10 +693,13 @@ mod tests {
             manifest,
             ProfileName::new("base"),
             |_cfg: SpawnConfig| async move {
-                Ok(SessionOutcome {
-                    exit_code: 0,
-                    cost_usd: None,
-                })
+                Ok((
+                    SessionOutcome {
+                        exit_code: 0,
+                        cost_usd: None,
+                    },
+                    Some(ExitSignal::Complete),
+                ))
             },
         );
         let outcome = ctrl.run_review().await;
@@ -618,10 +728,16 @@ mod tests {
             manifest,
             ProfileName::new("base"),
             |_cfg: SpawnConfig| async move {
-                Ok(SessionOutcome {
-                    exit_code: 7,
-                    cost_usd: None,
-                })
+                // No marker + non-zero exit: the gate routes via
+                // SwallowedMarker, and the review classifier folds the exit
+                // code into the detail body for human triage.
+                Ok((
+                    SessionOutcome {
+                        exit_code: 7,
+                        cost_usd: None,
+                    },
+                    None,
+                ))
             },
         );
         let outcome = ctrl.run_review().await;
@@ -779,10 +895,13 @@ mod tests {
                         .expect("prompt.txt readable");
                     *prompt_seen.lock().unwrap() = Some(txt);
                     *captured.lock().unwrap() = Some(cfg);
-                    Ok(SessionOutcome {
-                        exit_code: 0,
-                        cost_usd: None,
-                    })
+                    Ok((
+                        SessionOutcome {
+                            exit_code: 0,
+                            cost_usd: None,
+                        },
+                        Some(ExitSignal::Complete),
+                    ))
                 }
             },
         );
@@ -852,10 +971,13 @@ mod tests {
             manifest,
             ProfileName::new("base"),
             |_cfg: SpawnConfig| async move {
-                Ok(SessionOutcome {
-                    exit_code: 0,
-                    cost_usd: None,
-                })
+                Ok((
+                    SessionOutcome {
+                        exit_code: 0,
+                        cost_usd: None,
+                    },
+                    Some(ExitSignal::Complete),
+                ))
             },
         )
         .with_handoff_lock(guard);

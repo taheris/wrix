@@ -3742,7 +3742,62 @@ test_run_execs_check_then_review_tree() { _pending_stub run_execs_check_then_rev
 test_run_outer_loop_iterates_on_fixups() { _pending_stub run_outer_loop_iterates_on_fixups; }
 test_push_gate_refuses_on_tree_review_flag() { _pending_stub push_gate_refuses_on_tree_review_flag; }
 test_bare_loom_produces_grouped_help() { _pending_stub bare_loom_produces_grouped_help; }
-test_phase_verdict_decide_called_from_production() { _pending_stub phase_verdict_decide_called_from_production; }
+#-----------------------------------------------------------------------------
+# test_phase_verdict_decide_called_from_production — FR12 (verdict-gate
+# production wiring). The pure decision function `phase_verdict::decide()`
+# must be invoked from BOTH `loom run`'s per-bead exit (run/production.rs)
+# AND `loom review`'s phase-end (review/production.rs). No production site
+# may inline ad-hoc marker → outcome classification.
+#
+# Verification has two parts: (1) source-level — both production files
+# import and call `decide`; (2) behavioural — dedicated unit tests pin
+# the marker → outcome mapping in each call site so a future regression
+# that resurrects an inline classifier diverging from `decide()` would
+# trip the test, and the canonical Rust unit tests for the pure function
+# stay in `phase_verdict.rs` for documentation.
+#-----------------------------------------------------------------------------
+test_phase_verdict_decide_called_from_production() {
+    local run_prod="$LOOM_DIR/crates/loom-workflow/src/run/production.rs"
+    local review_prod="$LOOM_DIR/crates/loom-workflow/src/review/production.rs"
+    local missing=0
+    if [ ! -f "$run_prod" ]; then
+        echo "missing source: $run_prod" >&2
+        return 1
+    fi
+    if [ ! -f "$review_prod" ]; then
+        echo "missing source: $review_prod" >&2
+        return 1
+    fi
+    if ! grep -qE 'use[[:space:]]+crate::review::\{[^}]*\bdecide\b' "$run_prod"; then
+        echo "run/production.rs must import phase_verdict::decide" >&2
+        missing=$((missing + 1))
+    fi
+    if ! grep -qE '\bdecide\(' "$run_prod"; then
+        echo "run/production.rs must call decide(...) at the per-bead exit" >&2
+        missing=$((missing + 1))
+    fi
+    if ! grep -qE 'use[[:space:]]+super::phase_verdict::\{[^}]*\bdecide\b' "$review_prod"; then
+        echo "review/production.rs must import phase_verdict::decide" >&2
+        missing=$((missing + 1))
+    fi
+    if ! grep -qE '\bdecide\(' "$review_prod"; then
+        echo "review/production.rs must call decide(...) at the phase-end" >&2
+        missing=$((missing + 1))
+    fi
+    # The behavioural tests are the load-bearing surface — without them
+    # the source-level `decide()` call could be dead code that never
+    # executes on the production path.
+    if ! grep -qE 'fn classify_session_routes_marker_through_phase_verdict_decide' "$run_prod"; then
+        echo "run/production.rs missing live-path test for decide() wiring" >&2
+        missing=$((missing + 1))
+    fi
+    if ! grep -qE 'fn classify_review_phase_routes_marker_through_phase_verdict_decide' \
+        "$review_prod"; then
+        echo "review/production.rs missing live-path test for decide() wiring" >&2
+        missing=$((missing + 1))
+    fi
+    return "$missing"
+}
 #-----------------------------------------------------------------------------
 # test_style_rules_pinning_matrix — run.md and review.md include
 # partial/style_rules.md; the other phase templates (plan_new, plan_update,

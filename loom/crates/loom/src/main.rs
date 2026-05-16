@@ -1611,7 +1611,17 @@ fn run_review(
                     let sink =
                         LogSink::open_phase_at(&logs_root, &label, "review", None, phase_when)
                             .map_err(|e| ProtocolError::Io(std::io::Error::other(e.to_string())))?;
-                    dispatch(kind, spawn_cfg, shutdown_grace, Some(sink), None).await
+                    let mut output = String::new();
+                    let outcome = dispatch(
+                        kind,
+                        spawn_cfg,
+                        shutdown_grace,
+                        Some(sink),
+                        Some(&mut output),
+                    )
+                    .await?;
+                    let marker = parse_exit_signal(&output);
+                    Ok((outcome, marker))
                 }
             },
         )
