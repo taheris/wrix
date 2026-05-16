@@ -25,6 +25,7 @@ use loom_driver::logging::{LogSink, sweep_retention_at};
 use loom_driver::profile_manifest::ProfileImageManifest;
 use loom_driver::scratch::resolve_scratch_key;
 use loom_driver::state::StateDb;
+use loom_workflow::check;
 use loom_workflow::msg::{
     DISMISS_NOTE, build_rows, compose_option_note, filter_msg_beads, kind_of, resolve_target,
     spec_label_of,
@@ -38,7 +39,7 @@ use loom_workflow::run::{
 use loom_workflow::todo::{
     ExitSignal, ProductionTodoController, parse_exit_signal, run as run_todo_workflow,
 };
-use loom_workflow::{doctor, init, logs_cmd, plan, spec, status, use_spec};
+use loom_workflow::{init, logs_cmd, plan, spec, status, use_spec};
 use loom_workflow::{run_agent, run_agent_classified};
 
 /// Top-level CLI surface.
@@ -730,8 +731,8 @@ fn run_check_audit(
         CheckAudit::Criteria => {
             let specs_dir = workspace.join("specs");
             let dispatcher = workspace.join("tests/loom-test.sh");
-            let findings = doctor::audit(&specs_dir, &dispatcher)?;
-            let code = doctor::report(&findings, strict);
+            let findings = check::criteria::audit(&specs_dir, &dispatcher)?;
+            let code = check::criteria::report(&findings, strict);
             if code != 0 {
                 std::process::exit(code);
             }

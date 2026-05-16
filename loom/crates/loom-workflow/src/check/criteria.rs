@@ -1,23 +1,27 @@
-//! `loom doctor --check=criteria` — spec ↔ test stub-and-integration audit.
+//! `loom check --check=criteria` — spec ↔ test stub-and-integration audit.
 //!
 //! Walks every `specs/*.md` for `[verify](tests/loom-test.sh::test_<fn>)`
 //! annotations, opens the dispatcher in `tests/loom-test.sh`, and reports
-//! violations against the four spec-defined conditions:
+//! violations against three conditions (FR14 abolished `[ ]` / `[x]`
+//! checkboxes; verifier status is live, not stored in the spec):
 //!
-//! 1. **Stub criteria with checked boxes** — a `[x]` criterion whose
-//!    dispatcher still calls `_pending_stub`. Hard error.
-//! 2. **Unit-test masquerade** — a checked criterion whose dispatcher
-//!    runs a `--lib` profile test whose function path contains
-//!    `::tests::`, i.e. a `#[cfg(test)] mod tests` block inside the
-//!    production crate. Warning by default, error in `--strict`. R10
-//!    (wx-2pbxe). Suppressed by the per-annotation `@unit-ok` marker:
+//! 1. **Stubbed dispatcher** — annotation references a dispatcher whose
+//!    body still calls `_pending_stub`. Warning by default, error in
+//!    `--strict`. Per FR14, `stubbed` is a reported status, not a
+//!    contradiction — the bead that wires the real verifier will close
+//!    the gap.
+//! 2. **Unit-test masquerade** — a real dispatcher that runs a `--lib`
+//!    profile test whose function path contains `::tests::`, i.e. a
+//!    `#[cfg(test)] mod tests` block inside the production crate.
+//!    Warning by default, error in `--strict`. R10 (wx-2pbxe).
+//!    Suppressed by the per-annotation `@unit-ok` marker:
 //!    `[verify](tests/loom-test.sh::test_fn @unit-ok)`.
 //! 3. **Missing dispatcher** — `[verify](tests/loom-test.sh::test_X)`
 //!    where `test_X` is not defined. Hard error.
 //! 4. **Orphan stubs** — a function in `tests/loom-test.sh` that no
 //!    criterion references. Warning. R10 (wx-2pbxe).
 //!
-//! `loom doctor --check=criteria` exits 0 when no violations are found,
+//! `loom check --check=criteria` exits 0 when no violations are found,
 //! `1` for any hard error, `2` for arg parsing problems.
 
 use std::collections::HashSet;
@@ -26,16 +30,12 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
-/// Severity of a doctor finding. Hard errors fail the exit code; the
-/// strict flag promotes warnings to errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
     Error,
     Warning,
 }
 
-/// One finding from the audit. `location` is the spec file + line
-/// number that owned the criterion (or the dispatcher file).
 #[derive(Debug, Clone)]
 pub struct Finding {
     pub severity: Severity,
@@ -43,11 +43,8 @@ pub struct Finding {
     pub message: String,
 }
 
-/// Top-level errors from running the audit (distinct from `Finding` —
-/// these are about the audit itself failing, not the audit reporting
-/// violations).
 #[derive(Debug, Error)]
-pub enum DoctorError {
+pub enum CriteriaError {
     #[error("failed to read {path}: {source}")]
     ReadFile {
         path: PathBuf,
@@ -68,24 +65,17 @@ pub struct VerifyAnnotation {
     /// `tests/loom-test.sh::test_<fn>` — the path part is the
     /// dispatcher file, the `::test_<fn>` part is the function name.
     pub dispatcher_fn: String,
-    /// `true` when the preceding criterion checkbox is `[x]`.
-    pub checked: bool,
-    /// `true` when the annotation carries the `@unit-ok` opt-out
-    /// marker (R10, wx-2pbxe). Suppresses unit-test masquerade
-    /// warnings for criteria that legitimately target unit logic.
+    /// `@unit-ok` opt-out marker (R10, wx-2pbxe). Suppresses unit-test
+    /// masquerade warnings for criteria that legitimately target unit logic.
     pub unit_ok: bool,
 }
 
-/// Walk `specs_dir` for `.md` files and extract every `[verify]`
-/// annotation along with its preceding `[ ]` / `[x]` state. The
-/// regex-free parser scans line-by-line, tracking the most recent
-/// criterion bullet's checkbox state.
-pub fn parse_verify_annotations(specs_dir: &Path) -> Result<Vec<VerifyAnnotation>, DoctorError> {
+pub fn parse_verify_annotations(specs_dir: &Path) -> Result<Vec<VerifyAnnotation>, CriteriaError> {
     if !specs_dir.is_dir() {
-        return Err(DoctorError::NoSpecsDir(specs_dir.to_path_buf()));
+        return Err(CriteriaError::NoSpecsDir(specs_dir.to_path_buf()));
     }
     let mut out = Vec::new();
-    let entries = fs::read_dir(specs_dir).map_err(|source| DoctorError::ReadFile {
+    let entries = fs::read_dir(specs_dir).map_err(|source| CriteriaError::ReadFile {
         path: specs_dir.to_path_buf(),
         source,
     })?;
@@ -94,7 +84,7 @@ pub fn parse_verify_annotations(specs_dir: &Path) -> Result<Vec<VerifyAnnotation
         if path.extension().and_then(|e| e.to_str()) != Some("md") {
             continue;
         }
-        let body = fs::read_to_string(&path).map_err(|source| DoctorError::ReadFile {
+        let body = fs::read_to_string(&path).map_err(|source| CriteriaError::ReadFile {
             path: path.clone(),
             source,
         })?;
@@ -104,27 +94,7 @@ pub fn parse_verify_annotations(specs_dir: &Path) -> Result<Vec<VerifyAnnotation
 }
 
 fn parse_verify_from_body(spec_file: &Path, body: &str, out: &mut Vec<VerifyAnnotation>) {
-    // Track the most recent criterion's checkbox state. A criterion
-    // bullet looks like `- [ ] …` or `- [x] …` (any indent); we keep
-    // the last-seen value and pair it with the next `[verify](...)`
-    // annotation we encounter.
-    let mut last_checked: Option<bool> = None;
     for (idx, line) in body.lines().enumerate() {
-        let trimmed = line.trim_start();
-        if let Some(rest) = trimmed
-            .strip_prefix("- [")
-            .or_else(|| trimmed.strip_prefix("* ["))
-        {
-            // Two-byte chars: `[ ]` or `[x]` or `[X]`. Inspect first byte.
-            let first = rest.chars().next();
-            if first == Some(' ') {
-                last_checked = Some(false);
-            } else if first == Some('x') || first == Some('X') {
-                last_checked = Some(true);
-            }
-        }
-        // `[verify](tests/loom-test.sh::test_foo)` — find the substring
-        // and pull the function name out.
         let marker = "[verify](tests/loom-test.sh::";
         if let Some(start) = line.find(marker) {
             let after = &line[start + marker.len()..];
@@ -141,7 +111,6 @@ fn parse_verify_from_body(spec_file: &Path, body: &str, out: &mut Vec<VerifyAnno
                     spec_file: spec_file.to_path_buf(),
                     line_no: idx + 1,
                     dispatcher_fn: fn_name.to_string(),
-                    checked: last_checked.unwrap_or(false),
                     unit_ok,
                 });
             }
@@ -149,8 +118,6 @@ fn parse_verify_from_body(spec_file: &Path, body: &str, out: &mut Vec<VerifyAnno
     }
 }
 
-/// Parsed dispatcher map: per-function classification plus the body
-/// text the audit walks to detect unit-test masquerade (R10).
 #[derive(Debug, Default)]
 pub struct DispatcherIndex {
     /// Functions whose body calls `_pending_stub`.
@@ -166,17 +133,11 @@ pub struct DispatcherIndex {
 /// Collect every `test_<name>() { … }` symbol defined in `tests/loom-test.sh`,
 /// bucket each as `_pending_stub` vs real, and capture each body so the
 /// audit can inspect it for masquerade signatures.
-///
-/// Bodies are captured by reading forward from the function header until
-/// the next `test_<name>()` header or the end of file. Brace counting in
-/// real-world bash mismatches because of `{`/`}` characters inside
-/// strings, here-docs, and comments — line-based segmentation is simpler
-/// and correct enough for the heuristic checks the audit needs.
-pub fn parse_dispatcher(dispatcher_path: &Path) -> Result<DispatcherIndex, DoctorError> {
+pub fn parse_dispatcher(dispatcher_path: &Path) -> Result<DispatcherIndex, CriteriaError> {
     if !dispatcher_path.is_file() {
-        return Err(DoctorError::NoDispatcher(dispatcher_path.to_path_buf()));
+        return Err(CriteriaError::NoDispatcher(dispatcher_path.to_path_buf()));
     }
-    let body = fs::read_to_string(dispatcher_path).map_err(|source| DoctorError::ReadFile {
+    let body = fs::read_to_string(dispatcher_path).map_err(|source| CriteriaError::ReadFile {
         path: dispatcher_path.to_path_buf(),
         source,
     })?;
@@ -218,11 +179,6 @@ pub fn parse_dispatcher(dispatcher_path: &Path) -> Result<DispatcherIndex, Docto
     Ok(out)
 }
 
-/// Heuristic: does the dispatcher body look like it runs a unit-test
-/// masquerade — a `--lib` profile test whose path contains `::tests::`?
-/// That's the signal that the criterion is verified by a
-/// `#[cfg(test)] mod tests {}` block inside the production crate
-/// rather than an integration test. R10 (wx-2pbxe).
 pub fn is_unit_masquerade(body: &str) -> bool {
     let mut saw_lib = false;
     for line in body.lines() {
@@ -247,9 +203,7 @@ pub fn is_unit_masquerade(body: &str) -> bool {
     false
 }
 
-/// Run the criteria audit. Returns the collected `Finding`s — empty
-/// vec means clean.
-pub fn audit(specs_dir: &Path, dispatcher_path: &Path) -> Result<Vec<Finding>, DoctorError> {
+pub fn audit(specs_dir: &Path, dispatcher_path: &Path) -> Result<Vec<Finding>, CriteriaError> {
     let annotations = parse_verify_annotations(specs_dir)?;
     let index = parse_dispatcher(dispatcher_path)?;
     let mut findings = Vec::new();
@@ -266,13 +220,13 @@ pub fn audit(specs_dir: &Path, dispatcher_path: &Path) -> Result<Vec<Finding>, D
             });
             continue;
         }
-        if ann.checked && index.stubs.contains(fn_name) {
+        if index.stubs.contains(fn_name) {
             findings.push(Finding {
-                severity: Severity::Error,
+                severity: Severity::Warning,
                 location: where_at.clone(),
                 message: format!(
-                    "criterion is checked `[x]` but dispatcher `{fn_name}` \
-                     still calls `_pending_stub`",
+                    "dispatcher `{fn_name}` still calls `_pending_stub`; \
+                     replace the stub with a real verifier",
                 ),
             });
         }
@@ -349,11 +303,6 @@ pub fn report(findings: &[Finding], strict: bool) -> i32 {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "tests use panicking helpers"
-)]
 mod tests {
     use super::*;
 
@@ -363,21 +312,25 @@ mod tests {
     }
 
     #[test]
-    fn parser_extracts_checkbox_and_annotation() {
+    fn parser_extracts_annotations_ignoring_checkbox_state() {
         let dir = tempfile::tempdir().expect("tempdir");
+        // FR14: checkboxes are no longer part of the spec syntax, but
+        // the parser must still extract annotations from legacy specs
+        // that happen to carry them.
         let body = "\
-- [x] First criterion
+- First criterion
   [verify](tests/loom-test.sh::test_first)
-- [ ] Second criterion
+- [x] Second criterion (legacy checkbox)
   [verify](tests/loom-test.sh::test_second)
+- [ ] Third criterion (legacy checkbox)
+  [verify](tests/loom-test.sh::test_third)
 ";
         write_spec(dir.path(), "demo.md", body);
         let ann = parse_verify_annotations(dir.path()).expect("parse");
-        assert_eq!(ann.len(), 2);
+        assert_eq!(ann.len(), 3);
         assert_eq!(ann[0].dispatcher_fn, "test_first");
-        assert!(ann[0].checked);
         assert_eq!(ann[1].dispatcher_fn, "test_second");
-        assert!(!ann[1].checked);
+        assert_eq!(ann[2].dispatcher_fn, "test_third");
     }
 
     #[test]
@@ -422,7 +375,7 @@ test_three() {
     #[test]
     fn annotation_parser_extracts_unit_ok_marker() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let body = "- [x] keep this checked\n  [verify](tests/loom-test.sh::test_fn @unit-ok)\n";
+        let body = "- keep this verifier\n  [verify](tests/loom-test.sh::test_fn @unit-ok)\n";
         write_spec(dir.path(), "demo.md", body);
         let ann = parse_verify_annotations(dir.path()).expect("parse");
         assert_eq!(ann.len(), 1);
@@ -440,7 +393,7 @@ test_three() {
         write_spec(
             &specs,
             "a.md",
-            "- [x] checked\n  [verify](tests/loom-test.sh::test_unit)\n",
+            "- criterion\n  [verify](tests/loom-test.sh::test_unit)\n",
         );
         let dispatcher = dir.path().join("loom-test.sh");
         fs::write(
@@ -466,7 +419,7 @@ test_three() {
         write_spec(
             &specs,
             "a.md",
-            "- [x] intentional unit test\n  [verify](tests/loom-test.sh::test_unit @unit-ok)\n",
+            "- intentional unit test\n  [verify](tests/loom-test.sh::test_unit @unit-ok)\n",
         );
         let dispatcher = dir.path().join("loom-test.sh");
         fs::write(
@@ -492,13 +445,13 @@ test_three() {
         write_spec(
             &specs,
             "a.md",
-            "- [ ] not yet\n  [verify](tests/loom-test.sh::test_referenced)\n",
+            "- not yet\n  [verify](tests/loom-test.sh::test_referenced)\n",
         );
         let dispatcher = dir.path().join("loom-test.sh");
         fs::write(
             &dispatcher,
-            "test_referenced() { _pending_stub r; }\n\
-             test_orphan() { _pending_stub o; }\n",
+            "test_referenced() { cargo test r; }\n\
+             test_orphan() { cargo test o; }\n",
         )
         .expect("write");
         let findings = audit(&specs, &dispatcher).expect("audit");
@@ -512,26 +465,27 @@ test_three() {
         );
     }
 
+    /// FR14: stubbed dispatcher is flagged unconditionally — no
+    /// checkbox-state precondition. Reported as a Warning (status,
+    /// not a contradiction); `--strict` promotes it to error.
     #[test]
-    fn audit_flags_checked_stub_as_error() {
+    fn audit_flags_stub_as_warning() {
         let dir = tempfile::tempdir().expect("tempdir");
         let specs = dir.path().join("specs");
         fs::create_dir_all(&specs).expect("specs dir");
         write_spec(
             &specs,
             "a.md",
-            "- [x] this is checked\n  [verify](tests/loom-test.sh::test_a)\n",
+            "- criterion\n  [verify](tests/loom-test.sh::test_a)\n",
         );
         let dispatcher = dir.path().join("loom-test.sh");
         fs::write(&dispatcher, "test_a() { _pending_stub a; }\n").expect("write");
         let findings = audit(&specs, &dispatcher).expect("audit");
-        assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].severity, Severity::Error);
         assert!(
-            findings[0].message.contains("checked")
-                && findings[0].message.contains("_pending_stub"),
-            "{}",
-            findings[0].message,
+            findings
+                .iter()
+                .any(|f| f.severity == Severity::Warning && f.message.contains("_pending_stub")),
+            "expected stub warning, got: {findings:?}",
         );
     }
 
@@ -543,7 +497,7 @@ test_three() {
         write_spec(
             &specs,
             "a.md",
-            "- [ ] not yet checked\n  [verify](tests/loom-test.sh::test_does_not_exist)\n",
+            "- criterion\n  [verify](tests/loom-test.sh::test_does_not_exist)\n",
         );
         let dispatcher = dir.path().join("loom-test.sh");
         fs::write(&dispatcher, "# empty\n").expect("write");
@@ -561,7 +515,7 @@ test_three() {
         write_spec(
             &specs,
             "a.md",
-            "- [x] all good\n  [verify](tests/loom-test.sh::test_a)\n",
+            "- all good\n  [verify](tests/loom-test.sh::test_a)\n",
         );
         let dispatcher = dir.path().join("loom-test.sh");
         fs::write(&dispatcher, "test_a() {\n    cargo test foo\n}\n").expect("write");
