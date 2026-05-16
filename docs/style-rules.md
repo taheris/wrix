@@ -76,7 +76,7 @@ the Mayor via `bd human` instead.
   in a section that carries — a `[verify](path::fn)` or
   `[judge](path::fn)` annotation pointing at a real test. A checked
   criterion (`[x]`) must not route through `_pending_stub`.
-  `loom check --check=criteria` enforces this across every contract
+  `loom check criteria` enforces this across every contract
   surface and fails pre-commit on any of:
   - **Annotations:** target function does not exist; `[x]` routes
     through a stub
@@ -88,14 +88,14 @@ the Mayor via `bd human` instead.
     sentences but carries no verifier annotation
 - **TST-6** — *Orphan `[verify]` dispatchers are flagged.* Functions
   defined in `tests/loom-test.sh` that are referenced by no spec
-  annotation are caught by `loom check --check=criteria`. Delete
+  annotation are caught by `loom check criteria`. Delete
   them, or wire a spec annotation that uses them.
 - **TST-7** — *Removals demonstrate their replacements work.* When a
   change set deletes a test, code path, schema element, or file
   paired with a "replaces" / "replaced by" / "supersedes" claim
   (commit message, code comment, PR description, or
   `## Affected Files Removed` text), the replacement's verifier must
-  land in the same change set. `loom check --check=removals` scans
+  land in the same change set. `loom check removals` scans
   staged diffs and fails pre-commit on:
   - test-function or `[verify]` deletions paired with replacement-claim
     text where the change set adds no corresponding new test or
@@ -106,17 +106,16 @@ the Mayor via `bd human` instead.
 - **TST-8** — *Test infrastructure is itself tested.* Stubs (stub
   agents, fixture helpers, `wrapix spawn` fakes, JSONL fakes) must
   carry at least one conformance test asserting the stub's observable
-  contract matches the real implementation. `loom check` audit
-  checks (`--check=criteria`, `--check=removals`, `--check=cross-spec`,
-  etc.) must each carry a self-test with synthetic fixtures that
-  exhibit the violation and assert the check fires. Without these,
-  bugs in the test infrastructure or audit layer silently invalidate
-  every downstream test. `loom check --check=infrastructure`
-  enforces this.
+  contract matches the real implementation. `loom check` audits
+  (`criteria`, `removals`, `cross-spec`, etc.) must each carry a
+  self-test with synthetic fixtures that exhibit the violation and
+  assert the check fires. Without these, bugs in the test
+  infrastructure or audit layer silently invalidate every downstream
+  test. `loom check infrastructure` enforces this.
 - **TST-9** — *Cross-spec terms are consistent.* When a CLI flag,
   bead label, event variant, schema element, environment variable,
   or other named term appears in multiple specs in `specs/`, the
-  meaning, type, and behaviour must match. `loom check --check=cross-spec`
+  meaning, type, and behaviour must match. `loom check cross-spec`
   greps for shared terms across `specs/` and flags definitions that
   diverge.
 

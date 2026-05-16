@@ -1,5 +1,6 @@
 ---
 source: crates/loom/tests/cli_help.rs
+assertion_line: 55
 expression: "loom_help(&[])"
 ---
 Loom harness CLI
@@ -10,7 +11,7 @@ Workflow:
   plan    Interactive spec interview (`-n <label>` new, `-u <label>` update)
   todo    Decompose the active spec into beads (four-tier detection)
   run     Per-bead execution loop. Continuous by default; `--once` exits after one bead
-  check   Deterministic audits — `[verify]` scripts, style linters, and `--check=<name>` sub-audits
+  check   Deterministic audits — `[verify]` scripts, style linters, and `<audit>` sub-audits
   review  LLM-judged review pass over the gate scope
   msg     Resolve outstanding `loom:clarify` and `loom:blocked` beads
 

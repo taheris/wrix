@@ -1,4 +1,4 @@
-//! `loom check --check=criteria` — spec ↔ test verifier audit (FR14).
+//! `loom check criteria` — spec ↔ test verifier audit (FR14).
 //!
 //! Walks every `specs/*.md` for `[verify](tests/loom-test.sh::test_<fn>)`
 //! annotations and produces a per-criterion verdict by running the
@@ -34,7 +34,7 @@
 //!
 //! ## Exit code
 //!
-//! `loom check --check=criteria` exits `0` when every criterion is
+//! `loom check criteria` exits `0` when every criterion is
 //! `Pass` or `Stubbed` and there are no error-severity findings, `1`
 //! when any criterion is `Fail` / `MissingDispatcher` or there is any
 //! error finding. `--strict` promotes stubs and warnings to errors.
@@ -496,7 +496,7 @@ pub fn report(report: &AuditReport, strict: bool) -> i32 {
     }
 
     eprintln!(
-        "loom check --check=criteria: {total} criteria \
+        "loom check criteria: {total} criteria \
          ({pass_count} pass, {fail_count} fail, {stub_count} stub, \
          {missing_count} missing, {skipped_count} skipped); \
          {findings} findings ({hard_count} hard)",

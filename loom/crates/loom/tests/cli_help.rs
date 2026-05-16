@@ -98,7 +98,7 @@ fn loom_help_groups_workflow_inspection_state_in_order() {
         );
     }
 
-    // `doctor` was folded into `loom check --check=<name>` and must not
+    // `doctor` was folded into `loom check <audit>` and must not
     // surface in the top-level help — its absence is part of the user
     // contract (spec § Functional #1).
     assert!(
@@ -148,29 +148,44 @@ fn loom_check_help_snapshot() {
 }
 
 #[test]
-fn loom_check_rejects_unknown_check_selector() {
+fn loom_check_rejects_unknown_audit() {
     let loom_bin = env!("CARGO_BIN_EXE_loom");
     let output = Command::new(loom_bin)
-        .args(["check", "--check=bogus"])
+        .args(["check", "bogus"])
         .env("COLUMNS", "100")
         .env("CLAP_TERM_WIDTH", "100")
         .output()
         .expect("spawn loom");
     assert!(
         !output.status.success(),
-        "loom check --check=bogus must exit non-zero",
+        "loom check bogus must exit non-zero",
     );
     let stderr = String::from_utf8(output.stderr).expect("utf-8");
     assert!(
         stderr.contains("invalid value 'bogus'"),
         "stderr must name the invalid value, got: {stderr}",
     );
-    for selector in ["criteria", "removals", "infrastructure", "cross-spec"] {
+    for audit in ["criteria", "matrix", "surface"] {
         assert!(
-            stderr.contains(selector),
-            "stderr must list `{selector}` as an allowed selector, got: {stderr}",
+            stderr.contains(audit),
+            "stderr must list `{audit}` as an allowed audit, got: {stderr}",
         );
     }
+}
+
+#[test]
+fn loom_check_rejects_legacy_check_flag() {
+    let loom_bin = env!("CARGO_BIN_EXE_loom");
+    let output = Command::new(loom_bin)
+        .args(["check", "--check=criteria"])
+        .env("COLUMNS", "100")
+        .env("CLAP_TERM_WIDTH", "100")
+        .output()
+        .expect("spawn loom");
+    assert!(
+        !output.status.success(),
+        "legacy `loom check --check=criteria` must exit non-zero",
+    );
 }
 
 #[test]

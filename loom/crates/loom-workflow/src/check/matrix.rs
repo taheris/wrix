@@ -1,4 +1,4 @@
-//! `loom check --check=matrix` — pinning-matrix consistency audit.
+//! `loom check matrix` — pinning-matrix consistency audit.
 //!
 //! The `### Pinning Policy` table in `specs/loom-templates.md` is the
 //! authoritative contract for which partials each workflow template
@@ -370,7 +370,7 @@ pub fn report(findings: &[MatrixFinding]) -> i32 {
         eprintln!("{tag} {msg}", tag = f.kind.tag().to_uppercase());
     }
     eprintln!(
-        "loom check --check=matrix: {n} discrepanc{plural}",
+        "loom check matrix: {n} discrepanc{plural}",
         n = findings.len(),
         plural = if findings.len() == 1 { "y" } else { "ies" },
     );

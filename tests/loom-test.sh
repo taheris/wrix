@@ -3962,7 +3962,7 @@ test_parallel_scratch_isolation() { scratch_cargo_test parallel_keys_get_indepen
 
 # Pinning-matrix audit. Body is a single-line invocation so the body-slicing
 # heuristic cannot mistake stray text below for a stub call.
-test_pinning_matrix_audit() { cargo_run run --quiet --bin loom -- --workspace "$REPO_ROOT" check --check=matrix; }
+test_pinning_matrix_audit() { cargo_run run --quiet --bin loom -- --workspace "$REPO_ROOT" check matrix; }
 
 #-----------------------------------------------------------------------------
 # Dispatch

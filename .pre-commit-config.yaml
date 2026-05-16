@@ -35,23 +35,22 @@ repos:
         pass_filenames: true
         stages: [pre-commit]
 
-      # loom check --check=criteria --no-run — structural spec ↔ test
-      # dispatcher audit. Fast (~ms): stubs, missing dispatchers,
-      # orphans, masquerade — without invoking the live verifiers. The
-      # default (live) audit runs every `[verify]` script per FR14 and
-      # is far too slow for a pre-commit hook. Files filter triggers on
-      # changes to any spec or to the dispatcher, which is the surface
-      # the audit cross-references. `always_run: false` so unrelated
-      # commits skip the check.
+      # loom check criteria --no-run — structural spec ↔ test dispatcher
+      # audit. Fast (~ms): stubs, missing dispatchers, orphans, masquerade
+      # — without invoking the live verifiers. The default (live) audit
+      # runs every `[verify]` script per FR14 and is far too slow for a
+      # pre-commit hook. Files filter triggers on changes to any spec or
+      # to the dispatcher, which is the surface the audit cross-references.
+      # `always_run: false` so unrelated commits skip the check.
       - id: loom-check-criteria
-        name: loom check --check=criteria --no-run
-        entry: nix run .#loom -- check --check=criteria --no-run
+        name: loom check criteria --no-run
+        entry: nix run .#loom -- check criteria --no-run
         language: system
         pass_filenames: false
         files: ^(specs/|tests/loom-test\.sh$|loom/crates/[^/]+/)
         stages: [pre-commit]
 
-      # loom check --check=matrix — pinning-matrix drift audit. Reads the
+      # loom check matrix — pinning-matrix drift audit. Reads the
       # `### Pinning Policy` table in specs/loom-templates.md and the
       # `{% include %}` graph under loom-templates/templates/ (transitively
       # resolved); fails on any cell that diverges in either direction.
@@ -59,8 +58,8 @@ repos:
       # spawning the binary. Files filter triggers on changes to the
       # templates spec or to any template body.
       - id: loom-check-matrix
-        name: loom check --check=matrix
-        entry: nix run .#loom -- check --check=matrix
+        name: loom check matrix
+        entry: nix run .#loom -- check matrix
         language: system
         pass_filenames: false
         files: ^(specs/loom-templates\.md$|loom/crates/loom-templates/templates/)

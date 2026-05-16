@@ -77,15 +77,13 @@ impl From<AgentBackendArg> for AgentKind {
     }
 }
 
-/// Sub-audit selector for `loom check --check=<name>`.
+/// Positional sub-audit selector for `loom check <audit>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "kebab-case")]
 enum CheckAudit {
     Criteria,
     Matrix,
-    Removals,
-    Infrastructure,
-    CrossSpec,
+    Surface,
 }
 
 /// Subcommands of `loom note`.
@@ -235,16 +233,15 @@ enum Command {
         #[arg(long, short = 'v', conflicts_with = "raw")]
         verbose: bool,
     },
-    /// Deterministic audits — `[verify]` scripts, style linters, and `--check=<name>` sub-audits.
+    /// Deterministic audits — `[verify]` scripts, style linters, and `<audit>` sub-audits.
     Check {
+        /// Sub-audit to run (`criteria`, `matrix`, `surface`); omit to
+        /// run the full deterministic pass.
+        #[arg(value_name = "AUDIT")]
+        audit: Option<CheckAudit>,
         /// Spec label override (defaults to `current_spec`).
         #[arg(long, short = 's', value_name = "LABEL")]
         spec: Option<String>,
-        /// Sub-audit to run (`criteria`, `matrix`, `removals`,
-        /// `infrastructure`, `cross-spec`); omit to run the full
-        /// deterministic pass.
-        #[arg(long, value_name = "NAME")]
-        check: Option<CheckAudit>,
         /// Restrict the audit scope to one bead.
         #[arg(long, short = 'b', value_name = "ID", conflicts_with_all = ["diff", "tree"])]
         bead: Option<String>,
@@ -255,12 +252,12 @@ enum Command {
         #[arg(long, conflicts_with_all = ["bead", "diff"])]
         tree: bool,
         /// Promote warning-severity findings (e.g. orphan stubs) to errors.
-        /// Applies to `--check=criteria`.
+        /// Applies to `loom check criteria`.
         #[arg(long)]
         strict: bool,
         /// Skip executing live verifiers — only run structural checks
         /// (stubbed, missing-dispatcher, orphan, masquerade). Applies to
-        /// `--check=criteria` and is intended for the pre-commit hook
+        /// `loom check criteria` and is intended for the pre-commit hook
         /// path where the full live audit is too slow.
         #[arg(long)]
         no_run: bool,
@@ -352,7 +349,7 @@ impl Command {
     fn refused_inside_loom(&self) -> bool {
         match self {
             Command::Status | Command::Logs { .. } | Command::Spec { .. } => false,
-            Command::Check { check: Some(_), .. } => false,
+            Command::Check { audit: Some(_), .. } => false,
             Command::Init { .. }
             | Command::UseSpec { .. }
             | Command::Plan { .. }
@@ -562,7 +559,7 @@ fn main() -> ExitCode {
         ),
         Command::Check {
             spec,
-            check,
+            audit,
             bead,
             diff,
             tree,
@@ -573,7 +570,7 @@ fn main() -> ExitCode {
             spec,
             agent_override,
             CheckOpts {
-                audit: check,
+                audit,
                 bead,
                 diff,
                 tree,
@@ -761,7 +758,7 @@ fn run_check_audit(
             }
             Ok(())
         }
-        CheckAudit::Removals | CheckAudit::Infrastructure | CheckAudit::CrossSpec => {
+        CheckAudit::Surface => {
             anyhow::bail!("audit not yet implemented")
         }
     }
@@ -1543,13 +1540,13 @@ fn run_check(
     }
     if opts.bead.is_some() || opts.diff.is_some() || opts.tree {
         anyhow::bail!(
-            "scope flags (`--bead`, `--diff`, `--tree`) require `--check=<name>` until the \
-             full deterministic pass is implemented"
+            "scope flags (`--bead`, `--diff`, `--tree`) require a positional `<audit>` \
+             argument until the full deterministic pass is implemented"
         );
     }
     anyhow::bail!(
-        "loom check (no flags): full deterministic pass not yet implemented; \
-         use `loom check --check=<name>` for individual sub-audits, or `loom review` \
+        "loom check (no audit): full deterministic pass not yet implemented; \
+         use `loom check <audit>` for individual sub-audits, or `loom review` \
          for the LLM-judged rubric"
     )
 }
