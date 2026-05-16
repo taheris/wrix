@@ -3905,6 +3905,10 @@ test_repin_hook_registered()      { scratch_cargo_test claude_settings_registers
 test_scratch_dir_cleanup()        { scratch_cargo_test close_removes_dir_and_is_idempotent_with_drop; }
 test_parallel_scratch_isolation() { scratch_cargo_test parallel_keys_get_independent_dirs; }
 
+# Pinning-matrix audit. Body is a single-line invocation so the body-slicing
+# heuristic cannot mistake stray text below for a stub call.
+test_pinning_matrix_audit() { cargo_run run --quiet --bin loom -- --workspace "$REPO_ROOT" check --check=matrix; }
+
 #-----------------------------------------------------------------------------
 # Dispatch
 #-----------------------------------------------------------------------------

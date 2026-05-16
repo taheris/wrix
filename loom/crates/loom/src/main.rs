@@ -82,6 +82,7 @@ impl From<AgentBackendArg> for AgentKind {
 #[value(rename_all = "kebab-case")]
 enum CheckAudit {
     Criteria,
+    Matrix,
     Removals,
     Infrastructure,
     CrossSpec,
@@ -239,8 +240,9 @@ enum Command {
         /// Spec label override (defaults to `current_spec`).
         #[arg(long, short = 's', value_name = "LABEL")]
         spec: Option<String>,
-        /// Sub-audit to run (`criteria`, `removals`, `infrastructure`,
-        /// `cross-spec`); omit to run the full deterministic pass.
+        /// Sub-audit to run (`criteria`, `matrix`, `removals`,
+        /// `infrastructure`, `cross-spec`); omit to run the full
+        /// deterministic pass.
         #[arg(long, value_name = "NAME")]
         check: Option<CheckAudit>,
         /// Restrict the audit scope to one bead.
@@ -744,6 +746,16 @@ fn run_check_audit(
             let runner_arg = if no_run { None } else { Some(&runner) };
             let audit = check::criteria::audit(&specs_dir, &dispatcher, runner_arg)?;
             let code = check::criteria::report(&audit, strict);
+            if code != 0 {
+                std::process::exit(code);
+            }
+            Ok(())
+        }
+        CheckAudit::Matrix => {
+            let spec_path = workspace.join("specs/loom-templates.md");
+            let templates_dir = workspace.join("loom/crates/loom-templates/templates");
+            let findings = check::matrix::audit(&spec_path, &templates_dir)?;
+            let code = check::matrix::report(&findings);
             if code != 0 {
                 std::process::exit(code);
             }

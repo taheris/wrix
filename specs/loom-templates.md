@@ -54,7 +54,8 @@ Current set:
 | `scratchpad.md` | Pin the per-session scratchpad path |
 | `exit_signals.md` | Document the `LOOM_*` exit markers the phase accepts |
 | `interview_modes.md` | Describe the "one by one" / "polish the spec" interview sub-modes |
-| `invariant_clash.md` | Describe the invariant-clash awareness scan |
+| `plan_stage_rubric.md` | Gate the planning interview on completeness / coherence / invariant-clash before any commit |
+| `invariant_clash.md` | Describe the invariant-clash awareness scan (included transitively via `plan_stage_rubric.md`) |
 | `review_rubric.md` | Per-diff review rubric — see [loom-gate.md](loom-gate.md) |
 | `sibling_spec_editing.md` | Authorize cross-spec edits during a planning session |
 
@@ -67,12 +68,13 @@ Each partial is included by an explicit set of templates:
 | `context_pinning.md` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `style_rules.md` |  |  |  |  | ✓ | ✓ |  |
 | `spec_conventions.md` | ✓ | ✓ |  |  |  |  |  |
-| `spec_header.md` |  | ✓ | ✓ | ✓ | ✓ | ✓ |  |
+| `spec_header.md` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  |
 | `companions_context.md` |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `scratchpad.md` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `exit_signals.md` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `interview_modes.md` | ✓ | ✓ |  |  |  |  |  |
-| `invariant_clash.md` |  | ✓ |  |  |  |  |  |
+| `plan_stage_rubric.md` | ✓ | ✓ |  |  |  |  |  |
+| `invariant_clash.md` | ✓ | ✓ |  |  |  |  |  |
 | `review_rubric.md` |  |  |  |  |  | ✓ |  |
 | `sibling_spec_editing.md` |  | ✓ |  |  |  |  |  |
 
@@ -264,6 +266,11 @@ documents in front of the agent with zero configuration.
   prefixes like `SH-` / `RS-` / `COM-`; rule-ID examples in
   template prose are placeholders, not normative
   [verify](tests/loom-test.sh::test_style_rules_partials_are_family_agnostic)
+- Every cell of the pinning matrix above matches the actual
+  `{% include %}` graph in `loom-templates/templates/` (transitive
+  resolution); drift in either direction — `✓` with no include or
+  include with no `✓` — fails the audit
+  [verify](tests/loom-test.sh::test_pinning_matrix_audit)
 
 ### Agent-output markers
 

@@ -10,7 +10,7 @@ Options:
   -s, --spec <LABEL>      Spec label override (defaults to `current_spec`)
   -w, --workspace <PATH>  Workspace root. Defaults to the current working directory
   -A, --agent <BACKEND>   Override the agent backend for this invocation [possible values: claude, pi]
-      --check <NAME>      Sub-audit to run (`criteria`, `removals`, `infrastructure`, `cross-spec`); omit to run the full deterministic pass [possible values: criteria, removals, infrastructure, cross-spec]
+      --check <NAME>      Sub-audit to run (`criteria`, `matrix`, `removals`, `infrastructure`, `cross-spec`); omit to run the full deterministic pass [possible values: criteria, matrix, removals, infrastructure, cross-spec]
   -b, --bead <ID>         Restrict the audit scope to one bead
       --diff <RANGE>      Restrict the audit scope to a git diff range
       --tree              Audit the entire spec tree × implementation
