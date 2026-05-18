@@ -1,0 +1,26 @@
+[package]
+name = "loom-walk"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Binary crate hosting this repo's `[check]`-tier source walks. Each
+# walk is a function in `src/walk/<name>.rs`; the binary dispatches by
+# the positional argument under the verifier-runner contract in
+# `specs/loom-gate.md`. `syn` and `walkdir` are dev-dependencies until
+# walks land — the scaffolding bead ships dispatch + fixtures only.
+[dependencies]
+displaydoc = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+syn = { workspace = true }
+tempfile = { workspace = true }
+walkdir = { workspace = true }
+
+[lints]
+workspace = true

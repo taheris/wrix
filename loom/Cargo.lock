@@ -1806,6 +1806,19 @@ name = "loom-test-support"
 version = "0.1.0"
 
 [[package]]
+name = "loom-walk"
+version = "0.1.0"
+dependencies = [
+ "displaydoc",
+ "serde",
+ "serde_json",
+ "syn",
+ "tempfile",
+ "thiserror",
+ "walkdir",
+]
+
+[[package]]
 name = "loom-workflow"
 version = "0.1.0"
 dependencies = [

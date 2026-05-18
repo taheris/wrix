@@ -10,6 +10,7 @@ members = [
     "crates/loom-workflow",
     "crates/loom-templates",
     "crates/loom-test-support",
+    "crates/loom-walk",
 ]
 
 [workspace.package]
@@ -65,6 +66,7 @@ loom-gate = { path = "crates/loom-gate" }
 loom-workflow = { path = "crates/loom-workflow" }
 loom-templates = { path = "crates/loom-templates" }
 loom-test-support = { path = "crates/loom-test-support" }
+loom-walk = { path = "crates/loom-walk" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
