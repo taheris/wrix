@@ -366,85 +366,85 @@ Clarify beads that present a choice must enumerate their options in a standard m
 ### Check + push gate
 
 - [ ] `ralph check` (no flags) runs the post-loop review against the resolved spec
-  [verify](../tests/ralph/run-tests.sh#test_check_default_runs_review)
+  [test](tests/ralph/run-tests.sh::test_check_default_runs_review)
 - [ ] `ralph check` runs `bd dolt push` inside container after `RALPH_COMPLETE` so fix-up/clarify beads reach the host
-  [verify](../tests/ralph/run-tests.sh#test_check_dolt_push_in_container)
+  [check](tests/ralph/run-tests.sh::test_check_dolt_push_in_container)
 - [ ] `ralph check` runs `bd dolt pull` on host after container exits, before re-counting beads
-  [verify](../tests/ralph/run-tests.sh#test_check_dolt_pull_before_recount)
+  [check](tests/ralph/run-tests.sh::test_check_dolt_pull_before_recount)
 - [ ] `ralph check` invokes `git push` + `beads-push` only on RALPH_COMPLETE with no new beads and no `ralph:clarify`
-  [verify](../tests/ralph/run-tests.sh#test_check_push_gate_clean)
+  [test](tests/ralph/run-tests.sh::test_check_push_gate_clean)
 - [ ] `ralph check` exec-s `ralph run` when it creates fix-up beads without a clarify (auto-iteration)
-  [verify](../tests/ralph/run-tests.sh#test_check_auto_iterates_via_run)
+  [test](tests/ralph/run-tests.sh::test_check_auto_iterates_via_run)
 - [ ] `ralph check` stops without pushing when it sets `ralph:clarify` on any bead
-  [verify](../tests/ralph/run-tests.sh#test_check_clarify_stops_push)
+  [test](tests/ralph/run-tests.sh::test_check_clarify_stops_push)
 - [ ] `ralph check -t` remains a standalone template validator that does not invoke Claude
-  [verify](../tests/ralph/run-tests.sh#test_check_templates_no_claude)
+  [test](tests/ralph/run-tests.sh::test_check_templates_no_claude)
 - [ ] `check.md` template includes the three-paths-principle section as invariant-clash guidance
-  [verify](../tests/ralph/run-tests.sh#test_check_template_has_three_paths)
+  [check](tests/ralph/run-tests.sh::test_check_template_has_three_paths)
 - [ ] `check.md` instructs the reviewer to propose contextual options per clash, not a fixed A/B/C
-  [judge](../tests/judges/ralph-workflow.sh#test_check_contextual_options)
+  [judge](tests/judges/ralph-workflow.sh::test_check_contextual_options)
 - [ ] Reviewer creates beads with `ralph:clarify` and proposed options in description for each detected clash
-  [judge](../tests/judges/ralph-workflow.sh#test_check_clarify_bead_shape)
+  [judge](tests/judges/ralph-workflow.sh::test_check_clarify_bead_shape)
 - [ ] Full loop `run → check → run → check → push` terminates cleanly when no more issues are found
-  [verify](../tests/ralph/run-tests.sh#test_run_check_loop_terminates)
+  [check](tests/ralph/run-tests.sh::test_run_check_loop_terminates)
 - [ ] `ralph check` escalates to `ralph:clarify` and stops after `loop.max-iterations` unsuccessful iterations
-  [verify](../tests/ralph/run-tests.sh#test_check_iteration_cap_escalates)
+  [test](tests/ralph/run-tests.sh::test_check_iteration_cap_escalates)
 - [ ] Iteration counter persists in `state/<label>.json` and resets on clean RALPH_COMPLETE or clarify clear
-  [verify](../tests/ralph/run-tests.sh#test_iteration_counter_persistence)
+  [test](tests/ralph/run-tests.sh::test_iteration_counter_persistence)
 - [ ] `ralph check` push failures (non-fast-forward, detached HEAD, beads-push failure) exit non-zero with recovery hints
-  [verify](../tests/ralph/run-tests.sh#test_check_push_failure_modes)
+  [test](tests/ralph/run-tests.sh::test_check_push_failure_modes)
 
 ### Msg
 
 - [ ] `ralph msg` (no flags) lists every outstanding `ralph:clarify` bead across all specs; `state/current` is not consulted
-  [verify](../tests/ralph/run-tests.sh#test_msg_list_cross_spec_default)
+  [test](tests/ralph/run-tests.sh::test_msg_list_cross_spec_default)
 - [ ] `ralph msg -s <label>` filters the list to clarifies carrying the `spec:<label>` bead label
-  [verify](../tests/ralph/run-tests.sh#test_msg_list_filter_by_spec_label)
+  [test](tests/ralph/run-tests.sh::test_msg_list_filter_by_spec_label)
 - [ ] Cross-spec list output includes a SPEC column sourced from the bead's `spec:<label>` label (rendering `—` when absent); the SPEC column is dropped under `-s <label>`
-  [verify](../tests/ralph/run-tests.sh#test_msg_list_spec_column)
+  [test](tests/ralph/run-tests.sh::test_msg_list_spec_column)
 - [ ] Sequential index `#` orders the entire visible set (cross-spec by default, scoped when `-s` is supplied) by bead creation time ascending
-  [verify](../tests/ralph/run-tests.sh#test_msg_index_cross_spec_ordering)
+  [test](tests/ralph/run-tests.sh::test_msg_index_cross_spec_ordering)
 - [ ] `ralph msg -c` (no `-s`) reads every outstanding clarify regardless of `state/current`; `ralph msg -c -s <label>` scopes to clarifies labeled `spec:<label>`
-  [verify](../tests/ralph/run-tests.sh#test_msg_interactive_cross_spec_scope)
+  [test](tests/ralph/run-tests.sh::test_msg_interactive_cross_spec_scope)
 - [ ] `ralph msg` reply prints `Resume with: ralph run -s <label>` on successful clarify clear, with `<label>` sourced from the cleared bead's `spec:<label>` label; falls back to bare `ralph run` when the label is absent
-  [verify](../tests/ralph/run-tests.sh#test_msg_reply_resume_hint_per_spec)
+  [test](tests/ralph/run-tests.sh::test_msg_reply_resume_hint_per_spec)
 - [ ] `ralph msg` list SUMMARY column renders the `## Options — <summary>` header value, falling back to bead title when the header or summary is absent
-  [verify](../tests/ralph/run-tests.sh#test_msg_list_summary_fallback)
+  [test](tests/ralph/run-tests.sh::test_msg_list_summary_fallback)
 - [ ] `ralph msg -c` launches the interactive Drafter session inside a wrapix container with the base profile, using the `msg.md` template; bare `ralph msg` stays host-side (no container, no Claude)
-  [verify](../tests/ralph/run-tests.sh#test_msg_interactive_container)
+  [test](tests/ralph/run-tests.sh::test_msg_interactive_container)
 - [ ] `ralph msg` interactive session presents a triage summary of outstanding clarifies before walking through them
-  [judge](../tests/judges/ralph-workflow.sh#test_msg_interactive_triage)
+  [judge](tests/judges/ralph-workflow.sh::test_msg_interactive_triage)
 - [ ] `ralph msg` interactive session writes resolution notes via `bd update --notes` and clears `ralph:clarify` via `bd update --remove-label=ralph:clarify` per bead
-  [judge](../tests/judges/ralph-workflow.sh#test_msg_interactive_clears_label)
+  [judge](tests/judges/ralph-workflow.sh::test_msg_interactive_clears_label)
 - [ ] `ralph msg` interactive session ending mid-walk is a clean `RALPH_COMPLETE`; unresolved clarifies remain visible in the next session
-  [verify](../tests/ralph/run-tests.sh#test_msg_partial_progress_clean)
+  [test](tests/ralph/run-tests.sh::test_msg_partial_progress_clean)
 - [ ] `ralph msg` interactive session exit signals are `RALPH_COMPLETE` only (no `RALPH_BLOCKED`, no `RALPH_CLARIFY`)
-  [verify](../tests/ralph/run-tests.sh#test_msg_template_exit_signals)
+  [check](tests/ralph/run-tests.sh::test_msg_template_exit_signals)
 - [ ] `ralph msg -n <N>` views clarify #N on host without launching a container
-  [verify](../tests/ralph/run-tests.sh#test_msg_view_host_only)
+  [test](tests/ralph/run-tests.sh::test_msg_view_host_only)
 - [ ] `ralph msg -i <id>` views a clarify by bead ID on host (equivalent to `-n <N>` but ID-addressed)
-  [verify](../tests/ralph/run-tests.sh#test_msg_view_by_id)
+  [test](tests/ralph/run-tests.sh::test_msg_view_by_id)
 - [ ] `ralph msg -n <N> -a <int>` looks up `### Option <int>` in the bead description and writes `Chose option <int> — <title>: <body>` to notes
-  [verify](../tests/ralph/run-tests.sh#test_msg_answer_option_lookup)
+  [test](tests/ralph/run-tests.sh::test_msg_answer_option_lookup)
 - [ ] `ralph msg -n <N> -a <string>` (non-integer) writes the string verbatim to notes
-  [verify](../tests/ralph/run-tests.sh#test_msg_answer_verbatim)
+  [test](tests/ralph/run-tests.sh::test_msg_answer_verbatim)
 - [ ] `ralph msg -n <N> -a <int>` exits non-zero with a clear error when `### Option <int>` is missing from the bead description
-  [verify](../tests/ralph/run-tests.sh#test_msg_answer_option_missing_errors)
+  [test](tests/ralph/run-tests.sh::test_msg_answer_option_missing_errors)
 - [ ] `ralph msg -n <N> -d` and `ralph msg -i <id> -d` dismiss a clarify with a work-around note, host-side
-  [verify](../tests/ralph/run-tests.sh#test_msg_dismiss)
+  [test](tests/ralph/run-tests.sh::test_msg_dismiss)
 - [ ] `ralph msg -a <choice>` and `ralph msg -d` without `-n <N>`/`-i <id>` exit non-zero with a clear error instead of silently falling through to list mode
-  [verify](../tests/ralph/run-tests.sh#test_msg_answer_dismiss_require_target)
+  [test](tests/ralph/run-tests.sh::test_msg_answer_dismiss_require_target)
 - [ ] `msg.md` template exists, includes `context-pinning` and `exit-signals` partials, and renders the `SCOPE` and `CLARIFY_BEADS` variables (no `spec-header` or `companions-context` partials — there is no single anchor spec for a cross-spec session)
-  [verify](../tests/ralph/run-tests.sh#test_msg_template_structure)
+  [check](tests/ralph/run-tests.sh::test_msg_template_structure)
 
 ### Options format
 
 - [ ] Options format parser accepts em-dash, en-dash, single hyphen, or double hyphen as the separator on `## Options` and `### Option N` headings
-  [verify](../tests/ralph/run-tests.sh#test_options_format_separators)
+  [test](tests/ralph/run-tests.sh::test_options_format_separators)
 - [ ] `check.md` mandates the `## Options — <summary>` + `### Option N — <title>` format for clarify beads it creates for invariant clashes
-  [verify](../tests/ralph/run-tests.sh#test_check_template_options_format)
+  [check](tests/ralph/run-tests.sh::test_check_template_options_format)
 - [ ] Reviewer-created clarify beads conform to the options format with at least one `### Option N —` subsection
-  [judge](../tests/judges/ralph-workflow.sh#test_check_options_format_conformance)
+  [judge](tests/judges/ralph-workflow.sh::test_check_options_format_conformance)
 
 ## Out of Scope
 
