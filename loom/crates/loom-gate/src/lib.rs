@@ -31,7 +31,7 @@ pub use integrity::{
     CommandResolver, FsCommandResolver, IntegrityError, IntegrityFinding,
     RustWorkspaceTestResolver, TestPathResolver,
 };
-pub use runner::RunnerTemplate;
+pub use runner::{RunnerError, RunnerKind, RunnerTemplate, check_zero_match};
 
 /// Scaffold error returned by every stub entry point until the
 /// implementation bead lands. Per RS-9, stubs return a typed error rather
