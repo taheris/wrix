@@ -955,125 +955,125 @@ Ralph uses `bd mol` for work tracking:
 - [ ] Serial workflow (no `--spec` flag) continues to work as before
 - [ ] Clear error messages when `state/current` is missing and no `--spec` given
 - [ ] `state/<label>.json` no longer contains `update` or `hidden` fields
-  [verify](../tests/ralph/run-tests.sh#test_state_json_schema)
+  [test](tests/ralph/run-tests.sh::test_state_json_schema)
 
 ### Templates
 
 - [ ] `ralph check -t` validates all templates and partials
-  [verify](../tests/ralph/run-tests.sh#test_check_valid_templates)
+  [test](tests/ralph/run-tests.sh::test_check_valid_templates)
 - [ ] `nix flake check` includes template validation
-  [verify](../tests/ralph/run-tests.sh#test_check_exit_codes)
+  [test](tests/ralph/run-tests.sh::test_check_exit_codes)
 - [ ] Templates use Nix-native definitions with static validation
-  [verify](../tests/ralph/run-tests.sh#test_render_template_basic)
+  [test](tests/ralph/run-tests.sh::test_render_template_basic)
 - [ ] Partials work via `{{> partial-name}}` markers
-  [verify](../tests/ralph/run-tests.sh#test_plan_template_with_partials)
+  [test](tests/ralph/run-tests.sh::test_plan_template_with_partials)
 - [ ] `ralph tune` (interactive) identifies correct template and makes edits
-  [judge](../tests/judges/ralph-workflow.sh#test_tune_interactive)
+  [judge](tests/judges/ralph-workflow.sh::test_tune_interactive)
 - [ ] `ralph tune` (integration) ingests diff and interviews about changes
-  [judge](../tests/judges/ralph-workflow.sh#test_tune_integration)
+  [judge](tests/judges/ralph-workflow.sh::test_tune_integration)
 - [ ] `ralph sync --diff` shows local template changes vs packaged
-  [verify](../tests/ralph/run-tests.sh#test_diff_local_modifications)
+  [test](tests/ralph/run-tests.sh::test_diff_local_modifications)
 - [ ] `ralph sync` updates templates and backs up customizations
-  [verify](../tests/ralph/run-tests.sh#test_sync_backup)
+  [test](tests/ralph/run-tests.sh::test_sync_backup)
 - [ ] `ralph sync --dry-run` previews without executing
-  [verify](../tests/ralph/run-tests.sh#test_sync_dry_run)
+  [test](tests/ralph/run-tests.sh::test_sync_dry_run)
 
 ### Compaction re-pin
 
 - [ ] `ralph plan`, `todo`, `run --once`, and `check` each write `repin.sh` and `claude-settings.json` to `.wrapix/ralph/runtime/<label>/` before launching the container
-  [verify](../tests/ralph/run-tests.sh#test_repin_hook_files_written)
+  [check](tests/ralph/run-tests.sh::test_repin_hook_files_written)
 - [ ] Settings fragment registers a `SessionStart` hook with matcher `"compact"` pointing at `repin.sh`
-  [verify](../tests/ralph/run-tests.sh#test_repin_hook_settings_shape)
+  [test](tests/ralph/run-tests.sh::test_repin_hook_settings_shape)
 - [ ] `repin.sh` emits `hookSpecificOutput.additionalContext` JSON with the condensed re-pin
-  [verify](../tests/ralph/run-tests.sh#test_repin_script_output)
+  [test](tests/ralph/run-tests.sh::test_repin_script_output)
 - [ ] Re-pin content excludes the full spec body, companion manifest bodies, and full issue description
-  [verify](../tests/ralph/run-tests.sh#test_repin_content_is_condensed)
+  [test](tests/ralph/run-tests.sh::test_repin_content_is_condensed)
 - [ ] Re-pin content stays under 10KB
-  [verify](../tests/ralph/run-tests.sh#test_repin_content_size)
+  [test](tests/ralph/run-tests.sh::test_repin_content_size)
 - [ ] `lib/sandbox/linux/entrypoint.sh` merges `$RALPH_RUNTIME_DIR/claude-settings.json` into `~/.claude/settings.json` when the env var is set and the file exists
-  [verify](../tests/ralph/run-tests.sh#test_entrypoint_merges_ralph_settings)
+  [test](tests/ralph/run-tests.sh::test_entrypoint_merges_ralph_settings)
 - [ ] Merge concatenates hook arrays rather than replacing (ralph `SessionStart[compact]` coexists with sandbox `Notification` hook)
-  [verify](../tests/ralph/run-tests.sh#test_entrypoint_merge_concatenates_hooks)
+  [test](tests/ralph/run-tests.sh::test_entrypoint_merge_concatenates_hooks)
 - [ ] Runtime directory is removed by a trap on both success and failure paths
-  [verify](../tests/ralph/run-tests.sh#test_runtime_dir_cleanup)
+  [test](tests/ralph/run-tests.sh::test_runtime_dir_cleanup)
 - [ ] `.wrapix/ralph/runtime/` is listed in `.gitignore`
-  [verify](../tests/ralph/run-tests.sh#test_runtime_dir_gitignored)
+  [check](tests/ralph/run-tests.sh::test_runtime_dir_gitignored)
 - [ ] Host-side commands (`status`, `logs`, `check -t`, `msg`, `tune`, `sync`, `use`) do not create a runtime directory or register the hook
-  [verify](../tests/ralph/run-tests.sh#test_host_commands_no_repin_hook)
+  [check](tests/ralph/run-tests.sh::test_host_commands_no_repin_hook)
 - [ ] Compacted session receives the re-pin on next model turn
-  [judge](../tests/judges/ralph-workflow.sh#test_repin_after_compaction)
+  [judge](tests/judges/ralph-workflow.sh::test_repin_after_compaction)
 - [ ] Container-executed ralph commands pass `--env RALPH_RUNTIME_DIR=…` to wrapix; entrypoint only merges the settings fragment when the env var is set
-  [verify](../tests/ralph/run-tests.sh#test_runtime_dir_env_propagation)
+  [test](tests/ralph/run-tests.sh::test_runtime_dir_env_propagation)
 - [ ] `build_repin_content` scans the running command's template for `{{> X}}` partial references and resolves each via the existing partial-resolution helper
-  [verify](../tests/ralph/run-tests.sh#test_repin_scans_template_for_partials)
+  [test](tests/ralph/run-tests.sh::test_repin_scans_template_for_partials)
 - [ ] Re-pin output for each container-executed command includes the rendered body of every `{{> partial}}` referenced by that command's template, appended after the orientation block
-  [verify](../tests/ralph/run-tests.sh#test_repin_injects_rendered_partials)
+  [test](tests/ralph/run-tests.sh::test_repin_injects_rendered_partials)
 - [ ] Re-pin content stays under 10KB even with all referenced partial bodies injected
-  [verify](../tests/ralph/run-tests.sh#test_repin_content_size_with_partials)
+  [test](tests/ralph/run-tests.sh::test_repin_content_size_with_partials)
 - [ ] Rule content (conventions, protocols, MUST/SHOULD statements) in `plan-new.md`, `plan-update.md`, `todo-new.md`, `todo-update.md`, `run.md`, `check.md`, `msg.md` lives only inside `{{> partial}}` references; inline rule prose in template bodies is flagged as lint-eligible drift
-  [judge](../tests/judges/ralph-workflow.sh#test_rule_partial_discipline)
+  [judge](tests/judges/ralph-workflow.sh::test_rule_partial_discipline)
 - [ ] After auto-compact in a long-running `ralph plan -u` session, the model retains template-defined conventions (e.g. `## Implementation Notes` naming for plan-new, `implementation_notes` state-JSON location for plan-update) without re-reading the spec
-  [judge](../tests/judges/ralph-workflow.sh#test_repin_restores_template_rules_after_compact)
+  [judge](tests/judges/ralph-workflow.sh::test_repin_restores_template_rules_after_compact)
 
 ### Init
 
 - [ ] `ralph init` runs on host, not in a container
-  [verify](../tests/ralph/run-tests.sh#test_init_host_execution)
+  [check](tests/ralph/run-tests.sh::test_init_host_execution)
 - [ ] `nix run github:taheris/wrapix#init` invokes `ralph init` in cwd
-  [verify](../tests/ralph/run-tests.sh#test_init_flake_app)
+  [system](tests/ralph/run-tests.sh::test_init_flake_app)
 - [ ] `ralph init` recursively copies the `lib/ralph/template/flake/` tree (top-level `flake.nix` + `nix/flake/{apps,devshell,formatter}.nix`) into the project root when `flake.nix` is absent; treats `flake.nix` as the sentinel and skips the entire flake bootstrap (including the `nix/flake/` tree) when it exists
-  [verify](../tests/ralph/run-tests.sh#test_init_flake_skip_existing)
+  [test](tests/ralph/run-tests.sh::test_init_flake_skip_existing)
 - [ ] Generated top-level `flake.nix` is a thin entry point: declares inputs/systems and imports `inputs.treefmt-nix.flakeModule` plus `./nix/flake/apps.nix`, `./nix/flake/devshell.nix`, `./nix/flake/formatter.nix`; carries no inline `perSystem` body
-  [verify](../tests/ralph/run-tests.sh#test_init_flake_modular_imports)
+  [test](tests/ralph/run-tests.sh::test_init_flake_modular_imports)
 - [ ] Generated `nix/flake/apps.nix`, `nix/flake/devshell.nix`, `nix/flake/formatter.nix` each contribute their expected attribute (`apps.sandbox`, `devShells.default` composing `${ralph.shellHook}`, `treefmt` with `checks.treefmt` auto-registered by `treefmt-nix.flakeModule`)
-  [verify](../tests/ralph/run-tests.sh#test_init_flake_modules_present)
+  [test](tests/ralph/run-tests.sh::test_init_flake_modules_present)
 - [ ] Generated `flake.nix` systems list is `[x86_64-linux aarch64-linux aarch64-darwin]` (no x86_64-darwin)
-  [verify](../tests/ralph/run-tests.sh#test_init_flake_systems)
+  [test](tests/ralph/run-tests.sh::test_init_flake_systems)
 - [ ] Generated `nix/flake/formatter.nix` treefmt programs are deadnix, nixfmt, shellcheck, statix (no rustfmt)
-  [verify](../tests/ralph/run-tests.sh#test_init_treefmt_programs)
+  [test](tests/ralph/run-tests.sh::test_init_treefmt_programs)
 - [ ] Generated `flake.nix` evaluates cleanly under `nix flake check` in a fresh directory
-  [verify](../tests/ralph/run-tests.sh#test_init_flake_evaluates)
+  [system](tests/ralph/run-tests.sh::test_init_flake_evaluates)
 - [ ] `ralph init` creates `.envrc` with `use flake` content, skip-if-exists
-  [verify](../tests/ralph/run-tests.sh#test_init_creates_envrc)
+  [test](tests/ralph/run-tests.sh::test_init_creates_envrc)
 - [ ] `ralph init` appends missing `.gitignore` entries (`.direnv/`, `.wrapix/`, `result`, `result-*`) idempotently
-  [verify](../tests/ralph/run-tests.sh#test_init_gitignore_idempotent)
+  [test](tests/ralph/run-tests.sh::test_init_gitignore_idempotent)
 - [ ] `ralph init` creates `.pre-commit-config.yaml` with `treefmt` pre-commit + `nix flake check` pre-push stages
-  [verify](../tests/ralph/run-tests.sh#test_init_precommit_stages)
+  [test](tests/ralph/run-tests.sh::test_init_precommit_stages)
 - [ ] `ralph init` runs `bd init` when `.beads/` is absent, skips otherwise
-  [verify](../tests/ralph/run-tests.sh#test_init_bd_init_idempotent)
+  [test](tests/ralph/run-tests.sh::test_init_bd_init_idempotent)
 - [ ] `ralph init` creates `docs/README.md`, `docs/architecture.md`, `docs/style-rules.md` via shared `scaffold_docs`
-  [verify](../tests/ralph/run-tests.sh#test_init_scaffolds_docs)
+  [test](tests/ralph/run-tests.sh::test_init_scaffolds_docs)
 - [ ] `ralph init` creates `AGENTS.md` via shared `scaffold_agents`
-  [verify](../tests/ralph/run-tests.sh#test_init_creates_agents)
+  [test](tests/ralph/run-tests.sh::test_init_creates_agents)
 - [ ] `ralph init` creates `CLAUDE.md` as symlink to `AGENTS.md` when absent, skips when `CLAUDE.md` exists (file or symlink)
-  [verify](../tests/ralph/run-tests.sh#test_init_claude_symlink)
+  [test](tests/ralph/run-tests.sh::test_init_claude_symlink)
 - [ ] `ralph init` populates `.wrapix/ralph/template/` via shared `scaffold_templates`
-  [verify](../tests/ralph/run-tests.sh#test_init_scaffolds_templates)
+  [test](tests/ralph/run-tests.sh::test_init_scaffolds_templates)
 - [ ] `ralph init` and `ralph sync` share `scaffold_docs`, `scaffold_agents`, `scaffold_templates` (one code path)
-  [verify](../tests/ralph/run-tests.sh#test_scaffold_shared_code_path)
+  [test](tests/ralph/run-tests.sh::test_scaffold_shared_code_path)
 - [ ] `ralph init` prints per-artifact created/skipped summary + fixed 2-step next-steps block
-  [judge](../tests/judges/ralph-workflow.sh#test_init_output_format)
+  [judge](tests/judges/ralph-workflow.sh::test_init_output_format)
 - [ ] Top-level wrapix flake exposes `apps.init`
-  [verify](../tests/ralph/run-tests.sh#test_wrapix_flake_exposes_init)
+  [system](tests/ralph/run-tests.sh::test_wrapix_flake_exposes_init)
 - [ ] Top-level wrapix flake's `packages.${system}.ralph` exposes a `shellHook` passthru
-  [verify](../tests/ralph/run-tests.sh#test_wrapix_ralph_shellhook_passthru)
+  [system](tests/ralph/run-tests.sh::test_wrapix_ralph_shellhook_passthru)
 
 ### Prompt file-references
 
 - [ ] No template body or partial body references `{{EXISTING_SPEC}}` or `{{SPEC_CONTENT}}` (variables are removed)
-  [verify](../tests/ralph/run-tests.sh#test_templates_no_inlined_spec_content)
+  [check](tests/ralph/run-tests.sh::test_templates_no_inlined_spec_content)
 - [ ] No template body or partial body references `{{COMPANIONS}}` (replaced by `{{COMPANION_PATHS}}`)
-  [verify](../tests/ralph/run-tests.sh#test_templates_use_companion_paths)
+  [check](tests/ralph/run-tests.sh::test_templates_use_companion_paths)
 - [ ] `list_companion_paths` returns a newline-separated list of companion-directory paths and never inlines `manifest.md` contents
-  [verify](../tests/ralph/run-tests.sh#test_list_companion_paths_returns_paths_only)
+  [test](tests/ralph/run-tests.sh::test_list_companion_paths_returns_paths_only)
 - [ ] `{{COMPANION_PATHS}}` is wired into plan-update, todo-new, todo-update, run, check, and msg renders
-  [verify](../tests/ralph/run-tests.sh#test_companion_paths_template_variable)
+  [test](tests/ralph/run-tests.sh::test_companion_paths_template_variable)
 - [ ] `ralph plan -u <label>` against a synthetic spec ≥150 KiB completes without `E2BIG` / exit 126 (regression for the argv ceiling that tripped on a 127 KiB spec before this change)
-  [verify](../tests/ralph/run-tests.sh#test_plan_large_spec_no_e2big)
+  [test](tests/ralph/run-tests.sh::test_plan_large_spec_no_e2big)
 - [ ] `ralph tune` interactive launch with a synthetic ≥150 KiB context completes without `E2BIG`
-  [verify](../tests/ralph/run-tests.sh#test_tune_large_prompt_no_e2big)
+  [test](tests/ralph/run-tests.sh::test_tune_large_prompt_no_e2big)
 - [ ] After the rename, the rendered prompt for every container-executed command stays under 64 KiB on representative project state (well below the 128 KiB argv ceiling, with headroom for future template growth)
-  [verify](../tests/ralph/run-tests.sh#test_rendered_prompt_size_bound)
+  [test](tests/ralph/run-tests.sh::test_rendered_prompt_size_bound)
 
 ### Top-level diagram
 
