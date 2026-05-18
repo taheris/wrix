@@ -523,61 +523,61 @@ two successive ralph commands, must observe updated content between them.
 ## Success Criteria
 
 - [x] `nix run .#test` runs fast pure checks via `nix flake check`; `nix run .#test-ralph` runs the ralph integration suite
-  [verify](../tests/ralph/run-tests.sh#test_mock_claude_exists)
+  [test](tests/ralph/run-tests.sh::test_mock_claude_exists)
 - [x] Darwin tests skip gracefully on Linux
 - [x] Ralph tests pass with mock claude (no real API calls)
-  [verify](../tests/ralph/run-tests.sh#test_mock_claude_exists)
+  [test](tests/ralph/run-tests.sh::test_mock_claude_exists)
 - [x] `ralph plan <label>` does setup AND interview (no separate `start` command)
-  [verify](../tests/ralph/run-tests.sh#test_plan_flag_validation)
+  [test](tests/ralph/run-tests.sh::test_plan_flag_validation)
 - [x] `ralph todo` creates molecule from spec
-  [verify](../tests/ralph/run-tests.sh#test_run_closes_issue_on_complete)
+  [test](tests/ralph/run-tests.sh::test_run_closes_issue_on_complete)
 - [x] `ralph run --once` processes single issue
-  [verify](../tests/ralph/run-tests.sh#test_run_closes_issue_on_complete)
+  [test](tests/ralph/run-tests.sh::test_run_closes_issue_on_complete)
 - [x] `ralph run` processes all issues continuously
-  [verify](../tests/ralph/run-tests.sh#test_run_loop_processes_all)
+  [test](tests/ralph/run-tests.sh::test_run_loop_processes_all)
 - [x] Tests verify dependency-ordered task execution
-  [verify](../tests/ralph/run-tests.sh#test_run_respects_dependencies)
+  [test](tests/ralph/run-tests.sh::test_run_respects_dependencies)
 - [x] Tests verify in_progress exclusion for parallel agents
-  [verify](../tests/ralph/run-tests.sh#test_parallel_agent_simulation)
+  [test](tests/ralph/run-tests.sh::test_parallel_agent_simulation)
 - [x] Tests verify error handling (missing signals, RALPH_BLOCKED, bad JSON)
-  [verify](../tests/ralph/run-tests.sh#test_run_no_close_without_signal)
+  [test](tests/ralph/run-tests.sh::test_run_no_close_without_signal)
 - [x] Tests verify config options affect behavior (spec.hidden, beads.priority, loop settings)
-  [verify](../tests/ralph/run-tests.sh#test_config_data_driven)
+  [test](tests/ralph/run-tests.sh::test_config_data_driven)
 - [x] Tests are deterministic and fast
-  [judge](../tests/judges/ralph-tests.sh#test_deterministic_and_fast)
+  [judge](tests/judges/ralph-tests.sh::test_deterministic_and_fast)
 - [x] Test infrastructure split into `lib/` modules (assertions, fixtures, mock-claude, runner)
-  [verify](../tests/ralph/run-tests.sh#test_isolated_beads_db)
+  [test](tests/ralph/run-tests.sh::test_isolated_beads_db)
 - [x] JSON format support for declarative test scenarios
-  [verify](../tests/ralph/run-tests.sh#test_run_handles_blocked_signal)
+  [test](tests/ralph/run-tests.sh::test_run_handles_blocked_signal)
 - [x] Shell format support for complex scenarios requiring custom logic
-  [verify](../tests/ralph/run-tests.sh#test_run_loop_processes_all)
+  [test](tests/ralph/run-tests.sh::test_run_loop_processes_all)
 - [x] `ralph status` has coverage (mol position, awaiting, `--spec`, `--all`, missing state)
-  [verify](../tests/ralph/run-tests.sh#test_status_mol_current_position)
+  [test](tests/ralph/run-tests.sh::test_status_mol_current_position)
 - [x] `ralph logs` has coverage (error detection, `--all`, context, `--spec`, missing logfile)
-  [verify](../tests/ralph/run-tests.sh#test_logs_error_detection)
+  [test](tests/ralph/run-tests.sh::test_logs_error_detection)
 - [x] `ralph sync` has coverage (fresh/backup/dry-run/partials, `--diff` filtering)
-  [verify](../tests/ralph/run-tests.sh#test_sync_fresh)
+  [test](tests/ralph/run-tests.sh::test_sync_fresh)
 - [x] `ralph check` has coverage (templates, push gate, iteration counter, auto-iterate, dolt sync)
-  [verify](../tests/ralph/run-tests.sh#test_check_valid_templates)
+  [test](tests/ralph/run-tests.sh::test_check_valid_templates)
 - [x] `ralph use` / `msg` / `spec` / `tune` have coverage
-  [verify](../tests/ralph/run-tests.sh#test_use_switches_active_workflow)
+  [test](tests/ralph/run-tests.sh::test_use_switches_active_workflow)
 - [x] Per-label `state.json` isolation across concurrent workflows
-  [verify](../tests/ralph/run-tests.sh#test_concurrent_state_isolation)
+  [test](tests/ralph/run-tests.sh::test_concurrent_state_isolation)
 - [x] `ralph todo` detects spec changes via git diff (`base_commit`, `--since`, fallbacks)
-  [verify](../tests/ralph/run-tests.sh#test_todo_git_diff)
+  [test](tests/ralph/run-tests.sh::test_todo_git_diff)
 - [x] Host-side `bd dolt pull` and container-side `bd dolt push` for plan/todo/run/check
-  [verify](../tests/ralph/run-tests.sh#test_todo_dolt_push_in_container)
+  [test](tests/ralph/run-tests.sh::test_todo_dolt_push_in_container)
 - [x] Companion templates, re-pin hooks, runtime dir, entrypoint settings merge
-  [verify](../tests/ralph/run-tests.sh#test_companion_template_variable)
+  [test](tests/ralph/run-tests.sh::test_companion_template_variable)
 - [x] `simulate_compact_event` helper exercises `SessionStart[compact]` hook and returns `additionalContext`
-  [verify](../tests/ralph/run-tests.sh#test_simulate_compact_event_returns_additional_context)
+  [test](tests/ralph/run-tests.sh::test_simulate_compact_event_returns_additional_context)
 - [x] Re-pin content is asserted after each ralph command (plan/todo/run/check) and reflects current state
-  [verify](../tests/ralph/run-tests.sh#test_repin_content_after_plan)
+  [test](tests/ralph/run-tests.sh::test_repin_content_after_plan)
 - [x] Refresh-per-invocation is verified — orientation updates between successive ralph commands
-  [verify](../tests/ralph/run-tests.sh#test_simulate_compact_event_refresh_per_invocation)
+  [test](tests/ralph/run-tests.sh::test_simulate_compact_event_refresh_per_invocation)
 - [x] Full suite runs in <60s on dev hardware (measured: 29s / 928 assertions on 2026-04-24)
 - [x] `init_beads` uses snapshot copy instead of per-test `bd init`
-  [verify](../tests/ralph/run-tests.sh#test_init_beads_uses_snapshot)
+  [test](tests/ralph/run-tests.sh::test_init_beads_uses_snapshot)
 - [x] `setup_test_env` uses batched fixture operations (single `mkdir -p`, bulk symlinks)
 - [x] `RALPH_TEST_MAX_JOBS` default (16 host / 5 container) balances CPU/memory and Claude rate limits
 
