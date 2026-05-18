@@ -212,59 +212,59 @@ Uses existing `wrapix-notify`/`wrapix-notifyd` for key events:
 ## Success Criteria
 
 - [ ] `ralph check` with no flags prints usage help
-  [verify](tests/orchestration-test.sh::test_check_no_flags_prints_help)
+  [test](tests/orchestration-test.sh::test_check_no_flags_prints_help)
 - [ ] `ralph check -t` validates templates (existing behavior preserved)
-  [verify](tests/orchestration-test.sh::test_check_templates)
+  [test](tests/orchestration-test.sh::test_check_templates)
 - [ ] `ralph check -s <label>` spawns reviewer agent in wrapix container
-  [verify](tests/orchestration-test.sh::test_check_spec_runs_in_container)
+  [test](tests/orchestration-test.sh::test_check_spec_runs_in_container)
 - [ ] Reviewer receives spec, beads summary (titles + status), base_commit, and molecule ID — explores codebase on demand
   [judge](tests/judges/orchestration.sh::test_reviewer_context)
 - [ ] Reviewer creates follow-up beads for actionable issues
-  [verify](tests/orchestration-test.sh::test_reviewer_creates_followup_beads)
+  [test](tests/orchestration-test.sh::test_reviewer_creates_followup_beads)
 - [ ] Reviewer flags ambiguous items with `bd human`
-  [verify](tests/orchestration-test.sh::test_reviewer_flags_human_items)
+  [test](tests/orchestration-test.sh::test_reviewer_flags_human_items)
 - [ ] `ralph run -c` triggers review after molecule reaches 100%
-  [verify](tests/orchestration-test.sh::test_run_check_triggers_review)
+  [test](tests/orchestration-test.sh::test_run_check_triggers_review)
 - [ ] Review cycle processes follow-up beads then re-reviews
-  [verify](tests/orchestration-test.sh::test_review_cycle_loops)
+  [test](tests/orchestration-test.sh::test_review_cycle_loops)
 - [ ] Review cycle respects `max-reviews` limit
-  [verify](tests/orchestration-test.sh::test_review_cycle_max_limit)
+  [test](tests/orchestration-test.sh::test_review_cycle_max_limit)
 - [ ] `ralph msg` lists all outstanding questions
-  [verify](tests/orchestration-test.sh::test_msg_list)
+  [test](tests/orchestration-test.sh::test_msg_list)
 - [ ] `ralph msg -s <label>` filters by spec
-  [verify](tests/orchestration-test.sh::test_msg_list_by_spec)
+  [test](tests/orchestration-test.sh::test_msg_list_by_spec)
 - [ ] `ralph msg -i <id> "answer"` stores reply and removes `ralph:clarify` label
-  [verify](tests/orchestration-test.sh::test_msg_reply)
+  [test](tests/orchestration-test.sh::test_msg_reply)
 - [ ] `ralph msg -i <id> -d` dismisses without answering
-  [verify](tests/orchestration-test.sh::test_msg_dismiss)
+  [test](tests/orchestration-test.sh::test_msg_dismiss)
 - [ ] `ralph:clarify` label replaces `awaiting:input` in the run loop
-  [verify](tests/orchestration-test.sh::test_clarify_label)
+  [test](tests/orchestration-test.sh::test_clarify_label)
 - [ ] `ralph run -p N` spawns N concurrent workers for independent beads
-  [verify](tests/orchestration-test.sh::test_parallel_dispatch)
+  [test](tests/orchestration-test.sh::test_parallel_dispatch)
 - [ ] Parallel workers use git worktrees for isolation
-  [verify](tests/orchestration-test.sh::test_parallel_worktrees)
+  [test](tests/orchestration-test.sh::test_parallel_worktrees)
 - [ ] Worktree branches merge back on completion
-  [verify](tests/orchestration-test.sh::test_worktree_merge)
+  [test](tests/orchestration-test.sh::test_worktree_merge)
 - [ ] Merge conflicts reopen the bead with conflict details
-  [verify](tests/orchestration-test.sh::test_merge_conflict_handling)
+  [test](tests/orchestration-test.sh::test_merge_conflict_handling)
 - [ ] `config.nix` model overrides are passed to container
-  [verify](tests/orchestration-test.sh::test_model_override)
+  [test](tests/orchestration-test.sh::test_model_override)
 - [ ] Failed steps retry with `PREVIOUS_FAILURE` context
-  [verify](tests/orchestration-test.sh::test_retry_with_context)
+  [test](tests/orchestration-test.sh::test_retry_with_context)
 - [ ] Retries respect `max-retries` limit then label `ralph:clarify`
-  [verify](tests/orchestration-test.sh::test_retry_max_limit)
+  [test](tests/orchestration-test.sh::test_retry_max_limit)
 - [ ] `ralph watch -s <label>` monitors tmux panes and creates beads
-  [verify](tests/orchestration-test.sh::test_watch_creates_beads)
+  [test](tests/orchestration-test.sh::test_watch_creates_beads)
 - [ ] Watch agent deduplicates against existing beads
-  [verify](tests/orchestration-test.sh::test_watch_deduplication)
+  [test](tests/orchestration-test.sh::test_watch_deduplication)
 - [ ] Watch agent respects `max-issues` limit
-  [verify](tests/orchestration-test.sh::test_watch_max_issues)
+  [test](tests/orchestration-test.sh::test_watch_max_issues)
 - [ ] Watch-created beads have `source:watch` label
-  [verify](tests/orchestration-test.sh::test_watch_bead_labels)
+  [test](tests/orchestration-test.sh::test_watch_bead_labels)
 - [ ] `ralph run` picks up watch-created beads automatically
-  [verify](tests/orchestration-test.sh::test_run_picks_up_watch_beads)
+  [test](tests/orchestration-test.sh::test_run_picks_up_watch_beads)
 - [ ] Notifications fire for `ralph:clarify`, review results, and watch detections
-  [verify](tests/orchestration-test.sh::test_notifications)
+  [test](tests/orchestration-test.sh::test_notifications)
 - [ ] `check.md` template instructs reviewer to assess tests, code, and spec compliance holistically
   [judge](tests/judges/orchestration.sh::test_check_template_quality)
 - [ ] `watch.md` template instructs agent to observe contextually, not pattern-match
