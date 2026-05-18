@@ -68,56 +68,53 @@ the Mayor via `bd human` instead.
   surfaces (Askama templates, CLI `--help`); silent diffs there are
   accidental drift, not a deliberate change.
 - **TST-5** — *Every spec contract has a working verifier.* A contract
-  is any spec element that asserts behaviour: a Success Criteria `[ ]`
-  bullet, a row in a lifecycle / decision / contract table, an
-  `## Affected Files` entry (New / Modified / Removed), or
+  is any spec element that asserts behaviour: a Success Criteria
+  bullet, a row in a lifecycle / decision / contract table, or
   imperative-keyword prose (`MUST` / `MUST NOT` / `REQUIRES` /
   `CANNOT` / `NEVER` / `SHALL`). Each contract must carry — or live
-  in a section that carries — a `[verify](path::fn)` or
-  `[judge](path::fn)` annotation pointing at a real test. A checked
-  criterion (`[x]`) must not route through `_pending_stub`.
-  `loom check criteria` enforces this across every contract
-  surface and fails pre-commit on any of:
-  - **Annotations:** target function does not exist; `[x]` routes
-    through a stub
+  in a section that carries — a `[check]`, `[test]`, `[system]`, or
+  `[judge]` annotation pointing at a real verifier. `loom gate verify`
+  enforces this across every contract surface and fails pre-commit on
+  any of:
+  - **Annotations:** target does not resolve (command's first token
+    missing on PATH; test path doesn't match any function; judge file
+    absent)
   - **Tables:** row count does not match matching verifier-entry count
     in the same section
-  - **Affected Files:** New / Modified path absent on disk; Removed
-    path still exists or is still referenced
   - **Normative prose:** section contains imperative-keyword
     sentences but carries no verifier annotation
-- **TST-6** — *Orphan `[verify]` dispatchers are flagged.* Functions
-  defined in `tests/loom-test.sh` that are referenced by no spec
-  annotation are caught by `loom check criteria`. Delete
-  them, or wire a spec annotation that uses them.
+- **TST-6** — *Orphan walk-tier verifiers are flagged.* A consumer's
+  `[check]`-tier walk binary (e.g. one that takes named walks as
+  positional args) must accept only walks referenced by some spec
+  annotation. Walks declared in the binary but never annotated are
+  caught by `loom gate verify`. Delete them, or wire a spec
+  annotation that uses them.
 - **TST-7** — *Removals demonstrate their replacements work.* When a
   change set deletes a test, code path, schema element, or file
   paired with a "replaces" / "replaced by" / "supersedes" claim
-  (commit message, code comment, PR description, or
-  `## Affected Files Removed` text), the replacement's verifier must
-  land in the same change set. `loom check removals` scans
-  staged diffs and fails pre-commit on:
-  - test-function or `[verify]` deletions paired with replacement-claim
-    text where the change set adds no corresponding new test or
-    `[verify]` annotation
+  (commit message, code comment, or PR description), the
+  replacement's verifier must land in the same change set.
+  `loom gate check` scans staged diffs and fails pre-commit on:
+  - test-function or verifier-annotation deletions paired with
+    replacement-claim text where the change set adds no corresponding
+    new test or annotation
   - schema migrations containing `ALTER TABLE … DROP COLUMN` or
     equivalent removal patterns where the change set still leaves
     source references to the removed element
 - **TST-8** — *Test infrastructure is itself tested.* Stubs (stub
   agents, fixture helpers, `wrapix spawn` fakes, JSONL fakes) must
   carry at least one conformance test asserting the stub's observable
-  contract matches the real implementation. `loom check` audits
-  (`criteria`, `removals`, `cross-spec`, etc.) must each carry a
+  contract matches the real implementation. `loom gate` audits
+  (verifier, review, integrity-gate walks) must each carry a
   self-test with synthetic fixtures that exhibit the violation and
-  assert the check fires. Without these, bugs in the test
+  assert the audit fires. Without these, bugs in the test
   infrastructure or audit layer silently invalidate every downstream
-  test. `loom check infrastructure` enforces this.
+  test. `loom gate check` enforces this.
 - **TST-9** — *Cross-spec terms are consistent.* When a CLI flag,
   bead label, event variant, schema element, environment variable,
   or other named term appears in multiple specs in `specs/`, the
-  meaning, type, and behaviour must match. `loom check cross-spec`
-  greps for shared terms across `specs/` and flags definitions that
-  diverge.
+  meaning, type, and behaviour must match. `loom gate check` walks
+  shared terms across `specs/` and flags definitions that diverge.
 
 ## Rust (RS-)
 
@@ -273,6 +270,15 @@ the Mayor via `bd human` instead.
   the enum carries an `Other(String)` (or `#[serde(other)]`) fallback
   arm — the Rust API stays closed at the call site, the wire stays
   open.
+
+### Module naming (RS-18)
+
+- **RS-18** — *Crate and module names use the singular noun.* A
+  module is one unit of organization, named for what it organizes;
+  the count of items it contains doesn't determine the name. Prefer
+  `loom-gate` over `loom-gates`, `walk/` over `walks/`, `judge/` over
+  `judges/`. Mass nouns (`metadata`, `data`) and abbreviations (`io`,
+  `os`) are exempt — they aren't pluralizable.
 
 ## Comments (COM-)
 

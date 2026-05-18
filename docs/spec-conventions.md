@@ -4,9 +4,10 @@ What a spec is, what it isn't, and how to author one.
 
 A spec is a **forward-facing contract** about what a component does
 and why. It is the *intent floor* of the system — no downstream
-process (`loom todo`, the agent, `loom check`, `loom review`, the
-push gate) can recover more about intent than the spec contains. The
-spec is what every other artefact in the loop is held against.
+process (`loom todo`, the agent, `loom gate verify`, `loom gate
+review`, the push gate) can recover more about intent than the spec
+contains. The spec is what every other artefact in the loop is held
+against.
 
 Specs are read frequently and edited rarely. When in doubt, write
 less; put the rest in implementation notes (`loom note set`) or
@@ -60,8 +61,8 @@ A spec defines:
 7. **Cross-spec relationships.** Where this spec defers to a sibling
    and where it owns a concern siblings reference.
 8. **Verifier bindings.** Each success criterion carries one
-   annotation (`[verify]` or `[judge]`) pointing at the deterministic
-   test or LLM rubric that proves the claim. See *Trust tiers*
+   annotation (`[check]`, `[test]`, `[system]`, or `[judge]`)
+   pointing at the verifier that proves the claim. See *Trust tiers*
    below.
 
 ## Out of scope
@@ -70,9 +71,9 @@ A spec does NOT contain:
 
 1. **Implementation status.** No `[x]` / `[ ]` checkboxes, no "TODO",
    no "in progress", no progress percentages. Status is **computed**
-   by running the verifier, not stored in spec markdown. Per the
-   trust-topology framing, past passes do not grant immunity from
-   re-evaluation; the current code-spec pair is what counts.
+   by running the verifier, not stored in spec markdown. Past passes
+   do not grant immunity from re-evaluation; the current code-spec
+   pair is what counts.
 2. **Internal implementation organization** with no architectural
    role:
    - File paths inside a crate (`src/foo/bar.rs`, line numbers)
@@ -99,10 +100,9 @@ A spec does NOT contain:
 6. **Affected-file lists that enumerate what THIS edit touches.**
    The spec is not a PR description. An "Affected Files" section is
    acceptable only when it enumerates what files the spec *owns* as
-   source of truth (e.g., "this spec owns `tests/loom-test.sh` and
-   `loom/crates/loom-templates/templates/`"). Listing files an
-   in-flight change happens to modify is TODO-list shape, not
-   spec shape.
+   source of truth (e.g., "this spec owns `.pre-commit-config.yaml`
+   and the `tests/integration/` tree"). Listing files an in-flight
+   change happens to modify is TODO-list shape, not spec shape.
 
 ## Trust tiers
 
@@ -111,37 +111,65 @@ Reliability is a property of *gate composition*, not of individual
 claims; binding each claim to a tier is how the gate composes
 honestly.
 
-Three tiers, in order of cost and confidence-per-run:
+Three cost-and-confidence tiers, partitioned by what decides whether
+the claim holds (code, LLM, or human):
 
-| Tier | What it proves | How it's named |
-|------|----------------|----------------|
-| **Deterministic** | Structural correctness (the code does X for input Y) | `[verify](path::fn)` |
-| **Stochastic** | Semantic correctness (the implementation matches the *intent*, the test is honest, the style rule holds) | `[judge](path::fn)` |
+| Tier | What it proves | Annotation forms |
+|------|----------------|------------------|
+| **Deterministic** | Structural correctness (the code does X for input Y) | `[check]`, `[test]`, `[system]` |
+| **Stochastic** | Semantic correctness (the implementation matches the *intent*, the test is honest, the style rule holds) | `[judge]` |
 | **Oracle (human)** | Ground truth on intent (the criterion captures what was actually wanted) | Implicit — the human accepts a `loom plan` interview |
 
-A criterion without an annotation is a flag at `loom check
-criteria` (no resolvable verifier). A criterion whose annotation
-points at a missing or stubbed verifier is a flag at the same
-audit. A criterion whose annotation is satisfied by a unit-test
-pass but production diverges from that unit is a flag at `loom
-review`'s verifier-honesty walk.
+### Deterministic annotations
 
-**Deterministic ceiling.** Structural correctness ≠ semantic
-correctness. A `[verify]` passing proves the test passes; it does
-not prove the system does the right thing. Anything that requires
-judgement (mock discipline, scope appropriateness, style-rule
-conformance for prose rules, conformance trace through current code)
-is `[judge]`-tier, not `[verify]`-tier. Choosing the wrong tier is
-itself a flag.
+The three deterministic annotations partition by *what activity
+verifies the claim*:
 
-**No tier-skipping.** A claim whose verification depends on running
-the production code path is not satisfied by a unit test that runs
-the underlying function in isolation. A function can be
-unit-tested and correct while production calls a different
-classifier; the unit test's pass status says nothing about whether
-production satisfies the claim. The criterion's verifier must
-exercise the **live path** — same binary, same argv shape, same
-env as the real invocation.
+| Annotation | What the verifier does | Target shape |
+|------------|------------------------|--------------|
+| **`[check]`** | Static analysis of source (presence, absence, structural property across files) | `[check](command)` — a shell command that runs a walk / lint / AST analysis. Each annotation invokes its own process. |
+| **`[test]`** | Runs the code in isolation and asserts behaviour | `[test](path)` — a language-native test path (e.g. `crate::module::test_name` for Rust, `tests/test_foo.py::test_bar` for Python). The gate batches all `[test]` targets in a single `loom gate test` invocation into one runner subprocess. |
+| **`[system]`** | Runs the assembled system (containers, packaging, end-to-end) | `[system](command)` — a shell command that exercises the full system. Each annotation invokes its own process. |
+
+### Stochastic annotation
+
+`[judge]` invokes an LLM to evaluate a claim that requires semantic
+judgement — code-quality dimensions structural analysis cannot
+capture (error-message clarity, doc-comment usefulness, API
+ergonomics, naming consistency).
+
+| Annotation | Target shape |
+|------------|--------------|
+| **`[judge]`** | `[judge](path)` — a file path or criterion id whose content is the rubric the LLM evaluates against. The gate batches `[judge]` invocations to use API-level concurrency. |
+
+### Annotation flags
+
+A criterion without an annotation is a flag at `loom gate verify`
+(no resolvable verifier). A criterion whose annotation points at a
+missing or stubbed verifier is a flag at the same audit. A
+criterion whose annotation is satisfied by a unit-test pass but
+production diverges from that unit is a flag at `loom gate review`'s
+verifier-honesty walk.
+
+### Deterministic ceiling
+
+Structural correctness ≠ semantic correctness. A deterministic
+annotation passing proves the verifier passes; it does not prove
+the system does the right thing. Anything that requires judgement
+(mock discipline, scope appropriateness, style-rule conformance for
+prose rules, conformance trace through current code) is
+`[judge]`-tier, not deterministic. Choosing the wrong tier is itself
+a flag.
+
+### No tier-skipping
+
+A claim whose verification depends on running the production code
+path is not satisfied by a unit test that runs the underlying
+function in isolation. A function can be unit-tested and correct
+while production calls a different function entirely; the unit
+test's pass status says nothing about whether production satisfies
+the claim. The criterion's verifier must exercise the **live path**
+— same binary, same argv shape, same env as the real invocation.
 
 ## Section structure
 
@@ -168,10 +196,10 @@ is required; include only those that earn their place.>
 
 ## Success Criteria
 <Plain bullets — NO `[ ]` / `[x]`. Each bullet is a checkable
-property with a `[verify]` or `[judge]` annotation. The criteria
-ARE the contract surface — what the gate actually checks. Place
-them up front so a reader sees the testable claims before the prose
-that elaborates them.>
+property with a `[check]`, `[test]`, `[system]`, or `[judge]`
+annotation. The criteria ARE the contract surface — what the gate
+actually checks. Place them up front so a reader sees the testable
+claims before the prose that elaborates them.>
 
 ## Requirements
 
@@ -260,7 +288,7 @@ duplicate.
 - If two specs need the same fact stated differently, one of them
   is paraphrasing — replace the paraphrase with a cross-reference.
 - If two specs disagree on a fact, the contradiction is a flag
-  raised by `loom review`'s cross-spec walk.
+  raised by `loom gate review`'s cross-spec walk.
 
 ## Migration
 
@@ -282,13 +310,16 @@ explicitly.
 
 The loom gates carry the enforcement:
 
-- `loom check criteria` enumerates every criterion annotation and
+- `loom gate verify` enumerates every criterion annotation and
   reports pass/fail by running the verifier. Status is live.
-- `loom check surface` audits the binary's user surface against
-  this spec's command/flag declarations.
-- `loom review` walks the conformance / style / test-quality
+  Tier-specific subcommands (`loom gate check`, `loom gate test`,
+  `loom gate system`) run one tier in isolation.
+- `loom gate review` walks the conformance / style / test-quality
   rubric, citing every applicable rule from `docs/style-rules.md`
   and every applicable convention from this document.
+- Plain `loom gate` reads cached results from the last verifier run
+  (sqlite-backed) and prints a fast status report — no verifiers
+  run, no network, no spawn cost.
 - `loom plan` pins this document so every planning session has the
   convention in context.
 

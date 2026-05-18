@@ -13,13 +13,15 @@ branching, bind mounts, profile selection). All three need
 first-class coverage in a Rust-native test framework with explicit
 state-DB and protocol-parser tests.
 
-This spec designs the test strategy across three tiers — unit, integration,
-container smoke — and the design rules that make tests deterministic and
-findable: an annotation contract that ties acceptance criteria to executable
-tests, a `Clock` trait that eliminates real-time waits, AST-based style
-enforcement, snapshot testing for contract surfaces, property-based testing
-for protocol parsers, and Nix-pinned protocol versions to catch upstream
-drift.
+This spec designs the test strategy across three levels — unit,
+integration, container smoke — and the design rules that make tests
+deterministic and findable: per-tier annotations on acceptance
+criteria (`[check]` / `[test]` / `[system]` / `[judge]`, syntax owned
+by [`docs/spec-conventions.md`](../docs/spec-conventions.md), dispatch
+owned by [loom-gate.md](loom-gate.md)), a `Clock` trait that
+eliminates real-time waits, AST-based style enforcement, snapshot
+testing for contract surfaces, property-based testing for protocol
+parsers, and Nix-pinned protocol versions to catch upstream drift.
 
 ## Architecture
 
@@ -93,16 +95,36 @@ loom/
         agent_flag.rs         # Integration: --agent flag parsing/validation
         spawn_dispatch.rs     # Integration: shim-based wrapix spawn argv
                               #   contract + stdin-pipe-not-tty assertion
-        style.rs              # AST + filesystem style enforcement (syn-based)
-        annotations.rs        # Annotation-integrity gate (walks specs/*.md)
         properties.rs         # proptest invariants (pi/claude parsers, state DB)
+    loom-walk/                # [check]-tier verifier binary — takes named
+      src/                    #   walks as positional args. Annotations point
+        main.rs               #   at it: [check](cargo run -p loom-walk -- <name>)
+        walk/
+          mod.rs              # name → walk fn dispatch
+          no_gix_outside_git_client.rs
+          no_types_files.rs
+          template_ctx.rs
+          newtype_identifiers.rs
+          no_hardcoded_tmp_paths.rs
+          ...                 # one walk per file
+      tests/
+        fixture.rs            # per-walk pass/fail fixtures
+    loom-gate/                # The gate runner. Owns annotation dispatch,
+      src/                    #   status cache, integrity gate. See loom-gate.md.
+        annotation.rs         # [tier](target) parser
+        dispatch.rs           # per-tier dispatch (subprocess, batched, LLM)
+        runner.rs             # toolchain detection + .loom/config.toml
+        cache.rs              # status cache schema + reads/writes
+        integrity.rs          # integrity gate (itself a [check] walk)
+      tests/
+        annotation_parse.rs   # Integration: spec walking + annotation extract
+        dispatch.rs           # Integration: per-tier dispatch contract
+        cache.rs              # Integration: status cache round-trip
+        integrity.rs          # Integration: forward + atomic-acceptance
 
 tests/
-  loom-test.sh                # [verify] runner — invoked per-function by
-                              #   `loom spec --verify`; each function shells
-                              #   to a specific cargo test
   loom/
-    default.nix               # Nix derivation: cargo nextest run --workspace
+    default.nix               # Nix derivation: `loom gate verify`
     run-tests.sh              # Container smoke harness (single happy-path)
     mock-pi/pi.sh             # Mock pi (scoped scenario modes)
     mock-claude/claude.sh     # Mock claude (scoped scenario modes)
@@ -110,108 +132,37 @@ tests/
 
 ### Annotation Contract
 
-Every acceptance criterion in any spec under `specs/` is a plain
-bullet (no `[ ]` / `[x]` prefix) carrying one annotation:
+Annotation syntax (`[check]` / `[test]` / `[system]` / `[judge]`),
+cardinality rules (atomic acceptance, N→1 sharing, cross-spec
+sharing), and the deterministic-vs-stochastic partition are defined
+in [`docs/spec-conventions.md`](../docs/spec-conventions.md). The
+gate's resolution mechanics — per-tier dispatch, batching for
+`[test]` and `[judge]`, runner discovery, the `--files` scope model
+— live in [loom-gate.md](loom-gate.md). This spec does not duplicate
+those definitions.
 
-```
-- Criterion text
-  [verify](path/to/file.sh::test_function_name)
-- Criterion text
-  [judge](path/to/file.sh::test_function_name)
-```
+What loom-tests owns: the **classification policy** for tests in
+this repo — which tier each kind of test belongs to:
 
-**No checkboxes ever.** Per [loom-harness.md FR14](loom-harness.md#functional),
-criterion status is verifier-driven: a property of running the
-annotated verifier against the current code, not a value stored in
-the spec. The spec defines what must hold; `loom check criteria`
-reports what currently does.
-
-**Rules:**
-
-1. **Every annotation MUST resolve.** The named function exists in the
-   named file. Enforced by a CI gate (see *Annotation Integrity Gate*
-   below).
-2. **`[verify]` vs `[judge]` is mechanical.** `[verify]` means a
-   deterministic check (Rust test, AST walk, filesystem assertion,
-   shell exit code). `[judge]` means a check that *requires* LLM
-   evaluation — code-quality criteria like "error messages are
-   actionable" or "naming is consistent." Anything reducible to AST
-   patterns or filesystem state is `[verify]`, not `[judge]`.
-   Loom-tests v1 has no `[judge]` criteria, and the integrity gate
-   actively enforces this: any `[judge]` annotation in any spec is a
-   hard error until the judge runner is set up. The mechanism for
-   future use is documented in *Judge Mechanism*.
-3. **Atomic acceptances.** One acceptance → exactly one annotation.
-   Forbidden: one acceptance with two `[verify]` markers (ambiguous
-   pass/fail when one passes and the other fails). If a criterion
-   needs multiple tests, split it into multiple atomic criteria.
-4. **N→1 sharing allowed.** Multiple acceptances may point to the same
-   function when one test asserts multiple behaviors. The spec lists
-   them as separate criteria because they're separately documented
-   requirements.
-5. **Cross-spec sharing allowed.** One function may be referenced from
-   multiple specs.
+- Static analysis of Rust source (presence, absence, structural
+  property across files) → `[check]`. The verifier is a Rust binary
+  in `loom-walk` (or an analogous walk crate) invoked via
+  `cargo run -p loom-walk -- <walk-name>`.
+- Running Rust code in isolation (unit, integration, property,
+  snapshot) → `[test]`. The verifier is a `#[test]` / `#[tokio::test]`
+  / proptest function; the gate batches all `[test]` targets into one
+  `cargo nextest run` invocation.
+- Container smoke / nix-driven end-to-end → `[system]`.
+- Code-quality dimensions requiring LLM evaluation (error-message
+  clarity, naming consistency, doc-comment usefulness) → `[judge]`.
 
 ### Annotation Integrity Gate
 
-A tridirectional gate enforces the annotation contract:
-
-**Forward direction** — every `[verify]` / `[judge]` annotation in
-`specs/*.md` must resolve to an existing function in the named file:
-
-- **Shell paths** (e.g., `tests/loom-test.sh::test_X`) — file must
-  exist; the regex `^test_X\(\)` must match a function definition.
-- **Cargo paths** — see *Cargo-resolution direction* below.
-
-**Reverse direction** — every top-level zero-argument function in
-`tests/loom-test.sh` whose name starts with `test_` must be
-referenced by at least one annotation in some spec. Helper functions
-named `_helper`, `_setup`, etc. are exempt by the naming rule.
-Stale verify functions are a code smell: either the criterion is
-missing from a spec, the function name is wrong, or the function
-should be deleted.
-
-**Cargo-resolution direction** — every cargo test name invoked from
-a dispatcher must match a defined `#[test]` / `#[tokio::test]`
-function in the named cargo target. The dispatcher's body is parsed
-(direct `cargo_run test ...` lines and helper calls like
-`lock_cargo_test foo` that expand to `cargo_run test ...`); the
-positional name arguments are then substring-matched against the
-fully-qualified test paths reconstructed from the target's Rust
-sources (file-derived module path + `mod foo { … }` nesting + fn
-name, with `proptest! { #[test] fn … }` macro bodies handled by a
-text fallback that syn doesn't descend into).
-
-This direction is load-bearing because `cargo test -- <name>` exits
-0 silently when `<name>` matches nothing — without the check, a
-stale rename or typo lets a dispatcher claim coverage that cargo
-ran for zero tests (the wx-xad18 failure mode). The gate is the
-class-level fix for that class of bug.
-
-**Implementation**: `loom/crates/loom/tests/annotations.rs` walks
-`specs/*.md`, regex-extracts annotations, asserts each function
-resolves, asserts every shell-runner function is referenced, and
-asserts every dispatcher's cargo test names resolve. Output on
-failure: `<spec>:<line>: annotation [verify](...) — function not
-found` (forward), `tests/loom-test.sh:<line>: orphan test function`
-(reverse), or `tests/loom-test.sh:<line>: dispatcher … invokes
-cargo test <name> in -p <crate> <target> which does not match any
-defined #[test] function` (cargo-resolution). Runs under `nix flake
-check`.
-
-The gate verifies itself: this spec's acceptance criterion for the
-gate carries
-`[verify](tests/loom-test.sh::test_acceptance_annotations_resolve)`,
-which resolves to the gate's implementation. Each CI run therefore
-includes the gate's own integrity check.
-
-**Scope**: walks `specs/*.md` for annotations; only validates
-annotations pointing into `tests/loom-test.sh`. Other test runners
-(e.g., a future `tests/sandbox-test.sh`) own their own annotation
-gates. Per Annotation Contract rule 2, any `[judge]` annotation
-encountered today fails the gate; when the judge runner is set up
-(at `tests/judges/loom.sh` or equivalent), the gate's resolution
-logic extends to that path.
+The gate that verifies annotations themselves resolve is defined in
+[loom-gate.md](loom-gate.md) (Integrity gate section). It runs as
+part of `loom gate check`. Loom-tests has the acceptance criterion
+that the gate is self-checking (its own annotation points at its own
+implementation); the mechanism lives in loom-gate.md.
 
 ### Determinism Through Clock Injection
 
@@ -237,8 +188,7 @@ passes `clock.now()`.
 wall time stays zero; tests can express "this file is 15 days old"
 without sleeping.
 
-**Banned patterns** (enforced by `loom/crates/loom/tests/style.rs`
-AST check):
+**Banned patterns** (enforced by walks in `loom-walk`):
 
 - `std::thread::sleep` — anywhere, no exceptions.
 - `tokio::time::sleep` outside `SystemClock::sleep`'s implementation.
@@ -254,41 +204,38 @@ apply uniformly across `src/` and `tests/`.
 
 ### Style Enforcement
 
-Two complementary mechanisms in
-`loom/crates/loom/tests/style.rs`:
+Two complementary mechanisms:
 
-**Workspace clippy lints** for what clippy supports natively:
+**Workspace clippy lints** for what clippy supports natively
+(`unwrap_used`, `expect_used`, `panic`, `todo`, `unimplemented`,
+`allow_attributes`). The full configuration is the contract in
+[`docs/style-rules.md`](../docs/style-rules.md) under RS-3
+(*Workspace lint configuration*); this spec does not duplicate the
+rule list. Tests opt out via per-file
+`#![allow(clippy::unwrap_used, ...)]` at the top of
+`loom/crates/*/tests/*.rs` and inside `#[cfg(test)] mod tests`
+blocks.
 
-| Rule | Lint |
-|------|------|
-| no `unwrap()` | `clippy::unwrap_used = "deny"` |
-| no `expect()` | `clippy::expect_used = "deny"` |
-| no `panic!()` | `clippy::panic = "deny"` |
-| no `todo!()` | `clippy::todo = "deny"` |
-| no `unimplemented!()` | `clippy::unimplemented = "deny"` |
-| no `#[allow(dead_code)]` (use `#[expect]`) | `clippy::allow_attributes = "warn"` |
+**Source-walking checks** for rules clippy can't express. Each walk
+is a `[check]`-tier verifier in `loom-walk`. The rule set is owned
+by [`docs/style-rules.md`](../docs/style-rules.md) (RS-5, RS-7, RS-8,
+RS-16, RS-18, and the test-discipline rules TST-*); this spec lists
+the walks the repo ships, not the rules they enforce:
 
-Tests opt out via per-file `#![allow(clippy::unwrap_used, ...)]` at
-the top of `loom/crates/*/tests/*.rs` and inside `#[cfg(test)] mod
-tests` blocks. Already the convention in the workspace.
+| Walk | Enforces |
+|------|----------|
+| `no_derive_from_on_newtypes` | RS-8 |
+| `no_types_or_error_files` | RS-5 |
+| `git_client_encapsulation` | architectural — `GitClient` is the only `gix` / `git` CLI site |
+| `single_event_channel` | architectural — renderer + log writer subscribe to one `AgentEvent` sender |
+| `newtype_identifiers` | RS-7 |
+| `template_context_structs` | architectural — each Askama template has a typed context |
+| `no_hardcoded_tmp_paths` | NFR #7 (Darwin sandbox compatibility) |
 
-**Source-walking checks** for rules clippy can't express. One test
-covers both style rules and architectural assertions, using `syn` for
-AST patterns and `walkdir` for filesystem-shape rules:
-
-| Rule | Mechanism |
-|------|-----------|
-| no `derive(From)` / `derive(Into)` on tuple structs | `syn::ItemStruct` walk over `loom/crates/*/src/**/*.rs` |
-| no `loom/crates/*/src/{types,error}.rs` files | `walkdir` filter on `loom/crates/*/src/` |
-| `GitClient` is the only `gix` / `git` CLI importer | `syn` walk asserting `use gix::*` and `Command::new("git")` appear only in `loom-driver/src/git/` |
-| renderer + log writer share one `AgentEvent` channel | `syn` walk asserting both subscribe to the same `tokio::sync::broadcast` (or `mpsc`) sender |
-| domain identifiers are tuple-struct newtypes | `syn::ItemStruct` walk over `loom-driver/src/identifier/` |
-| each Askama template has a typed context struct | `syn` walk pairing `#[derive(Template)]` structs in `loom-templates/src/` with their `templates/*.md` files |
-| tests use `tempfile::tempdir`, never hardcoded `/tmp/...` | `syn` literal walk over `loom/crates/*/tests/**/*.rs` and `#[cfg(test)]` blocks |
-
-`syn` and `walkdir` are `[dev-dependencies]` of the binary crate
-(no propagation to dependents). Output on failure: `<path>:<line>
-<rule>` so reviewers can click directly into the violation.
+`syn` and `walkdir` are `[dev-dependencies]` of `loom-walk`. Output
+on failure follows the verifier-runner contract in loom-gate.md:
+JSON-line stdout `{"pass": false, "evidence": "<path>:<line> <rule>"}`
+so reviewers can click directly into the violation.
 
 ### Property-Based Testing
 
@@ -301,8 +248,31 @@ AST patterns and `walkdir` for filesystem-shape rules:
 | Claude protocol parser | round-trip identity for known shapes; unknown shapes map to the `Unknown` variant via `#[serde(other)]`; never panics |
 | State DB rebuild | never panics on arbitrary spec file content; schema invariants always hold; corrupted DB always recovers via `recreate` |
 
+**Convention.** Parsers and codecs ship with a proptest invariant —
+minimally no-panic-on-arbitrary-input and (where applicable) round-trip
+identity. State machines lean on typestate (per RS-12 / RS-7 in
+[`docs/style-rules.md`](../docs/style-rules.md)) to make invalid
+transitions unrepresentable at compile time; proptests on
+state-transition logic are redundant when the type system already
+enforces them. Parsers and codecs without proptest coverage are
+flagged at `loom gate review`.
+
 **CI configuration**: `PROPTEST_CASES=32` for `nix flake check`,
 overridable via env var to `2048+` for local exhaustive runs.
+
+**Discoverability.** The CI cap is a single named constant in a
+shared test-support module, not a scattered `with_cases(32)` literal:
+
+```rust
+// loom-test-support/src/lib.rs (or equivalent)
+pub const CI_PROPTEST_CASES: u32 = 32;
+```
+
+Every proptest call site imports the constant. One place to bump;
+one place to grep; no chance of drift between blocks. The env-var
+override behaviour is documented next to the constant — single
+source of truth.
+
 Property tests live in `loom/crates/<crate>/tests/properties.rs` —
 each crate owns the invariants for the types it defines. The binary
 crate's `loom/crates/loom/tests/properties.rs` is reserved for
@@ -347,24 +317,20 @@ LLM evaluation — code-quality dimensions that AST walks can't capture:
 - "API surface is ergonomic for typical call patterns"
 - "naming is consistent with codebase conventions"
 
-Loom-tests v1 has no `[judge]` criteria; the mechanism below is
-documented for future use.
+**Runner**: `loom gate judge` (or `loom gate review` for both
+criterion-attached judges and the rubric walk together). See
+[loom-gate.md](loom-gate.md). The runner sends the named source
+files plus the criterion text to the LLM via the existing agent
+abstraction and captures a structured verdict per the
+verifier-runner contract.
 
-**Runner**: separate from `cargo test`. Invocation:
-`loom judge run --annotation <spec.md::criterion>` (or `bd judge` once
-that command exists). The runner sends the named source files plus the
-criterion text to Claude via the existing agent abstraction and
-captures a structured verdict.
-
-**Output**: a bead comment with the verdict. Advisory only — judges
-do not gate CI.
-
-**Why advisory**: judges are non-deterministic, paid, and
+**Cost class.** Judges are non-deterministic, paid, and
 network-dependent. They do NOT run under `nix flake check`; they run
-on demand or in a nightly job. A `[judge]` verdict that disagrees with
-human judgement is a prompt to either rewrite the criterion as
-`[verify]` (if the property is reducible to a structural check) or
-accept the disagreement (if the property is genuinely subjective).
+on demand, on bead completion, or in scheduled jobs. A `[judge]`
+verdict that disagrees with human judgement is a prompt to either
+rewrite the criterion as one of `[check]` / `[test]` / `[system]`
+(if the property is reducible to a deterministic check) or accept
+the disagreement (if the property is genuinely subjective).
 
 ### Test Patterns
 
@@ -528,17 +494,22 @@ Code's stream-json framing (also JSONL) on stdin/stdout.
 # tests/loom/default.nix
 { pkgs, loom, bd, ... }:
 {
-  # Unit + integration tests — run under `nix flake check`.
+  # Deterministic verifiers — invokes `loom gate verify` which runs
+  # every [check] / [test] / [system] verifier (or composes the tier
+  # subcommands). Wraps the cargo-nextest test-tier invocation, the
+  # loom-walk check-tier invocations, and any system-tier verifiers
+  # registered by the consumer.
   loom-tests = pkgs.runCommandLocal "loom-tests" {
-    nativeBuildInputs = [ loom.cargoDeps loom.rustToolchain pkgs.cargo-nextest ];
+    nativeBuildInputs = [ loom.cargoDeps loom.rustToolchain pkgs.cargo-nextest loom ];
   } ''
     cd ${loom.src}
-    cargo nextest run --workspace
+    loom gate verify
     mkdir -p $out
   '';
 
   # Container smoke — invoked via `nix run .#test-loom`. Excluded from
-  # `flake check` because it needs podman at runtime.
+  # `flake check` because it needs podman at runtime. Annotated as
+  # [system](nix run .#test-loom) on its acceptance criterion.
   loom-smoke = pkgs.writeShellApplication {
     name = "test-loom";
     runtimeInputs = [ loom bd pkgs.podman pkgs.jq ];
@@ -551,6 +522,14 @@ Code's stream-json framing (also JSONL) on stdin/stdout.
 so it gates PRs in CI. `loom-smoke` is exposed as an app on Linux only.
 
 ## Success Criteria
+
+> **Migration note.** The bullets below currently carry legacy
+> `[verify](tests/loom-test.sh::test_X)` annotations. They are
+> retained as-is pending the per-spec migration epic that rewrites
+> each into a per-tier annotation (`[check]` / `[test]` / `[system]`
+> / `[judge]`) per [`docs/spec-conventions.md`](../docs/spec-conventions.md).
+> Migration mechanics are in this spec's implementation notes; the
+> new annotation syntax is the contract going forward.
 
 ### Unit tests
 
@@ -739,20 +718,24 @@ the rules:
 
 ### Functional
 
-1. **Three test tiers** with complementary scope:
-   - **Unit tests** (`cargo nextest run`) — per-crate, fast, no external
-     dependencies. Inline `#[cfg(test)] mod tests` blocks. Run as part of
-     `nix flake check`.
-   - **Integration tests** (`cargo nextest run --test`) — cross-crate, use
-     mock agent processes over real pipes, no containers. Live in
-     `loom/crates/<crate>/tests/*.rs`. Run as part of `nix flake check`.
-   - **Container smoke** (`nix run .#test-loom`) — one happy-path scenario
-     that spawns a real podman container via `wrapix spawn`, runs a mock
-     agent *inside* the container, drives `loom run --once` against it, and
-     asserts the bead closes. Validates host↔container plumbing
+1. **Three test levels** with complementary scope (each level is
+   addressed by one or more annotation tiers; the levels here are the
+   *test-design* axis, not the annotation-tier axis):
+   - **Unit tests** — per-crate, fast, no external dependencies.
+     Inline `#[cfg(test)] mod tests` blocks. Annotated `[test]`; run
+     via `loom gate test`, which dispatches to `cargo nextest`.
+   - **Integration tests** — cross-crate, use mock agent processes
+     over real pipes, no containers. Live in
+     `loom/crates/<crate>/tests/*.rs`. Annotated `[test]`; run via
+     `loom gate test`.
+   - **Container smoke** — one happy-path scenario that spawns a real
+     podman container via `wrapix spawn`, runs a mock agent *inside*
+     the container, drives `loom run --once` against it, and asserts
+     the bead closes. Validates host↔container plumbing
      (entrypoint.sh, bind mounts, `WRAPIX_AGENT` branching, container
-     teardown) — *not* protocol depth, which the integration tier already
-     covers. Linux-only (no podman in Darwin CI).
+     teardown) — *not* protocol depth, which the integration level
+     already covers. Annotated `[system](nix run .#test-loom)`; run
+     via `loom gate system`. Linux-only (no podman in Darwin CI).
 
 2. **Mock agent processes** — process-level fixtures driven over real pipes
    from cargo integration tests, plus the in-container smoke:
@@ -805,8 +788,8 @@ the rules:
      pins the on-disk shape so changes surface as test failures, not silent
      wire-format drift. Includes the optional
      `model: Option<ModelSelection>` field with
-     `#[serde(skip_serializing_if = "Option::is_none")]` so wrappers built
-     before the field landed continue to round-trip identically
+     `#[serde(skip_serializing_if = "Option::is_none")]` so the on-disk
+     shape is stable whether the field is present or absent
 
    #### loom-agent
    - Pi RPC command serialization (Rust struct → JSONL line)
@@ -925,12 +908,12 @@ the rules:
    - `loom logs --bead <id>` finds the most recent log for that bead;
      exits non-zero with a stderr message naming the bead id when no
      log exists
-   - `loom spec --deps` parses the active spec's `[verify]` / `[judge]`
-     annotations, opens each referenced test file, and prints the
-     deduplicated set of nixpkgs needed
+   - `loom spec --deps` parses the active spec's `[check]` / `[test]`
+     / `[system]` / `[judge]` annotations, opens each referenced
+     verifier source, and prints the deduplicated set of nixpkgs needed
    - CLI surface: `loom --help` lists every v1 command (`plan`,
-     `todo`, `run`, `check`, `review`, `msg`, `spec`, `init`, `status`,
-     `use`, `logs`, `note`)
+     `todo`, `run`, `gate`, `msg`, `spec`, `init`, `status`, `use`,
+     `logs`, `note`)
 
    #### Run UX renderer (loom-workflow)
    - Default mode: header line per bead, one line per tool call, no
@@ -977,8 +960,51 @@ the rules:
    - Hybrid implementation: callers see only the typed Rust API.
      Whichever path is used internally (gix vs `git` CLI) is
      encapsulated — no `gix::` or `tokio::process::Command::new("git")`
-     references appear outside the `GitClient` module. Verified by
-     `loom/crates/loom/tests/style.rs`.
+     references appear outside the `GitClient` module. Verified by a
+     `[check]`-tier walk in `loom-walk` (`git_client_encapsulation`).
+
+   #### loom-walk
+   - Walk dispatch: `loom-walk <name>` invokes the named walk; an
+     unknown name exits non-zero with a clear error naming the
+     available walks
+   - Each walk reads `LOOM_FILES` (colon-separated paths) if set and
+     filters its input set; absent means scan the walk's declared
+     scope
+   - Output conforms to the verifier-runner contract: one JSON line
+     on stdout (`{"pass": bool, "evidence": "<path>:<line> <rule>"}`),
+     exit code mirrors `pass`
+   - Per-walk fixtures: each walk has a `#[test]` exercising both pass
+     and fail cases against synthetic source under `tempfile::tempdir`
+
+   #### loom-gate
+   - Annotation parser: walks `specs/*.md`, regex-extracts
+     `[tier](target)` annotations, returns typed `Annotation` records
+     (tier, target, source spec, line)
+   - Per-tier dispatcher: `[check]` and `[system]` route to one
+     subprocess per annotation; `[test]` and `[judge]` collect targets
+     for batched invocations
+   - Toolchain detection: `Cargo.toml` at root → cargo nextest runner
+     template; `pyproject.toml` → pytest; `go.mod` → go test
+   - `.loom/config.toml` loading: `[runner]` table parses into
+     per-tier templates; missing file falls back to detected defaults
+   - Status cache schema: per-criterion row with annotation target,
+     last-run timestamp, commit hash, verdict (pass / fail / skipped),
+     evidence string
+   - Status cache writes on every verifier invocation; reads on plain
+     `loom gate` for the report
+   - Integrity gate forward direction: every annotation's target is
+     valid for its tier (resolves on PATH for `[check]` / `[system]`;
+     resolves to a `#[test]` function via cargo metadata for `[test]`;
+     resolves to a file on disk for `[judge]`)
+   - Integrity gate atomic acceptance: each criterion carries exactly
+     one annotation
+   - Integrity gate self-test: its own criterion in `loom-gate.md`
+     annotates back to its implementation
+   - `--files` scope filtering for `[test]`: cargo metadata computes
+     scope per annotation (files in crate(test) ∪ transitive deps);
+     intersection with input file set determines which tests batch
+   - Test-tier silent-zero-match sniffing: cargo / nextest / pytest
+     stdout post-processed to detect zero-match cases and fail loud
 
 4. **Integration test coverage** — load-bearing flows that exercise
    cross-crate behavior or pipe-level orchestration. Protocol-level
@@ -1021,7 +1047,7 @@ the rules:
    inside the container; loom invokes `wrapix spawn` with
    `WRAPIX_AGENT=pi` and `MOCK_PI_SCENARIO=happy-path`; the smoke
    asserts the container exits clean and the bead closes.
-   Workflow-level coverage (plan/todo/run/check/msg, profile selection,
+   Workflow-level coverage (plan/todo/run/gate/msg, profile selection,
    agent switching, runtime composition) lives in inline
    `#[cfg(test)] mod tests` blocks under `loom-workflow/src/` — those
    are exercised via `cargo nextest run`, not the smoke.
@@ -1032,20 +1058,21 @@ the rules:
      `unimplemented = "deny"`, `allow_attributes = "warn"`. Tests opt out
      via per-file `#![allow(clippy::unwrap_used, ...)]` at the top of
      `loom/crates/*/tests/*.rs` and inside `#[cfg(test)] mod tests` blocks.
-   - **Source-walking checks** in `loom/crates/loom/tests/style.rs`
-     for rules clippy can't express. Uses `syn` for AST patterns
-     (no `derive(From)` / `derive(Into)` on tuple structs, `GitClient`
-     encapsulation, single `AgentEvent` channel for renderer + log
-     writer, newtype identifier shape, typed Askama context structs)
-     and `walkdir` for filesystem-shape rules (no
-     `loom/crates/*/src/{types,error}.rs` at crate roots).
+   - **Source-walking checks** in `loom-walk` for rules clippy can't
+     express. Each walk is a `[check]`-tier verifier. Uses `syn` for
+     AST patterns (no `derive(From)` / `derive(Into)` on tuple
+     structs, `GitClient` encapsulation, single `AgentEvent` channel
+     for renderer + log writer, newtype identifier shape, typed
+     Askama context structs) and `walkdir` for filesystem-shape rules
+     (no `loom/crates/*/src/{types,error}.rs` at crate roots).
 
 7. **Annotation contract** — every acceptance criterion in any spec
-   under `specs/` carries a `[verify]` or `[judge]` annotation that
-   must resolve to an existing test function. The full rules
-   (cardinality, classification, cross-spec sharing) and the CI gate
-   that enforces them are defined in *Architecture / Annotation
-   Contract* and *Architecture / Annotation Integrity Gate*.
+   under `specs/` carries a `[check]`, `[test]`, `[system]`, or
+   `[judge]` annotation that must resolve to an existing verifier.
+   The full rules (syntax, cardinality, classification, cross-spec
+   sharing) live in [`docs/spec-conventions.md`](../docs/spec-conventions.md);
+   the integrity gate that enforces them lives in
+   [loom-gate.md](loom-gate.md).
 
 8. **Property-based testing** — `proptest` for invariants on four
    targets: JSONL line parser, Pi protocol parser, Claude protocol
@@ -1071,10 +1098,22 @@ the rules:
    Mock agents return canned responses. Time-dependent components take
    an injectable `Clock` trait; tests use a `MockClock` with controllable
    advance (see *Architecture / Determinism Through Clock Injection*).
-2. **Fast** — warm-cache `cargo nextest run --workspace` targets <5s
-   on Linux CI; container smoke targets <30s. Compile time is
-   separate from the test budget. Both targets guide design choices
-   (see *Out of Scope / Hard CI-time NFR*).
+2. **Fast** — soft targets per gate command, warm cache:
+   - `loom gate` (status, no verifiers): <100 ms (and a hard <500 ms
+     ceiling, asserted by a self-test on the cache implementation).
+   - `loom gate check`: <5 s aggregate across all `[check]` walks.
+   - `loom gate test`: <30 s aggregate (one batched cargo-nextest
+     invocation; nextest's internal parallelism does the heavy
+     lifting).
+   - `loom gate system`: <60 s per verifier; container smoke targets
+     <30 s.
+   - `loom gate judge`: no fixed target; bounded by LLM API
+     concurrency.
+
+   All except the `loom gate` status ceiling are *soft* — they guide
+   design (no real sleeps, subprocess tests need justification,
+   proptest case count bounded) but the gate doesn't fail when a
+   budget is exceeded; humans review timing in PRs.
 3. **Isolated** — each test uses its own temp directory and beads database
    prefix. No shared mutable state between tests.
 4. **Parallel-safe** — unit and integration tests run in parallel
@@ -1084,10 +1123,12 @@ the rules:
    smoke (single scenario) gets its own pre-seeded `.beads/` snapshot
    in a tempdir, fully isolated from any concurrent peers running
    against the workspace.
-5. **CI-friendly** — `nix flake check` runs unit + integration tests
-   via a single Nix derivation that invokes `cargo nextest run
-   --workspace`. The container smoke is exposed as a separate `nix run
-   .#test-loom` app because it needs podman at runtime.
+5. **CI-friendly** — `nix flake check` runs `loom gate verify`
+   (deterministic verifiers: `[check]` + `[test]` + `[system]`) via a
+   single Nix derivation. The container smoke is exposed as a
+   separate `nix run .#test-loom` app because it needs podman at
+   runtime; its acceptance criterion is annotated
+   `[system](nix run .#test-loom)`.
 6. **Real bd** — the container smoke runs against live `bd` (not a
    mock). The integration tier may mock `bd` where the test concern
    is orthogonal to the issue tracker, but the smoke validates that
@@ -1158,15 +1199,20 @@ the rules:
   injection, hang/timeout simulation, multi-turn conversations. These
   belong in parser unit tests with inline string literals, not in mock
   scripts.
-- **Real `[judge]` criteria in v1** — the judge mechanism is documented
-  in *Architecture / Judge Mechanism* for future use; loom-tests v1
-  has no LLM-evaluated acceptance criteria. Every existing acceptance
-  reduces to a deterministic check, so all current annotations are
-  `[verify]`.
+- **`loom.toml` per-repo verifier registry** — annotations carry
+  the verifier directly (target name for `[test]` / `[judge]`,
+  command for `[check]` / `[system]`); no separate config maps names
+  to commands. Toolchain detection (`Cargo.toml` at repo root →
+  cargo nextest, etc.) supplies defaults for batched-tier runners;
+  `.loom/config.toml` is the override path when defaults don't fit,
+  not a per-verifier registry.
 - **`cargo fuzz` under `nix flake check`** — exposed as `nix run .#fuzz-loom`
   for on-demand or nightly runs only. proptest covers invariants in CI.
-- **Hard CI-time NFR** — the <5s `cargo nextest` budget on Linux is a
-  soft design target, not a CI failure threshold. It guides decisions
-  (no real sleeps, subprocess tests need justification, proptest case
-  count bounded) but the test runner doesn't fail when the budget is
-  exceeded; humans review timing in PRs.
+- **Hard CI-time NFR for the verify path** — the per-tier budgets
+  (Non-Functional #2) are soft design targets, not CI failure
+  thresholds. They guide decisions (no real sleeps, subprocess tests
+  need justification, proptest case count bounded) but the gate
+  doesn't fail when a budget is exceeded; humans review timing in
+  PRs. Exception: `loom gate` status has a hard <500ms ceiling with a
+  self-test — that one is a regression of the cache implementation,
+  not of the corpus.
