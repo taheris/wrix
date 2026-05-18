@@ -26,7 +26,10 @@ pub mod runner;
 pub mod scope;
 
 pub use annotation::{Annotation, Criterion, ParsedSpecs, Tier};
-pub use cache::{CacheRow, Verdict};
+pub use cache::{
+    AnnotationHealth, BrokenAnnotation, CacheError, CacheRow, FailingCriterion, Report, SpecReport,
+    StaleRun, StatusCache, TierSummary, Verdict, render_from_rows, render_report, row_for,
+};
 pub use dispatch::{
     DispatchError, DispatchOptions, DispatchOutcome, EmptyScope, TestScope, VerifierVerdict,
     run_check, run_judge, run_system, run_test,

@@ -1764,6 +1764,7 @@ dependencies = [
  "displaydoc",
  "loom-events",
  "pulldown-cmark",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
