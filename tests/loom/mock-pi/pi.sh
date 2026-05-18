@@ -134,7 +134,6 @@ run_happy_path() {
     handle_probe 0
     local _prompt
     IFS= read -r _prompt
-    emit_message_delta "ack"
     emit_message_delta "LOOM_COMPLETE"
     emit_agent_end
 }
