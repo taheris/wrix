@@ -16,7 +16,7 @@ use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result};
-use loom_driver::git::{GitClient, MergeResult};
+use loom_driver::git::{GitClient, MergeResult, StatusKind};
 use loom_driver::identifier::{BeadId, SpecLabel};
 use tempfile::TempDir;
 
@@ -107,6 +107,34 @@ async fn merge_branch_clean_returns_ok() -> Result<()> {
 }
 
 #[tokio::test]
+async fn merge_branch_non_conflicting_returns_ok() -> Result<()> {
+    // Both branches diverge after a shared base — feature adds feature.txt,
+    // main adds main.txt. Neither touches the other's file, so the merge
+    // succeeds with a merge commit (forced by --no-ff) and both files land
+    // on the driver branch.
+    let repo = init_repo()?;
+    let path = repo.path();
+
+    git(path, &["checkout", "-q", "-b", "feature"])?;
+    std::fs::write(path.join("feature.txt"), "feature side\n")?;
+    git(path, &["add", "feature.txt"])?;
+    git(path, &["commit", "-q", "-m", "feature commit"])?;
+
+    git(path, &["checkout", "-q", "main"])?;
+    std::fs::write(path.join("main.txt"), "main side\n")?;
+    git(path, &["add", "main.txt"])?;
+    git(path, &["commit", "-q", "-m", "main commit"])?;
+
+    let client = GitClient::open(path)?;
+    let result = client.merge_branch("feature").await?;
+
+    assert_eq!(result, MergeResult::Ok);
+    assert!(path.join("feature.txt").exists());
+    assert!(path.join("main.txt").exists());
+    Ok(())
+}
+
+#[tokio::test]
 async fn merge_branch_conflict_is_reported() -> Result<()> {
     let repo = init_repo()?;
     let path = repo.path();
@@ -125,6 +153,42 @@ async fn merge_branch_conflict_is_reported() -> Result<()> {
     let result = client.merge_branch("feature").await?;
 
     assert_eq!(result, MergeResult::Conflict);
+    Ok(())
+}
+
+#[tokio::test]
+async fn status_reports_working_tree_and_index_changes() -> Result<()> {
+    // Status on a clean checkout reports zero entries; modifying a tracked
+    // file surfaces as a WorktreeChange, and `git add`ing a new file
+    // surfaces as an IndexChange. The typed API distinguishes the two
+    // without leaking gix internals.
+    let repo = init_repo()?;
+    let path = repo.path();
+    let client = GitClient::open(path)?;
+
+    let clean = client.status().await?;
+    assert!(
+        clean.is_empty(),
+        "clean checkout should report zero status entries, got {clean:?}",
+    );
+
+    std::fs::write(path.join("README.md"), "modified line\n")?;
+    let worktree_only = client.status().await?;
+    assert!(
+        worktree_only
+            .iter()
+            .any(|e| e.path == "README.md" && e.kind == StatusKind::WorktreeChange),
+        "modifying tracked file should produce a WorktreeChange entry, got {worktree_only:?}",
+    );
+
+    std::fs::write(path.join("new.txt"), "staged content\n")?;
+    git(path, &["add", "new.txt"])?;
+    let both = client.status().await?;
+    assert!(
+        both.iter()
+            .any(|e| e.path == "new.txt" && e.kind == StatusKind::IndexChange),
+        "git add of a new path should produce an IndexChange entry, got {both:?}",
+    );
     Ok(())
 }
 
