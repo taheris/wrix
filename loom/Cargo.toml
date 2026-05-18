@@ -6,6 +6,7 @@ members = [
     "crates/loom-events",
     "crates/loom-render",
     "crates/loom-agent",
+    "crates/loom-gate",
     "crates/loom-workflow",
     "crates/loom-templates",
     "crates/loom-test-support",
@@ -60,6 +61,7 @@ loom-driver = { path = "crates/loom-driver" }
 loom-events = { path = "crates/loom-events" }
 loom-render = { path = "crates/loom-render" }
 loom-agent = { path = "crates/loom-agent" }
+loom-gate = { path = "crates/loom-gate" }
 loom-workflow = { path = "crates/loom-workflow" }
 loom-templates = { path = "crates/loom-templates" }
 loom-test-support = { path = "crates/loom-test-support" }

@@ -1758,6 +1758,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "loom-gate"
+version = "0.1.0"
+dependencies = [
+ "displaydoc",
+ "loom-events",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
 name = "loom-render"
 version = "0.1.0"
 dependencies = [
@@ -1798,6 +1808,7 @@ dependencies = [
  "displaydoc",
  "loom-driver",
  "loom-events",
+ "loom-gate",
  "loom-render",
  "loom-templates",
  "loom-test-support",
