@@ -400,31 +400,31 @@ remains its own family of outputs in `modules/flake/packages.nix`.
 - [ ] deriveProfile correctly merges packages and environment
   [judge](../tests/judges/profiles.sh#test_derive_profile_merge)
 - [ ] Profiles are composable (can extend extended profiles)
-  [verify:wrapix](../tests/mcp/tmux/e2e/test_profile_composition.sh)
+  [system](../tests/mcp/tmux/e2e/test_profile_composition.sh)
 - [ ] Host devshell that splices `rustProfile.shellHook` resolves `rustc` to the same `/nix/store/...` path as the sandbox
   [judge](../tests/judges/profiles.sh#test_host_sandbox_rustc_same_store_path)
 - [ ] `profile.toolchain` is exposed on both the default rust profile and `withToolchain { file; sha256; }`, and points at the same derivation referenced by the profile's `packages` and the `${toolchain}/bin` PATH prepend in `shellHook`
   [judge](../tests/judges/profiles.sh#test_rust_toolchain_field)
-- [ ] `profiles.rust` and `profiles.rust.withToolchain { ... }` closures contain zero `*-nightly-*` derivations after a fresh `nix flake update` (regression guard against reintroducing `fenix.packages.${system}.rust-analyzer`, which drags a nightly cargo/rustc/rust-std closure). Implemented as a deterministic shell test (nix-eval the toolchain `drvPath`, scan the closure for `*-nightly-*` paths, exit 0/1) — `[verify]` rather than `[judge]` because there is no rubric ambiguity for an LLM to judge.
-  [verify](../tests/profiles/no-nightly-closure.sh#test_no_nightly_closure)
+- [ ] `profiles.rust` and `profiles.rust.withToolchain { ... }` closures contain zero `*-nightly-*` derivations after a fresh `nix flake update` (regression guard against reintroducing `fenix.packages.${system}.rust-analyzer`, which drags a nightly cargo/rustc/rust-std closure). Implemented as a deterministic shell test (nix-eval the toolchain `drvPath`, scan the closure for `*-nightly-*` paths, exit 0/1) — `[check]` rather than `[judge]` because there is no rubric ambiguity for an LLM to judge.
+  [check](../tests/profiles/no-nightly-closure.sh#test_no_nightly_closure)
 - [ ] `mkProfileImages { rust = …; }` produces a JSON file whose entry for `rust` has both `ref` and `source` fields, with `source` resolving to the same store path as `(mkSandbox { profile = profiles.rust; }).image`
-  [verify](../tests/profiles/profile-images-manifest.sh#test_manifest_shape)
+  [check](../tests/profiles/profile-images-manifest.sh#test_manifest_shape)
 - [ ] `packages.image-<name>`, `packages.sandbox-<name>`, and `packages.profile-images` all evaluate for each built-in profile
-  [verify](../tests/profiles/profile-images-manifest.sh#test_flake_outputs_present)
+  [check](../tests/profiles/profile-images-manifest.sh#test_flake_outputs_present)
 - [ ] `profiles.rust.buildPackage` is exposed and returns an attrset with `bin`, `clippy`, `nextest`, and `cargoArtifacts` fields
-  [verify](../tests/profiles/build-package.sh#test_build_package_exposed)
+  [check](../tests/profiles/build-package.sh#test_build_package_exposed)
 - [ ] Editing a workspace source file changes the `bin` derivation hash but does **not** change the `cargoArtifacts` derivation hash (dep cache reused across edits)
-  [verify](../tests/profiles/build-package.sh#test_workspace_edit_reuses_dep_cache)
+  [check](../tests/profiles/build-package.sh#test_workspace_edit_reuses_dep_cache)
 - [ ] Source filter excludes non-Cargo files: editing a `README.md` or other `*.md` file inside `src` does **not** change the `bin`, `clippy`, or `nextest` derivation hashes
-  [verify](../tests/profiles/build-package.sh#test_source_filter_excludes_non_cargo)
+  [check](../tests/profiles/build-package.sh#test_source_filter_excludes_non_cargo)
 - [ ] Editing a `.rs` file invalidates `bin`, `clippy`, and `nextest` together (the workspace source closure is shared by all three) but does **not** invalidate `cargoArtifacts`
-  [verify](../tests/profiles/build-package.sh#test_workspace_edit_skips_cargo_artifacts)
+  [check](../tests/profiles/build-package.sh#test_workspace_edit_skips_cargo_artifacts)
 - [ ] Editing a file in `extraSrcs` invalidates `clippy` and `nextest` but does **not** invalidate `bin` or `cargoArtifacts`
-  [verify](../tests/profiles/build-package.sh#test_extra_srcs_scoped_to_lint_test)
+  [check](../tests/profiles/build-package.sh#test_extra_srcs_scoped_to_lint_test)
 - [ ] `bin`, `clippy`, and `nextest` all close over `profile.toolchain`, so `${toolchain}/bin/rustc` resolves to the same `/nix/store/...` path across all three derivations, on both `profiles.rust` and `profiles.rust.withToolchain { ... }`
-  [verify](../tests/profiles/build-package.sh#test_build_package_toolchain_alignment)
+  [check](../tests/profiles/build-package.sh#test_build_package_toolchain_alignment)
 - [ ] `lib/loom/default.nix` and `lib/mcp/tmux/mcp-server.nix` are thin `wrapix.profiles.rust.buildPackage` consumers (no direct `pkgs.rustPlatform.buildRustPackage` or `makeRustPlatform` call); `packages.loom` and `packages.tmux-mcp` consume `.bin`; `tests/default.nix` exposes `loom-clippy`, `loom-nextest`, `tmux-mcp-clippy`, `tmux-mcp-nextest` checks
-  [verify](../tests/profiles/build-package.sh#test_consumers_migrated)
+  [check](../tests/profiles/build-package.sh#test_consumers_migrated)
 
 ## Out of Scope
 
