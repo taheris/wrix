@@ -22,6 +22,7 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
+loom-test-support = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 

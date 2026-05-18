@@ -1691,6 +1691,7 @@ dependencies = [
  "loom-driver",
  "loom-events",
  "loom-render",
+ "loom-test-support",
  "loom-workflow",
  "nix",
  "proc-macro2",
@@ -1710,6 +1711,7 @@ dependencies = [
  "displaydoc",
  "loom-driver",
  "loom-events",
+ "loom-test-support",
  "nix",
  "proptest",
  "serde",
@@ -1730,6 +1732,7 @@ dependencies = [
  "gix",
  "loom-events",
  "loom-render",
+ "loom-test-support",
  "proptest",
  "pulldown-cmark",
  "rusqlite",
@@ -1783,6 +1786,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "loom-test-support"
+version = "0.1.0"
+
+[[package]]
 name = "loom-workflow"
 version = "0.1.0"
 dependencies = [
@@ -1793,6 +1800,7 @@ dependencies = [
  "loom-events",
  "loom-render",
  "loom-templates",
+ "loom-test-support",
  "pulldown-cmark",
  "serde",
  "serde_json",

@@ -13,6 +13,7 @@
 
 use loom_driver::identifier::{MoleculeId, SpecLabel};
 use loom_driver::state::{ActiveMolecule, StateDb};
+use loom_test_support::CI_PROPTEST_CASES;
 use proptest::prelude::*;
 
 /// Acceptable label characters: ASCII letters, digits, dash, underscore.
@@ -59,7 +60,7 @@ fn schema_intact(db_path: &std::path::Path) -> bool {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(32))]
+    #![proptest_config(ProptestConfig::with_cases(CI_PROPTEST_CASES))]
 
     /// Arbitrary spec-file content never panics rebuild and never corrupts
     /// the schema: after `rebuild`, every required table still exists and

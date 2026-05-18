@@ -13,6 +13,7 @@ use loom_agent::claude::messages::ClaudeMessage;
 use loom_agent::claude::parser::ClaudeParser;
 use loom_agent::pi::parser::PiParser;
 use loom_driver::agent::{LineParse, MAX_LINE_BYTES, ProtocolError};
+use loom_test_support::CI_PROPTEST_CASES;
 use proptest::prelude::*;
 
 fn pi_parser() -> PiParser {
@@ -41,7 +42,7 @@ fn max_line_bytes_is_ten_megabytes() {
 // ----------------------------------------------------------------------------
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(32))]
+    #![proptest_config(ProptestConfig::with_cases(CI_PROPTEST_CASES))]
 
     #[test]
     fn jsonl_arbitrary_bytes_never_panic(input in ".{0,512}") {
@@ -83,7 +84,7 @@ fn pi_unknown_type() -> impl Strategy<Value = String> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(32))]
+    #![proptest_config(ProptestConfig::with_cases(CI_PROPTEST_CASES))]
 
     #[test]
     fn pi_encode_prompt_round_trips(msg in ".{0,128}") {
@@ -151,7 +152,7 @@ fn claude_unknown_type() -> impl Strategy<Value = String> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(32))]
+    #![proptest_config(ProptestConfig::with_cases(CI_PROPTEST_CASES))]
 
     #[test]
     fn claude_system_round_trips(
