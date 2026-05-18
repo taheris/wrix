@@ -1763,7 +1763,9 @@ version = "0.1.0"
 dependencies = [
  "displaydoc",
  "loom-events",
+ "pulldown-cmark",
  "serde",
+ "tempfile",
  "thiserror",
 ]
 

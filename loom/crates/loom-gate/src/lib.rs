@@ -24,7 +24,7 @@ pub mod dispatch;
 pub mod integrity;
 pub mod runner;
 
-pub use annotation::{Annotation, Tier};
+pub use annotation::{Annotation, Criterion, ParsedSpecs, Tier};
 pub use cache::{CacheRow, Verdict};
 pub use dispatch::VerifierVerdict;
 pub use integrity::IntegrityFinding;

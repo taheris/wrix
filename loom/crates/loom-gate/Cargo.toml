@@ -13,8 +13,12 @@ publish.workspace = true
 [dependencies]
 displaydoc = { workspace = true }
 loom-events = { workspace = true }
+pulldown-cmark = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true
