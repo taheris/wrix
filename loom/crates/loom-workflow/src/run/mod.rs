@@ -20,9 +20,10 @@
 //!    never closes a dispatched bead (closure is the agent's job per the
 //!    verdict-gate `bd-closed` observable);
 //! 6. on molecule completion (no more ready beads) execs the FR1
-//!    handoff: `loom check --tree` then `loom review --tree` — continuous
-//!    mode only. The outer loop then re-polls `bd ready` and iterates
-//!    on any newly-ready fix-up beads, bounded by `[loop] max_iterations`.
+//!    handoff: `loom gate verify --tree` then `loom gate review --tree`
+//!    — continuous mode only. The outer loop then re-polls `bd ready`
+//!    and iterates on any newly-ready fix-up beads, bounded by
+//!    `[loop] max_iterations`.
 //!
 //! `--parallel N > 1` (worktree parallelism) lives in [`parallel`]. The
 //! sequential and parallel paths share the [`AgentOutcome`] / retry vocabulary

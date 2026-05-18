@@ -31,7 +31,11 @@ fn mutating_subcommands_refuse_with_loom_inside_set() {
         &["use", "loom-harness"],
         &["plan", "-n", "tmp"],
         &["run", "--once"],
-        &["check"],
+        // `gate audit` triggers an LLM rubric path that spawns containers,
+        // so it falls under the nested-loom guard. The deterministic
+        // `gate` paths (bare status, `verify` / `check` / `test` /
+        // `system`) are read-only and tested in the bypass case below.
+        &["gate", "audit"],
         &["msg"],
         &["todo"],
     ] {
@@ -63,7 +67,7 @@ fn readonly_subcommands_run_under_loom_inside_set() {
     drop(db);
 
     let loom_bin = env!("CARGO_BIN_EXE_loom");
-    for sub in [&["status"][..], &["logs"], &["spec"]] {
+    for sub in [&["status"][..], &["logs"], &["spec"], &["gate"]] {
         let out = Command::new(loom_bin)
             .arg("--workspace")
             .arg(workspace)

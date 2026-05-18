@@ -758,8 +758,8 @@ mod tests {
     /// The review prompt must instruct the reviewer to walk
     /// `docs/style-rules.md` rule by rule and cite rule id + file/line for
     /// each violation. This is the load-bearing surface for style-rule
-    /// conformance — `loom check`'s deterministic audits cannot enforce the
-    /// prose rules, so the LLM-judged rubric is the only line of defence.
+    /// conformance — `loom gate verify`'s deterministic audits cannot enforce
+    /// the prose rules, so the LLM-judged rubric is the only line of defence.
     #[tokio::test]
     async fn build_review_prompt_includes_style_rule_conformance_walkthrough() {
         let dir = tempfile::tempdir().unwrap();

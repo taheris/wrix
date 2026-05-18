@@ -37,7 +37,7 @@ runtime state lives in the session and `SpawnConfig`; the backend type
 parameter alone carries dispatch. No instances, no constructor.
 
 The backend is resolved **per phase** from config, not once at startup.
-Each workflow command (plan, todo, run, check, msg) independently selects
+Each workflow command (plan, todo, run, gate, msg) independently selects
 its backend + model. The binary crate exposes a single `dispatch`
 function that matches on the per-phase choice and forwards to a generic
 helper parameterized by backend type. The workflow engine receives that
@@ -45,7 +45,7 @@ helper as a parameter and never touches concrete backend types — static
 dispatch is preserved inside each match arm.
 
 **Per-phase config example:** `loom todo` uses a cheap model via pi,
-while `loom review` uses claude directly:
+while `loom gate review` uses claude directly:
 
 ```toml
 [phase.default]

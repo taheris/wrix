@@ -207,7 +207,7 @@ impl GitClient {
 
     /// Push the current branch to its configured remote (`git push`).
     ///
-    /// Used by the push gate (`loom check`). Routed through this client so
+    /// Used by the push gate (`loom gate verify`). Routed through this client so
     /// `Command::new("git")` stays inside `loom-driver/src/git/`, satisfying
     /// the encapsulation rule asserted by `loom/crates/loom/tests/style.rs`.
     pub async fn push(&self) -> Result<(), GitError> {

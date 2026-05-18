@@ -7,11 +7,11 @@ policy, and snapshot-test contract for the Loom workflow.
 
 Loom's agent-bearing workflow phase prompts (`plan`, `todo`, `run`,
 `review`, `msg`) are rendered from Askama templates compiled into
-the binary. `loom check` is deterministic and renders no template.
-The template surface is its own concern: which partials exist,
-which template renders which partial in which phase, which context
-struct each template binds to, and what the snapshot gate looks
-like. [loom-harness.md](loom-harness.md) owns the crate that
+the binary. `loom gate verify` is deterministic and renders no
+template. The template surface is its own concern: which partials
+exist, which template renders which partial in which phase, which
+context struct each template binds to, and what the snapshot gate
+looks like. [loom-harness.md](loom-harness.md) owns the crate that
 builds these templates and the runtime that consumes rendered
 prompts; this spec owns the prompt surface itself.
 
@@ -25,13 +25,13 @@ One template per phase, plus per-mode variants:
 - `todo_new.md`, `todo_update.md`
 - `run.md`, `review.md`, `msg.md`
 
-`loom check` is deterministic — it runs verifiers, audits, and
-linters without rendering any agent prompt — so it has no template.
-`loom review` is the LLM-judged counterpart and has its own
-template, distinct from `run.md` because the review session has
-different inputs (diff, bead intent, sibling diffs, prior `loom
-check` results) and a rubric-walk objective rather than an
-implement-the-bead objective.
+`loom gate verify` is deterministic — it runs verifiers, audits,
+and linters without rendering any agent prompt — so it has no
+template. `loom gate review` is the LLM-judged counterpart and
+has its own template, distinct from `run.md` because the review
+session has different inputs (diff, bead intent, sibling diffs,
+prior `loom gate verify` results) and a rubric-walk objective
+rather than an implement-the-bead objective.
 
 Each template has a matching `#[derive(Template)]` context struct
 in the same crate. The Askama build verifies every variable

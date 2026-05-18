@@ -23,9 +23,9 @@ communication, backend selection) lives in
 [loom-agent.md](loom-agent.md). The gate (rubric, invariants, lanes,
 stages) lives in [loom-gate.md](loom-gate.md). Workflow
 semantics — what each `loom plan` / `loom todo` / `loom run` /
-`loom check` / `loom review` / `loom msg` command does — are
-defined in this spec's Functional section and the Msg Modes /
-Verdict Gate sections below.
+`loom gate` / `loom msg` command does — are defined in this
+spec's Functional section and the Msg Modes / Verdict Gate sections
+below.
 
 ## Architecture
 
@@ -245,11 +245,12 @@ collide briefly at merge-back and push:
 
 - Concurrent `git merge` is serialized by git's own `index.lock`; the
   losing process surfaces a clear error and retries.
-- Concurrent `git push` from `loom check` produces non-fast-forward on
-  the second push; `check`'s push gate re-fetches and retries.
+- Concurrent `git push` from `loom gate verify` produces non-fast-forward
+  on the second push; the gate's push gate re-fetches and retries.
 
 These are accepted, recoverable failure modes — not silent corruption —
-which is why a workspace-wide lock is *not* required for `run`/`check`.
+which is why a workspace-wide lock is *not* required for `run` / `gate
+verify`.
 
 ### Nested-Loom Guard
 
@@ -481,12 +482,12 @@ mental model already in muscle memory.
 
 After every agent phase ends, the verdict gate evaluates the result
 before the bead's state can advance. The gate runs in two passes:
-`loom check` (deterministic — mechanical signals, `[verify]` scripts,
-style linters) followed by `loom review` (LLM-judged rubric). The
-review rubric, inputs, and concerns are defined in
-[loom-gate.md](loom-gate.md); this section retains the execution
-layer — the decision table, recovery mechanics, markers, labels, and
-infra-failure handling.
+`loom gate verify` (deterministic — mechanical signals, `[check]` /
+`[test]` / `[system]` verifiers, style linters) followed by `loom
+gate review` (LLM-judged rubric). The review rubric, inputs, and
+concerns are defined in [loom-gate.md](loom-gate.md); this section
+retains the execution layer — the decision table, recovery mechanics,
+markers, labels, and infra-failure handling.
 
 Driver-detected failures enter a bounded recovery loop; agent
 self-reports go straight to human resolution via `loom msg`.
@@ -1051,7 +1052,7 @@ session — joined by a hook script that re-injects both after compaction.
 
 `<key>` is the session concurrency unit, matching the existing locks:
 spec **label** for `loom plan -n` / `loom plan -u` / `loom todo`; **bead
-ID** for `loom run` / `loom check` / `loom msg`. Two parallel run
+ID** for `loom run` / `loom gate` / `loom msg`. Two parallel run
 workers on different beads of the same molecule get independent scratch
 directories.
 
@@ -1396,29 +1397,32 @@ Criteria.
   [verify](tests/loom-test.sh::test_run_profile_selection)
 - `loom run` retries failed beads with previous error context
   [verify](tests/loom-test.sh::test_run_retry_with_context)
-- On molecule completion `loom run` execs `loom check --tree`
-      followed by `loom review --tree` (the `--tree` scope is
+- On molecule completion `loom run` execs `loom gate verify --tree`
+      followed by `loom gate review --tree` (the `--tree` scope is
       unconditional — the handoff does not branch on molecule size)
   [verify](tests/loom-test.sh::test_run_execs_check_then_review_tree)
-- `loom run`'s outer loop, after the `loom review --tree` handoff
-      returns and the push gate has not yet fired clean, re-polls
-      `bd ready` and continues processing any newly-ready fix-up
-      beads (i.e., fix-ups not labelled `loom:blocked` /
+- `loom run`'s outer loop, after the `loom gate review --tree`
+      handoff returns and the push gate has not yet fired clean,
+      re-polls `bd ready` and continues processing any newly-ready
+      fix-up beads (i.e., fix-ups not labelled `loom:blocked` /
       `loom:clarify`). The outer loop is bounded by
       `[loop] max_iterations` (default 10) and exits cleanly on push
       success, a fully-stuck molecule, or counter exhaustion
   [verify](tests/loom-test.sh::test_run_outer_loop_iterates_on_fixups)
-- `loom check` implements push gate (push only on clean completion)
+- `loom gate verify` implements push gate (push only on clean
+      completion)
   [verify](tests/loom-test.sh::test_review_push_gate)
-- Push gate refuses when the `--tree`-scoped `loom review` flags
-      a concern (same blocking behavior as a default-scope flag — no
-      advisory tier)
+- Push gate refuses when the `--tree`-scoped `loom gate review`
+      flags a concern (same blocking behavior as a default-scope
+      flag — no advisory tier)
   [verify](tests/loom-test.sh::test_push_gate_refuses_on_tree_review_flag)
-- `loom check` auto-iterates on fix-up beads (up to max iterations)
+- `loom gate verify` auto-iterates on fix-up beads (up to max
+      iterations)
   [verify](tests/loom-test.sh::test_review_auto_iterate)
-- `loom check surface` hard-fails when the binary's surface drifts
-      from FR1 (command set, flag set, removed surface, grouping order)
-      and exits 0 when spec and binary agree
+- The surface-conformance walk hard-fails when the binary's surface
+      drifts from FR1 (command set, flag set, removed surface,
+      grouping order) and exits 0 when spec and binary agree.
+      Wired as a `[check]`-tier verifier under `loom gate check`
   [verify](tests/loom-test.sh::test_check_surface_detects_drift)
 - Bare `loom` (no args) renders the same Workflow / Inspection /
       State grouped sections (in spec order) as `loom --help`,
@@ -1477,13 +1481,13 @@ Criteria.
 
 ### Verdict gate
 
-- After every agent phase, `loom check` evaluates the result against
-      the verdict-gate decision table; mechanical signals (marker,
-      bd-closed, diff) make no LLM call
+- After every agent phase, `loom gate verify` evaluates the result
+      against the verdict-gate decision table; mechanical signals
+      (marker, bd-closed, diff) make no LLM call
   [verify](tests/loom-test.sh::test_verdict_gate_mechanical_signals)
 - `phase_verdict::decide()` is invoked from `loom run`'s per-bead
-      exit AND from `loom review`'s phase-end; no production site
-      inlines ad-hoc marker → outcome classification (FR12)
+      exit AND from `loom gate review`'s phase-end; no production
+      site inlines ad-hoc marker → outcome classification (FR12)
   [verify](tests/loom-test.sh::test_phase_verdict_decide_called_from_production)
 - `loom run` never invokes `bd close` on a bead it dispatched;
       closure is the agent's responsibility and the `bd-closed` column
@@ -1555,11 +1559,11 @@ Criteria.
       `loom:blocked` with cause `unbonded-origin` to surface the
       upstream inconsistency
   [verify](tests/loom-test.sh::test_fixup_refuses_unbonded_origin)
-- `loom check` push gate walks `bd mol progress <id>` and refuses
-      to push when any bead in the molecule — including bonded fix-up
-      beads — carries `loom:blocked` or `loom:clarify`; an orphan
-      fix-up bead would slip past this check, so the bond invariant
-      is what makes the gate sound
+- `loom gate verify` push gate walks `bd mol progress <id>` and
+      refuses to push when any bead in the molecule — including bonded
+      fix-up beads — carries `loom:blocked` or `loom:clarify`; an
+      orphan fix-up bead would slip past this check, so the bond
+      invariant is what makes the gate sound
   [verify](tests/loom-test.sh::test_push_gate_sees_fixup_beads)
 - Recovery iter ≥ max_iterations → applies `loom:blocked` with cause
       in `bd update --notes`
@@ -1579,8 +1583,8 @@ Criteria.
 - Infra-retry counter is driver-memory only; resets on a fresh
       `loom run` invocation; does not consume `[loop] max_iterations`
   [verify](tests/loom-test.sh::test_infra_retry_counter_separate)
-- `loom check` push gate refuses to push while any bead in the
-      molecule carries `loom:blocked` or `loom:clarify`
+- `loom gate verify` push gate refuses to push while any bead in
+      the molecule carries `loom:blocked` or `loom:clarify`
   [verify](tests/loom-test.sh::test_push_gate_refuses_unresolved)
 
 ### Auxiliary commands
@@ -1772,22 +1776,23 @@ Criteria.
      human resolution via `loom msg`). Under `--parallel N`, a
      clarify or block on one of the N concurrent beads does not
      cancel the others. On molecule completion, execs
-     `loom check --tree` then `loom review --tree` then fires the
-     push gate. The outer loop iterates over molecule passes
-     (initial pass + each verdict-gate-produced fix-up pass) bounded
-     by `[loop] max_iterations`.
-   - `loom check` — deterministic audits. Bare `loom check` runs
-     every audit; a positional argument selects one audit only:
-     `loom check criteria`, `loom check surface`. Scope flags
-     compose with both forms: `--bead <id>`, `--diff <range>`,
-     `--tree`. See [loom-gate.md](loom-gate.md) for audit
-     semantics; FR13 defines the `surface` audit dimensions.
-   - `loom review` — LLM-judged review rubric (conformance trace,
-     contract closure, style-rule conformance, verifier honesty, mock
-     discipline, invariant clashes). Scope flags: `--bead <id>`,
-     `--diff <range>`, `--tree`. Reads `loom check` results as input;
-     runs only after `loom check` passes the same scope. See
-     [loom-gate.md](loom-gate.md) for the rubric.
+     `loom gate verify --tree` then `loom gate review --tree` then
+     fires the push gate. The outer loop iterates over molecule
+     passes (initial pass + each verdict-gate-produced fix-up pass)
+     bounded by `[loop] max_iterations`.
+   - `loom gate` — quality gate (annotation-dispatched verifiers +
+     LLM rubric). Subcommands per [loom-gate.md](loom-gate.md)
+     Commands table: bare `loom gate` reads the status cache;
+     `loom gate audit` runs verify then review; `loom gate verify`
+     runs every `[check]` / `[test]` / `[system]` verifier; per-tier
+     subcommands (`loom gate check`, `loom gate test`,
+     `loom gate system`) run one tier in isolation;
+     `loom gate review` runs the LLM rubric;
+     `loom gate judge` / `loom gate rubric` run one lane each. All
+     subcommands accept `--files`, `--spec <label>`, a positional
+     `<selector>`, and the scope flags `--bead <id>` / `--diff
+     <range>` / `--tree`. The surface-conformance walk (FR13) ships
+     as a `[check]`-tier verifier dispatched by `loom gate check`.
    - `loom msg` — clarify resolution
 
    **Inspection** — read-only views over state and logs:
@@ -1813,13 +1818,14 @@ Criteria.
    of the surface contract (the surface audit flags reintroduction).
 
    **Removed surface.** The table below lists user-facing surface
-   explicitly removed from the binary. `loom check surface` parses it
-   and hard-fails if any listed command resurfaces as a subcommand of
-   `loom`.
+   explicitly removed from the binary. The surface-conformance walk
+   (registered under `loom gate check`) parses it and hard-fails if
+   any listed command resurfaces as a subcommand of `loom`.
 
    | Surface | Removed because |
    |---------|-----------------|
-   | `loom doctor` | replaced by `loom check` sub-audits |
+   | `loom doctor` | replaced by `loom gate <subcommand>` per-tier dispatch |
+   | `loom check` | renamed to `loom gate <subcommand>` per [loom-gate.md](loom-gate.md) |
    | `loom sync` | Askama-compiled templates make per-project sync unnecessary |
    | `loom tune` | Askama-compiled templates make per-project tune unnecessary |
 
@@ -1848,24 +1854,25 @@ Criteria.
    Configurable max retries per bead (default 2). After in-session retries
    exhaust, the phase ends; the verdict is delegated to the
    [Verdict Gate](#verdict-gate).
-8. **Verdict gate per phase** — `loom check` (deterministic) followed
-   by `loom review` (LLM) evaluates each phase's result before the
-   bead's state can advance. See [Verdict Gate](#verdict-gate) for the
-   execution layer (decision table, recovery mechanics, markers, labels)
-   and [loom-gate.md](loom-gate.md) for the review rubric.
-   Driver-detected gate failures enter a bounded recovery loop;
-   agent self-reports (`LOOM_BLOCKED` / `LOOM_CLARIFY`) escalate
+8. **Verdict gate per phase** — `loom gate verify` (deterministic)
+   followed by `loom gate review` (LLM) evaluates each phase's result
+   before the bead's state can advance. See [Verdict Gate](#verdict-gate)
+   for the execution layer (decision table, recovery mechanics,
+   markers, labels) and [loom-gate.md](loom-gate.md) for the review
+   rubric. Driver-detected gate failures enter a bounded recovery
+   loop; agent self-reports (`LOOM_BLOCKED` / `LOOM_CLARIFY`) escalate
    directly to the human via `loom msg`.
 9. **Push gate** — push fires only when every bead in the molecule
    has reached `[done]` (no `loom:blocked` or `loom:clarify`
-   outstanding) *and* the `--tree`-scoped `loom check` + `loom review`
-   from the molecule-completion handoff (FR1 above) have both passed
-   for the final outer-loop iteration. A tree-scope `loom review`
-   flag refuses the push, identically to a default-scope flag — there
-   is no advisory tier. Per FR1, auto-iteration on fix-up beads is
-   owned by `loom run`'s outer loop, bounded by `[loop]
-   max_iterations`; this requirement is the molecule-final condition
-   the outer loop drives toward, not a separate iteration mechanism.
+   outstanding) *and* the `--tree`-scoped `loom gate verify` +
+   `loom gate review` from the molecule-completion handoff (FR1
+   above) have both passed for the final outer-loop iteration. A
+   tree-scope `loom gate review` flag refuses the push, identically
+   to a default-scope flag — there is no advisory tier. Per FR1,
+   auto-iteration on fix-up beads is owned by `loom run`'s outer
+   loop, bounded by `[loop] max_iterations`; this requirement is the
+   molecule-final condition the outer loop drives toward, not a
+   separate iteration mechanism.
 10. **Beads via shared Dolt socket** — every container has the host's
     `wrapix-beads` Dolt server bind-mounted at
     `/workspace/.wrapix/dolt.sock`; in-container `bd` writes go straight to
@@ -1877,32 +1884,33 @@ Criteria.
 12. **Verdict-gate production wiring** — the verdict-gate decision
     function is the single source of truth for marker → outcome
     routing. Production MUST invoke it from `loom run`'s per-bead
-    exit and `loom review`'s phase-end; no site may inline ad-hoc
-    marker classification. The function is unit-tested in isolation
-    and also exercised through its production callers (live-path
-    coverage), per the trust-tier rules in
+    exit and `loom gate review`'s phase-end; no site may inline
+    ad-hoc marker classification. The function is unit-tested in
+    isolation and also exercised through its production callers
+    (live-path coverage), per the trust-tier rules in
     [docs/spec-conventions.md](../docs/spec-conventions.md).
-13. **Surface conformance** — `loom check surface` audits the
-    binary's user-facing surface against this spec, hard-failing on
-    any drift across four dimensions: (1) **Command set** — FR1's
-    commands ↔ the `Command` enum's variants; (2) **Flag set** —
-    flags documented in the spec's per-command tables (e.g. *Msg
-    Modes*, *Logs UX*, FR1 scope-flag lines) ↔ declared
-    `#[arg(...)]`; (3) **Removed surface** — the `Removed` table is
-    absent from the binary; (4) **Grouping order** — both
-    `loom --help` AND bare `loom` render `Workflow:` / `Inspection:`
-    / `State:` in FR1's declared order. Help-text wording is *not* a
-    dimension — CLI-1 style is enforced by `loom review`'s style-rule
-    walk. The audit exists because an earlier multi-bead molecule
-    closed despite cross-component drift that the success-criteria
-    walk did not catch.
+13. **Surface conformance** — the surface-conformance walk
+    (registered as a `[check]`-tier verifier dispatched by `loom gate
+    check`) audits the binary's user-facing surface against this
+    spec, hard-failing on any drift across four dimensions:
+    (1) **Command set** — FR1's commands ↔ the `Command` enum's
+    variants; (2) **Flag set** — flags documented in the spec's
+    per-command tables (e.g. *Msg Modes*, *Logs UX*, FR1 scope-flag
+    lines) ↔ declared `#[arg(...)]`; (3) **Removed surface** — the
+    `Removed` table is absent from the binary; (4) **Grouping
+    order** — both `loom --help` AND bare `loom` render `Workflow:`
+    / `Inspection:` / `State:` in FR1's declared order. Help-text
+    wording is *not* a dimension — CLI-1 style is enforced by
+    `loom gate review`'s style-rule walk. The audit exists because
+    an earlier multi-bead molecule closed despite cross-component
+    drift that the success-criteria walk did not catch.
 14. **Verifier-driven status; no checkboxes in spec markdown.**
-    Success Criteria bullets carry their `[verify]` / `[judge]`
-    annotation but **no `[ ]` / `[x]` prefix**. Status is a property
-    of running the verifier against the current code-spec pair, not
-    a value stored in the spec. `loom check criteria` enumerates
-    every annotation in scope and reports per-criterion
-    `pass | fail | stubbed | missing-dispatcher` from running the
+    Success Criteria bullets carry their `[check]` / `[test]` /
+    `[system]` / `[judge]` annotation but **no `[ ]` / `[x]`
+    prefix**. Status is a property of running the verifier against
+    the current code-spec pair, not a value stored in the spec.
+    `loom gate verify` enumerates every annotation in scope and
+    reports per-criterion `pass | fail | skipped` from running the
     annotated verifier; output is live, not cached. Past passes do
     not grant immunity from re-evaluation. This rules out the
     failure class where a checkbox is `[x]` while the verifier

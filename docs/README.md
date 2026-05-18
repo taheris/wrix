@@ -9,7 +9,7 @@ development. See `docs/architecture.md` for system design.
   trust tiers, standard section structure. Pinned by `loom plan` sessions.
 - [`docs/style-rules.md`](style-rules.md) — code-style and test-quality rules
   organized by rule family (SH-, NX-, DOC-, GIT-, TST-, RS-, COM-, CLI-).
-  Pinned by `loom run` and `loom check` sessions.
+  Pinned by `loom run` and `loom gate review` sessions.
 
 ## Specs
 
@@ -38,7 +38,7 @@ pin — keep it current when specs land or retire.
 | [loom-harness.md](../specs/loom-harness.md) | [`loom/`](../loom/) | wx-3hhwq | Loom platform: crate structure, workspace lints, process architecture, state store, command set |
 | [loom-agent.md](../specs/loom-agent.md) | [`loom/crates/loom-agent/`](../loom/crates/loom-agent/) | wx-pkht8 | Agent backend abstraction: pi-mono RPC + Claude Code stream-json |
 | [loom-templates.md](../specs/loom-templates.md) | [`loom/crates/loom-templates/`](../loom/crates/loom-templates/) | wx-z28qe | Askama templates, partials inventory, per-phase pinning policy |
-| [loom-gate.md](../specs/loom-gate.md) | [`loom/crates/loom-workflow/src/check/`](../loom/crates/loom-workflow/src/check/) | — | Quality gate: conformance + style + test-quality dimensions, plan/per-diff/standing stages, `loom check` (deterministic) + `loom review` (LLM judge) |
+| [loom-gate.md](../specs/loom-gate.md) | [`loom/crates/loom-gate/`](../loom/crates/loom-gate/) | — | Quality gate: conformance + style + test-quality dimensions, plan/per-diff/standing stages, `loom gate verify` (deterministic) + `loom gate review` (LLM judge) |
 | [loom-tests.md](../specs/loom-tests.md) | [`tests/loom/`](../tests/loom/) | wx-lfuuh | Test strategy: unit, integration, system tests for Loom |
 
 ## Terminology Index

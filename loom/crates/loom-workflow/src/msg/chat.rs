@@ -7,7 +7,7 @@
 //! attaches directly to the user's terminal as a real REPL.
 //!
 //! This deliberately bypasses the `dispatch` / pi-mono / claude
-//! stream-json surface used by `loom run` / `loom check` / `loom todo`.
+//! stream-json surface used by `loom run` / `loom gate` / `loom todo`.
 //! Those backends pipe stdio so the driver can read events and write
 //! the JSONL log — fine for non-interactive sessions, fatal for an
 //! interactive chat (no readline, no color, no real REPL).

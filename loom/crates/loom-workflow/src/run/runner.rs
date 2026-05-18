@@ -44,11 +44,11 @@ pub struct RunSummary {
     pub beads_blocked: u32,
     /// `bd ready` returned no candidate, signalling the molecule is complete.
     pub molecule_complete: bool,
-    /// `loom review` was exec'd (continuous mode + molecule complete).
+    /// `loom gate review` was exec'd (continuous mode + molecule complete).
     pub execed_review: bool,
     /// Outer-loop passes consumed (each pass = one molecule-completion
-    /// handoff invoking `loom check --tree` + `loom review --tree`). Bounded
-    /// by `[loop] max_iterations` per FR1.
+    /// handoff invoking `loom gate verify --tree` + `loom gate review
+    /// --tree`). Bounded by `[loop] max_iterations` per FR1.
     pub outer_iterations: u32,
 }
 
@@ -64,8 +64,8 @@ pub struct RunSummary {
 /// - `apply_clarify` → `BdClient::update --add-label loom:clarify --notes <q>`
 /// - `apply_blocked` → `BdClient::update --add-label loom:blocked --notes <cause>`
 /// - `exec_review` → `tokio::process::Command` invocations of
-///   `loom check --tree` then `loom review --tree` (FR1 molecule-completion
-///   handoff).
+///   `loom gate verify --tree` then `loom gate review --tree` (FR1
+///   molecule-completion handoff).
 ///
 /// **No `close_bead`.** `bd close` is the agent's responsibility, not the
 /// driver's, per `specs/loom-harness.md`'s verdict-gate table where
@@ -108,10 +108,11 @@ pub trait AgentLoopController: Send {
         error: &str,
     ) -> impl std::future::Future<Output = Result<(), RunError>> + Send;
 
-    /// Molecule-completion handoff (FR1). Invokes `loom check --tree`
-    /// followed by `loom review --tree`; both are unconditional and the
-    /// non-zero exit codes that signal concerns do not bubble up as errors
-    /// here — they drive fix-up beads onto the next outer-loop pass.
+    /// Molecule-completion handoff (FR1). Invokes `loom gate verify
+    /// --tree` followed by `loom gate review --tree`; both are
+    /// unconditional and the non-zero exit codes that signal concerns
+    /// do not bubble up as errors here — they drive fix-up beads onto
+    /// the next outer-loop pass.
     fn exec_review(&mut self) -> impl std::future::Future<Output = Result<(), RunError>> + Send;
 
     /// Emit a driver-side event into the controller's event sink. The
@@ -204,8 +205,8 @@ pub async fn run_loop<C: AgentLoopController>(
         }
 
         // Stall: a prior handoff produced no fix-ups → molecule is either
-        // fully done (push fired clean inside `loom check`) or fully stuck
-        // (remaining work parked under `loom:blocked` / `loom:clarify`).
+        // fully done (push fired clean inside `loom gate verify`) or fully
+        // stuck (remaining work parked under `loom:blocked` / `loom:clarify`).
         if beads_this_pass == 0 && summary.execed_review {
             info!(
                 outer_iterations = summary.outer_iterations,

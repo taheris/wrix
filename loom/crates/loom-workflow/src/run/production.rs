@@ -247,18 +247,20 @@ where
     }
 
     async fn exec_review(&mut self) -> Result<(), RunError> {
-        // Release the spec lock before spawning the child — `loom check` and
-        // `loom review` acquire the same lock and would otherwise time out
-        // behind us.
+        // Release the spec lock before spawning the child — `loom gate
+        // verify` and `loom gate review` acquire the same lock and would
+        // otherwise time out behind us.
         self.lock.take();
-        // Molecule-completion handoff (FR1): unconditional `--tree` scope on
-        // both, check first then review. Non-zero exit codes are NOT fatal
-        // to `run_loop` — they signal concerns that the outer loop drives
-        // toward via fix-up beads on the next pass. Spawn failures (the
-        // child never started) DO surface as `RunError::Io`.
-        let check_status = Command::new(&self.loom_bin)
+        // Molecule-completion handoff (FR1): unconditional `--tree` scope
+        // on both, deterministic verify first then LLM review. Non-zero
+        // exit codes are NOT fatal to `run_loop` — they signal concerns
+        // that the outer loop drives toward via fix-up beads on the next
+        // pass. Spawn failures (the child never started) DO surface as
+        // `RunError::Io`.
+        let verify_status = Command::new(&self.loom_bin)
             .current_dir(&self.workspace)
-            .arg("check")
+            .arg("gate")
+            .arg("verify")
             .arg("--tree")
             .arg("-s")
             .arg(self.label.as_str())
@@ -266,11 +268,12 @@ where
             .await?;
         info!(
             spec = %self.label.as_str(),
-            exit_code = check_status.code().unwrap_or(-1),
-            "loom run: molecule handoff — loom check --tree finished",
+            exit_code = verify_status.code().unwrap_or(-1),
+            "loom run: molecule handoff — loom gate verify --tree finished",
         );
         let review_status = Command::new(&self.loom_bin)
             .current_dir(&self.workspace)
+            .arg("gate")
             .arg("review")
             .arg("--tree")
             .arg("-s")
@@ -280,7 +283,7 @@ where
         info!(
             spec = %self.label.as_str(),
             exit_code = review_status.code().unwrap_or(-1),
-            "loom run: molecule handoff — loom review --tree finished",
+            "loom run: molecule handoff — loom gate review --tree finished",
         );
         Ok(())
     }
@@ -290,12 +293,13 @@ where
 /// [`AgentOutcome`]. Marker → outcome routing goes through the canonical
 /// [`crate::review::decide`] gate function (FR12 — single source of truth);
 /// `bd_closed` / `diff_empty` / verify / review observables are not queried
-/// at the per-bead exit (they belong to `loom check`'s deterministic pass),
-/// so neutral inputs are passed and the gate's output reduces to marker-only
-/// routing. A defensive guard for `LOOM_COMPLETE`/`LOOM_NOOP` paired with a
-/// non-zero exit code predates the gate call because the spec's decision
-/// table does not consider exit code: a marker that disagrees with the
-/// kernel's view is surfaced as a failure rather than trusted blindly.
+/// at the per-bead exit (they belong to `loom gate verify`'s deterministic
+/// pass), so neutral inputs are passed and the gate's output reduces to
+/// marker-only routing. A defensive guard for `LOOM_COMPLETE`/`LOOM_NOOP`
+/// paired with a non-zero exit code predates the gate call because the
+/// spec's decision table does not consider exit code: a marker that
+/// disagrees with the kernel's view is surfaced as a failure rather than
+/// trusted blindly.
 pub fn classify_session(session: SessionResult, marker: Option<ExitSignal>) -> AgentOutcome {
     match session {
         SessionResult::PreflightFailed { error } => AgentOutcome::InfraPreflight { error },
@@ -321,9 +325,9 @@ pub fn classify_session(session: SessionResult, marker: Option<ExitSignal>) -> A
 
 /// Inputs threaded into [`decide`] when classifying the per-bead exit. The
 /// run-phase classifier only knows the marker; bd-closed, diff, verify, and
-/// review live in `loom check`'s downstream pass. Passing neutral defaults
-/// reduces the gate to marker-only routing — the spec table rows for
-/// `COMPLETE`/`NOOP` collapse to `Done` and `None` to `SwallowedMarker`,
+/// review live in `loom gate verify`'s downstream pass. Passing neutral
+/// defaults reduces the gate to marker-only routing — the spec table rows
+/// for `COMPLETE`/`NOOP` collapse to `Done` and `None` to `SwallowedMarker`,
 /// which is what the in-session classifier needs.
 fn neutral_gate_inputs() -> GateInputs {
     GateInputs {
@@ -773,13 +777,14 @@ mod tests {
             .expect("lock must be reacquirable after exec_review");
     }
 
-    /// FR1: the molecule-completion handoff invokes `loom check --tree`
-    /// THEN `loom review --tree` — both unconditionally `--tree`-scoped,
-    /// in that order, and both with the spec label threaded through `-s`.
-    /// The stub script records each invocation so the test can assert on
-    /// the exact argv sequence the production controller emits.
+    /// FR1: the molecule-completion handoff invokes `loom gate verify
+    /// --tree` THEN `loom gate review --tree` — both unconditionally
+    /// `--tree`-scoped, in that order, and both with the spec label
+    /// threaded through `-s`. The stub script records each invocation
+    /// so the test can assert on the exact argv sequence the production
+    /// controller emits.
     #[tokio::test(flavor = "multi_thread")]
-    async fn exec_review_invokes_loom_check_tree_then_loom_review_tree() {
+    async fn exec_review_invokes_gate_verify_then_gate_review_tree() {
         use std::os::unix::fs::PermissionsExt;
 
         let dir = tempfile::tempdir().expect("tempdir");
@@ -823,39 +828,40 @@ mod tests {
         assert_eq!(
             lines.len(),
             2,
-            "exec_review must spawn exactly two children (check then review): {recorded:?}",
+            "exec_review must spawn exactly two children (gate verify then gate review): {recorded:?}",
         );
         assert_eq!(
-            lines[0], "check --tree -s alpha",
-            "first child must be `loom check --tree -s <label>`",
+            lines[0], "gate verify --tree -s alpha",
+            "first child must be `loom gate verify --tree -s <label>`",
         );
         assert_eq!(
-            lines[1], "review --tree -s alpha",
-            "second child must be `loom review --tree -s <label>`",
+            lines[1], "gate review --tree -s alpha",
+            "second child must be `loom gate review --tree -s <label>`",
         );
     }
 
-    /// FR1: non-zero exit from `loom check` MUST NOT abort the handoff —
-    /// it signals concerns that the outer loop drives toward via fix-up
-    /// beads on the next pass. The production controller still spawns
-    /// `loom review --tree` after check fails, and `exec_review` returns
-    /// `Ok` so `run_loop` can re-poll `bd ready` rather than tearing
-    /// down the whole `loom run`.
+    /// FR1: non-zero exit from `loom gate verify` MUST NOT abort the
+    /// handoff — it signals concerns that the outer loop drives toward
+    /// via fix-up beads on the next pass. The production controller
+    /// still spawns `loom gate review --tree` after verify fails, and
+    /// `exec_review` returns `Ok` so `run_loop` can re-poll `bd ready`
+    /// rather than tearing down the whole `loom run`.
     #[tokio::test(flavor = "multi_thread")]
-    async fn exec_review_continues_to_review_when_check_exits_nonzero() {
+    async fn exec_review_continues_to_review_when_verify_exits_nonzero() {
         use std::os::unix::fs::PermissionsExt;
 
         let dir = tempfile::tempdir().expect("tempdir");
         let manifest = write_manifest(dir.path());
         let label = SpecLabel::new("beta");
 
-        // Stub: `check` exits 1 (concerns), every other invocation exits 0.
-        // First argv token selects the branch.
+        // Stub: `gate verify` exits 1 (concerns), every other invocation
+        // exits 0. The first two argv tokens (`gate verify`) select the
+        // branch.
         let argv_log = dir.path().join("argv.log");
         let stub = dir.path().join("loom-stub.sh");
         let stub_body = format!(
             "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {log}\n\
-             case \"$1\" in\n  check) exit 1 ;;\n  *) exit 0 ;;\nesac\n",
+             case \"$1 $2\" in\n  'gate verify') exit 1 ;;\n  *) exit 0 ;;\nesac\n",
             log = argv_log.to_string_lossy(),
         );
         std::fs::write(&stub, stub_body).unwrap();
@@ -883,14 +889,14 @@ mod tests {
         controller
             .exec_review()
             .await
-            .expect("non-zero check exit must not produce RunError");
+            .expect("non-zero verify exit must not produce RunError");
 
         let recorded = std::fs::read_to_string(&argv_log).expect("argv log readable");
         let lines: Vec<&str> = recorded.lines().collect();
         assert_eq!(
             lines,
-            vec!["check --tree -s beta", "review --tree -s beta"],
-            "review must still run even when check signals concerns",
+            vec!["gate verify --tree -s beta", "gate review --tree -s beta"],
+            "review must still run even when verify signals concerns",
         );
     }
 }

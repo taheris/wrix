@@ -11,7 +11,7 @@
 //!   `SessionStart[matcher: "compact"]`.
 //!
 //! `<key>` is the spec label for `loom plan` / `loom todo` and the bead
-//! id for `loom run` / `loom check`. Two parallel `loom run` workers on
+//! id for `loom run` / `loom gate`. Two parallel `loom run` workers on
 //! different beads of the same molecule get independent dirs.
 //!
 //! Cleanup runs on every exit path: [`Drop`] removes the directory
@@ -33,7 +33,7 @@ const SCRATCH_SUBDIR: &str = ".wrapix/loom/scratch";
 /// Resolve the per-session scratch-dir key for `phase`. Single source of
 /// truth for the spec-label-vs-bead-id choice documented in
 /// `specs/loom-harness.md`: spec label for `loom plan` / `loom todo`,
-/// bead id for `loom run` / `loom check` / `loom msg`. `loom check`
+/// bead id for `loom run` / `loom gate` / `loom msg`. `loom gate verify`
 /// currently runs once per molecule and has no bead at the call site —
 /// when `bead_id` is `None` for a bead-scoped phase the helper falls
 /// back to the spec label so the on-disk path stays deterministic.

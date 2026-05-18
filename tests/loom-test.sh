@@ -3733,14 +3733,14 @@ test_snapshots_no_crate_root_allows() {
 # rule-family-agnostic partials.
 #-----------------------------------------------------------------------------
 # test_run_execs_check_then_review_tree — FR1 molecule-completion handoff:
-# `loom run`'s outer loop invokes `loom check --tree -s <label>` first,
-# then `loom review --tree -s <label>`, both unconditionally. The check-
-# then-review ordering and the `--tree` scope on both invocations are
-# asserted by a recording stub script in the production test.
+# `loom run`'s outer loop invokes `loom gate verify --tree -s <label>` first,
+# then `loom gate review --tree -s <label>`, both unconditionally. The
+# verify-then-review ordering and the `--tree` scope on both invocations
+# are asserted by a recording stub script in the production test.
 #-----------------------------------------------------------------------------
 test_run_execs_check_then_review_tree() {
-    run_cargo_test run::production::tests::exec_review_invokes_loom_check_tree_then_loom_review_tree
-    run_cargo_test run::production::tests::exec_review_continues_to_review_when_check_exits_nonzero
+    run_cargo_test run::production::tests::exec_review_invokes_gate_verify_then_gate_review_tree
+    run_cargo_test run::production::tests::exec_review_continues_to_review_when_verify_exits_nonzero
 }
 
 #-----------------------------------------------------------------------------

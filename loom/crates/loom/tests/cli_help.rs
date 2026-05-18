@@ -72,7 +72,7 @@ fn loom_help_groups_workflow_inspection_state_in_order() {
     );
 
     let workflow_section = &out[workflow..inspection];
-    for sub in ["plan", "todo", "run", "check", "review", "msg"] {
+    for sub in ["plan", "todo", "run", "gate", "review", "msg"] {
         assert!(
             workflow_section.contains(&format!("  {sub} "))
                 || workflow_section.contains(&format!("  {sub}\n")),
@@ -98,12 +98,19 @@ fn loom_help_groups_workflow_inspection_state_in_order() {
         );
     }
 
-    // `doctor` was folded into `loom check <audit>` and must not
+    // `doctor` was folded into `loom gate <subcommand>` and must not
     // surface in the top-level help — its absence is part of the user
     // contract (spec § Functional #1).
     assert!(
         !out.contains("\n  doctor "),
         "`doctor` must not appear in `loom --help` output:\n{out}",
+    );
+    // `check` is the renamed-away subcommand: `loom gate check` is
+    // the new home for the [check]-tier dispatcher per
+    // specs/loom-gate.md. The top-level `loom check` must not exist.
+    assert!(
+        !out.contains("\n  check "),
+        "`check` must not appear at top level (renamed to `loom gate check`):\n{out}",
     );
 }
 
@@ -143,58 +150,79 @@ fn loom_run_help_snapshot() {
 }
 
 #[test]
-fn loom_check_help_snapshot() {
-    insta::assert_snapshot!(loom_help(&["check"]));
+fn loom_gate_help_snapshot() {
+    insta::assert_snapshot!(loom_help(&["gate"]));
 }
 
 #[test]
-fn loom_check_rejects_unknown_audit() {
+fn loom_gate_verify_help_snapshot() {
+    insta::assert_snapshot!(loom_help(&["gate", "verify"]));
+}
+
+#[test]
+fn loom_gate_check_help_snapshot() {
+    insta::assert_snapshot!(loom_help(&["gate", "check"]));
+}
+
+#[test]
+fn loom_gate_test_help_snapshot() {
+    insta::assert_snapshot!(loom_help(&["gate", "test"]));
+}
+
+#[test]
+fn loom_gate_system_help_snapshot() {
+    insta::assert_snapshot!(loom_help(&["gate", "system"]));
+}
+
+#[test]
+fn loom_gate_review_help_snapshot() {
+    insta::assert_snapshot!(loom_help(&["gate", "review"]));
+}
+
+#[test]
+fn loom_gate_audit_help_snapshot() {
+    insta::assert_snapshot!(loom_help(&["gate", "audit"]));
+}
+
+#[test]
+fn loom_gate_judge_help_snapshot() {
+    insta::assert_snapshot!(loom_help(&["gate", "judge"]));
+}
+
+#[test]
+fn loom_gate_rubric_help_snapshot() {
+    insta::assert_snapshot!(loom_help(&["gate", "rubric"]));
+}
+
+#[test]
+fn loom_check_is_removed_from_top_level() {
     let loom_bin = env!("CARGO_BIN_EXE_loom");
     let output = Command::new(loom_bin)
-        .args(["check", "bogus"])
+        .args(["check"])
         .env("COLUMNS", "100")
         .env("CLAP_TERM_WIDTH", "100")
         .output()
         .expect("spawn loom");
     assert!(
         !output.status.success(),
-        "loom check bogus must exit non-zero",
+        "top-level `loom check` must exit non-zero (renamed to `loom gate <subcommand>`)",
     );
     let stderr = String::from_utf8(output.stderr).expect("utf-8");
     assert!(
-        stderr.contains("invalid value 'bogus'"),
-        "stderr must name the invalid value, got: {stderr}",
-    );
-    for audit in ["criteria", "matrix", "surface"] {
-        assert!(
-            stderr.contains(audit),
-            "stderr must list `{audit}` as an allowed audit, got: {stderr}",
-        );
-    }
-}
-
-#[test]
-fn loom_check_rejects_legacy_check_flag() {
-    let loom_bin = env!("CARGO_BIN_EXE_loom");
-    let output = Command::new(loom_bin)
-        .args(["check", "--check=criteria"])
-        .env("COLUMNS", "100")
-        .env("CLAP_TERM_WIDTH", "100")
-        .output()
-        .expect("spawn loom");
-    assert!(
-        !output.status.success(),
-        "legacy `loom check --check=criteria` must exit non-zero",
+        stderr.contains("unrecognized subcommand")
+            || stderr.contains("invalid")
+            || stderr.contains("unrecognised"),
+        "stderr must explain the removal, got: {stderr}",
     );
 }
 
 #[test]
-fn loom_check_scope_flags_are_mutually_exclusive() {
+fn loom_gate_scope_flags_are_mutually_exclusive() {
     let loom_bin = env!("CARGO_BIN_EXE_loom");
     for args in [
-        vec!["check", "--bead", "wx-1", "--diff", "HEAD~1..HEAD"],
-        vec!["check", "--bead", "wx-1", "--tree"],
-        vec!["check", "--diff", "HEAD~1..HEAD", "--tree"],
+        vec!["gate", "verify", "--bead", "wx-1", "--diff", "HEAD~1..HEAD"],
+        vec!["gate", "check", "--bead", "wx-1", "--tree"],
+        vec!["gate", "test", "--diff", "HEAD~1..HEAD", "--tree"],
     ] {
         let output = Command::new(loom_bin)
             .args(&args)

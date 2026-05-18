@@ -35,24 +35,6 @@ repos:
         pass_filenames: true
         stages: [pre-commit]
 
-      # --no-run keeps the audit at ~ms (structural classification only);
-      # the live audit invokes every [verify] script and takes ~1 minute.
-      - id: loom-check-criteria
-        name: loom check criteria --no-run
-        entry: loom check criteria --no-run
-        language: system
-        pass_filenames: false
-        files: ^(specs/|tests/loom-test\.sh$|loom/crates/[^/]+/)
-        stages: [pre-commit]
-
-      - id: loom-check-matrix
-        name: loom check matrix
-        entry: loom check matrix
-        language: system
-        pass_filenames: false
-        files: ^(specs/loom-templates\.md$|loom/crates/loom-templates/templates/)
-        stages: [pre-commit]
-
       # Pre-push hooks (~10s)
       - id: nix-flake-check
         name: nix flake check

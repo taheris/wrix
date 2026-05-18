@@ -3,7 +3,7 @@
 //! Parses command-line arguments and dispatches to the workflow modules in
 //! `loom-workflow`. The set of subcommands matches the harness specification:
 //! `init`, `status`, `use`, `logs`, `spec`, plus the previously-implemented
-//! `run`, `check`, `msg`. There is no `sync` or `tune` — Askama compiled
+//! `run`, `gate`, `msg`. There is no `sync` or `tune` — Askama compiled
 //! templates make per-project sync unnecessary (see `specs/loom-harness.md`).
 
 use std::path::{Path, PathBuf};
@@ -25,7 +25,9 @@ use loom_driver::logging::{LogSink, sweep_retention_at};
 use loom_driver::profile_manifest::ProfileImageManifest;
 use loom_driver::scratch::resolve_scratch_key;
 use loom_driver::state::StateDb;
-use loom_workflow::check;
+use loom_gate::{
+    self, CacheRow, DispatchOptions, EmptyScope, StatusCache, Tier, Verdict, render_report, row_for,
+};
 use loom_workflow::msg::{
     DISMISS_NOTE, build_rows, compose_option_note, filter_msg_beads, kind_of, resolve_target,
     spec_label_of,
@@ -77,13 +79,56 @@ impl From<AgentBackendArg> for AgentKind {
     }
 }
 
-/// Positional sub-audit selector for `loom check <audit>`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-#[value(rename_all = "kebab-case")]
-enum CheckAudit {
-    Criteria,
-    Matrix,
-    Surface,
+#[derive(Debug, Subcommand)]
+enum GateSubcommand {
+    /// Run every deterministic verifier followed by the LLM rubric
+    /// (`verify` then `review`). The full PR-gate path.
+    Audit(GateScopeArgs),
+    /// Run every `[check]` / `[test]` / `[system]` verifier — cheap
+    /// relative to review, expensive relative to status.
+    Verify(GateScopeArgs),
+    /// Run only `[check]`-tier verifiers (static analysis). Fastest tier.
+    Check(GateScopeArgs),
+    /// Run only `[test]`-tier verifiers, batched into one runner
+    /// subprocess.
+    Test(GateScopeArgs),
+    /// Run only `[system]`-tier verifiers (containers, packaging,
+    /// end-to-end). Slow.
+    System(GateScopeArgs),
+    /// Run the LLM rubric — criterion-attached judges plus the rubric
+    /// walk over the diff. Expensive.
+    Review(GateScopeArgs),
+    /// Run only criterion-attached `[judge]` verifiers — skips the
+    /// rubric walk.
+    Judge(GateScopeArgs),
+    /// Run only the rubric walk over the diff — skips
+    /// criterion-attached judges.
+    Rubric(GateScopeArgs),
+}
+
+#[derive(Debug, clap::Args)]
+struct GateScopeArgs {
+    /// Filter to verifiers whose scope intersects the file set
+    /// (pre-commit hook fast feedback).
+    #[arg(long, value_name = "PATH", value_delimiter = ',')]
+    files: Vec<PathBuf>,
+    /// Filter to one spec's criteria. Defaults to `current_spec` when
+    /// applicable to the subcommand.
+    #[arg(long, short = 's', value_name = "LABEL")]
+    spec: Option<String>,
+    /// Run one specific verifier by its annotation target (e.g. a
+    /// command string for `[check]` / `[system]`, a test path for
+    /// `[test]`, a rubric path for `[judge]`).
+    selector: Option<String>,
+    /// Restrict the audit scope to one bead.
+    #[arg(long, short = 'b', value_name = "ID", conflicts_with_all = ["diff", "tree"])]
+    bead: Option<String>,
+    /// Restrict the audit scope to a git diff range.
+    #[arg(long, value_name = "RANGE", conflicts_with_all = ["bead", "tree"])]
+    diff: Option<String>,
+    /// Audit the entire spec tree × implementation.
+    #[arg(long, conflicts_with_all = ["bead", "diff"])]
+    tree: bool,
 }
 
 /// Subcommands of `loom note`.
@@ -201,7 +246,7 @@ enum Command {
     },
     /// Per-bead execution loop. Continuous by default; `--once` exits after one bead.
     Run {
-        /// Process a single bead then exit (no auto-handoff to `loom check` / `loom review`).
+        /// Process a single bead then exit (no auto-handoff to `loom gate verify` / `loom gate review`).
         #[arg(long)]
         once: bool,
         /// Concurrent dispatch slots (`-p N` / `--parallel N`). Default 1.
@@ -233,34 +278,10 @@ enum Command {
         #[arg(long, short = 'v', conflicts_with = "raw")]
         verbose: bool,
     },
-    /// Deterministic audits — `[verify]` scripts, style linters, and `<audit>` sub-audits.
-    Check {
-        /// Sub-audit to run (`criteria`, `matrix`, `surface`); omit to
-        /// run the full deterministic pass.
-        #[arg(value_name = "AUDIT")]
-        audit: Option<CheckAudit>,
-        /// Spec label override (defaults to `current_spec`).
-        #[arg(long, short = 's', value_name = "LABEL")]
-        spec: Option<String>,
-        /// Restrict the audit scope to one bead.
-        #[arg(long, short = 'b', value_name = "ID", conflicts_with_all = ["diff", "tree"])]
-        bead: Option<String>,
-        /// Restrict the audit scope to a git diff range.
-        #[arg(long, value_name = "RANGE", conflicts_with_all = ["bead", "tree"])]
-        diff: Option<String>,
-        /// Audit the entire spec tree × implementation.
-        #[arg(long, conflicts_with_all = ["bead", "diff"])]
-        tree: bool,
-        /// Promote warning-severity findings (e.g. orphan stubs) to errors.
-        /// Applies to `loom check criteria`.
-        #[arg(long)]
-        strict: bool,
-        /// Skip executing live verifiers — only run structural checks
-        /// (stubbed, missing-dispatcher, orphan, masquerade). Applies to
-        /// `loom check criteria` and is intended for the pre-commit hook
-        /// path where the full live audit is too slow.
-        #[arg(long)]
-        no_run: bool,
+    /// Quality gate — annotation-dispatched verifiers and LLM rubric.
+    Gate {
+        #[command(subcommand)]
+        subcommand: Option<GateSubcommand>,
     },
     /// LLM-judged review pass over the gate scope.
     Review {
@@ -344,17 +365,35 @@ enum Command {
 impl Command {
     /// `true` when this subcommand spawns containers or mutates workspace
     /// state — those are refused under `LOOM_INSIDE=1` to prevent a nested
-    /// driver. Read-only subcommands (`status`, `logs`, `spec`) return
-    /// `false`. Spec: `loom-harness.md` § Nested-Loom Guard.
+    /// driver. Read-only subcommands (`status`, `logs`, `spec`, plain
+    /// `gate` status) return `false`. Spec: `loom-harness.md` §
+    /// Nested-Loom Guard.
     fn refused_inside_loom(&self) -> bool {
         match self {
             Command::Status | Command::Logs { .. } | Command::Spec { .. } => false,
-            Command::Check { audit: Some(_), .. } => false,
+            // Bare `loom gate` (status read) and the deterministic tier
+            // subcommands are read-only relative to workspace state —
+            // they parse spec files, run verifiers, and write the local
+            // status cache. The LLM-driven `review` / `judge` / `rubric`
+            // / `audit` paths spawn agent containers, so they're refused.
+            Command::Gate { subcommand: None } => false,
+            Command::Gate {
+                subcommand: Some(GateSubcommand::Verify(_)),
+            }
+            | Command::Gate {
+                subcommand: Some(GateSubcommand::Check(_)),
+            }
+            | Command::Gate {
+                subcommand: Some(GateSubcommand::Test(_)),
+            }
+            | Command::Gate {
+                subcommand: Some(GateSubcommand::System(_)),
+            } => false,
             Command::Init { .. }
             | Command::UseSpec { .. }
             | Command::Plan { .. }
             | Command::Run { .. }
-            | Command::Check { .. }
+            | Command::Gate { .. }
             | Command::Review { .. }
             | Command::Msg { .. }
             | Command::Note { .. }
@@ -370,7 +409,7 @@ impl Command {
 const HELP_GROUPS: &[(&str, &[&str])] = &[
     (
         "Workflow",
-        &["plan", "todo", "run", "check", "review", "msg"],
+        &["plan", "todo", "run", "gate", "review", "msg"],
     ),
     ("Inspection", &["status", "logs", "spec"]),
     ("State", &["init", "use", "note"]),
@@ -386,7 +425,7 @@ fn args_request_top_level_help(args: &[String]) -> bool {
         return true;
     }
     let known_subcommands = [
-        "init", "status", "use", "logs", "spec", "plan", "run", "check", "review", "msg", "todo",
+        "init", "status", "use", "logs", "spec", "plan", "run", "gate", "review", "msg", "todo",
         "note", "help",
     ];
     for (idx, arg) in args.iter().enumerate() {
@@ -557,27 +596,7 @@ fn main() -> ExitCode {
                 verbose,
             },
         ),
-        Command::Check {
-            spec,
-            audit,
-            bead,
-            diff,
-            tree,
-            strict,
-            no_run,
-        } => run_check(
-            &workspace,
-            spec,
-            agent_override,
-            CheckOpts {
-                audit,
-                bead,
-                diff,
-                tree,
-                strict,
-                no_run,
-            },
-        ),
+        Command::Gate { subcommand } => run_gate(&workspace, subcommand, agent_override),
         Command::Review {
             spec,
             bead,
@@ -729,71 +748,292 @@ fn run_note(workspace: &std::path::Path, action: NoteAction) -> anyhow::Result<(
     Ok(())
 }
 
-impl CheckAudit {
-    fn tag(&self) -> &'static str {
-        match self {
-            CheckAudit::Criteria => "criteria",
-            CheckAudit::Matrix => "matrix",
-            CheckAudit::Surface => "surface",
+fn run_gate(
+    workspace: &Path,
+    subcommand: Option<GateSubcommand>,
+    agent_override: Option<AgentKind>,
+) -> anyhow::Result<()> {
+    match subcommand {
+        None => run_gate_status(workspace),
+        Some(GateSubcommand::Verify(args)) => run_gate_verify(workspace, &args),
+        Some(GateSubcommand::Check(args)) => run_gate_single_tier(workspace, &args, Tier::Check),
+        Some(GateSubcommand::Test(args)) => run_gate_single_tier(workspace, &args, Tier::Test),
+        Some(GateSubcommand::System(args)) => run_gate_single_tier(workspace, &args, Tier::System),
+        Some(GateSubcommand::Audit(args)) => run_gate_audit(workspace, args, agent_override),
+        Some(GateSubcommand::Review(args)) => run_gate_review(workspace, args, agent_override),
+        Some(GateSubcommand::Judge(_)) => {
+            anyhow::bail!(
+                "loom gate judge: not implemented yet — use `loom gate review` for the LLM rubric path"
+            )
+        }
+        Some(GateSubcommand::Rubric(_)) => {
+            anyhow::bail!(
+                "loom gate rubric: not implemented yet — use `loom gate review` for the LLM rubric path"
+            )
         }
     }
 }
 
-/// Run one audit and return its exit code (0 ↔ clean, 1 ↔ drift). The
-/// caller (bare or positional) decides whether to `process::exit`.
-///
-/// `criteria_scope` is the resolved spec-file filter for criteria; the
-/// surface and matrix audits are scope-independent and ignore it.
-fn run_check_audit(
-    workspace: &std::path::Path,
-    audit: CheckAudit,
-    strict: bool,
-    no_run: bool,
-    criteria_scope: &check::CriteriaScope,
-) -> anyhow::Result<i32> {
-    match audit {
-        CheckAudit::Criteria => {
-            let specs_dir = workspace.join("specs");
-            let dispatcher = workspace.join("tests/loom-test.sh");
-            let runner = if no_run {
-                None
-            } else {
-                // Pre-parse so the batched runner can fold every
-                // parseable dispatcher into one nextest invocation up
-                // front; the audit will re-parse internally but that's
-                // a few-ms cost.
-                let index = check::criteria::parse_dispatcher(&dispatcher)?;
-                let candidates: Vec<&str> = index.real.iter().map(String::as_str).collect();
-                Some(check::criteria::BatchedShellRunner::new(
-                    dispatcher.clone(),
-                    workspace,
-                    &index,
-                    &candidates,
-                ))
-            };
-            let report = check::criteria::audit_filtered(
-                &specs_dir,
-                &dispatcher,
-                runner.as_ref(),
-                criteria_scope.spec_files.as_ref(),
-            )?;
-            Ok(check::criteria::report(&report, strict))
-        }
-        CheckAudit::Matrix => {
-            let spec_path = workspace.join("specs/loom-templates.md");
-            let templates_dir = workspace.join("loom/crates/loom-templates/templates");
-            let findings = check::matrix::audit(&spec_path, &templates_dir)?;
-            Ok(check::matrix::report(&findings))
-        }
-        CheckAudit::Surface => {
-            let spec_path = workspace.join("specs/loom-harness.md");
-            let loom_bin = current_loom_bin()?;
-            let spec = check::surface::parse_spec_surface(&spec_path)?;
-            let provider = check::surface::BinaryHelp::new(loom_bin);
-            let findings = check::surface::audit(&spec, &provider)?;
-            Ok(check::surface::report(&findings))
+fn gate_dispatch_options(args: &GateScopeArgs) -> DispatchOptions {
+    DispatchOptions {
+        files: args.files.clone(),
+        spec: args.spec.clone(),
+    }
+}
+
+fn filter_annotations(
+    annotations: &[loom_gate::Annotation],
+    tier: Tier,
+    args: &GateScopeArgs,
+) -> Vec<loom_gate::Annotation> {
+    annotations
+        .iter()
+        .filter(|a| a.tier == tier)
+        .filter(|a| {
+            args.spec.as_deref().is_none_or(|label| {
+                a.source_spec
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .is_some_and(|s| s == label)
+            })
+        })
+        .filter(|a| args.selector.as_deref().is_none_or(|sel| a.target == sel))
+        .cloned()
+        .collect()
+}
+
+fn run_gate_status(workspace: &Path) -> anyhow::Result<()> {
+    let cache_path = workspace.join(".wrapix/loom/gate-cache.sqlite");
+    let cache = StatusCache::open(&cache_path)?;
+    let parsed = loom_gate::annotation::parse(&workspace.join("specs"))?;
+    let now_ms = SystemClock::new()
+        .wall_now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    let report = render_report(&cache, &parsed, &[], now_ms, 14)?;
+    print_gate_status(&report);
+    Ok(())
+}
+
+fn print_gate_status(report: &loom_gate::Report) {
+    for spec in &report.specs {
+        println!(
+            "{spec}: {total} criteria ({annotated} annotated, {unannotated} un-annotated)",
+            spec = spec.spec_label,
+            total = spec.criterion_total,
+            annotated = spec.criterion_annotated,
+            unannotated = spec.criterion_unannotated,
+        );
+    }
+    if report.tiers.is_empty() {
+        println!("(no cached verifier runs yet — run `loom gate verify` to populate)");
+        return;
+    }
+    for tier in &report.tiers {
+        println!(
+            "[{tier}] last_run_ts_ms={ts:?} pass={pass} fail={fail} skipped={skipped}",
+            tier = tier.tier,
+            ts = tier.last_run_ts_ms,
+            pass = tier.pass_count,
+            fail = tier.fail_count,
+            skipped = tier.skipped_count,
+        );
+        for fail in &tier.failing {
+            println!(
+                "  FAIL {spec}/{anchor}: {target} — {evidence}",
+                spec = fail.spec_label,
+                anchor = fail.criterion_anchor,
+                target = fail.annotation_target,
+                evidence = fail.evidence,
+            );
         }
     }
+    if !report.annotation_health.broken_annotations.is_empty() {
+        println!("broken annotations:");
+        for ann in &report.annotation_health.broken_annotations {
+            println!(
+                "  {spec}:{line}: [{tier}]({target})",
+                spec = ann.source_spec.display(),
+                line = ann.line,
+                tier = ann.tier,
+                target = ann.target,
+            );
+        }
+    }
+    if !report.annotation_health.stale_runs.is_empty() {
+        println!(
+            "stale runs (older than {} days):",
+            report.stale_threshold_days
+        );
+        for stale in &report.annotation_health.stale_runs {
+            println!(
+                "  {spec}/{anchor}: last_run_ts_ms={ts}",
+                spec = stale.spec_label,
+                anchor = stale.criterion_anchor,
+                ts = stale.last_run_ts_ms,
+            );
+        }
+    }
+}
+
+fn run_gate_verify(workspace: &Path, args: &GateScopeArgs) -> anyhow::Result<()> {
+    let mut combined: i32 = 0;
+    for tier in [Tier::Check, Tier::Test, Tier::System] {
+        eprintln!("--- loom gate verify [{tier}] ---");
+        match dispatch_tier(workspace, args, tier) {
+            Ok(0) => {}
+            Ok(code) => combined = combined.max(code),
+            Err(err) => {
+                eprintln!("loom gate verify [{tier}]: {err:#}");
+                combined = combined.max(1);
+            }
+        }
+    }
+    if combined != 0 {
+        std::process::exit(combined);
+    }
+    Ok(())
+}
+
+fn run_gate_single_tier(workspace: &Path, args: &GateScopeArgs, tier: Tier) -> anyhow::Result<()> {
+    let code = dispatch_tier(workspace, args, tier)?;
+    if code != 0 {
+        std::process::exit(code);
+    }
+    Ok(())
+}
+
+fn dispatch_tier(workspace: &Path, args: &GateScopeArgs, tier: Tier) -> anyhow::Result<i32> {
+    let specs_dir = workspace.join("specs");
+    let parsed = loom_gate::annotation::parse(&specs_dir)?;
+    let selected = filter_annotations(&parsed.annotations, tier, args);
+    if selected.is_empty() {
+        eprintln!("loom gate [{tier}]: no annotations matched");
+        return Ok(0);
+    }
+    let options = gate_dispatch_options(args);
+    let cache_path = workspace.join(".wrapix/loom/gate-cache.sqlite");
+    let cache = StatusCache::open(&cache_path)?;
+    let now_ms = SystemClock::new()
+        .wall_now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    let commit = current_commit(workspace).unwrap_or_default();
+
+    let mut combined: i32 = 0;
+    match tier {
+        Tier::Check => {
+            for result in loom_gate::run_check(&selected, &options) {
+                combined = persist_dispatch_result(&cache, result, now_ms, &commit, combined);
+            }
+        }
+        Tier::System => {
+            for result in loom_gate::run_system(&selected, &options) {
+                combined = persist_dispatch_result(&cache, result, now_ms, &commit, combined);
+            }
+        }
+        Tier::Test => {
+            let template = loom_gate::runner::discover(workspace, Tier::Test)?;
+            match loom_gate::run_test(&selected, &options, &template, &EmptyScope) {
+                Ok(Some(outcome)) => {
+                    let verdict = if outcome.verdict.pass {
+                        Verdict::Pass
+                    } else {
+                        combined = combined.max(1);
+                        Verdict::Fail
+                    };
+                    persist_outcome(&cache, &outcome, verdict, now_ms, &commit);
+                }
+                Ok(None) => eprintln!("loom gate [test]: no annotations matched scope filter"),
+                Err(err) => {
+                    eprintln!("loom gate [test]: {err:#}");
+                    combined = combined.max(1);
+                }
+            }
+        }
+        Tier::Judge => unreachable!("dispatch_tier does not handle Tier::Judge"),
+    }
+    Ok(combined)
+}
+
+fn persist_dispatch_result(
+    cache: &StatusCache,
+    result: Result<loom_gate::DispatchOutcome, loom_gate::DispatchError>,
+    now_ms: i64,
+    commit: &str,
+    combined: i32,
+) -> i32 {
+    match result {
+        Ok(outcome) => {
+            let (verdict, exit) = if outcome.verdict.pass {
+                (Verdict::Pass, combined)
+            } else {
+                (Verdict::Fail, combined.max(1))
+            };
+            persist_outcome(cache, &outcome, verdict, now_ms, commit);
+            exit
+        }
+        Err(err) => {
+            eprintln!("loom gate: dispatch error: {err:#}");
+            combined.max(1)
+        }
+    }
+}
+
+fn persist_outcome(
+    cache: &StatusCache,
+    outcome: &loom_gate::DispatchOutcome,
+    verdict: Verdict,
+    now_ms: i64,
+    commit: &str,
+) {
+    for ann in &outcome.annotations {
+        let row: CacheRow = row_for(
+            ann,
+            verdict,
+            outcome.verdict.evidence.clone(),
+            now_ms,
+            commit,
+        );
+        if let Err(err) = cache.upsert(&row) {
+            eprintln!("loom gate: failed to upsert cache row: {err:#}");
+        }
+    }
+}
+
+fn current_commit(workspace: &Path) -> anyhow::Result<String> {
+    let git = GitClient::open(workspace)?;
+    let runtime = tokio::runtime::Runtime::new()?;
+    Ok(runtime.block_on(async { git.head_commit_sha().await })?)
+}
+
+fn run_gate_audit(
+    workspace: &Path,
+    args: GateScopeArgs,
+    agent_override: Option<AgentKind>,
+) -> anyhow::Result<()> {
+    let verify_result = run_gate_verify(workspace, &args);
+    let review_result = run_gate_review(workspace, args, agent_override);
+    verify_result.and(review_result)
+}
+
+fn run_gate_review(
+    workspace: &Path,
+    args: GateScopeArgs,
+    agent_override: Option<AgentKind>,
+) -> anyhow::Result<()> {
+    run_review(
+        workspace,
+        args.spec,
+        agent_override,
+        ReviewOpts {
+            bead: args.bead,
+            diff: args.diff,
+            tree: args.tree,
+        },
+    )
 }
 
 fn run_status(workspace: &std::path::Path) -> anyhow::Result<()> {
@@ -1554,138 +1794,6 @@ fn resolved_agent_for(
         };
     }
     Ok(selection)
-}
-
-struct CheckOpts {
-    audit: Option<CheckAudit>,
-    bead: Option<String>,
-    diff: Option<String>,
-    tree: bool,
-    strict: bool,
-    no_run: bool,
-}
-
-/// FR1: bare `loom check` runs every audit; `loom check <audit>` runs
-/// one. Scope flags (`--bead`, `--diff`, `--tree`) compose with both
-/// forms. Aggregate exit is the OR of individual audit exit codes.
-fn run_check(
-    workspace: &Path,
-    _spec: Option<String>,
-    _agent_override: Option<AgentKind>,
-    opts: CheckOpts,
-) -> anyhow::Result<()> {
-    let scope = build_scope(opts.bead.as_deref(), opts.diff.as_deref(), opts.tree)?;
-    let criteria_scope = resolve_criteria_scope(workspace, &scope)?;
-
-    let audits: Vec<CheckAudit> = match opts.audit {
-        Some(a) => vec![a],
-        // FR1: bare `loom check` runs every audit. The spec enumerates
-        // `criteria` and `surface` as the audits today; `matrix` is its
-        // own audit, runnable individually but not part of the bare set.
-        None => vec![CheckAudit::Criteria, CheckAudit::Surface],
-    };
-    let aggregate = audits.len() > 1;
-
-    if aggregate && scope.is_narrow() {
-        eprintln!(
-            "loom check: scope = {scope_tag}; surface and matrix audits are scope-independent",
-            scope_tag = scope_tag(&scope),
-        );
-    }
-
-    let mut combined: i32 = 0;
-    let mut clean = 0usize;
-    for a in &audits {
-        if aggregate {
-            eprintln!("--- loom check {audit} ---", audit = a.tag());
-        }
-        let code = run_check_audit(workspace, *a, opts.strict, opts.no_run, &criteria_scope)?;
-        if code == 0 {
-            clean += 1;
-        } else {
-            combined = 1;
-        }
-    }
-    if aggregate {
-        eprintln!(
-            "loom check: {clean}/{total} audit{plural} clean",
-            total = audits.len(),
-            plural = if audits.len() == 1 { "" } else { "s" },
-        );
-    }
-    if combined != 0 {
-        std::process::exit(combined);
-    }
-    Ok(())
-}
-
-fn build_scope(bead: Option<&str>, diff: Option<&str>, tree: bool) -> anyhow::Result<check::Scope> {
-    if tree {
-        Ok(check::Scope::Tree)
-    } else if let Some(id) = bead {
-        Ok(check::Scope::Bead(BeadId::new(id)?))
-    } else if let Some(range) = diff {
-        Ok(check::Scope::Diff(range.to_string()))
-    } else {
-        Ok(check::Scope::Default)
-    }
-}
-
-fn scope_tag(scope: &check::Scope) -> String {
-    match scope {
-        check::Scope::Default => "default".to_string(),
-        check::Scope::Tree => "tree".to_string(),
-        check::Scope::Bead(id) => format!("bead {id}"),
-        check::Scope::Diff(range) => format!("diff {range}"),
-    }
-}
-
-/// Translate a [`check::Scope`] into a per-spec filter for the criteria
-/// audit. Default and Tree map to "no filter" (walk every spec). Bead
-/// scopes resolve the bead's `spec:<label>` and narrow to that one
-/// spec file. Diff scopes shell out to `git diff --name-only` over the
-/// `specs/` subtree and narrow to those files.
-fn resolve_criteria_scope(
-    workspace: &Path,
-    scope: &check::Scope,
-) -> anyhow::Result<check::CriteriaScope> {
-    match scope {
-        check::Scope::Default | check::Scope::Tree => Ok(check::CriteriaScope::unfiltered()),
-        check::Scope::Bead(id) => {
-            let runtime = tokio::runtime::Runtime::new()?;
-            let bead = runtime.block_on(async {
-                let bd = BdClient::new();
-                bd.show(id).await
-            })?;
-            let label = bead
-                .labels
-                .iter()
-                .find_map(|l| l.spec_label())
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "bead {id} carries no `spec:<label>` label; cannot scope criteria \
-                         audit to a single spec",
-                    )
-                })?;
-            let spec_file = workspace.join(format!("specs/{label}.md", label = label.as_str()));
-            if !spec_file.is_file() {
-                anyhow::bail!(
-                    "bead {id} references spec `{label}` but {path} does not exist",
-                    label = label.as_str(),
-                    path = spec_file.display(),
-                );
-            }
-            Ok(check::CriteriaScope::from_files([spec_file]))
-        }
-        check::Scope::Diff(range) => {
-            let runtime = tokio::runtime::Runtime::new()?;
-            let git = GitClient::open(workspace)?;
-            let rel_files = runtime
-                .block_on(async { git.changed_files_in_range(range, Some("specs/")).await })?;
-            let files: Vec<PathBuf> = rel_files.into_iter().map(|p| workspace.join(p)).collect();
-            Ok(check::CriteriaScope::from_files(files))
-        }
-    }
 }
 
 #[expect(
