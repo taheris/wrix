@@ -16,6 +16,7 @@ loom-events = { workspace = true }
 pulldown-cmark = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
+walkdir = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

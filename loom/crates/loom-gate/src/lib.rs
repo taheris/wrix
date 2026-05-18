@@ -27,7 +27,10 @@ pub mod runner;
 pub use annotation::{Annotation, Criterion, ParsedSpecs, Tier};
 pub use cache::{CacheRow, Verdict};
 pub use dispatch::VerifierVerdict;
-pub use integrity::IntegrityFinding;
+pub use integrity::{
+    CommandResolver, FsCommandResolver, IntegrityError, IntegrityFinding,
+    RustWorkspaceTestResolver, TestPathResolver,
+};
 pub use runner::RunnerTemplate;
 
 /// Scaffold error returned by every stub entry point until the

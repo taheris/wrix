@@ -1,0 +1,218 @@
+#![allow(clippy::unwrap_used)]
+//! Integration coverage for the integrity gate.
+//!
+//! Wires the annotation parser to the integrity check at the seam that
+//! `loom gate check` exercises: a temp specs/ tree is parsed end-to-end,
+//! the resulting annotations and criteria feed `check`, and the findings
+//! are asserted against the spec's failure-output contract.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use loom_gate::annotation::{parse, parse_content};
+use loom_gate::integrity::{
+    CommandResolver, FsCommandResolver, IntegrityFinding, RustWorkspaceTestResolver,
+    TestPathResolver, check, check_atomic_acceptance, check_forward,
+};
+use tempfile::tempdir;
+
+fn write(dir: &Path, name: &str, content: &str) {
+    fs::write(dir.join(name), content).unwrap();
+}
+
+struct AlwaysOkCommands;
+impl CommandResolver for AlwaysOkCommands {
+    fn resolves(&self, _: &str) -> bool {
+        true
+    }
+}
+
+struct NeverOkTests;
+impl TestPathResolver for NeverOkTests {
+    fn resolves(&self, _: &str) -> bool {
+        false
+    }
+}
+
+#[test]
+fn parse_then_check_with_all_valid_annotations_yields_no_findings() {
+    let dir = tempdir().unwrap();
+    let specs = dir.path().join("specs");
+    fs::create_dir_all(&specs).unwrap();
+    let rubric = dir.path().join("rubric.md");
+    fs::write(&rubric, "rubric body").unwrap();
+
+    write(
+        &specs,
+        "alpha.md",
+        "## Success Criteria\n\
+        \n\
+        - one [check](cargo run -p w -- a)\n\
+        - two [system](nix run .#test-loom)\n\
+        - three [test](crate::a::it_works)\n\
+        - four [judge](../rubric.md)\n",
+    );
+
+    let parsed = parse(&specs).unwrap();
+    let cmds = AlwaysOkCommands;
+    let tests = RustWorkspaceTestResolver::from_leaves(["it_works"]);
+    let findings = check(&parsed.annotations, &specs, &cmds, &tests);
+    assert!(
+        findings.is_empty(),
+        "no findings expected, got {findings:?}"
+    );
+}
+
+#[test]
+fn fixture_with_broken_target_per_tier_flags_each_one() {
+    let dir = tempdir().unwrap();
+    let md = "\
+## Success Criteria
+
+- one [check](no-such-binary --do x)
+- two [system](also-not-there --boot)
+- three [test](crate::nowhere::missing)
+- four [judge](does-not-exist.md)
+";
+    let parsed = parse_content(&PathBuf::from("specs/broken.md"), md);
+    struct NoCommands;
+    impl CommandResolver for NoCommands {
+        fn resolves(&self, _: &str) -> bool {
+            false
+        }
+    }
+    let findings = check_forward(&parsed.annotations, dir.path(), &NoCommands, &NeverOkTests);
+    assert_eq!(findings.len(), 4, "all four annotations flagged");
+    for finding in &findings {
+        assert!(
+            matches!(finding, IntegrityFinding::UnresolvedAnnotation { .. }),
+            "finding is unresolved: {finding:?}"
+        );
+    }
+}
+
+#[test]
+fn two_annotations_on_one_criterion_flags_atomic_acceptance() {
+    let md = "\
+## Success Criteria
+
+- shared claim
+  [test](crate::a::ok)
+  [check](cargo run -p w -- ok)
+";
+    let parsed = parse_content(&PathBuf::from("specs/atomic.md"), md);
+    let findings = check_atomic_acceptance(&parsed.annotations);
+    assert_eq!(findings.len(), 1);
+    match &findings[0] {
+        IntegrityFinding::MultipleAnnotations { spec, count, .. } => {
+            assert_eq!(spec, &PathBuf::from("specs/atomic.md"));
+            assert_eq!(*count, 2);
+        }
+        other => panic!("expected MultipleAnnotations, got {other:?}"),
+    }
+}
+
+#[test]
+fn self_referential_check_annotation_resolves_against_integrity_gate_implementation() {
+    let md = "\
+## Success Criteria
+
+- The integrity gate self-checks its own resolution logic
+  [check](cargo run -p loom-gate -- integrity-check)
+";
+    let parsed = parse_content(&PathBuf::from("specs/loom-gate.md"), md);
+
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let workspace_root = Path::new(manifest_dir)
+        .parent()
+        .and_then(Path::parent)
+        .unwrap()
+        .to_path_buf();
+    let resolver = FsCommandResolver::new(&workspace_root);
+
+    let findings = check_forward(
+        &parsed.annotations,
+        &workspace_root,
+        &resolver,
+        &NeverOkTests,
+    );
+    assert!(
+        findings.is_empty(),
+        "self-referential [check] annotation's first token (`cargo`) resolves on PATH; \
+         got findings: {findings:?}"
+    );
+}
+
+#[test]
+fn self_referential_judge_annotation_resolves_against_integrity_source_file() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let integrity_rs = manifest_dir.join("src/integrity.rs");
+    assert!(
+        integrity_rs.exists(),
+        "fixture relies on integrity.rs existing at {}",
+        integrity_rs.display()
+    );
+
+    let target = integrity_rs.to_string_lossy();
+    let md = format!("## Success Criteria\n\n- Integrity gate impl exists [judge]({target})\n");
+    let parsed = parse_content(&PathBuf::from("specs/loom-gate.md"), &md);
+    struct NoCommands;
+    impl CommandResolver for NoCommands {
+        fn resolves(&self, _: &str) -> bool {
+            false
+        }
+    }
+    let findings = check_forward(
+        &parsed.annotations,
+        Path::new("/this/is/ignored-when-target-is-absolute"),
+        &NoCommands,
+        &NeverOkTests,
+    );
+    assert!(
+        findings.is_empty(),
+        "self-referential [judge] annotation should resolve to integrity.rs; got {findings:?}"
+    );
+}
+
+#[test]
+fn end_to_end_specs_dir_check_combines_both_directions() {
+    let dir = tempdir().unwrap();
+    let specs = dir.path().join("specs");
+    fs::create_dir_all(&specs).unwrap();
+
+    write(
+        &specs,
+        "good.md",
+        "## Success Criteria\n\
+        \n\
+        - ok [test](crate::a::ok)\n",
+    );
+    write(
+        &specs,
+        "bad.md",
+        "## Success Criteria\n\
+        \n\
+        - has two annotations\n  \
+          [test](crate::a::ok)\n  \
+          [check](cargo run)\n\
+        - has broken target [judge](missing.md)\n",
+    );
+
+    let parsed = parse(&specs).unwrap();
+    let cmds = AlwaysOkCommands;
+    let tests = RustWorkspaceTestResolver::from_leaves(["ok"]);
+    let findings = check(&parsed.annotations, &specs, &cmds, &tests);
+
+    assert!(
+        findings
+            .iter()
+            .any(|f| matches!(f, IntegrityFinding::UnresolvedAnnotation { tier, .. } if *tier == loom_gate::Tier::Judge)),
+        "judge unresolved finding present: {findings:?}"
+    );
+    assert!(
+        findings
+            .iter()
+            .any(|f| matches!(f, IntegrityFinding::MultipleAnnotations { count: 2, .. })),
+        "multiple-annotations finding present: {findings:?}"
+    );
+}
