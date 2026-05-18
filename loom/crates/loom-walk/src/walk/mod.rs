@@ -20,6 +20,7 @@ mod no_thread_sleep;
 mod no_tokio_sleep_outside_clock;
 mod no_tokio_timeout_outside_clock;
 mod no_types_or_error_files;
+mod renderer_no_insta_dependency;
 mod single_event_channel;
 mod template_context_structs;
 mod util;
@@ -120,6 +121,10 @@ pub static REGISTRY: &[Walk] = &[
         run: no_types_or_error_files::run,
     },
     Walk {
+        name: "renderer_no_insta_dependency",
+        run: renderer_no_insta_dependency::run,
+    },
+    Walk {
         name: "single_event_channel",
         run: single_event_channel::run,
     },
@@ -173,6 +178,7 @@ mod tests {
             "no_tokio_sleep_outside_clock",
             "no_tokio_timeout_outside_clock",
             "no_real_clock_outside_system_clock",
+            "renderer_no_insta_dependency",
         ] {
             assert!(lookup(name).is_some(), "missing walk: {name}");
         }

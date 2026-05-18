@@ -511,6 +511,91 @@ fn no_tokio_timeout_outside_clock_fail() {
 }
 
 // ---------------------------------------------------------------------------
+// renderer_no_insta_dependency
+// ---------------------------------------------------------------------------
+
+const RENDERER_CARGO_OK: &str = "[package]\nname = \"loom-render\"\n\n[dependencies]\nserde = \"1\"\n\n[dev-dependencies]\ntempfile = \"3\"\n";
+
+#[test]
+fn renderer_no_insta_dependency_pass_no_cargo_dep_no_rs_use() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-render/Cargo.toml",
+        RENDERER_CARGO_OK,
+    );
+    seed(
+        ws.path(),
+        "crates/loom-render/src/lib.rs",
+        "pub fn render() -> String { String::new() }\n\
+         #[cfg(test)]\n\
+         mod tests {\n\
+             #[test]\n\
+             fn smoke() {\n\
+                 assert!(super::render().is_empty());\n\
+             }\n\
+         }\n",
+    );
+    let out = invoke(&["renderer_no_insta_dependency"], Some(ws.path()), None);
+    assert_pass(&out);
+}
+
+#[test]
+fn renderer_no_insta_dependency_fail_dev_dep_declared() {
+    let ws = make_workspace();
+    let cargo = "[package]\nname = \"loom-render\"\n\n[dev-dependencies]\ninsta = \"1\"\n";
+    seed(ws.path(), "crates/loom-render/Cargo.toml", cargo);
+    let out = invoke(&["renderer_no_insta_dependency"], Some(ws.path()), None);
+    assert_fail(&out, "crates/loom-render/Cargo.toml");
+}
+
+#[test]
+fn renderer_no_insta_dependency_fail_use_in_test() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-render/Cargo.toml",
+        RENDERER_CARGO_OK,
+    );
+    seed(
+        ws.path(),
+        "crates/loom-render/src/renderer.rs",
+        "#[cfg(test)]\n\
+         mod tests {\n\
+             use insta::assert_snapshot;\n\
+             #[test]\n\
+             fn snap() { assert_snapshot!(\"x\"); }\n\
+         }\n",
+    );
+    let out = invoke(&["renderer_no_insta_dependency"], Some(ws.path()), None);
+    assert_fail(&out, "crates/loom-render/src/renderer.rs");
+}
+
+#[test]
+fn renderer_no_insta_dependency_ignores_other_crates() {
+    let ws = make_workspace();
+    // Renderer is clean.
+    seed(
+        ws.path(),
+        "crates/loom-render/Cargo.toml",
+        RENDERER_CARGO_OK,
+    );
+    // A different crate is allowed to use insta — only loom-render is in scope.
+    seed(
+        ws.path(),
+        "crates/loom-templates/Cargo.toml",
+        "[package]\nname = \"loom-templates\"\n\n[dev-dependencies]\ninsta = \"1\"\n",
+    );
+    seed(
+        ws.path(),
+        "crates/loom-templates/tests/snap.rs",
+        "use insta::assert_snapshot;\n#[test] fn t() { assert_snapshot!(\"x\"); }\n",
+    );
+    let out = invoke(&["renderer_no_insta_dependency"], Some(ws.path()), None);
+    assert_pass(&out);
+}
+
+// ---------------------------------------------------------------------------
 // no_real_clock_outside_system_clock
 // ---------------------------------------------------------------------------
 
