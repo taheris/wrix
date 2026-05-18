@@ -814,26 +814,30 @@ discovers the provider from `city.toml`.
 ## Success Criteria
 
 - [x] `mkCity` evaluates with minimal config (`services.api.package = myApp`)
-  [verify](tests/city/unit.nix::city-mkcity-eval)
-- [x] Generated `city.toml` is valid and references the wrapix provider script
-  [verify](tests/city/unit.nix::city-city-toml), [verify](tests/city/unit.nix::city-config-validate)
-- [x] Provider script handles all gc provider methods
-  [verify](tests/city/unit.nix::city-shell-syntax), [verify](tests/city/unit.nix::city-provider-worker)
+  [test](tests/city/unit.nix::city-mkcity-eval)
+- [x] Generated `city.toml` matches gc's config schema
+  [test](tests/city/unit.nix::city-city-toml)
+- [x] Generated `city.toml` passes gc's config validation
+  [test](tests/city/unit.nix::city-config-validate)
+- [x] Provider scripts have valid shell syntax across all wrapix scripts
+  [test](tests/city/unit.nix::city-shell-syntax)
+- [x] Provider script handles worker session lifecycle methods
+  [test](tests/city/unit.nix::city-provider-worker)
 - [x] Ephemeral workers use git worktrees at `.wrapix/worktree/<bead-id>`
-  [verify](tests/city/integration.nix::Wait for worker worktree)
+  [system](tests/city/integration.nix::Wait for worker worktree)
 - [x] Persistent roles (mayor, scout, judge) start with tmux as PID 1
-  [verify](tests/city/integration.nix::Verify tmux session alive in mayor container)
+  [system](tests/city/integration.nix::Verify tmux session alive in mayor container)
 - [x] gc convergence detects worker completion and triggers judge gate
-  [verify](tests/city/integration.nix::Wait for judge approval (via monitor gate pipeline))
+  [system](tests/city/integration.nix::Wait for judge approval (via monitor gate pipeline))
 - [x] Secrets are injected at runtime, never baked into images
-  [verify](tests/city/unit.nix::city-secrets)
+  [test](tests/city/unit.nix::city-secrets)
 - [ ] `ralph run` still works standalone without gc
 - [x] NixOS module generates systemd units and podman network
-  [verify](tests/city/unit.nix::city-nixos-module)
+  [test](tests/city/unit.nix::city-nixos-module)
 - [ ] Crash recovery: gc systemd service restarts, reconciles orphaned containers
 - [ ] `ralph sync` scaffolds missing docs files and creates review beads
 - [x] Service packages are built into OCI images via `dockerTools.streamLayeredImage`
-  [verify](tests/city/unit.nix::city-service-images)
+  [test](tests/city/unit.nix::city-service-images)
 - [ ] Cooldown pacing delays task dispatch by configured duration
 - [ ] Judge enforces `docs/style-rules.md` rules
   [judge]
@@ -842,36 +846,40 @@ discovers the provider from `city.toml`.
 - [x] Agent abstraction allows future provider swaps without architectural changes
   [judge]
 - [ ] P0 beads bypass cooldown and are dispatched immediately
-- [x] Merge uses fast-forward only; rebase + prek on divergence
-  [verify](tests/city/integration.nix::Verify merge landed on main), [verify](tests/city/integration.nix::Judge detects merge conflict and rejects)
+- [x] Merge uses fast-forward when main is at the bead's parent
+  [system](tests/city/integration.nix::Verify merge landed on main)
+- [x] Merge rejects on conflict and routes back to a fresh worker
+  [system](tests/city/integration.nix::Judge detects merge conflict and rejects)
 - [x] Post-gate order sends notifications via `wrapix-notify`
-  [verify](tests/city/integration.nix::Wait for post-gate pipeline (deploy bead created))
+  [system](tests/city/integration.nix::Wait for post-gate pipeline (deploy bead created))
 - [ ] Scout pauses bead creation when queue cap is reached
-- [x] Scout detects errors via log pattern regex matching
-  [verify](tests/city/unit.nix::city-scout-parse-rules), [verify](tests/city/unit.nix::city-scout-scan)
+- [x] Scout parses log-pattern rules from `docs/orchestration.md`
+  [test](tests/city/unit.nix::city-scout-parse-rules)
+- [x] Scout scans container logs against parsed patterns to detect errors
+  [test](tests/city/unit.nix::city-scout-scan)
 - [x] Judge gate reads commit range from bead metadata
-  [verify](tests/city/integration.nix::Verify gate can find metadata after recovery)
+  [system](tests/city/integration.nix::Verify gate can find metadata after recovery)
 - [ ] Scout polling uses gc orders for scheduling
 - [ ] Worker→judge retry uses gc convergence with max 2 iterations
 - [x] Role behavior defined as gc formulas, overridable by consumers
-  [verify](tests/city/unit.nix::city-formulas)
+  [test](tests/city/unit.nix::city-formulas)
 - [x] Post-gate handles escalation path (non-approved convergence)
-  [verify](tests/city/integration.nix::Post-gate handles escalation (non-approved))
+  [system](tests/city/integration.nix::Post-gate handles escalation (non-approved))
 - [x] Custom scale_check avoids gc's 30s timeout under dolt contention
-  [verify](tests/city/unit.nix::city-config-validate)
+  [test](tests/city/unit.nix::city-config-validate)
 - [ ] Mayor formula starts as persistent session and responds on attach
 - [ ] Mayor presents proactive briefing (pending reviews, recent merges, escalations)
 - [ ] Mayor decomposes spec changes into proposed beads on startup/attach
 - [ ] Mayor executes approved actions on human's behalf (dismiss, approve, file)
 - [ ] Mayor `autoDecompose` config option skips human approval
 - [ ] Judge owns merge after approval (review + merge as one flow)
-  [verify](tests/city/integration.nix::Verify merge landed on main)
+  [system](tests/city/integration.nix::Verify merge landed on main)
 - [ ] Judge rejection includes specific rule references and line numbers
 - [ ] Escalation flows to mayor instead of raw notification
 - [ ] Scout performs housekeeping (stale beads, orphaned workers, worktree cleanup)
 - [ ] Entrypoint prints informational pending-review status without blocking
 - [ ] Formula step commands are individually testable against known state
-  [verify](tests/city/unit.nix::city-formula-steps)
+  [test](tests/city/unit.nix::city-formula-steps)
 
 ## Out of Scope
 
