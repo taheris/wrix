@@ -523,35 +523,27 @@ so it gates PRs in CI. `loom-smoke` is exposed as an app on Linux only.
 
 ## Success Criteria
 
-> **Migration note.** The bullets below currently carry legacy
-> `[verify]` annotations pointing into `tests/loom-test.sh`. They are
-> retained as-is pending the per-spec migration epic that rewrites
-> each into a per-tier annotation (`[check]` / `[test]` / `[system]`
-> / `[judge]`) per [`docs/spec-conventions.md`](../docs/spec-conventions.md).
-> Migration mechanics are in this spec's implementation notes; the
-> new annotation syntax is the contract going forward.
-
 ### Unit tests
 
 - Newtype serde round-trip tests cover all ID types (`BeadId`,
       `SpecLabel`, `MoleculeId`, `ProfileName`, `SessionId`,
       `ToolCallId`, `RequestId`)
-  [verify](tests/loom-test.sh::test_newtype_serde_roundtrip)
+  [test](tests/loom-test.sh::test_newtype_serde_roundtrip)
 - State database round-trip tests cover spec, molecule, and meta
       operations
-  [verify](tests/loom-test.sh::test_state_db_roundtrip)
+  [test](tests/loom-test.sh::test_state_db_roundtrip)
 - Pi RPC protocol tests cover every command and every event type
       in the pi v0.72 protocol table, asserting on every documented
       field (not just type discrimination) so a renamed field fails
       deserialization at test time
-  [verify](tests/loom-test.sh::test_pi_protocol_coverage)
+  [test](tests/loom-test.sh::test_pi_protocol_coverage)
 - Claude stream-json protocol tests cover all `ClaudeMessage`
       variants including `Unknown` via `#[serde(other)]`, with
       field-level assertions on each variant
-  [verify](tests/loom-test.sh::test_claude_protocol_coverage)
+  [test](tests/loom-test.sh::test_claude_protocol_coverage)
 - Template rendering tests cover every Askama template with
       representative inputs
-  [verify](tests/loom-test.sh::test_template_rendering)
+  [test](tests/loom-test.sh::test_template_rendering)
 
 ### Integration tests
 
@@ -561,41 +553,41 @@ in Functional #4.
 - Startup probe round-trip: mock pi with full required command set
       → loom proceeds; mock pi missing `set_model` → loom fails fast
       with a version-mismatch error
-  [verify](tests/loom-test.sh::test_startup_probe_roundtrip)
+  [test](tests/loom-test.sh::test_startup_probe_roundtrip)
 - `wrapix spawn` argv contract: loom invokes
       `wrapix spawn --spawn-config <file> --stdio` with stdin
       attached as a pipe (not a TTY); recorded `SpawnConfig` JSON
       matches the on-disk shape
-  [verify](tests/loom-test.sh::test_wrapix_spawn_argv_contract)
+  [test](tests/loom-test.sh::test_wrapix_spawn_argv_contract)
 - Parallel run end-to-end: `loom run --parallel 2` with two ready
       beads dispatches two mock-agent spawns concurrently, each in its
       own worktree, then merges both branches back to driver
-  [verify](tests/loom-test.sh::test_parallel_run_end_to_end)
+  [test](tests/loom-test.sh::test_parallel_run_end_to_end)
 - `GitClient` round-trip: create worktree, list, status, merge
       (clean / non-conflicting / conflict variants), remove — all
       against a temp repo via the typed Rust API
-  [verify](tests/loom-test.sh::test_git_client_roundtrip)
+  [test](tests/loom-test.sh::test_git_client_roundtrip)
 - State DB lifecycle: `open` on fresh path creates schema;
       `rebuild` populates from `specs/*.md` plus mock `bd` output,
       resetting iteration counters; `recreate` recovers from a
       corrupted file
-  [verify](tests/loom-test.sh::test_state_db_lifecycle)
+  [test](tests/loom-test.sh::test_state_db_lifecycle)
 - Per-spec advisory locking: two contending acquisitions on the
       same `<label>.lock` serialize via `flock`; the second waits
       via `MockClock` advance, then errors naming the held label.
       Crashed child releases lock immediately for parent
-  [verify](tests/loom-test.sh::test_per_spec_locking)
+  [test](tests/loom-test.sh::test_per_spec_locking)
 - Logging tee: renderer and on-disk `.jsonl` log subscribe to the
       same `AgentEvent` stream — capturing both yields line-for-line
       equality on the log side
-  [verify](tests/loom-test.sh::test_logging_tee_equality)
+  [test](tests/loom-test.sh::test_logging_tee_equality)
 
 ### Container smoke
 
 - `nix run .#test-loom` spawns a real podman container, runs
       `loom run --once` against a bead with `WRAPIX_AGENT=pi`
       `MOCK_PI_SCENARIO=happy-path`, exits 0 with the bead closed
-  [verify](tests/loom-test.sh::test_loom_smoke_real_container)
+  [system](tests/loom-test.sh::test_loom_smoke_real_container)
 
 ### Style enforcement
 
@@ -603,7 +595,7 @@ in Functional #4.
 
 - `[workspace.lints.clippy]` denies `unwrap_used`, `expect_used`,
       `panic`, `todo`, `unimplemented`; warns `allow_attributes`
-  [verify](tests/loom-test.sh::test_workspace_clippy_lints)
+  [check](tests/loom-test.sh::test_workspace_clippy_lints)
 
 **Outcome** — these tests check that the *codebase complies* with
 the rules:
@@ -611,108 +603,108 @@ the rules:
 - `cargo clippy --workspace` is covered by the `loom-clippy` flake
       check (shared cargoArtifacts cache); see [profiles.md](profiles.md)
 - No `derive(From)` / `derive(Into)` on tuple-struct newtypes
-  [verify](tests/loom-test.sh::test_no_derive_from_on_newtypes)
+  [check](tests/loom-test.sh::test_no_derive_from_on_newtypes)
 - No `loom/crates/*/src/{types,error}.rs` files at crate roots
-  [verify](tests/loom-test.sh::test_nested_module_structure)
+  [check](tests/loom-test.sh::test_nested_module_structure)
 - `GitClient` is the only module importing `gix` or invoking the
       `git` CLI
-  [verify](tests/loom-test.sh::test_git_client_encapsulation)
+  [check](tests/loom-test.sh::test_git_client_encapsulation)
 - Renderer + log writer subscribe to the same `AgentEvent` channel
-  [verify](tests/loom-test.sh::test_run_single_event_channel)
+  [check](tests/loom-test.sh::test_run_single_event_channel)
 - Domain identifiers are tuple-struct newtypes
-  [verify](tests/loom-test.sh::test_newtypes_for_identifiers)
+  [check](tests/loom-test.sh::test_newtypes_for_identifiers)
 - Each Askama template has a typed context struct
-  [verify](tests/loom-test.sh::test_template_context_structs)
+  [check](tests/loom-test.sh::test_template_context_structs)
 - Tests use `tempfile::tempdir`, never hardcoded `/tmp/...` paths
-  [verify](tests/loom-test.sh::test_no_hardcoded_tmp_paths)
+  [check](tests/loom-test.sh::test_no_hardcoded_tmp_paths)
 
 ### Determinism
 
 - No `std::thread::sleep` in any source file
-  [verify](tests/loom-test.sh::test_no_thread_sleep)
+  [check](tests/loom-test.sh::test_no_thread_sleep)
 - No `tokio::time::sleep` outside `SystemClock::sleep`
-  [verify](tests/loom-test.sh::test_no_tokio_sleep_outside_clock)
+  [check](tests/loom-test.sh::test_no_tokio_sleep_outside_clock)
 - No `tokio::time::timeout` outside `SystemClock::timeout`
-  [verify](tests/loom-test.sh::test_no_tokio_timeout_outside_clock)
+  [check](tests/loom-test.sh::test_no_tokio_timeout_outside_clock)
 - No `Instant::now()` / `SystemTime::now()` outside `SystemClock`
-  [verify](tests/loom-test.sh::test_no_real_clock_outside_system_clock)
+  [check](tests/loom-test.sh::test_no_real_clock_outside_system_clock)
 - No `#[ignore]` outside the container smoke runner
-  [verify](tests/loom-test.sh::test_no_ignore_for_flake)
+  [check](tests/loom-test.sh::test_no_ignore_for_flake)
 
 ### Annotation gate
 
-- Every `[verify]` / `[judge]` annotation in `specs/*.md` resolves
-      to an existing function in the named file
-  [verify](tests/loom-test.sh::test_acceptance_annotations_resolve)
+- Every `[check]` / `[test]` / `[system]` / `[judge]` annotation in
+      `specs/*.md` resolves to a valid verifier for its tier
+  [check](tests/loom-test.sh::test_acceptance_annotations_resolve)
 - Every `test_*` function in `tests/loom-test.sh` is referenced by
       at least one annotation in some spec
-  [verify](tests/loom-test.sh::test_no_orphan_test_functions)
+  [check](tests/loom-test.sh::test_no_orphan_test_functions)
 - Every cargo test name invoked by a dispatcher in
       `tests/loom-test.sh` resolves to a defined `#[test]` /
       `#[tokio::test]` function in the named cargo target
-  [verify](tests/loom-test.sh::test_dispatcher_cargo_tests_resolve)
+  [check](tests/loom-test.sh::test_dispatcher_cargo_tests_resolve)
 
 ### Property-based testing
 
 - JSONL line parser proptest: never panics on arbitrary bytes,
       respects `MAX_LINE_BYTES`, never emits `AgentEvent` from a
       malformed line
-  [verify](tests/loom-test.sh::test_jsonl_parser_invariants)
+  [test](tests/loom-test.sh::test_jsonl_parser_invariants)
 - Pi protocol parser proptest: round-trip identity for known
       shapes, unknown shapes map to typed errors, never panics
-  [verify](tests/loom-test.sh::test_pi_parser_invariants)
+  [test](tests/loom-test.sh::test_pi_parser_invariants)
 - Claude stream-json parser proptest: round-trip identity for
       known shapes, `Unknown` variant catches unknown types, never
       panics
-  [verify](tests/loom-test.sh::test_claude_parser_invariants)
+  [test](tests/loom-test.sh::test_claude_parser_invariants)
 - State DB rebuild proptest: arbitrary spec content never
       corrupts schema; corrupted DB always recovers via `recreate`
-  [verify](tests/loom-test.sh::test_state_db_rebuild_invariants)
+  [test](tests/loom-test.sh::test_state_db_rebuild_invariants)
 - `PROPTEST_CASES=32` for CI; overridable via env var
-  [verify](tests/loom-test.sh::test_proptest_case_count)
+  [check](tests/loom-test.sh::test_proptest_case_count)
 
 ### Snapshot testing
 
 - Every Askama template has at least one `insta` snapshot under
       `loom/crates/loom-templates/tests/snapshots/`
-  [verify](tests/loom-test.sh::test_template_snapshots_exist)
+  [check](tests/loom-test.sh::test_template_snapshots_exist)
 - `loom --help` and every subcommand `--help` have `insta`
       snapshots
-  [verify](tests/loom-test.sh::test_cli_help_snapshots_exist)
+  [check](tests/loom-test.sh::test_cli_help_snapshots_exist)
 - Run-time renderer uses substring + structural assertions, not
       `insta` (ensures terminal-output flexibility)
-  [verify](tests/loom-test.sh::test_renderer_no_insta_dependency)
+  [check](tests/loom-test.sh::test_renderer_no_insta_dependency)
 
 ### Cross-platform
 
 - `flake.nix` declares `loom-tests` under `checks.<system>` for
       `x86_64-linux`, `aarch64-linux`, `x86_64-darwin`, `aarch64-darwin`
-  [verify](tests/loom-test.sh::test_flake_declares_loom_for_all_systems)
+  [check](tests/loom-test.sh::test_flake_declares_loom_for_all_systems)
 - `nix run .#test-loom` is exposed only on Linux systems
-  [verify](tests/loom-test.sh::test_smoke_linux_only)
+  [check](tests/loom-test.sh::test_smoke_linux_only)
 - `nix run .#test-loom` on Darwin exits 0 with a clear "not
       available on Darwin" message
-  [verify](tests/loom-test.sh::test_smoke_darwin_skip_message)
+  [system](tests/loom-test.sh::test_smoke_darwin_skip_message)
 
 ### CI integration
 
 - `nix flake check` includes the loom-tests derivation that runs
       `cargo nextest run --workspace`
-  [verify](tests/loom-test.sh::test_flake_check_includes_loom)
+  [check](tests/loom-test.sh::test_flake_check_includes_loom)
 - `nix run .#test-loom` exists as a `writeShellApplication` exposed
       on Linux platforms
-  [verify](tests/loom-test.sh::test_system_runner_exists)
+  [check](tests/loom-test.sh::test_system_runner_exists)
 - `nix run .#fuzz-loom` exists for on-demand `cargo fuzz` runs
       (not gated by `nix flake check`)
-  [verify](tests/loom-test.sh::test_fuzz_runner_exists)
+  [check](tests/loom-test.sh::test_fuzz_runner_exists)
 - Warm-cache `cargo nextest run --workspace` completes in <5s
       (soft target, not hard NFR)
-  [verify](tests/loom-test.sh::test_cargo_nextest_timing)
+  [system](tests/loom-test.sh::test_cargo_nextest_timing)
 - Container smoke completes in <30s
-  [verify](tests/loom-test.sh::test_smoke_timing)
+  [system](tests/loom-test.sh::test_smoke_timing)
 - pi-mono and Claude Code versions pinned in
       `modules/flake/overlays.nix`
-  [verify](tests/loom-test.sh::test_protocol_versions_pinned)
+  [check](tests/loom-test.sh::test_protocol_versions_pinned)
 
 ## Requirements
 
