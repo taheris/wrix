@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::error::GateError;
+use crate::GateError;
 
 /// Verifier tier for one annotation. Closed set per RS-17; the wire
 /// strings line up with the `[tier]` text in spec files.

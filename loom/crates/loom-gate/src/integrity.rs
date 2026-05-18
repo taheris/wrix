@@ -8,8 +8,8 @@
 
 use std::path::PathBuf;
 
+use crate::GateError;
 use crate::annotation::{Annotation, Tier};
-use crate::error::GateError;
 
 /// One finding surfaced by the integrity gate.
 ///

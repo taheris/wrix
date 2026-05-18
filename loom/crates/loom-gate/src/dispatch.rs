@@ -10,8 +10,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::GateError;
 use crate::annotation::Annotation;
-use crate::error::GateError;
 
 /// JSON-line verdict every verifier returns on stdout, per the
 /// verifier-runner contract in `specs/loom-gate.md`. The exit code mirrors

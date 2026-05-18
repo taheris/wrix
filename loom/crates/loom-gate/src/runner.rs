@@ -9,8 +9,8 @@
 
 use std::path::Path;
 
+use crate::GateError;
 use crate::annotation::Tier;
-use crate::error::GateError;
 
 /// Template string for a batched-tier runner with a `{paths}` placeholder
 /// substituted at invocation time. Default templates come from toolchain

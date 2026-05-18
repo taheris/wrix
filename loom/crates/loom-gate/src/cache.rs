@@ -10,7 +10,7 @@ use std::path::Path;
 
 use loom_events::identifier::SpecLabel;
 
-use crate::error::GateError;
+use crate::GateError;
 
 /// Per-criterion verdict recorded by the most recent verifier run.
 ///
