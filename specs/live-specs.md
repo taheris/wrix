@@ -238,67 +238,67 @@ Utility Commands:
 ## Success Criteria
 
 - [ ] `[verify]` and `[judge]` annotations parse correctly from spec success criteria
-  [verify](../tests/ralph/run-tests.sh#test_parse_spec_annotations)
+  [test](tests/ralph/run-tests.sh::test_parse_spec_annotations)
 - [ ] `ralph spec` lists all spec files with annotation counts (verify/judge/unannotated)
-  [judge](../tests/judges/live-specs.sh#test_spec_index_output)
+  [judge](tests/judges/live-specs.sh::test_spec_index_output)
 - [ ] `ralph spec --verbose` shows per-criterion detail
-  [judge](../tests/judges/live-specs.sh#test_spec_verbose_output)
+  [judge](tests/judges/live-specs.sh::test_spec_verbose_output)
 - [ ] `ralph spec --verify` runs shell tests across all specs and reports PASS/FAIL/SKIP
-  [judge](../tests/judges/live-specs.sh#test_spec_verify_runner)
+  [judge](tests/judges/live-specs.sh::test_spec_verify_runner)
 - [ ] `ralph spec --judge` invokes LLM with rubric across all specs and reports PASS/FAIL/SKIP
-  [judge](../tests/judges/live-specs.sh#test_spec_judge_runner)
+  [judge](tests/judges/live-specs.sh::test_spec_judge_runner)
 - [ ] `ralph spec --all` runs both verify and judge
-  [judge](../tests/judges/live-specs.sh#test_spec_all_flag)
+  [judge](tests/judges/live-specs.sh::test_spec_all_flag)
 - [ ] Criteria with no annotation show as SKIP in verify/judge output
-  [verify](../tests/ralph/run-tests.sh#test_parse_spec_annotations)
+  [test](tests/ralph/run-tests.sh::test_parse_spec_annotations)
 - [ ] `ralph spec` and `ralph status` with no flags remain instant (no test/LLM execution)
-  [judge](../tests/judges/live-specs.sh#test_spec_instant_default)
+  [judge](tests/judges/live-specs.sh::test_spec_instant_default)
 - [ ] `ralph status --watch` creates tmux split with auto-refresh
-  [judge](../tests/judges/live-specs.sh#test_status_watch_tmux)
+  [judge](tests/judges/live-specs.sh::test_status_watch_tmux)
 - [ ] `ralph status --watch` errors clearly when not in tmux
-  [judge](../tests/judges/live-specs.sh#test_status_watch_no_tmux)
+  [judge](tests/judges/live-specs.sh::test_status_watch_no_tmux)
 - [ ] `ralph status --watch` works standalone (no active ralph run required)
-  [judge](../tests/judges/live-specs.sh#test_status_watch_standalone)
+  [judge](tests/judges/live-specs.sh::test_status_watch_standalone)
 - [ ] `RALPH_CLARIFY` in orchestrator adds `ralph:clarify` label to bead
-  [verify](../tests/ralph/run-tests.sh#test_run_handles_clarify_signal)
+  [test](tests/ralph/run-tests.sh::test_run_handles_clarify_signal)
 - [ ] `ralph run` skips beads with `ralph:clarify` label
-  [judge](../tests/judges/live-specs.sh#test_run_skips_awaiting)
+  [judge](tests/judges/live-specs.sh::test_run_skips_awaiting)
 - [ ] `ralph status` displays awaiting items with question text and age
-  [judge](../tests/judges/live-specs.sh#test_status_awaiting_display)
+  [judge](tests/judges/live-specs.sh::test_status_awaiting_display)
 - [ ] Judge test files define rubrics via `judge_files` and `judge_criterion`
-  [judge](../tests/judges/live-specs.sh#test_judge_rubric_format)
+  [judge](tests/judges/live-specs.sh::test_judge_rubric_format)
 - [ ] `ralph sync --deps` lists required nix packages for current spec's tests
-  [verify](../tests/ralph/run-tests.sh#test_sync_deps_basic)
+  [test](tests/ralph/run-tests.sh::test_sync_deps_basic)
 - [ ] Annotations are clickable links in GitHub and VS Code
-  [judge](../tests/judges/live-specs.sh#test_clickable_links)
+  [judge](tests/judges/live-specs.sh::test_clickable_links)
 - [ ] `ralph spec --verify` with no `--spec` flag runs verify tests across all spec files
-  [judge](../tests/judges/live-specs.sh#test_spec_verify_all_specs)
+  [judge](tests/judges/live-specs.sh::test_spec_verify_all_specs)
 - [ ] `ralph spec --judge` with no `--spec` flag runs judge tests across all spec files
-  [judge](../tests/judges/live-specs.sh#test_spec_judge_all_specs)
+  [judge](tests/judges/live-specs.sh::test_spec_judge_all_specs)
 - [ ] `ralph spec --all` with no `--spec` flag runs both across all spec files
-  [judge](../tests/judges/live-specs.sh#test_spec_all_all_specs)
+  [judge](tests/judges/live-specs.sh::test_spec_all_all_specs)
 - [ ] `ralph spec --verify --spec notifications` runs verify tests only for `specs/notifications.md`
-  [judge](../tests/judges/live-specs.sh#test_spec_filter_single)
+  [judge](tests/judges/live-specs.sh::test_spec_filter_single)
 - [ ] `ralph spec -v` is equivalent to `ralph spec --verify`
-  [verify](../tests/ralph/run-tests.sh#test_spec_short_flag_v)
+  [test](tests/ralph/run-tests.sh::test_spec_short_flag_v)
 - [ ] `ralph spec -j` is equivalent to `ralph spec --judge`
-  [verify](../tests/ralph/run-tests.sh#test_spec_short_flag_j)
+  [test](tests/ralph/run-tests.sh::test_spec_short_flag_j)
 - [ ] `ralph spec -a` is equivalent to `ralph spec --all`
-  [verify](../tests/ralph/run-tests.sh#test_spec_short_flag_a)
+  [test](tests/ralph/run-tests.sh::test_spec_short_flag_a)
 - [ ] `ralph spec -s notifications` is equivalent to `ralph spec --spec notifications`
-  [verify](../tests/ralph/run-tests.sh#test_spec_short_flag_s)
+  [test](tests/ralph/run-tests.sh::test_spec_short_flag_s)
 - [ ] `-v` no longer maps to `--verbose`; `--verbose` has no short flag
-  [verify](../tests/ralph/run-tests.sh#test_spec_verbose_no_short_v)
+  [test](tests/ralph/run-tests.sh::test_spec_verbose_no_short_v)
 - [ ] Short flags compose: `ralph spec -vj` is equivalent to `ralph spec --all`
-  [verify](../tests/ralph/run-tests.sh#test_spec_short_compose)
+  [test](tests/ralph/run-tests.sh::test_spec_short_compose)
 - [ ] Multi-spec output groups results by spec with per-spec headers
-  [judge](../tests/judges/live-specs.sh#test_spec_grouped_output)
+  [judge](tests/judges/live-specs.sh::test_spec_grouped_output)
 - [ ] Multi-spec output ends with a summary line including total pass/fail/skip and spec count
-  [judge](../tests/judges/live-specs.sh#test_spec_summary_line)
+  [judge](tests/judges/live-specs.sh::test_spec_summary_line)
 - [ ] Exit code is non-zero if any spec has a failure in multi-spec mode
-  [verify](../tests/ralph/run-tests.sh#test_spec_nonzero_exit)
+  [test](tests/ralph/run-tests.sh::test_spec_nonzero_exit)
 - [ ] Specs with no success criteria are silently skipped in multi-spec mode
-  [verify](../tests/ralph/run-tests.sh#test_spec_skip_empty)
+  [test](tests/ralph/run-tests.sh::test_spec_skip_empty)
 
 ## Out of Scope
 
