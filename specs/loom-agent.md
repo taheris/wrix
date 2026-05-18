@@ -565,97 +565,97 @@ connection, network filtering, session audit logging.
 ### Agent trait
 
 - `AgentBackend` trait defined in loom-driver with associated `spawn`; no `SUPPORTS_STEERING` constant (both backends steer)
-  [verify](tests/loom-test.sh::test_agent_trait_exists)
+  [check](tests/loom-test.sh::test_agent_trait_exists)
 - `run_agent` compiles with both `PiBackend` and `ClaudeBackend` as concrete types
-  [verify](tests/loom-test.sh::test_agent_trait_static_dispatch)
+  [check](tests/loom-test.sh::test_agent_trait_static_dispatch)
 - `AgentEvent` enum covers: MessageDelta, ToolCall, ToolResult, TurnEnd, SessionComplete, CompactionStart, CompactionEnd, Error
-  [verify](tests/loom-test.sh::test_agent_event_variants)
+  [check](tests/loom-test.sh::test_agent_event_variants)
 - `SpawnConfig` struct captures image_ref, image_source, workspace, env, initial_prompt, agent_args, scratch_dir
-  [verify](tests/loom-test.sh::test_spawn_config_fields)
+  [check](tests/loom-test.sh::test_spawn_config_fields)
 - Typestate `AgentSession<Idle>` / `AgentSession<Active>` prevents invalid transitions
-  [verify](tests/loom-test.sh::test_typestate_transitions)
+  [check](tests/loom-test.sh::test_typestate_transitions)
 - `ProtocolError` variants cover InvalidJson, UnknownMessageType, Io, ProcessExit, UnexpectedEof, LineTooLong, Unsupported
-  [verify](tests/loom-test.sh::test_protocol_error_variants)
+  [check](tests/loom-test.sh::test_protocol_error_variants)
 
 ### Pi backend
 
 - Pi backend sends `get_commands` probe on startup and fails fast if required commands are missing
-  [verify](tests/loom-test.sh::test_pi_startup_probe)
+  [test](tests/loom-test.sh::test_pi_startup_probe)
 - Pi backend parses JSONL events via two-phase deserialization
-  [verify](tests/loom-test.sh::test_pi_two_phase_deser)
+  [test](tests/loom-test.sh::test_pi_two_phase_deser)
 - Pi backend sends JSONL commands to pi's stdin
-  [verify](tests/loom-test.sh::test_pi_rpc_command_sending)
+  [test](tests/loom-test.sh::test_pi_rpc_command_sending)
 - Pi backend supports steering (steer returns Ok and reaches the agent on the next turn)
-  [verify](tests/loom-test.sh::test_pi_supports_steering)
+  [test](tests/loom-test.sh::test_pi_supports_steering)
 - Pi backend maps all pi event types to AgentEvent variants
-  [verify](tests/loom-test.sh::test_pi_event_mapping)
+  [test](tests/loom-test.sh::test_pi_event_mapping)
 - Pi backend detects CompactionStart event, reads `prompt.txt` + `scratch.md` from the per-key scratch directory, and sends the concatenated content via steer
-  [verify](tests/loom-test.sh::test_pi_compaction_repin)
+  [test](tests/loom-test.sh::test_pi_compaction_repin)
 - Pi backend handles malformed JSONL gracefully (logs warning, continues)
-  [verify](tests/loom-test.sh::test_pi_malformed_jsonl)
+  [test](tests/loom-test.sh::test_pi_malformed_jsonl)
 - Pi backend logs extension_ui_request at debug level without responding
-  [verify](tests/loom-test.sh::test_pi_extension_ui_passthrough)
+  [test](tests/loom-test.sh::test_pi_extension_ui_passthrough)
 
 ### Claude backend
 
 - Claude backend parses stream-json JSONL events from claude's stdout
-  [verify](tests/loom-test.sh::test_claude_stream_json_parsing)
+  [test](tests/loom-test.sh::test_claude_stream_json_parsing)
 - Claude backend uses `#[serde(tag = "type")]` for tagged enum deserialization
-  [verify](tests/loom-test.sh::test_claude_tagged_enum)
+  [check](tests/loom-test.sh::test_claude_tagged_enum)
 - Claude backend maps claude event types to AgentEvent variants
-  [verify](tests/loom-test.sh::test_claude_event_mapping)
+  [test](tests/loom-test.sh::test_claude_event_mapping)
 - Claude backend captures cost_usd from result events
-  [verify](tests/loom-test.sh::test_claude_cost_capture)
+  [test](tests/loom-test.sh::test_claude_cost_capture)
 - Claude backend handles unknown event types via `#[serde(other)]`
-  [verify](tests/loom-test.sh::test_claude_unknown_events)
+  [test](tests/loom-test.sh::test_claude_unknown_events)
 - Claude backend's `repin.sh` is registered under `SessionStart[matcher: compact]` before spawn, and the script emits a JSON envelope containing the scratch directory's `prompt.txt` + `scratch.md` when fired
-  [verify](tests/loom-test.sh::test_claude_repin_hook_registered)
+  [test](tests/loom-test.sh::test_claude_repin_hook_registered)
 - Claude backend auto-approves permission requests via control_response
-  [verify](tests/loom-test.sh::test_claude_permission_autoapprove)
+  [test](tests/loom-test.sh::test_claude_permission_autoapprove)
 - Claude backend supports steering — sends a stream-json user message via stdin during the session and verifies the agent receives it
-  [verify](tests/loom-test.sh::test_claude_supports_steering)
+  [test](tests/loom-test.sh::test_claude_supports_steering)
 - Claude backend shutdown watchdog: on `result` event, loom closes stdin; if claude does not exit within grace period, sends SIGTERM then SIGKILL
-  [verify](tests/loom-test.sh::test_claude_shutdown_watchdog)
+  [test](tests/loom-test.sh::test_claude_shutdown_watchdog)
 
 ### Backend selection
 
 - Per-phase config resolves correct backend (`[phase.todo].agent.backend` overrides `[phase.default].agent.backend`)
-  [verify](tests/loom-test.sh::test_per_phase_backend_config)
+  [test](tests/loom-test.sh::test_per_phase_backend_config)
 - `--agent` CLI flag overrides all phase config for the invocation
-  [verify](tests/loom-test.sh::test_backend_selection_flag)
+  [test](tests/loom-test.sh::test_backend_selection_flag)
 - Default (no phase config, no flag) selects claude
-  [verify](tests/loom-test.sh::test_backend_default_claude)
+  [test](tests/loom-test.sh::test_backend_default_claude)
 - Invalid backend name produces clear error
-  [verify](tests/loom-test.sh::test_backend_invalid_name)
+  [test](tests/loom-test.sh::test_backend_invalid_name)
 - Pi backend calls `set_model` after spawn when phase config specifies provider/model
-  [verify](tests/loom-test.sh::test_pi_set_model_from_phase_config)
+  [test](tests/loom-test.sh::test_pi_set_model_from_phase_config)
 
 ### Container integration
 
 - Loom spawns containers via `wrapix spawn --spawn-config <file>
       --stdio` with the correct profile image, never via `podman run` directly
-  [verify](tests/loom-test.sh::test_wrapix_spawn_dispatch)
+  [test](tests/loom-test.sh::test_wrapix_spawn_dispatch)
 - Container receives agent stdin/stdout via pipe
-  [verify](tests/loom-test.sh::test_container_stdio_pipe)
+  [test](tests/loom-test.sh::test_container_stdio_pipe)
 - Entrypoint starts pi in RPC mode when `WRAPIX_AGENT=pi`
-  [verify](tests/loom-test.sh::test_entrypoint_pi_mode)
+  [check](tests/loom-test.sh::test_entrypoint_pi_mode)
 - Entrypoint starts claude normally when `WRAPIX_AGENT=claude`
-  [verify](tests/loom-test.sh::test_entrypoint_claude_mode)
+  [check](tests/loom-test.sh::test_entrypoint_claude_mode)
 - Entrypoint preserves git SSH, beads, network filtering for both agents
-  [verify](tests/loom-test.sh::test_entrypoint_shared_setup)
+  [check](tests/loom-test.sh::test_entrypoint_shared_setup)
 
 ### Agent runtime layer
 
 - Pi runtime layer adds Node.js and pi binary to any workspace profile
-  [verify](tests/loom-test.sh::test_pi_runtime_layer)
+  [system](tests/loom-test.sh::test_pi_runtime_layer)
 - Image builds with `profile:rust` + `WRAPIX_AGENT=pi` (composition works)
-  [verify](tests/loom-test.sh::test_pi_rust_composition)
+  [system](tests/loom-test.sh::test_pi_rust_composition)
 - Image builds with `profile:base` + `WRAPIX_AGENT=pi`
-  [verify](tests/loom-test.sh::test_pi_base_composition)
+  [system](tests/loom-test.sh::test_pi_base_composition)
 - Pi binary is functional inside container (`pi --version` succeeds)
-  [verify](tests/loom-test.sh::test_pi_binary_in_container)
+  [system](tests/loom-test.sh::test_pi_binary_in_container)
 - Claude runtime adds nothing (claude already in base image)
-  [verify](tests/loom-test.sh::test_claude_runtime_noop)
+  [system](tests/loom-test.sh::test_claude_runtime_noop)
 
 ## Requirements
 
