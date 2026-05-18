@@ -1765,6 +1765,7 @@ dependencies = [
  "loom-events",
  "pulldown-cmark",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror",
  "toml",

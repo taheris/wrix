@@ -26,7 +26,10 @@ pub mod runner;
 
 pub use annotation::{Annotation, Criterion, ParsedSpecs, Tier};
 pub use cache::{CacheRow, Verdict};
-pub use dispatch::VerifierVerdict;
+pub use dispatch::{
+    DispatchError, DispatchOptions, DispatchOutcome, EmptyScope, TestScope, VerifierVerdict,
+    run_check, run_judge, run_system, run_test,
+};
 pub use integrity::{
     CommandResolver, FsCommandResolver, IntegrityError, IntegrityFinding,
     RustWorkspaceTestResolver, TestPathResolver,
