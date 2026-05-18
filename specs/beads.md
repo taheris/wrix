@@ -100,15 +100,15 @@ Key settings in `.beads/config.yaml`:
 ## Success Criteria
 
 - [ ] Issues persist across agent sessions
-  [verify](../tests/ralph/run-tests.sh#test_isolated_beads_db)
+  [test](tests/ralph/run-tests.sh::test_isolated_beads_db)
 - [ ] Dependencies correctly block `bd ready` output
-  [verify](../tests/ralph/run-tests.sh#test_run_respects_dependencies)
+  [test](tests/ralph/run-tests.sh::test_run_respects_dependencies)
 - [ ] `bd dolt pull`/`bd dolt push` works in container environment
-  [judge](../tests/judges/beads.sh#test_sync_in_container)
+  [judge](tests/judges/beads.sh::test_sync_in_container)
 - [ ] Priority and status filtering works
-  [verify](../tests/ralph/run-tests.sh#test_config_data_driven)
+  [test](tests/ralph/run-tests.sh::test_config_data_driven)
 - [ ] Issues can be created with descriptions
-  [verify](../tests/ralph/run-tests.sh#test_discovered_work)
+  [test](tests/ralph/run-tests.sh::test_discovered_work)
 
 ## Out of Scope
 
