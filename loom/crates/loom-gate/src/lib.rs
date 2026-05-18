@@ -23,6 +23,7 @@ pub mod cache;
 pub mod dispatch;
 pub mod integrity;
 pub mod runner;
+pub mod scope;
 
 pub use annotation::{Annotation, Criterion, ParsedSpecs, Tier};
 pub use cache::{CacheRow, Verdict};
@@ -35,6 +36,7 @@ pub use integrity::{
     RustWorkspaceTestResolver, TestPathResolver,
 };
 pub use runner::{RunnerError, RunnerKind, RunnerTemplate, check_zero_match};
+pub use scope::{CargoMetadataScope, ScopeError};
 
 /// Scaffold error returned by every stub entry point until the
 /// implementation bead lands. Per RS-9, stubs return a typed error rather
