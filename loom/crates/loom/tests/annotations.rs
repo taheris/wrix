@@ -532,18 +532,47 @@ fn top_level_functions(body: &str) -> Vec<ShellFunc> {
                 let mut buf = String::new();
                 let mut in_single = false;
                 let mut in_double = false;
+                let mut in_backtick = false;
+                let mut comment = false;
+                // Tracks whether the previous emitted char was whitespace
+                // (or we're at the start of input). Used to disambiguate
+                // bash comments (`#` after whitespace) from parameter
+                // expansion (`${var#pat}`, `${#var}`) where `#` is not a
+                // comment start.
+                let mut prev_was_ws = true;
                 for c in cursor_input.chars() {
-                    if !in_double && c == '\'' {
+                    if comment {
+                        buf.push(c);
+                        prev_was_ws = false;
+                        continue;
+                    }
+                    if !in_double && !in_backtick && c == '\'' {
                         in_single = !in_single;
                         buf.push(c);
+                        prev_was_ws = false;
                         continue;
                     }
-                    if !in_single && c == '"' {
+                    if !in_single && !in_backtick && c == '"' {
                         in_double = !in_double;
+                        buf.push(c);
+                        prev_was_ws = false;
+                        continue;
+                    }
+                    if !in_single && !in_double && c == '`' {
+                        in_backtick = !in_backtick;
+                        buf.push(c);
+                        prev_was_ws = false;
+                        continue;
+                    }
+                    if !in_single && !in_double && !in_backtick && c == '#' && prev_was_ws {
+                        // Bash comment — rest of the line is text, not
+                        // shell tokens. Skip brace-balancing on the tail.
+                        comment = true;
                         buf.push(c);
                         continue;
                     }
-                    if in_single || in_double {
+                    prev_was_ws = c.is_whitespace();
+                    if in_single || in_double || in_backtick {
                         buf.push(c);
                         continue;
                     }
@@ -1698,6 +1727,66 @@ mod outer {
         assert_eq!(funcs.len(), 1);
         assert_eq!(funcs[0].name, "test_one");
         assert!(funcs[0].body.contains("lock_cargo_test foo"));
+    }
+
+    /// A `{` inside a bash comment must not extend the function body —
+    /// brace-balancer needs to skip comments.
+    #[test]
+    fn top_level_functions_ignores_braces_inside_comments() {
+        let body = "\
+test_a() {
+    # comment with { brace
+    echo ok
+}
+test_b() {
+    echo two
+}
+";
+        let funcs = top_level_functions(body);
+        assert_eq!(funcs.len(), 2);
+        assert_eq!(funcs[0].name, "test_a");
+        assert_eq!(funcs[1].name, "test_b");
+    }
+
+    /// `${var#pat}` and `${var%pat}` parameter expansions look like
+    /// comments / format specifiers — but `#` after `{` is bash syntax,
+    /// not a comment, and must stay inside the function body.
+    #[test]
+    fn top_level_functions_handles_parameter_expansion() {
+        let body = "\
+test_a() {
+    name=${pair%=*}
+    val=${pair#*=}
+    echo \"$name=$val\"
+}
+test_b() {
+    echo next
+}
+";
+        let funcs = top_level_functions(body);
+        assert_eq!(funcs.len(), 2);
+        assert_eq!(funcs[0].name, "test_a");
+        assert!(funcs[0].body.contains("${pair#*=}"));
+        assert_eq!(funcs[1].name, "test_b");
+    }
+
+    /// Backtick-quoted text inside a comment ought to be treated as
+    /// quoted (its braces must not enter the brace count). This is what
+    /// bit the proptest_case_count refactor when the comment had
+    /// `` `proptest! {` `` inside it.
+    #[test]
+    fn top_level_functions_handles_backticks_in_comments() {
+        let body = "\
+test_a() {
+    # see `proptest! {` block in properties.rs
+    echo ok
+}
+test_b() {
+    echo next
+}
+";
+        let funcs = top_level_functions(body);
+        assert_eq!(funcs.len(), 2);
     }
 
     #[test]

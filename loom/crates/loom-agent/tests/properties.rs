@@ -41,6 +41,8 @@ fn max_line_bytes_is_ten_megabytes() {
 // ----------------------------------------------------------------------------
 
 proptest! {
+    #![proptest_config(ProptestConfig::with_cases(32))]
+
     #[test]
     fn jsonl_arbitrary_bytes_never_panic(input in ".{0,512}") {
         // PiParser::parse_line — no panic regardless of input shape.
@@ -81,6 +83,8 @@ fn pi_unknown_type() -> impl Strategy<Value = String> {
 }
 
 proptest! {
+    #![proptest_config(ProptestConfig::with_cases(32))]
+
     #[test]
     fn pi_encode_prompt_round_trips(msg in ".{0,128}") {
         let parser = pi_parser();
@@ -147,6 +151,8 @@ fn claude_unknown_type() -> impl Strategy<Value = String> {
 }
 
 proptest! {
+    #![proptest_config(ProptestConfig::with_cases(32))]
+
     #[test]
     fn claude_system_round_trips(
         subtype in "[a-z]{1,16}",

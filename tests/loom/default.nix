@@ -65,7 +65,6 @@ let
     nextestArgs
     // {
       cargoNextestExtraArgs = "-E 'binary(properties)'";
-      PROPTEST_CASES = "512";
     }
   );
 

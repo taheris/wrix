@@ -250,17 +250,6 @@ test_devshell_includes_loom() {
 }
 
 #-----------------------------------------------------------------------------
-# test_clippy_clean — `cargo clippy --workspace` passes with workspace lints.
-# Mirrors the `loom-clippy` flake-check invocation (crane's cargoClippy with
-# `--all-targets`); workspace lints listed under `[workspace.lints.clippy]`
-# already carry `deny`, so cargo clippy exits non-zero on a violation without
-# needing an extra `-- -D warnings`.
-#-----------------------------------------------------------------------------
-test_clippy_clean() {
-    cargo_run clippy --workspace --all-targets
-}
-
-#-----------------------------------------------------------------------------
 # test_workspace_clippy_lints — loom-tests spec Functional #6: clippy block
 # denies unwrap_used, expect_used, panic, todo, unimplemented; warns
 # allow_attributes (use `#[expect(...)]` over `#[allow(...)]`).
@@ -290,13 +279,6 @@ test_workspace_clippy_lints() {
         missing=$((missing + 1))
     fi
     return "$missing"
-}
-
-#-----------------------------------------------------------------------------
-# test_cargo_test — `cargo test --workspace` passes for all crates.
-#-----------------------------------------------------------------------------
-test_cargo_test() {
-    cargo_run test --workspace
 }
 
 #-----------------------------------------------------------------------------
@@ -963,7 +945,7 @@ test_template_compile_time_check() {
         echo "loom-templates/templates not yet scaffolded" >&2
         return 77
     fi
-    for t in plan_new plan_update todo_new todo_update run check msg; do
+    for t in plan_new plan_update todo_new todo_update run review msg; do
         if [ ! -f "$templates_dir/$t.md" ]; then
             echo "missing template: $templates_dir/$t.md" >&2
             missing=$((missing + 1))
@@ -1782,7 +1764,7 @@ test_agent_trait_static_dispatch() {
 # spec-listed `AgentEvent` variant.
 #-----------------------------------------------------------------------------
 test_agent_event_variants() {
-    local f="$LOOM_DIR/crates/loom-driver/src/agent/event.rs"
+    local f="$LOOM_DIR/crates/loom-events/src/event.rs"
     if [ ! -f "$f" ]; then
         echo "missing: $f" >&2
         return 1
@@ -1792,7 +1774,7 @@ test_agent_event_variants() {
         return 1
     fi
     local missing=0 v
-    for v in MessageDelta ToolCall ToolResult TurnEnd SessionComplete \
+    for v in TextDelta ToolCall ToolResult TurnEnd SessionComplete \
              CompactionStart CompactionEnd Error; do
         if ! grep -E "^[[:space:]]+${v}([[:space:]]|\{|,)" "$f" >/dev/null; then
             echo "AgentEvent::${v} missing in $f" >&2
@@ -1983,10 +1965,7 @@ test_claude_permission_autoapprove() {
 # compaction-recovery implementation; the prior `prepare_runtime` rust
 # test still covers file writing on the existing repin path.
 #-----------------------------------------------------------------------------
-test_claude_repin_hook_registered() {
-    echo "not yet implemented (compaction recovery hook registration)" >&2
-    return 77
-}
+test_claude_repin_hook_registered() { _pending_stub claude_repin_hook_registered; }
 
 #-----------------------------------------------------------------------------
 # test_claude_supports_steering — the driver writes a stream-json user
@@ -2413,13 +2392,19 @@ test_flake_check_includes_loom() {
 # and checks.<system>.loom-nextest evaluate for all four supported systems.
 #-----------------------------------------------------------------------------
 test_flake_declares_loom_for_all_systems() {
-    local sys check missing=0 errlog
+    local sys check missing=0 errlog present
     errlog=$(mktemp)
     trap 'rm -f "$errlog"' RETURN
+    # Use `--apply` membership probe rather than `.outPath` so the
+    # evaluator does not realize fenix's per-target rust-src derivation
+    # (which fails IFD when the host platform != target). This still
+    # proves the attribute is declared under `checks.<system>`.
     for sys in x86_64-linux aarch64-linux x86_64-darwin aarch64-darwin; do
         for check in loom-clippy loom-nextest; do
-            if ! nix eval --raw "$REPO_ROOT#checks.$sys.$check.outPath" \
-                    >/dev/null 2>"$errlog"; then
+            present=$(nix eval --raw "$REPO_ROOT#checks.$sys" \
+                    --apply "set: if set ? $check then \"yes\" else \"no\"" \
+                    2>"$errlog" || true)
+            if [ "$present" != "yes" ]; then
                 echo "checks.$sys.$check not declared:" >&2
                 sed 's/^/  /' "$errlog" >&2
                 missing=$((missing + 1))
@@ -2808,15 +2793,23 @@ test_state_db_rebuild_invariants() {
         rebuild_round_trips_known_shapes
 }
 
-# `PROPTEST_CASES=32` is configured for CI in tests/loom/default.nix and
-# is overridable via env var for local exhaustive runs (NFR §Property-
-# Based Testing). The tests/loom/default.nix derivation is the single
-# discoverable point; assert it sets the variable.
+# Default case count of 32 is baked into each `proptest!` block via
+# `ProptestConfig::with_cases(32)`. The env var still overrides upward
+# for local exhaustive runs (`PROPTEST_CASES=2048 …`).
 test_proptest_case_count() {
-    local file="$REPO_ROOT/tests/loom/default.nix"
-    [ -f "$file" ] || { echo "missing $file" >&2; return 1; }
-    grep -qE 'PROPTEST_CASES *= *"32"' "$file" \
-        || { echo "PROPTEST_CASES=32 not set in $file" >&2; return 1; }
+    local missing=0 f blocks pins
+    for f in \
+        "$LOOM_DIR/crates/loom-driver/tests/properties.rs" \
+        "$LOOM_DIR/crates/loom-agent/tests/properties.rs"; do
+        [ -f "$f" ] || { echo "missing $f" >&2; return 1; }
+        blocks=$(grep -cE '^proptest! .$' "$f")
+        pins=$(grep -cE 'ProptestConfig::with_cases\(32\)' "$f")
+        if [ "$blocks" != "$pins" ]; then
+            echo "$f: $blocks proptest blocks, $pins pinned to with_cases(32)" >&2
+            missing=$((missing + 1))
+        fi
+    done
+    return "$missing"
 }
 
 #-----------------------------------------------------------------------------
@@ -2839,7 +2832,7 @@ test_template_snapshots_exist() {
     }
     local missing=0
     # Each typed context gets one snapshot exercising representative inputs.
-    for ctx in plan_new plan_update todo_new todo_update run check msg; do
+    for ctx in plan_new plan_update todo_new todo_update run review msg; do
         local snap="$snap_dir/snapshots__${ctx}_snapshot.snap"
         if [ ! -f "$snap" ]; then
             echo "missing snapshot for ${ctx}: $snap" >&2
@@ -2916,20 +2909,20 @@ test_loom_smoke_real_container() {
     ( cd "$REPO_ROOT" && nix run --impure .#test-loom )
 }
 
-# `tests/loom/default.nix` must expose `loomSmoke` only when the host system
+# `tests/loom/default.nix` must expose `smoke` only when the host system
 # is Linux — the smoke depends on podman, which is not part of Darwin.
 test_smoke_linux_only() {
     local file="$REPO_ROOT/tests/loom/default.nix"
     [ -f "$file" ] || { echo "missing $file" >&2; return 1; }
     grep -q 'isLinux' "$file" || {
-        echo "$file: missing isLinux gate around loomSmoke" >&2
+        echo "$file: missing isLinux gate around smoke" >&2
         return 1
     }
-    grep -q 'loomSmoke =' "$file" || {
-        echo "$file: missing loomSmoke binding" >&2
+    grep -qE '^[[:space:]]*smoke =' "$file" || {
+        echo "$file: missing smoke binding" >&2
         return 1
     }
-    grep -q 'loomSmokeDarwinSkip' "$file" || {
+    grep -q 'darwinSkip' "$file" || {
         echo "$file: missing Darwin skip stub" >&2
         return 1
     }

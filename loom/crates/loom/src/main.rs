@@ -755,12 +755,26 @@ fn run_check_audit(
         CheckAudit::Criteria => {
             let specs_dir = workspace.join("specs");
             let dispatcher = workspace.join("tests/loom-test.sh");
-            let runner = check::criteria::ShellRunner::new(dispatcher.clone());
-            let runner_arg = if no_run { None } else { Some(&runner) };
+            let runner = if no_run {
+                None
+            } else {
+                // Pre-parse so the batched runner can fold every
+                // parseable dispatcher into one nextest invocation up
+                // front; the audit will re-parse internally but that's
+                // a few-ms cost.
+                let index = check::criteria::parse_dispatcher(&dispatcher)?;
+                let candidates: Vec<&str> = index.real.iter().map(String::as_str).collect();
+                Some(check::criteria::BatchedShellRunner::new(
+                    dispatcher.clone(),
+                    workspace,
+                    &index,
+                    &candidates,
+                ))
+            };
             let report = check::criteria::audit_filtered(
                 &specs_dir,
                 &dispatcher,
-                runner_arg,
+                runner.as_ref(),
                 criteria_scope.spec_files.as_ref(),
             )?;
             Ok(check::criteria::report(&report, strict))

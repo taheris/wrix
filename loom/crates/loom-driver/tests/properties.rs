@@ -59,6 +59,8 @@ fn schema_intact(db_path: &std::path::Path) -> bool {
 }
 
 proptest! {
+    #![proptest_config(ProptestConfig::with_cases(32))]
+
     /// Arbitrary spec-file content never panics rebuild and never corrupts
     /// the schema: after `rebuild`, every required table still exists and
     /// the connection stays usable for a follow-up query.

@@ -1747,10 +1747,9 @@ Criteria.
   [verify](tests/loom-test.sh::test_nix_build)
 - Loom binary is available in the devShell
   [verify](tests/loom-test.sh::test_devshell_includes_loom)
-- `cargo clippy` passes with workspace lints
-  [verify](tests/loom-test.sh::test_clippy_clean)
-- `cargo test` passes for all crates
-  [verify](tests/loom-test.sh::test_cargo_test)
+- `cargo clippy --workspace` and `cargo test --workspace` are
+      covered by the `loom-clippy` and `loom-nextest` flake checks
+      (shared cargoArtifacts cache); see [profiles.md](profiles.md)
 
 ## Requirements
 

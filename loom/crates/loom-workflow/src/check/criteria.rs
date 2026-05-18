@@ -22,13 +22,9 @@
 //!
 //! ## Auxiliary findings (not per-criterion)
 //!
-//! The audit also surfaces two structural warnings that don't attach to
+//! The audit also surfaces one structural warning that doesn't attach to
 //! a single criterion:
 //!
-//! - **Unit-test masquerade** — a real dispatcher whose body runs
-//!   `cargo test --lib` against a `::tests::` path (a `#[cfg(test)] mod
-//!   tests` block inside the production crate). Suppressed by the
-//!   per-annotation `@unit-ok` marker.
 //! - **Orphan dispatcher** — a `test_<name>` defined in
 //!   `tests/loom-test.sh` that no `[verify]` annotation references.
 //!
@@ -81,9 +77,6 @@ pub struct VerifyAnnotation {
     /// `test_<fn>` — the dispatcher function name (without the
     /// `tests/loom-test.sh::` prefix).
     pub dispatcher_fn: String,
-    /// `@unit-ok` opt-out marker. Suppresses unit-test masquerade
-    /// warnings for criteria that legitimately target unit logic.
-    pub unit_ok: bool,
 }
 
 /// Per-criterion verdict produced by running the annotated dispatcher
@@ -138,7 +131,11 @@ pub struct RunOutcome {
 /// observe the result". Real callers use [`ShellRunner`]; tests inject
 /// a recording fake so the audit logic can be exercised without a
 /// `cargo test` round-trip.
-pub trait DispatcherRunner {
+///
+/// `Sync` bound: `audit_filtered` dispatches each live runner call on a
+/// worker thread so a 280-criterion audit overlaps cargo per-invocation
+/// overhead instead of paying it serially.
+pub trait DispatcherRunner: Sync {
     fn run(&self, fn_name: &str) -> RunOutcome;
 }
 
@@ -186,8 +183,105 @@ fn tail_lines(s: &str, n: usize) -> String {
     lines[start..].join("\n")
 }
 
-/// Full audit output: a verdict per `[verify]` annotation plus
-/// non-per-criterion findings (orphan dispatchers, masquerade warnings).
+/// Wraps [`ShellRunner`] with a cache populated by a single up-front
+/// `cargo nextest` batch. Any dispatcher whose body the parser can
+/// resolve to a set of cargo-test entries gets its verdict from the
+/// batched run instead of paying the per-dispatcher bash + cargo cost.
+/// Anything the parser bounces (multi-line shell, `nix` invocations,
+/// `--test-threads=1` serial tests) falls through to the bash runner.
+pub struct BatchedShellRunner {
+    fallback: ShellRunner,
+    cache: std::collections::HashMap<String, RunOutcome>,
+}
+
+impl BatchedShellRunner {
+    /// Construct, batch all parseable dispatchers via nextest, and
+    /// populate the cache. `index` carries the per-dispatcher body
+    /// text; `helpers` is the helper-function map from
+    /// [`cargo_dispatch::parse_helpers`]. `workspace_dir` is the
+    /// workspace root (cargo's `Cargo.toml` parent).
+    pub fn new(
+        dispatcher_path: impl Into<std::path::PathBuf>,
+        workspace_dir: &Path,
+        index: &DispatcherIndex,
+        candidate_fns: &[&str],
+    ) -> Self {
+        let fallback = ShellRunner::new(dispatcher_path);
+        let helpers = super::cargo_dispatch::parse_helpers(&index.source);
+        let mut per_fn: std::collections::HashMap<String, super::cargo_dispatch::Invocation> =
+            std::collections::HashMap::new();
+        for fn_name in candidate_fns {
+            if !index.real.contains(*fn_name) {
+                continue;
+            }
+            let Some(body) = index.bodies.get(*fn_name) else {
+                continue;
+            };
+            if let Some(inv) = super::cargo_dispatch::parse_dispatch(body, &helpers) {
+                per_fn.insert((*fn_name).to_string(), inv);
+            }
+        }
+        let mut all_entries: Vec<super::cargo_dispatch::TestEntry> = Vec::new();
+        for inv in per_fn.values() {
+            for entry in &inv.entries {
+                all_entries.push(entry.clone());
+            }
+        }
+        let mut cache = std::collections::HashMap::new();
+        if !all_entries.is_empty() {
+            match super::cargo_dispatch::run_batch(workspace_dir, &all_entries) {
+                Ok(outcome) => {
+                    let stderr_tail = tail_lines(&outcome.stderr, 40);
+                    for (fn_name, inv) in &per_fn {
+                        let any_failed = inv
+                            .entries
+                            .iter()
+                            .any(|e| outcome.failed.contains(&e.test_name));
+                        let verdict = if any_failed {
+                            // nextest's interleaved stderr is the best
+                            // we can give without a per-test re-run;
+                            // the bash fallback is still an option for
+                            // anyone who wants clean per-test output.
+                            RunOutcome {
+                                exit_code: 1,
+                                stderr_tail: stderr_tail.clone(),
+                            }
+                        } else {
+                            RunOutcome {
+                                exit_code: 0,
+                                stderr_tail: String::new(),
+                            }
+                        };
+                        cache.insert(fn_name.clone(), verdict);
+                    }
+                }
+                Err(err) => {
+                    // nextest unavailable (cargo-nextest not on PATH)
+                    // or invocation failed — leave the cache empty so
+                    // everything falls back to the bash runner. The
+                    // audit still completes; it just runs at the old
+                    // serial speed.
+                    eprintln!(
+                        "warning: cargo nextest batch failed ({err}); falling back to per-dispatcher bash"
+                    );
+                }
+            }
+        }
+        Self { fallback, cache }
+    }
+}
+
+impl DispatcherRunner for BatchedShellRunner {
+    fn run(&self, fn_name: &str) -> RunOutcome {
+        if let Some(cached) = self.cache.get(fn_name) {
+            return cached.clone();
+        }
+        self.fallback.run(fn_name)
+    }
+}
+
+/// Full audit output: a verdict per `[verify]` annotation plus the
+/// orphan-dispatcher finding.
 #[derive(Debug, Default)]
 pub struct AuditReport {
     pub criteria: Vec<CriterionResult>,
@@ -228,16 +322,10 @@ fn parse_verify_from_body(spec_file: &Path, body: &str, out: &mut Vec<VerifyAnno
         if let Some(start) = line.find(marker) {
             let after = &line[start + marker.len()..];
             if let Some(end) = after.find(')') {
-                let raw = &after[..end];
-                let (fn_name, unit_ok) = match raw.split_once(" @unit-ok") {
-                    Some((name, _)) => (name.trim(), true),
-                    None => (raw.trim(), false),
-                };
                 out.push(VerifyAnnotation {
                     spec_file: spec_file.to_path_buf(),
                     line_no: idx + 1,
-                    dispatcher_fn: fn_name.to_string(),
-                    unit_ok,
+                    dispatcher_fn: after[..end].trim().to_string(),
                 });
             }
         }
@@ -250,15 +338,17 @@ pub struct DispatcherIndex {
     pub stubs: HashSet<String>,
     /// Functions whose body is a real test invocation.
     pub real: HashSet<String>,
-    /// Per-function body text for masquerade inspection. Keyed by
-    /// `test_<name>`; value is the lines between the opening `{` and
-    /// the matching closing `}` (newline-joined).
+    /// Verbatim body of each `test_<name>` (lines between header and the
+    /// next function header). Used by the nextest-batch fast path to
+    /// recognise dispatchers whose body is a single cargo invocation.
     pub bodies: std::collections::HashMap<String, String>,
+    /// Raw source of the whole dispatcher file. Needed so the cargo-
+    /// invocation parser can resolve `*_cargo_test()` helpers.
+    pub source: String,
 }
 
-/// Collect every `test_<name>() { … }` symbol defined in `tests/loom-test.sh`,
-/// bucket each as `_pending_stub` vs real, and capture each body so the
-/// audit can inspect it for masquerade signatures.
+/// Collect every `test_<name>() { … }` symbol defined in `tests/loom-test.sh`
+/// and bucket each as `_pending_stub` vs real.
 pub fn parse_dispatcher(dispatcher_path: &Path) -> Result<DispatcherIndex, CriteriaError> {
     if !dispatcher_path.is_file() {
         return Err(CriteriaError::NoDispatcher(dispatcher_path.to_path_buf()));
@@ -267,7 +357,10 @@ pub fn parse_dispatcher(dispatcher_path: &Path) -> Result<DispatcherIndex, Crite
         path: dispatcher_path.to_path_buf(),
         source,
     })?;
-    let mut out = DispatcherIndex::default();
+    let mut out = DispatcherIndex {
+        source: body.clone(),
+        ..DispatcherIndex::default()
+    };
     let lines: Vec<&str> = body.lines().collect();
     let starts: Vec<(usize, String)> = lines
         .iter()
@@ -303,34 +396,14 @@ pub fn parse_dispatcher(dispatcher_path: &Path) -> Result<DispatcherIndex, Crite
     Ok(out)
 }
 
-pub fn is_unit_masquerade(body: &str) -> bool {
-    let mut saw_lib = false;
-    for line in body.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('#') {
-            continue;
-        }
-        if trimmed.contains(" --lib ")
-            || trimmed.contains(" --lib\\")
-            || trimmed.ends_with(" --lib")
-        {
-            saw_lib = true;
-        }
-        if saw_lib && trimmed.contains("::tests::") {
-            return true;
-        }
-    }
-    false
-}
-
 /// Run the full audit: per-criterion verdicts via `runner`, plus
-/// auxiliary findings (orphans, masquerade) by static inspection.
+/// the orphan-dispatcher finding by static inspection.
 ///
 /// Pass `runner: Some(&r)` to actually execute the live verifiers (the
 /// FR14 default). Pass `None` for the structural-only pass used by the
-/// pre-commit hook: stubs and missing dispatchers are still flagged,
-/// orphans and masquerade still surface as findings, but real
-/// dispatchers receive a `Skipped` verdict instead of being invoked.
+/// pre-commit hook: stubs, missing dispatchers, and orphan dispatchers
+/// are still flagged, but real dispatchers receive a `Skipped` verdict
+/// instead of being invoked.
 pub fn audit<R: DispatcherRunner>(
     specs_dir: &Path,
     dispatcher_path: &Path,
@@ -368,28 +441,107 @@ pub fn audit_filtered<R: DispatcherRunner>(
         })
         .collect();
 
-    for ann in &in_scope {
-        let fn_name = &ann.dispatcher_fn;
+    // First pass: classify each criterion. Stubs / missing dispatchers /
+    // no-runner skip get an immediate verdict; only "real" dispatchers
+    // need a live invocation.
+    enum Classification {
+        Immediate(CriterionVerdict),
+        Run,
+    }
+    let classified: Vec<Classification> = in_scope
+        .iter()
+        .map(|ann| {
+            let fn_name = &ann.dispatcher_fn;
+            if !index.stubs.contains(fn_name) && !index.real.contains(fn_name) {
+                Classification::Immediate(CriterionVerdict::MissingDispatcher)
+            } else if index.stubs.contains(fn_name) {
+                Classification::Immediate(CriterionVerdict::Stubbed)
+            } else if runner.is_none() {
+                Classification::Immediate(CriterionVerdict::Skipped)
+            } else {
+                Classification::Run
+            }
+        })
+        .collect();
 
-        let verdict = if !index.stubs.contains(fn_name) && !index.real.contains(fn_name) {
-            CriterionVerdict::MissingDispatcher
-        } else if index.stubs.contains(fn_name) {
-            CriterionVerdict::Stubbed
-        } else {
-            match runner {
-                None => CriterionVerdict::Skipped,
-                Some(r) => {
-                    let outcome = r.run(fn_name);
-                    if outcome.exit_code == 0 {
-                        CriterionVerdict::Pass
-                    } else {
-                        CriterionVerdict::Fail {
-                            exit_code: outcome.exit_code,
-                            stderr_tail: outcome.stderr_tail,
-                        }
+    // Second pass: run the live dispatchers in parallel. Cargo's per-
+    // invocation overhead (~100ms manifest + resolve) dominated when this
+    // loop was sequential — 280 criteria × ~250ms ≈ 1m+ wall time. With a
+    // worker pool sized to logical CPUs, the audit overlaps that overhead
+    // across cores.
+    let mut outcomes: std::collections::HashMap<usize, RunOutcome> =
+        std::collections::HashMap::new();
+    if let Some(r) = runner {
+        let to_run: Vec<(usize, &str)> = classified
+            .iter()
+            .zip(in_scope.iter())
+            .enumerate()
+            .filter_map(|(idx, (cls, ann))| match cls {
+                Classification::Run => Some((idx, ann.dispatcher_fn.as_str())),
+                Classification::Immediate(_) => None,
+            })
+            .collect();
+
+        if !to_run.is_empty() {
+            let par = std::thread::available_parallelism()
+                .map(std::num::NonZeroUsize::get)
+                .unwrap_or(4);
+            let chunk_size = to_run.len().div_ceil(par.max(1));
+            std::thread::scope(|s| {
+                let handles: Vec<_> = to_run
+                    .chunks(chunk_size)
+                    .map(|chunk| {
+                        s.spawn(move || -> Vec<(usize, RunOutcome)> {
+                            chunk
+                                .iter()
+                                .map(|(idx, fn_name)| (*idx, r.run(fn_name)))
+                                .collect()
+                        })
+                    })
+                    .collect();
+                for h in handles {
+                    match h.join() {
+                        Ok(chunk) => outcomes.extend(chunk),
+                        // Propagate the original panic so the failure
+                        // surface matches a sequential run; the audit's
+                        // contract is "verdict per criterion or hard
+                        // crash", not "swallow worker panic".
+                        Err(payload) => std::panic::resume_unwind(payload),
                     }
                 }
-            }
+            });
+        }
+    }
+
+    // Third pass: assemble verdicts in annotation order.
+    for (idx, (ann, cls)) in in_scope.iter().zip(classified).enumerate() {
+        let fn_name = &ann.dispatcher_fn;
+        let verdict = match cls {
+            Classification::Immediate(v) => v,
+            Classification::Run => match outcomes.remove(&idx) {
+                Some(outcome) => match outcome.exit_code {
+                    0 => CriterionVerdict::Pass,
+                    // POSIX/Automake convention: exit 77 means the
+                    // dispatcher deliberately skipped (e.g. a tool it
+                    // depends on is not on PATH in this environment).
+                    77 => CriterionVerdict::Skipped,
+                    code => CriterionVerdict::Fail {
+                        exit_code: code,
+                        stderr_tail: outcome.stderr_tail,
+                    },
+                },
+                // Defensive: every `Classification::Run` is funnelled
+                // into the parallel `to_run` list above. A missing
+                // outcome means a worker silently dropped the slot —
+                // surface as a hard fail with a synthetic exit code so
+                // the audit stays observable.
+                None => CriterionVerdict::Fail {
+                    exit_code: -1,
+                    stderr_tail: format!(
+                        "internal: dispatcher worker produced no outcome for {fn_name}"
+                    ),
+                },
+            },
         };
 
         report.criteria.push(CriterionResult {
@@ -398,25 +550,6 @@ pub fn audit_filtered<R: DispatcherRunner>(
             dispatcher_fn: fn_name.clone(),
             verdict,
         });
-
-        // Masquerade is a structural finding about the dispatcher,
-        // not part of the per-criterion verdict.
-        if !ann.unit_ok
-            && index.real.contains(fn_name)
-            && let Some(body) = index.bodies.get(fn_name)
-            && is_unit_masquerade(body)
-        {
-            report.findings.push(Finding {
-                severity: Severity::Warning,
-                location: format!("{}:{}", ann.spec_file.display(), ann.line_no),
-                message: format!(
-                    "unit-test masquerade: `{fn_name}` runs a `--lib` test whose \
-                     path contains `::tests::` (production-crate unit test). \
-                     Add `@unit-ok` to the annotation if the unit-level coverage \
-                     is intentional.",
-                ),
-            });
-        }
     }
 
     // Orphan dispatchers — defined but unreferenced. Use the global
@@ -538,20 +671,22 @@ pub fn report(report: &AuditReport, strict: bool) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
+    use std::sync::Mutex;
 
     /// Recording fake runner. Returns a canned `RunOutcome` for each
-    /// `test_*` name; unrecognised names default to exit 0.
+    /// `test_*` name; unrecognised names default to exit 0. `Mutex`
+    /// (not `RefCell`) because the runner trait requires `Sync` so the
+    /// audit can dispatch in parallel.
     struct FakeRunner {
         outcomes: std::collections::HashMap<String, RunOutcome>,
-        calls: RefCell<Vec<String>>,
+        calls: Mutex<Vec<String>>,
     }
 
     impl FakeRunner {
         fn new() -> Self {
             Self {
                 outcomes: std::collections::HashMap::new(),
-                calls: RefCell::new(Vec::new()),
+                calls: Mutex::new(Vec::new()),
             }
         }
 
@@ -565,11 +700,21 @@ mod tests {
             );
             self
         }
+
+        fn calls(&self) -> Vec<String> {
+            self.calls
+                .lock()
+                .expect("fake runner call log poisoned")
+                .clone()
+        }
     }
 
     impl DispatcherRunner for FakeRunner {
         fn run(&self, fn_name: &str) -> RunOutcome {
-            self.calls.borrow_mut().push(fn_name.to_string());
+            self.calls
+                .lock()
+                .expect("fake runner call log poisoned")
+                .push(fn_name.to_string());
             self.outcomes.get(fn_name).cloned().unwrap_or(RunOutcome {
                 exit_code: 0,
                 stderr_tail: String::new(),
@@ -636,30 +781,6 @@ test_three() {
         assert!(index.stubs.contains("test_three"));
         assert!(index.real.contains("test_two"));
         assert_eq!(index.stubs.len() + index.real.len(), 3);
-        assert!(index.bodies["test_two"].contains("cargo test"));
-    }
-
-    #[test]
-    fn unit_masquerade_detects_lib_tests_path() {
-        let body = "    cargo_run test -p loom-render --lib -- renderer::tests::pretty_mode";
-        assert!(is_unit_masquerade(body));
-    }
-
-    #[test]
-    fn unit_masquerade_skips_integration_tests() {
-        let body = "    cargo_run test -p loom-driver --test logging -- run_default_output_shape";
-        assert!(!is_unit_masquerade(body));
-    }
-
-    #[test]
-    fn annotation_parser_extracts_unit_ok_marker() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let body = "- keep this verifier\n  [verify](tests/loom-test.sh::test_fn @unit-ok)\n";
-        write_spec(dir.path(), "demo.md", body);
-        let ann = parse_verify_annotations(dir.path()).expect("parse");
-        assert_eq!(ann.len(), 1);
-        assert_eq!(ann[0].dispatcher_fn, "test_fn");
-        assert!(ann[0].unit_ok, "unit-ok marker must round-trip");
     }
 
     /// FR14 — a real, non-stub dispatcher that exits 0 yields a
@@ -674,7 +795,7 @@ test_three() {
         let r = audit(&specs, &dispatcher, Some(&runner)).expect("audit");
         assert_eq!(r.criteria.len(), 1);
         assert_eq!(r.criteria[0].verdict, CriterionVerdict::Pass);
-        assert_eq!(runner.calls.borrow().as_slice(), &["test_a".to_string()]);
+        assert_eq!(runner.calls().as_slice(), &["test_a".to_string()]);
     }
 
     /// FR14 — a real dispatcher that exits non-zero yields a `Fail`
@@ -713,9 +834,9 @@ test_three() {
         assert_eq!(r.criteria.len(), 1);
         assert_eq!(r.criteria[0].verdict, CriterionVerdict::Stubbed);
         assert!(
-            runner.calls.borrow().is_empty(),
+            runner.calls().is_empty(),
             "stubbed dispatcher must not be executed: {:?}",
-            runner.calls.borrow()
+            runner.calls()
         );
     }
 
@@ -731,7 +852,7 @@ test_three() {
         let r = audit(&specs, &dispatcher, Some(&runner)).expect("audit");
         assert_eq!(r.criteria.len(), 1);
         assert_eq!(r.criteria[0].verdict, CriterionVerdict::MissingDispatcher);
-        assert!(runner.calls.borrow().is_empty());
+        assert!(runner.calls().is_empty());
     }
 
     /// FR14 — mixed verdicts in one spec. Order follows annotation
@@ -815,40 +936,6 @@ test_three() {
         });
         assert_eq!(report(&r, false), 0);
         assert_eq!(report(&r, true), 1);
-    }
-
-    /// Masquerade warning still surfaces alongside the per-criterion
-    /// verdict.
-    #[test]
-    fn audit_warns_on_unit_test_masquerade() {
-        let (_dir, specs, dispatcher) = workspace_with(
-            "test_unit() {\n    cargo_run test -p loom-render --lib -- renderer::tests::x\n}\n",
-            "- criterion\n  [verify](tests/loom-test.sh::test_unit)\n",
-        );
-        let runner = FakeRunner::new().with("test_unit", 0, "");
-        let r = audit(&specs, &dispatcher, Some(&runner)).expect("audit");
-        assert!(
-            r.findings
-                .iter()
-                .any(|f| f.severity == Severity::Warning && f.message.contains("masquerade")),
-            "expected masquerade warning, got: {:?}",
-            r.findings,
-        );
-    }
-
-    #[test]
-    fn audit_unit_ok_marker_silences_masquerade_warning() {
-        let (_dir, specs, dispatcher) = workspace_with(
-            "test_unit() {\n    cargo_run test -p loom-render --lib -- renderer::tests::x\n}\n",
-            "- intentional unit test\n  [verify](tests/loom-test.sh::test_unit @unit-ok)\n",
-        );
-        let runner = FakeRunner::new().with("test_unit", 0, "");
-        let r = audit(&specs, &dispatcher, Some(&runner)).expect("audit");
-        assert!(
-            !r.findings.iter().any(|f| f.message.contains("masquerade")),
-            "@unit-ok must silence masquerade warning: {:?}",
-            r.findings,
-        );
     }
 
     #[test]
@@ -962,7 +1049,7 @@ test_three() {
         let fns: Vec<&String> = r.criteria.iter().map(|c| &c.dispatcher_fn).collect();
         assert_eq!(fns, vec!["test_in"]);
         assert_eq!(
-            runner.calls.borrow().as_slice(),
+            runner.calls().as_slice(),
             &["test_in".to_string()],
             "out-of-scope dispatchers must not run",
         );

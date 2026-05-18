@@ -28,6 +28,7 @@ _:
           wrapix.devToolchain
           pkgs.sccache
           config.treefmt.build.wrapper
+          pkgs.cargo-nextest
           pkgs.flock
           pkgs.gh
           pkgs.podman

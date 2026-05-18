@@ -629,9 +629,8 @@ in Functional #4.
 **Outcome** — these tests check that the *codebase complies* with
 the rules:
 
-- `cargo clippy --workspace` passes (the gate that catches lint
-      violations as they happen)
-  [verify](tests/loom-test.sh::test_clippy_clean)
+- `cargo clippy --workspace` is covered by the `loom-clippy` flake
+      check (shared cargoArtifacts cache); see [profiles.md](profiles.md)
 - No `derive(From)` / `derive(Into)` on tuple-struct newtypes
   [verify](tests/loom-test.sh::test_no_derive_from_on_newtypes)
 - No `loom/crates/*/src/{types,error}.rs` files at crate roots
