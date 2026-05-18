@@ -524,7 +524,7 @@ so it gates PRs in CI. `loom-smoke` is exposed as an app on Linux only.
 ## Success Criteria
 
 > **Migration note.** The bullets below currently carry legacy
-> `[verify](tests/loom-test.sh::test_X)` annotations. They are
+> `[verify]` annotations pointing into `tests/loom-test.sh`. They are
 > retained as-is pending the per-spec migration epic that rewrites
 > each into a per-tier annotation (`[check]` / `[test]` / `[system]`
 > / `[judge]`) per [`docs/spec-conventions.md`](../docs/spec-conventions.md).
