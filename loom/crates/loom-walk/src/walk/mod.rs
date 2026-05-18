@@ -1,15 +1,28 @@
 //! Walk registry — the name → walk function table the binary dispatches
 //! against.
 //!
-//! Each walk implements `WalkFn`. The registry is a static slice so adding
-//! a walk is a one-line edit and the dispatcher can iterate the available
-//! names without runtime allocation. No walks ship in the scaffolding bead;
-//! [`REGISTRY`] is intentionally empty and the walks bead populates it
-//! alongside per-walk fixture coverage in `tests/fixture.rs`.
+//! Each walk is a function in `walk/<name>.rs` that matches [`WalkFn`].
+//! [`REGISTRY`] lists them by name; the dispatcher in `main.rs` looks
+//! up the named walk, runs it, and emits the [`Verdict`] as a JSON
+//! line on stdout per the verifier-runner contract in
+//! `specs/loom-gate.md`.
 
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+
+mod git_client_encapsulation;
+mod newtype_identifiers;
+mod no_derive_from_on_newtypes;
+mod no_hardcoded_tmp_paths;
+mod no_real_clock_outside_system_clock;
+mod no_thread_sleep;
+mod no_tokio_sleep_outside_clock;
+mod no_tokio_timeout_outside_clock;
+mod no_types_or_error_files;
+mod single_event_channel;
+mod template_context_structs;
+mod util;
 
 /// Verdict each walk returns. Matches the verifier-runner contract in
 /// `specs/loom-gate.md`: a JSON line `{"pass": bool, "evidence": "<msg>"}`
@@ -28,13 +41,6 @@ pub struct Verdict {
 /// against the set. `None` means scan the walk's declared scope in full.
 #[derive(Debug, Clone, Default)]
 pub struct WalkInput {
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the scaffolding bead registers zero walks; the walks bead reads this field from every walk implementation it adds"
-        )
-    )]
     pub files: Option<Vec<PathBuf>>,
 }
 
@@ -74,13 +80,54 @@ pub struct Walk {
     pub run: WalkFn,
 }
 
-/// Static registry of every walk this binary dispatches.
-///
-/// Empty in the scaffolding bead; the walks bead populates it as each
-/// `[check]`-tier walk lands. Order in this slice is the order
-/// [`names`] returns and the order errors enumerate available walks —
-/// keep alphabetical so the error message reads stably.
-pub static REGISTRY: &[Walk] = &[];
+/// Static registry of every walk this binary dispatches. Alphabetical
+/// so the error-message enumeration reads stably.
+pub static REGISTRY: &[Walk] = &[
+    Walk {
+        name: "git_client_encapsulation",
+        run: git_client_encapsulation::run,
+    },
+    Walk {
+        name: "newtype_identifiers",
+        run: newtype_identifiers::run,
+    },
+    Walk {
+        name: "no_derive_from_on_newtypes",
+        run: no_derive_from_on_newtypes::run,
+    },
+    Walk {
+        name: "no_hardcoded_tmp_paths",
+        run: no_hardcoded_tmp_paths::run,
+    },
+    Walk {
+        name: "no_real_clock_outside_system_clock",
+        run: no_real_clock_outside_system_clock::run,
+    },
+    Walk {
+        name: "no_thread_sleep",
+        run: no_thread_sleep::run,
+    },
+    Walk {
+        name: "no_tokio_sleep_outside_clock",
+        run: no_tokio_sleep_outside_clock::run,
+    },
+    Walk {
+        name: "no_tokio_timeout_outside_clock",
+        run: no_tokio_timeout_outside_clock::run,
+    },
+    Walk {
+        name: "no_types_or_error_files",
+        run: no_types_or_error_files::run,
+    },
+    Walk {
+        name: "single_event_channel",
+        run: single_event_channel::run,
+    },
+    Walk {
+        name: "template_context_structs",
+        run: template_context_structs::run,
+    },
+];
 
 /// Look up a walk by name. Returns `None` for any name not in
 /// [`REGISTRY`]; callers render the available set themselves via
@@ -113,18 +160,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn empty_registry_lookup_returns_none() {
-        assert!(lookup("anything").is_none());
+    fn registry_lookup_finds_known_walks() {
+        for name in [
+            "no_derive_from_on_newtypes",
+            "no_types_or_error_files",
+            "git_client_encapsulation",
+            "single_event_channel",
+            "newtype_identifiers",
+            "template_context_structs",
+            "no_hardcoded_tmp_paths",
+            "no_thread_sleep",
+            "no_tokio_sleep_outside_clock",
+            "no_tokio_timeout_outside_clock",
+            "no_real_clock_outside_system_clock",
+        ] {
+            assert!(lookup(name).is_some(), "missing walk: {name}");
+        }
     }
 
     #[test]
-    fn empty_registry_names_is_empty() {
-        assert!(names().is_empty());
+    fn registry_lookup_returns_none_for_unknown() {
+        assert!(lookup("definitely_not_a_walk").is_none());
     }
 
     #[test]
-    fn empty_registry_names_pretty_is_none_token() {
-        assert_eq!(names_pretty(), "<none>");
+    fn registry_names_is_alphabetical() {
+        let names = names();
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        assert_eq!(names, sorted);
+    }
+
+    #[test]
+    fn registry_names_pretty_lists_walks() {
+        let pretty = names_pretty();
+        assert!(pretty.contains("no_thread_sleep"), "got: {pretty}");
+        assert!(pretty.contains("git_client_encapsulation"), "got: {pretty}");
     }
 
     #[test]
