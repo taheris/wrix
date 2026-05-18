@@ -252,7 +252,7 @@ fn scan_annotations_in_line(line: &str, lineno: usize, out: &mut Vec<Annotation>
         };
         let label = &line[start + 1..close_bracket];
         let kind = match label {
-            "verify" => AnnotationKind::Verify,
+            "verify" | "check" | "test" | "system" => AnnotationKind::Verify,
             "judge" => AnnotationKind::Judge,
             _ => continue,
         };
