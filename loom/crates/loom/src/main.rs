@@ -919,14 +919,28 @@ fn dispatch_tier(workspace: &Path, args: &GateScopeArgs, tier: Tier) -> anyhow::
     let mut combined: i32 = 0;
     match tier {
         Tier::Check => {
-            for result in loom_gate::run_check(&selected, &options) {
-                combined = persist_dispatch_result(&cache, result, now_ms, &commit, combined);
-            }
+            combined = run_per_annotation_with_progress(
+                &selected,
+                tier,
+                &options,
+                &cache,
+                now_ms,
+                &commit,
+                combined,
+                loom_gate::run_check,
+            );
         }
         Tier::System => {
-            for result in loom_gate::run_system(&selected, &options) {
-                combined = persist_dispatch_result(&cache, result, now_ms, &commit, combined);
-            }
+            combined = run_per_annotation_with_progress(
+                &selected,
+                tier,
+                &options,
+                &cache,
+                now_ms,
+                &commit,
+                combined,
+                loom_gate::run_system,
+            );
         }
         Tier::Test => {
             let template = loom_gate::runner::discover(workspace, Tier::Test)?;
@@ -953,28 +967,78 @@ fn dispatch_tier(workspace: &Path, args: &GateScopeArgs, tier: Tier) -> anyhow::
     Ok(combined)
 }
 
-fn persist_dispatch_result(
+/// Per-annotation dispatch loop for the Check/System tiers with
+/// fail-eager, pass-silent output. On a TTY, an overwriting status
+/// line tracks the currently-running verifier; on a pipe the line is
+/// omitted entirely. Each failing verdict and each dispatch error is
+/// printed to stderr as soon as the verifier returns.
+fn run_per_annotation_with_progress(
+    selected: &[loom_gate::Annotation],
+    tier: Tier,
+    options: &loom_gate::DispatchOptions,
     cache: &StatusCache,
-    result: Result<loom_gate::DispatchOutcome, loom_gate::DispatchError>,
     now_ms: i64,
     commit: &str,
-    combined: i32,
+    mut combined: i32,
+    runner: fn(
+        &[loom_gate::Annotation],
+        &loom_gate::DispatchOptions,
+    ) -> Vec<Result<loom_gate::DispatchOutcome, loom_gate::DispatchError>>,
 ) -> i32 {
-    match result {
-        Ok(outcome) => {
-            let (verdict, exit) = if outcome.verdict.pass {
-                (Verdict::Pass, combined)
-            } else {
-                (Verdict::Fail, combined.max(1))
-            };
-            persist_outcome(cache, &outcome, verdict, now_ms, commit);
-            exit
+    use std::io::{IsTerminal, Write};
+    let mut stderr = std::io::stderr();
+    let is_tty = stderr.is_terminal();
+    let total = selected.len();
+    for (i, ann) in selected.iter().enumerate() {
+        if is_tty {
+            let target = truncate_for_progress(&ann.target, 60);
+            let _ = write!(stderr, "\x1b[2K\rrunning [{}/{total}]: {target}", i + 1);
+            let _ = stderr.flush();
         }
-        Err(err) => {
-            eprintln!("loom gate: dispatch error: {err:#}");
-            combined.max(1)
+        let results = runner(std::slice::from_ref(ann), options);
+        for result in results {
+            match result {
+                Ok(outcome) if outcome.verdict.pass => {
+                    persist_outcome(cache, &outcome, Verdict::Pass, now_ms, commit);
+                }
+                Ok(outcome) => {
+                    if is_tty {
+                        let _ = write!(stderr, "\x1b[2K\r");
+                    }
+                    let _ = writeln!(stderr, "loom gate [{tier}] FAIL: {}", ann.target);
+                    for line in outcome.verdict.evidence.lines().take(5) {
+                        let _ = writeln!(stderr, "  {line}");
+                    }
+                    persist_outcome(cache, &outcome, Verdict::Fail, now_ms, commit);
+                    combined = combined.max(1);
+                }
+                Err(err) => {
+                    if is_tty {
+                        let _ = write!(stderr, "\x1b[2K\r");
+                    }
+                    let _ = writeln!(stderr, "loom gate [{tier}] dispatch error: {}", ann.target);
+                    for line in format!("{err:#}").lines().take(5) {
+                        let _ = writeln!(stderr, "  {line}");
+                    }
+                    combined = combined.max(1);
+                }
+            }
         }
     }
+    if is_tty {
+        let _ = write!(stderr, "\x1b[2K\r");
+        let _ = stderr.flush();
+    }
+    combined
+}
+
+fn truncate_for_progress(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
 }
 
 fn persist_outcome(
