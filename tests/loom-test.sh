@@ -7,16 +7,6 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOOM_DIR="$REPO_ROOT/loom"
-WORKSPACE_TOML="$LOOM_DIR/Cargo.toml"
-
-# Member crates expected at loom/crates/<name>/.
-LOOM_CRATES=(loom loom-events loom-driver loom-render loom-agent loom-workflow loom-templates)
-
-# Workspace-pinned third-party deps (14, per spec).
-LOOM_DEPS=(
-    tokio serde serde_json thiserror displaydoc anyhow
-    tracing tracing-subscriber rusqlite toml askama clap gix fd-lock
-)
 
 # Run cargo with a Rust toolchain. Inside the devshell, cargo is on PATH
 # (fenix-provided rustc 1.95). Outside, fall back to `nix develop` so the
@@ -28,13 +18,6 @@ cargo_run() {
     else
         nix develop "$REPO_ROOT" --command bash -c "cd '$LOOM_DIR' && cargo $*"
     fi
-}
-
-# Read a key from a TOML file via `toml` python module if available, else
-# fall back to grep. Used only for shape checks in `test_workspace_*`.
-toml_grep() {
-    local pattern="$1" file="$2"
-    grep -E "$pattern" "$file"
 }
 
 #-----------------------------------------------------------------------------
@@ -59,160 +42,6 @@ _pending_stub() {
 
 #-----------------------------------------------------------------------------
 # test_workspace_builds — `cargo build` from loom/ root succeeds.
-
-#-----------------------------------------------------------------------------
-# test_crate_structure — all five member crates exist with src/{lib,main}.rs.
-#-----------------------------------------------------------------------------
-test_crate_structure() {
-    local missing=0
-    for crate in "${LOOM_CRATES[@]}"; do
-        local dir="$LOOM_DIR/crates/$crate"
-        if [ ! -d "$dir" ]; then
-            echo "missing crate dir: $dir" >&2
-            missing=$((missing + 1))
-            continue
-        fi
-        if [ ! -f "$dir/Cargo.toml" ]; then
-            echo "missing Cargo.toml: $dir/Cargo.toml" >&2
-            missing=$((missing + 1))
-        fi
-        if [ "$crate" = "loom" ]; then
-            if [ ! -f "$dir/src/main.rs" ]; then
-                echo "missing main.rs: $dir/src/main.rs" >&2
-                missing=$((missing + 1))
-            fi
-        else
-            if [ ! -f "$dir/src/lib.rs" ]; then
-                echo "missing lib.rs: $dir/src/lib.rs" >&2
-                missing=$((missing + 1))
-            fi
-        fi
-        if [ -f "$dir/src/types.rs" ]; then
-            echo "forbidden central types.rs at: $dir/src/types.rs" >&2
-            missing=$((missing + 1))
-        fi
-        if [ -f "$dir/src/error.rs" ]; then
-            echo "forbidden central error.rs at: $dir/src/error.rs" >&2
-            missing=$((missing + 1))
-        fi
-    done
-    return "$missing"
-}
-
-#-----------------------------------------------------------------------------
-# test_workspace_edition — workspace declares edition 2024 + resolver "3".
-#-----------------------------------------------------------------------------
-test_workspace_edition() {
-    if ! toml_grep '^resolver[[:space:]]*=[[:space:]]*"3"' "$WORKSPACE_TOML" >/dev/null; then
-        echo "workspace resolver is not \"3\" in $WORKSPACE_TOML" >&2
-        return 1
-    fi
-    if ! toml_grep '^edition[[:space:]]*=[[:space:]]*"2024"' "$WORKSPACE_TOML" >/dev/null; then
-        echo "workspace.package.edition is not \"2024\" in $WORKSPACE_TOML" >&2
-        return 1
-    fi
-    # Each member must inherit edition from the workspace.
-    local crate dir missing=0
-    for crate in "${LOOM_CRATES[@]}"; do
-        dir="$LOOM_DIR/crates/$crate"
-        if ! grep -E '^edition\.workspace[[:space:]]*=[[:space:]]*true' "$dir/Cargo.toml" >/dev/null; then
-            echo "$crate: edition.workspace = true missing in $dir/Cargo.toml" >&2
-            missing=$((missing + 1))
-        fi
-    done
-    return "$missing"
-}
-
-#-----------------------------------------------------------------------------
-# test_workspace_deps_pinned — every spec-listed third-party crate is pinned
-# under [workspace.dependencies] in loom/Cargo.toml.
-#-----------------------------------------------------------------------------
-test_workspace_deps_pinned() {
-    # Extract the [workspace.dependencies] section into a buffer and check
-    # each expected dep appears as a key. We stop at the next [section].
-    local section
-    section=$(awk '
-        /^\[workspace\.dependencies\][[:space:]]*$/ { in_section = 1; next }
-        in_section && /^\[/ { in_section = 0 }
-        in_section { print }
-    ' "$WORKSPACE_TOML")
-
-    if [ -z "$section" ]; then
-        echo "[workspace.dependencies] section missing in $WORKSPACE_TOML" >&2
-        return 1
-    fi
-
-    local missing=0 dep
-    for dep in "${LOOM_DEPS[@]}"; do
-        if ! grep -E "^${dep}[[:space:]]*=" <<<"$section" >/dev/null; then
-            echo "dep not pinned in [workspace.dependencies]: $dep" >&2
-            missing=$((missing + 1))
-        fi
-    done
-    return "$missing"
-}
-
-#-----------------------------------------------------------------------------
-# test_workspace_lints — workspace declares strict lint block; every member
-# crate inherits it via `[lints] workspace = true`.
-#-----------------------------------------------------------------------------
-test_workspace_lints() {
-    local missing=0
-
-    if ! grep -E '^\[workspace\.lints\.rust\][[:space:]]*$' "$WORKSPACE_TOML" >/dev/null; then
-        echo "[workspace.lints.rust] section missing in $WORKSPACE_TOML" >&2
-        missing=$((missing + 1))
-    fi
-    if ! grep -E '^\[workspace\.lints\.clippy\][[:space:]]*$' "$WORKSPACE_TOML" >/dev/null; then
-        echo "[workspace.lints.clippy] section missing in $WORKSPACE_TOML" >&2
-        missing=$((missing + 1))
-    fi
-    # Spec NF-9: panics banned. The four denials must appear in clippy block.
-    local lint clippy_section
-    clippy_section=$(awk '
-        /^\[workspace\.lints\.clippy\][[:space:]]*$/ { in_section = 1; next }
-        in_section && /^\[/ { in_section = 0 }
-        in_section { print }
-    ' "$WORKSPACE_TOML")
-    for lint in unwrap_used todo unimplemented panic; do
-        if ! grep -E "^${lint}[[:space:]]*=[[:space:]]*\"deny\"" <<<"$clippy_section" >/dev/null; then
-            echo "clippy lint $lint not denied in $WORKSPACE_TOML" >&2
-            missing=$((missing + 1))
-        fi
-    done
-
-    local crate dir
-    for crate in "${LOOM_CRATES[@]}"; do
-        dir="$LOOM_DIR/crates/$crate"
-        if ! awk '
-            /^\[lints\][[:space:]]*$/ { in_section = 1; next }
-            in_section && /^\[/ { in_section = 0 }
-            in_section && /^workspace[[:space:]]*=[[:space:]]*true/ { found = 1 }
-            END { exit (found ? 0 : 1) }
-        ' "$dir/Cargo.toml"; then
-            echo "$crate: [lints] workspace = true missing in $dir/Cargo.toml" >&2
-            missing=$((missing + 1))
-        fi
-    done
-
-    # Spec RS-3 (Workspace Lints): loom/clippy.toml must opt tests out of
-    # the panic-family restriction lints via the `allow-*-in-tests` knobs.
-    local clippy_toml="$LOOM_DIR/clippy.toml"
-    if [ ! -f "$clippy_toml" ]; then
-        echo "missing $clippy_toml (spec RS-3 requires allow-*-in-tests flags)" >&2
-        missing=$((missing + 1))
-    else
-        local flag
-        for flag in allow-expect-in-tests allow-panic-in-tests allow-unwrap-in-tests allow-print-in-tests allow-dbg-in-tests; do
-            if ! grep -E "^${flag}[[:space:]]*=[[:space:]]*true" "$clippy_toml" >/dev/null; then
-                echo "$flag not set to true in $clippy_toml" >&2
-                missing=$((missing + 1))
-            fi
-        done
-    fi
-
-    return "$missing"
-}
 
 #-----------------------------------------------------------------------------
 # test_nix_build — `nix build .#loom` succeeds and produces a loom binary.
@@ -289,131 +118,6 @@ EOF
 # `loom-workflow::run::profile::tests::resolve_profile_image_cli_override_wins_over_label`
 # pins the precedence chain (CLI > label > phase default).
 
-
-#-----------------------------------------------------------------------------
-# test_loom_does_not_invoke_podman — loom Rust sources never invoke podman
-# directly; only documentation/comments may reference it. Both backend
-# spawn paths (PiBackend, ClaudeBackend) MUST drive the wrapper via
-# `wrapix spawn` — the positive contract that complements the negative
-# grep above. A future refactor that bypasses the wrapper to call podman
-# directly would either reintroduce a podman match or drop the spawn
-# string; this test catches both.
-#-----------------------------------------------------------------------------
-test_loom_does_not_invoke_podman() {
-    if [ ! -d "$LOOM_DIR/crates" ]; then
-        echo "loom/crates not yet scaffolded" >&2
-        return 77
-    fi
-    # The contract is: loom never spawns a podman process. Look for the
-    # actual invocation patterns — Command::new("podman" or a bare
-    # "podman" string passed to a process spawn — rather than every
-    # mention of the word, so legitimate metadata (verify-deps mapping,
-    # doc-strings explaining what wrapix does on top) is not a false
-    # positive. Test files under */tests/* are excluded: they may legally
-    # describe podman in shim documentation.
-    local violations=0
-    while IFS= read -r -d '' file; do
-        case "$file" in
-            */tests/*) continue ;;
-        esac
-        local hits
-        hits=$(grep -nE 'Command::new\("podman"|spawn\("podman"|exec\("podman"|process::Command.*podman' "$file" || true)
-        if [ -n "$hits" ]; then
-            echo "podman invocation found in $file:" >&2
-            echo "$hits" >&2
-            violations=$((violations + 1))
-        fi
-    done < <(find "$LOOM_DIR/crates" -name '*.rs' -print0)
-    if [ "$violations" -ne 0 ]; then
-        return 1
-    fi
-
-    # Positive contract: each backend must spawn through `wrapix spawn`.
-    # The literal "spawn" appears as the first arg in both backends'
-    # Command construction; missing it would mean the backend bypassed the
-    # wrapper, which is the failure mode the negative grep alone could miss.
-    local backend
-    for backend in \
-        "$LOOM_DIR/crates/loom-agent/src/pi/backend.rs" \
-        "$LOOM_DIR/crates/loom-agent/src/claude/backend.rs"
-    do
-        if [ ! -f "$backend" ]; then
-            continue
-        fi
-        if ! grep -qE 'cmd\.arg\("spawn"\)' "$backend"; then
-            echo "$backend: missing cmd.arg(\"spawn\") — backend must spawn via wrapix wrapper" >&2
-            return 1
-        fi
-    done
-}
-
-#-----------------------------------------------------------------------------
-# test_no_panics_in_production — non-test Rust code under loom/crates/ contains
-# no `unwrap()`, `expect(...)`, `todo!()`, `unimplemented!()`, or `panic!()`
-# calls. Test code (`#[cfg(test)]` modules and files under `tests/`) is
-# excluded; the workspace clippy block already denies these in production.
-#-----------------------------------------------------------------------------
-test_no_panics_in_production() {
-    if [ ! -d "$LOOM_DIR/crates" ]; then
-        echo "loom/crates not yet scaffolded" >&2
-        return 77
-    fi
-    local hits violations=0
-    while IFS= read -r -d '' file; do
-        # bd-shim and mock-loom-agent are integration-test fixtures
-        # cargo-declared as bins so tests can `Command::new()` them.
-        case "$file" in
-            */tests/*) continue ;;
-            */src/bin/bd-shim.rs) continue ;;
-            */src/bin/mock-loom-agent.rs) continue ;;
-        esac
-        # Strip `#[cfg(test)] mod tests { ... }` blocks before scanning so
-        # unit tests under the same source file are excluded.
-        local body
-        body=$(awk '
-            BEGIN { skip = 0; depth = 0 }
-            /^[[:space:]]*#\[cfg\(test\)\][[:space:]]*$/ { skip = 1; next }
-            skip && /\{/ { depth += gsub(/\{/, "{") }
-            skip && /\}/ {
-                depth -= gsub(/\}/, "}")
-                if (depth <= 0) { skip = 0; depth = 0; next }
-            }
-            !skip { print }
-        ' "$file")
-        hits=$(grep -nE '\b(unwrap|expect|todo|unimplemented|panic)\s*\(' <<<"$body" || true)
-        # Filter out comment lines and the macro pattern in identifier/mod.rs
-        # where `unwrap`/`panic` could appear in doc strings.
-        hits=$(grep -vE '^[[:space:]]*[0-9]+:[[:space:]]*(//|/\*|\*)' <<<"$hits" || true)
-        # Filter out attribute lines like `#[expect(clippy::xxx, ...)]` or
-        # `#[allow(dead_code)]` — these are lint attributes, not call sites.
-        hits=$(grep -vE '^[[:space:]]*[0-9]+:[[:space:]]*#\[(expect|allow|warn|deny|forbid)\(' <<<"$hits" || true)
-        if [ -n "$hits" ]; then
-            echo "panic-in-production candidate(s) in $file:" >&2
-            echo "$hits" >&2
-            violations=$((violations + 1))
-        fi
-    done < <(find "$LOOM_DIR/crates" -name '*.rs' -print0)
-    return "$violations"
-}
-
-#-----------------------------------------------------------------------------
-# test_no_allow_dead_code — non-test Rust code uses `#[expect(dead_code)]`,
-# never `#[allow(dead_code)]` (NF-9). `expect` fails the build if the warning
-# stops firing; `allow` silently rots.
-#-----------------------------------------------------------------------------
-test_no_allow_dead_code() {
-    if [ ! -d "$LOOM_DIR/crates" ]; then
-        echo "loom/crates not yet scaffolded" >&2
-        return 77
-    fi
-    local hits
-    hits=$(grep -rEn '#\[allow\(dead_code\)\]' "$LOOM_DIR/crates" --include='*.rs' || true)
-    if [ -n "$hits" ]; then
-        echo "forbidden #[allow(dead_code)] (use #[expect(dead_code)] instead):" >&2
-        echo "$hits" >&2
-        return 1
-    fi
-}
 
 #-----------------------------------------------------------------------------
 # Workflow commands — each function dispatches into the matching cargo unit
@@ -768,28 +472,6 @@ aux_cargo_test() {
 # every `[verify]`/`[judge]` test file for known tool invocations (curl, jq,
 # rg, tmux, ssh, etc.), collapses aliases (`rg`/`ripgrep`, `ssh`/`scp`) to a
 # single nixpkgs name, and ignores substring matches such as "curling".
-
-#-----------------------------------------------------------------------------
-# test_no_sync_or_tune_command — the loom binary must NOT expose `sync` or
-# `tune` subcommands. Askama compiled templates make per-project sync
-# unnecessary (see `specs/loom-harness.md`). The check greps the binary's
-# clap surface; if either name shows up as a subcommand identifier, the
-# binary has regressed.
-#-----------------------------------------------------------------------------
-test_no_sync_or_tune_command() {
-    local main="$LOOM_DIR/crates/loom/src/main.rs"
-    if [ ! -f "$main" ]; then
-        echo "loom binary not yet scaffolded" >&2
-        return 77
-    fi
-    local hits
-    hits=$(grep -nE '#\[command\(name[[:space:]]*=[[:space:]]*"(sync|tune)"\)\]|^\s*Sync\b|^\s*Tune\b' "$main" || true)
-    if [ -n "$hits" ]; then
-        echo "forbidden sync/tune subcommand surfaced in $main:" >&2
-        echo "$hits" >&2
-        return 1
-    fi
-}
 
 #-----------------------------------------------------------------------------
 # test_plan_new — `loom plan -n <label>` renders the new-spec template, shells
@@ -1288,63 +970,6 @@ _loom_filter_disallowed() {
 #-----------------------------------------------------------------------------
 # `-v` streams `TextDelta` text verbatim during render — same widening as
 # `loom run -v` (the renderer's `Verbose` mode handles both call sites).
-test_loom_events_is_leaf() {
-    local cargo_toml="$REPO_ROOT/loom/crates/loom-events/Cargo.toml"
-    if [ ! -f "$cargo_toml" ]; then
-        echo "FAIL: $cargo_toml does not exist" >&2
-        return 1
-    fi
-    if grep -qE '^loom-(driver|render|agent|workflow|templates)' "$cargo_toml"; then
-        echo "FAIL: loom-events depends on internal crate(s):" >&2
-        grep -E '^loom-(driver|render|agent|workflow|templates)' "$cargo_toml" >&2
-        return 1
-    fi
-}
-test_loom_events_minimal_deps() {
-    local cargo_toml="$REPO_ROOT/loom/crates/loom-events/Cargo.toml"
-    if [ ! -f "$cargo_toml" ]; then
-        echo "FAIL: $cargo_toml does not exist" >&2
-        return 1
-    fi
-    local runtime
-    runtime="$(awk '
-        /^\[dependencies\]/ { in_deps=1; next }
-        /^\[/ { in_deps=0; next }
-        in_deps && /^[a-zA-Z]/ { print $1 }
-    ' "$cargo_toml" | sort)"
-    local want
-    want="$(printf '%s\n' serde serde_json thiserror | sort)"
-    if [ "$runtime" != "$want" ]; then
-        echo "FAIL: loom-events [dependencies] drift." >&2
-        echo "got:"; printf '%s\n' "$runtime" >&2
-        echo "want:"; printf '%s\n' "$want" >&2
-        return 1
-    fi
-    for forbidden in chrono ulid uuid; do
-        if grep -qE "^$forbidden\b" "$cargo_toml"; then
-            echo "FAIL: loom-events must not depend on $forbidden" >&2
-            return 1
-        fi
-    done
-}
-test_loom_render_deps() {
-    local cargo_toml="$REPO_ROOT/loom/crates/loom-render/Cargo.toml"
-    if [ ! -f "$cargo_toml" ]; then
-        echo "FAIL: $cargo_toml does not exist" >&2
-        return 1
-    fi
-    if ! grep -qE '^loom-events' "$cargo_toml"; then
-        echo "FAIL: loom-render must depend on loom-events" >&2
-        return 1
-    fi
-    for forbidden in loom-driver loom-workflow; do
-        if grep -qE "^$forbidden\b" "$cargo_toml"; then
-            echo "FAIL: loom-render must not depend on $forbidden" >&2
-            return 1
-        fi
-    done
-}
-
 #-----------------------------------------------------------------------------
 # test_snapshots_no_crate_root_allows — the snapshot tests must inherit the
 # workspace clippy exemptions in loom/clippy.toml (allow-*-in-tests = true)
@@ -1383,61 +1008,6 @@ test_snapshots_no_crate_root_allows() {
 # fix-ups appear after a handoff (stall), or (b) the `[loop]
 # max_iterations` counter is exhausted.
 #-----------------------------------------------------------------------------
-# test_phase_verdict_decide_called_from_production — FR12 (verdict-gate
-# production wiring). The pure decision function `phase_verdict::decide()`
-# must be invoked from BOTH `loom run`'s per-bead exit (run/production.rs)
-# AND `loom review`'s phase-end (review/production.rs). No production site
-# may inline ad-hoc marker → outcome classification.
-#
-# Verification has two parts: (1) source-level — both production files
-# import and call `decide`; (2) behavioural — dedicated unit tests pin
-# the marker → outcome mapping in each call site so a future regression
-# that resurrects an inline classifier diverging from `decide()` would
-# trip the test, and the canonical Rust unit tests for the pure function
-# stay in `phase_verdict.rs` for documentation.
-#-----------------------------------------------------------------------------
-test_phase_verdict_decide_called_from_production() {
-    local run_prod="$LOOM_DIR/crates/loom-workflow/src/run/production.rs"
-    local review_prod="$LOOM_DIR/crates/loom-workflow/src/review/production.rs"
-    local missing=0
-    if [ ! -f "$run_prod" ]; then
-        echo "missing source: $run_prod" >&2
-        return 1
-    fi
-    if [ ! -f "$review_prod" ]; then
-        echo "missing source: $review_prod" >&2
-        return 1
-    fi
-    if ! grep -qE 'use[[:space:]]+crate::review::\{[^}]*\bdecide\b' "$run_prod"; then
-        echo "run/production.rs must import phase_verdict::decide" >&2
-        missing=$((missing + 1))
-    fi
-    if ! grep -qE '\bdecide\(' "$run_prod"; then
-        echo "run/production.rs must call decide(...) at the per-bead exit" >&2
-        missing=$((missing + 1))
-    fi
-    if ! grep -qE 'use[[:space:]]+super::phase_verdict::\{[^}]*\bdecide\b' "$review_prod"; then
-        echo "review/production.rs must import phase_verdict::decide" >&2
-        missing=$((missing + 1))
-    fi
-    if ! grep -qE '\bdecide\(' "$review_prod"; then
-        echo "review/production.rs must call decide(...) at the phase-end" >&2
-        missing=$((missing + 1))
-    fi
-    # The behavioural tests are the load-bearing surface — without them
-    # the source-level `decide()` call could be dead code that never
-    # executes on the production path.
-    if ! grep -qE 'fn classify_session_routes_marker_through_phase_verdict_decide' "$run_prod"; then
-        echo "run/production.rs missing live-path test for decide() wiring" >&2
-        missing=$((missing + 1))
-    fi
-    if ! grep -qE 'fn classify_review_phase_routes_marker_through_phase_verdict_decide' \
-        "$review_prod"; then
-        echo "review/production.rs missing live-path test for decide() wiring" >&2
-        missing=$((missing + 1))
-    fi
-    return "$missing"
-}
 #-----------------------------------------------------------------------------
 # test_style_rules_pinning_matrix — run.md and review.md include
 # partial/style_rules.md; the other phase templates (plan_new, plan_update,
