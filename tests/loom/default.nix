@@ -82,6 +82,45 @@ let
     }
   );
 
+  # `loom gate verify` driving the deterministic verifier tiers from
+  # `specs/*.md`. Per the Nix Integration section of
+  # `specs/loom-tests.md`, the derivation threads the loom binary,
+  # cargo-nextest, cargoArtifacts, and staged source (with `specs/`)
+  # into the build sandbox via the craneLib custom-derivation pattern.
+  # LOOM_VERIFY_TIERS scopes the verify loop to `test` because
+  # [check] / [system] tier verifiers across the repo do not yet
+  # conform to the verifier-runner JSON contract (many are bare
+  # `grep -q` / `cargo test` / `nix build` shells, not the
+  # `cargo run -p loom-walk -- …` walks the spec calls for).
+  # `--spec loom-tests` further narrows to one spec because other
+  # specs' [test] annotations still point at bash / nix paths that
+  # don't resolve to cargo-nextest filter targets. Tier and spec
+  # coverage will expand as verifiers and annotations are migrated;
+  # until then, `nextestFast` above remains the CI gate and
+  # `loomTests` is the design target exposed for incremental
+  # development. The container smoke
+  # ([system](nix run .#test-loom)) stays in the separate `test-loom`
+  # app because it needs `podman` at runtime.
+  loomTests = craneLib.mkCargoDerivation (
+    nextestArgs
+    // {
+      pname = "loom-tests";
+      doCheck = true;
+      nativeBuildInputs = nextestArgs.nativeBuildInputs ++ [
+        pkgs.cargo-nextest
+        loomPackage.bin
+      ];
+      buildPhaseCargoCommand = ''
+        cargo --version
+        cargo nextest --version
+        loom --version
+      '';
+      checkPhaseCargoCommand = ''
+        LOOM_VERIFY_TIERS=test loom gate verify --spec loom-tests
+      '';
+    }
+  );
+
   propTests = craneLib.cargoNextest (
     nextestArgs
     // {
@@ -329,6 +368,7 @@ in
   inherit
     testLoom
     nextestFast
+    loomTests
     wrapixSpawnLoadTest
     piRuntimeImageTest
     claudeRuntimeNoopTest

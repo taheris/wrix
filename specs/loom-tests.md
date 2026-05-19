@@ -492,20 +492,35 @@ Code's stream-json framing (also JSONL) on stdin/stdout.
 
 ```nix
 # tests/loom/default.nix
-{ pkgs, loom, bd, ... }:
+{ pkgs, loomPackage, ... }:
+let
+  inherit (loomPackage) craneLib;
+in
 {
-  # Deterministic verifiers — invokes `loom gate verify` which runs
-  # every [check] / [test] / [system] verifier (or composes the tier
-  # subcommands). Wraps the cargo-nextest test-tier invocation, the
-  # loom-walk check-tier invocations, and any system-tier verifiers
-  # registered by the consumer.
-  loom-tests = pkgs.runCommandLocal "loom-tests" {
-    nativeBuildInputs = [ loom.cargoDeps loom.rustToolchain pkgs.cargo-nextest loom ];
-  } ''
-    cd ${loom.src}
-    loom gate verify
-    mkdir -p $out
-  '';
+  # Deterministic verifiers — invokes `loom gate verify` which dispatches
+  # `[check]` (one subprocess per `cargo run -p loom-walk -- …` annotation)
+  # and `[test]` (one batched `cargo nextest run -E 'test(…)'` over every
+  # annotated test path). `[system]` is excluded via LOOM_VERIFY_TIERS
+  # because its verifiers shell out to `nix build`, `nix run`, and
+  # `podman`, none of which exist inside the nix build sandbox. The
+  # craneLib custom-derivation pattern threads cargoArtifacts, staged
+  # source, and the pre-built loom binary into the sandbox.
+  loomTests = craneLib.mkCargoDerivation {
+    pname = "loom-tests";
+    src = stagedSrc;
+    cargoLock = ../../loom/Cargo.lock;
+    inherit (loomPackage) cargoArtifacts;
+    doCheck = true;
+    nativeBuildInputs = [ pkgs.git pkgs.cargo-nextest loomPackage.bin ];
+    buildPhaseCargoCommand = ''
+      cargo --version
+      cargo nextest --version
+      loom --version
+    '';
+    checkPhaseCargoCommand = ''
+      LOOM_VERIFY_TIERS=check,test loom gate verify
+    '';
+  };
 
   # Container smoke — invoked via `nix run .#test-loom`. Excluded from
   # `flake check` because it needs podman at runtime. Annotated as
@@ -518,8 +533,14 @@ Code's stream-json framing (also JSONL) on stdin/stdout.
 }
 ```
 
-`loom-tests` is included in the checks set exposed by `tests/default.nix`
-so it gates PRs in CI. `loom-smoke` is exposed as an app on Linux only.
+`loomTests` is exposed via `tests/default.nix` (as
+`loom-tests = loomDeriv.loomTests` under `loomChecks`) and lifted to
+`packages.loom-tests` in `modules/flake/tests.nix`. It joins the flake
+`checks` set — and replaces `loom-nextest` as the CI gate — once every
+`[check]`/`[test]` annotation across `specs/*.md` resolves against the
+verifier-runner contract; until then `loom-nextest` (the bare
+`cargo nextest run` derivation) gates PRs. `loom-smoke` is exposed as
+an app on Linux only.
 
 ## Success Criteria
 
@@ -672,7 +693,7 @@ the rules:
 
 - `flake.nix` declares `loom-tests` under `checks.<system>` for
       `x86_64-linux`, `aarch64-linux`, `x86_64-darwin`, `aarch64-darwin`
-  [check](grep -q 'nextestFast' tests/loom/default.nix)
+  [check](grep -q 'loomTests = craneLib.mkCargoDerivation' tests/loom/default.nix)
 - `nix run .#test-loom` is exposed only on Linux systems
   [check](grep -q 'isLinux' tests/loom/default.nix)
 - `nix run .#test-loom` on Darwin exits 0 with a clear "not
@@ -681,9 +702,13 @@ the rules:
 
 ### CI integration
 
-- `nix flake check` includes the loom-tests derivation that runs
-      `cargo nextest run --workspace`
-  [check](grep -q 'nextestFast' tests/default.nix)
+- `loom-tests` derivation is exposed for `nix build` and invokes
+      `loom gate verify` (which batches `cargo nextest run` for the
+      `[test]` tier and dispatches per-annotation subprocesses for
+      `[check]`); it joins the flake `checks` set once every
+      `[check]`/`[test]` annotation across `specs/*.md` resolves
+      against the verifier-runner contract
+  [check](grep -q 'loom-tests = loomDeriv.loomTests' tests/default.nix)
 - `nix run .#test-loom` exists as a `writeShellApplication` exposed
       on Linux platforms
   [check](grep -q 'name = "test-loom"' tests/loom/default.nix)

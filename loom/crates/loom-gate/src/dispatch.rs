@@ -261,12 +261,17 @@ fn filter_by_files<'a>(
 }
 
 fn spawn(command: &str, options: &DispatchOptions) -> Result<Output, DispatchError> {
-    let mut tokens = command.split_whitespace();
+    let mut tokens = shlex::split(command)
+        .ok_or_else(|| DispatchError::Spawn {
+            command: command.to_string(),
+            source: std::io::Error::new(std::io::ErrorKind::InvalidInput, "unbalanced quotes"),
+        })?
+        .into_iter();
     let head = tokens.next().ok_or_else(|| DispatchError::Spawn {
         command: command.to_string(),
         source: std::io::Error::new(std::io::ErrorKind::InvalidInput, "empty command"),
     })?;
-    let tail: Vec<&str> = tokens.collect();
+    let tail: Vec<String> = tokens.collect();
     let mut cmd = Command::new(head);
     cmd.args(&tail);
     cmd.env("LOOM_FILES", encode_files(&options.files));

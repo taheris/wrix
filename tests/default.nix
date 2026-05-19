@@ -102,9 +102,24 @@ let
   # invalidates only loom-clippy/loom-nextest.
   rustChecks = {
     loom-clippy = wrapix.loomPackage.clippy;
+    # loom-nextest is the CI gate today (cargo nextest run, all
+    # workspace tests). loom-tests below (in `loomChecks`) is the
+    # spec-aligned design target — it invokes `loom gate verify` per
+    # specs/loom-tests.md Nix Integration — but is not in the flake
+    # `checks` set yet because many [check]/[test] annotations across
+    # `specs/*.md` haven't migrated to the verifier-runner contract.
+    # Once those migrations land, `loom-tests` joins the checks set
+    # and `loom-nextest` is dropped.
     loom-nextest = loomDeriv.nextestFast;
     tmux-mcp-clippy = wrapix.tmuxMcpPackage.clippy;
     tmux-mcp-nextest = wrapix.tmuxMcpPackage.nextest;
+  };
+
+  # Spec-aligned design target — `nix build .#loom-tests` invokes
+  # `loom gate verify` once verifier conformance lands. Not in
+  # `rustChecks` yet (see comment above).
+  loomChecks = {
+    loom-tests = loomDeriv.loomTests;
   };
 
   # Gas City integration test (shell-based, requires podman at runtime)
@@ -298,6 +313,7 @@ in
     darwinMountTests
     darwinNetworkTests
     darwinUidTests
+    loomChecks
     ralphContainerIntegration
     ralphTemplatesCheck
     ralphTests

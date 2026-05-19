@@ -879,7 +879,7 @@ fn print_gate_status(report: &loom_gate::Report) {
 
 fn run_gate_verify(workspace: &Path, args: &GateScopeArgs) -> anyhow::Result<()> {
     let mut combined: i32 = 0;
-    for tier in [Tier::Check, Tier::Test, Tier::System] {
+    for tier in verify_tiers_from_env() {
         eprintln!("--- loom gate verify [{tier}] ---");
         match dispatch_tier(workspace, args, tier) {
             Ok(0) => {}
@@ -894,6 +894,30 @@ fn run_gate_verify(workspace: &Path, args: &GateScopeArgs) -> anyhow::Result<()>
         std::process::exit(combined);
     }
     Ok(())
+}
+
+/// Tier loop for `loom gate verify`, scoped by the `LOOM_VERIFY_TIERS`
+/// env var when set. The env var is a comma-separated list of tier
+/// wire names (`check`, `test`, `system`); unset or empty restores the
+/// default of all three. The Nix `loom-tests` derivation uses this to
+/// skip `[system]` whose verifiers (e.g. `nix build`, `podman`) are
+/// unavailable inside the build sandbox.
+fn verify_tiers_from_env() -> Vec<Tier> {
+    parse_verify_tiers(std::env::var("LOOM_VERIFY_TIERS").ok().as_deref())
+}
+
+fn parse_verify_tiers(raw: Option<&str>) -> Vec<Tier> {
+    let default = || vec![Tier::Check, Tier::Test, Tier::System];
+    match raw {
+        Some(s) if !s.trim().is_empty() => {
+            let parsed: Vec<Tier> = s
+                .split(',')
+                .filter_map(|t| Tier::from_wire(t.trim()))
+                .collect();
+            if parsed.is_empty() { default() } else { parsed }
+        }
+        _ => default(),
+    }
 }
 
 fn run_gate_single_tier(workspace: &Path, args: &GateScopeArgs, tier: Tier) -> anyhow::Result<()> {
@@ -941,6 +965,7 @@ fn dispatch_tier(workspace: &Path, args: &GateScopeArgs, tier: Tier) -> anyhow::
                     let verdict = if outcome.verdict.pass {
                         Verdict::Pass
                     } else {
+                        eprintln!("loom gate [test] failed:\n{}", outcome.verdict.evidence);
                         combined = combined.max(1);
                         Verdict::Fail
                     };
@@ -2210,4 +2235,54 @@ fn run_spec(workspace: &std::path::Path, deps: bool) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_verify_tiers_defaults_to_all_three_when_unset() {
+        assert_eq!(
+            parse_verify_tiers(None),
+            vec![Tier::Check, Tier::Test, Tier::System]
+        );
+    }
+
+    #[test]
+    fn parse_verify_tiers_defaults_to_all_three_when_empty() {
+        assert_eq!(
+            parse_verify_tiers(Some("")),
+            vec![Tier::Check, Tier::Test, Tier::System]
+        );
+        assert_eq!(
+            parse_verify_tiers(Some("   ")),
+            vec![Tier::Check, Tier::Test, Tier::System]
+        );
+    }
+
+    #[test]
+    fn parse_verify_tiers_scopes_to_named_tiers() {
+        assert_eq!(
+            parse_verify_tiers(Some("check,test")),
+            vec![Tier::Check, Tier::Test]
+        );
+        assert_eq!(parse_verify_tiers(Some("system")), vec![Tier::System]);
+    }
+
+    #[test]
+    fn parse_verify_tiers_ignores_whitespace_around_names() {
+        assert_eq!(
+            parse_verify_tiers(Some("  check , test ")),
+            vec![Tier::Check, Tier::Test]
+        );
+    }
+
+    #[test]
+    fn parse_verify_tiers_falls_back_to_default_when_all_names_unknown() {
+        assert_eq!(
+            parse_verify_tiers(Some("Check,Bogus")),
+            vec![Tier::Check, Tier::Test, Tier::System]
+        );
+    }
 }
