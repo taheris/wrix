@@ -41,7 +41,6 @@ let
   extraSrcs = {
     "tests/loom/mock-pi" = ../../tests/loom/mock-pi;
     "tests/loom/mock-claude" = ../../tests/loom/mock-claude;
-    "tests/loom-test.sh" = ../../tests/loom-test.sh;
     "specs" = ../../specs;
   };
 

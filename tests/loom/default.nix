@@ -57,7 +57,6 @@ let
     mkdir -p $out/tests/loom
     cp -r ${../loom/mock-pi} $out/tests/loom/mock-pi
     cp -r ${../loom/mock-claude} $out/tests/loom/mock-claude
-    cp ${../loom-test.sh} $out/tests/loom-test.sh
     cp -r ${../../specs} $out/specs
   '';
 
