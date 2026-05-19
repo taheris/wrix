@@ -32,6 +32,7 @@ mod no_types_or_error_files;
 mod phase_verdict_decide_called_from_production;
 mod renderer_no_insta_dependency;
 mod single_event_channel;
+mod surface_conformance;
 mod template_context_structs;
 mod template_pinning_matrix;
 mod util;
@@ -183,6 +184,10 @@ pub static REGISTRY: &[Walk] = &[
         run: single_event_channel::run,
     },
     Walk {
+        name: "surface_conformance",
+        run: surface_conformance::run,
+    },
+    Walk {
         name: "template_context_structs",
         run: template_context_structs::run,
     },
@@ -250,6 +255,7 @@ mod tests {
             "no_sync_or_tune_command",
             "phase_verdict_decide_called_from_production",
             "single_event_channel",
+            "surface_conformance",
             "newtype_identifiers",
             "template_context_structs",
             "template_pinning_matrix",

@@ -1270,6 +1270,148 @@ fn template_pinning_matrix_resolves_transitive_includes() {
 }
 
 // ---------------------------------------------------------------------------
+// surface_conformance
+// ---------------------------------------------------------------------------
+
+fn seed_surface_spec(ws: &TempDir, fr1_body: &str) {
+    let body = format!(
+        "# Loom Harness\n\n## Requirements\n\n### Functional\n\n1. **Command set** — header\n\n{fr1_body}\n2. **Compiled templates** — sentinel\n",
+    );
+    seed(ws.path(), "specs/loom-harness.md", &body);
+}
+
+fn seed_surface_main(ws: &TempDir, tuples_body: &str) {
+    let body =
+        format!("fn main() {{}}\n\nconst HELP_GROUPS: &[(&str, &[&str])] = &[\n{tuples_body}];\n",);
+    seed(ws.path(), "crates/loom/src/main.rs", &body);
+}
+
+const SPEC_FR1_MINIMAL: &str = concat!(
+    "   **Workflow** — group\n",
+    "   - `loom plan` — text\n",
+    "\n",
+    "   **Inspection** — group\n",
+    "   - `loom status` — text\n",
+    "\n",
+    "   **State** — group\n",
+    "   - `loom init` — text\n",
+    "\n",
+    "   **Removed surface.** prose\n",
+    "\n",
+    "   | Surface | Removed because |\n",
+    "   |---|---|\n",
+    "   | `loom doctor` | because |\n",
+    "\n",
+);
+
+const SPEC_FR1_TWO_WORKFLOW: &str = concat!(
+    "   **Workflow** — group\n",
+    "   - `loom plan` — text\n",
+    "   - `loom todo` — text\n",
+    "\n",
+    "   **Inspection** — group\n",
+    "   - `loom status` — text\n",
+    "\n",
+    "   **State** — group\n",
+    "   - `loom init` — text\n",
+    "\n",
+    "   **Removed surface.** prose\n",
+    "\n",
+    "   | Surface | Removed because |\n",
+    "   |---|---|\n",
+    "   | `loom doctor` | because |\n",
+    "\n",
+);
+
+const HELP_GROUPS_MINIMAL: &str = concat!(
+    "    (\"Workflow\", &[\"plan\"]),\n",
+    "    (\"Inspection\", &[\"status\"]),\n",
+    "    (\"State\", &[\"init\"]),\n",
+);
+
+#[test]
+fn surface_conformance_pass_when_spec_and_binary_agree() {
+    let ws = make_workspace();
+    seed_surface_spec(&ws, SPEC_FR1_MINIMAL);
+    seed_surface_main(&ws, HELP_GROUPS_MINIMAL);
+    let out = invoke(&["surface_conformance"], Some(ws.path()), None);
+    assert_pass(&out);
+}
+
+#[test]
+fn surface_conformance_fail_when_spec_lists_command_binary_does_not() {
+    let ws = make_workspace();
+    seed_surface_spec(&ws, SPEC_FR1_TWO_WORKFLOW);
+    seed_surface_main(&ws, HELP_GROUPS_MINIMAL);
+    let out = invoke(&["surface_conformance"], Some(ws.path()), None);
+    assert_fail(&out, "`todo`");
+}
+
+#[test]
+fn surface_conformance_fail_when_binary_lists_command_spec_does_not() {
+    let ws = make_workspace();
+    seed_surface_spec(&ws, SPEC_FR1_MINIMAL);
+    seed_surface_main(
+        &ws,
+        concat!(
+            "    (\"Workflow\", &[\"plan\", \"todo\"]),\n",
+            "    (\"Inspection\", &[\"status\"]),\n",
+            "    (\"State\", &[\"init\"]),\n",
+        ),
+    );
+    let out = invoke(&["surface_conformance"], Some(ws.path()), None);
+    assert_fail(&out, "`todo`");
+}
+
+#[test]
+fn surface_conformance_fail_when_removed_surface_resurfaces() {
+    let ws = make_workspace();
+    seed_surface_spec(&ws, SPEC_FR1_MINIMAL);
+    seed_surface_main(
+        &ws,
+        concat!(
+            "    (\"Workflow\", &[\"plan\", \"doctor\"]),\n",
+            "    (\"Inspection\", &[\"status\"]),\n",
+            "    (\"State\", &[\"init\"]),\n",
+        ),
+    );
+    let out = invoke(&["surface_conformance"], Some(ws.path()), None);
+    assert_fail(&out, "re-introduces `doctor`");
+}
+
+#[test]
+fn surface_conformance_fail_when_group_order_differs() {
+    let ws = make_workspace();
+    seed_surface_spec(&ws, SPEC_FR1_MINIMAL);
+    seed_surface_main(
+        &ws,
+        concat!(
+            "    (\"State\", &[\"init\"]),\n",
+            "    (\"Workflow\", &[\"plan\"]),\n",
+            "    (\"Inspection\", &[\"status\"]),\n",
+        ),
+    );
+    let out = invoke(&["surface_conformance"], Some(ws.path()), None);
+    assert_fail(&out, "group order");
+}
+
+#[test]
+fn surface_conformance_fail_when_per_group_command_order_differs() {
+    let ws = make_workspace();
+    seed_surface_spec(&ws, SPEC_FR1_TWO_WORKFLOW);
+    seed_surface_main(
+        &ws,
+        concat!(
+            "    (\"Workflow\", &[\"todo\", \"plan\"]),\n",
+            "    (\"Inspection\", &[\"status\"]),\n",
+            "    (\"State\", &[\"init\"]),\n",
+        ),
+    );
+    let out = invoke(&["surface_conformance"], Some(ws.path()), None);
+    assert_fail(&out, "per-group order differs");
+}
+
+// ---------------------------------------------------------------------------
 // loom_templates_snapshots_no_crate_root_allow
 // ---------------------------------------------------------------------------
 
