@@ -534,13 +534,13 @@ in
 ```
 
 `loomTests` is exposed via `tests/default.nix` (as
-`loom-tests = loomDeriv.loomTests` under `loomChecks`) and lifted to
-`packages.loom-tests` in `modules/flake/tests.nix`. It joins the flake
-`checks` set — and replaces `loom-nextest` as the CI gate — once every
-`[check]`/`[test]` annotation across `specs/*.md` resolves against the
-verifier-runner contract; until then `loom-nextest` (the bare
-`cargo nextest run` derivation) gates PRs. `loom-smoke` is exposed as
-an app on Linux only.
+`loom-tests = loomDeriv.loomTests` under `rustChecks`, joining the flake
+`checks` set) and lifted to `packages.loom-tests` in
+`modules/flake/tests.nix`. It runs alongside `loom-nextest` (the bare
+`cargo nextest run` derivation): the gate-driven variant batches only
+the `[test]`-annotated targets and runs the `[check]` walks alongside,
+while `loom-nextest` continues to cover every workspace test as a wide
+safety net. `loom-smoke` is exposed as an app on Linux only.
 
 ## Success Criteria
 
@@ -552,19 +552,19 @@ an app on Linux only.
   [check](cargo test -p loom-events --lib serde_round_trips_as_plain_string)
 - State database round-trip tests cover spec, molecule, and meta
       operations
-  [test](loom_driver_state_db::state_current_spec_round_trips)
+  [test](state_current_spec_round_trips)
 - Pi RPC protocol tests cover every command and every event type
       in the pi v0.72 protocol table, asserting on every documented
       field (not just type discrimination) so a renamed field fails
       deserialization at test time
-  [test](loom_agent::pi::messages::tests::pi_response_success_populates_data_field)
+  [test](pi_response_success_populates_data_field)
 - Claude stream-json protocol tests cover all `ClaudeMessage`
       variants including `Unknown` via `#[serde(other)]`, with
       field-level assertions on each variant
-  [test](loom_agent::claude::parser::tests::result_message_round_trips_every_documented_field)
+  [test](result_message_round_trips_every_documented_field)
 - Template rendering tests cover every Askama template with
       representative inputs
-  [test](loom_templates_render::template_renders_are_byte_stable_across_runs)
+  [test](template_renders_are_byte_stable_across_runs)
 
 ### Integration tests
 
@@ -574,34 +574,34 @@ in Functional #4.
 - Startup probe round-trip: mock pi with full required command set
       → loom proceeds; mock pi missing `set_model` → loom fails fast
       with a version-mismatch error
-  [test](loom_agent_static_dispatch::pi_startup_probe_succeeds_with_required_commands)
+  [test](pi_startup_probe_succeeds_with_required_commands)
 - `wrapix spawn` argv contract: loom invokes
       `wrapix spawn --spawn-config <file> --stdio` with stdin
       attached as a pipe (not a TTY); recorded `SpawnConfig` JSON
       matches the on-disk shape
-  [test](loom_spawn_dispatch::wrapix_spawn_invocation_records_correct_argv)
+  [test](wrapix_spawn_invocation_records_correct_argv)
 - Parallel run end-to-end: `loom run --parallel 2` with two ready
       beads dispatches two mock-agent spawns concurrently, each in its
       own worktree, then merges both branches back to driver
-  [test](loom_workflow_parallel::parallel_creates_worktrees)
+  [test](parallel_creates_worktrees)
 - `GitClient` round-trip: create worktree, list, status, merge
       (clean / non-conflicting / conflict variants), remove — all
       against a temp repo via the typed Rust API
-  [test](loom_driver_git_client::create_and_remove_worktree_round_trip)
+  [test](create_and_remove_worktree_round_trip)
 - State DB lifecycle: `open` on fresh path creates schema;
       `rebuild` populates from `specs/*.md` plus mock `bd` output,
       resetting iteration counters; `recreate` recovers from a
       corrupted file
-  [test](loom_driver_state_db::state_db_rebuild_populates_specs_and_molecules)
+  [test](state_db_rebuild_populates_specs_and_molecules)
 - Per-spec advisory locking: two contending acquisitions on the
       same `<label>.lock` serialize via `flock`; the second waits
       via `MockClock` advance, then errors naming the held label.
       Crashed child releases lock immediately for parent
-  [test](loom_driver_lock_manager::second_acquire_times_out_with_spec_busy)
+  [test](second_acquire_times_out_with_spec_busy)
 - Logging tee: renderer and on-disk `.jsonl` log subscribe to the
       same `AgentEvent` stream — capturing both yields line-for-line
       equality on the log side
-  [test](loom_driver_logging::run_single_event_sink_property)
+  [test](run_single_event_sink_property)
 
 ### Container smoke
 
@@ -663,17 +663,17 @@ the rules:
 - JSONL line parser proptest: never panics on arbitrary bytes,
       respects `MAX_LINE_BYTES`, never emits `AgentEvent` from a
       malformed line
-  [test](loom_agent_properties::jsonl_arbitrary_bytes_never_panic)
+  [test](jsonl_arbitrary_bytes_never_panic)
 - Pi protocol parser proptest: round-trip identity for known
       shapes, unknown shapes map to typed errors, never panics
-  [test](loom_agent_properties::pi_arbitrary_bytes_never_panic)
+  [test](pi_arbitrary_bytes_never_panic)
 - Claude stream-json parser proptest: round-trip identity for
       known shapes, `Unknown` variant catches unknown types, never
       panics
-  [test](loom_agent_properties::claude_arbitrary_bytes_never_panic)
+  [test](claude_arbitrary_bytes_never_panic)
 - State DB rebuild proptest: arbitrary spec content never
       corrupts schema; corrupted DB always recovers via `recreate`
-  [test](loom_driver_properties::rebuild_never_corrupts_schema)
+  [test](rebuild_never_corrupts_schema)
 - `PROPTEST_CASES=32` for CI; overridable via env var
   [check](grep -q 'pub const CI_PROPTEST_CASES: u32 = 32' crates/loom-test-support/src/lib.rs)
 
@@ -705,9 +705,7 @@ the rules:
 - `loom-tests` derivation is exposed for `nix build` and invokes
       `loom gate verify` (which batches `cargo nextest run` for the
       `[test]` tier and dispatches per-annotation subprocesses for
-      `[check]`); it joins the flake `checks` set once every
-      `[check]`/`[test]` annotation across `specs/*.md` resolves
-      against the verifier-runner contract
+      `[check]`); it joins the flake `checks` set under `rustChecks`
   [check](grep -q 'loom-tests = loomDeriv.loomTests' tests/default.nix)
 - `nix run .#test-loom` exists as a `writeShellApplication` exposed
       on Linux platforms

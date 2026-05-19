@@ -100,14 +100,9 @@ let
   # LOOM_VERIFY_TIERS scopes the verify loop to `check,test` because
   # [system]-tier verifiers across the repo shell out to `nix build`,
   # `nix run`, and `podman` — none of which are available inside the
-  # nix build sandbox. `--spec loom-tests` further narrows to one
-  # spec because other specs' [test] annotations still point at bash
-  # / nix paths that don't resolve to cargo-nextest filter targets.
-  # Spec coverage will expand as annotations are migrated; until then,
-  # `nextestFast` above remains the CI gate and `loomTests` is the
-  # design target exposed for incremental development. The container
-  # smoke ([system](nix run .#test-loom)) stays in the separate
-  # `test-loom` app because it needs `podman` at runtime.
+  # nix build sandbox. The container smoke ([system](nix run .#test-loom))
+  # stays in the separate `test-loom` app because it needs `podman` at
+  # runtime.
   loomTests = craneLib.mkCargoDerivation (
     nextestArgs
     // {
@@ -123,7 +118,7 @@ let
         loom --version
       '';
       checkPhaseCargoCommand = ''
-        LOOM_VERIFY_TIERS=check,test loom gate verify --spec loom-tests
+        LOOM_VERIFY_TIERS=check,test loom gate verify
       '';
     }
   );

@@ -226,15 +226,15 @@ documents in front of the agent with zero configuration.
   [check](cargo build -p loom-templates)
 - Each template has a typed context struct with every variable
   in the template body bound as a field
-  [test](loom_templates_render::template_renders_are_byte_stable_across_runs)
+  [test](template_renders_are_byte_stable_across_runs)
 - Templates compile at build time — missing variables are compile
   errors, not runtime errors
-  [test](loom_templates_render::template_renders_are_byte_stable_across_runs)
+  [test](template_renders_are_byte_stable_across_runs)
 - Partials are included via Askama's `{% include %}` mechanism
   [check](grep -q 'partial/context_pinning' loom/crates/loom-templates/templates/run.md)
 - Rendered output is stable across runs for identical inputs,
   verified by `insta` snapshots
-  [test](loom_templates_render::template_renders_are_byte_stable_across_runs)
+  [test](template_renders_are_byte_stable_across_runs)
 
 ### Pinning policy
 
@@ -256,11 +256,11 @@ documents in front of the agent with zero configuration.
   `LoomConfig.spec_conventions` defaults to
   `"docs/spec-conventions.md"`; `LoomConfig.pinned_context`
   defaults to `"docs/README.md"`
-  [test](loom_driver::config::tests::pin_paths_default_to_bundled_docs)
+  [test](pin_paths_default_to_bundled_docs)
 - Empty string values for any pin path are rejected at parse time
   with `ConfigError::EmptyPath { field }` naming the offending
   field
-  [test](loom_driver::config::tests::empty_pin_path_returns_empty_path_error)
+  [test](empty_pin_path_returns_empty_path_error)
 - The `style_rules.md` and `review_rubric.md` partials are
   rule-family-agnostic: their bodies do not enumerate fixed
   prefixes like `SH-` / `RS-` / `COM-`; rule-ID examples in
@@ -276,7 +276,7 @@ documents in front of the agent with zero configuration.
 
 - Templates that render agent-generated content delimit it with
   `<agent-output>` / `</agent-output>` markers
-  [test](loom_templates_render::agent_output_markers_wrap_each_agent_supplied_field)
+  [test](agent_output_markers_wrap_each_agent_supplied_field)
 
 ### Snapshot tests
 

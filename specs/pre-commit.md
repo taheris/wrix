@@ -179,31 +179,31 @@ Consumer repos should configure their test runners with quiet mode for LLM envir
 - [ ] `prek run` executes only fast hooks; slow hooks run on `git push`
   [judge](tests/judges/pre-commit.sh::test_prek_hook_speed_split)
 - [ ] Ralph loop executes hooks at all four points
-  [test](tests/ralph/run-tests.sh::test_default_config_has_hooks)
+  [system](bash tests/ralph/run-tests.sh test_default_config_has_hooks)
 - [ ] Loop pauses on hook failure when `hooks-on-failure = "block"`
-  [test](tests/ralph/run-tests.sh::test_config_data_driven)
+  [system](bash tests/ralph/run-tests.sh test_config_data_driven)
 - [ ] Existing tests pass; hook tests no longer skipped
-  [test](tests/ralph/run-tests.sh::test_default_config_has_hooks)
+  [system](bash tests/ralph/run-tests.sh test_default_config_has_hooks)
 - [ ] Template variables substituted correctly in hook commands
-  [test](tests/ralph/run-tests.sh::test_render_template_basic)
+  [system](bash tests/ralph/run-tests.sh test_render_template_basic)
 - [ ] Two concurrent `git commit` invocations serialize via `.wrapix/prek.lock`; neither loses working-tree edits (wx-m5yuq repro)
-  [test](tests/ralph/run-tests.sh::test_prek_lock_commit_serializes)
+  [system](bash tests/ralph/run-tests.sh test_prek_lock_commit_serializes)
 - [ ] Two concurrent `git push` invocations serialize via `.wrapix/prek.lock`
-  [test](tests/ralph/run-tests.sh::test_prek_lock_push_serializes)
+  [system](bash tests/ralph/run-tests.sh test_prek_lock_push_serializes)
 - [ ] Commit against a held push lock waits up to 10 min, then fails loudly with a clear error rather than hanging
-  [test](tests/ralph/run-tests.sh::test_prek_lock_cross_stage_timeout)
+  [system](bash tests/ralph/run-tests.sh test_prek_lock_cross_stage_timeout)
 - [ ] Both pre-commit and pre-push shims use a 10-min `flock` timeout
-  [test](tests/ralph/run-tests.sh::test_prek_lock_timeout)
+  [system](bash tests/ralph/run-tests.sh test_prek_lock_timeout)
 - [ ] `git commit --no-verify` and `git push --no-verify` bypass both the lock and prek (documented escape hatch)
-  [test](tests/ralph/run-tests.sh::test_prek_lock_no_verify_bypass)
+  [system](bash tests/ralph/run-tests.sh test_prek_lock_no_verify_bypass)
 - [ ] Shim aborts with a clear `flock not found` error when `flock` is missing from `PATH`
-  [test](tests/ralph/run-tests.sh::test_prek_lock_requires_flock)
+  [system](bash tests/ralph/run-tests.sh test_prek_lock_requires_flock)
 - [ ] `flock` is present in the nix devShell and the sandbox `base` profile
-  [test](tests/ralph/run-tests.sh::test_flock_in_devshell_and_base_profile)
+  [system](bash tests/ralph/run-tests.sh test_flock_in_devshell_and_base_profile)
 - [ ] Entering the nix devShell sets `core.hooksPath = lib/prek/hooks` idempotently
-  [test](tests/ralph/run-tests.sh::test_devshell_sets_core_hooks_path)
+  [system](bash tests/ralph/run-tests.sh test_devshell_sets_core_hooks_path)
 - [ ] `git commit` routes through `lib/prek/hooks/pre-commit` (shim actually intercepts the commit)
-  [test](tests/ralph/run-tests.sh::test_git_commit_routes_through_shim)
+  [system](bash tests/ralph/run-tests.sh test_git_commit_routes_through_shim)
 
 ## Out of Scope
 

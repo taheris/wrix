@@ -814,15 +814,15 @@ discovers the provider from `city.toml`.
 ## Success Criteria
 
 - [x] `mkCity` evaluates with minimal config (`services.api.package = myApp`)
-  [test](tests/city/unit.nix::city-mkcity-eval)
+  [system](tests/city/unit.nix::city-mkcity-eval)
 - [x] Generated `city.toml` matches gc's config schema
-  [test](tests/city/unit.nix::city-city-toml)
+  [system](tests/city/unit.nix::city-city-toml)
 - [x] Generated `city.toml` passes gc's config validation
-  [test](tests/city/unit.nix::city-config-validate)
+  [system](tests/city/unit.nix::city-config-validate)
 - [x] Provider scripts have valid shell syntax across all wrapix scripts
-  [test](tests/city/unit.nix::city-shell-syntax)
+  [system](tests/city/unit.nix::city-shell-syntax)
 - [x] Provider script handles worker session lifecycle methods
-  [test](tests/city/unit.nix::city-provider-worker)
+  [system](tests/city/unit.nix::city-provider-worker)
 - [x] Ephemeral workers use git worktrees at `.wrapix/worktree/<bead-id>`
   [system](tests/city/integration.nix::Wait for worker worktree)
 - [x] Persistent roles (mayor, scout, judge) start with tmux as PID 1
@@ -830,14 +830,14 @@ discovers the provider from `city.toml`.
 - [x] gc convergence detects worker completion and triggers judge gate
   [system](tests/city/integration.nix::Wait for judge approval (via monitor gate pipeline))
 - [x] Secrets are injected at runtime, never baked into images
-  [test](tests/city/unit.nix::city-secrets)
+  [system](tests/city/unit.nix::city-secrets)
 - [ ] `ralph run` still works standalone without gc
 - [x] NixOS module generates systemd units and podman network
-  [test](tests/city/unit.nix::city-nixos-module)
+  [system](tests/city/unit.nix::city-nixos-module)
 - [ ] Crash recovery: gc systemd service restarts, reconciles orphaned containers
 - [ ] `ralph sync` scaffolds missing docs files and creates review beads
 - [x] Service packages are built into OCI images via `dockerTools.streamLayeredImage`
-  [test](tests/city/unit.nix::city-service-images)
+  [system](tests/city/unit.nix::city-service-images)
 - [ ] Cooldown pacing delays task dispatch by configured duration
 - [ ] Judge enforces `docs/style-rules.md` rules
   [judge]
@@ -854,19 +854,19 @@ discovers the provider from `city.toml`.
   [system](tests/city/integration.nix::Wait for post-gate pipeline (deploy bead created))
 - [ ] Scout pauses bead creation when queue cap is reached
 - [x] Scout parses log-pattern rules from `docs/orchestration.md`
-  [test](tests/city/unit.nix::city-scout-parse-rules)
+  [system](tests/city/unit.nix::city-scout-parse-rules)
 - [x] Scout scans container logs against parsed patterns to detect errors
-  [test](tests/city/unit.nix::city-scout-scan)
+  [system](tests/city/unit.nix::city-scout-scan)
 - [x] Judge gate reads commit range from bead metadata
   [system](tests/city/integration.nix::Verify gate can find metadata after recovery)
 - [ ] Scout polling uses gc orders for scheduling
 - [ ] Worker→judge retry uses gc convergence with max 2 iterations
 - [x] Role behavior defined as gc formulas, overridable by consumers
-  [test](tests/city/unit.nix::city-formulas)
+  [system](tests/city/unit.nix::city-formulas)
 - [x] Post-gate handles escalation path (non-approved convergence)
   [system](tests/city/integration.nix::Post-gate handles escalation (non-approved))
 - [x] Custom scale_check avoids gc's 30s timeout under dolt contention
-  [test](tests/city/unit.nix::city-config-validate)
+  [system](tests/city/unit.nix::city-config-validate)
 - [ ] Mayor formula starts as persistent session and responds on attach
 - [ ] Mayor presents proactive briefing (pending reviews, recent merges, escalations)
 - [ ] Mayor decomposes spec changes into proposed beads on startup/attach
@@ -879,7 +879,7 @@ discovers the provider from `city.toml`.
 - [ ] Scout performs housekeeping (stale beads, orphaned workers, worktree cleanup)
 - [ ] Entrypoint prints informational pending-review status without blocking
 - [ ] Formula step commands are individually testable against known state
-  [test](tests/city/unit.nix::city-formula-steps)
+  [system](tests/city/unit.nix::city-formula-steps)
 
 ## Out of Scope
 

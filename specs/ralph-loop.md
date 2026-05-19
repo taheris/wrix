@@ -485,15 +485,15 @@ Add unit tests for parser edge cases...
 ### Plan
 
 - [ ] `ralph plan -n <label>` creates new spec in `specs/`
-  [test](tests/ralph/run-tests.sh::test_plan_flag_validation)
+  [system](bash tests/ralph/run-tests.sh test_plan_flag_validation)
 - [ ] `ralph plan -h <label>` creates new spec in `state/`
-  [test](tests/ralph/run-tests.sh::test_plan_flag_validation)
+  [system](bash tests/ralph/run-tests.sh test_plan_flag_validation)
 - [ ] `ralph plan -u <label>` validates spec exists before updating
-  [test](tests/ralph/run-tests.sh::test_plan_flag_validation)
+  [system](bash tests/ralph/run-tests.sh test_plan_flag_validation)
 - [ ] `ralph plan -u <label>` edits spec directly (no `state/<label>.md` created)
-  [test](tests/ralph/run-tests.sh::test_plan_update_direct_edit)
+  [system](bash tests/ralph/run-tests.sh test_plan_update_direct_edit)
 - [ ] `ralph plan -u` creates `state/<label>.json` if it doesn't exist
-  [test](tests/ralph/run-tests.sh::test_plan_update_creates_state_json)
+  [system](bash tests/ralph/run-tests.sh test_plan_update_creates_state_json)
 - [ ] `ralph plan -u -h <label>` updates hidden spec
   [judge](tests/judges/ralph-workflow.sh::test_plan_update_hidden)
 - [ ] `ralph plan` runs Claude in wrapix container with base profile
@@ -503,7 +503,7 @@ Add unit tests for parser edge cases...
 - [ ] `ralph plan -u <anchor>` permits the LLM to read and edit any spec in `specs/` (sibling-spec editing)
   [judge](tests/judges/ralph-workflow.sh::test_plan_anchor_sibling_editing)
 - [ ] `ralph plan -u -h` (hidden) remains single-spec; no sibling-spec editing
-  [test](tests/ralph/run-tests.sh::test_plan_update_hidden_single_spec)
+  [system](bash tests/ralph/run-tests.sh test_plan_update_hidden_single_spec)
 - [ ] Invariant-clash detection during planning scans the anchor and any touched sibling specs
   [judge](tests/judges/ralph-workflow.sh::test_plan_cross_spec_invariant_clash)
 - [ ] `plan-update.md` instructs the LLM to detect invariant clashes during the interview and ask the user before committing a change
@@ -524,45 +524,45 @@ Add unit tests for parser edge cases...
 ### Todo
 
 - [ ] `ralph todo` creates molecule and stores ID in state JSON
-  [test](tests/ralph/run-tests.sh::test_run_closes_issue_on_complete)
+  [system](bash tests/ralph/run-tests.sh test_run_closes_issue_on_complete)
 - [ ] `ralph todo` (new mode) creates tasks from `specs/<label>.md`
-  [test](tests/ralph/run-tests.sh::test_run_closes_issue_on_complete)
+  [system](bash tests/ralph/run-tests.sh test_run_closes_issue_on_complete)
 - [ ] `ralph todo` detects update mode from `base_commit` presence
-  [test](tests/ralph/run-tests.sh::test_todo_update_detection)
+  [system](bash tests/ralph/run-tests.sh test_todo_update_detection)
 - [ ] `ralph todo` computes `git diff` between `base_commit` and HEAD for spec changes
-  [test](tests/ralph/run-tests.sh::test_todo_git_diff)
+  [system](bash tests/ralph/run-tests.sh test_todo_git_diff)
 - [ ] `ralph todo` errors on uncommitted spec changes
-  [test](tests/ralph/run-tests.sh::test_todo_uncommitted_error)
+  [system](bash tests/ralph/run-tests.sh test_todo_uncommitted_error)
 - [ ] `ralph todo` stores `base_commit` only after container exits with `RALPH_COMPLETE`
-  [test](tests/ralph/run-tests.sh::test_todo_sets_base_commit)
+  [system](bash tests/ralph/run-tests.sh test_todo_sets_base_commit)
 - [ ] `ralph todo` does not update `base_commit` on container failure
-  [test](tests/ralph/run-tests.sh::test_todo_no_base_commit_on_failure)
+  [system](bash tests/ralph/run-tests.sh test_todo_no_base_commit_on_failure)
 - [ ] `ralph todo` exits early with message when tier 1 finds no spec changes
-  [test](tests/ralph/run-tests.sh::test_todo_no_changes_exit)
+  [system](bash tests/ralph/run-tests.sh test_todo_no_changes_exit)
 - [ ] `ralph todo --since <commit>` overrides `base_commit` and forces git-diff mode
-  [test](tests/ralph/run-tests.sh::test_todo_since_flag)
+  [system](bash tests/ralph/run-tests.sh test_todo_since_flag)
 - [ ] `ralph todo --since <invalid>` errors with clear message
-  [test](tests/ralph/run-tests.sh::test_todo_since_invalid_commit)
+  [system](bash tests/ralph/run-tests.sh test_todo_since_invalid_commit)
 - [ ] `ralph todo` falls back to molecule-based diff when `base_commit` is orphaned
-  [test](tests/ralph/run-tests.sh::test_todo_orphaned_commit_fallback)
+  [system](bash tests/ralph/run-tests.sh test_todo_orphaned_commit_fallback)
 - [ ] `ralph todo` falls back to molecule-based diff when no `base_commit` but molecule exists
-  [test](tests/ralph/run-tests.sh::test_todo_molecule_fallback)
+  [system](bash tests/ralph/run-tests.sh test_todo_molecule_fallback)
 - [ ] `ralph todo` discovers molecule from the pinned-context file (`docs/README.md` by default) when no state file exists (tier 3)
-  [test](tests/ralph/run-tests.sh::test_todo_readme_discovery)
+  [system](bash tests/ralph/run-tests.sh test_todo_readme_discovery)
 - [ ] `ralph todo` reconstructs `state/<label>.json` after README discovery
-  [test](tests/ralph/run-tests.sh::test_todo_readme_state_reconstruction)
+  [system](bash tests/ralph/run-tests.sh test_todo_readme_state_reconstruction)
 - [ ] `ralph todo` falls through to tier 4 when README has no molecule for the spec
-  [test](tests/ralph/run-tests.sh::test_todo_readme_no_molecule_fallthrough)
+  [system](bash tests/ralph/run-tests.sh test_todo_readme_no_molecule_fallthrough)
 - [ ] `ralph todo` falls through to tier 4 when README molecule ID is stale/invalid
-  [test](tests/ralph/run-tests.sh::test_todo_readme_stale_molecule_fallthrough)
+  [system](bash tests/ralph/run-tests.sh test_todo_readme_stale_molecule_fallthrough)
 - [ ] `discover_molecule_from_readme` correctly parses the Beads column from the pinned-context file (`docs/README.md` by default)
-  [test](tests/ralph/run-tests.sh::test_discover_molecule_from_readme)
+  [system](bash tests/ralph/run-tests.sh test_discover_molecule_from_readme)
 - [ ] `discover_molecule_from_readme` returns empty string when spec not in README
-  [test](tests/ralph/run-tests.sh::test_discover_molecule_not_in_readme)
+  [system](bash tests/ralph/run-tests.sh test_discover_molecule_not_in_readme)
 - [ ] Reconstructed state file has correct label, spec_path, molecule; no base_commit; empty companions
-  [test](tests/ralph/run-tests.sh::test_todo_readme_reconstructed_state_schema)
+  [system](bash tests/ralph/run-tests.sh test_todo_readme_reconstructed_state_schema)
 - [ ] `ralph todo` uses new mode when no state file and no molecule in README (tier 4)
-  [test](tests/ralph/run-tests.sh::test_todo_new_mode_fallback)
+  [system](bash tests/ralph/run-tests.sh test_todo_new_mode_fallback)
 - [ ] `ralph todo` runs `bd dolt push` inside container after `RALPH_COMPLETE`
   [check](tests/ralph/run-tests.sh::test_todo_dolt_push_in_container)
 - [ ] `ralph todo` runs `bd dolt pull` on host after container exits with `RALPH_COMPLETE`
@@ -576,7 +576,7 @@ Add unit tests for parser edge cases...
 - [ ] `ralph todo` runs Claude in wrapix container with base profile
   [judge](tests/judges/ralph-workflow.sh::test_todo_runs_in_container)
 - [ ] `ralph todo` LLM assigns `profile:X` labels per-task based on implementation needs
-  [test](tests/ralph/run-tests.sh::test_run_profile_selection)
+  [system](bash tests/ralph/run-tests.sh test_run_profile_selection)
 - [ ] `todo-new.md` instructs LLM to write molecule ID to the pinned-context file (`docs/README.md` by default) Beads column
   [judge](tests/judges/ralph-workflow.sh::test_todo_new_writes_readme_beads)
 - [ ] `todo-update.md` instructs LLM to fill in README Beads column if empty
@@ -586,36 +586,36 @@ Add unit tests for parser edge cases...
 - [ ] `todo-update.md` works with `EXISTING_TASKS` (tier 2) when no diff available
   [judge](tests/judges/ralph-workflow.sh::test_todo_update_with_tasks)
 - [ ] `ralph todo` clears `implementation_notes` from state JSON when it advances `base_commit` on RALPH_COMPLETE
-  [test](tests/ralph/run-tests.sh::test_todo_clears_implementation_notes)
+  [system](bash tests/ralph/run-tests.sh test_todo_clears_implementation_notes)
 
 ### Anchor + per-spec fan-out
 
 - [ ] Anchor's `state/<anchor>.json` owns `molecule`, `implementation_notes`, `iteration_count` regardless of which sibling specs are edited
-  [test](tests/ralph/run-tests.sh::test_anchor_owns_session_state)
+  [system](bash tests/ralph/run-tests.sh test_anchor_owns_session_state)
 - [ ] Sibling state files only hold `label`, `spec_path`, `base_commit`, `companions` (no molecule)
-  [test](tests/ralph/run-tests.sh::test_sibling_state_shape)
+  [system](bash tests/ralph/run-tests.sh test_sibling_state_shape)
 - [ ] `ralph todo` widens tier 1 candidate set to `git diff <anchor.base_commit> HEAD --name-only -- specs/`
-  [test](tests/ralph/run-tests.sh::test_todo_tier1_candidate_set)
+  [system](bash tests/ralph/run-tests.sh test_todo_tier1_candidate_set)
 - [ ] `ralph todo` computes per-spec diff using each touched spec's own `base_commit`
-  [test](tests/ralph/run-tests.sh::test_todo_per_spec_cursor)
+  [system](bash tests/ralph/run-tests.sh test_todo_per_spec_cursor)
 - [ ] Sibling with no state file uses the anchor's `base_commit` as its effective base
-  [test](tests/ralph/run-tests.sh::test_todo_sibling_seed_from_anchor)
+  [system](bash tests/ralph/run-tests.sh test_todo_sibling_seed_from_anchor)
 - [ ] Orphaned sibling `base_commit` falls back to anchor's `base_commit`
-  [test](tests/ralph/run-tests.sh::test_todo_sibling_orphan_fallback)
+  [system](bash tests/ralph/run-tests.sh test_todo_sibling_orphan_fallback)
 - [ ] Tasks created during a multi-spec session all bond to the anchor's molecule
-  [test](tests/ralph/run-tests.sh::test_todo_multi_spec_single_molecule)
+  [system](bash tests/ralph/run-tests.sh test_todo_multi_spec_single_molecule)
 - [ ] Each task labeled with `spec:<s>` identifying which spec file it implements
-  [test](tests/ralph/run-tests.sh::test_todo_per_task_spec_label)
+  [system](bash tests/ralph/run-tests.sh test_todo_per_task_spec_label)
 - [ ] On RALPH_COMPLETE, `base_commit` advances for every spec that received at least one task
-  [test](tests/ralph/run-tests.sh::test_todo_cursor_fanout_on_complete)
+  [system](bash tests/ralph/run-tests.sh test_todo_cursor_fanout_on_complete)
 - [ ] Sibling state file is created on demand if it didn't exist before the fan-out
-  [test](tests/ralph/run-tests.sh::test_todo_creates_sibling_state_file)
+  [system](bash tests/ralph/run-tests.sh test_todo_creates_sibling_state_file)
 - [ ] `ralph todo --since <commit>` overrides only the anchor's cursor; siblings retain own `base_commit`
-  [test](tests/ralph/run-tests.sh::test_todo_since_anchor_only)
+  [system](bash tests/ralph/run-tests.sh test_todo_since_anchor_only)
 - [ ] `ralph todo --since <commit>` applies the override to the anchor's own per-spec diff in fan-out, not just the candidate-set computation (so a stale stored `base_commit` on the anchor does not mask the override)
-  [test](tests/ralph/run-tests.sh::test_todo_since_override_anchor_per_spec_diff)
+  [system](bash tests/ralph/run-tests.sh test_todo_since_override_anchor_per_spec_diff)
 - [ ] `ralph todo` exits early when tier 1 candidate set is empty ("No spec changes since last task creation")
-  [test](tests/ralph/run-tests.sh::test_todo_empty_candidate_set_exits)
+  [system](bash tests/ralph/run-tests.sh test_todo_empty_candidate_set_exits)
 - [ ] Worked example (anchor + two siblings) produces correct molecule + per-spec cursors
   [judge](tests/judges/ralph-workflow.sh::test_todo_fanout_worked_example)
 
@@ -628,15 +628,15 @@ Add unit tests for parser edge cases...
 - [ ] `ralph run` host-side block runs `bd dolt pull` after container exits
   [check](tests/ralph/run-tests.sh::test_run_dolt_pull_after_complete)
 - [ ] `ralph run` reads `profile:X` label from bead and uses that profile
-  [test](tests/ralph/run-tests.sh::test_run_profile_selection)
+  [system](bash tests/ralph/run-tests.sh test_run_profile_selection)
 - [ ] `ralph run --profile=X` overrides bead profile label
-  [test](tests/ralph/run-tests.sh::test_run_profile_selection)
+  [system](bash tests/ralph/run-tests.sh test_run_profile_selection)
 - [ ] `ralph run` falls back to base profile when no label present
-  [test](tests/ralph/run-tests.sh::test_run_profile_selection)
+  [system](bash tests/ralph/run-tests.sh test_run_profile_selection)
 - [ ] `ralph run --once` completes single issues with blocked-vs-waiting guidance
-  [test](tests/ralph/run-tests.sh::test_run_closes_issue_on_complete)
+  [system](bash tests/ralph/run-tests.sh test_run_closes_issue_on_complete)
 - [ ] `ralph run` (continuous) runs on host, spawning containerized work per issue
-  [test](tests/ralph/run-tests.sh::test_run_loop_processes_all)
+  [system](bash tests/ralph/run-tests.sh test_run_loop_processes_all)
 - [ ] `ralph run` does NOT `git push` on its own; per-bead commits land without pushing
   [check](tests/ralph/run-tests.sh::test_run_does_not_push)
 - [ ] `ralph run` exec-s `ralph check` when the molecule reaches completion
@@ -647,17 +647,17 @@ Add unit tests for parser edge cases...
 ### Companions
 
 - [ ] `list_companion_paths` errors if a companion directory does not exist
-  [test](tests/ralph/run-tests.sh::test_list_companion_paths_missing_directory)
+  [system](bash tests/ralph/run-tests.sh test_list_companion_paths_missing_directory)
 - [ ] `list_companion_paths` errors if a companion directory lacks `manifest.md`
-  [test](tests/ralph/run-tests.sh::test_list_companion_paths_missing_manifest)
+  [system](bash tests/ralph/run-tests.sh test_list_companion_paths_missing_manifest)
 - [ ] `list_companion_paths` returns empty string when no companions declared
-  [test](tests/ralph/run-tests.sh::test_list_companion_paths_empty)
+  [system](bash tests/ralph/run-tests.sh test_list_companion_paths_empty)
 - [ ] `list_companion_paths` returns a newline-separated list of paths, no manifest body
-  [test](tests/ralph/run-tests.sh::test_list_companion_paths_format)
+  [system](bash tests/ralph/run-tests.sh test_list_companion_paths_format)
 - [ ] `{{COMPANION_PATHS}}` is available in plan-update, todo-new, todo-update, and run templates
-  [test](tests/ralph/run-tests.sh::test_companion_paths_template_variable)
+  [system](bash tests/ralph/run-tests.sh test_companion_paths_template_variable)
 - [ ] Local template overlay can override `partial/companions-context.md`
-  [test](tests/ralph/run-tests.sh::test_companion_partial_override)
+  [system](bash tests/ralph/run-tests.sh test_companion_partial_override)
 
 ## Out of Scope
 

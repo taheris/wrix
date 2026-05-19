@@ -580,63 +580,63 @@ connection, network filtering, session audit logging.
 ### Pi backend
 
 - Pi backend sends `get_commands` probe on startup and fails fast if required commands are missing
-  [test](loom_agent::pi::backend::tests::startup_probe_succeeds_when_required_commands_present)
+  [test](startup_probe_succeeds_when_required_commands_present)
 - Pi backend parses JSONL events via two-phase deserialization
-  [test](loom_agent::pi::parser::tests::full_response_classifies_and_re_deserializes)
+  [test](full_response_classifies_and_re_deserializes)
 - Pi backend sends JSONL commands to pi's stdin
-  [test](loom_agent::pi::backend::tests::driver_sends_prompt_as_jsonl_line)
+  [test](driver_sends_prompt_as_jsonl_line)
 - Pi backend supports steering (steer returns Ok and reaches the agent on the next turn)
-  [test](loom_agent::pi::backend::tests::driver_steers_mid_session_and_mock_observes_payload)
+  [test](driver_steers_mid_session_and_mock_observes_payload)
 - Pi backend maps all pi event types to AgentEvent variants
-  [test](loom_agent::pi::parser::tests::message_update_text_delta_yields_message_delta)
+  [test](message_update_text_delta_yields_message_delta)
 - Pi backend detects CompactionStart event, reads `prompt.txt` + `scratch.md` from the per-key scratch directory, and sends the concatenated content via steer
-  [test](loom_agent::pi::backend::tests::driver_repins_on_compaction_start_via_steer)
+  [test](driver_repins_on_compaction_start_via_steer)
 - Pi backend handles malformed JSONL gracefully (logs warning, continues)
-  [test](loom_agent::pi::parser::tests::malformed_json_returns_invalid_json_error)
+  [test](malformed_json_returns_invalid_json_error)
 - Pi backend logs extension_ui_request at debug level without responding
-  [test](loom_agent::pi::parser::tests::extension_ui_notify_leaves_response_none)
+  [test](extension_ui_notify_leaves_response_none)
 
 ### Claude backend
 
 - Claude backend parses stream-json JSONL events from claude's stdout
-  [test](loom_agent::claude::parser::tests::parses_assistant_text_and_tool_use)
+  [test](parses_assistant_text_and_tool_use)
 - Claude backend uses `#[serde(tag = "type")]` for tagged enum deserialization
   [check](grep -q 'serde(tag = "type")' loom/crates/loom-agent/src/claude/messages.rs)
 - Claude backend maps claude event types to AgentEvent variants
-  [test](loom_agent::claude::parser::tests::result_success_yields_turn_end_then_session_complete)
+  [test](result_success_yields_turn_end_then_session_complete)
 - Claude backend captures cost_usd from result events
-  [test](loom_agent::claude::parser::tests::result_event_captures_cost_usd)
+  [test](result_event_captures_cost_usd)
 - Claude backend handles unknown event types via `#[serde(other)]`
-  [test](loom_agent::claude::parser::tests::unknown_message_type_returns_empty_events)
+  [test](unknown_message_type_returns_empty_events)
 - Claude backend's `repin.sh` is registered under `SessionStart[matcher: compact]` before spawn, and the script emits a JSON envelope containing the scratch directory's `prompt.txt` + `scratch.md` when fired
-  [test](loom_driver::scratch::tests::claude_settings_registers_repin_under_session_start_compact)
+  [test](claude_settings_registers_repin_under_session_start_compact)
 - Claude backend auto-approves permission requests via control_response
-  [test](loom_agent::claude::parser::tests::control_request_autoapproves_when_denylist_empty)
+  [test](control_request_autoapproves_when_denylist_empty)
 - Claude backend supports steering — sends a stream-json user message via stdin during the session and verifies the agent receives it
-  [test](loom_agent::claude::backend::tests::steering_message_reaches_mock_and_emits_followup_turn)
+  [test](steering_message_reaches_mock_and_emits_followup_turn)
 - Claude backend shutdown watchdog: on `result` event, loom closes stdin; if claude does not exit within grace period, sends SIGTERM then SIGKILL
-  [test](loom_agent::claude::backend::tests::shutdown_watchdog_escalates_to_sigkill_when_child_ignores_stdin_close)
+  [test](shutdown_watchdog_escalates_to_sigkill_when_child_ignores_stdin_close)
 
 ### Backend selection
 
 - Per-phase config resolves correct backend (`[phase.todo].agent.backend` overrides `[phase.default].agent.backend`)
-  [test](loom_driver::config::tests::agent_for_per_phase_resolves_override_and_default)
+  [test](agent_for_per_phase_resolves_override_and_default)
 - `--agent` CLI flag overrides all phase config for the invocation
-  [test](loom_agent_flag::loom_accepts_agent_pi)
+  [test](loom_accepts_agent_pi)
 - Default (no phase config, no flag) selects claude
-  [test](loom_driver::config::tests::agent_for_default_is_claude_when_config_empty)
+  [test](agent_for_default_is_claude_when_config_empty)
 - Invalid backend name produces clear error
-  [test](loom_driver::config::tests::agent_for_unknown_backend_in_default_returns_error)
+  [test](agent_for_unknown_backend_in_default_returns_error)
 - Pi backend calls `set_model` after spawn when phase config specifies provider/model
-  [test](loom_agent::pi::backend::tests::set_model_from_phase_config_reaches_mock_pi)
+  [test](set_model_from_phase_config_reaches_mock_pi)
 
 ### Container integration
 
 - Loom spawns containers via `wrapix spawn --spawn-config <file>
       --stdio` with the correct profile image, never via `podman run` directly
-  [test](loom_spawn_dispatch::wrapix_spawn_invocation_records_correct_argv)
+  [test](wrapix_spawn_invocation_records_correct_argv)
 - Container receives agent stdin/stdout via pipe
-  [test](loom_spawn_dispatch::child_stdin_is_a_pipe_not_a_tty)
+  [test](child_stdin_is_a_pipe_not_a_tty)
 - Entrypoint starts pi in RPC mode when `WRAPIX_AGENT=pi`
   [check](grep -q 'pi --mode rpc' lib/sandbox/linux/entrypoint.sh)
 - Entrypoint starts claude normally when `WRAPIX_AGENT=claude`
