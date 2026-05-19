@@ -51,15 +51,16 @@ let
     filter = srcFilter;
   };
 
-  # Host files referenced by [check]-tier grep annotations in
-  # specs/loom-tests.md. The Nix-config invariants those annotations
-  # encode (test-loom app shape, flake-checks wiring, podman/pi-mono
-  # pinning) live outside the loom/ workspace, so the staged source
-  # mirrors the host paths exactly under tests/, modules/flake/.
+  # Host files referenced by [check]-tier grep annotations across
+  # specs/*.md. The Nix-config invariants those annotations encode
+  # (test-loom app shape, flake-checks wiring, podman/pi-mono
+  # pinning) and the sandbox entrypoint live outside the loom/
+  # workspace, so the staged source mirrors the host paths exactly
+  # under tests/, modules/flake/, and lib/sandbox/.
   stagedSrc = pkgs.runCommand "loom-test-src" { } ''
     cp -r ${cleanedSrc} $out
     chmod -R u+w $out
-    mkdir -p $out/tests/loom $out/modules/flake
+    mkdir -p $out/tests/loom $out/modules/flake $out/lib/sandbox/linux
     cp -r ${../loom/mock-pi} $out/tests/loom/mock-pi
     cp -r ${../loom/mock-claude} $out/tests/loom/mock-claude
     cp ${./default.nix} $out/tests/loom/default.nix
@@ -67,6 +68,7 @@ let
     cp ${../default.nix} $out/tests/default.nix
     cp ${../../modules/flake/apps.nix} $out/modules/flake/apps.nix
     cp ${../../modules/flake/overlays.nix} $out/modules/flake/overlays.nix
+    cp ${../../lib/sandbox/linux/entrypoint.sh} $out/lib/sandbox/linux/entrypoint.sh
     cp -r ${../../specs} $out/specs
   '';
 
@@ -100,13 +102,9 @@ let
   # LOOM_VERIFY_TIERS scopes the verify loop to `check,test` because
   # [system]-tier verifiers across the repo shell out to `nix build`,
   # `nix run`, and `podman` — none of which are available inside the
-  # nix build sandbox. `--spec loom-tests` keeps the verify loop on
-  # the one spec whose [check] grep targets line up with the staged
-  # source layout; other specs reference paths like `loom/crates/...`
-  # or `lib/sandbox/...` that the sandbox does not stage (tracked in
-  # wx-1pp3u). The container smoke ([system](nix run .#test-loom))
-  # stays in the separate `test-loom` app because it needs `podman`
-  # at runtime.
+  # nix build sandbox. The container smoke
+  # ([system](nix run .#test-loom)) stays in the separate `test-loom`
+  # app because it needs `podman` at runtime.
   loomTests = craneLib.mkCargoDerivation (
     nextestArgs
     // {
@@ -122,7 +120,7 @@ let
         loom --version
       '';
       checkPhaseCargoCommand = ''
-        LOOM_VERIFY_TIERS=check,test loom gate verify --spec loom-tests
+        LOOM_VERIFY_TIERS=check,test loom gate verify
       '';
     }
   );

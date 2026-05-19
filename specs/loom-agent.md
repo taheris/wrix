@@ -565,7 +565,7 @@ connection, network filtering, session audit logging.
 ### Agent trait
 
 - `AgentBackend` trait defined in loom-driver with associated `spawn`; no `SUPPORTS_STEERING` constant (both backends steer)
-  [check](grep -q 'pub trait AgentBackend' loom/crates/loom-driver/src/agent/backend.rs)
+  [check](grep -q 'pub trait AgentBackend' crates/loom-driver/src/agent/backend.rs)
 - `run_agent` compiles with both `PiBackend` and `ClaudeBackend` as concrete types
   [check](cargo test -p loom-agent --test static_dispatch pi_and_claude_dispatch_through_run_agent)
 - `AgentEvent` enum covers: MessageDelta, ToolCall, ToolResult, TurnEnd, SessionComplete, CompactionStart, CompactionEnd, Error
@@ -573,9 +573,9 @@ connection, network filtering, session audit logging.
 - `SpawnConfig` struct captures image_ref, image_source, workspace, env, initial_prompt, agent_args, scratch_dir
   [check](cargo test -p loom-driver --lib spawn_config_with_model_none_omits_model_key)
 - Typestate `AgentSession<Idle>` / `AgentSession<Active>` prevents invalid transitions
-  [check](grep -q 'pub struct Idle' loom/crates/loom-driver/src/agent/session.rs)
+  [check](grep -q 'pub struct Idle' crates/loom-driver/src/agent/session.rs)
 - `ProtocolError` variants cover InvalidJson, UnknownMessageType, Io, ProcessExit, UnexpectedEof, LineTooLong, Unsupported
-  [check](grep -q 'pub enum ProtocolError' loom/crates/loom-driver/src/agent/error.rs)
+  [check](grep -q 'pub enum ProtocolError' crates/loom-driver/src/agent/error.rs)
 
 ### Pi backend
 
@@ -601,7 +601,7 @@ connection, network filtering, session audit logging.
 - Claude backend parses stream-json JSONL events from claude's stdout
   [test](parses_assistant_text_and_tool_use)
 - Claude backend uses `#[serde(tag = "type")]` for tagged enum deserialization
-  [check](grep -q 'serde(tag = "type")' loom/crates/loom-agent/src/claude/messages.rs)
+  [check](grep -q 'serde(tag = "type")' crates/loom-agent/src/claude/messages.rs)
 - Claude backend maps claude event types to AgentEvent variants
   [test](result_success_yields_turn_end_then_session_complete)
 - Claude backend captures cost_usd from result events

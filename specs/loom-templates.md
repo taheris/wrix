@@ -231,7 +231,7 @@ documents in front of the agent with zero configuration.
   errors, not runtime errors
   [test](template_renders_are_byte_stable_across_runs)
 - Partials are included via Askama's `{% include %}` mechanism
-  [check](grep -q 'partial/context_pinning' loom/crates/loom-templates/templates/run.md)
+  [check](grep -q 'partial/context_pinning' crates/loom-templates/templates/run.md)
 - Rendered output is stable across runs for identical inputs,
   verified by `insta` snapshots
   [test](template_renders_are_byte_stable_across_runs)
@@ -239,7 +239,7 @@ documents in front of the agent with zero configuration.
 ### Pinning policy
 
 - `style_rules.md` partial renders the `style_rules` variable
-  [check](grep -q '{{ style_rules' loom/crates/loom-templates/templates/partial/style_rules.md)
+  [check](grep -q '{{ style_rules' crates/loom-templates/templates/partial/style_rules.md)
 - `run.md` and `review.md` include `style_rules.md`; no other
   phase template does
   [check](cargo run -p loom-walk -- template_pinning_matrix)
