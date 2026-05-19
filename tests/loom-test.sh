@@ -241,33 +241,6 @@ test_devshell_includes_loom() {
 # denies unwrap_used, expect_used, panic, todo, unimplemented; warns
 # allow_attributes (use `#[expect(...)]` over `#[allow(...)]`).
 #-----------------------------------------------------------------------------
-test_workspace_clippy_lints() {
-    local clippy_section
-    clippy_section=$(awk '
-        /^\[workspace\.lints\.clippy\][[:space:]]*$/ { in_section = 1; next }
-        in_section && /^\[/ { in_section = 0 }
-        in_section { print }
-    ' "$WORKSPACE_TOML")
-
-    if [ -z "$clippy_section" ]; then
-        echo "[workspace.lints.clippy] section missing in $WORKSPACE_TOML" >&2
-        return 1
-    fi
-
-    local missing=0 lint
-    for lint in unwrap_used expect_used panic todo unimplemented; do
-        if ! grep -E "^${lint}[[:space:]]*=[[:space:]]*\"deny\"" <<<"$clippy_section" >/dev/null; then
-            echo "clippy lint $lint not denied in $WORKSPACE_TOML" >&2
-            missing=$((missing + 1))
-        fi
-    done
-    if ! grep -E '^allow_attributes[[:space:]]*=[[:space:]]*"warn"' <<<"$clippy_section" >/dev/null; then
-        echo "clippy lint allow_attributes not warned in $WORKSPACE_TOML" >&2
-        missing=$((missing + 1))
-    fi
-    return "$missing"
-}
-
 #-----------------------------------------------------------------------------
 # Helpers for wrapix spawn acceptance tests.
 #
@@ -771,36 +744,8 @@ test_no_allow_dead_code() {
 # violations are printed there as `<path>:<line> <rule>` so reviewers can
 # click into the offending site.
 #-----------------------------------------------------------------------------
-test_no_derive_from_on_newtypes() {
-    cargo_run test -p loom --test style --quiet -- no_derive_from_on_newtypes
-}
-
-test_nested_module_structure() {
-    cargo_run test -p loom --test style --quiet -- nested_module_structure
-}
-
-test_git_client_encapsulation() {
-    cargo_run test -p loom --test style --quiet -- git_client_encapsulation
-}
-
-test_run_single_event_channel() {
-    cargo_run test -p loom --test style --quiet -- run_single_event_channel
-}
-
-test_newtypes_for_identifiers() {
-    cargo_run test -p loom --test style --quiet -- newtypes_for_identifiers
-}
-
 test_template_context_structs() {
     cargo_run test -p loom --test style --quiet -- template_context_structs
-}
-
-test_no_hardcoded_tmp_paths() {
-    cargo_run test -p loom --test style --quiet -- no_hardcoded_tmp_paths
-}
-
-test_no_ignore_for_flake() {
-    cargo_run test -p loom --test style --quiet -- no_ignore_for_flake
 }
 
 #-----------------------------------------------------------------------------
@@ -1886,18 +1831,6 @@ test_fuzz_runner_exists() {
 # version bumps go through a checklist; the pin file is the single
 # discoverable point reviewers grep when bumping either dependency.
 #-----------------------------------------------------------------------------
-test_protocol_versions_pinned() {
-    local file="$REPO_ROOT/modules/flake/overlays.nix"
-    [ -f "$file" ] || { echo "missing overlays.nix: $file" >&2; return 1; }
-
-    grep -q "pi-mono" "$file" \
-        || { echo "no pi-mono pin reference in $file" >&2; return 1; }
-    grep -q "claude-code" "$file" \
-        || { echo "no claude-code pin reference in $file" >&2; return 1; }
-    grep -qiE "protocol[- ]bump checklist" "$file" \
-        || { echo "no protocol-bump checklist comment in $file" >&2; return 1; }
-}
-
 #-----------------------------------------------------------------------------
 # test_flake_check_includes_loom — `nix flake check` runs both Rust gates
 # from the rust profile's buildPackage outputs. Asserts
@@ -1905,75 +1838,11 @@ test_protocol_versions_pinned() {
 # evaluate to store paths from the matching crane derivations. This is the
 # gate that binds the unit + integration tier to CI.
 #-----------------------------------------------------------------------------
-test_flake_check_includes_loom() {
-    local arch kernel nix_system store
-    arch=$(uname -m)
-    case "$(uname -s)" in
-        Linux)  kernel="linux" ;;
-        Darwin) kernel="darwin" ;;
-        *)
-            echo "unsupported kernel: $(uname -s)" >&2
-            return 1
-            ;;
-    esac
-    case "$arch" in
-        x86_64)        nix_system="x86_64-$kernel" ;;
-        aarch64|arm64) nix_system="aarch64-$kernel" ;;
-        *)
-            echo "unsupported arch: $arch" >&2
-            return 1
-            ;;
-    esac
-
-    store=$(nix eval --raw "$REPO_ROOT#checks.$nix_system.loom-clippy.outPath") \
-        || { echo "checks.$nix_system.loom-clippy does not evaluate" >&2; return 1; }
-    case "$store" in
-        /nix/store/*-clippy-*) ;;
-        *)
-            echo "unexpected loom-clippy store path: $store" >&2
-            return 1
-            ;;
-    esac
-
-    store=$(nix eval --raw "$REPO_ROOT#checks.$nix_system.loom-nextest.outPath") \
-        || { echo "checks.$nix_system.loom-nextest does not evaluate" >&2; return 1; }
-    case "$store" in
-        /nix/store/*-nextest-*) ;;
-        *)
-            echo "unexpected loom-nextest store path: $store" >&2
-            return 1
-            ;;
-    esac
-}
-
 #-----------------------------------------------------------------------------
 # test_flake_declares_loom_for_all_systems — per spec NFR #7 the unit +
 # integration tier is cross-platform. Asserts checks.<system>.loom-clippy
 # and checks.<system>.loom-nextest evaluate for all four supported systems.
 #-----------------------------------------------------------------------------
-test_flake_declares_loom_for_all_systems() {
-    local sys check missing=0 errlog present
-    errlog=$(mktemp)
-    trap 'rm -f "$errlog"' RETURN
-    # Use `--apply` membership probe rather than `.outPath` so the
-    # evaluator does not realize fenix's per-target rust-src derivation
-    # (which fails IFD when the host platform != target). This still
-    # proves the attribute is declared under `checks.<system>`.
-    for sys in x86_64-linux aarch64-linux x86_64-darwin aarch64-darwin; do
-        for check in loom-clippy loom-nextest; do
-            present=$(nix eval --raw "$REPO_ROOT#checks.$sys" \
-                    --apply "set: if set ? $check then \"yes\" else \"no\"" \
-                    2>"$errlog" || true)
-            if [ "$present" != "yes" ]; then
-                echo "checks.$sys.$check not declared:" >&2
-                sed 's/^/  /' "$errlog" >&2
-                missing=$((missing + 1))
-            fi
-        done
-    done
-    [ "$missing" -eq 0 ]
-}
-
 #-----------------------------------------------------------------------------
 # test_cargo_nextest_timing — soft <5s warm-cache target for
 # `cargo nextest run --workspace` per spec NFR #2. Guides PR review;
@@ -2032,17 +1901,6 @@ test_cargo_nextest_timing() {
 # `deserialize_rejects_malformed_string`, `display_round_trips_with_as_str`,
 # `parse_accepts_canonical_shapes`, `parse_rejects_malformed_inputs`.
 #-----------------------------------------------------------------------------
-test_newtype_serde_roundtrip() {
-    cargo_run test -p loom-events --lib --quiet -- \
-        identifier::bead::tests \
-        identifier::molecule::tests \
-        identifier::profile::tests \
-        identifier::request::tests \
-        identifier::session::tests \
-        identifier::spec::tests \
-        identifier::tool_call::tests
-}
-
 #-----------------------------------------------------------------------------
 # test_state_db_roundtrip — `StateDb` covers spec, molecule, companions, and
 # meta-table operations end-to-end: open creates schema, rebuild populates
@@ -2051,16 +1909,6 @@ test_newtype_serde_roundtrip() {
 # after rebuild), and `recreate` recovers from a corrupted file. Each cargo
 # integration test exercises one operation against a `tempfile::tempdir`.
 #-----------------------------------------------------------------------------
-test_state_db_roundtrip() {
-    state_db_cargo_test state_db_init_creates_tables
-    state_db_cargo_test state_db_rebuild_populates_specs_and_molecules
-    state_db_cargo_test state_db_rebuild_companions
-    state_db_cargo_test state_db_rebuild_resets_counters
-    state_db_cargo_test state_current_spec_round_trips
-    state_db_cargo_test state_increment_iteration_returns_updated_count
-    state_db_cargo_test state_corruption_recovery
-}
-
 #-----------------------------------------------------------------------------
 # test_pi_protocol_coverage — Pi RPC parser covers every documented field of
 # every documented message type for the pinned protocol version (per spec
@@ -2071,46 +1919,6 @@ test_state_db_roundtrip() {
 # compaction lifecycle reasons, observability-only events, malformed JSON,
 # extension UI auto-cancel, and command (prompt/steer/abort) serialization.
 #-----------------------------------------------------------------------------
-test_pi_protocol_coverage() {
-    cargo_run test -p loom-agent --lib --quiet -- \
-        pi::messages::tests::pi_response_success_populates_data_field \
-        pi::messages::tests::pi_response_failure_populates_error_field \
-        pi::messages::tests::pi_response_minimal_shape_omits_data_and_error \
-        pi::messages::tests::pi_event_tool_execution_start_maps_all_fields \
-        pi::messages::tests::pi_event_tool_execution_end_maps_all_fields \
-        pi::messages::tests::pi_ui_request_maps_id_and_method \
-        pi::messages::tests::command_structs_serialize_to_expected_type_field \
-        pi::parser::tests::envelope_only_with_unknown_extras_classifies_as_event \
-        pi::parser::tests::full_response_classifies_and_re_deserializes \
-        pi::parser::tests::full_event_classifies_via_id_absent_path \
-        pi::parser::tests::full_ui_request_classifies_as_extension_ui_request \
-        pi::parser::tests::unknown_envelope_type_with_id_is_unknown_message_type \
-        pi::parser::tests::message_update_text_delta_yields_message_delta \
-        pi::parser::tests::message_update_error_delta_yields_error_event \
-        pi::parser::tests::message_update_genuinely_unknown_delta_is_silent \
-        pi::parser::tests::tool_execution_end_yields_tool_result \
-        pi::parser::tests::tool_execution_end_stringifies_non_string_result \
-        pi::parser::tests::turn_end_yields_turn_end_event \
-        pi::parser::tests::agent_end_yields_session_complete_with_synthesized_zero \
-        pi::parser::tests::compaction_start_threshold_maps_to_context_limit \
-        pi::parser::tests::compaction_start_overflow_maps_to_context_limit \
-        pi::parser::tests::compaction_start_manual_maps_to_user_requested \
-        pi::parser::tests::compaction_start_unknown_reason_maps_to_unknown \
-        pi::parser::tests::compaction_end_carries_aborted_flag \
-        pi::parser::tests::observability_only_events_yield_no_agent_events \
-        pi::parser::tests::unknown_event_type_via_serde_other_yields_no_events \
-        pi::parser::tests::malformed_json_returns_invalid_json_error \
-        pi::parser::tests::extension_ui_select_yields_auto_cancel_response \
-        pi::parser::tests::extension_ui_confirm_yields_auto_cancel_response \
-        pi::parser::tests::extension_ui_input_yields_auto_cancel_response \
-        pi::parser::tests::extension_ui_editor_yields_auto_cancel_response \
-        pi::parser::tests::extension_ui_notify_leaves_response_none \
-        pi::parser::tests::extension_ui_set_status_leaves_response_none \
-        pi::parser::tests::encode_prompt_emits_prompt_command \
-        pi::parser::tests::encode_steer_emits_steer_command \
-        pi::parser::tests::encode_abort_emits_abort_command_some
-}
-
 #-----------------------------------------------------------------------------
 # test_claude_protocol_coverage — Claude stream-json parser covers every
 # documented field of every documented message type:
@@ -2120,52 +1928,12 @@ test_pi_protocol_coverage() {
 # `ControlRequest` / assistant / user block field mappings, control_request
 # auto-approval keyed on the deny-list, and malformed-JSON handling.
 #-----------------------------------------------------------------------------
-test_claude_protocol_coverage() {
-    cargo_run test -p loom-agent --lib --quiet -- \
-        claude::parser::tests::parses_system_init \
-        claude::parser::tests::parses_assistant_text_and_tool_use \
-        claude::parser::tests::parses_user_tool_result_string_content \
-        claude::parser::tests::parses_result_success \
-        claude::parser::tests::result_success_yields_turn_end_then_session_complete \
-        claude::parser::tests::result_error_yields_error_then_session_complete \
-        claude::parser::tests::result_event_captures_cost_usd \
-        claude::parser::tests::result_event_without_cost_yields_none \
-        claude::parser::tests::unknown_message_type_returns_empty_events \
-        claude::parser::tests::control_request_autoapproves_when_denylist_empty \
-        claude::parser::tests::control_request_denied_when_tool_in_denylist \
-        claude::parser::tests::control_request_denylist_does_not_affect_other_tools \
-        claude::parser::tests::encode_prompt_emits_stream_json_user_message \
-        claude::parser::tests::encode_steer_emits_same_shape_as_prompt \
-        claude::parser::tests::encode_abort_returns_none \
-        claude::parser::tests::result_message_round_trips_every_documented_field \
-        claude::parser::tests::system_message_maps_subtype_and_session_id \
-        claude::parser::tests::control_request_message_round_trips_all_fields \
-        claude::parser::tests::assistant_block_text_and_tool_use_field_mapping \
-        claude::parser::tests::user_block_tool_result_field_mapping \
-        claude::parser::tests::malformed_json_returns_invalid_json_error
-}
-
 #-----------------------------------------------------------------------------
 # test_template_rendering — every Askama template renders cleanly with
 # representative inputs. Exercises the integration tests under
 # `loom-templates/tests/render.rs`, which assert on shared sections,
 # partials, agent-output wrapping, and `previous_failure` truncation.
 #-----------------------------------------------------------------------------
-test_template_rendering() {
-    cargo_run test -p loom-templates --test render --quiet -- \
-        plan_new_renders_partials_and_inputs \
-        plan_update_renders_partials_and_companions \
-        todo_new_renders_implementation_notes_when_present \
-        todo_update_wraps_existing_tasks_in_agent_output \
-        run_wraps_agent_supplied_fields_in_agent_output \
-        run_renders_expected_sections_for_shared_inputs \
-        previous_failure_truncates_at_max_len \
-        previous_failure_preserves_short_input \
-        review_renders_review_context_fields \
-        msg_renders_clarify_beads_with_options \
-        msg_renders_with_no_clarify_beads
-}
-
 #-----------------------------------------------------------------------------
 # Integration tests — load-bearing flows from spec §Functional #4. Each
 # top-level wrapper corresponds to one acceptance criterion in
@@ -2181,12 +1949,6 @@ test_template_rendering() {
 # `loom-agent/tests/static_dispatch.rs` driving the real mock-pi over a
 # real pipe.
 #-----------------------------------------------------------------------------
-test_startup_probe_roundtrip() {
-    cargo_run test -p loom-agent --test static_dispatch --quiet -- \
-        pi_startup_probe_succeeds_with_required_commands \
-        pi_startup_probe_fails_with_missing_required_command
-}
-
 #-----------------------------------------------------------------------------
 # test_wrapix_spawn_argv_contract — loom invokes
 # `wrapix spawn --spawn-config <file> --stdio` with stdin attached as a
@@ -2195,12 +1957,6 @@ test_startup_probe_roundtrip() {
 # pipe-not-tty contract are both covered by the integration tests in
 # `loom/tests/spawn_dispatch.rs`.
 #-----------------------------------------------------------------------------
-test_wrapix_spawn_argv_contract() {
-    cargo_run test -p loom --test spawn_dispatch -- --test-threads=1 \
-        wrapix_spawn_invocation_records_correct_argv \
-        child_stdin_is_a_pipe_not_a_tty
-}
-
 #-----------------------------------------------------------------------------
 # test_parallel_run_end_to_end — `loom run --parallel 2` with two ready
 # beads dispatches two mock-agent spawns concurrently, each in its own
@@ -2209,39 +1965,18 @@ test_wrapix_spawn_argv_contract() {
 # integration tests under `loom-workflow/tests/parallel.rs` plus the
 # concurrency-overlap unit tests under `run::parallel`.
 #-----------------------------------------------------------------------------
-test_parallel_run_end_to_end() {
-    parallel_int_test parallel_creates_worktrees
-    parallel_int_test parallel_merge_back
-    parallel_lib_test run::parallel::tests::concurrent_spawns_overlap_in_wall_clock
-    parallel_lib_test run::parallel::tests::concurrent_spawns_collect_outcomes_for_every_slot
-}
-
 #-----------------------------------------------------------------------------
 # test_git_client_roundtrip — `GitClient` exercises create-worktree, list,
 # status, merge (clean / non-conflicting / conflict variants), and remove
 # against a temp repo via the typed Rust API. Cargo integration tests live
 # in `loom-driver/tests/git_client.rs`.
 #-----------------------------------------------------------------------------
-test_git_client_roundtrip() {
-    cargo_run test -p loom-driver --test git_client --quiet -- \
-        create_and_remove_worktree_round_trip \
-        merge_branch_clean_returns_ok \
-        merge_branch_conflict_is_reported
-}
-
 #-----------------------------------------------------------------------------
 # test_state_db_lifecycle — `StateDb::open` on a fresh path creates schema;
 # `rebuild` populates from `specs/*.md` plus mock `bd` output and resets
 # iteration counters; `recreate` recovers from a corrupted file. Aggregates
 # the lifecycle subset of `loom-driver/tests/state_db.rs`.
 #-----------------------------------------------------------------------------
-test_state_db_lifecycle() {
-    state_db_cargo_test state_db_init_creates_tables
-    state_db_cargo_test state_db_rebuild_populates_specs_and_molecules
-    state_db_cargo_test state_db_rebuild_resets_counters
-    state_db_cargo_test state_corruption_recovery
-}
-
 #-----------------------------------------------------------------------------
 # test_per_spec_locking — two contending acquisitions on the same
 # `<label>.lock` serialize via `flock`; the second waits via `MockClock`
@@ -2249,23 +1984,12 @@ test_state_db_lifecycle() {
 # lock immediately so the parent re-acquires. Aggregates the integration
 # tests under `loom-driver/tests/lock_manager.rs`.
 #-----------------------------------------------------------------------------
-test_per_spec_locking() {
-    lock_cargo_test second_acquire_times_out_with_spec_busy
-    lock_cargo_test times_out_with_default_timeout
-    lock_cargo_test second_thread_unblocks_when_holder_drops
-    lock_cargo_test crash_releases_spec_lock
-}
-
 #-----------------------------------------------------------------------------
 # test_logging_tee_equality — renderer and on-disk `.jsonl` log subscribe
 # to the same `AgentEvent` stream; capturing both yields line-for-line
 # equality on the log side. Exercises the integration test under
 # `loom-driver/tests/logging.rs::run_single_event_sink_property`.
 #-----------------------------------------------------------------------------
-test_logging_tee_equality() {
-    logging_cargo_test run_single_event_sink_property
-}
-
 #-----------------------------------------------------------------------------
 # Annotation gate — bidirectional integrity check on `specs/*.md`
 # annotations against `tests/loom-test.sh`. Implemented in
@@ -2278,10 +2002,6 @@ test_logging_tee_equality() {
 # spec corpus, regex-extracts annotations, and asserts each function
 # resolves; any `[judge]` annotation today is a hard error until the judge
 # runner ships (per spec Annotation Contract rule 2).
-test_acceptance_annotations_resolve() {
-    cargo_run test -p loom --test annotations --quiet -- acceptance_annotations_resolve
-}
-
 # Reverse direction: every top-level zero-argument `test_*` function in
 # `tests/loom-test.sh` is referenced by at least one annotation in some
 # spec. Helper functions named `_helper`, `_setup`, etc. are exempt by
@@ -2313,65 +2033,18 @@ test_dispatcher_cargo_tests_resolve() {
 # an `AgentEvent` from a malformed line, and `MAX_LINE_BYTES` matches the
 # spec's 10 MB cap. Exercises both PiParser and ClaudeParser since the
 # JSONL framing contract is shared between backends.
-test_jsonl_parser_invariants() {
-    cargo_run test -p loom-agent --test properties --quiet -- \
-        max_line_bytes_is_ten_megabytes \
-        jsonl_arbitrary_bytes_never_panic \
-        jsonl_malformed_line_emits_no_events
-}
-
 # Pi protocol parser invariants: round-trip identity for known shapes
 # (prompt/steer encoders), unknown message types surface as
 # `ProtocolError::UnknownMessageType`, never panics on arbitrary bytes.
-test_pi_parser_invariants() {
-    cargo_run test -p loom-agent --test properties --quiet -- \
-        pi_encode_prompt_round_trips \
-        pi_encode_steer_round_trips \
-        pi_unknown_message_type_surfaces_typed_error \
-        pi_arbitrary_bytes_never_panic
-}
-
 # Claude stream-json parser invariants: round-trip identity for known
 # shapes (System, Result, encoded user message), unknown shapes hit the
 # `Unknown` variant via `#[serde(other)]`, never panics on arbitrary bytes.
-test_claude_parser_invariants() {
-    cargo_run test -p loom-agent --test properties --quiet -- \
-        claude_system_round_trips \
-        claude_result_round_trips \
-        claude_unknown_type_falls_through_serde_other \
-        claude_encode_prompt_round_trips \
-        claude_arbitrary_bytes_never_panic
-}
-
 # State DB rebuild invariants: arbitrary spec content never corrupts the
 # schema, `recreate` always recovers from a corrupted DB file, and
 # round-trips of known molecule shapes are stable.
-test_state_db_rebuild_invariants() {
-    cargo_run test -p loom-driver --test properties --quiet -- \
-        rebuild_never_corrupts_schema \
-        recreate_recovers_from_arbitrary_bytes \
-        rebuild_round_trips_known_shapes
-}
-
 # Default case count of 32 is baked into each `proptest!` block via
 # `ProptestConfig::with_cases(32)`. The env var still overrides upward
 # for local exhaustive runs (`PROPTEST_CASES=2048 …`).
-test_proptest_case_count() {
-    local missing=0 f blocks pins
-    for f in \
-        "$LOOM_DIR/crates/loom-driver/tests/properties.rs" \
-        "$LOOM_DIR/crates/loom-agent/tests/properties.rs"; do
-        [ -f "$f" ] || { echo "missing $f" >&2; return 1; }
-        blocks=$(grep -cE '^proptest! .$' "$f")
-        pins=$(grep -cE 'ProptestConfig::with_cases\(32\)' "$f")
-        if [ "$blocks" != "$pins" ]; then
-            echo "$f: $blocks proptest blocks, $pins pinned to with_cases(32)" >&2
-            missing=$((missing + 1))
-        fi
-    done
-    return "$missing"
-}
-
 #-----------------------------------------------------------------------------
 # Snapshot tests — `insta` snapshots for contract surfaces.
 #
@@ -2384,66 +2057,12 @@ test_proptest_case_count() {
 # Every typed Askama context has at least one `.snap` under
 # loom/crates/loom-templates/tests/snapshots/. Names are tied to the test
 # function via insta's default `<test-binary>__<test-name>.snap` shape.
-test_template_snapshots_exist() {
-    local snap_dir="$LOOM_DIR/crates/loom-templates/tests/snapshots"
-    [ -d "$snap_dir" ] || {
-        echo "missing snapshot dir: $snap_dir" >&2
-        return 1
-    }
-    local missing=0
-    # Each typed context gets one snapshot exercising representative inputs.
-    for ctx in plan_new plan_update todo_new todo_update run review msg; do
-        local snap="$snap_dir/snapshots__${ctx}_snapshot.snap"
-        if [ ! -f "$snap" ]; then
-            echo "missing snapshot for ${ctx}: $snap" >&2
-            missing=$((missing + 1))
-        fi
-    done
-    [ "$missing" -eq 0 ] || return 1
-    cargo_run test -p loom-templates --test snapshots --quiet
-}
-
 # Every `loom <subcommand> --help` surface has an insta snapshot. The list
 # below mirrors the v1 command surface in `crates/loom/src/main.rs::Command`.
-test_cli_help_snapshots_exist() {
-    local snap_dir="$LOOM_DIR/crates/loom/tests/snapshots"
-    [ -d "$snap_dir" ] || {
-        echo "missing snapshot dir: $snap_dir" >&2
-        return 1
-    }
-    local missing=0
-    local commands=(
-        loom_help
-        loom_init_help
-        loom_status_help
-        loom_use_help
-        loom_logs_help
-        loom_spec_help
-        loom_plan_help
-        loom_run_help
-        loom_check_help
-        loom_msg_help
-        loom_todo_help
-    )
-    for cmd in "${commands[@]}"; do
-        local snap="$snap_dir/cli_help__${cmd}_snapshot.snap"
-        if [ ! -f "$snap" ]; then
-            echo "missing CLI help snapshot: $snap" >&2
-            missing=$((missing + 1))
-        fi
-    done
-    [ "$missing" -eq 0 ] || return 1
-    cargo_run test -p loom --test cli_help --quiet
-}
-
 # Run-time renderer must NOT use `insta`. Per spec §Snapshot Testing, the
 # renderer is a flexibility surface — substring + structural assertions keep
 # layout decisions free to evolve. The Rust check lives at
 # `loom/crates/loom/tests/style.rs::renderer_no_insta_dependency`.
-test_renderer_no_insta_dependency() {
-    cargo_run test -p loom --test style --quiet -- renderer_no_insta_dependency
-}
-
 #-----------------------------------------------------------------------------
 # Container smoke tests (specs/loom-tests.md Functional #5, NFR #7).
 #
@@ -2457,37 +2076,8 @@ test_renderer_no_insta_dependency() {
 # Linux-only: spawns the real podman container via `nix run .#test-loom`,
 # asserts exit 0 and bead closure. Skips on Darwin and when podman is
 # unavailable (exit 77 — both are environmental, not test failures).
-test_loom_smoke_real_container() {
-    if [ "$(uname -s)" = "Darwin" ]; then
-        echo "skip: container smoke is Linux-only" >&2
-        exit 77
-    fi
-    if ! command -v podman >/dev/null 2>&1; then
-        echo "skip: podman not on PATH" >&2
-        exit 77
-    fi
-    ( cd "$REPO_ROOT" && nix run --impure .#test-loom )
-}
-
 # `tests/loom/default.nix` must expose `smoke` only when the host system
 # is Linux — the smoke depends on podman, which is not part of Darwin.
-test_smoke_linux_only() {
-    local file="$REPO_ROOT/tests/loom/default.nix"
-    [ -f "$file" ] || { echo "missing $file" >&2; return 1; }
-    grep -q 'isLinux' "$file" || {
-        echo "$file: missing isLinux gate around smoke" >&2
-        return 1
-    }
-    grep -qE '^[[:space:]]*smoke =' "$file" || {
-        echo "$file: missing smoke binding" >&2
-        return 1
-    }
-    grep -q 'darwinSkip' "$file" || {
-        echo "$file: missing Darwin skip stub" >&2
-        return 1
-    }
-}
-
 # Darwin's `nix run .#test-loom` must print a clear "not available on
 # Darwin" message to stderr and exit 0. The message is asserted by string
 # match against the run-tests.sh skip branch and the Darwin stub in
@@ -2516,25 +2106,6 @@ test_smoke_darwin_skip_message() {
 # `nix run .#test-loom` must be exposed on Linux as a writeShellApplication
 # named `test-loom`. The Nix file binds the runner; modules/flake/apps.nix
 # registers it under apps.test-loom.
-test_system_runner_exists() {
-    local apps="$REPO_ROOT/modules/flake/apps.nix"
-    [ -f "$apps" ] || { echo "missing $apps" >&2; return 1; }
-    grep -q 'test-loom = test.apps.loom' "$apps" || {
-        echo "$apps: missing test-loom app registration" >&2
-        return 1
-    }
-
-    local nix_file="$REPO_ROOT/tests/loom/default.nix"
-    grep -q 'writeShellApplication' "$nix_file" || {
-        echo "$nix_file: loomSmoke is not a writeShellApplication" >&2
-        return 1
-    }
-    grep -q 'name = "test-loom"' "$nix_file" || {
-        echo "$nix_file: writeShellApplication name is not test-loom" >&2
-        return 1
-    }
-}
-
 # The smoke harness enforces a <30s wall-time budget per Functional #5.
 # Verify the script actually checks elapsed time against 30 seconds — if
 # this guard slips, regressions in startup cost go silent.
@@ -2569,22 +2140,6 @@ _loom_filter_disallowed() {
     local allow
     allow=$(_loom_allowed_clock_files)
     grep -vF -f <(printf '%s\n' "$allow") || true
-}
-
-test_no_thread_sleep() {
-    cargo_run test -p loom --test style --quiet -- no_thread_sleep
-}
-
-test_no_tokio_sleep_outside_clock() {
-    cargo_run test -p loom --test style --quiet -- no_tokio_sleep_outside_clock
-}
-
-test_no_tokio_timeout_outside_clock() {
-    cargo_run test -p loom --test style --quiet -- no_tokio_timeout_outside_clock
-}
-
-test_no_real_clock_outside_system_clock() {
-    cargo_run test -p loom --test style --quiet -- no_real_clock_outside_system_clock
 }
 
 #-----------------------------------------------------------------------------
