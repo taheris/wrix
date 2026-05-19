@@ -1425,7 +1425,7 @@ Criteria.
       drifts from FR1 (command set, flag set, removed surface,
       grouping order) and exits 0 when spec and binary agree.
       Wired as a `[check]`-tier verifier under `loom gate check`
-  [check](cargo test -p loom-workflow --lib check::surface)
+  [check](cargo run -p loom-walk -- surface_conformance)
 - Bare `loom` (no args) renders the same Workflow / Inspection /
       State grouped sections (in spec order) as `loom --help`,
       `loom -h`, and `loom help` — clap's flat default-help fallback
