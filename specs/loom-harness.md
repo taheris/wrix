@@ -1417,7 +1417,7 @@ Criteria.
 - Push gate refuses when the `--tree`-scoped `loom gate review`
       flags a concern (same blocking behavior as a default-scope
       flag — no advisory tier)
-  [test](tests/loom-test.sh::test_push_gate_refuses_on_tree_review_flag)
+  [test](loom_workflow::push_blocked_emits_refuse_with_id_payload)
 - `loom gate verify` auto-iterates on fix-up beads (up to max
       iterations)
   [test](loom_workflow::default_cap_matches_spec)

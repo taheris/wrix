@@ -1522,7 +1522,6 @@ test_snapshots_no_crate_root_allows() {
 # processes any newly-ready fix-up beads, and only exits when (a) no new
 # fix-ups appear after a handoff (stall), or (b) the `[loop]
 # max_iterations` counter is exhausted.
-test_push_gate_refuses_on_tree_review_flag() { _pending_stub push_gate_refuses_on_tree_review_flag; }
 #-----------------------------------------------------------------------------
 # test_phase_verdict_decide_called_from_production — FR12 (verdict-gate
 # production wiring). The pure decision function `phase_verdict::decide()`
