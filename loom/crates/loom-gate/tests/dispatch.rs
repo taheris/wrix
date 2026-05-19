@@ -186,12 +186,12 @@ fn check_tier_falls_back_to_exit_code_fail_when_verifier_omits_json() {
 }
 
 #[test]
-fn dispatcher_surfaces_malformed_verdict_when_json_invalid() {
+fn dispatcher_surfaces_malformed_verdict_when_pass_key_has_wrong_type() {
     let dir = fixture_dir();
     let script = write_script(
         dir.path(),
         "bad.sh",
-        "#!/bin/sh\nprintf '{\"pass\": maybe}\\n'\nexit 0\n",
+        "#!/bin/sh\nprintf '{\"pass\": \"yes\", \"evidence\": \"oops\"}\\n'\nexit 0\n",
     );
 
     let inputs = vec![ann(Tier::Check, &script)];
@@ -199,6 +199,22 @@ fn dispatcher_surfaces_malformed_verdict_when_json_invalid() {
     let results = run_check(&inputs, &opts);
     let err = results.into_iter().next().unwrap().unwrap_err();
     assert!(matches!(err, DispatchError::MalformedVerdict { .. }));
+}
+
+#[test]
+fn dispatcher_falls_through_to_exit_code_on_incidental_json() {
+    let dir = fixture_dir();
+    let script = write_script(
+        dir.path(),
+        "incidental.sh",
+        "#!/bin/sh\nprintf '{\"some\":\"data\"}\\n'\nexit 0\n",
+    );
+
+    let inputs = vec![ann(Tier::Check, &script)];
+    let opts = DispatchOptions::default();
+    let results = run_check(&inputs, &opts);
+    let outcome = results.into_iter().next().unwrap().unwrap();
+    assert!(outcome.verdict.pass);
 }
 
 #[test]

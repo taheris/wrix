@@ -302,14 +302,29 @@ fn parse_verdict_optional(
         if line.is_empty() || !line.starts_with('{') {
             continue;
         }
-        return serde_json::from_str::<VerifierVerdict>(line)
-            .map(Some)
-            .map_err(|source| DispatchError::MalformedVerdict {
-                command: command.to_string(),
-                source,
-            });
+        match serde_json::from_str::<VerifierVerdict>(line) {
+            Ok(v) => return Ok(Some(v)),
+            Err(source) if line_attempts_verdict(line) => {
+                return Err(DispatchError::MalformedVerdict {
+                    command: command.to_string(),
+                    source,
+                });
+            }
+            Err(_) => continue,
+        }
     }
     Ok(None)
+}
+
+/// `true` when the line parses as a JSON object with a `pass` key —
+/// the signal that the verifier is attempting to speak the verdict
+/// contract.
+fn line_attempts_verdict(line: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(line)
+        .ok()
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+        .is_some_and(|o| o.contains_key("pass"))
 }
 
 #[cfg(test)]
@@ -354,8 +369,38 @@ mod tests {
     }
 
     #[test]
-    fn parse_verdict_optional_surfaces_malformed_json_error() {
+    fn parse_verdict_optional_surfaces_malformed_verdict_with_wrong_type() {
+        let stdout = "{\"pass\": \"yes\", \"evidence\": \"ok\"}\n";
+        let err = parse_verdict_optional("cmd", stdout).unwrap_err();
+        assert!(matches!(err, DispatchError::MalformedVerdict { .. }));
+    }
+
+    #[test]
+    fn parse_verdict_optional_falls_through_on_unparseable_json() {
         let stdout = "{\"pass\": maybe}\n";
+        assert!(parse_verdict_optional("cmd", stdout).unwrap().is_none());
+    }
+
+    #[test]
+    fn parse_verdict_optional_skips_incidental_json_without_pass_key() {
+        let stdout = "{\"some\": \"data\", \"more\": true}\n";
+        assert!(parse_verdict_optional("cmd", stdout).unwrap().is_none());
+    }
+
+    #[test]
+    fn parse_verdict_optional_finds_verdict_above_incidental_trailing_json() {
+        let stdout = concat!(
+            "{\"pass\": true, \"evidence\": \"ok\"}\n",
+            "{\"unrelated\": \"trailing output\"}\n",
+        );
+        let v = parse_verdict_optional("cmd", stdout).unwrap().unwrap();
+        assert!(v.pass);
+        assert_eq!(v.evidence, "ok");
+    }
+
+    #[test]
+    fn parse_verdict_optional_errors_when_verdict_attempt_missing_evidence() {
+        let stdout = "{\"pass\": true}\n";
         let err = parse_verdict_optional("cmd", stdout).unwrap_err();
         assert!(matches!(err, DispatchError::MalformedVerdict { .. }));
     }
