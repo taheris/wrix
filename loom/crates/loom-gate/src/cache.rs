@@ -476,6 +476,18 @@ fn summarise_health(
                 tier: Tier::Check,
                 target: target.clone(),
             }),
+            IntegrityFinding::StubTestFunction {
+                spec,
+                line,
+                tier,
+                target,
+                ..
+            } => Some(BrokenAnnotation {
+                source_spec: spec.clone(),
+                line: *line,
+                tier: *tier,
+                target: target.clone(),
+            }),
             IntegrityFinding::MultipleAnnotations { .. } => None,
         })
         .collect();

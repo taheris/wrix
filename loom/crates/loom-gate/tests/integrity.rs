@@ -11,8 +11,9 @@ use std::path::{Path, PathBuf};
 
 use loom_gate::annotation::{parse, parse_content};
 use loom_gate::integrity::{
-    CommandResolver, FsCommandResolver, IntegrityFinding, RustWorkspaceTestResolver,
-    TestPathResolver, check, check_atomic_acceptance, check_forward,
+    CommandResolver, FsCommandResolver, IntegrityFinding, RustWorkspaceStubScanner,
+    RustWorkspaceTestResolver, StubScanner, TestPathResolver, check, check_atomic_acceptance,
+    check_forward,
 };
 use tempfile::tempdir;
 
@@ -30,6 +31,13 @@ impl CommandResolver for AlwaysOkCommands {
 struct NeverOkTests;
 impl TestPathResolver for NeverOkTests {
     fn resolves(&self, _: &str) -> bool {
+        false
+    }
+}
+
+struct NoStubs;
+impl StubScanner for NoStubs {
+    fn is_stub(&self, _: &str) -> bool {
         false
     }
 }
@@ -56,7 +64,7 @@ fn parse_then_check_with_all_valid_annotations_yields_no_findings() {
     let parsed = parse(&specs).unwrap();
     let cmds = AlwaysOkCommands;
     let tests = RustWorkspaceTestResolver::from_leaves(["it_works"]);
-    let findings = check(&parsed.annotations, &specs, &cmds, &tests);
+    let findings = check(&parsed.annotations, &specs, &cmds, &tests, &NoStubs);
     assert!(
         findings.is_empty(),
         "no findings expected, got {findings:?}"
@@ -81,7 +89,13 @@ fn fixture_with_broken_target_per_tier_flags_each_one() {
             false
         }
     }
-    let findings = check_forward(&parsed.annotations, dir.path(), &NoCommands, &NeverOkTests);
+    let findings = check_forward(
+        &parsed.annotations,
+        dir.path(),
+        &NoCommands,
+        &NeverOkTests,
+        &NoStubs,
+    );
     assert_eq!(findings.len(), 4, "all four annotations flagged");
     for finding in &findings {
         assert!(
@@ -135,6 +149,7 @@ fn self_referential_check_annotation_resolves_against_integrity_gate_implementat
         &workspace_root,
         &resolver,
         &NeverOkTests,
+        &NoStubs,
     );
     assert!(
         findings.is_empty(),
@@ -167,6 +182,7 @@ fn self_referential_judge_annotation_resolves_against_integrity_source_file() {
         Path::new("/this/is/ignored-when-target-is-absolute"),
         &NoCommands,
         &NeverOkTests,
+        &NoStubs,
     );
     assert!(
         findings.is_empty(),
@@ -193,7 +209,7 @@ fn check_flags_cargo_test_annotation_with_missing_test_name() {
     let parsed = parse(&specs).unwrap();
     let cmds = AlwaysOkCommands;
     let tests = RustWorkspaceTestResolver::from_leaves(["known_test"]);
-    let findings = check(&parsed.annotations, &specs, &cmds, &tests);
+    let findings = check(&parsed.annotations, &specs, &cmds, &tests, &NoStubs);
 
     let cargo_findings: Vec<_> = findings
         .iter()
@@ -239,7 +255,7 @@ fn end_to_end_specs_dir_check_combines_both_directions() {
     let parsed = parse(&specs).unwrap();
     let cmds = AlwaysOkCommands;
     let tests = RustWorkspaceTestResolver::from_leaves(["ok"]);
-    let findings = check(&parsed.annotations, &specs, &cmds, &tests);
+    let findings = check(&parsed.annotations, &specs, &cmds, &tests, &NoStubs);
 
     assert!(
         findings
@@ -253,4 +269,48 @@ fn end_to_end_specs_dir_check_combines_both_directions() {
             .any(|f| matches!(f, IntegrityFinding::MultipleAnnotations { count: 2, .. })),
         "multiple-annotations finding present: {findings:?}"
     );
+}
+
+#[test]
+fn stub_pointing_test_annotation_flags_via_workspace_scanner() {
+    let dir = tempdir().unwrap();
+    let specs = dir.path().join("specs");
+    fs::create_dir_all(&specs).unwrap();
+    let src = dir.path().join("src.rs");
+    fs::write(
+        &src,
+        "#[test]\nfn stub_fixture() {\n    _pending_stub();\n}\n\n#[test]\nfn real_fixture() {\n    assert!(true);\n}\n",
+    )
+    .unwrap();
+
+    write(
+        &specs,
+        "fixture.md",
+        "## Success Criteria\n\
+        \n\
+        - real [test](crate::a::real_fixture)\n\
+        - stubbed [test](crate::a::stub_fixture)\n",
+    );
+
+    let parsed = parse(&specs).unwrap();
+    let cmds = AlwaysOkCommands;
+    let tests = RustWorkspaceTestResolver::scan(dir.path()).unwrap();
+    let stubs = RustWorkspaceStubScanner::scan(dir.path()).unwrap();
+    let findings = check(&parsed.annotations, &specs, &cmds, &tests, &stubs);
+
+    let stub_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| matches!(f, IntegrityFinding::StubTestFunction { .. }))
+        .collect();
+    assert_eq!(
+        stub_findings.len(),
+        1,
+        "exactly one stub annotation flagged, got: {findings:?}"
+    );
+    match stub_findings[0] {
+        IntegrityFinding::StubTestFunction { test_name, .. } => {
+            assert_eq!(test_name, "stub_fixture");
+        }
+        other => panic!("expected StubTestFunction, got {other:?}"),
+    }
 }

@@ -15,9 +15,19 @@
 //! Findings render in the form prescribed by the spec:
 //! `<spec>:<line>: annotation [tier](<target>) — does not resolve` or
 //! `<spec>:<line>: criterion carries N annotations, expected 1`.
+//!
+//! A third direction — **stub-pointing annotations** — flags any
+//! annotation whose target Rust test function body invokes the
+//! `_pending_stub` sigil. Applies to `[test]` annotations and to
+//! `[check](cargo test ... <name>)` annotations that embed a test name.
+//! Under the verifier-driven-status invariant (`docs/spec-conventions.md`)
+//! a stubbed verifier means the criterion has no real evidence; the
+//! deterministic gate flags it without waiting for `loom gate review`'s
+//! verifier-honesty rubric.
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use displaydoc::Display;
@@ -59,6 +69,19 @@ pub enum IntegrityFinding {
         line: u32,
         count: usize,
     },
+    /// Annotation's target Rust test function body invokes the
+    /// `_pending_stub` sigil. The annotation resolves (so it is not an
+    /// [`Self::UnresolvedAnnotation`]) but the verifier it points at is
+    /// a placeholder that produces no real evidence. Applies to `[test]`
+    /// annotations and to `[check](cargo test ... <name>)` annotations
+    /// whose embedded test name resolves.
+    StubTestFunction {
+        spec: PathBuf,
+        line: u32,
+        tier: Tier,
+        target: String,
+        test_name: String,
+    },
 }
 
 impl std::fmt::Display for IntegrityFinding {
@@ -97,6 +120,21 @@ impl std::fmt::Display for IntegrityFinding {
                 line,
                 count
             ),
+            Self::StubTestFunction {
+                spec,
+                line,
+                tier,
+                target,
+                test_name,
+            } => write!(
+                f,
+                "{}:{}: annotation [{}]({}) — test function `{}` calls _pending_stub",
+                spec.display(),
+                line,
+                tier,
+                target,
+                test_name
+            ),
         }
     }
 }
@@ -133,6 +171,19 @@ pub trait CommandResolver {
 pub trait TestPathResolver {
     /// True iff `target` names a real test function in the workspace.
     fn resolves(&self, target: &str) -> bool;
+}
+
+/// Scanner answering whether a Rust test function is a stub.
+///
+/// A test function is a stub when its body invokes the `_pending_stub`
+/// sigil. The integrity gate calls into this trait once an annotation's
+/// target has resolved, so the membership check covers only real
+/// functions. Production implementations walk source files; tests
+/// substitute a deterministic membership check.
+pub trait StubScanner {
+    /// True iff the test function with leaf name `leaf` calls
+    /// `_pending_stub` in its body.
+    fn is_stub(&self, leaf: &str) -> bool;
 }
 
 /// Filesystem-backed implementation of [`CommandResolver`].
@@ -261,6 +312,68 @@ impl TestPathResolver for RustWorkspaceTestResolver {
     }
 }
 
+/// Workspace-scanning implementation of [`StubScanner`].
+///
+/// Walks every `.rs` file under `repo_root`, indexing the leaf names of
+/// test functions (attribute-marked or `proptest!`-block-enclosed) whose
+/// body invokes the `_pending_stub` sigil as a word-boundary token.
+/// Matches `RustWorkspaceTestResolver`'s walking discipline: skips
+/// `target/`, reads each file once, accepts the same heuristic
+/// `proptest!` recognition. Stub recognition is best-effort — strings or
+/// comments containing the sigil would also flag; tests covering the
+/// scanner pin the contract.
+pub struct RustWorkspaceStubScanner {
+    stub_leaves: HashSet<String>,
+}
+
+impl RustWorkspaceStubScanner {
+    /// Walk `repo_root` and index every test function whose body calls
+    /// `_pending_stub`.
+    pub fn scan(repo_root: &Path) -> Result<Self, IntegrityError> {
+        let mut stub_leaves: HashSet<String> = HashSet::new();
+        for entry in WalkDir::new(repo_root).follow_links(false) {
+            let entry = entry.map_err(|e| IntegrityError::WalkWorkspace {
+                root: repo_root.to_path_buf(),
+                source: e,
+            })?;
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let path = entry.path();
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            if path.components().any(|c| c.as_os_str() == "target") {
+                continue;
+            }
+            let Ok(body) = fs::read_to_string(path) else {
+                continue;
+            };
+            extract_stub_test_leaves(&body, &mut stub_leaves);
+        }
+        Ok(Self { stub_leaves })
+    }
+
+    /// Construct a scanner pre-seeded with the given stub leaf names.
+    /// Useful for tests and for callers that compute the index by other
+    /// means.
+    pub fn from_leaves<I, S>(leaves: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self {
+            stub_leaves: leaves.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl StubScanner for RustWorkspaceStubScanner {
+    fn is_stub(&self, leaf: &str) -> bool {
+        self.stub_leaves.contains(leaf)
+    }
+}
+
 /// Return the trailing path segment of a `[test]` target.
 ///
 /// Targets use language-native path syntax: `crate::module::test_name`
@@ -345,30 +458,243 @@ fn parse_fn_name(line: &str) -> Option<&str> {
     if name.is_empty() { None } else { Some(name) }
 }
 
-/// Run both integrity directions and return every finding in document
-/// order (forward findings first, then atomic-acceptance findings).
+/// Byte-level body scan. For every test function in `source` (an
+/// attribute-marked function or one enclosed by a `proptest!` block)
+/// whose body invokes `_pending_stub` as a word-boundary token, insert
+/// the function's leaf name into `sink`.
+fn extract_stub_test_leaves(source: &str, sink: &mut HashSet<String>) {
+    let bytes = source.as_bytes();
+    let proptest_bodies = find_proptest_bodies(bytes);
+
+    let mut last_test_attr_at: Option<usize> = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        if is_test_attr_start(&bytes[i..]) {
+            last_test_attr_at = Some(i);
+            i = skip_attr_block(bytes, i);
+            continue;
+        }
+        if starts_with_fn_keyword(bytes, i) {
+            let attr_attached = matches!(
+                last_test_attr_at,
+                Some(at) if bytes[at..i].iter().all(|b| !is_fn_separator(*b))
+            );
+            let in_proptest = proptest_bodies.iter().any(|r| r.contains(&i));
+            if (attr_attached || in_proptest)
+                && let Some((name, body)) = extract_fn_name_and_body(bytes, i)
+                && body_calls_pending_stub(&bytes[body.clone()])
+            {
+                sink.insert(name.to_string());
+            }
+            if attr_attached {
+                last_test_attr_at = None;
+            }
+        }
+        i += 1;
+    }
+}
+
+/// True iff the body bytes contain `_pending_stub` as a word-boundary
+/// token (not part of a longer identifier).
+fn body_calls_pending_stub(body: &[u8]) -> bool {
+    const NEEDLE: &[u8] = b"_pending_stub";
+    let mut k = 0;
+    while k + NEEDLE.len() <= body.len() {
+        if &body[k..k + NEEDLE.len()] == NEEDLE {
+            let before_ok = k == 0 || !is_ident_continue(body[k - 1]);
+            let after_idx = k + NEEDLE.len();
+            let after_ok = after_idx >= body.len() || !is_ident_continue(body[after_idx]);
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+        k += 1;
+    }
+    false
+}
+
+fn is_ident_continue(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// True iff `s` begins with a Rust test attribute that marks the next
+/// function as a test (`#[test]`, `#[tokio::test]`, `#[tokio_test]`).
+fn is_test_attr_start(s: &[u8]) -> bool {
+    s.starts_with(b"#[test]") || s.starts_with(b"#[tokio::test") || s.starts_with(b"#[tokio_test")
+}
+
+/// Skip past a `#[...]` attribute starting at byte `i`. Balances `[]`
+/// pairs so attribute arguments containing nested brackets round-trip.
+/// Returns the index of the byte after the closing `]`, or `bytes.len()`
+/// when the attribute never closes.
+fn skip_attr_block(bytes: &[u8], i: usize) -> usize {
+    let mut depth = 0usize;
+    let mut j = i;
+    while j < bytes.len() {
+        match bytes[j] {
+            b'[' => depth = depth.saturating_add(1),
+            b']' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return j + 1;
+                }
+            }
+            _ => {}
+        }
+        j += 1;
+    }
+    bytes.len()
+}
+
+/// True iff `bytes[i..]` begins with `fn` as a keyword (followed by
+/// whitespace).
+fn starts_with_fn_keyword(bytes: &[u8], i: usize) -> bool {
+    if !bytes[i..].starts_with(b"fn") {
+        return false;
+    }
+    if i > 0 && is_ident_continue(bytes[i - 1]) {
+        return false;
+    }
+    let after = i + 2;
+    after < bytes.len() && (bytes[after] == b' ' || bytes[after] == b'\t' || bytes[after] == b'\n')
+}
+
+/// A separator byte between a `#[test]` attribute and the function it
+/// applies to: a closing `}` or a semicolon means the attribute is no
+/// longer in scope for a following `fn`.
+fn is_fn_separator(b: u8) -> bool {
+    b == b'}' || b == b';'
+}
+
+/// Given that `bytes[fn_at..]` starts with `fn`, parse the function's
+/// name and the byte-range of its body (the content between the
+/// outermost `{` and matching `}`). Returns `None` when the byte stream
+/// runs out before the parser finds a balanced body — typically a
+/// truncated source file or a malformed declaration.
+fn extract_fn_name_and_body(bytes: &[u8], fn_at: usize) -> Option<(&str, Range<usize>)> {
+    let after_fn = fn_at + 2;
+    let mut k = after_fn;
+    while k < bytes.len() && bytes[k].is_ascii_whitespace() {
+        k += 1;
+    }
+    let name_start = k;
+    while k < bytes.len() && is_ident_continue(bytes[k]) {
+        k += 1;
+    }
+    if k == name_start {
+        return None;
+    }
+    let name = std::str::from_utf8(&bytes[name_start..k]).ok()?;
+    while k < bytes.len() && bytes[k] != b'(' {
+        k += 1;
+    }
+    if k >= bytes.len() {
+        return None;
+    }
+    k = balance_close(bytes, k, b'(', b')')?;
+    while k < bytes.len() && bytes[k] != b'{' {
+        k += 1;
+    }
+    if k >= bytes.len() {
+        return None;
+    }
+    let body_start = k + 1;
+    let body_end = balance_close(bytes, k, b'{', b'}')?;
+    Some((name, body_start..body_end))
+}
+
+/// Balance an opening bracket at `lparen` with its closing counterpart.
+/// Returns the index of the matching closer, or `None` when the bracket
+/// never balances before end-of-input. Naïve byte-counter — strings and
+/// comments may produce false matches; integrity-gate parsing has
+/// accepted that trade-off elsewhere.
+fn balance_close(bytes: &[u8], lparen: usize, open: u8, close: u8) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut k = lparen;
+    while k < bytes.len() {
+        let b = bytes[k];
+        if b == open {
+            depth = depth.saturating_add(1);
+        } else if b == close {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                return Some(k);
+            }
+        }
+        k += 1;
+    }
+    None
+}
+
+/// Locate every `proptest! { ... }` block in `bytes` and return the
+/// byte-range covered by each block's body. The integrity gate's stub
+/// scan walks these ranges in addition to attribute-marked functions
+/// because the `proptest!` macro turns inner `fn ident(...) { body }`
+/// declarations into test cases — matching
+/// [`RustWorkspaceTestResolver`]'s recognition rule.
+fn find_proptest_bodies(bytes: &[u8]) -> Vec<Range<usize>> {
+    const MACRO: &[u8] = b"proptest!";
+    let mut out: Vec<Range<usize>> = Vec::new();
+    let mut k = 0;
+    while k + MACRO.len() <= bytes.len() {
+        if &bytes[k..k + MACRO.len()] == MACRO {
+            let before_ok = k == 0 || !is_ident_continue(bytes[k - 1]);
+            if before_ok {
+                let mut m = k + MACRO.len();
+                while m < bytes.len() && bytes[m].is_ascii_whitespace() {
+                    m += 1;
+                }
+                if m < bytes.len()
+                    && bytes[m] == b'{'
+                    && let Some(end) = balance_close(bytes, m, b'{', b'}')
+                {
+                    out.push((m + 1)..end);
+                    k = end + 1;
+                    continue;
+                }
+            }
+        }
+        k += 1;
+    }
+    out
+}
+
+/// Run every integrity direction and return all findings: forward
+/// resolution, atomic acceptance, and stub-pointing.
 pub fn check(
     annotations: &[Annotation],
     repo_root: &Path,
     command_resolver: &dyn CommandResolver,
     test_resolver: &dyn TestPathResolver,
+    stub_scanner: &dyn StubScanner,
 ) -> Vec<IntegrityFinding> {
-    let mut findings = check_forward(annotations, repo_root, command_resolver, test_resolver);
+    let mut findings = check_forward(
+        annotations,
+        repo_root,
+        command_resolver,
+        test_resolver,
+        stub_scanner,
+    );
     findings.extend(check_atomic_acceptance(annotations));
     findings
 }
 
 /// Forward direction: every annotation's target must resolve for its
-/// tier. Returns one [`IntegrityFinding::UnresolvedAnnotation`] per
-/// annotation that fails to resolve, plus one
-/// [`IntegrityFinding::UnresolvedCargoTestName`] for each `[check](cargo
-/// test ... <name>)` whose command resolves but whose embedded test name
-/// does not.
+/// tier, and any resolved Rust test target must not be a stub. Emits
+/// at most one finding per annotation: an
+/// [`IntegrityFinding::UnresolvedAnnotation`] if the target fails to
+/// resolve, otherwise (for `[check](cargo test ... <name>)`) an
+/// [`IntegrityFinding::UnresolvedCargoTestName`] if the embedded test
+/// name does not resolve, otherwise an
+/// [`IntegrityFinding::StubTestFunction`] if the resolved test function
+/// is a stub. Distinct annotations on distinct criteria are independent
+/// — flagging one does not suppress findings on the others.
 pub fn check_forward(
     annotations: &[Annotation],
     repo_root: &Path,
     command_resolver: &dyn CommandResolver,
     test_resolver: &dyn TestPathResolver,
+    stub_scanner: &dyn StubScanner,
 ) -> Vec<IntegrityFinding> {
     let mut out = Vec::new();
     for ann in annotations {
@@ -386,16 +712,38 @@ pub fn check_forward(
             });
             continue;
         }
-        if ann.tier == Tier::Check
-            && let Some(test_name) = extract_cargo_test_name(&ann.target)
-            && !test_resolver.resolves(test_name)
+        if ann.tier == Tier::Test
+            && let Some(leaf) = test_target_leaf(&ann.target)
+            && stub_scanner.is_stub(leaf)
         {
-            out.push(IntegrityFinding::UnresolvedCargoTestName {
+            out.push(IntegrityFinding::StubTestFunction {
                 spec: ann.source_spec.clone(),
                 line: ann.line,
+                tier: ann.tier,
                 target: ann.target.clone(),
-                test_name: test_name.to_string(),
+                test_name: leaf.to_string(),
             });
+            continue;
+        }
+        if ann.tier == Tier::Check
+            && let Some(test_name) = extract_cargo_test_name(&ann.target)
+        {
+            if !test_resolver.resolves(test_name) {
+                out.push(IntegrityFinding::UnresolvedCargoTestName {
+                    spec: ann.source_spec.clone(),
+                    line: ann.line,
+                    target: ann.target.clone(),
+                    test_name: test_name.to_string(),
+                });
+            } else if stub_scanner.is_stub(test_name) {
+                out.push(IntegrityFinding::StubTestFunction {
+                    spec: ann.source_spec.clone(),
+                    line: ann.line,
+                    tier: ann.tier,
+                    target: ann.target.clone(),
+                    test_name: test_name.to_string(),
+                });
+            }
         }
     }
     out
@@ -570,6 +918,29 @@ mod tests {
         }
     }
 
+    struct StubLeaves {
+        stub_leaves: HashSet<String>,
+    }
+
+    impl StubLeaves {
+        fn with(items: &[&str]) -> Self {
+            Self {
+                stub_leaves: items.iter().map(|s| (*s).to_string()).collect(),
+            }
+        }
+        fn none() -> Self {
+            Self {
+                stub_leaves: HashSet::new(),
+            }
+        }
+    }
+
+    impl StubScanner for StubLeaves {
+        fn is_stub(&self, leaf: &str) -> bool {
+            self.stub_leaves.contains(leaf)
+        }
+    }
+
     #[test]
     fn unresolved_annotation_renders_per_spec_format() {
         let f = IntegrityFinding::UnresolvedAnnotation {
@@ -666,7 +1037,7 @@ mod tests {
         ];
         let cmds = StubCommands::with(&["cargo", "nix"]);
         let tests = StubTests::with(&["crate::a::ok"]);
-        let findings = check_forward(&annotations, dir.path(), &cmds, &tests);
+        let findings = check_forward(&annotations, dir.path(), &cmds, &tests, &StubLeaves::none());
         assert!(findings.is_empty(), "got findings: {findings:?}");
     }
 
@@ -682,7 +1053,7 @@ mod tests {
         )];
         let cmds = StubCommands::with(&["cargo"]);
         let tests = StubTests::with(&[]);
-        let findings = check_forward(&annotations, dir.path(), &cmds, &tests);
+        let findings = check_forward(&annotations, dir.path(), &cmds, &tests, &StubLeaves::none());
         assert_eq!(findings.len(), 1);
         assert_eq!(
             findings[0],
@@ -707,7 +1078,7 @@ mod tests {
         )];
         let cmds = StubCommands::with(&[]);
         let tests = StubTests::with(&[]);
-        let findings = check_forward(&annotations, dir.path(), &cmds, &tests);
+        let findings = check_forward(&annotations, dir.path(), &cmds, &tests, &StubLeaves::none());
         assert_eq!(findings.len(), 1);
         assert!(matches!(
             findings[0],
@@ -730,7 +1101,7 @@ mod tests {
         )];
         let cmds = StubCommands::with(&[]);
         let tests = StubTests::with(&["crate::a::ok"]);
-        let findings = check_forward(&annotations, dir.path(), &cmds, &tests);
+        let findings = check_forward(&annotations, dir.path(), &cmds, &tests, &StubLeaves::none());
         assert_eq!(findings.len(), 1);
         assert!(matches!(
             findings[0],
@@ -747,7 +1118,7 @@ mod tests {
         let annotations = vec![ann(Tier::Judge, "missing.md", "specs/a.md", 13, 13)];
         let cmds = StubCommands::with(&[]);
         let tests = StubTests::with(&[]);
-        let findings = check_forward(&annotations, dir.path(), &cmds, &tests);
+        let findings = check_forward(&annotations, dir.path(), &cmds, &tests, &StubLeaves::none());
         assert_eq!(findings.len(), 1);
         assert!(matches!(
             findings[0],
@@ -768,7 +1139,13 @@ mod tests {
         let annotations = vec![ann(Tier::Judge, &target, "specs/a.md", 14, 14)];
         let cmds = StubCommands::with(&[]);
         let tests = StubTests::with(&[]);
-        let findings = check_forward(&annotations, Path::new("/this/is/ignored"), &cmds, &tests);
+        let findings = check_forward(
+            &annotations,
+            Path::new("/this/is/ignored"),
+            &cmds,
+            &tests,
+            &StubLeaves::none(),
+        );
         assert!(findings.is_empty(), "absolute judge path resolved");
     }
 
@@ -781,7 +1158,7 @@ mod tests {
         ];
         let cmds = StubCommands::with(&[]);
         let tests = StubTests::with(&["crate::a::t"]);
-        let findings = check(&annotations, dir.path(), &cmds, &tests);
+        let findings = check(&annotations, dir.path(), &cmds, &tests, &StubLeaves::none());
         assert!(
             findings
                 .iter()
@@ -984,7 +1361,7 @@ mod tests {
         )];
         let cmds = StubCommands::with(&["cargo"]);
         let tests = StubTests::with(&["other_name"]);
-        let findings = check_forward(&annotations, dir.path(), &cmds, &tests);
+        let findings = check_forward(&annotations, dir.path(), &cmds, &tests, &StubLeaves::none());
         assert_eq!(findings.len(), 1);
         assert_eq!(
             findings[0],
@@ -1009,7 +1386,7 @@ mod tests {
         )];
         let cmds = StubCommands::with(&["cargo"]);
         let tests = StubTests::with(&["end_to_end_specs_dir_check_combines_both_directions"]);
-        let findings = check_forward(&annotations, dir.path(), &cmds, &tests);
+        let findings = check_forward(&annotations, dir.path(), &cmds, &tests, &StubLeaves::none());
         assert!(findings.is_empty(), "got findings: {findings:?}");
     }
 
@@ -1025,7 +1402,7 @@ mod tests {
         )];
         let cmds = StubCommands::with(&["cargo"]);
         let tests = StubTests::with(&[]);
-        let findings = check_forward(&annotations, dir.path(), &cmds, &tests);
+        let findings = check_forward(&annotations, dir.path(), &cmds, &tests, &StubLeaves::none());
         assert!(
             findings.is_empty(),
             "no positional => no name check, got: {findings:?}"
@@ -1044,7 +1421,7 @@ mod tests {
         )];
         let cmds = StubCommands::with(&["cargo"]);
         let tests = StubTests::with(&[]);
-        let findings = check_forward(&annotations, dir.path(), &cmds, &tests);
+        let findings = check_forward(&annotations, dir.path(), &cmds, &tests, &StubLeaves::none());
         assert!(
             findings.is_empty(),
             "system tier ignores embedded cargo-test names, got: {findings:?}"
@@ -1062,6 +1439,234 @@ mod tests {
         assert_eq!(
             f.to_string(),
             "specs/loom-tests.md:692: annotation [check](cargo test -p loom --test cli_help help_snapshot) — cargo test name `help_snapshot` does not resolve"
+        );
+    }
+
+    #[test]
+    fn stub_test_function_renders_per_spec_format() {
+        let f = IntegrityFinding::StubTestFunction {
+            spec: PathBuf::from("specs/loom-harness.md"),
+            line: 100,
+            tier: Tier::Test,
+            target: "crate::a::is_stub".into(),
+            test_name: "is_stub".into(),
+        };
+        assert_eq!(
+            f.to_string(),
+            "specs/loom-harness.md:100: annotation [test](crate::a::is_stub) — test function `is_stub` calls _pending_stub"
+        );
+    }
+
+    #[test]
+    fn forward_flags_test_annotation_whose_target_body_calls_pending_stub() {
+        let dir = tempdir().unwrap();
+        let annotations = vec![ann(Tier::Test, "crate::a::stub_me", "specs/a.md", 30, 30)];
+        let cmds = StubCommands::with(&[]);
+        let tests = StubTests::with(&["crate::a::stub_me"]);
+        let stubs = StubLeaves::with(&["stub_me"]);
+        let findings = check_forward(&annotations, dir.path(), &cmds, &tests, &stubs);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0],
+            IntegrityFinding::StubTestFunction {
+                spec: PathBuf::from("specs/a.md"),
+                line: 30,
+                tier: Tier::Test,
+                target: "crate::a::stub_me".into(),
+                test_name: "stub_me".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn forward_passes_test_annotation_when_body_does_not_call_pending_stub() {
+        let dir = tempdir().unwrap();
+        let annotations = vec![ann(Tier::Test, "crate::a::real", "specs/a.md", 31, 31)];
+        let cmds = StubCommands::with(&[]);
+        let tests = StubTests::with(&["crate::a::real"]);
+        let stubs = StubLeaves::none();
+        let findings = check_forward(&annotations, dir.path(), &cmds, &tests, &stubs);
+        assert!(
+            findings.is_empty(),
+            "real test should not flag: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn forward_flags_check_cargo_test_annotation_when_target_test_is_stub() {
+        let dir = tempdir().unwrap();
+        let annotations = vec![ann(
+            Tier::Check,
+            "cargo test -p foo --lib stub_me",
+            "specs/a.md",
+            40,
+            40,
+        )];
+        let cmds = StubCommands::with(&["cargo"]);
+        let tests = StubTests::with(&["stub_me"]);
+        let stubs = StubLeaves::with(&["stub_me"]);
+        let findings = check_forward(&annotations, dir.path(), &cmds, &tests, &stubs);
+        assert_eq!(findings.len(), 1);
+        match &findings[0] {
+            IntegrityFinding::StubTestFunction {
+                tier,
+                test_name,
+                target,
+                ..
+            } => {
+                assert_eq!(*tier, Tier::Check);
+                assert_eq!(test_name, "stub_me");
+                assert_eq!(target, "cargo test -p foo --lib stub_me");
+            }
+            other => panic!("expected StubTestFunction, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn forward_does_not_flag_judge_or_system_for_stub() {
+        let dir = tempdir().unwrap();
+        let rubric = dir.path().join("r.md");
+        fs::write(&rubric, "ok").unwrap();
+        let annotations = vec![
+            ann(Tier::Judge, "r.md", "specs/a.md", 50, 50),
+            ann(Tier::System, "nix run .#foo", "specs/a.md", 51, 51),
+        ];
+        let cmds = StubCommands::with(&["nix"]);
+        let tests = StubTests::with(&[]);
+        let stubs = StubLeaves::with(&["foo", "r"]);
+        let findings = check_forward(&annotations, dir.path(), &cmds, &tests, &stubs);
+        assert!(
+            findings.is_empty(),
+            "judge/system are not test functions: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn body_calls_pending_stub_requires_word_boundary() {
+        assert!(body_calls_pending_stub(b"_pending_stub();"));
+        assert!(body_calls_pending_stub(b"    _pending_stub!();"));
+        assert!(body_calls_pending_stub(b"_pending_stub"));
+        assert!(!body_calls_pending_stub(b"prefix_pending_stub();"));
+        assert!(!body_calls_pending_stub(b"_pending_stub_extended();"));
+        assert!(!body_calls_pending_stub(b"empty body"));
+    }
+
+    #[test]
+    fn extract_stub_test_leaves_attr_marked_function_with_pending_stub() {
+        let src = "\
+#[test]
+fn alpha_stub() {
+    _pending_stub();
+}
+
+#[test]
+fn alpha_real() {
+    assert_eq!(2 + 2, 4);
+}
+";
+        let mut sink = HashSet::new();
+        extract_stub_test_leaves(src, &mut sink);
+        assert!(sink.contains("alpha_stub"), "got {sink:?}");
+        assert!(!sink.contains("alpha_real"), "got {sink:?}");
+    }
+
+    #[test]
+    fn extract_stub_test_leaves_tokio_test_with_pending_stub() {
+        let src = "\
+#[tokio::test]
+async fn beta_stub() {
+    _pending_stub();
+}
+";
+        let mut sink = HashSet::new();
+        extract_stub_test_leaves(src, &mut sink);
+        assert!(sink.contains("beta_stub"), "got {sink:?}");
+    }
+
+    #[test]
+    fn extract_stub_test_leaves_proptest_block_with_pending_stub() {
+        let src = "\
+proptest! {
+    fn gamma_stub(_x in any::<u8>()) {
+        _pending_stub();
+    }
+
+    fn gamma_real(x in any::<u8>()) {
+        prop_assert!(x as u16 + 1 > 0);
+    }
+}
+";
+        let mut sink = HashSet::new();
+        extract_stub_test_leaves(src, &mut sink);
+        assert!(sink.contains("gamma_stub"), "got {sink:?}");
+        assert!(!sink.contains("gamma_real"), "got {sink:?}");
+    }
+
+    #[test]
+    fn extract_stub_test_leaves_ignores_non_test_function() {
+        let src = "\
+fn delta_helper() {
+    _pending_stub();
+}
+";
+        let mut sink = HashSet::new();
+        extract_stub_test_leaves(src, &mut sink);
+        assert!(
+            sink.is_empty(),
+            "non-test helper must not be indexed: {sink:?}"
+        );
+    }
+
+    #[test]
+    fn rust_workspace_stub_scanner_indexes_stub_leaves_from_directory() {
+        let dir = tempdir().unwrap();
+        let src = dir.path().join("src.rs");
+        fs::write(
+            &src,
+            "#[test]\nfn epsilon_stub() {\n    _pending_stub();\n}\n\n#[test]\nfn epsilon_real() {\n    assert!(true);\n}\n",
+        )
+        .unwrap();
+        let scanner = RustWorkspaceStubScanner::scan(dir.path()).unwrap();
+        assert!(scanner.is_stub("epsilon_stub"));
+        assert!(!scanner.is_stub("epsilon_real"));
+    }
+
+    #[test]
+    fn rust_workspace_stub_scanner_skips_target_directory() {
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("target/debug/build/foo.rs");
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(
+            &target,
+            "#[test]\nfn target_stub() {\n    _pending_stub();\n}\n",
+        )
+        .unwrap();
+        let scanner = RustWorkspaceStubScanner::scan(dir.path()).unwrap();
+        assert!(!scanner.is_stub("target_stub"));
+    }
+
+    #[test]
+    fn check_combines_stub_with_atomic_acceptance_findings() {
+        let dir = tempdir().unwrap();
+        let annotations = vec![
+            ann(Tier::Test, "crate::a::stub_me", "specs/a.md", 5, 4),
+            ann(Tier::Check, "cargo run", "specs/a.md", 6, 4),
+        ];
+        let cmds = StubCommands::with(&["cargo"]);
+        let tests = StubTests::with(&["crate::a::stub_me"]);
+        let stubs = StubLeaves::with(&["stub_me"]);
+        let findings = check(&annotations, dir.path(), &cmds, &tests, &stubs);
+        assert!(
+            findings
+                .iter()
+                .any(|f| matches!(f, IntegrityFinding::StubTestFunction { .. })),
+            "stub finding present: {findings:?}"
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|f| matches!(f, IntegrityFinding::MultipleAnnotations { .. })),
+            "atomic-acceptance finding present: {findings:?}"
         );
     }
 }
