@@ -198,12 +198,12 @@ fn init_workspace_repo(workspace: &Path) {
     assert!(status.success(), "git commit failed: {status}");
 }
 
-/// `tests/loom-test.sh::test_wrapix_spawn_dispatch` — loom hands the
-/// wrapper exactly `wrapix spawn --spawn-config <file> --stdio`, and
-/// the file resolves to a JSON [`SpawnConfig`] carrying the per-bead
-/// profile image. A future profile-resolution change that drops the
-/// `image_ref`/`image_source` fields or renames the subcommand will trip
-/// this assertion before the wrapper ever sees the malformed argv.
+/// Loom hands the wrapper exactly `wrapix spawn --spawn-config <file>
+/// --stdio`, and the file resolves to a JSON [`SpawnConfig`] carrying
+/// the per-bead profile image. A future profile-resolution change that
+/// drops the `image_ref`/`image_source` fields or renames the
+/// subcommand will trip this assertion before the wrapper ever sees the
+/// malformed argv.
 #[test]
 fn wrapix_spawn_invocation_records_correct_argv() {
     let dir = tempfile::tempdir().unwrap();
@@ -278,18 +278,17 @@ fn wrapix_spawn_invocation_records_correct_argv() {
     );
 }
 
-/// `tests/loom-test.sh::test_loom_todo_writes_jsonl_log` — the run-time
-/// promise from `specs/loom-harness.md` *Run UX & Logging* is that every
-/// `loom todo` invocation emits a per-phase JSONL file under
-/// `<workspace>/.wrapix/loom/logs/<spec-label>/todo-<utc>.jsonl`. Without
-/// this gate the workflow happily ran agents to completion while
+/// The run-time promise from `specs/loom-harness.md` *Run UX & Logging*
+/// is that every `loom todo` invocation emits a per-phase JSONL file
+/// under `<workspace>/.wrapix/loom/logs/<spec-label>/todo-<utc>.jsonl`.
+/// Without this gate the workflow happily ran agents to completion while
 /// `run_agent` previously discarded every event with a `trace!` call;
-/// users saw two INFO lines and an empty `loom logs`. The test drives the
-/// same mock-pi handshake as the dispatch tests above, then asserts the
-/// log file appears at the documented path with at least one valid event
-/// line that round-trips through `serde_json`. A future regression that
-/// removes the sink wiring trips this assertion before any user-visible
-/// breakage.
+/// users saw two INFO lines and an empty `loom logs`. The test drives
+/// the same mock-pi handshake as the dispatch tests above, then asserts
+/// the log file appears at the documented path with at least one valid
+/// event line that round-trips through `serde_json`. A future regression
+/// that removes the sink wiring trips this assertion before any
+/// user-visible breakage.
 #[test]
 fn loom_todo_writes_jsonl_log_under_workspace_logs_dir() {
     let dir = tempfile::tempdir().unwrap();
@@ -670,11 +669,11 @@ __BD_BEAD_JSON__\n\
     bin_dir
 }
 
-/// `tests/loom-test.sh::test_container_stdio_pipe` — the agent process
-/// receives stdin as a pipe, never a TTY. EOF on that pipe is the signal
-/// loom uses to tell the agent "no more input is coming"; if the
-/// underlying handle were a TTY (or a regular file), the agent's `read`
-/// would either block or return non-EOF, breaking the shutdown contract.
+/// The agent process receives stdin as a pipe, never a TTY. EOF on that
+/// pipe is the signal loom uses to tell the agent "no more input is
+/// coming"; if the underlying handle were a TTY (or a regular file), the
+/// agent's `read` would either block or return non-EOF, breaking the
+/// shutdown contract.
 #[test]
 fn child_stdin_is_a_pipe_not_a_tty() {
     let dir = tempfile::tempdir().unwrap();
@@ -727,15 +726,14 @@ fn child_stdin_is_a_pipe_not_a_tty() {
     );
 }
 
-/// Spec promise (`specs/loom-agent.md` Compaction repin, verify marker
-/// `tests/loom-test.sh::test_pi_compaction_repin`): the production
-/// driver detects `compaction_start` and sends `RePinContent::to_prompt()`
-/// via `steer`. A prior regression was silent because the only test of
-/// this behavior lived inside `loom-agent/src/pi/backend.rs` and stood
-/// in for the workflow layer: the test itself called `session.steer(...)`
-/// instead of driving through
-/// `run_agent`. Production wiring was missing for months without a
-/// failing test.
+/// Spec promise (`specs/loom-agent.md` Compaction repin): the
+/// production driver detects `compaction_start` and sends
+/// `RePinContent::to_prompt()` via `steer`. A prior regression was
+/// silent because the only test of this behavior lived inside
+/// `loom-agent/src/pi/backend.rs` and stood in for the workflow layer:
+/// the test itself called `session.steer(...)` instead of driving
+/// through `run_agent`. Production wiring was missing for months
+/// without a failing test.
 ///
 /// This test drives `loom todo --agent pi` end-to-end through `dispatch`
 /// → `run_agent::<PiBackend>` → `PiBackend::on_compaction_start`. The
@@ -814,8 +812,7 @@ fn loom_todo_pi_compaction_drives_repin_steer_through_run_agent() {
     );
 }
 
-/// Spec promise (`specs/loom-agent.md` Functional #4 second bullet,
-/// verify marker `tests/loom-test.sh::test_claude_shutdown_watchdog`):
+/// Spec promise (`specs/loom-agent.md` Functional #4 second bullet):
 /// the production driver runs the SIGTERM → SIGKILL escalation after
 /// observing `result`. A prior regression was silent because the only
 /// test of this behavior lived inside `loom-agent/src/claude/backend.rs`

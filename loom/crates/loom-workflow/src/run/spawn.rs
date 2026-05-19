@@ -119,9 +119,8 @@ mod tests {
 
     /// Per-bead dispatch: two beads with different `profile:X` labels
     /// produce SpawnConfigs with different `image_ref` + `image_source`.
-    /// Implements `tests/loom-test.sh::test_per_bead_profile_spawn` (Rust
-    /// side — argv-shape verified by the integration test in
-    /// `loom/tests/spawn_dispatch.rs`).
+    /// Argv-shape is verified by the integration test in
+    /// `loom/tests/spawn_dispatch.rs`.
     #[test]
     fn per_bead_profile_dispatch_produces_distinct_image_refs() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -171,7 +170,7 @@ mod tests {
 
     /// FR5 (`--profile` CLI override precedence): the same bead resolves
     /// to two different SpawnConfigs depending on whether the override is
-    /// applied. Implements `tests/loom-test.sh::test_profile_cli_override`.
+    /// applied.
     #[test]
     fn cli_override_swaps_resolved_image() {
         let dir = tempfile::tempdir().expect("tempdir");

@@ -2,8 +2,7 @@
 //!
 //! Mirrors `scan_file_for_deps` + `tool_to_nix_package` in
 //! `lib/ralph/cmd/sync.sh`. The list of known tools and their package
-//! mapping must stay in sync with the bash port — see
-//! `tests/loom-test.sh::test_spec_deps`.
+//! mapping must stay in sync with the bash port.
 
 use std::collections::BTreeSet;
 use std::fs;

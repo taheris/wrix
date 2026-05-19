@@ -1,22 +1,14 @@
-//! `tests/loom-test.sh::test_gate_loom_blocked_marker` and
-//! `tests/loom-test.sh::test_gate_loom_clarify_marker` (B5) plus
-//! `tests/loom-test.sh::test_run_does_not_close_bead` (B6) end-to-end
-//! gates.
+//! End-to-end verdict-gate tests covering `LOOM_BLOCKED`, `LOOM_CLARIFY`,
+//! and `LOOM_COMPLETE` marker handling, plus the invariant that the
+//! driver itself never invokes `bd close` (closure is the agent's
+//! responsibility per `specs/loom-harness.md` § Verdict gate).
 //!
-//! Drives `loom run --once` against a Rust mock agent that emits a
-//! `LOOM_BLOCKED` / `LOOM_CLARIFY` / `LOOM_COMPLETE` marker through the
-//! pi-mono protocol, with `bd-shim` standing in for the live beads
-//! socket. Verifies the verdict gate routes the marker into the
-//! correct `AgentOutcome` AND that the driver itself never invokes
-//! `bd close` — closure is the agent's responsibility per
-//! `specs/loom-harness.md` § Verdict gate.
-//!
-//! A prior bug collapsed every clean-exit session to
-//! `AgentOutcome::Success → bd close`, ignoring markers entirely. The
+//! Drives `loom run --once` against a Rust mock agent that emits the
+//! marker through the pi-mono protocol, with `bd-shim` standing in for
+//! the live beads socket. A prior bug collapsed every clean-exit
+//! session to `AgentOutcome::Success → bd close`, ignoring markers; the
 //! unit tests on `phase_verdict::decide` passed throughout because they
-//! never exercised `loom run`'s actual marker-routing wiring. This file
-//! pins both halves of the contract end-to-end: marker → label, and
-//! driver-side `bd close` never fires on a dispatched bead.
+//! never exercised `loom run`'s actual marker-routing wiring.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 

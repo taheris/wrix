@@ -550,7 +550,6 @@ mod tests {
     /// Spec gate: pre-flight infra failures bypass retry entirely and
     /// route the bead to `loom:blocked` cause `infra-preflight` on the
     /// first occurrence. No agent output is ever evaluated.
-    /// `tests/loom-test.sh::test_infra_preflight_fail_fast`.
     #[tokio::test]
     async fn infra_preflight_routes_to_blocked_without_retry() -> Result<(), RunError> {
         let mut c = FakeController::default();
@@ -582,7 +581,6 @@ mod tests {
     /// gets one free retry; the second one routes to `loom:blocked`
     /// cause `infra-repeated`. Both occurrences here happen on the same
     /// bead so the per-run counter is the only thing distinguishing them.
-    /// `tests/loom-test.sh::test_infra_midsession_one_retry`.
     #[tokio::test]
     async fn infra_midsession_one_retry_then_blocks_on_repeat() -> Result<(), RunError> {
         let mut c = FakeController::default();
@@ -643,7 +641,6 @@ mod tests {
     /// consume slots in `[loop] max_iterations`. After absorbing one
     /// mid-session infra failure, the agent-side retry policy still has
     /// its full budget for genuine `AgentOutcome::Failure` retries.
-    /// `tests/loom-test.sh::test_infra_retry_counter_separate`.
     #[tokio::test]
     async fn infra_retry_counter_does_not_consume_max_retries() -> Result<(), RunError> {
         let mut c = FakeController::default();

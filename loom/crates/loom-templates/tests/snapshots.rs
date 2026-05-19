@@ -107,7 +107,7 @@ fn review_snapshot() {
         base_commit: Some("abc1234".into()),
         molecule_id: Some(MoleculeId::new("wx-3hhwq")),
         verify_sources: vec![ReviewSource {
-            path: "tests/loom-test.sh".into(),
+            path: "tests/loom/run-tests.sh".into(),
             body: "test_review_inputs() { :; }\n".into(),
         }],
         judge_rubrics: vec![ReviewSource {

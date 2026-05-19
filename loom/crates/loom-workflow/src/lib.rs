@@ -11,7 +11,6 @@
 //! depending on `loom-driver` directly each time.
 
 pub mod agent;
-pub mod check;
 pub mod init;
 pub mod logs_cmd;
 pub mod msg;

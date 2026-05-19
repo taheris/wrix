@@ -279,7 +279,7 @@ fn previous_failure_preserves_short_input() {
 
 #[test]
 fn review_renders_review_context_fields() -> Result<()> {
-    let verify_path = "tests/loom-test.sh";
+    let verify_path = "tests/loom/run-tests.sh";
     let verify_body = "test_review_inputs_include_judge_rubrics_signature() { :; }\n";
     let judge_path = "tests/judges/loom.sh";
     let judge_body = "judge_live_path_coverage_signature() { :; }\n";
@@ -688,7 +688,7 @@ fn template_renders_are_byte_stable_across_runs() -> Result<()> {
             base_commit: Some("abc1234".into()),
             molecule_id: Some(MoleculeId::new("wx-3hhwq")),
             verify_sources: vec![ReviewSource {
-                path: "tests/loom-test.sh".into(),
+                path: "tests/loom/run-tests.sh".into(),
                 body: "test_review_inputs() { :; }\n".into(),
             }],
             judge_rubrics: vec![ReviewSource {

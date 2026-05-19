@@ -1,10 +1,5 @@
 //! Integration tests for `loom_driver::lock::LockManager`.
 //!
-//! Each test name maps onto a shell-level acceptance test in
-//! `tests/loom-test.sh::test_*`. The shell harness invokes these via
-//! `cargo test -p loom-driver --test lock_manager <name>`, so the verify path
-//! exercises the same code as `cargo test`.
-//!
 //! `crash_releases_spec_lock` re-execs the test binary as a child to take
 //! and abandon a lock (spec NFR #8): `flock(2)` release on process death
 //! is a kernel-level guarantee tied to fd close on exit. Asserting it

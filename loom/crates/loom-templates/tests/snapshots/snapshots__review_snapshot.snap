@@ -99,7 +99,7 @@ The verdict gate just ran these `[verify]` scripts. Their full source is
 reproduced below so you can judge live-path coverage and mock discipline
 without re-reading them from disk.
 
-### tests/loom-test.sh
+### tests/loom/run-tests.sh
 
 ```
 test_review_inputs() { :; }

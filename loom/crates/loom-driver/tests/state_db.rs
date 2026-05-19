@@ -1,9 +1,4 @@
 //! Integration tests for `loom_driver::state::StateDb`.
-//!
-//! Each test name maps 1:1 onto a shell-level acceptance test in
-//! `tests/loom-test.sh::test_state_*`. The shell harness invokes these via
-//! `cargo test -p loom-driver --test state_db <name>` so the verify path runs
-//! the real implementation, not a stub.
 
 use std::path::Path;
 

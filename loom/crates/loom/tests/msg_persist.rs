@@ -1,13 +1,10 @@
-//! `tests/loom-test.sh::test_msg_option_validates` (B3) and
-//! `tests/loom-test.sh::test_msg_reply_verbatim` (B4 path) end-to-end
-//! gates.
+//! End-to-end `loom msg -a <choice> -i <id>` reply-persistence tests.
 //!
-//! Drives the real `loom` binary's `msg -a <choice> -i <id>` flow
-//! against the `bd-shim` test helper binary installed on `PATH`. The
-//! shim mutates a per-test state directory on every `bd update` so a
-//! subsequent `bd show <id> --json` returns the same record the
-//! production code wrote — verifying the persist path end-to-end. No
-//! CommandRunner mocks; the test exercises the same
+//! Drives the real `loom` binary against the `bd-shim` test helper on
+//! `PATH`. The shim mutates a per-test state directory on every
+//! `bd update` so a subsequent `bd show <id> --json` returns the same
+//! record the production code wrote — verifying the persist path
+//! end-to-end. No CommandRunner mocks; the test exercises the same
 //! `tokio::process::Command::new("bd")` invocation path the production
 //! driver uses.
 //!

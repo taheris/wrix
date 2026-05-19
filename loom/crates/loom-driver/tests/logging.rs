@@ -1,9 +1,4 @@
 //! Integration tests for `loom_driver::logging`.
-//!
-//! Each test name maps onto a shell-level acceptance test in
-//! `tests/loom-test.sh::test_*`. The shell harness invokes these via
-//! `cargo test -p loom-driver --test logging <name>` so the verify path
-//! exercises the same code as `cargo test`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
