@@ -1799,6 +1799,10 @@ Criteria.
      `<selector>`, and the scope flags `--bead <id>` / `--diff
      <range>` / `--tree`. The surface-conformance walk (FR13) ships
      as a `[check]`-tier verifier dispatched by `loom gate check`.
+   - `loom review` — LLM-judged review pass over the gate scope.
+     Shares the scope flags (`--spec`, `--bead`, `--diff`, `--tree`)
+     with `loom gate review`; the distinction is dispatch surface
+     (top-level vs `loom gate <subcommand>`), not behavior.
    - `loom msg` — clarify resolution
 
    **Inspection** — read-only views over state and logs:
