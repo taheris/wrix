@@ -59,10 +59,6 @@ _pending_stub() {
 
 #-----------------------------------------------------------------------------
 # test_workspace_builds — `cargo build` from loom/ root succeeds.
-#-----------------------------------------------------------------------------
-test_workspace_builds() {
-    cargo_run build --workspace --quiet
-}
 
 #-----------------------------------------------------------------------------
 # test_crate_structure — all five member crates exist with src/{lib,main}.rs.
@@ -220,15 +216,6 @@ test_workspace_lints() {
 
 #-----------------------------------------------------------------------------
 # test_nix_build — `nix build .#loom` succeeds and produces a loom binary.
-#-----------------------------------------------------------------------------
-test_nix_build() {
-    local out
-    out=$(nix build "$REPO_ROOT#loom" --no-link --print-out-paths)
-    if [ ! -x "$out/bin/loom" ]; then
-        echo "expected executable at $out/bin/loom" >&2
-        return 1
-    fi
-}
 
 #-----------------------------------------------------------------------------
 # test_devshell_includes_loom — loom binary on PATH inside `nix develop`,
@@ -313,84 +300,10 @@ EOF
 # parses the JSON, omits TTY (STDIO=1), and exposes the resolved spawn state.
 # Verified through the launcher's WRAPIX_DRY_RUN=1 mode so no container
 # runtime is required.
-#-----------------------------------------------------------------------------
-test_wrapix_spawn_subcommand() {
-    if [ "$(uname -s)" != "Linux" ]; then
-        echo "wrapix launcher dry-run requires Linux" >&2
-        return 77
-    fi
-    local sandbox tmp out
-    sandbox=$(wrapix_bin) || { echo "failed to build sandbox" >&2; return 1; }
-    tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' RETURN
-
-    write_spawn_config "$tmp/spawn.json" "localhost/wrapix-sub:tag" \
-        "/nix/store/zzz-wrapix-sub.tar" "/work/ws"
-
-    out=$(WRAPIX_DRY_RUN=1 "$sandbox/bin/wrapix" \
-        spawn --spawn-config "$tmp/spawn.json" --stdio)
-
-    grep -qx 'SUBCOMMAND=spawn' <<<"$out" \
-        || { echo "missing SUBCOMMAND=spawn in dry-run output:" >&2; echo "$out" >&2; return 1; }
-    grep -qx 'STDIO=1' <<<"$out" \
-        || { echo "missing STDIO=1 in dry-run output:" >&2; echo "$out" >&2; return 1; }
-    grep -qx 'WORKSPACE=/work/ws' <<<"$out" \
-        || { echo "missing WORKSPACE=/work/ws in dry-run output:" >&2; echo "$out" >&2; return 1; }
-    grep -qx 'IMAGE_OVERRIDE_REF=localhost/wrapix-sub:tag' <<<"$out" \
-        || { echo "missing IMAGE_OVERRIDE_REF in dry-run output:" >&2; echo "$out" >&2; return 1; }
-    grep -qx 'IMAGE_OVERRIDE_SOURCE=/nix/store/zzz-wrapix-sub.tar' <<<"$out" \
-        || { echo "missing IMAGE_OVERRIDE_SOURCE in dry-run output:" >&2; echo "$out" >&2; return 1; }
-}
 
 #-----------------------------------------------------------------------------
 # test_spawn_config_json_stability — every documented SpawnConfig field
 # round-trips through the JSON shape without rename or loss.
-#-----------------------------------------------------------------------------
-test_spawn_config_json_stability() {
-    local sandbox tmp keys
-    sandbox=$(wrapix_bin)
-    tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' RETURN
-
-    cat >"$tmp/spawn.json" <<'EOF'
-{
-  "image_ref": "localhost/wrapix-stability:tag",
-  "image_source": "/nix/store/zzz-wrapix-stability.tar",
-  "workspace": "/work/ws",
-  "env": [["A","1"],["B","2"]],
-  "initial_prompt": "prompt body",
-  "agent_args": ["one","two"],
-  "repin": {
-    "orientation": "ori",
-    "pinned_context": "ctx",
-    "partial_bodies": {"foo": "bar"}
-  }
-}
-EOF
-
-    # All seven top-level keys must be present in the fixture itself.
-    keys=$(jq -r 'keys | sort | join(",")' "$tmp/spawn.json")
-    [ "$keys" = "agent_args,env,image_ref,image_source,initial_prompt,repin,workspace" ] \
-        || { echo "fixture key set drifted: $keys" >&2; return 1; }
-
-    # Round-trip via jq must preserve every key+value (jq -S sorts keys for diff).
-    jq -S . "$tmp/spawn.json" >"$tmp/canon.json"
-    jq -S . "$tmp/canon.json" >"$tmp/canon2.json"
-    if ! diff -q "$tmp/canon.json" "$tmp/canon2.json" >/dev/null; then
-        echo "round-trip diverged" >&2
-        diff "$tmp/canon.json" "$tmp/canon2.json" >&2
-        return 1
-    fi
-
-    # repin sub-keys must also round-trip.
-    keys=$(jq -r '.repin | keys | sort | join(",")' "$tmp/spawn.json")
-    [ "$keys" = "orientation,partial_bodies,pinned_context" ] \
-        || { echo "repin key set drifted: $keys" >&2; return 1; }
-
-    # The launcher must accept the full fixture (no unknown-field errors).
-    WRAPIX_DRY_RUN=1 "$sandbox/bin/wrapix" \
-        spawn --spawn-config "$tmp/spawn.json" --stdio >/dev/null
-}
 
 #-----------------------------------------------------------------------------
 # test_per_bead_profile_spawn — two beads with different `profile:X` labels
@@ -399,14 +312,6 @@ EOF
 # `loom-workflow::run::spawn::tests`. The integration test in
 # `loom/tests/spawn_dispatch.rs` records the argv shape (`spawn
 # --spawn-config <file> --stdio`) end-to-end against a wrapix shim.
-#-----------------------------------------------------------------------------
-test_per_bead_profile_spawn() {
-    cargo_run test -p loom-workflow --lib \
-        run::spawn::tests::per_bead_profile_dispatch_produces_distinct_image_refs \
-        -- --exact --nocapture --quiet
-    cargo_run test -p loom --test spawn_dispatch -- --test-threads=1 \
-        wrapix_spawn_invocation_records_correct_argv
-}
 
 #-----------------------------------------------------------------------------
 # test_wrapix_spawn_loads_image_source — `wrapix spawn` runs `podman load`
@@ -535,27 +440,12 @@ EOF
 # env var or missing file errors before any bead spawn (no implicit search
 # path or fallback default). The two paths (env unset, file missing) are
 # unit-tested under `loom-driver::profile_manifest::manifest::tests`.
-#-----------------------------------------------------------------------------
-test_profiles_manifest_required() {
-    cargo_run test -p loom-driver --lib \
-        profile_manifest::manifest::tests::from_path_missing_file_returns_manifest_not_found \
-        -- --exact --nocapture --quiet
-    cargo_run test -p loom-driver --lib \
-        profile_manifest::manifest::tests::from_path_parses_well_formed_manifest \
-        -- --exact --nocapture --quiet
-}
 
 #-----------------------------------------------------------------------------
 # test_unknown_profile_errors — a bead with `profile:X` where `X` is not
 # in the manifest fails with a typed `ProfileError::UnknownProfile` naming
 # the missing profile. Verified by the lookup unit test under
 # `loom-driver::profile_manifest::manifest::tests`.
-#-----------------------------------------------------------------------------
-test_unknown_profile_errors() {
-    cargo_run test -p loom-driver --lib \
-        profile_manifest::manifest::tests::lookup_unknown_profile_carries_manifest_path \
-        -- --exact --nocapture --quiet
-}
 
 #-----------------------------------------------------------------------------
 # test_profile_cli_override — `--profile` CLI override takes precedence
@@ -565,15 +455,6 @@ test_unknown_profile_errors() {
 # pins the resolution surface, while
 # `loom-workflow::run::profile::tests::resolve_profile_image_cli_override_wins_over_label`
 # pins the precedence chain (CLI > label > phase default).
-#-----------------------------------------------------------------------------
-test_profile_cli_override() {
-    cargo_run test -p loom-workflow --lib \
-        run::spawn::tests::cli_override_swaps_resolved_image \
-        -- --exact --nocapture --quiet
-    cargo_run test -p loom-workflow --lib \
-        run::profile::tests::resolve_profile_image_cli_override_wins_over_label \
-        -- --exact --nocapture --quiet
-}
 
 #-----------------------------------------------------------------------------
 # test_wrapix_spawn_dispatch — drives `loom --agent pi todo` through a
@@ -1012,26 +893,6 @@ todo_production_cargo_test() {
 # (Tier 3 — README discovery — is the driver's responsibility before
 # `compute_spec_diff` runs; once it reconstructs a molecule, the call
 # proceeds as tier 2.)
-#-----------------------------------------------------------------------------
-test_todo_tier_detection() {
-    todo_cargo_test todo::tier::tests::tier_4_when_no_molecule_no_since
-    todo_cargo_test todo::tier::tests::tier_2_when_molecule_present_without_base_commit
-    todo_cargo_test todo::tier::tests::tier_2_when_base_commit_orphaned
-    todo_cargo_test todo::tier::tests::tier_2_when_base_commit_no_longer_exists
-    todo_cargo_test todo::tier::tests::tier_1_diff_with_empty_candidate_set
-    todo_cargo_test todo::tier::tests::tier_1_anchor_only_diff
-    todo_cargo_test todo::tier::tests::tier_1_fanout_uses_sibling_base_when_set
-    todo_cargo_test todo::tier::tests::tier_1_fanout_seeds_orphaned_sibling_from_anchor
-    todo_cargo_test todo::tier::tests::tier_1_skips_candidates_with_empty_diff
-    todo_cargo_test todo::tier::tests::since_override_replaces_anchor_base_for_anchor_only
-    todo_cargo_test todo::tier::tests::since_override_errors_when_commit_missing
-    todo_cargo_test todo::tier::tests::since_override_errors_when_commit_orphaned
-    todo_production_cargo_test build_spawn_config_resolves_manifest_image_and_renders_new_template
-    todo_production_cargo_test build_spawn_config_uses_update_template_when_molecule_exists
-    todo_production_cargo_test build_spawn_config_surfaces_unknown_profile_as_profile_error
-    todo_production_cargo_test build_spawn_config_tier_1_renders_diff_from_base_commit
-    todo_production_cargo_test record_outcome_advances_cursor_only_on_complete_marker_and_clean_exit
-}
 
 #-----------------------------------------------------------------------------
 # State database — each function dispatches into the matching cargo
@@ -1045,68 +906,36 @@ state_db_cargo_test() {
 #-----------------------------------------------------------------------------
 # test_state_db_init — `StateDb::open` creates `specs`, `molecules`,
 # `companions`, and `meta` tables and seeds `meta.schema_version`.
-#-----------------------------------------------------------------------------
-test_state_db_init() {
-    state_db_cargo_test state_db_init_creates_tables
-}
 
 #-----------------------------------------------------------------------------
 # test_state_db_rebuild — `StateDb::rebuild` writes one specs row per
 # spec markdown file and one molecules row per active molecule.
-#-----------------------------------------------------------------------------
-test_state_db_rebuild() {
-    state_db_cargo_test state_db_rebuild_populates_specs_and_molecules
-}
 
 #-----------------------------------------------------------------------------
 # test_state_db_rebuild_companions — `## Companions` parser extracts paths,
 # specs without the section contribute zero rows, malformed lines skip.
-#-----------------------------------------------------------------------------
-test_state_db_rebuild_companions() {
-    state_db_cargo_test state_db_rebuild_companions
-}
 
 #-----------------------------------------------------------------------------
 # test_state_db_rebuild_resets_counters — `iteration_count` returns to 0
 # after rebuild, even when previously incremented.
-#-----------------------------------------------------------------------------
-test_state_db_rebuild_resets_counters() {
-    state_db_cargo_test state_db_rebuild_resets_counters
-}
 
 #-----------------------------------------------------------------------------
 # test_state_current_spec — `set_current_spec` followed by `current_spec`
 # round-trips the same `SpecLabel`.
-#-----------------------------------------------------------------------------
-test_state_current_spec() {
-    state_db_cargo_test state_current_spec_round_trips
-}
 
 #-----------------------------------------------------------------------------
 # test_state_increment_iteration — `increment_iteration` returns the post-
 # increment value (1, 2, 3, ...).
-#-----------------------------------------------------------------------------
-test_state_increment_iteration() {
-    state_db_cargo_test state_increment_iteration_returns_updated_count
-}
 
 #-----------------------------------------------------------------------------
 # test_state_corruption_recovery — opening a non-SQLite blob fails; the
 # `recreate()` recovery path replaces the file and rebuild succeeds.
-#-----------------------------------------------------------------------------
-test_state_corruption_recovery() {
-    state_db_cargo_test state_corruption_recovery
-}
 
 #-----------------------------------------------------------------------------
 # test_state_todo_cursor — `set_todo_cursor` / `todo_cursor` round-trip a
 # per-spec commit SHA through the `meta` table; subsequent writes overwrite
 # (cursor moves forward as `loom todo` runs); per-spec namespacing keeps
 # distinct labels disjoint.
-#-----------------------------------------------------------------------------
-test_state_todo_cursor() {
-    state_db_cargo_test todo_cursor_round_trips_through_meta_table
-}
 
 #-----------------------------------------------------------------------------
 # Beads CLI wrapper — each function dispatches into a unit test under
@@ -1121,40 +950,19 @@ bd_client_cargo_test() {
 #-----------------------------------------------------------------------------
 # test_bd_show_parsing — `bd show <id> --json` output deserializes into a
 # typed `Bead` value with the expected fields.
-#-----------------------------------------------------------------------------
-test_bd_show_parsing() {
-    bd_client_cargo_test bd::client::tests::show_parses_first_row_into_bead
-}
 
 #-----------------------------------------------------------------------------
 # test_bd_list_parsing — `bd list --json` output deserializes into a Vec<Bead>
 # and the `--status=` / `--label=` filters are forwarded to the CLI argv.
-#-----------------------------------------------------------------------------
-test_bd_list_parsing() {
-    bd_client_cargo_test bd::client::tests::list_parses_array_of_beads
-    bd_client_cargo_test bd::client::tests::list_filters_status_and_label
-    bd_client_cargo_test bd::client::tests::list_handles_null_response_as_empty_vec
-}
 
 #-----------------------------------------------------------------------------
 # test_bd_create_returns_id — `bd create --silent` stdout (a single id) is
 # parsed back into a `BeadId`; blank stdout maps to `BdError::CreateMissingId`.
-#-----------------------------------------------------------------------------
-test_bd_create_returns_id() {
-    bd_client_cargo_test bd::client::tests::create_returns_id_from_silent_output
-    bd_client_cargo_test bd::client::tests::create_errors_on_blank_silent_output
-}
 
 #-----------------------------------------------------------------------------
 # test_bd_error_handling — non-zero exits map to `BdError::Cli` with the
 # argv + stderr captured; malformed JSON maps to `BdError::Decode`; missing
 # rows map to `BdError::ShowEmpty`.
-#-----------------------------------------------------------------------------
-test_bd_error_handling() {
-    bd_client_cargo_test bd::client::tests::cli_failure_maps_to_typed_error
-    bd_client_cargo_test bd::client::tests::decode_failure_carries_args_context
-    bd_client_cargo_test bd::client::tests::show_returns_show_empty_for_zero_rows
-}
 
 #-----------------------------------------------------------------------------
 # Run-time logging — each function dispatches into a cargo integration test
@@ -1169,70 +977,36 @@ logging_cargo_test() {
 # test_run_default_output_shape — default render mode prints one header line
 # per bead and one short line per tool call (assistant text deltas
 # suppressed); the closing line carries tool count + duration.
-#-----------------------------------------------------------------------------
-test_pretty_selected_on_tty() {
-    logging_cargo_test run_default_output_shape
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        renderer::tests::pretty_selected_on_tty
-}
 
 #-----------------------------------------------------------------------------
 # test_run_verbose_streams_text — verbose mode streams MessageDelta verbatim.
-#-----------------------------------------------------------------------------
-test_verbose_full_output() {
-    logging_cargo_test run_verbose_streams_text
-}
 
 #-----------------------------------------------------------------------------
 # test_run_writes_per_bead_jsonl_log — every bead spawn writes the full
 # AgentEvent stream as JSONL to
 # `<workspace>/.wrapix/loom/logs/<spec>/<bead>-<utc>.jsonl`, regardless of
 # terminal verbosity.
-#-----------------------------------------------------------------------------
-test_run_writes_per_bead_jsonl_log() {
-    logging_cargo_test run_writes_per_bead_jsonl_log
-}
 
 #-----------------------------------------------------------------------------
 # test_run_logs_log_path — opening a sink emits an info-level tracing event
 # whose `log_path` field carries the resolved file path.
-#-----------------------------------------------------------------------------
-test_run_logs_log_path() {
-    logging_cargo_test run_logs_log_path
-}
 
 #-----------------------------------------------------------------------------
 # test_parallel_logs_are_per_bead — running two beads against the same logs
 # root writes two distinct files (per-bead, not per-session), and the
 # contents never cross-contaminate even when `emit` is interleaved.
-#-----------------------------------------------------------------------------
-test_parallel_logs_are_per_bead() {
-    logging_cargo_test parallel_logs_are_per_bead
-}
 
 #-----------------------------------------------------------------------------
 # test_log_retention_sweep — `sweep_retention_at` deletes files older than
 # `[logs] retention_days` and preserves recent files.
-#-----------------------------------------------------------------------------
-test_log_retention_sweep() {
-    logging_cargo_test log_retention_sweep
-}
 
 #-----------------------------------------------------------------------------
 # test_log_retention_disabled — `retention_days = 0` disables sweeping.
-#-----------------------------------------------------------------------------
-test_log_retention_disabled() {
-    logging_cargo_test log_retention_disabled
-}
 
 #-----------------------------------------------------------------------------
 # test_log_retention_failure_tolerance — per-file delete failures (here: a
 # read-only directory) do not abort the sweep; survivors and failures are
 # both surfaced in the report.
-#-----------------------------------------------------------------------------
-test_log_retention_failure_tolerance() {
-    logging_cargo_test log_retention_failure_tolerance
-}
 
 #-----------------------------------------------------------------------------
 # Concurrency & locking — each function dispatches into a cargo integration
@@ -1248,57 +1022,31 @@ lock_cargo_test() {
 #-----------------------------------------------------------------------------
 # test_per_spec_lock_acquired — `LockManager::acquire_spec` creates the per-
 # spec lock file and the guard releases on drop.
-#-----------------------------------------------------------------------------
-test_per_spec_lock_acquired() {
-    lock_cargo_test acquire_spec_creates_lock_file
-}
 
 #-----------------------------------------------------------------------------
 # test_per_spec_lock_serializes — a second mutating command on the same spec
 # waits up to 5s and then errors with `another loom command is operating on
 # <label>`. The fast contention path (250ms timeout) and the default 5s wait
 # are both asserted.
-#-----------------------------------------------------------------------------
-test_per_spec_lock_serializes() {
-    lock_cargo_test second_acquire_times_out_with_spec_busy
-    lock_cargo_test times_out_with_default_timeout
-}
 
 #-----------------------------------------------------------------------------
 # test_cross_spec_no_blocking — locks for distinct spec labels do not block
 # each other; both acquire effectively immediately.
-#-----------------------------------------------------------------------------
-test_cross_spec_no_blocking() {
-    lock_cargo_test cross_spec_locks_do_not_block
-}
 
 #-----------------------------------------------------------------------------
 # test_readonly_commands_unblocked — read-only commands acquire no lock; an
 # active spec lock does not block read-only inspection of the workspace.
-#-----------------------------------------------------------------------------
-test_readonly_commands_unblocked() {
-    lock_cargo_test readonly_paths_unaffected_by_spec_lock
-}
 
 #-----------------------------------------------------------------------------
 # test_init_workspace_lock — `acquire_workspace` errors immediately with
 # `WorkspaceBusy` if any per-spec lock is held; succeeds when none are; and
 # is exclusive against itself.
-#-----------------------------------------------------------------------------
-test_init_workspace_lock() {
-    lock_cargo_test acquire_workspace_errors_when_spec_lock_held
-    lock_cargo_test acquire_workspace_serializes_workspace_holders
-}
 
 #-----------------------------------------------------------------------------
 # test_crash_releases_lock — a crashed (process-exit) holder leaves no stale
 # lock; a fresh invocation acquires immediately. The integration test spawns
 # the cargo test binary as a child process, takes the lock, then exits via
 # `std::process::exit` so the kernel — not Rust's Drop — releases the flock.
-#-----------------------------------------------------------------------------
-test_crash_releases_lock() {
-    lock_cargo_test crash_releases_spec_lock
-}
 
 #-----------------------------------------------------------------------------
 # loom run — each function dispatches into a cargo unit test under
@@ -1315,49 +1063,20 @@ run_cargo_test() {
 # test_run_continuous — continuous mode pulls beads until `next_ready_bead`
 # returns `None`, closes each on success, and execs `loom review` exactly once
 # at molecule completion.
-#-----------------------------------------------------------------------------
-test_run_continuous() {
-    run_cargo_test run::runner::tests::continuous_loops_until_molecule_complete
-    run_cargo_test run::production::tests::run_bead_invokes_dispatch_closure_with_resolved_spawn_config
-}
 
 #-----------------------------------------------------------------------------
 # test_run_once — `--once` processes a single bead then returns; subsequent
 # ready beads remain in the queue and `loom review` is never invoked.
-#-----------------------------------------------------------------------------
-test_run_once() {
-    run_cargo_test run::runner::tests::once_mode_processes_single_bead
-    run_cargo_test run::runner::tests::once_mode_does_not_exec_review_on_empty_queue
-}
 
 #-----------------------------------------------------------------------------
 # test_run_profile_selection — `resolve_profile` reads the bead's `profile:X`
 # label, falls back to the phase default without a label, and honours the
 # CLI override.
-#-----------------------------------------------------------------------------
-test_run_profile_selection() {
-    run_cargo_test run::profile::tests::resolve_profile_reads_label
-    run_cargo_test run::profile::tests::resolve_profile_falls_back_to_phase_default_without_label
-    run_cargo_test run::profile::tests::resolve_profile_uses_override
-    run_cargo_test run::profile::tests::resolve_profile_first_matching_label_wins
-}
 
 #-----------------------------------------------------------------------------
 # test_run_retry_with_context — a failing bead retries with `previous_failure`
 # threaded into the next attempt, gives up after `max_retries`, and the
 # RetryPolicy decision math is asserted directly.
-#-----------------------------------------------------------------------------
-test_run_retry_with_context() {
-    run_cargo_test run::retry::tests::default_policy_is_two_retries
-    run_cargo_test run::retry::tests::retries_when_attempts_remain
-    run_cargo_test run::retry::tests::gives_up_after_max_retries
-    run_cargo_test run::retry::tests::zero_retries_gives_up_immediately
-    run_cargo_test run::runner::tests::failed_bead_retries_with_previous_failure_then_clarifies
-    run_cargo_test run::runner::tests::retry_succeeds_within_budget_reaches_done
-    run_cargo_test run::context::tests::retry_input_wraps_previous_failure
-    run_cargo_test run::context::tests::rendered_retry_prompt_includes_previous_failure_body
-    run_cargo_test run::production::tests::run_bead_translates_nonzero_exit_code_into_failure_with_error_body
-}
 
 #-----------------------------------------------------------------------------
 # Worktree parallelism — `--parallel N`. Pure-logic tests live in the
@@ -1375,71 +1094,38 @@ parallel_int_test() {
 # test_run_parallel_flag_validation — `Parallelism::from_str` accepts positive
 # integers and rejects 0, negatives, and non-integers with a clear error
 # (before any work begins).
-#-----------------------------------------------------------------------------
-test_run_parallel_flag_validation() {
-    parallel_lib_test run::parallelism::tests::default_is_one
-    parallel_lib_test run::parallelism::tests::parse_accepts_positive_integers
-    parallel_lib_test run::parallelism::tests::parse_rejects_zero_and_negatives_and_non_integers
-    parallel_lib_test run::parallelism::tests::is_one_false_for_n_greater_than_one
-    parallel_int_test run_parallel_flag_validation
-}
 
 #-----------------------------------------------------------------------------
 # test_parallel_one_no_worktree — `--parallel 1` (default) does not create
 # a worktree and works on the driver branch directly. The dispatch predicate
 # is `Parallelism::is_one()`; the integration test pins it.
-#-----------------------------------------------------------------------------
-test_parallel_one_no_worktree() {
-    parallel_int_test parallel_one_no_worktree
-}
 
 #-----------------------------------------------------------------------------
 # test_parallel_creates_worktrees — `--parallel N > 1` creates one worktree
 # per dispatched bead under `.wrapix/worktree/<label>/<bead-id>/` on a fresh
 # branch `loom/<label>/<bead-id>` based on HEAD.
-#-----------------------------------------------------------------------------
-test_parallel_creates_worktrees() {
-    parallel_int_test parallel_creates_worktrees
-}
 
 #-----------------------------------------------------------------------------
 # test_parallel_concurrent_spawns — `run_concurrent_spawns` joins futures via
 # `tokio::JoinSet` so wall-clock time for N concurrent dispatch slots is
 # dominated by a single slot's work, not the sum.
-#-----------------------------------------------------------------------------
-test_parallel_concurrent_spawns() {
-    parallel_lib_test run::parallel::tests::concurrent_spawns_overlap_in_wall_clock
-    parallel_lib_test run::parallel::tests::concurrent_spawns_collect_outcomes_for_every_slot
-}
 
 #-----------------------------------------------------------------------------
 # test_parallel_merge_back — successful bead branches are merged back to the
 # driver branch sequentially after the batch completes; the per-bead worktree
 # directory and branch are reclaimed on a clean merge.
-#-----------------------------------------------------------------------------
-test_parallel_merge_back() {
-    parallel_int_test parallel_merge_back
-}
 
 #-----------------------------------------------------------------------------
 # test_parallel_failure_cleanup — on agent failure the worktree branch is
 # deleted and the bead is queued for retry per the retry policy
 # (`BatchResult::AgentFailed` carries the error body the driver threads
 # back into the next attempt as `previous_failure`).
-#-----------------------------------------------------------------------------
-test_parallel_failure_cleanup() {
-    parallel_int_test parallel_failure_cleanup
-}
 
 #-----------------------------------------------------------------------------
 # test_parallel_conflict_preserves_worktree — on merge conflict the worktree
 # is preserved (not silently overwritten) and the bead is marked failed via
 # `BatchResult::Conflict`. The branch is not deleted; the path on disk
 # remains for human inspection.
-#-----------------------------------------------------------------------------
-test_parallel_conflict_preserves_worktree() {
-    parallel_int_test parallel_conflict_preserves_worktree
-}
 
 #-----------------------------------------------------------------------------
 # Note: the compiled-binary smoke for `loom run --once` lives at
@@ -1470,70 +1156,22 @@ msg_cargo_test() {
 # test_check_push_gate — clean review (no new beads, no clarify) pushes once
 # and resets the iteration counter; a clarify present (new or pre-existing)
 # stops the gate without pushing.
-#-----------------------------------------------------------------------------
-test_review_push_gate() {
-    check_cargo_test review::runner::tests::clean_review_pushes_and_resets_counter
-    check_cargo_test review::runner::tests::clarify_present_stops_without_pushing
-    check_cargo_test review::runner::tests::pre_existing_clarify_blocks_push_even_when_no_new_beads
-    check_cargo_test review::production::tests::beads_push_argv_invokes_beads_push_not_bd_dolt_push
-    check_cargo_test review::production::tests::run_review_translates_zero_exit_into_complete
-    check_cargo_test review::production::tests::run_review_translates_nonzero_exit_into_incomplete_with_code
-}
 
 #-----------------------------------------------------------------------------
 # test_check_auto_iterate — fix-up beads under the iteration cap trigger an
 # `exec loom run` with the counter incremented; reaching the cap escalates the
 # newest fix-up bead to `ralph:clarify` instead of looping forever.
-#-----------------------------------------------------------------------------
-test_review_auto_iterate() {
-    check_cargo_test review::iteration::tests::default_cap_matches_spec
-    check_cargo_test review::iteration::tests::is_exhausted_true_at_or_above_cap
-    check_cargo_test review::runner::tests::fix_up_beads_under_cap_auto_iterate
-    check_cargo_test review::runner::tests::iteration_cap_escalates_newest_fix_up_to_clarify
-    check_cargo_test review::production::tests::iteration_counter_round_trips_through_state_db
-    check_cargo_test review::production::tests::iteration_count_is_zero_when_no_active_molecule
-    check_cargo_test review::production::tests::set_iteration_errors_when_no_active_molecule
-    check_cargo_test review::production::tests::reset_iteration_is_no_op_when_no_active_molecule
-}
 
 #-----------------------------------------------------------------------------
 # test_msg_list — message list filters to `loom:clarify`- and `loom:blocked`-
 # labelled beads, drops the SPEC column under a spec filter, and falls back to
 # bead title when the `## Options — <summary>` header is missing.
-#-----------------------------------------------------------------------------
-test_msg_list_cross_spec_default() {
-    msg_cargo_test msg::list::tests::filter_keeps_only_clarify_labelled_beads
-    msg_cargo_test msg::list::tests::filter_keeps_blocked_alongside_clarify
-    msg_cargo_test msg::list::tests::filter_with_spec_label_keeps_only_matching
-    msg_cargo_test msg::list::tests::rows_drop_spec_column_under_filter
-    msg_cargo_test msg::list::tests::rows_carry_spec_column_when_unfiltered
-    msg_cargo_test msg::list::tests::summary_prefers_options_header_over_title
-    msg_cargo_test msg::list::tests::summary_falls_back_to_title_when_header_absent
-    msg_cargo_test msg::list::tests::kind_of_prefers_blocked_when_both_labels_present
-    msg_cargo_test msg::list::tests::msg_kind_label_and_tag_round_trip
-    msg_cargo_test msg::context::tests::rendered_msg_template_lists_each_clarify
-}
 
 #-----------------------------------------------------------------------------
 # test_msg_fast_reply — `-a <choice>` resolves a pure-integer to the matching
 # `### Option <N>` per the Options Format Contract for clarify beads; a
 # missing index errors with the available indices; non-integer choice is
 # stored verbatim. Blocked beads always store verbatim (free-form).
-#-----------------------------------------------------------------------------
-test_msg_reply_verbatim() {
-    msg_cargo_test msg::options::tests::options_em_dash_summary_and_three_options
-    msg_cargo_test msg::options::tests::separator_variants_all_strip_cleanly
-    msg_cargo_test msg::reply::tests::integer_choice_resolves_to_option_note
-    msg_cargo_test msg::reply::tests::missing_option_index_errors_with_available_list
-    msg_cargo_test msg::reply::tests::verbatim_string_passes_through_unchanged
-    msg_cargo_test msg::reply::tests::integer_with_no_options_section_errors
-    msg_cargo_test msg::reply::tests::empty_title_or_body_renders_partial_note
-    msg_cargo_test msg::reply::tests::blocked_integer_choice_is_always_verbatim
-    msg_cargo_test msg::reply::tests::blocked_free_form_passes_through_unchanged
-    cargo_run test -p loom --test msg_persist -- --test-threads=1 \
-        msg_blocked_verbatim_text_persists_via_bd_show \
-        msg_blocked_integer_input_persists_verbatim_not_as_option
-}
 
 #-----------------------------------------------------------------------------
 # Auxiliary commands (init, status, use, logs, spec) — each function dispatches
@@ -1548,55 +1186,27 @@ aux_cargo_test() {
 # test_init_creates_state — `loom init` creates `.wrapix/loom/config.toml`
 # (round-trips through `LoomConfig::default()`) and `.wrapix/loom/state.db`,
 # preserving an existing config file on subsequent invocations.
-#-----------------------------------------------------------------------------
-test_init_creates_state() {
-    aux_cargo_test init::tests::run_creates_config_and_state_db
-    aux_cargo_test init::tests::run_preserves_existing_config_file
-}
 
 #-----------------------------------------------------------------------------
 # test_init_rebuild — `loom init --rebuild` drops and repopulates the state
 # DB from `specs/*.md` plus the supplied molecule slice, and resets every
 # `iteration_count` to 0.
-#-----------------------------------------------------------------------------
-test_init_rebuild() {
-    aux_cargo_test init::tests::rebuild_drops_and_repopulates_state_db
-}
 
 #-----------------------------------------------------------------------------
 # test_status_command — `loom status` (read-only) renders `<unset>` when no
 # spec has been chosen, otherwise prints the active spec, molecule id, and
 # iteration counter. Sanity check confirms the call needs no lock.
-#-----------------------------------------------------------------------------
-test_status_command() {
-    aux_cargo_test status::tests::empty_state_reports_unset_spec
-    aux_cargo_test status::tests::populated_state_reports_label_and_iteration
-    aux_cargo_test status::tests::no_lock_required_to_call_load
-}
 
 #-----------------------------------------------------------------------------
 # test_use_command — `loom use <label>` acquires the per-spec lock, writes
 # `current_spec` to the state DB, and round-trips with `status::load`. A
 # spec lock held elsewhere causes `SpecBusy` after the configured timeout.
-#-----------------------------------------------------------------------------
-test_use_command() {
-    aux_cargo_test use_spec::tests::use_round_trips_with_status_load
-    aux_cargo_test use_spec::tests::use_acquires_per_spec_lock
-}
 
 #-----------------------------------------------------------------------------
 # test_logs_command — `loom logs` (read-only) walks `.wrapix/loom/logs/` two
 # levels deep, returns the most recent `*.jsonl`, applies an exact bead-id
 # prefix filter so `wx-1` does not collapse into `wx-10`, and rejects
 # non-jsonl files.
-#-----------------------------------------------------------------------------
-test_logs_default_renders_and_exits() {
-    aux_cargo_test logs_cmd::tests::empty_root_returns_no_logs
-    aux_cargo_test logs_cmd::tests::returns_most_recent_log_across_specs
-    aux_cargo_test logs_cmd::tests::bead_filter_matches_prefix_exactly
-    aux_cargo_test logs_cmd::tests::missing_bead_filter_returns_typed_error
-    aux_cargo_test logs_cmd::tests::ignores_non_jsonl_files
-}
 
 #-----------------------------------------------------------------------------
 # test_spec_query — `loom spec` parses `## Success Criteria` checkboxes and
@@ -1604,35 +1214,12 @@ test_logs_default_renders_and_exits() {
 # annotation. Fenced code blocks, the next `##` heading, and orphan
 # checkboxes (no annotation) are all handled per `parse_spec_annotations` in
 # `lib/ralph/cmd/util.sh`.
-#-----------------------------------------------------------------------------
-test_spec_query() {
-    aux_cargo_test spec::annotations::tests::returns_no_criteria_error_when_section_missing
-    aux_cargo_test spec::annotations::tests::pairs_checkbox_with_following_verify_link
-    aux_cargo_test spec::annotations::tests::checked_box_propagates
-    aux_cargo_test spec::annotations::tests::criterion_without_annotation_yields_none_kind
-    aux_cargo_test spec::annotations::tests::fenced_code_blocks_are_skipped
-    aux_cargo_test spec::annotations::tests::next_h2_terminates_section
-    aux_cargo_test spec::annotations::tests::relative_paths_normalize_against_spec_dir
-    aux_cargo_test spec::annotations::tests::legacy_double_colon_separator_supported
-    aux_cargo_test spec::tests::list_for_label_reads_spec_under_workspace
-}
 
 #-----------------------------------------------------------------------------
 # test_spec_deps — `loom spec --deps` mirrors `ralph sync --deps`: it scans
 # every `[verify]`/`[judge]` test file for known tool invocations (curl, jq,
 # rg, tmux, ssh, etc.), collapses aliases (`rg`/`ripgrep`, `ssh`/`scp`) to a
 # single nixpkgs name, and ignores substring matches such as "curling".
-#-----------------------------------------------------------------------------
-test_spec_deps() {
-    aux_cargo_test spec::deps::tests::maps_known_tools_to_nix_packages
-    aux_cargo_test spec::deps::tests::aliases_collapse_to_canonical_package
-    aux_cargo_test spec::deps::tests::ignores_substring_matches
-    aux_cargo_test spec::deps::tests::matches_after_pipes_and_command_subst
-    aux_cargo_test spec::deps::tests::ssh_and_scp_both_map_to_openssh
-    aux_cargo_test spec::deps::tests::collect_deps_ignores_missing_files
-    aux_cargo_test spec::deps::tests::collect_deps_skips_non_test_annotations
-    aux_cargo_test spec::tests::deps_for_label_aggregates_across_test_files
-}
 
 #-----------------------------------------------------------------------------
 # test_no_sync_or_tune_command — the loom binary must NOT expose `sync` or
@@ -1661,28 +1248,12 @@ test_no_sync_or_tune_command() {
 # out to interactive `wrapix run` (NOT `spawn --stdio`), waits for the
 # session to exit, then re-parses `## Companions` from the spec markdown the
 # interview wrote and replaces the companion rows for `<label>` in state.db.
-#-----------------------------------------------------------------------------
-test_plan_new() {
-    aux_cargo_test plan::runner::tests::plan_new_invokes_wrapix_run_and_records_companions
-    aux_cargo_test plan::runner::tests::plan_new_errors_when_interview_writes_no_spec
-    aux_cargo_test plan::runner::tests::plan_new_flags_missing_companions_section
-    aux_cargo_test plan::args::tests::parse_mode_accepts_new_only
-    aux_cargo_test plan::args::tests::parse_mode_rejects_no_flags
-    aux_cargo_test plan::args::tests::parse_mode_rejects_both_flags
-}
 
 #-----------------------------------------------------------------------------
 # test_plan_update — `loom plan -u <label>` requires the spec to already
 # exist, threads the existing companion rows into the update template, and
 # reconciles companions from the spec markdown after the interactive session
 # exits.
-#-----------------------------------------------------------------------------
-test_plan_update() {
-    aux_cargo_test plan::runner::tests::plan_update_threads_existing_companions_into_prompt
-    aux_cargo_test plan::runner::tests::plan_update_errors_when_spec_missing
-    aux_cargo_test plan::args::tests::parse_mode_accepts_update_only
-    aux_cargo_test plan::companions::tests::rerun_replaces_previous_rows
-}
 
 #-----------------------------------------------------------------------------
 # test_plan_uses_interactive_wrapix_run — `loom plan` must shell out to the
@@ -1693,17 +1264,6 @@ test_plan_update() {
 # `WRAPIX_DEFAULT_IMAGE_REF` / `WRAPIX_DEFAULT_IMAGE_SOURCE`, so plan must
 # resolve its profile against the parsed manifest and inject those env vars
 # into the child env before exec'ing.
-#-----------------------------------------------------------------------------
-test_plan_uses_interactive_wrapix_run() {
-    aux_cargo_test plan::command::tests::argv_starts_with_run_subcommand
-    aux_cargo_test plan::command::tests::argv_passes_prompt_to_claude_with_skip_permissions
-    aux_cargo_test plan::command::tests::argv_never_contains_spawn_or_stdio_or_spawn_config
-    aux_cargo_test plan::runner::tests::plan_acquires_per_spec_lock
-    aux_cargo_test plan::runner::tests::plan_exports_default_image_env_for_wrapix_run
-    aux_cargo_test plan::runner::tests::plan_cli_profile_override_picks_manifest_entry
-    aux_cargo_test plan::runner::tests::plan_phase_config_profile_picks_manifest_entry
-    aux_cargo_test plan::runner::tests::plan_unknown_profile_returns_typed_error
-}
 
 #-----------------------------------------------------------------------------
 # Agent backend trait surface — pin the loom-driver types and modules that
@@ -3034,121 +2594,10 @@ test_no_real_clock_outside_system_clock() {
 #-----------------------------------------------------------------------------
 
 # Filesystem Lock Map
-test_locks_outside_workspace()        { lock_cargo_test locks_outside_workspace; }
-test_container_cannot_rm_host_lock()  { lock_cargo_test container_cannot_rm_host_lock; }
-test_loom_inside_env_set() {
-    cargo_run test -p loom-workflow --lib --quiet -- \
-        run::spawn::tests::spawn_config_env_includes_loom_inside_marker
-}
-test_nested_loom_guard_refuses() {
-    cargo_run test -p loom --test nested_loom_guard --quiet -- \
-        mutating_subcommands_refuse_with_loom_inside_set
-}
-test_nested_loom_guard_allows_readonly() {
-    cargo_run test -p loom --test nested_loom_guard --quiet -- \
-        readonly_subcommands_run_under_loom_inside_set
-}
 
 # Verdict Gate
-test_verdict_gate_mechanical_signals() {
-    check_cargo_test review::phase_verdict::tests::recovery_cause_labels_match_spec_strings
-    check_cargo_test review::phase_verdict::tests::complete_clean_routes_to_done
-}
-test_gate_loom_blocked_marker() {
-    check_cargo_test review::phase_verdict::tests::blocked_marker_routes_to_blocked_with_reason
-    cargo_run test -p loom --test marker_gate -- --test-threads=1 \
-        loom_run_once_routes_blocked_marker_to_label_and_leaves_bead_open
-}
-test_gate_loom_clarify_marker() {
-    check_cargo_test review::phase_verdict::tests::clarify_marker_routes_to_clarify_with_question
-    cargo_run test -p loom --test marker_gate -- --test-threads=1 \
-        loom_run_once_routes_clarify_marker_to_label_and_leaves_bead_open
-}
-test_gate_swallowed_marker() {
-    check_cargo_test review::phase_verdict::tests::missing_marker_routes_to_swallowed_marker_recovery
-}
-test_gate_incomplete_signaling() {
-    check_cargo_test review::phase_verdict::tests::complete_without_bd_closed_routes_to_incomplete_signaling
-    check_cargo_test review::phase_verdict::tests::noop_without_bd_closed_routes_to_incomplete_signaling
-}
-test_gate_zero_progress() {
-    check_cargo_test review::phase_verdict::tests::complete_with_empty_diff_routes_to_zero_progress
-}
-test_gate_loom_noop_empty_diff() {
-    check_cargo_test review::phase_verdict::tests::noop_with_empty_diff_and_clean_review_is_done_not_zero_progress
-    check_cargo_test review::phase_verdict::tests::noop_with_non_empty_diff_and_clean_review_is_done
-}
-test_gate_runs_all_verify_scripts() {
-    check_cargo_test review::phase_verdict::tests::complete_with_verify_fail_routes_to_verify_fail
-    check_cargo_test review::phase_verdict::tests::noop_with_verify_fail_routes_to_verify_fail
-    check_cargo_test review::phase_verdict::tests::verify_fail_carries_every_failure_block_for_previous_failure
-}
-test_gate_verify_fail_collects_all() {
-    check_cargo_test review::phase_verdict::tests::verify_fail_carries_every_failure_block_for_previous_failure
-    check_cargo_test review::verify_fail::tests::multiple_failures_all_within_budget_are_all_included
-    check_cargo_test review::verify_fail::tests::later_failures_truncate_when_budget_exhausted
-    check_cargo_test review::verify_fail::tests::fully_omitted_failures_are_counted_in_marker
-    check_cargo_test review::verify_fail::tests::budget_is_respected_within_marker_overhead
-}
-test_review_runs_on_verify_fail() {
-    check_cargo_test review::phase_verdict::tests::complete_with_verify_fail_routes_to_verify_fail
-    check_cargo_test review::phase_verdict::tests::complete_with_review_flag_routes_to_review_flag
-    check_cargo_test review::phase_verdict::tests::complete_with_verify_fail_and_review_flag_threads_both_into_recovery_cause
-    check_cargo_test review::verify_fail::tests::review_notes_appended_under_heading_when_review_flagged
-    check_cargo_test review::verify_fail::tests::review_notes_truncated_when_detail_exceeds_budget
-    check_cargo_test review::verify_fail::tests::review_notes_budget_is_separate_from_verify_budget
-    check_cargo_test review::verify_fail::tests::no_review_notes_section_when_review_flag_absent
-}
-test_review_inputs_include_judge_rubrics() {
-    cargo_run test -p loom-templates --test render review_renders_review_context_fields \
-        -- --exact --nocapture --quiet
-}
-test_review_walks_style_rules() {
-    cargo_run test -p loom-templates --test render \
-        review_renders_style_rule_conformance_walkthrough \
-        -- --exact --nocapture --quiet
-    check_cargo_test \
-        review::production::tests::build_review_prompt_includes_style_rule_conformance_walkthrough
-}
-test_gate_review_flag_names_concern() {
-    check_cargo_test review::phase_verdict::tests::complete_with_review_flag_routes_to_review_flag
-    check_cargo_test review::phase_verdict::tests::noop_with_review_flag_routes_to_review_flag
-    check_cargo_test review::phase_verdict::tests::complete_with_style_rule_flag_routes_to_review_flag_with_rule_id
-}
 
 # Recovery & Iteration
-test_recovery_under_max() {
-    check_cargo_test review::recovery::tests::under_max_recovers_with_previous_failure
-    check_cargo_test review::recovery::tests::under_max_at_two_still_recovers_with_previous_failure
-}
-test_recovery_exhaustion_applies_blocked() {
-    check_cargo_test review::recovery::tests::at_or_above_max_applies_blocked_with_retry_exhausted_cause
-    check_cargo_test review::recovery::tests::review_flag_cause_round_trips_through_notes
-    check_cargo_test review::recovery::tests::zero_max_exhausts_immediately
-}
-test_iteration_count_persists() {
-    check_cargo_test review::production::tests::iteration_counter_round_trips_through_state_db
-}
-test_infra_preflight_fail_fast() {
-    check_cargo_test run::runner::tests::infra_preflight_routes_to_blocked_without_retry
-    check_cargo_test run::production::tests::run_bead_translates_preflight_failure_into_infra_preflight
-}
-test_infra_midsession_one_retry() {
-    check_cargo_test run::runner::tests::infra_midsession_one_retry_then_blocks_on_repeat
-    check_cargo_test run::runner::tests::infra_midsession_retry_succeeds_within_budget
-    check_cargo_test run::runner::tests::infra_budget_is_per_run_not_per_bead
-    check_cargo_test run::production::tests::run_bead_translates_midsession_failure_into_infra_midsession
-}
-test_infra_retry_counter_separate() {
-    check_cargo_test run::runner::tests::infra_retry_counter_does_not_consume_max_retries
-}
-test_push_gate_refuses_unresolved() {
-    check_cargo_test review::runner::tests::clarify_present_stops_without_pushing
-    check_cargo_test review::runner::tests::pre_existing_clarify_blocks_push_even_when_no_new_beads
-    check_cargo_test review::runner::tests::blocked_present_stops_without_pushing
-    check_cargo_test review::runner::tests::pre_existing_blocked_blocks_push_even_when_no_new_beads
-    check_cargo_test review::runner::tests::blocked_and_clarify_together_surface_both_lists
-}
 
 # Plan / Todo
 #-----------------------------------------------------------------------------
@@ -3164,11 +2613,6 @@ test_push_gate_refuses_unresolved() {
 # Together these ensure the only path that produces notes during -n
 # routes through the `loom note set` CLI — `ensure_spec_row` on that
 # call is what inserts the `specs` row, matching the criterion.
-#-----------------------------------------------------------------------------
-test_plan_new_writes_implementation_notes() {
-    aux_cargo_test plan::prompt::tests::new_prompt_instructs_agent_to_call_loom_note_set
-    aux_cargo_test plan::runner::tests::plan_new_prompt_directs_agent_to_seed_implementation_notes
-}
 
 #-----------------------------------------------------------------------------
 # test_todo_renders_notes_into_beads — `loom todo` reads implementation
@@ -3176,190 +2620,38 @@ test_plan_new_writes_implementation_notes() {
 # each note's text into the prompt so the agent copies them into every new
 # bead body. Productive completion atomically consumes the notes and advances
 # the cursor via `StateDb::consume_notes_and_advance_cursor`.
-#-----------------------------------------------------------------------------
-test_todo_renders_notes_into_beads() {
-    cargo_run test -p loom-workflow --test todo_production \
-        build_spawn_config_renders_implementation_notes_from_db \
-        -- --exact --nocapture --quiet
-    cargo_run test -p loom-workflow --test todo_production \
-        build_spawn_config_omits_notes_section_when_notes_empty \
-        -- --exact --nocapture --quiet
-    cargo_run test -p loom-workflow --test todo_production \
-        record_outcome_consumes_notes_and_advances_cursor_atomically \
-        -- --exact --nocapture --quiet
-}
-test_routine_commands_never_delete_spec_row() {
-    cargo_run test -p loom-driver --test state_db routine_commands_never_delete_spec_row \
-        -- --exact --nocapture --quiet
-}
-test_todo_cursor_advance_requires_marker() {
-    cargo_run test -p loom-workflow --lib \
-        todo::production::tests::cursor_gate_advances_only_on_complete_or_noop_with_clean_exit \
-        -- --exact --nocapture --quiet
-}
 
-test_agent_event_deserialize_round_trip() {
-    cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
-        event::tests::agent_event_deserialize_round_trip
-}
-test_agent_start_fields() {
-    cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
-        event::tests::agent_start_fields_present
-}
-test_cancellation_clean_close() {
-    cargo_run test -p loom-driver --test logging -- --exact --nocapture --quiet \
-        run_finish_finalizes_dangling_running_indicator
-}
-test_common_envelope_fields() {
-    cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
-        event::tests::common_envelope_fields_present_on_every_variant
-}
-test_driver_event_kinds_present() {
-    cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
-        event::tests::driver_kinds_present_for_spec_emission_sites
-    cargo_run test -p loom-workflow --lib -- --exact --nocapture --quiet \
-        review::runner::tests::clean_review_pushes_and_resets_counter
-    cargo_run test -p loom-workflow --lib -- --exact --nocapture --quiet \
-        run::runner::tests::retry_emits_retry_dispatch_driver_event
-    # wx-fgp9j.35: container_spawn / container_oom / infra_failure emission
-    # at the agent.rs session driver boundary. The unit-level tests pin the
-    # routing helper + the end-to-end preflight wire-up reaches the sink.
-    cargo_run test -p loom-workflow --lib -- --exact --nocapture --quiet \
-        agent::tests::midsession_failure_kind_routes_oom_versus_generic_infra
-    cargo_run test -p loom-workflow --lib -- --exact --nocapture --quiet \
-        agent::tests::preflight_failure_emits_infra_failure_driver_event
-}
-test_driver_events_rendered() {
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        renderer::tests::driver_event_renders_arrow_glyph
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        renderer::tests::driver_event_parallel_mode_prefixes_bead_id
-}
-test_edit_write_imara_diff() {
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        tool_body::tests::edit_summary_includes_added_removed_counts
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        tool_body::tests::write_summary_includes_path_and_line_count
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        tool_body::tests::diff_counts_tracks_simple_replacement
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        tool_body::tests::diff_counts_handles_pure_additions
-}
-test_fixup_bead_bonded_to_molecule() {
-    check_cargo_test review::fixup::tests::spawned_outcome_bonds_to_origins_parent_molecule
-    check_cargo_test review::fixup::tests::chokepoint_returns_only_after_bond_completes
-}
-test_fixup_refuses_unbonded_origin() {
-    check_cargo_test review::fixup::tests::refused_outcome_applies_unbonded_origin_blocked_to_origin
-}
-test_flat_variant_shape() {
-    cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
-        event::tests::flat_variant_shape_has_no_nested_envelopes
-}
-test_in_place_indicator_disabled_when_inappropriate() {
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        in_place::tests::disabled_indicator_writes_nothing
-}
-test_in_place_running_indicator() {
-    cargo_run test -p loom-render --lib -- --nocapture --quiet \
-        in_place::tests
-}
-test_json_mode_pretty_prints() {
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        renderer::tests::json_mode_pretty_prints
-}
-test_live_vs_replay_distinction() {
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        renderer::tests::live_vs_replay_distinction_pretty_renderer
-}
-test_log_sink_per_event_flush() {
-    logging_cargo_test log_sink_per_event_flush
-}
 #-----------------------------------------------------------------------------
 # Bare `loom logs` against an empty `.wrapix/loom/logs/` exits 0 with a
 # "No bead logs yet" message; `--path` against the same state exits non-zero.
 # Runs the binary via `cargo run` so the empty-logs branch is exercised
 # end-to-end (`run_logs` translates `LogsError::NoLogs` into the friendly
 # message for the bare path and the typed error for `--path`).
-#-----------------------------------------------------------------------------
-test_logs_empty_directory() {
-    local ws
-    ws=$(mktemp -d)
-    mkdir -p "$ws/.wrapix/loom/logs"
-
-    local out
-    if ! out=$(cargo_run run --quiet -p loom --bin loom -- -w "$ws" logs 2>&1); then
-        echo "loom logs on empty dir exited non-zero: $out" >&2
-        return 1
-    fi
-    if ! printf '%s\n' "$out" | grep -qF "No bead logs yet"; then
-        echo "missing friendly empty-logs message: $out" >&2
-        return 1
-    fi
-
-    if cargo_run run --quiet -p loom --bin loom -- -w "$ws" logs --path >/dev/null 2>&1; then
-        echo "loom logs --path on empty dir should fail" >&2
-        return 1
-    fi
-}
 
 #-----------------------------------------------------------------------------
 # `loom logs -f` keeps reading past EOF until interrupted. The unit test
 # under loom-workflow drives a paused-time tokio runtime that proves the
 # poll loop advances Clock::sleep after EOF — the same code path the
 # binary takes with a real SystemClock and no follow_max_polls cap.
-#-----------------------------------------------------------------------------
-test_logs_follow_blocks_on_eof() {
-    aux_cargo_test logs_cmd::tests::follow_blocks_past_eof_until_budget_expires
-}
 
 #-----------------------------------------------------------------------------
 # `--path` is mutually exclusive with `-f`, `-v`, `--raw` (clap-enforced).
 # The pinned `cli_help` snapshot for `loom logs --help` already records the
 # `Mutually exclusive` notes; this dispatcher pins runtime rejection by
 # running the binary with conflicting flag pairs and asserting non-zero exit.
-#-----------------------------------------------------------------------------
-test_logs_path_short_circuits() {
-    cargo_run test -p loom --test cli_help -- --exact --nocapture --quiet \
-        loom_logs_help_snapshot
-    for combo in "-f --path" "-v --path" "--raw --path"; do
-        # shellcheck disable=SC2086
-        if cargo_run run --quiet -p loom --bin loom -- logs $combo >/dev/null 2>&1; then
-            echo "expected clap to reject conflicting flags: $combo" >&2
-            return 1
-        fi
-    done
-}
 
 #-----------------------------------------------------------------------------
 # `--raw` copies file bytes verbatim and `-f --raw` polls past EOF.
-#-----------------------------------------------------------------------------
-test_logs_raw_and_follow_compose() {
-    aux_cargo_test logs_cmd::tests::replay_raw_copies_bytes_verbatim
-    aux_cargo_test logs_cmd::tests::follow_raw_blocks_past_eof_until_budget_expires
-}
 
 #-----------------------------------------------------------------------------
 # Same renderer types fed by `loom run` are constructed by `loom logs`.
 # Pinning both: the unit-test round-trip through JSONL exercises
 # `loom_render::build_renderer`, and the workflow-level test exercises
 # the same `build_renderer` selection inside `logs_cmd::replay`.
-#-----------------------------------------------------------------------------
-test_logs_reuses_renderer() {
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        renderer::tests::logs_reuses_renderer_via_jsonl_round_trip
-}
-test_logs_shares_renderer_with_run() {
-    aux_cargo_test logs_cmd::tests::replay_renders_via_shared_renderer
-}
 
 #-----------------------------------------------------------------------------
 # `-v` streams `TextDelta` text verbatim during render — same widening as
 # `loom run -v` (the renderer's `Verbose` mode handles both call sites).
-#-----------------------------------------------------------------------------
-test_logs_verbose_streams_deltas() {
-    aux_cargo_test logs_cmd::tests::replay_verbose_streams_text_deltas
-}
 test_loom_events_is_leaf() {
     local cargo_toml="$REPO_ROOT/loom/crates/loom-events/Cargo.toml"
     if [ ! -f "$cargo_toml" ]; then
@@ -3399,24 +2691,6 @@ test_loom_events_minimal_deps() {
         fi
     done
 }
-test_loom_note_add() {
-    cargo_run test -p loom-driver --test state_db -- --exact --nocapture --quiet notes_add_then_list_chronological
-}
-test_loom_note_clear() {
-    cargo_run test -p loom-driver --test state_db -- --exact --nocapture --quiet notes_clear_kind_only_or_all_kinds
-}
-test_loom_note_kind_defaults_implementation() {
-    cargo_run test -p loom-driver --test state_db -- --exact --nocapture --quiet notes_kind_defaults_implementation
-}
-test_loom_note_list_chronological() {
-    cargo_run test -p loom-driver --test state_db -- --exact --nocapture --quiet notes_add_then_list_chronological
-}
-test_loom_note_rm() {
-    cargo_run test -p loom-driver --test state_db -- --exact --nocapture --quiet notes_rm_removes_one_row_by_id
-}
-test_loom_note_set_atomic() {
-    cargo_run test -p loom-driver --test state_db -- --exact --nocapture --quiet notes_set_replaces_atomically
-}
 test_loom_render_deps() {
     local cargo_toml="$REPO_ROOT/loom/crates/loom-render/Cargo.toml"
     if [ ! -f "$cargo_toml" ]; then
@@ -3433,174 +2707,6 @@ test_loom_render_deps() {
             return 1
         fi
     done
-}
-test_msg_chat_exit_signals() {
-    # R6 (wx-ibgar) — chat session rejects LOOM_BLOCKED / LOOM_CLARIFY;
-    # only LOOM_COMPLETE is a valid terminator for msg --chat.
-    cargo_run test -p loom --test msg_chat -- --exact --nocapture --quiet \
-        loom_msg_chat_rejects_non_complete_exit_signal
-}
-test_msg_chat_launches_container() {
-    # R6 — `loom msg --chat` dispatches through wrapix-spawn into the
-    # agent; the bd-shim invocation log records the dispatch path.
-    cargo_run test -p loom --test msg_chat -- --exact --nocapture --quiet \
-        loom_msg_chat_launches_container
-}
-test_msg_chat_partial_progress() {
-    # R6 — partial-progress is clean: a session that emits LOOM_COMPLETE
-    # without resolving every clarify leaves the remaining beads open.
-    cargo_run test -p loom --test msg_chat -- --exact --nocapture --quiet \
-        loom_msg_chat_partial_progress_leaves_unresolved_clarifies_open
-}
-test_msg_chat_scope() {
-    # R6 — `-s <label>` filters the rendered prompt to that spec's
-    # clarifies; out-of-scope beads must not appear.
-    cargo_run test -p loom --test msg_chat -- --exact --nocapture --quiet \
-        loom_msg_chat_scope_filters_to_spec
-}
-test_msg_chat_writes_notes() {
-    # R6 — chat-resolve-all forks `bd update --notes --remove-label`
-    # per clarify; bd-shim logs the calls and the bead state reflects
-    # the resolution.
-    cargo_run test -p loom --test msg_chat -- --exact --nocapture --quiet \
-        loom_msg_chat_writes_notes_and_clears_labels
-}
-test_msg_dismiss() {
-    cargo_run test -p loom --test msg_persist -- --test-threads=1 \
-        msg_dismiss_writes_canonical_note_and_clears_label
-}
-test_msg_flag_exclusivity() {
-    cargo_run test -p loom --test msg_persist -- --test-threads=1 \
-        msg_flag_exclusivity_enforced_at_parse_time
-}
-test_msg_option_validates() {
-    cargo_run test -p loom --test msg_persist -- --test-threads=1 \
-        msg_option_fast_reply_persists_note_via_bd_show \
-        msg_option_out_of_range_errors_and_leaves_bead_unchanged
-}
-test_msg_spec_filter() {
-    cargo_run test -p loom --test msg_persist -- --test-threads=1 \
-        msg_spec_filter_narrows_list_to_matching_spec
-}
-test_msg_view_modes() {
-    cargo_run test -p loom --test msg_persist -- --test-threads=1 \
-        msg_view_modes_render_bead_host_side
-}
-test_notes_cascade_on_spec_delete() {
-    cargo_run test -p loom-driver --test state_db -- --exact --nocapture --quiet notes_cascade_on_spec_delete
-}
-test_osc8_hyperlinks() {
-    cargo_run test -p loom-render --lib -- --nocapture --quiet \
-        osc8::tests
-}
-test_path_normalization_display() {
-    # R6 (wx-fgp9j.13) — absolute /workspace/... paths in summary cells
-    # render repo-relative. Walks Read end-to-end plus the explicit
-    # normalizer helper to pin both the per-tool and the shared path.
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        tool_body::tests::normalize_for_display_strips_workspace_prefix
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        tool_body::tests::normalize_for_display_passes_relative_paths_through
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        tool_body::tests::normalize_for_display_keeps_non_workspace_paths
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        tool_body::tests::read_summary_normalizes_absolute_workspace_path
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        tool_body::tests::edit_write_grep_summaries_normalize_paths
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        tool_body::tests::osc8_enabled_keeps_absolute_url_with_relative_display
-}
-test_per_tool_summary_cells() {
-    # G3 — variant + tag presence.
-    cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
-        event::tests::every_spec_variant_present
-    # H3 — per-tool summary cell formatters.
-    cargo_run test -p loom-render --lib -- --nocapture --quiet \
-        tool_body::tests
-    # H3 — Bash body default policy: hidden on exit==0, first 10 lines on
-    # exit!=0 with the standard cap line. Non-Bash bodies stay hidden in
-    # default mode.
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        renderer::tests::default_mode_hides_bash_body_on_success
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        renderer::tests::default_mode_renders_bash_body_on_error_capped_at_ten_lines
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        renderer::tests::default_mode_renders_bash_body_on_error_short_output_no_cap_line
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        renderer::tests::default_mode_hides_non_bash_error_body
-}
-test_plain_selected_on_non_tty() {
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        renderer::tests::plain_selected_on_non_tty
-}
-test_push_gate_sees_fixup_beads() {
-    check_cargo_test review::runner::tests::fix_up_beads_under_cap_auto_iterate
-    check_cargo_test review::runner::tests::iteration_cap_escalates_newest_fix_up_to_clarify
-    check_cargo_test review::verdict::tests::diff_returns_only_new_ids_in_post_order
-    check_cargo_test review::verdict::tests::diff_handles_empty_before
-}
-test_raw_mode_passthrough() {
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        renderer::tests::raw_mode_passthrough
-}
-test_rebuild_drops_all_notes() {
-    cargo_run test -p loom-driver --test state_db -- --exact --nocapture --quiet rebuild_drops_all_notes
-}
-test_renderer_modes_present() {
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        renderer::tests::renderer_modes_present
-}
-test_run_does_not_close_bead() {
-    cargo_run test -p loom --test marker_gate -- --test-threads=1 \
-        loom_run_never_invokes_bd_close_on_dispatched_bead_across_all_markers
-}
-test_seq_monotonic() {
-    cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
-        event::tests::seq_advances_monotonically
-}
-test_task_subagent_nesting() {
-    # Parser half — G4 (wx-b2f7k) — pins parent_tool_call_id threading.
-    cargo_run test -p loom-agent --lib -- --exact --nocapture --quiet \
-        pi::parser::tests::task_subagent_nesting_threads_parent_tool_call_id
-    # Renderer half — H6 (wx-46jgi) — pins indent-by-depth on output.
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        renderer::tests::task_subagent_nesting_indents_nested_tool_calls
-}
-test_todo_delete_notes_atomic_with_cursor() {
-    cargo_run test -p loom-driver --test state_db -- --exact --nocapture --quiet \
-        consume_notes_and_advance_cursor_is_atomic
-    cargo_run test -p loom-workflow --test todo_production -- --exact --nocapture --quiet \
-        record_outcome_consumes_notes_and_advances_cursor_atomically
-}
-test_tool_body_truncation_policy() {
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        tool_body::tests::cap_body_keeps_short_bodies_unchanged
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        tool_body::tests::cap_body_truncates_long_bodies_with_recovery_hint
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        tool_body::tests::cap_body_respects_byte_cap
-}
-test_tool_call_result_pairing() {
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        renderer::tests::tool_call_result_pairing_collapses_with_ts_ms_duration
-}
-test_unknown_driver_kind_renders() {
-    # G3 lands the `driver_event` variant accepting arbitrary `driver_kind`;
-    # H2 (wx-26zjb) extends this to assert the renderer's unknown-kind
-    # fallback path — both layers pinned so the unknown-kind contract
-    # holds end-to-end.
-    cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
-        event::tests::driver_event_accepts_unknown_driver_kind
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        renderer::tests::unknown_driver_kind_renders_generic_arrow_summary
-}
-test_unknown_tool_fallback() {
-    cargo_run test -p loom-render --lib -- --exact --nocapture --quiet \
-        tool_body::tests::unknown_tool_falls_through_to_name
-}
-test_unknown_variants_tolerated() {
-    cargo_run test -p loom-events --lib -- --exact --nocapture --quiet \
-        event::tests::unknown_variants_fail_with_a_loud_error
 }
 
 #-----------------------------------------------------------------------------
@@ -3737,11 +2843,6 @@ test_snapshots_no_crate_root_allows() {
 # then `loom gate review --tree -s <label>`, both unconditionally. The
 # verify-then-review ordering and the `--tree` scope on both invocations
 # are asserted by a recording stub script in the production test.
-#-----------------------------------------------------------------------------
-test_run_execs_check_then_review_tree() {
-    run_cargo_test run::production::tests::exec_review_invokes_gate_verify_then_gate_review_tree
-    run_cargo_test run::production::tests::exec_review_continues_to_review_when_verify_exits_nonzero
-}
 
 #-----------------------------------------------------------------------------
 # test_run_outer_loop_iterates_on_fixups — FR1 outer loop: after the
@@ -3749,14 +2850,7 @@ test_run_execs_check_then_review_tree() {
 # processes any newly-ready fix-up beads, and only exits when (a) no new
 # fix-ups appear after a handoff (stall), or (b) the `[loop]
 # max_iterations` counter is exhausted.
-#-----------------------------------------------------------------------------
-test_run_outer_loop_iterates_on_fixups() {
-    run_cargo_test run::runner::tests::continuous_outer_loop_processes_fix_up_bead_then_exits_on_stall
-    run_cargo_test run::runner::tests::continuous_outer_loop_bounded_by_max_iterations
-    run_cargo_test run::runner::tests::continuous_outer_loop_exits_on_stall_when_no_fixups_appear
-}
 test_push_gate_refuses_on_tree_review_flag() { _pending_stub push_gate_refuses_on_tree_review_flag; }
-test_bare_loom_produces_grouped_help() { _pending_stub bare_loom_produces_grouped_help; }
 #-----------------------------------------------------------------------------
 # test_phase_verdict_decide_called_from_production — FR12 (verdict-gate
 # production wiring). The pure decision function `phase_verdict::decide()`
@@ -3964,16 +3058,6 @@ test_style_rules_partials_are_family_agnostic() {
 scratch_cargo_test() {
     cargo_run test -p loom-driver --lib "scratch::tests::$1" -- --exact --nocapture --quiet
 }
-test_scratch_dir_created()        { scratch_cargo_test open_creates_layout_and_drop_removes_it; }
-test_scratch_key_naming() {
-    scratch_cargo_test resolve_scratch_key_picks_label_for_spec_scoped_phases
-    scratch_cargo_test resolve_scratch_key_picks_bead_id_for_bead_scoped_phases
-    scratch_cargo_test resolve_scratch_key_falls_back_to_label_when_bead_missing
-}
-test_repin_envelope()             { scratch_cargo_test repin_script_runs_jq_envelope_against_files; }
-test_repin_hook_registered()      { scratch_cargo_test claude_settings_registers_repin_under_session_start_compact; }
-test_scratch_dir_cleanup()        { scratch_cargo_test close_removes_dir_and_is_idempotent_with_drop; }
-test_parallel_scratch_isolation() { scratch_cargo_test parallel_keys_get_independent_dirs; }
 
 # Pinning-matrix audit. Body is a single-line invocation so the body-slicing
 # heuristic cannot mistake stray text below for a stub call.
@@ -3987,11 +3071,6 @@ test_pinning_matrix_audit() { cargo_run run --quiet --bin loom -- --workspace "$
 # (command set, flag set, removed surface, grouping order); the live binary
 # run is the production-path smoke test that catches drift in the wiring or
 # spec markdown.
-#-----------------------------------------------------------------------------
-test_check_surface_detects_drift() {
-    cargo_run run --quiet --bin loom -- --workspace "$REPO_ROOT" check surface
-    cargo_run test -p loom-workflow --lib check::surface -- --quiet
-}
 
 #-----------------------------------------------------------------------------
 # Dispatch
