@@ -140,7 +140,7 @@ fn dispatcher_sets_loom_files_and_loom_spec_env_on_verifier_subprocess() {
 }
 
 #[test]
-fn dispatcher_surfaces_no_verdict_line_when_verifier_omits_json() {
+fn check_tier_falls_back_to_exit_code_pass_when_verifier_omits_json() {
     let dir = fixture_dir();
     let script = write_script(
         dir.path(),
@@ -151,8 +151,38 @@ fn dispatcher_surfaces_no_verdict_line_when_verifier_omits_json() {
     let inputs = vec![ann(Tier::Check, &script)];
     let opts = DispatchOptions::default();
     let results = run_check(&inputs, &opts);
-    let err = results.into_iter().next().unwrap().unwrap_err();
-    assert!(matches!(err, DispatchError::NoVerdictLine { .. }));
+    let outcome = results.into_iter().next().unwrap().unwrap();
+    assert!(
+        outcome.verdict.pass,
+        "exit 0 with no JSON line interprets as pass (matches batched-tier fallback)"
+    );
+    assert!(
+        outcome
+            .verdict
+            .evidence
+            .contains("some informational message"),
+        "stdout surfaced as evidence on the pass path"
+    );
+}
+
+#[test]
+fn check_tier_falls_back_to_exit_code_fail_when_verifier_omits_json() {
+    let dir = fixture_dir();
+    let script = write_script(
+        dir.path(),
+        "noverdict-fail.sh",
+        "#!/bin/sh\necho informational >&1\necho the actual diagnostic >&2\nexit 1\n",
+    );
+
+    let inputs = vec![ann(Tier::Check, &script)];
+    let opts = DispatchOptions::default();
+    let results = run_check(&inputs, &opts);
+    let outcome = results.into_iter().next().unwrap().unwrap();
+    assert!(!outcome.verdict.pass, "non-zero exit interprets as fail");
+    assert!(
+        outcome.verdict.evidence.contains("the actual diagnostic"),
+        "stderr surfaced as evidence on the fail path"
+    );
 }
 
 #[test]

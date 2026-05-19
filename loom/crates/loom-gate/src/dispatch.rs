@@ -11,10 +11,14 @@
 //! Each verifier subprocess receives `LOOM_FILES` (colon-joined paths)
 //! and `LOOM_SPEC` (when set) on its environment and is expected to
 //! emit one `{"pass": bool, "evidence": "<msg>"}` JSON line on stdout
-//! with an exit code mirroring `pass`. For batched runners that do not
-//! conform to the JSON-line contract (e.g. raw `cargo nextest`), the
-//! dispatcher falls back to exit-code interpretation with the runner's
-//! stderr surfaced as evidence.
+//! with an exit code mirroring `pass`. For verifiers that do not
+//! conform to the JSON-line contract (raw `cargo nextest`, bare
+//! `grep -q`, `nix build`, etc.), the dispatcher falls back to
+//! exit-code interpretation with the verifier's stdout surfaced as
+//! evidence on pass and stderr on fail. The `[test]` runner
+//! additionally undergoes silent-zero-match sniffing so a filtered
+//! cargo / nextest / pytest invocation that matches no targets fails
+//! loudly instead of passing on an empty selection.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -50,15 +54,13 @@ pub enum DispatchError {
         #[source]
         source: std::io::Error,
     },
-    /// verifier `{command}` produced no JSON verdict line on stdout
-    NoVerdictLine { command: String },
     /// verifier `{command}` produced malformed JSON verdict: {source}
     MalformedVerdict {
         command: String,
         #[source]
         source: serde_json::Error,
     },
-    /// batched runner zero-match: {source}
+    /// runner zero-match: {source}
     ZeroMatch {
         #[source]
         source: RunnerError,
@@ -153,7 +155,7 @@ pub fn run_test(
     }
     let targets: Vec<&str> = filtered.iter().map(|a| a.target.as_str()).collect();
     let command = template.render(&targets);
-    let verdict = run_batched(&command, options, true)?;
+    let verdict = run_with_fallback(&command, options, true)?;
     Ok(Some(DispatchOutcome {
         annotations: filtered.into_iter().cloned().collect(),
         verdict,
@@ -177,7 +179,7 @@ pub fn run_judge(
     }
     let targets: Vec<&str> = judges.iter().map(|a| a.target.as_str()).collect();
     let command = template.render(&targets);
-    let verdict = run_batched(&command, options, false)?;
+    let verdict = run_with_fallback(&command, options, false)?;
     Ok(Some(DispatchOutcome {
         annotations: judges.into_iter().cloned().collect(),
         verdict,
@@ -206,15 +208,14 @@ fn run_single(
             tier: annotation.tier,
         });
     }
-    let output = spawn(command, options)?;
-    let verdict = parse_verdict_required(command, &output)?;
+    let verdict = run_with_fallback(command, options, false)?;
     Ok(DispatchOutcome {
         annotations: vec![annotation.clone()],
         verdict,
     })
 }
 
-fn run_batched(
+fn run_with_fallback(
     command: &str,
     options: &DispatchOptions,
     sniff_zero_match: bool,
@@ -292,16 +293,6 @@ fn encode_files(files: &[PathBuf]) -> String {
         .join(":")
 }
 
-fn parse_verdict_required(
-    command: &str,
-    output: &Output,
-) -> Result<VerifierVerdict, DispatchError> {
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_verdict_optional(command, &stdout)?.ok_or_else(|| DispatchError::NoVerdictLine {
-        command: command.to_string(),
-    })
-}
-
 fn parse_verdict_optional(
     command: &str,
     stdout: &str,
@@ -360,20 +351,6 @@ mod tests {
     fn parse_verdict_optional_returns_none_when_no_json() {
         let stdout = "no JSON here\nrunning some tests\nall good\n";
         assert!(parse_verdict_optional("cmd", stdout).unwrap().is_none());
-    }
-
-    #[test]
-    fn parse_verdict_required_errors_when_missing() {
-        let output = Output {
-            status: std::process::ExitStatus::default(),
-            stdout: b"no json here\n".to_vec(),
-            stderr: Vec::new(),
-        };
-        let err = parse_verdict_required("the-cmd", &output).unwrap_err();
-        match err {
-            DispatchError::NoVerdictLine { command } => assert_eq!(command, "the-cmd"),
-            other => panic!("expected NoVerdictLine, got {other:?}"),
-        }
     }
 
     #[test]
@@ -471,17 +448,6 @@ mod tests {
         assert_eq!(
             e.to_string(),
             "annotation target was empty for tier [check]"
-        );
-    }
-
-    #[test]
-    fn no_verdict_line_error_message_names_the_command() {
-        let e = DispatchError::NoVerdictLine {
-            command: "my-walk x".into(),
-        };
-        assert_eq!(
-            e.to_string(),
-            "verifier `my-walk x` produced no JSON verdict line on stdout"
         );
     }
 

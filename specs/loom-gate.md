@@ -393,6 +393,16 @@ subprocess that conforms to:
 This works for any language. The contract is process-shaped, not
 language-shaped.
 
+**Fallback for non-conforming verifiers.** Bare `grep -q`, `cargo
+test`, `nix build`, and similar shells that don't emit a JSON
+verdict line still satisfy the contract via their exit code alone:
+the dispatcher interprets exit 0 as `pass=true` (stdout surfaced as
+evidence) and any non-zero exit as `pass=false` (stderr surfaced as
+evidence). Verifiers that emit a JSON line are preferred — the
+explicit evidence string clicks straight to the violation site — but
+the exit-code fallback keeps simple presence/absence checks viable
+without wrapping each one in a Rust walk.
+
 ### `--files` scope handling
 
 For batched tiers, the gate filters annotations to those whose
