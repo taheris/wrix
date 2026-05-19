@@ -1422,12 +1422,10 @@ Criteria.
       iterations)
   [test](default_cap_matches_spec)
 - The surface-conformance walk hard-fails when the binary's surface
-      drifts from FR1 across the dimensions it audits (command set,
-      removed surface, grouping order) and exits 0 when spec and
-      binary agree. Wired as a `[check]`-tier verifier under
-      `loom gate check`. Flag-set coverage (FR13 dim 2) is a
-      follow-up tracked in wx-icc8z.
-  [check](cargo run -p loom-walk -- surface_conformance)
+      drifts from FR1 (command set, flag set, removed surface,
+      grouping order) and exits 0 when spec and binary agree.
+      Wired as a `[check]`-tier verifier under `loom gate check`
+  [check](cargo test -p loom-workflow --lib check::surface)
 - Bare `loom` (no args) renders the same Workflow / Inspection /
       State grouped sections (in spec order) as `loom --help`,
       `loom -h`, and `loom help` — clap's flat default-help fallback
@@ -1799,10 +1797,6 @@ Criteria.
      `<selector>`, and the scope flags `--bead <id>` / `--diff
      <range>` / `--tree`. The surface-conformance walk (FR13) ships
      as a `[check]`-tier verifier dispatched by `loom gate check`.
-   - `loom review` — LLM-judged review pass over the gate scope.
-     Shares the scope flags (`--spec`, `--bead`, `--diff`, `--tree`)
-     with `loom gate review`; the distinction is dispatch surface
-     (top-level vs `loom gate <subcommand>`), not behavior.
    - `loom msg` — clarify resolution
 
    **Inspection** — read-only views over state and logs:
@@ -1900,25 +1894,21 @@ Criteria.
     isolation and also exercised through its production callers
     (live-path coverage), per the trust-tier rules in
     [docs/spec-conventions.md](../docs/spec-conventions.md).
-13. **Surface conformance** — the `surface_conformance` walk
-    (registered in `loom-walk` and dispatched as a `[check]`-tier
-    verifier under `loom gate check`) audits the binary's
-    user-facing surface against this spec. Three dimensions are
-    audited today: (1) **Command set** — FR1's per-group bullets ↔
-    the `HELP_GROUPS` constant in `crates/loom/src/main.rs`;
-    (3) **Removed surface** — every row of FR1's *Removed surface*
-    table is absent from `HELP_GROUPS`; (4) **Grouping order** —
-    the `**Workflow** / **Inspection** / **State**` sub-section
-    order in FR1, and per-group bullet order, ↔ `HELP_GROUPS`
-    tuple order and per-tuple slice order. A fourth dimension,
-    (2) **Flag set** — flags documented in the spec's per-command
-    tables (e.g. *Msg Modes*, *Logs UX*, FR1 scope-flag lines) ↔
-    declared `#[arg(...)]` — is a follow-up tracked in wx-icc8z.
-    Help-text wording is *not* a dimension — CLI-1 style is
-    enforced by `loom gate review`'s style-rule walk. The audit
-    exists because an earlier multi-bead molecule closed despite
-    cross-component drift that the success-criteria walk did not
-    catch.
+13. **Surface conformance** — the surface-conformance walk
+    (registered as a `[check]`-tier verifier dispatched by `loom gate
+    check`) audits the binary's user-facing surface against this
+    spec, hard-failing on any drift across four dimensions:
+    (1) **Command set** — FR1's commands ↔ the `Command` enum's
+    variants; (2) **Flag set** — flags documented in the spec's
+    per-command tables (e.g. *Msg Modes*, *Logs UX*, FR1 scope-flag
+    lines) ↔ declared `#[arg(...)]`; (3) **Removed surface** — the
+    `Removed` table is absent from the binary; (4) **Grouping
+    order** — both `loom --help` AND bare `loom` render `Workflow:`
+    / `Inspection:` / `State:` in FR1's declared order. Help-text
+    wording is *not* a dimension — CLI-1 style is enforced by
+    `loom gate review`'s style-rule walk. The audit exists because
+    an earlier multi-bead molecule closed despite cross-component
+    drift that the success-criteria walk did not catch.
 14. **Verifier-driven status; no checkboxes in spec markdown.**
     Success Criteria bullets carry their `[check]` / `[test]` /
     `[system]` / `[judge]` annotation but **no `[ ]` / `[x]`
