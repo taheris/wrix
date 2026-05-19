@@ -1159,3 +1159,148 @@ fn no_sync_or_tune_command_fail_when_tune_variant_present() {
     let out = invoke(&["no_sync_or_tune_command"], Some(ws.path()), None);
     assert_fail(&out, "Tune");
 }
+
+// ---------------------------------------------------------------------------
+// template_pinning_matrix
+// ---------------------------------------------------------------------------
+
+fn seed_pinning_matrix(ws: &TempDir, matrix_body: &str) {
+    seed(
+        ws.path(),
+        "specs/loom-templates.md",
+        &format!(
+            "# Loom Templates\n\n## Architecture\n\n### Pinning Policy\n\n{matrix_body}\n\n## Other\n"
+        ),
+    );
+}
+
+#[test]
+fn template_pinning_matrix_pass_clean_matrix() {
+    let ws = make_workspace();
+    seed_pinning_matrix(
+        &ws,
+        "| Partial | `run` |\n\
+         |---|:-:|\n\
+         | `context_pinning.md` | ✓ |\n",
+    );
+    seed(
+        ws.path(),
+        "crates/loom-templates/templates/run.md",
+        "{% include \"partial/context_pinning.md\" %}\n",
+    );
+    seed(
+        ws.path(),
+        "crates/loom-templates/templates/partial/context_pinning.md",
+        "ctx\n",
+    );
+    let out = invoke(&["template_pinning_matrix"], Some(ws.path()), None);
+    assert_pass(&out);
+}
+
+#[test]
+fn template_pinning_matrix_fail_spec_marks_but_template_missing_include() {
+    let ws = make_workspace();
+    seed_pinning_matrix(
+        &ws,
+        "| Partial | `run` |\n\
+         |---|:-:|\n\
+         | `style_rules.md` | ✓ |\n",
+    );
+    seed(
+        ws.path(),
+        "crates/loom-templates/templates/run.md",
+        "no style_rules include here\n",
+    );
+    let out = invoke(&["template_pinning_matrix"], Some(ws.path()), None);
+    assert_fail(&out, "style_rules.md");
+}
+
+#[test]
+fn template_pinning_matrix_fail_template_includes_but_spec_blank() {
+    let ws = make_workspace();
+    seed_pinning_matrix(
+        &ws,
+        "| Partial | `run` |\n\
+         |---|:-:|\n\
+         | `style_rules.md` |  |\n",
+    );
+    seed(
+        ws.path(),
+        "crates/loom-templates/templates/run.md",
+        "{% include \"partial/style_rules.md\" %}\n",
+    );
+    seed(
+        ws.path(),
+        "crates/loom-templates/templates/partial/style_rules.md",
+        "rules\n",
+    );
+    let out = invoke(&["template_pinning_matrix"], Some(ws.path()), None);
+    assert_fail(&out, "marks the cell blank");
+}
+
+#[test]
+fn template_pinning_matrix_resolves_transitive_includes() {
+    let ws = make_workspace();
+    // Spec marks `invariant_clash.md` ✓ for `plan_new`, and the template
+    // pulls it in transitively via `plan_stage_rubric.md`.
+    seed_pinning_matrix(
+        &ws,
+        "| Partial | `plan_new` |\n\
+         |---|:-:|\n\
+         | `plan_stage_rubric.md` | ✓ |\n\
+         | `invariant_clash.md` | ✓ |\n",
+    );
+    seed(
+        ws.path(),
+        "crates/loom-templates/templates/plan_new.md",
+        "{% include \"partial/plan_stage_rubric.md\" %}\n",
+    );
+    seed(
+        ws.path(),
+        "crates/loom-templates/templates/partial/plan_stage_rubric.md",
+        "rubric\n{% include \"partial/invariant_clash.md\" %}\n",
+    );
+    seed(
+        ws.path(),
+        "crates/loom-templates/templates/partial/invariant_clash.md",
+        "clash\n",
+    );
+    let out = invoke(&["template_pinning_matrix"], Some(ws.path()), None);
+    assert_pass(&out);
+}
+
+// ---------------------------------------------------------------------------
+// loom_templates_snapshots_no_crate_root_allow
+// ---------------------------------------------------------------------------
+
+#[test]
+fn loom_templates_snapshots_no_crate_root_allow_pass() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-templates/tests/snapshots.rs",
+        "//! header doc.\n\nuse askama::Template;\n#[test] fn t() {}\n",
+    );
+    let out = invoke(
+        &["loom_templates_snapshots_no_crate_root_allow"],
+        Some(ws.path()),
+        None,
+    );
+    assert_pass(&out);
+}
+
+#[test]
+fn loom_templates_snapshots_no_crate_root_allow_fail() {
+    let ws = make_workspace();
+    let body = format!(
+        "{allow_attr}\nuse askama::Template;\n#[test] fn t() {{}}\n",
+        allow_attr = concat!("#![", "allow(clippy::unwrap_used)]"),
+    );
+    seed(ws.path(), "crates/loom-templates/tests/snapshots.rs", &body);
+    let out = invoke(
+        &["loom_templates_snapshots_no_crate_root_allow"],
+        Some(ws.path()),
+        None,
+    );
+    assert_fail(&out, "crate-root `#![allow(...)]`");
+}

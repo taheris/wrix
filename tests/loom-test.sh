@@ -769,24 +769,6 @@ _loom_filter_disallowed() {
 #-----------------------------------------------------------------------------
 # `-v` streams `TextDelta` text verbatim during render — same widening as
 # `loom run -v` (the renderer's `Verbose` mode handles both call sites).
-#-----------------------------------------------------------------------------
-# test_snapshots_no_crate_root_allows — the snapshot tests must inherit the
-# workspace clippy exemptions in loom/clippy.toml (allow-*-in-tests = true)
-# rather than re-declare a crate-root `#![allow(clippy::unwrap_used, ...)]`.
-# Per specs/loom-templates.md § Snapshot Tests + workspace policy.
-#-----------------------------------------------------------------------------
-test_snapshots_no_crate_root_allows() {
-    local f="$LOOM_DIR/crates/loom-templates/tests/snapshots.rs"
-    if [ ! -f "$f" ]; then
-        echo "missing snapshot test file: $f" >&2
-        return 1
-    fi
-    if grep -nE '^#!\[allow' "$f"; then
-        echo "crate-root #![allow(...)] in $f: must rely on workspace clippy.toml exemptions" >&2
-        return 1
-    fi
-}
-
 # Stubs added by the spec-authoring-conventions planning session —
 # pending implementation of: --tree handoff, outer-loop iteration,
 # tree-review push-gate blocking, bare-loom grouped help, gate
@@ -807,77 +789,6 @@ test_snapshots_no_crate_root_allows() {
 # fix-ups appear after a handoff (stall), or (b) the `[loop]
 # max_iterations` counter is exhausted.
 #-----------------------------------------------------------------------------
-#-----------------------------------------------------------------------------
-# test_style_rules_pinning_matrix — run.md and review.md include
-# partial/style_rules.md; the other phase templates (plan_new, plan_update,
-# todo_new, todo_update, msg) do NOT include it. Matches the pinning matrix
-# in specs/loom-templates.md.
-#-----------------------------------------------------------------------------
-test_style_rules_pinning_matrix() {
-    local templates_dir="$LOOM_DIR/crates/loom-templates/templates"
-    local include_re='\{%[[:space:]]+include[[:space:]]+"partial/style_rules\.md"[[:space:]]*%\}'
-    local missing=0 t f
-    for t in run review; do
-        f="$templates_dir/$t.md"
-        if [ ! -f "$f" ]; then
-            echo "missing template: $f" >&2
-            missing=$((missing + 1))
-            continue
-        fi
-        if ! grep -qE "$include_re" "$f"; then
-            echo "template $t.md must include partial/style_rules.md" >&2
-            missing=$((missing + 1))
-        fi
-    done
-    for t in plan_new plan_update todo_new todo_update msg; do
-        f="$templates_dir/$t.md"
-        if [ -f "$f" ] && grep -qE "$include_re" "$f"; then
-            echo "template $t.md must NOT include partial/style_rules.md" >&2
-            missing=$((missing + 1))
-        fi
-    done
-    return "$missing"
-}
-#-----------------------------------------------------------------------------
-# test_spec_conventions_pinning_matrix — plan_new.md and plan_update.md
-# include partial/spec_conventions.md; the other phase templates (todo_new,
-# todo_update, run, review, msg) do NOT include it. Matches the pinning
-# matrix in specs/loom-templates.md.
-#-----------------------------------------------------------------------------
-test_spec_conventions_pinning_matrix() {
-    local templates_dir="$LOOM_DIR/crates/loom-templates/templates"
-    local include_re='\{%[[:space:]]+include[[:space:]]+"partial/spec_conventions\.md"[[:space:]]*%\}'
-    local partial="$templates_dir/partial/spec_conventions.md"
-    local missing=0 t f
-    if [ ! -f "$partial" ]; then
-        echo "missing partial: $partial" >&2
-        missing=$((missing + 1))
-    elif ! grep -qE '\{\{[[:space:]]*spec_conventions[[:space:]]*\}\}' "$partial"; then
-        echo "partial does not render {{ spec_conventions }}: $partial" >&2
-        missing=$((missing + 1))
-    fi
-    for t in plan_new plan_update; do
-        f="$templates_dir/$t.md"
-        if [ ! -f "$f" ]; then
-            echo "missing template: $f" >&2
-            missing=$((missing + 1))
-            continue
-        fi
-        if ! grep -qE "$include_re" "$f"; then
-            echo "template $t.md must include partial/spec_conventions.md" >&2
-            missing=$((missing + 1))
-        fi
-    done
-    for t in todo_new todo_update run review msg; do
-        f="$templates_dir/$t.md"
-        if [ -f "$f" ] && grep -qE "$include_re" "$f"; then
-            echo "template $t.md must NOT include partial/spec_conventions.md" >&2
-            missing=$((missing + 1))
-        fi
-    done
-    return "$missing"
-}
-
 # Compaction Recovery (scratch dir). Kept at the tail of the test
 # functions so the loom-doctor body-slicing heuristic — which scans
 # from each `test_*(` header to the next `test_*(` for `_pending_stub`
@@ -886,10 +797,6 @@ test_spec_conventions_pinning_matrix() {
 scratch_cargo_test() {
     cargo_run test -p loom-driver --lib "scratch::tests::$1" -- --exact --nocapture --quiet
 }
-
-# Pinning-matrix audit. Body is a single-line invocation so the body-slicing
-# heuristic cannot mistake stray text below for a stub call.
-test_pinning_matrix_audit() { cargo_run run --quiet --bin loom -- --workspace "$REPO_ROOT" check matrix; }
 
 #-----------------------------------------------------------------------------
 # test_check_surface_detects_drift — FR13 surface audit. The dispatcher pins

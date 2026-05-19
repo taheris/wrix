@@ -17,6 +17,7 @@ mod loom_does_not_invoke_podman;
 mod loom_events_is_leaf;
 mod loom_events_minimal_deps;
 mod loom_render_deps;
+mod loom_templates_snapshots_no_crate_root_allow;
 mod newtype_identifiers;
 mod no_allow_dead_code;
 mod no_derive_from_on_newtypes;
@@ -32,6 +33,7 @@ mod phase_verdict_decide_called_from_production;
 mod renderer_no_insta_dependency;
 mod single_event_channel;
 mod template_context_structs;
+mod template_pinning_matrix;
 mod util;
 mod workspace_deps_pinned;
 mod workspace_edition;
@@ -121,6 +123,10 @@ pub static REGISTRY: &[Walk] = &[
         run: loom_render_deps::run,
     },
     Walk {
+        name: "loom_templates_snapshots_no_crate_root_allow",
+        run: loom_templates_snapshots_no_crate_root_allow::run,
+    },
+    Walk {
         name: "newtype_identifiers",
         run: newtype_identifiers::run,
     },
@@ -179,6 +185,10 @@ pub static REGISTRY: &[Walk] = &[
     Walk {
         name: "template_context_structs",
         run: template_context_structs::run,
+    },
+    Walk {
+        name: "template_pinning_matrix",
+        run: template_pinning_matrix::run,
     },
     Walk {
         name: "workspace_deps_pinned",
@@ -242,6 +252,8 @@ mod tests {
             "single_event_channel",
             "newtype_identifiers",
             "template_context_structs",
+            "template_pinning_matrix",
+            "loom_templates_snapshots_no_crate_root_allow",
             "no_hardcoded_tmp_paths",
             "no_thread_sleep",
             "no_tokio_sleep_outside_clock",

@@ -242,10 +242,10 @@ documents in front of the agent with zero configuration.
   [check](grep -q '{{ style_rules' loom/crates/loom-templates/templates/partial/style_rules.md)
 - `run.md` and `review.md` include `style_rules.md`; no other
   phase template does
-  [check](tests/loom-test.sh::test_style_rules_pinning_matrix)
+  [check](cargo run -p loom-walk -- template_pinning_matrix)
 - `spec_conventions.md` partial renders the `spec_conventions`
   variable; included only by `plan_new` and `plan_update`
-  [check](tests/loom-test.sh::test_spec_conventions_pinning_matrix)
+  [check](cargo run -p loom-walk -- template_pinning_matrix)
 - `RunContext` and `ReviewContext` carry `style_rules: String`;
   other phase contexts do not
   [check](cargo test -p loom-templates --test render template_renders_are_byte_stable_across_runs)
@@ -270,7 +270,7 @@ documents in front of the agent with zero configuration.
   `{% include %}` graph in `loom-templates/templates/` (transitive
   resolution); drift in either direction — `✓` with no include or
   include with no `✓` — fails the audit
-  [check](tests/loom-test.sh::test_pinning_matrix_audit)
+  [check](cargo run -p loom-walk -- template_pinning_matrix)
 
 ### Agent-output markers
 
@@ -285,7 +285,7 @@ documents in front of the agent with zero configuration.
   [check](cargo test -p loom-templates --test snapshots)
 - Snapshot tests run under the workspace clippy test exemptions
   (no per-file `#![allow(clippy::unwrap_used, ...)]`)
-  [check](tests/loom-test.sh::test_snapshots_no_crate_root_allows)
+  [check](cargo run -p loom-walk -- loom_templates_snapshots_no_crate_root_allow)
 
 ### Sibling-spec editing
 
