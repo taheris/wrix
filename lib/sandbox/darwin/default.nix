@@ -130,17 +130,17 @@ in
               exit 1
             fi
 
-            # Ensure the per-workspace wrapix-beads dolt container is running.
-            # Uses Apple container CLI (same runtime as the sandbox itself).
-            if [ -d "$PROJECT_DIR/.beads/dolt" ]; then
-              ${pkgs.beads-dolt}/bin/beads-dolt start "$PROJECT_DIR"
-            fi
-
             # Ensure container system is running
             if ! container system status >/dev/null 2>&1; then
               echo "Starting container system..." >&2
               container system start
               sleep 2
+            fi
+
+            # Ensure the per-workspace wrapix-beads dolt container is running.
+            # Uses Apple container CLI (same runtime as the sandbox itself).
+            if [ -d "$PROJECT_DIR/.beads/dolt" ]; then
+              ${pkgs.beads-dolt}/bin/beads-dolt start "$PROJECT_DIR"
             fi
 
             ${fixVmnetRoute}
