@@ -368,9 +368,9 @@ Clarify beads that present a choice must enumerate their options in a standard m
 - [ ] `ralph check` (no flags) runs the post-loop review against the resolved spec
   [system](bash tests/ralph/run-tests.sh test_check_default_runs_review)
 - [ ] `ralph check` runs `bd dolt push` inside container after `RALPH_COMPLETE` so fix-up/clarify beads reach the host
-  [check](tests/ralph/run-tests.sh::test_check_dolt_push_in_container)
+  [system](bash tests/ralph/run-tests.sh test_check_dolt_push_in_container)
 - [ ] `ralph check` runs `bd dolt pull` on host after container exits, before re-counting beads
-  [check](tests/ralph/run-tests.sh::test_check_dolt_pull_before_recount)
+  [system](bash tests/ralph/run-tests.sh test_check_dolt_pull_before_recount)
 - [ ] `ralph check` invokes `git push` + `beads-push` only on RALPH_COMPLETE with no new beads and no `ralph:clarify`
   [system](bash tests/ralph/run-tests.sh test_check_push_gate_clean)
 - [ ] `ralph check` exec-s `ralph run` when it creates fix-up beads without a clarify (auto-iteration)
@@ -380,13 +380,13 @@ Clarify beads that present a choice must enumerate their options in a standard m
 - [ ] `ralph check -t` remains a standalone template validator that does not invoke Claude
   [system](bash tests/ralph/run-tests.sh test_check_templates_no_claude)
 - [ ] `check.md` template includes the three-paths-principle section as invariant-clash guidance
-  [check](tests/ralph/run-tests.sh::test_check_template_has_three_paths)
+  [system](bash tests/ralph/run-tests.sh test_check_template_has_three_paths)
 - [ ] `check.md` instructs the reviewer to propose contextual options per clash, not a fixed A/B/C
   [judge](tests/judges/ralph-workflow.sh::test_check_contextual_options)
 - [ ] Reviewer creates beads with `ralph:clarify` and proposed options in description for each detected clash
   [judge](tests/judges/ralph-workflow.sh::test_check_clarify_bead_shape)
 - [ ] Full loop `run → check → run → check → push` terminates cleanly when no more issues are found
-  [check](tests/ralph/run-tests.sh::test_run_check_loop_terminates)
+  [system](bash tests/ralph/run-tests.sh test_run_check_loop_terminates)
 - [ ] `ralph check` escalates to `ralph:clarify` and stops after `loop.max-iterations` unsuccessful iterations
   [system](bash tests/ralph/run-tests.sh test_check_iteration_cap_escalates)
 - [ ] Iteration counter persists in `state/<label>.json` and resets on clean RALPH_COMPLETE or clarify clear
@@ -419,7 +419,7 @@ Clarify beads that present a choice must enumerate their options in a standard m
 - [ ] `ralph msg` interactive session ending mid-walk is a clean `RALPH_COMPLETE`; unresolved clarifies remain visible in the next session
   [system](bash tests/ralph/run-tests.sh test_msg_partial_progress_clean)
 - [ ] `ralph msg` interactive session exit signals are `RALPH_COMPLETE` only (no `RALPH_BLOCKED`, no `RALPH_CLARIFY`)
-  [check](tests/ralph/run-tests.sh::test_msg_template_exit_signals)
+  [system](bash tests/ralph/run-tests.sh test_msg_template_exit_signals)
 - [ ] `ralph msg -n <N>` views clarify #N on host without launching a container
   [system](bash tests/ralph/run-tests.sh test_msg_view_host_only)
 - [ ] `ralph msg -i <id>` views a clarify by bead ID on host (equivalent to `-n <N>` but ID-addressed)
@@ -435,14 +435,14 @@ Clarify beads that present a choice must enumerate their options in a standard m
 - [ ] `ralph msg -a <choice>` and `ralph msg -d` without `-n <N>`/`-i <id>` exit non-zero with a clear error instead of silently falling through to list mode
   [system](bash tests/ralph/run-tests.sh test_msg_answer_dismiss_require_target)
 - [ ] `msg.md` template exists, includes `context-pinning` and `exit-signals` partials, and renders the `SCOPE` and `CLARIFY_BEADS` variables (no `spec-header` or `companions-context` partials — there is no single anchor spec for a cross-spec session)
-  [check](tests/ralph/run-tests.sh::test_msg_template_structure)
+  [system](bash tests/ralph/run-tests.sh test_msg_template_structure)
 
 ### Options format
 
 - [ ] Options format parser accepts em-dash, en-dash, single hyphen, or double hyphen as the separator on `## Options` and `### Option N` headings
   [system](bash tests/ralph/run-tests.sh test_options_format_separators)
 - [ ] `check.md` mandates the `## Options — <summary>` + `### Option N — <title>` format for clarify beads it creates for invariant clashes
-  [check](tests/ralph/run-tests.sh::test_check_template_options_format)
+  [system](bash tests/ralph/run-tests.sh test_check_template_options_format)
 - [ ] Reviewer-created clarify beads conform to the options format with at least one `### Option N —` subsection
   [judge](tests/judges/ralph-workflow.sh::test_check_options_format_conformance)
 

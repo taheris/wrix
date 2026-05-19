@@ -518,7 +518,7 @@ in
       loom --version
     '';
     checkPhaseCargoCommand = ''
-      LOOM_VERIFY_TIERS=check,test loom gate verify
+      LOOM_VERIFY_TIERS=check,test loom gate verify --spec loom-tests
     '';
   };
 
@@ -537,10 +537,13 @@ in
 `loom-tests = loomDeriv.loomTests` under `rustChecks`, joining the flake
 `checks` set) and lifted to `packages.loom-tests` in
 `modules/flake/tests.nix`. It runs alongside `loom-nextest` (the bare
-`cargo nextest run` derivation): the gate-driven variant batches only
-the `[test]`-annotated targets and runs the `[check]` walks alongside,
-while `loom-nextest` continues to cover every workspace test as a wide
-safety net. `loom-smoke` is exposed as an app on Linux only.
+`cargo nextest run` derivation): the gate-driven variant batches the
+`[test]`-annotated targets and runs the `[check]` walks for the
+`loom-tests` spec, while `loom-nextest` continues to cover every
+workspace test as a wide safety net. `--spec loom-tests` narrows the
+verify loop to one spec whose grep targets line up with the staged
+source layout; the broader cross-spec sweep is tracked in `wx-1pp3u`.
+`loom-smoke` is exposed as an app on Linux only.
 
 ## Success Criteria
 

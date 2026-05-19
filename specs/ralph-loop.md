@@ -499,7 +499,7 @@ Add unit tests for parser edge cases...
 - [ ] `ralph plan` runs Claude in wrapix container with base profile
   [judge](tests/judges/ralph-workflow.sh::test_plan_runs_in_container)
 - [ ] `ralph plan` runs `bd dolt push` inside container after `RALPH_COMPLETE`
-  [check](tests/ralph/run-tests.sh::test_plan_dolt_push_in_container)
+  [system](bash tests/ralph/run-tests.sh test_plan_dolt_push_in_container)
 - [ ] `ralph plan -u <anchor>` permits the LLM to read and edit any spec in `specs/` (sibling-spec editing)
   [judge](tests/judges/ralph-workflow.sh::test_plan_anchor_sibling_editing)
 - [ ] `ralph plan -u -h` (hidden) remains single-spec; no sibling-spec editing
@@ -509,13 +509,13 @@ Add unit tests for parser edge cases...
 - [ ] `plan-update.md` instructs the LLM to detect invariant clashes during the interview and ask the user before committing a change
   [judge](tests/judges/ralph-workflow.sh::test_plan_update_invariant_clash_detection)
 - [ ] `plan-new.md` and `plan-update.md` include the `interview-modes` partial
-  [check](tests/ralph/run-tests.sh::test_plan_templates_include_interview_modes)
+  [system](bash tests/ralph/run-tests.sh test_plan_templates_include_interview_modes)
 - [ ] `plan-new.md` references `{{> implementation-notes-spec}}` and carries no inline `## Implementation Notes` rule prose outside the partial reference
-  [check](tests/ralph/run-tests.sh::test_plan_new_rule_partials)
+  [system](bash tests/ralph/run-tests.sh test_plan_new_rule_partials)
 - [ ] `plan-update.md` references `{{> sibling-spec-editing}}`, `{{> invariant-clash}}`, and `{{> implementation-notes-state}}` and carries no inline rule prose for those topics outside the partial references
-  [check](tests/ralph/run-tests.sh::test_plan_update_rule_partials)
+  [system](bash tests/ralph/run-tests.sh test_plan_update_rule_partials)
 - [ ] `interview-modes.md` documents "one by one" and "polish the spec" with loose-matching guidance
-  [check](tests/ralph/run-tests.sh::test_interview_modes_partial_content)
+  [system](bash tests/ralph/run-tests.sh test_interview_modes_partial_content)
 - [ ] LLM responds to "one by one" (and close variants) with one-question-at-a-time + suggested defaults
   [judge](tests/judges/ralph-workflow.sh::test_plan_one_by_one_mode)
 - [ ] LLM responds to "polish the spec" (and close variants) with a full read-through + specific edits proposed
@@ -564,15 +564,15 @@ Add unit tests for parser edge cases...
 - [ ] `ralph todo` uses new mode when no state file and no molecule in README (tier 4)
   [system](bash tests/ralph/run-tests.sh test_todo_new_mode_fallback)
 - [ ] `ralph todo` runs `bd dolt push` inside container after `RALPH_COMPLETE`
-  [check](tests/ralph/run-tests.sh::test_todo_dolt_push_in_container)
+  [system](bash tests/ralph/run-tests.sh test_todo_dolt_push_in_container)
 - [ ] `ralph todo` runs `bd dolt pull` on host after container exits with `RALPH_COMPLETE`
-  [check](tests/ralph/run-tests.sh::test_todo_dolt_pull_after_complete)
+  [system](bash tests/ralph/run-tests.sh test_todo_dolt_pull_after_complete)
 - [ ] `ralph todo` emits informational warning on host when post-sync task count did not increase
-  [check](tests/ralph/run-tests.sh::test_todo_post_sync_warning)
+  [system](bash tests/ralph/run-tests.sh test_todo_post_sync_warning)
 - [ ] `ralph todo` still advances `base_commit` and commits spec/README despite sync warning
-  [check](tests/ralph/run-tests.sh::test_todo_advances_base_commit_on_warning)
+  [system](bash tests/ralph/run-tests.sh test_todo_advances_base_commit_on_warning)
 - [ ] `ralph todo` warning message includes `bd list` check command and `--since` recovery hint
-  [check](tests/ralph/run-tests.sh::test_todo_warning_includes_recovery_hints)
+  [system](bash tests/ralph/run-tests.sh test_todo_warning_includes_recovery_hints)
 - [ ] `ralph todo` runs Claude in wrapix container with base profile
   [judge](tests/judges/ralph-workflow.sh::test_todo_runs_in_container)
 - [ ] `ralph todo` LLM assigns `profile:X` labels per-task based on implementation needs
@@ -622,11 +622,11 @@ Add unit tests for parser edge cases...
 ### Run
 
 - [ ] `ralph run --once` runs `bd dolt push` inside container after `RALPH_COMPLETE`
-  [check](tests/ralph/run-tests.sh::test_run_once_dolt_push_in_container)
+  [system](bash tests/ralph/run-tests.sh test_run_once_dolt_push_in_container)
 - [ ] `ralph run` (continuous) runs `bd dolt push` after each `bd close` and at loop exit
-  [check](tests/ralph/run-tests.sh::test_run_continuous_dolt_push)
+  [system](bash tests/ralph/run-tests.sh test_run_continuous_dolt_push)
 - [ ] `ralph run` host-side block runs `bd dolt pull` after container exits
-  [check](tests/ralph/run-tests.sh::test_run_dolt_pull_after_complete)
+  [system](bash tests/ralph/run-tests.sh test_run_dolt_pull_after_complete)
 - [ ] `ralph run` reads `profile:X` label from bead and uses that profile
   [system](bash tests/ralph/run-tests.sh test_run_profile_selection)
 - [ ] `ralph run --profile=X` overrides bead profile label
@@ -638,9 +638,9 @@ Add unit tests for parser edge cases...
 - [ ] `ralph run` (continuous) runs on host, spawning containerized work per issue
   [system](bash tests/ralph/run-tests.sh test_run_loop_processes_all)
 - [ ] `ralph run` does NOT `git push` on its own; per-bead commits land without pushing
-  [check](tests/ralph/run-tests.sh::test_run_does_not_push)
+  [system](bash tests/ralph/run-tests.sh test_run_does_not_push)
 - [ ] `ralph run` exec-s `ralph check` when the molecule reaches completion
-  [check](tests/ralph/run-tests.sh::test_run_execs_check_on_complete)
+  [system](bash tests/ralph/run-tests.sh test_run_execs_check_on_complete)
 - [ ] `run.md` template handles already-implemented tasks (close and move on)
   [judge](tests/judges/ralph-workflow.sh::test_run_already_implemented)
 

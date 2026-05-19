@@ -981,7 +981,7 @@ Ralph uses `bd mol` for work tracking:
 ### Compaction re-pin
 
 - [ ] `ralph plan`, `todo`, `run --once`, and `check` each write `repin.sh` and `claude-settings.json` to `.wrapix/ralph/runtime/<label>/` before launching the container
-  [check](tests/ralph/run-tests.sh::test_repin_hook_files_written)
+  [system](bash tests/ralph/run-tests.sh test_repin_hook_files_written)
 - [ ] Settings fragment registers a `SessionStart` hook with matcher `"compact"` pointing at `repin.sh`
   [system](bash tests/ralph/run-tests.sh test_repin_hook_settings_shape)
 - [ ] `repin.sh` emits `hookSpecificOutput.additionalContext` JSON with the condensed re-pin
@@ -997,9 +997,9 @@ Ralph uses `bd mol` for work tracking:
 - [ ] Runtime directory is removed by a trap on both success and failure paths
   [system](bash tests/ralph/run-tests.sh test_runtime_dir_cleanup)
 - [ ] `.wrapix/ralph/runtime/` is listed in `.gitignore`
-  [check](tests/ralph/run-tests.sh::test_runtime_dir_gitignored)
+  [system](bash tests/ralph/run-tests.sh test_runtime_dir_gitignored)
 - [ ] Host-side commands (`status`, `logs`, `check -t`, `msg`, `tune`, `sync`, `use`) do not create a runtime directory or register the hook
-  [check](tests/ralph/run-tests.sh::test_host_commands_no_repin_hook)
+  [system](bash tests/ralph/run-tests.sh test_host_commands_no_repin_hook)
 - [ ] Compacted session receives the re-pin on next model turn
   [judge](tests/judges/ralph-workflow.sh::test_repin_after_compaction)
 - [ ] Container-executed ralph commands pass `--env RALPH_RUNTIME_DIR=…` to wrapix; entrypoint only merges the settings fragment when the env var is set
@@ -1018,7 +1018,7 @@ Ralph uses `bd mol` for work tracking:
 ### Init
 
 - [ ] `ralph init` runs on host, not in a container
-  [check](tests/ralph/run-tests.sh::test_init_host_execution)
+  [system](bash tests/ralph/run-tests.sh test_init_host_execution)
 - [ ] `nix run github:taheris/wrapix#init` invokes `ralph init` in cwd
   [system](tests/ralph/run-tests.sh::test_init_flake_app)
 - [ ] `ralph init` recursively copies the `lib/ralph/template/flake/` tree (top-level `flake.nix` + `nix/flake/{apps,devshell,formatter}.nix`) into the project root when `flake.nix` is absent; treats `flake.nix` as the sentinel and skips the entire flake bootstrap (including the `nix/flake/` tree) when it exists
@@ -1061,9 +1061,9 @@ Ralph uses `bd mol` for work tracking:
 ### Prompt file-references
 
 - [ ] No template body or partial body references `{{EXISTING_SPEC}}` or `{{SPEC_CONTENT}}` (variables are removed)
-  [check](tests/ralph/run-tests.sh::test_templates_no_inlined_spec_content)
+  [system](bash tests/ralph/run-tests.sh test_templates_no_inlined_spec_content)
 - [ ] No template body or partial body references `{{COMPANIONS}}` (replaced by `{{COMPANION_PATHS}}`)
-  [check](tests/ralph/run-tests.sh::test_templates_use_companion_paths)
+  [system](bash tests/ralph/run-tests.sh test_templates_use_companion_paths)
 - [ ] `list_companion_paths` returns a newline-separated list of companion-directory paths and never inlines `manifest.md` contents
   [system](bash tests/ralph/run-tests.sh test_list_companion_paths_returns_paths_only)
 - [ ] `{{COMPANION_PATHS}}` is wired into plan-update, todo-new, todo-update, run, check, and msg renders
