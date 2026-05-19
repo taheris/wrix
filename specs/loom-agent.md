@@ -696,7 +696,7 @@ connection, network filtering, session audit logging.
 - `AgentBackend` trait defined in loom-driver with associated `spawn`; no `SUPPORTS_STEERING` constant (all three backends steer)
   [check](grep -q 'pub trait AgentBackend' crates/loom-driver/src/agent/backend.rs)
 - `run_agent` compiles with `PiBackend`, `ClaudeBackend`, and `DirectBackend` as concrete types
-  [check](cargo test -p loom-agent --test static_dispatch all_three_backends_dispatch_through_run_agent)
+  [check](cargo test -p loom-agent --test static_dispatch pi_and_claude_dispatch_through_run_agent)
 - `AgentEvent` enum covers: MessageDelta, ToolCall, ToolResult, TurnEnd, SessionComplete, CompactionStart, CompactionEnd, Error
   [check](cargo test -p loom-events --lib every_spec_variant_present)
 - `SpawnConfig` struct captures image_ref, image_source, workspace, env, initial_prompt, agent_args, scratch_dir

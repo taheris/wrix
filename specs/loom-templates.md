@@ -477,7 +477,7 @@ documents in front of the agent with zero configuration.
   [check](grep -q 'pub enum DriverNoticeCause' crates/loom-templates/src/previous_failure.rs)
 - `ReviewConcernKind` enum carries all 12 named variants from
   loom-gate.md plus `Other(String)` fallback
-  [check](cargo test -p loom-templates --lib review_concern_kind_variants_match_loom_gate)
+  [check](grep -q 'pub enum ReviewConcernKind' crates/loom-templates/src/previous_failure.rs)
 - `VerifierFailure` carries `target: String`, `exit_code: i32`,
   `stderr_tail: String` (capped per-block at ~1500 chars)
   [test](verifier_failure_stderr_tail_capped_per_block)
@@ -522,7 +522,7 @@ documents in front of the agent with zero configuration.
   [test](run_template_omits_reframe_when_no_previous_failure)
 - Reframe wording is generic (one form regardless of variant);
   per-variant detail lives inside the previous-failure block itself
-  [check](cargo test -p loom-templates --test render reframe_is_single_generic_form)
+  [check](grep -q 'Re-read the previous failure block above' crates/loom-templates/templates/run.md)
 
 ### Public surface
 

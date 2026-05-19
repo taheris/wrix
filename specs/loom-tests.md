@@ -689,7 +689,7 @@ the rules:
   [check](cargo test -p loom-templates --test snapshots)
 - `loom --help` and every subcommand `--help` have `insta`
       snapshots
-  [check](cargo test -p loom --test cli_help help_snapshot)
+  [check](cargo test -p loom --test cli_help)
 - Run-time renderer uses substring + structural assertions, not
       `insta` (ensures terminal-output flexibility)
   [check](cargo run -p loom-walk -- renderer_no_insta_dependency)
