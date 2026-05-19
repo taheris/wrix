@@ -51,12 +51,22 @@ let
     filter = srcFilter;
   };
 
+  # Host files referenced by [check]-tier grep annotations in
+  # specs/loom-tests.md. The Nix-config invariants those annotations
+  # encode (test-loom app shape, flake-checks wiring, podman/pi-mono
+  # pinning) live outside the loom/ workspace, so the staged source
+  # mirrors the host paths exactly under tests/, modules/flake/.
   stagedSrc = pkgs.runCommand "loom-test-src" { } ''
     cp -r ${cleanedSrc} $out
     chmod -R u+w $out
-    mkdir -p $out/tests/loom
+    mkdir -p $out/tests/loom $out/modules/flake
     cp -r ${../loom/mock-pi} $out/tests/loom/mock-pi
     cp -r ${../loom/mock-claude} $out/tests/loom/mock-claude
+    cp ${./default.nix} $out/tests/loom/default.nix
+    cp ${./run-tests.sh} $out/tests/loom/run-tests.sh
+    cp ${../default.nix} $out/tests/default.nix
+    cp ${../../modules/flake/apps.nix} $out/modules/flake/apps.nix
+    cp ${../../modules/flake/overlays.nix} $out/modules/flake/overlays.nix
     cp -r ${../../specs} $out/specs
   '';
 

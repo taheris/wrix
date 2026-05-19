@@ -616,7 +616,7 @@ in Functional #4.
 
 - `[workspace.lints.clippy]` denies `unwrap_used`, `expect_used`,
       `panic`, `todo`, `unimplemented`; warns `allow_attributes`
-  [check](grep -q 'unwrap_used = "deny"' loom/Cargo.toml)
+  [check](grep -q 'unwrap_used = "deny"' Cargo.toml)
 
 **Outcome** — these tests check that the *codebase complies* with
 the rules:
@@ -675,7 +675,7 @@ the rules:
       corrupts schema; corrupted DB always recovers via `recreate`
   [test](loom_driver_properties::rebuild_never_corrupts_schema)
 - `PROPTEST_CASES=32` for CI; overridable via env var
-  [check](grep -q 'pub const CI_PROPTEST_CASES: u32 = 32' loom/crates/loom-test-support/src/lib.rs)
+  [check](grep -q 'pub const CI_PROPTEST_CASES: u32 = 32' crates/loom-test-support/src/lib.rs)
 
 ### Snapshot testing
 
