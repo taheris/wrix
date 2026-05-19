@@ -175,6 +175,44 @@ fn self_referential_judge_annotation_resolves_against_integrity_source_file() {
 }
 
 #[test]
+fn check_flags_cargo_test_annotation_with_missing_test_name() {
+    let dir = tempdir().unwrap();
+    let specs = dir.path().join("specs");
+    fs::create_dir_all(&specs).unwrap();
+
+    write(
+        &specs,
+        "alpha.md",
+        "## Success Criteria\n\
+        \n\
+        - resolved [check](cargo test -p loom-events --lib known_test)\n\
+        - missing [check](cargo test -p loom-events --lib missing_test)\n\
+        - whole-suite [check](cargo test -p loom-templates --test snapshots)\n",
+    );
+
+    let parsed = parse(&specs).unwrap();
+    let cmds = AlwaysOkCommands;
+    let tests = RustWorkspaceTestResolver::from_leaves(["known_test"]);
+    let findings = check(&parsed.annotations, &specs, &cmds, &tests);
+
+    let cargo_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| matches!(f, IntegrityFinding::UnresolvedCargoTestName { .. }))
+        .collect();
+    assert_eq!(
+        cargo_findings.len(),
+        1,
+        "exactly the missing_test annotation should flag, got: {findings:?}"
+    );
+    match cargo_findings[0] {
+        IntegrityFinding::UnresolvedCargoTestName { test_name, .. } => {
+            assert_eq!(test_name, "missing_test");
+        }
+        other => panic!("expected UnresolvedCargoTestName, got {other:?}"),
+    }
+}
+
+#[test]
 fn end_to_end_specs_dir_check_combines_both_directions() {
     let dir = tempdir().unwrap();
     let specs = dir.path().join("specs");

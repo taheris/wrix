@@ -28,9 +28,11 @@ use crate::annotation::{Annotation, Tier};
 
 /// One finding surfaced by the integrity gate.
 ///
-/// The two variants line up with the two directions the gate enforces:
-/// forward resolution (annotation target invalid for its tier) and atomic
-/// acceptance (criterion carries more than one annotation).
+/// Variants line up with the directions the gate enforces: forward
+/// resolution (annotation target invalid for its tier), embedded
+/// cargo-test-name resolution (`[check](cargo test ... <name>)`'s test
+/// name missing), and atomic acceptance (criterion carries more than one
+/// annotation).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IntegrityFinding {
     /// Annotation's target does not resolve for its tier.
@@ -39,6 +41,16 @@ pub enum IntegrityFinding {
         line: u32,
         tier: Tier,
         target: String,
+    },
+    /// `[check](cargo test ... <name>)` annotation's first token resolves
+    /// but `<name>` does not match any `#[test]` / `#[tokio::test]` /
+    /// `proptest!` function in the workspace. Caught separately so the
+    /// message can name the unresolved test rather than the whole command.
+    UnresolvedCargoTestName {
+        spec: PathBuf,
+        line: u32,
+        target: String,
+        test_name: String,
     },
     /// Criterion carries more than one annotation; atomic-acceptance
     /// violated. `count` is the number of annotations attached.
@@ -64,6 +76,19 @@ impl std::fmt::Display for IntegrityFinding {
                 line,
                 tier,
                 target
+            ),
+            Self::UnresolvedCargoTestName {
+                spec,
+                line,
+                target,
+                test_name,
+            } => write!(
+                f,
+                "{}:{}: annotation [check]({}) — cargo test name `{}` does not resolve",
+                spec.display(),
+                line,
+                target,
+                test_name
             ),
             Self::MultipleAnnotations { spec, line, count } => write!(
                 f,
@@ -335,7 +360,10 @@ pub fn check(
 
 /// Forward direction: every annotation's target must resolve for its
 /// tier. Returns one [`IntegrityFinding::UnresolvedAnnotation`] per
-/// annotation that fails to resolve.
+/// annotation that fails to resolve, plus one
+/// [`IntegrityFinding::UnresolvedCargoTestName`] for each `[check](cargo
+/// test ... <name>)` whose command resolves but whose embedded test name
+/// does not.
 pub fn check_forward(
     annotations: &[Annotation],
     repo_root: &Path,
@@ -355,6 +383,18 @@ pub fn check_forward(
                 line: ann.line,
                 tier: ann.tier,
                 target: ann.target.clone(),
+            });
+            continue;
+        }
+        if ann.tier == Tier::Check
+            && let Some(test_name) = extract_cargo_test_name(&ann.target)
+            && !test_resolver.resolves(test_name)
+        {
+            out.push(IntegrityFinding::UnresolvedCargoTestName {
+                spec: ann.source_spec.clone(),
+                line: ann.line,
+                target: ann.target.clone(),
+                test_name: test_name.to_string(),
             });
         }
     }
@@ -394,6 +434,70 @@ fn resolves_command(target: &str, command_resolver: &dyn CommandResolver) -> boo
 
 fn first_token(command: &str) -> Option<&str> {
     command.split_whitespace().next()
+}
+
+/// Return the explicit test-name positional in a `cargo test [...] <name>`
+/// command, or `None` when the command is not `cargo test`, has no
+/// positional after the flags, or places the test name after `--`.
+///
+/// Flag-arity is data-driven: long flags listed in `LONG_FLAGS_WITH_ARG`
+/// consume one following token; short flags in `SHORT_FLAGS_WITH_ARG` do
+/// the same. `--flag=value` is one token. The first non-flag positional
+/// is the test name. `--` ends scanning — args after it are runner args
+/// for the test binary, not the test name itself.
+fn extract_cargo_test_name(command: &str) -> Option<&str> {
+    const LONG_FLAGS_WITH_ARG: &[&str] = &[
+        "package",
+        "bin",
+        "example",
+        "bench",
+        "test",
+        "target",
+        "target-dir",
+        "manifest-path",
+        "features",
+        "jobs",
+        "profile",
+        "lockfile-path",
+        "config",
+        "exclude",
+    ];
+    const SHORT_FLAGS_WITH_ARG: &[&str] = &["p", "F", "j"];
+
+    let tokens: Vec<&str> = command.split_whitespace().collect();
+    if tokens.first() != Some(&"cargo") || tokens.get(1) != Some(&"test") {
+        return None;
+    }
+    let mut i = 2;
+    while i < tokens.len() {
+        let tok = tokens[i];
+        if tok == "--" {
+            return None;
+        }
+        if let Some(long) = tok.strip_prefix("--") {
+            if long.is_empty() {
+                return None;
+            }
+            if long.contains('=') || !LONG_FLAGS_WITH_ARG.contains(&long) {
+                i += 1;
+            } else {
+                i += 2;
+            }
+            continue;
+        }
+        if let Some(short) = tok.strip_prefix('-')
+            && !short.is_empty()
+        {
+            if SHORT_FLAGS_WITH_ARG.contains(&short) {
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        return Some(tok);
+    }
+    None
 }
 
 fn resolves_judge_path(target: &str, repo_root: &Path) -> bool {
@@ -804,5 +908,160 @@ mod tests {
         assert!(resolver.resolves("crate::a::one"));
         assert!(resolver.resolves("crate::b::two"));
         assert!(!resolver.resolves("crate::a::three"));
+    }
+
+    #[test]
+    fn extract_cargo_test_name_returns_positional_after_lib() {
+        assert_eq!(
+            extract_cargo_test_name(
+                "cargo test -p loom-events --lib serde_round_trips_as_plain_string"
+            ),
+            Some("serde_round_trips_as_plain_string")
+        );
+    }
+
+    #[test]
+    fn extract_cargo_test_name_returns_positional_after_named_suite() {
+        assert_eq!(
+            extract_cargo_test_name("cargo test -p loom --test cli_help help_snapshot"),
+            Some("help_snapshot")
+        );
+    }
+
+    #[test]
+    fn extract_cargo_test_name_returns_none_when_suite_value_is_only_positional() {
+        assert_eq!(
+            extract_cargo_test_name("cargo test -p loom-templates --test snapshots"),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_cargo_test_name_returns_none_for_non_cargo_test_command() {
+        assert_eq!(
+            extract_cargo_test_name("cargo run -p loom-walk -- single_event_channel"),
+            None
+        );
+        assert_eq!(extract_cargo_test_name("nix run .#test-loom"), None);
+        assert_eq!(extract_cargo_test_name("rg pattern"), None);
+    }
+
+    #[test]
+    fn extract_cargo_test_name_stops_at_double_dash() {
+        assert_eq!(
+            extract_cargo_test_name("cargo test -p foo -- --nocapture"),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_cargo_test_name_handles_long_flag_with_equals() {
+        assert_eq!(
+            extract_cargo_test_name("cargo test --package=foo --lib my_test"),
+            Some("my_test")
+        );
+    }
+
+    #[test]
+    fn extract_cargo_test_name_skips_long_arg_flags() {
+        assert_eq!(
+            extract_cargo_test_name(
+                "cargo test --manifest-path /tmp/Cargo.toml --features ci my_test"
+            ),
+            Some("my_test")
+        );
+    }
+
+    #[test]
+    fn forward_flags_check_cargo_test_with_missing_test_name() {
+        let dir = tempdir().unwrap();
+        let annotations = vec![ann(
+            Tier::Check,
+            "cargo test -p loom-events --lib does_not_exist",
+            "specs/a.md",
+            20,
+            20,
+        )];
+        let cmds = StubCommands::with(&["cargo"]);
+        let tests = StubTests::with(&["other_name"]);
+        let findings = check_forward(&annotations, dir.path(), &cmds, &tests);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0],
+            IntegrityFinding::UnresolvedCargoTestName {
+                spec: PathBuf::from("specs/a.md"),
+                line: 20,
+                target: "cargo test -p loom-events --lib does_not_exist".into(),
+                test_name: "does_not_exist".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn forward_passes_when_cargo_test_name_resolves() {
+        let dir = tempdir().unwrap();
+        let annotations = vec![ann(
+            Tier::Check,
+            "cargo test -p loom-gate --test integrity end_to_end_specs_dir_check_combines_both_directions",
+            "specs/a.md",
+            21,
+            21,
+        )];
+        let cmds = StubCommands::with(&["cargo"]);
+        let tests = StubTests::with(&["end_to_end_specs_dir_check_combines_both_directions"]);
+        let findings = check_forward(&annotations, dir.path(), &cmds, &tests);
+        assert!(findings.is_empty(), "got findings: {findings:?}");
+    }
+
+    #[test]
+    fn forward_skips_cargo_test_name_check_when_no_explicit_name() {
+        let dir = tempdir().unwrap();
+        let annotations = vec![ann(
+            Tier::Check,
+            "cargo test -p loom-templates --test snapshots",
+            "specs/a.md",
+            22,
+            22,
+        )];
+        let cmds = StubCommands::with(&["cargo"]);
+        let tests = StubTests::with(&[]);
+        let findings = check_forward(&annotations, dir.path(), &cmds, &tests);
+        assert!(
+            findings.is_empty(),
+            "no positional => no name check, got: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn forward_does_not_apply_cargo_test_check_to_system_tier() {
+        let dir = tempdir().unwrap();
+        let annotations = vec![ann(
+            Tier::System,
+            "cargo test -p loom-events --lib does_not_exist",
+            "specs/a.md",
+            23,
+            23,
+        )];
+        let cmds = StubCommands::with(&["cargo"]);
+        let tests = StubTests::with(&[]);
+        let findings = check_forward(&annotations, dir.path(), &cmds, &tests);
+        assert!(
+            findings.is_empty(),
+            "system tier ignores embedded cargo-test names, got: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn unresolved_cargo_test_name_renders_per_spec_format() {
+        let f = IntegrityFinding::UnresolvedCargoTestName {
+            spec: PathBuf::from("specs/loom-tests.md"),
+            line: 692,
+            target: "cargo test -p loom --test cli_help help_snapshot".into(),
+            test_name: "help_snapshot".into(),
+        };
+        assert_eq!(
+            f.to_string(),
+            "specs/loom-tests.md:692: annotation [check](cargo test -p loom --test cli_help help_snapshot) — cargo test name `help_snapshot` does not resolve"
+        );
     }
 }

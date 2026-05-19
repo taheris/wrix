@@ -468,6 +468,14 @@ fn summarise_health(
                 tier: *tier,
                 target: target.clone(),
             }),
+            IntegrityFinding::UnresolvedCargoTestName {
+                spec, line, target, ..
+            } => Some(BrokenAnnotation {
+                source_spec: spec.clone(),
+                line: *line,
+                tier: Tier::Check,
+                target: target.clone(),
+            }),
             IntegrityFinding::MultipleAnnotations { .. } => None,
         })
         .collect();
