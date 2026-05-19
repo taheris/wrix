@@ -399,7 +399,7 @@ remains its own family of outputs in `modules/flake/packages.nix`.
 - [ ] deriveProfile correctly merges packages and environment
   [judge](../tests/judges/profiles.sh#test_derive_profile_merge)
 - [ ] Profiles are composable (can extend extended profiles)
-  [system](../tests/mcp/tmux/e2e/test_profile_composition.sh)
+  [system](bash tests/mcp/tmux/e2e/test_profile_composition.sh)
 - [ ] Host devshell that splices `rustProfile.shellHook` resolves `rustc` to the same `/nix/store/...` path as the sandbox
   [judge](../tests/judges/profiles.sh#test_host_sandbox_rustc_same_store_path)
 - [ ] `profile.toolchain` is exposed on both the default rust profile and `withToolchain { file; sha256; }`, and points at the same derivation referenced by the profile's `packages` and the `${toolchain}/bin` PATH prepend in `shellHook`

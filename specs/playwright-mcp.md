@@ -144,14 +144,12 @@ All automatic Chromium flags (`--no-sandbox`, `--disable-dev-shm-usage`, `--disa
 
 ## Success Criteria
 
-- [ ] MCP server starts and responds to initialize request with tool list
-  [system](tests/mcp/playwright/smoke-test.sh::test_mcp_initialize)
+- [ ] MCP server starts, responds to initialize request with tool list, and runs fully offline (no network downloads at startup)
+  [system](bash tests/mcp/playwright/smoke-test.sh)
 - [ ] Screenshot returns base64 PNG when navigating to a local HTTP server
-  [system](tests/mcp/playwright/screenshot-test.sh::test_screenshot_returns_png)
+  [system](bash tests/mcp/playwright/screenshot-test.sh)
 - [ ] Nix image builds with `mcp.playwright = {}` and contains chromium binary
-  [system](tests/mcp/playwright/build-test.sh::test_image_contains_chromium)
-- [ ] Server runs fully offline (no network downloads at startup)
-  [system](tests/mcp/playwright/smoke-test.sh::test_offline_startup)
+  [system](bash tests/mcp/playwright/build-test.sh)
 - [ ] Chromium path is correctly derived from playwright-driver.browsers
   [judge](tests/judges/playwright-mcp.sh::test_chromium_path_derivation)
 - [ ] Container flags (--no-sandbox, --disable-dev-shm-usage, --disable-gpu) are always applied

@@ -1020,7 +1020,7 @@ Ralph uses `bd mol` for work tracking:
 - [ ] `ralph init` runs on host, not in a container
   [system](bash tests/ralph/run-tests.sh test_init_host_execution)
 - [ ] `nix run github:taheris/wrapix#init` invokes `ralph init` in cwd
-  [system](tests/ralph/run-tests.sh::test_init_flake_app)
+  [system](bash tests/ralph/run-tests.sh test_init_flake_app)
 - [ ] `ralph init` recursively copies the `lib/ralph/template/flake/` tree (top-level `flake.nix` + `nix/flake/{apps,devshell,formatter}.nix`) into the project root when `flake.nix` is absent; treats `flake.nix` as the sentinel and skips the entire flake bootstrap (including the `nix/flake/` tree) when it exists
   [system](bash tests/ralph/run-tests.sh test_init_flake_skip_existing)
 - [ ] Generated top-level `flake.nix` is a thin entry point: declares inputs/systems and imports `inputs.treefmt-nix.flakeModule` plus `./nix/flake/apps.nix`, `./nix/flake/devshell.nix`, `./nix/flake/formatter.nix`; carries no inline `perSystem` body
@@ -1032,7 +1032,7 @@ Ralph uses `bd mol` for work tracking:
 - [ ] Generated `nix/flake/formatter.nix` treefmt programs are deadnix, nixfmt, shellcheck, statix (no rustfmt)
   [system](bash tests/ralph/run-tests.sh test_init_treefmt_programs)
 - [ ] Generated `flake.nix` evaluates cleanly under `nix flake check` in a fresh directory
-  [system](tests/ralph/run-tests.sh::test_init_flake_evaluates)
+  [system](bash tests/ralph/run-tests.sh test_init_flake_evaluates)
 - [ ] `ralph init` creates `.envrc` with `use flake` content, skip-if-exists
   [system](bash tests/ralph/run-tests.sh test_init_creates_envrc)
 - [ ] `ralph init` appends missing `.gitignore` entries (`.direnv/`, `.wrapix/`, `result`, `result-*`) idempotently
@@ -1054,9 +1054,9 @@ Ralph uses `bd mol` for work tracking:
 - [ ] `ralph init` prints per-artifact created/skipped summary + fixed 2-step next-steps block
   [judge](tests/judges/ralph-workflow.sh::test_init_output_format)
 - [ ] Top-level wrapix flake exposes `apps.init`
-  [system](tests/ralph/run-tests.sh::test_wrapix_flake_exposes_init)
+  [system](bash tests/ralph/run-tests.sh test_wrapix_flake_exposes_init)
 - [ ] Top-level wrapix flake's `packages.${system}.ralph` exposes a `shellHook` passthru
-  [system](tests/ralph/run-tests.sh::test_wrapix_ralph_shellhook_passthru)
+  [system](bash tests/ralph/run-tests.sh test_wrapix_ralph_shellhook_passthru)
 
 ### Prompt file-references
 
