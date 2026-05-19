@@ -2261,9 +2261,8 @@ fn run_spec(workspace: &std::path::Path, deps: bool) -> anyhow::Result<()> {
                 .map(|p| p.display().to_string())
                 .unwrap_or_default();
             let function = row.function.unwrap_or_default();
-            let checked = if row.checked { "x" } else { " " };
             println!(
-                "[{checked}] {kind}\t{file}\t{function}\t{criterion}",
+                "{kind}\t{file}\t{function}\t{criterion}",
                 criterion = row.criterion
             );
         }

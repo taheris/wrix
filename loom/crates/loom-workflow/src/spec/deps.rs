@@ -189,7 +189,6 @@ mod tests {
             kind: AnnotationKind::Verify,
             file: Some(PathBuf::from("tests/missing.sh")),
             function: None,
-            checked: false,
         }];
         let pkgs = collect_deps(dir.path(), &anns)?;
         assert!(pkgs.is_empty());
@@ -209,14 +208,12 @@ mod tests {
                 kind: AnnotationKind::Verify,
                 file: Some(PathBuf::from("tests/a.sh")),
                 function: None,
-                checked: false,
             },
             Annotation {
                 criterion: "ignored".into(),
                 kind: AnnotationKind::None,
                 file: None,
                 function: None,
-                checked: false,
             },
         ];
         let pkgs = collect_deps(dir.path(), &anns)?;

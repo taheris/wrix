@@ -1,10 +1,13 @@
-//! Parse `## Success Criteria` checklists in spec markdown.
+//! Parse `## Success Criteria` bullet lists in spec markdown.
 //!
-//! Each `- [ ]`/`- [x]` checklist entry pairs with the first
-//! `[verify](path#fn)` or `[judge](path#fn)` link inside the same list item.
-//! Items without an annotation become entries of type
-//! [`AnnotationKind::None`]. Headings inside fenced code blocks are skipped
-//! by the structural parser.
+//! Each top-level bullet pairs with the first `[verify](path#fn)` or
+//! `[judge](path#fn)` link inside the same list item. Items without an
+//! annotation become entries of type [`AnnotationKind::None`]. Bullets
+//! carry their annotation but no `[ ]` / `[x]` checkbox prefix — status
+//! is derived live from running the verifier, not stored in the spec
+//! (specs/loom-harness.md FR14). Legacy checkbox bullets are still
+//! accepted: the marker is consumed and discarded. Headings inside
+//! fenced code blocks are skipped by the structural parser.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -31,7 +34,6 @@ pub struct Annotation {
     pub kind: AnnotationKind,
     pub file: Option<PathBuf>,
     pub function: Option<String>,
-    pub checked: bool,
 }
 
 /// Parse all annotations in `spec_path`. Returns the rows in order.
@@ -71,11 +73,9 @@ fn parse_body(body: &str, spec_dir: &Path) -> Option<Vec<Annotation>> {
                     out.push(annotation);
                 }
             }
-            Event::TaskListMarker(checked) => {
-                if let Some(state) = item.as_mut() {
-                    state.is_checkbox = true;
-                    state.checked = checked;
-                }
+            Event::TaskListMarker(_) => {
+                // Legacy `[ ]` / `[x]` markers are accepted and discarded
+                // — status is verifier-driven (specs/loom-harness.md FR14).
             }
             Event::Start(Tag::Link { dest_url, .. }) => {
                 if let Some(state) = item.as_mut() {
@@ -105,8 +105,6 @@ fn parse_body(body: &str, spec_dir: &Path) -> Option<Vec<Annotation>> {
 
 #[derive(Default)]
 struct ItemState {
-    is_checkbox: bool,
-    checked: bool,
     criterion: String,
     pending_link_text: Option<String>,
     pending_link_url: Option<String>,
@@ -149,10 +147,10 @@ impl ItemState {
     }
 
     fn into_annotation(self, spec_dir: &Path) -> Option<Annotation> {
-        if !self.is_checkbox {
+        let criterion = self.criterion.trim().to_string();
+        if criterion.is_empty() && self.annotation.is_none() {
             return None;
         }
-        let criterion = self.criterion.trim().to_string();
         match self.annotation {
             Some((kind, target)) => {
                 let (file, function) = resolve_annotation_link(&target, spec_dir);
@@ -161,7 +159,6 @@ impl ItemState {
                     kind,
                     file: Some(file),
                     function,
-                    checked: self.checked,
                 })
             }
             None => Some(Annotation {
@@ -169,7 +166,6 @@ impl ItemState {
                 kind: AnnotationKind::None,
                 file: None,
                 function: None,
-                checked: self.checked,
             }),
         }
     }
@@ -228,10 +224,9 @@ mod tests {
     }
 
     #[test]
-    fn pairs_checkbox_with_following_verify_link() -> Result<()> {
+    fn pairs_bullet_with_following_verify_link() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let body =
-            "# X\n\n## Success Criteria\n\n- [ ] Run thing\n  [verify](tests/x.sh#test_thing)\n";
+        let body = "# X\n\n## Success Criteria\n\n- Run thing\n  [verify](tests/x.sh#test_thing)\n";
         let path = write_spec(dir.path(), "x.md", body)?;
         let rows = parse_spec_annotations(&path)?;
         assert_eq!(rows.len(), 1);
@@ -240,25 +235,27 @@ mod tests {
         assert_eq!(row.criterion, "Run thing");
         assert_eq!(row.file.as_deref(), Some(Path::new("tests/x.sh")));
         assert_eq!(row.function.as_deref(), Some("test_thing"));
-        assert!(!row.checked);
         Ok(())
     }
 
     #[test]
-    fn checked_box_propagates() -> Result<()> {
+    fn legacy_checkbox_marker_is_accepted_and_discarded() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let body = "## Success Criteria\n\n- [x] done\n  [judge](specs/foo.md)\n";
+        let body = "## Success Criteria\n\n- [ ] open\n  [verify](t.sh#a)\n- [x] done\n  [judge](specs/foo.md)\n";
         let path = write_spec(dir.path(), "x.md", body)?;
         let rows = parse_spec_annotations(&path)?;
-        assert!(rows[0].checked);
-        assert_eq!(rows[0].kind, AnnotationKind::Judge);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].kind, AnnotationKind::Verify);
+        assert_eq!(rows[0].criterion, "open");
+        assert_eq!(rows[1].kind, AnnotationKind::Judge);
+        assert_eq!(rows[1].criterion, "done");
         Ok(())
     }
 
     #[test]
     fn criterion_without_annotation_yields_none_kind() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let body = "## Success Criteria\n\n- [ ] orphan\n- [ ] paired\n  [verify](t.sh#x)\n";
+        let body = "## Success Criteria\n\n- orphan\n- paired\n  [verify](t.sh#x)\n";
         let path = write_spec(dir.path(), "x.md", body)?;
         let rows = parse_spec_annotations(&path)?;
         assert_eq!(rows.len(), 2);
@@ -271,7 +268,8 @@ mod tests {
     #[test]
     fn fenced_code_blocks_are_skipped() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let body = "## Success Criteria\n\n```\n- [ ] not a real entry\n```\n\n- [ ] real\n  [verify](t.sh#x)\n";
+        let body =
+            "## Success Criteria\n\n```\n- not a real entry\n```\n\n- real\n  [verify](t.sh#x)\n";
         let path = write_spec(dir.path(), "x.md", body)?;
         let rows = parse_spec_annotations(&path)?;
         assert_eq!(rows.len(), 1);
@@ -282,8 +280,7 @@ mod tests {
     #[test]
     fn next_h2_terminates_section() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let body =
-            "## Success Criteria\n\n- [ ] a\n  [verify](t.sh#x)\n\n## Other\n\n- [ ] not parsed\n";
+        let body = "## Success Criteria\n\n- a\n  [verify](t.sh#x)\n\n## Other\n\n- not parsed\n";
         let path = write_spec(dir.path(), "x.md", body)?;
         let rows = parse_spec_annotations(&path)?;
         assert_eq!(rows.len(), 1);
@@ -295,7 +292,7 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let specs = dir.path().join("specs");
         fs::create_dir_all(&specs)?;
-        let body = "## Success Criteria\n\n- [ ] a\n  [verify](../tests/foo.sh#test_a)\n";
+        let body = "## Success Criteria\n\n- a\n  [verify](../tests/foo.sh#test_a)\n";
         let path = write_spec(&specs, "foo.md", body)?;
         let rows = parse_spec_annotations(&path)?;
         let resolved = rows[0]
@@ -309,7 +306,7 @@ mod tests {
     #[test]
     fn legacy_double_colon_separator_supported() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let body = "## Success Criteria\n\n- [ ] a\n  [verify](tests/foo.sh::test_a)\n";
+        let body = "## Success Criteria\n\n- a\n  [verify](tests/foo.sh::test_a)\n";
         let path = write_spec(dir.path(), "x.md", body)?;
         let rows = parse_spec_annotations(&path)?;
         assert_eq!(rows[0].function.as_deref(), Some("test_a"));
@@ -325,13 +322,13 @@ mod tests {
 ````markdown
 ## Success Criteria
 
-- [ ] fake entry
+- fake entry
   [verify](fake.sh#x)
 ````
 
 ## Success Criteria
 
-- [ ] real
+- real
   [verify](t.sh#x)
 ";
         let path = write_spec(dir.path(), "x.md", body)?;
