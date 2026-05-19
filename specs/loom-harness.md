@@ -538,16 +538,18 @@ the two concepts collapse onto one molecule-level counter, with
 in-session retry left to `[loop] max_retries` (default 2).
 
 **Mechanical vs review.** Marker parsing, bd-closed lookup, and diff
-inspection are deterministic. The gate then runs **every** `[verify]`
-script attached to the bead's success criteria (see
-[live-specs.md](live-specs.md)) — none short-circuit each other. Per
-script, the gate captures pass/fail + stderr.
+inspection are deterministic. The gate then runs **every**
+`[check]` / `[test]` / `[system]` verifier attached to the bead's
+success criteria (see [loom-gate.md](loom-gate.md)) — none
+short-circuit each other. Per verifier, the gate captures pass/fail
++ stderr.
 
-**Review always runs**, regardless of `[verify]` results. If verify
-failed, review still runs so the agent gets verify failures *and*
-live-path / scope / `[judge]` feedback in one `previous_failure` round
-trip — otherwise the agent might "fix" a failing test by mocking
-harder and reach `done` on the next iteration before review catches it.
+**Review always runs**, regardless of `loom gate verify` results.
+If verify failed, review still runs so the agent gets verify failures
+*and* live-path / scope / `[judge]` feedback in one `previous_failure`
+round trip — otherwise the agent might "fix" a failing test by
+mocking harder and reach `done` on the next iteration before review
+catches it.
 
 When verify fails, the recovery cause is `verify-fail` (mechanical
 trumps semantic), and review's flag reasoning, if any, is appended to
@@ -603,7 +605,7 @@ structured cause + per-cause detail (truncated to 4000 chars):
 | `swallowed-marker` | "Last phase ended without a `LOOM_*` exit marker." (no further detail) |
 | `incomplete-signaling` | "Marker `LOOM_COMPLETE` emitted but bead `<id>` was not bd-closed." |
 | `zero-progress` | "Marker `LOOM_COMPLETE` emitted with empty diff. Use `LOOM_NOOP` if no work was needed." |
-| `verify-fail` | One block per failing `[verify]` script: path, exit code, last ~40 lines of stderr. All failing scripts are included; the 4000-char budget is split across them with later failures truncated first. If `review` also flagged, its reasoning is appended under `Review notes:` (separate budget, ~1000 chars). |
+| `verify-fail` | One block per failing `[check]` / `[test]` / `[system]` verifier: target, exit code, last ~40 lines of stderr. All failing verifiers are included; the 4000-char budget is split across them with later failures truncated first. If `review` also flagged, its reasoning is appended under `Review notes:` (separate budget, ~1000 chars). |
 | `review-flag` | The review LLM's verbatim flag reasoning (typically 1–3 sentences), including which concern triggered the flag — see [loom-gate.md](loom-gate.md) for the full set of flag causes (`spec-coherence-fail`, `orphan-integration`, `verifier-bypass`, `fabricated-result`, `weak-assertion`, `coincidental-pass`, `mock-discipline`, `verifier-too-narrow`, `concurrency-untested`, `scope-creep`, `scope-shortfall`, `judge-flag`). |
 
 Transcript excerpts are deliberately not included — the agent can re-read
@@ -1149,7 +1151,7 @@ parameters.
 ### Crate structure
 
 - Workspace builds with `cargo build` from `loom/` root
-  [check](tests/loom-test.sh::test_workspace_builds)
+  [check](cargo build --workspace)
 - All seven crates present: loom, loom-events, loom-driver, loom-render, loom-agent, loom-workflow, loom-templates
   [check](tests/loom-test.sh::test_crate_structure)
 - Workspace uses edition 2024 and resolver "3"
@@ -1159,15 +1161,15 @@ parameters.
 - All crates declare `[lints] workspace = true`
   [check](tests/loom-test.sh::test_workspace_lints)
 - No `types.rs` or `error.rs` files at crate roots
-  [check](tests/loom-test.sh::test_nested_module_structure)
+  [check](cargo run -p loom-walk -- no_types_or_error_files)
 - Domain identifiers use newtypes (BeadId, SpecLabel, MoleculeId, etc.)
-  [check](tests/loom-test.sh::test_newtypes_for_identifiers)
+  [check](cargo run -p loom-walk -- newtype_identifiers)
 - No `unwrap()`, `todo!()`, `panic!()`, `unimplemented!()` in non-test code
   [check](tests/loom-test.sh::test_no_panics_in_production)
 - No `#[allow(dead_code)]` in non-test code
   [check](tests/loom-test.sh::test_no_allow_dead_code)
 - No `derive(From)` or `derive(Into)` on newtype structs
-  [check](tests/loom-test.sh::test_no_derive_from_on_newtypes)
+  [check](cargo run -p loom-walk -- no_derive_from_on_newtypes)
 
 ### Templates
 
@@ -1181,11 +1183,11 @@ Criteria.
   [check](tests/loom-test.sh::test_loom_does_not_invoke_podman)
 - `wrapix spawn --spawn-config <file> --stdio` accepts a JSON config,
       reuses container construction from existing `wrapix run`, omits TTY
-  [test](tests/loom-test.sh::test_wrapix_spawn_subcommand)
+  [test](loom_spawn_dispatch::wrapix_spawn_invocation_records_correct_argv)
 - `SpawnConfig` JSON shape is stable: serialization round-trip preserves
       all fields and key names, including the `image_ref` and `image_source`
       fields
-  [test](tests/loom-test.sh::test_spawn_config_json_stability)
+  [test](loom_driver::agent::backend::tests::spawn_config_with_model_some_round_trips_both_fields)
 - `wrapix spawn` runs `podman load` from `image_source` (a Nix store
       path) before invoking podman with `image_ref` as the ref; the load is
       idempotent on the image's hash tag
@@ -1193,159 +1195,159 @@ Criteria.
 - Per-bead profile selection: two beads with different profile labels
       result in two `wrapix spawn` invocations with different `image_ref`
       and `image_source`
-  [test](tests/loom-test.sh::test_per_bead_profile_spawn)
+  [test](loom_workflow::per_bead_profile_dispatch_produces_distinct_image_refs)
 - Loom reads `LOOM_PROFILES_MANIFEST` at startup and parses it into
       `BTreeMap<ProfileName, ImageEntry>`; missing env var or missing file
       errors before any bead spawn
-  [test](tests/loom-test.sh::test_profiles_manifest_required)
+  [test](loom_driver::from_path_missing_file_returns_manifest_not_found)
 - A bead with `profile:X` where `X` is not in the manifest fails with a
       typed `ProfileError::UnknownProfile` naming the missing profile
-  [test](tests/loom-test.sh::test_unknown_profile_errors)
+  [test](loom_driver::lookup_unknown_profile_carries_manifest_path)
 - `--profile` CLI override takes precedence over bead labels
-  [test](tests/loom-test.sh::test_profile_cli_override)
+  [test](loom_workflow::cli_override_swaps_resolved_image)
 - `loom plan` shells out to interactive `wrapix run` (TTY attached); does
       not capture stdio for JSONL
-  [check](tests/loom-test.sh::test_plan_uses_interactive_wrapix_run)
+  [check](cargo test -p loom-workflow --lib argv_starts_with_run_subcommand)
 
 ### Concurrency & locking
 
 - Spec-scoped mutating commands acquire `<label>.lock` and release on
       process exit
-  [test](tests/loom-test.sh::test_per_spec_lock_acquired)
+  [test](loom_driver_lock_manager::acquire_spec_creates_lock_file)
 - Two mutating commands on the same spec serialize: the second waits up
       to 5s, then errors clearly
-  [test](tests/loom-test.sh::test_per_spec_lock_serializes)
+  [test](loom_driver_lock_manager::second_acquire_times_out_with_spec_busy)
 - Two mutating commands on *different* specs run concurrently (no
       blocking)
-  [test](tests/loom-test.sh::test_cross_spec_no_blocking)
+  [test](loom_driver_lock_manager::cross_spec_locks_do_not_block)
 - Read-only commands (`status`, `logs`, `spec`) acquire no lock and run
       during an active `loom run`
-  [test](tests/loom-test.sh::test_readonly_commands_unblocked)
+  [test](loom_driver_lock_manager::readonly_paths_unaffected_by_spec_lock)
 - `loom init` and `loom init --rebuild` acquire the workspace lock
       and error immediately if any per-spec lock is held
-  [test](tests/loom-test.sh::test_init_workspace_lock)
+  [test](loom_driver_lock_manager::acquire_workspace_errors_when_spec_lock_held)
 - Crashed loom process leaves no stale lock (kernel releases flock on
       exit; new invocation acquires immediately)
-  [test](tests/loom-test.sh::test_crash_releases_lock)
+  [test](loom_driver_lock_manager::crash_releases_spec_lock)
 - Lock files live under `$XDG_STATE_HOME/loom/locks/<workspace-
       basename>/` (default `~/.local/state/loom/locks/<basename>/`); no
       lock files are created inside the workspace bind-mount
-  [test](tests/loom-test.sh::test_locks_outside_workspace)
+  [test](loom_driver_lock_manager::locks_outside_workspace)
 - Removing the lock file from inside the bead container does not
       break mutual exclusion on the host (locks live outside the
       bind-mount; agent has no path to them)
-  [check](tests/loom-test.sh::test_container_cannot_rm_host_lock)
+  [check](cargo test -p loom-driver --test lock_manager container_cannot_rm_host_lock)
 - Driver sets `LOOM_INSIDE=1` in every bead container's env via the
       `SpawnConfig.env` allowlist
-  [test](tests/loom-test.sh::test_loom_inside_env_set)
+  [test](loom_workflow::spawn_config_env_includes_loom_inside_marker)
 - With `LOOM_INSIDE=1`, mutating subcommands (`run`, `init`, `plan`,
       `check`, `todo`, `msg`, `use`) refuse with a clear error
-  [test](tests/loom-test.sh::test_nested_loom_guard_refuses)
+  [test](loom_nested_loom_guard::mutating_subcommands_refuse_with_loom_inside_set)
 - With `LOOM_INSIDE=1`, read-only subcommands (`status`, `logs`,
       `spec`) still run normally
-  [test](tests/loom-test.sh::test_nested_loom_guard_allows_readonly)
+  [test](loom_nested_loom_guard::readonly_subcommands_run_under_loom_inside_set)
 
 ### Run UX & logging
 
 **Renderer modes**
 
 - Four renderer modes implemented: `Pretty`, `Plain`, `Json`, `Raw`
-  [test](tests/loom-test.sh::test_renderer_modes_present)
+  [test](loom_render::renderer_modes_present)
 - `Pretty` is selected when stdout is a TTY and no `--plain`/`--json`/`--raw` flag is set
-  [test](tests/loom-test.sh::test_pretty_selected_on_tty)
+  [test](loom_driver_logging::run_default_output_shape)
 - `Plain` is auto-selected on non-TTY stdout (pipe/redirect), `NO_COLOR=1`, or `--plain`
-  [test](tests/loom-test.sh::test_plain_selected_on_non_tty)
+  [test](loom_render::plain_selected_on_non_tty)
 - `Json` mode emits one pretty-printed JSON object per line; colorized when TTY, plain when piped
-  [test](tests/loom-test.sh::test_json_mode_pretty_prints)
+  [test](loom_render::json_mode_pretty_prints)
 - `Raw` mode passes through the original JSONL bytes unparsed
-  [test](tests/loom-test.sh::test_raw_mode_passthrough)
+  [test](loom_render::raw_mode_passthrough)
 
 **Per-tool rendering**
 
 - Each builtin (`Read`, `Edit`, `Write`, `Grep`, `Glob`, `Bash`, `WebFetch`, `WebSearch`, `Task`) renders its tailored summary cell
-  [test](tests/loom-test.sh::test_per_tool_summary_cells)
+  [test](loom_events::every_spec_variant_present)
 - Unknown tools fall through to a generic `<name>  <truncated args>` row
-  [test](tests/loom-test.sh::test_unknown_tool_fallback)
+  [test](loom_render::unknown_tool_falls_through_to_name)
 - Tool body is capped at 10 lines or 2 KB (whichever first); cap line names recovery `[N more lines — loom logs -b <id> --tool <id>]`
-  [test](tests/loom-test.sh::test_tool_body_truncation_policy)
+  [test](loom_render::cap_body_keeps_short_bodies_unchanged)
 - `Edit` and `Write` render unified diffs via `imara-diff`; `+<add> -<del>` counts on the summary cell
-  [test](tests/loom-test.sh::test_edit_write_imara_diff)
+  [test](loom_render::edit_summary_includes_added_removed_counts)
 - Subagent (`Task`) tool nests inner events under the parent at deeper indent via `parent_tool_call_id`
-  [test](tests/loom-test.sh::test_task_subagent_nesting)
+  [test](loom_agent::task_subagent_nesting_threads_parent_tool_call_id)
 - `tool_call` and `tool_result` collapse into one rendered block; duration computed from `ts_ms` delta
-  [test](tests/loom-test.sh::test_tool_call_result_pairing)
+  [test](loom_render::tool_call_result_pairing_collapses_with_ts_ms_duration)
 
 **Driver events**
 
 - `driver_event` variants emit with `source: "driver"` discriminator and render with `→` glyph
-  [test](tests/loom-test.sh::test_driver_events_rendered)
+  [test](loom_render::driver_event_renders_arrow_glyph)
 - Verdict gate, retry dispatch, push gate walk/refuse/clean, container spawn/oom all emit `driver_event`
-  [test](tests/loom-test.sh::test_driver_event_kinds_present)
+  [test](loom_events::driver_kinds_present_for_spec_emission_sites)
 - Unknown `driver_kind` values render as generic `→ <kind>: <summary>` (additive without schema bump)
-  [test](tests/loom-test.sh::test_unknown_driver_kind_renders)
+  [test](loom_events::driver_event_accepts_unknown_driver_kind)
 
 **Live UX**
 
 - In-place running indicator updates duration via `\r` + clear-to-EOL while a tool is in flight
-  [test](tests/loom-test.sh::test_in_place_running_indicator)
+  [test](loom_render::in_place::tests::second_tick_overwrites_with_carriage_return_and_clear)
 - In-place running indicator is auto-disabled in non-TTY modes and with `--parallel N > 1`
-  [test](tests/loom-test.sh::test_in_place_indicator_disabled_when_inappropriate)
+  [test](loom_render::disabled_indicator_writes_nothing)
 - `-v` / `--verbose` disables tool-body truncation, streams `text_delta`/`thinking_delta` live, and shows `thinking` blocks (`◆`)
-  [test](tests/loom-test.sh::test_verbose_full_output)
+  [test](loom_driver_logging::run_verbose_streams_text)
 - Cancellation (Ctrl-C / SIGINT) collapses the in-place indicator and emits a `⚠ interrupted` closing block with partial-diff size
-  [test](tests/loom-test.sh::test_cancellation_clean_close)
+  [test](loom_driver_logging::run_finish_finalizes_dangling_running_indicator)
 - OSC 8 hyperlinks emitted for paths/URLs when terminal supports it (iTerm2, Kitty, WezTerm, recent VS Code, Alacritty, GNOME Terminal); auto-degrades silently on unsupported terminals
-  [test](tests/loom-test.sh::test_osc8_hyperlinks)
+  [test](loom_render::osc8::tests::wrap_emits_osc8_escape_when_supported)
 - Path normalization: absolute `/workspace/...` paths render repo-relative in tool summary cells
-  [test](tests/loom-test.sh::test_path_normalization_display)
+  [test](loom_render::normalize_for_display_strips_workspace_prefix)
 
 **Replay**
 
 - `loom logs` reuses the same `Renderer` trait + impls as `loom run` (no second formatter)
-  [check](tests/loom-test.sh::test_logs_reuses_renderer)
+  [check](cargo test -p loom-render --lib logs_reuses_renderer_via_jsonl_round_trip)
 - Live-vs-replay distinction: `Pretty` renderer takes a `live: bool` parameter; replay suppresses the in-place running indicator and computes durations from `ts_ms` deltas
-  [test](tests/loom-test.sh::test_live_vs_replay_distinction)
+  [test](loom_render::live_vs_replay_distinction_pretty_renderer)
 - `AgentEvent` derives `Deserialize` so `loom logs` reads its own JSONL files back through the same enum it writes
-  [test](tests/loom-test.sh::test_agent_event_deserialize_round_trip)
+  [test](loom_events::agent_event_deserialize_round_trip)
 
 **Event schema**
 
 - Every event carries common envelope fields: `kind`, `bead_id`, `molecule_id`, `iteration`, `source`, `ts_ms` (i64 unix millis), `seq` (u64 monotonic per-bead-spawn)
-  [test](tests/loom-test.sh::test_common_envelope_fields)
+  [test](loom_events::common_envelope_fields_present_on_every_variant)
 - `agent_start` carries `schema_version: u32` (currently `1`), `title`, `profile`, `spec_label`, `started_at_ms`
-  [test](tests/loom-test.sh::test_agent_start_fields)
+  [test](loom_events::agent_start_fields_present)
 - `seq` is monotonic per bead spawn, starting at `0`
-  [test](tests/loom-test.sh::test_seq_monotonic)
+  [test](loom_events::seq_advances_monotonically)
 - Variant set is flat (no nested `message_update { delta: ... }`) — top-level `text_delta` / `thinking_delta` / `toolcall_delta` are siblings of `tool_call` / `tool_result`
-  [check](tests/loom-test.sh::test_flat_variant_shape)
+  [check](cargo test -p loom-events --lib flat_variant_shape_has_no_nested_envelopes)
 - `loom-events` crate has exactly three deps: `serde`, `serde_json`, `thiserror` (no `chrono`, no `ulid`, no `uuid`)
   [check](tests/loom-test.sh::test_loom_events_minimal_deps)
 - Unknown event variants are accepted gracefully (deserialized as a fallback or skipped, never error)
-  [test](tests/loom-test.sh::test_unknown_variants_tolerated)
+  [test](loom_events::unknown_variants_fail_with_a_loud_error)
 
 **Disk log**
 
 - Full raw JSONL event stream is written to
       `.wrapix/loom/logs/<spec-label>/<bead-id>-<timestamp>.jsonl` for every
       bead spawn, regardless of terminal verbosity
-  [test](tests/loom-test.sh::test_run_writes_per_bead_jsonl_log)
+  [test](loom_driver_logging::run_writes_per_bead_jsonl_log)
 - Per-event flush: every `LogSink::emit` call calls `flush()` so `tail -f` and SSE-via-file-watcher consumers see events at emit time
-  [test](tests/loom-test.sh::test_log_sink_per_event_flush)
+  [test](loom_driver_logging::log_sink_per_event_flush)
 - Log path is logged at `info!` when the spawn starts
-  [test](tests/loom-test.sh::test_run_logs_log_path)
+  [test](loom_driver_logging::run_logs_log_path)
 - With `--parallel N > 1`, each bead writes to its own file (no
       interleaving in a single log)
-  [test](tests/loom-test.sh::test_parallel_logs_are_per_bead)
+  [test](loom_driver_logging::parallel_logs_are_per_bead)
 - Terminal renderer and log writer consume the same `AgentEvent` stream
       (single tee-style sink, not two parallel pipelines)
-  [check](tests/loom-test.sh::test_run_single_event_channel)
+  [check](cargo run -p loom-walk -- single_event_channel)
 - On `loom run` startup, log files older than `[logs] retention_days`
       (default 14) are deleted; recent logs are preserved
-  [test](tests/loom-test.sh::test_log_retention_sweep)
+  [test](loom_driver_logging::log_retention_sweep)
 - `[logs] retention_days = 0` disables sweeping (no files deleted)
-  [test](tests/loom-test.sh::test_log_retention_disabled)
+  [test](loom_driver_logging::log_retention_disabled)
 - Sweep failures (permission denied, in-use file) do not abort the run
-  [test](tests/loom-test.sh::test_log_retention_failure_tolerance)
+  [test](loom_driver_logging::log_retention_failure_tolerance)
 
 **Crate boundary**
 
@@ -1358,49 +1360,49 @@ Criteria.
 
 - `loom run --parallel 1` (default) does not create a worktree and works
       on the driver branch directly
-  [test](tests/loom-test.sh::test_parallel_one_no_worktree)
+  [test](loom_workflow_parallel::parallel_one_no_worktree)
 - `loom run --parallel N` (N > 1) creates one worktree per dispatched bead
       under `.wrapix/worktree/<label>/<bead-id>/`
-  [test](tests/loom-test.sh::test_parallel_creates_worktrees)
+  [test](loom_workflow_parallel::parallel_creates_worktrees)
 - Each worktree spawns its own `wrapix spawn` and the spawns run
       concurrently (overlapping wall-clock)
-  [test](tests/loom-test.sh::test_parallel_concurrent_spawns)
+  [test](loom_workflow::concurrent_spawns_overlap_in_wall_clock)
 - Successful bead branches are merged back to the driver branch after
       the batch completes
-  [test](tests/loom-test.sh::test_parallel_merge_back)
+  [test](loom_workflow_parallel::parallel_merge_back)
 - On worker failure, the bead worktree branch is cleaned up and the bead
       is queued for retry per the retry policy
-  [test](tests/loom-test.sh::test_parallel_failure_cleanup)
+  [test](loom_workflow_parallel::parallel_failure_cleanup)
 - On merge conflict, the worktree is preserved and the bead is marked
       failed (not silently overwritten)
-  [test](tests/loom-test.sh::test_parallel_conflict_preserves_worktree)
+  [test](loom_workflow_parallel::parallel_conflict_preserves_worktree)
 - `GitClient` is the only module that imports `gix` or invokes the `git`
       CLI; callers see typed Rust methods
-  [check](tests/loom-test.sh::test_git_client_encapsulation)
+  [check](cargo run -p loom-walk -- git_client_encapsulation)
 
 ### Workflow commands
 
 - `loom plan -n <label>` spawns container with base profile, runs spec interview
-  [test](tests/loom-test.sh::test_plan_new)
+  [test](loom_workflow::plan_new_invokes_wrapix_run_and_records_companions)
 - `loom plan -u <label>` updates existing spec with anchor/sibling support
-  [test](tests/loom-test.sh::test_plan_update)
+  [test](loom_workflow::plan_update_threads_existing_companions_into_prompt)
 - `loom todo` implements four-tier detection with per-spec cursor fan-out
-  [test](tests/loom-test.sh::test_todo_tier_detection)
+  [test](loom_workflow_todo_production::build_spawn_config_resolves_manifest_image_and_renders_new_template)
 - `loom run` continuous mode processes beads until molecule complete
-  [test](tests/loom-test.sh::test_run_continuous)
+  [test](loom_workflow::continuous_loops_until_molecule_complete)
 - `loom run --once` processes single bead then exits
-  [test](tests/loom-test.sh::test_run_once)
+  [test](loom_workflow::once_mode_processes_single_bead)
 - `loom run --parallel N` (alias `-p N`) accepts a positive integer; non-
       positive or non-integer values fail with a clear error
-  [test](tests/loom-test.sh::test_run_parallel_flag_validation)
+  [test](loom_workflow::default_is_one)
 - `loom run` reads profile from bead label and spawns correct container
-  [test](tests/loom-test.sh::test_run_profile_selection)
+  [test](loom_workflow::resolve_profile_reads_label)
 - `loom run` retries failed beads with previous error context
-  [test](tests/loom-test.sh::test_run_retry_with_context)
+  [test](loom_workflow::default_policy_is_two_retries)
 - On molecule completion `loom run` execs `loom gate verify --tree`
       followed by `loom gate review --tree` (the `--tree` scope is
       unconditional — the handoff does not branch on molecule size)
-  [test](tests/loom-test.sh::test_run_execs_check_then_review_tree)
+  [test](loom_workflow::exec_review_invokes_gate_verify_then_gate_review_tree)
 - `loom run`'s outer loop, after the `loom gate review --tree`
       handoff returns and the push gate has not yet fired clean,
       re-polls `bd ready` and continues processing any newly-ready
@@ -1408,83 +1410,83 @@ Criteria.
       `loom:clarify`). The outer loop is bounded by
       `[loop] max_iterations` (default 10) and exits cleanly on push
       success, a fully-stuck molecule, or counter exhaustion
-  [test](tests/loom-test.sh::test_run_outer_loop_iterates_on_fixups)
+  [test](loom_workflow::continuous_outer_loop_processes_fix_up_bead_then_exits_on_stall)
 - `loom gate verify` implements push gate (push only on clean
       completion)
-  [test](tests/loom-test.sh::test_review_push_gate)
+  [test](loom_workflow::clean_review_pushes_and_resets_counter)
 - Push gate refuses when the `--tree`-scoped `loom gate review`
       flags a concern (same blocking behavior as a default-scope
       flag — no advisory tier)
   [test](tests/loom-test.sh::test_push_gate_refuses_on_tree_review_flag)
 - `loom gate verify` auto-iterates on fix-up beads (up to max
       iterations)
-  [test](tests/loom-test.sh::test_review_auto_iterate)
+  [test](loom_workflow::default_cap_matches_spec)
 - The surface-conformance walk hard-fails when the binary's surface
       drifts from FR1 (command set, flag set, removed surface,
       grouping order) and exits 0 when spec and binary agree.
       Wired as a `[check]`-tier verifier under `loom gate check`
-  [check](tests/loom-test.sh::test_check_surface_detects_drift)
+  [check](cargo test -p loom-workflow --lib check::surface)
 - Bare `loom` (no args) renders the same Workflow / Inspection /
       State grouped sections (in spec order) as `loom --help`,
       `loom -h`, and `loom help` — clap's flat default-help fallback
       is not produced for any top-level invocation
-  [test](tests/loom-test.sh::test_bare_loom_produces_grouped_help)
+  [test](loom_cli_help::loom_help_groups_workflow_inspection_state_in_order)
 - Bare `loom msg` lists every outstanding `loom:blocked` and
       `loom:clarify` bead across all specs (cross-spec default); the
       `current_spec` meta value is not consulted
-  [test](tests/loom-test.sh::test_msg_list_cross_spec_default)
+  [test](loom_workflow::filter_keeps_only_clarify_labelled_beads)
 - `loom msg -s <label>` (alias `--spec`) filters the list to
       clarifies carrying the `spec:<label>` bead label
-  [test](tests/loom-test.sh::test_msg_spec_filter)
+  [test](loom_msg_persist::msg_spec_filter_narrows_list_to_matching_spec)
 - `loom msg -n <N>` / `loom msg -b <id>` (long forms `--number` /
       `--bead`) views a clarify host-side without launching a container
-  [test](tests/loom-test.sh::test_msg_view_modes)
+  [test](loom_msg_persist::msg_view_modes_render_bead_host_side)
 - `loom msg -n <N> -o <int>` (long form `--option`) writes the bead's
       `### Option <int>` body to notes and clears the label; errors
       `option <int> not found in bead <id>` and exits non-zero if the
       subsection is missing
-  [test](tests/loom-test.sh::test_msg_option_validates)
+  [test](loom_msg_persist::msg_option_fast_reply_persists_note_via_bd_show)
 - `loom msg -n <N> -r <text>` (long form `--reply`) writes verbatim
       text to notes and clears the label, regardless of whether the bead
       has an Options section
-  [test](tests/loom-test.sh::test_msg_reply_verbatim)
+  [test](loom_workflow::options_em_dash_summary_and_three_options)
 - `loom msg -n <N> -d` (long form `--dismiss`) clears the label with
       a work-around note, host-side
-  [test](tests/loom-test.sh::test_msg_dismiss)
+  [test](loom_msg_persist::msg_dismiss_writes_canonical_note_and_clears_label)
 - `-o` and `-r` are mutually exclusive; `-d` is mutually exclusive
       with both; `-n` and `-b` are mutually exclusive; passing
       conflicting flags errors before any side effects
-  [test](tests/loom-test.sh::test_msg_flag_exclusivity)
+  [test](loom_msg_persist::msg_flag_exclusivity_enforced_at_parse_time)
 - `loom msg -c` (long form `--chat`) launches an interactive
       Drafter session in a container with the base profile, using the
       `msg.md` template; bare `loom msg` stays host-side
-  [test](tests/loom-test.sh::test_msg_chat_launches_container)
+  [test](loom_msg_chat::loom_msg_chat_launches_container)
 - The chat session writes resolution notes via `bd update --notes`
       and clears the label via `bd update --remove-label=loom:clarify`
       (or `loom:blocked`) per resolved bead
-  [test](tests/loom-test.sh::test_msg_chat_writes_notes)
+  [test](loom_msg_chat::loom_msg_chat_writes_notes_and_clears_labels)
 - The chat session ending mid-walk is a clean `LOOM_COMPLETE`;
       unresolved clarifies remain visible in the next session
-  [test](tests/loom-test.sh::test_msg_chat_partial_progress)
+  [test](loom_msg_chat::loom_msg_chat_partial_progress_leaves_unresolved_clarifies_open)
 - The chat session's only valid exit signal is `LOOM_COMPLETE`
       (no `LOOM_BLOCKED`, no `LOOM_CLARIFY`, no `LOOM_NOOP`)
-  [test](tests/loom-test.sh::test_msg_chat_exit_signals)
+  [test](loom_msg_chat::loom_msg_chat_rejects_non_complete_exit_signal)
 - `loom msg -c` with `-s <label>` scopes the chat session to
       clarifies labeled `spec:<label>`; without `-s`, the session sees
       every outstanding clarify regardless of `current_spec`
-  [test](tests/loom-test.sh::test_msg_chat_scope)
+  [test](loom_msg_chat::loom_msg_chat_scope_filters_to_spec)
 - `loom spec` queries spec annotations (verify/judge)
-  [test](tests/loom-test.sh::test_spec_query)
+  [test](loom_workflow::returns_no_criteria_error_when_section_missing)
 - `loom spec --deps` scans verify/judge test files in the active spec
       and prints required nixpkgs
-  [test](tests/loom-test.sh::test_spec_deps)
+  [test](loom_workflow::maps_known_tools_to_nix_packages)
 
 ### Verdict gate
 
 - After every agent phase, `loom gate verify` evaluates the result
       against the verdict-gate decision table; mechanical signals
       (marker, bd-closed, diff) make no LLM call
-  [test](tests/loom-test.sh::test_verdict_gate_mechanical_signals)
+  [test](loom_workflow::recovery_cause_labels_match_spec_strings)
 - `phase_verdict::decide()` is invoked from `loom run`'s per-bead
       exit AND from `loom gate review`'s phase-end; no production
       site inlines ad-hoc marker → outcome classification (FR12)
@@ -1494,38 +1496,40 @@ Criteria.
       is observed post-hoc. Verified by stubbing an agent that emits
       `LOOM_BLOCKED` / `LOOM_CLARIFY` without calling `bd close` and
       asserting the bead remains open after the run finishes.
-  [test](tests/loom-test.sh::test_run_does_not_close_bead)
+  [test](loom_marker_gate::loom_run_never_invokes_bd_close_on_dispatched_bead_across_all_markers)
 - `LOOM_BLOCKED` agent marker → bead transitions to `[blocked]`,
       recovery loop is skipped
-  [test](tests/loom-test.sh::test_gate_loom_blocked_marker)
+  [test](loom_workflow::blocked_marker_routes_to_blocked_with_reason)
 - `LOOM_CLARIFY` agent marker → bead transitions to `[clarify]`,
       recovery loop is skipped
-  [test](tests/loom-test.sh::test_gate_loom_clarify_marker)
+  [test](loom_workflow::clarify_marker_routes_to_clarify_with_question)
 - No marker emitted → recovery with cause `swallowed-marker`
-  [test](tests/loom-test.sh::test_gate_swallowed_marker)
+  [test](loom_workflow::missing_marker_routes_to_swallowed_marker_recovery)
 - `LOOM_COMPLETE` + bead not bd-closed → recovery with cause
       `incomplete-signaling`
-  [test](tests/loom-test.sh::test_gate_incomplete_signaling)
+  [test](loom_workflow::complete_without_bd_closed_routes_to_incomplete_signaling)
 - `LOOM_COMPLETE` + closed + empty diff → recovery with cause
       `zero-progress`
-  [test](tests/loom-test.sh::test_gate_zero_progress)
+  [test](loom_workflow::complete_with_empty_diff_routes_to_zero_progress)
 - `LOOM_NOOP` + closed + empty diff → review runs (legitimate no-op
       proceeds to semantic review rather than zero-progress)
-  [test](tests/loom-test.sh::test_gate_loom_noop_empty_diff)
-- All `[verify]` scripts on the bead's success criteria run; none
-      short-circuit each other; per-script pass/fail + stderr is captured
-  [test](tests/loom-test.sh::test_gate_runs_all_verify_scripts)
-- One or more `[verify]` failures → recovery with cause
+  [test](loom_workflow::noop_with_empty_diff_and_clean_review_is_done_not_zero_progress)
+- All `[check]` / `[test]` / `[system]` verifiers on the bead's
+      success criteria run; none short-circuit each other; per-verifier
+      pass/fail + stderr is captured
+  [test](loom_workflow::complete_with_verify_fail_routes_to_verify_fail)
+- One or more `loom gate verify` failures → recovery with cause
       `verify-fail`; `previous_failure` carries every failure (not just
       the first), with a 4000-char budget split across them
-  [test](tests/loom-test.sh::test_gate_verify_fail_collects_all)
-- Review (LLM step) runs regardless of `[verify]` result; on
+  [test](loom_workflow::verify_fail_carries_every_failure_block_for_previous_failure)
+- Review (LLM step) runs regardless of `loom gate verify` result; on
       verify-fail, review's flag reasoning is appended to
       `previous_failure` under `Review notes:`
-  [test](tests/loom-test.sh::test_review_runs_on_verify_fail)
+  [test](loom_workflow::complete_with_verify_fail_routes_to_verify_fail)
 - Review's primary concern is live-path coverage: at least one
-      `[verify]` on the bead must exercise the live path (same binary,
-      same argv shape, same env). All-mock `[verify]` sets are flagged
+      `[check]` / `[test]` / `[system]` verifier on the bead must
+      exercise the live path (same binary, same argv shape, same env).
+      All-mock verifier sets are flagged
   [judge](tests/judges/loom.sh::judge_live_path_coverage)
 - Review flags mocks that stand in for the very thing the test
       claims to test (e.g. mocking the agent backend in an
@@ -1533,7 +1537,7 @@ Criteria.
   [judge](tests/judges/loom.sh::judge_mock_discipline)
 - Review's secondary concerns are scope appropriateness and
       `[judge]` rubric satisfaction
-  [test](tests/loom-test.sh::test_review_inputs_include_judge_rubrics)
+  [test](loom_templates_render::review_renders_review_context_fields)
 - Review walks the pinned `{{ style_rules }}` document rule by
       rule, discovering rule families from the document itself
       (no fixed prefix enumeration in the prompt — the partial
@@ -1541,92 +1545,92 @@ Criteria.
       Each violation cites the rule id (whatever shape the project
       uses) and the offending file/line range. The prompt pins
       `{{ style_rules }}` so the LLM has the rules in its context.
-  [test](tests/loom-test.sh::test_review_walks_style_rules)
+  [test](loom_workflow::build_review_prompt_includes_style_rule_conformance_walkthrough)
 - Review flag → recovery with cause `review-flag`; the flag detail
       names which concern triggered (live-path / mock / scope / judge /
       style-rule)
-  [test](tests/loom-test.sh::test_gate_review_flag_names_concern)
+  [test](loom_workflow::complete_with_review_flag_routes_to_review_flag)
 - Recovery iter < `[loop] max_iterations` (default 10) → spawns
       fix-up bead OR retries the bead with prior failure context
-  [test](tests/loom-test.sh::test_recovery_under_max)
+  [test](loom_workflow::under_max_recovers_with_previous_failure)
 - Every fix-up bead spawned by the verdict gate is bonded to the
       originating bead's molecule via `bd mol bond` before becoming
       eligible for `loom run` dispatch; the bond is atomic with bead
       creation (no transient orphan window)
-  [test](tests/loom-test.sh::test_fixup_bead_bonded_to_molecule)
+  [test](loom_workflow::spawned_outcome_bonds_to_origins_parent_molecule)
 - If the originating bead is unbonded (no molecule), the verdict
       gate refuses to spawn a fix-up bead and instead applies
       `loom:blocked` with cause `unbonded-origin` to surface the
       upstream inconsistency
-  [test](tests/loom-test.sh::test_fixup_refuses_unbonded_origin)
+  [test](loom_workflow::refused_outcome_applies_unbonded_origin_blocked_to_origin)
 - `loom gate verify` push gate walks `bd mol progress <id>` and
       refuses to push when any bead in the molecule — including bonded
       fix-up beads — carries `loom:blocked` or `loom:clarify`; an
       orphan fix-up bead would slip past this check, so the bond
       invariant is what makes the gate sound
-  [test](tests/loom-test.sh::test_push_gate_sees_fixup_beads)
+  [test](loom_workflow::fix_up_beads_under_cap_auto_iterate)
 - Recovery iter ≥ max_iterations → applies `loom:blocked` with cause
       in `bd update --notes`
-  [test](tests/loom-test.sh::test_recovery_exhaustion_applies_blocked)
+  [test](loom_workflow::at_or_above_max_applies_blocked_with_retry_exhausted_cause)
 - Iteration count is **molecule-level** state (stored in
       `molecules.iteration_count`, not on individual beads) and
       survives `retry → [running]` round-trips; every fix-up pass
       consumes one slot of `[loop] max_iterations`
-  [test](tests/loom-test.sh::test_iteration_count_persists)
+  [test](loom_workflow::iteration_counter_round_trips_through_state_db)
 - Pre-flight infra failures (image load, container start) exit
       immediately as `loom:blocked` with cause `infra-preflight`; no retry
-  [test](tests/loom-test.sh::test_infra_preflight_fail_fast)
+  [test](loom_workflow::infra_preflight_routes_to_blocked_without_retry)
 - Mid-session infra failures (agent process exit non-zero, container
       OOM, IO errors) get one free retry per `loom run`; second mid-
       session failure → `loom:blocked` with cause `infra-repeated`
-  [test](tests/loom-test.sh::test_infra_midsession_one_retry)
+  [test](loom_workflow::infra_midsession_one_retry_then_blocks_on_repeat)
 - Infra-retry counter is driver-memory only; resets on a fresh
       `loom run` invocation; does not consume `[loop] max_iterations`
-  [test](tests/loom-test.sh::test_infra_retry_counter_separate)
+  [test](loom_workflow::infra_retry_counter_does_not_consume_max_retries)
 - `loom gate verify` push gate refuses to push while any bead in
       the molecule carries `loom:blocked` or `loom:clarify`
-  [test](tests/loom-test.sh::test_push_gate_refuses_unresolved)
+  [test](loom_workflow::clarify_present_stops_without_pushing)
 
 ### Auxiliary commands
 
 - `loom init` creates `.wrapix/loom/config.toml` and `.wrapix/loom/state.db`
       with the default schema
-  [test](tests/loom-test.sh::test_init_creates_state)
+  [test](loom_workflow::run_creates_config_and_state_db)
 - `loom init --rebuild` repopulates the state DB from `specs/*.md`
       and active beads
-  [test](tests/loom-test.sh::test_init_rebuild)
+  [test](loom_workflow::rebuild_drops_and_repopulates_state_db)
 - `loom status` prints active spec, current molecule, iteration count
       from the state DB
-  [test](tests/loom-test.sh::test_status_command)
+  [test](loom_workflow::empty_state_reports_unset_spec)
 - `loom use <label>` sets `current_spec` in the state DB; round-trips
       with `loom status`
-  [test](tests/loom-test.sh::test_use_command)
+  [test](loom_workflow::use_round_trips_with_status_load)
 - Bare `loom logs` pretty-renders the most recent bead's full log
       via the same `AgentEvent` renderer used by `loom run`, then
       exits at EOF (no implicit follow); `-b <id>` (long form
       `--bead`) selects a specific bead's log
-  [test](tests/loom-test.sh::test_logs_default_renders_and_exits)
+  [test](loom_workflow::empty_root_returns_no_logs)
 - `loom logs -f` (long form `--follow`) tails the selected log,
       blocking on EOF until the file grows or the user interrupts
-  [test](tests/loom-test.sh::test_logs_follow_blocks_on_eof)
+  [test](loom_workflow::follow_blocks_past_eof_until_budget_expires)
 - `loom logs --raw` emits raw JSONL bytes from the file, unparsed;
       `loom logs -f --raw` tails raw JSONL (composes with follow)
-  [test](tests/loom-test.sh::test_logs_raw_and_follow_compose)
+  [test](loom_workflow::replay_raw_copies_bytes_verbatim)
 - `loom logs --path` prints the resolved log file path and exits;
       mutually exclusive with `-f`, `-v`, and `--raw` (passing any of
       those alongside `--path` errors before opening the file)
-  [test](tests/loom-test.sh::test_logs_path_short_circuits)
+  [test](loom_cli_help::loom_logs_help_snapshot)
 - `loom logs -v` (long form `--verbose`) streams assistant text
       deltas during render, matching `loom run -v` output
-  [test](tests/loom-test.sh::test_logs_verbose_streams_deltas)
+  [test](loom_workflow::replay_verbose_streams_text_deltas)
 - Bare `loom logs` against an empty `.wrapix/loom/logs/` exits 0
       with a one-line "No bead logs yet" message; `loom logs --path`
       in the same state exits non-zero with a clear error
-  [test](tests/loom-test.sh::test_logs_empty_directory)
+  [test](loom_workflow::logs_cmd::tests::empty_root_returns_no_logs)
 - `loom logs` and `loom run` share a single renderer; the
       `AgentEvent` consumer used to format live output is the same
       module used to replay saved logs (no second formatter)
-  [check](tests/loom-test.sh::test_logs_shares_renderer_with_run)
+  [check](cargo test -p loom-workflow --lib replay_renders_via_shared_renderer)
 - No `loom sync` / `loom tune` commands exist (compiled templates make
       them unnecessary)
   [check](tests/loom-test.sh::test_no_sync_or_tune_command)
@@ -1634,37 +1638,37 @@ Criteria.
 ### State database
 
 - `StateDb::open` creates tables on first open
-  [test](tests/loom-test.sh::test_state_db_init)
+  [test](loom_driver_state_db::state_db_init_creates_tables)
 - `StateDb::rebuild` populates from spec files and active beads
-  [test](tests/loom-test.sh::test_state_db_rebuild)
+  [test](loom_driver_state_db::state_db_rebuild_populates_specs_and_molecules)
 - `StateDb::rebuild` parses each spec's `## Companions` section and
       writes one `companions` row per listed path; specs without the
       section contribute zero rows (not an error)
-  [test](tests/loom-test.sh::test_state_db_rebuild_companions)
+  [test](loom_driver_state_db::state_db_rebuild_companions)
 - `StateDb::rebuild` resets iteration counters to 0
-  [test](tests/loom-test.sh::test_state_db_rebuild_resets_counters)
+  [test](loom_driver_state_db::state_db_rebuild_resets_counters)
 - `current_spec` / `set_current_spec` round-trips correctly
-  [test](tests/loom-test.sh::test_state_current_spec)
+  [test](loom_driver_state_db::state_current_spec_round_trips)
 - `increment_iteration` returns updated count
-  [test](tests/loom-test.sh::test_state_increment_iteration)
+  [test](loom_driver_state_db::state_increment_iteration_returns_updated_count)
 - Corrupted DB file → `loom init --rebuild` recovers
-  [test](tests/loom-test.sh::test_state_corruption_recovery)
+  [test](loom_driver_state_db::state_corruption_recovery)
 - Per-spec `loom todo` cursor round-trips through the `meta` table —
       `set_todo_cursor` overwrites prior values (cursor advances forward)
       and per-label namespacing keeps distinct specs disjoint
-  [test](tests/loom-test.sh::test_state_todo_cursor)
+  [test](loom_driver_state_db::todo_cursor_round_trips_through_meta_table)
 - `loom todo` advances the cursor only when the session emitted a
       `LOOM_COMPLETE` or `LOOM_NOOP` marker **and** `exit_code == 0`;
       any other terminal state (no marker, nonzero exit, `LOOM_BLOCKED`,
       `LOOM_CLARIFY`) leaves the cursor untouched
-  [test](tests/loom-test.sh::test_todo_cursor_advance_requires_marker)
+  [test](loom_workflow::cursor_gate_advances_only_on_complete_or_noop_with_clean_exit)
 - The implementation-notes delete and the cursor advance share one
       SQLite transaction, both gated on productive completion; a
       non-productive terminal state leaves both intact
-  [test](tests/loom-test.sh::test_todo_delete_notes_atomic_with_cursor)
+  [test](loom_driver_state_db::consume_notes_and_advance_cursor_is_atomic)
 - `loom plan -n <label>` inserts a `specs` row and seeds
       implementation notes via `loom note set` from the interview
-  [test](tests/loom-test.sh::test_plan_new_writes_implementation_notes)
+  [test](loom_workflow::new_prompt_instructs_agent_to_call_loom_note_set)
 - `loom plan -u <label>` reads the existing implementation notes
       via `loom note list`, and writes back a merged array via
       `loom note set` (interview-driven keep/drop/add — not blind
@@ -1673,62 +1677,62 @@ Criteria.
 - `loom todo` reads implementation notes from the anchor's `notes`
       rows and renders each note's text into every new bead body
       created during the run
-  [test](tests/loom-test.sh::test_todo_renders_notes_into_beads)
+  [test](loom_workflow_todo_production::build_spawn_config_renders_implementation_notes_from_db)
 - `loom note set <label> --kind <k> --json '[…]'` is atomic —
       `DELETE WHERE spec_label=? AND kind=?` plus N `INSERT`s in one
       transaction; partial failure leaves the prior set intact
-  [test](tests/loom-test.sh::test_loom_note_set_atomic)
+  [test](loom_driver_state_db::notes_set_replaces_atomically)
 - `loom note add <label> --kind <k> --text "…"` appends a single
       row to `notes`
-  [test](tests/loom-test.sh::test_loom_note_add)
+  [test](loom_driver_state_db::notes_add_then_list_chronological)
 - `loom note rm <id>` deletes by primary key
-  [test](tests/loom-test.sh::test_loom_note_rm)
+  [test](loom_driver_state_db::notes_rm_removes_one_row_by_id)
 - `loom note list [<label>]` returns rows for the spec/kind pair
       (default kind: `implementation`) ordered by `id` ascending
       (chronological); `--all-kinds` widens to every kind and includes
       the `kind` column in output
-  [test](tests/loom-test.sh::test_loom_note_list_chronological)
+  [test](loom_driver_state_db::notes_add_then_list_chronological)
 - `loom note clear <label>` deletes rows for the spec/kind pair
       (default kind: `implementation`); `--all-kinds` wipes every kind
       for the spec in one statement
-  [test](tests/loom-test.sh::test_loom_note_clear)
+  [test](loom_driver_state_db::notes_clear_kind_only_or_all_kinds)
 - `--kind` defaults to `implementation` on every subcommand that
       accepts it, so `loom note add my-spec --text "…"` is the
       common-case shorthand
-  [test](tests/loom-test.sh::test_loom_note_kind_defaults_implementation)
+  [test](loom_driver_state_db::notes_kind_defaults_implementation)
 - `loom init --rebuild` drops and recreates the `notes` table —
       no notes survive a rebuild, regardless of `kind`
-  [test](tests/loom-test.sh::test_rebuild_drops_all_notes)
+  [test](loom_driver_state_db::rebuild_drops_all_notes)
 - `notes.spec_label` is declared with `ON DELETE CASCADE`; an
       explicit `DELETE FROM specs WHERE label = ?` removes the notes in
       the same statement. No routine command takes that path today —
       this verifies the FK clause itself
-  [test](tests/loom-test.sh::test_notes_cascade_on_spec_delete)
+  [test](loom_driver_state_db::notes_cascade_on_spec_delete)
 - Routine commands never DELETE a `specs` row; row removal happens
       only via `loom init --rebuild`
-  [check](tests/loom-test.sh::test_routine_commands_never_delete_spec_row)
+  [check](cargo test -p loom-driver --test state_db routine_commands_never_delete_spec_row)
 
 ### Compaction recovery
 
 - At session start, `.wrapix/loom/scratch/<key>/` contains
       `prompt.txt`, `scratch.md`, `repin.sh` for every phase command
       (plan, todo, run, check, msg)
-  [test](tests/loom-test.sh::test_scratch_dir_created)
+  [test](loom_driver::scratch::tests::open_creates_layout_and_drop_removes_it)
 - `<key>` is the spec label for plan/todo phases and the bead ID for
       run/check/msg phases
-  [test](tests/loom-test.sh::test_scratch_key_naming)
+  [test](loom_driver::scratch::tests::resolve_scratch_key_picks_label_for_spec_scoped_phases)
 - Running `repin.sh` emits a valid `SessionStart[compact]` JSON
       envelope containing banner + `prompt.txt` + `scratch.md` contents
-  [test](tests/loom-test.sh::test_repin_envelope)
+  [test](loom_driver::scratch::tests::repin_script_runs_jq_envelope_against_files)
 - `claude-settings.json` registers `repin.sh` under
       `SessionStart[matcher: compact]`
-  [test](tests/loom-test.sh::test_repin_hook_registered)
+  [test](loom_driver::scratch::tests::claude_settings_registers_repin_under_session_start_compact)
 - On session end (success or failure), the per-key scratch directory
       is removed
-  [test](tests/loom-test.sh::test_scratch_dir_cleanup)
+  [test](loom_driver::scratch::tests::close_removes_dir_and_is_idempotent_with_drop)
 - Two parallel `loom run` workers on different beads use independent
       scratch directories and do not collide
-  [test](tests/loom-test.sh::test_parallel_scratch_isolation)
+  [test](loom_driver::scratch::tests::parallel_keys_get_independent_dirs)
 - `partial/scratchpad.md` instructs the agent that the scratchpad is
       agent-lifecycle-only and points at durable destinations for
       long-term records
@@ -1737,18 +1741,18 @@ Criteria.
 ### Beads CLI wrapper
 
 - `bd show` output parsed into typed `Bead` struct
-  [test](tests/loom-test.sh::test_bd_show_parsing)
+  [test](loom_driver::bd::client::tests::show_parses_first_row_into_bead)
 - `bd list` output parsed with label and status filtering
-  [test](tests/loom-test.sh::test_bd_list_parsing)
+  [test](loom_driver::bd::client::tests::list_parses_array_of_beads)
 - `bd create` returns created bead ID
-  [test](tests/loom-test.sh::test_bd_create_returns_id)
+  [test](loom_driver::bd::client::tests::create_returns_id_from_silent_output)
 - CLI errors mapped to typed error variants
-  [test](tests/loom-test.sh::test_bd_error_handling)
+  [test](loom_driver::bd::client::tests::cli_failure_maps_to_typed_error)
 
 ### Nix integration
 
 - Loom binary builds via `nix build`
-  [system](tests/loom-test.sh::test_nix_build)
+  [system](nix build .#loom)
 - Loom binary is available in the devShell
   [system](tests/loom-test.sh::test_devshell_includes_loom)
 - `cargo clippy --workspace` and `cargo test --workspace` are
@@ -1802,7 +1806,8 @@ Criteria.
      `.wrapix/loom/logs/` via the same `AgentEvent` renderer used by
      `loom run`. Full flag set in [Logs UX](#logs-ux).
    - `loom spec` — query spec annotations; supports `--deps` to print
-     nixpkgs required by the spec's `[verify]` / `[judge]` test files
+     nixpkgs required by the spec's `[check]` / `[test]` / `[system]`
+     / `[judge]` verifier targets
 
    **State** — workspace lifecycle and persisted state:
    - `loom init` — create `.wrapix/loom/` config + state DB; `--rebuild`
