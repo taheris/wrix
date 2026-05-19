@@ -45,11 +45,10 @@ the Mayor via `bd human` instead.
 - **DOC-2** — *Architecture references point to `docs/architecture.md`,
   not `specs/`.*
 - **DOC-3** — *Terminology references point to `docs/README.md`.*
-- **DOC-4** — *Do not edit files under `specs/` without explicit user
-  approval.* Spec edits happen in a `loom plan` session or via
-  inline approval; a bead's existence is not authorization, even
-  when its title implies a spec change. Verifier-vs-spec drift is
-  a spec decision — surface both options, don't pick one.
+- **DOC-4** — *Spec contract changes (additions, rewrites,
+  reconciliations) require human authorization — inline for
+  conversational drivers, `LOOM_CLARIFY` for in-loom agents.*
+  Retargets, typos, and renames are routine.
 
 ## Git (GIT-)
 
