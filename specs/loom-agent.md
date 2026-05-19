@@ -653,9 +653,9 @@ connection, network filtering, session audit logging.
 - Image builds with `profile:base` + `WRAPIX_AGENT=pi`
   [system](nix build .#sandbox-pi)
 - Pi binary is functional inside container (`pi --version` succeeds)
-  [system](tests/loom-test.sh::test_pi_binary_in_container)
+  [system](nix run .#test-pi-runtime-image)
 - Claude runtime adds nothing (claude already in base image)
-  [system](tests/loom-test.sh::test_claude_runtime_noop)
+  [system](nix run .#test-claude-runtime-noop)
 
 ## Requirements
 

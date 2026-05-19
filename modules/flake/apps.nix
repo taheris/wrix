@@ -58,6 +58,8 @@ _:
         test-ralph = test.apps.ralph;
         test-ralph-container = test.apps.ralph-container;
         test-wrapix-spawn-load = test.apps.wrapix-spawn-load;
+        test-pi-runtime-image = test.apps.pi-runtime-image;
+        test-claude-runtime-noop = test.apps.claude-runtime-noop;
       }
       // lib.optionalAttrs isLinux {
         fuzz-loom = {

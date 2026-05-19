@@ -18,6 +18,26 @@ let
     "aarch64-linux"
   ];
 
+  sandboxLib = import ../../lib/sandbox {
+    inherit
+      pkgs
+      system
+      linuxPkgs
+      fenix
+      treefmt
+      ;
+  };
+  defaultImage = (sandboxLib.mkSandbox { profile = sandboxLib.profiles.base; }).image;
+  piImage =
+    (sandboxLib.mkSandbox {
+      profile = sandboxLib.profiles.base;
+      agent = "pi";
+    }).image;
+  defaultImageClosure = pkgs.closureInfo { rootPaths = [ defaultImage ]; };
+  piImageClosure = pkgs.closureInfo { rootPaths = [ piImage ]; };
+  piMonoPkg = linuxPkgs.pi-mono;
+  claudeCodePkg = linuxPkgs.claude-code;
+
   # Mirrors lib/loom/default.nix's filter so the locally-built nextest
   # variants see the same src as `loomPackage.nextest`.
   srcFilter =
@@ -251,7 +271,67 @@ let
           exit 0
         '';
   };
+  piRuntimeImageTest = pkgs.writeShellApplication {
+    name = "test-pi-runtime-image";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.gnugrep
+    ];
+    text = ''
+      closure_file=${piImageClosure}/store-paths
+      pi_mono_path=${piMonoPkg}
+
+      if ! grep -qxF "$pi_mono_path" "$closure_file"; then
+          echo "FAIL: pi-mono store path not in sandbox-pi image closure" >&2
+          echo "  expected: $pi_mono_path" >&2
+          echo "  closure : $closure_file" >&2
+          exit 1
+      fi
+
+      if [[ ! -x "$pi_mono_path/bin/pi" ]]; then
+          echo "FAIL: pi binary at $pi_mono_path/bin/pi is missing or not executable" >&2
+          exit 1
+      fi
+
+      echo "test-pi-runtime-image: PASS"
+    '';
+  };
+
+  claudeRuntimeNoopTest = pkgs.writeShellApplication {
+    name = "test-claude-runtime-noop";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.gnugrep
+    ];
+    text = ''
+      closure_file=${defaultImageClosure}/store-paths
+      pi_mono_path=${piMonoPkg}
+      claude_code_path=${claudeCodePkg}
+
+      if grep -qxF "$pi_mono_path" "$closure_file"; then
+          echo "FAIL: pi-mono unexpectedly present in default sandbox closure" >&2
+          echo "  found   : $pi_mono_path" >&2
+          echo "  closure : $closure_file" >&2
+          exit 1
+      fi
+
+      if ! grep -qxF "$claude_code_path" "$closure_file"; then
+          echo "FAIL: claude-code missing from default sandbox closure" >&2
+          echo "  expected: $claude_code_path" >&2
+          echo "  closure : $closure_file" >&2
+          exit 1
+      fi
+
+      echo "test-claude-runtime-noop: PASS"
+    '';
+  };
 in
 {
-  inherit testLoom nextestFast wrapixSpawnLoadTest;
+  inherit
+    testLoom
+    nextestFast
+    wrapixSpawnLoadTest
+    piRuntimeImageTest
+    claudeRuntimeNoopTest
+    ;
 }

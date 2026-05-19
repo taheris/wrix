@@ -269,6 +269,18 @@ in
       program = "${loomDeriv.wrapixSpawnLoadTest}/bin/test-wrapix-spawn-load";
     };
 
+    pi-runtime-image = {
+      meta.description = "Verify sandbox-pi image closure contains executable pi-mono binary";
+      type = "app";
+      program = "${loomDeriv.piRuntimeImageTest}/bin/test-pi-runtime-image";
+    };
+
+    claude-runtime-noop = {
+      meta.description = "Verify default sandbox image closure has claude-code but not pi-mono";
+      type = "app";
+      program = "${loomDeriv.claudeRuntimeNoopTest}/bin/test-claude-runtime-noop";
+    };
+
     # profiles.rust.buildPackage [verify] hash invariants (specs/profiles.md
     # success criteria 414-427). Runs all 7 test functions in
     # tests/profiles/build-package.sh.
