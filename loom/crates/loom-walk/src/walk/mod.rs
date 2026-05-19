@@ -11,19 +11,31 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+mod crate_structure;
 mod git_client_encapsulation;
+mod loom_does_not_invoke_podman;
+mod loom_events_is_leaf;
+mod loom_events_minimal_deps;
+mod loom_render_deps;
 mod newtype_identifiers;
+mod no_allow_dead_code;
 mod no_derive_from_on_newtypes;
 mod no_hardcoded_tmp_paths;
+mod no_panics_in_production;
 mod no_real_clock_outside_system_clock;
+mod no_sync_or_tune_command;
 mod no_thread_sleep;
 mod no_tokio_sleep_outside_clock;
 mod no_tokio_timeout_outside_clock;
 mod no_types_or_error_files;
+mod phase_verdict_decide_called_from_production;
 mod renderer_no_insta_dependency;
 mod single_event_channel;
 mod template_context_structs;
 mod util;
+mod workspace_deps_pinned;
+mod workspace_edition;
+mod workspace_lints;
 
 /// Verdict each walk returns. Matches the verifier-runner contract in
 /// `specs/loom-gate.md`: a JSON line `{"pass": bool, "evidence": "<msg>"}`
@@ -85,12 +97,36 @@ pub struct Walk {
 /// so the error-message enumeration reads stably.
 pub static REGISTRY: &[Walk] = &[
     Walk {
+        name: "crate_structure",
+        run: crate_structure::run,
+    },
+    Walk {
         name: "git_client_encapsulation",
         run: git_client_encapsulation::run,
     },
     Walk {
+        name: "loom_does_not_invoke_podman",
+        run: loom_does_not_invoke_podman::run,
+    },
+    Walk {
+        name: "loom_events_is_leaf",
+        run: loom_events_is_leaf::run,
+    },
+    Walk {
+        name: "loom_events_minimal_deps",
+        run: loom_events_minimal_deps::run,
+    },
+    Walk {
+        name: "loom_render_deps",
+        run: loom_render_deps::run,
+    },
+    Walk {
         name: "newtype_identifiers",
         run: newtype_identifiers::run,
+    },
+    Walk {
+        name: "no_allow_dead_code",
+        run: no_allow_dead_code::run,
     },
     Walk {
         name: "no_derive_from_on_newtypes",
@@ -101,8 +137,16 @@ pub static REGISTRY: &[Walk] = &[
         run: no_hardcoded_tmp_paths::run,
     },
     Walk {
+        name: "no_panics_in_production",
+        run: no_panics_in_production::run,
+    },
+    Walk {
         name: "no_real_clock_outside_system_clock",
         run: no_real_clock_outside_system_clock::run,
+    },
+    Walk {
+        name: "no_sync_or_tune_command",
+        run: no_sync_or_tune_command::run,
     },
     Walk {
         name: "no_thread_sleep",
@@ -121,6 +165,10 @@ pub static REGISTRY: &[Walk] = &[
         run: no_types_or_error_files::run,
     },
     Walk {
+        name: "phase_verdict_decide_called_from_production",
+        run: phase_verdict_decide_called_from_production::run,
+    },
+    Walk {
         name: "renderer_no_insta_dependency",
         run: renderer_no_insta_dependency::run,
     },
@@ -131,6 +179,18 @@ pub static REGISTRY: &[Walk] = &[
     Walk {
         name: "template_context_structs",
         run: template_context_structs::run,
+    },
+    Walk {
+        name: "workspace_deps_pinned",
+        run: workspace_deps_pinned::run,
+    },
+    Walk {
+        name: "workspace_edition",
+        run: workspace_edition::run,
+    },
+    Walk {
+        name: "workspace_lints",
+        run: workspace_lints::run,
     },
 ];
 
@@ -167,9 +227,18 @@ mod tests {
     #[test]
     fn registry_lookup_finds_known_walks() {
         for name in [
+            "crate_structure",
+            "git_client_encapsulation",
+            "loom_does_not_invoke_podman",
+            "loom_events_is_leaf",
+            "loom_events_minimal_deps",
+            "loom_render_deps",
             "no_derive_from_on_newtypes",
             "no_types_or_error_files",
-            "git_client_encapsulation",
+            "no_allow_dead_code",
+            "no_panics_in_production",
+            "no_sync_or_tune_command",
+            "phase_verdict_decide_called_from_production",
             "single_event_channel",
             "newtype_identifiers",
             "template_context_structs",
@@ -179,6 +248,9 @@ mod tests {
             "no_tokio_timeout_outside_clock",
             "no_real_clock_outside_system_clock",
             "renderer_no_insta_dependency",
+            "workspace_deps_pinned",
+            "workspace_edition",
+            "workspace_lints",
         ] {
             assert!(lookup(name).is_some(), "missing walk: {name}");
         }

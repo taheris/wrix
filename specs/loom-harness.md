@@ -1153,21 +1153,21 @@ parameters.
 - Workspace builds with `cargo build` from `loom/` root
   [check](cargo build --workspace)
 - All seven crates present: loom, loom-events, loom-driver, loom-render, loom-agent, loom-workflow, loom-templates
-  [check](tests/loom-test.sh::test_crate_structure)
+  [check](cargo run -p loom-walk -- crate_structure)
 - Workspace uses edition 2024 and resolver "3"
-  [check](tests/loom-test.sh::test_workspace_edition)
+  [check](cargo run -p loom-walk -- workspace_edition)
 - All dependencies pinned under `[workspace.dependencies]`
-  [check](tests/loom-test.sh::test_workspace_deps_pinned)
+  [check](cargo run -p loom-walk -- workspace_deps_pinned)
 - All crates declare `[lints] workspace = true`
-  [check](tests/loom-test.sh::test_workspace_lints)
+  [check](cargo run -p loom-walk -- workspace_lints)
 - No `types.rs` or `error.rs` files at crate roots
   [check](cargo run -p loom-walk -- no_types_or_error_files)
 - Domain identifiers use newtypes (BeadId, SpecLabel, MoleculeId, etc.)
   [check](cargo run -p loom-walk -- newtype_identifiers)
 - No `unwrap()`, `todo!()`, `panic!()`, `unimplemented!()` in non-test code
-  [check](tests/loom-test.sh::test_no_panics_in_production)
+  [check](cargo run -p loom-walk -- no_panics_in_production)
 - No `#[allow(dead_code)]` in non-test code
-  [check](tests/loom-test.sh::test_no_allow_dead_code)
+  [check](cargo run -p loom-walk -- no_allow_dead_code)
 - No `derive(From)` or `derive(Into)` on newtype structs
   [check](cargo run -p loom-walk -- no_derive_from_on_newtypes)
 
@@ -1180,7 +1180,7 @@ Criteria.
 
 - Loom never invokes `podman run` directly (grep `loom/crates/` for
       `podman` finds only documentation references)
-  [check](tests/loom-test.sh::test_loom_does_not_invoke_podman)
+  [check](cargo run -p loom-walk -- loom_does_not_invoke_podman)
 - `wrapix spawn --spawn-config <file> --stdio` accepts a JSON config,
       reuses container construction from existing `wrapix run`, omits TTY
   [test](loom_spawn_dispatch::wrapix_spawn_invocation_records_correct_argv)
@@ -1321,7 +1321,7 @@ Criteria.
 - Variant set is flat (no nested `message_update { delta: ... }`) — top-level `text_delta` / `thinking_delta` / `toolcall_delta` are siblings of `tool_call` / `tool_result`
   [check](cargo test -p loom-events --lib flat_variant_shape_has_no_nested_envelopes)
 - `loom-events` crate has exactly three deps: `serde`, `serde_json`, `thiserror` (no `chrono`, no `ulid`, no `uuid`)
-  [check](tests/loom-test.sh::test_loom_events_minimal_deps)
+  [check](cargo run -p loom-walk -- loom_events_minimal_deps)
 - Unknown event variants are accepted gracefully (deserialized as a fallback or skipped, never error)
   [test](loom_events::unknown_variants_fail_with_a_loud_error)
 
@@ -1352,9 +1352,9 @@ Criteria.
 **Crate boundary**
 
 - `loom-events` is a leaf crate — no internal deps on `loom-driver` / `loom-render` / `loom-workflow` / `loom-templates`
-  [check](tests/loom-test.sh::test_loom_events_is_leaf)
+  [check](cargo run -p loom-walk -- loom_events_is_leaf)
 - `loom-render` depends on `loom-events` only (no `loom-driver`)
-  [check](tests/loom-test.sh::test_loom_render_deps)
+  [check](cargo run -p loom-walk -- loom_render_deps)
 
 ### Worktree parallelism
 
@@ -1490,7 +1490,7 @@ Criteria.
 - `phase_verdict::decide()` is invoked from `loom run`'s per-bead
       exit AND from `loom gate review`'s phase-end; no production
       site inlines ad-hoc marker → outcome classification (FR12)
-  [check](tests/loom-test.sh::test_phase_verdict_decide_called_from_production)
+  [check](cargo run -p loom-walk -- phase_verdict_decide_called_from_production)
 - `loom run` never invokes `bd close` on a bead it dispatched;
       closure is the agent's responsibility and the `bd-closed` column
       is observed post-hoc. Verified by stubbing an agent that emits
@@ -1633,7 +1633,7 @@ Criteria.
   [check](cargo test -p loom-workflow --lib replay_renders_via_shared_renderer)
 - No `loom sync` / `loom tune` commands exist (compiled templates make
       them unnecessary)
-  [check](tests/loom-test.sh::test_no_sync_or_tune_command)
+  [check](cargo run -p loom-walk -- no_sync_or_tune_command)
 
 ### State database
 
