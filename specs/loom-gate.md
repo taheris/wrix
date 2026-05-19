@@ -473,12 +473,15 @@ corpus, is what determines the latency.
 
 ## Options Format Contract
 
-When the gate raises `loom:clarify` for an invariant clash, the bead
-body presents the three (or contextual) paths as a structured
-markdown block that `loom msg` can consume mechanically:
+Whenever the gate (or, in practice, the reviewing agent acting on
+behalf of the gate) raises `loom:clarify` — for an invariant clash,
+for a verifier-honesty concern with multiple resolution paths, or
+for any review-time decision the user must pick from — the bead body
+presents the candidate paths as a structured markdown block that
+`loom msg` can consume mechanically:
 
 ```markdown
-## Options — <one-line summary of the clash>
+## Options — <one-line summary of the decision>
 
 ### Option 1 — Preserve the invariant
 <body explaining what reworking the change to preserve the invariant
@@ -505,8 +508,30 @@ invariant to weaken or remove, what code realignment would follow>
   `loom:clarify` is removed.
 
 A clarify bead can present fewer or differently-framed options when
-the clash warrants — the format is `### Option <integer> — <title>`
-for any integer ≥ 1. The summary line is always required.
+the decision warrants — the format is `### Option <integer> —
+<title>` for any integer ≥ 1. The summary line is always required.
+
+**Persistence boundary: agent narrates, agent persists.** The gate
+does not parse the reviewer's stdout for `## Options` / `### Option
+N` blocks — neither `loom gate verify`/`review` nor the verdict-gate
+phase classifier (`phase_verdict::decide`) scrapes prose for
+options. The reviewing agent is the only mechanism that puts the
+canonical block into bead state, via one of:
+
+- `bd create … --description "<options block>"` when the clarify is
+  a new bead, OR
+- `bd update <id> --notes "<options block>" && bd update <id>
+  --add-label=loom:clarify` when the options apply to an already-
+  existing bead (e.g. promoting a previously `loom:blocked` bead to
+  `loom:clarify` once the reviewer enumerates unblock paths).
+
+The agent must complete the `bd` write **before** emitting
+`LOOM_COMPLETE` / `LOOM_REVIEW_FLAG`. Reviewer prose that names
+options without a corresponding `bd` write leaves the canonical
+block in the review log file only — `loom msg`'s queue stays empty
+and the downstream user cannot fast-reply. The reviewer template
+in `loom-templates/templates/review.md` documents the required
+`bd` invocations.
 
 ## Output
 

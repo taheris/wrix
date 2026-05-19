@@ -375,12 +375,20 @@ These paths are **guidance, not a fixed A/B/C menu**. For each specific clash, p
 **contextual options tailored to the situation** — typically **2–4 options**, each
 naming its cost (churn, debt, coupling, risk). Do NOT emit a generic fixed menu.
 
-### Options Format Contract (REQUIRED)
+### Options Format Contract (REQUIRED, scope is universal)
 
-Every invariant-clash clarify bead you create **MUST** present its options using the
-canonical Options Format Contract. `loom msg` parses this format to render the
-SUMMARY column, enumerate options for view mode, and resolve integer fast-replies.
-A malformed bead breaks fast-reply with `-a <int>`.
+Whenever your review surfaces a decision point with **two or more candidate
+resolutions** — invariant clash, verifier-bypass with multiple fix paths, a
+blocked downstream bead that could be unblocked several ways, *anything*
+where the user picks — you **MUST** persist those options to bead state in
+the canonical Options Format Contract. The format applies to every clarify
+situation; the "Invariant-Clash" framing below is one common trigger, not
+the only one.
+
+`loom msg` parses this format to render the SUMMARY column, enumerate
+options for view mode, and resolve integer fast-replies. A malformed (or
+narrated-only-in-prose) bead breaks fast-reply with `-a <int>`, and the
+options live in the review log file — invisible to `loom msg`'s queue.
 
 **Required shape:**
 
@@ -406,8 +414,45 @@ A malformed bead breaks fast-reply with `-a <int>`.
   is required for `-a <int>` lookup to work.
 - Each option body extends from its `### Option N` heading until the next
   `### Option` or the next `##` heading; name the cost (churn, debt, coupling, risk).
-- Use contextual options per clash — typically 2–4 — shaped by the three-paths
-  principle. Do NOT emit a fixed A/B/C menu.
+- Use contextual options per decision — typically 2–4 — shaped by the
+  three-paths principle. Do NOT emit a fixed A/B/C menu, and do NOT narrate
+  options only in prose.
+
+**Persistence (REQUIRED — the gate does NOT parse your prose).** You are the
+mechanism that puts options into bead state. The verdict gate routes on
+mechanical signals (`LOOM_REVIEW_FLAG`, `bd-closed`, diff emptiness); it
+does not scrape your reasoning for `### Option N` blocks. Two flows:
+
+- **Options apply to a NEW clarify bead** (e.g. a freshly-detected invariant
+  clash) → `bd create` with the canonical block in `--description` (template
+  below).
+- **Options apply to an EXISTING bead** (e.g. wx-tc9xs.33 is already
+  `loom:blocked` and your review proposes paths to unblock it) → write the
+  canonical block onto that bead with `bd update --notes` AND apply the
+  `loom:clarify` label so `loom msg` finds it:
+
+  ```bash
+  bd update <existing-bead-id> --notes "$(cat <<'EOF'
+  ## Options — <one-line summary, ≤50 chars>
+
+  ### Option 1 — <short title>
+  <body, name the cost>
+
+  ### Option 2 — <short title>
+  <body, name the cost>
+
+  ### Option 3 — <short title>
+  <body, name the cost>
+  EOF
+  )"
+  bd update <existing-bead-id> --add-label=loom:clarify
+  # If the bead was previously `loom:blocked`, also: --remove-label=loom:blocked
+  ```
+
+Do this **before** you emit `LOOM_COMPLETE` / `LOOM_REVIEW_FLAG`. If the
+canonical block lives only in your stdout / the review log, `loom msg` will
+not find it — the queue will be empty even though your review identified a
+real clarify-worthy decision.
 
 ### Handling Each Clash
 
@@ -565,14 +610,23 @@ verbatim to derive the gate's verdict; emit it with nothing trailing.
   before emitting. Use `LOOM_NOOP` instead of `LOOM_COMPLETE` whenever the
   diff is empty — an empty diff with `LOOM_COMPLETE` is treated as
   `zero-progress` and enters recovery. Only valid in worker phases.
-- `LOOM_BLOCKED` — You cannot proceed and are self-reporting. Write the
-  reason on prior lines before the marker. The gate applies `loom:blocked`
-  to *this* bead and exits without entering recovery; other beads in the
-  molecule continue running. The labelled bead waits for human resolution
-  via `loom msg`.
+- `LOOM_BLOCKED` — You cannot proceed and are self-reporting *without* a
+  menu of resolution options. Write the reason on the line immediately
+  before the marker (the gate only reads the most recent non-empty prior
+  line — multi-paragraph prose is NOT captured). The gate applies
+  `loom:blocked` to *this* bead and exits without entering recovery; other
+  beads in the molecule continue running. The labelled bead waits for
+  human resolution via `loom msg`. **If you have multiple candidate
+  resolutions, do NOT use `LOOM_BLOCKED`** — use `LOOM_CLARIFY` below so
+  the options reach bead state.
 - `LOOM_CLARIFY` — You have a specific question with structured options for
-  the human (per the Options Format Contract in `specs/loom-gate.md`).
-  Write the question and option block on prior lines before the marker.
-  The gate applies `loom:clarify` to *this* bead and exits without
-  entering recovery; other beads in the molecule continue running. The
-  labelled bead waits for `loom msg` resolution.
+  the human. **Persist the question and the canonical `## Options — …`
+  block to bead state before emitting the marker** — either by `bd create`
+  on a new clarify bead or by `bd update --notes` + `bd update
+  --add-label=loom:clarify` on an existing bead — per the Options Format
+  Contract in `specs/loom-gate.md`. The gate does NOT parse your prose for
+  options; if the canonical block lives only in your stdout, `loom msg`'s
+  queue will be empty. After persisting, the gate applies `loom:clarify`
+  to *this* bead and exits without entering recovery; other beads in the
+  molecule continue running. The labelled bead waits for `loom msg`
+  resolution.

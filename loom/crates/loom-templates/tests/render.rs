@@ -384,6 +384,53 @@ fn review_renders_style_rule_conformance_walkthrough() -> Result<()> {
     Ok(())
 }
 
+/// Pins the Options Format Contract's universal scope and explicit
+/// `bd update --notes` + `loom:clarify` flow for existing beads, so the
+/// contract cannot silently re-narrow to invariant-clash-only.
+#[test]
+fn review_renders_options_format_contract_with_universal_scope() -> Result<()> {
+    let ctx = ReviewContext {
+        pinned_context: PINNED_CONTEXT_BODY.to_string(),
+        label: SpecLabel::new("loom-harness"),
+        spec_path: "specs/loom-harness.md".to_string(),
+        companion_paths: vec![],
+        beads_summary: None,
+        base_commit: None,
+        molecule_id: None,
+        verify_sources: vec![],
+        judge_rubrics: vec![],
+        scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+        style_rules: "docs/style-rules.md".to_string(),
+    };
+    let out = ctx.render()?;
+
+    assert!(
+        out.contains("Options Format Contract"),
+        "Options Format Contract section missing: {out}",
+    );
+    assert!(
+        out.contains("scope is universal") || out.contains("clarify situation"),
+        "contract scope not generalised beyond invariant clashes: {out}",
+    );
+    assert!(
+        out.contains("bd update")
+            && out.contains("--notes")
+            && out.contains("--add-label=loom:clarify"),
+        "bd update --notes + loom:clarify flow for EXISTING beads not documented: {out}",
+    );
+    assert!(
+        out.contains("gate does NOT parse your prose")
+            || out.contains("does not scrape")
+            || out.contains("does NOT parse your prose"),
+        "persistence-boundary statement missing: {out}",
+    );
+    assert!(
+        out.contains("## Options —") && out.contains("### Option 1 —"),
+        "canonical Options block shape missing: {out}",
+    );
+    Ok(())
+}
+
 #[test]
 fn msg_renders_clarify_beads_with_options() -> Result<()> {
     let ctx = MsgContext {
