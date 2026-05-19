@@ -36,8 +36,9 @@ pin — keep it current when specs land or retire.
 | [security-review.md](../specs/security-review.md) | — | wx-eok | Security tradeoffs and mitigations |
 | [tmux-mcp.md](../specs/tmux-mcp.md) | [`lib/mcp/tmux/`](../lib/mcp/tmux/) | wx-4f3g | AI-assisted debugging via tmux panes |
 | [loom-harness.md](../specs/loom-harness.md) | [`loom/`](../loom/) | wx-3hhwq | Loom platform: crate structure, workspace lints, process architecture, state store, command set |
-| [loom-agent.md](../specs/loom-agent.md) | [`loom/crates/loom-agent/`](../loom/crates/loom-agent/) | wx-pkht8 | Agent backend abstraction: pi-mono RPC + Claude Code stream-json |
+| [loom-agent.md](../specs/loom-agent.md) | [`loom/crates/loom-agent/`](../loom/crates/loom-agent/) | wx-pkht8 | Agent backend abstraction: pi-mono RPC, Claude Code stream-json, and Direct (loom-llm + sandbox-aware tools via `loom-direct-runner`) |
 | [loom-templates.md](../specs/loom-templates.md) | [`loom/crates/loom-templates/`](../loom/crates/loom-templates/) | wx-z28qe | Askama templates, partials inventory, per-phase pinning policy |
+| [loom-llm.md](../specs/loom-llm.md) | [`loom/crates/loom-llm/`](../loom/crates/loom-llm/) | — | Public-contract LLM primitives: `LlmClient`, typed `CacheControl`, `Conversation` with built-in tool-use loop, agent-loop observers (doom-loop, duplicate-result) |
 | [loom-gate.md](../specs/loom-gate.md) | [`loom/crates/loom-gate/`](../loom/crates/loom-gate/) | — | Quality gate: conformance + style + test-quality dimensions, plan/per-diff/standing stages, `loom gate verify` (deterministic) + `loom gate review` (LLM judge) |
 | [loom-tests.md](../specs/loom-tests.md) | [`tests/loom/`](../tests/loom/) | wx-lfuuh | Test strategy: unit, integration, system tests for Loom |
 

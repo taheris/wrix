@@ -15,13 +15,16 @@ variable validation.
 
 This spec covers the platform: crate structure, Rust conventions,
 Nix integration, SQLite state store, beads CLI wrapper, process
-architecture, and recovery mechanics. The Askama template engine,
-partials inventory, per-phase pinning policy, and snapshot-test
-contract live in [loom-templates.md](loom-templates.md). The agent
-abstraction layer (pi-mono and Claude Code backends, container
-communication, backend selection) lives in
-[loom-agent.md](loom-agent.md). The gate (rubric, invariants, lanes,
-stages) lives in [loom-gate.md](loom-gate.md). Workflow
+architecture, recovery mechanics, the `Session` and `EventSink`
+trait surfaces, and the `loom-llm` public LLM-primitives crate.
+The Askama template engine, partials inventory, per-phase pinning
+policy, the typed context structs Loom exposes for consumer
+template composition, and the snapshot-test contract live in
+[loom-templates.md](loom-templates.md). The agent abstraction
+layer (pi-mono, Claude Code, and Direct backends; container
+communication; backend selection) lives in
+[loom-agent.md](loom-agent.md). The gate (rubric, invariants,
+lanes, stages) lives in [loom-gate.md](loom-gate.md). Workflow
 semantics — what each `loom plan` / `loom todo` / `loom run` /
 `loom gate` / `loom msg` command does — are defined in this
 spec's Functional section and the Msg Modes / Verdict Gate sections
@@ -386,9 +389,26 @@ Field-level payload shapes per variant are defined by the Rust
 types in `loom-events`; the crate's API docs are the source of
 truth for per-variant fields.
 
-**Architecture-bearing types.** Three load-bearing patterns from
-this schema, each enforcing an invariant structurally:
+**Architecture-bearing types.** Four load-bearing patterns from
+this schema and the surrounding session contract, each enforcing
+an invariant structurally:
 
+- **`Session` trait** — the public agent-driver contract, defined
+  in `loom-events`. Workflow code holds backends as
+  `Box<dyn Session>` so per-phase backend selection is a runtime
+  choice rather than a compile-time one. The trait exposes
+  `prompt(msg) -> EventStream`, `steer(msg)`, `cancel()`, and
+  `set_mode(mode)`; its `Events` associated type is concretized
+  to `Pin<Box<dyn Stream<Item = AgentEvent> + Send>>` so
+  `dyn Session` is dyn-compatible without trait-variant
+  gymnastics. Backends pick their own stream type internally; the
+  box happens at the trait boundary. Subprocess-driving backends
+  (Pi, Claude) keep a typestate (`AgentSession<Idle|Active>`) as
+  an *internal mechanic* — handshake completed, stdin attached,
+  etc. — but that typestate does not leak through `Session`.
+  Backends that don't drive a subprocess (Direct, future
+  ACP-exposed sessions) carry no typestate at all; the
+  asymmetry is *why* the trait belongs on top.
 - **ID newtypes** (`BeadId`, `MoleculeId`, `ToolCallId`, etc.) —
   `#[serde(transparent)]` wrappers over `String`. Construction
   validates at the parse boundary; downstream code receives the
@@ -408,10 +428,15 @@ this schema, each enforcing an invariant structurally:
 **Driver events.** `driver_event` carries a `driver_kind` string
 discriminator (`verdict_gate`, `retry_dispatch`, `push_gate_walk`,
 `push_gate_refuse`, `push_gate_clean`, `container_spawn`,
-`container_oom`, `infra_failure`, …) plus a free-form `summary` and
-structured `payload`. Adding a new producing variant is additive on
-the wire — older consumers fall through to a generic render via
-`DriverKind::Other`.
+`container_oom`, `infra_failure`, `doom_loop_tripped`,
+`duplicate_tool_result`, `token_usage`, …) plus a free-form `summary`
+and structured `payload`. Adding a new producing variant is additive
+on the wire — older consumers fall through to a generic render via
+`DriverKind::Other`. The observer-emitted variants
+(`doom_loop_tripped`, `duplicate_tool_result`, `token_usage`)
+originate in `loom-llm` rather than `loom-driver`, so they fire on
+both Loom-binary runs and external consumer-driven `Conversation`
+runs.
 
 **Schema versioning.** `agent_start` carries `schema_version: u32`
 (currently `1`). Adding new variants, new fields on existing
@@ -423,9 +448,11 @@ are a `loom-events` crate major bump. Consumers must accept unknown
 `kind` values gracefully (drop or render as `<unknown>`); unknown
 variants are the contract working across versions.
 
-**Pi-mono and Claude adapters.** Per-backend wire schemas are
-flattened into the same `AgentEvent` variant set at the parser
-layer. See [loom-agent.md](loom-agent.md) for the adapter contract.
+**Backend adapters.** Per-backend wire schemas (Pi-mono RPC,
+Claude Code stream-json, the `loom-direct-runner` JSONL stream)
+are flattened into the same `AgentEvent` variant set at the parser
+layer. See [loom-agent.md](loom-agent.md) for each backend's
+adapter contract.
 
 **SSE integration.** A pipeline runner that wants to broadcast a
 bead's event stream over SSE pulls `loom-events`, tails the bead's
@@ -441,7 +468,63 @@ the contract — downstream `tail -f` and file-watcher SSE bridges
 see each event at emit time, not at OS-buffer cadence. The agent's
 IO is bound by the disk write+flush — measured at <100µs per event
 on local SSD, well below per-token agent latency, so no
-async channel or backpressure machinery is justified.
+async channel or backpressure machinery is justified. `LogSink`
+implements the `EventSink` trait (below); it is the persistence
+impl of a general consumer interface.
+
+### EventSink and SessionCommand
+
+`EventSink` is the universal `AgentEvent` consumer interface,
+defined in `loom-events` alongside the event type:
+
+```rust
+pub trait EventSink: Send {
+    fn emit(&mut self, event: &AgentEvent);
+    fn react(&mut self) -> Vec<SessionCommand> { Vec::new() }
+}
+
+pub enum SessionCommand {
+    Steer(String),   // inject a system message into the next turn
+    Abort(String),   // terminate the session with this reason
+}
+```
+
+**Contract:**
+
+- `emit` is **sync** — sinks push to channels, write to disk, or
+  mutate counters without awaiting. Sinks that need async work
+  (e.g. network broadcast) own a channel internally.
+- `emit` takes `&AgentEvent` — the driver owns the event;
+  multiple sinks read it without cloning.
+- `Send` bound supports multi-runtime deployments (SaaS).
+- `react()` is **pull-based**, default empty. The driver invokes
+  it after every **non-streaming** event (lifecycle, tool, driver,
+  operational) and applies the returned commands to the live
+  `Session`. Streaming variants (`text_delta`, `thinking_delta`,
+  `toolcall_delta`) do not trigger `react()` — observer state
+  doesn't change on text bytes, and polling them would be pure
+  overhead.
+
+**Composition.** Sinks compose via a chainable `.tee(other)` method
+producing `TeeSink<Self, Other>`. The driver builds a static-typed
+chain at session start; registration order is the `react()`
+invocation order:
+
+```rust
+let sink = LogSink::new(path)
+    .tee(DoomLoopObserver::new(config))
+    .tee(DuplicateResultObserver::new(config));
+```
+
+`react()` priority: any returned `Abort` is terminal — the driver
+cancels the session immediately and ignores subsequent commands in
+the same batch. `Steer` commands process in registration order
+before the next event is read.
+
+`SessionCommand`'s variant set is deliberately narrower than
+`Session`'s own surface (`steer` / `cancel` / `set_mode`) — observers
+only have two levers, both safety-relevant. Direct callers of
+`Session` have the full surface.
 
 ### Logs UX
 
@@ -501,7 +584,7 @@ review verdict — and produces one of four outcomes (`done`, `blocked`,
 |--------|-----------|------|--------|---------|
 | `LOOM_BLOCKED` | — | — | — | `blocked` |
 | `LOOM_CLARIFY` | — | — | — | `clarify` |
-| (none) | — | — | — | recovery (`swallowed-marker`) |
+| (none) | — | — | — | recovery (`swallowed-marker` OR `observer-abort`; see below) |
 | `LOOM_COMPLETE` | no | — | — | recovery (`incomplete-signaling`) |
 | `LOOM_COMPLETE` | yes | empty | — | recovery (`zero-progress`) |
 | `LOOM_COMPLETE` | yes | non-empty | verify-fail (review may also flag) | recovery (`verify-fail`; review notes appended if any) |
@@ -514,6 +597,16 @@ review verdict — and produces one of four outcomes (`done`, `blocked`,
 In the table above, `—` means the signal isn't inspected because an
 earlier signal already determined the outcome (e.g. an agent self-report
 short-circuits before review runs); `*` means any value is accepted.
+
+**Disambiguating "no marker"** (`observer-abort` vs
+`swallowed-marker`): when an `EventSink`'s `react()` returns
+`SessionCommand::Abort` and the driver terminates the session
+before the agent emits any marker, the cause is
+`observer-abort` — not `swallowed-marker`. The driver knows
+because it issued the cancel; the recovery cause's detail names
+the responsible observer + the reason it gave. Without this
+disambiguation, doom-loop kills would mis-classify as agent
+sloppiness instead of legitimate driver-detected failure.
 
 **Closure is the agent's responsibility.** The driver never calls
 `bd close` on a bead it dispatched. The `bd-closed` column is an
@@ -597,16 +690,28 @@ escalates to `loom:blocked` with cause `unbonded-origin` so the
 inconsistency surfaces immediately rather than propagating.
 
 **Recovery context (`previous_failure`).** On `retry → [running]`, the next
-session's prompt is rendered with `previous_failure` populated as a
-structured cause + per-cause detail (truncated to 4000 chars):
+session's prompt is rendered with a **typed** `PreviousFailure` value
+plus optional `review_notes` and an `attempt` counter — the shape lives
+in [loom-templates.md](loom-templates.md). The template renders each
+variant with distinct framing. Detail content per cause (each variant
+capped, total truncated to `PREVIOUS_FAILURE_MAX_LEN = 4000` chars):
 
-| Cause | Detail content |
-|-------|----------------|
-| `swallowed-marker` | "Last phase ended without a `LOOM_*` exit marker." (no further detail) |
-| `incomplete-signaling` | "Marker `LOOM_COMPLETE` emitted but bead `<id>` was not bd-closed." |
-| `zero-progress` | "Marker `LOOM_COMPLETE` emitted with empty diff. Use `LOOM_NOOP` if no work was needed." |
-| `verify-fail` | One block per failing `[check]` / `[test]` / `[system]` verifier: target, exit code, last ~40 lines of stderr. All failing verifiers are included; the 4000-char budget is split across them with later failures truncated first. If `review` also flagged, its reasoning is appended under `Review notes:` (separate budget, ~1000 chars). |
-| `review-flag` | The review LLM's verbatim flag reasoning (typically 1–3 sentences), including which concern triggered the flag — see [loom-gate.md](loom-gate.md) for the full set of flag causes (`spec-coherence-fail`, `orphan-integration`, `verifier-bypass`, `fabricated-result`, `weak-assertion`, `coincidental-pass`, `mock-discipline`, `verifier-too-narrow`, `concurrency-untested`, `scope-creep`, `scope-shortfall`, `judge-flag`). |
+| Cause | `PreviousFailure` variant | Detail content |
+|-------|----|----|
+| `swallowed-marker` | `DriverNotice` | "Last phase ended without a `LOOM_*` exit marker." |
+| `incomplete-signaling` | `DriverNotice` | "Marker `LOOM_COMPLETE` emitted but bead `<id>` was not bd-closed." |
+| `zero-progress` | `DriverNotice` | "Marker `LOOM_COMPLETE` emitted with empty diff. Use `LOOM_NOOP` if no work was needed." |
+| `observer-abort` | `DriverNotice` | "Session aborted by `<observer name>`: `<reason>`." |
+| `verify-fail` | `VerifyFailures(Vec<VerifierFailure>)` | One `VerifierFailure { target, exit_code, stderr_tail }` per failing `[check]` / `[test]` / `[system]` verifier. All failing verifiers are included; the budget is split across them with later failures truncated first; each `stderr_tail` is capped at ~1500 chars before split. If `review` also flagged, its reasoning is set as `review_notes` (separate ~1000-char budget) rendered under a `Review notes:` heading. |
+| `review-flag` | `ReviewConcern { concern: ReviewConcernKind, reason }` | The review LLM's verbatim flag reasoning. `ReviewConcernKind` is a typed enum with `Other(String)` fallback; concrete variants per [loom-gate.md](loom-gate.md) (`SpecCoherence`, `OrphanIntegration`, `VerifierBypass`, `FabricatedResult`, `WeakAssertion`, `CoincidentalPass`, `MockDiscipline`, `VerifierTooNarrow`, `ConcurrencyUntested`, `ScopeCreep`, `ScopeShortfall`, `JudgeFlag`). |
+
+When `previous_failure.is_some() && attempt > 0`, the `run.md`
+template prepends a first-instruction reframe: *"Re-read the
+previous failure block above and address its specific concern
+before re-implementing."* The `attempt` counter is per-bead
+in-session (bounded by `[loop] max_retries`), resetting when a
+fresh bead is dispatched; molecule-level iteration is opaque to the
+agent because each fix-up bead is a different prompt context.
 
 Transcript excerpts are deliberately not included — the agent can re-read
 its own session log if it needs prior tool-call context.
@@ -621,9 +726,9 @@ its own session log if it needs prior tool-call context.
   agent has a specific question with structured options for the human.
 - The cause of a driver-applied `loom:blocked` (`swallowed-marker`,
   `incomplete-signaling`, `zero-progress`, `verify-fail`, `review-flag`,
-  `retry-exhausted`) is preserved in the bead's notes. Per-cause sub-labels
-  can be stacked on top later if filtering becomes important; the gate's
-  terminal label stays `loom:blocked`.
+  `observer-abort`, `retry-exhausted`) is preserved in the bead's notes.
+  Per-cause sub-labels can be stacked on top later if filtering becomes
+  important; the gate's terminal label stays `loom:blocked`.
 
 **Marker definitions.** The agent ends every phase by emitting exactly
 one marker on its own line, as the final output of the session:
@@ -721,41 +826,51 @@ not a producer of new clarifies).
 
 ### Crate Layout
 
-The workspace has seven member crates. `loom-events` is the public
-contract crate (the only one downstream consumers import as a Rust
-dependency); the rest are internal organization.
+The workspace has eight member crates. Three are **public-contract**
+crates (downstream consumers import them as Rust dependencies);
+the other five are internal organization.
 
-| Crate | Role |
-|-------|------|
-| `loom` | CLI binary — arg parsing, entry point, dispatch. |
-| `loom-events` | Public contract — `AgentEvent` enum, ID newtypes (`BeadId`, `MoleculeId`, `ToolCallId`, `SpecLabel`, `ProfileName`, `SessionId`, `RequestId`), `DriverKind`. Frontends, SSE bridges, and external log tools depend only on this. |
-| `loom-driver` | Host-side runtime — `AgentBackend` trait, `AgentSession` typestate, `StateDb`, `Config`, `BdClient`, `Clock`, profile manifest, lock files, scratch dir, git ops. |
-| `loom-render` | `Renderer` trait + `Pretty` / `Plain` / `Json` / `Raw` impls; `LogSink` tee writer driving disk JSONL + renderer from one event stream. |
-| `loom-agent` | `AgentBackend` implementations (pi, claude). Adapters flatten backend wire schemas into `loom-events` variants. |
-| `loom-workflow` | Workflow engine — plan, todo, run, check, review, msg. Owns orchestration loop, bead lifecycle, retry logic, push gate, verdict gate, driver-event emission. |
-| `loom-templates` | Askama templates + typed context structs. See [loom-templates.md](loom-templates.md). |
+| Crate | Tier | Role |
+|-------|------|------|
+| `loom` | internal | CLI binary — arg parsing, entry point, dispatch. |
+| `loom-events` | **public** | `AgentEvent` enum, ID newtypes (`BeadId`, `MoleculeId`, `ToolCallId`, `SpecLabel`, `ProfileName`, `SessionId`, `RequestId`), `DriverKind`, `Session` trait, `EventSink` trait, `SessionCommand`. Frontends, SSE bridges, and external log tools depend only on this. |
+| `loom-llm` | **public** | Typed wrapper over a multi-provider LLM crate. `LlmClient` trait, `Conversation` with built-in tool-use loop, `ModelId`, `CacheControl`, `complete_structured::<T>` (provider-agnostic), `TokenUsage`. Hosts the agent-loop observers (`DoomLoopObserver`, `DuplicateResultObserver`) so consumers driving via `Conversation` get the same safety nets Loom's binary uses. See [loom-llm.md](loom-llm.md). |
+| `loom-templates` | **public** | Askama templates + typed context structs. Consumers compose their own templates from the exposed typed building blocks (`PinnedContext`, `PreviousFailure`, `RunContext`, partial strings). Loom's workflow templates themselves stay internal. See [loom-templates.md](loom-templates.md). |
+| `loom-driver` | internal | Host-side runtime — `AgentBackend` trait, `StateDb`, `Config`, `BdClient`, `Clock`, profile manifest, lock files, scratch dir, git ops, workflow-layer driver-event emission (verdict-gate, push-gate, container-spawn). |
+| `loom-render` | internal | `Renderer` trait + `Pretty` / `Plain` / `Json` / `Raw` impls; `LogSink` (impl `EventSink`) driving disk JSONL from the same event stream the renderer consumes. |
+| `loom-agent` | internal | `AgentBackend` implementations (pi, claude, direct). Pi/Claude drive subprocess agents; `direct` composes `loom-llm` with Loom's six sandbox-aware tools and exposes a `Session`. Adapters flatten backend wire schemas into `loom-events` variants. |
+| `loom-workflow` | internal | Workflow engine — plan, todo, run, gate, msg. Holds backends behind `Box<dyn Session>`. Owns orchestration loop, bead lifecycle, retry logic, push gate, verdict gate. |
 
 ### Dependency Graph
 
-Three load-bearing constraints on the dep graph:
+Load-bearing constraints on the dep graph:
 
 - `loom-events` is a **leaf** — no internal-crate imports. The
-  contract crate's dep footprint is `serde + serde_json + thiserror`
-  only.
+  contract crate's dep footprint is `serde + serde_json +
+  thiserror + futures-core` only (`futures-core` carries the
+  `Stream` trait referenced by `Session::Events`).
+- `loom-llm` depends on `loom-events` only (no `loom-driver`,
+  `loom-agent`, or `loom-workflow` import). Its dep footprint is
+  the public-contract floor plus the underlying multi-provider
+  LLM crate and `schemars`. The crate is independently versionable
+  for the same reason `loom-events` is.
+- `loom-templates` depends on `loom-events` only (typed contexts
+  reference `BeadId` / `SpecLabel` / etc.). The Askama compile
+  machinery is a build-time concern, not a runtime dep.
 - `loom-render` depends on `loom-events` only — no `loom-driver`
   import. A renderer regression must be local to `loom-render`.
+- `loom-agent` depends on `loom-llm` (its `direct` backend wraps
+  `Conversation`) and `loom-events` (the `Session` trait, `AgentEvent`).
 - `loom-workflow` depends on all the internal crates because it is
   the orchestration layer; `loom-events` is the bottom of the
   internal-crate stack and `loom-workflow` is the top.
 
-`loom-events`'s leaf status is what makes the contract version-able
-in isolation — a public-API change shows up as a `loom-events`
-crate bump, not as accidental coupling through a deeper crate.
+`loom-events`'s, `loom-llm`'s, and `loom-templates`'s leaf-or-near-leaf
+status is what makes each contract version-able in isolation — a
+public-API change shows up as a single-crate bump, not as accidental
+coupling through a deeper crate.
 
 ### Workspace Dependencies
-
-All third-party crates pinned once under `[workspace.dependencies]`. Member
-crates use `foo = { workspace = true }`.
 
 All third-party crates are pinned once under
 `[workspace.dependencies]`; every member crate uses
@@ -764,9 +879,11 @@ All third-party crates are pinned once under
 per [`docs/style-rules.md`](../docs/style-rules.md) RS-3.
 
 `loom-events` is the contract-crate dependency-floor: its dep
-footprint is `serde + serde_json + thiserror` only — no internal
-crates, no timestamps crate, no `ulid`, no `uuid`. The contract
-stays small.
+footprint is `serde + serde_json + thiserror + futures-core` only —
+no internal crates, no timestamps crate, no `ulid`, no `uuid`. The
+contract stays small. `loom-llm` and `loom-templates` carry their own
+small public-surface dep sets (LLM crate + `schemars` for `loom-llm`;
+Askama for `loom-templates`).
 
 ### Workspace Lints
 
@@ -826,8 +943,10 @@ bypass of the newtype boundary.
 
 See [loom-templates.md](loom-templates.md) — engine choice,
 per-template typed context structs, partials inventory, per-phase
-pinning policy, agent-output markers, and the snapshot-test contract
-all live there. `loom-templates` is the crate;
+pinning policy, typed `PreviousFailure`, attempt counter,
+agent-output markers, public-contract building blocks for consumer
+template composition, and the snapshot-test contract all live there.
+`loom-templates` is the crate (public-contract);
 [loom-templates.md](loom-templates.md) is the spec.
 
 ### Beads CLI Wrapper
@@ -1067,6 +1186,23 @@ is owned by [loom-agent.md § Compaction Handling](loom-agent.md#compaction-hand
 end on every exit path. A new session for the same key starts
 empty — no carry-over from a prior crashed session.
 
+### Loom-LLM
+
+See [loom-llm.md](loom-llm.md) — the `LlmClient` trait, typed
+`CompletionRequest` / `ModelId` / `CacheControl`, structured
+output, `TokenUsage`, `Conversation` with built-in tool-use loop,
+the `Tool` trait, and the two agent-loop observers
+(`DoomLoopObserver`, `DuplicateResultObserver`) all live there.
+`loom-llm` is the crate (public-contract);
+[loom-llm.md](loom-llm.md) is the spec.
+
+The observers are configured CLI-side via the
+`[agent.doom_loop]` and `[agent.duplicate_result]` blocks under
+*Configuration* below; their behaviour and the `observer-abort`
+recovery-cause flow into the verdict gate are owned by
+[loom-llm.md](loom-llm.md) and [Verdict Gate](#verdict-gate)
+respectively.
+
 ## Configuration
 
 Loom reads `.wrapix/loom/config.toml` — TOML, parsed natively via the
@@ -1139,6 +1275,27 @@ post_result_grace_secs = 5
 # control_request analog). Empty by default; the container sandbox is
 # the trust boundary.
 # denied_tools = ["SomeNewHostTool"]
+
+[agent.doom_loop]
+# Detects same-(call, result) repetition. Enabled by default — safety
+# net for a known agent failure mode, not an experimental feature.
+# Consumer-driven `Conversation` runs can override via the builder.
+enabled = true
+# Sliding-window size for trip detection.
+window = 5
+# Identical pairs in the window required to trigger stage 1.
+threshold = 3
+# Additional identical pairs (same CallKey) after stage 1 before stage 2
+# emits Abort. Provides the structural escape hatch — the agent has a
+# chance to reconsider, escalate, or demonstrate intent.
+stage_2_after_stage_1 = 3
+
+[agent.duplicate_result]
+# Pure-observability dedup signal. Enabled by default.
+enabled = true
+# Skip result payloads smaller than this — short outputs ("ok",
+# single-line booleans) would dominate the map with noise.
+min_bytes = 256
 ```
 
 Defaults are chosen so the file can be absent on a fresh install and
@@ -1152,8 +1309,10 @@ parameters.
 
 - Workspace builds with `cargo build` from `loom/` root
   [check](cargo build --workspace)
-- All seven crates present: loom, loom-events, loom-driver, loom-render, loom-agent, loom-workflow, loom-templates
+- All eight crates present: loom, loom-events, loom-llm, loom-templates, loom-driver, loom-render, loom-agent, loom-workflow
   [check](cargo run -p loom-walk -- crate_structure)
+- Three public-contract crates declared in workspace manifest metadata: loom-events, loom-llm, loom-templates
+  [check](cargo run -p loom-walk -- public_contract_crates)
 - Workspace uses edition 2024 and resolver "3"
   [check](cargo run -p loom-walk -- workspace_edition)
 - All dependencies pinned under `[workspace.dependencies]`
@@ -1324,6 +1483,18 @@ Criteria.
   [check](cargo run -p loom-walk -- loom_events_minimal_deps)
 - Unknown event variants are accepted gracefully (deserialized as a fallback or skipped, never error)
   [test](unknown_variants_fail_with_a_loud_error)
+- `Session` trait defined in `loom-events` with methods `prompt`, `steer`, `cancel`, `set_mode`; `Events` associated type concretized to `Pin<Box<dyn Stream<Item = AgentEvent> + Send>>` so `Box<dyn Session>` is dyn-compatible
+  [check](cargo run -p loom-walk -- session_trait_in_loom_events)
+- `EventSink` trait defined in `loom-events` with sync `emit(&AgentEvent)` and default `react() -> Vec<SessionCommand>`; `SessionCommand` enum has `Steer(String)` and `Abort(String)` variants
+  [check](cargo run -p loom-walk -- event_sink_in_loom_events)
+- `EventSink` composition via `.tee(other) -> TeeSink<Self, Other>`; registration order equals `react()` invocation order
+  [test](tee_chain_preserves_registration_order_for_react)
+- Driver applies `react()` after every non-streaming event (not after `text_delta` / `thinking_delta` / `toolcall_delta`)
+  [test](react_invoked_after_non_streaming_events_only)
+- Driver treats any `SessionCommand::Abort` returned from `react()` as terminal: subsequent commands in the same batch are not applied, session is cancelled, recovery cause is `observer-abort`
+  [test](abort_command_short_circuits_remaining_commands_and_classifies_observer_abort)
+- `LogSink` implements `EventSink`; it is the persistence sink in the trait's first implementor
+  [test](log_sink_implements_event_sink)
 
 **Disk log**
 
@@ -1351,10 +1522,16 @@ Criteria.
 
 **Crate boundary**
 
-- `loom-events` is a leaf crate — no internal deps on `loom-driver` / `loom-render` / `loom-workflow` / `loom-templates`
+- `loom-events` is a leaf crate — no internal deps on `loom-driver` / `loom-render` / `loom-workflow` / `loom-templates` / `loom-llm` / `loom-agent`
   [check](cargo run -p loom-walk -- loom_events_is_leaf)
+- `loom-llm` depends on `loom-events` only (no `loom-driver` / `loom-agent` / `loom-workflow` import)
+  [check](cargo run -p loom-walk -- loom_llm_deps)
+- `loom-templates` depends on `loom-events` only (no `loom-driver` / `loom-llm` / `loom-agent` / `loom-workflow` import)
+  [check](cargo run -p loom-walk -- loom_templates_deps)
 - `loom-render` depends on `loom-events` only (no `loom-driver`)
   [check](cargo run -p loom-walk -- loom_render_deps)
+- `loom-agent` depends on `loom-llm` and `loom-events`; its `direct` backend wraps `loom-llm::Conversation`
+  [check](cargo run -p loom-walk -- loom_agent_deps)
 
 ### Worktree parallelism
 
@@ -1590,6 +1767,20 @@ Criteria.
 - `loom gate verify` push gate refuses to push while any bead in
       the molecule carries `loom:blocked` or `loom:clarify`
   [test](clarify_present_stops_without_pushing)
+- Observer-driven abort (`EventSink::react()` returning
+      `SessionCommand::Abort`) classifies as recovery cause
+      `observer-abort` with detail naming the responsible observer +
+      the reason it gave; distinct from `swallowed-marker` (which
+      means the agent ended without a marker on its own, not under
+      driver cancel)
+  [test](observer_abort_routes_to_observer_abort_distinct_from_swallowed_marker)
+
+### Loom-LLM crate
+
+Owned by [loom-llm.md](loom-llm.md); see that spec's Success
+Criteria for the `LlmClient` public surface, `CacheControl`,
+`Conversation` + tool-use loop, wrapper-boundary checks, and the
+two agent-loop observers.
 
 ### Auxiliary commands
 
@@ -1834,11 +2025,16 @@ Criteria.
    | `loom sync` | Askama-compiled templates make per-project sync unnecessary |
    | `loom tune` | Askama-compiled templates make per-project tune unnecessary |
 
-2. **Compiled templates** — Askama engine, per-phase templates, partials,
-   and per-phase pinning policy live in
-   [loom-templates.md](loom-templates.md). The crate that builds them
-   (`loom-templates`) is one of the seven enumerated below; everything
-   inside it is owned by that spec.
+2. **Compiled templates with consumer-composable typed building blocks** —
+   Askama engine, per-phase templates, partials, and per-phase pinning
+   policy live in [loom-templates.md](loom-templates.md). The crate that
+   builds them (`loom-templates`) is one of the eight enumerated below.
+   `loom-templates` is **public-contract**: it exposes its typed context
+   structs (`PinnedContext`, `PreviousFailure`, `RunContext`, etc.) and
+   partial-string constants so external Rust consumers can compose their
+   own templates from the same building blocks Loom's workflow uses.
+   Loom's workflow templates themselves remain compile-time Askama and
+   internal — consumers do not override them.
 3. **SQLite state store** — workflow state persisted in a SQLite database
    (`.wrapix/loom/state.db`). Tracks active specs, molecules, iteration
    counts, companions. Reconstructable from spec files on disk and active
@@ -1922,16 +2118,43 @@ Criteria.
     points to a stub, or where production behaviour diverges from
     the unit-tested function the verifier exercises — the gate runs
     the verifier each time and reports current truth.
+15. **`loom-llm` public-contract crate** — typed multi-provider
+    LLM primitives + `Conversation` with built-in tool-use loop +
+    agent-loop observers. Surface, dependency graph constraints,
+    and observer behavior owned by [loom-llm.md](loom-llm.md).
+    Loom-harness's role is the crate-graph placement
+    (public-contract leaf, dep floor) — see *Crate Layout* and
+    *Dependency Graph* above.
+16. **`EventSink` trait and composition** — per *EventSink and
+    SessionCommand* above. Sinks compose via chainable
+    `.tee(other)`; the driver applies `react()` after every
+    non-streaming event and processes returned
+    `SessionCommand`s with `Abort` as terminal priority. The
+    `EventSink` trait lives in `loom-events` so any AgentEvent
+    consumer (Loom binary, external `loom-llm` `Conversation`
+    consumer, SSE bridge, log analyzer) can implement and compose
+    it.
+17. **Observer-abort verdict-gate routing** — when an
+    `EventSink::react()` returns `SessionCommand::Abort`, the
+    driver cancels the session and classifies the outcome as
+    recovery cause `observer-abort` with detail naming the
+    responsible observer + the reason. This is the verdict-gate
+    landing path for the loom-llm observer behavior owned by
+    [loom-llm.md](loom-llm.md) (notably `DoomLoopObserver`'s
+    stage 2). Without this routing, observer kills would
+    mis-classify as `swallowed-marker`.
 
 ### Non-Functional
 
 1. **Style.** All loom crates follow
    [`docs/style-rules.md`](../docs/style-rules.md). The
    architectural commitments specific to loom — newtype IDs at
-   parse boundaries, parser-to-stamper split, typestate sessions,
-   workspace-scope lints, single-source-of-truth verdict gate
-   function — are described in the *Architecture* sections above;
-   this NFR commits to the team-wide style rules as a whole.
+   parse boundaries, parser-to-stamper split, `Session` trait as
+   public surface (with subprocess-driving backends keeping their
+   typestate as internal mechanic), workspace-scope lints,
+   single-source-of-truth verdict gate function — are described in
+   the *Architecture* sections above; this NFR commits to the
+   team-wide style rules as a whole.
 2. **Required newtypes** — `BeadId`, `SpecLabel`, `MoleculeId`,
    `ProfileName` for domain identifiers; `SessionId`, `ToolCallId`,
    `RequestId` for protocol identifiers. No bare `String` for typed IDs.
@@ -1957,12 +2180,22 @@ Criteria.
   the flag keeps `plan` / `todo` / `run` path-resolution
   single-shaped. Reintroducing it later is a non-breaking additive
   change if the workflow asks for it.
-- **Per-project template customization** — loom templates are Askama,
-  compiled into the binary. There is no per-project template-fetch /
-  template-tune mechanism. Project-specific prompt tweaks happen via
-  `pinned_context` / `style_rules` config and per-spec `notes`.
-  Project-specific prompt tweaks happen via `pinned_context` and the
-  per-spec `notes` mechanism, not by editing template source.
+- **Override of Loom's workflow templates** — Loom's `plan` / `todo`
+  / `run` / `gate review` / `msg` templates are Askama, compiled
+  into the binary. There is no per-project template-fetch /
+  template-tune mechanism for overriding *Loom's own* templates;
+  template updates ship via a new loom release. Project-specific
+  prompt tweaks to Loom's workflow happen via `pinned_context` /
+  `style_rules` config and per-spec implementation notes.
+  Consumers writing their *own* templates (for their own LLM
+  calls via `loom-llm`) compose them from `loom-templates`'
+  exposed typed building blocks — that path is supported and
+  is *not* what this exclusion covers.
+- **Runtime template engine for consumer overrides of Loom's
+  workflow templates** — adding a runtime engine (e.g. `minijinja`)
+  to allow consumers to drop in replacements for Loom's compiled
+  Askama templates is bolt-on-able after the typed-context public
+  surface lands and is deferred until a concrete consumer asks.
 - **Observation daemon** — a polling monitor that spawns short-lived
   agent sessions to observe tmux / browser logs and create beads for
   detected issues. Independent of the workflow phase set; deferred to

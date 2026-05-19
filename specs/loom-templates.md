@@ -1,7 +1,8 @@
 # Loom Templates
 
 Askama template engine, partials inventory, per-phase pinning
-policy, and snapshot-test contract for the Loom workflow.
+policy, snapshot-test contract, and public-contract typed building
+blocks consumers compose into their own templates.
 
 ## Problem Statement
 
@@ -11,9 +12,19 @@ the binary. `loom gate verify` is deterministic and renders no
 template. The template surface is its own concern: which partials
 exist, which template renders which partial in which phase, which
 context struct each template binds to, and what the snapshot gate
-looks like. [loom-harness.md](loom-harness.md) owns the crate that
-builds these templates and the runtime that consumes rendered
-prompts; this spec owns the prompt surface itself.
+looks like.
+
+`loom-templates` is a **public-contract crate**: external Rust
+consumers depending on `loom-llm` for typed LLM calls can compose
+their own templates using `loom-templates`' exposed typed context
+structs (`PinnedContext`, `PreviousFailure`, `RunContext`, etc.) and
+partial strings. Loom's own *workflow templates* remain compiled-in
+Askama and internal — consumers do not override them — but the
+building blocks that go into those templates are shared.
+
+[loom-harness.md](loom-harness.md) owns the crate that builds these
+templates and the runtime that consumes rendered prompts; this spec
+owns the prompt surface itself.
 
 ## Architecture
 
@@ -58,6 +69,32 @@ Current set:
 | `invariant_clash.md` | Describe the invariant-clash awareness scan (included transitively via `plan_stage_rubric.md`) |
 | `review_rubric.md` | Per-diff review rubric — see [loom-gate.md](loom-gate.md) |
 | `sibling_spec_editing.md` | Authorize cross-spec edits during a planning session |
+
+### Style-Rules Partial
+
+The `style_rules.md` partial is **rule-family-agnostic**: it
+instructs the agent to discover rule families from the pinned
+`{{ style_rules }}` document, not from a fixed prefix list. The
+template body never enumerates specific prefixes like `RS-` or
+`COM-`; downstream consumers of loom maintain their own
+`style-rules.md` with their own conventions, and the partial
+adapts.
+
+The same agnosticism applies to the `review_rubric.md` partial in
+[loom-gate.md](loom-gate.md)'s style-rule-conformance dimension:
+the rubric instructs the judge to walk every rule family the pinned
+document defines, without enumerating prefixes. Any rule-ID example
+in template prose is illustrative (placeholder), not normative.
+
+### Spec-Conventions Partial
+
+The `spec_conventions.md` partial pins
+[`docs/spec-conventions.md`](../docs/spec-conventions.md), which
+defines what a spec is, what it isn't, and the relationship to
+code / verifiers / notes / beads. Planning sessions read it so
+authored content complies with the convention; this prevents
+implementation leakage, status indicators, and historical
+narrative from drifting back into spec markdown.
 
 ### Pinning Policy
 
@@ -110,7 +147,9 @@ through the parse-don't-validate boundary defined in
 | `issue_id` | `Option<BeadId>` | `run` |
 | `title` | `Option<String>` | `run` |
 | `description` | `Option<String>` | `run` |
-| `previous_failure` | `Option<String>` | `run` (retry only, truncated to 4000 chars) |
+| `previous_failure` | `Option<PreviousFailure>` | `run` (retry only; typed enum — see *Typed `PreviousFailure`* below) |
+| `review_notes` | `Option<String>` | `run` (set only when `previous_failure` is `VerifyFailures` and review also flagged) |
+| `attempt` | `u32` | `run` (in-session per-bead retry counter — see *Attempt Counter* below) |
 | `beads_summary` | `Option<String>` | `review` |
 | `base_commit` | `Option<String>` | `review` |
 | `exit_signals` | `String` | all |
@@ -125,31 +164,116 @@ template treats them as opaque typed values.
 (kind = `implementation`); see *Notes lifecycle* in
 [loom-harness.md](loom-harness.md#sqlite-state-store).
 
-### Style-Rules Partial
+### Typed `PreviousFailure`
 
-The `style_rules.md` partial is **rule-family-agnostic**: it
-instructs the agent to discover rule families from the pinned
-`{{ style_rules }}` document, not from a fixed prefix list. The
-template body never enumerates specific prefixes like `RS-` or
-`COM-`; downstream consumers of loom maintain their own
-`style-rules.md` with their own conventions, and the partial
-adapts.
+`previous_failure` is a typed tagged enum. The driver populates the
+right variant based on the verdict-gate cause classification; the
+template renders each variant with distinct framing so the agent
+sees a cause-appropriate prompt rather than a one-shape blob.
 
-The same agnosticism applies to the `review_rubric.md` partial in
-[loom-gate.md](loom-gate.md)'s style-rule-conformance dimension:
-the rubric instructs the judge to walk every rule family the pinned
-document defines, without enumerating prefixes. Any rule-ID example
-in template prose is illustrative (placeholder), not normative.
+```rust
+pub enum PreviousFailure {
+    /// Fixed-shape driver-procedural failures.
+    DriverNotice { cause: DriverNoticeCause, detail: String },
 
-### Spec-Conventions Partial
+    /// One or more [check]/[test]/[system] verifier failures.
+    VerifyFailures(Vec<VerifierFailure>),
 
-The `spec_conventions.md` partial pins
-[`docs/spec-conventions.md`](../docs/spec-conventions.md), which
-defines what a spec is, what it isn't, and the relationship to
-code / verifiers / notes / beads. Planning sessions read it so
-authored content complies with the convention; this prevents
-implementation leakage, status indicators, and historical
-narrative from drifting back into spec markdown.
+    /// Review LLM flagged a semantic concern.
+    ReviewConcern { concern: ReviewConcernKind, reason: String },
+
+    /// Pre-verifier build/compile failure (agent's code didn't compile).
+    BuildFailure { stage: String, output: String },
+}
+
+pub enum DriverNoticeCause {
+    SwallowedMarker,
+    IncompleteSignaling,
+    ZeroProgress,
+    ObserverAbort,
+    RetryExhausted,
+}
+
+pub struct VerifierFailure {
+    pub target: String,       // e.g. "cargo test ... -- my_test"
+    pub exit_code: i32,
+    pub stderr_tail: String,  // ~last 40 lines, capped per-block
+}
+
+pub enum ReviewConcernKind {
+    SpecCoherence,
+    OrphanIntegration,
+    VerifierBypass,
+    FabricatedResult,
+    WeakAssertion,
+    CoincidentalPass,
+    MockDiscipline,
+    VerifierTooNarrow,
+    ConcurrencyUntested,
+    ScopeCreep,
+    ScopeShortfall,
+    JudgeFlag,
+    Other(String),  // forward-compatible fallback
+}
+```
+
+The full set of `ReviewConcernKind` variants is defined in
+[loom-gate.md](loom-gate.md); the `Other` arm keeps the type
+forward-compatible when loom-gate.md grows new flag causes.
+
+**Caps:**
+
+- `PREVIOUS_FAILURE_MAX_LEN = 4000` total
+- Each `VerifierFailure.stderr_tail` capped individually
+  (~1500 chars) before the per-variant total is split across
+  multiple failures (later failures truncated first when the
+  total exceeds budget)
+- `review_notes` has a separate ~1000-char budget, independent
+  of `previous_failure`
+
+**Template framing.** Each variant renders distinctly:
+
+- `DriverNotice` → `"Previous attempt: {detail}"`
+- `VerifyFailures` → `"Verifier failures from previous attempt:\n\n{N blocks: target + exit + stderr}"`
+- `ReviewConcern` → `"Review flagged ({concern}): {reason}"`
+- `BuildFailure` → `"Build failed at {stage}:\n{output}"`
+- `review_notes` (when set, after the primary block) → heading `"Review notes:"` then content
+
+Driver maps verdict-gate causes to variants per the table in
+[loom-harness.md — Verdict Gate](loom-harness.md#verdict-gate).
+
+### Attempt Counter
+
+`attempt` is the per-bead in-session retry counter, populated by
+the driver and rendered by `run.md`:
+
+- `attempt == 0` on fresh bead dispatch — no retry context, no
+  attempt line in the template
+- Each in-session retry increments `attempt` (bounded by
+  `[loop] max_retries`, default 2)
+- Resets to 0 when a new bead is dispatched (fix-up beads carry
+  fresh prompts, not retry state from the failing bead)
+- **Molecule-level iteration is opaque to the agent** — fix-up
+  beads are different prompt contexts, and a counter that spans
+  them would be misleading
+
+When `attempt > 0 && previous_failure.is_some()`, `run.md`
+prepends a counter line: `"Retry attempt {attempt} — previous
+attempt failed with: …"` followed by the typed
+`previous_failure` block.
+
+### First-instruction reframe
+
+When `previous_failure.is_some()`, `run.md` prepends to its first
+user instruction:
+
+> "Re-read the previous failure block above and address its
+> specific concern before re-implementing."
+
+This single generic reframe forces the agent to acknowledge the
+prior failure as actionable input rather than skim past it. The
+per-variant framing (above) carries the cause-specific detail; the
+top-of-prompt reframe just establishes the directive.
 
 ### Agent-Output Markers
 
@@ -184,6 +308,53 @@ the real trust boundary is the container.
    Commits happen only on unambiguous trigger ("commit", "land the
    plane", "push it"). The same discipline applies to `git push`,
    `beads-push`, and any operation that mutates shared state.
+
+### Public Surface for Consumers
+
+`loom-templates` is a public-contract crate. External Rust
+consumers (e.g. RAG pipelines, domain-specific review tools)
+depending on `loom-llm` for typed LLM calls compose their own
+templates from `loom-templates`' exposed building blocks:
+
+**Exposed typed context structs:**
+
+- `PinnedContext` (the project-overview + style-rules pinning shape)
+- `PreviousFailure`, `VerifierFailure`, `ReviewConcernKind`,
+  `DriverNoticeCause` (the typed retry-context surface)
+- `RunContext`, `ReviewContext` (workflow-phase context shapes
+  consumers can either reuse directly or model their own contexts
+  after)
+
+**Exposed partial strings:**
+
+Each partial in the *Partials* table above is also available as
+a public `pub const` `&'static str` so consumers can `include!` or
+`{% include %}` them in their own templates:
+
+```rust
+pub const SCRATCHPAD_PARTIAL: &str = include_str!("templates/partial/scratchpad.md");
+pub const CONTEXT_PINNING_PARTIAL: &str = include_str!("templates/partial/context_pinning.md");
+// ...
+```
+
+**Stability guarantees:**
+
+- Typed context struct field additions are minor version bumps
+  (additive)
+- Removing or renaming fields is a major bump
+- Partial body changes are minor bumps (consumers don't
+  destructure the body)
+- Partial *path* renames (e.g. `scratchpad.md` → `scratch.md`) are
+  major bumps because consumers reference the partial name
+
+**Not exposed:**
+
+- The compiled Askama machinery itself — consumers bring their
+  own template engine (Askama, minijinja, raw `format!`, etc.)
+  for their own templates
+- Loom's workflow templates (`plan.md`, `todo.md`, `run.md`,
+  etc.) — consumers cannot override these; Loom's workflow
+  shape is opinionated and ships with the binary
 
 ### Snapshot Test Contract
 
@@ -294,15 +465,94 @@ documents in front of the agent with zero configuration.
   bead-allocation carve-out
   [judge](tests/judges/loom.sh::judge_sibling_spec_editing_documents_split)
 
+### Typed `PreviousFailure`
+
+- `PreviousFailure` is a tagged enum with variants `DriverNotice`,
+  `VerifyFailures(Vec<VerifierFailure>)`, `ReviewConcern`, and
+  `BuildFailure` — not a free string
+  [check](grep -q 'pub enum PreviousFailure' crates/loom-templates/src/previous_failure.rs)
+- `DriverNoticeCause` enum covers `SwallowedMarker`,
+  `IncompleteSignaling`, `ZeroProgress`, `ObserverAbort`,
+  `RetryExhausted`
+  [check](grep -q 'pub enum DriverNoticeCause' crates/loom-templates/src/previous_failure.rs)
+- `ReviewConcernKind` enum carries all 12 named variants from
+  loom-gate.md plus `Other(String)` fallback
+  [check](cargo test -p loom-templates --lib review_concern_kind_variants_match_loom_gate)
+- `VerifierFailure` carries `target: String`, `exit_code: i32`,
+  `stderr_tail: String` (capped per-block at ~1500 chars)
+  [test](verifier_failure_stderr_tail_capped_per_block)
+- Total `previous_failure` budget capped at
+  `PREVIOUS_FAILURE_MAX_LEN = 4000` chars; multi-block variants
+  split budget across entries with later entries truncated first
+  [test](verify_failures_split_budget_truncates_later_first)
+- `review_notes` field is separate from `previous_failure`, has
+  its own ~1000-char budget, and is populated only when
+  `previous_failure` is `VerifyFailures` and review also flagged
+  [test](review_notes_populated_only_on_verify_fail_plus_review_flag)
+- Each `PreviousFailure` variant renders with its documented
+  framing prefix (`DriverNotice` → "Previous attempt:",
+  `VerifyFailures` → "Verifier failures from previous attempt:",
+  `ReviewConcern` → "Review flagged (...):", `BuildFailure` →
+  "Build failed at ...:")
+  [test](previous_failure_variant_framings_match_spec)
+
+### Attempt counter
+
+- `RunContext` carries `attempt: u32`; field is `0` on fresh
+  bead dispatch
+  [test](attempt_zero_on_fresh_bead_dispatch)
+- `run.md` omits the attempt line when `attempt == 0`
+  [test](run_template_omits_attempt_line_when_zero)
+- `run.md` renders "Retry attempt {N} — previous attempt failed
+  with: …" when `attempt > 0 && previous_failure.is_some()`
+  [test](run_template_renders_attempt_line_on_retry)
+- Attempt counter is per-bead in-session: fix-up beads start at
+  `attempt = 0` regardless of the failing bead's prior attempts
+  [test](fix_up_bead_starts_at_attempt_zero)
+- Attempt counter is bounded by `[loop] max_retries` (default 2)
+  [test](attempt_does_not_exceed_max_retries_in_session)
+
+### First-instruction reframe
+
+- `run.md` prepends "Re-read the previous failure block above and
+  address its specific concern before re-implementing." when
+  `previous_failure.is_some()`
+  [test](run_template_prepends_reframe_when_previous_failure_set)
+- Reframe is omitted when `previous_failure.is_none()`
+  [test](run_template_omits_reframe_when_no_previous_failure)
+- Reframe wording is generic (one form regardless of variant);
+  per-variant detail lives inside the previous-failure block itself
+  [check](cargo test -p loom-templates --test render reframe_is_single_generic_form)
+
+### Public surface
+
+- `loom-templates` exposes `PreviousFailure`, `VerifierFailure`,
+  `ReviewConcernKind`, `DriverNoticeCause`, `RunContext`,
+  `ReviewContext`, `PinnedContext` as public types consumable from
+  external crates
+  [check](cargo run -p loom-walk -- loom_templates_public_types)
+- Each partial in the *Partials* table is also exposed as a public
+  `&'static str` constant (e.g. `SCRATCHPAD_PARTIAL`,
+  `CONTEXT_PINNING_PARTIAL`, etc.) for consumer template composition
+  [check](cargo run -p loom-walk -- loom_templates_public_partial_constants)
+- Loom's workflow template bodies themselves (`plan.md`, `todo.md`,
+  `run.md`, `review.md`, `msg.md`) are NOT publicly exported —
+  only the typed contexts and partial strings
+  [check](cargo run -p loom-walk -- loom_templates_workflow_templates_not_exported)
+
 ## Requirements
 
 ### Functional
 
-1. **Compiled templates.** Every workflow phase prompt is an
+1. **Compiled workflow templates.** Every Loom-workflow phase
+   prompt (`plan`, `todo`, `run`, `gate review`, `msg`) is an
    Askama template compiled into the binary. Template correctness
-   is verified at compile time. No per-project template-fetch or
-   template-tune mechanism; template updates ship via a new loom
-   release.
+   is verified at compile time. No per-project mechanism for
+   *overriding Loom's workflow templates*; updates ship via a new
+   loom release. (Consumers writing their own templates for their
+   own LLM calls via `loom-llm` use the public typed building
+   blocks per FR12; this FR is specifically about Loom's own
+   workflow templates.)
 2. **One template per phase plus per-mode variants** as enumerated
    in *Template Files* above.
 3. **Partials** as enumerated in *Partials* above. Each partial
@@ -324,6 +574,34 @@ documents in front of the agent with zero configuration.
    `</agent-output>`.
 8. **Snapshot tests.** Every template × representative-input
    combination has an `insta` snapshot.
+9. **Typed `PreviousFailure`** — `RunContext.previous_failure` is
+   `Option<PreviousFailure>` where `PreviousFailure` is a tagged
+   enum (`DriverNotice`, `VerifyFailures`, `ReviewConcern`,
+   `BuildFailure`). The driver populates the right variant from
+   the verdict-gate cause classification. Each variant renders
+   with distinct framing per *Typed `PreviousFailure`* above.
+   Caps: `PREVIOUS_FAILURE_MAX_LEN = 4000` total; per-block stderr
+   tail ~1500 chars; `review_notes` separate ~1000-char budget.
+10. **Attempt counter.** `RunContext.attempt: u32` is the per-bead
+    in-session retry counter, bounded by `[loop] max_retries`
+    (default 2), resets to 0 on fresh bead dispatch. Fix-up beads
+    start at `attempt = 0`; molecule-level iteration is opaque to
+    the agent. `run.md` renders the attempt line when `attempt > 0
+    && previous_failure.is_some()`, omits it otherwise.
+11. **First-instruction reframe.** When
+    `previous_failure.is_some()`, `run.md` prepends "Re-read the
+    previous failure block above and address its specific concern
+    before re-implementing." Single generic form — per-variant
+    detail lives in the previous-failure block itself.
+12. **Public surface for consumers.** `loom-templates` is a
+    public-contract crate. Exposed: `PreviousFailure` (and its
+    sub-types), `RunContext`, `ReviewContext`, `PinnedContext`,
+    and the partial-string constants for each entry in the
+    *Partials* table. Loom's workflow template bodies themselves
+    are not exposed — consumers compose their own templates from
+    the typed contexts + partial strings, not from Loom's workflow
+    templates. Stability: additive type changes are minor bumps;
+    removing or renaming fields / partial paths is a major bump.
 
 ### Non-Functional
 
@@ -340,12 +618,28 @@ documents in front of the agent with zero configuration.
   session, with judgment applied to which sections move, which
   beads reassign, and which cross-refs rewrite. The CLI exposes
   no dedicated split / merge / rename / supersede commands.
-- **Per-project template customization.** Templates are Askama,
+- **Override of Loom's workflow templates.** Loom's `plan` /
+  `todo` / `run` / `gate review` / `msg` templates are Askama,
   compiled into the binary. There is no per-project template-fetch
-  or template-tune mechanism. Project-specific prompt tweaks
-  happen via `pinned_context` / `style_rules` /
-  `spec_conventions` configuration and per-spec implementation
-  notes.
+  or template-tune mechanism for overriding *Loom's own* templates;
+  template updates ship via a new loom release. Project-specific
+  prompt tweaks to Loom's workflow happen via `pinned_context` /
+  `style_rules` / `spec_conventions` configuration and per-spec
+  implementation notes. Consumers writing their *own* templates
+  (for their own LLM calls via `loom-llm`) compose them from the
+  exposed typed building blocks (above) — that path is supported
+  and is *not* what this exclusion covers.
+- **Runtime template engine for consumer overrides of Loom's
+  workflow templates.** Adding a runtime engine (e.g. `minijinja`)
+  to allow consumers to drop in replacements for Loom's compiled
+  Askama templates is bolt-on-able after the typed-context public
+  surface lands and is deferred until a concrete consumer asks.
+- **Untyped `previous_failure`.** `RunContext.previous_failure` is
+  `Option<PreviousFailure>` — a typed enum, not a free string.
+  Free-string detail (driver formats prose into a String the
+  template prints unchanged) is excluded so heading shape, caps,
+  and multi-cause composition stay owned by the typed contract
+  rather than re-derived at every emit site.
 - **Template content changes.** The *rules* themselves live in
   `docs/style-rules.md`; this spec only pins the file and does not
   own its content. The *conventions* themselves live in

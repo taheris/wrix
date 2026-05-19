@@ -1,7 +1,8 @@
 # Loom Agent
 
-Agent backend abstraction, pi-mono and Claude Code implementations, container
-communication, and agent runtime layer for the pi runtime.
+Agent backend abstraction, three backend implementations (pi-mono,
+Claude Code, and Direct), container communication, and per-runtime
+layers for the agent images.
 
 ## Problem Statement
 
@@ -11,30 +12,35 @@ create vendor lock-in. Users with a Claude Max subscription need the
 alternative. Pi-mono provides 20+ LLM provider backends and a JSONL
 RPC mode that enables programmatic control — but it requires a
 different communication protocol than Claude Code's stream-json
-output mode.
+output mode. A third backend, Direct, composes
+[loom-llm.md](loom-llm.md)'s `Conversation` with Loom's six
+sandbox-aware tools so phases that need typed multi-provider LLM
+access (e.g. cost-sensitive structured-output `gate review` runs)
+can opt in without driving a subprocess agent.
 
 As of April 2026, Anthropic no longer allows third-party applications to consume
 Claude Pro/Max subscription quota. This means pi-mono cannot use a Max
 subscription even when backed by Claude — validating the need for a dedicated
 Claude Code backend that runs the `claude` binary directly.
 
-This spec defines the agent abstraction that lets Loom drive either runtime
-through a common interface, and the infrastructure changes (runtime layer,
-entrypoint) that make pi-mono available inside wrapix containers. The Loom
-platform (crate structure, templates, workflow) is defined in
-[loom-harness.md](loom-harness.md).
+This spec defines the agent abstraction that lets Loom drive any of
+the three runtimes through a common interface, and the infrastructure
+changes (runtime layer, entrypoint) that make each backend available
+inside wrapix containers. The Loom platform (crate structure,
+templates, workflow) is defined in [loom-harness.md](loom-harness.md).
 
 ## Architecture
 
 Throughout this section, **"driver"** refers to loom's backend-side code that
-drives the agent process over JSONL — distinct from the agent (pi or claude)
-running inside the container.
+drives the agent process over JSONL — distinct from the agent (`pi`,
+`claude`, or `loom-direct-runner`) running inside the container.
 
 ### Dispatch: ZST Backends + Per-Phase Selection
 
-Backends are zero-sized types — `PiBackend` and `ClaudeBackend`. All
-runtime state lives in the session and `SpawnConfig`; the backend type
-parameter alone carries dispatch. No instances, no constructor.
+Backends are zero-sized types — `PiBackend`, `ClaudeBackend`, and
+`DirectBackend`. All runtime state lives in the session and
+`SpawnConfig`; the backend type parameter alone carries dispatch.
+No instances, no constructor.
 
 The backend is resolved **per phase** from config, not once at startup.
 Each workflow command (plan, todo, run, gate, msg) independently selects
@@ -45,7 +51,8 @@ helper as a parameter and never touches concrete backend types — static
 dispatch is preserved inside each match arm.
 
 **Per-phase config example:** `loom todo` uses a cheap model via pi,
-while `loom gate review` uses claude directly:
+`loom gate review` uses direct (typed structured output + cost
+tracking), and the rest defaults to claude:
 
 ```toml
 [phase.default]
@@ -56,13 +63,15 @@ agent.backend = "pi"
 agent.provider = "deepseek"
 agent.model_id = "deepseek-v3"
 
-[phase.review]
-agent.backend = "claude"
+[phase.gate.review]
+agent.backend = "direct"
+agent.model_id = "claude-sonnet-4-6"
 ```
 
-Phases without explicit config inherit `[phase.default]`. The pi backend
-calls `set_model` after spawn if the phase config specifies a
-provider/model.
+Phases without explicit config inherit `[phase.default]`. The pi
+backend calls `set_model` after spawn if the phase config specifies a
+provider/model; the direct backend reads `agent.model_id` directly
+into its `Conversation`'s `ModelId`.
 
 `[phase.plan]` is also a valid per-phase key, but the resolution path
 differs: `loom plan` is interactive (human-in-the-loop) and shells to
@@ -84,10 +93,12 @@ interaction (prompt, steer, abort, event streaming) lives on the session
 type, not the backend trait — the backend's job is to spawn a session;
 the session's job is to drive the conversation.
 
-Both backends support steering: pi via the native `steer` command,
-claude via `--input-format stream-json --output-format stream-json`
-(sends a stream-json user message on stdin during the session). There is
-no capability gate — steering works for both backends. If a future
+All three backends support steering: pi via the native `steer`
+command, claude via `--input-format stream-json --output-format
+stream-json` (sends a stream-json user message on stdin during the
+session), and direct via `loom-direct-runner` injecting a steer
+message into the in-progress `Conversation`'s next turn. There is
+no capability gate — steering works for every backend. If a future
 backend cannot support steering, a capability constant can be
 reintroduced.
 
@@ -95,14 +106,41 @@ Backends carry no per-instance state — the type parameter conveys all
 information. The implementation uses native `async fn` in traits
 (edition 2024) with static dispatch, avoiding the `async-trait` crate.
 
-### Typestate Session
+### Public `Session` Trait
 
-Invalid protocol transitions are compile errors. A session is in one of
-two states — **idle** or **active** — and the state is encoded in the
-session's type parameter. Operations only available in one state are not
-even callable in the other.
+The public agent-driver contract is the `Session` trait, defined in
+`loom-events`. The trait shape's role as an architecture-bearing
+type — and why subprocess-driving backends keep a typestate as
+internal mechanic without exposing it — is described in
+[loom-harness.md — Event Schema](loom-harness.md#event-schema).
+Workflow callers hold backends as `Box<dyn Session>`:
 
-State-machine rules:
+```rust
+pub trait Session: Send {
+    async fn prompt(&mut self, msg: &str) -> Result<EventStream>;
+    async fn steer(&mut self, msg: &str) -> Result<()>;
+    async fn cancel(&mut self) -> Result<()>;
+    async fn set_mode(&mut self, mode: &str) -> Result<()>;
+}
+pub type EventStream = Pin<Box<dyn Stream<Item = AgentEvent> + Send>>;
+```
+
+`Events` is concretized to a boxed stream so `dyn Session` is
+dyn-compatible. Backends box their internal stream at the trait
+boundary. Workflow code never sees concrete backend types.
+
+### Typestate (internal mechanic of subprocess-driving backends)
+
+The Pi and Claude backends drive subprocess agents and must
+enforce protocol-correctness invariants — a prompt cannot be sent
+to a session that hasn't completed its handshake, the same active
+session cannot be re-prompted before its current run completes,
+etc. They use a typestate `AgentSession<Idle|Active>` as an
+**internal mechanic of their impl** — invalid transitions are
+compile errors *inside the backend*. The typestate does NOT leak
+through the public `Session` trait.
+
+State-machine rules (Pi and Claude):
 
 - **Idle session** must be prompted before events can be read. The
   prompt operation consumes the idle session and yields an active one.
@@ -117,6 +155,15 @@ State-machine rules:
 The session type and the parser abstraction both live in `loom-driver` —
 not in `loom-agent` — because the agent-backend trait returns a session,
 and the inverse dependency would be a cycle.
+
+The Direct backend does NOT carry this typestate: it composes
+`loom-llm::Conversation` (which manages its own multi-turn state
+internally) and wraps the result in a `Session` impl. There is no
+subprocess to drive, no handshake to gate; the typestate would be
+ceremony without invariant content. This asymmetry is *why* the
+public `Session` trait belongs on top — both shapes (subprocess-
+typestated and non-subprocess-direct) plug into the same workflow
+code without leaking their differences.
 
 A single inbound protocol line can yield multiple events. The session
 buffers excess events and returns one per call to `next_event`. A
@@ -232,14 +279,15 @@ known-needed variables:
 |----------|------|---------|
 | `WRAPIX_AGENT` | always | Agent selection in entrypoint |
 | `CLAUDE_CODE_OAUTH_TOKEN` | claude backend | Claude authentication |
-| `ANTHROPIC_API_KEY` | pi backend (Anthropic models) | LLM API key |
+| `ANTHROPIC_API_KEY` | pi or direct backend (Anthropic models) | LLM API key |
 | `TERM` | always | Terminal capability |
 | `BEADS_DOLT_SERVER_SOCKET`, `BEADS_DOLT_AUTO_START` | always | Beads dolt-socket path (set to the bind-mount); auto-start disabled (host owns the server) |
 | `LOOM_INSIDE` | always | Set to `1`; trips the nested-loom guard if the agent invokes `loom` inside the container — see [loom-harness.md — Nested-Loom Guard](loom-harness.md#nested-loom-guard) |
 
-Provider-specific API keys for the pi backend (OpenAI, Google, etc.) are
-added only when the configured model requires them. Variable names are
-logged at `info!` level during spawn; values are never logged.
+Provider-specific API keys for the pi and direct backends (OpenAI,
+Google, DeepSeek, etc.) are added only when the configured model
+requires them. Variable names are logged at `info!` level during
+spawn; values are never logged.
 
 ### Host-to-Container Communication
 
@@ -250,15 +298,15 @@ loom (host)                                            container
     ├─ wrapix spawn --spawn-config <file> --stdio        │
     │   └─ exec podman run [no TTY, stdio piped] ─►  entrypoint.sh
     │                                                       │
-    │                                                  agent (pi --mode rpc / claude)
+    │                                                  agent (pi --mode rpc / claude / loom-direct-runner)
     │   stdin ──────────────────────────────────────►  agent
     │   stdout ◄──────────────────────────────────────  agent
     │                                                       │
     ├─ writes JSONL to stdin ────────────────────────►  agent processes command
-    │   (both backends)                                     │
+    │   (all three backends)                                │
     │                                                       │
     ├─ reads JSONL from stdout ◄─────────────────────  agent streams events
-    │   (both backends)                                     │
+    │   (all three backends)                                │
     │                                                       │
     └─ on exit: container teardown via wrapix              │
 ```
@@ -493,11 +541,15 @@ Recovery](loom-harness.md#compaction-recovery) for the file layout and
 lifecycle. This section describes only how each backend delivers the
 recovery content to the agent.
 
-**Delivery is asymmetric** because claude stream-json does not expose
-compaction events — Anthropic compacts internally with no protocol
-notification, so claude must use its own `SessionStart` hook system, while
-pi exposes compaction events natively in JSONL. The asymmetry is
-fundamental to the products' compaction models, not a Loom design choice.
+**Delivery is asymmetric across backends.** Claude stream-json does
+not expose compaction events — Anthropic compacts internally with no
+protocol notification, so claude uses its own `SessionStart` hook
+system. Pi exposes compaction events natively in JSONL, so its
+backend reacts to them with a `steer`-based re-pin. Direct owns the
+conversation transcript itself via `loom-llm` and never sees an
+external compaction event at all. The asymmetry is fundamental to
+how each underlying agent (or LLM) manages context, not a Loom
+design choice.
 
 **Claude backend:**
 - Before spawn, the harness writes `repin.sh` and a `claude-settings.json`
@@ -533,6 +585,78 @@ fundamental to the products' compaction models, not a Loom design choice.
   directory and re-pins again — the scratchpad may have grown between
   compactions.
 
+**Direct backend:**
+- Compaction is not a provider-driven event in Direct — `loom-llm`
+  owns the conversation transcript itself, so there is no
+  external compaction notification to react to.
+- `loom-direct-runner` is responsible for its own context-budget
+  management (truncation, summarization) when the conversation
+  approaches model limits. The re-pin mechanism doesn't apply;
+  the runner already has direct access to the rendered prompt and
+  scratchpad from the start of the session.
+- Context-management strategy for Direct is implementation work
+  for the runner itself, not a spec-level protocol — defer until
+  a Direct-driven phase actually hits context overflow in practice.
+
+### Direct Backend
+
+The Direct backend (`loom-agent::direct`) is the third backend
+implementation, alongside Pi and Claude. Where Pi and Claude drive
+subprocess agents whose tools live inside their own binaries,
+Direct **composes `loom-llm::Conversation` with Loom's six
+sandbox-aware tools** to assemble an agent in-process — but the
+in-process is **inside the container**, not on the host. A small
+`loom-direct-runner` binary ships with the direct runtime layer
+and serves as the container entrypoint; it constructs the
+`Conversation`, registers the six tools, runs the loop, and emits
+the same `AgentEvent` JSONL stream over stdout that Pi and Claude
+emit. The trust boundary (loom on host = trusted; agent in
+container = sandboxed) is preserved.
+
+Selection works identically to the other backends: per-phase
+config picks it, the dispatch function selects the impl.
+
+```toml
+[phase.gate.review]
+agent.backend = "direct"
+agent.model_id = "claude-sonnet-4-6"
+```
+
+**The six tools.** Direct registers six sandbox-aware tools with
+the Conversation: `Read`, `Write`, `Edit`, `Bash`, `Grep`, `Glob`.
+These are **net-new implementations in `loom-agent::direct`** — not
+shared with Claude Code (whose tools live in a closed-source
+binary; no code to share). Each tool reads workspace bind-mount
+paths and executes inside the container's sandbox, matching how
+the subprocess backends' built-in tools behave.
+
+**Per-call provider and caching.** Direct exposes the typed
+`CacheControl` surface from `loom-llm` for prompts that want
+explicit cache breakpoints; the agent's system prompt and any
+long static context can be marked cached. Token usage flows back
+through the standard `DriverKind::TokenUsage` event.
+
+**Observability and safety nets.** Because Direct composes
+`Conversation`, both `DoomLoopObserver` and
+`DuplicateResultObserver` are active in Direct sessions by
+default — without the driver doing anything special. Loom's
+binary-level event chain (LogSink + driver-emitting events) sits
+on top, composed via `EventSink::tee`.
+
+**Library use vs CLI use of `loom-llm`.** The above describes
+Loom's CLI use of Direct backend. External Rust consumers that
+depend on `loom-llm` directly (without `loom-agent`) make their
+own sandboxing decisions — `loom-llm` is just a library with no
+opinion about how its tool handlers execute. The
+`loom-direct-runner` binary's sandboxing is a Loom-CLI concern,
+not a `loom-llm` concern.
+
+**Dependencies.** `loom-agent::direct` depends on `loom-llm`
+(internal-to-workspace dependency); both crates respect their
+respective public-contract surfaces. Adding a new sandbox-aware
+tool to Direct is a `loom-agent` change, independent of the
+`loom-llm` surface.
+
 ### Two-Axis Composition
 
 Container images compose from two independent axes:
@@ -540,12 +664,15 @@ Container images compose from two independent axes:
 | Axis | Options | Determines |
 |------|---------|------------|
 | **Workspace profile** | base, rust, python | Toolchain packages (cargo, python, etc.) |
-| **Agent runtime** | claude, pi | Agent binary and its dependencies |
+| **Agent runtime** | claude, pi, direct | Agent binary that runs inside the container |
 
 Selected profile × selected runtime → one composed image. No
 standalone `profiles.pi`; no `pi+rust` / `pi+python` proliferation.
 The claude runtime layer is empty (claude is already in the base
-image today); the pi runtime layer adds Node.js and the pi binary.
+image today); the pi runtime layer adds Node.js and the pi binary;
+the direct runtime layer adds the statically-linked
+`loom-direct-runner` binary (which carries `loom-llm` and the six
+sandbox-aware tool impls).
 
 ### Entrypoint Agent Selection
 
@@ -564,16 +691,20 @@ connection, network filtering, session audit logging.
 
 ### Agent trait
 
-- `AgentBackend` trait defined in loom-driver with associated `spawn`; no `SUPPORTS_STEERING` constant (both backends steer)
+- `Session` trait defined in `loom-events` with `prompt`, `steer`, `cancel`, `set_mode` methods; `Events` associated type concretized to `Pin<Box<dyn Stream<Item = AgentEvent> + Send>>` for dyn-compatibility
+  [check](grep -q 'pub trait Session' crates/loom-events/src/session.rs)
+- `AgentBackend` trait defined in loom-driver with associated `spawn`; no `SUPPORTS_STEERING` constant (all three backends steer)
   [check](grep -q 'pub trait AgentBackend' crates/loom-driver/src/agent/backend.rs)
-- `run_agent` compiles with both `PiBackend` and `ClaudeBackend` as concrete types
-  [check](cargo test -p loom-agent --test static_dispatch pi_and_claude_dispatch_through_run_agent)
+- `run_agent` compiles with `PiBackend`, `ClaudeBackend`, and `DirectBackend` as concrete types
+  [check](cargo test -p loom-agent --test static_dispatch all_three_backends_dispatch_through_run_agent)
 - `AgentEvent` enum covers: MessageDelta, ToolCall, ToolResult, TurnEnd, SessionComplete, CompactionStart, CompactionEnd, Error
   [check](cargo test -p loom-events --lib every_spec_variant_present)
 - `SpawnConfig` struct captures image_ref, image_source, workspace, env, initial_prompt, agent_args, scratch_dir
   [check](cargo test -p loom-driver --lib spawn_config_with_model_none_omits_model_key)
-- Typestate `AgentSession<Idle>` / `AgentSession<Active>` prevents invalid transitions
+- Typestate `AgentSession<Idle>` / `AgentSession<Active>` exists ONLY as an internal mechanic of subprocess-driving backends (Pi, Claude). It does not leak through `Session` trait; Direct backend carries no typestate.
   [check](grep -q 'pub struct Idle' crates/loom-driver/src/agent/session.rs)
+- `Session` trait surface does not reference `AgentSession`, `Idle`, or `Active` types (typestate is private to subprocess backends)
+  [check](cargo run -p loom-walk -- session_trait_does_not_expose_typestate)
 - `ProtocolError` variants cover InvalidJson, UnknownMessageType, Io, ProcessExit, UnexpectedEof, LineTooLong, Unsupported
   [check](grep -q 'pub enum ProtocolError' crates/loom-driver/src/agent/error.rs)
 
@@ -617,6 +748,27 @@ connection, network filtering, session audit logging.
 - Claude backend shutdown watchdog: on `result` event, loom closes stdin; if claude does not exit within grace period, sends SIGTERM then SIGKILL
   [test](shutdown_watchdog_escalates_to_sigkill_when_child_ignores_stdin_close)
 
+### Direct backend
+
+- Direct backend's `Session` impl spawns a container via `wrapix spawn` with the `direct` runtime layer; the container's entrypoint exec's `loom-direct-runner`
+  [test](direct_session_spawn_invokes_wrapix_spawn_with_direct_runtime)
+- `loom-direct-runner` constructs a `loom-llm::Conversation`, registers the six sandbox-aware tools, runs the loop, and emits `AgentEvent` JSONL to stdout — same wire shape as Pi/Claude
+  [test](direct_runner_emits_agent_event_jsonl_compatible_with_pi_and_claude)
+- Direct registers exactly six tools by name: `Read`, `Write`, `Edit`, `Bash`, `Grep`, `Glob`
+  [test](direct_runner_registers_canonical_six_tools)
+- Each Direct tool's impl lives in `loom-agent::direct::tools` — net-new code, not re-exported from any other crate
+  [check](cargo run -p loom-walk -- direct_tools_net_new)
+- Direct tools execute against the container's bind-mounted workspace; absolute paths under `/workspace/...` resolve inside the container
+  [test](direct_tools_read_against_container_workspace_mount)
+- `DoomLoopObserver` and `DuplicateResultObserver` are composed into the Conversation's sink by default in `loom-direct-runner`
+  [test](direct_runner_composes_default_observers)
+- Direct backend respects per-phase `agent.model_id` config; resolves through `ModelId::from_str` (with `Other` fallback for unknown models)
+  [test](direct_model_id_respects_phase_config)
+- Per-call `CacheControl::Ephemeral(CacheTtl)` markers in the runner's prompt construction flow through to provider requests (Anthropic confirmed via mock; OpenAI/Gemini no-op)
+  [test](direct_cache_control_propagates_to_anthropic_request)
+- `DriverKind::TokenUsage` event emits on every completion within Direct sessions
+  [test](direct_emits_token_usage_per_completion)
+
 ### Backend selection
 
 - Per-phase config resolves correct backend (`[phase.todo].agent.backend` overrides `[phase.default].agent.backend`)
@@ -656,6 +808,12 @@ connection, network filtering, session audit logging.
   [system](nix run .#test-pi-runtime-image)
 - Claude runtime adds nothing (claude already in base image)
   [system](nix run .#test-claude-runtime-noop)
+- Direct runtime layer adds the statically-linked `loom-direct-runner` binary
+  [system](nix build .#sandbox-direct)
+- Image builds with `profile:rust` + `WRAPIX_AGENT=direct` (composition works)
+  [system](nix build .#sandbox-rust-direct)
+- `loom-direct-runner` is functional inside container (`loom-direct-runner --version` succeeds)
+  [system](nix run .#test-direct-runtime-image)
 
 ## Requirements
 
@@ -692,28 +850,47 @@ connection, network filtering, session audit logging.
    via additional user messages. On observing a `result` event, loom closes
    its end of stdin, waits `[claude] post_result_grace_secs` (default 5s)
    for natural exit, then escalates SIGTERM → SIGKILL.
-5. **Per-phase backend selection** — each workflow phase (plan, todo, run,
+5. **Direct backend** — composes `loom-llm::Conversation` with Loom's six
+   sandbox-aware tools (`Read`, `Write`, `Edit`, `Bash`, `Grep`, `Glob`).
+   The actual agent loop runs inside a per-bead container via the
+   `loom-direct-runner` entrypoint binary that ships in the `direct`
+   runtime layer — preserving the trust boundary (loom on host = trusted;
+   agent in container = sandboxed) identically to Pi and Claude. Direct's
+   tools are net-new implementations in `loom-agent::direct`, not shared
+   with Claude Code (closed-source) or with consumer-supplied tools (which
+   consumers register via `Conversation::register` in their own apps when
+   using `loom-llm` as a library). All `loom-llm` features — typed
+   `CacheControl`, structured output via `T: DeserializeOwned + JsonSchema`,
+   per-call `ModelId`, `DoomLoopObserver` + `DuplicateResultObserver`
+   composed by default, `DriverKind::TokenUsage` events — are available
+   in Direct sessions.
+6. **Per-phase backend selection** — each workflow phase (plan, todo, run,
    check, msg) independently resolves its backend and model from config.
    `[phase.default].agent.backend` sets the fallback (`claude`). Per-phase
    overrides (e.g. `[phase.todo]`) carry `agent.backend` plus optional
-   `agent.provider` and `agent.model_id`. `--agent` CLI flag overrides all
-   phase config for the current invocation.
-6. **Agent runtime layer** — the image builder composes two orthogonal axes:
-   *workspace profile* (base, rust, python) and *agent runtime* (claude, pi).
-   When `WRAPIX_AGENT=pi`, the pi runtime layer (Node.js + pi binary) is
-   added to whichever workspace profile is configured for the bead. No
-   standalone `profiles.pi` — no profile proliferation.
-7. **Entrypoint agent selection** — `entrypoint.sh` checks `WRAPIX_AGENT` and:
+   `agent.provider` and `agent.model_id`. Valid `agent.backend` values are
+   `claude`, `pi`, and `direct`. `--agent` CLI flag overrides all phase
+   config for the current invocation.
+7. **Agent runtime layer** — the image builder composes two orthogonal axes:
+   *workspace profile* (base, rust, python) and *agent runtime* (claude, pi,
+   direct). When `WRAPIX_AGENT=pi`, the pi runtime layer (Node.js + pi
+   binary) is added to whichever workspace profile is configured for the
+   bead. When `WRAPIX_AGENT=direct`, the direct runtime layer (statically-
+   linked `loom-direct-runner` binary) is added. No standalone profile
+   proliferation per runtime.
+8. **Entrypoint agent selection** — `entrypoint.sh` checks `WRAPIX_AGENT` and:
    - `claude` (default): existing behavior (Claude config merging, hooks,
      `claude --dangerously-skip-permissions`)
    - `pi`: skips Claude-specific config, starts `pi --mode rpc` listening on
      stdin/stdout
-8. **Event normalization** — both backends emit a common `AgentEvent` enum so
+   - `direct`: skips Claude-specific config, exec's `loom-direct-runner`
+     listening on stdin/stdout
+9. **Event normalization** — all three backends emit a common `AgentEvent` enum so
    the workflow engine does not need backend-specific event handling.
-9. **JSONL framing** — both protocols use JSON Lines (one complete
-   JSON object per line, separated by `\n`). The JSONL reader splits on `\n`
-   only, not Unicode line separators (U+2028, U+2029). Each line is
-   independently parseable.
+10. **JSONL framing** — all three backends' wire protocols use JSON Lines
+    (one complete JSON object per line, separated by `\n`). The JSONL
+    reader splits on `\n` only, not Unicode line separators (U+2028,
+    U+2029). Each line is independently parseable.
 
 ### Non-Functional
 
@@ -740,12 +917,27 @@ connection, network filtering, session audit logging.
 - **Pi-mono extensions** — Loom controls pi via RPC, not via pi's extension
   system. No TypeScript extensions are written or loaded.
 - **Pi-mono web-ui** — terminal-only integration.
-- **Direct LLM API calls** — Loom delegates to agent binaries which handle
-  API communication. No direct Anthropic/OpenAI/etc. API usage.
 - **Pi-mono forking or vendoring** — consumed as an npm package bundled by
   Nix. No source-level fork.
 - **macOS (Darwin) support for pi runtime layer** — initially Linux
   containers only. Darwin support is a follow-up.
+- **Tool-set sharing with Claude Code** — Claude Code is a closed-source
+  binary; its built-in tool implementations are not available to share.
+  Loom's six sandbox-aware tools in `loom-agent::direct` are net-new
+  Rust implementations.
+- **Sharing Direct's tools with consumer-driven `loom-llm` use** —
+  consumers depending on `loom-llm` directly register their own custom
+  tools via `Conversation::register`. The six sandbox-aware tools live in
+  `loom-agent::direct` (internal); their sandboxing model assumes the
+  `loom-direct-runner` container context. Consumers building their own
+  Rust apps on `loom-llm` make their own sandboxing decisions per
+  [loom-llm.md — Two Consumer Paths](loom-llm.md#two-consumer-paths).
+- **Transcript-rewriting dedup in pi/Claude backends** — pi-mono and
+  Claude Code own their own transcripts; Loom does not intercept and
+  rewrite them. The `DuplicateResultObserver` (see [loom-llm.md —
+  Agent-Loop Observers](loom-llm.md#agent-loop-observers)) emits
+  observability events about duplicates but never rewrites. Future
+  transcript-rewriting work, if any, would be Direct-backend-only.
 - **Multiple simultaneous backends** — one backend per phase invocation.
   No mixing of backends within a single phase; parallel sessions all use
   the backend resolved for that phase.
