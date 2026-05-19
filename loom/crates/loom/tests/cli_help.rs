@@ -72,7 +72,7 @@ fn loom_help_groups_workflow_inspection_state_in_order() {
     );
 
     let workflow_section = &out[workflow..inspection];
-    for sub in ["plan", "todo", "run", "gate", "review", "msg"] {
+    for sub in ["plan", "todo", "run", "gate", "msg"] {
         assert!(
             workflow_section.contains(&format!("  {sub} "))
                 || workflow_section.contains(&format!("  {sub}\n")),
@@ -240,11 +240,6 @@ fn loom_gate_scope_flags_are_mutually_exclusive() {
             "stderr must explain mutual exclusion, got: {stderr}",
         );
     }
-}
-
-#[test]
-fn loom_review_help_snapshot() {
-    insta::assert_snapshot!(loom_help(&["review"]));
 }
 
 #[test]

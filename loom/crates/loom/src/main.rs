@@ -283,21 +283,6 @@ enum Command {
         #[command(subcommand)]
         subcommand: Option<GateSubcommand>,
     },
-    /// LLM-judged review pass over the gate scope.
-    Review {
-        /// Spec label override (defaults to `current_spec`).
-        #[arg(long, short = 's', value_name = "LABEL")]
-        spec: Option<String>,
-        /// Restrict the review scope to one bead.
-        #[arg(long, short = 'b', value_name = "ID", conflicts_with_all = ["diff", "tree"])]
-        bead: Option<String>,
-        /// Restrict the review scope to a git diff range.
-        #[arg(long, value_name = "RANGE", conflicts_with_all = ["bead", "tree"])]
-        diff: Option<String>,
-        /// Review the entire spec tree × implementation.
-        #[arg(long, conflicts_with_all = ["bead", "diff"])]
-        tree: bool,
-    },
     /// Resolve outstanding `loom:clarify` and `loom:blocked` beads.
     Msg {
         /// Filter to a specific spec label.
@@ -394,7 +379,6 @@ impl Command {
             | Command::Plan { .. }
             | Command::Run { .. }
             | Command::Gate { .. }
-            | Command::Review { .. }
             | Command::Msg { .. }
             | Command::Note { .. }
             | Command::Todo { .. } => true,
@@ -407,10 +391,7 @@ impl Command {
 /// `next_help_heading` applies to flags, not subcommands, so the binary
 /// regroups the auto-generated `Commands:` block instead.
 const HELP_GROUPS: &[(&str, &[&str])] = &[
-    (
-        "Workflow",
-        &["plan", "todo", "run", "gate", "review", "msg"],
-    ),
+    ("Workflow", &["plan", "todo", "run", "gate", "msg"]),
     ("Inspection", &["status", "logs", "spec"]),
     ("State", &["init", "use", "note"]),
 ];
@@ -425,8 +406,8 @@ fn args_request_top_level_help(args: &[String]) -> bool {
         return true;
     }
     let known_subcommands = [
-        "init", "status", "use", "logs", "spec", "plan", "run", "gate", "review", "msg", "todo",
-        "note", "help",
+        "init", "status", "use", "logs", "spec", "plan", "run", "gate", "msg", "todo", "note",
+        "help",
     ];
     for (idx, arg) in args.iter().enumerate() {
         if known_subcommands.contains(&arg.as_str()) {
@@ -597,17 +578,6 @@ fn main() -> ExitCode {
             },
         ),
         Command::Gate { subcommand } => run_gate(&workspace, subcommand, agent_override),
-        Command::Review {
-            spec,
-            bead,
-            diff,
-            tree,
-        } => run_review(
-            &workspace,
-            spec,
-            agent_override,
-            ReviewOpts { bead, diff, tree },
-        ),
         Command::Msg {
             spec,
             number,

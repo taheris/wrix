@@ -1,5 +1,6 @@
 ---
 source: crates/loom/tests/cli_help.rs
+assertion_line: 55
 expression: "loom_help(&[])"
 ---
 Loom harness CLI
@@ -11,7 +12,6 @@ Workflow:
   todo    Decompose the active spec into beads (four-tier detection)
   run     Per-bead execution loop. Continuous by default; `--once` exits after one bead
   gate    Quality gate — annotation-dispatched verifiers and LLM rubric
-  review  LLM-judged review pass over the gate scope
   msg     Resolve outstanding `loom:clarify` and `loom:blocked` beads
 
 Inspection:
