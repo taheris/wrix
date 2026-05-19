@@ -9,6 +9,7 @@ let
     expandPathFn
     cleanStaleStagingDirs
     createStagingDir
+    imageLoadStep
     mkDeployKeyExpr
     pruneStaleImages
     stageBeads
@@ -372,18 +373,8 @@ in
           IMAGE_SOURCE="$IMAGE_OVERRIDE_SOURCE"
         fi
 
-        if [ -n "$IMAGE_SOURCE" ] && ! podman image exists "$IMAGE_REF" 2>/dev/null; then
-          verbose "Loading image from $IMAGE_SOURCE..."
-          "$IMAGE_SOURCE" | podman load -q >/dev/null
-          # streamLayeredImage tarball tags the loaded image as <repo>:latest;
-          # alias it under the caller-supplied hash tag so subsequent
-          # `podman image exists` checks short-circuit the reload.
-          IMAGE_REPO="''${IMAGE_REF%:*}"
-          podman tag "$IMAGE_REPO:latest" "$IMAGE_REF" 2>/dev/null || true
-          verbose "Loaded image $IMAGE_REF"
-        else
-          verbose "Using cached image $IMAGE_REF"
-        fi
+        # Shared with the wrapix-spawn-load verifier: see `lib/util/shell.nix`.
+        ${imageLoadStep}
         # Prune stale wrapix-* tags from every profile on every invocation,
         # not just after a fresh load — otherwise a cached current profile
         # lets stale hashes from other profiles accumulate indefinitely.

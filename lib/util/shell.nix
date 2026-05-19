@@ -17,6 +17,20 @@ _:
     }
   '';
 
+  # Idempotent `podman load` of the sandbox image. Expects $IMAGE_REF,
+  # $IMAGE_SOURCE, and `verbose` in the caller's scope.
+  imageLoadStep = ''
+    if [ -n "$IMAGE_SOURCE" ] && ! podman image exists "$IMAGE_REF" 2>/dev/null; then
+      verbose "Loading image from $IMAGE_SOURCE..."
+      "$IMAGE_SOURCE" | podman load -q >/dev/null
+      IMAGE_REPO="''${IMAGE_REF%:*}"
+      podman tag "$IMAGE_REPO:latest" "$IMAGE_REF" 2>/dev/null || true
+      verbose "Loaded image $IMAGE_REF"
+    else
+      verbose "Using cached image $IMAGE_REF"
+    fi
+  '';
+
   # Clean up stale staging directories from previous runs (PIDs that no longer exist)
   # Expects $WRAPIX_CACHE to be set
   cleanStaleStagingDirs = ''

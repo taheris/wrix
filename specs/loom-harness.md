@@ -1191,7 +1191,7 @@ Criteria.
 - `wrapix spawn` runs `podman load` from `image_source` (a Nix store
       path) before invoking podman with `image_ref` as the ref; the load is
       idempotent on the image's hash tag
-  [system](tests/loom-test.sh::test_wrapix_spawn_loads_image_source)
+  [system](nix run .#test-wrapix-spawn-load)
 - Per-bead profile selection: two beads with different profile labels
       result in two `wrapix spawn` invocations with different `image_ref`
       and `image_source`
@@ -1754,7 +1754,7 @@ Criteria.
 - Loom binary builds via `nix build`
   [system](nix build .#loom)
 - Loom binary is available in the devShell
-  [system](tests/loom-test.sh::test_devshell_includes_loom)
+  [system](nix develop -c loom --version)
 - `cargo clippy --workspace` and `cargo test --workspace` are
       covered by the `loom-clippy` and `loom-nextest` flake checks
       (shared cargoArtifacts cache); see [profiles.md](profiles.md)

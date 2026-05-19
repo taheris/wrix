@@ -260,6 +260,15 @@ in
       program = "${loomDeriv.testLoom}/bin/test-loom";
     };
 
+    # Linux-only verifier for the wrapix-spawn image-source -> podman-load
+    # contract. Drives the shared `imageLoadStep` snippet (the same one
+    # `wrapix spawn` runs) through a shim podman; on Darwin prints a skip.
+    wrapix-spawn-load = {
+      meta.description = "Verify wrapix-spawn image-source -> podman-load idempotence (Linux only)";
+      type = "app";
+      program = "${loomDeriv.wrapixSpawnLoadTest}/bin/test-wrapix-spawn-load";
+    };
+
     # profiles.rust.buildPackage [verify] hash invariants (specs/profiles.md
     # success criteria 414-427). Runs all 7 test functions in
     # tests/profiles/build-package.sh.

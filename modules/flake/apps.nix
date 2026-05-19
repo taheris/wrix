@@ -57,6 +57,7 @@ _:
         test-profiles-build-package = test.apps.profiles-build-package;
         test-ralph = test.apps.ralph;
         test-ralph-container = test.apps.ralph-container;
+        test-wrapix-spawn-load = test.apps.wrapix-spawn-load;
       }
       // lib.optionalAttrs isLinux {
         fuzz-loom = {

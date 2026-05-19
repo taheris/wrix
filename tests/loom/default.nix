@@ -11,6 +11,8 @@ let
   inherit (pkgs) lib;
   inherit (loomPackage) craneLib;
 
+  shellLib = import ../../lib/util/shell.nix { };
+
   isLinux = lib.elem system [
     "x86_64-linux"
     "aarch64-linux"
@@ -137,7 +139,119 @@ let
       ${if isLinux then smoke.text else darwinSkip}
     '';
   };
+
+  # Linux-only verifier for the wrapix-spawn image-source -> podman-load
+  # contract. Drives the same `imageLoadStep` snippet wrapix-spawn runs
+  # through a shim podman; asserts load on first call, idempotence on the
+  # second.
+  wrapixSpawnLoadTest = pkgs.writeShellApplication {
+    name = "test-wrapix-spawn-load";
+    runtimeInputs = lib.optionals isLinux [
+      pkgs.coreutils
+      pkgs.gnugrep
+    ];
+    text =
+      if isLinux then
+        ''
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+
+          shim_dir="$tmp/bin"
+          state="$tmp/state"
+          mkdir -p "$shim_dir" "$state"
+          log_file="$state/podman.log"
+          : >"$log_file"
+
+          IMAGE_REF="localhost/wrapix-loadtest:abc123"
+          IMAGE_SOURCE="$tmp/image-source.sh"
+
+          # Fake image_source: emits a stream of bytes on stdout (the
+          # contract `streamLayeredImage` honors). The shim discards them.
+          cat >"$IMAGE_SOURCE" <<'IMG_SRC'
+          #!/usr/bin/env bash
+          printf 'fake-image-tarball-bytes'
+          IMG_SRC
+          chmod +x "$IMAGE_SOURCE"
+
+          # Shim podman that records every call into $log_file and emulates
+          # the subset the load step uses:
+          #   * `image exists <ref>` returns 0 only after a load+tag has
+          #     completed (state file PRESENT) — the idempotence pivot.
+          #   * `load -q` accepts a tarball stream.
+          #   * `tag <src> <dst>` flips the state file.
+          cat >"$shim_dir/podman" <<PODMAN_SHIM
+          #!/usr/bin/env bash
+          set -euo pipefail
+          printf '%s\n' "\$*" >>'$log_file'
+          case "\$1" in
+              image)
+                  case "\$2" in
+                      exists)
+                          if [ -f '$state/loaded' ]; then exit 0; else exit 1; fi
+                          ;;
+                      *) exit 0 ;;
+                  esac
+                  ;;
+              load)
+                  cat >'$state/load-stdin' || true
+                  exit 0
+                  ;;
+              tag)
+                  : >'$state/loaded'
+                  exit 0
+                  ;;
+              *) exit 0 ;;
+          esac
+          PODMAN_SHIM
+          chmod +x "$shim_dir/podman"
+
+          # The shared snippet expects `verbose` to be defined; production
+          # wraps it around WRAPIX_VERBOSE. The test no-ops it.
+          verbose() { :; }
+
+          PATH="$shim_dir:$PATH"
+          export PATH IMAGE_REF IMAGE_SOURCE
+
+          # First invocation: the snippet must call `podman load` and
+          # `podman tag <repo>:latest <ref>`.
+          ${shellLib.imageLoadStep}
+
+          if ! grep -q '^load -q' "$log_file"; then
+              echo "first invocation did not call 'podman load':" >&2
+              cat "$log_file" >&2
+              exit 1
+          fi
+          if ! grep -q "^tag .*:latest $IMAGE_REF$" "$log_file"; then
+              echo "first invocation did not tag image as $IMAGE_REF:" >&2
+              cat "$log_file" >&2
+              exit 1
+          fi
+
+          # Second invocation: the snippet must short-circuit on the cached
+          # tag (no second `podman load`).
+          : >"$log_file"
+          ${shellLib.imageLoadStep}
+
+          if grep -q '^load -q' "$log_file"; then
+              echo "second invocation re-loaded image (load is not idempotent):" >&2
+              cat "$log_file" >&2
+              exit 1
+          fi
+          if ! grep -q "^image exists $IMAGE_REF$" "$log_file"; then
+              echo "second invocation did not check 'image exists $IMAGE_REF':" >&2
+              cat "$log_file" >&2
+              exit 1
+          fi
+
+          echo "test-wrapix-spawn-load: PASS"
+        ''
+      else
+        ''
+          echo "test-wrapix-spawn-load: not available on Darwin (no podman dependency on macOS)" >&2
+          exit 0
+        '';
+  };
 in
 {
-  inherit testLoom nextestFast;
+  inherit testLoom nextestFast wrapixSpawnLoadTest;
 }
