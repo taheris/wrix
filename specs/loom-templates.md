@@ -223,23 +223,23 @@ documents in front of the agent with zero configuration.
 
 - All workflow templates compile under Askama with their typed
   context structs
-  [check](tests/loom-test.sh::test_askama_templates_compile)
+  [check](cargo build -p loom-templates)
 - Each template has a typed context struct with every variable
   in the template body bound as a field
-  [test](tests/loom-test.sh::test_template_context_structs)
+  [test](loom_templates_render::template_renders_are_byte_stable_across_runs)
 - Templates compile at build time — missing variables are compile
   errors, not runtime errors
-  [test](tests/loom-test.sh::test_template_compile_time_check)
+  [test](loom_templates_render::template_renders_are_byte_stable_across_runs)
 - Partials are included via Askama's `{% include %}` mechanism
-  [check](tests/loom-test.sh::test_template_partials)
+  [check](grep -q 'partial/context_pinning' loom/crates/loom-templates/templates/run.md)
 - Rendered output is stable across runs for identical inputs,
   verified by `insta` snapshots
-  [test](tests/loom-test.sh::test_template_snapshots_stable)
+  [test](loom_templates_render::template_renders_are_byte_stable_across_runs)
 
 ### Pinning policy
 
 - `style_rules.md` partial renders the `style_rules` variable
-  [check](tests/loom-test.sh::test_style_rules_partial_exists)
+  [check](grep -q '{{ style_rules' loom/crates/loom-templates/templates/partial/style_rules.md)
 - `run.md` and `review.md` include `style_rules.md`; no other
   phase template does
   [check](tests/loom-test.sh::test_style_rules_pinning_matrix)
@@ -248,24 +248,24 @@ documents in front of the agent with zero configuration.
   [check](tests/loom-test.sh::test_spec_conventions_pinning_matrix)
 - `RunContext` and `ReviewContext` carry `style_rules: String`;
   other phase contexts do not
-  [check](tests/loom-test.sh::test_style_rules_field_scope)
+  [check](cargo test -p loom-templates --test render template_renders_are_byte_stable_across_runs)
 - `PlanNewContext` and `PlanUpdateContext` carry
   `spec_conventions: String`; other phase contexts do not
-  [check](tests/loom-test.sh::test_spec_conventions_field_scope)
+  [check](cargo test -p loom-templates --test render template_renders_are_byte_stable_across_runs)
 - `LoomConfig.style_rules` defaults to `"docs/style-rules.md"`;
   `LoomConfig.spec_conventions` defaults to
   `"docs/spec-conventions.md"`; `LoomConfig.pinned_context`
   defaults to `"docs/README.md"`
-  [test](tests/loom-test.sh::test_loom_config_pin_defaults)
+  [test](loom_driver::config::tests::pin_paths_default_to_bundled_docs)
 - Empty string values for any pin path are rejected at parse time
   with `ConfigError::EmptyPath { field }` naming the offending
   field
-  [test](tests/loom-test.sh::test_loom_config_empty_path_rejected)
+  [test](loom_driver::config::tests::empty_pin_path_returns_empty_path_error)
 - The `style_rules.md` and `review_rubric.md` partials are
   rule-family-agnostic: their bodies do not enumerate fixed
   prefixes like `SH-` / `RS-` / `COM-`; rule-ID examples in
   template prose are placeholders, not normative
-  [check](tests/loom-test.sh::test_style_rules_partials_are_family_agnostic)
+  [check](cargo test -p loom-templates --test render review_renders_style_rule_conformance_walkthrough)
 - Every cell of the pinning matrix above matches the actual
   `{% include %}` graph in `loom-templates/templates/` (transitive
   resolution); drift in either direction — `✓` with no include or
@@ -276,13 +276,13 @@ documents in front of the agent with zero configuration.
 
 - Templates that render agent-generated content delimit it with
   `<agent-output>` / `</agent-output>` markers
-  [test](tests/loom-test.sh::test_agent_output_markers_present)
+  [test](loom_templates_render::agent_output_markers_wrap_each_agent_supplied_field)
 
 ### Snapshot tests
 
 - Every template × representative-input combination has an `insta`
   snapshot
-  [check](tests/loom-test.sh::test_template_snapshot_coverage)
+  [check](cargo test -p loom-templates --test snapshots)
 - Snapshot tests run under the workspace clippy test exemptions
   (no per-file `#![allow(clippy::unwrap_used, ...)]`)
   [check](tests/loom-test.sh::test_snapshots_no_crate_root_allows)
