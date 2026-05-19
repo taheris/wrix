@@ -1273,16 +1273,62 @@ fn template_pinning_matrix_resolves_transitive_includes() {
 // surface_conformance
 // ---------------------------------------------------------------------------
 
+const LOGS_UX_TABLE: &str = concat!(
+    "### Logs UX\n",
+    "\n",
+    "| Flag | Behavior |\n",
+    "|------|----------|\n",
+    "| `-f` / `--follow` | tail |\n",
+    "| `--raw` | raw bytes |\n",
+);
+
+const MSG_FLAG_TABLE: &str = concat!(
+    "### Msg Modes\n",
+    "\n",
+    "**Flag table.**\n",
+    "\n",
+    "| Short | Long | Argument | Purpose |\n",
+    "|-------|------|----------|---------|\n",
+    "| `-c` | `--chat` | — | chat |\n",
+    "| `-s` | `--spec` | `<label>` | filter |\n",
+);
+
+const COMMAND_ENUM_DEFAULT: &str = concat!(
+    "enum Command {\n",
+    "    Logs {\n",
+    "        #[arg(long, short = 'f')]\n",
+    "        follow: bool,\n",
+    "        #[arg(long)]\n",
+    "        raw: bool,\n",
+    "    },\n",
+    "    Msg {\n",
+    "        #[arg(long, short = 'c')]\n",
+    "        chat: bool,\n",
+    "        #[arg(long, short = 's')]\n",
+    "        spec: Option<String>,\n",
+    "    },\n",
+    "}\n",
+);
+
 fn seed_surface_spec(ws: &TempDir, fr1_body: &str) {
+    seed_surface_spec_with(ws, fr1_body, LOGS_UX_TABLE, MSG_FLAG_TABLE);
+}
+
+fn seed_surface_spec_with(ws: &TempDir, fr1_body: &str, logs_section: &str, msg_section: &str) {
     let body = format!(
-        "# Loom Harness\n\n## Requirements\n\n### Functional\n\n1. **Command set** — header\n\n{fr1_body}\n2. **Compiled templates** — sentinel\n",
+        "# Loom Harness\n\n{logs_section}\n{msg_section}\n## Requirements\n\n### Functional\n\n1. **Command set** — header\n\n{fr1_body}\n2. **Compiled templates** — sentinel\n",
     );
     seed(ws.path(), "specs/loom-harness.md", &body);
 }
 
 fn seed_surface_main(ws: &TempDir, tuples_body: &str) {
-    let body =
-        format!("fn main() {{}}\n\nconst HELP_GROUPS: &[(&str, &[&str])] = &[\n{tuples_body}];\n",);
+    seed_surface_main_with(ws, tuples_body, COMMAND_ENUM_DEFAULT);
+}
+
+fn seed_surface_main_with(ws: &TempDir, tuples_body: &str, command_enum: &str) {
+    let body = format!(
+        "fn main() {{}}\n\n{command_enum}\nconst HELP_GROUPS: &[(&str, &[&str])] = &[\n{tuples_body}];\n",
+    );
     seed(ws.path(), "crates/loom/src/main.rs", &body);
 }
 
@@ -1393,6 +1439,110 @@ fn surface_conformance_fail_when_group_order_differs() {
     );
     let out = invoke(&["surface_conformance"], Some(ws.path()), None);
     assert_fail(&out, "group order");
+}
+
+#[test]
+fn surface_conformance_fail_when_spec_logs_flag_missing_from_binary() {
+    let ws = make_workspace();
+    seed_surface_spec_with(
+        &ws,
+        SPEC_FR1_MINIMAL,
+        concat!(
+            "### Logs UX\n",
+            "\n",
+            "| Flag | Behavior |\n",
+            "|------|----------|\n",
+            "| `-f` / `--follow` | tail |\n",
+            "| `--raw` | raw bytes |\n",
+            "| `--ghost` | undeclared |\n",
+        ),
+        MSG_FLAG_TABLE,
+    );
+    seed_surface_main(&ws, HELP_GROUPS_MINIMAL);
+    let out = invoke(&["surface_conformance"], Some(ws.path()), None);
+    assert_fail(&out, "`--ghost`");
+}
+
+#[test]
+fn surface_conformance_fail_when_binary_logs_flag_missing_from_spec() {
+    let ws = make_workspace();
+    seed_surface_spec(&ws, SPEC_FR1_MINIMAL);
+    seed_surface_main_with(
+        &ws,
+        HELP_GROUPS_MINIMAL,
+        concat!(
+            "enum Command {\n",
+            "    Logs {\n",
+            "        #[arg(long, short = 'f')]\n",
+            "        follow: bool,\n",
+            "        #[arg(long)]\n",
+            "        raw: bool,\n",
+            "        #[arg(long)]\n",
+            "        ghost: bool,\n",
+            "    },\n",
+            "    Msg {\n",
+            "        #[arg(long, short = 'c')]\n",
+            "        chat: bool,\n",
+            "        #[arg(long, short = 's')]\n",
+            "        spec: Option<String>,\n",
+            "    },\n",
+            "}\n",
+        ),
+    );
+    let out = invoke(&["surface_conformance"], Some(ws.path()), None);
+    assert_fail(&out, "`--ghost`");
+}
+
+#[test]
+fn surface_conformance_fail_when_msg_flag_drift() {
+    let ws = make_workspace();
+    seed_surface_spec_with(
+        &ws,
+        SPEC_FR1_MINIMAL,
+        LOGS_UX_TABLE,
+        concat!(
+            "### Msg Modes\n",
+            "\n",
+            "**Flag table.**\n",
+            "\n",
+            "| Short | Long | Argument | Purpose |\n",
+            "|-------|------|----------|---------|\n",
+            "| `-c` | `--chat` | — | chat |\n",
+            "| `-s` | `--spec` | `<label>` | filter |\n",
+            "| `-d` | `--phantom` | — | undeclared |\n",
+        ),
+    );
+    seed_surface_main(&ws, HELP_GROUPS_MINIMAL);
+    let out = invoke(&["surface_conformance"], Some(ws.path()), None);
+    assert_fail(&out, "`--phantom`");
+}
+
+#[test]
+fn surface_conformance_long_attr_with_explicit_value_is_recognised() {
+    let ws = make_workspace();
+    seed_surface_spec(&ws, SPEC_FR1_MINIMAL);
+    seed_surface_main_with(
+        &ws,
+        HELP_GROUPS_MINIMAL,
+        concat!(
+            "enum Command {\n",
+            "    Logs {\n",
+            "        #[arg(long = \"follow\", short = 'f')]\n",
+            "        tail: bool,\n",
+            "        #[arg(long)]\n",
+            "        raw: bool,\n",
+            "    },\n",
+            "    Msg {\n",
+            "        #[arg(long, short = 'c')]\n",
+            "        chat: bool,\n",
+            "        #[arg(long, short = 's')]\n",
+            "        spec: Option<String>,\n",
+            "    },\n",
+            "}\n",
+        ),
+    );
+    let out = invoke(&["surface_conformance"], Some(ws.path()), None);
+    assert_pass(&out);
 }
 
 #[test]

@@ -1,9 +1,7 @@
 //! Surface-conformance walk — `loom-harness.md` FR13.
 //!
 //! Compares the binary's user-facing command surface against FR1 of
-//! `specs/loom-harness.md`. Three dimensions of FR13 are covered here;
-//! dimension (2) "Flag set" is tracked separately (see the bead linked
-//! from the spec's surface-conformance criterion).
+//! `specs/loom-harness.md`:
 //!
 //! - **Command set** — FR1's per-group bullets ↔ the `HELP_GROUPS`
 //!   constant in `crates/loom/src/main.rs`.
@@ -12,13 +10,21 @@
 //! - **Grouping order** — the order of `**Workflow** / **Inspection**
 //!   / **State**` sub-sections in FR1 (and per-group bullet order) ↔
 //!   the order of `HELP_GROUPS` tuples (and per-tuple slice order).
+//! - **Flag set (partial)** — long flag names in the *Logs UX* table
+//!   ↔ `Command::Logs` `#[arg(long, ...)]` declarations; long flag
+//!   names in the *Msg Modes* flag table ↔ `Command::Msg`. FR1
+//!   scope-flag inline prose (`loom gate <sub>` flags) is not yet
+//!   covered.
 //!
 //! `HELP_GROUPS` is the canonical declaration the binary regroups
 //! clap's flat `Commands:` block against, so parsing it as text is the
 //! shortest path to the renderable surface without a clap-reflection
 //! dep from this walk.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+
+use syn::{Expr, ExprLit, Lit, Meta, MetaNameValue};
 
 use super::util::{read_to_string, verdict_from, workspace_root};
 use super::{Verdict, WalkInput};
@@ -53,7 +59,47 @@ pub fn run(_input: &WalkInput) -> Verdict {
     let mut violations = Vec::new();
     check_groups_match(&spec_groups, &binary_groups, &mut violations);
     check_removed_surface_absent(&spec_removed, &binary_groups, &mut violations);
+    check_command_flag_set(&spec_body, &main_body, "logs", "Logs", &mut violations);
+    check_command_flag_set(&spec_body, &main_body, "msg", "Msg", &mut violations);
     verdict_from(RULE, violations)
+}
+
+fn check_command_flag_set(
+    spec_body: &str,
+    main_body: &str,
+    cmd_label: &str,
+    variant: &str,
+    violations: &mut Vec<String>,
+) {
+    let spec_flags = match cmd_label {
+        "logs" => parse_logs_ux_flags(spec_body),
+        "msg" => parse_msg_modes_flags(spec_body),
+        _ => return,
+    };
+    let spec_flags = match spec_flags {
+        Ok(s) => s,
+        Err(e) => {
+            violations.push(e);
+            return;
+        }
+    };
+    let binary_flags = match parse_binary_command_flags(main_body, variant) {
+        Ok(b) => b,
+        Err(e) => {
+            violations.push(e);
+            return;
+        }
+    };
+    for flag in spec_flags.difference(&binary_flags) {
+        violations.push(format!(
+            "{SPEC} `loom {cmd_label}` flag `--{flag}` documented but not declared on `Command::{variant}` in {MAIN_RS}",
+        ));
+    }
+    for flag in binary_flags.difference(&spec_flags) {
+        violations.push(format!(
+            "{MAIN_RS} `Command::{variant}` declares `--{flag}` but it is not documented in {SPEC} `loom {cmd_label}` flag table",
+        ));
+    }
 }
 
 fn check_groups_match(
@@ -274,6 +320,171 @@ fn parse_binary_help_groups(body: &str) -> Result<Vec<(String, Vec<String>)>, St
         return Err(format!("{MAIN_RS} HELP_GROUPS parsed empty"));
     }
     Ok(groups)
+}
+
+fn parse_logs_ux_flags(body: &str) -> Result<BTreeSet<String>, String> {
+    let lines: Vec<&str> = body.lines().collect();
+    let heading = lines
+        .iter()
+        .position(|l| l.trim_start().starts_with("### Logs UX"))
+        .ok_or_else(|| format!("{SPEC} missing `### Logs UX` heading"))?;
+    let header = lines
+        .iter()
+        .enumerate()
+        .skip(heading + 1)
+        .find(|(_, l)| l.trim_start().starts_with("| Flag "))
+        .map(|(i, _)| i)
+        .ok_or_else(|| format!("{SPEC} Logs UX missing `| Flag ` table header"))?;
+    let mut out = BTreeSet::new();
+    for line in lines.iter().skip(header + 2) {
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with('|') {
+            break;
+        }
+        let cells: Vec<&str> = trimmed.split('|').collect();
+        if cells.len() < 2 {
+            continue;
+        }
+        for name in extract_long_flags(cells[1]) {
+            out.insert(name);
+        }
+    }
+    if out.is_empty() {
+        return Err(format!("{SPEC} Logs UX table parsed no long flags"));
+    }
+    Ok(out)
+}
+
+fn parse_msg_modes_flags(body: &str) -> Result<BTreeSet<String>, String> {
+    let lines: Vec<&str> = body.lines().collect();
+    let heading = lines
+        .iter()
+        .position(|l| l.trim_start().starts_with("### Msg Modes"))
+        .ok_or_else(|| format!("{SPEC} missing `### Msg Modes` heading"))?;
+    let flag_table_marker = lines
+        .iter()
+        .enumerate()
+        .skip(heading + 1)
+        .find(|(_, l)| l.trim_start().starts_with("**Flag table.**"))
+        .map(|(i, _)| i)
+        .ok_or_else(|| format!("{SPEC} Msg Modes missing `**Flag table.**` marker"))?;
+    let header = lines
+        .iter()
+        .enumerate()
+        .skip(flag_table_marker + 1)
+        .find(|(_, l)| l.trim_start().starts_with("| Short "))
+        .map(|(i, _)| i)
+        .ok_or_else(|| format!("{SPEC} Msg Modes flag table missing `| Short ` header"))?;
+    let mut out = BTreeSet::new();
+    for line in lines.iter().skip(header + 2) {
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with('|') {
+            break;
+        }
+        let cells: Vec<&str> = trimmed.split('|').collect();
+        if cells.len() < 3 {
+            continue;
+        }
+        for name in extract_long_flags(cells[2]) {
+            out.insert(name);
+        }
+    }
+    if out.is_empty() {
+        return Err(format!("{SPEC} Msg Modes flag table parsed no long flags"));
+    }
+    Ok(out)
+}
+
+fn extract_long_flags(cell: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let bytes = cell.as_bytes();
+    let mut i = 0;
+    while i + 2 <= bytes.len() {
+        if bytes[i] == b'-' && bytes[i + 1] == b'-' {
+            let start = i + 2;
+            let mut j = start;
+            while j < bytes.len()
+                && (bytes[j].is_ascii_lowercase() || bytes[j].is_ascii_digit() || bytes[j] == b'-')
+            {
+                j += 1;
+            }
+            if j > start {
+                if let Ok(name) = std::str::from_utf8(&bytes[start..j]) {
+                    out.push(name.to_string());
+                }
+            }
+            i = j.max(i + 2);
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+fn parse_binary_command_flags(body: &str, variant: &str) -> Result<BTreeSet<String>, String> {
+    let file = syn::parse_file(body).map_err(|e| format!("{MAIN_RS} syn parse: {e}"))?;
+    let cmd_enum = file
+        .items
+        .iter()
+        .find_map(|i| match i {
+            syn::Item::Enum(e) if e.ident == "Command" => Some(e),
+            _ => None,
+        })
+        .ok_or_else(|| format!("{MAIN_RS} no `Command` enum"))?;
+    let var = cmd_enum
+        .variants
+        .iter()
+        .find(|v| v.ident == variant)
+        .ok_or_else(|| format!("{MAIN_RS} `Command` has no `{variant}` variant"))?;
+    let fields = match &var.fields {
+        syn::Fields::Named(n) => &n.named,
+        _ => {
+            return Err(format!(
+                "{MAIN_RS} `Command::{variant}` has no named fields to audit"
+            ));
+        }
+    };
+    let mut out = BTreeSet::new();
+    for field in fields {
+        let field_name = field
+            .ident
+            .as_ref()
+            .map(std::string::ToString::to_string)
+            .unwrap_or_default();
+        for attr in &field.attrs {
+            if !attr.path().is_ident("arg") {
+                continue;
+            }
+            if let Some(long) = arg_long_name(attr, &field_name) {
+                out.insert(long);
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn arg_long_name(attr: &syn::Attribute, field_name: &str) -> Option<String> {
+    let meta_list = attr.meta.require_list().ok()?;
+    let nested: syn::punctuated::Punctuated<Meta, syn::Token![,]> = meta_list
+        .parse_args_with(syn::punctuated::Punctuated::parse_terminated)
+        .ok()?;
+    for meta in nested {
+        match meta {
+            Meta::Path(p) if p.is_ident("long") => {
+                return Some(field_name.replace('_', "-"));
+            }
+            Meta::NameValue(MetaNameValue { path, value, .. }) if path.is_ident("long") => {
+                if let Expr::Lit(ExprLit {
+                    lit: Lit::Str(s), ..
+                }) = value
+                {
+                    return Some(s.value());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn extract_quoted_strings(s: &str) -> Vec<String> {
