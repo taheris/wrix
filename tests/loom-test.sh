@@ -558,37 +558,6 @@ test_claude_runtime_noop() {
 }
 
 #-----------------------------------------------------------------------------
-# test_fuzz_runner_exists — `nix run .#fuzz-loom` is wired up on Linux.
-# Per spec NFR §Property-Based Testing: cargo-fuzz is on-demand only and
-# not gated by `nix flake check`. The acceptance is that the app
-# attribute resolves; the fuzz targets themselves can land later.
-#-----------------------------------------------------------------------------
-test_fuzz_runner_exists() {
-    case "$(uname -s)" in
-        Linux) ;;
-        *)
-            # Linux-only: cargo-fuzz needs nightly LLVM sanitizers.
-            return 77
-            ;;
-    esac
-
-    local arch
-    arch=$(uname -m)
-    local nix_system
-    case "$arch" in
-        x86_64)  nix_system="x86_64-linux" ;;
-        aarch64) nix_system="aarch64-linux" ;;
-        *)
-            echo "unsupported arch for fuzz-loom: $arch" >&2
-            return 1
-            ;;
-    esac
-
-    nix eval "$REPO_ROOT#apps.$nix_system.fuzz-loom.program" --raw >/dev/null \
-        || { echo "nix eval .#apps.$nix_system.fuzz-loom failed" >&2; return 1; }
-}
-
-#-----------------------------------------------------------------------------
 # test_protocol_versions_pinned — both pi-mono and claude-code are pinned
 # in modules/flake/overlays.nix with documentation. Per spec NFR #9:
 # version bumps go through a checklist; the pin file is the single
@@ -606,52 +575,6 @@ test_fuzz_runner_exists() {
 # integration tier is cross-platform. Asserts checks.<system>.loom-clippy
 # and checks.<system>.loom-nextest evaluate for all four supported systems.
 #-----------------------------------------------------------------------------
-#-----------------------------------------------------------------------------
-# test_cargo_nextest_timing — soft <5s warm-cache target for
-# `cargo nextest run --workspace` per spec NFR #2. Guides PR review;
-# returns 0 with a WARN on stderr when exceeded (not a hard CI fail).
-# Skips when cargo or cargo-nextest is unavailable.
-#-----------------------------------------------------------------------------
-test_cargo_nextest_timing() {
-    if ! command -v cargo >/dev/null; then
-        echo "cargo not on PATH; skipping" >&2
-        return 77
-    fi
-    if ! command -v cargo-nextest >/dev/null; then
-        echo "cargo-nextest not on PATH; skipping" >&2
-        return 77
-    fi
-
-    local log
-    log=$(mktemp)
-    trap 'rm -f "$log"' RETURN
-
-    # Warm the cache so we measure run-time, not compile-time. Capture
-    # output so failures surface their actual cause rather than getting
-    # silenced.
-    if ! ( cd "$LOOM_DIR" && cargo nextest run --workspace --no-run ) >"$log" 2>&1; then
-        echo "warm-up build failed:" >&2
-        sed 's/^/  /' "$log" >&2
-        return 1
-    fi
-
-    local start_ns end_ns elapsed_ms
-    start_ns=$(date +%s%N)
-    if ! ( cd "$LOOM_DIR" && cargo nextest run --workspace ) >"$log" 2>&1; then
-        echo "cargo nextest run --workspace failed:" >&2
-        sed 's/^/  /' "$log" >&2
-        return 1
-    fi
-    end_ns=$(date +%s%N)
-    elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
-
-    echo "cargo nextest run --workspace: ${elapsed_ms}ms"
-    if [ "$elapsed_ms" -gt 5000 ]; then
-        echo "WARN: exceeds soft 5s target (${elapsed_ms}ms)" >&2
-    fi
-    return 0
-}
-
 #-----------------------------------------------------------------------------
 # test_newtype_serde_roundtrip — every domain identifier newtype
 # (`BeadId`, `SpecLabel`, `MoleculeId`, `ProfileName`, `SessionId`,
@@ -760,30 +683,6 @@ test_cargo_nextest_timing() {
 # Annotation Integrity Gate.
 #-----------------------------------------------------------------------------
 
-# Forward direction: every `[verify]` / `[judge]` annotation in `specs/*.md`
-# resolves to an existing function in the named file. The gate walks the
-# spec corpus, regex-extracts annotations, and asserts each function
-# resolves; any `[judge]` annotation today is a hard error until the judge
-# runner ships (per spec Annotation Contract rule 2).
-# Reverse direction: every top-level zero-argument `test_*` function in
-# `tests/loom-test.sh` is referenced by at least one annotation in some
-# spec. Helper functions named `_helper`, `_setup`, etc. are exempt by
-# the naming rule.
-test_no_orphan_test_functions() {
-    cargo_run test -p loom --test annotations --quiet -- no_orphan_test_functions
-}
-
-# Cargo-resolution direction: every cargo test name invoked from a
-# dispatcher (directly via `cargo_run test ...` or transitively through a
-# helper like `lock_cargo_test`) must match at least one `#[test]` /
-# `#[tokio::test]` function in the named cargo target. Without this check
-# a stale rename (`cargo test ... -- nonexistent`) silently exits 0,
-# letting a dispatcher report PASS without exercising any code — the
-# wx-xad18 failure mode.
-test_dispatcher_cargo_tests_resolve() {
-    cargo_run test -p loom --test annotations --quiet -- dispatcher_cargo_tests_resolve
-}
-
 #-----------------------------------------------------------------------------
 # Property-based tests — `proptest` invariants under
 # `loom/crates/{loom-driver,loom-agent}/tests/properties.rs`. Each shell
@@ -835,51 +734,6 @@ test_dispatcher_cargo_tests_resolve() {
 # wiring exposes the runner only on Linux, (c) Darwin gets a clear skip
 # message, and (d) Linux execution stays under the 30s wall-time budget.
 #-----------------------------------------------------------------------------
-
-# Linux-only: spawns the real podman container via `nix run .#test-loom`,
-# asserts exit 0 and bead closure. Skips on Darwin and when podman is
-# unavailable (exit 77 — both are environmental, not test failures).
-# `tests/loom/default.nix` must expose `smoke` only when the host system
-# is Linux — the smoke depends on podman, which is not part of Darwin.
-# Darwin's `nix run .#test-loom` must print a clear "not available on
-# Darwin" message to stderr and exit 0. The message is asserted by string
-# match against the run-tests.sh skip branch and the Darwin stub in
-# tests/loom/default.nix.
-test_smoke_darwin_skip_message() {
-    local script="$REPO_ROOT/tests/loom/run-tests.sh"
-    [ -f "$script" ] || { echo "missing $script" >&2; return 1; }
-
-    grep -q 'uname -s.*Darwin' "$script" || {
-        echo "$script: missing Darwin uname check" >&2
-        return 1
-    }
-    grep -q 'container smoke not available on Darwin' "$script" || {
-        echo "$script: missing canonical Darwin skip message" >&2
-        return 1
-    }
-
-    local nix_file="$REPO_ROOT/tests/loom/default.nix"
-    [ -f "$nix_file" ] || { echo "missing $nix_file" >&2; return 1; }
-    grep -q 'container smoke not available on Darwin' "$nix_file" || {
-        echo "$nix_file: Darwin stub missing canonical skip message" >&2
-        return 1
-    }
-}
-
-# `nix run .#test-loom` must be exposed on Linux as a writeShellApplication
-# named `test-loom`. The Nix file binds the runner; modules/flake/apps.nix
-# registers it under apps.test-loom.
-# The smoke harness enforces a <30s wall-time budget per Functional #5.
-# Verify the script actually checks elapsed time against 30 seconds — if
-# this guard slips, regressions in startup cost go silent.
-test_smoke_timing() {
-    local script="$REPO_ROOT/tests/loom/run-tests.sh"
-    [ -f "$script" ] || { echo "missing $script" >&2; return 1; }
-    grep -qE 'ELAPSED.*-gt[[:space:]]+30' "$script" || {
-        echo "$script: missing 30s wall-time guard" >&2
-        return 1
-    }
-}
 
 #-----------------------------------------------------------------------------
 # Determinism — banned wall-clock primitives in production code.

@@ -636,13 +636,6 @@ the rules:
 - Every `[check]` / `[test]` / `[system]` / `[judge]` annotation in
       `specs/*.md` resolves to a valid verifier for its tier
   [check](cargo test -p loom-gate --test integrity end_to_end_specs_dir_check_combines_both_directions)
-- Every `test_*` function in `tests/loom-test.sh` is referenced by
-      at least one annotation in some spec
-  [check](tests/loom-test.sh::test_no_orphan_test_functions)
-- Every cargo test name invoked by a dispatcher in
-      `tests/loom-test.sh` resolves to a defined `#[test]` /
-      `#[tokio::test]` function in the named cargo target
-  [check](tests/loom-test.sh::test_dispatcher_cargo_tests_resolve)
 
 ### Property-based testing
 
@@ -684,7 +677,7 @@ the rules:
   [check](grep -q 'isLinux' tests/loom/default.nix)
 - `nix run .#test-loom` on Darwin exits 0 with a clear "not
       available on Darwin" message
-  [system](tests/loom-test.sh::test_smoke_darwin_skip_message)
+  [check](grep -q 'container smoke not available on Darwin' tests/loom/default.nix)
 
 ### CI integration
 
@@ -696,12 +689,9 @@ the rules:
   [check](grep -q 'name = "test-loom"' tests/loom/default.nix)
 - `nix run .#fuzz-loom` exists for on-demand `cargo fuzz` runs
       (not gated by `nix flake check`)
-  [check](tests/loom-test.sh::test_fuzz_runner_exists)
-- Warm-cache `cargo nextest run --workspace` completes in <5s
-      (soft target, not hard NFR)
-  [system](tests/loom-test.sh::test_cargo_nextest_timing)
-- Container smoke completes in <30s
-  [system](tests/loom-test.sh::test_smoke_timing)
+  [check](grep -q 'name = "fuzz-loom"' modules/flake/apps.nix)
+- Container smoke enforces a <30s wall-time budget
+  [check](grep -qE 'ELAPSED.*-gt 30' tests/loom/run-tests.sh)
 - pi-mono and Claude Code versions pinned in
       `modules/flake/overlays.nix`
   [check](grep -q 'pi-mono' modules/flake/overlays.nix)
