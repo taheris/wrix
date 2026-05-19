@@ -1,0 +1,5 @@
+[runner]
+# Rust workspace lives in `loom/`, not at the repo root. Point nextest
+# at that manifest so `loom gate verify [test]` discovers and runs the
+# crate suite instead of skipping with "no Cargo.toml under <root>".
+test = "cargo nextest run --manifest-path loom/Cargo.toml -E 'test({paths})'"
