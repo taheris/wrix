@@ -1,6 +1,6 @@
 ---
 source: crates/loom-templates/tests/snapshots.rs
-assertion_line: 100
+assertion_line: 152
 expression: ctx.render().unwrap()
 ---
 # Implementation Step
@@ -93,8 +93,7 @@ Port templates to Askama.
 Retry attempt 1 — previous attempt failed with:
 
 <agent-output>
-Build failed at agent:
-error: cargo test failed
+Previous attempt: Marker `LOOM_COMPLETE` emitted but bead `wx-3hhwq.10` was not bd-closed.
 </agent-output>
 
 ## Instructions

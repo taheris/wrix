@@ -1,6 +1,6 @@
 ---
 source: crates/loom-templates/tests/snapshots.rs
-assertion_line: 100
+assertion_line: 230
 expression: ctx.render().unwrap()
 ---
 # Implementation Step
@@ -93,8 +93,8 @@ Port templates to Askama.
 Retry attempt 1 — previous attempt failed with:
 
 <agent-output>
-Build failed at agent:
-error: cargo test failed
+Build failed at cargo check:
+error[E0382]: borrow of moved value: `ctx`
 </agent-output>
 
 ## Instructions

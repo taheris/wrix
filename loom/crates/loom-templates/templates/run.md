@@ -36,7 +36,10 @@ Review notes:
 
 ## Instructions
 
-1. **Understand**: Read the spec and issue thoroughly before making changes
+{% if previous_failure.is_some() && attempt > 0 %}> Re-read the previous failure block above and address its specific
+> concern before re-implementing.
+
+{% endif %}1. **Understand**: Read the spec and issue thoroughly before making changes
 2. **Test Strategy**: Decide between:
    - Property-based tests: For functions with clear invariants, mathematical properties
    - Unit tests: For specific behaviors, edge cases, integration points

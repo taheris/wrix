@@ -1,6 +1,6 @@
 ---
 source: crates/loom-templates/tests/snapshots.rs
-assertion_line: 100
+assertion_line: 178
 expression: ctx.render().unwrap()
 ---
 # Implementation Step
@@ -93,8 +93,12 @@ Port templates to Askama.
 Retry attempt 1 — previous attempt failed with:
 
 <agent-output>
-Build failed at agent:
-error: cargo test failed
+Verifier failures from previous attempt:
+
+── tests/loom/run-tests.sh (exit 1) ──
+assertion failed: expected reframe in prompt
+
+
 </agent-output>
 
 ## Instructions

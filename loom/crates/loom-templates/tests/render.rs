@@ -324,6 +324,108 @@ fn run_template_renders_attempt_line_on_retry() -> Result<()> {
     Ok(())
 }
 
+/// Per `specs/loom-harness.md` § Recovery context, the run prompt must
+/// prepend a first-instruction reframe when `previous_failure.is_some() &&
+/// attempt > 0`. Pins the canonical wording and ordering so a refactor
+/// cannot silently drop or move the reframe.
+#[test]
+fn run_template_prepends_first_instruction_reframe_on_retry() -> Result<()> {
+    let ctx = RunContext {
+        pinned_context: PINNED_CONTEXT_BODY.to_string(),
+        label: SpecLabel::new("loom-harness"),
+        spec_path: "specs/loom-harness.md".to_string(),
+        companion_paths: vec![],
+        molecule_id: None,
+        issue_id: Some(BeadId::new("wx-3hhwq.10")?),
+        title: Some("port templates".into()),
+        description: Some("Port templates to Askama.".into()),
+        previous_failure: Some(PreviousFailure::DriverNotice {
+            cause: DriverNoticeCause::ZeroProgress,
+            detail: "Marker `LOOM_COMPLETE` emitted with empty diff.".into(),
+        }),
+        review_notes: None,
+        attempt: 1,
+        scratchpad_path: "/workspace/.wrapix/loom/scratch/wx-3hhwq.10/scratch.md".to_string(),
+        style_rules: "docs/style-rules.md".to_string(),
+    };
+    let out = ctx.render()?;
+    let reframe = "> Re-read the previous failure block above and address its specific\n> concern before re-implementing.";
+    assert!(out.contains(reframe), "reframe missing: {out}");
+    let instructions_heading = out
+        .find("## Instructions")
+        .expect("## Instructions heading present");
+    let reframe_pos = out.find(reframe).expect("reframe present");
+    let first_step = out
+        .find("1. **Understand**")
+        .expect("first numbered step present");
+    assert!(
+        instructions_heading < reframe_pos && reframe_pos < first_step,
+        "reframe must sit between the heading and step 1: heading={instructions_heading} reframe={reframe_pos} step1={first_step}",
+    );
+    Ok(())
+}
+
+/// Pins the false branch: fresh dispatch (`attempt = 0`, no
+/// `previous_failure`) must not include the reframe blockquote — instruction
+/// 1 follows the heading directly.
+#[test]
+fn run_template_omits_first_instruction_reframe_on_fresh_dispatch() -> Result<()> {
+    let ctx = RunContext {
+        pinned_context: PINNED_CONTEXT_BODY.to_string(),
+        label: SpecLabel::new("loom-harness"),
+        spec_path: "specs/loom-harness.md".to_string(),
+        companion_paths: vec![],
+        molecule_id: None,
+        issue_id: Some(BeadId::new("wx-3hhwq.10")?),
+        title: Some("port templates".into()),
+        description: Some("Port templates to Askama.".into()),
+        previous_failure: None,
+        review_notes: None,
+        attempt: 0,
+        scratchpad_path: "/workspace/.wrapix/loom/scratch/wx-3hhwq.10/scratch.md".to_string(),
+        style_rules: "docs/style-rules.md".to_string(),
+    };
+    let out = ctx.render()?;
+    assert!(
+        !out.contains("Re-read the previous failure block above"),
+        "reframe must be absent on fresh dispatch: {out}",
+    );
+    Ok(())
+}
+
+/// Defensive boundary: `previous_failure.is_some()` alone is not enough —
+/// the driver must also have bumped `attempt` past zero. If a caller wires
+/// `attempt = 0` while supplying a `previous_failure`, the template stays in
+/// the false branch (mirroring the existing `Retry attempt` line, which is
+/// already gated on `attempt > 0`).
+#[test]
+fn run_template_omits_first_instruction_reframe_when_attempt_zero() -> Result<()> {
+    let ctx = RunContext {
+        pinned_context: PINNED_CONTEXT_BODY.to_string(),
+        label: SpecLabel::new("loom-harness"),
+        spec_path: "specs/loom-harness.md".to_string(),
+        companion_paths: vec![],
+        molecule_id: None,
+        issue_id: Some(BeadId::new("wx-3hhwq.10")?),
+        title: Some("port templates".into()),
+        description: Some("Port templates to Askama.".into()),
+        previous_failure: Some(PreviousFailure::DriverNotice {
+            cause: DriverNoticeCause::ZeroProgress,
+            detail: "stray previous_failure with attempt=0".into(),
+        }),
+        review_notes: None,
+        attempt: 0,
+        scratchpad_path: "/workspace/.wrapix/loom/scratch/wx-3hhwq.10/scratch.md".to_string(),
+        style_rules: "docs/style-rules.md".to_string(),
+    };
+    let out = ctx.render()?;
+    assert!(
+        !out.contains("Re-read the previous failure block above"),
+        "reframe must be absent when attempt is 0: {out}",
+    );
+    Ok(())
+}
+
 #[test]
 fn run_template_renders_review_notes_block_when_set() -> Result<()> {
     let ctx = RunContext {
