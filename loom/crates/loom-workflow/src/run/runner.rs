@@ -60,8 +60,9 @@ pub struct RunSummary {
     /// `loom gate review` was exec'd (continuous mode + molecule complete).
     pub execed_review: bool,
     /// Outer-loop passes consumed (each pass = one molecule-completion
-    /// handoff invoking `loom gate verify --tree` + `loom gate review
-    /// --tree`). Bounded by `[loop] max_iterations` per FR1.
+    /// handoff invoking `loom gate verify --diff <base>..HEAD` +
+    /// `loom gate review --diff <base>..HEAD`). Bounded by
+    /// `[loop] max_iterations` per FR1.
     pub outer_iterations: u32,
 }
 
@@ -77,8 +78,10 @@ pub struct RunSummary {
 /// - `apply_clarify` → `BdClient::update --add-label loom:clarify --notes <q>`
 /// - `apply_blocked` → `BdClient::update --add-label loom:blocked --notes <cause>`
 /// - `exec_review` → `tokio::process::Command` invocations of
-///   `loom gate verify --tree` then `loom gate review --tree` (FR1
-///   molecule-completion handoff).
+///   `loom gate verify --diff <molecule.base_commit>..HEAD` then
+///   `loom gate review --diff <molecule.base_commit>..HEAD` (FR1
+///   molecule-completion handoff; scope is the molecule's own diff,
+///   not `--tree`).
 ///
 /// **No `close_bead`.** `bd close` is the agent's responsibility, not the
 /// driver's, per `specs/loom-harness.md`'s verdict-gate table where
@@ -122,10 +125,12 @@ pub trait AgentLoopController: Send {
     ) -> impl std::future::Future<Output = Result<(), RunError>> + Send;
 
     /// Molecule-completion handoff (FR1). Invokes `loom gate verify
-    /// --tree` followed by `loom gate review --tree`; both are
-    /// unconditional and the non-zero exit codes that signal concerns
-    /// do not bubble up as errors here — they drive fix-up beads onto
-    /// the next outer-loop pass.
+    /// --diff <molecule.base_commit>..HEAD` followed by `loom gate
+    /// review --diff <molecule.base_commit>..HEAD`; scope is the
+    /// molecule's own diff (not `--tree`), so push-gate cost is
+    /// proportional to the molecule's work. The non-zero exit codes
+    /// that signal concerns do not bubble up as errors here — they
+    /// drive fix-up beads onto the next outer-loop pass.
     ///
     /// The verify and review exit codes plus the review's parsed exit
     /// marker ride out in [`ExecReviewOutcome`] so the push-gate verdict

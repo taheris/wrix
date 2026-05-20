@@ -18,7 +18,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use loom_driver::agent::{ProtocolError, SpawnConfig};
-use loom_driver::bd::{BdClient, Bead, ListOpts, ReadyOpts, UpdateOpts};
+use loom_driver::bd::{
+    BdClient, Bead, CommandRunner, ListOpts, ReadyOpts, TokioRunner, UpdateOpts,
+};
 use loom_driver::config::Phase;
 use loom_driver::identifier::{BeadId, ProfileName, SpecLabel};
 use loom_driver::lock::LockGuard;
@@ -52,12 +54,12 @@ use loom_templates::run::PreviousFailure;
 /// (callable repeatedly). It receives `(SpawnConfig, BeadId)` — the bead id
 /// is passed alongside the spawn config so the closure can open the per-bead
 /// JSONL [`LogSink`](loom_driver::logging::LogSink) before dispatch.
-pub struct ProductionAgentLoopController<S, F>
+pub struct ProductionAgentLoopController<S, F, R: CommandRunner = TokioRunner>
 where
     S: Fn(SpawnConfig, BeadId) -> F + Send,
     F: std::future::Future<Output = (SessionResult, Option<ExitSignal>)> + Send,
 {
-    bd: BdClient,
+    bd: BdClient<R>,
     label: SpecLabel,
     loom_bin: PathBuf,
     workspace: PathBuf,
@@ -74,14 +76,14 @@ where
     style_rules: String,
 }
 
-impl<S, F> ProductionAgentLoopController<S, F>
+impl<S, F, R: CommandRunner> ProductionAgentLoopController<S, F, R>
 where
     S: Fn(SpawnConfig, BeadId) -> F + Send,
     F: std::future::Future<Output = (SessionResult, Option<ExitSignal>)> + Send,
 {
     #[expect(clippy::too_many_arguments, reason = "controller construction surface")]
     pub fn new(
-        bd: BdClient,
+        bd: BdClient<R>,
         label: SpecLabel,
         loom_bin: PathBuf,
         workspace: PathBuf,
@@ -124,7 +126,7 @@ where
     }
 }
 
-impl<S, F> AgentLoopController for ProductionAgentLoopController<S, F>
+impl<S, F, R: CommandRunner> AgentLoopController for ProductionAgentLoopController<S, F, R>
 where
     S: Fn(SpawnConfig, BeadId) -> F + Send,
     F: std::future::Future<Output = (SessionResult, Option<ExitSignal>)> + Send,
@@ -256,39 +258,47 @@ where
         // verify` and `loom gate review` acquire the same lock and would
         // otherwise time out behind us.
         self.lock.take();
-        // Molecule-completion handoff (FR1): unconditional `--tree` scope
-        // on both, deterministic verify first then LLM review. Non-zero
-        // exit codes are NOT fatal to `run_loop` — they signal concerns
-        // that the outer loop drives toward via fix-up beads on the next
-        // pass. Spawn failures (the child never started) DO surface as
-        // `RunError::Io`.
+        // Molecule-completion handoff (FR1 / FR9): scope the verify and
+        // review children to the molecule's own diff
+        // (`<molecule.base_commit>..HEAD`) so push-gate cost is
+        // proportional to the molecule's work rather than `--tree`.
+        // Deterministic verify first then LLM review; non-zero exit
+        // codes are NOT fatal to `run_loop` (they drive fix-up beads on
+        // the next outer-loop pass), but spawn failures and missing
+        // molecule metadata DO surface as `RunError`.
+        let base = fetch_molecule_base_commit(&self.bd, &self.label).await?;
+        let diff_range = format!("{base}..HEAD");
         let verify_status = Command::new(&self.loom_bin)
             .current_dir(&self.workspace)
             .arg("gate")
             .arg("verify")
-            .arg("--tree")
+            .arg("--diff")
+            .arg(&diff_range)
             .arg("-s")
             .arg(self.label.as_str())
             .status()
             .await?;
         info!(
             spec = %self.label.as_str(),
+            diff = %diff_range,
             exit_code = verify_status.code().unwrap_or(-1),
-            "loom run: molecule handoff — loom gate verify --tree finished",
+            "loom run: molecule handoff — loom gate verify --diff finished",
         );
         let review_status = Command::new(&self.loom_bin)
             .current_dir(&self.workspace)
             .arg("gate")
             .arg("review")
-            .arg("--tree")
+            .arg("--diff")
+            .arg(&diff_range)
             .arg("-s")
             .arg(self.label.as_str())
             .status()
             .await?;
         info!(
             spec = %self.label.as_str(),
+            diff = %diff_range,
             exit_code = review_status.code().unwrap_or(-1),
-            "loom run: molecule handoff — loom gate review --tree finished",
+            "loom run: molecule handoff — loom gate review --diff finished",
         );
         Ok(ExecReviewOutcome {
             verify_exit: verify_status.code(),
@@ -296,6 +306,41 @@ where
             review_marker: None,
         })
     }
+}
+
+/// Look up the spec's `loom:active` epic and return its
+/// `loom.base_commit` metadata. Used by `exec_review` to scope the
+/// molecule-completion handoff to the molecule's own diff rather than
+/// `--tree`. Mirrors the list-then-show pattern from
+/// `loom-workflow::init::fetch_active_molecules` (the rebuild path) so
+/// the run-phase and rebuild-phase resolutions agree.
+async fn fetch_molecule_base_commit<R: CommandRunner>(
+    bd: &BdClient<R>,
+    label: &SpecLabel,
+) -> Result<String, RunError> {
+    let spec_filter = format!("spec:{}", label.as_str());
+    let candidates = bd
+        .list(ListOpts {
+            status: Some("open".into()),
+            label: Some("loom:active".into()),
+            ..ListOpts::default()
+        })
+        .await?;
+    let molecule = candidates
+        .into_iter()
+        .find(|bead| bead.labels.iter().any(|l| l.as_str() == spec_filter))
+        .ok_or_else(|| RunError::NoActiveMolecule {
+            label: label.to_string(),
+        })?;
+    let detail = bd.show(&molecule.id).await?;
+    detail
+        .metadata
+        .get("loom.base_commit")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| RunError::MoleculeMissingBaseCommit {
+            id: molecule.id.to_string(),
+        })
 }
 
 /// Translate a `(SessionResult, Option<ExitSignal>)` pair into an
@@ -411,8 +456,86 @@ pub async fn list_open_for_spec(bd: &BdClient, label: &SpecLabel) -> Result<Vec<
 mod tests {
     use super::*;
     use loom_driver::agent::SessionOutcome;
-    use loom_driver::bd::Label;
+    use loom_driver::bd::{BdError, Label, RunOutput};
+    use std::collections::VecDeque;
+    use std::ffi::OsString;
     use std::sync::Mutex;
+    use std::time::Duration;
+
+    /// Replays a scripted sequence of `bd` responses so the controller's
+    /// `exec_review` can resolve the active molecule's `loom.base_commit`
+    /// without spawning the real `bd` binary. Each entry feeds one
+    /// `BdClient` call in order.
+    struct ScriptedBd {
+        responses: Mutex<VecDeque<RunOutput>>,
+    }
+
+    impl ScriptedBd {
+        fn new(responses: impl IntoIterator<Item = RunOutput>) -> Self {
+            Self {
+                responses: Mutex::new(responses.into_iter().collect()),
+            }
+        }
+    }
+
+    impl CommandRunner for ScriptedBd {
+        async fn run(
+            &self,
+            _args: Vec<OsString>,
+            _timeout: Duration,
+        ) -> Result<RunOutput, BdError> {
+            Ok(self
+                .responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or(RunOutput {
+                    status: 0,
+                    stdout: b"null\n".to_vec(),
+                    stderr: Vec::new(),
+                }))
+        }
+    }
+
+    fn ok_stdout(stdout: &[u8]) -> RunOutput {
+        RunOutput {
+            status: 0,
+            stdout: stdout.to_vec(),
+            stderr: Vec::new(),
+        }
+    }
+
+    /// Two-response script matching one `fetch_molecule_base_commit`
+    /// call: `bd list --status=open --label=loom:active` returns one
+    /// active molecule for `spec:<label>` and `bd show <id>` returns
+    /// the molecule with `loom.base_commit = <base>` metadata.
+    fn molecule_lookup_script(spec_label: &str, mol_id: &str, base: &str) -> ScriptedBd {
+        let list_body = format!(
+            r#"[{{
+                "id": "{mol_id}",
+                "title": "{spec_label}: pending decomposition",
+                "status": "open",
+                "priority": 2,
+                "issue_type": "epic",
+                "labels": ["spec:{spec_label}", "loom:active"]
+            }}]"#,
+        );
+        let show_body = format!(
+            r#"[{{
+                "id": "{mol_id}",
+                "title": "{spec_label}: pending decomposition",
+                "status": "open",
+                "priority": 2,
+                "issue_type": "epic",
+                "labels": ["spec:{spec_label}", "loom:active"],
+                "metadata": {{ "loom.base_commit": "{base}" }}
+            }}]"#,
+        );
+        ScriptedBd::new([
+            ok_stdout(list_body.as_bytes()),
+            ok_stdout(show_body.as_bytes()),
+        ])
+    }
 
     /// FR12 — `loom run`'s per-bead exit MUST route the agent's marker
     /// through the canonical [`crate::review::decide`] gate function rather
@@ -821,7 +944,6 @@ mod tests {
         use loom_driver::clock::SystemClock;
         use loom_driver::lock::LockManager;
         use std::os::unix::fs::PermissionsExt;
-        use std::time::Duration;
 
         let dir = tempfile::tempdir().expect("tempdir");
         let manifest = write_manifest(dir.path());
@@ -839,8 +961,9 @@ mod tests {
         std::fs::write(&stub, "#!/bin/sh\nexit 0\n").unwrap();
         std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
 
+        let bd = BdClient::with_runner(molecule_lookup_script("alpha", "wx-mol.1", "deadbeef"));
         let mut controller = ProductionAgentLoopController::new(
-            BdClient::new(),
+            bd,
             label.clone(),
             stub,
             dir.path().to_path_buf(),
@@ -872,13 +995,14 @@ mod tests {
     }
 
     /// FR1: the molecule-completion handoff invokes `loom gate verify
-    /// --tree` THEN `loom gate review --tree` — both unconditionally
-    /// `--tree`-scoped, in that order, and both with the spec label
-    /// threaded through `-s`. The stub script records each invocation
-    /// so the test can assert on the exact argv sequence the production
-    /// controller emits.
+    /// --diff <molecule.base_commit>..HEAD` THEN `loom gate review --diff
+    /// <molecule.base_commit>..HEAD` — both scoped to the molecule's
+    /// own diff (proportional to the molecule's work, not `--tree`), in
+    /// that order, and both with the spec label threaded through `-s`.
+    /// The stub script records each invocation so the test can assert
+    /// on the exact argv sequence the production controller emits.
     #[tokio::test(flavor = "multi_thread")]
-    async fn exec_review_invokes_gate_verify_then_gate_review_tree() {
+    async fn exec_review_invokes_gate_verify_then_gate_review_with_molecule_diff() {
         use std::os::unix::fs::PermissionsExt;
 
         let dir = tempfile::tempdir().expect("tempdir");
@@ -896,8 +1020,9 @@ mod tests {
         std::fs::write(&stub, stub_body).unwrap();
         std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
 
+        let bd = BdClient::with_runner(molecule_lookup_script("alpha", "wx-mol.1", "deadbeef"));
         let mut controller = ProductionAgentLoopController::new(
-            BdClient::new(),
+            bd,
             label.clone(),
             stub,
             dir.path().to_path_buf(),
@@ -925,21 +1050,21 @@ mod tests {
             "exec_review must spawn exactly two children (gate verify then gate review): {recorded:?}",
         );
         assert_eq!(
-            lines[0], "gate verify --tree -s alpha",
-            "first child must be `loom gate verify --tree -s <label>`",
+            lines[0], "gate verify --diff deadbeef..HEAD -s alpha",
+            "first child must be `loom gate verify --diff <base>..HEAD -s <label>`",
         );
         assert_eq!(
-            lines[1], "gate review --tree -s alpha",
-            "second child must be `loom gate review --tree -s <label>`",
+            lines[1], "gate review --diff deadbeef..HEAD -s alpha",
+            "second child must be `loom gate review --diff <base>..HEAD -s <label>`",
         );
     }
 
     /// FR1: non-zero exit from `loom gate verify` MUST NOT abort the
     /// handoff — it signals concerns that the outer loop drives toward
     /// via fix-up beads on the next pass. The production controller
-    /// still spawns `loom gate review --tree` after verify fails, and
-    /// `exec_review` returns `Ok` so `run_loop` can re-poll `bd ready`
-    /// rather than tearing down the whole `loom run`.
+    /// still spawns `loom gate review --diff <base>..HEAD` after verify
+    /// fails, and `exec_review` returns `Ok` so `run_loop` can re-poll
+    /// `bd ready` rather than tearing down the whole `loom run`.
     #[tokio::test(flavor = "multi_thread")]
     async fn exec_review_continues_to_review_when_verify_exits_nonzero() {
         use std::os::unix::fs::PermissionsExt;
@@ -961,8 +1086,9 @@ mod tests {
         std::fs::write(&stub, stub_body).unwrap();
         std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
 
+        let bd = BdClient::with_runner(molecule_lookup_script("beta", "wx-mol.7", "cafef00d"));
         let mut controller = ProductionAgentLoopController::new(
-            BdClient::new(),
+            bd,
             label.clone(),
             stub,
             dir.path().to_path_buf(),
@@ -989,7 +1115,10 @@ mod tests {
         let lines: Vec<&str> = recorded.lines().collect();
         assert_eq!(
             lines,
-            vec!["gate verify --tree -s beta", "gate review --tree -s beta"],
+            vec![
+                "gate verify --diff cafef00d..HEAD -s beta",
+                "gate review --diff cafef00d..HEAD -s beta"
+            ],
             "review must still run even when verify signals concerns",
         );
 
@@ -1006,5 +1135,103 @@ mod tests {
             Some(0),
             "review child exit code threaded through ExecReviewOutcome",
         );
+    }
+
+    /// FR1 negative: when no `loom:active` molecule exists for the
+    /// spec, `exec_review` MUST surface `NoActiveMolecule` rather than
+    /// silently falling back to `--tree` — the push-gate scope is
+    /// load-bearing and a missing molecule means the run is
+    /// misconfigured, not "scope unknown, push the whole tree".
+    #[tokio::test(flavor = "multi_thread")]
+    async fn exec_review_errors_when_no_active_molecule_for_spec() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = write_manifest(dir.path());
+        // `bd list` returns the JSON literal `null` when the result set
+        // is empty.
+        let bd = BdClient::with_runner(ScriptedBd::new([ok_stdout(b"null\n")]));
+        let mut controller = ProductionAgentLoopController::new(
+            bd,
+            SpecLabel::new("orphan-spec"),
+            PathBuf::from("/nonexistent/loom"),
+            dir.path().to_path_buf(),
+            manifest,
+            None,
+            ProfileName::new("base"),
+            |_cfg: SpawnConfig, _bead_id: BeadId| async move {
+                (
+                    SessionResult::Complete(SessionOutcome {
+                        exit_code: 0,
+                        cost_usd: None,
+                    }),
+                    Some(ExitSignal::Complete),
+                )
+            },
+        );
+        let err = controller
+            .exec_review()
+            .await
+            .expect_err("exec_review must error when no active molecule");
+        match err {
+            RunError::NoActiveMolecule { label } => assert_eq!(label, "orphan-spec"),
+            other => panic!("expected NoActiveMolecule, got {other:?}"),
+        }
+    }
+
+    /// FR1 negative: a `loom:active` molecule whose bead lacks
+    /// `loom.base_commit` metadata MUST surface
+    /// `MoleculeMissingBaseCommit` rather than fabricate a diff range.
+    /// `loom plan` writes this key unconditionally; the absence is a
+    /// state-DB corruption signal worth surfacing loudly.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn exec_review_errors_when_molecule_missing_base_commit_metadata() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = write_manifest(dir.path());
+        let list_body = br#"[{
+            "id": "wx-mol.99",
+            "title": "gamma: pending decomposition",
+            "status": "open",
+            "priority": 2,
+            "issue_type": "epic",
+            "labels": ["spec:gamma", "loom:active"]
+        }]"#;
+        let show_body = br#"[{
+            "id": "wx-mol.99",
+            "title": "gamma: pending decomposition",
+            "status": "open",
+            "priority": 2,
+            "issue_type": "epic",
+            "labels": ["spec:gamma", "loom:active"],
+            "metadata": {}
+        }]"#;
+        let bd = BdClient::with_runner(ScriptedBd::new([
+            ok_stdout(list_body),
+            ok_stdout(show_body),
+        ]));
+        let mut controller = ProductionAgentLoopController::new(
+            bd,
+            SpecLabel::new("gamma"),
+            PathBuf::from("/nonexistent/loom"),
+            dir.path().to_path_buf(),
+            manifest,
+            None,
+            ProfileName::new("base"),
+            |_cfg: SpawnConfig, _bead_id: BeadId| async move {
+                (
+                    SessionResult::Complete(SessionOutcome {
+                        exit_code: 0,
+                        cost_usd: None,
+                    }),
+                    Some(ExitSignal::Complete),
+                )
+            },
+        );
+        let err = controller
+            .exec_review()
+            .await
+            .expect_err("exec_review must error when molecule lacks base_commit");
+        match err {
+            RunError::MoleculeMissingBaseCommit { id } => assert_eq!(id, "wx-mol.99"),
+            other => panic!("expected MoleculeMissingBaseCommit, got {other:?}"),
+        }
     }
 }

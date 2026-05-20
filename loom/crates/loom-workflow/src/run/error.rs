@@ -30,4 +30,10 @@ pub enum RunError {
 
     /// profile-image manifest dispatch failed
     Profile(#[from] ProfileError),
+
+    /// no active molecule for spec `{label}`
+    NoActiveMolecule { label: String },
+
+    /// active molecule `{id}` missing `loom.base_commit` metadata
+    MoleculeMissingBaseCommit { id: String },
 }
