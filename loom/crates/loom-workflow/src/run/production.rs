@@ -30,7 +30,7 @@ use tracing::info;
 use super::context::{RunContextInputs, render_run_prompt};
 use super::error::RunError;
 use super::outcome::{AgentOutcome, SessionResult};
-use super::runner::AgentLoopController;
+use super::runner::{AgentLoopController, ExecReviewOutcome};
 use super::spawn::build_spawn_config_from_manifest;
 use crate::review::{GateInputs, PhaseVerdict, RecoveryCause, decide};
 use crate::todo::ExitSignal;
@@ -251,7 +251,7 @@ where
         Ok(())
     }
 
-    async fn exec_review(&mut self) -> Result<(), RunError> {
+    async fn exec_review(&mut self) -> Result<ExecReviewOutcome, RunError> {
         // Release the spec lock before spawning the child — `loom gate
         // verify` and `loom gate review` acquire the same lock and would
         // otherwise time out behind us.
@@ -290,7 +290,11 @@ where
             exit_code = review_status.code().unwrap_or(-1),
             "loom run: molecule handoff — loom gate review --tree finished",
         );
-        Ok(())
+        Ok(ExecReviewOutcome {
+            verify_exit: verify_status.code(),
+            review_exit: review_status.code(),
+            review_marker: None,
+        })
     }
 }
 
@@ -976,7 +980,7 @@ mod tests {
             },
         );
 
-        controller
+        let handoff = controller
             .exec_review()
             .await
             .expect("non-zero verify exit must not produce RunError");
@@ -987,6 +991,20 @@ mod tests {
             lines,
             vec!["gate verify --tree -s beta", "gate review --tree -s beta"],
             "review must still run even when verify signals concerns",
+        );
+
+        // FR9 four-condition AND wiring: the verify exit must ride out
+        // through `ExecReviewOutcome` so the push-gate verdict can
+        // refuse the push on `Some(n)` with `n != 0`.
+        assert_eq!(
+            handoff.verify_exit,
+            Some(1),
+            "verify child exit code threaded through ExecReviewOutcome",
+        );
+        assert_eq!(
+            handoff.review_exit,
+            Some(0),
+            "review child exit code threaded through ExecReviewOutcome",
         );
     }
 }

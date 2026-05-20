@@ -1,10 +1,12 @@
 use loom_driver::bd::{Bead, Label};
 use loom_driver::identifier::BeadId;
 use loom_events::DriverKind;
+use loom_gate::IntegrityFinding;
 
 use super::error::ReviewError;
 use super::iteration::IterationCap;
-use super::verdict::{ReviewVerdict, diff_new_bead_ids};
+use super::verdict::{PushGateRefuseCause, ReviewVerdict, diff_new_bead_ids};
+use crate::todo::ExitSignal;
 
 /// Side-effect surface the [`review_loop`] driver depends on.
 ///
@@ -27,10 +29,12 @@ use super::verdict::{ReviewVerdict, diff_new_bead_ids};
 pub trait ReviewController: Send {
     /// Run the reviewer agent. Returns when the agent emits a terminal
     /// signal or fails. The implementation tees the event stream into the
-    /// per-bead JSONL log alongside the terminal renderer.
+    /// per-bead JSONL log alongside the terminal renderer. The parsed
+    /// exit marker rides alongside the outcome so the push-gate verdict
+    /// can refuse on `LOOM_CONCERN` without re-parsing the agent output.
     fn run_review(
         &mut self,
-    ) -> impl std::future::Future<Output = Result<ReviewOutcome, ReviewError>> + Send;
+    ) -> impl std::future::Future<Output = Result<RunReviewOutput, ReviewError>> + Send;
 
     /// Return every bead carrying `spec:<label>` at this moment. Order is
     /// stable (creation order) so the driver's `before`/`after` diff is
@@ -92,6 +96,41 @@ pub trait ReviewController: Send {
         _payload: serde_json::Value,
     ) {
     }
+
+    /// Exit code from the molecule-final `loom gate verify --diff
+    /// <molecule.base_commit>..HEAD` invocation, or `None` when no
+    /// verify run is in scope for this push-gate evaluation. The
+    /// four-condition AND refuses the push when this is `Some(n)` with
+    /// `n != 0`. The default impl returns `None` so test fakes and
+    /// pre-wiring production callers compile; the production controller
+    /// overrides this with the actual verify exit threaded from the
+    /// parent `loom run`.
+    fn verify_exit(
+        &mut self,
+    ) -> impl std::future::Future<Output = Result<Option<i32>, ReviewError>> + Send {
+        async { Ok(None) }
+    }
+
+    /// Integrity-gate findings across the molecule's diff scope. The
+    /// four-condition AND refuses the push on any non-empty result. The
+    /// default impl returns the empty list so test fakes and pre-wiring
+    /// production callers compile; the production controller overrides
+    /// this once the integrity gate is wired into the push-gate walk.
+    fn integrity_findings(
+        &mut self,
+    ) -> impl std::future::Future<Output = Result<Vec<IntegrityFinding>, ReviewError>> + Send {
+        async { Ok(vec![]) }
+    }
+}
+
+/// Reviewer agent run result. Carries the typed [`ReviewOutcome`]
+/// alongside the parsed exit marker so the push-gate verdict can
+/// inspect the marker (refusing on `LOOM_CONCERN`) without re-parsing
+/// the agent output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunReviewOutput {
+    pub outcome: ReviewOutcome,
+    pub marker: Option<ExitSignal>,
 }
 
 /// What the reviewer agent produced. The driver only branches on
@@ -145,10 +184,13 @@ pub async fn review_loop<C: ReviewController>(
     let pre = controller.list_spec_beads().await?;
     let pre_ids: Vec<BeadId> = pre.iter().map(|b| b.id.clone()).collect();
 
-    match controller.run_review().await? {
+    let RunReviewOutput { outcome, marker } = controller.run_review().await?;
+    match outcome {
         ReviewOutcome::Complete => {}
         ReviewOutcome::Incomplete { detail } => {
-            return Err(ReviewError::ReviewIncomplete(detail));
+            if !matches!(marker, Some(ExitSignal::Concern { .. })) {
+                return Err(ReviewError::ReviewIncomplete(detail));
+            }
         }
     }
 
@@ -166,23 +208,70 @@ pub async fn review_loop<C: ReviewController>(
         .map(|b| b.id.clone())
         .collect();
 
-    let verdict = decide_verdict(&new_ids, &blocked_ids, &clarify_ids, cap, controller).await?;
+    let verify_exit = controller.verify_exit().await?;
+    let integrity_findings = controller.integrity_findings().await?;
+    let verdict = decide_verdict(
+        &new_ids,
+        &blocked_ids,
+        &clarify_ids,
+        verify_exit,
+        marker.as_ref(),
+        &integrity_findings,
+        cap,
+        controller,
+    )
+    .await?;
     apply_verdict(controller, verdict).await
 }
 
-/// Pure-ish branch picker: resolves the four verdict shapes from the
-/// snapshot diff plus the persisted iteration counter.
+/// Pure-ish branch picker: resolves the verdict shape from the snapshot
+/// diff plus the four push-gate inputs (bead labels, verify exit, review
+/// marker, integrity findings) and the persisted iteration counter.
+///
+/// The four-condition AND refuses the push as soon as any one input
+/// fails; the order of checks pins the refusal cause but otherwise has
+/// no behavioural effect — every refusing input yields a `PushBlocked`
+/// verdict tagged with its own [`PushGateRefuseCause`].
+#[expect(clippy::too_many_arguments, reason = "push-gate input surface")]
 async fn decide_verdict<C: ReviewController>(
     new_ids: &[BeadId],
     blocked_ids: &[BeadId],
     clarify_ids: &[BeadId],
+    verify_exit: Option<i32>,
+    review_marker: Option<&ExitSignal>,
+    integrity_findings: &[IntegrityFinding],
     cap: IterationCap,
     controller: &mut C,
 ) -> Result<ReviewVerdict, ReviewError> {
     if !blocked_ids.is_empty() || !clarify_ids.is_empty() {
         return Ok(ReviewVerdict::PushBlocked {
+            cause: PushGateRefuseCause::BeadNotDone,
             blocked_ids: blocked_ids.to_vec(),
             clarify_ids: clarify_ids.to_vec(),
+        });
+    }
+
+    if matches!(verify_exit, Some(code) if code != 0) {
+        return Ok(ReviewVerdict::PushBlocked {
+            cause: PushGateRefuseCause::VerifierFailed,
+            blocked_ids: vec![],
+            clarify_ids: vec![],
+        });
+    }
+
+    if matches!(review_marker, Some(ExitSignal::Concern { .. })) {
+        return Ok(ReviewVerdict::PushBlocked {
+            cause: PushGateRefuseCause::ReviewConcern,
+            blocked_ids: vec![],
+            clarify_ids: vec![],
+        });
+    }
+
+    if !integrity_findings.is_empty() {
+        return Ok(ReviewVerdict::PushBlocked {
+            cause: PushGateRefuseCause::IntegrityFinding,
+            blocked_ids: vec![],
+            clarify_ids: vec![],
         });
     }
 
@@ -240,13 +329,15 @@ async fn apply_verdict<C: ReviewController>(
             Ok(ReviewResult::Pushed)
         }
         ReviewVerdict::PushBlocked {
+            cause,
             blocked_ids,
             clarify_ids,
         } => {
             controller.emit_driver_event(
                 DriverKind::PushGateRefuse,
-                "verdict push-blocked — molecule beads carry loom:blocked or loom:clarify",
+                &format!("verdict push-blocked — cause {}", cause.as_str()),
                 serde_json::json!({
+                    "cause": cause.as_str(),
                     "blocked_ids": blocked_ids.iter().map(|b| b.to_string()).collect::<Vec<_>>(),
                     "clarify_ids": clarify_ids.iter().map(|b| b.to_string()).collect::<Vec<_>>(),
                 }),
@@ -322,6 +413,7 @@ mod tests {
     #[derive(Default)]
     struct FakeController {
         review: Option<ReviewOutcome>,
+        review_marker: Option<ExitSignal>,
         pre_beads: Vec<Bead>,
         post_beads: Vec<Bead>,
         list_calls: u32,
@@ -336,11 +428,24 @@ mod tests {
         /// `emit_driver_event` so tests can pin the verdict-gate
         /// emission sequence.
         driver_events: Vec<(String, String, serde_json::Value)>,
+        verify_exit: Option<i32>,
+        integrity_findings: Vec<IntegrityFinding>,
     }
 
     impl ReviewController for FakeController {
-        async fn run_review(&mut self) -> Result<ReviewOutcome, ReviewError> {
-            Ok(self.review.clone().unwrap_or(ReviewOutcome::Complete))
+        async fn run_review(&mut self) -> Result<RunReviewOutput, ReviewError> {
+            Ok(RunReviewOutput {
+                outcome: self.review.clone().unwrap_or(ReviewOutcome::Complete),
+                marker: self.review_marker.clone(),
+            })
+        }
+
+        async fn verify_exit(&mut self) -> Result<Option<i32>, ReviewError> {
+            Ok(self.verify_exit)
+        }
+
+        async fn integrity_findings(&mut self) -> Result<Vec<IntegrityFinding>, ReviewError> {
+            Ok(self.integrity_findings.clone())
         }
 
         async fn list_spec_beads(&mut self) -> Result<Vec<Bead>, ReviewError> {
@@ -708,6 +813,203 @@ mod tests {
         assert!(matches!(err, Some(ReviewError::ReviewIncomplete(_))));
         assert_eq!(c.list_calls, 1, "post snapshot not taken on review failure");
         assert_eq!(c.git_push_calls, 0);
+        Ok(())
+    }
+
+    fn unresolved_finding() -> IntegrityFinding {
+        IntegrityFinding::UnresolvedAnnotation {
+            spec: std::path::PathBuf::from("specs/loom-harness.md"),
+            line: 42,
+            tier: loom_gate::Tier::Check,
+            target: "missing-runner".to_string(),
+        }
+    }
+
+    /// FR9 — push-gate verifier branch: a non-zero `loom gate verify`
+    /// exit refuses the push with cause `verifier-failed`, even when
+    /// every bead in the molecule is otherwise done.
+    #[tokio::test]
+    async fn push_gate_refuses_when_verify_exit_is_nonzero() -> Result<(), ReviewError> {
+        let mut c = FakeController {
+            pre_beads: vec![bead("wx-1", &["spec:loom-harness"])],
+            post_beads: vec![bead("wx-1", &["spec:loom-harness"])],
+            verify_exit: Some(1),
+            ..FakeController::default()
+        };
+        let result = review_loop(&mut c, IterationCap::default()).await?;
+        assert!(matches!(result, ReviewResult::PushBlocked { .. }));
+        assert_eq!(c.git_push_calls, 0, "verify failure must refuse push");
+        let refuse = c
+            .driver_events
+            .iter()
+            .find(|(k, _, _)| k == "push_gate_refuse")
+            .expect("refuse event present");
+        assert_eq!(refuse.2["cause"].as_str(), Some("verifier-failed"));
+        Ok(())
+    }
+
+    /// FR9 — push-gate review branch: a `LOOM_CONCERN` exit marker
+    /// refuses the push with cause `review-concern`. The reviewer's
+    /// `Incomplete` outcome must NOT short-circuit `review_loop` into
+    /// an error when the marker is a structured concern; the verdict
+    /// gate has to render it as a `push_gate_refuse` event so the
+    /// downstream UI sees the four-condition AND fire. The driver-event
+    /// payload carries the typed cause so consumers can route off it
+    /// without re-deriving the refusal reason from event order.
+    #[tokio::test]
+    async fn push_blocked_on_review_concern_with_id_payload() -> Result<(), ReviewError> {
+        let mut c = FakeController {
+            review: Some(ReviewOutcome::Incomplete {
+                detail: "LOOM_CONCERN: spec-conventions-violation -- bad diff".into(),
+            }),
+            review_marker: Some(ExitSignal::Concern {
+                token: "spec-conventions-violation".into(),
+                reason: "bad diff".into(),
+            }),
+            pre_beads: vec![bead("wx-1", &["spec:loom-harness"])],
+            post_beads: vec![bead("wx-1", &["spec:loom-harness"])],
+            ..FakeController::default()
+        };
+        let result = review_loop(&mut c, IterationCap::default()).await?;
+        assert!(matches!(result, ReviewResult::PushBlocked { .. }));
+        assert_eq!(c.git_push_calls, 0, "concern marker must refuse push");
+        let refuse = c
+            .driver_events
+            .iter()
+            .find(|(k, _, _)| k == "push_gate_refuse")
+            .expect("refuse event present");
+        assert_eq!(refuse.2["cause"].as_str(), Some("review-concern"));
+        // The id-shape sub-fields are present (empty for this cause) so
+        // the wire format stays stable across causes.
+        assert!(refuse.2["blocked_ids"].is_array());
+        assert!(refuse.2["clarify_ids"].is_array());
+        Ok(())
+    }
+
+    /// FR9 — push-gate integrity branch: any integrity-gate finding
+    /// refuses the push with cause `integrity-finding`.
+    #[tokio::test]
+    async fn push_gate_refuses_on_integrity_finding() -> Result<(), ReviewError> {
+        let mut c = FakeController {
+            pre_beads: vec![bead("wx-1", &["spec:loom-harness"])],
+            post_beads: vec![bead("wx-1", &["spec:loom-harness"])],
+            integrity_findings: vec![unresolved_finding()],
+            ..FakeController::default()
+        };
+        let result = review_loop(&mut c, IterationCap::default()).await?;
+        assert!(matches!(result, ReviewResult::PushBlocked { .. }));
+        assert_eq!(c.git_push_calls, 0, "integrity finding must refuse push");
+        let refuse = c
+            .driver_events
+            .iter()
+            .find(|(k, _, _)| k == "push_gate_refuse")
+            .expect("refuse event present");
+        assert_eq!(refuse.2["cause"].as_str(), Some("integrity-finding"));
+        Ok(())
+    }
+
+    /// FR9 — bead-labels branch: the pre-existing refusal path tags
+    /// its event with cause `bead-not-done` so callers can disambiguate
+    /// from the three new causes.
+    #[tokio::test]
+    async fn push_gate_refusal_for_bead_labels_tags_cause_bead_not_done() -> Result<(), ReviewError>
+    {
+        let mut c = FakeController {
+            pre_beads: vec![bead("wx-1", &["spec:loom-harness"])],
+            post_beads: vec![
+                bead("wx-1", &["spec:loom-harness"]),
+                bead("wx-2", &["spec:loom-harness", "loom:blocked"]),
+            ],
+            ..FakeController::default()
+        };
+        let _ = review_loop(&mut c, IterationCap::default()).await?;
+        let refuse = c
+            .driver_events
+            .iter()
+            .find(|(k, _, _)| k == "push_gate_refuse")
+            .expect("refuse event present");
+        assert_eq!(refuse.2["cause"].as_str(), Some("bead-not-done"));
+        Ok(())
+    }
+
+    /// FR9 four-condition AND — every push-gate input must pass for
+    /// `Clean`. Each of the four inputs that fails routes to its own
+    /// `PushBlocked` cause; this test pins the truth table by toggling
+    /// one input at a time and asserting the cause string.
+    #[tokio::test]
+    async fn push_gate_evaluates_all_four_conditions() -> Result<(), ReviewError> {
+        // Baseline: every input passes → push fires clean.
+        let mut clean = FakeController {
+            pre_beads: vec![bead("wx-1", &["spec:loom-harness"])],
+            post_beads: vec![bead("wx-1", &["spec:loom-harness"])],
+            ..FakeController::default()
+        };
+        assert_eq!(
+            review_loop(&mut clean, IterationCap::default()).await?,
+            ReviewResult::Pushed,
+        );
+
+        let cases: Vec<(&str, FakeController)> = vec![
+            (
+                "bead-not-done",
+                FakeController {
+                    pre_beads: vec![bead("wx-1", &["spec:loom-harness"])],
+                    post_beads: vec![bead("wx-1", &["spec:loom-harness", "loom:blocked"])],
+                    ..FakeController::default()
+                },
+            ),
+            (
+                "verifier-failed",
+                FakeController {
+                    pre_beads: vec![bead("wx-1", &["spec:loom-harness"])],
+                    post_beads: vec![bead("wx-1", &["spec:loom-harness"])],
+                    verify_exit: Some(2),
+                    ..FakeController::default()
+                },
+            ),
+            (
+                "review-concern",
+                FakeController {
+                    review: Some(ReviewOutcome::Incomplete {
+                        detail: "LOOM_CONCERN: scope -- bad".into(),
+                    }),
+                    review_marker: Some(ExitSignal::Concern {
+                        token: "scope".into(),
+                        reason: "bad".into(),
+                    }),
+                    pre_beads: vec![bead("wx-1", &["spec:loom-harness"])],
+                    post_beads: vec![bead("wx-1", &["spec:loom-harness"])],
+                    ..FakeController::default()
+                },
+            ),
+            (
+                "integrity-finding",
+                FakeController {
+                    pre_beads: vec![bead("wx-1", &["spec:loom-harness"])],
+                    post_beads: vec![bead("wx-1", &["spec:loom-harness"])],
+                    integrity_findings: vec![unresolved_finding()],
+                    ..FakeController::default()
+                },
+            ),
+        ];
+        for (expected_cause, mut c) in cases {
+            let result = review_loop(&mut c, IterationCap::default()).await?;
+            assert!(
+                matches!(result, ReviewResult::PushBlocked { .. }),
+                "{expected_cause}: expected PushBlocked",
+            );
+            let refuse = c
+                .driver_events
+                .iter()
+                .find(|(k, _, _)| k == "push_gate_refuse")
+                .unwrap_or_else(|| panic!("{expected_cause}: refuse event present"));
+            assert_eq!(
+                refuse.2["cause"].as_str(),
+                Some(expected_cause),
+                "cause string in push_gate_refuse payload",
+            );
+            assert_eq!(c.git_push_calls, 0, "{expected_cause}: never pushes");
+        }
         Ok(())
     }
 }

@@ -45,7 +45,7 @@ use super::error::ReviewError;
 use super::phase_verdict::{
     GateInputs, PhaseVerdict, RecoveryCause, ReviewConcern, ReviewFlag, decide,
 };
-use super::runner::{ReviewController, ReviewOutcome};
+use super::runner::{ReviewController, ReviewOutcome, RunReviewOutput};
 use crate::todo::ExitSignal;
 
 pub struct ProductionReviewController<S, F>
@@ -270,7 +270,7 @@ where
     F: std::future::Future<Output = Result<(SessionOutcome, Option<ExitSignal>), ProtocolError>>
         + Send,
 {
-    async fn run_review(&mut self) -> Result<ReviewOutcome, ReviewError> {
+    async fn run_review(&mut self) -> Result<RunReviewOutput, ReviewError> {
         let prompt = self.build_review_prompt().await?;
         let entry = self.manifest.lookup(&self.phase_default)?;
         let banner = format!("loom review @ {}", self.label);
@@ -306,7 +306,11 @@ where
         let result = (self.spawn)(spawn_config).await;
         drop(scratch);
         let (outcome, marker) = result?;
-        Ok(classify_review_phase(marker.as_ref(), outcome.exit_code))
+        let typed_outcome = classify_review_phase(marker.as_ref(), outcome.exit_code);
+        Ok(RunReviewOutput {
+            outcome: typed_outcome,
+            marker,
+        })
     }
 
     async fn list_spec_beads(&mut self) -> Result<Vec<Bead>, ReviewError> {
@@ -770,13 +774,19 @@ mod tests {
                 ))
             },
         );
-        let outcome = ctrl.run_review().await;
-        if let Err(ReviewError::Bd(_)) = outcome {
+        let result = ctrl.run_review().await;
+        if let Err(ReviewError::Bd(_)) = result {
             return;
         }
         assert!(
-            matches!(outcome, Ok(ReviewOutcome::Complete)),
-            "expected Complete, got {outcome:?}",
+            matches!(
+                result,
+                Ok(RunReviewOutput {
+                    outcome: ReviewOutcome::Complete,
+                    ..
+                }),
+            ),
+            "expected Complete, got {result:?}",
         );
     }
 
@@ -808,12 +818,15 @@ mod tests {
                 ))
             },
         );
-        let outcome = ctrl.run_review().await;
-        if let Err(ReviewError::Bd(_)) = outcome {
+        let result = ctrl.run_review().await;
+        if let Err(ReviewError::Bd(_)) = result {
             return;
         }
-        match outcome {
-            Ok(ReviewOutcome::Incomplete { detail }) => {
+        match result {
+            Ok(RunReviewOutput {
+                outcome: ReviewOutcome::Incomplete { detail },
+                ..
+            }) => {
                 assert!(
                     detail.contains('7'),
                     "detail should mention exit 7: {detail}"

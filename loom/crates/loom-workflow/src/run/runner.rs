@@ -6,6 +6,7 @@ use tracing::info;
 use super::error::RunError;
 use super::outcome::{AgentOutcome, BeadResult};
 use super::retry::{RetryDecision, RetryPolicy};
+use crate::todo::ExitSignal;
 
 /// Loop-termination policy for `loom run`. `Continuous` is the default — the
 /// loop pulls beads until the molecule is complete, then hands off to
@@ -30,6 +31,18 @@ pub const INFRA_REPEATED_CAUSE: &str = "infra-repeated";
 /// "one free retry per `loom run`". The counter is separate from
 /// `[loop] max_iterations` and resets on every fresh `loom run` invocation.
 const INFRA_MIDSESSION_RETRY_BUDGET: u32 = 1;
+
+/// Outcome of one molecule-completion handoff. Carries the verify and
+/// review child-process exit codes plus the review's parsed exit marker
+/// so the push-gate verdict can consume all four conditions per FR9.
+/// `None` exit codes occur when a child was terminated by a signal; the
+/// gate treats them as failures (no exit code = no clean success).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ExecReviewOutcome {
+    pub verify_exit: Option<i32>,
+    pub review_exit: Option<i32>,
+    pub review_marker: Option<ExitSignal>,
+}
 
 /// Summary of one [`run_loop`] invocation. Surfaces what happened so callers
 /// can return a meaningful exit code and tests can assert on the path taken.
@@ -113,7 +126,13 @@ pub trait AgentLoopController: Send {
     /// unconditional and the non-zero exit codes that signal concerns
     /// do not bubble up as errors here — they drive fix-up beads onto
     /// the next outer-loop pass.
-    fn exec_review(&mut self) -> impl std::future::Future<Output = Result<(), RunError>> + Send;
+    ///
+    /// The verify and review exit codes plus the review's parsed exit
+    /// marker ride out in [`ExecReviewOutcome`] so the push-gate verdict
+    /// can consume all four conditions per FR9 (the four-condition AND).
+    fn exec_review(
+        &mut self,
+    ) -> impl std::future::Future<Output = Result<ExecReviewOutcome, RunError>> + Send;
 
     /// Emit a driver-side event into the controller's event sink. The
     /// run loop fires `retry_dispatch` here when it re-dispatches a bead
@@ -223,7 +242,7 @@ pub async fn run_loop<C: AgentLoopController>(
             break 'outer;
         }
 
-        controller.exec_review().await?;
+        let _handoff = controller.exec_review().await?;
         summary.execed_review = true;
         summary.outer_iterations += 1;
     }
@@ -372,14 +391,14 @@ mod tests {
             Ok(())
         }
 
-        async fn exec_review(&mut self) -> Result<(), RunError> {
+        async fn exec_review(&mut self) -> Result<ExecReviewOutcome, RunError> {
             self.review_calls += 1;
             if let Some(fixups) = self.review_injects.pop_front() {
                 for b in fixups {
                     self.ready_queue.push_back(b);
                 }
             }
-            Ok(())
+            Ok(ExecReviewOutcome::default())
         }
 
         fn emit_driver_event(

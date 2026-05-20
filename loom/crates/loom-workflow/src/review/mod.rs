@@ -44,7 +44,7 @@ pub use recovery::{
     RETRY_EXHAUSTED_CAUSE, RecoveryResolution, cause_to_previous_failure, resolve_recovery,
 };
 pub use runner::{ReviewController, ReviewOutcome, ReviewResult, review_loop};
-pub use verdict::{BeadSnapshot, ReviewVerdict, diff_new_bead_ids};
+pub use verdict::{BeadSnapshot, PushGateRefuseCause, ReviewVerdict, diff_new_bead_ids};
 pub use verify_fail::{
     PREVIOUS_FAILURE_BUDGET, REVIEW_NOTES_BUDGET, STDERR_TAIL_LINES, VerifyFailure,
     format_previous_failure,

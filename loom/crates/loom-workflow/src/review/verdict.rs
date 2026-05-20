@@ -1,5 +1,37 @@
 use loom_driver::identifier::BeadId;
 
+/// Which of the four push-gate inputs refused the push. Carried on
+/// [`ReviewVerdict::PushBlocked`] so the `push_gate_refuse` driver event
+/// can name the failing condition without the consumer re-deriving it
+/// from the payload shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PushGateRefuseCause {
+    /// Some bead in the molecule still carries `loom:blocked` or
+    /// `loom:clarify`.
+    BeadNotDone,
+    /// `loom gate verify --diff <molecule.base_commit>..HEAD` exited
+    /// non-zero (or a dispatch error counted as a fail).
+    VerifierFailed,
+    /// The reviewer agent's exit marker was `LOOM_CONCERN`.
+    ReviewConcern,
+    /// The integrity gate produced at least one `UnresolvedAnnotation`
+    /// or `StubTestFunction` finding within the molecule's diff scope.
+    IntegrityFinding,
+}
+
+impl PushGateRefuseCause {
+    /// Stable wire string used in `push_gate_refuse` driver-event
+    /// payloads and `bd update --notes` surfaces.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::BeadNotDone => "bead-not-done",
+            Self::VerifierFailed => "verifier-failed",
+            Self::ReviewConcern => "review-concern",
+            Self::IntegrityFinding => "integrity-finding",
+        }
+    }
+}
+
 /// Snapshot of bead state taken on either side of the reviewer agent. The
 /// driver pre-counts beads with `spec:<label>`, runs the reviewer, then
 /// re-counts and inspects the same query for `loom:blocked`/`loom:clarify`
@@ -26,12 +58,13 @@ pub enum ReviewVerdict {
     /// beads.
     Clean,
 
-    /// `loom:blocked` and/or `loom:clarify` present (newly raised or
-    /// pre-existing) → stop without pushing; user resolves via `loom msg`.
-    /// Per `specs/loom-harness.md` (Verdict gate success criteria) the push
-    /// gate refuses to push while either label is set on any bead in the
-    /// molecule.
+    /// Push gate refused. `cause` names which of the four conditions
+    /// failed; `blocked_ids`/`clarify_ids` populate only when
+    /// `cause = BeadNotDone` and are empty for the other three causes.
+    /// Per the four-condition AND in `specs/loom-harness.md` FR9, push
+    /// fires only when every condition passes.
     PushBlocked {
+        cause: PushGateRefuseCause,
         blocked_ids: Vec<BeadId>,
         clarify_ids: Vec<BeadId>,
     },
