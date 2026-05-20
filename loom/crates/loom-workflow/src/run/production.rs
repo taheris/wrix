@@ -304,6 +304,12 @@ pub fn classify_session(session: SessionResult, marker: Option<ExitSignal>) -> A
     match session {
         SessionResult::PreflightFailed { error } => AgentOutcome::InfraPreflight { error },
         SessionResult::MidSessionFailed { error } => AgentOutcome::InfraMidSession { error },
+        SessionResult::ObserverAbort { reason } => verdict_to_outcome(
+            PhaseVerdict::Recovery {
+                cause: RecoveryCause::ObserverAbort { reason },
+            },
+            0,
+        ),
         SessionResult::Complete(outcome) => {
             if matches!(marker, Some(ExitSignal::Complete | ExitSignal::Noop))
                 && outcome.exit_code != 0
@@ -353,6 +359,11 @@ fn verdict_to_outcome(verdict: PhaseVerdict, exit_code: i32) -> AgentOutcome {
             } else {
                 format!("agent exited with code {exit_code}")
             },
+        },
+        PhaseVerdict::Recovery {
+            cause: RecoveryCause::ObserverAbort { reason },
+        } => AgentOutcome::Failure {
+            error: format!("Session aborted by observer: {reason}."),
         },
         PhaseVerdict::Recovery { cause } => AgentOutcome::Failure {
             error: format!("unexpected gate verdict: {}", cause.as_str()),
@@ -442,6 +453,35 @@ mod tests {
                 error.contains("swallowed marker"),
                 "swallowed-marker text missing: {error}",
             ),
+            other => panic!("expected Failure, got {other:?}"),
+        }
+    }
+
+    /// Spec gate (§"Disambiguating no marker"): a session aborted by an
+    /// observer's `SessionCommand::Abort` must classify as `observer-abort`
+    /// rather than `swallowed-marker`, even though no exit marker was
+    /// emitted. The detail string must carry the observer's verbatim
+    /// reason so human triage sees what tripped the kill.
+    #[test]
+    fn observer_abort_session_result_routes_to_observer_abort_cause() {
+        let session = SessionResult::ObserverAbort {
+            reason: "doom-loop: 3 identical tool calls".into(),
+        };
+        match classify_session(session, None) {
+            AgentOutcome::Failure { error } => {
+                assert!(
+                    error.contains("Session aborted by observer"),
+                    "error must carry the spec format prefix: {error}",
+                );
+                assert!(
+                    error.contains("doom-loop: 3 identical tool calls"),
+                    "error must preserve verbatim observer reason: {error}",
+                );
+                assert!(
+                    !error.contains("swallowed"),
+                    "observer-abort must NOT degrade to swallowed-marker: {error}",
+                );
+            }
             other => panic!("expected Failure, got {other:?}"),
         }
     }

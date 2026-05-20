@@ -110,6 +110,12 @@ pub enum RecoveryCause {
     /// (`bd update --notes`, `previous_failure`) can name which concern
     /// triggered without re-parsing the agent's prose.
     ReviewFlag(ReviewFlag),
+    /// An `EventSink::react()` returned `SessionCommand::Abort` and the
+    /// driver cancelled the session before the agent emitted a marker.
+    /// Disambiguates "no marker" from `swallowed-marker` per
+    /// `specs/loom-harness.md` §"Disambiguating no marker". `reason` is
+    /// the verbatim payload the observer emitted.
+    ObserverAbort { reason: String },
 }
 
 impl RecoveryCause {
@@ -123,6 +129,7 @@ impl RecoveryCause {
             Self::ZeroProgress => "zero-progress",
             Self::VerifyFail { .. } => "verify-fail",
             Self::ReviewFlag(_) => "review-flag",
+            Self::ObserverAbort { .. } => "observer-abort",
         }
     }
 }
@@ -597,6 +604,13 @@ mod tests {
         assert_eq!(
             RecoveryCause::ReviewFlag(flag(ReviewConcern::Judge, "")).as_str(),
             "review-flag",
+        );
+        assert_eq!(
+            RecoveryCause::ObserverAbort {
+                reason: "doom-loop: 3 identical tool calls".into(),
+            }
+            .as_str(),
+            "observer-abort",
         );
     }
 

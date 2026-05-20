@@ -1672,11 +1672,18 @@ async fn dispatch_classified(
     }
     match kind {
         AgentKind::Pi => {
-            run_agent_classified::<PiBackend>(&spawn, sink, text_capture, envelope_builder).await
+            run_agent_classified::<PiBackend>(&spawn, sink, None, text_capture, envelope_builder)
+                .await
         }
         AgentKind::Claude => {
-            run_agent_classified::<ClaudeBackend>(&spawn, sink, text_capture, envelope_builder)
-                .await
+            run_agent_classified::<ClaudeBackend>(
+                &spawn,
+                sink,
+                None,
+                text_capture,
+                envelope_builder,
+            )
+            .await
         }
     }
 }

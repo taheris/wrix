@@ -24,7 +24,9 @@ use loom_driver::agent::{
 };
 use loom_driver::clock::{Clock, SystemClock};
 use loom_driver::logging::{BeadOutcome, LogSink};
-use loom_events::{DriverKind, EnvelopeBuilder, ParsedAgentEvent, Source};
+use loom_events::{
+    DriverKind, EnvelopeBuilder, EventSink, ParsedAgentEvent, SessionCommand, Source,
+};
 use tracing::{info, warn};
 
 use crate::run::SessionResult;
@@ -47,7 +49,7 @@ pub async fn run_agent<B: AgentBackend>(
     sink: Option<LogSink>,
     text_capture: Option<&mut String>,
 ) -> Result<SessionOutcome, ProtocolError> {
-    match run_agent_classified::<B>(config, sink, text_capture, None).await {
+    match run_agent_classified::<B>(config, sink, None, text_capture, None).await {
         SessionResult::Complete(outcome) => Ok(outcome),
         // Callers that only accept the legacy `Result` shape (todo, plan,
         // msg, batch dispatch) treat both infra phases as a single failure
@@ -57,6 +59,9 @@ pub async fn run_agent<B: AgentBackend>(
         SessionResult::PreflightFailed { error } | SessionResult::MidSessionFailed { error } => {
             Err(ProtocolError::Io(std::io::Error::other(error)))
         }
+        SessionResult::ObserverAbort { reason } => Err(ProtocolError::Io(std::io::Error::other(
+            format!("Session aborted by observer: {reason}"),
+        ))),
     }
 }
 
@@ -65,6 +70,14 @@ pub async fn run_agent<B: AgentBackend>(
 /// verdict gate can route pre-flight failures to `loom:blocked` cause
 /// `infra-preflight` immediately and grant mid-session failures one
 /// driver-memory retry per `loom run`.
+///
+/// `observer` is an optional auxiliary [`EventSink`] the driver fans
+/// every event into alongside `sink`. After every non-streaming event the
+/// driver calls `observer.react()` (then `sink.react()`) and applies the
+/// returned [`SessionCommand`]s to the live session: `Steer` injects a
+/// system message into the next turn; `Abort` terminates the session and
+/// the function returns [`SessionResult::ObserverAbort`]. `Abort` is
+/// terminal — subsequent commands in the same batch are ignored.
 ///
 /// `envelope_builder` joins each `ParsedAgentEvent` the session yields
 /// with the next per-spawn envelope (monotonic `seq`, real `bead_id`,
@@ -77,6 +90,7 @@ pub async fn run_agent<B: AgentBackend>(
 pub async fn run_agent_classified<B: AgentBackend>(
     config: &SpawnConfig,
     mut sink: Option<LogSink>,
+    mut observer: Option<&mut dyn EventSink>,
     mut text_capture: Option<&mut String>,
     mut envelope_builder: Option<loom_events::EnvelopeBuilder>,
 ) -> SessionResult {
@@ -183,6 +197,46 @@ pub async fn run_agent_classified<B: AgentBackend>(
             return SessionResult::MidSessionFailed {
                 error: format!("log sink emit failed: {e}"),
             };
+        }
+        if let Some(o) = observer.as_deref_mut() {
+            o.emit(&event);
+        }
+        if is_non_streaming(&event) {
+            let mut commands: Vec<SessionCommand> = Vec::new();
+            if let Some(s) = sink.as_mut() {
+                commands.extend(EventSink::react(s));
+            }
+            if let Some(o) = observer.as_deref_mut() {
+                commands.extend(o.react());
+            }
+            match classify_react_commands(commands) {
+                ReactAction::Continue { steers } => {
+                    for msg in steers {
+                        if let Err(e) = session.steer(&msg).await {
+                            warn!(error = %e, "session steer failed");
+                            finish_sink(sink, BeadOutcome::Failed);
+                            return SessionResult::MidSessionFailed {
+                                error: format!("session steer failed: {e}"),
+                            };
+                        }
+                    }
+                }
+                ReactAction::Abort { reason } => {
+                    info!(
+                        reason = %reason,
+                        "observer requested session abort via react()",
+                    );
+                    if let Err(e) = session.abort().await {
+                        warn!(
+                            error = %e,
+                            "session abort failed during observer-driven cancel; \
+                             kill_on_drop will reap the child",
+                        );
+                    }
+                    finish_sink(sink, BeadOutcome::Failed);
+                    return SessionResult::ObserverAbort { reason };
+                }
+            }
         }
         if matches!(event, AgentEvent::CompactionStart { .. })
             && let Err(e) = B::on_compaction_start(&mut session, config).await
@@ -362,6 +416,45 @@ fn is_oom_error(error: &str) -> bool {
         || lower.contains("killed")
         || lower.contains("oom")
         || lower.contains("out of memory")
+}
+
+/// Action the event loop should take after collecting `react()` commands
+/// from every sink in the chain. `Steer` commands are batched in
+/// registration order; the first `Abort` short-circuits the batch and
+/// becomes terminal — per `specs/loom-harness.md` §"EventSink and
+/// SessionCommand · react() priority".
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ReactAction {
+    Continue { steers: Vec<String> },
+    Abort { reason: String },
+}
+
+/// Pure classifier for the [`SessionCommand`] batch returned from
+/// `react()`. Pulled out of the event loop so the priority rule (Abort is
+/// terminal; subsequent commands in the same batch are dropped) can be
+/// tested without driving a real session.
+fn classify_react_commands(commands: Vec<SessionCommand>) -> ReactAction {
+    let mut steers = Vec::new();
+    for cmd in commands {
+        match cmd {
+            SessionCommand::Steer(msg) => steers.push(msg),
+            SessionCommand::Abort(reason) => return ReactAction::Abort { reason },
+        }
+    }
+    ReactAction::Continue { steers }
+}
+
+/// Streaming events (`text_delta`, `thinking_delta`, `toolcall_delta`) do
+/// not trigger `react()`; observer state does not change on text bytes
+/// and polling them every fragment would be pure overhead. Spec contract
+/// (`specs/loom-harness.md` §"EventSink and SessionCommand").
+fn is_non_streaming(event: &AgentEvent) -> bool {
+    !matches!(
+        event,
+        AgentEvent::TextDelta { .. }
+            | AgentEvent::ThinkingDelta { .. }
+            | AgentEvent::ToolcallDelta { .. }
+    )
 }
 
 fn emit_midsession_failure_event(
@@ -556,6 +649,170 @@ mod tests {
         );
     }
 
+    fn sample_envelope() -> loom_events::EventEnvelope {
+        loom_events::EventEnvelope {
+            bead_id: BeadId::new("wx-react").expect("bead id"),
+            molecule_id: None,
+            iteration: 1,
+            source: Source::Agent,
+            ts_ms: 0,
+            seq: 0,
+        }
+    }
+
+    fn tool_call_event() -> AgentEvent {
+        AgentEvent::ToolCall {
+            envelope: sample_envelope(),
+            id: loom_events::identifier::ToolCallId::new("tc-1"),
+            tool: "bash".to_string(),
+            params: serde_json::json!({}),
+            parent_tool_call_id: None,
+        }
+    }
+
+    fn text_delta_event() -> AgentEvent {
+        AgentEvent::TextDelta {
+            envelope: sample_envelope(),
+            text: "hi".into(),
+        }
+    }
+
+    #[test]
+    fn classify_react_commands_collects_steers_in_registration_order() {
+        let action = classify_react_commands(vec![
+            SessionCommand::Steer("first".into()),
+            SessionCommand::Steer("second".into()),
+        ]);
+        match action {
+            ReactAction::Continue { steers } => {
+                assert_eq!(steers, vec!["first".to_string(), "second".to_string()]);
+            }
+            other => panic!("expected Continue, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_react_commands_empty_batch_is_continue_no_steers() {
+        match classify_react_commands(vec![]) {
+            ReactAction::Continue { steers } => assert!(steers.is_empty()),
+            other => panic!("expected Continue, got {other:?}"),
+        }
+    }
+
+    /// Spec criterion: "Driver applies `react()` after every non-streaming
+    /// event (not after `text_delta` / `thinking_delta` /
+    /// `toolcall_delta`)" (`specs/loom-harness.md` Success Criteria §
+    /// "EventSink and SessionCommand"). The driver gates its
+    /// `react()` poll on [`is_non_streaming`]; this verifies the delta
+    /// trio is the only set excluded.
+    #[test]
+    fn react_invoked_after_non_streaming_events_only() {
+        assert!(!is_non_streaming(&text_delta_event()));
+        assert!(!is_non_streaming(&AgentEvent::ThinkingDelta {
+            envelope: sample_envelope(),
+            text: "x".into(),
+        }));
+        assert!(!is_non_streaming(&AgentEvent::ToolcallDelta {
+            envelope: sample_envelope(),
+            id: loom_events::identifier::ToolCallId::new("tc-1"),
+            delta: "x".into(),
+        }));
+        assert!(is_non_streaming(&tool_call_event()));
+        assert!(is_non_streaming(&AgentEvent::ToolResult {
+            envelope: sample_envelope(),
+            id: loom_events::identifier::ToolCallId::new("tc-1"),
+            output: "ok".into(),
+            is_error: false,
+        }));
+        assert!(is_non_streaming(&AgentEvent::DriverEvent {
+            envelope: sample_envelope(),
+            driver_kind: DriverKind::ContainerSpawn,
+            summary: "spawned".into(),
+            payload: serde_json::json!({}),
+        }));
+        assert!(is_non_streaming(&AgentEvent::TurnEnd {
+            envelope: sample_envelope()
+        }));
+    }
+
+    /// Spec criterion: "Driver treats any `SessionCommand::Abort`
+    /// returned from `react()` as terminal: subsequent commands in the
+    /// same batch are not applied, session is cancelled, recovery cause
+    /// is `observer-abort`" (`specs/loom-harness.md` Success Criteria §
+    /// "EventSink and SessionCommand"). Drives a mock observer that
+    /// returns `Abort` on the third `tool_call`; verifies (a) `Abort`
+    /// short-circuits subsequent `Steer`s in the same batch, and (b)
+    /// the cause classifier maps a session aborted by an observer to
+    /// `RecoveryCause::ObserverAbort` (label `"observer-abort"`) rather
+    /// than `swallowed-marker`.
+    #[test]
+    fn abort_command_short_circuits_remaining_commands_and_classifies_observer_abort() {
+        struct CountingAbortObserver {
+            tool_calls: u32,
+            abort_at: u32,
+            abort_reason: String,
+        }
+        impl EventSink for CountingAbortObserver {
+            fn emit(&mut self, event: &AgentEvent) {
+                if matches!(event, AgentEvent::ToolCall { .. }) {
+                    self.tool_calls += 1;
+                }
+            }
+            fn react(&mut self) -> Vec<SessionCommand> {
+                if self.tool_calls >= self.abort_at {
+                    vec![
+                        SessionCommand::Abort(self.abort_reason.clone()),
+                        // Subsequent commands in the same batch MUST be
+                        // dropped per the spec's react() priority rule.
+                        SessionCommand::Steer("post-abort-steer".into()),
+                    ]
+                } else {
+                    Vec::new()
+                }
+            }
+        }
+
+        let mut observer = CountingAbortObserver {
+            tool_calls: 0,
+            abort_at: 3,
+            abort_reason: "doom-loop: 3 identical tool calls".into(),
+        };
+
+        for _ in 0..2 {
+            observer.emit(&tool_call_event());
+            assert!(observer.react().is_empty(), "no abort before threshold");
+        }
+        observer.emit(&tool_call_event());
+        let commands = observer.react();
+        assert_eq!(
+            commands.len(),
+            2,
+            "observer emits Abort + a trailing Steer in the same batch",
+        );
+
+        match classify_react_commands(commands) {
+            ReactAction::Abort { reason } => {
+                assert_eq!(
+                    reason, "doom-loop: 3 identical tool calls",
+                    "Abort's reason must round-trip verbatim",
+                );
+            }
+            other => panic!(
+                "Abort must short-circuit the batch; got {other:?} — the trailing Steer leaked through",
+            ),
+        }
+
+        // The recovery cause label is the spec's `observer-abort`
+        // identifier, not `swallowed-marker`.
+        assert_eq!(
+            crate::review::RecoveryCause::ObserverAbort {
+                reason: "doom-loop: 3 identical tool calls".into(),
+            }
+            .as_str(),
+            "observer-abort",
+        );
+    }
+
     /// `B::spawn` returning `Err` is the preflight failure path. The
     /// driver must emit a `driver_event { kind: infra_failure }` into
     /// the sink BEFORE finishing it, so a replay can show the cause
@@ -591,7 +848,8 @@ mod tests {
             handshake_timeout: None,
             stall_warn_interval: Some(Duration::ZERO),
         };
-        let result = run_agent_classified::<FailingBackend>(&cfg, Some(sink), None, Some(b)).await;
+        let result =
+            run_agent_classified::<FailingBackend>(&cfg, Some(sink), None, None, Some(b)).await;
         match result {
             crate::run::SessionResult::PreflightFailed { error } => {
                 assert!(

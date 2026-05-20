@@ -82,4 +82,14 @@ pub enum SessionResult {
     /// `SessionComplete` — process EOF, IO error, OOM kill, etc. Eligible
     /// for one driver-memory retry per `loom run`.
     MidSessionFailed { error: String },
+
+    /// An `EventSink::react()` returned `SessionCommand::Abort` and the
+    /// driver cancelled the session. Per `specs/loom-harness.md`
+    /// §"Disambiguating no marker" this is classified as
+    /// `RecoveryCause::ObserverAbort`, not `swallowed-marker`, so the
+    /// human triage surface names it as a driver-detected failure rather
+    /// than agent sloppiness. `reason` is the verbatim payload the
+    /// observer emitted; observers that want to identify themselves
+    /// prefix their name into the reason.
+    ObserverAbort { reason: String },
 }

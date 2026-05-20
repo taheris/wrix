@@ -46,6 +46,9 @@ fn render_previous_failure(cause: &RecoveryCause) -> String {
         RecoveryCause::ReviewFlag(flag) => {
             format!("[{}] {}", flag.concern.as_str(), flag.detail)
         }
+        RecoveryCause::ObserverAbort { reason } => {
+            format!("Session aborted by observer: {reason}.")
+        }
     }
 }
 
@@ -200,6 +203,31 @@ mod tests {
                 assert!(
                     notes.contains("test mocks the agent backend"),
                     "review reasoning is preserved verbatim: {notes}",
+                );
+            }
+            other => panic!("expected Blocked, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn observer_abort_cause_renders_with_reason_in_notes() {
+        let cause = RecoveryCause::ObserverAbort {
+            reason: "doom-loop: 3 identical tool calls".into(),
+        };
+        match resolve_recovery(&cause, 3, 3) {
+            RecoveryResolution::Blocked { cause: tag, notes } => {
+                assert_eq!(tag, RETRY_EXHAUSTED_CAUSE);
+                assert!(
+                    notes.contains("observer-abort"),
+                    "notes name original cause: {notes}",
+                );
+                assert!(
+                    notes.contains("Session aborted by observer"),
+                    "notes carry spec-format prefix: {notes}",
+                );
+                assert!(
+                    notes.contains("doom-loop: 3 identical tool calls"),
+                    "notes preserve verbatim observer reason: {notes}",
                 );
             }
             other => panic!("expected Blocked, got {other:?}"),
