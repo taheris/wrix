@@ -12,7 +12,10 @@ use loom_driver::identifier::{BeadId, MoleculeId, SpecLabel};
 use loom_templates::msg::{ClarifyBead, ClarifyOption, MsgContext};
 use loom_templates::plan::{PlanNewContext, PlanUpdateContext};
 use loom_templates::review::{ReviewContext, ReviewSource};
-use loom_templates::run::{PREVIOUS_FAILURE_MAX_LEN, PreviousFailure, RunContext};
+use loom_templates::run::{
+    DriverNoticeCause, PREVIOUS_FAILURE_MAX_LEN, PreviousFailure, ReviewConcernKind, RunContext,
+    VerifierFailure,
+};
 use loom_templates::todo::{TodoNewContext, TodoUpdateContext};
 
 const PINNED_CONTEXT_BODY: &str =
@@ -242,7 +245,11 @@ fn run_wraps_agent_supplied_fields_in_agent_output() -> Result<()> {
         issue_id: Some(BeadId::new("wx-3hhwq.10")?),
         title: Some("port templates".into()),
         description: Some("Port templates to Askama.".into()),
-        previous_failure: Some(PreviousFailure::new("error: cargo test failed".to_string())),
+        previous_failure: Some(PreviousFailure::from_agent_error(
+            "error: cargo test failed",
+        )),
+        review_notes: None,
+        attempt: 1,
         scratchpad_path: "/workspace/.wrapix/loom/scratch/wx-3hhwq.10/scratch.md".to_string(),
         style_rules: "docs/style-rules.md".to_string(),
     };
@@ -264,17 +271,111 @@ fn run_wraps_agent_supplied_fields_in_agent_output() -> Result<()> {
 }
 
 #[test]
-fn previous_failure_truncates_at_max_len() {
-    let huge = "x".repeat(PREVIOUS_FAILURE_MAX_LEN * 2);
-    let pf = PreviousFailure::new(huge);
-    assert!(pf.as_str().len() <= PREVIOUS_FAILURE_MAX_LEN);
+fn run_template_omits_attempt_line_when_zero() -> Result<()> {
+    let ctx = RunContext {
+        pinned_context: PINNED_CONTEXT_BODY.to_string(),
+        label: SpecLabel::new("loom-harness"),
+        spec_path: "specs/loom-harness.md".to_string(),
+        companion_paths: vec![],
+        molecule_id: None,
+        issue_id: Some(BeadId::new("wx-3hhwq.10")?),
+        title: Some("port templates".into()),
+        description: Some("Port templates to Askama.".into()),
+        previous_failure: None,
+        review_notes: None,
+        attempt: 0,
+        scratchpad_path: "/workspace/.wrapix/loom/scratch/wx-3hhwq.10/scratch.md".to_string(),
+        style_rules: "docs/style-rules.md".to_string(),
+    };
+    let out = ctx.render()?;
+    assert!(
+        !out.contains("Retry attempt"),
+        "fresh dispatch must omit retry line: {out}",
+    );
+    Ok(())
 }
 
 #[test]
-fn previous_failure_preserves_short_input() {
-    let body = "boom".to_string();
-    let pf = PreviousFailure::new(body.clone());
-    assert_eq!(pf.as_str(), body);
+fn run_template_renders_attempt_line_on_retry() -> Result<()> {
+    let ctx = RunContext {
+        pinned_context: PINNED_CONTEXT_BODY.to_string(),
+        label: SpecLabel::new("loom-harness"),
+        spec_path: "specs/loom-harness.md".to_string(),
+        companion_paths: vec![],
+        molecule_id: None,
+        issue_id: Some(BeadId::new("wx-3hhwq.10")?),
+        title: Some("port templates".into()),
+        description: Some("Port templates to Askama.".into()),
+        previous_failure: Some(PreviousFailure::DriverNotice {
+            cause: DriverNoticeCause::ZeroProgress,
+            detail: "Marker `LOOM_COMPLETE` emitted with empty diff.".into(),
+        }),
+        review_notes: None,
+        attempt: 2,
+        scratchpad_path: "/workspace/.wrapix/loom/scratch/wx-3hhwq.10/scratch.md".to_string(),
+        style_rules: "docs/style-rules.md".to_string(),
+    };
+    let out = ctx.render()?;
+    assert!(
+        out.contains("Retry attempt 2 — previous attempt failed with:"),
+        "retry line missing: {out}",
+    );
+    assert!(out.contains("Previous attempt: "), "framing missing: {out}");
+    Ok(())
+}
+
+#[test]
+fn run_template_renders_review_notes_block_when_set() -> Result<()> {
+    let ctx = RunContext {
+        pinned_context: PINNED_CONTEXT_BODY.to_string(),
+        label: SpecLabel::new("loom-harness"),
+        spec_path: "specs/loom-harness.md".to_string(),
+        companion_paths: vec![],
+        molecule_id: None,
+        issue_id: Some(BeadId::new("wx-3hhwq.10")?),
+        title: Some("port templates".into()),
+        description: Some("Port templates to Askama.".into()),
+        previous_failure: Some(PreviousFailure::VerifyFailures(vec![VerifierFailure::new(
+            "tests/a.sh",
+            1,
+            "boom\n",
+        )])),
+        review_notes: Some("[verifier-bypass] test mocks the agent backend".into()),
+        attempt: 1,
+        scratchpad_path: "/workspace/.wrapix/loom/scratch/wx-3hhwq.10/scratch.md".to_string(),
+        style_rules: "docs/style-rules.md".to_string(),
+    };
+    let out = ctx.render()?;
+    assert!(out.contains("Review notes:"), "heading missing: {out}");
+    assert!(
+        out.contains("[verifier-bypass] test mocks the agent backend"),
+        "review-notes body missing: {out}",
+    );
+    Ok(())
+}
+
+#[test]
+fn previous_failure_truncates_at_max_len() {
+    let huge = "x".repeat(PREVIOUS_FAILURE_MAX_LEN * 2);
+    let pf = PreviousFailure::BuildFailure {
+        stage: "cargo".into(),
+        output: huge,
+    };
+    assert!(pf.to_string().len() <= PREVIOUS_FAILURE_MAX_LEN);
+}
+
+#[test]
+fn previous_failure_renders_review_concern_with_token() {
+    let pf = PreviousFailure::ReviewConcern {
+        concern: ReviewConcernKind::MockDiscipline,
+        reason: "mock is the thing under test".into(),
+    };
+    let rendered = pf.to_string();
+    assert!(rendered.contains("(mock-discipline)"), "{rendered}");
+    assert!(
+        rendered.contains("mock is the thing under test"),
+        "{rendered}"
+    );
 }
 
 #[test]
@@ -500,6 +601,8 @@ fn run_renders_expected_sections_for_shared_inputs() -> Result<()> {
         title: Some("the title".into()),
         description: Some("the description".into()),
         previous_failure: None,
+        review_notes: None,
+        attempt: 0,
         scratchpad_path: "/workspace/.wrapix/loom/scratch/wx-mol.1/scratch.md".into(),
         style_rules: "docs/style-rules.md".into(),
     };
@@ -563,7 +666,9 @@ fn agent_output_markers_wrap_each_agent_supplied_field() -> Result<()> {
         issue_id: Some(BeadId::new("wx-3hhwq.10")?),
         title: Some("AGENTOUT_TITLE_TOKEN".into()),
         description: Some("AGENTOUT_DESC_TOKEN".into()),
-        previous_failure: Some(PreviousFailure::new("AGENTOUT_FAILURE_TOKEN".to_string())),
+        previous_failure: Some(PreviousFailure::from_agent_error("AGENTOUT_FAILURE_TOKEN")),
+        review_notes: None,
+        attempt: 1,
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
         style_rules: "docs/style-rules.md".to_string(),
     }
@@ -672,7 +777,11 @@ fn template_renders_are_byte_stable_across_runs() -> Result<()> {
             issue_id: Some(BeadId::new("wx-3hhwq.10")?),
             title: Some("port templates".into()),
             description: Some("Port templates to Askama.".into()),
-            previous_failure: Some(PreviousFailure::new("error: cargo test failed".to_string())),
+            previous_failure: Some(PreviousFailure::from_agent_error(
+                "error: cargo test failed",
+            )),
+            review_notes: None,
+            attempt: 1,
             scratchpad_path: "/workspace/.wrapix/loom/scratch/wx-3hhwq.10/scratch.md".to_string(),
             style_rules: "docs/style-rules.md".to_string(),
         },

@@ -3,45 +3,10 @@
 use askama::Template;
 use loom_driver::identifier::{BeadId, MoleculeId, SpecLabel};
 
-/// Maximum length of the agent-supplied previous-failure body before truncation.
-///
-/// Keeps the retry prompt below the agent's effective context limit and matches
-/// the cap declared in `specs/loom-harness.md`.
-pub const PREVIOUS_FAILURE_MAX_LEN: usize = 4000;
-
-/// Wrapper around the previous-failure body that enforces the truncation cap.
-///
-/// Held by [`RunContext::previous_failure`] so callers cannot inject an
-/// unbounded blob into the retry prompt — see the `<agent-output>` markers in
-/// `templates/run.md`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PreviousFailure(String);
-
-impl PreviousFailure {
-    /// Construct a `PreviousFailure`, truncating bodies longer than
-    /// [`PREVIOUS_FAILURE_MAX_LEN`] at the nearest char boundary.
-    pub fn new(s: impl Into<String>) -> Self {
-        let mut s: String = s.into();
-        if s.len() > PREVIOUS_FAILURE_MAX_LEN {
-            let mut cut = PREVIOUS_FAILURE_MAX_LEN;
-            while !s.is_char_boundary(cut) && cut > 0 {
-                cut -= 1;
-            }
-            s.truncate(cut);
-        }
-        Self(s)
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::fmt::Display for PreviousFailure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
+pub use crate::previous_failure::{
+    DriverNoticeCause, PREVIOUS_FAILURE_MAX_LEN, PreviousFailure, ReviewConcernKind,
+    STDERR_TAIL_PER_BLOCK, VerifierFailure,
+};
 
 /// Context for `loom run` executing a single bead.
 #[derive(Template)]
@@ -55,11 +20,17 @@ pub struct RunContext {
     pub issue_id: Option<BeadId>,
     pub title: Option<String>,
     pub description: Option<String>,
+    /// Typed retry context — variants render with their documented framing
+    /// (see `crate::previous_failure::PreviousFailure`'s `Display` impl).
     pub previous_failure: Option<PreviousFailure>,
+    /// Companion ~1000-char review-notes block appended under
+    /// `Review notes:` when `previous_failure` is `VerifyFailures` and the
+    /// reviewer also raised a concern. Independent of the `previous_failure`
+    /// budget so review reasoning never crowds out mechanical failure detail.
+    pub review_notes: Option<String>,
+    /// In-session per-bead retry counter, populated by the driver. `0` on
+    /// fresh dispatch; `run.md` omits the retry line when zero.
+    pub attempt: u32,
     pub scratchpad_path: String,
-    /// Workspace-relative path to the project's style-rules document
-    /// (`docs/style-rules.md` by default). Pinned in the run prompt so the
-    /// implementer reads the rule families relevant to the diff and writes
-    /// code that conforms.
     pub style_rules: String,
 }

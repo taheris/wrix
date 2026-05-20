@@ -40,7 +40,9 @@ pub use phase_verdict::{
     GateInputs, PhaseVerdict, RecoveryCause, ReviewConcern, ReviewFlag, decide, parse_review_flag,
 };
 pub use production::ProductionReviewController;
-pub use recovery::{RETRY_EXHAUSTED_CAUSE, RecoveryResolution, resolve_recovery};
+pub use recovery::{
+    RETRY_EXHAUSTED_CAUSE, RecoveryResolution, cause_to_previous_failure, resolve_recovery,
+};
 pub use runner::{ReviewController, ReviewOutcome, ReviewResult, review_loop};
 pub use verdict::{BeadSnapshot, ReviewVerdict, diff_new_bead_ids};
 pub use verify_fail::{

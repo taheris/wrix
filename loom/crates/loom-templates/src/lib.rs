@@ -10,6 +10,12 @@
 
 pub mod msg;
 pub mod plan;
+pub mod previous_failure;
 pub mod review;
 pub mod run;
 pub mod todo;
+
+pub use previous_failure::{
+    DriverNoticeCause, PREVIOUS_FAILURE_MAX_LEN, PreviousFailure, ReviewConcernKind,
+    STDERR_TAIL_PER_BLOCK, VerifierFailure,
+};

@@ -1578,6 +1578,8 @@ async fn dispatch_for_slot(
         title: slot.bead.title.clone(),
         description: slot.bead.description.clone(),
         previous_failure: None,
+        review_notes: None,
+        attempt: 0,
         scratchpad_path,
         style_rules: style_rules.to_string(),
     })?;

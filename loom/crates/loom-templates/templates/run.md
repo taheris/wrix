@@ -23,9 +23,16 @@ Title: <agent-output>{% match title %}{% when Some with (t) %}{{ t }}{% when Non
 {% match description %}{% when Some with (d) %}{{ d }}{% when None %}{% endmatch %}
 </agent-output>
 
-{% match previous_failure %}{% when Some with (failure) %}<agent-output>
+{% match previous_failure %}{% when Some with (failure) %}{% if attempt > 0 %}Retry attempt {{ attempt }} — previous attempt failed with:
+
+{% endif %}<agent-output>
 {{ failure }}
-</agent-output>{% when None %}{% endmatch %}
+</agent-output>{% match review_notes %}{% when Some with (notes) %}
+
+Review notes:
+<agent-output>
+{{ notes }}
+</agent-output>{% when None %}{% endmatch %}{% when None %}{% endmatch %}
 
 ## Instructions
 

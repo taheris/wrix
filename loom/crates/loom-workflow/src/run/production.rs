@@ -34,6 +34,7 @@ use super::runner::AgentLoopController;
 use super::spawn::build_spawn_config_from_manifest;
 use crate::review::{GateInputs, PhaseVerdict, RecoveryCause, decide};
 use crate::todo::ExitSignal;
+use loom_templates::run::PreviousFailure;
 
 /// Wires the [`AgentLoopController`] trait against the real `BdClient`, a
 /// caller-provided agent dispatch closure, and a child `loom review` exec for
@@ -152,6 +153,8 @@ where
             loom_driver::scratch::ScratchSession::scratchpad_path_for(&self.workspace, &key)
                 .to_string_lossy()
                 .into_owned();
+        let typed_previous_failure = previous_failure.map(PreviousFailure::from_agent_error);
+        let attempt = u32::from(is_retry);
         let initial_prompt = render_run_prompt(RunContextInputs {
             label: self.label.clone(),
             spec_path: format!("specs/{}.md", self.label.as_str()),
@@ -161,7 +164,9 @@ where
             issue_id: bead.id.clone(),
             title: bead.title.clone(),
             description: bead.description.clone(),
-            previous_failure,
+            previous_failure: typed_previous_failure,
+            review_notes: None,
+            attempt,
             scratchpad_path,
             style_rules: self.style_rules.clone(),
         })

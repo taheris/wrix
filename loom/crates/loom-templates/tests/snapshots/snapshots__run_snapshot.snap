@@ -1,5 +1,6 @@
 ---
 source: crates/loom-templates/tests/snapshots.rs
+assertion_line: 98
 expression: ctx.render().unwrap()
 ---
 # Implementation Step
@@ -89,7 +90,10 @@ Title: <agent-output>port templates</agent-output>
 Port templates to Askama.
 </agent-output>
 
+Retry attempt 1 — previous attempt failed with:
+
 <agent-output>
+Build failed at agent:
 error: cargo test failed
 </agent-output>
 

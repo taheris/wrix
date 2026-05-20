@@ -89,7 +89,11 @@ fn run_snapshot() {
         issue_id: Some(BeadId::new("wx-3hhwq.10").unwrap()),
         title: Some("port templates".into()),
         description: Some("Port templates to Askama.".into()),
-        previous_failure: Some(PreviousFailure::new("error: cargo test failed".to_string())),
+        previous_failure: Some(PreviousFailure::from_agent_error(
+            "error: cargo test failed",
+        )),
+        review_notes: None,
+        attempt: 1,
         scratchpad_path: "/workspace/.wrapix/loom/scratch/wx-3hhwq.10/scratch.md".to_string(),
         style_rules: "docs/style-rules.md".to_string(),
     };

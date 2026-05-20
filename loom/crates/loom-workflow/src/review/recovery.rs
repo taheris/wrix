@@ -20,8 +20,10 @@
 //! to spawn a fix-up bead during a Retry pass invoke
 //! [`super::fixup::spawn_fixup_bead`] explicitly.
 
-use super::phase_verdict::RecoveryCause;
-use super::verify_fail::format_previous_failure;
+use loom_templates::run::{DriverNoticeCause, PreviousFailure, ReviewConcernKind, VerifierFailure};
+
+use super::phase_verdict::{RecoveryCause, ReviewConcern};
+use super::verify_fail::{VerifyFailure, format_previous_failure};
 
 /// Render a [`RecoveryCause`] into a `previous_failure` body suitable for
 /// threading into the next agent attempt's prompt — or into the blocked
@@ -48,6 +50,74 @@ fn render_previous_failure(cause: &RecoveryCause) -> String {
         }
         RecoveryCause::ObserverAbort { reason } => {
             format!("Session aborted by observer: {reason}.")
+        }
+    }
+}
+
+/// Map a [`RecoveryCause`] to the typed
+/// [`PreviousFailure`](loom_templates::run::PreviousFailure) variant the
+/// `run.md` template renders. Per `specs/loom-harness.md` § Verdict Gate
+/// (recovery-context table):
+///
+/// - `SwallowedMarker` / `IncompleteSignaling` / `ZeroProgress` →
+///   `DriverNotice` with the corresponding `DriverNoticeCause` + detail.
+/// - `ObserverAbort` → `DriverNotice { cause: ObserverAbort, detail }`.
+/// - `VerifyFail` → `VerifyFailures(Vec<VerifierFailure>)`. The companion
+///   `review_notes` flag, when present, must be carried separately on
+///   `RunContext.review_notes` (this function does not embed it inline).
+/// - `ReviewFlag` → `ReviewConcern { concern: ReviewConcernKind, reason }`.
+pub fn cause_to_previous_failure(cause: &RecoveryCause) -> PreviousFailure {
+    match cause {
+        RecoveryCause::SwallowedMarker => PreviousFailure::DriverNotice {
+            cause: DriverNoticeCause::SwallowedMarker,
+            detail: "Last phase ended without a `LOOM_*` exit marker.".to_string(),
+        },
+        RecoveryCause::IncompleteSignaling => PreviousFailure::DriverNotice {
+            cause: DriverNoticeCause::IncompleteSignaling,
+            detail: "Marker `LOOM_COMPLETE` emitted but the bead was not bd-closed.".to_string(),
+        },
+        RecoveryCause::ZeroProgress => PreviousFailure::DriverNotice {
+            cause: DriverNoticeCause::ZeroProgress,
+            detail:
+                "Marker `LOOM_COMPLETE` emitted with empty diff. Use `LOOM_NOOP` if no work was needed."
+                    .to_string(),
+        },
+        RecoveryCause::ObserverAbort { reason } => PreviousFailure::DriverNotice {
+            cause: DriverNoticeCause::ObserverAbort,
+            detail: format!("Session aborted by observer: {reason}."),
+        },
+        RecoveryCause::VerifyFail { failures, .. } => {
+            PreviousFailure::VerifyFailures(failures.iter().map(verify_failure_to_typed).collect())
+        }
+        RecoveryCause::ReviewFlag(flag) => PreviousFailure::ReviewConcern {
+            concern: concern_to_kind(flag.concern),
+            reason: flag.detail.clone(),
+        },
+    }
+}
+
+fn verify_failure_to_typed(failure: &VerifyFailure) -> VerifierFailure {
+    VerifierFailure::new(
+        failure.script_path.display().to_string(),
+        failure.exit_code,
+        failure.stderr.clone(),
+    )
+}
+
+fn concern_to_kind(concern: ReviewConcern) -> ReviewConcernKind {
+    match concern {
+        ReviewConcern::VerifierBypass => ReviewConcernKind::VerifierBypass,
+        ReviewConcern::FabricatedResult => ReviewConcernKind::FabricatedResult,
+        ReviewConcern::WeakAssertion => ReviewConcernKind::WeakAssertion,
+        ReviewConcern::CoincidentalPass => ReviewConcernKind::CoincidentalPass,
+        ReviewConcern::Mock => ReviewConcernKind::MockDiscipline,
+        ReviewConcern::Scope => ReviewConcernKind::ScopeCreep,
+        ReviewConcern::Judge => ReviewConcernKind::JudgeFlag,
+        ReviewConcern::StyleRule => ReviewConcernKind::Other("style-rule".into()),
+        ReviewConcern::SurfaceDrift => ReviewConcernKind::Other("surface-drift".into()),
+        ReviewConcern::CrossSpecClash => ReviewConcernKind::Other("cross-spec-clash".into()),
+        ReviewConcern::SpecConventionsViolation => {
+            ReviewConcernKind::Other("spec-conventions-violation".into())
         }
     }
 }
@@ -100,6 +170,105 @@ mod tests {
     use super::*;
     use crate::review::phase_verdict::{ReviewConcern, ReviewFlag};
     use crate::review::verify_fail::VerifyFailure;
+
+    #[test]
+    fn cause_to_previous_failure_maps_driver_notices() {
+        // The three driver-procedural causes all collapse onto
+        // PreviousFailure::DriverNotice carrying the matching DriverNoticeCause
+        // and the spec table's verbatim detail string.
+        for (cause, expected_cause, expected_detail_fragment) in [
+            (
+                RecoveryCause::SwallowedMarker,
+                DriverNoticeCause::SwallowedMarker,
+                "without a `LOOM_*` exit marker",
+            ),
+            (
+                RecoveryCause::IncompleteSignaling,
+                DriverNoticeCause::IncompleteSignaling,
+                "not bd-closed",
+            ),
+            (
+                RecoveryCause::ZeroProgress,
+                DriverNoticeCause::ZeroProgress,
+                "empty diff",
+            ),
+        ] {
+            match cause_to_previous_failure(&cause) {
+                PreviousFailure::DriverNotice { cause: c, detail } => {
+                    assert_eq!(c, expected_cause, "cause mismatch for {cause:?}");
+                    assert!(
+                        detail.contains(expected_detail_fragment),
+                        "detail missing fragment for {cause:?}: {detail}",
+                    );
+                }
+                other => panic!("expected DriverNotice for {cause:?}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn cause_to_previous_failure_maps_observer_abort_with_reason_in_detail() {
+        let cause = RecoveryCause::ObserverAbort {
+            reason: "doom-loop: 3 identical tool calls".into(),
+        };
+        match cause_to_previous_failure(&cause) {
+            PreviousFailure::DriverNotice {
+                cause: DriverNoticeCause::ObserverAbort,
+                detail,
+            } => {
+                assert!(
+                    detail.contains("doom-loop: 3 identical tool calls"),
+                    "verbatim observer reason missing: {detail}",
+                );
+            }
+            other => panic!("expected DriverNotice(ObserverAbort), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cause_to_previous_failure_maps_verify_fail_into_typed_failures() {
+        let cause = RecoveryCause::VerifyFail {
+            failures: vec![
+                VerifyFailure {
+                    script_path: std::path::PathBuf::from("tests/a.sh"),
+                    exit_code: 2,
+                    stderr: "boom-a".into(),
+                },
+                VerifyFailure {
+                    script_path: std::path::PathBuf::from("tests/b.sh"),
+                    exit_code: 3,
+                    stderr: "boom-b".into(),
+                },
+            ],
+            review_notes: None,
+        };
+        match cause_to_previous_failure(&cause) {
+            PreviousFailure::VerifyFailures(failures) => {
+                assert_eq!(failures.len(), 2);
+                assert_eq!(failures[0].target, "tests/a.sh");
+                assert_eq!(failures[0].exit_code, 2);
+                assert!(failures[0].stderr_tail.contains("boom-a"));
+                assert_eq!(failures[1].target, "tests/b.sh");
+                assert_eq!(failures[1].exit_code, 3);
+            }
+            other => panic!("expected VerifyFailures, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cause_to_previous_failure_maps_review_flag_to_typed_concern() {
+        let cause = RecoveryCause::ReviewFlag(ReviewFlag {
+            concern: ReviewConcern::VerifierBypass,
+            detail: "test mocks the agent backend".into(),
+        });
+        match cause_to_previous_failure(&cause) {
+            PreviousFailure::ReviewConcern { concern, reason } => {
+                assert_eq!(concern, ReviewConcernKind::VerifierBypass);
+                assert_eq!(reason, "test mocks the agent backend");
+            }
+            other => panic!("expected ReviewConcern, got {other:?}"),
+        }
+    }
 
     fn verify_fail_cause() -> RecoveryCause {
         RecoveryCause::VerifyFail {
