@@ -113,7 +113,7 @@ loom/
       src/                    #   status cache, integrity gate. See loom-gate.md.
         annotation.rs         # [tier](target) parser
         dispatch.rs           # per-tier dispatch (subprocess, batched, LLM)
-        runner.rs             # toolchain detection + .loom/config.toml
+        runner.rs             # toolchain detection + .wrapix/loom/config.toml [runner.*]
         cache.rs              # status cache schema + reads/writes
         integrity.rs          # integrity gate (itself a [check] walk)
       tests/
@@ -995,8 +995,10 @@ the rules:
      for batched invocations
    - Toolchain detection: `Cargo.toml` at root → cargo nextest runner
      template; `pyproject.toml` → pytest; `go.mod` → go test
-   - `.loom/config.toml` loading: `[runner]` table parses into
-     per-tier templates; missing file falls back to detected defaults
+   - `.wrapix/loom/config.toml` loading: `[runner.<tier>.<name>]`
+     tables parse into per-tier runners with `match`/`command`/
+     `target`/`join`/`parse`/`cwd` fields; missing file falls back to
+     detected defaults
    - Status cache schema: per-criterion row with annotation target,
      last-run timestamp, commit hash, verdict (pass / fail / skipped),
      evidence string
@@ -1214,8 +1216,8 @@ the rules:
   command for `[check]` / `[system]`); no separate config maps names
   to commands. Toolchain detection (`Cargo.toml` at repo root →
   cargo nextest, etc.) supplies defaults for batched-tier runners;
-  `.loom/config.toml` is the override path when defaults don't fit,
-  not a per-verifier registry.
+  `.wrapix/loom/config.toml` is the override path when defaults
+  don't fit, not a per-verifier registry.
 - **`cargo fuzz` under `nix flake check`** — exposed as `nix run .#fuzz-loom`
   for on-demand or nightly runs only. proptest covers invariants in CI.
 - **Hard CI-time NFR for the verify path** — the per-tier budgets

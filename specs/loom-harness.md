@@ -587,11 +587,11 @@ review verdict — and produces one of four outcomes (`done`, `blocked`,
 | (none) | — | — | — | recovery (`swallowed-marker` OR `observer-abort`; see below) |
 | `LOOM_COMPLETE` | no | — | — | recovery (`incomplete-signaling`) |
 | `LOOM_COMPLETE` | yes | empty | — | recovery (`zero-progress`) |
-| `LOOM_COMPLETE` | yes | non-empty | verify-fail (review may also flag) | recovery (`verify-fail`; review notes appended if any) |
-| `LOOM_COMPLETE` | yes | non-empty | verify-pass + review-flag | recovery (`review-flag`) |
+| `LOOM_COMPLETE` | yes | non-empty | verify-fail (review may also raise a concern) | recovery (`verify-fail`; review notes appended if any) |
+| `LOOM_COMPLETE` | yes | non-empty | verify-pass + review-concern | recovery (`review-concern`) |
 | `LOOM_COMPLETE` | yes | non-empty | verify-pass + review-pass | `done` |
-| `LOOM_NOOP` | yes | * | verify-fail (review may also flag) | recovery (`verify-fail`; review notes appended if any) |
-| `LOOM_NOOP` | yes | * | verify-pass + review-flag | recovery (`review-flag`) |
+| `LOOM_NOOP` | yes | * | verify-fail (review may also raise a concern) | recovery (`verify-fail`; review notes appended if any) |
+| `LOOM_NOOP` | yes | * | verify-pass + review-concern | recovery (`review-concern`) |
 | `LOOM_NOOP` | yes | * | verify-pass + review-pass | `done` |
 
 In the table above, `—` means the signal isn't inspected because an
@@ -645,21 +645,22 @@ mocking harder and reach `done` on the next iteration before review
 catches it.
 
 When verify fails, the recovery cause is `verify-fail` (mechanical
-trumps semantic), and review's flag reasoning, if any, is appended to
-the `previous_failure` detail under a `Review notes:` heading.
+trumps semantic), and review's concern reasoning, if any, is appended
+to the `previous_failure` detail under a `Review notes:` heading.
 
-A flag from any review concern produces `recovery` with cause
-`review-flag`; the flag detail names the specific concern (see the
-per-diff rubric table in [loom-gate.md](loom-gate.md) for the
-full set of flag causes). Invariant-clash flags raise `loom:clarify`
-instead of entering the recovery loop.
+A `LOOM_CONCERN` marker from the review phase produces `recovery`
+with cause `review-concern`; the detail carries the concern token
+emitted in the marker payload (see the per-diff rubric table in
+[loom-gate.md](loom-gate.md) for the full set of concern tokens).
+Invariant-clash concerns raise `loom:clarify` instead of entering
+the recovery loop.
 
 **Self-reports skip recovery.** `LOOM_BLOCKED` and `LOOM_CLARIFY` are agent
 self-reports — re-running the same prompt won't recover, so the gate exits
 straight to `[blocked]` / `[clarify]` for human resolution.
 
 **Driver-detected causes flow through recovery.** Swallowed marker,
-incomplete signaling, zero-progress, verify-fail, and review-flag all
+incomplete signaling, zero-progress, verify-fail, and review-concern all
 enter the recovery loop. Each recovery iteration either retries the
 bead in place with prior failure context, or — when the failure shape
 calls for a discrete follow-up unit of work — spawns a **fix-up bead**.
@@ -702,8 +703,8 @@ capped, total truncated to `PREVIOUS_FAILURE_MAX_LEN = 4000` chars):
 | `incomplete-signaling` | `DriverNotice` | "Marker `LOOM_COMPLETE` emitted but bead `<id>` was not bd-closed." |
 | `zero-progress` | `DriverNotice` | "Marker `LOOM_COMPLETE` emitted with empty diff. Use `LOOM_NOOP` if no work was needed." |
 | `observer-abort` | `DriverNotice` | "Session aborted by `<observer name>`: `<reason>`." |
-| `verify-fail` | `VerifyFailures(Vec<VerifierFailure>)` | One `VerifierFailure { target, exit_code, stderr_tail }` per failing `[check]` / `[test]` / `[system]` verifier. All failing verifiers are included; the budget is split across them with later failures truncated first; each `stderr_tail` is capped at ~1500 chars before split. If `review` also flagged, its reasoning is set as `review_notes` (separate ~1000-char budget) rendered under a `Review notes:` heading. |
-| `review-flag` | `ReviewConcern { concern: ReviewConcernKind, reason }` | The review LLM's verbatim flag reasoning. `ReviewConcernKind` is a typed enum with `Other(String)` fallback; concrete variants per [loom-gate.md](loom-gate.md) (`SpecCoherence`, `OrphanIntegration`, `VerifierBypass`, `FabricatedResult`, `WeakAssertion`, `CoincidentalPass`, `MockDiscipline`, `VerifierTooNarrow`, `ConcurrencyUntested`, `ScopeCreep`, `ScopeShortfall`, `JudgeFlag`). |
+| `verify-fail` | `VerifyFailures(Vec<VerifierFailure>)` | One `VerifierFailure { target, exit_code, stderr_tail }` per failing `[check]` / `[test]` / `[system]` verifier. All failing verifiers are included; the budget is split across them with later failures truncated first; each `stderr_tail` is capped at ~1500 chars before split. If `review` also raised a concern, its reasoning is set as `review_notes` (separate ~1000-char budget) rendered under a `Review notes:` heading. |
+| `review-concern` | `ReviewConcern { concern: ReviewConcernKind, reason }` | The review LLM's verbatim concern reasoning emitted in the `LOOM_CONCERN` marker payload. `ReviewConcernKind` is a typed enum with `Other(String)` fallback; concrete variants per [loom-gate.md](loom-gate.md) (`SpecCoherence`, `OrphanIntegration`, `VerifierBypass`, `FabricatedResult`, `WeakAssertion`, `CoincidentalPass`, `MockDiscipline`, `VerifierTooNarrow`, `ConcurrencyUntested`, `ScopeCreep`, `ScopeShortfall`, `JudgeFlag`). The in-code recovery cause is `RecoveryCause::ReviewConcern`. |
 
 When `previous_failure.is_some() && attempt > 0`, the `run.md`
 template prepends a first-instruction reframe: *"Re-read the
@@ -725,39 +726,78 @@ its own session log if it needs prior tool-call context.
 - `loom:clarify` is applied only by the `LOOM_CLARIFY` agent marker — the
   agent has a specific question with structured options for the human.
 - The cause of a driver-applied `loom:blocked` (`swallowed-marker`,
-  `incomplete-signaling`, `zero-progress`, `verify-fail`, `review-flag`,
+  `incomplete-signaling`, `zero-progress`, `verify-fail`, `review-concern`,
   `observer-abort`, `retry-exhausted`) is preserved in the bead's notes.
   Per-cause sub-labels can be stacked on top later if filtering becomes
   important; the gate's terminal label stays `loom:blocked`.
 
 **Marker definitions.** The agent ends every phase by emitting exactly
-one marker on its own line, as the final output of the session:
+**one** marker on its own line, as the final output of the session.
+Markers are **mutually exclusive** — a session emits one and only one.
+Five markers are defined:
 
 - `LOOM_COMPLETE` — the work succeeded. The agent has implemented the
   bead's criteria and `bd close`d the bead. The diff is non-empty
   (real changes); see `LOOM_NOOP` below for the zero-diff variant.
+  Valid in every phase.
 - `LOOM_NOOP` — the work was already done in tree; the phase
   intentionally produced an empty diff. Without `LOOM_NOOP`, an empty
   diff is treated as `zero-progress` (a recovery cause). The agent
   emits `LOOM_NOOP` to distinguish "no work needed" from "work
-  attempted but produced no diff."
-- `LOOM_BLOCKED` — the agent cannot proceed and is self-reporting.
-  Write the reason on prior lines before the marker; the gate
-  applies `loom:blocked` to *this bead* and exits the verdict
-  evaluation without entering recovery. Other beads in the molecule
-  continue running; the labelled bead waits for human resolution via
-  `loom msg`.
+  attempted but produced no diff." Valid in worker phases (`run`,
+  `todo`); not valid in the review phase.
+- `LOOM_BLOCKED` — the agent cannot proceed and is self-reporting,
+  *without* a structured set of options for the human. Write the
+  reason on prior lines before the marker; the gate applies
+  `loom:blocked` to *this bead* and exits the verdict evaluation
+  without entering recovery. Other beads in the molecule continue
+  running; the labelled bead waits for human resolution via
+  `loom msg`. Valid in every phase except `msg` (msg is itself the
+  resolution channel).
 - `LOOM_CLARIFY` — the agent has a specific question with structured
   options for the human (per the [Options Format
   Contract](loom-gate.md#options-format-contract)). Write the
-  question / option block on prior lines before the marker; the gate
+  question / option block to bead state before the marker; the gate
   applies `loom:clarify` to *this bead* and exits the verdict
   evaluation without entering recovery. Other beads in the molecule
-  continue running; the labelled bead waits for `loom msg` resolution.
+  continue running; the labelled bead waits for `loom msg`
+  resolution. Valid in every phase except `msg`.
+- `LOOM_CONCERN` — the review phase found a quality issue with the
+  molecule's work; push must not fire. Carries a structured payload:
+  `LOOM_CONCERN: <concern-token> -- <one-sentence reasoning>`.
+  Concern tokens are enumerated in the rubric-checks table in
+  [loom-gate.md § Per-diff stage checks](loom-gate.md#per-diff-stage-checks)
+  (e.g. `verifier-bypass`, `fabricated-result`, `weak-assertion`,
+  `coincidental-pass`, `spec-coherence-fail`, `style-rule-violation`,
+  `mock-discipline`, `judge-flag`). The gate routes `LOOM_CONCERN` to
+  `Recovery { cause: ReviewConcern }`; the molecule re-enters the
+  loop with `previous_failure` carrying the typed concern.
+  **Review-phase-only** — emitting `LOOM_CONCERN` from any other
+  phase is a `wrong-phase-marker` error in the verdict gate.
 
-The gate distinguishes markers by parsing the final line; `exit_code`
-alone is insufficient because backend errors, swallowed-marker turns,
-and successful self-reports all exit 0.
+**Choosing a marker in the review phase.** Four markers are valid:
+
+- `LOOM_COMPLETE` — clean review, no concerns.
+- `LOOM_CONCERN: <token> -- <reason>` — review found a quality issue;
+  push refused, molecule re-enters recovery.
+- `LOOM_BLOCKED` — review *itself* cannot run (logs corrupt, can't
+  access worktree, missing prerequisite). Distinct from `LOOM_CONCERN`:
+  blocked means "I couldn't review"; concern means "I reviewed and
+  found a problem."
+- `LOOM_CLARIFY` — rare: review surfaces a spec ambiguity that
+  requires human resolution before the verdict can be rendered.
+
+The four are mutually exclusive — exactly one per session. The
+common case is `LOOM_COMPLETE` xor `LOOM_CONCERN`. Multiple
+concerns → the agent picks the strongest one for the `LOOM_CONCERN`
+marker; the rest go in the prose body (visible via `loom logs` and
+captured into `previous_failure` for recovery).
+
+The gate distinguishes markers by parsing **the final line of the
+agent's final assistant message**. Because markers are mutually
+exclusive, exactly one valid marker is expected on that line.
+`exit_code` alone is insufficient because backend errors,
+swallowed-marker turns, and successful self-reports all exit 0.
 
 **Infra failures bypass the gate.** Pre-flight failures (image load, container
 start) exit immediately as `blocked` with cause `infra-preflight` — there is
@@ -979,6 +1019,13 @@ Workflow state lives in `.wrapix/loom/state.db`. The schema is owned by
 `loom-driver` and migrated on open (embed migrations via `rusqlite`'s
 `execute_batch`).
 
+**Sources of truth.** Git (code + specs) and Beads (tasks + molecules
++ metadata) are the durable, shared sources of truth. The state DB is
+a **per-machine cache** of values derived from those sources, plus
+session-bound transient data (notes). Every state-DB value is either
+rebuildable from Git/Beads or session-bound by design; nothing in the
+state DB is load-bearing-and-unrecoverable.
+
 ```sql
 CREATE TABLE specs (
     label TEXT PRIMARY KEY
@@ -987,7 +1034,7 @@ CREATE TABLE specs (
 CREATE TABLE molecules (
     id              TEXT PRIMARY KEY,
     spec_label      TEXT NOT NULL REFERENCES specs(label),
-    base_commit     TEXT,
+    base_commit     TEXT,                       -- cache of bead metadata `loom.base_commit`
     iteration_count INTEGER NOT NULL DEFAULT 0
 );
 
@@ -1010,8 +1057,24 @@ CREATE TABLE meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
--- meta rows: current_spec, schema_version, todo_cursor:<label>
+-- meta rows: current_spec, schema_version
 ```
+
+**`molecules.base_commit` is a cache of bead metadata.** The
+authoritative diff base for a molecule lives on the epic bead in
+Beads as the `loom.base_commit` metadata field, written when `loom
+plan` creates the molecule (see *Plan creates molecule* below). The
+state-DB column is a per-machine cache populated at rebuild time and
+kept in sync when `loom todo` advances the diff base. A wiped state
+DB recovers the value from Beads.
+
+**No `todo_cursor:<label>` meta key.** Earlier revisions of this
+schema carried a per-spec cursor recording the last commit at which
+`loom todo` had run for the spec. The cursor was per-machine and not
+rebuildable, which meant a state-DB wipe (or a colleague's machine)
+silently dropped tier-1 fan-out scope and fell back to tier-4 (New).
+The molecule's `loom.base_commit` (in bead metadata) is now the only
+diff base; advancing it serves both roles the cursor did.
 
 Typed Rust API — no raw SQL outside `loom-driver`. `loom-driver` owns a single
 `StateDb` handle that wraps the SQLite connection and exposes typed
@@ -1034,7 +1097,11 @@ repopulates from three sources:
 1. Glob `specs/*.md` → one `specs` row per file (label from filename).
    ~10-20 files.
 2. `bd list --status=open --label=loom:active` → active molecules only
-   (typically 0-3). For each, `bd mol progress <id>` → one `molecules` row.
+   (typically 0-3). For each, `bd show <id> --json` reads the epic's
+   `loom.base_commit` metadata and produces one `molecules` row with
+   `base_commit` populated from that metadata. **Empty `base_commit`
+   on rebuild is a bug** — the epic's metadata is the source of truth
+   and is set unconditionally by `loom plan` at molecule creation.
 3. Each spec markdown is parsed for a canonical `## Companions` section
    (see *Companion declaration in specs* below); each listed path becomes
    one `companions` row. Specs without the section contribute zero
@@ -1077,6 +1144,45 @@ This is the only contract between spec authors and the state DB on
 companions. The `loom plan` interview enforces the format when adding
 companion paths to a spec.
 
+**Plan creates the molecule.** At session start, `loom plan -n <label>`
+and `loom plan -u <label>` ensure an active molecule exists for the
+anchor before the agent runs:
+
+- If no `loom:active` epic exists for `<label>`, the driver creates
+  one via `bd create --type=epic --title="<label>: pending decomposition"
+  --labels="spec:<label>,loom:active" --metadata "loom.base_commit=<HEAD>"
+  --silent`. The molecule starts empty (no children); children are
+  added later by `loom todo`.
+- If an active epic already exists for `<label>`, the driver **does
+  nothing** — no metadata overwrite, no relabel, idempotent reuse.
+
+The molecule's `loom.base_commit` metadata is the **single durable
+diff base** for the cycle, captured at plan start. Every subsequent
+`loom todo` reads it (via Beads) as the tier-1 diff base, regardless
+of whether the local state-DB cache survived. Tier-4 (New) is
+therefore unreachable from any `loom todo` that follows a `loom plan`
+session for the same anchor — the molecule exists, the base is set,
+tier-1 fires.
+
+`loom plan` writes the metadata at session start (not session end)
+so the state is consistent even if the session is interrupted (Ctrl-C,
+crash) before `LOOM_COMPLETE`. A planning session that commits spec
+changes but never emits a marker still leaves a usable molecule for
+the next `loom todo`.
+
+When `loom todo` successfully creates child beads, it advances
+`loom.base_commit` on the molecule's epic (via `bd update --metadata
+loom.base_commit=<HEAD>`) so subsequent `loom todo` runs against the
+same molecule diff only against new content. The state-DB
+`molecules.base_commit` cache is updated in the same transaction as
+the notes-consume step.
+
+**Cycle close.** When the push gate fires clean, the molecule is
+closed and `loom:active` is removed. The next `loom plan` for the
+same anchor creates a new molecule with a fresh `loom.base_commit =
+HEAD`. Old molecules remain in Beads as history; only one
+`loom:active` molecule per anchor at a time.
+
 **Notes lifecycle.** Notes are *transient hints* attached to a spec —
 bug-or-gotcha context, file paths to touch, design trade-offs left to
 the implementer's judgement, decisions captured during a review, etc.
@@ -1108,10 +1214,10 @@ Lifecycle for `kind = implementation`:
 
 | Event | Effect on `notes` rows where `kind = 'implementation'` |
 |-------|--------------------------------------------------------|
-| `loom plan -n <label>` | Interview ends by calling `loom note set <label> --json '[…]'`. |
-| `loom plan -u <label>` | Interview reads existing notes via `loom note list <label>`, then writes a **merged** array back via `loom note set` — agent's judgement, keeping what still applies, dropping what new decisions invalidate, adding what's fresh. Not a blind append or replace. |
-| `loom todo` (productive completion: `(LOOM_COMPLETE or LOOM_NOOP)` AND `exit_code == 0`) | Renders the notes into each new bead body, then atomically deletes them and advances `meta.todo_cursor:<label>` in a single SQLite transaction. |
-| `loom todo` (any other terminal state) | Cursor and notes both untouched; next invocation reprocesses the same commit range with the same notes. |
+| `loom plan -n <label>` | Interview ends by calling `loom note set <label> --json '[…]'`. (Plan also creates the active molecule with `loom.base_commit` as bead metadata at session start — see *Plan creates the molecule* above.) |
+| `loom plan -u <label>` | Interview reads existing notes via `loom note list <label>`, then writes a **merged** array back via `loom note set` — agent's judgement, keeping what still applies, dropping what new decisions invalidate, adding what's fresh. Not a blind append or replace. (Plan reuses an existing `loom:active` molecule for the anchor; if none exists, creates one with `loom.base_commit = HEAD` at session start — see *Plan creates the molecule* above.) |
+| `loom todo` (productive completion: `(LOOM_COMPLETE or LOOM_NOOP)` AND `exit_code == 0`) | Renders the notes into each new bead body, then atomically: deletes the notes, advances `loom.base_commit` on the molecule's epic (via `bd update --metadata`), and refreshes the `molecules.base_commit` cache. Single SQLite transaction wraps the local writes; the bead-metadata write is the durable source of truth. |
+| `loom todo` (any other terminal state) | Notes untouched; `loom.base_commit` untouched; next invocation reprocesses the same diff with the same notes. |
 | `loom init --rebuild` | All notes drop with the table — no filesystem source to reconstruct from. |
 | Spec file deleted from `specs/` | The `specs` row is orphaned but stays; cleanup is deferred to the next `--rebuild`. |
 
@@ -1120,37 +1226,54 @@ command `DELETE`s from `specs`, and rebuild drops the table outright.
 The clause exists only to keep the FK honest if a future code path ever
 takes the explicit-delete route.
 
-**Todo cursor advancement.** `meta.todo_cursor:<label>` records the
-last commit at which `loom todo` ran for a spec. The commit-scan tier
-uses the cursor to scan only commits since the last run. Advancing it
-prematurely silently demotes future invocations to no-ops on real work
-the agent never saw, so the cursor is **only** advanced when the
-session demonstrates productive completion:
+**Productive-completion gate.** `loom todo` advances
+`loom.base_commit` on the molecule's epic and deletes the implementation
+notes only when the session demonstrates productive completion:
 
 - The agent emitted a `LOOM_COMPLETE` or `LOOM_NOOP` marker on its
-  final turn (the completion shapes the verdict gate recognises).
+  final line (the completion shapes the verdict gate recognises).
 - The session's `exit_code == 0`.
 
 A zero exit alone is not enough — backend errors (529 overload,
 network drop, watchdog timeout) and swallowed-marker turns also exit
-zero, and treating those as success would skip the spec's commit
+zero, and treating those as success would skip the spec's diff
 range on the next `loom todo` run. On any other terminal state
-(`LOOM_BLOCKED`, `LOOM_CLARIFY`, missing marker, nonzero exit) the
-cursor stays put so the next invocation reprocesses the same range.
+(`LOOM_BLOCKED`, `LOOM_CLARIFY`, missing marker, nonzero exit) both
+the metadata and the notes stay put so the next invocation
+reprocesses the same range.
 
-The cursor advance and the implementation-notes delete are two writes
-against the same productive-completion gate, so they **must be a single
-SQLite transaction**. A delete without a cursor advance (or vice versa)
-is a bug. The API exposing the gate
-(`StateDb::consume_notes_and_advance_cursor(&label, new_cursor)`) does
-both writes atomically inside one `BEGIN`/`COMMIT`, so calling code
-cannot perform one without the other.
+Three writes happen against the same productive-completion gate.
+The ordering is load-bearing:
+
+1. `BEGIN` SQLite transaction.
+2. `DELETE` notes rows for `(spec_label, kind='implementation')`.
+3. `UPDATE molecules SET base_commit = <HEAD>` (local cache).
+4. `bd update <epic-id> --metadata loom.base_commit=<HEAD>` (Beads —
+   the durable source of truth).
+5. If step 4 succeeded → `COMMIT` SQLite transaction. If step 4
+   failed → `ROLLBACK`; local state stays unchanged and matches
+   pre-write Beads state.
+
+The bead-metadata write happens **before** the SQLite `COMMIT` so
+that Beads becomes the leading edge of the state — if anything
+crashes between step 4 and step 5, the local cache lags Beads on
+next open; `loom init --rebuild` recovers cleanly. The inverse
+ordering (commit SQLite first, then update Beads) would risk a
+local cache ahead of the durable source after a crash, which is
+the harder inconsistency to detect.
+
+The API exposing this gate
+(`StateDb::consume_notes_and_refresh_base_commit(&label, &molecule_id,
+new_base_commit)` plus an injected bead-update closure) wraps the
+sequence so calling code cannot perform one without the others.
 
 **Container exposure:** The state DB is inside the workspace bind-mounted
 into containers. A malicious agent could modify it directly. This is an
 accepted risk — the DB is reconstructable via `loom init --rebuild`, the
-blast radius is limited to iteration counters and `current_spec`, and the
-durable sources of truth (spec files on disk, beads in Dolt) are
+blast radius is limited to local-cache values (iteration counters,
+`current_spec`, the `molecules.base_commit` cache) all of which recover
+from Beads + Git on rebuild, and the durable sources of truth (spec
+files on disk, beads in Dolt with `loom.base_commit` metadata) are
 independently verifiable.
 
 ### Compaction Recovery
@@ -1296,6 +1419,30 @@ enabled = true
 # Skip result payloads smaller than this — short outputs ("ok",
 # single-line booleans) would dominate the map with noise.
 min_bytes = 256
+
+# Gate runners — per-tier batched dispatch with per-runner cwd. Full
+# schema (match patterns, target templates, parsers) is owned by
+# loom-gate.md. The blocks below are loom-the-repo's own values; other
+# consumers declare their own.
+[runner.test]
+command = "cargo nextest run --manifest-path loom/Cargo.toml -E '{filter}' --message-format=libtest-json"
+target  = "test({name})"
+join    = " + "
+parse   = "libtest-json"
+cwd     = "."  # nextest's --manifest-path makes this cwd-agnostic
+
+[runner.check]
+# Per-tier default cwd for [check] annotations whose specific runner
+# does not override. Loom-the-repo's Rust workspace lives at `loom/`.
+cwd = "loom"
+
+[runner.system.nix]
+match   = '^nix (build|run) \.#(\S+)$'
+command = "nix build {targets}"
+target  = ".#{capture_2}"
+join    = " "
+parse   = "nix-build-status"
+cwd     = "."  # nix commands always run from repo root
 ```
 
 Defaults are chosen so the file can be absent on a fresh install and
@@ -1303,6 +1450,15 @@ loom still works. Concerns that don't appear as config fields (output
 display, hook integration, watch behaviour, failure-pattern handling)
 are handled in Rust code rather than exposed as user-tunable
 parameters.
+
+**Config consolidation.** Earlier revisions of loom carried a second
+config file at `.loom/config.toml` (introduced in commit
+`65fe1bd3 chore: add .loom/config.toml pointing test runner at
+loom/Cargo.toml`) for the `[runner]` block alone. That file is
+**retired**: every `[runner.<tier>.<name>]` block now lives in
+`.wrapix/loom/config.toml` alongside the rest of `LoomConfig`.
+Consumers migrating from the old location move their `[runner]` block
+verbatim into `.wrapix/loom/config.toml` and delete `.loom/`.
 ## Success Criteria
 
 ### Crate structure
@@ -1576,27 +1732,38 @@ Criteria.
   [test](resolve_profile_reads_label)
 - `loom run` retries failed beads with previous error context
   [test](default_policy_is_two_retries)
-- On molecule completion `loom run` execs `loom gate verify --tree`
-      followed by `loom gate review --tree` (the `--tree` scope is
-      unconditional — the handoff does not branch on molecule size)
-  [test](exec_review_invokes_gate_verify_then_gate_review_tree)
-- `loom run`'s outer loop, after the `loom gate review --tree`
-      handoff returns and the push gate has not yet fired clean,
-      re-polls `bd ready` and continues processing any newly-ready
-      fix-up beads (i.e., fix-ups not labelled `loom:blocked` /
+- On molecule completion `loom run` invokes `loom gate verify --diff
+      <molecule.base_commit>..HEAD` followed by `loom gate review
+      --diff <molecule.base_commit>..HEAD` (scope = molecule's own
+      diff, proportional to its work — not `--tree`)
+  [test](exec_review_invokes_gate_verify_then_gate_review_with_molecule_diff)
+- `loom run`'s outer loop, after the molecule-completion handoff
+      returns and the push gate has not yet fired clean, re-polls
+      `bd ready` and continues processing any newly-ready fix-up
+      beads (i.e., fix-ups not labelled `loom:blocked` /
       `loom:clarify`). The outer loop is bounded by
       `[loop] max_iterations` (default 10) and exits cleanly on push
       success, a fully-stuck molecule, or counter exhaustion
   [test](continuous_outer_loop_processes_fix_up_bead_then_exits_on_stall)
-- `loom gate verify` implements push gate (push only on clean
-      completion)
-  [test](clean_review_pushes_and_resets_counter)
-- Push gate refuses when the `--tree`-scoped `loom gate review`
-      flags a concern (same blocking behavior as a default-scope
-      flag — no advisory tier)
-  [test](push_blocked_emits_refuse_with_id_payload)
-- `loom gate verify` auto-iterates on fix-up beads (up to max
-      iterations)
+- Push gate is a **four-condition AND**: bead labels, verify exit,
+      review exit, integrity findings. Failure on any one input
+      refuses the push. The push verdict consumes the verify and
+      review exit codes (not just bead labels)
+  [test](push_gate_evaluates_all_four_conditions)
+- Push gate refuses when `loom gate review`'s `--diff`-scoped
+      invocation emits `LOOM_CONCERN`; molecule routes to recovery
+      with cause `review-concern`
+  [test](push_blocked_on_review_concern_with_id_payload)
+- Push gate refuses on any integrity-gate finding
+      (`UnresolvedAnnotation`, `StubTestFunction`) within the
+      molecule's diff scope; applies `loom:clarify` to the
+      molecule's epic with auto-generated `## Options — …` block
+  [test](push_blocked_on_integrity_finding_applies_clarify)
+- Push gate refuses on any verify-tier dispatch error (exit code
+      2 = unknown verifier, command not found); dispatch errors
+      count as fails, not skips
+  [test](push_blocked_on_verify_dispatch_error)
+- `loom run` auto-iterates on fix-up beads (up to max iterations)
   [test](default_cap_matches_spec)
 - The surface-conformance walk hard-fails when the binary's surface
       drifts from FR1 (command set, flag set, removed surface,
@@ -1700,17 +1867,17 @@ Criteria.
       the first), with a 4000-char budget split across them
   [test](verify_fail_carries_every_failure_block_for_previous_failure)
 - Review (LLM step) runs regardless of `loom gate verify` result; on
-      verify-fail, review's flag reasoning is appended to
+      verify-fail, review's concern reasoning is appended to
       `previous_failure` under `Review notes:`
   [test](complete_with_verify_fail_routes_to_verify_fail)
 - Review's primary concern is live-path coverage: at least one
       `[check]` / `[test]` / `[system]` verifier on the bead must
       exercise the live path (same binary, same argv shape, same env).
-      All-mock verifier sets are flagged
+      All-mock verifier sets raise a `LOOM_CONCERN`
   [judge](tests/judges/loom.sh::judge_live_path_coverage)
-- Review flags mocks that stand in for the very thing the test
-      claims to test (e.g. mocking the agent backend in an
-      agent-integration test)
+- Review raises a `LOOM_CONCERN` on mocks that stand in for the very
+      thing the test claims to test (e.g. mocking the agent backend in
+      an agent-integration test)
   [judge](tests/judges/loom.sh::judge_mock_discipline)
 - Review's secondary concerns are scope appropriateness and
       `[judge]` rubric satisfaction
@@ -1723,10 +1890,10 @@ Criteria.
       uses) and the offending file/line range. The prompt pins
       `{{ style_rules }}` so the LLM has the rules in its context.
   [test](build_review_prompt_includes_style_rule_conformance_walkthrough)
-- Review flag → recovery with cause `review-flag`; the flag detail
-      names which concern triggered (live-path / mock / scope / judge /
-      style-rule)
-  [test](complete_with_review_flag_routes_to_review_flag)
+- `LOOM_CONCERN` → recovery with cause `review-concern`; the
+      detail names which concern triggered (live-path / mock / scope /
+      judge / style-rule)
+  [test](complete_with_review_concern_routes_to_review_concern)
 - Recovery iter < `[loop] max_iterations` (default 10) → spawns
       fix-up bead OR retries the bead with prior failure context
   [test](under_max_recovers_with_previous_failure)
@@ -1844,19 +2011,30 @@ two agent-loop observers.
   [test](state_increment_iteration_returns_updated_count)
 - Corrupted DB file → `loom init --rebuild` recovers
   [test](state_corruption_recovery)
-- Per-spec `loom todo` cursor round-trips through the `meta` table —
-      `set_todo_cursor` overwrites prior values (cursor advances forward)
-      and per-label namespacing keeps distinct specs disjoint
-  [test](todo_cursor_round_trips_through_meta_table)
-- `loom todo` advances the cursor only when the session emitted a
-      `LOOM_COMPLETE` or `LOOM_NOOP` marker **and** `exit_code == 0`;
-      any other terminal state (no marker, nonzero exit, `LOOM_BLOCKED`,
-      `LOOM_CLARIFY`) leaves the cursor untouched
-  [test](cursor_gate_advances_only_on_complete_or_noop_with_clean_exit)
-- The implementation-notes delete and the cursor advance share one
-      SQLite transaction, both gated on productive completion; a
-      non-productive terminal state leaves both intact
-  [test](consume_notes_and_advance_cursor_is_atomic)
+- `loom plan -n/-u` writes `loom.base_commit = HEAD` as bead metadata
+      on the newly-created (or reused) `loom:active` epic at session
+      start; idempotent re-runs do not overwrite an existing active
+      molecule's metadata
+  [test](plan_writes_base_commit_to_bead_metadata_at_session_start)
+- `loom init --rebuild` populates `molecules.base_commit` from
+      `bd show <id> --json` reading `loom.base_commit` metadata;
+      no active molecule with empty `base_commit` is produced
+  [test](rebuild_reads_base_commit_from_bead_metadata)
+- `loom todo` advances `loom.base_commit` on the molecule's epic
+      AND the local `molecules.base_commit` cache only when the
+      session emitted `LOOM_COMPLETE` or `LOOM_NOOP` **and**
+      `exit_code == 0`; any other terminal state leaves both
+      untouched
+  [test](base_commit_advances_only_on_complete_or_noop_with_clean_exit)
+- The implementation-notes delete, the local `molecules.base_commit`
+      cache refresh, and the `bd update --metadata` write happen
+      atomically under productive completion; failure of the
+      bead-metadata write aborts the SQLite transaction
+  [test](consume_notes_and_advance_base_commit_is_atomic)
+- No `meta.todo_cursor:<label>` keys exist in the state DB schema;
+      the cursor concept is replaced by the molecule's `loom.base_commit`
+      bead metadata
+  [check](cargo run -p loom-walk -- no_todo_cursor_meta_key)
 - `loom plan -n <label>` inserts a `specs` row and seeds
       implementation notes via `loom note set` from the interview
   [test](new_prompt_instructs_agent_to_call_loom_note_set)
@@ -1970,11 +2148,15 @@ two agent-loop observers.
      `loom:blocked` / `loom:clarify` beads (which are parked for
      human resolution via `loom msg`). Under `--parallel N`, a
      clarify or block on one of the N concurrent beads does not
-     cancel the others. On molecule completion, execs
-     `loom gate verify --tree` then `loom gate review --tree` then
-     fires the push gate. The outer loop iterates over molecule
-     passes (initial pass + each verdict-gate-produced fix-up pass)
-     bounded by `[loop] max_iterations`.
+     cancel the others. On molecule completion, the driver invokes
+     `loom gate verify --diff <molecule.base_commit>..HEAD` then
+     `loom gate review --diff <molecule.base_commit>..HEAD` (the
+     molecule-completion scope is the molecule's own diff — not
+     `--tree` — so push-gate cost is proportional to the molecule's
+     work), then evaluates the push gate per FR9. The outer loop
+     iterates over molecule passes (initial pass + each
+     verdict-gate-produced fix-up pass) bounded by
+     `[loop] max_iterations`.
    - `loom gate` — quality gate (annotation-dispatched verifiers +
      LLM rubric). Subcommands per [loom-gate.md](loom-gate.md)
      Commands table: bare `loom gate` reads the status cache;
@@ -1984,10 +2166,14 @@ two agent-loop observers.
      `loom gate system`) run one tier in isolation;
      `loom gate review` runs the LLM rubric;
      `loom gate judge` / `loom gate rubric` run one lane each. All
-     subcommands accept `--files`, `--spec <label>`, a positional
-     `<selector>`, and the scope flags `--bead <id>` / `--diff
-     <range>` / `--tree`. The surface-conformance walk (FR13) ships
-     as a `[check]`-tier verifier dispatched by `loom gate check`.
+     subcommands accept `--spec <label>`, a positional `<selector>`,
+     and one of the four scope flags `--bead <id>` / `--diff
+     <range>` / `--files <paths>` / `--tree` (mutually exclusive;
+     bare invocation defaults to `--diff <molecule.base_commit>..HEAD`
+     if an active molecule exists, else `--diff HEAD` — see
+     [loom-gate.md](loom-gate.md) for the scope-flag contract).
+     The surface-conformance walk (FR13) ships as a `[check]`-tier
+     verifier dispatched by `loom gate check`.
    - `loom msg` — clarify resolution
 
    **Inspection** — read-only views over state and logs:
@@ -2063,17 +2249,45 @@ two agent-loop observers.
    rubric. Driver-detected gate failures enter a bounded recovery
    loop; agent self-reports (`LOOM_BLOCKED` / `LOOM_CLARIFY`) escalate
    directly to the human via `loom msg`.
-9. **Push gate** — push fires only when every bead in the molecule
-   has reached `[done]` (no `loom:blocked` or `loom:clarify`
-   outstanding) *and* the `--tree`-scoped `loom gate verify` +
-   `loom gate review` from the molecule-completion handoff (FR1
-   above) have both passed for the final outer-loop iteration. A
-   tree-scope `loom gate review` flag refuses the push, identically
-   to a default-scope flag — there is no advisory tier. Per FR1,
-   auto-iteration on fix-up beads is owned by `loom run`'s outer
-   loop, bounded by `[loop] max_iterations`; this requirement is the
-   molecule-final condition the outer loop drives toward, not a
-   separate iteration mechanism.
+9. **Push gate — four-condition AND.** Push fires only when **all
+   four** of the following hold; failure on any one refuses push.
+   The driver computes each input explicitly — no implicit
+   short-circuit, no `&&` chaining that could mask a failure.
+
+   1. **Bead labels.** Every bead in the molecule has reached
+      `[done]` — no `loom:blocked` and no `loom:clarify` outstanding.
+   2. **Verify exit.** `loom gate verify --diff <molecule.base_commit>..HEAD`
+      reports zero failing verifiers across `[check]` / `[test]` /
+      `[system]` tiers. **Dispatch errors (exit code 2: unknown
+      verifier, command not found, etc.) count as fails, not skips.**
+   3. **Review exit.** `loom gate review --diff <molecule.base_commit>..HEAD`
+      ends with `LOOM_COMPLETE`. Any other marker refuses the push,
+      routed per the marker's semantics: `LOOM_CONCERN` → recovery
+      with cause `review-concern` (per [Verdict Gate](#verdict-gate));
+      `LOOM_BLOCKED` → `loom:blocked` on the molecule's epic, human
+      resolution via `loom msg`; `LOOM_CLARIFY` → `loom:clarify` on
+      the molecule's epic, structured-options resolution via `loom msg`.
+   4. **Integrity gate.** Zero `UnresolvedAnnotation` and zero
+      `StubTestFunction` findings across the molecule's diff scope.
+      An integrity finding refuses the push and applies `loom:clarify`
+      to the molecule's epic with the integrity gate's auto-generated
+      `## Options — …` block (Options Format Contract — see
+      [loom-gate.md](loom-gate.md)).
+
+   **Production wiring requirement.** The push-gate verdict MUST
+   consume the exit codes of the verify and review invocations and
+   the integrity gate's findings — not just bead labels. An earlier
+   revision of the driver computed the verdict from labels alone
+   and discarded the verify/review exit codes; a molecule pushed
+   despite the reviewer raising `LOOM_CONCERN: spec-conventions-violation`
+   (then named `LOOM_REVIEW_FLAG`). The four-condition AND is the
+   load-bearing contract: any path that pushes without evaluating
+   all four inputs is a bug.
+
+   Per FR1, auto-iteration on fix-up beads is owned by `loom run`'s
+   outer loop, bounded by `[loop] max_iterations`; this requirement
+   is the molecule-final condition the outer loop drives toward, not
+   a separate iteration mechanism.
 10. **Beads via shared Dolt socket** — every container has the host's
     `wrapix-beads` Dolt server bind-mounted at
     `/workspace/.wrapix/dolt.sock`; in-container `bd` writes go straight to

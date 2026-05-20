@@ -63,7 +63,7 @@ Current set:
 | `spec_header.md` | Render spec label, path, active molecule |
 | `companions_context.md` | List companion paths declared on the spec |
 | `scratchpad.md` | Pin the per-session scratchpad path |
-| `exit_signals.md` | Document the `LOOM_*` exit markers the phase accepts |
+| `exit_signals.md` | Document the `LOOM_*` exit markers the phase accepts. **Markers are mutually exclusive — exactly one per session, on the final line.** For review-phase sessions: emit `LOOM_CONCERN: <token> -- <reason>` when a concern is found (review-phase only marker per [loom-harness.md](loom-harness.md#verdict-gate)), or `LOOM_COMPLETE` when the review is clean — **never both**. The earlier `LOOM_REVIEW_FLAG` name is retired; consumers and templates use `LOOM_CONCERN`. |
 | `interview_modes.md` | Describe the "one by one" / "polish the spec" interview sub-modes |
 | `plan_stage_rubric.md` | Gate the planning interview on completeness / coherence / invariant-clash before any commit |
 | `invariant_clash.md` | Describe the invariant-clash awareness scan (included transitively via `plan_stage_rubric.md`) |
@@ -148,7 +148,7 @@ through the parse-don't-validate boundary defined in
 | `title` | `Option<String>` | `run` |
 | `description` | `Option<String>` | `run` |
 | `previous_failure` | `Option<PreviousFailure>` | `run` (retry only; typed enum — see *Typed `PreviousFailure`* below) |
-| `review_notes` | `Option<String>` | `run` (set only when `previous_failure` is `VerifyFailures` and review also flagged) |
+| `review_notes` | `Option<String>` | `run` (set only when `previous_failure` is `VerifyFailures` and review also raised a concern) |
 | `attempt` | `u32` | `run` (in-session per-bead retry counter — see *Attempt Counter* below) |
 | `beads_summary` | `Option<String>` | `review` |
 | `base_commit` | `Option<String>` | `review` |
@@ -235,7 +235,7 @@ forward-compatible when loom-gate.md grows new flag causes.
 
 - `DriverNotice` → `"Previous attempt: {detail}"`
 - `VerifyFailures` → `"Verifier failures from previous attempt:\n\n{N blocks: target + exit + stderr}"`
-- `ReviewConcern` → `"Review flagged ({concern}): {reason}"`
+- `ReviewConcern` → `"Review raised a concern ({concern}): {reason}"`
 - `BuildFailure` → `"Build failed at {stage}:\n{output}"`
 - `review_notes` (when set, after the primary block) → heading `"Review notes:"` then content
 
@@ -487,12 +487,13 @@ documents in front of the agent with zero configuration.
   [test](verify_failures_split_budget_truncates_later_first)
 - `review_notes` field is separate from `previous_failure`, has
   its own ~1000-char budget, and is populated only when
-  `previous_failure` is `VerifyFailures` and review also flagged
-  [test](review_notes_populated_only_on_verify_fail_plus_review_flag)
+  `previous_failure` is `VerifyFailures` and review also raised a
+  concern
+  [test](review_notes_populated_only_on_verify_fail_plus_review_concern)
 - Each `PreviousFailure` variant renders with its documented
   framing prefix (`DriverNotice` → "Previous attempt:",
   `VerifyFailures` → "Verifier failures from previous attempt:",
-  `ReviewConcern` → "Review flagged (...):", `BuildFailure` →
+  `ReviewConcern` → "Review raised a concern (...):", `BuildFailure` →
   "Build failed at ...:")
   [test](previous_failure_variant_framings_match_spec)
 

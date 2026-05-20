@@ -2,8 +2,9 @@
 
 The quality gate. Decides whether code is good enough to ship.
 
-The umbrella concept covering all three stages (plan / per-diff /
-standing) and one command tree (`loom gate <subcommand>`).
+The umbrella concept covering all four stages (plan / per-diff /
+push / standing safety net) and one command tree (`loom gate
+<subcommand>`).
 `loom gate verify` runs deterministic verifiers; `loom gate review`
 runs the LLM rubric. Distinct from the *Verdict Gate* execution
 layer in [loom-harness.md](loom-harness.md) — that section owns the
@@ -147,15 +148,51 @@ selecting the audit scope:
 | **`loom gate judge`** | LLM judge, one lane | Runs only criterion-attached `[judge]` verifiers — skips the rubric walk. Useful when only one lane needs re-running. |
 | **`loom gate rubric`** | LLM judge, one lane | Runs only the rubric walk over the diff — skips criterion-attached judges. |
 
-All subcommands take scope flags: `--bead <id>`, `--diff <range>`,
-or `--tree`. The batched and per-tier subcommands additionally
-accept:
+### Scope flags
 
-- `--files <path>...` — filter to verifiers whose scope intersects
-  the file set (used by pre-commit hooks for fast feedback)
-- `--spec <label>` — filter to one spec's criteria
+All gate subcommands take exactly one scope flag (mutually
+exclusive), plus optional filters. The scope flag defines the
+**input set** — the files the gate is being asked about. A verifier
+runs iff its declared inputs intersect the input set (see *Verifier
+inputs* below); otherwise it's skipped.
+
+| Flag | Input set | Typical caller |
+|---|---|---|
+| `--bead <id>` | The bead's success-criteria input files + the bead's own diff | `loom run` per-bead verdict gate |
+| `--diff <range>` | `git diff <range> --name-only` (committed + working tree in the range) | push gate (molecule.base_commit..HEAD); CI scoped to a PR; bare interactive `loom gate verify` |
+| `--files <paths>` | Explicit path list | pre-commit hooks (`loom gate verify --files $(git diff --cached --name-only)`) |
+| `--tree` | Every file in the workspace | nightly CI safety net; manual debugging; **not used by push gate** |
+
+Filters compose with any scope flag:
+
+- `--spec <label>` — narrow to one spec's criteria
 - `<selector>` (positional) — run one specific verifier by its
   annotation target
+
+**Default for bare invocation.** When no scope flag is passed, the
+gate defaults to `--diff <molecule.base_commit>..HEAD` if an active
+molecule exists (the "what would fail if I pushed now?" question);
+else `--diff HEAD` (working-tree dirty changes vs HEAD). Bare
+`loom gate audit` never silently expands to `--tree` — users who
+want the full safety-net sweep type `--tree` explicitly.
+
+| Stage | Default invocation | Scope |
+|---|---|---|
+| Pre-commit hook | `loom gate verify --files $(git diff --cached --name-only)` | `--files` |
+| `loom run` per-bead | `loom gate verify --bead <id>` | `--bead` |
+| `loom run` molecule completion (push gate) | `loom gate audit --diff <molecule.base_commit>..HEAD` | `--diff` |
+| Interactive bare `loom gate verify` | implicit `--diff <molecule.base_commit>..HEAD` if active molecule; else `--diff HEAD` | `--diff` |
+| Nightly CI / on-demand audit | `loom gate audit --tree` | `--tree` |
+
+**Why push gate isn't `--tree`.** A `--tree` sweep runs every
+verifier against every spec; on a non-trivial workspace this takes
+many minutes. The push gate doesn't need that — the molecule's
+claim is "the work *I* did is done and correct", which is
+exclusively about files the molecule changed. Verifiers whose
+inputs don't intersect the molecule's diff have results unchanged
+from when they last ran; skipping them is safe. `--tree` is the
+nightly safety net that catches verifier-input-declaration drift
+(see *Verifier inputs*), not the push gate.
 
 The composition: `loom gate audit` ≡ `loom gate verify && loom gate
 review`. For lane subsets without a named alias (e.g. "all
@@ -164,14 +201,15 @@ deterministic without `system`"), shell composition is the path:
 
 ## Stages
 
-Same gate, three points. Scope and cost-of-failure differ; the
+Same gate, four points. Scope and cost-of-failure differ; the
 underlying check is the same.
 
 | Stage | Where | Scope | Cost-of-failure | Primary catches |
 |---|---|---|---|---|
 | **Plan** | `loom plan -n` / `loom plan -u` | Spec under interview | Lowest — no code yet | Missing claims, weak claims, missing verifier surfaces, invariant clashes in proposed spec changes |
 | **Per-diff** | `loom gate verify --bead <id>` then `loom gate review --bead <id>` (or `loom gate audit --bead <id>` for both) | Spec sections the diff touches; the diff itself; tests in the diff | Medium — one bead's worth | Conformance gaps in diff, lint violations, weak verifiers, contract gaps inside one diff's reach, invariant clashes in proposed code changes |
-| **Standing** | `loom gate audit --tree` (on-demand, CI, scheduled, **and unconditionally on `loom run` molecule completion — see [loom-harness.md FR1 + FR9](loom-harness.md#functional)**) | Entire spec tree × entire implementation | Highest — deployed code, **blocks push** when triggered by molecule completion | Cross-file incoherence, contracts orphaned across PRs, omissions that never had an owner, accumulated style/test regressions, invariant clashes that slipped past prior reviews, template-vs-spec drift (Invariant 3), surface drift (commands/flags spec lists but binary lacks, or vice-versa) |
+| **Push** | `loom gate audit --diff <molecule.base_commit>..HEAD` (unconditionally on `loom run` molecule completion — see [loom-harness.md FR1 + FR9](loom-harness.md#functional)) | The molecule's own diff (files it touched) × every verifier whose declared inputs intersect that diff | Highest — **blocks push**, gate verdict consumes verify + review + integrity findings (FR9 four-condition AND) | Conformance gaps in the molecule, integrity-gate findings (unresolved annotations, stub tests) within the molecule's diff, review concerns, dispatch errors |
+| **Standing safety net** | `loom gate audit --tree` (on-demand, nightly CI, scheduled) | Entire spec tree × entire implementation | Catches **verifier-input-declaration drift** — any verifier the push-gate's `--diff` scope would have skipped on the same diff is surfaced here. Drift = a verifier-correctness bug, filed as `loom:clarify` against the verifier's owning bead | Cross-file incoherence the molecule's diff didn't surface, contracts orphaned across PRs, accumulated style/test regressions, template-vs-spec drift (Invariant 3), surface drift, verifier-input declarations that are too narrow |
 
 The plan stage has no separate command invocation — the agent runs
 the rubric inline during the planning interview, and `loom plan` is
@@ -179,9 +217,12 @@ the surface that opens that interview. The other two stages compose
 `loom gate verify` and `loom gate review` (or invoke `loom gate
 audit` for both) as listed.
 
-The standing stage is **non-optional**. File-scoped review catches
-0% of cross-file incoherence; without project-scoped review, the
-dominant cross-component failure mode is structurally invisible.
+The push stage is **non-optional and load-bearing** — it computes
+the four-condition AND of FR9 (bead labels + verify exit + review
+exit + integrity findings) and refuses push on any failure. The
+standing safety net is **scheduled, not load-bearing for any
+individual push** — its job is to catch verifier-input-declaration
+drift over time, not to gate per-molecule pushes.
 
 ### Plan-stage checks
 
@@ -214,7 +255,7 @@ until the user resolves it.
 template it's running under contradicts the spec, it raises the
 contradiction as a user question. This isn't a structured rubric item
 at the plan stage — it's expected awareness. Mechanical detection of
-template-vs-spec drift happens at the standing stage instead.)
+template-vs-spec drift happens at the standing safety net instead.)
 
 ### Per-diff stage checks
 
@@ -245,14 +286,18 @@ are:
 - `[judge]` rubric texts
 - `loom gate verify` results from the immediately-prior run
 
-Rubric checks:
+Rubric checks. The **Concern token** column lists the value the
+reviewer emits as the `LOOM_CONCERN: <token> -- <reasoning>` marker
+payload when the check fails (per [loom-harness.md § Verdict
+Gate](loom-harness.md#verdict-gate)). The `invariant-clash` token
+routes to `loom:clarify` instead of recovery — see *Verdict* below.
 
-| Check | Dimension | Lane | Flag cause |
+| Check | Dimension | Lane | Concern token |
 |---|---|---|---|
 | **Conformance trace** — for every claim in touched spec sections, find a true code path (verifier-pass *or* LLM trace through current code). Scope includes the *full* touched spec sections — command-set tables, interface specs, decision tables, prose constraints — not only the bullets a diff line maps to. | Conformance | Hard fail | `spec-coherence-fail: <claim>` |
 | **Contract closure** — for every multi-component contract the diff touches, verify completion in this diff or in bonded sibling diffs | Conformance | Hard fail | `orphan-integration: <contract>` |
 | **Style-rule conformance** — diff complies with every rule in the consumer's pinned `{{ style_rules }}` document that linters cannot enforce mechanically. The judge discovers rule families from the document itself (no fixed prefix list — adapts to whatever convention the consuming project uses) and cites the rule id + file/line for each violation. | Style | Hard fail | `style-rule-violation: <rule-id>` |
-| **Verifier honesty** — each deterministic verifier the diff adds or modifies (`[check]`, `[test]`, `[system]`) must support the claim it cites. Decomposed into four sub-checks; a verifier is honest iff it satisfies all four. (a) **verifier-bypass** — does the verifier actually exercise the live path? (b) **fabricated-result** — does the verifier's pass rely on a value the test itself synthesized? (c) **weak-assertion** — does the assertion meaningfully constrain the result, or does it tautologically pass? (d) **coincidental-pass** — does the verifier pass for the right reason, or because of an unrelated property of the system? Standing stage re-checks existing verifiers against current spec/code to detect drift. | Test quality | Hard fail | `verifier-bypass: <verifier>` / `fabricated-result: <verifier>` / `weak-assertion: <verifier>` / `coincidental-pass: <verifier>` |
+| **Verifier honesty** — each deterministic verifier the diff adds or modifies (`[check]`, `[test]`, `[system]`) must support the claim it cites. Decomposed into four sub-checks; a verifier is honest iff it satisfies all four. (a) **verifier-bypass** — does the verifier actually exercise the live path? (b) **fabricated-result** — does the verifier's pass rely on a value the test itself synthesized? (c) **weak-assertion** — does the assertion meaningfully constrain the result, or does it tautologically pass? (d) **coincidental-pass** — does the verifier pass for the right reason, or because of an unrelated property of the system? The standing safety net re-checks existing verifiers against current spec/code to detect drift. | Test quality | Hard fail | `verifier-bypass: <verifier>` / `fabricated-result: <verifier>` / `weak-assertion: <verifier>` / `coincidental-pass: <verifier>` |
 | **Mock discipline** — mocks have a discernible reason; mock isn't the thing under test | Test quality | Hard fail | `mock-discipline: <test>` |
 | **Cross-component verifier sufficiency** — multi-component contracts need a verifier that exercises the seam, not one side | Test quality | Hard fail | `verifier-too-narrow: <criterion>` |
 | **Concurrency coverage** — production code introducing or modifying `Mutex`/`RwLock`/`Arc<Mutex<T>>` etc. needs at least one concurrent-load test | Test quality | Hard fail | `concurrency-untested: <lock-site>` |
@@ -271,14 +316,17 @@ output must enumerate which rules were checked. The rule-family
 prefixes vary per consuming project; the judge must adapt to whatever
 the document uses rather than expecting a fixed set.
 
-Verdict: any hard-fail flag → recovery loop. Invariant-clash flag →
-`loom:clarify` on the flagged bead. The clarified bead is skipped by
-`bd ready` on subsequent ticks; non-dependent beads in the molecule
-continue running. Push is held until the clarify is resolved via
-`loom msg` (see push-gate semantics in
-[loom-harness.md](loom-harness.md#functional)).
+Verdict: any hard-fail concern → reviewer emits `LOOM_CONCERN:
+<token> -- <reasoning>` → verdict gate routes to recovery loop with
+cause `review-concern`. The `invariant-clash` concern is the
+exception: it routes to `loom:clarify` on the affected bead with a
+structured `## Options — …` block per the Options Format Contract.
+The clarified bead is skipped by `bd ready` on subsequent ticks;
+non-dependent beads in the molecule continue running. Push is held
+until the clarify is resolved via `loom msg` (see push-gate
+semantics in [loom-harness.md](loom-harness.md#functional)).
 
-### Standing-stage checks
+### Standing-safety-net checks
 
 `loom gate verify --tree` and `loom gate review --tree` run
 independently (or `loom gate audit --tree` for both); mechanical-only
@@ -291,7 +339,7 @@ and every implementation file.
 
 `loom gate review --tree` runs the LLM rubric against the whole spec
 set × implementation. The checks from the per-diff rubric apply,
-scoped to the tree rather than a diff. Additional standing-only
+scoped to the tree rather than a diff. Additional safety-net-only
 check:
 
 - **Template-vs-spec drift** (Invariant 3 enforcement). Reads every
@@ -299,11 +347,11 @@ check:
   consumer-provided overrides) against every spec in the consumer's
   spec tree. Flags any template instruction that contradicts a spec
   claim. Hard fail conceptually, but surfaced as a `bd` issue (no
-  "merge to refuse" at standing stage).
+  "merge to refuse" at the standing safety net).
 
-Standing-stage flags become `bd` issues bonded to the relevant spec
-section. Invariant clashes surfaced at standing stage raise
-`loom:clarify`.
+Standing-safety-net flags become `bd` issues bonded to the relevant
+spec section. Invariant clashes surfaced at the standing safety net
+raise `loom:clarify`.
 
 ### Surface-conformance audit
 
@@ -352,46 +400,146 @@ Each criterion's annotation is resolved per its tier:
 | `[system]` | `[system](command)` — shell command | Each annotation invokes its own process. System verifiers are inherently slow and self-contained; batching doesn't help. |
 | `[judge]` | `[judge](path)` — file path or criterion id whose content is the LLM rubric | The gate collects all `[judge]` targets and issues concurrent LLM calls (API-level parallelism). |
 
-### Runner discovery
+### Runners — per-language batched dispatch
 
-For batched tiers (`[test]`, `[judge]`), the gate needs to know how
-to invoke the consumer's test runner with a list of targets. Two
-mechanisms, layered:
+**Runners, not verifiers, are the dispatch unit.** A runner executes
+one batch of annotations in a single subprocess. Per-language
+batching avoids the "process per test" cost that dominates wall-clock
+on non-trivial specs.
 
-1. **Defaults via toolchain detection.** The gate detects the
-   consumer's toolchain and applies a built-in runner template:
-   - `Cargo.toml` at repo root → `cargo nextest run -E 'test({paths})'`
-   - `pyproject.toml` at repo root → `pytest -k '{paths_or}'`
-   - `go.mod` at repo root → `go test -run '{paths_alt}' ./...`
-   - Built-in template applies the appropriate `{paths}` join syntax.
-2. **Repo override via `.loom/config.toml`.** When the default
-   doesn't fit (multi-language repos, custom runners, unusual
-   workflows), the consumer declares per-tier runners explicitly:
-   ```toml
-   [runner]
-   test = "cargo nextest run -E 'test({paths})'"
-   judge = "loom-judge {paths}"
-   ```
-   `{paths}` is replaced by the joined target list at invocation time.
+The dispatcher's job:
 
-Zero config for the common case; one-file override for everything
-else.
+1. Collect all in-scope annotations (per *Verifier inputs* + the
+   scope flag's input set, intersected).
+2. Group by which runner matches them.
+3. For each runner with a batch template, build one command, spawn
+   once, parse per-target verdicts from the output.
+4. For unmatched annotations, fall back to per-annotation spawn.
+
+**Schema: `[runner.<tier>.<name>]` in `.wrapix/loom/config.toml`.**
+Each runner declares how to recognise its annotations, how to format
+each target, how to join into a batch, how to parse per-target
+results, and where to run from.
+
+| Field | Purpose |
+|---|---|
+| `match` | Regex (PCRE-compatible) over the annotation's target string. Annotations whose target matches are dispatched through this runner. Capture groups are referenced by `{capture_N}` in `target`. Optional — when omitted, this runner is the default for the tier. |
+| `command` | Command-line template. `{filter}` or `{targets}` substitute the joined-target string; `{capture_N}` substitutes a regex capture from the matched target. |
+| `target` | Per-target template applied to each matched annotation before joining. References `{name}` (full target) or `{capture_N}` (capture groups from `match`). |
+| `join` | String inserted between formatted targets to build `{filter}` / `{targets}`. |
+| `parse` | Named built-in parser (see below) that extracts per-target verdicts from the runner's stdout. |
+| `cwd` | Repo-relative directory to run the command from. Override the tier-default cwd. |
+
+**Built-in parsers** ship with loom — consumers add new runners that
+emit one of these formats, rather than authoring custom parsers:
+
+- `libtest-json` — Rust `cargo test`/`nextest` `--message-format`
+  output: one event per test with `name` + `outcome`.
+- `junitxml` — JUnit-XML reports (pytest, others). Parses
+  `<testcase>` elements for pass/fail and message.
+- `nix-build-status` — `nix build`'s per-derivation success/failure
+  output.
+- `json-lines` — one `{"target":"<name>","pass":bool,"evidence":"<msg>"}`
+  per line on stdout. The simplest format for consumers writing
+  custom batched runners: emit one line per target.
+- `exit-code` — single per-runner verdict from the process exit
+  code. Only useful for non-batched runners (one annotation per
+  invocation).
+
+**Tier-default cwd.** A `[runner.<tier>]` block (no `.<name>` suffix)
+sets the default cwd for unmatched annotations in that tier:
+
+```toml
+[runner.check]
+cwd = "loom"  # default cwd for all [check] annotations
+```
+
+Resolution order when spawning a command:
+
+1. The matched runner's `cwd` field, if set.
+2. Else the tier's default `cwd` (`[runner.<tier>] cwd = "..."`), if set.
+3. Else repo root (`.`).
+
+**Loom-the-library ships defaults** for the common toolchains —
+nextest for `[test]` if a `Cargo.toml` is detected, nix for
+`[system]` derivations, pytest if a `pyproject.toml` is detected.
+Consumers extend or override in `.wrapix/loom/config.toml`. **Loom-
+the-library has no privileged knowledge of any consumer's layout** —
+the defaults are heuristics for common shapes, not assumptions.
+
+#### Verifier inputs
+
+Every verifier declares the **files it examines** — the gate uses
+these declarations to decide whether to run the verifier given a
+scope's input set. The intersection rule is: verifier runs iff
+`declared inputs ∩ scope input set ≠ ∅`.
+
+The wire format is a list of **gitignore-style glob patterns
+relative to repo root**. Where the declarations come from depends
+on verifier kind:
+
+| Verifier kind | Source of inputs |
+|---|---|
+| `[test](name)` | Derived from test framework metadata. For Rust: walk `cargo metadata`, resolve the test's owning crate, declare the crate's source dirs. For pytest: pytest's collection output. For other frameworks: `.wrapix/loom/config.toml` `[runner.<tier>] inputs_for_test = "<command>"`. |
+| `[check]` / `[system]` referencing a **script** | A `# loom-inputs: <comma-separated globs>` header line in the script. Format is uniform across script languages — the line is found by literal-string search, not by interpreting shebangs. |
+| `[check]` / `[system]` referencing a **binary** that supports the input-query protocol | The binary returns inputs via `<binary> --print-inputs <remaining-argv>` printing JSON `{"inputs": ["glob1", "glob2"]}` to stdout. |
+| `[check]` / `[system]` — fallback | Heuristic path extraction from the command string. `grep -q 'X' path/to/file` → `path/to/file`. `cargo test -p mycrate --lib testname` → `mycrate`'s sources via cargo metadata. Conservative; misses are caught by the standing-stage safety-net sweep. |
+| `[judge](script::fn)` | A `# loom-inputs:` header line in the judge script (same convention as `[check]`/`[system]` scripts). |
+
+**Spec-section auto-include.** The spec section the annotation lives
+in is *always* part of the verifier's inputs. The gate adds it
+automatically; spec authors don't declare it. Editing the spec
+section re-runs the verifier without anyone writing a rule.
+
+**Empty inputs are a smell.** A verifier that examines nothing under
+the repo is either a misdeclaration or a no-op. Genuinely
+cross-cutting verifiers declare **broad** inputs (e.g. integrity
+gate declares "every spec file in the input set"; workspace lints
+declare every workspace `Cargo.toml`), not empty. The standing-stage
+safety net surfaces unintentional empties.
+
+**Repo-agnostic.** The `# loom-inputs:` header works in any script
+language. The `--print-inputs` convention works for any binary. The
+`[runner.<tier>] inputs_for_test` config knob handles non-default
+test frameworks. Loom-the-library has no privileged knowledge of
+any consumer's layout.
+
+Spec annotations stay **clean** — `[tier](target)` and nothing else.
+No inline metadata, no HTML-comment companions, no syntax
+extensions. Override mechanisms live next to the verifier (script
+header, binary protocol, runner config), not next to the
+annotation.
 
 ### Verifier-runner contract
 
 Every verifier — whether `[check]` command, `[system]` command, or
-the runner invoked by `[test]` / `[judge]` batching — is a
-subprocess that conforms to:
+the runner invoked by batched dispatch — is a subprocess that
+conforms to:
 
 - **Input:** env vars (`LOOM_FILES=<paths>` for `--files` runs,
   `LOOM_SPEC=<label>`, etc.) plus argv from the annotation's command
   string.
 - **Output:** a JSON line on stdout matching the typed-verdict
-  shape — `{"pass": bool, "evidence": "<message>"}`.
-- **Exit code:** mirrors `pass` (0 for true, non-zero for false).
+  shape — `{"pass": bool, "evidence": "<message>"}`. Batched runners
+  emit one such line per target via the `json-lines` parser, or use
+  one of the other built-in parsers (`libtest-json`, `junitxml`,
+  `nix-build-status`).
+- **Exit code:** `0` for pass, `1` for fail, `2` for dispatch error
+  (unknown verifier, command not found, missing prerequisite).
 
 This works for any language. The contract is process-shaped, not
 language-shaped.
+
+**Exit code 2 is a fail at the push gate.** Dispatch errors — a
+spec annotation referencing a walk that doesn't exist, a binary
+that isn't on PATH, a command with a missing flag — produce exit
+code `2`. The gate treats this as a hard fail (not a skip): the
+verifier the spec is claiming exists, and the gate cannot confirm
+it did anything. The push gate (FR9) refuses on any verifier exit
+≠ 0, including dispatch errors. This closes the failure mode where
+a spec asserts `[check](cargo run -p loom-walk -- foo_bar)` for a
+walk `foo_bar` that nobody implemented — exit 2 → push refused →
+the missing implementation surfaces immediately.
 
 **Fallback for non-conforming verifiers.** Bare `grep -q`, `cargo
 test`, `nix build`, and similar shells that don't emit a JSON
@@ -428,7 +576,7 @@ runner fails on zero-match.
 ## Integrity gate
 
 The deterministic gate that verifies the annotations themselves
-resolve. Runs as part of `loom gate check`. Two directions:
+resolve. Runs as part of `loom gate check`. Three directions:
 
 1. **Forward — every annotation's target is valid for its tier.**
    - `[check](cmd)` and `[system](cmd)`: the command's first token
@@ -440,7 +588,13 @@ resolve. Runs as part of `loom gate check`. Two directions:
      metadata.
    - `[judge](path)`: the path resolves to a file on disk.
 
-2. **Atomic acceptance — each criterion carries exactly one
+2. **Stub-pointing — annotations whose verifier body invokes the
+   `_pending_stub` sigil are flagged** (`StubTestFunction`). A stub
+   means the criterion has no real evidence; the deterministic gate
+   flags it without waiting for `loom gate review`'s
+   verifier-honesty rubric.
+
+3. **Atomic acceptance — each criterion carries exactly one
    annotation.** Two annotations on one criterion is a flag
    (ambiguous pass/fail when one passes and the other fails).
    N→1 sharing is allowed (multiple criteria pointing at the same
@@ -448,7 +602,32 @@ resolve. Runs as part of `loom gate check`. Two directions:
 
 Failure output: `<spec>:<line>: annotation [tier](<target>) — does
 not resolve` or `<spec>:<line>: criterion carries N annotations,
-expected 1`.
+expected 1` or `<spec>:<line>: annotation [tier](<target>) points
+at stub function`.
+
+**Integrity findings are terminal at the push gate** (loom-harness.md
+FR9). `UnresolvedAnnotation` and `StubTestFunction` findings within
+the molecule's diff scope refuse the push and apply `loom:clarify`
+to the molecule's epic with an auto-generated `## Options — …` block
+per the *Options Format Contract* above.
+
+**Auto-generated options for `UnresolvedAnnotation`.** The gate has
+enough information (target string, tier, spec location) to draft
+options for the human:
+
+- *Option 1* — Implement the missing verifier (walk / test / judge /
+  system check) at the expected path.
+- *Option 2* — Retarget the annotation to an existing verifier
+  (gate lists nearest matches by name).
+- *Option 3* — Remove the criterion at `<spec>:<line>` if it's
+  superseded or out of scope.
+
+**Auto-generated options for `StubTestFunction`.** Similar shape:
+
+- *Option 1* — Implement the test body, replacing the
+  `_pending_stub` sigil.
+- *Option 2* — Retarget the annotation to a non-stub verifier.
+- *Option 3* — Remove the criterion if the work isn't planned.
 
 The integrity gate is itself a `[check]`-tier verifier (its own
 spec criterion annotates back to its implementation), so every
@@ -536,7 +715,7 @@ canonical block into bead state, via one of:
   `loom:clarify` once the reviewer enumerates unblock paths).
 
 The agent must complete the `bd` write **before** emitting
-`LOOM_COMPLETE` / `LOOM_REVIEW_FLAG`. Reviewer prose that names
+`LOOM_COMPLETE` / `LOOM_CONCERN`. Reviewer prose that names
 options without a corresponding `bd` write leaves the canonical
 block in the review log file only — `loom msg`'s queue stays empty
 and the downstream user cannot fast-reply. The reviewer template
