@@ -31,6 +31,7 @@ colored_json = "5"
 crossterm = "0.28"
 displaydoc = "0.2"
 fd-lock = "4"
+futures-core = "0.3"
 imara-diff = "0.1"
 gix = { version = "0.83", default-features = false, features = [
     "status",

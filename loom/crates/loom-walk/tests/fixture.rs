@@ -983,12 +983,12 @@ fn workspace_lints_fail_member_missing_workspace_true() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn loom_events_minimal_deps_pass_exactly_three_runtime_deps() {
+fn loom_events_minimal_deps_pass_exactly_four_runtime_deps() {
     let ws = make_workspace();
     seed(
         ws.path(),
         "crates/loom-events/Cargo.toml",
-        "[package]\nname=\"loom-events\"\n\n[dependencies]\nserde = \"1\"\nserde_json = \"1\"\nthiserror = \"2\"\n",
+        "[package]\nname=\"loom-events\"\n\n[dependencies]\nfutures-core = \"0.3\"\nserde = \"1\"\nserde_json = \"1\"\nthiserror = \"2\"\n",
     );
     let out = invoke(&["loom_events_minimal_deps"], Some(ws.path()), None);
     assert_pass(&out);
@@ -1000,7 +1000,7 @@ fn loom_events_minimal_deps_fail_extra_runtime_dep() {
     seed(
         ws.path(),
         "crates/loom-events/Cargo.toml",
-        "[package]\nname=\"loom-events\"\n\n[dependencies]\nserde = \"1\"\nserde_json = \"1\"\nthiserror = \"2\"\nchrono = \"0.4\"\n",
+        "[package]\nname=\"loom-events\"\n\n[dependencies]\nfutures-core = \"0.3\"\nserde = \"1\"\nserde_json = \"1\"\nthiserror = \"2\"\nchrono = \"0.4\"\n",
     );
     let out = invoke(&["loom_events_minimal_deps"], Some(ws.path()), None);
     assert_fail(&out, "chrono");

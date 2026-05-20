@@ -46,3 +46,11 @@ pub mod event {
     pub use loom_events::event::*;
 }
 pub use loom_events::event::{AgentEvent, CompactionReason};
+
+/// The agent-driver contract — `Session`, `EventSink`, and friends —
+/// lives in `loom-events` so frontends and external `loom-llm`
+/// consumers can implement and compose sinks without pulling in the
+/// driver runtime. Re-exported here so existing call sites resolve.
+pub use loom_events::{
+    EventSink, EventSinkExt, EventStream, Session, SessionCommand, SessionMode, TeeSink,
+};
