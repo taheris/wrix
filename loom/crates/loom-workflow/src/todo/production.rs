@@ -1,10 +1,8 @@
 //! Production [`TodoController`] used by the `loom todo` binary.
 //!
 //! Resolves the per-bead [`SpawnConfig`] by running the four-tier detection
-//! against a real [`GitClient`] + [`StateDb`], rendering `todo_new.md` /
-//! `todo_update.md` from `loom-templates`, and persisting a per-spec
-//! `todo_cursor` on success so subsequent tier-1 runs diff from the latest
-//! anchor instead of the molecule's original `base_commit`.
+//! against a real [`GitClient`] + [`StateDb`] and rendering `todo_new.md` /
+//! `todo_update.md` from `loom-templates`.
 //!
 //! Agent dispatch happens in [`super::runner::run`] via a caller-provided
 //! closure, so this controller does not own the spawn surface.
@@ -20,7 +18,7 @@ use loom_driver::identifier::{ProfileName, SpecLabel};
 use loom_driver::profile_manifest::ProfileImageManifest;
 use loom_driver::scratch::resolve_scratch_key;
 use loom_driver::state::StateDb;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use super::ExitSignal;
 use super::context::{TemplateBaseFields, TodoTemplateContext, build_template_context};
@@ -77,15 +75,9 @@ impl ProductionTodoController {
             .map(|row| row.text)
             .collect::<Vec<_>>();
 
-        // Layer the per-spec todo cursor over the molecule's stored
-        // `base_commit`: the cursor moves forward after every successful
-        // todo run so subsequent tier-1 diffs only show changes since then.
-        // The molecule's original `base_commit` is kept as the seed when no
-        // cursor has been recorded yet.
-        let cursor = self.state.todo_cursor(&self.label)?;
         let molecule = active_mol.as_ref().map(|row| MoleculeState {
             id: row.id.clone(),
-            base_commit: cursor.clone().or_else(|| row.base_commit.clone()),
+            base_commit: row.base_commit.clone(),
         });
 
         let spec_path = PathBuf::from("specs").join(format!("{}.md", self.label.as_str()));
@@ -180,41 +172,20 @@ impl TodoController for ProductionTodoController {
         outcome: &SessionOutcome,
         marker: Option<&ExitSignal>,
     ) -> Result<(), TodoError> {
-        if !cursor_should_advance(outcome.exit_code, marker) {
-            info!(
-                label = %self.label,
-                exit_code = outcome.exit_code,
-                marker = ?marker,
-                "loom todo: cursor not advanced — gate requires exit_code==0 AND LOOM_COMPLETE/LOOM_NOOP",
-            );
-            return Ok(());
-        }
-        match self.git.head_commit_sha().await {
-            Ok(head) => {
-                self.state
-                    .consume_notes_and_advance_cursor(&self.label, &head)?;
-                info!(
-                    label = %self.label,
-                    head = %head,
-                    marker = ?marker,
-                    "loom todo: implementation notes consumed and cursor advanced atomically",
-                );
-            }
-            Err(e) => {
-                warn!(
-                    label = %self.label,
-                    error = %e,
-                    "loom todo: could not resolve HEAD — cursor and notes unchanged",
-                );
-            }
-        }
+        info!(
+            label = %self.label,
+            exit_code = outcome.exit_code,
+            marker = ?marker,
+            productive = productive_completion(outcome.exit_code, marker),
+            "loom todo: session outcome recorded",
+        );
         Ok(())
     }
 }
 
-/// Cursor-advance gate per `specs/loom-harness.md` lines 902-918: both
-/// `exit_code == 0` and a `LOOM_COMPLETE`/`LOOM_NOOP` marker required.
-fn cursor_should_advance(exit_code: i32, marker: Option<&ExitSignal>) -> bool {
+/// Productive-completion gate per `specs/loom-harness.md` *Productive-completion gate*:
+/// both `exit_code == 0` and a `LOOM_COMPLETE`/`LOOM_NOOP` marker required.
+fn productive_completion(exit_code: i32, marker: Option<&ExitSignal>) -> bool {
     exit_code == 0 && matches!(marker, Some(ExitSignal::Complete | ExitSignal::Noop))
 }
 
@@ -280,9 +251,10 @@ mod tests {
 
     /// Five terminal marker shapes × two exit codes — ten rows, two
     /// truths: only `LOOM_COMPLETE`/`LOOM_NOOP` paired with `exit_code==0`
-    /// advances the cursor (`specs/loom-harness.md` lines 902-918).
+    /// classifies the session as productive completion (per
+    /// `specs/loom-harness.md` *Productive-completion gate*).
     #[test]
-    fn cursor_gate_advances_only_on_complete_or_noop_with_clean_exit() {
+    fn productive_completion_only_on_complete_or_noop_with_clean_exit() {
         let blocked = ExitSignal::Blocked {
             reason: "missing schema".into(),
         };
@@ -290,15 +262,11 @@ mod tests {
             question: "additive only?".into(),
         };
         let cases: &[(Option<&ExitSignal>, i32, bool, &str)] = &[
-            // Clean exit: only Complete and Noop advance the cursor.
             (Some(&ExitSignal::Complete), 0, true, "complete + exit 0"),
             (Some(&ExitSignal::Noop), 0, true, "noop + exit 0"),
             (Some(&blocked), 0, false, "blocked + exit 0"),
             (Some(&clarify), 0, false, "clarify + exit 0"),
             (None, 0, false, "no marker + exit 0"),
-            // Nonzero exit: gate refuses regardless of marker — covers
-            // the swallowed-marker and backend-error paths called out in
-            // the spec (529 overload, network drop, watchdog timeout).
             (Some(&ExitSignal::Complete), 1, false, "complete + exit 1"),
             (Some(&ExitSignal::Noop), 1, false, "noop + exit 1"),
             (Some(&blocked), 1, false, "blocked + exit 1"),
@@ -307,9 +275,9 @@ mod tests {
         ];
         for (marker, exit_code, expected, label) in cases {
             assert_eq!(
-                cursor_should_advance(*exit_code, *marker),
+                productive_completion(*exit_code, *marker),
                 *expected,
-                "case `{label}`: expected advance={expected}",
+                "case `{label}`: expected productive={expected}",
             );
         }
     }

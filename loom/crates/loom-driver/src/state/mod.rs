@@ -12,6 +12,7 @@
 mod companions;
 mod db;
 mod error;
+mod migrate;
 mod rebuild;
 
 pub use companions::parse_companions;

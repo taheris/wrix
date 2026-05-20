@@ -61,7 +61,7 @@ fn state_db_init_creates_tables() -> Result<()> {
     )?;
     assert_eq!(
         meta,
-        vec![vec!["schema_version".to_string(), "4".to_string()]]
+        vec![vec!["schema_version".to_string(), "5".to_string()]]
     );
     Ok(())
 }
@@ -230,34 +230,6 @@ fn state_set_and_reset_iteration_round_trip() -> Result<()> {
 }
 
 #[test]
-fn todo_cursor_round_trips_through_meta_table() -> Result<()> {
-    let dir = tempfile::tempdir()?;
-    let db = StateDb::open(dir.path().join("state.db"))?;
-    let alpha = SpecLabel::new("alpha");
-    let beta = SpecLabel::new("beta");
-
-    assert_eq!(db.todo_cursor(&alpha)?, None);
-    db.set_todo_cursor(&alpha, "deadbeef")?;
-    assert_eq!(db.todo_cursor(&alpha)?, Some("deadbeef".to_string()));
-
-    db.set_todo_cursor(&alpha, "cafebabe")?;
-    assert_eq!(
-        db.todo_cursor(&alpha)?,
-        Some("cafebabe".to_string()),
-        "second set must overwrite — cursor moves forward as todo runs",
-    );
-
-    db.set_todo_cursor(&beta, "abc123")?;
-    assert_eq!(db.todo_cursor(&alpha)?, Some("cafebabe".to_string()));
-    assert_eq!(
-        db.todo_cursor(&beta)?,
-        Some("abc123".to_string()),
-        "cursors must be per-spec — namespacing by label keeps them disjoint",
-    );
-    Ok(())
-}
-
-#[test]
 fn state_db_open_migrates_v1_to_v2() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let db_path = dir.path().join("state.db");
@@ -302,7 +274,7 @@ fn state_db_open_migrates_v1_to_v2() -> Result<()> {
         &db_path,
         "SELECT value FROM meta WHERE key='schema_version'",
     )?;
-    assert_eq!(meta, vec![vec!["4".to_string()]]);
+    assert_eq!(meta, vec![vec!["5".to_string()]]);
 
     let cols = list_table(&db_path, "PRAGMA table_info(specs)")?;
     let names: Vec<&str> = cols.iter().map(|r| r[1].as_str()).collect();
@@ -338,7 +310,7 @@ fn state_db_open_is_idempotent_after_migration() -> Result<()> {
         &db_path,
         "SELECT value FROM meta WHERE key='schema_version'",
     )?;
-    assert_eq!(meta, vec![vec!["4".to_string()]]);
+    assert_eq!(meta, vec![vec!["5".to_string()]]);
     Ok(())
 }
 
@@ -358,8 +330,6 @@ fn routine_commands_never_delete_spec_row() -> Result<()> {
     let mol_id = MoleculeId::new("wx-alpha");
 
     db.set_current_spec(&label)?;
-    db.set_todo_cursor(&label, "deadbeef")?;
-    db.set_todo_cursor(&label, "cafebabe")?;
     db.set_iteration(&mol_id, 2)?;
     db.increment_iteration(&mol_id)?;
     db.reset_iteration(&mol_id)?;
@@ -566,35 +536,70 @@ fn notes_cascade_on_spec_delete() -> Result<()> {
 }
 
 #[test]
-fn consume_notes_and_advance_cursor_is_atomic() -> Result<()> {
-    // Pins the single-pointed gate API `StateDb::consume_notes_and_advance_cursor`:
-    // a successful call deletes implementation notes AND advances the cursor;
-    // other-kind notes survive (the spec consumes only `kind=implementation`).
+fn open_wipes_legacy_todo_cursor_meta_keys() -> Result<()> {
+    // v4→v5 migration: any `todo_cursor:<label>` row surviving from an
+    // older binary is deleted on open. The cursor concept is replaced by
+    // the molecule's `loom.base_commit` bead metadata; legacy rows are
+    // dead state that must not bleed into v5 callers.
     let dir = tempfile::tempdir()?;
-    let db = StateDb::open(dir.path().join("state.db"))?;
-    let label = SpecLabel::new("alpha");
-    db.notes_add(&label, "implementation", "impl 1", 100)?;
-    db.notes_add(&label, "implementation", "impl 2", 200)?;
-    db.notes_add(&label, "design", "design 1", 300)?;
-    db.set_todo_cursor(&label, "old-cursor")?;
+    let db_path = dir.path().join("state.db");
 
-    db.consume_notes_and_advance_cursor(&label, "new-cursor")?;
+    {
+        let conn = rusqlite::Connection::open(&db_path)?;
+        conn.execute_batch(
+            "CREATE TABLE specs (label TEXT PRIMARY KEY);
+            CREATE TABLE molecules (
+                id              TEXT PRIMARY KEY,
+                spec_label      TEXT NOT NULL REFERENCES specs(label),
+                base_commit     TEXT,
+                iteration_count INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE companions (
+                spec_label     TEXT NOT NULL REFERENCES specs(label),
+                companion_path TEXT NOT NULL,
+                PRIMARY KEY (spec_label, companion_path)
+            );
+            CREATE TABLE notes (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                spec_label TEXT NOT NULL REFERENCES specs(label) ON DELETE CASCADE,
+                kind       TEXT NOT NULL,
+                text       TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            );
+            CREATE INDEX idx_notes_spec_kind ON notes(spec_label, kind);
+            CREATE TABLE meta (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            INSERT INTO meta(key, value) VALUES ('schema_version', '4');
+            INSERT INTO meta(key, value) VALUES ('current_spec', 'alpha');
+            INSERT INTO meta(key, value) VALUES ('todo_cursor:alpha', 'deadbeef');
+            INSERT INTO meta(key, value) VALUES ('todo_cursor:beta', 'cafebabe');",
+        )?;
+    }
 
-    let impl_rows = db.notes_list(Some(&label), Some("implementation"))?;
+    let _db = StateDb::open(&db_path)?;
+
+    let version = list_table(
+        &db_path,
+        "SELECT value FROM meta WHERE key='schema_version'",
+    )?;
+    assert_eq!(version, vec![vec!["5".to_string()]]);
+
+    let legacy = list_table(
+        &db_path,
+        "SELECT key FROM meta WHERE key LIKE 'todo_cursor:%' ORDER BY key",
+    )?;
     assert!(
-        impl_rows.is_empty(),
-        "implementation notes must be deleted on productive completion",
+        legacy.is_empty(),
+        "v4→v5 migration must wipe legacy todo_cursor:<label> rows: {legacy:?}",
     );
-    let design_rows = db.notes_list(Some(&label), Some("design"))?;
+
+    let current = list_table(&db_path, "SELECT value FROM meta WHERE key='current_spec'")?;
     assert_eq!(
-        design_rows.len(),
-        1,
-        "non-implementation kinds must not be touched by todo's consume gate",
-    );
-    assert_eq!(
-        db.todo_cursor(&label)?,
-        Some("new-cursor".to_string()),
-        "cursor must advance to the new value atomically with the notes delete",
+        current,
+        vec![vec!["alpha".to_string()]],
+        "migration must leave unrelated meta rows intact",
     );
     Ok(())
 }

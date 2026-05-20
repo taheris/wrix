@@ -6,8 +6,9 @@ use rusqlite::{Connection, OptionalExtension, params};
 use crate::identifier::{MoleculeId, SpecLabel};
 
 use super::error::StateError;
+use super::migrate::MIGRATE_V4_TO_V5;
 
-const SCHEMA_VERSION: &str = "4";
+const SCHEMA_VERSION: &str = "5";
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS specs (
@@ -38,6 +39,7 @@ CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+-- meta rows: current_spec, schema_version
 ";
 
 const MIGRATE_V1_TO_V2: &str = "ALTER TABLE specs DROP COLUMN spec_path;";
@@ -152,35 +154,6 @@ impl StateDb {
         )
         .optional()?
         .transpose()
-    }
-
-    /// Read the per-spec todo cursor — the commit at which `loom todo` last
-    /// ran successfully for `label`. Used by tier-1 detection as the anchor
-    /// base when the molecule has no `base_commit` of its own. Returns `None`
-    /// if no cursor has been recorded yet.
-    pub fn todo_cursor(&self, label: &SpecLabel) -> Result<Option<String>, StateError> {
-        let conn = self.lock_conn()?;
-        let key = todo_cursor_key(label);
-        let value: Option<String> = conn
-            .query_row("SELECT value FROM meta WHERE key = ?1", params![key], |r| {
-                r.get::<_, String>(0)
-            })
-            .optional()?;
-        Ok(value)
-    }
-
-    /// Persist the per-spec todo cursor to `commit`. Called by `loom todo`'s
-    /// `record_outcome` when the agent exits cleanly so the next tier-1
-    /// detection diffs from a fresh anchor.
-    pub fn set_todo_cursor(&self, label: &SpecLabel, commit: &str) -> Result<(), StateError> {
-        let conn = self.lock_conn()?;
-        let key = todo_cursor_key(label);
-        conn.execute(
-            "INSERT INTO meta(key, value) VALUES (?1, ?2)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![key, commit],
-        )?;
-        Ok(())
     }
 
     /// Read the `current_spec` meta row.
@@ -354,37 +327,6 @@ impl StateDb {
         Ok(rows)
     }
 
-    /// Atomically delete every `kind = 'implementation'` note for `label`
-    /// and write `new_cursor` into `meta.todo_cursor:<label>`. Both writes
-    /// share a single SQLite transaction so calling code cannot perform one
-    /// without the other — the productive-completion gate in `loom todo`
-    /// is single-pointed through this API.
-    ///
-    /// Spec: `loom-harness.md` *Todo cursor advancement* — "The cursor
-    /// advance and the implementation-notes delete are two writes against
-    /// the same productive-completion gate, so they must be a single
-    /// SQLite transaction."
-    pub fn consume_notes_and_advance_cursor(
-        &self,
-        label: &SpecLabel,
-        new_cursor: &str,
-    ) -> Result<(), StateError> {
-        let mut conn = self.conn.lock().map_err(|_| StateError::Poisoned)?;
-        let tx = conn.transaction()?;
-        tx.execute(
-            "DELETE FROM notes WHERE spec_label = ?1 AND kind = 'implementation'",
-            params![label.as_str()],
-        )?;
-        let key = todo_cursor_key(label);
-        tx.execute(
-            "INSERT INTO meta(key, value) VALUES (?1, ?2)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![key, new_cursor],
-        )?;
-        tx.commit()?;
-        Ok(())
-    }
-
     /// Remove a single note by its row id.
     pub fn notes_rm(&self, id: i64) -> Result<(), StateError> {
         let conn = self.conn.lock().map_err(|_| StateError::Poisoned)?;
@@ -478,10 +420,6 @@ impl StateDb {
     }
 }
 
-fn todo_cursor_key(label: &SpecLabel) -> String {
-    format!("todo_cursor:{}", label.as_str())
-}
-
 pub(super) fn drop_and_recreate(conn: &Connection) -> Result<(), StateError> {
     conn.execute_batch(DROP_AND_RECREATE)?;
     conn.execute_batch(SCHEMA)?;
@@ -497,18 +435,25 @@ fn apply_migrations(conn: &Connection) -> Result<(), StateError> {
             conn.execute_batch(MIGRATE_V1_TO_V2)?;
             conn.execute_batch(MIGRATE_V2_TO_V3)?;
             conn.execute_batch(MIGRATE_V3_TO_V4)?;
+            conn.execute_batch(MIGRATE_V4_TO_V5)?;
             write_schema_version(conn, SCHEMA_VERSION)?;
         }
         Some("2") => {
             conn.execute_batch(MIGRATE_V2_TO_V3)?;
             conn.execute_batch(MIGRATE_V3_TO_V4)?;
+            conn.execute_batch(MIGRATE_V4_TO_V5)?;
             write_schema_version(conn, SCHEMA_VERSION)?;
         }
         Some("3") => {
             conn.execute_batch(MIGRATE_V3_TO_V4)?;
+            conn.execute_batch(MIGRATE_V4_TO_V5)?;
             write_schema_version(conn, SCHEMA_VERSION)?;
         }
-        Some("4") => {}
+        Some("4") => {
+            conn.execute_batch(MIGRATE_V4_TO_V5)?;
+            write_schema_version(conn, SCHEMA_VERSION)?;
+        }
+        Some("5") => {}
         Some(other) => {
             return Err(StateError::UnknownSchemaVersion {
                 version: other.to_string(),

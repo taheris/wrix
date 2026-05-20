@@ -5,9 +5,9 @@
 //! `src/todo/production.rs::tests`.
 //!
 //! These tests spawn the system `git` binary to seed and inspect a real
-//! workspace (spec NFR #8): tier-1 fan-out and the per-spec cursor write
-//! resolve through `LiveGitDiffSource` over `loom_driver::git::GitClient`,
-//! which only has anything to observe against real refs/index/diff state.
+//! workspace (spec NFR #8): tier-1 fan-out resolves through
+//! `LiveGitDiffSource` over `loom_driver::git::GitClient`, which only has
+//! anything to observe against real refs/index/diff state.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -15,12 +15,11 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 
-use loom_driver::agent::SessionOutcome;
 use loom_driver::git::GitClient;
 use loom_driver::identifier::{MoleculeId, ProfileName, SpecLabel};
 use loom_driver::profile_manifest::ProfileImageManifest;
 use loom_driver::state::{ActiveMolecule, StateDb};
-use loom_workflow::todo::{ExitSignal, ProductionTodoController, TodoController, TodoError};
+use loom_workflow::todo::{ProductionTodoController, TodoController, TodoError};
 
 fn run_git(workspace: &Path, args: &[&str]) {
     let status = Command::new("git")
@@ -352,154 +351,5 @@ async fn build_spawn_config_omits_notes_section_when_notes_empty() {
             .contains("## Implementation Notes"),
         "empty notes must omit the Implementation Notes section: {}",
         session.config.initial_prompt,
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn record_outcome_advances_cursor_only_on_complete_marker_and_clean_exit() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace = dir.path().to_path_buf();
-    let state = seeded_state(&workspace, "alpha", "wx-mol", None);
-    let manifest = stub_manifest(&workspace);
-    let git = init_repo(&workspace);
-    let head_before = capture_head(&workspace);
-    let label = SpecLabel::new("alpha");
-    let mut ctrl = ProductionTodoController::new(
-        label.clone(),
-        workspace.clone(),
-        Arc::clone(&state),
-        manifest,
-        ProfileName::new("base"),
-        git,
-        None,
-    );
-
-    ctrl.record_outcome(
-        &SessionOutcome {
-            exit_code: 1,
-            cost_usd: None,
-        },
-        Some(&ExitSignal::Complete),
-    )
-    .await
-    .expect("record outcome (failure)");
-    assert_eq!(
-        state.todo_cursor(&label).expect("cursor lookup"),
-        None,
-        "nonzero exit must NOT advance the cursor",
-    );
-
-    ctrl.record_outcome(
-        &SessionOutcome {
-            exit_code: 0,
-            cost_usd: Some(0.42),
-        },
-        None,
-    )
-    .await
-    .expect("record outcome (missing marker)");
-    assert_eq!(
-        state.todo_cursor(&label).expect("cursor lookup"),
-        None,
-        "missing marker must NOT advance the cursor even on exit 0",
-    );
-
-    ctrl.record_outcome(
-        &SessionOutcome {
-            exit_code: 0,
-            cost_usd: Some(0.42),
-        },
-        Some(&ExitSignal::Complete),
-    )
-    .await
-    .expect("record outcome (success)");
-    assert_eq!(
-        state.todo_cursor(&label).expect("cursor lookup"),
-        Some(head_before),
-        "complete marker + clean exit must record HEAD as the per-spec cursor",
-    );
-}
-
-/// Productive completion deletes implementation notes AND advances the
-/// cursor atomically; a non-productive terminal state leaves both intact.
-/// Pinned to the gate API `StateDb::consume_notes_and_advance_cursor`.
-#[tokio::test(flavor = "multi_thread")]
-async fn record_outcome_consumes_notes_and_advances_cursor_atomically() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace = dir.path().to_path_buf();
-    let state = seeded_state(&workspace, "alpha", "wx-mol", None);
-    let manifest = stub_manifest(&workspace);
-    let git = init_repo(&workspace);
-    let head_before = capture_head(&workspace);
-    let label = SpecLabel::new("alpha");
-    state
-        .notes_add(&label, "implementation", "impl 1", 100)
-        .unwrap();
-    state
-        .notes_add(&label, "implementation", "impl 2", 200)
-        .unwrap();
-    state.notes_add(&label, "design", "design 1", 300).unwrap();
-
-    let mut ctrl = ProductionTodoController::new(
-        label.clone(),
-        workspace.clone(),
-        Arc::clone(&state),
-        manifest,
-        ProfileName::new("base"),
-        git,
-        None,
-    );
-
-    // Non-productive: blocked marker with clean exit must NOT touch either
-    // the notes or the cursor.
-    ctrl.record_outcome(
-        &SessionOutcome {
-            exit_code: 0,
-            cost_usd: None,
-        },
-        Some(&ExitSignal::Blocked {
-            reason: "ask human".into(),
-        }),
-    )
-    .await
-    .expect("record outcome (blocked)");
-    assert_eq!(state.todo_cursor(&label).unwrap(), None);
-    assert_eq!(
-        state
-            .notes_list(Some(&label), Some("implementation"))
-            .unwrap()
-            .len(),
-        2,
-        "blocked marker must leave implementation notes intact",
-    );
-
-    // Productive: complete marker + exit 0 deletes implementation notes and
-    // advances the cursor in a single atomic step.
-    ctrl.record_outcome(
-        &SessionOutcome {
-            exit_code: 0,
-            cost_usd: Some(0.42),
-        },
-        Some(&ExitSignal::Complete),
-    )
-    .await
-    .expect("record outcome (complete)");
-    assert_eq!(
-        state.todo_cursor(&label).unwrap(),
-        Some(head_before),
-        "productive completion must advance the cursor to HEAD",
-    );
-    assert!(
-        state
-            .notes_list(Some(&label), Some("implementation"))
-            .unwrap()
-            .is_empty(),
-        "productive completion must delete implementation notes",
-    );
-    let design = state.notes_list(Some(&label), Some("design")).unwrap();
-    assert_eq!(
-        design.len(),
-        1,
-        "non-implementation kinds are not consumed by todo's gate",
     );
 }
