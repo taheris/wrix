@@ -42,7 +42,9 @@ use tracing::{info, warn};
 
 use super::context::{beads_summary, load_review_sources};
 use super::error::ReviewError;
-use super::phase_verdict::{GateInputs, PhaseVerdict, RecoveryCause, decide};
+use super::phase_verdict::{
+    GateInputs, PhaseVerdict, RecoveryCause, ReviewConcern, ReviewFlag, decide,
+};
 use super::runner::{ReviewController, ReviewOutcome};
 use crate::todo::ExitSignal;
 
@@ -204,21 +206,33 @@ where
 /// Map the reviewer agent's `(marker, exit_code)` into a [`ReviewOutcome`]
 /// (FR12 — single source of truth). Marker → outcome routing goes through
 /// the canonical [`decide`] gate function; the review phase isn't bead-
-/// scoped, so `bd_closed` / `diff_empty` / verify / review observables are
+/// scoped, so `bd_closed` / `diff_empty` / verify-failure observables are
 /// neutral defaults that reduce the gate to marker-only routing. The
-/// defensive `COMPLETE`/`NOOP` + non-zero exit guard predates `decide`
-/// because the gate's decision table does not consider exit code.
+/// `LOOM_CONCERN` marker's structured payload is normalised here into
+/// [`GateInputs::review_flag`] so downstream surfaces consume the typed
+/// concern rather than re-parsing the token. The defensive
+/// `COMPLETE`/`NOOP` + non-zero exit guard predates `decide` because the
+/// gate's decision table does not consider exit code.
 fn classify_review_phase(marker: Option<&ExitSignal>, exit_code: i32) -> ReviewOutcome {
     if matches!(marker, Some(ExitSignal::Complete | ExitSignal::Noop)) && exit_code != 0 {
         return ReviewOutcome::Incomplete {
             detail: format!("agent emitted COMPLETE/NOOP but exited code {exit_code}"),
         };
     }
+    let review_flag = match marker {
+        Some(ExitSignal::Concern { token, reason }) => {
+            ReviewConcern::parse(token).map(|concern| ReviewFlag {
+                concern,
+                detail: reason.clone(),
+            })
+        }
+        _ => None,
+    };
     let inputs = GateInputs {
         bd_closed: true,
         diff_empty: false,
         verify_failures: vec![],
-        review_flag: None,
+        review_flag,
     };
     match decide(marker, inputs) {
         PhaseVerdict::Done => ReviewOutcome::Complete,
@@ -227,6 +241,11 @@ fn classify_review_phase(marker: Option<&ExitSignal>, exit_code: i32) -> ReviewO
         },
         PhaseVerdict::Clarify { question } => ReviewOutcome::Incomplete {
             detail: format!("LOOM_CLARIFY: {question}"),
+        },
+        PhaseVerdict::Recovery {
+            cause: RecoveryCause::ReviewConcern(flag),
+        } => ReviewOutcome::Incomplete {
+            detail: format!("LOOM_CONCERN: {} -- {}", flag.concern.as_str(), flag.detail),
         },
         PhaseVerdict::Recovery {
             cause: RecoveryCause::SwallowedMarker,
@@ -536,6 +555,55 @@ mod tests {
             ReviewOutcome::Incomplete { detail } => assert!(
                 detail.contains('7'),
                 "exit code missing from detail: {detail}",
+            ),
+            other => panic!("expected Incomplete, got {other:?}"),
+        }
+    }
+
+    /// `LOOM_CONCERN` with a recognised token must surface as `Incomplete`
+    /// carrying the typed concern token + the agent's reasoning. The
+    /// classifier owns the token→`ReviewConcern` parse and threads a
+    /// populated `GateInputs.review_flag` into `decide()` so downstream
+    /// surfaces consume typed data rather than re-parsing prose.
+    #[test]
+    fn classify_review_phase_routes_concern_marker_into_review_concern_recovery() {
+        let marker = ExitSignal::Concern {
+            token: "verifier-bypass".into(),
+            reason: "test mocks the agent backend".into(),
+        };
+        match classify_review_phase(Some(&marker), 0) {
+            ReviewOutcome::Incomplete { detail } => {
+                assert!(
+                    detail.contains("LOOM_CONCERN"),
+                    "concern marker missing from detail: {detail}",
+                );
+                assert!(
+                    detail.contains("verifier-bypass"),
+                    "concern token missing from detail: {detail}",
+                );
+                assert!(
+                    detail.contains("test mocks the agent backend"),
+                    "concern reason missing from detail: {detail}",
+                );
+            }
+            other => panic!("expected Incomplete, got {other:?}"),
+        }
+    }
+
+    /// `LOOM_CONCERN` with an unknown token collapses to `swallowed-marker`
+    /// — the gate refuses to fabricate a concern variant the rubric did
+    /// not define. The detail still surfaces as `Incomplete` so the human
+    /// gets the swallowed-marker hint rather than a silent pass.
+    #[test]
+    fn classify_review_phase_unknown_concern_token_collapses_to_swallowed_marker() {
+        let marker = ExitSignal::Concern {
+            token: "fictional-concern".into(),
+            reason: "doesn't map to any enum".into(),
+        };
+        match classify_review_phase(Some(&marker), 0) {
+            ReviewOutcome::Incomplete { detail } => assert!(
+                detail.contains("swallowed marker"),
+                "swallowed-marker hint missing: {detail}",
             ),
             other => panic!("expected Incomplete, got {other:?}"),
         }

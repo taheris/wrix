@@ -188,12 +188,12 @@ pub fn decide(marker: Option<&ExitSignal>, inputs: GateInputs) -> PhaseVerdict {
 }
 
 /// `LOOM_CONCERN` is review-phase-only per `specs/loom-harness.md` § Marker
-/// definitions. Until the per-phase classifiers normalise it into
-/// [`GateInputs::review_flag`] (see issue wx-e6c8r.9), the gate threads the
-/// payload through directly: a recognised token routes to
-/// [`RecoveryCause::ReviewConcern`] with the structured detail, an unknown
-/// token collapses to `SwallowedMarker` so downstream surfaces don't print
-/// a bogus concern.
+/// definitions. The review-phase classifier normalises the marker payload
+/// into [`GateInputs::review_flag`] before invoking [`decide`]; this branch
+/// is the fallback for callers that haven't done that normalisation yet —
+/// a recognised token routes to [`RecoveryCause::ReviewConcern`] with the
+/// structured detail, an unknown token collapses to `SwallowedMarker` so
+/// downstream surfaces don't print a bogus concern.
 fn decide_concern(token: &str, reason: &str, inputs: GateInputs) -> PhaseVerdict {
     if let Some(flag) = inputs.review_flag {
         return PhaseVerdict::Recovery {
