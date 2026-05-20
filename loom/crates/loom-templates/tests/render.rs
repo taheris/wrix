@@ -368,8 +368,8 @@ fn review_renders_style_rule_conformance_walkthrough() -> Result<()> {
         "citation contract (file/line range) not described: {out}",
     );
     assert!(
-        out.contains("LOOM_REVIEW_FLAG: style-rule"),
-        "style-rule flag marker not documented: {out}",
+        out.contains("LOOM_CONCERN: style-rule"),
+        "style-rule concern marker not documented: {out}",
     );
     assert!(
         out.contains("`style-rule`"),

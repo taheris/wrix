@@ -196,11 +196,14 @@ Coincidental-pass shapes to flag:
   every call to a default branch — change the dispatcher and the test
   no longer means what it claims to mean.
 
-A test that satisfies all four sub-checks is honest. Emit one
-`LOOM_REVIEW_FLAG` per failing sub-check with the matching concern
-token (`verifier-bypass`, `fabricated-result`, `weak-assertion`,
-`coincidental-pass`); cite the offending test path and the spec claim
-it purports to verify.
+A test that satisfies all four sub-checks is honest. If a sub-check
+fails, name the matching concern token (`verifier-bypass`,
+`fabricated-result`, `weak-assertion`, `coincidental-pass`) in the prose
+body and cite the offending test path and the spec claim it purports to
+verify. When you finalize the phase, emit a single `LOOM_CONCERN: <token>
+-- <reason>` line on the final line of the response for the strongest
+sub-check failure; per the Flag Emission Schema, only one structured
+concern reaches the verdict gate.
 
 ## Mock Discipline
 
@@ -306,9 +309,10 @@ against each edited spec section:
   a missing or stubbed verifier → already a `loom check criteria` flag;
   surface it here too if the edit introduces it.
 
-Each violation emits `LOOM_REVIEW_FLAG: spec-conventions-violation --
-<summary>`. The visible body cites the convention section by name and
-the offending spec file/line range.
+When you finalize the phase, emit `LOOM_CONCERN: spec-conventions-violation
+-- <summary>` on the final line for the strongest violation. The visible
+body cites the convention section by name and the offending spec file/line
+range for every violation found.
 
 ## Style-Rule Conformance
 
@@ -339,11 +343,11 @@ One violation per bullet; never aggregate multiple rules into one
 citation. A finding without a rule id is not actionable; a finding
 without a file/line range is not auditable.
 
-**Flag emission.** Any style-rule violation is a hard fail. Emit a
-single `LOOM_REVIEW_FLAG: style-rule -- <summary>` line per the Flag
-Emission Schema below. The summary should name the most load-bearing
-violation by rule id; the per-violation citations above carry the full
-list in the visible body of your response.
+**Flag emission.** Any style-rule violation is a hard fail. The final
+line of the response must be a single `LOOM_CONCERN: style-rule --
+<summary>` per the Flag Emission Schema below. The summary should name
+the most load-bearing violation by rule id; the per-violation citations
+above carry the full list in the visible body of your response.
 
 ## Invariant-Clash Detection
 
@@ -420,7 +424,7 @@ options live in the review log file — invisible to `loom msg`'s queue.
 
 **Persistence (REQUIRED — the gate does NOT parse your prose).** You are the
 mechanism that puts options into bead state. The verdict gate routes on
-mechanical signals (`LOOM_REVIEW_FLAG`, `bd-closed`, diff emptiness); it
+mechanical signals (`LOOM_CONCERN`, `bd-closed`, diff emptiness); it
 does not scrape your reasoning for `### Option N` blocks. Two flows:
 
 - **Options apply to a NEW clarify bead** (e.g. a freshly-detected invariant
@@ -449,7 +453,7 @@ does not scrape your reasoning for `### Option N` blocks. Two flows:
   # If the bead was previously `loom:blocked`, also: --remove-label=loom:blocked
   ```
 
-Do this **before** you emit `LOOM_COMPLETE` / `LOOM_REVIEW_FLAG`. If the
+Do this **before** you emit `LOOM_COMPLETE` / `LOOM_CONCERN`. If the
 canonical block lives only in your stdout / the review log, `loom msg` will
 not find it — the queue will be empty even though your review identified a
 real clarify-worthy decision.
@@ -530,16 +534,17 @@ bd human <id>
 
 ## Flag Emission Schema
 
-If your review surfaces a flag, emit it on its own line **before** the
-completion marker, in this exact shape:
+If your review surfaces a concern, the **final line** of your response must
+be the structured `LOOM_CONCERN` marker — and only that marker. The marker
+replaces `LOOM_COMPLETE` for this phase; never emit both. Shape:
 
 ```text
-LOOM_REVIEW_FLAG: <concern> -- <one-sentence reasoning>
+LOOM_CONCERN: <token> -- <one-sentence reasoning>
 ```
 
-`<concern>` is one of the following enum tokens (lowercase, hyphenated).
+`<token>` is one of the following enum tokens (lowercase, hyphenated).
 The first four are the verifier-honesty sub-checks (Verifier Honesty
-above) — one flag per failing sub-check, cited against the offending
+above) — one concern per failing sub-check, cited against the offending
 test path:
 
 - `verifier-bypass` — at least one `[verify]` on the bead must exercise
@@ -578,28 +583,34 @@ The remaining tokens cover the other rubric dimensions:
 
 Do NOT free-form the cause or paraphrase the concern; the orchestrator
 parses this line verbatim to populate `previous_failure` and `bd update
---notes` without re-reading your prose. If multiple findings exist, emit
-the strongest one — only the last well-formed `LOOM_REVIEW_FLAG:` line is
-kept. If your review is clean, omit the marker entirely.
+--notes` without re-reading your prose. If multiple findings exist, pick
+the strongest one for the `LOOM_CONCERN` marker — the rest go in the prose
+body. Only the final line of the session is parsed, so the marker must be
+the last thing you emit. If your review is clean, omit `LOOM_CONCERN` and
+emit `LOOM_COMPLETE` instead — never both.
 
 ## Completion
 
-When your review is complete, emit LOOM_COMPLETE. The orchestrator runs
-your output through the verdict gate's decision function
-(`phase_verdict::decide()` in `loom-workflow`): it consumes the parsed
-exit marker, the `bd-closed` status of beads in the molecule, the
-worktree-diff emptiness, and any `LOOM_REVIEW_FLAG` you emitted, and
-routes the phase to `Done`, `Blocked`, `Clarify`, or `Recovery`. A clean
-review with no flag → `Done`. A flag emission → `Recovery` with the
-parsed concern threaded into `previous_failure` for the next iteration.
-There is no bead-count diffing — the gate is a pure function of the
-marker plus the mechanical signals.
+When your review is complete, emit `LOOM_COMPLETE` if it is clean or
+`LOOM_CONCERN: <token> -- <reason>` if it found a quality issue — never
+both. The orchestrator runs your output through the verdict gate's decision
+function (`phase_verdict::decide()` in `loom-workflow`): it consumes the
+parsed exit marker, the `bd-closed` status of beads in the molecule, the
+worktree-diff emptiness, and the structured concern carried by
+`LOOM_CONCERN` if any, and routes the phase to `Done`, `Blocked`,
+`Clarify`, or `Recovery`. A clean review (`LOOM_COMPLETE`) → `Done`. A
+`LOOM_CONCERN` emission → `Recovery` with the parsed concern threaded into
+`previous_failure` for the next iteration. There is no bead-count diffing
+— the gate is a pure function of the marker plus the mechanical signals.
 
 ## Exit Signals
 
 End your response with exactly **one** of these markers on its own line, as
-the final output of the session. The orchestrator parses the final line
-verbatim to derive the gate's verdict; emit it with nothing trailing.
+the final output of the session. The orchestrator parses **only the final
+non-empty line** verbatim to derive the gate's verdict — markers emitted on
+any earlier line are treated as `swallowed-marker`, and multiple markers on
+the final line are likewise rejected. Markers are mutually exclusive: emit
+one and only one.
 
 - `LOOM_COMPLETE` — The work succeeded. For worker phases (`loom run`), this
   also means the bead's acceptance criteria are met and the bead has been
@@ -630,3 +641,10 @@ verbatim to derive the gate's verdict; emit it with nothing trailing.
   to *this* bead and exits without entering recovery; other beads in the
   molecule continue running. The labelled bead waits for `loom msg`
   resolution.
+- `LOOM_CONCERN: <token> -- <reason>` — **Review phase only.** The review
+  found a quality issue with the molecule's work; push must not fire.
+  `<token>` is one of the concern tokens (see the Flag Emission Schema in
+  the review template) and `<reason>` is a one-sentence summary. The
+  review phase emits `LOOM_CONCERN` xor `LOOM_COMPLETE` — never both, and
+  never alongside any other marker. Emitting `LOOM_CONCERN` from any
+  non-review phase is a `wrong-phase-marker` error in the verdict gate.

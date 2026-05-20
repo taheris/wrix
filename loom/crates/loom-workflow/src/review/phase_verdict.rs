@@ -183,6 +183,33 @@ pub fn decide(marker: Option<&ExitSignal>, inputs: GateInputs) -> PhaseVerdict {
         },
         Some(ExitSignal::Complete) => decide_progress_marker(false, inputs),
         Some(ExitSignal::Noop) => decide_progress_marker(true, inputs),
+        Some(ExitSignal::Concern { token, reason }) => decide_concern(token, reason, inputs),
+    }
+}
+
+/// `LOOM_CONCERN` is review-phase-only per `specs/loom-harness.md` § Marker
+/// definitions. Until the per-phase classifiers normalise it into
+/// [`GateInputs::review_flag`] (see issue wx-e6c8r.9), the gate threads the
+/// payload through directly: a recognised token routes to
+/// [`RecoveryCause::ReviewFlag`] with the structured detail, an unknown
+/// token collapses to `SwallowedMarker` so downstream surfaces don't print
+/// a bogus concern.
+fn decide_concern(token: &str, reason: &str, inputs: GateInputs) -> PhaseVerdict {
+    if let Some(flag) = inputs.review_flag {
+        return PhaseVerdict::Recovery {
+            cause: RecoveryCause::ReviewFlag(flag),
+        };
+    }
+    let Some(concern) = ReviewConcern::parse(token) else {
+        return PhaseVerdict::Recovery {
+            cause: RecoveryCause::SwallowedMarker,
+        };
+    };
+    PhaseVerdict::Recovery {
+        cause: RecoveryCause::ReviewFlag(ReviewFlag {
+            concern,
+            detail: reason.to_string(),
+        }),
     }
 }
 
@@ -219,16 +246,16 @@ fn decide_progress_marker(is_noop: bool, inputs: GateInputs) -> PhaseVerdict {
 /// Marker prefix the review LLM emits to flag a concern. Format:
 ///
 /// ```text
-/// LOOM_REVIEW_FLAG: <concern> -- <detail>
+/// LOOM_CONCERN: <concern> -- <detail>
 /// ```
 ///
 /// `<concern>` is one of the [`ReviewConcern`] tokens — see its `as_str`
 /// arms for the canonical set, which mirrors the flag-emission schema in
 /// `loom-templates/templates/review.md`. `<detail>` is free-form one-line
-/// reasoning. The marker lives on its own line; if the LLM emits it multiple
-/// times only the last well-formed occurrence wins, matching
-/// [`crate::todo::parse_exit_signal`]'s last-match policy.
-const REVIEW_FLAG_MARKER: &str = "LOOM_REVIEW_FLAG:";
+/// reasoning. The marker is review-phase-only and must be the final line of
+/// the agent's response per the mutual-exclusivity rule documented in
+/// `partial/exit_signals.md`.
+const REVIEW_FLAG_MARKER: &str = "LOOM_CONCERN:";
 const REVIEW_FLAG_SEPARATOR: &str = "--";
 
 /// Parse the review LLM's structured flag emission from its combined output.
@@ -301,6 +328,37 @@ mod tests {
     }
 
     // --- Marker-only rows (bd/diff/review irrelevant). ---
+
+    #[test]
+    fn concern_marker_with_known_token_routes_to_review_flag_recovery() {
+        let m = ExitSignal::Concern {
+            token: "verifier-bypass".into(),
+            reason: "test mocks the agent backend".into(),
+        };
+        match decide(Some(&m), inputs(true, false, true, None)) {
+            PhaseVerdict::Recovery {
+                cause: RecoveryCause::ReviewFlag(parsed),
+            } => {
+                assert_eq!(parsed.concern, ReviewConcern::VerifierBypass);
+                assert_eq!(parsed.detail, "test mocks the agent backend");
+            }
+            other => panic!("expected Recovery::ReviewFlag, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn concern_marker_with_unknown_token_collapses_to_swallowed_marker() {
+        let m = ExitSignal::Concern {
+            token: "fictional-concern".into(),
+            reason: "doesn't map to any enum".into(),
+        };
+        assert_eq!(
+            decide(Some(&m), inputs(true, false, true, None)),
+            PhaseVerdict::Recovery {
+                cause: RecoveryCause::SwallowedMarker,
+            },
+        );
+    }
 
     #[test]
     fn blocked_marker_routes_to_blocked_with_reason() {
@@ -677,7 +735,7 @@ mod tests {
 
     #[test]
     fn parse_review_flag_extracts_concern_and_detail_from_marker() {
-        let out = "preamble\nLOOM_REVIEW_FLAG: verifier-bypass -- test mocks the agent backend\nLOOM_COMPLETE\n";
+        let out = "preamble\nLOOM_CONCERN: verifier-bypass -- test mocks the agent backend\nLOOM_COMPLETE\n";
         let parsed = parse_review_flag(out).expect("flag parsed");
         assert_eq!(parsed.concern, ReviewConcern::VerifierBypass);
         assert_eq!(parsed.detail, "test mocks the agent backend");
@@ -701,7 +759,7 @@ mod tests {
                 ReviewConcern::SpecConventionsViolation,
             ),
         ] {
-            let out = format!("LOOM_REVIEW_FLAG: {token} -- because\n");
+            let out = format!("LOOM_CONCERN: {token} -- because\n");
             let parsed = parse_review_flag(&out).expect("flag parsed");
             assert_eq!(parsed.concern, expected);
             assert_eq!(parsed.detail, "because");
@@ -710,8 +768,8 @@ mod tests {
 
     #[test]
     fn parse_review_flag_takes_last_well_formed_match() {
-        let out = "LOOM_REVIEW_FLAG: mock -- first\n\
-                   LOOM_REVIEW_FLAG: judge -- second\n";
+        let out = "LOOM_CONCERN: mock -- first\n\
+                   LOOM_CONCERN: judge -- second\n";
         let parsed = parse_review_flag(out).expect("flag parsed");
         assert_eq!(parsed.concern, ReviewConcern::Judge);
         assert_eq!(parsed.detail, "second");
@@ -721,13 +779,13 @@ mod tests {
     fn parse_review_flag_skips_marker_with_unknown_concern() {
         // A garbled marker collapses to "no flag" — better than synthesising
         // a bogus concern that downstream surfaces would print verbatim.
-        assert!(parse_review_flag("LOOM_REVIEW_FLAG: nit -- whatever\n").is_none());
+        assert!(parse_review_flag("LOOM_CONCERN: nit -- whatever\n").is_none());
     }
 
     #[test]
     fn parse_review_flag_accepts_empty_detail() {
         let parsed =
-            parse_review_flag("LOOM_REVIEW_FLAG: scope\n").expect("concern-only marker parses");
+            parse_review_flag("LOOM_CONCERN: scope\n").expect("concern-only marker parses");
         assert_eq!(parsed.concern, ReviewConcern::Scope);
         assert!(parsed.detail.is_empty());
     }

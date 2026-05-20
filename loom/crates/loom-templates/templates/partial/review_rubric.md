@@ -55,11 +55,14 @@ Coincidental-pass shapes to flag:
   every call to a default branch — change the dispatcher and the test
   no longer means what it claims to mean.
 
-A test that satisfies all four sub-checks is honest. Emit one
-`LOOM_REVIEW_FLAG` per failing sub-check with the matching concern
-token (`verifier-bypass`, `fabricated-result`, `weak-assertion`,
-`coincidental-pass`); cite the offending test path and the spec claim
-it purports to verify.
+A test that satisfies all four sub-checks is honest. If a sub-check
+fails, name the matching concern token (`verifier-bypass`,
+`fabricated-result`, `weak-assertion`, `coincidental-pass`) in the prose
+body and cite the offending test path and the spec claim it purports to
+verify. When you finalize the phase, emit a single `LOOM_CONCERN: <token>
+-- <reason>` line on the final line of the response for the strongest
+sub-check failure; per the Flag Emission Schema, only one structured
+concern reaches the verdict gate.
 
 ## Mock Discipline
 
@@ -165,9 +168,10 @@ against each edited spec section:
   a missing or stubbed verifier → already a `loom check criteria` flag;
   surface it here too if the edit introduces it.
 
-Each violation emits `LOOM_REVIEW_FLAG: spec-conventions-violation --
-<summary>`. The visible body cites the convention section by name and
-the offending spec file/line range.
+When you finalize the phase, emit `LOOM_CONCERN: spec-conventions-violation
+-- <summary>` on the final line for the strongest violation. The visible
+body cites the convention section by name and the offending spec file/line
+range for every violation found.
 
 ## Style-Rule Conformance
 
@@ -198,8 +202,8 @@ One violation per bullet; never aggregate multiple rules into one
 citation. A finding without a rule id is not actionable; a finding
 without a file/line range is not auditable.
 
-**Flag emission.** Any style-rule violation is a hard fail. Emit a
-single `LOOM_REVIEW_FLAG: style-rule -- <summary>` line per the Flag
-Emission Schema below. The summary should name the most load-bearing
-violation by rule id; the per-violation citations above carry the full
-list in the visible body of your response.
+**Flag emission.** Any style-rule violation is a hard fail. The final
+line of the response must be a single `LOOM_CONCERN: style-rule --
+<summary>` per the Flag Emission Schema below. The summary should name
+the most load-bearing violation by rule id; the per-violation citations
+above carry the full list in the visible body of your response.

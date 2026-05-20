@@ -1,8 +1,11 @@
 ## Exit Signals
 
 End your response with exactly **one** of these markers on its own line, as
-the final output of the session. The orchestrator parses the final line
-verbatim to derive the gate's verdict; emit it with nothing trailing.
+the final output of the session. The orchestrator parses **only the final
+non-empty line** verbatim to derive the gate's verdict — markers emitted on
+any earlier line are treated as `swallowed-marker`, and multiple markers on
+the final line are likewise rejected. Markers are mutually exclusive: emit
+one and only one.
 
 - `LOOM_COMPLETE` — The work succeeded. For worker phases (`loom run`), this
   also means the bead's acceptance criteria are met and the bead has been
@@ -33,3 +36,10 @@ verbatim to derive the gate's verdict; emit it with nothing trailing.
   to *this* bead and exits without entering recovery; other beads in the
   molecule continue running. The labelled bead waits for `loom msg`
   resolution.
+- `LOOM_CONCERN: <token> -- <reason>` — **Review phase only.** The review
+  found a quality issue with the molecule's work; push must not fire.
+  `<token>` is one of the concern tokens (see the Flag Emission Schema in
+  the review template) and `<reason>` is a one-sentence summary. The
+  review phase emits `LOOM_CONCERN` xor `LOOM_COMPLETE` — never both, and
+  never alongside any other marker. Emitting `LOOM_CONCERN` from any
+  non-review phase is a `wrong-phase-marker` error in the verdict gate.

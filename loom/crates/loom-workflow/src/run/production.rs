@@ -311,6 +311,13 @@ pub fn classify_session(session: SessionResult, marker: Option<ExitSignal>) -> A
             0,
         ),
         SessionResult::Complete(outcome) => {
+            if let Some(ExitSignal::Concern { token, .. }) = marker.as_ref() {
+                return AgentOutcome::Failure {
+                    error: format!(
+                        "wrong-phase-marker: LOOM_CONCERN ({token}) is review-phase only",
+                    ),
+                };
+            }
             if matches!(marker, Some(ExitSignal::Complete | ExitSignal::Noop))
                 && outcome.exit_code != 0
             {
@@ -453,6 +460,42 @@ mod tests {
                 error.contains("swallowed marker"),
                 "swallowed-marker text missing: {error}",
             ),
+            other => panic!("expected Failure, got {other:?}"),
+        }
+    }
+
+    /// Spec gate (§"Marker definitions"): `LOOM_CONCERN` is
+    /// review-phase-only. The run phase emitting it is a
+    /// `wrong-phase-marker` error — neither `Success` nor a generic
+    /// swallowed-marker; the detail names the concern token so triage can
+    /// see which path the agent tried to flag.
+    #[test]
+    fn concern_marker_in_run_phase_is_wrong_phase_marker_failure() {
+        let session = SessionResult::Complete(SessionOutcome {
+            exit_code: 0,
+            cost_usd: None,
+        });
+        match classify_session(
+            session,
+            Some(ExitSignal::Concern {
+                token: "verifier-bypass".into(),
+                reason: "test mocks the agent backend".into(),
+            }),
+        ) {
+            AgentOutcome::Failure { error } => {
+                assert!(
+                    error.contains("wrong-phase-marker"),
+                    "wrong-phase-marker prefix missing: {error}",
+                );
+                assert!(
+                    error.contains("LOOM_CONCERN"),
+                    "marker name must appear in error: {error}",
+                );
+                assert!(
+                    error.contains("verifier-bypass"),
+                    "concern token must appear in error: {error}",
+                );
+            }
             other => panic!("expected Failure, got {other:?}"),
         }
     }

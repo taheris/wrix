@@ -1,5 +1,11 @@
 /// Parsed exit signal from an agent session — the trailing line the agent
-/// emits to signal whether `loom todo` should advance or roll back.
+/// emits to signal the gate's verdict.
+///
+/// Markers are **mutually exclusive** and live on the final non-empty line
+/// of the agent's last assistant message. [`parse_exit_signal`] enforces
+/// the mechanical half of that rule: only the final line is inspected, and
+/// a final line carrying more than one marker is treated as a
+/// swallowed-marker (returned as `None`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExitSignal {
     /// Agent finished cleanly; the driver advances per-spec cursors and
@@ -18,52 +24,105 @@ pub enum ExitSignal {
     /// Agent needs human input; the driver applies the `loom:clarify`
     /// label and bails.
     Clarify { question: String },
+
+    /// Review-phase concern. Carries the structured payload emitted as
+    /// `LOOM_CONCERN: <token> -- <reason>`. The verdict gate maps the
+    /// token to a typed concern via [`super::super::review::ReviewConcern`]
+    /// (or future typed equivalents); unknown tokens round-trip as the
+    /// literal string so the wire-additive contract in `docs/style-rules.md`
+    /// (RS-17 `Other(String)` fallback) holds. Review-phase-only — emitting
+    /// `LOOM_CONCERN` from any other phase is a `wrong-phase-marker` error
+    /// in the verdict gate per `specs/loom-harness.md` § Marker definitions.
+    Concern { token: String, reason: String },
 }
 
 const COMPLETE: &str = "LOOM_COMPLETE";
 const NOOP: &str = "LOOM_NOOP";
 const BLOCKED: &str = "LOOM_BLOCKED";
 const CLARIFY: &str = "LOOM_CLARIFY";
+const CONCERN: &str = "LOOM_CONCERN";
+const CONCERN_SEPARATOR: &str = "--";
 
 /// Scan the agent's combined output (or the `result` field of the final
 /// stream-json line) for an exit signal.
 ///
-/// Returns the **last** match — agents sometimes summarise their plan
-/// before settling on a verdict, and we want the verdict, not the plan.
-/// `None` means no signal was found and the caller should surface
-/// [`super::TodoError::MissingExitSignal`].
+/// The parser inspects **only the final non-empty line** of `output`. Any
+/// marker emitted earlier in the session is treated as swallowed; multiple
+/// markers on the final line likewise collapse to `None` per the
+/// mutual-exclusivity rule in `specs/loom-harness.md` § Marker definitions.
 ///
 /// `LOOM_BLOCKED` and `LOOM_CLARIFY` are bare markers — no trailing colon,
 /// no trailing payload. The reason / question is read from the text
-/// **before** the marker:
+/// **before** the marker on the final line, falling back to the most recent
+/// non-empty line before the final line if the same-line prefix is empty.
 ///
-/// 1. If the marker is preceded by non-whitespace text on the same line
-///    (e.g. `Final result: missing schema LOOM_BLOCKED`), that text is the
-///    reason.
-/// 2. Otherwise, the most recent non-empty line before the marker line is
-///    the reason.
-/// 3. If neither exists, the reason is empty.
+/// `LOOM_CONCERN` carries a structured payload on the final line:
+/// `LOOM_CONCERN: <token> -- <reason>`. The token and reason are extracted
+/// from that line directly; the `--` separator is mandatory for a
+/// well-formed marker, and a missing separator collapses to a swallowed
+/// marker.
+///
+/// `None` means no signal was found on the final line and the caller
+/// should surface [`super::TodoError::MissingExitSignal`] or the
+/// equivalent swallowed-marker recovery cause.
 pub fn parse_exit_signal(output: &str) -> Option<ExitSignal> {
     let lines: Vec<&str> = output.lines().collect();
-    let mut last: Option<ExitSignal> = None;
-    for (i, line) in lines.iter().enumerate() {
-        if let Some(reason) = reason_for(BLOCKED, line, &lines[..i]) {
-            last = Some(ExitSignal::Blocked { reason });
-            continue;
-        }
-        if let Some(question) = reason_for(CLARIFY, line, &lines[..i]) {
-            last = Some(ExitSignal::Clarify { question });
-            continue;
-        }
-        if line.contains(COMPLETE) {
-            last = Some(ExitSignal::Complete);
-            continue;
-        }
-        if line.contains(NOOP) {
-            last = Some(ExitSignal::Noop);
+    let final_idx = lines.iter().rposition(|line| !line.trim().is_empty())?;
+    let final_line = lines[final_idx];
+    let prior = &lines[..final_idx];
+
+    if has_multiple_markers(final_line) {
+        return None;
+    }
+
+    if let Some(idx) = final_line.find(CONCERN) {
+        return parse_concern(&final_line[idx + CONCERN.len()..]);
+    }
+    if let Some(reason) = reason_for(BLOCKED, final_line, prior) {
+        return Some(ExitSignal::Blocked { reason });
+    }
+    if let Some(question) = reason_for(CLARIFY, final_line, prior) {
+        return Some(ExitSignal::Clarify { question });
+    }
+    if final_line.contains(COMPLETE) {
+        return Some(ExitSignal::Complete);
+    }
+    if final_line.contains(NOOP) {
+        return Some(ExitSignal::Noop);
+    }
+    None
+}
+
+/// Count distinct marker keywords on `line`. The keywords are matched as
+/// substrings; `CONCERN` is a substring of nothing else in the set, and
+/// the others are pairwise non-overlapping, so distinct hits map one-to-one
+/// to distinct markers.
+fn has_multiple_markers(line: &str) -> bool {
+    let markers = [COMPLETE, NOOP, BLOCKED, CLARIFY, CONCERN];
+    let mut hits = 0;
+    for marker in markers {
+        if line.contains(marker) {
+            hits += 1;
+            if hits > 1 {
+                return true;
+            }
         }
     }
-    last
+    false
+}
+
+fn parse_concern(after_marker: &str) -> Option<ExitSignal> {
+    let payload = after_marker.trim_start_matches(':').trim();
+    let (token, reason) = payload.split_once(CONCERN_SEPARATOR)?;
+    let token = token.trim();
+    let reason = reason.trim();
+    if token.is_empty() {
+        return None;
+    }
+    Some(ExitSignal::Concern {
+        token: token.to_string(),
+        reason: reason.to_string(),
+    })
 }
 
 fn reason_for(marker: &str, line: &str, prior: &[&str]) -> Option<String> {
@@ -133,13 +192,6 @@ mod tests {
     }
 
     #[test]
-    fn last_match_wins_when_multiple_present() {
-        // Agent first declares blocked, then changes its mind and finishes.
-        let out = "tentative\nLOOM_BLOCKED\nactually nevermind\nLOOM_COMPLETE";
-        assert_eq!(parse_exit_signal(out), Some(ExitSignal::Complete));
-    }
-
-    #[test]
     fn marker_recognized_inside_a_longer_line() {
         let out = "Final result: missing schema LOOM_BLOCKED\n";
         match parse_exit_signal(out) {
@@ -166,5 +218,74 @@ mod tests {
             Some(ExitSignal::Blocked { reason }) => assert!(reason.is_empty()),
             other => panic!("expected Blocked with empty reason, got {other:?}"),
         }
+    }
+
+    /// Final-line-only rule: a marker emitted earlier in the session is
+    /// `swallowed-marker` territory, not a verdict.
+    #[test]
+    fn marker_on_non_final_line_is_swallowed() {
+        let out = "LOOM_COMPLETE\nfollow-up prose that hides the marker\n";
+        assert_eq!(parse_exit_signal(out), None);
+    }
+
+    /// Mutual exclusivity: an agent that emits two markers on the final
+    /// line is treated as swallowed rather than letting the parser silently
+    /// pick one.
+    #[test]
+    fn multiple_markers_on_final_line_swallow_the_signal() {
+        let out = "LOOM_BLOCKED LOOM_COMPLETE\n";
+        assert_eq!(parse_exit_signal(out), None);
+    }
+
+    /// The new "look at the final line only" rule replaces the prior
+    /// "last match wins" sweep: a `LOOM_BLOCKED` followed by a separate
+    /// `LOOM_COMPLETE` line resolves to `Complete` because the final line
+    /// is the only one inspected — the earlier line is swallowed.
+    #[test]
+    fn final_line_is_authoritative_when_prior_line_also_has_a_marker() {
+        let out = "tentative\nLOOM_BLOCKED\nactually nevermind\nLOOM_COMPLETE";
+        assert_eq!(parse_exit_signal(out), Some(ExitSignal::Complete));
+    }
+
+    #[test]
+    fn concern_with_structured_payload_parses_token_and_reason() {
+        let out = "LOOM_CONCERN: verifier-bypass -- test mocks the agent backend";
+        match parse_exit_signal(out) {
+            Some(ExitSignal::Concern { token, reason }) => {
+                assert_eq!(token, "verifier-bypass");
+                assert_eq!(reason, "test mocks the agent backend");
+            }
+            other => panic!("expected Concern, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn concern_trims_whitespace_around_payload_components() {
+        let out = "LOOM_CONCERN:   scope   --   diff edits files outside the bead\n";
+        match parse_exit_signal(out) {
+            Some(ExitSignal::Concern { token, reason }) => {
+                assert_eq!(token, "scope");
+                assert_eq!(reason, "diff edits files outside the bead");
+            }
+            other => panic!("expected Concern, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn concern_without_separator_collapses_to_none() {
+        let out = "LOOM_CONCERN: malformed payload with no separator\n";
+        assert_eq!(parse_exit_signal(out), None);
+    }
+
+    #[test]
+    fn concern_with_empty_token_collapses_to_none() {
+        let out = "LOOM_CONCERN: -- reason but no token\n";
+        assert_eq!(parse_exit_signal(out), None);
+    }
+
+    #[test]
+    fn concern_on_non_final_line_is_swallowed() {
+        let out = "LOOM_CONCERN: scope -- bad diff\nclosing prose\n";
+        assert_eq!(parse_exit_signal(out), None);
     }
 }

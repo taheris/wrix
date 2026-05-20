@@ -803,8 +803,8 @@ mod tests {
             );
         }
         assert!(
-            prompt.contains("LOOM_REVIEW_FLAG: style-rule"),
-            "flag marker not documented in review prompt: {prompt}",
+            prompt.contains("LOOM_CONCERN: style-rule"),
+            "concern marker not documented in review prompt: {prompt}",
         );
         assert!(
             prompt.contains("rule id"),
