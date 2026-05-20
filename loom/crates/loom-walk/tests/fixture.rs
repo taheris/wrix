@@ -1596,3 +1596,197 @@ fn loom_templates_snapshots_no_crate_root_allow_fail() {
     );
     assert_fail(&out, "crate-root `#![allow(...)]`");
 }
+
+// ---------------------------------------------------------------------------
+// no_todo_cursor_meta_key
+// ---------------------------------------------------------------------------
+
+#[test]
+fn no_todo_cursor_meta_key_pass_when_absent() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-driver/src/state/db.rs",
+        "pub struct StateDb;\n\npub fn current_spec() -> &'static str { \"x\" }\n",
+    );
+    let out = invoke(&["no_todo_cursor_meta_key"], Some(ws.path()), None);
+    assert_pass(&out);
+}
+
+#[test]
+fn no_todo_cursor_meta_key_fail_when_method_present() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-driver/src/state/db.rs",
+        "pub struct StateDb;\n\
+         impl StateDb { pub fn todo_cursor(&self) -> Option<String> { None } }\n",
+    );
+    let out = invoke(&["no_todo_cursor_meta_key"], Some(ws.path()), None);
+    assert_fail(&out, "todo_cursor");
+}
+
+#[test]
+fn no_todo_cursor_meta_key_ignores_test_block() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-driver/src/state/db.rs",
+        "pub struct StateDb;\n\
+         \n\
+         #[cfg(test)]\n\
+         mod tests {\n\
+             #[test]\n\
+             fn legacy_todo_cursor_migrated_away() {\n\
+                 let _ = \"todo_cursor\";\n\
+             }\n\
+         }\n",
+    );
+    let out = invoke(&["no_todo_cursor_meta_key"], Some(ws.path()), None);
+    assert_pass(&out);
+}
+
+// ---------------------------------------------------------------------------
+// session_trait_in_loom_events
+// ---------------------------------------------------------------------------
+
+#[test]
+fn session_trait_in_loom_events_pass() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-events/src/lib.rs",
+        "pub trait Session {}\n",
+    );
+    let out = invoke(&["session_trait_in_loom_events"], Some(ws.path()), None);
+    assert_pass(&out);
+}
+
+#[test]
+fn session_trait_in_loom_events_fail_when_missing() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-events/src/lib.rs",
+        "pub fn x() {}\n",
+    );
+    let out = invoke(&["session_trait_in_loom_events"], Some(ws.path()), None);
+    assert_fail(&out, "pub trait Session");
+}
+
+#[test]
+fn session_trait_in_loom_events_fail_when_defined_in_driver() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-events/src/lib.rs",
+        "pub trait Session {}\n",
+    );
+    seed(
+        ws.path(),
+        "crates/loom-driver/src/agent/session.rs",
+        "pub trait Session {}\n",
+    );
+    let out = invoke(&["session_trait_in_loom_events"], Some(ws.path()), None);
+    assert_fail(&out, "loom-driver");
+}
+
+// ---------------------------------------------------------------------------
+// event_sink_in_loom_events
+// ---------------------------------------------------------------------------
+
+#[test]
+fn event_sink_in_loom_events_pass() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-events/src/lib.rs",
+        "pub trait EventSink {}\n\
+         pub enum SessionCommand { Steer(String), Abort(String) }\n",
+    );
+    let out = invoke(&["event_sink_in_loom_events"], Some(ws.path()), None);
+    assert_pass(&out);
+}
+
+#[test]
+fn event_sink_in_loom_events_fail_when_trait_missing() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-events/src/lib.rs",
+        "pub enum SessionCommand { Steer(String), Abort(String) }\n",
+    );
+    let out = invoke(&["event_sink_in_loom_events"], Some(ws.path()), None);
+    assert_fail(&out, "pub trait EventSink");
+}
+
+#[test]
+fn event_sink_in_loom_events_fail_when_variant_missing() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-events/src/lib.rs",
+        "pub trait EventSink {}\n\
+         pub enum SessionCommand { Steer(String) }\n",
+    );
+    let out = invoke(&["event_sink_in_loom_events"], Some(ws.path()), None);
+    assert_fail(&out, "Abort(String)");
+}
+
+#[test]
+fn event_sink_in_loom_events_fail_when_variant_wrong_type() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-events/src/lib.rs",
+        "pub trait EventSink {}\n\
+         pub enum SessionCommand { Steer(u32), Abort(String) }\n",
+    );
+    let out = invoke(&["event_sink_in_loom_events"], Some(ws.path()), None);
+    assert_fail(&out, "Steer(String)");
+}
+
+// ---------------------------------------------------------------------------
+// public_contract_crates
+// ---------------------------------------------------------------------------
+
+fn seed_contract_manifest(ws: &TempDir, name: &str, declare: bool) {
+    let body = if declare {
+        format!(
+            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\n\
+             \n[package.metadata.loom]\npublic_contract = true\n",
+        )
+    } else {
+        format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\n")
+    };
+    seed(ws.path(), &format!("crates/{name}/Cargo.toml"), &body);
+}
+
+#[test]
+fn public_contract_crates_pass() {
+    let ws = make_workspace();
+    seed_contract_manifest(&ws, "loom-events", true);
+    seed_contract_manifest(&ws, "loom-llm", true);
+    seed_contract_manifest(&ws, "loom-templates", true);
+    let out = invoke(&["public_contract_crates"], Some(ws.path()), None);
+    assert_pass(&out);
+}
+
+#[test]
+fn public_contract_crates_fail_when_missing_marker() {
+    let ws = make_workspace();
+    seed_contract_manifest(&ws, "loom-events", true);
+    seed_contract_manifest(&ws, "loom-llm", false);
+    seed_contract_manifest(&ws, "loom-templates", true);
+    let out = invoke(&["public_contract_crates"], Some(ws.path()), None);
+    assert_fail(&out, "loom-llm");
+}
+
+#[test]
+fn public_contract_crates_fail_when_manifest_missing() {
+    let ws = make_workspace();
+    seed_contract_manifest(&ws, "loom-events", true);
+    seed_contract_manifest(&ws, "loom-templates", true);
+    let out = invoke(&["public_contract_crates"], Some(ws.path()), None);
+    assert_fail(&out, "loom-llm");
+}

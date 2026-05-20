@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 mod crate_structure;
+mod event_sink_in_loom_events;
 mod git_client_encapsulation;
 mod loom_does_not_invoke_podman;
 mod loom_events_is_leaf;
@@ -26,11 +27,14 @@ mod no_panics_in_production;
 mod no_real_clock_outside_system_clock;
 mod no_sync_or_tune_command;
 mod no_thread_sleep;
+mod no_todo_cursor_meta_key;
 mod no_tokio_sleep_outside_clock;
 mod no_tokio_timeout_outside_clock;
 mod no_types_or_error_files;
 mod phase_verdict_decide_called_from_production;
+mod public_contract_crates;
 mod renderer_no_insta_dependency;
+mod session_trait_in_loom_events;
 mod single_event_channel;
 mod surface_conformance;
 mod template_context_structs;
@@ -104,6 +108,10 @@ pub static REGISTRY: &[Walk] = &[
         run: crate_structure::run,
     },
     Walk {
+        name: "event_sink_in_loom_events",
+        run: event_sink_in_loom_events::run,
+    },
+    Walk {
         name: "git_client_encapsulation",
         run: git_client_encapsulation::run,
     },
@@ -160,6 +168,10 @@ pub static REGISTRY: &[Walk] = &[
         run: no_thread_sleep::run,
     },
     Walk {
+        name: "no_todo_cursor_meta_key",
+        run: no_todo_cursor_meta_key::run,
+    },
+    Walk {
         name: "no_tokio_sleep_outside_clock",
         run: no_tokio_sleep_outside_clock::run,
     },
@@ -176,8 +188,16 @@ pub static REGISTRY: &[Walk] = &[
         run: phase_verdict_decide_called_from_production::run,
     },
     Walk {
+        name: "public_contract_crates",
+        run: public_contract_crates::run,
+    },
+    Walk {
         name: "renderer_no_insta_dependency",
         run: renderer_no_insta_dependency::run,
+    },
+    Walk {
+        name: "session_trait_in_loom_events",
+        run: session_trait_in_loom_events::run,
     },
     Walk {
         name: "single_event_channel",
@@ -243,17 +263,21 @@ mod tests {
     fn registry_lookup_finds_known_walks() {
         for name in [
             "crate_structure",
+            "event_sink_in_loom_events",
             "git_client_encapsulation",
             "loom_does_not_invoke_podman",
             "loom_events_is_leaf",
             "loom_events_minimal_deps",
             "loom_render_deps",
             "no_derive_from_on_newtypes",
+            "no_todo_cursor_meta_key",
             "no_types_or_error_files",
             "no_allow_dead_code",
             "no_panics_in_production",
             "no_sync_or_tune_command",
             "phase_verdict_decide_called_from_production",
+            "public_contract_crates",
+            "session_trait_in_loom_events",
             "single_event_channel",
             "surface_conformance",
             "newtype_identifiers",
