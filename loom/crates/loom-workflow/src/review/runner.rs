@@ -410,6 +410,7 @@ mod tests {
             issue_type: "task".into(),
             labels: labels.iter().map(|s| Label::new(*s)).collect(),
             parent: None,
+            metadata: Default::default(),
         }
     }
 

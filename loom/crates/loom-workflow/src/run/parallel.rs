@@ -319,6 +319,7 @@ mod tests {
             issue_type: "task".into(),
             labels: vec![],
             parent: None,
+            metadata: Default::default(),
         }
     }
 

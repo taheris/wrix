@@ -75,6 +75,7 @@ fn fake_bead(id: &str) -> Bead {
         issue_type: "task".into(),
         labels: vec![],
         parent: None,
+        metadata: Default::default(),
     }
 }
 

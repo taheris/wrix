@@ -195,6 +195,7 @@ mod tests {
             issue_type: "task".into(),
             labels: vec![Label::new("spec:loom-harness")],
             parent: parent.map(|p| BeadId::new(p).expect("valid parent")),
+            metadata: Default::default(),
         }
     }
 

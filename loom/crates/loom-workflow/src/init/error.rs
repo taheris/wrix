@@ -36,4 +36,7 @@ pub enum InitError {
 
     /// active molecule {id} carries no `spec:<label>` label
     MissingSpecLabel { id: String },
+
+    /// active molecule {id} carries no `loom.base_commit` metadata
+    MoleculeMissingBaseCommit { id: String },
 }

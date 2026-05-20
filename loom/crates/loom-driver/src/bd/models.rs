@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::label::Label;
@@ -5,10 +7,10 @@ use crate::identifier::{BeadId, MoleculeId};
 
 /// One bead as produced by `bd show --json` and `bd list --json`.
 ///
-/// `bd` emits more fields than these (timestamps, owner, dependency lists,
-/// metadata blobs); they are intentionally not modelled here. `serde`
-/// ignores unknown fields by default, so the wrapper does not break when
-/// `bd` adds new keys. Add fields when a caller needs them.
+/// `bd` emits more fields than these (timestamps, owner, dependency lists);
+/// they are intentionally not modelled here. `serde` ignores unknown fields
+/// by default, so the wrapper does not break when `bd` adds new keys. Add
+/// fields when a caller needs them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Bead {
     pub id: BeadId,
@@ -29,6 +31,12 @@ pub struct Bead {
     /// the originating molecule".
     #[serde(default)]
     pub parent: Option<BeadId>,
+    /// Free-form metadata blob from `bd show --json`'s `metadata` object.
+    /// `bd list --json` omits the field; absent ⇒ empty map. Keys used by
+    /// loom include `loom.base_commit` (the molecule's diff anchor —
+    /// `specs/loom-harness.md` § *Plan creates the molecule*).
+    #[serde(default)]
+    pub metadata: BTreeMap<String, serde_json::Value>,
 }
 
 /// One molecule row. Beads exposes `bd mol show --json`; the shape is the

@@ -99,7 +99,10 @@ pub fn run(
 /// Enumerate active molecules via `bd list --status=open --label=loom:active`.
 /// Each returned bead's `spec:<label>` label resolves the [`SpecLabel`] for
 /// the rebuilt row; beads without a `spec:` label produce
-/// [`InitError::MissingSpecLabel`].
+/// [`InitError::MissingSpecLabel`]. For each active bead, `bd show <id>
+/// --json` is read for the `loom.base_commit` metadata key (set
+/// unconditionally by `loom plan`); a missing or non-string value produces
+/// [`InitError::MoleculeMissingBaseCommit`].
 pub async fn fetch_active_molecules<R: CommandRunner>(
     bd: &BdClient<R>,
 ) -> Result<Vec<ActiveMolecule>, InitError> {
@@ -119,22 +122,93 @@ pub async fn fetch_active_molecules<R: CommandRunner>(
             .ok_or_else(|| InitError::MissingSpecLabel {
                 id: bead.id.to_string(),
             })?;
+        let detail = bd.show(&bead.id).await?;
+        let base_commit = detail
+            .metadata
+            .get("loom.base_commit")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| InitError::MoleculeMissingBaseCommit {
+                id: bead.id.to_string(),
+            })?
+            .to_owned();
         out.push(ActiveMolecule {
             id: MoleculeId::new(bead.id.as_str()),
             spec_label,
-            base_commit: None,
+            base_commit: Some(base_commit),
         });
     }
     Ok(out)
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used, reason = "tests use panicking helpers")]
 mod tests {
     use super::*;
-    use anyhow::Result;
+    use anyhow::{Result, anyhow};
+    use loom_driver::bd::{BdError, CommandRunner, RunOutput};
     use loom_driver::config::{LoomConfig, Phase};
     use loom_driver::identifier::SpecLabel;
     use loom_driver::lock::LockError;
+    use std::collections::VecDeque;
+    use std::ffi::OsString;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    #[derive(Clone, Default)]
+    struct CapturingRunner {
+        responses: Arc<Mutex<VecDeque<RunOutput>>>,
+        calls: Arc<Mutex<Vec<Vec<OsString>>>>,
+    }
+
+    impl CapturingRunner {
+        fn new(responses: impl IntoIterator<Item = RunOutput>) -> Self {
+            Self {
+                responses: Arc::new(Mutex::new(responses.into_iter().collect())),
+                calls: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn calls(&self) -> Vec<Vec<String>> {
+            self.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|argv| {
+                    argv.iter()
+                        .map(|a| a.to_string_lossy().into_owned())
+                        .collect()
+                })
+                .collect()
+        }
+    }
+
+    impl CommandRunner for CapturingRunner {
+        async fn run(
+            &self,
+            args: Vec<OsString>,
+            _timeout: Duration,
+        ) -> std::result::Result<RunOutput, BdError> {
+            self.calls.lock().unwrap().push(args);
+            Ok(self
+                .responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or(RunOutput {
+                    status: 0,
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                }))
+        }
+    }
+
+    fn ok(stdout: &[u8]) -> RunOutput {
+        RunOutput {
+            status: 0,
+            stdout: stdout.to_vec(),
+            stderr: Vec::new(),
+        }
+    }
 
     fn temp_workspace() -> Result<tempfile::TempDir> {
         let dir = tempfile::tempdir()?;
@@ -260,5 +334,89 @@ mod tests {
             }
             other => Err(anyhow::anyhow!("expected WorkspaceBusy, got {other:?}")),
         }
+    }
+
+    /// Spec contract `[test]` annotation
+    /// (`specs/loom-harness.md` § Success Criteria · State DB):
+    /// `loom init --rebuild` populates `molecules.base_commit` from
+    /// `bd show <id> --json` reading `loom.base_commit` metadata; an
+    /// active molecule without the key surfaces as
+    /// `InitError::MoleculeMissingBaseCommit`.
+    #[tokio::test]
+    async fn rebuild_reads_base_commit_from_bead_metadata() -> Result<()> {
+        let list_json = br#"[
+            {
+                "id": "wx-mol.1",
+                "title": "loom-harness: pending decomposition",
+                "status": "open",
+                "priority": 2,
+                "issue_type": "epic",
+                "labels": ["spec:loom-harness", "loom:active"]
+            }
+        ]"#;
+        let show_json = br#"[
+            {
+                "id": "wx-mol.1",
+                "title": "loom-harness: pending decomposition",
+                "status": "open",
+                "priority": 2,
+                "issue_type": "epic",
+                "labels": ["spec:loom-harness", "loom:active"],
+                "metadata": {"loom.base_commit": "7c226fef"}
+            }
+        ]"#;
+        let runner = CapturingRunner::new([ok(list_json), ok(show_json)]);
+        let handle = runner.clone();
+        let client = BdClient::with_runner(runner);
+        let molecules = fetch_active_molecules(&client).await?;
+        assert_eq!(molecules.len(), 1);
+        assert_eq!(molecules[0].id.as_str(), "wx-mol.1");
+        assert_eq!(molecules[0].spec_label.as_str(), "loom-harness");
+        assert_eq!(molecules[0].base_commit.as_deref(), Some("7c226fef"));
+
+        let calls = handle.calls();
+        assert_eq!(calls.len(), 2, "expected list+show calls: {calls:?}");
+        assert_eq!(calls[0][0], "list");
+        assert!(calls[0].contains(&"--label=loom:active".to_string()));
+        assert!(calls[0].contains(&"--status=open".to_string()));
+        assert_eq!(calls[1][0], "show");
+        assert_eq!(calls[1][1], "wx-mol.1");
+        assert!(calls[1].contains(&"--json".to_string()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn rebuild_errors_when_active_molecule_lacks_base_commit_metadata() -> Result<()> {
+        let list_json = br#"[
+            {
+                "id": "wx-mol.2",
+                "title": "loom-harness: pending decomposition",
+                "status": "open",
+                "priority": 2,
+                "issue_type": "epic",
+                "labels": ["spec:loom-harness", "loom:active"]
+            }
+        ]"#;
+        let show_json = br#"[
+            {
+                "id": "wx-mol.2",
+                "title": "loom-harness: pending decomposition",
+                "status": "open",
+                "priority": 2,
+                "issue_type": "epic",
+                "labels": ["spec:loom-harness", "loom:active"]
+            }
+        ]"#;
+        let runner = CapturingRunner::new([ok(list_json), ok(show_json)]);
+        let client = BdClient::with_runner(runner);
+        let err = fetch_active_molecules(&client)
+            .await
+            .err()
+            .ok_or_else(|| anyhow!("expected MoleculeMissingBaseCommit"))?;
+        match err {
+            InitError::MoleculeMissingBaseCommit { id } => assert_eq!(id, "wx-mol.2"),
+            other => return Err(anyhow!("expected MoleculeMissingBaseCommit, got {other:?}")),
+        }
+        Ok(())
     }
 }

@@ -505,6 +505,7 @@ mod tests {
             issue_type: "task".into(),
             labels: vec![Label::new("profile:base")],
             parent: None,
+            metadata: Default::default(),
         }
     }
 
@@ -600,6 +601,7 @@ mod tests {
             issue_type: "task".into(),
             labels: vec![Label::new("profile:base")],
             parent: None,
+            metadata: Default::default(),
         };
         controller.run_bead(&bead, None).await.expect("run_bead ok");
         let cfg = captured.lock().unwrap().take().expect("closure called");
