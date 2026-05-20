@@ -4,6 +4,8 @@ use std::path::PathBuf;
 use displaydoc::Display;
 use thiserror::Error;
 
+use crate::bd::BdError;
+
 #[derive(Debug, Display, Error)]
 pub enum StateError {
     /// failed to open SQLite database at {path}
@@ -34,4 +36,7 @@ pub enum StateError {
 
     /// io failure
     Io(#[from] io::Error),
+
+    /// bead-metadata write inside productive-completion gate failed
+    BdUpdate(#[from] BdError),
 }

@@ -2185,6 +2185,7 @@ fn run_todo(
 
     let state = Arc::new(StateDb::open(workspace.join(".wrapix/loom/state.db"))?);
     let git = Arc::new(GitClient::open(workspace)?);
+    let bd = Arc::new(BdClient::new());
     let runtime = tokio::runtime::Runtime::new()?;
     let workspace_buf = workspace.to_path_buf();
     let logs_root = workspace.join(".wrapix/loom/logs");
@@ -2197,6 +2198,7 @@ fn run_todo(
             manifest,
             phase_default,
             git,
+            bd,
             since,
         );
         run_todo_workflow(&mut controller, |spawn_cfg: SpawnConfig| async move {

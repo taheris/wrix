@@ -12,13 +12,14 @@ use std::sync::Arc;
 
 use askama::Template;
 use loom_driver::agent::{RePinContent, SessionOutcome, SpawnConfig, set_loom_inside};
+use loom_driver::bd::{BdClient, BdError, CommandRunner, TokioRunner, UpdateOpts};
 use loom_driver::config::Phase;
 use loom_driver::git::GitClient;
-use loom_driver::identifier::{ProfileName, SpecLabel};
+use loom_driver::identifier::{BeadId, ProfileName, SpecLabel};
 use loom_driver::profile_manifest::ProfileImageManifest;
 use loom_driver::scratch::resolve_scratch_key;
-use loom_driver::state::StateDb;
-use tracing::{debug, info};
+use loom_driver::state::{BdUpdateFn, StateDb};
+use tracing::{debug, info, warn};
 
 use super::ExitSignal;
 use super::context::{TemplateBaseFields, TodoTemplateContext, build_template_context};
@@ -26,17 +27,21 @@ use super::error::TodoError;
 use super::runner::{TodoController, TodoSession};
 use super::tier::{GitDiffSource, MoleculeState, TierInputs, compute_spec_diff};
 
-pub struct ProductionTodoController {
+const BASE_COMMIT_METADATA_KEY: &str = "loom.base_commit";
+
+pub struct ProductionTodoController<R: CommandRunner = TokioRunner> {
     label: SpecLabel,
     workspace: PathBuf,
     state: Arc<StateDb>,
     manifest: Arc<ProfileImageManifest>,
     phase_default: ProfileName,
     git: Arc<GitClient>,
+    bd: Arc<BdClient<R>>,
     since: Option<String>,
 }
 
-impl ProductionTodoController {
+impl<R: CommandRunner> ProductionTodoController<R> {
+    #[expect(clippy::too_many_arguments, reason = "controller construction surface")]
     pub fn new(
         label: SpecLabel,
         workspace: PathBuf,
@@ -44,6 +49,7 @@ impl ProductionTodoController {
         manifest: Arc<ProfileImageManifest>,
         phase_default: ProfileName,
         git: Arc<GitClient>,
+        bd: Arc<BdClient<R>>,
         since: Option<String>,
     ) -> Self {
         Self {
@@ -53,6 +59,7 @@ impl ProductionTodoController {
             manifest,
             phase_default,
             git,
+            bd,
             since,
         }
     }
@@ -123,7 +130,7 @@ impl ProductionTodoController {
     }
 }
 
-impl TodoController for ProductionTodoController {
+impl<R: CommandRunner> TodoController for ProductionTodoController<R> {
     async fn build_session(&mut self) -> Result<TodoSession, TodoError> {
         let prompt = self.build_prompt()?;
         let entry = self.manifest.lookup(&self.phase_default)?;
@@ -172,20 +179,67 @@ impl TodoController for ProductionTodoController {
         outcome: &SessionOutcome,
         marker: Option<&ExitSignal>,
     ) -> Result<(), TodoError> {
+        if !base_commit_should_advance(outcome.exit_code, marker) {
+            info!(
+                label = %self.label,
+                exit_code = outcome.exit_code,
+                marker = ?marker,
+                "loom todo: base_commit not advanced — gate requires exit_code==0 AND LOOM_COMPLETE/LOOM_NOOP",
+            );
+            return Ok(());
+        }
+        let Some(mol) = self.state.active_molecule(&self.label)? else {
+            warn!(
+                label = %self.label,
+                "loom todo: productive completion observed but no active molecule — base_commit and notes unchanged",
+            );
+            return Ok(());
+        };
+        let head = self
+            .git
+            .head_commit_sha()
+            .await
+            .map_err(|e| TodoError::Io(std::io::Error::other(e.to_string())))?;
+        let bd = Arc::clone(&self.bd);
+        let bd_update: BdUpdateFn = Box::new(move |mol_id, new_base_commit| {
+            let bd = Arc::clone(&bd);
+            let mol_id_str = mol_id.as_str().to_owned();
+            let new_base_commit = new_base_commit.to_owned();
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async move {
+                    let bead_id = BeadId::new(&mol_id_str).map_err(BdError::CreateInvalidId)?;
+                    bd.update(
+                        &bead_id,
+                        UpdateOpts {
+                            set_metadata: vec![(
+                                BASE_COMMIT_METADATA_KEY.to_owned(),
+                                new_base_commit,
+                            )],
+                            ..UpdateOpts::default()
+                        },
+                    )
+                    .await
+                })
+            })
+        });
+        self.state
+            .consume_notes_and_refresh_base_commit(&self.label, &mol.id, &head, bd_update)?;
         info!(
             label = %self.label,
-            exit_code = outcome.exit_code,
+            head = %head,
+            mol_id = %mol.id,
             marker = ?marker,
-            productive = productive_completion(outcome.exit_code, marker),
-            "loom todo: session outcome recorded",
+            "loom todo: implementation notes consumed and base_commit refreshed atomically",
         );
         Ok(())
     }
 }
 
-/// Productive-completion gate per `specs/loom-harness.md` *Productive-completion gate*:
-/// both `exit_code == 0` and a `LOOM_COMPLETE`/`LOOM_NOOP` marker required.
-fn productive_completion(exit_code: i32, marker: Option<&ExitSignal>) -> bool {
+/// Productive-completion gate: a `loom todo` session advances
+/// `loom.base_commit` only when the marker is `LOOM_COMPLETE` /
+/// `LOOM_NOOP` and the agent process exited zero — backend errors,
+/// network drops, and swallowed-marker turns must not skip the diff.
+fn base_commit_should_advance(exit_code: i32, marker: Option<&ExitSignal>) -> bool {
     exit_code == 0 && matches!(marker, Some(ExitSignal::Complete | ExitSignal::Noop))
 }
 
@@ -251,10 +305,10 @@ mod tests {
 
     /// Five terminal marker shapes × two exit codes — ten rows, two
     /// truths: only `LOOM_COMPLETE`/`LOOM_NOOP` paired with `exit_code==0`
-    /// classifies the session as productive completion (per
-    /// `specs/loom-harness.md` *Productive-completion gate*).
+    /// advances `loom.base_commit` (per `specs/loom-harness.md`
+    /// *Productive-completion gate*).
     #[test]
-    fn productive_completion_only_on_complete_or_noop_with_clean_exit() {
+    fn base_commit_should_advance_only_on_complete_or_noop_with_clean_exit() {
         let blocked = ExitSignal::Blocked {
             reason: "missing schema".into(),
         };
@@ -275,9 +329,9 @@ mod tests {
         ];
         for (marker, exit_code, expected, label) in cases {
             assert_eq!(
-                productive_completion(*exit_code, *marker),
+                base_commit_should_advance(*exit_code, *marker),
                 *expected,
-                "case `{label}`: expected productive={expected}",
+                "case `{label}`: expected advance={expected}",
             );
         }
     }

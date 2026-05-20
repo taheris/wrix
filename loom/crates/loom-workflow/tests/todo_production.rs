@@ -11,15 +11,20 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use std::collections::VecDeque;
+use std::ffi::OsString;
 use std::path::Path;
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use loom_driver::agent::SessionOutcome;
+use loom_driver::bd::{BdClient, BdError, CommandRunner, RunOutput};
 use loom_driver::git::GitClient;
 use loom_driver::identifier::{MoleculeId, ProfileName, SpecLabel};
 use loom_driver::profile_manifest::ProfileImageManifest;
 use loom_driver::state::{ActiveMolecule, StateDb};
-use loom_workflow::todo::{ProductionTodoController, TodoController, TodoError};
+use loom_workflow::todo::{ExitSignal, ProductionTodoController, TodoController, TodoError};
 
 fn run_git(workspace: &Path, args: &[&str]) {
     let status = Command::new("git")
@@ -64,6 +69,54 @@ fn stub_manifest(dir: &Path) -> Arc<ProfileImageManifest> {
 
 fn empty_state(workspace: &Path) -> Arc<StateDb> {
     Arc::new(StateDb::open(workspace.join(".wrapix/loom/state.db")).unwrap())
+}
+
+#[derive(Clone, Default)]
+struct CapturingRunner {
+    responses: Arc<Mutex<VecDeque<RunOutput>>>,
+    calls: Arc<Mutex<Vec<Vec<OsString>>>>,
+}
+
+impl CapturingRunner {
+    fn new(responses: impl IntoIterator<Item = RunOutput>) -> Self {
+        Self {
+            responses: Arc::new(Mutex::new(responses.into_iter().collect())),
+            calls: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn calls(&self) -> Vec<Vec<String>> {
+        self.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|argv| {
+                argv.iter()
+                    .map(|a| a.to_string_lossy().into_owned())
+                    .collect()
+            })
+            .collect()
+    }
+}
+
+impl CommandRunner for CapturingRunner {
+    async fn run(&self, args: Vec<OsString>, _t: Duration) -> Result<RunOutput, BdError> {
+        self.calls.lock().unwrap().push(args);
+        Ok(self
+            .responses
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or(RunOutput {
+                status: 0,
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            }))
+    }
+}
+
+fn stub_bd() -> Arc<BdClient> {
+    Arc::new(BdClient::new())
 }
 
 fn seeded_state(
@@ -113,6 +166,7 @@ async fn build_session_dispatches_rendered_todo_template_and_writes_prompt_txt()
         manifest,
         ProfileName::new("base"),
         git,
+        stub_bd(),
         None,
     );
     let session = ctrl.build_session().await.expect("build cfg");
@@ -158,6 +212,7 @@ async fn build_spawn_config_resolves_manifest_image_and_renders_new_template() {
         manifest,
         ProfileName::new("base"),
         git,
+        stub_bd(),
         None,
     );
     let session = ctrl.build_session().await.expect("build cfg");
@@ -188,6 +243,7 @@ async fn build_spawn_config_uses_update_template_when_molecule_exists() {
         manifest,
         ProfileName::new("base"),
         git,
+        stub_bd(),
         None,
     );
     let session = ctrl.build_session().await.expect("build cfg");
@@ -213,6 +269,7 @@ async fn build_spawn_config_surfaces_unknown_profile_as_profile_error() {
         manifest,
         ProfileName::new("missing"),
         git,
+        stub_bd(),
         None,
     );
     let err = match ctrl.build_session().await {
@@ -252,6 +309,7 @@ async fn build_spawn_config_tier_1_renders_diff_from_base_commit() {
         manifest,
         ProfileName::new("base"),
         git,
+        stub_bd(),
         None,
     );
     let session = ctrl.build_session().await.expect("build cfg");
@@ -297,6 +355,7 @@ async fn build_spawn_config_renders_implementation_notes_from_db() {
         manifest,
         ProfileName::new("base"),
         git,
+        stub_bd(),
         None,
     );
     let session = ctrl.build_session().await.expect("build cfg");
@@ -341,6 +400,7 @@ async fn build_spawn_config_omits_notes_section_when_notes_empty() {
         manifest,
         ProfileName::new("base"),
         git,
+        stub_bd(),
         None,
     );
     let session = ctrl.build_session().await.expect("build cfg");
@@ -352,4 +412,130 @@ async fn build_spawn_config_omits_notes_section_when_notes_empty() {
         "empty notes must omit the Implementation Notes section: {}",
         session.config.initial_prompt,
     );
+}
+
+/// Productive completion (`exit_code == 0` AND `LOOM_COMPLETE` /
+/// `LOOM_NOOP`) advances `loom.base_commit` on the molecule's epic
+/// (via `bd update --set-metadata`) AND the local
+/// `molecules.base_commit` cache; any other terminal state leaves both
+/// untouched. Spec criterion
+/// `base_commit_advances_only_on_complete_or_noop_with_clean_exit`.
+#[tokio::test(flavor = "multi_thread")]
+async fn base_commit_advances_only_on_complete_or_noop_with_clean_exit() {
+    for (marker, exit_code, expected_advance, case) in [
+        (Some(ExitSignal::Complete), 0, true, "complete + exit 0"),
+        (Some(ExitSignal::Noop), 0, true, "noop + exit 0"),
+        (Some(ExitSignal::Complete), 1, false, "complete + exit 1"),
+        (None, 0, false, "missing marker + exit 0"),
+        (
+            Some(ExitSignal::Blocked { reason: "x".into() }),
+            0,
+            false,
+            "blocked + exit 0",
+        ),
+        (
+            Some(ExitSignal::Clarify {
+                question: "x".into(),
+            }),
+            0,
+            false,
+            "clarify + exit 0",
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().to_path_buf();
+        let state = seeded_state(&workspace, "alpha", "wx-alpha", Some("old-sha".into()));
+        let label = SpecLabel::new("alpha");
+        state
+            .notes_add(&label, "implementation", "impl 1", 100)
+            .unwrap();
+        state
+            .notes_add(&label, "implementation", "impl 2", 200)
+            .unwrap();
+        state.notes_add(&label, "design", "design 1", 300).unwrap();
+        let manifest = stub_manifest(&workspace);
+        let git = init_repo(&workspace);
+        let head_after_seed = capture_head(&workspace);
+        let runner = CapturingRunner::new([]);
+        let runner_handle = runner.clone();
+        let bd = Arc::new(BdClient::with_runner(runner));
+        let mut ctrl = ProductionTodoController::new(
+            label.clone(),
+            workspace,
+            Arc::clone(&state),
+            manifest,
+            ProfileName::new("base"),
+            git,
+            bd,
+            None,
+        );
+
+        ctrl.record_outcome(
+            &SessionOutcome {
+                exit_code,
+                cost_usd: None,
+            },
+            marker.as_ref(),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("case `{case}`: record_outcome failed: {e}"));
+
+        let mol = state
+            .active_molecule(&label)
+            .unwrap()
+            .expect("molecule survives");
+        let impl_notes_left = state
+            .notes_list(Some(&label), Some("implementation"))
+            .unwrap()
+            .len();
+        let bd_calls = runner_handle.calls();
+        if expected_advance {
+            assert_eq!(
+                mol.base_commit,
+                Some(head_after_seed.clone()),
+                "case `{case}`: molecules.base_commit must advance to HEAD",
+            );
+            assert_eq!(
+                impl_notes_left, 0,
+                "case `{case}`: productive completion must delete implementation notes",
+            );
+            assert_eq!(
+                state
+                    .notes_list(Some(&label), Some("design"))
+                    .unwrap()
+                    .len(),
+                1,
+                "case `{case}`: non-implementation kinds must survive the gate",
+            );
+            assert_eq!(
+                bd_calls.len(),
+                1,
+                "case `{case}`: exactly one bd call expected, got {bd_calls:?}",
+            );
+            let argv = &bd_calls[0];
+            assert_eq!(argv[0], "update");
+            assert_eq!(argv[1], "wx-alpha");
+            let pos = argv
+                .iter()
+                .position(|a| a == "--set-metadata")
+                .unwrap_or_else(|| {
+                    panic!("case `{case}`: --set-metadata flag missing in argv: {argv:?}")
+                });
+            assert_eq!(argv[pos + 1], format!("loom.base_commit={head_after_seed}"));
+        } else {
+            assert_eq!(
+                mol.base_commit,
+                Some("old-sha".to_string()),
+                "case `{case}`: non-productive terminal state must leave molecules.base_commit untouched",
+            );
+            assert_eq!(
+                impl_notes_left, 2,
+                "case `{case}`: non-productive terminal state must leave implementation notes intact",
+            );
+            assert!(
+                bd_calls.is_empty(),
+                "case `{case}`: non-productive terminal state must not invoke bd: {bd_calls:?}",
+            );
+        }
+    }
 }

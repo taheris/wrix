@@ -3,6 +3,7 @@ use std::sync::Mutex;
 
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::bd::BdError;
 use crate::identifier::{MoleculeId, SpecLabel};
 
 use super::error::StateError;
@@ -87,6 +88,14 @@ pub struct NoteRow {
     pub text: String,
     pub created_at_ms: i64,
 }
+
+/// Bead-metadata writer injected into
+/// [`StateDb::consume_notes_and_refresh_base_commit`]. The callback
+/// receives the molecule id whose epic carries `loom.base_commit` and
+/// the new commit value; failure surfaces as
+/// [`StateError::BdUpdate`](super::error::StateError::BdUpdate) and
+/// rolls back the SQLite writes that share the gate's transaction.
+pub type BdUpdateFn = Box<dyn Fn(&MoleculeId, &str) -> Result<(), BdError>>;
 
 /// One row of the `molecules` table.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -325,6 +334,35 @@ impl StateDb {
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    /// Productive-completion gate: delete every implementation-kind note
+    /// for `label`, advance the local `molecules.base_commit` cache for
+    /// `mol_id` to `new_base_commit`, and run the durable bead-metadata
+    /// write through `bd_update` — all under one SQLite transaction. A
+    /// closure failure (the bead-metadata write) propagates as
+    /// [`StateError::BdUpdate`] and the transaction rolls back so the
+    /// local cache stays aligned with the pre-write Beads state.
+    pub fn consume_notes_and_refresh_base_commit(
+        &self,
+        label: &SpecLabel,
+        mol_id: &MoleculeId,
+        new_base_commit: &str,
+        bd_update: BdUpdateFn,
+    ) -> Result<(), StateError> {
+        let mut conn = self.conn.lock().map_err(|_| StateError::Poisoned)?;
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM notes WHERE spec_label = ?1 AND kind = 'implementation'",
+            params![label.as_str()],
+        )?;
+        tx.execute(
+            "UPDATE molecules SET base_commit = ?1 WHERE id = ?2",
+            params![new_base_commit, mol_id.as_str()],
+        )?;
+        bd_update(mol_id, new_base_commit)?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// Remove a single note by its row id.

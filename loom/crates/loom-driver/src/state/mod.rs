@@ -16,6 +16,6 @@ mod migrate;
 mod rebuild;
 
 pub use companions::parse_companions;
-pub use db::{MoleculeRow, NoteRow, SpecRow, StateDb};
+pub use db::{BdUpdateFn, MoleculeRow, NoteRow, SpecRow, StateDb};
 pub use error::StateError;
 pub use rebuild::{ActiveMolecule, RebuildReport};

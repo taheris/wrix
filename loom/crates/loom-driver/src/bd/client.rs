@@ -148,6 +148,10 @@ impl<R: CommandRunner> BdClient<R> {
             args.push("--notes".into());
             args.push(notes.into());
         }
+        for (key, value) in opts.set_metadata {
+            args.push("--set-metadata".into());
+            args.push(format!("{key}={value}").into());
+        }
         self.invoke(args).await?;
         Ok(())
     }
@@ -292,6 +296,12 @@ pub struct UpdateOpts {
     /// run-loop infra-failure path to record `infra-preflight` /
     /// `infra-repeated` causes alongside the `loom:blocked` label.
     pub notes: Option<String>,
+    /// Additive metadata writes forwarded as repeated `bd update
+    /// --set-metadata key=value` flags. Each entry sets one key without
+    /// disturbing other metadata on the bead — preferred over the
+    /// full-object `--metadata <json>` flag whenever only a subset needs
+    /// to change.
+    pub set_metadata: Vec<(String, String)>,
 }
 
 /// Filters accepted by `bd list`. All fields are optional; passing none
@@ -731,6 +741,47 @@ mod tests {
         // The label and notes must travel together.
         assert!(argv.contains(&"--add-label".to_string()));
         assert!(argv.contains(&"loom:blocked".to_string()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_emits_set_metadata_pairs_when_set() -> Result<()> {
+        let runner = CapturingRunner::new([ok(b"")]);
+        let client = BdClient::with_runner(runner);
+        client
+            .update(
+                &BeadId::new("wx-mol")?,
+                UpdateOpts {
+                    set_metadata: vec![
+                        ("loom.base_commit".into(), "deadbeef".into()),
+                        ("loom.extra".into(), "v=1".into()),
+                    ],
+                    ..UpdateOpts::default()
+                },
+            )
+            .await?;
+        let argv = argv_of(&client.runner, 0);
+        assert_eq!(argv[0], "update");
+        assert_eq!(argv[1], "wx-mol");
+        let pairs: Vec<&String> = argv
+            .iter()
+            .enumerate()
+            .filter_map(|(i, a)| {
+                if a == "--set-metadata" {
+                    argv.get(i + 1)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            pairs,
+            vec![
+                &"loom.base_commit=deadbeef".to_string(),
+                &"loom.extra=v=1".to_string(),
+            ],
+            "each set_metadata entry must travel as one --set-metadata key=value pair: {argv:?}",
+        );
         Ok(())
     }
 
