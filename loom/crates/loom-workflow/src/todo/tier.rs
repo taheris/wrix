@@ -64,9 +64,10 @@ pub struct TierInputs<'a> {
 /// Output of [`compute_spec_diff`] — the tier the agent should run under.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TierDecision {
-    /// Tier 1 — git diff with per-spec cursor fan-out. `candidates` may be
-    /// empty (no spec changes since last cursor), in which case the driver
-    /// exits early with the "no spec changes" message.
+    /// Tier 1 — git diff against the molecule's `base_commit` with per-spec
+    /// fan-out. `candidates` may be empty (no spec changes since
+    /// `base_commit`), in which case the driver exits early with the "no
+    /// spec changes" message.
     Diff {
         anchor_base: String,
         candidates: Vec<DiffCandidate>,
