@@ -18,7 +18,10 @@ mod loom_does_not_invoke_podman;
 mod loom_events_is_leaf;
 mod loom_events_minimal_deps;
 mod loom_render_deps;
+mod loom_templates_public_partial_constants;
+mod loom_templates_public_types;
 mod loom_templates_snapshots_no_crate_root_allow;
+mod loom_templates_workflow_templates_not_exported;
 mod newtype_identifiers;
 mod no_allow_dead_code;
 mod no_derive_from_on_newtypes;
@@ -132,8 +135,20 @@ pub static REGISTRY: &[Walk] = &[
         run: loom_render_deps::run,
     },
     Walk {
+        name: "loom_templates_public_partial_constants",
+        run: loom_templates_public_partial_constants::run,
+    },
+    Walk {
+        name: "loom_templates_public_types",
+        run: loom_templates_public_types::run,
+    },
+    Walk {
         name: "loom_templates_snapshots_no_crate_root_allow",
         run: loom_templates_snapshots_no_crate_root_allow::run,
+    },
+    Walk {
+        name: "loom_templates_workflow_templates_not_exported",
+        run: loom_templates_workflow_templates_not_exported::run,
     },
     Walk {
         name: "newtype_identifiers",
@@ -283,7 +298,10 @@ mod tests {
             "newtype_identifiers",
             "template_context_structs",
             "template_pinning_matrix",
+            "loom_templates_public_partial_constants",
+            "loom_templates_public_types",
             "loom_templates_snapshots_no_crate_root_allow",
+            "loom_templates_workflow_templates_not_exported",
             "no_hardcoded_tmp_paths",
             "no_thread_sleep",
             "no_tokio_sleep_outside_clock",

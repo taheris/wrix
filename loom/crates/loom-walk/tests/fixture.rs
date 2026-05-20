@@ -1790,3 +1790,211 @@ fn public_contract_crates_fail_when_manifest_missing() {
     let out = invoke(&["public_contract_crates"], Some(ws.path()), None);
     assert_fail(&out, "loom-llm");
 }
+
+// ---------------------------------------------------------------------------
+// loom_templates_public_types
+// ---------------------------------------------------------------------------
+
+const TEMPLATES_PUBLIC_TYPES_BODY: &str = "pub struct PreviousFailure;\n\
+     pub struct VerifierFailure;\n\
+     pub enum ReviewConcernKind { Other(String) }\n\
+     pub enum DriverNoticeCause { RetryExhausted }\n\
+     pub struct RunContext;\n\
+     pub struct ReviewContext;\n\
+     pub struct PinnedContext;\n";
+
+#[test]
+fn loom_templates_public_types_pass_when_all_exposed_directly() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-templates/src/lib.rs",
+        TEMPLATES_PUBLIC_TYPES_BODY,
+    );
+    let out = invoke(&["loom_templates_public_types"], Some(ws.path()), None);
+    assert_pass(&out);
+}
+
+#[test]
+fn loom_templates_public_types_pass_when_reexported_via_pub_use() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-templates/src/lib.rs",
+        "pub mod inner;\n\
+         pub use inner::{PreviousFailure, VerifierFailure, ReviewConcernKind, DriverNoticeCause, RunContext, ReviewContext, PinnedContext};\n",
+    );
+    seed(
+        ws.path(),
+        "crates/loom-templates/src/inner.rs",
+        TEMPLATES_PUBLIC_TYPES_BODY,
+    );
+    let out = invoke(&["loom_templates_public_types"], Some(ws.path()), None);
+    assert_pass(&out);
+}
+
+#[test]
+fn loom_templates_public_types_fail_when_one_missing() {
+    let ws = make_workspace();
+    let body = "pub struct PreviousFailure;\n\
+                pub struct VerifierFailure;\n\
+                pub enum ReviewConcernKind { Other(String) }\n\
+                pub enum DriverNoticeCause { RetryExhausted }\n\
+                pub struct RunContext;\n\
+                pub struct ReviewContext;\n";
+    seed(ws.path(), "crates/loom-templates/src/lib.rs", body);
+    let out = invoke(&["loom_templates_public_types"], Some(ws.path()), None);
+    assert_fail(&out, "PinnedContext");
+}
+
+#[test]
+fn loom_templates_public_types_fail_when_private() {
+    let ws = make_workspace();
+    let body = "struct PreviousFailure;\n\
+                struct VerifierFailure;\n\
+                enum ReviewConcernKind { Other(String) }\n\
+                enum DriverNoticeCause { RetryExhausted }\n\
+                struct RunContext;\n\
+                struct ReviewContext;\n\
+                struct PinnedContext;\n";
+    seed(ws.path(), "crates/loom-templates/src/lib.rs", body);
+    let out = invoke(&["loom_templates_public_types"], Some(ws.path()), None);
+    assert_fail(&out, "PreviousFailure");
+}
+
+// ---------------------------------------------------------------------------
+// loom_templates_public_partial_constants
+// ---------------------------------------------------------------------------
+
+fn seed_partial(ws: &TempDir, name: &str) {
+    seed(
+        ws.path(),
+        &format!("crates/loom-templates/templates/partial/{name}"),
+        "partial body\n",
+    );
+}
+
+#[test]
+fn loom_templates_public_partial_constants_pass_each_partial_has_const() {
+    let ws = make_workspace();
+    seed_partial(&ws, "scratchpad.md");
+    seed_partial(&ws, "context_pinning.md");
+    seed(
+        ws.path(),
+        "crates/loom-templates/src/lib.rs",
+        "pub const SCRATCHPAD_PARTIAL: &str = include_str!(\"../templates/partial/scratchpad.md\");\n\
+         pub const CONTEXT_PINNING_PARTIAL: &str = include_str!(\"../templates/partial/context_pinning.md\");\n",
+    );
+    let out = invoke(
+        &["loom_templates_public_partial_constants"],
+        Some(ws.path()),
+        None,
+    );
+    assert_pass(&out);
+}
+
+#[test]
+fn loom_templates_public_partial_constants_fail_missing_const() {
+    let ws = make_workspace();
+    seed_partial(&ws, "scratchpad.md");
+    seed_partial(&ws, "style_rules.md");
+    seed(
+        ws.path(),
+        "crates/loom-templates/src/lib.rs",
+        "pub const SCRATCHPAD_PARTIAL: &str = include_str!(\"../templates/partial/scratchpad.md\");\n",
+    );
+    let out = invoke(
+        &["loom_templates_public_partial_constants"],
+        Some(ws.path()),
+        None,
+    );
+    assert_fail(&out, "style_rules.md");
+}
+
+#[test]
+fn loom_templates_public_partial_constants_fail_when_const_is_private() {
+    let ws = make_workspace();
+    seed_partial(&ws, "scratchpad.md");
+    seed(
+        ws.path(),
+        "crates/loom-templates/src/lib.rs",
+        "const SCRATCHPAD_PARTIAL: &str = include_str!(\"../templates/partial/scratchpad.md\");\n",
+    );
+    let out = invoke(
+        &["loom_templates_public_partial_constants"],
+        Some(ws.path()),
+        None,
+    );
+    assert_fail(&out, "scratchpad.md");
+}
+
+// ---------------------------------------------------------------------------
+// loom_templates_workflow_templates_not_exported
+// ---------------------------------------------------------------------------
+
+#[test]
+fn loom_templates_workflow_templates_not_exported_pass_when_no_const() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-templates/src/lib.rs",
+        "pub const SCRATCHPAD_PARTIAL: &str = include_str!(\"../templates/partial/scratchpad.md\");\n",
+    );
+    let out = invoke(
+        &["loom_templates_workflow_templates_not_exported"],
+        Some(ws.path()),
+        None,
+    );
+    assert_pass(&out);
+}
+
+#[test]
+fn loom_templates_workflow_templates_not_exported_pass_when_only_derive() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-templates/src/run.rs",
+        "use askama::Template;\n\
+         #[derive(Template)]\n\
+         #[template(path = \"run.md\")]\n\
+         pub struct RunContext;\n",
+    );
+    let out = invoke(
+        &["loom_templates_workflow_templates_not_exported"],
+        Some(ws.path()),
+        None,
+    );
+    assert_pass(&out);
+}
+
+#[test]
+fn loom_templates_workflow_templates_not_exported_fail_when_pub_const_run() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-templates/src/lib.rs",
+        "pub const RUN_TEMPLATE: &str = include_str!(\"../templates/run.md\");\n",
+    );
+    let out = invoke(
+        &["loom_templates_workflow_templates_not_exported"],
+        Some(ws.path()),
+        None,
+    );
+    assert_fail(&out, "run.md");
+}
+
+#[test]
+fn loom_templates_workflow_templates_not_exported_fail_when_pub_const_plan_new() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-templates/src/lib.rs",
+        "pub const PLAN_NEW_TEMPLATE: &str = include_str!(\"../templates/plan_new.md\");\n",
+    );
+    let out = invoke(
+        &["loom_templates_workflow_templates_not_exported"],
+        Some(ws.path()),
+        None,
+    );
+    assert_fail(&out, "plan_new.md");
+}
