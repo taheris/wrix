@@ -3,10 +3,10 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime};
 
-use tracing::info;
+use tracing::{info, warn};
 
-use loom_events::AgentEvent;
 use loom_events::identifier::{BeadId, SpecLabel};
+use loom_events::{AgentEvent, EventSink};
 
 mod error;
 
@@ -178,6 +178,26 @@ impl Drop for LogSink {
     }
 }
 
+/// `EventSink` impl makes `LogSink` the persistence implementor of the
+/// trait the driver fans into a static-typed chain via
+/// [`loom_events::EventSinkExt::tee`]. The trait `emit` is sync and has
+/// no return value, so disk-write failures (already rare per the spec's
+/// disk-writer contract) surface via `warn!` rather than aborting the
+/// chain — callers that need fallible emission keep the inherent
+/// [`LogSink::emit`] available via UFCS.
+impl EventSink for LogSink {
+    fn emit(&mut self, event: &AgentEvent) {
+        if let Err(err) = LogSink::emit(self, event) {
+            warn!(
+                target: "loom_render::sink",
+                error = %err,
+                log_path = %self.log_path.display(),
+                "log sink emit failed under EventSink trait",
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) type SharedBuffer = std::sync::Arc<std::sync::Mutex<Vec<u8>>>;
 
@@ -341,6 +361,97 @@ mod tests {
         )
         .expect("open");
         assert!(sink.log_path().parent().expect("parent").is_dir());
+    }
+
+    /// `LogSink` is the trait's first implementor: events emitted via the
+    /// `EventSink` interface land on disk as one JSONL line per event with
+    /// per-event flush, matching the disk-writer contract. The trait emit
+    /// returns `()`, so this test asserts via post-emit file inspection
+    /// rather than a return-value check.
+    #[test]
+    fn log_sink_implements_event_sink() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut sink, _term) = open_sink_with_sink_writer(
+            dir.path(),
+            &SpecLabel::new("alpha"),
+            &BeadId::new("wx-1").expect("valid bead id"),
+            SystemTime::UNIX_EPOCH,
+        )
+        .expect("open");
+        let path = sink.log_path().to_path_buf();
+
+        let trait_emit = |s: &mut dyn loom_events::EventSink, e: &AgentEvent| s.emit(e);
+        trait_emit(
+            &mut sink,
+            &AgentEvent::ToolCall {
+                envelope: sample_envelope(),
+                id: ToolCallId::new("t1"),
+                tool: "Read".to_string(),
+                params: json!({"file_path": "first.rs"}),
+                parent_tool_call_id: None,
+            },
+        );
+        let after_first = std::fs::read_to_string(&path).expect("read mid-stream");
+        assert_eq!(
+            after_first.lines().count(),
+            1,
+            "trait emit must flush each event to disk: {after_first:?}",
+        );
+
+        trait_emit(
+            &mut sink,
+            &AgentEvent::TurnEnd {
+                envelope: sample_envelope(),
+            },
+        );
+        sink.finish(BeadOutcome::Done).expect("finish");
+
+        let lines = read_lines(&path);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        let first: Value = serde_json::from_str(&lines[0]).expect("json");
+        assert_eq!(first["kind"], "tool_call");
+        let second: Value = serde_json::from_str(&lines[1]).expect("json");
+        assert_eq!(second["kind"], "turn_end");
+    }
+
+    /// Composition via `.tee(other)` from `EventSinkExt`: events flow to
+    /// the `LogSink` and to a sibling observer in registration order from
+    /// a single chain emit call.
+    #[test]
+    fn log_sink_composes_via_tee_with_observer() {
+        use loom_events::{EventSink, EventSinkExt};
+        use std::sync::{Arc, Mutex};
+
+        struct CountingObserver(Arc<Mutex<u32>>);
+        impl EventSink for CountingObserver {
+            fn emit(&mut self, _event: &AgentEvent) {
+                *self.0.lock().expect("not poisoned") += 1;
+            }
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let label = SpecLabel::new("alpha");
+        let bead = BeadId::new("wx-1").expect("valid bead id");
+        let sink = LogSink::open_in_at(dir.path(), &label, &bead, None, SystemTime::UNIX_EPOCH)
+            .expect("open");
+        let path = sink.log_path().to_path_buf();
+        let count = Arc::new(Mutex::new(0_u32));
+        let mut chain = sink.tee(CountingObserver(count.clone()));
+
+        chain.emit(&AgentEvent::TurnEnd {
+            envelope: sample_envelope(),
+        });
+        chain.emit(&AgentEvent::TurnEnd {
+            envelope: sample_envelope(),
+        });
+
+        assert_eq!(
+            *count.lock().expect("not poisoned"),
+            2,
+            "observer must see every event",
+        );
+        let lines = read_lines(&path);
+        assert_eq!(lines.len(), 2, "log sink must see every event: {lines:?}");
     }
 
     #[test]
