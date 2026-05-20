@@ -97,6 +97,10 @@ impl<R: CommandRunner> BdClient<R> {
             args.push("--labels".into());
             args.push(opts.labels.join(",").into());
         }
+        if let Some(metadata) = opts.metadata {
+            args.push("--metadata".into());
+            args.push(metadata.into());
+        }
         let out = self.invoke(args).await?;
         let stdout = String::from_utf8(out.stdout)?;
         let trimmed = stdout.trim();
@@ -271,6 +275,9 @@ pub struct CreateOpts {
     pub priority: Option<u8>,
     pub labels: Vec<String>,
     pub parent: Option<BeadId>,
+    /// Forwarded verbatim to `bd create --metadata <json>` when set. `bd`
+    /// expects a JSON object; callers must serialise before passing.
+    pub metadata: Option<String>,
 }
 
 /// Fields accepted by `bd update`. Empty defaults forward nothing.
@@ -537,6 +544,7 @@ mod tests {
                 priority: Some(2),
                 labels: vec!["profile:rust".into()],
                 parent: Some(BeadId::new("wx-3hhwq")?),
+                metadata: None,
             })
             .await?;
         assert_eq!(id, BeadId::new("wx-new.7")?);
@@ -550,6 +558,48 @@ mod tests {
         assert!(argv.contains(&"wx-3hhwq".to_string()));
         assert!(argv.contains(&"--labels".to_string()));
         assert!(argv.contains(&"profile:rust".to_string()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_forwards_metadata_flag_when_set() -> Result<()> {
+        let runner = CapturingRunner::new([ok(b"wx-new.1\n")]);
+        let client = BdClient::with_runner(runner);
+        client
+            .create(CreateOpts {
+                title: "loom-harness: pending decomposition".into(),
+                description: String::new(),
+                issue_type: Some("epic".into()),
+                labels: vec!["spec:loom-harness".into(), "loom:active".into()],
+                metadata: Some(r#"{"loom.base_commit":"deadbeef"}"#.into()),
+                ..CreateOpts::default()
+            })
+            .await?;
+        let argv = argv_of(&client.runner, 0);
+        let idx = argv
+            .iter()
+            .position(|a| a == "--metadata")
+            .ok_or_else(|| anyhow!("--metadata flag missing in argv: {argv:?}"))?;
+        assert_eq!(argv[idx + 1], r#"{"loom.base_commit":"deadbeef"}"#);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_omits_metadata_when_unset() -> Result<()> {
+        let runner = CapturingRunner::new([ok(b"wx-new.2\n")]);
+        let client = BdClient::with_runner(runner);
+        client
+            .create(CreateOpts {
+                title: "x".into(),
+                description: "y".into(),
+                ..CreateOpts::default()
+            })
+            .await?;
+        let argv = argv_of(&client.runner, 0);
+        assert!(
+            !argv.contains(&"--metadata".to_string()),
+            "no metadata ⇒ no --metadata flag, got: {argv:?}",
+        );
         Ok(())
     }
 

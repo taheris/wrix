@@ -4,7 +4,9 @@ use std::time::Duration;
 
 use tracing::info;
 
+use loom_driver::bd::BdClient;
 use loom_driver::config::{LoomConfig, Phase};
+use loom_driver::git::GitClient;
 use loom_driver::identifier::{ProfileName, SpecLabel};
 use loom_driver::lock::LockManager;
 use loom_driver::profile_manifest::{ImageEntry, ProfileImageManifest};
@@ -15,6 +17,7 @@ use super::args::PlanMode;
 use super::command::{WRAPIX_BIN, build_wrapix_argv};
 use super::companions::reconcile_companions;
 use super::error::PlanError;
+use super::molecule::ensure_active_molecule;
 use super::prompt::{PlanPromptInputs, render_prompt};
 
 /// Env var read by `wrapix run` to pick the podman ref of the per-profile
@@ -44,6 +47,13 @@ pub struct PlanOpts {
     /// `WRAPIX_DEFAULT_IMAGE_SOURCE` env vars the launcher reads when no
     /// `--spawn-config` is supplied (see `lib/sandbox/linux/default.nix`).
     pub manifest: ProfileImageManifest,
+    /// Resolve HEAD via `GitClient` and ensure a `loom:active` epic exists
+    /// for the anchor before the interactive `wrapix run` shell-out, per
+    /// `specs/loom-harness.md` § *Plan creates the molecule*. Production
+    /// always sets `true`; tests that don't seed a git repo or stub `bd`
+    /// set `false` to bypass the bootstrap and exercise the surrounding
+    /// surface (lock, prompt render, companion reconciliation, …).
+    pub bootstrap_molecule: bool,
 }
 
 /// Files touched by [`run`]. Surfaces the resolved spec path and the
@@ -137,6 +147,10 @@ pub fn run_with_timeout(
     // crash) does not leave current_spec pointing at a stale prior spec.
     db.set_current_spec(&label)?;
 
+    if opts.bootstrap_molecule {
+        bootstrap_active_molecule(workspace, &label)?;
+    }
+
     let banner = format!("loom plan @ {}", label);
     let scratch = ScratchSession::open(workspace, &key, &prompt_body, &banner)
         .map_err(|source| PlanError::Spawn { source })?;
@@ -201,6 +215,23 @@ fn resolve_plan_profile(
         return Ok(p.clone());
     }
     Ok(config.agent_for(Phase::Plan)?.profile)
+}
+
+/// Synchronous entry point for the molecule-bootstrap step. Builds a
+/// short-lived current-thread tokio runtime so the surrounding sync runner
+/// can shell out to `git rev-parse HEAD` and `bd list` / `bd create`
+/// without leaking an async signature.
+fn bootstrap_active_molecule(workspace: &Path, label: &SpecLabel) -> Result<(), PlanError> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|source| PlanError::Runtime { source })?;
+    runtime.block_on(async {
+        let git = GitClient::open(workspace)?;
+        let head = git.head_commit_sha().await?;
+        let bd = BdClient::new();
+        ensure_active_molecule(&bd, &head, label).await
+    })
 }
 
 fn read_pinned_context(workspace: &Path, rel: &str) -> Result<String, PlanError> {
@@ -297,6 +328,7 @@ mod tests {
             wrapix_bin: Some(bin),
             cli_profile: None,
             manifest,
+            bootstrap_molecule: false,
         }
     }
 
@@ -306,6 +338,7 @@ mod tests {
             wrapix_bin: Some(bin),
             cli_profile: None,
             manifest,
+            bootstrap_molecule: false,
         }
     }
 
@@ -397,6 +430,7 @@ mod tests {
             wrapix_bin: Some(bin),
             cli_profile: Some(ProfileName::new("rust")),
             manifest,
+            bootstrap_molecule: false,
         };
         run_with_timeout(dir.path(), opts, Duration::from_millis(100))?;
 
@@ -455,6 +489,7 @@ mod tests {
             wrapix_bin: Some(PathBuf::from("/nonexistent/wrapix")),
             cli_profile: Some(ProfileName::new("ruby")),
             manifest,
+            bootstrap_molecule: false,
         };
 
         match run_with_timeout(dir.path(), opts, Duration::from_millis(100)) {

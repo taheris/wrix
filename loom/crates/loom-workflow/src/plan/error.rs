@@ -4,6 +4,8 @@ use std::path::PathBuf;
 use displaydoc::Display;
 use thiserror::Error;
 
+use loom_driver::bd::BdError;
+use loom_driver::git::GitError;
 use loom_driver::lock::LockError;
 use loom_driver::profile_manifest::ProfileError;
 use loom_driver::state::StateError;
@@ -60,4 +62,16 @@ pub enum PlanError {
 
     /// `wrapix run` exited with status {status}
     WrapixExit { status: String },
+
+    /// `bd` CLI operation failed during molecule bootstrap
+    Bd(#[from] BdError),
+
+    /// git operation failed during molecule bootstrap
+    Git(#[from] GitError),
+
+    /// failed to build the tokio runtime for molecule bootstrap
+    Runtime {
+        #[source]
+        source: io::Error,
+    },
 }

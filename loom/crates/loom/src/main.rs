@@ -1209,6 +1209,7 @@ fn run_plan(
             wrapix_bin: std::env::var_os("LOOM_WRAPIX_BIN").map(PathBuf::from),
             cli_profile: profile.map(ProfileName::new),
             manifest,
+            bootstrap_molecule: true,
         },
     )?;
     println!("loom plan: spec={}", report.spec_path.display());

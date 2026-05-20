@@ -36,6 +36,7 @@ mod args;
 mod command;
 mod companions;
 mod error;
+mod molecule;
 mod prompt;
 mod runner;
 
