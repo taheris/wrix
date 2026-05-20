@@ -45,7 +45,7 @@ fn render_previous_failure(cause: &RecoveryCause) -> String {
             failures,
             review_notes,
         } => format_previous_failure(failures, review_notes.as_ref()),
-        RecoveryCause::ReviewFlag(flag) => {
+        RecoveryCause::ReviewConcern(flag) => {
             format!("[{}] {}", flag.concern.as_str(), flag.detail)
         }
         RecoveryCause::ObserverAbort { reason } => {
@@ -65,7 +65,7 @@ fn render_previous_failure(cause: &RecoveryCause) -> String {
 /// - `VerifyFail` → `VerifyFailures(Vec<VerifierFailure>)`. The companion
 ///   `review_notes` flag, when present, must be carried separately on
 ///   `RunContext.review_notes` (this function does not embed it inline).
-/// - `ReviewFlag` → `ReviewConcern { concern: ReviewConcernKind, reason }`.
+/// - `ReviewConcern` → `ReviewConcern { concern: ReviewConcernKind, reason }`.
 pub fn cause_to_previous_failure(cause: &RecoveryCause) -> PreviousFailure {
     match cause {
         RecoveryCause::SwallowedMarker => PreviousFailure::DriverNotice {
@@ -89,7 +89,7 @@ pub fn cause_to_previous_failure(cause: &RecoveryCause) -> PreviousFailure {
         RecoveryCause::VerifyFail { failures, .. } => {
             PreviousFailure::VerifyFailures(failures.iter().map(verify_failure_to_typed).collect())
         }
-        RecoveryCause::ReviewFlag(flag) => PreviousFailure::ReviewConcern {
+        RecoveryCause::ReviewConcern(flag) => PreviousFailure::ReviewConcern {
             concern: concern_to_kind(flag.concern),
             reason: flag.detail.clone(),
         },
@@ -256,8 +256,8 @@ mod tests {
     }
 
     #[test]
-    fn cause_to_previous_failure_maps_review_flag_to_typed_concern() {
-        let cause = RecoveryCause::ReviewFlag(ReviewFlag {
+    fn cause_to_previous_failure_maps_review_concern_to_typed_concern() {
+        let cause = RecoveryCause::ReviewConcern(ReviewFlag {
             concern: ReviewConcern::VerifierBypass,
             detail: "test mocks the agent backend".into(),
         });
@@ -353,18 +353,21 @@ mod tests {
     }
 
     #[test]
-    fn review_flag_cause_round_trips_through_notes() {
-        // The `review-flag` cause carries the concern + verbatim flag
+    fn review_concern_cause_round_trips_through_notes() {
+        // The `review-concern` cause carries the concern + verbatim flag
         // detail; both must survive into the blocked notes when the
         // recovery loop gives up on a flag.
-        let cause = RecoveryCause::ReviewFlag(ReviewFlag {
+        let cause = RecoveryCause::ReviewConcern(ReviewFlag {
             concern: ReviewConcern::VerifierBypass,
             detail: "test mocks the agent backend".into(),
         });
         match resolve_recovery(&cause, 3, 3) {
             RecoveryResolution::Blocked { cause, notes } => {
                 assert_eq!(cause, "retry-exhausted");
-                assert!(notes.contains("review-flag"), "notes name original cause");
+                assert!(
+                    notes.contains("review-concern"),
+                    "notes name original cause",
+                );
                 assert!(
                     notes.contains("[verifier-bypass]"),
                     "concern token preserved verbatim: {notes}",

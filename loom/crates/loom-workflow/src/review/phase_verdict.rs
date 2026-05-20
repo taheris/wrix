@@ -71,7 +71,7 @@ impl ReviewConcern {
 }
 
 /// Parsed contents of the review LLM's structured flag emission. The detail
-/// string carried here is what feeds the `review-flag` row of
+/// string carried here is what feeds the `review-concern` row of
 /// `previous_failure` (`specs/loom-harness.md` §"Recovery context") — sourced
 /// from the structured emission, not regex-extracted from prose.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,11 +105,11 @@ pub enum RecoveryCause {
         failures: Vec<VerifyFailure>,
         review_notes: Option<ReviewFlag>,
     },
-    /// Verify passed but the reviewer raised a flag. Carries the structured
+    /// Verify passed but the reviewer raised a concern. Carries the structured
     /// concern + reasoning emitted by the review LLM so downstream surfaces
     /// (`bd update --notes`, `previous_failure`) can name which concern
     /// triggered without re-parsing the agent's prose.
-    ReviewFlag(ReviewFlag),
+    ReviewConcern(ReviewFlag),
     /// An `EventSink::react()` returned `SessionCommand::Abort` and the
     /// driver cancelled the session before the agent emitted a marker.
     /// Disambiguates "no marker" from `swallowed-marker` per
@@ -120,15 +120,15 @@ pub enum RecoveryCause {
 
 impl RecoveryCause {
     /// Stable spec-table label used in user-facing surfaces (logs, bd notes).
-    /// The label is the same for every review-flag concern; per-concern
-    /// detail lives in [`RecoveryCause::ReviewFlag`]'s payload.
+    /// The label is the same for every review-concern variant; per-concern
+    /// detail lives in [`RecoveryCause::ReviewConcern`]'s payload.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::SwallowedMarker => "swallowed-marker",
             Self::IncompleteSignaling => "incomplete-signaling",
             Self::ZeroProgress => "zero-progress",
             Self::VerifyFail { .. } => "verify-fail",
-            Self::ReviewFlag(_) => "review-flag",
+            Self::ReviewConcern(_) => "review-concern",
             Self::ObserverAbort { .. } => "observer-abort",
         }
     }
@@ -191,13 +191,13 @@ pub fn decide(marker: Option<&ExitSignal>, inputs: GateInputs) -> PhaseVerdict {
 /// definitions. Until the per-phase classifiers normalise it into
 /// [`GateInputs::review_flag`] (see issue wx-e6c8r.9), the gate threads the
 /// payload through directly: a recognised token routes to
-/// [`RecoveryCause::ReviewFlag`] with the structured detail, an unknown
+/// [`RecoveryCause::ReviewConcern`] with the structured detail, an unknown
 /// token collapses to `SwallowedMarker` so downstream surfaces don't print
 /// a bogus concern.
 fn decide_concern(token: &str, reason: &str, inputs: GateInputs) -> PhaseVerdict {
     if let Some(flag) = inputs.review_flag {
         return PhaseVerdict::Recovery {
-            cause: RecoveryCause::ReviewFlag(flag),
+            cause: RecoveryCause::ReviewConcern(flag),
         };
     }
     let Some(concern) = ReviewConcern::parse(token) else {
@@ -206,7 +206,7 @@ fn decide_concern(token: &str, reason: &str, inputs: GateInputs) -> PhaseVerdict
         };
     };
     PhaseVerdict::Recovery {
-        cause: RecoveryCause::ReviewFlag(ReviewFlag {
+        cause: RecoveryCause::ReviewConcern(ReviewFlag {
             concern,
             detail: reason.to_string(),
         }),
@@ -237,7 +237,7 @@ fn decide_progress_marker(is_noop: bool, inputs: GateInputs) -> PhaseVerdict {
     }
     if let Some(flag) = inputs.review_flag {
         return PhaseVerdict::Recovery {
-            cause: RecoveryCause::ReviewFlag(flag),
+            cause: RecoveryCause::ReviewConcern(flag),
         };
     }
     PhaseVerdict::Done
@@ -262,7 +262,7 @@ const REVIEW_FLAG_SEPARATOR: &str = "--";
 /// Returns `None` for review-pass (no marker, or marker present but the
 /// concern token is not one of the four enum values).
 ///
-/// This is the **only** path by which a `RecoveryCause::ReviewFlag` detail
+/// This is the **only** path by which a `RecoveryCause::ReviewConcern` detail
 /// is produced — the spec ([§"Recovery context"](specs/loom-harness.md))
 /// requires the detail come from the structured emission, not regex-pulled
 /// from surrounding prose.
@@ -330,19 +330,19 @@ mod tests {
     // --- Marker-only rows (bd/diff/review irrelevant). ---
 
     #[test]
-    fn concern_marker_with_known_token_routes_to_review_flag_recovery() {
+    fn concern_marker_with_known_token_routes_to_review_concern_recovery() {
         let m = ExitSignal::Concern {
             token: "verifier-bypass".into(),
             reason: "test mocks the agent backend".into(),
         };
         match decide(Some(&m), inputs(true, false, true, None)) {
             PhaseVerdict::Recovery {
-                cause: RecoveryCause::ReviewFlag(parsed),
+                cause: RecoveryCause::ReviewConcern(parsed),
             } => {
                 assert_eq!(parsed.concern, ReviewConcern::VerifierBypass);
                 assert_eq!(parsed.detail, "test mocks the agent backend");
             }
-            other => panic!("expected Recovery::ReviewFlag, got {other:?}"),
+            other => panic!("expected Recovery::ReviewConcern, got {other:?}"),
         }
     }
 
@@ -508,7 +508,7 @@ mod tests {
     }
 
     #[test]
-    fn complete_with_review_flag_routes_to_review_flag() {
+    fn complete_with_review_concern_routes_to_review_concern() {
         let detail = "test mocks the agent backend instead of spawning it";
         let result = decide(
             Some(&ExitSignal::Complete),
@@ -521,18 +521,18 @@ mod tests {
         );
         match result {
             PhaseVerdict::Recovery {
-                cause: RecoveryCause::ReviewFlag(parsed),
+                cause: RecoveryCause::ReviewConcern(parsed),
             } => {
                 assert_eq!(parsed.concern, ReviewConcern::VerifierBypass);
                 assert_eq!(parsed.detail, detail);
             }
-            other => panic!("expected Recovery::ReviewFlag, got {other:?}"),
+            other => panic!("expected Recovery::ReviewConcern, got {other:?}"),
         }
     }
 
     #[test]
-    fn complete_with_style_rule_flag_routes_to_review_flag_with_rule_id() {
-        // The style-rule conformance rubric surfaces as a `review-flag`
+    fn complete_with_style_rule_flag_routes_to_review_concern_with_rule_id() {
+        // The style-rule conformance rubric surfaces as a `review-concern`
         // cause whose concern is `style-rule`. The detail names the
         // violating rule id (e.g. `RS-12`) so downstream surfaces can
         // render it without re-parsing the LLM's prose.
@@ -548,12 +548,12 @@ mod tests {
         );
         match result {
             PhaseVerdict::Recovery {
-                cause: RecoveryCause::ReviewFlag(parsed),
+                cause: RecoveryCause::ReviewConcern(parsed),
             } => {
                 assert_eq!(parsed.concern, ReviewConcern::StyleRule);
                 assert_eq!(parsed.detail, detail);
             }
-            other => panic!("expected Recovery::ReviewFlag(style-rule), got {other:?}"),
+            other => panic!("expected Recovery::ReviewConcern(style-rule), got {other:?}"),
         }
     }
 
@@ -597,7 +597,7 @@ mod tests {
     }
 
     #[test]
-    fn noop_with_review_flag_routes_to_review_flag() {
+    fn noop_with_review_flag_routes_to_review_concern() {
         let detail = "diff edits files outside the spec's Affected Files list";
         let result = decide(
             Some(&ExitSignal::Noop),
@@ -605,12 +605,12 @@ mod tests {
         );
         match result {
             PhaseVerdict::Recovery {
-                cause: RecoveryCause::ReviewFlag(parsed),
+                cause: RecoveryCause::ReviewConcern(parsed),
             } => {
                 assert_eq!(parsed.concern, ReviewConcern::Scope);
                 assert_eq!(parsed.detail, detail);
             }
-            other => panic!("expected Recovery::ReviewFlag, got {other:?}"),
+            other => panic!("expected Recovery::ReviewConcern, got {other:?}"),
         }
     }
 
@@ -660,8 +660,8 @@ mod tests {
             "label is mechanical-only — review-notes piggyback never relabels",
         );
         assert_eq!(
-            RecoveryCause::ReviewFlag(flag(ReviewConcern::Judge, "")).as_str(),
-            "review-flag",
+            RecoveryCause::ReviewConcern(flag(ReviewConcern::Judge, "")).as_str(),
+            "review-concern",
         );
         assert_eq!(
             RecoveryCause::ObserverAbort {
