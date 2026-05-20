@@ -288,4 +288,14 @@ mod tests {
         let out = "LOOM_CONCERN: scope -- bad diff\nclosing prose\n";
         assert_eq!(parse_exit_signal(out), None);
     }
+
+    /// The legacy `LOOM_REVIEW_FLAG:` keyword is no longer a recognised
+    /// marker; on a prior line it is plain prose and the final-line
+    /// `LOOM_COMPLETE` is the verdict.
+    #[test]
+    fn legacy_review_flag_keyword_on_prior_line_does_not_shadow_final_complete() {
+        let out =
+            "LOOM_REVIEW_FLAG: verifier-bypass -- test mocks the agent backend\nLOOM_COMPLETE\n";
+        assert_eq!(parse_exit_signal(out), Some(ExitSignal::Complete));
+    }
 }
