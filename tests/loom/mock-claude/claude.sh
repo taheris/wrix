@@ -75,6 +75,13 @@ case "$MODE" in
         exit 0
         ;;
     ignore-stdin)
+        # Drain the driver's initial prompt so the write returns. The
+        # mode name refers to ignoring stdin *close* (and the subsequent
+        # SIGTERM), not refusing to read at all; constrained sandboxes
+        # ship pipes as small as 8 KiB and the encoded prompt is ~8 KiB,
+        # so a mock that never reads would deadlock the driver in its
+        # prompt write before the watchdog ever ran.
+        IFS= read -r _initial || true
         emit_result_success
 
         # Trap SIGTERM and SIGPIPE so the test's shutdown watchdog must
