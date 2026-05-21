@@ -2502,17 +2502,22 @@ name = "loom-agent"
 version = "0.1.0"
 dependencies = [
  "displaydoc",
+ "glob",
  "loom-driver",
  "loom-events",
+ "loom-llm",
  "loom-test-support",
  "nix",
  "proptest",
+ "regex",
+ "schemars 1.2.1",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror",
  "tokio",
  "tracing",
+ "walkdir",
 ]
 
 [[package]]

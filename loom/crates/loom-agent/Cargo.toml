@@ -8,14 +8,19 @@ publish.workspace = true
 
 [dependencies]
 displaydoc = { workspace = true }
+glob = { workspace = true }
 loom-driver = { workspace = true }
 loom-events = { workspace = true }
+loom-llm = { workspace = true }
 nix = { workspace = true }
+regex = { workspace = true }
+schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+walkdir = { workspace = true }
 
 [dev-dependencies]
 loom-test-support = { workspace = true }
