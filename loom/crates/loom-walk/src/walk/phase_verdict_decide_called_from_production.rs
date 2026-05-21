@@ -41,11 +41,7 @@ fn check_decide_site(
         violations.push(format!("{rel_path}:1 production source not found"));
         return;
     };
-    let import_ok = body.lines().any(|line| {
-        let trimmed = line.trim_start();
-        trimmed.starts_with(import_prefix) && trimmed.contains("decide")
-    });
-    if !import_ok {
+    if !import_brings_in_decide(&body, import_prefix) {
         violations.push(format!(
             "{rel_path}:1 missing `{import_prefix}{{… decide …}}` import",
         ));
@@ -56,4 +52,28 @@ fn check_decide_site(
             "{rel_path}:1 no call to `decide(...)` — production must route markers through the gate function",
         ));
     }
+}
+
+/// Scan `body` for a `use` statement whose path starts with `import_prefix`
+/// and whose brace list imports `decide`. Handles both single-line
+/// (`use foo::{decide};`) and rustfmt's multi-line shape
+/// (`use foo::{\n    A, B, decide,\n};`).
+fn import_brings_in_decide(body: &str, import_prefix: &str) -> bool {
+    let mut lines = body.lines();
+    while let Some(line) = lines.next() {
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with(import_prefix) {
+            continue;
+        }
+        let mut accumulated = trimmed.to_string();
+        while !accumulated.contains(';') {
+            let Some(next) = lines.next() else { break };
+            accumulated.push(' ');
+            accumulated.push_str(next.trim());
+        }
+        if accumulated.contains("decide") {
+            return true;
+        }
+    }
+    false
 }

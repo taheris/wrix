@@ -60,6 +60,15 @@ let
     filter = srcFilter;
   };
 
+  # The host repo lays out the cargo workspace at `<repo>/loom/` and the
+  # workspace `config.toml` at `<repo>/config.toml` — `[runner.check] cwd
+  # = "loom"` and `[runner.test] --manifest-path loom/Cargo.toml` resolve
+  # under that layout. `stagedSrc` is what `loom gate verify` runs against
+  # inside the derivation; the workspace contents are copied to `$out`
+  # root (so crane finds `Cargo.toml`), and the same contents are also
+  # exposed under `$out/loom/` via a recursive hardlink mirror so the
+  # host runner-config paths resolve identically.
+  #
   # Host files referenced by [check]-tier grep annotations across
   # specs/*.md. The Nix-config invariants those annotations encode
   # (test-loom app shape, flake-checks wiring, podman/pi-mono
@@ -67,8 +76,17 @@ let
   # workspace, so the staged source mirrors the host paths exactly
   # under tests/, modules/flake/, and lib/sandbox/.
   stagedSrc = pkgs.runCommand "loom-test-src" { } ''
+    set -euo pipefail
     cp -r ${cleanedSrc} $out
     chmod -R u+w $out
+    # Mirror the workspace contents under $out/loom/ so the host's
+    # `[runner.check] cwd = "loom"` and `--manifest-path loom/Cargo.toml`
+    # resolve inside the derivation just as they do at the host repo
+    # root. crane finds the manifest at $out root; gate verify finds it
+    # under $out/loom.
+    mkdir -p $out/loom
+    cp -r ${cleanedSrc}/. $out/loom/
+    chmod -R u+w $out/loom
     mkdir -p $out/tests/loom $out/modules/flake $out/lib/sandbox/linux
     cp -r ${../loom/mock-pi} $out/tests/loom/mock-pi
     cp -r ${../loom/mock-claude} $out/tests/loom/mock-claude

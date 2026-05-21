@@ -692,7 +692,7 @@ connection, network filtering, session audit logging.
 ### Agent trait
 
 - `Session` trait defined in `loom-events` with `prompt`, `steer`, `cancel`, `set_mode` methods; `Events` associated type concretized to `Pin<Box<dyn Stream<Item = AgentEvent> + Send>>` for dyn-compatibility
-  [check](grep -q 'pub trait Session' crates/loom-events/src/session.rs)
+  [check](grep -q 'pub trait Session' crates/loom-events/src/lib.rs)
 - `AgentBackend` trait defined in loom-driver with associated `spawn`; no `SUPPORTS_STEERING` constant (all three backends steer)
   [check](grep -q 'pub trait AgentBackend' crates/loom-driver/src/agent/backend.rs)
 - `run_agent` compiles with `PiBackend`, `ClaudeBackend`, and `DirectBackend` as concrete types

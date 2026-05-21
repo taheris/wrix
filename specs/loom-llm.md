@@ -323,7 +323,7 @@ min_bytes = 256
 - `Conversation::new(ModelId)` returns a builder accepting `system`, tool registration via `register(impl Tool)`, `max_iterations`, `on_iteration_exhausted(LoopOutcome)`
   [test](conversation_builder_accepts_documented_knobs)
 - `Tool` trait has `name`, `description`, `input_schema`, async `invoke(args) -> Result<ToolOutput>` — no closure-only registration
-  [check](grep -q 'pub trait Tool' loom/crates/loom-llm/src/tool.rs)
+  [check](grep -q 'pub trait Tool' crates/loom-llm/src/tool.rs)
 - `Conversation::run(&client)` runs the tool-use loop to completion and returns the final `CompletionResponse`; `Conversation::run_stream(&client)` yields `AgentEvent` values during execution
   [test](conversation_run_completes_loop_and_returns_final_response)
 - Loop respects `max_iterations`; on exhaustion behaves per `on_iteration_exhausted` (default `LoopOutcome::Error`)

@@ -1099,6 +1099,31 @@ fn phase_verdict_decide_called_from_production_pass() {
     assert_pass(&out);
 }
 
+/// rustfmt rewrites long `use foo::{...}` lists onto multiple lines.
+/// The walker must follow the brace list across line breaks so the
+/// production import shape survives `treefmt` without spuriously flagging
+/// a missing `decide` import.
+#[test]
+fn phase_verdict_decide_called_from_production_pass_with_multiline_import() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-workflow/src/run/production.rs",
+        "use crate::review::{decide};\npub fn run() { let _ = decide(&None, ()); }\n",
+    );
+    seed(
+        ws.path(),
+        "crates/loom-workflow/src/review/production.rs",
+        "use super::phase_verdict::{\n    GateInputs, PhaseVerdict, RecoveryCause, ReviewConcern, ReviewFlag, decide,\n};\npub fn review() { let _ = decide(&None, ()); }\n",
+    );
+    let out = invoke(
+        &["phase_verdict_decide_called_from_production"],
+        Some(ws.path()),
+        None,
+    );
+    assert_pass(&out);
+}
+
 #[test]
 fn phase_verdict_decide_called_from_production_fail_run_missing_call() {
     let ws = make_workspace();
