@@ -16,6 +16,36 @@ use serde_json::Value;
 
 use super::result_hasher::{CallKey, ResultHash, ResultHasher};
 
+/// Per-observer configuration. Mirrors the `[agent.doom_loop]` TOML block
+/// the binary's `LoomConfig` exposes — consumers driving
+/// [`crate::Conversation`] directly construct the same shape and pass it
+/// in via [`crate::Conversation::doom_loop`] (or rely on
+/// [`DoomLoopConfig::default`] which matches the spec defaults).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DoomLoopConfig {
+    /// When false, the observer is omitted from
+    /// [`crate::Conversation`]'s default sink chain entirely.
+    pub enabled: bool,
+    /// Sliding-window size in `(CallKey, ResultHash)` entries.
+    pub window: u32,
+    /// Identical-pair count within the window that trips stage 1.
+    pub threshold: u32,
+    /// Additional identical pairs required after stage 1 before stage 2
+    /// emits an `Abort`.
+    pub stage_2_after_stage_1: u32,
+}
+
+impl Default for DoomLoopConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            window: 5,
+            threshold: 3,
+            stage_2_after_stage_1: 3,
+        }
+    }
+}
+
 /// Observability payload drained by [`DoomLoopObserver::take_pending`]
 /// and lifted into a `DriverKind::DoomLoopTripped` `AgentEvent` by the
 /// sink-chain wiring. The observer cannot synthesize the wire event
@@ -106,6 +136,17 @@ impl DoomLoopObserver {
     pub fn with_stage_2_after_stage_1(mut self, n: u32) -> Self {
         self.stage_2_after_stage_1 = n;
         self
+    }
+
+    /// Construct an observer with knobs sourced from `config`. The
+    /// `enabled` flag is consulted by [`crate::Conversation`]'s builder —
+    /// it's irrelevant here because the caller already decided to
+    /// materialise the observer.
+    pub fn from_config(config: &DoomLoopConfig) -> Self {
+        Self::new()
+            .with_window(config.window)
+            .with_threshold(config.threshold)
+            .with_stage_2_after_stage_1(config.stage_2_after_stage_1)
     }
 
     /// Borrow the shared hasher.

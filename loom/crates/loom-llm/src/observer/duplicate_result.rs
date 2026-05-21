@@ -17,6 +17,29 @@ use super::result_hasher::{ResultHash, ResultHasher};
 /// payloads like `"ok"`.
 pub const DEFAULT_MIN_BYTES: u32 = 256;
 
+/// Per-observer configuration. Mirrors the `[agent.duplicate_result]`
+/// TOML block the binary's `LoomConfig` exposes — consumers driving
+/// [`crate::Conversation`] directly construct the same shape and pass it
+/// in via [`crate::Conversation::duplicate_result`] (or rely on
+/// [`DuplicateResultConfig::default`] which matches the spec defaults).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DuplicateResultConfig {
+    /// When false, the observer is omitted from
+    /// [`crate::Conversation`]'s default sink chain entirely.
+    pub enabled: bool,
+    /// Skip results whose canonical payload is shorter than this.
+    pub min_bytes: u32,
+}
+
+impl Default for DuplicateResultConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            min_bytes: DEFAULT_MIN_BYTES,
+        }
+    }
+}
+
 /// One detected duplicate. Drained by `take_pending` and lifted into a
 /// `DriverKind::DuplicateToolResult` `AgentEvent` by the conversation /
 /// driver sink-chain wiring (B.12). The observer cannot synthesize the
@@ -66,6 +89,14 @@ impl DuplicateResultObserver {
     pub fn with_min_bytes(mut self, n: u32) -> Self {
         self.min_bytes = n;
         self
+    }
+
+    /// Construct an observer with knobs sourced from `config`. The
+    /// `enabled` flag is consulted by [`crate::Conversation`]'s builder —
+    /// it's irrelevant here because the caller already decided to
+    /// materialise the observer.
+    pub fn from_config(config: &DuplicateResultConfig) -> Self {
+        Self::new().with_min_bytes(config.min_bytes)
     }
 
     /// Borrow the shared hasher.

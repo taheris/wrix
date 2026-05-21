@@ -32,7 +32,10 @@ pub use cache::{CacheControl, CacheTtl};
 pub use client::{Client, CompletionResponse, LlmClient, LlmError, ToolUseRequest};
 pub use conversation::{Conversation, LoopOutcome};
 pub use model_id::{ModelId, Provider};
-pub use observer::{DoomLoopObserver, DuplicateDetection, DuplicateResultObserver};
+pub use observer::{
+    DoomLoopConfig, DoomLoopObserver, DuplicateDetection, DuplicateResultConfig,
+    DuplicateResultObserver,
+};
 pub use request::{CompletionRequest, Message, Role};
 pub use tool::{Tool, ToolDef, ToolOutput};
 pub use usage::TokenUsage;

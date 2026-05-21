@@ -10,6 +10,9 @@
 
 use crate::client::{CompletionResponse, LlmClient, LlmError};
 use crate::model_id::ModelId;
+use crate::observer::{
+    DoomLoopConfig, DoomLoopObserver, DuplicateResultConfig, DuplicateResultObserver,
+};
 use crate::request::{CompletionRequest, Message};
 use crate::tool::{Tool, ToolDef};
 
@@ -32,8 +35,8 @@ pub struct Conversation {
     max_iterations: u32,
     on_iteration_exhausted: LoopOutcome,
     history: Vec<Message>,
-    doom_loop_enabled: bool,
-    duplicate_result_enabled: bool,
+    doom_loop: Option<DoomLoopObserver>,
+    duplicate_result: Option<DuplicateResultObserver>,
 }
 
 impl Conversation {
@@ -41,7 +44,33 @@ impl Conversation {
     /// model override happens by re-issuing requests with a different
     /// `ModelId`; the conversation's `ModelId` is the default for
     /// `complete` calls the loop emits.
+    ///
+    /// Both default observers (`DoomLoopObserver`,
+    /// `DuplicateResultObserver`) are constructed into the conversation's
+    /// sink chain via `*Config::default()`. Callers that want to consume
+    /// the binary's `LoomConfig` should use
+    /// [`Conversation::with_observer_configs`] instead; per-conversation
+    /// overrides land via [`Conversation::doom_loop`] /
+    /// [`Conversation::duplicate_result`] /
+    /// [`Conversation::doom_loop_disabled`] /
+    /// [`Conversation::duplicate_result_disabled`].
     pub fn new(model: ModelId) -> Self {
+        Self::with_observer_configs(
+            model,
+            DoomLoopConfig::default(),
+            DuplicateResultConfig::default(),
+        )
+    }
+
+    /// Construct a conversation with explicit observer configs sourced
+    /// from the binary's `LoomConfig` (or any equivalent consumer-side
+    /// config). Disabled observers (`enabled = false`) are not added to
+    /// the sink chain.
+    pub fn with_observer_configs(
+        model: ModelId,
+        doom_loop: DoomLoopConfig,
+        duplicate_result: DuplicateResultConfig,
+    ) -> Self {
         Self {
             model,
             system: None,
@@ -49,8 +78,8 @@ impl Conversation {
             max_iterations: 50,
             on_iteration_exhausted: LoopOutcome::Error,
             history: Vec::new(),
-            doom_loop_enabled: true,
-            duplicate_result_enabled: true,
+            doom_loop: build_doom_loop_observer(&doom_loop),
+            duplicate_result: build_duplicate_result_observer(&duplicate_result),
         }
     }
 
@@ -91,18 +120,37 @@ impl Conversation {
         self
     }
 
-    /// Disable the default `DoomLoopObserver`. The observer ships
-    /// enabled-by-default; this knob mirrors the
-    /// `[agent.doom_loop] enabled = false` config used by the binary.
-    pub fn disable_doom_loop_observer(mut self) -> Self {
-        self.doom_loop_enabled = false;
+    /// Replace the default `DoomLoopObserver` with one built from
+    /// `config`. When `config.enabled` is false the observer is dropped
+    /// from the sink chain entirely, matching the binary-side
+    /// `[agent.doom_loop] enabled = false` knob.
+    pub fn doom_loop(mut self, config: DoomLoopConfig) -> Self {
+        self.doom_loop = build_doom_loop_observer(&config);
         self
     }
 
-    /// Disable the default `DuplicateResultObserver`. Mirrors
-    /// `[agent.duplicate_result] enabled = false` in the binary config.
-    pub fn disable_duplicate_result_observer(mut self) -> Self {
-        self.duplicate_result_enabled = false;
+    /// Drop the default `DoomLoopObserver` from this conversation's sink
+    /// chain. Mirrors `[agent.doom_loop] enabled = false` for callers
+    /// that only need to opt out.
+    pub fn doom_loop_disabled(mut self) -> Self {
+        self.doom_loop = None;
+        self
+    }
+
+    /// Replace the default `DuplicateResultObserver` with one built from
+    /// `config`. When `config.enabled` is false the observer is dropped
+    /// from the sink chain entirely, matching the binary-side
+    /// `[agent.duplicate_result] enabled = false` knob.
+    pub fn duplicate_result(mut self, config: DuplicateResultConfig) -> Self {
+        self.duplicate_result = build_duplicate_result_observer(&config);
+        self
+    }
+
+    /// Drop the default `DuplicateResultObserver` from this
+    /// conversation's sink chain. Mirrors
+    /// `[agent.duplicate_result] enabled = false`.
+    pub fn duplicate_result_disabled(mut self) -> Self {
+        self.duplicate_result = None;
         self
     }
 
@@ -198,16 +246,28 @@ impl Conversation {
         self.on_iteration_exhausted
     }
 
-    /// Whether the default `DoomLoopObserver` is enabled for this
-    /// conversation.
+    /// Whether the default `DoomLoopObserver` is composed in this
+    /// conversation's sink chain.
     pub fn doom_loop_enabled(&self) -> bool {
-        self.doom_loop_enabled
+        self.doom_loop.is_some()
     }
 
-    /// Whether the default `DuplicateResultObserver` is enabled for
-    /// this conversation.
+    /// Whether the default `DuplicateResultObserver` is composed in this
+    /// conversation's sink chain.
     pub fn duplicate_result_enabled(&self) -> bool {
-        self.duplicate_result_enabled
+        self.duplicate_result.is_some()
+    }
+
+    /// Borrow the composed `DoomLoopObserver`, or `None` when the
+    /// observer is disabled by config.
+    pub fn doom_loop_observer(&self) -> Option<&DoomLoopObserver> {
+        self.doom_loop.as_ref()
+    }
+
+    /// Borrow the composed `DuplicateResultObserver`, or `None` when the
+    /// observer is disabled by config.
+    pub fn duplicate_result_observer(&self) -> Option<&DuplicateResultObserver> {
+        self.duplicate_result.as_ref()
     }
 
     /// Total number of messages currently in the conversation history.
@@ -240,6 +300,20 @@ impl Conversation {
         }
         req
     }
+}
+
+fn build_doom_loop_observer(config: &DoomLoopConfig) -> Option<DoomLoopObserver> {
+    config
+        .enabled
+        .then(|| DoomLoopObserver::from_config(config))
+}
+
+fn build_duplicate_result_observer(
+    config: &DuplicateResultConfig,
+) -> Option<DuplicateResultObserver> {
+    config
+        .enabled
+        .then(|| DuplicateResultObserver::from_config(config))
 }
 
 #[cfg(test)]
@@ -456,26 +530,109 @@ mod tests {
     }
 
     /// The default `DuplicateResultObserver` ships enabled, and the
-    /// builder's `disable_duplicate_result_observer` toggle takes effect
+    /// builder's `duplicate_result_disabled` toggle takes effect
     /// — mirroring `[agent.duplicate_result] enabled = false` in the
     /// CLI-side config.
     #[test]
     fn duplicate_result_config_disable_path() {
         let on = Conversation::new(ModelId::ClaudeSonnet46);
         assert!(on.duplicate_result_enabled());
-        let off = Conversation::new(ModelId::ClaudeSonnet46).disable_duplicate_result_observer();
+        let off = Conversation::new(ModelId::ClaudeSonnet46).duplicate_result_disabled();
         assert!(!off.duplicate_result_enabled());
     }
 
     /// The default `DoomLoopObserver` ships enabled, and the builder's
-    /// `disable_doom_loop_observer` toggle mirrors
-    /// `[agent.doom_loop] enabled = false` in the CLI-side config.
+    /// `doom_loop_disabled` toggle mirrors `[agent.doom_loop] enabled =
+    /// false` in the CLI-side config.
     #[test]
     fn doom_loop_config_disable_path() {
         let on = Conversation::new(ModelId::ClaudeSonnet46);
         assert!(on.doom_loop_enabled());
-        let off = Conversation::new(ModelId::ClaudeSonnet46).disable_doom_loop_observer();
+        let off = Conversation::new(ModelId::ClaudeSonnet46).doom_loop_disabled();
         assert!(!off.doom_loop_enabled());
+    }
+
+    /// `Conversation::new` default-constructs both observers into the
+    /// sink chain with the spec defaults so consumer-driven
+    /// `Conversation` runs get the safety nets out of the box.
+    #[test]
+    fn conversation_new_default_constructs_observers() {
+        let conv = Conversation::new(ModelId::ClaudeSonnet46);
+        let doom = conv.doom_loop_observer().expect("doom loop composed");
+        assert_eq!(doom.window(), 5);
+        assert_eq!(doom.threshold(), 3);
+        assert_eq!(doom.stage_2_after_stage_1(), 3);
+        let dup = conv
+            .duplicate_result_observer()
+            .expect("duplicate result composed");
+        assert_eq!(
+            dup.min_bytes(),
+            crate::observer::duplicate_result::DEFAULT_MIN_BYTES
+        );
+    }
+
+    /// `.doom_loop(config)` replaces the default observer with one built
+    /// from the supplied knobs; `.duplicate_result(config)` does the same
+    /// for the other observer.
+    #[test]
+    fn observer_builder_knobs_apply_custom_config() {
+        let conv = Conversation::new(ModelId::ClaudeSonnet46)
+            .doom_loop(DoomLoopConfig {
+                enabled: true,
+                window: 8,
+                threshold: 4,
+                stage_2_after_stage_1: 2,
+            })
+            .duplicate_result(DuplicateResultConfig {
+                enabled: true,
+                min_bytes: 1024,
+            });
+        let doom = conv.doom_loop_observer().expect("doom loop composed");
+        assert_eq!(doom.window(), 8);
+        assert_eq!(doom.threshold(), 4);
+        assert_eq!(doom.stage_2_after_stage_1(), 2);
+        let dup = conv
+            .duplicate_result_observer()
+            .expect("duplicate result composed");
+        assert_eq!(dup.min_bytes(), 1024);
+    }
+
+    /// A config with `enabled = false` drops the observer from the sink
+    /// chain entirely — the same outcome as calling
+    /// `.doom_loop_disabled()` / `.duplicate_result_disabled()`.
+    #[test]
+    fn observer_config_enabled_false_drops_observer() {
+        let conv = Conversation::new(ModelId::ClaudeSonnet46)
+            .doom_loop(DoomLoopConfig {
+                enabled: false,
+                ..DoomLoopConfig::default()
+            })
+            .duplicate_result(DuplicateResultConfig {
+                enabled: false,
+                ..DuplicateResultConfig::default()
+            });
+        assert!(!conv.doom_loop_enabled());
+        assert!(!conv.duplicate_result_enabled());
+        assert!(conv.doom_loop_observer().is_none());
+        assert!(conv.duplicate_result_observer().is_none());
+    }
+
+    /// `Conversation::with_observer_configs` is the constructor that
+    /// reads from the binary's `LoomConfig` shape. Disabled observers
+    /// (`enabled = false`) are not added — matching the bead's
+    /// "Disabled observers (enabled = false) are not added" rule.
+    #[test]
+    fn with_observer_configs_honours_enabled_flags() {
+        let conv = Conversation::with_observer_configs(
+            ModelId::ClaudeSonnet46,
+            DoomLoopConfig {
+                enabled: false,
+                ..DoomLoopConfig::default()
+            },
+            DuplicateResultConfig::default(),
+        );
+        assert!(!conv.doom_loop_enabled());
+        assert!(conv.duplicate_result_enabled());
     }
 
     /// Dropping the loop future before it resolves cancels any work
