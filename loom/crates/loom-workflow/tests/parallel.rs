@@ -76,6 +76,7 @@ fn fake_bead(id: &str) -> Bead {
         labels: vec![],
         parent: None,
         metadata: Default::default(),
+        notes: None,
     }
 }
 

@@ -2261,7 +2261,12 @@ fn run_msg_inner(
         // require `### Option <int>` to exist, compose the canonical
         // `"Chose option N — title: body"` note. Validation runs before
         // any bd state mutation.
-        let note = compose_option_note(&target, opt_idx, &target_bead.description)?;
+        let note = compose_option_note(
+            &target,
+            opt_idx,
+            target_bead.notes.as_deref(),
+            &target_bead.description,
+        )?;
         let runtime = tokio::runtime::Runtime::new()?;
         let id_clone = target.clone();
         let note_for_bd = note.clone();

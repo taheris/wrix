@@ -1,9 +1,9 @@
 use loom_driver::bd::Bead;
 use loom_driver::identifier::{BeadId, SpecLabel};
-use loom_templates::msg::{ClarifyBead, ClarifyOption, MsgContext};
+use loom_templates::msg::{BeadKind, ClarifyBead, ClarifyOption, MsgContext};
 
-use super::list::spec_label_of;
-use super::options::parse_options;
+use super::list::{MsgKind, kind_of, spec_label_of};
+use super::options::parse_options_in;
 
 /// Build the typed [`MsgContext`] consumed by the `msg.md` Askama template.
 ///
@@ -26,7 +26,7 @@ pub fn build_msg_context(
 }
 
 fn to_clarify_bead(bead: &Bead) -> ClarifyBead {
-    let parsed = parse_options(&bead.description);
+    let parsed = parse_options_in(bead.notes.as_deref(), &bead.description);
     let spec_label = spec_label_of(bead).unwrap_or_else(|| SpecLabel::new("—"));
     let options_summary = if parsed.summary.is_empty() {
         None
@@ -42,12 +42,17 @@ fn to_clarify_bead(bead: &Bead) -> ClarifyBead {
             body: option_field(opt.body),
         })
         .collect();
+    let kind = match kind_of(bead).unwrap_or(MsgKind::Clarify) {
+        MsgKind::Clarify => BeadKind::Clarify,
+        MsgKind::Blocked => BeadKind::Blocked,
+    };
     ClarifyBead {
         id: bead.id.clone(),
         spec_label,
         title: bead.title.clone(),
         options_summary,
         options,
+        kind,
     }
 }
 
@@ -110,6 +115,7 @@ mod tests {
             labels: labels.iter().map(|s| Label::new(*s)).collect(),
             parent: None,
             metadata: Default::default(),
+            notes: None,
         }
     }
 

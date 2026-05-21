@@ -57,6 +57,10 @@ struct SubHead {
 ///   `--`) before being returned.
 /// - Each `### Option N` subsection extends from its heading until the next
 ///   `### Option` or the next `##` heading (whichever comes first).
+///
+/// Use [`parse_options_in`] when the bead may carry options in `--notes`
+/// (the path the reviewer takes when promoting a `loom:blocked` bead to
+/// `loom:clarify`, per `specs/loom-gate.md` § Options Format Contract).
 pub fn parse_options(description: &str) -> OptionsParse {
     let mut parse = OptionsParse::default();
     let mut iter = parser(description).into_offset_iter();
@@ -122,6 +126,32 @@ pub fn parse_options(description: &str) -> OptionsParse {
         })
         .collect();
     parse
+}
+
+/// Parse an `## Options` block from a bead, preferring `notes` over
+/// `description` when notes carries the canonical block.
+///
+/// The reviewer promotes a previously `loom:blocked` bead to
+/// `loom:clarify` by writing the options into `--notes`; new clarify
+/// beads carry their options in `--description`. The msg queue must
+/// surface both, so [`to_clarify_bead`] / [`build_rows`] call this
+/// wrapper instead of [`parse_options`] directly.
+///
+/// Behaviour: parse `notes` first; if it produces any summary or option
+/// rows, return that parse. Otherwise fall back to parsing
+/// `description`. An empty options block in either source yields the
+/// default (empty) parse.
+///
+/// [`to_clarify_bead`]: super::context
+/// [`build_rows`]: super::list::build_rows
+pub fn parse_options_in(notes: Option<&str>, description: &str) -> OptionsParse {
+    if let Some(n) = notes {
+        let parsed = parse_options(n);
+        if !parsed.summary.is_empty() || !parsed.options.is_empty() {
+            return parsed;
+        }
+    }
+    parse_options(description)
 }
 
 fn find_options_summary(iter: &mut OffsetIter<'_>) -> Option<String> {
@@ -310,6 +340,41 @@ ignored
         assert_eq!(parse.options.len(), 1);
         assert_eq!(parse.options[0].title, "");
         assert_eq!(parse.options[0].body, "body only");
+    }
+
+    #[test]
+    fn parse_options_in_prefers_notes_when_notes_carry_options() {
+        let notes = "## Options — promoted summary\n\n### Option 1 — promoted\nbody\n";
+        let description = "## Options — original summary\n\n### Option 1 — original\nbody\n";
+        let parse = parse_options_in(Some(notes), description);
+        assert_eq!(parse.summary, "promoted summary");
+        assert_eq!(parse.options.len(), 1);
+        assert_eq!(parse.options[0].title, "promoted");
+    }
+
+    #[test]
+    fn parse_options_in_falls_back_to_description_when_notes_empty() {
+        let parse = parse_options_in(
+            Some("agent-blocked: no options here"),
+            "## Options — from desc\n\n### Option 1 — d\nbody\n",
+        );
+        assert_eq!(parse.summary, "from desc");
+        assert_eq!(parse.options.len(), 1);
+        assert_eq!(parse.options[0].title, "d");
+    }
+
+    #[test]
+    fn parse_options_in_falls_back_when_notes_absent() {
+        let parse = parse_options_in(None, "## Options — only desc\n\n### Option 1 — t\nb\n");
+        assert_eq!(parse.summary, "only desc");
+        assert_eq!(parse.options.len(), 1);
+    }
+
+    #[test]
+    fn parse_options_in_returns_default_when_neither_source_has_options() {
+        let parse = parse_options_in(Some("just notes"), "just a description");
+        assert!(parse.summary.is_empty());
+        assert!(parse.options.is_empty());
     }
 
     #[test]

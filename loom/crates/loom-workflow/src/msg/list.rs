@@ -1,7 +1,7 @@
 use loom_driver::bd::{Bead, Label};
 use loom_driver::identifier::SpecLabel;
 
-use super::options::parse_options;
+use super::options::parse_options_in;
 
 /// Which `loom:*` flow a bead belongs to in the `loom msg` queue. Drives
 /// the printed kind tag and the fast-reply mode (`Clarify` allows option
@@ -65,10 +65,15 @@ pub fn kind_of(bead: &Bead) -> Option<MsgKind> {
 /// spec filter, when supplied, restricts the result to beads carrying
 /// `spec:<label>`. Order is preserved from the input slice (the caller
 /// sorts by creation time before calling).
+///
+/// Epic beads (`issue_type == "epic"`) are dropped: workers target leaf
+/// beads, and an epic that carries `loom:blocked` would surface as a
+/// non-actionable container in the queue.
 pub fn filter_msg_beads<'a>(beads: &'a [Bead], spec: Option<&SpecLabel>) -> Vec<&'a Bead> {
     beads
         .iter()
         .filter(|b| kind_of(b).is_some())
+        .filter(|b| b.issue_type != "epic")
         .filter(|b| match spec {
             None => true,
             Some(label) => b
@@ -87,7 +92,7 @@ pub fn build_rows(beads: &[&Bead], spec_filter: Option<&SpecLabel>) -> Vec<MsgRo
         .iter()
         .enumerate()
         .map(|(i, bead)| {
-            let parsed = parse_options(&bead.description);
+            let parsed = parse_options_in(bead.notes.as_deref(), &bead.description);
             let summary = if parsed.summary.is_empty() {
                 bead.title.clone()
             } else {
@@ -137,6 +142,7 @@ mod tests {
             labels: labels.iter().map(|s| Label::new(*s)).collect(),
             parent: None,
             metadata: Default::default(),
+            notes: None,
         }
     }
 
@@ -185,6 +191,17 @@ mod tests {
         let rows = build_rows(&kept, None);
         assert_eq!(rows[0].kind, MsgKind::Clarify);
         assert_eq!(rows[1].kind, MsgKind::Blocked);
+    }
+
+    #[test]
+    fn filter_drops_epic_beads_even_when_blocked() {
+        let mut epic = bead("wx-epic", "epic bead", "", &["loom:blocked"]);
+        epic.issue_type = "epic".into();
+        let leaf = bead("wx-leaf", "leaf bead", "", &["loom:blocked"]);
+        let beads = vec![epic, leaf];
+        let kept = filter_msg_beads(&beads, None);
+        assert_eq!(kept.len(), 1, "epic must be filtered out");
+        assert_eq!(kept[0].id, BeadId::new("wx-leaf").expect("valid"));
     }
 
     #[test]

@@ -37,6 +37,13 @@ pub struct Bead {
     /// `specs/loom-harness.md` § *Plan creates the molecule*).
     #[serde(default)]
     pub metadata: BTreeMap<String, serde_json::Value>,
+    /// `bd update --notes "..."` body. Used by the reviewer to carry the
+    /// `## Options` block for promoted `loom:blocked` → `loom:clarify`
+    /// beads (`specs/loom-gate.md` § *Options Format Contract*) and by
+    /// the verdict gate to record `infra-preflight` / `infra-repeated`
+    /// causes. Absent ⇒ `None`.
+    #[serde(default)]
+    pub notes: Option<String>,
 }
 
 /// One molecule row. Beads exposes `bd mol show --json`; the shape is the

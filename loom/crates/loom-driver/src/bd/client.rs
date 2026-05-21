@@ -448,6 +448,42 @@ mod tests {
         Ok(())
     }
 
+    /// `bd show --json` emits a `notes` field when the bead carries
+    /// `bd update --notes` content. The msg-queue Drafter needs this to
+    /// surface reviewer-promoted options that live in notes rather than
+    /// description (`specs/loom-gate.md` § Options Format Contract).
+    #[tokio::test]
+    async fn show_parses_notes_field_when_present() -> Result<()> {
+        let json = r###"[
+          {
+            "id": "wx-promoted",
+            "title": "blocked to clarify promotion",
+            "status": "open",
+            "priority": 2,
+            "issue_type": "task",
+            "notes": "## Options - pick a fix\n\n### Option 1 - revert\nundo.",
+            "labels": []
+          }
+        ]"###;
+        let runner = CapturingRunner::new([ok(json.as_bytes())]);
+        let client = BdClient::with_runner(runner);
+        let bead = client.show(&BeadId::new("wx-promoted")?).await?;
+        assert_eq!(
+            bead.notes.as_deref(),
+            Some("## Options - pick a fix\n\n### Option 1 - revert\nundo.")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn show_notes_field_is_none_when_absent() -> Result<()> {
+        let runner = CapturingRunner::new([ok(SHOW_FIXTURE.as_bytes())]);
+        let client = BdClient::with_runner(runner);
+        let bead = client.show(&BeadId::new("wx-3hhwq.5")?).await?;
+        assert_eq!(bead.notes, None);
+        Ok(())
+    }
+
     #[tokio::test]
     async fn show_parent_field_is_none_when_absent() -> Result<()> {
         let runner = CapturingRunner::new([ok(SHOW_FIXTURE.as_bytes())]);

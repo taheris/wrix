@@ -9,7 +9,7 @@
 use anyhow::Result;
 use askama::Template;
 use loom_events::identifier::{BeadId, MoleculeId, SpecLabel};
-use loom_templates::msg::{ClarifyBead, ClarifyOption, MsgContext};
+use loom_templates::msg::{BeadKind, ClarifyBead, ClarifyOption, MsgContext};
 use loom_templates::plan::{PlanNewContext, PlanUpdateContext};
 use loom_templates::review::{ReviewContext, ReviewSource};
 use loom_templates::run::{
@@ -702,6 +702,7 @@ fn msg_renders_clarify_beads_with_options() -> Result<()> {
                     body: Some("Use a SQLite table.".into()),
                 },
             ],
+            kind: BeadKind::Clarify,
         }],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
     };
@@ -716,6 +717,73 @@ fn msg_renders_clarify_beads_with_options() -> Result<()> {
     assert!(out.contains("Use a SQLite table."));
     assert!(out.contains("## Companions"));
     assert!(out.contains("- lib/sandbox/"));
+    Ok(())
+}
+
+/// `loom:blocked` beads carry no `## Options` block. The template must
+/// render a distinct flow for them — naming the kind explicitly and
+/// telling the drafter to walk the user through enumerating candidates
+/// — rather than the clarify framing that asserts "the reviewer has
+/// already presented options."
+#[test]
+fn msg_renders_blocked_bead_with_enumerate_first_framing() -> Result<()> {
+    let ctx = MsgContext {
+        pinned_context: PINNED_CONTEXT_BODY.to_string(),
+        companion_paths: vec![],
+        clarify_beads: vec![ClarifyBead {
+            id: BeadId::new("wx-block.1")?,
+            spec_label: SpecLabel::new("loom-harness"),
+            title: "Push hook fails inside sandbox".into(),
+            options_summary: None,
+            options: vec![],
+            kind: BeadKind::Blocked,
+        }],
+        scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+    };
+    let out = ctx.render()?;
+
+    assert!(out.contains("### wx-block.1 — [spec:loom-harness] Push hook fails inside sandbox"));
+    assert!(
+        out.contains("`loom:blocked`"),
+        "kind line must name loom:blocked: {out}",
+    );
+    assert!(
+        out.contains("enumerat"),
+        "blocked bead must trigger enumerate-first framing: {out}",
+    );
+    assert!(
+        !out.contains("#### Option "),
+        "no enumerated options should be rendered for blocked beads without notes: {out}",
+    );
+    Ok(())
+}
+
+/// A `loom:clarify` bead carries its options; the template should
+/// render the existing clarify framing without mentioning the
+/// enumerate-first language meant for `loom:blocked`.
+#[test]
+fn msg_renders_clarify_bead_without_enumerate_first_framing() -> Result<()> {
+    let ctx = MsgContext {
+        pinned_context: PINNED_CONTEXT_BODY.to_string(),
+        companion_paths: vec![],
+        clarify_beads: vec![ClarifyBead {
+            id: BeadId::new("wx-clar.2")?,
+            spec_label: SpecLabel::new("loom-harness"),
+            title: "Adopt new API surface".into(),
+            options_summary: Some("Pick API shape".into()),
+            options: vec![ClarifyOption {
+                n: 1,
+                title: Some("Keep existing".into()),
+                body: Some("Defer the change.".into()),
+            }],
+            kind: BeadKind::Clarify,
+        }],
+        scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+    };
+    let out = ctx.render()?;
+    assert!(out.contains("`loom:clarify`"));
+    assert!(out.contains("## Options — Pick API shape"));
+    assert!(out.contains("#### Option 1 — Keep existing"));
     Ok(())
 }
 
@@ -1008,6 +1076,7 @@ fn template_renders_are_byte_stable_across_runs() -> Result<()> {
                         body: Some("Use a SQLite table.".into()),
                     },
                 ],
+                kind: BeadKind::Clarify,
             }],
             scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
         },

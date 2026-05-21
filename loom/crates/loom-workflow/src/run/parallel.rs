@@ -320,6 +320,7 @@ mod tests {
             labels: vec![],
             parent: None,
             metadata: Default::default(),
+            notes: None,
         }
     }
 

@@ -2,7 +2,7 @@ use loom_driver::identifier::BeadId;
 
 use super::error::MsgError;
 use super::list::MsgKind;
-use super::options::{OptionsParse, parse_options};
+use super::options::{OptionsParse, parse_options_in};
 
 /// What `loom msg -a <choice>` should write to the bead. `Option` is the
 /// composed `Chose option N — title: body` note from a successful integer
@@ -25,13 +25,14 @@ pub enum FastReply {
 pub fn build_fast_reply(
     bead: &BeadId,
     choice: &str,
+    notes: Option<&str>,
     description: &str,
     kind: MsgKind,
 ) -> Result<FastReply, MsgError> {
     if matches!(kind, MsgKind::Clarify)
         && let Ok(n) = choice.parse::<u32>()
     {
-        let parsed = parse_options(description);
+        let parsed = parse_options_in(notes, description);
         return resolve_option(bead, n, &parsed);
     }
     Ok(FastReply::Verbatim {
@@ -41,15 +42,24 @@ pub fn build_fast_reply(
 
 /// Compose the bead note for a `loom msg -o <int> -b <id>` invocation.
 ///
-/// Parses `description` for the `## Options` block, looks up
-/// `### Option <n>`, and returns the composed note text — independent of
-/// bead kind (Clarify vs Blocked). A missing subsection produces
+/// Parses notes ∪ description for the `## Options` block, looks up
+/// `### Option <n>`, and returns the composed note text — independent
+/// of bead kind (Clarify vs Blocked). A missing subsection produces
 /// [`MsgError::OptionMissing`] carrying the available indices for the
 /// user-facing error message. Used by the I1 flag-split surface where
 /// `-o` does strict option-lookup; the legacy `-a <choice>` path that
 /// kind-discriminates lives in [`build_fast_reply`].
-pub fn compose_option_note(bead: &BeadId, n: u32, description: &str) -> Result<String, MsgError> {
-    let parsed = parse_options(description);
+///
+/// `notes` carries the reviewer's promoted-blocked options when the
+/// bead was promoted via `bd update --notes` (see
+/// `specs/loom-gate.md` § Options Format Contract).
+pub fn compose_option_note(
+    bead: &BeadId,
+    n: u32,
+    notes: Option<&str>,
+    description: &str,
+) -> Result<String, MsgError> {
+    let parsed = parse_options_in(notes, description);
     match resolve_option(bead, n, &parsed)? {
         FastReply::Option { note, .. } | FastReply::Verbatim { note } => Ok(note),
     }
@@ -108,7 +118,7 @@ Accept. Cost: debt.
     #[test]
     fn integer_choice_resolves_to_option_note() -> Result<(), MsgError> {
         let bead = BeadId::new("wx-x").expect("valid bead id");
-        let reply = build_fast_reply(&bead, "1", desc(), MsgKind::Clarify)?;
+        let reply = build_fast_reply(&bead, "1", None, desc(), MsgKind::Clarify)?;
         match reply {
             FastReply::Option { n, note } => {
                 assert_eq!(n, 1);
@@ -124,8 +134,8 @@ Accept. Cost: debt.
     #[test]
     fn missing_option_index_errors_with_available_list() {
         let bead = BeadId::new("wx-x").expect("valid bead id");
-        let err =
-            build_fast_reply(&bead, "9", desc(), MsgKind::Clarify).expect_err("expected error");
+        let err = build_fast_reply(&bead, "9", None, desc(), MsgKind::Clarify)
+            .expect_err("expected error");
         match err {
             MsgError::OptionMissing {
                 bead,
@@ -143,7 +153,7 @@ Accept. Cost: debt.
     #[test]
     fn verbatim_string_passes_through_unchanged() -> Result<(), MsgError> {
         let bead = BeadId::new("wx-x").expect("valid bead id");
-        let reply = build_fast_reply(&bead, "free-form answer", desc(), MsgKind::Clarify)?;
+        let reply = build_fast_reply(&bead, "free-form answer", None, desc(), MsgKind::Clarify)?;
         match reply {
             FastReply::Verbatim { note } => assert_eq!(note, "free-form answer"),
             other => panic!("expected Verbatim, got {other:?}"),
@@ -154,7 +164,7 @@ Accept. Cost: debt.
     #[test]
     fn integer_with_no_options_section_errors() {
         let bead = BeadId::new("wx-x").expect("valid bead id");
-        let err = build_fast_reply(&bead, "1", "no options at all", MsgKind::Clarify)
+        let err = build_fast_reply(&bead, "1", None, "no options at all", MsgKind::Clarify)
             .expect_err("expected missing option");
         assert!(matches!(err, MsgError::OptionMissing { .. }));
     }
@@ -163,7 +173,7 @@ Accept. Cost: debt.
     fn empty_title_or_body_renders_partial_note() -> Result<(), MsgError> {
         let bead = BeadId::new("wx-x").expect("valid bead id");
         let no_title = "## Options\n\n### Option 1\nonly body\n";
-        let reply = build_fast_reply(&bead, "1", no_title, MsgKind::Clarify)?;
+        let reply = build_fast_reply(&bead, "1", None, no_title, MsgKind::Clarify)?;
         match reply {
             FastReply::Option { note, .. } => {
                 assert!(note.contains("Chose option 1"));
@@ -177,10 +187,41 @@ Accept. Cost: debt.
     #[test]
     fn blocked_integer_choice_is_always_verbatim() -> Result<(), MsgError> {
         let bead = BeadId::new("wx-x").expect("valid bead id");
-        let reply = build_fast_reply(&bead, "1", desc(), MsgKind::Blocked)?;
+        let reply = build_fast_reply(&bead, "1", None, desc(), MsgKind::Blocked)?;
         match reply {
             FastReply::Verbatim { note } => assert_eq!(note, "1"),
             other => panic!("expected Verbatim, got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn compose_option_note_reads_options_from_notes_when_present() -> Result<(), MsgError> {
+        let bead = BeadId::new("wx-x").expect("valid bead id");
+        let notes = "## Options — promoted\n\n### Option 1 — fix\nbody.\n";
+        let description = "agent-blocked: no options here";
+        let note = compose_option_note(&bead, 1, Some(notes), description)?;
+        assert!(note.contains("Chose option 1"));
+        assert!(note.contains("fix"));
+        Ok(())
+    }
+
+    #[test]
+    fn build_fast_reply_reads_options_from_notes_when_present() -> Result<(), MsgError> {
+        let bead = BeadId::new("wx-x").expect("valid bead id");
+        let notes = "## Options — promoted\n\n### Option 1 — promoted-fix\nbody.\n";
+        let reply = build_fast_reply(
+            &bead,
+            "1",
+            Some(notes),
+            "no options in description",
+            MsgKind::Clarify,
+        )?;
+        match reply {
+            FastReply::Option { note, .. } => {
+                assert!(note.contains("promoted-fix"));
+            }
+            other => panic!("expected Option, got {other:?}"),
         }
         Ok(())
     }
@@ -191,6 +232,7 @@ Accept. Cost: debt.
         let reply = build_fast_reply(
             &bead,
             "use the staging endpoint",
+            None,
             "no options here",
             MsgKind::Blocked,
         )?;

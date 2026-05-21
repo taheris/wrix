@@ -854,15 +854,38 @@ The `current_spec` is not consulted for any msg mode.
 
 **Chat session shape.** `loom msg -c` (optionally with `-s <label>`)
 launches the base profile via `wrapix spawn`, runs Claude with the
-`msg.md` template, and walks the user through outstanding clarifies
+`msg.md` template, and walks the user through outstanding beads
 interactively. The session writes resolution notes via
 `bd update --notes` and clears the label via `bd update
 --remove-label=loom:clarify` (or `loom:blocked`) per resolved bead.
-Mid-walk exit is a clean `LOOM_COMPLETE`; unresolved clarifies remain
+Mid-walk exit is a clean `LOOM_COMPLETE`; unresolved beads remain
 visible in the next `loom msg` session. The chat session emits
 `LOOM_COMPLETE` only — `LOOM_BLOCKED` and `LOOM_CLARIFY` are not valid
 exit signals for `msg` (the session itself is the resolution channel,
 not a producer of new clarifies).
+
+**Chat queue — clarify vs blocked framing.** The chat session queue
+includes both `loom:clarify` and `loom:blocked` beads, but the two
+flows differ in the rendered prompt:
+
+- **`loom:clarify`** beads carry options under the *Options Format
+  Contract*. The drafter helps the user **pick among existing
+  options**; it does not re-generate them.
+- **`loom:blocked`** beads do not carry options (the `LOOM_BLOCKED`
+  marker is the no-options variant). The drafter walks the user
+  through **enumerating candidate resolutions first**, then helps
+  them pick. This is equivalent to promoting the bead from
+  `loom:blocked` to `loom:clarify` in-session and immediately
+  resolving the promoted clarify.
+- **Options in notes.** Per [loom-gate.md](loom-gate.md#options-format-contract),
+  a reviewer that promotes a previously-blocked bead writes the
+  `## Options` block into the bead's `--notes`. The msg queue reads
+  options from notes ∪ description so notes-carried options are
+  surfaced alongside description-carried ones.
+- **Epic exclusion.** Epic beads (`issue_type == "epic"`) are filtered
+  out of the chat queue: workers target leaf beads, and an epic
+  carrying `loom:blocked` would surface as a non-actionable
+  container.
 
 ### Crate Layout
 

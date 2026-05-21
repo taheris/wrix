@@ -428,6 +428,7 @@ mod tests {
             labels: labels.iter().map(|s| Label::new(*s)).collect(),
             parent: None,
             metadata: Default::default(),
+            notes: None,
         }
     }
 

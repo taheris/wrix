@@ -10,7 +10,7 @@
 
 use askama::Template;
 use loom_events::identifier::{BeadId, MoleculeId, SpecLabel};
-use loom_templates::msg::{ClarifyBead, ClarifyOption, MsgContext};
+use loom_templates::msg::{BeadKind, ClarifyBead, ClarifyOption, MsgContext};
 use loom_templates::plan::{PlanNewContext, PlanUpdateContext};
 use loom_templates::review::{ReviewContext, ReviewSource};
 use loom_templates::run::{
@@ -276,6 +276,7 @@ fn msg_snapshot() {
                     body: Some("Use a SQLite table.".into()),
                 },
             ],
+            kind: BeadKind::Clarify,
         }],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
     };
