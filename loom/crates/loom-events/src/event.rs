@@ -24,6 +24,11 @@ pub enum DriverKind {
     /// `complete*` so SaaS billing pipelines tail the live event stream
     /// instead of re-parsing provider responses.
     TokenUsage,
+    /// Observability signal emitted by `loom-llm`'s
+    /// `DuplicateResultObserver` when an agent's tool result payload
+    /// byte-equals an earlier result in the same session. Payload
+    /// fields: `original_call_id`, `repeated_call_id`, `bytes_wasted`.
+    DuplicateToolResult,
     /// Forward-compat fallback: any wire `driver_kind` string that does
     /// not match a known variant lands here. Known variants never fall
     /// through.
@@ -44,6 +49,7 @@ impl DriverKind {
             DriverKind::ContainerOom => "container_oom",
             DriverKind::InfraFailure => "infra_failure",
             DriverKind::TokenUsage => "token_usage",
+            DriverKind::DuplicateToolResult => "duplicate_tool_result",
             DriverKind::Other(s) => s.as_str(),
         }
     }
@@ -61,6 +67,7 @@ impl DriverKind {
             "container_oom" => DriverKind::ContainerOom,
             "infra_failure" => DriverKind::InfraFailure,
             "token_usage" => DriverKind::TokenUsage,
+            "duplicate_tool_result" => DriverKind::DuplicateToolResult,
             other => DriverKind::Other(other.to_string()),
         }
     }
@@ -874,6 +881,7 @@ mod tests {
             "container_oom",
             "infra_failure",
             "token_usage",
+            "duplicate_tool_result",
         ];
         for kind in kinds {
             let json = serde_json::json!({
@@ -962,6 +970,7 @@ mod tests {
             ("container_oom", DriverKind::ContainerOom),
             ("infra_failure", DriverKind::InfraFailure),
             ("token_usage", DriverKind::TokenUsage),
+            ("duplicate_tool_result", DriverKind::DuplicateToolResult),
         ];
         for (wire, variant) in known {
             assert_eq!(DriverKind::from_wire(wire), variant);

@@ -429,6 +429,18 @@ mod tests {
         assert_eq!(resp.tool_calls[0].call_id, "call-b");
     }
 
+    /// The default `DuplicateResultObserver` ships enabled, and the
+    /// builder's `disable_duplicate_result_observer` toggle takes effect
+    /// — mirroring `[agent.duplicate_result] enabled = false` in the
+    /// CLI-side config.
+    #[test]
+    fn duplicate_result_config_disable_path() {
+        let on = Conversation::new(ModelId::ClaudeSonnet46);
+        assert!(on.duplicate_result_enabled());
+        let off = Conversation::new(ModelId::ClaudeSonnet46).disable_duplicate_result_observer();
+        assert!(!off.duplicate_result_enabled());
+    }
+
     /// Dropping the loop future before it resolves cancels any work
     /// awaiting inside the loop — this is the standard tokio
     /// drop-cancels-future semantics, but the conversation must not

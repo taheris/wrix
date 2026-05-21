@@ -576,7 +576,8 @@ impl TerminalRenderer {
                     | DriverKind::ContainerSpawn
                     | DriverKind::ContainerOom
                     | DriverKind::InfraFailure
-                    | DriverKind::TokenUsage => driver_kind.as_wire(),
+                    | DriverKind::TokenUsage
+                    | DriverKind::DuplicateToolResult => driver_kind.as_wire(),
                     DriverKind::Other(name) => name.as_str(),
                 };
                 let line = if self.parallel {
