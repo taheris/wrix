@@ -284,6 +284,13 @@ where
             exit_code = verify_status.code().unwrap_or(-1),
             "loom run: molecule handoff — loom gate verify --diff finished",
         );
+        // Thread the verify exit into the child via `--verify-exit <CODE>`
+        // so the push gate's four-condition AND (FR9 condition 2) consumes
+        // it. Signal-terminated children surface `None`; the spec treats no
+        // exit code as "no clean success" — use a non-zero sentinel so the
+        // gate routes through `verifier-failed` rather than skipping the
+        // condition.
+        let verify_exit_arg = verify_status.code().unwrap_or(1);
         let review_status = Command::new(&self.loom_bin)
             .current_dir(&self.workspace)
             .arg("gate")
@@ -292,6 +299,8 @@ where
             .arg(&diff_range)
             .arg("-s")
             .arg(self.label.as_str())
+            .arg("--verify-exit")
+            .arg(verify_exit_arg.to_string())
             .status()
             .await?;
         info!(
@@ -1054,8 +1063,9 @@ mod tests {
             "first child must be `loom gate verify --diff <base>..HEAD -s <label>`",
         );
         assert_eq!(
-            lines[1], "gate review --diff deadbeef..HEAD -s alpha",
-            "second child must be `loom gate review --diff <base>..HEAD -s <label>`",
+            lines[1], "gate review --diff deadbeef..HEAD -s alpha --verify-exit 0",
+            "second child must be `loom gate review --diff <base>..HEAD -s <label> --verify-exit <code>` \
+             (FR9 condition 2: push gate consumes verify exit, not the default None)",
         );
     }
 
@@ -1117,9 +1127,11 @@ mod tests {
             lines,
             vec![
                 "gate verify --diff cafef00d..HEAD -s beta",
-                "gate review --diff cafef00d..HEAD -s beta"
+                "gate review --diff cafef00d..HEAD -s beta --verify-exit 1"
             ],
-            "review must still run even when verify signals concerns",
+            "review must still run even when verify signals concerns — and the \
+             verify exit code rides through to the child's push gate via \
+             `--verify-exit` per FR9 condition 2",
         );
 
         // FR9 four-condition AND wiring: the verify exit must ride out

@@ -89,6 +89,13 @@ where
     /// via [`Self::with_style_rules`]; defaults to the built-in path so
     /// test fakes that skip the builder still render a valid prompt.
     style_rules: String,
+    /// Exit code of the molecule-final `loom gate verify --diff
+    /// <base>..HEAD` run, threaded from `loom run`'s handoff via the
+    /// `--verify-exit` flag on `loom gate review`. Defaults to `None`
+    /// when the gate is invoked standalone; the push gate's
+    /// four-condition AND treats `None` as "no verify run in scope" so
+    /// the remaining three conditions still apply.
+    verify_exit: Option<i32>,
 }
 
 impl<S, F> ProductionReviewController<S, F>
@@ -122,6 +129,7 @@ where
             phase_log_when: SystemClock::new().wall_now(),
             envelope_builder: Mutex::new(None),
             style_rules: "docs/style-rules.md".to_string(),
+            verify_exit: None,
         }
     }
 
@@ -137,6 +145,18 @@ where
     /// rely on the built-in default.
     pub fn with_style_rules(mut self, path: String) -> Self {
         self.style_rules = path;
+        self
+    }
+
+    /// Wire the verify-phase exit code that the push gate's
+    /// four-condition AND consumes for FR9 condition 2. `loom run`'s
+    /// molecule-completion handoff captures `loom gate verify`'s exit
+    /// status and threads it through the `--verify-exit` flag on
+    /// `loom gate review`; `main.rs::run_review` plumbs that value here.
+    /// `None` means no verify run is in scope and condition 2 is treated
+    /// as passing.
+    pub fn with_verify_exit(mut self, code: Option<i32>) -> Self {
+        self.verify_exit = code;
         self
     }
 
@@ -444,6 +464,10 @@ where
 
     async fn integrity_findings(&mut self) -> Result<Vec<IntegrityFinding>, ReviewError> {
         self.molecule_integrity_findings().await
+    }
+
+    async fn verify_exit(&mut self) -> Result<Option<i32>, ReviewError> {
+        Ok(self.verify_exit)
     }
 
     async fn apply_integrity_clarify(
@@ -808,6 +832,44 @@ mod tests {
             "no extra args; `bd dolt push` would surface as program=bd args=[dolt, push]: argv={argv:?}",
         );
         assert_eq!(std_cmd.get_current_dir(), Some(dir.path()));
+    }
+
+    /// FR9 condition 2 production wiring: `ProductionReviewController`
+    /// MUST surface the threaded verify exit code so the push gate's
+    /// four-condition AND can refuse on a non-zero verify. The default
+    /// trait impl returns `None`, which let `loom run`'s handoff
+    /// silently push despite a failing verifier — the bug wx-e6c8r.25
+    /// pinned this test against.
+    #[tokio::test]
+    async fn verify_exit_returns_value_threaded_through_with_verify_exit() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().to_path_buf();
+        let state = empty_state(&workspace);
+        let manifest = stub_manifest(&workspace);
+        let mut ctrl = ProductionReviewController::new(
+            BdClient::new(),
+            SpecLabel::new("loom-harness"),
+            PathBuf::from("/usr/bin/loom"),
+            workspace,
+            state,
+            manifest,
+            ProfileName::new("base"),
+            noop_spawn,
+        )
+        .with_verify_exit(Some(1));
+        assert_eq!(ctrl.verify_exit().await.unwrap(), Some(1));
+    }
+
+    /// Default state — no `with_verify_exit` call — preserves the
+    /// historical `None` so direct human invocations of `loom gate
+    /// review` (no parent `loom run`) still work; FR9 condition 2 is
+    /// vacuously satisfied and the remaining three conditions gate the
+    /// push.
+    #[tokio::test]
+    async fn verify_exit_defaults_to_none_without_with_verify_exit() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ctrl = controller(dir.path().to_path_buf());
+        assert_eq!(ctrl.verify_exit().await.unwrap(), None);
     }
 
     #[tokio::test]

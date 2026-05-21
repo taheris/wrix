@@ -97,13 +97,30 @@ enum GateSubcommand {
     System(GateScopeArgs),
     /// Run the LLM rubric — criterion-attached judges plus the rubric
     /// walk over the diff. Expensive.
-    Review(GateScopeArgs),
+    Review(GateReviewArgs),
     /// Run only criterion-attached `[judge]` verifiers — skips the
     /// rubric walk.
     Judge(GateScopeArgs),
     /// Run only the rubric walk over the diff — skips
     /// criterion-attached judges.
     Rubric(GateScopeArgs),
+}
+
+/// `loom gate review` arg surface. Extends [`GateScopeArgs`] with the
+/// `--verify-exit` flag the molecule-completion handoff uses to thread
+/// the parent `loom run`'s `loom gate verify` exit code into the child
+/// (FR9 production wiring requirement — the push gate's four-condition
+/// AND must consume the actual verify exit, not the default `None`).
+#[derive(Debug, clap::Args)]
+struct GateReviewArgs {
+    #[command(flatten)]
+    scope: GateScopeArgs,
+    /// Exit code of a prior `loom gate verify --diff <range>` run.
+    /// Threaded from `loom run`'s molecule-completion handoff so the
+    /// push gate's four-condition AND can refuse on a non-zero verify
+    /// exit per FR9 condition 2.
+    #[arg(long, value_name = "CODE")]
+    verify_exit: Option<i32>,
 }
 
 #[derive(Debug, clap::Args)]
@@ -730,7 +747,9 @@ fn run_gate(
         Some(GateSubcommand::Test(args)) => run_gate_single_tier(workspace, &args, Tier::Test),
         Some(GateSubcommand::System(args)) => run_gate_single_tier(workspace, &args, Tier::System),
         Some(GateSubcommand::Audit(args)) => run_gate_audit(workspace, args, agent_override),
-        Some(GateSubcommand::Review(args)) => run_gate_review(workspace, args, agent_override),
+        Some(GateSubcommand::Review(args)) => {
+            run_gate_review(workspace, args.scope, args.verify_exit, agent_override)
+        }
         Some(GateSubcommand::Judge(_)) => {
             anyhow::bail!(
                 "loom gate judge: not implemented yet — use `loom gate review` for the LLM rubric path"
@@ -1074,13 +1093,21 @@ fn run_gate_audit(
     agent_override: Option<AgentKind>,
 ) -> anyhow::Result<()> {
     let verify_result = run_gate_verify(workspace, &args);
-    let review_result = run_gate_review(workspace, args, agent_override);
+    // Audit fuses verify+review in one process; pass the verify subcommand's
+    // exit code into the review step so the push gate's four-condition AND
+    // consumes condition 2 even on the human-invoked audit path.
+    let verify_exit = match verify_result.as_ref() {
+        Ok(()) => Some(0),
+        Err(_) => Some(1),
+    };
+    let review_result = run_gate_review(workspace, args, verify_exit, agent_override);
     verify_result.and(review_result)
 }
 
 fn run_gate_review(
     workspace: &Path,
     args: GateScopeArgs,
+    verify_exit: Option<i32>,
     agent_override: Option<AgentKind>,
 ) -> anyhow::Result<()> {
     run_review(
@@ -1091,6 +1118,7 @@ fn run_gate_review(
             bead: args.bead,
             diff: args.diff,
             tree: args.tree,
+            verify_exit,
         },
     )
 }
@@ -1878,13 +1906,18 @@ struct ReviewOpts {
     bead: Option<String>,
     diff: Option<String>,
     tree: bool,
+    /// Exit code threaded from `loom run`'s molecule-completion handoff
+    /// (via `loom gate review --verify-exit <CODE>`). `None` when the
+    /// gate is invoked standalone; the push gate's other three
+    /// conditions still gate the push.
+    verify_exit: Option<i32>,
 }
 
 fn run_review(
     workspace: &Path,
     spec: Option<String>,
     agent_override: Option<AgentKind>,
-    _opts: ReviewOpts,
+    opts: ReviewOpts,
 ) -> anyhow::Result<()> {
     let manifest = Arc::new(ProfileImageManifest::from_env()?);
     let label = resolve_spec_label(workspace, spec)?;
@@ -1943,7 +1976,8 @@ fn run_review(
         )
         .with_handoff_lock(guard)
         .with_phase_log(logs_root, phase_when)
-        .with_style_rules(style_rules_for_review);
+        .with_style_rules(style_rules_for_review)
+        .with_verify_exit(opts.verify_exit);
         run_review_loop(&mut controller, IterationCap::default()).await
     })?;
     println!("loom review: {result:?}");
