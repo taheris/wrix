@@ -12,12 +12,18 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 mod crate_structure;
+mod direct_tools_net_new;
 mod event_sink_in_loom_events;
 mod git_client_encapsulation;
+mod loom_agent_deps;
 mod loom_does_not_invoke_podman;
 mod loom_events_is_leaf;
 mod loom_events_minimal_deps;
+mod loom_llm_deps;
+mod loom_llm_no_underlying_crate_reexports;
+mod loom_llm_public_surface;
 mod loom_render_deps;
+mod loom_templates_deps;
 mod loom_templates_public_partial_constants;
 mod loom_templates_public_types;
 mod loom_templates_snapshots_no_crate_root_allow;
@@ -34,9 +40,12 @@ mod no_todo_cursor_meta_key;
 mod no_tokio_sleep_outside_clock;
 mod no_tokio_timeout_outside_clock;
 mod no_types_or_error_files;
+mod observers_in_loom_llm;
 mod phase_verdict_decide_called_from_production;
 mod public_contract_crates;
 mod renderer_no_insta_dependency;
+mod result_hasher_single_call_site;
+mod session_trait_does_not_expose_typestate;
 mod session_trait_in_loom_events;
 mod single_event_channel;
 mod surface_conformance;
@@ -111,12 +120,20 @@ pub static REGISTRY: &[Walk] = &[
         run: crate_structure::run,
     },
     Walk {
+        name: "direct_tools_net_new",
+        run: direct_tools_net_new::run,
+    },
+    Walk {
         name: "event_sink_in_loom_events",
         run: event_sink_in_loom_events::run,
     },
     Walk {
         name: "git_client_encapsulation",
         run: git_client_encapsulation::run,
+    },
+    Walk {
+        name: "loom_agent_deps",
+        run: loom_agent_deps::run,
     },
     Walk {
         name: "loom_does_not_invoke_podman",
@@ -131,8 +148,24 @@ pub static REGISTRY: &[Walk] = &[
         run: loom_events_minimal_deps::run,
     },
     Walk {
+        name: "loom_llm_deps",
+        run: loom_llm_deps::run,
+    },
+    Walk {
+        name: "loom_llm_no_underlying_crate_reexports",
+        run: loom_llm_no_underlying_crate_reexports::run,
+    },
+    Walk {
+        name: "loom_llm_public_surface",
+        run: loom_llm_public_surface::run,
+    },
+    Walk {
         name: "loom_render_deps",
         run: loom_render_deps::run,
+    },
+    Walk {
+        name: "loom_templates_deps",
+        run: loom_templates_deps::run,
     },
     Walk {
         name: "loom_templates_public_partial_constants",
@@ -199,6 +232,10 @@ pub static REGISTRY: &[Walk] = &[
         run: no_types_or_error_files::run,
     },
     Walk {
+        name: "observers_in_loom_llm",
+        run: observers_in_loom_llm::run,
+    },
+    Walk {
         name: "phase_verdict_decide_called_from_production",
         run: phase_verdict_decide_called_from_production::run,
     },
@@ -209,6 +246,14 @@ pub static REGISTRY: &[Walk] = &[
     Walk {
         name: "renderer_no_insta_dependency",
         run: renderer_no_insta_dependency::run,
+    },
+    Walk {
+        name: "result_hasher_single_call_site",
+        run: result_hasher_single_call_site::run,
+    },
+    Walk {
+        name: "session_trait_does_not_expose_typestate",
+        run: session_trait_does_not_expose_typestate::run,
     },
     Walk {
         name: "session_trait_in_loom_events",
@@ -278,11 +323,16 @@ mod tests {
     fn registry_lookup_finds_known_walks() {
         for name in [
             "crate_structure",
+            "direct_tools_net_new",
             "event_sink_in_loom_events",
             "git_client_encapsulation",
+            "loom_agent_deps",
             "loom_does_not_invoke_podman",
             "loom_events_is_leaf",
             "loom_events_minimal_deps",
+            "loom_llm_deps",
+            "loom_llm_no_underlying_crate_reexports",
+            "loom_llm_public_surface",
             "loom_render_deps",
             "no_derive_from_on_newtypes",
             "no_todo_cursor_meta_key",
@@ -290,14 +340,18 @@ mod tests {
             "no_allow_dead_code",
             "no_panics_in_production",
             "no_sync_or_tune_command",
+            "observers_in_loom_llm",
             "phase_verdict_decide_called_from_production",
             "public_contract_crates",
+            "result_hasher_single_call_site",
+            "session_trait_does_not_expose_typestate",
             "session_trait_in_loom_events",
             "single_event_channel",
             "surface_conformance",
             "newtype_identifiers",
             "template_context_structs",
             "template_pinning_matrix",
+            "loom_templates_deps",
             "loom_templates_public_partial_constants",
             "loom_templates_public_types",
             "loom_templates_snapshots_no_crate_root_allow",

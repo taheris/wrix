@@ -1998,3 +1998,444 @@ fn loom_templates_workflow_templates_not_exported_fail_when_pub_const_plan_new()
     );
     assert_fail(&out, "plan_new.md");
 }
+
+// ---------------------------------------------------------------------------
+// loom_llm_deps
+// ---------------------------------------------------------------------------
+
+#[test]
+fn loom_llm_deps_pass_when_only_loom_events_internal() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-llm/Cargo.toml",
+        "[package]\nname = \"loom-llm\"\n\
+         [dependencies]\nloom-events = { workspace = true }\nserde = \"1\"\n",
+    );
+    let out = invoke(&["loom_llm_deps"], Some(ws.path()), None);
+    assert_pass(&out);
+}
+
+#[test]
+fn loom_llm_deps_fail_on_forbidden_internal_dep() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-llm/Cargo.toml",
+        "[package]\nname = \"loom-llm\"\n\
+         [dependencies]\nloom-events = { workspace = true }\nloom-driver = { workspace = true }\n",
+    );
+    let out = invoke(&["loom_llm_deps"], Some(ws.path()), None);
+    assert_fail(&out, "loom-driver");
+}
+
+#[test]
+fn loom_llm_deps_fail_when_manifest_missing() {
+    let ws = make_workspace();
+    let out = invoke(&["loom_llm_deps"], Some(ws.path()), None);
+    assert_fail(&out, "not readable");
+}
+
+// ---------------------------------------------------------------------------
+// loom_llm_public_surface
+// ---------------------------------------------------------------------------
+
+const LLM_PUBLIC_SURFACE_BODY: &str = "pub trait LlmClient {}\n\
+     pub struct CompletionRequest;\n\
+     pub enum Message { Text }\n\
+     pub enum ModelId { Other(String) }\n\
+     pub enum CacheControl { None }\n\
+     pub trait Tool {}\n\
+     pub struct Conversation;\n";
+
+#[test]
+fn loom_llm_public_surface_pass_when_all_exposed_directly() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-llm/src/lib.rs",
+        LLM_PUBLIC_SURFACE_BODY,
+    );
+    let out = invoke(&["loom_llm_public_surface"], Some(ws.path()), None);
+    assert_pass(&out);
+}
+
+#[test]
+fn loom_llm_public_surface_pass_when_reexported_via_pub_use() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-llm/src/lib.rs",
+        "pub mod inner;\n\
+         pub use inner::{LlmClient, CompletionRequest, Message, ModelId, CacheControl, Tool, Conversation};\n",
+    );
+    seed(
+        ws.path(),
+        "crates/loom-llm/src/inner.rs",
+        LLM_PUBLIC_SURFACE_BODY,
+    );
+    let out = invoke(&["loom_llm_public_surface"], Some(ws.path()), None);
+    assert_pass(&out);
+}
+
+#[test]
+fn loom_llm_public_surface_fail_when_one_missing() {
+    let ws = make_workspace();
+    let body = "pub trait LlmClient {}\n\
+                pub struct CompletionRequest;\n\
+                pub enum Message { Text }\n\
+                pub enum ModelId { Other(String) }\n\
+                pub enum CacheControl { None }\n\
+                pub trait Tool {}\n";
+    seed(ws.path(), "crates/loom-llm/src/lib.rs", body);
+    let out = invoke(&["loom_llm_public_surface"], Some(ws.path()), None);
+    assert_fail(&out, "Conversation");
+}
+
+// ---------------------------------------------------------------------------
+// loom_llm_no_underlying_crate_reexports
+// ---------------------------------------------------------------------------
+
+#[test]
+fn loom_llm_no_underlying_crate_reexports_pass_when_types_defined_in_crate() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-llm/src/lib.rs",
+        LLM_PUBLIC_SURFACE_BODY,
+    );
+    let out = invoke(
+        &["loom_llm_no_underlying_crate_reexports"],
+        Some(ws.path()),
+        None,
+    );
+    assert_pass(&out);
+}
+
+#[test]
+fn loom_llm_no_underlying_crate_reexports_fail_when_only_pub_use_from_external() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-llm/src/lib.rs",
+        "pub use multi_provider::{LlmClient, CompletionRequest, Message, ModelId, CacheControl, Tool, Conversation};\n",
+    );
+    let out = invoke(
+        &["loom_llm_no_underlying_crate_reexports"],
+        Some(ws.path()),
+        None,
+    );
+    assert_fail(&out, "Conversation");
+}
+
+// ---------------------------------------------------------------------------
+// result_hasher_single_call_site
+// ---------------------------------------------------------------------------
+
+#[test]
+fn result_hasher_single_call_site_pass_when_two_observer_files_reference() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-llm/src/hasher.rs",
+        "pub struct ResultHasher;\nimpl ResultHasher { pub fn hash(_b: &[u8]) -> [u8;16] { [0;16] } }\n",
+    );
+    seed(
+        ws.path(),
+        "crates/loom-llm/src/observer/doom_loop.rs",
+        "use crate::hasher::ResultHasher;\nfn x() { let _ = ResultHasher::hash(b\"x\"); }\n",
+    );
+    seed(
+        ws.path(),
+        "crates/loom-llm/src/observer/duplicate_result.rs",
+        "use crate::hasher::ResultHasher;\nfn y() { let _ = ResultHasher::hash(b\"y\"); }\n",
+    );
+    let out = invoke(&["result_hasher_single_call_site"], Some(ws.path()), None);
+    assert_pass(&out);
+}
+
+#[test]
+fn result_hasher_single_call_site_fail_when_a_third_caller_appears() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-llm/src/hasher.rs",
+        "pub struct ResultHasher;\n",
+    );
+    seed(
+        ws.path(),
+        "crates/loom-llm/src/observer/doom_loop.rs",
+        "use crate::hasher::ResultHasher; fn x() { let _ = ResultHasher; }\n",
+    );
+    seed(
+        ws.path(),
+        "crates/loom-llm/src/observer/duplicate_result.rs",
+        "use crate::hasher::ResultHasher; fn y() { let _ = ResultHasher; }\n",
+    );
+    seed(
+        ws.path(),
+        "crates/loom-llm/src/extra.rs",
+        "use crate::hasher::ResultHasher; fn z() { let _ = ResultHasher; }\n",
+    );
+    let out = invoke(&["result_hasher_single_call_site"], Some(ws.path()), None);
+    assert_fail(&out, "expected exactly 2");
+}
+
+#[test]
+fn result_hasher_single_call_site_fail_when_no_callers() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-llm/src/hasher.rs",
+        "pub struct ResultHasher;\n",
+    );
+    let out = invoke(&["result_hasher_single_call_site"], Some(ws.path()), None);
+    assert_fail(&out, "expected exactly 2");
+}
+
+// ---------------------------------------------------------------------------
+// observers_in_loom_llm
+// ---------------------------------------------------------------------------
+
+#[test]
+fn observers_in_loom_llm_pass_when_both_defined_in_llm() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-llm/src/observer.rs",
+        "pub struct DoomLoopObserver;\npub struct DuplicateResultObserver;\n",
+    );
+    let out = invoke(&["observers_in_loom_llm"], Some(ws.path()), None);
+    assert_pass(&out);
+}
+
+#[test]
+fn observers_in_loom_llm_fail_when_missing() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-llm/src/observer.rs",
+        "pub struct DoomLoopObserver;\n",
+    );
+    let out = invoke(&["observers_in_loom_llm"], Some(ws.path()), None);
+    assert_fail(&out, "DuplicateResultObserver");
+}
+
+#[test]
+fn observers_in_loom_llm_fail_when_duplicated_elsewhere() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-llm/src/observer.rs",
+        "pub struct DoomLoopObserver;\npub struct DuplicateResultObserver;\n",
+    );
+    seed(
+        ws.path(),
+        "crates/loom-driver/src/dup.rs",
+        "pub struct DoomLoopObserver;\n",
+    );
+    let out = invoke(&["observers_in_loom_llm"], Some(ws.path()), None);
+    assert_fail(&out, "also defined outside loom-llm");
+}
+
+// ---------------------------------------------------------------------------
+// loom_agent_deps
+// ---------------------------------------------------------------------------
+
+#[test]
+fn loom_agent_deps_pass_when_both_present() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-agent/Cargo.toml",
+        "[package]\nname = \"loom-agent\"\n\
+         [dependencies]\nloom-events = { workspace = true }\nloom-llm = { workspace = true }\n",
+    );
+    let out = invoke(&["loom_agent_deps"], Some(ws.path()), None);
+    assert_pass(&out);
+}
+
+#[test]
+fn loom_agent_deps_fail_when_loom_llm_missing() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-agent/Cargo.toml",
+        "[package]\nname = \"loom-agent\"\n\
+         [dependencies]\nloom-events = { workspace = true }\n",
+    );
+    let out = invoke(&["loom_agent_deps"], Some(ws.path()), None);
+    assert_fail(&out, "loom-llm");
+}
+
+#[test]
+fn loom_agent_deps_fail_when_loom_events_missing() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-agent/Cargo.toml",
+        "[package]\nname = \"loom-agent\"\n\
+         [dependencies]\nloom-llm = { workspace = true }\n",
+    );
+    let out = invoke(&["loom_agent_deps"], Some(ws.path()), None);
+    assert_fail(&out, "loom-events");
+}
+
+// ---------------------------------------------------------------------------
+// session_trait_does_not_expose_typestate
+// ---------------------------------------------------------------------------
+
+#[test]
+fn session_trait_does_not_expose_typestate_pass_when_clean() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-events/src/lib.rs",
+        "pub trait Session {\n\
+             fn prompt(&mut self, msg: &str);\n\
+             fn steer(&mut self, msg: &str);\n\
+         }\n",
+    );
+    let out = invoke(
+        &["session_trait_does_not_expose_typestate"],
+        Some(ws.path()),
+        None,
+    );
+    assert_pass(&out);
+}
+
+#[test]
+fn session_trait_does_not_expose_typestate_fail_when_idle_in_signature() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-events/src/lib.rs",
+        "pub struct Idle;\n\
+         pub trait Session {\n\
+             fn prompt(&mut self, idle: Idle);\n\
+         }\n",
+    );
+    let out = invoke(
+        &["session_trait_does_not_expose_typestate"],
+        Some(ws.path()),
+        None,
+    );
+    assert_fail(&out, "Idle");
+}
+
+#[test]
+fn session_trait_does_not_expose_typestate_fail_when_agent_session_in_supertrait() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-events/src/lib.rs",
+        "pub trait AgentSession {}\n\
+         pub trait Session: AgentSession {\n\
+             fn prompt(&mut self, msg: &str);\n\
+         }\n",
+    );
+    let out = invoke(
+        &["session_trait_does_not_expose_typestate"],
+        Some(ws.path()),
+        None,
+    );
+    assert_fail(&out, "AgentSession");
+}
+
+// ---------------------------------------------------------------------------
+// direct_tools_net_new
+// ---------------------------------------------------------------------------
+
+#[test]
+fn direct_tools_net_new_pass_when_all_six_defined_locally() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-agent/src/direct/tools/mod.rs",
+        "pub struct Read;\npub struct Write;\npub struct Edit;\n\
+         pub struct Bash;\npub struct Grep;\npub struct Glob;\n",
+    );
+    let out = invoke(&["direct_tools_net_new"], Some(ws.path()), None);
+    assert_pass(&out);
+}
+
+#[test]
+fn direct_tools_net_new_pass_when_split_across_files() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-agent/src/direct/tools/read.rs",
+        "pub struct Read;\n",
+    );
+    seed(
+        ws.path(),
+        "crates/loom-agent/src/direct/tools/write.rs",
+        "pub struct Write;\n",
+    );
+    seed(
+        ws.path(),
+        "crates/loom-agent/src/direct/tools/edit.rs",
+        "pub struct Edit;\n",
+    );
+    seed(
+        ws.path(),
+        "crates/loom-agent/src/direct/tools/bash.rs",
+        "pub struct Bash;\n",
+    );
+    seed(
+        ws.path(),
+        "crates/loom-agent/src/direct/tools/grep.rs",
+        "pub struct Grep;\n",
+    );
+    seed(
+        ws.path(),
+        "crates/loom-agent/src/direct/tools/glob.rs",
+        "pub struct Glob;\n",
+    );
+    let out = invoke(&["direct_tools_net_new"], Some(ws.path()), None);
+    assert_pass(&out);
+}
+
+#[test]
+fn direct_tools_net_new_fail_when_a_tool_is_only_reexported() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-agent/src/direct/tools/mod.rs",
+        "pub struct Read;\npub struct Write;\npub struct Edit;\n\
+         pub struct Bash;\npub struct Grep;\n\
+         pub use external::Glob;\n",
+    );
+    let out = invoke(&["direct_tools_net_new"], Some(ws.path()), None);
+    assert_fail(&out, "Glob");
+}
+
+// ---------------------------------------------------------------------------
+// loom_templates_deps
+// ---------------------------------------------------------------------------
+
+#[test]
+fn loom_templates_deps_pass_when_only_loom_events_internal() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-templates/Cargo.toml",
+        "[package]\nname = \"loom-templates\"\n\
+         [dependencies]\nloom-events = { workspace = true }\naskama = \"0.16\"\n",
+    );
+    let out = invoke(&["loom_templates_deps"], Some(ws.path()), None);
+    assert_pass(&out);
+}
+
+#[test]
+fn loom_templates_deps_fail_when_loom_driver_present() {
+    let ws = make_workspace();
+    seed(
+        ws.path(),
+        "crates/loom-templates/Cargo.toml",
+        "[package]\nname = \"loom-templates\"\n\
+         [dependencies]\nloom-events = { workspace = true }\nloom-driver = { workspace = true }\n",
+    );
+    let out = invoke(&["loom_templates_deps"], Some(ws.path()), None);
+    assert_fail(&out, "loom-driver");
+}
