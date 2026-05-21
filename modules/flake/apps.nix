@@ -60,6 +60,7 @@ _:
         test-wrapix-spawn-load = test.apps.wrapix-spawn-load;
         test-pi-runtime-image = test.apps.pi-runtime-image;
         test-claude-runtime-noop = test.apps.claude-runtime-noop;
+        test-direct-runtime-image = test.apps.direct-runtime-image;
       }
       // lib.optionalAttrs isLinux {
         fuzz-loom = {

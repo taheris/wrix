@@ -4,6 +4,7 @@
   linuxPkgs,
   fenix,
   loomPackage,
+  loomLinuxPackage ? loomPackage,
   treefmt ? null,
 }:
 
@@ -25,6 +26,7 @@ let
       linuxPkgs
       fenix
       treefmt
+      loomLinuxPackage
       ;
   };
   defaultImage = (sandboxLib.mkSandbox { profile = sandboxLib.profiles.base; }).image;
@@ -33,10 +35,17 @@ let
       profile = sandboxLib.profiles.base;
       agent = "pi";
     }).image;
+  directImage =
+    (sandboxLib.mkSandbox {
+      profile = sandboxLib.profiles.base;
+      agent = "direct";
+    }).image;
   defaultImageClosure = pkgs.closureInfo { rootPaths = [ defaultImage ]; };
   piImageClosure = pkgs.closureInfo { rootPaths = [ piImage ]; };
+  directImageClosure = pkgs.closureInfo { rootPaths = [ directImage ]; };
   piMonoPkg = linuxPkgs.pi-mono;
   claudeCodePkg = linuxPkgs.claude-code;
+  loomDirectRunnerPkg = loomLinuxPackage.bin;
 
   # Mirrors lib/loom/default.nix's filter so the locally-built nextest
   # variants see the same src as `loomPackage.nextest`.
@@ -368,6 +377,32 @@ let
       echo "test-claude-runtime-noop: PASS"
     '';
   };
+
+  directRuntimeImageTest = pkgs.writeShellApplication {
+    name = "test-direct-runtime-image";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.gnugrep
+    ];
+    text = ''
+      closure_file=${directImageClosure}/store-paths
+      runner_path=${loomDirectRunnerPkg}
+
+      if ! grep -qxF "$runner_path" "$closure_file"; then
+          echo "FAIL: loom-direct-runner store path not in sandbox-direct image closure" >&2
+          echo "  expected: $runner_path" >&2
+          echo "  closure : $closure_file" >&2
+          exit 1
+      fi
+
+      if [[ ! -x "$runner_path/bin/loom-direct-runner" ]]; then
+          echo "FAIL: loom-direct-runner binary at $runner_path/bin/loom-direct-runner is missing or not executable" >&2
+          exit 1
+      fi
+
+      echo "test-direct-runtime-image: PASS"
+    '';
+  };
 in
 {
   inherit
@@ -377,5 +412,6 @@ in
     wrapixSpawnLoadTest
     piRuntimeImageTest
     claudeRuntimeNoopTest
+    directRuntimeImageTest
     ;
 }

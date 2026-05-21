@@ -91,7 +91,7 @@ let
       fenix
       treefmt
       ;
-    inherit (wrapix) loomPackage;
+    inherit (wrapix) loomPackage loomLinuxPackage;
   };
 
   # Per specs/profiles.md, the rust profile's buildPackage emits separate
@@ -293,6 +293,12 @@ in
       meta.description = "Verify default sandbox image closure has claude-code but not pi-mono";
       type = "app";
       program = "${loomDeriv.claudeRuntimeNoopTest}/bin/test-claude-runtime-noop";
+    };
+
+    direct-runtime-image = {
+      meta.description = "Verify sandbox-direct image closure contains executable loom-direct-runner binary";
+      type = "app";
+      program = "${loomDeriv.directRuntimeImageTest}/bin/test-direct-runtime-image";
     };
 
     # profiles.rust.buildPackage [verify] hash invariants (specs/profiles.md

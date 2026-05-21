@@ -11,13 +11,14 @@ cd /workspace
 . /git-ssh-setup.sh
 
 # WRAPIX_AGENT selects the agent runtime. 'claude' (default) runs claude with
-# config merging and permission bypass; 'pi' runs pi-mono in JSONL RPC mode
-# and skips Claude-specific config (pi has no permission system or settings.json).
+# config merging and permission bypass; 'pi' runs pi-mono in JSONL RPC mode;
+# 'direct' execs loom-direct-runner over JSONL stdin/stdout. pi and direct
+# skip Claude-specific config (neither has a permission system or settings.json).
 WRAPIX_AGENT="${WRAPIX_AGENT:-claude}"
 case "$WRAPIX_AGENT" in
-  claude|pi) ;;
+  claude|pi|direct) ;;
   *)
-    echo "Error: unknown WRAPIX_AGENT: $WRAPIX_AGENT (expected 'claude' or 'pi')" >&2
+    echo "Error: unknown WRAPIX_AGENT: $WRAPIX_AGENT (expected 'claude', 'pi', or 'direct')" >&2
     exit 1
     ;;
 esac
@@ -267,6 +268,11 @@ elif [ "$WRAPIX_AGENT" = "pi" ]; then
   # Pi RPC mode: pi listens on stdin/stdout for JSONL commands.
   # Loom drives the session from the host via piped stdio.
   pi --mode rpc || MAIN_EXIT=$?
+elif [ "$WRAPIX_AGENT" = "direct" ]; then
+  # Direct mode: loom-direct-runner listens on stdin/stdout for JSONL
+  # commands and drives a loom-llm Conversation with the six sandbox-aware
+  # tools. Loom drives the session from the host via piped stdio.
+  loom-direct-runner || MAIN_EXIT=$?
 elif [ "$WRAPIX_AGENT" = "claude" ] && [ "${WRAPIX_STDIO:-}" = "1" ]; then
   # Claude stream-json mode: loom drives the session from the host via piped
   # stdio. Symmetric to the pi branch above. Canonical claude args live here

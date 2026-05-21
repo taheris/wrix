@@ -4,16 +4,19 @@
 # - Base packages + profile-specific packages
 # - Claude Code package
 # - Optional pi-mono runtime (Node.js + pi binary) when `agent == "pi"`
+# - Optional loom-direct-runner binary when `agent == "direct"`
 # - CA certificates for HTTPS
 # - Platform-specific entrypoint script
 #
 # The image is composed from two orthogonal axes:
 #   - workspace profile (base | rust | python) — toolchain packages
-#   - agent runtime (claude | pi) — agent binary layer
+#   - agent runtime (claude | pi | direct) — agent binary layer
 #
 # Claude is always present (it's part of the base image today), so the claude
 # runtime layer is a no-op. The pi runtime layer adds pkgs.pi-mono on top of
-# whichever profile is selected.
+# whichever profile is selected. The direct runtime layer adds the
+# loom-direct-runner binary so the entrypoint can exec it on
+# WRAPIX_AGENT=direct.
 #
 # Layer ordering: stable packages first, frequently-changing packages last.
 # This maximizes layer cache hits across rebuilds and profiles.
@@ -26,10 +29,13 @@
   claudeConfig,
   claudeSettings,
   mcpServerConfigs ? { },
-  # Agent runtime axis. "claude" (default) is a no-op. "pi" adds pi-mono
-  # (Node.js + pi binary) so the entrypoint can launch pi --mode rpc when
-  # WRAPIX_AGENT=pi.
+  # Agent runtime axis. "claude" (default) is a no-op; "pi" adds pi-mono
+  # (Node.js + pi binary) for `pi --mode rpc`; "direct" adds the
+  # loom-direct-runner binary that the entrypoint execs over JSONL stdio.
   agent ? "claude",
+  # Linux-built loom workspace (from `lib/default.nix`). Required when
+  # `agent == "direct"` to source the `loom-direct-runner` binary.
+  loomLinuxPackage ? null,
   # Use buildLayeredImage (tar in store) instead of streamLayeredImage (script).
   # Required on Darwin where the stream script's Linux Python shebang won't execute.
   asTarball ? false,
@@ -91,14 +97,22 @@ let
   '';
 
   # Agent runtime layer. `claude` is a no-op (claudeCode is the entrypointPkg
-  # already baked into every image); `pi` adds pi-mono. New runtimes plug in
-  # by extending this lookup — no profile.pi or pi+rust special cases.
+  # already baked into every image); `pi` adds pi-mono; `direct` adds the
+  # Linux-built `loom-direct-runner` binary. New runtimes plug in by
+  # extending this lookup — no profile.pi or pi+rust special cases.
+  directPkg =
+    if loomLinuxPackage == null then
+      throw "lib/sandbox/image.nix: agent='direct' requires loomLinuxPackage"
+    else
+      loomLinuxPackage.bin;
   agentPackages =
     {
       claude = [ ];
       pi = [ pkgs.pi-mono ];
+      direct = [ directPkg ];
     }
-    .${agent} or (throw "lib/sandbox/image.nix: unknown agent '${agent}' (expected 'claude' or 'pi')");
+    .${agent}
+      or (throw "lib/sandbox/image.nix: unknown agent '${agent}' (expected 'claude', 'pi', or 'direct')");
 
   # Create a merged environment with all packages for proper PATH
   allPackages = [

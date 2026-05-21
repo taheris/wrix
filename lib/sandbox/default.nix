@@ -5,6 +5,7 @@
   crane ? null,
   fenix ? null,
   treefmt ? null,
+  loomLinuxPackage ? null,
 }:
 
 let
@@ -132,6 +133,7 @@ let
         mcpServerConfigs
         agent
         asTarball
+        loomLinuxPackage
         ;
       entrypointPkg = claudePkg;
     };
