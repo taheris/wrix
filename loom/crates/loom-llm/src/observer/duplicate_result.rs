@@ -6,7 +6,7 @@
 
 use loom_events::{AgentEvent, EventSink, SessionCommand};
 
-use super::hash::ResultHasher;
+use super::result_hasher::ResultHasher;
 
 /// Default `min_bytes` threshold below which short results are skipped
 /// — keeps the dedup map from being dominated by trivially-short

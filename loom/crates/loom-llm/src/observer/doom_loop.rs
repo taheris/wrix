@@ -6,11 +6,11 @@
 //! (tool_name, canonical_params)` (canonical JSON per RFC 8785 JCS,
 //! normalized numbers) and `ResultHash` is `BLAKE3-16(canonical
 //! result)` — shared with `DuplicateResultObserver` via
-//! [`super::hash::ResultHasher`].
+//! [`super::result_hasher::ResultHasher`].
 
 use loom_events::{AgentEvent, EventSink, SessionCommand};
 
-use super::hash::ResultHasher;
+use super::result_hasher::ResultHasher;
 
 /// Observer state for one session. Resets on `CompactionEnd`; does NOT
 /// reset on `TurnEnd` — agent doom loops routinely span turns and
