@@ -42,10 +42,10 @@ let
     "tests/loom/mock-pi" = ../../tests/loom/mock-pi;
     "tests/loom/mock-claude" = ../../tests/loom/mock-claude;
     "specs" = ../../specs;
-    # Stage `.wrapix/loom/config.toml` (with the `[runner.*]` block) so
+    # Stage `<workspace>/config.toml` (with the `[runner.*]` block) so
     # the nextest derivation sees the same runner config the host sees.
     # See specs/loom-harness.md § Configuration.
-    ".wrapix/loom/config.toml" = ../../.wrapix/loom/config.toml;
+    "config.toml" = ../../config.toml;
   };
 
   stagedSrc = pkgs.runCommand "rust-src-with-extras" { } (
