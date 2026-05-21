@@ -14,6 +14,7 @@ pub mod agent;
 pub mod init;
 pub mod logs_cmd;
 pub mod msg;
+pub mod observer;
 pub mod plan;
 pub mod review;
 pub mod run;
@@ -28,3 +29,4 @@ pub use loom_driver::agent::{
     LineParse, MAX_LINE_BYTES, ParsedLine, ProtocolError, RePinContent, SessionOutcome,
     SpawnConfig,
 };
+pub use observer::DefaultObserverChain;

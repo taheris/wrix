@@ -17,7 +17,7 @@ use loom_agent::{ClaudeBackend, PiBackend};
 use loom_driver::agent::{AgentKind, LOOM_INSIDE_ENV, ProtocolError, SessionOutcome, SpawnConfig};
 use loom_driver::bd::{BdClient, ListOpts, UpdateOpts};
 use loom_driver::clock::{Clock, SystemClock};
-use loom_driver::config::{LoomConfig, Phase};
+use loom_driver::config::{AgentObserversConfig, LoomConfig, Phase};
 use loom_driver::git::GitClient;
 use loom_driver::identifier::{BeadId, ProfileName, SpecLabel};
 use loom_driver::lock::LockManager;
@@ -41,7 +41,7 @@ use loom_workflow::run::{
 use loom_workflow::todo::{
     ExitSignal, ProductionTodoController, parse_exit_signal, run as run_todo_workflow,
 };
-use loom_workflow::{init, logs_cmd, plan, spec, status, use_spec};
+use loom_workflow::{DefaultObserverChain, init, logs_cmd, plan, spec, status, use_spec};
 use loom_workflow::{run_agent, run_agent_classified};
 
 /// Top-level CLI surface.
@@ -1447,6 +1447,7 @@ fn run_run(
     let label_for_sink = label.clone();
     let render_mode = resolve_render_mode(render_flags);
     let style_rules_for_run = config.style_rules.clone();
+    let observer_config = config.agent.clone();
     let retry_policy = RetryPolicy {
         max_retries: config.loop_.max_retries,
     };
@@ -1465,6 +1466,7 @@ fn run_run(
                 let logs_root = logs_root.clone();
                 let label = label_for_sink.clone();
                 let workspace = workspace_for_renderer.clone();
+                let observer_config = observer_config.clone();
                 async move {
                     // A sink-open failure is pre-spawn — the bead's
                     // JSONL log location is part of the workflow's
@@ -1498,6 +1500,7 @@ fn run_run(
                         sink,
                         Some(&mut output),
                         Some(envelope_builder),
+                        observer_config,
                     )
                     .await;
                     let marker = parse_exit_signal(&output);
@@ -1788,6 +1791,14 @@ async fn dispatch(
 /// [`SessionResult`]. The `loom run` driver consumes this so the verdict gate
 /// can route preflight failures to `infra-preflight` immediately and grant
 /// mid-session failures one driver-memory retry per `loom run`.
+///
+/// `observer_config` is the resolved `LoomConfig::agent` block. When at
+/// least one sub-observer is `enabled = true`, a
+/// [`loom_workflow::DefaultObserverChain`] is composed from the two
+/// `loom-llm` observers and passed to `run_agent_classified` as the
+/// session's `observer` arg — wiring the spec's safety nets
+/// (`specs/loom-llm.md` § Agent-Loop Observers) into every Pi/Claude
+/// session by default.
 async fn dispatch_classified(
     kind: AgentKind,
     mut spawn: SpawnConfig,
@@ -1795,6 +1806,7 @@ async fn dispatch_classified(
     sink: Option<LogSink>,
     text_capture: Option<&mut String>,
     envelope_builder: Option<loom_events::EnvelopeBuilder>,
+    observer_config: AgentObserversConfig,
 ) -> SessionResult {
     if matches!(kind, AgentKind::Claude) && spawn.shutdown_grace.is_none() {
         spawn.shutdown_grace = shutdown_grace;
@@ -1809,16 +1821,26 @@ async fn dispatch_classified(
     {
         spawn.stall_warn_interval = Some(d);
     }
+    let mut observer_chain = DefaultObserverChain::from_config(&observer_config);
+    let observer: Option<&mut dyn loom_events::EventSink> = observer_chain
+        .as_mut()
+        .map(|c| c as &mut dyn loom_events::EventSink);
     match kind {
         AgentKind::Pi => {
-            run_agent_classified::<PiBackend>(&spawn, sink, None, text_capture, envelope_builder)
-                .await
+            run_agent_classified::<PiBackend>(
+                &spawn,
+                sink,
+                observer,
+                text_capture,
+                envelope_builder,
+            )
+            .await
         }
         AgentKind::Claude => {
             run_agent_classified::<ClaudeBackend>(
                 &spawn,
                 sink,
-                None,
+                observer,
                 text_capture,
                 envelope_builder,
             )

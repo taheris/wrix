@@ -15,6 +15,7 @@
 //! cwd-relative); otherwise the path is `<workspace>/config.toml`.
 
 mod agent;
+mod agent_observer;
 mod beads;
 mod claude;
 mod error;
@@ -27,6 +28,7 @@ pub use agent::{
     AgentSelection, AgentSelectionError, BUILT_IN_BACKEND, BUILT_IN_PROFILE, ClaudeSettings,
     DEFAULT_PHASE_KEY, Phase, PhaseAgentConfig, PhaseConfig, parse_backend_name,
 };
+pub use agent_observer::{AgentObserversConfig, DoomLoopConfig, DuplicateResultConfig};
 pub use beads::BeadsConfig;
 pub use claude::ClaudeConfig;
 pub use error::LoomConfigError;
@@ -81,6 +83,10 @@ pub struct LoomConfig {
     /// `RunnerConfig::default()` so consumers without runner overrides
     /// fall back to toolchain detection.
     pub runner: RunnerConfig,
+    /// `[agent]` block — observer-composition knobs (`[agent.doom_loop]`
+    /// / `[agent.duplicate_result]`). Workflow's Pi/Claude dispatch
+    /// reads this to materialise the default observer chain.
+    pub agent: AgentObserversConfig,
 }
 
 impl Default for LoomConfig {
@@ -96,6 +102,7 @@ impl Default for LoomConfig {
             claude: ClaudeConfig::default(),
             security: SecurityConfig::default(),
             runner: RunnerConfig::default(),
+            agent: AgentObserversConfig::default(),
         }
     }
 }
@@ -326,6 +333,34 @@ post_result_grace_secs = 5
         assert_eq!(from_spec.logs, empty.logs);
         assert_eq!(from_spec.claude, empty.claude);
         assert_eq!(from_spec.security, empty.security);
+        assert_eq!(from_spec.agent, empty.agent);
+        Ok(())
+    }
+
+    /// `[agent.doom_loop]` / `[agent.duplicate_result]` round-trip through
+    /// the full `LoomConfig` parser the way the spec's Configuration block
+    /// promises. Disabling either observer in TOML lands on the typed
+    /// `enabled = false` so the workflow's chain composition skips it.
+    #[test]
+    fn agent_observer_block_round_trips_via_loom_config() -> Result<()> {
+        let src = r#"
+[agent.doom_loop]
+enabled = false
+window = 8
+threshold = 4
+stage_2_after_stage_1 = 2
+
+[agent.duplicate_result]
+enabled = false
+min_bytes = 1024
+"#;
+        let cfg = LoomConfig::from_toml_str(src)?;
+        assert!(!cfg.agent.doom_loop.enabled);
+        assert_eq!(cfg.agent.doom_loop.window, 8);
+        assert_eq!(cfg.agent.doom_loop.threshold, 4);
+        assert_eq!(cfg.agent.doom_loop.stage_2_after_stage_1, 2);
+        assert!(!cfg.agent.duplicate_result.enabled);
+        assert_eq!(cfg.agent.duplicate_result.min_bytes, 1024);
         Ok(())
     }
 

@@ -2670,6 +2670,7 @@ dependencies = [
  "loom-driver",
  "loom-events",
  "loom-gate",
+ "loom-llm",
  "loom-render",
  "loom-templates",
  "loom-test-support",
