@@ -6,6 +6,9 @@ version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[package.metadata.loom]
+public_contract = true
+
 # PUBLIC CONTRACT LEAF — frontends, SSE bridges, log analyzers depend on
 # this crate to consume `AgentEvent` and the id newtypes without pulling
 # in the loom-driver runtime (rusqlite, gix, tokio). Adding a new dep
