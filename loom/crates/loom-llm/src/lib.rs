@@ -29,7 +29,7 @@ pub mod tool;
 pub mod usage;
 
 pub use cache::{CacheControl, CacheTtl};
-pub use client::{CompletionResponse, LlmClient, LlmError};
+pub use client::{Client, CompletionResponse, LlmClient, LlmError};
 pub use conversation::{Conversation, LoopOutcome};
 pub use model_id::{ModelId, Provider};
 pub use observer::{DoomLoopObserver, DuplicateResultObserver};

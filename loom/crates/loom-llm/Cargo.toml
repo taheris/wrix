@@ -19,6 +19,7 @@ public_contract = true
 blake3 = { workspace = true }
 displaydoc = { workspace = true }
 futures-core = { workspace = true }
+genai = { workspace = true }
 loom-events = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }

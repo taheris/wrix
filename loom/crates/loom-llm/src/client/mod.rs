@@ -6,6 +6,10 @@
 //! [`crate::request::CompletionRequest`]. Provider routing is inferred
 //! from the `ModelId` variant (or `Other` prefix).
 
+mod multi_provider;
+
+pub use multi_provider::Client;
+
 use displaydoc::Display;
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
