@@ -29,6 +29,12 @@ pub enum DriverKind {
     /// byte-equals an earlier result in the same session. Payload
     /// fields: `original_call_id`, `repeated_call_id`, `bytes_wasted`.
     DuplicateToolResult,
+    /// Observability signal emitted by `loom-llm`'s `DoomLoopObserver`
+    /// when 3 of the last 5 entries for a given `(CallKey, ResultHash)`
+    /// window are identical (stage 1) or `stage_2_after_stage_1` more
+    /// identical pairs follow stage 1 (stage 2). Payload fields:
+    /// `stage`, `tool`, `params`, `call_id`.
+    DoomLoopTripped,
     /// Forward-compat fallback: any wire `driver_kind` string that does
     /// not match a known variant lands here. Known variants never fall
     /// through.
@@ -50,6 +56,7 @@ impl DriverKind {
             DriverKind::InfraFailure => "infra_failure",
             DriverKind::TokenUsage => "token_usage",
             DriverKind::DuplicateToolResult => "duplicate_tool_result",
+            DriverKind::DoomLoopTripped => "doom_loop_tripped",
             DriverKind::Other(s) => s.as_str(),
         }
     }
@@ -68,6 +75,7 @@ impl DriverKind {
             "infra_failure" => DriverKind::InfraFailure,
             "token_usage" => DriverKind::TokenUsage,
             "duplicate_tool_result" => DriverKind::DuplicateToolResult,
+            "doom_loop_tripped" => DriverKind::DoomLoopTripped,
             other => DriverKind::Other(other.to_string()),
         }
     }
@@ -882,6 +890,7 @@ mod tests {
             "infra_failure",
             "token_usage",
             "duplicate_tool_result",
+            "doom_loop_tripped",
         ];
         for kind in kinds {
             let json = serde_json::json!({
@@ -971,6 +980,7 @@ mod tests {
             ("infra_failure", DriverKind::InfraFailure),
             ("token_usage", DriverKind::TokenUsage),
             ("duplicate_tool_result", DriverKind::DuplicateToolResult),
+            ("doom_loop_tripped", DriverKind::DoomLoopTripped),
         ];
         for (wire, variant) in known {
             assert_eq!(DriverKind::from_wire(wire), variant);

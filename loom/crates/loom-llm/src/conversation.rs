@@ -467,6 +467,17 @@ mod tests {
         assert!(!off.duplicate_result_enabled());
     }
 
+    /// The default `DoomLoopObserver` ships enabled, and the builder's
+    /// `disable_doom_loop_observer` toggle mirrors
+    /// `[agent.doom_loop] enabled = false` in the CLI-side config.
+    #[test]
+    fn doom_loop_config_disable_path() {
+        let on = Conversation::new(ModelId::ClaudeSonnet46);
+        assert!(on.doom_loop_enabled());
+        let off = Conversation::new(ModelId::ClaudeSonnet46).disable_doom_loop_observer();
+        assert!(!off.doom_loop_enabled());
+    }
+
     /// Dropping the loop future before it resolves cancels any work
     /// awaiting inside the loop — this is the standard tokio
     /// drop-cancels-future semantics, but the conversation must not

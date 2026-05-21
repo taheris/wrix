@@ -9,5 +9,5 @@ pub mod doom_loop;
 pub mod duplicate_result;
 mod result_hasher;
 
-pub use doom_loop::DoomLoopObserver;
+pub use doom_loop::{DoomLoopObserver, DoomLoopTripped};
 pub use duplicate_result::{DuplicateDetection, DuplicateResultObserver};
