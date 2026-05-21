@@ -94,6 +94,14 @@ test_scratchpad_partial_clarity() {
     "partial/scratchpad.md tells the agent that the scratchpad is agent-lifecycle-only — the file is created at session start, removed at session end on every exit path, and is a compaction-recovery aid rather than durable storage. It explicitly enumerates durable destinations for anything that must outlive the session: bead notes (bd update --notes), the spec file (specs/<label>.md), the commit message, CLAUDE.md / companion docs, or a new bead (bd create). The partial directs the agent to write to those destinations BEFORE session end if the thought is worth keeping, so a future agent reading the bead, spec, or commit history can find the durable record. Vague guidance like 'write important things down' without naming the durable destination is insufficient — the partial must enumerate them."
 }
 
+judge_tool_trait_ecosystem_compat() {
+  judge_files \
+    "loom/crates/loom-llm/src/tool.rs" \
+    "loom/crates/loom-llm/src/lib.rs"
+  judge_criterion \
+    "The Tool trait in loom-llm/src/tool.rs exposes a shape that is reasonably convertible to other Rust agent-loop crates' tool surfaces (agent-client-protocol, rig, etc.) so re-hosting Conversation on a different crate later is feasible. Specifically: (1) the trait carries exactly the four documented members — name() -> &str, description() -> &str, input_schema() -> serde_json::Value, and an async invoke(args: serde_json::Value) -> Result<ToolOutput, LlmError> — so the three read-side accessors are sufficient to populate the Anthropic Messages-API tool definition shape { name, description, input_schema } from the trait alone; (2) ToolOutput carries a canonical-JSON content payload (serde_json::Value, not String) plus an is_error flag, so tool results compose into ecosystem crates that key on canonical JSON; (3) the trait is dyn-compatible — the async invoke returns a boxed future (the InvokeFuture alias) so handlers store as Box<dyn Tool> without per-type monomorphisation, matching the Vec<Box<dyn Tool>> registry shape used by every ecosystem agent-loop crate; (4) the trait bounds Send + Sync so handlers cross thread boundaries the same way ecosystem crates require. The forward-compat smoke test (tool_trait_generates_anthropic_schema_that_round_trips in the same file) exercises a sample Tool impl and verifies the generated Anthropic schema JSON round-trips losslessly through serde_json — judge that the test actually constructs the Anthropic-shaped JSON from the trait's read-side surface (no parallel hand-built struct) and asserts the round-tripped value matches the original, so a future refactor that drops a method or changes a return type trips the test."
+}
+
 judge_sibling_spec_editing_documents_split() {
   judge_files \
     "loom/crates/loom-templates/templates/partial/sibling_spec_editing.md"

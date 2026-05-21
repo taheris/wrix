@@ -50,3 +50,123 @@ pub trait Tool: Send + Sync {
     /// `Vec<Box<dyn Tool>>`.
     fn invoke<'a>(&'a self, args: Value) -> InvokeFuture<'a>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use serde_json::json;
+
+    /// Sample echo tool that doubles as a forward-compat surrogate for
+    /// the documented ecosystem trait shapes (`agent-client-protocol`,
+    /// rig). It implements the full `Tool` surface — name, description,
+    /// JSON-Schema input, async invoke returning a canonical
+    /// `ToolOutput` — so the round-trip and dyn-compat tests below
+    /// exercise the same shape an ecosystem-bridge adapter would walk.
+    struct SampleEchoTool;
+
+    impl Tool for SampleEchoTool {
+        fn name(&self) -> &str {
+            "echo"
+        }
+
+        fn description(&self) -> &str {
+            "Echo the given text payload back to the caller."
+        }
+
+        fn input_schema(&self) -> Value {
+            json!({
+                "type": "object",
+                "properties": {
+                    "text": { "type": "string" }
+                },
+                "required": ["text"],
+                "additionalProperties": false,
+            })
+        }
+
+        fn invoke<'a>(&'a self, args: Value) -> InvokeFuture<'a> {
+            Box::pin(async move {
+                let text = args
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .ok_or(LlmError::Canonicalize)?
+                    .to_string();
+                Ok(ToolOutput {
+                    content: json!({ "echo": text }),
+                    is_error: false,
+                })
+            })
+        }
+    }
+
+    /// Build the Anthropic Messages-API tool-definition JSON from the
+    /// trait surface alone. Anthropic's documented tool shape is
+    /// `{ name, description, input_schema }` — exactly the three
+    /// non-invoke methods on [`Tool`]. The helper takes `&dyn Tool` so
+    /// the trait's dyn-compatibility is part of the contract under
+    /// test.
+    fn anthropic_tool_definition(tool: &dyn Tool) -> Value {
+        json!({
+            "name": tool.name(),
+            "description": tool.description(),
+            "input_schema": tool.input_schema(),
+        })
+    }
+
+    /// Forward-compat smoke test: a sample `Tool` impl generates the
+    /// Anthropic tool-schema JSON, the JSON round-trips through
+    /// serde_json without loss, and the recovered fields match the
+    /// trait surface. Pins three things at once:
+    ///
+    /// 1. The trait's read-side surface (`name`, `description`,
+    ///    `input_schema`) is sufficient to satisfy the Anthropic
+    ///    Messages-API tool definition shape — keeps the option open
+    ///    to re-host `Conversation` on a different agent-loop crate
+    ///    later without breaking consumers.
+    /// 2. The schema payload is canonical JSON: serialising and
+    ///    re-parsing produces a structurally identical value (no lossy
+    ///    coercions snuck in via the trait's `Value` return type).
+    /// 3. `&dyn Tool` is the right boundary — the helper takes a trait
+    ///    object, mirroring how the conversation loop stores handlers
+    ///    as `Vec<Box<dyn Tool>>`.
+    #[test]
+    fn tool_trait_generates_anthropic_schema_that_round_trips() {
+        let tool = SampleEchoTool;
+        let schema = anthropic_tool_definition(&tool);
+
+        let wire = serde_json::to_string(&schema).expect("schema serialises");
+        let parsed: Value = serde_json::from_str(&wire).expect("schema round-trips");
+        assert_eq!(parsed, schema);
+
+        assert_eq!(parsed["name"], json!("echo"));
+        assert_eq!(
+            parsed["description"],
+            json!("Echo the given text payload back to the caller.")
+        );
+        assert_eq!(parsed["input_schema"]["type"], json!("object"));
+        assert_eq!(parsed["input_schema"]["required"], json!(["text"]));
+        assert_eq!(
+            parsed["input_schema"]["properties"]["text"]["type"],
+            json!("string")
+        );
+    }
+
+    /// `Tool` is dyn-compatible — concrete handlers compose into the
+    /// conversation loop's `Vec<Box<dyn Tool>>` registry without
+    /// per-type monomorphisation. The async `invoke` returns the
+    /// [`InvokeFuture`] alias (boxed, `Send`, lifetime-tied to `&self`)
+    /// so the trait object stays object-safe; this test pins both the
+    /// boxing path and that an awaited invocation produces the
+    /// canonical `ToolOutput` shape the loop expects.
+    #[test]
+    fn tool_trait_is_dyn_compatible_and_invoke_resolves() {
+        let handlers: Vec<Box<dyn Tool>> = vec![Box::new(SampleEchoTool)];
+        let handler = handlers.first().expect("one handler registered");
+
+        let output =
+            tokio_test::block_on(handler.invoke(json!({ "text": "hi" }))).expect("invoke succeeds");
+        assert!(!output.is_error);
+        assert_eq!(output.content, json!({ "echo": "hi" }));
+    }
+}

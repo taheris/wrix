@@ -27,6 +27,7 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
+tokio-test = { workspace = true }
 
 [lints]
 workspace = true
