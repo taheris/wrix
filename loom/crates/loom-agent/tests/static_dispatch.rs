@@ -29,7 +29,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use loom_agent::pi::backend::spawn_with_handshake;
-use loom_agent::{ClaudeBackend, PiBackend};
+use loom_agent::{ClaudeBackend, DirectBackend, PiBackend};
 use loom_driver::agent::{AgentBackend, ProtocolError, RePinContent, SessionOutcome, SpawnConfig};
 use loom_driver::clock::SystemClock;
 use loom_events::ParsedAgentEvent;
@@ -43,15 +43,17 @@ async fn run_agent<B: AgentBackend>(config: &SpawnConfig) -> Result<SessionOutco
 #[test]
 fn pi_and_claude_dispatch_through_run_agent() {
     // The bound `B: AgentBackend` is the dispatch contract — instantiating
-    // it at both concrete types is what monomorphizes `run_agent` and proves
+    // it at every concrete type is what monomorphizes `run_agent` and proves
     // the trait surface accepts each backend.
     fn assert_backend<B: AgentBackend>() {}
     assert_backend::<PiBackend>();
     assert_backend::<ClaudeBackend>();
+    assert_backend::<DirectBackend>();
 
     // Reference the generic function at each backend so the test binary
-    // pulls in both `run_agent::<PiBackend>` and `run_agent::<ClaudeBackend>`
-    // monomorphizations rather than only the trait-bound check above.
+    // pulls in `run_agent::<PiBackend>`, `run_agent::<ClaudeBackend>`, and
+    // `run_agent::<DirectBackend>` monomorphizations rather than only the
+    // trait-bound check above.
     let _pi_fut = async {
         let cfg = sample_config();
         run_agent::<PiBackend>(&cfg).await
@@ -59,6 +61,10 @@ fn pi_and_claude_dispatch_through_run_agent() {
     let _claude_fut = async {
         let cfg = sample_config();
         run_agent::<ClaudeBackend>(&cfg).await
+    };
+    let _direct_fut = async {
+        let cfg = sample_config();
+        run_agent::<DirectBackend>(&cfg).await
     };
 }
 
