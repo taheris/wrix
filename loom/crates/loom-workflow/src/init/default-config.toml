@@ -55,3 +55,26 @@ post_result_grace_secs = 5
 # control_request analog). Empty by default; the container sandbox is
 # the trust boundary.
 # denied_tools = ["SomeNewHostTool"]
+
+# Gate runners — per-tier batched dispatch with per-runner cwd. Full
+# schema (match patterns, target templates, parsers) is owned by
+# specs/loom-gate.md § Runners. Consumers declare their own runners;
+# the blocks below are commented examples.
+#
+# [runner.test]
+# command = "cargo nextest run -E '{filter}' --message-format=libtest-json"
+# target  = "test({name})"
+# join    = " + "
+# parse   = "libtest-json"
+# cwd     = "."
+#
+# [runner.check]
+# cwd = "."
+#
+# [runner.system.nix]
+# match   = '^nix (build|run) \.#(\S+)$'
+# command = "nix build {targets}"
+# target  = ".#{capture_2}"
+# join    = " "
+# parse   = "nix-build-status"
+# cwd     = "."

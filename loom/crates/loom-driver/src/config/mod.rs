@@ -16,6 +16,7 @@ mod claude;
 mod error;
 mod logs;
 mod loop_config;
+mod runner;
 mod security;
 
 pub use agent::{
@@ -27,6 +28,7 @@ pub use claude::ClaudeConfig;
 pub use error::LoomConfigError;
 pub use logs::LogsConfig;
 pub use loop_config::LoopConfig;
+pub use runner::{Parser, RunnerConfig, RunnerEntry, RunnerTier};
 pub use security::SecurityConfig;
 
 use std::collections::BTreeMap;
@@ -61,6 +63,11 @@ pub struct LoomConfig {
     pub phase: BTreeMap<String, PhaseConfig>,
     pub claude: ClaudeConfig,
     pub security: SecurityConfig,
+    /// `[runner.<tier>.<name>]` blocks per `specs/loom-gate.md` § Runners.
+    /// The runtime dispatcher reads this map; an empty table parses as
+    /// `RunnerConfig::default()` so consumers without runner overrides
+    /// fall back to toolchain detection.
+    pub runner: RunnerConfig,
 }
 
 impl Default for LoomConfig {
@@ -75,6 +82,7 @@ impl Default for LoomConfig {
             phase: BTreeMap::new(),
             claude: ClaudeConfig::default(),
             security: SecurityConfig::default(),
+            runner: RunnerConfig::default(),
         }
     }
 }
@@ -314,6 +322,7 @@ max_retries = 5
         assert!(cfg.phase.is_empty());
         assert_eq!(cfg.claude, ClaudeConfig::default());
         assert_eq!(cfg.security, SecurityConfig::default());
+        assert!(cfg.runner.0.is_empty());
         Ok(())
     }
 

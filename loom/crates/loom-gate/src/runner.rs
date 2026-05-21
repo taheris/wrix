@@ -1,25 +1,26 @@
 //! Runner discovery for batched tiers (`[test]`, `[judge]`).
 //!
-//! Two layered mechanisms per `specs/loom-gate.md`: toolchain-detection
-//! defaults (Cargo.toml → nextest, pyproject.toml → pytest, go.mod →
-//! `go test`) and a `.loom/config.toml` override path for repos where the
-//! defaults do not fit. The module also surfaces silent-zero-match cases
-//! in cargo / nextest / pytest output so a filtered run that matches no
-//! tests fails loudly rather than passing silently — other runners are
-//! expected to fail on zero-match themselves and are passed through.
+//! Toolchain-detection defaults per `specs/loom-gate.md` § Runners
+//! (`Cargo.toml` → nextest, `pyproject.toml` → pytest, `go.mod` →
+//! `go test`). Per-tier overrides flow in from `LoomConfig`'s
+//! `[runner.<tier>.<name>]` blocks at `.wrapix/loom/config.toml`; this
+//! module never reads TOML from disk itself. The module also surfaces
+//! silent-zero-match cases in cargo / nextest / pytest output so a
+//! filtered run that matches no tests fails loudly rather than passing
+//! silently — other runners are expected to fail on zero-match themselves
+//! and are passed through.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use displaydoc::Display;
-use serde::Deserialize;
 use thiserror::Error;
 
 use crate::annotation::Tier;
 
 /// Template string for a batched-tier runner with a placeholder
-/// substituted at invocation time. Default templates come from toolchain
-/// detection; an opt-in `.loom/config.toml` overrides per tier.
+/// substituted at invocation time. Defaults come from toolchain
+/// detection; overrides come from `LoomConfig`'s `[runner.<tier>.<name>]`
+/// blocks at `.wrapix/loom/config.toml`.
 ///
 /// Placeholder vocabulary, all rendered by [`RunnerTemplate::render`]:
 ///
@@ -51,23 +52,23 @@ impl RunnerTemplate {
     }
 }
 
-/// Resolve the runner template for `tier` rooted at `repo_root`.
+/// Resolve the runner template for `tier` rooted at `repo_root` via
+/// toolchain detection. Per-tier overrides from `LoomConfig`'s
+/// `[runner.<tier>.<name>]` blocks are resolved by the caller (the
+/// dispatcher in `loom-workflow` / `main.rs`) and passed in to the
+/// dispatch layer directly; this function performs detection only.
 ///
-/// Order of resolution:
-/// 1. `.loom/config.toml`'s `[runner]` table — per-tier override.
-/// 2. Toolchain detection: `Cargo.toml` → nextest, `pyproject.toml` →
-///    pytest, `go.mod` → `go test`.
-/// 3. [`RunnerError::UnknownToolchain`] when neither path resolves.
+/// Detection order:
+/// 1. `Cargo.toml` → `cargo nextest`.
+/// 2. `pyproject.toml` → `pytest`.
+/// 3. `go.mod` → `go test`.
+/// 4. [`RunnerError::UnknownToolchain`] when nothing matches.
 ///
 /// Only batched tiers ([`Tier::Test`], [`Tier::Judge`]) are supported;
 /// other tiers receive [`RunnerError::NotBatched`].
 pub fn discover(repo_root: &Path, tier: Tier) -> Result<RunnerTemplate, RunnerError> {
     if !matches!(tier, Tier::Test | Tier::Judge) {
         return Err(RunnerError::NotBatched { tier });
-    }
-
-    if let Some(template) = load_override(repo_root, tier)? {
-        return Ok(template);
     }
 
     if let Some(default) = detect_default(repo_root) {
@@ -165,27 +166,6 @@ fn detect_zero_match(kind: RunnerKind, stdout: &str, stderr: &str) -> Option<Str
     }
 }
 
-fn load_override(repo_root: &Path, tier: Tier) -> Result<Option<RunnerTemplate>, RunnerError> {
-    let path = repo_root.join(".loom").join("config.toml");
-    if !path.is_file() {
-        return Ok(None);
-    }
-    let body = fs::read_to_string(&path).map_err(|e| RunnerError::ReadConfig {
-        path: path.clone(),
-        source: e,
-    })?;
-    let cfg: LoomConfig = toml::from_str(&body).map_err(|e| RunnerError::ParseConfig {
-        path: path.clone(),
-        source: e,
-    })?;
-    let entry = cfg.runner.and_then(|r| match tier {
-        Tier::Test => r.test,
-        Tier::Judge => r.judge,
-        Tier::Check | Tier::System => None,
-    });
-    Ok(entry.map(RunnerTemplate::new))
-}
-
 fn detect_default(repo_root: &Path) -> Option<RunnerTemplate> {
     if repo_root.join("Cargo.toml").is_file() {
         return Some(RunnerTemplate::new("cargo nextest run -E 'test({paths})'"));
@@ -197,17 +177,6 @@ fn detect_default(repo_root: &Path) -> Option<RunnerTemplate> {
         return Some(RunnerTemplate::new("go test -run '{paths_alt}' ./..."));
     }
     None
-}
-
-#[derive(Debug, Deserialize)]
-struct LoomConfig {
-    runner: Option<RunnerSection>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RunnerSection {
-    test: Option<String>,
-    judge: Option<String>,
 }
 
 fn render_template(template: &str, paths: &[&str]) -> String {
@@ -265,20 +234,8 @@ fn starts_with_token(input: &str, token: &str) -> bool {
 pub enum RunnerError {
     /// runner discovery only applies to batched tiers (test, judge); got [{tier}]
     NotBatched { tier: Tier },
-    /// no .loom/config.toml override and no Cargo.toml / pyproject.toml / go.mod under {root}
+    /// no Cargo.toml / pyproject.toml / go.mod under {root}
     UnknownToolchain { root: PathBuf },
-    /// failed to read runner override at {path}: {source}
-    ReadConfig {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-    /// failed to parse runner override at {path}: {source}
-    ParseConfig {
-        path: PathBuf,
-        #[source]
-        source: toml::de::Error,
-    },
     /// {runner} reported zero matched tests; filter likely missed every target: {evidence}
     ZeroMatch {
         runner: &'static str,
@@ -326,69 +283,35 @@ mod tests {
     }
 
     #[test]
-    fn override_test_via_loom_config_takes_precedence() {
-        let dir = tempdir().unwrap();
-        fs::write(dir.path().join("Cargo.toml"), "[workspace]\n").unwrap();
-        let loom = dir.path().join(".loom");
-        fs::create_dir_all(&loom).unwrap();
-        fs::write(
-            loom.join("config.toml"),
-            "[runner]\ntest = \"my-runner --tests {paths}\"\n",
-        )
-        .unwrap();
-
-        let template = discover(dir.path(), Tier::Test).unwrap();
-        assert_eq!(template.command, "my-runner --tests {paths}");
-    }
-
-    #[test]
-    fn override_judge_via_loom_config() {
-        let dir = tempdir().unwrap();
-        fs::write(dir.path().join("Cargo.toml"), "[workspace]\n").unwrap();
-        let loom = dir.path().join(".loom");
-        fs::create_dir_all(&loom).unwrap();
-        fs::write(
-            loom.join("config.toml"),
-            "[runner]\njudge = \"loom-judge {paths}\"\n",
-        )
-        .unwrap();
-
-        let judge = discover(dir.path(), Tier::Judge).unwrap();
-        assert_eq!(judge.command, "loom-judge {paths}");
-    }
-
-    #[test]
-    fn override_falls_back_per_tier_when_entry_missing() {
-        let dir = tempdir().unwrap();
-        fs::write(dir.path().join("Cargo.toml"), "[workspace]\n").unwrap();
-        let loom = dir.path().join(".loom");
-        fs::create_dir_all(&loom).unwrap();
-        fs::write(
-            loom.join("config.toml"),
-            "[runner]\ntest = \"my-runner {paths}\"\n",
-        )
-        .unwrap();
-
-        let judge = discover(dir.path(), Tier::Judge).unwrap();
-        assert_eq!(
-            judge.command, "cargo nextest run -E 'test({paths})'",
-            "judge entry missing in override → falls back to toolchain default"
-        );
-    }
-
-    #[test]
     fn unknown_toolchain_errors_cleanly() {
         let dir = tempdir().unwrap();
         let err = discover(dir.path(), Tier::Test).unwrap_err();
         assert!(matches!(err, RunnerError::UnknownToolchain { .. }));
         let msg = err.to_string();
         assert!(
-            msg.contains("no .loom/config.toml override"),
-            "message names the override path: {msg}"
-        );
-        assert!(
             msg.contains("Cargo.toml") && msg.contains("pyproject.toml") && msg.contains("go.mod"),
             "message names the detected markers: {msg}"
+        );
+    }
+
+    #[test]
+    fn discover_ignores_legacy_loom_config_toml() {
+        // The retired second config-file read path used to read
+        // `.loom/config.toml`; the module must not see it any more.
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("Cargo.toml"), "[workspace]\n").unwrap();
+        let legacy = dir.path().join(".loom");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(
+            legacy.join("config.toml"),
+            "[runner]\ntest = \"should-never-be-read {paths}\"\n",
+        )
+        .unwrap();
+
+        let template = discover(dir.path(), Tier::Test).unwrap();
+        assert_eq!(
+            template.command, "cargo nextest run -E 'test({paths})'",
+            "discover must use toolchain detection only; .loom/config.toml is retired"
         );
     }
 
@@ -407,23 +330,6 @@ mod tests {
             system,
             RunnerError::NotBatched { tier: Tier::System }
         ));
-    }
-
-    #[test]
-    fn parse_error_surfaces_with_path() {
-        let dir = tempdir().unwrap();
-        fs::write(dir.path().join("Cargo.toml"), "[workspace]\n").unwrap();
-        let loom = dir.path().join(".loom");
-        fs::create_dir_all(&loom).unwrap();
-        fs::write(loom.join("config.toml"), "this is = not valid = toml\n").unwrap();
-
-        let err = discover(dir.path(), Tier::Test).unwrap_err();
-        match err {
-            RunnerError::ParseConfig { path, .. } => {
-                assert!(path.ends_with(".loom/config.toml"), "{path:?}");
-            }
-            other => panic!("expected ParseConfig, got {other:?}"),
-        }
     }
 
     #[test]

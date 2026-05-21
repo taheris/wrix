@@ -917,6 +917,20 @@ fn run_gate_single_tier(workspace: &Path, args: &GateScopeArgs, tier: Tier) -> a
     Ok(())
 }
 
+/// Resolve the `[test]`-tier runner template. `[runner.test] command =
+/// "..."` from `.wrapix/loom/config.toml` (the consolidated `LoomConfig`)
+/// wins; absent that override, fall back to toolchain detection in
+/// `loom_gate::runner::discover`.
+fn resolve_test_runner_template(workspace: &Path) -> anyhow::Result<loom_gate::RunnerTemplate> {
+    let config = LoomConfig::load(workspace.join(".wrapix/loom/config.toml"))?;
+    if let Some(tier) = config.runner.tier("test")
+        && let Some(command) = tier.command.as_deref()
+    {
+        return Ok(loom_gate::RunnerTemplate::new(command));
+    }
+    Ok(loom_gate::runner::discover(workspace, Tier::Test)?)
+}
+
 fn dispatch_tier(workspace: &Path, args: &GateScopeArgs, tier: Tier) -> anyhow::Result<i32> {
     let specs_dir = workspace.join("specs");
     let parsed = loom_gate::annotation::parse(&specs_dir)?;
@@ -962,7 +976,7 @@ fn dispatch_tier(workspace: &Path, args: &GateScopeArgs, tier: Tier) -> anyhow::
             );
         }
         Tier::Test => {
-            let template = loom_gate::runner::discover(workspace, Tier::Test)?;
+            let template = resolve_test_runner_template(workspace)?;
             match loom_gate::run_test(&selected, &options, &template, &EmptyScope) {
                 Ok(Some(outcome)) => {
                     let verdict = if outcome.verdict.pass {

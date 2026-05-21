@@ -60,7 +60,7 @@ let
   stagedSrc = pkgs.runCommand "loom-test-src" { } ''
     cp -r ${cleanedSrc} $out
     chmod -R u+w $out
-    mkdir -p $out/tests/loom $out/modules/flake $out/lib/sandbox/linux
+    mkdir -p $out/tests/loom $out/modules/flake $out/lib/sandbox/linux $out/.wrapix/loom
     cp -r ${../loom/mock-pi} $out/tests/loom/mock-pi
     cp -r ${../loom/mock-claude} $out/tests/loom/mock-claude
     cp ${./default.nix} $out/tests/loom/default.nix
@@ -70,6 +70,7 @@ let
     cp ${../../modules/flake/overlays.nix} $out/modules/flake/overlays.nix
     cp ${../../lib/sandbox/linux/entrypoint.sh} $out/lib/sandbox/linux/entrypoint.sh
     cp -r ${../../specs} $out/specs
+    cp ${../../.wrapix/loom/config.toml} $out/.wrapix/loom/config.toml
   '';
 
   nextestArgs = {
