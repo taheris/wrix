@@ -13,11 +13,10 @@ pub enum ModelId {
     ClaudeSonnet46,
     ClaudeHaiku45,
     // OpenAI — GPT family
-    Gpt4o,
-    Gpt4oMini,
+    Gpt55,
     // Google — Gemini family
-    Gemini25Pro,
-    Gemini25Flash,
+    Gemini31Pro,
+    Gemini35Flash,
     /// Forward-compat fallback for fine-tuned / custom / not-yet-known
     /// models. Routing falls back to a provider-prefix match on the
     /// carried string (e.g. `"claude-*"` -> Anthropic, `"gpt-*"` ->
@@ -46,8 +45,8 @@ impl ModelId {
             ModelId::ClaudeOpus47 | ModelId::ClaudeSonnet46 | ModelId::ClaudeHaiku45 => {
                 Provider::Anthropic
             }
-            ModelId::Gpt4o | ModelId::Gpt4oMini => Provider::OpenAi,
-            ModelId::Gemini25Pro | ModelId::Gemini25Flash => Provider::Google,
+            ModelId::Gpt55 => Provider::OpenAi,
+            ModelId::Gemini31Pro | ModelId::Gemini35Flash => Provider::Google,
             ModelId::Other(s) => provider_from_prefix(s),
         }
     }
@@ -67,13 +66,12 @@ impl ModelId {
     )]
     pub fn from_str(s: &str) -> Self {
         match s {
-            "claude-opus-4-7" | "claude-opus-4-5" => ModelId::ClaudeOpus47,
-            "claude-sonnet-4-6" | "claude-sonnet-4-5" => ModelId::ClaudeSonnet46,
+            "claude-opus-4-7" => ModelId::ClaudeOpus47,
+            "claude-sonnet-4-6" => ModelId::ClaudeSonnet46,
             "claude-haiku-4-5" => ModelId::ClaudeHaiku45,
-            "gpt-4o" => ModelId::Gpt4o,
-            "gpt-4o-mini" => ModelId::Gpt4oMini,
-            "gemini-2.5-pro" => ModelId::Gemini25Pro,
-            "gemini-2.5-flash" => ModelId::Gemini25Flash,
+            "gpt-5.5" => ModelId::Gpt55,
+            "gemini-3.1-pro" => ModelId::Gemini31Pro,
+            "gemini-3.5-flash" => ModelId::Gemini35Flash,
             other => ModelId::Other(other.to_string()),
         }
     }
@@ -103,10 +101,9 @@ mod tests {
             (ModelId::ClaudeOpus47, Provider::Anthropic),
             (ModelId::ClaudeSonnet46, Provider::Anthropic),
             (ModelId::ClaudeHaiku45, Provider::Anthropic),
-            (ModelId::Gpt4o, Provider::OpenAi),
-            (ModelId::Gpt4oMini, Provider::OpenAi),
-            (ModelId::Gemini25Pro, Provider::Google),
-            (ModelId::Gemini25Flash, Provider::Google),
+            (ModelId::Gpt55, Provider::OpenAi),
+            (ModelId::Gemini31Pro, Provider::Google),
+            (ModelId::Gemini35Flash, Provider::Google),
         ];
         for (model, expected) in cases {
             assert_eq!(model.provider(), expected, "model {model:?}");
@@ -115,31 +112,23 @@ mod tests {
 
     /// `ModelId::from_str` resolves canonical model identifier strings
     /// into their typed variant and falls through to `Other` for any
-    /// string outside the known set. Future-dated `claude-sonnet-4-6`
-    /// (config-side) aliases `claude-sonnet-4-5` (provider-side) so
-    /// `agent.model_id` in phase config stays stable across the rename.
+    /// string outside the known set.
     #[test]
     fn modelid_from_str_known_and_unknown() {
         assert_eq!(ModelId::from_str("claude-opus-4-7"), ModelId::ClaudeOpus47);
-        assert_eq!(ModelId::from_str("claude-opus-4-5"), ModelId::ClaudeOpus47);
         assert_eq!(
             ModelId::from_str("claude-sonnet-4-6"),
-            ModelId::ClaudeSonnet46
-        );
-        assert_eq!(
-            ModelId::from_str("claude-sonnet-4-5"),
             ModelId::ClaudeSonnet46
         );
         assert_eq!(
             ModelId::from_str("claude-haiku-4-5"),
             ModelId::ClaudeHaiku45
         );
-        assert_eq!(ModelId::from_str("gpt-4o"), ModelId::Gpt4o);
-        assert_eq!(ModelId::from_str("gpt-4o-mini"), ModelId::Gpt4oMini);
-        assert_eq!(ModelId::from_str("gemini-2.5-pro"), ModelId::Gemini25Pro);
+        assert_eq!(ModelId::from_str("gpt-5.5"), ModelId::Gpt55);
+        assert_eq!(ModelId::from_str("gemini-3.1-pro"), ModelId::Gemini31Pro);
         assert_eq!(
-            ModelId::from_str("gemini-2.5-flash"),
-            ModelId::Gemini25Flash
+            ModelId::from_str("gemini-3.5-flash"),
+            ModelId::Gemini35Flash
         );
         // Unknown strings round-trip through Other and route via prefix.
         match ModelId::from_str("claude-future-experimental") {

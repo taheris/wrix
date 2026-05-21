@@ -214,13 +214,12 @@ pub(crate) fn parse_structured_text<T: DeserializeOwned>(text: &str) -> Result<T
 /// or not-yet-listed models without waiting for a `ModelId` minor bump.
 pub(crate) fn model_id_to_provider_name(model: &ModelId) -> String {
     match model {
-        ModelId::ClaudeOpus47 => "claude-opus-4-5".to_string(),
-        ModelId::ClaudeSonnet46 => "claude-sonnet-4-5".to_string(),
+        ModelId::ClaudeOpus47 => "claude-opus-4-7".to_string(),
+        ModelId::ClaudeSonnet46 => "claude-sonnet-4-6".to_string(),
         ModelId::ClaudeHaiku45 => "claude-haiku-4-5".to_string(),
-        ModelId::Gpt4o => "gpt-4o".to_string(),
-        ModelId::Gpt4oMini => "gpt-4o-mini".to_string(),
-        ModelId::Gemini25Pro => "gemini-2.5-pro".to_string(),
-        ModelId::Gemini25Flash => "gemini-2.5-flash".to_string(),
+        ModelId::Gpt55 => "gpt-5.5".to_string(),
+        ModelId::Gemini31Pro => "gemini-3.1-pro".to_string(),
+        ModelId::Gemini35Flash => "gemini-3.5-flash".to_string(),
         ModelId::Other(s) => s.clone(),
     }
 }
@@ -389,28 +388,24 @@ mod tests {
     fn model_id_to_provider_name_maps_known_and_other_variants() {
         assert_eq!(
             model_id_to_provider_name(&ModelId::ClaudeOpus47),
-            "claude-opus-4-5"
+            "claude-opus-4-7"
         );
         assert_eq!(
             model_id_to_provider_name(&ModelId::ClaudeSonnet46),
-            "claude-sonnet-4-5"
+            "claude-sonnet-4-6"
         );
         assert_eq!(
             model_id_to_provider_name(&ModelId::ClaudeHaiku45),
             "claude-haiku-4-5"
         );
-        assert_eq!(model_id_to_provider_name(&ModelId::Gpt4o), "gpt-4o");
+        assert_eq!(model_id_to_provider_name(&ModelId::Gpt55), "gpt-5.5");
         assert_eq!(
-            model_id_to_provider_name(&ModelId::Gpt4oMini),
-            "gpt-4o-mini"
+            model_id_to_provider_name(&ModelId::Gemini31Pro),
+            "gemini-3.1-pro"
         );
         assert_eq!(
-            model_id_to_provider_name(&ModelId::Gemini25Pro),
-            "gemini-2.5-pro"
-        );
-        assert_eq!(
-            model_id_to_provider_name(&ModelId::Gemini25Flash),
-            "gemini-2.5-flash"
+            model_id_to_provider_name(&ModelId::Gemini35Flash),
+            "gemini-3.5-flash"
         );
         let custom = "claude-3-7-sonnet-future";
         assert_eq!(
@@ -477,7 +472,7 @@ mod tests {
     /// lives in the underlying adapter, not in this crate.
     #[test]
     fn cache_marker_no_ops_on_openai_provider() {
-        let req = CompletionRequest::new(ModelId::Gpt4o)
+        let req = CompletionRequest::new(ModelId::Gpt55)
             .user("hi")
             .user_cached("doc", CacheControl::Ephemeral(CacheTtl::Minutes5));
 
@@ -506,7 +501,7 @@ mod tests {
     }
 
     fn make_response(usage: GenAiUsage) -> ChatResponse {
-        let model = ModelIden::new(AdapterKind::Anthropic, "claude-sonnet-4-5");
+        let model = ModelIden::new(AdapterKind::Anthropic, "claude-sonnet-4-6");
         ChatResponse {
             content: MessageContent::from_text("the answer"),
             reasoning_content: None,
@@ -535,13 +530,6 @@ mod tests {
         assert_eq!(completion.usage.output, 250);
         assert_eq!(completion.usage.cache_read, 600);
         assert_eq!(completion.usage.cache_write, 400);
-        // Sonnet 4.5 rates (per 1M tokens, 1/100ths-of-a-cent):
-        // input=30_000, output=150_000, cache_read=3_000, cache_write=37_500
-        // regular_input = 1_000 - 600 - 400 = 0
-        // total = 0*30_000 + 250*150_000 + 600*3_000 + 400*37_500
-        //       = 0 + 37_500_000 + 1_800_000 + 15_000_000
-        //       = 54_300_000
-        // / 1_000_000 = 54
         assert_eq!(completion.usage.cost_cents, 54);
     }
 
@@ -566,8 +554,8 @@ mod tests {
 
         let models = [
             ModelId::ClaudeSonnet46,
-            ModelId::Gpt4o,
-            ModelId::Gemini25Pro,
+            ModelId::Gpt55,
+            ModelId::Gemini31Pro,
         ];
         for model in models {
             let req = CompletionRequest::new(model.clone()).user("structured please");
@@ -607,8 +595,8 @@ mod tests {
         let json_text = r#"{"title":"forty-two","count":42}"#;
         let providers = [
             (ModelId::ClaudeSonnet46, AdapterKind::Anthropic),
-            (ModelId::Gpt4o, AdapterKind::OpenAI),
-            (ModelId::Gemini25Pro, AdapterKind::Gemini),
+            (ModelId::Gpt55, AdapterKind::OpenAI),
+            (ModelId::Gemini31Pro, AdapterKind::Gemini),
         ];
         let expected = AnswerShape {
             title: "forty-two".to_string(),
@@ -713,9 +701,9 @@ mod tests {
                 assert_eq!(payload["cache_read"], 600);
                 assert_eq!(payload["cache_write"], 400);
                 assert_eq!(payload["cost_cents"], 54);
-                assert_eq!(payload["model"], "claude-sonnet-4-5");
+                assert_eq!(payload["model"], "claude-sonnet-4-6");
                 assert!(
-                    summary.contains("claude-sonnet-4-5"),
+                    summary.contains("claude-sonnet-4-6"),
                     "summary names the model: {summary}",
                 );
             }

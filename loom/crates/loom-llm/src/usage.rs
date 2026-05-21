@@ -60,28 +60,22 @@ const fn rates_for(model: &ModelId) -> Option<ModelRates> {
             cache_read: 1_000,
             cache_write: 12_500,
         }),
-        ModelId::Gpt4o => Some(ModelRates {
-            input: 25_000,
-            output: 100_000,
-            cache_read: 12_500,
-            cache_write: 25_000,
+        ModelId::Gpt55 => Some(ModelRates {
+            input: 50_000,
+            output: 300_000,
+            cache_read: 0,
+            cache_write: 0,
         }),
-        ModelId::Gpt4oMini => Some(ModelRates {
-            input: 1_500,
-            output: 6_000,
-            cache_read: 750,
-            cache_write: 1_500,
-        }),
-        ModelId::Gemini25Pro => Some(ModelRates {
+        ModelId::Gemini31Pro => Some(ModelRates {
             input: 12_500,
             output: 100_000,
             cache_read: 0,
             cache_write: 0,
         }),
-        ModelId::Gemini25Flash => Some(ModelRates {
-            input: 3_000,
-            output: 25_000,
-            cache_read: 0,
+        ModelId::Gemini35Flash => Some(ModelRates {
+            input: 15_000,
+            output: 90_000,
+            cache_read: 1_500,
             cache_write: 0,
         }),
         ModelId::Other(_) => None,
@@ -147,9 +141,6 @@ mod tests {
     /// provider reports `input` as the inclusive total.
     #[test]
     fn cost_cents_bills_cache_lanes_at_cache_rates() {
-        // 1M input tokens of which 1M are cache reads on Sonnet 4.5:
-        // cache-read rate is 3_000 per 1M tokens, regular-input lane is
-        // zero so the whole bill is 3_000.
         let cost = cost_cents_for(&ModelId::ClaudeSonnet46, 1_000_000, 0, 1_000_000, 0);
         assert_eq!(cost, 3_000);
     }
