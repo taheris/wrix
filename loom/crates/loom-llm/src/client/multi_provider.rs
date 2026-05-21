@@ -9,16 +9,18 @@ use std::sync::{Arc, Mutex};
 
 use genai::chat::{
     CacheControl as GenAiCacheControl, ChatMessage, ChatOptions, ChatRequest, ChatResponse,
-    ChatResponseFormat, ChatRole, JsonSpec, MessageContent, MessageOptions, Usage as GenAiUsage,
+    ChatResponseFormat, ChatRole, JsonSpec, MessageContent, MessageOptions, Tool as GenAiTool,
+    ToolCall as GenAiToolCall, ToolResponse as GenAiToolResponse, Usage as GenAiUsage,
 };
 use loom_events::{AgentEvent, DriverKind, EnvelopeBuilder, EventSink, Source};
 use schemars::{JsonSchema, SchemaGenerator};
 use serde::de::DeserializeOwned;
 
 use crate::cache::{CacheControl, CacheTtl};
-use crate::client::{CompletionResponse, LlmClient, LlmError};
+use crate::client::{CompletionResponse, LlmClient, LlmError, ToolUseRequest};
 use crate::model_id::ModelId;
 use crate::request::{CompletionRequest, Message, Role};
+use crate::tool::ToolDef;
 use crate::usage::{TokenUsage, cost_cents_for};
 
 /// Concrete `LlmClient` over the underlying multi-provider crate. The
@@ -229,6 +231,7 @@ pub(crate) fn to_genai_chat_request(req: CompletionRequest) -> (ChatRequest, Cha
         system,
         messages,
         max_tokens,
+        tools,
     } = req;
 
     let chat_messages: Vec<ChatMessage> = messages.into_iter().map(to_chat_message).collect();
@@ -236,6 +239,9 @@ pub(crate) fn to_genai_chat_request(req: CompletionRequest) -> (ChatRequest, Cha
     let mut chat_req = ChatRequest::new(chat_messages);
     if let Some(prefix) = system {
         chat_req = chat_req.with_system(prefix);
+    }
+    if !tools.is_empty() {
+        chat_req = chat_req.with_tools(tools.into_iter().map(to_genai_tool));
     }
 
     let mut options = ChatOptions::default();
@@ -246,6 +252,12 @@ pub(crate) fn to_genai_chat_request(req: CompletionRequest) -> (ChatRequest, Cha
     (chat_req, options)
 }
 
+fn to_genai_tool(def: ToolDef) -> GenAiTool {
+    GenAiTool::new(def.name)
+        .with_description(def.description)
+        .with_schema(def.input_schema)
+}
+
 fn to_chat_message(msg: Message) -> ChatMessage {
     let role = match msg.role {
         Role::User => ChatRole::User,
@@ -253,12 +265,46 @@ fn to_chat_message(msg: Message) -> ChatMessage {
         Role::Tool => ChatRole::Tool,
     };
 
-    let mut chat_msg = ChatMessage::new(role, MessageContent::from_text(msg.content));
+    let content = build_message_content(&msg);
+    let mut chat_msg = ChatMessage::new(role, content);
     if let Some(cache) = cache_control_to_genai(&msg.cache) {
         let opts = MessageOptions::default().with_cache_control(cache);
         chat_msg = chat_msg.with_options(opts);
     }
     chat_msg
+}
+
+fn build_message_content(msg: &Message) -> MessageContent {
+    if let Some(call_id) = msg.tool_call_id.as_ref() {
+        let response = GenAiToolResponse::new(call_id.clone(), msg.content.clone());
+        return MessageContent::from(response);
+    }
+    if !msg.tool_calls.is_empty() {
+        let calls: Vec<GenAiToolCall> = msg.tool_calls.iter().map(to_genai_tool_call).collect();
+        let mut content = MessageContent::from_tool_calls(calls);
+        if !msg.content.is_empty() {
+            content.prepend(genai::chat::ContentPart::Text(msg.content.clone()));
+        }
+        return content;
+    }
+    MessageContent::from_text(msg.content.clone())
+}
+
+fn to_genai_tool_call(call: &ToolUseRequest) -> GenAiToolCall {
+    GenAiToolCall {
+        call_id: call.call_id.clone(),
+        fn_name: call.name.clone(),
+        fn_arguments: call.args.clone(),
+        thought_signatures: None,
+    }
+}
+
+fn from_genai_tool_call(call: &GenAiToolCall) -> ToolUseRequest {
+    ToolUseRequest {
+        call_id: call.call_id.clone(),
+        name: call.fn_name.clone(),
+        args: call.fn_arguments.clone(),
+    }
 }
 
 pub(crate) fn cache_control_to_genai(cache: &CacheControl) -> Option<GenAiCacheControl> {
@@ -272,8 +318,17 @@ pub(crate) fn cache_control_to_genai(cache: &CacheControl) -> Option<GenAiCacheC
 
 pub(crate) fn from_genai_chat_response(model: &ModelId, resp: ChatResponse) -> CompletionResponse {
     let usage = from_genai_usage(model, &resp.usage);
+    let tool_calls: Vec<ToolUseRequest> = resp
+        .tool_calls()
+        .into_iter()
+        .map(from_genai_tool_call)
+        .collect();
     let text = resp.into_first_text().unwrap_or_default();
-    CompletionResponse { text, usage }
+    CompletionResponse {
+        text,
+        usage,
+        tool_calls,
+    }
 }
 
 fn from_genai_usage(model: &ModelId, usage: &GenAiUsage) -> TokenUsage {

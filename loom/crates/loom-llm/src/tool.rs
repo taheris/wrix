@@ -27,6 +27,32 @@ pub struct ToolOutput {
     pub is_error: bool,
 }
 
+/// Static definition of a tool attached to a [`crate::request::CompletionRequest`].
+/// Carries the same `(name, description, input_schema)` triple a [`Tool`]
+/// exposes, decoupled from the handler so the surface that flows to the
+/// provider is plain data.
+#[derive(Debug, Clone)]
+pub struct ToolDef {
+    /// Stable tool name advertised to the model.
+    pub name: String,
+    /// Human-readable description the model consults to decide whether
+    /// to call this tool.
+    pub description: String,
+    /// JSON-Schema describing the tool's accepted arguments.
+    pub input_schema: Value,
+}
+
+impl ToolDef {
+    /// Lift a [`Tool`] handler to its plain-data definition.
+    pub fn from_tool(tool: &dyn Tool) -> Self {
+        Self {
+            name: tool.name().to_string(),
+            description: tool.description().to_string(),
+            input_schema: tool.input_schema(),
+        }
+    }
+}
+
 /// Handler trait every consumer-registered tool implements. The shape
 /// (name + description + JSON-Schema input + async invoke) is
 /// reasonably convertible to other Rust agent-loop crates' tool shapes

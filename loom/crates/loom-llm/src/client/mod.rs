@@ -29,6 +29,26 @@ pub struct CompletionResponse {
     pub text: String,
     /// Per-call token usage including cache fields.
     pub usage: TokenUsage,
+    /// Tool calls the model emitted on this turn. Empty when the model
+    /// produced text only. [`crate::Conversation`]'s loop iterates while
+    /// this is non-empty.
+    pub tool_calls: Vec<ToolUseRequest>,
+}
+
+/// One tool call the model emitted on a turn. The conversation loop
+/// dispatches each call to the registered [`crate::Tool`] whose `name`
+/// matches and appends the result as a tool-role message on the next
+/// iteration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolUseRequest {
+    /// Provider-stable identifier the loop echoes back on the matching
+    /// tool result so the model correlates request to response.
+    pub call_id: String,
+    /// Name of the tool the model wants to invoke; matches a registered
+    /// [`crate::Tool`]'s `name()`.
+    pub name: String,
+    /// JSON arguments payload the model supplied for the call.
+    pub args: serde_json::Value,
 }
 
 /// Public-contract error returned by every fallible `loom-llm` surface.
@@ -54,6 +74,17 @@ pub enum LlmError {
     Canonicalize,
     /// failed to deserialize structured response into target type
     Deserialize(#[from] serde_json::Error),
+    /// conversation iteration budget exhausted after {budget} iterations
+    IterationBudgetExhausted {
+        /// Cap that was hit. Mirrors
+        /// [`crate::Conversation::max_iterations`].
+        budget: u32,
+    },
+    /// model called unregistered tool: {name}
+    ToolNotRegistered {
+        /// Name of the tool the model asked to invoke.
+        name: String,
+    },
 }
 
 /// The public agent-side LLM contract. Per-call model selection;

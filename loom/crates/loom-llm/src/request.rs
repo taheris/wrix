@@ -3,7 +3,9 @@
 //! per-content-block.
 
 use crate::cache::CacheControl;
+use crate::client::ToolUseRequest;
 use crate::model_id::ModelId;
+use crate::tool::ToolDef;
 
 /// One message in a completion request. Constructed via the builder
 /// helpers on [`CompletionRequest`]; consumers compose blocks rather
@@ -12,12 +14,25 @@ use crate::model_id::ModelId;
 pub struct Message {
     /// Speaker role.
     pub role: Role,
-    /// Free-form text content.
+    /// Free-form text content. Empty when the message carries only
+    /// `tool_calls` / `tool_result` payload.
     pub content: String,
     /// Cache-control marker for this content block. Providers that do
     /// not support typed per-block cache markers no-op the marker
     /// without error.
     pub cache: CacheControl,
+    /// Tool calls the assistant emitted on this turn (only populated on
+    /// `Role::Assistant` messages produced by the loop after a
+    /// tool-calling completion).
+    pub tool_calls: Vec<ToolUseRequest>,
+    /// Provider-stable identifier of the originating tool call (only
+    /// populated on `Role::Tool` messages — the result the loop carries
+    /// back to the model).
+    pub tool_call_id: Option<String>,
+    /// True when this tool-result message reports an error from the
+    /// tool handler. Providers that distinguish error tool-results
+    /// surface this; others ignore it.
+    pub tool_is_error: bool,
 }
 
 /// Role on a [`Message`]. The system role is carried via
@@ -53,6 +68,9 @@ pub struct CompletionRequest {
     pub messages: Vec<Message>,
     /// Optional `max_tokens` cap surfaced through the provider.
     pub max_tokens: Option<u32>,
+    /// Tool definitions the model may invoke. Empty when no tools are
+    /// attached.
+    pub tools: Vec<ToolDef>,
 }
 
 impl CompletionRequest {
@@ -64,6 +82,7 @@ impl CompletionRequest {
             system: None,
             messages: Vec::new(),
             max_tokens: None,
+            tools: Vec::new(),
         }
     }
 
@@ -75,41 +94,40 @@ impl CompletionRequest {
 
     /// Append a user turn with no cache marker.
     pub fn user(mut self, content: impl Into<String>) -> Self {
-        self.messages.push(Message {
-            role: Role::User,
-            content: content.into(),
-            cache: CacheControl::None,
-        });
+        self.messages.push(Message::user(content));
         self
     }
 
     /// Append a user turn with a per-block cache marker.
     pub fn user_cached(mut self, content: impl Into<String>, cache: CacheControl) -> Self {
-        self.messages.push(Message {
-            role: Role::User,
-            content: content.into(),
-            cache,
-        });
+        self.messages.push(Message::user_cached(content, cache));
         self
     }
 
     /// Append an assistant turn with no cache marker.
     pub fn assistant(mut self, content: impl Into<String>) -> Self {
-        self.messages.push(Message {
-            role: Role::Assistant,
-            content: content.into(),
-            cache: CacheControl::None,
-        });
+        self.messages.push(Message::assistant(content));
         self
     }
 
     /// Append an assistant turn with a per-block cache marker.
     pub fn assistant_cached(mut self, content: impl Into<String>, cache: CacheControl) -> Self {
-        self.messages.push(Message {
-            role: Role::Assistant,
-            content: content.into(),
-            cache,
-        });
+        self.messages
+            .push(Message::assistant_cached(content, cache));
+        self
+    }
+
+    /// Append a pre-built message. Used by the conversation loop to
+    /// reflect assistant tool-use turns and tool-result turns back into
+    /// the next request.
+    pub fn message(mut self, message: Message) -> Self {
+        self.messages.push(message);
+        self
+    }
+
+    /// Replace the tool set the model can invoke on this call.
+    pub fn tools(mut self, tools: Vec<ToolDef>) -> Self {
+        self.tools = tools;
         self
     }
 
@@ -117,6 +135,69 @@ impl CompletionRequest {
     pub fn max_tokens(mut self, n: u32) -> Self {
         self.max_tokens = Some(n);
         self
+    }
+}
+
+impl Message {
+    /// Construct a plain user turn.
+    pub fn user(content: impl Into<String>) -> Self {
+        Self::text(Role::User, content, CacheControl::None)
+    }
+
+    /// Construct a user turn with a per-block cache marker.
+    pub fn user_cached(content: impl Into<String>, cache: CacheControl) -> Self {
+        Self::text(Role::User, content, cache)
+    }
+
+    /// Construct a plain assistant turn.
+    pub fn assistant(content: impl Into<String>) -> Self {
+        Self::text(Role::Assistant, content, CacheControl::None)
+    }
+
+    /// Construct an assistant turn with a per-block cache marker.
+    pub fn assistant_cached(content: impl Into<String>, cache: CacheControl) -> Self {
+        Self::text(Role::Assistant, content, cache)
+    }
+
+    /// Construct an assistant turn that carries tool calls. `content`
+    /// may be empty when the model emitted only tool-use blocks.
+    pub fn assistant_tool_use(content: impl Into<String>, tool_calls: Vec<ToolUseRequest>) -> Self {
+        Self {
+            role: Role::Assistant,
+            content: content.into(),
+            cache: CacheControl::None,
+            tool_calls,
+            tool_call_id: None,
+            tool_is_error: false,
+        }
+    }
+
+    /// Construct a tool-result turn the loop forwards back to the model
+    /// after dispatching an assistant tool call.
+    pub fn tool_result(
+        call_id: impl Into<String>,
+        content: impl Into<String>,
+        is_error: bool,
+    ) -> Self {
+        Self {
+            role: Role::Tool,
+            content: content.into(),
+            cache: CacheControl::None,
+            tool_calls: Vec::new(),
+            tool_call_id: Some(call_id.into()),
+            tool_is_error: is_error,
+        }
+    }
+
+    fn text(role: Role, content: impl Into<String>, cache: CacheControl) -> Self {
+        Self {
+            role,
+            content: content.into(),
+            cache,
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+            tool_is_error: false,
+        }
     }
 }
 
