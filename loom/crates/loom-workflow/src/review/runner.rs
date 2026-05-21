@@ -121,6 +121,20 @@ pub trait ReviewController: Send {
     ) -> impl std::future::Future<Output = Result<Vec<IntegrityFinding>, ReviewError>> + Send {
         async { Ok(vec![]) }
     }
+
+    /// Apply `loom:clarify` to the molecule's epic with the
+    /// auto-generated `## Options — …` block per `specs/loom-gate.md`
+    /// § Integrity gate when the push-gate verdict refuses with cause
+    /// `integrity-finding`. Production wires this to find the active
+    /// molecule's epic and call `bd update --notes <options> --add-label
+    /// loom:clarify`. The default impl is a no-op so test fakes that
+    /// don't exercise the integrity-clarify path keep working.
+    fn apply_integrity_clarify(
+        &mut self,
+        _findings: &[IntegrityFinding],
+    ) -> impl std::future::Future<Output = Result<(), ReviewError>> + Send {
+        async { Ok(()) }
+    }
 }
 
 /// Reviewer agent run result. Carries the typed [`ReviewOutcome`]
@@ -248,6 +262,7 @@ async fn decide_verdict<C: ReviewController>(
             cause: PushGateRefuseCause::BeadNotDone,
             blocked_ids: blocked_ids.to_vec(),
             clarify_ids: clarify_ids.to_vec(),
+            integrity_findings: vec![],
         });
     }
 
@@ -256,6 +271,7 @@ async fn decide_verdict<C: ReviewController>(
             cause: PushGateRefuseCause::VerifierFailed,
             blocked_ids: vec![],
             clarify_ids: vec![],
+            integrity_findings: vec![],
         });
     }
 
@@ -264,6 +280,7 @@ async fn decide_verdict<C: ReviewController>(
             cause: PushGateRefuseCause::ReviewConcern,
             blocked_ids: vec![],
             clarify_ids: vec![],
+            integrity_findings: vec![],
         });
     }
 
@@ -272,6 +289,7 @@ async fn decide_verdict<C: ReviewController>(
             cause: PushGateRefuseCause::IntegrityFinding,
             blocked_ids: vec![],
             clarify_ids: vec![],
+            integrity_findings: integrity_findings.to_vec(),
         });
     }
 
@@ -332,6 +350,7 @@ async fn apply_verdict<C: ReviewController>(
             cause,
             blocked_ids,
             clarify_ids,
+            integrity_findings,
         } => {
             controller.emit_driver_event(
                 DriverKind::PushGateRefuse,
@@ -342,6 +361,11 @@ async fn apply_verdict<C: ReviewController>(
                     "clarify_ids": clarify_ids.iter().map(|b| b.to_string()).collect::<Vec<_>>(),
                 }),
             );
+            if cause == PushGateRefuseCause::IntegrityFinding {
+                controller
+                    .apply_integrity_clarify(&integrity_findings)
+                    .await?;
+            }
             Ok(ReviewResult::PushBlocked {
                 blocked_ids,
                 clarify_ids,
@@ -421,6 +445,7 @@ mod tests {
         set_iter_calls: Vec<u32>,
         reset_iter_calls: u32,
         apply_clarify_calls: Vec<(BeadId, String)>,
+        apply_integrity_clarify_calls: Vec<Vec<IntegrityFinding>>,
         git_push_calls: u32,
         beads_push_calls: u32,
         exec_run_calls: u32,
@@ -476,6 +501,14 @@ mod tests {
         async fn apply_clarify(&mut self, bead: &BeadId, reason: &str) -> Result<(), ReviewError> {
             self.apply_clarify_calls
                 .push((bead.clone(), reason.to_string()));
+            Ok(())
+        }
+
+        async fn apply_integrity_clarify(
+            &mut self,
+            findings: &[IntegrityFinding],
+        ) -> Result<(), ReviewError> {
+            self.apply_integrity_clarify_calls.push(findings.to_vec());
             Ok(())
         }
 
@@ -905,6 +938,89 @@ mod tests {
             .find(|(k, _, _)| k == "push_gate_refuse")
             .expect("refuse event present");
         assert_eq!(refuse.2["cause"].as_str(), Some("integrity-finding"));
+        Ok(())
+    }
+
+    /// FR9 — push-gate integrity terminal: when integrity findings refuse
+    /// the push, the gate also threads the findings into
+    /// `apply_integrity_clarify` so the production controller can stamp
+    /// `loom:clarify` on the molecule's epic with the auto-generated
+    /// `## Options — …` block. The test fixes the spec-named contract
+    /// from `specs/loom-harness.md` FR9 condition 4 — finding present →
+    /// apply_integrity_clarify called with the same findings, no push.
+    #[tokio::test]
+    async fn push_blocked_on_integrity_finding_applies_clarify() -> Result<(), ReviewError> {
+        let findings = vec![unresolved_finding()];
+        let mut c = FakeController {
+            pre_beads: vec![bead("wx-1", &["spec:loom-harness"])],
+            post_beads: vec![bead("wx-1", &["spec:loom-harness"])],
+            integrity_findings: findings.clone(),
+            ..FakeController::default()
+        };
+        let result = review_loop(&mut c, IterationCap::default()).await?;
+        assert!(matches!(result, ReviewResult::PushBlocked { .. }));
+        assert_eq!(c.git_push_calls, 0, "integrity finding never pushes");
+        assert_eq!(
+            c.apply_integrity_clarify_calls.len(),
+            1,
+            "apply_integrity_clarify called exactly once on the IntegrityFinding branch",
+        );
+        assert_eq!(
+            c.apply_integrity_clarify_calls[0], findings,
+            "findings threaded through verdict to controller",
+        );
+        Ok(())
+    }
+
+    /// The `apply_integrity_clarify` hook fires ONLY on the
+    /// `IntegrityFinding` branch — not on `BeadNotDone`, `VerifierFailed`,
+    /// or `ReviewConcern`. Other branches reach the molecule's epic via
+    /// their own paths (recovery, blocked) and must not collide with the
+    /// integrity-clarify writer.
+    #[tokio::test]
+    async fn apply_integrity_clarify_is_not_called_for_non_integrity_causes()
+    -> Result<(), ReviewError> {
+        let scenarios: Vec<(&str, FakeController)> = vec![
+            (
+                "bead-not-done",
+                FakeController {
+                    pre_beads: vec![bead("wx-1", &["spec:loom-harness"])],
+                    post_beads: vec![bead("wx-1", &["spec:loom-harness", "loom:blocked"])],
+                    ..FakeController::default()
+                },
+            ),
+            (
+                "verifier-failed",
+                FakeController {
+                    pre_beads: vec![bead("wx-1", &["spec:loom-harness"])],
+                    post_beads: vec![bead("wx-1", &["spec:loom-harness"])],
+                    verify_exit: Some(1),
+                    ..FakeController::default()
+                },
+            ),
+            (
+                "review-concern",
+                FakeController {
+                    review: Some(ReviewOutcome::Incomplete {
+                        detail: "LOOM_CONCERN: scope -- bad".into(),
+                    }),
+                    review_marker: Some(ExitSignal::Concern {
+                        token: "scope".into(),
+                        reason: "bad".into(),
+                    }),
+                    pre_beads: vec![bead("wx-1", &["spec:loom-harness"])],
+                    post_beads: vec![bead("wx-1", &["spec:loom-harness"])],
+                    ..FakeController::default()
+                },
+            ),
+        ];
+        for (label, mut c) in scenarios {
+            review_loop(&mut c, IterationCap::default()).await?;
+            assert!(
+                c.apply_integrity_clarify_calls.is_empty(),
+                "{label}: apply_integrity_clarify must not fire for non-integrity causes",
+            );
+        }
         Ok(())
     }
 

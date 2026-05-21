@@ -1,4 +1,5 @@
 use loom_driver::identifier::BeadId;
+use loom_gate::IntegrityFinding;
 
 /// Which of the four push-gate inputs refused the push. Carried on
 /// [`ReviewVerdict::PushBlocked`] so the `push_gate_refuse` driver event
@@ -60,13 +61,16 @@ pub enum ReviewVerdict {
 
     /// Push gate refused. `cause` names which of the four conditions
     /// failed; `blocked_ids`/`clarify_ids` populate only when
-    /// `cause = BeadNotDone` and are empty for the other three causes.
-    /// Per the four-condition AND in `specs/loom-harness.md` FR9, push
-    /// fires only when every condition passes.
+    /// `cause = BeadNotDone` and are empty for the other three causes;
+    /// `integrity_findings` populates only when `cause =
+    /// IntegrityFinding` and is empty otherwise. Per the four-condition
+    /// AND in `specs/loom-harness.md` FR9, push fires only when every
+    /// condition passes.
     PushBlocked {
         cause: PushGateRefuseCause,
         blocked_ids: Vec<BeadId>,
         clarify_ids: Vec<BeadId>,
+        integrity_findings: Vec<IntegrityFinding>,
     },
 
     /// New fix-up beads, no blocked/clarify, iteration cap not reached → exec

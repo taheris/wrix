@@ -36,6 +36,10 @@ use loom_driver::profile_manifest::ProfileImageManifest;
 use loom_driver::scratch::resolve_scratch_key;
 use loom_driver::state::StateDb;
 use loom_events::{AgentEvent, DriverKind, EnvelopeBuilder, Source};
+use loom_gate::{
+    FsCommandResolver, IntegrityFinding, RustWorkspaceStubScanner, RustWorkspaceTestResolver,
+    annotation, format_clarify_options, integrity,
+};
 use loom_templates::review::ReviewContext;
 use tokio::process::Command;
 use tracing::{info, warn};
@@ -164,6 +168,81 @@ where
         let mut cmd = Command::new("beads-push");
         cmd.current_dir(&self.workspace);
         cmd
+    }
+
+    /// Locate the molecule's epic bead — the `loom:active`-labelled bead
+    /// carrying `spec:<self.label>`. Used by the integrity-clarify path
+    /// to find the write target for `bd update --notes ... --add-label
+    /// loom:clarify`. Mirrors `run::production::fetch_molecule_base_commit`'s
+    /// list-then-filter pattern so review-time and run-time epic lookups
+    /// agree on which bead "the molecule's epic" denotes.
+    async fn molecule_epic_bead(&self) -> Result<Option<Bead>, ReviewError> {
+        let spec_filter = self.spec_label_filter();
+        let candidates = self
+            .bd
+            .list(ListOpts {
+                status: Some("open".into()),
+                label: Some("loom:active".into()),
+                ..ListOpts::default()
+            })
+            .await?;
+        Ok(candidates
+            .into_iter()
+            .find(|b| b.labels.iter().any(|l| l.as_str() == spec_filter)))
+    }
+
+    /// Walk the spec files changed between the active molecule's
+    /// `base_commit` and `HEAD`, run the integrity gate's forward
+    /// resolution against the annotations they declare, and keep only the
+    /// findings that are terminal at the push gate
+    /// ([`IntegrityFinding::is_push_gate_terminal`]). Workspace-wide
+    /// resolver scans (`RustWorkspaceTestResolver`, `RustWorkspaceStubScanner`)
+    /// are built once per call. Returns an empty list when no molecule is
+    /// active or when no spec files have changed in the molecule's range.
+    async fn molecule_integrity_findings(&self) -> Result<Vec<IntegrityFinding>, ReviewError> {
+        let Some(mol) = self.state.active_molecule(&self.label)? else {
+            return Ok(vec![]);
+        };
+        let Some(base) = mol.base_commit else {
+            return Ok(vec![]);
+        };
+        let git = GitClient::open(&self.workspace)
+            .map_err(|e| ReviewError::Io(std::io::Error::other(e.to_string())))?;
+        let changed_specs = git
+            .changed_spec_files(&base)
+            .await
+            .map_err(|e| ReviewError::Io(std::io::Error::other(e.to_string())))?;
+        if changed_specs.is_empty() {
+            return Ok(vec![]);
+        }
+        let mut annotations = Vec::new();
+        for rel in &changed_specs {
+            let abs = self.workspace.join(rel);
+            let Ok(body) = std::fs::read_to_string(&abs) else {
+                continue;
+            };
+            let parsed = annotation::parse_content(rel, &body);
+            annotations.extend(parsed.annotations);
+        }
+        if annotations.is_empty() {
+            return Ok(vec![]);
+        }
+        let cmd_resolver = FsCommandResolver::new(&self.workspace);
+        let test_resolver = RustWorkspaceTestResolver::scan(&self.workspace)
+            .map_err(|e| ReviewError::Io(std::io::Error::other(e.to_string())))?;
+        let stub_scanner = RustWorkspaceStubScanner::scan(&self.workspace)
+            .map_err(|e| ReviewError::Io(std::io::Error::other(e.to_string())))?;
+        let findings = integrity::check_forward(
+            &annotations,
+            &self.workspace,
+            &cmd_resolver,
+            &test_resolver,
+            &stub_scanner,
+        );
+        Ok(findings
+            .into_iter()
+            .filter(IntegrityFinding::is_push_gate_terminal)
+            .collect())
     }
 
     async fn build_review_prompt(&self) -> Result<String, ReviewError> {
@@ -356,6 +435,38 @@ where
                 UpdateOpts {
                     add_labels: vec!["loom:clarify".to_string()],
                     notes: Some(reason.to_string()),
+                    ..UpdateOpts::default()
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn integrity_findings(&mut self) -> Result<Vec<IntegrityFinding>, ReviewError> {
+        self.molecule_integrity_findings().await
+    }
+
+    async fn apply_integrity_clarify(
+        &mut self,
+        findings: &[IntegrityFinding],
+    ) -> Result<(), ReviewError> {
+        if findings.is_empty() {
+            return Ok(());
+        }
+        let Some(epic) = self.molecule_epic_bead().await? else {
+            warn!(
+                label = %self.label,
+                "integrity findings present but no active molecule epic found",
+            );
+            return Ok(());
+        };
+        let notes = format_clarify_options(findings);
+        self.bd
+            .update(
+                &epic.id,
+                UpdateOpts {
+                    add_labels: vec!["loom:clarify".to_string()],
+                    notes: Some(notes),
                     ..UpdateOpts::default()
                 },
             )
@@ -738,6 +849,42 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut ctrl = controller(dir.path().to_path_buf());
         ctrl.reset_iteration_count().await.unwrap();
+    }
+
+    /// `integrity_findings` returns an empty list when no molecule is
+    /// active for the controller's spec — the push-gate condition trivially
+    /// passes rather than surfacing an error. The four-condition AND still
+    /// gates on the remaining inputs.
+    #[tokio::test]
+    async fn integrity_findings_empty_when_no_active_molecule() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ctrl = controller(dir.path().to_path_buf());
+        let findings = ctrl.integrity_findings().await.unwrap();
+        assert!(findings.is_empty(), "no active molecule => no findings");
+    }
+
+    /// `integrity_findings` returns an empty list when the active molecule
+    /// has no recorded `base_commit` — there is no diff range to walk so the
+    /// integrity input is vacuously empty. Avoids fabricating a `HEAD..HEAD`
+    /// scope that would parse every spec file in the tree.
+    #[tokio::test]
+    async fn integrity_findings_empty_when_molecule_lacks_base_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path();
+        let state = seeded_state(workspace, "alpha", "wx-alpha");
+        let mut ctrl = controller_with_state(workspace.to_path_buf(), "alpha", state);
+        let findings = ctrl.integrity_findings().await.unwrap();
+        assert!(findings.is_empty(), "no base_commit => no findings");
+    }
+
+    /// `apply_integrity_clarify` is a no-op when handed an empty findings
+    /// list — there is no clarify to apply, and the controller must not
+    /// query `bd` for a molecule that may not exist.
+    #[tokio::test]
+    async fn apply_integrity_clarify_is_noop_for_empty_findings() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ctrl = controller(dir.path().to_path_buf());
+        ctrl.apply_integrity_clarify(&[]).await.unwrap();
     }
 
     /// Seed a stub spec file at `specs/<label>.md` with an empty

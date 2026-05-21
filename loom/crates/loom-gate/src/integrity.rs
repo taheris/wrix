@@ -84,6 +84,20 @@ pub enum IntegrityFinding {
     },
 }
 
+impl IntegrityFinding {
+    /// True iff this finding is terminal at the push gate per
+    /// `specs/loom-gate.md` § Integrity gate — only
+    /// [`Self::UnresolvedAnnotation`] and [`Self::StubTestFunction`]
+    /// refuse the push and raise `loom:clarify`. The remaining variants
+    /// surface as warnings elsewhere.
+    pub fn is_push_gate_terminal(&self) -> bool {
+        matches!(
+            self,
+            Self::UnresolvedAnnotation { .. } | Self::StubTestFunction { .. }
+        )
+    }
+}
+
 impl std::fmt::Display for IntegrityFinding {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -655,6 +669,85 @@ fn find_proptest_bodies(bytes: &[u8]) -> Vec<Range<usize>> {
             }
         }
         k += 1;
+    }
+    out
+}
+
+/// Render the push-gate `loom:clarify` notes block for a set of
+/// integrity findings, per `specs/loom-gate.md` § Options Format
+/// Contract. Each terminal finding ([`IntegrityFinding::is_push_gate_terminal`])
+/// produces one `## Options — …` section with three `### Option N —
+/// <title>` resolutions. Non-terminal variants are skipped silently —
+/// they belong to other channels (atomic-acceptance flags, etc.). The
+/// concatenated string is what `bd update <epic> --notes` consumes, and
+/// what `loom msg` parses to populate the option-reply menu.
+pub fn format_clarify_options(findings: &[IntegrityFinding]) -> String {
+    use std::fmt::Write;
+
+    let mut out = String::new();
+    for finding in findings.iter().filter(|f| f.is_push_gate_terminal()) {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        match finding {
+            IntegrityFinding::UnresolvedAnnotation {
+                spec,
+                line,
+                tier,
+                target,
+            } => {
+                let _ = write!(
+                    out,
+                    "## Options — Unresolved [{tier}]({target}) at {spec}:{line}\n\n\
+                     ### Option 1 — Implement the verifier at the expected path\n\
+                     Add the missing {tier} verifier so `{target}` resolves. \
+                     Pick this when the criterion is correct and the verifier \
+                     has not been written yet.\n\n\
+                     ### Option 2 — Retarget to an existing verifier\n\
+                     Replace `{target}` with the name of an existing verifier \
+                     that exercises the same claim. Pick this when the \
+                     criterion is correct but the annotation points at the \
+                     wrong (or renamed) verifier.\n\n\
+                     ### Option 3 — Remove the criterion at {spec}:{line}\n\
+                     Delete or rewrite the criterion so it no longer requires \
+                     this verifier. Pick this when the criterion is \
+                     superseded or out of scope.\n",
+                    tier = tier,
+                    target = target,
+                    spec = spec.display(),
+                    line = line,
+                );
+            }
+            IntegrityFinding::StubTestFunction {
+                spec,
+                line,
+                tier: _,
+                target,
+                test_name,
+            } => {
+                let _ = write!(
+                    out,
+                    "## Options — Stub verifier `{test_name}` at {spec}:{line}\n\n\
+                     ### Option 1 — Implement the test body\n\
+                     Replace the `_pending_stub` sigil in `{test_name}` with a \
+                     real assertion that exercises the criterion. Pick this \
+                     when the criterion is correct and the test is owed.\n\n\
+                     ### Option 2 — Retarget to a non-stub verifier\n\
+                     Replace `{target}` with a verifier that already \
+                     exercises the claim. Pick this when another verifier \
+                     supersedes the stub.\n\n\
+                     ### Option 3 — Remove the criterion at {spec}:{line}\n\
+                     Delete or rewrite the criterion so it no longer points \
+                     at a stub. Pick this when the work behind the criterion \
+                     is no longer planned.\n",
+                    test_name = test_name,
+                    target = target,
+                    spec = spec.display(),
+                    line = line,
+                );
+            }
+            _ => {}
+        }
     }
     out
 }
@@ -1667,6 +1760,140 @@ fn delta_helper() {
                 .iter()
                 .any(|f| matches!(f, IntegrityFinding::MultipleAnnotations { .. })),
             "atomic-acceptance finding present: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn is_push_gate_terminal_holds_for_unresolved_and_stub_only() {
+        let spec = PathBuf::from("specs/a.md");
+        assert!(
+            IntegrityFinding::UnresolvedAnnotation {
+                spec: spec.clone(),
+                line: 1,
+                tier: Tier::Check,
+                target: "missing".into(),
+            }
+            .is_push_gate_terminal()
+        );
+        assert!(
+            IntegrityFinding::StubTestFunction {
+                spec: spec.clone(),
+                line: 1,
+                tier: Tier::Test,
+                target: "crate::x".into(),
+                test_name: "x".into(),
+            }
+            .is_push_gate_terminal()
+        );
+        assert!(
+            !IntegrityFinding::UnresolvedCargoTestName {
+                spec: spec.clone(),
+                line: 1,
+                target: "cargo test foo".into(),
+                test_name: "foo".into(),
+            }
+            .is_push_gate_terminal()
+        );
+        assert!(
+            !IntegrityFinding::MultipleAnnotations {
+                spec,
+                line: 1,
+                count: 2,
+            }
+            .is_push_gate_terminal()
+        );
+    }
+
+    #[test]
+    fn format_clarify_options_renders_three_options_for_unresolved_annotation() {
+        let f = IntegrityFinding::UnresolvedAnnotation {
+            spec: PathBuf::from("specs/loom-harness.md"),
+            line: 42,
+            tier: Tier::Check,
+            target: "loom-walk surface".into(),
+        };
+        let out = format_clarify_options(&[f]);
+        assert!(
+            out.starts_with("## Options — "),
+            "must start with Options heading: {out}"
+        );
+        assert!(
+            out.contains("specs/loom-harness.md:42"),
+            "must cite spec:line: {out}"
+        );
+        assert!(
+            out.contains("[check](loom-walk surface)"),
+            "tier+target: {out}"
+        );
+        assert!(out.contains("### Option 1 —"), "option 1: {out}");
+        assert!(out.contains("### Option 2 —"), "option 2: {out}");
+        assert!(out.contains("### Option 3 —"), "option 3: {out}");
+        assert!(out.contains("Implement"), "implement language: {out}");
+        assert!(out.contains("Retarget"), "retarget language: {out}");
+        assert!(
+            out.contains("Remove the criterion"),
+            "remove language: {out}"
+        );
+    }
+
+    #[test]
+    fn format_clarify_options_renders_three_options_for_stub_test_function() {
+        let f = IntegrityFinding::StubTestFunction {
+            spec: PathBuf::from("specs/loom-harness.md"),
+            line: 100,
+            tier: Tier::Test,
+            target: "crate::a::stub_me".into(),
+            test_name: "stub_me".into(),
+        };
+        let out = format_clarify_options(&[f]);
+        assert!(out.starts_with("## Options — "), "summary heading: {out}");
+        assert!(out.contains("stub_me"), "test name: {out}");
+        assert!(
+            out.contains("specs/loom-harness.md:100"),
+            "spec:line: {out}"
+        );
+        assert!(out.contains("### Option 1 —"), "option 1: {out}");
+        assert!(out.contains("### Option 2 —"), "option 2: {out}");
+        assert!(out.contains("### Option 3 —"), "option 3: {out}");
+        assert!(out.contains("test body"), "implement test body: {out}");
+    }
+
+    #[test]
+    fn format_clarify_options_concatenates_blocks_for_multiple_findings() {
+        let a = IntegrityFinding::UnresolvedAnnotation {
+            spec: PathBuf::from("specs/a.md"),
+            line: 1,
+            tier: Tier::Check,
+            target: "missing_a".into(),
+        };
+        let b = IntegrityFinding::StubTestFunction {
+            spec: PathBuf::from("specs/b.md"),
+            line: 2,
+            tier: Tier::Test,
+            target: "crate::b::s".into(),
+            test_name: "s".into(),
+        };
+        let out = format_clarify_options(&[a, b]);
+        let heading_count = out.matches("## Options — ").count();
+        assert_eq!(heading_count, 2, "one block per finding: {out}");
+        assert!(out.contains("missing_a"), "first finding present: {out}");
+        assert!(
+            out.contains("specs/b.md:2"),
+            "second finding present: {out}"
+        );
+    }
+
+    #[test]
+    fn format_clarify_options_skips_non_terminal_findings() {
+        let f = IntegrityFinding::MultipleAnnotations {
+            spec: PathBuf::from("specs/a.md"),
+            line: 1,
+            count: 2,
+        };
+        let out = format_clarify_options(&[f]);
+        assert!(
+            out.is_empty(),
+            "non-terminal variants produce no options block: {out:?}"
         );
     }
 }

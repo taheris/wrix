@@ -36,7 +36,7 @@ pub use dispatch::{
 };
 pub use integrity::{
     CommandResolver, FsCommandResolver, IntegrityError, IntegrityFinding, RustWorkspaceStubScanner,
-    RustWorkspaceTestResolver, StubScanner, TestPathResolver,
+    RustWorkspaceTestResolver, StubScanner, TestPathResolver, format_clarify_options,
 };
 pub use runner::{RunnerError, RunnerKind, RunnerTemplate, check_zero_match};
 pub use scope::{CargoMetadataScope, ScopeError};
