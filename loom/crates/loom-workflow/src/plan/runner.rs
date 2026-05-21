@@ -94,7 +94,7 @@ pub fn run_with_timeout(
     let lock_mgr = LockManager::new(workspace)?;
     let _guard = lock_mgr.acquire_spec_with_timeout(&label, timeout)?;
 
-    let cfg = LoomConfig::load(workspace.join(".wrapix/loom/config.toml"))
+    let cfg = LoomConfig::load(LoomConfig::resolve_path(workspace))
         .unwrap_or_else(|_| LoomConfig::default());
 
     let profile = resolve_plan_profile(opts.cli_profile.as_ref(), &cfg)?;
@@ -447,7 +447,7 @@ mod tests {
         Ok(())
     }
 
-    /// `[phase.plan].profile` from `.wrapix/loom/config.toml` wins when no
+    /// `[phase.plan].profile` from `<workspace>/config.toml` wins when no
     /// CLI override is set — verifies the second tier of precedence.
     #[test]
     fn plan_phase_config_profile_picks_manifest_entry() -> Result<()> {
@@ -458,7 +458,7 @@ mod tests {
             Some((&spec_path, "# loom-harness\n\n## Companions\n\n")),
         )?;
         std::fs::write(
-            dir.path().join(".wrapix/loom/config.toml"),
+            dir.path().join("config.toml"),
             "[phase.plan]\nprofile = \"python\"\n",
         )?;
         let manifest = three_profile_manifest(dir.path())?;

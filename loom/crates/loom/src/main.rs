@@ -263,7 +263,7 @@ enum Command {
         update: Option<String>,
         /// Override the profile resolution chain. Wins over
         /// `[phase.plan].profile` and `[phase.default].profile` in
-        /// `.wrapix/loom/config.toml` (default `base`).
+        /// `<workspace>/config.toml` (default `base`).
         #[arg(long, value_name = "PROFILE")]
         profile: Option<String>,
     },
@@ -1007,11 +1007,11 @@ fn run_gate_single_tier(workspace: &Path, args: &GateScopeArgs, tier: Tier) -> a
 }
 
 /// Resolve the `[test]`-tier runner template. `[runner.test] command =
-/// "..."` from `.wrapix/loom/config.toml` (the consolidated `LoomConfig`)
+/// "..."` from `<workspace>/config.toml` (the consolidated `LoomConfig`)
 /// wins; absent that override, fall back to toolchain detection in
 /// `loom_gate::runner::discover`.
 fn resolve_test_runner_template(workspace: &Path) -> anyhow::Result<loom_gate::RunnerTemplate> {
-    let config = LoomConfig::load(workspace.join(".wrapix/loom/config.toml"))?;
+    let config = LoomConfig::load(LoomConfig::resolve_path(workspace))?;
     if let Some(tier) = config.runner.tier("test")
         && let Some(command) = tier.command.as_deref()
     {
@@ -1385,7 +1385,7 @@ fn run_run(
     let lock_mgr = LockManager::new(workspace)?;
     let guard = lock_mgr.acquire_spec(&label)?;
 
-    let config = LoomConfig::load(workspace.join(".wrapix/loom/config.toml"))?;
+    let config = LoomConfig::load(LoomConfig::resolve_path(workspace))?;
     sweep_retention_at(
         &workspace.join(".wrapix/loom/logs"),
         config.logs.retention_days,
@@ -2027,7 +2027,7 @@ fn run_review(
     let lock_mgr = LockManager::new(workspace)?;
     let guard = lock_mgr.acquire_spec(&label)?;
 
-    let config = LoomConfig::load(workspace.join(".wrapix/loom/config.toml"))?;
+    let config = LoomConfig::load(LoomConfig::resolve_path(workspace))?;
     let selection = resolved_agent_for(&config, agent_override, Phase::Review)?;
     let phase_default = selection.profile.clone();
     let kind = selection.kind;
@@ -2321,7 +2321,7 @@ fn run_todo(
     let lock_mgr = LockManager::new(workspace)?;
     let _guard = lock_mgr.acquire_spec(&label)?;
 
-    let config = LoomConfig::load(workspace.join(".wrapix/loom/config.toml"))?;
+    let config = LoomConfig::load(LoomConfig::resolve_path(workspace))?;
     let selection = resolved_agent_for(&config, agent_override, Phase::Todo)?;
     let phase_default = selection.profile.clone();
     let kind = selection.kind;

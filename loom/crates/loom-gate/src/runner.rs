@@ -3,7 +3,7 @@
 //! Toolchain-detection defaults per `specs/loom-gate.md` § Runners
 //! (`Cargo.toml` → nextest, `pyproject.toml` → pytest, `go.mod` →
 //! `go test`). Per-tier overrides flow in from `LoomConfig`'s
-//! `[runner.<tier>.<name>]` blocks at `.wrapix/loom/config.toml`; this
+//! `[runner.<tier>.<name>]` blocks at `<workspace>/config.toml`; this
 //! module never reads TOML from disk itself. The module also surfaces
 //! silent-zero-match cases in cargo / nextest / pytest output so a
 //! filtered run that matches no tests fails loudly rather than passing
@@ -22,7 +22,7 @@ use crate::annotation::{Annotation, Tier};
 /// Template string for a batched-tier runner with a placeholder
 /// substituted at invocation time. Defaults come from toolchain
 /// detection; overrides come from `LoomConfig`'s `[runner.<tier>.<name>]`
-/// blocks at `.wrapix/loom/config.toml`.
+/// blocks at `<workspace>/config.toml`.
 ///
 /// Placeholder vocabulary, all rendered by [`RunnerTemplate::render`]:
 ///

@@ -1328,9 +1328,11 @@ respectively.
 
 ## Configuration
 
-Loom reads `.wrapix/loom/config.toml` — TOML, parsed natively via the
-`toml` crate into a typed `LoomConfig` struct with `#[serde(default)]`
-on all fields so the file can be empty or absent (defaults apply).
+Loom reads `<workspace>/config.toml` by default; setting the
+`LOOM_CONFIG` env var overrides the path (absolute or cwd-relative).
+TOML, parsed natively via the `toml` crate into a typed `LoomConfig`
+struct with `#[serde(default)]` on all fields so the file can be
+empty or absent (defaults apply).
 
 ```toml
 # Project overview — pinned in every phase via partial/context_pinning.md
@@ -1456,9 +1458,13 @@ config file at `.loom/config.toml` (introduced in commit
 `65fe1bd3 chore: add .loom/config.toml pointing test runner at
 loom/Cargo.toml`) for the `[runner]` block alone. That file is
 **retired**: every `[runner.<tier>.<name>]` block now lives in
-`.wrapix/loom/config.toml` alongside the rest of `LoomConfig`.
+`<workspace>/config.toml` alongside the rest of `LoomConfig`.
 Consumers migrating from the old location move their `[runner]` block
-verbatim into `.wrapix/loom/config.toml` and delete `.loom/`.
+verbatim into `<workspace>/config.toml` and delete `.loom/`.
+
+The default config location moved out of `.wrapix/loom/config.toml` to
+`<workspace>/config.toml` so the entire `.wrapix/` tree can be
+gitignored without carve-outs. Set `LOOM_CONFIG` to relocate.
 ## Success Criteria
 
 ### Crate structure
@@ -1951,8 +1957,8 @@ two agent-loop observers.
 
 ### Auxiliary commands
 
-- `loom init` creates `.wrapix/loom/config.toml` and `.wrapix/loom/state.db`
-      with the default schema
+- `loom init` creates `<workspace>/config.toml` (or `$LOOM_CONFIG` when
+      set) and `.wrapix/loom/state.db` with the default schema
   [test](run_creates_config_and_state_db)
 - `loom init --rebuild` repopulates the state DB from `specs/*.md`
       and active beads

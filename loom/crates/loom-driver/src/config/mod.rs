@@ -1,4 +1,4 @@
-//! Loom configuration loaded from `.wrapix/loom/config.toml`.
+//! Loom configuration loaded from `<workspace>/config.toml`.
 //!
 //! Parsed natively via the `toml` crate into a typed [`LoomConfig`]. Every
 //! field carries `#[serde(default)]` so a missing or empty file yields
@@ -9,6 +9,10 @@
 //! with `[phase.default]` as the fallback (see
 //! `specs/loom-harness.md` § Configuration). Resolution for any phase
 //! field walks `[phase.<name>]` → `[phase.default]` → built-in defaults.
+//!
+//! The on-disk path is resolved via [`LoomConfig::resolve_path`]: when
+//! `LOOM_CONFIG` is set, its value is the path (absolute or
+//! cwd-relative); otherwise the path is `<workspace>/config.toml`.
 
 mod agent;
 mod beads;
@@ -32,9 +36,18 @@ pub use runner::{Parser, RunnerConfig, RunnerEntry, RunnerTier};
 pub use security::SecurityConfig;
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+
+/// Env-var name that overrides the default config-file lookup. When set,
+/// its value is taken as the config path (absolute or cwd-relative) and
+/// the `<workspace>/config.toml` default is not consulted.
+pub const CONFIG_PATH_ENV: &str = "LOOM_CONFIG";
+
+/// Default config-file location, relative to the workspace root. Used
+/// when [`CONFIG_PATH_ENV`] is unset.
+pub const DEFAULT_CONFIG_FILENAME: &str = "config.toml";
 
 use crate::agent::AgentKind;
 use crate::identifier::ProfileName;
@@ -146,8 +159,20 @@ impl LoomConfig {
         })
     }
 
+    /// Resolve the on-disk config path for `workspace`. Returns the value
+    /// of [`CONFIG_PATH_ENV`] when set; otherwise returns
+    /// `<workspace>/config.toml`. The path is not required to exist —
+    /// [`Self::load`] tolerates a missing file.
+    pub fn resolve_path(workspace: &Path) -> PathBuf {
+        if let Some(override_path) = std::env::var_os(CONFIG_PATH_ENV) {
+            PathBuf::from(override_path)
+        } else {
+            workspace.join(DEFAULT_CONFIG_FILENAME)
+        }
+    }
+
     /// Load a config from disk. A missing file yields the default config so
-    /// `.wrapix/loom/config.toml` is optional.
+    /// the file is optional.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, LoomConfigError> {
         let path = path.as_ref();
         match std::fs::read_to_string(path) {

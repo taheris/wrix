@@ -2,18 +2,8 @@
 .claude/
 .direnv/
 .gc/
-# Root-level `.wrapix/`: ignore runtime state (logs, scratch, state DB),
-# but track the repo-owned `LoomConfig` at `.wrapix/loom/config.toml`.
-# See specs/loom-harness.md § Configuration.
-/.wrapix/*
-!/.wrapix/loom/
-/.wrapix/loom/*
-!/.wrapix/loom/config.toml
-/.wrapix/ralph/runtime/
+.wrapix/
 
-# Nested `.wrapix/` directories (test-driven; never repo-owned).
-**/loom/.wrapix/
-**/city/.wrapix/
 city.toml
 result
 result-*

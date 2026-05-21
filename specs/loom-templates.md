@@ -367,8 +367,8 @@ diffs in PR review. Updates require an explicit
 
 ## Configuration
 
-Three pinning-related fields on `LoomConfig`, all loaded from the
-workspace `.wrapix/loom/config.toml`:
+Three pinning-related fields on `LoomConfig`, all loaded from
+`<workspace>/config.toml`:
 
 ```toml
 # Project overview — pinned in every phase

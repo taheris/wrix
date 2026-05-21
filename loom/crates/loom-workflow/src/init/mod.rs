@@ -1,7 +1,7 @@
 //! `loom init` — workspace bootstrap and optional state-DB rebuild.
 //!
 //! Acquires the workspace lock (errors immediately if any per-spec lock is
-//! held), ensures `.wrapix/loom/config.toml` and `.wrapix/loom/state.db`
+//! held), ensures `<workspace>/config.toml` and `.wrapix/loom/state.db`
 //! exist, and — when `--rebuild` is passed — drops/recreates the state DB
 //! and repopulates it from `specs/*.md` plus a caller-supplied slice of
 //! active molecules.
@@ -17,13 +17,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use loom_driver::bd::{BdClient, CommandRunner, ListOpts};
+use loom_driver::config::LoomConfig;
 use loom_driver::identifier::MoleculeId;
 use loom_driver::lock::LockManager;
 use loom_driver::state::{ActiveMolecule, RebuildReport, StateDb};
 
 pub use error::InitError;
 
-/// Default body for `.wrapix/loom/config.toml`. Mirrors the Configuration
+/// Default body for `<workspace>/config.toml`. Mirrors the Configuration
 /// section of `specs/loom-harness.md` verbatim so a fresh `loom init` writes
 /// a file that round-trips through `LoomConfig::default()`.
 pub const DEFAULT_CONFIG_TOML: &str = include_str!("default-config.toml");
@@ -63,17 +64,25 @@ pub fn run(
     let lock_mgr = LockManager::new(workspace)?;
     let _guard = lock_mgr.acquire_workspace()?;
 
-    let loom_dir = workspace.join(".wrapix/loom");
-    fs::create_dir_all(&loom_dir).map_err(|source| InitError::CreateDir {
-        path: loom_dir.clone(),
+    let runtime_dir = workspace.join(".wrapix/loom");
+    fs::create_dir_all(&runtime_dir).map_err(|source| InitError::CreateDir {
+        path: runtime_dir.clone(),
         source,
     })?;
 
-    let config_path = loom_dir.join("config.toml");
-    let state_db_path = loom_dir.join("state.db");
+    let config_path = LoomConfig::resolve_path(workspace);
+    let state_db_path = runtime_dir.join("state.db");
 
     let config_created = !config_path.exists();
     if config_created {
+        if let Some(parent) = config_path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent).map_err(|source| InitError::CreateDir {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
         fs::write(&config_path, DEFAULT_CONFIG_TOML).map_err(|source| InitError::WriteConfig {
             path: config_path.clone(),
             source,
@@ -263,10 +272,8 @@ mod tests {
     #[test]
     fn run_preserves_existing_config_file() -> Result<()> {
         let dir = temp_workspace()?;
-        let loom_dir = dir.path().join(".wrapix/loom");
-        std::fs::create_dir_all(&loom_dir)?;
         let custom = "pinned_context = \"AGENTS.md\"\n";
-        std::fs::write(loom_dir.join("config.toml"), custom)?;
+        std::fs::write(dir.path().join("config.toml"), custom)?;
 
         let report = run(dir.path(), InitOpts::default(), &[])?;
         assert!(!report.config_created);

@@ -416,7 +416,7 @@ The dispatcher's job:
    once, parse per-target verdicts from the output.
 4. For unmatched annotations, fall back to per-annotation spawn.
 
-**Schema: `[runner.<tier>.<name>]` in `.wrapix/loom/config.toml`.**
+**Schema: `[runner.<tier>.<name>]` in `<workspace>/config.toml`.**
 Each runner declares how to recognise its annotations, how to format
 each target, how to join into a batch, how to parse per-target
 results, and where to run from.
@@ -463,7 +463,7 @@ Resolution order when spawning a command:
 **Loom-the-library ships defaults** for the common toolchains —
 nextest for `[test]` if a `Cargo.toml` is detected, nix for
 `[system]` derivations, pytest if a `pyproject.toml` is detected.
-Consumers extend or override in `.wrapix/loom/config.toml`. **Loom-
+Consumers extend or override in `<workspace>/config.toml`. **Loom-
 the-library has no privileged knowledge of any consumer's layout** —
 the defaults are heuristics for common shapes, not assumptions.
 
@@ -480,7 +480,7 @@ on verifier kind:
 
 | Verifier kind | Source of inputs |
 |---|---|
-| `[test](name)` | Derived from test framework metadata. For Rust: walk `cargo metadata`, resolve the test's owning crate, declare the crate's source dirs. For pytest: pytest's collection output. For other frameworks: `.wrapix/loom/config.toml` `[runner.<tier>] inputs_for_test = "<command>"`. |
+| `[test](name)` | Derived from test framework metadata. For Rust: walk `cargo metadata`, resolve the test's owning crate, declare the crate's source dirs. For pytest: pytest's collection output. For other frameworks: `<workspace>/config.toml` `[runner.<tier>] inputs_for_test = "<command>"`. |
 | `[check]` / `[system]` referencing a **script** | A `# loom-inputs: <comma-separated globs>` header line in the script. Format is uniform across script languages — the line is found by literal-string search, not by interpreting shebangs. |
 | `[check]` / `[system]` referencing a **binary** that supports the input-query protocol | The binary returns inputs via `<binary> --print-inputs <remaining-argv>` printing JSON `{"inputs": ["glob1", "glob2"]}` to stdout. |
 | `[check]` / `[system]` — fallback | Heuristic path extraction from the command string. `grep -q 'X' path/to/file` → `path/to/file`. `cargo test -p mycrate --lib testname` → `mycrate`'s sources via cargo metadata. Conservative; misses are caught by the standing-stage safety-net sweep. |

@@ -116,7 +116,7 @@ impl RunnerTier {
     }
 }
 
-/// The full `[runner.*]` table from `.wrapix/loom/config.toml`. Keys are
+/// The full `[runner.*]` table from `<workspace>/config.toml`. Keys are
 /// tier names (`test`, `check`, `system`, `judge`) matching the
 /// `loom-gate::annotation::Tier` enum at the consumer end. Empty by
 /// default, so configs without a `[runner]` block parse cleanly.
@@ -319,20 +319,20 @@ parse = "json-lines"
         assert_eq!(custom.parse, Some(Parser::JsonLines));
     }
 
-    /// Loom-the-repo's checked-in `.wrapix/loom/config.toml` must parse
-    /// through the same `LoomConfig::load` path production uses. The test
-    /// walks up from `CARGO_MANIFEST_DIR` to the workspace root so it
-    /// works from any nested test runner.
+    /// Loom-the-repo's checked-in `config.toml` must parse through the same
+    /// `LoomConfig::load` path production uses. The test walks up from
+    /// `CARGO_MANIFEST_DIR` to the workspace root so it works from any
+    /// nested test runner.
     #[test]
     fn loom_repo_config_loads_and_exposes_migrated_runner_blocks() {
         let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let mut workspace_root = manifest.as_path();
-        while !workspace_root.join(".wrapix/loom/config.toml").is_file() {
+        while !workspace_root.join("config.toml").is_file() {
             workspace_root = workspace_root
                 .parent()
-                .expect("walked past filesystem root looking for .wrapix/loom/config.toml");
+                .expect("walked past filesystem root looking for config.toml");
         }
-        let path = workspace_root.join(".wrapix/loom/config.toml");
+        let path = workspace_root.join("config.toml");
         let cfg = LoomConfig::load(&path).unwrap();
 
         let test = cfg.runner.tier("test").expect("[runner.test] migrated");

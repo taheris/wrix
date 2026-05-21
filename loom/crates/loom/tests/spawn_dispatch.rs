@@ -835,10 +835,8 @@ fn loom_todo_claude_runs_shutdown_watchdog_through_run_agent() {
     let workspace = dir.path();
     init_workspace_repo(workspace);
 
-    let loom_dir = workspace.join(".wrapix/loom");
-    std::fs::create_dir_all(&loom_dir).unwrap();
     std::fs::write(
-        loom_dir.join("config.toml"),
+        workspace.join("config.toml"),
         "[claude]\npost_result_grace_secs = 1\n",
     )
     .unwrap();

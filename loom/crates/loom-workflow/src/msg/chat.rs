@@ -102,7 +102,7 @@ pub enum ChatError {
 /// before/after clarify counts so the caller can surface a one-line
 /// summary.
 pub fn run(workspace: &Path, opts: ChatOpts) -> Result<ChatReport, ChatError> {
-    let cfg = LoomConfig::load(workspace.join(".wrapix/loom/config.toml"))
+    let cfg = LoomConfig::load(LoomConfig::resolve_path(workspace))
         .map_err(|e| ChatError::Config(e.to_string()))?;
     let profile = resolve_chat_profile(opts.cli_profile.as_ref(), &cfg)?;
     let image: &ImageEntry = opts.manifest.lookup(&profile)?;
