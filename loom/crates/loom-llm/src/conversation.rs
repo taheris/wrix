@@ -8,6 +8,10 @@
 //! until the agent stops calling tools or the iteration budget is
 //! exhausted.
 
+use loom_events::event::Source;
+use loom_events::identifier::{BeadId, ToolCallId};
+use loom_events::{AgentEvent, EnvelopeBuilder, EventSink, SessionCommand};
+
 use crate::client::{CompletionResponse, LlmClient, LlmError};
 use crate::model_id::ModelId;
 use crate::observer::{
@@ -37,6 +41,8 @@ pub struct Conversation {
     history: Vec<Message>,
     doom_loop: Option<DoomLoopObserver>,
     duplicate_result: Option<DuplicateResultObserver>,
+    envelope_builder: EnvelopeBuilder,
+    pending_steers: Vec<String>,
 }
 
 impl Conversation {
@@ -80,6 +86,8 @@ impl Conversation {
             history: Vec::new(),
             doom_loop: build_doom_loop_observer(&doom_loop),
             duplicate_result: build_duplicate_result_observer(&duplicate_result),
+            envelope_builder: default_envelope_builder(),
+            pending_steers: Vec::new(),
         }
     }
 
@@ -154,6 +162,19 @@ impl Conversation {
         self
     }
 
+    /// Replace the conversation's `EnvelopeBuilder`. External consumers
+    /// thread their own bead / molecule / iteration identity through this
+    /// hook so the synthetic `AgentEvent::ToolCall` / `AgentEvent::ToolResult`
+    /// events the loop emits into composed observers carry the right
+    /// per-spawn metadata. Without an override the conversation uses a
+    /// synthetic `wx-conv` bead id with a constant `ts_ms = 0`;
+    /// observers key on `(CallKey, ResultHash)` rather than the
+    /// timestamp, so the default is observationally inert.
+    pub fn with_envelope_builder(mut self, envelope_builder: EnvelopeBuilder) -> Self {
+        self.envelope_builder = envelope_builder;
+        self
+    }
+
     /// Append a user turn to the conversation history. Subsequent
     /// `run` / `run_stream` calls include it on the next completion.
     pub fn user(&mut self, content: impl Into<String>) {
@@ -163,6 +184,15 @@ impl Conversation {
     /// Run the tool-use loop to completion against `client`. Returns
     /// the final `CompletionResponse` (the assistant turn that did not
     /// emit further tool calls).
+    ///
+    /// Each dispatched tool call synthesises an `AgentEvent::ToolCall` /
+    /// `AgentEvent::ToolResult` pair that is fanned into the composed
+    /// `DoomLoopObserver` / `DuplicateResultObserver`. After every
+    /// non-streaming event the loop drains `react()` on each composed
+    /// observer: `SessionCommand::Steer` payloads are queued as user
+    /// messages on the next iteration; the first `SessionCommand::Abort`
+    /// short-circuits the loop and returns
+    /// [`LlmError::ObserverAbort`].
     pub async fn run<C: LlmClient + Sync>(
         &mut self,
         client: &C,
@@ -177,6 +207,9 @@ impl Conversation {
         let mut iterations: u32 = 0;
         while iterations < self.max_iterations {
             iterations += 1;
+            for steer in self.pending_steers.drain(..) {
+                self.history.push(Message::user(steer));
+            }
             let req = self.build_request(tool_defs.clone());
             let response = client.complete(req).await?;
 
@@ -190,6 +223,11 @@ impl Conversation {
             ));
 
             for call in &response.tool_calls {
+                self.observe_tool_call(call.call_id.clone(), &call.name, &call.args);
+                if let Some(reason) = self.process_react_commands() {
+                    return Err(LlmError::ObserverAbort { reason });
+                }
+
                 let tool = self
                     .tools
                     .iter()
@@ -201,9 +239,14 @@ impl Conversation {
                 let content = serde_json::to_string(&output.content)?;
                 self.history.push(Message::tool_result(
                     call.call_id.clone(),
-                    content,
+                    content.clone(),
                     output.is_error,
                 ));
+
+                self.observe_tool_result(call.call_id.clone(), &content, output.is_error);
+                if let Some(reason) = self.process_react_commands() {
+                    return Err(LlmError::ObserverAbort { reason });
+                }
             }
 
             last_response = Some(response);
@@ -217,6 +260,67 @@ impl Conversation {
                 budget: self.max_iterations,
             }),
         }
+    }
+
+    fn observe_tool_call(&mut self, call_id: String, tool: &str, params: &serde_json::Value) {
+        if self.doom_loop.is_none() && self.duplicate_result.is_none() {
+            return;
+        }
+        let event = AgentEvent::ToolCall {
+            envelope: self.envelope_builder.build_with_source(Source::Agent),
+            id: ToolCallId::new(call_id),
+            tool: tool.to_owned(),
+            params: params.clone(),
+            parent_tool_call_id: None,
+        };
+        if let Some(observer) = self.doom_loop.as_mut() {
+            observer.emit(&event);
+        }
+        if let Some(observer) = self.duplicate_result.as_mut() {
+            observer.emit(&event);
+        }
+    }
+
+    fn observe_tool_result(&mut self, call_id: String, output: &str, is_error: bool) {
+        if self.doom_loop.is_none() && self.duplicate_result.is_none() {
+            return;
+        }
+        let event = AgentEvent::ToolResult {
+            envelope: self.envelope_builder.build_with_source(Source::Agent),
+            id: ToolCallId::new(call_id),
+            output: output.to_owned(),
+            is_error,
+        };
+        if let Some(observer) = self.doom_loop.as_mut() {
+            observer.emit(&event);
+        }
+        if let Some(observer) = self.duplicate_result.as_mut() {
+            observer.emit(&event);
+        }
+    }
+
+    /// Drain composed observers' `react()` queues in registration order.
+    /// `Steer` payloads land in `pending_steers` for injection on the
+    /// next iteration. Returns `Some(reason)` on the first `Abort`; the
+    /// caller short-circuits the loop with `LlmError::ObserverAbort`.
+    /// Mirrors `loom-workflow`'s `classify_react_commands` priority rule
+    /// (Abort is terminal; subsequent commands in the same batch are
+    /// dropped).
+    fn process_react_commands(&mut self) -> Option<String> {
+        let mut commands: Vec<SessionCommand> = Vec::new();
+        if let Some(observer) = self.doom_loop.as_mut() {
+            commands.extend(observer.react());
+        }
+        if let Some(observer) = self.duplicate_result.as_mut() {
+            commands.extend(observer.react());
+        }
+        for cmd in commands {
+            match cmd {
+                SessionCommand::Steer(msg) => self.pending_steers.push(msg),
+                SessionCommand::Abort(reason) => return Some(reason),
+            }
+        }
+        None
     }
 
     /// Same as [`Conversation::run`] but yields `AgentEvent` values
@@ -300,6 +404,21 @@ impl Conversation {
         }
         req
     }
+}
+
+/// Synthetic `EnvelopeBuilder` for consumers that don't thread their own
+/// bead identity through [`Conversation::with_envelope_builder`]. Uses
+/// the constant `wx-conv` bead id (replay tools see it as a distinct
+/// stream) and a constant `ts_ms = 0`. The composed observers key on
+/// `(CallKey, ResultHash)`, not `ts_ms`, so the constant clock is
+/// observationally inert; consumers that need wall-clock timestamps on
+/// the synthesised events supply their own builder via
+/// [`Conversation::with_envelope_builder`] (the only path that draws on
+/// the dedicated `SystemClock` impls in `loom-driver` / `loom-render`).
+fn default_envelope_builder() -> EnvelopeBuilder {
+    let bead = BeadId::new("wx-conv")
+        .unwrap_or_else(|err| unreachable!("`wx-conv` must parse as a BeadId: {err}"));
+    EnvelopeBuilder::new(bead, None, 0, Source::Agent, || 0)
 }
 
 fn build_doom_loop_observer(config: &DoomLoopConfig) -> Option<DoomLoopObserver> {
@@ -671,5 +790,104 @@ mod tests {
         assert!(matches!(poll, std::task::Poll::Pending));
         drop(fut);
         assert_eq!(*calls.lock().unwrap_or_else(|p| p.into_inner()), 1);
+    }
+
+    /// A doom-loop scenario driven through `run` short-circuits with
+    /// [`LlmError::ObserverAbort`] once the composed `DoomLoopObserver`
+    /// trips stage 2. This is the spec-promised behaviour for external
+    /// consumers — the safety net fires automatically with no extra
+    /// wiring from the caller.
+    #[test]
+    fn conversation_run_observer_abort_short_circuits_loop() {
+        let (tool, _seen) = EchoTool::new();
+        let identical = || with_call("echo", "call-loop", json!({ "text": "spin" }));
+        let scripted = std::iter::repeat_with(identical).take(20).collect();
+        let (client, calls) = ScriptedClient::new(scripted);
+
+        let mut conv = Conversation::new(ModelId::ClaudeSonnet46)
+            .register(tool)
+            .doom_loop(DoomLoopConfig {
+                enabled: true,
+                window: 5,
+                threshold: 3,
+                stage_2_after_stage_1: 1,
+            })
+            .max_iterations(20);
+        conv.user("spin forever");
+
+        let err = tokio_test::block_on(conv.run(&client)).expect_err("observer aborts loop");
+        match err {
+            LlmError::ObserverAbort { reason } => {
+                assert_eq!(reason, "doom-loop: echo");
+            }
+            other => panic!("expected ObserverAbort, got {other:?}"),
+        }
+        let observed = *calls.lock().unwrap_or_else(|p| p.into_inner());
+        assert!(
+            observed <= 4,
+            "loop must short-circuit by iteration 4 (stage 1 at 3, stage 2 at 4); \
+             saw {observed} completions",
+        );
+    }
+
+    /// `SessionCommand::Steer` returned from a composed observer is
+    /// queued and injected as a user message on the next iteration so
+    /// the agent's next turn sees the nudge.
+    #[test]
+    fn conversation_run_steer_command_reaches_next_iteration() {
+        let (tool, _seen) = EchoTool::new();
+        let identical = || with_call("echo", "call-steer", json!({ "text": "stuck" }));
+        let mut scripted: Vec<CompletionResponse> = (0..3).map(|_| identical()).collect();
+        scripted.push(no_calls("done"));
+        let (client, _calls) = ScriptedClient::new(scripted);
+
+        let mut conv = Conversation::new(ModelId::ClaudeSonnet46)
+            .register(tool)
+            .doom_loop(DoomLoopConfig {
+                enabled: true,
+                window: 5,
+                threshold: 3,
+                stage_2_after_stage_1: 10,
+            })
+            .max_iterations(10);
+        conv.user("first user turn");
+
+        let resp = tokio_test::block_on(conv.run(&client)).expect("run completes");
+        assert!(resp.tool_calls.is_empty());
+
+        let steer_turns: Vec<&Message> = conv
+            .history
+            .iter()
+            .filter(|m| m.role == Role::User && m.content.contains("doom-loop suspected"))
+            .collect();
+        assert_eq!(
+            steer_turns.len(),
+            1,
+            "exactly one steer must land as a user message in history",
+        );
+    }
+
+    /// Disabling both observers via the builder means the run loop
+    /// synthesises no `ToolCall` / `ToolResult` envelopes — confirmed
+    /// indirectly here by driving an otherwise-doom-looping program past
+    /// stage 2's threshold without triggering an abort.
+    #[test]
+    fn conversation_run_observers_disabled_skips_event_synthesis() {
+        let (tool, _seen) = EchoTool::new();
+        let identical = || with_call("echo", "call-noop", json!({ "text": "spin" }));
+        let mut scripted: Vec<CompletionResponse> = (0..5).map(|_| identical()).collect();
+        scripted.push(no_calls("done"));
+        let (client, _calls) = ScriptedClient::new(scripted);
+
+        let mut conv = Conversation::new(ModelId::ClaudeSonnet46)
+            .register(tool)
+            .doom_loop_disabled()
+            .duplicate_result_disabled()
+            .max_iterations(10);
+        conv.user("spin");
+
+        let resp =
+            tokio_test::block_on(conv.run(&client)).expect("disabled observers do not abort");
+        assert_eq!(resp.text, "done");
     }
 }

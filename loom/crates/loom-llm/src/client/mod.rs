@@ -85,6 +85,14 @@ pub enum LlmError {
         /// Name of the tool the model asked to invoke.
         name: String,
     },
+    /// observer requested session abort: {reason}
+    ObserverAbort {
+        /// Reason supplied by the observer that emitted
+        /// `loom_events::SessionCommand::Abort`. The
+        /// `DoomLoopObserver`'s stage-2 reason is `"doom-loop: <tool>"`;
+        /// other observers (consumer-supplied) format their own.
+        reason: String,
+    },
 }
 
 /// The public agent-side LLM contract. Per-call model selection;
