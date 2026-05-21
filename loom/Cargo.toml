@@ -45,6 +45,7 @@ nix = { version = "0.29", default-features = false, features = ["signal"] }
 owo-colors = { version = "4", features = ["supports-colors"] }
 proptest = "1"
 pulldown-cmark = { version = "0.13", default-features = false }
+regex = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }

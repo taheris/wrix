@@ -16,9 +16,9 @@ use std::path::{Path, PathBuf};
 use loom_gate::annotation::{Annotation, Tier};
 use loom_gate::dispatch::{
     DispatchError, DispatchOptions, EmptyScope, TestScope, run_check, run_judge, run_system,
-    run_test,
+    run_test, run_with_runners,
 };
-use loom_gate::runner::RunnerTemplate;
+use loom_gate::runner::{BuiltinParser, RunnerSpec, RunnerTemplate};
 use tempfile::TempDir;
 
 fn ann(tier: Tier, target: &str) -> Annotation {
@@ -410,4 +410,227 @@ fn dispatcher_surfaces_spawn_failure_when_command_not_found() {
     let results = run_check(&inputs, &opts);
     let err = results.into_iter().next().unwrap().unwrap_err();
     assert!(matches!(err, DispatchError::Spawn { .. }));
+}
+
+#[test]
+fn run_with_runners_groups_matched_into_one_batch_and_falls_back_for_unmatched() {
+    let dir = fixture_dir();
+    let runner = write_script(
+        dir.path(),
+        "json-lines.sh",
+        "#!/bin/sh\nfor target in \"$@\"; do\n  printf '{\"target\":\"%s\",\"pass\":true,\"evidence\":\"batched\"}\\n' \"$target\"\ndone\n",
+    );
+    let fallback_script = write_script(
+        dir.path(),
+        "fallback.sh",
+        "#!/bin/sh\nprintf '{\"pass\": true, \"evidence\": \"singleton\"}\\n'\n",
+    );
+
+    let spec = RunnerSpec::compile(
+        "lines",
+        Some(r"^lines::"),
+        format!("{runner} {{targets}}"),
+        "{name}",
+        " ",
+        BuiltinParser::JsonLines,
+        None,
+    )
+    .unwrap();
+    let inputs = vec![
+        ann(Tier::Check, "lines::a"),
+        ann(Tier::Check, &fallback_script),
+        ann(Tier::Check, "lines::b"),
+    ];
+    let opts = DispatchOptions::default();
+    let results = run_with_runners(&inputs, &[spec], &opts, dir.path());
+    assert_eq!(results.len(), 3);
+
+    let r0 = results[0].as_ref().unwrap();
+    assert!(r0.verdict.pass);
+    assert_eq!(r0.verdict.evidence, "batched");
+    assert_eq!(r0.annotations[0].target, "lines::a");
+
+    let r1 = results[1].as_ref().unwrap();
+    assert!(r1.verdict.pass);
+    assert_eq!(
+        r1.verdict.evidence, "singleton",
+        "unmatched annotation flows through run_single fallback"
+    );
+
+    let r2 = results[2].as_ref().unwrap();
+    assert!(r2.verdict.pass);
+    assert_eq!(r2.verdict.evidence, "batched");
+    assert_eq!(r2.annotations[0].target, "lines::b");
+}
+
+#[test]
+fn run_with_runners_first_match_wins_in_spec_order() {
+    let dir = fixture_dir();
+    let first = write_script(
+        dir.path(),
+        "first.sh",
+        "#!/bin/sh\nfor t in \"$@\"; do printf '{\"target\":\"%s\",\"pass\":true,\"evidence\":\"first\"}\\n' \"$t\"; done\n",
+    );
+    let second = write_script(
+        dir.path(),
+        "second.sh",
+        "#!/bin/sh\nfor t in \"$@\"; do printf '{\"target\":\"%s\",\"pass\":true,\"evidence\":\"second\"}\\n' \"$t\"; done\n",
+    );
+
+    let spec_a = RunnerSpec::compile(
+        "first",
+        Some(r"^test::"),
+        format!("{first} {{targets}}"),
+        "{name}",
+        " ",
+        BuiltinParser::JsonLines,
+        None,
+    )
+    .unwrap();
+    let spec_b = RunnerSpec::compile(
+        "second",
+        None,
+        format!("{second} {{targets}}"),
+        "{name}",
+        " ",
+        BuiltinParser::JsonLines,
+        None,
+    )
+    .unwrap();
+    let inputs = vec![ann(Tier::Check, "test::shared")];
+    let opts = DispatchOptions::default();
+    let results = run_with_runners(&inputs, &[spec_a, spec_b], &opts, dir.path());
+    assert_eq!(results.len(), 1);
+    let outcome = results[0].as_ref().unwrap();
+    assert_eq!(
+        outcome.verdict.evidence, "first",
+        "first declared spec claims a target both specs match"
+    );
+}
+
+#[test]
+fn run_with_runners_dispatch_fails_targets_missing_from_batch_output() {
+    let dir = fixture_dir();
+    let runner = write_script(
+        dir.path(),
+        "partial.sh",
+        "#!/bin/sh\n# Only emit a row for the first target; others are silently dropped.\nfirst=\"$1\"\nprintf '{\"target\":\"%s\",\"pass\":true,\"evidence\":\"ok\"}\\n' \"$first\"\n",
+    );
+    let spec = RunnerSpec::compile(
+        "partial",
+        None,
+        format!("{runner} {{targets}}"),
+        "{name}",
+        " ",
+        BuiltinParser::JsonLines,
+        None,
+    )
+    .unwrap();
+    let inputs = vec![ann(Tier::Check, "covered"), ann(Tier::Check, "missing")];
+    let opts = DispatchOptions::default();
+    let results = run_with_runners(&inputs, &[spec], &opts, dir.path());
+    assert_eq!(results.len(), 2);
+    let covered = results[0].as_ref().unwrap();
+    assert!(covered.verdict.pass);
+    let err = results[1].as_ref().unwrap_err();
+    match err {
+        DispatchError::MissingFromBatchOutput { runner, target } => {
+            assert_eq!(runner, "partial");
+            assert_eq!(target, "missing");
+        }
+        other => panic!("expected MissingFromBatchOutput, got {other:?}"),
+    }
+}
+
+#[test]
+fn run_with_runners_resolves_cwd_against_repo_root() {
+    let dir = fixture_dir();
+    let subdir_name = "nested";
+    let nested = dir.path().join(subdir_name);
+    std::fs::create_dir(&nested).unwrap();
+    let probe = write_script(
+        dir.path(),
+        "pwd-probe.sh",
+        "#!/bin/sh\nfor t in \"$@\"; do printf '{\"target\":\"%s\",\"pass\":true,\"evidence\":\"%s\"}\\n' \"$t\" \"$PWD\"; done\n",
+    );
+    let spec = RunnerSpec::compile(
+        "probe",
+        None,
+        format!("{probe} {{targets}}"),
+        "{name}",
+        " ",
+        BuiltinParser::JsonLines,
+        Some(PathBuf::from(subdir_name)),
+    )
+    .unwrap();
+    let inputs = vec![ann(Tier::Check, "x")];
+    let opts = DispatchOptions::default();
+    let results = run_with_runners(&inputs, &[spec], &opts, dir.path());
+    let outcome = results[0].as_ref().unwrap();
+    assert!(
+        outcome.verdict.evidence.ends_with(subdir_name),
+        "cwd should resolve under {} but got `{}`",
+        dir.path().display(),
+        outcome.verdict.evidence,
+    );
+}
+
+#[test]
+fn run_with_runners_libtest_json_maps_test_names_back_to_annotations() {
+    let dir = fixture_dir();
+    let runner = write_script(
+        dir.path(),
+        "libtest.sh",
+        "#!/bin/sh\nfor t in \"$@\"; do printf '{\"type\":\"test\",\"event\":\"ok\",\"name\":\"%s\"}\\n' \"$t\"; done\n",
+    );
+    let spec = RunnerSpec::compile(
+        "nextest",
+        None,
+        format!("{runner} {{targets}}"),
+        "{name}",
+        " ",
+        BuiltinParser::LibtestJson,
+        None,
+    )
+    .unwrap();
+    let inputs = vec![
+        ann(Tier::Test, "crate::a::one"),
+        ann(Tier::Test, "crate::b::two"),
+    ];
+    let opts = DispatchOptions::default();
+    let results = run_with_runners(&inputs, &[spec], &opts, dir.path());
+    assert_eq!(results.len(), 2);
+    for r in &results {
+        let outcome = r.as_ref().unwrap();
+        assert!(outcome.verdict.pass);
+    }
+}
+
+#[test]
+fn run_with_runners_exit_code_parser_shares_verdict_across_group() {
+    let dir = fixture_dir();
+    let runner = write_script(
+        dir.path(),
+        "exit-fail.sh",
+        "#!/bin/sh\necho 'something went wrong' >&2\nexit 1\n",
+    );
+    let spec = RunnerSpec::compile(
+        "raw",
+        None,
+        format!("{runner} {{targets}}"),
+        "{name}",
+        " ",
+        BuiltinParser::ExitCode,
+        None,
+    )
+    .unwrap();
+    let inputs = vec![ann(Tier::Check, "a"), ann(Tier::Check, "b")];
+    let opts = DispatchOptions::default();
+    let results = run_with_runners(&inputs, &[spec], &opts, dir.path());
+    assert_eq!(results.len(), 2);
+    for r in &results {
+        let outcome = r.as_ref().unwrap();
+        assert!(!outcome.verdict.pass);
+        assert!(outcome.verdict.evidence.contains("something went wrong"));
+    }
 }

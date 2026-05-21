@@ -29,7 +29,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::annotation::{Annotation, Tier};
-use crate::runner::{RunnerError, RunnerTemplate, check_zero_match};
+use crate::runner::{
+    BuiltinParser, RunnerError, RunnerGroup, RunnerSpec, RunnerTemplate, check_zero_match,
+    group_by_runner, parse_runner_output,
+};
 
 /// JSON-line verdict every verifier returns on stdout, per the
 /// verifier-runner contract in `specs/loom-gate.md`. The exit code mirrors
@@ -65,6 +68,8 @@ pub enum DispatchError {
         #[source]
         source: RunnerError,
     },
+    /// runner `{runner}` did not report a verdict for target `{target}`
+    MissingFromBatchOutput { runner: String, target: String },
 }
 
 /// Options shared by every dispatch entry point: the `--files` scope set
@@ -186,6 +191,135 @@ pub fn run_judge(
     }))
 }
 
+/// Dispatch `annotations` through `specs` per the runner-batched
+/// contract in `specs/loom-gate.md` § Runners. Annotations are grouped
+/// by which spec matches their target (first match wins, declaration
+/// order); each group spawns one subprocess and parses per-target
+/// verdicts via the spec's [`BuiltinParser`]. Annotations no spec
+/// matches fall back to per-annotation spawn (the existing
+/// `[check]` / `[system]` semantics).
+///
+/// Results are returned in input order, one per input annotation:
+///
+/// - `Ok(outcome)` — the runner produced a verdict for this target.
+/// - `Err(DispatchError::MissingFromBatchOutput { .. })` — the runner
+///   ran but emitted no row covering this target. Treated as a
+///   dispatch failure (exit-code-2 semantics) at the push gate.
+/// - `Err(DispatchError::Spawn { .. })` / other variants — the runner
+///   could not be spawned at all; every annotation it claimed
+///   shares the same error.
+///
+/// `repo_root` is the workspace root used to resolve per-runner
+/// [`RunnerSpec::cwd`] overrides; an absolute `cwd` is honoured as-is.
+pub fn run_with_runners(
+    annotations: &[Annotation],
+    specs: &[RunnerSpec],
+    options: &DispatchOptions,
+    repo_root: &std::path::Path,
+) -> Vec<Result<DispatchOutcome, DispatchError>> {
+    let (groups, unmatched) = group_by_runner(specs, annotations);
+
+    let mut per_index: Vec<Option<Result<DispatchOutcome, DispatchError>>> =
+        (0..annotations.len()).map(|_| None).collect();
+    let position_of: std::collections::HashMap<*const Annotation, usize> = annotations
+        .iter()
+        .enumerate()
+        .map(|(i, a)| (a as *const Annotation, i))
+        .collect();
+
+    for group in groups {
+        let results = dispatch_group(&group, options, repo_root);
+        for (matched, result) in group.matched.iter().zip(results) {
+            if let Some(&idx) = position_of.get(&(matched.annotation as *const Annotation)) {
+                per_index[idx] = Some(result);
+            }
+        }
+    }
+    for ann in unmatched {
+        if let Some(&idx) = position_of.get(&(ann as *const Annotation)) {
+            per_index[idx] = Some(run_single(ann, options));
+        }
+    }
+    per_index
+        .into_iter()
+        .map(|slot| slot.unwrap_or(Err(DispatchError::EmptyTarget { tier: Tier::Check })))
+        .collect()
+}
+
+fn dispatch_group(
+    group: &RunnerGroup<'_, '_>,
+    options: &DispatchOptions,
+    repo_root: &std::path::Path,
+) -> Vec<Result<DispatchOutcome, DispatchError>> {
+    let command = group.render_command();
+    let cwd = group.spec.cwd.as_ref().map(|c| {
+        if c.is_absolute() {
+            c.clone()
+        } else {
+            repo_root.join(c)
+        }
+    });
+    let output = match spawn_in(&command, options, cwd.as_deref()) {
+        Ok(o) => o,
+        Err(err) => {
+            let message = err.to_string();
+            return group
+                .matched
+                .iter()
+                .map(|_| {
+                    Err(DispatchError::Spawn {
+                        command: command.clone(),
+                        source: std::io::Error::other(message.clone()),
+                    })
+                })
+                .collect();
+        }
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let parsed = parse_runner_output(group.spec.parse, &stdout, &stderr, output.status.success());
+
+    if matches!(group.spec.parse, BuiltinParser::ExitCode) {
+        let pass = output.status.success();
+        let evidence = if pass {
+            stdout.trim().to_string()
+        } else {
+            stderr.trim().to_string()
+        };
+        return group
+            .matched
+            .iter()
+            .map(|matched| {
+                Ok(DispatchOutcome {
+                    annotations: vec![matched.annotation.clone()],
+                    verdict: VerifierVerdict {
+                        pass,
+                        evidence: evidence.clone(),
+                    },
+                })
+            })
+            .collect();
+    }
+
+    group
+        .matched
+        .iter()
+        .map(|matched| match parsed.get(&matched.rendered_target) {
+            Some(verdict) => Ok(DispatchOutcome {
+                annotations: vec![matched.annotation.clone()],
+                verdict: VerifierVerdict {
+                    pass: verdict.pass,
+                    evidence: verdict.evidence.clone(),
+                },
+            }),
+            None => Err(DispatchError::MissingFromBatchOutput {
+                runner: group.spec.name.clone(),
+                target: matched.rendered_target.clone(),
+            }),
+        })
+        .collect()
+}
+
 fn run_per_annotation(
     annotations: &[Annotation],
     tier: Tier,
@@ -262,6 +396,14 @@ fn filter_by_files<'a>(
 }
 
 fn spawn(command: &str, options: &DispatchOptions) -> Result<Output, DispatchError> {
+    spawn_in(command, options, None)
+}
+
+fn spawn_in(
+    command: &str,
+    options: &DispatchOptions,
+    cwd: Option<&std::path::Path>,
+) -> Result<Output, DispatchError> {
     let mut tokens = shlex::split(command)
         .ok_or_else(|| DispatchError::Spawn {
             command: command.to_string(),
@@ -278,6 +420,9 @@ fn spawn(command: &str, options: &DispatchOptions) -> Result<Output, DispatchErr
     cmd.env("LOOM_FILES", encode_files(&options.files));
     if let Some(spec) = &options.spec {
         cmd.env("LOOM_SPEC", spec);
+    }
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
     }
     cmd.output().map_err(|e| DispatchError::Spawn {
         command: command.to_string(),

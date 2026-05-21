@@ -32,13 +32,16 @@ pub use cache::{
 };
 pub use dispatch::{
     DispatchError, DispatchOptions, DispatchOutcome, EmptyScope, TestScope, VerifierVerdict,
-    run_check, run_judge, run_system, run_test,
+    run_check, run_judge, run_system, run_test, run_with_runners,
 };
 pub use integrity::{
     CommandResolver, FsCommandResolver, IntegrityError, IntegrityFinding, RustWorkspaceStubScanner,
     RustWorkspaceTestResolver, StubScanner, TestPathResolver, format_clarify_options,
 };
-pub use runner::{RunnerError, RunnerKind, RunnerTemplate, check_zero_match};
+pub use runner::{
+    BuiltinParser, MatchedAnnotation, ParsedVerdict, RunnerError, RunnerGroup, RunnerKind,
+    RunnerSpec, RunnerTemplate, check_zero_match, group_by_runner, parse_runner_output,
+};
 pub use scope::{CargoMetadataScope, ScopeError};
 
 /// Scaffold error returned by every stub entry point until the
