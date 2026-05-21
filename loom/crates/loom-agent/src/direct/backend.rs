@@ -141,11 +141,15 @@ impl LineParse for DirectParser {
     }
 
     fn encode_prompt(&self, msg: &str) -> Result<String, ProtocolError> {
-        encode_command(&DirectCommand::Prompt { message: msg })
+        encode_command(&DirectCommand::Prompt {
+            message: msg.to_string(),
+        })
     }
 
     fn encode_steer(&self, msg: &str) -> Result<String, ProtocolError> {
-        encode_command(&DirectCommand::Steer { message: msg })
+        encode_command(&DirectCommand::Steer {
+            message: msg.to_string(),
+        })
     }
 
     fn encode_abort(&self) -> Result<Option<String>, ProtocolError> {
@@ -153,23 +157,33 @@ impl LineParse for DirectParser {
     }
 }
 
-fn encode_command(cmd: &DirectCommand<'_>) -> Result<String, ProtocolError> {
+fn encode_command(cmd: &DirectCommand) -> Result<String, ProtocolError> {
     let mut line = serde_json::to_string(cmd)?;
     line.push('\n');
     Ok(line)
 }
 
-#[derive(Serialize)]
+/// JSONL command frame from the host driver to the in-container
+/// `loom-direct-runner`. Mirrored on the runner side via the same enum
+/// (round-trips through `serde_json`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum DirectCommand<'a> {
-    Prompt { message: &'a str },
-    Steer { message: &'a str },
+pub enum DirectCommand {
+    /// Drive one `Conversation::run` cycle against `message`.
+    Prompt { message: String },
+    /// Inject `message` as a steering user turn the runner queues for
+    /// the next iteration.
+    Steer { message: String },
+    /// Cancel the in-flight `Conversation::run` and return to idle.
     Abort,
 }
 
-#[derive(Deserialize)]
+/// JSONL event frame from `loom-direct-runner` to the host driver. The
+/// host-side [`DirectParser`] decodes this and joins it with the per-spawn
+/// envelope on the way out to the workflow's [`AgentEvent`] stream.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum DirectEvent {
+pub enum DirectEvent {
     TextDelta {
         text: String,
     },
@@ -178,7 +192,7 @@ enum DirectEvent {
         id: ToolCallId,
         tool: String,
         params: serde_json::Value,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         parent_tool_call_id: Option<ToolCallId>,
     },
     ToolResult {
@@ -189,7 +203,7 @@ enum DirectEvent {
     TurnEnd,
     SessionComplete {
         exit_code: i32,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         cost_usd: Option<f64>,
     },
     Error {
@@ -198,7 +212,10 @@ enum DirectEvent {
 }
 
 impl DirectEvent {
-    fn into_parsed(self) -> ParsedAgentEvent {
+    /// Lift the wire-level event into the parser-emitted shape the host's
+    /// session layer expects. The session joins the result with its
+    /// per-spawn `EventEnvelope` via `AgentEvent::from_parsed`.
+    pub fn into_parsed(self) -> ParsedAgentEvent {
         match self {
             Self::TextDelta { text } => ParsedAgentEvent::TextDelta { text },
             Self::TextEnd => ParsedAgentEvent::TextEnd,

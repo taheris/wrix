@@ -2521,6 +2521,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "loom-direct-runner"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "displaydoc",
+ "loom-agent",
+ "loom-driver",
+ "loom-events",
+ "loom-llm",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "loom-driver"
 version = "0.1.0"
 dependencies = [

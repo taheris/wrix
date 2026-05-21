@@ -68,6 +68,15 @@ impl Conversation {
         self
     }
 
+    /// Register a pre-boxed tool handler. Same semantics as
+    /// [`Conversation::register`]; used when the handler is already a
+    /// `Box<dyn Tool>` (e.g. tools constructed from a `Vec<Box<dyn
+    /// Tool>>` registry like `loom-direct-runner`'s six-tool set).
+    pub fn register_boxed(mut self, tool: Box<dyn Tool>) -> Self {
+        self.tools.push(tool);
+        self
+    }
+
     /// Cap iterations the loop runs before applying
     /// [`Conversation::on_iteration_exhausted`].
     pub fn max_iterations(mut self, n: u32) -> Self {
@@ -199,6 +208,23 @@ impl Conversation {
     /// this conversation.
     pub fn duplicate_result_enabled(&self) -> bool {
         self.duplicate_result_enabled
+    }
+
+    /// Total number of messages currently in the conversation history.
+    /// Callers snapshot this before [`Conversation::run`] and pass the
+    /// snapshot to [`Conversation::history_since`] afterwards to read
+    /// only the turns the loop appended.
+    pub fn history_len(&self) -> usize {
+        self.history.len()
+    }
+
+    /// Borrow the slice of history messages appended at or after `from`.
+    /// `from` is typically a value returned by [`Conversation::history_len`]
+    /// before [`Conversation::run`] was driven, so the slice captures one
+    /// run's transcript without aliasing earlier turns.
+    pub fn history_since(&self, from: usize) -> &[Message] {
+        let from = from.min(self.history.len());
+        &self.history[from..]
     }
 
     fn build_request(&self, tool_defs: Vec<ToolDef>) -> CompletionRequest {

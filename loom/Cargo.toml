@@ -7,6 +7,7 @@ members = [
     "crates/loom-llm",
     "crates/loom-render",
     "crates/loom-agent",
+    "crates/loom-direct-runner",
     "crates/loom-gate",
     "crates/loom-workflow",
     "crates/loom-templates",
@@ -72,6 +73,7 @@ loom-events = { path = "crates/loom-events" }
 loom-llm = { path = "crates/loom-llm" }
 loom-render = { path = "crates/loom-render" }
 loom-agent = { path = "crates/loom-agent" }
+loom-direct-runner = { path = "crates/loom-direct-runner" }
 loom-gate = { path = "crates/loom-gate" }
 loom-workflow = { path = "crates/loom-workflow" }
 loom-templates = { path = "crates/loom-templates" }

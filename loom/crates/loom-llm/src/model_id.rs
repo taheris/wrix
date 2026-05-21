@@ -51,6 +51,32 @@ impl ModelId {
             ModelId::Other(s) => provider_from_prefix(s),
         }
     }
+
+    /// Parse a model identifier string into a typed [`ModelId`]. Known
+    /// model strings resolve to their named variant; any other input
+    /// falls through to [`ModelId::Other`] so callers can name
+    /// fine-tuned or not-yet-listed models without waiting for a minor
+    /// version bump.
+    ///
+    /// Total: never returns an error — every input string is a valid
+    /// `ModelId`. Provider routing for [`ModelId::Other`] uses the same
+    /// prefix matching as [`ModelId::provider`].
+    #[expect(
+        clippy::should_implement_trait,
+        reason = "spec names ModelId::from_str(...) as the parse surface; the operation is total so a `Result<_, Infallible>` return would force unwrap warts at every call site"
+    )]
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "claude-opus-4-7" | "claude-opus-4-5" => ModelId::ClaudeOpus47,
+            "claude-sonnet-4-6" | "claude-sonnet-4-5" => ModelId::ClaudeSonnet46,
+            "claude-haiku-4-5" => ModelId::ClaudeHaiku45,
+            "gpt-4o" => ModelId::Gpt4o,
+            "gpt-4o-mini" => ModelId::Gpt4oMini,
+            "gemini-2.5-pro" => ModelId::Gemini25Pro,
+            "gemini-2.5-flash" => ModelId::Gemini25Flash,
+            other => ModelId::Other(other.to_string()),
+        }
+    }
 }
 
 fn provider_from_prefix(s: &str) -> Provider {
@@ -85,6 +111,49 @@ mod tests {
         for (model, expected) in cases {
             assert_eq!(model.provider(), expected, "model {model:?}");
         }
+    }
+
+    /// `ModelId::from_str` resolves canonical model identifier strings
+    /// into their typed variant and falls through to `Other` for any
+    /// string outside the known set. Future-dated `claude-sonnet-4-6`
+    /// (config-side) aliases `claude-sonnet-4-5` (provider-side) so
+    /// `agent.model_id` in phase config stays stable across the rename.
+    #[test]
+    fn modelid_from_str_known_and_unknown() {
+        assert_eq!(ModelId::from_str("claude-opus-4-7"), ModelId::ClaudeOpus47);
+        assert_eq!(ModelId::from_str("claude-opus-4-5"), ModelId::ClaudeOpus47);
+        assert_eq!(
+            ModelId::from_str("claude-sonnet-4-6"),
+            ModelId::ClaudeSonnet46
+        );
+        assert_eq!(
+            ModelId::from_str("claude-sonnet-4-5"),
+            ModelId::ClaudeSonnet46
+        );
+        assert_eq!(
+            ModelId::from_str("claude-haiku-4-5"),
+            ModelId::ClaudeHaiku45
+        );
+        assert_eq!(ModelId::from_str("gpt-4o"), ModelId::Gpt4o);
+        assert_eq!(ModelId::from_str("gpt-4o-mini"), ModelId::Gpt4oMini);
+        assert_eq!(ModelId::from_str("gemini-2.5-pro"), ModelId::Gemini25Pro);
+        assert_eq!(
+            ModelId::from_str("gemini-2.5-flash"),
+            ModelId::Gemini25Flash
+        );
+        // Unknown strings round-trip through Other and route via prefix.
+        match ModelId::from_str("claude-future-experimental") {
+            ModelId::Other(s) => assert_eq!(s, "claude-future-experimental"),
+            other => panic!("expected Other, got {other:?}"),
+        }
+        assert_eq!(
+            ModelId::from_str("claude-future-experimental").provider(),
+            Provider::Anthropic
+        );
+        assert_eq!(
+            ModelId::from_str("llama-3-70b").provider(),
+            Provider::Unknown
+        );
     }
 
     /// Spec contract: `ModelId::Other(String)` routes provider via prefix
