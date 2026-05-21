@@ -3,4 +3,4 @@ set -euo pipefail
 # shellcheck source=../lock.sh
 source "$(dirname "$0")/../lock.sh"
 _prek_acquire_lock
-exec prek hook-impl --hook-dir "$(dirname "$0")" --script-version 4 --hook-type=pre-commit -- "$@"
+exec prek --no-progress hook-impl --hook-dir "$(dirname "$0")" --script-version 4 --hook-type=pre-commit -- "$@"
