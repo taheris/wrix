@@ -138,31 +138,28 @@ fn render_under_500ms_on_2000_row_corpus() {
     // territory or starts re-querying inside the render loop.
     let dir = tempdir().unwrap();
     let cache = StatusCache::open(&cache_path(&dir)).unwrap();
-    for i in 0..2000 {
-        let tier = match i % 4 {
-            0 => Tier::Check,
-            1 => Tier::Test,
-            2 => Tier::System,
-            _ => Tier::Judge,
-        };
-        let verdict = match i % 3 {
-            0 => Verdict::Pass,
-            1 => Verdict::Fail,
-            _ => Verdict::Skipped,
-        };
-        cache
-            .upsert(&CacheRow {
-                spec_label: format!("spec-{}", i % 16),
-                criterion_anchor: format!("{i}"),
-                tier,
-                annotation_target: format!("target-{i}"),
-                last_run_ts_ms: i as i64,
-                last_run_commit: "deadbeef".into(),
-                verdict,
-                evidence: "ev".into(),
-            })
-            .unwrap();
-    }
+    let rows: Vec<CacheRow> = (0..2000)
+        .map(|i| CacheRow {
+            spec_label: format!("spec-{}", i % 16),
+            criterion_anchor: format!("{i}"),
+            tier: match i % 4 {
+                0 => Tier::Check,
+                1 => Tier::Test,
+                2 => Tier::System,
+                _ => Tier::Judge,
+            },
+            annotation_target: format!("target-{i}"),
+            last_run_ts_ms: i as i64,
+            last_run_commit: "deadbeef".into(),
+            verdict: match i % 3 {
+                0 => Verdict::Pass,
+                1 => Verdict::Fail,
+                _ => Verdict::Skipped,
+            },
+            evidence: "ev".into(),
+        })
+        .collect();
+    cache.upsert_many(&rows).unwrap();
 
     let parsed = ParsedSpecs::default();
     let started = Instant::now();

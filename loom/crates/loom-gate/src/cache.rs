@@ -159,17 +159,7 @@ impl StatusCache {
     pub fn upsert(&self, row: &CacheRow) -> Result<(), CacheError> {
         let conn = self.lock_conn()?;
         conn.execute(
-            "INSERT INTO gate_criteria(
-                 spec_label, criterion_anchor, tier, annotation_target,
-                 last_run_ts_ms, last_run_commit, verdict, evidence
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-             ON CONFLICT(spec_label, criterion_anchor) DO UPDATE SET
-                 tier = excluded.tier,
-                 annotation_target = excluded.annotation_target,
-                 last_run_ts_ms = excluded.last_run_ts_ms,
-                 last_run_commit = excluded.last_run_commit,
-                 verdict = excluded.verdict,
-                 evidence = excluded.evidence",
+            UPSERT_SQL,
             params![
                 row.spec_label,
                 row.criterion_anchor,
@@ -184,9 +174,54 @@ impl StatusCache {
         Ok(())
     }
 
+    /// Batched form of [`Self::upsert`]: every row lands inside one
+    /// transaction with a single prepared statement, so callers seeding
+    /// many rows pay one fsync instead of N.
+    pub fn upsert_many(&self, rows: &[CacheRow]) -> Result<(), CacheError> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare_cached(UPSERT_SQL)?;
+            for row in rows {
+                exec_upsert(&mut stmt, row)?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     fn lock_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, CacheError> {
         self.conn.lock().map_err(|_| CacheError::Poisoned)
     }
+}
+
+const UPSERT_SQL: &str = "INSERT INTO gate_criteria(
+         spec_label, criterion_anchor, tier, annotation_target,
+         last_run_ts_ms, last_run_commit, verdict, evidence
+     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+     ON CONFLICT(spec_label, criterion_anchor) DO UPDATE SET
+         tier = excluded.tier,
+         annotation_target = excluded.annotation_target,
+         last_run_ts_ms = excluded.last_run_ts_ms,
+         last_run_commit = excluded.last_run_commit,
+         verdict = excluded.verdict,
+         evidence = excluded.evidence";
+
+fn exec_upsert(stmt: &mut rusqlite::CachedStatement<'_>, row: &CacheRow) -> rusqlite::Result<()> {
+    stmt.execute(params![
+        row.spec_label,
+        row.criterion_anchor,
+        row.tier.as_wire(),
+        row.annotation_target,
+        row.last_run_ts_ms,
+        row.last_run_commit,
+        row.verdict.as_wire(),
+        row.evidence,
+    ])?;
+    Ok(())
 }
 
 fn write_schema_version(conn: &Connection, version: &str) -> Result<(), CacheError> {
