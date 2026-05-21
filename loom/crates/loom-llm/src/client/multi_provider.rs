@@ -9,9 +9,11 @@ use std::sync::{Arc, Mutex};
 
 use genai::chat::{
     CacheControl as GenAiCacheControl, ChatMessage, ChatOptions, ChatRequest, ChatResponse,
-    ChatRole, MessageContent, MessageOptions, Usage as GenAiUsage,
+    ChatResponseFormat, ChatRole, JsonSpec, MessageContent, MessageOptions, Usage as GenAiUsage,
 };
 use loom_events::{AgentEvent, DriverKind, EnvelopeBuilder, EventSink, Source};
+use schemars::{JsonSchema, SchemaGenerator};
+use serde::de::DeserializeOwned;
 
 use crate::cache::{CacheControl, CacheTtl};
 use crate::client::{CompletionResponse, LlmClient, LlmError};
@@ -139,14 +141,69 @@ impl LlmClient for Client {
         Ok(response)
     }
 
-    async fn complete_structured<T>(&self, _req: CompletionRequest) -> Result<T, LlmError>
+    async fn complete_structured<T>(&self, req: CompletionRequest) -> Result<T, LlmError>
     where
-        T: serde::de::DeserializeOwned + schemars::JsonSchema + Send,
+        T: DeserializeOwned + JsonSchema + Send,
     {
-        Err(LlmError::Unimplemented {
-            what: "LlmClient::complete_structured",
-        })
+        let model = req.model.clone();
+        let model_name = model_id_to_provider_name(&model);
+        let (chat_req, options) = to_genai_structured_chat_options::<T>(req);
+        let resp = self
+            .inner
+            .exec_chat(&model_name, chat_req, Some(&options))
+            .await
+            .map_err(|err| LlmError::Provider {
+                message: err.to_string(),
+            })?;
+        let completion = from_genai_chat_response(&model, resp);
+        self.emit_usage(&model, &completion.usage);
+        parse_structured_text::<T>(&completion.text)
     }
+}
+
+/// Lower a [`CompletionRequest`] to the genai chat request + options pair
+/// and attach `T`'s JSON schema as the structured-output spec. The same
+/// `JsonSpec` round-trips through every adapter — Anthropic's
+/// `output_config.format = json_schema`, OpenAI's `response_format =
+/// json_schema`, and Gemini's `responseMimeType = "application/json"` +
+/// `responseJsonSchema` — so the provider mechanism is hidden behind one
+/// call shape and only the `ModelId` variant decides routing.
+pub(crate) fn to_genai_structured_chat_options<T: JsonSchema>(
+    req: CompletionRequest,
+) -> (ChatRequest, ChatOptions) {
+    let (chat_req, mut options) = to_genai_chat_request(req);
+    options.response_format = Some(ChatResponseFormat::JsonSpec(JsonSpec::new(
+        json_spec_name::<T>(),
+        json_schema_value::<T>(),
+    )));
+    (chat_req, options)
+}
+
+fn json_schema_value<T: JsonSchema>() -> serde_json::Value {
+    SchemaGenerator::default()
+        .into_root_schema_for::<T>()
+        .to_value()
+}
+
+/// Sanitize `T::schema_name()` for the OpenAI structured-output API,
+/// which only accepts ASCII alphanumerics plus `-` and `_`. The other
+/// adapters ignore the name field, so the same sanitization is safe
+/// across providers.
+fn json_spec_name<T: JsonSchema>() -> String {
+    T::schema_name()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn parse_structured_text<T: DeserializeOwned>(text: &str) -> Result<T, LlmError> {
+    Ok(serde_json::from_str(text)?)
 }
 
 /// Map a typed [`ModelId`] to the underlying crate's model-name string.
@@ -433,21 +490,100 @@ mod tests {
         assert_eq!(completion.usage.cost_cents, 54);
     }
 
-    /// `complete_structured` returns `LlmError::Unimplemented` until
-    /// B.6 wires up the per-provider mechanism. The variant identifies
-    /// the surface so observability can distinguish the scaffold stub
-    /// from a runtime provider failure.
+    /// `complete_structured::<T>` lowers a `CompletionRequest` into a
+    /// genai `ChatOptions` whose `response_format = JsonSpec` carries
+    /// `T`'s JSON schema regardless of which provider the request's
+    /// `ModelId` routes to. The same lowering function is invoked on
+    /// the Anthropic, OpenAI, and Gemini paths, so consumers never see
+    /// the provider mechanism — switching providers is a `ModelId`
+    /// variant change.
     #[test]
-    fn complete_structured_returns_unimplemented() {
-        let client = Client::new();
-        let req = CompletionRequest::new(ModelId::ClaudeSonnet46).user("anything");
-        let result: Result<serde_json::Value, _> =
-            tokio_test::block_on(client.complete_structured(req));
-        match result {
-            Err(LlmError::Unimplemented { what }) => {
-                assert_eq!(what, "LlmClient::complete_structured");
-            }
-            other => panic!("expected Unimplemented, got {other:?}"),
+    fn complete_structured_attaches_json_schema_for_every_provider() {
+        #[derive(serde::Deserialize, schemars::JsonSchema)]
+        #[expect(
+            dead_code,
+            reason = "fields are referenced through schemars-derived schema, not by Rust code"
+        )]
+        struct AnswerShape {
+            title: String,
+            count: u32,
+        }
+
+        let models = [
+            ModelId::ClaudeSonnet46,
+            ModelId::Gpt4o,
+            ModelId::Gemini25Pro,
+        ];
+        for model in models {
+            let req = CompletionRequest::new(model.clone()).user("structured please");
+            let (_chat_req, options) = to_genai_structured_chat_options::<AnswerShape>(req);
+            let format = options
+                .response_format
+                .as_ref()
+                .expect("response_format set for structured call");
+            let ChatResponseFormat::JsonSpec(spec) = format else {
+                panic!("expected JsonSpec response format for {model:?}, got {format:?}");
+            };
+            let props = spec
+                .schema
+                .get("properties")
+                .and_then(|v| v.as_object())
+                .expect("schema carries object properties");
+            assert!(props.contains_key("title"), "schema names `title` field");
+            assert!(props.contains_key("count"), "schema names `count` field");
+        }
+    }
+
+    /// `parse_structured_text::<T>` deserializes the same canonical JSON
+    /// payload into the same `T` regardless of which provider produced
+    /// it. The downstream `complete_structured` code path treats all
+    /// three adapters identically — only the `ModelId`-driven route
+    /// through the underlying crate differs, so the "same call shape,
+    /// same returned `T`" promise holds across Anthropic, OpenAI, and
+    /// Gemini.
+    #[test]
+    fn complete_structured_returns_typed_t_across_providers() {
+        #[derive(Debug, PartialEq, serde::Deserialize, schemars::JsonSchema)]
+        struct AnswerShape {
+            title: String,
+            count: u32,
+        }
+
+        let json_text = r#"{"title":"forty-two","count":42}"#;
+        let providers = [
+            (ModelId::ClaudeSonnet46, AdapterKind::Anthropic),
+            (ModelId::Gpt4o, AdapterKind::OpenAI),
+            (ModelId::Gemini25Pro, AdapterKind::Gemini),
+        ];
+        let expected = AnswerShape {
+            title: "forty-two".to_string(),
+            count: 42,
+        };
+
+        for (model_id, adapter_kind) in providers {
+            let resp = make_text_response(
+                adapter_kind,
+                &model_id_to_provider_name(&model_id),
+                json_text,
+            );
+            let completion = from_genai_chat_response(&model_id, resp);
+            let value: AnswerShape =
+                parse_structured_text(&completion.text).expect("structured payload parses");
+            assert_eq!(value, expected, "same T across providers: {adapter_kind:?}",);
+        }
+    }
+
+    fn make_text_response(adapter: AdapterKind, model_name: &str, text: &str) -> ChatResponse {
+        let model = ModelIden::new(adapter, model_name.to_string());
+        ChatResponse {
+            content: MessageContent::from_text(text),
+            reasoning_content: None,
+            model_iden: model.clone(),
+            provider_model_iden: model,
+            stop_reason: None,
+            usage: GenAiUsage::default(),
+            captured_raw_body: None,
+            response_id: None,
         }
     }
 
