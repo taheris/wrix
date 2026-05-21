@@ -1,7 +1,7 @@
 //! `loom review` template: the LLM-judged rubric prompt.
 
 use askama::Template;
-use loom_driver::identifier::{MoleculeId, SpecLabel};
+use loom_events::identifier::{MoleculeId, SpecLabel};
 
 /// One file body included in the review prompt — either a `[verify]` test
 /// script the gate just ran, or a `[judge]` rubric the LLM must score

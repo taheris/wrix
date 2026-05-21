@@ -1,7 +1,7 @@
 //! `loom msg` template: drafter session for resolving outstanding clarify beads.
 
 use askama::Template;
-use loom_driver::identifier::{BeadId, SpecLabel};
+use loom_events::identifier::{BeadId, SpecLabel};
 
 /// Context for `loom msg` rendering the cross-spec clarify queue.
 #[derive(Template)]

@@ -1,7 +1,7 @@
 //! `loom run` template: the per-bead implementation prompt with retry context.
 
 use askama::Template;
-use loom_driver::identifier::{BeadId, MoleculeId, SpecLabel};
+use loom_events::identifier::{BeadId, MoleculeId, SpecLabel};
 
 pub use crate::previous_failure::{
     DriverNoticeCause, PREVIOUS_FAILURE_MAX_LEN, PreviousFailure, ReviewConcernKind,

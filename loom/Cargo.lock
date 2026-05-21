@@ -1800,7 +1800,7 @@ dependencies = [
  "askama",
  "displaydoc",
  "insta",
- "loom-driver",
+ "loom-events",
  "serde",
  "thiserror",
 ]

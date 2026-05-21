@@ -9,7 +9,7 @@
 //! `insta::assert_snapshot!`'s default file naming.
 
 use askama::Template;
-use loom_driver::identifier::{BeadId, MoleculeId, SpecLabel};
+use loom_events::identifier::{BeadId, MoleculeId, SpecLabel};
 use loom_templates::msg::{ClarifyBead, ClarifyOption, MsgContext};
 use loom_templates::plan::{PlanNewContext, PlanUpdateContext};
 use loom_templates::review::{ReviewContext, ReviewSource};

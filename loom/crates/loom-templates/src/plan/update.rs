@@ -1,5 +1,5 @@
 use askama::Template;
-use loom_driver::identifier::SpecLabel;
+use loom_events::identifier::SpecLabel;
 
 /// Context for `loom plan -u <label>` (update-spec interview).
 #[derive(Template)]
