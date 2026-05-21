@@ -65,3 +65,52 @@ fn provider_from_prefix(s: &str) -> Provider {
         Provider::Unknown
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Known variants route to their owning provider.
+    #[test]
+    fn modelid_known_variants_route_to_expected_provider() {
+        let cases = [
+            (ModelId::ClaudeOpus47, Provider::Anthropic),
+            (ModelId::ClaudeSonnet46, Provider::Anthropic),
+            (ModelId::ClaudeHaiku45, Provider::Anthropic),
+            (ModelId::Gpt4o, Provider::OpenAi),
+            (ModelId::Gpt4oMini, Provider::OpenAi),
+            (ModelId::Gemini25Pro, Provider::Google),
+            (ModelId::Gemini25Flash, Provider::Google),
+        ];
+        for (model, expected) in cases {
+            assert_eq!(model.provider(), expected, "model {model:?}");
+        }
+    }
+
+    /// Spec contract: `ModelId::Other(String)` routes provider via prefix
+    /// match on the carried string — `claude-*` -> Anthropic, `gpt-*` /
+    /// `o1-*` / `o3-*` -> OpenAi, `gemini-*` -> Google. Strings that
+    /// don't match a known prefix fall through to `Provider::Unknown` so
+    /// concrete `LlmClient` impls surface a typed error rather than
+    /// guessing.
+    #[test]
+    fn modelid_other_fallback_routes_provider_by_prefix() {
+        let cases = [
+            ("claude-3-7-sonnet-future", Provider::Anthropic),
+            ("Claude-Opus-Custom", Provider::Anthropic),
+            ("gpt-5-preview", Provider::OpenAi),
+            ("GPT-5", Provider::OpenAi),
+            ("o1-mini", Provider::OpenAi),
+            ("o3-pro", Provider::OpenAi),
+            ("gemini-3-ultra", Provider::Google),
+            ("Gemini-Flash-Lite", Provider::Google),
+            ("llama-3-70b", Provider::Unknown),
+            ("mistral-large", Provider::Unknown),
+            ("", Provider::Unknown),
+        ];
+        for (carried, expected) in cases {
+            let routed = ModelId::Other(carried.to_string()).provider();
+            assert_eq!(routed, expected, "prefix routing for {carried:?}");
+        }
+    }
+}

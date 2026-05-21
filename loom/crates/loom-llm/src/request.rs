@@ -35,6 +35,14 @@ pub enum Role {
 /// construction — `CompletionRequest::new(model)` is the only entry
 /// point, so the type system forbids constructing a request without
 /// naming the model.
+///
+/// Omitting the `ModelId` is a compile error:
+///
+/// ```compile_fail
+/// use loom_llm::CompletionRequest;
+/// // No `ModelId` argument -> does not compile.
+/// let _req = CompletionRequest::new();
+/// ```
 #[derive(Debug, Clone)]
 pub struct CompletionRequest {
     /// Model the underlying provider should route to.
@@ -109,5 +117,56 @@ impl CompletionRequest {
     pub fn max_tokens(mut self, n: u32) -> Self {
         self.max_tokens = Some(n);
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cache::CacheTtl;
+
+    /// `CompletionRequest::new` requires a `ModelId` positionally — the
+    /// only public constructor takes one, the `model` field is
+    /// non-optional, and there is no `Default` impl. The compile-fail
+    /// doctest on the type proves the negative path; this runtime test
+    /// pins the positive path (constructed value carries the chosen
+    /// model and is reachable from the builder chain).
+    #[test]
+    fn completion_request_requires_model_at_construction() {
+        let req = CompletionRequest::new(ModelId::ClaudeSonnet46)
+            .system("prefix")
+            .user("question")
+            .user_cached("doc", CacheControl::Ephemeral(CacheTtl::Hours1))
+            .max_tokens(2048);
+        assert_eq!(req.model, ModelId::ClaudeSonnet46);
+        assert_eq!(req.system.as_deref(), Some("prefix"));
+        assert_eq!(req.max_tokens, Some(2048));
+        assert_eq!(req.messages.len(), 2);
+        assert_eq!(req.messages[0].role, Role::User);
+        assert_eq!(req.messages[0].content, "question");
+        assert!(matches!(req.messages[0].cache, CacheControl::None));
+        assert_eq!(req.messages[1].role, Role::User);
+        assert!(matches!(
+            req.messages[1].cache,
+            CacheControl::Ephemeral(CacheTtl::Hours1),
+        ));
+    }
+
+    /// The builder also chains assistant turns (cached and uncached) —
+    /// the surface is symmetric across roles so multi-turn replays can
+    /// be reconstructed without dropping into raw `Message` literals.
+    #[test]
+    fn completion_request_builder_chains_all_roles() {
+        let req = CompletionRequest::new(ModelId::Other("gpt-5-preview".to_string()))
+            .assistant("previous reply")
+            .assistant_cached("cached reply", CacheControl::Ephemeral(CacheTtl::Minutes5));
+        assert_eq!(req.messages.len(), 2);
+        assert_eq!(req.messages[0].role, Role::Assistant);
+        assert!(matches!(req.messages[0].cache, CacheControl::None));
+        assert_eq!(req.messages[1].role, Role::Assistant);
+        assert!(matches!(
+            req.messages[1].cache,
+            CacheControl::Ephemeral(CacheTtl::Minutes5),
+        ));
     }
 }
