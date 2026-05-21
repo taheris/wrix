@@ -4,6 +4,7 @@ members = [
     "crates/loom",
     "crates/loom-driver",
     "crates/loom-events",
+    "crates/loom-llm",
     "crates/loom-render",
     "crates/loom-agent",
     "crates/loom-gate",
@@ -26,12 +27,14 @@ name = "loom"
 [workspace.dependencies]
 anyhow = "1"
 askama = "0.16"
+blake3 = "1"
 clap = { version = "4", features = ["derive"] }
 colored_json = "5"
 crossterm = "0.28"
 displaydoc = "0.2"
 fd-lock = "4"
 futures-core = "0.3"
+genai = "0.6.0-beta.20"
 imara-diff = "0.1"
 gix = { version = "0.83", default-features = false, features = [
     "status",
@@ -47,6 +50,7 @@ proptest = "1"
 pulldown-cmark = { version = "0.13", default-features = false }
 regex = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
+schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 shlex = "1"
@@ -63,6 +67,7 @@ walkdir = "2"
 # Internal crates
 loom-driver = { path = "crates/loom-driver" }
 loom-events = { path = "crates/loom-events" }
+loom-llm = { path = "crates/loom-llm" }
 loom-render = { path = "crates/loom-render" }
 loom-agent = { path = "crates/loom-agent" }
 loom-gate = { path = "crates/loom-gate" }
