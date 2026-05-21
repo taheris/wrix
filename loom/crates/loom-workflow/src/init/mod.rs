@@ -16,7 +16,9 @@ mod error;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use loom_driver::bd::{BdClient, CommandRunner, ListOpts};
+use tracing::info;
+
+use loom_driver::bd::{BdClient, CommandRunner, ListOpts, UpdateOpts};
 use loom_driver::config::LoomConfig;
 use loom_driver::identifier::MoleculeId;
 use loom_driver::lock::LockManager;
@@ -109,9 +111,16 @@ pub fn run(
 /// Each returned bead's `spec:<label>` label resolves the [`SpecLabel`] for
 /// the rebuilt row; beads without a `spec:` label produce
 /// [`InitError::MissingSpecLabel`]. For each active bead, `bd show <id>
-/// --json` is read for the `loom.base_commit` metadata key (set
-/// unconditionally by `loom plan`); a missing or non-string value produces
-/// [`InitError::MoleculeMissingBaseCommit`].
+/// --json` is read for the `loom.base_commit` metadata key.
+///
+/// `loom plan` sets the key unconditionally on every molecule it creates.
+/// Beads created via `bd create` (out-of-band) may inherit `loom.base_commit`
+/// from their parent: if the bead lacks the metadata, the parent (via
+/// `bd show <parent> --json`) is consulted; a present value is written back
+/// to the child via `bd update --set-metadata` and surfaced as the child's
+/// base_commit. Beads with neither own metadata nor an inheritable parent
+/// produce [`InitError::MoleculeMissingBaseCommit`], whose `Display` includes
+/// the `bd update` fix command.
 pub async fn fetch_active_molecules<R: CommandRunner>(
     bd: &BdClient<R>,
 ) -> Result<Vec<ActiveMolecule>, InitError> {
@@ -132,14 +141,7 @@ pub async fn fetch_active_molecules<R: CommandRunner>(
                 id: bead.id.to_string(),
             })?;
         let detail = bd.show(&bead.id).await?;
-        let base_commit = detail
-            .metadata
-            .get("loom.base_commit")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| InitError::MoleculeMissingBaseCommit {
-                id: bead.id.to_string(),
-            })?
-            .to_owned();
+        let base_commit = resolve_base_commit(bd, &detail).await?;
         out.push(ActiveMolecule {
             id: MoleculeId::new(bead.id.as_str()),
             spec_label,
@@ -147,6 +149,55 @@ pub async fn fetch_active_molecules<R: CommandRunner>(
         });
     }
     Ok(out)
+}
+
+/// Read `loom.base_commit` from `detail.metadata`, or inherit from parent.
+///
+/// When the child lacks the metadata but its parent carries it, write the
+/// value back to the child via `bd update --set-metadata` so subsequent
+/// reads are self-sufficient, then log the inheritance.
+async fn resolve_base_commit<R: CommandRunner>(
+    bd: &BdClient<R>,
+    detail: &loom_driver::bd::Bead,
+) -> Result<String, InitError> {
+    if let Some(v) = detail
+        .metadata
+        .get("loom.base_commit")
+        .and_then(serde_json::Value::as_str)
+    {
+        return Ok(v.to_owned());
+    }
+    let parent_id = detail
+        .parent
+        .as_ref()
+        .ok_or_else(|| InitError::MoleculeMissingBaseCommit {
+            id: detail.id.to_string(),
+        })?;
+    let parent = bd.show(parent_id).await?;
+    let inherited = parent
+        .metadata
+        .get("loom.base_commit")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| InitError::MoleculeMissingBaseCommitNoParentMetadata {
+            id: detail.id.to_string(),
+            parent: parent_id.to_string(),
+        })?
+        .to_owned();
+    bd.update(
+        &detail.id,
+        UpdateOpts {
+            set_metadata: vec![("loom.base_commit".to_string(), inherited.clone())],
+            ..UpdateOpts::default()
+        },
+    )
+    .await?;
+    info!(
+        bead_id = %detail.id,
+        parent_id = %parent_id,
+        base_commit = %inherited,
+        "loom init: inherited `loom.base_commit` from parent molecule",
+    );
+    Ok(inherited)
 }
 
 #[cfg(test)]
@@ -420,9 +471,154 @@ mod tests {
             .await
             .err()
             .ok_or_else(|| anyhow!("expected MoleculeMissingBaseCommit"))?;
+        let msg = err.to_string();
+        assert!(
+            msg.contains("bd update wx-mol.2 --set-metadata loom.base_commit="),
+            "error must surface the fix command: {msg}",
+        );
         match err {
             InitError::MoleculeMissingBaseCommit { id } => assert_eq!(id, "wx-mol.2"),
             other => return Err(anyhow!("expected MoleculeMissingBaseCommit, got {other:?}")),
+        }
+        Ok(())
+    }
+
+    /// Spec contract `[test]` annotation
+    /// (`specs/loom-harness.md` § Success Criteria · State DB):
+    /// A `loom:active` bead created via `bd create --parent=<epic>` without
+    /// its own `loom.base_commit` metadata inherits the value from the
+    /// parent epic. `fetch_active_molecules` writes the inherited value
+    /// back via `bd update --set-metadata` so subsequent reads are
+    /// self-sufficient.
+    #[tokio::test]
+    async fn rebuild_inherits_base_commit_from_parent_when_missing() -> Result<()> {
+        let list_json = br#"[
+            {
+                "id": "wx-child.1",
+                "title": "follow-up",
+                "status": "open",
+                "priority": 2,
+                "issue_type": "bug",
+                "labels": ["spec:loom-harness", "loom:active"]
+            }
+        ]"#;
+        let child_show = br#"[
+            {
+                "id": "wx-child.1",
+                "title": "follow-up",
+                "status": "open",
+                "priority": 2,
+                "issue_type": "bug",
+                "labels": ["spec:loom-harness", "loom:active"],
+                "parent": "wx-epic",
+                "metadata": {}
+            }
+        ]"#;
+        let parent_show = br#"[
+            {
+                "id": "wx-epic",
+                "title": "loom-harness: pending decomposition",
+                "status": "open",
+                "priority": 2,
+                "issue_type": "epic",
+                "labels": ["spec:loom-harness", "loom:active"],
+                "metadata": {"loom.base_commit": "40d21b79"}
+            }
+        ]"#;
+        let runner = CapturingRunner::new([
+            ok(list_json),
+            ok(child_show),
+            ok(parent_show),
+            ok(b""), // bd update
+        ]);
+        let handle = runner.clone();
+        let client = BdClient::with_runner(runner);
+        let molecules = fetch_active_molecules(&client).await?;
+
+        assert_eq!(molecules.len(), 1);
+        assert_eq!(molecules[0].id.as_str(), "wx-child.1");
+        assert_eq!(molecules[0].base_commit.as_deref(), Some("40d21b79"));
+
+        let calls = handle.calls();
+        assert_eq!(
+            calls.len(),
+            4,
+            "expected list + show(child) + show(parent) + update(child) calls: {calls:?}",
+        );
+        assert_eq!(calls[1][0], "show");
+        assert_eq!(calls[1][1], "wx-child.1");
+        assert_eq!(calls[2][0], "show");
+        assert_eq!(calls[2][1], "wx-epic");
+        assert_eq!(calls[3][0], "update");
+        assert_eq!(calls[3][1], "wx-child.1");
+        assert!(
+            calls[3].contains(&"--set-metadata".to_string()),
+            "inherited value must be persisted back to the child: {:?}",
+            calls[3],
+        );
+        assert!(
+            calls[3].contains(&"loom.base_commit=40d21b79".to_string()),
+            "inherited value must round-trip as the set-metadata pair: {:?}",
+            calls[3],
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn rebuild_errors_when_parent_also_lacks_base_commit_metadata() -> Result<()> {
+        let list_json = br#"[
+            {
+                "id": "wx-child.2",
+                "title": "follow-up",
+                "status": "open",
+                "priority": 2,
+                "issue_type": "bug",
+                "labels": ["spec:loom-harness", "loom:active"]
+            }
+        ]"#;
+        let child_show = br#"[
+            {
+                "id": "wx-child.2",
+                "title": "follow-up",
+                "status": "open",
+                "priority": 2,
+                "issue_type": "bug",
+                "labels": ["spec:loom-harness", "loom:active"],
+                "parent": "wx-epic2",
+                "metadata": {}
+            }
+        ]"#;
+        let parent_show = br#"[
+            {
+                "id": "wx-epic2",
+                "title": "loom-harness: pending decomposition",
+                "status": "open",
+                "priority": 2,
+                "issue_type": "epic",
+                "labels": ["spec:loom-harness", "loom:active"]
+            }
+        ]"#;
+        let runner = CapturingRunner::new([ok(list_json), ok(child_show), ok(parent_show)]);
+        let client = BdClient::with_runner(runner);
+        let err = fetch_active_molecules(&client)
+            .await
+            .err()
+            .ok_or_else(|| anyhow!("expected MoleculeMissingBaseCommitNoParentMetadata"))?;
+        let msg = err.to_string();
+        assert!(
+            msg.contains("bd update wx-child.2 --set-metadata loom.base_commit="),
+            "error must surface the fix command: {msg}",
+        );
+        match err {
+            InitError::MoleculeMissingBaseCommitNoParentMetadata { id, parent } => {
+                assert_eq!(id, "wx-child.2");
+                assert_eq!(parent, "wx-epic2");
+            }
+            other => {
+                return Err(anyhow!(
+                    "expected MoleculeMissingBaseCommitNoParentMetadata, got {other:?}"
+                ));
+            }
         }
         Ok(())
     }

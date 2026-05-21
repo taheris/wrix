@@ -1100,8 +1100,11 @@ repopulates from three sources:
    (typically 0-3). For each, `bd show <id> --json` reads the epic's
    `loom.base_commit` metadata and produces one `molecules` row with
    `base_commit` populated from that metadata. **Empty `base_commit`
-   on rebuild is a bug** — the epic's metadata is the source of truth
-   and is set unconditionally by `loom plan` at molecule creation.
+   on rebuild is a bug** — the metadata is the source of truth and is
+   set unconditionally by `loom plan` at molecule creation; beads
+   filed out-of-band via `bd create` inherit the value from their
+   parent on first read (see *Out-of-band `loom:active` beads inherit
+   `loom.base_commit` from their parent* below).
 3. Each spec markdown is parsed for a canonical `## Companions` section
    (see *Companion declaration in specs* below); each listed path becomes
    one `companions` row. Specs without the section contribute zero
@@ -1176,6 +1179,34 @@ loom.base_commit=<HEAD>`) so subsequent `loom todo` runs against the
 same molecule diff only against new content. The state-DB
 `molecules.base_commit` cache is updated in the same transaction as
 the notes-consume step.
+
+**Out-of-band `loom:active` beads inherit `loom.base_commit` from
+their parent.** Beads created via `bd create` (outside `loom plan`)
+with the `loom:active` label may legitimately ship without a
+`loom.base_commit` of their own — typical when the user files a
+follow-up bug parented to an existing molecule's epic. The
+precondition is still **required** for every `loom:active` row, but
+`fetch_active_molecules` (the `loom init --rebuild` / `loom run` init
+entry point) self-heals as follows:
+
+1. Read the bead's own `loom.base_commit` metadata. If present, use
+   it (no parent lookup).
+2. Otherwise, follow the bead's `parent` to its parent bead's
+   `loom.base_commit`. On a hit, write the value back to the child
+   via `bd update <id> --set-metadata loom.base_commit=<sha>` so
+   subsequent reads are self-sufficient and the inheritance is
+   logged at `info` level.
+3. If neither the bead nor its parent carries the metadata (or the
+   bead is unparented), `fetch_active_molecules` returns
+   `InitError::MoleculeMissingBaseCommit` whose `Display` text names
+   the exact `bd update` fix command. `loom run` exits with the
+   message printed verbatim.
+
+This rule applies regardless of which `spec:<label>` the bead
+carries; the inheritance walks the bond, not the spec graph. The
+single-step lookup (child → parent, no further chain) is sufficient
+because Beads enforces at most one parent per bead and `loom plan`
+sets the metadata unconditionally on every molecule it creates.
 
 **Cycle close.** When the push gate fires clean, the molecule is
 closed and `loom:active` is removed. The next `loom plan` for the
@@ -2026,6 +2057,19 @@ two agent-loop observers.
       `bd show <id> --json` reading `loom.base_commit` metadata;
       no active molecule with empty `base_commit` is produced
   [test](rebuild_reads_base_commit_from_bead_metadata)
+- `fetch_active_molecules` inherits `loom.base_commit` from a
+      bead's parent when the bead is missing the metadata of its
+      own, writes the inherited value back via
+      `bd update --set-metadata`, and surfaces the inherited value
+      to the rebuilt row
+  [test](rebuild_inherits_base_commit_from_parent_when_missing)
+- A `loom:active` bead with neither own `loom.base_commit` nor a
+      parent carrying it fails loudly with
+      `InitError::MoleculeMissingBaseCommit`, and the error's
+      `Display` text names the exact
+      `bd update <id> --set-metadata loom.base_commit=<sha>`
+      fix command
+  [test](rebuild_errors_when_active_molecule_lacks_base_commit_metadata)
 - `loom todo` advances `loom.base_commit` on the molecule's epic
       AND the local `molecules.base_commit` cache only when the
       session emitted `LOOM_COMPLETE` or `LOOM_NOOP` **and**

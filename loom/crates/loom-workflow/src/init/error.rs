@@ -37,6 +37,9 @@ pub enum InitError {
     /// active molecule {id} carries no `spec:<label>` label
     MissingSpecLabel { id: String },
 
-    /// active molecule {id} carries no `loom.base_commit` metadata
+    /// active molecule {id} has no `loom.base_commit` metadata and no parent to inherit from — set it with: bd update {id} --set-metadata loom.base_commit=<sha>
     MoleculeMissingBaseCommit { id: String },
+
+    /// active molecule {id} has no `loom.base_commit` metadata and its parent {parent} also lacks it — set it with: bd update {id} --set-metadata loom.base_commit=<sha>
+    MoleculeMissingBaseCommitNoParentMetadata { id: String, parent: String },
 }
