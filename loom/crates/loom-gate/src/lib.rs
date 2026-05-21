@@ -21,6 +21,7 @@ use thiserror::Error;
 pub mod annotation;
 pub mod cache;
 pub mod dispatch;
+pub mod inputs;
 pub mod integrity;
 pub mod runner;
 pub mod scope;
@@ -31,9 +32,10 @@ pub use cache::{
     StaleRun, StatusCache, TierSummary, Verdict, render_from_rows, render_report, row_for,
 };
 pub use dispatch::{
-    DispatchError, DispatchOptions, DispatchOutcome, EmptyScope, TestScope, VerifierVerdict,
-    run_check, run_judge, run_system, run_test, run_with_runners,
+    DispatchError, DispatchOptions, DispatchOutcome, EmptyScope, TestScope, TierCwds,
+    VerifierVerdict, run_check, run_judge, run_system, run_test, run_with_runners,
 };
+pub use inputs::{InputResolver, InputsError, VerifierInputs};
 pub use integrity::{
     CommandResolver, FsCommandResolver, IntegrityError, IntegrityFinding, RustWorkspaceStubScanner,
     RustWorkspaceTestResolver, StubScanner, TestPathResolver, format_clarify_options,

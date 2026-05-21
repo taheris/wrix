@@ -21,7 +21,7 @@
 //! loudly instead of passing on an empty selection.
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use displaydoc::Display;
@@ -81,6 +81,33 @@ pub enum DispatchError {
 pub struct DispatchOptions {
     pub files: Vec<PathBuf>,
     pub spec: Option<String>,
+}
+
+/// Per-tier default working directories used when neither the matched
+/// runner's `cwd` field nor an annotation's explicit override applies.
+/// The dispatcher resolves the per-spawn cwd by walking
+/// matched-runner > tier-default > repo-root in that order; this
+/// struct carries the middle source. Repo-relative paths in this
+/// struct are joined to the dispatcher's `repo_root` parameter at
+/// spawn time.
+#[derive(Debug, Default, Clone)]
+pub struct TierCwds {
+    pub check: Option<PathBuf>,
+    pub test: Option<PathBuf>,
+    pub system: Option<PathBuf>,
+    pub judge: Option<PathBuf>,
+}
+
+impl TierCwds {
+    /// Look up the default cwd configured for `tier`, if any.
+    pub fn for_tier(&self, tier: Tier) -> Option<&Path> {
+        match tier {
+            Tier::Check => self.check.as_deref(),
+            Tier::Test => self.test.as_deref(),
+            Tier::System => self.system.as_deref(),
+            Tier::Judge => self.judge.as_deref(),
+        }
+    }
 }
 
 /// Result of dispatching one verifier — either a single annotation
@@ -160,7 +187,7 @@ pub fn run_test(
     }
     let targets: Vec<&str> = filtered.iter().map(|a| a.target.as_str()).collect();
     let command = template.render(&targets);
-    let verdict = run_with_fallback(&command, options, true)?;
+    let verdict = run_with_fallback(&command, options, true, None)?;
     Ok(Some(DispatchOutcome {
         annotations: filtered.into_iter().cloned().collect(),
         verdict,
@@ -184,7 +211,7 @@ pub fn run_judge(
     }
     let targets: Vec<&str> = judges.iter().map(|a| a.target.as_str()).collect();
     let command = template.render(&targets);
-    let verdict = run_with_fallback(&command, options, false)?;
+    let verdict = run_with_fallback(&command, options, false, None)?;
     Ok(Some(DispatchOutcome {
         annotations: judges.into_iter().cloned().collect(),
         verdict,
@@ -211,11 +238,15 @@ pub fn run_judge(
 ///
 /// `repo_root` is the workspace root used to resolve per-runner
 /// [`RunnerSpec::cwd`] overrides; an absolute `cwd` is honoured as-is.
+/// `tier_cwds` carries the `[runner.<tier>] cwd = "..."` defaults; per
+/// `specs/loom-gate.md` § Runners the per-spawn cwd resolves as
+/// matched-runner > tier-default > repo-root.
 pub fn run_with_runners(
     annotations: &[Annotation],
     specs: &[RunnerSpec],
     options: &DispatchOptions,
-    repo_root: &std::path::Path,
+    repo_root: &Path,
+    tier_cwds: &TierCwds,
 ) -> Vec<Result<DispatchOutcome, DispatchError>> {
     let (groups, unmatched) = group_by_runner(specs, annotations);
 
@@ -228,7 +259,7 @@ pub fn run_with_runners(
         .collect();
 
     for group in groups {
-        let results = dispatch_group(&group, options, repo_root);
+        let results = dispatch_group(&group, options, repo_root, tier_cwds);
         for (matched, result) in group.matched.iter().zip(results) {
             if let Some(&idx) = position_of.get(&(matched.annotation as *const Annotation)) {
                 per_index[idx] = Some(result);
@@ -237,7 +268,8 @@ pub fn run_with_runners(
     }
     for ann in unmatched {
         if let Some(&idx) = position_of.get(&(ann as *const Annotation)) {
-            per_index[idx] = Some(run_single(ann, options));
+            let cwd = resolve_cwd(None, tier_cwds.for_tier(ann.tier), repo_root);
+            per_index[idx] = Some(run_single_in(ann, options, cwd.as_deref()));
         }
     }
     per_index
@@ -246,19 +278,36 @@ pub fn run_with_runners(
         .collect()
 }
 
+/// Compute the effective working directory for one spawn per the
+/// matched-runner > tier-default > repo-root chain in
+/// `specs/loom-gate.md` § Runners. Repo-relative paths are joined to
+/// `repo_root`; absolute paths round-trip unchanged.
+fn resolve_cwd(
+    runner_cwd: Option<&Path>,
+    tier_cwd: Option<&Path>,
+    repo_root: &Path,
+) -> Option<PathBuf> {
+    let chosen = runner_cwd.or(tier_cwd);
+    match chosen {
+        Some(p) if p.is_absolute() => Some(p.to_path_buf()),
+        Some(p) => Some(repo_root.join(p)),
+        None => Some(repo_root.to_path_buf()),
+    }
+}
+
 fn dispatch_group(
     group: &RunnerGroup<'_, '_>,
     options: &DispatchOptions,
-    repo_root: &std::path::Path,
+    repo_root: &Path,
+    tier_cwds: &TierCwds,
 ) -> Vec<Result<DispatchOutcome, DispatchError>> {
     let command = group.render_command();
-    let cwd = group.spec.cwd.as_ref().map(|c| {
-        if c.is_absolute() {
-            c.clone()
-        } else {
-            repo_root.join(c)
-        }
-    });
+    let tier_default = group
+        .matched
+        .first()
+        .map(|m| m.annotation.tier)
+        .and_then(|t| tier_cwds.for_tier(t));
+    let cwd = resolve_cwd(group.spec.cwd.as_deref(), tier_default, repo_root);
     let output = match spawn_in(&command, options, cwd.as_deref()) {
         Ok(o) => o,
         Err(err) => {
@@ -336,13 +385,21 @@ fn run_single(
     annotation: &Annotation,
     options: &DispatchOptions,
 ) -> Result<DispatchOutcome, DispatchError> {
+    run_single_in(annotation, options, None)
+}
+
+fn run_single_in(
+    annotation: &Annotation,
+    options: &DispatchOptions,
+    cwd: Option<&Path>,
+) -> Result<DispatchOutcome, DispatchError> {
     let command = annotation.target.trim();
     if command.is_empty() {
         return Err(DispatchError::EmptyTarget {
             tier: annotation.tier,
         });
     }
-    let verdict = run_with_fallback(command, options, false)?;
+    let verdict = run_with_fallback(command, options, false, cwd)?;
     Ok(DispatchOutcome {
         annotations: vec![annotation.clone()],
         verdict,
@@ -353,8 +410,9 @@ fn run_with_fallback(
     command: &str,
     options: &DispatchOptions,
     sniff_zero_match: bool,
+    cwd: Option<&Path>,
 ) -> Result<VerifierVerdict, DispatchError> {
-    let output = spawn(command, options)?;
+    let output = spawn_in(command, options, cwd)?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     if sniff_zero_match {
@@ -393,10 +451,6 @@ fn filter_by_files<'a>(
                 .any(|path| file_set.contains(path))
         })
         .collect()
-}
-
-fn spawn(command: &str, options: &DispatchOptions) -> Result<Output, DispatchError> {
-    spawn_in(command, options, None)
 }
 
 fn spawn_in(

@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 
 use loom_gate::annotation::{Annotation, Tier};
 use loom_gate::dispatch::{
-    DispatchError, DispatchOptions, EmptyScope, TestScope, run_check, run_judge, run_system,
-    run_test, run_with_runners,
+    DispatchError, DispatchOptions, EmptyScope, TestScope, TierCwds, run_check, run_judge,
+    run_system, run_test, run_with_runners,
 };
 use loom_gate::runner::{BuiltinParser, RunnerSpec, RunnerTemplate};
 use tempfile::TempDir;
@@ -442,7 +442,7 @@ fn run_with_runners_groups_matched_into_one_batch_and_falls_back_for_unmatched()
         ann(Tier::Check, "lines::b"),
     ];
     let opts = DispatchOptions::default();
-    let results = run_with_runners(&inputs, &[spec], &opts, dir.path());
+    let results = run_with_runners(&inputs, &[spec], &opts, dir.path(), &TierCwds::default());
     assert_eq!(results.len(), 3);
 
     let r0 = results[0].as_ref().unwrap();
@@ -499,7 +499,13 @@ fn run_with_runners_first_match_wins_in_spec_order() {
     .unwrap();
     let inputs = vec![ann(Tier::Check, "test::shared")];
     let opts = DispatchOptions::default();
-    let results = run_with_runners(&inputs, &[spec_a, spec_b], &opts, dir.path());
+    let results = run_with_runners(
+        &inputs,
+        &[spec_a, spec_b],
+        &opts,
+        dir.path(),
+        &TierCwds::default(),
+    );
     assert_eq!(results.len(), 1);
     let outcome = results[0].as_ref().unwrap();
     assert_eq!(
@@ -528,7 +534,7 @@ fn run_with_runners_dispatch_fails_targets_missing_from_batch_output() {
     .unwrap();
     let inputs = vec![ann(Tier::Check, "covered"), ann(Tier::Check, "missing")];
     let opts = DispatchOptions::default();
-    let results = run_with_runners(&inputs, &[spec], &opts, dir.path());
+    let results = run_with_runners(&inputs, &[spec], &opts, dir.path(), &TierCwds::default());
     assert_eq!(results.len(), 2);
     let covered = results[0].as_ref().unwrap();
     assert!(covered.verdict.pass);
@@ -565,12 +571,115 @@ fn run_with_runners_resolves_cwd_against_repo_root() {
     .unwrap();
     let inputs = vec![ann(Tier::Check, "x")];
     let opts = DispatchOptions::default();
-    let results = run_with_runners(&inputs, &[spec], &opts, dir.path());
+    let results = run_with_runners(&inputs, &[spec], &opts, dir.path(), &TierCwds::default());
     let outcome = results[0].as_ref().unwrap();
     assert!(
         outcome.verdict.evidence.ends_with(subdir_name),
         "cwd should resolve under {} but got `{}`",
         dir.path().display(),
+        outcome.verdict.evidence,
+    );
+}
+
+#[test]
+fn run_with_runners_falls_through_to_tier_default_when_runner_cwd_is_none() {
+    let dir = fixture_dir();
+    let subdir_name = "tier-default";
+    std::fs::create_dir(dir.path().join(subdir_name)).unwrap();
+    let probe = write_script(
+        dir.path(),
+        "tier-probe.sh",
+        "#!/bin/sh\nfor t in \"$@\"; do printf '{\"target\":\"%s\",\"pass\":true,\"evidence\":\"%s\"}\\n' \"$t\" \"$PWD\"; done\n",
+    );
+    let spec = RunnerSpec::compile(
+        "probe",
+        None,
+        format!("{probe} {{targets}}"),
+        "{name}",
+        " ",
+        BuiltinParser::JsonLines,
+        None,
+    )
+    .unwrap();
+    let tier_cwds = TierCwds {
+        check: Some(PathBuf::from(subdir_name)),
+        ..TierCwds::default()
+    };
+    let inputs = vec![ann(Tier::Check, "x")];
+    let opts = DispatchOptions::default();
+    let results = run_with_runners(&inputs, &[spec], &opts, dir.path(), &tier_cwds);
+    let outcome = results[0].as_ref().unwrap();
+    assert!(
+        outcome.verdict.evidence.ends_with(subdir_name),
+        "runner cwd None falls back to tier default `{subdir_name}` but got `{}`",
+        outcome.verdict.evidence,
+    );
+}
+
+#[test]
+fn run_with_runners_uses_repo_root_when_neither_runner_nor_tier_cwd_set() {
+    let dir = fixture_dir();
+    let probe = write_script(
+        dir.path(),
+        "root-probe.sh",
+        "#!/bin/sh\nfor t in \"$@\"; do printf '{\"target\":\"%s\",\"pass\":true,\"evidence\":\"%s\"}\\n' \"$t\" \"$PWD\"; done\n",
+    );
+    let spec = RunnerSpec::compile(
+        "probe",
+        None,
+        format!("{probe} {{targets}}"),
+        "{name}",
+        " ",
+        BuiltinParser::JsonLines,
+        None,
+    )
+    .unwrap();
+    let inputs = vec![ann(Tier::Check, "x")];
+    let opts = DispatchOptions::default();
+    let results = run_with_runners(&inputs, &[spec], &opts, dir.path(), &TierCwds::default());
+    let outcome = results[0].as_ref().unwrap();
+    let canonical_root = std::fs::canonicalize(dir.path()).unwrap();
+    let canonical_observed = std::fs::canonicalize(&outcome.verdict.evidence).unwrap();
+    assert_eq!(
+        canonical_observed, canonical_root,
+        "neither runner nor tier cwd → spawn under repo root",
+    );
+}
+
+#[test]
+fn run_with_runners_tier_default_applies_to_unmatched_per_annotation_fallback() {
+    let dir = fixture_dir();
+    let subdir_name = "fallback-cwd";
+    let nested = dir.path().join(subdir_name);
+    std::fs::create_dir(&nested).unwrap();
+    let probe_path = nested.join("probe.sh");
+    fs::write(
+        &probe_path,
+        "#!/bin/sh\nprintf '{\"pass\": true, \"evidence\": \"%s\"}\\n' \"$PWD\"\n",
+    )
+    .unwrap();
+
+    let spec = RunnerSpec::compile(
+        "noclaim",
+        Some("^never-matches"),
+        "ignored",
+        "{name}",
+        " ",
+        BuiltinParser::JsonLines,
+        None,
+    )
+    .unwrap();
+    let tier_cwds = TierCwds {
+        check: Some(PathBuf::from(subdir_name)),
+        ..TierCwds::default()
+    };
+    let inputs = vec![ann(Tier::Check, "sh probe.sh")];
+    let opts = DispatchOptions::default();
+    let results = run_with_runners(&inputs, &[spec], &opts, dir.path(), &tier_cwds);
+    let outcome = results[0].as_ref().unwrap();
+    assert!(
+        outcome.verdict.evidence.contains(subdir_name),
+        "unmatched annotation must inherit tier-default cwd `{subdir_name}` but got `{}`",
         outcome.verdict.evidence,
     );
 }
@@ -598,7 +707,7 @@ fn run_with_runners_libtest_json_maps_test_names_back_to_annotations() {
         ann(Tier::Test, "crate::b::two"),
     ];
     let opts = DispatchOptions::default();
-    let results = run_with_runners(&inputs, &[spec], &opts, dir.path());
+    let results = run_with_runners(&inputs, &[spec], &opts, dir.path(), &TierCwds::default());
     assert_eq!(results.len(), 2);
     for r in &results {
         let outcome = r.as_ref().unwrap();
@@ -626,7 +735,7 @@ fn run_with_runners_exit_code_parser_shares_verdict_across_group() {
     .unwrap();
     let inputs = vec![ann(Tier::Check, "a"), ann(Tier::Check, "b")];
     let opts = DispatchOptions::default();
-    let results = run_with_runners(&inputs, &[spec], &opts, dir.path());
+    let results = run_with_runners(&inputs, &[spec], &opts, dir.path(), &TierCwds::default());
     assert_eq!(results.len(), 2);
     for r in &results {
         let outcome = r.as_ref().unwrap();
