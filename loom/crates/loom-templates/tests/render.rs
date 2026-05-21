@@ -734,6 +734,36 @@ fn msg_renders_with_no_clarify_beads() -> Result<()> {
     Ok(())
 }
 
+/// `msg.md` is a multi-turn chat template; the partial `exit_signals.md`
+/// it includes was written for single-shot worker phases ("end your
+/// response with the marker"). The chat-restrictions block must
+/// disambiguate by stating that `LOOM_COMPLETE` is emitted on the final
+/// assistant turn only, never on intermediate turns. The May-21 bug
+/// report (wx-lq12o) was the agent appending `LOOM_COMPLETE` to every
+/// reply mid-conversation; this test pins the clarifying clause so a
+/// future template edit cannot silently regress it.
+#[test]
+fn msg_restricts_marker_to_final_turn_in_multi_turn_chat() -> Result<()> {
+    let ctx = MsgContext {
+        pinned_context: PINNED_CONTEXT_BODY.to_string(),
+        companion_paths: vec![],
+        clarify_beads: vec![],
+        scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+    };
+    let out = ctx.render()?;
+
+    assert!(
+        out.contains("final turn only") || out.contains("final assistant turn"),
+        "chat-restrictions must name the final-turn-only rule: {out}",
+    );
+    assert!(
+        out.contains("Do **NOT** append `LOOM_COMPLETE` to intermediate turns")
+            || out.contains("not on intermediate turns"),
+        "chat-restrictions must explicitly forbid intermediate-turn markers: {out}",
+    );
+    Ok(())
+}
+
 /// Smoke check: the rendered run prompt contains every instruction section,
 /// header, and substituted value the run.md template promises for shared
 /// inputs.
