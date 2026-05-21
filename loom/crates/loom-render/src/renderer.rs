@@ -575,7 +575,8 @@ impl TerminalRenderer {
                     | DriverKind::PushGateClean
                     | DriverKind::ContainerSpawn
                     | DriverKind::ContainerOom
-                    | DriverKind::InfraFailure => driver_kind.as_wire(),
+                    | DriverKind::InfraFailure
+                    | DriverKind::TokenUsage => driver_kind.as_wire(),
                     DriverKind::Other(name) => name.as_str(),
                 };
                 let line = if self.parallel {
