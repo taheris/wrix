@@ -587,6 +587,52 @@ fn review_renders_style_rule_conformance_walkthrough() -> Result<()> {
     Ok(())
 }
 
+/// A.7 — the rendered review template instructs the agent to emit
+/// exactly one terminal marker per session and forbids co-emission of
+/// `LOOM_CONCERN` + `LOOM_COMPLETE`. The May-19 incident was a
+/// reviewer agent emitting `LOOM_REVIEW_FLAG:` (the legacy name) and
+/// `LOOM_COMPLETE` together; A.7 renamed the marker and rewrote the
+/// instructions to be mutually exclusive. This test pins the rendered
+/// surface so a future template edit cannot silently undo either
+/// contract.
+#[test]
+fn review_renders_single_marker_instruction_with_concern_xor_complete() -> Result<()> {
+    let ctx = ReviewContext {
+        pinned_context: PINNED_CONTEXT_BODY.to_string(),
+        label: SpecLabel::new("loom-harness"),
+        spec_path: "specs/loom-harness.md".to_string(),
+        companion_paths: vec![],
+        beads_summary: None,
+        base_commit: None,
+        molecule_id: None,
+        verify_sources: vec![],
+        judge_rubrics: vec![],
+        scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+        style_rules: "docs/style-rules.md".to_string(),
+    };
+    let out = ctx.render()?;
+
+    assert!(
+        out.contains("LOOM_CONCERN")
+            && (out.contains("never emit both") || out.contains("never both")),
+        "review template must forbid LOOM_CONCERN + LOOM_COMPLETE co-emission. \
+         body:\n{out}",
+    );
+    assert!(
+        out.contains("xor")
+            || out.contains("mutually exclusive")
+            || out.contains("one and only one"),
+        "rendered template must instruct mutual exclusivity for the final-line \
+         marker. body:\n{out}",
+    );
+    assert!(
+        !out.contains("LOOM_REVIEW_FLAG"),
+        "rendered template must not reference the legacy LOOM_REVIEW_FLAG keyword. \
+         body:\n{out}",
+    );
+    Ok(())
+}
+
 /// Pins the Options Format Contract's universal scope and explicit
 /// `bd update --notes` + `loom:clarify` flow for existing beads, so the
 /// contract cannot silently re-narrow to invariant-clash-only.

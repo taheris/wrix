@@ -25,6 +25,12 @@
 //!   `bd close` itself, but the test asserts the *driver* doesn't.
 //! - `no-marker`       — emit a plain message and `agent_end` without
 //!   any `LOOM_*` line. Exercises the swallowed-marker recovery path.
+//! - `concern-marker`  — emit a single `LOOM_CONCERN: verifier-bypass -- …`
+//!   line and `agent_end`. Drives the review-phase concern branch of
+//!   the push gate (`PushGateRefuseCause::ReviewConcern`).
+//! - `concern-then-complete` — emit `LOOM_CONCERN: … -- …` then
+//!   `LOOM_COMPLETE` on a later line. The final-line parser must pick
+//!   the trailing `LOOM_COMPLETE`; this is the literal May-19 sequence.
 
 #![allow(
     clippy::unwrap_used,
@@ -41,9 +47,13 @@ const MODE_BLOCKED: &str = "blocked-marker";
 const MODE_CLARIFY: &str = "clarify-marker";
 const MODE_COMPLETE: &str = "complete-marker";
 const MODE_NO_MARKER: &str = "no-marker";
+const MODE_CONCERN: &str = "concern-marker";
+const MODE_CONCERN_THEN_COMPLETE: &str = "concern-then-complete";
 
 const BLOCKED_REASON: &str = "spec section is missing the schema for this bead";
 const CLARIFY_QUESTION: &str = "which deploy-key path should the runner image mount?";
+const CONCERN_LINE: &str =
+    "LOOM_CONCERN: verifier-bypass -- the only [verify] for this bead mocks the agent backend";
 
 fn main() -> ExitCode {
     let mode = env::var("LOOM_TEST_AGENT_MODE").unwrap_or_else(|_| MODE_COMPLETE.to_string());
@@ -91,6 +101,21 @@ fn main() -> ExitCode {
         }
         MODE_NO_MARKER => {
             emit_message_delta(&mut stdout, "ran without emitting a verdict");
+        }
+        MODE_CONCERN => {
+            emit_message_delta(&mut stdout, CONCERN_LINE);
+        }
+        MODE_CONCERN_THEN_COMPLETE => {
+            // The May-19 sequence: a `LOOM_CONCERN: …` line followed by a
+            // separate `LOOM_COMPLETE` line. `parse_exit_signal` reads
+            // only the final non-empty line, so the trailing
+            // `LOOM_COMPLETE` wins. Newlines are embedded in the delta
+            // payload — pi-mono text_deltas concatenate verbatim, so
+            // separate emits without a trailing newline collapse onto
+            // one line and trigger the multi-marker swallow path.
+            emit_message_delta(&mut stdout, &format!("{CONCERN_LINE}\n"));
+            emit_message_delta(&mut stdout, "did the work\n");
+            emit_message_delta(&mut stdout, "LOOM_COMPLETE");
         }
         other => {
             eprintln!("mock-loom-agent: unknown LOOM_TEST_AGENT_MODE {other}");
