@@ -11,7 +11,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
-use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{ArgGroup, CommandFactory, Parser, Subcommand, ValueEnum};
 
 use loom_agent::{ClaudeBackend, PiBackend};
 use loom_driver::agent::{AgentKind, LOOM_INSIDE_ENV, ProtocolError, SessionOutcome, SpawnConfig};
@@ -124,9 +124,14 @@ struct GateReviewArgs {
 }
 
 #[derive(Debug, clap::Args)]
+#[command(group(
+    ArgGroup::new("gate_scope")
+        .args(["files", "bead", "diff", "tree"])
+        .multiple(false)
+        .required(false),
+))]
 struct GateScopeArgs {
-    /// Filter to verifiers whose scope intersects the file set
-    /// (pre-commit hook fast feedback).
+    /// Scope to verifiers whose declared inputs intersect this file set.
     #[arg(long, value_name = "PATH", value_delimiter = ',')]
     files: Vec<PathBuf>,
     /// Filter to one spec's criteria. Defaults to `current_spec` when
@@ -137,14 +142,15 @@ struct GateScopeArgs {
     /// command string for `[check]` / `[system]`, a test path for
     /// `[test]`, a rubric path for `[judge]`).
     selector: Option<String>,
-    /// Restrict the audit scope to one bead.
-    #[arg(long, short = 'b', value_name = "ID", conflicts_with_all = ["diff", "tree"])]
+    /// Scope to one bead's success-criteria inputs and the bead's own diff.
+    #[arg(long, short = 'b', value_name = "ID")]
     bead: Option<String>,
-    /// Restrict the audit scope to a git diff range.
-    #[arg(long, value_name = "RANGE", conflicts_with_all = ["bead", "tree"])]
+    /// Scope to a git diff range. Default when no scope flag is set:
+    /// `<molecule.base_commit>..HEAD` for the active molecule, else `HEAD`.
+    #[arg(long, value_name = "RANGE")]
     diff: Option<String>,
-    /// Audit the entire spec tree × implementation.
-    #[arg(long, conflicts_with_all = ["bead", "diff"])]
+    /// Scope to every file in the workspace (nightly safety net).
+    #[arg(long)]
     tree: bool,
 }
 
@@ -742,12 +748,28 @@ fn run_gate(
 ) -> anyhow::Result<()> {
     match subcommand {
         None => run_gate_status(workspace),
-        Some(GateSubcommand::Verify(args)) => run_gate_verify(workspace, &args),
-        Some(GateSubcommand::Check(args)) => run_gate_single_tier(workspace, &args, Tier::Check),
-        Some(GateSubcommand::Test(args)) => run_gate_single_tier(workspace, &args, Tier::Test),
-        Some(GateSubcommand::System(args)) => run_gate_single_tier(workspace, &args, Tier::System),
-        Some(GateSubcommand::Audit(args)) => run_gate_audit(workspace, args, agent_override),
-        Some(GateSubcommand::Review(args)) => {
+        Some(GateSubcommand::Verify(mut args)) => {
+            apply_default_scope(workspace, &mut args);
+            run_gate_verify(workspace, &args)
+        }
+        Some(GateSubcommand::Check(mut args)) => {
+            apply_default_scope(workspace, &mut args);
+            run_gate_single_tier(workspace, &args, Tier::Check)
+        }
+        Some(GateSubcommand::Test(mut args)) => {
+            apply_default_scope(workspace, &mut args);
+            run_gate_single_tier(workspace, &args, Tier::Test)
+        }
+        Some(GateSubcommand::System(mut args)) => {
+            apply_default_scope(workspace, &mut args);
+            run_gate_single_tier(workspace, &args, Tier::System)
+        }
+        Some(GateSubcommand::Audit(mut args)) => {
+            apply_default_scope(workspace, &mut args);
+            run_gate_audit(workspace, args, agent_override)
+        }
+        Some(GateSubcommand::Review(mut args)) => {
+            apply_default_scope(workspace, &mut args.scope);
             run_gate_review(workspace, args.scope, args.verify_exit, agent_override)
         }
         Some(GateSubcommand::Judge(_)) => {
@@ -761,6 +783,73 @@ fn run_gate(
             )
         }
     }
+}
+
+/// Resolve the default scope for bare `loom gate <sub>` invocations per
+/// `specs/loom-gate.md` § *Default for bare invocation*. When the user
+/// supplied none of `--files` / `--bead` / `--diff` / `--tree`, expand
+/// to `--diff <molecule.base_commit>..HEAD` for the active molecule
+/// bonded to `current_spec`, else `--diff HEAD`. Failure modes
+/// (missing state db, missing molecule, `bd` subprocess error) degrade
+/// to `HEAD` with a single-line warning so a bare gate invocation
+/// remains usable on a fresh workspace.
+fn apply_default_scope(workspace: &Path, args: &mut GateScopeArgs) {
+    if !args.files.is_empty() || args.bead.is_some() || args.diff.is_some() || args.tree {
+        return;
+    }
+    let base = match active_molecule_base_commit(workspace) {
+        Ok(value) => value,
+        Err(err) => {
+            eprintln!(
+                "loom gate: could not resolve active molecule ({err:#}); defaulting to --diff HEAD",
+            );
+            None
+        }
+    };
+    args.diff = Some(match base {
+        Some(commit) => format!("{commit}..HEAD"),
+        None => "HEAD".to_owned(),
+    });
+}
+
+/// Look up `loom.base_commit` for the `loom:active` epic bonded to the
+/// workspace's `current_spec`. Returns `Ok(None)` for the unconfigured
+/// cases (no state db, no current_spec, no active epic, missing
+/// metadata key) — those are expected on a fresh workspace, not
+/// errors. Subprocess and parse failures propagate.
+fn active_molecule_base_commit(workspace: &Path) -> anyhow::Result<Option<String>> {
+    let db_path = workspace.join(".wrapix/loom/state.db");
+    if !db_path.exists() {
+        return Ok(None);
+    }
+    let db = StateDb::open(db_path)?;
+    let Some(label) = db.current_spec()? else {
+        return Ok(None);
+    };
+    let spec_filter = format!("spec:{}", label.as_str());
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(async move {
+        let bd = BdClient::new();
+        let candidates = bd
+            .list(ListOpts {
+                status: Some("open".into()),
+                label: Some("loom:active".into()),
+                ..ListOpts::default()
+            })
+            .await?;
+        let Some(mol) = candidates
+            .into_iter()
+            .find(|bead| bead.labels.iter().any(|l| l.as_str() == spec_filter))
+        else {
+            return Ok(None);
+        };
+        let detail = bd.show(&mol.id).await?;
+        Ok(detail
+            .metadata
+            .get("loom.base_commit")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned))
+    })
 }
 
 fn gate_dispatch_options(args: &GateScopeArgs) -> DispatchOptions {
@@ -2382,5 +2471,66 @@ mod tests {
             parse_verify_tiers(Some("Check,Bogus")),
             vec![Tier::Check, Tier::Test, Tier::System]
         );
+    }
+
+    fn empty_scope_args() -> GateScopeArgs {
+        GateScopeArgs {
+            files: Vec::new(),
+            spec: None,
+            selector: None,
+            bead: None,
+            diff: None,
+            tree: false,
+        }
+    }
+
+    #[test]
+    fn apply_default_scope_falls_back_to_head_on_fresh_workspace() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut args = empty_scope_args();
+        apply_default_scope(tmp.path(), &mut args);
+        assert_eq!(args.diff.as_deref(), Some("HEAD"));
+        assert!(args.bead.is_none());
+        assert!(!args.tree);
+        assert!(args.files.is_empty());
+    }
+
+    #[test]
+    fn apply_default_scope_is_noop_when_bead_set() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut args = empty_scope_args();
+        args.bead = Some("wx-1".into());
+        apply_default_scope(tmp.path(), &mut args);
+        assert!(args.diff.is_none());
+        assert_eq!(args.bead.as_deref(), Some("wx-1"));
+    }
+
+    #[test]
+    fn apply_default_scope_is_noop_when_diff_set() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut args = empty_scope_args();
+        args.diff = Some("HEAD~3..HEAD".into());
+        apply_default_scope(tmp.path(), &mut args);
+        assert_eq!(args.diff.as_deref(), Some("HEAD~3..HEAD"));
+    }
+
+    #[test]
+    fn apply_default_scope_is_noop_when_tree_set() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut args = empty_scope_args();
+        args.tree = true;
+        apply_default_scope(tmp.path(), &mut args);
+        assert!(args.diff.is_none());
+        assert!(args.tree);
+    }
+
+    #[test]
+    fn apply_default_scope_is_noop_when_files_set() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut args = empty_scope_args();
+        args.files = vec![PathBuf::from("src/lib.rs")];
+        apply_default_scope(tmp.path(), &mut args);
+        assert!(args.diff.is_none());
+        assert_eq!(args.files, vec![PathBuf::from("src/lib.rs")]);
     }
 }

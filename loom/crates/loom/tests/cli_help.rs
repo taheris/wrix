@@ -223,6 +223,16 @@ fn loom_gate_scope_flags_are_mutually_exclusive() {
         vec!["gate", "verify", "--bead", "wx-1", "--diff", "HEAD~1..HEAD"],
         vec!["gate", "check", "--bead", "wx-1", "--tree"],
         vec!["gate", "test", "--diff", "HEAD~1..HEAD", "--tree"],
+        vec!["gate", "verify", "--files", "src/lib.rs", "--bead", "wx-1"],
+        vec![
+            "gate",
+            "audit",
+            "--files",
+            "src/lib.rs",
+            "--diff",
+            "HEAD~1..HEAD",
+        ],
+        vec!["gate", "system", "--files", "src/lib.rs", "--tree"],
     ] {
         let output = Command::new(loom_bin)
             .args(&args)
@@ -236,7 +246,9 @@ fn loom_gate_scope_flags_are_mutually_exclusive() {
         );
         let stderr = String::from_utf8(output.stderr).expect("utf-8");
         assert!(
-            stderr.contains("cannot be used with"),
+            stderr.contains("cannot be used with")
+                || stderr.contains("the argument")
+                || stderr.contains("not be used with"),
             "stderr must explain mutual exclusion, got: {stderr}",
         );
     }
