@@ -154,7 +154,7 @@ fn detect_zero_match(kind: RunnerKind, stdout: &str, stderr: &str) -> Option<Str
             .map(str::trim)
             .find(|t| {
                 t.starts_with("Starting 0 tests")
-                    || t.contains("0 tests run:")
+                    || t.contains(" 0 tests run:")
                     || t.contains("no tests to run")
             })
             .map(str::to_string),
@@ -941,6 +941,13 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out
         let stdout = "------------\n     Summary [   0.011s] 0 tests run: 0 passed, 0 skipped\n";
         let err = check_zero_match("cargo nextest run", stdout, "").unwrap_err();
         assert!(matches!(err, RunnerError::ZeroMatch { .. }));
+    }
+
+    #[test]
+    fn zero_match_does_not_false_positive_on_nextest_count_ending_in_zero() {
+        let stdout =
+            "------------\n     Summary [   0.840s] 310 tests run: 310 passed, 1105 skipped\n";
+        check_zero_match("cargo nextest run", stdout, "").unwrap();
     }
 
     #[test]
