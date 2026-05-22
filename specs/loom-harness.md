@@ -2012,8 +2012,7 @@ Criteria.
 - Epic auto-close does not fire while any direct child of the
       candidate epic carries `status != "closed"` (`open`,
       `in_progress`, or `deferred`).
-  [test](epic_does_not_auto_close_when_a_child_is_open)
-  [test](epic_does_not_auto_close_when_a_child_is_in_progress)
+  [test](epic_does_not_auto_close_when_any_child_non_closed)
 - Epic auto-close does not fire on any non-Clean push-gate verdict
       (`LOOM_CONCERN`, any bead carrying `loom:blocked` or
       `loom:clarify`); only the `Clean` arm reaches the walk.

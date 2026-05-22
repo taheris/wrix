@@ -912,47 +912,26 @@ fn msg_renders_with_no_clarify_beads() -> Result<()> {
     Ok(())
 }
 
-/// `msg.md` is a multi-turn chat template; the partial `exit_signals.md`
-/// it includes was written for single-shot worker phases ("end your
-/// response with the marker"). The chat-restrictions block must
-/// disambiguate by stating that `LOOM_COMPLETE` is emitted on the final
-/// assistant turn only, never on intermediate turns. The May-21 bug
-/// report (wx-lq12o) was the agent appending `LOOM_COMPLETE` to every
-/// reply mid-conversation; this test pins the clarifying clause so a
-/// future template edit cannot silently regress it.
+/// `msg`, `plan_new`, and `plan_update` are all multi-turn templates
+/// that include `exit_signals.md`, a partial written for single-shot
+/// worker phases ("end your response with the marker"). Each must
+/// disambiguate via the `chat_marker_final_turn_only.md` partial,
+/// stating that `LOOM_COMPLETE` is emitted on the final assistant turn
+/// only — never on intermediate turns. The May-21 bug reports were the
+/// chat agent (wx-lq12o) and planning agent (wx-qzdhj) appending
+/// `LOOM_COMPLETE` to every reply mid-conversation; this test pins the
+/// clarifying clause across the entire multi-turn template set so a
+/// future edit cannot silently regress any one of them.
 #[test]
-fn msg_restricts_marker_to_final_turn_in_multi_turn_chat() -> Result<()> {
-    let ctx = MsgContext {
+fn every_multi_turn_template_includes_chat_marker_partial() -> Result<()> {
+    let msg_out = MsgContext {
         pinned_context: PINNED_CONTEXT_BODY.to_string(),
         companion_paths: vec![],
         clarify_beads: vec![],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
-    };
-    let out = ctx.render()?;
-
-    assert!(
-        out.contains("final turn only") || out.contains("final assistant turn"),
-        "chat-restrictions must name the final-turn-only rule: {out}",
-    );
-    assert!(
-        out.contains("Do **NOT** append `LOOM_COMPLETE` to intermediate turns")
-            || out.contains("not on intermediate turns"),
-        "chat-restrictions must explicitly forbid intermediate-turn markers: {out}",
-    );
-    Ok(())
-}
-
-/// `loom plan` (both `plan_new` and `plan_update`) is also a multi-turn
-/// interview that shares `exit_signals.md` with one-shot worker phases.
-/// The May-21 bug (wx-qzdhj) was the planning agent appending
-/// `LOOM_COMPLETE` to every reply just like `loom msg --chat` did before
-/// wx-lq12o; the fix is the same `chat_marker_final_turn_only` partial,
-/// included by both `plan_*` templates. This test pins the clause so a
-/// future template edit cannot silently regress the planning agent into
-/// the same per-turn-marker pattern.
-#[test]
-fn plan_templates_restrict_marker_to_final_turn_in_multi_turn_interview() -> Result<()> {
-    let new_out = PlanNewContext {
+    }
+    .render()?;
+    let plan_new_out = PlanNewContext {
         pinned_context: PINNED_CONTEXT_BODY.to_string(),
         label: SpecLabel::new("loom-harness"),
         spec_path: "specs/loom-harness.md".to_string(),
@@ -960,7 +939,7 @@ fn plan_templates_restrict_marker_to_final_turn_in_multi_turn_interview() -> Res
         spec_conventions: "docs/spec-conventions.md".to_string(),
     }
     .render()?;
-    let update_out = PlanUpdateContext {
+    let plan_update_out = PlanUpdateContext {
         pinned_context: PINNED_CONTEXT_BODY.to_string(),
         label: SpecLabel::new("loom-harness"),
         spec_path: "specs/loom-harness.md".to_string(),
@@ -971,15 +950,19 @@ fn plan_templates_restrict_marker_to_final_turn_in_multi_turn_interview() -> Res
     }
     .render()?;
 
-    for (name, out) in [("plan_new", &new_out), ("plan_update", &update_out)] {
+    for (name, out) in [
+        ("msg", &msg_out),
+        ("plan_new", &plan_new_out),
+        ("plan_update", &plan_update_out),
+    ] {
         assert!(
             out.contains("final turn only") || out.contains("final assistant turn"),
-            "{name}: chat-restrictions must name the final-turn-only rule",
+            "{name}: chat-restrictions must name the final-turn-only rule: {out}",
         );
         assert!(
             out.contains("Do **NOT** append `LOOM_COMPLETE` to intermediate turns")
                 || out.contains("not on intermediate turns"),
-            "{name}: chat-restrictions must explicitly forbid intermediate-turn markers",
+            "{name}: chat-restrictions must explicitly forbid intermediate-turn markers: {out}",
         );
     }
     Ok(())

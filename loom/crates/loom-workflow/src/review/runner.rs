@@ -1368,41 +1368,31 @@ mod tests {
         Ok(())
     }
 
-    /// No-fire #1: any open child blocks auto-close.
+    /// Universal no-fire rule: any non-`closed` child status blocks
+    /// auto-close. Parameterised across the full non-closed status set
+    /// (`open`, `in_progress`, `deferred`) so the criterion's "any
+    /// direct child" claim is exercised once per status, not once per
+    /// status that someone remembered to add a test for.
     #[tokio::test]
-    async fn epic_does_not_auto_close_when_a_child_is_open() -> Result<(), ReviewError> {
-        let leaf_closed = shaped_bead("wx-leaf.1", "task", "closed", Some("wx-epic"));
-        let leaf_open = shaped_bead("wx-leaf.2", "task", "open", Some("wx-epic"));
-        let epic = shaped_bead("wx-epic", "epic", "open", None);
-        let mut c = controller_with_ancestry(vec![leaf_closed, leaf_open], vec![epic]);
-        let _ = review_loop(&mut c, IterationCap::default()).await?;
-        assert!(
-            c.close_calls.is_empty(),
-            "open child must block auto-close: {:?}",
-            c.close_calls,
-        );
-        assert!(
-            !c.driver_events
-                .iter()
-                .any(|(k, _, _)| k == "epic_auto_closed"),
-            "no epic_auto_closed event when any child is still open",
-        );
-        Ok(())
-    }
-
-    /// No-fire #2: in_progress child blocks auto-close just like an
-    /// open child.
-    #[tokio::test]
-    async fn epic_does_not_auto_close_when_a_child_is_in_progress() -> Result<(), ReviewError> {
-        let leaf_closed = shaped_bead("wx-leaf.1", "task", "closed", Some("wx-epic"));
-        let leaf_running = shaped_bead("wx-leaf.2", "task", "in_progress", Some("wx-epic"));
-        let epic = shaped_bead("wx-epic", "epic", "open", None);
-        let mut c = controller_with_ancestry(vec![leaf_closed, leaf_running], vec![epic]);
-        let _ = review_loop(&mut c, IterationCap::default()).await?;
-        assert!(
-            c.close_calls.is_empty(),
-            "in_progress child must block auto-close",
-        );
+    async fn epic_does_not_auto_close_when_any_child_non_closed() -> Result<(), ReviewError> {
+        for status in ["open", "in_progress", "deferred"] {
+            let leaf_closed = shaped_bead("wx-leaf.1", "task", "closed", Some("wx-epic"));
+            let leaf_non_closed = shaped_bead("wx-leaf.2", "task", status, Some("wx-epic"));
+            let epic = shaped_bead("wx-epic", "epic", "open", None);
+            let mut c = controller_with_ancestry(vec![leaf_closed, leaf_non_closed], vec![epic]);
+            let _ = review_loop(&mut c, IterationCap::default()).await?;
+            assert!(
+                c.close_calls.is_empty(),
+                "{status} child must block auto-close: {:?}",
+                c.close_calls,
+            );
+            assert!(
+                !c.driver_events
+                    .iter()
+                    .any(|(k, _, _)| k == "epic_auto_closed"),
+                "{status}: no epic_auto_closed event when any child is non-closed",
+            );
+        }
         Ok(())
     }
 

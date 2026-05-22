@@ -448,8 +448,7 @@ documents in front of the agent with zero configuration.
   every multi-turn template (`msg`, `plan_new`, `plan_update`),
   pinning the "emit `LOOM_COMPLETE` on the final turn only" rule
   that disambiguates `exit_signals.md`'s single-shot wording
-  [test](plan_templates_restrict_marker_to_final_turn_in_multi_turn_interview)
-  [test](msg_restricts_marker_to_final_turn_in_multi_turn_chat)
+  [test](every_multi_turn_template_includes_chat_marker_partial)
 - One-shot worker templates (`run`, `todo_new`, `todo_update`,
   `review`) deliberately **omit** `chat_marker_final_turn_only.md`
   because every response in those phases is the session's final
