@@ -27,6 +27,16 @@
 #                               set_model) respond ok and echo the
 #                               provider/modelId pair into a later
 #                               message_delta after the prompt.
+#   set-thinking-level        — probe ok; on the next command (expected
+#                               set_thinking_level) respond ok and echo
+#                               the level into a later message_delta
+#                               after the prompt.
+#   set-thinking-level-reject — probe ok; on the next command (expected
+#                               set_thinking_level) respond with
+#                               success:false. The loom driver must
+#                               log a warn and continue, so the mock
+#                               still services a follow-up prompt and
+#                               emits agent_end normally.
 #   happy-path                — probe ok, prompt → message_delta →
 #                               agent_end. Used by the container smoke
 #                               and any test that wants the full
@@ -193,6 +203,42 @@ run_set_model() {
     emit_agent_end
 }
 
+run_set_thinking_level() {
+    handle_probe 0
+    local stl_line stl_id stl_type level _prompt
+    IFS= read -r stl_line
+    stl_id="$(extract_field id "$stl_line")"
+    stl_type="$(extract_field type "$stl_line")"
+    level="$(extract_field level "$stl_line")"
+    if [[ "$stl_type" != "set_thinking_level" ]]; then
+        emit_response_err "${stl_id:-unknown}" "${stl_type:-unknown}" "expected set_thinking_level"
+        return
+    fi
+    emit_response_ok "$stl_id" "set_thinking_level"
+
+    IFS= read -r _prompt
+    emit_message_delta "thinking:${level}"
+    emit_agent_end
+}
+
+run_set_thinking_level_reject() {
+    handle_probe 0
+    local stl_line stl_id stl_type level _prompt
+    IFS= read -r stl_line
+    stl_id="$(extract_field id "$stl_line")"
+    stl_type="$(extract_field type "$stl_line")"
+    level="$(extract_field level "$stl_line")"
+    if [[ "$stl_type" != "set_thinking_level" ]]; then
+        emit_response_err "${stl_id:-unknown}" "${stl_type:-unknown}" "expected set_thinking_level"
+        return
+    fi
+    emit_response_err "$stl_id" "set_thinking_level" "unsupported by provider"
+
+    IFS= read -r _prompt
+    emit_message_delta "thinking-rejected:${level}"
+    emit_agent_end
+}
+
 # Read the probe line, then sleep forever — the loom side must surface
 # HandshakeTimeout instead of blocking on the unanswered probe. `exec
 # sleep` so SIGKILL from the loom side hits the PID still holding the
@@ -236,6 +282,12 @@ case "$MODE" in
         ;;
     set-model)
         run_set_model
+        ;;
+    set-thinking-level)
+        run_set_thinking_level
+        ;;
+    set-thinking-level-reject)
+        run_set_thinking_level_reject
         ;;
     happy-path)
         run_happy_path

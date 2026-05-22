@@ -47,6 +47,16 @@ pub struct SpawnConfig {
     /// remains identical to existing fixtures.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<ModelSelection>,
+    /// Optional post-spawn reasoning-effort override consumed by the pi
+    /// backend (claude has no analog). When present, the pi backend sends a
+    /// best-effort `set_thinking_level` RPC after the startup probe (and
+    /// after [`SpawnConfig::model`], if set); pi rejection logs a `warn!`
+    /// and the handshake continues — providers that do not support
+    /// thinking-effort levels degrade silently per [`AgentBackend`]'s
+    /// graceful-degradation contract. Skipped during serialization when
+    /// `None` so existing wrapper fixtures round-trip identically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_level: Option<ThinkingLevel>,
     /// Grace window the workflow's `after_session_complete` hook waits for
     /// the agent to exit on its own before escalating signals. Currently
     /// consumed only by [`ClaudeBackend`](crate::agent::AgentBackend) — pi
@@ -135,6 +145,36 @@ pub struct ModelSelection {
     pub model_id: String,
 }
 
+/// Per-session reasoning-effort knob sent by pi RPC's
+/// `set_thinking_level { level }`. The level set matches the pi-mono protocol
+/// (`specs/loom-agent.md` Pi command table). The driver sends this
+/// best-effort after the startup probe — pi rejections downgrade to a `warn!`
+/// rather than aborting the handshake, so providers without thinking support
+/// degrade silently per [`AgentBackend`]'s graceful-degradation contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThinkingLevel {
+    Off,
+    Minimal,
+    Low,
+    Medium,
+    High,
+    Xhigh,
+}
+
+impl ThinkingLevel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ThinkingLevel::Off => "off",
+            ThinkingLevel::Minimal => "minimal",
+            ThinkingLevel::Low => "low",
+            ThinkingLevel::Medium => "medium",
+            ThinkingLevel::High => "high",
+            ThinkingLevel::Xhigh => "xhigh",
+        }
+    }
+}
+
 /// Outcome of a completed agent session — what the workflow engine receives
 /// after the session reaches `SessionComplete`.
 #[derive(Debug, Clone)]
@@ -217,6 +257,7 @@ mod tests {
             },
             scratch_dir: PathBuf::from("/workspace/.wrapix/loom/scratch/test"),
             model,
+            thinking_level: None,
             shutdown_grace: None,
             handshake_timeout: None,
             stall_warn_interval: None,
@@ -294,6 +335,56 @@ mod tests {
             1,
             "duplicate LOOM_INSIDE entries: {env:?}",
         );
+    }
+
+    /// `thinking_level: None` is omitted from on-disk JSON via
+    /// `#[serde(skip_serializing_if = "Option::is_none")]` so existing
+    /// wrapper fixtures (which predate the field) round-trip identically.
+    #[test]
+    fn spawn_config_with_thinking_level_none_omits_field() {
+        let cfg = sample_config(None);
+        let json = serde_json::to_string(&cfg).expect("serialize");
+        let v: serde_json::Value = serde_json::from_str(&json).expect("parse");
+        let obj = v.as_object().expect("object");
+        assert!(
+            !obj.contains_key("thinking_level"),
+            "thinking_level: None must be omitted, got JSON: {json}"
+        );
+    }
+
+    /// `thinking_level: Some(_)` serializes the variant as a lowercase string
+    /// and round-trips back to the same enum.
+    #[test]
+    fn spawn_config_with_thinking_level_some_round_trips_lowercase() {
+        let mut cfg = sample_config(None);
+        cfg.thinking_level = Some(ThinkingLevel::High);
+        let json = serde_json::to_string(&cfg).expect("serialize");
+        let v: serde_json::Value = serde_json::from_str(&json).expect("parse");
+        assert_eq!(v["thinking_level"], "high");
+        let back: SpawnConfig = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.thinking_level, Some(ThinkingLevel::High));
+    }
+
+    /// Every documented level (`specs/loom-agent.md` Pi command table)
+    /// serializes lowercase and round-trips. Pins the wire vocabulary so a
+    /// silent rename surfaces here, not as a pi rejection in the field.
+    #[test]
+    fn thinking_level_serializes_each_variant_as_lowercase_wire_token() {
+        for (variant, expected) in [
+            (ThinkingLevel::Off, "off"),
+            (ThinkingLevel::Minimal, "minimal"),
+            (ThinkingLevel::Low, "low"),
+            (ThinkingLevel::Medium, "medium"),
+            (ThinkingLevel::High, "high"),
+            (ThinkingLevel::Xhigh, "xhigh"),
+        ] {
+            let json = serde_json::to_string(&variant).expect("serialize");
+            assert_eq!(json, format!("\"{expected}\""));
+            let back: ThinkingLevel =
+                serde_json::from_str(&format!("\"{expected}\"")).expect("deserialize");
+            assert_eq!(back, variant);
+            assert_eq!(variant.as_str(), expected);
+        }
     }
 
     /// JSON without a `model` key still parses (treated as `None`) — this is

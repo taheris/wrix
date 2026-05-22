@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use loom_driver::agent::{
     Active, AgentBackend, AgentSession, DEFAULT_HANDSHAKE_TIMEOUT_SECS, Idle, JsonlReader,
-    ModelSelection, ProtocolError, SpawnConfig,
+    ModelSelection, ProtocolError, SpawnConfig, ThinkingLevel,
 };
 use loom_driver::clock::{Clock, SystemClock};
 use serde::Serialize;
@@ -35,7 +35,7 @@ use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::process::{ChildStdin, Command};
 use tracing::{debug, error, info, warn};
 
-use super::messages::{PiEnvelope, PiResponse};
+use super::messages::{PiEnvelope, PiResponse, SetThinkingLevelCommand};
 use super::parser::PiParser;
 
 /// Env var that overrides the launcher binary. Production resolves
@@ -49,6 +49,9 @@ const PROBE_REQUEST_ID: &str = "loom-pi-probe";
 
 /// Request id used for the optional post-probe `set_model` request.
 const SET_MODEL_REQUEST_ID: &str = "loom-pi-set-model";
+
+/// Request id used for the optional post-probe `set_thinking_level` request.
+const SET_THINKING_LEVEL_REQUEST_ID: &str = "loom-pi-set-thinking-level";
 
 /// Pi commands Loom depends on. A missing entry in the `get_commands`
 /// response is a hard fail (`ProtocolError::Unsupported`).
@@ -93,6 +96,7 @@ impl AgentBackend for PiBackend {
         spawn_with_handshake(
             cmd,
             config.model.as_ref(),
+            config.thinking_level,
             handshake_budget,
             &SystemClock::new(),
         )
@@ -158,6 +162,7 @@ struct SetModelCommand<'a> {
 pub async fn spawn_with_handshake(
     mut cmd: Command,
     model: Option<&ModelSelection>,
+    thinking_level: Option<ThinkingLevel>,
     handshake_timeout: Duration,
     clock: &dyn Clock,
 ) -> Result<AgentSession<Idle>, ProtocolError> {
@@ -183,6 +188,10 @@ pub async fn spawn_with_handshake(
 
     if let Some(model) = model {
         run_set_model(&mut writer, &mut reader, model, handshake_timeout, clock).await?;
+    }
+
+    if let Some(level) = thinking_level {
+        run_set_thinking_level(&mut writer, &mut reader, level, handshake_timeout, clock).await?;
     }
 
     let parser = PiParser::new();
@@ -274,6 +283,51 @@ async fn run_set_model(
         model_id = %model.model_id,
         "pi set_model succeeded",
     );
+    Ok(())
+}
+
+/// Send `set_thinking_level` on stdin and wait for the matching response.
+/// Best-effort per `specs/loom-agent.md` § Functional 3: a failure response
+/// logs a `warn!` and returns `Ok(())` so the handshake continues — providers
+/// without thinking support (or pi builds that omit the command) degrade
+/// silently. Transport-level errors (`HandshakeTimeout`, `Io`) propagate
+/// because they indicate a broken pipe, not a rejected feature.
+async fn run_set_thinking_level(
+    writer: &mut BufWriter<ChildStdin>,
+    reader: &mut JsonlReader,
+    level: ThinkingLevel,
+    budget: Duration,
+    clock: &dyn Clock,
+) -> Result<(), ProtocolError> {
+    let cmd = SetThinkingLevelCommand {
+        kind: "set_thinking_level",
+        id: SET_THINKING_LEVEL_REQUEST_ID,
+        level: level.as_str(),
+    };
+    info!(
+        id = SET_THINKING_LEVEL_REQUEST_ID,
+        level = level.as_str(),
+        "pi handshake: sending set_thinking_level (best-effort)",
+    );
+    write_command(writer, &cmd).await?;
+
+    let resp = bounded_await_response(
+        reader,
+        SET_THINKING_LEVEL_REQUEST_ID,
+        budget,
+        "set_thinking_level",
+        clock,
+    )
+    .await?;
+    if resp.success {
+        info!(level = level.as_str(), "pi set_thinking_level succeeded",);
+    } else {
+        warn!(
+            level = level.as_str(),
+            error = ?resp.error,
+            "pi set_thinking_level rejected — continuing without thinking override",
+        );
+    }
     Ok(())
 }
 
@@ -453,6 +507,7 @@ mod tests {
             repin: sample_repin(),
             scratch_dir: PathBuf::from("/workspace/.wrapix/loom/scratch/test"),
             model,
+            thinking_level: None,
             shutdown_grace: None,
             handshake_timeout: None,
             stall_warn_interval: None,
@@ -486,6 +541,7 @@ mod tests {
         let session = spawn_with_handshake(
             mock_command("happy-path"),
             None,
+            None,
             TEST_HANDSHAKE_BUDGET,
             &SystemClock::new(),
         )
@@ -508,6 +564,7 @@ mod tests {
         let result = spawn_with_handshake(
             mock_command("probe-missing-set-model"),
             None,
+            None,
             TEST_HANDSHAKE_BUDGET,
             &SystemClock::new(),
         )
@@ -525,6 +582,7 @@ mod tests {
     async fn driver_sends_prompt_as_jsonl_line() {
         let session = spawn_with_handshake(
             mock_command("echo-prompt"),
+            None,
             None,
             TEST_HANDSHAKE_BUDGET,
             &SystemClock::new(),
@@ -555,6 +613,7 @@ mod tests {
     async fn driver_steers_mid_session_and_mock_observes_payload() {
         let session = spawn_with_handshake(
             mock_command("steering"),
+            None,
             None,
             TEST_HANDSHAKE_BUDGET,
             &SystemClock::new(),
@@ -600,6 +659,7 @@ mod tests {
     async fn driver_repins_on_compaction_start_via_steer() {
         let session = spawn_with_handshake(
             mock_command("compaction"),
+            None,
             None,
             TEST_HANDSHAKE_BUDGET,
             &SystemClock::new(),
@@ -647,6 +707,7 @@ mod tests {
 
         let session = spawn_with_handshake(
             mock_command("compaction"),
+            None,
             None,
             TEST_HANDSHAKE_BUDGET,
             &SystemClock::new(),
@@ -720,6 +781,7 @@ mod tests {
         let session = spawn_with_handshake(
             mock_command("set-model"),
             Some(&model),
+            None,
             TEST_HANDSHAKE_BUDGET,
             &SystemClock::new(),
         )
@@ -748,5 +810,115 @@ mod tests {
         }
         assert!(saw_provider, "mock did not observe provider");
         assert!(saw_model_id, "mock did not observe model_id");
+    }
+
+    // -- test_pi_set_thinking_level_from_phase_config ---------------------
+
+    /// Driver-sends-when-config-set: with `thinking_level: Some(_)` the
+    /// driver issues `set_thinking_level` after the probe. The mock acks
+    /// the command and echoes the level back via a `message_delta`, so
+    /// the test verifies the wire token (`high`) reached pi.
+    #[tokio::test]
+    async fn set_thinking_level_from_phase_config_reaches_mock_pi() {
+        let session = spawn_with_handshake(
+            mock_command("set-thinking-level"),
+            None,
+            Some(ThinkingLevel::High),
+            TEST_HANDSHAKE_BUDGET,
+            &SystemClock::new(),
+        )
+        .await
+        .expect("spawn with thinking_level");
+
+        let mut session = session.prompt("hi").await.expect("prompt ok");
+        let mut saw_level = false;
+        loop {
+            match session.next_event().await.expect("event ok") {
+                Some(ParsedAgentEvent::TextDelta { text, .. }) => {
+                    if text.contains("thinking:high") {
+                        saw_level = true;
+                    }
+                }
+                Some(ParsedAgentEvent::SessionComplete { .. }) => break,
+                Some(_) => continue,
+                None => panic!("unexpected EOF"),
+            }
+        }
+        assert!(saw_level, "mock did not observe thinking_level");
+    }
+
+    /// With `thinking_level: None`, the driver must skip
+    /// `set_thinking_level` entirely. `happy-path` only consumes a
+    /// `prompt` after the probe — any extra post-probe command would
+    /// desynchronize it and fail this test before the `LOOM_COMPLETE`
+    /// delta arrives.
+    #[tokio::test]
+    async fn set_thinking_level_skipped_when_config_none() {
+        let session = spawn_with_handshake(
+            mock_command("happy-path"),
+            None,
+            None,
+            TEST_HANDSHAKE_BUDGET,
+            &SystemClock::new(),
+        )
+        .await
+        .expect("spawn without thinking_level");
+
+        let mut session = session.prompt("hi").await.expect("prompt ok");
+        let mut saw_loom_complete = false;
+        loop {
+            match session.next_event().await.expect("event ok") {
+                Some(ParsedAgentEvent::TextDelta { text, .. }) => {
+                    if text.contains("LOOM_COMPLETE") {
+                        saw_loom_complete = true;
+                    }
+                }
+                Some(ParsedAgentEvent::SessionComplete { .. }) => break,
+                Some(_) => continue,
+                None => panic!("unexpected EOF"),
+            }
+        }
+        assert!(
+            saw_loom_complete,
+            "happy-path delta missing — driver may have injected a set_thinking_level"
+        );
+    }
+
+    /// Driver-tolerates-pi-rejection: when pi answers
+    /// `set_thinking_level` with `success: false`, the driver logs a
+    /// warn and continues — the spawn must still return an `Idle`
+    /// session ready for `prompt`. The mock's `set-thinking-level-reject`
+    /// mode emits an error response, then services a follow-up prompt
+    /// to confirm the handshake did not abort.
+    #[tokio::test]
+    async fn set_thinking_level_tolerates_pi_rejection() {
+        let session = spawn_with_handshake(
+            mock_command("set-thinking-level-reject"),
+            None,
+            Some(ThinkingLevel::Medium),
+            TEST_HANDSHAKE_BUDGET,
+            &SystemClock::new(),
+        )
+        .await
+        .expect("spawn must succeed even when pi rejects set_thinking_level");
+
+        let mut session = session.prompt("hi").await.expect("prompt ok");
+        let mut saw_rejection_echo = false;
+        loop {
+            match session.next_event().await.expect("event ok") {
+                Some(ParsedAgentEvent::TextDelta { text, .. }) => {
+                    if text.contains("thinking-rejected:medium") {
+                        saw_rejection_echo = true;
+                    }
+                }
+                Some(ParsedAgentEvent::SessionComplete { .. }) => break,
+                Some(_) => continue,
+                None => panic!("unexpected EOF"),
+            }
+        }
+        assert!(
+            saw_rejection_echo,
+            "driver aborted instead of treating set_thinking_level rejection as advisory"
+        );
     }
 }

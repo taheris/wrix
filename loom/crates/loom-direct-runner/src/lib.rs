@@ -349,6 +349,7 @@ mod tests {
                 provider: "anthropic".into(),
                 model_id: m.into(),
             }),
+            thinking_level: None,
             shutdown_grace: None,
             handshake_timeout: None,
             stall_warn_interval: None,

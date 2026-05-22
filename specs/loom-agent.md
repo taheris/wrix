@@ -781,6 +781,12 @@ connection, network filtering, session audit logging.
   [test](agent_for_unknown_backend_in_default_returns_error)
 - Pi backend calls `set_model` after spawn when phase config specifies provider/model
   [test](set_model_from_phase_config_reaches_mock_pi)
+- Pi backend sends best-effort `set_thinking_level` when phase config sets it
+  [test](set_thinking_level_from_phase_config_reaches_mock_pi)
+- Pi backend skips `set_thinking_level` entirely when phase config leaves it unset
+  [test](set_thinking_level_skipped_when_config_none)
+- Pi backend tolerates pi rejection of `set_thinking_level` without aborting the handshake
+  [test](set_thinking_level_tolerates_pi_rejection)
 
 ### Container integration
 

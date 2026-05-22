@@ -393,6 +393,7 @@ where
             },
             scratch_dir: scratch.path().to_path_buf(),
             model: None,
+            thinking_level: None,
             shutdown_grace: None,
             handshake_timeout: None,
             stall_warn_interval: None,

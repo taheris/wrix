@@ -83,6 +83,7 @@ fn sample_config() -> SpawnConfig {
         },
         scratch_dir: PathBuf::new(),
         model: None,
+        thinking_level: None,
         shutdown_grace: None,
         handshake_timeout: None,
         stall_warn_interval: None,
@@ -132,6 +133,7 @@ async fn pi_startup_probe_succeeds_with_required_commands() {
     let session = spawn_with_handshake(
         mock_command("happy-path"),
         None,
+        None,
         Duration::from_secs(5),
         &SystemClock::new(),
     )
@@ -159,6 +161,7 @@ async fn pi_startup_probe_succeeds_with_required_commands() {
 async fn pi_startup_probe_fails_with_missing_required_command() {
     let result = spawn_with_handshake(
         mock_command("probe-missing-set-model"),
+        None,
         None,
         Duration::from_secs(5),
         &SystemClock::new(),

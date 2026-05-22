@@ -4,7 +4,7 @@ use displaydoc::Display;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::agent::AgentKind;
+use crate::agent::{AgentKind, ThinkingLevel};
 use crate::identifier::ProfileName;
 
 /// `[phase.<name>]` table from `<workspace>/config.toml`. Each per-phase
@@ -30,6 +30,12 @@ pub struct PhaseAgentConfig {
     pub backend: Option<String>,
     pub provider: Option<String>,
     pub model_id: Option<String>,
+    /// Reasoning-effort hint forwarded to pi via `set_thinking_level`. Stays
+    /// stringly-typed at the TOML layer so `agent.thinking_level = "off"`
+    /// parses natively; [`super::LoomConfig::agent_for`] converts the value
+    /// to [`ThinkingLevel`] and surfaces typos as
+    /// [`AgentSelectionError::UnknownThinkingLevel`].
+    pub thinking_level: Option<String>,
 }
 
 /// Workflow phase that resolves an [`AgentSelection`] from config.
@@ -105,6 +111,11 @@ pub struct AgentSelection {
     pub kind: AgentKind,
     pub provider: Option<String>,
     pub model_id: Option<String>,
+    /// Reasoning-effort hint forwarded to pi via `set_thinking_level` when
+    /// the resolved backend is [`AgentKind::Pi`]. Claude has no analog;
+    /// resolver carries the value through regardless so a non-pi phase that
+    /// later switches backends still has the typed value at hand.
+    pub thinking_level: Option<ThinkingLevel>,
     pub claude_settings: Option<ClaudeSettings>,
 }
 
@@ -112,6 +123,8 @@ pub struct AgentSelection {
 pub enum AgentSelectionError {
     /// unknown agent backend `{name}` in config (expected `claude` or `pi`)
     UnknownBackend { name: String },
+    /// unknown agent.thinking_level `{name}` in config (expected one of `off`, `minimal`, `low`, `medium`, `high`, `xhigh`)
+    UnknownThinkingLevel { name: String },
 }
 
 /// Convert a backend name string (from `[phase.<name>] agent.backend` or
@@ -121,6 +134,25 @@ pub fn parse_backend_name(name: &str) -> Result<AgentKind, AgentSelectionError> 
         "claude" => Ok(AgentKind::Claude),
         "pi" => Ok(AgentKind::Pi),
         other => Err(AgentSelectionError::UnknownBackend {
+            name: other.to_string(),
+        }),
+    }
+}
+
+/// Convert a `agent.thinking_level` TOML string into the typed
+/// [`ThinkingLevel`]. The accepted vocabulary matches `specs/loom-agent.md`'s
+/// Pi command table; typos surface as
+/// [`AgentSelectionError::UnknownThinkingLevel`] rather than silently
+/// dropping the override.
+pub fn parse_thinking_level_name(name: &str) -> Result<ThinkingLevel, AgentSelectionError> {
+    match name {
+        "off" => Ok(ThinkingLevel::Off),
+        "minimal" => Ok(ThinkingLevel::Minimal),
+        "low" => Ok(ThinkingLevel::Low),
+        "medium" => Ok(ThinkingLevel::Medium),
+        "high" => Ok(ThinkingLevel::High),
+        "xhigh" => Ok(ThinkingLevel::Xhigh),
+        other => Err(AgentSelectionError::UnknownThinkingLevel {
             name: other.to_string(),
         }),
     }
@@ -183,6 +215,28 @@ mod tests {
         match parse_backend_name("gpt") {
             Err(AgentSelectionError::UnknownBackend { name }) => assert_eq!(name, "gpt"),
             other => panic!("expected UnknownBackend, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_thinking_level_name_accepts_every_documented_level() {
+        for (token, expected) in [
+            ("off", ThinkingLevel::Off),
+            ("minimal", ThinkingLevel::Minimal),
+            ("low", ThinkingLevel::Low),
+            ("medium", ThinkingLevel::Medium),
+            ("high", ThinkingLevel::High),
+            ("xhigh", ThinkingLevel::Xhigh),
+        ] {
+            assert_eq!(parse_thinking_level_name(token).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn parse_thinking_level_name_rejects_unknown() {
+        match parse_thinking_level_name("ultra") {
+            Err(AgentSelectionError::UnknownThinkingLevel { name }) => assert_eq!(name, "ultra"),
+            other => panic!("expected UnknownThinkingLevel, got {other:?}"),
         }
     }
 

@@ -229,6 +229,18 @@ pub struct AbortCommand {
     pub kind: &'static str,
 }
 
+/// `set_thinking_level` command body — best-effort post-handshake hint
+/// per `specs/loom-agent.md`'s Pi command table. The `level` field carries
+/// the lowercase wire token; pi rejection is downgraded to a `warn!` in
+/// the driver so providers without thinking support continue uninterrupted.
+#[derive(Debug, Serialize)]
+pub struct SetThinkingLevelCommand<'a> {
+    #[serde(rename = "type")]
+    pub kind: &'static str,
+    pub id: &'a str,
+    pub level: &'a str,
+}
+
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
@@ -357,5 +369,22 @@ mod tests {
             serde_json::to_string(&AbortCommand { kind: "abort" }).expect("serialize abort");
         let abort_v: serde_json::Value = serde_json::from_str(&abort).expect("parse");
         assert_eq!(abort_v["type"], "abort");
+    }
+
+    /// `set_thinking_level` serializes to a JSONL line with the documented
+    /// shape: `type` discriminator, request `id`, and lowercase `level`
+    /// token. Pin every field so a rename on either side surfaces here.
+    #[test]
+    fn set_thinking_level_command_serializes_to_expected_shape() {
+        let cmd = SetThinkingLevelCommand {
+            kind: "set_thinking_level",
+            id: "loom-pi-set-thinking-level",
+            level: "high",
+        };
+        let json = serde_json::to_string(&cmd).expect("serialize");
+        let v: serde_json::Value = serde_json::from_str(&json).expect("parse");
+        assert_eq!(v["type"], "set_thinking_level");
+        assert_eq!(v["id"], "loom-pi-set-thinking-level");
+        assert_eq!(v["level"], "high");
     }
 }

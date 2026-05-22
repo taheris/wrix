@@ -27,6 +27,7 @@ mod security;
 pub use agent::{
     AgentSelection, AgentSelectionError, BUILT_IN_BACKEND, BUILT_IN_PROFILE, ClaudeSettings,
     DEFAULT_PHASE_KEY, Phase, PhaseAgentConfig, PhaseConfig, parse_backend_name,
+    parse_thinking_level_name,
 };
 pub use agent_observer::{AgentObserversConfig, DoomLoopConfig, DuplicateResultConfig};
 pub use beads::BeadsConfig;
@@ -150,6 +151,10 @@ impl LoomConfig {
         let kind = parse_backend_name(backend_str)?;
         let provider = lookup_phase_field(&self.phase, key, |p| &p.agent.provider).cloned();
         let model_id = lookup_phase_field(&self.phase, key, |p| &p.agent.model_id).cloned();
+        let thinking_level = lookup_phase_field(&self.phase, key, |p| &p.agent.thinking_level)
+            .map(String::as_str)
+            .map(parse_thinking_level_name)
+            .transpose()?;
         let claude_settings = match kind {
             AgentKind::Claude => Some(ClaudeSettings {
                 denied_tools: self.security.denied_tools.clone(),
@@ -162,6 +167,7 @@ impl LoomConfig {
             kind,
             provider,
             model_id,
+            thinking_level,
             claude_settings,
         })
     }
@@ -490,6 +496,53 @@ agent.model_id = "deepseek-v3"
         assert_eq!(claude.post_result_grace_secs, 5);
         assert!(claude.denied_tools.is_empty());
 
+        Ok(())
+    }
+
+    /// `[phase.<name>] agent.thinking_level = "high"` resolves into a typed
+    /// [`ThinkingLevel`] on the resolved [`AgentSelection`]. The fallback
+    /// chain walks `[phase.<name>]` → `[phase.default]` like every other
+    /// field — assert both legs.
+    #[test]
+    fn agent_for_resolves_thinking_level_through_named_and_default_phases() -> Result<()> {
+        use crate::agent::ThinkingLevel;
+
+        let src = r#"
+[phase.default]
+agent.backend = "pi"
+agent.thinking_level = "medium"
+
+[phase.todo]
+agent.backend = "pi"
+agent.thinking_level = "high"
+"#;
+        let cfg = LoomConfig::from_toml_str(src)?;
+        let todo = cfg.agent_for(Phase::Todo).expect("agent_for todo");
+        assert_eq!(todo.thinking_level, Some(ThinkingLevel::High));
+
+        let run = cfg.agent_for(Phase::Run).expect("agent_for run");
+        assert_eq!(run.thinking_level, Some(ThinkingLevel::Medium));
+        Ok(())
+    }
+
+    /// Typos in `agent.thinking_level` surface lazily as
+    /// `UnknownThinkingLevel` from `agent_for`, mirroring the
+    /// `UnknownBackend` error path so misconfigurations are caught at
+    /// resolve time with a precise message.
+    #[test]
+    fn agent_for_unknown_thinking_level_surfaces_typed_error() -> Result<()> {
+        let src = r#"
+[phase.default]
+agent.backend = "pi"
+agent.thinking_level = "ultra"
+"#;
+        let cfg = LoomConfig::from_toml_str(src)?;
+        match cfg.agent_for(Phase::Run) {
+            Err(AgentSelectionError::UnknownThinkingLevel { name }) => {
+                assert_eq!(name, "ultra");
+            }
+            other => panic!("expected UnknownThinkingLevel, got {other:?}"),
+        }
         Ok(())
     }
 
