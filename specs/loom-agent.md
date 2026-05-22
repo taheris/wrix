@@ -113,21 +113,31 @@ The public agent-driver contract is the `Session` trait, defined in
 type — and why subprocess-driving backends keep a typestate as
 internal mechanic without exposing it — is described in
 [loom-harness.md — Event Schema](loom-harness.md#event-schema).
-Workflow callers hold backends as `Box<dyn Session>`:
+Workflow callers hold backends as
+`Box<dyn Session<Events = EventStream>>`:
 
 ```rust
 pub trait Session: Send {
-    async fn prompt(&mut self, msg: &str) -> Result<EventStream>;
-    async fn steer(&mut self, msg: &str) -> Result<()>;
-    async fn cancel(&mut self) -> Result<()>;
-    async fn set_mode(&mut self, mode: &str) -> Result<()>;
+    type Events: Stream<Item = AgentEvent> + Send;
+
+    fn prompt(&mut self, msg: String) -> Self::Events;
+    fn steer(&mut self, msg: String);
+    fn cancel(&mut self);
+    fn set_mode(&mut self, mode: SessionMode);
 }
 pub type EventStream = Pin<Box<dyn Stream<Item = AgentEvent> + Send>>;
 ```
 
-`Events` is concretized to a boxed stream so `dyn Session` is
-dyn-compatible. Backends box their internal stream at the trait
-boundary. Workflow code never sees concrete backend types.
+The methods are sync and infallible — backends push commands onto an
+internal queue or channel; the streamed `AgentEvent`s carry any
+asynchronous outcome (including failures, via `AgentEvent::Error` and
+the `exit_code` on `SessionComplete`). The associated `Events` type
+lets each backend pick its own stream impl internally; workflow code
+pins the stream at the boundary by binding `Events = EventStream` so
+`dyn Session` is dyn-compatible. `SessionMode` is a `#[non_exhaustive]`
+enum (defined alongside `Session` in `loom-events`) so the closed-set
+discipline of RS-17 holds while future modes can land additively.
+Workflow code never sees concrete backend types.
 
 ### Typestate (internal mechanic of subprocess-driving backends)
 
@@ -196,22 +206,34 @@ map to one outbound event.
 ### AgentEvent
 
 The session emits a stream of typed events. Event names are part of the
-wire format: they are serialized as snake_case (`message_delta`,
+wire format: they are serialized as snake_case (`text_delta`,
 `tool_call`, …) when the terminal renderer and on-disk JSONL log share
 the tee-style sink (see [loom-harness — Run UX &
 Logging](loom-harness.md#run-ux--logging)). Log readers consume those
-names directly.
+names directly. Every variant carries a flat envelope (`bead_id`,
+`molecule_id?`, `iteration`, `source`, `ts_ms`, `seq`) in addition to
+the per-variant payload listed below.
 
 | Event | Payload | Meaning |
 |-------|---------|---------|
-| `message_delta` | `text` | Streaming text fragment from the agent. |
-| `tool_call` | `id`, `tool`, `params` | Agent invoked a tool. |
+| `agent_start` | `schema_version`, `title`, `profile`, `spec_label`, `started_at_ms`, `parent_tool_call_id?` | First event in any session; carries per-spawn metadata for the renderer/log replayer. |
+| `agent_end` | — | Agent session ended; lifecycle bookend paired with `agent_start`. |
+| `turn_start` | — | Multi-turn session opened a new turn; paired with `turn_end`. |
+| `text_delta` | `text` | Streaming text fragment from the agent. |
+| `text_end` | — | Closes a `text_delta` stream. |
+| `thinking_delta` | `text` | Streaming reasoning fragment (when the backend exposes it). |
+| `thinking_end` | — | Closes a `thinking_delta` stream. |
+| `toolcall_delta` | `id`, `delta` | Streaming tool-call argument fragment. |
+| `tool_call` | `id`, `tool`, `params`, `parent_tool_call_id?` | Agent invoked a tool. |
 | `tool_result` | `id`, `output`, `is_error` | Tool execution completed. |
+| `tool_progress` | `id`, `text` | In-flight progress update from a long-running tool. |
 | `turn_end` | — | One turn finished; the session may have more turns. |
 | `session_complete` | `exit_code`, `cost_usd?` | Process exiting or final result received. |
 | `compaction_start` | `reason` | Context compaction beginning. |
 | `compaction_end` | `aborted` | Compaction finished. |
-| `error` | `message` | Agent reported an error. |
+| `auto_retry` | `attempt`, `max_attempts`, `delay_ms`, `error_message` | Backend signaled an auto-retry attempt. |
+| `error` | `message` | Agent reported an error mid-stream (does not necessarily end the session). |
+| `driver_event` | `driver_kind`, `summary`, `payload` | Driver-side event (verdict gate, push gate, container lifecycle, token usage, observer signal, …). `driver_kind` is forward-compatible — unknown wire strings land in `DriverKind::Other`. |
 
 `reason` is one of `context_limit`, `user_requested`, or `unknown`. Pi's
 `threshold` and `overflow` both map to `context_limit`; `manual` maps to
@@ -239,6 +261,11 @@ closed set of error categories:
   (10 MB; see [JSONL Framing](#jsonl-framing)).
 - **Unsupported** — the backend cannot perform the requested operation
   (e.g., a future backend without steering).
+- **Handshake timeout** — a named backend handshake stage did not
+  complete within its budget; the variant carries the stage name and
+  the elapsed duration.
+- **Lock poisoned** — a parser-internal mutex was poisoned by a
+  panicking thread.
 
 These are the only protocol-level error classes. Backend-specific
 failures (model errors, container teardown failures, etc.) surface
@@ -450,7 +477,7 @@ by the top-level `tool_execution_*` and `turn_end` events.
 
 | Delta Type | Maps To |
 |------------|---------|
-| `text_delta` | `AgentEvent::MessageDelta` (extract `text`) |
+| `text_delta` | `AgentEvent::TextDelta` (extract `text`) |
 | `error` | `AgentEvent::Error` (reasons: `"aborted"`, `"error"`) |
 | `start`, `text_start`, `text_end` | logged at `trace!`, skipped |
 | `thinking_start`, `thinking_delta`, `thinking_end` | logged at `trace!`, skipped |
@@ -508,7 +535,7 @@ session.
 |-------------|---------|
 | `system` (subtype `init`) | session metadata — extract `session_id` |
 | `assistant` (tool_use content) | `AgentEvent::ToolCall` |
-| `assistant` (text content) | `AgentEvent::MessageDelta` |
+| `assistant` (text content) | `AgentEvent::TextDelta` |
 | `user` (tool_result content) | `AgentEvent::ToolResult` |
 | `result` (subtype `success`) | `AgentEvent::TurnEnd` then `AgentEvent::SessionComplete` |
 | `result` (subtype `error`) | `AgentEvent::Error` then `AgentEvent::SessionComplete` |
@@ -697,7 +724,7 @@ connection, network filtering, session audit logging.
   [check](grep -q 'pub trait AgentBackend' crates/loom-driver/src/agent/backend.rs)
 - `run_agent` compiles with `PiBackend`, `ClaudeBackend`, and `DirectBackend` as concrete types
   [check](cargo test -p loom-agent --test static_dispatch pi_and_claude_dispatch_through_run_agent)
-- `AgentEvent` enum covers: MessageDelta, ToolCall, ToolResult, TurnEnd, SessionComplete, CompactionStart, CompactionEnd, Error
+- `AgentEvent` enum covers: AgentStart, AgentEnd, TurnStart, TextDelta, TextEnd, ThinkingDelta, ThinkingEnd, ToolcallDelta, ToolCall, ToolResult, ToolProgress, TurnEnd, SessionComplete, CompactionStart, CompactionEnd, AutoRetry, Error, DriverEvent
   [check](cargo test -p loom-events --lib every_spec_variant_present)
 - `SpawnConfig` struct captures image_ref, image_source, workspace, env, initial_prompt, agent_args, scratch_dir
   [check](cargo test -p loom-driver --lib spawn_config_with_model_none_omits_model_key)
@@ -705,7 +732,7 @@ connection, network filtering, session audit logging.
   [check](grep -q 'pub struct Idle' crates/loom-driver/src/agent/session.rs)
 - `Session` trait surface does not reference `AgentSession`, `Idle`, or `Active` types (typestate is private to subprocess backends)
   [check](cargo run -p loom-walk -- session_trait_does_not_expose_typestate)
-- `ProtocolError` variants cover InvalidJson, UnknownMessageType, Io, ProcessExit, UnexpectedEof, LineTooLong, Unsupported
+- `ProtocolError` variants cover InvalidJson, UnknownMessageType, Io, ProcessExit, UnexpectedEof, LineTooLong, Unsupported, HandshakeTimeout, LockPoisoned
   [check](grep -q 'pub enum ProtocolError' crates/loom-driver/src/agent/error.rs)
 
 ### Pi backend
