@@ -1034,6 +1034,47 @@ mod tests {
         Ok(())
     }
 
+    /// FR9.2 — verify-tier dispatch errors (exit code 2 = unknown verifier,
+    /// command not found) must refuse the push with cause `verifier-failed`,
+    /// i.e. count as fails rather than skips. Exit codes 1 (verifier ran
+    /// and said "no") and 2 (verifier could not run at all) collapse onto
+    /// the same push-gate refusal so a broken verifier never tunnels a
+    /// silent pass through the four-condition AND.
+    #[tokio::test]
+    async fn push_blocked_on_verify_dispatch_error() -> Result<(), ReviewError> {
+        let mut c = FakeController {
+            pre_beads: vec![bead("wx-1", &["spec:loom-harness"])],
+            post_beads: vec![bead("wx-1", &["spec:loom-harness"])],
+            verify_exit: Some(2),
+            ..FakeController::default()
+        };
+        let result = review_loop(&mut c, IterationCap::default()).await?;
+        assert!(
+            matches!(result, ReviewResult::PushBlocked { .. }),
+            "dispatch error (exit 2) must refuse push, not pass through: {result:?}",
+        );
+        assert_eq!(
+            c.git_push_calls, 0,
+            "dispatch error must NOT push — counts as fail, not skip",
+        );
+        let refuse = c
+            .driver_events
+            .iter()
+            .find(|(k, _, _)| k == "push_gate_refuse")
+            .expect("refuse event present");
+        assert_eq!(
+            refuse.2["cause"].as_str(),
+            Some("verifier-failed"),
+            "dispatch error must route through verifier-failed cause",
+        );
+        assert_eq!(
+            c.apply_integrity_clarify_calls.len(),
+            0,
+            "verify-fail branch must not invoke the integrity-clarify writer",
+        );
+        Ok(())
+    }
+
     /// FR9 — push-gate review branch: a `LOOM_CONCERN` exit marker
     /// refuses the push with cause `review-concern`. The reviewer's
     /// `Incomplete` outcome must NOT short-circuit `review_loop` into

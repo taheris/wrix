@@ -657,29 +657,54 @@ mod tests {
     /// observer's `SessionCommand::Abort` must classify as `observer-abort`
     /// rather than `swallowed-marker`, even though no exit marker was
     /// emitted. The detail string must carry the observer's verbatim
-    /// reason so human triage sees what tripped the kill.
+    /// reason so human triage sees what tripped the kill. The two branches
+    /// — observer-aborted vs. plain no-marker — share the same `marker=None`
+    /// input, so distinctness is the load-bearing property: the choice of
+    /// recovery cause must come from the `SessionResult` discriminator, not
+    /// the marker shape.
     #[test]
-    fn observer_abort_session_result_routes_to_observer_abort_cause() {
-        let session = SessionResult::ObserverAbort {
+    fn observer_abort_routes_to_observer_abort_distinct_from_swallowed_marker() {
+        let observer_session = SessionResult::ObserverAbort {
             reason: "doom-loop: 3 identical tool calls".into(),
         };
-        match classify_session(session, None) {
-            AgentOutcome::Failure { error } => {
-                assert!(
-                    error.contains("Session aborted by observer"),
-                    "error must carry the spec format prefix: {error}",
-                );
-                assert!(
-                    error.contains("doom-loop: 3 identical tool calls"),
-                    "error must preserve verbatim observer reason: {error}",
-                );
-                assert!(
-                    !error.contains("swallowed"),
-                    "observer-abort must NOT degrade to swallowed-marker: {error}",
-                );
-            }
-            other => panic!("expected Failure, got {other:?}"),
-        }
+        let observer_error = match classify_session(observer_session, None) {
+            AgentOutcome::Failure { error } => error,
+            other => panic!("expected Failure for ObserverAbort, got {other:?}"),
+        };
+        assert!(
+            observer_error.contains("Session aborted by observer"),
+            "observer-abort error must carry the spec format prefix: {observer_error}",
+        );
+        assert!(
+            observer_error.contains("doom-loop: 3 identical tool calls"),
+            "observer-abort error must preserve verbatim observer reason: {observer_error}",
+        );
+        assert!(
+            !observer_error.contains("swallowed marker"),
+            "observer-abort must NOT degrade to swallowed-marker: {observer_error}",
+        );
+
+        let plain_session = SessionResult::Complete(SessionOutcome {
+            exit_code: 0,
+            cost_usd: None,
+        });
+        let plain_error = match classify_session(plain_session, None) {
+            AgentOutcome::Failure { error } => error,
+            other => panic!("expected Failure for marker-less Complete, got {other:?}"),
+        };
+        assert!(
+            plain_error.contains("swallowed marker"),
+            "marker-less Complete must route to swallowed-marker: {plain_error}",
+        );
+        assert!(
+            !plain_error.contains("Session aborted by observer"),
+            "swallowed-marker must NOT borrow observer-abort phrasing: {plain_error}",
+        );
+
+        assert_ne!(
+            observer_error, plain_error,
+            "observer-abort and swallowed-marker must yield distinct error bodies under marker=None",
+        );
     }
 
     fn write_manifest(dir: &std::path::Path) -> Arc<ProfileImageManifest> {
