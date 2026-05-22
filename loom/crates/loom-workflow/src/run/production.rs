@@ -321,8 +321,10 @@ where
 /// `loom.base_commit` metadata. Used by `exec_review` to scope the
 /// molecule-completion handoff to the molecule's own diff rather than
 /// `--tree`. Mirrors the list-then-show pattern from
-/// `loom-workflow::init::fetch_active_molecules` (the rebuild path) so
-/// the run-phase and rebuild-phase resolutions agree.
+/// `loom-workflow::init::fetch_active_molecules` (the rebuild path) and
+/// delegates the metadata resolution to
+/// [`crate::init::resolve_base_commit`] so the run-phase and rebuild-phase
+/// resolutions share parent inheritance + write-back behaviour verbatim.
 async fn fetch_molecule_base_commit<R: CommandRunner>(
     bd: &BdClient<R>,
     label: &SpecLabel,
@@ -342,13 +344,23 @@ async fn fetch_molecule_base_commit<R: CommandRunner>(
             label: label.to_string(),
         })?;
     let detail = bd.show(&molecule.id).await?;
-    detail
-        .metadata
-        .get("loom.base_commit")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| RunError::MoleculeMissingBaseCommit {
-            id: molecule.id.to_string(),
+    crate::init::resolve_base_commit(bd, &detail)
+        .await
+        .map_err(|e| {
+            use crate::init::InitError;
+            match e {
+                InitError::Bd(e) => RunError::Bd(e),
+                InitError::MoleculeMissingBaseCommit { id } => {
+                    RunError::MoleculeMissingBaseCommit { id }
+                }
+                InitError::MoleculeMissingBaseCommitNoParentMetadata { id, parent } => {
+                    RunError::MoleculeMissingBaseCommitNoParentMetadata { id, parent }
+                }
+                other => unreachable!(
+                    "resolve_base_commit emits only Bd / MoleculeMissingBaseCommit / \
+                     MoleculeMissingBaseCommitNoParentMetadata; got {other:?}",
+                ),
+            }
         })
 }
 
@@ -1246,6 +1258,182 @@ mod tests {
         match err {
             RunError::MoleculeMissingBaseCommit { id } => assert_eq!(id, "wx-mol.99"),
             other => panic!("expected MoleculeMissingBaseCommit, got {other:?}"),
+        }
+    }
+
+    /// Out-of-band `loom:active` beads (created via `bd create` rather than
+    /// `loom plan`) may ship without their own `loom.base_commit` — typical
+    /// when the user files a follow-up bug parented to an existing molecule's
+    /// epic. `fetch_molecule_base_commit` MUST mirror
+    /// `init::fetch_active_molecules`'s self-heal: read the parent's
+    /// `loom.base_commit`, persist it on the child via `bd update --set-metadata`,
+    /// and continue the molecule-completion handoff using the inherited value.
+    /// Without this, `exec_review` would surface
+    /// `RunError::MoleculeMissingBaseCommit` for a state the spec calls valid.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn exec_review_inherits_base_commit_from_parent_when_child_lacks_metadata() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = write_manifest(dir.path());
+        let label = SpecLabel::new("delta");
+
+        let argv_log = dir.path().join("argv.log");
+        let stub = dir.path().join("loom-stub.sh");
+        let stub_body = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {log}\nexit 0\n",
+            log = argv_log.to_string_lossy(),
+        );
+        std::fs::write(&stub, stub_body).unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let list_body = br#"[{
+            "id": "wx-child.7",
+            "title": "delta follow-up",
+            "status": "open",
+            "priority": 2,
+            "issue_type": "bug",
+            "labels": ["spec:delta", "loom:active"]
+        }]"#;
+        let child_show = br#"[{
+            "id": "wx-child.7",
+            "title": "delta follow-up",
+            "status": "open",
+            "priority": 2,
+            "issue_type": "bug",
+            "labels": ["spec:delta", "loom:active"],
+            "parent": "wx-epicd",
+            "metadata": {}
+        }]"#;
+        let parent_show = br#"[{
+            "id": "wx-epicd",
+            "title": "delta: pending decomposition",
+            "status": "open",
+            "priority": 2,
+            "issue_type": "epic",
+            "labels": ["spec:delta", "loom:active"],
+            "metadata": {"loom.base_commit": "feed0042"}
+        }]"#;
+        let bd = BdClient::with_runner(ScriptedBd::new([
+            ok_stdout(list_body),
+            ok_stdout(child_show),
+            ok_stdout(parent_show),
+            ok_stdout(b""), // bd update --set-metadata (inheritance write-back)
+        ]));
+        let mut controller = ProductionAgentLoopController::new(
+            bd,
+            label,
+            stub,
+            dir.path().to_path_buf(),
+            manifest,
+            None,
+            ProfileName::new("base"),
+            |_cfg: SpawnConfig, _bead_id: BeadId| async move {
+                (
+                    SessionResult::Complete(SessionOutcome {
+                        exit_code: 0,
+                        cost_usd: None,
+                    }),
+                    Some(ExitSignal::Complete),
+                )
+            },
+        );
+
+        controller
+            .exec_review()
+            .await
+            .expect("exec_review must succeed when base_commit is inheritable from parent");
+
+        let recorded = std::fs::read_to_string(&argv_log).expect("argv log readable");
+        let lines: Vec<&str> = recorded.lines().collect();
+        assert_eq!(
+            lines.len(),
+            2,
+            "exec_review must still spawn verify + review after inheritance: {recorded:?}",
+        );
+        assert_eq!(
+            lines[0], "gate verify --diff feed0042..HEAD -s delta",
+            "verify child must use the inherited base_commit",
+        );
+        assert_eq!(
+            lines[1], "gate review --diff feed0042..HEAD -s delta --verify-exit 0",
+            "review child must use the inherited base_commit",
+        );
+    }
+
+    /// When neither the child nor its parent carries `loom.base_commit`,
+    /// `fetch_molecule_base_commit` surfaces the distinct
+    /// `MoleculeMissingBaseCommitNoParentMetadata` variant so the error
+    /// text can name the parent — the operator's first repair hop is to
+    /// fix the epic, not the child.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn exec_review_errors_when_parent_also_lacks_base_commit_metadata() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = write_manifest(dir.path());
+        let list_body = br#"[{
+            "id": "wx-child.8",
+            "title": "epsilon follow-up",
+            "status": "open",
+            "priority": 2,
+            "issue_type": "bug",
+            "labels": ["spec:epsilon", "loom:active"]
+        }]"#;
+        let child_show = br#"[{
+            "id": "wx-child.8",
+            "title": "epsilon follow-up",
+            "status": "open",
+            "priority": 2,
+            "issue_type": "bug",
+            "labels": ["spec:epsilon", "loom:active"],
+            "parent": "wx-epice",
+            "metadata": {}
+        }]"#;
+        let parent_show = br#"[{
+            "id": "wx-epice",
+            "title": "epsilon: pending decomposition",
+            "status": "open",
+            "priority": 2,
+            "issue_type": "epic",
+            "labels": ["spec:epsilon", "loom:active"]
+        }]"#;
+        let bd = BdClient::with_runner(ScriptedBd::new([
+            ok_stdout(list_body),
+            ok_stdout(child_show),
+            ok_stdout(parent_show),
+        ]));
+        let mut controller = ProductionAgentLoopController::new(
+            bd,
+            SpecLabel::new("epsilon"),
+            PathBuf::from("/nonexistent/loom"),
+            dir.path().to_path_buf(),
+            manifest,
+            None,
+            ProfileName::new("base"),
+            |_cfg: SpawnConfig, _bead_id: BeadId| async move {
+                (
+                    SessionResult::Complete(SessionOutcome {
+                        exit_code: 0,
+                        cost_usd: None,
+                    }),
+                    Some(ExitSignal::Complete),
+                )
+            },
+        );
+        let err = controller
+            .exec_review()
+            .await
+            .expect_err("exec_review must error when both child and parent lack base_commit");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("bd update wx-child.8 --set-metadata loom.base_commit="),
+            "error must surface the fix command: {msg}",
+        );
+        match err {
+            RunError::MoleculeMissingBaseCommitNoParentMetadata { id, parent } => {
+                assert_eq!(id, "wx-child.8");
+                assert_eq!(parent, "wx-epice");
+            }
+            other => panic!("expected MoleculeMissingBaseCommitNoParentMetadata, got {other:?}"),
         }
     }
 }

@@ -156,7 +156,11 @@ pub async fn fetch_active_molecules<R: CommandRunner>(
 /// When the child lacks the metadata but its parent carries it, write the
 /// value back to the child via `bd update --set-metadata` so subsequent
 /// reads are self-sufficient, then log the inheritance.
-async fn resolve_base_commit<R: CommandRunner>(
+///
+/// Shared between the init/rebuild path ([`fetch_active_molecules`]) and the
+/// run-phase epic lookup ([`crate::run::production::fetch_molecule_base_commit`])
+/// so both surface the same inheritance behaviour the spec mandates.
+pub(crate) async fn resolve_base_commit<R: CommandRunner>(
     bd: &BdClient<R>,
     detail: &loom_driver::bd::Bead,
 ) -> Result<String, InitError> {
