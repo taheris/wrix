@@ -11,7 +11,7 @@ use askama::Template;
 use loom_events::identifier::{BeadId, MoleculeId, SpecLabel};
 use loom_templates::msg::{BeadKind, ClarifyBead, ClarifyOption, MsgContext};
 use loom_templates::plan::{PlanNewContext, PlanUpdateContext};
-use loom_templates::review::{ReviewContext, ReviewSource};
+use loom_templates::review::{ReviewContext, ReviewLane, ReviewSource};
 use loom_templates::run::{
     DriverNoticeCause, PREVIOUS_FAILURE_MAX_LEN, PreviousFailure, ReviewConcernKind, RunContext,
     VerifierFailure,
@@ -505,6 +505,7 @@ fn review_renders_review_context_fields() -> Result<()> {
         }],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
         style_rules: "docs/style-rules.md".to_string(),
+        lane: ReviewLane::Both,
     };
     let out = ctx.render()?;
 
@@ -524,6 +525,112 @@ fn review_renders_review_context_fields() -> Result<()> {
     assert!(out.contains("## `[judge]` Rubrics"));
     assert!(out.contains(judge_path), "judge path missing: {out}");
     assert!(out.contains(judge_body.trim()), "judge body missing: {out}");
+    Ok(())
+}
+
+/// `ReviewLane::Judge` narrows the prompt to the `[judge]` rubric evaluation
+/// lane — the `[judge]` rubric bodies still render so the agent has its
+/// inputs, but the rubric walk over the diff (Review Dimensions,
+/// review_rubric.md content, Invariant-Clash Detection) is suppressed.
+/// Pins the per-lane render contract for `loom gate judge`.
+#[test]
+fn review_lane_judge_omits_rubric_walk_sections_and_keeps_judge_rubrics() -> Result<()> {
+    let ctx = ReviewContext {
+        pinned_context: PINNED_CONTEXT_BODY.to_string(),
+        label: SpecLabel::new("loom-harness"),
+        spec_path: "specs/loom-harness.md".to_string(),
+        companion_paths: vec![],
+        beads_summary: None,
+        base_commit: None,
+        molecule_id: None,
+        verify_sources: vec![],
+        judge_rubrics: vec![ReviewSource {
+            path: "tests/judges/loom.sh".into(),
+            body: "JUDGE_BODY_MARKER".into(),
+        }],
+        scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+        style_rules: "docs/style-rules.md".to_string(),
+        lane: ReviewLane::Judge,
+    };
+    let out = ctx.render()?;
+
+    assert!(
+        out.contains("## `[judge]` Rubrics"),
+        "judge lane must keep [judge] rubrics section: {out}",
+    );
+    assert!(
+        out.contains("JUDGE_BODY_MARKER"),
+        "judge lane must inline judge rubric bodies: {out}",
+    );
+    assert!(
+        !out.contains("## Review Dimensions"),
+        "judge lane must suppress Review Dimensions: {out}",
+    );
+    assert!(
+        !out.contains("## Verifier Honesty"),
+        "judge lane must suppress verifier-honesty rubric: {out}",
+    );
+    assert!(
+        !out.contains("## Style-Rule Conformance"),
+        "judge lane must suppress style-rule walk: {out}",
+    );
+    assert!(
+        !out.contains("## Invariant-Clash Detection"),
+        "judge lane must suppress invariant-clash detection: {out}",
+    );
+    Ok(())
+}
+
+/// `ReviewLane::Rubric` narrows the prompt to the rubric walk over the diff —
+/// the rubric content (Review Dimensions, verifier honesty, style-rule
+/// conformance, invariant-clash detection) all render, but the `[judge]`
+/// rubric bodies are suppressed. Pins the per-lane render contract for
+/// `loom gate rubric`.
+#[test]
+fn review_lane_rubric_omits_judge_rubrics_and_keeps_rubric_walk_sections() -> Result<()> {
+    let ctx = ReviewContext {
+        pinned_context: PINNED_CONTEXT_BODY.to_string(),
+        label: SpecLabel::new("loom-harness"),
+        spec_path: "specs/loom-harness.md".to_string(),
+        companion_paths: vec![],
+        beads_summary: None,
+        base_commit: None,
+        molecule_id: None,
+        verify_sources: vec![],
+        judge_rubrics: vec![ReviewSource {
+            path: "tests/judges/loom.sh".into(),
+            body: "JUDGE_BODY_MARKER".into(),
+        }],
+        scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+        style_rules: "docs/style-rules.md".to_string(),
+        lane: ReviewLane::Rubric,
+    };
+    let out = ctx.render()?;
+
+    assert!(
+        !out.contains("## `[judge]` Rubrics"),
+        "rubric lane must suppress [judge] rubrics section: {out}",
+    );
+    assert!(
+        !out.contains("JUDGE_BODY_MARKER"),
+        "rubric lane must not inline judge rubric bodies: {out}",
+    );
+    assert!(
+        out.contains("## Review Dimensions"),
+        "rubric lane must keep Review Dimensions: {out}",
+    );
+    assert!(
+        out.contains("## Verifier Honesty"),
+        "rubric lane must keep verifier-honesty rubric: {out}",
+    );
+    assert!(
+        out.contains("## Style-Rule Conformance"),
+        "rubric lane must keep style-rule walk: {out}",
+    );
+    assert!(
+        out.contains("## Invariant-Clash Detection"),
+        "rubric lane must keep invariant-clash detection: {out}",
+    );
     Ok(())
 }
 
@@ -547,6 +654,7 @@ fn review_renders_style_rule_conformance_walkthrough() -> Result<()> {
         judge_rubrics: vec![],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
         style_rules: "docs/style-rules.md".to_string(),
+        lane: ReviewLane::Both,
     };
     let out = ctx.render()?;
 
@@ -609,6 +717,7 @@ fn review_renders_single_marker_instruction_with_concern_xor_complete() -> Resul
         judge_rubrics: vec![],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
         style_rules: "docs/style-rules.md".to_string(),
+        lane: ReviewLane::Both,
     };
     let out = ctx.render()?;
 
@@ -650,6 +759,7 @@ fn review_renders_options_format_contract_with_universal_scope() -> Result<()> {
         judge_rubrics: vec![],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
         style_rules: "docs/style-rules.md".to_string(),
+        lane: ReviewLane::Both,
     };
     let out = ctx.render()?;
 
@@ -935,6 +1045,7 @@ fn worker_templates_omit_chat_final_turn_clause() -> Result<()> {
         judge_rubrics: vec![],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
         style_rules: "docs/style-rules.md".to_string(),
+        lane: ReviewLane::Both,
     }
     .render()?;
 
@@ -1176,6 +1287,7 @@ fn template_renders_are_byte_stable_across_runs() -> Result<()> {
             }],
             scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
             style_rules: "docs/style-rules.md".to_string(),
+            lane: ReviewLane::Both,
         },
     )?;
     assert_stable(

@@ -40,7 +40,7 @@ use loom_gate::{
     FsCommandResolver, IntegrityFinding, RustWorkspaceStubScanner, RustWorkspaceTestResolver,
     annotation, format_clarify_options, integrity,
 };
-use loom_templates::review::ReviewContext;
+use loom_templates::review::{ReviewContext, ReviewLane};
 use tokio::process::Command;
 use tracing::{info, warn};
 
@@ -96,6 +96,10 @@ where
     /// four-condition AND treats `None` as "no verify run in scope" so
     /// the remaining three conditions still apply.
     verify_exit: Option<i32>,
+    /// Which lane(s) of the review this controller drives. `Both` is the
+    /// `loom gate review` path; `Judge`/`Rubric` are the focused single-
+    /// lane re-runs surfaced by `loom gate judge` / `loom gate rubric`.
+    lane: ReviewLane,
 }
 
 impl<S, F> ProductionReviewController<S, F>
@@ -130,6 +134,7 @@ where
             envelope_builder: Mutex::new(None),
             style_rules: "docs/style-rules.md".to_string(),
             verify_exit: None,
+            lane: ReviewLane::Both,
         }
     }
 
@@ -157,6 +162,15 @@ where
     /// as passing.
     pub fn with_verify_exit(mut self, code: Option<i32>) -> Self {
         self.verify_exit = code;
+        self
+    }
+
+    /// Select which lane(s) of the review this controller will drive.
+    /// `Both` keeps the full `loom gate review` path; `Judge`/`Rubric`
+    /// narrow the rendered prompt to one lane per `loom gate judge` /
+    /// `loom gate rubric`.
+    pub fn with_lane(mut self, lane: ReviewLane) -> Self {
+        self.lane = lane;
         self
     }
 
@@ -297,6 +311,7 @@ where
             judge_rubrics,
             scratchpad_path,
             style_rules: self.style_rules.clone(),
+            lane: self.lane,
         };
         Ok(ctx.render()?)
     }
@@ -1172,6 +1187,94 @@ mod tests {
         assert!(prompt.contains("JUDGE_BODY_MARKER"), "{prompt}");
         assert!(prompt.contains("tests/alpha.sh"), "{prompt}");
         assert!(prompt.contains("tests/judges/alpha.sh"), "{prompt}");
+    }
+
+    /// `with_lane` plumbs the requested [`ReviewLane`] into the rendered
+    /// prompt so `loom gate judge` / `loom gate rubric` invocations actually
+    /// surface narrower prompts to the agent rather than silently running
+    /// the full `loom gate review` template. Pins the wiring contract for
+    /// the per-lane subcommands; the per-section render contract is owned
+    /// by the template-level tests in `loom-templates::tests::render`.
+    #[tokio::test]
+    async fn build_review_prompt_honors_with_lane_judge_and_rubric() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path();
+        let label = "alpha";
+        std::fs::create_dir_all(workspace.join("specs")).unwrap();
+        std::fs::create_dir_all(workspace.join("tests/judges")).unwrap();
+        std::fs::write(
+            workspace.join(format!("specs/{label}.md")),
+            "## Success Criteria\n\n\
+             - [ ] one\n  [judge](tests/judges/alpha.sh#judge_two)\n",
+        )
+        .unwrap();
+        std::fs::write(
+            workspace.join("tests/judges/alpha.sh"),
+            "JUDGE_BODY_MARKER\n",
+        )
+        .unwrap();
+
+        let judge_ctrl = ProductionReviewController::new(
+            BdClient::new(),
+            SpecLabel::new(label),
+            PathBuf::from("/usr/bin/loom"),
+            workspace.to_path_buf(),
+            empty_state(workspace),
+            stub_manifest(workspace),
+            ProfileName::new("base"),
+            noop_spawn,
+        )
+        .with_lane(ReviewLane::Judge);
+        let judge_prompt = match judge_ctrl.build_review_prompt().await {
+            Ok(p) => p,
+            Err(ReviewError::Bd(_)) => return,
+            Err(e) => panic!("unexpected error: {e:?}"),
+        };
+        assert!(
+            judge_prompt.contains("JUDGE_BODY_MARKER"),
+            "judge lane keeps [judge] rubric bodies: {judge_prompt}",
+        );
+        assert!(
+            !judge_prompt.contains("## Review Dimensions"),
+            "judge lane suppresses Review Dimensions: {judge_prompt}",
+        );
+        assert!(
+            !judge_prompt.contains("## Style-Rule Conformance"),
+            "judge lane suppresses style-rule walk: {judge_prompt}",
+        );
+
+        let rubric_ctrl = ProductionReviewController::new(
+            BdClient::new(),
+            SpecLabel::new(label),
+            PathBuf::from("/usr/bin/loom"),
+            workspace.to_path_buf(),
+            empty_state(workspace),
+            stub_manifest(workspace),
+            ProfileName::new("base"),
+            noop_spawn,
+        )
+        .with_lane(ReviewLane::Rubric);
+        let rubric_prompt = match rubric_ctrl.build_review_prompt().await {
+            Ok(p) => p,
+            Err(ReviewError::Bd(_)) => return,
+            Err(e) => panic!("unexpected error: {e:?}"),
+        };
+        assert!(
+            !rubric_prompt.contains("JUDGE_BODY_MARKER"),
+            "rubric lane suppresses [judge] rubric bodies: {rubric_prompt}",
+        );
+        assert!(
+            !rubric_prompt.contains("## `[judge]` Rubrics"),
+            "rubric lane suppresses [judge] rubrics heading: {rubric_prompt}",
+        );
+        assert!(
+            rubric_prompt.contains("## Review Dimensions"),
+            "rubric lane keeps Review Dimensions: {rubric_prompt}",
+        );
+        assert!(
+            rubric_prompt.contains("## Style-Rule Conformance"),
+            "rubric lane keeps style-rule walk: {rubric_prompt}",
+        );
     }
 
     /// `loom review` must dispatch with the rendered `ReviewContext`

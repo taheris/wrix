@@ -41,7 +41,7 @@ without re-reading them from disk.
 ```
 
 {% endfor %}{% endif %}
-## `[judge]` Rubrics
+{% if lane.includes_judge() %}## `[judge]` Rubrics
 
 These `[judge]` annotations name LLM-judgement criteria the deliverable
 must satisfy. Each rubric file's body follows; locate the function
@@ -55,7 +55,7 @@ referenced by the annotation to read the per-criterion rubric.
 ```
 
 {% endfor %}{% endif %}
-
+{% endif %}
 ## Instructions
 
 1. **Read the spec** at `{{ spec_path }}` thoroughly
@@ -63,7 +63,7 @@ referenced by the annotation to read the per-criterion rubric.
 3. **Run `git diff {% match base_commit %}{% when Some with (commit) %}{{ commit }}{% when None %}<base>{% endmatch %}..HEAD`** to see all changes made during implementation
 4. **Run `git log {% match base_commit %}{% when Some with (commit) %}{{ commit }}{% when None %}<base>{% endmatch %}..HEAD --oneline`** to understand the commit history
 
-## Review Dimensions
+{% if lane.includes_rubric() %}## Review Dimensions
 
 Assess the deliverable against these dimensions:
 
@@ -225,7 +225,7 @@ bd mol bond "$CLARIFY_ID" "{% match molecule_id %}{% when Some with (id) %}{{ id
 ```
 
 The user will answer with a free-form choice or an integer option pick via `loom msg`.
-
+{% endif %}
 ## Creating Fix-Up Beads
 
 For actionable issues that do NOT need human judgment (straightforward bugs, missing

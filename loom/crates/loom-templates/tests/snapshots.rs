@@ -12,7 +12,7 @@ use askama::Template;
 use loom_events::identifier::{BeadId, MoleculeId, SpecLabel};
 use loom_templates::msg::{BeadKind, ClarifyBead, ClarifyOption, MsgContext};
 use loom_templates::plan::{PlanNewContext, PlanUpdateContext};
-use loom_templates::review::{ReviewContext, ReviewSource};
+use loom_templates::review::{ReviewContext, ReviewLane, ReviewSource};
 use loom_templates::run::{
     DriverNoticeCause, PreviousFailure, ReviewConcernKind, RunContext, VerifierFailure,
 };
@@ -250,6 +250,7 @@ fn review_snapshot() {
         }],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
         style_rules: "docs/style-rules.md".to_string(),
+        lane: ReviewLane::Both,
     };
     insta::assert_snapshot!(ctx.render().unwrap());
 }

@@ -34,7 +34,7 @@ use loom_workflow::msg::{
     spec_label_of,
 };
 use loom_workflow::review::{
-    IterationCap, ProductionReviewController, review_loop as run_review_loop,
+    IterationCap, ProductionReviewController, ReviewLane, review_loop as run_review_loop,
 };
 use loom_workflow::run::{
     Parallelism, ProductionAgentLoopController, RetryPolicy, RunMode, SessionResult, run_loop,
@@ -771,17 +771,21 @@ fn run_gate(
         }
         Some(GateSubcommand::Review(mut args)) => {
             apply_default_scope(workspace, &mut args.scope);
-            run_gate_review(workspace, args.scope, args.verify_exit, agent_override)
-        }
-        Some(GateSubcommand::Judge(_)) => {
-            anyhow::bail!(
-                "loom gate judge: not implemented yet — use `loom gate review` for the LLM rubric path"
+            run_gate_review(
+                workspace,
+                args.scope,
+                args.verify_exit,
+                agent_override,
+                ReviewLane::Both,
             )
         }
-        Some(GateSubcommand::Rubric(_)) => {
-            anyhow::bail!(
-                "loom gate rubric: not implemented yet — use `loom gate review` for the LLM rubric path"
-            )
+        Some(GateSubcommand::Judge(mut args)) => {
+            apply_default_scope(workspace, &mut args);
+            run_gate_review(workspace, args, None, agent_override, ReviewLane::Judge)
+        }
+        Some(GateSubcommand::Rubric(mut args)) => {
+            apply_default_scope(workspace, &mut args);
+            run_gate_review(workspace, args, None, agent_override, ReviewLane::Rubric)
         }
     }
 }
@@ -1263,7 +1267,13 @@ fn run_gate_audit(
         Ok(()) => Some(0),
         Err(_) => Some(1),
     };
-    let review_result = run_gate_review(workspace, args, verify_exit, agent_override);
+    let review_result = run_gate_review(
+        workspace,
+        args,
+        verify_exit,
+        agent_override,
+        ReviewLane::Both,
+    );
     verify_result.and(review_result)
 }
 
@@ -1272,6 +1282,7 @@ fn run_gate_review(
     args: GateScopeArgs,
     verify_exit: Option<i32>,
     agent_override: Option<AgentKind>,
+    lane: ReviewLane,
 ) -> anyhow::Result<()> {
     run_review(
         workspace,
@@ -1282,6 +1293,7 @@ fn run_gate_review(
             diff: args.diff,
             tree: args.tree,
             verify_exit,
+            lane,
         },
     )
 }
@@ -2094,6 +2106,10 @@ struct ReviewOpts {
     /// gate is invoked standalone; the push gate's other three
     /// conditions still gate the push.
     verify_exit: Option<i32>,
+    /// Which lane(s) of the review to run — `Both` for `loom gate review`,
+    /// `Judge`/`Rubric` for the focused single-lane re-runs surfaced by
+    /// `loom gate judge` / `loom gate rubric`.
+    lane: ReviewLane,
 }
 
 fn run_review(
@@ -2160,7 +2176,8 @@ fn run_review(
         .with_handoff_lock(guard)
         .with_phase_log(logs_root, phase_when)
         .with_style_rules(style_rules_for_review)
-        .with_verify_exit(opts.verify_exit);
+        .with_verify_exit(opts.verify_exit)
+        .with_lane(opts.lane);
         run_review_loop(&mut controller, IterationCap::default()).await
     })?;
     println!("loom review: {result:?}");

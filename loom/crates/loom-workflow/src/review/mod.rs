@@ -36,6 +36,7 @@ pub use fixup::{
     FixupContext, FixupOutcome, FixupRequest, UNBONDED_ORIGIN_CAUSE, spawn_fixup_bead,
 };
 pub use iteration::{DEFAULT_MAX_ITERATIONS, IterationCap};
+pub use loom_templates::review::ReviewLane;
 pub use phase_verdict::{
     GateInputs, PhaseVerdict, RecoveryCause, ReviewConcern, ReviewFlag, decide, parse_review_flag,
 };

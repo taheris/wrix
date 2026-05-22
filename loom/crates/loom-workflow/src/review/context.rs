@@ -4,7 +4,7 @@ use std::path::Path;
 
 use loom_driver::bd::Bead;
 use loom_driver::identifier::{MoleculeId, SpecLabel};
-use loom_templates::review::{ReviewContext, ReviewSource};
+use loom_templates::review::{ReviewContext, ReviewLane, ReviewSource};
 
 use crate::spec::{Annotation, AnnotationKind, SpecError, parse_spec_annotations};
 
@@ -27,6 +27,9 @@ pub struct ReviewContextInputs {
     /// Workspace-relative path to the style-rules document the reviewer
     /// must walk rule-by-rule when judging the diff.
     pub style_rules: String,
+    /// Which lane(s) of the review the reviewer agent is being asked to
+    /// run; gates the template sections that only one lane needs.
+    pub lane: ReviewLane,
 }
 
 /// Render the typed [`ReviewContext`] used by the `review.md` Askama template.
@@ -43,6 +46,7 @@ pub fn build_review_context(inputs: ReviewContextInputs) -> ReviewContext {
         judge_rubrics: inputs.judge_rubrics,
         scratchpad_path: inputs.scratchpad_path,
         style_rules: inputs.style_rules,
+        lane: inputs.lane,
     }
 }
 
@@ -161,6 +165,7 @@ mod tests {
             judge_rubrics: vec![],
             scratchpad_path: "/workspace/.wrapix/loom/scratch/loom-harness/scratch.md".into(),
             style_rules: "docs/style-rules.md".into(),
+            lane: ReviewLane::Both,
         }
     }
 

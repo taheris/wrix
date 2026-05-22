@@ -13,6 +13,35 @@ pub struct ReviewSource {
     pub body: String,
 }
 
+/// Which lane(s) of the review the prompt asks the agent to run. `Both`
+/// drives the full `loom gate review` path (criterion-attached `[judge]`
+/// rubrics *and* the rubric walk over the diff). `Judge` and `Rubric` are
+/// the focused per-lane re-runs surfaced by `loom gate judge` /
+/// `loom gate rubric` respectively, used when iterating on one lane
+/// without paying the cost of the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReviewLane {
+    /// Both lanes — the default for `loom gate review`.
+    #[default]
+    Both,
+    /// `[judge]`-tier rubrics only; rubric walk suppressed.
+    Judge,
+    /// Rubric walk only; `[judge]` rubric bodies suppressed.
+    Rubric,
+}
+
+impl ReviewLane {
+    /// True when the lane includes the `[judge]` rubric evaluation.
+    pub fn includes_judge(self) -> bool {
+        matches!(self, Self::Both | Self::Judge)
+    }
+
+    /// True when the lane includes the rubric walk over the diff.
+    pub fn includes_rubric(self) -> bool {
+        matches!(self, Self::Both | Self::Rubric)
+    }
+}
+
 /// Context for `loom review` reviewing a completed molecule.
 #[derive(Template)]
 #[template(path = "review.md", escape = "none")]
@@ -32,4 +61,7 @@ pub struct ReviewContext {
     /// the LLM walks the rules rule-by-rule and cites each violation by
     /// rule id + file/line.
     pub style_rules: String,
+    /// Which lane(s) the agent is being asked to run. Drives the template's
+    /// per-lane section gates.
+    pub lane: ReviewLane,
 }
