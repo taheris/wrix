@@ -803,6 +803,11 @@ PATH, and a `[judge]` annotation pointing at the gate's own
   broken-target shape: `[check]` first token absent on PATH, `[test]`
   path with no matching function, `[judge]` file absent
   [test](fixture_with_broken_target_per_tier_flags_each_one)
+- **Forward — judge `::fn` selector.** A `[judge](script::fn)` target
+  resolves when the leading script path exists; the `::fn` suffix is
+  stripped before the on-disk check (per the *Verifier inputs* table's
+  `[judge](script::fn)` row)
+  [test](forward_judge_accepts_script_with_fn_selector)
 - **Forward — test-tier missing function.** A `[test](cargo test …)`
   annotation whose test name does not match any function in the
   workspace is flagged

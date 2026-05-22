@@ -946,7 +946,11 @@ fn resolves_judge_path(target: &str, repo_root: &Path) -> bool {
     if trimmed.is_empty() {
         return false;
     }
-    let p = Path::new(trimmed);
+    let path_part = trimmed.split_once("::").map_or(trimmed, |(p, _)| p);
+    if path_part.is_empty() {
+        return false;
+    }
+    let p = Path::new(path_part);
     let resolved = if p.is_absolute() {
         p.to_path_buf()
     } else {
@@ -1240,6 +1244,53 @@ mod tests {
             &StubLeaves::none(),
         );
         assert!(findings.is_empty(), "absolute judge path resolved");
+    }
+
+    #[test]
+    fn forward_judge_accepts_script_with_fn_selector() {
+        let dir = tempdir().unwrap();
+        let script_dir = dir.path().join("tests/judges");
+        fs::create_dir_all(&script_dir).unwrap();
+        let script = script_dir.join("loom.sh");
+        fs::write(&script, "#!/usr/bin/env bash\n").unwrap();
+
+        let annotations = vec![ann(
+            Tier::Judge,
+            "tests/judges/loom.sh::judge_tool_trait_ecosystem_compat",
+            "specs/a.md",
+            15,
+            15,
+        )];
+        let cmds = StubCommands::with(&[]);
+        let tests = StubTests::with(&[]);
+        let findings = check_forward(&annotations, dir.path(), &cmds, &tests, &StubLeaves::none());
+        assert!(
+            findings.is_empty(),
+            "judge target with ::fn selector should resolve to leading path: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn forward_judge_flags_missing_script_with_fn_selector() {
+        let dir = tempdir().unwrap();
+        let annotations = vec![ann(
+            Tier::Judge,
+            "tests/judges/absent.sh::some_fn",
+            "specs/a.md",
+            16,
+            16,
+        )];
+        let cmds = StubCommands::with(&[]);
+        let tests = StubTests::with(&[]);
+        let findings = check_forward(&annotations, dir.path(), &cmds, &tests, &StubLeaves::none());
+        assert_eq!(findings.len(), 1);
+        assert!(matches!(
+            findings[0],
+            IntegrityFinding::UnresolvedAnnotation {
+                tier: Tier::Judge,
+                ..
+            }
+        ));
     }
 
     #[test]
