@@ -75,6 +75,22 @@ impl ModelId {
             other => ModelId::Other(other.to_string()),
         }
     }
+
+    /// Round-trip wire string for this model. Inverse of
+    /// [`ModelId::from_str`]: every known variant returns the canonical
+    /// provider model ID; [`ModelId::Other`] returns the carried string
+    /// verbatim.
+    pub fn as_wire(&self) -> String {
+        match self {
+            ModelId::ClaudeOpus47 => "claude-opus-4-7".to_string(),
+            ModelId::ClaudeSonnet46 => "claude-sonnet-4-6".to_string(),
+            ModelId::ClaudeHaiku45 => "claude-haiku-4-5".to_string(),
+            ModelId::Gpt55 => "gpt-5.5".to_string(),
+            ModelId::Gemini31Pro => "gemini-3.1-pro".to_string(),
+            ModelId::Gemini35Flash => "gemini-3.5-flash".to_string(),
+            ModelId::Other(s) => s.clone(),
+        }
+    }
 }
 
 fn provider_from_prefix(s: &str) -> Provider {

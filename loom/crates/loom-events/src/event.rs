@@ -441,6 +441,35 @@ impl AgentEvent {
                 error_message,
             },
             ParsedAgentEvent::Error { message } => AgentEvent::Error { envelope, message },
+            ParsedAgentEvent::TokenUsage {
+                model,
+                input,
+                output,
+                cache_read,
+                cache_write,
+                cost_cents,
+            } => {
+                let mut env = envelope;
+                env.source = Source::Driver;
+                let summary = format!(
+                    "{model} input={input} output={output} cache_read={cache_read} \
+                     cache_write={cache_write} cost_cents={cost_cents}",
+                );
+                let payload = serde_json::json!({
+                    "model": model,
+                    "input": input,
+                    "output": output,
+                    "cache_read": cache_read,
+                    "cache_write": cache_write,
+                    "cost_cents": cost_cents,
+                });
+                AgentEvent::DriverEvent {
+                    envelope: env,
+                    driver_kind: DriverKind::TokenUsage,
+                    summary,
+                    payload,
+                }
+            }
         }
     }
 }
@@ -450,9 +479,12 @@ impl AgentEvent {
 /// ts_ms / seq context — the session layer joins this payload with the
 /// per-spawn [`EventEnvelope`] via [`AgentEvent::from_parsed`].
 ///
-/// Variants are exactly the subset of [`AgentEvent`] a backend parser
-/// can produce — `AgentStart` and `DriverEvent` are driver-emitted and
-/// never appear here.
+/// `AgentStart` is driver-emitted and never appears here. The Direct
+/// backend's runner is uniquely positioned to surface
+/// [`DriverKind::TokenUsage`] alongside agent-emitted events, so
+/// `TokenUsage` is the one driver-event-equivalent variant the parser
+/// layer carries; `from_parsed` lifts it into [`AgentEvent::DriverEvent`]
+/// with `Source::Driver` regardless of the envelope's configured source.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParsedAgentEvent {
     AgentEnd,
@@ -503,6 +535,18 @@ pub enum ParsedAgentEvent {
     },
     Error {
         message: String,
+    },
+    /// Per-call token accounting emitted by the Direct backend's runner
+    /// after every `complete*`. Lifted to `AgentEvent::DriverEvent` with
+    /// `driver_kind: DriverKind::TokenUsage` and `source: Source::Driver`
+    /// by [`AgentEvent::from_parsed`].
+    TokenUsage {
+        model: String,
+        input: u32,
+        output: u32,
+        cache_read: u32,
+        cache_write: u32,
+        cost_cents: u32,
     },
 }
 
@@ -1040,6 +1084,45 @@ mod tests {
                 assert!(parent_tool_call_id.is_none());
             }
             other => panic!("expected ToolCall, got {other:?}"),
+        }
+    }
+
+    /// `ParsedAgentEvent::TokenUsage` lifts into `AgentEvent::DriverEvent`
+    /// with `driver_kind: TokenUsage` and overrides the envelope's
+    /// `source` to `Source::Driver` regardless of the configured source.
+    /// SaaS billing pipelines tail the live event stream and rely on this
+    /// per-call accounting frame having driver provenance.
+    #[test]
+    fn from_parsed_token_usage_emits_driver_event_with_driver_source() {
+        let mut b = builder();
+        let mut env = b.build();
+        env.source = Source::Agent;
+        let parsed = ParsedAgentEvent::TokenUsage {
+            model: "claude-sonnet-4-6".to_string(),
+            input: 1_000,
+            output: 250,
+            cache_read: 600,
+            cache_write: 400,
+            cost_cents: 54,
+        };
+        match AgentEvent::from_parsed(parsed, env) {
+            AgentEvent::DriverEvent {
+                envelope,
+                driver_kind,
+                summary,
+                payload,
+            } => {
+                assert_eq!(driver_kind, DriverKind::TokenUsage);
+                assert_eq!(envelope.source, Source::Driver);
+                assert_eq!(payload["model"], "claude-sonnet-4-6");
+                assert_eq!(payload["input"], 1_000);
+                assert_eq!(payload["output"], 250);
+                assert_eq!(payload["cache_read"], 600);
+                assert_eq!(payload["cache_write"], 400);
+                assert_eq!(payload["cost_cents"], 54);
+                assert!(summary.contains("claude-sonnet-4-6"));
+            }
+            other => panic!("expected DriverEvent, got {other:?}"),
         }
     }
 }

@@ -17,19 +17,30 @@
 //!    return.
 
 use std::io;
+use std::sync::{Arc, Mutex};
 
 use loom_agent::direct::backend::{DirectCommand, DirectEvent};
 use loom_agent::direct::tools::{Bash, Edit, Glob, Grep, Read, Write};
 use loom_driver::agent::SpawnConfig;
 use loom_events::identifier::ToolCallId;
-use loom_llm::client::LlmClient;
+use loom_llm::cache::{CacheControl, CacheTtl};
+use loom_llm::client::{CompletionResponse, LlmClient, LlmError};
 use loom_llm::conversation::Conversation;
 use loom_llm::model_id::ModelId;
-use loom_llm::request::{Message, Role};
+use loom_llm::request::{CompletionRequest, Message, Role};
 use loom_llm::tool::Tool;
+use loom_llm::usage::TokenUsage;
+use schemars::JsonSchema;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 use tracing::{debug, info, warn};
+
+/// TTL the runner attaches to every user prompt so the underlying
+/// provider treats each turn as a cache breakpoint. Anthropic honours
+/// this directly; OpenAI / Gemini no-op the marker per
+/// [`CacheControl`]'s contract.
+const PROMPT_CACHE_TTL: CacheTtl = CacheTtl::Hours1;
 
 /// Default Conversation model when the [`SpawnConfig`] omits one.
 const DEFAULT_MODEL: ModelId = ModelId::ClaudeSonnet46;
@@ -80,6 +91,11 @@ where
     W: AsyncWrite + Unpin,
 {
     let mut conv = build_conversation(&config);
+    let usages = Arc::new(Mutex::new(Vec::<UsageRecord>::new()));
+    let recording = UsageRecordingClient {
+        inner: client,
+        usages: usages.clone(),
+    };
     let mut emitter = Emitter::new(stdout);
     let mut lines = stdin.lines();
     let mut exit_code: i32 = 0;
@@ -92,7 +108,9 @@ where
         match serde_json::from_str::<DirectCommand>(trimmed) {
             Ok(DirectCommand::Prompt { message }) => {
                 debug!(bytes = message.len(), "received prompt");
-                if let Err(err) = run_prompt(&mut conv, &client, &mut emitter, message).await {
+                if let Err(err) =
+                    run_prompt(&mut conv, &recording, &usages, &mut emitter, message).await
+                {
                     warn!(error = %err, "prompt failed");
                     emitter
                         .emit(&DirectEvent::Error {
@@ -104,7 +122,7 @@ where
             }
             Ok(DirectCommand::Steer { message }) => {
                 debug!(bytes = message.len(), "received steer");
-                conv.user(message);
+                conv.user_cached(message, CacheControl::Ephemeral(PROMPT_CACHE_TTL));
             }
             Ok(DirectCommand::Abort) => {
                 info!("received abort, terminating session");
@@ -133,7 +151,8 @@ where
 
 async fn run_prompt<C, W>(
     conv: &mut Conversation,
-    client: &C,
+    client: &UsageRecordingClient<C>,
+    usages: &Mutex<Vec<UsageRecord>>,
     emitter: &mut Emitter<W>,
     message: String,
 ) -> Result<(), RunnerError>
@@ -142,7 +161,7 @@ where
     W: AsyncWrite + Unpin,
 {
     let history_pivot = conv.history_len();
-    conv.user(message);
+    conv.user_cached(message, CacheControl::Ephemeral(PROMPT_CACHE_TTL));
     let response = conv
         .run(client)
         .await
@@ -162,8 +181,73 @@ where
             .await?;
         emitter.emit(&DirectEvent::TextEnd).await?;
     }
+    for record in drain_usages(usages) {
+        emitter.emit(&token_usage_event(&record)).await?;
+    }
     emitter.emit(&DirectEvent::TurnEnd).await?;
     Ok(())
+}
+
+fn drain_usages(usages: &Mutex<Vec<UsageRecord>>) -> Vec<UsageRecord> {
+    let mut guard = usages.lock().unwrap_or_else(|poison| poison.into_inner());
+    std::mem::take(&mut *guard)
+}
+
+fn token_usage_event(record: &UsageRecord) -> DirectEvent {
+    DirectEvent::TokenUsage {
+        model: record.model.clone(),
+        input: record.usage.input,
+        output: record.usage.output,
+        cache_read: record.usage.cache_read,
+        cache_write: record.usage.cache_write,
+        cost_cents: record.usage.cost_cents,
+    }
+}
+
+/// One captured (model, usage) pair recorded by [`UsageRecordingClient`]
+/// after a successful `complete*` call.
+#[derive(Debug, Clone)]
+struct UsageRecord {
+    model: String,
+    usage: TokenUsage,
+}
+
+/// Decorator around an inner [`LlmClient`] that captures every
+/// completion's [`TokenUsage`] into a shared queue. The runner drains
+/// the queue between turns to emit one [`DirectEvent::TokenUsage`] frame
+/// per completion so the host's parser surfaces a
+/// [`loom_events::DriverKind::TokenUsage`] event per call.
+struct UsageRecordingClient<C> {
+    inner: C,
+    usages: Arc<Mutex<Vec<UsageRecord>>>,
+}
+
+impl<C> UsageRecordingClient<C> {
+    fn record(&self, model: &ModelId, usage: TokenUsage) {
+        self.usages
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .push(UsageRecord {
+                model: model.as_wire(),
+                usage,
+            });
+    }
+}
+
+impl<C: LlmClient + Sync> LlmClient for UsageRecordingClient<C> {
+    async fn complete(&self, req: CompletionRequest) -> Result<CompletionResponse, LlmError> {
+        let model = req.model.clone();
+        let resp = self.inner.complete(req).await?;
+        self.record(&model, resp.usage);
+        Ok(resp)
+    }
+
+    async fn complete_structured<T>(&self, req: CompletionRequest) -> Result<T, LlmError>
+    where
+        T: DeserializeOwned + JsonSchema + Send,
+    {
+        self.inner.complete_structured::<T>(req).await
+    }
 }
 
 fn events_from_history(message: &Message) -> Vec<DirectEvent> {
@@ -406,6 +490,7 @@ mod tests {
                     .map_or("<missing>", |s| match s {
                         "text_delta" => "text_delta",
                         "text_end" => "text_end",
+                        "token_usage" => "token_usage",
                         "turn_end" => "turn_end",
                         "session_complete" => "session_complete",
                         other => panic!("unexpected event type {other}"),
@@ -414,14 +499,20 @@ mod tests {
             .collect();
         assert_eq!(
             kinds,
-            vec!["text_delta", "text_end", "turn_end", "session_complete"],
+            vec![
+                "text_delta",
+                "text_end",
+                "token_usage",
+                "turn_end",
+                "session_complete",
+            ],
         );
 
         match &parsed[0] {
             DirectEvent::TextDelta { text } => assert_eq!(text, "hello back"),
             other => panic!("expected TextDelta, got {other:?}"),
         }
-        match &parsed[3] {
+        match &parsed[4] {
             DirectEvent::SessionComplete {
                 exit_code,
                 cost_usd,
@@ -500,6 +591,7 @@ mod tests {
             .map(|e| match e {
                 DirectEvent::TextDelta { .. } => "text_delta",
                 DirectEvent::TextEnd => "text_end",
+                DirectEvent::TokenUsage { .. } => "token_usage",
                 DirectEvent::TurnEnd => "turn_end",
                 DirectEvent::SessionComplete { .. } => "session_complete",
                 other => panic!("unexpected trailing event {other:?}"),
@@ -507,7 +599,14 @@ mod tests {
             .collect();
         assert_eq!(
             kinds,
-            vec!["text_delta", "text_end", "turn_end", "session_complete"],
+            vec![
+                "text_delta",
+                "text_end",
+                "token_usage",
+                "token_usage",
+                "turn_end",
+                "session_complete",
+            ],
         );
     }
 
@@ -542,6 +641,226 @@ mod tests {
         match &events[1] {
             DirectEvent::SessionComplete { exit_code, .. } => assert_eq!(*exit_code, 1),
             other => panic!("expected SessionComplete, got {other:?}"),
+        }
+    }
+
+    /// Client that captures every [`CompletionRequest`] the runner
+    /// constructs into a shared [`Arc<Mutex<Vec<_>>>`] so a test can
+    /// inspect the lowered messages and tool definitions without
+    /// reaching a live provider. The shared handle stays alive after
+    /// `run_session` consumes the client.
+    struct CapturingClient {
+        captured: std::sync::Arc<Mutex<Vec<CompletionRequest>>>,
+        response: CompletionResponse,
+    }
+
+    impl CapturingClient {
+        fn new(
+            response: CompletionResponse,
+        ) -> (Self, std::sync::Arc<Mutex<Vec<CompletionRequest>>>) {
+            let captured = std::sync::Arc::new(Mutex::new(Vec::new()));
+            (
+                Self {
+                    captured: captured.clone(),
+                    response,
+                },
+                captured,
+            )
+        }
+    }
+
+    impl LlmClient for CapturingClient {
+        async fn complete(&self, req: CompletionRequest) -> Result<CompletionResponse, LlmError> {
+            self.captured
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .push(req);
+            Ok(self.response.clone())
+        }
+
+        async fn complete_structured<T>(&self, _req: CompletionRequest) -> Result<T, LlmError>
+        where
+            T: serde::de::DeserializeOwned + schemars::JsonSchema + Send,
+        {
+            Err(LlmError::Provider {
+                message: "structured not used in runner tests".into(),
+            })
+        }
+    }
+
+    /// Spec contract (`specs/loom-agent.md` § Direct Backend): per-call
+    /// `CacheControl::Ephemeral(CacheTtl)` markers in the runner's prompt
+    /// construction flow through to the provider request. The runner
+    /// attaches an ephemeral cache marker to every incoming user prompt
+    /// so subsequent turns hit cache on the established prefix;
+    /// `loom-llm`'s `multi_provider` adapter lowers the marker to the
+    /// Anthropic adapter's `cache_control` field (Anthropic-confirmed
+    /// path) and the OpenAI/Gemini adapters no-op it without error.
+    #[test]
+    fn direct_cache_control_propagates_to_anthropic_request() {
+        let (client, captured) = CapturingClient::new(final_text("ok"));
+        let stdin =
+            b"{\"type\":\"prompt\",\"message\":\"orient me on spec X\"}\n{\"type\":\"steer\",\"message\":\"focus on cache\"}\n{\"type\":\"prompt\",\"message\":\"continue\"}\n"
+                .to_vec();
+        let mut stdout: Vec<u8> = Vec::new();
+
+        tokio_test::block_on(run_session(
+            client,
+            sample_config(Some("claude-sonnet-4-6")),
+            tokio::io::BufReader::new(&stdin[..]),
+            &mut stdout,
+        ))
+        .expect("run_session completes");
+
+        let requests: Vec<CompletionRequest> =
+            captured.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        assert_eq!(
+            requests.len(),
+            2,
+            "two prompt frames produce two completion requests",
+        );
+        assert_eq!(
+            requests[0].model,
+            ModelId::ClaudeSonnet46,
+            "request targets the phase-configured Anthropic model",
+        );
+        let cached_blocks: Vec<&Message> = requests[0]
+            .messages
+            .iter()
+            .filter(|m| matches!(m.cache, CacheControl::Ephemeral(_)))
+            .collect();
+        assert_eq!(
+            cached_blocks.len(),
+            1,
+            "the first prompt becomes a cached user block: {:?}",
+            requests[0].messages,
+        );
+        assert!(
+            matches!(
+                cached_blocks[0].cache,
+                CacheControl::Ephemeral(CacheTtl::Hours1),
+            ),
+            "ephemeral 1h marker reaches the request: {:?}",
+            cached_blocks[0].cache,
+        );
+
+        let second_cached: Vec<&Message> = requests[1]
+            .messages
+            .iter()
+            .filter(|m| matches!(m.cache, CacheControl::Ephemeral(_)))
+            .collect();
+        assert_eq!(
+            second_cached.len(),
+            3,
+            "first prompt, steer, and second prompt each become cache breakpoints: {:?}",
+            requests[1].messages,
+        );
+    }
+
+    /// Spec contract (`specs/loom-agent.md` § Direct Backend):
+    /// `DriverKind::TokenUsage` event emits on every completion within
+    /// Direct sessions. The runner wraps the LLM client so each
+    /// `complete*` call records its `TokenUsage`; the wire frame
+    /// (`DirectEvent::TokenUsage`) reaches stdout in turn-completion
+    /// order and the host's parser lifts it into an
+    /// `AgentEvent::DriverEvent { driver_kind: TokenUsage, .. }` with
+    /// `source: Source::Driver`.
+    #[test]
+    fn direct_emits_token_usage_per_completion() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cargo = dir.path().join("Cargo.toml");
+        std::fs::write(&cargo, "[package]\nname = \"x\"\n").expect("write fixture");
+
+        let with_call = CompletionResponse {
+            text: String::new(),
+            usage: TokenUsage {
+                input: 500,
+                output: 120,
+                cache_read: 200,
+                cache_write: 50,
+                cost_cents: 17,
+            },
+            tool_calls: vec![ToolUseRequest {
+                call_id: "call-1".into(),
+                name: "Read".into(),
+                args: json!({ "file_path": cargo }),
+            }],
+        };
+        let final_resp = CompletionResponse {
+            text: "done".into(),
+            usage: TokenUsage {
+                input: 800,
+                output: 60,
+                cache_read: 600,
+                cache_write: 0,
+                cost_cents: 9,
+            },
+            tool_calls: Vec::new(),
+        };
+
+        let client = ScriptedClient::new(vec![with_call, final_resp]);
+        let stdin = b"{\"type\":\"prompt\",\"message\":\"please read\"}\n".to_vec();
+        let mut stdout: Vec<u8> = Vec::new();
+
+        tokio_test::block_on(run_session(
+            client,
+            sample_config(Some("claude-sonnet-4-6")),
+            tokio::io::BufReader::new(&stdin[..]),
+            &mut stdout,
+        ))
+        .expect("run_session completes");
+
+        let events: Vec<DirectEvent> = std::str::from_utf8(&stdout)
+            .expect("utf-8")
+            .lines()
+            .map(|l| serde_json::from_str(l).expect("parse"))
+            .collect();
+
+        let usages: Vec<&DirectEvent> = events
+            .iter()
+            .filter(|e| matches!(e, DirectEvent::TokenUsage { .. }))
+            .collect();
+        assert_eq!(
+            usages.len(),
+            2,
+            "one TokenUsage frame per completion (two completions for a tool-using turn): {events:?}",
+        );
+
+        match usages[0] {
+            DirectEvent::TokenUsage {
+                model,
+                input,
+                output,
+                cache_read,
+                cache_write,
+                cost_cents,
+            } => {
+                assert_eq!(model, "claude-sonnet-4-6");
+                assert_eq!(*input, 500);
+                assert_eq!(*output, 120);
+                assert_eq!(*cache_read, 200);
+                assert_eq!(*cache_write, 50);
+                assert_eq!(*cost_cents, 17);
+            }
+            other => panic!("expected TokenUsage, got {other:?}"),
+        }
+        match usages[1] {
+            DirectEvent::TokenUsage {
+                model,
+                input,
+                output,
+                cache_read,
+                cache_write,
+                cost_cents,
+            } => {
+                assert_eq!(model, "claude-sonnet-4-6");
+                assert_eq!(*input, 800);
+                assert_eq!(*output, 60);
+                assert_eq!(*cache_read, 600);
+                assert_eq!(*cache_write, 0);
+                assert_eq!(*cost_cents, 9);
+            }
+            other => panic!("expected TokenUsage, got {other:?}"),
         }
     }
 

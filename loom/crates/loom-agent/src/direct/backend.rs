@@ -209,6 +209,17 @@ pub enum DirectEvent {
     Error {
         message: String,
     },
+    /// Per-completion token accounting the runner emits after every
+    /// `LlmClient::complete*` call. Host-side parser lifts this into a
+    /// `DriverKind::TokenUsage` `AgentEvent::DriverEvent`.
+    TokenUsage {
+        model: String,
+        input: u32,
+        output: u32,
+        cache_read: u32,
+        cache_write: u32,
+        cost_cents: u32,
+    },
 }
 
 impl DirectEvent {
@@ -248,6 +259,21 @@ impl DirectEvent {
                 cost_usd,
             },
             Self::Error { message } => ParsedAgentEvent::Error { message },
+            Self::TokenUsage {
+                model,
+                input,
+                output,
+                cache_read,
+                cache_write,
+                cost_cents,
+            } => ParsedAgentEvent::TokenUsage {
+                model,
+                input,
+                output,
+                cache_read,
+                cache_write,
+                cost_cents,
+            },
         }
     }
 }
@@ -366,6 +392,32 @@ mod tests {
             }
             other => panic!("expected SessionComplete, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parser_decodes_token_usage_into_parsed_event() {
+        let line = r#"{"type":"token_usage","model":"claude-sonnet-4-6","input":500,"output":120,"cache_read":200,"cache_write":50,"cost_cents":17}"#;
+        let parsed = DirectParser.parse_line(line).expect("parse");
+        assert_eq!(parsed.events.len(), 1);
+        match &parsed.events[0] {
+            ParsedAgentEvent::TokenUsage {
+                model,
+                input,
+                output,
+                cache_read,
+                cache_write,
+                cost_cents,
+            } => {
+                assert_eq!(model, "claude-sonnet-4-6");
+                assert_eq!(*input, 500);
+                assert_eq!(*output, 120);
+                assert_eq!(*cache_read, 200);
+                assert_eq!(*cache_write, 50);
+                assert_eq!(*cost_cents, 17);
+            }
+            other => panic!("expected TokenUsage, got {other:?}"),
+        }
+        assert!(parsed.response.is_none());
     }
 
     #[test]

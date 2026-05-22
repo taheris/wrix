@@ -12,6 +12,7 @@ use loom_events::event::Source;
 use loom_events::identifier::{BeadId, ToolCallId};
 use loom_events::{AgentEvent, EnvelopeBuilder, EventSink, SessionCommand};
 
+use crate::cache::CacheControl;
 use crate::client::{CompletionResponse, LlmClient, LlmError};
 use crate::model_id::ModelId;
 use crate::observer::{
@@ -179,6 +180,14 @@ impl Conversation {
     /// `run` / `run_stream` calls include it on the next completion.
     pub fn user(&mut self, content: impl Into<String>) {
         self.history.push(Message::user(content));
+    }
+
+    /// Append a user turn carrying a per-block cache marker. Providers
+    /// that support typed prompt-cache breakpoints (Anthropic today)
+    /// honour the marker; providers without typed-cache support no-op
+    /// it without error.
+    pub fn user_cached(&mut self, content: impl Into<String>, cache: CacheControl) {
+        self.history.push(Message::user_cached(content, cache));
     }
 
     /// Run the tool-use loop to completion against `client`. Returns

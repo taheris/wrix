@@ -209,19 +209,10 @@ pub(crate) fn parse_structured_text<T: DeserializeOwned>(text: &str) -> Result<T
 }
 
 /// Map a typed [`ModelId`] to the underlying crate's model-name string.
-/// Known variants resolve to documented provider model IDs; `Other(s)`
-/// passes the carried string through so consumers can name fine-tuned
-/// or not-yet-listed models without waiting for a `ModelId` minor bump.
+/// Delegates to [`ModelId::as_wire`] so the canonical mapping lives on
+/// the public type.
 pub(crate) fn model_id_to_provider_name(model: &ModelId) -> String {
-    match model {
-        ModelId::ClaudeOpus47 => "claude-opus-4-7".to_string(),
-        ModelId::ClaudeSonnet46 => "claude-sonnet-4-6".to_string(),
-        ModelId::ClaudeHaiku45 => "claude-haiku-4-5".to_string(),
-        ModelId::Gpt55 => "gpt-5.5".to_string(),
-        ModelId::Gemini31Pro => "gemini-3.1-pro".to_string(),
-        ModelId::Gemini35Flash => "gemini-3.5-flash".to_string(),
-        ModelId::Other(s) => s.clone(),
-    }
+    model.as_wire()
 }
 
 pub(crate) fn to_genai_chat_request(req: CompletionRequest) -> (ChatRequest, ChatOptions) {
