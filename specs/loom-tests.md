@@ -48,9 +48,6 @@ loom/
         bd/
           client.rs           # bd CLI wrapper + inline tests
           label.rs            # Label newtype + inline tests
-        identifier/
-          bead.rs             # BeadId + inline tests (validation, serde)
-          ...                 # one file per id newtype, all with inline tests
         agent/
           repin.rs            # RePinContent + inline tests (doc-tested)
           ...
@@ -60,6 +57,13 @@ loom/
         git_client.rs         # Integration: GitClient against a temp repo
         logging.rs            # Integration: shared renderer + log channel
         properties.rs         # proptest invariants for state DB rebuild
+    loom-events/              # Public contract leaf crate — `AgentEvent`,
+      src/                    #   identifier newtypes, `Session` trait. Tiny
+        identifier/           #   dep surface (serde, futures-core, thiserror).
+          bead.rs             # BeadId + inline tests (validation, serde)
+          ...                 # one file per id newtype, all with inline tests
+        event.rs              # AgentEvent + envelope types
+        lib.rs                # Session / EventSink contract + inline tests
     loom-agent/
       src/
         pi/
@@ -95,7 +99,9 @@ loom/
         agent_flag.rs         # Integration: --agent flag parsing/validation
         spawn_dispatch.rs     # Integration: shim-based wrapix spawn argv
                               #   contract + stdin-pipe-not-tty assertion
-        properties.rs         # proptest invariants (pi/claude parsers, state DB)
+                              # properties.rs is reserved here for cross-crate
+                              #   invariants; per-crate properties live in
+                              #   each crate's own tests/properties.rs
     loom-walk/                # [check]-tier verifier binary — takes named
       src/                    #   walks as positional args. Annotations point
         main.rs               #   at it: [check](cargo run -p loom-walk -- <name>)
