@@ -30,7 +30,7 @@ pub mod usage;
 
 pub use cache::{CacheControl, CacheTtl};
 pub use client::{Client, CompletionResponse, LlmClient, LlmError, ToolUseRequest};
-pub use conversation::{Conversation, LoopOutcome};
+pub use conversation::{Conversation, ConversationBuildError, LoopOutcome};
 pub use model_id::{ModelId, Provider};
 pub use observer::{
     DoomLoopConfig, DoomLoopObserver, DuplicateDetection, DuplicateResultConfig,

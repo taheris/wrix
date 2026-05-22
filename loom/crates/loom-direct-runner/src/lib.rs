@@ -25,7 +25,7 @@ use loom_driver::agent::SpawnConfig;
 use loom_events::identifier::ToolCallId;
 use loom_llm::cache::{CacheControl, CacheTtl};
 use loom_llm::client::{CompletionResponse, LlmClient, LlmError};
-use loom_llm::conversation::Conversation;
+use loom_llm::conversation::{Conversation, ConversationBuildError};
 use loom_llm::model_id::ModelId;
 use loom_llm::request::{CompletionRequest, Message, Role};
 use loom_llm::tool::Tool;
@@ -64,16 +64,16 @@ pub fn six_tools() -> Vec<Box<dyn Tool>> {
 /// the field is absent the runner falls back to [`DEFAULT_MODEL`]. The
 /// six sandbox-aware tools are registered in the canonical order, and
 /// both default observers stay enabled.
-pub fn build_conversation(config: &SpawnConfig) -> Conversation {
+pub fn build_conversation(config: &SpawnConfig) -> Result<Conversation, ConversationBuildError> {
     let model = config
         .model
         .as_ref()
         .map_or(DEFAULT_MODEL, |sel| ModelId::from_str(&sel.model_id));
-    let mut conv = Conversation::new(model);
+    let mut conv = Conversation::new(model)?;
     for tool in six_tools() {
         conv = conv.register_boxed(tool);
     }
-    conv
+    Ok(conv)
 }
 
 /// Drive one Direct session against `client`. Reads JSONL commands from
@@ -90,7 +90,7 @@ where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let mut conv = build_conversation(&config);
+    let mut conv = build_conversation(&config)?;
     let usages = Arc::new(Mutex::new(Vec::<UsageRecord>::new()));
     let recording = UsageRecordingClient {
         inner: client,
@@ -318,6 +318,8 @@ pub enum RunnerError {
     EncodeJson(#[source] serde_json::Error),
     /// llm error during conversation run: {0}
     Llm(String),
+    /// failed to build runner Conversation: {0}
+    Build(#[from] ConversationBuildError),
 }
 
 #[cfg(test)]
@@ -420,7 +422,7 @@ mod tests {
     /// surface is the only opt-out path.
     #[test]
     fn direct_runner_composes_default_observers() {
-        let conv = build_conversation(&sample_config(None));
+        let conv = build_conversation(&sample_config(None)).expect("conversation builds");
         assert!(
             conv.doom_loop_enabled(),
             "DoomLoopObserver enabled by default in runner Conversation",
@@ -438,16 +440,18 @@ mod tests {
     /// consumers can name not-yet-supported models without a minor bump.
     #[test]
     fn direct_model_id_respects_phase_config() {
-        let conv = build_conversation(&sample_config(Some("claude-sonnet-4-6")));
+        let conv = build_conversation(&sample_config(Some("claude-sonnet-4-6")))
+            .expect("conversation builds");
         assert_eq!(*conv.model(), ModelId::ClaudeSonnet46);
 
-        let conv_unknown = build_conversation(&sample_config(Some("future-model-x")));
+        let conv_unknown = build_conversation(&sample_config(Some("future-model-x")))
+            .expect("conversation builds");
         assert_eq!(
             *conv_unknown.model(),
             ModelId::Other("future-model-x".to_string()),
         );
 
-        let conv_default = build_conversation(&sample_config(None));
+        let conv_default = build_conversation(&sample_config(None)).expect("conversation builds");
         assert_eq!(*conv_default.model(), DEFAULT_MODEL);
     }
 
