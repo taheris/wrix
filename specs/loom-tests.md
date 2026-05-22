@@ -554,7 +554,7 @@ the verify loop runs unscoped — no `--spec` filter.
 - Newtype serde round-trip tests cover all ID types (`BeadId`,
       `SpecLabel`, `MoleculeId`, `ProfileName`, `SessionId`,
       `ToolCallId`, `RequestId`)
-  [check](cargo test -p loom-events --lib serde_round_trips_as_plain_string)
+  [test](serde_round_trips_as_plain_string)
 - State database round-trip tests cover spec, molecule, and meta
       operations
   [test](state_current_spec_round_trips)
@@ -655,13 +655,13 @@ the rules:
 - No `Instant::now()` / `SystemTime::now()` outside `SystemClock`
   [check](cargo run -p loom-walk -- no_real_clock_outside_system_clock)
 - No `#[ignore]` outside the container smoke runner
-  [check](cargo test -p loom --test style no_ignore_for_flake)
+  [test](no_ignore_for_flake)
 
 ### Annotation gate
 
 - Every `[check]` / `[test]` / `[system]` / `[judge]` annotation in
       `specs/*.md` resolves to a valid verifier for its tier
-  [check](cargo test -p loom-gate --test integrity end_to_end_specs_dir_check_combines_both_directions)
+  [test](end_to_end_specs_dir_check_combines_both_directions)
 
 ### Property-based testing
 
@@ -686,10 +686,10 @@ the rules:
 
 - Every Askama template has at least one `insta` snapshot under
       `loom/crates/loom-templates/tests/snapshots/`
-  [check](cargo test -p loom-templates --test snapshots)
+  [test](run_snapshot)
 - `loom --help` and every subcommand `--help` have `insta`
       snapshots
-  [check](cargo test -p loom --test cli_help)
+  [test](loom_help_snapshot)
 - Run-time renderer uses substring + structural assertions, not
       `insta` (ensures terminal-output flexibility)
   [check](cargo run -p loom-walk -- renderer_no_insta_dependency)
