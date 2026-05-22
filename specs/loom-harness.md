@@ -1695,7 +1695,7 @@ Criteria.
   [test](seq_advances_monotonically)
 - Variant set is flat (no nested `message_update { delta: ... }`) — top-level `text_delta` / `thinking_delta` / `toolcall_delta` are siblings of `tool_call` / `tool_result`
   [check](cargo test -p loom-events --lib flat_variant_shape_has_no_nested_envelopes)
-- `loom-events` crate has exactly three deps: `serde`, `serde_json`, `thiserror` (no `chrono`, no `ulid`, no `uuid`)
+- `loom-events` crate has exactly four deps: `futures-core`, `serde`, `serde_json`, `thiserror` (no `chrono`, no `ulid`, no `uuid`)
   [check](cargo run -p loom-walk -- loom_events_minimal_deps)
 - Unknown event variants are accepted gracefully (deserialized as a fallback or skipped, never error)
   [test](unknown_variants_fail_with_a_loud_error)
