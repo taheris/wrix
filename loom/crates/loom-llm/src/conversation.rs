@@ -2,11 +2,17 @@
 //!
 //! Consumers register handlers via the [`Tool`](crate::tool::Tool)
 //! trait, configure budget and exhaustion behaviour, then call
-//! [`Conversation::run`] (fire-and-forget) or
-//! [`Conversation::run_stream`] (event stream). The loop iterates
+//! [`Conversation::run`]. The loop iterates
 //! `complete -> tool_calls? -> dispatch -> tool_results -> complete`
 //! until the agent stops calling tools or the iteration budget is
 //! exhausted.
+//!
+//! Live event observation is via the [`EventSink`] chain attached to
+//! the driving [`LlmClient`] (e.g.
+//! [`Client::with_event_sink`](crate::client::Client::with_event_sink)) —
+//! `Conversation` does not expose a separate streaming entry point.
+//! Consumers that want a `Stream<Item = AgentEvent>` can wrap a
+//! short mpsc-backed `EventSink` impl.
 
 use loom_events::event::Source;
 use loom_events::identifier::{BeadId, ToolCallId};
@@ -177,7 +183,7 @@ impl Conversation {
     }
 
     /// Append a user turn to the conversation history. Subsequent
-    /// `run` / `run_stream` calls include it on the next completion.
+    /// [`Conversation::run`] calls include it on the next completion.
     pub fn user(&mut self, content: impl Into<String>) {
         self.history.push(Message::user(content));
     }
@@ -330,18 +336,6 @@ impl Conversation {
             }
         }
         None
-    }
-
-    /// Same as [`Conversation::run`] but yields `AgentEvent` values
-    /// during execution so callers can render incremental output.
-    /// Wired-up event emission lands with the default sink chain in a
-    /// follow-up bead; for now the surface matches `run` so consumers
-    /// can adopt the entry point ahead of the streaming work.
-    pub async fn run_stream<C: LlmClient + Sync>(
-        &mut self,
-        client: &C,
-    ) -> Result<CompletionResponse, LlmError> {
-        self.run(client).await
     }
 
     /// Read-only view of the conversation's current `ModelId`.

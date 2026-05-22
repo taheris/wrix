@@ -153,7 +153,7 @@ decisions.
 ### `Conversation` and the Built-in Tool-Use Loop
 
 For multi-turn work with tool calls, consumers register tool
-handlers via a `Tool` trait and call `run` or `run_stream`:
+handlers via a `Tool` trait and call `run`:
 
 ```rust
 let mut conv = Conversation::new(ModelId::ClaudeSonnet46)
@@ -163,11 +163,7 @@ let mut conv = Conversation::new(ModelId::ClaudeSonnet46)
     .on_iteration_exhausted(LoopOutcome::Error);
 
 conv.user("Do the thing.");
-let resp = conv.run(&client).await?;        // fire-and-forget
-// or:
-let mut events = conv.run_stream(&client);   // event stream
-while let Some(event) = events.next().await { /* … */ }
-let resp = events.finish()?;
+let resp = conv.run(&client).await?;
 ```
 
 The loop iterates `complete → tool_calls? → dispatch handlers →
@@ -176,6 +172,14 @@ the budget is exhausted. Behaviour on exhaustion is
 consumer-selectable via `LoopOutcome` (`Error`, `ReturnLast`, or
 a custom variant). Cancellation via standard tokio primitives;
 per-iteration timeout is configurable.
+
+Live event observation during the loop is via the `EventSink`
+chain attached to the driving `LlmClient` (see
+[TokenUsage criterion](#public-surface) and `Client::with_event_sink`);
+`Conversation` does not expose a separate streaming entry point.
+Consumers that want a `Stream<Item = AgentEvent>` wrap a short
+mpsc-backed `EventSink` impl — paid by the one consumer that needs
+it, not by every consumer up-front.
 
 ### `Tool` Trait
 
@@ -324,7 +328,7 @@ min_bytes = 256
   [test](conversation_builder_accepts_documented_knobs)
 - `Tool` trait has `name`, `description`, `input_schema`, async `invoke(args) -> Result<ToolOutput>` — no closure-only registration
   [check](grep -q 'pub trait Tool' crates/loom-llm/src/tool.rs)
-- `Conversation::run(&client)` runs the tool-use loop to completion and returns the final `CompletionResponse`; `Conversation::run_stream(&client)` yields `AgentEvent` values during execution
+- `Conversation::run(&client)` runs the tool-use loop to completion and returns the final `CompletionResponse`; live event observation during the loop happens via the `EventSink` chain attached to the driving `LlmClient` (see `complete_emits_token_usage_driver_event`), not via a separate streaming entry point
   [test](conversation_run_completes_loop_and_returns_final_response)
 - Loop respects `max_iterations`; on exhaustion behaves per `on_iteration_exhausted` (default `LoopOutcome::Error`)
   [test](conversation_loop_respects_max_iterations)
@@ -406,11 +410,13 @@ min_bytes = 256
 5. **`Conversation` with built-in tool-use loop.** Consumers
    register tools via the `Tool` trait, configure
    `max_iterations` budget and `on_iteration_exhausted` behavior,
-   then call `run(&client)` (fire-and-forget) or
-   `run_stream(&client)` (event stream). Loop iterates
+   then call `run(&client)`. Loop iterates
    `complete → tool_calls? → dispatch → tool_results → complete`
    until the agent stops calling tools or the budget is
-   exhausted. Cancellation via standard tokio primitives.
+   exhausted. Cancellation via standard tokio primitives. Live
+   event observation during the loop is via the `EventSink` chain
+   attached to the driving `LlmClient` (Requirement 4) — no
+   separate streaming entry point.
 6. **`Tool` trait designed for ecosystem convertibility.** Shape
    permits reasonable conversion to other Rust agent-loop crates'
    tool shapes (`agent-client-protocol`, rig, etc.) so re-hosting
