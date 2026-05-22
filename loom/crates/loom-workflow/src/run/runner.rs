@@ -807,6 +807,52 @@ mod tests {
         Ok(())
     }
 
+    /// Per `specs/loom-templates.md` § Attempt counter, the per-bead
+    /// attempt counter resets on fresh bead dispatch. A fix-up bead
+    /// emitted by the review handoff carries no retry state from the
+    /// failing bead that spawned it; its first `run_bead` call must
+    /// thread `previous_failure = None` so the rendered prompt's
+    /// `attempt` starts at zero (the production controller derives
+    /// `attempt = u32::from(previous_failure.is_some())`).
+    #[tokio::test]
+    async fn fix_up_bead_starts_at_attempt_zero() -> Result<(), RunError> {
+        let mut c = FakeController::default();
+        c.ready_queue.push_back(bead("wx-orig", &[]));
+        c.agent_outcomes.push_back(AgentOutcome::Failure {
+            error: "first failure".into(),
+        });
+        c.agent_outcomes.push_back(AgentOutcome::Failure {
+            error: "second failure".into(),
+        });
+        c.agent_outcomes.push_back(AgentOutcome::Success);
+        c.review_injects
+            .push_back(vec![bead("wx-fixup", &["loom:fixup"])]);
+        c.review_injects.push_back(vec![]);
+        c.agent_outcomes.push_back(AgentOutcome::Success);
+
+        run_loop(&mut c, RunMode::Continuous, RetryPolicy::default(), 10).await?;
+
+        let fixup_id = BeadId::new("wx-fixup").expect("valid bead id");
+        let fixup_calls: Vec<&(BeadId, Option<String>)> = c
+            .run_calls
+            .iter()
+            .filter(|(id, _)| *id == fixup_id)
+            .collect();
+        assert_eq!(
+            fixup_calls.len(),
+            1,
+            "fix-up bead dispatched exactly once: {:?}",
+            c.run_calls,
+        );
+        assert!(
+            fixup_calls[0].1.is_none(),
+            "fix-up bead's first dispatch must carry no previous_failure \
+             (proving attempt=0 in the rendered prompt): {:?}",
+            fixup_calls[0].1,
+        );
+        Ok(())
+    }
+
     /// FR1 outer-loop stall. A fully-clarified (or fully-stuck) molecule
     /// MUST exit on the second pass: the first pass drains the ready
     /// queue (which may be empty from the start), invokes `exec_review`,

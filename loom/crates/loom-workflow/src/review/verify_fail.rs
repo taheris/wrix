@@ -327,6 +327,40 @@ mod tests {
         );
     }
 
+    /// Per `specs/loom-templates.md` § Typed `PreviousFailure`,
+    /// `review_notes` is populated **only** when `previous_failure` is
+    /// `VerifyFailures` and the reviewer also raised a concern. The
+    /// formatter is only ever entered for the verify-fail recovery cause,
+    /// so this test pins the second arm of the conditional: with the
+    /// verify-fail side held constant, the `Review notes:` block appears
+    /// iff the `ReviewFlag` is `Some` and is absent when it is `None`.
+    #[test]
+    fn review_notes_populated_only_on_verify_fail_plus_review_concern() {
+        let f = failure("tests/a.sh", 1, "boom\n");
+
+        let with_concern = format_previous_failure(
+            &[f.clone()],
+            Some(&flag(
+                ReviewConcern::VerifierBypass,
+                "test mocks the agent backend",
+            )),
+        );
+        assert!(
+            with_concern.contains(REVIEW_NOTES_HEADING),
+            "verify-fail + review concern must populate Review notes: {with_concern}",
+        );
+        assert!(
+            with_concern.contains("[verifier-bypass]"),
+            "concern token must surface: {with_concern}",
+        );
+
+        let without_concern = format_previous_failure(&[f], None);
+        assert!(
+            !without_concern.contains(REVIEW_NOTES_HEADING),
+            "verify-fail without review concern must NOT populate Review notes: {without_concern}",
+        );
+    }
+
     #[test]
     fn review_notes_truncated_when_detail_exceeds_budget() {
         let f = failure("tests/a.sh", 1, "boom\n");

@@ -525,16 +525,16 @@ documents in front of the agent with zero configuration.
   `attempt = 0` regardless of the failing bead's prior attempts
   [test](fix_up_bead_starts_at_attempt_zero)
 - Attempt counter is bounded by `[loop] max_retries` (default 2)
-  [test](attempt_does_not_exceed_max_retries_in_session)
+  [test](failed_bead_retries_with_previous_failure_then_clarifies)
 
 ### First-instruction reframe
 
 - `run.md` prepends "Re-read the previous failure block above and
   address its specific concern before re-implementing." when
   `previous_failure.is_some()`
-  [test](run_template_prepends_reframe_when_previous_failure_set)
+  [test](run_template_prepends_first_instruction_reframe_on_retry)
 - Reframe is omitted when `previous_failure.is_none()`
-  [test](run_template_omits_reframe_when_no_previous_failure)
+  [test](run_template_omits_first_instruction_reframe_on_fresh_dispatch)
 - Reframe wording is generic (one form regardless of variant);
   per-variant detail lives inside the previous-failure block itself
   [check](grep -q 'Re-read the previous failure block above' crates/loom-templates/templates/run.md)
