@@ -768,6 +768,193 @@ Per-stage flag handling:
   picked up by any future `loom todo` run. Invariant clashes surface
   via `loom:clarify` in the next `loom msg` walk.
 
+## Success Criteria
+
+The gate's spec defines the verifier-annotation taxonomy, so these
+criteria self-host — they use the same `[check]` / `[test]` /
+`[system]` / `[judge]` annotations the rest of the spec defines. The
+integrity gate's self-referential tests (under *Integrity gate — three
+directions* below) pin that this self-hosting actually resolves: a
+`[check]` annotation in `specs/loom-gate.md` whose first token is on
+PATH, and a `[judge]` annotation pointing at the gate's own
+`src/integrity.rs`, both pass forward resolution.
+
+### Annotation parsing
+
+- Parser walks every `.md` file in the specs directory in lexical order
+  [test](parse_walks_all_md_files_in_lex_order)
+- Parser skips non-`.md` files in the specs directory
+  [test](parse_skips_non_markdown_files_in_specs_dir)
+- Parser aggregates criteria across multiple spec files into a single
+  `ParsedSpecs`
+  [test](parse_aggregates_criteria_across_files)
+- Parser returns a typed read-directory error when the specs directory
+  is missing rather than producing an empty result
+  [test](parse_returns_read_dir_error_for_missing_directory)
+
+### Integrity gate — three directions
+
+- **Forward — baseline.** A spec with all valid annotations yields no
+  findings
+  [test](parse_then_check_with_all_valid_annotations_yields_no_findings)
+- **Forward — broken targets per tier.** Each tier flags its own
+  broken-target shape: `[check]` first token absent on PATH, `[test]`
+  path with no matching function, `[judge]` file absent
+  [test](fixture_with_broken_target_per_tier_flags_each_one)
+- **Forward — test-tier missing function.** A `[test](cargo test …)`
+  annotation whose test name does not match any function in the
+  workspace is flagged
+  [test](check_flags_cargo_test_annotation_with_missing_test_name)
+- **Stub-pointing.** A `[test]` annotation whose body invokes the
+  `_pending_stub` sigil is flagged as `StubTestFunction`
+  [test](stub_pointing_test_annotation_flags_via_workspace_scanner)
+- **Atomic-acceptance.** Two annotations on one criterion flags
+  `MultipleAnnotations`
+  [test](two_annotations_on_one_criterion_flags_atomic_acceptance)
+- **End-to-end.** A specs directory containing both broken-target and
+  multiple-annotation fixtures surfaces findings from both directions
+  in one pass
+  [test](end_to_end_specs_dir_check_combines_both_directions)
+- **Self-hosting — check tier.** The integrity gate accepts a
+  `[check]` annotation in `specs/loom-gate.md` whose first token
+  resolves on PATH (closes the bootstrap concern: the spec that defines
+  the taxonomy can carry its own annotations)
+  [test](self_referential_check_annotation_resolves_against_integrity_gate_implementation)
+- **Self-hosting — judge tier.** A `[judge]` annotation in
+  `specs/loom-gate.md` pointing at the integrity gate's own
+  `src/integrity.rs` resolves
+  [test](self_referential_judge_annotation_resolves_against_integrity_source_file)
+
+### Status cache
+
+- Cache file is created on first `open` when the path is missing
+  [test](open_creates_db_file_when_missing)
+- A `CacheRow` round-trips through sqlite preserving every field
+  [test](round_trip_through_sqlite_preserves_every_field)
+- The `row_for` helper writes a row that round-trips through the cache
+  [test](row_for_helper_writes_round_trip_row)
+- Report rendered from on-disk rows summarises pass/fail per tier
+  [test](render_report_reads_from_disk_and_summarises_per_tier)
+- Broken-annotation entries in the report come from integrity findings,
+  not from the cache file itself
+  [test](broken_annotations_in_report_come_from_integrity_findings)
+- **Cache render <500ms — sqlite path.** The report renders in <500ms
+  on a 2000-row corpus when read from sqlite (hard target from
+  *Status cache*)
+  [test](render_under_500ms_on_2000_row_corpus)
+- **Cache render <500ms — in-memory path.** Same <500ms target holds
+  for the in-memory `render_from_rows` path
+  [test](render_from_rows_under_500ms_on_2000_row_corpus)
+
+### Verifier inputs
+
+- `[test]` annotations resolve declared inputs as the union of the
+  owning crate's source directories (via `cargo metadata`) and the spec
+  section the annotation lives in (spec-section auto-include)
+  [test](test_tier_resolution_uses_cargo_metadata_plus_spec_autoinclude)
+
+### Scope handling
+
+- Live-workspace scope for a `[test](crate::module::test)` annotation
+  includes the owning crate's files plus its transitive dependency
+  files
+  [test](live_workspace_scope_includes_own_files_and_transitive_dep_files)
+- Live-workspace scope for an annotation referencing an unknown crate
+  is empty
+  [test](live_workspace_scope_for_unknown_crate_is_empty)
+- Live-workspace scope for a `[test](<crate>)` placeholder-target
+  annotation is empty
+  [test](live_workspace_scope_for_crate_placeholder_target_is_empty)
+
+### Dispatch — per-tier process model
+
+- `[check]` tier spawns one subprocess per annotation
+  [test](dispatcher_spawns_one_subprocess_per_check_annotation)
+- `[system]` tier spawns one subprocess per annotation (system
+  verifiers are inherently slow and self-contained; batching doesn't
+  help)
+  [test](dispatcher_spawns_one_subprocess_per_system_annotation)
+- `[test]` tier batches every in-scope target into one runner
+  subprocess per invocation
+  [test](test_tier_batches_all_targets_into_one_runner_subprocess)
+- `[test]` tier filters targets by `--files` scope intersection before
+  invoking the runner
+  [test](test_tier_filters_targets_by_files_scope_intersection)
+- `[test]` tier returns no subprocess when the `--files` filter
+  excludes every target
+  [test](test_tier_returns_none_when_files_filter_excludes_everything)
+- `[test]` tier returns no subprocess when no `[test]` annotations are
+  in scope at all
+  [test](test_tier_returns_none_when_no_test_annotations_in_input)
+- `[judge]` tier batches every target into one runner subprocess per
+  invocation
+  [test](judge_tier_batches_all_targets_into_one_runner_subprocess)
+- `[judge]` tier ignores `--files` scope filtering (unlike `[test]`)
+  [test](judge_tier_ignores_files_scope_unlike_test_tier)
+- Dispatcher skips annotations whose tier does not match the requested
+  tier
+  [test](check_tier_skips_annotations_with_non_check_tier)
+
+### Dispatch — env contract
+
+- The dispatcher sets `LOOM_FILES` and `LOOM_SPEC` env vars on every
+  verifier subprocess (per *Verifier-runner contract*)
+  [test](dispatcher_sets_loom_files_and_loom_spec_env_on_verifier_subprocess)
+
+### Dispatch — JSON verdict and exit-code fallback
+
+- `[check]` tier falls back to "exit code 0 → pass" when the verifier
+  emits no JSON line (per *Fallback for non-conforming verifiers*)
+  [test](check_tier_falls_back_to_exit_code_pass_when_verifier_omits_json)
+- `[check]` tier falls back to "non-zero exit → fail" when the verifier
+  emits no JSON line
+  [test](check_tier_falls_back_to_exit_code_fail_when_verifier_omits_json)
+- `[test]` runner falls back to exit code when the runner omits a JSON
+  per-target line
+  [test](test_tier_falls_back_to_exit_code_when_runner_omits_json_line)
+- A malformed JSON verdict (e.g. `pass` field with wrong type) surfaces
+  as a typed dispatch error rather than silently passing
+  [test](dispatcher_surfaces_malformed_verdict_when_pass_key_has_wrong_type)
+- Incidental JSON on stdout that isn't a recognised verdict line falls
+  through to the exit-code path
+  [test](dispatcher_falls_through_to_exit_code_on_incidental_json)
+- A verifier command that fails to spawn (command not found) surfaces
+  as a dispatch error — the gate-exit-2 case from the
+  *Verifier-runner contract*
+  [test](dispatcher_surfaces_spawn_failure_when_command_not_found)
+
+### Runners — batched dispatch
+
+- `run_with_runners` groups matched annotations into one batch per
+  runner and falls back to per-annotation spawn for unmatched
+  annotations
+  [test](run_with_runners_groups_matched_into_one_batch_and_falls_back_for_unmatched)
+- When multiple runners' `match` regexes could apply, the first match
+  in spec order wins
+  [test](run_with_runners_first_match_wins_in_spec_order)
+- When a batched-runner invocation does not produce per-target output
+  for every annotation in the batch, the missing targets surface as
+  dispatch failures
+  [test](run_with_runners_dispatch_fails_targets_missing_from_batch_output)
+- Runner cwd resolution — explicit `cwd` is resolved against the repo
+  root
+  [test](run_with_runners_resolves_cwd_against_repo_root)
+- Runner cwd resolution — a runner with no `cwd` falls through to the
+  tier-default `cwd`
+  [test](run_with_runners_falls_through_to_tier_default_when_runner_cwd_is_none)
+- Runner cwd resolution — a runner with no `cwd` and no tier-default
+  uses the repo root
+  [test](run_with_runners_uses_repo_root_when_neither_runner_nor_tier_cwd_set)
+- Tier-default `cwd` also applies to per-annotation fallback when the
+  matched runner has no cwd
+  [test](run_with_runners_tier_default_applies_to_unmatched_per_annotation_fallback)
+- `libtest-json` parser maps test-event names back to annotation
+  targets
+  [test](run_with_runners_libtest_json_maps_test_names_back_to_annotations)
+- `exit-code` parser shares a single per-runner verdict across every
+  target in the group
+  [test](run_with_runners_exit_code_parser_shares_verdict_across_group)
+
 ## Not in scope of this spec
 
 The gate enforces; it does not own:
