@@ -870,7 +870,11 @@ fn resolves_command(target: &str, command_resolver: &dyn CommandResolver) -> boo
     let Some(first) = first_token(target) else {
         return false;
     };
-    command_resolver.resolves(first)
+    let path_part = first.split_once("::").map_or(first, |(p, _)| p);
+    if path_part.is_empty() {
+        return false;
+    }
+    command_resolver.resolves(path_part)
 }
 
 fn first_token(command: &str) -> Option<&str> {
@@ -1268,6 +1272,62 @@ mod tests {
             findings.is_empty(),
             "judge target with ::fn selector should resolve to leading path: {findings:?}"
         );
+    }
+
+    #[test]
+    fn forward_system_accepts_path_with_attr_selector() {
+        let dir = tempdir().unwrap();
+        let nix_dir = dir.path().join("tests/city");
+        fs::create_dir_all(&nix_dir).unwrap();
+        let unit_nix = nix_dir.join("unit.nix");
+        fs::write(&unit_nix, "{ }\n").unwrap();
+
+        let annotations = vec![
+            ann(
+                Tier::System,
+                "tests/city/unit.nix::city-mkcity-eval",
+                "specs/a.md",
+                17,
+                17,
+            ),
+            ann(
+                Tier::System,
+                "tests/city/unit.nix::Wait for worker worktree",
+                "specs/a.md",
+                18,
+                18,
+            ),
+        ];
+        let cmds = FsCommandResolver::with_path(dir.path(), "");
+        let tests = StubTests::with(&[]);
+        let findings = check_forward(&annotations, dir.path(), &cmds, &tests, &StubLeaves::none());
+        assert!(
+            findings.is_empty(),
+            "system target with ::attr selector should resolve to leading path: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn forward_system_flags_missing_path_with_attr_selector() {
+        let dir = tempdir().unwrap();
+        let annotations = vec![ann(
+            Tier::System,
+            "tests/city/absent.nix::some-attr",
+            "specs/a.md",
+            19,
+            19,
+        )];
+        let cmds = FsCommandResolver::with_path(dir.path(), "");
+        let tests = StubTests::with(&[]);
+        let findings = check_forward(&annotations, dir.path(), &cmds, &tests, &StubLeaves::none());
+        assert_eq!(findings.len(), 1);
+        assert!(matches!(
+            findings[0],
+            IntegrityFinding::UnresolvedAnnotation {
+                tier: Tier::System,
+                ..
+            }
+        ));
     }
 
     #[test]

@@ -808,6 +808,11 @@ PATH, and a `[judge]` annotation pointing at the gate's own
   stripped before the on-disk check (per the *Verifier inputs* table's
   `[judge](script::fn)` row)
   [test](forward_judge_accepts_script_with_fn_selector)
+- **Forward — system `::attr` selector.** A `[system](path::attr)`
+  target (e.g. `[system](tests/city/unit.nix::city-mkcity-eval)`)
+  resolves when the leading path exists; the `::attr` suffix is
+  stripped before the PATH / file check, matching the `[judge]` shape
+  [test](forward_system_accepts_path_with_attr_selector)
 - **Forward — test-tier missing function.** A `[test](cargo test …)`
   annotation whose test name does not match any function in the
   workspace is flagged
