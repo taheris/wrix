@@ -146,6 +146,45 @@ touched spec section + bonded sibling specs are in view, and any
 cross-spec discrepancy noticed there falls under the per-section
 invariant-clash walk above.
 
+## Template-vs-Spec Drift Walk (`--tree` scope only)
+
+When this review runs at `--tree` scope, walk every prompt template loom
+ships (every file under `crates/loom-templates/templates/` — the embedded
+template set, including partials) against every spec under `specs/`. The
+check enforces Invariant 3 from `specs/loom-gate.md`: a template that
+directs agents toward behaviour the spec contradicts produces cascading
+damage as the agent follows the template literally instead of the
+contract.
+
+For each template, judge whether any instruction it gives an agent
+contradicts a claim in the spec set:
+
+- An instruction to emit a marker / token / label the spec does not
+  define, or that the spec defines with a different meaning.
+- A workflow step that violates an explicit imperative-keyword sentence
+  (`MUST`, `MUST NOT`, `NEVER`) in a spec section the template
+  references.
+- A command shape the template tells the agent to run that contradicts
+  the spec's command surface (e.g. flag spelled differently, subcommand
+  the spec marks removed).
+- A persistence path (`bd update --notes`, `bd update --add-label=...`)
+  the template prescribes that disagrees with the persistence contract
+  the spec sets.
+
+A template instruction that the spec set does not speak to is not
+drift — only contradictions count. When uncertain whether a template
+phrasing conflicts with a spec claim, treat it as drift and flag; false
+positives surface as `bd` discussion, misses ship broken templates.
+
+At `--bead` or `--diff` scope this walk is out of scope; per-diff
+template edits are reviewed against the spec sections the diff itself
+touches, under the conformance-trace and invariant-clash walks above.
+
+When you finalize the phase, emit `LOOM_CONCERN: template-spec-drift
+-- <summary>` on the final line for the strongest contradiction. The
+visible body cites the template path and the spec section it
+contradicts for every drift found.
+
 ## Spec-Conventions Walk (for spec edits)
 
 When the diff edits spec markdown under `specs/` (not just code), the

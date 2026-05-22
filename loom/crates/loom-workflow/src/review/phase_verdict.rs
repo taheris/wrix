@@ -19,7 +19,8 @@ use crate::todo::ExitSignal;
 /// schema in `loom-templates/templates/review.md`: the four verifier-honesty
 /// sub-checks, mock discipline, scope appropriateness, `[judge]` rubric
 /// satisfaction, style-rule conformance, plus the standing/tree-scope
-/// concerns (surface drift, cross-spec clash, spec-conventions violation).
+/// concerns (surface drift, cross-spec clash, template-vs-spec drift,
+/// spec-conventions violation).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReviewConcern {
     VerifierBypass,
@@ -32,6 +33,7 @@ pub enum ReviewConcern {
     StyleRule,
     SurfaceDrift,
     CrossSpecClash,
+    TemplateSpecDrift,
     SpecConventionsViolation,
 }
 
@@ -48,6 +50,7 @@ impl ReviewConcern {
             Self::StyleRule => "style-rule",
             Self::SurfaceDrift => "surface-drift",
             Self::CrossSpecClash => "cross-spec-clash",
+            Self::TemplateSpecDrift => "template-spec-drift",
             Self::SpecConventionsViolation => "spec-conventions-violation",
         }
     }
@@ -64,6 +67,7 @@ impl ReviewConcern {
             "style-rule" => Some(Self::StyleRule),
             "surface-drift" => Some(Self::SurfaceDrift),
             "cross-spec-clash" => Some(Self::CrossSpecClash),
+            "template-spec-drift" => Some(Self::TemplateSpecDrift),
             "spec-conventions-violation" => Some(Self::SpecConventionsViolation),
             _ => None,
         }
@@ -691,6 +695,10 @@ mod tests {
         assert_eq!(ReviewConcern::SurfaceDrift.as_str(), "surface-drift");
         assert_eq!(ReviewConcern::CrossSpecClash.as_str(), "cross-spec-clash");
         assert_eq!(
+            ReviewConcern::TemplateSpecDrift.as_str(),
+            "template-spec-drift",
+        );
+        assert_eq!(
             ReviewConcern::SpecConventionsViolation.as_str(),
             "spec-conventions-violation",
         );
@@ -709,6 +717,7 @@ mod tests {
             ReviewConcern::StyleRule,
             ReviewConcern::SurfaceDrift,
             ReviewConcern::CrossSpecClash,
+            ReviewConcern::TemplateSpecDrift,
             ReviewConcern::SpecConventionsViolation,
         ] {
             assert_eq!(ReviewConcern::parse(c.as_str()), Some(c));
@@ -754,6 +763,7 @@ mod tests {
             ("style-rule", ReviewConcern::StyleRule),
             ("surface-drift", ReviewConcern::SurfaceDrift),
             ("cross-spec-clash", ReviewConcern::CrossSpecClash),
+            ("template-spec-drift", ReviewConcern::TemplateSpecDrift),
             (
                 "spec-conventions-violation",
                 ReviewConcern::SpecConventionsViolation,

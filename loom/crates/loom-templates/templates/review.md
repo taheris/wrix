@@ -303,6 +303,10 @@ The remaining tokens cover the other rubric dimensions:
 - `cross-spec-clash` — at `--tree` scope, two specs under `specs/`
   contradict each other (single-source-of-truth rule from
   `docs/spec-conventions.md`); detail names both specs.
+- `template-spec-drift` — at `--tree` scope, a prompt template under
+  `crates/loom-templates/templates/` directs agents toward behaviour
+  a spec claim contradicts (Invariant 3 from `specs/loom-gate.md`);
+  detail names the template path and the contradicted spec section.
 - `spec-conventions-violation` — the diff edits a spec section in a
   way that violates `docs/spec-conventions.md`; detail names the
   convention section and the offending spec file/line range.

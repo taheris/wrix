@@ -116,6 +116,7 @@ fn concern_to_kind(concern: ReviewConcern) -> ReviewConcernKind {
         ReviewConcern::StyleRule => ReviewConcernKind::Other("style-rule".into()),
         ReviewConcern::SurfaceDrift => ReviewConcernKind::Other("surface-drift".into()),
         ReviewConcern::CrossSpecClash => ReviewConcernKind::Other("cross-spec-clash".into()),
+        ReviewConcern::TemplateSpecDrift => ReviewConcernKind::Other("template-spec-drift".into()),
         ReviewConcern::SpecConventionsViolation => {
             ReviewConcernKind::Other("spec-conventions-violation".into())
         }

@@ -347,7 +347,9 @@ check:
   consumer-provided overrides) against every spec in the consumer's
   spec tree. Flags any template instruction that contradicts a spec
   claim. Hard fail conceptually, but surfaced as a `bd` issue (no
-  "merge to refuse" at the standing safety net).
+  "merge to refuse" at the standing safety net). Concern token:
+  `template-spec-drift`; the rubric body lives in the review prompt's
+  *Template-vs-Spec Drift Walk* partial, gated on `--tree` scope.
 
 Standing-safety-net flags become `bd` issues bonded to the relevant
 spec section. Invariant clashes surfaced at the standing safety net
