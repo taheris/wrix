@@ -1822,9 +1822,7 @@ async fn dispatch_classified(
         spawn.stall_warn_interval = Some(d);
     }
     let mut observer_chain = DefaultObserverChain::from_config(&observer_config);
-    let observer: Option<&mut dyn loom_events::EventSink> = observer_chain
-        .as_mut()
-        .map(|c| c as &mut dyn loom_events::EventSink);
+    let observer = observer_chain.as_mut();
     match kind {
         AgentKind::Pi => {
             run_agent_classified::<PiBackend>(

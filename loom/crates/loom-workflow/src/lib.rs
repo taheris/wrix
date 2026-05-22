@@ -29,4 +29,4 @@ pub use loom_driver::agent::{
     LineParse, MAX_LINE_BYTES, ParsedLine, ProtocolError, RePinContent, SessionOutcome,
     SpawnConfig,
 };
-pub use observer::DefaultObserverChain;
+pub use observer::{DefaultObserverChain, ObserverDriverEvent};

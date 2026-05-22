@@ -29,6 +29,7 @@ use loom_events::{
 };
 use tracing::{info, warn};
 
+use crate::observer::DefaultObserverChain;
 use crate::run::SessionResult;
 
 /// Drive `B` through one full session: spawn, prompt, then consume events
@@ -71,13 +72,18 @@ pub async fn run_agent<B: AgentBackend>(
 /// `infra-preflight` immediately and grant mid-session failures one
 /// driver-memory retry per `loom run`.
 ///
-/// `observer` is an optional auxiliary [`EventSink`] the driver fans
-/// every event into alongside `sink`. After every non-streaming event the
-/// driver calls `observer.react()` (then `sink.react()`) and applies the
-/// returned [`SessionCommand`]s to the live session: `Steer` injects a
-/// system message into the next turn; `Abort` terminates the session and
-/// the function returns [`SessionResult::ObserverAbort`]. `Abort` is
-/// terminal — subsequent commands in the same batch are ignored.
+/// `observer` is an optional [`DefaultObserverChain`] the driver fans
+/// every event into alongside `sink`. After every non-streaming event
+/// the driver calls `observer.react()` (then `sink.react()`) and applies
+/// the returned [`SessionCommand`]s to the live session: `Steer` injects
+/// a system message into the next turn; `Abort` terminates the session
+/// and the function returns [`SessionResult::ObserverAbort`]. `Abort`
+/// is terminal — subsequent commands in the same batch are ignored. The
+/// driver also drains the chain's pending observability payloads
+/// (`take_pending_driver_events`) and writes each one through the same
+/// `sink` + `envelope_builder` as the surrounding agent events, so
+/// `DriverKind::DoomLoopTripped` / `DriverKind::DuplicateToolResult`
+/// land in the log alongside the events that caused them.
 ///
 /// `envelope_builder` joins each `ParsedAgentEvent` the session yields
 /// with the next per-spawn envelope (monotonic `seq`, real `bead_id`,
@@ -90,7 +96,7 @@ pub async fn run_agent<B: AgentBackend>(
 pub async fn run_agent_classified<B: AgentBackend>(
     config: &SpawnConfig,
     mut sink: Option<LogSink>,
-    mut observer: Option<&mut dyn EventSink>,
+    mut observer: Option<&mut DefaultObserverChain>,
     mut text_capture: Option<&mut String>,
     mut envelope_builder: Option<loom_events::EnvelopeBuilder>,
 ) -> SessionResult {
@@ -202,6 +208,18 @@ pub async fn run_agent_classified<B: AgentBackend>(
             o.emit(&event);
         }
         if is_non_streaming(&event) {
+            if let Some(o) = observer.as_deref_mut() {
+                let pending = o.take_pending_driver_events();
+                for entry in pending {
+                    emit_driver_event(
+                        sink.as_mut(),
+                        envelope_builder.as_mut(),
+                        entry.kind,
+                        &entry.summary,
+                        entry.payload,
+                    );
+                }
+            }
             let mut commands: Vec<SessionCommand> = Vec::new();
             if let Some(s) = sink.as_mut() {
                 commands.extend(EventSink::react(s));

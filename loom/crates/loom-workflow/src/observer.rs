@@ -16,11 +16,24 @@ use loom_driver::config::{
     AgentObserversConfig, DoomLoopConfig as DriverDoomLoopConfig,
     DuplicateResultConfig as DriverDuplicateResultConfig,
 };
-use loom_events::{AgentEvent, EventSink, SessionCommand};
+use loom_events::{AgentEvent, DriverKind, EventSink, SessionCommand};
 use loom_llm::observer::{
     DoomLoopConfig as LlmDoomLoopConfig, DoomLoopObserver,
     DuplicateResultConfig as LlmDuplicateResultConfig, DuplicateResultObserver,
 };
+use serde_json::Value;
+
+/// One observability payload drained from the chain, ready to be lifted
+/// into an `AgentEvent::DriverEvent` by the event-loop wiring. Carries
+/// the wire `kind`, a human-readable `summary`, and the structured
+/// `payload` body — the same triple shape `emit_driver_event` writes for
+/// lifecycle driver events.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObserverDriverEvent {
+    pub kind: DriverKind,
+    pub summary: String,
+    pub payload: Value,
+}
 
 /// Observer chain composed in `run_agent_classified`. Wraps each
 /// optional `loom-llm` observer and forwards `EventSink` calls in
@@ -58,6 +71,59 @@ impl DefaultObserverChain {
     /// chain.
     pub fn duplicate_result_enabled(&self) -> bool {
         self.duplicate_result.is_some()
+    }
+
+    /// Drain observability payloads queued by the sub-observers.
+    ///
+    /// The driver calls this after every non-streaming event (alongside
+    /// `react()`) and lifts each entry into an
+    /// `AgentEvent::DriverEvent` written through the active
+    /// `EnvelopeBuilder` + `LogSink`. Doom-loop entries surface first
+    /// (registration order matches `react()`), then duplicate-result
+    /// entries.
+    pub fn take_pending_driver_events(&mut self) -> Vec<ObserverDriverEvent> {
+        let mut out = Vec::new();
+        if let Some(observer) = self.doom_loop.as_mut() {
+            for tripped in observer.take_pending() {
+                let summary = format!(
+                    "doom-loop tripped stage {stage} for tool `{tool}`",
+                    stage = tripped.stage,
+                    tool = tripped.tool,
+                );
+                let payload = serde_json::json!({
+                    "stage": tripped.stage,
+                    "tool": tripped.tool,
+                    "params": tripped.params,
+                    "call_id": tripped.call_id.as_str(),
+                });
+                out.push(ObserverDriverEvent {
+                    kind: DriverKind::DoomLoopTripped,
+                    summary,
+                    payload,
+                });
+            }
+        }
+        if let Some(observer) = self.duplicate_result.as_mut() {
+            for detection in observer.take_pending() {
+                let summary = format!(
+                    "duplicate tool result: call {repeated} repeats {original} ({bytes} B)",
+                    repeated = detection.repeated_call_id.as_str(),
+                    original = detection.original_call_id.as_str(),
+                    bytes = detection.bytes_wasted,
+                );
+                let payload = serde_json::json!({
+                    "original_call_id": detection.original_call_id.as_str(),
+                    "repeated_call_id": detection.repeated_call_id.as_str(),
+                    "bytes_wasted": detection.bytes_wasted,
+                });
+                out.push(ObserverDriverEvent {
+                    kind: DriverKind::DuplicateToolResult,
+                    summary,
+                    payload,
+                });
+            }
+        }
+        out
     }
 }
 
@@ -254,5 +320,125 @@ mod tests {
             commands.first(),
             Some(SessionCommand::Steer(msg)) if msg.contains("doom-loop suspected")
         ));
+    }
+
+    /// `take_pending_driver_events` lifts the doom-loop observability
+    /// payload into a `DriverKind::DoomLoopTripped` entry once stage 1
+    /// fires, carrying the originating tool/params/call_id so a replay
+    /// can reconstruct the trigger.
+    #[test]
+    fn take_pending_driver_events_lifts_doom_loop_stage_1() {
+        let cfg = AgentObserversConfig {
+            doom_loop: DriverDoomLoopConfig {
+                enabled: true,
+                window: 5,
+                threshold: 3,
+                stage_2_after_stage_1: 10,
+            },
+            duplicate_result: DriverDuplicateResultConfig {
+                enabled: false,
+                ..DriverDuplicateResultConfig::default()
+            },
+        };
+        let mut chain = DefaultObserverChain::from_config(&cfg).expect("non-empty");
+        let params = json!({"path": "/etc/hosts"});
+        let same = r#"{"content":"loop"}"#;
+        let mut seq = 0u64;
+        for id in ["c1", "c2", "c3"] {
+            chain.emit(&tool_call(seq, id, "read_file", params.clone()));
+            seq += 1;
+            chain.emit(&tool_result(seq, id, same));
+            seq += 1;
+        }
+        let drained = chain.take_pending_driver_events();
+        assert_eq!(drained.len(), 1, "exactly one stage-1 payload: {drained:?}");
+        let entry = &drained[0];
+        assert_eq!(entry.kind, DriverKind::DoomLoopTripped);
+        assert!(
+            entry.summary.contains("stage 1") && entry.summary.contains("read_file"),
+            "summary names stage and tool: {summary}",
+            summary = entry.summary,
+        );
+        assert_eq!(entry.payload["stage"], 1);
+        assert_eq!(entry.payload["tool"], "read_file");
+        assert_eq!(entry.payload["params"], params);
+        assert_eq!(entry.payload["call_id"], "c3");
+        assert!(
+            chain.take_pending_driver_events().is_empty(),
+            "drain leaves the queue empty",
+        );
+    }
+
+    /// `take_pending_driver_events` lifts every duplicate-result
+    /// detection into a `DriverKind::DuplicateToolResult` entry; the
+    /// payload carries `original_call_id`, `repeated_call_id`, and the
+    /// canonical-byte-count `bytes_wasted`.
+    #[test]
+    fn take_pending_driver_events_lifts_duplicate_result() {
+        let cfg = AgentObserversConfig {
+            doom_loop: DriverDoomLoopConfig {
+                enabled: false,
+                ..DriverDoomLoopConfig::default()
+            },
+            duplicate_result: DriverDuplicateResultConfig::default(),
+        };
+        let mut chain = DefaultObserverChain::from_config(&cfg).expect("non-empty");
+        let filler = "x".repeat(512);
+        let same = format!(r#"{{"content":"loop","filler":"{filler}"}}"#);
+        chain.emit(&tool_result(0, "first", &same));
+        chain.emit(&tool_result(1, "second", &same));
+        let drained = chain.take_pending_driver_events();
+        assert_eq!(drained.len(), 1, "one duplicate detected: {drained:?}");
+        let entry = &drained[0];
+        assert_eq!(entry.kind, DriverKind::DuplicateToolResult);
+        assert_eq!(entry.payload["original_call_id"], "first");
+        assert_eq!(entry.payload["repeated_call_id"], "second");
+        assert!(
+            entry.payload["bytes_wasted"]
+                .as_u64()
+                .is_some_and(|n| n > 0),
+            "bytes_wasted carries the canonical payload size: {payload}",
+            payload = entry.payload,
+        );
+    }
+
+    /// Drain order matches `react()` ordering: doom-loop entries first,
+    /// then duplicate-result entries. Same scenario fires both
+    /// observers in one batch and asserts the ordering invariant.
+    #[test]
+    fn take_pending_driver_events_orders_doom_loop_before_duplicate() {
+        let cfg = AgentObserversConfig {
+            doom_loop: DriverDoomLoopConfig {
+                enabled: true,
+                window: 5,
+                threshold: 3,
+                stage_2_after_stage_1: 10,
+            },
+            duplicate_result: DriverDuplicateResultConfig::default(),
+        };
+        let mut chain = DefaultObserverChain::from_config(&cfg).expect("non-empty");
+        let params = json!({"path": "/etc/hosts"});
+        let filler = "x".repeat(512);
+        let same = format!(r#"{{"content":"loop","filler":"{filler}"}}"#);
+        let mut seq = 0u64;
+        for id in ["c1", "c2", "c3"] {
+            chain.emit(&tool_call(seq, id, "read_file", params.clone()));
+            seq += 1;
+            chain.emit(&tool_result(seq, id, &same));
+            seq += 1;
+        }
+        let drained = chain.take_pending_driver_events();
+        assert!(
+            drained.len() >= 2,
+            "doom-loop + at least one duplicate: {drained:?}",
+        );
+        assert_eq!(drained[0].kind, DriverKind::DoomLoopTripped);
+        assert!(
+            drained
+                .iter()
+                .skip(1)
+                .all(|e| e.kind == DriverKind::DuplicateToolResult),
+            "all later entries are duplicate-result: {drained:?}",
+        );
     }
 }
