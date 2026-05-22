@@ -70,8 +70,9 @@ let
   # host runner-config paths resolve identically.
   #
   # Host files referenced by [check]-tier grep annotations across
-  # specs/*.md. The Nix-config invariants those annotations encode
-  # (test-loom app shape, flake-checks wiring, podman/pi-mono
+  # specs/*.md plus the spec-relative [judge] targets under
+  # tests/judges/. The Nix-config invariants those annotations
+  # encode (test-loom app shape, flake-checks wiring, podman/pi-mono
   # pinning) and the sandbox entrypoint live outside the loom/
   # workspace, so the staged source mirrors the host paths exactly
   # under tests/, modules/flake/, and lib/sandbox/.
@@ -93,6 +94,7 @@ let
     cp ${./default.nix} $out/tests/loom/default.nix
     cp ${./run-tests.sh} $out/tests/loom/run-tests.sh
     cp ${../default.nix} $out/tests/default.nix
+    cp -r ${../judges} $out/tests/judges
     cp ${../../modules/flake/apps.nix} $out/modules/flake/apps.nix
     cp ${../../modules/flake/overlays.nix} $out/modules/flake/overlays.nix
     cp ${../../lib/sandbox/linux/entrypoint.sh} $out/lib/sandbox/linux/entrypoint.sh
