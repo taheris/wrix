@@ -25,7 +25,7 @@ use askama::Template;
 use loom_driver::agent::{
     ProtocolError, RePinContent, SessionOutcome, SpawnConfig, set_loom_inside,
 };
-use loom_driver::bd::{BdClient, Bead, ListOpts, UpdateOpts};
+use loom_driver::bd::{BdClient, BdError, Bead, ListOpts, UpdateOpts};
 use loom_driver::clock::{Clock, SystemClock};
 use loom_driver::config::Phase;
 use loom_driver::git::GitClient;
@@ -515,6 +515,30 @@ where
                 String::from_utf8_lossy(&output.stderr).into_owned(),
             ));
         }
+        Ok(())
+    }
+
+    async fn show_bead(&mut self, id: &BeadId) -> Result<Option<Bead>, ReviewError> {
+        match self.bd.show(id).await {
+            Ok(bead) => Ok(Some(bead)),
+            Err(BdError::ShowEmpty) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    async fn list_children(&mut self, parent: &BeadId) -> Result<Vec<Bead>, ReviewError> {
+        let beads = self
+            .bd
+            .list(ListOpts {
+                parent: Some(parent.clone()),
+                ..ListOpts::default()
+            })
+            .await?;
+        Ok(beads)
+    }
+
+    async fn close_bead(&mut self, id: &BeadId, reason: &str) -> Result<(), ReviewError> {
+        self.bd.close(id, Some(reason)).await?;
         Ok(())
     }
 

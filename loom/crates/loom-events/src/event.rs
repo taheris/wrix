@@ -35,6 +35,13 @@ pub enum DriverKind {
     /// identical pairs follow stage 1 (stage 2). Payload fields:
     /// `stage`, `tool`, `params`, `call_id`.
     DoomLoopTripped,
+    /// Emitted by the review phase's push-gate `Clean` branch after the
+    /// code + beads push succeed: when an epic's children are all
+    /// closed and the molecule's review passed, the driver calls `bd
+    /// close <epic-id>` and emits one event per closed epic. Payload
+    /// field: `epic_id`. Nested epics close inside-out in one pass; the
+    /// driver emits one event per close, ordered child-before-parent.
+    EpicAutoClosed,
     /// Forward-compat fallback: any wire `driver_kind` string that does
     /// not match a known variant lands here. Known variants never fall
     /// through.
@@ -57,6 +64,7 @@ impl DriverKind {
             DriverKind::TokenUsage => "token_usage",
             DriverKind::DuplicateToolResult => "duplicate_tool_result",
             DriverKind::DoomLoopTripped => "doom_loop_tripped",
+            DriverKind::EpicAutoClosed => "epic_auto_closed",
             DriverKind::Other(s) => s.as_str(),
         }
     }
@@ -76,6 +84,7 @@ impl DriverKind {
             "token_usage" => DriverKind::TokenUsage,
             "duplicate_tool_result" => DriverKind::DuplicateToolResult,
             "doom_loop_tripped" => DriverKind::DoomLoopTripped,
+            "epic_auto_closed" => DriverKind::EpicAutoClosed,
             other => DriverKind::Other(other.to_string()),
         }
     }
@@ -891,6 +900,7 @@ mod tests {
             "token_usage",
             "duplicate_tool_result",
             "doom_loop_tripped",
+            "epic_auto_closed",
         ];
         for kind in kinds {
             let json = serde_json::json!({
@@ -981,6 +991,7 @@ mod tests {
             ("token_usage", DriverKind::TokenUsage),
             ("duplicate_tool_result", DriverKind::DuplicateToolResult),
             ("doom_loop_tripped", DriverKind::DoomLoopTripped),
+            ("epic_auto_closed", DriverKind::EpicAutoClosed),
         ];
         for (wire, variant) in known {
             assert_eq!(DriverKind::from_wire(wire), variant);

@@ -135,6 +135,45 @@ pub trait ReviewController: Send {
     ) -> impl std::future::Future<Output = Result<(), ReviewError>> + Send {
         async { Ok(()) }
     }
+
+    /// Fetch a single bead by id, used by the epic auto-close walk to
+    /// inspect `issue_type`, `status`, and `parent` as it walks up the
+    /// ancestry chain. Production wires this to `BdClient::show`. The
+    /// default impl returns `None` so test fakes that don't exercise the
+    /// auto-close walk keep working — `auto_close_completed_epics`
+    /// treats `None` as "epic not in scope" and stops the walk.
+    fn show_bead(
+        &mut self,
+        _id: &BeadId,
+    ) -> impl std::future::Future<Output = Result<Option<Bead>, ReviewError>> + Send {
+        async { Ok(None) }
+    }
+
+    /// List the direct children of `parent` (`bd list --parent=<id>`).
+    /// Used by the epic auto-close walk to decide whether every child of
+    /// a candidate epic has reached `status == "closed"`. The default
+    /// impl returns an empty list so test fakes opt out of the walk by
+    /// default — the walk's "no children present" branch refuses to
+    /// auto-close (an epic with no children is not what the gate is
+    /// trying to retire).
+    fn list_children(
+        &mut self,
+        _parent: &BeadId,
+    ) -> impl std::future::Future<Output = Result<Vec<Bead>, ReviewError>> + Send {
+        async { Ok(Vec::new()) }
+    }
+
+    /// Close a bead via `bd close <id> --reason=<reason>`. The epic
+    /// auto-close walk calls this once per epic that qualifies. The
+    /// default impl is a no-op so test fakes that don't drive the walk
+    /// keep working.
+    fn close_bead(
+        &mut self,
+        _id: &BeadId,
+        _reason: &str,
+    ) -> impl std::future::Future<Output = Result<(), ReviewError>> + Send {
+        async { Ok(()) }
+    }
 }
 
 /// Reviewer agent run result. Carries the typed [`ReviewOutcome`]
@@ -235,7 +274,71 @@ pub async fn review_loop<C: ReviewController>(
         controller,
     )
     .await?;
-    apply_verdict(controller, verdict).await
+    apply_verdict(controller, verdict, &post).await
+}
+
+/// Walk up from every spec-bead parent, closing each epic whose direct
+/// children are all `status == "closed"`. Nested epics close inside-out
+/// in one pass: closing the immediate-parent epic enqueues its own
+/// parent for re-evaluation, and the next iteration sees the just-
+/// closed epic and decides whether the grandparent now qualifies.
+///
+/// Returns the list of epics closed (child-before-parent order) so the
+/// caller — or a test — can pin the close sequence. Each close also
+/// emits a [`DriverKind::EpicAutoClosed`] driver event onto the
+/// controller's sink chain.
+async fn auto_close_completed_epics<C: ReviewController>(
+    controller: &mut C,
+    spec_beads: &[Bead],
+) -> Result<Vec<BeadId>, ReviewError> {
+    use std::collections::{HashSet, VecDeque};
+    let mut closed: Vec<BeadId> = Vec::new();
+    let mut visited: HashSet<BeadId> = HashSet::new();
+    let mut frontier: VecDeque<BeadId> =
+        spec_beads.iter().filter_map(|b| b.parent.clone()).collect();
+    while let Some(candidate) = frontier.pop_front() {
+        if !visited.insert(candidate.clone()) {
+            continue;
+        }
+        let Some(epic) = controller.show_bead(&candidate).await? else {
+            continue;
+        };
+        if epic.issue_type != "epic" {
+            continue;
+        }
+        // Skip already-closed epics, but still enqueue *their* parents:
+        // a leaf bead's immediate parent may already be closed while a
+        // higher ancestor still qualifies for this pass.
+        if epic.status == "closed" {
+            if let Some(parent) = epic.parent.clone() {
+                frontier.push_back(parent);
+            }
+            continue;
+        }
+        let children = controller.list_children(&candidate).await?;
+        if children.is_empty() {
+            continue;
+        }
+        if children.iter().any(|c| c.status != "closed") {
+            continue;
+        }
+        controller
+            .close_bead(
+                &candidate,
+                "all children complete; auto-closed by review gate",
+            )
+            .await?;
+        controller.emit_driver_event(
+            DriverKind::EpicAutoClosed,
+            &format!("epic {candidate} auto-closed: all children complete"),
+            serde_json::json!({ "epic_id": candidate.to_string() }),
+        );
+        closed.push(candidate.clone());
+        if let Some(parent) = epic.parent {
+            frontier.push_back(parent);
+        }
+    }
+    Ok(closed)
 }
 
 /// Pure-ish branch picker: resolves the verdict shape from the snapshot
@@ -315,6 +418,7 @@ async fn decide_verdict<C: ReviewController>(
 async fn apply_verdict<C: ReviewController>(
     controller: &mut C,
     verdict: ReviewVerdict,
+    spec_beads: &[Bead],
 ) -> Result<ReviewResult, ReviewError> {
     // Every gate walk emits `push_gate_walk` first so the JSONL replay
     // carries a fence between the reviewer's output and the verdict-
@@ -344,6 +448,12 @@ async fn apply_verdict<C: ReviewController>(
             controller.reset_iteration_count().await?;
             controller.git_push().await?;
             controller.beads_push().await?;
+            // Auto-close every epic whose direct children are all closed.
+            // Runs *after* both pushes succeed so a push failure cannot
+            // leave a closed-locally / open-on-remote epic stranded; on
+            // push failure the function returns early above and the walk
+            // is skipped.
+            auto_close_completed_epics(controller, spec_beads).await?;
             Ok(ReviewResult::Pushed)
         }
         ReviewVerdict::PushBlocked {
@@ -455,6 +565,14 @@ mod tests {
         driver_events: Vec<(String, String, serde_json::Value)>,
         verify_exit: Option<i32>,
         integrity_findings: Vec<IntegrityFinding>,
+        /// Bead store used by `show_bead` / `list_children` to simulate
+        /// the epic ancestry walk. Children are derived from each
+        /// stored bead's `parent` field.
+        bead_store: std::collections::HashMap<BeadId, Bead>,
+        /// `(bead_id, reason)` for every `close_bead` invocation. Order
+        /// pins the inside-out close sequence asserted in the
+        /// nested-epic test.
+        close_calls: Vec<(BeadId, String)>,
     }
 
     impl ReviewController for FakeController {
@@ -527,6 +645,29 @@ mod tests {
             Ok(())
         }
 
+        async fn show_bead(&mut self, id: &BeadId) -> Result<Option<Bead>, ReviewError> {
+            Ok(self.bead_store.get(id).cloned())
+        }
+
+        async fn list_children(&mut self, parent: &BeadId) -> Result<Vec<Bead>, ReviewError> {
+            Ok(self
+                .bead_store
+                .values()
+                .filter(|b| b.parent.as_ref() == Some(parent))
+                .cloned()
+                .collect())
+        }
+
+        async fn close_bead(&mut self, id: &BeadId, reason: &str) -> Result<(), ReviewError> {
+            self.close_calls.push((id.clone(), reason.to_string()));
+            // Reflect the close in the store so an inside-out walk sees
+            // the just-closed child when it evaluates the parent epic.
+            if let Some(b) = self.bead_store.get_mut(id) {
+                b.status = "closed".into();
+            }
+            Ok(())
+        }
+
         fn emit_driver_event(
             &mut self,
             kind: DriverKind,
@@ -551,6 +692,17 @@ mod tests {
             metadata: Default::default(),
             notes: None,
         }
+    }
+
+    /// Build a bead with a typed `issue_type`, `status`, and an
+    /// optional `parent`. Used by the epic auto-close tests to populate
+    /// the FakeController's bead store with realistic ancestry.
+    fn shaped_bead(id: &str, issue_type: &str, status: &str, parent: Option<&str>) -> Bead {
+        let mut b = bead(id, &[]);
+        b.issue_type = issue_type.into();
+        b.status = status.into();
+        b.parent = parent.map(|p| BeadId::new(p).expect("valid bead id"));
+        b
     }
 
     #[tokio::test]
@@ -1127,6 +1279,237 @@ mod tests {
             );
             assert_eq!(c.git_push_calls, 0, "{expected_cause}: never pushes");
         }
+        Ok(())
+    }
+
+    /// Helper: build a FakeController whose `post_beads` carry the
+    /// `parent` field set so the auto-close walk has parent candidates
+    /// to enumerate. The bead_store maps every id (epics + leaves) so
+    /// `show_bead` / `list_children` can resolve the ancestry.
+    fn controller_with_ancestry(leaves: Vec<Bead>, epics: Vec<Bead>) -> FakeController {
+        let mut store: std::collections::HashMap<BeadId, Bead> = std::collections::HashMap::new();
+        for b in leaves.iter().chain(epics.iter()) {
+            store.insert(b.id.clone(), b.clone());
+        }
+        FakeController {
+            pre_beads: leaves.clone(),
+            post_beads: leaves,
+            bead_store: store,
+            ..FakeController::default()
+        }
+    }
+
+    /// Trigger pin: every leaf closed + parent epic open + review
+    /// LOOM_COMPLETE → epic auto-closes. Emits a single
+    /// `epic_auto_closed` driver event carrying the epic id.
+    #[tokio::test]
+    async fn epic_auto_closes_when_all_children_closed_and_review_passes() -> Result<(), ReviewError>
+    {
+        let leaf = shaped_bead("wx-leaf.1", "task", "closed", Some("wx-epic"));
+        let epic = shaped_bead("wx-epic", "epic", "open", None);
+        let mut c = controller_with_ancestry(vec![leaf], vec![epic]);
+        let result = review_loop(&mut c, IterationCap::default()).await?;
+        assert_eq!(result, ReviewResult::Pushed);
+        assert_eq!(
+            c.close_calls,
+            vec![(
+                BeadId::new("wx-epic").expect("valid"),
+                "all children complete; auto-closed by review gate".to_string(),
+            )],
+            "epic closed exactly once with the spec'd reason",
+        );
+        let auto_closed = c
+            .driver_events
+            .iter()
+            .find(|(k, _, _)| k == "epic_auto_closed")
+            .expect("epic_auto_closed event emitted");
+        assert_eq!(auto_closed.2["epic_id"].as_str(), Some("wx-epic"));
+        Ok(())
+    }
+
+    /// No-fire #1: any open child blocks auto-close.
+    #[tokio::test]
+    async fn epic_does_not_auto_close_when_a_child_is_open() -> Result<(), ReviewError> {
+        let leaf_closed = shaped_bead("wx-leaf.1", "task", "closed", Some("wx-epic"));
+        let leaf_open = shaped_bead("wx-leaf.2", "task", "open", Some("wx-epic"));
+        let epic = shaped_bead("wx-epic", "epic", "open", None);
+        let mut c = controller_with_ancestry(vec![leaf_closed, leaf_open], vec![epic]);
+        let _ = review_loop(&mut c, IterationCap::default()).await?;
+        assert!(
+            c.close_calls.is_empty(),
+            "open child must block auto-close: {:?}",
+            c.close_calls,
+        );
+        assert!(
+            !c.driver_events
+                .iter()
+                .any(|(k, _, _)| k == "epic_auto_closed"),
+            "no epic_auto_closed event when any child is still open",
+        );
+        Ok(())
+    }
+
+    /// No-fire #2: in_progress child blocks auto-close just like an
+    /// open child.
+    #[tokio::test]
+    async fn epic_does_not_auto_close_when_a_child_is_in_progress() -> Result<(), ReviewError> {
+        let leaf_closed = shaped_bead("wx-leaf.1", "task", "closed", Some("wx-epic"));
+        let leaf_running = shaped_bead("wx-leaf.2", "task", "in_progress", Some("wx-epic"));
+        let epic = shaped_bead("wx-epic", "epic", "open", None);
+        let mut c = controller_with_ancestry(vec![leaf_closed, leaf_running], vec![epic]);
+        let _ = review_loop(&mut c, IterationCap::default()).await?;
+        assert!(
+            c.close_calls.is_empty(),
+            "in_progress child must block auto-close",
+        );
+        Ok(())
+    }
+
+    /// No-fire #3: when the push-gate refuses (any non-Clean verdict),
+    /// the auto-close walk does not run even if children happen to be
+    /// closed. Pinned across all three non-Clean push-refusal markers
+    /// the review phase can produce: a bead carrying `loom:clarify`
+    /// (bead-not-done), a `loom:blocked` bead, and a `LOOM_CONCERN`
+    /// review marker.
+    #[tokio::test]
+    async fn epic_does_not_auto_close_on_non_clean_review_verdict() -> Result<(), ReviewError> {
+        let leaf_clarify = {
+            let mut b = shaped_bead("wx-leaf.1", "task", "closed", Some("wx-epic"));
+            b.labels = vec![Label::new("loom:clarify")];
+            b
+        };
+        let leaf_blocked = {
+            let mut b = shaped_bead("wx-leaf.1", "task", "closed", Some("wx-epic"));
+            b.labels = vec![Label::new("loom:blocked")];
+            b
+        };
+        let leaf_clean = shaped_bead("wx-leaf.1", "task", "closed", Some("wx-epic"));
+        let epic = shaped_bead("wx-epic", "epic", "open", None);
+
+        let cases: Vec<(&str, FakeController)> = vec![
+            ("clarify-on-leaf", {
+                controller_with_ancestry(vec![leaf_clarify], vec![epic.clone()])
+            }),
+            ("blocked-on-leaf", {
+                controller_with_ancestry(vec![leaf_blocked], vec![epic.clone()])
+            }),
+            ("loom_concern-marker", {
+                let mut c = controller_with_ancestry(vec![leaf_clean], vec![epic.clone()]);
+                c.review = Some(ReviewOutcome::Incomplete {
+                    detail: "LOOM_CONCERN: scope -- nope".into(),
+                });
+                c.review_marker = Some(ExitSignal::Concern {
+                    token: "scope".into(),
+                    reason: "nope".into(),
+                });
+                c
+            }),
+        ];
+        for (label, mut c) in cases {
+            let _ = review_loop(&mut c, IterationCap::default()).await?;
+            assert!(
+                c.close_calls.is_empty(),
+                "{label}: non-Clean verdict must skip auto-close, got {:?}",
+                c.close_calls,
+            );
+            assert!(
+                !c.driver_events
+                    .iter()
+                    .any(|(k, _, _)| k == "epic_auto_closed"),
+                "{label}: no epic_auto_closed event on non-Clean verdict",
+            );
+        }
+        Ok(())
+    }
+
+    /// Nested-epic inside-out close: parent epic has one child epic
+    /// whose own children are all closed. One review-phase pass closes
+    /// the inner epic first, then the outer epic, in that order.
+    #[tokio::test]
+    async fn nested_epics_close_inside_out_in_one_pass() -> Result<(), ReviewError> {
+        let leaf = shaped_bead("wx-leaf.1", "task", "closed", Some("wx-inner"));
+        let inner_epic = shaped_bead("wx-inner", "epic", "open", Some("wx-outer"));
+        let outer_epic = shaped_bead("wx-outer", "epic", "open", None);
+        let mut c = controller_with_ancestry(vec![leaf], vec![inner_epic, outer_epic]);
+        let result = review_loop(&mut c, IterationCap::default()).await?;
+        assert_eq!(result, ReviewResult::Pushed);
+        let closed_ids: Vec<&str> = c.close_calls.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(
+            closed_ids,
+            vec!["wx-inner", "wx-outer"],
+            "inner epic closes before outer in one pass",
+        );
+        let auto_closed_ids: Vec<&str> = c
+            .driver_events
+            .iter()
+            .filter(|(k, _, _)| k == "epic_auto_closed")
+            .map(|(_, _, p)| p["epic_id"].as_str().expect("epic_id payload"))
+            .collect();
+        assert_eq!(
+            auto_closed_ids,
+            vec!["wx-inner", "wx-outer"],
+            "one event per closed epic, inside-out order",
+        );
+        Ok(())
+    }
+
+    /// Auto-close runs only after both pushes succeed: when `git_push`
+    /// errors, the walk is skipped because `apply_verdict` returns
+    /// early. Verified by erroring `git_push` from the controller and
+    /// asserting no close occurred.
+    #[tokio::test]
+    async fn auto_close_skipped_when_git_push_fails() -> Result<(), ReviewError> {
+        struct PushFailController(FakeController);
+        impl ReviewController for PushFailController {
+            async fn run_review(&mut self) -> Result<RunReviewOutput, ReviewError> {
+                self.0.run_review().await
+            }
+            async fn list_spec_beads(&mut self) -> Result<Vec<Bead>, ReviewError> {
+                self.0.list_spec_beads().await
+            }
+            async fn iteration_count(&mut self) -> Result<u32, ReviewError> {
+                self.0.iteration_count().await
+            }
+            async fn set_iteration_count(&mut self, n: u32) -> Result<(), ReviewError> {
+                self.0.set_iteration_count(n).await
+            }
+            async fn reset_iteration_count(&mut self) -> Result<(), ReviewError> {
+                self.0.reset_iteration_count().await
+            }
+            async fn apply_clarify(&mut self, b: &BeadId, r: &str) -> Result<(), ReviewError> {
+                self.0.apply_clarify(b, r).await
+            }
+            async fn git_push(&mut self) -> Result<(), ReviewError> {
+                Err(ReviewError::GitPushFailed("simulated".into()))
+            }
+            async fn beads_push(&mut self) -> Result<(), ReviewError> {
+                self.0.beads_push().await
+            }
+            async fn exec_run(&mut self) -> Result<(), ReviewError> {
+                self.0.exec_run().await
+            }
+            async fn show_bead(&mut self, id: &BeadId) -> Result<Option<Bead>, ReviewError> {
+                self.0.show_bead(id).await
+            }
+            async fn list_children(&mut self, p: &BeadId) -> Result<Vec<Bead>, ReviewError> {
+                self.0.list_children(p).await
+            }
+            async fn close_bead(&mut self, id: &BeadId, r: &str) -> Result<(), ReviewError> {
+                self.0.close_bead(id, r).await
+            }
+            fn emit_driver_event(&mut self, k: DriverKind, s: &str, p: serde_json::Value) {
+                self.0.emit_driver_event(k, s, p);
+            }
+        }
+        let leaf = shaped_bead("wx-leaf.1", "task", "closed", Some("wx-epic"));
+        let epic = shaped_bead("wx-epic", "epic", "open", None);
+        let mut c = PushFailController(controller_with_ancestry(vec![leaf], vec![epic]));
+        let err = review_loop(&mut c, IterationCap::default()).await;
+        assert!(matches!(err, Err(ReviewError::GitPushFailed(_))));
+        assert!(
+            c.0.close_calls.is_empty(),
+            "auto-close must not fire when git push fails",
+        );
         Ok(())
     }
 }

@@ -168,6 +168,9 @@ impl<R: CommandRunner> BdClient<R> {
         for label in opts.label_any {
             args.push(format!("--label-any={label}").into());
         }
+        if let Some(parent) = opts.parent {
+            args.push(format!("--parent={}", parent.as_str()).into());
+        }
         let out = self.invoke(args).await?;
         // `bd list --json` returns `null` when the result set is empty.
         if out.stdout.iter().all(u8::is_ascii_whitespace) {
@@ -314,6 +317,11 @@ pub struct ListOpts {
     /// `bd list --label-any=<L>` — beads carrying at least one of these
     /// labels. Forwarded as a repeated flag so multiple labels OR together.
     pub label_any: Vec<String>,
+    /// `bd list --parent=<id>` — restricts the result to direct children
+    /// of the given bead. Used by the review push-gate's epic auto-close
+    /// walk to enumerate an epic's children without parsing
+    /// `bd show --json`'s nested `dependents` array.
+    pub parent: Option<BeadId>,
 }
 
 /// Filters accepted by `bd ready`. `limit` caps the result count
@@ -514,7 +522,7 @@ mod tests {
             .list(ListOpts {
                 status: Some("open".into()),
                 label: Some("spec:loom-harness".into()),
-                label_any: Vec::new(),
+                ..ListOpts::default()
             })
             .await?;
         let argv = argv_of(&client.runner, 0);
@@ -536,9 +544,8 @@ mod tests {
         let client = BdClient::with_runner(runner);
         client
             .list(ListOpts {
-                status: None,
-                label: None,
                 label_any: vec!["loom:clarify".into(), "loom:blocked".into()],
+                ..ListOpts::default()
             })
             .await?;
         let argv = argv_of(&client.runner, 0);
@@ -549,6 +556,28 @@ mod tests {
                 "--json".into(),
                 "--label-any=loom:clarify".into(),
                 "--label-any=loom:blocked".into(),
+            ]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_parent_forwards_filter_flag() -> Result<()> {
+        let runner = CapturingRunner::new([ok(b"[]")]);
+        let client = BdClient::with_runner(runner);
+        client
+            .list(ListOpts {
+                parent: Some(BeadId::new("wx-sarcz")?),
+                ..ListOpts::default()
+            })
+            .await?;
+        let argv = argv_of(&client.runner, 0);
+        assert_eq!(
+            argv,
+            vec![
+                "list".to_string(),
+                "--json".into(),
+                "--parent=wx-sarcz".into(),
             ]
         );
         Ok(())

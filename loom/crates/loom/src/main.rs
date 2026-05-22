@@ -2186,9 +2186,8 @@ fn run_msg_inner(
     let beads = runtime.block_on(async {
         let bd = BdClient::new();
         bd.list(ListOpts {
-            status: None,
-            label: None,
             label_any: vec!["loom:clarify".to_string(), "loom:blocked".to_string()],
+            ..ListOpts::default()
         })
         .await
     })?;

@@ -129,9 +129,8 @@ pub fn run(workspace: &Path, opts: ChatOpts) -> Result<ChatReport, ChatError> {
         .block_on(async {
             let bd = BdClient::new();
             bd.list(ListOpts {
-                status: None,
-                label: None,
                 label_any: vec!["loom:clarify".to_string(), "loom:blocked".to_string()],
+                ..ListOpts::default()
             })
             .await
         })
@@ -198,9 +197,8 @@ pub fn run(workspace: &Path, opts: ChatOpts) -> Result<ChatReport, ChatError> {
         .block_on(async {
             let bd = BdClient::new();
             bd.list(ListOpts {
-                status: None,
-                label: None,
                 label_any: vec!["loom:clarify".to_string(), "loom:blocked".to_string()],
+                ..ListOpts::default()
             })
             .await
         })

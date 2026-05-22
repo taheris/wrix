@@ -2001,6 +2001,32 @@ Criteria.
       means the agent ended without a marker on its own, not under
       driver cancel)
   [test](observer_abort_routes_to_observer_abort_distinct_from_swallowed_marker)
+- After the push-gate `Clean` branch's `git push` + `beads-push`
+      both succeed, the driver walks the molecule's spec-bead
+      parents and closes every ancestor epic whose direct children
+      are all `status == "closed"` via `bd close --reason="all
+      children complete; auto-closed by review gate"`. Each close
+      emits one `DriverKind::EpicAutoClosed` driver event carrying
+      the epic id.
+  [test](epic_auto_closes_when_all_children_closed_and_review_passes)
+- Epic auto-close does not fire while any direct child of the
+      candidate epic carries `status != "closed"` (`open`,
+      `in_progress`, or `deferred`).
+  [test](epic_does_not_auto_close_when_a_child_is_open)
+  [test](epic_does_not_auto_close_when_a_child_is_in_progress)
+- Epic auto-close does not fire on any non-Clean push-gate verdict
+      (`LOOM_CONCERN`, any bead carrying `loom:blocked` or
+      `loom:clarify`); only the `Clean` arm reaches the walk.
+  [test](epic_does_not_auto_close_on_non_clean_review_verdict)
+- Nested epics close inside-out in a single review-phase pass:
+      closing an inner epic re-enqueues its parent so a fully-
+      resolved grandparent retires in the same `Clean` walk.
+  [test](nested_epics_close_inside_out_in_one_pass)
+- Epic auto-close runs strictly **after** `git push` + `beads-
+      push` succeed; a push failure returns early through the
+      `Clean` arm and skips the walk, so no closed-locally / open-
+      on-remote split arises.
+  [test](auto_close_skipped_when_git_push_fails)
 
 ### Loom-LLM crate
 
@@ -2361,6 +2387,28 @@ two agent-loop observers.
    outer loop, bounded by `[loop] max_iterations`; this requirement
    is the molecule-final condition the outer loop drives toward, not
    a separate iteration mechanism.
+
+   **Epic auto-close on Clean push.** After the `Clean` branch of
+   the push gate completes (verify pass + review `LOOM_COMPLETE` +
+   integrity clean + every bead in scope `[done]`) **and both
+   `git push` and `beads-push` succeed**, the driver walks up from
+   the molecule's spec beads to find every ancestor epic whose
+   direct children are all `status == "closed"` and closes them via
+   `bd close <epic-id> --reason="all children complete; auto-closed
+   by review gate"`. The walk is **inside-out in one pass**: each
+   newly-closed epic is enqueued so its own parent is re-evaluated,
+   so an epic-of-epics collapses to a single closed root without
+   needing a second review cycle. Each close emits one
+   `DriverKind::EpicAutoClosed` driver event carrying the epic id
+   in its payload — visible in the JSONL log alongside the push-
+   gate trace. The walk is **strictly post-push**: a `git push` or
+   `beads-push` failure returns early through the `Clean` arm and
+   skips the walk, so a closed-locally / open-on-remote split
+   cannot arise. The walk does **not** fire on any non-Clean
+   verdict (`LOOM_CONCERN`, `LOOM_BLOCKED`, `LOOM_CLARIFY`,
+   `verify-fail`, `integrity-finding`, or any bead carrying
+   `loom:blocked` / `loom:clarify`) — those paths leave the gate
+   before the `Clean` arm runs.
 10. **Beads via shared Dolt socket** — every container has the host's
     `wrapix-beads` Dolt server bind-mounted at
     `/workspace/.wrapix/dolt.sock`; in-container `bd` writes go straight to
