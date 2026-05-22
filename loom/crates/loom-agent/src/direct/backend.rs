@@ -8,7 +8,7 @@
 //! `{"type": "...", ...}` JSONL frames — see [`DirectParser`] for the
 //! wire shape.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -62,14 +62,24 @@ impl AgentBackend for DirectBackend {
             "direct backend spawn",
         );
 
-        let mut cmd = Command::new(&wrapix_bin);
-        cmd.arg("spawn")
-            .arg("--spawn-config")
-            .arg(&spawn_config_path)
-            .arg("--stdio");
-
+        let cmd = build_wrapix_command(&wrapix_bin, &spawn_config_path);
         spawn_session(cmd).await
     }
+}
+
+/// Build the `<wrapix_bin> spawn --spawn-config <file> --stdio` command
+/// [`DirectBackend::spawn`] launches. The argv shape is the load-bearing
+/// contract loom owes the wrapix wrapper: the wrapper resolves `<file>`
+/// as a JSON [`SpawnConfig`] and `--stdio` selects the JSONL wire path
+/// (rather than a TTY attach). Extracted so tests can pin the contract
+/// without spawning a child or mutating the process env.
+pub(crate) fn build_wrapix_command(wrapix_bin: &OsStr, spawn_config_path: &Path) -> Command {
+    let mut cmd = Command::new(wrapix_bin);
+    cmd.arg("spawn")
+        .arg("--spawn-config")
+        .arg(spawn_config_path)
+        .arg("--stdio");
+    cmd
 }
 
 /// Serialize the [`SpawnConfig`] into the per-session
@@ -340,6 +350,64 @@ mod tests {
         assert_eq!(decoded.image_source, cfg.image_source);
         assert_eq!(decoded.initial_prompt, cfg.initial_prompt);
         assert_eq!(decoded.agent_args, cfg.agent_args);
+    }
+
+    /// Spec contract (`specs/loom-agent.md` § Direct backend, L753–754):
+    /// `DirectBackend::spawn` launches `wrapix spawn --spawn-config <file>
+    /// --stdio`, and the spawn-config the wrapper reads carries
+    /// `WRAPIX_AGENT=direct` so the container's entrypoint dispatches to
+    /// the direct runtime layer (`lib/sandbox/linux/entrypoint.sh` exec's
+    /// `loom-direct-runner` on this value). Both halves of the contract
+    /// are pinned here: the argv shape via [`build_wrapix_command`]
+    /// inspection (the in-process function `DirectBackend::spawn` calls)
+    /// and the runtime-layer signal via the on-disk spawn-config the
+    /// wrapper deserialises.
+    #[test]
+    fn direct_session_spawn_invokes_wrapix_spawn_with_direct_runtime() {
+        let scratch = tempfile::tempdir().expect("tempdir");
+        let cfg = sample_config(scratch.path().to_path_buf());
+        assert!(
+            cfg.env
+                .iter()
+                .any(|(k, v)| k == "WRAPIX_AGENT" && v == "direct"),
+            "sample_config must seed the direct runtime marker; got env={:?}",
+            cfg.env,
+        );
+
+        let spawn_config_path = prepare_runtime(&cfg).expect("prepare_runtime");
+
+        let wrapix_bin = OsStr::new("wrapix");
+        let cmd = build_wrapix_command(wrapix_bin, &spawn_config_path);
+        let std_cmd = cmd.as_std();
+
+        assert_eq!(
+            std_cmd.get_program(),
+            wrapix_bin,
+            "program must be the wrapix launcher, not podman directly",
+        );
+        let args: Vec<&OsStr> = std_cmd.get_args().collect();
+        assert_eq!(
+            args,
+            vec![
+                OsStr::new("spawn"),
+                OsStr::new("--spawn-config"),
+                spawn_config_path.as_os_str(),
+                OsStr::new("--stdio"),
+            ],
+            "argv contract is `spawn --spawn-config <file> --stdio`; got={args:?}",
+        );
+
+        let bytes = std::fs::read(&spawn_config_path).expect("read spawn-config");
+        let decoded: SpawnConfig = serde_json::from_slice(&bytes).expect("decode spawn-config");
+        assert!(
+            decoded
+                .env
+                .iter()
+                .any(|(k, v)| k == "WRAPIX_AGENT" && v == "direct"),
+            "spawn-config.json must round-trip WRAPIX_AGENT=direct so the \
+             entrypoint exec's loom-direct-runner; got env={:?}",
+            decoded.env,
+        );
     }
 
     #[test]

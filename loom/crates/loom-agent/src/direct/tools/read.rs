@@ -181,4 +181,47 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(required.contains(&"file_path"), "schema: {schema}");
     }
+
+    /// Spec contract (`specs/loom-agent.md` § Direct backend, L761–762):
+    /// inside the container the workspace is bind-mounted at
+    /// `/workspace/...`, and Direct tools resolve absolute paths through
+    /// the same kernel filesystem APIs as on the host. This test stands
+    /// in for the container by rooting a fake workspace mount under a
+    /// tempdir and confirming that an absolute path nested under it —
+    /// the same path-shape `/workspace/<dir>/<file>` the agent receives
+    /// in production — round-trips through the Read tool. A regression
+    /// that introduces sandbox-side path translation, prefix stripping,
+    /// or sandbox-internal virtual filesystems would silently change the
+    /// contract; this test trips on it.
+    #[tokio::test]
+    async fn direct_tools_read_against_container_workspace_mount() {
+        let workspace_mount = tempfile::tempdir().expect("workspace mount tempdir");
+        let nested = workspace_mount.path().join("crates/loom-agent/src");
+        fs::create_dir_all(&nested)
+            .await
+            .expect("create nested dir");
+        let target = nested.join("lib.rs");
+        let body = "//! workspace-mount probe\npub fn hello() {}\n";
+        fs::write(&target, body).await.expect("write fixture");
+
+        assert!(
+            target.is_absolute(),
+            "test must exercise the absolute-path contract; got={}",
+            target.display(),
+        );
+
+        let out = Read
+            .invoke(json!({ "file_path": target }))
+            .await
+            .expect("invoke");
+        assert!(
+            !out.is_error,
+            "Read against the workspace-mount file must succeed; got={out:?}",
+        );
+        assert_eq!(
+            out.content,
+            Value::String(body.to_string()),
+            "Read must return the bytes the kernel resolved at the absolute path",
+        );
+    }
 }
