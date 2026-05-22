@@ -283,8 +283,7 @@ impl GitClient {
             args.push("--");
             args.push(p);
         }
-        let output =
-            run_git_raw(&self.workdir, self.clock.as_ref(), args.into_iter(), None).await?;
+        let output = run_git_raw(&self.workdir, self.clock.as_ref(), args, None).await?;
         if !output.status.success() {
             return Err(GitError::GitCli {
                 status: output.status.code().unwrap_or(-1),
