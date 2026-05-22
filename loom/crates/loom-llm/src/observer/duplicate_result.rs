@@ -207,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    fn react_always_returns_empty() {
+    fn duplicate_result_react_always_returns_empty() {
         let mut obs = DuplicateResultObserver::new();
         let payload = big_payload("a");
         obs.emit(&tool_result(0, "call-1", &payload));
@@ -218,7 +218,7 @@ mod tests {
     }
 
     #[test]
-    fn first_seen_wins_and_subsequent_emit_detection() {
+    fn duplicate_result_first_seen_wins_subsequent_emit() {
         let mut obs = DuplicateResultObserver::new();
         let payload = big_payload("dup");
         obs.emit(&tool_result(0, "call-1", &payload));
@@ -233,7 +233,7 @@ mod tests {
     }
 
     #[test]
-    fn ignores_payloads_below_min_bytes() {
+    fn duplicate_result_ignores_payloads_below_min_bytes() {
         let mut obs = DuplicateResultObserver::new().with_min_bytes(1024);
         let payload = big_payload("a");
         obs.emit(&tool_result(0, "call-1", &payload));
@@ -243,7 +243,7 @@ mod tests {
     }
 
     #[test]
-    fn event_payload_carries_bytes_wasted_eq_canonical_len() {
+    fn duplicate_result_event_payload_carries_bytes_wasted() {
         let mut obs = DuplicateResultObserver::new();
         let payload = big_payload("size-check");
         let canonical_len = ResultHasher::canonical_len(
@@ -279,7 +279,7 @@ mod tests {
     }
 
     #[test]
-    fn resets_seen_on_compaction_end() {
+    fn duplicate_result_resets_on_compaction_end() {
         let mut obs = DuplicateResultObserver::new();
         let payload = big_payload("c");
         obs.emit(&tool_result(0, "call-1", &payload));
