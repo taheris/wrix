@@ -5,11 +5,12 @@
 //! without touching any workflow-template internals.
 
 use loom_templates::{
-    PARTIAL_COMPANIONS_CONTEXT, PARTIAL_CONTEXT_PINNING, PARTIAL_EXIT_SIGNALS,
-    PARTIAL_INTERVIEW_MODES, PARTIAL_INVARIANT_CLASH, PARTIAL_PLAN_STAGE_RUBRIC,
-    PARTIAL_REVIEW_RUBRIC, PARTIAL_SCRATCHPAD, PARTIAL_SIBLING_SPEC_EDITING,
-    PARTIAL_SPEC_CONVENTIONS, PARTIAL_SPEC_HEADER, PARTIAL_STYLE_RULES, PinnedContext,
-    PreviousFailure, ReviewConcernKind, RunContext, VerifierFailure,
+    PARTIAL_CHAT_MARKER_FINAL_TURN_ONLY, PARTIAL_COMPANIONS_CONTEXT, PARTIAL_CONTEXT_PINNING,
+    PARTIAL_EXIT_SIGNALS, PARTIAL_INTERVIEW_MODES, PARTIAL_INVARIANT_CLASH,
+    PARTIAL_PLAN_STAGE_RUBRIC, PARTIAL_REVIEW_RUBRIC, PARTIAL_SCRATCHPAD,
+    PARTIAL_SIBLING_SPEC_EDITING, PARTIAL_SPEC_CONVENTIONS, PARTIAL_SPEC_HEADER,
+    PARTIAL_STYLE_RULES, PinnedContext, PreviousFailure, ReviewConcernKind, RunContext,
+    VerifierFailure,
 };
 
 #[test]
@@ -25,6 +26,10 @@ fn pinned_context_holds_project_overview_and_style_rules() {
 #[test]
 fn partial_constants_carry_their_source_files() {
     for (name, body) in [
+        (
+            "chat_marker_final_turn_only",
+            PARTIAL_CHAT_MARKER_FINAL_TURN_ONLY,
+        ),
         ("companions_context", PARTIAL_COMPANIONS_CONTEXT),
         ("context_pinning", PARTIAL_CONTEXT_PINNING),
         ("exit_signals", PARTIAL_EXIT_SIGNALS),

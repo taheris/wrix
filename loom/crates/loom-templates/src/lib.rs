@@ -62,6 +62,18 @@ pub const PARTIAL_CONTEXT_PINNING: &str = include_str!("../templates/partial/con
 /// phase accepts.
 pub const PARTIAL_EXIT_SIGNALS: &str = include_str!("../templates/partial/exit_signals.md");
 
+/// `partial/chat_marker_final_turn_only.md` — restrict `LOOM_COMPLETE`
+/// emission to the **final** assistant turn of a multi-turn chat
+/// session. Multi-turn templates (`msg`, `plan_new`, `plan_update`)
+/// include this alongside `partial/exit_signals.md` so the
+/// "end your response with the marker" instruction in the shared
+/// partial does not get read as "every response." One-shot worker
+/// templates (`run`, `todo_*`, `review`) deliberately omit this
+/// partial — every response in those phases IS the final output, so
+/// the wrap-up restriction does not apply.
+pub const PARTIAL_CHAT_MARKER_FINAL_TURN_ONLY: &str =
+    include_str!("../templates/partial/chat_marker_final_turn_only.md");
+
 /// `partial/interview_modes.md` — describe the "one by one" / "polish
 /// the spec" interview sub-modes.
 pub const PARTIAL_INTERVIEW_MODES: &str = include_str!("../templates/partial/interview_modes.md");

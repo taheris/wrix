@@ -64,6 +64,7 @@ Current set:
 | `companions_context.md` | List companion paths declared on the spec |
 | `scratchpad.md` | Pin the per-session scratchpad path |
 | `exit_signals.md` | Document the `LOOM_*` exit markers the phase accepts. **Markers are mutually exclusive — exactly one per session, on the final line.** For review-phase sessions: emit `LOOM_CONCERN: <token> -- <reason>` when a concern is found (review-phase only marker per [loom-harness.md](loom-harness.md#verdict-gate)), or `LOOM_COMPLETE` when the review is clean — **never both**. The earlier `LOOM_REVIEW_FLAG` name is retired; consumers and templates use `LOOM_CONCERN`. |
+| `chat_marker_final_turn_only.md` | Restrict `LOOM_COMPLETE` emission to the **final** assistant turn of a multi-turn chat. Included by `msg`, `plan_new`, and `plan_update` to disambiguate `exit_signals.md`'s "end your response with the marker" language (which is correct for single-shot worker phases but misreads as "every response" in chat). One-shot worker phases (`run`, `todo_*`, `review`) deliberately omit it because every response in those phases IS the final output. |
 | `interview_modes.md` | Describe the "one by one" / "polish the spec" interview sub-modes |
 | `plan_stage_rubric.md` | Gate the planning interview on completeness / coherence / invariant-clash before any commit |
 | `invariant_clash.md` | Describe the invariant-clash awareness scan (included transitively via `plan_stage_rubric.md`) |
@@ -109,6 +110,7 @@ Each partial is included by an explicit set of templates:
 | `companions_context.md` |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `scratchpad.md` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `exit_signals.md` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `chat_marker_final_turn_only.md` | ✓ | ✓ |  |  |  |  | ✓ |
 | `interview_modes.md` | ✓ | ✓ |  |  |  |  |  |
 | `plan_stage_rubric.md` | ✓ | ✓ |  |  |  |  |  |
 | `invariant_clash.md` | ✓ | ✓ |  |  |  |  |  |
@@ -442,6 +444,18 @@ documents in front of the agent with zero configuration.
   resolution); drift in either direction — `✓` with no include or
   include with no `✓` — fails the audit
   [check](cargo run -p loom-walk -- template_pinning_matrix)
+- The `chat_marker_final_turn_only.md` partial is included by
+  every multi-turn template (`msg`, `plan_new`, `plan_update`),
+  pinning the "emit `LOOM_COMPLETE` on the final turn only" rule
+  that disambiguates `exit_signals.md`'s single-shot wording
+  [test](plan_templates_restrict_marker_to_final_turn_in_multi_turn_interview)
+  [test](msg_restricts_marker_to_final_turn_in_multi_turn_chat)
+- One-shot worker templates (`run`, `todo_new`, `todo_update`,
+  `review`) deliberately **omit** `chat_marker_final_turn_only.md`
+  because every response in those phases is the session's final
+  output; including the chat-only clause would mislead the agent
+  into withholding the marker
+  [test](worker_templates_omit_chat_final_turn_clause)
 
 ### Agent-output markers
 

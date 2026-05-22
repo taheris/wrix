@@ -84,3 +84,5 @@ the conventions document):
 {% include "partial/interview_modes.md" %}
 
 {% include "partial/exit_signals.md" %}
+
+{% include "partial/chat_marker_final_turn_only.md" %}

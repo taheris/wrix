@@ -832,6 +832,130 @@ fn msg_restricts_marker_to_final_turn_in_multi_turn_chat() -> Result<()> {
     Ok(())
 }
 
+/// `loom plan` (both `plan_new` and `plan_update`) is also a multi-turn
+/// interview that shares `exit_signals.md` with one-shot worker phases.
+/// The May-21 bug (wx-qzdhj) was the planning agent appending
+/// `LOOM_COMPLETE` to every reply just like `loom msg --chat` did before
+/// wx-lq12o; the fix is the same `chat_marker_final_turn_only` partial,
+/// included by both `plan_*` templates. This test pins the clause so a
+/// future template edit cannot silently regress the planning agent into
+/// the same per-turn-marker pattern.
+#[test]
+fn plan_templates_restrict_marker_to_final_turn_in_multi_turn_interview() -> Result<()> {
+    let new_out = PlanNewContext {
+        pinned_context: PINNED_CONTEXT_BODY.to_string(),
+        label: SpecLabel::new("loom-harness"),
+        spec_path: "specs/loom-harness.md".to_string(),
+        scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+        spec_conventions: "docs/spec-conventions.md".to_string(),
+    }
+    .render()?;
+    let update_out = PlanUpdateContext {
+        pinned_context: PINNED_CONTEXT_BODY.to_string(),
+        label: SpecLabel::new("loom-harness"),
+        spec_path: "specs/loom-harness.md".to_string(),
+        companion_paths: vec![],
+        implementation_notes: vec![],
+        scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+        spec_conventions: "docs/spec-conventions.md".to_string(),
+    }
+    .render()?;
+
+    for (name, out) in [("plan_new", &new_out), ("plan_update", &update_out)] {
+        assert!(
+            out.contains("final turn only") || out.contains("final assistant turn"),
+            "{name}: chat-restrictions must name the final-turn-only rule",
+        );
+        assert!(
+            out.contains("Do **NOT** append `LOOM_COMPLETE` to intermediate turns")
+                || out.contains("not on intermediate turns"),
+            "{name}: chat-restrictions must explicitly forbid intermediate-turn markers",
+        );
+    }
+    Ok(())
+}
+
+/// One-shot worker templates (`run`, `todo_*`, `review`) deliberately
+/// omit the chat-mode final-turn restriction: every response in those
+/// phases IS the final output, so the wrap-up clause is meaningless and
+/// could confuse the agent into delaying the marker. This test pins the
+/// asymmetry — worker templates must not pick up the chat-only partial
+/// by accident (e.g. via a copy-pasted include).
+#[test]
+fn worker_templates_omit_chat_final_turn_clause() -> Result<()> {
+    let run_out = RunContext {
+        pinned_context: "PIN".into(),
+        label: SpecLabel::new("demo"),
+        spec_path: "specs/demo.md".into(),
+        companion_paths: vec![],
+        molecule_id: Some(MoleculeId::new("wx-mol")),
+        issue_id: Some(BeadId::new("wx-mol.1")?),
+        title: Some("the title".into()),
+        description: Some("the description".into()),
+        previous_failure: None,
+        review_notes: None,
+        attempt: 0,
+        scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+        style_rules: "docs/style-rules.md".into(),
+    }
+    .render()?;
+
+    let todo_new_out = TodoNewContext {
+        pinned_context: PINNED_CONTEXT_BODY.to_string(),
+        label: SpecLabel::new("loom-harness"),
+        spec_path: "specs/loom-harness.md".to_string(),
+        companion_paths: vec![],
+        implementation_notes: vec![],
+        scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+    }
+    .render()?;
+
+    let todo_update_out = TodoUpdateContext {
+        pinned_context: PINNED_CONTEXT_BODY.to_string(),
+        label: SpecLabel::new("loom-harness"),
+        spec_path: "specs/loom-harness.md".to_string(),
+        companion_paths: vec![],
+        spec_diff: None,
+        existing_tasks: None,
+        molecule_id: Some(MoleculeId::new("wx-mol")),
+        implementation_notes: vec![],
+        scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+    }
+    .render()?;
+
+    let review_out = ReviewContext {
+        pinned_context: PINNED_CONTEXT_BODY.to_string(),
+        label: SpecLabel::new("loom-harness"),
+        spec_path: "specs/loom-harness.md".to_string(),
+        companion_paths: vec![],
+        beads_summary: None,
+        base_commit: None,
+        molecule_id: None,
+        verify_sources: vec![],
+        judge_rubrics: vec![],
+        scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
+        style_rules: "docs/style-rules.md".to_string(),
+    }
+    .render()?;
+
+    for (name, out) in [
+        ("run", &run_out),
+        ("todo_new", &todo_new_out),
+        ("todo_update", &todo_update_out),
+        ("review", &review_out),
+    ] {
+        assert!(
+            !out.contains("intermediate turns"),
+            "{name}: worker template must not include the chat-only final-turn clause; output: {out}",
+        );
+        assert!(
+            !out.contains("final turn only"),
+            "{name}: worker template must not include the chat-only final-turn clause; output: {out}",
+        );
+    }
+    Ok(())
+}
+
 /// Smoke check: the rendered run prompt contains every instruction section,
 /// header, and substituted value the run.md template promises for shared
 /// inputs.
