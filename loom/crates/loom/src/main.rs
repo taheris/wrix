@@ -1096,10 +1096,17 @@ fn dispatch_tier(workspace: &Path, args: &GateScopeArgs, tier: Tier) -> anyhow::
 /// surface alongside every `loom gate check` (and therefore every `loom
 /// gate verify`) run. Honours the `--spec <label>` filter; the integrity
 /// pass is workspace-scoped and does not narrow by `--diff` / `--files` /
-/// `--bead` / `--tree`. Returns exit code `0` when every annotation
-/// resolves and no criterion carries more than one annotation, `1`
-/// otherwise. Each finding is printed to stderr in the form prescribed by
-/// the spec.
+/// `--bead` / `--tree`.
+///
+/// Findings print to stderr in the spec-prescribed form. They are
+/// **advisory** at the verify lane: this function always returns `0`
+/// even when findings surface. The spec is explicit that "Integrity
+/// findings are terminal at the push gate" (L608) — the push gate's
+/// `molecule_integrity_findings()` in `loom-workflow::review` enforces
+/// that contract independently against the molecule's diff scope. The
+/// verify lane is workspace-wide, so forcing it to fail on every
+/// pre-existing resolution gap would block CI on issues outside the
+/// landing molecule's reach.
 fn run_integrity_gate(workspace: &Path, args: &GateScopeArgs) -> anyhow::Result<i32> {
     let specs_dir = workspace.join("specs");
     if !specs_dir.exists() {
@@ -1137,9 +1144,9 @@ fn run_integrity_gate(workspace: &Path, args: &GateScopeArgs) -> anyhow::Result<
     let mut stderr = std::io::stderr().lock();
     use std::io::Write;
     for finding in &findings {
-        let _ = writeln!(stderr, "loom gate [integrity] FAIL: {finding}");
+        let _ = writeln!(stderr, "loom gate [integrity]: {finding}");
     }
-    Ok(1)
+    Ok(0)
 }
 
 /// Per-annotation dispatch loop for the Check/System tiers with
