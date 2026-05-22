@@ -243,7 +243,6 @@ pub(crate) fn open_sink_with_sink_writer(
 }
 
 #[cfg(test)]
-#[expect(clippy::expect_used, reason = "tests use panicking helpers")]
 mod tests {
     use super::*;
     use loom_events::EventEnvelope;

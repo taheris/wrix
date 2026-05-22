@@ -65,7 +65,6 @@ pub fn file_url(cwd: &Path, rel_or_abs: &str, line: Option<u32>) -> String {
 }
 
 #[cfg(test)]
-#[expect(clippy::expect_used, reason = "tests use panicking helpers")]
 mod tests {
     use super::*;
 

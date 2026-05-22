@@ -65,7 +65,6 @@ pub fn phase_log_path(
 }
 
 #[cfg(test)]
-#[expect(clippy::expect_used, reason = "tests use panicking helpers")]
 mod tests {
     use super::*;
     use std::time::{Duration, UNIX_EPOCH};

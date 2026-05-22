@@ -300,7 +300,6 @@ pub fn cap_body(body: &str, bead_id: &str, tool_call_id: &str) -> String {
 }
 
 #[cfg(test)]
-#[expect(clippy::expect_used, reason = "tests use panicking helpers")]
 mod tests {
     use super::*;
     use serde_json::json;

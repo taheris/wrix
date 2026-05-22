@@ -115,7 +115,6 @@ impl<W: Write> RunningIndicator<W> {
 }
 
 #[cfg(test)]
-#[expect(clippy::expect_used, reason = "tests use panicking helpers")]
 mod tests {
     use super::*;
 
