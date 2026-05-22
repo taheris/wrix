@@ -132,7 +132,6 @@ impl RunnerConfig {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, reason = "tests use panicking helpers")]
 mod tests {
     use super::*;
     use crate::config::LoomConfig;

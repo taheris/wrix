@@ -237,7 +237,6 @@ pub trait AgentBackend: Send + Sync {
 }
 
 #[cfg(test)]
-#[expect(clippy::expect_used, reason = "tests use panicking helpers")]
 mod tests {
     use super::*;
     use crate::agent::repin::RePinContent;

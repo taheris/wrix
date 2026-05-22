@@ -204,11 +204,6 @@ fn bash_single_quote(s: &str) -> String {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    reason = "tests use panicking helpers"
-)]
 mod tests {
     use super::*;
 
