@@ -151,13 +151,13 @@ All automatic Chromium flags (`--no-sandbox`, `--disable-dev-shm-usage`, `--disa
 - [ ] Nix image builds with `mcp.playwright = {}` and contains chromium binary
   [system](bash tests/mcp/playwright/build-test.sh)
 - [ ] Chromium path is correctly derived from playwright-driver.browsers
-  [judge](tests/judges/playwright-mcp.sh::test_chromium_path_derivation)
+  [judge](../tests/judges/playwright-mcp.sh#test_chromium_path_derivation)
 - [ ] Container flags (--no-sandbox, --disable-dev-shm-usage, --disable-gpu) are always applied
-  [judge](tests/judges/playwright-mcp.sh::test_container_flags)
+  [judge](../tests/judges/playwright-mcp.sh#test_container_flags)
 - [ ] Configuration options (headless, viewport, config) are wired through to MCP server
-  [judge](tests/judges/playwright-mcp.sh::test_config_passthrough)
+  [judge](../tests/judges/playwright-mcp.sh#test_config_passthrough)
 - [ ] Server definition follows the MCP registry pattern (name, packages, mkServerConfig)
-  [judge](tests/judges/playwright-mcp.sh::test_registry_pattern)
+  [judge](../tests/judges/playwright-mcp.sh#test_registry_pattern)
 
 ## Out of Scope
 

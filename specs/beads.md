@@ -104,7 +104,7 @@ Key settings in `.beads/config.yaml`:
 - [ ] Dependencies correctly block `bd ready` output
   [system](bash tests/ralph/run-tests.sh test_run_respects_dependencies)
 - [ ] `bd dolt pull`/`bd dolt push` works in container environment
-  [judge](tests/judges/beads.sh::test_sync_in_container)
+  [judge](../tests/judges/beads.sh#test_sync_in_container)
 - [ ] Priority and status filtering works
   [system](bash tests/ralph/run-tests.sh test_config_data_driven)
 - [ ] Issues can be created with descriptions

@@ -177,7 +177,7 @@ Consumer repos should configure their test runners with quiet mode for LLM envir
 ## Success Criteria
 
 - [ ] `prek run` executes only fast hooks; slow hooks run on `git push`
-  [judge](tests/judges/pre-commit.sh::test_prek_hook_speed_split)
+  [judge](../tests/judges/pre-commit.sh#test_prek_hook_speed_split)
 - [ ] Ralph loop executes hooks at all four points
   [system](bash tests/ralph/run-tests.sh test_default_config_has_hooks)
 - [ ] Loop pauses on hook failure when `hooks-on-failure = "block"`

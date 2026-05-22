@@ -495,19 +495,19 @@ Add unit tests for parser edge cases...
 - [ ] `ralph plan -u` creates `state/<label>.json` if it doesn't exist
   [system](bash tests/ralph/run-tests.sh test_plan_update_creates_state_json)
 - [ ] `ralph plan -u -h <label>` updates hidden spec
-  [judge](tests/judges/ralph-workflow.sh::test_plan_update_hidden)
+  [judge](../tests/judges/ralph-workflow.sh#test_plan_update_hidden)
 - [ ] `ralph plan` runs Claude in wrapix container with base profile
-  [judge](tests/judges/ralph-workflow.sh::test_plan_runs_in_container)
+  [judge](../tests/judges/ralph-workflow.sh#test_plan_runs_in_container)
 - [ ] `ralph plan` runs `bd dolt push` inside container after `RALPH_COMPLETE`
   [system](bash tests/ralph/run-tests.sh test_plan_dolt_push_in_container)
 - [ ] `ralph plan -u <anchor>` permits the LLM to read and edit any spec in `specs/` (sibling-spec editing)
-  [judge](tests/judges/ralph-workflow.sh::test_plan_anchor_sibling_editing)
+  [judge](../tests/judges/ralph-workflow.sh#test_plan_anchor_sibling_editing)
 - [ ] `ralph plan -u -h` (hidden) remains single-spec; no sibling-spec editing
   [system](bash tests/ralph/run-tests.sh test_plan_update_hidden_single_spec)
 - [ ] Invariant-clash detection during planning scans the anchor and any touched sibling specs
-  [judge](tests/judges/ralph-workflow.sh::test_plan_cross_spec_invariant_clash)
+  [judge](../tests/judges/ralph-workflow.sh#test_plan_cross_spec_invariant_clash)
 - [ ] `plan-update.md` instructs the LLM to detect invariant clashes during the interview and ask the user before committing a change
-  [judge](tests/judges/ralph-workflow.sh::test_plan_update_invariant_clash_detection)
+  [judge](../tests/judges/ralph-workflow.sh#test_plan_update_invariant_clash_detection)
 - [ ] `plan-new.md` and `plan-update.md` include the `interview-modes` partial
   [system](bash tests/ralph/run-tests.sh test_plan_templates_include_interview_modes)
 - [ ] `plan-new.md` references `{{> implementation-notes-spec}}` and carries no inline `## Implementation Notes` rule prose outside the partial reference
@@ -517,9 +517,9 @@ Add unit tests for parser edge cases...
 - [ ] `interview-modes.md` documents "one by one" and "polish the spec" with loose-matching guidance
   [system](bash tests/ralph/run-tests.sh test_interview_modes_partial_content)
 - [ ] LLM responds to "one by one" (and close variants) with one-question-at-a-time + suggested defaults
-  [judge](tests/judges/ralph-workflow.sh::test_plan_one_by_one_mode)
+  [judge](../tests/judges/ralph-workflow.sh#test_plan_one_by_one_mode)
 - [ ] LLM responds to "polish the spec" (and close variants) with a full read-through + specific edits proposed
-  [judge](tests/judges/ralph-workflow.sh::test_plan_polish_mode)
+  [judge](../tests/judges/ralph-workflow.sh#test_plan_polish_mode)
 
 ### Todo
 
@@ -574,17 +574,17 @@ Add unit tests for parser edge cases...
 - [ ] `ralph todo` warning message includes `bd list` check command and `--since` recovery hint
   [system](bash tests/ralph/run-tests.sh test_todo_warning_includes_recovery_hints)
 - [ ] `ralph todo` runs Claude in wrapix container with base profile
-  [judge](tests/judges/ralph-workflow.sh::test_todo_runs_in_container)
+  [judge](../tests/judges/ralph-workflow.sh#test_todo_runs_in_container)
 - [ ] `ralph todo` LLM assigns `profile:X` labels per-task based on implementation needs
   [system](bash tests/ralph/run-tests.sh test_run_profile_selection)
 - [ ] `todo-new.md` instructs LLM to write molecule ID to the pinned-context file (`docs/README.md` by default) Beads column
-  [judge](tests/judges/ralph-workflow.sh::test_todo_new_writes_readme_beads)
+  [judge](../tests/judges/ralph-workflow.sh#test_todo_new_writes_readme_beads)
 - [ ] `todo-update.md` instructs LLM to fill in README Beads column if empty
-  [judge](tests/judges/ralph-workflow.sh::test_todo_update_fills_readme_beads)
+  [judge](../tests/judges/ralph-workflow.sh#test_todo_update_fills_readme_beads)
 - [ ] `todo-update.md` works with `SPEC_DIFF` (tier 1) when diff is available
-  [judge](tests/judges/ralph-workflow.sh::test_todo_update_with_diff)
+  [judge](../tests/judges/ralph-workflow.sh#test_todo_update_with_diff)
 - [ ] `todo-update.md` works with `EXISTING_TASKS` (tier 2) when no diff available
-  [judge](tests/judges/ralph-workflow.sh::test_todo_update_with_tasks)
+  [judge](../tests/judges/ralph-workflow.sh#test_todo_update_with_tasks)
 - [ ] `ralph todo` clears `implementation_notes` from state JSON when it advances `base_commit` on RALPH_COMPLETE
   [system](bash tests/ralph/run-tests.sh test_todo_clears_implementation_notes)
 
@@ -617,7 +617,7 @@ Add unit tests for parser edge cases...
 - [ ] `ralph todo` exits early when tier 1 candidate set is empty ("No spec changes since last task creation")
   [system](bash tests/ralph/run-tests.sh test_todo_empty_candidate_set_exits)
 - [ ] Worked example (anchor + two siblings) produces correct molecule + per-spec cursors
-  [judge](tests/judges/ralph-workflow.sh::test_todo_fanout_worked_example)
+  [judge](../tests/judges/ralph-workflow.sh#test_todo_fanout_worked_example)
 
 ### Run
 
@@ -642,7 +642,7 @@ Add unit tests for parser edge cases...
 - [ ] `ralph run` exec-s `ralph check` when the molecule reaches completion
   [system](bash tests/ralph/run-tests.sh test_run_execs_check_on_complete)
 - [ ] `run.md` template handles already-implemented tasks (close and move on)
-  [judge](tests/judges/ralph-workflow.sh::test_run_already_implemented)
+  [judge](../tests/judges/ralph-workflow.sh#test_run_already_implemented)
 
 ### Companions
 

@@ -5,9 +5,11 @@
 #   judge_files   — source files the LLM reads
 #   judge_criterion — what the LLM evaluates
 #
-# Rubric functions are referenced from spec success criteria annotations:
+# Rubric functions are referenced from spec success criteria annotations
+# using a spec-relative path and a markdown `#fn` fragment selector so
+# the link is clickable in markdown renderers:
 #   - [ ] Output includes progress percentage
-#     [judge](tests/judges/example.sh::test_progress_display)
+#     [judge](../tests/judges/example.sh#test_progress_display)
 #
 # When ralph spec --judge runs, it sources this file, calls the function,
 # then passes the files + criterion to an LLM for PASS/FAIL evaluation.

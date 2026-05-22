@@ -794,7 +794,7 @@ pub fn check_forward(
         let resolved = match ann.tier {
             Tier::Check | Tier::System => resolves_command(&ann.target, command_resolver),
             Tier::Test => test_resolver.resolves(&ann.target),
-            Tier::Judge => resolves_judge_path(&ann.target, repo_root),
+            Tier::Judge => resolves_judge_path(&ann.target, &ann.source_spec, repo_root),
         };
         if !resolved {
             out.push(IntegrityFinding::UnresolvedAnnotation {
@@ -945,22 +945,76 @@ fn extract_cargo_test_name(command: &str) -> Option<&str> {
     None
 }
 
-fn resolves_judge_path(target: &str, repo_root: &Path) -> bool {
+/// Resolves a `[judge]` target's path part against the spec file's own
+/// directory, matching the markdown renderer's relative-link resolution.
+/// Accepts `#fn` (canonical, standard URL-fragment syntax) or `::fn`
+/// (legacy) as the function-selector separator. Absolute paths are
+/// honoured as-is; relative paths are joined with `source_spec.parent()`
+/// when present, falling back to `repo_root` only when the spec has no
+/// parent component.
+fn resolves_judge_path(target: &str, source_spec: &Path, repo_root: &Path) -> bool {
     let trimmed = target.trim();
     if trimmed.is_empty() {
         return false;
     }
-    let path_part = trimmed.split_once("::").map_or(trimmed, |(p, _)| p);
+    let path_part = strip_judge_selector(trimmed);
     if path_part.is_empty() {
         return false;
     }
     let p = Path::new(path_part);
-    let resolved = if p.is_absolute() {
+    let raw = if p.is_absolute() {
         p.to_path_buf()
     } else {
-        repo_root.join(p)
+        judge_base(source_spec, repo_root).join(p)
     };
-    resolved.exists()
+    normalize_path(&raw).exists()
+}
+
+/// Collapse `..` and `.` lexically. Intermediate components in a
+/// spec-relative target like `specs/../tests/...` may not exist as real
+/// directories (the spec dir does; an arbitrary intermediate may not), so
+/// the kernel's path walker would return ENOENT before reaching the real
+/// target. Markdown renderers do the same lexical collapse, so this keeps
+/// the gate aligned with what a reader sees on click.
+fn normalize_path(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                if !out.pop() {
+                    out.push("..");
+                }
+            }
+            Component::CurDir => {}
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// `#` is the canonical selector separator (URL-fragment syntax, clickable
+/// in markdown renderers); `::` is accepted during migration. Whichever
+/// appears first wins so paths containing the other character are handled
+/// predictably.
+fn strip_judge_selector(target: &str) -> &str {
+    let hash = target.find('#');
+    let colons = target.find("::");
+    match (hash, colons) {
+        (Some(h), Some(c)) if h < c => &target[..h],
+        (Some(h), None) => &target[..h],
+        (_, Some(c)) => &target[..c],
+        (None, None) => target,
+    }
+}
+
+fn judge_base(source_spec: &Path, repo_root: &Path) -> PathBuf {
+    match source_spec.parent() {
+        Some(parent) if parent.as_os_str().is_empty() => repo_root.to_path_buf(),
+        Some(parent) if parent.is_absolute() => parent.to_path_buf(),
+        Some(parent) => repo_root.join(parent),
+        None => repo_root.to_path_buf(),
+    }
 }
 
 #[cfg(test)]
@@ -1134,7 +1188,7 @@ mod tests {
             ann(Tier::Check, "cargo run -p w", "specs/a.md", 1, 1),
             ann(Tier::System, "nix run .#x", "specs/a.md", 2, 2),
             ann(Tier::Test, "crate::a::ok", "specs/a.md", 3, 3),
-            ann(Tier::Judge, "rubric.md", "specs/a.md", 4, 4),
+            ann(Tier::Judge, "../rubric.md", "specs/a.md", 4, 4),
         ];
         let cmds = StubCommands::with(&["cargo", "nix"]);
         let tests = StubTests::with(&["crate::a::ok"]);
@@ -1216,7 +1270,7 @@ mod tests {
     #[test]
     fn forward_flags_judge_when_file_absent() {
         let dir = tempdir().unwrap();
-        let annotations = vec![ann(Tier::Judge, "missing.md", "specs/a.md", 13, 13)];
+        let annotations = vec![ann(Tier::Judge, "../missing.md", "specs/a.md", 13, 13)];
         let cmds = StubCommands::with(&[]);
         let tests = StubTests::with(&[]);
         let findings = check_forward(&annotations, dir.path(), &cmds, &tests, &StubLeaves::none());
@@ -1260,7 +1314,7 @@ mod tests {
 
         let annotations = vec![ann(
             Tier::Judge,
-            "tests/judges/loom.sh::judge_tool_trait_ecosystem_compat",
+            "../tests/judges/loom.sh::judge_tool_trait_ecosystem_compat",
             "specs/a.md",
             15,
             15,
@@ -1272,6 +1326,56 @@ mod tests {
             findings.is_empty(),
             "judge target with ::fn selector should resolve to leading path: {findings:?}"
         );
+    }
+
+    #[test]
+    fn forward_judge_accepts_script_with_hash_fn_selector() {
+        let dir = tempdir().unwrap();
+        let script_dir = dir.path().join("tests/judges");
+        fs::create_dir_all(&script_dir).unwrap();
+        let script = script_dir.join("loom.sh");
+        fs::write(&script, "#!/usr/bin/env bash\n").unwrap();
+
+        let annotations = vec![ann(
+            Tier::Judge,
+            "../tests/judges/loom.sh#judge_tool_trait_ecosystem_compat",
+            "specs/a.md",
+            15,
+            15,
+        )];
+        let cmds = StubCommands::with(&[]);
+        let tests = StubTests::with(&[]);
+        let findings = check_forward(&annotations, dir.path(), &cmds, &tests, &StubLeaves::none());
+        assert!(
+            findings.is_empty(),
+            "judge target with #fn selector should resolve to leading path: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn forward_judge_resolves_relative_to_spec_dir() {
+        let dir = tempdir().unwrap();
+        let script_dir = dir.path().join("tests/judges");
+        fs::create_dir_all(&script_dir).unwrap();
+        fs::write(script_dir.join("x.sh"), "#!/usr/bin/env bash\n").unwrap();
+
+        let annotations = vec![ann(Tier::Judge, "tests/judges/x.sh#fn", "specs/a.md", 5, 5)];
+        let cmds = StubCommands::with(&[]);
+        let tests = StubTests::with(&[]);
+        let findings = check_forward(&annotations, dir.path(), &cmds, &tests, &StubLeaves::none());
+        assert_eq!(
+            findings.len(),
+            1,
+            "spec-relative path: a target without ../ should not resolve from inside specs/, \
+             got: {findings:?}"
+        );
+        assert!(matches!(
+            findings[0],
+            IntegrityFinding::UnresolvedAnnotation {
+                tier: Tier::Judge,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -1335,7 +1439,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let annotations = vec![ann(
             Tier::Judge,
-            "tests/judges/absent.sh::some_fn",
+            "../tests/judges/absent.sh::some_fn",
             "specs/a.md",
             16,
             16,
@@ -1732,7 +1836,7 @@ mod tests {
         let rubric = dir.path().join("r.md");
         fs::write(&rubric, "ok").unwrap();
         let annotations = vec![
-            ann(Tier::Judge, "r.md", "specs/a.md", 50, 50),
+            ann(Tier::Judge, "../r.md", "specs/a.md", 50, 50),
             ann(Tier::System, "nix run .#foo", "specs/a.md", 51, 51),
         ];
         let cmds = StubCommands::with(&["nix"]);

@@ -218,7 +218,7 @@ Uses existing `wrapix-notify`/`wrapix-notifyd` for key events:
 - [ ] `ralph check -s <label>` spawns reviewer agent in wrapix container
   [system](bash tests/orchestration-test.sh test_check_spec_runs_in_container)
 - [ ] Reviewer receives spec, beads summary (titles + status), base_commit, and molecule ID — explores codebase on demand
-  [judge](tests/judges/orchestration.sh::test_reviewer_context)
+  [judge](../tests/judges/orchestration.sh#test_reviewer_context)
 - [ ] Reviewer creates follow-up beads for actionable issues
   [system](bash tests/orchestration-test.sh test_reviewer_creates_followup_beads)
 - [ ] Reviewer flags ambiguous items with `bd human`
@@ -266,11 +266,11 @@ Uses existing `wrapix-notify`/`wrapix-notifyd` for key events:
 - [ ] Notifications fire for `ralph:clarify`, review results, and watch detections
   [system](bash tests/orchestration-test.sh test_notifications)
 - [ ] `check.md` template instructs reviewer to assess tests, code, and spec compliance holistically
-  [judge](tests/judges/orchestration.sh::test_check_template_quality)
+  [judge](../tests/judges/orchestration.sh#test_check_template_quality)
 - [ ] `watch.md` template instructs agent to observe contextually, not pattern-match
-  [judge](tests/judges/orchestration.sh::test_watch_template_quality)
+  [judge](../tests/judges/orchestration.sh#test_watch_template_quality)
 - [ ] `run.md` template includes `PREVIOUS_FAILURE` variable for retry context
-  [judge](tests/judges/orchestration.sh::test_run_template_retry_context)
+  [judge](../tests/judges/orchestration.sh#test_run_template_retry_context)
 
 ## Out of Scope
 

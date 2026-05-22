@@ -476,7 +476,7 @@ documents in front of the agent with zero configuration.
 - `partial/sibling_spec_editing.md` documents that creating a new
   sibling spec is a valid planning-session outcome and names the
   bead-allocation carve-out
-  [judge](tests/judges/loom.sh::judge_sibling_spec_editing_documents_split)
+  [judge](../tests/judges/loom.sh#judge_sibling_spec_editing_documents_split)
 
 ### Typed `PreviousFailure`
 

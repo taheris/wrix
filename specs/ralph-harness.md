@@ -968,9 +968,9 @@ Ralph uses `bd mol` for work tracking:
 - [ ] Partials work via `{{> partial-name}}` markers
   [system](bash tests/ralph/run-tests.sh test_plan_template_with_partials)
 - [ ] `ralph tune` (interactive) identifies correct template and makes edits
-  [judge](tests/judges/ralph-workflow.sh::test_tune_interactive)
+  [judge](../tests/judges/ralph-workflow.sh#test_tune_interactive)
 - [ ] `ralph tune` (integration) ingests diff and interviews about changes
-  [judge](tests/judges/ralph-workflow.sh::test_tune_integration)
+  [judge](../tests/judges/ralph-workflow.sh#test_tune_integration)
 - [ ] `ralph sync --diff` shows local template changes vs packaged
   [system](bash tests/ralph/run-tests.sh test_diff_local_modifications)
 - [ ] `ralph sync` updates templates and backs up customizations
@@ -1001,7 +1001,7 @@ Ralph uses `bd mol` for work tracking:
 - [ ] Host-side commands (`status`, `logs`, `check -t`, `msg`, `tune`, `sync`, `use`) do not create a runtime directory or register the hook
   [system](bash tests/ralph/run-tests.sh test_host_commands_no_repin_hook)
 - [ ] Compacted session receives the re-pin on next model turn
-  [judge](tests/judges/ralph-workflow.sh::test_repin_after_compaction)
+  [judge](../tests/judges/ralph-workflow.sh#test_repin_after_compaction)
 - [ ] Container-executed ralph commands pass `--env RALPH_RUNTIME_DIR=…` to wrapix; entrypoint only merges the settings fragment when the env var is set
   [system](bash tests/ralph/run-tests.sh test_runtime_dir_env_propagation)
 - [ ] `build_repin_content` scans the running command's template for `{{> X}}` partial references and resolves each via the existing partial-resolution helper
@@ -1011,9 +1011,9 @@ Ralph uses `bd mol` for work tracking:
 - [ ] Re-pin content stays under 10KB even with all referenced partial bodies injected
   [system](bash tests/ralph/run-tests.sh test_repin_content_size_with_partials)
 - [ ] Rule content (conventions, protocols, MUST/SHOULD statements) in `plan-new.md`, `plan-update.md`, `todo-new.md`, `todo-update.md`, `run.md`, `check.md`, `msg.md` lives only inside `{{> partial}}` references; inline rule prose in template bodies is flagged as lint-eligible drift
-  [judge](tests/judges/ralph-workflow.sh::test_rule_partial_discipline)
+  [judge](../tests/judges/ralph-workflow.sh#test_rule_partial_discipline)
 - [ ] After auto-compact in a long-running `ralph plan -u` session, the model retains template-defined conventions (e.g. `## Implementation Notes` naming for plan-new, `implementation_notes` state-JSON location for plan-update) without re-reading the spec
-  [judge](tests/judges/ralph-workflow.sh::test_repin_restores_template_rules_after_compact)
+  [judge](../tests/judges/ralph-workflow.sh#test_repin_restores_template_rules_after_compact)
 
 ### Init
 
@@ -1052,7 +1052,7 @@ Ralph uses `bd mol` for work tracking:
 - [ ] `ralph init` and `ralph sync` share `scaffold_docs`, `scaffold_agents`, `scaffold_templates` (one code path)
   [system](bash tests/ralph/run-tests.sh test_scaffold_shared_code_path)
 - [ ] `ralph init` prints per-artifact created/skipped summary + fixed 2-step next-steps block
-  [judge](tests/judges/ralph-workflow.sh::test_init_output_format)
+  [judge](../tests/judges/ralph-workflow.sh#test_init_output_format)
 - [ ] Top-level wrapix flake exposes `apps.init`
   [system](bash tests/ralph/run-tests.sh test_wrapix_flake_exposes_init)
 - [ ] Top-level wrapix flake's `packages.${system}.ralph` exposes a `shellHook` passthru

@@ -402,6 +402,26 @@ Each criterion's annotation is resolved per its tier:
 | `[system]` | `[system](command)` — shell command | Each annotation invokes its own process. System verifiers are inherently slow and self-contained; batching doesn't help. |
 | `[judge]` | `[judge](path)` — file path or criterion id whose content is the LLM rubric | The gate collects all `[judge]` targets and issues concurrent LLM calls (API-level parallelism). |
 
+**`[judge]` annotations are clickable links.** The path inside the
+parentheses is read both by the gate (to dispatch a verifier) and by
+markdown renderers (GitHub, VS Code, terminal viewers) when a reader
+clicks the link. Two requirements compose to keep that click working:
+
+1. **URL-fragment selector.** Shell-function selectors use `#fn`
+   (standard markdown / URL fragment syntax), not `::fn`. A renderer
+   sees `path#fn` as the same `path` it would for `path` alone, then
+   scrolls to the `#fn` anchor; `path::fn` resolves to a literal
+   filename ending in `::fn`, which 404s.
+2. **Spec-relative path.** Paths are written relative to the spec
+   file's own directory (e.g. `../tests/judges/x.sh#fn` from a spec
+   in `specs/`). The renderer's relative-link resolution and the
+   integrity gate's resolution share the same base, so a path that
+   clicks correctly in a rendered spec also resolves on disk for the
+   gate. Absolute paths are honoured as-is.
+
+`::fn` selectors are accepted during migration; new annotations use
+`#fn` so the click works.
+
 ### Runners — per-language batched dispatch
 
 **Runners, not verifiers, are the dispatch unit.** A runner executes
@@ -486,7 +506,7 @@ on verifier kind:
 | `[check]` / `[system]` referencing a **script** | A `# loom-inputs: <comma-separated globs>` header line in the script. Format is uniform across script languages — the line is found by literal-string search, not by interpreting shebangs. |
 | `[check]` / `[system]` referencing a **binary** that supports the input-query protocol | The binary returns inputs via `<binary> --print-inputs <remaining-argv>` printing JSON `{"inputs": ["glob1", "glob2"]}` to stdout. |
 | `[check]` / `[system]` — fallback | Heuristic path extraction from the command string. `grep -q 'X' path/to/file` → `path/to/file`. `cargo test -p mycrate --lib testname` → `mycrate`'s sources via cargo metadata. Conservative; misses are caught by the standing-stage safety-net sweep. |
-| `[judge](script::fn)` | A `# loom-inputs:` header line in the judge script (same convention as `[check]`/`[system]` scripts). |
+| `[judge](script#fn)` | A `# loom-inputs:` header line in the judge script (same convention as `[check]`/`[system]` scripts). |
 
 **Spec-section auto-include.** The spec section the annotation lives
 in is *always* part of the verifier's inputs. The gate adds it
@@ -803,10 +823,23 @@ PATH, and a `[judge]` annotation pointing at the gate's own
   broken-target shape: `[check]` first token absent on PATH, `[test]`
   path with no matching function, `[judge]` file absent
   [test](fixture_with_broken_target_per_tier_flags_each_one)
-- **Forward — judge `::fn` selector.** A `[judge](script::fn)` target
-  resolves when the leading script path exists; the `::fn` suffix is
+- **Forward — judge `#fn` selector.** A `[judge](script#fn)` target
+  resolves when the leading script path exists; the `#fn` suffix is
   stripped before the on-disk check (per the *Verifier inputs* table's
-  `[judge](script::fn)` row)
+  `[judge](script#fn)` row). `::fn` is accepted during migration but
+  `#fn` is canonical because the URL-fragment shape is what markdown
+  renderers click through to
+  [test](forward_judge_accepts_script_with_hash_fn_selector)
+- **Forward — judge spec-relative resolution.** Path resolution joins
+  the relative target against the annotation's spec-file directory, not
+  the repo root; absolute paths are honoured as-is. This matches the
+  markdown renderer's relative-link resolution so a clickable
+  `[judge](../tests/judges/x.sh#fn)` in `specs/foo.md` resolves to
+  `tests/judges/x.sh` on disk
+  [test](forward_judge_resolves_relative_to_spec_dir)
+- **Forward — judge legacy `::fn` selector.** A `[judge](script::fn)`
+  target still resolves during the `::` → `#` migration; the `::fn`
+  suffix is stripped before the on-disk check
   [test](forward_judge_accepts_script_with_fn_selector)
 - **Forward — system `::attr` selector.** A `[system](path::attr)`
   target (e.g. `[system](tests/city/unit.nix::city-mkcity-eval)`)

@@ -335,7 +335,7 @@ min_bytes = 256
 - Loop respects tokio cancellation: dropping the future cancels the in-flight LLM call and tool invocation
   [test](conversation_loop_cancellation_aborts_in_flight_work)
 - `Tool` trait shape is convertible to ecosystem agent-loop tool shapes (Anthropic tool-schema JSON; forward-compat smoke test against an external tool trait — re-evaluated each loom release)
-  [judge](tests/judges/loom.sh::judge_tool_trait_ecosystem_compat)
+  [judge](../tests/judges/loom.sh#judge_tool_trait_ecosystem_compat)
 
 ### Wrapper boundary
 

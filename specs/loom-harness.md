@@ -1934,11 +1934,11 @@ Criteria.
       `[check]` / `[test]` / `[system]` verifier on the bead must
       exercise the live path (same binary, same argv shape, same env).
       All-mock verifier sets raise a `LOOM_CONCERN`
-  [judge](tests/judges/loom.sh::judge_live_path_coverage)
+  [judge](../tests/judges/loom.sh#judge_live_path_coverage)
 - Review raises a `LOOM_CONCERN` on mocks that stand in for the very
       thing the test claims to test (e.g. mocking the agent backend in
       an agent-integration test)
-  [judge](tests/judges/loom.sh::judge_mock_discipline)
+  [judge](../tests/judges/loom.sh#judge_mock_discipline)
 - Review's secondary concerns are scope appropriateness and
       `[judge]` rubric satisfaction
   [test](review_renders_review_context_fields)
@@ -2140,7 +2140,7 @@ two agent-loop observers.
       via `loom note list`, and writes back a merged array via
       `loom note set` (interview-driven keep/drop/add — not blind
       append, not blind replace)
-  [judge](tests/judges/loom.sh::judge_plan_update_merges_notes)
+  [judge](../tests/judges/loom.sh#judge_plan_update_merges_notes)
 - `loom todo` reads implementation notes from the anchor's `notes`
       rows and renders each note's text into every new bead body
       created during the run
@@ -2203,7 +2203,7 @@ two agent-loop observers.
 - `partial/scratchpad.md` instructs the agent that the scratchpad is
       agent-lifecycle-only and points at durable destinations for
       long-term records
-  [judge](tests/judges/loom.sh::test_scratchpad_partial_clarity)
+  [judge](../tests/judges/loom.sh#test_scratchpad_partial_clarity)
 
 ### Beads CLI wrapper
 

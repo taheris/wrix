@@ -382,9 +382,9 @@ Clarify beads that present a choice must enumerate their options in a standard m
 - [ ] `check.md` template includes the three-paths-principle section as invariant-clash guidance
   [system](bash tests/ralph/run-tests.sh test_check_template_has_three_paths)
 - [ ] `check.md` instructs the reviewer to propose contextual options per clash, not a fixed A/B/C
-  [judge](tests/judges/ralph-workflow.sh::test_check_contextual_options)
+  [judge](../tests/judges/ralph-workflow.sh#test_check_contextual_options)
 - [ ] Reviewer creates beads with `ralph:clarify` and proposed options in description for each detected clash
-  [judge](tests/judges/ralph-workflow.sh::test_check_clarify_bead_shape)
+  [judge](../tests/judges/ralph-workflow.sh#test_check_clarify_bead_shape)
 - [ ] Full loop `run → check → run → check → push` terminates cleanly when no more issues are found
   [system](bash tests/ralph/run-tests.sh test_run_check_loop_terminates)
 - [ ] `ralph check` escalates to `ralph:clarify` and stops after `loop.max-iterations` unsuccessful iterations
@@ -413,9 +413,9 @@ Clarify beads that present a choice must enumerate their options in a standard m
 - [ ] `ralph msg -c` launches the interactive Drafter session inside a wrapix container with the base profile, using the `msg.md` template; bare `ralph msg` stays host-side (no container, no Claude)
   [system](bash tests/ralph/run-tests.sh test_msg_interactive_container)
 - [ ] `ralph msg` interactive session presents a triage summary of outstanding clarifies before walking through them
-  [judge](tests/judges/ralph-workflow.sh::test_msg_interactive_triage)
+  [judge](../tests/judges/ralph-workflow.sh#test_msg_interactive_triage)
 - [ ] `ralph msg` interactive session writes resolution notes via `bd update --notes` and clears `ralph:clarify` via `bd update --remove-label=ralph:clarify` per bead
-  [judge](tests/judges/ralph-workflow.sh::test_msg_interactive_clears_label)
+  [judge](../tests/judges/ralph-workflow.sh#test_msg_interactive_clears_label)
 - [ ] `ralph msg` interactive session ending mid-walk is a clean `RALPH_COMPLETE`; unresolved clarifies remain visible in the next session
   [system](bash tests/ralph/run-tests.sh test_msg_partial_progress_clean)
 - [ ] `ralph msg` interactive session exit signals are `RALPH_COMPLETE` only (no `RALPH_BLOCKED`, no `RALPH_CLARIFY`)
@@ -444,7 +444,7 @@ Clarify beads that present a choice must enumerate their options in a standard m
 - [ ] `check.md` mandates the `## Options — <summary>` + `### Option N — <title>` format for clarify beads it creates for invariant clashes
   [system](bash tests/ralph/run-tests.sh test_check_template_options_format)
 - [ ] Reviewer-created clarify beads conform to the options format with at least one `### Option N —` subsection
-  [judge](tests/judges/ralph-workflow.sh::test_check_options_format_conformance)
+  [judge](../tests/judges/ralph-workflow.sh#test_check_options_format_conformance)
 
 ## Out of Scope
 

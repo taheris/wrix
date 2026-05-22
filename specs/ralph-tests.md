@@ -544,7 +544,7 @@ two successive ralph commands, must observe updated content between them.
 - [x] Tests verify config options affect behavior (spec.hidden, beads.priority, loop settings)
   [system](bash tests/ralph/run-tests.sh test_config_data_driven)
 - [x] Tests are deterministic and fast
-  [judge](tests/judges/ralph-tests.sh::test_deterministic_and_fast)
+  [judge](../tests/judges/ralph-tests.sh#test_deterministic_and_fast)
 - [x] Test infrastructure split into `lib/` modules (assertions, fixtures, mock-claude, runner)
   [system](bash tests/ralph/run-tests.sh test_isolated_beads_db)
 - [x] JSON format support for declarative test scenarios
