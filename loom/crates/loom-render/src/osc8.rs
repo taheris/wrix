@@ -30,10 +30,10 @@ pub fn supports_osc8(term_program: Option<&str>, term: Option<&str>) -> bool {
             return true;
         }
     }
-    if let Some(t) = term {
-        if t.starts_with("kitty") || t == "xterm-kitty" || t.starts_with("alacritty") {
-            return true;
-        }
+    if let Some(t) = term
+        && (t.starts_with("kitty") || t == "xterm-kitty" || t.starts_with("alacritty"))
+    {
+        return true;
     }
     false
 }
