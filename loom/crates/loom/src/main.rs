@@ -26,7 +26,8 @@ use loom_driver::profile_manifest::ProfileImageManifest;
 use loom_driver::scratch::resolve_scratch_key;
 use loom_driver::state::StateDb;
 use loom_gate::{
-    self, CacheRow, DispatchOptions, EmptyScope, StatusCache, Tier, Verdict, render_report, row_for,
+    self, CacheRow, DispatchOptions, EmptyScope, FsCommandResolver, RustWorkspaceStubScanner,
+    RustWorkspaceTestResolver, StatusCache, Tier, Verdict, render_report, row_for,
 };
 use loom_workflow::msg::{
     DISMISS_NOTE, build_rows, compose_option_note, filter_msg_beads, kind_of, resolve_target,
@@ -1041,6 +1042,7 @@ fn dispatch_tier(workspace: &Path, args: &GateScopeArgs, tier: Tier) -> anyhow::
     let mut combined: i32 = 0;
     match tier {
         Tier::Check => {
+            combined = combined.max(run_integrity_gate(workspace, args)?);
             combined = run_per_annotation_with_progress(
                 &selected,
                 tier,
@@ -1087,6 +1089,57 @@ fn dispatch_tier(workspace: &Path, args: &GateScopeArgs, tier: Tier) -> anyhow::
         Tier::Judge => unreachable!("dispatch_tier does not handle Tier::Judge"),
     }
     Ok(combined)
+}
+
+/// Run the annotation integrity gate. The gate is itself a `[check]`-tier
+/// verifier per `specs/loom-gate.md` § Integrity gate — its findings
+/// surface alongside every `loom gate check` (and therefore every `loom
+/// gate verify`) run. Honours the `--spec <label>` filter; the integrity
+/// pass is workspace-scoped and does not narrow by `--diff` / `--files` /
+/// `--bead` / `--tree`. Returns exit code `0` when every annotation
+/// resolves and no criterion carries more than one annotation, `1`
+/// otherwise. Each finding is printed to stderr in the form prescribed by
+/// the spec.
+fn run_integrity_gate(workspace: &Path, args: &GateScopeArgs) -> anyhow::Result<i32> {
+    let specs_dir = workspace.join("specs");
+    if !specs_dir.exists() {
+        return Ok(0);
+    }
+    let parsed = loom_gate::annotation::parse(&specs_dir)?;
+    let annotations: Vec<loom_gate::Annotation> = parsed
+        .annotations
+        .into_iter()
+        .filter(|a| {
+            args.spec.as_deref().is_none_or(|label| {
+                a.source_spec
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .is_some_and(|s| s == label)
+            })
+        })
+        .collect();
+    if annotations.is_empty() {
+        return Ok(0);
+    }
+    let cmd_resolver = FsCommandResolver::new(workspace);
+    let test_resolver = RustWorkspaceTestResolver::scan(workspace)?;
+    let stub_scanner = RustWorkspaceStubScanner::scan(workspace)?;
+    let findings = loom_gate::integrity::check(
+        &annotations,
+        workspace,
+        &cmd_resolver,
+        &test_resolver,
+        &stub_scanner,
+    );
+    if findings.is_empty() {
+        return Ok(0);
+    }
+    let mut stderr = std::io::stderr().lock();
+    use std::io::Write;
+    for finding in &findings {
+        let _ = writeln!(stderr, "loom gate [integrity] FAIL: {finding}");
+    }
+    Ok(1)
 }
 
 /// Per-annotation dispatch loop for the Check/System tiers with
