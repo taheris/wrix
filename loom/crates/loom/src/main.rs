@@ -1090,7 +1090,7 @@ fn dispatch_tier(workspace: &Path, args: &GateScopeArgs, tier: Tier) -> anyhow::
                 }
             }
         }
-        Tier::Judge => unreachable!("dispatch_tier does not handle Tier::Judge"),
+        Tier::Judge => anyhow::bail!("dispatch_tier does not handle Tier::Judge"),
     }
     Ok(combined)
 }
@@ -1345,10 +1345,11 @@ fn run_logs(
     // renderer chrome (header, recovery hints) carries the right id
     // even when `--bead` is not passed. Falls back to a sentinel when
     // the stem doesn't parse — we still render successfully.
-    let renderer_bead = bead_id
-        .clone()
-        .or_else(|| derive_bead_id_from_path(&path))
-        .unwrap_or_else(|| BeadId::new("wx-x").unwrap_or_else(|_| unreachable!()));
+    let renderer_bead = match bead_id.clone().or_else(|| derive_bead_id_from_path(&path)) {
+        Some(b) => b,
+        None => BeadId::new("wx-x")
+            .map_err(|err| anyhow::anyhow!("`wx-x` sentinel must parse as BeadId: {err}"))?,
+    };
     let mode = resolve_replay_mode(raw, verbose);
     let clock: Arc<dyn loom_driver::clock::Clock> = Arc::new(loom_driver::clock::SystemClock);
     let runtime = tokio::runtime::Runtime::new()?;

@@ -185,9 +185,22 @@ pub async fn run_agent_classified<B: AgentBackend>(
         // RS-12: the session yields the parser's payload only; the
         // workflow layer joins it with the per-spawn envelope to
         // produce the consumer-visible `AgentEvent`.
-        let envelope = envelope_builder
-            .get_or_insert_with(phase_envelope_builder)
-            .build();
+        let envelope = match envelope_builder.as_mut() {
+            Some(b) => b.build(),
+            None => match phase_envelope_builder() {
+                Ok(b) => envelope_builder.insert(b).build(),
+                Err(err) => {
+                    let error_str = format!("phase envelope builder construction failed: {err}");
+                    emit_midsession_failure_event(
+                        sink.as_mut(),
+                        envelope_builder.as_mut(),
+                        &error_str,
+                    );
+                    finish_sink(sink, BeadOutcome::Failed);
+                    return SessionResult::MidSessionFailed { error: error_str };
+                }
+            },
+        };
         let event = AgentEvent::from_parsed(parsed, envelope);
         info!(event = %summarize_event(&event), "agent event");
         if let AgentEvent::TextDelta { text, .. } = &event
@@ -355,21 +368,25 @@ async fn next_event_with_stall_warn(
 /// synthetic but fully-valid `wx-phase` bead id; replay tools that key
 /// on `bead_id` see it as a distinct stream rather than an invalid
 /// sentinel. The `ts_ms` closure samples the wall clock so events stay
-/// monotonic.
-fn phase_envelope_builder() -> EnvelopeBuilder {
-    let bead = loom_events::identifier::BeadId::new("wx-phase").unwrap_or_else(|err| {
-        // `wx-phase` is a compile-time constant that passes BeadId
-        // validation; failure means BeadId rules drifted incompatibly.
-        unreachable!("`wx-phase` must parse as a BeadId: {err}")
-    });
+/// monotonic. Returns the parser error if BeadId rules drift to reject
+/// `wx-phase`; the [`phase_bead_id_parses`] test catches that drift
+/// before it can reach a live session.
+fn phase_envelope_builder() -> Result<EnvelopeBuilder, loom_events::identifier::ParseBeadIdError> {
+    let bead = loom_events::identifier::BeadId::new("wx-phase")?;
     let clock = SystemClock::new();
-    EnvelopeBuilder::new(bead, None, 0, Source::Agent, move || {
-        clock
-            .wall_now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64
-    })
+    Ok(EnvelopeBuilder::new(
+        bead,
+        None,
+        0,
+        Source::Agent,
+        move || {
+            clock
+                .wall_now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as i64
+        },
+    ))
 }
 
 fn finish_sink(sink: Option<LogSink>, outcome: BeadOutcome) {
@@ -565,6 +582,12 @@ mod tests {
     use loom_events::identifier::{BeadId, SpecLabel};
     use std::path::PathBuf;
     use std::time::SystemTime;
+
+    #[test]
+    fn phase_bead_id_parses() {
+        loom_events::identifier::BeadId::new("wx-phase")
+            .expect("`wx-phase` must parse as a BeadId — phase_envelope_builder depends on it");
+    }
 
     #[test]
     fn is_oom_error_matches_exit_137_and_killed_phrasings() {

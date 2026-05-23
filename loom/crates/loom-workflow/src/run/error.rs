@@ -39,4 +39,7 @@ pub enum RunError {
 
     /// active molecule {id} has no `loom.base_commit` metadata and its parent {parent} also lacks it — set it with: bd update {id} --set-metadata loom.base_commit=<sha>
     MoleculeMissingBaseCommitNoParentMetadata { id: String, parent: String },
+
+    /// internal invariant violated: {context}
+    Bug { context: String },
 }

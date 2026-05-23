@@ -356,10 +356,12 @@ async fn fetch_molecule_base_commit<R: CommandRunner>(
                 InitError::MoleculeMissingBaseCommitNoParentMetadata { id, parent } => {
                     RunError::MoleculeMissingBaseCommitNoParentMetadata { id, parent }
                 }
-                other => unreachable!(
-                    "resolve_base_commit emits only Bd / MoleculeMissingBaseCommit / \
-                     MoleculeMissingBaseCommitNoParentMetadata; got {other:?}",
-                ),
+                other => RunError::Bug {
+                    context: format!(
+                        "resolve_base_commit emits only Bd / MoleculeMissingBaseCommit / \
+                         MoleculeMissingBaseCommitNoParentMetadata; got {other:?}",
+                    ),
+                },
             }
         })
 }
