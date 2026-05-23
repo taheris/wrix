@@ -670,6 +670,20 @@ fn no_panics_in_production_fail_unwrap_in_production() {
 }
 
 #[test]
+fn no_panics_in_production_fail_unreachable_in_production() {
+    let ws = make_workspace();
+    let body =
+        "pub fn bad(x: Option<u32>) -> u32 { match x { Some(v) => v, None => unreachable!() } }\n";
+    let target = seed(ws.path(), "crates/loom-driver/src/lib.rs", body);
+    let out = invoke(
+        &["no_panics_in_production"],
+        Some(ws.path()),
+        Some(&target.to_string_lossy()),
+    );
+    assert_fail(&out, "unreachable!");
+}
+
+#[test]
 fn no_panics_in_production_pass_with_intermediate_attrs_on_cfg_test() {
     let ws = make_workspace();
     let body = format!(

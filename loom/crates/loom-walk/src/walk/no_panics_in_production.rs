@@ -1,8 +1,9 @@
 //! RS-9: no `unwrap()` / `expect()` / `panic!()` / `todo!()` /
-//! `unimplemented!()` in production source. The workspace clippy
-//! restriction lints (RS-3) catch most cases; this walk is the
-//! belt-and-braces backstop that runs even when clippy is skipped and
-//! that surfaces violations as a single per-criterion verdict.
+//! `unimplemented!()` / `unreachable!()` in production source. The
+//! workspace clippy restriction lints (RS-3) catch most cases; this
+//! walk is the belt-and-braces backstop that runs even when clippy is
+//! skipped and that surfaces violations as a single per-criterion
+//! verdict.
 //!
 //! Test code is exempt: `#[cfg(test)]` blocks are stripped before the
 //! scan, and files under `tests/` are out of scope. The integration-
@@ -22,6 +23,7 @@ const NEEDLE_EXPECT: &str = concat!("expect", "(");
 const NEEDLE_PANIC: &str = concat!("panic", "!(");
 const NEEDLE_TODO: &str = concat!("todo", "!(");
 const NEEDLE_UNIMPLEMENTED: &str = concat!("unimplemented", "!(");
+const NEEDLE_UNREACHABLE: &str = concat!("unreachable", "!(");
 
 const EXEMPT_BINS: &[&str] = &[
     "crates/loom/src/bin/bd-shim.rs",
@@ -32,12 +34,13 @@ pub fn run(input: &WalkInput) -> Verdict {
     let root = workspace_root();
     let scope = narrow_to_loom_files(src_files(&root), input, &root);
     let mut violations = Vec::new();
-    let needles: [(&str, &str); 5] = [
+    let needles: [(&str, &str); 6] = [
         (NEEDLE_UNWRAP, "unwrap"),
         (NEEDLE_EXPECT, "expect"),
         (NEEDLE_PANIC, "panic!"),
         (NEEDLE_TODO, "todo!"),
         (NEEDLE_UNIMPLEMENTED, "unimplemented!"),
+        (NEEDLE_UNREACHABLE, "unreachable!"),
     ];
     for path in scope {
         let rel_path = rel(&root, &path);

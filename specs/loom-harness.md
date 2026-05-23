@@ -1539,7 +1539,7 @@ gitignored without carve-outs. Set `LOOM_CONFIG` to relocate.
   [check](cargo run -p loom-walk -- no_types_or_error_files)
 - Domain identifiers use newtypes (BeadId, SpecLabel, MoleculeId, etc.)
   [check](cargo run -p loom-walk -- newtype_identifiers)
-- No `unwrap()`, `todo!()`, `panic!()`, `unimplemented!()` in non-test code
+- No `unwrap()`, `todo!()`, `panic!()`, `unimplemented!()`, `unreachable!()` in non-test code
   [check](cargo run -p loom-walk -- no_panics_in_production)
 - No `#[allow(dead_code)]` in non-test code
   [check](cargo run -p loom-walk -- no_allow_dead_code)
