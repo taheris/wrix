@@ -271,17 +271,21 @@ fn end_to_end_specs_dir_check_combines_both_directions() {
     );
 }
 
+fn write_stub_fixture(src: &Path) {
+    fs::write(
+        src,
+        "#[test]\nfn stub_fixture() {\n    _pending_stub();\n}\n\n#[test]\nfn real_fixture() {\n    assert!(true);\n}\n",
+    )
+    .unwrap();
+}
+
 #[test]
 fn stub_pointing_test_annotation_flags_via_workspace_scanner() {
     let dir = tempdir().unwrap();
     let specs = dir.path().join("specs");
     fs::create_dir_all(&specs).unwrap();
     let src = dir.path().join("src.rs");
-    fs::write(
-        &src,
-        "#[test]\nfn stub_fixture() {\n    _pending_stub();\n}\n\n#[test]\nfn real_fixture() {\n    assert!(true);\n}\n",
-    )
-    .unwrap();
+    write_stub_fixture(&src);
 
     write(
         &specs,
