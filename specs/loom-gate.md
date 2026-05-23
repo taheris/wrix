@@ -860,6 +860,11 @@ PATH, and a `[judge]` annotation pointing at the gate's own
   multiple-annotation fixtures surfaces findings from both directions
   in one pass
   [test](end_to_end_specs_dir_check_combines_both_directions)
+- **Verify lane — terminal.** Integrity findings exit non-zero from
+  `loom gate check` and `loom gate verify` runs (the integrity gate is
+  itself a `[check]`-tier verifier, so it fails the same way the
+  per-annotation `[check]` dispatch does)
+  [test](gate_check_fails_on_integrity_finding_for_unresolved_annotation)
 - **Self-hosting — check tier.** The integrity gate accepts a
   `[check]` annotation in `specs/loom-gate.md` whose first token
   resolves on PATH (closes the bootstrap concern: the spec that defines

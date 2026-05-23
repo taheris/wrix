@@ -4,16 +4,10 @@
 //! `specs/loom-gate.md` § Integrity gate pins that every `loom gate
 //! check` run includes a self-test of the gate's resolution logic, and
 //! that the integrity gate is itself a `[check]`-tier verifier — so it
-//! must also surface during `loom gate verify`. Before this wiring,
-//! `integrity::check_forward` was reachable only from the push-gate
-//! path (`loom gate review`), leaving the contract unmet for the
-//! deterministic verify lanes.
-//!
-//! Findings print to stderr in the spec-prescribed form but are
-//! **advisory** at the verify lane (per `run_integrity_gate`'s docs in
-//! `loom/src/main.rs`). The push gate's `molecule_integrity_findings()`
-//! enforces terminal semantics independently against the molecule's
-//! diff scope. These tests therefore pin visibility, not exit code.
+//! must also surface during `loom gate verify`. Findings are terminal:
+//! a surfaced finding fails the run with a non-zero exit code, matching
+//! the spec's "Integrity findings are terminal" contract for the push
+//! gate and the broader `[check]`-tier semantics for the verify lane.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -52,7 +46,7 @@ fn run_loom_gate(workspace: &Path, subcommand: &str) -> std::process::Output {
 }
 
 #[test]
-fn gate_check_surfaces_integrity_finding_for_unresolved_annotation() {
+fn gate_check_fails_on_integrity_finding_for_unresolved_annotation() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = dir.path();
     write_spec_with_unresolvable_annotation(workspace, "integrity_check");
@@ -60,6 +54,12 @@ fn gate_check_surfaces_integrity_finding_for_unresolved_annotation() {
     let output = run_loom_gate(workspace, "check");
     let stderr = String::from_utf8_lossy(&output.stderr);
 
+    assert!(
+        !output.status.success(),
+        "loom gate check must exit non-zero when an integrity finding \
+         surfaces. status={:?}\nstderr={stderr}",
+        output.status,
+    );
     assert!(
         stderr.contains("loom gate [integrity]"),
         "stderr must label the integrity-gate finding. stderr:\n{stderr}",
@@ -76,14 +76,11 @@ fn gate_check_surfaces_integrity_finding_for_unresolved_annotation() {
 }
 
 #[test]
-fn gate_verify_surfaces_integrity_finding_for_unresolved_annotation() {
+fn gate_verify_fails_on_integrity_finding_for_unresolved_annotation() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = dir.path();
     write_spec_with_unresolvable_annotation(workspace, "integrity_verify");
 
-    // `verify` cycles every tier; the test-tier subprocess (cargo /
-    // nextest) is not what we want exercising in this scope, so pin the
-    // tier set to `check` via the documented env var.
     let loom_bin = env!("CARGO_BIN_EXE_loom");
     let output = Command::new(loom_bin)
         .arg("--workspace")
@@ -97,6 +94,12 @@ fn gate_verify_surfaces_integrity_finding_for_unresolved_annotation() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
 
+    assert!(
+        !output.status.success(),
+        "loom gate verify must exit non-zero when an integrity finding \
+         surfaces. status={:?}\nstderr={stderr}",
+        output.status,
+    );
     assert!(
         stderr.contains("loom gate [integrity]"),
         "stderr must label the integrity-gate finding under verify. \
