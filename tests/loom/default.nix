@@ -95,6 +95,7 @@ let
     cp ${./run-tests.sh} $out/tests/loom/run-tests.sh
     cp ${../default.nix} $out/tests/default.nix
     cp -r ${../judges} $out/tests/judges
+    cp -r ${../city} $out/tests/city
     cp ${../../modules/flake/apps.nix} $out/modules/flake/apps.nix
     cp ${../../modules/flake/overlays.nix} $out/modules/flake/overlays.nix
     cp ${../../lib/sandbox/linux/entrypoint.sh} $out/lib/sandbox/linux/entrypoint.sh
@@ -134,7 +135,10 @@ let
   # `nix run`, and `podman` — none of which are available inside the
   # nix build sandbox. The container smoke
   # ([system](nix run .#test-loom)) stays in the separate `test-loom`
-  # app because it needs `podman` at runtime.
+  # app because it needs `podman` at runtime. `pkgs.nix` is on PATH so
+  # the integrity gate's first-token resolution succeeds for
+  # `[system](nix build .#...)` / `nix run ...` annotations even though
+  # the commands themselves don't execute under `LOOM_VERIFY_TIERS=check,test`.
   loomTests = craneLib.mkCargoDerivation (
     nextestArgs
     // {
@@ -142,6 +146,7 @@ let
       doCheck = true;
       nativeBuildInputs = nextestArgs.nativeBuildInputs ++ [
         pkgs.cargo-nextest
+        pkgs.nix
         loomPackage.bin
       ];
       buildPhaseCargoCommand = ''
