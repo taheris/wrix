@@ -27,15 +27,19 @@
   makeWrapper,
 }:
 
+let
+  inherit (lib) fileset licenses platforms;
+in
+
 buildNpmPackage (_finalAttrs: {
   pname = "pi-mono";
   version = "0.72.1";
 
   nodejs = nodejs_22;
 
-  src = lib.fileset.toSource {
+  src = fileset.toSource {
     root = ./.;
-    fileset = lib.fileset.unions [
+    fileset = fileset.unions [
       ./package.json
       ./package-lock.json
     ];
@@ -70,10 +74,10 @@ buildNpmPackage (_finalAttrs: {
   '';
 
   meta = {
-    description = "pi-mono coding agent (RPC backend for the Loom harness)";
+    description = "pi-mono coding agent (RPC runtime exposed via WRAPIX_AGENT=pi)";
     homepage = "https://github.com/badlogic/pi-mono";
-    license = lib.licenses.mit;
+    license = licenses.mit;
     mainProgram = "pi";
-    platforms = lib.platforms.linux ++ lib.platforms.darwin;
+    platforms = platforms.linux ++ platforms.darwin;
   };
 })

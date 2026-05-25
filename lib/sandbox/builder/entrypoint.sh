@@ -1,10 +1,8 @@
 #!/bin/sh
-set -eu
 
-# Builder entrypoint: starts sshd and nix-daemon for remote building
-#
-# Uses /bin/sh (static busybox) for bootstrapping so it works even when
-# /nix is mounted as an empty volume for persistent store support.
+# shellcheck disable=SC3040
+# Busybox ash supports `-o pipefail` even though POSIX sh does not
+set -euo pipefail
 
 BUILDER_USER="builder"
 BUILDER_UID=1000

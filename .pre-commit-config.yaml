@@ -35,12 +35,3 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-push]
-
-      # Integration tests (~1m, conditional on changes to relevant files)
-      - id: loom-integration
-        name: loom integration tests
-        entry: nix run .#test-loom
-        language: system
-        pass_filenames: false
-        files: ^loom/crates/[^/]+/tests/properties\.rs$
-        stages: [pre-push]

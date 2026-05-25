@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Verify shape and presence of the profile-image manifest produced by
-# `wrapix.lib.${system}.mkProfileImages` (specs/profiles.md, specs/loom-harness.md).
+# `wrapix.lib.${system}.mkProfileImages` (specs/profiles.md).
 #
 # Two contracts:
 #

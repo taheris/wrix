@@ -14,7 +14,7 @@
 # source multiple times and safe to source when no keys are present — it
 # becomes a no-op.
 
-if [ -n "${WRAPIX_DEPLOY_KEY:-}" ] && [ -f "$WRAPIX_DEPLOY_KEY" ]; then
+if [[ -n "${WRAPIX_DEPLOY_KEY:-}" ]] && [[ -f "$WRAPIX_DEPLOY_KEY" ]]; then
   export GIT_SSH_COMMAND="ssh -i $WRAPIX_DEPLOY_KEY -o IdentitiesOnly=yes"
 
   # Write SSH config so bare `ssh -T git@github.com` also works (not just
@@ -29,19 +29,22 @@ SSHEOF
   chmod 600 "$HOME/.ssh/config"
 fi
 
-if [ -n "${WRAPIX_SIGNING_KEY:-}" ] && [ -f "$WRAPIX_SIGNING_KEY" ]; then
+if [[ -n "${WRAPIX_SIGNING_KEY:-}" ]] && [[ -f "$WRAPIX_SIGNING_KEY" ]]; then
   git config --global gpg.format ssh
   git config --global user.signingkey "$WRAPIX_SIGNING_KEY"
 
   mkdir -p "$HOME/.config/git"
   PUBKEY_TMP="$HOME/.config/git/signing_key.pub.tmp"
+  # best-effort: ssh-keygen prints "no such file" / "invalid format" to stderr
+  # when the key is unreadable; the if-guard already handles failure, the
+  # stderr would just clutter container startup logs.
   if ssh-keygen -y -f "$WRAPIX_SIGNING_KEY" > "$PUBKEY_TMP" 2>/dev/null; then
     echo "${GIT_AUTHOR_EMAIL:-sandbox@wrapix.dev} $(cat "$PUBKEY_TMP")" > "$HOME/.config/git/allowed_signers"
     rm "$PUBKEY_TMP"
     git config --global gpg.ssh.allowedSignersFile "$HOME/.config/git/allowed_signers"
   fi
 
-  if [ "${WRAPIX_GIT_SIGN:-1}" != "0" ]; then
+  if [[ "${WRAPIX_GIT_SIGN:-1}" != "0" ]]; then
     git config --global commit.gpgsign true
   fi
 fi

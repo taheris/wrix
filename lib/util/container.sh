@@ -3,6 +3,12 @@
 #
 # Source this file to get cr_* functions that dispatch to the correct runtime.
 # On Darwin, assumes macOS 26+ with the Apple container CLI installed.
+#
+# SH-6 note: predicate wrappers below suppress stderr because both runtimes
+# write "no such object" / "not found" to stderr on missing IDs — the exit
+# code is the contract, the stderr noise is not. Cleanup wrappers
+# (`cr_*_delete`, `cr_stop`, `cr_rm`, `cr_image_prune`) use `|| true` to make
+# the operation idempotent against an already-gone target.
 
 if [[ -n "${CR:-}" ]]; then
   : # Caller pre-set the runtime (tests, overrides)

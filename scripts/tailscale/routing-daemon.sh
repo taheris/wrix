@@ -24,7 +24,10 @@ log() {
 log "Starting Tailscale routing daemon"
 log "Monitoring route changes..."
 
-# Run setup once at start
+# Run setup once at start.
+# best-effort: the daemon must keep running even when setup-routing fails
+# (no exit node yet, transient pfctl error). Capture the failure to the
+# log so we know it happened, but don't propagate.
 if [[ -x "$SETUP_SCRIPT" ]]; then
     log "Running initial route setup"
     "$SETUP_SCRIPT" 2>&1 || log "Initial setup skipped (exit node may not be active)"
@@ -35,9 +38,13 @@ route -n monitor | while read -r _; do
     # Debounce: wait for route changes to settle
     sleep 1
 
-    # Only act if Tailscale is active with exit node
+    # Only act if Tailscale is active with exit node.
+    # best-effort: status non-zero / stderr just means "no exit node right
+    # now" — fine, we just skip this tick.
     if tailscale status --json 2>/dev/null | grep -q '"ExitNodeStatus"'; then
         log "Route change detected, re-applying Tailscale routing fix"
+        # best-effort: setup-routing may fail mid-reconfiguration; log and
+        # wait for the next route change to retry.
         "$SETUP_SCRIPT" 2>&1 || log "Setup failed (will retry on next change)"
     fi
 done

@@ -149,8 +149,8 @@ profile.buildPackage {
 
 - `bin` is the output a `packages.<name>` entry consumes; it has **no** dependency edge on `clippy` or `nextest`. Because of that missing edge, consumers depending only on `bin` (e.g. the devshell) realize only `bin` on workspace edits; `clippy` and `nextest` have separate, unrealized store paths until `nix flake check` asks for them.
 - `clippy` and `nextest` are independent derivations the flake wires into `nix flake check` (one entry per check in `tests/default.nix`); they are the only outputs that see `extraSrcs`. `cargoArtifacts` and `bin` close over `src` only.
-- `extraSrcs` exists for test inputs the harness reads from outside the workspace (e.g. loom's `crates/loom/tests/annotations.rs` reads `specs/*.md`). Editing files in `extraSrcs` invalidates `clippy`/`nextest` but leaves `bin` and `cargoArtifacts` untouched — devshell-style consumers stay warm across test-fixture edits (e.g. `specs/*.md` changes).
-- `srcFilter` is the escape hatch for crates that need non-Rust files in `src` at compile time (e.g. loom-templates' askama `#[template(path = ...)]` reads `templates/*.md`). The default `null` keeps the spec invariant that editing `src/README.md` does not invalidate `bin`; passing a custom predicate lets the consumer broaden it (`craneLib.filterCargoSources` is exposed via `profile.craneLib` so callers can compose: `path: type: (craneFilter path type) || (lib.hasInfix "/templates/" path)`).
+- `extraSrcs` exists for test inputs the harness reads from outside the workspace (e.g. an integration test that reads fixture files under `tests/fixtures/`). Editing files in `extraSrcs` invalidates `clippy`/`nextest` but leaves `bin` and `cargoArtifacts` untouched — devshell-style consumers stay warm across test-fixture edits.
+- `srcFilter` is the escape hatch for crates that need non-Rust files in `src` at compile time (e.g. an askama-style `#[template(path = ...)]` that reads `templates/*.md`). The default `null` keeps the spec invariant that editing `src/README.md` does not invalidate `bin`; passing a custom predicate lets the consumer broaden it (`craneLib.filterCargoSources` is exposed via `profile.craneLib` so callers can compose: `path: type: (craneFilter path type) || (lib.hasInfix "/templates/" path)`).
 - `cargoArtifacts` is exposed as an output and accepted as an input so workspaces with multiple binaries can share dep compilation across calls. Single-binary callers ignore both directions.
 - `buildPackage` closes over `profile.toolchain` via crane's `overrideToolchain`, so `bin`/`clippy`/`nextest` resolve `rustc` to the same `/nix/store/...` path as the sandbox image and the host devshell PATH. `withToolchain` rebuilds `buildPackage` against the custom toolchain alongside `packages`/`env`/`shellHook`/`toolchain`.
 - Builds are pure — Nix-sandboxed, no `__noChroot`. Sccache covers the host/sandbox/sibling-app cargo paths (where it's mounted from `~/.cache/sccache` and persists across runs); `cargoArtifacts` is the equivalent caching layer for build-sandbox cargo invocations. The two layers do not overlap and do not share cache state.
@@ -222,10 +222,9 @@ Network allowlist: `pypi.org`, `files.pythonhosted.org`
 | `lib/default.nix` | Defines `deriveProfile` (merges `packages` / `mounts` / `env` / `networkAllowlist`; passes through other profile fields) |
 | `lib/sandbox/default.nix` | Imports `profiles.nix` with Linux `pkgs`, host `pkgs`, `fenix`, `crane`, and the treefmt wrapper; defines internal `extendProfile` helper |
 | `lib/sandbox/profiles.nix` | Defines `mkProfile`, `basePackages`, built-in `base`/`rust`/`python` profiles; builds rust toolchain via `fenixPkgs.stable.defaultToolchain` combined with `rust-src` and `rust-analyzer`; wires sccache and sccache env vars, `CARGO_INCREMENTAL=0`; exposes the per-profile host `shellHook` (rust prepends `${toolchain}/bin` to host PATH and re-exports sccache env); exposes `profile.toolchain` on the rust profile (default and `withToolchain` variants) so consumer-side derivations can share the sandbox's toolchain store path; defines `profile.buildPackage` on the rust profile via `(crane.mkLib pkgs).overrideToolchain (_: profile.toolchain)`, returning `{ bin; clippy; nextest; cargoArtifacts }` |
-| `lib/loom/default.nix` | Thin consumer of `wrapix.profiles.rust.buildPackage`; passes `extraSrcs` for `tests/loom/{mock-pi,mock-claude}` and `specs/`; returns the full `{ bin; clippy; nextest; cargoArtifacts }` attrset so the flake can wire each output independently |
 | `lib/mcp/tmux/mcp-server.nix` | Thin consumer of `wrapix.profiles.rust.buildPackage`; passes `buildInputs`/`propagatedBuildInputs = [ pkgs.tmux ]`; returns the full attrset |
-| `modules/flake/packages.nix` | `packages.loom` and `packages.tmux-mcp` consume `.bin` from their respective `buildPackage` invocations (no test/lint dep edge into the devshell rebuild path) |
-| `tests/default.nix` | `checks` includes `loom-clippy`, `loom-nextest`, `tmux-mcp-clippy`, `tmux-mcp-nextest` from the same `buildPackage` outputs |
+| `modules/flake/packages.nix` | `packages.tmux-mcp` consumes `.bin` from the `buildPackage` invocation (no test/lint dep edge into the devshell rebuild path) |
+| `tests/default.nix` | `checks` includes `tmux-mcp-clippy`, `tmux-mcp-nextest` from the same `buildPackage` outputs |
 | `lib/sandbox/linux/entrypoint.sh` | Contains no rustup bootstrap logic (toolchain is baked in at image build time) |
 | `lib/sandbox/darwin/entrypoint.sh` | Contains no rustup bootstrap logic |
 
@@ -278,20 +277,19 @@ pkgs.writeShellApplication {
 # Build a Rust package whose devshell rebuild path skips lint/test.
 # `bin` becomes packages.<name>; `clippy` and `nextest` become check entries.
 let
-  loom = profiles.rust.buildPackage {
-    src = ./loom;
-    cargoLock = ./loom/Cargo.lock;
+  myCrate = profiles.rust.buildPackage {
+    src = ./my-crate;
+    cargoLock = ./my-crate/Cargo.lock;
     extraSrcs = {
-      "tests/loom/mock-pi"     = ./tests/loom/mock-pi;
-      "tests/loom/mock-claude" = ./tests/loom/mock-claude;
-      "specs"                  = ./specs;
+      "tests/fixtures" = ./tests/fixtures;
+      "specs"          = ./specs;
     };
     nativeBuildInputs = [ pkgs.git ];
   };
 in {
-  packages.loom        = loom.bin;
-  checks.loom-clippy   = loom.clippy;
-  checks.loom-nextest  = loom.nextest;
+  packages.my-crate         = myCrate.bin;
+  checks.my-crate-clippy    = myCrate.clippy;
+  checks.my-crate-nextest   = myCrate.nextest;
 }
 ```
 
@@ -354,10 +352,8 @@ re-implement the tag logic. Loom maps the manifest entry's `ref` and
 respectively when building each spawn-config.
 
 The manifest is keyed by profile only. Agent runtime (claude vs pi) is
-selected at container start via `WRAPIX_AGENT` (see
-[loom-agent.md — Agent Runtime Layer](loom-agent.md#agent-runtime-layer)) —
-each profile image installs both runtimes, so a single
-`packages.image-<profile>` covers both agents.
+selected at container start via `WRAPIX_AGENT` — each profile image installs
+both runtimes, so a single `packages.image-<profile>` covers both agents.
 
 The repo's bundled manifest covering `base`, `rust`, `python` is exposed as
 `packages.profile-images`. External flakes adding custom profiles call
@@ -372,7 +368,7 @@ Profiles surface as three sibling output families:
 |--------|-------|-----|
 | `packages.image-<profile>` | OCI artifact (Linux: `streamLayeredImage`; Darwin: tarball); both agent runtimes installed | Consumers driving podman directly; manifest entries |
 | `packages.sandbox-<profile>[-pi]` | `makeWrapper` of `packages.wrapix` + `packages.image-<profile>`; bare form defaults to `WRAPIX_AGENT=claude`, `-pi` suffix sets `WRAPIX_AGENT=pi` | One-shot users (`nix run .#sandbox-rust`, `nix run .#sandbox-rust-pi`) |
-| `packages.profile-images` | JSON manifest from `mkProfileImages`, keyed by profile (not by profile×agent) | Loom (`LOOM_PROFILES_MANIFEST`) |
+| `packages.profile-images` | JSON manifest from `mkProfileImages`, keyed by profile (not by profile×agent) | External orchestrators (e.g. Loom via `LOOM_PROFILES_MANIFEST`) |
 
 `<profile>` covers the built-in profiles (`base`, `rust`, `python`). The
 `-mcp` axis (runtime MCP server selection) is independent of agent and
@@ -422,7 +418,7 @@ remains its own family of outputs in `modules/flake/packages.nix`.
   [system](bash tests/profiles/build-package.sh test_extra_srcs_scoped_to_lint_test)
 - [ ] `bin`, `clippy`, and `nextest` all close over `profile.toolchain`, so `${toolchain}/bin/rustc` resolves to the same `/nix/store/...` path across all three derivations, on both `profiles.rust` and `profiles.rust.withToolchain { ... }`
   [system](bash tests/profiles/build-package.sh test_build_package_toolchain_alignment)
-- [ ] `lib/loom/default.nix` and `lib/mcp/tmux/mcp-server.nix` are thin `wrapix.profiles.rust.buildPackage` consumers (no direct `pkgs.rustPlatform.buildRustPackage` or `makeRustPlatform` call); `packages.loom` and `packages.tmux-mcp` consume `.bin`; `tests/default.nix` exposes `loom-clippy`, `loom-nextest`, `tmux-mcp-clippy`, `tmux-mcp-nextest` checks
+- [ ] `lib/mcp/tmux/mcp-server.nix` is a thin `wrapix.profiles.rust.buildPackage` consumer (no direct `pkgs.rustPlatform.buildRustPackage` or `makeRustPlatform` call); `packages.tmux-mcp` consumes `.bin`; `tests/default.nix` exposes `tmux-mcp-clippy`, `tmux-mcp-nextest` checks
   [system](bash tests/profiles/build-package.sh test_consumers_migrated)
 
 ## Out of Scope

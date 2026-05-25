@@ -32,12 +32,16 @@ _prek_acquire_lock() {
 
     while true; do
         exec 9<>"$_lock_file"
+        # best-effort: flock prints "Resource temporarily unavailable" to stderr
+        # on contention; we just want the exit code to drive the poll loop.
         if flock --exclusive --nonblock 9 2>/dev/null; then
             printf '%d\n' $$ > "$_lock_file"
             return 0
         fi
 
         holder=$(<"$_lock_file") || holder=""
+        # best-effort: `kill -0` on a stale/dead PID prints "No such process";
+        # we only care about the exit code (alive vs dead) for reclaim logic.
         if [[ -n "$holder" ]] && ! kill -0 "$holder" 2>/dev/null; then
             echo "prek: lock held by dead PID $holder — reclaiming" >&2
             exec 9>&-

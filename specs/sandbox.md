@@ -60,8 +60,10 @@ The `SpawnConfig` JSON has stable top-level fields: `image_ref` (podman ref),
 `image_source` (Nix store path the launcher loads via `podman load` before
 invoking podman; idempotent on the image's hash tag), `workspace`, `env`
 (allowlist of `[key, value]` pairs), `agent_args`, plus consumer-defined
-fields the entrypoint reads from inside the container. Loom is the only v1
-producer; the schema is documented in [loom-harness.md](loom-harness.md).
+fields the entrypoint reads from inside the container. External orchestrators
+(e.g. Loom) are the only producers in practice; the schema is part of the
+wrapix CLI contract — see `wrapix spawn --help` and the parsing block in
+`lib/sandbox/{linux,darwin}/default.nix`.
 
 `wrapix run` (interactive) has no `--spawn-config` so it reads two env
 vars to know which image to load: `WRAPIX_DEFAULT_IMAGE_REF` (podman ref)

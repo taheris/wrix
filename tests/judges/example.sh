@@ -15,6 +15,6 @@
 # then passes the files + criterion to an LLM for PASS/FAIL evaluation.
 
 test_clear_error_messages() {
-  judge_files "loom/crates/loom-driver/src/error.rs"
+  judge_files "lib/sandbox/default.nix"
   judge_criterion "Error messages are clear and actionable, telling the user what went wrong and how to fix it"
 }

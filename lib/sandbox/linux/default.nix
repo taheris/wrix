@@ -177,10 +177,9 @@ in
         # Ensure project .claude dir exists for session persistence (/resume, /rename)
         # ~/.claude is container-local (tmpfs); entrypoint symlinks persistent items.
         # The dir is best-effort: when `wrapix spawn` is invoked from inside
-        # another wrapix sandbox (e.g. `nix run .#test-loom` from a dev
-        # container), $PROJECT_DIR is the host path and is not visible to the
-        # caller's filesystem. Skip on permission errors — the container's
-        # entrypoint creates the dir again when WRAPIX_AGENT=claude.
+        # another wrapix sandbox, $PROJECT_DIR is the host path and is not
+        # visible to the caller's filesystem. Skip on permission errors — the
+        # container's entrypoint creates the dir again when WRAPIX_AGENT=claude.
         #
         # mktemp the error-capture file so concurrent `wrapix spawn`
         # invocations don't race on a shared `/tmp/wrapix-mkdir-err`

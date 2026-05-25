@@ -42,17 +42,17 @@ validate_mount_mapping() {
 # Copy directories from staging to destination
 # VirtioFS maps files as root; unshare namespace remaps root to HOST_UID
 # This must run BEFORE SSH setup so deploy keys are in place
-if [ -n "${WRAPIX_DIR_MOUNTS:-}" ]; then
+if [[ -n "${WRAPIX_DIR_MOUNTS:-}" ]]; then
     IFS=',' read -ra DIR_MOUNTS <<< "$WRAPIX_DIR_MOUNTS"
     for mapping in "${DIR_MOUNTS[@]}"; do
-        [ -z "$mapping" ] && continue
+        [[ -z "$mapping" ]] && continue
         if ! validate_mount_mapping "$mapping"; then
             echo "Warning: Skipping malformed dir mount: $mapping" >&2
             continue
         fi
         src="${mapping%%:*}"
         dst=$(expand_path "${mapping#*:}")
-        if [ -d "$src" ]; then
+        if [[ -d "$src" ]]; then
             mkdir -p "$(dirname "$dst")"
             cp -r "$src" "$dst"
         fi
@@ -61,17 +61,17 @@ fi
 
 # Copy files from staging to destination
 # This includes deploy keys which are needed for SSH config
-if [ -n "${WRAPIX_FILE_MOUNTS:-}" ]; then
+if [[ -n "${WRAPIX_FILE_MOUNTS:-}" ]]; then
     IFS=',' read -ra MOUNTS <<< "$WRAPIX_FILE_MOUNTS"
     for mapping in "${MOUNTS[@]}"; do
-        [ -z "$mapping" ] && continue
+        [[ -z "$mapping" ]] && continue
         if ! validate_mount_mapping "$mapping"; then
             echo "Warning: Skipping malformed file mount: $mapping" >&2
             continue
         fi
         src="${mapping%%:*}"
         dst=$(expand_path "${mapping#*:}")
-        if [ -f "$src" ]; then
+        if [[ -f "$src" ]]; then
             mkdir -p "$(dirname "$dst")"
             cp "$src" "$dst"
         fi
@@ -79,12 +79,12 @@ if [ -n "${WRAPIX_FILE_MOUNTS:-}" ]; then
 fi
 
 # Fix socket permissions - VirtioFS may mount sockets with 0000 permissions
-if [ -n "${WRAPIX_SOCK_MOUNTS:-}" ]; then
+if [[ -n "${WRAPIX_SOCK_MOUNTS:-}" ]]; then
     IFS=',' read -ra SOCKS <<< "$WRAPIX_SOCK_MOUNTS"
     for sock in "${SOCKS[@]}"; do
-        [ -z "$sock" ] && continue
+        [[ -z "$sock" ]] && continue
         sock=$(expand_path "$sock")
-        if [ -e "$sock" ]; then
+        if [[ -e "$sock" ]]; then
             # best-effort: VirtioFS sometimes forbids chmod; fail silently so boot continues
             chmod 777 "$sock" 2>/dev/null || true
         fi
@@ -93,7 +93,7 @@ fi
 
 # Copy known_hosts from mounted directory (VirtioFS only supports dirs, not files)
 KNOWN_HOSTS_SRC="/etc/wrapix/known_hosts_dir/known_hosts"
-if [ -f "$KNOWN_HOSTS_SRC" ]; then
+if [[ -f "$KNOWN_HOSTS_SRC" ]]; then
   cp "$KNOWN_HOSTS_SRC" /etc/ssh/ssh_known_hosts
 fi
 
@@ -116,16 +116,16 @@ chmod 644 "$HOME/.claude.json" "$HOME/.claude/settings.json"
 # Runtime MCP server selection
 # Images built with mcpRuntime=true include per-server configs in /etc/wrapix/mcp/.
 # WRAPIX_MCP selects which servers to enable (comma-separated, default: all).
-if [ -d /etc/wrapix/mcp ]; then
+if [[ -d /etc/wrapix/mcp ]]; then
   mcp_enabled="${WRAPIX_MCP:-all}"
   mcp_servers="{}"
 
   for config_file in /etc/wrapix/mcp/*.json; do
-    [ -f "$config_file" ] || continue
+    [[ -f "$config_file" ]] || continue
     server_name=$(basename "$config_file" .json)
 
     # Filter by WRAPIX_MCP unless "all"
-    if [ "$mcp_enabled" != "all" ]; then
+    if [[ "$mcp_enabled" != "all" ]]; then
       if ! echo ",$mcp_enabled," | grep -qF ",$server_name,"; then
         continue
       fi
@@ -136,10 +136,10 @@ if [ -d /etc/wrapix/mcp ]; then
     # Apply runtime env var overrides
     case "$server_name" in
       tmux)
-        if [ -n "${WRAPIX_MCP_TMUX_AUDIT:-}" ]; then
+        if [[ -n "${WRAPIX_MCP_TMUX_AUDIT:-}" ]]; then
           server_config=$(echo "$server_config" | jq --arg v "$WRAPIX_MCP_TMUX_AUDIT" '.env.TMUX_DEBUG_AUDIT = $v')
         fi
-        if [ -n "${WRAPIX_MCP_TMUX_AUDIT_FULL:-}" ]; then
+        if [[ -n "${WRAPIX_MCP_TMUX_AUDIT_FULL:-}" ]]; then
           server_config=$(echo "$server_config" | jq --arg v "$WRAPIX_MCP_TMUX_AUDIT_FULL" '.env.TMUX_DEBUG_AUDIT_FULL = $v')
         fi
         ;;
@@ -148,7 +148,7 @@ if [ -d /etc/wrapix/mcp ]; then
     mcp_servers=$(echo "$mcp_servers" | jq --arg name "$server_name" --argjson config "$server_config" '.[$name] = $config')
   done
 
-  if [ "$mcp_servers" != "{}" ]; then
+  if [[ "$mcp_servers" != "{}" ]]; then
     jq --argjson servers "$mcp_servers" '.mcpServers = $servers' \
       "$HOME/.claude/settings.json" > "$HOME/.claude/settings.json.tmp"
     mv "$HOME/.claude/settings.json.tmp" "$HOME/.claude/settings.json"
@@ -156,7 +156,7 @@ if [ -d /etc/wrapix/mcp ]; then
 fi
 
 # Write project-level settings only if missing (preserve user customizations)
-if [ ! -f /workspace/.claude/settings.json ]; then
+if [[ ! -f /workspace/.claude/settings.json ]]; then
   cp /etc/wrapix/claude-settings.json /workspace/.claude/settings.json
 fi
 
@@ -164,7 +164,7 @@ fi
 for item in projects plans todos file-history paste-cache backups \
             debug session-env plugins shell-snapshots \
             history.jsonl settings.local.json stats-cache.json; do
-  if [ -e "/workspace/.claude/$item" ] && [ ! -e "$HOME/.claude/$item" ]; then
+  if [[ -e "/workspace/.claude/$item" ]] && [[ ! -e "$HOME/.claude/$item" ]]; then
     ln -s "/workspace/.claude/$item" "$HOME/.claude/$item"
   fi
 done
@@ -173,14 +173,14 @@ done
 # VirtioFS can't pass Unix sockets, so the launcher passes
 # BEADS_DOLT_SERVER_PORT for TCP. The socat bridge on the host retries
 # until the container network interface appears, so we wait here too.
-if [ -f /workspace/.beads/config.yaml ]; then
+if [[ -f /workspace/.beads/config.yaml ]]; then
   # best-effort: missing/malformed metadata.json -> default to sqlite backend
   BACKEND=$(jq -r '.backend // "sqlite"' /workspace/.beads/metadata.json 2>/dev/null || echo "sqlite")
 
-  if [ "$BACKEND" = "dolt" ]; then
-    if [ -n "${BEADS_DOLT_SERVER_HOST:-}" ] && [ -n "${BEADS_DOLT_SERVER_PORT:-}" ]; then
+  if [[ "$BACKEND" = "dolt" ]]; then
+    if [[ -n "${BEADS_DOLT_SERVER_HOST:-}" ]] && [[ -n "${BEADS_DOLT_SERVER_PORT:-}" ]]; then
       export BEADS_DOLT_AUTO_START=0
-    elif [ -n "${BEADS_DOLT_SERVER_PORT:-}" ]; then
+    elif [[ -n "${BEADS_DOLT_SERVER_PORT:-}" ]]; then
       BEADS_DOLT_SERVER_HOST=$(ip route 2>/dev/null | awk '/default/ {print $3; exit}')
       export BEADS_DOLT_SERVER_HOST
       export BEADS_DOLT_AUTO_START=0
@@ -191,7 +191,7 @@ if [ -f /workspace/.beads/config.yaml ]; then
         fi
         sleep 0.5
       done
-    elif [ -S /workspace/.wrapix/dolt.sock ]; then
+    elif [[ -S /workspace/.wrapix/dolt.sock ]]; then
       export BEADS_DOLT_SERVER_SOCKET=/workspace/.wrapix/dolt.sock
       export BEADS_DOLT_AUTO_START=0
     else
@@ -203,7 +203,7 @@ if [ -f /workspace/.beads/config.yaml ]; then
   else
     # best-effort: config.yaml without issue-prefix -> PREFIX empty, bd init skipped
     PREFIX=$(yq -r '.["issue-prefix"] // ""' /workspace/.beads/config.yaml 2>/dev/null || echo "")
-    if [ -n "$PREFIX" ] && [ -f /workspace/.beads/issues.jsonl ]; then
+    if [[ -n "$PREFIX" ]] && [[ -f /workspace/.beads/issues.jsonl ]]; then
       bd init --prefix "$PREFIX" --from-jsonl --quiet --skip-hooks --skip-merge-driver
     fi
   fi
@@ -215,7 +215,7 @@ fi
 # Wait for external network if host is fixing a VPN route conflict.
 # The host's fixVpnRoute adds a route for the container subnet once
 # bridge100 appears; this loop blocks until internet is reachable.
-if [ "${WRAPIX_WAIT_FOR_ROUTE:-}" = "1" ]; then
+if [[ "${WRAPIX_WAIT_FOR_ROUTE:-}" = "1" ]]; then
   _route_ok=false
   for _i in $(seq 1 30); do
     if nc -z -w1 1.1.1.1 443 2>/dev/null; then
@@ -224,14 +224,14 @@ if [ "${WRAPIX_WAIT_FOR_ROUTE:-}" = "1" ]; then
     fi
     sleep 0.5
   done
-  if [ "$_route_ok" = false ]; then
+  if [[ "$_route_ok" = false ]]; then
     echo "Warning: network still unreachable after route fix timeout" >&2
   fi
 fi
 
 # Apply network filtering when WRAPIX_NETWORK=limit
 # Runs as root (before unshare), so iptables works without extra capabilities
-if [ "${WRAPIX_NETWORK:-open}" = "limit" ]; then
+if [[ "${WRAPIX_NETWORK:-open}" = "limit" ]]; then
   echo "Network mode: limit (restricting outbound to allowlist)" >&2
 
   if ! command -v iptables >/dev/null 2>&1; then
@@ -250,11 +250,11 @@ if [ "${WRAPIX_NETWORK:-open}" = "limit" ]; then
     # Resolve and allow each domain in the allowlist
     IFS=',' read -ra DOMAINS <<< "${WRAPIX_NETWORK_ALLOWLIST:-}"
     for domain in "${DOMAINS[@]}"; do
-      [ -z "$domain" ] && continue
+      [[ -z "$domain" ]] && continue
       # Resolve domain to IPv4 addresses
       # best-effort: unresolvable domain -> no iptables rule added, traffic stays blocked
       while IFS=' ' read -r ip _rest; do
-        [ -z "$ip" ] && continue
+        [[ -z "$ip" ]] && continue
         iptables -A OUTPUT -d "$ip" -j ACCEPT
       done < <(getent ahostsv4 "$domain" 2>/dev/null | awk '{print $1}' | sort -u)
     done
@@ -267,10 +267,10 @@ if [ "${WRAPIX_NETWORK:-open}" = "limit" ]; then
       ip6tables -A OUTPUT -p tcp --dport 53 -j ACCEPT
 
       for domain in "${DOMAINS[@]}"; do
-        [ -z "$domain" ] && continue
+        [[ -z "$domain" ]] && continue
         # best-effort: no IPv6 records -> no ip6tables rule, domain only reachable via IPv4
         while IFS=' ' read -r ip _rest; do
-          [ -z "$ip" ] && continue
+          [[ -z "$ip" ]] && continue
           ip6tables -A OUTPUT -d "$ip" -j ACCEPT
         done < <(getent ahostsv6 "$domain" 2>/dev/null | awk '{print $1}' | sort -u)
       done
@@ -293,20 +293,20 @@ write_session_log() {
   local duration=$(( end_epoch - SESSION_START_EPOCH ))
 
   local mode="interactive"
-  if [ "${LOOM_MODE:-}" = "1" ]; then
+  if [[ "${LOOM_MODE:-}" = "1" ]]; then
     mode="loom"
   fi
 
   # Read bead ID if loom wrote one during the session
   local bead_id=""
-  if [ -f /tmp/wrapix-bead-id ]; then
+  if [[ -f /tmp/wrapix-bead-id ]]; then
     # best-effort: loom didn't write a bead id -> field stays empty in session log
     bead_id=$(cat /tmp/wrapix-bead-id 2>/dev/null || true)
   fi
 
   # Find most recent claude session ID from history
   local claude_session_id=""
-  if [ -f /workspace/.claude/history.jsonl ]; then
+  if [[ -f /workspace/.claude/history.jsonl ]]; then
     # best-effort: missing/malformed history.jsonl -> session id stays empty
     claude_session_id=$(tail -1 /workspace/.claude/history.jsonl 2>/dev/null \
       | jq -r '.sessionId // empty' 2>/dev/null || true)
@@ -344,7 +344,7 @@ write_session_log() {
 # so VirtioFS root-owned files appear as HOST_UID — proper UID mapping)
 # Run without exec so session log can be written after exit
 MAIN_EXIT=0
-if [ $# -gt 0 ]; then
+if [[ $# -gt 0 ]]; then
   # Command override: run the specified command instead of Claude
   unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
     "$@" || MAIN_EXIT=$?
@@ -352,7 +352,7 @@ else
   # Build system prompt only for interactive claude (not needed for command
   # overrides).  Requires /etc/wrapix-prompts/wrapix-prompt.
   SYSTEM_PROMPT=$(cat /etc/wrapix-prompts/wrapix-prompt)
-  if [ -f /workspace/docs/README.md ]; then
+  if [[ -f /workspace/docs/README.md ]]; then
     SYSTEM_PROMPT="$SYSTEM_PROMPT
 
 ## Project Context (from docs/README.md)

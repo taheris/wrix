@@ -1,6 +1,12 @@
 # Architecture
 
-Wrapix is a secure sandbox for running [Claude Code](https://claude.ai/code) in isolated containers. It provides container isolation on Linux (Podman) and macOS (Apple container CLI), with tooling for notifications, remote builds, and integration hooks for external orchestrators such as [Loom](https://github.com/taheris/loom).
+Wrapix is a secure sandbox for running AI coding agents in isolated containers.
+It provides container isolation on Linux (Podman) and macOS (Apple container
+CLI), with built-in support for three agent runtimes
+([Claude Code](https://claude.ai/code), [pi-mono](https://github.com/badlogic/pi-mono),
+and a consumer-supplied *direct* runner), plus tooling for notifications,
+remote Nix builds, and integration hooks for external orchestrators such as
+[Loom](https://github.com/taheris/loom).
 
 ## Design Principles
 
@@ -8,7 +14,8 @@ Wrapix is a secure sandbox for running [Claude Code](https://claude.ai/code) in 
 2. **Least privilege** — Containers run without elevated capabilities
 3. **User namespace mapping** — Files created in `/workspace` have correct host ownership
 4. **Open network** — Full internet access for web research, git, package managers
-5. **Nix all the way down** — Config, images, and orchestration are deterministic Nix outputs
+5. **Nix all the way down** — Config, images, and the launcher are deterministic Nix outputs
+6. **Agent-runtime axis is orthogonal to the profile axis** — `claude`/`pi`/`direct` compose with `base`/`rust`/`python` rather than multiplying out
 
 ## Platform Support
 
@@ -23,14 +30,15 @@ Both platforms provide full network connectivity without elevated privileges. Th
 
 ```
 lib/
-├── default.nix          # Top-level API: mkSandbox, profiles
+├── default.nix          # Top-level API: mkSandbox, profiles, mkProfileImages
 ├── sandbox/             # Container isolation
 │   ├── default.nix      # Platform dispatcher, MCP integration, mkProfileImages
 │   ├── profiles.nix     # Built-in profiles (base, rust, python)
-│   ├── image.nix        # OCI image builder
+│   ├── image.nix        # OCI image builder; selects agent runtime layer
 │   ├── manifest.nix     # Profile→image JSON manifest consumed by orchestrators
 │   ├── linux/           # Podman implementation + krun microVM support
-│   └── darwin/          # Apple container implementation
+│   ├── darwin/          # Apple container implementation
+│   └── builder/         # Static-busybox bootstrap entrypoint for the Linux builder
 ├── beads/               # Per-workspace beads-dolt container management
 ├── mcp/                 # MCP server registry
 │   ├── default.nix      # Server registry: { tmux, playwright }
@@ -38,26 +46,28 @@ lib/
 │   └── playwright/      # Playwright MCP server
 ├── pi-mono/             # Pi agent runtime layer (Node.js + pi binary)
 ├── prek/                # Pre-commit hook shims (flock-wrapped)
-├── builder/             # Linux builder for macOS
+├── builder/             # macOS-side CLI for the Linux remote builder
 ├── notify/              # Desktop notifications
-└── util/                # Shared utilities
+└── util/                # Shared utilities (container CLI shim, SSH, paths, …)
 
 docs/
 ├── README.md            # Project overview, terminology
 ├── architecture.md      # This file
 ├── spec-conventions.md  # Spec-authoring conventions
-└── style-rules.md       # Code standards
+└── style-rules.md       # Code standards (SH-, NX-, DOC-, GIT-, TST-, RS-, COM-, CLI-)
 ```
 
 ## Component Overview
 
 | Component | Purpose | Entry Point |
 |-----------|---------|-------------|
-| Sandbox | Container creation and lifecycle (`wrapix run`/`spawn`) | `mkSandbox` |
+| Sandbox | Container creation and lifecycle | `mkSandbox`, `wrapix run`/`spawn` |
 | Profiles | Pre-configured dev environments | `profiles.{base,rust,python}` |
-| MCP Servers | Optional capabilities (tmux, playwright) | `mcp.tmux`, `mcp.playwright` |
+| Agent Runtime | Binary the entrypoint execs inside the container | `agent = "claude" \| "pi" \| "direct"` |
+| MCP Servers | Optional capabilities exposed to the agent | `mcp.tmux`, `mcp.playwright`, `mcpRuntime = true` |
 | Image Builder | OCI image generation via Nix | `lib/sandbox/image.nix` |
-| Notifications | Desktop alerts when Claude waits | `wrapix-notify`, `wrapix-notifyd` |
+| Profile Manifest | JSON map of profile → `{ref, source}` for orchestrators | `packages.profile-images` (`mkProfileImages`) |
+| Notifications | Desktop alerts when the agent waits | `wrapix-notify`, `wrapix-notifyd` |
 | Linux Builder | Remote Nix builds on macOS | `wrapix-builder` |
 
 ## Sandbox Launcher
@@ -69,20 +79,38 @@ The launcher and the OCI image are separate Nix outputs, composed at the consume
 | `packages.wrapix` | Profile-agnostic launcher binary; reads image ref/source at runtime |
 | `packages.image-<profile>` | Per-profile OCI artifact (claude + pi runtimes both installed) |
 | `packages.sandbox-<profile>[-pi]` | `makeWrapper` of the launcher with image ref/source + `WRAPIX_AGENT` baked in — the user-facing `nix run .#sandbox-rust` target |
-| `packages.profile-images` | JSON manifest mapping profile → `{ref, source}`, consumed by orchestrators that need to look up an image by profile name |
+| `packages.profile-images` | JSON manifest mapping profile → `{ref, source}`, for orchestrators that look up images by profile name |
 
 The launcher exposes two subcommands sharing the same container construction (mounts, env passthrough, deploy key):
 
-- `wrapix run [DIR] [CMD…]` — interactive (TTY); reads `WRAPIX_DEFAULT_IMAGE_REF`/`WRAPIX_DEFAULT_IMAGE_SOURCE` from the env. The `sandbox-<profile>` wrappers set both; orchestrators export them from the profile-image manifest.
-- `wrapix spawn --spawn-config <file> [--stdio]` — programmatic dispatch. Reads image ref/source plus workspace, env allowlist, and agent args from a JSON `SpawnConfig`. The agent runtime (`claude`, `pi`, `direct`) is selected at container start via `WRAPIX_AGENT`, not baked per-image.
+- `wrapix run [DIR] [CMD…]` — interactive (TTY). Reads `WRAPIX_DEFAULT_IMAGE_REF`/`WRAPIX_DEFAULT_IMAGE_SOURCE` from the env. The `sandbox-<profile>` wrappers set both; orchestrators export them from the profile-image manifest.
+- `wrapix spawn --spawn-config <file> [--stdio]` — programmatic dispatch. Reads image ref/source plus workspace, env allowlist, and agent args from a JSON `SpawnConfig`. `--stdio` adds `WRAPIX_STDIO=1` so claude runs in `--input-format stream-json` mode.
 
 See [specs/sandbox.md](../specs/sandbox.md) and [specs/profiles.md](../specs/profiles.md) for the full launcher and manifest contracts.
 
-### Direct-mode agent (consumer-supplied)
+## Agent Runtimes
 
-`mkSandbox { agent = "direct"; directRunner = ...; }` bakes a consumer-supplied
-direct-runner binary into the image. Wrapix doesn't ship its own runner — pass
-e.g. `loom.packages.${system}.default` from a flake input.
+`WRAPIX_AGENT` (selected by the `sandbox-<profile>[-pi]` wrapper or set
+explicitly) controls which agent binary the entrypoint execs after staging
+`/workspace`, settings, and SSH credentials:
+
+| Value | Behaviour |
+|-------|-----------|
+| `claude` *(default)* | Interactive `claude` TTY, or `claude --print --input-format stream-json` when `WRAPIX_STDIO=1` |
+| `pi` | `pi --mode rpc` — JSONL RPC on stdio. Requires `agent = "pi"` at image-build time so `pkgs.pi-mono` is in the closure. |
+| `direct` | Execs `loom-direct-runner` (or any consumer-named binary). Requires `agent = "direct"` and `directRunner = …` at image-build time. |
+
+The `claude` and `pi` runtimes live alongside each other in every
+`packages.image-<profile>` — picking between them is a runtime decision.
+`direct` is build-time because the runner binary comes from outside wrapix.
+
+### Direct mode (orchestrator integration)
+
+`mkSandbox { agent = "direct"; directRunner = ...; }` is the integration
+seam for external orchestrators. The orchestrator provides its own Linux
+binary (e.g. Loom's `loom-direct-runner`) and drives the container over
+JSONL stdio. Wrapix doesn't ship its own runner — see
+[Loom's flake](https://github.com/taheris/loom) for the canonical wiring.
 
 ## Security Model
 
@@ -93,6 +121,8 @@ e.g. `loom.packages.${system}.default` from a flake input.
 ### MicroVM Boundary (Linux)
 
 On Linux with KVM, containers can optionally run inside a [libkrun](https://github.com/containers/libkrun) microVM (`podman --runtime krun`) for hardware-level isolation. Set `WRAPIX_MICROVM=1` to opt in.
+
+See [specs/security-review.md](../specs/security-review.md) for the full threat model.
 
 ## MCP Integration
 
@@ -106,4 +136,23 @@ mkSandbox {
 }
 ```
 
+`mcpRuntime = true` bundles every registered server into the image and lets
+`WRAPIX_MCP=<csv>` pick at container start.
+
 See [tmux-mcp.md](../specs/tmux-mcp.md) and [playwright-mcp.md](../specs/playwright-mcp.md) for details.
+
+## State Layout
+
+All wrapix state lives under `.wrapix/` in the host workspace, mounted at
+`/workspace/.wrapix/` inside the container:
+
+```
+.wrapix/
+├── log/             # Session transcripts (one JSON file per session)
+├── push-verified    # Touched by lib/prek/hooks/pre-push on green nix flake check
+├── prek.lock        # flock file serializing concurrent commits/pushes
+└── dolt.sock        # Per-workspace beads-dolt server socket
+```
+
+External orchestrators (e.g. Loom) may keep their own state under
+`.wrapix/<name>/` — wrapix itself doesn't manage that.

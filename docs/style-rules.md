@@ -310,7 +310,7 @@ Cross-language: applies to shell, nix, rust, and any other source we keep here.
   silently because nothing breaks when the target moves. Acceptable
   references: a stable section name when load-bearing, an
   RFC/spec citation that names the document not its layout
-  (`per RFC 7230 §3.2`, `per specs/loom-harness.md Event Schema`).
+  (`per RFC 7230 §3.2`, `per specs/sandbox.md § Image Loading`).
   Best is no cross-reference at all — describe what the code itself
   asserts.
 

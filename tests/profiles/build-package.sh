@@ -15,10 +15,10 @@
 #      bin/clippy/nextest all close over profile.toolchain on both
 #      profiles.rust and profiles.rust.withToolchain { ... }.
 #   7. test_consumers_migrated
-#      lib/loom/default.nix and lib/mcp/tmux/mcp-server.nix consume
-#      profile.buildPackage (no rustPlatform.buildRustPackage / makeRustPlatform);
-#      tests/default.nix exposes the four new check entries; modules/flake/packages.nix
-#      extracts .bin from each loomPackage / tmuxMcpPackage call.
+#      lib/mcp/tmux/mcp-server.nix consumes profile.buildPackage (no
+#      rustPlatform.buildRustPackage / makeRustPlatform); tests/default.nix
+#      exposes the clippy/nextest check entries; modules/flake/packages.nix
+#      extracts .bin from tmuxMcpPackage.
 #
 # Usage:
 #   tests/profiles/build-package.sh                    # run all 7 tests
@@ -37,7 +37,7 @@ TOOLCHAIN_FIXTURE_SHA="sha256-SXRtAuO4IqNOQq+nLbrsDFbVk+3aVA8NNpSZsKlVH/8="
 TMPDIRS=()
 cleanup() {
   for d in "${TMPDIRS[@]+"${TMPDIRS[@]}"}"; do
-    [ -n "$d" ] && [ -d "$d" ] && rm -rf "$d"
+    [[ -n "$d" ]] && [[ -d "$d" ]] && rm -rf "$d"
   done
 }
 trap cleanup EXIT
@@ -92,7 +92,7 @@ eval_drvs() {
 
 assert_eq() {
   local label="$1" got="$2" want="$3"
-  if [ "$got" != "$want" ]; then
+  if [[ "$got" != "$want" ]]; then
     echo "FAIL: $label: expected equal" >&2
     echo "  got:  $got" >&2
     echo "  want: $want" >&2
@@ -102,7 +102,7 @@ assert_eq() {
 
 assert_ne() {
   local label="$1" got="$2" other="$3"
-  if [ "$got" = "$other" ]; then
+  if [[ "$got" = "$other" ]]; then
     echo "FAIL: $label: expected different drvPaths, both were $got" >&2
     return 1
   fi
@@ -137,7 +137,7 @@ test_build_package_exposed() {
 
   local hasFn
   hasFn=$(echo "$result" | jq -r '.hasBuildPackage')
-  if [ "$hasFn" != "true" ]; then
+  if [[ "$hasFn" != "true" ]]; then
     echo "FAIL: profiles.rust.buildPackage is not a function" >&2
     return 1
   fi
@@ -145,14 +145,14 @@ test_build_package_exposed() {
   local keys
   keys=$(echo "$result" | jq -r '.keys | sort | join(",")')
   local want_keys="bin,cargoArtifacts,clippy,nextest"
-  if [ "$keys" != "$want_keys" ]; then
+  if [[ "$keys" != "$want_keys" ]]; then
     echo "FAIL: buildPackage returned keys [$keys], expected [$want_keys]" >&2
     return 1
   fi
 
   local bad
   bad=$(echo "$result" | jq -r '.types | to_entries | map(select(.value != "derivation")) | map(.key) | join(",")')
-  if [ -n "$bad" ]; then
+  if [[ -n "$bad" ]]; then
     echo "FAIL: buildPackage outputs that are not derivations: $bad" >&2
     return 1
   fi
@@ -286,7 +286,7 @@ test_build_package_toolchain_alignment() {
     clippy=$(echo "$result" | jq -r '.clippy')
     nextest=$(echo "$result" | jq -r '.nextest')
 
-    if [ -z "$toolchain" ] || [ "$toolchain" = "null" ]; then
+    if [[ -z "$toolchain" ]] || [[ "$toolchain" = "null" ]]; then
       echo "FAIL: [$name] profile.toolchain.drvPath is empty" >&2
       return 1
     fi
@@ -306,25 +306,24 @@ test_build_package_toolchain_alignment() {
 # ============================================================================
 test_consumers_migrated() {
   local file pat
-  for file in "$REPO_ROOT/lib/loom/default.nix" "$REPO_ROOT/lib/mcp/tmux/mcp-server.nix"; do
-    if [ ! -f "$file" ]; then
-      echo "FAIL: expected consumer file missing: $file" >&2
-      return 1
-    fi
-    for pat in 'rustPlatform.buildRustPackage' 'makeRustPlatform'; do
-      if grep -qF "$pat" "$file"; then
-        echo "FAIL: $file still references '$pat'" >&2
-        return 1
-      fi
-    done
-    if ! grep -qF 'rustProfile.buildPackage' "$file"; then
-      echo "FAIL: $file does not call rustProfile.buildPackage" >&2
+  file="$REPO_ROOT/lib/mcp/tmux/mcp-server.nix"
+  if [[ ! -f "$file" ]]; then
+    echo "FAIL: expected consumer file missing: $file" >&2
+    return 1
+  fi
+  for pat in 'rustPlatform.buildRustPackage' 'makeRustPlatform'; do
+    if grep -qF "$pat" "$file"; then
+      echo "FAIL: $file still references '$pat'" >&2
       return 1
     fi
   done
+  if ! grep -qF 'rustProfile.buildPackage' "$file"; then
+    echo "FAIL: $file does not call rustProfile.buildPackage" >&2
+    return 1
+  fi
 
   local checks_file="$REPO_ROOT/tests/default.nix"
-  for pat in loom-clippy loom-nextest tmux-mcp-clippy tmux-mcp-nextest; do
+  for pat in tmux-mcp-clippy tmux-mcp-nextest; do
     if ! grep -qF "$pat" "$checks_file"; then
       echo "FAIL: $checks_file is missing check entry '$pat'" >&2
       return 1
@@ -332,12 +331,10 @@ test_consumers_migrated() {
   done
 
   local pkgs_file="$REPO_ROOT/modules/flake/packages.nix"
-  for pat in 'wrapix.loomPackage.bin' 'wrapix.tmuxMcpPackage.bin'; do
-    if ! grep -qF "$pat" "$pkgs_file"; then
-      echo "FAIL: $pkgs_file does not extract .bin via '$pat'" >&2
-      return 1
-    fi
-  done
+  if ! grep -qF 'wrapix.tmuxMcpPackage.bin' "$pkgs_file"; then
+    echo "FAIL: $pkgs_file does not extract .bin via 'wrapix.tmuxMcpPackage.bin'" >&2
+    return 1
+  fi
 }
 
 # ----------------------------------------------------------------------------
@@ -364,13 +361,13 @@ run_all() {
       failed=$((failed + 1))
     fi
   done
-  if [ "$failed" -ne 0 ]; then
+  if [[ "$failed" -ne 0 ]]; then
     echo "$failed test(s) failed" >&2
     return 1
   fi
 }
 
-if [ $# -eq 0 ]; then
+if [[ $# -eq 0 ]]; then
   run_all
 else
   fn="$1"

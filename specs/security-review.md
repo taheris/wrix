@@ -203,11 +203,13 @@ Lifecycle defines what persists between runs.
 Containers are ephemeral (`--rm`). Nothing inside the container persists after exit except:
 - `/workspace` — bind-mounted from host, persists all workspace changes
 - `.wrapix/log/` — session transcripts (see below)
-- `.wrapix/loom/` — loom working state (state DB, logs, scratchpads)
+
+External orchestrators may keep their own state directories under
+`.wrapix/<name>/` (e.g. `.wrapix/loom/`); wrapix itself does not own them.
 
 ### Session Transcript as Audit Trail
 
-A structured session summary is persisted to `.wrapix/log/` after each wrapix session (both interactive and loom-orchestrated).
+A structured session summary is persisted to `.wrapix/log/` after each wrapix session (interactive or orchestrator-driven).
 
 Each record captures:
 - Session timestamp and duration
@@ -217,7 +219,7 @@ Each record captures:
 - Network-accessing tool calls
 - Link to full `.claude/` session data
 
-Loom-orchestrated sessions additionally link the log entry to the bead ID for traceability.
+Orchestrator-driven sessions (signalled by `LOOM_MODE=1`) additionally link the log entry to the bead ID for traceability.
 
 **Rationale**: The agent's own session transcript is a richer audit trail than OS-level logging (strace, process tree) because it includes intent and reasoning, not just syscalls. For the primary threat (policy leakage from misbehaving agent / prompt injection), the session transcript is sufficient. OS-level audit would only matter for an adversarial-agent threat model (agent deliberately hiding actions), which is a different class of problem.
 
@@ -227,9 +229,8 @@ All wrapix state lives under `.wrapix/`:
 
 ```
 .wrapix/
-├── log/        # Session transcripts
-└── loom/       # Loom working state
-    ├── state.db
-    ├── logs/
-    └── scratch/
+└── log/        # Session transcripts
 ```
+
+External orchestrators may add their own subdirectories (e.g. `.wrapix/loom/`);
+those are out of wrapix's lifecycle.

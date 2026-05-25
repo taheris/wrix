@@ -23,7 +23,7 @@ case "$WRAPIX_AGENT" in
     ;;
 esac
 
-if [ "$WRAPIX_AGENT" = "claude" ]; then
+if [[ "$WRAPIX_AGENT" = "claude" ]]; then
   # Initialize Claude config and settings
   # ~/.claude is a container-local directory (tmpfs, not mounted from host) so that
   # user-level settings.json stays separate from project-level settings.json.
@@ -37,16 +37,16 @@ if [ "$WRAPIX_AGENT" = "claude" ]; then
   # Runtime MCP server selection
   # Images built with mcpRuntime=true include per-server configs in /etc/wrapix/mcp/.
   # WRAPIX_MCP selects which servers to enable (comma-separated, default: all).
-  if [ -d /etc/wrapix/mcp ]; then
+  if [[ -d /etc/wrapix/mcp ]]; then
     mcp_enabled="${WRAPIX_MCP:-all}"
     mcp_servers="{}"
 
     for config_file in /etc/wrapix/mcp/*.json; do
-      [ -f "$config_file" ] || continue
+      [[ -f "$config_file" ]] || continue
       server_name=$(basename "$config_file" .json)
 
       # Filter by WRAPIX_MCP unless "all"
-      if [ "$mcp_enabled" != "all" ]; then
+      if [[ "$mcp_enabled" != "all" ]]; then
         if ! echo ",$mcp_enabled," | grep -qF ",$server_name,"; then
           continue
         fi
@@ -57,10 +57,10 @@ if [ "$WRAPIX_AGENT" = "claude" ]; then
       # Apply runtime env var overrides
       case "$server_name" in
         tmux)
-          if [ -n "${WRAPIX_MCP_TMUX_AUDIT:-}" ]; then
+          if [[ -n "${WRAPIX_MCP_TMUX_AUDIT:-}" ]]; then
             server_config=$(echo "$server_config" | jq --arg v "$WRAPIX_MCP_TMUX_AUDIT" '.env.TMUX_DEBUG_AUDIT = $v')
           fi
-          if [ -n "${WRAPIX_MCP_TMUX_AUDIT_FULL:-}" ]; then
+          if [[ -n "${WRAPIX_MCP_TMUX_AUDIT_FULL:-}" ]]; then
             server_config=$(echo "$server_config" | jq --arg v "$WRAPIX_MCP_TMUX_AUDIT_FULL" '.env.TMUX_DEBUG_AUDIT_FULL = $v')
           fi
           ;;
@@ -69,7 +69,7 @@ if [ "$WRAPIX_AGENT" = "claude" ]; then
       mcp_servers=$(echo "$mcp_servers" | jq --arg name "$server_name" --argjson config "$server_config" '.[$name] = $config')
     done
 
-    if [ "$mcp_servers" != "{}" ]; then
+    if [[ "$mcp_servers" != "{}" ]]; then
       jq --argjson servers "$mcp_servers" '.mcpServers = $servers' \
         "$HOME/.claude/settings.json" > "$HOME/.claude/settings.json.tmp"
       mv "$HOME/.claude/settings.json.tmp" "$HOME/.claude/settings.json"
@@ -78,7 +78,7 @@ if [ "$WRAPIX_AGENT" = "claude" ]; then
 
   # Seed project-level settings if missing, then sync env vars from image
   mkdir -p /workspace/.claude
-  if [ ! -f /workspace/.claude/settings.json ]; then
+  if [[ ! -f /workspace/.claude/settings.json ]]; then
     cp /etc/wrapix/claude-settings.json /workspace/.claude/settings.json
   else
     jq -s '.[1].env = (.[1].env // {}) * .[0].env | .[1]' \
@@ -91,7 +91,7 @@ if [ "$WRAPIX_AGENT" = "claude" ]; then
   for item in projects plans todos file-history paste-cache backups \
               debug session-env plugins shell-snapshots \
               history.jsonl settings.local.json stats-cache.json; do
-    if [ -e "/workspace/.claude/$item" ] && [ ! -e "$HOME/.claude/$item" ]; then
+    if [[ -e "/workspace/.claude/$item" ]] && [[ ! -e "$HOME/.claude/$item" ]]; then
       ln -s "/workspace/.claude/$item" "$HOME/.claude/$item"
     fi
   done
@@ -103,14 +103,14 @@ fi
 # Missing socket is fatal when the dolt backend is configured — we refuse
 # to fall back to bd's embedded autostart (which would fork a per-container
 # dolt that diverges from the host's authoritative state).
-if [ -f /workspace/.beads/config.yaml ]; then
+if [[ -f /workspace/.beads/config.yaml ]]; then
   # best-effort: missing/malformed metadata.json -> default to sqlite backend
   BACKEND=$(jq -r '.backend // "sqlite"' /workspace/.beads/metadata.json 2>/dev/null || echo "sqlite")
 
-  if [ "$BACKEND" = "dolt" ]; then
-    if [ -n "${BEADS_DOLT_SERVER_HOST:-}" ] && [ -n "${BEADS_DOLT_SERVER_PORT:-}" ]; then
+  if [[ "$BACKEND" = "dolt" ]]; then
+    if [[ -n "${BEADS_DOLT_SERVER_HOST:-}" ]] && [[ -n "${BEADS_DOLT_SERVER_PORT:-}" ]]; then
       export BEADS_DOLT_AUTO_START=0
-    elif [ -S /workspace/.wrapix/dolt.sock ]; then
+    elif [[ -S /workspace/.wrapix/dolt.sock ]]; then
       export BEADS_DOLT_SERVER_SOCKET=/workspace/.wrapix/dolt.sock
       export BEADS_DOLT_AUTO_START=0
     else
@@ -127,7 +127,7 @@ fi
 
 # Apply network filtering when WRAPIX_NETWORK=limit
 # Resolves allowlisted domains to IPs and configures iptables OUTPUT chain
-if [ "${WRAPIX_NETWORK:-open}" = "limit" ]; then
+if [[ "${WRAPIX_NETWORK:-open}" = "limit" ]]; then
   echo "Network mode: limit (restricting outbound to allowlist)" >&2
 
   if ! command -v iptables >/dev/null 2>&1; then
@@ -147,11 +147,11 @@ if [ "${WRAPIX_NETWORK:-open}" = "limit" ]; then
     # Resolve and allow each domain in the allowlist
     IFS=',' read -ra DOMAINS <<< "${WRAPIX_NETWORK_ALLOWLIST:-}"
     for domain in "${DOMAINS[@]}"; do
-      [ -z "$domain" ] && continue
+      [[ -z "$domain" ]] && continue
       # Resolve domain to IPv4 addresses
       # best-effort: unresolvable domain -> no iptables rule added, traffic stays blocked
       while IFS=' ' read -r ip _rest; do
-        [ -z "$ip" ] && continue
+        [[ -z "$ip" ]] && continue
         iptables -A OUTPUT -d "$ip" -j ACCEPT
       done < <(getent ahostsv4 "$domain" 2>/dev/null | awk '{print $1}' | sort -u)
     done
@@ -164,10 +164,10 @@ if [ "${WRAPIX_NETWORK:-open}" = "limit" ]; then
       ip6tables -A OUTPUT -p tcp --dport 53 -j ACCEPT
 
       for domain in "${DOMAINS[@]}"; do
-        [ -z "$domain" ] && continue
+        [[ -z "$domain" ]] && continue
         # best-effort: no IPv6 records -> no ip6tables rule, domain only reachable via IPv4
         while IFS=' ' read -r ip _rest; do
-          [ -z "$ip" ] && continue
+          [[ -z "$ip" ]] && continue
           ip6tables -A OUTPUT -d "$ip" -j ACCEPT
         done < <(getent ahostsv6 "$domain" 2>/dev/null | awk '{print $1}' | sort -u)
       done
@@ -191,20 +191,20 @@ write_session_log() {
   local duration=$(( end_epoch - SESSION_START_EPOCH ))
 
   local mode="interactive"
-  if [ "${LOOM_MODE:-}" = "1" ]; then
+  if [[ "${LOOM_MODE:-}" = "1" ]]; then
     mode="loom"
   fi
 
   # Read bead ID if loom wrote one during the session
   local bead_id=""
-  if [ -f /tmp/wrapix-bead-id ]; then
+  if [[ -f /tmp/wrapix-bead-id ]]; then
     # best-effort: loom didn't write a bead id -> field stays empty in session log
     bead_id=$(cat /tmp/wrapix-bead-id 2>/dev/null || true)
   fi
 
   # Find most recent claude session ID from history
   local claude_session_id=""
-  if [ -f /workspace/.claude/history.jsonl ]; then
+  if [[ -f /workspace/.claude/history.jsonl ]]; then
     # best-effort: missing/malformed history.jsonl -> session id stays empty
     claude_session_id=$(tail -1 /workspace/.claude/history.jsonl 2>/dev/null \
       | jq -r '.sessionId // empty' 2>/dev/null || true)
@@ -240,19 +240,19 @@ write_session_log() {
 
 # Run main process (without exec, so EXIT trap can write session log)
 MAIN_EXIT=0
-if [ $# -gt 0 ]; then
+if [[ $# -gt 0 ]]; then
   # Command override: run the specified command instead of Claude
   "$@" || MAIN_EXIT=$?
-elif [ "$WRAPIX_AGENT" = "pi" ]; then
+elif [[ "$WRAPIX_AGENT" = "pi" ]]; then
   # Pi RPC mode: pi listens on stdin/stdout for JSONL commands.
   # Loom drives the session from the host via piped stdio.
   pi --mode rpc || MAIN_EXIT=$?
-elif [ "$WRAPIX_AGENT" = "direct" ]; then
+elif [[ "$WRAPIX_AGENT" = "direct" ]]; then
   # Direct mode: loom-direct-runner listens on stdin/stdout for JSONL
   # commands and drives a loom-llm Conversation with the six sandbox-aware
   # tools. Loom drives the session from the host via piped stdio.
   loom-direct-runner || MAIN_EXIT=$?
-elif [ "$WRAPIX_AGENT" = "claude" ] && [ "${WRAPIX_STDIO:-}" = "1" ]; then
+elif [[ "$WRAPIX_AGENT" = "claude" ]] && [[ "${WRAPIX_STDIO:-}" = "1" ]]; then
   # Claude stream-json mode: loom drives the session from the host via piped
   # stdio. Symmetric to the pi branch above. Canonical claude args live here
   # (single source of truth) so workflow code doesn't have to thread them.
@@ -267,7 +267,7 @@ else
   # Build system prompt only for interactive claude (not needed for command
   # overrides).  Requires /etc/wrapix-prompt to be mounted.
   SYSTEM_PROMPT=$(cat /etc/wrapix-prompt)
-  if [ -f /workspace/docs/README.md ]; then
+  if [[ -f /workspace/docs/README.md ]]; then
     SYSTEM_PROMPT="$SYSTEM_PROMPT
 
 ## Project Context (from docs/README.md)
