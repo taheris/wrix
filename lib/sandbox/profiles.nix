@@ -7,15 +7,6 @@
 }:
 
 let
-  # Agent tooling: project-wide formatter wrapper. Forced when basePackages
-  # is materialized; throws with a helpful message if the caller didn't thread
-  # the treefmt-nix wrapper through from the flake.
-  treefmtPkg =
-    if treefmt == null then
-      throw "lib/sandbox/profiles.nix: basePackages requires the treefmt wrapper; pass `treefmt` to this file"
-    else
-      treefmt;
-
   # Base packages included in all profiles
   basePackages = with pkgs; [
     bash
@@ -29,7 +20,6 @@ let
     file
     findutils
     gawk
-    gc
     gh
     git
     gnugrep
@@ -49,9 +39,11 @@ let
     patch
     prek
     procps
+    python3
     ripgrep
     rsync
     shellcheck
+    sqlite
     tmux
     tree
     treefmtPkg
@@ -75,9 +67,9 @@ let
   # These domains are always permitted regardless of profile
   baseNetworkAllowlist = [
     "api.anthropic.com" # Claude API
+    "cache.nixos.org" # Nix binary cache
     "github.com" # git operations
     "ssh.github.com" # git SSH (port 443 fallback)
-    "cache.nixos.org" # Nix binary cache
   ];
 
   # Helper to create a profile with base packages, mounts, and env merged in.
@@ -320,8 +312,19 @@ let
       }
     );
 
-  # Build a toolchain from a rust-toolchain.toml file. fenix requires a sha256
-  # of the downloaded components for purity, so callers must pass { file, sha256 }.
+  # Project-wide formatter wrapper. Forced when basePackages is materialized
+  treefmtPkg =
+    if treefmt == null then
+      throw "lib/sandbox/profiles.nix: basePackages requires the treefmt wrapper; pass `treefmt` to this file"
+    else
+      treefmt;
+
+  # Suppress GNU which's verbose "no X in (PATH)" errors
+  whichQuiet = pkgs.writeShellScriptBin "which" ''
+    ${pkgs.which}/bin/which "$@" 2>/dev/null
+  '';
+
+  # Build a toolchain from a rust-toolchain.toml file.
   withToolchainFromFile =
     { file, sha256 }:
     let
@@ -329,11 +332,6 @@ let
       toolchain = mkRustToolchain base;
     in
     mkRustProfile toolchain;
-
-  # Suppress GNU which's verbose "no X in (PATH)" errors
-  whichQuiet = pkgs.writeShellScriptBin "which" ''
-    ${pkgs.which}/bin/which "$@" 2>/dev/null
-  '';
 
 in
 {
@@ -349,7 +347,6 @@ in
     name = "python";
 
     packages = with pkgs; [
-      python3
       ruff
       ty
       uv

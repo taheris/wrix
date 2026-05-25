@@ -13,12 +13,8 @@ _:
       inherit (builtins) listToAttrs mapAttrs;
       inherit (wrapix) profiles;
 
-      mkSandboxPkg = cfg: (wrapix.mkSandbox cfg).package;
-
       builtInProfiles = { inherit (profiles) base rust python; };
-
       profileSandboxes = mapAttrs (_: profile: wrapix.mkSandbox { inherit profile; }) builtInProfiles;
-
       profileImages = mapAttrs (_: s: s.image) profileSandboxes;
 
       # `packages.image-<name>` — per-profile OCI artifact (claude + pi
@@ -30,6 +26,7 @@ _:
         }) (builtins.attrNames builtInProfiles)
       );
 
+      mkSandboxPkg = cfg: (wrapix.mkSandbox cfg).package;
       sandboxPkgs = mapAttrs (_: mkSandboxPkg) {
         sandbox = {
           profile = profiles.base;
@@ -103,7 +100,6 @@ _:
             beads
             beads-dolt
             beads-push
-            gc
             pi-mono
             ;
           nodejs = linuxPkgs.nodejs_22;

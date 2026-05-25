@@ -14,7 +14,7 @@
         else
           system;
 
-      wrapixBeadsPkgs =
+      beadsPkgs =
         hostPkgs_: linuxPkgs_:
         let
           m = import ../../lib/beads {
@@ -25,33 +25,6 @@
         {
           beads-dolt = m.dolt;
           beads-push = m.push;
-        };
-
-      beadsFor =
-        pkgs':
-        pkgs'.callPackage "${inputs.beads}/default.nix" {
-          self = inputs.beads;
-          buildGoModule =
-            args:
-            pkgs'.buildGoModule (
-              args
-              // {
-                proxyVendor = true;
-                vendorHash = "sha256-FjO7mUTB9FJL5ShVzEj+dEr1Hpzb23JO5QjNLPc5sLQ=";
-              }
-            );
-        };
-
-      gcFor =
-        pkgs':
-        pkgs'.buildGo126Module {
-          pname = "gc";
-          version = "dev";
-          src = inputs.gascity;
-          subPackages = [ "cmd/gc" ];
-          proxyVendor = true;
-          vendorHash = "sha256-59k7xFBaLZJ50KWNhwIzttE8j7GXZPneq6o4eUTlvBI=";
-          doCheck = false;
         };
 
       # Protocol version pinning — see specs/loom-tests.md NFR #9.
@@ -83,13 +56,9 @@
       linuxOverlay =
         final: _prev:
         {
-          beads = beadsFor final;
-          gc = gcFor final;
-          # claude-code: pinned via nixpkgs nixos-unstable (flake.lock).
-          # pi-mono: pinned to 0.72.1 in lib/pi-mono/package.json.
           pi-mono = final.callPackage ../../lib/pi-mono { };
         }
-        // wrapixBeadsPkgs final final;
+        // beadsPkgs final final;
 
       linuxPkgs = import nixpkgs {
         system = linuxSystem;
@@ -100,11 +69,10 @@
       hostOverlay =
         final: _prev:
         {
-          beads = beadsFor final;
-          gc = gcFor final;
           inherit (linuxPkgs) pi-mono;
         }
-        // wrapixBeadsPkgs final linuxPkgs;
+        // beadsPkgs final linuxPkgs;
+
     in
     {
       _module.args.pkgs = import nixpkgs {

@@ -563,7 +563,6 @@ let
         cityScripts
         pkgs.beads-dolt
         pkgs.beads-push
-        pkgs.gc
         pkgs.lsof
         pkgs.procps
         pkgs.tmux

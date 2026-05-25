@@ -4,11 +4,6 @@
   inputs = {
     nixpkgs.url = "git+ssh://git@github.com/NixOS/nixpkgs.git?ref=nixos-unstable&shallow=1";
 
-    beads = {
-      url = "git+ssh://git@github.com/gastownhall/beads.git?ref=main&shallow=1";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-
     crane = {
       url = "git+https://github.com/ipetkov/crane.git?ref=master&shallow=1";
     };
@@ -21,11 +16,6 @@
     flake-parts = {
       url = "git+ssh://git@github.com/hercules-ci/flake-parts.git?ref=main&shallow=1";
       inputs.nixpkgs-lib.follows = "nixpkgs";
-    };
-
-    gascity = {
-      url = "git+ssh://git@github.com/gastownhall/gascity.git?ref=main&shallow=1";
-      flake = false;
     };
 
     treefmt-nix = {

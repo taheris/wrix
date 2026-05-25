@@ -276,7 +276,6 @@ in
       {
         nativeBuildInputs = [
           bash
-          pkgs.gc
         ];
       }
       ''
@@ -666,7 +665,6 @@ in
         nativeBuildInputs = [
           bash
           pkgs.git
-          pkgs.gc
         ];
       }
       ''
@@ -1066,7 +1064,6 @@ in
       {
         nativeBuildInputs = [
           bash
-          pkgs.gc
           pkgs.jq
         ];
       }
@@ -1153,7 +1150,7 @@ in
         # inside the mayor container inherits only those vars.
         cd "$TMPDIR"
         env -i \
-          PATH="$STUB_BIN:${pkgs.gc}/bin:${pkgs.coreutils}/bin:${pkgs.bash}/bin" \
+          PATH="$STUB_BIN:${pkgs.coreutils}/bin:${pkgs.bash}/bin" \
           HOME="$TMPDIR" \
           BD_ENV_DUMP="$BD_ENV_DUMP" \
           $(while IFS= read -r line; do printf ' %q' "$line"; done < "$TMPDIR/container.env") \
@@ -1508,7 +1505,6 @@ in
       {
         nativeBuildInputs = [
           bash
-          pkgs.gc
         ];
       }
       ''
@@ -1545,7 +1541,6 @@ in
       {
         nativeBuildInputs = [
           bash
-          pkgs.gc
           pkgs.gnugrep
         ];
       }
