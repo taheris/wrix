@@ -2,8 +2,7 @@
 //!
 //! Parsed natively via the `toml` crate into a typed [`LoomConfig`]. Every
 //! field carries `#[serde(default)]` so a missing or empty file yields
-//! defaults that match Ralph's `.wrapix/ralph/config.nix`, letting users
-//! transition without writing a Loom config.
+//! sensible defaults — users can run Loom with no config at all.
 //!
 //! Per-phase agent and profile selection lives in `[phase.<name>]` tables
 //! with `[phase.default]` as the fallback (see

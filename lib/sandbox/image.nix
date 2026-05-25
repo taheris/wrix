@@ -46,7 +46,6 @@ let
   sshConfig = import ../util/ssh.nix;
 
   notifyClient = import ../notify/client.nix { inherit pkgs; };
-  ralph = import ../ralph { inherit pkgs; };
 
   # krun microVM support: UID spoofing library + PTY relay
   # See lib/sandbox/linux/ for source files
@@ -118,7 +117,6 @@ let
   allPackages = [
     entrypointPkg
     notifyClient
-    ralph.scripts
   ]
   ++ (profile.packages or [ ])
   ++ agentPackages;
@@ -185,9 +183,6 @@ buildImage {
         mapAttrsToList (name: file: "cp ${file} etc/wrapix/mcp/${name}.json") mcpConfigFiles
       )}
     ''}
-
-    # Bundle ralph template for ralph-init
-    cp -r ${ralph.templateDir} etc/wrapix/ralph-template
 
     # Fix Nix permissions for non-root users
     # (includeNixDB creates files owned by root)

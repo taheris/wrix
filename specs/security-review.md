@@ -173,7 +173,7 @@ Open network is a conscious tradeoff: agent autonomy (dependency installation, w
 
 **Not enforced:**
 - **Disk**: `/workspace` is a host bind mount; capping it requires host-side filesystem quotas, which is outside wrapix's scope.
-- **Timeout**: interactive sessions have the user present; ralph handles timeouts for orchestrated runs.
+- **Timeout**: interactive sessions have the user present; loom handles timeouts for orchestrated runs.
 
 ### Nixpkgs Channel
 
@@ -203,11 +203,11 @@ Lifecycle defines what persists between runs.
 Containers are ephemeral (`--rm`). Nothing inside the container persists after exit except:
 - `/workspace` — bind-mounted from host, persists all workspace changes
 - `.wrapix/log/` — session transcripts (see below)
-- `.wrapix/ralph/` — ralph working state (templates, logs, config)
+- `.wrapix/loom/` — loom working state (state DB, logs, scratchpads)
 
 ### Session Transcript as Audit Trail
 
-A structured session summary is persisted to `.wrapix/log/` after each wrapix session (both interactive and ralph-orchestrated).
+A structured session summary is persisted to `.wrapix/log/` after each wrapix session (both interactive and loom-orchestrated).
 
 Each record captures:
 - Session timestamp and duration
@@ -217,7 +217,7 @@ Each record captures:
 - Network-accessing tool calls
 - Link to full `.claude/` session data
 
-Ralph-orchestrated sessions additionally link the log entry to the bead ID for traceability.
+Loom-orchestrated sessions additionally link the log entry to the bead ID for traceability.
 
 **Rationale**: The agent's own session transcript is a richer audit trail than OS-level logging (strace, process tree) because it includes intent and reasoning, not just syscalls. For the primary threat (policy leakage from misbehaving agent / prompt injection), the session transcript is sufficient. OS-level audit would only matter for an adversarial-agent threat model (agent deliberately hiding actions), which is a different class of problem.
 
@@ -228,10 +228,8 @@ All wrapix state lives under `.wrapix/`:
 ```
 .wrapix/
 ├── log/        # Session transcripts
-└── ralph/      # Ralph working state (was .ralph/)
-    ├── config.nix
-    ├── state/
-    ├── template/
+└── loom/       # Loom working state
+    ├── state.db
     ├── logs/
-    └── backup/
+    └── scratch/
 ```

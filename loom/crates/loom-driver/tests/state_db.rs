@@ -168,7 +168,7 @@ fn state_current_spec_round_trips() -> Result<()> {
     db.set_current_spec(&label)?;
     assert_eq!(db.current_spec()?, Some(label.clone()));
 
-    let other = SpecLabel::new("ralph-loop");
+    let other = SpecLabel::new("loom-gate");
     db.set_current_spec(&other)?;
     assert_eq!(db.current_spec()?, Some(other));
     Ok(())

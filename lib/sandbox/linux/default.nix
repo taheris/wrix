@@ -450,12 +450,6 @@ in
           TTY_ARGS=(-i -t)
           ENV_ARGS+=(
             -e "CLAUDE_CODE_OAUTH_TOKEN=''${CLAUDE_CODE_OAUTH_TOKEN:-}"
-            -e "RALPH_MODE=''${RALPH_MODE:-}"
-            -e "RALPH_CMD=''${RALPH_CMD:-}"
-            -e "RALPH_ARGS=''${RALPH_ARGS:-}"
-            -e "RALPH_DIR=''${RALPH_DIR:-}"
-            -e "RALPH_DEBUG=''${RALPH_DEBUG:-}"
-            -e "RALPH_RUNTIME_DIR=''${RALPH_RUNTIME_DIR:-}"
             -e "WRAPIX_SESSION_ID=$WRAPIX_SESSION_ID"
             -e "WRAPIX_VERBOSE=''${WRAPIX_VERBOSE:-}"
           )

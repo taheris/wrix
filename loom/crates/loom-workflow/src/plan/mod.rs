@@ -28,9 +28,8 @@
 //!    (`loom todo`, `loom run`, `loom spec`) resolve the spec without a
 //!    separate `loom use` call.
 //!
-//! Hidden specs (Ralph's `-h` flag) are deliberately not ported — keeping a
-//! spec out of git is covered by `.git/info/exclude` (see *Out of Scope* in
-//! the harness spec).
+//! Hidden specs are deliberately unsupported — keeping a spec out of git is
+//! covered by `.git/info/exclude` (see *Out of Scope* in the harness spec).
 
 mod args;
 mod command;

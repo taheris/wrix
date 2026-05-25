@@ -87,27 +87,6 @@ if [ "$WRAPIX_AGENT" = "claude" ]; then
       && mv /workspace/.claude/settings.json.tmp /workspace/.claude/settings.json
   fi
 
-  # === ralph settings merge: start ===
-  # Deep-merge ralph runtime settings fragment (SessionStart[compact] re-pin hook)
-  # into ~/.claude/settings.json. Array entries under each hook event are
-  # concatenated so ralph's hooks coexist with the sandbox Notification hook.
-  if [ -n "${RALPH_RUNTIME_DIR:-}" ] && [ -f "$RALPH_RUNTIME_DIR/claude-settings.json" ]; then
-    jq -s '
-      .[0] as $base
-      | .[1] as $frag
-      | ($base.hooks // {}) as $bh
-      | ($frag.hooks // {}) as $fh
-      | $base
-      | .hooks = (
-          ($bh * $fh)
-          | with_entries(.value = (($bh[.key] // []) + ($fh[.key] // [])))
-        )
-    ' "$HOME/.claude/settings.json" "$RALPH_RUNTIME_DIR/claude-settings.json" \
-      > "$HOME/.claude/settings.json.tmp"
-    mv "$HOME/.claude/settings.json.tmp" "$HOME/.claude/settings.json"
-  fi
-  # === ralph settings merge: end ===
-
   # Symlink persistent session data from workspace for /resume and /rename
   for item in projects plans todos file-history paste-cache backups \
               debug session-env plugins shell-snapshots \
@@ -212,14 +191,14 @@ write_session_log() {
   local duration=$(( end_epoch - SESSION_START_EPOCH ))
 
   local mode="interactive"
-  if [ "${RALPH_MODE:-}" = "1" ]; then
-    mode="ralph"
+  if [ "${LOOM_MODE:-}" = "1" ]; then
+    mode="loom"
   fi
 
-  # Read bead ID if ralph wrote one during the session
+  # Read bead ID if loom wrote one during the session
   local bead_id=""
   if [ -f /tmp/wrapix-bead-id ]; then
-    # best-effort: ralph didn't write a bead id -> field stays empty in session log
+    # best-effort: loom didn't write a bead id -> field stays empty in session log
     bead_id=$(cat /tmp/wrapix-bead-id 2>/dev/null || true)
   fi
 
@@ -262,7 +241,7 @@ write_session_log() {
 # Run main process (without exec, so EXIT trap can write session log)
 MAIN_EXIT=0
 if [ $# -gt 0 ]; then
-  # Command override: run the specified command instead of Claude/Ralph
+  # Command override: run the specified command instead of Claude
   "$@" || MAIN_EXIT=$?
 elif [ "$WRAPIX_AGENT" = "pi" ]; then
   # Pi RPC mode: pi listens on stdin/stdout for JSONL commands.
@@ -284,13 +263,9 @@ elif [ "$WRAPIX_AGENT" = "claude" ] && [ "${WRAPIX_STDIO:-}" = "1" ]; then
     --input-format stream-json \
     --output-format stream-json \
     || MAIN_EXIT=$?
-elif [ "${RALPH_MODE:-}" = "1" ]; then
-  # RALPH_CMD and RALPH_ARGS set by launcher (default: help)
-  # shellcheck disable=SC2086 # Intentional word splitting for RALPH_ARGS
-  ralph "${RALPH_CMD:-help}" ${RALPH_ARGS:-} || MAIN_EXIT=$?
 else
   # Build system prompt only for interactive claude (not needed for command
-  # overrides or ralph mode).  Requires /etc/wrapix-prompt to be mounted.
+  # overrides).  Requires /etc/wrapix-prompt to be mounted.
   SYSTEM_PROMPT=$(cat /etc/wrapix-prompt)
   if [ -f /workspace/docs/README.md ]; then
     SYSTEM_PROMPT="$SYSTEM_PROMPT

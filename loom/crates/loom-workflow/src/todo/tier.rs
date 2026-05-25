@@ -92,9 +92,8 @@ pub struct DiffCandidate {
     pub diff: String,
 }
 
-/// Pure four-tier detection. Mirrors the decision tree in
-/// `lib/ralph/cmd/util.sh::compute_spec_diff` but parameterised on a
-/// [`GitDiffSource`] so tests can drive every branch without a real repo.
+/// Pure four-tier detection. Parameterised on a [`GitDiffSource`] so tests
+/// can drive every branch without a real repo.
 ///
 /// The function does not read the state DB or call `bd` — those calls
 /// happen in the driver, which threads the resolved values in via

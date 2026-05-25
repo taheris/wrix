@@ -30,7 +30,7 @@ impl FromStr for SpecLabel {
     /// Parse a kebab-case spec label: lowercase ASCII letters and digits
     /// separated by single `-` characters, non-empty, no leading or
     /// trailing `-`. Matches the file names under `specs/*.md`
-    /// (`loom-harness`, `ralph-loop`, …) and rejects whitespace,
+    /// (`loom-harness`, `loom-gate`, …) and rejects whitespace,
     /// uppercase, and empty strings so external input (CLI args, JSON
     /// from `bd`) cannot smuggle in a malformed label.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -81,9 +81,9 @@ mod tests {
 
     #[test]
     fn serde_round_trips_as_plain_string() -> Result<()> {
-        let label = SpecLabel::new("ralph-loop");
+        let label = SpecLabel::new("loom-gate");
         let json = serde_json::to_string(&label)?;
-        assert_eq!(json, "\"ralph-loop\"");
+        assert_eq!(json, "\"loom-gate\"");
         let back: SpecLabel = serde_json::from_str(&json)?;
         assert_eq!(back, label);
         Ok(())
@@ -97,7 +97,7 @@ mod tests {
 
     #[test]
     fn parse_accepts_canonical_shapes() -> Result<()> {
-        for input in ["loom-harness", "ralph-loop", "demo", "a1", "spec-2-final"] {
+        for input in ["loom-harness", "loom-gate", "demo", "a1", "spec-2-final"] {
             let label: SpecLabel = input.parse()?;
             assert_eq!(label.as_str(), input);
         }

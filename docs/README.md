@@ -21,15 +21,10 @@ pin — keep it current when specs land or retire.
 | [beads.md](../specs/beads.md) | [`.beads/`](../.beads/) | — | Issue tracking with dependency support |
 | [image-builder.md](../specs/image-builder.md) | [`lib/sandbox/image.nix`](../lib/sandbox/image.nix) | — | Nix-based OCI image creation |
 | [linux-builder.md](../specs/linux-builder.md) | [`lib/builder/default.nix`](../lib/builder/default.nix) | wx-ope | Remote Nix builds for macOS |
-| [live-specs.md](../specs/live-specs.md) | [`lib/ralph/cmd/spec.sh`](../lib/ralph/cmd/spec.sh) | wx-a13n | Queryable, verifiable, observable specifications |
 | [notifications.md](../specs/notifications.md) | [`lib/notify/`](../lib/notify/) | wx-q6x | Desktop notifications with focus suppression |
 | [playwright-mcp.md](../specs/playwright-mcp.md) | [`lib/mcp/playwright/`](../lib/mcp/playwright/) | wx-9mvh | Browser automation for frontend development |
-| [pre-commit.md](../specs/pre-commit.md) | [`.pre-commit-config.yaml`](../.pre-commit-config.yaml), [`lib/ralph/cmd/run.sh`](../lib/ralph/cmd/run.sh) | wx-t6rh | Git hooks and ralph run integration |
+| [pre-commit.md](../specs/pre-commit.md) | [`.pre-commit-config.yaml`](../.pre-commit-config.yaml) | wx-t6rh | Git hooks for treefmt, shellcheck, and integration tests |
 | [profiles.md](../specs/profiles.md) | [`lib/sandbox/profiles.nix`](../lib/sandbox/profiles.nix) | wx-1thzk | Pre-configured development environments |
-| [ralph-harness.md](../specs/ralph-harness.md) | [`lib/ralph/`](../lib/ralph/) | wx-6gd5g | Ralph platform: state, templates, utilities, init |
-| [ralph-loop.md](../specs/ralph-loop.md) | [`lib/ralph/cmd/{plan,todo,run}.sh`](../lib/ralph/cmd/) | wx-1ic8b | Ralph forward pipeline: plan → todo → run |
-| [ralph-review.md](../specs/ralph-review.md) | [`lib/ralph/cmd/{check,msg}.sh`](../lib/ralph/cmd/) | wx-qvuhk | Ralph review gate: invariant clash, options format, push gate, clarify resolution |
-| [ralph-tests.md](../specs/ralph-tests.md) | [`tests/ralph/`](../tests/ralph/) | wx-h0qqy | Integration tests for ralph workflow |
 | [sandbox.md](../specs/sandbox.md) | [`lib/sandbox/default.nix`](../lib/sandbox/default.nix) | — | Platform-agnostic container isolation |
 | [security-review.md](../specs/security-review.md) | — | wx-eok | Security tradeoffs and mitigations |
 | [tmux-mcp.md](../specs/tmux-mcp.md) | [`lib/mcp/tmux/`](../lib/mcp/tmux/) | wx-4f3g | AI-assisted debugging via tmux panes |
@@ -45,19 +40,17 @@ pin — keep it current when specs land or retire.
 | Term | Definition |
 |------|------------|
 | **bd** | CLI for the beads issue tracker |
-| **Beads** | Persistent issue tracker used by Ralph and the `bd` CLI |
+| **Beads** | Persistent issue tracker used by Loom and the `bd` CLI |
 | **Deploy Key** | SSH key for git push operations from container |
 | **Dolt** | SQL database backing beads; shared via `beads-dolt` container |
 | **Focus-aware** | Notification suppression when terminal is focused |
-| **Loom** | Rust agent driver replacing Ralph's bash scripts; supports pi-mono and Claude Code backends |
+| **Loom** | Rust workflow orchestrator: spec-to-implementation pipeline with pi-mono and Claude Code backends |
 | **JSONL** | JSON Lines — one complete JSON object per `\n`-terminated line (same format as NDJSON; JSONL is the term Loom uses); protocol framing for both pi-mono RPC and Claude stream-json |
+| **loom:clarify** | Bead label for items awaiting human response via `loom msg` |
 | **pasta** | Linux userspace networking for Podman containers |
 | **playwright-mcp** | MCP server wrapping @playwright/mcp for browser automation in sandboxes |
 | **prek** | Rust-based pre-commit framework (drop-in replacement for pre-commit) |
 | **Profile** | Pre-configured set of packages and environment variables |
-| **ralph:clarify** | Bead label for items awaiting human response via `ralph msg` |
-| **ralph:scaffold** | Bead label for docs scaffolded by `ralph sync` |
-| **Ralph** | Workflow orchestrator for spec-to-implementation |
 | **Sandbox** | Isolated container environment for running Claude Code |
 | **tmux-mcp** | MCP server for AI-assisted debugging via tmux panes |
 | **virtio-fs** | Shared filesystem for macOS container VMs |

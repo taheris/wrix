@@ -1,31 +1,39 @@
-# Pre-commit Hooks and Ralph Run Integration
+# Pre-commit Hooks
 
-Unified hook system for git workflow validation and ralph run automation.
+Staged git hooks via [prek](https://github.com/j178/prek) with a `flock`-serialized
+shim to prevent concurrent stash races across agents sharing a workspace.
 
 ## Problem Statement
 
-Current state:
-- ~~Basic prek setup exists but lacks stage separation (fast vs slow checks)~~ Done
-- Ralph loop hooks (`pre-hook`, `post-hook`) defined in config but not implemented
-- LLMs may skip quality gates defined in templates
-- No enforcement mechanism for tests/linting between steps
-- "Land the plane" protocol is manual and error-prone
+prek's stash/restore dance around unstaged changes can race with concurrent writers,
+silently dropping working-tree edits (wx-m5yuq). Multiple wrapix agents on the same
+workspace — and `loom run` quality-gate commits firing alongside human commits — re-expose
+this race unless hook invocations serialize across processes.
+
+## Requirements
 
 ### Hook Ownership
 
 Hook stages are served from two locations:
 
-- **`pre-commit` and `pre-push`** are served from `lib/prek/hooks/` via `core.hooksPath` (see FR7). The versioned shims there acquire the serialization `flock` and then `exec prek run --hook-stage <stage>`. Git reads only from `core.hooksPath` for these stages, so anything under `.git/hooks/pre-commit` or `.git/hooks/pre-push` is inert.
-- **All other stages** (`prepare-commit-msg`, `post-checkout`, `post-merge`) are served from `.git/hooks/`, written by `prek install`. Beads (bd) hooks run as prek-managed local hooks in `.pre-commit-config.yaml` via `bd hooks run <stage>`. The `.git/hooks/` directory is `chmod 555` to prevent `bd hooks install` from overwriting prek's shims for these non-FR7 stages.
+- **`pre-commit` and `pre-push`** are served from `lib/prek/hooks/` via `core.hooksPath`
+  (see FR2). The versioned shims there acquire the serialization `flock` and then
+  `exec prek hook-impl …`. Git reads only from `core.hooksPath` for these stages, so
+  anything under `.git/hooks/pre-commit` or `.git/hooks/pre-push` is inert.
+- **All other stages** (`prepare-commit-msg`, `post-checkout`, `post-merge`) are served
+  from `.git/hooks/`, written by `prek install`. Beads (bd) hooks run as prek-managed
+  local hooks in `.pre-commit-config.yaml` via `bd hooks run <stage>`. The `.git/hooks/`
+  directory is `chmod 555` to prevent `bd hooks install` from overwriting prek's shims
+  for these non-FR2 stages.
 
-To update the non-FR7 hook set:
+To update the non-FR2 hook set:
+
 ```bash
 chmod 755 .git/hooks/ && prek install -f && chmod 555 .git/hooks/
 ```
 
-The FR7 shims are versioned in the repo and need no install step — they're effective as soon as `core.hooksPath` is set (see FR7 *Install ordering*).
-
-## Requirements
+The FR2 shims are versioned in the repo and need no install step — they're effective as
+soon as `core.hooksPath` is set (see FR2 *Install ordering*).
 
 ### Functional Requirements
 
@@ -35,178 +43,82 @@ Configure `.pre-commit-config.yaml` with staged hooks:
 
 | Stage | Hooks | Purpose |
 |-------|-------|---------|
-| pre-commit | bd dolt pull, nixfmt, shellcheck, ralph check -t (template files only), builtin hooks | Fast validation on every commit |
+| pre-commit | treefmt, shellcheck, builtin hooks (trailing-whitespace, end-of-file-fixer, check-merge-conflict) | Fast validation on every commit |
 | prepare-commit-msg | bd agent trailers | Add agent identity to commits |
 | post-checkout | bd dolt pull | Pull Dolt state after branch switch |
 | post-merge | bd dolt pull | Pull Dolt state after pull/merge |
-| pre-push | bd stale check, nix flake check, tests | Slow validation before sharing |
+| pre-push | nix flake check, loom integration tests | Slow validation before sharing |
 
-Builtin hooks to add:
-- `trailing-whitespace`
-- `end-of-file-fixer`
-- `check-merge-conflict`
+#### FR2: Hook Serialization (`flock`)
 
-#### FR2: Ralph Run Hook Points
+The installed pre-commit and pre-push hooks acquire an exclusive `flock` on
+`.wrapix/prek.lock` before invoking prek's hook run, and release it when prek exits.
+Both stages are covered because concurrent commits and pushes both touch the same
+working-tree stash window.
 
-Implement four hook points in ralph run:
-
-```
-ralph run [feature]
-├── [pre-loop]     → Before any work starts
-│
-├── while has_work:
-│   ├── [pre-step]  → Before each step
-│   ├── step        → Claude works on one bead
-│   └── [post-step] → After each step
-│
-└── [post-loop]     → After all work complete
-```
-
-#### FR3: Hook Configuration Schema
-
-Update `config.nix` with simplified hook structure:
-
-```nix
-{
-  hooks = {
-    pre-loop = "prek run";
-    pre-step = "bd dolt pull";
-    post-step = "prek run";
-    post-loop = ''
-      bd dolt push
-      git diff --quiet || { echo "Error: worktree is dirty; commit or stash before pushing" >&2; exit 1; }
-    '';
-  };
-
-  hooks-on-failure = "block";  # block | warn | skip
-}
-```
-
-#### FR4: Template Variable Substitution
-
-Hooks support these variables:
-
-| Variable | Description | Available In |
-|----------|-------------|--------------|
-| `{{LABEL}}` | Feature label | All hooks |
-| `{{ISSUE_ID}}` | Current bead ID | pre-step, post-step |
-| `{{STEP_COUNT}}` | Current iteration number | pre-step, post-step |
-| `{{STEP_EXIT_CODE}}` | Exit code from ralph-step | post-step only |
-
-#### FR5: Failure Handling
-
-`hooks-on-failure` options:
-
-| Action | Behavior |
-|--------|----------|
-| `block` | Stop loop, exit with error code |
-| `warn` | Log warning to stderr, continue |
-| `skip` | Silently continue |
-
-Default: `block` (fail fast, require human intervention)
-
-#### FR6: Run Template Update
-
-Update `run.md` to reference hook enforcement:
-
-```markdown
-## Quality Gates
-Before outputting RALPH_COMPLETE:
-- [ ] Tests written and passing
-- [ ] Lint checks pass
-- [ ] Changes staged (`git add`)
-
-Post-step hooks verify compliance automatically.
-```
-
-#### FR7: Hook Serialization
-
-prek's stash/restore dance around unstaged changes can race with concurrent
-writers, silently dropping working-tree edits (wx-m5yuq). To serialize hook
-invocations across agents sharing a workspace, the installed pre-commit and
-pre-push hooks acquire an exclusive `flock` on `.wrapix/prek.lock` before
-invoking prek's hook run, and release it when prek exits. Both stages are
-covered because `ralph check` routinely triggers pre-push at the end of every
-ralph run, and concurrent ralph sessions would otherwise re-expose the same
-race at push time.
-
-- **Mechanism** — versioned shims at `lib/prek/hooks/pre-commit` and `lib/prek/hooks/pre-push` source `lib/prek/lock.sh` for shared lock infrastructure, then call `_prek_acquire_lock` to serialize. The pre-commit shim `exec`s `prek hook-impl --hook-dir ... --script-version 4 --hook-type=pre-commit -- "$@"` (`hook-impl` is used rather than `prek run` because git passes positional args that `prek run` would mistake for hook/project selectors). The pre-push shim runs `prek run --stage pre-push` independently of git's SSH connection, then writes a stamp file (`.wrapix/push-verified`) on success; the user re-runs `git push` and the stamp is consumed instantly, pushing on a fresh connection. This avoids SSH idle timeouts during long test suites. Git is pointed at the shim directory via `core.hooksPath = lib/prek/hooks`
-- **Lock file** — `.wrapix/prek.lock`, gitignored, auto-created on first use; located in the main repo's `.wrapix/` so every agent (host, container with `.wrapix` mount, linked worktree) shares the same lock. A single lock covers both stages because both protect the same working-tree stash window — a commit and a push must not interleave either
-- **Path resolution from any worktree** — the shim resolves the lock path via `$(dirname "$(git rev-parse --git-common-dir)")/.wrapix/prek.lock`. `git rev-parse --git-common-dir` always returns the main repo's `.git/` from any linked worktree, so commits fired from a linked worktree share the same lock as the main repo — no relative-path surprises
-- **Timeout** — 600s (10 min) poll loop with dead-PID recovery. If the lock holder's PID is no longer running, the lock file is deleted and re-acquired on a fresh inode. If the timeout fires, the shim fails loudly (`>&2` with lock-holder PID) and exits non-zero so the commit or push aborts rather than deadlocking the workspace. Subprocesses (prek, nix) do not inherit the lock FD (`9>&-`) in the pre-push shim, preventing orphaned children from holding stale locks
-- **Scope** — every commit and push routed through the installed hooks participates: manual user commits/pushes, ralph run quality-gate commits, `ralph check` pre-push invocations, and `beads-push` commits. One explicit out-of-scope case:
-  - **Ralph-internal `prek run` invocations** — FR3's `pre-step`/`post-step` hooks invoke `prek run` directly as validation/lint steps, not as git hooks, so they don't route through the shim. This is safe because ralph run's loop is single-threaded per label — only one `prek run` call is in flight at a time within a ralph session. Concurrent ralph sessions on the same workspace are covered at the commit boundary instead (the quality-gate commit goes through the shim)
-- **`--no-verify` bypass** — skips the hook and therefore the lock, but also skips prek's stash, so no race exists on that path. The documented escape hatch for emergency pushes
-- **`flock` availability** — `flock(1)` is a hard requirement, not a graceful-degrade. The shim aborts with a clear error (`flock not found — enter nix develop or install util-linux`) if `flock` is missing from `PATH`. `flock` is added to the nix devShell and to the wrapix sandbox `base` profile so every context that might invoke the shim (devShell, every wrapix container) has it available without per-user setup. macOS hosts running `git commit` outside `nix develop` are the only environment that can hit the missing-flock path, and the error message points them at the fix
-- **Install ordering** — `core.hooksPath` is set idempotently by the `flake.nix` devShell `shellHook` on every `nix develop` entry (`git config --local core.hooksPath lib/prek/hooks`). No per-user setup step is required, and the shims survive subsequent `prek install` runs because they live outside `.git/hooks/`. The `chmod 555 .git/hooks/` rule in Hook Ownership still applies to `.git/hooks/` but is now redundant for the pre-commit and pre-push paths (since Git reads the shims from `core.hooksPath` instead). Contributors who commit outside `nix develop` and have never entered the devShell on this clone won't have `core.hooksPath` set and bypass FR7 entirely — this is considered acceptable (rare, outside the concurrent-agent scenario); contributors who *have* entered the devShell but then commit outside it still have `core.hooksPath` set in their local git config and hit the *flock availability* bullet above instead (aborting loudly rather than silently racing)
-
-### Non-Functional Requirements
-
-#### NFR1: Consumer Repo Assumptions
-
-- Wrapix is a library; consumer repos have their own test setups
-- Assume consumer repos have prek installed and configured
-- Default hooks use `prek run`, not repo-specific test commands
-
-#### NFR2: LLM-Friendly Output
-
-Consumer repos should configure their test runners with quiet mode for LLM environments:
-- Default: Show only failures
-- `--verbose` flag: Full output for human operators
-- Detection via `RALPH_MODE` environment variable (optional)
+- **Mechanism** — versioned shims at `lib/prek/hooks/pre-commit` and
+  `lib/prek/hooks/pre-push` source `lib/prek/lock.sh` for shared lock infrastructure,
+  then call `_prek_acquire_lock` to serialize. The pre-commit shim `exec`s
+  `prek hook-impl --hook-dir ... --script-version 4 --hook-type=pre-commit -- "$@"`
+  (`hook-impl` is used rather than `prek run` because git passes positional args that
+  `prek run` would mistake for hook/project selectors). The pre-push shim runs
+  `prek run --stage pre-push` independently of git's SSH connection, then writes a
+  stamp file (`.wrapix/push-verified`) on success; the user re-runs `git push` and the
+  stamp is consumed instantly, pushing on a fresh connection. This avoids SSH idle
+  timeouts during long test suites. Git is pointed at the shim directory via
+  `core.hooksPath = lib/prek/hooks`.
+- **Lock file** — `.wrapix/prek.lock`, gitignored, auto-created on first use; located
+  in the main repo's `.wrapix/` so every agent (host, container with `.wrapix` mount,
+  linked worktree) shares the same lock. A single lock covers both stages because both
+  protect the same working-tree stash window — a commit and a push must not interleave
+  either.
+- **Path resolution from any worktree** — the shim resolves the lock path via
+  `$(dirname "$(git rev-parse --git-common-dir)")/.wrapix/prek.lock`.
+  `git rev-parse --git-common-dir` always returns the main repo's `.git/` from any
+  linked worktree, so commits fired from a linked worktree share the same lock as the
+  main repo — no relative-path surprises.
+- **Timeout** — 600s (10 min) poll loop with dead-PID recovery. If the lock holder's
+  PID is no longer running, the lock file is deleted and re-acquired on a fresh inode.
+  If the timeout fires, the shim fails loudly (`>&2` with lock-holder PID) and exits
+  non-zero so the commit or push aborts rather than deadlocking the workspace.
+  Subprocesses (prek, nix) do not inherit the lock FD (`9>&-`) in the pre-push shim,
+  preventing orphaned children from holding stale locks.
+- **`--no-verify` bypass** — skips the hook and therefore the lock, but also skips
+  prek's stash, so no race exists on that path. The documented escape hatch for
+  emergency pushes.
+- **`flock` availability** — `flock(1)` is a hard requirement, not a graceful-degrade.
+  The shim aborts with a clear error (`flock not found — enter nix develop or install
+  util-linux`) if `flock` is missing from `PATH`. `flock` is added to the nix devShell
+  and to the wrapix sandbox `base` profile so every context that might invoke the shim
+  (devShell, every wrapix container) has it available without per-user setup. macOS
+  hosts running `git commit` outside `nix develop` are the only environment that can
+  hit the missing-flock path, and the error message points them at the fix.
+- **Install ordering** — `core.hooksPath` is set idempotently by the `flake.nix`
+  devShell `shellHook` on every `nix develop` entry
+  (`git config --local core.hooksPath lib/prek/hooks`). No per-user setup step is
+  required, and the shims survive subsequent `prek install` runs because they live
+  outside `.git/hooks/`. Contributors who commit outside `nix develop` and have never
+  entered the devShell on this clone won't have `core.hooksPath` set and bypass FR2
+  entirely — this is considered acceptable (rare, outside the concurrent-agent
+  scenario); contributors who *have* entered the devShell but then commit outside it
+  still have `core.hooksPath` set in their local git config and hit the *flock
+  availability* bullet above instead (aborting loudly rather than silently racing).
 
 ## Affected Files
 
-| File | Changes |
+| File | Purpose |
 |------|---------|
-| `.pre-commit-config.yaml` | Add stages, builtin hooks |
-| `lib/ralph/cmd/run.sh` | Implement hook execution |
-| `lib/ralph/template/config.nix` | New hooks schema |
-| `lib/ralph/template/run.md` | Update quality gates section |
-| `lib/prek/hooks/pre-commit` | `flock`-wrapped prek entry point for pre-commit stage (FR7) |
-| `lib/prek/hooks/pre-push` | `flock`-wrapped prek entry point for pre-push stage (FR7) |
+| `.pre-commit-config.yaml` | Hook stage configuration |
+| `lib/prek/hooks/pre-commit` | `flock`-wrapped prek entry point for pre-commit stage |
+| `lib/prek/hooks/pre-push` | `flock`-wrapped prek entry point for pre-push stage |
 | `lib/prek/lock.sh` | Shared helper: resolve main-repo lock path, provide `_prek_acquire_lock` |
-| `.gitignore` | Ignore `.wrapix/prek.lock` |
-| `flake.nix` devShell shellHook | Set `core.hooksPath = lib/prek/hooks` idempotently on entry (FR7) |
-| `flake.nix` devShell | Add `flock` (util-linux) to devShell packages (FR7) |
-| `lib/sandbox/profiles.nix` (base profile) | Add `flock` (util-linux) to base profile packages (FR7) |
-| `tests/ralph/run-tests.sh` | Update hook tests (remove skip) |
-| `tests/ralph/scenarios/hook-test.sh` | Expand test coverage |
-
-## Success Criteria
-
-- [ ] `prek run` executes only fast hooks; slow hooks run on `git push`
-  [judge](../tests/judges/pre-commit.sh#test_prek_hook_speed_split)
-- [ ] Ralph loop executes hooks at all four points
-  [system](bash tests/ralph/run-tests.sh test_default_config_has_hooks)
-- [ ] Loop pauses on hook failure when `hooks-on-failure = "block"`
-  [system](bash tests/ralph/run-tests.sh test_config_data_driven)
-- [ ] Existing tests pass; hook tests no longer skipped
-  [system](bash tests/ralph/run-tests.sh test_default_config_has_hooks)
-- [ ] Template variables substituted correctly in hook commands
-  [system](bash tests/ralph/run-tests.sh test_render_template_basic)
-- [ ] Two concurrent `git commit` invocations serialize via `.wrapix/prek.lock`; neither loses working-tree edits (wx-m5yuq repro)
-  [system](bash tests/ralph/run-tests.sh test_prek_lock_commit_serializes)
-- [ ] Two concurrent `git push` invocations serialize via `.wrapix/prek.lock`
-  [system](bash tests/ralph/run-tests.sh test_prek_lock_push_serializes)
-- [ ] Commit against a held push lock waits up to 10 min, then fails loudly with a clear error rather than hanging
-  [system](bash tests/ralph/run-tests.sh test_prek_lock_cross_stage_timeout)
-- [ ] Both pre-commit and pre-push shims use a 10-min `flock` timeout
-  [system](bash tests/ralph/run-tests.sh test_prek_lock_timeout)
-- [ ] `git commit --no-verify` and `git push --no-verify` bypass both the lock and prek (documented escape hatch)
-  [system](bash tests/ralph/run-tests.sh test_prek_lock_no_verify_bypass)
-- [ ] Shim aborts with a clear `flock not found` error when `flock` is missing from `PATH`
-  [system](bash tests/ralph/run-tests.sh test_prek_lock_requires_flock)
-- [ ] `flock` is present in the nix devShell and the sandbox `base` profile
-  [system](bash tests/ralph/run-tests.sh test_flock_in_devshell_and_base_profile)
-- [ ] Entering the nix devShell sets `core.hooksPath = lib/prek/hooks` idempotently
-  [system](bash tests/ralph/run-tests.sh test_devshell_sets_core_hooks_path)
-- [ ] `git commit` routes through `lib/prek/hooks/pre-commit` (shim actually intercepts the commit)
-  [system](bash tests/ralph/run-tests.sh test_git_commit_routes_through_shim)
+| `.gitignore` | Ignore `.wrapix/prek.lock`, `.wrapix/push-verified` |
+| `flake.nix` devShell `shellHook` | Set `core.hooksPath = lib/prek/hooks` idempotently on entry |
+| `flake.nix` devShell packages | Add `flock` (util-linux) |
+| `lib/sandbox/profiles.nix` base profile | Add `flock` (util-linux) |
 
 ## Out of Scope
 
-- Custom per-feature hook overrides (use config.nix)
-- Hook retry logic (may add later)
+- Custom per-feature hook overrides — use a project-local `.pre-commit-config.yaml` patch
+- Hook retry logic
 - Parallel hook execution
-- Test runner quiet mode implementation (repo-specific)

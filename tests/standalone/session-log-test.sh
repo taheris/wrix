@@ -42,7 +42,7 @@ setup() {
 
 teardown() {
   rm -rf "$TEST_DIR"
-  unset RALPH_MODE WRAPIX_SESSION_ID
+  unset LOOM_MODE WRAPIX_SESSION_ID
   rm -f /tmp/wrapix-bead-id
 }
 
@@ -57,8 +57,8 @@ write_session_log() {
   local duration=$(( end_epoch - SESSION_START_EPOCH ))
 
   local mode="interactive"
-  if [ "${RALPH_MODE:-}" = "1" ]; then
-    mode="ralph"
+  if [ "${LOOM_MODE:-}" = "1" ]; then
+    mode="loom"
   fi
 
   local bead_id=""
@@ -160,7 +160,7 @@ test_log_required_fields() {
 test_log_interactive_mode() {
   test_header "Interactive mode is recorded correctly"
   setup
-  unset RALPH_MODE
+  unset LOOM_MODE
 
   local log_file
   log_file=$(write_session_log 0)
@@ -176,20 +176,20 @@ test_log_interactive_mode() {
   teardown
 }
 
-test_log_ralph_mode() {
-  test_header "Ralph mode is recorded correctly"
+test_log_loom_mode() {
+  test_header "Loom mode is recorded correctly"
   setup
-  export RALPH_MODE=1
+  export LOOM_MODE=1
 
   local log_file
   log_file=$(write_session_log 0)
   local mode
   mode=$(jq -r '.mode' "$log_file")
 
-  if [ "$mode" = "ralph" ]; then
-    test_pass "Mode is 'ralph'"
+  if [ "$mode" = "loom" ]; then
+    test_pass "Mode is 'loom'"
   else
-    test_fail "Mode is '$mode', expected 'ralph'"
+    test_fail "Mode is '$mode', expected 'loom'"
   fi
 
   teardown
@@ -363,7 +363,7 @@ ALL_TESTS=(
   test_log_valid_json
   test_log_required_fields
   test_log_interactive_mode
-  test_log_ralph_mode
+  test_log_loom_mode
   test_log_exit_code
   test_log_bead_id_from_file
   test_log_bead_id_null_when_missing

@@ -1,8 +1,7 @@
 //! `loom todo` — spec-to-beads decomposition.
 //!
-//! Implements four-tier detection (per-spec cursor fan-out) by porting the
-//! decision tree from `lib/ralph/cmd/todo.sh` and `compute_spec_diff` in
-//! `lib/ralph/cmd/util.sh` to typed Rust.
+//! Implements four-tier detection (per-spec cursor fan-out) via
+//! `compute_spec_diff`.
 //!
 //! - Tier 1 (`diff`): a molecule with `base_commit` exists → widen to
 //!   `git diff <base> HEAD -- specs/` and apply per-spec cursor fan-out.

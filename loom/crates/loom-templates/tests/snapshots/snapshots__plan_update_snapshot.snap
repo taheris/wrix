@@ -31,7 +31,7 @@ Read the existing spec at `specs/loom-harness.md` for full context before refini
 The following companion directories are in scope. Read each one's `manifest.md` on demand:
 
 - lib/sandbox/
-- lib/ralph/template/
+- loom/crates/loom-templates/templates/
 
 
 ## Spec-Authoring Conventions

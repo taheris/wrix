@@ -3,7 +3,7 @@
 //! The default mode prints `[verify]`/`[judge]` annotations parsed from the
 //! active spec's `## Success Criteria` section. The `--deps` mode walks each
 //! annotated test file and emits the set of nixpkgs names referenced by the
-//! tools they invoke (a port of `ralph sync --deps`).
+//! tools they invoke.
 //!
 //! Read-only — no lock acquired (per the lock matrix in
 //! `specs/loom-harness.md`).

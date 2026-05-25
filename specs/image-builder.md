@@ -20,7 +20,6 @@ Sandboxes need container images with:
 4. **Nix Configuration** - Enable flakes and nix-command features
 5. **CA Certificates** - Include root certificates for HTTPS
 6. **Entrypoint Embedding** - Include platform-specific startup scripts
-7. **Template Bundling** - Include ralph templates for AI workflow
 
 ### Non-Functional
 
@@ -34,11 +33,9 @@ Sandboxes need container images with:
 /
 ├── bin/, lib/, etc/     # Profile packages (from Nix store)
 ├── entrypoint.sh        # Container startup script
-├── etc/
-│   ├── nix/nix.conf     # Nix configuration
-│   └── ssl/certs/       # CA certificates
-└── ralph/
-    └── template/        # Ralph prompt templates
+└── etc/
+    ├── nix/nix.conf     # Nix configuration
+    └── ssl/certs/       # CA certificates
 ```
 
 ## Build Process

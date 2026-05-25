@@ -94,15 +94,21 @@ mod tests {
         std::fs::create_dir_all(spec.parent().unwrap())?;
         std::fs::write(
             &spec,
-            "# Foo\n\n## Companions\n\n- `lib/sandbox/`\n- `lib/ralph/template/`\n",
+            "# Foo\n\n## Companions\n\n- `lib/sandbox/`\n- `loom/crates/loom-templates/templates/`\n",
         )?;
         let label = SpecLabel::new("foo");
 
         let outcome = reconcile_companions(&db, &label, &spec)?;
-        assert_eq!(outcome.paths, vec!["lib/sandbox/", "lib/ralph/template/"]);
+        assert_eq!(
+            outcome.paths,
+            vec!["lib/sandbox/", "loom/crates/loom-templates/templates/"]
+        );
         assert!(outcome.section_present);
         let stored = db.companions(&label)?;
-        assert_eq!(stored, vec!["lib/ralph/template/", "lib/sandbox/"]);
+        assert_eq!(
+            stored,
+            vec!["lib/sandbox/", "loom/crates/loom-templates/templates/"]
+        );
         Ok(())
     }
 

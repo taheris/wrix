@@ -1,8 +1,4 @@
 //! Scan annotated test files for tool references and emit nixpkgs names.
-//!
-//! Mirrors `scan_file_for_deps` + `tool_to_nix_package` in
-//! `lib/ralph/cmd/sync.sh`. The list of known tools and their package
-//! mapping must stay in sync with the bash port.
 
 use std::collections::BTreeSet;
 use std::fs;

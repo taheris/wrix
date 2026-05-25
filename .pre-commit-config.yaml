@@ -19,14 +19,6 @@ repos:
         pass_filenames: true
         stages: [pre-commit]
 
-      - id: ralph-check-templates
-        name: ralph check templates
-        entry: ralph check -t
-        language: system
-        files: ^lib/ralph/template/
-        pass_filenames: false
-        stages: [pre-commit]
-
       - id: shell-reexec-explicit-interpreter
         name: shell re-exec must invoke interpreter explicitly
         entry: scripts/check-shell-reexec
@@ -51,12 +43,4 @@ repos:
         language: system
         pass_filenames: false
         files: ^loom/crates/[^/]+/tests/properties\.rs$
-        stages: [pre-push]
-
-      - id: ralph-integration
-        name: ralph integration tests
-        entry: nix run .#test-ralph
-        language: system
-        pass_filenames: false
-        files: ^(lib/ralph/(cmd|template)/|tests/ralph/)
         stages: [pre-push]

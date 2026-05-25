@@ -5,7 +5,6 @@ _:
     {
       pkgs,
       system,
-      wrapix,
       test,
       ...
     }:
@@ -44,18 +43,12 @@ _:
           exec cargo +nightly fuzz run "$@"
         '';
       };
-
-      ralphInstance = wrapix.mkRalph { profile = wrapix.profiles.base; };
     in
     {
       apps = {
-        init = wrapix.ralphInitApp;
-        ralph = ralphInstance.app;
         test = test.app;
         test-loom = test.apps.loom;
         test-profiles-build-package = test.apps.profiles-build-package;
-        test-ralph = test.apps.ralph;
-        test-ralph-container = test.apps.ralph-container;
         test-wrapix-spawn-load = test.apps.wrapix-spawn-load;
         test-pi-runtime-image = test.apps.pi-runtime-image;
         test-claude-runtime-noop = test.apps.claude-runtime-noop;

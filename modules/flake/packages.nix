@@ -105,7 +105,6 @@ _:
           default = sandboxPkgs.sandbox-rust;
           loom = wrapix.loomPackage.bin;
           profile-images = wrapix.mkProfileImages profileImages;
-          ralph = wrapix.ralphPackage;
           tmux-mcp = wrapix.tmuxMcpPackage.bin;
           wrapix = wrapixLauncher;
           wrapix-builder = import ../../lib/builder { inherit pkgs linuxPkgs; };

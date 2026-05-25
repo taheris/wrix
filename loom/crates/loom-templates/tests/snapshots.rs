@@ -40,7 +40,10 @@ fn plan_update_snapshot() {
         pinned_context: PINNED_CONTEXT_BODY.to_string(),
         label: SpecLabel::new("loom-harness"),
         spec_path: "specs/loom-harness.md".to_string(),
-        companion_paths: vec!["lib/sandbox/".into(), "lib/ralph/template/".into()],
+        companion_paths: vec![
+            "lib/sandbox/".into(),
+            "loom/crates/loom-templates/templates/".into(),
+        ],
         implementation_notes: vec![
             "Read `specs/loom-harness.md` end-to-end before touching the parser".into(),
             "Retry policy is described in `## Recovery & Retry`".into(),

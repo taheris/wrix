@@ -293,14 +293,14 @@ write_session_log() {
   local duration=$(( end_epoch - SESSION_START_EPOCH ))
 
   local mode="interactive"
-  if [ "${RALPH_MODE:-}" = "1" ]; then
-    mode="ralph"
+  if [ "${LOOM_MODE:-}" = "1" ]; then
+    mode="loom"
   fi
 
-  # Read bead ID if ralph wrote one during the session
+  # Read bead ID if loom wrote one during the session
   local bead_id=""
   if [ -f /tmp/wrapix-bead-id ]; then
-    # best-effort: ralph didn't write a bead id -> field stays empty in session log
+    # best-effort: loom didn't write a bead id -> field stays empty in session log
     bead_id=$(cat /tmp/wrapix-bead-id 2>/dev/null || true)
   fi
 
@@ -345,17 +345,12 @@ write_session_log() {
 # Run without exec so session log can be written after exit
 MAIN_EXIT=0
 if [ $# -gt 0 ]; then
-  # Command override: run the specified command instead of Claude/Ralph
+  # Command override: run the specified command instead of Claude
   unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
     "$@" || MAIN_EXIT=$?
-elif [ "${RALPH_MODE:-}" = "1" ]; then
-  # RALPH_CMD and RALPH_ARGS set by launcher (default: help)
-  # shellcheck disable=SC2086 # Intentional word splitting for RALPH_ARGS
-  unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
-    ralph "${RALPH_CMD:-help}" ${RALPH_ARGS:-} || MAIN_EXIT=$?
 else
   # Build system prompt only for interactive claude (not needed for command
-  # overrides or ralph mode).  Requires /etc/wrapix-prompts/wrapix-prompt.
+  # overrides).  Requires /etc/wrapix-prompts/wrapix-prompt.
   SYSTEM_PROMPT=$(cat /etc/wrapix-prompts/wrapix-prompt)
   if [ -f /workspace/docs/README.md ]; then
     SYSTEM_PROMPT="$SYSTEM_PROMPT

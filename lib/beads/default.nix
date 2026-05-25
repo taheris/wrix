@@ -541,8 +541,8 @@ in
 
   # dolt/push are exposed here for the flake overlay (see wrapixBeadsPkgs in
   # flake.nix). Consumers should reach them via pkgs.beads-dolt / pkgs.beads-push.
-  # `cli` is a convenience bundle of both scripts — used by mkRalph so a single
-  # package entry puts both binaries on the host devShell PATH.
+  # `cli` is a convenience bundle of both scripts so a single package entry
+  # puts both binaries on the host devShell PATH.
   image = doltImageDrv;
   dolt = beadsDolt;
   push = beadsPush;

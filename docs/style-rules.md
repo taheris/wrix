@@ -55,8 +55,8 @@ the Mayor via `bd human` instead.
 - **GIT-1** — *Commit messages are imperative mood, max 72 chars for the
   subject line.*
 - **GIT-2** — *No secrets, credentials, or API keys in committed files.*
-- **GIT-3** — *Hidden specs (`.wrapix/ralph/state/`) must never be
-  copied into `specs/`.*
+- **GIT-3** — *Hidden specs (e.g. files in `.git/info/exclude`'d paths) must
+  never be copied into `specs/`.*
 
 ## Testing (TST-)
 

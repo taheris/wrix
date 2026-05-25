@@ -33,7 +33,6 @@ _:
           pkgs.gh
           pkgs.podman
           self'.packages.loom
-          self'.packages.ralph
           self'.packages.sandbox-rust
           self'.packages.wrapix-notifyd
         ];

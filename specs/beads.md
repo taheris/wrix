@@ -71,11 +71,11 @@ bd close <id>                        # Complete
 bd dolt push                         # Push changes
 ```
 
-### Ralph Integration
+### Loom Integration
 
-Ralph uses beads for issue tracking:
-- `ralph todo` creates issues from specs via `bd create`
-- `ralph run` finds work via `bd ready`
+Loom uses beads for issue tracking:
+- `loom todo` creates issues from specs via `bd create`
+- `loom run` finds work via `bd ready`
 - Issues link to specs via description field
 
 ## Configuration
@@ -99,16 +99,8 @@ Key settings in `.beads/config.yaml`:
 
 ## Success Criteria
 
-- [ ] Issues persist across agent sessions
-  [system](bash tests/ralph/run-tests.sh test_isolated_beads_db)
-- [ ] Dependencies correctly block `bd ready` output
-  [system](bash tests/ralph/run-tests.sh test_run_respects_dependencies)
 - [ ] `bd dolt pull`/`bd dolt push` works in container environment
   [judge](../tests/judges/beads.sh#test_sync_in_container)
-- [ ] Priority and status filtering works
-  [system](bash tests/ralph/run-tests.sh test_config_data_driven)
-- [ ] Issues can be created with descriptions
-  [system](bash tests/ralph/run-tests.sh test_discovered_work)
 
 ## Out of Scope
 

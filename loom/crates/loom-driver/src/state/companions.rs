@@ -96,7 +96,7 @@ mod tests {
 ## Companions
 
 - `lib/sandbox/`
-- `lib/ralph/template/`
+- `loom/crates/loom-templates/templates/`
 
 ## Next Section
 
@@ -104,7 +104,7 @@ mod tests {
 ";
         assert_eq!(
             parse_companions(md),
-            vec!["lib/sandbox/", "lib/ralph/template/"]
+            vec!["lib/sandbox/", "loom/crates/loom-templates/templates/"]
         );
     }
 
@@ -162,7 +162,7 @@ mod tests {
 ## Companions
 
 - `lib/sandbox/`
-- `lib/ralph/template/`
+- `loom/crates/loom-templates/templates/`
 ```
 
 Body text.

@@ -373,12 +373,6 @@ in
             else
               ENV_ARGS+=(-e "WRAPIX_VERBOSE=''${WRAPIX_VERBOSE:-}")
               ENV_ARGS+=(-e "CLAUDE_CODE_OAUTH_TOKEN=''${CLAUDE_CODE_OAUTH_TOKEN:-}")
-              ENV_ARGS+=(-e "RALPH_MODE=''${RALPH_MODE:-}")
-              ENV_ARGS+=(-e "RALPH_CMD=''${RALPH_CMD:-}")
-              ENV_ARGS+=(-e "RALPH_ARGS=''${RALPH_ARGS:-}")
-              ENV_ARGS+=(-e "RALPH_DIR=''${RALPH_DIR:-}")
-              ENV_ARGS+=(-e "RALPH_DEBUG=''${RALPH_DEBUG:-}")
-              ENV_ARGS+=(-e "RALPH_RUNTIME_DIR=''${RALPH_RUNTIME_DIR:-}")
               [ -n "''${WRAPIX_GIT_SIGN:-}" ] && ENV_ARGS+=(-e "WRAPIX_GIT_SIGN=$WRAPIX_GIT_SIGN")
               ENV_ARGS+=(-e "WRAPIX_SESSION_ID=$WRAPIX_SESSION_ID")
             fi

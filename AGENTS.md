@@ -55,13 +55,6 @@ beads-push            # Sync beads branch: bd dolt commit + push + git push orig
 Work is NOT complete until both pushes succeed. `beads-push` is required — `bd dolt
 push` alone does not sync the `beads` git branch to GitHub.
 
-## Hidden Specs
-
-Files in `.wrapix/ralph/state/` are **hidden specs** managed by Ralph. **NEVER** copy or
-commit them to `specs/`. The `no-hidden-specs` pre-commit hook blocks this, but
-`--no-verify` bypasses it. If you need to reference a hidden spec, read it in place —
-do not create a corresponding file under `specs/`.
-
 ## Code Style
 
 Read `docs/style-rules.md` before writing or reviewing code — it contains

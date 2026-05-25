@@ -31,10 +31,6 @@ let
     loomLinuxPackage = loomLinux;
   };
   beads = import ./beads { inherit pkgs linuxPkgs; };
-  ralph = import ./ralph {
-    inherit pkgs beads;
-    inherit (sandbox) mkSandbox;
-  };
   tmuxMcp = import ./mcp/tmux/mcp-server.nix {
     inherit pkgs crane fenix;
   };
@@ -58,9 +54,6 @@ let
 in
 {
   inherit (sandbox) profiles mkSandbox mkProfileImages;
-  inherit (ralph) mkRalph scripts;
-  ralphPackage = ralph.package;
-  ralphInitApp = ralph.initApp;
   loomPackage = loom;
   loomLinuxPackage = loomLinux;
   tmuxMcpPackage = tmuxMcp;

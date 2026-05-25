@@ -45,22 +45,6 @@ let
   # Darwin UID mapping tests (verify unshare-based VirtioFS ownership fix)
   darwinUidTests = import ./darwin/uid.nix { inherit pkgs treefmt; };
 
-  # Ralph utility function tests run on all platforms
-  ralphTests = import ./ralph { inherit pkgs; };
-
-  # Ralph template validation check (runs as part of nix flake check)
-  # Uses mkTemplatesCheck from lib/ralph to validate all templates
-  ralphTemplatesCheck =
-    let
-      ralph = import ../lib/ralph {
-        inherit pkgs;
-        mkSandbox = null; # not needed for template validation
-      };
-    in
-    {
-      ralph-templates = ralph.mkTemplatesCheck;
-    };
-
   # tmux-mcp tests (Rust unit tests and shell script syntax)
   tmuxMcpTests = import ./mcp/tmux/check.nix {
     inherit
@@ -118,16 +102,6 @@ let
     loom-tests = loomDeriv.loomTests;
   };
 
-  # Ralph standalone container integration test (requires podman at runtime)
-  ralphContainerIntegration = import ./ralph/container.nix {
-    inherit
-      pkgs
-      system
-      linuxPkgs
-      treefmt
-      ;
-  };
-
   # README example verification
   readmeTest = {
     readme = import ./readme.nix { inherit pkgs src; };
@@ -138,8 +112,6 @@ let
     darwinMountTests
     // darwinNetworkTests
     // darwinUidTests
-    // ralphTemplatesCheck
-    // ralphTests
     // readmeTest
     // rustChecks
     // sandboxIntegrationTests
@@ -149,55 +121,8 @@ let
     // tomlTests;
 
   # ============================================================================
-  # Integration Test Runners (require runtime environment)
-  # ============================================================================
-
-  # Ralph workflow integration tests (with mock-claude)
-  # Copy entire ralph test directory to store so run-tests.sh can find mock-claude and scenarios
-  ralphTestDir = pkgs.runCommandLocal "ralph-test-dir" { } ''
-    cp -r ${./ralph} $out
-    chmod -R u+w $out
-    # Bundle shared test lib so fixtures.sh can source dolt-server.sh from the store
-    mkdir -p $out/lib-shared
-    cp ${./lib/dolt-server.sh} $out/lib-shared/dolt-server.sh
-    chmod +x $out/run-tests.sh $out/mock-claude $out/scenarios/*.sh
-    # Make standalone test scripts executable if they exist
-    for f in $out/test-*.sh; do
-      [ -f "$f" ] && chmod +x "$f"
-    done
-  '';
-
-  # Get ralph scripts for RALPH_METADATA_DIR (contains variables.json, templates.json)
-  ralphModule = import ../lib/ralph {
-    inherit pkgs;
-    mkSandbox = null;
-  };
-
-  ralphIntegrationTests = writeShellScriptBin "test-ralph-integration" ''
-    set -euo pipefail
-    export REPO_ROOT="${src}"
-    export RALPH_METADATA_DIR="${ralphModule.scripts}/share/ralph"
-    export RALPH_TEMPLATE_DIR="${src}/lib/ralph/template"
-    export PATH="${pkgs.beads}/bin:${pkgs.dolt}/bin:${pkgs.git}/bin:${ralphModule.scripts}/bin:$PATH"
-    # dolt init requires an identity; provide one for test runs outside a devShell
-    export DOLT_ROOT_PATH="$(mktemp -d -t wrapix-test-dolt-root-XXXXXX)"
-    trap 'rm -rf "$DOLT_ROOT_PATH"' EXIT
-    dolt config --global --add user.email "test@wrapix.local" >/dev/null
-    dolt config --global --add user.name "wrapix-test" >/dev/null
-    exec ${ralphTestDir}/run-tests.sh
-  '';
-
-  # ============================================================================
   # Test Runner Apps
   # ============================================================================
-
-  # Ralph integration tests only
-  testRalph = writeShellScriptBin "test-ralph" ''
-    set -euo pipefail
-    echo "=== Ralph Integration Tests ==="
-    echo ""
-    ${ralphIntegrationTests}/bin/test-ralph-integration
-  '';
 
   # Fast tests: nix flake check (lint, smoke, unit tests)
   testAll = writeShellScriptBin "test-all" ''
@@ -231,20 +156,6 @@ in
 
   # Individual test apps for selective running
   apps = {
-    # Ralph integration tests
-    ralph = {
-      meta.description = "Run ralph integration tests only";
-      type = "app";
-      program = "${testRalph}/bin/test-ralph";
-    };
-
-    # Ralph standalone container integration test (requires podman)
-    ralph-container = {
-      meta.description = "Run ralph standalone container integration test (requires podman)";
-      type = "app";
-      program = "${ralphContainerIntegration.script}/bin/test-ralph-container";
-    };
-
     # Loom property tests + container smoke. Property tests run everywhere;
     # the smoke runs on Linux only (Darwin prints a skip notice).
     loom = {
@@ -296,9 +207,6 @@ in
     darwinNetworkTests
     darwinUidTests
     loomChecks
-    ralphContainerIntegration
-    ralphTemplatesCheck
-    ralphTests
     readmeTest
     rustChecks
     sandboxIntegrationTests

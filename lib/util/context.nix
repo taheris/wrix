@@ -1,7 +1,7 @@
 # Context pinning utility for AI agents
 #
 # Provides a function to read the project pin file (default docs/README.md)
-# for better AI search hit rates. Used by sandbox entrypoints and ralph commands.
+# for better AI search hit rates. Used by sandbox entrypoints.
 { pkgs }:
 
 let

@@ -22,8 +22,7 @@ impl PlanMode {
 /// Resolve clap's pair of `Option<String>` flags into a [`PlanMode`].
 ///
 /// Exactly one of `new`/`update` must be set. Both unset and both set are
-/// rejected with [`PlanError::ModeRequired`] / [`PlanError::ConflictingModes`]
-/// — matching the bash usage banner in `lib/ralph/cmd/plan.sh`.
+/// rejected with [`PlanError::ModeRequired`] / [`PlanError::ConflictingModes`].
 pub fn parse_mode(new: Option<String>, update: Option<String>) -> Result<PlanMode, PlanError> {
     match (new, update) {
         (Some(_), Some(_)) => Err(PlanError::ConflictingModes),

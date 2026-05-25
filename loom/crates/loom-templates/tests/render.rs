@@ -48,7 +48,10 @@ fn plan_update_renders_partials_and_companions() -> Result<()> {
         pinned_context: PINNED_CONTEXT_BODY.to_string(),
         label: SpecLabel::new("loom-harness"),
         spec_path: "specs/loom-harness.md".to_string(),
-        companion_paths: vec!["lib/sandbox/".into(), "lib/ralph/template/".into()],
+        companion_paths: vec![
+            "lib/sandbox/".into(),
+            "loom/crates/loom-templates/templates/".into(),
+        ],
         implementation_notes: vec![],
         scratchpad_path: SCRATCHPAD_PATH_BODY.to_string(),
         spec_conventions: "docs/spec-conventions.md".to_string(),
@@ -57,7 +60,7 @@ fn plan_update_renders_partials_and_companions() -> Result<()> {
 
     assert!(out.contains("# Specification Update Interview"));
     assert!(out.contains("- lib/sandbox/"));
-    assert!(out.contains("- lib/ralph/template/"));
+    assert!(out.contains("- loom/crates/loom-templates/templates/"));
     assert!(out.contains("Anchor Session & Sibling-Spec Editing"));
     assert!(out.contains("Invariant-Clash Awareness"));
     Ok(())

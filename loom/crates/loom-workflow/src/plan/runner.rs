@@ -520,7 +520,7 @@ mod tests {
             dir.path(),
             Some((
                 &spec_path,
-                "# loom-harness\n\n## Companions\n\n- `lib/sandbox/`\n- `lib/ralph/template/`\n",
+                "# loom-harness\n\n## Companions\n\n- `lib/sandbox/`\n- `loom/crates/loom-templates/templates/`\n",
             )),
         )?;
         let manifest = three_profile_manifest(dir.path())?;
@@ -533,7 +533,7 @@ mod tests {
 
         assert_eq!(
             report.companion_paths,
-            vec!["lib/sandbox/", "lib/ralph/template/"]
+            vec!["lib/sandbox/", "loom/crates/loom-templates/templates/"]
         );
 
         let argv_log = std::fs::read_to_string(dir.path().join("argv.log"))?;

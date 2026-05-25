@@ -1,4 +1,4 @@
-//! Parser for the **Options Format Contract** (see `specs/ralph-review.md`).
+//! Parser for the **Options Format Contract** on clarify beads.
 //!
 //! Clarify beads enumerate their options with two heading shapes:
 //!
