@@ -842,7 +842,7 @@ PATH, and a `[judge]` annotation pointing at the gate's own
   suffix is stripped before the on-disk check
   [test](forward_judge_accepts_script_with_fn_selector)
 - **Forward — system `::attr` selector.** A `[system](path::attr)`
-  target (e.g. `[system](tests/city/unit.nix::city-mkcity-eval)`)
+  target (e.g. `[system](tests/loom/unit.nix::eval-smoke)`)
   resolves when the leading path exists; the `::attr` suffix is
   stripped before the PATH / file check, matching the `[judge]` shape
   [test](forward_system_accepts_path_with_attr_selector)

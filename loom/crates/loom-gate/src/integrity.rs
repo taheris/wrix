@@ -1381,7 +1381,7 @@ mod tests {
     #[test]
     fn forward_system_accepts_path_with_attr_selector() {
         let dir = tempdir().unwrap();
-        let nix_dir = dir.path().join("tests/city");
+        let nix_dir = dir.path().join("tests/loom");
         fs::create_dir_all(&nix_dir).unwrap();
         let unit_nix = nix_dir.join("unit.nix");
         fs::write(&unit_nix, "{ }\n").unwrap();
@@ -1389,14 +1389,14 @@ mod tests {
         let annotations = vec![
             ann(
                 Tier::System,
-                "tests/city/unit.nix::city-mkcity-eval",
+                "tests/loom/unit.nix::eval-smoke",
                 "specs/a.md",
                 17,
                 17,
             ),
             ann(
                 Tier::System,
-                "tests/city/unit.nix::Wait for worker worktree",
+                "tests/loom/unit.nix::Wait for worker worktree",
                 "specs/a.md",
                 18,
                 18,
@@ -1416,7 +1416,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let annotations = vec![ann(
             Tier::System,
-            "tests/city/absent.nix::some-attr",
+            "tests/loom/absent.nix::some-attr",
             "specs/a.md",
             19,
             19,

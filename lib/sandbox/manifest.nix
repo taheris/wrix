@@ -16,7 +16,7 @@ let
   # podman accepts `localhost/<name>:<tag>` refs; Apple's `container` CLI
   # rejects the `localhost/` prefix and uses bare `<name>:<tag>`. Match the
   # platform convention used by the corresponding launcher (linux/darwin
-  # sandbox default.nix and lib/city/default.nix).
+  # sandbox default.nix).
   refPrefix = if pkgs.stdenv.isDarwin then "" else "localhost/";
 
   mkEntry = image: {

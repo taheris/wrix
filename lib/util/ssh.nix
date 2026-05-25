@@ -1,9 +1,9 @@
 # SSH credential paths and runtime setup for sandbox containers.
 #
-# Centralises container-side mount targets so Linux, Darwin, and city
-# launchers all use the same key locations.  The runtime setup script
-# (gitSshSetup) is sourced by entrypoints and the city provider to
-# export GIT_SSH_COMMAND, write ~/.ssh/config, and configure git signing.
+# Centralises container-side mount targets so Linux and Darwin launchers
+# all use the same key locations.  The runtime setup script (gitSshSetup)
+# is sourced by entrypoints to export GIT_SSH_COMMAND, write ~/.ssh/config,
+# and configure git signing.
 {
   # Container-side key directory.
   # NOT under ~/.ssh/ — on Linux, podman auto-creates parent dirs for
@@ -18,7 +18,7 @@
   # directories instead of files (Darwin VirtioFS).
   knownHostsDirTarget = "/etc/wrapix/known_hosts_dir";
 
-  # Runtime git/SSH setup script — sourced (not executed) by entrypoints
-  # and the city provider.  Kept as a .sh file so shellcheck works.
+  # Runtime git/SSH setup script — sourced (not executed) by entrypoints.
+  # Kept as a .sh file so shellcheck works.
   gitSshSetup = ./git-ssh-setup.sh;
 }

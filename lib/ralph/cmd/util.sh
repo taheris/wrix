@@ -2504,51 +2504,6 @@ Files in `.wrapix/ralph/state/` are hidden specs managed by ralph. Never copy or
 commit them to `specs/`.
 '
 
-# Default content for docs/orchestration.md (Gas City projects only)
-DOCS_ORCHESTRATION_CONTENT='# Orchestration
-
-<!-- Scaffolded by ralph sync — edit this file, then close the review bead -->
-
-## Deploy Commands
-
-Describe how to deploy changes (e.g., `nix build`, `podman restart`).
-
-## Scout Rules
-
-Error patterns the scout watches for in service container logs.
-
-### Immediate (P0 bead)
-
-```
-FATAL|PANIC|panic:
-```
-
-### Batched (collected over one poll cycle)
-
-```
-ERROR|Exception
-```
-
-### Ignore
-
-```
-# Add patterns for known noise
-```
-
-## Auto-deploy
-
-<!-- Define criteria for changes that can be deployed without director approval -->
-<!-- Remove this section or leave empty to require director approval for all deploys -->
-'
-
-# Detect whether the flake uses mkCity (Gas City integration).
-flake_uses_mkcity() {
-  if [ -f "flake.nix" ] && grep -q 'mkCity' "flake.nix"; then
-    return 0
-  fi
-  return 1
-}
-
 # Scaffold a single docs file and create a review bead.
 # Usage: scaffold_doc <filepath> <content> <description>
 # Returns: 0 if created, 1 if already exists
@@ -2587,7 +2542,7 @@ scaffold_doc() {
 }
 
 # Scaffold project docs (docs/README.md, docs/architecture.md,
-# docs/style-guidelines.md, and docs/orchestration.md when mkCity is detected).
+# docs/style-guidelines.md).
 # AGENTS.md is scaffolded separately by scaffold_agents.
 scaffold_docs() {
   local scaffolded=0
@@ -2611,14 +2566,6 @@ scaffold_docs() {
     "$DOCS_STYLE_CONTENT" \
     "Review and customize the scaffolded style guidelines (docs/style-guidelines.md). Define code standards and review criteria."; then
     scaffolded=$((scaffolded + 1))
-  fi
-
-  if flake_uses_mkcity; then
-    if scaffold_doc "docs/orchestration.md" \
-      "$DOCS_ORCHESTRATION_CONTENT" \
-      "Review and customize the scaffolded orchestration config (docs/orchestration.md). Define deploy commands, scout error patterns, and auto-deploy criteria."; then
-      scaffolded=$((scaffolded + 1))
-    fi
   fi
 
   if [ "$scaffolded" -gt 0 ]; then

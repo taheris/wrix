@@ -84,7 +84,7 @@ This includes:
 - **Data-structure choices** (e.g., "state is a single JSON file per label")
 - **Documented constraints** (e.g., "no network access during build")
 - **Non-functional requirements** (e.g., "template render is pure/side-effect free")
-- **Out-of-scope items** (e.g., "gas-city is handled by a separate spec")
+- **Out-of-scope items** (e.g., "notifications are handled by a separate spec")
 
 **Detection posture**: Use LLM judgment, biased toward asking. When uncertain whether
 something is an invariant clash, treat it as one and ask — it's cheaper for the user

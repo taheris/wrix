@@ -75,9 +75,6 @@ let
   # TOML utility tests
   tomlTests = import ./toml.nix { inherit pkgs; };
 
-  # Gas City tests (layered: eval, provider, lifecycle)
-  cityTests = import ./city/unit.nix { inherit pkgs system treefmt; };
-
   # Loom container smoke runner (Linux: real podman smoke; Darwin: skip stub).
   # Unit + integration coverage for loom comes from the loom-clippy /
   # loom-nextest entries below, which reuse the cargoArtifacts of
@@ -121,16 +118,6 @@ let
     loom-tests = loomDeriv.loomTests;
   };
 
-  # Gas City integration test (shell-based, requires podman at runtime)
-  cityIntegration = import ./city/integration.nix {
-    inherit
-      pkgs
-      system
-      linuxPkgs
-      treefmt
-      ;
-  };
-
   # Ralph standalone container integration test (requires podman at runtime)
   ralphContainerIntegration = import ./ralph/container.nix {
     inherit
@@ -148,8 +135,7 @@ let
 
   # All checks combined
   checks =
-    cityTests
-    // darwinMountTests
+    darwinMountTests
     // darwinNetworkTests
     // darwinUidTests
     // ralphTemplatesCheck
@@ -245,13 +231,6 @@ in
 
   # Individual test apps for selective running
   apps = {
-    # Gas City integration test (requires podman)
-    city = {
-      meta.description = "Run Gas City full ops loop integration test (requires podman)";
-      type = "app";
-      program = "${cityIntegration.script}/bin/test-city";
-    };
-
     # Ralph integration tests
     ralph = {
       meta.description = "Run ralph integration tests only";
@@ -313,8 +292,6 @@ in
 
   # Individual test sets (for debugging/selective running)
   inherit
-    cityIntegration
-    cityTests
     darwinMountTests
     darwinNetworkTests
     darwinUidTests

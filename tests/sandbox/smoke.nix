@@ -299,7 +299,7 @@ in
     '';
 
   # Regression guard for wx-1thzk.1: treefmt must be in basePackages so
-  # mkCity-built city containers inherit the project formatter wrapper.
+  # all sandbox containers inherit the project formatter wrapper.
   profiles-contain-treefmt =
     let
       hasTreefmt = profile: elem treefmt profile.packages;

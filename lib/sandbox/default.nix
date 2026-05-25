@@ -270,7 +270,7 @@ let
           throw "Unsupported system: ${system}";
 
       # Expose the image derivation for consumers that manage containers
-      # themselves (e.g. mkCity's provider runs podman directly).
+      # themselves (e.g. drive podman directly).
       # On Linux this is a streamLayeredImage (executable script that pipes tar).
       # On Darwin this is a buildLayeredImage (tar file in store) since the
       # stream script's Linux Python shebang can't execute on macOS.

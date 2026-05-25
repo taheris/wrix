@@ -6,7 +6,6 @@ _:
       pkgs,
       system,
       wrapix,
-      city,
       test,
       ...
     }:
@@ -45,14 +44,14 @@ _:
           exec cargo +nightly fuzz run "$@"
         '';
       };
+
+      ralphInstance = wrapix.mkRalph { profile = wrapix.profiles.base; };
     in
     {
       apps = {
-        city = city.app;
         init = wrapix.ralphInitApp;
-        ralph = city.ralph.app;
+        ralph = ralphInstance.app;
         test = test.app;
-        test-city = test.apps.city;
         test-loom = test.apps.loom;
         test-profiles-build-package = test.apps.profiles-build-package;
         test-ralph = test.apps.ralph;

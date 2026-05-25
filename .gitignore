@@ -1,10 +1,8 @@
 .cache/
 .claude/
 .direnv/
-.gc/
 .wrapix/
 
-city.toml
 result
 result-*
 target/
@@ -15,21 +13,3 @@ target/
 .beads/hooks/
 .dolt/
 *.db
-
-# Gas City scaffold (gc start creates these at workspace root)
-/.runtime/
-/formulas/
-/hooks/
-/orders/
-/prompts/
-
-# Gas City pack symlinks (gc start creates these in scripts/)
-scripts/cross-rig-deps.sh
-scripts/gate-sweep.sh
-scripts/jsonl-export.sh
-scripts/orphan-sweep.sh
-scripts/prune-branches.sh
-scripts/reaper.sh
-scripts/runtime.sh
-scripts/spawn-storm-detect.sh
-scripts/wisp-compact.sh

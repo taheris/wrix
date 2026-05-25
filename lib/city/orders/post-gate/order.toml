@@ -1,5 +1,0 @@
-[order]
-description = "Post-convergence: notify judge to merge, deploy bead creation, notifications"
-gate = "event"
-on = "convergence.terminated"
-exec = ".gc/scripts/post-gate.sh"

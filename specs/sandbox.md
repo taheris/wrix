@@ -14,7 +14,7 @@ Running AI coding assistants with unrestricted host access creates security risk
 
 ### Functional
 
-1. **Container Creation** - `mkSandbox` function creates runnable sandbox derivations. Returns `{ package, image, profile }` where `image` is the per-profile OCI artifact and `package` is a `makeWrapper` composing the profile-agnostic launcher (`packages.wrapix`) with that image. Consumers driving podman themselves (e.g. `mkCity`) read `.image` directly; one-shot users invoke `.package`
+1. **Container Creation** - `mkSandbox` function creates runnable sandbox derivations. Returns `{ package, image, profile }` where `image` is the per-profile OCI artifact and `package` is a `makeWrapper` composing the profile-agnostic launcher (`packages.wrapix`) with that image. Consumers driving podman themselves read `.image` directly; one-shot users invoke `.package`
 2. **Platform Dispatch** - Automatically selects Podman (Linux) or Apple container CLI (macOS)
 3. **Workspace Mounting** - Current directory mounted at `/workspace` with read-write access
 4. **User Namespace Mapping** - Files created in container have correct host UID/GID

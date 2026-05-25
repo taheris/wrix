@@ -400,7 +400,7 @@ _:
 
 Each module carries its own `let` for the bindings it needs (e.g., `wrapixLib`, `ralph`); flake-parts modules don't share lexical scope, and the duplication is small enough that adding `_module.args` plumbing isn't justified at this scale.
 
-`rustfmt` is intentionally omitted from the default template — it's the only treefmt program that carries a language assumption. Users enable it when they add Rust code. `mkCity` is not wired in; users opt in by extending their flake.
+`rustfmt` is intentionally omitted from the default template — it's the only treefmt program that carries a language assumption. Users enable it when they add Rust code.
 
 **`.pre-commit-config.yaml` template:**
 
@@ -1095,4 +1095,3 @@ Ralph uses `bd mol` for work tracking:
 - Interactive prompts — init is non-interactive
 - Path argument — operates on cwd only (flake-app form has no shell context to pass a path from)
 - Overwrite/merge of existing `flake.nix` (and any sibling `nix/flake/*.nix` modules) — skip-and-continue policy gated on the `flake.nix` sentinel; user merges manually if retrofitting
-- `mkCity` wiring in generated `flake.nix` — user opt-in; default flake keeps scope minimal

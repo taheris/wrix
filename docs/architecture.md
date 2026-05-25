@@ -1,6 +1,6 @@
 # Architecture
 
-Wrapix is a secure sandbox for running [Claude Code](https://claude.ai/code) in isolated containers. It provides container isolation on Linux (Podman) and macOS (Apple container CLI), with tooling for notifications, remote builds, AI-driven workflows (Ralph), and multi-agent orchestration (Gas City).
+Wrapix is a secure sandbox for running [Claude Code](https://claude.ai/code) in isolated containers. It provides container isolation on Linux (Podman) and macOS (Apple container CLI), with tooling for notifications, remote builds, and AI-driven workflows (Ralph).
 
 ## Design Principles
 
@@ -23,7 +23,7 @@ Both platforms provide full network connectivity without elevated privileges. Th
 
 ```
 lib/
-├── default.nix          # Top-level API: mkSandbox, mkCity, mkRalph, profiles
+├── default.nix          # Top-level API: mkSandbox, mkRalph, profiles
 ├── sandbox/             # Container isolation
 │   ├── default.nix      # Platform dispatcher, MCP integration, mkProfileImages
 │   ├── profiles.nix     # Built-in profiles (base, rust, python)
@@ -32,25 +32,6 @@ lib/
 │   ├── linux/           # Podman implementation + krun microVM support
 │   └── darwin/          # Apple container implementation
 ├── beads/               # Per-workspace beads-dolt container management
-├── city/                # Gas City orchestration
-│   ├── default.nix      # mkCity — generates city.toml, provider, images
-│   ├── provider.sh      # exec:<script> provider — gc commands → podman ops
-│   ├── agent.sh         # wrapix-agent wrapper (claude abstraction)
-│   ├── scout.sh         # Scout helpers: parse-rules, scan
-│   ├── gate.sh          # Convergence gate: nudge Judge, poll verdict
-│   ├── scripts/         # Shell scripts (provider, entrypoint, gate, etc.)
-│   │   ├── provider.sh      # exec:provider — podman lifecycle (start/stop/nudge)
-│   │   ├── entrypoint.sh    # beads-dolt, recovery, events watcher, gc start
-│   │   ├── gate.sh          # Convergence gate: nudge judge, wait for verdict
-│   │   ├── post-gate.sh     # Post-convergence: merge, cleanup, deploy bead
-│   │   ├── dispatch.sh      # Cooldown-aware Worker scale_check for gc
-│   │   ├── stage-home.sh    # Isolate gc from host .beads/
-│   │   ├── prime-hook.sh    # SessionStart/PreCompact role prompt loader
-│   │   ├── recovery.sh      # Crash recovery: reconcile orphaned containers
-│   │   └── ...              # worker-setup, worker-collect, judge-merge, etc.
-│   ├── prompts/         # Per-role system prompts (mayor, scout, judge, worker)
-│   ├── formulas/        # Default role formulas (mayor, scout, worker, judge)
-│   └── orders/          # gc orders (post-gate)
 ├── mcp/                 # MCP server registry
 │   ├── default.nix      # Server registry: { tmux, playwright }
 │   ├── tmux/            # tmux MCP server
@@ -65,14 +46,10 @@ lib/
 
 loom/                    # Rust workspace: loom orchestrator (crates/loom*, profile manifest, spawn)
 
-modules/
-└── city.nix             # NixOS module: services.wrapix.cities.<name>
-
 docs/
 ├── README.md            # Project overview, terminology (always pinned)
 ├── architecture.md      # This file (on demand)
-├── orchestration.md     # Ops config, Scout rules, deploy commands (on demand)
-└── style-rules.md  # Code standards the Judge enforces (on demand)
+└── style-rules.md       # Code standards (on demand)
 ```
 
 ## Component Overview
@@ -80,7 +57,6 @@ docs/
 | Component | Purpose | Entry Point |
 |-----------|---------|-------------|
 | Sandbox | Container creation and lifecycle (`wrapix run`/`spawn`) | `mkSandbox` |
-| Gas City | Multi-agent orchestration | `mkCity` |
 | Profiles | Pre-configured dev environments | `profiles.{base,rust,python}` |
 | MCP Servers | Optional capabilities (tmux, playwright) | `mcp.tmux`, `mcp.playwright` |
 | Image Builder | OCI image generation via Nix | `lib/sandbox/image.nix` |
@@ -116,51 +92,6 @@ See [specs/sandbox.md](../specs/sandbox.md) and [specs/profiles.md](../specs/pro
 ### MicroVM Boundary (Linux)
 
 On Linux with KVM, containers can optionally run inside a [libkrun](https://github.com/containers/libkrun) microVM (`podman --runtime krun`) for hardware-level isolation. Set `WRAPIX_MICROVM=1` to opt in.
-
-## Gas City
-
-Gas City adds multi-agent orchestration on top of the sandbox. It runs four roles in an autonomous ops loop:
-
-```
-Scout (watching) → creates bead → Worker (fixes) → Judge (reviews)
-                                                         |
-                                               merge or reject → retry
-                                                         |
-                                                  escalation → Mayor
-```
-
-| Role | Job | Lifetime |
-|------|-----|----------|
-| Mayor | Human's conversational interface, triage, approved actions | Persistent |
-| Scout | Watches services, detects errors, creates beads, housekeeping | Persistent |
-| Worker | Picks up a bead, writes the fix in a git worktree | Ephemeral |
-| Judge | Reviews diffs against `docs/style-rules.md`, owns merge | Persistent |
-
-**Key design decisions:**
-
-- gc runs on the host as a per-city systemd service; agent role containers are spawned as siblings by the provider script via the local podman socket
-- Workers get isolated git worktrees at `.wrapix/worktree/<bead-id>`
-- The provider script (`lib/city/scripts/provider.sh`) translates gc commands to podman operations
-- Convergence manages the Worker→Judge loop (max 2 iterations before escalation to the Mayor)
-- Merge is fast-forward only; rebase + prek on divergence
-- `ralph sync` scaffolds the docs/ context hierarchy; scaffolded files are flagged for human review via `bd label add <id> human` and presented by the Mayor on attach
-
-### gc Primitives
-
-- **Convergence** — bounded Worker-Judge retry loop with a gate condition script; terminates on approve or max iterations (default 2), then escalates to the Mayor.
-- **Orders** — event- or time-triggered workflow dispatchers defined in TOML under `lib/city/orders/`; fire formulas on conditions like `convergence.terminated`.
-- **Formulas** — role-behavior definitions under `lib/city/formulas/`; each role's formula is a sequence of steps executed per session iteration.
-- **Sling** — gc's routing primitive; sets `gc.routed_to=<role>` metadata on a bead so the target role's scale_check picks it up.
-
-### Context Hierarchy
-
-| File | Pinned | Purpose |
-|------|--------|---------|
-| `docs/README.md` | Always | Project overview, terminology |
-| `docs/architecture.md` | On demand | System design |
-| `docs/orchestration.md` | On demand | Ops config, Scout rules, deploy commands |
-| `docs/style-rules.md` | On demand | Code standards the Judge enforces |
-| `.wrapix/orchestration.md` | On demand | Dynamic/temporal overrides (local, tool-managed) |
 
 ## MCP Integration
 

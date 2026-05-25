@@ -35,11 +35,6 @@ let
     inherit pkgs beads;
     inherit (sandbox) mkSandbox;
   };
-  city = import ./city {
-    inherit pkgs linuxPkgs;
-    inherit (sandbox) mkSandbox profiles baseClaudeSettings;
-    inherit (ralph) mkRalph;
-  };
   tmuxMcp = import ./mcp/tmux/mcp-server.nix {
     inherit pkgs crane fenix;
   };
@@ -63,7 +58,6 @@ let
 in
 {
   inherit (sandbox) profiles mkSandbox mkProfileImages;
-  inherit (city) mkCity;
   inherit (ralph) mkRalph scripts;
   ralphPackage = ralph.package;
   ralphInitApp = ralph.initApp;

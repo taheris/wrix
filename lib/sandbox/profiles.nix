@@ -73,7 +73,7 @@ let
   ];
 
   # Helper to create a profile with base packages, mounts, and env merged in.
-  # shellHook is a shell snippet consumer shellHooks (ralph, city, or a
+  # shellHook is a shell snippet consumer shellHooks (ralph or a
   # downstream host devShell) splice in to align host-side toolchain identity,
   # env, and PATH with the sandbox — e.g. prepending the rust profile's
   # `${toolchain}/bin` so host `rustc` resolves to the same /nix/store/... path

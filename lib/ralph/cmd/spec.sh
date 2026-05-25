@@ -128,7 +128,6 @@ run_verify_nix_integration() {
 
   local app=""
   case "$file_path" in
-    tests/city/integration.nix) app="test-city" ;;
     *)
       echo "  [FAIL] $criterion"
       echo "         $file_path: no known nix app for integration file"

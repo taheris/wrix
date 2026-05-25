@@ -71,7 +71,7 @@ let
   deepResult = toTOML {
     session = {
       k8s = {
-        namespace = "gc";
+        namespace = "demo";
         cpu_limit = "2";
       };
     };
@@ -82,18 +82,18 @@ let
 
     [session.k8s]
     cpu_limit = "2"
-    namespace = "gc"'';
+    namespace = "demo"'';
 
   # Array of tables ([[section]])
   aotResult = toTOML {
     agent = [
       {
-        name = "scout";
-        scope = "city";
+        name = "build";
+        scope = "global";
       }
       {
-        name = "worker";
-        scope = "city";
+        name = "test";
+        scope = "global";
         max_active_sessions = 2;
       }
     ];
@@ -101,12 +101,12 @@ let
   aotExpected = ''
 
     [[agent]]
-    name = "scout"
-    scope = "city"
+    name = "build"
+    scope = "global"
     [[agent]]
     max_active_sessions = 2
-    name = "worker"
-    scope = "city"'';
+    name = "test"
+    scope = "global"'';
 
   # Mixed: scalars + tables + array of tables
   mixedResult = toTOML {
@@ -122,12 +122,12 @@ let
     };
     agent = [
       {
-        name = "scout";
-        scope = "city";
+        name = "build";
+        scope = "global";
       }
       {
-        name = "worker";
-        scope = "city";
+        name = "test";
+        scope = "global";
       }
     ];
   };

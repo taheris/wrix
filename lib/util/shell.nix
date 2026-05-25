@@ -126,8 +126,7 @@ _:
   # filter was scoped to the currently-invoked profile only.
   #
   # runtime:
-  #   "podman"    — Linux, city, module, beads-dolt; repos are
-  #                 localhost/wrapix-*.
+  #   "podman"    — Linux, beads-dolt; repos are localhost/wrapix-*.
   #   "container" — Darwin's Apple container CLI; repos are wrapix-*.
   # cmd: override the CLI binary (absolute path for systemd units, etc.).
   pruneStaleImages =

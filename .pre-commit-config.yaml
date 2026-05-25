@@ -45,14 +45,6 @@ repos:
         stages: [pre-push]
 
       # Integration tests (~1m, conditional on changes to relevant files)
-      - id: city-integration
-        name: city integration tests
-        entry: bash -c 'nix run .#test-city; rc=$?; [ "$rc" = "77" ] && exit 0; exit "$rc"'
-        language: system
-        pass_filenames: false
-        files: ^(lib/city/(scripts|formulas|orders|prompts)/|tests/city/)
-        stages: [pre-push]
-
       - id: loom-integration
         name: loom integration tests
         entry: nix run .#test-loom

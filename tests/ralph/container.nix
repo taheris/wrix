@@ -1,8 +1,7 @@
 # Ralph standalone container integration test.
 #
-# Exercises `mkRalph` without gas-city to verify a consumer that just wants
-# ralph (no city orchestration) still gets the beads-dolt container bootstrap
-# and the unix-socket-based bd connection.
+# Exercises `mkRalph` to verify a consumer gets the beads-dolt container
+# bootstrap and the unix-socket-based bd connection.
 #
 # Scenarios:
 #   shellhook-bootstraps-beads:

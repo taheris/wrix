@@ -65,19 +65,6 @@ See [specs/sandbox.md](specs/sandbox.md) for full details.
 | `rust` | base + fenix toolchain, sccache, gcc, openssl, pkg-config |
 | `python` | base + python3, uv, ty, ruff |
 
-## NixOS Module
-
-```nix
-services.wrapix.cities.myproject = {
-  workspace = "/srv/myproject";
-  profile = "rust";
-  services.api.package = myApp;
-  secrets.claude = "/run/secrets/claude-api-key";
-};
-```
-
-Generates systemd units and a podman network per city.
-
 ## MCP Servers
 
 ```bash

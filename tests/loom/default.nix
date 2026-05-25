@@ -95,7 +95,6 @@ let
     cp ${./run-tests.sh} $out/tests/loom/run-tests.sh
     cp ${../default.nix} $out/tests/default.nix
     cp -r ${../judges} $out/tests/judges
-    cp -r ${../city} $out/tests/city
     cp ${../../modules/flake/apps.nix} $out/modules/flake/apps.nix
     cp ${../../modules/flake/overlays.nix} $out/modules/flake/overlays.nix
     cp ${../../lib/sandbox/linux/entrypoint.sh} $out/lib/sandbox/linux/entrypoint.sh

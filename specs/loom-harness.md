@@ -2501,8 +2501,6 @@ two agent-loop observers.
 
 ## Out of Scope
 
-- **Gas City integration** — Gas City is experimental and token-heavy. Loom
-  does not need to integrate with or replace Gas City's agent management.
 - **Agent backend implementations** — defined in [loom-agent.md](loom-agent.md).
 - **Parallelism beyond worktree-per-bead** — `loom run --parallel N`
   dispatches one git worktree per bead in parallel. New parallelism

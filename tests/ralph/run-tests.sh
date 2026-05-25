@@ -15843,7 +15843,7 @@ test_rendered_prompt_size_bound() {
     open 6 "Add integration tests for the rename" \
     open 7 "Hook the new flag into ralph check" \
     open 8 "Backfill existing molecules for the schema change" \
-    open 9 "Land the gas-city sibling spec edits" \
+    open 9 "Land the sibling spec edits" \
     open 10 "Final read-through and merge")
 
   local beads_summary="$existing_tasks"

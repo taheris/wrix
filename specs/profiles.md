@@ -25,7 +25,7 @@ Different projects require different toolchains. Users need:
 
 ### Non-Functional
 
-1. **Curated Toolkit** - Base profile ships a ready-to-work agent container (shell, search, VCS, issue tracking, formatters) — the shared floor for city agents and direct `mkSandbox` consumers alike, not a minimal OS layer. Language profiles extend it.
+1. **Curated Toolkit** - Base profile ships a ready-to-work agent container (shell, search, VCS, issue tracking, formatters) for `mkSandbox` consumers — the shared floor, not a minimal OS layer. Language profiles extend it.
 2. **Reproducible** - Same profile produces same environment via Nix
 
 ## Profile Attrset Schema
@@ -40,7 +40,7 @@ A profile is a Nix attrset produced by the internal `mkProfile` helper in `lib/s
 | `mounts` | list of mount specs | Host → container bind mounts; each `{ source, dest, mode, optional }` |
 | `networkAllowlist` | list of strings | Domains permitted when `WRAPIX_NETWORK=limit` (merged with base allowlist) |
 | `enabledPlugins` | attrset | Claude Code plugins merged into `~/.claude/settings.json` (e.g. `"rust-analyzer-lsp@claude-plugins-official" = true`) |
-| `shellHook` | shell snippet | Optional snippet for downstream **host** devShells / ralph / city shellHooks to splice in (e.g. `${rustProfile.shellHook}`). Aligns host-side toolchain identity, env, and PATH with the sandbox so `rustc` resolves to the same `/nix/store/...` path on both sides — the prerequisite for cross-boundary sccache hits and shared `target/` artifact reuse. |
+| `shellHook` | shell snippet | Optional snippet for downstream **host** devShells / ralph shellHooks to splice in (e.g. `${rustProfile.shellHook}`). Aligns host-side toolchain identity, env, and PATH with the sandbox so `rustc` resolves to the same `/nix/store/...` path on both sides — the prerequisite for cross-boundary sccache hits and shared `target/` artifact reuse. |
 | `writableDirs` | list of strings | Linux-only: paths where the launcher stacks a tmpfs with `U=true` so the dir is wrapix-owned — needed because podman creates bind-mount parents as root, which blocks writes to sibling files like `.global-cache`/`credentials.toml` |
 
 Mount specs use `optional = true` to mean "skip this bind silently if the host source path does not exist", letting profiles declare cache mounts that no-op on hosts that haven't yet populated them.
@@ -68,7 +68,7 @@ Curated developer toolkit present in every profile. Grouped by purpose:
 
 `whichQuiet` is a local `pkgs.which` wrapper that suppresses `"no X in (PATH)"` noise.
 
-`treefmt` is the project-wide formatter wrapper (nixfmt, rustfmt, shellcheck, deadnix, statix) built via `treefmt-nix.lib.mkWrapper`. Placing it in `basePackages` ensures every consumer of `profiles.base` — direct `mkSandbox` calls **and** `mkCity`-built city containers — gets the same formatters.
+`treefmt` is the project-wide formatter wrapper (nixfmt, rustfmt, shellcheck, deadnix, statix) built via `treefmt-nix.lib.mkWrapper`. Placing it in `basePackages` ensures every consumer of `profiles.base` gets the same formatters.
 
 **Base env:** none.
 **Base mounts:** none. Host `~/.claude` is intentionally NOT mounted — containers use `$PROJECT_DIR/.claude` so user-level settings stay separate from project-level settings.
@@ -370,7 +370,7 @@ Profiles surface as three sibling output families:
 
 | Output | Shape | Use |
 |--------|-------|-----|
-| `packages.image-<profile>` | OCI artifact (Linux: `streamLayeredImage`; Darwin: tarball); both agent runtimes installed | `mkCity`-style consumers driving podman directly; manifest entries |
+| `packages.image-<profile>` | OCI artifact (Linux: `streamLayeredImage`; Darwin: tarball); both agent runtimes installed | Consumers driving podman directly; manifest entries |
 | `packages.sandbox-<profile>[-pi]` | `makeWrapper` of `packages.wrapix` + `packages.image-<profile>`; bare form defaults to `WRAPIX_AGENT=claude`, `-pi` suffix sets `WRAPIX_AGENT=pi` | One-shot users (`nix run .#sandbox-rust`, `nix run .#sandbox-rust-pi`) |
 | `packages.profile-images` | JSON manifest from `mkProfileImages`, keyed by profile (not by profile×agent) | Loom (`LOOM_PROFILES_MANIFEST`) |
 

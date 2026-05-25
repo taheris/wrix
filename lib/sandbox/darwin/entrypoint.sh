@@ -97,7 +97,7 @@ if [ -f "$KNOWN_HOSTS_SRC" ]; then
   cp "$KNOWN_HOSTS_SRC" /etc/ssh/ssh_known_hosts
 fi
 
-# Git/SSH setup — shared with Linux entrypoint and city provider
+# Git/SSH setup — shared with Linux entrypoint
 # shellcheck source=/dev/null
 . /git-ssh-setup.sh
 

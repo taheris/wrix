@@ -1,10 +1,6 @@
 { inputs, ... }:
 
 {
-  flake.nixosModules = {
-    city = ../nixos/city.nix;
-  };
-
   perSystem =
     {
       pkgs,
@@ -24,13 +20,11 @@
     {
       _module.args = {
         inherit wrapix;
-        city = wrapix.mkCity { name = "wx"; };
       };
 
       legacyPackages.lib = {
         inherit (wrapix)
           deriveProfile
-          mkCity
           mkDevShell
           mkProfileImages
           mkRalph

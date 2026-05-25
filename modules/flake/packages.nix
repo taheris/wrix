@@ -5,7 +5,6 @@ _:
     {
       pkgs,
       wrapix,
-      city,
       linuxPkgs,
       ...
     }:
@@ -104,7 +103,6 @@ _:
             ;
           nodejs = linuxPkgs.nodejs_22;
           default = sandboxPkgs.sandbox-rust;
-          city-config = city.configDir;
           loom = wrapix.loomPackage.bin;
           profile-images = wrapix.mkProfileImages profileImages;
           ralph = wrapix.ralphPackage;
