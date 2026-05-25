@@ -3586,7 +3586,7 @@ test_prek_lock_timeout() {
   # pre-commit must use prek hook-impl (not prek run) so git's positional
   # args are handled as hook metadata.
   local pre_commit_shim="$REPO_ROOT/lib/prek/hooks/pre-commit"
-  if grep -Eq "prek hook-impl .*--script-version 4 .*--hook-type=pre-commit" "$pre_commit_shim"; then
+  if grep -Eq "prek( [^ ]+)* hook-impl .*--script-version 4 .*--hook-type=pre-commit" "$pre_commit_shim"; then
     test_pass "pre-commit shim invokes prek hook-impl --script-version 4"
   else
     test_fail "pre-commit shim missing prek hook-impl (contents: $(cat "$pre_commit_shim"))"
@@ -3595,7 +3595,7 @@ test_prek_lock_timeout() {
   # pre-push uses prek hook-impl (same as pre-commit) so the ref range
   # from stdin is parsed correctly, then stamps success for a retry.
   local pre_push_shim="$REPO_ROOT/lib/prek/hooks/pre-push"
-  if grep -Fq "prek hook-impl" "$pre_push_shim" && grep -Fq -- "--hook-type=pre-push" "$pre_push_shim"; then
+  if grep -Eq "prek( [^ ]+)* hook-impl" "$pre_push_shim" && grep -Fq -- "--hook-type=pre-push" "$pre_push_shim"; then
     test_pass "pre-push shim invokes prek hook-impl --hook-type=pre-push"
   else
     test_fail "pre-push shim missing prek hook-impl (contents: $(cat "$pre_push_shim"))"
@@ -16591,13 +16591,14 @@ test_repin_content_size_with_partials() {
 
 test_runtime_dir_gitignored() {
   CURRENT_TEST="runtime_dir_gitignored"
-  test_header ".wrapix/ralph/runtime/ is listed in .gitignore"
+  test_header ".wrapix/ralph/runtime/ is covered by .gitignore"
 
   local gitignore="$REPO_ROOT/.gitignore"
-  if grep -qE '^\.wrapix/ralph/runtime/?$' "$gitignore"; then
-    test_pass ".gitignore contains .wrapix/ralph/runtime/"
+  # Accept the explicit entry or any parent glob that covers the runtime dir.
+  if grep -qE '^\.wrapix/(ralph/(runtime/?)?)?$' "$gitignore"; then
+    test_pass ".gitignore covers .wrapix/ralph/runtime/"
   else
-    test_fail ".gitignore missing entry for .wrapix/ralph/runtime/"
+    test_fail ".gitignore missing entry covering .wrapix/ralph/runtime/"
   fi
 }
 
