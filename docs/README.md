@@ -6,10 +6,9 @@ Wrapix provides sandboxed containers for AI-driven development. See
 ## Authoring Conventions
 
 - [`docs/spec-conventions.md`](spec-conventions.md) — what a spec is and isn't,
-  trust tiers, standard section structure. Pinned by `loom plan` sessions.
+  trust tiers, standard section structure.
 - [`docs/style-rules.md`](style-rules.md) — code-style and test-quality rules
   organized by rule family (SH-, NX-, DOC-, GIT-, TST-, RS-, COM-, CLI-).
-  Pinned by `loom run` and `loom gate review` sessions.
 
 ## Specs
 
@@ -28,25 +27,17 @@ pin — keep it current when specs land or retire.
 | [sandbox.md](../specs/sandbox.md) | [`lib/sandbox/default.nix`](../lib/sandbox/default.nix) | — | Platform-agnostic container isolation |
 | [security-review.md](../specs/security-review.md) | — | wx-eok | Security tradeoffs and mitigations |
 | [tmux-mcp.md](../specs/tmux-mcp.md) | [`lib/mcp/tmux/`](../lib/mcp/tmux/) | wx-4f3g | AI-assisted debugging via tmux panes |
-| [loom-harness.md](../specs/loom-harness.md) | [`loom/`](../loom/) | wx-3hhwq | Loom platform: crate structure, workspace lints, process architecture, state store, command set |
-| [loom-agent.md](../specs/loom-agent.md) | [`loom/crates/loom-agent/`](../loom/crates/loom-agent/) | wx-pkht8 | Agent backend abstraction: pi-mono RPC, Claude Code stream-json, and Direct (loom-llm + sandbox-aware tools via `loom-direct-runner`) |
-| [loom-templates.md](../specs/loom-templates.md) | [`loom/crates/loom-templates/`](../loom/crates/loom-templates/) | wx-z28qe | Askama templates, partials inventory, per-phase pinning policy |
-| [loom-llm.md](../specs/loom-llm.md) | [`loom/crates/loom-llm/`](../loom/crates/loom-llm/) | — | Public-contract LLM primitives: `LlmClient`, typed `CacheControl`, `Conversation` with built-in tool-use loop, agent-loop observers (doom-loop, duplicate-result) |
-| [loom-gate.md](../specs/loom-gate.md) | [`loom/crates/loom-gate/`](../loom/crates/loom-gate/) | — | Quality gate: conformance + style + test-quality dimensions, plan/per-diff/standing stages, `loom gate verify` (deterministic) + `loom gate review` (LLM judge) |
-| [loom-tests.md](../specs/loom-tests.md) | [`tests/loom/`](../tests/loom/) | wx-lfuuh | Test strategy: unit, integration, system tests for Loom |
 
 ## Terminology Index
 
 | Term | Definition |
 |------|------------|
 | **bd** | CLI for the beads issue tracker |
-| **Beads** | Persistent issue tracker used by Loom and the `bd` CLI |
+| **Beads** | Persistent issue tracker (used by the `bd` CLI) |
 | **Deploy Key** | SSH key for git push operations from container |
 | **Dolt** | SQL database backing beads; shared via `beads-dolt` container |
 | **Focus-aware** | Notification suppression when terminal is focused |
-| **Loom** | Rust workflow orchestrator: spec-to-implementation pipeline with pi-mono and Claude Code backends |
-| **JSONL** | JSON Lines — one complete JSON object per `\n`-terminated line (same format as NDJSON; JSONL is the term Loom uses); protocol framing for both pi-mono RPC and Claude stream-json |
-| **loom:clarify** | Bead label for items awaiting human response via `loom msg` |
+| **Loom** | External Rust workflow orchestrator that drives wrapix sandboxes ([taheris/loom](https://github.com/taheris/loom)) |
 | **pasta** | Linux userspace networking for Podman containers |
 | **playwright-mcp** | MCP server wrapping @playwright/mcp for browser automation in sandboxes |
 | **prek** | Rust-based pre-commit framework (drop-in replacement for pre-commit) |
@@ -54,4 +45,3 @@ pin — keep it current when specs land or retire.
 | **Sandbox** | Isolated container environment for running Claude Code |
 | **tmux-mcp** | MCP server for AI-assisted debugging via tmux panes |
 | **virtio-fs** | Shared filesystem for macOS container VMs |
-| **Worktree** | Per-bead git worktree under `.wrapix/worktree/<bead-id>` |

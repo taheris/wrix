@@ -63,21 +63,6 @@ _:
           profile = profiles.python;
           agent = "pi";
         };
-        # Direct runtime variants — agent=direct adds the loom-direct-runner
-        # binary on top of the workspace profile. WRAPIX_AGENT=direct at
-        # runtime selects the direct entrypoint branch.
-        sandbox-direct = {
-          profile = profiles.base;
-          agent = "direct";
-        };
-        sandbox-rust-direct = {
-          profile = profiles.rust;
-          agent = "direct";
-        };
-        sandbox-python-direct = {
-          profile = profiles.python;
-          agent = "direct";
-        };
         debug = {
           profile = profiles.rust;
           packages = [ linuxPkgs.podman ];
@@ -85,9 +70,8 @@ _:
       };
 
       # Profile-agnostic launcher (`packages.wrapix`) — no image baked in.
-      # Loom and other orchestrators export
-      # WRAPIX_DEFAULT_IMAGE_REF/WRAPIX_DEFAULT_IMAGE_SOURCE (or pass
-      # image_ref/image_source via SpawnConfig) before invoking it.
+      # Orchestrators export WRAPIX_DEFAULT_IMAGE_REF/WRAPIX_DEFAULT_IMAGE_SOURCE
+      # (or pass image_ref/image_source via SpawnConfig) before invoking it.
       wrapixLauncher = (wrapix.mkSandbox { profile = profiles.base; }).launcher;
     in
     {
@@ -103,7 +87,6 @@ _:
             ;
           nodejs = linuxPkgs.nodejs_22;
           default = sandboxPkgs.sandbox-rust;
-          loom = wrapix.loomPackage.bin;
           profile-images = wrapix.mkProfileImages profileImages;
           tmux-mcp = wrapix.tmuxMcpPackage.bin;
           wrapix = wrapixLauncher;

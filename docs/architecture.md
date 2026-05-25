@@ -1,6 +1,6 @@
 # Architecture
 
-Wrapix is a secure sandbox for running [Claude Code](https://claude.ai/code) in isolated containers. It provides container isolation on Linux (Podman) and macOS (Apple container CLI), with tooling for notifications, remote builds, and AI-driven workflows (Loom).
+Wrapix is a secure sandbox for running [Claude Code](https://claude.ai/code) in isolated containers. It provides container isolation on Linux (Podman) and macOS (Apple container CLI), with tooling for notifications, remote builds, and integration hooks for external orchestrators such as [Loom](https://github.com/taheris/loom).
 
 ## Design Principles
 
@@ -28,7 +28,7 @@ lib/
 │   ├── default.nix      # Platform dispatcher, MCP integration, mkProfileImages
 │   ├── profiles.nix     # Built-in profiles (base, rust, python)
 │   ├── image.nix        # OCI image builder
-│   ├── manifest.nix     # Profile→image JSON manifest (LOOM_PROFILES_MANIFEST)
+│   ├── manifest.nix     # Profile→image JSON manifest consumed by orchestrators
 │   ├── linux/           # Podman implementation + krun microVM support
 │   └── darwin/          # Apple container implementation
 ├── beads/               # Per-workspace beads-dolt container management
@@ -36,19 +36,17 @@ lib/
 │   ├── default.nix      # Server registry: { tmux, playwright }
 │   ├── tmux/            # tmux MCP server
 │   └── playwright/      # Playwright MCP server
-├── loom/                # Rust loom orchestrator package wrapper
 ├── pi-mono/             # Pi agent runtime layer (Node.js + pi binary)
 ├── prek/                # Pre-commit hook shims (flock-wrapped)
 ├── builder/             # Linux builder for macOS
 ├── notify/              # Desktop notifications
 └── util/                # Shared utilities
 
-loom/                    # Rust workspace: loom orchestrator (crates/loom*, profile manifest, spawn)
-
 docs/
-├── README.md            # Project overview, terminology (always pinned)
-├── architecture.md      # This file (on demand)
-└── style-rules.md       # Code standards (on demand)
+├── README.md            # Project overview, terminology
+├── architecture.md      # This file
+├── spec-conventions.md  # Spec-authoring conventions
+└── style-rules.md       # Code standards
 ```
 
 ## Component Overview
@@ -61,7 +59,6 @@ docs/
 | Image Builder | OCI image generation via Nix | `lib/sandbox/image.nix` |
 | Notifications | Desktop alerts when Claude waits | `wrapix-notify`, `wrapix-notifyd` |
 | Linux Builder | Remote Nix builds on macOS | `wrapix-builder` |
-| Loom | Spec-driven workflow runner; dispatches profiles via manifest | `loom {plan,todo,run,gate,msg}` |
 
 ## Sandbox Launcher
 
@@ -72,14 +69,20 @@ The launcher and the OCI image are separate Nix outputs, composed at the consume
 | `packages.wrapix` | Profile-agnostic launcher binary; reads image ref/source at runtime |
 | `packages.image-<profile>` | Per-profile OCI artifact (claude + pi runtimes both installed) |
 | `packages.sandbox-<profile>[-pi]` | `makeWrapper` of the launcher with image ref/source + `WRAPIX_AGENT` baked in — the user-facing `nix run .#sandbox-rust` target |
-| `packages.profile-images` | JSON manifest mapping profile → `{ref, source}` consumed by Loom (`LOOM_PROFILES_MANIFEST`) |
+| `packages.profile-images` | JSON manifest mapping profile → `{ref, source}`, consumed by orchestrators that need to look up an image by profile name |
 
 The launcher exposes two subcommands sharing the same container construction (mounts, env passthrough, deploy key):
 
-- `wrapix run [DIR] [CMD…]` — interactive (TTY); reads `WRAPIX_DEFAULT_IMAGE_REF`/`WRAPIX_DEFAULT_IMAGE_SOURCE` from the env. The `sandbox-<profile>` wrappers set both; Loom's `plan` phase exports them programmatically from the profile-image manifest.
-- `wrapix spawn --spawn-config <file> [--stdio]` — programmatic dispatch (Loom). Reads image ref/source plus workspace, env allowlist, and agent args from a JSON `SpawnConfig`. The agent runtime (`claude` vs `pi`) is selected at container start via `WRAPIX_AGENT`, not baked per-image.
+- `wrapix run [DIR] [CMD…]` — interactive (TTY); reads `WRAPIX_DEFAULT_IMAGE_REF`/`WRAPIX_DEFAULT_IMAGE_SOURCE` from the env. The `sandbox-<profile>` wrappers set both; orchestrators export them from the profile-image manifest.
+- `wrapix spawn --spawn-config <file> [--stdio]` — programmatic dispatch. Reads image ref/source plus workspace, env allowlist, and agent args from a JSON `SpawnConfig`. The agent runtime (`claude`, `pi`, `direct`) is selected at container start via `WRAPIX_AGENT`, not baked per-image.
 
 See [specs/sandbox.md](../specs/sandbox.md) and [specs/profiles.md](../specs/profiles.md) for the full launcher and manifest contracts.
+
+### Direct-mode agent (consumer-supplied)
+
+`mkSandbox { agent = "direct"; directRunner = ...; }` bakes a consumer-supplied
+direct-runner binary into the image. Wrapix doesn't ship its own runner — pass
+e.g. `loom.packages.${system}.default` from a flake input.
 
 ## Security Model
 

@@ -4,7 +4,7 @@
 # - Base packages + profile-specific packages
 # - Claude Code package
 # - Optional pi-mono runtime (Node.js + pi binary) when `agent == "pi"`
-# - Optional loom-direct-runner binary when `agent == "direct"`
+# - Optional Direct runtime binary when `agent == "direct"`
 # - CA certificates for HTTPS
 # - Platform-specific entrypoint script
 #
@@ -13,10 +13,10 @@
 #   - agent runtime (claude | pi | direct) — agent binary layer
 #
 # Claude is always present (it's part of the base image today), so the claude
-# runtime layer is a no-op. The pi runtime layer adds pkgs.pi-mono on top of
-# whichever profile is selected. The direct runtime layer adds the
-# loom-direct-runner binary so the entrypoint can exec it on
-# WRAPIX_AGENT=direct.
+# runtime layer is a no-op. The pi runtime layer adds pkgs.pi-mono. The
+# direct runtime layer adds a consumer-supplied `directRunner` package
+# (e.g. loom's `loom-direct-runner`) so the entrypoint can exec it over
+# JSONL stdio on WRAPIX_AGENT=direct.
 #
 # Layer ordering: stable packages first, frequently-changing packages last.
 # This maximizes layer cache hits across rebuilds and profiles.
@@ -31,11 +31,14 @@
   mcpServerConfigs ? { },
   # Agent runtime axis. "claude" (default) is a no-op; "pi" adds pi-mono
   # (Node.js + pi binary) for `pi --mode rpc`; "direct" adds the
-  # loom-direct-runner binary that the entrypoint execs over JSONL stdio.
+  # consumer-supplied direct-runner binary that the entrypoint execs over
+  # JSONL stdio.
   agent ? "claude",
-  # Linux-built loom workspace (from `lib/default.nix`). Required when
-  # `agent == "direct"` to source the `loom-direct-runner` binary.
-  loomLinuxPackage ? null,
+  # Linux-built package whose `bin/` directory contains the direct-runner
+  # binary. Required when `agent == "direct"`; ignored otherwise. Consumers
+  # provide this themselves (e.g. via `loom.packages.${system}.default`)
+  # since wrapix no longer builds loom in-tree.
+  directRunner ? null,
   # Use buildLayeredImage (tar in store) instead of streamLayeredImage (script).
   # Required on Darwin where the stream script's Linux Python shebang won't execute.
   asTarball ? false,
@@ -97,18 +100,18 @@ let
 
   # Agent runtime layer. `claude` is a no-op (claudeCode is the entrypointPkg
   # already baked into every image); `pi` adds pi-mono; `direct` adds the
-  # Linux-built `loom-direct-runner` binary. New runtimes plug in by
+  # consumer-supplied `directRunner` package. New runtimes plug in by
   # extending this lookup — no profile.pi or pi+rust special cases.
-  directPkg =
-    if loomLinuxPackage == null then
-      throw "lib/sandbox/image.nix: agent='direct' requires loomLinuxPackage"
+  directRunnerPkg =
+    if directRunner == null then
+      throw "lib/sandbox/image.nix: agent='direct' requires the `directRunner` argument"
     else
-      loomLinuxPackage.bin;
+      directRunner;
   agentPackages =
     {
       claude = [ ];
       pi = [ pkgs.pi-mono ];
-      direct = [ directPkg ];
+      direct = [ directRunnerPkg ];
     }
     .${agent}
       or (throw "lib/sandbox/image.nix: unknown agent '${agent}' (expected 'claude', 'pi', or 'direct')");

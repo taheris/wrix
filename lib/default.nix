@@ -8,17 +8,6 @@
 }:
 
 let
-  loom = import ./loom {
-    inherit pkgs crane fenix;
-  };
-  loomLinux =
-    if linuxPkgs == pkgs then
-      loom
-    else
-      import ./loom {
-        pkgs = linuxPkgs;
-        inherit crane fenix;
-      };
   sandbox = import ./sandbox {
     inherit
       pkgs
@@ -28,7 +17,6 @@ let
       fenix
       treefmt
       ;
-    loomLinuxPackage = loomLinux;
   };
   beads = import ./beads { inherit pkgs linuxPkgs; };
   tmuxMcp = import ./mcp/tmux/mcp-server.nix {
@@ -54,8 +42,6 @@ let
 in
 {
   inherit (sandbox) profiles mkSandbox mkProfileImages;
-  loomPackage = loom;
-  loomLinuxPackage = loomLinux;
   tmuxMcpPackage = tmuxMcp;
   inherit beads devToolchain;
 

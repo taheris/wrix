@@ -1,9 +1,10 @@
 # Profile-image manifest helper.
 #
 # Builds a `profile-images.json` derivation mapping each profile name to the
-# podman ref and Nix store path needed to spawn its image. Loom reads the
-# resulting file at startup (LOOM_PROFILES_MANIFEST) and uses each entry's
-# `ref`/`source` to populate `SpawnConfig.image_ref`/`image_source` per bead.
+# podman ref and Nix store path needed to spawn its image. Orchestrators
+# (e.g. Loom via `LOOM_PROFILES_MANIFEST`) read this at startup and use each
+# entry's `ref`/`source` to populate `SpawnConfig.image_ref`/`image_source`
+# per bead.
 #
 # See specs/profiles.md § Profile-Image Manifest.
 {

@@ -4,7 +4,7 @@
 # `dist/` (the `prepublishOnly` script runs `tsgo` before publish), so this
 # package only resolves and stages dependencies — no JS build runs in Nix.
 #
-# Spec: specs/loom-agent.md § Pi Runtime Layer
+# See the loom repo (specs/agent.md) for the consumer-side Pi runtime contract.
 # Audit: see SECURITY-AUDIT.md when bumping the version.
 #
 # Bumping the pin:

@@ -59,12 +59,10 @@ let
   # TOML utility tests
   tomlTests = import ./toml.nix { inherit pkgs; };
 
-  # Loom container smoke runner (Linux: real podman smoke; Darwin: skip stub).
-  # Unit + integration coverage for loom comes from the loom-clippy /
-  # loom-nextest entries below, which reuse the cargoArtifacts of
-  # wrapix.loomPackage so flake check shares dep compilation with the
-  # devshell's packages.loom build.
-  loomDeriv = import ./loom {
+  # Profile-image runtime checks share a craneLib + linux-package set with
+  # the standalone tests below. They verify the per-profile sandbox images
+  # contain the expected agent runtime binary.
+  sandboxImageChecks = import ./sandbox/image-checks.nix {
     inherit
       pkgs
       system
@@ -72,34 +70,11 @@ let
       fenix
       treefmt
       ;
-    inherit (wrapix) loomPackage loomLinuxPackage;
   };
 
-  # Per specs/profiles.md, the rust profile's buildPackage emits separate
-  # clippy/nextest derivations from the same buildPackage call that produces
-  # packages.loom / packages.tmux-mcp; cargoArtifacts is shared so editing a
-  # workspace .rs file invalidates lint/test/bin together but reuses the dep
-  # cache, and editing a file under extraSrcs (e.g. tests/loom/mock-pi)
-  # invalidates only loom-clippy/loom-nextest.
   rustChecks = {
-    loom-clippy = wrapix.loomPackage.clippy;
-    # loom-tests invokes `loom gate verify` across every spec under
-    # `specs/*.md` for the `[check]` and `[test]` tiers (see Nix
-    # Integration in specs/loom-tests.md). It complements
-    # `loom-nextest` (bare `cargo nextest run`) — the gate-driven
-    # variant batches only the annotated `[test]` targets and runs
-    # the static `[check]` walks alongside.
-    loom-nextest = loomDeriv.nextestFast;
-    loom-tests = loomDeriv.loomTests;
     tmux-mcp-clippy = wrapix.tmuxMcpPackage.clippy;
     tmux-mcp-nextest = wrapix.tmuxMcpPackage.nextest;
-  };
-
-  # `nix build .#loom-tests` exposes the gate-driven derivation
-  # individually (matches the `packages.loom-tests` lift in
-  # modules/flake/tests.nix).
-  loomChecks = {
-    loom-tests = loomDeriv.loomTests;
   };
 
   # README example verification
@@ -156,44 +131,28 @@ in
 
   # Individual test apps for selective running
   apps = {
-    # Loom property tests + container smoke. Property tests run everywhere;
-    # the smoke runs on Linux only (Darwin prints a skip notice).
-    loom = {
-      meta.description = "Run loom property tests + container smoke (Linux: requires podman; Darwin: smoke skipped)";
-      type = "app";
-      program = "${loomDeriv.testLoom}/bin/test-loom";
-    };
-
     # Linux-only verifier for the wrapix-spawn image-source -> podman-load
     # contract. Drives the shared `imageLoadStep` snippet (the same one
     # `wrapix spawn` runs) through a shim podman; on Darwin prints a skip.
     wrapix-spawn-load = {
       meta.description = "Verify wrapix-spawn image-source -> podman-load idempotence (Linux only)";
       type = "app";
-      program = "${loomDeriv.wrapixSpawnLoadTest}/bin/test-wrapix-spawn-load";
+      program = "${sandboxImageChecks.wrapixSpawnLoadTest}/bin/test-wrapix-spawn-load";
     };
 
     pi-runtime-image = {
       meta.description = "Verify sandbox-pi image closure contains executable pi-mono binary";
       type = "app";
-      program = "${loomDeriv.piRuntimeImageTest}/bin/test-pi-runtime-image";
+      program = "${sandboxImageChecks.piRuntimeImageTest}/bin/test-pi-runtime-image";
     };
 
     claude-runtime-noop = {
       meta.description = "Verify default sandbox image closure has claude-code but not pi-mono";
       type = "app";
-      program = "${loomDeriv.claudeRuntimeNoopTest}/bin/test-claude-runtime-noop";
+      program = "${sandboxImageChecks.claudeRuntimeNoopTest}/bin/test-claude-runtime-noop";
     };
 
-    direct-runtime-image = {
-      meta.description = "Verify sandbox-direct image closure contains executable loom-direct-runner binary";
-      type = "app";
-      program = "${loomDeriv.directRuntimeImageTest}/bin/test-direct-runtime-image";
-    };
-
-    # profiles.rust.buildPackage [verify] hash invariants (specs/profiles.md
-    # success criteria 414-427). Runs all 7 test functions in
-    # tests/profiles/build-package.sh.
+    # profiles.rust.buildPackage [verify] hash invariants (specs/profiles.md).
     profiles-build-package = {
       meta.description = "Verify profiles.rust.buildPackage hash invariants (bin/clippy/nextest/cargoArtifacts)";
       type = "app";
@@ -206,7 +165,6 @@ in
     darwinMountTests
     darwinNetworkTests
     darwinUidTests
-    loomChecks
     readmeTest
     rustChecks
     sandboxIntegrationTests

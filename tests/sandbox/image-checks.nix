@@ -1,0 +1,203 @@
+# Sandbox image runtime checks: verify each agent variant's image closure
+# contains the expected agent runtime binary, and the `wrapix spawn` image
+# load contract is idempotent against a shim podman.
+{
+  pkgs,
+  system,
+  linuxPkgs,
+  fenix ? null,
+  treefmt ? null,
+}:
+
+let
+  inherit (pkgs) lib; # threaded for symmetry with other test imports
+
+  shellLib = import ../../lib/util/shell.nix { };
+
+  isLinux = lib.elem system [
+    "x86_64-linux"
+    "aarch64-linux"
+  ];
+
+  sandboxLib = import ../../lib/sandbox {
+    inherit
+      pkgs
+      system
+      linuxPkgs
+      fenix
+      treefmt
+      ;
+  };
+  defaultImage = (sandboxLib.mkSandbox { profile = sandboxLib.profiles.base; }).image;
+  piImage =
+    (sandboxLib.mkSandbox {
+      profile = sandboxLib.profiles.base;
+      agent = "pi";
+    }).image;
+
+  defaultImageClosure = pkgs.closureInfo { rootPaths = [ defaultImage ]; };
+  piImageClosure = pkgs.closureInfo { rootPaths = [ piImage ]; };
+
+  piMonoPkg = linuxPkgs.pi-mono;
+  claudeCodePkg = linuxPkgs.claude-code;
+
+  # Linux-only shim-podman verifier for the shared `imageLoadStep` snippet
+  # (the same one `wrapix spawn` runs). Asserts load on first call,
+  # idempotence on the second.
+  wrapixSpawnLoadTest = pkgs.writeShellApplication {
+    name = "test-wrapix-spawn-load";
+    runtimeInputs = lib.optionals isLinux [
+      pkgs.coreutils
+      pkgs.gnugrep
+    ];
+    text =
+      if isLinux then
+        ''
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+
+          shim_dir="$tmp/bin"
+          state="$tmp/state"
+          mkdir -p "$shim_dir" "$state"
+          log_file="$state/podman.log"
+          : >"$log_file"
+
+          IMAGE_REF="localhost/wrapix-loadtest:abc123"
+          IMAGE_SOURCE="$tmp/image-source.sh"
+
+          cat >"$IMAGE_SOURCE" <<'IMG_SRC'
+          #!/usr/bin/env bash
+          printf 'fake-image-tarball-bytes'
+          IMG_SRC
+          chmod +x "$IMAGE_SOURCE"
+
+          cat >"$shim_dir/podman" <<PODMAN_SHIM
+          #!/usr/bin/env bash
+          set -euo pipefail
+          printf '%s\n' "\$*" >>'$log_file'
+          case "\$1" in
+              image)
+                  case "\$2" in
+                      exists)
+                          if [ -f '$state/loaded' ]; then exit 0; else exit 1; fi
+                          ;;
+                      *) exit 0 ;;
+                  esac
+                  ;;
+              load)
+                  cat >'$state/load-stdin' || true
+                  exit 0
+                  ;;
+              tag)
+                  : >'$state/loaded'
+                  exit 0
+                  ;;
+              *) exit 0 ;;
+          esac
+          PODMAN_SHIM
+          chmod +x "$shim_dir/podman"
+
+          verbose() { :; }
+
+          PATH="$shim_dir:$PATH"
+          export PATH IMAGE_REF IMAGE_SOURCE
+
+          ${shellLib.imageLoadStep}
+
+          if ! grep -q '^load -q' "$log_file"; then
+              echo "first invocation did not call 'podman load':" >&2
+              cat "$log_file" >&2
+              exit 1
+          fi
+          if ! grep -q "^tag .*:latest $IMAGE_REF$" "$log_file"; then
+              echo "first invocation did not tag image as $IMAGE_REF:" >&2
+              cat "$log_file" >&2
+              exit 1
+          fi
+
+          : >"$log_file"
+          ${shellLib.imageLoadStep}
+
+          if grep -q '^load -q' "$log_file"; then
+              echo "second invocation re-loaded image (load is not idempotent):" >&2
+              cat "$log_file" >&2
+              exit 1
+          fi
+          if ! grep -q "^image exists $IMAGE_REF$" "$log_file"; then
+              echo "second invocation did not check 'image exists $IMAGE_REF':" >&2
+              cat "$log_file" >&2
+              exit 1
+          fi
+
+          echo "test-wrapix-spawn-load: PASS"
+        ''
+      else
+        ''
+          echo "test-wrapix-spawn-load: not available on Darwin (no podman dependency on macOS)" >&2
+          exit 0
+        '';
+  };
+
+  piRuntimeImageTest = pkgs.writeShellApplication {
+    name = "test-pi-runtime-image";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.gnugrep
+    ];
+    text = ''
+      closure_file=${piImageClosure}/store-paths
+      pi_mono_path=${piMonoPkg}
+
+      if ! grep -qxF "$pi_mono_path" "$closure_file"; then
+          echo "FAIL: pi-mono store path not in sandbox-pi image closure" >&2
+          echo "  expected: $pi_mono_path" >&2
+          echo "  closure : $closure_file" >&2
+          exit 1
+      fi
+
+      if [[ ! -x "$pi_mono_path/bin/pi" ]]; then
+          echo "FAIL: pi binary at $pi_mono_path/bin/pi is missing or not executable" >&2
+          exit 1
+      fi
+
+      echo "test-pi-runtime-image: PASS"
+    '';
+  };
+
+  claudeRuntimeNoopTest = pkgs.writeShellApplication {
+    name = "test-claude-runtime-noop";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.gnugrep
+    ];
+    text = ''
+      closure_file=${defaultImageClosure}/store-paths
+      pi_mono_path=${piMonoPkg}
+      claude_code_path=${claudeCodePkg}
+
+      if grep -qxF "$pi_mono_path" "$closure_file"; then
+          echo "FAIL: pi-mono unexpectedly present in default sandbox closure" >&2
+          echo "  found   : $pi_mono_path" >&2
+          echo "  closure : $closure_file" >&2
+          exit 1
+      fi
+
+      if ! grep -qxF "$claude_code_path" "$closure_file"; then
+          echo "FAIL: claude-code missing from default sandbox closure" >&2
+          echo "  expected: $claude_code_path" >&2
+          echo "  closure : $closure_file" >&2
+          exit 1
+      fi
+
+      echo "test-claude-runtime-noop: PASS"
+    '';
+  };
+
+in
+{
+  inherit
+    wrapixSpawnLoadTest
+    piRuntimeImageTest
+    claudeRuntimeNoopTest
+    ;
+}

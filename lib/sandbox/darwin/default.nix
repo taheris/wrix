@@ -86,7 +86,7 @@ in
                 echo "Error: spawn-config file not found: $SPAWN_CONFIG" >&2
                 exit 1
               fi
-              # Stable JSON shape (loom-agent.md SpawnConfig): image_ref,
+              # Stable JSON shape (the loom repo SpawnConfig): image_ref,
               # image_source, workspace, env, initial_prompt, agent_args, repin.
               PROJECT_DIR=$(${pkgs.jq}/bin/jq -r '.workspace' "$SPAWN_CONFIG")
               # `// ""` coerces missing keys / explicit nulls to empty strings,

@@ -17,11 +17,10 @@ _:
           export SCCACHE_DIR="''${SCCACHE_DIR:-$HOME/.cache/sccache}"
           export SCCACHE_CACHE_SIZE="''${SCCACHE_CACHE_SIZE:-50G}"
           export CARGO_INCREMENTAL="''${CARGO_INCREMENTAL:-0}"
-          # FR7: point git at versioned flock-wrapped hook shims
+          # Point git at versioned flock-wrapped hook shims (see specs/pre-commit.md).
           if [ -e .git ]; then
             git config --local core.hooksPath lib/prek/hooks
           fi
-          export LOOM_PROFILES_MANIFEST=${self'.packages.profile-images}
         '';
 
         packages = [
@@ -32,7 +31,6 @@ _:
           pkgs.flock
           pkgs.gh
           pkgs.podman
-          self'.packages.loom
           self'.packages.sandbox-rust
           self'.packages.wrapix-notifyd
         ];

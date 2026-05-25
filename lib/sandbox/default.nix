@@ -5,7 +5,6 @@
   crane ? null,
   fenix ? null,
   treefmt ? null,
-  loomLinuxPackage ? null,
 }:
 
 let
@@ -120,6 +119,7 @@ let
       claudeSettings ? baseClaudeSettings,
       mcpServerConfigs ? { },
       agent ? "claude",
+      directRunner ? null,
       asTarball ? false,
     }:
     import ./image.nix {
@@ -132,8 +132,8 @@ let
         claudeSettings
         mcpServerConfigs
         agent
+        directRunner
         asTarball
-        loomLinuxPackage
         ;
       entrypointPkg = claudePkg;
     };
@@ -192,8 +192,13 @@ let
       mcp ? { },
       mcpRuntime ? false,
       # Agent runtime axis composed onto the workspace profile. "claude"
-      # (default) is a no-op; "pi" adds the pi-mono runtime layer.
+      # (default) is a no-op; "pi" adds the pi-mono runtime layer; "direct"
+      # adds a consumer-supplied `directRunner` package.
       agent ? "claude",
+      # Linux-built package whose `bin/` directory contains the direct-runner
+      # binary. Required when `agent == "direct"`. Consumers provide this
+      # themselves (e.g. via `loom.packages.${system}.default`) since wrapix
+      # no longer builds loom in-tree.
       # Override the default ANTHROPIC_MODEL for this container (null = use default)
       model ? null,
     }:
