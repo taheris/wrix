@@ -30,6 +30,8 @@ The agent binary that runs inside the container is selected by `WRAPIX_AGENT`:
 
 ## Flake Integration
 
+The canonical pattern feeds one profile to both the host devshell and the sandbox image, so `rustc` resolves to the same `/nix/store/...` path on both sides (the prerequisite for cross-boundary sccache hits):
+
 ```nix
 {
   inputs.wrapix.url = "github:taheris/wrapix";
@@ -41,18 +43,19 @@ The agent binary that runs inside the container is selected by `WRAPIX_AGENT`:
       perSystem = { system, ... }:
         let
           wrapix = inputs.wrapix.legacyPackages.${system}.lib;
-          sandbox = wrapix.mkSandbox {
-            profile = wrapix.profiles.rust;   # or base, python
-            # packages = [ linuxPkgs.sqlx-cli ];
-            # env.DATABASE_URL = "postgres://localhost/mydb";
-            # mcp.tmux = { };
+          rustProfile = wrapix.rustProfile {
+            toolchain = ./rust-toolchain.toml;
+            sha256    = "sha256-...";
           };
         in {
-          packages.default = sandbox.package;
+          devShells.default = wrapix.mkDevShell { profile = rustProfile; };
+          packages.image    = (wrapix.mkSandbox { profile = rustProfile; }).image;
         };
     };
 }
 ```
+
+`wrapix.mkDevShell { profile = ...; }` is the sole entry point for profile-aware host devshells — it splices `profile.shellHook` automatically, so consumers never hand-roll PATH or `RUSTC_WRAPPER` exports. See [specs/profiles.md](specs/profiles.md) for the `rustProfile` constructor signature and `mkDevShell` composition rules.
 
 ### mkSandbox Options
 
