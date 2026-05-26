@@ -4,33 +4,38 @@ Pre-configured development environments with language-specific toolchains.
 
 ## Problem Statement
 
-Different projects require different toolchains. Users need:
-- Ready-to-use environments for common languages
-- A consistent base of essential tools
-- Ability to extend profiles with additional packages
-- Proper environment variable configuration for each toolchain
+Different projects need different toolchains, but every project benefits from a shared agent-tooling floor (shell, search, VCS, formatters). Profiles bundle a language toolchain (rust, python) on top of that floor and expose extension hooks (`deriveProfile`, per-toolchain constructors like `rustProfile`) so consumers can pin versions or add packages without re-implementing the bundle. The same profile feeds both the sandbox image and the host devshell, keeping toolchain identity consistent across the boundary.
 
-## Requirements
+## Architecture
 
-### Functional
+A profile is a Nix attrset that bundles a packaged toolchain (`packages`,
+`env`, `mounts`, `networkAllowlist`, `shellHook`, plus optional fields)
+and toolchain-specific extras (`profile.toolchain` and
+`profile.buildPackage` on the rust profile). Built-in profiles ship as
+constants at `profiles.<name>`; per-toolchain pinned variants come from
+top-level constructors (`rustProfile { toolchain; sha256; }`). Profile
+extension uses the universal `deriveProfile` operator — there is no
+on-profile `withX` builder.
 
-1. **Base Profile** - Core tools included in all environments
-2. **Language Profiles** - Pre-configured Rust and Python environments
-3. **Profile Extension** - `deriveProfile` API to extend existing profiles
-4. **Package Bundling** - Profiles specify packages to include in container image
-5. **Environment Configuration** - Profiles set required environment variables
-6. **Mount Specifications** - Profiles can define default mounts (e.g., cargo cache)
-7. **Toolchain Configuration** - Rust profile supports `withToolchain` for project-specific versions via `rust-toolchain.toml`
-8. **Rust Package Construction** - Rust profile exposes `buildPackage` for crane-backed Rust packages with split `bin`/`clippy`/`nextest` derivations
+Two peer consumers take a profile and produce a consumer-facing artifact:
+`mkSandbox` produces an OCI image and launcher wrapper; `mkDevShell`
+produces a host devshell. Both close the loop on toolchain identity by
+referencing the same `profile.toolchain` derivation. That single
+`/nix/store/...` path lands in the sandbox image at build time, in the
+host devshell's PATH via `mkDevShell`, and in sibling-app `runtimeInputs`
+via direct field access. The shared store path is what makes cross-boundary
+sccache hits possible — the invariants and success criteria below exist
+to keep that identity from drifting.
 
-### Non-Functional
-
-1. **Curated Toolkit** - Base profile ships a ready-to-work agent container (shell, search, VCS, issue tracking, formatters) for `mkSandbox` consumers — the shared floor, not a minimal OS layer. Language profiles extend it.
-2. **Reproducible** - Same profile produces same environment via Nix
+Rust toolchains are baked into the container image at build time, never
+bootstrapped from rustup at container start. fenix supplies proper Nix
+derivations with stable dynamic linkers, eliminating the rustup-on-Nix
+breakage mode where nixpkgs updates evict the glibc path a downloaded
+rustup binary was linked against.
 
 ## Profile Attrset Schema
 
-A profile is a Nix attrset produced by the internal `mkProfile` helper in `lib/sandbox/profiles.nix`. Fields:
+A profile is a Nix attrset produced by the internal `mkProfile` helper. Fields:
 
 | Field | Type | Purpose |
 |-------|------|---------|
@@ -40,20 +45,20 @@ A profile is a Nix attrset produced by the internal `mkProfile` helper in `lib/s
 | `mounts` | list of mount specs | Host → container bind mounts; each `{ source, dest, mode, optional }` |
 | `networkAllowlist` | list of strings | Domains permitted when `WRAPIX_NETWORK=limit` (merged with base allowlist) |
 | `enabledPlugins` | attrset | Claude Code plugins merged into `~/.claude/settings.json` (e.g. `"rust-analyzer-lsp@claude-plugins-official" = true`) |
-| `shellHook` | shell snippet | Optional snippet for downstream **host** devShells to splice in (e.g. `${rustProfile.shellHook}`). Aligns host-side toolchain identity, env, and PATH with the sandbox so `rustc` resolves to the same `/nix/store/...` path on both sides — the prerequisite for cross-boundary sccache hits and shared `target/` artifact reuse. |
+| `shellHook` | shell snippet | Internal alignment hook spliced by `mkDevShell`. Aligns host-side toolchain identity, env, and PATH with the sandbox so `rustc` resolves to the same `/nix/store/...` path on both sides — the prerequisite for cross-boundary sccache hits and shared `target/` artifact reuse. Consumers do not splice this directly; they pass the profile to `mkDevShell { profile = ...; }`. |
 | `writableDirs` | list of strings | Linux-only: paths where the launcher stacks a tmpfs with `U=true` so the dir is wrapix-owned — needed because podman creates bind-mount parents as root, which blocks writes to sibling files like `.global-cache`/`credentials.toml` |
 
 Mount specs use `optional = true` to mean "skip this bind silently if the host source path does not exist", letting profiles declare cache mounts that no-op on hosts that haven't yet populated them.
 
 `deriveProfile` merges `packages`, `mounts`, `env`, and `networkAllowlist` (packages/mounts/allowlist concatenated; env right-biased). Other fields (`name`, `enabledPlugins`, `shellHook`, `writableDirs`) pass through from the extensions attrset if set, otherwise inherit from the base — they are not deep-merged. Callers extending a profile with extra plugins or shell hooks must compose those values themselves.
 
-The rust profile additionally exposes `toolchain` (the resolved fenix `combine` derivation), `withToolchain` (a configuration function), and `buildPackage` (a crane-backed Rust package builder); all three pass through `deriveProfile` since extensions don't override them. See [Rust Profile](#rust-profile) for details.
+The rust profile additionally exposes `toolchain` (the resolved fenix `combine` derivation) and `buildPackage` (a crane-backed Rust package builder); both pass through `deriveProfile` since extensions don't override them. For project-pinned rust toolchains, consumers use the top-level `rustProfile { toolchain; sha256; }` constructor — see [wrapix.rustProfile](#wrapixrustprofile) and [Rust Profile](#rust-profile) for details.
 
 ## Built-in Profiles
 
 ### Base Profile
 
-Curated developer toolkit present in every profile. Grouped by purpose:
+Curated developer toolkit. The rust and python profiles extend this set. Grouped by purpose:
 
 | Category | Packages |
 |----------|----------|
@@ -68,7 +73,7 @@ Curated developer toolkit present in every profile. Grouped by purpose:
 
 `whichQuiet` is a local `pkgs.which` wrapper that suppresses `"no X in (PATH)"` noise.
 
-`treefmt` is the project-wide formatter wrapper (nixfmt, rustfmt, shellcheck, deadnix, statix) built via `treefmt-nix.lib.mkWrapper`. Placing it in `basePackages` ensures every consumer of `profiles.base` gets the same formatters.
+`treefmt` is the project-wide formatter wrapper (nixfmt, rustfmt, shellcheck, deadnix, statix) built via `treefmt-nix.lib.mkWrapper`. Including it in the base profile ensures every consumer gets the same formatters.
 
 **Base env:** none.
 **Base mounts:** none. Host `~/.claude` is intentionally NOT mounted — containers use `$PROJECT_DIR/.claude` so user-level settings stay separate from project-level settings.
@@ -76,16 +81,13 @@ Curated developer toolkit present in every profile. Grouped by purpose:
 
 ### Rust Profile
 
-Extends base with Rust toolchain via `nix-community/fenix`. fenix provides
-Rust toolchains as proper Nix derivations — no dynamic linker breakage across rebuilds —
-and is the same provider downstream projects are standardizing on, so store paths
-align across the host/sandbox boundary.
+Extends base with Rust toolchain via `nix-community/fenix`. See *Why not rustup?* and *Why fenix?* below for the design rationale.
 
 **Toolchain:** `fenix.packages.${system}.stable.defaultToolchain` combined with
 `rust-src` (separately pinned) and `stable.rust-analyzer-preview` (manifest build
 from the stable channel — see *Why stable rust-analyzer?* below). The default
-toolchain matches the rustup-equivalent set: rustc + cargo + rust-std + clippy +
-rustfmt + rust-docs.
+toolchain ships the same components rustup installs by default: rustc + cargo +
+rust-std + clippy + rustfmt + rust-docs.
 
 | Package | Purpose |
 |---------|---------|
@@ -110,12 +112,12 @@ Environment:
 - `CARGO_BUILD_RUSTC_WRAPPER=${pkgs.sccache}/bin/sccache` — same value, picked up by cargo directly
 - `SCCACHE_DIR=/home/wrapix/.cache/sccache` — stable in-container cache path, mounted from host
 - `SCCACHE_CACHE_SIZE=50G` — ceiling above sccache's 10 GiB default; the default LRU-evicts mid-build for workspace-sized Rust projects. Changing this requires `sccache --stop-server` before the server picks up the new value.
-- `CARGO_INCREMENTAL=0` — sccache refuses to cache any `rustc` invocation with `-C incremental=...`, so incremental compilation and sccache are redundant; disabling incremental lets every Rust compile flow through the cache.
-- `CARGO_TARGET_DIR` — intentionally **unset**; cargo's per-workspace default (`<workspace>/target`) applies. The judge asserts this invariant because pinning `CARGO_TARGET_DIR` to a shared path across workspaces defeats cargo's freshness tracking and churns builds.
+- `CARGO_INCREMENTAL=0` — sccache refuses to cache any `rustc` invocation with `-C incremental=...`; disabling incremental lets every Rust compile flow through sccache instead.
+- `CARGO_TARGET_DIR` — intentionally **unset**; cargo's per-workspace default (`<workspace>/target`) applies. Pinning `CARGO_TARGET_DIR` to a shared path across workspaces defeats cargo's freshness tracking and churns builds.
 
-**Host devshell alignment.** The profile's `shellHook` (spliced into downstream host devShells) prepends `${toolchain}/bin` to `PATH` and re-exports `RUSTC_WRAPPER`, `SCCACHE_DIR`, `SCCACHE_CACHE_SIZE`, and `CARGO_INCREMENTAL=0` so the host shell uses the same fenix-pinned `rustc` binary as the sandbox. Without the PATH prepend, host PATH falls through to rustup's `rustc` (or whichever appears first), and the diverging sysroot path baked into rlib metadata invalidates every sccache key across the boundary — even when both sides report the same Rust version. `withToolchain` rebuilds the snippet over the custom toolchain so `packages`, `env`, `shellHook`, and `toolchain` (see below) all close over the same derivation.
+**Host devshell alignment.** The profile's `shellHook` prepends `${toolchain}/bin` to `PATH` and re-exports `RUSTC_WRAPPER`, `SCCACHE_DIR`, `SCCACHE_CACHE_SIZE`, and `CARGO_INCREMENTAL=0` so the host shell uses the same fenix-pinned `rustc` binary as the sandbox. Without the PATH prepend, host PATH falls through to rustup's `rustc` (or whichever appears first), and the diverging sysroot path baked into rlib metadata invalidates every sccache key across the boundary — even when both sides report the same Rust version. Consumers reach this alignment by passing the rust profile to `mkDevShell { profile = ...; }`, which splices `profile.shellHook` automatically — there is no consumer-facing splice path. `rustProfile { toolchain; sha256; }` rebuilds the snippet over the project-pinned toolchain so `packages`, `env`, `shellHook`, and `toolchain` (see below) all close over the same derivation.
 
-**Toolchain derivation (`profile.toolchain`).** The rust profile exposes the resolved fenix `combine` derivation as `profile.toolchain` — the same store path that lands in `packages` and is interpolated into `shellHook`'s PATH prepend. Sibling Nix apps that run cargo (e.g. `pkgs.writeShellApplication { runtimeInputs = [ rustProfile.toolchain ]; ... }`) must point `runtimeInputs` at this field rather than re-instantiating fenix in their own flake. Re-instantiation produces a different `/nix/store/...` path even when fenix versions match, and again when calling `fromToolchainFile` directly (bare `rust-<ver>` vs the `combine`-wrapped `rust-mixed`); sccache hashes the compiler binary, so a divergent path means every cache key misses across the boundary. The default profile and the `withToolchain` variant both set this field to the toolchain they were built from.
+**Toolchain derivation (`profile.toolchain`).** The rust profile exposes the resolved fenix `combine` derivation as `profile.toolchain` — the same store path that lands in `packages` and is interpolated into `shellHook`'s PATH prepend. Sibling Nix apps that run cargo (e.g. `pkgs.writeShellApplication { runtimeInputs = [ rustProfile.toolchain ]; ... }`) must point `runtimeInputs` at this field rather than re-instantiating fenix in their own flake. Re-instantiation produces a different `/nix/store/...` path even when fenix versions match, and again when calling `fromToolchainFile` directly (bare `rust-<ver>` vs the `combine`-wrapped `rust-mixed`); sccache hashes the compiler binary, so a divergent path means every cache key misses across the boundary. Both `profiles.rust` (the unpinned default) and `rustProfile { toolchain; sha256; }` (the project-pinned constructor) set this field to the toolchain they were built from.
 
 Mounts (host source → literal container dest; literal dests avoid the `~`-expands-on-host-launcher gotcha):
 
@@ -150,9 +152,14 @@ profile.buildPackage {
 - `bin` is the output a `packages.<name>` entry consumes; it has **no** dependency edge on `clippy` or `nextest`. Because of that missing edge, consumers depending only on `bin` (e.g. the devshell) realize only `bin` on workspace edits; `clippy` and `nextest` have separate, unrealized store paths until `nix flake check` asks for them.
 - `clippy` and `nextest` are independent derivations the flake wires into `nix flake check` (one entry per check in `tests/default.nix`); they are the only outputs that see `extraSrcs`. `cargoArtifacts` and `bin` close over `src` only.
 - `extraSrcs` exists for test inputs the harness reads from outside the workspace (e.g. an integration test that reads fixture files under `tests/fixtures/`). Editing files in `extraSrcs` invalidates `clippy`/`nextest` but leaves `bin` and `cargoArtifacts` untouched — devshell-style consumers stay warm across test-fixture edits.
-- `srcFilter` is the escape hatch for crates that need non-Rust files in `src` at compile time (e.g. an askama-style `#[template(path = ...)]` that reads `templates/*.md`). The default `null` keeps the spec invariant that editing `src/README.md` does not invalidate `bin`; passing a custom predicate lets the consumer broaden it (`craneLib.filterCargoSources` is exposed via `profile.craneLib` so callers can compose: `path: type: (craneFilter path type) || (lib.hasInfix "/templates/" path)`).
+- `srcFilter` is the escape hatch for crates that need non-Rust files in `src` at compile time (e.g. an askama-style `#[template(path = ...)]` that reads `templates/*.md`). The default `null` keeps the spec invariant that editing `src/README.md` does not invalidate `bin`; passing a custom predicate lets the consumer broaden it. `craneLib.filterCargoSources` is exposed via `profile.craneLib` so callers can compose:
+
+  ```nix
+  path: type: (craneFilter path type) || (lib.hasInfix "/templates/" path)
+  ```
+
 - `cargoArtifacts` is exposed as an output and accepted as an input so workspaces with multiple binaries can share dep compilation across calls. Single-binary callers ignore both directions.
-- `buildPackage` closes over `profile.toolchain` via crane's `overrideToolchain`, so `bin`/`clippy`/`nextest` resolve `rustc` to the same `/nix/store/...` path as the sandbox image and the host devshell PATH. `withToolchain` rebuilds `buildPackage` against the custom toolchain alongside `packages`/`env`/`shellHook`/`toolchain`.
+- `buildPackage` closes over `profile.toolchain` via crane's `overrideToolchain`, so `bin`/`clippy`/`nextest` resolve `rustc` to the same `/nix/store/...` path as the sandbox image and the host devshell PATH. `rustProfile { toolchain; sha256; }` rebuilds `buildPackage` against the project-pinned toolchain alongside `packages`/`env`/`shellHook`/`toolchain`.
 - Builds are pure — Nix-sandboxed, no `__noChroot`. Sccache covers the host/sandbox/sibling-app cargo paths (where it's mounted from `~/.cache/sccache` and persists across runs); `cargoArtifacts` is the equivalent caching layer for build-sandbox cargo invocations. The two layers do not overlap and do not share cache state.
 - Always builds for `pkgs.stdenv.hostPlatform.system` — no cross-compilation. Returns one `bin` per call — workspaces with multiple binaries call `buildPackage` once per binary, threading the same `cargoArtifacts` through.
 
@@ -176,11 +183,23 @@ profile.buildPackage {
 > the same toolchains as proper Nix derivations with correct dynamic linkers.
 >
 > **Why fenix?** fenix supports arbitrary version selection and can read
-> `rust-toolchain.toml` files via `fromToolchainFile`. Identical rustc store
-> paths across the host/sandbox/sibling-app boundary — required for sccache
-> hits — come from splicing `rustProfile.shellHook` into the downstream
-> devShell and using `rustProfile.toolchain` in sibling app `runtimeInputs`
-> (see *Downstream Integration*).
+> `rust-toolchain.toml` files. Identical rustc store paths across the
+> host/sandbox/sibling-app boundary — required for sccache hits — come
+> from building the profile via `rustProfile { toolchain; sha256; }`,
+> passing it to `mkDevShell { profile = ...; }` for the host devshell, and
+> pointing sibling-app `runtimeInputs` at `profile.toolchain` (see
+> *Downstream Integration*).
+>
+> **Why `rustProfile` over `fromToolchainFile` directly?** Both can read
+> `rust-toolchain.toml`, but they produce different `/nix/store/...` paths
+> even with identical inputs — `rustProfile` wraps the result in
+> `fenix.combine` (yielding `rust-mixed`), while `fromToolchainFile`
+> returns the bare `rust-<ver>` derivation. sccache hashes the compiler
+> binary, so the divergent paths produce no cross-boundary hits. Consumers
+> building a profile use `rustProfile`; consumers reaching for
+> `runtimeInputs` use `profile.toolchain` from that built profile.
+> `fromToolchainFile` is a fenix-native API the constructor builds on top
+> of; downstream code does not call it directly.
 >
 > **Why stable rust-analyzer?** rust-analyzer ships from
 > `fenix.stable.rust-analyzer-preview`, a manifest download channel-aligned
@@ -214,61 +233,57 @@ Mounts (host source → literal container dest):
 
 Network allowlist: `pypi.org`, `files.pythonhosted.org`
 
-## Affected Files
-
-| File | Role |
-|------|------|
-| `flake.nix` | Declares `fenix`, `crane`, and `treefmt-nix` flake inputs; threads `fenix`, `crane`, and the project treefmt wrapper to `lib/sandbox/profiles.nix` via `lib/sandbox/default.nix` |
-| `lib/default.nix` | Defines `deriveProfile` (merges `packages` / `mounts` / `env` / `networkAllowlist`; passes through other profile fields) |
-| `lib/sandbox/default.nix` | Imports `profiles.nix` with Linux `pkgs`, host `pkgs`, `fenix`, `crane`, and the treefmt wrapper; defines internal `extendProfile` helper |
-| `lib/sandbox/profiles.nix` | Defines `mkProfile`, `basePackages`, built-in `base`/`rust`/`python` profiles; builds rust toolchain via `fenixPkgs.stable.defaultToolchain` combined with `rust-src` and `rust-analyzer`; wires sccache and sccache env vars, `CARGO_INCREMENTAL=0`; exposes the per-profile host `shellHook` (rust prepends `${toolchain}/bin` to host PATH and re-exports sccache env); exposes `profile.toolchain` on the rust profile (default and `withToolchain` variants) so consumer-side derivations can share the sandbox's toolchain store path; defines `profile.buildPackage` on the rust profile via `(crane.mkLib pkgs).overrideToolchain (_: profile.toolchain)`, returning `{ bin; clippy; nextest; cargoArtifacts }` |
-| `lib/mcp/tmux/mcp-server.nix` | Thin consumer of `wrapix.profiles.rust.buildPackage`; passes `buildInputs`/`propagatedBuildInputs = [ pkgs.tmux ]`; returns the full attrset |
-| `modules/flake/packages.nix` | `packages.tmux-mcp` consumes `.bin` from the `buildPackage` invocation (no test/lint dep edge into the devshell rebuild path) |
-| `tests/default.nix` | `checks` includes `tmux-mcp-clippy`, `tmux-mcp-nextest` from the same `buildPackage` outputs |
-| `lib/sandbox/linux/entrypoint.sh` | Contains no rustup bootstrap logic (toolchain is baked in at image build time) |
-| `lib/sandbox/darwin/entrypoint.sh` | Contains no rustup bootstrap logic |
-
 ## API
 
 ```nix
-# Use built-in profile (fenix stable + rust-analyzer + rust-src)
-mkSandbox { profile = profiles.rust; }
+# Built-in unpinned profile (tracks fenix stable + rust-analyzer + rust-src)
+wrapix.mkSandbox { profile = wrapix.profiles.rust; }
 
-# Use project's rust-toolchain.toml (fenix requires a sha256 for purity)
-mkSandbox {
-  profile = profiles.rust.withToolchain {
-    file = ./rust-toolchain.toml;
-    sha256 = "sha256-...";
+# Project-pinned rust profile via top-level constructor (fenix requires sha256 for purity)
+wrapix.mkSandbox {
+  profile = wrapix.rustProfile {
+    toolchain = ./rust-toolchain.toml;
+    sha256    = "sha256-...";
   };
 }
 
-# Extend profile with additional packages
-mkSandbox {
-  profile = deriveProfile profiles.rust {
+# Pinned rust profile with extra packages and env (single call, no deriveProfile needed)
+wrapix.mkSandbox {
+  profile = wrapix.rustProfile {
+    toolchain = ./rust-toolchain.toml;
+    sha256    = "sha256-...";
+    packages  = [ pkgs.sqlx-cli ];
+    env       = { DATABASE_URL = "postgres://localhost/db"; };
+  };
+}
+
+# Extend an existing profile (yours, a third party's, or a `wrapix.rustProfile` result)
+wrapix.mkSandbox {
+  profile = wrapix.deriveProfile wrapix.profiles.rust {
     packages = [ pkgs.sqlx-cli ];
-    env = { DATABASE_URL = "postgres://localhost/db"; };
   };
 }
 
-# Combine: custom toolchain + extra packages
-mkSandbox {
-  profile = deriveProfile (profiles.rust.withToolchain {
-    file = ./rust-toolchain.toml;
-    sha256 = "sha256-...";
-  }) {
-    packages = [ pkgs.sqlx-cli ];
-  };
-}
-
-# Reuse the same toolchain derivation in a sibling Nix app so its `rustc` shares
-# a /nix/store/... path with the sandbox image and the host devshell PATH.
+# Same profile drives both a host devshell and a sandbox image
 let
-  rustProfile = profiles.rust.withToolchain {
-    file = ./rust-toolchain.toml;
-    sha256 = "sha256-...";
+  rustProfile = wrapix.rustProfile {
+    toolchain = ./rust-toolchain.toml;
+    sha256    = "sha256-...";
   };
-in
-pkgs.writeShellApplication {
+in {
+  devShells.default = wrapix.mkDevShell { profile = rustProfile; };
+  packages.image    = (wrapix.mkSandbox { profile = rustProfile; }).image;
+}
+
+# Sibling Nix app that runs cargo: reuse the same toolchain derivation so its
+# `rustc` shares a /nix/store/... path with the sandbox image and the host
+# devshell PATH.
+let
+  rustProfile = wrapix.rustProfile {
+    toolchain = ./rust-toolchain.toml;
+    sha256    = "sha256-...";
+  };
+in pkgs.writeShellApplication {
   name = "test-ci";
   runtimeInputs = [ rustProfile.toolchain ];
   text = "cargo nextest run";
@@ -277,7 +292,7 @@ pkgs.writeShellApplication {
 # Build a Rust package whose devshell rebuild path skips lint/test.
 # `bin` becomes packages.<name>; `clippy` and `nextest` become check entries.
 let
-  myCrate = profiles.rust.buildPackage {
+  myCrate = wrapix.profiles.rust.buildPackage {
     src = ./my-crate;
     cargoLock = ./my-crate/Cargo.lock;
     extraSrcs = {
@@ -293,36 +308,83 @@ in {
 }
 ```
 
-### Profile-Specific Configuration
+## wrapix.rustProfile
 
-Profiles may expose functions for configuration specific to their toolchain.
-These live on the profile attrset itself, not on `deriveProfile`.
+Top-level constructor for project-pinned rust profiles. Reads a
+`rust-toolchain.toml` and produces a profile attrset whose `packages`,
+`env`, `shellHook`, `toolchain`, and `buildPackage` all close over the
+pinned fenix toolchain — the same derivation `mkSandbox` bakes into the
+image and `mkDevShell` prepends to PATH.
 
-- `profiles.rust.withToolchain` — accepts `{ file, sha256 }` (the `file` is the
-  path to `rust-toolchain.toml`; `sha256` is the hash of the downloaded components),
-  returns a new profile attrset (without `withToolchain`) using
-  `fenix.fromToolchainFile`. `rust-src` and `stable.rust-analyzer-preview` are
-  combined in on top of whatever components the toolchain file declares.
-  `packages`, `env`, `shellHook`, `toolchain`, and `buildPackage` are all
-  rebuilt against the custom toolchain so they close over the same derivation —
-  `env.RUST_SRC_PATH` resolves to the new toolchain's stdlib source, the host
-  PATH prepend in `shellHook` resolves to the same `rustc` binary the sandbox
-  uses, `profile.toolchain` is exactly that derivation for downstream
-  `runtimeInputs`, and `profile.buildPackage`'s `bin`/`clippy`/`nextest` outputs
-  compile against it.
+```nix
+wrapix.rustProfile {
+  toolchain;                      # REQUIRED — path to rust-toolchain.toml
+  sha256;                         # REQUIRED — fenix purity hash
+  packages         ? [ ];         # appended to profile.packages
+  env              ? { };         # right-merged into profile.env
+  mounts           ? [ ];         # appended to profile.mounts
+  networkAllowlist ? [ ];         # appended to profile.networkAllowlist
+}
+```
 
-  **Caveat:** do not list `rust-analyzer` in your `rust-toolchain.toml`
-  `components`. The profile always combines `stable.rust-analyzer-preview` on
-  top, and `fenix.combine` errors on duplicate `bin/rust-analyzer`. Consumers
-  who want a different RA should omit it from `components` and add their
-  preferred build via `deriveProfile profiles.rust { packages = [ ... ]; }`
-  instead.
+Both `toolchain` and `sha256` are required. The constructor uses
+`fenix.fromToolchainFile` under the hood, then combines `rust-src` and
+`stable.rust-analyzer-preview` on top of whatever components the toolchain
+file declares. Extension args (`packages`/`env`/`mounts`/`networkAllowlist`)
+follow the same merge rules as `deriveProfile`: lists concatenate, env is
+right-biased.
 
-- `profiles.rust.buildPackage` — see [Rust package builder](#rust-profile)
-  above. Closes over `profile.toolchain`; rebuilt under `withToolchain`.
+**Caveat:** do not list `rust-analyzer` in your `rust-toolchain.toml`
+`components`. The constructor always combines `stable.rust-analyzer-preview`
+on top, and `fenix.combine` errors on duplicate `bin/rust-analyzer`.
+Consumers who want a different RA should omit it from `components` and
+compose their preferred build via
+`deriveProfile (rustProfile { ... }) { packages = [ ... ]; }` instead.
 
-Only the Rust profile has `withToolchain` and `buildPackage`. Other profiles
-(base, python) do not expose profile-specific configuration functions.
+## mkDevShell
+
+Single profile-aware entry point for host devshells. `mkDevShell` is the
+only consumer-facing path for splicing a profile's `shellHook` into a
+local shell — there is no manual splice path, no hand-copy alternative
+for the profile's env exports, and no separate "add `profile.toolchain`
+to your packages" step.
+
+```nix
+wrapix.mkDevShell {
+  profile   = rustProfile;   # REQUIRED — any profile attrset
+  packages  = [ ... ];        # optional, appended to profile.packages
+  shellHook = "...";          # optional, appended after profile.shellHook
+  env       = { ... };        # optional, right-merged into profile.env
+}
+```
+
+**`profile` is required.** No default. A devshell that needs no toolchain
+extension still passes `profile = profiles.base;` explicitly — there is
+no implicit fallthrough. Calling `mkDevShell {}` without `profile` errors
+at evaluation.
+
+Composition rules (deterministic, no consumer override):
+
+| Field     | Rule                                                                                  |
+|-----------|---------------------------------------------------------------------------------------|
+| packages  | `profile.packages ++ packages` (the profile's toolchain etc. is always on PATH)        |
+| env       | `profile.env // env` (consumer wins on conflict)                                       |
+| shellHook | `<wrapix-internal lifecycle setup> + profile.shellHook + <consumer shellHook>` (fixed order) |
+
+The internal lifecycle setup performs wrapix-specific bootstrap (beads
+init, dolt remote configuration, prek hook install). It runs before
+`profile.shellHook` so its tooling installs resolve through the system
+PATH rather than the profile-extended one; the consumer's `shellHook`
+runs last so consumer-set env can override profile-set env after the
+profile's exports have fired.
+
+A consumer that wants a different shell wrapper (custom `pkgs.mkShell`
+attrs, alternate hook layering) is reaching outside the contract — they
+construct their own shell directly and accept that nothing in the wrapix
+profile system guarantees toolchain identity for that shell. The
+ergonomic floor `mkDevShell` enforces is what makes cross-boundary
+sccache alignment hard to misuse; bypassing `mkDevShell` re-opens every
+failure mode this API closes.
 
 ## Profile-Image Manifest
 
@@ -335,10 +397,10 @@ the profile→image mapping lives outside it as a JSON manifest.
 
 ```nix
 wrapix.lib.${system}.mkProfileImages {
-  base   = (wrapix.mkSandbox { profile = profiles.base;   }).image;
-  rust   = (wrapix.mkSandbox { profile = profiles.rust;   }).image;
-  python = (wrapix.mkSandbox { profile = profiles.python; }).image;
-  myCustom = (wrapix.mkSandbox { profile = myCustomProfile; }).image;
+  base     = (wrapix.mkSandbox { profile = wrapix.profiles.base;   }).image;
+  rust     = (wrapix.mkSandbox { profile = wrapix.profiles.rust;   }).image;
+  python   = (wrapix.mkSandbox { profile = wrapix.profiles.python; }).image;
+  myCustom = (wrapix.mkSandbox { profile = myCustomProfile;        }).image;
 }
 ```
 
@@ -374,109 +436,52 @@ Profiles surface as three sibling output families:
 `-mcp` axis (runtime MCP server selection) is independent of agent and
 remains its own family of outputs in `modules/flake/packages.nix`.
 
-## Success Criteria
-
-- [ ] Base profile provides functional development environment
-  [judge](../tests/judges/profiles.sh#test_base_profile_functional)
-- [ ] Rust profile can compile and run Rust projects
-  [judge](../tests/judges/profiles.sh#test_rust_profile)
-- [ ] Rust profile toolchain survives nixpkgs updates (no dynamic linker breakage)
-  [judge](../tests/judges/profiles.sh#test_rust_profile_rebuild_stable)
-- [ ] rust-analyzer can resolve the standard library (RUST_SRC_PATH is set correctly)
-  [judge](../tests/judges/profiles.sh#test_rust_analyzer_sysroot)
-- [ ] `profiles.rust.withToolchain { file = ./rust-toolchain.toml; sha256 = "..."; }` produces a working profile
-  [judge](../tests/judges/profiles.sh#test_rust_with_toolchain)
-- [ ] Cargo registry and git mounts are writable so cargo can fetch crates not in the pre-warm set without `Read-only file system` errors
-  [judge](../tests/judges/profiles.sh#test_cargo_registry_writable)
-- [ ] Python profile can run Python scripts with dependencies
-  [judge](../tests/judges/profiles.sh#test_python_profile)
-- [ ] uv cache mount is writable so uv can fetch packages not in the pre-warm set without `Read-only file system` errors
-  [judge](../tests/judges/profiles.sh#test_uv_cache_writable)
-- [ ] deriveProfile correctly merges packages and environment
-  [judge](../tests/judges/profiles.sh#test_derive_profile_merge)
-- [ ] Profiles are composable (can extend extended profiles)
-  [system](bash tests/mcp/tmux/e2e/test_profile_composition.sh)
-- [ ] Host devshell that splices `rustProfile.shellHook` resolves `rustc` to the same `/nix/store/...` path as the sandbox
-  [judge](../tests/judges/profiles.sh#test_host_sandbox_rustc_same_store_path)
-- [ ] `profile.toolchain` is exposed on both the default rust profile and `withToolchain { file; sha256; }`, and points at the same derivation referenced by the profile's `packages` and the `${toolchain}/bin` PATH prepend in `shellHook`
-  [judge](../tests/judges/profiles.sh#test_rust_toolchain_field)
-- [ ] `profiles.rust` and `profiles.rust.withToolchain { ... }` closures contain zero `*-nightly-*` derivations after a fresh `nix flake update` (regression guard against reintroducing `fenix.packages.${system}.rust-analyzer`, which drags a nightly cargo/rustc/rust-std closure). Implemented as a deterministic shell test (nix-eval the toolchain `drvPath`, scan the closure for `*-nightly-*` paths, exit 0/1) — `[check]` rather than `[judge]` because there is no rubric ambiguity for an LLM to judge.
-  [system](bash tests/profiles/no-nightly-closure.sh test_no_nightly_closure)
-- [ ] `mkProfileImages { rust = …; }` produces a JSON file whose entry for `rust` has both `ref` and `source` fields, with `source` resolving to the same store path as `(mkSandbox { profile = profiles.rust; }).image`
-  [system](bash tests/profiles/profile-images-manifest.sh test_manifest_shape)
-- [ ] `packages.image-<name>`, `packages.sandbox-<name>`, and `packages.profile-images` all evaluate for each built-in profile
-  [system](bash tests/profiles/profile-images-manifest.sh test_flake_outputs_present)
-- [ ] `profiles.rust.buildPackage` is exposed and returns an attrset with `bin`, `clippy`, `nextest`, and `cargoArtifacts` fields
-  [system](bash tests/profiles/build-package.sh test_build_package_exposed)
-- [ ] Editing a workspace source file changes the `bin` derivation hash but does **not** change the `cargoArtifacts` derivation hash (dep cache reused across edits)
-  [system](bash tests/profiles/build-package.sh test_workspace_edit_reuses_dep_cache)
-- [ ] Source filter excludes non-Cargo files: editing a `README.md` or other `*.md` file inside `src` does **not** change the `bin`, `clippy`, or `nextest` derivation hashes
-  [system](bash tests/profiles/build-package.sh test_source_filter_excludes_non_cargo)
-- [ ] Editing a `.rs` file invalidates `bin`, `clippy`, and `nextest` together (the workspace source closure is shared by all three) but does **not** invalidate `cargoArtifacts`
-  [system](bash tests/profiles/build-package.sh test_workspace_edit_skips_cargo_artifacts)
-- [ ] Editing a file in `extraSrcs` invalidates `clippy` and `nextest` but does **not** invalidate `bin` or `cargoArtifacts`
-  [system](bash tests/profiles/build-package.sh test_extra_srcs_scoped_to_lint_test)
-- [ ] `bin`, `clippy`, and `nextest` all close over `profile.toolchain`, so `${toolchain}/bin/rustc` resolves to the same `/nix/store/...` path across all three derivations, on both `profiles.rust` and `profiles.rust.withToolchain { ... }`
-  [system](bash tests/profiles/build-package.sh test_build_package_toolchain_alignment)
-- [ ] `lib/mcp/tmux/mcp-server.nix` is a thin `wrapix.profiles.rust.buildPackage` consumer (no direct `pkgs.rustPlatform.buildRustPackage` or `makeRustPlatform` call); `packages.tmux-mcp` consumes `.bin`; `tests/default.nix` exposes `tmux-mcp-clippy`, `tmux-mcp-nextest` checks
-  [system](bash tests/profiles/build-package.sh test_consumers_migrated)
-
-## Out of Scope
-
-- Language-specific project scaffolding
-- IDE configuration beyond Claude Code
-- Auto-detection of `rust-toolchain.toml` at runtime (must be passed explicitly via `withToolchain`)
-- Automatic pruning of cargo registry / git / uv caches — operators are expected to clean `~/.cargo/{registry,git}` and `~/.cache/uv` manually if they grow unbounded; sccache is self-capped via `SCCACHE_CACHE_SIZE`.
-- Tracking nightly rust-analyzer in the default profile. Building `fenix.packages.${system}.rust-analyzer` from source pulls a matching nightly cargo/rustc/rust-std closure into every consumer's flake on each input update; the profile pins `fenix.stable.rust-analyzer-preview` instead. Consumers who need nightly RA opt in via `deriveProfile`.
-- Cross-compilation in `buildPackage`. Always builds for `pkgs.stdenv.hostPlatform.system`. Consumers needing cross builds drop down to crane directly.
-- Returning multiple `bin` outputs from a single `buildPackage` call. Workspaces with multiple binary crates call `buildPackage` once per binary, threading the same `cargoArtifacts` through to share dep compilation.
-
 ## Downstream Integration
 
 Cross-boundary sccache hits require the host shell, sandbox image, and any
-sibling Nix app derivations that run cargo to all reference the same toolchain
-derivation. Wrapix exposes two surfaces for this — splice `rustProfile.shellHook`
-into the host devShell, and use `rustProfile.toolchain` in `runtimeInputs` of
-any sibling derivation that runs cargo. Both close over the same `/nix/store/...`
-path the sandbox bakes in.
+sibling Nix app derivations that run cargo to all reference the same
+toolchain derivation. The profile attrset is the carrier — build one via
+`rustProfile { toolchain; sha256; }` and pass the same value to every
+consumer.
 
-For the host devshell, splice the rust profile's `shellHook`:
+For the host devshell, use `mkDevShell`:
 
 ```nix
 let
-  rustProfile = wrapix.profiles.rust.withToolchain {
-    file = ./rust-toolchain.toml;
-    sha256 = "sha256-...";
+  rustProfile = wrapix.rustProfile {
+    toolchain = ./rust-toolchain.toml;
+    sha256    = "sha256-...";
   };
-  sandbox = wrapix.mkSandbox { profile = rustProfile; };
-in pkgs.mkShell {
-  shellHook = ''
-    ${rustProfile.shellHook}
-  '';
+in {
+  devShells.default = wrapix.mkDevShell { profile = rustProfile; };
+  packages.image    = (wrapix.mkSandbox { profile = rustProfile; }).image;
 }
 ```
 
-The hook prepends the profile's pinned toolchain to `PATH`, so host `rustc`
-resolves to the same `/nix/store/.../bin/rustc` the sandbox uses. This is the
-prerequisite for cross-boundary sccache hits and shared `target/` artifact
-reuse: when host and sandbox compile against the same toolchain derivation,
-sysroot paths in rlib metadata match, sccache keys collide, and cargo's
-fingerprints in `/workspace/target/` stay valid across switches.
+`mkDevShell` splices `profile.shellHook` automatically (see
+[mkDevShell](#mkdevshell) for composition rules) — no manual splice, no
+hand-copied env exports, no separate `profile.toolchain` add to
+`packages`. The same profile drives `mkSandbox` so host and sandbox close
+over an identical `/nix/store/.../bin/rustc` derivation, matching sysroot
+paths in rlib metadata, colliding sccache keys, and keeping cargo's
+fingerprints in `/workspace/target/` valid across switches.
 
-**Sibling Nix apps that run cargo.** Aligning the host shell PATH is not
-enough on its own — any sibling app derivation in the consumer's flake
-(`pkgs.writeShellApplication`, a `nix run` target, a CI runner) ships its own
-`runtimeInputs` and bypasses PATH from the devshell. If that derivation
-re-instantiates fenix (`inputs.fenix.packages.fromToolchainFile { ... }`), it
-gets a different `/nix/store/...` path than the sandbox/host even when fenix
-versions match, and an additional difference between the bare `rust-<ver>`
-output and the `combine`-wrapped `rust-mixed` the profile builds. sccache
-hashes the compiler binary, so cache keys never collide and an 11 GiB host
-cache populated from inside the sandbox can produce 0 hits when invoked from
+**Sibling Nix apps that run cargo.** `mkDevShell` covers the devshell;
+sibling app derivations are a separate surface. Any
+`pkgs.writeShellApplication`, `nix run` target, or CI runner in the
+consumer's flake ships its own `runtimeInputs` and bypasses the devshell.
+If that derivation re-instantiates fenix
+(`inputs.fenix.packages.fromToolchainFile { ... }`), it gets a different
+`/nix/store/...` path than the sandbox/host even when fenix versions
+match, and an additional difference between the bare `rust-<ver>` output
+and the `combine`-wrapped `rust-mixed` the profile builds. sccache hashes
+the compiler binary, so cache keys never collide and an 11 GiB host cache
+populated from inside the sandbox can produce 0 hits when invoked from
 the sibling app.
 
-The fix is to point `runtimeInputs` at `rustProfile.toolchain`, which is the
-exact derivation the profile baked into the image and prepended to PATH:
+The fix is to point `runtimeInputs` at `rustProfile.toolchain`, which is
+the exact derivation the profile baked into the image and `mkDevShell`
+prepended to PATH:
 
 ```nix
 packages.test-ci = pkgs.writeShellApplication {
@@ -486,14 +491,16 @@ packages.test-ci = pkgs.writeShellApplication {
 };
 ```
 
-Consumers with their own `rust-toolchain.toml` feed it to `withToolchain`
-once; `rustProfile.toolchain` is then the `combine`-wrapped output of THEIR
-file, identical across sandbox image, host shellHook PATH, and sibling app
-`runtimeInputs`. They never need to call fenix directly.
+Consumers with their own `rust-toolchain.toml` feed it to `rustProfile`
+once; `rustProfile.toolchain` is then the `combine`-wrapped output of
+THEIR file, identical across sandbox image, host devshell PATH (via
+`mkDevShell`), and sibling-app `runtimeInputs`. They never need to call
+fenix directly.
 
-**Escape hatch.** If a downstream wants to control `rustc` independently of
-wrapix's pin (e.g., to use a different fenix revision on the host), it can
-skip the splice and instead lock its fenix flake input to wrapix's:
+**Escape hatch.** If a downstream wants to control `rustc` independently
+of wrapix's pin (e.g., to use a different fenix revision on the host), it
+can skip `rustProfile` and instead lock its fenix flake input to
+wrapix's:
 
 ```nix
 inputs.wrapix.url = "...";
@@ -501,12 +508,111 @@ inputs.fenix.url = "git+https://github.com/nix-community/fenix.git?ref=main";
 inputs.wrapix.inputs.fenix.follows = "fenix";
 ```
 
-Without aligning toolchain identity through one of these surfaces (shellHook
-splice for the devshell, `profile.toolchain` for sibling apps, or the `follows`
-escape hatch), host, sandbox, and sibling derivations lock fenix to their own
-revisions, produce different `/nix/store/.../bin/rustc` paths, and sccache
-entries do not cross the boundary.
+Without aligning toolchain identity through one of these surfaces
+(`mkDevShell` + `mkSandbox` consuming the same profile, `profile.toolchain`
+for sibling apps, or the `follows` escape hatch), host, sandbox, and
+sibling derivations lock fenix to their own revisions, produce different
+`/nix/store/.../bin/rustc` paths, and sccache entries do not cross the
+boundary.
 
-No downstream gitignore is required for the sandbox cache paths: mount dests
-live under `/home/wrapix/` inside the container, not under `/workspace/`, so
-nothing is materialized in the project tree.
+No downstream gitignore is required for the sandbox cache paths: mount
+dests live under `/home/wrapix/` inside the container, not under
+`/workspace/`, so nothing is materialized in the project tree.
+
+## Success Criteria
+
+- Base profile provides functional development environment
+  [judge](../tests/judges/profiles.sh#test_base_profile_functional)
+- Rust profile can compile and run Rust projects
+  [judge](../tests/judges/profiles.sh#test_rust_profile)
+- Rust profile toolchain survives nixpkgs updates (no dynamic linker breakage)
+  [judge](../tests/judges/profiles.sh#test_rust_profile_rebuild_stable)
+- rust-analyzer can resolve the standard library (RUST_SRC_PATH is set correctly)
+  [judge](../tests/judges/profiles.sh#test_rust_analyzer_sysroot)
+- `wrapix.rustProfile { toolchain = ./rust-toolchain.toml; sha256 = "..."; }` produces a working profile whose `toolchain` field is a fenix-combine derivation reflecting the file's component set
+  [judge](../tests/judges/profiles.sh#test_rust_profile_constructor)
+- `wrapix.rustProfile { toolchain; sha256; packages = [p]; env = { K = "v"; }; mounts = [m]; networkAllowlist = [a]; }` lands extension args in the matching profile slots (packages/mounts/networkAllowlist appended, env right-merged)
+  [system](bash tests/profiles/rust-profile-ctor.sh test_extension_args)
+- `wrapix.rustProfile {}` (omitting required `toolchain`/`sha256`) errors at evaluation rather than silently producing an unpinned profile
+  [system](bash tests/profiles/rust-profile-ctor.sh test_required_args)
+- Cargo registry and git mounts are writable so cargo can fetch crates not in the pre-warm set without `Read-only file system` errors
+  [judge](../tests/judges/profiles.sh#test_cargo_registry_writable)
+- Python profile can run Python scripts with dependencies
+  [judge](../tests/judges/profiles.sh#test_python_profile)
+- uv cache mount is writable so uv can fetch packages not in the pre-warm set without `Read-only file system` errors
+  [judge](../tests/judges/profiles.sh#test_uv_cache_writable)
+- deriveProfile correctly merges packages and environment
+  [judge](../tests/judges/profiles.sh#test_derive_profile_merge)
+- Profiles are composable (can extend extended profiles)
+  [system](bash tests/mcp/tmux/e2e/test_profile_composition.sh)
+- `wrapix.mkDevShell { profile = wrapix.rustProfile { ... }; }` produces a devshell whose env contains `RUSTC_WRAPPER=sccache`, `SCCACHE_DIR`, `SCCACHE_CACHE_SIZE`, and `CARGO_INCREMENTAL=0` (the rust profile's `shellHook` was spliced)
+  [system](bash tests/profiles/mkdevshell.sh test_profile_shellhook_spliced)
+- `wrapix.mkDevShell { profile; packages = [extra]; }` shell has both `profile.packages` and `extra` available on PATH
+  [system](bash tests/profiles/mkdevshell.sh test_packages_merge)
+- `wrapix.mkDevShell { profile; env = { K = "v"; }; }` shell has env var `K=v` (right-merge with profile.env, consumer wins on conflict)
+  [system](bash tests/profiles/mkdevshell.sh test_env_right_merge)
+- `wrapix.mkDevShell { profile; shellHook = "marker_xyz"; }` shell hook contains both `profile.shellHook` content AND `marker_xyz`, with the consumer hook firing **after** the profile's
+  [system](bash tests/profiles/mkdevshell.sh test_shellhook_order)
+- `wrapix.mkDevShell {}` without `profile` errors at evaluation
+  [system](bash tests/profiles/mkdevshell.sh test_profile_required)
+- Host devshell built via `wrapix.mkDevShell { profile = wrapix.rustProfile { toolchain; sha256; }; }` resolves `rustc` to the same `/nix/store/...` path as the sandbox built from the same profile
+  [judge](../tests/judges/profiles.sh#test_host_sandbox_rustc_same_store_path)
+- `wrapix.devToolchain` is not exposed by the lib (deleted; consumers reach `profile.toolchain`)
+  [check](nix eval --raw .#legacyPackages.lib --apply 'lib: if lib ? devToolchain then throw "devToolchain still exposed" else ""')
+- `profiles.rust.withToolchain` is not exposed on the rust profile attrset (replaced by top-level `wrapix.rustProfile`)
+  [check](nix eval .#legacyPackages.lib.profiles.rust --apply 'p: if p ? withToolchain then throw "withToolchain still exposed" else true')
+- `profile.toolchain` is exposed on both `wrapix.profiles.rust` and `wrapix.rustProfile { toolchain; sha256; }`, and points at the same derivation referenced by the profile's `packages` and the `${toolchain}/bin` PATH prepend in `shellHook`
+  [judge](../tests/judges/profiles.sh#test_rust_toolchain_field)
+- `wrapix.profiles.rust` and `wrapix.rustProfile { toolchain; sha256; }` closures contain zero `*-nightly-*` derivations after a fresh `nix flake update` (regression guard against reintroducing `fenix.packages.${system}.rust-analyzer`, which drags a nightly cargo/rustc/rust-std closure)
+  [system](bash tests/profiles/no-nightly-closure.sh test_no_nightly_closure)
+- `mkProfileImages { rust = …; }` produces a JSON file whose entry for `rust` has both `ref` and `source` fields, with `source` resolving to the same store path as `(wrapix.mkSandbox { profile = wrapix.profiles.rust; }).image`
+  [system](bash tests/profiles/profile-images-manifest.sh test_manifest_shape)
+- `packages.image-<name>`, `packages.sandbox-<name>`, and `packages.profile-images` all evaluate for each built-in profile
+  [system](bash tests/profiles/profile-images-manifest.sh test_flake_outputs_present)
+- `profiles.rust.buildPackage` is exposed and returns an attrset with `bin`, `clippy`, `nextest`, and `cargoArtifacts` fields
+  [system](bash tests/profiles/build-package.sh test_build_package_exposed)
+- Editing a workspace source file changes the `bin` derivation hash but does **not** change the `cargoArtifacts` derivation hash (dep cache reused across edits)
+  [system](bash tests/profiles/build-package.sh test_workspace_edit_reuses_dep_cache)
+- Source filter excludes non-Cargo files: editing a `README.md` or other `*.md` file inside `src` does **not** change the `bin`, `clippy`, or `nextest` derivation hashes
+  [system](bash tests/profiles/build-package.sh test_source_filter_excludes_non_cargo)
+- Editing a `.rs` file invalidates `bin`, `clippy`, and `nextest` together (the workspace source closure is shared by all three) but does **not** invalidate `cargoArtifacts`
+  [system](bash tests/profiles/build-package.sh test_workspace_edit_skips_cargo_artifacts)
+- Editing a file in `extraSrcs` invalidates `clippy` and `nextest` but does **not** invalidate `bin` or `cargoArtifacts`
+  [system](bash tests/profiles/build-package.sh test_extra_srcs_scoped_to_lint_test)
+- `bin`, `clippy`, and `nextest` all close over `profile.toolchain`, so `${toolchain}/bin/rustc` resolves to the same `/nix/store/...` path across all three derivations, on both `wrapix.profiles.rust` and `wrapix.rustProfile { toolchain; sha256; }`
+  [system](bash tests/profiles/build-package.sh test_build_package_toolchain_alignment)
+- `lib/mcp/tmux/mcp-server.nix` is a thin `wrapix.profiles.rust.buildPackage` consumer (no direct `pkgs.rustPlatform.buildRustPackage` or `makeRustPlatform` call); `packages.tmux-mcp` consumes `.bin`; `tests/default.nix` exposes `tmux-mcp-clippy`, `tmux-mcp-nextest` checks
+  [system](bash tests/profiles/build-package.sh test_consumers_migrated)
+- `modules/flake/devshell.nix` is a thin `wrapix.mkDevShell { profile = wrapix.profiles.rust; ... }` consumer (no hand-rolled `RUSTC_WRAPPER`/`SCCACHE_DIR`/`PATH` exports, no separate `profile.toolchain` entry in `packages`)
+  [check](grep -L 'RUSTC_WRAPPER\|SCCACHE_DIR' modules/flake/devshell.nix)
+- Container entrypoints (`lib/sandbox/linux/entrypoint.sh`, `lib/sandbox/darwin/entrypoint.sh`) contain no rustup bootstrap logic — toolchain is baked into the image at build time
+  [check](grep -L 'rustup' lib/sandbox/linux/entrypoint.sh lib/sandbox/darwin/entrypoint.sh)
+
+## Requirements
+
+### Functional
+
+1. **Base Profile** — Core tools included in all environments
+2. **Language Profiles** — Pre-configured Rust and Python environments
+3. **Profile Extension** — `deriveProfile` API to extend existing profiles
+4. **Package Bundling** — Profiles specify packages to include in container image
+5. **Environment Configuration** — Profiles set required environment variables
+6. **Mount Specifications** — Profiles can define default mounts (e.g., cargo cache)
+7. **Toolchain Configuration** — Top-level `rustProfile { toolchain; sha256; ... }` constructor produces a project-pinned rust profile from a `rust-toolchain.toml`
+8. **Rust Package Construction** — Rust profile exposes `buildPackage` for crane-backed Rust packages with split `bin`/`clippy`/`nextest` derivations
+9. **Devshell Construction** — Top-level `mkDevShell { profile; ... }` is the single profile-aware entry point for host devshells; consumers do not splice `profile.shellHook` directly
+
+### Non-Functional
+
+1. **Curated Toolkit** — Base profile is a ready-to-work agent toolkit, not a minimal OS layer.
+2. **Reproducible** — Same profile produces same environment via Nix
+
+## Out of Scope
+
+- Language-specific project scaffolding
+- IDE configuration beyond Claude Code
+- Auto-detection of `rust-toolchain.toml` at runtime (must be passed explicitly via `rustProfile`)
+- Automatic pruning of cargo registry / git / uv caches — operators are expected to clean `~/.cargo/{registry,git}` and `~/.cache/uv` manually if they grow unbounded; sccache is self-capped via `SCCACHE_CACHE_SIZE`.
+- Tracking nightly rust-analyzer in the default profile. Building `fenix.packages.${system}.rust-analyzer` from source pulls a matching nightly cargo/rustc/rust-std closure into every consumer's flake on each input update; the profile pins `fenix.stable.rust-analyzer-preview` instead. Consumers who need nightly RA opt in via `deriveProfile`.
+- Cross-compilation in `buildPackage`. Always builds for `pkgs.stdenv.hostPlatform.system`. Consumers needing cross builds drop down to crane directly.
+- Returning multiple `bin` outputs from a single `buildPackage` call. Workspaces with multiple binary crates call `buildPackage` once per binary, threading the same `cargoArtifacts` through to share dep compilation.
