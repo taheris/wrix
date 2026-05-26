@@ -38,7 +38,7 @@ test_rust_profile_constructor() {
 
 test_host_sandbox_rustc_same_store_path() {
   judge_files "lib/sandbox/profiles.nix" "lib/default.nix"
-  judge_criterion "The rust profile exposes a shellHook field (not hostShellHook) that, when spliced into a host devShell, prepends \${toolchain}/bin to PATH so host rustc resolves to the same /nix/store/... path the sandbox bakes in. Both the default rust profile and rustProfile { toolchain; sha256; } must close their shellHook over the same toolchain derivation that goes into packages, so packages and shellHook never drift."
+  judge_criterion "The rust profile exposes a shellHook field (not hostShellHook) that, when the profile is consumed via wrapix.mkDevShell { profile = ...; } (the consumer never splices profile.shellHook directly), prepends \${toolchain}/bin to PATH so host rustc resolves to the same /nix/store/... path the sandbox bakes in. Both the default rust profile and the wrapix.rustProfile { toolchain; sha256; } constructor must close profile.packages and the \${toolchain}/bin prepend in shellHook over the same toolchain derivation, so packages and shellHook never drift."
 }
 
 test_cargo_registry_writable() {
@@ -53,5 +53,5 @@ test_uv_cache_writable() {
 
 test_rust_toolchain_field() {
   judge_files "lib/sandbox/profiles.nix" "lib/default.nix"
-  judge_criterion "The rust profile exposes a 'toolchain' field on both the default profile and the rustProfile { toolchain, sha256 } variant. The field is the resolved fenix combine derivation — the same derivation interpolated into the profile's packages list and into the \${toolchain}/bin PATH prepend in shellHook. All three references close over the same value so sibling Nix apps using rustProfile.toolchain in runtimeInputs see the identical /nix/store/... path the sandbox bakes in."
+  judge_criterion "The rust profile exposes a 'toolchain' field on both the default profile and the wrapix.rustProfile { toolchain; sha256; } constructor. The field is the resolved fenix combine derivation — the same derivation interpolated into the profile's packages list and into the \${toolchain}/bin PATH prepend in shellHook. All three references close over the same value so sibling Nix apps using rustProfile.toolchain in runtimeInputs see the identical /nix/store/... path the sandbox bakes in."
 }
