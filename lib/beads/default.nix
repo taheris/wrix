@@ -527,9 +527,19 @@ let
             echo "beads: .beads/dolt exists but podman is not on PATH — cannot start dolt server" >&2
             return 1 2>/dev/null || exit 1
           fi
-          if ! ${beadsDolt}/bin/beads-dolt start "$PWD"; then
-            echo "beads: beads-dolt start failed — dolt will not be available" >&2
-            return 1 2>/dev/null || exit 1
+          if command -v systemd-run >/dev/null 2>&1 \
+             && command -v systemctl >/dev/null 2>&1 \
+             && systemctl --user is-active dbus.service >/dev/null 2>&1; then
+            if ! systemd-run --user --scope --quiet --collect \
+                 -- ${beadsDolt}/bin/beads-dolt start "$PWD"; then
+              echo "beads: beads-dolt start failed — dolt will not be available" >&2
+              return 1 2>/dev/null || exit 1
+            fi
+          else
+            if ! ${beadsDolt}/bin/beads-dolt start "$PWD"; then
+              echo "beads: beads-dolt start failed — dolt will not be available" >&2
+              return 1 2>/dev/null || exit 1
+            fi
           fi
           ${waitAndExport}
         fi
