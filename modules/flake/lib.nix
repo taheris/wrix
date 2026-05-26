@@ -29,6 +29,7 @@
           mkProfileImages
           mkSandbox
           profiles
+          rustProfile
           ;
       };
     };

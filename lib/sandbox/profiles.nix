@@ -324,8 +324,11 @@ let
     ${pkgs.which}/bin/which "$@" 2>/dev/null
   '';
 
-  # Build a toolchain from a rust-toolchain.toml file.
-  withToolchainFromFile =
+  # Build a project-pinned rust profile from a rust-toolchain.toml file.
+  # Used by lib/default.nix's wrapix.rustProfile; not exposed as part of the
+  # public profiles attrset surface (sandbox/default.nix strips it before
+  # re-export).
+  rustProfileFromFile =
     { file, sha256 }:
     let
       base = fenixPkgs.fromToolchainFile { inherit file sha256; };
@@ -339,9 +342,9 @@ in
     name = "base";
   };
 
-  rust = mkRustProfile defaultRustToolchain // {
-    withToolchain = withToolchainFromFile;
-  };
+  rust = mkRustProfile defaultRustToolchain;
+
+  inherit rustProfileFromFile;
 
   python = mkProfile {
     name = "python";

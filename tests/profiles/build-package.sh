@@ -13,7 +13,7 @@
 #      Editing a file in extraSrcs invalidates clippy+nextest only.
 #   6. test_build_package_toolchain_alignment
 #      bin/clippy/nextest all close over profile.toolchain on both
-#      profiles.rust and profiles.rust.withToolchain { ... }.
+#      profiles.rust and rustProfile { toolchain; sha256; }.
 #   7. test_consumers_migrated
 #      lib/mcp/tmux/mcp-server.nix consumes profile.buildPackage (no
 #      rustPlatform.buildRustPackage / makeRustPlatform); tests/default.nix
@@ -270,10 +270,10 @@ test_build_package_toolchain_alignment() {
   local fixture; fixture=$(make_fixture)
 
   local default_profile='lib.profiles.rust'
-  local with_profile="lib.profiles.rust.withToolchain { file = $REPO_ROOT/tests/fixtures/rust-toolchain.toml; sha256 = \"$TOOLCHAIN_FIXTURE_SHA\"; }"
+  local with_profile="lib.rustProfile { toolchain = $REPO_ROOT/tests/fixtures/rust-toolchain.toml; sha256 = \"$TOOLCHAIN_FIXTURE_SHA\"; }"
 
   local label
-  for label in "default:$default_profile" "withToolchain:$with_profile"; do
+  for label in "default:$default_profile" "rustProfile:$with_profile"; do
     local name="${label%%:*}"
     local profile_expr="${label#*:}"
 

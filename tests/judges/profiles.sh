@@ -31,14 +31,14 @@ test_rust_analyzer_sysroot() {
   judge_criterion "RUST_SRC_PATH is set correctly so rust-analyzer can resolve the standard library sysroot."
 }
 
-test_rust_with_toolchain() {
-  judge_files "lib/sandbox/profiles.nix"
-  judge_criterion "profiles.rust.withToolchain accepts { file, sha256 } (file being a rust-toolchain.toml path, sha256 being the component hash fenix needs for purity) and returns a profile attrset (without withToolchain) using fenix.fromToolchainFile. rust-src and fenix.stable.rust-analyzer-preview are combined in via fenix.combine. The returned profile is compatible with deriveProfile."
+test_rust_profile_constructor() {
+  judge_files "lib/default.nix" "lib/sandbox/profiles.nix" "lib/sandbox/default.nix"
+  judge_criterion "wrapix.rustProfile is a top-level constructor in lib/default.nix (alongside deriveProfile/mkDevShell/mkSandbox) with signature { toolchain, sha256, packages ? [], env ? {}, mounts ? [], networkAllowlist ? [] }. Both toolchain and sha256 are required (Nix destructuring errors when omitted; no silent unpinned-profile fallback). Internally it consumes fenix.fromToolchainFile via the helper exposed from lib/sandbox/profiles.nix, combines rust-src and fenix.stable.rust-analyzer-preview on top with fenix.combine, then applies extension args using the same merge rules as deriveProfile (packages/mounts/networkAllowlist concatenated, env right-biased — consumer wins on conflict). Pass-through fields (name/enabledPlugins/shellHook/writableDirs/toolchain/buildPackage) come from the pinned-profile base. profiles.rust.withToolchain is no longer exposed."
 }
 
 test_host_sandbox_rustc_same_store_path() {
-  judge_files "lib/sandbox/profiles.nix"
-  judge_criterion "The rust profile exposes a shellHook field (not hostShellHook) that, when spliced into a host devShell, prepends \${toolchain}/bin to PATH so host rustc resolves to the same /nix/store/... path the sandbox bakes in. Both the default rust profile and the withToolchain variant must close their shellHook over the same toolchain derivation that goes into packages, so packages and shellHook never drift."
+  judge_files "lib/sandbox/profiles.nix" "lib/default.nix"
+  judge_criterion "The rust profile exposes a shellHook field (not hostShellHook) that, when spliced into a host devShell, prepends \${toolchain}/bin to PATH so host rustc resolves to the same /nix/store/... path the sandbox bakes in. Both the default rust profile and rustProfile { toolchain; sha256; } must close their shellHook over the same toolchain derivation that goes into packages, so packages and shellHook never drift."
 }
 
 test_cargo_registry_writable() {
@@ -52,6 +52,6 @@ test_uv_cache_writable() {
 }
 
 test_rust_toolchain_field() {
-  judge_files "lib/sandbox/profiles.nix"
-  judge_criterion "The rust profile exposes a 'toolchain' field on both the default profile and the withToolchain { file, sha256 } variant. The field is the resolved fenix combine derivation — the same derivation interpolated into the profile's packages list and into the \${toolchain}/bin PATH prepend in shellHook. All three references close over the same value so sibling Nix apps using rustProfile.toolchain in runtimeInputs see the identical /nix/store/... path the sandbox bakes in."
+  judge_files "lib/sandbox/profiles.nix" "lib/default.nix"
+  judge_criterion "The rust profile exposes a 'toolchain' field on both the default profile and the rustProfile { toolchain, sha256 } variant. The field is the resolved fenix combine derivation — the same derivation interpolated into the profile's packages list and into the \${toolchain}/bin PATH prepend in shellHook. All three references close over the same value so sibling Nix apps using rustProfile.toolchain in runtimeInputs see the identical /nix/store/... path the sandbox bakes in."
 }

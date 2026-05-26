@@ -52,22 +52,22 @@ test_no_nightly_closure() {
     return 1
   fi
 
-  local withtc_drv
-  if ! withtc_drv=$(nix eval --raw --impure --no-warn-dirty --expr "
+  local pinned_drv
+  if ! pinned_drv=$(nix eval --raw --impure --no-warn-dirty --expr "
     let
       flake = builtins.getFlake \"$flake_url\";
-      rust = flake.legacyPackages.${system}.lib.profiles.rust;
-      wt = rust.withToolchain { file = $fixture_path; sha256 = \"$FIXTURE_SHA\"; };
-    in wt.toolchain.drvPath
+      lib = flake.legacyPackages.${system}.lib;
+      pinned = lib.rustProfile { toolchain = $fixture_path; sha256 = \"$FIXTURE_SHA\"; };
+    in pinned.toolchain.drvPath
   "); then
-    echo "nix eval for withToolchain rust toolchain drvPath failed" >&2
+    echo "nix eval for rustProfile toolchain drvPath failed" >&2
     return 1
   fi
 
-  local withtc_count
-  withtc_count=$(count_nightly_in_closure "$withtc_drv")
-  if [ "$withtc_count" -ne 0 ]; then
-    echo "withToolchain rust toolchain closure contains $withtc_count nightly-* derivation(s) — likely regression to fenix.packages.\${system}.rust-analyzer" >&2
+  local pinned_count
+  pinned_count=$(count_nightly_in_closure "$pinned_drv")
+  if [ "$pinned_count" -ne 0 ]; then
+    echo "rustProfile toolchain closure contains $pinned_count nightly-* derivation(s) — likely regression to fenix.packages.\${system}.rust-analyzer" >&2
     return 1
   fi
 }

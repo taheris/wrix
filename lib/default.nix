@@ -56,6 +56,33 @@ in
       networkAllowlist = (baseProfile.networkAllowlist or [ ]) ++ (extensions.networkAllowlist or [ ]);
     };
 
+  # Top-level constructor for project-pinned rust profiles. `toolchain` is the
+  # path to a rust-toolchain.toml; `sha256` is the fenix purity hash. Both are
+  # required — Nix's destructuring errors when either is omitted, matching the
+  # "no silent unpinned profile" invariant in specs/profiles.md.
+  rustProfile =
+    {
+      toolchain,
+      sha256,
+      packages ? [ ],
+      env ? { },
+      mounts ? [ ],
+      networkAllowlist ? [ ],
+    }:
+    let
+      base = sandbox.rustProfileFromFile {
+        file = toolchain;
+        inherit sha256;
+      };
+    in
+    base
+    // {
+      packages = base.packages ++ packages;
+      env = base.env // env;
+      mounts = base.mounts ++ mounts;
+      networkAllowlist = base.networkAllowlist ++ networkAllowlist;
+    };
+
   mkDevShell =
     {
       packages ? [ ],

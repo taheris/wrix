@@ -39,11 +39,17 @@ let
 
   # Profiles must use Linux packages (they contain Linux-only tools like iproute2)
   # hostPkgs is used only by profile.shellHook references.
-  profiles = import ./profiles.nix {
+  profilesModule = import ./profiles.nix {
     pkgs = linuxPkgs;
     hostPkgs = pkgs;
     inherit crane fenix treefmt;
   };
+  # rustProfileFromFile is the internal constructor that powers
+  # `wrapix.rustProfile` (lib/default.nix); it is intentionally stripped from
+  # the public `profiles` surface — consumers reach pinned rust profiles
+  # through `wrapix.rustProfile { toolchain; sha256; }`.
+  profiles = builtins.removeAttrs profilesModule [ "rustProfileFromFile" ];
+  inherit (profilesModule) rustProfileFromFile;
 
   # MCP server registry (uses Linux packages for server binaries)
   mcpRegistry = import ../mcp {
@@ -327,6 +333,7 @@ in
     mkImage
     mkImageRef
     profiles
+    rustProfileFromFile
     baseClaudeSettings
     ;
   inherit (manifest) mkProfileImages;
