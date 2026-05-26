@@ -23,27 +23,11 @@ let
     inherit pkgs crane fenix;
   };
 
-  # Host-native Rust toolchain for the devShell (includes rust-analyzer + src
-  # for IDE support).  Container images use the Linux toolchain from
-  # sandbox.profiles.rust; this is its macOS/host counterpart.
-  devToolchain =
-    if fenix != null then
-      let
-        hostFenixPkgs = fenix.packages.${system};
-      in
-      hostFenixPkgs.combine [
-        hostFenixPkgs.stable.defaultToolchain
-        hostFenixPkgs.stable.rust-analyzer-preview
-        hostFenixPkgs.stable.rust-src
-      ]
-    else
-      null;
-
 in
 {
   inherit (sandbox) profiles mkSandbox mkProfileImages;
   tmuxMcpPackage = tmuxMcp;
-  inherit beads devToolchain;
+  inherit beads;
 
   deriveProfile =
     baseProfile: extensions:
@@ -85,20 +69,15 @@ in
 
   mkDevShell =
     {
+      profile,
       packages ? [ ],
+      env ? { },
       shellHook ? "",
     }:
     pkgs.mkShell {
-      packages = [
-        pkgs.beads
-        pkgs.beads-dolt
-        pkgs.beads-push
-        pkgs.dolt
-        pkgs.prek
-      ]
-      ++ packages;
+      packages = profile.packages ++ packages;
+      env = profile.env // env;
       shellHook = ''
-        ${shellHook}
         # Configure Dolt origin remote for bd dolt pull/push (no-op if already set)
         if [ -d .beads/dolt/beads/.dolt ] && [ -d .git/beads-worktrees/beads/.beads/dolt-remote ]; then
           _dolt_remote="file://$PWD/.git/beads-worktrees/beads/.beads/dolt-remote"
@@ -117,6 +96,9 @@ in
         fi
 
         echo "Wrapix development shell"
+
+        ${profile.shellHook or ""}
+        ${shellHook}
       '';
     };
 }
