@@ -1,8 +1,9 @@
-_:
+{ inputs, ... }:
 
 {
   perSystem =
     {
+      system,
       pkgs,
       wrapix,
       linuxPkgs,
@@ -85,8 +86,10 @@ _:
             beads-push
             pi-mono
             ;
-          nodejs = linuxPkgs.nodejs_22;
+
           default = sandboxPkgs.sandbox-rust;
+          loom = inputs.loom.packages.${system}.loom;
+          nodejs = linuxPkgs.nodejs_22;
           profile-images = wrapix.mkProfileImages profileImages;
           tmux-mcp = wrapix.tmuxMcpPackage.bin;
           wrapix = wrapixLauncher;

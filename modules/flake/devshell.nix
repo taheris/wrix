@@ -31,6 +31,7 @@ _:
           pkgs.flock
           pkgs.gh
           pkgs.podman
+          self'.packages.loom
           self'.packages.sandbox-rust
           self'.packages.wrapix-notifyd
         ];

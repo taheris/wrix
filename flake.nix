@@ -18,6 +18,22 @@
       inputs.nixpkgs-lib.follows = "nixpkgs";
     };
 
+    # Cycle: loom depends on wrapix; we cascade follows into loom's wrapix so
+    # the shared inputs (nixpkgs, crane, fenix) resolve to one rustc, not two.
+    loom = {
+      url = "git+ssh://git@github.com/taheris/loom.git?ref=main&shallow=1";
+      inputs = {
+        nixpkgs.follows = "nixpkgs";
+        flake-parts.follows = "flake-parts";
+        treefmt-nix.follows = "treefmt-nix";
+        wrapix.inputs.nixpkgs.follows = "nixpkgs";
+        wrapix.inputs.crane.follows = "crane";
+        wrapix.inputs.fenix.follows = "fenix";
+        wrapix.inputs.flake-parts.follows = "flake-parts";
+        wrapix.inputs.treefmt-nix.follows = "treefmt-nix";
+      };
+    };
+
     treefmt-nix = {
       url = "git+https://github.com/numtide/treefmt-nix.git?ref=main&shallow=1";
       inputs.nixpkgs.follows = "nixpkgs";
