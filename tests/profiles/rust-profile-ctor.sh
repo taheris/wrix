@@ -100,7 +100,7 @@ test_extension_args() {
     toolchain = $REPO_ROOT/tests/fixtures/rust-toolchain.toml;
     sha256 = \"$TOOLCHAIN_FIXTURE_SHA\";
     packages = [ pkgs.hello ];
-    env = { CTOR_TEST_KEY = \"ctor_test_value\"; CARGO_HOME = \"/ctor-override\"; };
+    env = { CTOR_TEST_KEY = \"ctor_test_value\"; SCCACHE_CACHE_SIZE = \"99G\"; };
     mounts = [ { source = \"/host/ctor\"; dest = \"/ctn/ctor\"; mode = \"ro\"; optional = true; } ];
     networkAllowlist = [ \"ctor.example.com\" ];
   }"
@@ -115,8 +115,8 @@ test_extension_args() {
       mountsDiff         = (builtins.length ext.mounts)   - (builtins.length base.mounts);
       networkDiff        = (builtins.length ext.networkAllowlist) - (builtins.length base.networkAllowlist);
       envExtAdded        = ext.env.CTOR_TEST_KEY or null;
-      envRightMergeWins  = ext.env.CARGO_HOME;
-      baseCargoHome      = base.env.CARGO_HOME;
+      envRightMergeWins  = ext.env.SCCACHE_CACHE_SIZE;
+      baseSccacheSize    = base.env.SCCACHE_CACHE_SIZE;
       mountDestPresent   = builtins.any (m: m.dest == \"/ctn/ctor\") ext.mounts;
       networkPresent     = builtins.elem \"ctor.example.com\" ext.networkAllowlist;
       baseNetworkPreserved = builtins.elem \"crates.io\" ext.networkAllowlist;
@@ -126,14 +126,14 @@ test_extension_args() {
     return 1
   fi
 
-  local packages_diff mounts_diff network_diff env_added env_override base_cargo \
+  local packages_diff mounts_diff network_diff env_added env_override base_sccache \
     mount_present network_present base_net_preserved
   packages_diff=$(echo "$result"      | jq -r '.packagesDiff')
   mounts_diff=$(echo "$result"        | jq -r '.mountsDiff')
   network_diff=$(echo "$result"       | jq -r '.networkDiff')
   env_added=$(echo "$result"          | jq -r '.envExtAdded')
   env_override=$(echo "$result"       | jq -r '.envRightMergeWins')
-  base_cargo=$(echo "$result"         | jq -r '.baseCargoHome')
+  base_sccache=$(echo "$result"       | jq -r '.baseSccacheSize')
   mount_present=$(echo "$result"      | jq -r '.mountDestPresent')
   network_present=$(echo "$result"    | jq -r '.networkPresent')
   base_net_preserved=$(echo "$result" | jq -r '.baseNetworkPreserved')
@@ -154,12 +154,12 @@ test_extension_args() {
     echo "FAIL: env.CTOR_TEST_KEY expected 'ctor_test_value', got '$env_added'" >&2
     return 1
   fi
-  if [[ "$env_override" != "/ctor-override" ]]; then
-    echo "FAIL: env.CARGO_HOME right-merge expected '/ctor-override', got '$env_override'" >&2
+  if [[ "$env_override" != "99G" ]]; then
+    echo "FAIL: env.SCCACHE_CACHE_SIZE right-merge expected '99G', got '$env_override'" >&2
     return 1
   fi
-  if [[ "$base_cargo" != "/home/wrapix/.cargo" ]]; then
-    echo "FAIL: base env.CARGO_HOME expected '/home/wrapix/.cargo', got '$base_cargo' — base profile drift" >&2
+  if [[ "$base_sccache" != "50G" ]]; then
+    echo "FAIL: base env.SCCACHE_CACHE_SIZE expected '50G', got '$base_sccache' — base profile drift" >&2
     return 1
   fi
   if [[ "$mount_present" != "true" ]]; then

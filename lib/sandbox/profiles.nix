@@ -242,7 +242,6 @@ let
 
       env = {
         CARGO_BUILD_RUSTC_WRAPPER = "${pkgs.sccache}/bin/sccache";
-        CARGO_HOME = "/home/wrapix/.cargo";
         CARGO_INCREMENTAL = "0";
         LIBRARY_PATH = "${pkgs.postgresql.lib}/lib";
         OPENSSL_INCLUDE_DIR = "${pkgs.openssl.dev}/include";
@@ -297,14 +296,14 @@ let
       # bakes in — without it, host falls through to rustup and the diverging
       # sysroot baked into rlib metadata invalidates every sccache key.
       #
-      # mkDevShell merges profile.env (container env) into mkShell's env, so
-      # CARGO_HOME=/home/wrapix/.cargo and SCCACHE_DIR=/home/wrapix/.cache/...
-      # leak into the host shell. Drop the leaked values so the :- defaults
-      # below fall through to host paths; user-set values survive untouched.
-      # Without this, host cargo/sccache miss their caches and rebuild every
-      # crate on every change.
+      # SCCACHE_DIR must stay set in profile.env (the image's
+      # XDG_CACHE_HOME=/var/cache would otherwise send sccache to
+      # /var/cache/sccache, missing the host mount). On the host devshell,
+      # mkDevShell merges profile.env into mkShell's env, so the container
+      # path /home/wrapix/.cache/sccache leaks into the host. Match-and-unset
+      # so the :- default falls through to $HOME/.cache/sccache; user-set
+      # overrides survive.
       shellHook = ''
-        [ "''${CARGO_HOME:-}" = "/home/wrapix/.cargo" ] && unset CARGO_HOME
         [ "''${SCCACHE_DIR:-}" = "/home/wrapix/.cache/sccache" ] && unset SCCACHE_DIR
         export PATH="${toolchain}/bin:$PATH"
         export RUSTC_WRAPPER="${hostPkgs.sccache}/bin/sccache"

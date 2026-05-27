@@ -107,7 +107,7 @@ rust-std + clippy + rustfmt + rust-docs.
 
 Environment:
 
-- `CARGO_HOME=/home/wrapix/.cargo` — aligns with the registry/git mount dests below so cargo reads from and writes back to the shared host cache. Non-mounted CARGO_HOME state (credentials.toml, config.toml, `cargo install` bins) lives on tmpfs on Linux and is ephemeral across container runs — intentional for an agent-style environment.
+- `CARGO_HOME` — intentionally **unset**; cargo's `$HOME/.cargo` default applies, which resolves to `/home/wrapix/.cargo` inside the container and to the user's host home in `mkDevShell`. The registry/git mount dests below match cargo's container default, so the shared host cache lines up without an explicit env override. Non-mounted CARGO_HOME state (credentials.toml, config.toml, `cargo install` bins) lives on tmpfs on Linux and is ephemeral across container runs — intentional for an agent-style environment.
 - `RUST_SRC_PATH=${toolchain}/lib/rustlib/src/rust/library` — rust-analyzer standard library resolution
 - `LIBRARY_PATH=${pkgs.postgresql.lib}/lib` — PostgreSQL library discovery at link time
 - `OPENSSL_INCLUDE_DIR=${pkgs.openssl.dev}/include` — OpenSSL headers
@@ -229,7 +229,7 @@ Extends base with Python toolchain:
 
 Environment:
 
-- `UV_CACHE_DIR=/home/wrapix/.cache/uv` — points at the cache mount dest below so uv reads from and writes back to the shared host cache (mirrors the rust profile's `CARGO_HOME` ↔ registry-mount alignment).
+- `UV_CACHE_DIR=/home/wrapix/.cache/uv` — points at the cache mount dest below so uv reads from and writes back to the shared host cache (mirrors the rust profile's `SCCACHE_DIR` ↔ cache-mount alignment).
 
 Mounts (host source → literal container dest):
 

@@ -8,7 +8,7 @@ test_base_profile_functional() {
 
 test_rust_profile() {
   judge_files "lib/sandbox/profiles.nix"
-  judge_criterion "Rust profile uses fenix (fenix.packages.\${system}.stable.defaultToolchain combined with fenix.stable.rust-src and fenix.stable.rust-analyzer-preview (manifest builds — NOT fenix.packages.\${system}.rust-analyzer which is built from nightly source)), gcc for linking, openssl, pkg-config, postgresql libs, and sccache. CARGO_HOME, RUST_SRC_PATH, OPENSSL, RUSTC_WRAPPER, CARGO_BUILD_RUSTC_WRAPPER, SCCACHE_DIR, SCCACHE_CACHE_SIZE, and CARGO_INCREMENTAL=0 environment variables are configured. CARGO_TARGET_DIR is not pinned (cargo default applies). No rustup, RUSTUP_HOME, or rust-overlay."
+  judge_criterion "Rust profile uses fenix (fenix.packages.\${system}.stable.defaultToolchain combined with fenix.stable.rust-src and fenix.stable.rust-analyzer-preview (manifest builds — NOT fenix.packages.\${system}.rust-analyzer which is built from nightly source)), gcc for linking, openssl, pkg-config, postgresql libs, and sccache. RUST_SRC_PATH, OPENSSL, RUSTC_WRAPPER, CARGO_BUILD_RUSTC_WRAPPER, SCCACHE_DIR, SCCACHE_CACHE_SIZE, and CARGO_INCREMENTAL=0 environment variables are configured. CARGO_HOME and CARGO_TARGET_DIR are not pinned (cargo's \$HOME/.cargo default applies; \$HOME=/home/wrapix inside the container). No rustup, RUSTUP_HOME, or rust-overlay."
 }
 
 test_python_profile() {

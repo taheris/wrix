@@ -165,8 +165,8 @@ check_command_output "rustc --version" "rustc" "rustc is functional"
 # Check cargo (Rust package manager)
 check_command "cargo" "cargo (Rust package manager)"
 
-# Verify CARGO_HOME and RUST_SRC_PATH environment variables are set
-check_command_output "echo \$CARGO_HOME" "/home/wrapix/.cargo" "CARGO_HOME is set correctly"
+# Verify RUST_SRC_PATH is set (CARGO_HOME is intentionally unset: cargo
+# defaults to $HOME/.cargo = /home/wrapix/.cargo via the container's $HOME).
 check_command_output "echo \$RUST_SRC_PATH" "rustlib/src/rust/library" "RUST_SRC_PATH is set correctly"
 
 echo ""
@@ -212,7 +212,6 @@ log_info "Checking that rust profile environment and MCP packages are merged..."
 cat > "${WORKSPACE}/check_env.sh" << 'SCRIPT'
 #!/usr/bin/env bash
 echo "=== Environment Variables ==="
-echo "CARGO_HOME=$CARGO_HOME"
 echo "RUST_SRC_PATH=$RUST_SRC_PATH"
 echo "OPENSSL_LIB_DIR=$OPENSSL_LIB_DIR"
 echo "OPENSSL_INCLUDE_DIR=$OPENSSL_INCLUDE_DIR"
