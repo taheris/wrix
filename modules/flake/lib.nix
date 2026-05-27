@@ -28,6 +28,7 @@
           mkDevShell
           mkProfileImages
           mkSandbox
+          prekHooks
           profiles
           rustProfile
           ;

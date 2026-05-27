@@ -29,6 +29,15 @@ in
   tmuxMcpPackage = tmuxMcp;
   inherit beads;
 
+  prekHooks = pkgs.runCommand "wrapix-prek-hooks" { } ''
+    install -Dm 555 ${./prek/hooks/pre-commit}         $out/pre-commit
+    install -Dm 555 ${./prek/hooks/pre-push}           $out/pre-push
+    install -Dm 555 ${./prek/hooks/prepare-commit-msg} $out/prepare-commit-msg
+    install -Dm 555 ${./prek/hooks/post-checkout}      $out/post-checkout
+    install -Dm 555 ${./prek/hooks/post-merge}         $out/post-merge
+    install -Dm 444 ${./prek/lock.sh}                  $out/_lib/lock.sh
+  '';
+
   deriveProfile =
     baseProfile: extensions:
     baseProfile
