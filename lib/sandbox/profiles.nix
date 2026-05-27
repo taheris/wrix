@@ -280,13 +280,17 @@ let
         "index.crates.io"
       ];
 
-      # Linux-only: stack a tmpfs at CARGO_HOME so the dir is wrapix-owned.
-      # Without this, podman creates /home/wrapix/.cargo as root to serve as
-      # the mountpoint parent for the ro registry/git binds, and cargo (as
-      # wrapix) can't write its .global-cache/credentials there.
+      # Linux-only: stack a tmpfs at CARGO_HOME and .cache so the dirs are
+      # wrapix-owned. Without this, podman creates them as root to anchor the
+      # registry/git/sccache binds, and cargo/sccache (as wrapix) can't write
+      # their own files there. The .cache tmpfs also keeps sccache functional
+      # when the optional ~/.cache/sccache host mount is absent.
       # Darwin is unaffected: the entrypoint mkdirs these paths itself as
       # namespaced-root-mapped-to-HOST_UID, so they're already writable.
-      writableDirs = [ "/home/wrapix/.cargo" ];
+      writableDirs = [
+        "/home/wrapix/.cargo"
+        "/home/wrapix/.cache"
+      ];
 
       # Align host with the sandbox so cross-boundary cache hits work.
       # PATH prepend pins host `rustc` to the same fenix derivation the sandbox
