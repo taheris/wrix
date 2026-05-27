@@ -14,26 +14,29 @@ this race unless hook invocations serialize across processes.
 
 ### Hook Ownership
 
-Hook stages are served from two locations:
+All git hooks for prek-using wrapix repositories are served from a single
+Nix-store directory — `wrapix.prekHooks` — pointed at by `core.hooksPath`. The
+bundle contains shims for every stage prek serves:
 
-- **`pre-commit` and `pre-push`** are served from `lib/prek/hooks/` via `core.hooksPath`
-  (see FR2). The versioned shims there acquire the serialization `flock` and then
-  `exec prek hook-impl …`. Git reads only from `core.hooksPath` for these stages, so
-  anything under `.git/hooks/pre-commit` or `.git/hooks/pre-push` is inert.
-- **All other stages** (`prepare-commit-msg`, `post-checkout`, `post-merge`) are served
-  from `.git/hooks/`, written by `prek install`. Beads (bd) hooks run as prek-managed
-  local hooks in `.pre-commit-config.yaml` via `bd hooks run <stage>`. The `.git/hooks/`
-  directory is `chmod 555` to prevent `bd hooks install` from overwriting prek's shims
-  for these non-FR2 stages.
+| Stage | Shim behavior |
+|-------|---------------|
+| pre-commit | flock-wrap then `exec prek hook-impl --hook-type=pre-commit ...` |
+| pre-push | flock-wrap then `prek run --stage pre-push` with stamp-file dance |
+| prepare-commit-msg | plain `exec prek hook-impl ...` (no flock) |
+| post-checkout | plain `exec prek hook-impl ...` (no flock) |
+| post-merge | plain `exec prek hook-impl ...` (no flock) |
 
-To update the non-FR2 hook set:
+`mkDevShell` sets `core.hooksPath` to the bundle on every devshell entry
+whenever `.pre-commit-config.yaml` is present (see `specs/profiles.md`
+§ Prek hook management for the auto-set / opt-out / derivation-substitute
+contract). Consumers do not vendor shims, do not set `core.hooksPath`
+themselves, and do not run `prek install`.
 
-```bash
-chmod 755 .git/hooks/ && prek install -f && chmod 555 .git/hooks/
-```
-
-The FR2 shims are versioned in the repo and need no install step — they're effective as
-soon as `core.hooksPath` is set (see FR2 *Install ordering*).
+Because git never reads `.git/hooks/` while `core.hooksPath` is set,
+whatever lands there (e.g. `bd hooks install`) is inert — no chmod-lockdown
+is needed, no `prek install -f` runs from any wrapix lifecycle. Beads local
+hooks declared in `.pre-commit-config.yaml` still run via prek's own
+dispatch, unaffected by the location swap.
 
 ### Functional Requirements
 
@@ -56,17 +59,18 @@ The installed pre-commit and pre-push hooks acquire an exclusive `flock` on
 Both stages are covered because concurrent commits and pushes both touch the same
 working-tree stash window.
 
-- **Mechanism** — versioned shims at `lib/prek/hooks/pre-commit` and
-  `lib/prek/hooks/pre-push` source `lib/prek/lock.sh` for shared lock infrastructure,
-  then call `_prek_acquire_lock` to serialize. The pre-commit shim `exec`s
-  `prek hook-impl --hook-dir ... --script-version 4 --hook-type=pre-commit -- "$@"`
-  (`hook-impl` is used rather than `prek run` because git passes positional args that
-  `prek run` would mistake for hook/project selectors). The pre-push shim runs
-  `prek run --stage pre-push` independently of git's SSH connection, then writes a
-  stamp file (`.wrapix/push-verified`) on success; the user re-runs `git push` and the
-  stamp is consumed instantly, pushing on a fresh connection. This avoids SSH idle
-  timeouts during long test suites. Git is pointed at the shim directory via
-  `core.hooksPath = lib/prek/hooks`.
+- **Mechanism** — the `pre-commit` and `pre-push` shims inside the
+  `wrapix.prekHooks` derivation source `_lib/lock.sh` for shared lock
+  infrastructure, then call `_prek_acquire_lock` to serialize. The pre-commit
+  shim `exec`s `prek hook-impl --hook-dir ... --script-version 4
+  --hook-type=pre-commit -- "$@"` (`hook-impl` is used rather than `prek run`
+  because git passes positional args that `prek run` would mistake for
+  hook/project selectors). The pre-push shim runs `prek run --stage pre-push`
+  independently of git's SSH connection, then writes a stamp file
+  (`.wrapix/push-verified`) on success; the user re-runs `git push` and the
+  stamp is consumed instantly, pushing on a fresh connection. This avoids SSH
+  idle timeouts during long test suites. Git is pointed at the bundle directory
+  via `core.hooksPath = ${wrapix.prekHooks}`, set by `mkDevShell`.
 - **Lock file** — `.wrapix/prek.lock`, gitignored, auto-created on first use; located
   in the main repo's `.wrapix/` so every agent (host, container with `.wrapix` mount,
   linked worktree) shares the same lock. A single lock covers both stages because both
@@ -93,27 +97,33 @@ working-tree stash window.
   (devShell, every wrapix container) has it available without per-user setup. macOS
   hosts running `git commit` outside `nix develop` are the only environment that can
   hit the missing-flock path, and the error message points them at the fix.
-- **Install ordering** — `core.hooksPath` is set idempotently by the `flake.nix`
-  devShell `shellHook` on every `nix develop` entry
-  (`git config --local core.hooksPath lib/prek/hooks`). No per-user setup step is
-  required, and the shims survive subsequent `prek install` runs because they live
-  outside `.git/hooks/`. Contributors who commit outside `nix develop` and have never
-  entered the devShell on this clone won't have `core.hooksPath` set and bypass FR2
-  entirely — this is considered acceptable (rare, outside the concurrent-agent
-  scenario); contributors who *have* entered the devShell but then commit outside it
-  still have `core.hooksPath` set in their local git config and hit the *flock
-  availability* bullet above instead (aborting loudly rather than silently racing).
+- **Install ordering** — `core.hooksPath` is set idempotently by `mkDevShell`'s
+  lifecycle on every devshell entry, pointing at the `wrapix.prekHooks`
+  Nix-store path (see `specs/profiles.md` § Prek hook management). No per-user
+  setup step is required, and the shims survive arbitrary `prek install` runs
+  because they live entirely outside `.git/hooks/` — no wrapix lifecycle calls
+  `prek install` at all.
+- **Contributors outside `nix develop`** — those who have never entered the
+  devshell on this clone won't have `core.hooksPath` set and bypass FR2
+  entirely. Once any devshell entry has run, `core.hooksPath` is persisted in
+  local git config and every later commit hits the shim regardless of whether
+  the commit fires from inside `nix develop`. Contributors who have entered
+  the devshell but commit outside it still hit the *flock availability* bullet
+  above (aborting loudly rather than silently racing).
 
 ## Affected Files
 
 | File | Purpose |
 |------|---------|
 | `.pre-commit-config.yaml` | Hook stage configuration |
-| `lib/prek/hooks/pre-commit` | `flock`-wrapped prek entry point for pre-commit stage |
-| `lib/prek/hooks/pre-push` | `flock`-wrapped prek entry point for pre-push stage |
-| `lib/prek/lock.sh` | Shared helper: resolve main-repo lock path, provide `_prek_acquire_lock` |
+| `lib/prek/hooks/pre-commit` | `flock`-wrapped shim — source input to `wrapix.prekHooks` derivation |
+| `lib/prek/hooks/pre-push` | `flock`-wrapped shim — source input to `wrapix.prekHooks` derivation |
+| `lib/prek/hooks/prepare-commit-msg` | Plain prek shim — source input to `wrapix.prekHooks` derivation |
+| `lib/prek/hooks/post-checkout` | Plain prek shim — source input to `wrapix.prekHooks` derivation |
+| `lib/prek/hooks/post-merge` | Plain prek shim — source input to `wrapix.prekHooks` derivation |
+| `lib/prek/lock.sh` | Shared helper — source input to `wrapix.prekHooks`; resolves main-repo lock path, provides `_prek_acquire_lock` |
+| `lib/default.nix` | `wrapix.prekHooks` derivation; `mkDevShell` lifecycle sets `core.hooksPath` |
 | `.gitignore` | Ignore `.wrapix/prek.lock`, `.wrapix/push-verified` |
-| `flake.nix` devShell `shellHook` | Set `core.hooksPath = lib/prek/hooks` idempotently on entry |
 | `flake.nix` devShell packages | Add `flock` (util-linux) |
 | `lib/sandbox/profiles.nix` base profile | Add `flock` (util-linux) |
 
@@ -122,3 +132,14 @@ working-tree stash window.
 - Custom per-feature hook overrides — use a project-local `.pre-commit-config.yaml` patch
 - Hook retry logic
 - Parallel hook execution
+- Parameterized `mkPrekHooks` constructor. v1 ships a single frozen
+  `wrapix.prekHooks` bundle; consumers needing a different shim set substitute
+  a hand-built derivation via `mkDevShell { prekHooks = <derivation>; }`. A
+  parameterized constructor lands when a second concrete use case emerges and
+  the right configuration surface is clearer than guessing now.
+- Flock serialization on `prepare-commit-msg`, `post-checkout`, `post-merge`.
+  These stages don't enter prek's stash window (wx-m5yuq is specifically about
+  the working-tree stash on commit/push), so flock would only serialize
+  unrelated operations across agents. If a future bug shows a different race
+  on one of these stages, the bundle gains a shim for it — additive change,
+  no contract break.

@@ -27,6 +27,10 @@ via direct field access. The shared store path is what makes cross-boundary
 sccache hits possible — the invariants and success criteria below exist
 to keep that identity from drifting.
 
+`mkDevShell` additionally manages prek hook installation by pointing
+`core.hooksPath` at a standalone `wrapix.prekHooks` derivation — see
+[Prek hook management](#prek-hook-management) for the contract.
+
 Rust toolchains are baked into the container image at build time, never
 bootstrapped from rustup at container start. fenix supplies proper Nix
 derivations with stable dynamic linkers, eliminating the rustup-on-Nix
@@ -355,6 +359,7 @@ wrapix.mkDevShell {
   packages  = [ ... ];        # optional, appended to profile.packages
   shellHook = "...";          # optional, appended after profile.shellHook
   env       = { ... };        # optional, right-merged into profile.env
+  prekHooks = true;           # optional, see Prek hook management below
 }
 ```
 
@@ -372,11 +377,54 @@ Composition rules (deterministic, no consumer override):
 | shellHook | `<wrapix-internal lifecycle setup> + profile.shellHook + <consumer shellHook>` (fixed order) |
 
 The internal lifecycle setup performs wrapix-specific bootstrap (beads
-init, dolt remote configuration, prek hook install). It runs before
-`profile.shellHook` so its tooling installs resolve through the system
-PATH rather than the profile-extended one; the consumer's `shellHook`
-runs last so consumer-set env can override profile-set env after the
-profile's exports have fired.
+init, dolt remote configuration, prek `core.hooksPath` configuration —
+see [Prek hook management](#prek-hook-management) below). It runs
+before `profile.shellHook` so its tooling installs resolve through the
+system PATH rather than the profile-extended one; the consumer's
+`shellHook` runs last so consumer-set env can override profile-set env
+after the profile's exports have fired.
+
+### Prek hook management
+
+The lifecycle owns `core.hooksPath` configuration for prek-using
+repositories. Two conditions gate the install: (1)
+`.pre-commit-config.yaml` exists in the working directory, AND (2)
+`prekHooks` resolves to a derivation. When both hold, the lifecycle
+runs `git config --local core.hooksPath ${derivation}` on every
+devshell entry, pointing git at a frozen Nix-store bundle of shims.
+The default bundle is `wrapix.prekHooks`, which ships flock-wrapped
+`pre-commit` / `pre-push` and plain `prepare-commit-msg` /
+`post-checkout` / `post-merge` shims. Consumers do not write their
+own shims, do not vendor `lib/prek/hooks/`, and do not set
+`core.hooksPath` from their own shellHook. The contract closes the
+wx-m5yuq stash-race surface (see `specs/pre-commit.md`) for every
+prek-using consumer by default, and there is no `prek install -f`
+step to clobber hand-authored files.
+
+`prekHooks` resolves as follows:
+
+| Value | Resolves to |
+|-------|-------------|
+| `true` (the default) | `wrapix.prekHooks` |
+| `false` | nothing — lifecycle is a no-op for hooks |
+| a derivation | the substituted derivation, used as-is |
+
+**Wrapix-always-wins on stale config.** When `prekHooks` resolves to
+a derivation (the `true` default or an explicit derivation), the
+lifecycle overwrites `core.hooksPath` on the next devshell entry if
+its current value differs from the target derivation's store path,
+and prints a one-line message naming the old value so the consumer
+notices the migration (e.g. a previous in-tree path the consumer was
+using before adopting `prekHooks`). The `prekHooks = false` branch
+is passive: the lifecycle does nothing, including not clearing a
+`core.hooksPath` that a previous session set. Consumers who flip
+from `true` to `false` and want the stale value cleared run
+`git config --local --unset core.hooksPath` themselves.
+
+`wrapix.prekHooks` is exported at the lib level. Consumers needing a
+different shim set substitute a hand-built derivation via `prekHooks =
+...`. There is no parameterized constructor in v1 — see
+`specs/pre-commit.md` *Out of Scope* for the deferral rationale.
 
 A consumer that wants a different shell wrapper (custom `pkgs.mkShell`
 attrs, alternate hook layering) is reaching outside the contract — they
@@ -555,6 +603,26 @@ dests live under `/home/wrapix/` inside the container, not under
   [system](bash tests/profiles/mkdevshell.sh test_shellhook_order)
 - `wrapix.mkDevShell {}` without `profile` errors at evaluation
   [system](bash tests/profiles/mkdevshell.sh test_profile_required)
+- `wrapix.prekHooks` is exported on the lib and is a directory derivation containing executable shims for `pre-commit`, `pre-push`, `prepare-commit-msg`, `post-checkout`, `post-merge` plus a `_lib/lock.sh` helper
+  [system](bash tests/profiles/prek-hooks-bundle.sh test_bundle_contents)
+- `pre-commit` and `pre-push` shims in `wrapix.prekHooks` source `_lib/lock.sh` and call `_prek_acquire_lock` before invoking prek; `prepare-commit-msg`, `post-checkout`, `post-merge` shims call prek directly without sourcing the lock helper
+  [system](bash tests/profiles/prek-hooks-bundle.sh test_flock_only_on_fr2_stages)
+- `wrapix.mkDevShell { profile = ...; }` with `.pre-commit-config.yaml` present sets `core.hooksPath` to `${wrapix.prekHooks}` on entry
+  [system](bash tests/profiles/mkdevshell-prek.sh test_auto_set_when_config_present)
+- `wrapix.mkDevShell { profile = ...; }` without `.pre-commit-config.yaml` does NOT set `core.hooksPath` on entry
+  [system](bash tests/profiles/mkdevshell-prek.sh test_skip_when_config_absent)
+- `wrapix.mkDevShell { profile = ...; prekHooks = false; }` does NOT set `core.hooksPath` even when `.pre-commit-config.yaml` is present
+  [system](bash tests/profiles/mkdevshell-prek.sh test_opt_out)
+- `wrapix.mkDevShell { profile = ...; prekHooks = <custom-derivation>; }` sets `core.hooksPath` to the substituted derivation when `.pre-commit-config.yaml` is present
+  [system](bash tests/profiles/mkdevshell-prek.sh test_derivation_substitute)
+- When `prekHooks` resolves to a derivation and a previous session left `core.hooksPath` set to a different store path, entering `mkDevShell` overwrites it and prints a one-line message naming the old value (covers both the `true` default → `${wrapix.prekHooks}` case and the substituted-derivation case)
+  [system](bash tests/profiles/mkdevshell-prek.sh test_stale_config_overwrite_with_warning)
+- `wrapix.mkDevShell { profile = ...; prekHooks = false; }` entered in a repo whose local git config already has `core.hooksPath` set leaves that value unchanged (passive opt-out preserves stale state per design)
+  [system](bash tests/profiles/mkdevshell-prek.sh test_opt_out_preserves_stale_config)
+- `lib/default.nix` mkDevShell shellHook contains no `prek install` invocation and no `chmod` on `.git/hooks`
+  [check](grep -L 'prek install\|chmod.*\.git/hooks' lib/default.nix)
+- `modules/flake/devshell.nix` does not set `core.hooksPath` (mkDevShell owns it)
+  [check](grep -L 'core.hooksPath' modules/flake/devshell.nix)
 - Host devshell built via `wrapix.mkDevShell { profile = wrapix.rustProfile { toolchain; sha256; }; }` resolves `rustc` to the same `/nix/store/...` path as the sandbox built from the same profile
   [judge](../tests/judges/profiles.sh#test_host_sandbox_rustc_same_store_path)
 - `wrapix.devToolchain` is not exposed by the lib (deleted; consumers reach `profile.toolchain`)
@@ -601,6 +669,7 @@ dests live under `/home/wrapix/` inside the container, not under
 7. **Toolchain Configuration** — Top-level `rustProfile { toolchain; sha256; ... }` constructor produces a project-pinned rust profile from a `rust-toolchain.toml`
 8. **Rust Package Construction** — Rust profile exposes `buildPackage` for crane-backed Rust packages with split `bin`/`clippy`/`nextest` derivations
 9. **Devshell Construction** — Top-level `mkDevShell { profile; ... }` is the single profile-aware entry point for host devshells; consumers do not splice `profile.shellHook` directly
+10. **Prek Hook Management** — `mkDevShell` configures `core.hooksPath` from a wrapix-shipped shim bundle (`wrapix.prekHooks`) when `.pre-commit-config.yaml` is present, opted out via `prekHooks = false`. Consumers do not vendor shims or set `core.hooksPath` themselves.
 
 ### Non-Functional
 
