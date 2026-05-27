@@ -296,11 +296,19 @@ let
       # PATH prepend pins host `rustc` to the same fenix derivation the sandbox
       # bakes in — without it, host falls through to rustup and the diverging
       # sysroot baked into rlib metadata invalidates every sccache key.
-      # SCCACHE_DIR/SCCACHE_CACHE_SIZE/CARGO_INCREMENTAL: default if unset;
-      # downstream can override in its own shellHook.
+      #
+      # mkDevShell merges profile.env (container env) into mkShell's env, so
+      # CARGO_HOME=/home/wrapix/.cargo and SCCACHE_DIR=/home/wrapix/.cache/...
+      # leak into the host shell. Drop the leaked values so the :- defaults
+      # below fall through to host paths; user-set values survive untouched.
+      # Without this, host cargo/sccache miss their caches and rebuild every
+      # crate on every change.
       shellHook = ''
+        [ "''${CARGO_HOME:-}" = "/home/wrapix/.cargo" ] && unset CARGO_HOME
+        [ "''${SCCACHE_DIR:-}" = "/home/wrapix/.cache/sccache" ] && unset SCCACHE_DIR
         export PATH="${toolchain}/bin:$PATH"
         export RUSTC_WRAPPER="${hostPkgs.sccache}/bin/sccache"
+        export CARGO_BUILD_RUSTC_WRAPPER="${hostPkgs.sccache}/bin/sccache"
         export SCCACHE_DIR="''${SCCACHE_DIR:-$HOME/.cache/sccache}"
         export SCCACHE_CACHE_SIZE="''${SCCACHE_CACHE_SIZE:-50G}"
         export CARGO_INCREMENTAL="''${CARGO_INCREMENTAL:-0}"
