@@ -23,13 +23,7 @@ let
     inherit pkgs crane fenix;
   };
 
-in
-{
-  inherit (sandbox) profiles mkSandbox mkProfileImages;
-  tmuxMcpPackage = tmuxMcp;
-  inherit beads;
-
-  prekHooks = pkgs.runCommand "wrapix-prek-hooks" { } ''
+  prekHooksBundle = pkgs.runCommand "wrapix-prek-hooks" { } ''
     install -Dm 555 ${./prek/hooks/pre-commit}         $out/pre-commit
     install -Dm 555 ${./prek/hooks/pre-push}           $out/pre-push
     install -Dm 555 ${./prek/hooks/prepare-commit-msg} $out/prepare-commit-msg
@@ -37,6 +31,14 @@ in
     install -Dm 555 ${./prek/hooks/post-merge}         $out/post-merge
     install -Dm 444 ${./prek/lock.sh}                  $out/_lib/lock.sh
   '';
+
+in
+{
+  inherit (sandbox) profiles mkSandbox mkProfileImages;
+  tmuxMcpPackage = tmuxMcp;
+  inherit beads;
+
+  prekHooks = prekHooksBundle;
 
   deriveProfile =
     baseProfile: extensions:
@@ -82,7 +84,33 @@ in
       packages ? [ ],
       env ? { },
       shellHook ? "",
+      prekHooks ? true,
     }:
+    let
+      hooksTarget =
+        if prekHooks == false then
+          null
+        else if prekHooks == true then
+          prekHooksBundle
+        else
+          prekHooks;
+      prekHookSetup =
+        if hooksTarget == null then
+          ""
+        else
+          ''
+            if [ -d .git ] && [ -f .pre-commit-config.yaml ]; then
+              _wrapix_hooks_target='${hooksTarget}'
+              if _wrapix_hooks_current=$(git config --local --get core.hooksPath); then
+                if [ "$_wrapix_hooks_current" != "$_wrapix_hooks_target" ]; then
+                  echo "wrapix: overriding stale core.hooksPath ($_wrapix_hooks_current) -> $_wrapix_hooks_target" >&2
+                fi
+              fi
+              git config --local core.hooksPath "$_wrapix_hooks_target"
+              unset _wrapix_hooks_target _wrapix_hooks_current
+            fi
+          '';
+    in
     pkgs.mkShell {
       packages = profile.packages ++ packages;
       env = profile.env // env;
@@ -97,12 +125,7 @@ in
         # bd's embedded autostart. See lib/beads/default.nix.
         ${beads.shellHook}
 
-        # Ensure prek owns .git/hooks/ — bd hooks install can overwrite the shim
-        if [ -d .git ] && [ -f .pre-commit-config.yaml ] && ! grep -q 'prek' .git/hooks/pre-commit 2>/dev/null; then
-          echo "Installing prek hooks (bd shim detected or hooks missing)..."
-          prek install -f
-          chmod 555 .git/hooks/
-        fi
+        ${prekHookSetup}
 
         echo "Wrapix development shell"
 
