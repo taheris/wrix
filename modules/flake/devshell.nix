@@ -19,8 +19,6 @@ _:
           pkgs.flock
           pkgs.podman
           self'.packages.loom
-          self'.packages.sandbox-rust
-          self'.packages.wrapix-notifyd
         ];
       };
     };
