@@ -1,0 +1,260 @@
+# Security
+
+Cross-cutting security invariants for wrapix sandboxes: threat model,
+credential surfaces, network exfil baseline, and audit anchor.
+
+## Problem Statement
+
+AI coding agents running inside wrapix sandboxes hold three kinds of
+credentials (deploy key, signing key, OAuth token), reach a small set
+of network destinations, and produce session artefacts the operator
+can later inspect. The per-component specs (`sandbox.md`, `image-builder.md`,
+`linux-builder.md`, `profiles.md`) own the *mechanics* of each surface;
+this spec owns the cross-cutting *trust model* that ties them together —
+what the threat is, why each mitigation is fit for that threat, and
+which invariants must hold across components. Component-specific facts
+are cross-referenced, not duplicated.
+
+## Architecture
+
+### Threat Model
+
+The primary realistic threat is **policy leakage**: a prompt-injected or
+misbehaving agent uses its granted permissions (deploy key, network,
+OAuth token, workspace access) for unintended purposes — exfiltrating
+code, secrets, or credentials through legitimate channels. No kernel
+escape or boundary exploit is required.
+
+The secondary threat is **boundary escape**: the agent breaks out of
+the container/microVM into the host. This is mitigated by the
+hardware-virtualized boundary owned by `sandbox.md` (microVM on macOS,
+opt-in via `WRAPIX_MICROVM=1` on Linux).
+
+Defense against policy leakage requires restricting *what's available
+inside the boundary* (network, credentials, filesystem), not
+strengthening the boundary itself. The credential and network-baseline
+sections below are scoped to that threat.
+
+The audit-anchor invariant further assumes an agent that may be
+*misbehaving but not adversarial* — one that does not deliberately hide
+its actions from the transcript. An adversarial-agent model (agent
+attempts to evade its own logging) is a different problem class and out
+of scope.
+
+### Credential Surfaces
+
+Three credentials cross the host-container boundary: the deploy key,
+the signing key, and the OAuth token.
+
+#### Deploy & Signing Keys
+
+Both keys are ed25519, generated **passphraseless** so the agent can use
+them non-interactively. Acceptable because:
+
+- The host-side directory holding them (`~/.ssh/deploy_keys/`) is mode
+  `700`; the keys themselves are `600`.
+- The deploy key is **repository-scoped** — GitHub deploy keys grant
+  write only to the single repository they were added to. Compromise
+  blast radius is one repo, not the user's full GitHub identity.
+- The signing key adds attribution to commits; it does not grant any
+  additional access.
+
+**Host-source resolution precedence.** When staging a key for the
+sandbox, the launcher resolves the *host* source path. The rule below
+is stated for the deploy key; the signing key follows the same rule
+with `WRAPIX_SIGNING_KEY` and `$HOME/.ssh/deploy_keys/<name>-signing`
+substituted in. The two keys are resolved independently — neither
+affects the other.
+
+1. If `WRAPIX_DEPLOY_KEY` is set in the launcher's environment and
+   points at an existing file, that path is the source.
+2. Else if `$HOME/.ssh/deploy_keys/<name>` exists, that path is the
+   source.
+3. Else the deploy key is not mounted.
+
+If `WRAPIX_DEPLOY_KEY` is set but the pointed-at file does not exist,
+the launcher **fails loudly** (non-zero exit before the container
+starts, with a stderr message naming the missing path) rather than
+silently falling through to the `$HOME` path. A set-but-missing env
+var indicates a parent-process mistake the operator wants to see,
+not a recoverable condition. Same for `WRAPIX_SIGNING_KEY`.
+
+This precedence exists to support **nested sandboxes**: a parent
+wrapix container can spawn a child wrapix container, injecting keys at
+arbitrary host paths (e.g. `/etc/wrapix/keys/`) and passing those
+paths through `WRAPIX_DEPLOY_KEY` / `WRAPIX_SIGNING_KEY`. Without this
+rule the child would boot without keys (the parent's `$HOME` has no
+`~/.ssh/deploy_keys/`), agents would produce unsigned commits, and
+`git push` would fail.
+
+**In-container destination is fixed.** Regardless of which source
+won, the launcher mounts the key at `/etc/wrapix/keys/<name>`
+(`<name>-signing` for the signing key) inside the container and sets
+the child's `WRAPIX_DEPLOY_KEY` / `WRAPIX_SIGNING_KEY` env vars to
+those in-container paths. The host source path never crosses the
+boundary. This makes the launcher recursively composable: every
+wrapix launch — host-spawned or container-spawned — produces a child
+that observes its keys at the same paths under the same env vars.
+
+**Trust model.** The launcher's parent process is trusted to choose
+the host source path. The launcher's only validation is presence
+(`[ -f ]`); it performs no path-prefix, ownership, mode, or content
+check. The justification is symmetry with the existing surface: a
+hostile parent could already write to `$HOME/.ssh/deploy_keys/`, so
+accepting env pointers adds no new attack surface.
+
+#### OAuth Token
+
+`CLAUDE_CODE_OAUTH_TOKEN` reaches the container via env passthrough
+(mechanics owned by `sandbox.md`). The exposure surface inside the
+container is `/proc/$pid/environ` of the agent's own process.
+
+Acceptable because:
+
+- The container runs as a single non-root user; the only processes
+  that can read `/proc` are ones the agent itself started.
+- The token is already present in the operator's environment;
+  passing it through adds no new host-side exposure surface.
+- Tokens are session-scoped, with limits set by the OAuth provider.
+
+A secrets-file mount (`/run/secrets/oauth_token`) would prevent
+`/proc/environ` exposure but adds complexity for marginal benefit
+against the stated threat model.
+
+### Network Exfil Baseline
+
+`WRAPIX_NETWORK=limit` mode restricts the container to a merged
+allowlist. The **base allowlist** every profile inherits is enumerated
+by `profiles.md`; this spec owns the *rubric* the membership must
+satisfy. Each base-allowlist entry must either pair with a specific
+credential (the exfil risk is accepted for the agent autonomy that
+credential enables) or be credentialless (the exfil risk is bounded by
+what an anonymous request can leak).
+
+The current entries map as:
+
+- `api.anthropic.com` pairs with `CLAUDE_CODE_OAUTH_TOKEN` — required
+  for any agent operation.
+- The GitHub hosts pair with the deploy key — required for `git push`
+  and `git fetch`.
+- `cache.nixos.org` is credentialless and read-only — bounded risk.
+
+Per-profile additions (e.g. `crates.io` for rust, `pypi.org` for
+python) must satisfy the same rubric and are owned by `profiles.md`.
+Mode mechanics (`WRAPIX_NETWORK=open` vs `limit`, iptables
+enforcement, NET_ADMIN fallback to open mode on rootless Linux) are
+owned by `sandbox.md`.
+
+### Audit Trail
+
+Policy-leakage detection is anchored in the **agent's own session
+transcript** (the directory under `/workspace/.claude/` containing
+the agent's tool-call-level history). At session end, wrapix writes a
+**session-metadata index** to `/workspace/.wrapix/log/<timestamp>.json`
+containing:
+
+- `timestamp_start`, `timestamp_end`, `duration_seconds`
+- `exit_code`, `mode`
+- `bead_id` (null in non-orchestrated sessions)
+- `wrapix_session_id`, `claude_session_id`
+- `claude_session_dir` — pointer to the agent transcript
+
+The index is the **audit anchor**; the agent transcript is the
+**audit content**. The index is the smallest artefact that makes a session
+findable post-hoc (by bead, by time, by exit code); the agent
+transcript is the only place rich enough to reason about what the
+agent intended at each step.
+
+Wrapix deliberately does not synthesize a parallel
+syscall-level / tool-call-level audit log. The agent transcript
+already contains intent + reasoning + outcome at the granularity that
+matters for policy leakage; OS-level audit (strace, process tree)
+would only add value against an adversarial agent that hides its
+actions from its own transcript — a different threat class.
+
+### Component-Specific Security (Cross-References)
+
+The following security-relevant facts are owned by sibling specs;
+this section is the index, not a restatement.
+
+- **Boundary class** (microVM on macOS always; opt-in via
+  `WRAPIX_MICROVM=1` on Linux; krun memory overhead) — `sandbox.md`
+- **Network mode mechanics** (`open` vs `limit`, iptables-based
+  enforcement, NET_ADMIN fallback to open on rootless Linux) —
+  `sandbox.md`
+- **Base allowlist enumeration** — `profiles.md`
+- **Per-profile allowlist additions** — `profiles.md`
+- **Nix build sandbox disabled inside the container image** —
+  `image-builder.md`
+- **Builder SSH keys** (localhost-bound, Nix-store residence,
+  multi-user trust framing) — `linux-builder.md`
+
+## Success Criteria
+
+- When the launcher's environment sets `WRAPIX_DEPLOY_KEY` and
+  `WRAPIX_SIGNING_KEY` to existing files outside
+  `$HOME/.ssh/deploy_keys/`, the child container observes both env
+  vars set to `/etc/wrapix/keys/<name>{,-signing}`, the files are
+  present at those in-container paths, and `git commit` in the child
+  produces a commit whose `git cat-file -p HEAD` output contains a
+  non-empty `gpgsig` field.
+  [system](bash tests/security/nested-key-propagation.sh)
+- When `WRAPIX_DEPLOY_KEY` or `WRAPIX_SIGNING_KEY` is set in the
+  launcher's environment but the pointed-at file does not exist, the
+  launcher exits non-zero with a stderr message naming the missing
+  path, before the container is started.
+  [system](bash tests/security/key-env-missing-file.sh)
+- After a sandbox session, a session-metadata index file exists under
+  `/workspace/.wrapix/log/`; its `timestamp_start`, `timestamp_end`,
+  `exit_code`, `mode`, and `claude_session_dir` fields are populated;
+  and `claude_session_dir` resolves to an existing directory.
+  [system](bash tests/security/audit-trail-anchor.sh)
+
+## Requirements
+
+### Functional
+
+1. **Host-source resolution precedence** — launcher resolves each
+   key's host source by env-first, `$HOME/.ssh/deploy_keys/`-second;
+   independently per key; fails loud if env is set but file does not
+   exist. (See *Credential Surfaces*.)
+2. **In-container destination fixed** — `/etc/wrapix/keys/<name>` for
+   the deploy key, `/etc/wrapix/keys/<name>-signing` for the signing
+   key; the launcher always sets `WRAPIX_DEPLOY_KEY` /
+   `WRAPIX_SIGNING_KEY` in the child's env to those in-container
+   paths. Host source paths do not cross the boundary.
+3. **Platform symmetry** — Linux and macOS launchers implement the
+   same precedence rule; behavior is identical across platforms
+   modulo the launcher's outer shell/applescript wrapping.
+4. **Audit anchor** — every sandbox session writes a session-metadata
+   index whose `claude_session_dir` field points at the directory
+   containing the agent transcript for that session.
+
+### Non-Functional
+
+1. **Trust posture** — the launcher's parent process is trusted to
+   choose key source paths. Validation is presence-only (`[ -f ]`);
+   no path-prefix, ownership, mode, or content check.
+2. **Composability** — every wrapix launcher behaves identically with
+   respect to keys regardless of whether its parent is a shell or
+   another wrapix container.
+3. **Audit fit** — the agent transcript is treated as fit-for-purpose
+   audit content for the stated threat model (policy leakage from a
+   misbehaving but not adversarial agent).
+
+## Out of Scope
+
+- **Key rotation cadence.** Operator responsibility; no spec contract.
+- **Additional key-path validation** (ownership checks, path-prefix
+  restrictions, mode checks on parent-supplied env paths). The
+  trust-posture invariant explicitly forbids these.
+- **Syscall-level or tool-call-level audit synthesis** by wrapix
+  itself. The agent transcript is the ground truth; wrapix only
+  writes the metadata index that makes it findable.
+- **Adversarial-agent threat model** — an agent that deliberately
+  evades its own transcript. The audit-anchor invariant does not
+  defend against this.
+- **OAuth secrets-file mount** (`/run/secrets/oauth_token`). Env
+  passthrough is the chosen mechanism.
+- **Image signing** and supply-chain verification of pulled artefacts.
+- **Multi-tenant sharing** of a sandbox between operators.
