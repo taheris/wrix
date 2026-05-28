@@ -6,30 +6,22 @@ MCP server providing browser automation for AI-assisted frontend development and
 
 AI agents building web frontends cannot see what they've built. They edit HTML/CSS/JS but have no way to verify the result visually — detecting misalignment, overflow, broken layouts, or rendering bugs requires actually looking at the page. The single-command Bash tool can run a dev server but cannot interact with a browser.
 
-## Overview
+## Architecture
 
 Wraps Microsoft's `@playwright/mcp` server (59 built-in tools) to provide browser automation inside wrapix sandboxes. The agent can navigate pages, take screenshots (returned as base64 PNG for direct visual interpretation), fill forms, click elements, and inspect accessibility trees — enabling a tight edit-code-check-browser iteration loop.
 
-**Key design decisions:**
+The server is registered in the main Claude session via `mkSandbox`'s `mcp` parameter (see `sandbox.md`); MCP servers compose orthogonally with workspace profiles. Container construction, isolation, and trust boundary belong to `sandbox.md`; this spec owns the Playwright server's wiring on top.
 
-- Wraps `@playwright/mcp` — does not reimplement browser automation
-- Uses `pkgs.playwright-mcp` from nixpkgs for offline operation (no `npx` at runtime)
-- Uses `pkgs.playwright-driver.browsers` for Chromium (Playwright-specific build at the exact expected revision, avoids version skew)
-- Chromium sandbox disabled (`--no-sandbox`) since the wrapix container is the security boundary
-- Registered in main session when enabled — no prescribed subagent isolation
+Load-bearing decisions:
 
-## Use Cases
-
-1. **Visual verification** — Take screenshots after code changes to verify layout, alignment, and styling
-2. **Frontend iteration** — Edit code, reload browser, screenshot, spot issues, fix, repeat
-3. **Form/interaction testing** — Fill forms, click buttons, verify navigation flows work
-4. **Responsive testing** — Resize viewport to check mobile/tablet/desktop layouts
-5. **Accessibility inspection** — Use accessibility snapshots to verify semantic structure
-6. **Error detection** — Capture console errors and failed network requests
+- Wraps `@playwright/mcp` rather than reimplementing browser automation
+- Uses `pkgs.playwright-mcp` from nixpkgs for offline operation — no `npx` at runtime
+- Uses `pkgs.playwright-driver.browsers` for Chromium (Playwright-specific build at the exact expected revision; avoids upstream version skew)
+- Chromium's internal sandbox is disabled (`--no-sandbox`) because the wrapix container is the trust boundary (see *Chromium Sandbox Disabled* below)
 
 ## MCP Tools
 
-All 59 tools from `@playwright/mcp` are available. Key tools for the primary use cases:
+All 59 tools from `@playwright/mcp` are available. Categories for the primary use cases:
 
 | Category | Tools | Purpose |
 |----------|-------|---------|
@@ -43,38 +35,18 @@ All 59 tools from `@playwright/mcp` are available. Key tools for the primary use
 
 ## Configuration
 
-### Image Size Impact
-
-Enabling Playwright adds ~400MB to the container image (Chromium ~350MB, Node.js + MCP server ~50MB). This is opt-in — sandboxes without `mcp.playwright` are unaffected.
-
-### MCP Opt-in
-
-Enabled per-sandbox via the `mcp` parameter:
+Enabled per sandbox via `mkSandbox`'s `mcp` parameter:
 
 ```nix
-# Enable with defaults
-mkSandbox {
-  profile = profiles.rust;
-  mcp.playwright = { };
-}
-
-# Custom viewport
 mkSandbox {
   profile = profiles.rust;
   mcp.playwright = {
-    viewport = { width = 1920; height = 1080; };
+    viewport = { width = 1920; height = 1080; };  # optional
   };
-}
-
-# Combined with other MCP servers
-mkSandbox {
-  profile = profiles.rust;
-  mcp.tmux = { };
-  mcp.playwright = { };
 }
 ```
 
-### Options
+User options:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
@@ -82,87 +54,67 @@ mkSandbox {
 | `viewport` | `{ width, height }` | `{ width = 1280; height = 720; }` | Default browser viewport size |
 | `config` | attrset | `{ }` | Passthrough to `@playwright/mcp` JSON config (serialized to a temp file and passed via `--config`) |
 
-### Automatic Configuration (not user-facing)
+Always set by the Nix expression (not user-facing, cannot be overridden):
 
-These are always set by the Nix expression:
-
-- `--executable-path` — derived from `playwright-driver.browsers` chromium path
-- `--no-sandbox` — Chromium's internal sandbox is redundant inside a container (see Security Model)
-- `--disable-dev-shm-usage` — avoids `/dev/shm` size limits in containers
+- `--executable-path` — derived from `pkgs.playwright-driver.browsers`
+- `--no-sandbox` — Chromium's internal sandbox is disabled (see below)
+- `--disable-dev-shm-usage` — avoids `/dev/shm` size limits in rootless containers
 - `--disable-gpu` — avoids GPU initialization failures in headless environments
 - `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` — prevent runtime downloads
 - `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=true` — bypass NixOS host validation
 
-The automatic flags (`--no-sandbox`, `--disable-dev-shm-usage`, `--disable-gpu`) are always present in `browser.launchOptions.args`. When the user provides a `config` attrset with additional `launchOptions.args`, those args are appended to the automatic flags. The automatic flags cannot be overridden.
+When the user supplies additional `launchOptions.args` via `config`, those args are appended to the automatic flags; the automatic flags themselves are non-overridable.
 
-## Security Model
+## Chromium Sandbox Disabled
 
-### Container as Trust Boundary
+The outer wrapix container is the trust boundary — see `sandbox.md` and `docs/security-review.md` for the full posture. Chromium's own multi-layer sandbox (user namespaces, seccomp-bpf, setuid helper) is both redundant and non-functional inside the container:
 
-The MCP server runs inside the wrapix container. All browser processes execute within sandbox isolation — the same trust model as the Bash tool. No additional restrictions are needed beyond what the container provides.
+- **Linux (rootless Podman)**: the kernel restricts nested user namespace creation. Chromium's sandbox cannot initialize without `CAP_SYS_ADMIN` or relaxed seccomp policy — granting either would weaken the container's own isolation.
+- **macOS / Linux with `WRAPIX_MICROVM=1`**: each container runs in its own microVM. The VM boundary is strictly stronger than Chromium's process-level sandbox.
 
-### Chromium Sandbox Disabled
-
-Chromium ships with its own multi-layer sandbox (user namespaces, seccomp-bpf, setuid helper) designed to isolate renderer processes on a regular desktop. Inside a wrapix container, this internal sandbox is both **redundant and non-functional**:
-
-- **Linux (rootless Podman)**: The kernel restricts nested user namespace creation. Chromium's sandbox cannot initialize without `CAP_SYS_ADMIN` or relaxed seccomp policy — granting these would weaken the container's own isolation.
-- **macOS (Apple containers)**: Each container runs in its own microVM via Virtualization.framework. The VM boundary is stronger than Chromium's process-level sandbox.
-
-Disabling Chromium's sandbox (`--no-sandbox`) removes a redundant inner layer that cannot work, rather than weakening security. The outer isolation boundary — rootless container on Linux, microVM on macOS (and optionally on Linux with `WRAPIX_MICROVM=1`) — enforces the same protections at a higher level.
-
-### No Privilege Escalation
-
-- MCP server runs as the same unprivileged user as Claude Code
-- Browser processes inherit sandbox constraints
-- Filesystem access limited to `/workspace`
+Passing `--no-sandbox` removes a redundant inner layer that cannot work, not protection that was previously in place.
 
 ## Platform Support
 
-All automatic Chromium flags (`--no-sandbox`, `--disable-dev-shm-usage`, `--disable-gpu`) are set on both platforms. Platform-specific notes:
-
-### Linux (Podman)
-
-- `/dev/shm` is typically 64MB in rootless containers; `--disable-dev-shm-usage` is essential here
-- With `WRAPIX_MICROVM=1` (krun): runs inside a microVM, same flags apply
-
-### macOS (Apple Containers)
-
-- Each container runs in a Virtualization.framework microVM with a full Linux kernel — `/dev/shm` is not constrained, but `--disable-dev-shm-usage` is harmless
-- The container image is Linux (aarch64), so `playwright-driver.browsers` provides the Linux Chromium build
-- VirtioFS workspace mounting works normally — no special handling needed for Playwright
-
-## Affected Files
-
-| File | Action | Description |
-|------|--------|-------------|
-| `lib/mcp/playwright/default.nix` | Create | Server definition: name, packages, mkServerConfig |
-| `lib/mcp/default.nix` | Edit | Add `playwright` to registry |
-| `specs/playwright-mcp.md` | Create | This spec |
-| `tests/mcp/playwright/smoke-test.sh` | Create | Smoke test: MCP server starts, responds to initialize |
-| `tests/mcp/playwright/screenshot-test.sh` | Create | Screenshot test: navigate to page, capture base64 PNG |
-| `tests/mcp/playwright/build-test.sh` | Create | Nix build test: image contains chromium + MCP server |
+The container image is Linux (aarch64 or x86_64), so `pkgs.playwright-driver.browsers` always resolves to a Linux Chromium build regardless of host platform. All automatic Chromium flags apply identically across platforms; the differences (Podman vs Apple `container` CLI, rootless container vs microVM, `/dev/shm` sizing) belong to `sandbox.md`. `--disable-dev-shm-usage` is essential on Linux rootless containers (where `/dev/shm` is typically 64MB) and harmless under macOS / krun microVMs.
 
 ## Success Criteria
 
-- [ ] MCP server starts, responds to initialize request with tool list, and runs fully offline (no network downloads at startup)
-  [system](bash tests/mcp/playwright/smoke-test.sh)
-- [ ] Screenshot returns base64 PNG when navigating to a local HTTP server
-  [system](bash tests/mcp/playwright/screenshot-test.sh)
-- [ ] Nix image builds with `mcp.playwright = {}` and contains chromium binary
-  [system](bash tests/mcp/playwright/build-test.sh)
-- [ ] Chromium path is correctly derived from playwright-driver.browsers
-  [judge](../tests/judges/playwright-mcp.sh#test_chromium_path_derivation)
-- [ ] Container flags (--no-sandbox, --disable-dev-shm-usage, --disable-gpu) are always applied
-  [judge](../tests/judges/playwright-mcp.sh#test_container_flags)
-- [ ] Configuration options (headless, viewport, config) are wired through to MCP server
-  [judge](../tests/judges/playwright-mcp.sh#test_config_passthrough)
-- [ ] Server definition follows the MCP registry pattern (name, packages, mkServerConfig)
-  [judge](../tests/judges/playwright-mcp.sh#test_registry_pattern)
+- MCP server starts, responds to `initialize` with the tool list, and runs fully offline (no network downloads at startup)
+  [system](bash tests/mcp/playwright/smoke.sh)
+- Screenshot returns base64 PNG when navigating to a local HTTP server
+  [system](bash tests/mcp/playwright/screenshot.sh)
+- The image built with `mcp.playwright = {}` contains the chromium binary in its store closure
+  [system](bash tests/mcp/playwright/image-contains-chromium.sh)
+- Chromium executable path is derived from `pkgs.playwright-driver.browsers`, not from a hard-coded path or `npx`
+  [check](grep -nE 'playwright-driver\.browsers|executable-path' lib/mcp/playwright/default.nix)
+- The automatic Chromium flags `--no-sandbox`, `--disable-dev-shm-usage`, and `--disable-gpu` are always passed through `launchOptions.args`
+  [check](grep -nE '\-\-no-sandbox|\-\-disable-dev-shm-usage|\-\-disable-gpu' lib/mcp/playwright/default.nix)
+- The `headless`, `viewport`, and `config` user options reach the MCP server's serialized config file
+  [check](grep -nE 'headless|viewport|launchOptions' lib/mcp/playwright/default.nix)
+- The server definition exposes the MCP registry triple (`name`, `packages`, `mkServerConfig`) so `mkSandbox` can compose it like any other server
+  [check](grep -nE '^\s*(name|packages|mkServerConfig)\s*=' lib/mcp/playwright/default.nix)
+
+## Requirements
+
+### Functional
+
+1. **MCP tool surface** — every tool the bundled `@playwright/mcp` exposes is registered; the spec does not maintain its own tool whitelist. The category table above is illustrative, not exhaustive. (At the time of writing, upstream ships 59 tools.)
+2. **Offline operation** — `pkgs.playwright-mcp` and `pkgs.playwright-driver.browsers` bake the server and Chromium into the image. No `npx` or browser download at runtime.
+3. **MCP opt-in via sandbox** — enabled per sandbox via `mcp.playwright = { … }`; composes with the workspace profile and other MCP servers without a `-playwright` profile variant.
+4. **Configuration passthrough** — `headless`, `viewport`, and `config` options reach `@playwright/mcp`'s serialized JSON config.
+5. **Non-overridable flags** — `--no-sandbox`, `--disable-dev-shm-usage`, `--disable-gpu` are always set on `browser.launchOptions.args`. User-supplied `launchOptions.args` are appended, not substituted.
+
+### Non-Functional
+
+1. **Image size cost** — enabling `mcp.playwright` adds ~400MB to the image (Chromium ~350MB, Node.js + MCP server ~50MB). Sandboxes without `mcp.playwright` are unaffected.
+2. **Reproducibility** — Chromium revision pinned via `pkgs.playwright-driver.browsers`; no runtime downloads.
+3. **Headless only in v1** — headful mode requires X forwarding and is not implemented.
 
 ## Out of Scope
 
-- **Performance metrics** — Not in `@playwright/mcp` tool set; would require custom tooling
-- **Custom browser support (Firefox, WebKit)** — Chromium only for v1; `playwright-driver.browsers` ships all three, easy to add later
-- **Persistent browser profiles** — Clean state per container launch is correct sandbox behavior
-- **Playwright test runner (`@playwright/test`)** — Different tool; users can add it to profile packages independently
-- **HAR recording/replay** — Not built into `@playwright/mcp`; the built-in `browser_network_requests` and `browser_route` tools cover common network debugging needs
+- **Performance metrics** — not in the `@playwright/mcp` tool set; would require custom tooling.
+- **Custom browser support (Firefox, WebKit)** — Chromium only for v1; `playwright-driver.browsers` ships all three, easy to add later.
+- **Persistent browser profiles** — clean state per container launch is correct sandbox behavior.
+- **Playwright test runner (`@playwright/test`)** — different tool; users add it to profile packages independently.
+- **HAR recording / replay** — not built into `@playwright/mcp`; `browser_network_requests` and `browser_route` cover common network debugging needs.

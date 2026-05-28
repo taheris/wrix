@@ -25,23 +25,26 @@ pin — keep it current when specs land or retire.
 | [pre-commit.md](../specs/pre-commit.md) | [`.pre-commit-config.yaml`](../.pre-commit-config.yaml) | wx-t6rh | Git hooks for treefmt, shellcheck, and integration tests |
 | [profiles.md](../specs/profiles.md) | [`lib/sandbox/profiles.nix`](../lib/sandbox/profiles.nix) | wx-1thzk | Pre-configured development environments |
 | [sandbox.md](../specs/sandbox.md) | [`lib/sandbox/default.nix`](../lib/sandbox/default.nix) | — | Platform-agnostic container isolation |
-| [security-review.md](../specs/security-review.md) | — | wx-eok | Security tradeoffs and mitigations |
 | [tmux-mcp.md](../specs/tmux-mcp.md) | [`lib/mcp/tmux/`](../lib/mcp/tmux/) | wx-4f3g | AI-assisted debugging via tmux panes |
+
+## Security
+
+- [`security-review.md`](security-review.md) — security tradeoffs and mitigations across the sandbox, deploy keys, OAuth token, network modes, and lifecycle.
 
 ## Terminology Index
 
 | Term | Definition |
 |------|------------|
 | **bd** | CLI for the beads issue tracker |
-| **Beads** | Persistent issue tracker (used by the `bd` CLI) |
-| **Deploy Key** | SSH key for git push operations from container |
-| **Dolt** | SQL database backing beads; shared via `beads-dolt` container |
-| **Focus-aware** | Notification suppression when terminal is focused |
-| **Loom** | External Rust workflow orchestrator that drives wrapix sandboxes ([taheris/loom](https://github.com/taheris/loom)) |
+| **beads** | Persistent issue tracker (used by the `bd` CLI) |
+| **deploy key** | SSH key for git push operations from container |
+| **dolt** | SQL database backing beads; shared via `beads-dolt` container |
+| **focus-aware** | Notification suppression when terminal is focused |
+| **loom** | External Rust workflow orchestrator that drives wrapix sandboxes ([taheris/loom](https://github.com/taheris/loom)) |
 | **pasta** | Linux userspace networking for Podman containers |
 | **playwright-mcp** | MCP server wrapping @playwright/mcp for browser automation in sandboxes |
 | **prek** | Rust-based pre-commit framework (drop-in replacement for pre-commit) |
-| **Profile** | Pre-configured set of packages and environment variables |
-| **Sandbox** | Isolated container environment for running Claude Code |
+| **profile** | Pre-configured set of packages and environment variables |
+| **sandbox** | Isolated container environment for running Claude Code |
 | **tmux-mcp** | MCP server for AI-assisted debugging via tmux panes |
 | **virtio-fs** | Shared filesystem for macOS container VMs |

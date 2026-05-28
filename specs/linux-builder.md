@@ -1,73 +1,10 @@
 # Linux Builder
 
-Remote Nix builds for macOS via Linux container.
+Remote Nix builder running in an Apple `container` VM on macOS, exposed via `ssh-ng://` so the host nix-daemon can dispatch `aarch64-linux` builds without leaving the local machine.
 
 ## Problem Statement
 
-macOS users need to build `aarch64-linux` packages for:
-- Container images that run Linux
-- Cross-platform CI/CD pipelines
-- Testing Linux-specific code
-
-Apple Silicon Macs can run Linux VMs efficiently, but setting up a Nix remote builder is complex.
-
-## Requirements
-
-### Functional
-
-1. **Container Lifecycle** - Start/stop Linux builder container
-2. **Persistent Nix Store** - `/nix` survives container restarts
-3. **SSH Access** - Remote builds via `ssh-ng://` protocol
-4. **Route Configuration** - Network setup for nix-daemon access
-5. **Key Management** - Automatic SSH key generation and trust
-6. **nix-darwin Integration** - Config snippet for permanent setup
-
-### Non-Functional
-
-1. **Minimal Overhead** - Uses Apple container CLI (lightweight VM)
-2. **Automatic Initialization** - First start copies initial Nix store
-3. **Secure** - SSH keys stored in user data directory
-
-### Security
-
-1. **SSH Port Binding** - SSH port 2222 is bound to localhost (127.0.0.1) only, not exposed to network interfaces
-2. **Key-Based Auth** - Password authentication is disabled; only SSH key authentication is accepted
-3. **Limited Access** - Only the `builder` user has SSH access to the container
-
-### Trust Model
-
-The Linux builder uses a **container-boundary security model**:
-
-1. **Nix Sandbox Disabled** (`sandbox = false`)
-   - Nix's internal build sandboxing is disabled inside the container
-   - The outer container provides the security boundary instead
-   - This avoids nested namespace complexity and improves build compatibility
-
-2. **Trusted Users** (`trusted-users = root builder`)
-   - The `builder` user has full trust within the Nix daemon
-   - This allows remote builds to set arbitrary derivation options
-   - Appropriate because:
-     - SSH access is restricted to localhost (no network exposure)
-     - SSH key is required (no password auth)
-     - Only the host user who started the builder has the SSH key
-
-3. **Single-User Design**
-   - The builder is designed for single-user local development
-   - Not suitable for multi-tenant or shared build infrastructure
-   - Each user should run their own builder instance
-
-**Security Boundary Summary:**
-
-| Layer | Protection |
-|-------|------------|
-| Container | Process isolation, filesystem namespace, network namespace |
-| SSH | Key-based auth only, localhost binding, no root login |
-| Nix | Delegated to container boundary (sandbox disabled internally) |
-
-This model trades Nix's internal sandboxing for container-level isolation, which is appropriate when:
-- The builder runs locally on a single-user workstation
-- Network access is restricted to localhost
-- The user trusts code they're building (their own projects)
+macOS users need `aarch64-linux` builds for container images, cross-platform CI, and Linux-only code paths. Apple Silicon can run Linux VMs efficiently, but wiring a Nix remote builder (persistent store, SSH keys, route configuration, nix-darwin integration) by hand is fiddly. The Linux Builder packages all of that as a single `wrapix-builder` CLI.
 
 ## Architecture
 
@@ -85,7 +22,13 @@ nix-daemon                         sshd (:22)
 ~/.local/share/wrapix/builder-nix/ ◄───┘
 ```
 
-## Commands
+The builder runs under Apple's `container` CLI (Virtualization.framework microVM, same boundary class as wrapix sandboxes on macOS — see `docs/security-review.md`). `/nix` is bind-mounted from `~/.local/share/wrapix/builder-nix/` so the store persists across container restarts. SSH host and client keys live next to the store under `builder-keys/`.
+
+### Trust Model
+
+The container boundary is the isolation primitive; Nix's internal sandbox is disabled inside the container (`sandbox = false`) to avoid nested namespace complexity, and the `builder` user is trusted by the nix-daemon. This is appropriate because SSH binds to `127.0.0.1` only, password authentication is disabled, and the SSH key is reachable only by the host user who started the builder. See `docs/security-review.md` for the broader sandbox-vs-builder trust analysis.
+
+## CLI Surface
 
 | Command | Description |
 |---------|-------------|
@@ -93,8 +36,8 @@ nix-daemon                         sshd (:22)
 | `wrapix-builder stop` | Stop and remove container |
 | `wrapix-builder status` | Show builder state |
 | `wrapix-builder ssh [cmd]` | Connect or run remote command |
-| `wrapix-builder setup` | Configure routes and SSH (sudo) |
-| `wrapix-builder config` | Print nix-darwin config snippet |
+| `wrapix-builder setup` | Configure routes and SSH known_hosts (sudo) |
+| `wrapix-builder config` | Print nix-darwin configuration snippet |
 
 ## Storage Layout
 
@@ -108,38 +51,43 @@ nix-daemon                         sshd (:22)
 
 ## Setup Process
 
-1. `wrapix-builder start` - Creates container with VirtioFS mount
-2. First start copies `/nix-image/*` to initialize store
-3. `wrapix-builder setup` - Adds route and SSH known_hosts (sudo)
-4. Add to `~/.config/nix/nix.conf`:
-   ```
-   builders = ssh-ng://builder@localhost:2222 aarch64-linux
-   ```
-
-## Affected Files
-
-| File | Role |
-|------|------|
-| `lib/builder/default.nix` | CLI script and package |
-| `lib/builder/hostkey.nix` | SSH key generation |
-| `lib/sandbox/builder/image.nix` | Builder container image |
-| `lib/sandbox/builder/entrypoint.sh` | Builder startup script |
+1. `wrapix-builder start` creates the container with the VirtioFS `/nix` mount; first start copies `/nix-image/*` to initialize the store
+2. `wrapix-builder setup` adds the host route and SSH `known_hosts` entry (sudo required)
+3. User adds `builders = ssh-ng://builder@localhost:2222 aarch64-linux` to `~/.config/nix/nix.conf` (or runs the snippet from `wrapix-builder config` in a nix-darwin module)
 
 ## Success Criteria
 
-- [ ] `nix build --system aarch64-linux` works on macOS
-  [judge](../tests/judges/linux-builder.sh#test_aarch64_linux_builds)
-- [ ] Nix store persists across container restarts
-  [judge](../tests/judges/linux-builder.sh#test_nix_store_persistence)
-- [ ] SSH connection is secure (key-based auth)
-  [judge](../tests/judges/linux-builder.sh#test_ssh_key_auth)
-- [ ] `wrapix-builder config` prints nix-darwin configuration snippet (full nix-darwin module not yet implemented)
-  [judge](../tests/judges/linux-builder.sh#test_nix_darwin_config)
-- [ ] Builder can be stopped and restarted cleanly
-  [judge](../tests/judges/linux-builder.sh#test_stop_restart_clean)
+- `nix build --system aarch64-linux <pkg>` on macOS dispatches to the builder and returns the built derivation
+  [system](bash tests/builder/aarch64-linux-build.sh)
+- `/nix` survives `wrapix-builder stop && wrapix-builder start` — store paths present before stop are still present after restart
+  [system](bash tests/builder/nix-store-persistence.sh)
+- sshd inside the container has `PasswordAuthentication no` and binds the listener to `127.0.0.1`
+  [check](grep -nE 'PasswordAuthentication|ListenAddress' lib/sandbox/builder/entrypoint.sh)
+- `wrapix-builder config` emits a nix-darwin `nix.buildMachines` snippet pointing at `ssh-ng://builder@localhost:2222`
+  [system](wrapix-builder config | grep -q 'ssh-ng://builder@localhost:2222')
+- `wrapix-builder stop` followed by `wrapix-builder start` leaves no stranded container or socket and SSH reconnects on first attempt
+  [system](bash tests/builder/stop-restart.sh)
+
+## Requirements
+
+### Functional
+
+1. **Container lifecycle** — `wrapix-builder start` / `stop` / `status` manage a single Apple `container` instance named for the builder.
+2. **Persistent Nix store** — `/nix` is bind-mounted from `~/.local/share/wrapix/builder-nix/`; the first `start` seeds it from the image's initial store, subsequent starts reuse it.
+3. **SSH access** — sshd listens on 22 inside the container; the Apple `container` CLI forwards `127.0.0.1:2222` on the host to it. Authentication is key-based only.
+4. **Route and known_hosts setup** — `wrapix-builder setup` runs sudo-required host configuration so the nix-daemon can reach the listener and trust the host key.
+5. **Key management** — host and client SSH keys are generated on first run, stored under `~/.local/share/wrapix/builder-keys/`, and never regenerated unless the user opts in.
+6. **nix-darwin integration** — `wrapix-builder config` emits the buildMachines snippet for use in nix-darwin modules.
+
+### Non-Functional
+
+1. **Minimal overhead** — uses the Apple `container` CLI's microVM directly; no extra VM management layer.
+2. **Single-user design** — one builder per host user. Not suitable for multi-tenant or shared build infrastructure.
+3. **Localhost only** — sshd binds to `127.0.0.1`; the builder is never reachable from the network.
 
 ## Out of Scope
 
-- x86_64-linux builds (would require emulation)
+- `x86_64-linux` builds (would require emulation)
 - Multi-user builder access
 - Remote builders over network (localhost only)
+- Linux-host equivalents (the builder is the macOS workaround for cross-platform builds; Linux hosts build natively)

@@ -165,7 +165,9 @@ The `WRAPIX_NETWORK` environment variable controls outbound network access:
 
 Profiles define `networkAllowlist` alongside existing `packages`, `mounts`, `env` in `lib/sandbox/profiles.nix`.
 
-Open network is a conscious tradeoff: agent autonomy (dependency installation, web research, git push) requires broad network access. The `allow` mode is for users who want tighter policy at the cost of manual allowlist management.
+Open network is a conscious tradeoff: agent autonomy (dependency installation, web research, git push) requires broad network access. The `limit` mode is for users who want tighter policy at the cost of manual allowlist management.
+
+**Capability dependency**: filtering is implemented as iptables OUTPUT rules in the container entrypoint, which requires `NET_ADMIN`. A Linux rootless container has no `NET_ADMIN`, so `WRAPIX_NETWORK=limit` there logs a warning and falls back to open network rather than failing closed. Pair `WRAPIX_NETWORK=limit` with `WRAPIX_MICROVM=1` on Linux to actually enforce. macOS containers run in a microVM unconditionally and enforce without further flags. The fail-open behavior is a deliberate choice — failing closed in rootless mode would silently break agent workflows; the warning makes the missing enforcement visible. Users who require hard enforcement on Linux should treat `WRAPIX_MICROVM=1` as a prerequisite for `limit` mode.
 
 ### Resource Limits
 
