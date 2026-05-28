@@ -25,11 +25,8 @@ pin — keep it current when specs land or retire.
 | [pre-commit.md](../specs/pre-commit.md) | [`.pre-commit-config.yaml`](../.pre-commit-config.yaml) | wx-t6rh | Git hooks for treefmt, shellcheck, and integration tests |
 | [profiles.md](../specs/profiles.md) | [`lib/sandbox/profiles.nix`](../lib/sandbox/profiles.nix) | wx-1thzk | Pre-configured development environments |
 | [sandbox.md](../specs/sandbox.md) | [`lib/sandbox/default.nix`](../lib/sandbox/default.nix) | — | Platform-agnostic container isolation |
+| [security.md](../specs/security.md) | [`lib/sandbox/{linux,darwin}/default.nix`](../lib/sandbox/) | — | Cross-cutting credential, network, and audit-trail invariants |
 | [tmux-mcp.md](../specs/tmux-mcp.md) | [`lib/mcp/tmux/`](../lib/mcp/tmux/) | wx-4f3g | AI-assisted debugging via tmux panes |
-
-## Security
-
-- [`security-review.md`](security-review.md) — security tradeoffs and mitigations across the sandbox, deploy keys, OAuth token, network modes, and lifecycle.
 
 ## Terminology Index
 

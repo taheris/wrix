@@ -152,7 +152,7 @@ in
 
   # Verify builder key generation produces expected outputs
   # Security note: Keys are in Nix store (world-readable), mitigated by localhost-only SSH
-  # See specs/security-review.md "Builder SSH Keys" section
+  # See specs/linux-builder.md for trust model.
   builder-keys-structure =
     let
       builderKeys = import ../../lib/builder/hostkey.nix { inherit pkgs; };
@@ -183,10 +183,10 @@ in
       echo "PASS: Base64 public host key present"
 
       # Document that keys are in Nix store (world-readable)
-      # This is intentional - see specs/security-review.md for security analysis
+      # This is intentional - see specs/linux-builder.md for trust model.
       echo ""
       echo "NOTE: Keys are in Nix store at ${builderKeys}"
-      echo "This is documented in specs/security-review.md 'Builder SSH Keys' section"
+      echo "This is documented in specs/linux-builder.md (Trust Model section)"
       echo "Mitigations: localhost-only SSH, password auth disabled, machine-local keys"
 
       echo ""
@@ -320,7 +320,7 @@ in
 
   # Verify wrapix script contains krun microVM boundary detection
   # Security property: Linux defaults to microVM boundary via krun runtime
-  # See specs/security-review.md "MicroVM Boundary" section
+  # See specs/security.md (Threat Model / Component-Specific Security).
   # Linux-only: krun detection only exists in the Linux launcher
   linux-microvm-krun-detection =
     if isLinux then
@@ -361,7 +361,7 @@ in
 
   # Verify WRAPIX_NETWORK environment variable support in launcher and entrypoints
   # Security property: network filtering restricts outbound access in limit mode
-  # See specs/security-review.md "Network Modes" section
+  # See specs/security.md § Network Exfil Baseline and specs/sandbox.md.
   #
   # Profile allowlists are verified as pure Nix assertions (no image build needed).
   # Launcher script checks reuse the base sandbox (already built by image-builds).

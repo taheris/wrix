@@ -67,7 +67,7 @@ When the user supplies additional `launchOptions.args` via `config`, those args 
 
 ## Chromium Sandbox Disabled
 
-The outer wrapix container is the trust boundary — see `sandbox.md` and `docs/security-review.md` for the full posture. Chromium's own multi-layer sandbox (user namespaces, seccomp-bpf, setuid helper) is both redundant and non-functional inside the container:
+The outer wrapix container is the trust boundary — see `sandbox.md` and `specs/security.md` for the full posture. Chromium's own multi-layer sandbox (user namespaces, seccomp-bpf, setuid helper) is both redundant and non-functional inside the container:
 
 - **Linux (rootless Podman)**: the kernel restricts nested user namespace creation. Chromium's sandbox cannot initialize without `CAP_SYS_ADMIN` or relaxed seccomp policy — granting either would weaken the container's own isolation.
 - **macOS / Linux with `WRAPIX_MICROVM=1`**: each container runs in its own microVM. The VM boundary is strictly stronger than Chromium's process-level sandbox.

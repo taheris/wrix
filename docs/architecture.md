@@ -122,7 +122,7 @@ JSONL stdio. Wrapix doesn't ship its own runner — see
 
 On Linux with KVM, containers can optionally run inside a [libkrun](https://github.com/containers/libkrun) microVM (`podman --runtime krun`) for hardware-level isolation. Set `WRAPIX_MICROVM=1` to opt in.
 
-See [security-review.md](security-review.md) for the full threat model.
+See [`specs/security.md`](../specs/security.md) for the full threat model.
 
 ## MCP Integration
 

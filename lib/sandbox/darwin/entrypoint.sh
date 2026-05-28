@@ -298,7 +298,7 @@ if [[ "${WRAPIX_NETWORK:-open}" = "limit" ]]; then
 fi
 
 # Session audit trail: write structured log entry on exit
-# Log format documented in specs/security-review.md
+# Log format documented in specs/security.md § Audit Trail
 write_session_log() {
   local exit_code="${1:-0}"
   local end_epoch

@@ -69,7 +69,7 @@ let
   };
 
   # Nix sandbox disabled: outer container provides isolation.
-  # See specs/security-review.md "Nix Sandbox Disabled" for security rationale.
+  # See specs/image-builder.md for the rationale.
   nixConfig = pkgs.writeTextDir "etc/nix/nix.conf" ''
     experimental-features = nix-command flakes
     sandbox = false

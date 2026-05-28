@@ -22,11 +22,11 @@ nix-daemon                         sshd (:22)
 ~/.local/share/wrapix/builder-nix/ ◄───┘
 ```
 
-The builder runs under Apple's `container` CLI (Virtualization.framework microVM, same boundary class as wrapix sandboxes on macOS — see `docs/security-review.md`). `/nix` is bind-mounted from `~/.local/share/wrapix/builder-nix/` so the store persists across container restarts. SSH host and client keys live next to the store under `builder-keys/`.
+The builder runs under Apple's `container` CLI (Virtualization.framework microVM, same boundary class as wrapix sandboxes on macOS — see `specs/security.md`). `/nix` is bind-mounted from `~/.local/share/wrapix/builder-nix/` so the store persists across container restarts. SSH host and client keys live next to the store under `builder-keys/`.
 
 ### Trust Model
 
-The container boundary is the isolation primitive; Nix's internal sandbox is disabled inside the container (`sandbox = false`) to avoid nested namespace complexity, and the `builder` user is trusted by the nix-daemon. This is appropriate because SSH binds to `127.0.0.1` only, password authentication is disabled, and the SSH key is reachable only by the host user who started the builder. See `docs/security-review.md` for the broader sandbox-vs-builder trust analysis.
+The container boundary is the isolation primitive; Nix's internal sandbox is disabled inside the container (`sandbox = false`) to avoid nested namespace complexity, and the `builder` user is trusted by the nix-daemon. This is appropriate because SSH binds to `127.0.0.1` only, password authentication is disabled, and the SSH key is reachable only by the host user who started the builder.
 
 ## CLI Surface
 

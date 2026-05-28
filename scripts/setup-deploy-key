@@ -4,8 +4,8 @@
 # Must be run from within a git repository with a GitHub remote.
 #
 # Security note: Keys are generated without passphrases to enable
-# non-interactive use by AI agents. See specs/security-review.md
-# for the security tradeoff discussion and mitigations.
+# non-interactive use by AI agents. See specs/security.md
+# § Deploy & Signing Keys for the security tradeoff discussion.
 #
 # Usage: setup-deploy-key [keyname] [-f|--force]
 #

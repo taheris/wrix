@@ -4,8 +4,8 @@
 # `#!/usr/bin/env bash` fails with ENOENT in a real nix-build sandbox
 # (`/usr/bin/env` is not on `sandbox-paths`). Applies repo-wide because
 # any script can end up staged into a nix-build derivation. Caught the
-# hard way by commit 5531020 — see specs/security-review.md
-# "Nix Build Sandbox Disabled" for why this gap exists locally.
+# hard way by commit 5531020 — see specs/image-builder.md for why the
+# in-container Nix sandbox is disabled (the gap that exposes this).
 #
 # This script's own shebang is fine: it runs in the dev environment, never
 # inside a nix-build derivation.

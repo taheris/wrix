@@ -25,7 +25,7 @@ Build pipeline:
 
 1. Collect packages from the profile (workspace toolchain + agent tooling + MCP server packages if any)
 2. Compose the agent runtime layer (claude is a no-op; pi adds Node + pi-mono; direct adds the consumer-supplied `directRunner` package)
-3. Configure `/etc/nix/nix.conf` for flakes and disabled in-container sandbox (the outer container is the security boundary — see `docs/security-review.md`)
+3. Configure `/etc/nix/nix.conf` for flakes and disabled in-container sandbox (the outer container is the security boundary — see `specs/security.md`)
 4. Bundle CA certificates from `pkgs.cacert`
 5. Emit the layered image, with the entrypoint script as the OCI `Cmd`
 

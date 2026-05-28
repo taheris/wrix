@@ -74,7 +74,7 @@ Newline-delimited JSON, one envelope per notification:
 
 ## Security
 
-The daemon's macOS TCP transport binds to the vmnet gateway (192.168.64.1:5959), reachable only from containers on the vmnet bridge. There is no authentication on the notification protocol; the worst-case abuse is unwanted desktop notification spam, since notifications are cosmetic and cannot execute code. Linux uses a Unix socket mounted into the container — filesystem permissions on the socket provide access control. See `docs/security-review.md` for the broader analysis.
+The daemon's macOS TCP transport binds to the vmnet gateway (192.168.64.1:5959), reachable only from containers on the vmnet bridge. There is no authentication on the notification protocol; the worst-case abuse is unwanted desktop notification spam, since notifications are cosmetic and cannot execute code. Linux uses a Unix socket mounted into the container — filesystem permissions on the socket provide access control.
 
 ## Success Criteria
 

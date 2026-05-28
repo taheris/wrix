@@ -294,22 +294,46 @@ in
             # VirtioFS cannot pass Unix socket operations, so the container client
             # connects to the host daemon via TCP (WRAPIX_NOTIFY_TCP=1 set below)
 
-            # Add deploy key and signing key (not under ~/.ssh/ — see lib/util/ssh.nix)
+            # Add deploy key and signing key (not under ~/.ssh/ — see lib/util/ssh.nix).
+            # Host-source resolution precedence per specs/security.md:
+            #   1. $WRAPIX_{DEPLOY,SIGNING}_KEY pointing at an existing file.
+            #   2. $HOME/.ssh/deploy_keys/<name>{,-signing} fallback.
+            # Set-but-missing env is fail-loud (parent-process mistake).
             DEPLOY_KEY_NAME=${deployKeyExpr}
-            DEPLOY_KEY="$HOME/.ssh/deploy_keys/$DEPLOY_KEY_NAME"
-            SIGNING_KEY="$HOME/.ssh/deploy_keys/$DEPLOY_KEY_NAME-signing"
+            DEPLOY_KEY=""
+            if [ -n "''${WRAPIX_DEPLOY_KEY:-}" ]; then
+              if [ ! -f "$WRAPIX_DEPLOY_KEY" ]; then
+                echo "wrapix: WRAPIX_DEPLOY_KEY=$WRAPIX_DEPLOY_KEY: file does not exist" >&2
+                exit 1
+              fi
+              DEPLOY_KEY="$WRAPIX_DEPLOY_KEY"
+            elif [ -f "$HOME/.ssh/deploy_keys/$DEPLOY_KEY_NAME" ]; then
+              DEPLOY_KEY="$HOME/.ssh/deploy_keys/$DEPLOY_KEY_NAME"
+            fi
+            SIGNING_KEY=""
+            if [ -n "''${WRAPIX_SIGNING_KEY:-}" ]; then
+              if [ ! -f "$WRAPIX_SIGNING_KEY" ]; then
+                echo "wrapix: WRAPIX_SIGNING_KEY=$WRAPIX_SIGNING_KEY: file does not exist" >&2
+                exit 1
+              fi
+              SIGNING_KEY="$WRAPIX_SIGNING_KEY"
+            elif [ -f "$HOME/.ssh/deploy_keys/$DEPLOY_KEY_NAME-signing" ]; then
+              SIGNING_KEY="$HOME/.ssh/deploy_keys/$DEPLOY_KEY_NAME-signing"
+            fi
             DEPLOY_KEY_ARGS=""
-            if [ -f "$DEPLOY_KEY" ]; then
+            if [ -n "$DEPLOY_KEY" ] || [ -n "$SIGNING_KEY" ]; then
               DEPLOY_STAGING="$STAGING_ROOT/deploy_keys"
               mkdir -p "$DEPLOY_STAGING"
-              cp "$DEPLOY_KEY" "$DEPLOY_STAGING/$DEPLOY_KEY_NAME"
-              [ -f "$SIGNING_KEY" ] && cp "$SIGNING_KEY" "$DEPLOY_STAGING/$DEPLOY_KEY_NAME-signing"
               MOUNT_ARGS="$MOUNT_ARGS -v $DEPLOY_STAGING:/mnt/wrapix/deploy_keys"
+            fi
+            if [ -n "$DEPLOY_KEY" ]; then
+              cp "$DEPLOY_KEY" "$DEPLOY_STAGING/$DEPLOY_KEY_NAME"
               [ -n "$FILE_MOUNTS" ] && FILE_MOUNTS="$FILE_MOUNTS,"
               FILE_MOUNTS="$FILE_MOUNTS/mnt/wrapix/deploy_keys/$DEPLOY_KEY_NAME:${sshConfig.containerKeyDir}/$DEPLOY_KEY_NAME"
               DEPLOY_KEY_ARGS="-e WRAPIX_DEPLOY_KEY=${sshConfig.containerKeyDir}/$DEPLOY_KEY_NAME"
             fi
-            if [ -f "$SIGNING_KEY" ]; then
+            if [ -n "$SIGNING_KEY" ]; then
+              cp "$SIGNING_KEY" "$DEPLOY_STAGING/$DEPLOY_KEY_NAME-signing"
               [ -n "$FILE_MOUNTS" ] && FILE_MOUNTS="$FILE_MOUNTS,"
               FILE_MOUNTS="$FILE_MOUNTS/mnt/wrapix/deploy_keys/$DEPLOY_KEY_NAME-signing:${sshConfig.containerKeyDir}/$DEPLOY_KEY_NAME-signing"
               DEPLOY_KEY_ARGS="$DEPLOY_KEY_ARGS -e WRAPIX_SIGNING_KEY=${sshConfig.containerKeyDir}/$DEPLOY_KEY_NAME-signing"

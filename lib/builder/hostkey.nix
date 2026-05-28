@@ -11,7 +11,7 @@
 # - SSH port bound to localhost only (not network-accessible)
 # - Password authentication disabled
 # - Keys only grant access to local builder (no external systems)
-# See specs/security-review.md "Builder SSH Keys" section for full analysis.
+# See specs/linux-builder.md for trust model.
 #
 { pkgs }:
 

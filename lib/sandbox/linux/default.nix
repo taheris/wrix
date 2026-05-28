@@ -274,16 +274,38 @@ in
           fi
         fi
 
-        # Mount deploy key and signing key (not under ~/.ssh/ — see lib/util/ssh.nix)
+        # Mount deploy key and signing key (not under ~/.ssh/ — see lib/util/ssh.nix).
+        # Host-source resolution precedence per specs/security.md:
+        #   1. $WRAPIX_{DEPLOY,SIGNING}_KEY pointing at an existing file.
+        #   2. $HOME/.ssh/deploy_keys/<name>{,-signing} fallback.
+        # Set-but-missing env is fail-loud (parent-process mistake).
         DEPLOY_KEY_NAME=${deployKeyExpr}
-        DEPLOY_KEY="$HOME/.ssh/deploy_keys/$DEPLOY_KEY_NAME"
-        SIGNING_KEY="$HOME/.ssh/deploy_keys/$DEPLOY_KEY_NAME-signing"
+        DEPLOY_KEY=""
+        if [ -n "''${WRAPIX_DEPLOY_KEY:-}" ]; then
+          if [ ! -f "$WRAPIX_DEPLOY_KEY" ]; then
+            echo "wrapix: WRAPIX_DEPLOY_KEY=$WRAPIX_DEPLOY_KEY: file does not exist" >&2
+            exit 1
+          fi
+          DEPLOY_KEY="$WRAPIX_DEPLOY_KEY"
+        elif [ -f "$HOME/.ssh/deploy_keys/$DEPLOY_KEY_NAME" ]; then
+          DEPLOY_KEY="$HOME/.ssh/deploy_keys/$DEPLOY_KEY_NAME"
+        fi
+        SIGNING_KEY=""
+        if [ -n "''${WRAPIX_SIGNING_KEY:-}" ]; then
+          if [ ! -f "$WRAPIX_SIGNING_KEY" ]; then
+            echo "wrapix: WRAPIX_SIGNING_KEY=$WRAPIX_SIGNING_KEY: file does not exist" >&2
+            exit 1
+          fi
+          SIGNING_KEY="$WRAPIX_SIGNING_KEY"
+        elif [ -f "$HOME/.ssh/deploy_keys/$DEPLOY_KEY_NAME-signing" ]; then
+          SIGNING_KEY="$HOME/.ssh/deploy_keys/$DEPLOY_KEY_NAME-signing"
+        fi
         DEPLOY_KEY_ARGS=""
-        if [ -f "$DEPLOY_KEY" ]; then
+        if [ -n "$DEPLOY_KEY" ]; then
           VOLUME_ARGS="$VOLUME_ARGS -v $DEPLOY_KEY:${sshConfig.containerKeyDir}/$DEPLOY_KEY_NAME:ro"
           DEPLOY_KEY_ARGS="-e WRAPIX_DEPLOY_KEY=${sshConfig.containerKeyDir}/$DEPLOY_KEY_NAME"
         fi
-        if [ -f "$SIGNING_KEY" ]; then
+        if [ -n "$SIGNING_KEY" ]; then
           VOLUME_ARGS="$VOLUME_ARGS -v $SIGNING_KEY:${sshConfig.containerKeyDir}/$DEPLOY_KEY_NAME-signing:ro"
           DEPLOY_KEY_ARGS="$DEPLOY_KEY_ARGS -e WRAPIX_SIGNING_KEY=${sshConfig.containerKeyDir}/$DEPLOY_KEY_NAME-signing"
         fi
@@ -381,7 +403,7 @@ in
 
         verbose "Starting container (cpus=$CPUS, memory=${toString memoryMb}m)..."
 
-        # Detect krun availability for microVM boundary (see specs/security-review.md)
+        # Detect krun availability for microVM boundary (see specs/security.md)
         # Default: container boundary (krun microVM currently disabled)
         # WRAPIX_MICROVM=1: explicit opt-in to microVM boundary
         RUNTIME_ARGS=""

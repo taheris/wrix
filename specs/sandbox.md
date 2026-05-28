@@ -23,7 +23,7 @@ Running AI coding assistants with unrestricted host access creates security risk
 
 **Platform dispatch** — `lib/sandbox/default.nix` selects `linuxSandbox.mkSandbox` (Podman) or `darwinSandbox.mkSandbox` (Apple `container` CLI). Unsupported systems throw at evaluation.
 
-**Boundary class** — see `docs/security-review.md` for the full analysis.
+**Boundary class** — see `specs/security.md` for the full analysis.
 
 - macOS: microVM via Virtualization.framework, always
 - Linux: rootless container by default; `WRAPIX_MICROVM=1` opts into `podman --runtime krun` when `/dev/kvm` is available. krun is bundled via Nix; without KVM the opt-in fails loudly rather than silently degrading.
@@ -46,7 +46,7 @@ mkSandbox {
   profile = profiles.base;          # Workspace profile (profiles.md). Default: base
   cpus = null;                      # CPU limit honored by the platform launcher
   memoryMb = 4096;                  # Memory limit MB
-  deployKey = "myproject";          # SSH key name — mounts ~/.ssh/deploy_keys/<name>
+  deployKey = "myproject";          # SSH key name — mounts host key into /etc/wrapix/keys/<name>
   packages = [ pkgs.jq ];           # Extra packages merged into profile.packages
   mounts = [ {                      # Extra mounts merged into profile.mounts
     source = "~/.config";
@@ -121,8 +121,8 @@ The `wrapix` launcher binary is profile-agnostic. Both subcommands share contain
   [check](grep -nE 'image_ref|image_source|workspace|env|agent_args' lib/sandbox/linux/default.nix lib/sandbox/darwin/default.nix)
 - The container entrypoint switches on `WRAPIX_AGENT` and exec's the matching agent binary (`claude`, `pi`, `direct`)
   [check](grep -nE 'WRAPIX_AGENT' lib/sandbox/linux/entrypoint.sh lib/sandbox/darwin/entrypoint.sh)
-- Deploy key `<name>` is mounted at `~/.ssh/deploy_keys/<name>{,.pub}` inside the container when `deployKey = "<name>"` is set
-  [check](grep -nE 'deploy_keys|deployKey' lib/sandbox/linux/default.nix lib/sandbox/darwin/default.nix)
+- Deploy key `<name>` is mounted at `/etc/wrapix/keys/<name>` inside the container when `deployKey = "<name>"` is set (the `.pub` file is not mounted; the entrypoint regenerates it on demand via `ssh-keygen -y`)
+  [check](grep -nE 'containerKeyDir|deployKey' lib/sandbox/linux/default.nix lib/sandbox/darwin/default.nix)
 - `model = "<id>"` overrides `ANTHROPIC_MODEL` in the baked claude settings; null leaves the default in place
   [check](grep -nE 'ANTHROPIC_MODEL|modelEnvOverride' lib/sandbox/default.nix)
 
@@ -135,7 +135,7 @@ The `wrapix` launcher binary is profile-agnostic. Both subcommands share contain
 3. **Workspace mount** — CWD bind-mounts at `/workspace`; profile mounts merge on top.
 4. **UID mapping** — files created in `/workspace` carry host UID/GID.
 5. **Custom mounts and env** — `mkSandbox`'s `mounts` and `env` extend the profile, they do not replace.
-6. **Deploy keys** — `deployKey = "<name>"` mounts `~/.ssh/deploy_keys/<name>{,.pub}` into the container's `~/.ssh/`.
+6. **Deploy keys** — `deployKey = "<name>"` mounts the host key into the container at `/etc/wrapix/keys/<name>` (and `/etc/wrapix/keys/<name>-signing` when a signing key is present). The `.pub` file is not mounted; the entrypoint regenerates it on demand via `ssh-keygen -y`. Host-source resolution and the env-first override (`WRAPIX_DEPLOY_KEY`, `WRAPIX_SIGNING_KEY`) are owned by `security.md`.
 7. **MCP opt-in** — `mcp.<server>` enables a named server per `tmux-mcp.md` / `playwright-mcp.md`. `mcpRuntime = true` bakes all registered servers and defers selection to the entrypoint.
 8. **Agent runtime axis** — `agent` selects the entrypoint binary; the agent runtime layer composes orthogonally with the workspace profile.
 9. **Model override** — `model = "claude-…"` sets `ANTHROPIC_MODEL` in the baked `~/.claude/settings.json` env block.
@@ -144,9 +144,9 @@ The `wrapix` launcher binary is profile-agnostic. Both subcommands share contain
 ### Non-Functional
 
 1. **Rootless / no elevated privileges** — Linux runs rootless Podman; macOS runs the Apple `container` CLI as the calling user. No host capabilities granted.
-2. **Boundary class** — macOS is always microVM; Linux defaults to rootless container, opts into microVM with `WRAPIX_MICROVM=1` (see `docs/security-review.md`).
+2. **Boundary class** — macOS is always microVM; Linux defaults to rootless container, opts into microVM with `WRAPIX_MICROVM=1` (see `specs/security.md`).
 3. **Network posture** — `WRAPIX_NETWORK=open` (default) permits unrestricted outbound; `WRAPIX_NETWORK=limit` enforces the merged allowlist via iptables in the entrypoint. Filtering requires `NET_ADMIN` (microVM on macOS, `WRAPIX_MICROVM=1` on Linux); without it, `limit` falls back to open network with a stderr warning. No inbound ports on either platform.
-4. **Near-native performance** — minimal overhead beyond the container/microVM boundary cost; krun adds ~100MB per microVM as documented in `docs/security-review.md`.
+4. **Near-native performance** — minimal overhead beyond the container/microVM boundary cost; krun adds ~100MB per microVM.
 
 ## Out of Scope
 
