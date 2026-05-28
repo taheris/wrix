@@ -211,4 +211,74 @@ in
       assert result.strip() == "1000", f"Nested file should be owned by UID 1000, got: {result}"
     '';
   };
+
+  # Test 4: Verify the session-metadata audit anchor — specs/security.md § Audit Trail.
+  # Runs the entrypoint with a no-op command override so the EXIT trap fires
+  # without any agent runtime; then asserts the session-metadata JSON exists
+  # and carries the required fields.
+  audit-trail-anchor = pkgs.testers.nixosTest {
+    name = "wrapix-audit-trail-anchor";
+
+    nodes.machine =
+      { ... }:
+      {
+        imports = [ commonModule ];
+        environment.systemPackages = [ pkgs.jq ];
+      };
+
+    testScript = ''
+      machine.wait_for_unit("multi-user.target")
+
+      # Load the test image
+      machine.succeed("${testImage} | podman load")
+
+      # Create test workspace owned by testuser; entrypoint writes its
+      # session log under /workspace/.wrapix/log/ which surfaces on the host
+      # at /tmp/workspace/.wrapix/log/.
+      machine.succeed("mkdir -p /tmp/workspace && chown testuser:users /tmp/workspace")
+
+      # Run the entrypoint with a no-op command override. The launcher's
+      # always-on env is replicated here (HOME, GIT_AUTHOR_*, GIT_COMMITTER_*)
+      # so the entrypoint's claude-config branch and write_session_log run
+      # the same way they would under real `wrapix run`.
+      machine.succeed(
+        "su - testuser -c 'podman run --rm --network=pasta --userns=keep-id "
+        "-e HOME=/home/wrapix "
+        "-e GIT_AUTHOR_NAME=test -e GIT_AUTHOR_EMAIL=test@example.com "
+        "-e GIT_COMMITTER_NAME=test -e GIT_COMMITTER_EMAIL=test@example.com "
+        "-v /tmp/workspace:/workspace:rw "
+        "docker-archive:${testImage} /bin/true'"
+      )
+
+      # Assert exactly one session-metadata JSON exists.
+      log_files = machine.succeed(
+        "ls /tmp/workspace/.wrapix/log/*.json 2>/dev/null | wc -l"
+      ).strip()
+      assert log_files == "1", \
+        f"Expected exactly one session-metadata JSON, got {log_files}"
+
+      log_file = machine.succeed(
+        "ls /tmp/workspace/.wrapix/log/*.json"
+      ).strip()
+
+      # Assert the contract fields the spec names are populated (non-empty
+      # and non-null in the JSON).
+      for field in ("timestamp_start", "timestamp_end", "exit_code", "mode", "claude_session_dir"):
+          value = machine.succeed(
+              f"jq -r '.{field} // empty' {log_file}"
+          ).strip()
+          assert value != "", \
+              f"Field {field} is empty/null in session-metadata JSON {log_file}"
+
+      # claude_session_dir must resolve to an existing directory; the
+      # entrypoint mkdir's /workspace/.claude before agent dispatch so it
+      # surfaces at /tmp/workspace/.claude on the host.
+      claude_dir = machine.succeed(
+          f"jq -r '.claude_session_dir' {log_file}"
+      ).strip()
+      assert claude_dir == "/workspace/.claude", \
+          f"Unexpected claude_session_dir: {claude_dir!r}"
+      machine.succeed("test -d /tmp/workspace/.claude")
+    '';
+  };
 }
