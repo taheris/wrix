@@ -26,11 +26,7 @@ fi
 # from stdin is parsed correctly — same code path git would use, but
 # decoupled from the SSH connection.
 _hook_dir="$(dirname "$0")"
-# --no-progress works around a prek 0.3.x crash where the indicatif
-# progress bar's Drop hits a poisoned Mutex from a parallel worker and
-# aborts with `panic in a destructor during cleanup`, killing the whole
-# hook before the verdict propagates back to git push.
-printf '%s\n' "$_stdin" | prek --no-progress hook-impl \
+printf '%s\n' "$_stdin" | prek hook-impl \
     --hook-dir "$_hook_dir" \
     --script-version 4 \
     --hook-type=pre-push \
