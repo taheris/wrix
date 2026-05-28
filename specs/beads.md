@@ -62,7 +62,7 @@ invariant; the implementation chooses the mechanism per platform.
 | `bd close <id>` | Close issue |
 | `bd dep add <issue> <depends-on>` | Add dependency |
 | `bd dolt pull` / `bd dolt push` | Sync the Dolt database via the Dolt remote |
-| `beads-push` | Session-close sync: commit the Dolt remote and push the `beads` git branch (see *Storage*) |
+| `beads-push` | Session-close sync: commit the Dolt remote and push the `beads` git branch (see *Session-Close Sync*) |
 
 Issue types: task, bug, feature, epic, question, docs. Priority levels: P0
 (critical) through P4 (backlog).
@@ -81,14 +81,49 @@ Beads splits state across two worktrees:
   branch.
 
 `bd dolt pull` / `bd dolt push` move data between the local `dolt/` and
-the remote (which is on disk in the beads branch worktree). `beads-push`
-then commits that remote and pushes the `beads` git branch to the GitHub
-remote — `bd dolt push` alone does not move the git branch, so session
-close must run `beads-push`.
+the remote (which is on disk in the beads branch worktree).
+`bd dolt push` alone does not move the `beads` git branch to GitHub —
+that's the role of `beads-push` (see *Session-Close Sync*).
 
 The shellHook exports the connection info `bd` uses to reach the dolt
 server: `BEADS_DOLT_SERVER_SOCKET` on Linux, `BEADS_DOLT_SERVER_HOST` and
 `BEADS_DOLT_SERVER_PORT` on Darwin.
+
+## Session-Close Sync
+
+`beads-push` is the session-close synchronization step: it lands local
+operator state (`bd close`, `bd update --status=…`, label changes) into
+the on-disk Dolt remote, then pushes the `beads` git branch to GitHub.
+
+### Ordering
+
+`beads-push` attempts `bd dolt push` before `bd dolt pull`. When the
+push succeeds, the local state reaches the remote verbatim and no merge
+is computed. Only when the push fails because the remote has advanced
+(a fast-forward rejection from Dolt) does `beads-push` fall back to
+pull-then-push. Other push failures (network, auth, disk) propagate
+as-is rather than triggering the fallback.
+
+Rationale: an interior `pull` ahead of `push` runs Dolt's default
+three-way merge over rows the local session has just written. Dolt's
+default policy can pick the remote side over the local side without
+surfacing a conflict, silently reverting operator state (e.g. a
+`bd close` returning to `blocked`) before the push that would have
+landed it. Pushing first ensures the local commits become the merge
+base for any subsequent remote activity rather than being merged
+against pre-write remote state.
+
+### Pull-fallback intent protection
+
+On the pull-fallback path, `beads-push` must not silently overwrite
+local operator state. Before `bd dolt pull`, it records
+`(issue_id, intended_status, intended_labels)` for every row where the
+local-ahead-of-remote commits modified `status` or `labels` (sourced
+from a Dolt system-table column diff between local HEAD and the remote
+tracking branch). After the pull, it re-reads those rows; any row
+whose post-pull value diverges from the recorded intent causes
+`beads-push` to exit non-zero with the affected issue IDs in stderr.
+No push is attempted. The operator resolves the conflict by hand.
 
 ## Configuration
 
@@ -148,6 +183,17 @@ upstream, not by this spec.
   startup budget — no fallback to embedded dolt
   [judge](../tests/judges/beads.sh#test_shellhook_fail_loud)
 
+- `beads-push` attempts `bd dolt push` before `bd dolt pull`, so a
+  session-close run against an up-to-date remote never enters the Dolt
+  merge path
+  [judge](../tests/judges/beads.sh#test_beadspush_pushes_before_pulls)
+
+- On the pull-fallback path, `beads-push` snapshots local `status` and
+  `labels` intent before pulling and exits non-zero with the affected
+  issue IDs in stderr when the post-pull row state diverges from that
+  intent — no push attempted, no silent overwrite
+  [judge](../tests/judges/beads.sh#test_beadspush_failloud_on_intent_overwrite)
+
 ## Requirements
 
 ### Functional
@@ -166,15 +212,22 @@ upstream, not by this spec.
 6. **Lifecycle isolation** — the container started by `beads.shellHook`
    has a lifecycle independent of the process that triggered shellHook
    evaluation.
+7. **Session-close sync** — `beads-push` attempts `bd dolt push` before
+   `bd dolt pull`; on the pull-fallback path it snapshots local `status`
+   and `labels` intent before pulling and refuses to overwrite divergent
+   rows.
 
 ### Non-Functional
 
-1. **Loud failure** — shellHook fails non-zero with a clear stderr message
-   when prerequisites are missing or the dolt server is unreachable. No
-   fallback to embedded dolt.
+1. **Loud shellHook failure** — shellHook fails non-zero with a clear
+   stderr message when prerequisites are missing or the dolt server is
+   unreachable. No fallback to embedded dolt.
 2. **Portability** — works on Linux (podman) and Darwin (Apple `container`
    or podman-via-VM) via the same `beads-dolt` CLI surface.
-3. **Conflict-free sync** — Dolt-native merge handles concurrent edits.
+3. **Conflict-free sync** — `beads-push` pushes before it pulls so the
+   common case bypasses any merge; on the pull-fallback path it fails
+   loud rather than silently overwriting `status` or `labels` (see
+   *Session-Close Sync*).
 
 ## Out of Scope
 
@@ -185,3 +238,11 @@ upstream, not by this spec.
   ensures its own container is independent; what the caller does is the
   caller's concern
 - Container runtime selection (covered by `sandbox.md`)
+- Opt-in / legacy ordering flag for `beads-push` — push-before-pull is
+  the unconditional default
+- Conflict detection on columns other than `status` and `labels`
+- Insert / delete row collisions during the pull-fallback merge (the
+  intent-protection check covers updates only)
+- One-shot cleanup of historical `gc:session`-labelled rows and their
+  events in the Dolt database — operator concern, not part of
+  `beads-push`'s recurring responsibilities
