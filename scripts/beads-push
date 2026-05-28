@@ -7,29 +7,6 @@
 # github sync is skipped with a notice.
 set -euo pipefail
 
-# Gas City's reconciler writes an event every ~10s on each gc:session-labeled
-# bead (judge/scout/mayor). Without this prune the events table grows without
-# bound — three beads × 8640 rows/day = ~26k/day of reconciler churn, plus
-# the rows are large (full state snapshots in old_value/new_value).
-#
-# Trim to the most recent KEEP per session bead before every push. KEEP=100
-# leaves ~17 min of scroll-back per bead, which is plenty for debugging and
-# ~99% smaller than the steady-state rate.
-KEEP=${BEADS_KEEP_SESSION_EVENTS:-100}
-bd sql "
-  DELETE FROM events
-  WHERE issue_id IN (SELECT issue_id FROM labels WHERE label = 'gc:session')
-    AND id NOT IN (
-      SELECT id FROM (
-        SELECT id,
-               ROW_NUMBER() OVER (PARTITION BY issue_id ORDER BY created_at DESC) AS rn
-        FROM events
-        WHERE issue_id IN (SELECT issue_id FROM labels WHERE label = 'gc:session')
-      ) ranked
-      WHERE rn <= $KEEP
-    )
-" >/dev/null
-
 BRANCH="$(grep '^sync-branch:' .beads/config.yaml 2>/dev/null | awk '{print $2}' | tr -d '"' || echo beads)"
 BRANCH="${BRANCH:-beads}"
 
@@ -49,9 +26,8 @@ REMOTE_DIR="$ROOT/.beads/dolt/dolt-remote"
 # Gate the flatten+rebuild path: any remote file >= THRESHOLD_MB triggers a
 # full history squash + remote rebuild. GitHub's hard limit is 100 MiB per
 # file; 50 MiB gives us headroom for the next push cycle's growth before the
-# gate trips again. The session-event prune above keeps steady-state small;
-# this gate is the circuit breaker for when dolt chunk files grow regardless
-# (schema migrations, long-running reconcile churn, etc).
+# gate trips again. The gate is the circuit breaker for when dolt chunk files
+# grow (schema migrations, long-running reconcile churn, etc).
 THRESHOLD_MB=${BEADS_REMOTE_REBUILD_MB:-50}
 threshold_bytes=$((THRESHOLD_MB * 1024 * 1024))
 needs_rebuild=0
@@ -78,9 +54,91 @@ if [ "$needs_rebuild" = 1 ]; then
   done
 fi
 
-bd dolt commit || true
-bd dolt pull
-bd dolt push "$@"
+# Push before pull so local commits become the merge base for any subsequent
+# remote activity. Pulling ahead of push would run Dolt's default three-way
+# merge over rows the local session has just written and can silently revert
+# operator state (e.g. a `bd close`) to the remote value.
+bd dolt commit || true  # best-effort: no-op when there are no pending writes
+
+push_stderr="$(mktemp)"
+trap 'rm -f "$push_stderr"' EXIT
+
+push_rc=0
+bd dolt push "$@" 2>"$push_stderr" || push_rc=$?
+cat "$push_stderr" >&2
+
+if [[ "$push_rc" -ne 0 ]]; then
+  # Fast-forward rejection (remote advanced) is the only push failure that
+  # triggers the pull-fallback path. Network, auth, and disk failures
+  # propagate as-is per spec Session-Close Sync / Ordering.
+  if ! grep -qiE 'non-fast-forward|fast-forward|reject|behind|out of date|denied' "$push_stderr"; then
+    exit "$push_rc"
+  fi
+
+  # Pull-fallback intent protection. Snapshot status/labels intent for every
+  # issue the local commits touched, using dolt_commit_diff_<table> between
+  # local HEAD and the remote-tracking branch. Updates only — insert/delete
+  # row collisions stay with Dolt default per spec Out of Scope.
+  dolt_local='HEAD'
+  dolt_remote='remotes/origin/main'
+
+  mapfile -t affected_ids < <(
+    bd sql --csv "
+      SELECT DISTINCT id FROM (
+        SELECT to_id AS id
+        FROM dolt_commit_diff_issues
+        WHERE to_commit = '${dolt_local}' AND from_commit = '${dolt_remote}'
+          AND (from_status IS NULL OR from_status <> to_status)
+        UNION
+        SELECT to_issue_id AS id
+        FROM dolt_commit_diff_labels
+        WHERE to_commit = '${dolt_local}' AND from_commit = '${dolt_remote}'
+        UNION
+        SELECT from_issue_id AS id
+        FROM dolt_commit_diff_labels
+        WHERE to_commit = '${dolt_local}' AND from_commit = '${dolt_remote}'
+      ) AS touched
+      WHERE id IS NOT NULL
+    " | tail -n +2
+  )
+
+  if [[ "${#affected_ids[@]}" -eq 0 ]]; then
+    bd dolt pull
+    bd dolt push "$@"
+  else
+    in_list=""
+    for id in "${affected_ids[@]}"; do
+      in_list+="'${id//\'/\'\'}',"
+    done
+    in_list="${in_list%,}"
+
+    snapshot_query="
+      SELECT i.id, i.status,
+        COALESCE((SELECT GROUP_CONCAT(label ORDER BY label SEPARATOR ',')
+                  FROM labels WHERE issue_id = i.id), '') AS labels
+      FROM issues i
+      WHERE i.id IN (${in_list})
+      ORDER BY i.id
+    "
+
+    intent_file="$(mktemp)"
+    post_file="$(mktemp)"
+    trap 'rm -f "$push_stderr" "$intent_file" "$post_file"' EXIT
+
+    bd sql --csv "$snapshot_query" >"$intent_file"
+    bd dolt pull
+    bd sql --csv "$snapshot_query" >"$post_file"
+
+    if ! diff -q "$intent_file" "$post_file" >/dev/null; then
+      echo "beads-push: pull-fallback diverged from local intent on status/labels — refusing to push" >&2
+      diff "$intent_file" "$post_file" >&2 || true  # best-effort: surface row-level diff for the operator
+      printf 'beads-push: affected issue IDs: %s\n' "${affected_ids[*]}" >&2
+      exit 1
+    fi
+
+    bd dolt push "$@"
+  fi
+fi
 
 if [ ! -d "$WT" ]; then
   if git rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
