@@ -103,71 +103,86 @@ fi
 
 cd /workspace
 
-# Initialize Claude config and settings
-# ~/.claude is a container-local directory (not mounted from host) so that
-# user-level settings.json stays separate from project-level settings.json.
-# Persistent session data (history, projects, etc.) is symlinked from
-# /workspace/.claude which IS on the host via the /workspace VirtioFS mount.
-mkdir -p "$HOME/.claude"
-cp /etc/wrapix/claude-config.json "$HOME/.claude.json"
-cp /etc/wrapix/claude-settings.json "$HOME/.claude/settings.json"
-chmod 644 "$HOME/.claude.json" "$HOME/.claude/settings.json"
+# WRAPIX_AGENT selects the agent runtime. 'claude' (default) runs claude with
+# config merging and permission bypass; 'pi' runs pi-mono in JSONL RPC mode;
+# 'direct' execs loom-direct-runner over JSONL stdin/stdout. pi and direct
+# skip Claude-specific config (neither has a permission system or settings.json).
+WRAPIX_AGENT="${WRAPIX_AGENT:-claude}"
+case "$WRAPIX_AGENT" in
+  claude|pi|direct) ;;
+  *)
+    echo "Error: unknown WRAPIX_AGENT: $WRAPIX_AGENT (expected 'claude', 'pi', or 'direct')" >&2
+    exit 1
+    ;;
+esac
 
-# Runtime MCP server selection
-# Images built with mcpRuntime=true include per-server configs in /etc/wrapix/mcp/.
-# WRAPIX_MCP selects which servers to enable (comma-separated, default: all).
-if [[ -d /etc/wrapix/mcp ]]; then
-  mcp_enabled="${WRAPIX_MCP:-all}"
-  mcp_servers="{}"
+if [[ "$WRAPIX_AGENT" = "claude" ]]; then
+  # Initialize Claude config and settings
+  # ~/.claude is a container-local directory (not mounted from host) so that
+  # user-level settings.json stays separate from project-level settings.json.
+  # Persistent session data (history, projects, etc.) is symlinked from
+  # /workspace/.claude which IS on the host via the /workspace VirtioFS mount.
+  mkdir -p "$HOME/.claude"
+  cp /etc/wrapix/claude-config.json "$HOME/.claude.json"
+  cp /etc/wrapix/claude-settings.json "$HOME/.claude/settings.json"
+  chmod 644 "$HOME/.claude.json" "$HOME/.claude/settings.json"
 
-  for config_file in /etc/wrapix/mcp/*.json; do
-    [[ -f "$config_file" ]] || continue
-    server_name=$(basename "$config_file" .json)
+  # Runtime MCP server selection
+  # Images built with mcpRuntime=true include per-server configs in /etc/wrapix/mcp/.
+  # WRAPIX_MCP selects which servers to enable (comma-separated, default: all).
+  if [[ -d /etc/wrapix/mcp ]]; then
+    mcp_enabled="${WRAPIX_MCP:-all}"
+    mcp_servers="{}"
 
-    # Filter by WRAPIX_MCP unless "all"
-    if [[ "$mcp_enabled" != "all" ]]; then
-      if ! echo ",$mcp_enabled," | grep -qF ",$server_name,"; then
-        continue
+    for config_file in /etc/wrapix/mcp/*.json; do
+      [[ -f "$config_file" ]] || continue
+      server_name=$(basename "$config_file" .json)
+
+      # Filter by WRAPIX_MCP unless "all"
+      if [[ "$mcp_enabled" != "all" ]]; then
+        if ! echo ",$mcp_enabled," | grep -qF ",$server_name,"; then
+          continue
+        fi
       fi
+
+      server_config=$(cat "$config_file")
+
+      # Apply runtime env var overrides
+      case "$server_name" in
+        tmux)
+          if [[ -n "${WRAPIX_MCP_TMUX_AUDIT:-}" ]]; then
+            server_config=$(echo "$server_config" | jq --arg v "$WRAPIX_MCP_TMUX_AUDIT" '.env.TMUX_DEBUG_AUDIT = $v')
+          fi
+          if [[ -n "${WRAPIX_MCP_TMUX_AUDIT_FULL:-}" ]]; then
+            server_config=$(echo "$server_config" | jq --arg v "$WRAPIX_MCP_TMUX_AUDIT_FULL" '.env.TMUX_DEBUG_AUDIT_FULL = $v')
+          fi
+          ;;
+      esac
+
+      mcp_servers=$(echo "$mcp_servers" | jq --arg name "$server_name" --argjson config "$server_config" '.[$name] = $config')
+    done
+
+    if [[ "$mcp_servers" != "{}" ]]; then
+      jq --argjson servers "$mcp_servers" '.mcpServers = $servers' \
+        "$HOME/.claude/settings.json" > "$HOME/.claude/settings.json.tmp"
+      mv "$HOME/.claude/settings.json.tmp" "$HOME/.claude/settings.json"
     fi
+  fi
 
-    server_config=$(cat "$config_file")
+  # Write project-level settings only if missing (preserve user customizations)
+  if [[ ! -f /workspace/.claude/settings.json ]]; then
+    cp /etc/wrapix/claude-settings.json /workspace/.claude/settings.json
+  fi
 
-    # Apply runtime env var overrides
-    case "$server_name" in
-      tmux)
-        if [[ -n "${WRAPIX_MCP_TMUX_AUDIT:-}" ]]; then
-          server_config=$(echo "$server_config" | jq --arg v "$WRAPIX_MCP_TMUX_AUDIT" '.env.TMUX_DEBUG_AUDIT = $v')
-        fi
-        if [[ -n "${WRAPIX_MCP_TMUX_AUDIT_FULL:-}" ]]; then
-          server_config=$(echo "$server_config" | jq --arg v "$WRAPIX_MCP_TMUX_AUDIT_FULL" '.env.TMUX_DEBUG_AUDIT_FULL = $v')
-        fi
-        ;;
-    esac
-
-    mcp_servers=$(echo "$mcp_servers" | jq --arg name "$server_name" --argjson config "$server_config" '.[$name] = $config')
+  # Symlink persistent session data from workspace for /resume and /rename
+  for item in projects plans todos file-history paste-cache backups \
+              debug session-env plugins shell-snapshots \
+              history.jsonl settings.local.json stats-cache.json; do
+    if [[ -e "/workspace/.claude/$item" ]] && [[ ! -e "$HOME/.claude/$item" ]]; then
+      ln -s "/workspace/.claude/$item" "$HOME/.claude/$item"
+    fi
   done
-
-  if [[ "$mcp_servers" != "{}" ]]; then
-    jq --argjson servers "$mcp_servers" '.mcpServers = $servers' \
-      "$HOME/.claude/settings.json" > "$HOME/.claude/settings.json.tmp"
-    mv "$HOME/.claude/settings.json.tmp" "$HOME/.claude/settings.json"
-  fi
 fi
-
-# Write project-level settings only if missing (preserve user customizations)
-if [[ ! -f /workspace/.claude/settings.json ]]; then
-  cp /etc/wrapix/claude-settings.json /workspace/.claude/settings.json
-fi
-
-# Symlink persistent session data from workspace for /resume and /rename
-for item in projects plans todos file-history paste-cache backups \
-            debug session-env plugins shell-snapshots \
-            history.jsonl settings.local.json stats-cache.json; do
-  if [[ -e "/workspace/.claude/$item" ]] && [[ ! -e "$HOME/.claude/$item" ]]; then
-    ln -s "/workspace/.claude/$item" "$HOME/.claude/$item"
-  fi
-done
 
 # Connect bd to the host's wrapix-beads dolt server.
 # VirtioFS can't pass Unix sockets, so the launcher passes
@@ -348,6 +363,29 @@ if [[ $# -gt 0 ]]; then
   # Command override: run the specified command instead of Claude
   unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
     "$@" || MAIN_EXIT=$?
+elif [[ "$WRAPIX_AGENT" = "pi" ]]; then
+  # Pi RPC mode: pi listens on stdin/stdout for JSONL commands.
+  # Loom drives the session from the host via piped stdio.
+  unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
+    pi --mode rpc || MAIN_EXIT=$?
+elif [[ "$WRAPIX_AGENT" = "direct" ]]; then
+  # Direct mode: loom-direct-runner listens on stdin/stdout for JSONL
+  # commands and drives a loom-llm Conversation with the six sandbox-aware
+  # tools. Loom drives the session from the host via piped stdio.
+  unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
+    loom-direct-runner || MAIN_EXIT=$?
+elif [[ "$WRAPIX_AGENT" = "claude" ]] && [[ "${WRAPIX_STDIO:-}" = "1" ]]; then
+  # Claude stream-json mode: loom drives the session from the host via piped
+  # stdio. Symmetric to the pi branch above. Canonical claude args live here
+  # (single source of truth) so workflow code doesn't have to thread them.
+  unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
+    claude \
+      --dangerously-skip-permissions \
+      --print \
+      --verbose \
+      --input-format stream-json \
+      --output-format stream-json \
+      || MAIN_EXIT=$?
 else
   # Build system prompt only for interactive claude (not needed for command
   # overrides).  Requires /etc/wrapix-prompts/wrapix-prompt.
