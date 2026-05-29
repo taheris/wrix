@@ -103,7 +103,15 @@ run_launcher() {
 # Count `^MOUNT=-v ` lines in the dry-run dump.
 count_mount_lines() {
   local out="$1"
+  # grep -c exits 1 on zero matches; we want that to flow through as the count 0
   grep -cE '^MOUNT=-v ' "$out" || true
+}
+
+# Dump every `^MOUNT=` line in the dry-run output for fail-message diagnostics.
+# best-effort: empty grep output is meaningful diagnostic context (means the
+# launcher emitted no MOUNT= lines at all), so zero matches is not a failure.
+dump_mount_lines() {
+  grep '^MOUNT=' "$1" || true
 }
 
 # ============================================================================
@@ -131,7 +139,7 @@ test_two_mounts_with_one_ro() {
   local count
   count=$(count_mount_lines "$out")
   if [[ "$count" != "2" ]]; then
-    fail "two mounts: expected 2 MOUNT=-v lines, got $count: $(grep '^MOUNT=' "$out" || true)"
+    fail "two mounts: expected 2 MOUNT=-v lines, got $count: $(dump_mount_lines "$out")"
     return 1
   fi
 
@@ -164,7 +172,7 @@ test_missing_mounts_field_zero_lines() {
   local count
   count=$(count_mount_lines "$out")
   if [[ "$count" != "0" ]]; then
-    fail "missing mounts: expected 0 MOUNT=-v lines, got $count: $(grep '^MOUNT=' "$out" || true)"
+    fail "missing mounts: expected 0 MOUNT=-v lines, got $count: $(dump_mount_lines "$out")"
     return 1
   fi
   pass "Missing mounts field → zero -v lines (empty-list default)"
@@ -187,7 +195,7 @@ test_empty_mounts_list_zero_lines() {
   local count
   count=$(count_mount_lines "$out")
   if [[ "$count" != "0" ]]; then
-    fail "empty mounts: expected 0 MOUNT=-v lines, got $count: $(grep '^MOUNT=' "$out" || true)"
+    fail "empty mounts: expected 0 MOUNT=-v lines, got $count: $(dump_mount_lines "$out")"
     return 1
   fi
   pass "Explicit empty mounts list → zero -v lines"
