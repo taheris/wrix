@@ -23,6 +23,12 @@ WT="$ROOT/.git/beads-worktrees/$BRANCH"
 # CLI (.beads/dolt/<db>/) and the SQL server (/data/<db>/ in containers).
 REMOTE_DIR="$ROOT/.beads/dolt/dolt-remote"
 
+# Disable bd's auto-export hook: redundant with the explicit `bd dolt` calls
+# below, and its `git add .beads/issues.jsonl` warns noisily in any repo that
+# gitignores the JSONL (the common case post-Dolt). Idempotent and persists
+# in .beads/config.yaml — no save/restore.
+bd config set export.auto false >/dev/null
+
 # Gate the flatten+rebuild path: any remote file >= THRESHOLD_MB triggers a
 # full history squash + remote rebuild. GitHub's hard limit is 100 MiB per
 # file; 50 MiB gives us headroom for the next push cycle's growth before the
