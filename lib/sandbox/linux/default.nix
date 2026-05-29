@@ -86,6 +86,8 @@ in
         CONTAINER_CMD=()
         # SpawnConfig env allowlist: KEY=VALUE pairs (one per array slot)
         SPAWN_ENV=()
+        # SpawnConfig per-launch mounts, pre-rendered as `host:container[:ro]`
+        SPAWN_MOUNTS=()
 
         if [ "$SUBCOMMAND" = "spawn" ]; then
           while [ $# -gt 0 ]; do
@@ -125,6 +127,14 @@ in
           while IFS= read -r arg; do
             CONTAINER_CMD+=("$arg")
           done < <(jq -r '.agent_args[]?' "$SPAWN_CONFIG")
+          # SpawnConfig.mounts: pre-render each entry to the podman volume
+          # syntax `host:container[:ro]`. Missing / empty array yields zero
+          # entries (matches the loom-side `#[serde(default,
+          # skip_serializing_if = "Vec::is_empty")]` on SpawnConfig.mounts).
+          while IFS= read -r entry; do
+            [ -z "$entry" ] && continue
+            SPAWN_MOUNTS+=("$entry")
+          done < <(jq -r '.mounts[]? | "\(.host_path):\(.container_path)" + (if .read_only == true then ":ro" else "" end)' "$SPAWN_CONFIG")
         else
           PROJECT_DIR="''${1:-$(pwd)}"
           shift || true
@@ -146,6 +156,7 @@ in
           printf 'IMAGE_OVERRIDE_SOURCE=%s\n' "$IMAGE_OVERRIDE_SOURCE"
           for pair in "''${SPAWN_ENV[@]}"; do printf 'ENV=%s\n' "$pair"; done
           for arg in "''${CONTAINER_CMD[@]}"; do printf 'CMD=%s\n' "$arg"; done
+          for entry in "''${SPAWN_MOUNTS[@]}"; do printf 'MOUNT=-v %s\n' "$entry"; done
           exit 0
         fi
 
@@ -242,6 +253,14 @@ in
           includeMode = true;
         }}
         MOUNTS
+
+        # Per-launch SpawnConfig.mounts are additive on top of profile.mounts
+        # — podman applies them as plain `-v host:container[:ro]` binds. The
+        # launcher does not stat host_path; podman fails loudly at runtime if
+        # the source is missing.
+        for entry in "''${SPAWN_MOUNTS[@]}"; do
+          VOLUME_ARGS="$VOLUME_ARGS -v $entry"
+        done
 
         # Mount SSH known_hosts as system-wide file (not under ~/.ssh/ —
         # podman auto-creates parent dirs owned by root on the tmpfs home)
