@@ -24,6 +24,7 @@ let
   };
 
   prekHooksBundle = import ./prek/bundle.nix { inherit pkgs; };
+  prekWrappers = import ./prek/wrappers.nix { inherit pkgs; };
 
 in
 {
@@ -32,6 +33,7 @@ in
   inherit beads;
 
   prekHooks = prekHooksBundle;
+  inherit (prekWrappers) prePushChecks skipIfMissing;
 
   deriveProfile =
     baseProfile: extensions:
@@ -105,7 +107,13 @@ in
           '';
     in
     pkgs.mkShell {
-      packages = profile.packages ++ packages;
+      packages =
+        profile.packages
+        ++ packages
+        ++ [
+          prekWrappers.prePushChecks
+          prekWrappers.skipIfMissing
+        ];
       env = profile.env // env;
       shellHook = ''
         # Configure Dolt origin remote for bd dolt pull/push (no-op if already set)

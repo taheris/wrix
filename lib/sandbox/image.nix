@@ -55,6 +55,11 @@ let
   # Installation).
   prekHooksBundle = import ../prek/bundle.nix { inherit pkgs; };
 
+  # `pre-push-checks` and `skip-if-missing` wrappers — co-located on PATH so
+  # `.pre-commit-config.yaml` entries that name them resolve inside the
+  # container (specs/pre-commit.md § Hook-Entry Wrappers).
+  prekWrappers = import ../prek/wrappers.nix { inherit pkgs; };
+
   # krun microVM support: UID spoofing library + PTY relay
   # See lib/sandbox/linux/ for source files
   libfakeuid = pkgs.stdenv.mkDerivation {
@@ -125,6 +130,8 @@ let
   allPackages = [
     entrypointPkg
     notifyClient
+    prekWrappers.prePushChecks
+    prekWrappers.skipIfMissing
   ]
   ++ (profile.packages or [ ])
   ++ agentPackages;
