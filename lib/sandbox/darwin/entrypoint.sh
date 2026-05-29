@@ -78,19 +78,6 @@ if [[ -n "${WRAPIX_FILE_MOUNTS:-}" ]]; then
     done
 fi
 
-# Fix socket permissions - VirtioFS may mount sockets with 0000 permissions
-if [[ -n "${WRAPIX_SOCK_MOUNTS:-}" ]]; then
-    IFS=',' read -ra SOCKS <<< "$WRAPIX_SOCK_MOUNTS"
-    for sock in "${SOCKS[@]}"; do
-        [[ -z "$sock" ]] && continue
-        sock=$(expand_path "$sock")
-        if [[ -e "$sock" ]]; then
-            # best-effort: VirtioFS sometimes forbids chmod; fail silently so boot continues
-            chmod 777 "$sock" 2>/dev/null || true
-        fi
-    done
-fi
-
 # Copy known_hosts from mounted directory (VirtioFS only supports dirs, not files)
 KNOWN_HOSTS_SRC="/etc/wrapix/known_hosts_dir/known_hosts"
 if [[ -f "$KNOWN_HOSTS_SRC" ]]; then

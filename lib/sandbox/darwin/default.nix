@@ -66,6 +66,7 @@ in
             IMAGE_OVERRIDE_SOURCE=""
             CONTAINER_CMD=()
             SPAWN_ENV=()
+            SPAWN_MOUNTS=()
 
             if [ "$SUBCOMMAND" = "spawn" ]; then
               while [ $# -gt 0 ]; do
@@ -101,6 +102,13 @@ in
               while IFS= read -r arg; do
                 CONTAINER_CMD+=("$arg")
               done < <(${pkgs.jq}/bin/jq -r '.agent_args[]?' "$SPAWN_CONFIG")
+              # SpawnConfig.mounts: tab-separated host_path, container_path,
+              # read_only. Missing/empty list yields zero entries (matches the
+              # loom-side `#[serde(default, skip_serializing_if = ...)]`).
+              while IFS= read -r entry; do
+                [ -z "$entry" ] && continue
+                SPAWN_MOUNTS+=("$entry")
+              done < <(${pkgs.jq}/bin/jq -r '.mounts[]? | [.host_path, .container_path, (.read_only|tostring)] | @tsv' "$SPAWN_CONFIG")
             else
               PROJECT_DIR="''${1:-$(pwd)}"
               shift || true
@@ -110,9 +118,11 @@ in
               fi
             fi
 
-            # WRAPIX_DRY_RUN=1: print resolved spawn state and exit without
-            # touching the filesystem or invoking the container CLI. Used by
-            # tests to verify SpawnConfig parsing without a runtime.
+            # WRAPIX_DRY_RUN=1: print resolved spawn state, run the mount
+            # classifier with filesystem ops disabled, dump classified mount
+            # intents, and exit before any container CLI invocation. Used by
+            # tests to verify SpawnConfig parsing and mount classification
+            # without a runtime.
             if [ "''${WRAPIX_DRY_RUN:-}" = "1" ]; then
               printf 'SUBCOMMAND=%s\n' "$SUBCOMMAND"
               printf 'STDIO=%s\n' "$USE_STDIO"
@@ -121,29 +131,31 @@ in
               printf 'IMAGE_OVERRIDE_SOURCE=%s\n' "$IMAGE_OVERRIDE_SOURCE"
               for pair in "''${SPAWN_ENV[@]}"; do printf 'ENV=%s\n' "$pair"; done
               for arg in "''${CONTAINER_CMD[@]}"; do printf 'CMD=%s\n' "$arg"; done
-              exit 0
+              for entry in "''${SPAWN_MOUNTS[@]}"; do printf 'MOUNT=%s\n' "$entry"; done
             fi
 
-            # Check macOS version
-            if [ "$(sw_vers -productVersion | cut -d. -f1)" -lt 26 ]; then
-              echo "Error: macOS 26+ required (current: $(sw_vers -productVersion))"
-              exit 1
-            fi
+            if [ "''${WRAPIX_DRY_RUN:-}" != "1" ]; then
+              # Check macOS version
+              if [ "$(sw_vers -productVersion | cut -d. -f1)" -lt 26 ]; then
+                echo "Error: macOS 26+ required (current: $(sw_vers -productVersion))"
+                exit 1
+              fi
 
-            # Ensure container system is running
-            if ! container system status >/dev/null 2>&1; then
-              echo "Starting container system..." >&2
-              container system start
-              sleep 2
-            fi
+              # Ensure container system is running
+              if ! container system status >/dev/null 2>&1; then
+                echo "Starting container system..." >&2
+                container system start
+                sleep 2
+              fi
 
-            # Ensure the per-workspace wrapix-beads dolt container is running.
-            # Uses Apple container CLI (same runtime as the sandbox itself).
-            if [ -d "$PROJECT_DIR/.beads/dolt" ]; then
-              ${pkgs.beads-dolt}/bin/beads-dolt start "$PROJECT_DIR"
-            fi
+              # Ensure the per-workspace wrapix-beads dolt container is running.
+              # Uses Apple container CLI (same runtime as the sandbox itself).
+              if [ -d "$PROJECT_DIR/.beads/dolt" ]; then
+                ${pkgs.beads-dolt}/bin/beads-dolt start "$PROJECT_DIR"
+              fi
 
-            ${fixVmnetRoute}
+              ${fixVmnetRoute}
+            fi
 
             # Image is supplied to the launcher at runtime, not baked in. For
             # `wrapix run`, $WRAPIX_DEFAULT_IMAGE_REF and $WRAPIX_DEFAULT_IMAGE_SOURCE
@@ -165,36 +177,38 @@ in
             fi
 
             PROFILE_IMAGE="$IMAGE_REF"
-            if [ -n "$IMAGE_SOURCE" ] && ! container image inspect "$PROFILE_IMAGE" >/dev/null 2>&1; then
-              verbose "Image hash changed or missing, reloading..."
-              echo "Loading profile image..."
-              # Drop the prior :latest alias so the new load can claim the same
-              # repo name; pruneStaleImages later cleans residual hash tags.
-              IMAGE_REPO="''${IMAGE_REF%:*}"
-              container image delete "$IMAGE_REPO:latest" 2>/dev/null || true
-              # Convert Docker-format tar to OCI-archive for Apple container CLI.
-              # --insecure-policy is safe: images are built locally from Nix
-              # derivations (trusted source with cryptographic hashes).
-              OCI_TAR="$WRAPIX_CACHE/profile-image-oci.tar"
-              mkdir -p "$WRAPIX_CACHE"
-              ${pkgs.skopeo}/bin/skopeo --insecure-policy copy --quiet "docker-archive:$IMAGE_SOURCE" "oci-archive:$OCI_TAR"
-              LOAD_OUTPUT=$(container image load --input "$OCI_TAR" 2>&1)
-              LOADED_REF=$(echo "$LOAD_OUTPUT" | grep -oE 'untagged@sha256:[a-f0-9]+' | head -1)
-              if [ -n "$LOADED_REF" ]; then
-                container image tag "$LOADED_REF" "$PROFILE_IMAGE"
-                # Maintain :latest as the keep-anchor for pruneStaleImages.
-                container image tag "$LOADED_REF" "$IMAGE_REPO:latest"
+            if [ "''${WRAPIX_DRY_RUN:-}" != "1" ]; then
+              if [ -n "$IMAGE_SOURCE" ] && ! container image inspect "$PROFILE_IMAGE" >/dev/null 2>&1; then
+                verbose "Image hash changed or missing, reloading..."
+                echo "Loading profile image..."
+                # Drop the prior :latest alias so the new load can claim the same
+                # repo name; pruneStaleImages later cleans residual hash tags.
+                IMAGE_REPO="''${IMAGE_REF%:*}"
+                container image delete "$IMAGE_REPO:latest" 2>/dev/null || true
+                # Convert Docker-format tar to OCI-archive for Apple container CLI.
+                # --insecure-policy is safe: images are built locally from Nix
+                # derivations (trusted source with cryptographic hashes).
+                OCI_TAR="$WRAPIX_CACHE/profile-image-oci.tar"
+                mkdir -p "$WRAPIX_CACHE"
+                ${pkgs.skopeo}/bin/skopeo --insecure-policy copy --quiet "docker-archive:$IMAGE_SOURCE" "oci-archive:$OCI_TAR"
+                LOAD_OUTPUT=$(container image load --input "$OCI_TAR" 2>&1)
+                LOADED_REF=$(echo "$LOAD_OUTPUT" | grep -oE 'untagged@sha256:[a-f0-9]+' | head -1)
+                if [ -n "$LOADED_REF" ]; then
+                  container image tag "$LOADED_REF" "$PROFILE_IMAGE"
+                  # Maintain :latest as the keep-anchor for pruneStaleImages.
+                  container image tag "$LOADED_REF" "$IMAGE_REPO:latest"
+                fi
+                rm -f "$OCI_TAR"
+                container image prune
+                verbose "Loaded image $PROFILE_IMAGE"
+              else
+                verbose "Using cached image $PROFILE_IMAGE"
               fi
-              rm -f "$OCI_TAR"
-              container image prune
-              verbose "Loaded image $PROFILE_IMAGE"
-            else
-              verbose "Using cached image $PROFILE_IMAGE"
+              # Prune runs on every invocation, not just after load, so stale
+              # hashes from other profiles get swept even when the current
+              # profile is cached.
+              ${pruneStaleImages { runtime = "container"; }}
             fi
-            # Prune runs on every invocation, not just after load, so stale
-            # hashes from other profiles get swept even when the current
-            # profile is cached.
-            ${pruneStaleImages { runtime = "container"; }}
 
             verbose "Project dir: $PROJECT_DIR"
 
@@ -203,7 +217,9 @@ in
             #   1. Files appear as root-owned - entrypoint copies with correct ownership
             #   2. Only directory mounts work - files mounted via parent directory
             #   3. Symlinks pointing outside mount are broken - dereference on host
-            #   4. Sockets mount with 0000 perms - entrypoint runs chmod to fix
+            # Unix-socket sources are rejected by the classifier (VirtioFS does
+            # not pass socket operations), so no entrypoint-side socket chmod
+            # is needed.
             #
             # Security: We dereference symlinks on the HOST to avoid mounting /nix/store
             # Use PID-based staging to allow multiple concurrent containers
@@ -221,11 +237,14 @@ in
             MOUNT_ARGS=""
             DIR_MOUNTS=""
             FILE_MOUNTS=""
-            SOCK_MOUNTS=""
             MOUNTED_FILE_DIRS=""
             dir_idx=0
             file_idx=0
 
+            # Unified classifier: profile.mounts (from mkMountSpecs at Nix-eval
+            # time) and SpawnConfig.mounts (parsed from JSON at runtime) feed
+            # the same branch logic. Socket sources are rejected loudly — see
+            # specs/sandbox.md § Platform Implementations / macOS.
             while IFS=: read -r src dest optional; do
               [ -z "$src" ] && continue
               src=$(expand_path "$src")
@@ -238,10 +257,11 @@ in
               fi
 
               if [ -d "$src" ]; then
-                # Dereference symlinks on host to avoid mounting /nix/store
                 host_staging="$STAGING_ROOT/dir$dir_idx"
-                mkdir -p "$host_staging"
-                cp -rL "$src/." "$host_staging/"
+                if [ "''${WRAPIX_DRY_RUN:-}" != "1" ]; then
+                  mkdir -p "$host_staging"
+                  cp -rL "$src/." "$host_staging/"
+                fi
 
                 staging="/mnt/wrapix/dir$dir_idx"
                 dir_idx=$((dir_idx + 1))
@@ -249,16 +269,12 @@ in
                 [ -n "$DIR_MOUNTS" ] && DIR_MOUNTS="$DIR_MOUNTS,"
                 DIR_MOUNTS="$DIR_MOUNTS$staging:$dest"
               elif [ -S "$src" ]; then
-                # Socket: mount directly, fix permissions in entrypoint
-                # VirtioFS may show wrong permissions (0000) but chmod can fix it
-                MOUNT_ARGS="$MOUNT_ARGS -v $src:$dest"
-                [ -n "$SOCK_MOUNTS" ] && SOCK_MOUNTS="$SOCK_MOUNTS,"
-                SOCK_MOUNTS="$SOCK_MOUNTS$dest"
+                echo "wrapix: Unix-socket mount source rejected: $src -> $dest" >&2
+                echo "  (VirtioFS does not pass socket operations; mounting would dead-end at connect())" >&2
+                exit 1
               else
-                # File: mount parent dir to staging (dedup), track for entrypoint to copy
                 parent_dir=$(dirname "$src")
                 file_name=$(basename "$src")
-                # Check if parent already mounted
                 staging=""
                 for entry in $MOUNTED_FILE_DIRS; do
                   dir="''${entry%%=*}"
@@ -277,12 +293,25 @@ in
                 [ -n "$FILE_MOUNTS" ] && FILE_MOUNTS="$FILE_MOUNTS,"
                 FILE_MOUNTS="$FILE_MOUNTS$staging/$file_name:$dest"
               fi
-            done <<'MOUNTS'
+            done < <(
+              cat <<'PROFILE_MOUNTS'
       ${mkMountSpecs {
         inherit profile;
         includeMode = false;
       }}
-      MOUNTS
+      PROFILE_MOUNTS
+              for entry in "''${SPAWN_MOUNTS[@]}"; do
+                IFS=$'\t' read -r host container _ro <<<"$entry"
+                printf '%s:%s:required\n' "$host" "$container"
+              done
+            )
+
+            if [ "''${WRAPIX_DRY_RUN:-}" = "1" ]; then
+              [ -n "$DIR_MOUNTS" ] && printf 'DIR_MOUNTS=%s\n' "$DIR_MOUNTS"
+              [ -n "$FILE_MOUNTS" ] && printf 'FILE_MOUNTS=%s\n' "$FILE_MOUNTS"
+              printf 'MOUNT_ARGS=%s\n' "$MOUNT_ARGS"
+              exit 0
+            fi
 
             # Add SSH known_hosts and system prompt (directories from Nix store)
             # Note: prompt mounted to /etc/wrapix-prompts (not /etc/wrapix) to preserve
@@ -409,7 +438,6 @@ in
             ENV_ARGS+=(-e "GIT_COMMITTER_EMAIL=$GIT_COMMITTER_EMAIL")
             [ -n "$DIR_MOUNTS" ] && ENV_ARGS+=(-e "WRAPIX_DIR_MOUNTS=$DIR_MOUNTS")
             [ -n "$FILE_MOUNTS" ] && ENV_ARGS+=(-e "WRAPIX_FILE_MOUNTS=$FILE_MOUNTS")
-            [ -n "$SOCK_MOUNTS" ] && ENV_ARGS+=(-e "WRAPIX_SOCK_MOUNTS=$SOCK_MOUNTS")
             # VirtioFS can't pass Unix sockets — use TCP for notifications and dolt.
             # Dolt is now also an Apple Container publishing to all interfaces;
             # the sandbox VM reaches it via the vmnet gateway.
