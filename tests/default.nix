@@ -152,6 +152,12 @@ in
       program = "${sandboxImageChecks.claudeRuntimeNoopTest}/bin/test-claude-runtime-noop";
     };
 
+    prek-hooks-closure = {
+      meta.description = "Verify default sandbox image closure contains the prek hooks bundle";
+      type = "app";
+      program = "${sandboxImageChecks.prekHooksClosureTest}/bin/test-prek-hooks-closure";
+    };
+
     # profiles.rust.buildPackage [verify] hash invariants (specs/profiles.md).
     profiles-build-package = {
       meta.description = "Verify profiles.rust.buildPackage hash invariants (bin/clippy/nextest/cargoArtifacts)";

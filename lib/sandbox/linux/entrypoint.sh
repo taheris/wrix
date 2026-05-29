@@ -10,6 +10,20 @@ cd /workspace
 # shellcheck source=/dev/null
 . /git-ssh-setup.sh
 
+# Point core.hooksPath at the prek bundle baked into the image, per
+# specs/pre-commit.md § Bead-Container Hook Installation.
+if [[ -d /workspace/.git ]] \
+  && [[ -f /workspace/.pre-commit-config.yaml ]] \
+  && [[ -n "${WRAPIX_PREK_HOOKS:-}" ]]; then
+  if _wrapix_hooks_current=$(git -C /workspace config --local --get core.hooksPath); then
+    if [[ "$_wrapix_hooks_current" != "$WRAPIX_PREK_HOOKS" ]]; then
+      echo "wrapix: overriding stale core.hooksPath ($_wrapix_hooks_current) -> $WRAPIX_PREK_HOOKS" >&2
+    fi
+  fi
+  git -C /workspace config --local core.hooksPath "$WRAPIX_PREK_HOOKS"
+  unset _wrapix_hooks_current
+fi
+
 # WRAPIX_AGENT selects the agent runtime. 'claude' (default) runs claude with
 # config merging and permission bypass; 'pi' runs pi-mono in JSONL RPC mode;
 # 'direct' execs loom-direct-runner over JSONL stdin/stdout. pi and direct

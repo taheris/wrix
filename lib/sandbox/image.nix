@@ -50,6 +50,11 @@ let
 
   notifyClient = import ../notify/client.nix { inherit pkgs; };
 
+  # Bundle referenced from config.Env WRAPIX_PREK_HOOKS so the entrypoint can
+  # point `core.hooksPath` at it (specs/pre-commit.md § Bead-Container Hook
+  # Installation).
+  prekHooksBundle = import ../prek/bundle.nix { inherit pkgs; };
+
   # krun microVM support: UID spoofing library + PTY relay
   # See lib/sandbox/linux/ for source files
   libfakeuid = pkgs.stdenv.mkDerivation {
@@ -210,6 +215,7 @@ buildImage {
       "LANG=C.UTF-8"
       "PATH=${profileEnv}/bin:/bin:/usr/bin"
       "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
+      "WRAPIX_PREK_HOOKS=${prekHooksBundle}"
       "XDG_CACHE_HOME=/var/cache"
     ]
     ++ (mapAttrsToList (name: value: "${name}=${value}") (profile.env or { }));

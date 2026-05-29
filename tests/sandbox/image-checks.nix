@@ -40,6 +40,7 @@ let
 
   piMonoPkg = linuxPkgs.pi-mono;
   claudeCodePkg = linuxPkgs.claude-code;
+  prekHooksBundle = import ../../lib/prek/bundle.nix { pkgs = linuxPkgs; };
 
   # Linux-only shim-podman verifier for the shared `imageLoadStep` snippet
   # (the same one `wrapix spawn` runs). Asserts load on first call,
@@ -193,11 +194,33 @@ let
     '';
   };
 
+  prekHooksClosureTest = pkgs.writeShellApplication {
+    name = "test-prek-hooks-closure";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.gnugrep
+    ];
+    text = ''
+      closure_file=${defaultImageClosure}/store-paths
+      prek_hooks_path=${prekHooksBundle}
+
+      if ! grep -qxF "$prek_hooks_path" "$closure_file"; then
+          echo "FAIL: prek hooks bundle not in default sandbox closure" >&2
+          echo "  expected: $prek_hooks_path" >&2
+          echo "  closure : $closure_file" >&2
+          exit 1
+      fi
+
+      echo "test-prek-hooks-closure: PASS"
+    '';
+  };
+
 in
 {
   inherit
     wrapixSpawnLoadTest
     piRuntimeImageTest
     claudeRuntimeNoopTest
+    prekHooksClosureTest
     ;
 }
