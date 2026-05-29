@@ -12,7 +12,7 @@ Running AI coding assistants with unrestricted host access creates security risk
 
 - A workspace **profile** — packages, env, mounts, network allowlist, plugins (`profiles.md`)
 - An OCI **image** built from the profile and the selected agent runtime layer (`image-builder.md`)
-- A profile-agnostic **launcher** binary (`wrapix`) baked at build time with the image ref and source as defaults
+- A profile-agnostic **launcher** binary (`wrapix`)
 
 `mkSandbox` returns `{ package, image, launcher, profile }`:
 
@@ -72,7 +72,16 @@ The `wrapix` launcher binary is profile-agnostic. Both subcommands share contain
 | `wrapix run [DIR] [CMD…]` | TTY (`-it`) | Host env + CLI args | Interactive sessions, `nix run .#sandbox-<profile>` |
 | `wrapix spawn --spawn-config <file> [--stdio]` | Piped or detached | JSON file (`SpawnConfig`) | Programmatic dispatch (loom; future orchestrators) |
 
-`SpawnConfig` JSON has stable top-level fields: `image_ref` (podman ref), `image_source` (Nix store path the launcher loads via `podman load` before invoking podman; idempotent on the image's hash tag), `workspace`, `env` (allowlist of `[key, value]` pairs), `agent_args`, plus consumer-defined fields the entrypoint reads from inside the container. The schema is part of the wrapix CLI contract — see `wrapix spawn --help` and the parsing block in `lib/sandbox/{linux,darwin}/default.nix`.
+`SpawnConfig` JSON has stable top-level fields:
+
+- `image_ref` — podman ref
+- `image_source` — Nix store path the launcher loads via `podman load` before invoking podman; idempotent on the image's hash tag
+- `workspace` — host path bind-mounted at `/workspace`
+- `env` — allowlist of `[key, value]` pairs to pass through
+- `agent_args` — argv tail passed to the agent binary
+- `mounts` — optional `[{host_path, container_path, read_only}]` list; omitted or empty means no per-launch mounts. Additive to `profile.mounts` and `mkSandbox.mounts`.
+
+Plus consumer-defined fields the entrypoint reads from inside the container. The schema is part of the wrapix CLI contract — see `wrapix spawn --help` and the parsing block in `lib/sandbox/{linux,darwin}/default.nix`.
 
 `wrapix run` (interactive) has no `--spawn-config` so it reads two env vars to know which image to load: `WRAPIX_DEFAULT_IMAGE_REF` (podman ref) and `WRAPIX_DEFAULT_IMAGE_SOURCE` (Nix store path). The convenience flake outputs `packages.sandbox-<profile>` set both via `makeWrapper`; orchestrators set them programmatically from the profile-image manifest before exec. Without these vars set, `wrapix run` errors at startup — there is no implicit default image baked into the launcher.
 
@@ -93,6 +102,7 @@ The `wrapix` launcher binary is profile-agnostic. Both subcommands share contain
 - Virtualization.framework microVM, always (no separate container-mode path)
 - vmnet networking (open outbound, no inbound ports)
 - VirtioFS workspace mount
+- Mount classifier handles `profile.mounts` and `SpawnConfig.mounts` uniformly — directories staged + copied at launch, regular files copy-from-parent-dir, Unix-socket sources rejected at launch
 - Entrypoint creates user matching host UID
 
 ## Success Criteria
@@ -117,8 +127,12 @@ The `wrapix` launcher binary is profile-agnostic. Both subcommands share contain
   [check](grep -nE 'WRAPIX_MICROVM|--runtime krun|/dev/kvm' lib/sandbox/linux/default.nix)
 - `wrapix run` errors at startup with a clear message when `WRAPIX_DEFAULT_IMAGE_REF` or `WRAPIX_DEFAULT_IMAGE_SOURCE` is unset
   [system](bash tests/sandbox/missing-image-env.sh)
-- `wrapix spawn --spawn-config <file>` parses the documented `SpawnConfig` fields (`image_ref`, `image_source`, `workspace`, `env`, `agent_args`)
-  [check](grep -nE 'image_ref|image_source|workspace|env|agent_args' lib/sandbox/linux/default.nix lib/sandbox/darwin/default.nix)
+- `wrapix spawn --spawn-config <file>` parses the documented `SpawnConfig` fields (`image_ref`, `image_source`, `workspace`, `env`, `agent_args`, `mounts`)
+  [check](grep -nE 'image_ref|image_source|workspace|env|agent_args|mounts' lib/sandbox/linux/default.nix lib/sandbox/darwin/default.nix)
+- On Linux, each `SpawnConfig.mounts` entry becomes a `-v <host_path>:<container_path>` podman argument, with `:ro` appended when `read_only: true`. A missing or empty `mounts` list produces no additional `-v` flags.
+  [system](bash tests/sandbox/spawn-config-mounts.sh)
+- On Darwin, the same mount classifier handles `profile.mounts` and `SpawnConfig.mounts` — one mechanism, not two. Directories are staged + copied at launch, regular files copy-from-parent-dir, and entries whose `host_path` is a Unix socket cause the launcher to fail loudly before the container starts. (VirtioFS does not pass socket operations, so a silently-mounted socket would dead-end at the first `connect()`.)
+  [system](bash tests/sandbox/darwin-mount-classifier.sh)
 - The container entrypoint switches on `WRAPIX_AGENT` and exec's the matching agent binary (`claude`, `pi`, `direct`)
   [check](grep -nE 'WRAPIX_AGENT' lib/sandbox/linux/entrypoint.sh lib/sandbox/darwin/entrypoint.sh)
 - Deploy key `<name>` is mounted at `/etc/wrapix/keys/<name>` inside the container when `deployKey = "<name>"` is set (the `.pub` file is not mounted; the entrypoint regenerates it on demand via `ssh-keygen -y`)
@@ -134,12 +148,13 @@ The `wrapix` launcher binary is profile-agnostic. Both subcommands share contain
 2. **Platform dispatch** — Linux selects the Podman launcher; macOS selects the Apple `container` CLI launcher; unsupported systems throw.
 3. **Workspace mount** — CWD bind-mounts at `/workspace`; profile mounts merge on top.
 4. **UID mapping** — files created in `/workspace` carry host UID/GID.
-5. **Custom mounts and env** — `mkSandbox`'s `mounts` and `env` extend the profile, they do not replace.
+5. **Custom mounts and env** — `mkSandbox`'s `mounts` and `env` extend the profile rather than replace it.
 6. **Deploy keys** — `deployKey = "<name>"` mounts the host key into the container at `/etc/wrapix/keys/<name>` (and `/etc/wrapix/keys/<name>-signing` when a signing key is present). The `.pub` file is not mounted; the entrypoint regenerates it on demand via `ssh-keygen -y`. Host-source resolution and the env-first override (`WRAPIX_DEPLOY_KEY`, `WRAPIX_SIGNING_KEY`) are owned by `security.md`.
 7. **MCP opt-in** — `mcp.<server>` enables a named server per `tmux-mcp.md` / `playwright-mcp.md`. `mcpRuntime = true` bakes all registered servers and defers selection to the entrypoint.
 8. **Agent runtime axis** — `agent` selects the entrypoint binary; the agent runtime layer composes orthogonally with the workspace profile.
 9. **Model override** — `model = "claude-…"` sets `ANTHROPIC_MODEL` in the baked `~/.claude/settings.json` env block.
 10. **Launcher contract** — `wrapix run` reads `WRAPIX_DEFAULT_IMAGE_REF` and `WRAPIX_DEFAULT_IMAGE_SOURCE` from env; `wrapix spawn` reads `SpawnConfig` JSON. Both share container construction.
+11. **Per-launch mounts via SpawnConfig** — `wrapix spawn`'s `SpawnConfig.mounts` adds per-launch bind mounts on top of `profile.mounts` and `mkSandbox`'s `mounts`. Each entry maps `host_path → container_path` with `read_only: true` rendering `:ro`. On Linux this is a literal `-v` flag. On Darwin, `SpawnConfig.mounts` flows through the same mount classifier as `profile.mounts`: directories staged + copied, regular files copy-from-parent-dir, Unix-socket sources rejected at launch with a clear error (VirtioFS does not pass socket operations). The launcher does not validate that `host_path` exists; podman fails at runtime if it does not.
 
 ### Non-Functional
 
