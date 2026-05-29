@@ -212,7 +212,205 @@ in
     '';
   };
 
-  # Test 4: Verify the session-metadata audit anchor — specs/security.md § Audit Trail.
+  # Test 4: Verify the container-side pre-commit hook chain fires.
+  # Per specs/pre-commit.md § Bead-Container Hook Installation: the entrypoint
+  # sets core.hooksPath to wrapix.prekHooks and the wrappers
+  # (pre-push-checks, skip-if-missing) land on PATH so a `.pre-commit-config.yaml`
+  # hook configured by the consumer actually fires from inside the container.
+  # We seed a workspace with .git + a config that names both a skip-if-missing
+  # probe (asserts the wrapper resolves) and a sentinel hook that writes a
+  # marker file outside the worktree (.git/sentinel-fired-precommit), then run
+  # `git commit` as the entrypoint's command override.
+  container-pre-commit = pkgs.testers.nixosTest {
+    name = "wrapix-container-pre-commit";
+
+    nodes.machine =
+      { ... }:
+      {
+        imports = [ commonModule ];
+      };
+
+    testScript =
+      let
+        cfg = pkgs.writeText "container-pre-commit.yaml" ''
+          repos:
+            - repo: local
+              hooks:
+                - id: wrapper-on-path
+                  name: wrapper-on-path
+                  entry: skip-if-missing nonexistent-tool-xyz -- false
+                  language: system
+                  stages: [pre-commit]
+                  always_run: true
+                  pass_filenames: false
+                - id: sentinel
+                  name: sentinel
+                  entry: /workspace/.git/sentinel-pre-commit.sh
+                  language: system
+                  stages: [pre-commit]
+                  always_run: true
+                  pass_filenames: false
+        '';
+        sentinel = pkgs.writeText "sentinel-pre-commit.sh" ''
+          #!/usr/bin/env bash
+          touch /workspace/.git/sentinel-fired-precommit
+        '';
+      in
+      ''
+        machine.wait_for_unit("multi-user.target")
+        machine.succeed("${testImage} | podman load")
+
+        # Workspace owned by testuser (UID 1000); --userns=keep-id maps this
+        # to the container's wrapix user (UID 1000) so the entrypoint can
+        # write to .git/config when it installs core.hooksPath.
+        machine.succeed("mkdir -p /tmp/workspace && chown testuser:users /tmp/workspace")
+
+        # Seed: a git repo, .pre-commit-config.yaml, the sentinel script, and
+        # one tracked file. Both the entrypoint's core.hooksPath gate and
+        # prek's hook discovery require .git + .pre-commit-config.yaml to be
+        # present before the container starts.
+        machine.succeed(
+            "su - testuser -c \"cd /tmp/workspace && "
+            "git init -q -b main && "
+            "git config user.email test@example.com && "
+            "git config user.name Test && "
+            "echo seed > seed.txt\""
+        )
+        machine.succeed(
+            "install -o testuser -g users -m 644 "
+            "${cfg} /tmp/workspace/.pre-commit-config.yaml"
+        )
+        machine.succeed(
+            "install -o testuser -g users -m 755 "
+            "${sentinel} /tmp/workspace/.git/sentinel-pre-commit.sh"
+        )
+
+        # Run the container with `git add` + `git commit` as the command
+        # override. The entrypoint sets core.hooksPath to the prek bundle
+        # baked into the image (referenced via WRAPIX_PREK_HOOKS), then
+        # exec's the override; the commit fires the bundled pre-commit shim
+        # which dispatches the .pre-commit-config.yaml hooks via prek.
+        machine.succeed(
+            "su - testuser -c 'podman run --rm --network=pasta --userns=keep-id "
+            "-e HOME=/home/wrapix "
+            "-e GIT_AUTHOR_NAME=test -e GIT_AUTHOR_EMAIL=test@example.com "
+            "-e GIT_COMMITTER_NAME=test -e GIT_COMMITTER_EMAIL=test@example.com "
+            "-v /tmp/workspace:/workspace:rw "
+            "docker-archive:${testImage} "
+            "/bin/bash -c \"cd /workspace && git add -A && git commit -m test\"'"
+        )
+
+        # Sentinel side-effect proves the hook chain fired via core.hooksPath.
+        # Written under .git/ so it sits outside the worktree and survives
+        # prek's stash/restore dance regardless of how prek classifies it.
+        machine.succeed("test -f /tmp/workspace/.git/sentinel-fired-precommit")
+
+        # The wrapper-on-path probe (`skip-if-missing nonexistent-tool-xyz --
+        # false`) would have failed the commit if `skip-if-missing` were not
+        # on PATH (`command not found` is non-zero); the commit succeeding
+        # without a non-zero exit is the evidence that both wrappers landed.
+      '';
+  };
+
+  # Test 5: Verify the container-side pre-push hook chain fires.
+  # Symmetric to container-pre-commit but exercises the pre-push stage:
+  # `git push` to a local file:// bare remote fires the bundled pre-push
+  # shim, which dispatches the `stages: [pre-push]` hooks via prek and then
+  # writes the .wrapix/push-verified stamp on success. The sentinel hook
+  # writes a marker file that proves the chain ran.
+  container-pre-push = pkgs.testers.nixosTest {
+    name = "wrapix-container-pre-push";
+
+    nodes.machine =
+      { ... }:
+      {
+        imports = [ commonModule ];
+      };
+
+    testScript =
+      let
+        cfg = pkgs.writeText "container-pre-push.yaml" ''
+          repos:
+            - repo: local
+              hooks:
+                - id: wrapper-on-path
+                  name: wrapper-on-path
+                  entry: skip-if-missing nonexistent-tool-xyz -- false
+                  language: system
+                  stages: [pre-push]
+                  always_run: true
+                  pass_filenames: false
+                - id: sentinel
+                  name: sentinel
+                  entry: /workspace/.git/sentinel-pre-push.sh
+                  language: system
+                  stages: [pre-push]
+                  always_run: true
+                  pass_filenames: false
+        '';
+        sentinel = pkgs.writeText "sentinel-pre-push.sh" ''
+          #!/usr/bin/env bash
+          touch /workspace/.git/sentinel-fired-prepush
+        '';
+      in
+      ''
+        machine.wait_for_unit("multi-user.target")
+        machine.succeed("${testImage} | podman load")
+
+        machine.succeed("mkdir -p /tmp/workspace && chown testuser:users /tmp/workspace")
+
+        # Seed: working repo + bare file:// remote inside the workspace so
+        # push has a target reachable from inside the container. The initial
+        # commit is made on the host (no hooks fire because core.hooksPath
+        # is unset until the container's entrypoint installs it).
+        machine.succeed(
+            "su - testuser -c \"cd /tmp/workspace && "
+            "git init -q -b main && "
+            "git config user.email test@example.com && "
+            "git config user.name Test && "
+            "git init --bare -q remote.git && "
+            "git remote add origin file:///workspace/remote.git && "
+            "echo seed > seed.txt\""
+        )
+        machine.succeed(
+            "install -o testuser -g users -m 644 "
+            "${cfg} /tmp/workspace/.pre-commit-config.yaml"
+        )
+        machine.succeed(
+            "install -o testuser -g users -m 755 "
+            "${sentinel} /tmp/workspace/.git/sentinel-pre-push.sh"
+        )
+        machine.succeed(
+            "su - testuser -c \"cd /tmp/workspace && "
+            "git add -A && "
+            "git commit -q -m initial\""
+        )
+
+        # Push from inside the container. The entrypoint installs
+        # core.hooksPath -> prek bundle, then `git push` triggers the
+        # pre-push shim which runs prek hook-impl --hook-type=pre-push and
+        # invokes the sentinel hook before the actual push proceeds.
+        machine.succeed(
+            "su - testuser -c 'podman run --rm --network=pasta --userns=keep-id "
+            "-e HOME=/home/wrapix "
+            "-e GIT_AUTHOR_NAME=test -e GIT_AUTHOR_EMAIL=test@example.com "
+            "-e GIT_COMMITTER_NAME=test -e GIT_COMMITTER_EMAIL=test@example.com "
+            "-v /tmp/workspace:/workspace:rw "
+            "docker-archive:${testImage} "
+            "/bin/bash -c \"cd /workspace && git push origin main\"'"
+        )
+
+        # Sentinel side-effect proves the pre-push hook chain fired.
+        machine.succeed("test -f /tmp/workspace/.git/sentinel-fired-prepush")
+
+        # The push also reached the bare remote (HEAD ref exists).
+        machine.succeed(
+            "su - testuser -c \"git -C /tmp/workspace/remote.git rev-parse refs/heads/main\""
+        )
+      '';
+  };
+
+  # Test 6: Verify the session-metadata audit anchor — specs/security.md § Audit Trail.
   # Runs the entrypoint with a no-op command override so the EXIT trap fires
   # without any agent runtime; then asserts the session-metadata JSON exists
   # and carries the required fields.
