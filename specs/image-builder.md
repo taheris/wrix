@@ -31,6 +31,14 @@ Build pipeline:
 
 `mkImageRef` (also in `lib/sandbox/`) produces the stable podman ref the launcher expects (`localhost/<name>:<hash-tag>` on Linux, bare `<name>:<hash-tag>` on Darwin's Apple `container` CLI).
 
+## Hook Installation
+
+Every profile image carries the host-equivalent prek setup so commits and pushes from inside the container fire the same `.pre-commit-config.yaml` chain the host runs (see `pre-commit.md` § Bead-Container Hook Installation):
+
+- `wrapix.prekHooks`, `wrapix.prePushChecks`, and `wrapix.skipIfMissing` are wired into the image's package set — `prekHooks` so its store path is reachable by `core.hooksPath`, and the two wrappers so they resolve on `PATH` for prek `entry:` lines that reference them by name.
+- The platform entrypoint (`lib/sandbox/{linux,darwin}/entrypoint.sh`) sets `core.hooksPath` on `/workspace/.git` to the `wrapix.prekHooks` store path when `.pre-commit-config.yaml` is present, mirroring `mkDevShell`'s host-side step.
+- Profile images for bead use do not ship `nix` by default; nix-requiring hooks remain inert under `skip-if-missing nix --` (see `pre-commit.md`). The image builder does not inject `SKIP=` env vars, does not stub `nix` on `PATH`, and does not maintain a hook-id skip list. A profile that wants nix to fire in-container ships `pkgs.nix` via its own `packages`.
+
 ## Success Criteria
 
 - `wrapix spawn`'s image-source → `podman load` step is idempotent (re-loading the same image is a no-op on a fresh inode and on a previously-loaded ref)
@@ -47,6 +55,12 @@ Build pipeline:
   [check](grep -nE 'cacert|SSL_CERT_FILE' lib/sandbox/image.nix)
 - The platform entrypoint script (`lib/sandbox/{linux,darwin}/entrypoint.sh`) is the image's startup command
   [check](grep -nE 'entrypointSh|Entrypoint|Cmd' lib/sandbox/image.nix)
+- `wrapix.prekHooks`, `wrapix.prePushChecks`, and `wrapix.skipIfMissing` all land in every profile image's store closure
+  [check?](grep -nrE 'prekHooks|prePushChecks|skipIfMissing' lib/sandbox/ lib/default.nix)
+- The Linux entrypoint sets `core.hooksPath` on `/workspace/.git` to the `wrapix.prekHooks` store path when `.pre-commit-config.yaml` is present
+  [check?](grep -nE 'core\.hooksPath|prekHooks' lib/sandbox/linux/entrypoint.sh)
+- The Darwin entrypoint mirrors the Linux entrypoint's `core.hooksPath` setup for `/workspace/.git`
+  [check?](grep -nE 'core\.hooksPath|prekHooks' lib/sandbox/darwin/entrypoint.sh)
 
 ## Requirements
 
@@ -58,6 +72,7 @@ Build pipeline:
 4. **Nix configuration** — `flakes` and `nix-command` are enabled; the in-container Nix sandbox is disabled (the outer container is the boundary).
 5. **CA certificates** — `pkgs.cacert` is included and `SSL_CERT_FILE` resolves to it.
 6. **Entrypoint embedding** — the platform-specific entrypoint script (`lib/sandbox/{linux,darwin}/entrypoint.sh`) is the image's startup command.
+7. **Hook installation** — every profile image carries `wrapix.prekHooks` plus `wrapix.prePushChecks` and `wrapix.skipIfMissing` on `PATH`; the entrypoint configures `core.hooksPath` on `/workspace/.git` when `.pre-commit-config.yaml` is present. See `pre-commit.md` for the wrapper contracts.
 
 ### Non-Functional
 
