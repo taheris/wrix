@@ -1,15 +1,9 @@
 .cache/
 .claude/
 .direnv/
+.loom/
 .wrapix/
 
 result
 result-*
 target/
-
-# Beads / Dolt files (added by bd init)
-.beads-credential-key
-.beads/formulas/
-.beads/hooks/
-.dolt/
-*.db
