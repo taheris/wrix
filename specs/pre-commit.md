@@ -4,7 +4,7 @@ Staged git hooks via [prek](https://github.com/j178/prek) with a `flock`-seriali
 
 ## Problem Statement
 
-prek's stash/restore dance around unstaged changes races with concurrent writers, silently dropping working-tree edits (wx-m5yuq). Multiple wrapix agents on the same workspace — and `loom run` quality-gate commits firing alongside human commits — re-expose this race unless hook invocations serialize across processes.
+prek's stash/restore dance around unstaged changes races with concurrent writers, silently dropping working-tree edits (wx-m5yuq). Multiple wrapix agents on the same workspace — and `loom loop` quality-gate commits firing alongside human commits — re-expose this race unless hook invocations serialize across processes.
 
 ## Architecture
 
@@ -40,7 +40,7 @@ The pre-commit and pre-push shims acquire an exclusive `flock` on `.wrapix/prek.
 
 - **Mechanism** — the shims source `_lib/lock.sh` from inside `wrapix.prekHooks` and call `_prek_acquire_lock` to serialize. The pre-commit shim `exec`s `prek hook-impl --hook-dir ... --script-version 4 --hook-type=pre-commit -- "$@"` (`hook-impl` rather than `prek run` because git passes positional args that `prek run` would mistake for hook/project selectors). The pre-push shim runs `prek run --stage pre-push` independently of git's SSH connection, then writes a stamp file (`.wrapix/push-verified`) on success; the user re-runs `git push` and the stamp is consumed instantly, pushing on a fresh connection. This avoids SSH idle timeouts during long test suites.
 - **Lock file** — `.wrapix/prek.lock`, gitignored, auto-created on first use. Located in the main repo's `.wrapix/` so every agent (host, container with `.wrapix` mount, linked worktree) shares the same lock. A single lock covers both stages because both protect the same working-tree stash window.
-- **Worktree-safe path resolution** — the shim resolves the lock path via `$(dirname "$(git rev-parse --git-common-dir)")/.wrapix/prek.lock`. `git rev-parse --git-common-dir` always returns the main repo's `.git/` from any linked worktree, so commits fired from a linked worktree share the same lock as the main repo.
+- **Worktree-safe path resolution** — the shim resolves the lock path via `$(git rev-parse --git-common-dir)/../.wrapix/prek.lock`. `git rev-parse --git-common-dir` always returns the main repo's `.git/` from any linked worktree, so commits fired from a linked worktree share the same lock as the main repo.
 - **Timeout** — 600s poll loop with dead-PID recovery. If the lock holder's PID is no longer running, the lock file is deleted and re-acquired on a fresh inode. If the timeout fires, the shim fails loudly (`>&2` with lock-holder PID) and exits non-zero so the commit or push aborts rather than deadlocking the workspace.
 - **No FD inheritance** — subprocesses (prek, nix) do not inherit the lock FD (`9>&-`) in the pre-push shim, preventing orphaned children from holding stale locks.
 - **`--no-verify` bypass** — skips the hook and therefore the lock, but also skips prek's stash, so no race exists on that path. The documented escape hatch for emergency pushes.
@@ -60,11 +60,11 @@ pre-push-checks <command> [args…]
 
 Resolution order:
 
-1. If `.wrapix/loom/marker.json` is absent in the current working directory, `exec "$@"`.
-2. If present, invoke `loom gate verify-marker`:
+1. If `.loom/marker.json` is absent in the current working directory, `exec "$@"`.
+2. If `loom gate verify-marker` is missing from `PATH`, `exec "$@"`. Consumers without a loom-based driver loop install the wrapper safely; it transparently degrades to running the wrapped command.
+3. Otherwise, invoke `loom gate verify-marker`:
    - exit 0 → wrapper exits 0 without running the wrapped command (short-circuit).
    - exit non-zero → `exec "$@"` (marker stale or invalid; fall through to the real check).
-3. If `loom gate verify-marker` is missing from `PATH`, `exec "$@"`. Consumers without a loom-based driver loop install the wrapper safely; it transparently degrades to running the wrapped command.
 
 The wrapper does **not** read or interpret `marker.json`. Schema, mint, and validation are owned by the downstream loom project; wrapix's only responsibility is "ask `loom gate verify-marker`; act on the exit code." Schema evolution in loom does not propagate to wrapix.
 
@@ -137,11 +137,11 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
   [system](bash tests/prek/worktree-lock-resolution.sh)
 - `wrapix.prePushChecks` and `wrapix.skipIfMissing` are exposed by the wrapix library and land on the host devShell's `PATH`
   [check?](grep -nE 'prePushChecks|skipIfMissing' lib/default.nix)
-- `pre-push-checks` exits 0 without running the wrapped command when `.wrapix/loom/marker.json` is present and `loom gate verify-marker` exits 0
+- `pre-push-checks` exits 0 without running the wrapped command when `.loom/marker.json` is present and `loom gate verify-marker` exits 0
   [system?](bash tests/prek/pre-push-checks-marker-valid.sh)
-- `pre-push-checks` execs the wrapped command when `.wrapix/loom/marker.json` is present and `loom gate verify-marker` exits non-zero
+- `pre-push-checks` execs the wrapped command when `.loom/marker.json` is present and `loom gate verify-marker` exits non-zero
   [system?](bash tests/prek/pre-push-checks-marker-stale.sh)
-- `pre-push-checks` execs the wrapped command when `.wrapix/loom/marker.json` is absent
+- `pre-push-checks` execs the wrapped command when `.loom/marker.json` is absent
   [system?](bash tests/prek/pre-push-checks-no-marker.sh)
 - `pre-push-checks` execs the wrapped command when `loom gate verify-marker` is not on `PATH`
   [system?](bash tests/prek/pre-push-checks-no-loom.sh)
@@ -165,7 +165,7 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
 5. **Stamp-file dance** — pre-push runs validation off the SSH connection, stamps `.wrapix/push-verified` on success, and the user re-runs `git push` to consume the stamp.
 6. **Loud failure** — missing `flock(1)` or 600s lock timeout aborts with stderr context and non-zero exit; no silent bypass, no infinite wait.
 7. **Marker-aware short-circuit** — `pre-push-checks` consults `loom gate verify-marker`'s exit code to decide whether to skip the wrapped command; see § Hook-Entry Wrappers for the resolution order.
-8. **Graceful degrade in wrappers** — `pre-push-checks` execs the wrapped command when either `loom gate verify-marker` or `.wrapix/loom/marker.json` is absent. `skip-if-missing` exits 0 silently when `<tool>` is absent from `PATH`. Neither wrapper exits non-zero on a missing-input path.
+8. **Graceful degrade in wrappers** — `pre-push-checks` execs the wrapped command when either `loom gate verify-marker` or `.loom/marker.json` is absent. `skip-if-missing` exits 0 silently when `<tool>` is absent from `PATH`. Neither wrapper exits non-zero on a missing-input path.
 9. **Container hook parity** — profile containers install `core.hooksPath` and both wrappers on `PATH` so `.pre-commit-config.yaml` fires equivalently inside the bead container and on the host.
 
 ### Non-Functional
@@ -173,7 +173,7 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
 1. **Cross-process serialization** — pre-commit and pre-push concurrent calls across host shells, containers, and linked worktrees all coordinate through the same lock file.
 2. **No FD inheritance** — child processes do not retain the lock FD (`9>&-`), so orphaned subprocesses cannot extend the critical section.
 3. **`--no-verify` honored** — the documented escape hatch skips both the hook and prek's stash, so no race exists on that path.
-4. **Schema independence** — wrapix's coupling to loom is bounded by the file path `.wrapix/loom/marker.json` and the `loom gate verify-marker` exit-code contract. Schema and validation evolution in loom does not require a wrapix change.
+4. **Schema independence** — wrapix's coupling to loom is bounded by the file path `.loom/marker.json` and the `loom gate verify-marker` exit-code contract. Schema and validation evolution in loom does not require a wrapix change.
 5. **No new runtime dependencies** — both wrappers are POSIX shell scripts using utilities already present in the devShell and profile-image base layer.
 
 ## Out of Scope
