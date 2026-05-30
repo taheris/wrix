@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Verifier for criterion 144 of specs/pre-commit.md:
 #
-#   `pre-push-checks` execs the wrapped command when `.wrapix/loom/marker.json`
+#   `pre-push-checks` execs the wrapped command when `.loom/marker.json`
 #   is absent.
 #
 # Resolution order step 1: marker absent → exec, regardless of whether the

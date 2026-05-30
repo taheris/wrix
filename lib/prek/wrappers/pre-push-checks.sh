@@ -3,7 +3,7 @@
 #
 # Wraps a slow pre-push check with a marker-aware short-circuit. Consults
 # `loom gate verify-marker` to decide whether to skip the wrapped command;
-# the wrapper never reads or interprets `.wrapix/loom/marker.json` itself.
+# the wrapper never reads or interprets `.loom/marker.json` itself.
 #
 # Resolution order (per specs/pre-commit.md § pre-push-checks):
 #   1. marker absent in PWD          → exec "$@"
@@ -23,7 +23,7 @@ if [[ $# -eq 0 ]]; then
     exit 2
 fi
 
-if [[ ! -f .wrapix/loom/marker.json ]]; then
+if [[ ! -f .loom/marker.json ]]; then
     exec "$@"
 fi
 

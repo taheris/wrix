@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Verifier for criterion 142 of specs/pre-commit.md:
 #
-#   `pre-push-checks` execs the wrapped command when `.wrapix/loom/marker.json`
+#   `pre-push-checks` execs the wrapped command when `.loom/marker.json`
 #   is present and `loom gate verify-marker` exits non-zero.
 #
 # Drives the wrapper from its source file. See marker-valid sibling for
@@ -40,8 +40,8 @@ EOF
 chmod +x "$LOOM_SHIM"
 
 WORK="$TEST_TMP/work"
-mkdir -p "$WORK/.wrapix/loom"
-echo '{}' > "$WORK/.wrapix/loom/marker.json"
+mkdir -p "$WORK/.loom"
+echo '{}' > "$WORK/.loom/marker.json"
 
 SENTINEL="$TEST_TMP/sentinel"
 

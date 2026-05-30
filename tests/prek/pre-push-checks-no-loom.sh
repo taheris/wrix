@@ -30,8 +30,8 @@ mkdir -p "$(dirname "$WRAPPER_BIN")"
 chmod +x "$WRAPPER_BIN"
 
 WORK="$TEST_TMP/work"
-mkdir -p "$WORK/.wrapix/loom"
-echo '{}' > "$WORK/.wrapix/loom/marker.json"
+mkdir -p "$WORK/.loom"
+echo '{}' > "$WORK/.loom/marker.json"
 
 SENTINEL="$TEST_TMP/sentinel"
 
