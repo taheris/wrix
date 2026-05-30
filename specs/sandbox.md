@@ -16,7 +16,7 @@ Running AI coding assistants with unrestricted host access creates security risk
 
 `mkSandbox` returns `{ package, image, launcher, profile }`:
 
-- `package` — `wrapix` wrapped with `makeWrapper`, with `WRAPIX_AGENT`, `WRAPIX_DEFAULT_IMAGE_REF`, and `WRAPIX_DEFAULT_IMAGE_SOURCE` baked in as defaults. One-shot users invoke this directly.
+- `package` — `wrapix` wrapped with `makeWrapper`. `WRAPIX_AGENT` is set unconditionally and is **not** caller-overridable — the wrapper is bound to its built `(profile × agent)` image variant. `WRAPIX_DEFAULT_IMAGE_REF` and `WRAPIX_DEFAULT_IMAGE_SOURCE` are **caller-overridable defaults**: caller env wins; the wrapper's baked value applies only when the caller leaves the variable unset. One-shot users invoke `package` directly; orchestrators (e.g., loom) export the two image-ref vars to swap profiles per launch.
 - `image` — the per-profile OCI artifact. Orchestrators that drive podman themselves read this and call `podman load`.
 - `launcher` — the underlying `wrapix` derivation without the IMAGE env-var defaults; orchestrators that supply their own image ref per call use this instead of `package`.
 - `profile` — the resolved profile attrset after merging consumer `packages`, `mounts`, `env`, and MCP server packages.
@@ -83,7 +83,9 @@ The `wrapix` launcher binary is profile-agnostic. Both subcommands share contain
 
 Plus consumer-defined fields the entrypoint reads from inside the container. The schema is part of the wrapix CLI contract — see `wrapix spawn --help` and the parsing block in `lib/sandbox/{linux,darwin}/default.nix`.
 
-`wrapix run` (interactive) has no `--spawn-config` so it reads two env vars to know which image to load: `WRAPIX_DEFAULT_IMAGE_REF` (podman ref) and `WRAPIX_DEFAULT_IMAGE_SOURCE` (Nix store path). The convenience flake outputs `packages.sandbox-<profile>` set both via `makeWrapper`; orchestrators set them programmatically from the profile-image manifest before exec. Without these vars set, `wrapix run` errors at startup — there is no implicit default image baked into the launcher.
+`wrapix run` (interactive) has no `--spawn-config` so it reads two env vars to know which image to load: `WRAPIX_DEFAULT_IMAGE_REF` (podman ref) and `WRAPIX_DEFAULT_IMAGE_SOURCE` (Nix store path). The convenience flake outputs `packages.sandbox-<profile>` install both as **caller-overridable defaults** via `makeWrapper`'s `--set-default` (or the equivalent `: "${VAR:=…}"` bash idiom in a hand-rolled wrapper).
+
+Orchestrators that need a different profile per launch export the two vars before exec'ing the wrapper and the wrapper honors them — an unconditional `--set` would silently clobber the caller's choice and break the hand-off contract. Without the env populated either way, the underlying launcher errors at startup — there is no implicit default image baked into the launcher itself.
 
 ## Platform Implementations
 
@@ -127,6 +129,12 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
   [check](grep -nE 'WRAPIX_MICROVM|--runtime krun|/dev/kvm' lib/sandbox/linux/default.nix)
 - `wrapix run` errors at startup with a clear message when `WRAPIX_DEFAULT_IMAGE_REF` or `WRAPIX_DEFAULT_IMAGE_SOURCE` is unset
   [system](bash tests/sandbox/missing-image-env.sh)
+- `mkSandbox`'s `package` wrapper installs `WRAPIX_DEFAULT_IMAGE_REF` and `WRAPIX_DEFAULT_IMAGE_SOURCE` as caller-overridable defaults via `makeWrapper --set-default` (not `--set`)
+  [check?](grep -nE -- '--set-default[[:space:]]+WRAPIX_DEFAULT_IMAGE_(REF|SOURCE)' lib/sandbox/default.nix)
+- `mkSandbox`'s `package` wrapper installs `WRAPIX_AGENT` via unconditional `makeWrapper --set` so the wrapper's built agent runtime cannot be overridden at exec time
+  [check?](grep -nE -- '--set[[:space:]]+WRAPIX_AGENT' lib/sandbox/default.nix)
+- When a caller pre-sets `WRAPIX_DEFAULT_IMAGE_REF` and/or `WRAPIX_DEFAULT_IMAGE_SOURCE` before exec'ing the wrapped `package`, the caller's value for each set variable reaches the underlying launcher; for any variable the caller leaves unset, the wrapper's baked default fills in
+  [system?](bash tests/sandbox/wrapper-image-env-override.sh)
 - `wrapix spawn --spawn-config <file>` parses the documented `SpawnConfig` fields (`image_ref`, `image_source`, `workspace`, `env`, `agent_args`, `mounts`)
   [check](grep -nE 'image_ref|image_source|workspace|env|agent_args|mounts' lib/sandbox/linux/default.nix lib/sandbox/darwin/default.nix)
 - On Linux, each `SpawnConfig.mounts` entry becomes a `-v <host_path>:<container_path>` podman argument, with `:ro` appended when `read_only: true`. A missing or empty `mounts` list produces no additional `-v` flags.
@@ -153,7 +161,7 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 7. **MCP opt-in** — `mcp.<server>` enables a named server per `tmux-mcp.md` / `playwright-mcp.md`. `mcpRuntime = true` bakes all registered servers and defers selection to the entrypoint.
 8. **Agent runtime axis** — `agent` selects the entrypoint binary; the agent runtime layer composes orthogonally with the workspace profile.
 9. **Model override** — `model = "claude-…"` sets `ANTHROPIC_MODEL` in the baked `~/.claude/settings.json` env block.
-10. **Launcher contract** — `wrapix run` reads `WRAPIX_DEFAULT_IMAGE_REF` and `WRAPIX_DEFAULT_IMAGE_SOURCE` from env; `wrapix spawn` reads `SpawnConfig` JSON. Both share container construction.
+10. **Launcher contract** — `wrapix run` reads `WRAPIX_DEFAULT_IMAGE_REF` and `WRAPIX_DEFAULT_IMAGE_SOURCE` from env; `wrapix spawn` reads `SpawnConfig` JSON. Both share container construction. When invoked through the `mkSandbox` `package` wrapper, the two image-ref env vars are installed as **caller-overridable defaults** (caller env wins; wrapper's baked value fills only when unset). `WRAPIX_AGENT` is set unconditionally and is not caller-overridable, because the wrapper is bound to a specific built `(profile × agent)` image variant.
 11. **Per-launch mounts via SpawnConfig** — `wrapix spawn`'s `SpawnConfig.mounts` adds per-launch bind mounts on top of `profile.mounts` and `mkSandbox`'s `mounts`. Each entry maps `host_path → container_path` with `read_only: true` rendering `:ro`. On Linux this is a literal `-v` flag. On Darwin, `SpawnConfig.mounts` flows through the same mount classifier as `profile.mounts`: directories staged + copied, regular files copy-from-parent-dir, Unix-socket sources rejected at launch with a clear error (VirtioFS does not pass socket operations). The launcher does not validate that `host_path` exists; podman fails at runtime if it does not.
 
 ### Non-Functional
