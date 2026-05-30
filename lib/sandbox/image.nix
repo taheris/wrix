@@ -199,6 +199,12 @@ buildImage {
       )}
     ''}
 
+    # Register prekHooksBundle in nix db — referenced only from config.Env
+    # (WRAPIX_PREK_HOOKS), which includeNixDB does not cover.
+    NIX_STATE_DIR=$PWD/nix/var/nix \
+      ${pkgs.buildPackages.nix}/bin/nix-store --load-db \
+      < ${pkgs.closureInfo { rootPaths = [ prekHooksBundle ]; }}/registration
+
     # Fix Nix permissions for non-root users
     # (includeNixDB creates files owned by root)
     # Store must be writable to add new paths and create lock files
