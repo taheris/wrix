@@ -114,7 +114,7 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
 ## Success Criteria
 
 - The `wrapix.prekHooks` derivation contains executable shims for `pre-commit`, `pre-push`, `prepare-commit-msg`, `post-checkout`, and `post-merge`
-  [check](p=$(nix build --no-link --print-out-paths .#prekHooks) && test -x "$p/pre-commit" -a -x "$p/pre-push" -a -x "$p/prepare-commit-msg" -a -x "$p/post-checkout" -a -x "$p/post-merge")
+  [check](grep -nE '\$out/(pre-commit|pre-push|prepare-commit-msg|post-checkout|post-merge)' lib/prek/bundle.nix)
 - `mkDevShell` sets `core.hooksPath` to the `wrapix.prekHooks` store path on every devshell entry when `.pre-commit-config.yaml` is present
   [check](grep -nE 'core\.hooksPath|prekHooks' lib/default.nix)
 - The pre-commit and pre-push shims source `_lib/lock.sh` and call `_prek_acquire_lock` before invoking prek
@@ -136,19 +136,19 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
 - A commit fired from a linked git worktree acquires the main repo's lock rather than a sibling lock under the worktree dir
   [system](bash tests/prek/worktree-lock-resolution.sh)
 - `wrapix.prePushChecks` and `wrapix.skipIfMissing` are exposed by the wrapix library and land on the host devShell's `PATH`
-  [check?](grep -nE 'prePushChecks|skipIfMissing' lib/default.nix)
+  [check](grep -nE 'prePushChecks|skipIfMissing' lib/default.nix)
 - `pre-push-checks` exits 0 without running the wrapped command when `.loom/marker.json` is present and `loom gate verify-marker` exits 0
-  [system?](bash tests/prek/pre-push-checks-marker-valid.sh)
+  [system](bash tests/prek/pre-push-checks-marker-valid.sh)
 - `pre-push-checks` execs the wrapped command when `.loom/marker.json` is present and `loom gate verify-marker` exits non-zero
-  [system?](bash tests/prek/pre-push-checks-marker-stale.sh)
+  [system](bash tests/prek/pre-push-checks-marker-stale.sh)
 - `pre-push-checks` execs the wrapped command when `.loom/marker.json` is absent
-  [system?](bash tests/prek/pre-push-checks-no-marker.sh)
+  [system](bash tests/prek/pre-push-checks-no-marker.sh)
 - `pre-push-checks` execs the wrapped command when `loom gate verify-marker` is not on `PATH`
-  [system?](bash tests/prek/pre-push-checks-no-loom.sh)
+  [system](bash tests/prek/pre-push-checks-no-loom.sh)
 - `skip-if-missing <tool> -- <cmd>` execs `<cmd>` when `<tool>` resolves on `PATH`
-  [system?](bash tests/prek/skip-if-missing-present.sh)
+  [system](bash tests/prek/skip-if-missing-present.sh)
 - `skip-if-missing <tool> -- <cmd>` exits 0 without running `<cmd>` when `<tool>` is absent from `PATH`
-  [system?](bash tests/prek/skip-if-missing-absent.sh)
+  [system](bash tests/prek/skip-if-missing-absent.sh)
 - A pre-commit hook configured in `.pre-commit-config.yaml` fires when `git commit` runs inside a profile container
   [system?](bash tests/sandbox/container-pre-commit.sh)
 - A pre-push hook configured in `.pre-commit-config.yaml` fires when `git push` runs inside a profile container
