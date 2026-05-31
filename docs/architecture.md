@@ -45,7 +45,7 @@ lib/
 │   ├── tmux/            # tmux MCP server
 │   └── playwright/      # Playwright MCP server
 ├── pi-mono/             # Pi agent runtime layer (Node.js + pi binary)
-├── prek/                # Pre-commit hook shims (flock-wrapped)
+├── prek/                # Pre-commit hook shims
 ├── builder/             # macOS-side CLI for the Linux remote builder
 ├── notify/              # Desktop notifications
 └── util/                # Shared utilities (container CLI shim, SSH, paths, …)
@@ -150,7 +150,6 @@ All wrapix state lives under `.wrapix/` in the host workspace, mounted at
 .wrapix/
 ├── log/             # Session transcripts (one JSON file per session)
 ├── push-verified    # Touched by lib/prek/hooks/pre-push on green nix flake check
-├── prek.lock        # flock file serializing concurrent commits/pushes
 └── dolt.sock        # Per-workspace beads-dolt server socket
 ```
 
