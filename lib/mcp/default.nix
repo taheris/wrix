@@ -16,14 +16,13 @@
 # Spec: specs/tmux-mcp.md
 {
   pkgs,
-  crane,
-  fenix,
+  rustProfile,
 }:
 
 {
   # tmux: MCP server for tmux pane management
   # Provides tools for AI-assisted debugging (create_pane, send_keys, capture_pane, etc.)
-  tmux = import ./tmux { inherit pkgs crane fenix; };
+  tmux = import ./tmux { inherit pkgs rustProfile; };
 
   # playwright: MCP server for browser automation
   # Provides tools for AI-assisted frontend development (screenshots, navigation, interaction, etc.)

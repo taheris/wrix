@@ -121,7 +121,9 @@ Environment:
 
 **Host devshell alignment.** The profile's `shellHook` prepends `${toolchain}/bin` to `PATH` and re-exports `RUSTC_WRAPPER`, `SCCACHE_DIR`, `SCCACHE_CACHE_SIZE`, and `CARGO_INCREMENTAL=0` so the host shell uses the same fenix-pinned `rustc` binary as the sandbox. Without the PATH prepend, host PATH falls through to rustup's `rustc` (or whichever appears first), and the diverging sysroot path baked into rlib metadata invalidates every sccache key across the boundary — even when both sides report the same Rust version. Consumers reach this alignment by passing the rust profile to `mkDevShell { profile = ...; }`, which splices `profile.shellHook` automatically — there is no consumer-facing splice path. `rustProfile { toolchain; sha256; }` rebuilds the snippet over the project-pinned toolchain so `packages`, `env`, `shellHook`, and `toolchain` (see below) all close over the same derivation.
 
-**Toolchain derivation (`profile.toolchain`).** The rust profile exposes the resolved fenix `combine` derivation as `profile.toolchain` — the same store path that lands in `packages` and is interpolated into `shellHook`'s PATH prepend. Sibling Nix apps that run cargo (e.g. `pkgs.writeShellApplication { runtimeInputs = [ rustProfile.toolchain ]; ... }`) must point `runtimeInputs` at this field rather than re-instantiating fenix in their own flake. Re-instantiation produces a different `/nix/store/...` path even when fenix versions match, and again when calling `fromToolchainFile` directly (bare `rust-<ver>` vs the `combine`-wrapped `rust-mixed`); sccache hashes the compiler binary, so a divergent path means every cache key misses across the boundary. Both `profiles.rust` (the unpinned default) and `rustProfile { toolchain; sha256; }` (the project-pinned constructor) set this field to the toolchain they were built from.
+**Toolchain derivation (`profile.toolchain`).** The rust profile exposes the resolved fenix `combine` derivation as `profile.toolchain` — the same store path interpolated into `shellHook`'s PATH prepend and shared by `buildPackage`'s craneLib. Sibling Nix apps that run cargo (e.g. `pkgs.writeShellApplication { runtimeInputs = [ rustProfile.toolchain ]; ... }`) must point `runtimeInputs` at this field rather than re-instantiating fenix in their own flake. Re-instantiation produces a different `/nix/store/...` path even when fenix versions match, and again when calling `fromToolchainFile` directly (bare `rust-<ver>` vs the `combine`-wrapped `rust-mixed`); sccache hashes the compiler binary, so a divergent path means every cache key misses across the boundary. Both `profiles.rust` (the unpinned default) and `rustProfile { toolchain; sha256; }` (the project-pinned constructor) set this field to the toolchain they were built from.
+
+**Host/image toolchain split.** `profile.toolchain` resolves to the *host-platform* fenix derivation so the devshell PATH prepend and `buildPackage`'s craneLib produce binaries that run on the user's machine. The image's toolchain (the one in `profile.packages` and `RUST_SRC_PATH`) targets the image platform (Linux). On Linux hosts the two derivations coincide; on Darwin hosts they share the channel/version but resolve to different `/nix/store/...` paths. Cross-boundary sccache reuse (host ↔ sandbox) therefore works only on Linux — consistent with the Darwin cache-mount caveat below.
 
 Mounts (host source → literal container dest; literal dests avoid the `~`-expands-on-host-launcher gotcha):
 
@@ -163,7 +165,7 @@ profile.buildPackage {
   ```
 
 - `cargoArtifacts` is exposed as an output and accepted as an input so workspaces with multiple binaries can share dep compilation across calls. Single-binary callers ignore both directions.
-- `buildPackage` closes over `profile.toolchain` via crane's `overrideToolchain`, so `bin`/`clippy`/`nextest` resolve `rustc` to the same `/nix/store/...` path as the sandbox image and the host devshell PATH. `rustProfile { toolchain; sha256; }` rebuilds `buildPackage` against the project-pinned toolchain alongside `packages`/`env`/`shellHook`/`toolchain`.
+- `buildPackage` closes over `profile.toolchain` via crane's `overrideToolchain`, so `bin`/`clippy`/`nextest` resolve `rustc` to the same `/nix/store/...` path as the host devshell PATH. On Linux hosts this also matches the sandbox image's baked-in toolchain; on Darwin the image keeps a Linux toolchain while `buildPackage` produces host-platform binaries (see *Host/image toolchain split* above). `rustProfile { toolchain; sha256; }` rebuilds `buildPackage` against the project-pinned toolchain alongside `packages`/`env`/`shellHook`/`toolchain`.
 - Builds are pure — Nix-sandboxed, no `__noChroot`. Sccache covers the host/sandbox/sibling-app cargo paths (where it's mounted from `~/.cache/sccache` and persists across runs); `cargoArtifacts` is the equivalent caching layer for build-sandbox cargo invocations. The two layers do not overlap and do not share cache state.
 - Always builds for `pkgs.stdenv.hostPlatform.system` — no cross-compilation. Returns one `bin` per call — workspaces with multiple binaries call `buildPackage` once per binary, threading the same `cargoArtifacts` through.
 
@@ -606,9 +608,9 @@ dests live under `/home/wrapix/` inside the container, not under
 - `wrapix.mkDevShell {}` without `profile` errors at evaluation
   [system](bash tests/profiles/mkdevshell.sh test_profile_required)
 - The materialized `wrapix.prekHooks` derivation contains exactly five executable files (one per stage: `pre-commit`, `pre-push`, `prepare-commit-msg`, `post-checkout`, `post-merge`) and no other paths
-  [system?](bash tests/profiles/prek-hooks-bundle.sh test_bundle_contents)
+  [system](bash tests/profiles/prek-hooks-bundle.sh test_bundle_contents)
 - Each materialized shim's content matches `prek hook-impl --hook-type=<stage>` for its stage
-  [system?](bash tests/profiles/prek-hooks-bundle.sh test_shims_are_plain_hook_impl)
+  [system](bash tests/profiles/prek-hooks-bundle.sh test_shims_are_plain_hook_impl)
 - `wrapix.mkDevShell { profile = ...; }` with `.pre-commit-config.yaml` present sets `core.hooksPath` to `${wrapix.prekHooks}` on entry
   [system](bash tests/profiles/mkdevshell-prek.sh test_auto_set_when_config_present)
 - `wrapix.mkDevShell { profile = ...; }` without `.pre-commit-config.yaml` does NOT set `core.hooksPath` on entry
@@ -622,16 +624,16 @@ dests live under `/home/wrapix/` inside the container, not under
 - `wrapix.mkDevShell { profile = ...; prekHooks = false; }` entered in a repo whose local git config already has `core.hooksPath` set leaves that value unchanged (passive opt-out preserves stale state per design)
   [system](bash tests/profiles/mkdevshell-prek.sh test_opt_out_preserves_stale_config)
 - `lib/default.nix` mkDevShell shellHook contains no `prek install` invocation and no `chmod` on `.git/hooks`
-  [check](grep -L 'prek install\|chmod.*\.git/hooks' lib/default.nix)
+  [check](sh -c "! grep -nE 'prek install|chmod.*\.git/hooks' lib/default.nix")
 - `modules/flake/devshell.nix` does not set `core.hooksPath` (mkDevShell owns it)
-  [check](grep -L 'core.hooksPath' modules/flake/devshell.nix)
+  [check](sh -c "! grep -nE 'core\.hooksPath' modules/flake/devshell.nix")
 - Host devshell built via `wrapix.mkDevShell { profile = wrapix.rustProfile { toolchain; sha256; }; }` resolves `rustc` to the same `/nix/store/...` path as the sandbox built from the same profile
   [judge](../tests/judges/profiles.sh#test_host_sandbox_rustc_same_store_path)
 - `wrapix.devToolchain` is not exposed by the lib (deleted; consumers reach `profile.toolchain`)
-  [check](nix eval --raw .#legacyPackages.lib --apply 'lib: if lib ? devToolchain then throw "devToolchain still exposed" else ""')
+  [check](nix eval --raw .#lib --apply 'lib: if lib ? devToolchain then throw "devToolchain still exposed" else ""')
 - `profiles.rust.withToolchain` is not exposed on the rust profile attrset (replaced by top-level `wrapix.rustProfile`)
-  [check](nix eval .#legacyPackages.lib.profiles.rust --apply 'p: if p ? withToolchain then throw "withToolchain still exposed" else true')
-- `profile.toolchain` is exposed on both `wrapix.profiles.rust` and `wrapix.rustProfile { toolchain; sha256; }`, and points at the same derivation referenced by the profile's `packages` and the `${toolchain}/bin` PATH prepend in `shellHook`
+  [check](nix eval .#lib.profiles.rust --apply 'p: if p ? withToolchain then throw "withToolchain still exposed" else true')
+- `profile.toolchain` is exposed on both `wrapix.profiles.rust` and `wrapix.rustProfile { toolchain; sha256; }`, and points at the same host-platform derivation `shellHook` interpolates into the PATH prepend (matches the image's toolchain in `profile.packages` on Linux hosts; diverges on Darwin per *Host/image toolchain split*)
   [judge](../tests/judges/profiles.sh#test_rust_toolchain_field)
 - `wrapix.profiles.rust` and `wrapix.rustProfile { toolchain; sha256; }` closures contain zero `*-nightly-*` derivations after a fresh `nix flake update` (regression guard against reintroducing `fenix.packages.${system}.rust-analyzer`, which drags a nightly cargo/rustc/rust-std closure)
   [system](bash tests/profiles/no-nightly-closure.sh test_no_nightly_closure)
@@ -654,9 +656,9 @@ dests live under `/home/wrapix/` inside the container, not under
 - `lib/mcp/tmux/mcp-server.nix` is a thin `wrapix.profiles.rust.buildPackage` consumer (no direct `pkgs.rustPlatform.buildRustPackage` or `makeRustPlatform` call); `packages.tmux-mcp` consumes `.bin`; `tests/default.nix` exposes `tmux-mcp-clippy`, `tmux-mcp-nextest` checks
   [system](bash tests/profiles/build-package.sh test_consumers_migrated)
 - `modules/flake/devshell.nix` is a thin `wrapix.mkDevShell { profile = wrapix.profiles.rust; ... }` consumer (no hand-rolled `RUSTC_WRAPPER`/`SCCACHE_DIR`/`PATH` exports, no separate `profile.toolchain` entry in `packages`)
-  [check](grep -L 'RUSTC_WRAPPER\|SCCACHE_DIR' modules/flake/devshell.nix)
+  [check](sh -c "! grep -nE 'RUSTC_WRAPPER|SCCACHE_DIR' modules/flake/devshell.nix")
 - Container entrypoints (`lib/sandbox/linux/entrypoint.sh`, `lib/sandbox/darwin/entrypoint.sh`) contain no rustup bootstrap logic — toolchain is baked into the image at build time
-  [check](grep -L 'rustup' lib/sandbox/linux/entrypoint.sh lib/sandbox/darwin/entrypoint.sh)
+  [check](sh -c "! grep -nE 'rustup' lib/sandbox/linux/entrypoint.sh lib/sandbox/darwin/entrypoint.sh")
 
 ## Requirements
 

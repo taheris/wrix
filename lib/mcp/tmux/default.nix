@@ -15,8 +15,7 @@
 # Spec: specs/tmux-mcp.md
 {
   pkgs,
-  crane,
-  fenix,
+  rustProfile,
 }:
 
 {
@@ -24,7 +23,7 @@
 
   # tmux must be listed explicitly: buildEnv doesn't follow propagatedBuildInputs
   packages = [
-    (import ./mcp-server.nix { inherit pkgs crane fenix; }).bin
+    (import ./mcp-server.nix { inherit pkgs rustProfile; }).bin
     pkgs.tmux
   ];
 

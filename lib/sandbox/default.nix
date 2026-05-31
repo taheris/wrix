@@ -38,7 +38,8 @@ let
   mkImageRef = image: "${imageRefPrefix}${image.imageName}:${imageTagLib.mkImageTag image}";
 
   # Profiles must use Linux packages (they contain Linux-only tools like iproute2)
-  # hostPkgs is used only by profile.shellHook references.
+  # for the image-side surface; hostPkgs governs the toolchain that backs
+  # profile.toolchain, the devshell PATH prepend, and buildPackage's craneLib.
   profilesModule = import ./profiles.nix {
     pkgs = linuxPkgs;
     hostPkgs = pkgs;
@@ -51,10 +52,20 @@ let
   profiles = builtins.removeAttrs profilesModule [ "rustProfileFromFile" ];
   inherit (profilesModule) rustProfileFromFile;
 
+  # Separate profile instance whose buildPackage targets the image platform
+  # (linuxPkgs). Used to construct the in-image MCP server binaries that get
+  # baked into sandbox images; profilesModule.rust's buildPackage is host-platform
+  # and would ship a non-runnable binary into a Linux image on Darwin hosts.
+  imageProfilesModule = import ./profiles.nix {
+    pkgs = linuxPkgs;
+    hostPkgs = linuxPkgs;
+    inherit crane fenix treefmt;
+  };
+
   # MCP server registry (uses Linux packages for server binaries)
   mcpRegistry = import ../mcp {
     pkgs = linuxPkgs;
-    inherit crane fenix;
+    rustProfile = imageProfilesModule.rust;
   };
 
   # Claude config (~/.claude.json) - onboarding state and runtime flags

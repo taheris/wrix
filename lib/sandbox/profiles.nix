@@ -102,35 +102,43 @@ let
       networkAllowlist = baseNetworkAllowlist ++ networkAllowlist;
     };
 
-  fenixPkgs =
+  requireFenix =
     if fenix == null then
       throw "lib/sandbox/profiles.nix: profiles.rust requires the fenix input; pass `fenix` to this file"
     else
-      fenix.packages.${pkgs.stdenv.hostPlatform.system};
+      fenix;
+
+  # Two fenix package sets so the rust profile can serve both the image (always
+  # Linux) and host-platform consumers (devshell, buildPackage) without forcing
+  # a cross-build. On Linux hosts both resolve to the same /nix/store path; on
+  # Darwin they diverge (image stays Linux, host gets Darwin).
+  imageFenixPkgs = requireFenix.packages.${pkgs.stdenv.hostPlatform.system};
+  hostFenixPkgs = requireFenix.packages.${hostPkgs.stdenv.hostPlatform.system};
 
   mkRustToolchain =
-    base:
-    fenixPkgs.combine [
+    fenixSet: base:
+    fenixSet.combine [
       base
       # stable RA from manifest avoids dragging matching nightly toolchain into closure
-      fenixPkgs.stable.rust-analyzer-preview
-      fenixPkgs.stable.rust-src
+      fenixSet.stable.rust-analyzer-preview
+      fenixSet.stable.rust-src
     ];
 
   # fenix's minimalToolchain omits clippy/rustfmt; defaultToolchain is the
   # rustup-equivalent "default" set (rustc + cargo + rust-std + clippy + rustfmt + rust-docs).
-  defaultRustToolchain = mkRustToolchain fenixPkgs.stable.defaultToolchain;
+  defaultImageToolchain = mkRustToolchain imageFenixPkgs imageFenixPkgs.stable.defaultToolchain;
+  defaultHostToolchain = mkRustToolchain hostFenixPkgs hostFenixPkgs.stable.defaultToolchain;
 
-  # crane.mkLib is bound to pkgs (build-sandbox cargo target) and overridden
-  # with the rust profile's resolved toolchain so build-sandbox `rustc` resolves
-  # to the same /nix/store/... path as the sandbox image and host devshell PATH.
-  # buildPackage closes over this craneLib.
+  # crane.mkLib is bound to hostPkgs so buildPackage produces host-platform
+  # binaries (the devshell + `nix build .#tmux-mcp` path). The in-image build
+  # uses a separate profile instance constructed with hostPkgs = pkgs; see
+  # lib/sandbox/default.nix.
   mkCraneLib =
     toolchain:
     if crane == null then
       throw "lib/sandbox/profiles.nix: profiles.rust requires the crane input; pass `crane` to this file"
     else
-      (crane.mkLib pkgs).overrideToolchain (_: toolchain);
+      (crane.mkLib hostPkgs).overrideToolchain (_: toolchain);
 
   # bin closes over src + cargoArtifacts only — no edge to clippy/nextest, no
   # extraSrcs — so devshell consumers stay warm across test-fixture edits.
@@ -220,14 +228,20 @@ let
       cargoArtifacts = resolvedCargoArtifacts;
     };
 
-  # Build a Rust profile attrset from a given toolchain
+  # Build a Rust profile attrset from a given (image-toolchain, host-toolchain) pair.
+  # The image toolchain lands in profile.packages and the image-side env exports;
+  # the host toolchain backs profile.toolchain, the devshell PATH prepend, and
+  # buildPackage's craneLib. On Linux hosts the two coincide.
   mkRustProfile =
-    toolchain:
+    {
+      imageToolchain,
+      hostToolchain,
+    }:
     mkProfile {
       name = "rust";
 
       packages = [
-        toolchain
+        imageToolchain
         pkgs.gcc
         pkgs.openssl
         pkgs.openssl.dev
@@ -247,7 +261,7 @@ let
         OPENSSL_INCLUDE_DIR = "${pkgs.openssl.dev}/include";
         OPENSSL_LIB_DIR = "${pkgs.openssl.out}/lib";
         RUSTC_WRAPPER = "${pkgs.sccache}/bin/sccache";
-        RUST_SRC_PATH = "${toolchain}/lib/rustlib/src/rust/library";
+        RUST_SRC_PATH = "${imageToolchain}/lib/rustlib/src/rust/library";
         SCCACHE_CACHE_SIZE = "50G";
         SCCACHE_DIR = "/home/wrapix/.cache/sccache";
       };
@@ -305,7 +319,7 @@ let
       # overrides survive.
       shellHook = ''
         [ "''${SCCACHE_DIR:-}" = "/home/wrapix/.cache/sccache" ] && unset SCCACHE_DIR
-        export PATH="${toolchain}/bin:$PATH"
+        export PATH="${hostToolchain}/bin:$PATH"
         export RUSTC_WRAPPER="${hostPkgs.sccache}/bin/sccache"
         export CARGO_BUILD_RUSTC_WRAPPER="${hostPkgs.sccache}/bin/sccache"
         export SCCACHE_DIR="''${SCCACHE_DIR:-$HOME/.cache/sccache}"
@@ -315,10 +329,11 @@ let
     }
     // (
       let
-        craneLib = mkCraneLib toolchain;
+        craneLib = mkCraneLib hostToolchain;
       in
       {
-        inherit toolchain craneLib;
+        toolchain = hostToolchain;
+        inherit craneLib;
         buildPackage = mkBuildPackageFn craneLib;
       }
     );
@@ -341,11 +356,14 @@ let
   # re-export).
   rustProfileFromFile =
     { file, sha256 }:
-    let
-      base = fenixPkgs.fromToolchainFile { inherit file sha256; };
-      toolchain = mkRustToolchain base;
-    in
-    mkRustProfile toolchain;
+    mkRustProfile {
+      imageToolchain = mkRustToolchain imageFenixPkgs (
+        imageFenixPkgs.fromToolchainFile { inherit file sha256; }
+      );
+      hostToolchain = mkRustToolchain hostFenixPkgs (
+        hostFenixPkgs.fromToolchainFile { inherit file sha256; }
+      );
+    };
 
 in
 {
@@ -353,7 +371,10 @@ in
     name = "base";
   };
 
-  rust = mkRustProfile defaultRustToolchain;
+  rust = mkRustProfile {
+    imageToolchain = defaultImageToolchain;
+    hostToolchain = defaultHostToolchain;
+  };
 
   inherit rustProfileFromFile;
 

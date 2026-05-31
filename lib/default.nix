@@ -20,7 +20,8 @@ let
   };
   beads = import ./beads { inherit pkgs linuxPkgs; };
   tmuxMcp = import ./mcp/tmux/mcp-server.nix {
-    inherit pkgs crane fenix;
+    inherit pkgs;
+    rustProfile = sandbox.profiles.rust;
   };
 
   prekHooksBundle = import ./prek/bundle.nix { inherit pkgs; };
