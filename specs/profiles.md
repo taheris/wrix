@@ -478,8 +478,8 @@ Profiles surface as three sibling output families:
 
 | Output | Shape | Use |
 |--------|-------|-----|
-| `packages.image-<profile>` | OCI artifact (Linux: `streamLayeredImage`; Darwin: tarball); both agent runtimes installed | Consumers driving podman directly; manifest entries |
-| `packages.sandbox-<profile>[-pi]` | `makeWrapper` of `packages.wrapix` + `packages.image-<profile>`; bare form defaults to `WRAPIX_AGENT=claude`, `-pi` suffix sets `WRAPIX_AGENT=pi` | One-shot users (`nix run .#sandbox-rust`, `nix run .#sandbox-rust-pi`) |
+| `packages.image-<profile>` | OCI artifact (Linux: `streamLayeredImage`; Darwin: tarball); built with `agent = "claude"` (the default) | Consumers driving podman directly; manifest entries |
+| `packages.sandbox-<profile>` | `makeWrapper` of `packages.wrapix` + `packages.image-<profile>` with `WRAPIX_AGENT=claude` baked in | One-shot users (`nix run .#sandbox-rust`). Consumers needing `pi` or `direct` call `mkSandbox` themselves with their own agent package. |
 | `packages.profile-images` | JSON manifest from `mkProfileImages`, keyed by profile (not by profile×agent) | External orchestrators (e.g. Loom via `LOOM_PROFILES_MANIFEST`) |
 
 `<profile>` covers the built-in profiles (`base`, `rust`, `python`). The

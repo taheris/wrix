@@ -2,11 +2,10 @@
 
 Wrapix is a secure sandbox for running AI coding agents in isolated containers.
 It provides container isolation on Linux (Podman) and macOS (Apple container
-CLI), with built-in support for three agent runtimes
-([Claude Code](https://claude.ai/code), [pi-mono](https://github.com/badlogic/pi-mono),
-and a consumer-supplied *direct* runner), plus tooling for notifications,
-remote Nix builds, and integration hooks for external orchestrators such as
-[Loom](https://github.com/taheris/loom).
+CLI), with built-in support for [Claude Code](https://claude.ai/code) (from
+nixpkgs) and two consumer-supplied agent slots (*pi* and *direct*) for
+external orchestrators such as [Loom](https://github.com/taheris/loom), plus
+tooling for notifications, remote Nix builds, and integration hooks.
 
 ## Design Principles
 
@@ -44,7 +43,6 @@ lib/
 │   ├── default.nix      # Server registry: { tmux, playwright }
 │   ├── tmux/            # tmux MCP server
 │   └── playwright/      # Playwright MCP server
-├── pi-mono/             # Pi agent runtime layer (Node.js + pi binary)
 ├── prek/                # Pre-commit hook shims
 ├── builder/             # macOS-side CLI for the Linux remote builder
 ├── notify/              # Desktop notifications
@@ -77,8 +75,8 @@ The launcher and the OCI image are separate Nix outputs, composed at the consume
 | Output | Role |
 |--------|------|
 | `packages.wrapix` | Profile-agnostic launcher binary; reads image ref/source at runtime |
-| `packages.image-<profile>` | Per-profile OCI artifact (claude + pi runtimes both installed) |
-| `packages.sandbox-<profile>[-pi]` | `makeWrapper` of the launcher with image ref/source + `WRAPIX_AGENT` baked in — the user-facing `nix run .#sandbox-rust` target |
+| `packages.image-<profile>` | Per-profile OCI artifact built with `agent = "claude"` (the default) |
+| `packages.sandbox-<profile>` | `makeWrapper` of the launcher with image ref/source + `WRAPIX_AGENT=claude` baked in — the user-facing `nix run .#sandbox-rust` target. Consumers needing `pi` or `direct` build their own wrappers via `mkSandbox` |
 | `packages.profile-images` | JSON manifest mapping profile → `{ref, source}`, for orchestrators that look up images by profile name |
 
 The launcher exposes two subcommands sharing the same container construction (mounts, env passthrough, deploy key):
@@ -90,19 +88,20 @@ See [specs/sandbox.md](../specs/sandbox.md) and [specs/profiles.md](../specs/pro
 
 ## Agent Runtimes
 
-`WRAPIX_AGENT` (selected by the `sandbox-<profile>[-pi]` wrapper or set
-explicitly) controls which agent binary the entrypoint execs after staging
-`/workspace`, settings, and SSH credentials:
+`WRAPIX_AGENT` controls which agent binary the entrypoint execs after staging
+`/workspace`, settings, and SSH credentials. The `sandbox-<profile>` wrapper
+sets it to `claude`; consumers building their own wrappers for `pi`/`direct`
+set it themselves.
 
 | Value | Behaviour |
 |-------|-----------|
 | `claude` *(default)* | Interactive `claude` TTY, or `claude --print --input-format stream-json` when `WRAPIX_STDIO=1` |
-| `pi` | `pi --mode rpc` — JSONL RPC on stdio. Requires `agent = "pi"` at image-build time so `pkgs.pi-mono` is in the closure. |
+| `pi` | `pi --mode rpc` — JSONL RPC on stdio. Requires `agent = "pi"` and a consumer-supplied `piPkg` at image-build time. |
 | `direct` | Execs `loom-direct-runner` (or any consumer-named binary). Requires `agent = "direct"` and `directRunner = …` at image-build time. |
 
-The `claude` and `pi` runtimes live alongside each other in every
-`packages.image-<profile>` — picking between them is a runtime decision.
-`direct` is build-time because the runner binary comes from outside wrapix.
+Only the `claude` runtime is installed in the default
+`packages.image-<profile>`. `pi` and `direct` are build-time selections
+because their binaries come from outside wrapix.
 
 ### Direct mode (orchestrator integration)
 

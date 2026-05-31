@@ -35,7 +35,7 @@ Running AI coding assistants with unrestricted host access creates security risk
 
 Filtering requires `NET_ADMIN`: a Linux rootless container has no `NET_ADMIN`, so `WRAPIX_NETWORK=limit` there logs a warning and falls back to open network. Pair `WRAPIX_NETWORK=limit` with `WRAPIX_MICROVM=1` on Linux to actually enforce. macOS runs in a microVM unconditionally, so `limit` works without further flags.
 
-**Agent runtime axis** — the `agent` parameter selects which binary the container's entrypoint launches: `claude` (default), `pi` (adds Node.js + pi-mono runtime layer), or `direct` (adds a consumer-supplied `directRunner` package such as `loom-direct-runner`). The agent runtime composes orthogonally with the workspace profile — image variants are `(profile × agent)`, not per-profile-and-agent special cases.
+**Agent runtime axis** — the `agent` parameter selects which binary the container's entrypoint launches: `claude` (default, from nixpkgs), `pi` (adds a consumer-supplied `piPkg` package such as loom's `pi-coding-agent`), or `direct` (adds a consumer-supplied `directRunner` package such as `loom-direct-runner`). Neither `pi` nor `direct` has a default package; `mkSandbox` throws when the corresponding argument is missing. The agent runtime composes orthogonally with the workspace profile — image variants are `(profile × agent)`, not per-profile-and-agent special cases.
 
 **MCP servers** — `mkSandbox`'s `mcp` parameter opts servers in per sandbox (`mcp.tmux = { … }`, `mcp.playwright = { … }`). Server contracts live in their own specs (`tmux-mcp.md`, `playwright-mcp.md`). `mcpRuntime = true` bakes all registered servers into the image and defers selection to the entrypoint at run time.
 
@@ -57,6 +57,8 @@ mkSandbox {
   mcp.tmux = { };                   # MCP server opt-in
   mcpRuntime = false;               # Bake ALL MCP servers, defer selection to entrypoint
   agent = "claude";                 # "claude" (default), "pi", or "direct"
+  # piPkg = ...;                    # Required when agent = "pi"; consumer-supplied (e.g. loom's pi-coding-agent)
+  # directRunner = ...;             # Required when agent = "direct"; consumer-supplied (e.g. loom-direct-runner)
   model = null;                     # Override ANTHROPIC_MODEL in claude settings
 }
 ```

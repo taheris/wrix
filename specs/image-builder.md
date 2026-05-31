@@ -8,7 +8,7 @@ Sandboxes need container images with all profile packages pre-installed, an agen
 
 ## Architecture
 
-`mkImage` (in `lib/sandbox/image.nix`) is the internal API called by `mkSandbox` (see `sandbox.md`). Inputs: a profile, an agent runtime selector, an entrypoint script path (Linux or Darwin), optional krun support, the merged Claude settings JSON, and the resolved MCP server configs. It emits a layered OCI image via `dockerTools.streamLayeredImage` (Linux) or `dockerTools.buildLayeredImage` (Darwin — the stream script's Linux Python shebang cannot execute on macOS).
+`mkImage` (in `lib/sandbox/image.nix`) is the internal API called by `mkSandbox` (see `sandbox.md`). Inputs: a profile, an agent runtime selector, an entrypoint script path (Linux or Darwin), optional krun support, the merged Claude settings JSON, and the resolved MCP server configs. When `agent` is `"pi"` or `"direct"`, the caller also supplies the agent package (`piPkg` or `directRunner` respectively); `mkSandbox` throws when it's missing. It emits a layered OCI image via `dockerTools.streamLayeredImage` (Linux) or `dockerTools.buildLayeredImage` (Darwin — the stream script's Linux Python shebang cannot execute on macOS).
 
 Image layout:
 
@@ -24,7 +24,7 @@ Image layout:
 Build pipeline:
 
 1. Collect packages from the profile (workspace toolchain + agent tooling + MCP server packages if any)
-2. Compose the agent runtime layer (claude is a no-op; pi adds Node + pi-mono; direct adds the consumer-supplied `directRunner` package)
+2. Compose the agent runtime layer (claude is a no-op; pi adds the consumer-supplied `piPkg` package; direct adds the consumer-supplied `directRunner` package)
 3. Configure `/etc/nix/nix.conf` for flakes and disabled in-container sandbox (the outer container is the security boundary — see `specs/security.md`)
 4. Bundle CA certificates from `pkgs.cacert`
 5. Emit the layered image, with the entrypoint script as the OCI `Cmd`
@@ -43,10 +43,12 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
 
 - `wrapix spawn`'s image-source → `podman load` step is idempotent (re-loading the same image is a no-op on a fresh inode and on a previously-loaded ref)
   [system](nix run .#wrapix-spawn-load)
-- `agent = "pi"` adds an executable `pi` binary to the image's store closure
-  [system](nix run .#pi-runtime-image)
-- `agent = "claude"` produces an image that contains `claude-code` but does not pull in `pi-mono`
+- `agent = "claude"` produces an image that contains `claude-code`
   [system](nix run .#claude-runtime-noop)
+- The `agent = "pi"` code path threads a consumer-supplied `piPkg` derivation into the image build
+  [check?](grep -nE 'agent.*pi|piPkg' lib/sandbox/image.nix lib/sandbox/default.nix)
+- `mkSandbox` throws a clear error when `agent = "pi"` is set without `piPkg`
+  [check?](grep -nE 'throw.*piPkg|piPkg.*requires' lib/sandbox/default.nix)
 - The `agent = "direct"` code path threads a consumer-supplied `directRunner` derivation into the image build
   [check](grep -nE 'agent.*direct|directRunner' lib/sandbox/image.nix lib/sandbox/default.nix)
 - `nix-command` and `flakes` are enabled in `/etc/nix/nix.conf` and Nix's in-container build sandbox is disabled
@@ -68,7 +70,7 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
 
 1. **OCI image generation** — `mkImage` returns a derivation whose output is an OCI-compatible image (streamLayeredImage on Linux, buildLayeredImage on Darwin).
 2. **Package bundling** — every derivation in the profile's `packages` list lands in the image's store closure.
-3. **Agent runtime composition** — the `agent` parameter selects which agent runtime layer the image carries; the workspace profile composes orthogonally on top.
+3. **Agent runtime composition** — the `agent` parameter selects which agent runtime layer the image carries: `claude` (from nixpkgs), `pi` (consumer-supplied `piPkg`), or `direct` (consumer-supplied `directRunner`). The workspace profile composes orthogonally on top.
 4. **Nix configuration** — `flakes` and `nix-command` are enabled; the in-container Nix sandbox is disabled (the outer container is the boundary).
 5. **CA certificates** — `pkgs.cacert` is included and `SSL_CERT_FILE` resolves to it.
 6. **Entrypoint embedding** — the platform-specific entrypoint script (`lib/sandbox/{linux,darwin}/entrypoint.sh`) is the image's startup command.
@@ -77,7 +79,7 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
 ### Non-Functional
 
 1. **Layered for caching** — packages, agent runtime, and config land in separate layers so changes in one do not invalidate the others.
-2. **Reproducible** — same profile + agent selector produces the same image hash; `mkImageRef` is a pure function of the image.
+2. **Reproducible** — same profile, agent selector, and consumer-supplied agent package (when applicable) produce the same image hash; `mkImageRef` is a pure function of the image.
 
 ## Out of Scope
 
