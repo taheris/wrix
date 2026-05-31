@@ -80,24 +80,14 @@ Profiles do not need a `-debug` variant — MCP servers compose orthogonally wit
 
 ## Success Criteria
 
-- Pane lifecycle round-trip: `tmux_create_pane` → `tmux_list_panes` shows it → `tmux_kill_pane` removes it
-  [system](bash tests/mcp/tmux/lifecycle.sh)
-- `tmux_send_keys` + `tmux_capture_pane` round-trips a payload through a shell pane (`echo hello` is visible in capture)
-  [system](bash tests/mcp/tmux/send-capture.sh)
-- An exited pane reports `status: "exited"` and `tmux_capture_pane` returns its final output
-  [system](bash tests/mcp/tmux/exited-pane.sh)
-- Pane processes inherit sandbox filesystem isolation: attempts to read host paths outside `/workspace` fail
-  [system](bash tests/mcp/tmux/filesystem-isolation.sh)
-- When `audit` is configured, every tool invocation emits one JSON-Lines record matching the documented schema
-  [system](bash tests/mcp/tmux/audit-format.sh)
-- When the MCP server exits, the underlying tmux session and panes are torn down (no stranded `debug-{pid}` sessions)
-  [system](bash tests/mcp/tmux/cleanup-on-exit.sh)
-- `mcp.tmux` composes with any profile via `mkSandbox`'s `mcp` parameter (image build succeeds, server is reachable in the running container)
-  [system](nix build .#sandbox-rust && bash tests/mcp/tmux/in-sandbox.sh)
+- The tmux-mcp integration suite passes: pane lifecycle (create/list/kill), `send_keys` + `capture_pane` round-trip, exited-pane status reporting, error-handling envelopes, audit-log JSON-Lines format, and session cleanup on server exit
+  [system](bash tests/mcp/tmux/integration.sh)
+- `mcp.tmux` composes with the rust-debug profile image via `mkSandbox`'s `mcp` parameter: the image build succeeds, tmux and tmux-mcp resolve on PATH inside the container, and the MCP server responds to a JSON-RPC `initialize` request
+  [system](bash tests/mcp/tmux/e2e-sandbox.sh)
 - Tool error responses construct `isError: true` envelopes via the MCP standard path
-  [check](grep -n 'isError' lib/mcp/tmux/src/mcp.rs)
+  [check](grep -n 'isError' lib/mcp/tmux/tmux-mcp/src/mcp.rs)
 - No custom error-code field is present in the error envelope (the consumer reads plain text)
-  [check](! grep -nE 'error_code|errorCode' lib/mcp/tmux/src/mcp.rs)
+  [check](sh -c "! grep -nE 'error_code|errorCode' lib/mcp/tmux/tmux-mcp/src/mcp.rs")
 
 ## Requirements
 
