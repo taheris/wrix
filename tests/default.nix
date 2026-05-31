@@ -50,7 +50,6 @@ let
     inherit
       pkgs
       system
-      treefmt
       src
       wrapix
       ;

@@ -2,7 +2,6 @@
 {
   pkgs,
   system,
-  treefmt,
   src,
   wrapix,
 }:
@@ -176,23 +175,17 @@ let
 
           testScript =
             let
-              # Build the debug profile image for testing
-              linuxPkgs = import pkgs.path {
-                system = "x86_64-linux";
-                config.allowUnfree = true;
-              };
-              profiles = import ../../../lib/sandbox/profiles.nix {
-                pkgs = linuxPkgs;
-                inherit treefmt;
-              };
-              debugImage = import ../../../lib/sandbox/image.nix {
-                pkgs = linuxPkgs;
-                profile = profiles.debug;
-                entrypointPkg = linuxPkgs.hello; # Stand-in for claude-code
-                entrypointSh = ../../../lib/sandbox/linux/entrypoint.sh;
-                claudeConfig = { };
-                claudeSettings = { };
-              };
+              # Compose the rust profile with the tmux MCP server — the same
+              # contract `mkSandbox { mcp.tmux = {}; }` exposes to consumers,
+              # exercised here at image-build granularity so the VM only loads
+              # the resulting OCI artifact. profiles.nix never exposed a
+              # `debug` profile; the per-system `debug` sandbox in
+              # modules/flake/packages.nix is `profiles.rust` + extras.
+              debugImage =
+                (wrapix.mkSandbox {
+                  profile = wrapix.profiles.rust;
+                  mcp.tmux = { };
+                }).image;
             in
             ''
               machine.wait_for_unit("multi-user.target")
