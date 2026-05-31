@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# shellcheck source=../lock.sh
-source "$(dirname "${BASH_SOURCE[0]}")/_lib/lock.sh"
 
+_git_common_dir=$(git rev-parse --git-common-dir)
+_wrapix_dir=$(dirname "$_git_common_dir")/.wrapix
 _stamp_file="$_wrapix_dir/push-verified"
 _head_sha=$(git rev-parse HEAD)
 
@@ -12,8 +12,6 @@ if [[ -f "$_stamp_file" ]] && [[ "$(<"$_stamp_file")" == "$_head_sha" ]]; then
     exit 0
 fi
 
-_prek_acquire_lock
-
 # Save stdin — git writes ref lines once and hook-impl needs them to
 # determine which files changed across the push range.
 _stdin=$(cat)
@@ -21,6 +19,8 @@ _stdin=$(cat)
 if [[ -z "$_stdin" ]]; then
     exit 0
 fi
+
+mkdir -p "$_wrapix_dir"
 
 # Run pre-push hooks via hook-impl (not `prek run`) so the ref range
 # from stdin is parsed correctly — same code path git would use, but
@@ -30,8 +30,7 @@ printf '%s\n' "$_stdin" | prek hook-impl \
     --hook-dir "$_hook_dir" \
     --script-version 4 \
     --hook-type=pre-push \
-    -- "$@" \
-    9>&- || exit 1
+    -- "$@" || exit 1
 
 # Tests passed — stamp in case the SSH connection died during tests.
 # Exit 0 lets git try the original connection. If it's still alive, the

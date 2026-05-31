@@ -3,14 +3,13 @@
 #
 #   test_bundle_contents
 #     lib.prekHooks is a directory derivation containing executable shims for
-#     pre-commit, pre-push, prepare-commit-msg, post-checkout, post-merge plus
-#     a _lib/lock.sh helper.
+#     pre-commit, pre-push, prepare-commit-msg, post-checkout, post-merge —
+#     no _lib/ subdirectory.
 #
-#   test_flock_only_on_fr2_stages
-#     pre-commit and pre-push shims source _lib/lock.sh and call
-#     _prek_acquire_lock; prepare-commit-msg, post-checkout, post-merge call
-#     prek directly without sourcing the lock helper (FR2 stages only — the
-#     informational hooks do not contend for the index).
+#   test_shims_are_plain_hook_impl
+#     Every shim invokes `prek hook-impl --hook-type=<its-stage>` and none
+#     source lock.sh, call _prek_acquire_lock, or invoke flock — the bundle
+#     no longer wraps any stage in a serialized critical section.
 #
 # Usage:
 #   tests/profiles/prek-hooks-bundle.sh                  # run all tests
@@ -33,8 +32,7 @@ bundle_path() {
 }
 
 # ============================================================================
-# Bundle contains all expected shims plus the lock helper, with executable
-# bits on the shims (lock helper is library-style, not directly runnable).
+# Bundle contains the five shims (executable) and no _lib/ subdirectory.
 # ============================================================================
 test_bundle_contents() {
   local bundle
@@ -57,8 +55,8 @@ test_bundle_contents() {
     fi
   done
 
-  if [[ ! -f "$bundle/_lib/lock.sh" ]]; then
-    echo "FAIL: bundle missing _lib/lock.sh helper" >&2
+  if [[ -e "$bundle/_lib" ]]; then
+    echo "FAIL: bundle still contains _lib/ subdirectory" >&2
     missing=$((missing + 1))
   fi
 
@@ -66,11 +64,11 @@ test_bundle_contents() {
 }
 
 # ============================================================================
-# pre-commit and pre-push source _lib/lock.sh and call _prek_acquire_lock.
-# The informational hooks (prepare-commit-msg, post-checkout, post-merge) do
-# NOT source the lock helper — they run after-the-fact and never contend.
+# Every shim is a plain hook-impl invocation: no lock.sh source, no
+# _prek_acquire_lock call, no flock invocation; and each shim names its own
+# stage via --hook-type=<stage>.
 # ============================================================================
-test_flock_only_on_fr2_stages() {
+test_shims_are_plain_hook_impl() {
   local bundle
   if ! bundle=$(bundle_path); then
     echo "FAIL: nix build lib.prekHooks failed" >&2
@@ -79,24 +77,26 @@ test_flock_only_on_fr2_stages() {
 
   local failed=0
   local hook
-  for hook in pre-commit pre-push; do
-    if ! grep -q 'source.*_lib/lock\.sh' "$bundle/$hook"; then
-      echo "FAIL: $hook does not source _lib/lock.sh" >&2
+  for hook in pre-commit pre-push prepare-commit-msg post-checkout post-merge; do
+    if [[ ! -f "$bundle/$hook" ]]; then
+      echo "FAIL: bundle missing shim: $hook" >&2
       failed=$((failed + 1))
+      continue
     fi
-    if ! grep -q '_prek_acquire_lock' "$bundle/$hook"; then
-      echo "FAIL: $hook does not call _prek_acquire_lock" >&2
-      failed=$((failed + 1))
-    fi
-  done
-
-  for hook in prepare-commit-msg post-checkout post-merge; do
-    if grep -q '_lib/lock\.sh' "$bundle/$hook"; then
-      echo "FAIL: $hook sources lock helper (should call prek directly)" >&2
+    if grep -qE 'lock\.sh' "$bundle/$hook"; then
+      echo "FAIL: $hook still references lock.sh" >&2
       failed=$((failed + 1))
     fi
     if grep -q '_prek_acquire_lock' "$bundle/$hook"; then
-      echo "FAIL: $hook calls _prek_acquire_lock (should call prek directly)" >&2
+      echo "FAIL: $hook still calls _prek_acquire_lock" >&2
+      failed=$((failed + 1))
+    fi
+    if grep -qE '\bflock\b' "$bundle/$hook"; then
+      echo "FAIL: $hook still invokes flock" >&2
+      failed=$((failed + 1))
+    fi
+    if ! grep -qE "hook-impl .*--hook-type=$hook( |$)" "$bundle/$hook"; then
+      echo "FAIL: $hook does not invoke 'prek hook-impl --hook-type=$hook'" >&2
       failed=$((failed + 1))
     fi
   done
@@ -108,7 +108,7 @@ test_flock_only_on_fr2_stages() {
 
 ALL_TESTS=(
   test_bundle_contents
-  test_flock_only_on_fr2_stages
+  test_shims_are_plain_hook_impl
 )
 
 run_all() {
