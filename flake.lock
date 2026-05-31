@@ -86,10 +86,10 @@
         "wrapix": "wrapix"
       },
       "locked": {
-        "lastModified": 1780247857,
-        "narHash": "sha256-bTehaNBVaD09iL48/tT4XaaeC0meCvCV6eNsADtlYtU=",
+        "lastModified": 1780256732,
+        "narHash": "sha256-uDXBgqUrYuejr1lboa8pQdUHWUZu6dSxN3l1siMDx+I=",
         "ref": "main",
-        "rev": "03dee8e96d8d1bc8b9250bc4bae8b029fd91165c",
+        "rev": "b7fbc4cfe64b99e9d50d27e9199258719552155d",
         "shallow": true,
         "type": "git",
         "url": "ssh://git@github.com/taheris/loom.git"
