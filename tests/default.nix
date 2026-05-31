@@ -140,14 +140,8 @@ in
       program = "${sandboxImageChecks.wrapixSpawnLoadTest}/bin/test-wrapix-spawn-load";
     };
 
-    pi-runtime-image = {
-      meta.description = "Verify sandbox-pi image closure contains executable pi-mono binary";
-      type = "app";
-      program = "${sandboxImageChecks.piRuntimeImageTest}/bin/test-pi-runtime-image";
-    };
-
     claude-runtime-noop = {
-      meta.description = "Verify default sandbox image closure has claude-code but not pi-mono";
+      meta.description = "Verify default sandbox image closure contains claude-code";
       type = "app";
       program = "${sandboxImageChecks.claudeRuntimeNoopTest}/bin/test-claude-runtime-noop";
     };

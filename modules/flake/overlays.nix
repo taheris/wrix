@@ -53,17 +53,10 @@
 
       # Agent runtime packages exposed to consumers:
       #
-      #   pi-mono     — 0.72.1, pinned in lib/pi-mono/package.json
-      #                 (RPC framing for the pi backend)
       #   claude-code — tracks nixos-unstable via flake.lock
       #                 (stream-json framing for the claude backend);
       #                 bumping nixpkgs may bump claude-code's wire surface.
-      linuxOverlay =
-        final: _prev:
-        {
-          pi-mono = final.callPackage ../../lib/pi-mono { };
-        }
-        // beadsPkgs final final;
+      linuxOverlay = final: _prev: beadsPkgs final final;
 
       linuxPkgs = import nixpkgs {
         system = linuxSystem;
@@ -74,12 +67,7 @@
         config.allowUnfree = true;
       };
 
-      hostOverlay =
-        final: _prev:
-        {
-          inherit (linuxPkgs) pi-mono;
-        }
-        // beadsPkgs final linuxPkgs;
+      hostOverlay = final: _prev: beadsPkgs final linuxPkgs;
 
     in
     {

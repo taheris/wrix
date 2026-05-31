@@ -29,16 +29,9 @@ let
       ;
   };
   defaultImage = (sandboxLib.mkSandbox { profile = sandboxLib.profiles.base; }).image;
-  piImage =
-    (sandboxLib.mkSandbox {
-      profile = sandboxLib.profiles.base;
-      agent = "pi";
-    }).image;
 
   defaultImageClosure = pkgs.closureInfo { rootPaths = [ defaultImage ]; };
-  piImageClosure = pkgs.closureInfo { rootPaths = [ piImage ]; };
 
-  piMonoPkg = linuxPkgs.pi-mono;
   claudeCodePkg = linuxPkgs.claude-code;
   prekHooksBundle = import ../../lib/prek/bundle.nix { pkgs = linuxPkgs; };
 
@@ -139,32 +132,6 @@ let
         '';
   };
 
-  piRuntimeImageTest = pkgs.writeShellApplication {
-    name = "test-pi-runtime-image";
-    runtimeInputs = [
-      pkgs.coreutils
-      pkgs.gnugrep
-    ];
-    text = ''
-      closure_file=${piImageClosure}/store-paths
-      pi_mono_path=${piMonoPkg}
-
-      if ! grep -qxF "$pi_mono_path" "$closure_file"; then
-          echo "FAIL: pi-mono store path not in sandbox-pi image closure" >&2
-          echo "  expected: $pi_mono_path" >&2
-          echo "  closure : $closure_file" >&2
-          exit 1
-      fi
-
-      if [[ ! -x "$pi_mono_path/bin/pi" ]]; then
-          echo "FAIL: pi binary at $pi_mono_path/bin/pi is missing or not executable" >&2
-          exit 1
-      fi
-
-      echo "test-pi-runtime-image: PASS"
-    '';
-  };
-
   claudeRuntimeNoopTest = pkgs.writeShellApplication {
     name = "test-claude-runtime-noop";
     runtimeInputs = [
@@ -173,15 +140,7 @@ let
     ];
     text = ''
       closure_file=${defaultImageClosure}/store-paths
-      pi_mono_path=${piMonoPkg}
       claude_code_path=${claudeCodePkg}
-
-      if grep -qxF "$pi_mono_path" "$closure_file"; then
-          echo "FAIL: pi-mono unexpectedly present in default sandbox closure" >&2
-          echo "  found   : $pi_mono_path" >&2
-          echo "  closure : $closure_file" >&2
-          exit 1
-      fi
 
       if ! grep -qxF "$claude_code_path" "$closure_file"; then
           echo "FAIL: claude-code missing from default sandbox closure" >&2
@@ -219,7 +178,6 @@ in
 {
   inherit
     wrapixSpawnLoadTest
-    piRuntimeImageTest
     claudeRuntimeNoopTest
     prekHooksClosureTest
     ;

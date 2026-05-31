@@ -3,8 +3,8 @@
 # This creates a layered container image with:
 # - Base packages + profile-specific packages
 # - Claude Code package
-# - Optional pi-mono runtime (Node.js + pi binary) when `agent == "pi"`
-# - Optional Direct runtime binary when `agent == "direct"`
+# - Optional consumer-supplied `piPkg` when `agent == "pi"`
+# - Optional consumer-supplied `directRunner` when `agent == "direct"`
 # - CA certificates for HTTPS
 # - Platform-specific entrypoint script
 #
@@ -13,10 +13,11 @@
 #   - agent runtime (claude | pi | direct) — agent binary layer
 #
 # Claude is always present (it's part of the base image today), so the claude
-# runtime layer is a no-op. The pi runtime layer adds pkgs.pi-mono. The
-# direct runtime layer adds a consumer-supplied `directRunner` package
-# (e.g. loom's `loom-direct-runner`) so the entrypoint can exec it over
-# JSONL stdio on WRAPIX_AGENT=direct.
+# runtime layer is a no-op. The pi runtime layer adds the consumer-supplied
+# `piPkg` (e.g. loom's `pi-mono` derivation); the direct runtime layer adds
+# the consumer-supplied `directRunner` package (e.g. loom's
+# `loom-direct-runner`) so the entrypoint can exec it over JSONL stdio on
+# WRAPIX_AGENT=direct. Wrapix no longer ships pi-mono in tree.
 #
 # Layer ordering: stable packages first, frequently-changing packages last.
 # This maximizes layer cache hits across rebuilds and profiles.
@@ -29,8 +30,8 @@
   claudeConfig,
   claudeSettings,
   mcpServerConfigs ? { },
-  # Agent runtime axis. "claude" (default) is a no-op; "pi" adds pi-mono
-  # (Node.js + pi binary) for `pi --mode rpc`; "direct" adds the
+  # Agent runtime axis. "claude" (default) is a no-op; "pi" adds the
+  # consumer-supplied `piPkg` for `pi --mode rpc`; "direct" adds the
   # consumer-supplied direct-runner binary that the entrypoint execs over
   # JSONL stdio.
   agent ? "claude",
@@ -39,6 +40,10 @@
   # provide this themselves (e.g. via `loom.packages.${system}.default`)
   # since wrapix no longer builds loom in-tree.
   directRunner ? null,
+  # Linux-built package whose `bin/` directory contains the `pi` binary.
+  # Required when `agent == "pi"`; ignored otherwise. Consumers provide this
+  # themselves since wrapix no longer ships pi-mono in tree.
+  piPkg ? null,
   # Use buildLayeredImage (tar in store) instead of streamLayeredImage (script).
   # Required on Darwin where the stream script's Linux Python shebang won't execute.
   asTarball ? false,
@@ -109,18 +114,19 @@ let
   '';
 
   # Agent runtime layer. `claude` is a no-op (claudeCode is the entrypointPkg
-  # already baked into every image); `pi` adds pi-mono; `direct` adds the
-  # consumer-supplied `directRunner` package. New runtimes plug in by
-  # extending this lookup — no profile.pi or pi+rust special cases.
+  # already baked into every image); `pi` adds the consumer-supplied `piPkg`;
+  # `direct` adds the consumer-supplied `directRunner` package. New runtimes
+  # plug in by extending this lookup — no profile.pi or pi+rust special cases.
   directRunnerPkg =
     if directRunner == null then
       throw "lib/sandbox/image.nix: agent='direct' requires the `directRunner` argument"
     else
       directRunner;
+  piPkgResolved = if piPkg == null then throw ''mkSandbox: agent = "pi" requires piPkg'' else piPkg;
   agentPackages =
     {
       claude = [ ];
-      pi = [ pkgs.pi-mono ];
+      pi = [ piPkgResolved ];
       direct = [ directRunnerPkg ];
     }
     .${agent}

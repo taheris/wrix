@@ -49,21 +49,6 @@
           profile = profiles.python;
           mcpRuntime = true;
         };
-        # Pi runtime variants — same workspace profiles, agent=pi adds pi-mono
-        # (Node.js + pi binary) on top. WRAPIX_AGENT=pi at runtime selects the
-        # pi entrypoint branch.
-        sandbox-pi = {
-          profile = profiles.base;
-          agent = "pi";
-        };
-        sandbox-rust-pi = {
-          profile = profiles.rust;
-          agent = "pi";
-        };
-        sandbox-python-pi = {
-          profile = profiles.python;
-          agent = "pi";
-        };
         debug = {
           profile = profiles.rust;
           packages = [ linuxPkgs.podman ];
@@ -84,7 +69,6 @@
             beads
             beads-dolt
             beads-push
-            pi-mono
             ;
 
           default = sandboxPkgs.sandbox-rust;

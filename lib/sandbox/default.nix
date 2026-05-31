@@ -116,6 +116,10 @@ let
 
   # Build the container image using Linux packages
   # On Darwin, this will use a remote Linux builder if configured
+  #
+  # `agent = "pi"` requires the caller to supply `piPkg` (a Linux-built
+  # package whose `bin/` contains the `pi` binary); wrapix no longer ships
+  # pi-mono in tree. Symmetric with `agent = "direct"` and `directRunner`.
   mkImage =
     {
       profile,
@@ -126,6 +130,7 @@ let
       mcpServerConfigs ? { },
       agent ? "claude",
       directRunner ? null,
+      piPkg ? null,
       asTarball ? false,
     }:
     import ./image.nix {
@@ -139,6 +144,7 @@ let
         mcpServerConfigs
         agent
         directRunner
+        piPkg
         asTarball
         ;
       entrypointPkg = claudePkg;
@@ -198,13 +204,24 @@ let
       mcp ? { },
       mcpRuntime ? false,
       # Agent runtime axis composed onto the workspace profile. "claude"
-      # (default) is a no-op; "pi" adds the pi-mono runtime layer; "direct"
-      # adds a consumer-supplied `directRunner` package.
+      # (default) is a no-op; "pi" adds a consumer-supplied `piPkg`; "direct"
+      # adds a consumer-supplied `directRunner` package. Both `pi` and
+      # `direct` require their respective package argument — mkSandbox throws
+      # "agent = \"pi\" requires piPkg" (resp. directRunner) when the package
+      # is missing, since wrapix no longer ships pi-mono or loom in tree.
       agent ? "claude",
       # Linux-built package whose `bin/` directory contains the direct-runner
       # binary. Required when `agent == "direct"`. Consumers provide this
       # themselves (e.g. via `loom.packages.${system}.default`) since wrapix
       # no longer builds loom in-tree.
+      directRunner ? null,
+      # Linux-built package whose `bin/` directory contains the `pi` binary.
+      # Required when `agent == "pi"`. Consumers provide this themselves
+      # (e.g. via `loom.packages.${system}.pi-mono`); wrapix no longer ships
+      # pi-mono in tree. When the caller asks for `agent = "pi"` without
+      # supplying `piPkg`, the default raises a fail-fast
+      # `throw "... piPkg ..."` so the misuse is caught at evaluation.
+      piPkg ? if agent == "pi" then throw ''mkSandbox: agent = "pi" requires piPkg'' else null,
       # Override the default ANTHROPIC_MODEL for this container (null = use default)
       model ? null,
     }:
@@ -297,7 +314,12 @@ let
         krunSupport = isLinux;
         asTarball = isDarwin;
         claudeSettings = finalClaudeSettings;
-        inherit agent mcpServerConfigs;
+        inherit
+          agent
+          directRunner
+          piPkg
+          mcpServerConfigs
+          ;
       };
 
       # Profile-specific sandbox: makeWrapper composes launcher + image,
