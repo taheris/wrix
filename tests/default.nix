@@ -10,16 +10,7 @@
 }:
 
 let
-  inherit (builtins) elem pathExists;
   inherit (pkgs) writeShellScriptBin;
-  isLinux = elem system [
-    "x86_64-linux"
-    "aarch64-linux"
-  ];
-
-  # Check if KVM is available (for VM integration tests)
-  # This is impure - requires `nix flake check --impure`
-  hasKvm = pathExists "/dev/kvm";
 
   # ============================================================================
   # Pure Nix Checks (run via `nix flake check`)
@@ -28,10 +19,13 @@ let
   # Smoke tests run on all platforms
   smokeTests = import ./sandbox/smoke.nix { inherit pkgs system treefmt; };
 
-  # Sandbox VM integration tests require NixOS VM (Linux with KVM only)
-  # Skip when KVM unavailable (e.g., inside containers)
-  sandboxIntegrationTests =
-    if isLinux && hasKvm then import ./sandbox/integration.nix { inherit pkgs treefmt; } else { };
+  # Test sandbox image with `hello` as a stand-in for claude/beads.
+  # Exposed as `packages.test-image-base` so the host-side podman
+  # verifiers can `nix build .#test-image-base` without rebuilding the
+  # full claude/beads closure.
+  testImages = {
+    base = import ./sandbox/test-image.nix { inherit pkgs treefmt; };
+  };
 
   # Shell utility tests run on all platforms
   shellTests = import ./sandbox/shell.nix { inherit pkgs; };
@@ -88,7 +82,6 @@ let
     // darwinUidTests
     // readmeTest
     // rustChecks
-    // sandboxIntegrationTests
     // shellTests
     // smokeTests
     // tmuxMcpTests
@@ -166,9 +159,9 @@ in
     darwinUidTests
     readmeTest
     rustChecks
-    sandboxIntegrationTests
     shellTests
     smokeTests
+    testImages
     tmuxMcpTests
     tomlTests
     ;

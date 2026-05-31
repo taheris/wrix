@@ -1,17 +1,15 @@
 #!/usr/bin/env bash
 # Verifier for the tmux-mcp integration suite (specs/tmux-mcp.md).
 #
-# Drives the NixOS VM check `tmux-mcp-integration` (tests/mcp/tmux/check.nix),
-# which boots a VM with tmux + tmux-mcp on PATH and runs every `test_*.sh`
-# under tests/mcp/tmux/ against the MCP server over JSON-RPC. The covered
-# behaviours are pane lifecycle (create/list/kill), send_keys + capture
-# round-trip, exited-pane reporting, audit log JSON-Lines format, error
-# handling, and session cleanup on server exit.
+# Drives the existing tests/mcp/tmux/test_*.sh scripts directly against
+# the host's tmux + the wrapix-built tmux-mcp binary — no container, no
+# VM. Each test exercises the MCP server's JSON-RPC surface over stdin/
+# stdout for one tool (create_pane, send_keys, capture_pane, kill_pane,
+# list_panes, exited_pane, error_handling, audit_log, cleanup_on_exit).
 #
-#   Linux with /dev/kvm + nix  -> nix build .#checks.<system>.tmux-mcp-integration
-#   Darwin                     -> exit 77 (NixOS VM is Linux-only)
-#   Linux without /dev/kvm     -> exit 77 (check is gated on KVM)
-#   nix unavailable on PATH    -> exit 77
+#   Linux + nix + tmux on PATH  -> exercise the binary
+#   non-Linux                   -> exit 77 (test_*.sh assume Linux tmux semantics)
+#   nix or tmux missing         -> exit 77
 
 set -euo pipefail
 
@@ -23,40 +21,13 @@ skip() {
   exit 77
 }
 
-main() {
-  local uname_s
-  uname_s=$(uname -s)
+uname_s=$(uname -s)
+[[ "$uname_s" = "Linux" ]] || skip "Linux-only verifier (uname=$uname_s); test_*.sh use Linux tmux semantics"
+command -v nix  >/dev/null 2>&1 || skip "nix not on PATH"
+command -v tmux >/dev/null 2>&1 || skip "tmux not on PATH"
 
-  if [[ "$uname_s" = "Darwin" ]]; then
-    skip "tmux-mcp-integration runs in a NixOS VM (Linux-only)"
-  fi
+cd "$REPO_ROOT"
 
-  if [[ "$uname_s" != "Linux" ]]; then
-    skip "unsupported platform: $uname_s"
-  fi
+TMUX_MCP_BIN_DIR=$(nix build --no-link --print-out-paths --no-warn-dirty .#tmux-mcp)
 
-  if [[ ! -e /dev/kvm ]]; then
-    skip "/dev/kvm not present — flake check tmux-mcp-integration is gated on KVM"
-  fi
-
-  if ! command -v nix >/dev/null 2>&1; then
-    skip "nix not on PATH — cannot drive .#checks.<system>.tmux-mcp-integration"
-  fi
-
-  local system
-  system=$(nix eval --raw --impure --no-warn-dirty --expr 'builtins.currentSystem')
-
-  local attr=".#checks.${system}.tmux-mcp-integration"
-  echo "=== nix build $attr ===" >&2
-  # --impure: tests/mcp/tmux/check.nix gates integrationTests on
-  # `builtins.pathExists "/dev/kvm"`, which returns false in pure eval
-  # even when /dev/kvm exists. The shell-level KVM guard above already
-  # gates the script.
-  if ! nix build --impure --no-link --print-build-logs --no-warn-dirty "$attr"; then
-    echo "FAIL: $attr did not build" >&2
-    return 1
-  fi
-  echo "PASS: $attr built successfully" >&2
-}
-
-(cd "$REPO_ROOT" && main "$@")
+PATH="$TMUX_MCP_BIN_DIR/bin:$PATH" exec bash "$REPO_ROOT/tests/mcp/tmux/run-integration.sh" "$@"

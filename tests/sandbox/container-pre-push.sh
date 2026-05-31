@@ -4,34 +4,14 @@
 #   A pre-push hook configured in `.pre-commit-config.yaml` fires when
 #   `git push` runs inside a profile container.
 #
-# The substantive behaviour is exercised by the NixOS VM check in
-# tests/sandbox/integration.nix (attr `container-pre-push`, derivation
-# name `wrapix-container-pre-push`). That check loads the base sandbox
-# image into a rootless podman inside a NixOS VM, seeds a workspace with
-# a git repo, a bare local file:// remote, and a .pre-commit-config.yaml
-# that names both a `skip-if-missing` probe and a sentinel hook, then
-# runs `git push origin main` as the entrypoint's command override. The
-# sentinel hook writes a marker file outside the worktree
-# (.git/sentinel-fired-prepush); its presence after the push proves the
-# bundled pre-push shim ran the configured hooks via core.hooksPath. The
-# bare remote also reports an updated HEAD, so the push completed end-to-
-# end through the stamp-file dance. It is wired into the flake checks via
-# tests/default.nix only when /dev/kvm is available; without KVM (Darwin,
-# or Linux in a container that cannot nest VMs) the attr is dropped at
-# the tests/default.nix layer.
-#
-# This shell verifier drives the existing check rather than re-implementing
-# container hook firing — we do not add a new backing test. We only translate
-# environment availability into a verdict the orchestrator can consume:
-#
-#   Linux with /dev/kvm + nix    → run `nix build .#checks.<system>.container-pre-push`
-#   Darwin                       → exit 77 (macOS container hook parity not yet covered)
-#   Linux without /dev/kvm       → exit 77 (matches tests/default.nix's KVM gate)
-#   nix unavailable on PATH      → exit 77 (cannot drive the flake check at all)
-#
-# The exit-77 SKIP convention mirrors tests/sandbox/container-starts.sh: a
-# clear stderr message plus exit 77 lets the runner distinguish "test cannot
-# run here" from "test failed".
+# Seeds a workspace with a git repo + a local bare remote + a
+# .pre-commit-config.yaml naming two pre-push hooks (a skip-if-missing
+# wrapper probe and a sentinel touch), commits a seed file on the host
+# (no hooks installed there yet), then runs `git push origin main`
+# inside the container. The entrypoint installs core.hooksPath, the
+# pre-push shim invokes prek which dispatches the configured hooks, the
+# sentinel touch proves the chain fired, and the push reaches the bare
+# remote.
 
 set -euo pipefail
 
@@ -43,40 +23,87 @@ skip() {
   exit 77
 }
 
-main() {
-  local uname_s
-  uname_s=$(uname -s)
+uname_s=$(uname -s)
+[[ "$uname_s" = "Linux" ]] || skip "Linux-only verifier (uname=$uname_s)"
+command -v nix    >/dev/null 2>&1 || skip "nix not on PATH"
+command -v podman >/dev/null 2>&1 || skip "podman not on PATH"
+command -v git    >/dev/null 2>&1 || skip "git not on PATH"
 
-  if [[ "$uname_s" = "Darwin" ]]; then
-    skip "container-pre-push runs in a NixOS VM (Linux-only); macOS container hook parity is not yet exercised"
-  fi
+cd "$REPO_ROOT"
 
-  if [[ "$uname_s" != "Linux" ]]; then
-    skip "unsupported platform: $uname_s"
-  fi
+IMAGE_STREAM=$(nix build --no-link --print-out-paths --no-warn-dirty .#test-image-base)
 
-  if [[ ! -e /dev/kvm ]]; then
-    skip "/dev/kvm not present — flake check container-pre-push is gated on KVM"
-  fi
+WORKSPACE=$(mktemp -d -t wrapix-container-pre-push.XXXXXX)
+cleanup() {
+  rm -rf "$WORKSPACE"
+  podman rmi -f localhost/wrapix-base:latest >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
 
-  if ! command -v nix >/dev/null; then
-    skip "nix not on PATH — cannot drive .#checks.<system>.container-pre-push"
-  fi
+"$IMAGE_STREAM" | podman load >/dev/null
+IMAGE_REF="localhost/wrapix-base:latest"
 
-  local system
-  system=$(nix eval --raw --impure --no-warn-dirty --expr 'builtins.currentSystem')
+# Seed the workspace: working repo + bare file:// remote + sentinel +
+# initial commit (made on the host; no hooks fire because core.hooksPath
+# is unset until the container's entrypoint installs it).
+git -C "$WORKSPACE" init -q -b main
+git -C "$WORKSPACE" config user.email test@example.com
+git -C "$WORKSPACE" config user.name Test
+git -C "$WORKSPACE" init --bare -q remote.git
+git -C "$WORKSPACE" remote add origin "file:///workspace/remote.git"
+echo seed > "$WORKSPACE/seed.txt"
 
-  local attr=".#checks.${system}.container-pre-push"
-  echo "=== nix build $attr ===" >&2
-  # --impure: tests/default.nix gates sandboxIntegrationTests on
-  # `builtins.pathExists "/dev/kvm"`, which returns false in pure eval
-  # even when /dev/kvm exists. Without --impure the attr is missing
-  # despite the shell-level KVM guard above.
-  if ! nix build --impure --no-link --print-build-logs --no-warn-dirty "$attr"; then
-    echo "FAIL: $attr did not build" >&2
-    return 1
-  fi
-  echo "PASS: $attr built successfully" >&2
+cat > "$WORKSPACE/.pre-commit-config.yaml" <<'YAML'
+repos:
+  - repo: local
+    hooks:
+      - id: wrapper-on-path
+        name: wrapper-on-path
+        entry: skip-if-missing nonexistent-tool-xyz -- false
+        language: system
+        stages: [pre-push]
+        always_run: true
+        pass_filenames: false
+      - id: sentinel
+        name: sentinel
+        entry: /workspace/.git/sentinel-pre-push.sh
+        language: system
+        stages: [pre-push]
+        always_run: true
+        pass_filenames: false
+YAML
+
+cat > "$WORKSPACE/.git/sentinel-pre-push.sh" <<'SCRIPT'
+#!/usr/bin/env bash
+touch /workspace/.git/sentinel-fired-prepush
+SCRIPT
+chmod 755 "$WORKSPACE/.git/sentinel-pre-push.sh"
+
+git -C "$WORKSPACE" add -A
+git -C "$WORKSPACE" commit -q -m initial
+
+# Push from inside the container. The entrypoint installs
+# core.hooksPath -> prek bundle, then `git push` triggers the pre-push
+# shim which runs prek hook-impl --hook-type=pre-push and invokes the
+# sentinel before the actual push proceeds.
+podman run --rm --network=pasta --userns=keep-id \
+  -e HOME=/home/wrapix \
+  -e GIT_AUTHOR_NAME=test -e GIT_AUTHOR_EMAIL=test@example.com \
+  -e GIT_COMMITTER_NAME=test -e GIT_COMMITTER_EMAIL=test@example.com \
+  -v "$WORKSPACE:/workspace:rw" \
+  "$IMAGE_REF" \
+  /bin/bash -c "cd /workspace && git push origin main"
+
+# Sentinel side-effect proves the pre-push hook chain fired.
+[[ -f "$WORKSPACE/.git/sentinel-fired-prepush" ]] || {
+  echo "FAIL: pre-push sentinel did not fire" >&2
+  exit 1
 }
 
-(cd "$REPO_ROOT" && main "$@")
+# The push reached the bare remote (HEAD ref exists).
+git -C "$WORKSPACE/remote.git" rev-parse refs/heads/main >/dev/null || {
+  echo "FAIL: push did not land on the bare remote" >&2
+  exit 1
+}
+
+echo "PASS: container-pre-push" >&2

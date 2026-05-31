@@ -5,6 +5,7 @@
     {
       system,
       pkgs,
+      test,
       wrapix,
       linuxPkgs,
       ...
@@ -75,6 +76,9 @@
           loom = inputs.loom.packages.${system}.loom;
           nodejs = linuxPkgs.nodejs_22;
           profile-images = wrapix.mkProfileImages profileImages;
+          # Test sandbox image (claude/beads stubbed out with `hello`);
+          # consumed by the host-side podman verifiers in tests/sandbox/.
+          test-image-base = test.testImages.base;
           tmux-mcp = wrapix.tmuxMcpPackage.bin;
           wrapix = wrapixLauncher;
           wrapix-builder = import ../../lib/builder { inherit pkgs linuxPkgs; };

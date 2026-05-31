@@ -6,33 +6,9 @@
 #   exit_code, mode, and claude_session_dir fields are populated; and
 #   claude_session_dir resolves to an existing directory.
 #
-# The substantive behaviour is exercised by the NixOS VM check in
-# tests/sandbox/integration.nix (attr `audit-trail-anchor`, derivation
-# name `wrapix-audit-trail-anchor`). That check loads the base sandbox
-# image into a rootless podman inside a NixOS VM, runs the entrypoint
-# with a no-op command override so its EXIT trap fires without booting
-# an agent runtime, and asserts the host-side
-# `/tmp/workspace/.wrapix/log/*.json` exists with the contract fields
-# populated and `claude_session_dir` resolving to an existing host
-# directory. It is wired into the flake checks via tests/default.nix
-# only when /dev/kvm is available; without KVM (Darwin, or Linux in a
-# container that cannot nest VMs) the attr is dropped at the
-# tests/default.nix layer.
-#
-# This shell verifier drives the existing check rather than
-# re-implementing audit-trail emission — we do not add a new backing
-# test. We only translate environment availability into a verdict the
-# orchestrator can consume:
-#
-#   Linux with /dev/kvm + nix    -> nix build .#checks.<system>.audit-trail-anchor
-#   Darwin                       -> exit 77 (entrypoint exercised by tests/darwin/*)
-#   Linux without /dev/kvm       -> exit 77 (matches tests/default.nix's KVM gate)
-#   nix unavailable on PATH      -> exit 77 (cannot drive the flake check at all)
-#
-# The exit-77 SKIP convention mirrors tests/sandbox/container-starts.sh,
-# tests/sandbox/filesystem-isolation.sh, and tests/sandbox/uid-mapping.sh:
-# a clear stderr message plus exit 77 lets the runner distinguish "test
-# cannot run here" from "test failed".
+# Runs the entrypoint with `/bin/true` as the command override so the
+# EXIT trap fires without booting any agent runtime. Asserts the
+# host-side $WORKSPACE/.wrapix/log/*.json carries the contract fields.
 
 set -euo pipefail
 
@@ -44,40 +20,62 @@ skip() {
   exit 77
 }
 
-main() {
-  local uname_s
-  uname_s=$(uname -s)
+uname_s=$(uname -s)
+[[ "$uname_s" = "Linux" ]] || skip "Linux-only verifier (uname=$uname_s); macOS entrypoint covered by tests/darwin/*"
+command -v nix    >/dev/null 2>&1 || skip "nix not on PATH"
+command -v podman >/dev/null 2>&1 || skip "podman not on PATH"
+command -v jq     >/dev/null 2>&1 || skip "jq not on PATH"
 
-  if [[ "$uname_s" = "Darwin" ]]; then
-    skip "audit-trail-anchor runs in a NixOS VM (Linux-only); macOS entrypoint is covered by tests/darwin/*"
-  fi
+cd "$REPO_ROOT"
 
-  if [[ "$uname_s" != "Linux" ]]; then
-    skip "unsupported platform: $uname_s"
-  fi
+IMAGE_STREAM=$(nix build --no-link --print-out-paths --no-warn-dirty .#test-image-base)
 
-  if [[ ! -e /dev/kvm ]]; then
-    skip "/dev/kvm not present — flake check audit-trail-anchor is gated on KVM"
-  fi
+WORKSPACE=$(mktemp -d -t wrapix-audit-trail.XXXXXX)
+cleanup() {
+  rm -rf "$WORKSPACE"
+  podman rmi -f localhost/wrapix-base:latest >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
 
-  if ! command -v nix >/dev/null 2>&1; then
-    skip "nix not on PATH — cannot drive .#checks.<system>.audit-trail-anchor"
-  fi
+"$IMAGE_STREAM" | podman load >/dev/null
+IMAGE_REF="localhost/wrapix-base:latest"
 
-  local system
-  system=$(nix eval --raw --impure --no-warn-dirty --expr 'builtins.currentSystem')
+# Run the entrypoint with a no-op command override. The launcher's
+# always-on env (HOME, GIT_AUTHOR_*, GIT_COMMITTER_*) is replicated so
+# the entrypoint's claude-config branch and write_session_log fire the
+# same way they would under real `wrapix run`.
+podman run --rm --network=pasta --userns=keep-id \
+  -e HOME=/home/wrapix \
+  -e GIT_AUTHOR_NAME=test -e GIT_AUTHOR_EMAIL=test@example.com \
+  -e GIT_COMMITTER_NAME=test -e GIT_COMMITTER_EMAIL=test@example.com \
+  -v "$WORKSPACE:/workspace:rw" \
+  "$IMAGE_REF" /bin/true
 
-  local attr=".#checks.${system}.audit-trail-anchor"
-  echo "=== nix build $attr ===" >&2
-  # --impure: tests/default.nix gates sandboxIntegrationTests on
-  # `builtins.pathExists "/dev/kvm"`, which returns false in pure eval
-  # even when /dev/kvm exists. Without --impure the attr is missing
-  # despite the shell-level KVM guard above.
-  if ! nix build --impure --no-link --print-build-logs --no-warn-dirty "$attr"; then
-    echo "FAIL: $attr did not build" >&2
-    return 1
-  fi
-  echo "PASS: $attr built successfully" >&2
+log_count=$(find "$WORKSPACE/.wrapix/log" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l)
+[[ "$log_count" -eq 1 ]] || {
+  echo "FAIL: expected exactly one session-metadata JSON, got $log_count" >&2
+  exit 1
 }
 
-(cd "$REPO_ROOT" && main "$@")
+log_file=$(find "$WORKSPACE/.wrapix/log" -maxdepth 1 -name '*.json' | head -n1)
+
+for field in timestamp_start timestamp_end exit_code mode claude_session_dir; do
+  value=$(jq -r ".${field} // empty" "$log_file")
+  [[ -n "$value" ]] || {
+    echo "FAIL: field $field empty/null in $log_file" >&2
+    cat "$log_file" >&2
+    exit 1
+  }
+done
+
+claude_dir=$(jq -r '.claude_session_dir' "$log_file")
+[[ "$claude_dir" = "/workspace/.claude" ]] || {
+  echo "FAIL: unexpected claude_session_dir: $claude_dir" >&2
+  exit 1
+}
+[[ -d "$WORKSPACE/.claude" ]] || {
+  echo "FAIL: claude_session_dir does not exist on host: $WORKSPACE/.claude" >&2
+  exit 1
+}
+
+echo "PASS: audit-trail-anchor" >&2

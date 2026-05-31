@@ -4,32 +4,15 @@
 #   Files created inside /workspace carry the host UID/GID, not a
 #   container-internal UID.
 #
-# The substantive behaviour is exercised by two existing backing tests:
+# Runs directly against the host's rootless podman with `--userns=keep-id`:
+# the host caller's UID maps to the same UID inside the container's user
+# namespace, so a write from container-side root or wrapix lands on disk
+# owned by the host caller.
 #
-#   Linux  — tests/sandbox/integration.nix attr `user-namespace`
-#            (NixOS VM check; creates files inside the container under
-#            `--userns=keep-id` and asserts host-side stat shows UID 1000).
-#   Darwin — tests/darwin/uid.nix attr `darwin-uid-integration`
-#            (drives Apple `container` CLI with HOST_UID propagation,
-#            then runs tests/darwin/uid-test.sh inside the container).
-#
-# Both are wired into the flake's check set by tests/default.nix:
-#   sandboxIntegrationTests = if isLinux && hasKvm then import ... else {};
-#   darwinUidTests = import ./darwin/uid.nix { ... };
-#
-# This shell verifier drives the existing checks rather than re-implementing
-# UID mapping — we do not add a new backing test. We only translate the
-# environment availability into a verdict the orchestrator can consume:
-#
-#   Linux with /dev/kvm + nix → `nix build .#checks.<system>.user-namespace`
-#   Darwin with nix           → `nix build .#checks.<system>.darwin-uid-integration`
-#   Linux without /dev/kvm    → exit 77 (matches tests/default.nix's KVM gate)
-#   nix unavailable on PATH   → exit 77 (cannot drive the flake check at all)
-#   any other platform        → exit 77
-#
-# The exit-77 SKIP convention mirrors tests/sandbox/container-starts.sh: a
-# clear stderr message plus exit 77 lets the runner distinguish "test cannot
-# run here" from "test failed".
+#   Linux + rootless podman + nix  -> exercise the image
+#   Darwin                         -> exit 77 (Darwin path: tests/darwin/uid.nix)
+#   non-Linux non-Darwin           -> exit 77
+#   nix or podman missing          -> exit 77
 
 set -euo pipefail
 
@@ -41,43 +24,70 @@ skip() {
   exit 77
 }
 
-drive_check() {
-  local attr="$1"
-  echo "=== nix build $attr ===" >&2
-  # --impure: tests/default.nix gates sandboxIntegrationTests on
-  # `builtins.pathExists "/dev/kvm"`, which returns false in pure eval
-  # even when /dev/kvm exists. Without --impure the attr is missing
-  # despite the shell-level KVM guard.
-  if ! nix build --impure --no-link --print-build-logs --no-warn-dirty "$attr"; then
-    echo "FAIL: $attr did not build" >&2
-    return 1
-  fi
-  echo "PASS: $attr built successfully" >&2
+uname_s=$(uname -s)
+case "$uname_s" in
+  Linux) ;;
+  Darwin) skip "Darwin path verified by .#checks.<sys>.darwin-uid-integration" ;;
+  *) skip "unsupported platform: $uname_s" ;;
+esac
+command -v nix    >/dev/null 2>&1 || skip "nix not on PATH"
+command -v podman >/dev/null 2>&1 || skip "podman not on PATH"
+
+cd "$REPO_ROOT"
+
+IMAGE_STREAM=$(nix build --no-link --print-out-paths --no-warn-dirty .#test-image-base)
+
+WORKSPACE=$(mktemp -d -t wrapix-uid-mapping.XXXXXX)
+cleanup() {
+  rm -rf "$WORKSPACE"
+  podman rmi -f localhost/wrapix-base:latest >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+"$IMAGE_STREAM" | podman load >/dev/null
+IMAGE_REF="localhost/wrapix-base:latest"
+HOST_UID=$(id -u)
+
+# Write a file from inside the container.
+podman run --rm --network=pasta --userns=keep-id \
+  --entrypoint /bin/bash \
+  -v "$WORKSPACE:/workspace:rw" \
+  -w /workspace \
+  "$IMAGE_REF" \
+  -c "echo created-in-container > /workspace/container-file.txt"
+
+[[ -f "$WORKSPACE/container-file.txt" ]] || {
+  echo "FAIL: container-file.txt missing on host after container write" >&2
+  exit 1
+}
+got_uid=$(stat -c '%u' "$WORKSPACE/container-file.txt")
+[[ "$got_uid" = "$HOST_UID" ]] || {
+  echo "FAIL: container-file.txt has UID $got_uid, expected $HOST_UID" >&2
+  exit 1
+}
+content=$(cat "$WORKSPACE/container-file.txt")
+[[ "$content" == *created-in-container* ]] || {
+  echo "FAIL: container-file.txt content mismatch: $content" >&2
+  exit 1
 }
 
-main() {
-  if ! command -v nix >/dev/null 2>&1; then
-    skip "nix not on PATH — cannot drive .#checks.<system>.user-namespace or .darwin-uid-integration"
-  fi
+# Create a subdirectory + nested file; ownership should propagate.
+podman run --rm --network=pasta --userns=keep-id \
+  --entrypoint /bin/bash \
+  -v "$WORKSPACE:/workspace:rw" \
+  -w /workspace \
+  "$IMAGE_REF" \
+  -c "mkdir -p /workspace/subdir && echo nested > /workspace/subdir/nested.txt"
 
-  local uname_s system
-  uname_s=$(uname -s)
-  system=$(nix eval --raw --impure --no-warn-dirty --expr 'builtins.currentSystem')
-
-  case "$uname_s" in
-    Linux)
-      if [[ ! -e /dev/kvm ]]; then
-        skip "/dev/kvm not present — flake check user-namespace is gated on KVM in tests/default.nix"
-      fi
-      drive_check ".#checks.${system}.user-namespace"
-      ;;
-    Darwin)
-      drive_check ".#checks.${system}.darwin-uid-integration"
-      ;;
-    *)
-      skip "unsupported platform: $uname_s"
-      ;;
-  esac
+got_dir_uid=$(stat -c '%u' "$WORKSPACE/subdir")
+[[ "$got_dir_uid" = "$HOST_UID" ]] || {
+  echo "FAIL: subdir has UID $got_dir_uid, expected $HOST_UID" >&2
+  exit 1
+}
+got_nested_uid=$(stat -c '%u' "$WORKSPACE/subdir/nested.txt")
+[[ "$got_nested_uid" = "$HOST_UID" ]] || {
+  echo "FAIL: subdir/nested.txt has UID $got_nested_uid, expected $HOST_UID" >&2
+  exit 1
 }
 
-(cd "$REPO_ROOT" && main "$@")
+echo "PASS: uid-mapping" >&2

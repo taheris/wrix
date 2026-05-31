@@ -4,29 +4,16 @@
 #   Host filesystem outside /workspace and declared mounts is not visible
 #   inside the container.
 #
-# The substantive behaviour is exercised by the NixOS VM check in
-# tests/sandbox/integration.nix (attr `filesystem-isolation`, derivation
-# name `wrapix-filesystem-isolation`). That check loads the base sandbox
-# image into a rootless podman inside a NixOS VM, writes a sentinel file
-# at /tmp/host-secret.txt on the host, and asserts the container cannot
-# read it through its own /tmp (which is isolated from the host) while
-# still being able to read /workspace bind-mounts. It is wired into the
-# flake checks via tests/default.nix only when /dev/kvm is available;
-# without KVM (Darwin, or Linux in a container that cannot nest VMs) the
-# attr is dropped at the tests/default.nix layer.
+# Runs directly against the host's rootless podman: builds the test sandbox
+# image, loads it, then runs a container that:
+#   1. CAN read $WORKSPACE/testfile.txt via the -v bind mount;
+#   2. CANNOT read a sentinel file on the host (placed outside the bind);
+#   3. CANNOT see host users in /etc/passwd (image's fakeNss owns it).
 #
-# This shell verifier drives the existing check rather than re-implementing
-# filesystem isolation — we do not add a new backing test. We only translate
-# environment availability into a verdict the orchestrator can consume:
-#
-#   Linux with /dev/kvm + nix    → run `nix build .#checks.<system>.filesystem-isolation`
-#   Darwin                       → exit 77 (macOS branch covered by tests/darwin/*)
-#   Linux without /dev/kvm       → exit 77 (matches tests/default.nix's KVM gate)
-#   nix unavailable on PATH      → exit 77 (cannot drive the flake check at all)
-#
-# The exit-77 SKIP convention mirrors tests/sandbox/container-starts.sh and
-# tests/sandbox/uid-mapping.sh: a clear stderr message plus exit 77 lets the
-# runner distinguish "test cannot run here" from "test failed".
+#   Linux + rootless podman + nix  -> exercise the image
+#   Darwin                         -> exit 77 (macOS path covered by tests/darwin/*)
+#   non-Linux non-Darwin           -> exit 77
+#   nix or podman missing          -> exit 77
 
 set -euo pipefail
 
@@ -38,40 +25,67 @@ skip() {
   exit 77
 }
 
-main() {
-  local uname_s
-  uname_s=$(uname -s)
+uname_s=$(uname -s)
+[[ "$uname_s" = "Linux" ]] || skip "Linux-only verifier (uname=$uname_s); macOS covered by tests/darwin/*"
+command -v nix    >/dev/null 2>&1 || skip "nix not on PATH"
+command -v podman >/dev/null 2>&1 || skip "podman not on PATH"
 
-  if [[ "$uname_s" = "Darwin" ]]; then
-    skip "filesystem-isolation runs in a NixOS VM (Linux-only); macOS is covered by tests/darwin/*"
-  fi
+cd "$REPO_ROOT"
 
-  if [[ "$uname_s" != "Linux" ]]; then
-    skip "unsupported platform: $uname_s"
-  fi
+IMAGE_STREAM=$(nix build --no-link --print-out-paths --no-warn-dirty .#test-image-base)
 
-  if [[ ! -e /dev/kvm ]]; then
-    skip "/dev/kvm not present — flake check filesystem-isolation is gated on KVM"
-  fi
+WORKSPACE=$(mktemp -d -t wrapix-fs-isolation.XXXXXX)
+HOST_SENTINEL=$(mktemp -t wrapix-fs-isolation-host-secret.XXXXXX)
+echo 'host-secret' > "$HOST_SENTINEL"
+echo 'workspace-content' > "$WORKSPACE/testfile.txt"
 
-  if ! command -v nix >/dev/null 2>&1; then
-    skip "nix not on PATH — cannot drive .#checks.<system>.filesystem-isolation"
-  fi
+cleanup() {
+  rm -rf "$WORKSPACE" "$HOST_SENTINEL"
+  podman rmi -f localhost/wrapix-base:latest >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
 
-  local system
-  system=$(nix eval --raw --impure --no-warn-dirty --expr 'builtins.currentSystem')
+"$IMAGE_STREAM" | podman load >/dev/null
+IMAGE_REF="localhost/wrapix-base:latest"
 
-  local attr=".#checks.${system}.filesystem-isolation"
-  echo "=== nix build $attr ===" >&2
-  # --impure: tests/default.nix gates sandboxIntegrationTests on
-  # `builtins.pathExists "/dev/kvm"`, which returns false in pure eval
-  # even when /dev/kvm exists. Without --impure the attr is missing
-  # despite the shell-level KVM guard above.
-  if ! nix build --impure --no-link --print-build-logs --no-warn-dirty "$attr"; then
-    echo "FAIL: $attr did not build" >&2
-    return 1
-  fi
-  echo "PASS: $attr built successfully" >&2
+# 1. Workspace bind mount is readable.
+result=$(podman run --rm --network=pasta --userns=keep-id \
+  --entrypoint /bin/bash \
+  -v "$WORKSPACE:/workspace:rw" \
+  -w /workspace \
+  "$IMAGE_REF" \
+  -c "cat /workspace/testfile.txt")
+[[ "$result" == *workspace-content* ]] || {
+  echo "FAIL: workspace bind mount not readable: $result" >&2
+  exit 1
 }
 
-(cd "$REPO_ROOT" && main "$@")
+# 2. The host's sentinel path is NOT exposed inside the container — only
+# /workspace is bind-mounted, so the same absolute path inside is empty.
+if podman run --rm --network=pasta --userns=keep-id \
+    --entrypoint /bin/bash \
+    -v "$WORKSPACE:/workspace:rw" \
+    "$IMAGE_REF" \
+    -c "cat $HOST_SENTINEL" 2>/dev/null | grep -q host-secret; then
+  echo "FAIL: container could read host path $HOST_SENTINEL" >&2
+  exit 1
+fi
+
+# 3. Container /etc/passwd is the image's fakeNss, not the host's.
+container_passwd=$(podman run --rm --network=pasta --userns=keep-id \
+  --entrypoint /bin/bash \
+  -v "$WORKSPACE:/workspace:rw" \
+  "$IMAGE_REF" \
+  -c "cat /etc/passwd")
+if [[ "$container_passwd" != *wrapix* ]]; then
+  echo "FAIL: container /etc/passwd missing image fakeNss wrapix entry" >&2
+  echo "$container_passwd" >&2
+  exit 1
+fi
+host_user=$(id -un)
+if [[ "$container_passwd" == *"$host_user"* ]] && [[ "$host_user" != "wrapix" ]]; then
+  echo "FAIL: container /etc/passwd leaked host user $host_user" >&2
+  exit 1
+fi
+
+echo "PASS: filesystem-isolation" >&2

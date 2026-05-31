@@ -4,31 +4,13 @@
 #   A pre-commit hook configured in `.pre-commit-config.yaml` fires when
 #   `git commit` runs inside a profile container.
 #
-# The substantive behaviour is exercised by the NixOS VM check in
-# tests/sandbox/integration.nix (attr `container-pre-commit`, derivation
-# name `wrapix-container-pre-commit`). That check loads the base sandbox
-# image into a rootless podman inside a NixOS VM, seeds a workspace with
-# a git repo, a .pre-commit-config.yaml that names both a `skip-if-missing`
-# probe and a sentinel hook, then runs `git commit` as the entrypoint's
-# command override. The sentinel hook writes a marker file outside the
-# worktree (.git/sentinel-fired-precommit); its presence after the commit
-# proves the bundled hook chain fired via core.hooksPath. It is wired into
-# the flake checks via tests/default.nix only when /dev/kvm is available;
-# without KVM (Darwin, or Linux in a container that cannot nest VMs) the
-# attr is dropped at the tests/default.nix layer.
-#
-# This shell verifier drives the existing check rather than re-implementing
-# container hook firing — we do not add a new backing test. We only translate
-# environment availability into a verdict the orchestrator can consume:
-#
-#   Linux with /dev/kvm + nix    → run `nix build .#checks.<system>.container-pre-commit`
-#   Darwin                       → exit 77 (macOS container hook parity not yet covered)
-#   Linux without /dev/kvm       → exit 77 (matches tests/default.nix's KVM gate)
-#   nix unavailable on PATH      → exit 77 (cannot drive the flake check at all)
-#
-# The exit-77 SKIP convention mirrors tests/sandbox/container-starts.sh: a
-# clear stderr message plus exit 77 lets the runner distinguish "test cannot
-# run here" from "test failed".
+# Seeds a workspace with a git repo + a .pre-commit-config.yaml naming
+# two hooks (a skip-if-missing wrapper probe and a sentinel touch), then
+# runs `git add -A && git commit -m test` inside the container with the
+# entrypoint as the entrypoint. The entrypoint installs core.hooksPath
+# to wrapix.prekHooks before exec'ing the override; the commit's
+# pre-commit shim then dispatches the .pre-commit-config.yaml hooks via
+# prek. Sentinel marker file proves the chain fired.
 
 set -euo pipefail
 
@@ -40,40 +22,75 @@ skip() {
   exit 77
 }
 
-main() {
-  local uname_s
-  uname_s=$(uname -s)
+uname_s=$(uname -s)
+[[ "$uname_s" = "Linux" ]] || skip "Linux-only verifier (uname=$uname_s)"
+command -v nix    >/dev/null 2>&1 || skip "nix not on PATH"
+command -v podman >/dev/null 2>&1 || skip "podman not on PATH"
+command -v git    >/dev/null 2>&1 || skip "git not on PATH"
 
-  if [[ "$uname_s" = "Darwin" ]]; then
-    skip "container-pre-commit runs in a NixOS VM (Linux-only); macOS container hook parity is not yet exercised"
-  fi
+cd "$REPO_ROOT"
 
-  if [[ "$uname_s" != "Linux" ]]; then
-    skip "unsupported platform: $uname_s"
-  fi
+IMAGE_STREAM=$(nix build --no-link --print-out-paths --no-warn-dirty .#test-image-base)
 
-  if [[ ! -e /dev/kvm ]]; then
-    skip "/dev/kvm not present — flake check container-pre-commit is gated on KVM"
-  fi
+WORKSPACE=$(mktemp -d -t wrapix-container-pre-commit.XXXXXX)
+cleanup() {
+  rm -rf "$WORKSPACE"
+  podman rmi -f localhost/wrapix-base:latest >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
 
-  if ! command -v nix >/dev/null; then
-    skip "nix not on PATH — cannot drive .#checks.<system>.container-pre-commit"
-  fi
+"$IMAGE_STREAM" | podman load >/dev/null
+IMAGE_REF="localhost/wrapix-base:latest"
 
-  local system
-  system=$(nix eval --raw --impure --no-warn-dirty --expr 'builtins.currentSystem')
+# Seed the workspace: git repo + .pre-commit-config.yaml + sentinel.
+git -C "$WORKSPACE" init -q -b main
+git -C "$WORKSPACE" config user.email test@example.com
+git -C "$WORKSPACE" config user.name Test
+echo seed > "$WORKSPACE/seed.txt"
 
-  local attr=".#checks.${system}.container-pre-commit"
-  echo "=== nix build $attr ===" >&2
-  # --impure: tests/default.nix gates sandboxIntegrationTests on
-  # `builtins.pathExists "/dev/kvm"`, which returns false in pure eval
-  # even when /dev/kvm exists. Without --impure the attr is missing
-  # despite the shell-level KVM guard above.
-  if ! nix build --impure --no-link --print-build-logs --no-warn-dirty "$attr"; then
-    echo "FAIL: $attr did not build" >&2
-    return 1
-  fi
-  echo "PASS: $attr built successfully" >&2
+cat > "$WORKSPACE/.pre-commit-config.yaml" <<'YAML'
+repos:
+  - repo: local
+    hooks:
+      - id: wrapper-on-path
+        name: wrapper-on-path
+        entry: skip-if-missing nonexistent-tool-xyz -- false
+        language: system
+        stages: [pre-commit]
+        always_run: true
+        pass_filenames: false
+      - id: sentinel
+        name: sentinel
+        entry: /workspace/.git/sentinel-pre-commit.sh
+        language: system
+        stages: [pre-commit]
+        always_run: true
+        pass_filenames: false
+YAML
+
+cat > "$WORKSPACE/.git/sentinel-pre-commit.sh" <<'SCRIPT'
+#!/usr/bin/env bash
+touch /workspace/.git/sentinel-fired-precommit
+SCRIPT
+chmod 755 "$WORKSPACE/.git/sentinel-pre-commit.sh"
+
+# Run the container with `git add -A && git commit` as the override.
+podman run --rm --network=pasta --userns=keep-id \
+  -e HOME=/home/wrapix \
+  -e GIT_AUTHOR_NAME=test -e GIT_AUTHOR_EMAIL=test@example.com \
+  -e GIT_COMMITTER_NAME=test -e GIT_COMMITTER_EMAIL=test@example.com \
+  -v "$WORKSPACE:/workspace:rw" \
+  "$IMAGE_REF" \
+  /bin/bash -c "cd /workspace && git add -A && git commit -m test"
+
+# Sentinel side-effect proves the hook chain fired via core.hooksPath.
+[[ -f "$WORKSPACE/.git/sentinel-fired-precommit" ]] || {
+  echo "FAIL: pre-commit sentinel did not fire" >&2
+  exit 1
 }
 
-(cd "$REPO_ROOT" && main "$@")
+# The wrapper-on-path probe would have failed the commit if
+# `skip-if-missing` were not on PATH (`command not found` is non-zero);
+# the commit succeeding above is the evidence that both wrappers landed.
+
+echo "PASS: container-pre-commit" >&2
