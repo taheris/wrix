@@ -35,3 +35,19 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-push]
+
+      # loom gate verify enforces every spec annotation (and the
+      # spec-convention integrity rules — e.g. resolved `?` markers).
+      # --diff @{upstream}..HEAD scopes to the commits the push will
+      # publish; loom's no-flag default is `HEAD` (last commit only)
+      # outside a molecule context, which would miss earlier commits in
+      # the push range. skip-if-missing keeps the hook inert in contexts
+      # where loom isn't on PATH (bead containers without the rust-mcp
+      # profile, fresh clones outside the devshell).
+      - id: loom-gate-verify
+        name: loom gate verify
+        entry: skip-if-missing loom -- loom gate verify --diff @{upstream}..HEAD
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
