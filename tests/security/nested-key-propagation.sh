@@ -205,6 +205,12 @@ test_git_signing_produces_gpgsig() {
   if ! (
     set -e
     cd "$repo"
+    # Isolate git config to $signing_home: HOME alone is not enough — git
+    # also reads XDG_CONFIG_HOME/git/config and the GIT_CONFIG_GLOBAL
+    # override. If a caller's XDG path is read-only (e.g. some sandbox
+    # mounts), `git commit` errors at config-lock time before signing
+    # gets exercised at all.
+    unset XDG_CONFIG_HOME GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM
     export HOME="$signing_home"
     export WRAPIX_DEPLOY_KEY="$HOST_DEPLOY_KEY"
     export WRAPIX_SIGNING_KEY="$HOST_SIGNING_KEY"

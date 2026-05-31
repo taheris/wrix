@@ -62,7 +62,11 @@ main() {
 
   local attr=".#checks.${system}.container-start"
   echo "=== nix build $attr ===" >&2
-  if ! nix build --no-link --print-build-logs --no-warn-dirty "$attr"; then
+  # --impure: tests/default.nix gates sandboxIntegrationTests on
+  # `builtins.pathExists "/dev/kvm"`, which returns false in pure eval
+  # even when /dev/kvm exists. Without --impure the attr is missing
+  # despite the shell-level KVM guard above.
+  if ! nix build --impure --no-link --print-build-logs --no-warn-dirty "$attr"; then
     echo "FAIL: $attr did not build" >&2
     return 1
   fi
