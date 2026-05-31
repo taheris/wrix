@@ -153,8 +153,14 @@ let
             {
               virtualisation = {
                 podman.enable = true;
+                # diskSize must fit two copies of the rust + tmux image closure
+                # (~5.7 GB): the streamed tarball lands in /var/tmp/ during
+                # `podman load` and the unpacked layers go into
+                # /var/lib/containers/storage. 8 GB OOMs the load with
+                # "no space left on device"; 16 GB leaves headroom for both
+                # copies plus the VM's working /var.
                 memorySize = 4096;
-                diskSize = 8192;
+                diskSize = 16384;
                 cores = 2;
               };
 

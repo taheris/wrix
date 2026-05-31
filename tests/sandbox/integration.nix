@@ -26,9 +26,15 @@ let
     {
       virtualisation = {
         podman.enable = true;
-        # Allocate enough resources for container tests
+        # Allocate enough resources for container tests. diskSize covers the
+        # VM writable layer where `podman load` first writes the streamed
+        # tarball to /var/tmp/, then untars it into /var/lib/containers/storage —
+        # so the floor is roughly 2× the image closure. The wrapix-base
+        # closure is ~3.6 GB, so 4 GB OOMs the load with
+        # "no space left on device". 12 GB leaves room for both copies plus
+        # /home, /var, and a working buffer.
         memorySize = 2048;
-        diskSize = 4096;
+        diskSize = 12288;
         cores = 2;
       };
 
