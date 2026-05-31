@@ -78,9 +78,12 @@ if [[ ! -d "${PACKAGE_PATH}" ]]; then
 fi
 
 # Extract the image stream path from the makeWrapper-generated wrapper.
-# Profile-specific sandboxes are built as `makeWrapper` over the bare
-# launcher that sets WRAPIX_DEFAULT_IMAGE_SOURCE='/nix/store/...'.
-IMAGE_PATH=$(grep -oP "WRAPIX_DEFAULT_IMAGE_SOURCE='\K[^']+" "${PACKAGE_PATH}/bin/wrapix" | head -1) || {
+# Profile-specific sandboxes are built as `makeWrapper --set-default` over the
+# bare launcher, so the wrapper line is
+# `WRAPIX_DEFAULT_IMAGE_SOURCE=${WRAPIX_DEFAULT_IMAGE_SOURCE-'/nix/store/...'}`
+# (the `-'…'` default-fallback form, not the older `--set` bare `'…'` form).
+# Match the first single-quoted nix-store path that follows the variable name.
+IMAGE_PATH=$(grep -oP "WRAPIX_DEFAULT_IMAGE_SOURCE=[^']*'\K[^']+" "${PACKAGE_PATH}/bin/wrapix" | head -1) || {
     log_error "Could not find WRAPIX_DEFAULT_IMAGE_SOURCE in wrapper script"
     exit 1
 }
