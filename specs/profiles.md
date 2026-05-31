@@ -392,14 +392,16 @@ repositories. Two conditions gate the install: (1)
 `prekHooks` resolves to a derivation. When both hold, the lifecycle
 runs `git config --local core.hooksPath ${derivation}` on every
 devshell entry, pointing git at a frozen Nix-store bundle of shims.
-The default bundle is `wrapix.prekHooks`, which ships flock-wrapped
-`pre-commit` / `pre-push` and plain `prepare-commit-msg` /
-`post-checkout` / `post-merge` shims. Consumers do not write their
+The default bundle is `wrapix.prekHooks`, which ships a `prek
+hook-impl --hook-type=<stage>` shim for every stage prek serves. The
+pre-push shim writes `.wrapix/push-verified` (HEAD SHA) after a
+successful check so a subsequent `git push` can short-circuit if the
+SSH connection died during validation. Consumers do not write their
 own shims, do not vendor `lib/prek/hooks/`, and do not set
-`core.hooksPath` from their own shellHook. The contract closes the
-wx-m5yuq stash-race surface (see `specs/pre-commit.md`) for every
-prek-using consumer by default, and there is no `prek install -f`
-step to clobber hand-authored files.
+`core.hooksPath` from their own shellHook. There is no `prek install
+-f` step to clobber hand-authored files. See `specs/pre-commit.md`
+for the bundle's contracts and the scope decision around
+concurrent-commit serialization.
 
 `prekHooks` resolves as follows:
 
@@ -603,10 +605,10 @@ dests live under `/home/wrapix/` inside the container, not under
   [system](bash tests/profiles/mkdevshell.sh test_shellhook_order)
 - `wrapix.mkDevShell {}` without `profile` errors at evaluation
   [system](bash tests/profiles/mkdevshell.sh test_profile_required)
-- `wrapix.prekHooks` is exported on the lib and is a directory derivation containing executable shims for `pre-commit`, `pre-push`, `prepare-commit-msg`, `post-checkout`, `post-merge` plus a `_lib/lock.sh` helper
-  [system](bash tests/profiles/prek-hooks-bundle.sh test_bundle_contents)
-- `pre-commit` and `pre-push` shims in `wrapix.prekHooks` source `_lib/lock.sh` and call `_prek_acquire_lock` before invoking prek; `prepare-commit-msg`, `post-checkout`, `post-merge` shims call prek directly without sourcing the lock helper
-  [system](bash tests/profiles/prek-hooks-bundle.sh test_flock_only_on_fr2_stages)
+- The materialized `wrapix.prekHooks` derivation contains exactly five executable files (one per stage: `pre-commit`, `pre-push`, `prepare-commit-msg`, `post-checkout`, `post-merge`) and no other paths
+  [system?](bash tests/profiles/prek-hooks-bundle.sh test_bundle_contents)
+- Each materialized shim's content matches `prek hook-impl --hook-type=<stage>` for its stage
+  [system?](bash tests/profiles/prek-hooks-bundle.sh test_shims_are_plain_hook_impl)
 - `wrapix.mkDevShell { profile = ...; }` with `.pre-commit-config.yaml` present sets `core.hooksPath` to `${wrapix.prekHooks}` on entry
   [system](bash tests/profiles/mkdevshell-prek.sh test_auto_set_when_config_present)
 - `wrapix.mkDevShell { profile = ...; }` without `.pre-commit-config.yaml` does NOT set `core.hooksPath` on entry
