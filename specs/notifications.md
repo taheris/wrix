@@ -78,16 +78,8 @@ The daemon's macOS TCP transport binds to the vmnet gateway (192.168.64.1:5959),
 
 ## Success Criteria
 
-- Linux client sends a notification through the mounted Unix socket and the host daemon dispatches it via `notify-send`
-  [system](bash tests/notify/linux-notify-send.sh)
-- macOS client sends a notification over TCP to the gateway address and the host daemon dispatches it via `terminal-notifier`
-  [system](bash tests/notify/macos-terminal-notifier.sh)
-- Daemon suppresses the notification when the registered tmux session's window is focused
-  [system](bash tests/notify/focus-suppression.sh)
-- N concurrent clients each send one envelope and all N notifications are dispatched to the host bridge (no envelopes silently discarded)
-  [system](bash tests/notify/concurrent-connections.sh)
-- `wrapix-notify` invoked from inside a container reaches the host daemon
-  [system](bash tests/notify/client-in-container.sh)
+- `wrapix-notify` invoked from inside a container reaches a running host daemon via the platform-appropriate transport (Linux Unix socket, Darwin TCP to gateway); skips with exit 77 when the daemon is not running
+  [system](bash tests/standalone/notify-test.sh)
 - macOS TCP listener binds to the vmnet gateway address (`192.168.64.1`); `0.0.0.0` is not used as a bind address
   [check](grep -nE '192\.168\.64\.1|0\.0\.0\.0' lib/notify/daemon.nix)
 

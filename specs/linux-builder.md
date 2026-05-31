@@ -57,16 +57,10 @@ The container boundary is the isolation primitive; Nix's internal sandbox is dis
 
 ## Success Criteria
 
-- `nix build --system aarch64-linux <pkg>` on macOS dispatches to the builder and returns the built derivation
-  [system](bash tests/builder/aarch64-linux-build.sh)
-- `/nix` survives `wrapix-builder stop && wrapix-builder start` — store paths present before stop are still present after restart
-  [system](bash tests/builder/nix-store-persistence.sh)
+- The `wrapix-builder` integration suite passes on macOS 26+ (start, status, SSH, nix-daemon, remote `nixpkgs#hello` build, store persistence across `stop`/`start`, `config` snippet); skips with exit 77 on non-Darwin or older macOS
+  [system](bash tests/standalone/builder-test.sh)
 - sshd inside the container has `PasswordAuthentication no` and binds the listener to `127.0.0.1`
   [check](grep -nE 'PasswordAuthentication|ListenAddress' lib/sandbox/builder/entrypoint.sh)
-- `wrapix-builder config` emits a nix-darwin `nix.buildMachines` snippet pointing at `ssh-ng://builder@localhost:2222`
-  [system](wrapix-builder config | grep -q 'ssh-ng://builder@localhost:2222')
-- `wrapix-builder stop` followed by `wrapix-builder start` leaves no stranded container or socket and SSH reconnects on first attempt
-  [system](bash tests/builder/stop-restart.sh)
 
 ## Requirements
 
