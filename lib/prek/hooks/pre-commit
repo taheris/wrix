@@ -1,3 +1,3 @@
 #!/usr/bin/env bash
 set -euo pipefail
-exec prek hook-impl --hook-dir "$(dirname "$0")" --script-version 4 --hook-type=pre-commit -- "$@"
+exec prek hook-impl --hook-type=pre-commit --hook-dir "$(dirname "$0")" --script-version 4 -- "$@"

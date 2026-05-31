@@ -116,9 +116,9 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
 - The pre-commit and pre-push shims both invoke `prek hook-impl --hook-type=<stage>` (not `prek run`, which would mistake git's positional args for hook/project selectors)
   [check](grep -nE 'hook-impl --hook-type=' lib/prek/hooks/pre-commit lib/prek/hooks/pre-push)
 - No shim under `lib/prek/hooks/` references `flock`, `_prek_acquire_lock`, or `_lib/lock.sh`
-  [check?](sh -c '! grep -rnE "_prek_acquire_lock|lock\.sh|\bflock\b" lib/prek/hooks/')
+  [check](sh -c '! grep -rnE "_prek_acquire_lock|lock\.sh|\bflock\b" lib/prek/hooks/')
 - The bundle source does not ship a `lib/prek/lock.sh` helper
-  [check?](test ! -e lib/prek/lock.sh)
+  [check](test ! -e lib/prek/lock.sh)
 - The pre-push shim writes and consumes `.wrapix/push-verified`
   [check](grep -nE 'push-verified' lib/prek/hooks/pre-push)
 - `wrapix.prePushChecks` and `wrapix.skipIfMissing` are exposed by the wrapix library and land on the host devShell's `PATH`

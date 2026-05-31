@@ -26,10 +26,9 @@ mkdir -p "$_wrapix_dir"
 # from stdin is parsed correctly — same code path git would use, but
 # decoupled from the SSH connection.
 _hook_dir="$(dirname "$0")"
-printf '%s\n' "$_stdin" | prek hook-impl \
+printf '%s\n' "$_stdin" | prek hook-impl --hook-type=pre-push \
     --hook-dir "$_hook_dir" \
     --script-version 4 \
-    --hook-type=pre-push \
     -- "$@" || exit 1
 
 # Tests passed — stamp in case the SSH connection died during tests.
