@@ -41,8 +41,18 @@ let
 
       configJSON = {
         browser = {
+          # @playwright/mcp otherwise calls createUserDataDir() which mkdirs
+          # `mcp-<channel>-<cwdHash>` under playwright-core's registry path
+          # (the read-only nix store) and EACCES's any tool that opens a
+          # browser context (e.g. browser_take_screenshot). Pinning
+          # userDataDir to a writable container path keeps the persistent
+          # context inside the wrapix HOME and matches the runtime layout
+          # the entrypoint already provisions. See
+          # playwright-core/lib/tools/mcp/browserFactory.js:createUserDataDir.
+          userDataDir = "/home/wrapix/.cache/playwright-mcp";
           launchOptions = {
             args = mandatoryFlags ++ userArgs;
+            channel = "chromium";
             executablePath = chromiumPath;
             inherit headless;
           }
@@ -77,7 +87,7 @@ in
       configFile = mkConfigFile { inherit headless viewport config; };
     in
     {
-      command = "mcp-server-playwright";
+      command = "playwright-mcp";
       args = [
         "--config"
         "${configFile}"

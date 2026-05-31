@@ -70,9 +70,9 @@ test_image_contains_chromium() {
         return 1
     }
 
-    local mcp_bin="${mcp_path}/bin/mcp-server-playwright"
+    local mcp_bin="${mcp_path}/bin/playwright-mcp"
     if [[ ! -x "$mcp_bin" ]]; then
-        log_fail "mcp-server-playwright binary not found at: $mcp_bin"
+        log_fail "playwright-mcp binary not found at: $mcp_bin"
         return 1
     fi
     log_info "MCP server binary found: $mcp_bin"

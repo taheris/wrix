@@ -6,7 +6,7 @@
 #    take a screenshot, verify base64 PNG is returned
 #
 # Prerequisites:
-# - mcp-server-playwright (from nixpkgs)
+# - playwright-mcp (from nixpkgs)
 # - playwright-driver.browsers (chromium)
 # - nodejs (for local HTTP server)
 # - jq, base64, xxd
@@ -52,13 +52,13 @@ trap cleanup EXIT
 # --- Helpers ---
 
 find_playwright_mcp() {
-    if command -v mcp-server-playwright &>/dev/null; then
-        command -v mcp-server-playwright
+    if command -v playwright-mcp &>/dev/null; then
+        command -v playwright-mcp
         return 0
     fi
     local pkg_path
     pkg_path=$(nix build 'nixpkgs#playwright-mcp' --no-link --print-out-paths 2>/dev/null) || return 1
-    echo "${pkg_path}/bin/mcp-server-playwright"
+    echo "${pkg_path}/bin/playwright-mcp"
 }
 
 find_chromium() {
@@ -87,11 +87,29 @@ find_node() {
 make_config() {
     local chrome_path="$1"
     local config_file="${TEMP_DIR}/config.json"
+    # browserName + channel are pinned explicitly: @playwright/mcp defaults
+    # `channel` to `"chrome-for-testing"` when neither browserName nor channel
+    # is set, then tries to install that channel's binary under
+    # $PLAYWRIGHT_BROWSERS_PATH and EACCES against the read-only nix store
+    # path. Pinning channel=chromium honors executablePath without triggering
+    # the install path. See playwright-core/lib/tools/mcp/config.js.
+    local user_data_dir="${TEMP_DIR}/user-data"
+    mkdir -p "$user_data_dir"
+    # browserName + channel are pinned explicitly: @playwright/mcp defaults
+    # `channel` to `"chrome-for-testing"` when neither is set. userDataDir is
+    # pre-created in a writable temp dir because @playwright/mcp otherwise
+    # calls createUserDataDir() which mkdirs `mcp-<channel>-<hash>` under
+    # the playwright registry (the read-only nix store path), EACCES'ing on
+    # the screenshot tool path. See
+    # playwright-core/lib/tools/mcp/browserFactory.js:createUserDataDir.
     cat > "$config_file" <<EOF
 {
   "browser": {
+    "browserName": "chromium",
+    "userDataDir": "${user_data_dir}",
     "launchOptions": {
       "args": ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+      "channel": "chromium",
       "executablePath": "${chrome_path}",
       "headless": true
     }
@@ -200,7 +218,7 @@ test_screenshot_returns_png() {
     log_test "test_screenshot_returns_png: Navigate and capture screenshot as base64 PNG"
 
     local mcp_bin chrome_path node_bin config_file
-    mcp_bin=$(find_playwright_mcp) || { log_fail "Cannot find mcp-server-playwright"; return 1; }
+    mcp_bin=$(find_playwright_mcp) || { log_fail "Cannot find playwright-mcp"; return 1; }
     chrome_path=$(find_chromium) || { log_fail "Cannot find chromium"; return 1; }
     node_bin=$(find_node) || { log_fail "Cannot find node"; return 1; }
 

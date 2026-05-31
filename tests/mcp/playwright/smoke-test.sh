@@ -8,7 +8,7 @@
 #    (PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 is effective)
 #
 # Prerequisites:
-# - mcp-server-playwright (from nixpkgs)
+# - playwright-mcp (from nixpkgs)
 # - playwright-driver.browsers (chromium)
 # - jq
 
@@ -48,14 +48,14 @@ trap cleanup EXIT
 # --- Helpers ---
 
 find_playwright_mcp() {
-    if command -v mcp-server-playwright &>/dev/null; then
-        command -v mcp-server-playwright
+    if command -v playwright-mcp &>/dev/null; then
+        command -v playwright-mcp
         return 0
     fi
     # Try nix build
     local pkg_path
     pkg_path=$(nix build 'nixpkgs#playwright-mcp' --no-link --print-out-paths 2>/dev/null) || return 1
-    echo "${pkg_path}/bin/mcp-server-playwright"
+    echo "${pkg_path}/bin/playwright-mcp"
 }
 
 find_chromium() {
@@ -164,7 +164,7 @@ test_mcp_initialize() {
     log_test "test_mcp_initialize: MCP server starts and returns tools"
 
     local mcp_bin chrome_path config_file
-    mcp_bin=$(find_playwright_mcp) || { log_fail "Cannot find mcp-server-playwright"; return 1; }
+    mcp_bin=$(find_playwright_mcp) || { log_fail "Cannot find playwright-mcp"; return 1; }
     chrome_path=$(find_chromium) || { log_fail "Cannot find chromium"; return 1; }
 
     TEMP_DIR=$(mktemp -d)
@@ -228,7 +228,7 @@ test_offline_startup() {
     log_test "test_offline_startup: Server starts with PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
 
     local mcp_bin chrome_path config_file
-    mcp_bin=$(find_playwright_mcp) || { log_fail "Cannot find mcp-server-playwright"; return 1; }
+    mcp_bin=$(find_playwright_mcp) || { log_fail "Cannot find playwright-mcp"; return 1; }
     chrome_path=$(find_chromium) || { log_fail "Cannot find chromium"; return 1; }
 
     TEMP_DIR=$(mktemp -d)
