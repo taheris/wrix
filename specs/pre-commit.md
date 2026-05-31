@@ -115,10 +115,8 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
   [check](grep -nE 'core\.hooksPath|prekHooks' lib/default.nix)
 - The pre-commit and pre-push shims both invoke `prek hook-impl --hook-type=<stage>` (not `prek run`, which would mistake git's positional args for hook/project selectors)
   [check](grep -nE 'hook-impl --hook-type=' lib/prek/hooks/pre-commit lib/prek/hooks/pre-push)
-- No shim under `lib/prek/hooks/` references `flock`, `_prek_acquire_lock`, or `_lib/lock.sh`
-  [check](sh -c '! grep -rnE "_prek_acquire_lock|lock\.sh|\bflock\b" lib/prek/hooks/')
-- The bundle source does not ship a `lib/prek/lock.sh` helper
-  [check](test ! -e lib/prek/lock.sh)
+- No shim sources `lock.sh`, calls `_prek_acquire_lock`, or invokes `flock`; every shim invokes `prek hook-impl --hook-type=<its-stage>`
+  [system](bash tests/profiles/prek-hooks-bundle.sh test_shims_are_plain_hook_impl)
 - The pre-push shim writes and consumes `.wrapix/push-verified`
   [check](grep -nE 'push-verified' lib/prek/hooks/pre-push)
 - `wrapix.prePushChecks` and `wrapix.skipIfMissing` are exposed by the wrapix library and land on the host devShell's `PATH`
@@ -164,7 +162,7 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
 - Hook retry logic
 - Parallel hook execution
 - Parameterized `mkPrekHooks` constructor. v1 ships a single frozen `wrapix.prekHooks` bundle; consumers needing a different shim set substitute a hand-built derivation via `mkDevShell { prekHooks = <derivation>; }`. A parameterized constructor lands when a second concrete use case emerges.
-- Stash-race protection for concurrent commits against the same working tree. Prek's stash/restore dance races when two commits land at once. Wrapix relies on its consumers' invocation model to avoid this: loom runs each bead in a private `git clone --local` under `.loom/beads/<id>/` with a single sequential agent per container and never touches the operator's `/workspace/`, so no concurrent writers reach a shared working tree under loom's control. Residual cases (parallel host shells on a single working tree, non-loom linked worktrees) use `git commit --no-verify` / `git push --no-verify` as the escape hatch.
+- Cross-process serialization of prek hook execution. Earlier revisions wrapped every shim in a `flock`-guarded critical section to defend prek's stash/restore dance against two commits landing at once on the same working tree. That defense was retired because wrapix's consumer-invocation model already eliminates the dominant contention case: loom runs each bead in a private `git clone --local` under `.loom/beads/<id>/` with a single sequential agent per container and never touches the operator's `/workspace/`, so no concurrent writers reach a shared working tree under loom's control. Residual cases (parallel host shells on a single working tree, non-loom linked worktrees) use `git commit --no-verify` / `git push --no-verify` as the escape hatch.
 - `marker.json` schema, mint, and validation — owned by downstream loom.
 - `loom gate verify-marker` subcommand internals — owned by downstream loom.
 - `.pre-commit-config.yaml` content in downstream projects — wrapix ships the wrappers, not the hook list.
