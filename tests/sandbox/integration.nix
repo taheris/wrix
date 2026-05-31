@@ -38,8 +38,12 @@ let
         cores = 2;
       };
 
-      # Enable pasta network mode for rootless containers
+      # Enable pasta network mode for rootless containers.
+      # git is needed on the VM (not just in-container) by the
+      # container-pre-{commit,push} tests, which seed the workspace with
+      # `git init` before running the container.
       environment.systemPackages = with pkgs; [
+        git
         podman
         slirp4netns
       ];
