@@ -134,9 +134,9 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
 - `skip-if-missing <tool> -- <cmd>` exits 0 without running `<cmd>` when `<tool>` is absent from `PATH`
   [system](bash tests/prek/skip-if-missing-absent.sh)
 - A pre-commit hook configured in `.pre-commit-config.yaml` fires when `git commit` runs inside a profile container
-  [system?](bash tests/sandbox/container-pre-commit.sh)
+  [system](bash tests/sandbox/container-pre-commit.sh)
 - A pre-push hook configured in `.pre-commit-config.yaml` fires when `git push` runs inside a profile container
-  [system?](bash tests/sandbox/container-pre-push.sh)
+  [system](bash tests/sandbox/container-pre-push.sh)
 
 ## Requirements
 
