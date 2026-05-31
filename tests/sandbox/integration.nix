@@ -68,7 +68,7 @@ in
       machine.wait_for_unit("multi-user.target")
 
       # Load the test image
-      machine.succeed("${testImage} | podman load")
+      machine.succeed("su - testuser -c \"${testImage} | podman load\"")
 
       # Create a test workspace directory
       machine.succeed("mkdir -p /tmp/workspace && chown testuser:users /tmp/workspace")
@@ -112,7 +112,7 @@ in
       machine.wait_for_unit("multi-user.target")
 
       # Load the test image
-      machine.succeed("${testImage} | podman load")
+      machine.succeed("su - testuser -c \"${testImage} | podman load\"")
 
       # Create test workspace
       machine.succeed("mkdir -p /tmp/workspace && chown testuser:users /tmp/workspace")
@@ -173,7 +173,7 @@ in
       machine.wait_for_unit("multi-user.target")
 
       # Load the test image
-      machine.succeed("${testImage} | podman load")
+      machine.succeed("su - testuser -c \"${testImage} | podman load\"")
 
       # Create test workspace owned by testuser
       machine.succeed("mkdir -p /tmp/workspace && chown testuser:users /tmp/workspace")
@@ -264,7 +264,7 @@ in
       in
       ''
         machine.wait_for_unit("multi-user.target")
-        machine.succeed("${testImage} | podman load")
+        machine.succeed("su - testuser -c \"${testImage} | podman load\"")
 
         # Workspace owned by testuser (UID 1000); --userns=keep-id maps this
         # to the container's wrapix user (UID 1000) so the entrypoint can
@@ -361,7 +361,7 @@ in
       in
       ''
         machine.wait_for_unit("multi-user.target")
-        machine.succeed("${testImage} | podman load")
+        machine.succeed("su - testuser -c \"${testImage} | podman load\"")
 
         machine.succeed("mkdir -p /tmp/workspace && chown testuser:users /tmp/workspace")
 
@@ -434,7 +434,7 @@ in
       machine.wait_for_unit("multi-user.target")
 
       # Load the test image
-      machine.succeed("${testImage} | podman load")
+      machine.succeed("su - testuser -c \"${testImage} | podman load\"")
 
       # Create test workspace owned by testuser; entrypoint writes its
       # session log under /workspace/.wrapix/log/ which surfaces on the host
