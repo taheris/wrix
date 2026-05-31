@@ -225,14 +225,14 @@ upstream, not by this spec.
   `.beads/config.yaml`, so subsequent bd calls inside and outside
   `beads-push` no longer emit the `Warning: auto-export: git add failed`
   message or write `.beads/issues.jsonl`
-  [judge?](../tests/judges/beads.sh#test_beadspush_disables_autoexport)
+  [judge](../tests/judges/beads.sh#test_beadspush_disables_autoexport)
 
 - `beads-push`'s pre-pull cleanup commits any pre-existing dirt in the
   beads worktree — untracked files OR modified tracked files left by a
   previously-interrupted run — using the same detection surface
   `git rebase` itself consults, so the subsequent `git pull --rebase`
   never aborts with "You have unstaged changes"
-  [judge?](../tests/judges/beads.sh#test_beadspush_pre_pull_cleanup_canonical)
+  [judge](../tests/judges/beads.sh#test_beadspush_pre_pull_cleanup_canonical)
 
 ## Requirements
 

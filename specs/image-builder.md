@@ -42,13 +42,13 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
 ## Success Criteria
 
 - `wrapix spawn`'s image-source → `podman load` step is idempotent (re-loading the same image is a no-op on a fresh inode and on a previously-loaded ref)
-  [system](nix run .#wrapix-spawn-load)
+  [system](nix run .#test-wrapix-spawn-load)
 - `agent = "claude"` produces an image that contains `claude-code`
-  [system](nix run .#claude-runtime-noop)
+  [system](nix run .#test-claude-runtime-noop)
 - The `agent = "pi"` code path threads a consumer-supplied `piPkg` derivation into the image build
-  [check?](grep -nE 'agent.*pi|piPkg' lib/sandbox/image.nix lib/sandbox/default.nix)
+  [check](grep -nE 'agent.*pi|piPkg' lib/sandbox/image.nix lib/sandbox/default.nix)
 - `mkSandbox` throws a clear error when `agent = "pi"` is set without `piPkg`
-  [check?](grep -nE 'throw.*piPkg|piPkg.*requires' lib/sandbox/default.nix)
+  [check](grep -nE 'throw.*piPkg|piPkg.*requires' lib/sandbox/default.nix)
 - The `agent = "direct"` code path threads a consumer-supplied `directRunner` derivation into the image build
   [check](grep -nE 'agent.*direct|directRunner' lib/sandbox/image.nix lib/sandbox/default.nix)
 - `nix-command` and `flakes` are enabled in `/etc/nix/nix.conf` and Nix's in-container build sandbox is disabled
@@ -58,11 +58,11 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
 - The platform entrypoint script (`lib/sandbox/{linux,darwin}/entrypoint.sh`) is the image's startup command
   [check](grep -nE 'entrypointSh|Entrypoint|Cmd' lib/sandbox/image.nix)
 - `wrapix.prekHooks`, `wrapix.prePushChecks`, and `wrapix.skipIfMissing` all land in every profile image's store closure
-  [check?](grep -nrE 'prekHooks|prePushChecks|skipIfMissing' lib/sandbox/ lib/default.nix)
+  [check](grep -nrE 'prekHooks|prePushChecks|skipIfMissing' lib/sandbox/ lib/default.nix)
 - The Linux entrypoint sets `core.hooksPath` on `/workspace/.git` to the `wrapix.prekHooks` store path when `.pre-commit-config.yaml` is present
-  [check?](grep -nE 'core\.hooksPath|prekHooks' lib/sandbox/linux/entrypoint.sh)
+  [check](grep -nE 'core\.hooksPath|prekHooks' lib/sandbox/linux/entrypoint.sh)
 - The Darwin entrypoint mirrors the Linux entrypoint's `core.hooksPath` setup for `/workspace/.git`
-  [check?](grep -nE 'core\.hooksPath|prekHooks' lib/sandbox/darwin/entrypoint.sh)
+  [check](grep -nE 'core\.hooksPath|prekHooks' lib/sandbox/darwin/entrypoint.sh)
 
 ## Requirements
 

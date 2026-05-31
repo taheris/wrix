@@ -132,11 +132,11 @@ Orchestrators that need a different profile per launch export the two vars befor
 - `wrapix run` errors at startup with a clear message when `WRAPIX_DEFAULT_IMAGE_REF` or `WRAPIX_DEFAULT_IMAGE_SOURCE` is unset
   [system](bash tests/sandbox/missing-image-env.sh)
 - `mkSandbox`'s `package` wrapper installs `WRAPIX_DEFAULT_IMAGE_REF` and `WRAPIX_DEFAULT_IMAGE_SOURCE` as caller-overridable defaults via `makeWrapper --set-default` (not `--set`)
-  [check?](grep -nE -- '--set-default[[:space:]]+WRAPIX_DEFAULT_IMAGE_(REF|SOURCE)' lib/sandbox/default.nix)
+  [check](grep -nE -- '--set-default[[:space:]]+WRAPIX_DEFAULT_IMAGE_(REF|SOURCE)' lib/sandbox/default.nix)
 - `mkSandbox`'s `package` wrapper installs `WRAPIX_AGENT` via unconditional `makeWrapper --set` so the wrapper's built agent runtime cannot be overridden at exec time
-  [check?](grep -nE -- '--set[[:space:]]+WRAPIX_AGENT' lib/sandbox/default.nix)
+  [check](grep -nE -- '--set[[:space:]]+WRAPIX_AGENT' lib/sandbox/default.nix)
 - When a caller pre-sets `WRAPIX_DEFAULT_IMAGE_REF` and/or `WRAPIX_DEFAULT_IMAGE_SOURCE` before exec'ing the wrapped `package`, the caller's value for each set variable reaches the underlying launcher; for any variable the caller leaves unset, the wrapper's baked default fills in
-  [system?](bash tests/sandbox/wrapper-image-env-override.sh)
+  [system](bash tests/sandbox/wrapper-image-env-override.sh)
 - `wrapix spawn --spawn-config <file>` parses the documented `SpawnConfig` fields (`image_ref`, `image_source`, `workspace`, `env`, `agent_args`, `mounts`)
   [check](grep -nE 'image_ref|image_source|workspace|env|agent_args|mounts' lib/sandbox/linux/default.nix lib/sandbox/darwin/default.nix)
 - On Linux, each `SpawnConfig.mounts` entry becomes a `-v <host_path>:<container_path>` podman argument, with `:ro` appended when `read_only: true`. A missing or empty `mounts` list produces no additional `-v` flags.

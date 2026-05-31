@@ -81,11 +81,11 @@ The container image is Linux (aarch64 or x86_64), so `pkgs.playwright-driver.bro
 ## Success Criteria
 
 - MCP server starts, responds to `initialize` with the tool list, and runs fully offline (no network downloads at startup)
-  [system](bash tests/mcp/playwright/smoke.sh)
+  [system](bash tests/mcp/playwright/smoke-test.sh)
 - Screenshot returns base64 PNG when navigating to a local HTTP server
-  [system](bash tests/mcp/playwright/screenshot.sh)
+  [system](bash tests/mcp/playwright/screenshot-test.sh)
 - The image built with `mcp.playwright = {}` contains the chromium binary in its store closure
-  [system](bash tests/mcp/playwright/image-contains-chromium.sh)
+  [system](bash tests/mcp/playwright/build-test.sh)
 - Chromium executable path is derived from `pkgs.playwright-driver.browsers`, not from a hard-coded path or `npx`
   [check](grep -nE 'playwright-driver\.browsers|executable-path' lib/mcp/playwright/default.nix)
 - The automatic Chromium flags `--no-sandbox`, `--disable-dev-shm-usage`, and `--disable-gpu` are always passed through `launchOptions.args`
