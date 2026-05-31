@@ -77,14 +77,18 @@ if [[ ! -d "${PACKAGE_PATH}" ]]; then
     exit 1
 fi
 
-# Extract the image stream path from the makeWrapper-generated wrapper.
-# Profile-specific sandboxes are built as `makeWrapper --set-default` over the
-# bare launcher, so the wrapper line is
-# `WRAPIX_DEFAULT_IMAGE_SOURCE=${WRAPIX_DEFAULT_IMAGE_SOURCE-'/nix/store/...'}`
+# Extract the image stream path and ref from the makeWrapper-generated
+# wrapper. Profile-specific sandboxes are built as `makeWrapper --set-default`
+# over the bare launcher, so the wrapper lines are
+# `WRAPIX_DEFAULT_IMAGE_{SOURCE,REF}=${WRAPIX_DEFAULT_IMAGE_{SOURCE,REF}-'…'}`
 # (the `-'…'` default-fallback form, not the older `--set` bare `'…'` form).
-# Match the first single-quoted nix-store path that follows the variable name.
+# Match the first single-quoted value that follows the variable name.
 IMAGE_PATH=$(grep -oP "WRAPIX_DEFAULT_IMAGE_SOURCE=[^']*'\K[^']+" "${PACKAGE_PATH}/bin/wrapix" | head -1) || {
     log_error "Could not find WRAPIX_DEFAULT_IMAGE_SOURCE in wrapper script"
+    exit 1
+}
+IMAGE_REF=$(grep -oP "WRAPIX_DEFAULT_IMAGE_REF=[^']*'\K[^']+" "${PACKAGE_PATH}/bin/wrapix" | head -1) || {
+    log_error "Could not find WRAPIX_DEFAULT_IMAGE_REF in wrapper script"
     exit 1
 }
 
@@ -94,6 +98,7 @@ if [[ ! -e "${IMAGE_PATH}" ]]; then
 fi
 
 log_info "Image built successfully: ${IMAGE_PATH}"
+log_info "Image ref: ${IMAGE_REF}"
 log_info "PASS: Profile composition (rust + tmux MCP) builds correctly"
 
 if [[ "$HAS_PODMAN" != "true" ]]; then
@@ -101,6 +106,18 @@ if [[ "$HAS_PODMAN" != "true" ]]; then
     log_info "Composition validated via successful nix build"
     exit 0
 fi
+
+# Load the streamed OCI archive into the local podman store. IMAGE_PATH is
+# the streamLayeredImage script (writes a tarball to stdout), not a static
+# .tar.gz on disk — `podman run docker-archive:<path>` would treat the
+# bash script as a tarball and fail. After load, refer to the image by
+# IMAGE_REF (the `localhost/wrapix-<profile>:<tag>` the wrapper sets).
+log_info "Loading image into podman..."
+if ! "${IMAGE_PATH}" | podman load >/dev/null 2>&1; then
+    log_error "Failed to load image into podman"
+    exit 1
+fi
+log_info "Image loaded as ${IMAGE_REF}"
 
 # Create a temporary workspace
 WORKSPACE=$(mktemp -d)
@@ -119,7 +136,7 @@ check_command() {
         --entrypoint /bin/bash \
         -v "${WORKSPACE}:/workspace:rw" \
         -w /workspace \
-        "docker-archive:${IMAGE_PATH}" \
+        "${IMAGE_REF}" \
         -c "which $cmd" &>/dev/null; then
         log_info "PASS: $description is present"
         return 0
@@ -143,7 +160,7 @@ check_command_output() {
         --entrypoint /bin/bash \
         -v "${WORKSPACE}:/workspace:rw" \
         -w /workspace \
-        "docker-archive:${IMAGE_PATH}" \
+        "${IMAGE_REF}" \
         -c "$cmd" 2>&1) || true
 
     if echo "$output" | grep -qi "$expected"; then
@@ -234,7 +251,7 @@ ENV_OUTPUT=$(podman run --rm \
     --entrypoint /bin/bash \
     -v "${WORKSPACE}:/workspace:rw" \
     -w /workspace \
-    "docker-archive:${IMAGE_PATH}" \
+    "${IMAGE_REF}" \
     -c "/workspace/check_env.sh" 2>&1)
 
 echo ""
