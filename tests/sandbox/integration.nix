@@ -81,7 +81,7 @@ in
         "--entrypoint /bin/bash "
         "-v /tmp/workspace:/workspace:rw "
         "-w /workspace "
-        "docker-archive:${testImage} "
+        "localhost/${testImage.imageName}:${testImage.imageTag} "
         "-c \"echo container-started\"'"
       )
       assert "container-started" in result, f"Container failed to start: {result}"
@@ -91,7 +91,7 @@ in
         "su - testuser -c 'podman run --rm --network=pasta --userns=keep-id "
         "--entrypoint /bin/bash "
         "-v /tmp/workspace:/workspace:rw "
-        "docker-archive:${testImage} "
+        "localhost/${testImage.imageName}:${testImage.imageTag} "
         "-c \"cat /etc/hosts | grep localhost\"'"
       )
       assert "localhost" in result, f"Network not configured: {result}"
@@ -127,7 +127,7 @@ in
         "--entrypoint /bin/bash "
         "-v /tmp/workspace:/workspace:rw "
         "-w /workspace "
-        "docker-archive:${testImage} "
+        "localhost/${testImage.imageName}:${testImage.imageTag} "
         "-c \"cat /workspace/testfile.txt\"'"
       )
       assert "workspace-content" in result, f"Workspace not accessible: {result}"
@@ -138,7 +138,7 @@ in
         "su - testuser -c 'podman run --rm --network=pasta --userns=keep-id "
         "--entrypoint /bin/bash "
         "-v /tmp/workspace:/workspace:rw "
-        "docker-archive:${testImage} "
+        "localhost/${testImage.imageName}:${testImage.imageTag} "
         "-c \"cat /tmp/host-secret.txt 2>&1\"'"
       )
       # Should fail because /tmp/host-secret.txt doesn't exist in container
@@ -150,7 +150,7 @@ in
         "su - testuser -c 'podman run --rm --network=pasta --userns=keep-id "
         "--entrypoint /bin/bash "
         "-v /tmp/workspace:/workspace:rw "
-        "docker-archive:${testImage} "
+        "localhost/${testImage.imageName}:${testImage.imageTag} "
         "-c \"cat /etc/passwd\"'"
       )
       # Container uses fakeNss, should not have host users
@@ -184,7 +184,7 @@ in
         "--entrypoint /bin/bash "
         "-v /tmp/workspace:/workspace:rw "
         "-w /workspace "
-        "docker-archive:${testImage} "
+        "localhost/${testImage.imageName}:${testImage.imageTag} "
         "-c \"echo created-in-container > /workspace/container-file.txt\"'"
       )
 
@@ -205,7 +205,7 @@ in
         "--entrypoint /bin/bash "
         "-v /tmp/workspace:/workspace:rw "
         "-w /workspace "
-        "docker-archive:${testImage} "
+        "localhost/${testImage.imageName}:${testImage.imageTag} "
         "-c \"mkdir -p /workspace/subdir && echo nested > /workspace/subdir/nested.txt\"'"
       )
 
@@ -302,7 +302,7 @@ in
             "-e GIT_AUTHOR_NAME=test -e GIT_AUTHOR_EMAIL=test@example.com "
             "-e GIT_COMMITTER_NAME=test -e GIT_COMMITTER_EMAIL=test@example.com "
             "-v /tmp/workspace:/workspace:rw "
-            "docker-archive:${testImage} "
+            "localhost/${testImage.imageName}:${testImage.imageTag} "
             "/bin/bash -c \"cd /workspace && git add -A && git commit -m test\"'"
         )
 
@@ -402,7 +402,7 @@ in
             "-e GIT_AUTHOR_NAME=test -e GIT_AUTHOR_EMAIL=test@example.com "
             "-e GIT_COMMITTER_NAME=test -e GIT_COMMITTER_EMAIL=test@example.com "
             "-v /tmp/workspace:/workspace:rw "
-            "docker-archive:${testImage} "
+            "localhost/${testImage.imageName}:${testImage.imageTag} "
             "/bin/bash -c \"cd /workspace && git push origin main\"'"
         )
 
@@ -451,7 +451,7 @@ in
         "-e GIT_AUTHOR_NAME=test -e GIT_AUTHOR_EMAIL=test@example.com "
         "-e GIT_COMMITTER_NAME=test -e GIT_COMMITTER_EMAIL=test@example.com "
         "-v /tmp/workspace:/workspace:rw "
-        "docker-archive:${testImage} /bin/true'"
+        "localhost/${testImage.imageName}:${testImage.imageTag} /bin/true'"
       )
 
       # Assert exactly one session-metadata JSON exists.

@@ -210,7 +210,7 @@ let
                 "--entrypoint /bin/bash "
                 "-v /tmp/workspace:/workspace:rw "
                 "-w /workspace "
-                "docker-archive:${debugImage} "
+                "localhost/${debugImage.imageName}:${debugImage.imageTag} "
                 "-c \"tmux -V\"'"
               )
               assert "tmux" in result, f"tmux not found in container: {result}"
@@ -223,7 +223,7 @@ let
                 "--entrypoint /bin/bash "
                 "-v /tmp/workspace:/workspace:rw "
                 "-w /workspace "
-                "docker-archive:${debugImage} "
+                "localhost/${debugImage.imageName}:${debugImage.imageTag} "
                 "-c \"which tmux-mcp\"'"
               )
               assert "tmux-mcp" in result, f"tmux-mcp not found: {result}"
@@ -236,7 +236,7 @@ let
                 "--entrypoint /bin/bash "
                 "-v /tmp/workspace:/workspace:rw "
                 "-w /workspace "
-                "docker-archive:${debugImage} "
+                "localhost/${debugImage.imageName}:${debugImage.imageTag} "
                 "-c \"echo '\\'''{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1.0\"}}}'\\''' | timeout 5 tmux-mcp 2>/dev/null || echo timeout\"'"
               )
               # Server should respond with JSON-RPC response containing serverInfo
