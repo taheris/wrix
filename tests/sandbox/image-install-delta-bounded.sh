@@ -42,6 +42,10 @@ uname_s=$(uname -s)
 [[ "$uname_s" = "Linux" ]] || skip "Linux-only; Darwin per-layer-blob-dedup install is Out of Scope (specs/image-builder.md)"
 command -v nix    >/dev/null 2>&1 || skip "nix not on PATH"
 command -v podman >/dev/null 2>&1 || skip "podman not on PATH"
+# Nested rootless podman deadlocks on `podman load` (overlayfs storage
+# backend); podman is present but non-functional, so bail cleanly rather
+# than hang the gate. Matches the guard on the other image-load verifiers.
+[ -e /run/.containerenv ] && skip "nested container: podman load unavailable"
 
 cd "$REPO_ROOT"
 
