@@ -174,6 +174,12 @@ in
       program = "${sandboxImageChecks.baseImageUniversalTest}/bin/test-base-image-universal";
     };
 
+    base-image-hash-stable = {
+      meta.description = "Verify wrapix-base-image drvPath is invariant under profile-level input changes";
+      type = "app";
+      program = "${sandboxImageChecks.baseImageHashStableTest}/bin/test-base-image-hash-stable";
+    };
+
     # profiles.rust.buildPackage [verify] hash invariants (specs/profiles.md).
     profiles-build-package = {
       meta.description = "Verify profiles.rust.buildPackage hash invariants (bin/clippy/nextest/cargoArtifacts)";

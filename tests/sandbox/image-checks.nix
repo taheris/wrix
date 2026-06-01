@@ -413,6 +413,70 @@ let
     '';
   };
 
+  # Hash-stability guard for `wrapix-base-image` (specs/image-builder.md
+  # § Base Image Layering). The base captures only the nixpkgs-pin-dependent
+  # bottom-of-closure, so its derivation hash must not move when any
+  # profile-level input changes. We build the full sandbox image under several
+  # perturbations of profile.packages, profile.env, MCP configs, the merged
+  # Claude settings JSON, and the agent runtime selection, then read each
+  # image's chained `fromImage` base (image.baseImage) and assert one drvPath
+  # across all of them. A regression that threads a profile input into
+  # base-image.nix would split the drvPaths and fail here.
+  baseImageOf = args: (sandboxLib.mkSandbox args).image.baseImage.drvPath;
+  referenceBaseImage = baseImageOf { profile = sandboxLib.profiles.base; };
+  baseImagePermutations = {
+    packages = baseImageOf {
+      profile = sandboxLib.profiles.base;
+      packages = [ linuxPkgs.hello ];
+    };
+    env = baseImageOf {
+      profile = sandboxLib.profiles.base;
+      env = {
+        WRAPIX_HASH_STABLE_PROBE = "v2";
+      };
+    };
+    mcpConfigs = baseImageOf {
+      profile = sandboxLib.profiles.base;
+      mcpRuntime = true;
+    };
+    claudeSettings = baseImageOf {
+      profile = sandboxLib.profiles.base;
+      model = "claude-hash-stable-probe";
+    };
+    agentDirect = baseImageOf {
+      profile = sandboxLib.profiles.base;
+      agent = "direct";
+      directRunner = linuxPkgs.hello;
+    };
+    profilePython = baseImageOf { profile = sandboxLib.profiles.python; };
+  };
+  baseImageHashStableChecks = lib.concatStringsSep "\n" (
+    lib.mapAttrsToList (name: drvPath: ''
+      if [[ "${drvPath}" != "$reference" ]]; then
+          echo "FAIL: wrapix-base-image drvPath changed under profile perturbation '${name}'" >&2
+          echo "  reference  : $reference" >&2
+          echo "  ${name}: ${drvPath}" >&2
+          status=1
+      fi
+    '') baseImagePermutations
+  );
+  baseImageHashStableTest = pkgs.writeShellApplication {
+    name = "test-base-image-hash-stable";
+    runtimeInputs = [ pkgs.coreutils ];
+    text = ''
+      reference="${referenceBaseImage}"
+      status=0
+
+      ${baseImageHashStableChecks}
+
+      if [[ "$status" -ne 0 ]]; then
+          exit 1
+      fi
+
+      echo "test-base-image-hash-stable: PASS (base drvPath invariant across ${toString (builtins.length (builtins.attrNames baseImagePermutations))} profile perturbations)"
+    '';
+  };
+
 in
 {
   inherit
@@ -421,5 +485,6 @@ in
     claudeRuntimeNoopTest
     prekHooksClosureTest
     baseImageUniversalTest
+    baseImageHashStableTest
     ;
 }

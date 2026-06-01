@@ -280,4 +280,12 @@ let
           ''
       );
 in
-rawImage // { digest = digestFile; }
+rawImage
+// {
+  digest = digestFile;
+  # Expose the chained `fromImage` base so callers (and the
+  # base-image-hash-stable verifier, specs/image-builder.md § Base Image
+  # Layering) can assert the base derivation is invariant under profile-level
+  # input changes without re-deriving it.
+  baseImage = wrapixBaseImage;
+}
