@@ -79,6 +79,20 @@ silently falling through to the `$HOME` path. A set-but-missing env
 var indicates a parent-process mistake the operator wants to see,
 not a recoverable condition. Same for `WRAPIX_SIGNING_KEY`.
 
+**Spawn mode requires both keys.** The rule-3 no-mount fall-through
+(silent keyless boot) applies only to interactive `wrapix run`. Under
+`wrapix spawn` — the non-interactive path loom uses for loop agents — an
+unresolved key (no env pointer *and* no `$HOME/.ssh/deploy_keys/`
+fallback) is fail-loud: the launcher exits non-zero before the container
+starts, naming the unresolved key. A loop agent that boots keyless cannot
+sign or push and only discovers the gap at land-the-plane time, after its
+work is done and lost when the container exits; failing at launch turns a
+wasted agent run into an immediate, actionable error. The deploy key is
+always required under spawn; the signing key is required unless
+`WRAPIX_GIT_SIGN=0` disables commit signing, in which case an unresolved
+signing key is not fail-loud (a keyless boot still needs the deploy key to
+push).
+
 This precedence exists to support **nested sandboxes**: a parent
 wrapix container can spawn a child wrapix container, injecting keys at
 arbitrary host paths (e.g. `/etc/wrapix/keys/`) and passing those
@@ -204,6 +218,12 @@ this section is the index, not a restatement.
   launcher exits non-zero with a stderr message naming the missing
   path, before the container is started.
   [system](bash tests/security/key-env-missing-file.sh)
+- Under `wrapix spawn`, when a deploy key or signing key does not
+  resolve (no env pointer and no `$HOME/.ssh/deploy_keys/` fallback),
+  the launcher exits non-zero with a stderr message naming the
+  unresolved key, before the container is started; interactive
+  `wrapix run` still boots without keys under the same condition.
+  [system](bash tests/security/spawn-requires-keys.sh)
 - After a sandbox session, a session-metadata index file exists under
   `/workspace/.wrapix/log/`; its `timestamp_start`, `timestamp_end`,
   `exit_code`, `mode`, and `claude_session_dir` fields are populated;
@@ -217,7 +237,9 @@ this section is the index, not a restatement.
 1. **Host-source resolution precedence** — launcher resolves each
    key's host source by env-first, `$HOME/.ssh/deploy_keys/`-second;
    independently per key; fails loud if env is set but file does not
-   exist. (See *Credential Surfaces*.)
+   exist. Under `wrapix spawn`, an unresolved key (no env, no fallback)
+   is also fail-loud; interactive `run` permits the no-mount
+   fall-through. (See *Credential Surfaces*.)
 2. **In-container destination fixed** — `/etc/wrapix/keys/<name>` for
    the deploy key, `/etc/wrapix/keys/<name>-signing` for the signing
    key; the launcher always sets `WRAPIX_DEPLOY_KEY` /

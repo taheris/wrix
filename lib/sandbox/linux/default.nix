@@ -333,6 +333,18 @@ in
           DEPLOY_KEY_ARGS="$DEPLOY_KEY_ARGS -e WRAPIX_SIGNING_KEY=${sshConfig.containerKeyDir}/$DEPLOY_KEY_NAME-signing"
         fi
 
+        # spawn (loop agent) must sign and push: fail loud on a keyless boot, not at land-the-plane (specs/security.md § Deploy & Signing Keys).
+        if [ "$SUBCOMMAND" = "spawn" ]; then
+          if [ -z "$DEPLOY_KEY" ]; then
+            echo "wrapix spawn: no deploy key resolved — set WRAPIX_DEPLOY_KEY to an existing file, or place one at $HOME/.ssh/deploy_keys/$DEPLOY_KEY_NAME" >&2
+            exit 1
+          fi
+          if [ "''${WRAPIX_GIT_SIGN:-1}" != "0" ] && [ -z "$SIGNING_KEY" ]; then
+            echo "wrapix spawn: no signing key resolved — set WRAPIX_SIGNING_KEY to an existing file, place one at $HOME/.ssh/deploy_keys/$DEPLOY_KEY_NAME-signing, or set WRAPIX_GIT_SIGN=0 to disable commit signing" >&2
+            exit 1
+          fi
+        fi
+
         ${stageBeads}
         BEADS_ARGS=""
         if [ -n "$BEADS_STAGING" ]; then
