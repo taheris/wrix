@@ -79,6 +79,11 @@
           # Test sandbox image (claude/beads stubbed out with `hello`);
           # consumed by the host-side podman verifiers in tests/sandbox/.
           test-image-base = test.testImages.base;
+          # Same image with a one-attr claudeConfig perturbation — only
+          # the top-of-closure customisation layer differs. The
+          # image-install-delta-bounded verifier installs both and
+          # asserts the platform store only takes on changed-blob bytes.
+          test-image-base-perturbed = test.testImages.basePerturbed;
           tmux-mcp = wrapix.tmuxMcpPackage.bin;
           wrapix = wrapixLauncher;
           wrapix-builder = import ../../lib/builder { inherit pkgs linuxPkgs; };

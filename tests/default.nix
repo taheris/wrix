@@ -23,8 +23,20 @@ let
   # Exposed as `packages.test-image-base` so the host-side podman
   # verifiers can `nix build .#test-image-base` without rebuilding the
   # full claude/beads closure.
+  #
+  # `basePerturbed` is the same image with a one-attr claudeConfig
+  # difference — the streamLayeredImage customisation layer's hash
+  # changes while every base-layer blob remains identical. The
+  # image-install-delta-bounded verifier installs both and asserts
+  # the platform store only takes on bytes for the changed top layer.
   testImages = {
     base = import ./sandbox/test-image.nix { inherit pkgs treefmt; };
+    basePerturbed = import ./sandbox/test-image.nix {
+      inherit pkgs treefmt;
+      claudeConfig = {
+        _wrapix_delta_bounded_probe = "v2";
+      };
+    };
   };
 
   # Shell utility tests run on all platforms

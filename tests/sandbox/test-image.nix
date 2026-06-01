@@ -6,9 +6,16 @@
 # Exposed via the flake as `packages.test-image-base` so verifier shell
 # scripts can `nix build .#test-image-base` without re-instantiating the
 # profile + image inputs themselves.
+#
+# `claudeConfig` is forwarded straight through to image.nix and only
+# affects the streamLayeredImage customisation layer (top of closure):
+# perturbing it lets the install-delta verifier build two images that
+# share every base-layer blob and differ only in the top-of-closure
+# layer, exercising the launcher's per-blob-dedup install transport.
 {
   pkgs,
   treefmt ? null,
+  claudeConfig ? { },
 }:
 
 let
@@ -23,6 +30,6 @@ import ../../lib/sandbox/image.nix {
   profile = profiles.base;
   entrypointPkg = testPkgs.hello;
   entrypointSh = ../../lib/sandbox/linux/entrypoint.sh;
-  claudeConfig = { };
+  inherit claudeConfig;
   claudeSettings = { };
 }
