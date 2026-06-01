@@ -37,15 +37,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
-"$IMAGE_STREAM" | podman load >/dev/null
 IMAGE_REF="localhost/wrapix-base:latest"
-
-# podman load stores the unqualified manifest tag (`wrapix-base:latest`)
-# under a podman-version-dependent ref — sometimes the bare `<name>:<tag>`,
-# sometimes `localhost/<name>:<tag>`, sometimes `docker.io/library/<name>:<tag>`
-# — depending on the host registries.conf. Re-tag via the loaded image ID
-# to $IMAGE_REF so podman run can address it. Same pattern as the launcher
-# (lib/util/shell.nix imageLoadStep).
+# Clear stale wrapix-base images BEFORE load so the post-load retag has
+# exactly one candidate to pick. `podman load` of a streamLayeredImage
+# tarball stores the image under the manifest tag with a podman-version-
+# dependent normalization (`wrapix-base:latest`, `localhost/wrapix-base:latest`,
+# or `docker.io/library/wrapix-base:latest`), so we re-tag via the loaded
+# ID to $IMAGE_REF. If a previous run left a stale `wrapix-base` around,
+# the `head -n1` pick is non-deterministic and we'd risk tagging the
+# stale ID to the new ref — and silently exercising the old image whose
+# config may lack the env vars (e.g. WRAPIX_PREK_HOOKS) the entrypoint
+# depends on. Same retag pattern as lib/util/shell.nix imageLoadStep.
+podman images --quiet --filter "reference=*wrapix-base*" | xargs -r podman rmi -f >/dev/null 2>&1 || true
+"$IMAGE_STREAM" | podman load >/dev/null
 loaded_id=$(podman images --quiet --filter "reference=*wrapix-base*" | head -n1)
 [[ -n "$loaded_id" ]] || { echo "FAIL: image not found after podman load" >&2; podman images >&2; exit 1; }
 podman tag "$loaded_id" "$IMAGE_REF"

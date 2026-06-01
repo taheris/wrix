@@ -112,20 +112,23 @@ fi
 # .tar.gz on disk — `podman run docker-archive:<path>` would treat the
 # bash script as a tarball and fail. After load, refer to the image by
 # IMAGE_REF (the `localhost/wrapix-<profile>:<tag>` the wrapper sets).
+short_name="${IMAGE_REF##*/}"
+short_name="${short_name%%:*}"
+# Clear stale `${short_name}` images BEFORE load so the post-load retag
+# has exactly one candidate. `podman load` of a streamLayeredImage
+# tarball stores the image under the manifest tag with a podman-version-
+# dependent normalization. If a previous run left a stale image around,
+# `head -n1` is non-deterministic and we'd risk tagging the stale ID to
+# the new ref — silently exercising the old image whose config may lack
+# env vars (e.g. WRAPIX_PREK_HOOKS) the entrypoint depends on. Same
+# retag pattern as lib/util/shell.nix imageLoadStep.
+podman images --quiet --filter "reference=*${short_name}*" | xargs -r podman rmi -f >/dev/null 2>&1 || true
 log_info "Loading image into podman..."
 if ! "${IMAGE_PATH}" | podman load >/dev/null 2>&1; then
     log_error "Failed to load image into podman"
     exit 1
 fi
 
-# podman load stores the unqualified manifest tag under a podman-version-
-# dependent ref (`wrapix-rust:latest`, `localhost/wrapix-rust:latest`, or
-# `docker.io/library/wrapix-rust:latest` depending on registries.conf
-# defaults). Re-tag the loaded image to ${IMAGE_REF} via its ID so
-# subsequent `podman run` commands address it unambiguously — same
-# pattern as lib/util/shell.nix's imageLoadStep.
-short_name="${IMAGE_REF##*/}"
-short_name="${short_name%%:*}"
 loaded_id=$(podman images --quiet --filter "reference=*${short_name}*" | head -n1)
 if [[ -z "$loaded_id" ]]; then
     log_error "Image not found after podman load (filter: *${short_name}*)"
