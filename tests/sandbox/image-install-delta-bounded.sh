@@ -62,7 +62,19 @@ fi
 # the user's store and the user's store never absorbs test bytes.
 STORE_ROOT=$(mktemp -d -t wrapix-install-delta.XXXXXX)
 cleanup() {
-  rm -rf "$STORE_ROOT"
+  # rootless podman writes the overlay store under mapped subuids the
+  # caller can't unlink directly; reclaim it from inside the user
+  # namespace, falling back to a plain rm. A leftover temp dir is
+  # non-fatal, so warn rather than fail if neither works. Restore the
+  # body's exit status afterwards: a bare EXIT trap adopts its last
+  # command's status, so a cleanup failure would otherwise flip a
+  # passing run to a failure.
+  local rc=$?
+  if ! podman unshare rm -rf "$STORE_ROOT"; then
+    rm -rf "$STORE_ROOT" \
+      || echo "WARN: could not remove temp store $STORE_ROOT" >&2
+  fi
+  exit "$rc"
 }
 trap cleanup EXIT
 

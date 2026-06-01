@@ -120,41 +120,41 @@ fi
 # IMAGE_REF (the `localhost/wrapix-<profile>:<tag>` the wrapper sets).
 short_name="${IMAGE_REF##*/}"
 short_name="${short_name%%:*}"
-# Clear stale `${short_name}` images BEFORE load so the post-load retag
-# has exactly one candidate. `podman load` of a streamLayeredImage
-# tarball stores the image under the manifest tag with a podman-version-
-# dependent normalization. If a previous run left a stale image around,
-# `head -n1` is non-deterministic and we'd risk tagging the stale ID to
-# the new ref — silently exercising the old image whose config may lack
-# env vars (e.g. WRAPIX_PREK_HOOKS) the entrypoint depends on. Same
-# retag pattern as lib/util/shell.nix imageLoadStep.
+# `podman load` of a streamLayeredImage tarball stores the image under
+# the manifest tag with a podman-version-dependent normalization. Read
+# the ref back from `podman load`'s own report rather than guessing via
+# `podman images --filter reference=*name* | head -n1`: on a host
+# carrying images from prior runs that filter is non-deterministic and
+# could retag a stale image whose config lacks env vars (e.g.
+# WRAPIX_PREK_HOOKS) the entrypoint depends on.
 if podman image exists "$IMAGE_REF"; then
   podman rmi "$IMAGE_REF" >/dev/null
 fi
 log_info "Loading image into podman..."
-# Silence the streamLayeredImage script's stderr (~hundreds of
-# "Creating layer N from paths" lines when the cache is cold). In a
-# bash pipeline `>/dev/null 2>&1` only applies to the right-hand
-# command (`podman load`); without redirecting the stream script's
-# stderr too, the chatter fills loom's per-verifier output buffer and
-# pushes the real failure tail off the captured window — exactly the
-# bug commit 42010041 fixed for tests/mcp/tmux/e2e-sandbox.sh.
+# Capture the stream script's stderr (~hundreds of "Creating layer N
+# from paths" lines on a cold cache) to a log so it can be surfaced on
+# failure without flooding loom's per-verifier output buffer. Capture
+# `podman load`'s stdout+stderr to parse the loaded ref back out.
 stream_log=$(mktemp -t wrapix-stream-load.XXXXXX)
-if ! "${IMAGE_PATH}" 2>"$stream_log" | podman load >/dev/null 2>&1; then
+if ! load_out=$("${IMAGE_PATH}" 2>"$stream_log" | podman load 2>&1); then
     cat "$stream_log" >&2
     rm -f "$stream_log"
     log_error "Failed to load image into podman"
+    printf '%s\n' "$load_out" >&2
     exit 1
 fi
 rm -f "$stream_log"
 
-loaded_id=$(podman images --quiet --filter "reference=*${short_name}*" | head -n1)
-if [[ -z "$loaded_id" ]]; then
-    log_error "Image not found after podman load (filter: *${short_name}*)"
-    podman images >&2
+loaded_ref=$(printf '%s\n' "$load_out" \
+  | sed -n 's/^Loaded image(s): //p; s/^Loaded image: //p' \
+  | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
+  | grep -F "$short_name" | head -n1)
+if [[ -z "$loaded_ref" ]]; then
+    log_error "Could not determine loaded image ref from podman load output"
+    printf '%s\n' "$load_out" >&2
     exit 1
 fi
-podman tag "$loaded_id" "${IMAGE_REF}"
+podman tag "$loaded_ref" "${IMAGE_REF}"
 log_info "Image loaded as ${IMAGE_REF}"
 
 # Create a temporary workspace
