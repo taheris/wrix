@@ -12,6 +12,7 @@ _:
         test-image-install-digest-skip = test.apps.image-install-digest-skip;
         test-base-image-universal = test.apps.base-image-universal;
         test-base-image-hash-stable = test.apps.base-image-hash-stable;
+        test-iteration-cost-bounded = test.apps.iteration-cost-bounded;
       };
     };
 }

@@ -477,6 +477,122 @@ let
     '';
   };
 
+  # Iteration-cost-bounded probe (specs/image-builder.md Success Criteria:
+  # "A one-file perturbation in profile-level inputs (one wrapper script touched)
+  # leaves every layer-blob hash in the resulting image's manifest unchanged
+  # except for the customisation layer and any top layer that directly depends on
+  # the changed file"). Two profile images that differ only in a single wrapper
+  # script's body — a one-line edit. The fromImage base, the entrypoint, and
+  # every other input are held fixed, so the streamLayeredImage manifests must
+  # share every layer blob except the customisation layer (which always re-hashes,
+  # since it aggregates the perturbed content) and the top layer(s) carrying the
+  # wrapper's store path.
+  mkIterationProbeImage =
+    line:
+    import ../../lib/sandbox/image.nix {
+      inherit pkgs;
+      profile = {
+        name = "iterprobe";
+        packages = [
+          (pkgs.writeShellScriptBin "wrapix-iteration-probe" ''
+            # iteration-cost-bounded probe wrapper
+            echo "iteration probe: ${line}"
+          '')
+        ];
+        env = { };
+      };
+      entrypointPkg = pkgs.hello;
+      entrypointSh = ../../lib/sandbox/linux/entrypoint.sh;
+      claudeConfig = { };
+      claudeSettings = { };
+    };
+  iterationProbeImageA = mkIterationProbeImage "alpha";
+  iterationProbeImageB = mkIterationProbeImage "beta";
+
+  # Changed-blob ceiling: the customisation layer plus the top layer(s) carrying
+  # the perturbed wrapper's store path. A regression that threaded the wrapper
+  # into a shared bottom-of-closure layer would churn base blobs and exceed it.
+  iterationMaxChangedBlobs = 4;
+
+  iterationCostBoundedTest = pkgs.writeShellApplication {
+    name = "test-iteration-cost-bounded";
+    runtimeInputs = lib.optionals isLinux [
+      pkgs.coreutils
+      pkgs.gnutar
+      pkgs.jq
+    ];
+    text =
+      if isLinux then
+        ''
+          imgA=${iterationProbeImageA}
+          imgB=${iterationProbeImageB}
+          max_changed=${toString iterationMaxChangedBlobs}
+
+          if [[ "$imgA" == "$imgB" ]]; then
+              echo "FAIL: probe images A and B resolved to the same stream script;" >&2
+              echo "      the one-line wrapper perturbation did not materialise a distinct image" >&2
+              exit 1
+          fi
+
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+
+          # streamLayeredImage emits a docker-archive tar; manifest.json lists each
+          # layer blob as "<sha256>/layer.tar".
+          "$imgA" | tar -xO manifest.json > "$tmp/a.json"
+          "$imgB" | tar -xO manifest.json > "$tmp/b.json"
+
+          jq -r '.[0].Layers[]' "$tmp/a.json" | sort -u > "$tmp/a.layers"
+          jq -r '.[0].Layers[]' "$tmp/b.json" | sort -u > "$tmp/b.layers"
+
+          # The customisation layer is streamLayeredImage's final layer.
+          custA=$(jq -r '.[0].Layers[-1]' "$tmp/a.json")
+          custB=$(jq -r '.[0].Layers[-1]' "$tmp/b.json")
+
+          total=$(wc -l < "$tmp/a.layers")
+          shared=$(comm -12 "$tmp/a.layers" "$tmp/b.layers" | wc -l)
+          only_a=$(comm -23 "$tmp/a.layers" "$tmp/b.layers" | wc -l)
+          only_b=$(comm -13 "$tmp/a.layers" "$tmp/b.layers" | wc -l)
+
+          echo "layer blobs: total(A)=$total shared=$shared only_in_A=$only_a only_in_B=$only_b" >&2
+
+          # The customisation layer aggregates the perturbed content, so it must move.
+          if [[ "$custA" == "$custB" ]]; then
+              echo "FAIL: customisation layer blob unchanged under the wrapper perturbation ($custA)" >&2
+              echo "      the manifest diff cannot be attributed to the changed file" >&2
+              exit 1
+          fi
+
+          if [[ "$only_a" -gt "$max_changed" || "$only_b" -gt "$max_changed" ]]; then
+              echo "FAIL: one-file perturbation changed more than $max_changed layer blobs" >&2
+              echo "      only_in_A=$only_a only_in_B=$only_b (expected <= $max_changed:" >&2
+              echo "      customisation layer + the top layer(s) carrying the wrapper)" >&2
+              echo "  only in A:" >&2
+              comm -23 "$tmp/a.layers" "$tmp/b.layers" >&2
+              echo "  only in B:" >&2
+              comm -13 "$tmp/a.layers" "$tmp/b.layers" >&2
+              exit 1
+          fi
+
+          if [[ "$shared" -lt $((total - max_changed)) ]]; then
+              echo "FAIL: too few shared layer blobs ($shared of $total); the base and" >&2
+              echo "      sibling layers should be invariant under a one-file perturbation" >&2
+              exit 1
+          fi
+
+          echo "test-iteration-cost-bounded: PASS ($shared/$total layer blobs identical; only_in_A=$only_a only_in_B=$only_b within bound $max_changed)"
+        ''
+      else
+        ''
+          # streamLayeredImage's stream script carries a Linux Python shebang;
+          # the manifest diff this verifier performs is Linux-only. Darwin's
+          # iteration-cost bound is covered by base-image pinning alone (see
+          # specs/image-builder.md § Out of Scope).
+          echo "test-iteration-cost-bounded: skipped on this platform (streamLayeredImage is Linux-only)" >&2
+          exit 0
+        '';
+  };
+
 in
 {
   inherit
@@ -486,5 +602,6 @@ in
     prekHooksClosureTest
     baseImageUniversalTest
     baseImageHashStableTest
+    iterationCostBoundedTest
     ;
 }

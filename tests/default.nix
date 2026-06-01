@@ -180,6 +180,12 @@ in
       program = "${sandboxImageChecks.baseImageHashStableTest}/bin/test-base-image-hash-stable";
     };
 
+    iteration-cost-bounded = {
+      meta.description = "Verify a one-wrapper-script perturbation only re-emits the customisation layer + dependent top layers (Linux only)";
+      type = "app";
+      program = "${sandboxImageChecks.iterationCostBoundedTest}/bin/test-iteration-cost-bounded";
+    };
+
     # profiles.rust.buildPackage [verify] hash invariants (specs/profiles.md).
     profiles-build-package = {
       meta.description = "Verify profiles.rust.buildPackage hash invariants (bin/clippy/nextest/cargoArtifacts)";
