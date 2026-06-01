@@ -245,7 +245,7 @@ check_command "git" "git"
 check_command "bash" "bash"
 check_command "jq" "jq"
 check_command "curl" "curl"
-check_command "ripgrep" "ripgrep (rg)" || check_command "rg" "ripgrep (rg)"
+check_command "rg" "ripgrep (rg)"
 check_command "fd" "fd"
 
 echo ""
