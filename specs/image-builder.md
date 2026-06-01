@@ -52,7 +52,7 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
 ## Success Criteria
 
 - The launcher's image-install step (under both `wrapix run` and `wrapix spawn`) is short-circuited when the image's content digest is already present in the platform store: no tar materialization, no stream invocation, no `*-load` CLI call
-  [system?](nix run .#test-image-install-digest-skip)
+  [system](nix run .#test-image-install-digest-skip)
 - `mkImage` chains the profile image atop the shared `wrapix-base-image` derivation via `fromImage` on both Linux (`streamLayeredImage`) and Darwin (`buildLayeredImage`)
   [check?](grep -nE 'fromImage|wrapix-base-image' lib/sandbox/image.nix)
 - `wrapix-base-image`'s derivation hash is invariant under changes to profile-level inputs — `profile.packages`, `profile.env`, MCP configs, the merged Claude settings JSON, and the agent runtime selection
