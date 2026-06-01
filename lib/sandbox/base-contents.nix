@@ -11,8 +11,7 @@
 [
   pkgs.glibc
   pkgs.gcc-unwrapped.lib
-  pkgs.llvmPackages.libllvm
-  pkgs.openssl
+  pkgs.openssl.out
   pkgs.cacert
   pkgs.bashInteractive
   pkgs.coreutils

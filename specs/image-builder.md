@@ -33,7 +33,7 @@ Build pipeline:
 
 ## Base Image Layering
 
-The image build is two-tier. A shared `wrapix-base-image` derivation pins the universal bottom-of-closure — toolchain libraries (glibc, gcc-lib, llvm), TLS material (openssl, cacert), shells and coreutils, and any other store paths that vary with the nixpkgs pin but not with profile inputs. Profile images chain on top via `fromImage`, so the base's tar is loaded into the platform store once and never re-emitted when profile-level inputs (`profile.packages`, `profile.env`, MCP configs, Claude settings, agent runtime selection) change.
+The image build is two-tier. A shared `wrapix-base-image` derivation pins the universal bottom-of-closure — toolchain libraries (glibc, gcc-lib), TLS material (openssl, cacert), shells and coreutils, and any other store paths that vary with the nixpkgs pin but not with profile inputs. Profile images chain on top via `fromImage`, so the base's tar is loaded into the platform store once and never re-emitted when profile-level inputs (`profile.packages`, `profile.env`, MCP configs, Claude settings, agent runtime selection) change.
 
 Both `dockerTools.streamLayeredImage` (Linux) and `dockerTools.buildLayeredImage` (Darwin) accept `fromImage` with identical semantics, so the chaining shape is the same on both platforms.
 

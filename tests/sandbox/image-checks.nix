@@ -369,12 +369,15 @@ let
 
   # Membership guard for the universal bottom-of-closure (specs/image-builder.md
   # § Base Image Layering). The base holds only nixpkgs-pin-dependent paths that
-  # every profile actually closes over — shared libraries, TLS material, shells,
-  # coreutils. It must NOT carry a profile-specific compiler toolchain: no
-  # profile references `pkgs.rustc` (the rust profile uses fenix's toolchain, a
-  # different store path; base/python carry no Rust), so its presence would be
-  # dead weight in every profile image. Anchors a couple of genuine universal
-  # members so the test asserts membership in both directions.
+  # every profile actually closes over. The base profile is the minimal package
+  # set (every other profile adds to it), so its image closure is the universal
+  # lower bound: a base member is genuinely shared iff it is reachable there.
+  # The fromImage base tar is a compressed blob whose store refs are unscannable,
+  # so a member that no profile references — a profile-specific toolchain such as
+  # `pkgs.rustc` (rust uses fenix's toolchain; base/python carry no Rust) or
+  # `pkgs.llvmPackages.libllvm` (no profile links LLVM) — is absent from the
+  # scannable image closure and is caught here as dead weight.
+  baseContentsList = lib.concatStringsSep " " (map (p: ''"${p}"'') baseContents);
   baseImageUniversalTest = pkgs.writeShellApplication {
     name = "test-base-image-universal";
     runtimeInputs = [
@@ -382,21 +385,26 @@ let
       pkgs.gnugrep
     ];
     text = ''
-      closure_file=${baseContentsClosure}/store-paths
+      image_closure=${defaultImageClosure}/store-paths
+      base_contents=${baseContentsClosure}/store-paths
 
-      rustc_path=${linuxPkgs.rustc}
-      if grep -qxF "$rustc_path" "$closure_file"; then
-          echo "FAIL: profile-specific rustc reachable from wrapix-base-image contents" >&2
-          echo "  unexpected: $rustc_path" >&2
-          echo "  base is the universal bottom-of-closure; no profile uses pkgs.rustc" >&2
-          exit 1
-      fi
+      # Universality: every base member must be reachable from the base profile's
+      # own packages, else it is dead weight loaded into every image's base layer.
+      members=(${baseContentsList})
+      for member in "''${members[@]}"; do
+          if ! grep -qxF "$member" "$image_closure"; then
+              echo "FAIL: wrapix-base-image member not shared by the base profile closure" >&2
+              echo "  member : $member" >&2
+              echo "  closure: $image_closure" >&2
+              exit 1
+          fi
+      done
 
-      for universal in ${linuxPkgs.glibc} ${linuxPkgs.cacert}; do
-          if ! grep -qxF "$universal" "$closure_file"; then
-              echo "FAIL: expected universal base member missing from closure" >&2
-              echo "  expected: $universal" >&2
-              echo "  closure : $closure_file" >&2
+      # Exclusion: no profile references rustc or libllvm, so neither is a base member.
+      for toolchain in ${linuxPkgs.rustc} ${linuxPkgs.llvmPackages.libllvm}; do
+          if grep -qxF "$toolchain" "$base_contents"; then
+              echo "FAIL: profile-specific toolchain present in wrapix-base-image contents" >&2
+              echo "  unexpected: $toolchain" >&2
               exit 1
           fi
       done
