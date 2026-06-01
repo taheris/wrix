@@ -178,7 +178,7 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 - A second spawn of an already-loaded image performs no writes to the platform store's layer directory (measurable via store size or per-blob mtime)
   [system?](bash tests/sandbox/image-install-no-rewrite.sh)
 - On Linux, re-installing an image that differs from the cached one in only its top-of-closure layers transfers O(changed-blobs) bytes into the platform store, not O(image-size) bytes
-  [system?](bash tests/sandbox/image-install-delta-bounded.sh)
+  [system](bash tests/sandbox/image-install-delta-bounded.sh)
 - On Darwin, the launcher uses `container image load --input <tar>` for image install (per Apple's available CLI surface) and relies on the digest-skip preflight and `wrapix-base-image` chaining to bound install I/O
   [check](grep -nE 'container image load' lib/sandbox/darwin/default.nix)
 
