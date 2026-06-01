@@ -25,7 +25,22 @@ command -v podman >/dev/null 2>&1 || skip "podman not on PATH"
 
 cd "$REPO_ROOT"
 
-PACKAGE_PATH=$(nix build --no-link --print-out-paths --no-warn-dirty .#sandbox-rust-mcp)
+# Silence nix-build chatter (streamLayeredImage emits ~hundreds of
+# "Creating layer N from paths" lines on stderr) so loom's per-verifier
+# output buffer reaches the actual test output before truncating.
+build_log=$(mktemp -t wrapix-e2e-sandbox-build.XXXXXX)
+IMAGE_REF=""
+cleanup() {
+  rm -f "$build_log"
+  [[ -n "$IMAGE_REF" ]] && podman rmi -f "$IMAGE_REF" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+if ! PACKAGE_PATH=$(nix build --no-link --print-out-paths --no-warn-dirty .#sandbox-rust-mcp 2>"$build_log"); then
+  cat "$build_log" >&2
+  echo "FAIL: nix build .#sandbox-rust-mcp" >&2
+  exit 1
+fi
 IMAGE_STREAM=$(grep -oP "WRAPIX_DEFAULT_IMAGE_SOURCE=[^']*'\K[^']+" "$PACKAGE_PATH/bin/wrapix" | head -1)
 IMAGE_REF=$(grep -oP "WRAPIX_DEFAULT_IMAGE_REF=[^']*'\K[^']+" "$PACKAGE_PATH/bin/wrapix" | head -1)
 
@@ -38,12 +53,23 @@ IMAGE_REF=$(grep -oP "WRAPIX_DEFAULT_IMAGE_REF=[^']*'\K[^']+" "$PACKAGE_PATH/bin
   exit 1
 }
 
-cleanup() {
-  podman rmi -f "$IMAGE_REF" >/dev/null 2>&1 || true
-}
-trap cleanup EXIT
-
 "$IMAGE_STREAM" | podman load >/dev/null
+
+# podman load stores the unqualified manifest tag under a podman-version-
+# dependent ref (`wrapix-rust:latest`, `localhost/wrapix-rust:latest`, or
+# `docker.io/library/wrapix-rust:latest` depending on registries.conf
+# defaults). Re-tag the loaded image to ${IMAGE_REF} via its ID so
+# subsequent `podman run` commands address it unambiguously — same
+# pattern as lib/util/shell.nix's imageLoadStep.
+short_name="${IMAGE_REF##*/}"
+short_name="${short_name%%:*}"
+loaded_id=$(podman images --quiet --filter "reference=*${short_name}*" | head -n1)
+[[ -n "$loaded_id" ]] || {
+  echo "FAIL: image not found after podman load (filter: *${short_name}*)" >&2
+  podman images >&2
+  exit 1
+}
+podman tag "$loaded_id" "$IMAGE_REF"
 
 for cmd in tmux tmux-mcp; do
   podman run --rm --entrypoint /bin/bash "$IMAGE_REF" \

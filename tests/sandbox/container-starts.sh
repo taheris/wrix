@@ -43,6 +43,16 @@ trap cleanup EXIT
 "$IMAGE_STREAM" | podman load >/dev/null
 IMAGE_REF="localhost/wrapix-base:latest"
 
+# podman load stores the unqualified manifest tag (`wrapix-base:latest`)
+# under a podman-version-dependent ref — sometimes the bare `<name>:<tag>`,
+# sometimes `localhost/<name>:<tag>`, sometimes `docker.io/library/<name>:<tag>`
+# — depending on the host registries.conf. Re-tag via the loaded image ID
+# to $IMAGE_REF so podman run can address it. Same pattern as the launcher
+# (lib/util/shell.nix imageLoadStep).
+loaded_id=$(podman images --quiet --filter "reference=*wrapix-base*" | head -n1)
+[[ -n "$loaded_id" ]] || { echo "FAIL: image not found after podman load" >&2; podman images >&2; exit 1; }
+podman tag "$loaded_id" "$IMAGE_REF"
+
 result=$(podman run --rm --network=pasta --userns=keep-id \
   --entrypoint /bin/bash \
   -v "$WORKSPACE:/workspace:rw" \

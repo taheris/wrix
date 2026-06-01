@@ -117,6 +117,22 @@ if ! "${IMAGE_PATH}" | podman load >/dev/null 2>&1; then
     log_error "Failed to load image into podman"
     exit 1
 fi
+
+# podman load stores the unqualified manifest tag under a podman-version-
+# dependent ref (`wrapix-rust:latest`, `localhost/wrapix-rust:latest`, or
+# `docker.io/library/wrapix-rust:latest` depending on registries.conf
+# defaults). Re-tag the loaded image to ${IMAGE_REF} via its ID so
+# subsequent `podman run` commands address it unambiguously — same
+# pattern as lib/util/shell.nix's imageLoadStep.
+short_name="${IMAGE_REF##*/}"
+short_name="${short_name%%:*}"
+loaded_id=$(podman images --quiet --filter "reference=*${short_name}*" | head -n1)
+if [[ -z "$loaded_id" ]]; then
+    log_error "Image not found after podman load (filter: *${short_name}*)"
+    podman images >&2
+    exit 1
+fi
+podman tag "$loaded_id" "${IMAGE_REF}"
 log_info "Image loaded as ${IMAGE_REF}"
 
 # Create a temporary workspace
