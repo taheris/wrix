@@ -7,6 +7,8 @@ SESSION_START_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 cd /workspace
 
+if [[ -d /workspace/bin ]]; then export PATH="/workspace/bin:$PATH"; fi
+
 # shellcheck source=/dev/null
 . /git-ssh-setup.sh
 

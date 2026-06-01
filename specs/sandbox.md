@@ -163,7 +163,7 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 - When `/workspace/bin` does not exist, the container's `PATH` does not contain `/workspace/bin`
   [system?](bash tests/sandbox/workspace-bin-path.sh)
 - Both `lib/sandbox/linux/entrypoint.sh` and `lib/sandbox/darwin/entrypoint.sh` implement the `/workspace/bin` PATH prepend
-  [check?](grep -nE 'PATH="/workspace/bin:' lib/sandbox/linux/entrypoint.sh lib/sandbox/darwin/entrypoint.sh)
+  [check](grep -nE 'PATH="/workspace/bin:' lib/sandbox/linux/entrypoint.sh lib/sandbox/darwin/entrypoint.sh)
 
 ## Requirements
 

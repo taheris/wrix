@@ -90,6 +90,8 @@ fi
 
 cd /workspace
 
+if [[ -d /workspace/bin ]]; then export PATH="/workspace/bin:$PATH"; fi
+
 # Point core.hooksPath at the prek bundle baked into the image, per
 # specs/pre-commit.md § Bead-Container Hook Installation.
 if [[ -d /workspace/.git ]] \
