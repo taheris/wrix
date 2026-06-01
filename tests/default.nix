@@ -123,11 +123,12 @@ in
 
   # Individual test apps for selective running
   apps = {
-    # Linux-only verifier for the wrapix-spawn image-source -> podman-load
-    # contract. Drives the shared `imageLoadStep` snippet (the same one
-    # `wrapix spawn` runs) through a shim podman; on Darwin prints a skip.
+    # Linux-only verifier for the wrapix-spawn image install transport
+    # (specs/sandbox.md § Image install path). Drives the shared
+    # `imageLoadStep` snippet (the same one `wrapix spawn` runs) through
+    # shim podman + skopeo binaries; on Darwin prints a skip.
     wrapix-spawn-load = {
-      meta.description = "Verify wrapix-spawn image-source -> podman-load idempotence (Linux only)";
+      meta.description = "Verify wrapix-spawn skopeo install idempotence (Linux only)";
       type = "app";
       program = "${sandboxImageChecks.wrapixSpawnLoadTest}/bin/test-wrapix-spawn-load";
     };

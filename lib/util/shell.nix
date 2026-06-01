@@ -17,19 +17,28 @@ _:
     }
   '';
 
-  # Idempotent `podman load` of the sandbox image. Expects $IMAGE_REF,
-  # $IMAGE_SOURCE, $IMAGE_DIGEST_PATH, and `verbose` in the caller's scope.
+  # Idempotent install of the sandbox image into the local containers store.
+  # Expects $IMAGE_REF, $IMAGE_SOURCE, $IMAGE_DIGEST_PATH, and `verbose` in
+  # the caller's scope.
   #
-  # Preflight is content-digest based (specs/sandbox.md): when the image's
-  # OCI config digest is already present in the local store, the install
-  # pipeline is short-circuited — no stream invocation, no `podman load`.
-  # This catches drv-hash rebuilds that leave the image content untouched
-  # (where `mkImageRef`'s tag changes but the content does not), the case
-  # the prior `podman image exists $IMAGE_REF` preflight missed.
+  # Preflight is content-digest based (specs/sandbox.md § Image install path):
+  # when the image's OCI config digest is already present in the local store,
+  # the install pipeline is short-circuited — no stream invocation, no `*-load`
+  # CLI call. This catches drv-hash rebuilds that leave the image content
+  # untouched (where `mkImageRef`'s tag changes but the content does not),
+  # the case the prior `podman image exists $IMAGE_REF` preflight missed.
   #
   # $IMAGE_DIGEST_PATH may be empty (e.g. legacy `wrapix spawn` callers that
   # don't yet supply `image_digest_path`); the step falls back to the
   # ref-existence check so spawn-side idempotency is preserved.
+  #
+  # On miss, the install transport is `skopeo copy oci-archive: →
+  # containers-storage:` (per specs/sandbox.md § Image install path).
+  # `streamLayeredImage` emits a Docker-format tar; we materialize it to a
+  # temp file, convert docker-archive → oci-archive via skopeo, then copy
+  # oci-archive → containers-storage. The containers-storage transport
+  # hashes each blob on write and skips ones already present, bounding
+  # rewrite I/O by the changed-blob delta rather than image size.
   imageLoadStep = ''
     if [[ -z "$IMAGE_SOURCE" ]]; then
       verbose "Using cached image $IMAGE_REF"
@@ -55,11 +64,19 @@ _:
         verbose "Using cached image $IMAGE_REF"
       else
         verbose "Loading image from $IMAGE_SOURCE..."
-        "$IMAGE_SOURCE" | podman load -q >/dev/null
+        _wrapix_img_tmp=$(mktemp -d)
+        "$IMAGE_SOURCE" >"$_wrapix_img_tmp/image.tar"
+        skopeo --insecure-policy copy --quiet \
+          "docker-archive:$_wrapix_img_tmp/image.tar" \
+          "oci-archive:$_wrapix_img_tmp/image.oci"
+        skopeo --insecure-policy copy --quiet \
+          "oci-archive:$_wrapix_img_tmp/image.oci" \
+          "containers-storage:$IMAGE_REF"
+        rm -rf "$_wrapix_img_tmp"
         IMAGE_REPO="''${IMAGE_REF%:*}"
-        # best-effort: podman tag failures are non-fatal — caller can still
-        # reach the loaded :latest tag; we only lose the convenience alias
-        podman tag "$IMAGE_REPO:latest" "$IMAGE_REF" 2>/dev/null || true
+        # best-effort: :latest is pruneStaleImages' keep-anchor; a tag
+        # failure only loses the convenience alias.
+        podman tag "$IMAGE_REF" "$IMAGE_REPO:latest" 2>/dev/null || true
         verbose "Loaded image $IMAGE_REF"
       fi
     fi

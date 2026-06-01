@@ -35,9 +35,10 @@ let
   claudeCodePkg = linuxPkgs.claude-code;
   prekHooksBundle = import ../../lib/prek/bundle.nix { pkgs = linuxPkgs; };
 
-  # Linux-only shim-podman verifier for the shared `imageLoadStep` snippet
-  # (the same one `wrapix spawn` runs). Asserts load on first call,
-  # idempotence on the second.
+  # Linux-only shim verifier for the shared `imageLoadStep` snippet (the same
+  # one `wrapix spawn` runs). Asserts the skopeo-based install transport on
+  # first call (per specs/sandbox.md § Image install path) and idempotence on
+  # the second.
   wrapixSpawnLoadTest = pkgs.writeShellApplication {
     name = "test-wrapix-spawn-load";
     runtimeInputs = lib.optionals isLinux [
@@ -53,8 +54,10 @@ let
           shim_dir="$tmp/bin"
           state="$tmp/state"
           mkdir -p "$shim_dir" "$state"
-          log_file="$state/podman.log"
-          : >"$log_file"
+          podman_log="$state/podman.log"
+          skopeo_log="$state/skopeo.log"
+          : >"$podman_log"
+          : >"$skopeo_log"
 
           IMAGE_REF="localhost/wrapix-loadtest:abc123"
           IMAGE_SOURCE="$tmp/image-source.sh"
@@ -68,7 +71,7 @@ let
           cat >"$shim_dir/podman" <<PODMAN_SHIM
           #!/usr/bin/env bash
           set -euo pipefail
-          printf '%s\n' "\$*" >>'$log_file'
+          printf '%s\n' "\$*" >>'$podman_log'
           case "\$1" in
               image)
                   case "\$2" in
@@ -77,10 +80,6 @@ let
                           ;;
                       *) exit 0 ;;
                   esac
-                  ;;
-              load)
-                  cat >'$state/load-stdin' || true
-                  exit 0
                   ;;
               tag)
                   : >'$state/loaded'
@@ -91,6 +90,14 @@ let
           PODMAN_SHIM
           chmod +x "$shim_dir/podman"
 
+          cat >"$shim_dir/skopeo" <<SKOPEO_SHIM
+          #!/usr/bin/env bash
+          set -euo pipefail
+          printf '%s\n' "\$*" >>'$skopeo_log'
+          exit 0
+          SKOPEO_SHIM
+          chmod +x "$shim_dir/skopeo"
+
           verbose() { :; }
 
           PATH="$shim_dir:$PATH"
@@ -98,28 +105,34 @@ let
 
           ${shellLib.imageLoadStep}
 
-          if ! grep -q '^load -q' "$log_file"; then
-              echo "first invocation did not call 'podman load':" >&2
-              cat "$log_file" >&2
+          if ! grep -qE 'oci-archive:[^ ]+ containers-storage:'"$IMAGE_REF"'$' "$skopeo_log"; then
+              echo "first invocation did not skopeo copy oci-archive: -> containers-storage:$IMAGE_REF:" >&2
+              cat "$skopeo_log" >&2
               exit 1
           fi
-          if ! grep -q "^tag .*:latest $IMAGE_REF$" "$log_file"; then
-              echo "first invocation did not tag image as $IMAGE_REF:" >&2
-              cat "$log_file" >&2
+          if ! grep -qE 'docker-archive:[^ ]+ oci-archive:[^ ]+$' "$skopeo_log"; then
+              echo "first invocation did not stage docker-archive -> oci-archive via skopeo:" >&2
+              cat "$skopeo_log" >&2
+              exit 1
+          fi
+          if ! grep -q "^tag $IMAGE_REF .*:latest$" "$podman_log"; then
+              echo "first invocation did not tag $IMAGE_REF as :latest:" >&2
+              cat "$podman_log" >&2
               exit 1
           fi
 
-          : >"$log_file"
+          : >"$podman_log"
+          : >"$skopeo_log"
           ${shellLib.imageLoadStep}
 
-          if grep -q '^load -q' "$log_file"; then
-              echo "second invocation re-loaded image (load is not idempotent):" >&2
-              cat "$log_file" >&2
+          if [[ -s "$skopeo_log" ]]; then
+              echo "second invocation re-invoked skopeo (install is not idempotent):" >&2
+              cat "$skopeo_log" >&2
               exit 1
           fi
-          if ! grep -q "^image exists $IMAGE_REF$" "$log_file"; then
+          if ! grep -q "^image exists $IMAGE_REF$" "$podman_log"; then
               echo "second invocation did not check 'image exists $IMAGE_REF':" >&2
-              cat "$log_file" >&2
+              cat "$podman_log" >&2
               exit 1
           fi
 

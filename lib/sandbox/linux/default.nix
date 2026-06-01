@@ -56,6 +56,7 @@ in
         pkgs.beads-dolt
         pkgs.jq
         pkgs.podman
+        pkgs.skopeo
       ];
       text = ''
         # Verbose mode for debugging startup
@@ -419,7 +420,9 @@ in
           IMAGE_DIGEST_PATH="$IMAGE_OVERRIDE_DIGEST"
         fi
 
-        # Shared with the wrapix-spawn-load verifier: see `lib/util/shell.nix`.
+        # Image install transport: skopeo copy oci-archive: → containers-storage:
+        # (per specs/sandbox.md § Image install path). Body lives in
+        # `lib/util/shell.nix` and is shared with the wrapix-spawn-load verifier.
         ${imageLoadStep}
         # Prune stale wrapix-* tags from every profile on every invocation,
         # not just after a fresh load — otherwise a cached current profile
