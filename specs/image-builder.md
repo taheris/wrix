@@ -56,11 +56,11 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
 - `mkImage` chains the profile image atop the shared `wrapix-base-image` derivation via `fromImage` on both Linux (`streamLayeredImage`) and Darwin (`buildLayeredImage`)
   [check](grep -nE 'fromImage|wrapix-base-image' lib/sandbox/image.nix)
 - `wrapix-base-image`'s derivation hash is invariant under changes to profile-level inputs — `profile.packages`, `profile.env`, MCP configs, the merged Claude settings JSON, and the agent runtime selection
-  [system?](nix run .#test-base-image-hash-stable)
+  [system](nix run .#test-base-image-hash-stable)
 - `wrapix-base-image` holds only the universal bottom-of-closure: no profile-specific compiler toolchain leaks in (e.g. `pkgs.rustc`, which no profile references — the rust profile uses fenix's toolchain)
   [system](nix run .#test-base-image-universal)
 - A one-file perturbation in profile-level inputs (one wrapper script touched) leaves every layer-blob hash in the resulting image's manifest unchanged except for the customisation layer and any top layer that directly depends on the changed file
-  [system?](nix run .#test-iteration-cost-bounded)
+  [system](nix run .#test-iteration-cost-bounded)
 - `agent = "claude"` produces an image that contains `claude-code`
   [system](nix run .#test-claude-runtime-noop)
 - The `agent = "pi"` code path threads a consumer-supplied `piPkg` derivation into the image build
