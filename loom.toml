@@ -1,0 +1,2 @@
+[loom]
+git_hook_timeout_secs = 900
