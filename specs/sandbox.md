@@ -174,7 +174,7 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 - The launcher preflight checks whether the image's content digest matches any image already present in the platform store before invoking the install pipeline; on a digest hit, no tar bytes are streamed and no `*-load` CLI is invoked
   [system?](bash tests/sandbox/image-install-digest-skip.sh)
 - On Linux, the launcher uses `skopeo copy oci-archive: → containers-storage:` for image install; the existing `podman load` call site is replaced
-  [check?](grep -nE 'skopeo.*containers-storage' lib/sandbox/linux/default.nix)
+  [check](grep -nE 'skopeo.*containers-storage' lib/sandbox/linux/default.nix)
 - A second spawn of an already-loaded image performs no writes to the platform store's layer directory (measurable via store size or per-blob mtime)
   [system?](bash tests/sandbox/image-install-no-rewrite.sh)
 - On Linux, re-installing an image that differs from the cached one in only its top-of-closure layers transfers O(changed-blobs) bytes into the platform store, not O(image-size) bytes
