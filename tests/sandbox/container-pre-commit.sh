@@ -35,7 +35,9 @@ IMAGE_STREAM=$(nix build --no-link --print-out-paths --no-warn-dirty .#test-imag
 WORKSPACE=$(mktemp -d -t wrapix-container-pre-commit.XXXXXX)
 cleanup() {
   rm -rf "$WORKSPACE"
-  podman rmi -f localhost/wrapix-base:latest >/dev/null 2>&1 || true
+  if podman image exists localhost/wrapix-base:latest; then
+    podman rmi localhost/wrapix-base:latest >/dev/null
+  fi
 }
 trap cleanup EXIT
 
@@ -50,7 +52,9 @@ IMAGE_REF="localhost/wrapix-base:latest"
 # stale ID to the new ref — and silently exercising the old image whose
 # config may lack the env vars (e.g. WRAPIX_PREK_HOOKS) the entrypoint
 # depends on. Same retag pattern as lib/util/shell.nix imageLoadStep.
-podman images --quiet --filter "reference=*wrapix-base*" | xargs -r podman rmi -f >/dev/null 2>&1 || true
+if podman image exists "$IMAGE_REF"; then
+  podman rmi "$IMAGE_REF" >/dev/null
+fi
 "$IMAGE_STREAM" | podman load >/dev/null
 loaded_id=$(podman images --quiet --filter "reference=*wrapix-base*" | head -n1)
 [[ -n "$loaded_id" ]] || { echo "FAIL: image not found after podman load" >&2; podman images >&2; exit 1; }
@@ -90,7 +94,7 @@ chmod 755 "$WORKSPACE/.git/sentinel-pre-commit.sh"
 
 # Run the container with `git add -A && git commit` as the override.
 commit_log=$(mktemp -t wrapix-container-pre-commit-log.XXXXXX)
-trap 'rm -rf "$WORKSPACE" "$commit_log"; podman rmi -f localhost/wrapix-base:latest >/dev/null 2>&1 || true' EXIT
+trap 'rm -rf "$WORKSPACE" "$commit_log"; if podman image exists localhost/wrapix-base:latest; then podman rmi localhost/wrapix-base:latest >/dev/null; fi' EXIT
 if ! podman run --rm --network=pasta --userns=keep-id \
   -e HOME=/home/wrapix \
   -e GIT_AUTHOR_NAME=test -e GIT_AUTHOR_EMAIL=test@example.com \

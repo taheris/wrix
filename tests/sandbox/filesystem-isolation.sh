@@ -41,7 +41,9 @@ echo 'workspace-content' > "$WORKSPACE/testfile.txt"
 
 cleanup() {
   rm -rf "$WORKSPACE" "$HOST_SENTINEL"
-  podman rmi -f localhost/wrapix-base:latest >/dev/null 2>&1 || true
+  if podman image exists localhost/wrapix-base:latest; then
+    podman rmi localhost/wrapix-base:latest >/dev/null
+  fi
 }
 trap cleanup EXIT
 
@@ -56,7 +58,9 @@ IMAGE_REF="localhost/wrapix-base:latest"
 # stale ID to the new ref — and silently exercising the old image whose
 # config may lack the env vars (e.g. WRAPIX_PREK_HOOKS) the entrypoint
 # depends on. Same retag pattern as lib/util/shell.nix imageLoadStep.
-podman images --quiet --filter "reference=*wrapix-base*" | xargs -r podman rmi -f >/dev/null 2>&1 || true
+if podman image exists "$IMAGE_REF"; then
+  podman rmi "$IMAGE_REF" >/dev/null
+fi
 "$IMAGE_STREAM" | podman load >/dev/null
 loaded_id=$(podman images --quiet --filter "reference=*wrapix-base*" | head -n1)
 [[ -n "$loaded_id" ]] || { echo "FAIL: image not found after podman load" >&2; podman images >&2; exit 1; }

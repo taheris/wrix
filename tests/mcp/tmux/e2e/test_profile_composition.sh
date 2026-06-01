@@ -122,7 +122,9 @@ short_name="${short_name%%:*}"
 # the new ref — silently exercising the old image whose config may lack
 # env vars (e.g. WRAPIX_PREK_HOOKS) the entrypoint depends on. Same
 # retag pattern as lib/util/shell.nix imageLoadStep.
-podman images --quiet --filter "reference=*${short_name}*" | xargs -r podman rmi -f >/dev/null 2>&1 || true
+if podman image exists "$IMAGE_REF"; then
+  podman rmi "$IMAGE_REF" >/dev/null
+fi
 log_info "Loading image into podman..."
 # Silence the streamLayeredImage script's stderr (~hundreds of
 # "Creating layer N from paths" lines when the cache is cold). In a

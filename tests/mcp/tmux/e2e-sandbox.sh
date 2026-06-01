@@ -32,7 +32,9 @@ build_log=$(mktemp -t wrapix-e2e-sandbox-build.XXXXXX)
 IMAGE_REF=""
 cleanup() {
   rm -f "$build_log"
-  [[ -n "$IMAGE_REF" ]] && podman rmi -f "$IMAGE_REF" >/dev/null 2>&1 || true
+  if [[ -n "$IMAGE_REF" ]] && podman image exists "$IMAGE_REF"; then
+    podman rmi "$IMAGE_REF" >/dev/null
+  fi
 }
 trap cleanup EXIT
 
@@ -64,7 +66,9 @@ short_name="${short_name%%:*}"
 # the stale ID to the new ref — silently exercising the old image whose
 # config may lack the env vars (e.g. WRAPIX_PREK_HOOKS) the entrypoint
 # depends on. Same retag pattern as lib/util/shell.nix imageLoadStep.
-podman images --quiet --filter "reference=*${short_name}*" | xargs -r podman rmi -f >/dev/null 2>&1 || true
+if podman image exists "$IMAGE_REF"; then
+  podman rmi "$IMAGE_REF" >/dev/null
+fi
 "$IMAGE_STREAM" | podman load >/dev/null
 loaded_id=$(podman images --quiet --filter "reference=*${short_name}*" | head -n1)
 [[ -n "$loaded_id" ]] || {
