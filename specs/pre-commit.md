@@ -137,6 +137,8 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
   [system](bash tests/sandbox/container-pre-commit.sh)
 - A pre-push hook configured in `.pre-commit-config.yaml` fires when `git push` runs inside a profile container
   [system](bash tests/sandbox/container-pre-push.sh)
+- Heavy realization checks — those whose input closure includes the full sandbox base image or the full Rust workspace build — are referenced from a CI-only flake output (e.g., `.#test-ci`), not from `flake.nix#checks` which pre-push's `nix flake check` runs
+  [check?](grep -nE 'test-ci' flake.nix)
 
 ## Requirements
 
@@ -155,6 +157,7 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
 1. **`--no-verify` honored** — git's standard hook-bypass flag is the documented escape hatch when a hook would otherwise block an emergency commit or push.
 2. **Schema independence** — wrapix's coupling to loom is bounded by the file path `.loom/marker.json` and the `loom gate verify-marker` exit-code contract. Schema and validation evolution in loom does not require a wrapix change.
 3. **No new runtime dependencies** — both wrappers are POSIX shell scripts using utilities already present in the devShell and profile-image base layer.
+4. **Pre-push cost bound** — The pre-push chain is the interactive critical path of `git push`; it must complete promptly even on a **cold Nix store**, inclusive of the time to realise its inputs. No command on pre-push may require realization of the full sandbox base-image closure or the full Rust workspace build. Wrapix's `nix flake check` invocation on pre-push covers the `flake.nix#checks` subset that meets this bound; heavier checks live under a separate flake output (e.g., `.#test-ci`) that only CI realises. The marker short-circuit in `pre-push-checks` and the `wrapix-base-image` chaining in `image-builder.md` both reduce the warm-cache cost of pre-push, but neither relaxes this cold-cache constraint — checks that *could* require full-closure realization on a cold store belong in CI regardless of warm-cache speed.
 
 ## Out of Scope
 

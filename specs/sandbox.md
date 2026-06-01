@@ -17,11 +17,18 @@ Running AI coding assistants with unrestricted host access creates security risk
 `mkSandbox` returns `{ package, image, launcher, profile }`:
 
 - `package` — `wrapix` wrapped with `makeWrapper`. `WRAPIX_AGENT` is set unconditionally and is **not** caller-overridable — the wrapper is bound to its built `(profile × agent)` image variant. `WRAPIX_DEFAULT_IMAGE_REF` and `WRAPIX_DEFAULT_IMAGE_SOURCE` are **caller-overridable defaults**: caller env wins; the wrapper's baked value applies only when the caller leaves the variable unset. One-shot users invoke `package` directly; orchestrators (e.g., loom) export the two image-ref vars to swap profiles per launch.
-- `image` — the per-profile OCI artifact. Orchestrators that drive podman themselves read this and call `podman load`.
+- `image` — the per-profile OCI artifact. Orchestrators that drive the install themselves read this and feed it through their platform's install transport (see *Image install path* below).
 - `launcher` — the raw `wrapix` derivation with no env vars baked in (neither the `IMAGE` defaults nor `WRAPIX_AGENT`); orchestrators that supply image ref and agent runtime per call use this instead of `package`.
 - `profile` — the resolved profile attrset after merging consumer `packages`, `mounts`, `env`, and MCP server packages.
 
 **Platform dispatch** — `lib/sandbox/default.nix` selects the Podman launcher (`lib/sandbox/linux/`) or the Apple `container` CLI launcher (`lib/sandbox/darwin/`). Unsupported systems throw at evaluation.
+
+**Image install path** — Before invoking the platform install pipeline, the launcher checks whether the image's **content digest** (manifest digest, not ref-name+tag) matches any image already present in the platform store. On a digest hit, the install is skipped entirely — no tar materialization, no stream invocation, no `*-load` CLI call. On a miss, the launcher installs the image:
+
+- Linux uses a per-layer-blob-dedup transport (`skopeo copy oci-archive: → containers-storage:`) so unchanged layer blobs in a re-emitted image are not re-extracted into the store.
+- Darwin uses `container image load --input <tar>` (Apple's `container` CLI surfaces no per-blob-dedup install path at this time; see `image-builder.md` § Out of Scope).
+
+Both platforms rely on `wrapix-base-image` chaining (see `image-builder.md` § Base Image Layering) to keep the per-profile tar small, so even the Darwin path transfers a bounded delta rather than the full image on small input changes.
 
 **Boundary class** —
 
@@ -85,7 +92,7 @@ The `wrapix` launcher binary is profile-agnostic. Both subcommands share contain
 `SpawnConfig` JSON has stable top-level fields:
 
 - `image_ref` — podman ref
-- `image_source` — Nix store path the launcher loads via `podman load` before invoking podman; idempotent on the image's hash tag
+- `image_source` — Nix store path of the streamable/loadable image artifact. The launcher installs it into the platform store before invoking the container CLI; preflight + transport semantics are documented in *Image install path* above.
 - `workspace` — host path bind-mounted at `/workspace`
 - `env` — allowlist of `[key, value]` pairs to pass through
 - `agent_args` — argv tail passed to the agent binary
@@ -164,6 +171,16 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
   [system?](bash tests/sandbox/workspace-bin-path.sh)
 - Both `lib/sandbox/linux/entrypoint.sh` and `lib/sandbox/darwin/entrypoint.sh` implement the `/workspace/bin` PATH prepend
   [check](grep -nE 'PATH="/workspace/bin:' lib/sandbox/linux/entrypoint.sh lib/sandbox/darwin/entrypoint.sh)
+- The launcher preflight checks whether the image's content digest matches any image already present in the platform store before invoking the install pipeline; on a digest hit, no tar bytes are streamed and no `*-load` CLI is invoked
+  [system?](bash tests/sandbox/image-install-digest-skip.sh)
+- On Linux, the launcher uses `skopeo copy oci-archive: → containers-storage:` for image install; the existing `podman load` call site is replaced
+  [check?](grep -nE 'skopeo.*containers-storage' lib/sandbox/linux/default.nix)
+- A second spawn of an already-loaded image performs no writes to the platform store's layer directory (measurable via store size or per-blob mtime)
+  [system?](bash tests/sandbox/image-install-no-rewrite.sh)
+- On Linux, re-installing an image that differs from the cached one in only its top-of-closure layers transfers O(changed-blobs) bytes into the platform store, not O(image-size) bytes
+  [system?](bash tests/sandbox/image-install-delta-bounded.sh)
+- On Darwin, the launcher uses `container image load --input <tar>` for image install (per Apple's available CLI surface) and relies on the digest-skip preflight and `wrapix-base-image` chaining to bound install I/O
+  [check](grep -nE 'container image load' lib/sandbox/darwin/default.nix)
 
 ## Requirements
 
