@@ -55,6 +55,11 @@ let
 
   notifyClient = import ../notify/client.nix { inherit pkgs; };
 
+  # Shared nixpkgs-pin-dependent bottom-of-closure. Chained under the
+  # per-profile image via `fromImage` so it loads into the platform store once
+  # (specs/image-builder.md § Base Image Layering).
+  wrapixBaseImage = import ./base-image.nix { inherit pkgs; };
+
   # Bundle referenced from config.Env WRAPIX_PREK_HOOKS so the entrypoint can
   # point `core.hooksPath` at it (specs/pre-commit.md § Bead-Container Hook
   # Installation).
@@ -162,6 +167,7 @@ let
     tag = "latest";
     maxLayers = 100;
     includeNixDB = true;
+    fromImage = wrapixBaseImage;
 
     contents = [
       passwdFile
