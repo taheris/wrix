@@ -102,7 +102,7 @@ let
     };
 
     env = {
-      ANTHROPIC_MODEL = "claude-opus-4-7";
+      ANTHROPIC_MODEL = "claude-opus-4-8";
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
       CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = "1";
       DISABLE_AUTOUPDATER = "1";
