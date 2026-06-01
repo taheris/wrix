@@ -64,6 +64,7 @@ in
             USE_STDIO=0
             IMAGE_OVERRIDE_REF=""
             IMAGE_OVERRIDE_SOURCE=""
+            IMAGE_OVERRIDE_DIGEST=""
             CONTAINER_CMD=()
             SPAWN_ENV=()
             SPAWN_MOUNTS=()
@@ -95,6 +96,7 @@ in
               # the orchestrator provides only image_ref.
               IMAGE_OVERRIDE_REF=$(${pkgs.jq}/bin/jq -r '.image_ref // ""' "$SPAWN_CONFIG")
               IMAGE_OVERRIDE_SOURCE=$(${pkgs.jq}/bin/jq -r '.image_source // ""' "$SPAWN_CONFIG")
+              IMAGE_OVERRIDE_DIGEST=$(${pkgs.jq}/bin/jq -r '.image_digest_path // ""' "$SPAWN_CONFIG")
               while IFS= read -r pair; do
                 [ -z "$pair" ] && continue
                 SPAWN_ENV+=("$pair")
@@ -129,6 +131,7 @@ in
               printf 'WORKSPACE=%s\n' "$PROJECT_DIR"
               printf 'IMAGE_OVERRIDE_REF=%s\n' "$IMAGE_OVERRIDE_REF"
               printf 'IMAGE_OVERRIDE_SOURCE=%s\n' "$IMAGE_OVERRIDE_SOURCE"
+              printf 'IMAGE_OVERRIDE_DIGEST=%s\n' "$IMAGE_OVERRIDE_DIGEST"
               for pair in "''${SPAWN_ENV[@]}"; do printf 'ENV=%s\n' "$pair"; done
               for arg in "''${CONTAINER_CMD[@]}"; do printf 'CMD=%s\n' "$arg"; done
               for entry in "''${SPAWN_MOUNTS[@]}"; do printf 'MOUNT=%s\n' "$entry"; done
@@ -164,6 +167,7 @@ in
             # carries `image_ref` and `image_source`.
             IMAGE_REF=""
             IMAGE_SOURCE=""
+            IMAGE_DIGEST_PATH=""
             if [ "$SUBCOMMAND" = "run" ]; then
               if [ -z "''${WRAPIX_DEFAULT_IMAGE_REF:-}" ] || [ -z "''${WRAPIX_DEFAULT_IMAGE_SOURCE:-}" ]; then
                 echo "Error: wrapix run requires WRAPIX_DEFAULT_IMAGE_REF and WRAPIX_DEFAULT_IMAGE_SOURCE" >&2
@@ -171,38 +175,83 @@ in
               fi
               IMAGE_REF="$WRAPIX_DEFAULT_IMAGE_REF"
               IMAGE_SOURCE="$WRAPIX_DEFAULT_IMAGE_SOURCE"
+              IMAGE_DIGEST_PATH="''${WRAPIX_DEFAULT_IMAGE_DIGEST:-}"
             else
               IMAGE_REF="$IMAGE_OVERRIDE_REF"
               IMAGE_SOURCE="$IMAGE_OVERRIDE_SOURCE"
+              IMAGE_DIGEST_PATH="$IMAGE_OVERRIDE_DIGEST"
             fi
 
             PROFILE_IMAGE="$IMAGE_REF"
+            IMAGE_REPO="''${IMAGE_REF%:*}"
             if [ "''${WRAPIX_DRY_RUN:-}" != "1" ]; then
-              if [ -n "$IMAGE_SOURCE" ] && ! container image inspect "$PROFILE_IMAGE" >/dev/null 2>&1; then
-                verbose "Image hash changed or missing, reloading..."
-                echo "Loading profile image..."
-                # Drop the prior :latest alias so the new load can claim the same
-                # repo name; pruneStaleImages later cleans residual hash tags.
-                IMAGE_REPO="''${IMAGE_REF%:*}"
-                container image delete "$IMAGE_REPO:latest" 2>/dev/null || true
-                # Convert Docker-format tar to OCI-archive for Apple container CLI.
-                # --insecure-policy is safe: images are built locally from Nix
-                # derivations (trusted source with cryptographic hashes).
-                OCI_TAR="$WRAPIX_CACHE/profile-image-oci.tar"
-                mkdir -p "$WRAPIX_CACHE"
-                ${pkgs.skopeo}/bin/skopeo --insecure-policy copy --quiet "docker-archive:$IMAGE_SOURCE" "oci-archive:$OCI_TAR"
-                LOAD_OUTPUT=$(container image load --input "$OCI_TAR" 2>&1)
-                LOADED_REF=$(echo "$LOAD_OUTPUT" | grep -oE 'untagged@sha256:[a-f0-9]+' | head -1)
-                if [ -n "$LOADED_REF" ]; then
-                  container image tag "$LOADED_REF" "$PROFILE_IMAGE"
-                  # Maintain :latest as the keep-anchor for pruneStaleImages.
-                  container image tag "$LOADED_REF" "$IMAGE_REPO:latest"
-                fi
-                rm -f "$OCI_TAR"
-                container image prune
-                verbose "Loaded image $PROFILE_IMAGE"
-              else
+              if [ -z "$IMAGE_SOURCE" ]; then
                 verbose "Using cached image $PROFILE_IMAGE"
+              else
+                # Content-digest preflight (specs/sandbox.md § Image install path):
+                # short-circuit the load pipeline when an image with matching OCI
+                # config digest is already in the platform store under any tag.
+                # Apple's container CLI exposes no digest-as-ref lookup, so we
+                # enumerate wrapix-* refs and compare each ref's content digest.
+                # On a hit, the requested ref is aliased to the matching content
+                # and no tar bytes are streamed, no skopeo conversion, no
+                # `container image load` is invoked. Falls back to ref-existence
+                # when IMAGE_DIGEST_PATH is empty (legacy spawn callers).
+                _wrapix_skip_load=0
+                _wrapix_desired_digest=""
+                if [ -n "''${IMAGE_DIGEST_PATH:-}" ] && [ -s "$IMAGE_DIGEST_PATH" ]; then
+                  _wrapix_desired_digest=$(cat "$IMAGE_DIGEST_PATH")
+                fi
+
+                if [ -n "$_wrapix_desired_digest" ]; then
+                  _wrapix_desired_short="''${_wrapix_desired_digest#sha256:}"
+                  _wrapix_match_ref=""
+                  while IFS= read -r _ref; do
+                    [ -z "$_ref" ] && continue
+                    _wrapix_actual=$(container image inspect "$_ref" 2>/dev/null | ${pkgs.jq}/bin/jq -r '.[0].digest // .[0].id // empty')
+                    _wrapix_actual_short="''${_wrapix_actual#sha256:}"
+                    if [ -n "$_wrapix_actual_short" ] && [ "$_wrapix_actual_short" = "$_wrapix_desired_short" ]; then
+                      _wrapix_match_ref="$_ref"
+                      break
+                    fi
+                  done < <(container image list 2>/dev/null | tail -n +2 | awk '/^wrapix-/ {print $1 ":" $2}')
+
+                  if [ -n "$_wrapix_match_ref" ]; then
+                    # best-effort: requested ref may already alias matching content,
+                    # in which case tag exits non-zero benignly; tar bytes still
+                    # aren't streamed.
+                    container image tag "$_wrapix_match_ref" "$PROFILE_IMAGE" 2>/dev/null || true
+                    _wrapix_skip_load=1
+                  fi
+                elif container image inspect "$PROFILE_IMAGE" >/dev/null 2>&1; then
+                  _wrapix_skip_load=1
+                fi
+
+                if [ "$_wrapix_skip_load" = "1" ]; then
+                  verbose "Using cached image $PROFILE_IMAGE"
+                else
+                  verbose "Image hash changed or missing, reloading..."
+                  echo "Loading profile image..."
+                  # Drop the prior :latest alias so the new load can claim the same
+                  # repo name; pruneStaleImages later cleans residual hash tags.
+                  container image delete "$IMAGE_REPO:latest" 2>/dev/null || true
+                  # Convert Docker-format tar to OCI-archive for Apple container CLI.
+                  # --insecure-policy is safe: images are built locally from Nix
+                  # derivations (trusted source with cryptographic hashes).
+                  OCI_TAR="$WRAPIX_CACHE/profile-image-oci.tar"
+                  mkdir -p "$WRAPIX_CACHE"
+                  ${pkgs.skopeo}/bin/skopeo --insecure-policy copy --quiet "docker-archive:$IMAGE_SOURCE" "oci-archive:$OCI_TAR"
+                  LOAD_OUTPUT=$(container image load --input "$OCI_TAR" 2>&1)
+                  LOADED_REF=$(echo "$LOAD_OUTPUT" | grep -oE 'untagged@sha256:[a-f0-9]+' | head -1)
+                  if [ -n "$LOADED_REF" ]; then
+                    container image tag "$LOADED_REF" "$PROFILE_IMAGE"
+                    # Maintain :latest as the keep-anchor for pruneStaleImages.
+                    container image tag "$LOADED_REF" "$IMAGE_REPO:latest"
+                  fi
+                  rm -f "$OCI_TAR"
+                  container image prune
+                  verbose "Loaded image $PROFILE_IMAGE"
+                fi
               fi
               # Prune runs on every invocation, not just after load, so stale
               # hashes from other profiles get swept even when the current
