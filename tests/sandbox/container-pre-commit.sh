@@ -85,17 +85,36 @@ SCRIPT
 chmod 755 "$WORKSPACE/.git/sentinel-pre-commit.sh"
 
 # Run the container with `git add -A && git commit` as the override.
-podman run --rm --network=pasta --userns=keep-id \
+commit_log=$(mktemp -t wrapix-container-pre-commit-log.XXXXXX)
+trap 'rm -rf "$WORKSPACE" "$commit_log"; podman rmi -f localhost/wrapix-base:latest >/dev/null 2>&1 || true' EXIT
+if ! podman run --rm --network=pasta --userns=keep-id \
   -e HOME=/home/wrapix \
   -e GIT_AUTHOR_NAME=test -e GIT_AUTHOR_EMAIL=test@example.com \
   -e GIT_COMMITTER_NAME=test -e GIT_COMMITTER_EMAIL=test@example.com \
   -v "$WORKSPACE:/workspace:rw" \
   "$IMAGE_REF" \
-  /bin/bash -c "cd /workspace && git add -A && git commit -m test"
+  /bin/bash -c 'cd /workspace && git add -A && echo "=== core.hooksPath ===" && (git config --local --get core.hooksPath || echo NOT_SET) && echo "=== git commit ===" && git commit -m test' \
+  > "$commit_log" 2>&1; then
+  cat "$commit_log" >&2
+  echo "FAIL: container commit returned non-zero" >&2
+  exit 1
+fi
+cat "$commit_log" >&2
 
 # Sentinel side-effect proves the hook chain fired via core.hooksPath.
 [[ -f "$WORKSPACE/.git/sentinel-fired-precommit" ]] || {
   echo "FAIL: pre-commit sentinel did not fire" >&2
+  echo "--- workspace state ---" >&2
+  ls -la "$WORKSPACE/.git/" 2>&1 | head -20 >&2
+  echo "--- container core.hooksPath + prek ---" >&2
+  podman run --rm --network=pasta --userns=keep-id \
+    -e HOME=/home/wrapix \
+    -v "$WORKSPACE:/workspace:rw" \
+    --entrypoint /bin/bash "$IMAGE_REF" \
+    -c 'echo "hooksPath=$(git -C /workspace config --local --get core.hooksPath)";
+        echo "WRAPIX_PREK_HOOKS=$WRAPIX_PREK_HOOKS";
+        ls -la "$WRAPIX_PREK_HOOKS/" 2>&1 | head -15;
+        echo "prek=$(command -v prek)"' >&2
   exit 1
 }
 
