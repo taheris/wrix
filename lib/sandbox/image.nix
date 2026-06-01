@@ -234,6 +234,12 @@ let
       chmod 755 nix/var/nix/gcroots nix/var/nix/gcroots/per-user
       chmod 1777 nix/var/nix/gcroots/auto
       chmod -R a+rwX nix/var/log
+
+      # Drop Nix's 8 MiB all-zero gc-reserved-space file: opening the store
+      # read-write (includeNixDB + the load-db above) creates it, it re-hashes
+      # the customisation layer on any input change, and Nix recreates it
+      # lazily on first in-container read-write store open.
+      rm -f nix/var/nix/db/reserved
     '';
 
     config = {

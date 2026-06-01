@@ -186,6 +186,12 @@ in
       program = "${sandboxImageChecks.iterationCostBoundedTest}/bin/test-iteration-cost-bounded";
     };
 
+    customisation-layer-bounded = {
+      meta.description = "Verify the customisation layer elides Nix's 8 MiB gc-reserved-space padding and stays bounded (Linux only)";
+      type = "app";
+      program = "${sandboxImageChecks.customisationLayerBoundedTest}/bin/test-customisation-layer-bounded";
+    };
+
     # profiles.rust.buildPackage [verify] hash invariants (specs/profiles.md).
     profiles-build-package = {
       meta.description = "Verify profiles.rust.buildPackage hash invariants (bin/clippy/nextest/cargoArtifacts)";

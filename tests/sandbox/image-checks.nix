@@ -593,6 +593,70 @@ let
         '';
   };
 
+  # Customisation-layer-bounded probe. Opening the in-image Nix store
+  # read-write (includeNixDB + the prekHooksBundle load-db in image.nix)
+  # creates Nix's gc-reserved-space file `nix/var/nix/db/reserved` — an 8 MiB
+  # all-zero block that landed in the streamLayeredImage customisation layer
+  # and re-hashed it on every profile-level input change. image.nix removes
+  # the file at the end of extraCommands; Nix recreates it lazily in-container.
+  # This asserts the removal holds: the customisation layer must not carry
+  # `db/reserved`, and its uncompressed tar must stay under the bound the 8 MiB
+  # block used to blow past.
+  customisationLayerMaxBytes = 4 * 1024 * 1024;
+  customisationLayerBoundedTest = pkgs.writeShellApplication {
+    name = "test-customisation-layer-bounded";
+    runtimeInputs = lib.optionals isLinux [
+      pkgs.coreutils
+      pkgs.gnutar
+      pkgs.gnugrep
+      pkgs.jq
+    ];
+    text =
+      if isLinux then
+        ''
+          img=${iterationProbeImageA}
+          max_bytes=${toString customisationLayerMaxBytes}
+
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+
+          "$img" | tar -xf - -C "$tmp"
+
+          cust=$(jq -r '.[0].Layers[-1]' "$tmp/manifest.json")
+          layer="$tmp/$cust"
+
+          if [[ ! -f "$layer" ]]; then
+              echo "FAIL: customisation layer tar $cust not found in image archive" >&2
+              exit 1
+          fi
+
+          if tar -tf "$layer" | grep -qE '(^|/)nix/var/nix/db/reserved$'; then
+              echo "FAIL: customisation layer still carries nix/var/nix/db/reserved" >&2
+              echo "      (the gc-reserved-space padding was not elided)" >&2
+              exit 1
+          fi
+
+          layer_bytes=$(stat -c %s "$layer")
+          echo "customisation layer: $cust ($layer_bytes bytes)" >&2
+
+          if [[ "$layer_bytes" -gt "$max_bytes" ]]; then
+              echo "FAIL: customisation layer is $layer_bytes bytes (bound $max_bytes)" >&2
+              echo "      reserved padding elision should keep it well under the bound" >&2
+              exit 1
+          fi
+
+          echo "test-customisation-layer-bounded: PASS ($layer_bytes bytes, reserved absent)"
+        ''
+      else
+        ''
+          # streamLayeredImage's stream script carries a Linux Python shebang;
+          # extracting the customisation layer here is Linux-only. The reserved
+          # elision itself runs identically under buildLayeredImage on Darwin.
+          echo "test-customisation-layer-bounded: skipped on this platform (streamLayeredImage is Linux-only)" >&2
+          exit 0
+        '';
+  };
+
 in
 {
   inherit
@@ -603,5 +667,6 @@ in
     baseImageUniversalTest
     baseImageHashStableTest
     iterationCostBoundedTest
+    customisationLayerBoundedTest
     ;
 }

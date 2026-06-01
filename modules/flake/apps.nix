@@ -13,6 +13,7 @@ _:
         test-base-image-universal = test.apps.base-image-universal;
         test-base-image-hash-stable = test.apps.base-image-hash-stable;
         test-iteration-cost-bounded = test.apps.iteration-cost-bounded;
+        test-customisation-layer-bounded = test.apps.customisation-layer-bounded;
       };
     };
 }
