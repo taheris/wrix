@@ -145,6 +145,179 @@ let
         '';
   };
 
+  # Linux-only verifier for the digest-preflight short-circuit (specs/sandbox.md
+  # § Image install path; specs/image-builder.md Success Criteria #1). Drives
+  # the shared `imageLoadStep` snippet through shim podman + skopeo binaries.
+  # The shim records the image as content-digest-present after the first
+  # install transport runs; the second `imageLoadStep` must observe the
+  # digest hit and short-circuit — no skopeo copies, no tar materialization,
+  # no `*-load` CLI call. Darwin's digest preflight is verified separately
+  # by its own (in-progress) work in specs/sandbox.md and is skipped here.
+  imageInstallDigestSkipTest = pkgs.writeShellApplication {
+    name = "test-image-install-digest-skip";
+    runtimeInputs = lib.optionals isLinux [
+      pkgs.coreutils
+      pkgs.gnugrep
+    ];
+    text =
+      if isLinux then
+        ''
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+
+          shim_dir="$tmp/bin"
+          state="$tmp/state"
+          mkdir -p "$shim_dir" "$state"
+          podman_log="$state/podman.log"
+          skopeo_log="$state/skopeo.log"
+          image_source_log="$state/image-source.log"
+          : >"$podman_log"
+          : >"$skopeo_log"
+          : >"$image_source_log"
+
+          IMAGE_REF="localhost/wrapix-digestskip:abc123"
+          IMAGE_SOURCE="$tmp/image-source.sh"
+          IMAGE_DIGEST_PATH="$tmp/image-digest"
+          DESIRED_DIGEST="sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+          printf '%s' "$DESIRED_DIGEST" >"$IMAGE_DIGEST_PATH"
+
+          cat >"$IMAGE_SOURCE" <<IMG_SRC
+          #!/usr/bin/env bash
+          printf 'invoked\n' >>'$image_source_log'
+          printf 'fake-image-tarball-bytes'
+          IMG_SRC
+          chmod +x "$IMAGE_SOURCE"
+
+          # podman shim — logs every invocation as a single-line `$*`.
+          # `image inspect --format {{.Id}} <digest>`: succeeds (exit 0,
+          # echoes the digest) iff the shim has been marked installed,
+          # mirroring podman's content-digest lookup.
+          # `image exists <ref>`: succeeds iff installed; covers the
+          # legacy ref-existence fallback.
+          # `load`: recorded via $state/load-invoked so a regression to
+          # an `*-load` CLI call is detectable even if the log line shape
+          # changes.
+          cat >"$shim_dir/podman" <<PODMAN_SHIM
+          #!/usr/bin/env bash
+          set -euo pipefail
+          printf '%s\n' "\$*" >>'$podman_log'
+          case "\$1" in
+              image)
+                  case "\$2" in
+                      inspect)
+                          if [ -f '$state/installed' ]; then
+                              printf '%s\n' "\$5"
+                              exit 0
+                          else
+                              exit 1
+                          fi
+                          ;;
+                      exists)
+                          if [ -f '$state/installed' ]; then exit 0; else exit 1; fi
+                          ;;
+                      *) exit 0 ;;
+                  esac
+                  ;;
+              tag) exit 0 ;;
+              load)
+                  : >'$state/load-invoked'
+                  exit 0
+                  ;;
+              *) exit 0 ;;
+          esac
+          PODMAN_SHIM
+          chmod +x "$shim_dir/podman"
+
+          # skopeo shim — records every invocation and marks the image
+          # installed when it sees the containers-storage target (the
+          # second copy of the install transport).
+          cat >"$shim_dir/skopeo" <<SKOPEO_SHIM
+          #!/usr/bin/env bash
+          set -euo pipefail
+          printf '%s\n' "\$*" >>'$skopeo_log'
+          for a in "\$@"; do
+              case "\$a" in
+                  containers-storage:*) : >'$state/installed' ;;
+              esac
+          done
+          exit 0
+          SKOPEO_SHIM
+          chmod +x "$shim_dir/skopeo"
+
+          verbose() { :; }
+
+          PATH="$shim_dir:$PATH"
+          export PATH IMAGE_REF IMAGE_SOURCE IMAGE_DIGEST_PATH
+
+          # First invocation: digest preflight miss → install transport runs.
+          ${shellLib.imageLoadStep}
+
+          if [[ ! -f "$state/installed" ]]; then
+              echo "first invocation did not reach the install transport" >&2
+              cat "$skopeo_log" >&2
+              exit 1
+          fi
+          if ! grep -qE 'oci-archive:[^ ]+ containers-storage:'"$IMAGE_REF"'$' "$skopeo_log"; then
+              echo "first invocation did not skopeo copy oci-archive: -> containers-storage:$IMAGE_REF:" >&2
+              cat "$skopeo_log" >&2
+              exit 1
+          fi
+          if ! grep -qFx -- "image inspect --format {{.Id}} $DESIRED_DIGEST" "$podman_log"; then
+              echo "first invocation did not perform a digest-preflight inspect of $DESIRED_DIGEST:" >&2
+              cat "$podman_log" >&2
+              exit 1
+          fi
+          first_source_lines=$(wc -l <"$image_source_log")
+          if [[ "$first_source_lines" -ne 1 ]]; then
+              echo "first invocation did not materialise the image tar exactly once (got $first_source_lines):" >&2
+              cat "$image_source_log" >&2
+              exit 1
+          fi
+
+          : >"$podman_log"
+          : >"$skopeo_log"
+
+          # Second invocation: digest preflight hit → short-circuit.
+          ${shellLib.imageLoadStep}
+
+          if [[ -s "$skopeo_log" ]]; then
+              echo "second invocation re-invoked skopeo (digest preflight did not short-circuit):" >&2
+              cat "$skopeo_log" >&2
+              exit 1
+          fi
+          if [[ -e "$state/load-invoked" ]]; then
+              echo "second invocation issued a *-load CLI call (expected none):" >&2
+              exit 1
+          fi
+          second_source_lines=$(wc -l <"$image_source_log")
+          if [[ "$second_source_lines" -ne 1 ]]; then
+              echo "second invocation re-materialised the image tar (lines now=$second_source_lines, expected 1):" >&2
+              cat "$image_source_log" >&2
+              exit 1
+          fi
+          if ! grep -qFx -- "image inspect --format {{.Id}} $DESIRED_DIGEST" "$podman_log"; then
+              echo "second invocation did not perform a digest-preflight inspect of $DESIRED_DIGEST:" >&2
+              cat "$podman_log" >&2
+              exit 1
+          fi
+          if grep -qE '^load($| )' "$podman_log"; then
+              echo "second invocation logged a podman load command (expected none):" >&2
+              cat "$podman_log" >&2
+              exit 1
+          fi
+
+          echo "test-image-install-digest-skip: PASS"
+        ''
+      else
+        ''
+          # Darwin's digest-preflight short-circuit lives in lib/sandbox/darwin/default.nix
+          # and is exercised by its own platform-resident verifier; the shared
+          # `imageLoadStep` snippet driven here is Linux-only (podman + skopeo).
+          echo "test-image-install-digest-skip: skipped on this platform (Linux-only shim)" >&2
+          exit 0
+        '';
+  };
+
   claudeRuntimeNoopTest = pkgs.writeShellApplication {
     name = "test-claude-runtime-noop";
     runtimeInputs = [
@@ -191,6 +364,7 @@ in
 {
   inherit
     wrapixSpawnLoadTest
+    imageInstallDigestSkipTest
     claudeRuntimeNoopTest
     prekHooksClosureTest
     ;
