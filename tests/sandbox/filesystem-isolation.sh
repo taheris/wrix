@@ -29,6 +29,8 @@ uname_s=$(uname -s)
 [[ "$uname_s" = "Linux" ]] || skip "Linux-only verifier (uname=$uname_s); macOS covered by tests/darwin/*"
 command -v nix    >/dev/null 2>&1 || skip "nix not on PATH"
 command -v podman >/dev/null 2>&1 || skip "podman not on PATH"
+# Nested rootless podman can't load OCI images (overlayfs deadlock); skip vs hang.
+[ -e /run/.containerenv ] && skip "nested container: podman load unavailable"
 
 cd "$REPO_ROOT"
 

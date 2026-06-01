@@ -67,6 +67,12 @@ if ! command -v podman &>/dev/null; then
     exit 1
 fi
 
+# Nested rootless podman can't load OCI images (overlayfs deadlock); skip vs hang.
+if [ -e /run/.containerenv ]; then
+    log_warn "nested container: podman load unavailable — skipping"
+    exit 0
+fi
+
 log_info "Building sandbox-mcp image (mcpRuntime=true)..."
 
 # Build the mcp image: all MCP server packages included, runtime selection via env vars

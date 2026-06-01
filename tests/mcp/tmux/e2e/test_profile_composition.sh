@@ -61,6 +61,12 @@ if ! command -v podman &>/dev/null; then
     HAS_PODMAN=false
     log_warn "podman not available — container runtime checks will be skipped"
 fi
+# Nested rootless podman can't load OCI images (overlayfs deadlock); validate
+# the build but skip runtime checks rather than hang the gate.
+if [ -e /run/.containerenv ]; then
+    HAS_PODMAN=false
+    log_warn "nested container: podman load unavailable — container runtime checks will be skipped"
+fi
 
 log_info "Building sandbox-rust-mcp image (mcpRuntime=true)..."
 

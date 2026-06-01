@@ -25,6 +25,8 @@ uname_s=$(uname -s)
 command -v nix    >/dev/null 2>&1 || skip "nix not on PATH"
 command -v podman >/dev/null 2>&1 || skip "podman not on PATH"
 command -v jq     >/dev/null 2>&1 || skip "jq not on PATH"
+# Nested rootless podman can't load OCI images (overlayfs deadlock); skip vs hang.
+[ -e /run/.containerenv ] && skip "nested container: podman load unavailable"
 
 cd "$REPO_ROOT"
 
