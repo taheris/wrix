@@ -37,7 +37,7 @@ The image build is two-tier. A shared `wrapix-base-image` derivation pins the un
 
 Both `dockerTools.streamLayeredImage` (Linux) and `dockerTools.buildLayeredImage` (Darwin) accept `fromImage` with identical semantics, so the chaining shape is the same on both platforms.
 
-Membership rule for the base: a store path belongs in `wrapix-base-image` iff it varies only with the nixpkgs pin, not with any profile-level input or wrapix-generated content. Paths whose hash depends on profile inputs — per-profile wrapper scripts, the merged Claude settings JSON, MCP configs, and the selected agent runtime layer (`piPkg`, `directRunner`, or `claude-code`) — stay in the per-profile top layers.
+Membership rule for the base: a store path belongs in `wrapix-base-image` iff (a) it varies only with the nixpkgs pin, not with any profile-level input or wrapix-generated content, **and** (b) it is genuinely universal — every profile already closes over it as shared bottom-of-closure (a library or runtime that other paths depend on), not a profile-specific leaf. Condition (a) alone is necessary but not sufficient: a pin-only path that no profile references — a profile-specific compiler toolchain such as `pkgs.rustc` (the rust profile uses fenix's toolchain, a different store path; base and python carry no Rust) — is dead weight in every profile image and stays out of the base. Paths whose hash depends on profile inputs — per-profile wrapper scripts, the merged Claude settings JSON, MCP configs, and the selected agent runtime layer (`piPkg`, `directRunner`, or `claude-code`) — stay in the per-profile top layers.
 
 The top layers include `streamLayeredImage`'s **customisation layer** (its final layer, which aggregates content not held in a standalone Nix store path — generated files, metadata, anything the layered-image builder synthesises rather than pulling from the store). The customisation layer re-hashes whenever any of its inputs change; the membership rule keeps that input set tied to profile-level concerns so changes to a sibling profile don't perturb it.
 
@@ -57,6 +57,8 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
   [check](grep -nE 'fromImage|wrapix-base-image' lib/sandbox/image.nix)
 - `wrapix-base-image`'s derivation hash is invariant under changes to profile-level inputs — `profile.packages`, `profile.env`, MCP configs, the merged Claude settings JSON, and the agent runtime selection
   [system?](nix run .#test-base-image-hash-stable)
+- `wrapix-base-image` holds only the universal bottom-of-closure: no profile-specific compiler toolchain leaks in (e.g. `pkgs.rustc`, which no profile references — the rust profile uses fenix's toolchain)
+  [system](nix run .#test-base-image-universal)
 - A one-file perturbation in profile-level inputs (one wrapper script touched) leaves every layer-blob hash in the resulting image's manifest unchanged except for the customisation layer and any top layer that directly depends on the changed file
   [system?](nix run .#test-iteration-cost-bounded)
 - `agent = "claude"` produces an image that contains `claude-code`

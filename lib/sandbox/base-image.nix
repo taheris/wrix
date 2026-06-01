@@ -23,14 +23,5 @@ dockerTools.buildLayeredImage {
   tag = "latest";
   maxLayers = 64;
 
-  contents = [
-    pkgs.glibc
-    pkgs.gcc-unwrapped.lib
-    pkgs.llvmPackages.libllvm
-    pkgs.openssl
-    pkgs.cacert
-    pkgs.bashInteractive
-    pkgs.coreutils
-    pkgs.rustc
-  ];
+  contents = import ./base-contents.nix { inherit pkgs; };
 }

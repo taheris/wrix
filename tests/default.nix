@@ -168,6 +168,12 @@ in
       program = "${sandboxImageChecks.prekHooksClosureTest}/bin/test-prek-hooks-closure";
     };
 
+    base-image-universal = {
+      meta.description = "Verify wrapix-base-image holds only universal bottom-of-closure paths (no profile-specific rustc)";
+      type = "app";
+      program = "${sandboxImageChecks.baseImageUniversalTest}/bin/test-base-image-universal";
+    };
+
     # profiles.rust.buildPackage [verify] hash invariants (specs/profiles.md).
     profiles-build-package = {
       meta.description = "Verify profiles.rust.buildPackage hash invariants (bin/clippy/nextest/cargoArtifacts)";

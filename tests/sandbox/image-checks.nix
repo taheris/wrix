@@ -32,6 +32,13 @@ let
 
   defaultImageClosure = pkgs.closureInfo { rootPaths = [ defaultImage ]; };
 
+  # Closure over the actual base-image contents (built with linuxPkgs, matching
+  # lib/sandbox/image.nix). The base image itself is a compressed tarball whose
+  # store references are not scannable, so the membership verifier closes over
+  # the contents list the image is built from.
+  baseContents = import ../../lib/sandbox/base-contents.nix { pkgs = linuxPkgs; };
+  baseContentsClosure = pkgs.closureInfo { rootPaths = baseContents; };
+
   claudeCodePkg = linuxPkgs.claude-code;
   prekHooksBundle = import ../../lib/prek/bundle.nix { pkgs = linuxPkgs; };
 
@@ -360,6 +367,44 @@ let
     '';
   };
 
+  # Membership guard for the universal bottom-of-closure (specs/image-builder.md
+  # § Base Image Layering). The base holds only nixpkgs-pin-dependent paths that
+  # every profile actually closes over — shared libraries, TLS material, shells,
+  # coreutils. It must NOT carry a profile-specific compiler toolchain: no
+  # profile references `pkgs.rustc` (the rust profile uses fenix's toolchain, a
+  # different store path; base/python carry no Rust), so its presence would be
+  # dead weight in every profile image. Anchors a couple of genuine universal
+  # members so the test asserts membership in both directions.
+  baseImageUniversalTest = pkgs.writeShellApplication {
+    name = "test-base-image-universal";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.gnugrep
+    ];
+    text = ''
+      closure_file=${baseContentsClosure}/store-paths
+
+      rustc_path=${linuxPkgs.rustc}
+      if grep -qxF "$rustc_path" "$closure_file"; then
+          echo "FAIL: profile-specific rustc reachable from wrapix-base-image contents" >&2
+          echo "  unexpected: $rustc_path" >&2
+          echo "  base is the universal bottom-of-closure; no profile uses pkgs.rustc" >&2
+          exit 1
+      fi
+
+      for universal in ${linuxPkgs.glibc} ${linuxPkgs.cacert}; do
+          if ! grep -qxF "$universal" "$closure_file"; then
+              echo "FAIL: expected universal base member missing from closure" >&2
+              echo "  expected: $universal" >&2
+              echo "  closure : $closure_file" >&2
+              exit 1
+          fi
+      done
+
+      echo "test-base-image-universal: PASS"
+    '';
+  };
+
 in
 {
   inherit
@@ -367,5 +412,6 @@ in
     imageInstallDigestSkipTest
     claudeRuntimeNoopTest
     prekHooksClosureTest
+    baseImageUniversalTest
     ;
 }
