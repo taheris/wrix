@@ -124,10 +124,21 @@ short_name="${short_name%%:*}"
 # retag pattern as lib/util/shell.nix imageLoadStep.
 podman images --quiet --filter "reference=*${short_name}*" | xargs -r podman rmi -f >/dev/null 2>&1 || true
 log_info "Loading image into podman..."
-if ! "${IMAGE_PATH}" | podman load >/dev/null 2>&1; then
+# Silence the streamLayeredImage script's stderr (~hundreds of
+# "Creating layer N from paths" lines when the cache is cold). In a
+# bash pipeline `>/dev/null 2>&1` only applies to the right-hand
+# command (`podman load`); without redirecting the stream script's
+# stderr too, the chatter fills loom's per-verifier output buffer and
+# pushes the real failure tail off the captured window — exactly the
+# bug commit 42010041 fixed for tests/mcp/tmux/e2e-sandbox.sh.
+stream_log=$(mktemp -t wrapix-stream-load.XXXXXX)
+if ! "${IMAGE_PATH}" 2>"$stream_log" | podman load >/dev/null 2>&1; then
+    cat "$stream_log" >&2
+    rm -f "$stream_log"
     log_error "Failed to load image into podman"
     exit 1
 fi
+rm -f "$stream_log"
 
 loaded_id=$(podman images --quiet --filter "reference=*${short_name}*" | head -n1)
 if [[ -z "$loaded_id" ]]; then
