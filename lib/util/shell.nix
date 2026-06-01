@@ -18,16 +18,50 @@ _:
   '';
 
   # Idempotent `podman load` of the sandbox image. Expects $IMAGE_REF,
-  # $IMAGE_SOURCE, and `verbose` in the caller's scope.
+  # $IMAGE_SOURCE, $IMAGE_DIGEST_PATH, and `verbose` in the caller's scope.
+  #
+  # Preflight is content-digest based (specs/sandbox.md): when the image's
+  # OCI config digest is already present in the local store, the install
+  # pipeline is short-circuited — no stream invocation, no `podman load`.
+  # This catches drv-hash rebuilds that leave the image content untouched
+  # (where `mkImageRef`'s tag changes but the content does not), the case
+  # the prior `podman image exists $IMAGE_REF` preflight missed.
+  #
+  # $IMAGE_DIGEST_PATH may be empty (e.g. legacy `wrapix spawn` callers that
+  # don't yet supply `image_digest_path`); the step falls back to the
+  # ref-existence check so spawn-side idempotency is preserved.
   imageLoadStep = ''
-    if [ -n "$IMAGE_SOURCE" ] && ! podman image exists "$IMAGE_REF" 2>/dev/null; then
-      verbose "Loading image from $IMAGE_SOURCE..."
-      "$IMAGE_SOURCE" | podman load -q >/dev/null
-      IMAGE_REPO="''${IMAGE_REF%:*}"
-      podman tag "$IMAGE_REPO:latest" "$IMAGE_REF" 2>/dev/null || true
-      verbose "Loaded image $IMAGE_REF"
-    else
+    if [[ -z "$IMAGE_SOURCE" ]]; then
       verbose "Using cached image $IMAGE_REF"
+    else
+      _wrapix_skip_load=0
+      _wrapix_desired_digest=""
+      if [[ -n "''${IMAGE_DIGEST_PATH:-}" && -s "$IMAGE_DIGEST_PATH" ]]; then
+        _wrapix_desired_digest=$(cat "$IMAGE_DIGEST_PATH")
+      fi
+      if [[ -n "$_wrapix_desired_digest" ]]; then
+        if podman image inspect --format '{{.Id}}' "$_wrapix_desired_digest" >/dev/null 2>&1; then
+          # best-effort: aliasing the desired ref to the matching content is
+          # convenience only — a non-zero exit (e.g. ref already points at
+          # the same Id) is benign; tar bytes still aren't streamed.
+          podman tag "$_wrapix_desired_digest" "$IMAGE_REF" >/dev/null 2>&1 || true
+          _wrapix_skip_load=1
+        fi
+      elif podman image exists "$IMAGE_REF" 2>/dev/null; then
+        _wrapix_skip_load=1
+      fi
+
+      if [[ "$_wrapix_skip_load" == "1" ]]; then
+        verbose "Using cached image $IMAGE_REF"
+      else
+        verbose "Loading image from $IMAGE_SOURCE..."
+        "$IMAGE_SOURCE" | podman load -q >/dev/null
+        IMAGE_REPO="''${IMAGE_REF%:*}"
+        # best-effort: podman tag failures are non-fatal — caller can still
+        # reach the loaded :latest tag; we only lose the convenience alias
+        podman tag "$IMAGE_REPO:latest" "$IMAGE_REF" 2>/dev/null || true
+        verbose "Loaded image $IMAGE_REF"
+      fi
     fi
   '';
 

@@ -67,6 +67,7 @@ mk_runner() {
     printf 'SUBCOMMAND=%s\n' "$subcommand"
     printf 'IMAGE_OVERRIDE_REF=""\n'
     printf 'IMAGE_OVERRIDE_SOURCE=""\n'
+    printf 'IMAGE_OVERRIDE_DIGEST=""\n'
     cat "$block"
   } > "$out"
   chmod +x "$out"

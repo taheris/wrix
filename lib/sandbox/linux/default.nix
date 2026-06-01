@@ -83,6 +83,7 @@ in
         USE_STDIO=0
         IMAGE_OVERRIDE_REF=""
         IMAGE_OVERRIDE_SOURCE=""
+        IMAGE_OVERRIDE_DIGEST=""
         CONTAINER_CMD=()
         # SpawnConfig env allowlist: KEY=VALUE pairs (one per array slot)
         SPAWN_ENV=()
@@ -120,6 +121,7 @@ in
           # the orchestrator provides only image_ref.
           IMAGE_OVERRIDE_REF=$(jq -r '.image_ref // ""' "$SPAWN_CONFIG")
           IMAGE_OVERRIDE_SOURCE=$(jq -r '.image_source // ""' "$SPAWN_CONFIG")
+          IMAGE_OVERRIDE_DIGEST=$(jq -r '.image_digest_path // ""' "$SPAWN_CONFIG")
           while IFS= read -r pair; do
             [ -z "$pair" ] && continue
             SPAWN_ENV+=("$pair")
@@ -154,6 +156,7 @@ in
           printf 'WORKSPACE=%s\n' "$PROJECT_DIR"
           printf 'IMAGE_OVERRIDE_REF=%s\n' "$IMAGE_OVERRIDE_REF"
           printf 'IMAGE_OVERRIDE_SOURCE=%s\n' "$IMAGE_OVERRIDE_SOURCE"
+          printf 'IMAGE_OVERRIDE_DIGEST=%s\n' "$IMAGE_OVERRIDE_DIGEST"
           for pair in "''${SPAWN_ENV[@]}"; do printf 'ENV=%s\n' "$pair"; done
           for arg in "''${CONTAINER_CMD[@]}"; do printf 'CMD=%s\n' "$arg"; done
           for entry in "''${SPAWN_MOUNTS[@]}"; do printf 'MOUNT=-v %s\n' "$entry"; done
@@ -401,6 +404,7 @@ in
         # carries `image_ref` and `image_source`.
         IMAGE_REF=""
         IMAGE_SOURCE=""
+        IMAGE_DIGEST_PATH=""
         if [ "$SUBCOMMAND" = "run" ]; then
           if [ -z "''${WRAPIX_DEFAULT_IMAGE_REF:-}" ] || [ -z "''${WRAPIX_DEFAULT_IMAGE_SOURCE:-}" ]; then
             echo "Error: wrapix run requires WRAPIX_DEFAULT_IMAGE_REF and WRAPIX_DEFAULT_IMAGE_SOURCE" >&2
@@ -408,9 +412,11 @@ in
           fi
           IMAGE_REF="$WRAPIX_DEFAULT_IMAGE_REF"
           IMAGE_SOURCE="$WRAPIX_DEFAULT_IMAGE_SOURCE"
+          IMAGE_DIGEST_PATH="''${WRAPIX_DEFAULT_IMAGE_DIGEST:-}"
         else
           IMAGE_REF="$IMAGE_OVERRIDE_REF"
           IMAGE_SOURCE="$IMAGE_OVERRIDE_SOURCE"
+          IMAGE_DIGEST_PATH="$IMAGE_OVERRIDE_DIGEST"
         fi
 
         # Shared with the wrapix-spawn-load verifier: see `lib/util/shell.nix`.

@@ -154,91 +154,124 @@ let
   };
   buildImage =
     if asTarball then pkgs.dockerTools.buildLayeredImage else pkgs.dockerTools.streamLayeredImage;
-in
-buildImage {
-  name = "wrapix-${profile.name}${pkgs.lib.optionalString (agent != "claude") "-${agent}"}";
-  tag = "latest";
-  maxLayers = 100;
-  includeNixDB = true;
 
-  contents = [
-    passwdFile
-    groupFile
-    pkgs.dockerTools.usrBinEnv
-    pkgs.dockerTools.binSh
-    pkgs.dockerTools.caCertificates
-    pkgs.cacert
-    nixConfig
-    profileEnv
-  ];
+  imageName = "wrapix-${profile.name}${pkgs.lib.optionalString (agent != "claude") "-${agent}"}";
 
-  extraCommands = ''
-    mkdir -p tmp home/wrapix root var/run var/cache var/tmp mnt/wrapix/file mnt/wrapix/dir
-    chmod 1777 tmp var/cache var/tmp
-    chmod 777 home/wrapix
+  rawImage = buildImage {
+    name = imageName;
+    tag = "latest";
+    maxLayers = 100;
+    includeNixDB = true;
 
-    mkdir -p etc/wrapix
-    echo "127.0.0.1 localhost" > etc/hosts
+    contents = [
+      passwdFile
+      groupFile
+      pkgs.dockerTools.usrBinEnv
+      pkgs.dockerTools.binSh
+      pkgs.dockerTools.caCertificates
+      pkgs.cacert
+      nixConfig
+      profileEnv
+    ];
 
-    cp ${entrypointSh} entrypoint.sh
-    chmod +x entrypoint.sh
+    extraCommands = ''
+      mkdir -p tmp home/wrapix root var/run var/cache var/tmp mnt/wrapix/file mnt/wrapix/dir
+      chmod 1777 tmp var/cache var/tmp
+      chmod 777 home/wrapix
 
-    cp ${sshConfig.gitSshSetup} git-ssh-setup.sh
-    chmod 0644 git-ssh-setup.sh
+      mkdir -p etc/wrapix
+      echo "127.0.0.1 localhost" > etc/hosts
 
-    ${pkgs.lib.optionalString krunSupport ''
-      cp ${./linux/krun-init.sh} krun-init.sh
-      chmod +x krun-init.sh
-      mkdir -p lib
-      cp ${libfakeuid}/lib/libfakeuid.so lib/libfakeuid.so
-      cp ${krunRelay}/bin/krun-relay krun-relay
-      chmod +x krun-relay
-    ''}
+      cp ${entrypointSh} entrypoint.sh
+      chmod +x entrypoint.sh
 
-    cp ${claudeConfigJson} etc/wrapix/claude-config.json
-    cp ${claudeSettingsJson} etc/wrapix/claude-settings.json
+      cp ${sshConfig.gitSshSetup} git-ssh-setup.sh
+      chmod 0644 git-ssh-setup.sh
 
-    ${optionalString (mcpServerConfigs != { }) ''
-      mkdir -p etc/wrapix/mcp
-      ${concatStringsSep "\n" (
-        mapAttrsToList (name: file: "cp ${file} etc/wrapix/mcp/${name}.json") mcpConfigFiles
-      )}
-    ''}
+      ${pkgs.lib.optionalString krunSupport ''
+        cp ${./linux/krun-init.sh} krun-init.sh
+        chmod +x krun-init.sh
+        mkdir -p lib
+        cp ${libfakeuid}/lib/libfakeuid.so lib/libfakeuid.so
+        cp ${krunRelay}/bin/krun-relay krun-relay
+        chmod +x krun-relay
+      ''}
 
-    # Register prekHooksBundle in nix db — referenced only from config.Env
-    # (WRAPIX_PREK_HOOKS), which includeNixDB does not cover.
-    NIX_STATE_DIR=$PWD/nix/var/nix \
-      ${pkgs.buildPackages.nix}/bin/nix-store --load-db \
-      < ${pkgs.closureInfo { rootPaths = [ prekHooksBundle ]; }}/registration
+      cp ${claudeConfigJson} etc/wrapix/claude-config.json
+      cp ${claudeSettingsJson} etc/wrapix/claude-settings.json
 
-    # Fix Nix permissions for non-root users
-    # (includeNixDB creates files owned by root)
-    # Store must be writable to add new paths and create lock files
-    chmod -R a+rwX nix/store nix/var/nix
+      ${optionalString (mcpServerConfigs != { }) ''
+        mkdir -p etc/wrapix/mcp
+        ${concatStringsSep "\n" (
+          mapAttrsToList (name: file: "cp ${file} etc/wrapix/mcp/${name}.json") mcpConfigFiles
+        )}
+      ''}
 
-    # Pre-create directory structure Nix expects with correct permissions
-    # This prevents Nix from trying to chmod directories it doesn't own
-    mkdir -p nix/var/nix/profiles/per-user
-    mkdir -p nix/var/nix/gcroots/per-user
-    mkdir -p nix/var/nix/gcroots/auto
-    mkdir -p nix/var/log/nix/drvs
-    chmod 755 nix/var/nix/profiles nix/var/nix/profiles/per-user
-    chmod 755 nix/var/nix/gcroots nix/var/nix/gcroots/per-user
-    chmod 1777 nix/var/nix/gcroots/auto
-    chmod -R a+rwX nix/var/log
-  '';
+      # Register prekHooksBundle in nix db — referenced only from config.Env
+      # (WRAPIX_PREK_HOOKS), which includeNixDB does not cover.
+      NIX_STATE_DIR=$PWD/nix/var/nix \
+        ${pkgs.buildPackages.nix}/bin/nix-store --load-db \
+        < ${pkgs.closureInfo { rootPaths = [ prekHooksBundle ]; }}/registration
 
-  config = {
-    Env = [
-      # GIT_AUTHOR_*/GIT_COMMITTER_* set at runtime by launcher (from host git config)
-      "LANG=C.UTF-8"
-      "PATH=${profileEnv}/bin:/bin:/usr/bin"
-      "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
-      "WRAPIX_PREK_HOOKS=${prekHooksBundle}"
-      "XDG_CACHE_HOME=/var/cache"
-    ]
-    ++ (mapAttrsToList (name: value: "${name}=${value}") (profile.env or { }));
-    WorkingDir = "/workspace";
-    Entrypoint = [ "/entrypoint.sh" ];
+      # Fix Nix permissions for non-root users
+      # (includeNixDB creates files owned by root)
+      # Store must be writable to add new paths and create lock files
+      chmod -R a+rwX nix/store nix/var/nix
+
+      # Pre-create directory structure Nix expects with correct permissions
+      # This prevents Nix from trying to chmod directories it doesn't own
+      mkdir -p nix/var/nix/profiles/per-user
+      mkdir -p nix/var/nix/gcroots/per-user
+      mkdir -p nix/var/nix/gcroots/auto
+      mkdir -p nix/var/log/nix/drvs
+      chmod 755 nix/var/nix/profiles nix/var/nix/profiles/per-user
+      chmod 755 nix/var/nix/gcroots nix/var/nix/gcroots/per-user
+      chmod 1777 nix/var/nix/gcroots/auto
+      chmod -R a+rwX nix/var/log
+    '';
+
+    config = {
+      Env = [
+        # GIT_AUTHOR_*/GIT_COMMITTER_* set at runtime by launcher (from host git config)
+        "LANG=C.UTF-8"
+        "PATH=${profileEnv}/bin:/bin:/usr/bin"
+        "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
+        "WRAPIX_PREK_HOOKS=${prekHooksBundle}"
+        "XDG_CACHE_HOME=/var/cache"
+      ]
+      ++ (mapAttrsToList (name: value: "${name}=${value}") (profile.env or { }));
+      WorkingDir = "/workspace";
+      Entrypoint = [ "/entrypoint.sh" ];
+    };
   };
-}
+
+  # Content digest of the OCI config blob (== podman's `.Id`), extracted at
+  # build time so the launcher's preflight (specs/sandbox.md) can decide
+  # whether the image is already present without re-streaming or invoking
+  # *-load. Stable across drv-hash rebuilds when the image content is
+  # unchanged — which `mkImageRef`'s drv-hash tag cannot detect.
+  digestFile =
+    pkgs.runCommandLocal "${imageName}-digest"
+      {
+        nativeBuildInputs = [
+          pkgs.gnutar
+          pkgs.jq
+        ];
+      }
+      (
+        if asTarball then
+          ''
+            tar -xOf ${rawImage} manifest.json \
+              | jq -r '.[0].Config' \
+              | sed 's/\.json$//' > $out
+          ''
+        else
+          ''
+            ${rawImage} \
+              | tar -xO manifest.json \
+              | jq -r '.[0].Config' \
+              | sed 's/\.json$//' > $out
+          ''
+      );
+in
+rawImage // { digest = digestFile; }

@@ -350,7 +350,8 @@ let
             makeWrapper "${launcher}/bin/wrapix" "$out/bin/wrapix" \
               --set WRAPIX_AGENT "${agent}" \
               --set-default WRAPIX_DEFAULT_IMAGE_REF "${mkImageRef image}" \
-              --set-default WRAPIX_DEFAULT_IMAGE_SOURCE "${image}"
+              --set-default WRAPIX_DEFAULT_IMAGE_SOURCE "${image}" \
+              --set-default WRAPIX_DEFAULT_IMAGE_DIGEST "${image.digest}"
           '';
 
     in
