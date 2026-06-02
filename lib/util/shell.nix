@@ -69,7 +69,20 @@ _:
         skopeo --insecure-policy copy --quiet \
           "docker-archive:$_wrapix_img_tmp/image.tar" \
           "oci-archive:$_wrapix_img_tmp/image.oci"
-        skopeo --insecure-policy copy --quiet \
+        # The oci-archive -> containers-storage leg writes into podman's
+        # store. skopeo resolves that store on its own and, when
+        # XDG_RUNTIME_DIR is unset, falls back to the rootful runroot
+        # (/run/containers/storage) a non-root user cannot create — the
+        # failure `podman load` dodged because podman computes the rootless
+        # runtime dir itself. Run it under `podman unshare`: skopeo re-execs
+        # in podman's rootless user namespace with the CONTAINERS_* storage
+        # env exported, so it writes to podman's actual store. Rootful needs
+        # no namespace (and `podman unshare` refuses to run there).
+        _wrapix_store_copy=(skopeo)
+        if [[ "$(id -u)" -ne 0 ]]; then
+          _wrapix_store_copy=(podman unshare skopeo)
+        fi
+        "''${_wrapix_store_copy[@]}" --insecure-policy copy --quiet \
           "oci-archive:$_wrapix_img_tmp/image.oci" \
           "containers-storage:$IMAGE_REF"
         rm -rf "$_wrapix_img_tmp"
