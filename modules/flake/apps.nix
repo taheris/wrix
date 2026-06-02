@@ -10,6 +10,7 @@ _:
         test-wrapix-spawn-load = test.apps.wrapix-spawn-load;
         test-claude-runtime-noop = test.apps.claude-runtime-noop;
         test-image-install-digest-skip = test.apps.image-install-digest-skip;
+        test-image-digest-matches-stored-id = test.apps.image-digest-matches-stored-id;
         test-base-image-universal = test.apps.base-image-universal;
         test-base-image-hash-stable = test.apps.base-image-hash-stable;
         test-iteration-cost-bounded = test.apps.iteration-cost-bounded;

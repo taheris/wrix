@@ -162,6 +162,17 @@ in
       program = "${sandboxImageChecks.imageInstallDigestSkipTest}/bin/test-image-install-digest-skip";
     };
 
+    # Faithful counterpart to image-install-digest-skip: drives the real
+    # `docker-archive → oci-archive` skopeo conversion on the live image and
+    # asserts `image.digest` equals the post-conversion OCI config digest (the
+    # value podman stores as `.Id`). Guards against a digest taken from the
+    # docker-archive manifest, which never matches and re-streams every launch.
+    image-digest-matches-stored-id = {
+      meta.description = "Verify image.digest equals the post-conversion OCI config digest (Linux only)";
+      type = "app";
+      program = "${sandboxImageChecks.digestMatchesStoredIdTest}/bin/test-image-digest-matches-stored-id";
+    };
+
     prek-hooks-closure = {
       meta.description = "Verify default sandbox image closure contains the prek hooks bundle";
       type = "app";

@@ -257,33 +257,54 @@ let
     };
   };
 
-  # Content digest of the OCI config blob (== podman's `.Id`), extracted at
-  # build time so the launcher's preflight (specs/sandbox.md) can decide
-  # whether the image is already present without re-streaming or invoking
-  # *-load. Stable across drv-hash rebuilds when the image content is
-  # unchanged — which `mkImageRef`'s drv-hash tag cannot detect.
+  # Content digest of the OCI config blob (== podman's `.Id` / the Apple
+  # container CLI's image digest), extracted at build time so the launcher's
+  # preflight (specs/sandbox.md § Image install path) can decide whether the
+  # image is already present without re-streaming or invoking *-load. Stable
+  # across drv-hash rebuilds when the image content is unchanged — which
+  # `mkImageRef`'s drv-hash tag cannot detect.
+  #
+  # The digest MUST be computed through the same Docker schema2 → OCI
+  # conversion the launcher's install transport runs: skopeo rewrites the
+  # config blob on conversion, so the docker-archive manifest's `.Config`
+  # digest does NOT equal the config digest of the stored OCI image. Reading
+  # the post-conversion OCI config digest here is what makes the preflight a
+  # real hit instead of a guaranteed miss that re-streams on every launch.
+  #
+  # The conversion targets the `oci:` directory layout, not `oci-archive:`:
+  # the archive transport hardcodes `/var/tmp` for its assembly temp dir
+  # (ignoring `TMPDIR`), which does not exist in the Nix build sandbox. The
+  # directory layout writes blobs in place and yields the identical config
+  # digest the launcher's `oci-archive:` transport stores as podman's `.Id`.
   digestFile =
     pkgs.runCommandLocal "${imageName}-digest"
       {
         nativeBuildInputs = [
-          pkgs.gnutar
+          pkgs.skopeo
           pkgs.jq
         ];
       }
       (
-        if asTarball then
-          ''
-            tar -xOf ${rawImage} manifest.json \
-              | jq -r '.[0].Config' \
-              | sed 's/\.json$//' > $out
-          ''
-        else
-          ''
-            ${rawImage} \
-              | tar -xO manifest.json \
-              | jq -r '.[0].Config' \
-              | sed 's/\.json$//' > $out
-          ''
+        ''
+          export HOME=$TMPDIR
+        ''
+        + (
+          if asTarball then
+            ''
+              skopeo --insecure-policy copy --quiet \
+                "docker-archive:${rawImage}" "oci:$TMPDIR/image-oci:latest"
+            ''
+          else
+            ''
+              ${rawImage} > "$TMPDIR/image.tar"
+              skopeo --insecure-policy copy --quiet \
+                "docker-archive:$TMPDIR/image.tar" "oci:$TMPDIR/image-oci:latest"
+            ''
+        )
+        + ''
+          skopeo inspect --raw "oci:$TMPDIR/image-oci:latest" \
+            | jq -r '.config.digest' > $out
+        ''
       );
 in
 rawImage

@@ -325,6 +325,58 @@ let
         '';
   };
 
+  # Faithful verifier that the build-time `image.digest` equals the config
+  # digest of the image AFTER the launcher's `docker-archive → oci-archive`
+  # conversion (specs/sandbox.md § Image install path) — i.e. the value podman
+  # records as `.Id` once the install transport finishes. Unlike the shim-based
+  # digest-skip test (whose stub podman reports presence from a sentinel file,
+  # not from the digest bytes), this drives the real skopeo conversion on the
+  # same streamLayeredImage and compares against `image.digest`. skopeo
+  # rewrites the config blob when converting Docker schema2 → OCI, so a digest
+  # taken from the docker-archive manifest would never match what podman
+  # stores, and the preflight would re-stream on every launch. This test
+  # closes over the live `defaultImage` derivation and its `.digest`, so a
+  # regression to the docker-archive digest is caught here.
+  digestMatchesStoredIdTest = pkgs.writeShellApplication {
+    name = "test-image-digest-matches-stored-id";
+    runtimeInputs = lib.optionals isLinux [
+      pkgs.coreutils
+      pkgs.skopeo
+      pkgs.jq
+    ];
+    text =
+      if isLinux then
+        ''
+          HOME=$(mktemp -d); export HOME
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp" "$HOME"' EXIT
+
+          ${defaultImage} > "$tmp/image.tar"
+          skopeo --insecure-policy copy --quiet \
+            "docker-archive:$tmp/image.tar" "oci-archive:$tmp/image.oci"
+          oci_digest=$(skopeo inspect --raw "oci-archive:$tmp/image.oci" | jq -r '.config.digest')
+          built_digest=$(cat ${defaultImage.digest})
+
+          if [[ "$oci_digest" != "$built_digest" ]]; then
+              echo "FAIL: image.digest does not match the post-conversion OCI config digest" >&2
+              echo "  built_digest (image.digest)   : $built_digest" >&2
+              echo "  oci_digest   (live conversion): $oci_digest" >&2
+              echo "  => launcher preflight would miss and re-stream on every launch" >&2
+              exit 1
+          fi
+
+          echo "test-image-digest-matches-stored-id: PASS ($built_digest)"
+        ''
+      else
+        ''
+          # streamLayeredImage's stream script carries a Linux Python shebang;
+          # the docker-archive → oci-archive conversion this verifier performs
+          # is Linux-only. Darwin's digest preflight is covered separately.
+          echo "test-image-digest-matches-stored-id: skipped on this platform (streamLayeredImage is Linux-only)" >&2
+          exit 0
+        '';
+  };
+
   claudeRuntimeNoopTest = pkgs.writeShellApplication {
     name = "test-claude-runtime-noop";
     runtimeInputs = [
@@ -662,6 +714,7 @@ in
   inherit
     wrapixSpawnLoadTest
     imageInstallDigestSkipTest
+    digestMatchesStoredIdTest
     claudeRuntimeNoopTest
     prekHooksClosureTest
     baseImageUniversalTest
