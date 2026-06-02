@@ -51,7 +51,13 @@
 }:
 
 let
-  inherit (pkgs.lib) concatStringsSep mapAttrsToList optionalString;
+  inherit (pkgs.lib)
+    concatStringsSep
+    mapAttrsToList
+    optionalString
+    removeSuffix
+    splitString
+    ;
   sshConfig = import ../util/ssh.nix;
 
   notifyClient = import ../notify/client.nix { inherit pkgs; };
@@ -59,7 +65,21 @@ let
   # Shared nixpkgs-pin-dependent bottom-of-closure. Chained under the
   # per-profile image via `fromImage` so it loads into the platform store once
   # (specs/image-builder.md § Base Image Layering).
+  baseContents = import ./base-contents.nix { inherit pkgs; };
   wrapixBaseImage = import ./base-image.nix { inherit pkgs; };
+
+  # Store paths the chained `fromImage` base layers already ship. Removed from
+  # the per-profile layering graph so streamLayeredImage cannot re-emit the base
+  # closure as duplicate top layers (specs/image-builder.md § Base Image
+  # Layering). The cap then budgets genuinely-new content alone, leaving room
+  # below the 127-layer OCI ceiling for the base's layers plus the customisation
+  # layer.
+  baseClosurePaths =
+    let
+      closure = pkgs.closureInfo { rootPaths = baseContents; };
+    in
+    splitString "\n" (removeSuffix "\n" (builtins.readFile "${closure}/store-paths"));
+  maxStoreLayers = 100;
 
   # Bundle referenced from config.Env WRAPIX_PREK_HOOKS so the entrypoint can
   # point `core.hooksPath` at it (specs/pre-commit.md § Bead-Container Hook
@@ -166,7 +186,17 @@ let
   rawImage = buildImage {
     name = imageName;
     tag = "latest";
-    maxLayers = 100;
+    layeringPipeline = [
+      [
+        "remove_paths"
+        baseClosurePaths
+      ]
+      [ "popularity_contest" ]
+      [
+        "limit_layers"
+        maxStoreLayers
+      ]
+    ];
     includeNixDB = true;
     fromImage = wrapixBaseImage;
 
