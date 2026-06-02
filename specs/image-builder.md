@@ -88,7 +88,7 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
 - The `agent = "direct"` code path threads a consumer-supplied `directRunner` derivation into the image build
   [check](grep -nE 'agent.*direct|directRunner' lib/sandbox/image.nix lib/sandbox/default.nix)
 - `nix-command` and `flakes` are enabled in `/etc/nix/nix.conf` and Nix's in-container build sandbox is disabled
-  [check](grep -nE 'experimental-features|sandbox' lib/sandbox/image.nix)
+  [check](grep -nE 'experimental-features|sandbox' lib/sandbox/stable-profile-image.nix)
 - CA certificates from `pkgs.cacert` are baked into the image and `SSL_CERT_FILE` resolves to the bundle
   [check](grep -nE 'cacert|SSL_CERT_FILE' lib/sandbox/image.nix)
 - The platform entrypoint script (`lib/sandbox/{linux,darwin}/entrypoint.sh`) is the image's startup command

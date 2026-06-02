@@ -55,8 +55,6 @@ let
     concatStringsSep
     mapAttrsToList
     optionalString
-    removeSuffix
-    splitString
     ;
   sshConfig = import ../util/ssh.nix;
 
@@ -65,21 +63,17 @@ let
   # Shared nixpkgs-pin-dependent bottom-of-closure. Chained under the
   # per-profile image via `fromImage` so it loads into the platform store once
   # (specs/image-builder.md § Base Image Layering).
-  baseContents = import ./base-contents.nix { inherit pkgs; };
   wrapixBaseImage = import ./base-image.nix { inherit pkgs; };
 
-  # Store paths the chained `fromImage` base layers already ship. Removed from
-  # the per-profile layering graph so streamLayeredImage cannot re-emit the base
-  # closure as duplicate top layers (specs/image-builder.md § Base Image
-  # Layering). The cap then budgets genuinely-new content alone, leaving room
-  # below the 127-layer OCI ceiling for the base's layers plus the customisation
-  # layer.
-  baseClosurePaths =
-    let
-      closure = pkgs.closureInfo { rootPaths = baseContents; };
-    in
-    splitString "\n" (removeSuffix "\n" (builtins.readFile "${closure}/store-paths"));
-  maxStoreLayers = 100;
+  # Tier 1: the fixed-per-instance closure (profile.corePackages + the
+  # wrapix-generated derivations that do not vary with profile.packages, MCP
+  # configs, Claude settings, or agent selection), chained atop the base. The
+  # leaf chains on top of this via `fromImage`, so this tar loads into the
+  # platform store once (specs/image-builder.md § Base Image Layering).
+  stableProfileImage = import ./stable-profile-image.nix {
+    inherit pkgs profile;
+    claudePkg = entrypointPkg;
+  };
 
   # Bundle referenced from config.Env WRAPIX_PREK_HOOKS so the entrypoint can
   # point `core.hooksPath` at it (specs/pre-commit.md § Bead-Container Hook
@@ -109,14 +103,6 @@ let
     installPhase = "mkdir -p $out/bin && cp krun-relay $out/bin/";
   };
 
-  # Nix sandbox disabled: outer container provides isolation.
-  # See specs/image-builder.md for the rationale.
-  nixConfig = pkgs.writeTextDir "etc/nix/nix.conf" ''
-    experimental-features = nix-command flakes
-    sandbox = false
-    filter-syscalls = false
-  '';
-
   # Generate Claude JSON files from Nix attribute sets
   claudeConfigJson = pkgs.writeText "claude-config.json" (builtins.toJSON claudeConfig);
   claudeSettingsJson = pkgs.writeText "claude-settings.json" (builtins.toJSON claudeSettings);
@@ -125,19 +111,6 @@ let
   mcpConfigFiles = builtins.mapAttrs (
     name: config: pkgs.writeText "mcp-${name}.json" (builtins.toJSON config)
   ) mcpServerConfigs;
-
-  # Base passwd/group with fixed wrapix user (UID remapped at runtime via --userns=keep-id or setpriv)
-  passwdFile = pkgs.writeTextDir "etc/passwd" ''
-    root:x:0:0:root:/root:/bin/bash
-    nobody:x:65534:65534:Unprivileged account:/var/empty:/bin/false
-    wrapix:x:1000:1000:Wrapix Sandbox:/home/wrapix:/bin/bash
-  '';
-
-  groupFile = pkgs.writeTextDir "etc/group" ''
-    root:x:0:
-    nogroup:x:65534:
-    wrapix:x:1000:
-  '';
 
   # Agent runtime layer. `claude` is a no-op (claudeCode is the entrypointPkg
   # already baked into every image); `pi` adds the consumer-supplied `piPkg`;
@@ -183,31 +156,49 @@ let
 
   imageName = "wrapix-${profile.name}${pkgs.lib.optionalString (agent != "claude") "-${agent}"}";
 
+  # The leaf budgets only its tier-2 delta plus the customisation layer; with
+  # base (64) and stable-profile (48) below it, this keeps the stacked image at
+  # or under the 127-layer OCI ceiling (specs/image-builder.md § Base Image
+  # Layering).
+  maxLayers = 15;
+
+  # The custom layeringPipeline (dockerMakeLayers) does not dedup `fromImage`
+  # the way the default popularity-contest path does, so remove_paths strips the
+  # UNION of all lower tiers' closures (tier 0 base + tier 1 stable-profile)
+  # first — a path a lower tier already ships is never re-emitted here. Fixed
+  # per-tier contents keep intra-tier ordering stable (specs/image-builder.md
+  # § Base Image Layering).
+  layeringPipeline =
+    pkgs.runCommandLocal "${imageName}-layering.json"
+      {
+        nativeBuildInputs = [ pkgs.jq ];
+        lowerClosure = stableProfileImage.lowerTiersClosure;
+      }
+      ''
+        set -euo pipefail
+        jq -n \
+          --rawfile storePaths "$lowerClosure/store-paths" \
+          --argjson maxLayers ${toString maxLayers} \
+          '($storePaths | split("\n") | map(select(length > 0))) as $lower
+           | [
+               [ "remove_paths", $lower ],
+               [ "popularity_contest" ],
+               [ "limit_layers", $maxLayers ]
+             ]' \
+          > "$out"
+      '';
+
   rawImage = buildImage {
     name = imageName;
     tag = "latest";
-    layeringPipeline = [
-      [
-        "remove_paths"
-        baseClosurePaths
-      ]
-      [ "popularity_contest" ]
-      [
-        "limit_layers"
-        maxStoreLayers
-      ]
-    ];
+    inherit layeringPipeline;
     includeNixDB = true;
-    fromImage = wrapixBaseImage;
+    fromImage = stableProfileImage;
 
     contents = [
-      passwdFile
-      groupFile
       pkgs.dockerTools.usrBinEnv
       pkgs.dockerTools.binSh
       pkgs.dockerTools.caCertificates
-      pkgs.cacert
-      nixConfig
       profileEnv
     ];
 

@@ -61,6 +61,22 @@ let
     ];
   };
 
+  tierContents = [
+    passwdFile
+    groupFile
+    nixConfig
+    coreEnv
+  ];
+
+  # Everything tiers 0+1 ship, exposed so the leaf's custom layeringPipeline can
+  # remove_paths the whole union (specs/image-builder.md § Base Image Layering).
+  # The custom pipeline does not dedup fromImage, so the leaf must strip this
+  # explicitly. prekHooksBundle is reachable only via config.Env, but
+  # buildLayeredImage still layers it, so it belongs in the union.
+  lowerTiersClosure = pkgs.closureInfo {
+    rootPaths = baseContents ++ tierContents ++ [ prekHooksBundle ];
+  };
+
   # Bounded to this tier's own fixed closure, well under the 127-layer OCI
   # ceiling shared across base + stable-profile + leaf.
   maxLayers = 48;
@@ -96,12 +112,7 @@ dockerTools.buildLayeredImage {
   fromImage = wrapixBaseImage;
   inherit layeringPipeline;
 
-  contents = [
-    passwdFile
-    groupFile
-    nixConfig
-    coreEnv
-  ];
+  contents = tierContents;
 
   # Pin prekHooksBundle into this tier's closure without symlinking its hooks
   # into the image root — the entrypoint reaches it by store path via this env
@@ -109,4 +120,7 @@ dockerTools.buildLayeredImage {
   config.Env = [
     "WRAPIX_PREK_HOOKS=${prekHooksBundle}"
   ];
+}
+// {
+  inherit lowerTiersClosure;
 }
