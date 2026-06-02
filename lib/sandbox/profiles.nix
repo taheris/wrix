@@ -7,53 +7,74 @@
 }:
 
 let
-  # Base packages included in all profiles
-  basePackages = with pkgs; [
-    bash
-    beads
-    beads-push
-    coreutils
-    curl
-    diffutils
-    dolt
-    fd
-    file
-    findutils
-    gawk
-    gh
-    git
-    gnugrep
-    gnused
-    gnutar
-    gzip
+  # Packages shared by all profiles on both platforms.
+  # The function accepts a package set so it can be instantiated with
+  # linuxPkgs (container images) or hostPkgs (devshells).
+  commonPackagesFn =
+    p: with p; [
+      bash
+      beads
+      beads-push
+      coreutils
+      curl
+      diffutils
+      dolt
+      fd
+      file
+      findutils
+      gawk
+      gh
+      git
+      gnugrep
+      gnused
+      gnutar
+      gzip
+      jq
+      less
+      lsof
+      man
+      nix
+      patch
+      prek
+      python3
+      ripgrep
+      rsync
+      shellcheck
+      sqlite
+      tmux
+      tree
+      unzip
+      vim
+      yq
+      zip
+    ];
+
+  # Container images only — Linux-specific or where the host version is preferred.
+  imageOnlyPackages = with pkgs; [
     iproute2
     iptables
     iputils
-    jq
-    less
-    lsof
-    man
     netcat
-    nix
     openssh
-    patch
-    prek
     procps
-    python3
-    ripgrep
-    rsync
-    shellcheck
-    sqlite
-    tmux
-    tree
-    treefmtPkg
-    unzip
     util-linux
-    vim
-    whichQuiet
-    yq
-    zip
   ];
+
+  # Base packages included in all profiles (container image side)
+  basePackages =
+    commonPackagesFn pkgs
+    ++ imageOnlyPackages
+    ++ [
+      treefmtPkg
+      whichQuiet
+    ];
+
+  # Host-native equivalents for devshells. Excludes linux-only packages and
+  # treefmtPkg (the devshell supplies its own host-native treefmt wrapper).
+  hostWhichQuiet = hostPkgs.writeShellScriptBin "which" ''
+    ${hostPkgs.which}/bin/which "$@" 2>/dev/null
+  '';
+  hostBasePackages = commonPackagesFn hostPkgs ++ [ hostWhichQuiet ];
 
   # Required mounts for all profiles
   # Note: Host ~/.claude is NOT mounted - containers use $PROJECT_DIR/.claude instead
@@ -82,6 +103,7 @@ let
     {
       name,
       packages ? [ ],
+      hostExtraPackages ? [ ],
       env ? { },
       mounts ? [ ],
       networkAllowlist ? [ ],
@@ -97,6 +119,7 @@ let
         writableDirs
         ;
       packages = basePackages ++ packages;
+      hostPackages = hostBasePackages ++ hostExtraPackages;
       env = baseEnv // env;
       mounts = baseMounts ++ mounts;
       networkAllowlist = baseNetworkAllowlist ++ networkAllowlist;
@@ -250,6 +273,15 @@ let
         pkgs.sccache
       ];
 
+      hostExtraPackages = [
+        hostToolchain
+        hostPkgs.openssl
+        hostPkgs.openssl.dev
+        hostPkgs.pkg-config
+        hostPkgs.postgresql.lib
+        hostPkgs.sccache
+      ];
+
       enabledPlugins = {
         "rust-analyzer-lsp@claude-plugins-official" = true;
       };
@@ -382,6 +414,12 @@ in
     name = "python";
 
     packages = with pkgs; [
+      ruff
+      ty
+      uv
+    ];
+
+    hostExtraPackages = with hostPkgs; [
       ruff
       ty
       uv

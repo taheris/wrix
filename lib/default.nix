@@ -42,6 +42,7 @@ in
     // extensions
     // {
       packages = (baseProfile.packages or [ ]) ++ (extensions.packages or [ ]);
+      hostPackages = (baseProfile.hostPackages or [ ]) ++ (extensions.hostPackages or [ ]);
       mounts = (baseProfile.mounts or [ ]) ++ (extensions.mounts or [ ]);
       env = (baseProfile.env or { }) // (extensions.env or { });
       networkAllowlist = (baseProfile.networkAllowlist or [ ]) ++ (extensions.networkAllowlist or [ ]);
@@ -109,7 +110,7 @@ in
     in
     pkgs.mkShell {
       packages =
-        profile.packages
+        (profile.hostPackages or profile.packages)
         ++ packages
         ++ [
           prekWrappers.prePushChecks

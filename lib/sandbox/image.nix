@@ -23,6 +23,7 @@
 # This maximizes layer cache hits across rebuilds and profiles.
 {
   pkgs,
+  hostPkgs ? pkgs,
   profile,
   entrypointPkg,
   entrypointSh,
@@ -277,11 +278,11 @@ let
   # directory layout writes blobs in place and yields the identical config
   # digest the launcher's `oci-archive:` transport stores as podman's `.Id`.
   digestFile =
-    pkgs.runCommandLocal "${imageName}-digest"
+    hostPkgs.runCommandLocal "${imageName}-digest"
       {
         nativeBuildInputs = [
-          pkgs.skopeo
-          pkgs.jq
+          hostPkgs.skopeo
+          hostPkgs.jq
         ];
       }
       (

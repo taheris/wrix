@@ -146,6 +146,7 @@ let
     }:
     import ./image.nix {
       pkgs = linuxPkgs;
+      hostPkgs = pkgs;
       inherit
         profile
         entrypointSh

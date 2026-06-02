@@ -30,9 +30,13 @@ let
   # image-install-delta-bounded verifier installs both and asserts
   # the platform store only takes on bytes for the changed top layer.
   testImages = {
-    base = import ./sandbox/test-image.nix { inherit pkgs treefmt; };
+    base = import ./sandbox/test-image.nix {
+      pkgs = linuxPkgs;
+      inherit treefmt;
+    };
     basePerturbed = import ./sandbox/test-image.nix {
-      inherit pkgs treefmt;
+      pkgs = linuxPkgs;
+      inherit treefmt;
       claudeConfig = {
         _wrapix_delta_bounded_probe = "v2";
       };
