@@ -64,9 +64,9 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
 - The launcher's image-install step (under both `wrapix run` and `wrapix spawn`) is short-circuited when the image's content digest is already present in the platform store: no tar materialization, no stream invocation, no `*-load` CLI call
   [system](nix run .#test-image-install-digest-skip)
 - The image is a three-stage `fromImage` chain — the leaf chains atop `wrapix-stable-profile-<name>`, which chains atop `wrapix-base-image` — on both Linux (`streamLayeredImage` leaf) and Darwin (`buildLayeredImage` leaf)
-  [check?](grep -nE 'fromImage|wrapix-stable-profile|wrapix-base-image' lib/sandbox/image.nix lib/sandbox/stable-profile-image.nix)
+  [check](grep -nE 'fromImage|wrapix-stable-profile|wrapix-base-image' lib/sandbox/image.nix lib/sandbox/stable-profile-image.nix)
 - Each non-base tier removes the union of all lower tiers' closures from its layering graph via `remove_paths`, so no tier re-emits a store path a lower tier already ships
-  [check?](grep -nE 'remove_paths' lib/sandbox/image.nix lib/sandbox/stable-profile-image.nix)
+  [check](grep -nE 'remove_paths' lib/sandbox/image.nix lib/sandbox/stable-profile-image.nix)
 - `wrapix-base-image`'s derivation hash is invariant under changes to profile-level inputs — `profile.packages`, `profile.env`, MCP configs, the merged Claude settings JSON, and the agent runtime selection
   [system](nix run .#test-base-image-hash-stable)
 - `wrapix-base-image` holds only the universal bottom-of-closure: no profile-specific compiler toolchain leaks in (e.g. `pkgs.rustc`, which no profile references — the rust profile uses fenix's toolchain)
