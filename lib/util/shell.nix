@@ -74,17 +74,23 @@ _:
         # XDG_RUNTIME_DIR is unset, falls back to the rootful runroot
         # (/run/containers/storage) a non-root user cannot create — the
         # failure `podman load` dodged because podman computes the rootless
-        # runtime dir itself. Run it under `podman unshare`: skopeo re-execs
-        # in podman's rootless user namespace with the CONTAINERS_* storage
-        # env exported, so it writes to podman's actual store. Rootful needs
-        # no namespace (and `podman unshare` refuses to run there).
-        _wrapix_store_copy=(skopeo)
-        if [[ "$(id -u)" -ne 0 ]]; then
-          _wrapix_store_copy=(podman unshare skopeo)
+        # runtime dir itself. Pin the destination to podman's actual store
+        # (driver@graphroot+runroot, queried from `podman info`) so skopeo
+        # writes exactly where podman reads, regardless of XDG_RUNTIME_DIR.
+        # This supersedes a `podman unshare skopeo` wrapper, which refuses to
+        # run under a remote podman client (CONTAINER_HOST set). If `podman
+        # info` can't be resolved, fall back to the bare ref and let skopeo
+        # resolve the store itself.
+        _wrapix_store_ref="containers-storage:$IMAGE_REF"
+        _wrapix_store_spec=$(podman info \
+          --format '{{.Store.GraphDriverName}}@{{.Store.GraphRoot}}+{{.Store.RunRoot}}' \
+          2>/dev/null) || _wrapix_store_spec=""
+        if [[ "$_wrapix_store_spec" == *@*+* ]]; then
+          _wrapix_store_ref="containers-storage:[$_wrapix_store_spec]$IMAGE_REF"
         fi
-        "''${_wrapix_store_copy[@]}" --insecure-policy copy --quiet \
+        skopeo --insecure-policy copy --quiet \
           "oci-archive:$_wrapix_img_tmp/image.oci" \
-          "containers-storage:$IMAGE_REF"
+          "$_wrapix_store_ref"
         rm -rf "$_wrapix_img_tmp"
         IMAGE_REPO="''${IMAGE_REF%:*}"
         # best-effort: :latest is pruneStaleImages' keep-anchor; a tag

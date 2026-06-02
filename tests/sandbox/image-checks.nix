@@ -68,6 +68,10 @@ let
 
           IMAGE_REF="localhost/wrapix-loadtest:abc123"
           IMAGE_SOURCE="$tmp/image-source.sh"
+          # The install transport pins skopeo's containers-storage destination
+          # to podman's store via `podman info`; the shim reports this spec so
+          # the assertion below can verify the [driver@graphroot+runroot] ref.
+          STORE_SPEC="overlay@$tmp/graphroot+$tmp/runroot"
 
           cat >"$IMAGE_SOURCE" <<'IMG_SRC'
           #!/usr/bin/env bash
@@ -87,6 +91,10 @@ let
                           ;;
                       *) exit 0 ;;
                   esac
+                  ;;
+              info)
+                  printf '%s\n' '$STORE_SPEC'
+                  exit 0
                   ;;
               tag)
                   : >'$state/loaded'
@@ -112,8 +120,9 @@ let
 
           ${shellLib.imageLoadStep}
 
-          if ! grep -qE 'oci-archive:[^ ]+ containers-storage:'"$IMAGE_REF"'$' "$skopeo_log"; then
-              echo "first invocation did not skopeo copy oci-archive: -> containers-storage:$IMAGE_REF:" >&2
+          EXPECTED_DEST="containers-storage:[$STORE_SPEC]$IMAGE_REF"
+          if ! grep -qF -- " $EXPECTED_DEST" "$skopeo_log"; then
+              echo "first invocation did not skopeo copy oci-archive: -> $EXPECTED_DEST:" >&2
               cat "$skopeo_log" >&2
               exit 1
           fi
