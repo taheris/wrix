@@ -41,6 +41,9 @@ in
     baseProfile
     // extensions
     // {
+      # corePackages is tier-1: extension grows packages only, never the
+      # fixed-per-instance core.
+      corePackages = baseProfile.corePackages or [ ];
       packages = (baseProfile.packages or [ ]) ++ (extensions.packages or [ ]);
       hostPackages = (baseProfile.hostPackages or [ ]) ++ (extensions.hostPackages or [ ]);
       mounts = (baseProfile.mounts or [ ]) ++ (extensions.mounts or [ ]);

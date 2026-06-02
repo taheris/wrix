@@ -99,10 +99,16 @@ let
   # env, and PATH with the sandbox — e.g. prepending the rust profile's
   # `${toolchain}/bin` so host `rustc` resolves to the same /nix/store/... path
   # the sandbox uses, the prerequisite for cross-boundary sccache hits.
+  # corePackages is the wrapix-controlled, fixed-per-instance package set (the
+  # base toolkit plus any toolchain a constructor pins). It is the tier-1
+  # membership key for provenance-tiered image layering: downstream extension
+  # grows `packages` only, never `corePackages`, so the leaf delta an image
+  # rebuilds on is `packages` − `corePackages`.
   mkProfile =
     {
       name,
       packages ? [ ],
+      corePackages ? [ ],
       hostExtraPackages ? [ ],
       env ? { },
       mounts ? [ ],
@@ -118,7 +124,8 @@ let
         shellHook
         writableDirs
         ;
-      packages = basePackages ++ packages;
+      corePackages = basePackages ++ corePackages;
+      packages = basePackages ++ corePackages ++ packages;
       hostPackages = hostBasePackages ++ hostExtraPackages;
       env = baseEnv // env;
       mounts = baseMounts ++ mounts;
@@ -263,7 +270,11 @@ let
     mkProfile {
       name = "rust";
 
-      packages = [
+      # The toolchain and its fixed support packages are wrapix-controlled and
+      # fixed per instance, so they are corePackages (tier 1). A downstream
+      # `rustProfile { toolchain = ...; }` pins a different toolchain but it
+      # still lands here via mkRustProfile, keeping pinned toolchains tier-1.
+      corePackages = [
         imageToolchain
         pkgs.gcc
         pkgs.openssl
