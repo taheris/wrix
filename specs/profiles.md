@@ -44,7 +44,8 @@ A profile is a Nix attrset produced by the internal `mkProfile` helper. Fields:
 | Field | Type | Purpose |
 |-------|------|---------|
 | `name` | string | Profile identifier (e.g. `"base"`, `"rust"`) |
-| `packages` | list of derivations | Packages baked into the container image |
+| `packages` | list of derivations | Packages baked into the container image (the merged convenience view used for PATH and `mkDevShell`) |
+| `corePackages` | list of derivations | The wrapix-controlled, fixed-per-instance subset of `packages` — the `basePackages` floor plus the profile toolchain (default or pinned). Set at construction by `mkProfile`/`rustProfile`; downstream extension never appends to it. The image builder assigns it to the stable layer tier and treats `packages` − `corePackages` as the downstream-added delta that rides in the volatile leaf tier (see `image-builder.md` § Provenance-Tiered Layering). |
 | `env` | attrset of strings | Environment variables set inside the container |
 | `mounts` | list of mount specs | Host → container bind mounts; each `{ source, dest, mode, optional }` |
 | `networkAllowlist` | list of strings | Domains permitted when `WRAPIX_NETWORK=limit` (merged with base allowlist) |
@@ -54,7 +55,7 @@ A profile is a Nix attrset produced by the internal `mkProfile` helper. Fields:
 
 Mount specs use `optional = true` to mean "skip this bind silently if the host source path does not exist", letting profiles declare cache mounts that no-op on hosts that haven't yet populated them.
 
-`deriveProfile` merges `packages`, `mounts`, `env`, and `networkAllowlist` (packages/mounts/allowlist concatenated; env right-biased). Other fields (`name`, `enabledPlugins`, `shellHook`, `writableDirs`) pass through from the extensions attrset if set, otherwise inherit from the base — they are not deep-merged. Callers extending a profile with extra plugins or shell hooks must compose those values themselves.
+`deriveProfile` merges `packages`, `mounts`, `env`, and `networkAllowlist` (packages/mounts/allowlist concatenated; env right-biased). Extension `packages` append to `packages` only — `corePackages` passes through from the base unchanged, so the wrapix-controlled floor + toolchain stays distinguishable from downstream additions for image layer tiering (`image-builder.md` § Provenance-Tiered Layering). Other fields (`name`, `enabledPlugins`, `shellHook`, `writableDirs`) pass through from the extensions attrset if set, otherwise inherit from the base — they are not deep-merged. Callers extending a profile with extra plugins or shell hooks must compose those values themselves.
 
 The rust profile additionally exposes `toolchain` (the resolved fenix `combine` derivation) and `buildPackage` (a crane-backed Rust package builder); both pass through `deriveProfile` since extensions don't override them. For project-pinned rust toolchains, consumers use the top-level `rustProfile { toolchain; sha256; }` constructor — see [wrapix.rustProfile](#wrapixrustprofile) and [Rust Profile](#rust-profile) for details.
 
@@ -595,6 +596,10 @@ dests live under `/home/wrapix/` inside the container, not under
   [judge](../tests/judges/profiles.sh#test_uv_cache_writable)
 - deriveProfile correctly merges packages and environment
   [judge](../tests/judges/profiles.sh#test_derive_profile_merge)
+- A built-in profile's `corePackages` equals its `basePackages` floor plus its own toolchain, and `rustProfile { toolchain = ./file }` includes the pinned toolchain in `corePackages`
+  [system?](bash tests/profiles/core-packages.sh test_core_membership)
+- `deriveProfile p { packages = [extra]; }` appends `extra` to `.packages` but leaves `.corePackages` equal to `p.corePackages`, so `packages` − `corePackages` is exactly the downstream-added delta
+  [system?](bash tests/profiles/core-packages.sh test_extra_not_in_core)
 - Profiles are composable (can extend extended profiles)
   [system](bash tests/mcp/tmux/e2e/test_profile_composition.sh)
 - `wrapix.mkDevShell { profile = wrapix.rustProfile { ... }; }` produces a devshell whose env contains `RUSTC_WRAPPER=sccache`, `SCCACHE_DIR`, `SCCACHE_CACHE_SIZE`, and `CARGO_INCREMENTAL=0` (the rust profile's `shellHook` was spliced)
@@ -667,7 +672,7 @@ dests live under `/home/wrapix/` inside the container, not under
 1. **Base Profile** — Core tools included in all environments
 2. **Language Profiles** — Pre-configured Rust and Python environments
 3. **Profile Extension** — `deriveProfile` API to extend existing profiles
-4. **Package Bundling** — Profiles specify packages to include in container image
+4. **Package Bundling** — Profiles specify packages to include in container image. A profile also exposes `corePackages`, the wrapix-controlled fixed-per-instance subset, so the image builder can layer wrapix-default content separately from downstream additions (see `image-builder.md` § Provenance-Tiered Layering).
 5. **Environment Configuration** — Profiles set required environment variables
 6. **Mount Specifications** — Profiles can define default mounts (e.g., cargo cache)
 7. **Toolchain Configuration** — Top-level `rustProfile { toolchain; sha256; ... }` constructor produces a project-pinned rust profile from a `rust-toolchain.toml`

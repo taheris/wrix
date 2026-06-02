@@ -28,7 +28,7 @@ Running AI coding assistants with unrestricted host access creates security risk
 - Linux uses a per-layer-blob-dedup transport (`skopeo copy oci-archive: → containers-storage:`) so unchanged layer blobs in a re-emitted image are not re-extracted into the store.
 - Darwin uses `container image load --input <tar>` (Apple's `container` CLI surfaces no per-blob-dedup install path at this time; see `image-builder.md` § Out of Scope).
 
-Both platforms rely on `wrapix-base-image` chaining (see `image-builder.md` § Base Image Layering) to keep the per-profile tar small, so even the Darwin path transfers a bounded delta rather than the full image on small input changes.
+Both platforms rely on the provenance-tiered `fromImage` chain (see `image-builder.md` § Provenance-Tiered Layering) to keep the per-profile leaf tar small, so even the Darwin path transfers a bounded delta rather than the full image on small input changes.
 
 **Boundary class** —
 
