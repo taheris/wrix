@@ -1007,8 +1007,10 @@ let
   #
   # The test reconstructs the composed image's on-disk store by listing every
   # store path across all three tiers' layer tars, then reads the baked
-  # db.sqlite (carried in the leaf customisation layer) and asserts no on-disk
-  # store path is missing from ValidPaths. Built via image.nix directly with a
+  # db.sqlite and asserts no on-disk store path is missing from ValidPaths. It
+  # also asserts the DB rides in the leaf customisation layer only — present in
+  # that final leaf layer, absent from both lower tiers — so registration does
+  # not perturb the tier-0/tier-1 blobs. Built via image.nix directly with a
   # light entrypointPkg so the check does not drag in claude-code, but through
   # the same tier chain that produces the diagnosed orphan.
   nixDbProbeImage = import ../../lib/sandbox/image.nix {
@@ -1077,10 +1079,12 @@ let
           dbroot="$tmp/dbroot"
           mkdir -p "$dbroot"
           db=""
+          db_layer=""
           while IFS= read -r layer; do
               if tar -tf "$leafx/$layer" | grep -qE '(^|\./)nix/var/nix/db/db\.sqlite$'; then
                   tar -xf "$leafx/$layer" -C "$dbroot"
                   db="$dbroot/nix/var/nix/db/db.sqlite"
+                  db_layer="$layer"
                   break
               fi
           done < <(jq -r '.[0].Layers[]' "$leafx/manifest.json")
@@ -1090,6 +1094,31 @@ let
               echo "      (includeNixDB / load-db did not bake a database)" >&2
               exit 1
           fi
+
+          # The DB must ride in the leaf's customisation layer (its final layer):
+          # registration is metadata that copies no lower-tier store path up, so
+          # it stays in the volatile leaf tier.
+          cust_layer=$(jq -r '.[0].Layers[-1]' "$leafx/manifest.json")
+          if [[ "$db_layer" != "$cust_layer" ]]; then
+              echo "FAIL: baked Nix DB rides in leaf layer '$db_layer', not the" >&2
+              echo "      customisation layer '$cust_layer'" >&2
+              exit 1
+          fi
+
+          # The DB rides in the leaf ONLY: a db.sqlite in a lower tier would mean
+          # registration perturbed a tier-0/tier-1 blob and broke the
+          # provenance-tiered chain's byte-identical-lower-tiers guarantee.
+          for tier_tar in "$tier1_tar" "$tier0_tar"; do
+              td=$(mktemp -d -p "$unpack_dir")
+              tar -xf "$tier_tar" -C "$td"
+              while IFS= read -r layer; do
+                  if tar -tf "$td/$layer" | grep -qE '(^|\./)nix/var/nix/db/db\.sqlite$'; then
+                      echo "FAIL: lower tier '$tier_tar' carries a baked Nix DB;" >&2
+                      echo "      the DB must ride in the leaf customisation layer only" >&2
+                      exit 1
+                  fi
+              done < <(jq -r '.[0].Layers[]' "$td/manifest.json")
+          done
 
           # Store paths are extracted read-only; SQLite opened read-write needs
           # to write the -wal/-shm sidecars while reading WAL-resident rows.
