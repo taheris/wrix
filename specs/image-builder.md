@@ -72,13 +72,13 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
 - `wrapix-base-image` holds only the universal bottom-of-closure: no profile-specific compiler toolchain leaks in (e.g. `pkgs.rustc`, which no profile references — the rust profile uses fenix's toolchain)
   [system](nix run .#test-base-image-universal)
 - `wrapix-stable-profile-<name>`'s derivation hash is invariant under tier-2 inputs — downstream-appended packages (`profile.packages` − `corePackages`), the agent runtime selection, the merged Claude settings JSON, and MCP configs
-  [system?](nix run .#test-stable-profile-hash-stable)
+  [system](nix run .#test-stable-profile-hash-stable)
 - `wrapix-stable-profile-<name>` holds only fixed-per-instance content: neither a downstream-appended package nor a consumer-supplied agent runtime (`piPkg`/`directRunner`) leaks into it
-  [system?](nix run .#test-stable-profile-membership)
+  [system](nix run .#test-stable-profile-membership)
 - A downstream-pinned toolchain (`rustProfile { toolchain = ./rust-toolchain.toml }`) lands in tier 1 (`wrapix-stable-profile-<name>`), not the leaf
-  [system?](nix run .#test-pinned-toolchain-stable-tier)
+  [system](nix run .#test-pinned-toolchain-stable-tier)
 - A change to a tier-2 input (a downstream-appended package or the agent runtime `piPkg`/`directRunner`) leaves every tier-0 and tier-1 layer-blob byte-identical in the resulting image's manifest; only leaf-tier blobs change
-  [system?](nix run .#test-downstream-change-leaf-only)
+  [system](nix run .#test-downstream-change-leaf-only)
 - `agent = "claude"` produces an image that contains `claude-code`
   [system](nix run .#test-claude-runtime-noop)
 - The `agent = "pi"` code path threads a consumer-supplied `piPkg` derivation into the image build

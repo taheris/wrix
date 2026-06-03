@@ -17,7 +17,7 @@ pin — keep it current when specs land or retire.
 
 | Spec | Code | Beads | Purpose |
 |------|------|-------|---------|
-| [beads.md](../specs/beads.md) | [`.beads/`](../.beads/) | — | Issue tracking with dependency support |
+| [beads.md](../specs/beads.md) | [`.beads/`](../.beads/) | wx-v7m8n | Issue tracking with dependency support |
 | [image-builder.md](../specs/image-builder.md) | [`lib/sandbox/image.nix`](../lib/sandbox/image.nix) | wx-nf6eu | Nix-based OCI image creation |
 | [linux-builder.md](../specs/linux-builder.md) | [`lib/builder/default.nix`](../lib/builder/default.nix) | wx-ope | Remote Nix builds for macOS |
 | [notifications.md](../specs/notifications.md) | [`lib/notify/`](../lib/notify/) | wx-q6x | Desktop notifications with focus suppression |

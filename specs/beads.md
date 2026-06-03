@@ -111,6 +111,34 @@ Key settings in `.beads/config.yaml`:
 operator state (`bd close`, `bd update --status=…`, label changes) into
 the on-disk Dolt remote, then pushes the `beads` git branch to GitHub.
 
+### Invocation contexts
+
+`beads-push` is safe to invoke unconditionally — it detects its context and
+acts accordingly rather than requiring consumers to guard the call. A
+consumer's session-close step is therefore an unconditional `beads-push`;
+no `$LOOM_INSIDE` check and no manual dolt-sync-race workaround belong in
+downstream "land the plane" instructions.
+
+- **Loom-managed bead clone (`$LOOM_INSIDE` set).** Full no-op: no git or
+  dolt operation runs and `beads-push` exits 0 with a one-line notice.
+  Inside a loom clone `origin` points at the driver workdir (not GitHub)
+  and `.git/beads-worktrees/<branch>` does not exist; the loom driver
+  publishes `main` + `beads` after a Clean review verdict, and the worker's
+  `bd` writes are already authoritative through the bind-mounted Dolt
+  socket. Running `bd dolt push` here would target the wrong remote and add
+  a second writer racing the driver, so `beads-push` declines entirely.
+- **Unresolvable repository (`$LOOM_INSIDE` unset).** When
+  `git rev-parse --show-toplevel` does not resolve a workspace root,
+  `beads-push` fails fast with an actionable stderr message naming the
+  unresolved repository, rather than letting an empty `ROOT` flow into a
+  git invocation that prints `fatal: not a git repository: (null)`.
+- **Normal host session.** The dolt-sync (see *Ordering*) and beads-branch
+  sync run as described below, including the existing skip when no
+  `<branch>` resolves locally or on `origin`.
+
+This context guard runs first — before the auto-export write and any
+`bd dolt` call — so a loom-clone invocation has zero side effects.
+
 ### Ordering
 
 `beads-push` attempts `bd dolt push` before `bd dolt pull`. When the
@@ -144,7 +172,8 @@ No push is attempted. The operator resolves the conflict by hand.
 ### Auto-export suppression
 
 `beads-push` disables bd's auto-export hook
-(`bd config set export.auto false`) on every invocation. The hook is
+(`bd config set export.auto false`) on every invocation that proceeds past
+the context guard (a `$LOOM_INSIDE` no-op runs nothing at all). The hook is
 redundant with the explicit `bd dolt` calls the script already makes,
 and its `git add .beads/issues.jsonl` produces noisy warnings in any
 repo that gitignores the JSONL (the common case post-Dolt, including
@@ -220,12 +249,27 @@ upstream, not by this spec.
   intent — no push attempted, no silent overwrite
   [judge](../tests/judges/beads.sh#test_beadspush_failloud_on_intent_overwrite)
 
-- `beads-push` disables bd's auto-export hook on every invocation
-  (idempotent), leaving `export.auto: false` persisted in
+- `beads-push` disables bd's auto-export hook on every invocation that
+  proceeds past the context guard (idempotent), leaving
+  `export.auto: false` persisted in
   `.beads/config.yaml`, so subsequent bd calls inside and outside
   `beads-push` no longer emit the `Warning: auto-export: git add failed`
   message or write `.beads/issues.jsonl`
   [judge](../tests/judges/beads.sh#test_beadspush_disables_autoexport)
+
+- When `$LOOM_INSIDE` is set, `beads-push` performs no git or dolt
+  operation and exits 0 with a one-line notice, so a consumer may invoke it
+  unconditionally inside a loom-managed bead clone — where `origin` points
+  at the driver workdir and `.git/beads-worktrees/<branch>` is absent —
+  without error and without a second writer racing the driver
+  [judge](../tests/judges/beads.sh#test_beadspush_loom_inside_noop)
+
+- When `$LOOM_INSIDE` is unset and `git rev-parse --show-toplevel` does not
+  resolve a workspace root, `beads-push` exits non-zero with an actionable
+  stderr message naming the unresolved repository — never proceeding with an
+  empty `ROOT` into a git invocation that prints
+  `fatal: not a git repository: (null)`
+  [judge](../tests/judges/beads.sh#test_beadspush_failloud_missing_repo)
 
 - `beads-push`'s pre-pull cleanup commits any pre-existing dirt in the
   beads worktree — untracked files OR modified tracked files left by a
@@ -257,9 +301,14 @@ upstream, not by this spec.
    and `labels` intent before pulling and refuses to overwrite divergent
    rows.
 8. **Auto-export suppression** — `beads-push` disables bd's auto-export
-   hook on every invocation (idempotent); the pre-pull cleanup in the
-   beads worktree uses `git status --porcelain` so any dirt the rebase
-   would refuse is committed first.
+   hook on every invocation past the context guard (idempotent); the
+   pre-pull cleanup in the beads worktree uses `git status --porcelain` so
+   any dirt the rebase would refuse is committed first.
+9. **Context-aware invocation** — `beads-push` is safe to invoke
+   unconditionally. Under `$LOOM_INSIDE` it is a full no-op (exit 0); when
+   the git root is unresolvable it fails fast with an actionable message;
+   otherwise it runs the dolt-sync and beads-branch sync. Consumers need no
+   `$LOOM_INSIDE` guard around the call.
 
 ### Non-Functional
 
@@ -272,6 +321,11 @@ upstream, not by this spec.
    common case bypasses any merge; on the pull-fallback path it fails
    loud rather than silently overwriting `status` or `labels` (see
    *Session-Close Sync*).
+4. **Caller-agnostic, fail-loud invocation** — `beads-push` never emits a
+   bare `fatal: not a git repository: (null)`; an unresolvable repository
+   produces an actionable non-zero error, and a loom-managed clone produces
+   a clean no-op. Downstream session-close instructions reduce to an
+   unconditional `beads-push` step.
 
 ## Out of Scope
 
@@ -281,6 +335,13 @@ upstream, not by this spec.
 - Lifecycle management of the process that triggers shellHook — beads
   ensures its own container is independent; what the caller does is the
   caller's concern
+- Downstream consumers' session-close documentation (e.g. another repo's
+  `AGENTS.md` land-the-plane block) — `beads-push` owns the context-handling
+  behavior so consumers invoke it unconditionally; how each repo documents
+  that call is the repo's concern
+- Publication of `main` + `beads` from inside a loom-managed bead clone —
+  the loom driver owns that after a Clean review verdict; `beads-push`
+  deliberately no-ops under `$LOOM_INSIDE` rather than publishing
 - Container runtime selection (covered by `sandbox.md`)
 - Opt-in / legacy ordering flag for `beads-push` — push-before-pull is
   the unconditional default
