@@ -68,13 +68,20 @@ let
     coreEnv
   ];
 
+  # The on-disk roots tiers 0+1 contribute to the composed image: the base
+  # contents, this tier's own contents, and prekHooksBundle (reachable only via
+  # config.Env, but buildLayeredImage still layers it). Exposed so the leaf can
+  # both remove_paths the whole union from its layering graph and register the
+  # full on-disk closure in the baked Nix DB (specs/image-builder.md
+  # § In-Container Nix Store Consistency).
+  lowerTiersRootPaths = baseContents ++ tierContents ++ [ prekHooksBundle ];
+
   # Everything tiers 0+1 ship, exposed so the leaf's custom layeringPipeline can
   # remove_paths the whole union (specs/image-builder.md § Base Image Layering).
   # The custom pipeline does not dedup fromImage, so the leaf must strip this
-  # explicitly. prekHooksBundle is reachable only via config.Env, but
-  # buildLayeredImage still layers it, so it belongs in the union.
+  # explicitly.
   lowerTiersClosure = pkgs.closureInfo {
-    rootPaths = baseContents ++ tierContents ++ [ prekHooksBundle ];
+    rootPaths = lowerTiersRootPaths;
   };
 
   # Bounded to this tier's own fixed closure, well under the 127-layer OCI
@@ -122,5 +129,5 @@ dockerTools.buildLayeredImage {
   ];
 }
 // {
-  inherit lowerTiersClosure;
+  inherit lowerTiersClosure lowerTiersRootPaths;
 }

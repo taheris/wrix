@@ -995,6 +995,143 @@ let
         '';
   };
 
+  # Nix-DB-consistency verifier (specs/image-builder.md § In-Container Nix Store
+  # Consistency; Success Criteria "The baked image's Nix database is consistent
+  # with its on-disk store"). The image must register its FULL on-disk closure
+  # valid — the leaf's own contents AND every path the fromImage base +
+  # stable-profile tiers physically lay down (notably the tier-1 generated
+  # passwd/group/nix.conf store paths and prekHooksBundle). includeNixDB alone
+  # registers only the leaf's `contents`, leaving those tier paths on disk but
+  # unregistered — orphans that make the unprivileged in-container user's
+  # additive Nix ops try to chmod a root-owned path and fail with EPERM.
+  #
+  # The test reconstructs the composed image's on-disk store by listing every
+  # store path across all three tiers' layer tars, then reads the baked
+  # db.sqlite (carried in the leaf customisation layer) and asserts no on-disk
+  # store path is missing from ValidPaths. Built via image.nix directly with a
+  # light entrypointPkg so the check does not drag in claude-code, but through
+  # the same tier chain that produces the diagnosed orphan.
+  nixDbProbeImage = import ../../lib/sandbox/image.nix {
+    inherit pkgs;
+    profile = {
+      name = "nixdbprobe";
+      corePackages = [ pkgs.coreutils ];
+      packages = [ pkgs.coreutils ];
+      env = { };
+    };
+    entrypointPkg = pkgs.hello;
+    entrypointSh = ../../lib/sandbox/linux/entrypoint.sh;
+    claudeConfig = { };
+    claudeSettings = { };
+  };
+  imageNixDbConsistentTest = pkgs.writeShellApplication {
+    name = "test-image-nix-db-consistent";
+    runtimeInputs = lib.optionals isLinux [
+      pkgs.coreutils
+      pkgs.gnutar
+      pkgs.gnugrep
+      pkgs.jq
+      pkgs.sqlite
+    ];
+    text =
+      if isLinux then
+        ''
+          leaf_stream=${nixDbProbeImage}
+          tier1_tar=${nixDbProbeImage.stableProfileImage}
+          tier0_tar=${nixDbProbeImage.baseImage}
+
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+
+          "$leaf_stream" > "$tmp/leaf.tar"
+
+          # Unpack each tier's docker-archive (manifest.json + <sha>/layer.tar
+          # blobs) and list the store paths every layer blob carries. The union
+          # across all three tiers is the composed image's on-disk store.
+          unpack_dir="$tmp/archives"
+          mkdir -p "$unpack_dir"
+          list_tier_store_paths() {
+              local arc="$1" d
+              d=$(mktemp -d -p "$unpack_dir")
+              tar -xf "$arc" -C "$d"
+              local layer
+              while IFS= read -r layer; do
+                  tar -tf "$d/$layer"
+              done < <(jq -r '.[0].Layers[]' "$d/manifest.json")
+          }
+
+          {
+              list_tier_store_paths "$tmp/leaf.tar"
+              list_tier_store_paths "$tier1_tar"
+              list_tier_store_paths "$tier0_tar"
+          } | grep -oE 'nix/store/[a-z0-9]{32}-[^/]+' | sort -u | sed 's#^#/#' \
+              > "$tmp/ondisk"
+
+          # The baked Nix DB rides in the leaf customisation layer; find the
+          # layer carrying it and extract the whole db dir (the sqlite store is
+          # WAL-mode, so the -wal/-shm sidecars must travel with db.sqlite for
+          # the registered rows to be visible).
+          leafx="$tmp/leafx"
+          mkdir -p "$leafx"
+          tar -xf "$tmp/leaf.tar" -C "$leafx"
+          dbroot="$tmp/dbroot"
+          mkdir -p "$dbroot"
+          db=""
+          while IFS= read -r layer; do
+              if tar -tf "$leafx/$layer" | grep -qE '(^|\./)nix/var/nix/db/db\.sqlite$'; then
+                  tar -xf "$leafx/$layer" -C "$dbroot"
+                  db="$dbroot/nix/var/nix/db/db.sqlite"
+                  break
+              fi
+          done < <(jq -r '.[0].Layers[]' "$leafx/manifest.json")
+
+          if [[ -z "$db" || ! -f "$db" ]]; then
+              echo "FAIL: no nix/var/nix/db/db.sqlite found in any leaf layer" >&2
+              echo "      (includeNixDB / load-db did not bake a database)" >&2
+              exit 1
+          fi
+
+          # Store paths are extracted read-only; SQLite opened read-write needs
+          # to write the -wal/-shm sidecars while reading WAL-resident rows.
+          chmod -R u+rwX "$dbroot/nix/var/nix/db"
+          sqlite3 "$db" 'SELECT path FROM ValidPaths' | sort -u \
+              > "$tmp/registered"
+
+          ondisk_count=$(wc -l < "$tmp/ondisk")
+          registered_count=$(wc -l < "$tmp/registered")
+          if [[ "$ondisk_count" -eq 0 ]]; then
+              echo "FAIL: reconstructed on-disk store is empty; the test did not" >&2
+              echo "      enumerate the image's store paths" >&2
+              exit 1
+          fi
+          if [[ "$registered_count" -eq 0 ]]; then
+              echo "FAIL: baked Nix DB registered no ValidPaths" >&2
+              exit 1
+          fi
+
+          # Every on-disk store path must be registered valid — no orphan.
+          orphans=$(comm -23 "$tmp/ondisk" "$tmp/registered")
+          if [[ -n "$orphans" ]]; then
+              orphan_count=$(printf '%s\n' "$orphans" | grep -c '^' || true)
+              echo "FAIL: $orphan_count on-disk store path(s) are not registered valid" >&2
+              echo "      in the baked Nix DB (orphans break additive in-container Nix):" >&2
+              printf '%s\n' "$orphans" | sed 's/^/  /' >&2
+              exit 1
+          fi
+
+          echo "test-image-nix-db-consistent: PASS ($ondisk_count on-disk store paths all registered valid; no orphan)"
+        ''
+      else
+        ''
+          # streamLayeredImage's stream script carries a Linux Python shebang;
+          # reconstructing the on-disk store from the leaf docker-archive here
+          # is Linux-only. The full-closure registration in image.nix runs
+          # identically under buildLayeredImage on Darwin.
+          echo "test-image-nix-db-consistent: skipped on this platform (streamLayeredImage is Linux-only)" >&2
+          exit 0
+        '';
+  };
+
 in
 {
   inherit
@@ -1011,5 +1148,6 @@ in
     downstreamChangeLeafOnlyTest
     iterationCostBoundedTest
     customisationLayerBoundedTest
+    imageNixDbConsistentTest
     ;
 }

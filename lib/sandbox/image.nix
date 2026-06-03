@@ -154,6 +154,26 @@ let
   buildImage =
     if asTarball then pkgs.dockerTools.buildLayeredImage else pkgs.dockerTools.streamLayeredImage;
 
+  leafContents = [
+    pkgs.dockerTools.usrBinEnv
+    pkgs.dockerTools.binSh
+    pkgs.dockerTools.caCertificates
+    profileEnv
+  ];
+
+  # The image's full on-disk store: the leaf's own contents plus every path the
+  # base + stable-profile tiers physically lay down (their generated passwd /
+  # group / nix.conf, coreEnv, base bottom-of-closure, and prekHooksBundle).
+  # Registering this whole closure in the baked Nix DB leaves no orphaned
+  # (on-disk-but-unregistered) path, so the unprivileged in-container user's
+  # additive Nix ops never try to chmod a root-owned store path
+  # (specs/image-builder.md § In-Container Nix Store Consistency). The DB rides
+  # in the leaf customisation layer — registration is metadata, it copies no
+  # lower-tier store path up, so the provenance-tiered chain is unperturbed.
+  imageNixDb = pkgs.closureInfo {
+    rootPaths = leafContents ++ stableProfileImage.lowerTiersRootPaths;
+  };
+
   imageName = "wrapix-${profile.name}${pkgs.lib.optionalString (agent != "claude") "-${agent}"}";
 
   # The leaf budgets only its tier-2 delta plus the customisation layer; with
@@ -195,12 +215,7 @@ let
     includeNixDB = true;
     fromImage = stableProfileImage;
 
-    contents = [
-      pkgs.dockerTools.usrBinEnv
-      pkgs.dockerTools.binSh
-      pkgs.dockerTools.caCertificates
-      profileEnv
-    ];
+    contents = leafContents;
 
     extraCommands = ''
       mkdir -p tmp home/wrapix root var/run var/cache var/tmp mnt/wrapix/file mnt/wrapix/dir
@@ -235,11 +250,15 @@ let
         )}
       ''}
 
-      # Register prekHooksBundle in nix db — referenced only from config.Env
-      # (WRAPIX_PREK_HOOKS), which includeNixDB does not cover.
+      # Register the FULL on-disk closure in the nix db. includeNixDB covers
+      # only the leaf's own `contents`; the fromImage tiers' paths (generated
+      # passwd/group/nix.conf, coreEnv, base bottom-of-closure) and
+      # prekHooksBundle (config.Env only) would otherwise stay on disk but
+      # unregistered — orphans that break additive in-container Nix ops
+      # (specs/image-builder.md § In-Container Nix Store Consistency).
       NIX_STATE_DIR=$PWD/nix/var/nix \
         ${pkgs.buildPackages.nix}/bin/nix-store --load-db \
-        < ${pkgs.closureInfo { rootPaths = [ prekHooksBundle ]; }}/registration
+        < ${imageNixDb}/registration
 
       # Fix Nix permissions for non-root users
       # (includeNixDB creates files owned by root)

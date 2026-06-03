@@ -231,6 +231,12 @@ in
       program = "${sandboxImageChecks.customisationLayerBoundedTest}/bin/test-customisation-layer-bounded";
     };
 
+    image-nix-db-consistent = {
+      meta.description = "Verify the baked image's Nix DB registers its full on-disk store with no orphan (Linux only)";
+      type = "app";
+      program = "${sandboxImageChecks.imageNixDbConsistentTest}/bin/test-image-nix-db-consistent";
+    };
+
     # profiles.rust.buildPackage [verify] hash invariants (specs/profiles.md).
     profiles-build-package = {
       meta.description = "Verify profiles.rust.buildPackage hash invariants (bin/clippy/nextest/cargoArtifacts)";

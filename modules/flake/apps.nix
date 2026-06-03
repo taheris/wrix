@@ -19,6 +19,7 @@ _:
         test-downstream-change-leaf-only = test.apps.downstream-change-leaf-only;
         test-iteration-cost-bounded = test.apps.iteration-cost-bounded;
         test-customisation-layer-bounded = test.apps.customisation-layer-bounded;
+        test-image-nix-db-consistent = test.apps.image-nix-db-consistent;
       };
     };
 }
