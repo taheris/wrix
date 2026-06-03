@@ -195,6 +195,30 @@ in
       program = "${sandboxImageChecks.baseImageHashStableTest}/bin/test-base-image-hash-stable";
     };
 
+    stable-profile-hash-stable = {
+      meta.description = "Verify wrapix-stable-profile-<name> drvPath is invariant under tier-2 input changes";
+      type = "app";
+      program = "${sandboxImageChecks.stableProfileHashStableTest}/bin/test-stable-profile-hash-stable";
+    };
+
+    stable-profile-membership = {
+      meta.description = "Verify wrapix-stable-profile-<name> excludes downstream packages and the agent runtime (tier-2 leaf)";
+      type = "app";
+      program = "${sandboxImageChecks.stableProfileMembershipTest}/bin/test-stable-profile-membership";
+    };
+
+    pinned-toolchain-stable-tier = {
+      meta.description = "Verify a downstream-pinned rust toolchain lands in tier 1 (wrapix-stable-profile-<name>), not the leaf";
+      type = "app";
+      program = "${sandboxImageChecks.pinnedToolchainStableTest}/bin/test-pinned-toolchain-stable-tier";
+    };
+
+    downstream-change-leaf-only = {
+      meta.description = "Verify a tier-2 change leaves every tier-0 and tier-1 layer blob byte-identical (Linux only)";
+      type = "app";
+      program = "${sandboxImageChecks.downstreamChangeLeafOnlyTest}/bin/test-downstream-change-leaf-only";
+    };
+
     iteration-cost-bounded = {
       meta.description = "Verify a one-wrapper-script perturbation only re-emits the customisation layer + dependent top layers (Linux only)";
       type = "app";

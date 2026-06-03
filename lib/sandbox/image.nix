@@ -337,4 +337,9 @@ rawImage
   # Layering) can assert the base derivation is invariant under profile-level
   # input changes without re-deriving it.
   baseImage = wrapixBaseImage;
+  # Expose tier 1 so the stable-profile verifiers (hash-stability, membership,
+  # pinned-toolchain) can assert against the middle tier's derivation and its
+  # `lowerTiersClosure` without rebuilding the leaf (specs/image-builder.md
+  # § Provenance-Tiered Layering).
+  inherit stableProfileImage;
 }

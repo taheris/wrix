@@ -538,6 +538,283 @@ let
     '';
   };
 
+  # Hash-stability guard for `wrapix-stable-profile-<name>` (tier 1;
+  # specs/image-builder.md § Provenance-Tiered Layering). Tier 1's contents are
+  # fixed per profile instance, so its derivation hash must not move when a
+  # tier-2 input changes. We read each sandbox image's chained `fromImage`
+  # tier-1 (image.stableProfileImage) under several tier-2 perturbations — a
+  # downstream-appended package, the agent runtime selection, the merged Claude
+  # settings JSON, and MCP configs — holding the profile fixed, then assert one
+  # drvPath across all of them. A regression threading a tier-2 input into
+  # stable-profile-image.nix would split the drvPaths and fail here.
+  stableProfileImageOf = args: (sandboxLib.mkSandbox args).image.stableProfileImage.drvPath;
+  referenceStableProfile = stableProfileImageOf { profile = sandboxLib.profiles.base; };
+  stableProfilePermutations = {
+    packages = stableProfileImageOf {
+      profile = sandboxLib.profiles.base;
+      packages = [ linuxPkgs.hello ];
+    };
+    agentDirect = stableProfileImageOf {
+      profile = sandboxLib.profiles.base;
+      agent = "direct";
+      directRunner = linuxPkgs.hello;
+    };
+    claudeSettings = stableProfileImageOf {
+      profile = sandboxLib.profiles.base;
+      model = "claude-hash-stable-probe";
+    };
+    mcpConfigs = stableProfileImageOf {
+      profile = sandboxLib.profiles.base;
+      mcpRuntime = true;
+    };
+  };
+  stableProfileHashStableChecks = lib.concatStringsSep "\n" (
+    lib.mapAttrsToList (name: drvPath: ''
+      if [[ "${drvPath}" != "$reference" ]]; then
+          echo "FAIL: wrapix-stable-profile drvPath changed under tier-2 perturbation '${name}'" >&2
+          echo "  reference  : $reference" >&2
+          echo "  ${name}: ${drvPath}" >&2
+          status=1
+      fi
+    '') stableProfilePermutations
+  );
+  stableProfileHashStableTest = pkgs.writeShellApplication {
+    name = "test-stable-profile-hash-stable";
+    runtimeInputs = [ pkgs.coreutils ];
+    text = ''
+      reference="${referenceStableProfile}"
+      status=0
+
+      ${stableProfileHashStableChecks}
+
+      if [[ "$status" -ne 0 ]]; then
+          exit 1
+      fi
+
+      echo "test-stable-profile-hash-stable: PASS (tier-1 drvPath invariant across ${toString (builtins.length (builtins.attrNames stableProfilePermutations))} tier-2 perturbations)"
+    '';
+  };
+
+  # Membership guard for tier 1 (specs/image-builder.md § Provenance-Tiered
+  # Layering): `wrapix-stable-profile-<name>` holds only fixed-per-instance
+  # content. A downstream-appended package and a consumer-supplied agent runtime
+  # are tier-2, so neither may appear in tier 1's `lowerTiersClosure` (the union
+  # the leaf strips), yet both must ship in the leaf image's own closure. Built
+  # via image.nix directly with a light entrypointPkg so the check does not drag
+  # in claude-code.
+  membershipAppendedPkg = pkgs.writeShellScriptBin "wrapix-stable-membership-appended" ''
+    echo "downstream-appended package"
+  '';
+  membershipRunnerPkg = pkgs.writeShellScriptBin "wrapix-stable-membership-runner" ''
+    echo "consumer-supplied agent runtime"
+  '';
+  membershipImage = import ../../lib/sandbox/image.nix {
+    inherit pkgs;
+    asTarball = !isLinux;
+    profile = {
+      name = "membership";
+      corePackages = [ pkgs.coreutils ];
+      packages = [
+        pkgs.coreutils
+        membershipAppendedPkg
+      ];
+      env = { };
+    };
+    agent = "direct";
+    directRunner = membershipRunnerPkg;
+    entrypointPkg = pkgs.hello;
+    entrypointSh = ../../lib/sandbox/linux/entrypoint.sh;
+    claudeConfig = { };
+    claudeSettings = { };
+  };
+  membershipImageClosure = pkgs.closureInfo { rootPaths = [ membershipImage ]; };
+  stableProfileMembershipTest = pkgs.writeShellApplication {
+    name = "test-stable-profile-membership";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.gnugrep
+    ];
+    text = ''
+      tier1_closure=${membershipImage.stableProfileImage.lowerTiersClosure}/store-paths
+      image_closure=${membershipImageClosure}/store-paths
+      appended=${membershipAppendedPkg}
+      runner=${membershipRunnerPkg}
+
+      for tier2 in "$appended" "$runner"; do
+          if grep -qxF "$tier2" "$tier1_closure"; then
+              echo "FAIL: tier-2 path leaked into the wrapix-stable-profile tier-1 closure" >&2
+              echo "  leaked : $tier2" >&2
+              echo "  tier-1 : $tier1_closure" >&2
+              exit 1
+          fi
+          if ! grep -qxF "$tier2" "$image_closure"; then
+              echo "FAIL: tier-2 path missing from the leaf image closure" >&2
+              echo "  expected: $tier2" >&2
+              echo "  image   : $image_closure" >&2
+              exit 1
+          fi
+      done
+
+      echo "test-stable-profile-membership: PASS (appended package + agent runtime are tier-2 leaf, absent from tier 1)"
+    '';
+  };
+
+  # Pinned-toolchain tier guard (specs/image-builder.md § Provenance-Tiered
+  # Layering): a downstream-pinned rust toolchain is fixed per instance, so it
+  # belongs to `corePackages` and lands in tier 1, never the volatile leaf. We
+  # build a project-pinned rust profile from a fixture rust-toolchain.toml and
+  # assert every rust-specific core package (the pinned toolchain plus its fixed
+  # support packages) is reachable from the leaf image's tier-1
+  # `lowerTiersClosure`. Skipped when the fenix input is absent (no rust profile).
+  toolchainFixtureSha = "sha256-SXRtAuO4IqNOQq+nLbrsDFbVk+3aVA8NNpSZsKlVH/8=";
+  pinnedToolchainStableTest =
+    if fenix == null then
+      pkgs.writeShellApplication {
+        name = "test-pinned-toolchain-stable-tier";
+        runtimeInputs = [ pkgs.coreutils ];
+        text = ''
+          echo "test-pinned-toolchain-stable-tier: skipped (fenix input absent, no rust profile)" >&2
+          exit 0
+        '';
+      }
+    else
+      let
+        pinnedProfile = sandboxLib.rustProfileFromFile {
+          file = ../fixtures/rust-toolchain.toml;
+          sha256 = toolchainFixtureSha;
+        };
+        pinnedSandbox = sandboxLib.mkSandbox { profile = pinnedProfile; };
+        rustCoreExtras = lib.subtractLists sandboxLib.profiles.base.corePackages pinnedProfile.corePackages;
+        rustCoreExtrasList = lib.concatStringsSep " " (map (p: ''"${p}"'') rustCoreExtras);
+      in
+      pkgs.writeShellApplication {
+        name = "test-pinned-toolchain-stable-tier";
+        runtimeInputs = [
+          pkgs.coreutils
+          pkgs.gnugrep
+        ];
+        text = ''
+          tier1_closure=${pinnedSandbox.image.stableProfileImage.lowerTiersClosure}/store-paths
+
+          members=(${rustCoreExtrasList})
+          if [[ "''${#members[@]}" -eq 0 ]]; then
+              echo "FAIL: pinned rust profile contributed no core packages over base" >&2
+              exit 1
+          fi
+
+          for member in "''${members[@]}"; do
+              if ! grep -qxF "$member" "$tier1_closure"; then
+                  echo "FAIL: pinned-toolchain core package absent from the wrapix-stable-profile tier-1 closure" >&2
+                  echo "  member : $member" >&2
+                  echo "  tier-1 : $tier1_closure" >&2
+                  exit 1
+              fi
+          done
+
+          echo "test-pinned-toolchain-stable-tier: PASS (''${#members[@]} pinned core packages land in tier 1)"
+        '';
+      };
+
+  # Leaf-only-change guard (specs/image-builder.md § Provenance-Tiered Layering;
+  # Non-Functional § Iteration cost). Two leaf images that differ only in a
+  # tier-2 input — the agent runtime selection — share an identical
+  # `wrapix-stable-profile-<name>` (tier 1) and `wrapix-base-image` (tier 0),
+  # since neither depends on the agent axis. Every tier-0 and tier-1 layer blob
+  # must therefore be byte-identical across the two leaves' manifests; only
+  # leaf-tier blobs change. Built via image.nix directly with a light
+  # entrypointPkg so the check does not drag in claude-code.
+  mkLeafAgentProbe =
+    {
+      agent,
+      directRunner ? null,
+    }:
+    import ../../lib/sandbox/image.nix {
+      inherit pkgs agent directRunner;
+      profile = {
+        name = "leafprobe";
+        corePackages = [ pkgs.coreutils ];
+        packages = [ pkgs.coreutils ];
+        env = { };
+      };
+      entrypointPkg = pkgs.hello;
+      entrypointSh = ../../lib/sandbox/linux/entrypoint.sh;
+      claudeConfig = { };
+      claudeSettings = { };
+    };
+  leafProbeClaude = mkLeafAgentProbe { agent = "claude"; };
+  leafProbeDirect = mkLeafAgentProbe {
+    agent = "direct";
+    directRunner = pkgs.writeShellScriptBin "wrapix-leaf-probe-runner" ''
+      echo "leaf probe direct runner"
+    '';
+  };
+  downstreamChangeLeafOnlyTest = pkgs.writeShellApplication {
+    name = "test-downstream-change-leaf-only";
+    runtimeInputs = lib.optionals isLinux [
+      pkgs.coreutils
+      pkgs.gnutar
+      pkgs.jq
+    ];
+    text =
+      if isLinux then
+        ''
+          imgA=${leafProbeClaude}
+          imgB=${leafProbeDirect}
+          tier1_tar=${leafProbeClaude.stableProfileImage}
+
+          if [[ "$imgA" == "$imgB" ]]; then
+              echo "FAIL: claude/direct probe images resolved to the same stream script;" >&2
+              echo "      the agent-runtime perturbation did not materialise a distinct leaf" >&2
+              exit 1
+          fi
+
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+
+          # streamLayeredImage emits a docker-archive tar; manifest.json lists
+          # each layer blob as "<sha256>/layer.tar".
+          "$imgA" | tar -xO manifest.json > "$tmp/a.json"
+          "$imgB" | tar -xO manifest.json > "$tmp/b.json"
+          # GNU tar auto-detects the tier-1 buildLayeredImage tar's compression.
+          tar -xOf "$tier1_tar" manifest.json > "$tmp/tier1.json"
+
+          jq -r '.[0].Layers[]' "$tmp/a.json" | sort -u > "$tmp/a.layers"
+          jq -r '.[0].Layers[]' "$tmp/b.json" | sort -u > "$tmp/b.layers"
+          jq -r '.[0].Layers[]' "$tmp/tier1.json" | sort -u > "$tmp/tier1.layers"
+
+          comm -12 "$tmp/a.layers" "$tmp/b.layers" > "$tmp/shared.layers"
+          tier1_count=$(wc -l < "$tmp/tier1.layers")
+
+          # Every tier-0 + tier-1 blob (the whole tier-1 fromImage manifest) must
+          # survive byte-identical in BOTH leaves, i.e. appear in their shared set.
+          missing=$(comm -23 "$tmp/tier1.layers" "$tmp/shared.layers")
+          if [[ -n "$missing" ]]; then
+              echo "FAIL: a tier-0/tier-1 layer blob changed across the agent-runtime perturbation" >&2
+              echo "  tier blobs not shared by both leaves:" >&2
+              echo "$missing" >&2
+              exit 1
+          fi
+
+          only_a=$(comm -23 "$tmp/a.layers" "$tmp/b.layers" | wc -l)
+          only_b=$(comm -13 "$tmp/a.layers" "$tmp/b.layers" | wc -l)
+          if [[ "$only_a" -eq 0 && "$only_b" -eq 0 ]]; then
+              echo "FAIL: no leaf-tier blob changed; the perturbation left the manifest identical" >&2
+              exit 1
+          fi
+
+          echo "test-downstream-change-leaf-only: PASS ($tier1_count tier-0/tier-1 blobs byte-identical; only_in_A=$only_a only_in_B=$only_b leaf-only)"
+        ''
+      else
+        ''
+          # streamLayeredImage's stream script carries a Linux Python shebang;
+          # the manifest diff this verifier performs is Linux-only. Darwin's
+          # iteration-cost bound is the tiered chain alone (specs/image-builder.md
+          # § Out of Scope).
+          echo "test-downstream-change-leaf-only: skipped on this platform (streamLayeredImage is Linux-only)" >&2
+          exit 0
+        '';
+  };
+
   # Iteration-cost-bounded probe (specs/image-builder.md Success Criteria:
   # "A one-file perturbation in profile-level inputs (one wrapper script touched)
   # leaves every layer-blob hash in the resulting image's manifest unchanged
@@ -728,6 +1005,10 @@ in
     prekHooksClosureTest
     baseImageUniversalTest
     baseImageHashStableTest
+    stableProfileHashStableTest
+    stableProfileMembershipTest
+    pinnedToolchainStableTest
+    downstreamChangeLeafOnlyTest
     iterationCostBoundedTest
     customisationLayerBoundedTest
     ;
