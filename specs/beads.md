@@ -181,6 +181,34 @@ wrapix itself). The write is idempotent and persists in
 `.beads/config.yaml`, so subsequent bd calls in that repo skip
 auto-export until a consumer explicitly re-enables it.
 
+### Beads-worktree resilience
+
+The beads-branch sync recreates the beads worktree when it is absent **or**
+present-but-invalid. The recreate guard fires both when the worktree
+directory does not exist and when it exists but is no longer a valid git
+worktree — e.g. its admin directory `.git/worktrees/<branch>` was pruned or
+removed, leaving a dangling gitdir pointer. In the invalid case `beads-push`
+prunes the stale worktree registration, removes the directory, and re-adds
+the worktree relative to the current `$ROOT` (falling back to
+`origin/<branch>`, or skipping with a notice when no `<branch>` exists).
+Rebuilding relative to the running `$ROOT` keeps the pointers correct from
+both host and container contexts — the checkout is bind-mounted, so worktree
+admin files store context-dependent absolute paths.
+
+Removing the directory is non-destructive: the canonical bead data has
+already been pushed to the on-disk Dolt remote earlier in this run, the
+`<branch>` commits live in the shared `.git` object store rather than inside
+the worktree, and the worktree's `dolt-remote/` copy is rsynced fresh from
+`$REMOTE_DIR` on every run. Recovery only triggers on an already-invalid
+worktree, whose contents were inaccessible regardless.
+
+Every git invocation in the beads-branch sync — including the
+`git worktree add` that recreates the worktree — uniformly skips prek,
+because the `beads` branch legitimately carries no prek config and a
+post-checkout hook firing there would abort the sync with
+`No prek.toml … found`. The prek-skip is scoped to this section; the
+preceding Dolt commit/push phase is unchanged.
+
 ### Pre-pull cleanup
 
 Before `git pull --rebase` in the beads worktree, `beads-push` commits
@@ -278,6 +306,22 @@ upstream, not by this spec.
   never aborts with "You have unstaged changes"
   [judge](../tests/judges/beads.sh#test_beadspush_pre_pull_cleanup_canonical)
 
+- When the beads worktree directory exists but is no longer a valid git
+  worktree (its `.git/worktrees/<branch>` admin directory was pruned or
+  removed, leaving a dangling gitdir), `beads-push` prunes, removes, and
+  recreates the worktree relative to the current `$ROOT`, then completes the
+  beads-branch sync — exiting 0, printing `beads-push: synced to GitHub`, and
+  advancing `origin/<branch>` with no `fatal: not a git repository: (null)`
+  error
+  [judge](../tests/judges/beads.sh#test_beadspush_recovers_orphaned_worktree)
+
+- Every git invocation in the beads-branch sync, including the
+  `git worktree add` that recreates the worktree, skips prek, so a fresh
+  worktree recreate completes without the caller setting
+  `PREK_ALLOW_NO_CONFIG` and without a `No prek.toml … found` error from the
+  config-less `beads` branch
+  [judge](../tests/judges/beads.sh#test_beadspush_worktree_recreate_skips_prek)
+
 ## Requirements
 
 ### Functional
@@ -309,6 +353,12 @@ upstream, not by this spec.
    the git root is unresolvable it fails fast with an actionable message;
    otherwise it runs the dolt-sync and beads-branch sync. Consumers need no
    `$LOOM_INSIDE` guard around the call.
+10. **Beads-worktree resilience** — the beads-branch sync recreates the
+    beads worktree when it is absent or present-but-invalid (dangling gitdir
+    after the admin directory was pruned/removed), rebuilding relative to the
+    current `$ROOT` so host and container paths stay correct; and every git
+    invocation in that section, including the recreating `git worktree add`,
+    skips prek so the config-less `beads` branch does not abort the sync.
 
 ### Non-Functional
 
