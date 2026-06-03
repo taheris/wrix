@@ -51,6 +51,30 @@ Tier 1 is built with `dockerTools.buildLayeredImage` (a tar in the store) so it 
 
 The leaf's **customisation layer** (its final layer — generated files, metadata, and anything not held in a standalone Nix store path, including the `profileEnv` symlink tree) re-hashes whenever any of its inputs change, but it rides above the stable tiers, so a tier-2-only change leaves every tier-0 and tier-1 blob byte-identical. The `profileEnv` symlink tree references tier-0 and tier-1 store paths that resolve from the lower layers at runtime, so the leaf's `remove_paths` strips them from its own graph without breaking PATH. Each tier's own layer count stays well below the 127-layer OCI ceiling: tiers 0 and 1 bound `maxLayers` to their fixed closures, and the leaf budgets only its delta plus the customisation layer.
 
+## In-Container Nix Store Consistency
+
+The container runs Nix as the unprivileged runtime user directly against the
+store — no `nix-daemon`, and the in-container build sandbox is disabled (Build
+pipeline step 3; threat-model rationale in `specs/security.md`). `/nix/store` is
+world-writable (`0777`), so *additive* operations — substituting new paths from
+a binary cache, building new derivations — succeed even though the baked paths
+are root-owned. What the unprivileged client cannot do is mutate or delete an
+existing root-owned path.
+
+So the image must ship a **Nix database consistent with its on-disk store**:
+every path under `/nix/store` is registered valid, and no orphaned
+(on-disk-but-unregistered) path remains. An inconsistent database makes Nix
+treat an already-present path as missing and rebuild it; to write the new
+output it first deletes the stale on-disk copy, whose `chmod` on a root-owned
+path fails with `EPERM` for the unprivileged client. Registering the full
+closure at build time (e.g. `closureInfo` + `nix-store --load-db`) closes that
+gap. The registration is a single database file in the leaf's customisation
+layer, so it adds no store-path copy-up and re-hashes only at that layer's
+existing cadence — the provenance-tiered chain is unaffected.
+
+The runtime acceptance — a fresh container letting the unprivileged user run
+`nix develop` / `nix build` — is owned by `sandbox.md`.
+
 ## Hook Installation
 
 Every profile image carries the host-equivalent prek setup so commits and pushes from inside the container fire the same `.pre-commit-config.yaml` chain the host runs (see `pre-commit.md` § Hook Installation in Profile Containers):
@@ -89,6 +113,8 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
   [check](grep -nE 'agent.*direct|directRunner' lib/sandbox/image.nix lib/sandbox/default.nix)
 - `nix-command` and `flakes` are enabled in `/etc/nix/nix.conf` and Nix's in-container build sandbox is disabled
   [check](grep -nE 'experimental-features|sandbox' lib/sandbox/stable-profile-image.nix)
+- The baked image's Nix database is consistent with its on-disk store: every path under `/nix/store` is registered valid, and no orphaned (on-disk but unregistered) store path remains
+  [system?](nix run .#test-image-nix-db-consistent)
 - CA certificates from `pkgs.cacert` are baked into the image and `SSL_CERT_FILE` resolves to the bundle
   [check](grep -nE 'cacert|SSL_CERT_FILE' lib/sandbox/image.nix)
 - The platform entrypoint script (`lib/sandbox/{linux,darwin}/entrypoint.sh`) is the image's startup command
@@ -112,6 +138,7 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
 6. **Entrypoint embedding** — the platform-specific entrypoint script (`lib/sandbox/{linux,darwin}/entrypoint.sh`) is the image's startup command.
 7. **Hook installation** — every profile image carries `wrapix.prekHooks` plus `wrapix.prePushChecks` and `wrapix.skipIfMissing` on `PATH`; the entrypoint configures `core.hooksPath` on `/workspace/.git` when `.pre-commit-config.yaml` is present. See `pre-commit.md` for the wrapper contracts.
 8. **Provenance-tiered layering** — the image is a three-stage `fromImage` chain (base → stable-profile → leaf). Each tier's layer membership is fixed by its own closed contents and removes the union of all lower tiers' closures via `remove_paths`, so a tier-2 (downstream/volatile) change leaves tier-0 and tier-1 blobs byte-identical. Tier membership keys on `corePackages` (see `profiles.md`): the wrapix floor + profile toolchain + wrapix-generated content is tier 1; downstream-appended packages, the agent runtime, and per-invocation generated files are tier 2. Both Linux (`streamLayeredImage` leaf) and Darwin (`buildLayeredImage` leaf) chain identically; intermediate tiers are always `buildLayeredImage` tars so they can serve as a `fromImage` on both platforms.
+9. **Store/DB consistency** — the image registers its full on-disk closure as valid in the Nix database, with no orphaned unregistered paths, so the unprivileged in-container runtime user can perform additive Nix operations (substituting new paths, building new derivations) without mutating root-owned store paths. The registration rides in the leaf customisation layer and does not perturb the provenance-tiered chain. Runtime acceptance is owned by `sandbox.md`.
 
 ### Non-Functional
 
@@ -121,6 +148,7 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
 
 ## Out of Scope
 
+- In-container mutation or garbage-collection of existing root-owned store paths. The image guarantees additive Nix operations (substituting new paths, building new derivations) by the unprivileged runtime user; deleting, rewriting, or GC-ing baked store paths is not supported.
 - Multi-architecture manifests (arm64 + amd64 in a single ref)
 - Image signing
 - Registry push automation (consumers install from a Nix store path via the launcher's platform install path; remote registries are user-side concerns)

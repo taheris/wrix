@@ -137,6 +137,8 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
   [system](bash tests/sandbox/filesystem-isolation.sh)
 - `mounts` and `env` passed to `mkSandbox` are merged into the profile and reach the container as configured
   [system](bash tests/sandbox/custom-mounts-env.sh)
+- In a fresh container built from a profile that ships `nix`, the unprivileged runtime user runs `nix develop -c true` and a `nix build` of a flake target to completion (exit 0) with no `Operation not permitted` failure on a `/nix/store` path
+  [system?](bash tests/sandbox/nix-in-container.sh)
 - The launcher accepts `WRAPIX_NETWORK=open` and `WRAPIX_NETWORK=limit`; any other value errors before the container starts
   [check](grep -nE "WRAPIX_NETWORK must be 'open' or 'limit'" lib/sandbox/linux/default.nix lib/sandbox/darwin/default.nix)
 - With `NET_ADMIN` available (`WRAPIX_MICROVM=1` on Linux, microVM on macOS), `WRAPIX_NETWORK=limit` restricts outbound to the merged allowlist
@@ -198,6 +200,7 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 10. **Launcher contract** — `wrapix run` reads `WRAPIX_DEFAULT_IMAGE_REF` and `WRAPIX_DEFAULT_IMAGE_SOURCE` from env; `wrapix spawn` reads `SpawnConfig` JSON. Both share container construction. Wrapper env-var pinning rules (which vars are caller-overridable defaults, which are unconditional) are owned by *Architecture > `package`*.
 11. **Per-launch mounts via SpawnConfig** — `wrapix spawn`'s `SpawnConfig.mounts` adds per-launch bind mounts on top of `profile.mounts` and `mkSandbox`'s `mounts`. Each entry maps `host_path → container_path` with `read_only: true` rendering `:ro`. On Linux this is a literal `-v` flag. On Darwin, `SpawnConfig.mounts` flows through the same mount classifier as `profile.mounts`: directories staged + copied, regular files copy-from-parent-dir, Unix-socket sources rejected at launch with a clear error (VirtioFS does not pass socket operations). The launcher does not validate that `host_path` exists; podman fails at runtime if it does not.
 12. **Workspace `bin/` PATH prepend** — When `/workspace/bin` exists inside the container, both Linux and macOS entrypoints prepend it to `PATH` so consumer-supplied shims under the workspace's `bin/` resolve ahead of image-baked binaries with the same name. The check is directory existence, not per-binary; the consumer owns what it ships in `bin/`. When the directory is absent, `PATH` is unchanged. The contract is PATH ordering only — wrapix does not create `/workspace/bin`, does not validate its contents, and does not allowlist individual shims.
+13. **In-container Nix (additive)** — a sandbox built from a `nix`-shipping profile lets the unprivileged runtime user run additive Nix operations (`nix develop`, `nix build`) without store-permission failures. The store stays root-owned and the runtime user stays unprivileged; correctness relies on the image shipping a Nix database consistent with its on-disk store (mechanism owned by `image-builder.md` § In-Container Nix Store Consistency). Mutation or GC of baked store paths is out of scope — see `image-builder.md` § Out of Scope.
 
 ### Non-Functional
 
