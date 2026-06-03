@@ -7,16 +7,36 @@
 # github sync is skipped with a notice.
 set -euo pipefail
 
+# Context guard — runs first, before the auto-export write and any bd dolt call.
+# Inside a loom-managed bead clone `origin` points at the driver workdir (not
+# GitHub) and `.git/beads-worktrees/<branch>` is absent; the driver publishes
+# main+beads after a Clean review verdict and the worker's bd writes are already
+# authoritative through the bind-mounted Dolt socket, so a push here targets the
+# wrong remote and races the driver. No-op rather than publish.
+if [[ -n "${LOOM_INSIDE:-}" ]]; then
+  echo "beads-push: \$LOOM_INSIDE set — loom driver owns publish; skipping" >&2
+  exit 0
+fi
+
 BRANCH="$(grep '^sync-branch:' .beads/config.yaml 2>/dev/null | awk '{print $2}' | tr -d '"' || echo beads)"
 BRANCH="${BRANCH:-beads}"
 
 # Peel back to the main workspace: when beads-push is invoked from inside
 # .git/beads-worktrees/<branch>, git rev-parse --show-toplevel returns the
 # worktree itself, which is not where the dolt socket lives.
+# || true: the empty-ROOT guard below turns an unresolved root into an
+# actionable error rather than letting (null) flow into the worktree git calls.
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 case "$ROOT" in
   */.git/beads-worktrees/*) ROOT="${ROOT%/.git/beads-worktrees/*}" ;;
 esac
+# Fail fast when no workspace root resolves ($LOOM_INSIDE is already handled
+# above): an empty ROOT would otherwise poison WT and the later `cd "$WT"` /
+# worktree git calls with `fatal: not a git repository: (null)`.
+if [[ -z "$ROOT" ]]; then
+  echo "beads-push: cannot resolve a git repository from '$PWD' — run inside a workspace checkout" >&2
+  exit 1
+fi
 WT="$ROOT/.git/beads-worktrees/$BRANCH"
 # Dolt-remote lives next to the database inside .beads/dolt/ so the
 # relative URL file://../dolt-remote resolves correctly from both the
