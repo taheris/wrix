@@ -168,9 +168,9 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 - `model = "<id>"` overrides `ANTHROPIC_MODEL` in the baked claude settings; null leaves the default in place
   [check](grep -nE 'ANTHROPIC_MODEL|modelEnvOverride' lib/sandbox/default.nix)
 - When `/workspace/bin` exists inside the container, it appears first on `PATH`, so a consumer-supplied shim at `/workspace/bin/<name>` resolves ahead of a same-named binary baked into the image
-  [system?](bash tests/sandbox/workspace-bin-path.sh)
+  [system](bash tests/sandbox/workspace-bin-path.sh)
 - When `/workspace/bin` does not exist, the container's `PATH` does not contain `/workspace/bin`
-  [system?](bash tests/sandbox/workspace-bin-path.sh)
+  [system](bash tests/sandbox/workspace-bin-path.sh)
 - Both `lib/sandbox/linux/entrypoint.sh` and `lib/sandbox/darwin/entrypoint.sh` implement the `/workspace/bin` PATH prepend
   [check](grep -nE 'PATH="/workspace/bin:' lib/sandbox/linux/entrypoint.sh lib/sandbox/darwin/entrypoint.sh)
 - The launcher preflight checks whether the image's content digest matches any image already present in the platform store before invoking the install pipeline; on a digest hit, no tar bytes are streamed and no `*-load` CLI is invoked
