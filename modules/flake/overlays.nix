@@ -27,30 +27,6 @@
           beads-push = m.push;
         };
 
-      # Override prek to 0.4.3 — nixpkgs nixos-unstable still pins 0.3.11,
-      # which crashes during hook cleanup (indicatif Drop hits a poisoned
-      # Mutex from a parallel worker, panic in destructor kills the hook
-      # before its verdict reaches git push). Fixed upstream in 0.3.12+ via
-      # indicatif 0.18.4 (j178/prek#1644). Drop this override and revert
-      # lib/prek/hooks/{pre-commit,pre-push} to omit --no-progress once
-      # nixpkgs catches up past 0.3.11.
-      prekOverride = final: prev: {
-        prek = prev.prek.overrideAttrs (_: rec {
-          version = "0.4.3";
-          src = final.fetchFromGitHub {
-            owner = "j178";
-            repo = "prek";
-            tag = "v${version}";
-            hash = "sha256-GseXLrklwVjrhgU3rfcBzM8ztnwjD631IgDGNb+4Plw=";
-          };
-          cargoDeps = final.rustPlatform.fetchCargoVendor {
-            inherit src;
-            name = "prek-${version}-vendor.tar.gz";
-            hash = "sha256-gMbEHkKcUc4QqpWua3dczvlkKywwHEf+qxkn82Tzrys=";
-          };
-        });
-      };
-
       # Agent runtime packages exposed to consumers:
       #
       #   claude-code — tracks nixos-unstable via flake.lock
@@ -62,7 +38,6 @@
         system = linuxSystem;
         overlays = [
           linuxOverlay
-          prekOverride
         ];
         config.allowUnfree = true;
       };
@@ -75,7 +50,6 @@
         inherit system;
         overlays = [
           hostOverlay
-          prekOverride
         ];
         config.allowUnfree = true;
       };
