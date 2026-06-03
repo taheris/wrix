@@ -166,7 +166,26 @@ if [[ "$push_rc" -ne 0 ]]; then
   fi
 fi
 
-if [ ! -d "$WT" ]; then
+# Beads-branch (github mirror) sync begins here. The `beads` branch carries no
+# prek config, so a post-checkout/commit hook firing on it aborts the sync with
+# `No prek.toml … found`. Skip prek uniformly across every git call below —
+# including the `git worktree add` that recreates the worktree — by exporting
+# the bypass once. The preceding Dolt commit/push phase is unaffected.
+export PREK_ALLOW_NO_CONFIG=1
+
+# Recreate the beads worktree when it is absent OR present-but-invalid. A
+# dangling `.git/worktrees/$BRANCH` (admin dir pruned/removed) leaves a stale
+# gitdir pointer that the pointer-fix below cannot repair; detect it via a
+# failing rev-parse, then prune the registration, drop the directory, and re-add
+# relative to the current $ROOT. Removing the directory is non-destructive: the
+# canonical bead data was already pushed to the Dolt remote above, the $BRANCH
+# commits live in the shared .git object store, and dolt-remote/ is rsynced
+# fresh from $REMOTE_DIR below.
+if [ ! -d "$WT" ] || ! git -C "$WT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  if [ -d "$WT" ]; then
+    git worktree prune
+    rm -rf "$WT"
+  fi
   if git rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
     git worktree add "$WT" "$BRANCH" --quiet
   elif git rev-parse --verify "origin/$BRANCH" >/dev/null 2>&1; then
@@ -195,11 +214,11 @@ cd "$WT"
 # the signal we want flushed so the subsequent status reflects real content.
 git update-index --refresh >/dev/null || true
 if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
-  PREK_ALLOW_NO_CONFIG=1 git add -A
-  PREK_ALLOW_NO_CONFIG=1 git commit -m "bd sync" --quiet
+  git add -A
+  git commit -m "bd sync" --quiet
 fi
 
-PREK_ALLOW_NO_CONFIG=1 git pull --rebase --quiet
+git pull --rebase --quiet
 
 if [ -d "$REMOTE_DIR" ]; then
   rsync -a --delete "$REMOTE_DIR/" "$WT/.beads/dolt-remote/"
@@ -209,9 +228,9 @@ fi
 # the signal we want flushed so the subsequent status reflects real content.
 git update-index --refresh >/dev/null || true
 if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
-  PREK_ALLOW_NO_CONFIG=1 git add -A
-  PREK_ALLOW_NO_CONFIG=1 git commit -m "bd sync" --quiet
+  git add -A
+  git commit -m "bd sync" --quiet
 fi
 
-PREK_ALLOW_NO_CONFIG=1 git push -u origin "$BRANCH" --quiet
+git push -u origin "$BRANCH" --quiet
 echo "beads-push: synced to GitHub"
