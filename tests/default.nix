@@ -41,6 +41,15 @@ let
         _wrapix_delta_bounded_probe = "v2";
       };
     };
+    # Same image but with `pkgs.nix` added to the profile's packages — a
+    # nix-shipping profile. Consumed by tests/sandbox/nix-in-container.sh,
+    # which drives live `nix develop`/`nix build` as the unprivileged
+    # runtime user and asserts no store-permission failure (FR #13).
+    nix = import ./sandbox/test-image.nix {
+      pkgs = linuxPkgs;
+      inherit treefmt;
+      shipNix = true;
+    };
   };
 
   # Shell utility tests run on all platforms

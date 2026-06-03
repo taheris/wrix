@@ -138,7 +138,7 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 - `mounts` and `env` passed to `mkSandbox` are merged into the profile and reach the container as configured
   [system](bash tests/sandbox/custom-mounts-env.sh)
 - In a fresh container built from a profile that ships `nix`, the unprivileged runtime user runs `nix develop -c true` and a `nix build` of a flake target to completion (exit 0) with no `Operation not permitted` failure on a `/nix/store` path
-  [system?](bash tests/sandbox/nix-in-container.sh)
+  [system](bash tests/sandbox/nix-in-container.sh)
 - The launcher accepts `WRAPIX_NETWORK=open` and `WRAPIX_NETWORK=limit`; any other value errors before the container starts
   [check](grep -nE "WRAPIX_NETWORK must be 'open' or 'limit'" lib/sandbox/linux/default.nix lib/sandbox/darwin/default.nix)
 - With `NET_ADMIN` available (`WRAPIX_MICROVM=1` on Linux, microVM on macOS), `WRAPIX_NETWORK=limit` restricts outbound to the merged allowlist

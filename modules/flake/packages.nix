@@ -91,6 +91,7 @@
             {
               test-image-base = test.testImages.base;
               test-image-base-perturbed = test.testImages.basePerturbed;
+              test-image-nix = test.testImages.nix;
             }
           else
             { }
