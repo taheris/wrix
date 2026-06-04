@@ -56,28 +56,31 @@ The leaf's **customisation layer** (its final layer — generated files, metadat
 
 ## In-Container Nix Store Consistency
 
-The container runs Nix as the unprivileged runtime user directly against the
-store — no `nix-daemon`, and the in-container build sandbox is disabled (Build
-pipeline step 3; threat-model rationale in `specs/security.md`). `/nix/store` is
-world-writable (`0777`), so *additive* operations — substituting new paths from
-a binary cache, building new derivations — succeed even though the baked paths
-are root-owned. What the unprivileged client cannot do is mutate or delete an
-existing root-owned path.
+The container runs Nix as the runtime user directly against the store — no
+`nix-daemon`, and the in-container build sandbox is disabled (Build pipeline
+step 3; threat-model rationale in `specs/security.md`). On the default boundary
+that user is rootless container-root (libfakeuid-spoofed to uid 1000), which
+maps to the host user that owns the baked store, so it can both *add* paths
+(substituting from a binary cache, building new derivations) and *mutate* the
+baked root-owned paths (replace, GC, delete) — store ownership is no longer a
+write barrier (runtime acceptance owned by `sandbox.md`).
 
-So the image must ship a **Nix database that exactly matches its on-disk
+The image must still ship a **Nix database that exactly matches its on-disk
 store** — the registered-valid set and the on-disk `/nix/store` contents are
 the *same* closure-closed set, with no discrepancy in **either** direction:
 
-- **No orphan** (on-disk but unregistered). Nix treats an already-present path
-  as missing and rebuilds it; to write the new output it first deletes the
-  stale on-disk copy, whose `chmod` on a root-owned path fails with `EPERM`
-  for the unprivileged client.
-- **No dangling registration** (registered valid but absent on disk). Nix
-  trusts the DB and feeds the missing path into a build as though present; the
-  builder then fails with `No such file or directory`. Because such a path is
-  typically a build intermediate with `allowSubstitutes = false`, it cannot
-  self-heal by substitution either, and the container cannot always rebuild it
-  locally — so the fault is unrecoverable without manual store surgery.
+- **No dangling registration** (registered valid but absent on disk) — the
+  load-bearing correctness requirement. Nix trusts the DB and feeds the missing
+  path into a build as though present; the builder then fails with `No such
+  file or directory`. Because such a path is typically a build intermediate
+  with `allowSubstitutes = false`, it cannot self-heal by substitution either,
+  and the container cannot always rebuild it locally — so the fault is
+  unrecoverable without manual store surgery.
+- **No orphan** (on-disk but unregistered). No longer a correctness failure now
+  that the runtime user owns the store — Nix treats the path as missing,
+  deletes the stale on-disk copy (a `chmod` the store owner can now perform),
+  and rebuilds it. Registering over exactly the materialized contents avoids
+  the wasted rebuild for free.
 
 The registration is therefore derived from the **materialized contents
 closure** — the exact path set copied into the image layers — **not** the
@@ -97,8 +100,9 @@ the provenance-tiered chain is unaffected. Materializing the missing
 intermediates into the rootfs instead would add store-path copy-up and re-hash
 a lower tier, trading the consistency bug for a caching regression.
 
-The runtime acceptance — a fresh container letting the unprivileged user run
-`nix develop` / `nix build` — is owned by `sandbox.md`.
+The runtime acceptance — a fresh container letting the runtime user run
+`nix develop` / `nix build` and mutate baked store paths — is owned by
+`sandbox.md`.
 
 ## Hook Installation
 
@@ -121,13 +125,13 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
 - `wrapix-base-image` holds only the universal bottom-of-closure: no profile-specific compiler toolchain leaks in (e.g. `pkgs.rustc`, which no profile references — the rust profile uses fenix's toolchain)
   [system](nix run .#test-base-image-universal)
 - `wrapix-stable-profile-<name>`'s derivation hash is invariant under the agent runtime selection and all leaf (tier-3) inputs — downstream-appended packages (`profile.packages` − `corePackages`), the merged Claude settings JSON, MCP configs, and `model`
-  [system?](nix run .#test-stable-profile-hash-stable)
+  [system](nix run .#test-stable-profile-hash-stable)
 - `wrapix-stable-profile-<name>` holds only fixed-per-instance content: no agent runtime — not the default `claude-code`, nor a consumer-supplied `piPkg`/`directRunner` — and no downstream-appended package leaks into it
-  [system?](nix run .#test-stable-profile-membership)
+  [system](nix run .#test-stable-profile-membership)
 - A downstream-pinned toolchain (`rustProfile { toolchain = ./rust-toolchain.toml }`) lands in tier 1 (`wrapix-stable-profile-<name>`), not the leaf
   [system](nix run .#test-pinned-toolchain-stable-tier)
 - A tier-3 (leaf) change — a downstream-appended package, a Claude-settings field, an MCP-config field, or `model` — leaves every tier-0, tier-1, and tier-2 (agent) layer-blob byte-identical in the resulting image's manifest; only leaf blobs change
-  [system?](nix run .#test-downstream-change-leaf-only)
+  [system](nix run .#test-downstream-change-leaf-only)
 - The selected agent runtime rides its own tier `wrapix-agent-<agent>-<name>`, chained atop `wrapix-stable-profile-<name>`; an agent-version change leaves every tier-0 and tier-1 blob byte-identical
   [system?](nix run .#test-agent-tier-isolated)
 - A non-selected agent's binary is absent from the image: an `agent = "direct"` image contains neither `claude-code` nor a `pi` runtime
@@ -169,7 +173,7 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
 6. **Entrypoint embedding** — the platform-specific entrypoint script (`lib/sandbox/{linux,darwin}/entrypoint.sh`) is the image's startup command.
 7. **Hook installation** — every profile image carries `wrapix.prekHooks` plus `wrapix.prePushChecks` and `wrapix.skipIfMissing` on `PATH`; the entrypoint configures `core.hooksPath` on `/workspace/.git` when `.pre-commit-config.yaml` is present. See `pre-commit.md` for the wrapper contracts.
 8. **Provenance-tiered layering** — the image is a four-stage `fromImage` chain (base → stable-profile → agent → leaf). Each tier's layer membership is fixed by its own closed contents and removes the union of all lower tiers' closures via `remove_paths`, so a tier-3 (leaf) change leaves tier-0, tier-1, and tier-2 blobs byte-identical. Tier membership: the wrapix floor + profile toolchain + wrapix-generated content is tier 1 (keyed on `corePackages`, see `profiles.md`); the single selected agent runtime (`claude-code`/`piPkg`/`directRunner`) is tier 2; downstream-appended packages and per-invocation generated files are tier 3. The agent tier rides *above* the toolchain so an agent-version bump never re-ships the heavier toolchain (which sits lowest, dragged only by a base change). Both Linux (`streamLayeredImage` leaf) and Darwin (`buildLayeredImage` leaf) chain identically; intermediate tiers (stable-profile, agent) are always `buildLayeredImage` tars so they can serve as a `fromImage` on both platforms.
-9. **Store/DB consistency** — the image's Nix database registers *exactly* its on-disk contents closure: no orphaned (on-disk but unregistered) path and no dangling (registered but absent) path, in either direction. The registered set is derived from the materialized path list copied into the image layers, not the build derivation's full closure (which includes unmaterialized intermediates like the `wrapix-*-profile-env` buildEnv). This lets the unprivileged in-container runtime user perform additive Nix operations (substituting new paths, building new derivations) without mutating root-owned store paths, and prevents a build from trusting a registered-but-missing path. The registration rides as a single DB file in the leaf customisation layer — it copies up no store path and does not perturb the provenance-tiered chain. Runtime acceptance is owned by `sandbox.md`.
+9. **Store/DB consistency** — the image's Nix database registers *exactly* its on-disk contents closure: no orphaned (on-disk but unregistered) path and no dangling (registered but absent) path, in either direction. The registered set is derived from the materialized path list copied into the image layers, not the build derivation's full closure (which includes unmaterialized intermediates like the `wrapix-*-profile-env` buildEnv). This prevents a build from trusting a registered-but-missing path (`No such file or directory`, unrecoverable without store surgery); the no-orphan direction is no longer a correctness requirement now that the runtime user owns the store, but registering over exactly the materialized contents secures it for free. The registration rides as a single DB file in the leaf customisation layer — it copies up no store path and does not perturb the provenance-tiered chain. Runtime acceptance is owned by `sandbox.md`.
 
 ### Non-Functional
 
@@ -179,7 +183,6 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
 
 ## Out of Scope
 
-- In-container mutation or garbage-collection of existing root-owned store paths. The image guarantees additive Nix operations (substituting new paths, building new derivations) by the unprivileged runtime user; deleting, rewriting, or GC-ing baked store paths is not supported.
 - Multi-architecture manifests (arm64 + amd64 in a single ref)
 - Image signing
 - Registry push automation (consumers install from a Nix store path via the launcher's platform install path; remote registries are user-side concerns)

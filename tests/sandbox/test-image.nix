@@ -18,8 +18,9 @@
 # images omit nix by default). The leaf renames to `nix` so the resulting
 # image tags as `wrapix-nix` and does not collide with the base variant in
 # the platform store. `tests/sandbox/nix-in-container.sh` builds this
-# variant to exercise live additive in-container Nix as the unprivileged
-# runtime user (specs/sandbox.md FR #13).
+# variant to exercise live in-container Nix (additive + store-mutating) as the
+# runtime user — rootless container-root, libfakeuid-spoofed to uid 1000
+# (specs/sandbox.md FR #13).
 {
   pkgs,
   treefmt ? null,
@@ -48,6 +49,10 @@ import ../../lib/sandbox/image.nix {
   inherit profile;
   entrypointPkg = testPkgs.hello;
   entrypointSh = ../../lib/sandbox/linux/entrypoint.sh;
+  # Mirror production (lib/sandbox/default.nix sets krunSupport = isLinux): bakes
+  # /lib/libfakeuid.so, which the default Linux boundary now LD_PRELOADs — the
+  # podman verifiers run as rootless container-root and rely on it for uid 1000.
+  krunSupport = testPkgs.stdenv.hostPlatform.isLinux;
   inherit claudeConfig;
   claudeSettings = { };
 }

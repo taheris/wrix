@@ -5,12 +5,23 @@ set -euo pipefail
 SESSION_START_EPOCH=$(date +%s)
 SESSION_START_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-cd /workspace
+# The launcher always passes HOME=/home/wrapix; default it so a bare
+# `podman run` of this entrypoint (tests, ad-hoc) still has a writable home —
+# git config below and the agent config seeding both need $HOME.
+export HOME="${HOME:-/home/wrapix}"
 
-if [[ -d /workspace/bin ]]; then export PATH="/workspace/bin:$PATH"; fi
+cd /workspace
 
 # shellcheck source=/dev/null
 . /git-ssh-setup.sh
+
+# On the default boundary the process runs as rootless container-root with
+# LD_PRELOAD=libfakeuid spoofing uid 1000, so every path created by the process
+# (/workspace, and nix's libgit2 flake/tarball caches under $XDG_CACHE_HOME) is
+# owned by container-root while git/libgit2 see uid 1000 -> "dubious ownership"
+# / "not owned by current user". Trust all paths: single identity, effectively
+# root, ephemeral container. Covers git ops and nix's git fetcher alike.
+git config --global --replace-all safe.directory '*'
 
 # Point core.hooksPath at the prek bundle baked into the image, per
 # specs/pre-commit.md § Bead-Container Hook Installation.
@@ -25,6 +36,12 @@ if [[ -d /workspace/.git ]] \
   git -C /workspace config --local core.hooksPath "$WRAPIX_PREK_HOOKS"
   unset _wrapix_hooks_current
 fi
+
+# Prepend /workspace/bin AFTER the entrypoint's own git bootstrap (git-ssh-setup,
+# safe.directory, hooksPath) so those resolve the baked git, never a consumer
+# shim — but BEFORE the agent guard/dispatch so a /workspace/bin/<agent> shim
+# still resolves for the agent.
+if [[ -d /workspace/bin ]]; then export PATH="/workspace/bin:$PATH"; fi
 
 # WRAPIX_AGENT selects the agent runtime. 'claude' (default) runs claude with
 # config merging and permission bypass; 'pi' runs pi-mono in JSONL RPC mode;

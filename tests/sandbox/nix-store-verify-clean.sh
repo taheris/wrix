@@ -19,10 +19,11 @@
 # reports it as a disappeared/missing path, and an additive build that trusts
 # the DB would dead-end on it with `No such file or directory`.
 #
-# The container is launched the way the Linux launcher launches it for the
-# runtime user (lib/sandbox/linux/default.nix): `--userns=keep-id` maps the
-# host caller's UID to the same UID inside and `--passwd-entry` names it
-# `wrapix`. The default entrypoint is bypassed (`--entrypoint /bin/bash`) so
+# The container is launched the way the Linux launcher launches the default
+# boundary (lib/sandbox/linux/default.nix): no `--userns=keep-id`, so the
+# process is rootless container-root (the store owner) with
+# `LD_PRELOAD=/lib/libfakeuid.so` spoofing uid 1000, and `--passwd-entry` names
+# it `wrapix`. The default entrypoint is bypassed (`--entrypoint /bin/bash`) so
 # the probe is the focused store-verify path, not the agent bootstrap. No
 # network is needed — `--verify` reads only the baked store and DB — so unlike
 # nix-in-container.sh this verifier never self-skips on a missing substituter.
@@ -118,14 +119,16 @@ fi
 echo "PROBE-OK"
 PROBE
 
-# Mirror the launcher's runtime-user invocation: keep-id UID mapping and a
-# wrapix passwd entry (lib/sandbox/linux/default.nix). No network: --verify
-# reads only the baked store.
+# Mirror the launcher's default-boundary invocation: no keep-id (rootless
+# container-root owns the store), LD_PRELOAD libfakeuid so tools see uid 1000,
+# and a wrapix passwd entry (lib/sandbox/linux/default.nix). No network:
+# --verify reads only the baked store.
 set +e
-output=$(podman run --rm --network=none --userns=keep-id \
+output=$(podman run --rm --network=none \
   --passwd-entry "wrapix:*:$(id -u):$(id -g)::/home/wrapix:/bin/bash" \
   --entrypoint /bin/bash \
   -e HOME=/home/wrapix \
+  -e LD_PRELOAD=/lib/libfakeuid.so \
   "$IMAGE_REF" \
   -c "$IN_CONTAINER" 2>&1)
 status=$?

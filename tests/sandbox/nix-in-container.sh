@@ -17,9 +17,10 @@
 # EPERM (mechanism owned by image-builder.md § In-Container Nix Store
 # Consistency).
 #
-# The container is launched the way the Linux launcher launches it for the
-# runtime user (lib/sandbox/linux/default.nix): `--userns=keep-id` maps the
-# host caller's UID to the same UID inside, `--passwd-entry` names it
+# The container is launched the way the Linux launcher launches the default
+# boundary (lib/sandbox/linux/default.nix): no `--userns=keep-id`, so the
+# process is rootless container-root (the store owner) with
+# `LD_PRELOAD=/lib/libfakeuid.so` spoofing uid 1000; `--passwd-entry` names it
 # `wrapix`, and a `U=true` tmpfs at /home/wrapix gives Nix a writable HOME.
 # The default entrypoint is bypassed (`--entrypoint /bin/bash`) so the probe
 # is the focused additive-Nix path, not the agent bootstrap.
@@ -102,6 +103,11 @@ if [[ "$uid" -eq 0 ]]; then
 fi
 echo "[probe] running as uid=$uid ($(id -un 2>/dev/null || echo '?'))" >&2
 
+# Mirror the entrypoint: under root+libfakeuid, /workspace and nix's libgit2
+# flake/tarball caches are owned by container-root while libgit2 sees uid 1000,
+# so the git fetcher rejects them as "not owned by current user" without this.
+git config --global --add safe.directory '*'
+
 command -v nix >/dev/null 2>&1 || { echo "FAIL: nix not on PATH inside the container" >&2; exit 1; }
 
 # The realistic nix-shipping-profile dev shell pulls a stdenv closure from a
@@ -147,19 +153,36 @@ out=$(cat /tmp/probe-out)
 [[ -n "$out" ]] || { echo "FAIL: nix build produced no output path" >&2; exit 1; }
 [[ -x "$out/bin/hello" ]] || { echo "FAIL: nix build target missing expected bin/hello: $out" >&2; exit 1; }
 echo "[probe] built and registered $out" >&2
+
+# Store-MUTATING op. The additive build above only substitutes a brand-new
+# closure owned by the writer, so it never chmods a baked root-owned path —
+# the real failure is create/replace/GC/delete -> deletePath -> fchmodat2(u+w)
+# on a baked path. Reproduce that exact primitive on a baked /nix/store dir:
+# under a plain uid-1000 mapping it fails EPERM; the runtime user must own the
+# store (rootless container-root) to make it writable.
+# -print -quit stops find at the first match: piping to `head` would SIGPIPE
+# find (141) under `set -o pipefail` before the chmod runs (/nix/store is huge).
+baked=$(find /nix/store -mindepth 1 -maxdepth 1 -type d -name '*-*' -print -quit)
+[[ -n "$baked" ]] || { echo "FAIL: no baked /nix/store path found to mutate" >&2; exit 1; }
+echo "[probe] chmod u+w baked store path (deletePath primitive): $baked" >&2
+chmod u+w "$baked"
+echo "[probe] mutated baked store path without EPERM" >&2
+
 echo "PROBE-OK"
 PROBE
 
-# Mirror the launcher's runtime-user invocation: keep-id UID mapping, a
-# wrapix passwd entry, and a writable tmpfs HOME (lib/sandbox/linux/default.nix).
+# Mirror the launcher's default-boundary invocation: no keep-id (rootless
+# container-root owns the store), LD_PRELOAD libfakeuid so tools see uid 1000,
+# a wrapix passwd entry, and a writable tmpfs HOME (lib/sandbox/linux/default.nix).
 set +e
-output=$(podman run --rm --network=pasta --userns=keep-id \
+output=$(podman run --rm --network=pasta \
   --passwd-entry "wrapix:*:$(id -u):$(id -g)::/home/wrapix:/bin/bash" \
   --mount type=tmpfs,destination=/home/wrapix,U=true \
   --entrypoint /bin/bash \
   -v "$WORKSPACE:/workspace:rw" \
   -w /workspace \
   -e HOME=/home/wrapix \
+  -e LD_PRELOAD=/lib/libfakeuid.so \
   "$IMAGE_REF" \
   -c "$IN_CONTAINER" 2>&1)
 status=$?

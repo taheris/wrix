@@ -135,8 +135,12 @@ with mechanics owned by `sandbox.md`:
 
 Acceptable because:
 
-- The container runs as a single non-root user; the only processes
-  that can read `/proc` are ones the agent itself started.
+- The container runs as a single identity (on the default Linux boundary,
+  rootless container-root — kernel uid 0 inside a user namespace owned by the
+  unprivileged host user, with tools seeing uid 1000 via `LD_PRELOAD`
+  libfakeuid; the microVM path is equivalent). There is no second principal,
+  so the only processes that can read `/proc` are ones the agent itself
+  started.
 - The credential is already present in the operator's environment (or in an
   on-host auth file); passing it through adds no new host-side exposure.
 - Tokens are session-scoped, with limits set by the provider.

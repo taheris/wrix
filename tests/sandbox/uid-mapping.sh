@@ -4,10 +4,10 @@
 #   Files created inside /workspace carry the host UID/GID, not a
 #   container-internal UID.
 #
-# Runs directly against the host's rootless podman with `--userns=keep-id`:
-# the host caller's UID maps to the same UID inside the container's user
-# namespace, so a write from container-side root or wrapix lands on disk
-# owned by the host caller.
+# Runs directly against the host's rootless podman on the default boundary
+# (no `--userns=keep-id`, matching lib/sandbox/linux/default.nix): the container
+# runs as rootless container-root, which maps to the invoking host user, so a
+# write to the /workspace bind mount lands on disk owned by the host caller.
 #
 #   Linux + rootless podman + nix  -> exercise the image
 #   Darwin                         -> exit 77 (Darwin path: tests/darwin/uid.nix)
@@ -69,7 +69,7 @@ podman tag "$loaded_id" "$IMAGE_REF"
 HOST_UID=$(id -u)
 
 # Write a file from inside the container.
-podman run --rm --network=pasta --userns=keep-id \
+podman run --rm --network=pasta \
   --entrypoint /bin/bash \
   -v "$WORKSPACE:/workspace:rw" \
   -w /workspace \
@@ -92,7 +92,7 @@ content=$(cat "$WORKSPACE/container-file.txt")
 }
 
 # Create a subdirectory + nested file; ownership should propagate.
-podman run --rm --network=pasta --userns=keep-id \
+podman run --rm --network=pasta \
   --entrypoint /bin/bash \
   -v "$WORKSPACE:/workspace:rw" \
   -w /workspace \

@@ -492,6 +492,23 @@ in
           CONTAINER_CMD=()
         fi
 
+        # Boundary-dependent UID handling. The image bakes /nix/store as
+        # root:root, so store-mutating nix ops (GC/replace/delete -> deletePath
+        # -> fchmodat2) need the runtime user to own the store.
+        #   microVM (krun)   — keep --userns=keep-id; krun maps the host user to
+        #                       root inside the VM and krun-init.sh sets
+        #                       LD_PRELOAD there.
+        #   default container — drop keep-id so rootless container-root maps to
+        #                       the host user that owns the baked store, and
+        #                       LD_PRELOAD libfakeuid so tools still see uid 1000.
+        #                       /workspace files still land as the host UID
+        #                       because container-root maps to the invoking user.
+        if [ -n "$RUNTIME_ARGS" ]; then
+          USERNS_ARGS="--userns=keep-id"
+        else
+          USERNS_ARGS=""
+        fi
+
         # Per-subcommand wiring:
         #   run   — interactive: TTY allocated, host env passthrough.
         #   spawn — non-TTY: stdio piped, env strictly from SpawnConfig.
@@ -528,6 +545,9 @@ in
           -e "WRAPIX_NETWORK_ALLOWLIST=${networkAllowlist}"
         )
         [ -n "$KRUN_CMD_ENV" ] && ENV_ARGS+=(-e "$KRUN_CMD_ENV")
+        # default boundary: spoof uid 1000 for tools while the process runs as
+        # the store-owning rootless container-root (see USERNS_ARGS above).
+        [ -z "$RUNTIME_ARGS" ] && ENV_ARGS+=(-e "LD_PRELOAD=/lib/libfakeuid.so")
 
         RUN_IMAGE="$IMAGE_REF"
 
@@ -540,7 +560,7 @@ in
           --memory=${toString memoryMb}m \
           --pids-limit=4096 \
           --network=pasta \
-          --userns=keep-id \
+          $USERNS_ARGS \
           --passwd-entry "wrapix:*:$(id -u):$(id -g)::/home/wrapix:/bin/bash" \
           --mount type=tmpfs,destination=/home/wrapix,U=true \
           ${
