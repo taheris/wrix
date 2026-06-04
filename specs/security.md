@@ -6,7 +6,7 @@ credential surfaces, network exfil baseline, and audit anchor.
 ## Problem Statement
 
 AI coding agents running inside wrapix sandboxes hold three kinds of
-credentials (deploy key, signing key, OAuth token), reach a small set
+credentials (deploy key, signing key, agent API credentials), reach a small set
 of network destinations, and produce session artefacts the operator
 can later inspect. The per-component specs (`sandbox.md`, `image-builder.md`,
 `linux-builder.md`, `profiles.md`) own the *mechanics* of each surface;
@@ -43,8 +43,9 @@ of scope.
 
 ### Credential Surfaces
 
-Three credentials cross the host-container boundary: the deploy key,
-the signing key, and the OAuth token.
+The credentials crossing the host-container boundary are the deploy key,
+the signing key, and the agent's API credentials (claude's OAuth token, or
+a non-claude agent's provider API key / auth file).
 
 #### Deploy & Signing Keys
 
@@ -117,23 +118,35 @@ check. The justification is symmetry with the existing surface: a
 hostile parent could already write to `$HOME/.ssh/deploy_keys/`, so
 accepting env pointers adds no new attack surface.
 
-#### OAuth Token
+#### Agent API Credentials
 
-`CLAUDE_CODE_OAUTH_TOKEN` reaches the container via env passthrough
-(mechanics owned by `sandbox.md`). The exposure surface inside the
-container is `/proc/$pid/environ` of the agent's own process.
+The agent's API credentials reach the container at **runtime only** — they
+are never baked into an image layer (an image is content-addressed and
+widely shared, so a secret in a layer leaks). Two delivery channels, both
+with mechanics owned by `sandbox.md`:
+
+- **Env passthrough** — claude's `CLAUDE_CODE_OAUTH_TOKEN`, or a non-claude
+  agent's provider key (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, …), passed
+  through `env` / host env / `SpawnConfig.env`. The exposure surface inside
+  the container is `/proc/$pid/environ` of the agent's own process.
+- **Credential-file mount** — a file-based agent auth store (e.g. pi's
+  `~/.pi/agent/auth.json` holding an OAuth/subscription token) bind-mounted
+  from the host, like the deploy key.
 
 Acceptable because:
 
 - The container runs as a single non-root user; the only processes
   that can read `/proc` are ones the agent itself started.
-- The token is already present in the operator's environment;
-  passing it through adds no new host-side exposure surface.
-- Tokens are session-scoped, with limits set by the OAuth provider.
+- The credential is already present in the operator's environment (or in an
+  on-host auth file); passing it through adds no new host-side exposure.
+- Tokens are session-scoped, with limits set by the provider.
 
 A secrets-file mount (`/run/secrets/oauth_token`) would prevent
 `/proc/environ` exposure but adds complexity for marginal benefit
-against the stated threat model.
+against the stated threat model. wrapix does not model providers or keys
+itself — provider/model selection and the agent's own credential resolution
+(pi's `auth.json`, claude's settings) are the agent's concern; wrapix only
+delivers the secret into the container.
 
 ### Network Exfil Baseline
 
