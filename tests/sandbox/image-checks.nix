@@ -1161,6 +1161,130 @@ let
         '';
   };
 
+  # Nix-DB no-dangling verifier (specs/image-builder.md § In-Container Nix Store
+  # Consistency; Success Criteria "The baked image's Nix database registers no
+  # dangling path"). The complement of the orphan check above: every path the
+  # baked DB registers VALID must exist on disk. The full build closure
+  # (leafContents ++ lowerTiersRootPaths) over-registers — it drags in
+  # prekHooksBundle (config.Env-only, never in any tier's `contents`) and its
+  # config.Env-unique closure, which buildLayeredImage never materializes into a
+  # store layer. Registering those bakes a dangling (registered-but-absent) path
+  # that makes an additive `nix build` trust the DB into feeding a missing path
+  # to a builder, which then fails with `No such file or directory`. image.nix
+  # registers over `lowerTiersContents` (the materialized contents closure), so
+  # the registered set must equal the on-disk set with zero dangling paths.
+  #
+  # The test reconstructs the composed image's on-disk store the same way the
+  # orphan check does — the union of store paths across all three tiers' layer
+  # tars — then reads the baked db.sqlite ValidPaths and asserts no REGISTERED
+  # path is absent from disk. Built via image.nix directly with a light
+  # entrypointPkg so the check does not drag in claude-code, through the same
+  # tier chain that produced the diagnosed dangling registration.
+  imageNixDbNoDanglingTest = pkgs.writeShellApplication {
+    name = "test-image-nix-db-no-dangling";
+    runtimeInputs = lib.optionals isLinux [
+      pkgs.coreutils
+      pkgs.gnutar
+      pkgs.gnugrep
+      pkgs.jq
+      pkgs.sqlite
+    ];
+    text =
+      if isLinux then
+        ''
+          leaf_stream=${nixDbProbeImage}
+          tier1_tar=${nixDbProbeImage.stableProfileImage}
+          tier0_tar=${nixDbProbeImage.baseImage}
+
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+
+          "$leaf_stream" > "$tmp/leaf.tar"
+
+          # Unpack each tier's docker-archive and list the store paths every
+          # layer blob carries. The union across all three tiers is the composed
+          # image's on-disk store.
+          unpack_dir="$tmp/archives"
+          mkdir -p "$unpack_dir"
+          list_tier_store_paths() {
+              local arc="$1" d
+              d=$(mktemp -d -p "$unpack_dir")
+              tar -xf "$arc" -C "$d"
+              local layer
+              while IFS= read -r layer; do
+                  tar -tf "$d/$layer"
+              done < <(jq -r '.[0].Layers[]' "$d/manifest.json")
+          }
+
+          {
+              list_tier_store_paths "$tmp/leaf.tar"
+              list_tier_store_paths "$tier1_tar"
+              list_tier_store_paths "$tier0_tar"
+          } | grep -oE 'nix/store/[a-z0-9]{32}-[^/]+' | sort -u | sed 's#^#/#' \
+              > "$tmp/ondisk"
+
+          # Extract the baked Nix DB from the leaf customisation layer (WAL-mode
+          # sqlite: the -wal/-shm sidecars must travel with db.sqlite).
+          leafx="$tmp/leafx"
+          mkdir -p "$leafx"
+          tar -xf "$tmp/leaf.tar" -C "$leafx"
+          dbroot="$tmp/dbroot"
+          mkdir -p "$dbroot"
+          db=""
+          while IFS= read -r layer; do
+              if tar -tf "$leafx/$layer" | grep -qE '(^|\./)nix/var/nix/db/db\.sqlite$'; then
+                  tar -xf "$leafx/$layer" -C "$dbroot"
+                  db="$dbroot/nix/var/nix/db/db.sqlite"
+                  break
+              fi
+          done < <(jq -r '.[0].Layers[]' "$leafx/manifest.json")
+
+          if [[ -z "$db" || ! -f "$db" ]]; then
+              echo "FAIL: no nix/var/nix/db/db.sqlite found in any leaf layer" >&2
+              echo "      (includeNixDB / load-db did not bake a database)" >&2
+              exit 1
+          fi
+
+          chmod -R u+rwX "$dbroot/nix/var/nix/db"
+          sqlite3 "$db" 'SELECT path FROM ValidPaths' | sort -u \
+              > "$tmp/registered"
+
+          ondisk_count=$(wc -l < "$tmp/ondisk")
+          registered_count=$(wc -l < "$tmp/registered")
+          if [[ "$ondisk_count" -eq 0 ]]; then
+              echo "FAIL: reconstructed on-disk store is empty; the test did not" >&2
+              echo "      enumerate the image's store paths" >&2
+              exit 1
+          fi
+          if [[ "$registered_count" -eq 0 ]]; then
+              echo "FAIL: baked Nix DB registered no ValidPaths" >&2
+              exit 1
+          fi
+
+          # Every registered-valid path must exist on disk — no dangling.
+          dangling=$(comm -13 "$tmp/ondisk" "$tmp/registered")
+          if [[ -n "$dangling" ]]; then
+              dangling_count=$(printf '%s\n' "$dangling" | grep -c '^' || true)
+              echo "FAIL: $dangling_count registered-valid path(s) are absent from the" >&2
+              echo "      image's on-disk store (dangling registrations break additive" >&2
+              echo "      in-container 'nix build' with 'No such file or directory'):" >&2
+              printf '%s\n' "$dangling" | sed 's/^/  /' >&2
+              exit 1
+          fi
+
+          echo "test-image-nix-db-no-dangling: PASS ($registered_count registered paths all present on disk; no dangling)"
+        ''
+      else
+        ''
+          # streamLayeredImage's stream script carries a Linux Python shebang;
+          # reconstructing the on-disk store from the leaf docker-archive here
+          # is Linux-only. The materialized-contents registration in image.nix
+          # runs identically under buildLayeredImage on Darwin.
+          echo "test-image-nix-db-no-dangling: skipped on this platform (streamLayeredImage is Linux-only)" >&2
+          exit 0
+        '';
+  };
+
 in
 {
   inherit
@@ -1178,5 +1302,6 @@ in
     iterationCostBoundedTest
     customisationLayerBoundedTest
     imageNixDbConsistentTest
+    imageNixDbNoDanglingTest
     ;
 }

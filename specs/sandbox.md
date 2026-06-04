@@ -150,7 +150,7 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 - In a fresh container built from a profile that ships `nix`, the unprivileged runtime user runs `nix develop -c true` and a `nix build` of a flake target to completion (exit 0) with no `Operation not permitted` failure on a `/nix/store` path
   [system](bash tests/sandbox/nix-in-container.sh)
 - A freshly provisioned container — with no prior store surgery — passes `nix-store --verify --check-contents` with zero missing or dangling paths, so an additive `nix build` cannot fail with `No such file or directory` on a path the baked Nix DB registers as valid (the build-time guarantee is owned by `image-builder.md` § In-Container Nix Store Consistency)
-  [system?](bash tests/sandbox/nix-store-verify-clean.sh)
+  [system](bash tests/sandbox/nix-store-verify-clean.sh)
 - The launcher accepts `WRAPIX_NETWORK=open` and `WRAPIX_NETWORK=limit`; any other value errors before the container starts
   [check](grep -nE "WRAPIX_NETWORK must be 'open' or 'limit'" lib/sandbox/linux/default.nix lib/sandbox/darwin/default.nix)
 - With `NET_ADMIN` available (`WRAPIX_MICROVM=1` on Linux, microVM on macOS), `WRAPIX_NETWORK=limit` restricts outbound to the merged allowlist

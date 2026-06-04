@@ -70,11 +70,20 @@ let
 
   # The on-disk roots tiers 0+1 contribute to the composed image: the base
   # contents, this tier's own contents, and prekHooksBundle (reachable only via
-  # config.Env, but buildLayeredImage still layers it). Exposed so the leaf can
-  # both remove_paths the whole union from its layering graph and register the
-  # full on-disk closure in the baked Nix DB (specs/image-builder.md
-  # § In-Container Nix Store Consistency).
+  # config.Env). Exposed so the leaf can remove_paths the whole union from its
+  # layering graph (specs/image-builder.md § Base Image Layering).
   lowerTiersRootPaths = baseContents ++ tierContents ++ [ prekHooksBundle ];
+
+  # The store paths tiers 0+1 actually MATERIALIZE on disk: each tier's
+  # dockerTools `contents` and nothing else. prekHooksBundle is deliberately
+  # absent — it rides in `config.Env` (WRAPIX_PREK_HOOKS) only, never in any
+  # tier's `contents`, so buildLayeredImage never copies it (or its
+  # config.Env-unique closure) into a store layer. Exposed so the leaf registers
+  # the baked Nix DB over the materialized contents closure, not the full build
+  # closure: registering prekHooksBundle would bake a dangling (registered but
+  # absent) path that breaks additive in-container Nix ops
+  # (specs/image-builder.md § In-Container Nix Store Consistency).
+  lowerTiersContents = baseContents ++ tierContents;
 
   # Everything tiers 0+1 ship, exposed so the leaf's custom layeringPipeline can
   # remove_paths the whole union (specs/image-builder.md § Base Image Layering).
@@ -129,5 +138,5 @@ dockerTools.buildLayeredImage {
   ];
 }
 // {
-  inherit lowerTiersClosure lowerTiersRootPaths;
+  inherit lowerTiersClosure lowerTiersRootPaths lowerTiersContents;
 }

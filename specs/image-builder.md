@@ -145,7 +145,7 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
 - The baked image's Nix database registers no orphaned path: every path on disk under `/nix/store` is registered valid
   [system](nix run .#test-image-nix-db-consistent)
 - The baked image's Nix database registers no dangling path: every path registered valid exists on disk, so a freshly provisioned container passes `nix-store --verify --check-contents` with zero missing paths and an additive `nix build` cannot fail with `No such file or directory` on a registered path. The registration is derived from the materialized contents closure, not the full build closure
-  [system?](nix run .#test-image-nix-db-no-dangling)
+  [system](nix run .#test-image-nix-db-no-dangling)
 - CA certificates from `pkgs.cacert` are baked into the image and `SSL_CERT_FILE` resolves to the bundle
   [check](grep -nE 'cacert|SSL_CERT_FILE' lib/sandbox/image.nix)
 - The platform entrypoint script (`lib/sandbox/{linux,darwin}/entrypoint.sh`) is the image's startup command

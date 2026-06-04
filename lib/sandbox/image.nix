@@ -161,17 +161,27 @@ let
     profileEnv
   ];
 
-  # The image's full on-disk store: the leaf's own contents plus every path the
-  # base + stable-profile tiers physically lay down (their generated passwd /
-  # group / nix.conf, coreEnv, base bottom-of-closure, and prekHooksBundle).
-  # Registering this whole closure in the baked Nix DB leaves no orphaned
+  # The image's MATERIALIZED on-disk store: the closure of the exact `contents`
+  # path-lists dockerTools copies into the layers — the leaf's own contents plus
+  # every path the base + stable-profile tiers physically lay down (their
+  # generated passwd / group / nix.conf, coreEnv, and base bottom-of-closure).
+  # Registering this closure — and ONLY this closure — keeps the baked Nix DB an
+  # honest description of the disk in BOTH directions: no orphaned
   # (on-disk-but-unregistered) path, so the unprivileged in-container user's
-  # additive Nix ops never try to chmod a root-owned store path
-  # (specs/image-builder.md § In-Container Nix Store Consistency). The DB rides
-  # in the leaf customisation layer — registration is metadata, it copies no
-  # lower-tier store path up, so the provenance-tiered chain is unperturbed.
+  # additive Nix ops never chmod a root-owned store path, AND no dangling
+  # (registered-but-absent) path, so an additive `nix build` never trusts the DB
+  # into feeding a missing path to a builder that then fails with `No such file
+  # or directory` (specs/image-builder.md § In-Container Nix Store Consistency).
+  #
+  # `lowerTiersContents` (NOT `lowerTiersRootPaths`) is the materialized list:
+  # the full build closure drags in unmaterialized intermediates — prekHooksBundle
+  # (config.Env-only, never in any tier's `contents`) and image-build artifacts —
+  # that are never copied into the rootfs; registering them is precisely what
+  # bakes a dangling path. The DB rides in the leaf customisation layer —
+  # registration is metadata, it copies no lower-tier store path up, so the
+  # provenance-tiered chain is unperturbed.
   imageNixDb = pkgs.closureInfo {
-    rootPaths = leafContents ++ stableProfileImage.lowerTiersRootPaths;
+    rootPaths = leafContents ++ stableProfileImage.lowerTiersContents;
   };
 
   imageName = "wrapix-${profile.name}${pkgs.lib.optionalString (agent != "claude") "-${agent}"}";
@@ -250,12 +260,14 @@ let
         )}
       ''}
 
-      # Register the FULL on-disk closure in the nix db. includeNixDB covers
-      # only the leaf's own `contents`; the fromImage tiers' paths (generated
-      # passwd/group/nix.conf, coreEnv, base bottom-of-closure) and
-      # prekHooksBundle (config.Env only) would otherwise stay on disk but
-      # unregistered — orphans that break additive in-container Nix ops
-      # (specs/image-builder.md § In-Container Nix Store Consistency).
+      # Register the materialized on-disk closure in the nix db. includeNixDB
+      # covers only the leaf's own `contents`; the fromImage tiers' materialized
+      # paths (generated passwd/group/nix.conf, coreEnv, base bottom-of-closure)
+      # would otherwise stay on disk but unregistered — orphans that break
+      # additive in-container Nix ops. The closure is taken over the materialized
+      # contents (lowerTiersContents), so it registers neither an orphan nor a
+      # dangling path (specs/image-builder.md § In-Container Nix Store
+      # Consistency).
       NIX_STATE_DIR=$PWD/nix/var/nix \
         ${pkgs.buildPackages.nix}/bin/nix-store --load-db \
         < ${imageNixDb}/registration

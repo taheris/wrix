@@ -246,6 +246,12 @@ in
       program = "${sandboxImageChecks.imageNixDbConsistentTest}/bin/test-image-nix-db-consistent";
     };
 
+    image-nix-db-no-dangling = {
+      meta.description = "Verify the baked image's Nix DB registers no dangling (registered-but-absent) path (Linux only)";
+      type = "app";
+      program = "${sandboxImageChecks.imageNixDbNoDanglingTest}/bin/test-image-nix-db-no-dangling";
+    };
+
     # profiles.rust.buildPackage [verify] hash invariants (specs/profiles.md).
     profiles-build-package = {
       meta.description = "Verify profiles.rust.buildPackage hash invariants (bin/clippy/nextest/cargoArtifacts)";

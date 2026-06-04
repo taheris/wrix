@@ -14,6 +14,7 @@ _:
         test-image-digest-matches-stored-id = test.apps.image-digest-matches-stored-id;
         test-image-install-digest-skip = test.apps.image-install-digest-skip;
         test-image-nix-db-consistent = test.apps.image-nix-db-consistent;
+        test-image-nix-db-no-dangling = test.apps.image-nix-db-no-dangling;
         test-iteration-cost-bounded = test.apps.iteration-cost-bounded;
         test-pinned-toolchain-stable-tier = test.apps.pinned-toolchain-stable-tier;
         test-profiles-build-package = test.apps.profiles-build-package;
