@@ -112,12 +112,21 @@ fi
 # skip Claude-specific config (neither has a permission system or settings.json).
 WRAPIX_AGENT="${WRAPIX_AGENT:-claude}"
 case "$WRAPIX_AGENT" in
-  claude|pi|direct) ;;
+  claude) WRAPIX_AGENT_BIN=claude ;;
+  pi) WRAPIX_AGENT_BIN=pi ;;
+  direct) WRAPIX_AGENT_BIN=loom-direct-runner ;;
   *)
     echo "Error: unknown WRAPIX_AGENT: $WRAPIX_AGENT (expected 'claude', 'pi', or 'direct')" >&2
     exit 1
     ;;
 esac
+
+# A command override ($# > 0) execs "$@" instead of the agent, so the
+# binary-presence guard applies only to agent-exec runs.
+if [[ $# -eq 0 ]] && ! command -v "$WRAPIX_AGENT_BIN" >/dev/null 2>&1; then
+  echo "Error: WRAPIX_AGENT=$WRAPIX_AGENT selects '$WRAPIX_AGENT_BIN', but that binary is not present in this image" >&2
+  exit 1
+fi
 
 if [[ "$WRAPIX_AGENT" = "claude" ]]; then
   # Initialize Claude config and settings
