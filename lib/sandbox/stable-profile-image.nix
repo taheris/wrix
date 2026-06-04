@@ -13,7 +13,6 @@
 {
   pkgs,
   profile,
-  claudePkg,
 }:
 
 let
@@ -54,8 +53,8 @@ let
   # The packages the stable-profile buildEnv links. Factored out because the
   # baked Nix DB must register these (which buildLayeredImage materializes),
   # NOT the `coreEnv` wrapper itself (which it does not — see lowerTiersContents).
+  # No agent binary lives here — claude-code rides the agent tier above.
   coreEnvPaths = [
-    claudePkg
     notifyClient
     prekWrappers.prePushChecks
     prekWrappers.skipIfMissing
@@ -86,26 +85,21 @@ let
   # layering graph (specs/image-builder.md § Base Image Layering).
   lowerTiersRootPaths = baseContents ++ tierContents ++ [ prekHooksBundle ];
 
-  # The store paths tiers 0+1 actually MATERIALIZE on disk, exposed so the leaf
-  # registers the baked Nix DB over the materialized set — no orphan, no dangling
-  # (specs/image-builder.md § In-Container Nix Store Consistency). Two paths in
-  # `tierContents` are deliberately swapped for what is *actually* laid down:
-  #   - `coreEnv` (the wrapix-stable-profile-env buildEnv) → `coreEnvPaths`.
-  #     buildLayeredImage copies the buildEnv's symlink tree to / and lays down
-  #     its closure of real packages, but NOT the wrapper store-path itself;
-  #     registering `coreEnv` bakes a dangling (registered-but-absent) entry.
-  #     `closure(coreEnvPaths) == closure(coreEnv) \ {coreEnv}`, i.e. exactly the
-  #     materialized set.
-  # `prekHooksBundle` is deliberately absent here — it rides in `config.Env`
-  # (WRAPIX_PREK_HOOKS) only, never in any tier's `contents`. dockerTools DOES
-  # still materialize its closure (to keep the env reference valid), so the leaf
-  # registers it separately in `imageNixDb` to avoid an orphan (image.nix).
+  # registers the baked Nix DB over the materialized contents closure, not the
+  # build derivation's full closure (specs/image-builder.md § In-Container Nix
+  # Store Consistency). coreEnv (a buildEnv) is replaced by its `paths`:
+  # dockerTools copies a buildEnv's merged tree to the image root and
+  # materializes only its targets, never the wrapper's own store path — so
+  # registering the wrapper bakes a dangling path. prekHooksBundle is included:
+  # it rides in `config.Env` (WRAPIX_PREK_HOOKS) and its closure IS materialized
+  # into a layer, so omitting it leaves an orphan (on-disk-but-unregistered).
   lowerTiersContents =
     baseContents
     ++ [
       passwdFile
       groupFile
       nixConfig
+      prekHooksBundle
     ]
     ++ coreEnvPaths;
 
@@ -117,9 +111,9 @@ let
     rootPaths = lowerTiersRootPaths;
   };
 
-  # Bounded to this tier's own fixed closure, well under the 127-layer OCI
-  # ceiling shared across base + stable-profile + leaf.
-  maxLayers = 48;
+  # Bounded to this tier's own fixed closure; the 127-layer OCI ceiling splits
+  # across base (64) + stable-profile (40) + agent (8) + leaf (15).
+  maxLayers = 40;
 
   # Split only this tier's own paths into layers. dockerMakeLayers (the custom
   # layeringPipeline path) does not dedup fromImage the way the default

@@ -597,11 +597,14 @@ let
 
   # Membership guard for tier 1 (specs/image-builder.md § Provenance-Tiered
   # Layering): `wrapix-stable-profile-<name>` holds only fixed-per-instance
-  # content. A downstream-appended package and a consumer-supplied agent runtime
-  # are tier-2, so neither may appear in tier 1's `lowerTiersClosure` (the union
-  # the leaf strips), yet both must ship in the leaf image's own closure. Built
-  # via image.nix directly with a light entrypointPkg so the check does not drag
-  # in claude-code.
+  # content — no agent runtime, no downstream-appended package. The check is
+  # agent-invariant: neither the consumer-supplied agent runtime nor a
+  # downstream-appended package may appear in tier 1's `lowerTiersClosure`. It
+  # further pins where each one DOES land: the agent runtime is tier 2 (present
+  # in the agent tier's `lowerTiersClosure`, the base+stable+agent union, but
+  # not the base+stable one), the appended package is tier 3 leaf (in neither
+  # tier's `lowerTiersClosure`, only the whole image closure). Built via image.nix
+  # directly with a light entrypointPkg so the check does not drag in claude-code.
   membershipAppendedPkg = pkgs.writeShellScriptBin "wrapix-stable-membership-appended" ''
     echo "downstream-appended package"
   '';
@@ -636,26 +639,46 @@ let
     ];
     text = ''
       tier1_closure=${membershipImage.stableProfileImage.lowerTiersClosure}/store-paths
+      tier2_closure=${membershipImage.agentImage.lowerTiersClosure}/store-paths
       image_closure=${membershipImageClosure}/store-paths
       appended=${membershipAppendedPkg}
       runner=${membershipRunnerPkg}
 
-      for tier2 in "$appended" "$runner"; do
-          if grep -qxF "$tier2" "$tier1_closure"; then
-              echo "FAIL: tier-2 path leaked into the wrapix-stable-profile tier-1 closure" >&2
-              echo "  leaked : $tier2" >&2
+      # Neither the agent runtime nor a downstream-appended package belongs in
+      # tier 1 (the base+stable union).
+      for above in "$appended" "$runner"; do
+          if grep -qxF "$above" "$tier1_closure"; then
+              echo "FAIL: non-tier-1 path leaked into the wrapix-stable-profile tier-1 closure" >&2
+              echo "  leaked : $above" >&2
               echo "  tier-1 : $tier1_closure" >&2
               exit 1
           fi
-          if ! grep -qxF "$tier2" "$image_closure"; then
-              echo "FAIL: tier-2 path missing from the leaf image closure" >&2
-              echo "  expected: $tier2" >&2
+          if ! grep -qxF "$above" "$image_closure"; then
+              echo "FAIL: expected path missing from the leaf image closure" >&2
+              echo "  expected: $above" >&2
               echo "  image   : $image_closure" >&2
               exit 1
           fi
       done
 
-      echo "test-stable-profile-membership: PASS (appended package + agent runtime are tier-2 leaf, absent from tier 1)"
+      # The agent runtime is tier 2: present in the agent tier's lowerTiersClosure
+      # (base+stable+agent), absent from tier 1.
+      if ! grep -qxF "$runner" "$tier2_closure"; then
+          echo "FAIL: agent runtime absent from the wrapix-agent tier-2 closure" >&2
+          echo "  expected: $runner" >&2
+          echo "  tier-2  : $tier2_closure" >&2
+          exit 1
+      fi
+
+      # The appended package is tier 3 leaf: in neither lower tier's closure.
+      if grep -qxF "$appended" "$tier2_closure"; then
+          echo "FAIL: downstream-appended package leaked into the wrapix-agent tier-2 closure" >&2
+          echo "  leaked : $appended" >&2
+          echo "  tier-2 : $tier2_closure" >&2
+          exit 1
+      fi
+
+      echo "test-stable-profile-membership: PASS (agent runtime is tier 2, appended package is tier-3 leaf, neither in tier 1)"
     '';
   };
 
@@ -715,18 +738,15 @@ let
         '';
       };
 
-  # Leaf-only-change guard (specs/image-builder.md § Provenance-Tiered Layering;
-  # Non-Functional § Iteration cost). Two leaf images that differ only in a
-  # tier-2 input — the agent runtime selection — share an identical
-  # `wrapix-stable-profile-<name>` (tier 1) and `wrapix-base-image` (tier 0),
-  # since neither depends on the agent axis. Every tier-0 and tier-1 layer blob
-  # must therefore be byte-identical across the two leaves' manifests; only
-  # leaf-tier blobs change. Built via image.nix directly with a light
-  # entrypointPkg so the check does not drag in claude-code.
-  mkLeafAgentProbe =
+  # Probe builder for the layering tests below: a leaf image built via image.nix
+  # directly with a light entrypointPkg so checks do not drag in claude-code.
+  # Each knob isolates one tier — `agent`/`directRunner` perturb tier 2, the
+  # `model` settings field perturbs the tier-3 leaf customisation layer.
+  mkLeafProbe =
     {
-      agent,
+      agent ? "claude",
       directRunner ? null,
+      settings ? { },
     }:
     import ../../lib/sandbox/image.nix {
       inherit pkgs agent directRunner;
@@ -739,14 +759,22 @@ let
       entrypointPkg = pkgs.hello;
       entrypointSh = ../../lib/sandbox/linux/entrypoint.sh;
       claudeConfig = { };
-      claudeSettings = { };
+      claudeSettings = settings;
     };
-  leafProbeClaude = mkLeafAgentProbe { agent = "claude"; };
-  leafProbeDirect = mkLeafAgentProbe {
-    agent = "direct";
-    directRunner = pkgs.writeShellScriptBin "wrapix-leaf-probe-runner" ''
-      echo "leaf probe direct runner"
-    '';
+
+  # Leaf-only-change guard (specs/image-builder.md § Provenance-Tiered Layering;
+  # Non-Functional § Iteration cost). Two leaf images that differ only in a
+  # tier-3 leaf input — one Claude-settings field — share an identical
+  # `wrapix-base-image` (tier 0), `wrapix-stable-profile-<name>` (tier 1), and
+  # `wrapix-agent-<agent>-<name>` (tier 2), since none depends on the settings
+  # JSON. Every tier-0, tier-1, AND tier-2 layer blob must therefore be
+  # byte-identical across the two leaves' manifests; only the leaf customisation
+  # layer changes.
+  leafProbeSettingsA = mkLeafProbe { settings = { }; };
+  leafProbeSettingsB = mkLeafProbe {
+    settings = {
+      probe = "downstream-change-leaf-only";
+    };
   };
   downstreamChangeLeafOnlyTest = pkgs.writeShellApplication {
     name = "test-downstream-change-leaf-only";
@@ -758,13 +786,14 @@ let
     text =
       if isLinux then
         ''
-          imgA=${leafProbeClaude}
-          imgB=${leafProbeDirect}
-          tier1_tar=${leafProbeClaude.stableProfileImage}
+          imgA=${leafProbeSettingsA}
+          imgB=${leafProbeSettingsB}
+          tier1_tar=${leafProbeSettingsA.stableProfileImage}
+          tier2_tar=${leafProbeSettingsA.agentImage}
 
           if [[ "$imgA" == "$imgB" ]]; then
-              echo "FAIL: claude/direct probe images resolved to the same stream script;" >&2
-              echo "      the agent-runtime perturbation did not materialise a distinct leaf" >&2
+              echo "FAIL: the two probe images resolved to the same stream script;" >&2
+              echo "      the leaf settings perturbation did not materialise a distinct leaf" >&2
               exit 1
           fi
 
@@ -775,22 +804,23 @@ let
           # each layer blob as "<sha256>/layer.tar".
           "$imgA" | tar -xO manifest.json > "$tmp/a.json"
           "$imgB" | tar -xO manifest.json > "$tmp/b.json"
-          # GNU tar auto-detects the tier-1 buildLayeredImage tar's compression.
+          # GNU tar auto-detects the intermediate buildLayeredImage tars' compression.
           tar -xOf "$tier1_tar" manifest.json > "$tmp/tier1.json"
+          tar -xOf "$tier2_tar" manifest.json > "$tmp/tier2.json"
 
           jq -r '.[0].Layers[]' "$tmp/a.json" | sort -u > "$tmp/a.layers"
           jq -r '.[0].Layers[]' "$tmp/b.json" | sort -u > "$tmp/b.layers"
-          jq -r '.[0].Layers[]' "$tmp/tier1.json" | sort -u > "$tmp/tier1.layers"
+          jq -r '.[0].Layers[]' "$tmp/tier1.json" "$tmp/tier2.json" | sort -u > "$tmp/lower.layers"
 
           comm -12 "$tmp/a.layers" "$tmp/b.layers" > "$tmp/shared.layers"
-          tier1_count=$(wc -l < "$tmp/tier1.layers")
+          lower_count=$(wc -l < "$tmp/lower.layers")
 
-          # Every tier-0 + tier-1 blob (the whole tier-1 fromImage manifest) must
-          # survive byte-identical in BOTH leaves, i.e. appear in their shared set.
-          missing=$(comm -23 "$tmp/tier1.layers" "$tmp/shared.layers")
+          # Every tier-0 + tier-1 + tier-2 blob must survive byte-identical in
+          # BOTH leaves, i.e. appear in their shared set.
+          missing=$(comm -23 "$tmp/lower.layers" "$tmp/shared.layers")
           if [[ -n "$missing" ]]; then
-              echo "FAIL: a tier-0/tier-1 layer blob changed across the agent-runtime perturbation" >&2
-              echo "  tier blobs not shared by both leaves:" >&2
+              echo "FAIL: a tier-0/tier-1/tier-2 layer blob changed across the leaf perturbation" >&2
+              echo "  lower-tier blobs not shared by both leaves:" >&2
               echo "$missing" >&2
               exit 1
           fi
@@ -802,7 +832,7 @@ let
               exit 1
           fi
 
-          echo "test-downstream-change-leaf-only: PASS ($tier1_count tier-0/tier-1 blobs byte-identical; only_in_A=$only_a only_in_B=$only_b leaf-only)"
+          echo "test-downstream-change-leaf-only: PASS ($lower_count tier-0/1/2 blobs byte-identical; only_in_A=$only_a only_in_B=$only_b leaf-only)"
         ''
       else
         ''
@@ -813,6 +843,175 @@ let
           echo "test-downstream-change-leaf-only: skipped on this platform (streamLayeredImage is Linux-only)" >&2
           exit 0
         '';
+  };
+
+  # Agent-tier-isolation guard (specs/image-builder.md § Provenance-Tiered
+  # Layering). The selected agent runtime rides its own tier
+  # `wrapix-agent-<agent>-<name>`, chained atop the toolchain tier. Two leaf
+  # images that differ only in the agent package's version (two distinct direct
+  # runners) share an identical tier 0 and tier 1 — neither depends on the agent
+  # axis — so every tier-0 and tier-1 blob is byte-identical, while the agent
+  # tier's own tar changes. This is the weight-driven payoff: an agent-version
+  # bump never re-ships the heavier toolchain below it.
+  leafProbeRunnerA = mkLeafProbe {
+    agent = "direct";
+    directRunner = pkgs.writeShellScriptBin "wrapix-agent-probe-runner" ''
+      echo "agent probe runner A"
+    '';
+  };
+  leafProbeRunnerB = mkLeafProbe {
+    agent = "direct";
+    directRunner = pkgs.writeShellScriptBin "wrapix-agent-probe-runner" ''
+      echo "agent probe runner B — a different version"
+    '';
+  };
+  agentTierIsolatedTest = pkgs.writeShellApplication {
+    name = "test-agent-tier-isolated";
+    runtimeInputs = lib.optionals isLinux [
+      pkgs.coreutils
+      pkgs.gnutar
+      pkgs.jq
+    ];
+    text =
+      if isLinux then
+        ''
+          imgA=${leafProbeRunnerA}
+          imgB=${leafProbeRunnerB}
+          tier1_tar=${leafProbeRunnerA.stableProfileImage}
+          agentA_tar=${leafProbeRunnerA.agentImage}
+          agentB_tar=${leafProbeRunnerB.agentImage}
+
+          if [[ "$imgA" == "$imgB" ]]; then
+              echo "FAIL: the two agent-version probe images resolved to the same stream" >&2
+              echo "      script; the agent perturbation did not materialise a distinct leaf" >&2
+              exit 1
+          fi
+          if [[ "$agentA_tar" == "$agentB_tar" ]]; then
+              echo "FAIL: the two agent-version probes share an agent tier tar; the agent" >&2
+              echo "      runtime does not ride its own tier" >&2
+              exit 1
+          fi
+
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+
+          "$imgA" | tar -xO manifest.json > "$tmp/a.json"
+          "$imgB" | tar -xO manifest.json > "$tmp/b.json"
+          tar -xOf "$tier1_tar" manifest.json > "$tmp/tier1.json"
+
+          jq -r '.[0].Layers[]' "$tmp/a.json" | sort -u > "$tmp/a.layers"
+          jq -r '.[0].Layers[]' "$tmp/b.json" | sort -u > "$tmp/b.layers"
+          jq -r '.[0].Layers[]' "$tmp/tier1.json" | sort -u > "$tmp/tier1.layers"
+
+          comm -12 "$tmp/a.layers" "$tmp/b.layers" > "$tmp/shared.layers"
+          tier1_count=$(wc -l < "$tmp/tier1.layers")
+
+          # Every tier-0 + tier-1 blob must survive byte-identical in BOTH leaves
+          # across the agent-version bump.
+          missing=$(comm -23 "$tmp/tier1.layers" "$tmp/shared.layers")
+          if [[ -n "$missing" ]]; then
+              echo "FAIL: a tier-0/tier-1 layer blob changed across the agent-version bump" >&2
+              echo "  tier blobs not shared by both leaves:" >&2
+              echo "$missing" >&2
+              exit 1
+          fi
+
+          # The agent tier must actually change (otherwise nothing isolates it).
+          only_a=$(comm -23 "$tmp/a.layers" "$tmp/b.layers" | wc -l)
+          only_b=$(comm -13 "$tmp/a.layers" "$tmp/b.layers" | wc -l)
+          if [[ "$only_a" -eq 0 && "$only_b" -eq 0 ]]; then
+              echo "FAIL: no blob changed across the agent-version bump; the agent tier did" >&2
+              echo "      not re-emit" >&2
+              exit 1
+          fi
+
+          echo "test-agent-tier-isolated: PASS ($tier1_count tier-0/tier-1 blobs byte-identical across the agent-version bump; only_in_A=$only_a only_in_B=$only_b)"
+        ''
+      else
+        ''
+          # streamLayeredImage's stream script carries a Linux Python shebang;
+          # the manifest diff this verifier performs is Linux-only.
+          echo "test-agent-tier-isolated: skipped on this platform (streamLayeredImage is Linux-only)" >&2
+          exit 0
+        '';
+  };
+
+  # Agent-exclusivity guard (specs/image-builder.md § Provenance-Tiered Layering;
+  # specs/sandbox.md § Agent runtime axis). Exactly one agent rides each image:
+  # an `agent = "direct"` image carries its runner and NO claude-code, even when
+  # the build is handed a real claude-code as entrypointPkg (the claude branch is
+  # simply never selected); an `agent = "claude"` image carries claude-code and
+  # not the direct runner. Built via image.nix directly so the closures are
+  # scannable.
+  agentExclusiveProfile = {
+    name = "agentexcl";
+    corePackages = [ pkgs.coreutils ];
+    packages = [ pkgs.coreutils ];
+    env = { };
+  };
+  agentExclusiveRunner = pkgs.writeShellScriptBin "wrapix-agent-exclusive-runner" ''
+    echo "agent exclusive direct runner"
+  '';
+  mkAgentExclusiveImage =
+    {
+      agent,
+      directRunner ? null,
+    }:
+    import ../../lib/sandbox/image.nix {
+      inherit pkgs agent directRunner;
+      profile = agentExclusiveProfile;
+      entrypointPkg = claudeCodePkg;
+      entrypointSh = ../../lib/sandbox/linux/entrypoint.sh;
+      claudeConfig = { };
+      claudeSettings = { };
+    };
+  agentExclusiveDirect = mkAgentExclusiveImage {
+    agent = "direct";
+    directRunner = agentExclusiveRunner;
+  };
+  agentExclusiveClaude = mkAgentExclusiveImage { agent = "claude"; };
+  agentExclusiveDirectClosure = pkgs.closureInfo { rootPaths = [ agentExclusiveDirect ]; };
+  agentExclusiveClaudeClosure = pkgs.closureInfo { rootPaths = [ agentExclusiveClaude ]; };
+  agentExclusiveTest = pkgs.writeShellApplication {
+    name = "test-agent-exclusive";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.gnugrep
+    ];
+    text = ''
+      direct_closure=${agentExclusiveDirectClosure}/store-paths
+      claude_closure=${agentExclusiveClaudeClosure}/store-paths
+      claude_code=${claudeCodePkg}
+      runner=${agentExclusiveRunner}
+
+      # direct image: the runner is present, claude-code is absent.
+      if ! grep -qxF "$runner" "$direct_closure"; then
+          echo "FAIL: direct runner missing from the agent=direct image closure" >&2
+          echo "  expected: $runner" >&2
+          exit 1
+      fi
+      if grep -qxF "$claude_code" "$direct_closure"; then
+          echo "FAIL: claude-code present in an agent=direct image (a non-claude image" >&2
+          echo "      must carry no claude-code)" >&2
+          echo "  unexpected: $claude_code" >&2
+          exit 1
+      fi
+
+      # claude image: claude-code is present, the direct runner is absent
+      # (exactly one agent per image).
+      if ! grep -qxF "$claude_code" "$claude_closure"; then
+          echo "FAIL: claude-code missing from the agent=claude image closure" >&2
+          echo "  expected: $claude_code" >&2
+          exit 1
+      fi
+      if grep -qxF "$runner" "$claude_closure"; then
+          echo "FAIL: direct runner present in an agent=claude image (more than one agent)" >&2
+          echo "  unexpected: $runner" >&2
+          exit 1
+      fi
+
+      echo "test-agent-exclusive: PASS (direct image has runner + no claude-code; claude image has claude-code + no runner)"
+    '';
   };
 
   # Iteration-cost-bounded probe (specs/image-builder.md Success Criteria:
@@ -1039,6 +1238,7 @@ let
       if isLinux then
         ''
           leaf_stream=${nixDbProbeImage}
+          tier2_tar=${nixDbProbeImage.agentImage}
           tier1_tar=${nixDbProbeImage.stableProfileImage}
           tier0_tar=${nixDbProbeImage.baseImage}
 
@@ -1049,7 +1249,7 @@ let
 
           # Unpack each tier's docker-archive (manifest.json + <sha>/layer.tar
           # blobs) and list the store paths every layer blob carries. The union
-          # across all three tiers is the composed image's on-disk store.
+          # across all four tiers is the composed image's on-disk store.
           unpack_dir="$tmp/archives"
           mkdir -p "$unpack_dir"
           list_tier_store_paths() {
@@ -1064,6 +1264,7 @@ let
 
           {
               list_tier_store_paths "$tmp/leaf.tar"
+              list_tier_store_paths "$tier2_tar"
               list_tier_store_paths "$tier1_tar"
               list_tier_store_paths "$tier0_tar"
           } | grep -oE 'nix/store/[a-z0-9]{32}-[^/]+' | sort -u | sed 's#^#/#' \
@@ -1106,9 +1307,9 @@ let
           fi
 
           # The DB rides in the leaf ONLY: a db.sqlite in a lower tier would mean
-          # registration perturbed a tier-0/tier-1 blob and broke the
+          # registration perturbed a tier-0/tier-1/tier-2 blob and broke the
           # provenance-tiered chain's byte-identical-lower-tiers guarantee.
-          for tier_tar in "$tier1_tar" "$tier0_tar"; do
+          for tier_tar in "$tier2_tar" "$tier1_tar" "$tier0_tar"; do
               td=$(mktemp -d -p "$unpack_dir")
               tar -xf "$tier_tar" -C "$td"
               while IFS= read -r layer; do
@@ -1193,6 +1394,7 @@ let
       if isLinux then
         ''
           leaf_stream=${nixDbProbeImage}
+          tier2_tar=${nixDbProbeImage.agentImage}
           tier1_tar=${nixDbProbeImage.stableProfileImage}
           tier0_tar=${nixDbProbeImage.baseImage}
 
@@ -1202,7 +1404,7 @@ let
           "$leaf_stream" > "$tmp/leaf.tar"
 
           # Unpack each tier's docker-archive and list the store paths every
-          # layer blob carries. The union across all three tiers is the composed
+          # layer blob carries. The union across all four tiers is the composed
           # image's on-disk store.
           unpack_dir="$tmp/archives"
           mkdir -p "$unpack_dir"
@@ -1218,6 +1420,7 @@ let
 
           {
               list_tier_store_paths "$tmp/leaf.tar"
+              list_tier_store_paths "$tier2_tar"
               list_tier_store_paths "$tier1_tar"
               list_tier_store_paths "$tier0_tar"
           } | grep -oE 'nix/store/[a-z0-9]{32}-[^/]+' | sort -u | sed 's#^#/#' \
@@ -1299,6 +1502,8 @@ in
     stableProfileMembershipTest
     pinnedToolchainStableTest
     downstreamChangeLeafOnlyTest
+    agentTierIsolatedTest
+    agentExclusiveTest
     iterationCostBoundedTest
     customisationLayerBoundedTest
     imageNixDbConsistentTest

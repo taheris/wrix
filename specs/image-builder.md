@@ -117,7 +117,7 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
 - The launcher's image-install step (under both `wrapix run` and `wrapix spawn`) is short-circuited when the image's content digest is already present in the platform store: no tar materialization, no stream invocation, no `*-load` CLI call
   [system](nix run .#test-image-install-digest-skip)
 - The image is a four-stage `fromImage` chain — the leaf chains atop `wrapix-agent-<agent>-<name>`, which chains atop `wrapix-stable-profile-<name>`, which chains atop `wrapix-base-image` — on both Linux (`streamLayeredImage` leaf) and Darwin (`buildLayeredImage` leaf)
-  [check?](grep -nE 'wrapix-agent' lib/sandbox/image.nix)
+  [check](grep -nE 'wrapix-agent' lib/sandbox/image.nix)
 - Each non-base tier removes the union of all lower tiers' closures from its layering graph via `remove_paths`, so no tier re-emits a store path a lower tier already ships
   [check](grep -nE 'remove_paths' lib/sandbox/image.nix lib/sandbox/stable-profile-image.nix)
 - `wrapix-base-image`'s derivation hash is invariant under changes to profile-level inputs — `profile.packages`, `profile.env`, MCP configs, the merged Claude settings JSON, and the agent runtime selection
@@ -133,9 +133,9 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
 - A tier-3 (leaf) change — a downstream-appended package, a Claude-settings field, an MCP-config field, or `model` — leaves every tier-0, tier-1, and tier-2 (agent) layer-blob byte-identical in the resulting image's manifest; only leaf blobs change
   [system](nix run .#test-downstream-change-leaf-only)
 - The selected agent runtime rides its own tier `wrapix-agent-<agent>-<name>`, chained atop `wrapix-stable-profile-<name>`; an agent-version change leaves every tier-0 and tier-1 blob byte-identical
-  [system?](nix run .#test-agent-tier-isolated)
+  [system](nix run .#test-agent-tier-isolated)
 - A non-selected agent's binary is absent from the image: an `agent = "direct"` image contains neither `claude-code` nor a `pi` runtime
-  [system?](nix run .#test-agent-exclusive)
+  [system](nix run .#test-agent-exclusive)
 - `agent = "claude"` produces an image that contains `claude-code`
   [system](nix run .#test-claude-runtime-noop)
 - The `agent = "pi"` code path threads a consumer-supplied `piPkg` derivation into the image build

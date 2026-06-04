@@ -67,12 +67,11 @@ let
 
   # Tier 1: the fixed-per-instance closure (profile.corePackages + the
   # wrapix-generated derivations that do not vary with profile.packages, MCP
-  # configs, Claude settings, or agent selection), chained atop the base. The
-  # leaf chains on top of this via `fromImage`, so this tar loads into the
-  # platform store once (specs/image-builder.md § Base Image Layering).
+  # configs, Claude settings, or agent selection), chained atop the base. No
+  # agent binary lives here — it rides the agent tier above (specs/image-builder.md
+  # § Provenance-Tiered Layering).
   stableProfileImage = import ./stable-profile-image.nix {
     inherit pkgs profile;
-    claudePkg = entrypointPkg;
   };
 
   # Bundle referenced from config.Env WRAPIX_PREK_HOOKS so the entrypoint can
@@ -116,10 +115,11 @@ let
     name: config: pkgs.writeText "mcp-${name}.json" (builtins.toJSON config)
   ) mcpServerConfigs;
 
-  # Agent runtime layer. `claude` is a no-op (claudeCode is the entrypointPkg
-  # already baked into every image); `pi` adds the consumer-supplied `piPkg`;
-  # `direct` adds the consumer-supplied `directRunner` package. New runtimes
-  # plug in by extending this lookup — no profile.pi or pi+rust special cases.
+  # Agent runtime selection. `claude` carries `claude-code` (the entrypointPkg);
+  # `pi` the consumer-supplied `piPkg`; `direct` the consumer-supplied
+  # `directRunner` package. Exactly one agent's packages ride the agent tier —
+  # new runtimes plug in by extending this lookup. No profile.pi or pi+rust
+  # special cases.
   directRunnerPkg =
     if directRunner == null then
       throw "lib/sandbox/image.nix: agent='direct' requires the `directRunner` argument"
@@ -128,16 +128,33 @@ let
   piPkgResolved = if piPkg == null then throw ''mkSandbox: agent = "pi" requires piPkg'' else piPkg;
   agentPackages =
     {
-      claude = [ ];
+      claude = [ entrypointPkg ];
       pi = [ piPkgResolved ];
       direct = [ directRunnerPkg ];
     }
     .${agent}
       or (throw "lib/sandbox/image.nix: unknown agent '${agent}' (expected 'claude', 'pi', or 'direct')");
 
-  # Create a merged environment with all packages for proper PATH
+  agentImageName = "wrapix-agent-${agent}-${profile.name}";
+
+  # Tier 2: exactly the one selected agent runtime and its closure, chained atop
+  # the stable-profile (toolchain) tier. The leaf chains on top of this, so an
+  # agent-version bump re-emits only this tier and the leaf — the heavier
+  # toolchain tier below stays byte-identical (specs/image-builder.md
+  # § Provenance-Tiered Layering).
+  agentImage = import ./agent-image.nix {
+    inherit
+      pkgs
+      agentPackages
+      agentImageName
+      stableProfileImage
+      ;
+  };
+
+  # Create a merged environment with all packages for proper PATH. The agent
+  # binary reaches PATH via `agentPackages` (its store path is materialized in
+  # the agent tier and stripped from this leaf's graph by remove_paths).
   allPackages = [
-    entrypointPkg
     notifyClient
     prekWrappers.prePushChecks
     prekWrappers.skipIfMissing
@@ -173,15 +190,16 @@ let
   # fails with `No such file or directory` (specs/image-builder.md § In-Container
   # Nix Store Consistency).
   #
-  # Three adjustments make `closureInfo` match what dockerTools actually lays down
+  # Two adjustments make `closureInfo` match what dockerTools actually lays down
   # (the naive full build closure both over- and under-registers):
-  #   - `lowerTiersContents` registers the stable tier's buildEnv INPUTS, not the
-  #     `coreEnv` wrapper buildLayeredImage never lays into a store layer (see
-  #     stable-profile-image.nix) — registering the wrapper bakes a dangling path.
-  #   - `prekHooksBundle` rides in `config.Env` (WRAPIX_PREK_HOOKS), never in any
-  #     tier's `contents`, but dockerTools still materializes its closure to keep
-  #     that env reference valid — so it must be REGISTERED here or it is an
-  #     orphan. (The rest of its closure is already covered by the tiers above.)
+  #   - `agentImage.lowerTiersContents` carries the MATERIALIZED set of every
+  #     tier below the leaf (base + stable-profile + agent). It registers the
+  #     stable tier's buildEnv INPUTS, not the `coreEnv` wrapper buildLayeredImage
+  #     never lays into a store layer (registering the wrapper bakes a dangling
+  #     path), and it folds in `prekHooksBundle` — which rides in `config.Env`
+  #     (WRAPIX_PREK_HOOKS), never in any tier's `contents`, yet dockerTools still
+  #     materializes its closure, so omitting it leaves an orphan (see
+  #     stable-profile-image.nix § lowerTiersContents).
   #   - image-build artifacts (the customisation-layer tar, `layering.json`) are
   #     never in any `contents` or `config` reference, so they are not in this
   #     closure and never bake a dangling path.
@@ -189,7 +207,7 @@ let
   # copies no lower-tier store path up, so the provenance-tiered chain is
   # unperturbed.
   imageNixDb = pkgs.closureInfo {
-    rootPaths = leafContents ++ stableProfileImage.lowerTiersContents ++ [ prekHooksBundle ];
+    rootPaths = leafContents ++ agentImage.lowerTiersContents;
   };
 
   imageName = "wrapix-${profile.name}${pkgs.lib.optionalString (agent != "claude") "-${agent}"}";
@@ -210,7 +228,7 @@ let
     pkgs.runCommandLocal "${imageName}-layering.json"
       {
         nativeBuildInputs = [ pkgs.jq ];
-        lowerClosure = stableProfileImage.lowerTiersClosure;
+        lowerClosure = agentImage.lowerTiersClosure;
       }
       ''
         set -euo pipefail
@@ -231,7 +249,7 @@ let
     tag = "latest";
     inherit layeringPipeline;
     includeNixDB = true;
-    fromImage = stableProfileImage;
+    fromImage = agentImage;
 
     contents = leafContents;
 
@@ -377,8 +395,9 @@ rawImage
   # input changes without re-deriving it.
   baseImage = wrapixBaseImage;
   # Expose tier 1 so the stable-profile verifiers (hash-stability, membership,
-  # pinned-toolchain) can assert against the middle tier's derivation and its
-  # `lowerTiersClosure` without rebuilding the leaf (specs/image-builder.md
+  # pinned-toolchain) can assert against it and its `lowerTiersClosure` without
+  # rebuilding the leaf, and tier 2 so the agent verifiers (tier-isolated,
+  # exclusive) can assert the agent rides its own tar (specs/image-builder.md
   # § Provenance-Tiered Layering).
-  inherit stableProfileImage;
+  inherit stableProfileImage agentImage;
 }

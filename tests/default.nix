@@ -223,9 +223,21 @@ in
     };
 
     downstream-change-leaf-only = {
-      meta.description = "Verify a tier-2 change leaves every tier-0 and tier-1 layer blob byte-identical (Linux only)";
+      meta.description = "Verify a leaf change leaves every tier-0, tier-1, and tier-2 layer blob byte-identical (Linux only)";
       type = "app";
       program = "${sandboxImageChecks.downstreamChangeLeafOnlyTest}/bin/test-downstream-change-leaf-only";
+    };
+
+    agent-tier-isolated = {
+      meta.description = "Verify the agent runtime rides its own tier; an agent-version bump leaves tier-0 and tier-1 blobs byte-identical (Linux only)";
+      type = "app";
+      program = "${sandboxImageChecks.agentTierIsolatedTest}/bin/test-agent-tier-isolated";
+    };
+
+    agent-exclusive = {
+      meta.description = "Verify exactly one agent rides each image: a direct image has no claude-code, a claude image no direct runner";
+      type = "app";
+      program = "${sandboxImageChecks.agentExclusiveTest}/bin/test-agent-exclusive";
     };
 
     iteration-cost-bounded = {
