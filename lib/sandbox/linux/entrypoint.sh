@@ -28,8 +28,8 @@ fi
 
 # WRAPIX_AGENT selects the agent runtime. 'claude' (default) runs claude with
 # config merging and permission bypass; 'pi' runs pi-mono in JSONL RPC mode;
-# 'direct' execs loom-direct-runner over JSONL stdin/stdout. pi and direct
-# skip Claude-specific config (neither has a permission system or settings.json).
+# 'direct' execs loom-direct-runner over JSONL stdin/stdout. Each agent seeds
+# its own config home below (claude ~/.claude, pi ~/.pi/agent); direct has none.
 WRAPIX_AGENT="${WRAPIX_AGENT:-claude}"
 case "$WRAPIX_AGENT" in
   claude) WRAPIX_AGENT_BIN=claude ;;
@@ -118,6 +118,23 @@ if [[ "$WRAPIX_AGENT" = "claude" ]]; then
               history.jsonl settings.local.json stats-cache.json; do
     if [[ -e "/workspace/.claude/$item" ]] && [[ ! -e "$HOME/.claude/$item" ]]; then
       ln -s "/workspace/.claude/$item" "$HOME/.claude/$item"
+    fi
+  done
+elif [[ "$WRAPIX_AGENT" = "pi" ]]; then
+  # Pi keeps its own config home at ~/.pi/agent: seed image-baked defaults
+  # when present, then symlink-persist session data from the /workspace bind
+  # mount. Credentials arrive by mount, not seeding (specs/security.md).
+  mkdir -p "$HOME/.pi/agent"
+  if [[ -d /etc/wrapix/pi-agent ]]; then
+    cp -rn /etc/wrapix/pi-agent/. "$HOME/.pi/agent/"
+  fi
+
+  mkdir -p /workspace/.pi/agent
+  for item in /workspace/.pi/agent/*; do
+    [[ -e "$item" ]] || continue
+    name=$(basename "$item")
+    if [[ ! -e "$HOME/.pi/agent/$name" ]]; then
+      ln -s "$item" "$HOME/.pi/agent/$name"
     fi
   done
 fi

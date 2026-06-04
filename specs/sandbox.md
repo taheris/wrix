@@ -178,7 +178,7 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 - Before exec'ing the selected agent, the entrypoint verifies the agent's binary is present and fails loudly with a clear error when it is absent from the image (e.g. `WRAPIX_AGENT=pi` against a claude image), rather than emitting a bare `command not found`
   [system](bash tests/sandbox/agent-binary-guard.sh)
 - Both entrypoints seed and persist each agent's own config home — claude `~/.claude`, pi `~/.pi/agent` — not only claude's
-  [check?](grep -nE '\.pi/agent' lib/sandbox/linux/entrypoint.sh lib/sandbox/darwin/entrypoint.sh)
+  [check](grep -nE '\.pi/agent' lib/sandbox/linux/entrypoint.sh lib/sandbox/darwin/entrypoint.sh)
 - Deploy key `<name>` is mounted at `/etc/wrapix/keys/<name>` inside the container when `deployKey = "<name>"` is set (the `.pub` file is not mounted; the entrypoint regenerates it on demand via `ssh-keygen -y`)
   [check](grep -nE 'containerKeyDir|deployKey' lib/sandbox/linux/default.nix lib/sandbox/darwin/default.nix)
 - `model = "<id>"` overrides `ANTHROPIC_MODEL` in the baked claude settings; null leaves the default in place
