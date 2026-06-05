@@ -13,8 +13,8 @@
 #   test_rust_toolchain_in_core
 #     The rust profile's toolchain + fixed support packages (gcc, openssl,
 #     pkg-config, sccache, ...) are corePackages, not leaf: rust corePackages
-#     strictly exceeds base corePackages, the leaf delta is empty, and sccache
-#     is a member of corePackages.
+#     strictly exceeds base corePackages, cargo-nextest is leaf tooling, and
+#     sccache is a member of corePackages.
 #
 #   test_python_extras_not_core
 #     The python profile keeps corePackages == base (basePackages only); its
@@ -27,8 +27,9 @@
 #
 #   test_pinned_toolchain_in_core
 #     A downstream-pinned rustProfile { toolchain; sha256; packages = [p]; }
-#     lands its pinned toolchain in corePackages (tier 1) while the extension
-#     package becomes leaf: corePackages exceeds base, leaf delta == 1.
+#     lands its pinned toolchain in corePackages (tier 1) while cargo-nextest
+#     and the extension package become leaf: corePackages exceeds base,
+#     leaf delta == 2.
 #
 # Usage:
 #   tests/profiles/core-packages.sh                 # run all tests
@@ -105,18 +106,24 @@ test_rust_toolchain_in_core() {
       rustCore = coreLen wlib.profiles.rust;
       rustLeaf = leafLen wlib.profiles.rust;
       hasSccache = builtins.any (p: lib.hasInfix \"sccache\" p.outPath) wlib.profiles.rust.corePackages;
+      hasNextestLeaf = builtins.any (p: lib.hasInfix \"cargo-nextest\" p.outPath) (leaf wlib.profiles.rust);
+      hasNextestCore = builtins.any (p: lib.hasInfix \"cargo-nextest\" p.outPath) wlib.profiles.rust.corePackages;
     }
   ")
-  local base_core rust_core rust_leaf has_sccache
+  local base_core rust_core rust_leaf has_sccache has_nextest_leaf has_nextest_core
   base_core=$(echo "$result" | jq -r '.baseCore')
   rust_core=$(echo "$result" | jq -r '.rustCore')
   rust_leaf=$(echo "$result" | jq -r '.rustLeaf')
   has_sccache=$(echo "$result" | jq -r '.hasSccache')
+  has_nextest_leaf=$(echo "$result" | jq -r '.hasNextestLeaf')
+  has_nextest_core=$(echo "$result" | jq -r '.hasNextestCore')
 
   [[ "$rust_core" -gt "$base_core" ]] \
     || fail "rust corePackages ($rust_core) should exceed base ($base_core) — toolchain belongs in core"
-  [[ "$rust_leaf" -eq 0 ]] || fail "rust leaf delta should be empty, got $rust_leaf"
+  [[ "$rust_leaf" -eq 1 ]] || fail "rust leaf delta should contain only cargo-nextest, got $rust_leaf"
   [[ "$has_sccache" == "true" ]] || fail "sccache should be a member of rust corePackages"
+  [[ "$has_nextest_leaf" == "true" ]] || fail "cargo-nextest should be rust leaf tooling"
+  [[ "$has_nextest_core" == "false" ]] || fail "cargo-nextest should not be a member of rust corePackages"
 }
 
 # ============================================================================
@@ -189,8 +196,8 @@ test_pinned_toolchain_in_core() {
 
   [[ "$pinned_core" -gt "$base_core" ]] \
     || fail "pinned toolchain should land in corePackages (base $base_core, pinned $pinned_core)"
-  [[ "$pinned_leaf" -eq 1 ]] \
-    || fail "only the extension package should be leaf, got $pinned_leaf"
+  [[ "$pinned_leaf" -eq 2 ]] \
+    || fail "only cargo-nextest and the extension package should be leaf, got $pinned_leaf"
 }
 
 # ----------------------------------------------------------------------------

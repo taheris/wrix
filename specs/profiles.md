@@ -99,6 +99,7 @@ rust-std + clippy + rustfmt + rust-docs.
 | fenix toolchain | cargo, rustc, clippy, rustfmt, rust-std |
 | fenix rust-src | Standard library source for rust-analyzer |
 | fenix `stable.rust-analyzer-preview` | LSP server (manifest build, channel-aligned with stable) |
+| cargo-nextest | Rust test runner |
 | sccache | Shared compile cache across host + sandbox |
 | gcc | C compiler for linking |
 | openssl | TLS library (runtime) |
@@ -601,7 +602,7 @@ dests live under `/home/wrapix/` inside the container, not under
   [judge](../tests/judges/profiles.sh#test_uv_cache_writable)
 - deriveProfile correctly merges packages and environment
   [judge](../tests/judges/profiles.sh#test_derive_profile_merge)
-- A built-in profile's `corePackages` equals its `basePackages` floor plus its own toolchain, and `rustProfile { toolchain = ./file }` includes the pinned toolchain in `corePackages`
+- A built-in profile's `corePackages` equals its `basePackages` floor plus its own toolchain, `rustProfile { toolchain = ./file }` includes the pinned toolchain in `corePackages`, and cargo-nextest remains rust leaf tooling rather than tier-1 core content
   [system?](bash tests/profiles/core-packages.sh test_core_membership)
 - `deriveProfile p { packages = [extra]; }` appends `extra` to `.packages` but leaves `.corePackages` equal to `p.corePackages`, so `packages` − `corePackages` is exactly the downstream-added delta
   [system?](bash tests/profiles/core-packages.sh test_extra_not_in_core)

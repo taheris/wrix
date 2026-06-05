@@ -14,7 +14,6 @@ _:
 
         packages = [
           config.treefmt.build.wrapper
-          pkgs.cargo-nextest
           pkgs.flock
           pkgs.podman
           pkgs.skopeo

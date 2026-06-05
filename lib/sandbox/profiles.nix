@@ -284,8 +284,13 @@ let
         pkgs.sccache
       ];
 
+      packages = [
+        pkgs.cargo-nextest
+      ];
+
       hostPackages = [
         hostToolchain
+        hostPkgs.cargo-nextest
         hostPkgs.openssl
         hostPkgs.openssl.dev
         hostPkgs.pkg-config
