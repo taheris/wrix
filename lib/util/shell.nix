@@ -250,14 +250,16 @@ _:
               case "$_err" in
                 *"in use"*|*"is using"*)
                   if _holder=$(${spec.holder}); then
-                    _holder_ws=$(${spec.holderWorkspace}) || _holder_ws=""
-                    # Skip cross-workspace pins silently: the holder is
-                    # correctly pinned to its own workspace's flake.lock,
-                    # not actually stale from its perspective.
-                    if [ -n "$_holder_ws" ] && [ "$_holder_ws" != "$PWD" ]; then
-                      continue
-                    fi
-                    if [ -n "$_holder" ]; then
+                    if [[ -n "$_holder" ]]; then
+                      if ! _holder_ws=$(${spec.holderWorkspace} 2>&1); then
+                        _holder_ws="" # best-effort: holder can disappear before inspect.
+                      fi
+                      # Skip cross-workspace pins silently: the holder is
+                      # correctly pinned to its own workspace's flake.lock,
+                      # not actually stale from its perspective.
+                      if [[ -n "$_holder_ws" && "$_holder_ws" != "$PWD" ]]; then
+                        continue
+                      fi
                       echo "prune-stale-images: $_stale pinned by container $_holder — upgrades on next start" >&2
                     else
                       echo "prune-stale-images: $_stale pinned by a container — upgrades on next start" >&2

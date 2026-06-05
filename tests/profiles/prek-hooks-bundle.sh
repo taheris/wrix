@@ -34,12 +34,20 @@ bundle_path() {
     "$REPO_ROOT#legacyPackages.$system.lib.prekHooks"
 }
 
+require_bundle() {
+  if [[ $# -gt 0 ]]; then
+    printf '%s\n' "$1"
+    return 0
+  fi
+  bundle_path
+}
+
 # ============================================================================
 # Bundle contains the five shims (executable) and no _lib/ subdirectory.
 # ============================================================================
 test_bundle_contents() {
   local bundle
-  if ! bundle=$(bundle_path); then
+  if ! bundle=$(require_bundle "$@"); then
     echo "FAIL: nix build lib.prekHooks failed" >&2
     return 1
   fi
@@ -77,7 +85,7 @@ test_bundle_contents() {
 # ============================================================================
 test_shims_are_plain_hook_impl() {
   local bundle
-  if ! bundle=$(bundle_path); then
+  if ! bundle=$(require_bundle "$@"); then
     echo "FAIL: nix build lib.prekHooks failed" >&2
     return 1
   fi
@@ -124,10 +132,16 @@ ALL_TESTS=(
 
 run_all() {
   local failed=0
+  local bundle
+  if ! bundle=$(bundle_path); then
+    echo "FAIL: nix build lib.prekHooks failed" >&2
+    return 1
+  fi
+
   local fn
   for fn in "${ALL_TESTS[@]}"; do
     echo "=== $fn ==="
-    if "$fn"; then
+    if "$fn" "$bundle"; then
       echo "PASS: $fn"
     else
       echo "FAIL: $fn"

@@ -122,6 +122,56 @@ let
     exec ${pkgs.nix}/bin/nix flake check "$@"
   '';
 
+  testCi = writeShellScriptBin "test-ci" ''
+    set -euo pipefail
+
+    repo_root=$(${pkgs.git}/bin/git rev-parse --show-toplevel 2>/dev/null || pwd) # best-effort: allow running outside a git checkout.
+    cd "$repo_root"
+
+    failed=0
+    run_step() {
+      local name="$1"
+      shift
+      echo "=== $name ==="
+      if "$@"; then
+        echo "PASS: $name"
+      else
+        echo "FAIL: $name" >&2
+        failed=$((failed + 1))
+      fi
+    }
+
+    run_step "nix flake check" ${pkgs.nix}/bin/nix flake check --no-warn-dirty
+
+    for app in \
+      test-wrapix-spawn-load \
+      test-image-install-digest-skip \
+      test-image-digest-matches-stored-id \
+      test-claude-runtime-noop \
+      test-prek-hooks-closure \
+      test-base-image-universal \
+      test-base-image-hash-stable \
+      test-stable-profile-hash-stable \
+      test-stable-profile-membership \
+      test-pinned-toolchain-stable-tier \
+      test-downstream-change-leaf-only \
+      test-agent-tier-isolated \
+      test-agent-exclusive \
+      test-iteration-cost-bounded \
+      test-customisation-layer-bounded \
+      test-image-nix-db-consistent \
+      test-image-nix-db-no-dangling \
+      test-profiles-build-package
+    do
+      run_step "$app" ${pkgs.nix}/bin/nix run --no-warn-dirty ".#$app"
+    done
+
+    if [[ "$failed" -ne 0 ]]; then
+      echo "$failed CI step(s) failed" >&2
+      exit 1
+    fi
+  '';
+
   # profiles.rust.buildPackage hash invariant verifies (specs/profiles.md).
   # Driven via `nix eval` against the live flake, so it runs outside the build
   # sandbox like the other tests/profiles/*.sh scripts. Wrapper resolves
@@ -264,6 +314,12 @@ in
       program = "${sandboxImageChecks.imageNixDbNoDanglingTest}/bin/test-image-nix-db-no-dangling";
     };
 
+    ci = {
+      meta.description = "Run full CI-only image and profile verifiers.";
+      type = "app";
+      program = "${testCi}/bin/test-ci";
+    };
+
     # profiles.rust.buildPackage [verify] hash invariants (specs/profiles.md).
     profiles-build-package = {
       meta.description = "Verify profiles.rust.buildPackage hash invariants (bin/clippy/nextest/cargoArtifacts)";
@@ -281,6 +337,7 @@ in
     rustChecks
     shellTests
     smokeTests
+    testCi
     testImages
     tmuxMcpTests
     tomlTests

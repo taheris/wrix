@@ -6,6 +6,7 @@ _:
     {
       apps = {
         test = test.app;
+        test-ci = test.apps.ci;
         test-agent-exclusive = test.apps.agent-exclusive;
         test-agent-tier-isolated = test.apps.agent-tier-isolated;
         test-base-image-hash-stable = test.apps.base-image-hash-stable;
@@ -19,6 +20,7 @@ _:
         test-image-nix-db-no-dangling = test.apps.image-nix-db-no-dangling;
         test-iteration-cost-bounded = test.apps.iteration-cost-bounded;
         test-pinned-toolchain-stable-tier = test.apps.pinned-toolchain-stable-tier;
+        test-prek-hooks-closure = test.apps.prek-hooks-closure;
         test-profiles-build-package = test.apps.profiles-build-package;
         test-stable-profile-hash-stable = test.apps.stable-profile-hash-stable;
         test-stable-profile-membership = test.apps.stable-profile-membership;

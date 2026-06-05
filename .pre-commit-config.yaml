@@ -30,7 +30,7 @@ repos:
       # Pre-push hooks (~10s)
       - id: nix-flake-check
         name: nix flake check
-        entry: nix flake check
+        entry: skip-if-missing nix -- pre-push-checks nix flake check
         language: system
         pass_filenames: false
         always_run: true
@@ -43,10 +43,11 @@ repos:
       # outside a molecule context, which would miss earlier commits in
       # the push range. skip-if-missing keeps the hook inert in contexts
       # where loom isn't on PATH (bead containers without the rust-mcp
-      # profile, fresh clones outside the devshell).
+      # profile, fresh clones outside the devshell). pre-push-checks skips
+      # the slow verifier when loom has already minted a valid marker.
       - id: loom-gate-verify
         name: loom gate verify
-        entry: skip-if-missing loom -- loom gate verify --diff @{upstream}..HEAD
+        entry: skip-if-missing loom -- pre-push-checks loom gate verify --diff @{upstream}..HEAD
         language: system
         pass_filenames: false
         always_run: true

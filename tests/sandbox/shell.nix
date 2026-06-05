@@ -7,7 +7,7 @@ let
   inherit (pkgs) runCommandLocal;
 
   shellUtils = import ../../lib/util/shell.nix { };
-  inherit (shellUtils) expandPathFn;
+  inherit (shellUtils) expandPathFn pruneStaleImages;
 
 in
 {
@@ -108,6 +108,62 @@ in
     echo "PASS: {brace,expansion} not performed"
 
     mkdir $out
+  '';
+
+  prune-stale-images-empty-holder = runCommandLocal "test-prune-stale-images-empty-holder" { } ''
+    set -euo pipefail
+
+    cat > podman <<'EOF'
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    case "$1" in
+      images)
+        printf '%s\n' \
+          'localhost/wrapix-rust latest new-id' \
+          'localhost/wrapix-rust c07457c7 old-id'
+        ;;
+      rmi)
+        echo 'Error: image is in use by a container' >&2
+        exit 2
+        ;;
+      ps)
+        ;;
+      inspect)
+        if [[ "''${*: -1}" == "" ]]; then
+          echo 'Error: name or ID cannot be empty' >&2
+          exit 125
+        fi
+        ;;
+      *)
+        echo "unexpected podman command: $*" >&2
+        exit 64
+        ;;
+    esac
+    EOF
+    chmod +x podman
+
+    if ! {
+      ${pruneStaleImages { cmd = "$PWD/podman"; }}
+    } 2>stderr; then
+      echo "FAIL: pruneStaleImages returned non-zero" >&2
+      cat stderr >&2
+      exit 1
+    fi
+
+    if grep -q 'name or ID cannot be empty' stderr; then
+      echo "FAIL: holder workspace lookup ran with an empty holder" >&2
+      cat stderr >&2
+      exit 1
+    fi
+
+    if ! grep -q 'pinned by a container' stderr; then
+      echo "FAIL: generic pinned-container notice missing" >&2
+      cat stderr >&2
+      exit 1
+    fi
+
+    mkdir "$out"
   '';
 
   # Edge cases and boundary conditions
