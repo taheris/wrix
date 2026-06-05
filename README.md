@@ -17,7 +17,7 @@ nix run github:taheris/wrapix#sandbox-python  # python profile, claude agent
 
 ## Agent Runtimes
 
-The agent binary that runs inside the container is selected by `WRAPIX_AGENT`:
+The agent binary baked into the image is selected **at build time** by the build target — `mkSandbox { agent = …; }`, surfaced as the `sandbox-<profile>[-<agent>]` flake output. Exactly one agent rides each image, so a `pi` or `direct` image carries no `claude-code`. There is no runtime switch: `WRAPIX_AGENT` is internal build→entrypoint plumbing pinned on the wrapper via `makeWrapper --set`, not a user knob.
 
 | Agent | Runtime | How it talks to the host |
 |-------|---------|--------------------------|
@@ -25,7 +25,7 @@ The agent binary that runs inside the container is selected by `WRAPIX_AGENT`:
 | `pi` | Caller-supplied [pi-mono](https://github.com/badlogic/pi-mono) build | JSONL RPC on stdio (`pi --mode rpc`); see *Consumer-supplied agents* below |
 | `direct` | Caller-supplied binary | JSONL stdio; see *Consumer-supplied agents* below |
 
-`packages.image-<profile>` ships the `claude` runtime; `pi` and `direct` need a caller-supplied derivation baked in at image-build time (see below).
+`packages.image-<profile>` ships the `claude` runtime; `pi` and `direct` need a caller-supplied derivation baked in at image-build time (see below). The entrypoint dispatches on `WRAPIX_AGENT` and guards on binary presence (`command -v`) before exec, so an image asked for an agent it doesn't carry fails loudly instead of with a bare `command not found`.
 
 ## Flake Integration
 

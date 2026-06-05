@@ -61,7 +61,7 @@ docs/
 |-----------|---------|-------------|
 | Sandbox | Container creation and lifecycle | `mkSandbox`, `wrapix run`/`spawn` |
 | Profiles | Pre-configured dev environments | `profiles.{base,rust,python}` |
-| Agent Runtime | Binary the entrypoint execs inside the container | `agent = "claude" \| "pi" \| "direct"` |
+| Agent Runtime | Single agent binary baked into the image and exec'd by the entrypoint | `mkSandbox { agent = … }` / `sandbox-<profile>[-<agent>]` |
 | MCP Servers | Optional capabilities exposed to the agent | `mcp.tmux`, `mcp.playwright`, `mcpRuntime = true` |
 | Image Builder | OCI image generation via Nix | `lib/sandbox/image.nix` |
 | Profile Manifest | JSON map of profile → `{ref, source}` for orchestrators | `packages.profile-images` (`mkProfileImages`) |
@@ -88,10 +88,15 @@ See [specs/sandbox.md](../specs/sandbox.md) and [specs/profiles.md](../specs/pro
 
 ## Agent Runtimes
 
-`WRAPIX_AGENT` controls which agent binary the entrypoint execs after staging
-`/workspace`, settings, and SSH credentials. The `sandbox-<profile>` wrapper
-sets it to `claude`; consumers building their own wrappers for `pi`/`direct`
-set it themselves.
+The `agent` parameter selects, **at build time**, the single agent binary the
+image bakes and the entrypoint execs after staging `/workspace`, settings, and
+SSH credentials — selection is by build target, not by env var. A human picks
+an agent by choosing the `mkSandbox { agent = …; }` build / its
+`sandbox-<profile>[-<agent>]` target. `WRAPIX_AGENT` is the internal
+build→entrypoint wire, not a caller knob: the `package` wrapper pins it with
+`makeWrapper --set` (non-overridable). Orchestrators driving the raw `launcher`
+(which bakes no agent) set `WRAPIX_AGENT` per call, paired with a matching
+per-call image.
 
 | Value | Behaviour |
 |-------|-----------|
@@ -99,9 +104,14 @@ set it themselves.
 | `pi` | `pi --mode rpc` — JSONL RPC on stdio. Requires `agent = "pi"` and a consumer-supplied `piPkg` at image-build time. |
 | `direct` | Execs `loom-direct-runner` (or any consumer-named binary). Requires `agent = "direct"` and `directRunner = …` at image-build time. |
 
-Only the `claude` runtime is installed in the default
-`packages.image-<profile>`. `pi` and `direct` are build-time selections
-because their binaries come from outside wrapix.
+Exactly one agent rides each image — a non-claude image carries no
+`claude-code` (`agent = "direct"` bakes neither `claude-code` nor `pi`). Only
+the `claude` runtime is installed in the default `packages.image-<profile>`;
+`pi` and `direct` are build-time selections because their binaries come from
+outside wrapix. Before exec, the entrypoint verifies the selected agent's
+binary is present (`command -v`) and fails loudly when it is absent from the
+image — e.g. `WRAPIX_AGENT=pi` against a claude image on the raw-launcher
+path — rather than emitting a bare `command not found`.
 
 ### Direct mode (orchestrator integration)
 
