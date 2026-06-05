@@ -46,9 +46,9 @@ Filtering requires `NET_ADMIN`: a Linux rootless container has no `NET_ADMIN`, s
 
 **Agent runtime axis** — the `agent` parameter selects, **at build time**, the single agent binary the image bakes and the entrypoint launches. The binary must be in the image, so this is not a runtime knob.
 
-- `direct` (default) — default base image; consumers can override the placeholder `directRunner`
+- `direct` (default) — default base image; consumers can override the placeholder with `agentPkg`
 - `claude` — `claude-code` from nixpkgs; no consumer package required
-- `pi` — `pi-coding-agent` from nixpkgs by default; callers can override `piPkg`
+- `pi` — `pi-coding-agent` from nixpkgs by default
 
 Exactly one agent rides each image — `agent = "direct"` bakes neither `claude-code` nor `pi`. The agent runtime is its own image tier (`image-builder.md` § Provenance-Tiered Layering); it composes orthogonally with the profile, so variants are `(profile × agent)`.
 
@@ -60,7 +60,7 @@ Exactly one agent rides each image — `agent = "direct"` bakes neither `claude-
 
 - *Config home* — the entrypoint seeds the agent's config home from baked defaults and persists session data via `/workspace`, per agent: claude → `~/.claude`, pi → `~/.pi/agent`; `direct` has none.
 - *Credentials* — API keys and OAuth/subscription tokens reach the agent via ordinary env passthrough (`env`, host env, `SpawnConfig.env`) and mounts; secrets are never baked into the image. The credential invariants are owned by `security.md`.
-- *Model/provider* — `model` is **claude-scoped** config (it sets `ANTHROPIC_MODEL` in claude's baked settings), not a cross-agent knob; other agents select provider/model by their own means (e.g. pi's `--provider`/`--model` via `agent_args`).
+- *Package/settings overrides* — `agentPkg` overrides the selected agent package; `agentSettings` merges into the selected agent's settings schema. `agentSettings` is rejected for `agent = "direct"` until direct has a settings schema.
 
 **MCP servers** — `mkSandbox`'s `mcp` parameter opts servers in per sandbox (`mcp.tmux = { … }`, `mcp.playwright = { … }`). Server contracts live in their own specs (`tmux-mcp.md`, `playwright-mcp.md`). `mcpRuntime = true` bakes all registered servers into the image and defers selection to the entrypoint at run time.
 
@@ -82,9 +82,8 @@ mkSandbox {
   mcp.tmux = { };                   # MCP server opt-in
   mcpRuntime = false;               # Bake ALL MCP servers, defer selection to entrypoint
   agent = "direct";                 # "direct" (default), "claude", or "pi"
-  # piPkg = ...;                    # Optional when agent = "pi"; defaults to linuxPkgs.pi-coding-agent
-  # directRunner = ...;             # Optional when agent = "direct"; defaults to placeholder runner
-  model = null;                     # claude-scoped: overrides ANTHROPIC_MODEL in claude settings (no-op for other agents)
+  agentPkg = null;                  # Optional selected-agent package override
+  agentSettings = { };              # Settings for the selected agent
 }
 ```
 
@@ -133,8 +132,8 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 
 ## Success Criteria
 
-- `mkSandbox` accepts the documented parameter set (`profile`, `cpus`, `memoryMb`, `deployKey`, `packages`, `mounts`, `env`, `mcp`, `mcpRuntime`, `agent`, `model`) and returns `{ package, image, launcher, profile }`
-  [check](grep -nE 'profile \?|cpus \?|memoryMb \?|deployKey \?|packages \?|mounts \?|env \?|mcp \?|mcpRuntime \?|agent \?|model \?|inherit package image launcher' lib/sandbox/default.nix)
+- `mkSandbox` accepts the documented parameter set (`profile`, `cpus`, `memoryMb`, `deployKey`, `packages`, `mounts`, `env`, `mcp`, `mcpRuntime`, `agent`, `agentPkg`, `agentSettings`) and returns `{ package, image, launcher, profile }`
+  [check](grep -nE 'profile \?|cpus \?|memoryMb \?|deployKey \?|packages \?|mounts \?|env \?|mcp \?|mcpRuntime \?|agent \?|agentPkg \?|agentSettings \?|inherit package image launcher' lib/sandbox/default.nix)
 - Platform dispatch picks the Linux implementation on Linux hosts and the macOS implementation on Darwin hosts
   [check](grep -nE 'isLinux|isDarwin' lib/sandbox/default.nix)
 - Evaluating `mkSandbox` on an unsupported system throws at evaluation time rather than producing a broken derivation
@@ -183,8 +182,8 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
   [check](grep -nE '\.pi/agent' lib/sandbox/linux/entrypoint.sh lib/sandbox/darwin/entrypoint.sh)
 - Deploy key `<name>` is mounted at `/etc/wrapix/keys/<name>` inside the container when `deployKey = "<name>"` is set (the `.pub` file is not mounted; the entrypoint regenerates it on demand via `ssh-keygen -y`)
   [check](grep -nE 'containerKeyDir|deployKey' lib/sandbox/linux/default.nix lib/sandbox/darwin/default.nix)
-- `model = "<id>"` overrides `ANTHROPIC_MODEL` in the baked claude settings; null leaves the default in place
-  [check](grep -nE 'ANTHROPIC_MODEL|modelEnvOverride' lib/sandbox/default.nix)
+- `agentSettings` merges into the selected agent's baked settings; non-empty `agentSettings` with `agent = "direct"` fails at evaluation time
+  [check](grep -nE 'agentSettings|baseClaudeSettings|basePiSettings' lib/sandbox/default.nix)
 - When `/workspace/bin` exists inside the container, it appears first on `PATH`, so a consumer-supplied shim at `/workspace/bin/<name>` resolves ahead of a same-named binary baked into the image
   [system](bash tests/sandbox/workspace-bin-path.sh)
 - When `/workspace/bin` does not exist, the container's `PATH` does not contain `/workspace/bin`
@@ -213,12 +212,11 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 5. **Custom mounts and env** — `mkSandbox`'s `mounts` and `env` extend the profile rather than replace it.
 6. **Deploy keys** — `deployKey = "<name>"` mounts the host key into the container at `/etc/wrapix/keys/<name>` (and `/etc/wrapix/keys/<name>-signing` when a signing key is present). The `.pub` file is not mounted; the entrypoint regenerates it on demand via `ssh-keygen -y`. Host-source resolution and the env-first override (`WRAPIX_DEPLOY_KEY`, `WRAPIX_SIGNING_KEY`) are owned by `security.md`.
 7. **MCP opt-in** — `mcp.<server>` enables a named server per `tmux-mcp.md` / `playwright-mcp.md`. `mcpRuntime = true` bakes all registered servers and defers selection to the entrypoint.
-8. **Agent runtime axis** — `agent` selects, at build time, the single agent binary baked into the image and launched by the entrypoint; exactly one agent per image (a non-claude image carries no `claude-code`). `WRAPIX_AGENT` is the build→entrypoint wire, pinned non-overridably on the `package` wrapper — selection is by build target, not env var. The entrypoint guards on binary presence (`command -v`) and seeds/persists each agent's own config home (claude `~/.claude`, pi `~/.pi/agent`). Per-agent credentials and provider/model selection are delivered through env passthrough, mounts, and `agent_args` (secrets owned by `security.md`); `model` is claude-scoped config. The agent runtime is its own image tier (`image-builder.md`), composing orthogonally with the profile.
-9. **Model override** — `model = "claude-…"` sets `ANTHROPIC_MODEL` in the baked `~/.claude/settings.json` env block.
-10. **Launcher contract** — `wrapix run` reads `WRAPIX_DEFAULT_IMAGE_REF` and `WRAPIX_DEFAULT_IMAGE_SOURCE` from env; `wrapix spawn` reads `SpawnConfig` JSON. Both share container construction. Wrapper env-var pinning rules (which vars are caller-overridable defaults, which are unconditional) are owned by *Architecture > `package`*.
-11. **Per-launch mounts via SpawnConfig** — `wrapix spawn`'s `SpawnConfig.mounts` adds per-launch bind mounts on top of `profile.mounts` and `mkSandbox`'s `mounts`. Each entry maps `host_path → container_path` with `read_only: true` rendering `:ro`. On Linux this is a literal `-v` flag. On Darwin, `SpawnConfig.mounts` flows through the same mount classifier as `profile.mounts`: directories staged + copied, regular files copy-from-parent-dir, Unix-socket sources rejected at launch with a clear error (VirtioFS does not pass socket operations). The launcher does not validate that `host_path` exists; podman fails at runtime if it does not.
-12. **Workspace `bin/` PATH prepend** — When `/workspace/bin` exists inside the container, both Linux and macOS entrypoints prepend it to `PATH` so consumer-supplied shims under the workspace's `bin/` resolve ahead of image-baked binaries with the same name. The check is directory existence, not per-binary; the consumer owns what it ships in `bin/`. When the directory is absent, `PATH` is unchanged. The contract is PATH ordering only — wrapix does not create `/workspace/bin`, does not validate its contents, and does not allowlist individual shims.
-13. **In-container Nix** — a sandbox built from a `nix`-shipping profile lets the runtime user run both additive (`nix develop`, `nix build` of new closures) and store-mutating (replace, GC, delete of baked paths) Nix operations without permission or missing-path failures. On the default boundary the runtime process is rootless container-root, which maps to the host user that owns the baked store, so it can mutate root-owned store paths — the `deletePath → fchmodat2(u+w)` primitive no longer hits `EPERM`. Independently, correctness against a missing-path failure (`No such file or directory` on a registered path) relies on the image shipping a Nix database that exactly matches its on-disk store — no orphaned (on-disk but unregistered) and no dangling (registered but absent) paths in either direction (mechanism owned by `image-builder.md` § In-Container Nix Store Consistency).
+8. **Agent runtime axis** — `agent` selects, at build time, the single agent binary baked into the image and launched by the entrypoint; exactly one agent per image (a non-claude image carries no `claude-code`). `WRAPIX_AGENT` is the build→entrypoint wire, pinned non-overridably on the `package` wrapper — selection is by build target, not env var. The entrypoint guards on binary presence (`command -v`) and seeds/persists each agent's own config home (claude `~/.claude`, pi `~/.pi/agent`). Agent selection adds only that agent's required config: Claude images get Claude settings, Pi images get non-secret Pi settings (`openai-codex`, `gpt-5.5`, high reasoning, explicit `/workspace/.pi/agent/sessions` session dir) plus a runtime `auth.json` mount when selected, and direct images get no agent config. `agentPkg` overrides the selected agent package; `agentSettings` merges into the selected agent's settings schema and is rejected for direct. Pi does not import arbitrary files from `/workspace/.pi/agent`; only the session directory and auth mount are wired. Secrets are delivered through env passthrough, credential-file mounts, and `agent_args` (owned by `security.md`). The agent runtime is its own image tier (`image-builder.md`), composing orthogonally with the profile.
+9. **Launcher contract** — `wrapix run` reads `WRAPIX_DEFAULT_IMAGE_REF` and `WRAPIX_DEFAULT_IMAGE_SOURCE` from env; `wrapix spawn` reads `SpawnConfig` JSON. Both share container construction. Wrapper env-var pinning rules (which vars are caller-overridable defaults, which are unconditional) are owned by *Architecture > `package`*.
+10. **Per-launch mounts via SpawnConfig** — `wrapix spawn`'s `SpawnConfig.mounts` adds per-launch bind mounts on top of `profile.mounts` and `mkSandbox`'s `mounts`. Each entry maps `host_path → container_path` with `read_only: true` rendering `:ro`. On Linux this is a literal `-v` flag. On Darwin, `SpawnConfig.mounts` flows through the same mount classifier as `profile.mounts`: directories staged + copied, regular files copy-from-parent-dir, Unix-socket sources rejected at launch with a clear error (VirtioFS does not pass socket operations). The launcher does not validate that `host_path` exists; podman fails at runtime if it does not.
+11. **Workspace `bin/` PATH prepend** — When `/workspace/bin` exists inside the container, both Linux and macOS entrypoints prepend it to `PATH` so consumer-supplied shims under the workspace's `bin/` resolve ahead of image-baked binaries with the same name. The check is directory existence, not per-binary; the consumer owns what it ships in `bin/`. When the directory is absent, `PATH` is unchanged. The contract is PATH ordering only — wrapix does not create `/workspace/bin`, does not validate its contents, and does not allowlist individual shims.
+12. **In-container Nix** — a sandbox built from a `nix`-shipping profile lets the runtime user run both additive (`nix develop`, `nix build` of new closures) and store-mutating (replace, GC, delete of baked paths) Nix operations without permission or missing-path failures. On the default boundary the runtime process is rootless container-root, which maps to the host user that owns the baked store, so it can mutate root-owned store paths — the `deletePath → fchmodat2(u+w)` primitive no longer hits `EPERM`. Independently, correctness against a missing-path failure (`No such file or directory` on a registered path) relies on the image shipping a Nix database that exactly matches its on-disk store — no orphaned (on-disk but unregistered) and no dangling (registered but absent) paths in either direction (mechanism owned by `image-builder.md` § In-Container Nix Store Consistency).
 
 ### Non-Functional
 

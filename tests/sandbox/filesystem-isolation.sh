@@ -19,6 +19,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+# shellcheck source=../lib/podman-image.sh
+source "$SCRIPT_DIR/../lib/podman-image.sh"
 
 skip() {
   echo "SKIP: $1" >&2
@@ -43,30 +45,26 @@ echo 'workspace-content' > "$WORKSPACE/testfile.txt"
 
 cleanup() {
   rm -rf "$WORKSPACE" "$HOST_SENTINEL"
-  if podman image exists localhost/wrapix-base:latest; then
-    podman rmi localhost/wrapix-base:latest >/dev/null
+  if podman image exists "$IMAGE_REF"; then
+    podman rmi "$IMAGE_REF" >/dev/null
   fi
 }
 trap cleanup EXIT
 
-IMAGE_REF="localhost/wrapix-base:latest"
+IMAGE_REF="localhost/wrapix-test-filesystem-isolation:latest"
 # Clear stale wrapix-base images BEFORE load so the post-load retag has
 # exactly one candidate to pick. `podman load` of a streamLayeredImage
 # tarball stores the image under the manifest tag with a podman-version-
-# dependent normalization (`wrapix-base:latest`, `localhost/wrapix-base:latest`,
-# or `docker.io/library/wrapix-base:latest`), so we re-tag via the loaded
+# dependent normalization (`wrapix-base-claude:latest`, `localhost/wrapix-base-claude:latest`,
+# or `docker.io/library/wrapix-base-claude:latest`), so we re-tag via the loaded
 # ID to $IMAGE_REF. If a previous run left a stale `wrapix-base` around,
 # the `head -n1` pick is non-deterministic and we'd risk tagging the
 # stale ID to the new ref — and silently exercising the old image whose
 # config may lack the env vars (e.g. WRAPIX_PREK_HOOKS) the entrypoint
 # depends on. Same retag pattern as lib/util/shell.nix imageLoadStep.
-if podman image exists "$IMAGE_REF"; then
-  podman rmi "$IMAGE_REF" >/dev/null
-fi
+wrapix_remove_test_image_refs "wrapix-base-claude" "$IMAGE_REF"
 "$IMAGE_STREAM" | podman load >/dev/null
-loaded_id=$(podman images --quiet --filter "reference=*wrapix-base*" | head -n1)
-[[ -n "$loaded_id" ]] || { echo "FAIL: image not found after podman load" >&2; podman images >&2; exit 1; }
-podman tag "$loaded_id" "$IMAGE_REF"
+wrapix_tag_loaded_image_id "wrapix-base-claude" "$IMAGE_REF"
 
 # 1. Workspace bind mount is readable.
 result=$(podman run --rm --network=pasta --userns=keep-id \

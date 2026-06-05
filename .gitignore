@@ -2,6 +2,7 @@
 .claude/
 .direnv/
 .loom/
+.pi/
 .playwright-mcp/
 .wrapix/
 

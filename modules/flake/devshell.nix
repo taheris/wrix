@@ -17,6 +17,7 @@ _:
           pkgs.cargo-nextest
           pkgs.flock
           pkgs.podman
+          pkgs.skopeo
         ];
       };
     };

@@ -3,8 +3,7 @@
 # This creates a layered container image with:
 # - Base packages + profile-specific packages
 # - Agent package selected by the caller
-# - Optional consumer-supplied `piPkg` when `agent == "pi"`
-# - Optional consumer-supplied `directRunner` when `agent == "direct"`
+# - Optional consumer-supplied `agentPkg`
 # - CA certificates for HTTPS
 # - Platform-specific entrypoint script
 #
@@ -13,8 +12,8 @@
 #   - agent runtime (claude | pi | direct) — agent binary layer
 #
 # The claude runtime layer adds `claude-code`; the pi runtime layer adds
-# `piPkg` (nixpkgs' `pi-coding-agent` by default); the direct runtime layer
-# adds `directRunner` (a placeholder by default, overrideable by orchestrators).
+# `pi-coding-agent`; the direct runtime layer adds the selected direct runner.
+# Callers override any selected runtime with `agentPkg`.
 #
 # Layer ordering: stable packages first, frequently-changing packages last.
 # This maximizes layer cache hits across rebuilds and profiles.
@@ -22,22 +21,19 @@
   pkgs,
   hostPkgs ? pkgs,
   profile,
-  entrypointPkg,
   entrypointSh,
   krunSupport ? false,
   claudeConfig,
   claudeSettings,
+  piSettings ? { },
   mcpServerConfigs ? { },
   # Agent runtime axis. Callers must choose explicitly. "claude" adds
-  # claude-code; "pi" adds the consumer-supplied `piPkg` for `pi --mode rpc`;
-  # "direct" adds the consumer-supplied direct-runner binary.
+  # claude-code; "pi" adds pi-coding-agent; "direct" adds the direct-runner
+  # binary. The resolved package is supplied as `agentPkg`.
   agent,
-  # Linux-built package whose `bin/` directory contains the direct-runner
-  # binary. Used when `agent == "direct"`; ignored otherwise.
-  directRunner ? null,
-  # Linux-built package whose `bin/` directory contains the `pi` binary.
-  # Used when `agent == "pi"`; ignored otherwise.
-  piPkg ? null,
+  # Linux-built package whose `bin/` directory contains the selected agent
+  # binary (`claude`, `pi`, or `loom-direct-runner`).
+  agentPkg,
   # Use buildLayeredImage (tar in store) instead of streamLayeredImage (script).
   # Required on Darwin where the stream script's Linux Python shebang won't execute.
   asTarball ? false,
@@ -102,28 +98,26 @@ let
   # Generate Claude JSON files from Nix attribute sets
   claudeConfigJson = pkgs.writeText "claude-config.json" (builtins.toJSON claudeConfig);
   claudeSettingsJson = pkgs.writeText "claude-settings.json" (builtins.toJSON claudeSettings);
+  piSettingsJson = pkgs.writeText "pi-settings.json" (builtins.toJSON piSettings);
 
   # Per-server MCP config files for runtime selection (mcpRuntime mode)
   mcpConfigFiles = builtins.mapAttrs (
     name: config: pkgs.writeText "mcp-${name}.json" (builtins.toJSON config)
   ) mcpServerConfigs;
 
-  # Agent runtime selection. `claude` carries `claude-code` (the entrypointPkg);
-  # `pi` the consumer-supplied `piPkg`; `direct` the consumer-supplied
-  # `directRunner` package. Exactly one agent's packages ride the agent tier —
-  # new runtimes plug in by extending this lookup. No profile.pi or pi+rust
-  # special cases.
-  directRunnerPkg =
-    if directRunner == null then
-      throw "lib/sandbox/image.nix: agent='direct' requires the `directRunner` argument"
+  # Agent runtime selection. Exactly one agent package rides the agent tier —
+  # new runtimes plug in by extending the supported `agent` values. No
+  # profile.pi or pi+rust special cases.
+  agentPkgResolved =
+    if agentPkg == null then
+      throw "lib/sandbox/image.nix: agentPkg is required for agent='${agent}'"
     else
-      directRunner;
-  piPkgResolved = if piPkg == null then throw ''mkSandbox: agent = "pi" requires piPkg'' else piPkg;
+      agentPkg;
   agentPackages =
     {
-      claude = [ entrypointPkg ];
-      pi = [ piPkgResolved ];
-      direct = [ directRunnerPkg ];
+      claude = [ agentPkgResolved ];
+      pi = [ agentPkgResolved ];
+      direct = [ agentPkgResolved ];
     }
     .${agent}
       or (throw "lib/sandbox/image.nix: unknown agent '${agent}' (expected 'claude', 'pi', or 'direct')");
@@ -271,6 +265,11 @@ let
 
       cp ${claudeConfigJson} etc/wrapix/claude-config.json
       cp ${claudeSettingsJson} etc/wrapix/claude-settings.json
+
+      ${optionalString (agent == "pi") ''
+        mkdir -p etc/wrapix/pi-agent
+        cp ${piSettingsJson} etc/wrapix/pi-agent/settings.json
+      ''}
 
       ${optionalString (mcpServerConfigs != { }) ''
         mkdir -p etc/wrapix/mcp

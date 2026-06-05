@@ -16,6 +16,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+# shellcheck source=../lib/podman-image.sh
+source "$SCRIPT_DIR/../lib/podman-image.sh"
 
 skip() {
   echo "SKIP: $1" >&2
@@ -37,30 +39,26 @@ IMAGE_STREAM=$(nix build --no-link --print-out-paths --no-warn-dirty .#test-imag
 WORKSPACE=$(mktemp -d -t wrapix-container-pre-commit.XXXXXX)
 cleanup() {
   rm -rf "$WORKSPACE"
-  if podman image exists localhost/wrapix-base:latest; then
-    podman rmi localhost/wrapix-base:latest >/dev/null
+  if podman image exists "$IMAGE_REF"; then
+    podman rmi "$IMAGE_REF" >/dev/null
   fi
 }
 trap cleanup EXIT
 
-IMAGE_REF="localhost/wrapix-base:latest"
+IMAGE_REF="localhost/wrapix-test-container-pre-commit:latest"
 # Clear stale wrapix-base images BEFORE load so the post-load retag has
 # exactly one candidate to pick. `podman load` of a streamLayeredImage
 # tarball stores the image under the manifest tag with a podman-version-
-# dependent normalization (`wrapix-base:latest`, `localhost/wrapix-base:latest`,
-# or `docker.io/library/wrapix-base:latest`), so we re-tag via the loaded
+# dependent normalization (`wrapix-base-claude:latest`, `localhost/wrapix-base-claude:latest`,
+# or `docker.io/library/wrapix-base-claude:latest`), so we re-tag via the loaded
 # ID to $IMAGE_REF. If a previous run left a stale `wrapix-base` around,
 # the `head -n1` pick is non-deterministic and we'd risk tagging the
 # stale ID to the new ref — and silently exercising the old image whose
 # config may lack the env vars (e.g. WRAPIX_PREK_HOOKS) the entrypoint
 # depends on. Same retag pattern as lib/util/shell.nix imageLoadStep.
-if podman image exists "$IMAGE_REF"; then
-  podman rmi "$IMAGE_REF" >/dev/null
-fi
+wrapix_remove_test_image_refs "wrapix-base-claude" "$IMAGE_REF"
 "$IMAGE_STREAM" | podman load >/dev/null
-loaded_id=$(podman images --quiet --filter "reference=*wrapix-base*" | head -n1)
-[[ -n "$loaded_id" ]] || { echo "FAIL: image not found after podman load" >&2; podman images >&2; exit 1; }
-podman tag "$loaded_id" "$IMAGE_REF"
+wrapix_tag_loaded_image_id "wrapix-base-claude" "$IMAGE_REF"
 
 # Seed the workspace: git repo + .pre-commit-config.yaml + sentinel.
 git -C "$WORKSPACE" init -q -b main
@@ -96,7 +94,7 @@ chmod 755 "$WORKSPACE/.git/sentinel-pre-commit.sh"
 
 # Run the container with `git add -A && git commit` as the override.
 commit_log=$(mktemp -t wrapix-container-pre-commit-log.XXXXXX)
-trap 'rm -rf "$WORKSPACE" "$commit_log"; if podman image exists localhost/wrapix-base:latest; then podman rmi localhost/wrapix-base:latest >/dev/null; fi' EXIT
+trap 'rm -rf "$WORKSPACE" "$commit_log"; if podman image exists "$IMAGE_REF"; then podman rmi "$IMAGE_REF" >/dev/null; fi' EXIT
 if ! podman run --rm --network=pasta --userns=keep-id \
   -e HOME=/home/wrapix \
   -e GIT_AUTHOR_NAME=test -e GIT_AUTHOR_EMAIL=test@example.com \

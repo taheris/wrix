@@ -139,21 +139,18 @@ if [[ "$WRAPIX_AGENT" = "claude" ]]; then
   done
 elif [[ "$WRAPIX_AGENT" = "pi" ]]; then
   # Pi keeps its own config home at ~/.pi/agent: seed image-baked defaults
-  # when present, then symlink-persist session data from the /workspace bind
-  # mount. Credentials arrive by mount, not seeding (specs/security.md).
-  mkdir -p "$HOME/.pi/agent"
+  # when present. Credentials arrive by mount, not seeding (specs/security.md).
+  mkdir -p "$HOME/.pi/agent" /workspace/.pi/agent/sessions
   if [[ -d /etc/wrapix/pi-agent ]]; then
     cp -rn /etc/wrapix/pi-agent/. "$HOME/.pi/agent/"
   fi
-
-  mkdir -p /workspace/.pi/agent
-  for item in /workspace/.pi/agent/*; do
-    [[ -e "$item" ]] || continue
-    name=$(basename "$item")
-    if [[ ! -e "$HOME/.pi/agent/$name" ]]; then
-      ln -s "$item" "$HOME/.pi/agent/$name"
+  if [[ -n "${WRAPIX_PI_AUTH_JSON:-}" ]]; then
+    if [[ ! -f "$WRAPIX_PI_AUTH_JSON" ]]; then
+      echo "Error: WRAPIX_PI_AUTH_JSON=$WRAPIX_PI_AUTH_JSON is not mounted" >&2
+      exit 1
     fi
-  done
+    ln -sf "$WRAPIX_PI_AUTH_JSON" "$HOME/.pi/agent/auth.json"
+  fi
 fi
 
 # Connect bd to the host's wrapix-beads dolt container via the mounted
@@ -300,12 +297,14 @@ write_session_log() {
 # Run main process (without exec, so EXIT trap can write session log)
 MAIN_EXIT=0
 if [[ $# -gt 0 ]]; then
-  # Command override: run the specified command instead of Claude
+  # Command override: run the specified command instead of the selected agent.
   "$@" || MAIN_EXIT=$?
-elif [[ "$WRAPIX_AGENT" = "pi" ]]; then
+elif [[ "$WRAPIX_AGENT" = "pi" ]] && [[ "${WRAPIX_STDIO:-}" = "1" ]]; then
   # Pi RPC mode: pi listens on stdin/stdout for JSONL commands.
   # Loom drives the session from the host via piped stdio.
   pi --mode rpc || MAIN_EXIT=$?
+elif [[ "$WRAPIX_AGENT" = "pi" ]]; then
+  pi || MAIN_EXIT=$?
 elif [[ "$WRAPIX_AGENT" = "direct" ]]; then
   # Direct mode: loom-direct-runner listens on stdin/stdout for JSONL
   # commands and drives a loom-llm Conversation with the six sandbox-aware

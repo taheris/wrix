@@ -4,18 +4,21 @@
 #   test_bundle_contents
 #     lib.prekHooks is a directory derivation containing executable shims for
 #     pre-commit, pre-push, prepare-commit-msg, post-checkout, post-merge —
-#     no _lib/ subdirectory.
+#     and no other paths.
 #
 #   test_shims_are_plain_hook_impl
 #     Every shim invokes `prek hook-impl --hook-type=<its-stage>` and none
 #     source lock.sh, call _prek_acquire_lock, or invoke flock — the bundle
-#     no longer wraps any stage in a serialized critical section.
+#     no longer wraps any stage in a serialized critical section. Every shim
+#     also pins the Nix-store prek package on PATH so git hooks work outside
+#     the devShell.
 #
 # Usage:
 #   tests/profiles/prek-hooks-bundle.sh                  # run all tests
 #   tests/profiles/prek-hooks-bundle.sh test_<name>      # run a single test
 
 set -euo pipefail
+export LC_ALL=C
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
@@ -55,8 +58,12 @@ test_bundle_contents() {
     fi
   done
 
-  if [[ -e "$bundle/_lib" ]]; then
-    echo "FAIL: bundle still contains _lib/ subdirectory" >&2
+  local found
+  found=$(find "$bundle" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)
+  local expected=$'post-checkout\npost-merge\npre-commit\npre-push\nprepare-commit-msg'
+  if [[ "$found" != "$expected" ]]; then
+    echo "FAIL: bundle contains unexpected paths:" >&2
+    printf '%s\n' "$found" >&2
     missing=$((missing + 1))
   fi
 
@@ -97,6 +104,10 @@ test_shims_are_plain_hook_impl() {
     fi
     if ! grep -qE "hook-impl .*--hook-type=$hook( |$)" "$bundle/$hook"; then
       echo "FAIL: $hook does not invoke 'prek hook-impl --hook-type=$hook'" >&2
+      failed=$((failed + 1))
+    fi
+    if ! grep -qE '/nix/store/[^"]+-prek-[^/]+/bin' "$bundle/$hook"; then
+      echo "FAIL: $hook does not pin prek on PATH" >&2
       failed=$((failed + 1))
     fi
   done

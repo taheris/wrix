@@ -345,6 +345,30 @@ in
           fi
         fi
 
+        # Pi subscription credentials are file-backed. Mount only auth.json
+        # when the selected image is Pi; settings are non-secret image defaults.
+        PI_AUTH_JSON_MOUNT=""
+        if [ "''${WRAPIX_AGENT:-direct}" = "pi" ]; then
+          PI_AUTH_FILE="''${WRAPIX_PI_AUTH_FILE:-$HOME/.pi/agent/auth.json}"
+          if [ -n "''${WRAPIX_PI_AUTH_FILE:-}" ]; then
+            if [ ! -f "$PI_AUTH_FILE" ]; then
+              echo "wrapix: WRAPIX_PI_AUTH_FILE=$PI_AUTH_FILE: file does not exist" >&2
+              exit 1
+            fi
+          elif [ "$SUBCOMMAND" = "spawn" ] && [ ! -f "$PI_AUTH_FILE" ]; then
+            echo "wrapix spawn: Pi auth file not found at $PI_AUTH_FILE — run 'pi' and /login on the host, or set WRAPIX_PI_AUTH_FILE to an existing auth.json" >&2
+            exit 1
+          elif [ "$SUBCOMMAND" = "run" ]; then
+            mkdir -p "$(dirname "$PI_AUTH_FILE")"
+            if [ ! -e "$PI_AUTH_FILE" ]; then
+              printf '{}\n' > "$PI_AUTH_FILE"
+            fi
+            chmod 600 "$PI_AUTH_FILE"
+          fi
+          VOLUME_ARGS="$VOLUME_ARGS -v $PI_AUTH_FILE:/mnt/wrapix/file/pi-auth.json:rw"
+          PI_AUTH_JSON_MOUNT="/mnt/wrapix/file/pi-auth.json"
+        fi
+
         ${stageBeads}
         BEADS_ARGS=""
         if [ -n "$BEADS_STAGING" ]; then
@@ -549,6 +573,7 @@ in
           -e "WRAPIX_NETWORK=$WRAPIX_NETWORK"
           -e "WRAPIX_NETWORK_ALLOWLIST=${networkAllowlist}"
         )
+        [ -n "$PI_AUTH_JSON_MOUNT" ] && ENV_ARGS+=(-e "WRAPIX_PI_AUTH_JSON=$PI_AUTH_JSON_MOUNT")
         [ -n "$KRUN_CMD_ENV" ] && ENV_ARGS+=(-e "$KRUN_CMD_ENV")
         # default boundary: the process is the store-owning rootless container-0
         # (see USERNS_ARGS above). Tell claude it is sandboxed so it permits

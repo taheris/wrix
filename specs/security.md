@@ -129,9 +129,15 @@ with mechanics owned by `sandbox.md`:
   agent's provider key (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, …), passed
   through `env` / host env / `SpawnConfig.env`. The exposure surface inside
   the container is `/proc/$pid/environ` of the agent's own process.
-- **Credential-file mount** — a file-based agent auth store (e.g. pi's
-  `~/.pi/agent/auth.json` holding an OAuth/subscription token) bind-mounted
-  from the host, like the deploy key.
+- **Credential-file mount** — a file-based agent auth store. For Pi, the
+  launcher resolves `WRAPIX_PI_AUTH_FILE` or falls back to
+  `~/.pi/agent/auth.json`. Interactive `wrapix run` creates an empty fallback
+  file for first `/login` use when it is missing; non-interactive
+  `wrapix spawn` fails loudly when the file is absent. The launcher mounts only
+  that credential path into Pi's `~/.pi/agent/auth.json` when `WRAPIX_AGENT=pi`.
+  Linux uses a single-file bind; macOS mounts the auth file's parent directory
+  at an internal staging path because Apple Container/VirtioFS is
+  directory-oriented, then exposes only the selected auth file to Pi.
 
 Acceptable because:
 
@@ -148,9 +154,11 @@ Acceptable because:
 A secrets-file mount (`/run/secrets/oauth_token`) would prevent
 `/proc/environ` exposure but adds complexity for marginal benefit
 against the stated threat model. wrapix does not model providers or keys
-itself — provider/model selection and the agent's own credential resolution
-(pi's `auth.json`, claude's settings) are the agent's concern; wrapix only
-delivers the secret into the container.
+itself — provider/model defaults and the agent's own credential resolution are
+the agent's concern. Pi gets image-baked non-secret `settings.json` defaults and
+a runtime `auth.json` mount; its project session persistence uses an explicit
+`sessionDir`, not a broad import of `~/.pi/agent`. Claude gets its settings
+surface. Wrapix only delivers the secret into the container.
 
 ### Network Exfil Baseline
 

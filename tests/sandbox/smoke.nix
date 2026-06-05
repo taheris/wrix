@@ -39,7 +39,7 @@ let
     pkgs = linuxPkgs;
     profile = profiles.base;
     agent = "claude";
-    entrypointPkg = linuxPkgs.claude-code;
+    agentPkg = linuxPkgs.claude-code;
     entrypointSh =
       if isDarwin then ../../lib/sandbox/darwin/entrypoint.sh else ../../lib/sandbox/linux/entrypoint.sh;
     claudeConfig = { };
@@ -105,6 +105,10 @@ in
         echo "Checking bash syntax..."
         bash -n ${wrapixLauncher}/bin/wrapix
         bash -n ${wrapix}/bin/wrapix
+        grep -q 'WRAPIX_PI_AUTH_FILE' ${wrapixLauncher}/bin/wrapix || { echo "launcher must resolve Pi auth file"; exit 1; }
+        grep -q 'WRAPIX_AGENT:-direct}.*=.*pi' ${wrapixLauncher}/bin/wrapix || { echo "launcher must gate Pi auth on WRAPIX_AGENT=pi"; exit 1; }
+        grep -q 'wrapix spawn: Pi auth file not found' ${wrapixLauncher}/bin/wrapix || { echo "spawn must fail loud without Pi auth"; exit 1; }
+        grep -Eq '/mnt/wrapix/(file/pi-auth.json|pi-agent-auth)' ${wrapixLauncher}/bin/wrapix || { echo "Pi auth mount must use a staging path"; exit 1; }
 
         echo "Script syntax validation passed"
         mkdir $out
@@ -132,6 +136,12 @@ in
         # Verify entrypoint uses fixed wrapix user
         grep -q 'USER="wrapix"' "$SCRIPT" || { echo "entrypoint should set USER=wrapix"; exit 1; }
         grep -q 'HOME="/home/wrapix"' "$SCRIPT" || { echo "entrypoint should set HOME=/home/wrapix"; exit 1; }
+        grep -q 'WRAPIX_AGENT" = "pi".*WRAPIX_STDIO' "$SCRIPT" || { echo "Pi RPC mode must be gated by WRAPIX_STDIO"; exit 1; }
+        grep -q 'pi || MAIN_EXIT' "$SCRIPT" || { echo "Pi interactive mode must run plain pi"; exit 1; }
+        grep -q '.pi/agent/sessions' "$SCRIPT" || { echo "Pi sessions directory must be initialized"; exit 1; }
+        grep -q 'WRAPIX_PI_AUTH_JSON' "$SCRIPT" || { echo "Pi auth mount must be linked into agent config"; exit 1; }
+        ! grep -q '/workspace/.pi/agent/\*' "$SCRIPT" || { echo "Pi must not import arbitrary workspace agent config"; exit 1; }
+        grep -q 'WRAPIX_STDIO=1' ${../../lib/sandbox/darwin/default.nix} || { echo "Darwin launcher must forward WRAPIX_STDIO"; exit 1; }
 
         echo "Darwin entrypoint validation passed"
         mkdir $out
@@ -146,10 +156,32 @@ in
       ''
         echo "Checking Linux entrypoint syntax..."
         bash -n ${../../lib/sandbox/linux/entrypoint.sh}
+        SCRIPT="${../../lib/sandbox/linux/entrypoint.sh}"
+        grep -q 'WRAPIX_AGENT" = "pi".*WRAPIX_STDIO' "$SCRIPT" || { echo "Pi RPC mode must be gated by WRAPIX_STDIO"; exit 1; }
+        grep -q 'pi || MAIN_EXIT' "$SCRIPT" || { echo "Pi interactive mode must run plain pi"; exit 1; }
+        grep -q '.pi/agent/sessions' "$SCRIPT" || { echo "Pi sessions directory must be initialized"; exit 1; }
+        grep -q 'WRAPIX_PI_AUTH_JSON' "$SCRIPT" || { echo "Pi auth mount must be linked into agent config"; exit 1; }
+        ! grep -q '/workspace/.pi/agent/\*' "$SCRIPT" || { echo "Pi must not import arbitrary workspace agent config"; exit 1; }
 
         echo "Linux entrypoint validation passed"
         mkdir $out
       '';
+
+  # Verify Pi defaults and image config are scoped to the Pi agent tier.
+  pi-config-defaults = runCommandLocal "smoke-pi-config-defaults" { } ''
+    DEFAULTS="${../../lib/sandbox/default.nix}"
+    IMAGE="${../../lib/sandbox/image.nix}"
+
+    grep -q 'defaultProvider = "openai-codex"' "$DEFAULTS" || { echo "Pi default provider must be OpenAI Codex"; exit 1; }
+    grep -q 'defaultModel = "gpt-5.5"' "$DEFAULTS" || { echo "Pi default model must be gpt-5.5"; exit 1; }
+    grep -q 'defaultThinkingLevel = "high"' "$DEFAULTS" || { echo "Pi default reasoning must be high"; exit 1; }
+    grep -q 'sessionDir = "/workspace/.pi/agent/sessions"' "$DEFAULTS" || { echo "Pi sessions must persist via explicit sessionDir"; exit 1; }
+    grep -q 'optionalString (agent == "pi")' "$IMAGE" || { echo "Pi settings must only be baked for agent=pi"; exit 1; }
+    grep -q 'etc/wrapix/pi-agent/settings.json' "$IMAGE" || { echo "Pi settings seed must be written under /etc/wrapix/pi-agent"; exit 1; }
+
+    echo "Pi config defaults validation passed"
+    mkdir $out
+  '';
 
   # Verify builder key generation produces expected outputs
   # Security note: Keys are in Nix store (world-readable), mitigated by localhost-only SSH

@@ -38,7 +38,7 @@ let
     pkgs = linuxPkgs;
     profile = profiles.base;
     agent = "claude";
-    entrypointPkg = linuxPkgs.claude-code;
+    agentPkg = linuxPkgs.claude-code;
     entrypointSh = ../../lib/sandbox/darwin/entrypoint.sh;
     claudeConfig = { };
     claudeSettings = { };

@@ -12,9 +12,9 @@
 # grepping source: the guard runs only on agent-exec runs ($# -eq 0),
 # so each case invokes the default entrypoint with no command override.
 #
-#   - Guard fires: WRAPIX_AGENT=pi against test-image-base (which bakes
-#     `hello` as the agent stand-in — no pi, no claude, no
-#     loom-direct-runner) hard-errors non-zero, naming the agent.
+#   - Guard fires: WRAPIX_AGENT=claude against test-image-base (which bakes
+#     `hello` as the agent stand-in — no claude, no loom-direct-runner)
+#     hard-errors non-zero, naming the agent.
 #   - Guard passes: WRAPIX_AGENT=direct with a /workspace/bin shim named
 #     loom-direct-runner runs the shim (its sentinel reaches stdout)
 #     rather than blocking.
@@ -28,6 +28,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+# shellcheck source=../lib/podman-image.sh
+source "$SCRIPT_DIR/../lib/podman-image.sh"
 
 skip() {
   echo "SKIP: $1" >&2
@@ -48,22 +50,18 @@ IMAGE_STREAM=$(nix build --no-link --print-out-paths --no-warn-dirty .#test-imag
 WORKSPACE=$(mktemp -d -t wrapix-agent-binary-guard.XXXXXX)
 cleanup() {
   rm -rf "$WORKSPACE"
-  if podman image exists localhost/wrapix-base:latest; then
-    podman rmi localhost/wrapix-base:latest >/dev/null
+  if podman image exists "$IMAGE_REF"; then
+    podman rmi "$IMAGE_REF" >/dev/null
   fi
 }
 trap cleanup EXIT
 
-IMAGE_REF="localhost/wrapix-base:latest"
+IMAGE_REF="localhost/wrapix-test-agent-binary-guard:latest"
 # Clear stale wrapix-base images BEFORE load so the post-load retag has exactly
 # one candidate (same retag pattern as container-starts.sh / workspace-bin-path.sh).
-if podman image exists "$IMAGE_REF"; then
-  podman rmi "$IMAGE_REF" >/dev/null
-fi
+wrapix_remove_test_image_refs "wrapix-base-claude" "$IMAGE_REF"
 "$IMAGE_STREAM" | podman load >/dev/null
-loaded_id=$(podman images --quiet --filter "reference=*wrapix-base*" | head -n1)
-[[ -n "$loaded_id" ]] || { echo "FAIL: image not found after podman load" >&2; podman images >&2; exit 1; }
-podman tag "$loaded_id" "$IMAGE_REF"
+wrapix_tag_loaded_image_id "wrapix-base-claude" "$IMAGE_REF"
 
 # Run the default entrypoint with no command override ($# -eq 0 inside the
 # container) so the agent-exec path — and thus the guard — is reached.
@@ -77,16 +75,16 @@ run_agent() {
 # --- Case 1: selected agent absent -> guard fires, names the agent ------------
 rm -rf "${WORKSPACE:?}/bin"
 set +e
-fire_out=$(run_agent pi 2>&1)
+fire_out=$(run_agent claude 2>&1)
 fire_rc=$?
 set -e
 [[ "$fire_rc" -ne 0 ]] || {
-  echo "FAIL: WRAPIX_AGENT=pi against an image without pi exited 0 (guard did not fire)" >&2
+  echo "FAIL: WRAPIX_AGENT=claude against an image without claude exited 0 (guard did not fire)" >&2
   echo "  output: $fire_out" >&2
   exit 1
 }
 case "$fire_out" in
-  *"WRAPIX_AGENT=pi"*"not present"*) ;;
+  *"WRAPIX_AGENT=claude"*"not present"*) ;;
   *)
     echo "FAIL: guard error did not name the missing agent clearly: $fire_out" >&2
     exit 1

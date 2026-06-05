@@ -429,6 +429,35 @@ in
               fi
             fi
 
+            # Pi subscription credentials are file-backed. Mount them only
+            # when the selected image is Pi; settings are non-secret image
+            # defaults. Apple Container/VirtioFS mounts directories, so mount
+            # the auth file's parent at a staging path and expose only auth.json
+            # to Pi via WRAPIX_PI_AUTH_JSON.
+            PI_AUTH_JSON_MOUNT=""
+            if [ "''${WRAPIX_AGENT:-direct}" = "pi" ]; then
+              PI_AUTH_FILE="''${WRAPIX_PI_AUTH_FILE:-$HOME/.pi/agent/auth.json}"
+              if [ -n "''${WRAPIX_PI_AUTH_FILE:-}" ]; then
+                if [ ! -f "$PI_AUTH_FILE" ]; then
+                  echo "wrapix: WRAPIX_PI_AUTH_FILE=$PI_AUTH_FILE: file does not exist" >&2
+                  exit 1
+                fi
+              elif [ "$SUBCOMMAND" = "spawn" ] && [ ! -f "$PI_AUTH_FILE" ]; then
+                echo "wrapix spawn: Pi auth file not found at $PI_AUTH_FILE — run 'pi' and /login on the host, or set WRAPIX_PI_AUTH_FILE to an existing auth.json" >&2
+                exit 1
+              elif [ "$SUBCOMMAND" = "run" ]; then
+                mkdir -p "$(dirname "$PI_AUTH_FILE")"
+                if [ ! -e "$PI_AUTH_FILE" ]; then
+                  printf '{}\n' > "$PI_AUTH_FILE"
+                fi
+                chmod 600 "$PI_AUTH_FILE"
+              fi
+              PI_AUTH_DIR=$(dirname "$PI_AUTH_FILE")
+              PI_AUTH_NAME=$(basename "$PI_AUTH_FILE")
+              MOUNT_ARGS="$MOUNT_ARGS -v $PI_AUTH_DIR:/mnt/wrapix/pi-agent-auth"
+              PI_AUTH_JSON_MOUNT="/mnt/wrapix/pi-agent-auth/$PI_AUTH_NAME"
+            fi
+
             ${stageBeads}
             if [ -n "$BEADS_STAGING" ]; then
               MOUNT_ARGS="$MOUNT_ARGS -v $BEADS_STAGING:/workspace/.beads"
@@ -484,6 +513,7 @@ in
               for pair in "''${SPAWN_ENV[@]}"; do
                 ENV_ARGS+=(-e "$pair")
               done
+              [ "$USE_STDIO" = "1" ] && ENV_ARGS+=(-e "WRAPIX_STDIO=1")
             else
               ENV_ARGS+=(-e "WRAPIX_VERBOSE=''${WRAPIX_VERBOSE:-}")
               ENV_ARGS+=(-e "CLAUDE_CODE_OAUTH_TOKEN=''${CLAUDE_CODE_OAUTH_TOKEN:-}")
@@ -510,6 +540,7 @@ in
             ENV_ARGS+=(-e "WRAPIX_NETWORK=$WRAPIX_NETWORK")
             [ "$_vpn_conflict" = true ] && ENV_ARGS+=(-e "WRAPIX_WAIT_FOR_ROUTE=1")
             ENV_ARGS+=(-e "WRAPIX_NETWORK_ALLOWLIST=${networkAllowlist}")
+            [ -n "$PI_AUTH_JSON_MOUNT" ] && ENV_ARGS+=(-e "WRAPIX_PI_AUTH_JSON=$PI_AUTH_JSON_MOUNT")
 
             # Generate unique container name
             CONTAINER_NAME="wrapix-$$"
@@ -539,11 +570,11 @@ in
             # user-level settings.json separate from project-level settings.json,
             # avoiding Claude Code writing user-only properties (like
             # skipDangerousModePermissionPrompt) to the project settings path.
-            TTY_ARGS=""
+            TTY_ARGS=()
             if [ "$SUBCOMMAND" = "spawn" ]; then
-              [ "$USE_STDIO" = "1" ] && TTY_ARGS="-i"
+              [ "$USE_STDIO" = "1" ] && TTY_ARGS=(-i)
             else
-              [ -t 0 ] && TTY_ARGS="-t -i"
+              [ -t 0 ] && TTY_ARGS=(-t -i)
             fi
 
             RUN_IMAGE="''${WRAPIX_IMAGE:-$PROFILE_IMAGE}"
@@ -552,7 +583,7 @@ in
             container run \
               --name "$CONTAINER_NAME" \
               --rm \
-              $TTY_ARGS \
+              "''${TTY_ARGS[@]}" \
               -w / \
               -c "$CPUS" \
               -m ${toString memoryMb}M \

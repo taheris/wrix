@@ -125,10 +125,21 @@ let
     };
   };
 
+  # Pi settings (~/.pi/agent/settings.json) - non-secret provider preferences.
+  # Credentials stay runtime-only in ~/.pi/agent/auth.json (mounted by the
+  # launcher when WRAPIX_AGENT=pi).
+  basePiSettings = {
+    defaultProvider = "openai-codex";
+    defaultModel = "gpt-5.5";
+    defaultThinkingLevel = "high";
+    sessionDir = "/workspace/.pi/agent/sessions";
+    transport = "websocket-cached";
+  };
+
   defaultDirectRunner = linuxPkgs.writeShellApplication {
     name = "loom-direct-runner";
     text = ''
-      echo "wrapix: default direct runner is a placeholder; provide directRunner for agent=direct" >&2
+      echo "wrapix: default direct runner is a placeholder; provide agentPkg for agent=direct" >&2
       exit 64
     '';
   };
@@ -138,18 +149,17 @@ let
   #
   # `agent = "pi"` defaults to nixpkgs' pi-coding-agent (a Linux-built package
   # whose `bin/` contains the `pi` binary). Symmetric with `agent = "direct"`
-  # and `directRunner`, both remain overrideable.
+  # and `agentPkg`, both remain overrideable.
   mkImage =
     {
       profile,
       entrypointSh,
       krunSupport ? false,
-      claudePkg ? linuxPkgs.claude-code,
       claudeSettings ? baseClaudeSettings,
+      piSettings ? basePiSettings,
       mcpServerConfigs ? { },
       agent,
-      directRunner ? defaultDirectRunner,
-      piPkg ? linuxPkgs.pi-coding-agent,
+      agentPkg,
       asTarball ? false,
     }:
     import ./image.nix {
@@ -161,13 +171,12 @@ let
         krunSupport
         claudeConfig
         claudeSettings
+        piSettings
         mcpServerConfigs
         agent
-        directRunner
-        piPkg
+        agentPkg
         asTarball
         ;
-      entrypointPkg = claudePkg;
     };
 
   # Merge extra packages/mounts/env/networkAllowlist into a profile
@@ -226,15 +235,11 @@ let
       # Agent runtime axis composed onto the workspace profile. "direct" is
       # the default base image; "claude" and "pi" are explicit agent overlays.
       agent ? "direct",
-      # Linux-built package whose `bin/` directory contains the direct-runner
-      # binary. The default is a placeholder so the direct base image family
-      # is buildable; production orchestrators provide their own runner.
-      directRunner ? defaultDirectRunner,
-      # Linux-built package whose `bin/` directory contains the `pi` binary.
-      # Defaults to nixpkgs' pi-coding-agent; callers can override it.
-      piPkg ? linuxPkgs.pi-coding-agent,
-      # Override the default ANTHROPIC_MODEL for this container (null = use default)
-      model ? null,
+      # Linux-built package whose `bin/` directory contains the selected
+      # agent binary. Defaults according to `agent`.
+      agentPkg ? null,
+      # Settings for the selected agent. Schema depends on `agent`.
+      agentSettings ? { },
     }:
     let
       # mcpRuntime: include ALL MCP server packages, defer selection to runtime.
@@ -254,21 +259,34 @@ let
         inherit mounts env;
       };
 
-      # Merge MCP servers, profile plugins, and model override into Claude settings
-      # When mcpRuntime is true, don't bake mcpServers — entrypoint handles it
-      modelEnvOverride =
-        if model != null then
-          {
-            env = baseClaudeSettings.env // {
-              ANTHROPIC_MODEL = model;
-            };
-          }
+      defaultAgentPkg =
+        {
+          direct = defaultDirectRunner;
+          claude = linuxPkgs.claude-code;
+          pi = linuxPkgs.pi-coding-agent;
+        }
+        .${agent} or (throw "mkSandbox: unknown agent '${agent}' (expected 'direct', 'claude', or 'pi')");
+
+      _validateAgentSettings =
+        if agent == "direct" && agentSettings != { } then
+          throw "mkSandbox: agentSettings is only supported for agent='claude' or agent='pi'"
         else
-          { };
+          null;
+
+      finalAgentPkg = builtins.seq _validateAgentSettings (
+        if agentPkg == null then defaultAgentPkg else agentPkg
+      );
+
+      # Merge MCP servers and profile plugins into Claude settings. When
+      # mcpRuntime is true, don't bake mcpServers — entrypoint handles it.
+      claudeAgentSettings = if agent == "claude" then agentSettings else { };
 
       finalClaudeSettings =
         baseClaudeSettings
-        // modelEnvOverride
+        // claudeAgentSettings
+        // {
+          env = baseClaudeSettings.env // (claudeAgentSettings.env or { });
+        }
         // (if !mcpRuntime && mcpConfig.mcpServers != { } then { inherit (mcpConfig) mcpServers; } else { })
         // (
           if (finalProfile.enabledPlugins or { }) != { } then
@@ -276,6 +294,8 @@ let
           else
             { }
         );
+
+      finalPiSettings = basePiSettings // (if agent == "pi" then agentSettings else { });
 
       # Compute comma-separated network allowlist for WRAPIX_NETWORK=limit mode
       networkAllowlist = concatStringsSep "," (finalProfile.networkAllowlist or [ ]);
@@ -325,10 +345,10 @@ let
         krunSupport = isLinux;
         asTarball = isDarwin;
         claudeSettings = finalClaudeSettings;
+        piSettings = finalPiSettings;
+        agentPkg = finalAgentPkg;
         inherit
           agent
-          directRunner
-          piPkg
           mcpServerConfigs
           ;
       };

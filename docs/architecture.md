@@ -80,13 +80,13 @@ The launcher and the OCI image are separate Nix outputs, composed at the consume
 | `packages.image-<profile>-pi` | Per-profile OCI artifact built with `agent = "pi"` |
 | `packages.sandbox-<profile>` | `makeWrapper` of the launcher with image ref/source + `WRAPIX_AGENT=direct` baked in — the user-facing `nix run .#sandbox-rust` target |
 | `packages.sandbox-<profile>-claude` | Claude overlay with `WRAPIX_AGENT=claude` baked in |
-| `packages.sandbox-<profile>-pi` | Pi overlay with `WRAPIX_AGENT=pi` baked in. `packages.default` points at `packages.sandbox-pi` |
+| `packages.sandbox-<profile>-pi` | Pi overlay with `WRAPIX_AGENT=pi` baked in. Pi images seed non-secret Codex subscription defaults; the launcher mounts Pi `auth.json` only for Pi runs. `packages.default` points at `packages.sandbox-pi` |
 | `packages.profile-images` | JSON manifest mapping profile → `{ref, source}`, for orchestrators that look up images by profile name |
 
 The launcher exposes two subcommands sharing the same container construction (mounts, env passthrough, deploy key):
 
 - `wrapix run [DIR] [CMD…]` — interactive (TTY). Reads `WRAPIX_DEFAULT_IMAGE_REF`/`WRAPIX_DEFAULT_IMAGE_SOURCE` from the env. The `sandbox-<profile>` wrappers set both; orchestrators export them from the profile-image manifest.
-- `wrapix spawn --spawn-config <file> [--stdio]` — programmatic dispatch. Reads image ref/source plus workspace, env allowlist, and agent args from a JSON `SpawnConfig`. `--stdio` adds `WRAPIX_STDIO=1` so claude runs in `--input-format stream-json` mode.
+- `wrapix spawn --spawn-config <file> [--stdio]` — programmatic dispatch. Reads image ref/source plus workspace, env allowlist, and agent args from a JSON `SpawnConfig`. `--stdio` adds `WRAPIX_STDIO=1` so the selected agent uses its stdio protocol (`claude --input-format stream-json`, `pi --mode rpc`).
 
 See [specs/sandbox.md](../specs/sandbox.md) and [specs/profiles.md](../specs/profiles.md) for the full launcher and manifest contracts.
 
@@ -119,7 +119,7 @@ path — rather than emitting a bare `command not found`.
 
 ### Direct mode (orchestrator integration)
 
-`mkSandbox { agent = "direct"; directRunner = ...; }` is the integration
+`mkSandbox { agent = "direct"; agentPkg = ...; }` is the integration
 seam for external orchestrators. The orchestrator provides its own Linux
 binary (e.g. Loom's `loom-direct-runner`) and drives the container over
 JSONL stdio. Wrapix doesn't ship its own runner — see

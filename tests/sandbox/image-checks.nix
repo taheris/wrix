@@ -509,12 +509,13 @@ let
     };
     claudeSettings = baseImageOf {
       profile = sandboxLib.profiles.base;
-      model = "claude-hash-stable-probe";
+      agent = "claude";
+      agentSettings.env.ANTHROPIC_MODEL = "claude-hash-stable-probe";
     };
     agentDirect = baseImageOf {
       profile = sandboxLib.profiles.base;
       agent = "direct";
-      directRunner = linuxPkgs.hello;
+      agentPkg = linuxPkgs.hello;
     };
     profilePython = baseImageOf { profile = sandboxLib.profiles.python; };
   };
@@ -564,11 +565,12 @@ let
     agentDirect = stableProfileImageOf {
       profile = sandboxLib.profiles.base;
       agent = "direct";
-      directRunner = linuxPkgs.hello;
+      agentPkg = linuxPkgs.hello;
     };
     claudeSettings = stableProfileImageOf {
       profile = sandboxLib.profiles.base;
-      model = "claude-hash-stable-probe";
+      agent = "claude";
+      agentSettings.env.ANTHROPIC_MODEL = "claude-hash-stable-probe";
     };
     mcpConfigs = stableProfileImageOf {
       profile = sandboxLib.profiles.base;
@@ -611,7 +613,7 @@ let
   # in the agent tier's `lowerTiersClosure`, the base+stable+agent union, but
   # not the base+stable one), the appended package is tier 3 leaf (in neither
   # tier's `lowerTiersClosure`, only the whole image closure). Built via image.nix
-  # directly with a light entrypointPkg so the check does not drag in claude-code.
+  # directly with a light agent package so the check does not drag in claude-code.
   membershipAppendedPkg = pkgs.writeShellScriptBin "wrapix-stable-membership-appended" ''
     echo "downstream-appended package"
   '';
@@ -631,8 +633,7 @@ let
       env = { };
     };
     agent = "direct";
-    directRunner = membershipRunnerPkg;
-    entrypointPkg = pkgs.hello;
+    agentPkg = membershipRunnerPkg;
     entrypointSh = ../../lib/sandbox/linux/entrypoint.sh;
     claudeConfig = { };
     claudeSettings = { };
@@ -749,24 +750,24 @@ let
       };
 
   # Probe builder for the layering tests below: a leaf image built via image.nix
-  # directly with a light entrypointPkg so checks do not drag in claude-code.
-  # Each knob isolates one tier — `agent`/`directRunner` perturb tier 2, the
-  # `model` settings field perturbs the tier-3 leaf customisation layer.
+  # directly with a light agent package so checks do not drag in claude-code.
+  # Each knob isolates one tier — `agent`/`agentPkg` perturb tier 2, the
+  # agent settings perturb the tier-3 leaf customisation layer.
   mkLeafProbe =
     {
       agent ? "claude",
-      directRunner ? null,
+      agentPkg ? null,
       settings ? { },
     }:
     import ../../lib/sandbox/image.nix {
-      inherit pkgs agent directRunner;
+      inherit pkgs agent;
       profile = {
         name = "leafprobe";
         corePackages = [ pkgs.coreutils ];
         packages = [ pkgs.coreutils ];
         env = { };
       };
-      entrypointPkg = pkgs.hello;
+      agentPkg = if agentPkg == null then pkgs.hello else agentPkg;
       entrypointSh = ../../lib/sandbox/linux/entrypoint.sh;
       claudeConfig = { };
       claudeSettings = settings;
@@ -865,13 +866,13 @@ let
   # bump never re-ships the heavier toolchain below it.
   leafProbeRunnerA = mkLeafProbe {
     agent = "direct";
-    directRunner = pkgs.writeShellScriptBin "wrapix-agent-probe-runner" ''
+    agentPkg = pkgs.writeShellScriptBin "wrapix-agent-probe-runner" ''
       echo "agent probe runner A"
     '';
   };
   leafProbeRunnerB = mkLeafProbe {
     agent = "direct";
-    directRunner = pkgs.writeShellScriptBin "wrapix-agent-probe-runner" ''
+    agentPkg = pkgs.writeShellScriptBin "wrapix-agent-probe-runner" ''
       echo "agent probe runner B — a different version"
     '';
   };
@@ -949,7 +950,7 @@ let
   # Agent-exclusivity guard (specs/image-builder.md § Provenance-Tiered Layering;
   # specs/sandbox.md § Agent runtime axis). Exactly one agent rides each image:
   # an `agent = "direct"` image carries its runner and NO claude-code, even when
-  # the build is handed a real claude-code as entrypointPkg (the claude branch is
+  # the build is handed a real claude-code as agentPkg (the claude branch is
   # simply never selected); an `agent = "claude"` image carries claude-code and
   # not the direct runner. Built via image.nix directly so the closures are
   # scannable.
@@ -965,19 +966,19 @@ let
   mkAgentExclusiveImage =
     {
       agent,
-      directRunner ? null,
+      agentPkg ? null,
     }:
     import ../../lib/sandbox/image.nix {
-      inherit pkgs agent directRunner;
+      inherit pkgs agent;
       profile = agentExclusiveProfile;
-      entrypointPkg = claudeCodePkg;
+      agentPkg = if agentPkg == null then claudeCodePkg else agentPkg;
       entrypointSh = ../../lib/sandbox/linux/entrypoint.sh;
       claudeConfig = { };
       claudeSettings = { };
     };
   agentExclusiveDirect = mkAgentExclusiveImage {
     agent = "direct";
-    directRunner = agentExclusiveRunner;
+    agentPkg = agentExclusiveRunner;
   };
   agentExclusiveClaude = mkAgentExclusiveImage { agent = "claude"; };
   agentExclusiveDirectClosure = pkgs.closureInfo { rootPaths = [ agentExclusiveDirect ]; };
@@ -1049,7 +1050,7 @@ let
         ];
         env = { };
       };
-      entrypointPkg = pkgs.hello;
+      agentPkg = pkgs.hello;
       entrypointSh = ../../lib/sandbox/linux/entrypoint.sh;
       claudeConfig = { };
       claudeSettings = { };
@@ -1221,7 +1222,7 @@ let
   # also asserts the DB rides in the leaf customisation layer only — present in
   # that final leaf layer, absent from both lower tiers — so registration does
   # not perturb the tier-0/tier-1 blobs. Built via image.nix directly with a
-  # light entrypointPkg so the check does not drag in claude-code, but through
+  # light agent package so the check does not drag in claude-code, but through
   # the same tier chain that produces the diagnosed orphan.
   nixDbProbeImage = import ../../lib/sandbox/image.nix {
     inherit pkgs;
@@ -1232,7 +1233,7 @@ let
       packages = [ pkgs.coreutils ];
       env = { };
     };
-    entrypointPkg = pkgs.hello;
+    agentPkg = pkgs.hello;
     entrypointSh = ../../lib/sandbox/linux/entrypoint.sh;
     claudeConfig = { };
     claudeSettings = { };
@@ -1391,7 +1392,7 @@ let
   # orphan check does — the union of store paths across all three tiers' layer
   # tars — then reads the baked db.sqlite ValidPaths and asserts no REGISTERED
   # path is absent from disk. Built via image.nix directly with a light
-  # entrypointPkg so the check does not drag in claude-code, through the same
+  # agent package so the check does not drag in claude-code, through the same
   # tier chain that produced the diagnosed dangling registration.
   imageNixDbNoDanglingTest = pkgs.writeShellApplication {
     name = "test-image-nix-db-no-dangling";

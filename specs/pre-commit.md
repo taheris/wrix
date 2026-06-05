@@ -8,7 +8,7 @@ A wrapix consumer using prek wants the same hook chain to fire in every context 
 
 ## Architecture
 
-All git hooks for prek-using wrapix repositories are served from a single Nix-store derivation — `wrapix.prekHooks` — pointed at by `core.hooksPath`. The bundle contains one shim per stage prek serves. Every shim invokes prek directly; the pre-commit and post-* shims `exec` it, while the pre-push shim wraps the call in a stamp-file dance to survive an SSH disconnect mid-check (see § Pre-Push Stamp Dance):
+All git hooks for prek-using wrapix repositories are served from a single Nix-store derivation — `wrapix.prekHooks` — pointed at by `core.hooksPath`. The bundle contains one shim per stage prek serves. Every shim injects the Nix-store `prek` package into `PATH` before invoking prek, so hooks work from plain host shells, devshells, and profile containers. The pre-commit and post-* shims `exec` it, while the pre-push shim wraps the call in a stamp-file dance to survive an SSH disconnect mid-check (see § Pre-Push Stamp Dance):
 
 | Stage | Shim behavior |
 |-------|---------------|
@@ -115,7 +115,7 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
   [check](grep -nE 'core\.hooksPath|prekHooks' lib/default.nix)
 - The pre-commit and pre-push shims both invoke `prek hook-impl --hook-type=<stage>` (not `prek run`, which would mistake git's positional args for hook/project selectors)
   [check](grep -nE 'hook-impl --hook-type=' lib/prek/hooks/pre-commit lib/prek/hooks/pre-push)
-- No shim sources `lock.sh`, calls `_prek_acquire_lock`, or invokes `flock`; every shim invokes `prek hook-impl --hook-type=<its-stage>`
+- No shim sources `lock.sh`, calls `_prek_acquire_lock`, or invokes `flock`; every shim invokes `prek hook-impl --hook-type=<its-stage>` and pins the Nix-store `prek` package on `PATH`
   [system](bash tests/profiles/prek-hooks-bundle.sh test_shims_are_plain_hook_impl)
 - The pre-push shim writes and consumes `.wrapix/push-verified`
   [check](grep -nE 'push-verified' lib/prek/hooks/pre-push)

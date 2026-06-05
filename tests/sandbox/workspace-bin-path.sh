@@ -21,6 +21,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+# shellcheck source=../lib/podman-image.sh
+source "$SCRIPT_DIR/../lib/podman-image.sh"
 
 skip() {
   echo "SKIP: $1" >&2
@@ -41,22 +43,18 @@ IMAGE_STREAM=$(nix build --no-link --print-out-paths --no-warn-dirty .#test-imag
 WORKSPACE=$(mktemp -d -t wrapix-workspace-bin.XXXXXX)
 cleanup() {
   rm -rf "$WORKSPACE"
-  if podman image exists localhost/wrapix-base:latest; then
-    podman rmi localhost/wrapix-base:latest >/dev/null
+  if podman image exists "$IMAGE_REF"; then
+    podman rmi "$IMAGE_REF" >/dev/null
   fi
 }
 trap cleanup EXIT
 
-IMAGE_REF="localhost/wrapix-base:latest"
+IMAGE_REF="localhost/wrapix-test-workspace-bin-path:latest"
 # Clear stale wrapix-base images BEFORE load so the post-load retag has exactly
 # one candidate (same retag pattern as container-starts.sh / shell.nix).
-if podman image exists "$IMAGE_REF"; then
-  podman rmi "$IMAGE_REF" >/dev/null
-fi
+wrapix_remove_test_image_refs "wrapix-base-claude" "$IMAGE_REF"
 "$IMAGE_STREAM" | podman load >/dev/null
-loaded_id=$(podman images --quiet --filter "reference=*wrapix-base*" | head -n1)
-[[ -n "$loaded_id" ]] || { echo "FAIL: image not found after podman load" >&2; podman images >&2; exit 1; }
-podman tag "$loaded_id" "$IMAGE_REF"
+wrapix_tag_loaded_image_id "wrapix-base-claude" "$IMAGE_REF"
 
 run_entrypoint() {
   # Invoke the default entrypoint (/entrypoint.sh) with a command override so

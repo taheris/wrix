@@ -43,6 +43,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+# shellcheck source=../lib/podman-image.sh
+source "$SCRIPT_DIR/../lib/podman-image.sh"
 
 skip() {
   echo "SKIP: $1" >&2
@@ -63,22 +65,18 @@ IMAGE_STREAM=$(nix build --no-link --print-out-paths --no-warn-dirty .#test-imag
 WORKSPACE=$(mktemp -d -t wrapix-nix-in-container.XXXXXX)
 cleanup() {
   rm -rf "$WORKSPACE"
-  if podman image exists localhost/wrapix-nix:latest; then
-    podman rmi localhost/wrapix-nix:latest >/dev/null
+  if podman image exists "$IMAGE_REF"; then
+    podman rmi "$IMAGE_REF" >/dev/null
   fi
 }
 trap cleanup EXIT
 
-IMAGE_REF="localhost/wrapix-nix:latest"
+IMAGE_REF="localhost/wrapix-test-nix-in-container:latest"
 # Clear stale wrapix-nix images BEFORE load so the post-load retag has exactly
 # one candidate (same retag pattern as container-starts.sh / shell.nix).
-if podman image exists "$IMAGE_REF"; then
-  podman rmi "$IMAGE_REF" >/dev/null
-fi
+wrapix_remove_test_image_refs "wrapix-nix-claude" "$IMAGE_REF"
 "$IMAGE_STREAM" | podman load >/dev/null
-loaded_id=$(podman images --quiet --filter "reference=*wrapix-nix*" | head -n1)
-[[ -n "$loaded_id" ]] || { echo "FAIL: image not found after podman load" >&2; podman images >&2; exit 1; }
-podman tag "$loaded_id" "$IMAGE_REF"
+wrapix_tag_loaded_image_id "wrapix-nix-claude" "$IMAGE_REF"
 
 # The probe runs entirely inside the container so the flake resolves and
 # realizes against the image's own Nix store, never the host's. It drives a
