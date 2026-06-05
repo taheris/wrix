@@ -114,7 +114,7 @@ in
     set -euo pipefail
 
     cat > podman <<'EOF'
-    #!/usr/bin/env bash
+    #!${pkgs.bash}/bin/bash
     set -euo pipefail
 
     case "$1" in
