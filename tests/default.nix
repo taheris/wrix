@@ -159,7 +159,7 @@ in
     };
 
     claude-runtime-noop = {
-      meta.description = "Verify default sandbox image closure contains claude-code";
+      meta.description = "Verify bundled Claude sandbox image closure contains claude-code";
       type = "app";
       program = "${sandboxImageChecks.claudeRuntimeNoopTest}/bin/test-claude-runtime-noop";
     };

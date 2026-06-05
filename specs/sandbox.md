@@ -46,9 +46,9 @@ Filtering requires `NET_ADMIN`: a Linux rootless container has no `NET_ADMIN`, s
 
 **Agent runtime axis** — the `agent` parameter selects, **at build time**, the single agent binary the image bakes and the entrypoint launches. The binary must be in the image, so this is not a runtime knob.
 
-- `claude` (default) — `claude-code` from nixpkgs; no consumer package required
-- `pi` — a consumer-supplied `piPkg` (e.g. loom's `pi-coding-agent`); `mkSandbox` throws when `piPkg` is missing
-- `direct` — a consumer-supplied `directRunner` (e.g. `loom-direct-runner`); `mkSandbox` throws when `directRunner` is missing
+- `direct` (default) — default base image; consumers can override the placeholder `directRunner`
+- `claude` — `claude-code` from nixpkgs; no consumer package required
+- `pi` — `pi-coding-agent` from nixpkgs by default; callers can override `piPkg`
 
 Exactly one agent rides each image — `agent = "direct"` bakes neither `claude-code` nor `pi`. The agent runtime is its own image tier (`image-builder.md` § Provenance-Tiered Layering); it composes orthogonally with the profile, so variants are `(profile × agent)`.
 
@@ -81,9 +81,9 @@ mkSandbox {
   env = { FOO = "bar"; };           # Extra env merged into profile.env
   mcp.tmux = { };                   # MCP server opt-in
   mcpRuntime = false;               # Bake ALL MCP servers, defer selection to entrypoint
-  agent = "claude";                 # "claude" (default), "pi", or "direct"
-  # piPkg = ...;                    # Required when agent = "pi"; consumer-supplied (e.g. loom's pi-coding-agent)
-  # directRunner = ...;             # Required when agent = "direct"; consumer-supplied (e.g. loom-direct-runner)
+  agent = "direct";                 # "direct" (default), "claude", or "pi"
+  # piPkg = ...;                    # Optional when agent = "pi"; defaults to linuxPkgs.pi-coding-agent
+  # directRunner = ...;             # Optional when agent = "direct"; defaults to placeholder runner
   model = null;                     # claude-scoped: overrides ANTHROPIC_MODEL in claude settings (no-op for other agents)
 }
 ```

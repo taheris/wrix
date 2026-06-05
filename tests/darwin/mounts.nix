@@ -37,6 +37,7 @@ let
   profileImage = import ../../lib/sandbox/image.nix {
     pkgs = linuxPkgs;
     profile = profiles.base;
+    agent = "claude";
     entrypointPkg = linuxPkgs.claude-code;
     entrypointSh = ../../lib/sandbox/darwin/entrypoint.sh;
     claudeConfig = { };

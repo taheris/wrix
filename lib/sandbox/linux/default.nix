@@ -545,6 +545,7 @@ in
           -e "GIT_AUTHOR_EMAIL=$GIT_AUTHOR_EMAIL"
           -e "GIT_COMMITTER_NAME=$GIT_COMMITTER_NAME"
           -e "GIT_COMMITTER_EMAIL=$GIT_COMMITTER_EMAIL"
+          -e "WRAPIX_AGENT=$WRAPIX_AGENT"
           -e "WRAPIX_NETWORK=$WRAPIX_NETWORK"
           -e "WRAPIX_NETWORK_ALLOWLIST=${networkAllowlist}"
         )

@@ -10,9 +10,10 @@ Provides filesystem and process isolation — code inside the container cannot a
 ## Quick Start
 
 ```bash
-nix run github:taheris/wrapix                 # base profile, claude agent
-nix run github:taheris/wrapix#sandbox-rust    # rust profile, claude agent
-nix run github:taheris/wrapix#sandbox-python  # python profile, claude agent
+nix run github:taheris/wrapix                 # base profile, pi agent
+nix run github:taheris/wrapix#sandbox-rust    # rust profile, direct base image
+nix run github:taheris/wrapix#sandbox-rust-pi # rust profile, pi agent overlay
+nix run github:taheris/wrapix#sandbox-rust-claude  # rust profile, claude overlay
 ```
 
 ## Agent Runtimes
@@ -21,11 +22,11 @@ The agent binary baked into the image is selected **at build time** by the build
 
 | Agent | Runtime | How it talks to the host |
 |-------|---------|--------------------------|
-| `claude` *(default)* | [Claude Code](https://claude.ai/code) | Interactive TTY, or stream-json via `WRAPIX_STDIO=1` |
-| `pi` | Caller-supplied [pi-mono](https://github.com/badlogic/pi-mono) build | JSONL RPC on stdio (`pi --mode rpc`); see *Consumer-supplied agents* below |
-| `direct` | Caller-supplied binary | JSONL stdio; see *Consumer-supplied agents* below |
+| `direct` *(default)* | Direct runner binary | JSONL stdio; intended for orchestrators |
+| `claude` | [Claude Code](https://claude.ai/code) | Interactive TTY, or stream-json via `WRAPIX_STDIO=1` |
+| `pi` | [Pi coding agent](https://github.com/earendil-works/pi) | Interactive TTY, or JSONL RPC on stdio (`pi --mode rpc`) |
 
-`packages.image-<profile>` ships the `claude` runtime; `pi` and `direct` need a caller-supplied derivation baked in at image-build time (see below). The entrypoint dispatches on `WRAPIX_AGENT` and guards on binary presence (`command -v`) before exec, so an image asked for an agent it doesn't carry fails loudly instead of with a bare `command not found`.
+`packages.image-<profile>` ships the default direct runtime. Agent overlays are exposed as `packages.image-<profile>-claude` and `packages.image-<profile>-pi`. The entrypoint dispatches on `WRAPIX_AGENT` and guards on binary presence (`command -v`) before exec, so an image asked for an agent it doesn't carry fails loudly instead of with a bare `command not found`.
 
 ## Flake Integration
 
@@ -64,9 +65,9 @@ The canonical pattern feeds one profile to both the host devshell and the sandbo
 | `packages` | list of packages | Additional Nix packages to include |
 | `env` | attrset of strings | Environment variables |
 | `mounts` | list of `{ source, dest, mode }` | Host paths to mount into the container |
-| `agent` | `"claude"` \| `"pi"` \| `"direct"` | Agent runtime baked into the image (default `"claude"`) |
-| `piPkg` | Linux derivation | Required when `agent == "pi"`; supplies the `pi` binary the entrypoint execs |
-| `directRunner` | Linux derivation | Required when `agent == "direct"`; supplies the binary the entrypoint execs |
+| `agent` | `"direct"` \| `"claude"` \| `"pi"` | Agent runtime baked into the image (default `"direct"`) |
+| `piPkg` | Linux derivation | Optional when `agent == "pi"`; defaults to `linuxPkgs.pi-coding-agent` |
+| `directRunner` | Linux derivation | Optional when `agent == "direct"`; defaults to a placeholder runner for built-in direct images |
 | `deployKey` | string | SSH key name for git push (see `scripts/setup-deploy-key`) |
 | `mcp` | attrset of server configs | Baked-in MCP servers (e.g. `{ tmux = { }; }`) |
 | `mcpRuntime` | bool | Include all MCP servers, select at runtime via `WRAPIX_MCP` |
@@ -86,7 +87,7 @@ See [specs/profiles.md](specs/profiles.md) for the full schema and `buildPackage
 
 ## Consumer-supplied agents
 
-`agent = "pi"` and `agent = "direct"` both require the caller to hand in a Linux derivation that supplies the agent binary; wrapix no longer ships either runtime in tree. `agent = "direct"` is the integration seam for external orchestrators (e.g. [Loom](https://github.com/taheris/loom)) that drive the container themselves over JSONL stdio:
+`agent = "direct"` is the integration seam for external orchestrators (e.g. [Loom](https://github.com/taheris/loom)) that drive the container themselves over JSONL stdio. The built-in direct image carries a placeholder runner so the default image family is buildable; production orchestrators should pass their own `directRunner`:
 
 ```nix
 let

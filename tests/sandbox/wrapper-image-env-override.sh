@@ -48,6 +48,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 WRAPPER_NIX="$REPO_ROOT/lib/sandbox/default.nix"
+LINUX_LAUNCHER_NIX="$REPO_ROOT/lib/sandbox/linux/default.nix"
+DARWIN_LAUNCHER_NIX="$REPO_ROOT/lib/sandbox/darwin/default.nix"
 
 TEST_TMP=$(mktemp -d -t wrapix-wrapper-image-env-override.XXXXXX)
 trap 'rm -rf "$TEST_TMP"' EXIT
@@ -211,6 +213,18 @@ test_production_source_uses_correct_directives() {
   pass "lib/sandbox/default.nix uses --set-default for image vars, --set for WRAPIX_AGENT"
 }
 
+test_launchers_pass_agent_to_container() {
+  if ! grep -nF -- '-e "WRAPIX_AGENT=$WRAPIX_AGENT"' "$LINUX_LAUNCHER_NIX" >/dev/null; then
+    fail "lib/sandbox/linux/default.nix: launcher must pass WRAPIX_AGENT into podman env"
+    return 1
+  fi
+  if ! grep -nF -- '-e "WRAPIX_AGENT=$WRAPIX_AGENT"' "$DARWIN_LAUNCHER_NIX" >/dev/null; then
+    fail "lib/sandbox/darwin/default.nix: launcher must pass WRAPIX_AGENT into container env"
+    return 1
+  fi
+  pass "Linux and Darwin launchers pass WRAPIX_AGENT into the container"
+}
+
 ALL_TESTS=(
   test_caller_unset_uses_baked_defaults
   test_caller_set_ref_wins_independently
@@ -218,6 +232,7 @@ ALL_TESTS=(
   test_caller_set_both_image_vars_win
   test_agent_is_not_caller_overridable
   test_production_source_uses_correct_directives
+  test_launchers_pass_agent_to_container
 )
 
 run_all() {

@@ -125,12 +125,20 @@ let
     };
   };
 
+  defaultDirectRunner = linuxPkgs.writeShellApplication {
+    name = "loom-direct-runner";
+    text = ''
+      echo "wrapix: default direct runner is a placeholder; provide directRunner for agent=direct" >&2
+      exit 64
+    '';
+  };
+
   # Build the container image using Linux packages
   # On Darwin, this will use a remote Linux builder if configured
   #
-  # `agent = "pi"` requires the caller to supply `piPkg` (a Linux-built
-  # package whose `bin/` contains the `pi` binary); wrapix no longer ships
-  # pi-mono in tree. Symmetric with `agent = "direct"` and `directRunner`.
+  # `agent = "pi"` defaults to nixpkgs' pi-coding-agent (a Linux-built package
+  # whose `bin/` contains the `pi` binary). Symmetric with `agent = "direct"`
+  # and `directRunner`, both remain overrideable.
   mkImage =
     {
       profile,
@@ -139,9 +147,9 @@ let
       claudePkg ? linuxPkgs.claude-code,
       claudeSettings ? baseClaudeSettings,
       mcpServerConfigs ? { },
-      agent ? "claude",
-      directRunner ? null,
-      piPkg ? null,
+      agent,
+      directRunner ? defaultDirectRunner,
+      piPkg ? linuxPkgs.pi-coding-agent,
       asTarball ? false,
     }:
     import ./image.nix {
@@ -215,25 +223,16 @@ let
       env ? { },
       mcp ? { },
       mcpRuntime ? false,
-      # Agent runtime axis composed onto the workspace profile. "claude"
-      # (default) is a no-op; "pi" adds a consumer-supplied `piPkg`; "direct"
-      # adds a consumer-supplied `directRunner` package. Both `pi` and
-      # `direct` require their respective package argument — mkSandbox throws
-      # "agent = \"pi\" requires piPkg" (resp. directRunner) when the package
-      # is missing, since wrapix no longer ships pi-mono or loom in tree.
-      agent ? "claude",
+      # Agent runtime axis composed onto the workspace profile. "direct" is
+      # the default base image; "claude" and "pi" are explicit agent overlays.
+      agent ? "direct",
       # Linux-built package whose `bin/` directory contains the direct-runner
-      # binary. Required when `agent == "direct"`. Consumers provide this
-      # themselves (e.g. via `loom.packages.${system}.default`) since wrapix
-      # no longer builds loom in-tree.
-      directRunner ? null,
+      # binary. The default is a placeholder so the direct base image family
+      # is buildable; production orchestrators provide their own runner.
+      directRunner ? defaultDirectRunner,
       # Linux-built package whose `bin/` directory contains the `pi` binary.
-      # Required when `agent == "pi"`. Consumers provide this themselves
-      # (e.g. via `loom.packages.${system}.pi-mono`); wrapix no longer ships
-      # pi-mono in tree. When the caller asks for `agent = "pi"` without
-      # supplying `piPkg`, the default raises a fail-fast
-      # `throw "... piPkg ..."` so the misuse is caught at evaluation.
-      piPkg ? if agent == "pi" then throw ''mkSandbox: agent = "pi" requires piPkg'' else null,
+      # Defaults to nixpkgs' pi-coding-agent; callers can override it.
+      piPkg ? linuxPkgs.pi-coding-agent,
       # Override the default ANTHROPIC_MODEL for this container (null = use default)
       model ? null,
     }:
@@ -338,7 +337,7 @@ let
       # baking in the agent-runtime selector and image ref/source as defaults
       # so `wrapix run` works without the caller exporting env vars.
       packageName = "wrapix-${finalProfile.name}${packageSuffix}";
-      packageSuffix = if agent != "claude" then "-${agent}" else "";
+      packageSuffix = if agent == "direct" then "" else "-${agent}";
       package =
         pkgs.runCommand packageName
           {

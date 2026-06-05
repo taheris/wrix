@@ -23,13 +23,32 @@ _:
       profileSandboxes = mapAttrs (_: profile: wrapix.mkSandbox { inherit profile; }) builtInProfiles;
       profileImages = mapAttrs (_: s: s.image) profileSandboxes;
 
-      # `packages.image-<name>` — per-profile OCI artifact (claude + pi
-      # runtimes both installed; WRAPIX_AGENT picks at container start).
+      # `packages.image-<name>` — per-profile OCI artifact for the default
+      # direct runtime. Agent overlays use `image-<name>-claude` and
+      # `image-<name>-pi`.
       imagePkgs = listToAttrs (
         map (name: {
           name = "image-${name}";
           value = profileImages.${name};
         }) (builtins.attrNames builtInProfiles)
+      );
+      overlayImagePkgs = listToAttrs (
+        builtins.concatMap
+          (
+            agent:
+            map (name: {
+              name = "image-${name}-${agent}";
+              value =
+                (wrapix.mkSandbox {
+                  profile = builtInProfiles.${name};
+                  inherit agent;
+                }).image;
+            }) (builtins.attrNames builtInProfiles)
+          )
+          [
+            "claude"
+            "pi"
+          ]
       );
 
       mkSandboxPkg = cfg: (wrapix.mkSandbox cfg).package;
@@ -60,6 +79,62 @@ _:
           packages = [ linuxPkgs.podman ];
         };
       };
+      sandboxOverlayPkgs = mapAttrs (_: mkSandboxPkg) {
+        sandbox-claude = {
+          profile = profiles.base;
+          agent = "claude";
+        };
+        sandbox-pi = {
+          profile = profiles.base;
+          agent = "pi";
+        };
+        sandbox-rust-claude = {
+          profile = profiles.rust;
+          agent = "claude";
+        };
+        sandbox-rust-pi = {
+          profile = profiles.rust;
+          agent = "pi";
+        };
+        sandbox-python-claude = {
+          profile = profiles.python;
+          agent = "claude";
+        };
+        sandbox-python-pi = {
+          profile = profiles.python;
+          agent = "pi";
+        };
+        sandbox-mcp-claude = {
+          profile = profiles.base;
+          mcpRuntime = true;
+          agent = "claude";
+        };
+        sandbox-mcp-pi = {
+          profile = profiles.base;
+          mcpRuntime = true;
+          agent = "pi";
+        };
+        sandbox-rust-mcp-claude = {
+          profile = profiles.rust;
+          mcpRuntime = true;
+          agent = "claude";
+        };
+        sandbox-rust-mcp-pi = {
+          profile = profiles.rust;
+          mcpRuntime = true;
+          agent = "pi";
+        };
+        sandbox-python-mcp-claude = {
+          profile = profiles.python;
+          mcpRuntime = true;
+          agent = "claude";
+        };
+        sandbox-python-mcp-pi = {
+          profile = profiles.python;
+          mcpRuntime = true;
+          agent = "pi";
+        };
+      };
 
       # Profile-agnostic launcher (`packages.wrapix`) — no image baked in.
       # Orchestrators export WRAPIX_DEFAULT_IMAGE_REF/WRAPIX_DEFAULT_IMAGE_SOURCE
@@ -69,7 +144,9 @@ _:
     {
       packages =
         sandboxPkgs
+        // sandboxOverlayPkgs
         // imagePkgs
+        // overlayImagePkgs
         // {
           inherit (pkgs)
             beads
@@ -77,7 +154,7 @@ _:
             beads-push
             ;
 
-          default = sandboxPkgs.sandbox-rust;
+          default = sandboxOverlayPkgs.sandbox-pi;
           nodejs = linuxPkgs.nodejs_22;
           profile-images = wrapix.mkProfileImages profileImages;
           # Test sandbox image (claude/beads stubbed out with `hello`);

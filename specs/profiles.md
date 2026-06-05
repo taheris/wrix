@@ -466,9 +466,10 @@ re-implement the tag logic. Loom maps the manifest entry's `ref` and
 `source` to `SpawnConfig.image_ref` and `SpawnConfig.image_source`
 respectively when building each spawn-config.
 
-The manifest is keyed by profile only. Agent runtime (claude vs pi) is
-selected at container start via `WRAPIX_AGENT` — each profile image installs
-both runtimes, so a single `packages.image-<profile>` covers both agents.
+The bundled manifest is keyed by profile only and points at the default
+`direct` image for each profile. Agent overlays are separate image variants:
+Claude is exposed by `packages.image-<profile>-claude`, and Pi is exposed by
+`packages.image-<profile>-pi`.
 
 The repo's bundled manifest covering `base`, `rust`, `python` is exposed as
 `packages.profile-images`. External flakes adding custom profiles call
@@ -481,8 +482,12 @@ Profiles surface as three sibling output families:
 
 | Output | Shape | Use |
 |--------|-------|-----|
-| `packages.image-<profile>` | OCI artifact (Linux: `streamLayeredImage`; Darwin: tarball); built with `agent = "claude"` (the default) | Consumers driving podman directly; manifest entries |
-| `packages.sandbox-<profile>` | `makeWrapper` of `packages.wrapix` + `packages.image-<profile>` with `WRAPIX_AGENT=claude` baked in | One-shot users (`nix run .#sandbox-rust`). Consumers needing `pi` or `direct` call `mkSandbox` themselves with their own agent package. |
+| `packages.image-<profile>` | OCI artifact (Linux: `streamLayeredImage`; Darwin: tarball); built with `agent = "direct"` (the default base image) | Consumers driving podman directly; manifest entries |
+| `packages.image-<profile>-claude` | OCI artifact built with `agent = "claude"` | Consumers driving Claude images directly |
+| `packages.image-<profile>-pi` | OCI artifact built with `agent = "pi"` | Consumers driving Pi images directly |
+| `packages.sandbox-<profile>` | `makeWrapper` of `packages.wrapix` + `packages.image-<profile>` with `WRAPIX_AGENT=direct` baked in | One-shot users (`nix run .#sandbox-rust`) |
+| `packages.sandbox-<profile>-claude` | Claude variant with `WRAPIX_AGENT=claude` baked in | One-shot users that want Claude |
+| `packages.sandbox-<profile>-pi` | Pi variant with `WRAPIX_AGENT=pi` baked in | One-shot users that want Pi; `packages.default` points at base `sandbox-pi` |
 | `packages.profile-images` | JSON manifest from `mkProfileImages`, keyed by profile (not by profile×agent) | External orchestrators (e.g. Loom via `LOOM_PROFILES_MANIFEST`) |
 
 `<profile>` covers the built-in profiles (`base`, `rust`, `python`). The

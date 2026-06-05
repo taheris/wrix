@@ -46,6 +46,7 @@ in
 import ../../lib/sandbox/image.nix {
   pkgs = testPkgs;
   inherit profile;
+  agent = "claude";
   entrypointPkg = testPkgs.hello;
   entrypointSh = ../../lib/sandbox/linux/entrypoint.sh;
   # Mirror production (lib/sandbox/default.nix sets krunSupport = isLinux): bakes

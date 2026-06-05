@@ -8,7 +8,7 @@ Sandboxes need container images with all profile packages pre-installed, an agen
 
 ## Architecture
 
-`mkImage` (in `lib/sandbox/image.nix`) is the internal API called by `mkSandbox` (see `sandbox.md`). Inputs: a profile, an agent runtime selector, an entrypoint script path (Linux or Darwin), optional krun support, the merged Claude settings JSON, and the resolved MCP server configs. When `agent` is `"pi"` or `"direct"`, the caller also supplies the agent package (`piPkg` or `directRunner` respectively); `mkSandbox` throws when it's missing. It emits a layered OCI image via `dockerTools.streamLayeredImage` (Linux) or `dockerTools.buildLayeredImage` (Darwin — the stream script's Linux Python shebang cannot execute on macOS).
+`mkImage` (in `lib/sandbox/image.nix`) is the internal API called by `mkSandbox` (see `sandbox.md`). Inputs: a profile, an agent runtime selector, an entrypoint script path (Linux or Darwin), optional krun support, the merged Claude settings JSON, and the resolved MCP server configs. `agent = "direct"` uses a placeholder `directRunner` by default and consumers can override it; `agent = "pi"` defaults to `linuxPkgs.pi-coding-agent` and callers can override `piPkg`. It emits a layered OCI image via `dockerTools.streamLayeredImage` (Linux) or `dockerTools.buildLayeredImage` (Darwin — the stream script's Linux Python shebang cannot execute on macOS).
 
 Image layout:
 
@@ -126,7 +126,7 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
   [system](nix run .#test-base-image-universal)
 - `wrapix-stable-profile-<name>`'s derivation hash is invariant under the agent runtime selection and all leaf (tier-3) inputs — downstream-appended packages (`profile.packages` − `corePackages`), the merged Claude settings JSON, MCP configs, and `model`
   [system](nix run .#test-stable-profile-hash-stable)
-- `wrapix-stable-profile-<name>` holds only fixed-per-instance content: no agent runtime — not the default `claude-code`, nor a consumer-supplied `piPkg`/`directRunner` — and no downstream-appended package leaks into it
+- `wrapix-stable-profile-<name>` holds only fixed-per-instance content: no agent runtime — not direct, `claude-code`, `piPkg`, nor `directRunner` — and no downstream-appended package leaks into it
   [system](nix run .#test-stable-profile-membership)
 - A downstream-pinned toolchain (`rustProfile { toolchain = ./rust-toolchain.toml }`) lands in tier 1 (`wrapix-stable-profile-<name>`), not the leaf
   [system](nix run .#test-pinned-toolchain-stable-tier)
@@ -136,8 +136,10 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
   [system](nix run .#test-agent-tier-isolated)
 - A non-selected agent's binary is absent from the image: an `agent = "direct"` image contains neither `claude-code` nor a `pi` runtime
   [system](nix run .#test-agent-exclusive)
+- default `agent = "direct"` produces an image that contains `loom-direct-runner`
+  [system](nix run .#test-agent-exclusive)
 - `agent = "claude"` produces an image that contains `claude-code`
-  [system](nix run .#test-claude-runtime-noop)
+  [system](nix run .#test-agent-exclusive)
 - The `agent = "pi"` code path threads a consumer-supplied `piPkg` derivation into the image build
   [check](grep -nE 'agent.*pi|piPkg' lib/sandbox/image.nix lib/sandbox/default.nix)
 - `mkSandbox` throws a clear error when `agent = "pi"` is set without `piPkg`
@@ -167,7 +169,7 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
 
 1. **OCI image generation** — `mkImage` returns a derivation whose output is an OCI-compatible image (streamLayeredImage on Linux, buildLayeredImage on Darwin).
 2. **Package bundling** — every derivation in the profile's `packages` list lands in the image's store closure.
-3. **Agent runtime composition** — the `agent` parameter selects the single agent runtime the image carries: `claude` (default `claude-code` from nixpkgs), `pi` (consumer-supplied `piPkg`), or `direct` (consumer-supplied `directRunner`). Exactly one agent is baked — a non-selected agent's binary is absent (a `direct` image carries no `claude-code`) — and it rides its own tier (tier 2, see § Provenance-Tiered Layering), composing orthogonally with the workspace profile.
+3. **Agent runtime composition** — the `agent` parameter selects the single agent runtime the image carries: `direct` (default placeholder `directRunner`), `claude` (`claude-code` from nixpkgs), or `pi` (`pi-coding-agent` from nixpkgs by default). Exactly one agent is baked — a non-selected agent's binary is absent (a `direct` image carries no `claude-code`) — and it rides its own tier (tier 2, see § Provenance-Tiered Layering), composing orthogonally with the workspace profile.
 4. **Nix configuration** — `flakes` and `nix-command` are enabled; the in-container Nix sandbox is disabled (the outer container is the boundary).
 5. **CA certificates** — `pkgs.cacert` is included and `SSL_CERT_FILE` resolves to it.
 6. **Entrypoint embedding** — the platform-specific entrypoint script (`lib/sandbox/{linux,darwin}/entrypoint.sh`) is the image's startup command.

@@ -2,8 +2,8 @@
 
 Wrapix is a secure sandbox for running AI coding agents in isolated containers.
 It provides container isolation on Linux (Podman) and macOS (Apple container
-CLI), with built-in support for [Claude Code](https://claude.ai/code) (from
-nixpkgs) and two consumer-supplied agent slots (*pi* and *direct*) for
+CLI), with built-in support for Pi and [Claude Code](https://claude.ai/code)
+(from nixpkgs) and a direct agent slot for
 external orchestrators such as [Loom](https://github.com/taheris/loom), plus
 tooling for notifications, remote Nix builds, and integration hooks.
 
@@ -14,7 +14,7 @@ tooling for notifications, remote Nix builds, and integration hooks.
 3. **User namespace mapping** — Files created in `/workspace` have correct host ownership
 4. **Open network** — Full internet access for web research, git, package managers
 5. **Nix all the way down** — Config, images, and the launcher are deterministic Nix outputs
-6. **Agent-runtime axis is orthogonal to the profile axis** — `claude`/`pi`/`direct` compose with `base`/`rust`/`python` rather than multiplying out
+6. **Agent-runtime axis is orthogonal to the profile axis** — `direct`/`claude`/`pi` compose with `base`/`rust`/`python` rather than multiplying out
 
 ## Platform Support
 
@@ -75,8 +75,12 @@ The launcher and the OCI image are separate Nix outputs, composed at the consume
 | Output | Role |
 |--------|------|
 | `packages.wrapix` | Profile-agnostic launcher binary; reads image ref/source at runtime |
-| `packages.image-<profile>` | Per-profile OCI artifact built with `agent = "claude"` (the default) |
-| `packages.sandbox-<profile>` | `makeWrapper` of the launcher with image ref/source + `WRAPIX_AGENT=claude` baked in — the user-facing `nix run .#sandbox-rust` target. Consumers needing `pi` or `direct` build their own wrappers via `mkSandbox` |
+| `packages.image-<profile>` | Per-profile OCI artifact built with `agent = "direct"` (the default base image) |
+| `packages.image-<profile>-claude` | Per-profile OCI artifact built with `agent = "claude"` |
+| `packages.image-<profile>-pi` | Per-profile OCI artifact built with `agent = "pi"` |
+| `packages.sandbox-<profile>` | `makeWrapper` of the launcher with image ref/source + `WRAPIX_AGENT=direct` baked in — the user-facing `nix run .#sandbox-rust` target |
+| `packages.sandbox-<profile>-claude` | Claude overlay with `WRAPIX_AGENT=claude` baked in |
+| `packages.sandbox-<profile>-pi` | Pi overlay with `WRAPIX_AGENT=pi` baked in. `packages.default` points at `packages.sandbox-pi` |
 | `packages.profile-images` | JSON manifest mapping profile → `{ref, source}`, for orchestrators that look up images by profile name |
 
 The launcher exposes two subcommands sharing the same container construction (mounts, env passthrough, deploy key):
@@ -100,15 +104,15 @@ per-call image.
 
 | Value | Behaviour |
 |-------|-----------|
-| `claude` *(default)* | Interactive `claude` TTY, or `claude --print --input-format stream-json` when `WRAPIX_STDIO=1` |
-| `pi` | `pi --mode rpc` — JSONL RPC on stdio. Requires `agent = "pi"` and a consumer-supplied `piPkg` at image-build time. |
-| `direct` | Execs `loom-direct-runner` (or any consumer-named binary). Requires `agent = "direct"` and `directRunner = …` at image-build time. |
+| `direct` *(default)* | Execs `loom-direct-runner`. Built-in direct images carry a placeholder runner; consumers can supply their own direct runner. |
+| `claude` | Interactive `claude` TTY, or `claude --print --input-format stream-json` when `WRAPIX_STDIO=1` |
+| `pi` | Interactive `pi` TTY, or `pi --mode rpc` for JSONL RPC on stdio. Defaults to `linuxPkgs.pi-coding-agent`. |
 
 Exactly one agent rides each image — a non-claude image carries no
-`claude-code` (`agent = "direct"` bakes neither `claude-code` nor `pi`). Only
-the `claude` runtime is installed in the default `packages.image-<profile>`;
-`pi` and `direct` are build-time selections because their binaries come from
-outside wrapix. Before exec, the entrypoint verifies the selected agent's
+`claude-code` (`agent = "direct"` bakes neither `claude-code` nor `pi`). The
+default direct runtime is installed in `packages.image-<profile>`;
+`claude` and `pi` are exposed as agent overlay images. Before exec,
+the entrypoint verifies the selected agent's
 binary is present (`command -v`) and fails loudly when it is absent from the
 image — e.g. `WRAPIX_AGENT=pi` against a claude image on the raw-launcher
 path — rather than emitting a bare `command not found`.

@@ -30,7 +30,14 @@ let
   };
   defaultImage = (sandboxLib.mkSandbox { profile = sandboxLib.profiles.base; }).image;
 
+  claudeImage =
+    (sandboxLib.mkSandbox {
+      profile = sandboxLib.profiles.base;
+      agent = "claude";
+    }).image;
+
   defaultImageClosure = pkgs.closureInfo { rootPaths = [ defaultImage ]; };
+  claudeImageClosure = pkgs.closureInfo { rootPaths = [ claudeImage ]; };
 
   # Closure over the actual base-image contents (built with linuxPkgs, matching
   # lib/sandbox/image.nix). The base image itself is a compressed tarball whose
@@ -393,11 +400,11 @@ let
       pkgs.gnugrep
     ];
     text = ''
-      closure_file=${defaultImageClosure}/store-paths
+      closure_file=${claudeImageClosure}/store-paths
       claude_code_path=${claudeCodePkg}
 
       if ! grep -qxF "$claude_code_path" "$closure_file"; then
-          echo "FAIL: claude-code missing from default sandbox closure" >&2
+          echo "FAIL: claude-code missing from claude sandbox closure" >&2
           echo "  expected: $claude_code_path" >&2
           echo "  closure : $closure_file" >&2
           exit 1
@@ -706,7 +713,10 @@ let
           file = ../fixtures/rust-toolchain.toml;
           sha256 = toolchainFixtureSha;
         };
-        pinnedSandbox = sandboxLib.mkSandbox { profile = pinnedProfile; };
+        pinnedSandbox = sandboxLib.mkSandbox {
+          profile = pinnedProfile;
+          agent = "claude";
+        };
         rustCoreExtras = lib.subtractLists sandboxLib.profiles.base.corePackages pinnedProfile.corePackages;
         rustCoreExtrasList = lib.concatStringsSep " " (map (p: ''"${p}"'') rustCoreExtras);
       in
@@ -1028,6 +1038,7 @@ let
     line:
     import ../../lib/sandbox/image.nix {
       inherit pkgs;
+      agent = "claude";
       profile = {
         name = "iterprobe";
         packages = [
@@ -1214,6 +1225,7 @@ let
   # the same tier chain that produces the diagnosed orphan.
   nixDbProbeImage = import ../../lib/sandbox/image.nix {
     inherit pkgs;
+    agent = "claude";
     profile = {
       name = "nixdbprobe";
       corePackages = [ pkgs.coreutils ];

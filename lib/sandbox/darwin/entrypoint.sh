@@ -106,11 +106,10 @@ if [[ -d /workspace/.git ]] \
   unset _wrapix_hooks_current
 fi
 
-# WRAPIX_AGENT selects the agent runtime. 'claude' (default) runs claude with
-# config merging and permission bypass; 'pi' runs pi-mono in JSONL RPC mode;
-# 'direct' execs loom-direct-runner over JSONL stdin/stdout. Each agent seeds
-# its own config home below (claude ~/.claude, pi ~/.pi/agent); direct has none.
-WRAPIX_AGENT="${WRAPIX_AGENT:-claude}"
+# WRAPIX_AGENT selects the agent runtime. 'direct' is the default base image;
+# 'claude' and 'pi' are explicit agent overlays. Each agent seeds its own config
+# home below (claude ~/.claude, pi ~/.pi/agent); direct has none.
+WRAPIX_AGENT="${WRAPIX_AGENT:-direct}"
 case "$WRAPIX_AGENT" in
   claude) WRAPIX_AGENT_BIN=claude ;;
   pi) WRAPIX_AGENT_BIN=pi ;;
