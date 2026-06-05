@@ -1,4 +1,4 @@
-{ inputs, ... }:
+_:
 
 {
   perSystem =
@@ -78,7 +78,6 @@
             ;
 
           default = sandboxPkgs.sandbox-rust;
-          loom = inputs.loom.packages.${system}.loom;
           nodejs = linuxPkgs.nodejs_22;
           profile-images = wrapix.mkProfileImages profileImages;
           # Test sandbox image (claude/beads stubbed out with `hello`);

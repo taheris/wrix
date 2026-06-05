@@ -5,7 +5,6 @@ _:
     {
       config,
       pkgs,
-      self',
       wrapix,
       ...
     }:
@@ -18,7 +17,6 @@ _:
           pkgs.cargo-nextest
           pkgs.flock
           pkgs.podman
-          self'.packages.loom
         ];
       };
     };

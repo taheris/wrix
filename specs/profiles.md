@@ -136,7 +136,7 @@ Writable dirs (`writableDirs = [ "/home/wrapix/.cargo" ]`): on Linux, the launch
 
 Network allowlist: `crates.io`, `static.crates.io`, `index.crates.io`
 
-**Rust package builder (`profile.buildPackage`).** The rust profile owns Rust package construction the same way it owns the toolchain, sccache wiring, and cache mounts. `buildPackage` is a crane-backed function that produces a binary derivation alongside separate clippy and nextest derivations, so consumers in `devShells.default.packages` (e.g. `packages.loom`) rebuild only `bin` on workspace edits — `clippy` and `nextest` are realized separately by `nix flake check`. Crane's `cargoArtifacts` snapshot caches dep compilation across rebuilds — the build-sandbox analog of the sccache mounts that cover the interactive cargo path; a `Cargo.lock` edit invalidates `cargoArtifacts`, but a workspace-source edit does not.
+**Rust package builder (`profile.buildPackage`).** The rust profile owns Rust package construction the same way it owns the toolchain, sccache wiring, and cache mounts. `buildPackage` is a crane-backed function that produces a binary derivation alongside separate clippy and nextest derivations, so consumers in `devShells.default.packages` (e.g. a downstream flake's own Rust binary) rebuild only `bin` on workspace edits — `clippy` and `nextest` are realized separately by `nix flake check`. Crane's `cargoArtifacts` snapshot caches dep compilation across rebuilds — the build-sandbox analog of the sccache mounts that cover the interactive cargo path; a `Cargo.lock` edit invalidates `cargoArtifacts`, but a workspace-source edit does not.
 
 Signature:
 
