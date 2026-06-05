@@ -109,7 +109,7 @@ let
       name,
       packages ? [ ],
       corePackages ? [ ],
-      hostExtraPackages ? [ ],
+      hostPackages ? [ ],
       env ? { },
       mounts ? [ ],
       networkAllowlist ? [ ],
@@ -126,7 +126,7 @@ let
         ;
       corePackages = basePackages ++ corePackages;
       packages = basePackages ++ corePackages ++ packages;
-      hostPackages = hostBasePackages ++ hostExtraPackages;
+      hostPackages = hostBasePackages ++ hostPackages;
       env = baseEnv // env;
       mounts = baseMounts ++ mounts;
       networkAllowlist = baseNetworkAllowlist ++ networkAllowlist;
@@ -284,7 +284,7 @@ let
         pkgs.sccache
       ];
 
-      hostExtraPackages = [
+      hostPackages = [
         hostToolchain
         hostPkgs.openssl
         hostPkgs.openssl.dev
@@ -430,7 +430,7 @@ in
       uv
     ];
 
-    hostExtraPackages = with hostPkgs; [
+    hostPackages = with hostPkgs; [
       ruff
       ty
       uv
