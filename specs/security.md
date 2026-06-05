@@ -137,10 +137,10 @@ Acceptable because:
 
 - The container runs as a single identity (on the default Linux boundary,
   rootless container-root — kernel uid 0 inside a user namespace owned by the
-  unprivileged host user, with tools seeing uid 1000 via `LD_PRELOAD`
-  libfakeuid; the microVM path is equivalent). There is no second principal,
-  so the only processes that can read `/proc` are ones the agent itself
-  started.
+  unprivileged host user; claude runs with `IS_SANDBOX=1` so it accepts that
+  root. The microVM path is equivalent — krun maps the host user to root and
+  uses `LD_PRELOAD` libfakeuid). There is no second principal, so the only
+  processes that can read `/proc` are ones the agent itself started.
 - The credential is already present in the operator's environment (or in an
   on-host auth file); passing it through adds no new host-side exposure.
 - Tokens are session-scoped, with limits set by the provider.

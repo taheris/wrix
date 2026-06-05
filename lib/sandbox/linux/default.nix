@@ -496,13 +496,17 @@ in
         # root:root, so store-mutating nix ops (GC/replace/delete -> deletePath
         # -> fchmodat2) need the runtime user to own the store.
         #   microVM (krun)   — keep --userns=keep-id; krun maps the host user to
-        #                       root inside the VM and krun-init.sh sets
-        #                       LD_PRELOAD there.
+        #                       root inside the VM and krun-init.sh LD_PRELOADs
+        #                       libfakeuid (krun-relay's PTY tolerates the uid
+        #                       spoof; the default boundary's does not).
         #   default container — drop keep-id so rootless container-root maps to
-        #                       the host user that owns the baked store, and
-        #                       LD_PRELOAD libfakeuid so tools still see uid 1000.
-        #                       /workspace files still land as the host UID
-        #                       because container-root maps to the invoking user.
+        #                       the host user that owns the baked store and lands
+        #                       /workspace files as the host UID. claude refuses
+        #                       --dangerously-skip-permissions as root, so set
+        #                       IS_SANDBOX=1 (claude's escape hatch) instead of
+        #                       libfakeuid: that getuid->1000 spoof blanks claude's
+        #                       TUI when really root here (wx-nsage). Works on ANY
+        #                       host uid (it maps to container-0).
         if [ -n "$RUNTIME_ARGS" ]; then
           USERNS_ARGS="--userns=keep-id"
         else
@@ -545,9 +549,12 @@ in
           -e "WRAPIX_NETWORK_ALLOWLIST=${networkAllowlist}"
         )
         [ -n "$KRUN_CMD_ENV" ] && ENV_ARGS+=(-e "$KRUN_CMD_ENV")
-        # default boundary: spoof uid 1000 for tools while the process runs as
-        # the store-owning rootless container-root (see USERNS_ARGS above).
-        [ -z "$RUNTIME_ARGS" ] && ENV_ARGS+=(-e "LD_PRELOAD=/lib/libfakeuid.so")
+        # default boundary: the process is the store-owning rootless container-0
+        # (see USERNS_ARGS above). Tell claude it is sandboxed so it permits
+        # --dangerously-skip-permissions as root, rather than spoofing the uid
+        # with libfakeuid — that spoof blanks claude's TUI here (wx-nsage). krun
+        # sets IS_SANDBOX=1 from inside krun-init.sh instead.
+        [ -z "$RUNTIME_ARGS" ] && ENV_ARGS+=(-e "IS_SANDBOX=1")
 
         RUN_IMAGE="$IMAGE_REF"
 

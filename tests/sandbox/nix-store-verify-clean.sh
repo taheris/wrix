@@ -21,9 +21,8 @@
 #
 # The container is launched the way the Linux launcher launches the default
 # boundary (lib/sandbox/linux/default.nix): no `--userns=keep-id`, so the
-# process is rootless container-root (the store owner) with
-# `LD_PRELOAD=/lib/libfakeuid.so` spoofing uid 1000, and `--passwd-entry` names
-# it `wrapix`. The default entrypoint is bypassed (`--entrypoint /bin/bash`) so
+# process is rootless container-root (the store owner), and `--passwd-entry`
+# names it `wrapix`. The default entrypoint is bypassed (`--entrypoint /bin/bash`) so
 # the probe is the focused store-verify path, not the agent bootstrap. No
 # network is needed — `--verify` reads only the baked store and DB — so unlike
 # nix-in-container.sh this verifier never self-skips on a missing substituter.
@@ -75,9 +74,9 @@ podman tag "$loaded_id" "$IMAGE_REF"
 # The probe runs entirely inside the container so `nix-store --verify` reads the
 # image's own baked store and DB, never the host's. `--check-contents` re-hashes
 # every registered path; a dangling registration surfaces as a disappeared /
-# missing path, an orphan as an unregistered on-disk path. Run as the
-# unprivileged runtime user (uid != 0): a fresh container does no store surgery,
-# so a clean DB must verify clean.
+# missing path, an orphan as an unregistered on-disk path. Run as the rootless
+# container-root runtime (uid 0): a fresh container does no store surgery, so a
+# clean DB must verify clean.
 # `read -rd ''` returns non-zero at the heredoc's EOF after a full read; the
 # `|| true` absorbs only that expected EOF status, not a real error (SH-6).
 read -r -d '' IN_CONTAINER <<'PROBE' || true
@@ -86,8 +85,8 @@ export HOME=/home/wrapix
 export NIX_CONFIG="experimental-features = nix-command flakes"
 
 uid=$(id -u)
-if [[ "$uid" -eq 0 ]]; then
-  echo "FAIL: probe is running as root; the criterion requires the unprivileged runtime user" >&2
+if [[ "$uid" -ne 0 ]]; then
+  echo "FAIL: probe must run as rootless container-root (uid 0); got uid=$uid" >&2
   exit 1
 fi
 echo "[probe] running as uid=$uid ($(id -un 2>/dev/null || echo '?'))" >&2
@@ -120,15 +119,16 @@ echo "PROBE-OK"
 PROBE
 
 # Mirror the launcher's default-boundary invocation: no keep-id (rootless
-# container-root owns the store), LD_PRELOAD libfakeuid so tools see uid 1000,
-# and a wrapix passwd entry (lib/sandbox/linux/default.nix). No network:
-# --verify reads only the baked store.
+# container-root owns the store), IS_SANDBOX=1 (claude's root-permission escape
+# hatch, used instead of the libfakeuid getuid spoof that blanks its TUI here —
+# wx-nsage), and a wrapix passwd entry (lib/sandbox/linux/default.nix). No
+# network: --verify reads only the baked store.
 set +e
 output=$(podman run --rm --network=none \
   --passwd-entry "wrapix:*:$(id -u):$(id -g)::/home/wrapix:/bin/bash" \
   --entrypoint /bin/bash \
   -e HOME=/home/wrapix \
-  -e LD_PRELOAD=/lib/libfakeuid.so \
+  -e IS_SANDBOX=1 \
   "$IMAGE_REF" \
   -c "$IN_CONTAINER" 2>&1)
 status=$?

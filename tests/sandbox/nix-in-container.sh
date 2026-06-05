@@ -3,25 +3,23 @@
 # "In-container Nix (additive)"):
 #
 #   In a fresh container built from a profile that ships `nix`, the
-#   unprivileged runtime user runs `nix develop -c true` and a `nix build`
-#   of a flake target to completion (exit 0) with no `Operation not
-#   permitted` failure on a `/nix/store` path.
+#   rootless container-root runtime runs `nix develop -c true` and a
+#   `nix build` of a flake target to completion (exit 0) with no `Operation
+#   not permitted` failure on a `/nix/store` path.
 #
 # Exercises the LIVE runtime path — a real container started from the
 # nix-shipping test image (`.#test-image-nix`, which adds `pkgs.nix` to the
-# profile's packages), with the unprivileged runtime user driving real
+# profile's packages), with the rootless container-root runtime driving real
 # `nix develop` / `nix build` against the image's baked store. No host-side
 # nix substitution stands in for the container path (no tier-skipping): the
 # whole point is to prove the baked Nix DB registers the image's on-disk
-# store with no orphan, so additive store writes by uid != 0 never hit
-# EPERM (mechanism owned by image-builder.md § In-Container Nix Store
-# Consistency).
+# store with no orphan, so additive store writes never hit EPERM (mechanism
+# owned by image-builder.md § In-Container Nix Store Consistency).
 #
 # The container is launched the way the Linux launcher launches the default
 # boundary (lib/sandbox/linux/default.nix): no `--userns=keep-id`, so the
-# process is rootless container-root (the store owner) with
-# `LD_PRELOAD=/lib/libfakeuid.so` spoofing uid 1000; `--passwd-entry` names it
-# `wrapix`, and a `U=true` tmpfs at /home/wrapix gives Nix a writable HOME.
+# process is rootless container-root (the store owner); `--passwd-entry` names
+# it `wrapix`, and a `U=true` tmpfs at /home/wrapix gives Nix a writable HOME.
 # The default entrypoint is bypassed (`--entrypoint /bin/bash`) so the probe
 # is the focused additive-Nix path, not the agent bootstrap.
 #
@@ -30,7 +28,7 @@
 # stdenv-shaped dev environment (Nix replaces the build with its own
 # `get-env`, which a bare input-free derivation cannot satisfy), and both
 # `nix develop` and `nix build` substitute their closures into the baked
-# store as the unprivileged user — that substitution is the EPERM tripwire.
+# store as rootless container-root — that substitution is the EPERM tripwire.
 # Because the realistic dev-shell path needs a substituter, the probe first
 # checks outbound reachability and SKIPS (exit 77) when the container has no
 # network, rather than reporting a false failure offline.
@@ -84,9 +82,9 @@ podman tag "$loaded_id" "$IMAGE_REF"
 
 # The probe runs entirely inside the container so the flake resolves and
 # realizes against the image's own Nix store, never the host's. It drives a
-# real `nix develop -c true` (stdenv dev shell) and a real `nix build` as the
-# unprivileged user; both substitute closures into the baked store, which is
-# where a broken/orphaned Nix DB would surface EPERM. Exits 77 to self-skip
+# real `nix develop -c true` (stdenv dev shell) and a real `nix build` as
+# rootless container-root; both substitute closures into the baked store, which
+# is where a broken/orphaned Nix DB would surface EPERM. Exits 77 to self-skip
 # when the container has no outbound network (the dev-shell path needs a
 # substituter).
 # `read -rd ''` returns non-zero at the heredoc's EOF after a full read; the
@@ -97,15 +95,15 @@ export HOME=/home/wrapix
 export NIX_CONFIG="experimental-features = nix-command flakes"
 
 uid=$(id -u)
-if [[ "$uid" -eq 0 ]]; then
-  echo "FAIL: probe is running as root; the criterion requires the unprivileged runtime user" >&2
+if [[ "$uid" -ne 0 ]]; then
+  echo "FAIL: probe must run as rootless container-root (uid 0); got uid=$uid" >&2
   exit 1
 fi
 echo "[probe] running as uid=$uid ($(id -un 2>/dev/null || echo '?'))" >&2
 
-# Mirror the entrypoint: under root+libfakeuid, /workspace and nix's libgit2
-# flake/tarball caches are owned by container-root while libgit2 sees uid 1000,
-# so the git fetcher rejects them as "not owned by current user" without this.
+# Mirror the entrypoint: /workspace and nix's libgit2 flake/tarball caches are
+# container-root-owned, which libgit2 can reject as "dubious ownership" /
+# "not owned by current user" without this.
 git config --global --add safe.directory '*'
 
 command -v nix >/dev/null 2>&1 || { echo "FAIL: nix not on PATH inside the container" >&2; exit 1; }
@@ -142,7 +140,7 @@ NIXEOF
 
 echo "[probe] nix --version: $(nix --version)" >&2
 
-# Both operations add paths to the baked store as the unprivileged user.
+# Both operations add paths to the baked store as rootless container-root.
 echo "[probe] nix develop -c true" >&2
 nix develop -c true
 
@@ -172,8 +170,10 @@ echo "PROBE-OK"
 PROBE
 
 # Mirror the launcher's default-boundary invocation: no keep-id (rootless
-# container-root owns the store), LD_PRELOAD libfakeuid so tools see uid 1000,
-# a wrapix passwd entry, and a writable tmpfs HOME (lib/sandbox/linux/default.nix).
+# container-root owns the store), IS_SANDBOX=1 (claude's root-permission escape
+# hatch, used instead of the libfakeuid getuid spoof that blanks its TUI here —
+# wx-nsage), a wrapix passwd entry, and a writable tmpfs HOME
+# (lib/sandbox/linux/default.nix).
 set +e
 output=$(podman run --rm --network=pasta \
   --passwd-entry "wrapix:*:$(id -u):$(id -g)::/home/wrapix:/bin/bash" \
@@ -182,7 +182,7 @@ output=$(podman run --rm --network=pasta \
   -v "$WORKSPACE:/workspace:rw" \
   -w /workspace \
   -e HOME=/home/wrapix \
-  -e LD_PRELOAD=/lib/libfakeuid.so \
+  -e IS_SANDBOX=1 \
   "$IMAGE_REF" \
   -c "$IN_CONTAINER" 2>&1)
 status=$?
@@ -214,4 +214,4 @@ if printf '%s\n' "$output" | grep -nE '/nix/store' | grep -iE 'operation not per
   exit 1
 fi
 
-echo "PASS: nix-in-container (unprivileged runtime user ran nix develop + nix build; no /nix/store EPERM)" >&2
+echo "PASS: nix-in-container (rootless container-root ran nix develop + nix build; no /nix/store EPERM)" >&2

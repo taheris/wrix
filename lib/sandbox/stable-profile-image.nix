@@ -30,6 +30,13 @@ let
     experimental-features = nix-command flakes
     sandbox = false
     filter-syscalls = false
+    # The container runs Nix as rootless container-root (single identity, no
+    # nix-daemon). An empty build-users-group makes Nix build directly as that
+    # process instead of demanding the default 'nixbld' group (absent here) to
+    # drop privileges — which it only does when euid is really 0. Without this,
+    # `nix build`/`nix develop` as root fail: "the group 'nixbld' specified in
+    # 'build-users-group' does not exist" (wx-nsage).
+    build-users-group =
   '';
 
   passwdFile = pkgs.writeTextDir "etc/passwd" ''

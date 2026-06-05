@@ -15,12 +15,13 @@ cd /workspace
 # shellcheck source=/dev/null
 . /git-ssh-setup.sh
 
-# On the default boundary the process runs as rootless container-root with
-# LD_PRELOAD=libfakeuid spoofing uid 1000, so every path created by the process
-# (/workspace, and nix's libgit2 flake/tarball caches under $XDG_CACHE_HOME) is
-# owned by container-root while git/libgit2 see uid 1000 -> "dubious ownership"
-# / "not owned by current user". Trust all paths: single identity, effectively
-# root, ephemeral container. Covers git ops and nix's git fetcher alike.
+# The process runs as rootless container-root mapped to the invoking host user
+# (default boundary) or host-user->root (krun). Either way paths under
+# /workspace and nix's libgit2 caches ($XDG_CACHE_HOME) can present an owner
+# git/libgit2 reject as "dubious ownership" / "not owned by current user"
+# (especially on krun, where libfakeuid makes tools see uid 1000). Trust all
+# paths: single identity, effectively root, ephemeral container. Covers git ops
+# and nix's git fetcher alike.
 git config --global --replace-all safe.directory '*'
 
 # Point core.hooksPath at the prek bundle baked into the image, per

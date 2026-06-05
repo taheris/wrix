@@ -19,8 +19,7 @@
 # image tags as `wrapix-nix` and does not collide with the base variant in
 # the platform store. `tests/sandbox/nix-in-container.sh` builds this
 # variant to exercise live in-container Nix (additive + store-mutating) as the
-# runtime user — rootless container-root, libfakeuid-spoofed to uid 1000
-# (specs/sandbox.md FR #13).
+# runtime process — rootless container-root (specs/sandbox.md FR #13).
 {
   pkgs,
   treefmt ? null,
@@ -50,8 +49,9 @@ import ../../lib/sandbox/image.nix {
   entrypointPkg = testPkgs.hello;
   entrypointSh = ../../lib/sandbox/linux/entrypoint.sh;
   # Mirror production (lib/sandbox/default.nix sets krunSupport = isLinux): bakes
-  # /lib/libfakeuid.so, which the default Linux boundary now LD_PRELOADs — the
-  # podman verifiers run as rootless container-root and rely on it for uid 1000.
+  # /lib/libfakeuid.so + krun-relay for the krun microVM boundary. The default
+  # container boundary does not LD_PRELOAD libfakeuid (its getuid spoof blanks
+  # claude's TUI — wx-nsage); it runs as rootless container-root with IS_SANDBOX=1.
   krunSupport = testPkgs.stdenv.hostPlatform.isLinux;
   inherit claudeConfig;
   claudeSettings = { };

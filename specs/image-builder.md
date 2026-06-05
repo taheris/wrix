@@ -59,7 +59,7 @@ The leaf's **customisation layer** (its final layer — generated files, metadat
 The container runs Nix as the runtime user directly against the store — no
 `nix-daemon`, and the in-container build sandbox is disabled (Build pipeline
 step 3; threat-model rationale in `specs/security.md`). On the default boundary
-that user is rootless container-root (libfakeuid-spoofed to uid 1000), which
+that user is rootless container-root, which
 maps to the host user that owns the baked store, so it can both *add* paths
 (substituting from a binary cache, building new derivations) and *mutate* the
 baked root-owned paths (replace, GC, delete) — store ownership is no longer a
