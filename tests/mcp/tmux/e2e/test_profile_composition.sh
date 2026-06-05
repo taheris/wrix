@@ -20,7 +20,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="${SCRIPT_DIR}/../../.."
+REPO_ROOT="${SCRIPT_DIR}/../../../.."
+# shellcheck source=tests/lib/podman-image.sh
+source "$REPO_ROOT/tests/lib/podman-image.sh"
 
 # Colors for output
 RED='\033[0;31m'
@@ -46,6 +48,9 @@ cleanup() {
     if [[ -n "${WORKSPACE:-}" ]] && [[ -d "${WORKSPACE}" ]]; then
         rm -rf "${WORKSPACE}"
     fi
+    if [[ -n "${IMAGE_REF:-}" ]] && podman image exists "${IMAGE_REF}"; then
+        podman rmi "${IMAGE_REF}" >/dev/null
+    fi
     exit "$exit_code"
 }
 trap cleanup EXIT
@@ -63,7 +68,7 @@ if ! command -v podman &>/dev/null; then
 fi
 # Nested rootless podman can't load OCI images (overlayfs deadlock); validate
 # the build but skip runtime checks rather than hang the gate.
-if [ -e /run/.containerenv ]; then
+if [[ -e /run/.containerenv ]]; then
     HAS_PODMAN=false
     log_warn "nested container: podman load unavailable — container runtime checks will be skipped"
 fi
@@ -93,7 +98,7 @@ IMAGE_PATH=$(grep -oP "WRAPIX_DEFAULT_IMAGE_SOURCE=[^']*'\K[^']+" "${PACKAGE_PAT
     log_error "Could not find WRAPIX_DEFAULT_IMAGE_SOURCE in wrapper script"
     exit 1
 }
-IMAGE_REF=$(grep -oP "WRAPIX_DEFAULT_IMAGE_REF=[^']*'\K[^']+" "${PACKAGE_PATH}/bin/wrapix" | head -1) || {
+WRAPPER_IMAGE_REF=$(grep -oP "WRAPIX_DEFAULT_IMAGE_REF=[^']*'\K[^']+" "${PACKAGE_PATH}/bin/wrapix" | head -1) || {
     log_error "Could not find WRAPIX_DEFAULT_IMAGE_REF in wrapper script"
     exit 1
 }
@@ -104,7 +109,7 @@ if [[ ! -e "${IMAGE_PATH}" ]]; then
 fi
 
 log_info "Image built successfully: ${IMAGE_PATH}"
-log_info "Image ref: ${IMAGE_REF}"
+log_info "Image ref: ${WRAPPER_IMAGE_REF}"
 log_info "PASS: Profile composition (rust + tmux MCP) builds correctly"
 
 if [[ "$HAS_PODMAN" != "true" ]]; then
@@ -113,48 +118,9 @@ if [[ "$HAS_PODMAN" != "true" ]]; then
     exit 0
 fi
 
-# Load the streamed OCI archive into the local podman store. IMAGE_PATH is
-# the streamLayeredImage script (writes a tarball to stdout), not a static
-# .tar.gz on disk — `podman run docker-archive:<path>` would treat the
-# bash script as a tarball and fail. After load, refer to the image by
-# IMAGE_REF (the `localhost/wrapix-<profile>:<tag>` the wrapper sets).
-short_name="${IMAGE_REF##*/}"
-short_name="${short_name%%:*}"
-# `podman load` of a streamLayeredImage tarball stores the image under
-# the manifest tag with a podman-version-dependent normalization. Read
-# the ref back from `podman load`'s own report rather than guessing via
-# `podman images --filter reference=*name* | head -n1`: on a host
-# carrying images from prior runs that filter is non-deterministic and
-# could retag a stale image whose config lacks env vars (e.g.
-# WRAPIX_PREK_HOOKS) the entrypoint depends on.
-if podman image exists "$IMAGE_REF"; then
-  podman rmi "$IMAGE_REF" >/dev/null
-fi
 log_info "Loading image into podman..."
-# Capture the stream script's stderr (~hundreds of "Creating layer N
-# from paths" lines on a cold cache) to a log so it can be surfaced on
-# failure without flooding loom's per-verifier output buffer. Capture
-# `podman load`'s stdout+stderr to parse the loaded ref back out.
-stream_log=$(mktemp -t wrapix-stream-load.XXXXXX)
-if ! load_out=$("${IMAGE_PATH}" 2>"$stream_log" | podman load 2>&1); then
-    cat "$stream_log" >&2
-    rm -f "$stream_log"
-    log_error "Failed to load image into podman"
-    printf '%s\n' "$load_out" >&2
-    exit 1
-fi
-rm -f "$stream_log"
-
-loaded_ref=$(printf '%s\n' "$load_out" \
-  | sed -n 's/^Loaded image(s): //p; s/^Loaded image: //p' \
-  | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
-  | grep -F "$short_name" | head -n1)
-if [[ -z "$loaded_ref" ]]; then
-    log_error "Could not determine loaded image ref from podman load output"
-    printf '%s\n' "$load_out" >&2
-    exit 1
-fi
-podman tag "$loaded_ref" "${IMAGE_REF}"
+IMAGE_REF=$(wrapix_unique_image_ref "wrapix-test-profile-composition")
+wrapix_load_test_image "${IMAGE_PATH}" "$(wrapix_image_short_name "$WRAPPER_IMAGE_REF")" "${IMAGE_REF}"
 log_info "Image loaded as ${IMAGE_REF}"
 
 # Create a temporary workspace

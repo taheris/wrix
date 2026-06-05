@@ -43,7 +43,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
-# shellcheck source=../lib/podman-image.sh
+# shellcheck source=tests/lib/podman-image.sh
 source "$SCRIPT_DIR/../lib/podman-image.sh"
 
 skip() {
@@ -71,12 +71,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-IMAGE_REF="localhost/wrapix-test-nix-in-container:latest"
-# Clear stale wrapix-nix images BEFORE load so the post-load retag has exactly
-# one candidate (same retag pattern as container-starts.sh / shell.nix).
-wrapix_remove_test_image_refs "wrapix-nix-claude" "$IMAGE_REF"
-"$IMAGE_STREAM" | podman load >/dev/null
-wrapix_tag_loaded_image_id "wrapix-nix-claude" "$IMAGE_REF"
+IMAGE_REF=$(wrapix_unique_image_ref "wrapix-test-nix-in-container")
+wrapix_load_test_image "$IMAGE_STREAM" "wrapix-nix-claude" "$IMAGE_REF"
 
 # The probe runs entirely inside the container so the flake resolves and
 # realizes against the image's own Nix store, never the host's. It drives a

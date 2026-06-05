@@ -18,7 +18,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
-# shellcheck source=../lib/podman-image.sh
+# shellcheck source=tests/lib/podman-image.sh
 source "$SCRIPT_DIR/../lib/podman-image.sh"
 
 skip() {
@@ -35,7 +35,7 @@ esac
 command -v nix    >/dev/null 2>&1 || skip "nix not on PATH"
 command -v podman >/dev/null 2>&1 || skip "podman not on PATH"
 # Nested rootless podman can't load OCI images (overlayfs deadlock); skip vs hang.
-[ -e /run/.containerenv ] && skip "nested container: podman load unavailable"
+[[ -e /run/.containerenv ]] && skip "nested container: podman load unavailable"
 
 cd "$REPO_ROOT"
 
@@ -50,20 +50,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-IMAGE_REF="localhost/wrapix-test-uid-mapping:latest"
-# Clear stale wrapix-base images BEFORE load so the post-load retag has
-# exactly one candidate to pick. `podman load` of a streamLayeredImage
-# tarball stores the image under the manifest tag with a podman-version-
-# dependent normalization (`wrapix-base-claude:latest`, `localhost/wrapix-base-claude:latest`,
-# or `docker.io/library/wrapix-base-claude:latest`), so we re-tag via the loaded
-# ID to $IMAGE_REF. If a previous run left a stale `wrapix-base` around,
-# the `head -n1` pick is non-deterministic and we'd risk tagging the
-# stale ID to the new ref — and silently exercising the old image whose
-# config may lack the env vars (e.g. WRAPIX_PREK_HOOKS) the entrypoint
-# depends on. Same retag pattern as lib/util/shell.nix imageLoadStep.
-wrapix_remove_test_image_refs "wrapix-base-claude" "$IMAGE_REF"
-"$IMAGE_STREAM" | podman load >/dev/null
-wrapix_tag_loaded_image_id "wrapix-base-claude" "$IMAGE_REF"
+IMAGE_REF=$(wrapix_unique_image_ref "wrapix-test-uid-mapping")
+wrapix_load_test_image "$IMAGE_STREAM" "wrapix-base-claude" "$IMAGE_REF"
 HOST_UID=$(id -u)
 
 # Write a file from inside the container.

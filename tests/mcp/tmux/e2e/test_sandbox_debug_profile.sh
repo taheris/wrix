@@ -23,7 +23,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="${SCRIPT_DIR}/../../.."
+REPO_ROOT="${SCRIPT_DIR}/../../../.."
+# shellcheck source=tests/lib/podman-image.sh
+source "$REPO_ROOT/tests/lib/podman-image.sh"
 
 # Colors for output
 RED='\033[0;31m'
@@ -46,11 +48,11 @@ log_error() {
 # shellcheck disable=SC2317,SC2329  # cleanup is used by trap
 cleanup() {
     local exit_code=$?
-    if [[ -n "${IMAGE_FILE:-}" ]] && [[ -f "${IMAGE_FILE}" ]]; then
-        rm -f "${IMAGE_FILE}"
+    if [[ -n "${WORKSPACE:-}" ]] && [[ -d "${WORKSPACE}" ]]; then
+        rm -rf "${WORKSPACE}"
     fi
-    if [[ -n "${CONTAINER_ID:-}" ]]; then
-        podman rm -f "${CONTAINER_ID}" 2>/dev/null || true
+    if [[ -n "${IMAGE_REF:-}" ]] && podman image exists "${IMAGE_REF}"; then
+        podman rmi "${IMAGE_REF}" >/dev/null
     fi
     exit "$exit_code"
 }
@@ -63,44 +65,43 @@ if ! command -v nix &>/dev/null; then
 fi
 
 if ! command -v podman &>/dev/null; then
-    log_error "podman is required but not installed"
-    exit 1
+    log_warn "podman not available — container runtime checks will be skipped"
+    exit 0
 fi
 
 # Nested rootless podman can't load OCI images (overlayfs deadlock); skip vs hang.
-if [ -e /run/.containerenv ]; then
+if [[ -e /run/.containerenv ]]; then
     log_warn "nested container: podman load unavailable — skipping"
     exit 0
 fi
 
 log_info "Building sandbox-mcp image (mcpRuntime=true)..."
 
-# Build the mcp image: all MCP server packages included, runtime selection via env vars
-IMAGE_FILE=$(mktemp --suffix=.tar)
-if ! nix build "${REPO_ROOT}#sandbox-mcp" --out-link "${IMAGE_FILE%.tar}" 2>&1; then
+PACKAGE_PATH=$(nix build "${REPO_ROOT}#sandbox-mcp" --print-out-paths 2>/dev/null) || {
     log_error "Failed to build sandbox-mcp image"
     log_warn "Check that the mcp parameter is properly configured in lib/sandbox/default.nix"
     exit 1
-fi
+}
 
-# The nix build creates a result symlink to a stream script
-IMAGE_STREAM=$(readlink -f "${IMAGE_FILE%.tar}")
+IMAGE_STREAM=$(grep -oP "WRAPIX_DEFAULT_IMAGE_SOURCE=[^']*'\K[^']+" "${PACKAGE_PATH}/bin/wrapix" | head -1) || {
+    log_error "Could not find WRAPIX_DEFAULT_IMAGE_SOURCE in wrapper script"
+    exit 1
+}
+WRAPPER_IMAGE_REF=$(grep -oP "WRAPIX_DEFAULT_IMAGE_REF=[^']*'\K[^']+" "${PACKAGE_PATH}/bin/wrapix" | head -1) || {
+    log_error "Could not find WRAPIX_DEFAULT_IMAGE_REF in wrapper script"
+    exit 1
+}
 if [[ ! -x "${IMAGE_STREAM}" ]]; then
     log_error "Built image stream not found at ${IMAGE_STREAM}"
     exit 1
 fi
 
 log_info "Loading image into podman..."
-IMAGE_NAME=$("${IMAGE_STREAM}" | podman load | grep -oP 'Loaded image: \K.*')
-if [[ -z "${IMAGE_NAME}" ]]; then
-    log_error "Failed to load image into podman"
-    exit 1
-fi
-log_info "Loaded image: ${IMAGE_NAME}"
+IMAGE_REF=$(wrapix_unique_image_ref "wrapix-test-sandbox-debug-profile")
+wrapix_load_test_image "${IMAGE_STREAM}" "$(wrapix_image_short_name "$WRAPPER_IMAGE_REF")" "${IMAGE_REF}"
+log_info "Loaded image: ${IMAGE_REF}"
 
-# Create a temporary workspace
 WORKSPACE=$(mktemp -d)
-trap 'rm -rf "${WORKSPACE}"; cleanup' EXIT
 
 log_info "Verifying tmux is present in the container..."
 
@@ -111,7 +112,7 @@ TMUX_VERSION=$(podman run --rm \
     --entrypoint /bin/bash \
     -v "${WORKSPACE}:/workspace:rw" \
     -w /workspace \
-    "docker-archive:${IMAGE_PATH}" \
+    "${IMAGE_REF}" \
     -c "tmux -V" 2>&1) || {
     log_error "tmux is not present or not executable in the container"
     log_error "Output: ${TMUX_VERSION}"
@@ -128,7 +129,7 @@ MCP_PRESENCE=$(podman run --rm \
     --entrypoint /bin/bash \
     -v "${WORKSPACE}:/workspace:rw" \
     -w /workspace \
-    "docker-archive:${IMAGE_PATH}" \
+    "${IMAGE_REF}" \
     -c "which tmux-mcp && tmux-mcp --version 2>/dev/null || tmux-mcp --help 2>/dev/null || echo 'found'" 2>&1) || {
     log_error "tmux-mcp is not present or not executable in the container"
     log_error "Output: ${MCP_PRESENCE}"
@@ -144,7 +145,7 @@ MCP_START=$(timeout 5 podman run --rm \
     --entrypoint /bin/bash \
     -v "${WORKSPACE}:/workspace:rw" \
     -w /workspace \
-    "docker-archive:${IMAGE_PATH}" \
+    "${IMAGE_REF}" \
     -c "echo '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{}}}' | timeout 2 tmux-mcp 2>/dev/null || true; echo 'startup-test-complete'" 2>&1) || true
 
 if [[ "${MCP_START}" != *"startup-test-complete"* ]]; then
@@ -154,7 +155,7 @@ fi
 log_info "All checks passed!"
 echo ""
 echo "Summary:"
-echo "  - Image built successfully: ${IMAGE_NAME}"
+echo "  - Image built successfully: ${IMAGE_REF}"
 echo "  - tmux present: ${TMUX_VERSION}"
 echo "  - tmux-mcp: present"
 

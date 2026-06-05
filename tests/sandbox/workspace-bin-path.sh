@@ -21,7 +21,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
-# shellcheck source=../lib/podman-image.sh
+# shellcheck source=tests/lib/podman-image.sh
 source "$SCRIPT_DIR/../lib/podman-image.sh"
 
 skip() {
@@ -49,12 +49,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-IMAGE_REF="localhost/wrapix-test-workspace-bin-path:latest"
-# Clear stale wrapix-base images BEFORE load so the post-load retag has exactly
-# one candidate (same retag pattern as container-starts.sh / shell.nix).
-wrapix_remove_test_image_refs "wrapix-base-claude" "$IMAGE_REF"
-"$IMAGE_STREAM" | podman load >/dev/null
-wrapix_tag_loaded_image_id "wrapix-base-claude" "$IMAGE_REF"
+IMAGE_REF=$(wrapix_unique_image_ref "wrapix-test-workspace-bin-path")
+wrapix_load_test_image "$IMAGE_STREAM" "wrapix-base-claude" "$IMAGE_REF"
 
 run_entrypoint() {
   # Invoke the default entrypoint (/entrypoint.sh) with a command override so
