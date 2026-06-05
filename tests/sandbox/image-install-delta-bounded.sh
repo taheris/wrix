@@ -67,7 +67,7 @@ fi
 # podman and skopeo's containers-storage transport honor
 # CONTAINERS_STORAGE_CONF, so every byte the install path writes lands
 # here.
-STORE_ROOT=$(mktemp -d -t wrapix-install-delta.XXXXXX)
+STORE_ROOT=$(mktemp -d -t wrix-install-delta.XXXXXX)
 cleanup() {
   # rootless podman writes the overlay store under mapped subuids the
   # caller can't unlink directly; reclaim it from inside the user
@@ -126,10 +126,10 @@ snapshot_size() {
 
 SIZE0=$(snapshot_size)
 
-install_image "$IMAGE_A_STREAM" "localhost/wrapix-delta-a:test"
+install_image "$IMAGE_A_STREAM" "localhost/wrix-delta-a:test"
 SIZE1=$(snapshot_size)
 
-install_image "$IMAGE_B_STREAM" "localhost/wrapix-delta-b:test"
+install_image "$IMAGE_B_STREAM" "localhost/wrix-delta-b:test"
 SIZE2=$(snapshot_size)
 
 DELTA_A=$((SIZE1 - SIZE0))

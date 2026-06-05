@@ -2,13 +2,13 @@
 # Verifier for criterion 207 of specs/security.md:
 #
 #   After a sandbox session, a session-metadata index file exists under
-#   /workspace/.wrapix/log/; its timestamp_start, timestamp_end,
+#   /workspace/.wrix/log/; its timestamp_start, timestamp_end,
 #   exit_code, mode, and claude_session_dir fields are populated; and
 #   claude_session_dir resolves to an existing directory.
 #
 # Runs the entrypoint with `/bin/true` as the command override so the
 # EXIT trap fires without booting any agent runtime. Asserts the
-# host-side $WORKSPACE/.wrapix/log/*.json carries the contract fields.
+# host-side $WORKSPACE/.wrix/log/*.json carries the contract fields.
 
 set -euo pipefail
 
@@ -34,7 +34,7 @@ cd "$REPO_ROOT"
 
 IMAGE_STREAM=$(nix build --no-link --print-out-paths --no-warn-dirty .#test-image-base)
 
-WORKSPACE=$(mktemp -d -t wrapix-audit-trail.XXXXXX)
+WORKSPACE=$(mktemp -d -t wrix-audit-trail.XXXXXX)
 cleanup() {
   rm -rf "$WORKSPACE"
   if podman image exists "$IMAGE_REF"; then
@@ -43,28 +43,28 @@ cleanup() {
 }
 trap cleanup EXIT
 
-IMAGE_REF=$(wrapix_unique_image_ref "wrapix-test-audit-trail-anchor")
-wrapix_load_test_image "$IMAGE_STREAM" "wrapix-base-claude" "$IMAGE_REF"
+IMAGE_REF=$(wrix_unique_image_ref "wrix-test-audit-trail-anchor")
+wrix_load_test_image "$IMAGE_STREAM" "wrix-base-claude" "$IMAGE_REF"
 
 # Run the entrypoint with a no-op command override. The launcher's
 # always-on env (HOME, GIT_AUTHOR_*, GIT_COMMITTER_*) is replicated so
 # the entrypoint's claude-config branch and write_session_log fire the
-# same way they would under real `wrapix run`.
+# same way they would under real `wrix run`.
 podman run --rm --network=pasta --userns=keep-id \
-  -e HOME=/home/wrapix \
-  -e WRAPIX_AGENT=claude \
+  -e HOME=/home/wrix \
+  -e WRIX_AGENT=claude \
   -e GIT_AUTHOR_NAME=test -e GIT_AUTHOR_EMAIL=test@example.com \
   -e GIT_COMMITTER_NAME=test -e GIT_COMMITTER_EMAIL=test@example.com \
   -v "$WORKSPACE:/workspace:rw" \
   "$IMAGE_REF" /bin/true
 
-log_count=$(find "$WORKSPACE/.wrapix/log" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l)
+log_count=$(find "$WORKSPACE/.wrix/log" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l)
 [[ "$log_count" -eq 1 ]] || {
   echo "FAIL: expected exactly one session-metadata JSON, got $log_count" >&2
   exit 1
 }
 
-log_file=$(find "$WORKSPACE/.wrapix/log" -maxdepth 1 -name '*.json' | head -n1)
+log_file=$(find "$WORKSPACE/.wrix/log" -maxdepth 1 -name '*.json' | head -n1)
 
 for field in timestamp_start timestamp_end exit_code mode claude_session_dir; do
   value=$(jq -r ".${field} // empty" "$log_file")

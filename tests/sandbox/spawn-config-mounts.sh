@@ -8,7 +8,7 @@
 #
 # The parser + renderer live in the launcher script body in
 # `lib/sandbox/linux/default.nix`. We build the launcher via `nix build`
-# and exercise it under `WRAPIX_DRY_RUN=1`, which runs the SpawnConfig
+# and exercise it under `WRIX_DRY_RUN=1`, which runs the SpawnConfig
 # parse + mount rendering but skips the profile-mount staging loop and
 # the `podman run` invocation. The dry-run dump prints one `MOUNT=-v …`
 # line per parsed SpawnConfig entry, so assertions can inspect the
@@ -31,7 +31,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 
-TEST_TMP=$(mktemp -d -t wrapix-spawn-mounts.XXXXXX)
+TEST_TMP=$(mktemp -d -t wrix-spawn-mounts.XXXXXX)
 cleanup() {
   rm -rf "$TEST_TMP"
 }
@@ -58,9 +58,9 @@ nix build \
     in (lib.mkSandbox { profile = lib.profiles.base; }).launcher
   "
 
-WRAPIX="$LAUNCHER_LINK/bin/wrapix"
-if [[ ! -x "$WRAPIX" ]]; then
-  echo "fixture error: launcher binary not built at $WRAPIX" >&2
+WRIX="$LAUNCHER_LINK/bin/wrix"
+if [[ ! -x "$WRIX" ]]; then
+  echo "fixture error: launcher binary not built at $WRIX" >&2
   exit 1
 fi
 
@@ -80,7 +80,7 @@ write_spawn_config() {
   cat > "$out_file" <<EOF
 {
   "workspace": "$WORKSPACE",
-  "image_ref": "wrapix-base:test",
+  "image_ref": "wrix-base:test",
   "image_source": "",
   "env": [],
   "agent_args": []${mounts_field:+,
@@ -96,7 +96,7 @@ run_launcher() {
   local out="$2"
   local err="$3"
   local rc=0
-  WRAPIX_DRY_RUN=1 "$WRAPIX" spawn --spawn-config "$config" >"$out" 2>"$err" || rc=$?
+  WRIX_DRY_RUN=1 "$WRIX" spawn --spawn-config "$config" >"$out" 2>"$err" || rc=$?
   echo "$rc"
 }
 

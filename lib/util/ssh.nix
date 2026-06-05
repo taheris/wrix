@@ -8,7 +8,7 @@
   # Container-side key directory.
   # NOT under ~/.ssh/ — on Linux, podman auto-creates parent dirs for
   # bind mounts owned by root, which blocks chmod in the entrypoint.
-  containerKeyDir = "/etc/wrapix/keys";
+  containerKeyDir = "/etc/wrix/keys";
 
   # System-wide SSH known_hosts target.
   # OpenSSH reads /etc/ssh/ssh_known_hosts automatically.
@@ -16,7 +16,7 @@
 
   # Known_hosts source directory target for platforms that must mount
   # directories instead of files (Darwin VirtioFS).
-  knownHostsDirTarget = "/etc/wrapix/known_hosts_dir";
+  knownHostsDirTarget = "/etc/wrix/known_hosts_dir";
 
   # Runtime git/SSH setup script — sourced (not executed) by entrypoints.
   # Kept as a .sh file so shellcheck works.

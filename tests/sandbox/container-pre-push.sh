@@ -37,7 +37,7 @@ cd "$REPO_ROOT"
 
 IMAGE_STREAM=$(nix build --no-link --print-out-paths --no-warn-dirty .#test-image-base)
 
-WORKSPACE=$(mktemp -d -t wrapix-container-pre-push.XXXXXX)
+WORKSPACE=$(mktemp -d -t wrix-container-pre-push.XXXXXX)
 cleanup() {
   rm -rf "$WORKSPACE"
   if podman image exists "$IMAGE_REF"; then
@@ -46,8 +46,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-IMAGE_REF=$(wrapix_unique_image_ref "wrapix-test-container-pre-push")
-wrapix_load_test_image "$IMAGE_STREAM" "wrapix-base-claude" "$IMAGE_REF"
+IMAGE_REF=$(wrix_unique_image_ref "wrix-test-container-pre-push")
+wrix_load_test_image "$IMAGE_STREAM" "wrix-base-claude" "$IMAGE_REF"
 
 # Seed the workspace: working repo + bare file:// remote + sentinel +
 # initial commit (made on the host; no hooks fire because core.hooksPath
@@ -93,7 +93,7 @@ git -C "$WORKSPACE" commit -q -m initial
 # shim which runs prek hook-impl --hook-type=pre-push and invokes the
 # sentinel before the actual push proceeds.
 podman run --rm --network=pasta --userns=keep-id \
-  -e HOME=/home/wrapix \
+  -e HOME=/home/wrix \
   -e GIT_AUTHOR_NAME=test -e GIT_AUTHOR_EMAIL=test@example.com \
   -e GIT_COMMITTER_NAME=test -e GIT_COMMITTER_EMAIL=test@example.com \
   -v "$WORKSPACE:/workspace:rw" \

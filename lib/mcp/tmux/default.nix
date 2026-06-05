@@ -1,7 +1,7 @@
 # tmux MCP server definition
 #
 # Server providing tmux pane management for AI-assisted debugging
-# within wrapix sandboxes.
+# within wrix sandboxes.
 #
 # Exports:
 #   - name: Server identifier ("tmux")

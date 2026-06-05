@@ -46,9 +46,9 @@ let
     inherit crane fenix treefmt;
   };
   # rustProfileFromFile is the internal constructor that powers
-  # `wrapix.rustProfile` (lib/default.nix); it is intentionally stripped from
+  # `wrix.rustProfile` (lib/default.nix); it is intentionally stripped from
   # the public `profiles` surface — consumers reach pinned rust profiles
-  # through `wrapix.rustProfile { toolchain; sha256; }`.
+  # through `wrix.rustProfile { toolchain; sha256; }`.
   profiles = builtins.removeAttrs profilesModule [ "rustProfileFromFile" ];
   inherit (profilesModule) rustProfileFromFile;
 
@@ -117,7 +117,7 @@ let
           hooks = [
             {
               type = "command";
-              command = "wrapix-notify 'Claude Code' 'Waiting for input...'";
+              command = "wrix-notify 'Claude Code' 'Waiting for input...'";
             }
           ];
         }
@@ -127,7 +127,7 @@ let
 
   # Pi settings (~/.pi/agent/settings.json) - non-secret provider preferences.
   # Credentials stay runtime-only in ~/.pi/agent/auth.json (mounted by the
-  # launcher when WRAPIX_AGENT=pi).
+  # launcher when WRIX_AGENT=pi).
   basePiSettings = {
     defaultProvider = "openai-codex";
     defaultModel = "gpt-5.5";
@@ -139,7 +139,7 @@ let
   defaultDirectRunner = linuxPkgs.writeShellApplication {
     name = "loom-direct-runner";
     text = ''
-      echo "wrapix: default direct runner is a placeholder; provide agentPkg for agent=direct" >&2
+      echo "wrix: default direct runner is a placeholder; provide agentPkg for agent=direct" >&2
       exit 64
     '';
   };
@@ -297,13 +297,13 @@ let
 
       finalPiSettings = basePiSettings // (if agent == "pi" then agentSettings else { });
 
-      # Compute comma-separated network allowlist for WRAPIX_NETWORK=limit mode
+      # Compute comma-separated network allowlist for WRIX_NETWORK=limit mode
       networkAllowlist = concatStringsSep "," (finalProfile.networkAllowlist or [ ]);
 
       # Profile-baked launcher (mounts, writableDirs, networkAllowlist) with
       # no image interpolation. The launcher reads its image at runtime from
-      # WRAPIX_DEFAULT_IMAGE_REF / WRAPIX_DEFAULT_IMAGE_SOURCE (interactive
-      # `wrapix run`) or from SpawnConfig (`wrapix spawn`).
+      # WRIX_DEFAULT_IMAGE_REF / WRIX_DEFAULT_IMAGE_SOURCE (interactive
+      # `wrix run`) or from SpawnConfig (`wrix spawn`).
       launcher =
         if isLinux then
           linuxSandbox.mkSandbox {
@@ -355,23 +355,23 @@ let
 
       # Profile-specific sandbox: makeWrapper composes launcher + image,
       # baking in the agent-runtime selector and image ref/source as defaults
-      # so `wrapix run` works without the caller exporting env vars.
-      packageName = "wrapix-${finalProfile.name}${packageSuffix}";
+      # so `wrix run` works without the caller exporting env vars.
+      packageName = "wrix-${finalProfile.name}${packageSuffix}";
       packageSuffix = if agent == "direct" then "" else "-${agent}";
       package =
         pkgs.runCommand packageName
           {
             nativeBuildInputs = [ pkgs.makeWrapper ];
             passthru = { inherit launcher image; };
-            meta.mainProgram = "wrapix";
+            meta.mainProgram = "wrix";
           }
           ''
             mkdir -p "$out/bin"
-            makeWrapper "${launcher}/bin/wrapix" "$out/bin/wrapix" \
-              --set WRAPIX_AGENT "${agent}" \
-              --set-default WRAPIX_DEFAULT_IMAGE_REF "${mkImageRef image}" \
-              --set-default WRAPIX_DEFAULT_IMAGE_SOURCE "${image}" \
-              --set-default WRAPIX_DEFAULT_IMAGE_DIGEST "${image.digest}"
+            makeWrapper "${launcher}/bin/wrix" "$out/bin/wrix" \
+              --set WRIX_AGENT "${agent}" \
+              --set-default WRIX_DEFAULT_IMAGE_REF "${mkImageRef image}" \
+              --set-default WRIX_DEFAULT_IMAGE_SOURCE "${image}" \
+              --set-default WRIX_DEFAULT_IMAGE_DIGEST "${image.digest}"
           '';
 
     in

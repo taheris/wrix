@@ -331,8 +331,8 @@ test_consumers_migrated() {
   done
 
   local pkgs_file="$REPO_ROOT/modules/flake/packages.nix"
-  if ! grep -qF 'wrapix.tmuxMcpPackage.bin' "$pkgs_file"; then
-    echo "FAIL: $pkgs_file does not extract .bin via 'wrapix.tmuxMcpPackage.bin'" >&2
+  if ! grep -qF 'wrix.tmuxMcpPackage.bin' "$pkgs_file"; then
+    echo "FAIL: $pkgs_file does not extract .bin via 'wrix.tmuxMcpPackage.bin'" >&2
     return 1
   fi
 }

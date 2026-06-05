@@ -1,7 +1,7 @@
-# wrapix-agent-<agent>-<name>: tier 2 of the provenance-tiered fromImage chain
+# wrix-agent-<agent>-<name>: tier 2 of the provenance-tiered fromImage chain
 # (specs/image-builder.md § Provenance-Tiered Layering). Holds exactly the one
 # selected `agentPkg` runtime and its closure; a non-selected agent's binary is
-# absent. Chained atop wrapix-stable-profile-<name>, with the
+# absent. Chained atop wrix-stable-profile-<name>, with the
 # per-profile leaf chaining on top via fromImage, so the agent binary loads into
 # the platform store once and an agent-version bump re-emits only this tier and
 # the leaf, leaving the heavier toolchain tier (below) byte-identical.

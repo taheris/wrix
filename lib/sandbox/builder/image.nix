@@ -1,4 +1,4 @@
-# Build the OCI image for wrapix-builder (Linux remote builder)
+# Build the OCI image for wrix-builder (Linux remote builder)
 #
 # This creates a layered container image with:
 # - nix-daemon for remote building
@@ -57,7 +57,7 @@ let
 
   # Create merged environment with all packages
   builderEnv = pkgs.buildEnv {
-    name = "wrapix-builder-env";
+    name = "wrix-builder-env";
     paths = builderPackages;
     pathsToLink = [
       "/bin"
@@ -69,7 +69,7 @@ let
 
 in
 pkgs.dockerTools.buildLayeredImage {
-  name = "wrapix-builder";
+  name = "wrix-builder";
   tag = "latest";
   maxLayers = 50;
   includeNixDB = true;
@@ -115,7 +115,7 @@ pkgs.dockerTools.buildLayeredImage {
     chmod 755 nix/var/nix/gcroots nix/var/nix/gcroots/per-user
     chmod -R a+rwX nix/var/log
 
-    # Note: Persistent store bootstrap is handled by the CLI (wrapix-builder)
+    # Note: Persistent store bootstrap is handled by the CLI (wrix-builder)
     # which copies /nix from a temp container before mounting the volume
   '';
 

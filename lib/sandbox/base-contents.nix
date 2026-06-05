@@ -1,4 +1,4 @@
-# Universal bottom-of-closure for `wrapix-base-image` (specs/image-builder.md
+# Universal bottom-of-closure for `wrix-base-image` (specs/image-builder.md
 # § Base Image Layering). Membership: a path belongs here iff it varies only
 # with the nixpkgs pin AND is genuinely shared — a library or runtime every
 # profile already closes over, not a profile-specific leaf. Profile-specific

@@ -1,6 +1,6 @@
 # Project Overview
 
-Wrapix provides sandboxed containers for AI-driven development. See
+Wrix provides sandboxed containers for AI-driven development. See
 `docs/architecture.md` for system design.
 
 ## Authoring Conventions
@@ -37,7 +37,7 @@ pin — keep it current when specs land or retire.
 | **deploy key** | SSH key for git push operations from container |
 | **dolt** | SQL database backing beads; shared via `beads-dolt` container |
 | **focus-aware** | Notification suppression when terminal is focused |
-| **loom** | External Rust workflow orchestrator that drives wrapix sandboxes ([taheris/loom](https://github.com/taheris/loom)) |
+| **loom** | External Rust workflow orchestrator that drives wrix sandboxes ([taheris/loom](https://github.com/taheris/loom)) |
 | **pasta** | Linux userspace networking for Podman containers |
 | **playwright-mcp** | MCP server wrapping @playwright/mcp for browser automation in sandboxes |
 | **prek** | Rust-based pre-commit framework (drop-in replacement for pre-commit) |

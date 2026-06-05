@@ -5,7 +5,7 @@
   linuxPkgs,
   treefmt,
   src,
-  wrapix,
+  wrix,
   fenix ? null,
 }:
 
@@ -38,7 +38,7 @@ let
       pkgs = linuxPkgs;
       inherit treefmt;
       claudeConfig = {
-        _wrapix_delta_bounded_probe = "v2";
+        _wrix_delta_bounded_probe = "v2";
       };
     };
     # Same image but with `pkgs.nix` added to the profile's packages — a
@@ -70,7 +70,7 @@ let
       pkgs
       system
       src
-      wrapix
+      wrix
       ;
   };
 
@@ -91,8 +91,8 @@ let
   };
 
   rustChecks = {
-    tmux-mcp-clippy = wrapix.tmuxMcpPackage.clippy;
-    tmux-mcp-nextest = wrapix.tmuxMcpPackage.nextest;
+    tmux-mcp-clippy = wrix.tmuxMcpPackage.clippy;
+    tmux-mcp-nextest = wrix.tmuxMcpPackage.nextest;
   };
 
   # README example verification
@@ -144,7 +144,7 @@ let
     run_step "nix flake check" ${pkgs.nix}/bin/nix flake check --no-warn-dirty
 
     for app in \
-      test-wrapix-spawn-load \
+      test-wrix-spawn-load \
       test-image-install-digest-skip \
       test-image-digest-matches-stored-id \
       test-claude-runtime-noop \
@@ -198,14 +198,14 @@ in
 
   # Individual test apps for selective running
   apps = {
-    # Linux-only verifier for the wrapix-spawn image install transport
+    # Linux-only verifier for the wrix-spawn image install transport
     # (specs/sandbox.md § Image install path). Drives the shared
-    # `imageLoadStep` snippet (the same one `wrapix spawn` runs) through
+    # `imageLoadStep` snippet (the same one `wrix spawn` runs) through
     # shim podman + skopeo binaries; on Darwin prints a skip.
-    wrapix-spawn-load = {
-      meta.description = "Verify wrapix-spawn skopeo install idempotence (Linux only)";
+    wrix-spawn-load = {
+      meta.description = "Verify wrix-spawn skopeo install idempotence (Linux only)";
       type = "app";
-      program = "${sandboxImageChecks.wrapixSpawnLoadTest}/bin/test-wrapix-spawn-load";
+      program = "${sandboxImageChecks.wrixSpawnLoadTest}/bin/test-wrix-spawn-load";
     };
 
     claude-runtime-noop = {
@@ -243,31 +243,31 @@ in
     };
 
     base-image-universal = {
-      meta.description = "Verify wrapix-base-image holds only universal bottom-of-closure paths (no profile-specific rustc)";
+      meta.description = "Verify wrix-base-image holds only universal bottom-of-closure paths (no profile-specific rustc)";
       type = "app";
       program = "${sandboxImageChecks.baseImageUniversalTest}/bin/test-base-image-universal";
     };
 
     base-image-hash-stable = {
-      meta.description = "Verify wrapix-base-image drvPath is invariant under profile-level input changes";
+      meta.description = "Verify wrix-base-image drvPath is invariant under profile-level input changes";
       type = "app";
       program = "${sandboxImageChecks.baseImageHashStableTest}/bin/test-base-image-hash-stable";
     };
 
     stable-profile-hash-stable = {
-      meta.description = "Verify wrapix-stable-profile-<name> drvPath is invariant under tier-2 input changes";
+      meta.description = "Verify wrix-stable-profile-<name> drvPath is invariant under tier-2 input changes";
       type = "app";
       program = "${sandboxImageChecks.stableProfileHashStableTest}/bin/test-stable-profile-hash-stable";
     };
 
     stable-profile-membership = {
-      meta.description = "Verify wrapix-stable-profile-<name> excludes downstream packages and the agent runtime (tier-2 leaf)";
+      meta.description = "Verify wrix-stable-profile-<name> excludes downstream packages and the agent runtime (tier-2 leaf)";
       type = "app";
       program = "${sandboxImageChecks.stableProfileMembershipTest}/bin/test-stable-profile-membership";
     };
 
     pinned-toolchain-stable-tier = {
-      meta.description = "Verify a downstream-pinned rust toolchain lands in tier 1 (wrapix-stable-profile-<name>), not the leaf";
+      meta.description = "Verify a downstream-pinned rust toolchain lands in tier 1 (wrix-stable-profile-<name>), not the leaf";
       type = "app";
       program = "${sandboxImageChecks.pinnedToolchainStableTest}/bin/test-pinned-toolchain-stable-tier";
     };

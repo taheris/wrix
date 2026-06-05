@@ -28,7 +28,7 @@ _:
   # untouched (where `mkImageRef`'s tag changes but the content does not),
   # the case the prior `podman image exists $IMAGE_REF` preflight missed.
   #
-  # $IMAGE_DIGEST_PATH may be empty (e.g. legacy `wrapix spawn` callers that
+  # $IMAGE_DIGEST_PATH may be empty (e.g. legacy `wrix spawn` callers that
   # don't yet supply `image_digest_path`); the step falls back to the
   # ref-existence check so spawn-side idempotency is preserved.
   #
@@ -43,32 +43,32 @@ _:
     if [[ -z "$IMAGE_SOURCE" ]]; then
       verbose "Using cached image $IMAGE_REF"
     else
-      _wrapix_skip_load=0
-      _wrapix_desired_digest=""
+      _wrix_skip_load=0
+      _wrix_desired_digest=""
       if [[ -n "''${IMAGE_DIGEST_PATH:-}" && -s "$IMAGE_DIGEST_PATH" ]]; then
-        _wrapix_desired_digest=$(cat "$IMAGE_DIGEST_PATH")
+        _wrix_desired_digest=$(cat "$IMAGE_DIGEST_PATH")
       fi
-      if [[ -n "$_wrapix_desired_digest" ]]; then
-        if podman image inspect --format '{{.Id}}' "$_wrapix_desired_digest" >/dev/null 2>&1; then
+      if [[ -n "$_wrix_desired_digest" ]]; then
+        if podman image inspect --format '{{.Id}}' "$_wrix_desired_digest" >/dev/null 2>&1; then
           # best-effort: aliasing the desired ref to the matching content is
           # convenience only — a non-zero exit (e.g. ref already points at
           # the same Id) is benign; tar bytes still aren't streamed.
-          podman tag "$_wrapix_desired_digest" "$IMAGE_REF" >/dev/null 2>&1 || true
-          _wrapix_skip_load=1
+          podman tag "$_wrix_desired_digest" "$IMAGE_REF" >/dev/null 2>&1 || true
+          _wrix_skip_load=1
         fi
       elif podman image exists "$IMAGE_REF" 2>/dev/null; then
-        _wrapix_skip_load=1
+        _wrix_skip_load=1
       fi
 
-      if [[ "$_wrapix_skip_load" == "1" ]]; then
+      if [[ "$_wrix_skip_load" == "1" ]]; then
         verbose "Using cached image $IMAGE_REF"
       else
         verbose "Loading image from $IMAGE_SOURCE..."
-        _wrapix_img_tmp=$(mktemp -d)
-        "$IMAGE_SOURCE" >"$_wrapix_img_tmp/image.tar"
+        _wrix_img_tmp=$(mktemp -d)
+        "$IMAGE_SOURCE" >"$_wrix_img_tmp/image.tar"
         skopeo --insecure-policy copy --quiet \
-          "docker-archive:$_wrapix_img_tmp/image.tar" \
-          "oci-archive:$_wrapix_img_tmp/image.oci"
+          "docker-archive:$_wrix_img_tmp/image.tar" \
+          "oci-archive:$_wrix_img_tmp/image.oci"
         # The oci-archive -> containers-storage leg writes into podman's
         # store. skopeo resolves that store on its own and, when
         # XDG_RUNTIME_DIR is unset, falls back to the rootful runroot
@@ -81,17 +81,17 @@ _:
         # run under a remote podman client (CONTAINER_HOST set). If `podman
         # info` can't be resolved, fall back to the bare ref and let skopeo
         # resolve the store itself.
-        _wrapix_store_ref="containers-storage:$IMAGE_REF"
-        _wrapix_store_spec=$(podman info \
+        _wrix_store_ref="containers-storage:$IMAGE_REF"
+        _wrix_store_spec=$(podman info \
           --format '{{.Store.GraphDriverName}}@{{.Store.GraphRoot}}+{{.Store.RunRoot}}' \
-          2>/dev/null) || _wrapix_store_spec=""
-        if [[ "$_wrapix_store_spec" == *@*+* ]]; then
-          _wrapix_store_ref="containers-storage:[$_wrapix_store_spec]$IMAGE_REF"
+          2>/dev/null) || _wrix_store_spec=""
+        if [[ "$_wrix_store_spec" == *@*+* ]]; then
+          _wrix_store_ref="containers-storage:[$_wrix_store_spec]$IMAGE_REF"
         fi
         skopeo --insecure-policy copy --quiet \
-          "oci-archive:$_wrapix_img_tmp/image.oci" \
-          "$_wrapix_store_ref"
-        rm -rf "$_wrapix_img_tmp"
+          "oci-archive:$_wrix_img_tmp/image.oci" \
+          "$_wrix_store_ref"
+        rm -rf "$_wrix_img_tmp"
         IMAGE_REPO="''${IMAGE_REF%:*}"
         # best-effort: :latest is pruneStaleImages' keep-anchor; a tag
         # failure only loses the convenience alias.
@@ -102,10 +102,10 @@ _:
   '';
 
   # Clean up stale staging directories from previous runs (PIDs that no longer exist)
-  # Expects $WRAPIX_CACHE to be set
+  # Expects $WRIX_CACHE to be set
   cleanStaleStagingDirs = ''
-    mkdir -p "$WRAPIX_CACHE/mounts"
-    for stale_dir in "$WRAPIX_CACHE/mounts"/*; do
+    mkdir -p "$WRIX_CACHE/mounts"
+    for stale_dir in "$WRIX_CACHE/mounts"/*; do
       [ -d "$stale_dir" ] || continue
       stale_pid=$(basename "$stale_dir")
       if ! kill -0 "$stale_pid" 2>/dev/null; then
@@ -116,9 +116,9 @@ _:
 
   # Create PID-based staging directory with cleanup trap
   # Sets $STAGING_ROOT and registers EXIT trap
-  # Expects $WRAPIX_CACHE to be set
+  # Expects $WRIX_CACHE to be set
   createStagingDir = ''
-    STAGING_ROOT="$WRAPIX_CACHE/mounts/$$"
+    STAGING_ROOT="$WRIX_CACHE/mounts/$$"
     mkdir -p "$STAGING_ROOT"
     trap 'rm -rf "$STAGING_ROOT"' EXIT
   '';
@@ -187,17 +187,17 @@ _:
     else
       ''$(basename "$PROJECT_DIR")-$(hostname -s 2>/dev/null || uname -n)'';
 
-  # Prune stale image tags across every wrapix-* repo (not just the active
+  # Prune stale image tags across every wrix-* repo (not just the active
   # one). After a fresh load, :latest and the new hash tag are aliases for
   # the same image ID; old hash tags from prior rebuilds are stray. For each
-  # wrapix-* repo, keep :latest and any tag that aliases it (same ID/digest)
+  # wrix-* repo, keep :latest and any tag that aliases it (same ID/digest)
   # and delete the rest. Without this, rebuilding one profile leaves stale
   # hashes from every other profile accumulating forever, since the old
   # filter was scoped to the currently-invoked profile only.
   #
   # runtime:
-  #   "podman"    — Linux, beads-dolt; repos are localhost/wrapix-*.
-  #   "container" — Darwin's Apple container CLI; repos are wrapix-*.
+  #   "podman"    — Linux, beads-dolt; repos are localhost/wrix-*.
+  #   "container" — Darwin's Apple container CLI; repos are wrix-*.
   # cmd: override the CLI binary (absolute path for systemd units, etc.).
   pruneStaleImages =
     {
@@ -211,19 +211,19 @@ _:
           podman = {
             list = "${bin} images --format '{{.Repository}} {{.Tag}} {{.ID}}'";
             delete = "${bin} rmi";
-            pattern = "^localhost/wrapix-";
+            pattern = "^localhost/wrix-";
             # Name the container pinning a given tag (via $_stale at shell
             # runtime). Empty if none — lets callers print a friendly notice
             # naming the holder instead of a generic rmi error.
             holder = ''${bin} ps -a --filter "ancestor=$_stale" --format '{{.Names}}' | head -n1'';
             # Workspace label set by beads-dolt cmd_start. Empty for legacy
             # containers or when the holder disappears mid-check.
-            holderWorkspace = ''${bin} inspect --format '{{ index .Config.Labels "wrapix.workspace" }}' "$_holder"'';
+            holderWorkspace = ''${bin} inspect --format '{{ index .Config.Labels "wrix.workspace" }}' "$_holder"'';
           };
           container = {
             list = "${bin} image list | tail -n +2";
             delete = "${bin} image delete";
-            pattern = "^wrapix-";
+            pattern = "^wrix-";
             # Apple's container CLI has no ancestor filter — fall through
             # to the generic "pinned by a container" message.
             holder = "echo ''";

@@ -1,5 +1,5 @@
 # Sandbox image runtime checks: verify each agent variant's image closure
-# contains the expected agent runtime binary, and the `wrapix spawn` image
+# contains the expected agent runtime binary, and the `wrix spawn` image
 # load contract is idempotent against a shim podman.
 {
   pkgs,
@@ -50,11 +50,11 @@ let
   prekHooksBundle = import ../../lib/prek/bundle.nix { pkgs = linuxPkgs; };
 
   # Linux-only shim verifier for the shared `imageLoadStep` snippet (the same
-  # one `wrapix spawn` runs). Asserts the skopeo-based install transport on
+  # one `wrix spawn` runs). Asserts the skopeo-based install transport on
   # first call (per specs/sandbox.md § Image install path) and idempotence on
   # the second.
-  wrapixSpawnLoadTest = pkgs.writeShellApplication {
-    name = "test-wrapix-spawn-load";
+  wrixSpawnLoadTest = pkgs.writeShellApplication {
+    name = "test-wrix-spawn-load";
     runtimeInputs = lib.optionals isLinux [
       pkgs.coreutils
       pkgs.gnugrep
@@ -73,7 +73,7 @@ let
           : >"$podman_log"
           : >"$skopeo_log"
 
-          IMAGE_REF="localhost/wrapix-loadtest:abc123"
+          IMAGE_REF="localhost/wrix-loadtest:abc123"
           IMAGE_SOURCE="$tmp/image-source.sh"
           # The install transport pins skopeo's containers-storage destination
           # to podman's store via `podman info`; the shim reports this spec so
@@ -159,11 +159,11 @@ let
               exit 1
           fi
 
-          echo "test-wrapix-spawn-load: PASS"
+          echo "test-wrix-spawn-load: PASS"
         ''
       else
         ''
-          echo "test-wrapix-spawn-load: not available on Darwin (no podman dependency on macOS)" >&2
+          echo "test-wrix-spawn-load: not available on Darwin (no podman dependency on macOS)" >&2
           exit 0
         '';
   };
@@ -198,7 +198,7 @@ let
           : >"$skopeo_log"
           : >"$image_source_log"
 
-          IMAGE_REF="localhost/wrapix-digestskip:abc123"
+          IMAGE_REF="localhost/wrix-digestskip:abc123"
           IMAGE_SOURCE="$tmp/image-source.sh"
           IMAGE_DIGEST_PATH="$tmp/image-digest"
           DESIRED_DIGEST="sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -461,7 +461,7 @@ let
       members=(${baseContentsList})
       for member in "''${members[@]}"; do
           if ! grep -qxF "$member" "$image_closure"; then
-              echo "FAIL: wrapix-base-image member not shared by the base profile closure" >&2
+              echo "FAIL: wrix-base-image member not shared by the base profile closure" >&2
               echo "  member : $member" >&2
               echo "  closure: $image_closure" >&2
               exit 1
@@ -471,7 +471,7 @@ let
       # Exclusion: no profile references rustc or libllvm, so neither is a base member.
       for toolchain in ${linuxPkgs.rustc} ${linuxPkgs.llvmPackages.libllvm}; do
           if grep -qxF "$toolchain" "$base_contents"; then
-              echo "FAIL: profile-specific toolchain present in wrapix-base-image contents" >&2
+              echo "FAIL: profile-specific toolchain present in wrix-base-image contents" >&2
               echo "  unexpected: $toolchain" >&2
               exit 1
           fi
@@ -481,7 +481,7 @@ let
     '';
   };
 
-  # Hash-stability guard for `wrapix-base-image` (specs/image-builder.md
+  # Hash-stability guard for `wrix-base-image` (specs/image-builder.md
   # § Base Image Layering). The base captures only the nixpkgs-pin-dependent
   # bottom-of-closure, so its derivation hash must not move when any
   # profile-level input changes. We build the full sandbox image under several
@@ -500,7 +500,7 @@ let
     env = baseImageOf {
       profile = sandboxLib.profiles.base;
       env = {
-        WRAPIX_HASH_STABLE_PROBE = "v2";
+        WRIX_HASH_STABLE_PROBE = "v2";
       };
     };
     mcpConfigs = baseImageOf {
@@ -522,7 +522,7 @@ let
   baseImageHashStableChecks = lib.concatStringsSep "\n" (
     lib.mapAttrsToList (name: drvPath: ''
       if [[ "${drvPath}" != "$reference" ]]; then
-          echo "FAIL: wrapix-base-image drvPath changed under profile perturbation '${name}'" >&2
+          echo "FAIL: wrix-base-image drvPath changed under profile perturbation '${name}'" >&2
           echo "  reference  : $reference" >&2
           echo "  ${name}: ${drvPath}" >&2
           status=1
@@ -546,7 +546,7 @@ let
     '';
   };
 
-  # Hash-stability guard for `wrapix-stable-profile-<name>` (tier 1;
+  # Hash-stability guard for `wrix-stable-profile-<name>` (tier 1;
   # specs/image-builder.md § Provenance-Tiered Layering). Tier 1's contents are
   # fixed per profile instance, so its derivation hash must not move when a
   # tier-2 input changes. We read each sandbox image's chained `fromImage`
@@ -580,7 +580,7 @@ let
   stableProfileHashStableChecks = lib.concatStringsSep "\n" (
     lib.mapAttrsToList (name: drvPath: ''
       if [[ "${drvPath}" != "$reference" ]]; then
-          echo "FAIL: wrapix-stable-profile drvPath changed under tier-2 perturbation '${name}'" >&2
+          echo "FAIL: wrix-stable-profile drvPath changed under tier-2 perturbation '${name}'" >&2
           echo "  reference  : $reference" >&2
           echo "  ${name}: ${drvPath}" >&2
           status=1
@@ -605,7 +605,7 @@ let
   };
 
   # Membership guard for tier 1 (specs/image-builder.md § Provenance-Tiered
-  # Layering): `wrapix-stable-profile-<name>` holds only fixed-per-instance
+  # Layering): `wrix-stable-profile-<name>` holds only fixed-per-instance
   # content — no agent runtime, no downstream-appended package. The check is
   # agent-invariant: neither the consumer-supplied agent runtime nor a
   # downstream-appended package may appear in tier 1's `lowerTiersClosure`. It
@@ -614,10 +614,10 @@ let
   # not the base+stable one), the appended package is tier 3 leaf (in neither
   # tier's `lowerTiersClosure`, only the whole image closure). Built via image.nix
   # directly with a light agent package so the check does not drag in claude-code.
-  membershipAppendedPkg = pkgs.writeShellScriptBin "wrapix-stable-membership-appended" ''
+  membershipAppendedPkg = pkgs.writeShellScriptBin "wrix-stable-membership-appended" ''
     echo "downstream-appended package"
   '';
-  membershipRunnerPkg = pkgs.writeShellScriptBin "wrapix-stable-membership-runner" ''
+  membershipRunnerPkg = pkgs.writeShellScriptBin "wrix-stable-membership-runner" ''
     echo "consumer-supplied agent runtime"
   '';
   membershipImage = import ../../lib/sandbox/image.nix {
@@ -656,7 +656,7 @@ let
       # tier 1 (the base+stable union).
       for above in "$appended" "$runner"; do
           if grep -qxF "$above" "$tier1_closure"; then
-              echo "FAIL: non-tier-1 path leaked into the wrapix-stable-profile tier-1 closure" >&2
+              echo "FAIL: non-tier-1 path leaked into the wrix-stable-profile tier-1 closure" >&2
               echo "  leaked : $above" >&2
               echo "  tier-1 : $tier1_closure" >&2
               exit 1
@@ -672,7 +672,7 @@ let
       # The agent runtime is tier 2: present in the agent tier's lowerTiersClosure
       # (base+stable+agent), absent from tier 1.
       if ! grep -qxF "$runner" "$tier2_closure"; then
-          echo "FAIL: agent runtime absent from the wrapix-agent tier-2 closure" >&2
+          echo "FAIL: agent runtime absent from the wrix-agent tier-2 closure" >&2
           echo "  expected: $runner" >&2
           echo "  tier-2  : $tier2_closure" >&2
           exit 1
@@ -680,7 +680,7 @@ let
 
       # The appended package is tier 3 leaf: in neither lower tier's closure.
       if grep -qxF "$appended" "$tier2_closure"; then
-          echo "FAIL: downstream-appended package leaked into the wrapix-agent tier-2 closure" >&2
+          echo "FAIL: downstream-appended package leaked into the wrix-agent tier-2 closure" >&2
           echo "  leaked : $appended" >&2
           echo "  tier-2 : $tier2_closure" >&2
           exit 1
@@ -738,7 +738,7 @@ let
 
           for member in "''${members[@]}"; do
               if ! grep -qxF "$member" "$tier1_closure"; then
-                  echo "FAIL: pinned-toolchain core package absent from the wrapix-stable-profile tier-1 closure" >&2
+                  echo "FAIL: pinned-toolchain core package absent from the wrix-stable-profile tier-1 closure" >&2
                   echo "  member : $member" >&2
                   echo "  tier-1 : $tier1_closure" >&2
                   exit 1
@@ -776,8 +776,8 @@ let
   # Leaf-only-change guard (specs/image-builder.md § Provenance-Tiered Layering;
   # Non-Functional § Iteration cost). Two leaf images that differ only in a
   # tier-3 leaf input — one Claude-settings field — share an identical
-  # `wrapix-base-image` (tier 0), `wrapix-stable-profile-<name>` (tier 1), and
-  # `wrapix-agent-<agent>-<name>` (tier 2), since none depends on the settings
+  # `wrix-base-image` (tier 0), `wrix-stable-profile-<name>` (tier 1), and
+  # `wrix-agent-<agent>-<name>` (tier 2), since none depends on the settings
   # JSON. Every tier-0, tier-1, AND tier-2 layer blob must therefore be
   # byte-identical across the two leaves' manifests; only the leaf customisation
   # layer changes.
@@ -858,7 +858,7 @@ let
 
   # Agent-tier-isolation guard (specs/image-builder.md § Provenance-Tiered
   # Layering). The selected agent runtime rides its own tier
-  # `wrapix-agent-<agent>-<name>`, chained atop the toolchain tier. Two leaf
+  # `wrix-agent-<agent>-<name>`, chained atop the toolchain tier. Two leaf
   # images that differ only in the agent package's version (two distinct direct
   # runners) share an identical tier 0 and tier 1 — neither depends on the agent
   # axis — so every tier-0 and tier-1 blob is byte-identical, while the agent
@@ -866,13 +866,13 @@ let
   # bump never re-ships the heavier toolchain below it.
   leafProbeRunnerA = mkLeafProbe {
     agent = "direct";
-    agentPkg = pkgs.writeShellScriptBin "wrapix-agent-probe-runner" ''
+    agentPkg = pkgs.writeShellScriptBin "wrix-agent-probe-runner" ''
       echo "agent probe runner A"
     '';
   };
   leafProbeRunnerB = mkLeafProbe {
     agent = "direct";
-    agentPkg = pkgs.writeShellScriptBin "wrapix-agent-probe-runner" ''
+    agentPkg = pkgs.writeShellScriptBin "wrix-agent-probe-runner" ''
       echo "agent probe runner B — a different version"
     '';
   };
@@ -960,7 +960,7 @@ let
     packages = [ pkgs.coreutils ];
     env = { };
   };
-  agentExclusiveRunner = pkgs.writeShellScriptBin "wrapix-agent-exclusive-runner" ''
+  agentExclusiveRunner = pkgs.writeShellScriptBin "wrix-agent-exclusive-runner" ''
     echo "agent exclusive direct runner"
   '';
   mkAgentExclusiveImage =
@@ -1043,7 +1043,7 @@ let
       profile = {
         name = "iterprobe";
         packages = [
-          (pkgs.writeShellScriptBin "wrapix-iteration-probe" ''
+          (pkgs.writeShellScriptBin "wrix-iteration-probe" ''
             # iteration-cost-bounded probe wrapper
             echo "iteration probe: ${line}"
           '')
@@ -1504,7 +1504,7 @@ let
 in
 {
   inherit
-    wrapixSpawnLoadTest
+    wrixSpawnLoadTest
     imageInstallDigestSkipTest
     digestMatchesStoredIdTest
     claudeRuntimeNoopTest

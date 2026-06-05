@@ -1,6 +1,6 @@
 # tmux-mcp
 
-MCP server providing tmux pane management for AI-assisted debugging within wrapix sandboxes.
+MCP server providing tmux pane management for AI-assisted debugging within wrix sandboxes.
 
 ## Problem Statement
 
@@ -8,11 +8,11 @@ AI agents lack the ability to debug applications the way humans do — running a
 
 ## Architecture
 
-A Rust binary implementing the MCP protocol (JSON-RPC over stdio) that drives a tmux session named `debug-{pid}`. The server runs inside the wrapix container — `sandbox.md` is the security boundary; this spec adds no further isolation. Container construction, MCP opt-in plumbing (`mcp.tmux = { … }`), and trust model belong to `sandbox.md`. This spec owns the wire protocol, pane lifecycle, and audit format.
+A Rust binary implementing the MCP protocol (JSON-RPC over stdio) that drives a tmux session named `debug-{pid}`. The server runs inside the wrix container — `sandbox.md` is the security boundary; this spec adds no further isolation. Container construction, MCP opt-in plumbing (`mcp.tmux = { … }`), and trust model belong to `sandbox.md`. This spec owns the wire protocol, pane lifecycle, and audit format.
 
 Load-bearing decisions:
 
-- MCP server runs inside the wrapix container — the sandbox IS the trust boundary, not the server
+- MCP server runs inside the wrix container — the sandbox IS the trust boundary, not the server
 - Open command policy — pane processes inherit sandbox constraints, no extra command filtering
 - `remain-on-exit on` so panes survive their process for post-mortem capture
 - Optional audit logging (JSON Lines) for review and debugging-the-debugger
@@ -101,7 +101,7 @@ Profiles do not need a `-debug` variant — MCP servers compose orthogonally wit
 
 ### Non-Functional
 
-1. **Sandbox-only trust boundary** — no command filtering beyond what the wrapix container enforces; pane processes inherit container constraints.
+1. **Sandbox-only trust boundary** — no command filtering beyond what the wrix container enforces; pane processes inherit container constraints.
 2. **No privilege escalation** — server runs as the same unprivileged user as Claude Code; tmux session is user-local.
 3. **Plain-text errors** — MCP error responses carry natural-language messages, not structured codes.
 

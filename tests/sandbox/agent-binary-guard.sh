@@ -2,20 +2,20 @@
 # Verifier for the entrypoint agent-binary guard criterion of
 # specs/sandbox.md § Entrypoint binary guard (FR8, "Agent runtime axis"):
 #
-#   Before exec'ing the agent selected by WRAPIX_AGENT, the entrypoint
+#   Before exec'ing the agent selected by WRIX_AGENT, the entrypoint
 #   verifies the named binary is present (command -v) and hard-errors
 #   with a clear message naming the missing agent when it is absent
-#   (e.g. WRAPIX_AGENT=pi against a claude image on the raw-launcher
+#   (e.g. WRIX_AGENT=pi against a claude image on the raw-launcher
 #   path), instead of dead-ending at a bare 'command not found'.
 #
 # Exercises the real container entrypoint (/entrypoint.sh) rather than
 # grepping source: the guard runs only on agent-exec runs ($# -eq 0),
 # so each case invokes the default entrypoint with no command override.
 #
-#   - Guard fires: WRAPIX_AGENT=claude against test-image-base (which bakes
+#   - Guard fires: WRIX_AGENT=claude against test-image-base (which bakes
 #     `hello` as the agent stand-in — no claude, no loom-direct-runner)
 #     hard-errors non-zero, naming the agent.
-#   - Guard passes: WRAPIX_AGENT=direct with a /workspace/bin shim named
+#   - Guard passes: WRIX_AGENT=direct with a /workspace/bin shim named
 #     loom-direct-runner runs the shim (its sentinel reaches stdout)
 #     rather than blocking.
 #
@@ -47,7 +47,7 @@ cd "$REPO_ROOT"
 
 IMAGE_STREAM=$(nix build --no-link --print-out-paths --no-warn-dirty .#test-image-base)
 
-WORKSPACE=$(mktemp -d -t wrapix-agent-binary-guard.XXXXXX)
+WORKSPACE=$(mktemp -d -t wrix-agent-binary-guard.XXXXXX)
 cleanup() {
   rm -rf "$WORKSPACE"
   if podman image exists "$IMAGE_REF"; then
@@ -56,14 +56,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
-IMAGE_REF=$(wrapix_unique_image_ref "wrapix-test-agent-binary-guard")
-wrapix_load_test_image "$IMAGE_STREAM" "wrapix-base-claude" "$IMAGE_REF"
+IMAGE_REF=$(wrix_unique_image_ref "wrix-test-agent-binary-guard")
+wrix_load_test_image "$IMAGE_STREAM" "wrix-base-claude" "$IMAGE_REF"
 
 # Run the default entrypoint with no command override ($# -eq 0 inside the
 # container) so the agent-exec path — and thus the guard — is reached.
 run_agent() {
   podman run --rm --network=pasta --userns=keep-id \
-    -e "WRAPIX_AGENT=$1" \
+    -e "WRIX_AGENT=$1" \
     -v "$WORKSPACE:/workspace:rw" \
     "$IMAGE_REF"
 }
@@ -75,12 +75,12 @@ fire_out=$(run_agent claude 2>&1)
 fire_rc=$?
 set -e
 [[ "$fire_rc" -ne 0 ]] || {
-  echo "FAIL: WRAPIX_AGENT=claude against an image without claude exited 0 (guard did not fire)" >&2
+  echo "FAIL: WRIX_AGENT=claude against an image without claude exited 0 (guard did not fire)" >&2
   echo "  output: $fire_out" >&2
   exit 1
 }
 case "$fire_out" in
-  *"WRAPIX_AGENT=claude"*"not present"*) ;;
+  *"WRIX_AGENT=claude"*"not present"*) ;;
   *)
     echo "FAIL: guard error did not name the missing agent clearly: $fire_out" >&2
     exit 1
@@ -96,7 +96,7 @@ esac
 
 # --- Case 2: selected agent present -> guard passes, agent runs ---------------
 mkdir -p "$WORKSPACE/bin"
-SENTINEL="WRAPIX_DIRECT_RAN_OK"
+SENTINEL="WRIX_DIRECT_RAN_OK"
 cat > "$WORKSPACE/bin/loom-direct-runner" <<EOF
 #!/bin/bash
 echo "$SENTINEL"
@@ -108,7 +108,7 @@ pass_out=$(run_agent direct 2>&1)
 pass_rc=$?
 set -e
 [[ "$pass_rc" -eq 0 ]] || {
-  echo "FAIL: WRAPIX_AGENT=direct with a present binary exited $pass_rc (guard wrongly fired)" >&2
+  echo "FAIL: WRIX_AGENT=direct with a present binary exited $pass_rc (guard wrongly fired)" >&2
   echo "  output: $pass_out" >&2
   exit 1
 }

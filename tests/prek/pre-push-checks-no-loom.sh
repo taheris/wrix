@@ -15,7 +15,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 
-TEST_TMP="$(mktemp -d -t wrapix-prek-no-loom.XXXXXX)"
+TEST_TMP="$(mktemp -d -t wrix-prek-no-loom.XXXXXX)"
 trap 'rm -rf "$TEST_TMP"' EXIT
 
 BASH_BIN="$(command -v bash)"

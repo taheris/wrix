@@ -28,7 +28,7 @@ sccache hits possible — the invariants and success criteria below exist
 to keep that identity from drifting.
 
 `mkDevShell` additionally manages prek hook installation by pointing
-`core.hooksPath` at a standalone `wrapix.prekHooks` derivation — see
+`core.hooksPath` at a standalone `wrix.prekHooks` derivation — see
 [Prek hook management](#prek-hook-management) for the contract.
 
 Rust toolchains are baked into the container image at build time, never
@@ -45,19 +45,19 @@ A profile is a Nix attrset produced by the internal `mkProfile` helper. Fields:
 |-------|------|---------|
 | `name` | string | Profile identifier (e.g. `"base"`, `"rust"`) |
 | `packages` | list of derivations | Packages baked into the container image (the merged convenience view used for PATH and `mkDevShell`) |
-| `corePackages` | list of derivations | The wrapix-controlled, fixed-per-instance subset of `packages` — the `basePackages` floor plus the profile toolchain (default or pinned). Set at construction by `mkProfile`/`rustProfile`; downstream extension never appends to it. The image builder assigns it to the stable layer tier and treats `packages` − `corePackages` as the downstream-added delta that rides in the volatile leaf tier (see `image-builder.md` § Provenance-Tiered Layering). |
+| `corePackages` | list of derivations | The wrix-controlled, fixed-per-instance subset of `packages` — the `basePackages` floor plus the profile toolchain (default or pinned). Set at construction by `mkProfile`/`rustProfile`; downstream extension never appends to it. The image builder assigns it to the stable layer tier and treats `packages` − `corePackages` as the downstream-added delta that rides in the volatile leaf tier (see `image-builder.md` § Provenance-Tiered Layering). |
 | `env` | attrset of strings | Environment variables set inside the container |
 | `mounts` | list of mount specs | Host → container bind mounts; each `{ source, dest, mode, optional }` |
-| `networkAllowlist` | list of strings | Domains permitted when `WRAPIX_NETWORK=limit` (merged with base allowlist) |
+| `networkAllowlist` | list of strings | Domains permitted when `WRIX_NETWORK=limit` (merged with base allowlist) |
 | `enabledPlugins` | attrset | Claude Code plugins merged into `~/.claude/settings.json` (e.g. `"rust-analyzer-lsp@claude-plugins-official" = true`) |
 | `shellHook` | shell snippet | Internal alignment hook spliced by `mkDevShell`. Aligns host-side toolchain identity, env, and PATH with the sandbox so `rustc` resolves to the same `/nix/store/...` path on both sides — the prerequisite for cross-boundary sccache hits and shared `target/` artifact reuse. Consumers do not splice this directly; they pass the profile to `mkDevShell { profile = ...; }`. |
-| `writableDirs` | list of strings | Linux-only: paths where the launcher stacks a tmpfs with `U=true` so the dir is wrapix-owned — needed because podman creates bind-mount parents as root, which blocks writes to sibling files like `.global-cache`/`credentials.toml` |
+| `writableDirs` | list of strings | Linux-only: paths where the launcher stacks a tmpfs with `U=true` so the dir is wrix-owned — needed because podman creates bind-mount parents as root, which blocks writes to sibling files like `.global-cache`/`credentials.toml` |
 
 Mount specs use `optional = true` to mean "skip this bind silently if the host source path does not exist", letting profiles declare cache mounts that no-op on hosts that haven't yet populated them.
 
-`deriveProfile` merges `packages`, `mounts`, `env`, and `networkAllowlist` (packages/mounts/allowlist concatenated; env right-biased). Extension `packages` append to `packages` only — `corePackages` passes through from the base unchanged, so the wrapix-controlled floor + toolchain stays distinguishable from downstream additions for image layer tiering (`image-builder.md` § Provenance-Tiered Layering). Other fields (`name`, `enabledPlugins`, `shellHook`, `writableDirs`) pass through from the extensions attrset if set, otherwise inherit from the base — they are not deep-merged. Callers extending a profile with extra plugins or shell hooks must compose those values themselves.
+`deriveProfile` merges `packages`, `mounts`, `env`, and `networkAllowlist` (packages/mounts/allowlist concatenated; env right-biased). Extension `packages` append to `packages` only — `corePackages` passes through from the base unchanged, so the wrix-controlled floor + toolchain stays distinguishable from downstream additions for image layer tiering (`image-builder.md` § Provenance-Tiered Layering). Other fields (`name`, `enabledPlugins`, `shellHook`, `writableDirs`) pass through from the extensions attrset if set, otherwise inherit from the base — they are not deep-merged. Callers extending a profile with extra plugins or shell hooks must compose those values themselves.
 
-The rust profile additionally exposes `toolchain` (the resolved fenix `combine` derivation) and `buildPackage` (a crane-backed Rust package builder); both pass through `deriveProfile` since extensions don't override them. For project-pinned rust toolchains, consumers use the top-level `rustProfile { toolchain; sha256; }` constructor — see [wrapix.rustProfile](#wrapixrustprofile) and [Rust Profile](#rust-profile) for details.
+The rust profile additionally exposes `toolchain` (the resolved fenix `combine` derivation) and `buildPackage` (a crane-backed Rust package builder); both pass through `deriveProfile` since extensions don't override them. For project-pinned rust toolchains, consumers use the top-level `rustProfile { toolchain; sha256; }` constructor — see [wrix.rustProfile](#wrixrustprofile) and [Rust Profile](#rust-profile) for details.
 
 ## Built-in Profiles
 
@@ -82,7 +82,7 @@ Curated developer toolkit. The rust and python profiles extend this set. Grouped
 
 **Base env:** none.
 **Base mounts:** none. Host `~/.claude` is intentionally NOT mounted — containers use `$PROJECT_DIR/.claude` so user-level settings stay separate from project-level settings.
-**Base network allowlist:** `api.anthropic.com`, `github.com`, `ssh.github.com`, `cache.nixos.org` — always permitted regardless of profile, used only when `WRAPIX_NETWORK=limit`.
+**Base network allowlist:** `api.anthropic.com`, `github.com`, `ssh.github.com`, `cache.nixos.org` — always permitted regardless of profile, used only when `WRIX_NETWORK=limit`.
 
 ### Rust Profile
 
@@ -109,14 +109,14 @@ rust-std + clippy + rustfmt + rust-docs.
 
 Environment:
 
-- `CARGO_HOME` — intentionally **unset**; cargo's `$HOME/.cargo` default applies, which resolves to `/home/wrapix/.cargo` inside the container and to the user's host home in `mkDevShell`. The registry/git mount dests below match cargo's container default, so the shared host cache lines up without an explicit env override. Non-mounted CARGO_HOME state (credentials.toml, config.toml, `cargo install` bins) lives on tmpfs on Linux and is ephemeral across container runs — intentional for an agent-style environment.
+- `CARGO_HOME` — intentionally **unset**; cargo's `$HOME/.cargo` default applies, which resolves to `/home/wrix/.cargo` inside the container and to the user's host home in `mkDevShell`. The registry/git mount dests below match cargo's container default, so the shared host cache lines up without an explicit env override. Non-mounted CARGO_HOME state (credentials.toml, config.toml, `cargo install` bins) lives on tmpfs on Linux and is ephemeral across container runs — intentional for an agent-style environment.
 - `RUST_SRC_PATH=${toolchain}/lib/rustlib/src/rust/library` — rust-analyzer standard library resolution
 - `LIBRARY_PATH=${pkgs.postgresql.lib}/lib` — PostgreSQL library discovery at link time
 - `OPENSSL_INCLUDE_DIR=${pkgs.openssl.dev}/include` — OpenSSL headers
 - `OPENSSL_LIB_DIR=${pkgs.openssl.out}/lib` — OpenSSL libraries
 - `RUSTC_WRAPPER=${pkgs.sccache}/bin/sccache` — route compiler invocations through sccache
 - `CARGO_BUILD_RUSTC_WRAPPER=${pkgs.sccache}/bin/sccache` — same value, picked up by cargo directly
-- `SCCACHE_DIR=/home/wrapix/.cache/sccache` — stable in-container cache path, mounted from host
+- `SCCACHE_DIR=/home/wrix/.cache/sccache` — stable in-container cache path, mounted from host
 - `SCCACHE_CACHE_SIZE=50G` — ceiling above sccache's 10 GiB default; the default LRU-evicts mid-build for workspace-sized Rust projects. Changing this requires `sccache --stop-server` before the server picks up the new value.
 - `CARGO_INCREMENTAL=0` — sccache refuses to cache any `rustc` invocation with `-C incremental=...`; disabling incremental lets every Rust compile flow through sccache instead.
 - `CARGO_TARGET_DIR` — intentionally **unset**; cargo's per-workspace default (`<workspace>/target`) applies. Pinning `CARGO_TARGET_DIR` to a shared path across workspaces defeats cargo's freshness tracking and churns builds.
@@ -129,11 +129,11 @@ Environment:
 
 Mounts (host source → literal container dest; literal dests avoid the `~`-expands-on-host-launcher gotcha):
 
-- `~/.cargo/registry` → `/home/wrapix/.cargo/registry` (rw, optional) — shared crate cache between host and sandbox; pre-warms at launch and writes back as cargo downloads crates not in the pre-warm set. `ro` here breaks any cargo command that needs a fresh crate (`Read-only file system (os error 30)` writing to `registry/index/.../.cache/...` or `registry/cache/...`), since cargo's pre-fetch path is the same as its on-demand download path.
-- `~/.cargo/git` → `/home/wrapix/.cargo/git` (rw, optional) — shared git dependency cache; same rw rationale as registry (cargo writes new git checkouts here on cache miss).
-- `~/.cache/sccache` → `/home/wrapix/.cache/sccache` (rw, optional) — shared sccache store between host and sandbox
+- `~/.cargo/registry` → `/home/wrix/.cargo/registry` (rw, optional) — shared crate cache between host and sandbox; pre-warms at launch and writes back as cargo downloads crates not in the pre-warm set. `ro` here breaks any cargo command that needs a fresh crate (`Read-only file system (os error 30)` writing to `registry/index/.../.cache/...` or `registry/cache/...`), since cargo's pre-fetch path is the same as its on-demand download path.
+- `~/.cargo/git` → `/home/wrix/.cargo/git` (rw, optional) — shared git dependency cache; same rw rationale as registry (cargo writes new git checkouts here on cache miss).
+- `~/.cache/sccache` → `/home/wrix/.cache/sccache` (rw, optional) — shared sccache store between host and sandbox
 
-Writable dirs (`writableDirs = [ "/home/wrapix/.cargo" ]`): on Linux, the launcher stacks a tmpfs at `/home/wrapix/.cargo` with `U=true` so the dir is wrapix-owned. Without this, podman creates the mountpoint parent as root (to host the registry/git binds on top, regardless of mount mode) and cargo can't write `.global-cache`/`credentials.toml` there. Darwin doesn't need the fix — its entrypoint creates these dirs via `mkdir -p` as namespaced-root-mapped-to-`HOST_UID`, already wrapix-writable.
+Writable dirs (`writableDirs = [ "/home/wrix/.cargo" ]`): on Linux, the launcher stacks a tmpfs at `/home/wrix/.cargo` with `U=true` so the dir is wrix-owned. Without this, podman creates the mountpoint parent as root (to host the registry/git binds on top, regardless of mount mode) and cargo can't write `.global-cache`/`credentials.toml` there. Darwin doesn't need the fix — its entrypoint creates these dirs via `mkdir -p` as namespaced-root-mapped-to-`HOST_UID`, already wrix-writable.
 
 Network allowlist: `crates.io`, `static.crates.io`, `index.crates.io`
 
@@ -174,9 +174,9 @@ profile.buildPackage {
 > **Darwin caveat — rw cache mounts are session-scoped, not cross-boundary.**
 > Apple's `container` CLI only exposes host paths via VirtioFS staging; the darwin
 > entrypoint then `cp -r`s staged content into the profile's destination. That
-> means writes to any rw cache mount inside a Darwin sandbox — `/home/wrapix/.cargo/registry`,
-> `/home/wrapix/.cargo/git`, `/home/wrapix/.cache/sccache`, and (per the Python profile)
-> `/home/wrapix/.cache/uv` — stay in the container's writable layer and are discarded
+> means writes to any rw cache mount inside a Darwin sandbox — `/home/wrix/.cargo/registry`,
+> `/home/wrix/.cargo/git`, `/home/wrix/.cache/sccache`, and (per the Python profile)
+> `/home/wrix/.cache/uv` — stay in the container's writable layer and are discarded
 > at exit; nothing propagates back to the corresponding `~/.cargo/{registry,git}`,
 > `~/.cache/sccache`, or `~/.cache/uv`. Cross-boundary cache reuse is Linux-only today.
 > On Darwin the mounts still deliver a cold pre-warm at container start; in-session
@@ -233,11 +233,11 @@ Extends base with Python toolchain:
 
 Environment:
 
-- `UV_CACHE_DIR=/home/wrapix/.cache/uv` — points at the cache mount dest below so uv reads from and writes back to the shared host cache (mirrors the rust profile's `SCCACHE_DIR` ↔ cache-mount alignment).
+- `UV_CACHE_DIR=/home/wrix/.cache/uv` — points at the cache mount dest below so uv reads from and writes back to the shared host cache (mirrors the rust profile's `SCCACHE_DIR` ↔ cache-mount alignment).
 
 Mounts (host source → literal container dest):
 
-- `~/.cache/uv` → `/home/wrapix/.cache/uv` (rw, optional) — shared uv cache between host and sandbox; pre-warms at launch and writes back on cache miss. `ro` here would break any `uv` invocation that needs a package not in the pre-warm set, same failure mode as the cargo registry.
+- `~/.cache/uv` → `/home/wrix/.cache/uv` (rw, optional) — shared uv cache between host and sandbox; pre-warms at launch and writes back on cache miss. `ro` here would break any `uv` invocation that needs a package not in the pre-warm set, same failure mode as the cargo registry.
 
 Network allowlist: `pypi.org`, `files.pythonhosted.org`
 
@@ -245,19 +245,19 @@ Network allowlist: `pypi.org`, `files.pythonhosted.org`
 
 ```nix
 # Built-in unpinned profile (tracks fenix stable + rust-analyzer + rust-src)
-wrapix.mkSandbox { profile = wrapix.profiles.rust; }
+wrix.mkSandbox { profile = wrix.profiles.rust; }
 
 # Project-pinned rust profile via top-level constructor (fenix requires sha256 for purity)
-wrapix.mkSandbox {
-  profile = wrapix.rustProfile {
+wrix.mkSandbox {
+  profile = wrix.rustProfile {
     toolchain = ./rust-toolchain.toml;
     sha256    = "sha256-...";
   };
 }
 
 # Pinned rust profile with extra packages and env (single call, no deriveProfile needed)
-wrapix.mkSandbox {
-  profile = wrapix.rustProfile {
+wrix.mkSandbox {
+  profile = wrix.rustProfile {
     toolchain = ./rust-toolchain.toml;
     sha256    = "sha256-...";
     packages  = [ pkgs.sqlx-cli ];
@@ -265,29 +265,29 @@ wrapix.mkSandbox {
   };
 }
 
-# Extend an existing profile (yours, a third party's, or a `wrapix.rustProfile` result)
-wrapix.mkSandbox {
-  profile = wrapix.deriveProfile wrapix.profiles.rust {
+# Extend an existing profile (yours, a third party's, or a `wrix.rustProfile` result)
+wrix.mkSandbox {
+  profile = wrix.deriveProfile wrix.profiles.rust {
     packages = [ pkgs.sqlx-cli ];
   };
 }
 
 # Same profile drives both a host devshell and a sandbox image
 let
-  rustProfile = wrapix.rustProfile {
+  rustProfile = wrix.rustProfile {
     toolchain = ./rust-toolchain.toml;
     sha256    = "sha256-...";
   };
 in {
-  devShells.default = wrapix.mkDevShell { profile = rustProfile; };
-  packages.image    = (wrapix.mkSandbox { profile = rustProfile; }).image;
+  devShells.default = wrix.mkDevShell { profile = rustProfile; };
+  packages.image    = (wrix.mkSandbox { profile = rustProfile; }).image;
 }
 
 # Sibling Nix app that runs cargo: reuse the same toolchain derivation so its
 # `rustc` shares a /nix/store/... path with the sandbox image and the host
 # devshell PATH.
 let
-  rustProfile = wrapix.rustProfile {
+  rustProfile = wrix.rustProfile {
     toolchain = ./rust-toolchain.toml;
     sha256    = "sha256-...";
   };
@@ -300,7 +300,7 @@ in pkgs.writeShellApplication {
 # Build a Rust package whose devshell rebuild path skips lint/test.
 # `bin` becomes packages.<name>; `clippy` and `nextest` become check entries.
 let
-  myCrate = wrapix.profiles.rust.buildPackage {
+  myCrate = wrix.profiles.rust.buildPackage {
     src = ./my-crate;
     cargoLock = ./my-crate/Cargo.lock;
     extraSrcs = {
@@ -316,7 +316,7 @@ in {
 }
 ```
 
-## wrapix.rustProfile
+## wrix.rustProfile
 
 Top-level constructor for project-pinned rust profiles. Reads a
 `rust-toolchain.toml` and produces a profile attrset whose `packages`,
@@ -325,7 +325,7 @@ pinned fenix toolchain — the same derivation `mkSandbox` bakes into the
 image and `mkDevShell` prepends to PATH.
 
 ```nix
-wrapix.rustProfile {
+wrix.rustProfile {
   toolchain;                      # REQUIRED — path to rust-toolchain.toml
   sha256;                         # REQUIRED — fenix purity hash
   packages         ? [ ];         # appended to profile.packages
@@ -358,7 +358,7 @@ for the profile's env exports, and no separate "add `profile.toolchain`
 to your packages" step.
 
 ```nix
-wrapix.mkDevShell {
+wrix.mkDevShell {
   profile   = rustProfile;   # REQUIRED — any profile attrset
   packages  = [ ... ];        # optional, appended to profile.packages
   shellHook = "...";          # optional, appended after profile.shellHook
@@ -378,9 +378,9 @@ Composition rules (deterministic, no consumer override):
 |-----------|---------------------------------------------------------------------------------------|
 | packages  | `profile.packages ++ packages` (the profile's toolchain etc. is always on PATH)        |
 | env       | `profile.env // env` (consumer wins on conflict)                                       |
-| shellHook | `<wrapix-internal lifecycle setup> + profile.shellHook + <consumer shellHook>` (fixed order) |
+| shellHook | `<wrix-internal lifecycle setup> + profile.shellHook + <consumer shellHook>` (fixed order) |
 
-The internal lifecycle setup performs wrapix-specific bootstrap (beads
+The internal lifecycle setup performs wrix-specific bootstrap (beads
 init, dolt remote configuration, prek `core.hooksPath` configuration —
 see [Prek hook management](#prek-hook-management) below). It runs
 before `profile.shellHook` so its tooling installs resolve through the
@@ -396,9 +396,9 @@ repositories. Two conditions gate the install: (1)
 `prekHooks` resolves to a derivation. When both hold, the lifecycle
 runs `git config --local core.hooksPath ${derivation}` on every
 devshell entry, pointing git at a frozen Nix-store bundle of shims.
-The default bundle is `wrapix.prekHooks`, which ships a `prek
+The default bundle is `wrix.prekHooks`, which ships a `prek
 hook-impl --hook-type=<stage>` shim for every stage prek serves. The
-pre-push shim writes `.wrapix/push-verified` (HEAD SHA) after a
+pre-push shim writes `.wrix/push-verified` (HEAD SHA) after a
 successful check so a subsequent `git push` can short-circuit if the
 SSH connection died during validation. Consumers do not write their
 own shims, do not vendor `lib/prek/hooks/`, and do not set
@@ -411,11 +411,11 @@ concurrent-commit serialization.
 
 | Value | Resolves to |
 |-------|-------------|
-| `true` (the default) | `wrapix.prekHooks` |
+| `true` (the default) | `wrix.prekHooks` |
 | `false` | nothing — lifecycle is a no-op for hooks |
 | a derivation | the substituted derivation, used as-is |
 
-**Wrapix-always-wins on stale config.** When `prekHooks` resolves to
+**Wrix-always-wins on stale config.** When `prekHooks` resolves to
 a derivation (the `true` default or an explicit derivation), the
 lifecycle overwrites `core.hooksPath` on the next devshell entry if
 its current value differs from the target derivation's store path,
@@ -427,14 +427,14 @@ is passive: the lifecycle does nothing, including not clearing a
 from `true` to `false` and want the stale value cleared run
 `git config --local --unset core.hooksPath` themselves.
 
-`wrapix.prekHooks` is exported at the lib level. Consumers needing a
+`wrix.prekHooks` is exported at the lib level. Consumers needing a
 different shim set substitute a hand-built derivation via `prekHooks =
 ...`. There is no parameterized constructor in v1 — see
 `specs/pre-commit.md` *Out of Scope* for the deferral rationale.
 
 A consumer that wants a different shell wrapper (custom `pkgs.mkShell`
 attrs, alternate hook layering) is reaching outside the contract — they
-construct their own shell directly and accept that nothing in the wrapix
+construct their own shell directly and accept that nothing in the wrix
 profile system guarantees toolchain identity for that shell. The
 ergonomic floor `mkDevShell` enforces is what makes cross-boundary
 sccache alignment hard to misuse; bypassing `mkDevShell` re-opens every
@@ -444,23 +444,23 @@ failure mode this API closes.
 
 Loom and other multi-profile orchestrators need to dispatch to per-profile
 images at runtime — one bead might want `profile:rust`, the next
-`profile:python`. The launcher (`packages.wrapix`) is profile-agnostic, so
+`profile:python`. The launcher (`packages.wrix`) is profile-agnostic, so
 the profile→image mapping lives outside it as a JSON manifest.
 
-`wrapix.lib.${system}.mkProfileImages` produces that manifest:
+`wrix.lib.${system}.mkProfileImages` produces that manifest:
 
 ```nix
-wrapix.lib.${system}.mkProfileImages {
-  base     = (wrapix.mkSandbox { profile = wrapix.profiles.base;   }).image;
-  rust     = (wrapix.mkSandbox { profile = wrapix.profiles.rust;   }).image;
-  python   = (wrapix.mkSandbox { profile = wrapix.profiles.python; }).image;
-  myCustom = (wrapix.mkSandbox { profile = myCustomProfile;        }).image;
+wrix.lib.${system}.mkProfileImages {
+  base     = (wrix.mkSandbox { profile = wrix.profiles.base;   }).image;
+  rust     = (wrix.mkSandbox { profile = wrix.profiles.rust;   }).image;
+  python   = (wrix.mkSandbox { profile = wrix.profiles.python; }).image;
+  myCustom = (wrix.mkSandbox { profile = myCustomProfile;        }).image;
 }
 ```
 
 The output is a `pkgs.writeText "profile-images.json" <…>` derivation whose
 content is a JSON object keyed by profile name. Each value is `{ ref,
-source }` — `ref` is the podman image reference (`localhost/wrapix-<name>:<hash>`),
+source }` — `ref` is the podman image reference (`localhost/wrix-<name>:<hash>`),
 `source` is the Nix store path the launcher hands to `podman load`. Both
 fields are computed Nix-side from the image derivation so consumers never
 re-implement the tag logic. Loom maps the manifest entry's `ref` and
@@ -486,9 +486,9 @@ Profiles surface as three sibling output families:
 | `packages.image-<profile>` | OCI artifact (Linux: `streamLayeredImage`; Darwin: tarball); built with `agent = "direct"` (the default base image) | Consumers driving podman directly; manifest entries |
 | `packages.image-<profile>-claude` | OCI artifact built with `agent = "claude"` | Consumers driving Claude images directly |
 | `packages.image-<profile>-pi` | OCI artifact built with `agent = "pi"` | Consumers driving Pi images directly |
-| `packages.sandbox-<profile>` | `makeWrapper` of `packages.wrapix` + `packages.image-<profile>` with `WRAPIX_AGENT=direct` baked in | One-shot users (`nix run .#sandbox-rust`) |
-| `packages.sandbox-<profile>-claude` | Claude variant with `WRAPIX_AGENT=claude` baked in | One-shot users that want Claude |
-| `packages.sandbox-<profile>-pi` | Pi variant with `WRAPIX_AGENT=pi` baked in | One-shot users that want Pi; `packages.default` points at base `sandbox-pi` |
+| `packages.sandbox-<profile>` | `makeWrapper` of `packages.wrix` + `packages.image-<profile>` with `WRIX_AGENT=direct` baked in | One-shot users (`nix run .#sandbox-rust`) |
+| `packages.sandbox-<profile>-claude` | Claude variant with `WRIX_AGENT=claude` baked in | One-shot users that want Claude |
+| `packages.sandbox-<profile>-pi` | Pi variant with `WRIX_AGENT=pi` baked in | One-shot users that want Pi; `packages.default` points at base `sandbox-pi` |
 | `packages.profile-images` | JSON manifest from `mkProfileImages`, keyed by profile (not by profile×agent) | External orchestrators (e.g. Loom via `LOOM_PROFILES_MANIFEST`) |
 
 `<profile>` covers the built-in profiles (`base`, `rust`, `python`). The
@@ -507,13 +507,13 @@ For the host devshell, use `mkDevShell`:
 
 ```nix
 let
-  rustProfile = wrapix.rustProfile {
+  rustProfile = wrix.rustProfile {
     toolchain = ./rust-toolchain.toml;
     sha256    = "sha256-...";
   };
 in {
-  devShells.default = wrapix.mkDevShell { profile = rustProfile; };
-  packages.image    = (wrapix.mkSandbox { profile = rustProfile; }).image;
+  devShells.default = wrix.mkDevShell { profile = rustProfile; };
+  packages.image    = (wrix.mkSandbox { profile = rustProfile; }).image;
 }
 ```
 
@@ -557,14 +557,14 @@ THEIR file, identical across sandbox image, host devshell PATH (via
 fenix directly.
 
 **Escape hatch.** If a downstream wants to control `rustc` independently
-of wrapix's pin (e.g., to use a different fenix revision on the host), it
+of wrix's pin (e.g., to use a different fenix revision on the host), it
 can skip `rustProfile` and instead lock its fenix flake input to
-wrapix's:
+wrix's:
 
 ```nix
-inputs.wrapix.url = "...";
+inputs.wrix.url = "...";
 inputs.fenix.url = "git+https://github.com/nix-community/fenix.git?ref=main";
-inputs.wrapix.inputs.fenix.follows = "fenix";
+inputs.wrix.inputs.fenix.follows = "fenix";
 ```
 
 Without aligning toolchain identity through one of these surfaces
@@ -575,7 +575,7 @@ sibling derivations lock fenix to their own revisions, produce different
 boundary.
 
 No downstream gitignore is required for the sandbox cache paths: mount
-dests live under `/home/wrapix/` inside the container, not under
+dests live under `/home/wrix/` inside the container, not under
 `/workspace/`, so nothing is materialized in the project tree.
 
 ## Success Criteria
@@ -588,11 +588,11 @@ dests live under `/home/wrapix/` inside the container, not under
   [judge](../tests/judges/profiles.sh#test_rust_profile_rebuild_stable)
 - rust-analyzer can resolve the standard library (RUST_SRC_PATH is set correctly)
   [judge](../tests/judges/profiles.sh#test_rust_analyzer_sysroot)
-- `wrapix.rustProfile { toolchain = ./rust-toolchain.toml; sha256 = "..."; }` produces a working profile whose `toolchain` field is a fenix-combine derivation reflecting the file's component set
+- `wrix.rustProfile { toolchain = ./rust-toolchain.toml; sha256 = "..."; }` produces a working profile whose `toolchain` field is a fenix-combine derivation reflecting the file's component set
   [judge](../tests/judges/profiles.sh#test_rust_profile_constructor)
-- `wrapix.rustProfile { toolchain; sha256; packages = [p]; env = { K = "v"; }; mounts = [m]; networkAllowlist = [a]; }` lands extension args in the matching profile slots (packages/mounts/networkAllowlist appended, env right-merged)
+- `wrix.rustProfile { toolchain; sha256; packages = [p]; env = { K = "v"; }; mounts = [m]; networkAllowlist = [a]; }` lands extension args in the matching profile slots (packages/mounts/networkAllowlist appended, env right-merged)
   [system](bash tests/profiles/rust-profile-ctor.sh test_extension_args)
-- `wrapix.rustProfile {}` (omitting required `toolchain`/`sha256`) errors at evaluation rather than silently producing an unpinned profile
+- `wrix.rustProfile {}` (omitting required `toolchain`/`sha256`) errors at evaluation rather than silently producing an unpinned profile
   [system](bash tests/profiles/rust-profile-ctor.sh test_required_args)
 - Cargo registry and git mounts are writable so cargo can fetch crates not in the pre-warm set without `Read-only file system` errors
   [judge](../tests/judges/profiles.sh#test_cargo_registry_writable)
@@ -608,47 +608,47 @@ dests live under `/home/wrapix/` inside the container, not under
   [system?](bash tests/profiles/core-packages.sh test_extra_not_in_core)
 - Profiles are composable (can extend extended profiles)
   [system](bash tests/mcp/tmux/e2e/test_profile_composition.sh)
-- `wrapix.mkDevShell { profile = wrapix.rustProfile { ... }; }` produces a devshell whose env contains `RUSTC_WRAPPER=sccache`, `SCCACHE_DIR`, `SCCACHE_CACHE_SIZE`, and `CARGO_INCREMENTAL=0` (the rust profile's `shellHook` was spliced)
+- `wrix.mkDevShell { profile = wrix.rustProfile { ... }; }` produces a devshell whose env contains `RUSTC_WRAPPER=sccache`, `SCCACHE_DIR`, `SCCACHE_CACHE_SIZE`, and `CARGO_INCREMENTAL=0` (the rust profile's `shellHook` was spliced)
   [system](bash tests/profiles/mkdevshell.sh test_profile_shellhook_spliced)
-- `wrapix.mkDevShell { profile; packages = [extra]; }` shell has both `profile.packages` and `extra` available on PATH
+- `wrix.mkDevShell { profile; packages = [extra]; }` shell has both `profile.packages` and `extra` available on PATH
   [system](bash tests/profiles/mkdevshell.sh test_packages_merge)
-- `wrapix.mkDevShell { profile; env = { K = "v"; }; }` shell has env var `K=v` (right-merge with profile.env, consumer wins on conflict)
+- `wrix.mkDevShell { profile; env = { K = "v"; }; }` shell has env var `K=v` (right-merge with profile.env, consumer wins on conflict)
   [system](bash tests/profiles/mkdevshell.sh test_env_right_merge)
-- `wrapix.mkDevShell { profile; shellHook = "marker_xyz"; }` shell hook contains both `profile.shellHook` content AND `marker_xyz`, with the consumer hook firing **after** the profile's
+- `wrix.mkDevShell { profile; shellHook = "marker_xyz"; }` shell hook contains both `profile.shellHook` content AND `marker_xyz`, with the consumer hook firing **after** the profile's
   [system](bash tests/profiles/mkdevshell.sh test_shellhook_order)
-- `wrapix.mkDevShell {}` without `profile` errors at evaluation
+- `wrix.mkDevShell {}` without `profile` errors at evaluation
   [system](bash tests/profiles/mkdevshell.sh test_profile_required)
-- The materialized `wrapix.prekHooks` derivation contains exactly five executable files (one per stage: `pre-commit`, `pre-push`, `prepare-commit-msg`, `post-checkout`, `post-merge`) and no other paths
+- The materialized `wrix.prekHooks` derivation contains exactly five executable files (one per stage: `pre-commit`, `pre-push`, `prepare-commit-msg`, `post-checkout`, `post-merge`) and no other paths
   [system](bash tests/profiles/prek-hooks-bundle.sh test_bundle_contents)
 - Each materialized shim's content matches `prek hook-impl --hook-type=<stage>` for its stage
   [system](bash tests/profiles/prek-hooks-bundle.sh test_shims_are_plain_hook_impl)
-- `wrapix.mkDevShell { profile = ...; }` with `.pre-commit-config.yaml` present sets `core.hooksPath` to `${wrapix.prekHooks}` on entry
+- `wrix.mkDevShell { profile = ...; }` with `.pre-commit-config.yaml` present sets `core.hooksPath` to `${wrix.prekHooks}` on entry
   [system](bash tests/profiles/mkdevshell-prek.sh test_auto_set_when_config_present)
-- `wrapix.mkDevShell { profile = ...; }` without `.pre-commit-config.yaml` does NOT set `core.hooksPath` on entry
+- `wrix.mkDevShell { profile = ...; }` without `.pre-commit-config.yaml` does NOT set `core.hooksPath` on entry
   [system](bash tests/profiles/mkdevshell-prek.sh test_skip_when_config_absent)
-- `wrapix.mkDevShell { profile = ...; prekHooks = false; }` does NOT set `core.hooksPath` even when `.pre-commit-config.yaml` is present
+- `wrix.mkDevShell { profile = ...; prekHooks = false; }` does NOT set `core.hooksPath` even when `.pre-commit-config.yaml` is present
   [system](bash tests/profiles/mkdevshell-prek.sh test_opt_out)
-- `wrapix.mkDevShell { profile = ...; prekHooks = <custom-derivation>; }` sets `core.hooksPath` to the substituted derivation when `.pre-commit-config.yaml` is present
+- `wrix.mkDevShell { profile = ...; prekHooks = <custom-derivation>; }` sets `core.hooksPath` to the substituted derivation when `.pre-commit-config.yaml` is present
   [system](bash tests/profiles/mkdevshell-prek.sh test_derivation_substitute)
-- When `prekHooks` resolves to a derivation and a previous session left `core.hooksPath` set to a different store path, entering `mkDevShell` overwrites it and prints a one-line message naming the old value (covers both the `true` default → `${wrapix.prekHooks}` case and the substituted-derivation case)
+- When `prekHooks` resolves to a derivation and a previous session left `core.hooksPath` set to a different store path, entering `mkDevShell` overwrites it and prints a one-line message naming the old value (covers both the `true` default → `${wrix.prekHooks}` case and the substituted-derivation case)
   [system](bash tests/profiles/mkdevshell-prek.sh test_stale_config_overwrite_with_warning)
-- `wrapix.mkDevShell { profile = ...; prekHooks = false; }` entered in a repo whose local git config already has `core.hooksPath` set leaves that value unchanged (passive opt-out preserves stale state per design)
+- `wrix.mkDevShell { profile = ...; prekHooks = false; }` entered in a repo whose local git config already has `core.hooksPath` set leaves that value unchanged (passive opt-out preserves stale state per design)
   [system](bash tests/profiles/mkdevshell-prek.sh test_opt_out_preserves_stale_config)
 - `lib/default.nix` mkDevShell shellHook contains no `prek install` invocation and no `chmod` on `.git/hooks`
   [check](sh -c "! grep -nE 'prek install|chmod.*\.git/hooks' lib/default.nix")
 - `modules/flake/devshell.nix` does not set `core.hooksPath` (mkDevShell owns it)
   [check](sh -c "! grep -nE 'core\.hooksPath' modules/flake/devshell.nix")
-- Host devshell built via `wrapix.mkDevShell { profile = wrapix.rustProfile { toolchain; sha256; }; }` resolves `rustc` to the same `/nix/store/...` path as the sandbox built from the same profile
+- Host devshell built via `wrix.mkDevShell { profile = wrix.rustProfile { toolchain; sha256; }; }` resolves `rustc` to the same `/nix/store/...` path as the sandbox built from the same profile
   [judge](../tests/judges/profiles.sh#test_host_sandbox_rustc_same_store_path)
-- `wrapix.devToolchain` is not exposed by the lib (deleted; consumers reach `profile.toolchain`)
+- `wrix.devToolchain` is not exposed by the lib (deleted; consumers reach `profile.toolchain`)
   [check](nix eval --raw .#lib --apply 'lib: if lib ? devToolchain then throw "devToolchain still exposed" else ""')
-- `profiles.rust.withToolchain` is not exposed on the rust profile attrset (replaced by top-level `wrapix.rustProfile`)
+- `profiles.rust.withToolchain` is not exposed on the rust profile attrset (replaced by top-level `wrix.rustProfile`)
   [check](nix eval .#lib.profiles.rust --apply 'p: if p ? withToolchain then throw "withToolchain still exposed" else true')
-- `profile.toolchain` is exposed on both `wrapix.profiles.rust` and `wrapix.rustProfile { toolchain; sha256; }`, and points at the same host-platform derivation `shellHook` interpolates into the PATH prepend (matches the image's toolchain in `profile.packages` on Linux hosts; diverges on Darwin per *Host/image toolchain split*)
+- `profile.toolchain` is exposed on both `wrix.profiles.rust` and `wrix.rustProfile { toolchain; sha256; }`, and points at the same host-platform derivation `shellHook` interpolates into the PATH prepend (matches the image's toolchain in `profile.packages` on Linux hosts; diverges on Darwin per *Host/image toolchain split*)
   [judge](../tests/judges/profiles.sh#test_rust_toolchain_field)
-- `wrapix.profiles.rust` and `wrapix.rustProfile { toolchain; sha256; }` closures contain zero `*-nightly-*` derivations after a fresh `nix flake update` (regression guard against reintroducing `fenix.packages.${system}.rust-analyzer`, which drags a nightly cargo/rustc/rust-std closure)
+- `wrix.profiles.rust` and `wrix.rustProfile { toolchain; sha256; }` closures contain zero `*-nightly-*` derivations after a fresh `nix flake update` (regression guard against reintroducing `fenix.packages.${system}.rust-analyzer`, which drags a nightly cargo/rustc/rust-std closure)
   [system](bash tests/profiles/no-nightly-closure.sh test_no_nightly_closure)
-- `mkProfileImages { rust = …; }` produces a JSON file whose entry for `rust` has both `ref` and `source` fields, with `source` resolving to the same store path as `(wrapix.mkSandbox { profile = wrapix.profiles.rust; }).image`
+- `mkProfileImages { rust = …; }` produces a JSON file whose entry for `rust` has both `ref` and `source` fields, with `source` resolving to the same store path as `(wrix.mkSandbox { profile = wrix.profiles.rust; }).image`
   [system](bash tests/profiles/profile-images-manifest.sh test_manifest_shape)
 - `packages.image-<name>`, `packages.sandbox-<name>`, and `packages.profile-images` all evaluate for each built-in profile
   [system](bash tests/profiles/profile-images-manifest.sh test_flake_outputs_present)
@@ -662,11 +662,11 @@ dests live under `/home/wrapix/` inside the container, not under
   [system](bash tests/profiles/build-package.sh test_workspace_edit_skips_cargo_artifacts)
 - Editing a file in `extraSrcs` invalidates `clippy` and `nextest` but does **not** invalidate `bin` or `cargoArtifacts`
   [system](bash tests/profiles/build-package.sh test_extra_srcs_scoped_to_lint_test)
-- `bin`, `clippy`, and `nextest` all close over `profile.toolchain`, so `${toolchain}/bin/rustc` resolves to the same `/nix/store/...` path across all three derivations, on both `wrapix.profiles.rust` and `wrapix.rustProfile { toolchain; sha256; }`
+- `bin`, `clippy`, and `nextest` all close over `profile.toolchain`, so `${toolchain}/bin/rustc` resolves to the same `/nix/store/...` path across all three derivations, on both `wrix.profiles.rust` and `wrix.rustProfile { toolchain; sha256; }`
   [system](bash tests/profiles/build-package.sh test_build_package_toolchain_alignment)
-- `lib/mcp/tmux/mcp-server.nix` is a thin `wrapix.profiles.rust.buildPackage` consumer (no direct `pkgs.rustPlatform.buildRustPackage` or `makeRustPlatform` call); `packages.tmux-mcp` consumes `.bin`; `tests/default.nix` exposes `tmux-mcp-clippy`, `tmux-mcp-nextest` checks
+- `lib/mcp/tmux/mcp-server.nix` is a thin `wrix.profiles.rust.buildPackage` consumer (no direct `pkgs.rustPlatform.buildRustPackage` or `makeRustPlatform` call); `packages.tmux-mcp` consumes `.bin`; `tests/default.nix` exposes `tmux-mcp-clippy`, `tmux-mcp-nextest` checks
   [system](bash tests/profiles/build-package.sh test_consumers_migrated)
-- `modules/flake/devshell.nix` is a thin `wrapix.mkDevShell { profile = wrapix.profiles.rust; ... }` consumer (no hand-rolled `RUSTC_WRAPPER`/`SCCACHE_DIR`/`PATH` exports, no separate `profile.toolchain` entry in `packages`)
+- `modules/flake/devshell.nix` is a thin `wrix.mkDevShell { profile = wrix.profiles.rust; ... }` consumer (no hand-rolled `RUSTC_WRAPPER`/`SCCACHE_DIR`/`PATH` exports, no separate `profile.toolchain` entry in `packages`)
   [check](sh -c "! grep -nE 'RUSTC_WRAPPER|SCCACHE_DIR' modules/flake/devshell.nix")
 - Container entrypoints (`lib/sandbox/linux/entrypoint.sh`, `lib/sandbox/darwin/entrypoint.sh`) contain no rustup bootstrap logic — toolchain is baked into the image at build time
   [check](sh -c "! grep -nE 'rustup' lib/sandbox/linux/entrypoint.sh lib/sandbox/darwin/entrypoint.sh")
@@ -678,13 +678,13 @@ dests live under `/home/wrapix/` inside the container, not under
 1. **Base Profile** — Core tools included in all environments
 2. **Language Profiles** — Pre-configured Rust and Python environments
 3. **Profile Extension** — `deriveProfile` API to extend existing profiles
-4. **Package Bundling** — Profiles specify packages to include in container image. A profile also exposes `corePackages`, the wrapix-controlled fixed-per-instance subset, so the image builder can layer wrapix-default content separately from downstream additions (see `image-builder.md` § Provenance-Tiered Layering).
+4. **Package Bundling** — Profiles specify packages to include in container image. A profile also exposes `corePackages`, the wrix-controlled fixed-per-instance subset, so the image builder can layer wrix-default content separately from downstream additions (see `image-builder.md` § Provenance-Tiered Layering).
 5. **Environment Configuration** — Profiles set required environment variables
 6. **Mount Specifications** — Profiles can define default mounts (e.g., cargo cache)
 7. **Toolchain Configuration** — Top-level `rustProfile { toolchain; sha256; ... }` constructor produces a project-pinned rust profile from a `rust-toolchain.toml`
 8. **Rust Package Construction** — Rust profile exposes `buildPackage` for crane-backed Rust packages with split `bin`/`clippy`/`nextest` derivations
 9. **Devshell Construction** — Top-level `mkDevShell { profile; ... }` is the single profile-aware entry point for host devshells; consumers do not splice `profile.shellHook` directly
-10. **Prek Hook Management** — `mkDevShell` configures `core.hooksPath` from a wrapix-shipped shim bundle (`wrapix.prekHooks`) when `.pre-commit-config.yaml` is present, opted out via `prekHooks = false`. Consumers do not vendor shims or set `core.hooksPath` themselves.
+10. **Prek Hook Management** — `mkDevShell` configures `core.hooksPath` from a wrix-shipped shim bundle (`wrix.prekHooks`) when `.pre-commit-config.yaml` is present, opted out via `prekHooks = false`. Consumers do not vendor shims or set `core.hooksPath` themselves.
 
 ### Non-Functional
 

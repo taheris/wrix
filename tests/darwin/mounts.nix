@@ -110,7 +110,7 @@ in
         export HOME="$REAL_HOME"
 
         # Load test image
-        TEST_IMAGE="wrapix-mount-test:latest"
+        TEST_IMAGE="wrix-mount-test:latest"
         echo "Loading test image..."
         container image delete "$TEST_IMAGE" 2>/dev/null || true
         OCI_TAR=$(mktemp)
@@ -142,7 +142,7 @@ in
         chmod +x "$WORKSPACE/mount-test.sh"
 
         # Set up directory mount (simulating ~/.claude)
-        # VirtioFS maps files as root, so we use staging + WRAPIX_DIR_MOUNTS
+        # VirtioFS maps files as root, so we use staging + WRIX_DIR_MOUNTS
         CLAUDE_DIR="$TEST_DIR/claude-config"
         mkdir -p "$CLAUDE_DIR/mcp"
 
@@ -164,8 +164,8 @@ in
         # Build mount environment variables in same format as production:
         # DIR_MOUNTS:  /staging/path:/destination/path
         # FILE_MOUNTS: /staging/path/filename:/destination/path
-        DIR_MOUNTS="/mnt/wrapix/dir0:/home/wrapix/.claude"
-        FILE_MOUNTS="/mnt/wrapix/file0/claude.json:/home/wrapix/.claude.json"
+        DIR_MOUNTS="/mnt/wrix/dir0:/home/wrix/.claude"
+        FILE_MOUNTS="/mnt/wrix/file0/claude.json:/home/wrix/.claude.json"
 
         echo "Test setup: symlink in $CLAUDE_DIR -> $SYMLINK_TARGET"
         echo ""
@@ -181,15 +181,15 @@ in
         container run --rm \
           -w / \
           -v "$WORKSPACE:/workspace" \
-          -v "$CLAUDE_DIR_DEREF:/mnt/wrapix/dir0" \
-          -v "$CLAUDE_JSON_DIR:/mnt/wrapix/file0" \
+          -v "$CLAUDE_DIR_DEREF:/mnt/wrix/dir0" \
+          -v "$CLAUDE_JSON_DIR:/mnt/wrix/file0" \
           -e BD_DB=/tmp/beads.db \
           -e BD_NO_DAEMON=1 \
           -e HOST_UID=$(id -u "$REAL_USER") \
-          -e WRAPIX_DIR_MOUNTS="$DIR_MOUNTS" \
-          -e WRAPIX_FILE_MOUNTS="$FILE_MOUNTS" \
-          -e WRAPIX_NOTIFY_TCP=1 \
-          -e WRAPIX_PROMPT="test" \
+          -e WRIX_DIR_MOUNTS="$DIR_MOUNTS" \
+          -e WRIX_FILE_MOUNTS="$FILE_MOUNTS" \
+          -e WRIX_NOTIFY_TCP=1 \
+          -e WRIX_PROMPT="test" \
           --network default \
           --entrypoint /bin/bash \
           "$TEST_IMAGE" /workspace/mount-test.sh

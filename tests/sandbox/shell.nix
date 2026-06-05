@@ -120,8 +120,8 @@ in
     case "$1" in
       images)
         printf '%s\n' \
-          'localhost/wrapix-rust latest new-id' \
-          'localhost/wrapix-rust c07457c7 old-id'
+          'localhost/wrix-rust latest new-id' \
+          'localhost/wrix-rust c07457c7 old-id'
         ;;
       rmi)
         echo 'Error: image is in use by a container' >&2

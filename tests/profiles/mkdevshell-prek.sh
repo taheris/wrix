@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Verify wrapix.mkDevShell prekHooks lifecycle (specs/profiles.md § Prek hook management).
+# Verify wrix.mkDevShell prekHooks lifecycle (specs/profiles.md § Prek hook management).
 #
 #   test_auto_set_when_config_present
 #     With .pre-commit-config.yaml present and prekHooks defaulted to true,
-#     sourcing the shellHook sets core.hooksPath to ${wrapix.prekHooks}.
+#     sourcing the shellHook sets core.hooksPath to ${wrix.prekHooks}.
 #
 #   test_skip_when_config_absent
 #     Without .pre-commit-config.yaml, sourcing the shellHook does NOT set
@@ -19,7 +19,7 @@
 #
 #   test_stale_config_overwrite_with_warning
 #     Pre-set core.hooksPath to /some/old/path. With prekHooks=true (default
-#     → wrapix.prekHooks) and with prekHooks=<custom-derivation>, the
+#     → wrix.prekHooks) and with prekHooks=<custom-derivation>, the
 #     lifecycle overwrites the stale value AND prints a one-line message to
 #     stderr naming the old value.
 #
@@ -111,7 +111,7 @@ mkdevshell_hook_with_custom_deriv_json() {
   # shellcheck disable=SC2016
   eval_expr_json '
     let
-      customHooks = pkgs.runCommand "wrapix-test-prek-hooks" {} '"''"'
+      customHooks = pkgs.runCommand "wrix-test-prek-hooks" {} '"''"'
         mkdir -p $out
         touch $out/pre-commit
         chmod +x $out/pre-commit
@@ -215,7 +215,7 @@ test_stale_config_overwrite_with_warning() {
   local old_path="/some/old/hooks/path"
   local dir bundle hook stderr_file actual result expected
 
-  # Case 1: prekHooks = true (default → wrapix.prekHooks)
+  # Case 1: prekHooks = true (default → wrix.prekHooks)
   bundle=$(default_bundle_path)
   dir=$(make_repo)
   stderr_file=$(mktemp -p "$TMP_BASE")

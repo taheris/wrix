@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Verify wrapix.rustProfile top-level constructor (specs/profiles.md).
+# Verify wrix.rustProfile top-level constructor (specs/profiles.md).
 #
 #   test_required_args
-#     wrapix.rustProfile {} and rustProfile { toolchain = ...; } (no sha256)
+#     wrix.rustProfile {} and rustProfile { toolchain = ...; } (no sha256)
 #     error at evaluation rather than silently producing an unpinned profile.
 #
 #   test_extension_args

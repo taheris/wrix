@@ -4,7 +4,7 @@
 # Renders a hook inert in contexts where its runtime dependency is absent:
 # if `<tool>` resolves on PATH, exec the command; otherwise exit 0 silently.
 # Tagging the dependency at the hook's `entry:` line keeps the knowledge
-# co-located with the command instead of in a wrapix-curated skip list.
+# co-located with the command instead of in a wrix-curated skip list.
 #
 # The literal `--` separator is required to disambiguate the tool name
 # from the wrapped command's leading arguments.

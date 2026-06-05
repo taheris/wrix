@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Verifier for criterion 118 of specs/sandbox.md:
 #
-#   `wrapix run` errors at startup with a clear message when
-#   WRAPIX_DEFAULT_IMAGE_REF or WRAPIX_DEFAULT_IMAGE_SOURCE is unset.
+#   `wrix run` errors at startup with a clear message when
+#   WRIX_DEFAULT_IMAGE_REF or WRIX_DEFAULT_IMAGE_SOURCE is unset.
 #
 # The check lives in the launcher script bodies in
 # lib/sandbox/{linux,darwin}/default.nix. We extract the image-resolution
 # block from each source and execute it under bash, asserting:
 #   1. Both vars unset → exit 1, stderr names both vars.
-#   2. Only WRAPIX_DEFAULT_IMAGE_REF unset → exit 1, stderr names both vars.
-#   3. Only WRAPIX_DEFAULT_IMAGE_SOURCE unset → exit 1, stderr names both vars.
+#   2. Only WRIX_DEFAULT_IMAGE_REF unset → exit 1, stderr names both vars.
+#   3. Only WRIX_DEFAULT_IMAGE_SOURCE unset → exit 1, stderr names both vars.
 #   4. Both set → exit 0 (the validation gate doesn't false-trigger).
 #   5. SUBCOMMAND=spawn bypasses the check entirely.
 #
@@ -23,7 +23,7 @@ REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 LINUX_LAUNCHER_NIX="$REPO_ROOT/lib/sandbox/linux/default.nix"
 DARWIN_LAUNCHER_NIX="$REPO_ROOT/lib/sandbox/darwin/default.nix"
 
-TEST_TMP=$(mktemp -d -t wrapix-missing-image-env.XXXXXX)
+TEST_TMP=$(mktemp -d -t wrix-missing-image-env.XXXXXX)
 trap 'rm -rf "$TEST_TMP"' EXIT
 
 PASSED=0
@@ -84,12 +84,12 @@ assert_missing_env_errors() {
     sed 's/^/    /' "$err" >&2
     return 1
   fi
-  if ! grep -qF "WRAPIX_DEFAULT_IMAGE_REF" "$err"; then
-    fail "$label: stderr missing WRAPIX_DEFAULT_IMAGE_REF: $(cat "$err")"
+  if ! grep -qF "WRIX_DEFAULT_IMAGE_REF" "$err"; then
+    fail "$label: stderr missing WRIX_DEFAULT_IMAGE_REF: $(cat "$err")"
     return 1
   fi
-  if ! grep -qF "WRAPIX_DEFAULT_IMAGE_SOURCE" "$err"; then
-    fail "$label: stderr missing WRAPIX_DEFAULT_IMAGE_SOURCE: $(cat "$err")"
+  if ! grep -qF "WRIX_DEFAULT_IMAGE_SOURCE" "$err"; then
+    fail "$label: stderr missing WRIX_DEFAULT_IMAGE_SOURCE: $(cat "$err")"
     return 1
   fi
   return 0
@@ -105,13 +105,13 @@ test_linux_run_both_unset_errors() {
   mk_runner "$block" "run" "$runner"
 
   if assert_missing_env_errors "linux-both-unset" "$runner" \
-      -u WRAPIX_DEFAULT_IMAGE_REF -u WRAPIX_DEFAULT_IMAGE_SOURCE; then
-    pass "Linux: wrapix run with both image env vars unset errors with documented message"
+      -u WRIX_DEFAULT_IMAGE_REF -u WRIX_DEFAULT_IMAGE_SOURCE; then
+    pass "Linux: wrix run with both image env vars unset errors with documented message"
   fi
 }
 
 # ----------------------------------------------------------------------------
-# Test 2: Linux launcher errors when only WRAPIX_DEFAULT_IMAGE_REF is unset
+# Test 2: Linux launcher errors when only WRIX_DEFAULT_IMAGE_REF is unset
 # ----------------------------------------------------------------------------
 test_linux_run_ref_unset_errors() {
   local block="$TEST_TMP/linux-image.sh"
@@ -120,14 +120,14 @@ test_linux_run_ref_unset_errors() {
   mk_runner "$block" "run" "$runner"
 
   if assert_missing_env_errors "linux-ref-unset" "$runner" \
-      -u WRAPIX_DEFAULT_IMAGE_REF \
-      WRAPIX_DEFAULT_IMAGE_SOURCE=/nix/store/fake.tar.gz; then
-    pass "Linux: wrapix run with WRAPIX_DEFAULT_IMAGE_REF unset errors"
+      -u WRIX_DEFAULT_IMAGE_REF \
+      WRIX_DEFAULT_IMAGE_SOURCE=/nix/store/fake.tar.gz; then
+    pass "Linux: wrix run with WRIX_DEFAULT_IMAGE_REF unset errors"
   fi
 }
 
 # ----------------------------------------------------------------------------
-# Test 3: Linux launcher errors when only WRAPIX_DEFAULT_IMAGE_SOURCE is unset
+# Test 3: Linux launcher errors when only WRIX_DEFAULT_IMAGE_SOURCE is unset
 # ----------------------------------------------------------------------------
 test_linux_run_source_unset_errors() {
   local block="$TEST_TMP/linux-image.sh"
@@ -136,9 +136,9 @@ test_linux_run_source_unset_errors() {
   mk_runner "$block" "run" "$runner"
 
   if assert_missing_env_errors "linux-source-unset" "$runner" \
-      -u WRAPIX_DEFAULT_IMAGE_SOURCE \
-      WRAPIX_DEFAULT_IMAGE_REF=wrapix-base:latest; then
-    pass "Linux: wrapix run with WRAPIX_DEFAULT_IMAGE_SOURCE unset errors"
+      -u WRIX_DEFAULT_IMAGE_SOURCE \
+      WRIX_DEFAULT_IMAGE_REF=wrix-base:latest; then
+    pass "Linux: wrix run with WRIX_DEFAULT_IMAGE_SOURCE unset errors"
   fi
 }
 
@@ -153,13 +153,13 @@ test_linux_run_both_set_passes() {
 
   local err="$TEST_TMP/linux-both-set.err"
   if ! env \
-        WRAPIX_DEFAULT_IMAGE_REF=wrapix-base:latest \
-        WRAPIX_DEFAULT_IMAGE_SOURCE=/nix/store/fake.tar.gz \
+        WRIX_DEFAULT_IMAGE_REF=wrix-base:latest \
+        WRIX_DEFAULT_IMAGE_SOURCE=/nix/store/fake.tar.gz \
         "$BASH_BIN" "$runner" 2>"$err"; then
-    fail "Linux: launcher rejected wrapix run with both image env vars set: $(cat "$err")"
+    fail "Linux: launcher rejected wrix run with both image env vars set: $(cat "$err")"
     return
   fi
-  pass "Linux: wrapix run with both image env vars set passes the validation gate"
+  pass "Linux: wrix run with both image env vars set passes the validation gate"
 }
 
 # ----------------------------------------------------------------------------
@@ -172,12 +172,12 @@ test_linux_spawn_bypasses_env_check() {
   mk_runner "$block" "spawn" "$runner"
 
   local err="$TEST_TMP/linux-spawn-bypass.err"
-  if ! env -u WRAPIX_DEFAULT_IMAGE_REF -u WRAPIX_DEFAULT_IMAGE_SOURCE \
+  if ! env -u WRIX_DEFAULT_IMAGE_REF -u WRIX_DEFAULT_IMAGE_SOURCE \
         "$BASH_BIN" "$runner" 2>"$err"; then
     fail "Linux: spawn mode incorrectly triggered the run-mode env check: $(cat "$err")"
     return
   fi
-  pass "Linux: wrapix spawn bypasses the WRAPIX_DEFAULT_IMAGE_* env check"
+  pass "Linux: wrix spawn bypasses the WRIX_DEFAULT_IMAGE_* env check"
 }
 
 # ----------------------------------------------------------------------------
@@ -190,13 +190,13 @@ test_darwin_run_both_unset_errors() {
   mk_runner "$block" "run" "$runner"
 
   if assert_missing_env_errors "darwin-both-unset" "$runner" \
-      -u WRAPIX_DEFAULT_IMAGE_REF -u WRAPIX_DEFAULT_IMAGE_SOURCE; then
-    pass "Darwin: wrapix run with both image env vars unset errors with documented message"
+      -u WRIX_DEFAULT_IMAGE_REF -u WRIX_DEFAULT_IMAGE_SOURCE; then
+    pass "Darwin: wrix run with both image env vars unset errors with documented message"
   fi
 }
 
 # ----------------------------------------------------------------------------
-# Test 7: Darwin launcher errors when only WRAPIX_DEFAULT_IMAGE_REF is unset
+# Test 7: Darwin launcher errors when only WRIX_DEFAULT_IMAGE_REF is unset
 # ----------------------------------------------------------------------------
 test_darwin_run_ref_unset_errors() {
   local block="$TEST_TMP/darwin-image.sh"
@@ -205,14 +205,14 @@ test_darwin_run_ref_unset_errors() {
   mk_runner "$block" "run" "$runner"
 
   if assert_missing_env_errors "darwin-ref-unset" "$runner" \
-      -u WRAPIX_DEFAULT_IMAGE_REF \
-      WRAPIX_DEFAULT_IMAGE_SOURCE=/nix/store/fake.tar.gz; then
-    pass "Darwin: wrapix run with WRAPIX_DEFAULT_IMAGE_REF unset errors"
+      -u WRIX_DEFAULT_IMAGE_REF \
+      WRIX_DEFAULT_IMAGE_SOURCE=/nix/store/fake.tar.gz; then
+    pass "Darwin: wrix run with WRIX_DEFAULT_IMAGE_REF unset errors"
   fi
 }
 
 # ----------------------------------------------------------------------------
-# Test 8: Darwin launcher errors when only WRAPIX_DEFAULT_IMAGE_SOURCE is unset
+# Test 8: Darwin launcher errors when only WRIX_DEFAULT_IMAGE_SOURCE is unset
 # ----------------------------------------------------------------------------
 test_darwin_run_source_unset_errors() {
   local block="$TEST_TMP/darwin-image.sh"
@@ -221,9 +221,9 @@ test_darwin_run_source_unset_errors() {
   mk_runner "$block" "run" "$runner"
 
   if assert_missing_env_errors "darwin-source-unset" "$runner" \
-      -u WRAPIX_DEFAULT_IMAGE_SOURCE \
-      WRAPIX_DEFAULT_IMAGE_REF=wrapix-base:latest; then
-    pass "Darwin: wrapix run with WRAPIX_DEFAULT_IMAGE_SOURCE unset errors"
+      -u WRIX_DEFAULT_IMAGE_SOURCE \
+      WRIX_DEFAULT_IMAGE_REF=wrix-base:latest; then
+    pass "Darwin: wrix run with WRIX_DEFAULT_IMAGE_SOURCE unset errors"
   fi
 }
 
@@ -238,13 +238,13 @@ test_darwin_run_both_set_passes() {
 
   local err="$TEST_TMP/darwin-both-set.err"
   if ! env \
-        WRAPIX_DEFAULT_IMAGE_REF=wrapix-base:latest \
-        WRAPIX_DEFAULT_IMAGE_SOURCE=/nix/store/fake.tar.gz \
+        WRIX_DEFAULT_IMAGE_REF=wrix-base:latest \
+        WRIX_DEFAULT_IMAGE_SOURCE=/nix/store/fake.tar.gz \
         "$BASH_BIN" "$runner" 2>"$err"; then
-    fail "Darwin: launcher rejected wrapix run with both image env vars set: $(cat "$err")"
+    fail "Darwin: launcher rejected wrix run with both image env vars set: $(cat "$err")"
     return
   fi
-  pass "Darwin: wrapix run with both image env vars set passes the validation gate"
+  pass "Darwin: wrix run with both image env vars set passes the validation gate"
 }
 
 # ----------------------------------------------------------------------------
@@ -257,12 +257,12 @@ test_darwin_spawn_bypasses_env_check() {
   mk_runner "$block" "spawn" "$runner"
 
   local err="$TEST_TMP/darwin-spawn-bypass.err"
-  if ! env -u WRAPIX_DEFAULT_IMAGE_REF -u WRAPIX_DEFAULT_IMAGE_SOURCE \
+  if ! env -u WRIX_DEFAULT_IMAGE_REF -u WRIX_DEFAULT_IMAGE_SOURCE \
         "$BASH_BIN" "$runner" 2>"$err"; then
     fail "Darwin: spawn mode incorrectly triggered the run-mode env check: $(cat "$err")"
     return
   fi
-  pass "Darwin: wrapix spawn bypasses the WRAPIX_DEFAULT_IMAGE_* env check"
+  pass "Darwin: wrix spawn bypasses the WRIX_DEFAULT_IMAGE_* env check"
 }
 
 ALL_TESTS=(

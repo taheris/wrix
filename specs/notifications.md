@@ -11,15 +11,15 @@ When Claude Code stops and waits for input, users may not notice if they are wor
 ```
 Container                          Host
 ---------                          ----
-wrapix-notify                      wrapix-notifyd
+wrix-notify                      wrix-notifyd
     │                                  │
     ├─ Linux: Unix socket ────────────►├─ notify-send
-    │   (/run/wrapix/notify.sock)      │
+    │   (/run/wrix/notify.sock)      │
     │                                  │
     └─ macOS: TCP:5959 ───────────────►└─ terminal-notifier
 ```
 
-Two processes: `wrapix-notify` is the in-container client invoked from a Claude Code Stop hook; `wrapix-notifyd` is the host-side daemon that displays notifications via the platform's native bridge. Transport differs by platform because VirtioFS cannot pass Unix sockets between host and container.
+Two processes: `wrix-notify` is the in-container client invoked from a Claude Code Stop hook; `wrix-notifyd` is the host-side daemon that displays notifications via the platform's native bridge. Transport differs by platform because VirtioFS cannot pass Unix sockets between host and container.
 
 ## Wire Protocol
 
@@ -52,9 +52,9 @@ Newline-delimited JSON, one envelope per notification:
 
 | Variable | Description |
 |----------|-------------|
-| `WRAPIX_NOTIFY_ALWAYS=1` | Disable focus checking |
-| `WRAPIX_NOTIFY_VERBOSE=1` | Enable debug logging |
-| `WRAPIX_NOTIFY_TCP=host:port` | Override TCP endpoint |
+| `WRIX_NOTIFY_ALWAYS=1` | Disable focus checking |
+| `WRIX_NOTIFY_VERBOSE=1` | Enable debug logging |
+| `WRIX_NOTIFY_TCP=host:port` | Override TCP endpoint |
 
 ## Claude Code Hook Configuration
 
@@ -65,7 +65,7 @@ Newline-delimited JSON, one envelope per notification:
       "matcher": "",
       "hooks": [{
         "type": "command",
-        "command": "wrapix-notify 'Claude' 'Waiting'"
+        "command": "wrix-notify 'Claude' 'Waiting'"
       }]
     }]
   }
@@ -78,7 +78,7 @@ The daemon's macOS TCP transport binds to the vmnet gateway (192.168.64.1:5959),
 
 ## Success Criteria
 
-- `wrapix-notify` invoked from inside a container reaches a running host daemon via the platform-appropriate transport (Linux Unix socket, Darwin TCP to gateway); skips with exit 77 when the daemon is not running
+- `wrix-notify` invoked from inside a container reaches a running host daemon via the platform-appropriate transport (Linux Unix socket, Darwin TCP to gateway); skips with exit 77 when the daemon is not running
   [system](bash tests/standalone/notify-test.sh)
 - macOS TCP listener binds to the vmnet gateway address (`192.168.64.1`); `0.0.0.0` is not used as a bind address
   [check](grep -nE '192\.168\.64\.1|0\.0\.0\.0' lib/notify/daemon.nix)
@@ -87,18 +87,18 @@ The daemon's macOS TCP transport binds to the vmnet gateway (192.168.64.1:5959),
 
 ### Functional
 
-1. **Client command** — `wrapix-notify <title> <message>` sends a notification envelope from inside the container.
-2. **Host daemon** — `wrapix-notifyd` receives envelopes and dispatches via the platform-native notification bridge.
-3. **Cross-platform transport** — Linux uses a Unix socket bind-mounted into the container at `/run/wrapix/notify.sock`; macOS uses TCP to the vmnet gateway (5959). VirtioFS does not pass Unix sockets between host and container, so TCP is mandatory on macOS.
+1. **Client command** — `wrix-notify <title> <message>` sends a notification envelope from inside the container.
+2. **Host daemon** — `wrix-notifyd` receives envelopes and dispatches via the platform-native notification bridge.
+3. **Cross-platform transport** — Linux uses a Unix socket bind-mounted into the container at `/run/wrix/notify.sock`; macOS uses TCP to the vmnet gateway (5959). VirtioFS does not pass Unix sockets between host and container, so TCP is mandatory on macOS.
 4. **Focus-aware suppression** — when the registered tmux session's window is focused, the daemon discards the notification before dispatch.
 5. **Session tracking** — the launcher registers `(session_id, window_id)` on container start so focus detection has a target.
 6. **Sound support** — clients may pass an optional `sound` field consumed by `terminal-notifier` on macOS.
 
 ### Non-Functional
 
-1. **Low latency** — notifications appear within one second of `wrapix-notify` invocation.
+1. **Low latency** — notifications appear within one second of `wrix-notify` invocation.
 2. **Reliable** — daemon survives client disconnects and accepts new connections without restart.
-3. **Non-blocking client** — `wrapix-notify` exits immediately after writing the envelope, with no acknowledgement round-trip.
+3. **Non-blocking client** — `wrix-notify` exits immediately after writing the envelope, with no acknowledgement round-trip.
 
 ## Out of Scope
 

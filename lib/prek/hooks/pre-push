@@ -2,8 +2,8 @@
 set -euo pipefail
 
 _git_common_dir=$(git rev-parse --git-common-dir)
-_wrapix_dir=$(dirname "$_git_common_dir")/.wrapix
-_stamp_file="$_wrapix_dir/push-verified"
+_wrix_dir=$(dirname "$_git_common_dir")/.wrix
+_stamp_file="$_wrix_dir/push-verified"
 _head_sha=$(git rev-parse HEAD)
 
 # Second push: stamp valid for current HEAD — consume it and let git push.
@@ -20,7 +20,7 @@ if [[ -z "$_stdin" ]]; then
     exit 0
 fi
 
-mkdir -p "$_wrapix_dir"
+mkdir -p "$_wrix_dir"
 
 # Run pre-push hooks via hook-impl (not `prek run`) so the ref range
 # from stdin is parsed correctly — same code path git would use, but

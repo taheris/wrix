@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Test: Build wrapix image with MCP opt-in, verify tmux and MCP server present
+# Test: Build wrix image with MCP opt-in, verify tmux and MCP server present
 #
 # This test builds a sandbox image using mkSandbox with the mcp parameter
 # and verifies that MCP servers are properly included:
@@ -83,12 +83,12 @@ PACKAGE_PATH=$(nix build "${REPO_ROOT}#sandbox-mcp" --print-out-paths 2>/dev/nul
     exit 1
 }
 
-IMAGE_STREAM=$(grep -oP "WRAPIX_DEFAULT_IMAGE_SOURCE=[^']*'\K[^']+" "${PACKAGE_PATH}/bin/wrapix" | head -1) || {
-    log_error "Could not find WRAPIX_DEFAULT_IMAGE_SOURCE in wrapper script"
+IMAGE_STREAM=$(grep -oP "WRIX_DEFAULT_IMAGE_SOURCE=[^']*'\K[^']+" "${PACKAGE_PATH}/bin/wrix" | head -1) || {
+    log_error "Could not find WRIX_DEFAULT_IMAGE_SOURCE in wrapper script"
     exit 1
 }
-WRAPPER_IMAGE_REF=$(grep -oP "WRAPIX_DEFAULT_IMAGE_REF=[^']*'\K[^']+" "${PACKAGE_PATH}/bin/wrapix" | head -1) || {
-    log_error "Could not find WRAPIX_DEFAULT_IMAGE_REF in wrapper script"
+WRAPPER_IMAGE_REF=$(grep -oP "WRIX_DEFAULT_IMAGE_REF=[^']*'\K[^']+" "${PACKAGE_PATH}/bin/wrix" | head -1) || {
+    log_error "Could not find WRIX_DEFAULT_IMAGE_REF in wrapper script"
     exit 1
 }
 if [[ ! -x "${IMAGE_STREAM}" ]]; then
@@ -97,8 +97,8 @@ if [[ ! -x "${IMAGE_STREAM}" ]]; then
 fi
 
 log_info "Loading image into podman..."
-IMAGE_REF=$(wrapix_unique_image_ref "wrapix-test-sandbox-debug-profile")
-wrapix_load_test_image "${IMAGE_STREAM}" "$(wrapix_image_short_name "$WRAPPER_IMAGE_REF")" "${IMAGE_REF}"
+IMAGE_REF=$(wrix_unique_image_ref "wrix-test-sandbox-debug-profile")
+wrix_load_test_image "${IMAGE_STREAM}" "$(wrix_image_short_name "$WRAPPER_IMAGE_REF")" "${IMAGE_REF}"
 log_info "Loaded image: ${IMAGE_REF}"
 
 WORKSPACE=$(mktemp -d)

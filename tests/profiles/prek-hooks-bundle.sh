@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verify wrapix.prekHooks bundle contents (specs/profiles.md § Prek hook management).
+# Verify wrix.prekHooks bundle contents (specs/profiles.md § Prek hook management).
 #
 #   test_bundle_contents
 #     lib.prekHooks is a directory derivation containing executable shims for

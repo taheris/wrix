@@ -1,4 +1,4 @@
-# Build the main OCI image for wrapix sandbox
+# Build the main OCI image for wrix sandbox
 #
 # This creates a layered container image with:
 # - Base packages + profile-specific packages
@@ -52,10 +52,10 @@ let
   # Shared nixpkgs-pin-dependent bottom-of-closure. Chained under the
   # per-profile image via `fromImage` so it loads into the platform store once
   # (specs/image-builder.md § Base Image Layering).
-  wrapixBaseImage = import ./base-image.nix { inherit pkgs; };
+  wrixBaseImage = import ./base-image.nix { inherit pkgs; };
 
   # Tier 1: the fixed-per-instance closure (profile.corePackages + the
-  # wrapix-generated derivations that do not vary with profile.packages, MCP
+  # wrix-generated derivations that do not vary with profile.packages, MCP
   # configs, Claude settings, or agent selection), chained atop the base. No
   # agent binary lives here — it rides the agent tier above (specs/image-builder.md
   # § Provenance-Tiered Layering).
@@ -63,7 +63,7 @@ let
     inherit pkgs profile;
   };
 
-  # Bundle referenced from config.Env WRAPIX_PREK_HOOKS so the entrypoint can
+  # Bundle referenced from config.Env WRIX_PREK_HOOKS so the entrypoint can
   # point `core.hooksPath` at it (specs/pre-commit.md § Bead-Container Hook
   # Installation).
   prekHooksBundle = import ../prek/bundle.nix { inherit pkgs; };
@@ -122,7 +122,7 @@ let
     .${agent}
       or (throw "lib/sandbox/image.nix: unknown agent '${agent}' (expected 'claude', 'pi', or 'direct')");
 
-  agentImageName = "wrapix-agent-${agent}-${profile.name}";
+  agentImageName = "wrix-agent-${agent}-${profile.name}";
 
   # Tier 2: exactly the one selected agent runtime and its closure, chained atop
   # the stable-profile (toolchain) tier. The leaf chains on top of this, so an
@@ -150,7 +150,7 @@ let
   ++ agentPackages;
 
   profileEnv = pkgs.buildEnv {
-    name = "wrapix-profile-env";
+    name = "wrix-profile-env";
     paths = allPackages;
     pathsToLink = [
       "/bin"
@@ -184,7 +184,7 @@ let
   #     stable tier's buildEnv INPUTS, not the `coreEnv` wrapper buildLayeredImage
   #     never lays into a store layer (registering the wrapper bakes a dangling
   #     path), and it folds in `prekHooksBundle` — which rides in `config.Env`
-  #     (WRAPIX_PREK_HOOKS), never in any tier's `contents`, yet dockerTools still
+  #     (WRIX_PREK_HOOKS), never in any tier's `contents`, yet dockerTools still
   #     materializes its closure, so omitting it leaves an orphan (see
   #     stable-profile-image.nix § lowerTiersContents).
   #   - image-build artifacts (the customisation-layer tar, `layering.json`) are
@@ -197,7 +197,7 @@ let
     rootPaths = leafContents ++ agentImage.lowerTiersContents;
   };
 
-  imageName = "wrapix-${profile.name}${pkgs.lib.optionalString (agent != "direct") "-${agent}"}";
+  imageName = "wrix-${profile.name}${pkgs.lib.optionalString (agent != "direct") "-${agent}"}";
 
   # The leaf budgets only its tier-2 delta plus the customisation layer; with
   # base (64) and stable-profile (48) below it, this keeps the stacked image at
@@ -241,11 +241,11 @@ let
     contents = leafContents;
 
     extraCommands = ''
-      mkdir -p tmp home/wrapix root var/run var/cache var/tmp mnt/wrapix/file mnt/wrapix/dir
+      mkdir -p tmp home/wrix root var/run var/cache var/tmp mnt/wrix/file mnt/wrix/dir
       chmod 1777 tmp var/cache var/tmp
-      chmod 777 home/wrapix
+      chmod 777 home/wrix
 
-      mkdir -p etc/wrapix
+      mkdir -p etc/wrix
       echo "127.0.0.1 localhost" > etc/hosts
 
       cp ${entrypointSh} entrypoint.sh
@@ -263,18 +263,18 @@ let
         chmod +x krun-relay
       ''}
 
-      cp ${claudeConfigJson} etc/wrapix/claude-config.json
-      cp ${claudeSettingsJson} etc/wrapix/claude-settings.json
+      cp ${claudeConfigJson} etc/wrix/claude-config.json
+      cp ${claudeSettingsJson} etc/wrix/claude-settings.json
 
       ${optionalString (agent == "pi") ''
-        mkdir -p etc/wrapix/pi-agent
-        cp ${piSettingsJson} etc/wrapix/pi-agent/settings.json
+        mkdir -p etc/wrix/pi-agent
+        cp ${piSettingsJson} etc/wrix/pi-agent/settings.json
       ''}
 
       ${optionalString (mcpServerConfigs != { }) ''
-        mkdir -p etc/wrapix/mcp
+        mkdir -p etc/wrix/mcp
         ${concatStringsSep "\n" (
-          mapAttrsToList (name: file: "cp ${file} etc/wrapix/mcp/${name}.json") mcpConfigFiles
+          mapAttrsToList (name: file: "cp ${file} etc/wrix/mcp/${name}.json") mcpConfigFiles
         )}
       ''}
 
@@ -319,7 +319,7 @@ let
         "LANG=C.UTF-8"
         "PATH=${profileEnv}/bin:/bin:/usr/bin"
         "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
-        "WRAPIX_PREK_HOOKS=${prekHooksBundle}"
+        "WRIX_PREK_HOOKS=${prekHooksBundle}"
         "XDG_CACHE_HOME=/var/cache"
       ]
       ++ (mapAttrsToList (name: value: "${name}=${value}") (profile.env or { }));
@@ -385,7 +385,7 @@ rawImage
   # base-image-hash-stable verifier, specs/image-builder.md § Base Image
   # Layering) can assert the base derivation is invariant under profile-level
   # input changes without re-deriving it.
-  baseImage = wrapixBaseImage;
+  baseImage = wrixBaseImage;
   # Expose tier 1 so the stable-profile verifiers (hash-stability, membership,
   # pinned-toolchain) can assert against it and its `lowerTiersClosure` without
   # rebuilding the leaf, and tier 2 so the agent verifiers (tier-isolated,

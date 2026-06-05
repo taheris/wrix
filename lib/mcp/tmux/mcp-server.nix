@@ -1,6 +1,6 @@
 # tmux-mcp: MCP server for tmux pane management
 #
-# Provides tools for AI-assisted debugging within wrapix sandboxes:
+# Provides tools for AI-assisted debugging within wrix sandboxes:
 # - tmux_create_pane: Spawn panes running commands
 # - tmux_send_keys: Send keystrokes to panes
 # - tmux_capture_pane: Capture pane output

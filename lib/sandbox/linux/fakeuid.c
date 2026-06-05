@@ -40,8 +40,8 @@ int ioctl(int fd, unsigned long request, ...) {
     if (request == TIOCGWINSZ) {
         struct winsize *ws = (struct winsize *)arg;
         if (ret != 0 || (ws->ws_row == 0 && ws->ws_col == 0)) {
-            const char *rows = getenv("WRAPIX_TERM_ROWS");
-            const char *cols = getenv("WRAPIX_TERM_COLS");
+            const char *rows = getenv("WRIX_TERM_ROWS");
+            const char *cols = getenv("WRIX_TERM_COLS");
             if (rows) ws->ws_row = (unsigned short)atoi(rows);
             if (cols) ws->ws_col = (unsigned short)atoi(cols);
             ret = 0;

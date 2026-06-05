@@ -20,7 +20,7 @@ let
   shellLib = import ../../util/shell.nix { };
   sshConfig = import ../../util/ssh.nix;
 
-  prompt = writeText "wrapix-prompt" (readFile ../prompt.txt);
+  prompt = writeText "wrix-prompt" (readFile ../prompt.txt);
 
   # crun built with libkrun support for microVM boundary
   # Provides 'krun' binary (symlink to crun) for podman --runtime krun
@@ -50,7 +50,7 @@ in
 
     in
     writeShellApplication {
-      name = "wrapix";
+      name = "wrix";
       runtimeInputs = [
         crun-krun
         pkgs.beads-dolt
@@ -60,19 +60,19 @@ in
       ];
       text = ''
         # Verbose mode for debugging startup
-        WRAPIX_VERBOSE="''${WRAPIX_VERBOSE:-}"
-        verbose() { [ -n "$WRAPIX_VERBOSE" ] && echo "[wrapix] $*" >&2 || true; }
+        WRIX_VERBOSE="''${WRIX_VERBOSE:-}"
+        verbose() { [ -n "$WRIX_VERBOSE" ] && echo "[wrix] $*" >&2 || true; }
 
         # Ensure USER is set (may be unset in some environments)
         USER="''${USER:-$(id -un)}"
 
         # XDG-compliant directories for staging and image cache
         XDG_CACHE_HOME="''${XDG_CACHE_HOME:-$HOME/.cache}"
-        WRAPIX_CACHE="$XDG_CACHE_HOME/wrapix"
+        WRIX_CACHE="$XDG_CACHE_HOME/wrix"
 
-        # Subcommand dispatch: `wrapix run` (interactive, TTY) vs
-        # `wrapix spawn` (stdio, JSON spawn-config). Default with no
-        # subcommand keeps legacy positional invocation `wrapix [DIR] [CMD...]`.
+        # Subcommand dispatch: `wrix run` (interactive, TTY) vs
+        # `wrix spawn` (stdio, JSON spawn-config). Default with no
+        # subcommand keeps legacy positional invocation `wrix [DIR] [CMD...]`.
         SUBCOMMAND="run"
         if [ $# -gt 0 ]; then
           case "$1" in
@@ -99,11 +99,11 @@ in
                 SPAWN_CONFIG="$2"; shift 2 ;;
               --stdio) USE_STDIO=1; shift ;;
               --) shift; break ;;
-              *) echo "Error: unknown wrapix spawn flag: $1" >&2; exit 2 ;;
+              *) echo "Error: unknown wrix spawn flag: $1" >&2; exit 2 ;;
             esac
           done
           if [ -z "$SPAWN_CONFIG" ]; then
-            echo "Error: wrapix spawn requires --spawn-config <file>" >&2
+            echo "Error: wrix spawn requires --spawn-config <file>" >&2
             exit 2
           fi
           if [ ! -f "$SPAWN_CONFIG" ]; then
@@ -147,11 +147,11 @@ in
           fi
         fi
 
-        # WRAPIX_DRY_RUN=1: print resolved spawn state and exit without
+        # WRIX_DRY_RUN=1: print resolved spawn state and exit without
         # touching the filesystem or invoking podman. Used by tests to
         # verify SpawnConfig parsing and per-bead profile selection
         # without a container runtime.
-        if [ "''${WRAPIX_DRY_RUN:-}" = "1" ]; then
+        if [ "''${WRIX_DRY_RUN:-}" = "1" ]; then
           printf 'SUBCOMMAND=%s\n' "$SUBCOMMAND"
           printf 'STDIO=%s\n' "$USE_STDIO"
           printf 'WORKSPACE=%s\n' "$PROJECT_DIR"
@@ -172,17 +172,17 @@ in
 
         verbose "Project dir: $PROJECT_DIR"
 
-        # Ensure the per-workspace wrapix-beads dolt container is running
+        # Ensure the per-workspace wrix-beads dolt container is running
         # before launching. Without it, bd inside the container has no
-        # server to talk to and the socket at $PROJECT_DIR/.wrapix/dolt.sock
+        # server to talk to and the socket at $PROJECT_DIR/.wrix/dolt.sock
         # won't exist. beads-dolt start is idempotent.
         if [ -d "$PROJECT_DIR/.beads/dolt" ] && command -v podman >/dev/null 2>&1; then
           beads-dolt start "$PROJECT_DIR"
         fi
 
         # Read git author from host config (overrideable via env vars)
-        GIT_AUTHOR_NAME="''${GIT_AUTHOR_NAME:-$(git config --global user.name 2>/dev/null || echo 'Wrapix Sandbox')}"
-        GIT_AUTHOR_EMAIL="''${GIT_AUTHOR_EMAIL:-$(git config --global user.email 2>/dev/null || echo 'sandbox@wrapix.dev')}"
+        GIT_AUTHOR_NAME="''${GIT_AUTHOR_NAME:-$(git config --global user.name 2>/dev/null || echo 'Wrix Sandbox')}"
+        GIT_AUTHOR_EMAIL="''${GIT_AUTHOR_EMAIL:-$(git config --global user.email 2>/dev/null || echo 'sandbox@wrix.dev')}"
         GIT_COMMITTER_NAME="''${GIT_COMMITTER_NAME:-$GIT_AUTHOR_NAME}"
         GIT_COMMITTER_EMAIL="''${GIT_COMMITTER_EMAIL:-$GIT_AUTHOR_EMAIL}"
 
@@ -191,13 +191,13 @@ in
 
         # Ensure project .claude dir exists for session persistence (/resume, /rename)
         # ~/.claude is container-local (tmpfs); entrypoint symlinks persistent items.
-        # The dir is best-effort: when `wrapix spawn` is invoked from inside
-        # another wrapix sandbox, $PROJECT_DIR is the host path and is not
+        # The dir is best-effort: when `wrix spawn` is invoked from inside
+        # another wrix sandbox, $PROJECT_DIR is the host path and is not
         # visible to the caller's filesystem. Skip on permission errors — the
-        # container's entrypoint creates the dir again when WRAPIX_AGENT=claude.
+        # container's entrypoint creates the dir again when WRIX_AGENT=claude.
         #
-        # mktemp the error-capture file so concurrent `wrapix spawn`
-        # invocations don't race on a shared `/tmp/wrapix-mkdir-err`
+        # mktemp the error-capture file so concurrent `wrix spawn`
+        # invocations don't race on a shared `/tmp/wrix-mkdir-err`
         # path (wx-w4h5e).
         mkdir_err_file=$(mktemp)
         trap 'rm -f "$mkdir_err_file"' EXIT INT TERM
@@ -208,7 +208,7 @@ in
                     verbose "Skipping host-side .claude prep — $PROJECT_DIR not accessible from this context: $mkdir_err"
                     ;;
                 *)
-                    echo "wrapix: mkdir $PROJECT_DIR/.claude failed: $mkdir_err" >&2
+                    echo "wrix: mkdir $PROJECT_DIR/.claude failed: $mkdir_err" >&2
                     exit 1
                     ;;
             esac
@@ -269,22 +269,22 @@ in
         # Mount SSH known_hosts as system-wide file (not under ~/.ssh/ —
         # podman auto-creates parent dirs owned by root on the tmpfs home)
         VOLUME_ARGS="$VOLUME_ARGS -v ${knownHosts}/known_hosts:${sshConfig.knownHostsTarget}:ro"
-        VOLUME_ARGS="$VOLUME_ARGS -v ${prompt}:/etc/wrapix-prompt:ro"
+        VOLUME_ARGS="$VOLUME_ARGS -v ${prompt}:/etc/wrix-prompt:ro"
 
         # Mount notification socket directory if daemon is running
         # We mount the directory (not the socket file) so daemon restarts work
         # without needing to restart the container
-        NOTIFY_SOCKET_DIR="''${XDG_RUNTIME_DIR:-$HOME/.local/share}/wrapix"
+        NOTIFY_SOCKET_DIR="''${XDG_RUNTIME_DIR:-$HOME/.local/share}/wrix"
         if [ -S "$NOTIFY_SOCKET_DIR/notify.sock" ]; then
-          VOLUME_ARGS="$VOLUME_ARGS -v $NOTIFY_SOCKET_DIR:/run/wrapix"
+          VOLUME_ARGS="$VOLUME_ARGS -v $NOTIFY_SOCKET_DIR:/run/wrix"
         else
           echo "Note: Notification socket not found at $NOTIFY_SOCKET_DIR/notify.sock" >&2
-          echo "      Run 'nix run .#wrapix-notifyd' on host for desktop notifications" >&2
+          echo "      Run 'nix run .#wrix-notifyd' on host for desktop notifications" >&2
         fi
 
         # Mount host podman socket for sibling container access (opt-in)
         PODMAN_SOCKET_ARGS=""
-        if [ -n "''${WRAPIX_PODMAN_SOCKET:-}" ]; then
+        if [ -n "''${WRIX_PODMAN_SOCKET:-}" ]; then
           PODMAN_SOCK="''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"
           if [ -S "$PODMAN_SOCK" ]; then
             PODMAN_SOCKET_ARGS="-v $PODMAN_SOCK:/run/podman/podman.sock -e CONTAINER_HOST=unix:///run/podman/podman.sock"
@@ -292,55 +292,55 @@ in
             # $PROJECT_DIR is the host path (the launcher runs on the host).
             PODMAN_SOCKET_ARGS="$PODMAN_SOCKET_ARGS -e GC_HOST_WORKSPACE=$PROJECT_DIR"
           else
-            echo "Error: WRAPIX_PODMAN_SOCKET set but socket not found at $PODMAN_SOCK" >&2
+            echo "Error: WRIX_PODMAN_SOCKET set but socket not found at $PODMAN_SOCK" >&2
             exit 1
           fi
         fi
 
         # Mount deploy key and signing key (not under ~/.ssh/ — see lib/util/ssh.nix).
         # Host-source resolution precedence per specs/security.md:
-        #   1. $WRAPIX_{DEPLOY,SIGNING}_KEY pointing at an existing file.
+        #   1. $WRIX_{DEPLOY,SIGNING}_KEY pointing at an existing file.
         #   2. $HOME/.ssh/deploy_keys/<name>{,-signing} fallback.
         # Set-but-missing env is fail-loud (parent-process mistake).
         DEPLOY_KEY_NAME=${deployKeyExpr}
         DEPLOY_KEY=""
-        if [ -n "''${WRAPIX_DEPLOY_KEY:-}" ]; then
-          if [ ! -f "$WRAPIX_DEPLOY_KEY" ]; then
-            echo "wrapix: WRAPIX_DEPLOY_KEY=$WRAPIX_DEPLOY_KEY: file does not exist" >&2
+        if [ -n "''${WRIX_DEPLOY_KEY:-}" ]; then
+          if [ ! -f "$WRIX_DEPLOY_KEY" ]; then
+            echo "wrix: WRIX_DEPLOY_KEY=$WRIX_DEPLOY_KEY: file does not exist" >&2
             exit 1
           fi
-          DEPLOY_KEY="$WRAPIX_DEPLOY_KEY"
+          DEPLOY_KEY="$WRIX_DEPLOY_KEY"
         elif [ -f "$HOME/.ssh/deploy_keys/$DEPLOY_KEY_NAME" ]; then
           DEPLOY_KEY="$HOME/.ssh/deploy_keys/$DEPLOY_KEY_NAME"
         fi
         SIGNING_KEY=""
-        if [ -n "''${WRAPIX_SIGNING_KEY:-}" ]; then
-          if [ ! -f "$WRAPIX_SIGNING_KEY" ]; then
-            echo "wrapix: WRAPIX_SIGNING_KEY=$WRAPIX_SIGNING_KEY: file does not exist" >&2
+        if [ -n "''${WRIX_SIGNING_KEY:-}" ]; then
+          if [ ! -f "$WRIX_SIGNING_KEY" ]; then
+            echo "wrix: WRIX_SIGNING_KEY=$WRIX_SIGNING_KEY: file does not exist" >&2
             exit 1
           fi
-          SIGNING_KEY="$WRAPIX_SIGNING_KEY"
+          SIGNING_KEY="$WRIX_SIGNING_KEY"
         elif [ -f "$HOME/.ssh/deploy_keys/$DEPLOY_KEY_NAME-signing" ]; then
           SIGNING_KEY="$HOME/.ssh/deploy_keys/$DEPLOY_KEY_NAME-signing"
         fi
         DEPLOY_KEY_ARGS=""
         if [ -n "$DEPLOY_KEY" ]; then
           VOLUME_ARGS="$VOLUME_ARGS -v $DEPLOY_KEY:${sshConfig.containerKeyDir}/$DEPLOY_KEY_NAME:ro"
-          DEPLOY_KEY_ARGS="-e WRAPIX_DEPLOY_KEY=${sshConfig.containerKeyDir}/$DEPLOY_KEY_NAME"
+          DEPLOY_KEY_ARGS="-e WRIX_DEPLOY_KEY=${sshConfig.containerKeyDir}/$DEPLOY_KEY_NAME"
         fi
         if [ -n "$SIGNING_KEY" ]; then
           VOLUME_ARGS="$VOLUME_ARGS -v $SIGNING_KEY:${sshConfig.containerKeyDir}/$DEPLOY_KEY_NAME-signing:ro"
-          DEPLOY_KEY_ARGS="$DEPLOY_KEY_ARGS -e WRAPIX_SIGNING_KEY=${sshConfig.containerKeyDir}/$DEPLOY_KEY_NAME-signing"
+          DEPLOY_KEY_ARGS="$DEPLOY_KEY_ARGS -e WRIX_SIGNING_KEY=${sshConfig.containerKeyDir}/$DEPLOY_KEY_NAME-signing"
         fi
 
         # spawn (loop agent) must sign and push: fail loud on a keyless boot, not at land-the-plane (specs/security.md § Deploy & Signing Keys).
         if [ "$SUBCOMMAND" = "spawn" ]; then
           if [ -z "$DEPLOY_KEY" ]; then
-            echo "wrapix spawn: no deploy key resolved — set WRAPIX_DEPLOY_KEY to an existing file, or place one at $HOME/.ssh/deploy_keys/$DEPLOY_KEY_NAME" >&2
+            echo "wrix spawn: no deploy key resolved — set WRIX_DEPLOY_KEY to an existing file, or place one at $HOME/.ssh/deploy_keys/$DEPLOY_KEY_NAME" >&2
             exit 1
           fi
-          if [ "''${WRAPIX_GIT_SIGN:-1}" != "0" ] && [ -z "$SIGNING_KEY" ]; then
-            echo "wrapix spawn: no signing key resolved — set WRAPIX_SIGNING_KEY to an existing file, place one at $HOME/.ssh/deploy_keys/$DEPLOY_KEY_NAME-signing, or set WRAPIX_GIT_SIGN=0 to disable commit signing" >&2
+          if [ "''${WRIX_GIT_SIGN:-1}" != "0" ] && [ -z "$SIGNING_KEY" ]; then
+            echo "wrix spawn: no signing key resolved — set WRIX_SIGNING_KEY to an existing file, place one at $HOME/.ssh/deploy_keys/$DEPLOY_KEY_NAME-signing, or set WRIX_GIT_SIGN=0 to disable commit signing" >&2
             exit 1
           fi
         fi
@@ -348,15 +348,15 @@ in
         # Pi subscription credentials are file-backed. Mount only auth.json
         # when the selected image is Pi; settings are non-secret image defaults.
         PI_AUTH_JSON_MOUNT=""
-        if [ "''${WRAPIX_AGENT:-direct}" = "pi" ]; then
-          PI_AUTH_FILE="''${WRAPIX_PI_AUTH_FILE:-$HOME/.pi/agent/auth.json}"
-          if [ -n "''${WRAPIX_PI_AUTH_FILE:-}" ]; then
+        if [ "''${WRIX_AGENT:-direct}" = "pi" ]; then
+          PI_AUTH_FILE="''${WRIX_PI_AUTH_FILE:-$HOME/.pi/agent/auth.json}"
+          if [ -n "''${WRIX_PI_AUTH_FILE:-}" ]; then
             if [ ! -f "$PI_AUTH_FILE" ]; then
-              echo "wrapix: WRAPIX_PI_AUTH_FILE=$PI_AUTH_FILE: file does not exist" >&2
+              echo "wrix: WRIX_PI_AUTH_FILE=$PI_AUTH_FILE: file does not exist" >&2
               exit 1
             fi
           elif [ "$SUBCOMMAND" = "spawn" ] && [ ! -f "$PI_AUTH_FILE" ]; then
-            echo "wrapix spawn: Pi auth file not found at $PI_AUTH_FILE — run 'pi' and /login on the host, or set WRAPIX_PI_AUTH_FILE to an existing auth.json" >&2
+            echo "wrix spawn: Pi auth file not found at $PI_AUTH_FILE — run 'pi' and /login on the host, or set WRIX_PI_AUTH_FILE to an existing auth.json" >&2
             exit 1
           elif [ "$SUBCOMMAND" = "run" ]; then
             mkdir -p "$(dirname "$PI_AUTH_FILE")"
@@ -365,26 +365,26 @@ in
             fi
             chmod 600 "$PI_AUTH_FILE"
           fi
-          VOLUME_ARGS="$VOLUME_ARGS -v $PI_AUTH_FILE:/mnt/wrapix/file/pi-auth.json:rw"
-          PI_AUTH_JSON_MOUNT="/mnt/wrapix/file/pi-auth.json"
+          VOLUME_ARGS="$VOLUME_ARGS -v $PI_AUTH_FILE:/mnt/wrix/file/pi-auth.json:rw"
+          PI_AUTH_JSON_MOUNT="/mnt/wrix/file/pi-auth.json"
         fi
 
         ${stageBeads}
         BEADS_ARGS=""
         if [ -n "$BEADS_STAGING" ]; then
           BEADS_ARGS="-v $BEADS_STAGING:/workspace/.beads"
-          if [ -n "''${WRAPIX_PODMAN_SOCKET:-}" ]; then
+          if [ -n "''${WRIX_PODMAN_SOCKET:-}" ]; then
             PODMAN_SOCKET_ARGS="$PODMAN_SOCKET_ARGS -e GC_HOST_BEADS=$BEADS_STAGING"
           fi
         fi
 
         # Session registration for focus-aware notifications (tmux only)
-        WRAPIX_SESSION_ID=""
-        WRAPIX_SESSION_FILE=""
+        WRIX_SESSION_ID=""
+        WRIX_SESSION_FILE=""
         if [ -n "''${TMUX:-}" ]; then
-          WRAPIX_SESSION_ID=$(tmux display-message -p '#S:#I.#P')
-          WRAPIX_SESSION_DIR="''${XDG_RUNTIME_DIR:-$HOME/.local/share}/wrapix/sessions"
-          mkdir -p "$WRAPIX_SESSION_DIR"
+          WRIX_SESSION_ID=$(tmux display-message -p '#S:#I.#P')
+          WRIX_SESSION_DIR="''${XDG_RUNTIME_DIR:-$HOME/.local/share}/wrix/sessions"
+          mkdir -p "$WRIX_SESSION_DIR"
 
           # Capture window ID for focus detection (niri-specific)
           WINDOW_ID=""
@@ -393,31 +393,31 @@ in
           fi
 
           # Use safe filename (replace : and . with -)
-          SAFE_SESSION_ID="''${WRAPIX_SESSION_ID//[:\.]/-}"
-          WRAPIX_SESSION_FILE="$WRAPIX_SESSION_DIR/$SAFE_SESSION_ID.json"
-          printf '{"session_id":"%s","window_id":"%s"}\n' "$WRAPIX_SESSION_ID" "$WINDOW_ID" > "$WRAPIX_SESSION_FILE"
+          SAFE_SESSION_ID="''${WRIX_SESSION_ID//[:\.]/-}"
+          WRIX_SESSION_FILE="$WRIX_SESSION_DIR/$SAFE_SESSION_ID.json"
+          printf '{"session_id":"%s","window_id":"%s"}\n' "$WRIX_SESSION_ID" "$WINDOW_ID" > "$WRIX_SESSION_FILE"
         fi
 
         # Cleanup function for session file
         # shellcheck disable=SC2329 # Invoked via trap
         cleanup_session() {
-          [ -n "$WRAPIX_SESSION_FILE" ] && [ -f "$WRAPIX_SESSION_FILE" ] && rm -f "$WRAPIX_SESSION_FILE"
+          [ -n "$WRIX_SESSION_FILE" ] && [ -f "$WRIX_SESSION_FILE" ] && rm -f "$WRIX_SESSION_FILE"
         }
         trap cleanup_session EXIT
 
-        # Validate WRAPIX_NETWORK mode (default: open)
-        WRAPIX_NETWORK="''${WRAPIX_NETWORK:-open}"
-        case "$WRAPIX_NETWORK" in
+        # Validate WRIX_NETWORK mode (default: open)
+        WRIX_NETWORK="''${WRIX_NETWORK:-open}"
+        case "$WRIX_NETWORK" in
           open|limit) ;;
           *)
-            echo "Error: WRAPIX_NETWORK must be 'open' or 'limit' (got: $WRAPIX_NETWORK)" >&2
+            echo "Error: WRIX_NETWORK must be 'open' or 'limit' (got: $WRIX_NETWORK)" >&2
             exit 1
             ;;
         esac
 
         # Network filtering requires NET_ADMIN capability for iptables
         NETWORK_CAP_ARGS=""
-        if [ "$WRAPIX_NETWORK" = "limit" ]; then
+        if [ "$WRIX_NETWORK" = "limit" ]; then
           NETWORK_CAP_ARGS="--cap-add=NET_ADMIN"
         fi
 
@@ -435,21 +435,21 @@ in
         }
 
         # Image is supplied to the launcher at runtime, not baked in. For
-        # `wrapix run`, $WRAPIX_DEFAULT_IMAGE_REF and $WRAPIX_DEFAULT_IMAGE_SOURCE
+        # `wrix run`, $WRIX_DEFAULT_IMAGE_REF and $WRIX_DEFAULT_IMAGE_SOURCE
         # are set by the per-profile makeWrapper composition (or by an
-        # orchestrator like loom). For `wrapix spawn`, the SpawnConfig
+        # orchestrator like loom). For `wrix spawn`, the SpawnConfig
         # carries `image_ref` and `image_source`.
         IMAGE_REF=""
         IMAGE_SOURCE=""
         IMAGE_DIGEST_PATH=""
         if [ "$SUBCOMMAND" = "run" ]; then
-          if [ -z "''${WRAPIX_DEFAULT_IMAGE_REF:-}" ] || [ -z "''${WRAPIX_DEFAULT_IMAGE_SOURCE:-}" ]; then
-            echo "Error: wrapix run requires WRAPIX_DEFAULT_IMAGE_REF and WRAPIX_DEFAULT_IMAGE_SOURCE" >&2
+          if [ -z "''${WRIX_DEFAULT_IMAGE_REF:-}" ] || [ -z "''${WRIX_DEFAULT_IMAGE_SOURCE:-}" ]; then
+            echo "Error: wrix run requires WRIX_DEFAULT_IMAGE_REF and WRIX_DEFAULT_IMAGE_SOURCE" >&2
             exit 1
           fi
-          IMAGE_REF="$WRAPIX_DEFAULT_IMAGE_REF"
-          IMAGE_SOURCE="$WRAPIX_DEFAULT_IMAGE_SOURCE"
-          IMAGE_DIGEST_PATH="''${WRAPIX_DEFAULT_IMAGE_DIGEST:-}"
+          IMAGE_REF="$WRIX_DEFAULT_IMAGE_REF"
+          IMAGE_SOURCE="$WRIX_DEFAULT_IMAGE_SOURCE"
+          IMAGE_DIGEST_PATH="''${WRIX_DEFAULT_IMAGE_DIGEST:-}"
         else
           IMAGE_REF="$IMAGE_OVERRIDE_REF"
           IMAGE_SOURCE="$IMAGE_OVERRIDE_SOURCE"
@@ -458,9 +458,9 @@ in
 
         # Image install transport: skopeo copy oci-archive: → containers-storage:
         # (per specs/sandbox.md § Image install path). Body lives in
-        # `lib/util/shell.nix` and is shared with the wrapix-spawn-load verifier.
+        # `lib/util/shell.nix` and is shared with the wrix-spawn-load verifier.
         ${imageLoadStep}
-        # Prune stale wrapix-* tags from every profile on every invocation,
+        # Prune stale wrix-* tags from every profile on every invocation,
         # not just after a fresh load — otherwise a cached current profile
         # lets stale hashes from other profiles accumulate indefinitely.
         ${pruneStaleImages { }}
@@ -469,9 +469,9 @@ in
 
         # Detect krun availability for microVM boundary (see specs/security.md)
         # Default: container boundary (krun microVM currently disabled)
-        # WRAPIX_MICROVM=1: explicit opt-in to microVM boundary
+        # WRIX_MICROVM=1: explicit opt-in to microVM boundary
         RUNTIME_ARGS=""
-        if [ "''${WRAPIX_MICROVM:-}" = "1" ]; then
+        if [ "''${WRIX_MICROVM:-}" = "1" ]; then
           if ! [ -e /dev/kvm ]; then
             echo "Error: /dev/kvm not found. A microVM boundary requires KVM support." >&2
             exit 1
@@ -504,15 +504,15 @@ in
 
           # krun-relay as PID 1: creates real PTY, relays I/O, execs krun-init.sh
           KRUN_ENTRYPOINT_ARGS="--entrypoint /krun-relay"
-          KRUN_ENV_ARGS="-e WRAPIX_TERM_ROWS=$TERM_ROWS -e WRAPIX_TERM_COLS=$TERM_COLS"
+          KRUN_ENV_ARGS="-e WRIX_TERM_ROWS=$TERM_ROWS -e WRIX_TERM_COLS=$TERM_COLS"
 
           # Serialize container command for krun-init.sh (preserves quoting)
           # Kept separate from KRUN_ENV_ARGS to avoid word-splitting the value
           if [ ''${#CONTAINER_CMD[@]} -gt 0 ]; then
-            KRUN_CMD_ENV="WRAPIX_KRUN_CMD=$(printf '%q ' "''${CONTAINER_CMD[@]}")"
+            KRUN_CMD_ENV="WRIX_KRUN_CMD=$(printf '%q ' "''${CONTAINER_CMD[@]}")"
           fi
 
-          # krun-relay execs /krun-init.sh which handles args via WRAPIX_KRUN_CMD
+          # krun-relay execs /krun-init.sh which handles args via WRIX_KRUN_CMD
           CONTAINER_CMD=()
         fi
 
@@ -550,30 +550,30 @@ in
           # Mark stream-json mode so the entrypoint dispatches into the
           # claude --print --input-format stream-json branch instead of the
           # interactive TTY fallback. Symmetric to the pi RPC branch which
-          # is gated on WRAPIX_AGENT=pi.
-          [ "$USE_STDIO" = "1" ] && ENV_ARGS+=(-e "WRAPIX_STDIO=1")
+          # is gated on WRIX_AGENT=pi.
+          [ "$USE_STDIO" = "1" ] && ENV_ARGS+=(-e "WRIX_STDIO=1")
         else
           TTY_ARGS=(-i -t)
           ENV_ARGS+=(
             -e "CLAUDE_CODE_OAUTH_TOKEN=''${CLAUDE_CODE_OAUTH_TOKEN:-}"
-            -e "WRAPIX_SESSION_ID=$WRAPIX_SESSION_ID"
-            -e "WRAPIX_VERBOSE=''${WRAPIX_VERBOSE:-}"
+            -e "WRIX_SESSION_ID=$WRIX_SESSION_ID"
+            -e "WRIX_VERBOSE=''${WRIX_VERBOSE:-}"
           )
-          [ -n "''${WRAPIX_GIT_SIGN:-}" ] && ENV_ARGS+=(-e "WRAPIX_GIT_SIGN=$WRAPIX_GIT_SIGN")
+          [ -n "''${WRIX_GIT_SIGN:-}" ] && ENV_ARGS+=(-e "WRIX_GIT_SIGN=$WRIX_GIT_SIGN")
         fi
         # Always-on container env: built from launcher state, not host passthrough.
         ENV_ARGS+=(
           -e "BD_NO_DAEMON=1"
-          -e "HOME=/home/wrapix"
+          -e "HOME=/home/wrix"
           -e "GIT_AUTHOR_NAME=$GIT_AUTHOR_NAME"
           -e "GIT_AUTHOR_EMAIL=$GIT_AUTHOR_EMAIL"
           -e "GIT_COMMITTER_NAME=$GIT_COMMITTER_NAME"
           -e "GIT_COMMITTER_EMAIL=$GIT_COMMITTER_EMAIL"
-          -e "WRAPIX_AGENT=$WRAPIX_AGENT"
-          -e "WRAPIX_NETWORK=$WRAPIX_NETWORK"
-          -e "WRAPIX_NETWORK_ALLOWLIST=${networkAllowlist}"
+          -e "WRIX_AGENT=$WRIX_AGENT"
+          -e "WRIX_NETWORK=$WRIX_NETWORK"
+          -e "WRIX_NETWORK_ALLOWLIST=${networkAllowlist}"
         )
-        [ -n "$PI_AUTH_JSON_MOUNT" ] && ENV_ARGS+=(-e "WRAPIX_PI_AUTH_JSON=$PI_AUTH_JSON_MOUNT")
+        [ -n "$PI_AUTH_JSON_MOUNT" ] && ENV_ARGS+=(-e "WRIX_PI_AUTH_JSON=$PI_AUTH_JSON_MOUNT")
         [ -n "$KRUN_CMD_ENV" ] && ENV_ARGS+=(-e "$KRUN_CMD_ENV")
         # default boundary: the process is the store-owning rootless container-0
         # (see USERNS_ARGS above). Tell claude it is sandboxed so it permits
@@ -594,8 +594,8 @@ in
           --pids-limit=4096 \
           --network=pasta \
           $USERNS_ARGS \
-          --passwd-entry "wrapix:*:$(id -u):$(id -g)::/home/wrapix:/bin/bash" \
-          --mount type=tmpfs,destination=/home/wrapix,U=true \
+          --passwd-entry "wrix:*:$(id -u):$(id -g)::/home/wrix:/bin/bash" \
+          --mount type=tmpfs,destination=/home/wrix,U=true \
           ${
             concatStringsSep " " (
               map (d: "--mount type=tmpfs,destination=${d},U=true") (profile.writableDirs or [ ])

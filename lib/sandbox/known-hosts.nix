@@ -8,7 +8,7 @@
 #
 # This is a conscious security tradeoff vs. TOFU (Trust On First Use):
 # - Hardcoding prevents MITM attacks on first connection
-# - If GitHub rotates keys, users must update wrapix
+# - If GitHub rotates keys, users must update wrix
 # - GitHub rarely rotates SSH host keys
 #
 # To verify these keys, compare against the fingerprints at the URL above or run:

@@ -38,8 +38,8 @@ cd "$REPO_ROOT"
 
 IMAGE_STREAM=$(nix build --no-link --print-out-paths --no-warn-dirty .#test-image-base)
 
-WORKSPACE=$(mktemp -d -t wrapix-fs-isolation.XXXXXX)
-HOST_SENTINEL=$(mktemp -t wrapix-fs-isolation-host-secret.XXXXXX)
+WORKSPACE=$(mktemp -d -t wrix-fs-isolation.XXXXXX)
+HOST_SENTINEL=$(mktemp -t wrix-fs-isolation-host-secret.XXXXXX)
 echo 'host-secret' > "$HOST_SENTINEL"
 echo 'workspace-content' > "$WORKSPACE/testfile.txt"
 
@@ -51,8 +51,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-IMAGE_REF=$(wrapix_unique_image_ref "wrapix-test-filesystem-isolation")
-wrapix_load_test_image "$IMAGE_STREAM" "wrapix-base-claude" "$IMAGE_REF"
+IMAGE_REF=$(wrix_unique_image_ref "wrix-test-filesystem-isolation")
+wrix_load_test_image "$IMAGE_STREAM" "wrix-base-claude" "$IMAGE_REF"
 
 # 1. Workspace bind mount is readable.
 result=$(podman run --rm --network=pasta --userns=keep-id \
@@ -83,13 +83,13 @@ container_passwd=$(podman run --rm --network=pasta --userns=keep-id \
   -v "$WORKSPACE:/workspace:rw" \
   "$IMAGE_REF" \
   -c "cat /etc/passwd")
-if [[ "$container_passwd" != *wrapix* ]]; then
-  echo "FAIL: container /etc/passwd missing image fakeNss wrapix entry" >&2
+if [[ "$container_passwd" != *wrix* ]]; then
+  echo "FAIL: container /etc/passwd missing image fakeNss wrix entry" >&2
   echo "$container_passwd" >&2
   exit 1
 fi
 host_user=$(id -un)
-if [[ "$container_passwd" == *"$host_user"* ]] && [[ "$host_user" != "wrapix" ]]; then
+if [[ "$container_passwd" == *"$host_user"* ]] && [[ "$host_user" != "wrix" ]]; then
   echo "FAIL: container /etc/passwd leaked host user $host_user" >&2
   exit 1
 fi

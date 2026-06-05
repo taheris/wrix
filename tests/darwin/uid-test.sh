@@ -12,7 +12,7 @@ set -euo pipefail
 # inside a Linux container on a Darwin host, so uname returns "Linux" here.
 
 # Precondition: VirtioFS must be in use. VirtioFS maps all files to UID 0 inside
-# the container. When running outside an Apple Container VM (e.g., via wrapix-mcp
+# the container. When running outside an Apple Container VM (e.g., via wrix-mcp
 # on Linux), VirtioFS is not present and this test is not applicable.
 WORKSPACE_OWNER_CHECK=$(stat -c %u /workspace 2>/dev/null || echo "unknown")
 if [ "$WORKSPACE_OWNER_CHECK" != "0" ]; then
@@ -116,10 +116,10 @@ echo ""
 echo "Test 7: Username resolution"
 USERNAME=$(unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- id -un 2>/dev/null || echo "unknown")
 echo "  Username: $USERNAME"
-if [ "$USERNAME" = "wrapix" ]; then
-  echo "  PASS: Username resolves to wrapix"
+if [ "$USERNAME" = "wrix" ]; then
+  echo "  PASS: Username resolves to wrix"
 else
-  echo "  WARN: Username is '$USERNAME' (expected 'wrapix')"
+  echo "  WARN: Username is '$USERNAME' (expected 'wrix')"
   # Not a hard failure — depends on /etc/passwd setup
 fi
 echo ""

@@ -1,6 +1,6 @@
 # playwright-mcp
 
-MCP server providing browser automation for AI-assisted frontend development and testing within wrapix sandboxes.
+MCP server providing browser automation for AI-assisted frontend development and testing within wrix sandboxes.
 
 ## Problem Statement
 
@@ -8,7 +8,7 @@ AI agents building web frontends cannot see what they've built. They edit HTML/C
 
 ## Architecture
 
-Wraps Microsoft's `@playwright/mcp` server (59 built-in tools) to provide browser automation inside wrapix sandboxes. The agent can navigate pages, take screenshots (returned as base64 PNG for direct visual interpretation), fill forms, click elements, and inspect accessibility trees — enabling a tight edit-code-check-browser iteration loop.
+Wraps Microsoft's `@playwright/mcp` server (59 built-in tools) to provide browser automation inside wrix sandboxes. The agent can navigate pages, take screenshots (returned as base64 PNG for direct visual interpretation), fill forms, click elements, and inspect accessibility trees — enabling a tight edit-code-check-browser iteration loop.
 
 The server is registered in the main Claude session via `mkSandbox`'s `mcp` parameter (see `sandbox.md`); MCP servers compose orthogonally with workspace profiles. Container construction, isolation, and trust boundary belong to `sandbox.md`; this spec owns the Playwright server's wiring on top.
 
@@ -17,7 +17,7 @@ Load-bearing decisions:
 - Wraps `@playwright/mcp` rather than reimplementing browser automation
 - Uses `pkgs.playwright-mcp` from nixpkgs for offline operation — no `npx` at runtime
 - Uses `pkgs.playwright-driver.browsers` for Chromium (Playwright-specific build at the exact expected revision; avoids upstream version skew)
-- Chromium's internal sandbox is disabled (`--no-sandbox`) because the wrapix container is the trust boundary (see *Chromium Sandbox Disabled* below)
+- Chromium's internal sandbox is disabled (`--no-sandbox`) because the wrix container is the trust boundary (see *Chromium Sandbox Disabled* below)
 
 ## MCP Tools
 
@@ -67,10 +67,10 @@ When the user supplies additional `launchOptions.args` via `config`, those args 
 
 ## Chromium Sandbox Disabled
 
-The outer wrapix container is the trust boundary — see `sandbox.md` and `specs/security.md` for the full posture. Chromium's own multi-layer sandbox (user namespaces, seccomp-bpf, setuid helper) is both redundant and non-functional inside the container:
+The outer wrix container is the trust boundary — see `sandbox.md` and `specs/security.md` for the full posture. Chromium's own multi-layer sandbox (user namespaces, seccomp-bpf, setuid helper) is both redundant and non-functional inside the container:
 
 - **Linux (rootless Podman)**: the kernel restricts nested user namespace creation. Chromium's sandbox cannot initialize without `CAP_SYS_ADMIN` or relaxed seccomp policy — granting either would weaken the container's own isolation.
-- **macOS / Linux with `WRAPIX_MICROVM=1`**: each container runs in its own microVM. The VM boundary is strictly stronger than Chromium's process-level sandbox.
+- **macOS / Linux with `WRIX_MICROVM=1`**: each container runs in its own microVM. The VM boundary is strictly stronger than Chromium's process-level sandbox.
 
 Passing `--no-sandbox` removes a redundant inner layer that cannot work, not protection that was previously in place.
 

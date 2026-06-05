@@ -56,7 +56,7 @@ IMAGE_STREAM=$(nix build --no-link --print-out-paths --no-warn-dirty .#test-imag
 # Isolated podman store. Both podman and skopeo's containers-storage
 # transport honor CONTAINERS_STORAGE_CONF, so every byte the install
 # path writes lands here, never in the user's real store.
-STORE_ROOT=$(mktemp -d -t wrapix-norewrite.XXXXXX)
+STORE_ROOT=$(mktemp -d -t wrix-norewrite.XXXXXX)
 cleanup() {
   rm -rf "$STORE_ROOT"
 }
@@ -86,7 +86,7 @@ if [[ -z "$DESIRED_DIGEST" ]]; then
   exit 1
 fi
 
-IMAGE_REF="localhost/wrapix-norewrite:test"
+IMAGE_REF="localhost/wrix-norewrite:test"
 
 # Inline mirror of lib/util/shell.nix imageLoadStep — digest preflight,
 # then docker-archive -> oci-archive -> containers-storage. Kept narrow

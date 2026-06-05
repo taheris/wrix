@@ -2,7 +2,7 @@
 # Verify the corePackages tier-1 membership key on the profile attrset
 # produced by lib/sandbox/profiles.nix.
 #
-# corePackages is the wrapix-controlled, fixed-per-instance package set.
+# corePackages is the wrix-controlled, fixed-per-instance package set.
 # Downstream extension grows `packages` only, never `corePackages`, so the
 # leaf delta an image rebuilds on is `packages` − `corePackages`.
 #
@@ -49,7 +49,7 @@ resolve_system() {
 }
 
 # Evaluate $1 (a Nix expression) as JSON against the live flake. The expression
-# may reference: `wlib` (wrapix lib with profiles/deriveProfile/rustProfile),
+# may reference: `wlib` (wrix lib with profiles/deriveProfile/rustProfile),
 # `np` (nixpkgs package set), and `lib` (nixpkgs lib). Helper bindings `leaf`
 # and `coreLen`/`pkgsLen`/`leafLen` are also in scope.
 eval_profile_json() {

@@ -1,6 +1,6 @@
 # Architecture
 
-Wrapix is a secure sandbox for running AI coding agents in isolated containers.
+Wrix is a secure sandbox for running AI coding agents in isolated containers.
 It provides container isolation on Linux (Podman) and macOS (Apple container
 CLI), with built-in support for Pi and [Claude Code](https://claude.ai/code)
 (from nixpkgs) and a direct agent slot for
@@ -59,14 +59,14 @@ docs/
 
 | Component | Purpose | Entry Point |
 |-----------|---------|-------------|
-| Sandbox | Container creation and lifecycle | `mkSandbox`, `wrapix run`/`spawn` |
+| Sandbox | Container creation and lifecycle | `mkSandbox`, `wrix run`/`spawn` |
 | Profiles | Pre-configured dev environments | `profiles.{base,rust,python}` |
 | Agent Runtime | Single agent binary baked into the image and exec'd by the entrypoint | `mkSandbox { agent = … }` / `sandbox-<profile>[-<agent>]` |
 | MCP Servers | Optional capabilities exposed to the agent | `mcp.tmux`, `mcp.playwright`, `mcpRuntime = true` |
 | Image Builder | OCI image generation via Nix | `lib/sandbox/image.nix` |
 | Profile Manifest | JSON map of profile → `{ref, source}` for orchestrators | `packages.profile-images` (`mkProfileImages`) |
-| Notifications | Desktop alerts when the agent waits | `wrapix-notify`, `wrapix-notifyd` |
-| Linux Builder | Remote Nix builds on macOS | `wrapix-builder` |
+| Notifications | Desktop alerts when the agent waits | `wrix-notify`, `wrix-notifyd` |
+| Linux Builder | Remote Nix builds on macOS | `wrix-builder` |
 
 ## Sandbox Launcher
 
@@ -74,19 +74,19 @@ The launcher and the OCI image are separate Nix outputs, composed at the consume
 
 | Output | Role |
 |--------|------|
-| `packages.wrapix` | Profile-agnostic launcher binary; reads image ref/source at runtime |
+| `packages.wrix` | Profile-agnostic launcher binary; reads image ref/source at runtime |
 | `packages.image-<profile>` | Per-profile OCI artifact built with `agent = "direct"` (the default base image) |
 | `packages.image-<profile>-claude` | Per-profile OCI artifact built with `agent = "claude"` |
 | `packages.image-<profile>-pi` | Per-profile OCI artifact built with `agent = "pi"` |
-| `packages.sandbox-<profile>` | `makeWrapper` of the launcher with image ref/source + `WRAPIX_AGENT=direct` baked in — the user-facing `nix run .#sandbox-rust` target |
-| `packages.sandbox-<profile>-claude` | Claude overlay with `WRAPIX_AGENT=claude` baked in |
-| `packages.sandbox-<profile>-pi` | Pi overlay with `WRAPIX_AGENT=pi` baked in. Pi images seed non-secret Codex subscription defaults; the launcher mounts Pi `auth.json` only for Pi runs. `packages.default` points at `packages.sandbox-pi` |
+| `packages.sandbox-<profile>` | `makeWrapper` of the launcher with image ref/source + `WRIX_AGENT=direct` baked in — the user-facing `nix run .#sandbox-rust` target |
+| `packages.sandbox-<profile>-claude` | Claude overlay with `WRIX_AGENT=claude` baked in |
+| `packages.sandbox-<profile>-pi` | Pi overlay with `WRIX_AGENT=pi` baked in. Pi images seed non-secret Codex subscription defaults; the launcher mounts Pi `auth.json` only for Pi runs. `packages.default` points at `packages.sandbox-pi` |
 | `packages.profile-images` | JSON manifest mapping profile → `{ref, source}`, for orchestrators that look up images by profile name |
 
 The launcher exposes two subcommands sharing the same container construction (mounts, env passthrough, deploy key):
 
-- `wrapix run [DIR] [CMD…]` — interactive (TTY). Reads `WRAPIX_DEFAULT_IMAGE_REF`/`WRAPIX_DEFAULT_IMAGE_SOURCE` from the env. The `sandbox-<profile>` wrappers set both; orchestrators export them from the profile-image manifest.
-- `wrapix spawn --spawn-config <file> [--stdio]` — programmatic dispatch. Reads image ref/source plus workspace, env allowlist, and agent args from a JSON `SpawnConfig`. `--stdio` adds `WRAPIX_STDIO=1` so the selected agent uses its stdio protocol (`claude --input-format stream-json`, `pi --mode rpc`).
+- `wrix run [DIR] [CMD…]` — interactive (TTY). Reads `WRIX_DEFAULT_IMAGE_REF`/`WRIX_DEFAULT_IMAGE_SOURCE` from the env. The `sandbox-<profile>` wrappers set both; orchestrators export them from the profile-image manifest.
+- `wrix spawn --spawn-config <file> [--stdio]` — programmatic dispatch. Reads image ref/source plus workspace, env allowlist, and agent args from a JSON `SpawnConfig`. `--stdio` adds `WRIX_STDIO=1` so the selected agent uses its stdio protocol (`claude --input-format stream-json`, `pi --mode rpc`).
 
 See [specs/sandbox.md](../specs/sandbox.md) and [specs/profiles.md](../specs/profiles.md) for the full launcher and manifest contracts.
 
@@ -96,16 +96,16 @@ The `agent` parameter selects, **at build time**, the single agent binary the
 image bakes and the entrypoint execs after staging `/workspace`, settings, and
 SSH credentials — selection is by build target, not by env var. A human picks
 an agent by choosing the `mkSandbox { agent = …; }` build / its
-`sandbox-<profile>[-<agent>]` target. `WRAPIX_AGENT` is the internal
+`sandbox-<profile>[-<agent>]` target. `WRIX_AGENT` is the internal
 build→entrypoint wire, not a caller knob: the `package` wrapper pins it with
 `makeWrapper --set` (non-overridable). Orchestrators driving the raw `launcher`
-(which bakes no agent) set `WRAPIX_AGENT` per call, paired with a matching
+(which bakes no agent) set `WRIX_AGENT` per call, paired with a matching
 per-call image.
 
 | Value | Behaviour |
 |-------|-----------|
 | `direct` *(default)* | Execs `loom-direct-runner`. Built-in direct images carry a placeholder runner; consumers can supply their own direct runner. |
-| `claude` | Interactive `claude` TTY, or `claude --print --input-format stream-json` when `WRAPIX_STDIO=1` |
+| `claude` | Interactive `claude` TTY, or `claude --print --input-format stream-json` when `WRIX_STDIO=1` |
 | `pi` | Interactive `pi` TTY, or `pi --mode rpc` for JSONL RPC on stdio. Defaults to `linuxPkgs.pi-coding-agent`. |
 
 Exactly one agent rides each image — a non-claude image carries no
@@ -114,7 +114,7 @@ default direct runtime is installed in `packages.image-<profile>`;
 `claude` and `pi` are exposed as agent overlay images. Before exec,
 the entrypoint verifies the selected agent's
 binary is present (`command -v`) and fails loudly when it is absent from the
-image — e.g. `WRAPIX_AGENT=pi` against a claude image on the raw-launcher
+image — e.g. `WRIX_AGENT=pi` against a claude image on the raw-launcher
 path — rather than emitting a bare `command not found`.
 
 ### Direct mode (orchestrator integration)
@@ -122,7 +122,7 @@ path — rather than emitting a bare `command not found`.
 `mkSandbox { agent = "direct"; agentPkg = ...; }` is the integration
 seam for external orchestrators. The orchestrator provides its own Linux
 binary (e.g. Loom's `loom-direct-runner`) and drives the container over
-JSONL stdio. Wrapix doesn't ship its own runner — see
+JSONL stdio. Wrix doesn't ship its own runner — see
 [Loom's flake](https://github.com/taheris/loom) for the canonical wiring.
 
 ## Security Model
@@ -133,7 +133,7 @@ JSONL stdio. Wrapix doesn't ship its own runner — see
 
 ### MicroVM Boundary (Linux)
 
-On Linux with KVM, containers can optionally run inside a [libkrun](https://github.com/containers/libkrun) microVM (`podman --runtime krun`) for hardware-level isolation. Set `WRAPIX_MICROVM=1` to opt in.
+On Linux with KVM, containers can optionally run inside a [libkrun](https://github.com/containers/libkrun) microVM (`podman --runtime krun`) for hardware-level isolation. Set `WRIX_MICROVM=1` to opt in.
 
 See [`specs/security.md`](../specs/security.md) for the full threat model.
 
@@ -150,21 +150,21 @@ mkSandbox {
 ```
 
 `mcpRuntime = true` bundles every registered server into the image and lets
-`WRAPIX_MCP=<csv>` pick at container start.
+`WRIX_MCP=<csv>` pick at container start.
 
 See [tmux-mcp.md](../specs/tmux-mcp.md) and [playwright-mcp.md](../specs/playwright-mcp.md) for details.
 
 ## State Layout
 
-All wrapix state lives under `.wrapix/` in the host workspace, mounted at
-`/workspace/.wrapix/` inside the container:
+All wrix state lives under `.wrix/` in the host workspace, mounted at
+`/workspace/.wrix/` inside the container:
 
 ```
-.wrapix/
+.wrix/
 ├── log/             # Session transcripts (one JSON file per session)
 ├── push-verified    # Touched by lib/prek/hooks/pre-push on green nix flake check
 └── dolt.sock        # Per-workspace beads-dolt server socket
 ```
 
 External orchestrators (e.g. Loom) may keep their own state under
-`.wrapix/<name>/` — wrapix itself doesn't manage that.
+`.wrix/<name>/` — wrix itself doesn't manage that.

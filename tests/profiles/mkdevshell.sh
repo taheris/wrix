@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verify wrapix.mkDevShell composition rules (specs/profiles.md § mkDevShell).
+# Verify wrix.mkDevShell composition rules (specs/profiles.md § mkDevShell).
 #
 #   test_profile_required
 #     mkDevShell {} (no profile) errors at evaluation — no two-arg fallback.
@@ -181,7 +181,7 @@ test_env_right_merge() {
 # shellHook order: lifecycle → profile.shellHook → consumer shellHook
 # ============================================================================
 test_shellhook_order() {
-  local marker="WRAPIX_MKDEVSHELL_CONSUMER_MARKER_XYZ"
+  local marker="WRIX_MKDEVSHELL_CONSUMER_MARKER_XYZ"
   local hook
   if ! hook=$(eval_expr_raw "
     (lib.mkDevShell {

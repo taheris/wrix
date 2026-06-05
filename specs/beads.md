@@ -13,7 +13,7 @@ correctness gate loom's ability to make progress.
 
 ## Architecture
 
-Beads is an external CLI (`bd`) backed by a Dolt SQL database. Wrapix
+Beads is an external CLI (`bd`) backed by a Dolt SQL database. Wrix
 provides:
 
 - A **per-workspace Dolt container** (`<basename>-beads`) serving
@@ -50,7 +50,7 @@ invariant; the implementation chooses the mechanism per platform.
 
 ## CLI Surface
 
-`bd …` commands are upstream beads; `beads-push` is the wrapix-provided
+`bd …` commands are upstream beads; `beads-push` is the wrix-provided
 session-close wrapper.
 
 | Command | Purpose |
@@ -177,7 +177,7 @@ the context guard (a `$LOOM_INSIDE` no-op runs nothing at all). The hook is
 redundant with the explicit `bd dolt` calls the script already makes,
 and its `git add .beads/issues.jsonl` produces noisy warnings in any
 repo that gitignores the JSONL (the common case post-Dolt, including
-wrapix itself). The write is idempotent and persists in
+wrix itself). The write is idempotent and persists in
 `.beads/config.yaml`, so subsequent bd calls in that repo skip
 auto-export until a consumer explicitly re-enables it.
 
@@ -244,7 +244,7 @@ upstream, not by this spec.
 
 ## Success Criteria
 
-- `bd dolt pull` and `bd dolt push` succeed inside the wrapix sandbox using
+- `bd dolt pull` and `bd dolt push` succeed inside the wrix sandbox using
   the host-mounted `.beads/` directory, with no fallback to a per-container
   embedded Dolt
   [judge](../tests/judges/beads.sh#test_sync_in_container)

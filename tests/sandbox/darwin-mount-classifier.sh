@@ -13,7 +13,7 @@
 # `lib/sandbox/darwin/default.nix`. We build the launcher via
 # `nix build` (Darwin-only — the Darwin launcher imports
 # `darwinSandbox` which is platform-gated) and exercise it under
-# `WRAPIX_DRY_RUN=1`, which runs parsing + classification but skips
+# `WRIX_DRY_RUN=1`, which runs parsing + classification but skips
 # the macOS container CLI, image load, and the `container run`
 # invocation. The dry-run dump exposes the classifier's resolved
 # MOUNT_ARGS / DIR_MOUNTS / FILE_MOUNTS for assertion.
@@ -35,7 +35,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 
-TEST_TMP=$(mktemp -d -t wrapix-mount-cls.XXXXXX)
+TEST_TMP=$(mktemp -d -t wrix-mount-cls.XXXXXX)
 cleanup() {
   rm -rf "$TEST_TMP"
 }
@@ -61,9 +61,9 @@ nix build \
     in (lib.mkSandbox { profile = lib.profiles.base; }).launcher
   "
 
-WRAPIX="$LAUNCHER_LINK/bin/wrapix"
-if [[ ! -x "$WRAPIX" ]]; then
-  echo "fixture error: launcher binary not built at $WRAPIX" >&2
+WRIX="$LAUNCHER_LINK/bin/wrix"
+if [[ ! -x "$WRIX" ]]; then
+  echo "fixture error: launcher binary not built at $WRIX" >&2
   exit 1
 fi
 
@@ -78,7 +78,7 @@ write_spawn_config() {
   cat > "$out_file" <<EOF
 {
   "workspace": "$WORKSPACE",
-  "image_ref": "wrapix-base:test",
+  "image_ref": "wrix-base:test",
   "image_source": "",
   "env": [],
   "agent_args": [],
@@ -94,17 +94,17 @@ run_launcher() {
   local out="$2"
   local err="$3"
   local rc=0
-  WRAPIX_DRY_RUN=1 "$WRAPIX" spawn --spawn-config "$config" >"$out" 2>"$err" || rc=$?
+  WRIX_DRY_RUN=1 "$WRIX" spawn --spawn-config "$config" >"$out" 2>"$err" || rc=$?
   echo "$rc"
 }
 
 # ============================================================================
 # Temp directory: classifier emits a dir-staging mount (cp -rL is skipped
-# under WRAPIX_DRY_RUN=1, but the mount intent is recorded).
+# under WRIX_DRY_RUN=1, but the mount intent is recorded).
 # ============================================================================
 test_temp_dir_classified_as_dir_staging() {
   local host_dir
-  host_dir=$(mktemp -d -t wrapix-cls-dir.XXXXXX)
+  host_dir=$(mktemp -d -t wrix-cls-dir.XXXXXX)
 
   local config="$TEST_TMP/dir.json"
   write_spawn_config "$config" \
@@ -119,13 +119,13 @@ test_temp_dir_classified_as_dir_staging() {
     return 1
   fi
 
-  if ! grep -qE '^MOUNT_ARGS=.* -v [^ ]+/dir0:/mnt/wrapix/dir0( |$)' "$out"; then
-    fail "temp dir: MOUNT_ARGS missing host-staging:/mnt/wrapix/dir0; got: $(grep MOUNT_ARGS "$out")"
+  if ! grep -qE '^MOUNT_ARGS=.* -v [^ ]+/dir0:/mnt/wrix/dir0( |$)' "$out"; then
+    fail "temp dir: MOUNT_ARGS missing host-staging:/mnt/wrix/dir0; got: $(grep MOUNT_ARGS "$out")"
     rm -rf "$host_dir"
     return 1
   fi
-  if ! grep -qE '^DIR_MOUNTS=/mnt/wrapix/dir0:/mnt/test-dir(,|$)' "$out"; then
-    fail "temp dir: DIR_MOUNTS missing /mnt/wrapix/dir0:/mnt/test-dir; got: $(grep DIR_MOUNTS "$out")"
+  if ! grep -qE '^DIR_MOUNTS=/mnt/wrix/dir0:/mnt/test-dir(,|$)' "$out"; then
+    fail "temp dir: DIR_MOUNTS missing /mnt/wrix/dir0:/mnt/test-dir; got: $(grep DIR_MOUNTS "$out")"
     rm -rf "$host_dir"
     return 1
   fi
@@ -139,7 +139,7 @@ test_temp_dir_classified_as_dir_staging() {
 # ============================================================================
 test_temp_file_classified_as_parent_dir_staging() {
   local host_file
-  host_file=$(mktemp -t wrapix-cls-file.XXXXXX)
+  host_file=$(mktemp -t wrix-cls-file.XXXXXX)
   local parent
   parent=$(dirname "$host_file")
   local base
@@ -158,12 +158,12 @@ test_temp_file_classified_as_parent_dir_staging() {
     return 1
   fi
 
-  if ! grep -qE "^MOUNT_ARGS=.* -v ${parent}:/mnt/wrapix/file0( |$)" "$out"; then
+  if ! grep -qE "^MOUNT_ARGS=.* -v ${parent}:/mnt/wrix/file0( |$)" "$out"; then
     fail "temp file: MOUNT_ARGS missing parent-dir bind for $parent; got: $(grep MOUNT_ARGS "$out")"
     rm -f "$host_file"
     return 1
   fi
-  if ! grep -qE "^FILE_MOUNTS=/mnt/wrapix/file0/${base}:/etc/test-file(,|$)" "$out"; then
+  if ! grep -qE "^FILE_MOUNTS=/mnt/wrix/file0/${base}:/etc/test-file(,|$)" "$out"; then
     fail "temp file: FILE_MOUNTS missing parent-dir-staging entry; got: $(grep FILE_MOUNTS "$out")"
     rm -f "$host_file"
     return 1
@@ -178,7 +178,7 @@ test_temp_file_classified_as_parent_dir_staging() {
 # ============================================================================
 test_temp_socket_rejected_before_container_run() {
   local sock_dir
-  sock_dir=$(mktemp -d -t wrapix-cls-sock.XXXXXX)
+  sock_dir=$(mktemp -d -t wrix-cls-sock.XXXXXX)
   local sock_path="$sock_dir/test.sock"
 
   # Create a bound unix socket on disk and exit; the filesystem entry

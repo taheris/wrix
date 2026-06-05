@@ -5,10 +5,10 @@ set -euo pipefail
 SESSION_START_EPOCH=$(date +%s)
 SESSION_START_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-# The launcher always passes HOME=/home/wrapix; default it so a bare
+# The launcher always passes HOME=/home/wrix; default it so a bare
 # `podman run` of this entrypoint (tests, ad-hoc) still has a writable home —
 # git config below and the agent config seeding both need $HOME.
-export HOME="${HOME:-/home/wrapix}"
+export HOME="${HOME:-/home/wrix}"
 
 cd /workspace
 
@@ -28,14 +28,14 @@ git config --global --replace-all safe.directory '*'
 # specs/pre-commit.md § Bead-Container Hook Installation.
 if [[ -d /workspace/.git ]] \
   && [[ -f /workspace/.pre-commit-config.yaml ]] \
-  && [[ -n "${WRAPIX_PREK_HOOKS:-}" ]]; then
-  if _wrapix_hooks_current=$(git -C /workspace config --local --get core.hooksPath); then
-    if [[ "$_wrapix_hooks_current" != "$WRAPIX_PREK_HOOKS" ]]; then
-      echo "wrapix: overriding stale core.hooksPath ($_wrapix_hooks_current) -> $WRAPIX_PREK_HOOKS" >&2
+  && [[ -n "${WRIX_PREK_HOOKS:-}" ]]; then
+  if _wrix_hooks_current=$(git -C /workspace config --local --get core.hooksPath); then
+    if [[ "$_wrix_hooks_current" != "$WRIX_PREK_HOOKS" ]]; then
+      echo "wrix: overriding stale core.hooksPath ($_wrix_hooks_current) -> $WRIX_PREK_HOOKS" >&2
     fi
   fi
-  git -C /workspace config --local core.hooksPath "$WRAPIX_PREK_HOOKS"
-  unset _wrapix_hooks_current
+  git -C /workspace config --local core.hooksPath "$WRIX_PREK_HOOKS"
+  unset _wrix_hooks_current
 fi
 
 # Prepend /workspace/bin AFTER the entrypoint's own git bootstrap (git-ssh-setup,
@@ -44,50 +44,50 @@ fi
 # still resolves for the agent.
 if [[ -d /workspace/bin ]]; then export PATH="/workspace/bin:$PATH"; fi
 
-# WRAPIX_AGENT selects the agent runtime. 'direct' is the default base image;
+# WRIX_AGENT selects the agent runtime. 'direct' is the default base image;
 # 'claude' and 'pi' are explicit agent overlays. Each agent seeds its own config
 # home below (claude ~/.claude, pi ~/.pi/agent); direct has none.
-WRAPIX_AGENT="${WRAPIX_AGENT:-direct}"
-case "$WRAPIX_AGENT" in
-  claude) WRAPIX_AGENT_BIN=claude ;;
-  pi) WRAPIX_AGENT_BIN=pi ;;
-  direct) WRAPIX_AGENT_BIN=loom-direct-runner ;;
+WRIX_AGENT="${WRIX_AGENT:-direct}"
+case "$WRIX_AGENT" in
+  claude) WRIX_AGENT_BIN=claude ;;
+  pi) WRIX_AGENT_BIN=pi ;;
+  direct) WRIX_AGENT_BIN=loom-direct-runner ;;
   *)
-    echo "Error: unknown WRAPIX_AGENT: $WRAPIX_AGENT (expected 'claude', 'pi', or 'direct')" >&2
+    echo "Error: unknown WRIX_AGENT: $WRIX_AGENT (expected 'claude', 'pi', or 'direct')" >&2
     exit 1
     ;;
 esac
 
 # A command override ($# > 0) execs "$@" instead of the agent, so the
 # binary-presence guard applies only to agent-exec runs.
-if [[ $# -eq 0 ]] && ! command -v "$WRAPIX_AGENT_BIN" >/dev/null 2>&1; then
-  echo "Error: WRAPIX_AGENT=$WRAPIX_AGENT selects '$WRAPIX_AGENT_BIN', but that binary is not present in this image" >&2
+if [[ $# -eq 0 ]] && ! command -v "$WRIX_AGENT_BIN" >/dev/null 2>&1; then
+  echo "Error: WRIX_AGENT=$WRIX_AGENT selects '$WRIX_AGENT_BIN', but that binary is not present in this image" >&2
   exit 1
 fi
 
-if [[ "$WRAPIX_AGENT" = "claude" ]]; then
+if [[ "$WRIX_AGENT" = "claude" ]]; then
   # Initialize Claude config and settings
   # ~/.claude is a container-local directory (tmpfs, not mounted from host) so that
   # user-level settings.json stays separate from project-level settings.json.
   # Persistent session data (history, projects, etc.) is symlinked from
   # /workspace/.claude which IS on the host via the /workspace bind mount.
   mkdir -p "$HOME/.claude"
-  cp /etc/wrapix/claude-config.json "$HOME/.claude.json"
-  cp /etc/wrapix/claude-settings.json "$HOME/.claude/settings.json"
+  cp /etc/wrix/claude-config.json "$HOME/.claude.json"
+  cp /etc/wrix/claude-settings.json "$HOME/.claude/settings.json"
   chmod 644 "$HOME/.claude.json" "$HOME/.claude/settings.json"
 
   # Runtime MCP server selection
-  # Images built with mcpRuntime=true include per-server configs in /etc/wrapix/mcp/.
-  # WRAPIX_MCP selects which servers to enable (comma-separated, default: all).
-  if [[ -d /etc/wrapix/mcp ]]; then
-    mcp_enabled="${WRAPIX_MCP:-all}"
+  # Images built with mcpRuntime=true include per-server configs in /etc/wrix/mcp/.
+  # WRIX_MCP selects which servers to enable (comma-separated, default: all).
+  if [[ -d /etc/wrix/mcp ]]; then
+    mcp_enabled="${WRIX_MCP:-all}"
     mcp_servers="{}"
 
-    for config_file in /etc/wrapix/mcp/*.json; do
+    for config_file in /etc/wrix/mcp/*.json; do
       [[ -f "$config_file" ]] || continue
       server_name=$(basename "$config_file" .json)
 
-      # Filter by WRAPIX_MCP unless "all"
+      # Filter by WRIX_MCP unless "all"
       if [[ "$mcp_enabled" != "all" ]]; then
         if ! echo ",$mcp_enabled," | grep -qF ",$server_name,"; then
           continue
@@ -99,11 +99,11 @@ if [[ "$WRAPIX_AGENT" = "claude" ]]; then
       # Apply runtime env var overrides
       case "$server_name" in
         tmux)
-          if [[ -n "${WRAPIX_MCP_TMUX_AUDIT:-}" ]]; then
-            server_config=$(echo "$server_config" | jq --arg v "$WRAPIX_MCP_TMUX_AUDIT" '.env.TMUX_DEBUG_AUDIT = $v')
+          if [[ -n "${WRIX_MCP_TMUX_AUDIT:-}" ]]; then
+            server_config=$(echo "$server_config" | jq --arg v "$WRIX_MCP_TMUX_AUDIT" '.env.TMUX_DEBUG_AUDIT = $v')
           fi
-          if [[ -n "${WRAPIX_MCP_TMUX_AUDIT_FULL:-}" ]]; then
-            server_config=$(echo "$server_config" | jq --arg v "$WRAPIX_MCP_TMUX_AUDIT_FULL" '.env.TMUX_DEBUG_AUDIT_FULL = $v')
+          if [[ -n "${WRIX_MCP_TMUX_AUDIT_FULL:-}" ]]; then
+            server_config=$(echo "$server_config" | jq --arg v "$WRIX_MCP_TMUX_AUDIT_FULL" '.env.TMUX_DEBUG_AUDIT_FULL = $v')
           fi
           ;;
       esac
@@ -121,10 +121,10 @@ if [[ "$WRAPIX_AGENT" = "claude" ]]; then
   # Seed project-level settings if missing, then sync env vars from image
   mkdir -p /workspace/.claude
   if [[ ! -f /workspace/.claude/settings.json ]]; then
-    cp /etc/wrapix/claude-settings.json /workspace/.claude/settings.json
+    cp /etc/wrix/claude-settings.json /workspace/.claude/settings.json
   else
     jq -s '.[1].env = (.[1].env // {}) * .[0].env | .[1]' \
-      /etc/wrapix/claude-settings.json /workspace/.claude/settings.json \
+      /etc/wrix/claude-settings.json /workspace/.claude/settings.json \
       > /workspace/.claude/settings.json.tmp \
       && mv /workspace/.claude/settings.json.tmp /workspace/.claude/settings.json
   fi
@@ -137,25 +137,25 @@ if [[ "$WRAPIX_AGENT" = "claude" ]]; then
       ln -s "/workspace/.claude/$item" "$HOME/.claude/$item"
     fi
   done
-elif [[ "$WRAPIX_AGENT" = "pi" ]]; then
+elif [[ "$WRIX_AGENT" = "pi" ]]; then
   # Pi keeps its own config home at ~/.pi/agent: seed image-baked defaults
   # when present. Credentials arrive by mount, not seeding (specs/security.md).
   mkdir -p "$HOME/.pi/agent" /workspace/.pi/agent/sessions
-  if [[ -d /etc/wrapix/pi-agent ]]; then
-    cp -rn /etc/wrapix/pi-agent/. "$HOME/.pi/agent/"
+  if [[ -d /etc/wrix/pi-agent ]]; then
+    cp -rn /etc/wrix/pi-agent/. "$HOME/.pi/agent/"
   fi
-  if [[ -n "${WRAPIX_PI_AUTH_JSON:-}" ]]; then
-    if [[ ! -f "$WRAPIX_PI_AUTH_JSON" ]]; then
-      echo "Error: WRAPIX_PI_AUTH_JSON=$WRAPIX_PI_AUTH_JSON is not mounted" >&2
+  if [[ -n "${WRIX_PI_AUTH_JSON:-}" ]]; then
+    if [[ ! -f "$WRIX_PI_AUTH_JSON" ]]; then
+      echo "Error: WRIX_PI_AUTH_JSON=$WRIX_PI_AUTH_JSON is not mounted" >&2
       exit 1
     fi
-    ln -sf "$WRAPIX_PI_AUTH_JSON" "$HOME/.pi/agent/auth.json"
+    ln -sf "$WRIX_PI_AUTH_JSON" "$HOME/.pi/agent/auth.json"
   fi
 fi
 
-# Connect bd to the host's wrapix-beads dolt container via the mounted
-# unix socket. The host starts wrapix-beads (lib/beads/default.nix shellHook)
-# and bind-mounts /workspace/.wrapix/dolt.sock into every wrapix container.
+# Connect bd to the host's wrix-beads dolt container via the mounted
+# unix socket. The host starts wrix-beads (lib/beads/default.nix shellHook)
+# and bind-mounts /workspace/.wrix/dolt.sock into every wrix container.
 # Missing socket is fatal when the dolt backend is configured — we refuse
 # to fall back to bd's embedded autostart (which would fork a per-container
 # dolt that diverges from the host's authoritative state).
@@ -166,8 +166,8 @@ if [[ -f /workspace/.beads/config.yaml ]]; then
   if [[ "$BACKEND" = "dolt" ]]; then
     if [[ -n "${BEADS_DOLT_SERVER_HOST:-}" ]] && [[ -n "${BEADS_DOLT_SERVER_PORT:-}" ]]; then
       export BEADS_DOLT_AUTO_START=0
-    elif [[ -S /workspace/.wrapix/dolt.sock ]]; then
-      export BEADS_DOLT_SERVER_SOCKET=/workspace/.wrapix/dolt.sock
+    elif [[ -S /workspace/.wrix/dolt.sock ]]; then
+      export BEADS_DOLT_SERVER_SOCKET=/workspace/.wrix/dolt.sock
       export BEADS_DOLT_AUTO_START=0
     else
       echo "Error: dolt backend configured but no connection available (socket or TCP)" >&2
@@ -181,14 +181,14 @@ if [[ -f /workspace/.beads/config.yaml ]]; then
   git checkout -- .beads/.gitignore AGENTS.md 2>/dev/null || true
 fi
 
-# Apply network filtering when WRAPIX_NETWORK=limit
+# Apply network filtering when WRIX_NETWORK=limit
 # Resolves allowlisted domains to IPs and configures iptables OUTPUT chain
-if [[ "${WRAPIX_NETWORK:-open}" = "limit" ]]; then
+if [[ "${WRIX_NETWORK:-open}" = "limit" ]]; then
   echo "Network mode: limit (restricting outbound to allowlist)" >&2
 
   if ! command -v iptables >/dev/null 2>&1; then
     echo "Warning: iptables not available, network filtering disabled" >&2
-    echo "  WRAPIX_NETWORK=limit requires NET_ADMIN capability (microVM recommended)" >&2
+    echo "  WRIX_NETWORK=limit requires NET_ADMIN capability (microVM recommended)" >&2
   elif iptables -P OUTPUT DROP; then
     # Allow loopback traffic
     iptables -A OUTPUT -o lo -j ACCEPT
@@ -201,7 +201,7 @@ if [[ "${WRAPIX_NETWORK:-open}" = "limit" ]]; then
     iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
 
     # Resolve and allow each domain in the allowlist
-    IFS=',' read -ra DOMAINS <<< "${WRAPIX_NETWORK_ALLOWLIST:-}"
+    IFS=',' read -ra DOMAINS <<< "${WRIX_NETWORK_ALLOWLIST:-}"
     for domain in "${DOMAINS[@]}"; do
       [[ -z "$domain" ]] && continue
       # Resolve domain to IPv4 addresses
@@ -229,10 +229,10 @@ if [[ "${WRAPIX_NETWORK:-open}" = "limit" ]]; then
       done
     fi
 
-    echo "Network filtering active: ${WRAPIX_NETWORK_ALLOWLIST:-}" >&2
+    echo "Network filtering active: ${WRIX_NETWORK_ALLOWLIST:-}" >&2
   else
     echo "Warning: iptables -P OUTPUT DROP failed, network filtering disabled" >&2
-    echo "  WRAPIX_NETWORK=limit requires NET_ADMIN capability (microVM recommended)" >&2
+    echo "  WRIX_NETWORK=limit requires NET_ADMIN capability (microVM recommended)" >&2
   fi
 fi
 
@@ -253,9 +253,9 @@ write_session_log() {
 
   # Read bead ID if loom wrote one during the session
   local bead_id=""
-  if [[ -f /tmp/wrapix-bead-id ]]; then
+  if [[ -f /tmp/wrix-bead-id ]]; then
     # best-effort: loom didn't write a bead id -> field stays empty in session log
-    bead_id=$(cat /tmp/wrapix-bead-id 2>/dev/null || true)
+    bead_id=$(cat /tmp/wrix-bead-id 2>/dev/null || true)
   fi
 
   # Find most recent claude session ID from history
@@ -266,8 +266,8 @@ write_session_log() {
       | jq -r '.sessionId // empty' 2>/dev/null || true)
   fi
 
-  mkdir -p /workspace/.wrapix/log
-  local log_file="/workspace/.wrapix/log/${SESSION_START_ISO//[:.]/-}.json"
+  mkdir -p /workspace/.wrix/log
+  local log_file="/workspace/.wrix/log/${SESSION_START_ISO//[:.]/-}.json"
 
   # Build JSON with jq to ensure proper escaping
   jq -n \
@@ -277,7 +277,7 @@ write_session_log() {
     --argjson exit_code "$exit_code" \
     --arg mode "$mode" \
     --arg bead_id "$bead_id" \
-    --arg session_id "${WRAPIX_SESSION_ID:-}" \
+    --arg session_id "${WRIX_SESSION_ID:-}" \
     --arg claude_session_id "$claude_session_id" \
     --arg claude_session_dir "/workspace/.claude" \
     '{
@@ -287,11 +287,11 @@ write_session_log() {
       exit_code: $exit_code,
       mode: $mode,
       bead_id: (if $bead_id == "" then null else $bead_id end),
-      wrapix_session_id: (if $session_id == "" then null else $session_id end),
+      wrix_session_id: (if $session_id == "" then null else $session_id end),
       claude_session_id: (if $claude_session_id == "" then null else $claude_session_id end),
       claude_session_dir: $claude_session_dir
     }' > "$log_file" 2>/dev/null || true
-    # best-effort: /workspace/.wrapix/log unwritable in some profiles -> skip session log rather than fail exit trap
+    # best-effort: /workspace/.wrix/log unwritable in some profiles -> skip session log rather than fail exit trap
 }
 
 # Run main process (without exec, so EXIT trap can write session log)
@@ -299,18 +299,18 @@ MAIN_EXIT=0
 if [[ $# -gt 0 ]]; then
   # Command override: run the specified command instead of the selected agent.
   "$@" || MAIN_EXIT=$?
-elif [[ "$WRAPIX_AGENT" = "pi" ]] && [[ "${WRAPIX_STDIO:-}" = "1" ]]; then
+elif [[ "$WRIX_AGENT" = "pi" ]] && [[ "${WRIX_STDIO:-}" = "1" ]]; then
   # Pi RPC mode: pi listens on stdin/stdout for JSONL commands.
   # Loom drives the session from the host via piped stdio.
   pi --mode rpc || MAIN_EXIT=$?
-elif [[ "$WRAPIX_AGENT" = "pi" ]]; then
+elif [[ "$WRIX_AGENT" = "pi" ]]; then
   pi || MAIN_EXIT=$?
-elif [[ "$WRAPIX_AGENT" = "direct" ]]; then
+elif [[ "$WRIX_AGENT" = "direct" ]]; then
   # Direct mode: loom-direct-runner listens on stdin/stdout for JSONL
   # commands and drives a loom-llm Conversation with the six sandbox-aware
   # tools. Loom drives the session from the host via piped stdio.
   loom-direct-runner || MAIN_EXIT=$?
-elif [[ "$WRAPIX_AGENT" = "claude" ]] && [[ "${WRAPIX_STDIO:-}" = "1" ]]; then
+elif [[ "$WRIX_AGENT" = "claude" ]] && [[ "${WRIX_STDIO:-}" = "1" ]]; then
   # Claude stream-json mode: loom drives the session from the host via piped
   # stdio. Symmetric to the pi branch above. Canonical claude args live here
   # (single source of truth) so workflow code doesn't have to thread them.
@@ -323,8 +323,8 @@ elif [[ "$WRAPIX_AGENT" = "claude" ]] && [[ "${WRAPIX_STDIO:-}" = "1" ]]; then
     || MAIN_EXIT=$?
 else
   # Build system prompt only for interactive claude (not needed for command
-  # overrides).  Requires /etc/wrapix-prompt to be mounted.
-  SYSTEM_PROMPT=$(cat /etc/wrapix-prompt)
+  # overrides).  Requires /etc/wrix-prompt to be mounted.
+  SYSTEM_PROMPT=$(cat /etc/wrix-prompt)
   if [[ -f /workspace/docs/README.md ]]; then
     SYSTEM_PROMPT="$SYSTEM_PROMPT
 

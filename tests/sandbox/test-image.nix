@@ -16,7 +16,7 @@
 # `shipNix` adds `pkgs.nix` to the profile's `packages` (a nix-shipping
 # profile, as `image-builder.md` § Hook Installation describes; bead-use
 # images omit nix by default). The leaf renames to `nix` so the resulting
-# image tags as `wrapix-nix` and does not collide with the base variant in
+# image tags as `wrix-nix` and does not collide with the base variant in
 # the platform store. `tests/sandbox/nix-in-container.sh` builds this
 # variant to exercise live in-container Nix (additive + store-mutating) as the
 # runtime process — rootless container-root (specs/sandbox.md FR #13).

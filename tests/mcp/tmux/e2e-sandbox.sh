@@ -32,7 +32,7 @@ cd "$REPO_ROOT"
 # Silence nix-build chatter (streamLayeredImage emits ~hundreds of
 # "Creating layer N from paths" lines on stderr) so loom's per-verifier
 # output buffer reaches the actual test output before truncating.
-build_log=$(mktemp -t wrapix-e2e-sandbox-build.XXXXXX)
+build_log=$(mktemp -t wrix-e2e-sandbox-build.XXXXXX)
 IMAGE_REF=""
 cleanup() {
   rm -f "$build_log"
@@ -47,20 +47,20 @@ if ! PACKAGE_PATH=$(nix build --no-link --print-out-paths --no-warn-dirty .#sand
   echo "FAIL: nix build .#sandbox-rust-mcp" >&2
   exit 1
 fi
-IMAGE_STREAM=$(grep -oP "WRAPIX_DEFAULT_IMAGE_SOURCE=[^']*'\K[^']+" "$PACKAGE_PATH/bin/wrapix" | head -1)
-WRAPPER_IMAGE_REF=$(grep -oP "WRAPIX_DEFAULT_IMAGE_REF=[^']*'\K[^']+" "$PACKAGE_PATH/bin/wrapix" | head -1)
+IMAGE_STREAM=$(grep -oP "WRIX_DEFAULT_IMAGE_SOURCE=[^']*'\K[^']+" "$PACKAGE_PATH/bin/wrix" | head -1)
+WRAPPER_IMAGE_REF=$(grep -oP "WRIX_DEFAULT_IMAGE_REF=[^']*'\K[^']+" "$PACKAGE_PATH/bin/wrix" | head -1)
 
 [[ -n "$IMAGE_STREAM" && -e "$IMAGE_STREAM" ]] || {
-  echo "FAIL: could not extract IMAGE_SOURCE from $PACKAGE_PATH/bin/wrapix" >&2
+  echo "FAIL: could not extract IMAGE_SOURCE from $PACKAGE_PATH/bin/wrix" >&2
   exit 1
 }
 [[ -n "$WRAPPER_IMAGE_REF" ]] || {
-  echo "FAIL: could not extract IMAGE_REF from $PACKAGE_PATH/bin/wrapix" >&2
+  echo "FAIL: could not extract IMAGE_REF from $PACKAGE_PATH/bin/wrix" >&2
   exit 1
 }
 
-IMAGE_REF=$(wrapix_unique_image_ref "wrapix-test-tmux-e2e-sandbox")
-wrapix_load_test_image "$IMAGE_STREAM" "$(wrapix_image_short_name "$WRAPPER_IMAGE_REF")" "$IMAGE_REF"
+IMAGE_REF=$(wrix_unique_image_ref "wrix-test-tmux-e2e-sandbox")
+wrix_load_test_image "$IMAGE_STREAM" "$(wrix_image_short_name "$WRAPPER_IMAGE_REF")" "$IMAGE_REF"
 
 for cmd in tmux tmux-mcp; do
   podman run --rm --entrypoint /bin/bash "$IMAGE_REF" \

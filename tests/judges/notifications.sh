@@ -23,5 +23,5 @@ test_macos_terminal_notifier() {
 
 test_client_in_container() {
   judge_files "lib/notify/client.nix" "lib/sandbox/linux/entrypoint.sh" "lib/sandbox/darwin/entrypoint.sh"
-  judge_criterion "The notify client works from inside a wrapix container: it connects to the host-running daemon via a transport that is reachable from inside the sandbox (Unix socket bind-mounted into the container on Linux, TCP on the vmnet bridge on Darwin). PASS if the client code and entrypoint scripts together wire up that transport so a containerized call reaches the host daemon."
+  judge_criterion "The notify client works from inside a wrix container: it connects to the host-running daemon via a transport that is reachable from inside the sandbox (Unix socket bind-mounted into the container on Linux, TCP on the vmnet bridge on Darwin). PASS if the client code and entrypoint scripts together wire up that transport so a containerized call reaches the host daemon."
 }

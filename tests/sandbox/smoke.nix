@@ -56,12 +56,12 @@ let
       ;
   };
   sandbox = sandboxLib.mkSandbox { profile = sandboxLib.profiles.base; };
-  wrapix = sandbox.package;
+  wrix = sandbox.package;
   # Underlying profile-baked launcher (no image env vars wrapper). Smoke
   # tests that grep the script for krun / network / mount logic should
-  # target this — the `package` wrapper only sets WRAPIX_AGENT and the
+  # target this — the `package` wrapper only sets WRIX_AGENT and the
   # default image ref/source.
-  wrapixLauncher = sandbox.launcher;
+  wrixLauncher = sandbox.launcher;
 
 in
 {
@@ -95,7 +95,7 @@ in
         mkdir $out
       '';
 
-  # Verify wrapix script has valid bash syntax
+  # Verify wrix script has valid bash syntax
   script-syntax =
     runCommandLocal "smoke-script-syntax"
       {
@@ -103,12 +103,12 @@ in
       }
       ''
         echo "Checking bash syntax..."
-        bash -n ${wrapixLauncher}/bin/wrapix
-        bash -n ${wrapix}/bin/wrapix
-        grep -q 'WRAPIX_PI_AUTH_FILE' ${wrapixLauncher}/bin/wrapix || { echo "launcher must resolve Pi auth file"; exit 1; }
-        grep -q 'WRAPIX_AGENT:-direct}.*=.*pi' ${wrapixLauncher}/bin/wrapix || { echo "launcher must gate Pi auth on WRAPIX_AGENT=pi"; exit 1; }
-        grep -q 'wrapix spawn: Pi auth file not found' ${wrapixLauncher}/bin/wrapix || { echo "spawn must fail loud without Pi auth"; exit 1; }
-        grep -Eq '/mnt/wrapix/(file/pi-auth.json|pi-agent-auth)' ${wrapixLauncher}/bin/wrapix || { echo "Pi auth mount must use a staging path"; exit 1; }
+        bash -n ${wrixLauncher}/bin/wrix
+        bash -n ${wrix}/bin/wrix
+        grep -q 'WRIX_PI_AUTH_FILE' ${wrixLauncher}/bin/wrix || { echo "launcher must resolve Pi auth file"; exit 1; }
+        grep -q 'WRIX_AGENT:-direct}.*=.*pi' ${wrixLauncher}/bin/wrix || { echo "launcher must gate Pi auth on WRIX_AGENT=pi"; exit 1; }
+        grep -q 'wrix spawn: Pi auth file not found' ${wrixLauncher}/bin/wrix || { echo "spawn must fail loud without Pi auth"; exit 1; }
+        grep -Eq '/mnt/wrix/(file/pi-auth.json|pi-agent-auth)' ${wrixLauncher}/bin/wrix || { echo "Pi auth mount must use a staging path"; exit 1; }
 
         echo "Script syntax validation passed"
         mkdir $out
@@ -128,20 +128,20 @@ in
         bash -n ${../../lib/sandbox/darwin/entrypoint.sh}
 
         echo "Verifying entrypoint handles mount env vars..."
-        # Test that entrypoint processes WRAPIX_DIR_MOUNTS correctly
+        # Test that entrypoint processes WRIX_DIR_MOUNTS correctly
         SCRIPT="${../../lib/sandbox/darwin/entrypoint.sh}"
-        grep -q 'WRAPIX_DIR_MOUNTS' "$SCRIPT" || { echo "Missing WRAPIX_DIR_MOUNTS handling"; exit 1; }
-        grep -q 'WRAPIX_FILE_MOUNTS' "$SCRIPT" || { echo "Missing WRAPIX_FILE_MOUNTS handling"; exit 1; }
+        grep -q 'WRIX_DIR_MOUNTS' "$SCRIPT" || { echo "Missing WRIX_DIR_MOUNTS handling"; exit 1; }
+        grep -q 'WRIX_FILE_MOUNTS' "$SCRIPT" || { echo "Missing WRIX_FILE_MOUNTS handling"; exit 1; }
 
-        # Verify entrypoint uses fixed wrapix user
-        grep -q 'USER="wrapix"' "$SCRIPT" || { echo "entrypoint should set USER=wrapix"; exit 1; }
-        grep -q 'HOME="/home/wrapix"' "$SCRIPT" || { echo "entrypoint should set HOME=/home/wrapix"; exit 1; }
-        grep -q 'WRAPIX_AGENT" = "pi".*WRAPIX_STDIO' "$SCRIPT" || { echo "Pi RPC mode must be gated by WRAPIX_STDIO"; exit 1; }
+        # Verify entrypoint uses fixed wrix user
+        grep -q 'USER="wrix"' "$SCRIPT" || { echo "entrypoint should set USER=wrix"; exit 1; }
+        grep -q 'HOME="/home/wrix"' "$SCRIPT" || { echo "entrypoint should set HOME=/home/wrix"; exit 1; }
+        grep -q 'WRIX_AGENT" = "pi".*WRIX_STDIO' "$SCRIPT" || { echo "Pi RPC mode must be gated by WRIX_STDIO"; exit 1; }
         grep -q 'pi || MAIN_EXIT' "$SCRIPT" || { echo "Pi interactive mode must run plain pi"; exit 1; }
         grep -q '.pi/agent/sessions' "$SCRIPT" || { echo "Pi sessions directory must be initialized"; exit 1; }
-        grep -q 'WRAPIX_PI_AUTH_JSON' "$SCRIPT" || { echo "Pi auth mount must be linked into agent config"; exit 1; }
+        grep -q 'WRIX_PI_AUTH_JSON' "$SCRIPT" || { echo "Pi auth mount must be linked into agent config"; exit 1; }
         ! grep -q '/workspace/.pi/agent/\*' "$SCRIPT" || { echo "Pi must not import arbitrary workspace agent config"; exit 1; }
-        grep -q 'WRAPIX_STDIO=1' ${../../lib/sandbox/darwin/default.nix} || { echo "Darwin launcher must forward WRAPIX_STDIO"; exit 1; }
+        grep -q 'WRIX_STDIO=1' ${../../lib/sandbox/darwin/default.nix} || { echo "Darwin launcher must forward WRIX_STDIO"; exit 1; }
 
         echo "Darwin entrypoint validation passed"
         mkdir $out
@@ -157,10 +157,10 @@ in
         echo "Checking Linux entrypoint syntax..."
         bash -n ${../../lib/sandbox/linux/entrypoint.sh}
         SCRIPT="${../../lib/sandbox/linux/entrypoint.sh}"
-        grep -q 'WRAPIX_AGENT" = "pi".*WRAPIX_STDIO' "$SCRIPT" || { echo "Pi RPC mode must be gated by WRAPIX_STDIO"; exit 1; }
+        grep -q 'WRIX_AGENT" = "pi".*WRIX_STDIO' "$SCRIPT" || { echo "Pi RPC mode must be gated by WRIX_STDIO"; exit 1; }
         grep -q 'pi || MAIN_EXIT' "$SCRIPT" || { echo "Pi interactive mode must run plain pi"; exit 1; }
         grep -q '.pi/agent/sessions' "$SCRIPT" || { echo "Pi sessions directory must be initialized"; exit 1; }
-        grep -q 'WRAPIX_PI_AUTH_JSON' "$SCRIPT" || { echo "Pi auth mount must be linked into agent config"; exit 1; }
+        grep -q 'WRIX_PI_AUTH_JSON' "$SCRIPT" || { echo "Pi auth mount must be linked into agent config"; exit 1; }
         ! grep -q '/workspace/.pi/agent/\*' "$SCRIPT" || { echo "Pi must not import arbitrary workspace agent config"; exit 1; }
 
         echo "Linux entrypoint validation passed"
@@ -177,7 +177,7 @@ in
     grep -q 'defaultThinkingLevel = "high"' "$DEFAULTS" || { echo "Pi default reasoning must be high"; exit 1; }
     grep -q 'sessionDir = "/workspace/.pi/agent/sessions"' "$DEFAULTS" || { echo "Pi sessions must persist via explicit sessionDir"; exit 1; }
     grep -q 'optionalString (agent == "pi")' "$IMAGE" || { echo "Pi settings must only be baked for agent=pi"; exit 1; }
-    grep -q 'etc/wrapix/pi-agent/settings.json' "$IMAGE" || { echo "Pi settings seed must be written under /etc/wrapix/pi-agent"; exit 1; }
+    grep -q 'etc/wrix/pi-agent/settings.json' "$IMAGE" || { echo "Pi settings seed must be written under /etc/wrix/pi-agent"; exit 1; }
 
     echo "Pi config defaults validation passed"
     mkdir $out
@@ -351,7 +351,7 @@ in
       mkdir $out
     '';
 
-  # Verify wrapix script contains krun microVM boundary detection
+  # Verify wrix script contains krun microVM boundary detection
   # Security property: Linux defaults to microVM boundary via krun runtime
   # See specs/security.md (Threat Model / Component-Specific Security).
   # Linux-only: krun detection only exists in the Linux launcher
@@ -362,12 +362,12 @@ in
           nativeBuildInputs = [ bash ];
         }
         ''
-          echo "Checking krun microVM detection in wrapix script..."
-          SCRIPT="${wrapixLauncher}/bin/wrapix"
+          echo "Checking krun microVM detection in wrix script..."
+          SCRIPT="${wrixLauncher}/bin/wrix"
 
           # Verify krun detection logic exists
-          grep -q 'WRAPIX_MICROVM' "$SCRIPT" || { echo "FAIL: Missing WRAPIX_MICROVM env var check"; exit 1; }
-          echo "PASS: WRAPIX_MICROVM opt-in supported"
+          grep -q 'WRIX_MICROVM' "$SCRIPT" || { echo "FAIL: Missing WRIX_MICROVM env var check"; exit 1; }
+          echo "PASS: WRIX_MICROVM opt-in supported"
 
           # Verify /dev/kvm detection
           grep -q '/dev/kvm' "$SCRIPT" || { echo "FAIL: Missing /dev/kvm detection"; exit 1; }
@@ -392,7 +392,7 @@ in
         exit 77
       '';
 
-  # Verify WRAPIX_NETWORK environment variable support in launcher and entrypoints
+  # Verify WRIX_NETWORK environment variable support in launcher and entrypoints
   # Security property: network filtering restricts outbound access in limit mode
   # See specs/security.md § Network Exfil Baseline and specs/sandbox.md.
   #
@@ -426,20 +426,20 @@ in
         ];
       }
       ''
-        echo "Checking WRAPIX_NETWORK support..."
+        echo "Checking WRIX_NETWORK support..."
 
         echo "PASS: Profile allowlists verified (pure Nix assertions)"
 
         # Launcher script checks (reuses base sandbox, no extra image build)
-        SCRIPT="${wrapixLauncher}/bin/wrapix"
-        grep -q 'WRAPIX_NETWORK' "$SCRIPT" || { echo "FAIL: Missing WRAPIX_NETWORK env var handling"; exit 1; }
-        echo "PASS: WRAPIX_NETWORK env var handled in launcher"
+        SCRIPT="${wrixLauncher}/bin/wrix"
+        grep -q 'WRIX_NETWORK' "$SCRIPT" || { echo "FAIL: Missing WRIX_NETWORK env var handling"; exit 1; }
+        echo "PASS: WRIX_NETWORK env var handled in launcher"
 
-        grep -q "open|limit" "$SCRIPT" || { echo "FAIL: Missing WRAPIX_NETWORK mode validation"; exit 1; }
-        echo "PASS: WRAPIX_NETWORK mode validation present"
+        grep -q "open|limit" "$SCRIPT" || { echo "FAIL: Missing WRIX_NETWORK mode validation"; exit 1; }
+        echo "PASS: WRIX_NETWORK mode validation present"
 
-        grep -q 'WRAPIX_NETWORK_ALLOWLIST' "$SCRIPT" || { echo "FAIL: Missing WRAPIX_NETWORK_ALLOWLIST passthrough"; exit 1; }
-        echo "PASS: WRAPIX_NETWORK_ALLOWLIST passed to container"
+        grep -q 'WRIX_NETWORK_ALLOWLIST' "$SCRIPT" || { echo "FAIL: Missing WRIX_NETWORK_ALLOWLIST passthrough"; exit 1; }
+        echo "PASS: WRIX_NETWORK_ALLOWLIST passed to container"
 
         ${
           if isLinux then
@@ -456,16 +456,16 @@ in
         # Entrypoint checks (source files, no build needed)
         LINUX_EP="${../../lib/sandbox/linux/entrypoint.sh}"
         grep -q 'iptables' "$LINUX_EP" || { echo "FAIL: Missing iptables in Linux entrypoint"; exit 1; }
-        grep -q 'WRAPIX_NETWORK' "$LINUX_EP" || { echo "FAIL: Missing WRAPIX_NETWORK check in Linux entrypoint"; exit 1; }
+        grep -q 'WRIX_NETWORK' "$LINUX_EP" || { echo "FAIL: Missing WRIX_NETWORK check in Linux entrypoint"; exit 1; }
         echo "PASS: Linux entrypoint has network filtering"
 
         DARWIN_EP="${../../lib/sandbox/darwin/entrypoint.sh}"
         grep -q 'iptables' "$DARWIN_EP" || { echo "FAIL: Missing iptables in Darwin entrypoint"; exit 1; }
-        grep -q 'WRAPIX_NETWORK' "$DARWIN_EP" || { echo "FAIL: Missing WRAPIX_NETWORK check in Darwin entrypoint"; exit 1; }
+        grep -q 'WRIX_NETWORK' "$DARWIN_EP" || { echo "FAIL: Missing WRIX_NETWORK check in Darwin entrypoint"; exit 1; }
         echo "PASS: Darwin entrypoint has network filtering"
 
         echo ""
-        echo "WRAPIX_NETWORK configuration validation passed"
+        echo "WRIX_NETWORK configuration validation passed"
         mkdir $out
       '';
 

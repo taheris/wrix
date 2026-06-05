@@ -1,6 +1,6 @@
-# Wrapix Notification Daemon
+# Wrix Notification Daemon
 
-Runs `wrapix-notifyd` on the host to receive notifications from containers.
+Runs `wrix-notifyd` on the host to receive notifications from containers.
 
 ## Overview
 
@@ -9,7 +9,7 @@ container) needs attention.
 
 **Transport**:
 - **macOS**: TCP port 5959 - VirtioFS cannot pass Unix socket operations
-- **Linux**: Unix socket (`~/.local/share/wrapix/notify.sock`)
+- **Linux**: Unix socket (`~/.local/share/wrix/notify.sock`)
 
 On macOS, the daemon listens on both TCP (for containers) and Unix socket
 (for local testing). Containers connect to the host via the gateway IP.
@@ -18,19 +18,19 @@ On macOS, the daemon listens on both TCP (for containers) and Unix socket
 
 ### Home-manager (recommended)
 
-Add `wrapix-notifyd` to your home-manager configuration for automatic startup.
+Add `wrix-notifyd` to your home-manager configuration for automatic startup.
 
 **macOS** (launchd):
 
 ```nix
-launchd.agents.wrapix-notifyd = {
+launchd.agents.wrix-notifyd = {
   enable = true;
   config = {
-    ProgramArguments = [ "${pkgs.wrapix-notifyd}/bin/wrapix-notifyd" ];
+    ProgramArguments = [ "${pkgs.wrix-notifyd}/bin/wrix-notifyd" ];
     KeepAlive = true;
     RunAtLoad = true;
-    StandardOutPath = "/tmp/wrapix-notifyd.log";
-    StandardErrorPath = "/tmp/wrapix-notifyd.log";
+    StandardOutPath = "/tmp/wrix-notifyd.log";
+    StandardErrorPath = "/tmp/wrix-notifyd.log";
   };
 };
 ```
@@ -38,14 +38,14 @@ launchd.agents.wrapix-notifyd = {
 **Linux** (systemd):
 
 ```nix
-systemd.user.services.wrapix-notifyd = {
+systemd.user.services.wrix-notifyd = {
   Unit = {
-    Description = "Wrapix notification daemon";
+    Description = "Wrix notification daemon";
     After = [ "graphical-session.target" ];
   };
   Service = {
     Type = "simple";
-    ExecStart = "${pkgs.wrapix-notifyd}/bin/wrapix-notifyd";
+    ExecStart = "${pkgs.wrix-notifyd}/bin/wrix-notifyd";
     Restart = "always";
     RestartSec = 5;
   };
@@ -63,15 +63,15 @@ For users not using home-manager, follow the platform-specific instructions belo
 
 #### Files
 
-- `com.local.wrapix-notifyd.plist` - macOS LaunchAgent template
-- `wrapix-notifyd.service` - Linux systemd user service template
+- `com.local.wrix-notifyd.plist` - macOS LaunchAgent template
+- `wrix-notifyd.service` - Linux systemd user service template
 
 ## macOS Manual Installation
 
 ### Option A: Run manually
 
 ```bash
-nix run github:taheris/wrapix#wrapix-notifyd
+nix run github:taheris/wrix#wrix-notifyd
 ```
 
 ### Option B: Install as LaunchAgent
@@ -79,8 +79,8 @@ nix run github:taheris/wrapix#wrapix-notifyd
 1. Build the daemon and note its path:
 
 ```bash
-nix build github:taheris/wrapix#wrapix-notifyd
-DAEMON_PATH="$(nix path-info github:taheris/wrapix#wrapix-notifyd)/bin/wrapix-notifyd"
+nix build github:taheris/wrix#wrix-notifyd
+DAEMON_PATH="$(nix path-info github:taheris/wrix#wrix-notifyd)/bin/wrix-notifyd"
 echo "Daemon path: $DAEMON_PATH"
 ```
 
@@ -88,34 +88,34 @@ echo "Daemon path: $DAEMON_PATH"
 
 ```bash
 # Create log directory (XDG-compliant location)
-LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/wrapix"
+LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/wrix"
 mkdir -p "$LOG_DIR"
 
 # Generate plist with daemon and log paths
 sed -e "s|__DAEMON_PATH__|$DAEMON_PATH|g" \
     -e "s|__LOG_DIR__|$LOG_DIR|g" \
-    scripts/notify/com.local.wrapix-notifyd.plist \
-    > ~/Library/LaunchAgents/com.local.wrapix-notifyd.plist
+    scripts/notify/com.local.wrix-notifyd.plist \
+    > ~/Library/LaunchAgents/com.local.wrix-notifyd.plist
 ```
 
 3. Load the agent:
 
 ```bash
-launchctl load ~/Library/LaunchAgents/com.local.wrapix-notifyd.plist
+launchctl load ~/Library/LaunchAgents/com.local.wrix-notifyd.plist
 ```
 
 4. Verify it's running:
 
 ```bash
-launchctl list | grep wrapix-notifyd
-tail -f ~/.local/state/wrapix/wrapix-notifyd.log
+launchctl list | grep wrix-notifyd
+tail -f ~/.local/state/wrix/wrix-notifyd.log
 ```
 
 ### macOS Manual Uninstall
 
 ```bash
-launchctl unload ~/Library/LaunchAgents/com.local.wrapix-notifyd.plist
-rm ~/Library/LaunchAgents/com.local.wrapix-notifyd.plist
+launchctl unload ~/Library/LaunchAgents/com.local.wrix-notifyd.plist
+rm ~/Library/LaunchAgents/com.local.wrix-notifyd.plist
 ```
 
 ## Linux Manual Installation
@@ -123,7 +123,7 @@ rm ~/Library/LaunchAgents/com.local.wrapix-notifyd.plist
 ### Option A: Run manually
 
 ```bash
-nix run github:taheris/wrapix#wrapix-notifyd
+nix run github:taheris/wrix#wrix-notifyd
 ```
 
 ### Option B: Install as systemd user service (recommended)
@@ -131,8 +131,8 @@ nix run github:taheris/wrapix#wrapix-notifyd
 1. Build the daemon and note its path:
 
 ```bash
-nix build github:taheris/wrapix#wrapix-notifyd
-DAEMON_PATH="$(nix path-info github:taheris/wrapix#wrapix-notifyd)/bin/wrapix-notifyd"
+nix build github:taheris/wrix#wrix-notifyd
+DAEMON_PATH="$(nix path-info github:taheris/wrix#wrix-notifyd)/bin/wrix-notifyd"
 echo "Daemon path: $DAEMON_PATH"
 ```
 
@@ -140,38 +140,38 @@ echo "Daemon path: $DAEMON_PATH"
 
 ```bash
 mkdir -p ~/.config/systemd/user
-sed "s|__DAEMON_PATH__|$DAEMON_PATH|g" scripts/notify/wrapix-notifyd.service \
-    > ~/.config/systemd/user/wrapix-notifyd.service
+sed "s|__DAEMON_PATH__|$DAEMON_PATH|g" scripts/notify/wrix-notifyd.service \
+    > ~/.config/systemd/user/wrix-notifyd.service
 ```
 
 3. Enable and start the service:
 
 ```bash
 systemctl --user daemon-reload
-systemctl --user enable --now wrapix-notifyd
+systemctl --user enable --now wrix-notifyd
 ```
 
 4. Verify it's running:
 
 ```bash
-systemctl --user status wrapix-notifyd
-journalctl --user -u wrapix-notifyd -f
+systemctl --user status wrix-notifyd
+journalctl --user -u wrix-notifyd -f
 ```
 
 ### Linux Manual Uninstall
 
 ```bash
-systemctl --user disable --now wrapix-notifyd
-rm ~/.config/systemd/user/wrapix-notifyd.service
+systemctl --user disable --now wrix-notifyd
+rm ~/.config/systemd/user/wrix-notifyd.service
 systemctl --user daemon-reload
 ```
 
 ## Testing
 
-From inside a wrapix container:
+From inside a wrix container:
 
 ```bash
-wrapix-notify "Test" "Hello from container"
+wrix-notify "Test" "Hello from container"
 ```
 
 You should see a notification appear on your desktop.

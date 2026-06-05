@@ -1,4 +1,4 @@
-# Wrapix
+# Wrix
 
 Secure sandbox for running AI coding agents in isolated containers.
 
@@ -10,10 +10,10 @@ Provides filesystem and process isolation — code inside the container cannot a
 ## Quick Start
 
 ```bash
-nix run github:taheris/wrapix                      # base profile, pi agent
-nix run github:taheris/wrapix#sandbox-rust         # rust profile, direct base image
-nix run github:taheris/wrapix#sandbox-rust-pi      # rust profile, pi agent overlay
-nix run github:taheris/wrapix#sandbox-rust-claude  # rust profile, claude overlay
+nix run github:taheris/wrix                      # base profile, pi agent
+nix run github:taheris/wrix#sandbox-rust         # rust profile, direct base image
+nix run github:taheris/wrix#sandbox-rust-pi      # rust profile, pi agent overlay
+nix run github:taheris/wrix#sandbox-rust-claude  # rust profile, claude overlay
 ```
 
 ## Agent Runtimes
@@ -23,7 +23,7 @@ The agent binary baked into the image is selected **at build time** by `mkSandbo
 | Agent | Runtime | How it talks to the host |
 |-------|---------|--------------------------|
 | `direct` *(default)* | Direct runner binary | JSONL stdio; intended for orchestrators |
-| `claude` | [Claude Code](https://claude.ai/code) | Interactive TTY, or stream-json via `WRAPIX_STDIO=1` |
+| `claude` | [Claude Code](https://claude.ai/code) | Interactive TTY, or stream-json via `WRIX_STDIO=1` |
 | `pi` | [Pi coding agent](https://github.com/earendil-works/pi) | Interactive TTY, or JSONL RPC on stdio (`pi --mode rpc`) |
 
 `packages.image-<profile>` ships the default direct runtime. Agent overlays are exposed as `packages.image-<profile>-claude` and `packages.image-<profile>-pi`.
@@ -36,7 +36,7 @@ The canonical pattern feeds one profile to both the host devshell and the sandbo
 
 ```nix
 {
-  inputs.wrapix.url = "github:taheris/wrapix";
+  inputs.wrix.url = "github:taheris/wrix";
   inputs.flake-parts.url = "github:hercules-ci/flake-parts";
 
   outputs = inputs:
@@ -44,20 +44,20 @@ The canonical pattern feeds one profile to both the host devshell and the sandbo
       systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
       perSystem = { system, ... }:
         let
-          wrapix = inputs.wrapix.legacyPackages.${system}.lib;
-          rustProfile = wrapix.rustProfile {
+          wrix = inputs.wrix.legacyPackages.${system}.lib;
+          rustProfile = wrix.rustProfile {
             toolchain = ./rust-toolchain.toml;
             sha256    = "sha256-...";
           };
         in {
-          devShells.default = wrapix.mkDevShell { profile = rustProfile; };
-          packages.image    = (wrapix.mkSandbox { profile = rustProfile; }).image;
+          devShells.default = wrix.mkDevShell { profile = rustProfile; };
+          packages.image    = (wrix.mkSandbox { profile = rustProfile; }).image;
         };
     };
 }
 ```
 
-`wrapix.mkDevShell { profile = ...; }` is the sole entry point for profile-aware host devshells — it splices `profile.shellHook` automatically, so consumers never hand-roll PATH or `RUSTC_WRAPPER` exports. See [specs/profiles.md](specs/profiles.md) for the `rustProfile` constructor signature and `mkDevShell` composition rules.
+`wrix.mkDevShell { profile = ...; }` is the sole entry point for profile-aware host devshells — it splices `profile.shellHook` automatically, so consumers never hand-roll PATH or `RUSTC_WRAPPER` exports. See [specs/profiles.md](specs/profiles.md) for the `rustProfile` constructor signature and `mkDevShell` composition rules.
 
 ### mkSandbox Options
 
@@ -72,7 +72,7 @@ The canonical pattern feeds one profile to both the host devshell and the sandbo
 | `agentSettings` | attrset | Settings for the selected agent (`claude` or `pi`) |
 | `deployKey` | string | SSH key name for git push (see `scripts/setup-deploy-key`) |
 | `mcp` | attrset of server configs | Baked-in MCP servers (e.g. `{ tmux = { }; }`) |
-| `mcpRuntime` | bool | Include all MCP servers, select at runtime via `WRAPIX_MCP` |
+| `mcpRuntime` | bool | Include all MCP servers, select at runtime via `WRIX_MCP` |
 
 See [specs/sandbox.md](specs/sandbox.md) for full details.
 
@@ -92,10 +92,10 @@ See [specs/profiles.md](specs/profiles.md) for the full schema and `buildPackage
 
 ```nix
 let
-  wrapix    = inputs.wrapix.legacyPackages.${system}.lib;
+  wrix    = inputs.wrix.legacyPackages.${system}.lib;
   loomLinux = inputs.loom.lib.mkLoom { pkgs = inputs.nixpkgs.legacyPackages.x86_64-linux; };
-  sandbox   = wrapix.mkSandbox {
-    profile  = wrapix.profiles.rust;
+  sandbox   = wrix.mkSandbox {
+    profile  = wrix.profiles.rust;
     agent    = "direct";
     agentPkg = loomLinux.bin;
   };
@@ -105,23 +105,23 @@ in
 
 The launcher exposes two entry points (both honour the profile's mounts, env passthrough, and deploy key):
 
-- `wrapix run [DIR] [CMD…]` — interactive TTY.
-- `wrapix spawn --spawn-config <file> [--stdio]` — programmatic JSONL dispatch. The orchestrator writes a `SpawnConfig` JSON file with `image_ref`, `image_source`, `workspace`, `env`, and `agent_args`, then pipes JSONL on stdin/stdout.
+- `wrix run [DIR] [CMD…]` — interactive TTY.
+- `wrix spawn --spawn-config <file> [--stdio]` — programmatic JSONL dispatch. The orchestrator writes a `SpawnConfig` JSON file with `image_ref`, `image_source`, `workspace`, `env`, and `agent_args`, then pipes JSONL on stdin/stdout.
 
 ## MCP Servers
 
 ```bash
-nix run github:taheris/wrapix#sandbox-mcp         # base + all MCP servers
-nix run github:taheris/wrapix#sandbox-rust-mcp    # rust + all MCP servers
-WRAPIX_MCP=tmux nix run .#sandbox-mcp             # select specific servers
+nix run github:taheris/wrix#sandbox-mcp         # base + all MCP servers
+nix run github:taheris/wrix#sandbox-rust-mcp    # rust + all MCP servers
+WRIX_MCP=tmux nix run .#sandbox-mcp             # select specific servers
 ```
 
 Available: [tmux](specs/tmux-mcp.md) (pane management for debugging), [playwright](specs/playwright-mcp.md) (browser automation). In flakes: `mcp.tmux = { }` or `mcpRuntime = true`.
 
 ## Notifications
 
-Desktop alerts when the agent needs attention: `nix run github:taheris/wrapix#wrapix-notifyd`. See [specs/notifications.md](specs/notifications.md).
+Desktop alerts when the agent needs attention: `nix run github:taheris/wrix#wrix-notifyd`. See [specs/notifications.md](specs/notifications.md).
 
 ## Linux Builder (macOS)
 
-Remote Nix builds for aarch64-linux on macOS: `wrapix-builder start && wrapix-builder setup`. See [specs/linux-builder.md](specs/linux-builder.md).
+Remote Nix builds for aarch64-linux on macOS: `wrix-builder start && wrix-builder setup`. See [specs/linux-builder.md](specs/linux-builder.md).

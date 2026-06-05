@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Verify shape and presence of the profile-image manifest produced by
-# `wrapix.lib.${system}.mkProfileImages` (specs/profiles.md).
+# `wrix.lib.${system}.mkProfileImages` (specs/profiles.md).
 #
 # Two contracts:
 #
@@ -69,10 +69,10 @@ test_manifest_shape() {
         return 1
     fi
 
-    # ref is `[localhost/]wrapix-<name>:<hash>`; the prefix is platform-dependent
+    # ref is `[localhost/]wrix-<name>:<hash>`; the prefix is platform-dependent
     # (linux uses localhost/, darwin omits it). Accept both.
-    if ! [[ "$ref" =~ ^(localhost/)?wrapix-rust:[a-f0-9]+$ ]]; then
-        echo "manifest .rust.ref ($ref) does not match expected pattern '[localhost/]wrapix-rust:<hex>'" >&2
+    if ! [[ "$ref" =~ ^(localhost/)?wrix-rust:[a-f0-9]+$ ]]; then
+        echo "manifest .rust.ref ($ref) does not match expected pattern '[localhost/]wrix-rust:<hex>'" >&2
         return 1
     fi
 }
@@ -90,7 +90,7 @@ test_flake_outputs_present() {
         "sandbox-rust"
         "sandbox-python"
         "profile-images"
-        "wrapix"
+        "wrix"
     )
 
     local out

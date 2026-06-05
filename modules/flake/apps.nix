@@ -24,7 +24,7 @@ _:
         test-profiles-build-package = test.apps.profiles-build-package;
         test-stable-profile-hash-stable = test.apps.stable-profile-hash-stable;
         test-stable-profile-membership = test.apps.stable-profile-membership;
-        test-wrapix-spawn-load = test.apps.wrapix-spawn-load;
+        test-wrix-spawn-load = test.apps.wrix-spawn-load;
       };
     };
 }

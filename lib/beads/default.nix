@@ -17,14 +17,14 @@ let
 
   imageTagLib = import ../util/image-tag.nix { };
   imageTag = imageTagLib.mkImageTag doltImageDrv;
-  imageName = if isDarwin then "wrapix-beads:${imageTag}" else "localhost/wrapix-beads:${imageTag}";
+  imageName = if isDarwin then "wrix-beads:${imageTag}" else "localhost/wrix-beads:${imageTag}";
   loadImageCmd = if isDarwin then "cat ${doltImageDrv}" else "${doltImageDrv}";
   shellLib = import ../util/shell.nix { };
   containerRuntime = builtins.readFile ../util/container.sh;
 
   # Minimal dolt-only container image used to serve a workspace's .beads/dolt.
   doltImageDrv = mkImage {
-    name = "wrapix-beads";
+    name = "wrix-beads";
     tag = "latest";
     maxLayers = 10;
     contents = with linuxPkgs; [
@@ -71,16 +71,16 @@ let
     ${containerRuntime}
 
     if [[ "$CR" == "container" ]]; then
-      IMAGE="wrapix-beads:${imageTag}"
+      IMAGE="wrix-beads:${imageTag}"
     else
-      IMAGE="localhost/wrapix-beads:${imageTag}"
+      IMAGE="localhost/wrix-beads:${imageTag}"
     fi
 
     ${
       if isDarwin then
         ''
           XDG_CACHE_HOME="''${XDG_CACHE_HOME:-$HOME/.cache}"
-          WRAPIX_CACHE="$XDG_CACHE_HOME/wrapix"
+          WRIX_CACHE="$XDG_CACHE_HOME/wrix"
         ''
       else
         ""
@@ -102,7 +102,7 @@ let
     }
 
     _socket_path() {
-      echo "''${1:-$PWD}/.wrapix/dolt.sock"
+      echo "''${1:-$PWD}/.wrix/dolt.sock"
     }
 
     _load_image() {
@@ -115,8 +115,8 @@ let
           ${
             if isDarwin then
               ''
-                local oci_tar="$WRAPIX_CACHE/beads-image-oci.tar"
-                mkdir -p "$WRAPIX_CACHE"
+                local oci_tar="$WRIX_CACHE/beads-image-oci.tar"
+                mkdir -p "$WRIX_CACHE"
                 ${pkgs.skopeo}/bin/skopeo --insecure-policy copy --quiet \
                   "docker-archive:${doltImageDrv}" "oci-archive:$oci_tar"
                 local load_out loaded_ref
@@ -124,7 +124,7 @@ let
                 loaded_ref=$(echo "$load_out" | grep -oE 'untagged@sha256:[a-f0-9]+' | head -1)
                 if [ -n "$loaded_ref" ]; then
                   cr_image_tag "$loaded_ref" "$IMAGE"
-                  cr_image_tag "$loaded_ref" "wrapix-beads:latest"
+                  cr_image_tag "$loaded_ref" "wrix-beads:latest"
                 fi
                 rm -f "$oci_tar"
               ''
@@ -137,7 +137,7 @@ let
           ;;
         *)
           ${loadImageCmd} | podman load -q >/dev/null
-          cr_image_tag "localhost/wrapix-beads:latest" "$IMAGE" 2>/dev/null || true
+          cr_image_tag "localhost/wrix-beads:latest" "$IMAGE" 2>/dev/null || true
           ;;
       esac
       ${
@@ -199,13 +199,13 @@ let
       case "$CR" in
         container) return 0 ;;
         *)
-          if podman network exists wrapix-dolt; then
+          if podman network exists wrix-dolt; then
             return 0
           fi
-          if podman network create wrapix-dolt >/dev/null 2>&1; then
+          if podman network create wrix-dolt >/dev/null 2>&1; then
             return 0
           fi
-          podman network exists wrapix-dolt
+          podman network exists wrix-dolt
           ;;
       esac
     }
@@ -363,7 +363,7 @@ let
               mkdir -p /tmp/dolthome /tmp
               mkdir -p "$(dirname "$2")"
               exec dolt sql-server --data-dir /data -H 0.0.0.0 -P "$1" --socket "$2"
-            ' -- "$port" "/workspace/.wrapix/dolt.sock" \
+            ' -- "$port" "/workspace/.wrix/dolt.sock" \
             >/dev/null
           ;;
         *)
@@ -378,8 +378,8 @@ let
               --name "$name" \
               --restart=unless-stopped \
               --entrypoint "" \
-              --label "wrapix.workspace=$ws" \
-              --network wrapix-dolt \
+              --label "wrix.workspace=$ws" \
+              --network wrix-dolt \
               --userns=keep-id \
               -e HOME=/tmp/dolthome \
               -e DOLT_FORCE_LOCAL_TEMP_FILES=1 \
@@ -395,7 +395,7 @@ let
                 mkdir -p /tmp/dolthome
                 mkdir -p "$(dirname "$2")"
                 exec dolt sql-server --data-dir /data -H 0.0.0.0 -P "$1" --socket "$2"
-              ' -- "$port" "/workspace/.wrapix/dolt.sock" \
+              ' -- "$port" "/workspace/.wrix/dolt.sock" \
               >/dev/null
           )
           ;;
@@ -549,7 +549,7 @@ in
 {
   inherit imageName shellHook waitAndExport;
 
-  # dolt/push are exposed here for the flake overlay (see wrapixBeadsPkgs in
+  # dolt/push are exposed here for the flake overlay (see wrixBeadsPkgs in
   # flake.nix). Consumers should reach them via pkgs.beads-dolt / pkgs.beads-push.
   # `cli` is a convenience bundle of both scripts so a single package entry
   # puts both binaries on the host devShell PATH.

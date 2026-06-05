@@ -1,6 +1,6 @@
 # OCI Image Builder
 
-Nix expression that turns a wrapix profile into an OCI container image consumed by the platform launchers in `sandbox.md`.
+Nix expression that turns a wrix profile into an OCI container image consumed by the platform launchers in `sandbox.md`.
 
 ## Problem Statement
 
@@ -24,10 +24,10 @@ Image layout:
 Build pipeline:
 
 1. Collect packages from the profile (profile toolchain + agent tooling + MCP server packages if any)
-2. Compose the agent tier (`wrapix-agent-<agent>-<name>`) with exactly the selected `agentPkg`; a non-selected agent's binary is not present
+2. Compose the agent tier (`wrix-agent-<agent>-<name>`) with exactly the selected `agentPkg`; a non-selected agent's binary is not present
 3. Configure `/etc/nix/nix.conf` for flakes and disabled in-container sandbox (the outer container is the security boundary — see `specs/security.md`)
 4. Bundle CA certificates from `pkgs.cacert`
-5. Emit the leaf image atop the `wrapix-agent-<agent>-<name>` → `wrapix-stable-profile-<name>` → `wrapix-base-image` chain via `fromImage` (see § Provenance-Tiered Layering), with the entrypoint script as the OCI `Cmd`
+5. Emit the leaf image atop the `wrix-agent-<agent>-<name>` → `wrix-stable-profile-<name>` → `wrix-base-image` chain via `fromImage` (see § Provenance-Tiered Layering), with the entrypoint script as the OCI `Cmd`
 
 `mkImageRef` (also in `lib/sandbox/`) produces the stable podman ref the launcher expects (`localhost/<name>:<hash-tag>` on Linux, bare `<name>:<hash-tag>` on Darwin's Apple `container` CLI).
 
@@ -39,18 +39,18 @@ The four tiers, bottom (most stable) to top (most volatile):
 
 | Tier | Derivation | Contents | Changes with |
 |------|-----------|----------|--------------|
-| 0 — base | `wrapix-base-image` | universal nixpkgs bottom-of-closure (glibc, gcc-lib, openssl, cacert, shells, coreutils) | nixpkgs pin |
-| 1 — stable-profile | `wrapix-stable-profile-<name>` | the profile's `corePackages` (the `basePackages` floor + the profile toolchain, default *or* pinned) plus wrapix-generated derivations (notify client, prek wrappers + bundle, nix.conf, passwd/group) — **no agent runtime** | wrapix source, nixpkgs pin, a toolchain re-pin |
-| 2 — agent | `wrapix-agent-<agent>-<name>` | exactly the **one** selected `agentPkg` runtime and its closure. A non-selected agent's binary is absent | the agent selection and that agent package's own version |
+| 0 — base | `wrix-base-image` | universal nixpkgs bottom-of-closure (glibc, gcc-lib, openssl, cacert, shells, coreutils) | nixpkgs pin |
+| 1 — stable-profile | `wrix-stable-profile-<name>` | the profile's `corePackages` (the `basePackages` floor + the profile toolchain, default *or* pinned) plus wrix-generated derivations (notify client, prek wrappers + bundle, nix.conf, passwd/group) — **no agent runtime** | wrix source, nixpkgs pin, a toolchain re-pin |
+| 2 — agent | `wrix-agent-<agent>-<name>` | exactly the **one** selected `agentPkg` runtime and its closure. A non-selected agent's binary is absent | the agent selection and that agent package's own version |
 | 3 — leaf | the per-profile image | downstream-appended packages (`profile.packages` − `corePackages`) and per-invocation generated content (merged agent settings, MCP configs, the `profileEnv` symlink tree, entrypoint `extraCommands`), plus the Nix DB registration file | each consumer iteration |
 
 Tiers 1 and 2 are built with `dockerTools.buildLayeredImage` (tars in the store) so each can serve as a `fromImage` on both Linux and Darwin — the same tar-only constraint `base-image.nix` records for tier 0. The leaf is `streamLayeredImage` on Linux and `buildLayeredImage` on Darwin. Each non-base tier sets `fromImage` to the tier below — leaf → agent → stable-profile → base — and drives its `layeringPipeline` with `remove_paths` over the **union of all lower tiers' closures**, so no tier re-emits a path a lower tier already ships. Within a tier, standard dockerTools layering applies, but because the tier's contents are a fixed set the ordering inside it is stable — the global-ranking re-partition that destabilised the old single-image layering cannot occur.
 
-**Tier membership rule.** Three discriminators separate the three non-base tiers. *Fixed-per-profile-instance* content (tier 1) is the profile's `corePackages` plus the wrapix-generated derivations; the profile exposes it through `corePackages` (see `profiles.md` § Profile Attrset Schema), the wrapix-controlled set `mkProfile` fixes at construction — downstream extension (`deriveProfile`, `rustProfile { packages }`) appends only to `profile.packages`, never to `corePackages`. The *one selected `agentPkg` runtime* is tier 2. *Varies-per-iteration* content — the appended delta `profile.packages` − `corePackages` and the volatile generated files — is tier 3 (leaf). A downstream-**pinned** toolchain (`rustProfile { toolchain = ./rust-toolchain.toml }`) is part of `corePackages` and therefore tier 1.
+**Tier membership rule.** Three discriminators separate the three non-base tiers. *Fixed-per-profile-instance* content (tier 1) is the profile's `corePackages` plus the wrix-generated derivations; the profile exposes it through `corePackages` (see `profiles.md` § Profile Attrset Schema), the wrix-controlled set `mkProfile` fixes at construction — downstream extension (`deriveProfile`, `rustProfile { packages }`) appends only to `profile.packages`, never to `corePackages`. The *one selected `agentPkg` runtime* is tier 2. *Varies-per-iteration* content — the appended delta `profile.packages` − `corePackages` and the volatile generated files — is tier 3 (leaf). A downstream-**pinned** toolchain (`rustProfile { toolchain = ./rust-toolchain.toml }`) is part of `corePackages` and therefore tier 1.
 
-**Tier ordering (toolchain below agent).** The agent tier sits *above* the toolchain, not below, because a change low in the chain re-emits every tier above it, and the toolchain is by far the heaviest mutable path (a pinned rust toolchain is ~1.5 GB versus ~230 MB for `claude-code` and less for a `direct` runner). Placing the toolchain lowest — only `wrapix-base-image` beneath it — means almost nothing ever drags it: it re-ships only when it itself changes. The inverse order would re-ship the whole toolchain on every agent-version bump, and for `direct` — whose runner is the consumer's own frequently-rebuilt binary — that would be on nearly every iteration. The light agent binary is the cheap thing to cascade, so it rides above; cascade cost is `freq × weight-of-tier-dragged`, and the toolchain's weight dominates regardless of relative cadence.
+**Tier ordering (toolchain below agent).** The agent tier sits *above* the toolchain, not below, because a change low in the chain re-emits every tier above it, and the toolchain is by far the heaviest mutable path (a pinned rust toolchain is ~1.5 GB versus ~230 MB for `claude-code` and less for a `direct` runner). Placing the toolchain lowest — only `wrix-base-image` beneath it — means almost nothing ever drags it: it re-ships only when it itself changes. The inverse order would re-ship the whole toolchain on every agent-version bump, and for `direct` — whose runner is the consumer's own frequently-rebuilt binary — that would be on nearly every iteration. The light agent binary is the cheap thing to cascade, so it rides above; cascade cost is `freq × weight-of-tier-dragged`, and the toolchain's weight dominates regardless of relative cadence.
 
-**Tier 0 membership.** A path belongs in `wrapix-base-image` iff (a) it varies only with the nixpkgs pin, not with any profile-level input or wrapix-generated content, **and** (b) it is genuinely universal — every profile already closes over it as shared bottom-of-closure, not a profile-specific leaf. Condition (a) alone is necessary but not sufficient. A pin-stable but non-universal path must not be hoisted into tier 0 merely because its hash tracks only the pin: doing so would force every profile image to carry it even where it is never closed over. A profile-specific compiler toolchain such as `pkgs.rustc` is the case in point — base and python close over no Rust at all, and even the rust profile pulls fenix's toolchain (a different store path), so `pkgs.rustc` in tier 0 would be dead weight in every image. Such a path stays in the profile-specific tier 1 domain, never tier 0.
+**Tier 0 membership.** A path belongs in `wrix-base-image` iff (a) it varies only with the nixpkgs pin, not with any profile-level input or wrix-generated content, **and** (b) it is genuinely universal — every profile already closes over it as shared bottom-of-closure, not a profile-specific leaf. Condition (a) alone is necessary but not sufficient. A pin-stable but non-universal path must not be hoisted into tier 0 merely because its hash tracks only the pin: doing so would force every profile image to carry it even where it is never closed over. A profile-specific compiler toolchain such as `pkgs.rustc` is the case in point — base and python close over no Rust at all, and even the rust profile pulls fenix's toolchain (a different store path), so `pkgs.rustc` in tier 0 would be dead weight in every image. Such a path stays in the profile-specific tier 1 domain, never tier 0.
 
 The leaf's **customisation layer** (its final layer — generated files, metadata, and anything not held in a standalone Nix store path, including the `profileEnv` symlink tree) re-hashes whenever any of its inputs change, but it rides above the stable tiers, so a tier-3-only (leaf) change leaves every tier-0, tier-1, and tier-2 blob byte-identical. The `profileEnv` symlink tree references tier-0, tier-1, and tier-2 store paths that resolve from the lower layers at runtime, so the leaf's `remove_paths` strips them from its own graph without breaking PATH. The 127-layer OCI ceiling now splits four ways: tiers 0, 1, and 2 bound `maxLayers` to their fixed closures, and the leaf budgets only its delta plus the customisation layer.
 
@@ -85,7 +85,7 @@ the *same* closure-closed set, with no discrepancy in **either** direction:
 The registration is therefore derived from the **materialized contents
 closure** — the exact path set copied into the image layers — **not** the
 build derivation's full closure. The full build closure drags in unmaterialized
-intermediates (the `wrapix-*-profile-env` buildEnv and image-build artifacts
+intermediates (the `wrix-*-profile-env` buildEnv and image-build artifacts
 such as the customisation-layer tar and `layering.json`) that are never copied
 into the rootfs; registering them is precisely what bakes a dangling path.
 Computing the registration (`closureInfo` over the materialized path list +
@@ -108,31 +108,31 @@ The runtime acceptance — a fresh container letting the runtime user run
 
 Every profile image carries the host-equivalent prek setup so commits and pushes from inside the container fire the same `.pre-commit-config.yaml` chain the host runs (see `pre-commit.md` § Hook Installation in Profile Containers):
 
-- `wrapix.prekHooks`, `wrapix.prePushChecks`, and `wrapix.skipIfMissing` are wired into the image's package set — `prekHooks` so its store path is reachable by `core.hooksPath`, and the two wrappers so they resolve on `PATH` for prek `entry:` lines that reference them by name.
-- The platform entrypoint (`lib/sandbox/{linux,darwin}/entrypoint.sh`) sets `core.hooksPath` on `/workspace/.git` to the `wrapix.prekHooks` store path when `.pre-commit-config.yaml` is present, mirroring `mkDevShell`'s host-side step.
+- `wrix.prekHooks`, `wrix.prePushChecks`, and `wrix.skipIfMissing` are wired into the image's package set — `prekHooks` so its store path is reachable by `core.hooksPath`, and the two wrappers so they resolve on `PATH` for prek `entry:` lines that reference them by name.
+- The platform entrypoint (`lib/sandbox/{linux,darwin}/entrypoint.sh`) sets `core.hooksPath` on `/workspace/.git` to the `wrix.prekHooks` store path when `.pre-commit-config.yaml` is present, mirroring `mkDevShell`'s host-side step.
 - Profile images for bead use do not ship `nix` by default; nix-requiring hooks remain inert under `skip-if-missing nix --` (see `pre-commit.md`). The image builder does not inject `SKIP=` env vars, does not stub `nix` on `PATH`, and does not maintain a hook-id skip list. A profile that wants nix to fire in-container ships `pkgs.nix` via its own `packages`.
 
 ## Success Criteria
 
-- The launcher's image-install step (under both `wrapix run` and `wrapix spawn`) is short-circuited when the image's content digest is already present in the platform store: no tar materialization, no stream invocation, no `*-load` CLI call
+- The launcher's image-install step (under both `wrix run` and `wrix spawn`) is short-circuited when the image's content digest is already present in the platform store: no tar materialization, no stream invocation, no `*-load` CLI call
   [system](nix run .#test-image-install-digest-skip)
-- The image is a four-stage `fromImage` chain — the leaf chains atop `wrapix-agent-<agent>-<name>`, which chains atop `wrapix-stable-profile-<name>`, which chains atop `wrapix-base-image` — on both Linux (`streamLayeredImage` leaf) and Darwin (`buildLayeredImage` leaf)
-  [check](grep -nE 'wrapix-agent' lib/sandbox/image.nix)
+- The image is a four-stage `fromImage` chain — the leaf chains atop `wrix-agent-<agent>-<name>`, which chains atop `wrix-stable-profile-<name>`, which chains atop `wrix-base-image` — on both Linux (`streamLayeredImage` leaf) and Darwin (`buildLayeredImage` leaf)
+  [check](grep -nE 'wrix-agent' lib/sandbox/image.nix)
 - Each non-base tier removes the union of all lower tiers' closures from its layering graph via `remove_paths`, so no tier re-emits a store path a lower tier already ships
   [check](grep -nE 'remove_paths' lib/sandbox/image.nix lib/sandbox/stable-profile-image.nix)
-- `wrapix-base-image`'s derivation hash is invariant under changes to profile-level inputs — `profile.packages`, `profile.env`, MCP configs, the merged Claude settings JSON, and the agent runtime selection
+- `wrix-base-image`'s derivation hash is invariant under changes to profile-level inputs — `profile.packages`, `profile.env`, MCP configs, the merged Claude settings JSON, and the agent runtime selection
   [system](nix run .#test-base-image-hash-stable)
-- `wrapix-base-image` holds only the universal bottom-of-closure: no profile-specific compiler toolchain leaks in (e.g. `pkgs.rustc`, which no profile references — the rust profile uses fenix's toolchain)
+- `wrix-base-image` holds only the universal bottom-of-closure: no profile-specific compiler toolchain leaks in (e.g. `pkgs.rustc`, which no profile references — the rust profile uses fenix's toolchain)
   [system](nix run .#test-base-image-universal)
-- `wrapix-stable-profile-<name>`'s derivation hash is invariant under the agent runtime selection and all leaf (tier-3) inputs — downstream-appended packages (`profile.packages` − `corePackages`), the merged agent settings JSON, and MCP configs
+- `wrix-stable-profile-<name>`'s derivation hash is invariant under the agent runtime selection and all leaf (tier-3) inputs — downstream-appended packages (`profile.packages` − `corePackages`), the merged agent settings JSON, and MCP configs
   [system](nix run .#test-stable-profile-hash-stable)
-- `wrapix-stable-profile-<name>` holds only fixed-per-instance content: no agent runtime and no downstream-appended package leaks into it
+- `wrix-stable-profile-<name>` holds only fixed-per-instance content: no agent runtime and no downstream-appended package leaks into it
   [system](nix run .#test-stable-profile-membership)
-- A downstream-pinned toolchain (`rustProfile { toolchain = ./rust-toolchain.toml }`) lands in tier 1 (`wrapix-stable-profile-<name>`), not the leaf
+- A downstream-pinned toolchain (`rustProfile { toolchain = ./rust-toolchain.toml }`) lands in tier 1 (`wrix-stable-profile-<name>`), not the leaf
   [system](nix run .#test-pinned-toolchain-stable-tier)
 - A tier-3 (leaf) change — a downstream-appended package, an agent-settings field, or an MCP-config field — leaves every tier-0, tier-1, and tier-2 (agent) layer-blob byte-identical in the resulting image's manifest; only leaf blobs change
   [system](nix run .#test-downstream-change-leaf-only)
-- The selected agent runtime rides its own tier `wrapix-agent-<agent>-<name>`, chained atop `wrapix-stable-profile-<name>`; an agent-version change leaves every tier-0 and tier-1 blob byte-identical
+- The selected agent runtime rides its own tier `wrix-agent-<agent>-<name>`, chained atop `wrix-stable-profile-<name>`; an agent-version change leaves every tier-0 and tier-1 blob byte-identical
   [system](nix run .#test-agent-tier-isolated)
 - A non-selected agent's binary is absent from the image: an `agent = "direct"` image contains neither `claude-code` nor a `pi` runtime
   [system](nix run .#test-agent-exclusive)
@@ -152,9 +152,9 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
   [check](grep -nE 'cacert|SSL_CERT_FILE' lib/sandbox/image.nix)
 - The platform entrypoint script (`lib/sandbox/{linux,darwin}/entrypoint.sh`) is the image's startup command
   [check](grep -nE 'entrypointSh|Entrypoint|Cmd' lib/sandbox/image.nix)
-- `wrapix.prekHooks`, `wrapix.prePushChecks`, and `wrapix.skipIfMissing` all land in every profile image's store closure
+- `wrix.prekHooks`, `wrix.prePushChecks`, and `wrix.skipIfMissing` all land in every profile image's store closure
   [check](grep -nrE 'prekHooks|prePushChecks|skipIfMissing' lib/sandbox/ lib/default.nix)
-- The Linux entrypoint sets `core.hooksPath` on `/workspace/.git` to the `wrapix.prekHooks` store path when `.pre-commit-config.yaml` is present
+- The Linux entrypoint sets `core.hooksPath` on `/workspace/.git` to the `wrix.prekHooks` store path when `.pre-commit-config.yaml` is present
   [check](grep -nE 'core\.hooksPath|prekHooks' lib/sandbox/linux/entrypoint.sh)
 - The Darwin entrypoint mirrors the Linux entrypoint's `core.hooksPath` setup for `/workspace/.git`
   [check](grep -nE 'core\.hooksPath|prekHooks' lib/sandbox/darwin/entrypoint.sh)
@@ -169,9 +169,9 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
 4. **Nix configuration** — `flakes` and `nix-command` are enabled; the in-container Nix sandbox is disabled (the outer container is the boundary).
 5. **CA certificates** — `pkgs.cacert` is included and `SSL_CERT_FILE` resolves to it.
 6. **Entrypoint embedding** — the platform-specific entrypoint script (`lib/sandbox/{linux,darwin}/entrypoint.sh`) is the image's startup command.
-7. **Hook installation** — every profile image carries `wrapix.prekHooks` plus `wrapix.prePushChecks` and `wrapix.skipIfMissing` on `PATH`; the entrypoint configures `core.hooksPath` on `/workspace/.git` when `.pre-commit-config.yaml` is present. See `pre-commit.md` for the wrapper contracts.
-8. **Provenance-tiered layering** — the image is a four-stage `fromImage` chain (base → stable-profile → agent → leaf). Each tier's layer membership is fixed by its own closed contents and removes the union of all lower tiers' closures via `remove_paths`, so a tier-3 (leaf) change leaves tier-0, tier-1, and tier-2 blobs byte-identical. Tier membership: the wrapix floor + profile toolchain + wrapix-generated content is tier 1 (keyed on `corePackages`, see `profiles.md`); the single selected `agentPkg` runtime is tier 2; downstream-appended packages and per-invocation generated files are tier 3. The agent tier rides *above* the toolchain so an agent-version bump never re-ships the heavier toolchain (which sits lowest, dragged only by a base change). Both Linux (`streamLayeredImage` leaf) and Darwin (`buildLayeredImage` leaf) chain identically; intermediate tiers (stable-profile, agent) are always `buildLayeredImage` tars so they can serve as a `fromImage` on both platforms.
-9. **Store/DB consistency** — the image's Nix database registers *exactly* its on-disk contents closure: no orphaned (on-disk but unregistered) path and no dangling (registered but absent) path, in either direction. The registered set is derived from the materialized path list copied into the image layers, not the build derivation's full closure (which includes unmaterialized intermediates like the `wrapix-*-profile-env` buildEnv). This prevents a build from trusting a registered-but-missing path (`No such file or directory`, unrecoverable without store surgery); the no-orphan direction is no longer a correctness requirement now that the runtime user owns the store, but registering over exactly the materialized contents secures it for free. The registration rides as a single DB file in the leaf customisation layer — it copies up no store path and does not perturb the provenance-tiered chain. Runtime acceptance is owned by `sandbox.md`.
+7. **Hook installation** — every profile image carries `wrix.prekHooks` plus `wrix.prePushChecks` and `wrix.skipIfMissing` on `PATH`; the entrypoint configures `core.hooksPath` on `/workspace/.git` when `.pre-commit-config.yaml` is present. See `pre-commit.md` for the wrapper contracts.
+8. **Provenance-tiered layering** — the image is a four-stage `fromImage` chain (base → stable-profile → agent → leaf). Each tier's layer membership is fixed by its own closed contents and removes the union of all lower tiers' closures via `remove_paths`, so a tier-3 (leaf) change leaves tier-0, tier-1, and tier-2 blobs byte-identical. Tier membership: the wrix floor + profile toolchain + wrix-generated content is tier 1 (keyed on `corePackages`, see `profiles.md`); the single selected `agentPkg` runtime is tier 2; downstream-appended packages and per-invocation generated files are tier 3. The agent tier rides *above* the toolchain so an agent-version bump never re-ships the heavier toolchain (which sits lowest, dragged only by a base change). Both Linux (`streamLayeredImage` leaf) and Darwin (`buildLayeredImage` leaf) chain identically; intermediate tiers (stable-profile, agent) are always `buildLayeredImage` tars so they can serve as a `fromImage` on both platforms.
+9. **Store/DB consistency** — the image's Nix database registers *exactly* its on-disk contents closure: no orphaned (on-disk but unregistered) path and no dangling (registered but absent) path, in either direction. The registered set is derived from the materialized path list copied into the image layers, not the build derivation's full closure (which includes unmaterialized intermediates like the `wrix-*-profile-env` buildEnv). This prevents a build from trusting a registered-but-missing path (`No such file or directory`, unrecoverable without store surgery); the no-orphan direction is no longer a correctness requirement now that the runtime user owns the store, but registering over exactly the materialized contents secures it for free. The registration rides as a single DB file in the leaf customisation layer — it copies up no store path and does not perturb the provenance-tiered chain. Runtime acceptance is owned by `sandbox.md`.
 
 ### Non-Functional
 

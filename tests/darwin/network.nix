@@ -109,7 +109,7 @@ in
         export HOME="$REAL_HOME"
 
         # Load test image
-        TEST_IMAGE="wrapix-network-test:latest"
+        TEST_IMAGE="wrix-network-test:latest"
         echo "Loading test image..."
         container image delete "$TEST_IMAGE" 2>/dev/null || true
         OCI_TAR=$(mktemp)
@@ -151,7 +151,7 @@ in
           -e BD_DB=/tmp/beads.db \
           -e BD_NO_DAEMON=1 \
           -e HOST_UID=$(id -u "$REAL_USER") \
-          -e WRAPIX_PROMPT="test" \
+          -e WRIX_PROMPT="test" \
           --network default \
           --dns 100.100.100.100 \
           --dns 1.1.1.1 \

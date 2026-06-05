@@ -5,12 +5,12 @@ _:
     {
       config,
       pkgs,
-      wrapix,
+      wrix,
       ...
     }:
     {
-      devShells.default = wrapix.mkDevShell {
-        profile = wrapix.profiles.rust;
+      devShells.default = wrix.mkDevShell {
+        profile = wrix.profiles.rust;
 
         packages = [
           config.treefmt.build.wrapper

@@ -63,12 +63,12 @@ test_mounts_appended_to_profile() {
       extended = lib.mkSandbox {
         profile = lib.profiles.python;
         mounts = [
-          { source = \"/tmp/wrapix-test-src-a\"; dest = \"/mnt/a\"; mode = \"ro\"; }
-          { source = \"/tmp/wrapix-test-src-b\"; dest = \"/mnt/b\"; mode = \"rw\"; }
+          { source = \"/tmp/wrix-test-src-a\"; dest = \"/mnt/a\"; mode = \"ro\"; }
+          { source = \"/tmp/wrix-test-src-b\"; dest = \"/mnt/b\"; mode = \"rw\"; }
         ];
       };
       uvMountPresent = builtins.any
-        (m: m.dest == \"/home/wrapix/.cache/uv\")
+        (m: m.dest == \"/home/wrix/.cache/uv\")
         extended.profile.mounts;
       hasDest = dest: builtins.any (m: m.dest == dest) extended.profile.mounts;
     in {
@@ -120,7 +120,7 @@ test_mount_payload_preserved() {
     let
       sb = lib.mkSandbox {
         mounts = [
-          { source = \"/srv/wrapix/test-payload\"; dest = \"/payload/here\"; mode = \"ro\"; }
+          { source = \"/srv/wrix/test-payload\"; dest = \"/payload/here\"; mode = \"ro\"; }
         ];
       };
       mountAt = dest: builtins.head (
@@ -140,8 +140,8 @@ test_mount_payload_preserved() {
   dest=$(echo "$result" | jq -r '.dest')
   mode=$(echo "$result" | jq -r '.mode')
 
-  if [[ "$src" != "/srv/wrapix/test-payload" ]]; then
-    fail "mount.source not preserved: expected '/srv/wrapix/test-payload', got '$src'"
+  if [[ "$src" != "/srv/wrix/test-payload" ]]; then
+    fail "mount.source not preserved: expected '/srv/wrix/test-payload', got '$src'"
     return 1
   fi
   if [[ "$dest" != "/payload/here" ]]; then
@@ -166,14 +166,14 @@ test_env_right_merge() {
     let
       added = lib.mkSandbox {
         profile = lib.profiles.base;
-        env = { WRAPIX_TEST_KEY = \"wrapix_test_value\"; };
+        env = { WRIX_TEST_KEY = \"wrix_test_value\"; };
       };
       conflict = lib.mkSandbox {
         profile = lib.profiles.python;
         env = { UV_CACHE_DIR = \"/custom/uv/override\"; };
       };
     in {
-      addedValue    = added.profile.env.WRAPIX_TEST_KEY    or null;
+      addedValue    = added.profile.env.WRIX_TEST_KEY    or null;
       conflictValue = conflict.profile.env.UV_CACHE_DIR    or null;
     }
   "); then
@@ -185,8 +185,8 @@ test_env_right_merge() {
   added_value=$(echo    "$result" | jq -r '.addedValue')
   conflict_value=$(echo "$result" | jq -r '.conflictValue')
 
-  if [[ "$added_value" != "wrapix_test_value" ]]; then
-    fail "env.WRAPIX_TEST_KEY expected 'wrapix_test_value', got '$added_value'"
+  if [[ "$added_value" != "wrix_test_value" ]]; then
+    fail "env.WRIX_TEST_KEY expected 'wrix_test_value', got '$added_value'"
     return 1
   fi
   if [[ "$conflict_value" != "/custom/uv/override" ]]; then
@@ -207,11 +207,11 @@ test_env_preserves_profile_keys() {
     let
       sb = lib.mkSandbox {
         profile = lib.profiles.python;
-        env = { WRAPIX_EXTRA = \"x\"; };
+        env = { WRIX_EXTRA = \"x\"; };
       };
     in {
       uvValue = sb.profile.env.UV_CACHE_DIR or null;
-      extraValue = sb.profile.env.WRAPIX_EXTRA or null;
+      extraValue = sb.profile.env.WRIX_EXTRA or null;
     }
   "); then
     fail "nix eval env-preserve expression failed"
@@ -222,12 +222,12 @@ test_env_preserves_profile_keys() {
   uv_value=$(echo    "$result" | jq -r '.uvValue')
   extra_value=$(echo "$result" | jq -r '.extraValue')
 
-  if [[ "$uv_value" != "/home/wrapix/.cache/uv" ]]; then
+  if [[ "$uv_value" != "/home/wrix/.cache/uv" ]]; then
     fail "python profile's UV_CACHE_DIR clobbered by merge: got '$uv_value'"
     return 1
   fi
   if [[ "$extra_value" != "x" ]]; then
-    fail "consumer env.WRAPIX_EXTRA missing from profile.env: got '$extra_value'"
+    fail "consumer env.WRIX_EXTRA missing from profile.env: got '$extra_value'"
     return 1
   fi
   pass "Profile env keys survive a merge that adds an unrelated key"

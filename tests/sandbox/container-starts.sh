@@ -37,7 +37,7 @@ cd "$REPO_ROOT"
 
 IMAGE_STREAM=$(nix build --no-link --print-out-paths --no-warn-dirty .#test-image-base)
 
-WORKSPACE=$(mktemp -d -t wrapix-container-start.XXXXXX)
+WORKSPACE=$(mktemp -d -t wrix-container-start.XXXXXX)
 cleanup() {
   rm -rf "$WORKSPACE"
   if podman image exists "$IMAGE_REF"; then
@@ -46,8 +46,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-IMAGE_REF=$(wrapix_unique_image_ref "wrapix-test-container-starts")
-wrapix_load_test_image "$IMAGE_STREAM" "wrapix-base-claude" "$IMAGE_REF"
+IMAGE_REF=$(wrix_unique_image_ref "wrix-test-container-starts")
+wrix_load_test_image "$IMAGE_STREAM" "wrix-base-claude" "$IMAGE_REF"
 
 result=$(podman run --rm --network=pasta --userns=keep-id \
   --entrypoint /bin/bash \

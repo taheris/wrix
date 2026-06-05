@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 # Verifier for criterion 114 of specs/sandbox.md:
 #
-#   With NET_ADMIN available, WRAPIX_NETWORK=limit restricts outbound to the
+#   With NET_ADMIN available, WRIX_NETWORK=limit restricts outbound to the
 #   merged allowlist; without NET_ADMIN, limit mode logs a warning and falls
 #   back to open network. Any value other than open|limit errors before the
 #   container starts.
 #
 # Two contracts under test, both runnable anywhere (no KVM / no microVM):
-#   1. Validation contract — the launcher rejects unknown WRAPIX_NETWORK
+#   1. Validation contract — the launcher rejects unknown WRIX_NETWORK
 #      values with the documented error before any container work.
 #   2. Fallback contract — the Linux entrypoint's filter block warns and
 #      proceeds (rather than aborts) when iptables cannot acquire NET_ADMIN.
 #
 # Enforcement of the limit allowlist inside the container is only meaningful
-# when NET_ADMIN is available (microVM on macOS, WRAPIX_MICROVM=1 on Linux).
+# when NET_ADMIN is available (microVM on macOS, WRIX_MICROVM=1 on Linux).
 # That path is exercised by tests/darwin/network.nix (allowlist resolution).
 # This script skips (exit 77) any assertion that would require a real
 # NET_ADMIN-capable container.
@@ -25,7 +25,7 @@ LINUX_LAUNCHER_NIX="$REPO_ROOT/lib/sandbox/linux/default.nix"
 DARWIN_LAUNCHER_NIX="$REPO_ROOT/lib/sandbox/darwin/default.nix"
 LINUX_ENTRYPOINT="$REPO_ROOT/lib/sandbox/linux/entrypoint.sh"
 
-TEST_TMP=$(mktemp -d -t wrapix-network-modes.XXXXXX)
+TEST_TMP=$(mktemp -d -t wrix-network-modes.XXXXXX)
 trap 'rm -rf "$TEST_TMP"' EXIT
 
 PASSED=0
@@ -34,14 +34,14 @@ FAILED=0
 pass() { printf '  PASS: %s\n' "$1"; PASSED=$((PASSED + 1)); }
 fail() { printf '  FAIL: %s\n' "$1" >&2; FAILED=$((FAILED + 1)); }
 
-# Extract the WRAPIX_NETWORK validation block from a writeShellApplication
+# Extract the WRIX_NETWORK validation block from a writeShellApplication
 # `text = ''...''` body in lib/sandbox/{linux,darwin}/default.nix and convert
 # Nix's `''$` escape back to a literal `$` so the snippet runs under bash.
 # The block runs from the marker comment to the first `esac` at any indent.
 extract_validation_block() {
   local source="$1" out="$2"
   awk '
-    /# Validate WRAPIX_NETWORK mode/ { capture = 1 }
+    /# Validate WRIX_NETWORK mode/ { capture = 1 }
     capture { print }
     capture && /^[[:space:]]*esac[[:space:]]*$/ { exit }
   ' "$source" \
@@ -53,46 +53,46 @@ extract_validation_block() {
 # comment to the next `fi` at column 0 (the outer-block terminator).
 extract_filter_block() {
   local source="$1" out="$2"
-  sed -n '/^# Apply network filtering when WRAPIX_NETWORK=limit/,/^fi$/p' \
+  sed -n '/^# Apply network filtering when WRIX_NETWORK=limit/,/^fi$/p' \
     "$source" > "$out"
 }
 
 # ----------------------------------------------------------------------------
-# Test 1: Linux launcher rejects WRAPIX_NETWORK=garbage with documented error
+# Test 1: Linux launcher rejects WRIX_NETWORK=garbage with documented error
 # ----------------------------------------------------------------------------
 test_linux_validation_rejects_garbage() {
   local block="$TEST_TMP/linux-validate.sh"
   extract_validation_block "$LINUX_LAUNCHER_NIX" "$block"
 
   local err="$TEST_TMP/linux-garbage.err"
-  if WRAPIX_NETWORK=garbage bash "$block" 2>"$err"; then
-    fail "Linux launcher accepted WRAPIX_NETWORK=garbage"
+  if WRIX_NETWORK=garbage bash "$block" 2>"$err"; then
+    fail "Linux launcher accepted WRIX_NETWORK=garbage"
     return
   fi
-  if ! grep -qF "WRAPIX_NETWORK must be 'open' or 'limit'" "$err"; then
+  if ! grep -qF "WRIX_NETWORK must be 'open' or 'limit'" "$err"; then
     fail "Linux launcher missing documented error message: $(cat "$err")"
     return
   fi
-  pass "Linux launcher rejects WRAPIX_NETWORK=garbage with documented error"
+  pass "Linux launcher rejects WRIX_NETWORK=garbage with documented error"
 }
 
 # ----------------------------------------------------------------------------
-# Test 2: Darwin launcher rejects WRAPIX_NETWORK=garbage with documented error
+# Test 2: Darwin launcher rejects WRIX_NETWORK=garbage with documented error
 # ----------------------------------------------------------------------------
 test_darwin_validation_rejects_garbage() {
   local block="$TEST_TMP/darwin-validate.sh"
   extract_validation_block "$DARWIN_LAUNCHER_NIX" "$block"
 
   local err="$TEST_TMP/darwin-garbage.err"
-  if WRAPIX_NETWORK=garbage bash "$block" 2>"$err"; then
-    fail "Darwin launcher accepted WRAPIX_NETWORK=garbage"
+  if WRIX_NETWORK=garbage bash "$block" 2>"$err"; then
+    fail "Darwin launcher accepted WRIX_NETWORK=garbage"
     return
   fi
-  if ! grep -qF "WRAPIX_NETWORK must be 'open' or 'limit'" "$err"; then
+  if ! grep -qF "WRIX_NETWORK must be 'open' or 'limit'" "$err"; then
     fail "Darwin launcher missing documented error message: $(cat "$err")"
     return
   fi
-  pass "Darwin launcher rejects WRAPIX_NETWORK=garbage with documented error"
+  pass "Darwin launcher rejects WRIX_NETWORK=garbage with documented error"
 }
 
 # ----------------------------------------------------------------------------
@@ -104,12 +104,12 @@ test_launcher_accepts_valid_modes() {
 
   local mode
   for mode in open limit; do
-    if ! WRAPIX_NETWORK="$mode" bash "$block" 2>"$TEST_TMP/valid-$mode.err"; then
-      fail "Linux launcher rejected valid WRAPIX_NETWORK=$mode: $(cat "$TEST_TMP/valid-$mode.err")"
+    if ! WRIX_NETWORK="$mode" bash "$block" 2>"$TEST_TMP/valid-$mode.err"; then
+      fail "Linux launcher rejected valid WRIX_NETWORK=$mode: $(cat "$TEST_TMP/valid-$mode.err")"
       return
     fi
   done
-  pass "Linux launcher accepts WRAPIX_NETWORK in {open,limit}"
+  pass "Linux launcher accepts WRIX_NETWORK in {open,limit}"
 }
 
 # Absolute path to the bash we're running under. Tests that override PATH
@@ -140,14 +140,14 @@ STUB
 
   local err="$TEST_TMP/fallback-no-netadmin.err"
   if ! PATH="$stub_dir" \
-       WRAPIX_NETWORK=limit \
-       WRAPIX_NETWORK_ALLOWLIST="api.anthropic.com,github.com" \
+       WRIX_NETWORK=limit \
+       WRIX_NETWORK_ALLOWLIST="api.anthropic.com,github.com" \
        "$BASH_BIN" "$block" 2>"$err"; then
     fail "Entrypoint exited non-zero when iptables lacks NET_ADMIN; should warn and fall back"
     sed 's/^/    /' "$err" >&2
     return
   fi
-  if ! grep -qF "WRAPIX_NETWORK=limit requires NET_ADMIN capability" "$err"; then
+  if ! grep -qF "WRIX_NETWORK=limit requires NET_ADMIN capability" "$err"; then
     fail "Missing NET_ADMIN fallback warning in stderr: $(cat "$err")"
     return
   fi
@@ -166,8 +166,8 @@ test_limit_falls_back_when_iptables_missing() {
 
   local err="$TEST_TMP/fallback-no-iptables.err"
   if ! PATH="$empty_dir" \
-       WRAPIX_NETWORK=limit \
-       WRAPIX_NETWORK_ALLOWLIST="api.anthropic.com" \
+       WRIX_NETWORK=limit \
+       WRIX_NETWORK_ALLOWLIST="api.anthropic.com" \
        "$BASH_BIN" "$block" 2>"$err"; then
     fail "Entrypoint exited non-zero when iptables is missing; should warn and fall back"
     sed 's/^/    /' "$err" >&2
@@ -194,7 +194,7 @@ test_enforcement_requires_net_admin_capability() {
     return 77
   fi
   if [[ ! -e /dev/kvm ]]; then
-    echo "  SKIP: NET_ADMIN enforcement requires /dev/kvm (WRAPIX_MICROVM=1) or macOS"
+    echo "  SKIP: NET_ADMIN enforcement requires /dev/kvm (WRIX_MICROVM=1) or macOS"
     return 77
   fi
   if ! command -v podman >/dev/null 2>&1; then

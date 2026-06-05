@@ -100,14 +100,14 @@ in
         else
           ''
             if [ -d .git ] && [ -f .pre-commit-config.yaml ]; then
-              _wrapix_hooks_target='${hooksTarget}'
-              if _wrapix_hooks_current=$(git config --local --get core.hooksPath); then
-                if [ "$_wrapix_hooks_current" != "$_wrapix_hooks_target" ]; then
-                  echo "wrapix: overriding stale core.hooksPath ($_wrapix_hooks_current) -> $_wrapix_hooks_target" >&2
+              _wrix_hooks_target='${hooksTarget}'
+              if _wrix_hooks_current=$(git config --local --get core.hooksPath); then
+                if [ "$_wrix_hooks_current" != "$_wrix_hooks_target" ]; then
+                  echo "wrix: overriding stale core.hooksPath ($_wrix_hooks_current) -> $_wrix_hooks_target" >&2
                 fi
               fi
-              git config --local core.hooksPath "$_wrapix_hooks_target"
-              unset _wrapix_hooks_target _wrapix_hooks_current
+              git config --local core.hooksPath "$_wrix_hooks_target"
+              unset _wrix_hooks_target _wrix_hooks_current
             fi
           '';
     in
@@ -133,7 +133,7 @@ in
 
         ${prekHookSetup}
 
-        echo "Wrapix development shell"
+        echo "Wrix development shell"
 
         ${profile.shellHook or ""}
         ${shellHook}

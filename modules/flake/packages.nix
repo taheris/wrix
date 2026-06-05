@@ -6,13 +6,13 @@ _:
       system,
       pkgs,
       test,
-      wrapix,
+      wrix,
       linuxPkgs,
       ...
     }:
     let
       inherit (builtins) elem listToAttrs mapAttrs;
-      inherit (wrapix) profiles;
+      inherit (wrix) profiles;
 
       isLinux = elem system [
         "aarch64-linux"
@@ -20,7 +20,7 @@ _:
       ];
 
       builtInProfiles = { inherit (profiles) base rust python; };
-      profileSandboxes = mapAttrs (_: profile: wrapix.mkSandbox { inherit profile; }) builtInProfiles;
+      profileSandboxes = mapAttrs (_: profile: wrix.mkSandbox { inherit profile; }) builtInProfiles;
       profileImages = mapAttrs (_: s: s.image) profileSandboxes;
 
       # `packages.image-<name>` — per-profile OCI artifact for the default
@@ -39,7 +39,7 @@ _:
             map (name: {
               name = "image-${name}-${agent}";
               value =
-                (wrapix.mkSandbox {
+                (wrix.mkSandbox {
                   profile = builtInProfiles.${name};
                   inherit agent;
                 }).image;
@@ -51,7 +51,7 @@ _:
           ]
       );
 
-      mkSandboxPkg = cfg: (wrapix.mkSandbox cfg).package;
+      mkSandboxPkg = cfg: (wrix.mkSandbox cfg).package;
       sandboxPkgs = mapAttrs (_: mkSandboxPkg) {
         sandbox = {
           profile = profiles.base;
@@ -136,10 +136,10 @@ _:
         };
       };
 
-      # Profile-agnostic launcher (`packages.wrapix`) — no image baked in.
-      # Orchestrators export WRAPIX_DEFAULT_IMAGE_REF/WRAPIX_DEFAULT_IMAGE_SOURCE
+      # Profile-agnostic launcher (`packages.wrix`) — no image baked in.
+      # Orchestrators export WRIX_DEFAULT_IMAGE_REF/WRIX_DEFAULT_IMAGE_SOURCE
       # (or pass image_ref/image_source via SpawnConfig) before invoking it.
-      wrapixLauncher = (wrapix.mkSandbox { profile = profiles.base; }).launcher;
+      wrixLauncher = (wrix.mkSandbox { profile = profiles.base; }).launcher;
     in
     {
       packages =
@@ -156,7 +156,7 @@ _:
 
           default = sandboxOverlayPkgs.sandbox-pi;
           nodejs = linuxPkgs.nodejs_22;
-          profile-images = wrapix.mkProfileImages profileImages;
+          profile-images = wrix.mkProfileImages profileImages;
           # Test sandbox image (claude/beads stubbed out with `hello`);
           # consumed by the host-side podman verifiers in tests/sandbox/.
           # Linux-only: the image builds against linuxPkgs and the podman
@@ -173,10 +173,10 @@ _:
             { }
         )
         // {
-          tmux-mcp = wrapix.tmuxMcpPackage.bin;
-          wrapix = wrapixLauncher;
-          wrapix-builder = import ../../lib/builder { inherit pkgs linuxPkgs; };
-          wrapix-notifyd = import ../../lib/notify/daemon.nix { inherit pkgs; };
+          tmux-mcp = wrix.tmuxMcpPackage.bin;
+          wrix = wrixLauncher;
+          wrix-builder = import ../../lib/builder { inherit pkgs linuxPkgs; };
+          wrix-notifyd = import ../../lib/notify/daemon.nix { inherit pkgs; };
         };
     };
 }

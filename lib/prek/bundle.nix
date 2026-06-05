@@ -4,7 +4,7 @@ let
   mkHook =
     name:
     pkgs.writeShellApplication {
-      name = "wrapix-prek-hook-${name}";
+      name = "wrix-prek-hook-${name}";
       runtimeInputs = [ pkgs.prek ];
       text = builtins.readFile (./hooks + "/${name}");
     };
@@ -18,10 +18,10 @@ let
   };
 
 in
-pkgs.runCommand "wrapix-prek-hooks" { } ''
-  install -Dm 555 ${hooks.pre-commit}/bin/wrapix-prek-hook-pre-commit $out/pre-commit
-  install -Dm 555 ${hooks.pre-push}/bin/wrapix-prek-hook-pre-push $out/pre-push
-  install -Dm 555 ${hooks.prepare-commit-msg}/bin/wrapix-prek-hook-prepare-commit-msg $out/prepare-commit-msg
-  install -Dm 555 ${hooks.post-checkout}/bin/wrapix-prek-hook-post-checkout $out/post-checkout
-  install -Dm 555 ${hooks.post-merge}/bin/wrapix-prek-hook-post-merge $out/post-merge
+pkgs.runCommand "wrix-prek-hooks" { } ''
+  install -Dm 555 ${hooks.pre-commit}/bin/wrix-prek-hook-pre-commit $out/pre-commit
+  install -Dm 555 ${hooks.pre-push}/bin/wrix-prek-hook-pre-push $out/pre-push
+  install -Dm 555 ${hooks.prepare-commit-msg}/bin/wrix-prek-hook-prepare-commit-msg $out/prepare-commit-msg
+  install -Dm 555 ${hooks.post-checkout}/bin/wrix-prek-hook-post-checkout $out/post-checkout
+  install -Dm 555 ${hooks.post-merge}/bin/wrix-prek-hook-post-merge $out/post-merge
 ''

@@ -1,4 +1,4 @@
-# Shared wrapix-base-image: the universal, nixpkgs-pin-dependent bottom of the
+# Shared wrix-base-image: the universal, nixpkgs-pin-dependent bottom of the
 # image closure. Profile images chain on top via `fromImage` (see
 # specs/image-builder.md § Base Image Layering), so the base's tar loads into the
 # platform store once and never re-emits when profile-level inputs change.
@@ -19,7 +19,7 @@ let
   inherit (pkgs) dockerTools;
 in
 dockerTools.buildLayeredImage {
-  name = "wrapix-base-image";
+  name = "wrix-base-image";
   tag = "latest";
   maxLayers = 64;
 

@@ -10,7 +10,7 @@ BUILDER_HOME="/home/$BUILDER_USER"
 
 # Verify /nix/store is populated (bootstrap is done by CLI before container start)
 if [ ! -d /nix/store ] || [ -z "$(/bin/ls -A /nix/store 2>/dev/null)" ]; then
-    echo "ERROR: /nix/store is empty. Run 'wrapix-builder start' to initialize." >&2
+    echo "ERROR: /nix/store is empty. Run 'wrix-builder start' to initialize." >&2
     exit 1
 fi
 

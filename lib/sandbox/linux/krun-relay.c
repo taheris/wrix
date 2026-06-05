@@ -43,8 +43,8 @@ static void sigchld_handler(int sig) {
 int main(int argc, char **argv) {
     /* Terminal size from env (set by launcher) */
     int rows = 24, cols = 80;
-    const char *r = getenv("WRAPIX_TERM_ROWS");
-    const char *c = getenv("WRAPIX_TERM_COLS");
+    const char *r = getenv("WRIX_TERM_ROWS");
+    const char *c = getenv("WRIX_TERM_COLS");
     if (r) rows = atoi(r);
     if (c) cols = atoi(c);
 

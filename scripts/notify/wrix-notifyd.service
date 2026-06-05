@@ -1,6 +1,6 @@
 [Unit]
-Description=Wrapix Notification Daemon
-Documentation=https://github.com/taheris/wrapix
+Description=Wrix Notification Daemon
+Documentation=https://github.com/taheris/wrix
 After=graphical-session.target
 
 [Service]

@@ -6,13 +6,13 @@
 #
 # Silently succeeds if daemon is not running.
 #
-# Usage: wrapix-notify "Title" "Message" ["Sound"]
+# Usage: wrix-notify "Title" "Message" ["Sound"]
 { pkgs }:
 
-pkgs.writeShellScriptBin "wrapix-notify" ''
-  SOCKET="/run/wrapix/notify.sock"
+pkgs.writeShellScriptBin "wrix-notify" ''
+  SOCKET="/run/wrix/notify.sock"
   TCP_PORT=5959      # Must match daemon.nix
-  VERBOSE="''${WRAPIX_NOTIFY_VERBOSE:-0}"
+  VERBOSE="''${WRIX_NOTIFY_VERBOSE:-0}"
   title="''${1:-Claude Code}"
   message="''${2:-}"
   sound="''${3:-}"
@@ -20,30 +20,30 @@ pkgs.writeShellScriptBin "wrapix-notify" ''
   # Build JSON payload (compact single-line for line-based daemon protocol)
   # Include session_id for focus-aware notifications (empty if not in tmux)
   payload=$(${pkgs.jq}/bin/jq -cn --arg t "$title" --arg m "$message" --arg s "$sound" \
-    --arg sid "''${WRAPIX_SESSION_ID:-}" \
+    --arg sid "''${WRIX_SESSION_ID:-}" \
     '{title: $t, message: $m, sound: $s, session_id: $sid}')
 
-  # Darwin containers set WRAPIX_NOTIFY_TCP=1 (VirtioFS can't pass Unix sockets)
-  if [ "''${WRAPIX_NOTIFY_TCP:-}" = "1" ]; then
+  # Darwin containers set WRIX_NOTIFY_TCP=1 (VirtioFS can't pass Unix sockets)
+  if [ "''${WRIX_NOTIFY_TCP:-}" = "1" ]; then
     # Get gateway IP (the host) from routing table
     GATEWAY=$(${pkgs.iproute2}/bin/ip route | ${pkgs.gawk}/bin/awk '/default/ {print $3; exit}')
     if [ -z "$GATEWAY" ]; then
-      [ "$VERBOSE" = "1" ] && echo "wrapix-notify: no gateway found" >&2
+      [ "$VERBOSE" = "1" ] && echo "wrix-notify: no gateway found" >&2
       exit 0
     fi
-    [ "$VERBOSE" = "1" ] && echo "wrapix-notify: using TCP to $GATEWAY:$TCP_PORT" >&2
+    [ "$VERBOSE" = "1" ] && echo "wrix-notify: using TCP to $GATEWAY:$TCP_PORT" >&2
     printf '%s\n' "$payload" | ${pkgs.netcat}/bin/nc -N "$GATEWAY" "$TCP_PORT" 2>/dev/null || true
-    [ "$VERBOSE" = "1" ] && echo "wrapix-notify: sent via TCP" >&2
+    [ "$VERBOSE" = "1" ] && echo "wrix-notify: sent via TCP" >&2
     exit 0
   fi
 
   # Linux containers: use Unix socket mounted from host
   if [ ! -S "$SOCKET" ]; then
-    [ "$VERBOSE" = "1" ] && echo "wrapix-notify: socket not found at $SOCKET" >&2
+    [ "$VERBOSE" = "1" ] && echo "wrix-notify: socket not found at $SOCKET" >&2
     exit 0  # Silent success if daemon not running
   fi
 
   printf '%s\n' "$payload" | ${pkgs.netcat}/bin/nc -U -N "$SOCKET" 2>/dev/null || true
-  [ "$VERBOSE" = "1" ] && echo "wrapix-notify: sent to $SOCKET" >&2
+  [ "$VERBOSE" = "1" ] && echo "wrix-notify: sent to $SOCKET" >&2
   exit 0
 ''

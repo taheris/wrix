@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# wrapix-builder integration test
+# wrix-builder integration test
 # Tests the Linux builder functionality on macOS 26+
 # Use with: nix run .#test-builder (when added to flake.nix)
 set -euo pipefail
 
-echo "=== wrapix-builder Integration Test ==="
+echo "=== wrix-builder Integration Test ==="
 echo "Date: $(date)"
 echo ""
 
@@ -22,10 +22,10 @@ fi
 
 FAILED=0
 
-# Build wrapix-builder
-echo "=== Building wrapix-builder ==="
-nix build .#wrapix-builder
-BUILDER="./result/bin/wrapix-builder"
+# Build wrix-builder
+echo "=== Building wrix-builder ==="
+nix build .#wrix-builder
+BUILDER="./result/bin/wrix-builder"
 
 # Test 1: Start builder
 echo ""
@@ -88,7 +88,7 @@ fi
 # Test 6: Remote build test
 echo ""
 echo "Test 6: Remote build (nixpkgs#hello)"
-KEYS_DIR="$HOME/.local/share/wrapix/builder-keys"
+KEYS_DIR="$HOME/.local/share/wrix/builder-keys"
 if nix build \
   --builders "ssh-ng://builder@localhost:2222 aarch64-linux $KEYS_DIR/builder_ed25519 4 1" \
   --max-jobs 0 \

@@ -113,7 +113,7 @@ in
         export HOME="$REAL_HOME"
 
         # Load test image
-        TEST_IMAGE="wrapix-uid-test:latest"
+        TEST_IMAGE="wrix-uid-test:latest"
         echo "Loading test image..."
         container image delete "$TEST_IMAGE" 2>/dev/null || true
         OCI_TAR=$(mktemp)
@@ -160,9 +160,9 @@ in
           --network default \
           --entrypoint /bin/bash \
           "$TEST_IMAGE" -c "
-            sed -i \"s/^wrapix:x:1000:1000:/wrapix:x:$REAL_UID:$REAL_UID:/\" /etc/passwd
-            sed -i \"s/^wrapix:x:1000:/wrapix:x:$REAL_UID:/\" /etc/group
-            export HOME=/home/wrapix
+            sed -i \"s/^wrix:x:1000:1000:/wrix:x:$REAL_UID:$REAL_UID:/\" /etc/passwd
+            sed -i \"s/^wrix:x:1000:/wrix:x:$REAL_UID:/\" /etc/group
+            export HOME=/home/wrix
             exec /workspace/uid-test.sh
           "
         EXIT_CODE=$?

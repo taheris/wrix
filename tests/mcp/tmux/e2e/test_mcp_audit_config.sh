@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Test: Verify MCP audit configuration via runtime env vars
 #
-# This test verifies that the WRAPIX_MCP_TMUX_AUDIT env var is properly
+# This test verifies that the WRIX_MCP_TMUX_AUDIT env var is properly
 # merged into Claude settings at container startup:
 #
 # 1. Build sandbox-mcp sandbox (mcpRuntime=true, all servers included)
-# 2. Run with WRAPIX_MCP=tmux and WRAPIX_MCP_TMUX_AUDIT set
+# 2. Run with WRIX_MCP=tmux and WRIX_MCP_TMUX_AUDIT set
 # 3. Verify TMUX_DEBUG_AUDIT appears in the MCP server configuration
 #
 # Prerequisites:
@@ -83,18 +83,18 @@ FAILED=0
 log_info "=== Checking audit configuration ==="
 
 # Check that the Claude settings contain the MCP server configuration with audit
-# Uses the entrypoint with WRAPIX_MCP_TMUX_AUDIT to exercise runtime MCP selection
+# Uses the entrypoint with WRIX_MCP_TMUX_AUDIT to exercise runtime MCP selection
 log_info "Verifying Claude settings contain MCP server configuration..."
 
 CLAUDE_SETTINGS=$(podman run --rm \
     --network=pasta \
     --userns=keep-id \
-    -e WRAPIX_MCP=tmux \
-    -e WRAPIX_MCP_TMUX_AUDIT=/workspace/.debug-audit.log \
+    -e WRIX_MCP=tmux \
+    -e WRIX_MCP_TMUX_AUDIT=/workspace/.debug-audit.log \
     -v "${WORKSPACE}:/workspace:rw" \
     -w /workspace \
     "docker-archive:${IMAGE_PATH}" \
-    cat /home/wrapix/.claude/settings.json 2>&1) || true
+    cat /home/wrix/.claude/settings.json 2>&1) || true
 
 if ! echo "${CLAUDE_SETTINGS}" | jq . &>/dev/null; then
     log_error "FAIL: Claude settings not valid JSON"

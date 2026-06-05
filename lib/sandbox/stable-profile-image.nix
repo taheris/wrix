@@ -1,8 +1,8 @@
-# wrapix-stable-profile-<name>: tier 1 of the provenance-tiered fromImage chain
+# wrix-stable-profile-<name>: tier 1 of the provenance-tiered fromImage chain
 # (specs/image-builder.md § Base Image Layering). Holds the fixed-per-instance
-# closure — profile.corePackages plus the wrapix-generated derivations that do
+# closure — profile.corePackages plus the wrix-generated derivations that do
 # not vary with profile.packages, MCP configs, the merged Claude settings, or
-# the agent runtime selection — chained atop wrapix-base-image. The per-profile
+# the agent runtime selection — chained atop wrix-base-image. The per-profile
 # leaf chains on top via fromImage, so this tier's tar loads into the platform
 # store once and is not re-emitted when profile-level inputs change.
 #
@@ -22,7 +22,7 @@ let
   prekHooksBundle = import ../prek/bundle.nix { inherit pkgs; };
   prekWrappers = import ../prek/wrappers.nix { inherit pkgs; };
 
-  wrapixBaseImage = import ./base-image.nix { inherit pkgs; };
+  wrixBaseImage = import ./base-image.nix { inherit pkgs; };
   baseContents = import ./base-contents.nix { inherit pkgs; };
 
   nixConfig = pkgs.writeTextDir "etc/nix/nix.conf" ''
@@ -41,13 +41,13 @@ let
   passwdFile = pkgs.writeTextDir "etc/passwd" ''
     root:x:0:0:root:/root:/bin/bash
     nobody:x:65534:65534:Unprivileged account:/var/empty:/bin/false
-    wrapix:x:1000:1000:Wrapix Sandbox:/home/wrapix:/bin/bash
+    wrix:x:1000:1000:Wrix Sandbox:/home/wrix:/bin/bash
   '';
 
   groupFile = pkgs.writeTextDir "etc/group" ''
     root:x:0:
     nogroup:x:65534:
-    wrapix:x:1000:
+    wrix:x:1000:
   '';
 
   # The packages the stable-profile buildEnv links. Factored out because the
@@ -62,7 +62,7 @@ let
   ++ (profile.corePackages or [ ]);
 
   coreEnv = pkgs.buildEnv {
-    name = "wrapix-stable-profile-env";
+    name = "wrix-stable-profile-env";
     paths = coreEnvPaths;
     pathsToLink = [
       "/bin"
@@ -91,7 +91,7 @@ let
   # dockerTools copies a buildEnv's merged tree to the image root and
   # materializes only its targets, never the wrapper's own store path — so
   # registering the wrapper bakes a dangling path. prekHooksBundle is included:
-  # it rides in `config.Env` (WRAPIX_PREK_HOOKS) and its closure IS materialized
+  # it rides in `config.Env` (WRIX_PREK_HOOKS) and its closure IS materialized
   # into a layer, so omitting it leaves an orphan (on-disk-but-unregistered).
   lowerTiersContents =
     baseContents
@@ -118,10 +118,10 @@ let
   # Split only this tier's own paths into layers. dockerMakeLayers (the custom
   # layeringPipeline path) does not dedup fromImage the way the default
   # popularity-contest path does, so remove_paths strips the lower tier's
-  # (wrapix-base-image's) closure first — a path base already ships is never
+  # (wrix-base-image's) closure first — a path base already ships is never
   # re-emitted here.
   layeringPipeline =
-    pkgs.runCommandLocal "wrapix-stable-profile-${profile.name}-layering.json"
+    pkgs.runCommandLocal "wrix-stable-profile-${profile.name}-layering.json"
       {
         nativeBuildInputs = [ pkgs.jq ];
         baseClosure = pkgs.closureInfo { rootPaths = baseContents; };
@@ -141,9 +141,9 @@ let
       '';
 in
 dockerTools.buildLayeredImage {
-  name = "wrapix-stable-profile-${profile.name}";
+  name = "wrix-stable-profile-${profile.name}";
   tag = "latest";
-  fromImage = wrapixBaseImage;
+  fromImage = wrixBaseImage;
   inherit layeringPipeline;
 
   contents = tierContents;
@@ -152,7 +152,7 @@ dockerTools.buildLayeredImage {
   # into the image root — the entrypoint reaches it by store path via this env
   # var (specs/pre-commit.md § Bead-Container Hook Installation).
   config.Env = [
-    "WRAPIX_PREK_HOOKS=${prekHooksBundle}"
+    "WRIX_PREK_HOOKS=${prekHooksBundle}"
   ];
 }
 // {

@@ -2,10 +2,10 @@
 # Verifier for specs/security.md § Deploy & Signing Keys / "Spawn mode
 # requires both keys":
 #
-#   Under `wrapix spawn`, when a deploy key or signing key does not resolve
+#   Under `wrix spawn`, when a deploy key or signing key does not resolve
 #   (no env pointer and no $HOME/.ssh/deploy_keys/ fallback), the launcher
 #   exits non-zero with a stderr message naming the unresolved key, before
-#   the container is started; interactive `wrapix run` still boots without
+#   the container is started; interactive `wrix run` still boots without
 #   keys under the same condition.
 #
 # The launcher's key-resolution block is extracted from the
@@ -35,7 +35,7 @@ for tool in awk sed; do
   command -v "$tool" >/dev/null 2>&1 || skip "$tool not on PATH"
 done
 
-TEST_TMP=$(mktemp -d -t wrapix-spawn-keys.XXXXXX)
+TEST_TMP=$(mktemp -d -t wrix-spawn-keys.XXXXXX)
 trap 'rm -rf "$TEST_TMP"' EXIT
 
 PASSED=0
@@ -60,7 +60,7 @@ extract_keyresolve_block() {
     capture                       { print }
   ' "$source" \
     | sed -e 's|\${deployKeyExpr}|"myrepo"|g' \
-          -e 's|\${sshConfig\.containerKeyDir}|/etc/wrapix/keys|g' \
+          -e 's|\${sshConfig\.containerKeyDir}|/etc/wrix/keys|g' \
           -e "s/''\\\$/\$/g" \
     > "$out"
 }
@@ -93,8 +93,8 @@ assert_spawn_fails_no_keys() {
   write_probe_preamble "$probe" "$label"
   cat >>"$probe" <<EOF
 SUBCOMMAND=spawn
-unset WRAPIX_DEPLOY_KEY
-unset WRAPIX_SIGNING_KEY
+unset WRIX_DEPLOY_KEY
+unset WRIX_SIGNING_KEY
 source $block
 echo "REACHED_END_UNEXPECTEDLY"
 EOF
@@ -121,8 +121,8 @@ assert_spawn_fails_no_signing() {
   write_probe_preamble "$probe" "$label"
   cat >>"$probe" <<EOF
 SUBCOMMAND=spawn
-WRAPIX_DEPLOY_KEY=$REAL_DEPLOY_KEY
-unset WRAPIX_SIGNING_KEY
+WRIX_DEPLOY_KEY=$REAL_DEPLOY_KEY
+unset WRIX_SIGNING_KEY
 source $block
 echo "REACHED_END_UNEXPECTEDLY"
 EOF
@@ -142,58 +142,58 @@ EOF
   pass "$label: spawn with deploy-only fails loud naming the signing key"
 }
 
-# spawn + WRAPIX_GIT_SIGN=0 + deploy resolves → signing not required, end reached.
+# spawn + WRIX_GIT_SIGN=0 + deploy resolves → signing not required, end reached.
 assert_spawn_nosign_deploy_only() {
   local label="$1" block="$2"
   local probe="$TEST_TMP/$label.sh"
   write_probe_preamble "$probe" "$label"
   cat >>"$probe" <<EOF
 SUBCOMMAND=spawn
-WRAPIX_GIT_SIGN=0
-WRAPIX_DEPLOY_KEY=$REAL_DEPLOY_KEY
-unset WRAPIX_SIGNING_KEY
+WRIX_GIT_SIGN=0
+WRIX_DEPLOY_KEY=$REAL_DEPLOY_KEY
+unset WRIX_SIGNING_KEY
 source $block
 echo "REACHED_END_OK"
 EOF
   local out="$TEST_TMP/$label.out" err="$TEST_TMP/$label.err"
   if ! bash "$probe" >"$out" 2>"$err"; then
-    fail "$label: spawn WRAPIX_GIT_SIGN=0 deploy-only exited non-zero (expected pass). stderr: $(cat "$err")"
+    fail "$label: spawn WRIX_GIT_SIGN=0 deploy-only exited non-zero (expected pass). stderr: $(cat "$err")"
     return
   fi
   if ! grep -qF "REACHED_END_OK" "$out"; then
-    fail "$label: spawn WRAPIX_GIT_SIGN=0 deploy-only did not reach end of block"
+    fail "$label: spawn WRIX_GIT_SIGN=0 deploy-only did not reach end of block"
     return
   fi
-  pass "$label: spawn WRAPIX_GIT_SIGN=0 with deploy key boots (signing not required)"
+  pass "$label: spawn WRIX_GIT_SIGN=0 with deploy key boots (signing not required)"
 }
 
-# spawn + WRAPIX_GIT_SIGN=0 + no deploy → deploy still required, fail loud.
+# spawn + WRIX_GIT_SIGN=0 + no deploy → deploy still required, fail loud.
 assert_spawn_nosign_still_needs_deploy() {
   local label="$1" block="$2"
   local probe="$TEST_TMP/$label.sh"
   write_probe_preamble "$probe" "$label"
   cat >>"$probe" <<EOF
 SUBCOMMAND=spawn
-WRAPIX_GIT_SIGN=0
-unset WRAPIX_DEPLOY_KEY
-unset WRAPIX_SIGNING_KEY
+WRIX_GIT_SIGN=0
+unset WRIX_DEPLOY_KEY
+unset WRIX_SIGNING_KEY
 source $block
 echo "REACHED_END_UNEXPECTEDLY"
 EOF
   local out="$TEST_TMP/$label.out" err="$TEST_TMP/$label.err"
   if bash "$probe" >"$out" 2>"$err"; then
-    fail "$label: spawn WRAPIX_GIT_SIGN=0 no deploy exited 0 (expected fail-loud)"
+    fail "$label: spawn WRIX_GIT_SIGN=0 no deploy exited 0 (expected fail-loud)"
     return
   fi
   if grep -qF "REACHED_END_UNEXPECTEDLY" "$out"; then
-    fail "$label: spawn WRAPIX_GIT_SIGN=0 fell through past the deploy guard"
+    fail "$label: spawn WRIX_GIT_SIGN=0 fell through past the deploy guard"
     return
   fi
   if ! grep -qF "no deploy key resolved" "$err"; then
     fail "$label: stderr does not say 'no deploy key resolved'. stderr: $(cat "$err")"
     return
   fi
-  pass "$label: spawn WRAPIX_GIT_SIGN=0 still fails loud on missing deploy key"
+  pass "$label: spawn WRIX_GIT_SIGN=0 still fails loud on missing deploy key"
 }
 
 # run + nothing resolves → permissive (rule 3): block exits 0, no fail-loud.
@@ -203,8 +203,8 @@ assert_run_permits_no_keys() {
   write_probe_preamble "$probe" "$label"
   cat >>"$probe" <<EOF
 SUBCOMMAND=run
-unset WRAPIX_DEPLOY_KEY
-unset WRAPIX_SIGNING_KEY
+unset WRIX_DEPLOY_KEY
+unset WRIX_SIGNING_KEY
 source $block
 echo "REACHED_END_OK"
 EOF

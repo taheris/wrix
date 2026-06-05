@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.local.wrapix-notifyd</string>
+    <string>com.local.wrix-notifyd</string>
 
     <key>ProgramArguments</key>
     <array>
@@ -17,9 +17,9 @@
     <true/>
 
     <key>StandardOutPath</key>
-    <string>__LOG_DIR__/wrapix-notifyd.log</string>
+    <string>__LOG_DIR__/wrix-notifyd.log</string>
 
     <key>StandardErrorPath</key>
-    <string>__LOG_DIR__/wrapix-notifyd.log</string>
+    <string>__LOG_DIR__/wrix-notifyd.log</string>
 </dict>
 </plist>

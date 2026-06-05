@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Verifier for criterion 202 of specs/security.md:
 #
-#   When WRAPIX_DEPLOY_KEY or WRAPIX_SIGNING_KEY is set in the launcher's
+#   When WRIX_DEPLOY_KEY or WRIX_SIGNING_KEY is set in the launcher's
 #   environment but the pointed-at file does not exist, the launcher exits
 #   non-zero with a stderr message naming the missing path, before the
 #   container is started.
@@ -33,7 +33,7 @@ for tool in awk sed; do
   command -v "$tool" >/dev/null 2>&1 || skip "$tool not on PATH"
 done
 
-TEST_TMP=$(mktemp -d -t wrapix-key-missing.XXXXXX)
+TEST_TMP=$(mktemp -d -t wrix-key-missing.XXXXXX)
 trap 'rm -rf "$TEST_TMP"' EXIT
 
 PASSED=0
@@ -58,7 +58,7 @@ extract_keyresolve_block() {
     capture                       { print }
   ' "$source" \
     | sed -e 's|\${deployKeyExpr}|"myrepo"|g' \
-          -e 's|\${sshConfig\.containerKeyDir}|/etc/wrapix/keys|g' \
+          -e 's|\${sshConfig\.containerKeyDir}|/etc/wrix/keys|g' \
           -e "s/''\\\$/\$/g" \
     > "$out"
 }
@@ -110,10 +110,10 @@ darwin_block="$TEST_TMP/darwin.sh"
 extract_keyresolve_block "$LINUX_LAUNCHER_NIX" "$linux_block"
 extract_keyresolve_block "$DARWIN_LAUNCHER_NIX" "$darwin_block"
 
-assert_fails_with_path linux-deploy-missing "$linux_block" WRAPIX_DEPLOY_KEY
-assert_fails_with_path linux-signing-missing "$linux_block" WRAPIX_SIGNING_KEY
-assert_fails_with_path darwin-deploy-missing "$darwin_block" WRAPIX_DEPLOY_KEY
-assert_fails_with_path darwin-signing-missing "$darwin_block" WRAPIX_SIGNING_KEY
+assert_fails_with_path linux-deploy-missing "$linux_block" WRIX_DEPLOY_KEY
+assert_fails_with_path linux-signing-missing "$linux_block" WRIX_SIGNING_KEY
+assert_fails_with_path darwin-deploy-missing "$darwin_block" WRIX_DEPLOY_KEY
+assert_fails_with_path darwin-signing-missing "$darwin_block" WRIX_SIGNING_KEY
 
 # ----------------------------------------------------------------------------
 # Sanity check: when env is unset, the block falls through to the $HOME
@@ -132,8 +132,8 @@ FILE_MOUNTS=""
 DEPLOY_KEY_ARGS=""
 STAGING_ROOT=$TEST_TMP/staging-no-env
 mkdir -p "\$STAGING_ROOT"
-unset WRAPIX_DEPLOY_KEY
-unset WRAPIX_SIGNING_KEY
+unset WRIX_DEPLOY_KEY
+unset WRIX_SIGNING_KEY
 source $linux_block
 echo "DEPLOY_KEY_ARGS=\$DEPLOY_KEY_ARGS"
 EOF

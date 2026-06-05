@@ -11,10 +11,10 @@ set -euo pipefail
 echo "=== Notification Connectivity Test ==="
 
 TCP_PORT=5959    # Must match daemon.nix
-SOCKET="/run/wrapix/notify.sock"
+SOCKET="/run/wrix/notify.sock"
 
-# Detect transport mechanism (WRAPIX_NOTIFY_TCP=1 set by Darwin sandbox)
-if [ "${WRAPIX_NOTIFY_TCP:-}" = "1" ]; then
+# Detect transport mechanism (WRIX_NOTIFY_TCP=1 set by Darwin sandbox)
+if [ "${WRIX_NOTIFY_TCP:-}" = "1" ]; then
   echo ""
   echo "Transport: TCP to gateway (Darwin container)"
 
@@ -35,8 +35,8 @@ if [ "${WRAPIX_NOTIFY_TCP:-}" = "1" ]; then
     echo "  FAIL: Could not connect via TCP"
     echo ""
     echo "  This usually means:"
-    echo "    1. Daemon not running - wrapix-notifyd is not running on the host."
-    echo "       Fix: Run 'nix run .#wrapix-notifyd' on the host."
+    echo "    1. Daemon not running - wrix-notifyd is not running on the host."
+    echo "       Fix: Run 'nix run .#wrix-notifyd' on the host."
     echo "    2. Firewall blocking - port $TCP_PORT may be blocked."
     echo "       Fix: Check firewall settings on the host."
     exit 1
@@ -77,8 +77,8 @@ else
     echo "  This usually means:"
     echo "    1. Stale socket mount - the daemon was restarted after the container started."
     echo "       Fix: Restart the container to pick up the new socket."
-    echo "    2. Daemon not running - wrapix-notifyd is not running on the host."
-    echo "       Fix: Run 'nix run .#wrapix-notifyd' on the host."
+    echo "    2. Daemon not running - wrix-notifyd is not running on the host."
+    echo "       Fix: Run 'nix run .#wrix-notifyd' on the host."
     exit 1
   fi
 fi

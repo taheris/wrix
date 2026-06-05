@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-wrapix_unique_image_ref() {
+wrix_unique_image_ref() {
   local image_name="$1"
 
   printf 'localhost/%s-%s:latest\n' "$image_name" "$$"
 }
 
-wrapix_remove_test_image_ref() {
+wrix_remove_test_image_ref() {
   local target_ref="$1"
 
   if podman image exists "$target_ref"; then
@@ -15,13 +15,13 @@ wrapix_remove_test_image_ref() {
   fi
 }
 
-wrapix_loaded_image_refs() {
+wrix_loaded_image_refs() {
   sed -n 's/^Loaded image(s): //p; s/^Loaded image: //p' \
     | tr ',' '\n' \
     | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
 }
 
-wrapix_image_short_name() {
+wrix_image_short_name() {
   local ref="$1"
   local short_name
 
@@ -29,31 +29,31 @@ wrapix_image_short_name() {
   printf '%s\n' "${short_name%%:*}"
 }
 
-wrapix_loaded_ref_for_image() {
+wrix_loaded_ref_for_image() {
   local image_name="$1"
   local load_out="$2"
   local ref
 
   while IFS= read -r ref; do
     [[ -n "$ref" ]] || continue
-    if [[ "$(wrapix_image_short_name "$ref")" == "$image_name" ]]; then
+    if [[ "$(wrix_image_short_name "$ref")" == "$image_name" ]]; then
       printf '%s\n' "$ref"
       return 0
     fi
-  done < <(printf '%s\n' "$load_out" | wrapix_loaded_image_refs)
+  done < <(printf '%s\n' "$load_out" | wrix_loaded_image_refs)
 
   return 1
 }
 
-wrapix_load_test_image() {
+wrix_load_test_image() {
   local image_stream="$1"
   local image_name="$2"
   local target_ref="$3"
   local stream_log load_out loaded_ref loaded_id
 
-  wrapix_remove_test_image_ref "$target_ref"
+  wrix_remove_test_image_ref "$target_ref"
 
-  stream_log=$(mktemp -t wrapix-podman-load.XXXXXX)
+  stream_log=$(mktemp -t wrix-podman-load.XXXXXX)
   if ! load_out=$("$image_stream" 2>"$stream_log" | podman load 2>&1); then
     cat "$stream_log" >&2
     rm -f "$stream_log"
@@ -63,7 +63,7 @@ wrapix_load_test_image() {
   fi
   rm -f "$stream_log"
 
-  if ! loaded_ref=$(wrapix_loaded_ref_for_image "$image_name" "$load_out"); then
+  if ! loaded_ref=$(wrix_loaded_ref_for_image "$image_name" "$load_out"); then
     echo "FAIL: could not determine loaded image ref for $image_name" >&2
     printf '%s\n' "$load_out" >&2
     return 1

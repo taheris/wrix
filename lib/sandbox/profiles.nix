@@ -84,7 +84,7 @@ let
   # Environment variables in all profiles
   baseEnv = { };
 
-  # Base network allowlist for WRAPIX_NETWORK=limit mode
+  # Base network allowlist for WRIX_NETWORK=limit mode
   # These domains are always permitted regardless of profile
   baseNetworkAllowlist = [
     "api.anthropic.com" # Claude API
@@ -99,7 +99,7 @@ let
   # env, and PATH with the sandbox — e.g. prepending the rust profile's
   # `${toolchain}/bin` so host `rustc` resolves to the same /nix/store/... path
   # the sandbox uses, the prerequisite for cross-boundary sccache hits.
-  # corePackages is the wrapix-controlled, fixed-per-instance package set (the
+  # corePackages is the wrix-controlled, fixed-per-instance package set (the
   # base toolkit plus any toolchain a constructor pins). It is the tier-1
   # membership key for provenance-tiered image layering: downstream extension
   # grows `packages` only, never `corePackages`, so the leaf delta an image
@@ -270,7 +270,7 @@ let
     mkProfile {
       name = "rust";
 
-      # The toolchain and its fixed support packages are wrapix-controlled and
+      # The toolchain and its fixed support packages are wrix-controlled and
       # fixed per instance, so they are corePackages (tier 1). A downstream
       # `rustProfile { toolchain = ...; }` pins a different toolchain but it
       # still lands here via mkRustProfile, keeping pinned toolchains tier-1.
@@ -311,25 +311,25 @@ let
         RUSTC_WRAPPER = "${pkgs.sccache}/bin/sccache";
         RUST_SRC_PATH = "${imageToolchain}/lib/rustlib/src/rust/library";
         SCCACHE_CACHE_SIZE = "50G";
-        SCCACHE_DIR = "/home/wrapix/.cache/sccache";
+        SCCACHE_DIR = "/home/wrix/.cache/sccache";
       };
 
       mounts = [
         {
           source = "~/.cargo/registry";
-          dest = "/home/wrapix/.cargo/registry";
+          dest = "/home/wrix/.cargo/registry";
           mode = "rw";
           optional = true;
         }
         {
           source = "~/.cargo/git";
-          dest = "/home/wrapix/.cargo/git";
+          dest = "/home/wrix/.cargo/git";
           mode = "rw";
           optional = true;
         }
         {
           source = "~/.cache/sccache";
-          dest = "/home/wrapix/.cache/sccache";
+          dest = "/home/wrix/.cache/sccache";
           mode = "rw";
           optional = true;
         }
@@ -342,15 +342,15 @@ let
       ];
 
       # Linux-only: stack a tmpfs at CARGO_HOME and .cache so the dirs are
-      # wrapix-owned. Without this, podman creates them as root to anchor the
-      # registry/git/sccache binds, and cargo/sccache (as wrapix) can't write
+      # wrix-owned. Without this, podman creates them as root to anchor the
+      # registry/git/sccache binds, and cargo/sccache (as wrix) can't write
       # their own files there. The .cache tmpfs also keeps sccache functional
       # when the optional ~/.cache/sccache host mount is absent.
       # Darwin is unaffected: the entrypoint mkdirs these paths itself as
       # namespaced-root-mapped-to-HOST_UID, so they're already writable.
       writableDirs = [
-        "/home/wrapix/.cargo"
-        "/home/wrapix/.cache"
+        "/home/wrix/.cargo"
+        "/home/wrix/.cache"
       ];
 
       # Align host with the sandbox so cross-boundary cache hits work.
@@ -362,11 +362,11 @@ let
       # XDG_CACHE_HOME=/var/cache would otherwise send sccache to
       # /var/cache/sccache, missing the host mount). On the host devshell,
       # mkDevShell merges profile.env into mkShell's env, so the container
-      # path /home/wrapix/.cache/sccache leaks into the host. Match-and-unset
+      # path /home/wrix/.cache/sccache leaks into the host. Match-and-unset
       # so the :- default falls through to $HOME/.cache/sccache; user-set
       # overrides survive.
       shellHook = ''
-        [ "''${SCCACHE_DIR:-}" = "/home/wrapix/.cache/sccache" ] && unset SCCACHE_DIR
+        [ "''${SCCACHE_DIR:-}" = "/home/wrix/.cache/sccache" ] && unset SCCACHE_DIR
         export PATH="${hostToolchain}/bin:$PATH"
         export RUSTC_WRAPPER="${hostPkgs.sccache}/bin/sccache"
         export CARGO_BUILD_RUSTC_WRAPPER="${hostPkgs.sccache}/bin/sccache"
@@ -399,7 +399,7 @@ let
   '';
 
   # Build a project-pinned rust profile from a rust-toolchain.toml file.
-  # Used by lib/default.nix's wrapix.rustProfile; not exposed as part of the
+  # Used by lib/default.nix's wrix.rustProfile; not exposed as part of the
   # public profiles attrset surface (sandbox/default.nix strips it before
   # re-export).
   rustProfileFromFile =
@@ -442,13 +442,13 @@ in
     ];
 
     env = {
-      UV_CACHE_DIR = "/home/wrapix/.cache/uv";
+      UV_CACHE_DIR = "/home/wrix/.cache/uv";
     };
 
     mounts = [
       {
         source = "~/.cache/uv";
-        dest = "/home/wrapix/.cache/uv";
+        dest = "/home/wrix/.cache/uv";
         mode = "rw";
         optional = true;
       }

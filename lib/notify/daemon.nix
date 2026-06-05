@@ -12,7 +12,7 @@
 #   Impact is low: notifications are cosmetic (no code execution).
 #   See specs/notifications.md for full security analysis.
 #
-# Usage: nix run .#wrapix-notifyd
+# Usage: nix run .#wrix-notifyd
 { pkgs }:
 
 let
@@ -22,9 +22,9 @@ let
   # Platform-specific session directory
   sessionDir =
     if isDarwin then
-      ''WRAPIX_SESSION_DIR="''${XDG_DATA_HOME:-$HOME/.local/share}/wrapix/sessions"''
+      ''WRIX_SESSION_DIR="''${XDG_DATA_HOME:-$HOME/.local/share}/wrix/sessions"''
     else
-      ''WRAPIX_SESSION_DIR="''${XDG_RUNTIME_DIR:-$HOME/.local/share}/wrapix/sessions"'';
+      ''WRIX_SESSION_DIR="''${XDG_RUNTIME_DIR:-$HOME/.local/share}/wrix/sessions"'';
 
   # Platform-specific app/window focus check
   # Returns 0 if terminal app/window is focused, 1 otherwise
@@ -89,7 +89,7 @@ let
   # Shared handler script with platform-specific parts injected
   handlerScript = ''
     ${sessionDir}
-    VERBOSE="''${WRAPIX_NOTIFY_VERBOSE:-0}"
+    VERBOSE="''${WRIX_NOTIFY_VERBOSE:-0}"
 
     ${appCheckFn}
 
@@ -99,7 +99,7 @@ let
     check_terminal_focused() {
       local session_id="$1"
       local safe_id="''${session_id//[:\.]/-}"
-      local session_file="$WRAPIX_SESSION_DIR/$safe_id.json"
+      local session_file="$WRIX_SESSION_DIR/$safe_id.json"
 
       if [ ! -f "$session_file" ]; then
         [ "$VERBOSE" = "1" ] && echo "notifyd: session file not found: $session_file" >&2
@@ -130,8 +130,8 @@ let
       ${if isDarwin then ''sound=$(printf '%s\n' "$line" | jq -r '.sound // ""')'' else ""}
       session_id=$(printf '%s\n' "$line" | jq -r '.session_id // ""')
 
-      # Check focus - skip notification if terminal is focused (unless WRAPIX_NOTIFY_ALWAYS=1)
-      if [ "''${WRAPIX_NOTIFY_ALWAYS:-}" != "1" ] && [ -n "$session_id" ]; then
+      # Check focus - skip notification if terminal is focused (unless WRIX_NOTIFY_ALWAYS=1)
+      if [ "''${WRIX_NOTIFY_ALWAYS:-}" != "1" ] && [ -n "$session_id" ]; then
         if check_terminal_focused "$session_id"; then
           [ "$VERBOSE" = "1" ] && echo "notifyd: suppressed (terminal focused)" >&2
           continue
@@ -144,7 +144,7 @@ let
 
 in
 pkgs.writeShellApplication {
-  name = "wrapix-notifyd";
+  name = "wrix-notifyd";
   runtimeInputs =
     with pkgs;
     [
@@ -155,7 +155,7 @@ pkgs.writeShellApplication {
     ++ (if isDarwin then [ terminal-notifier ] else [ libnotify ]);
 
   text = ''
-    SOCKET="''${XDG_RUNTIME_DIR:-$HOME/.local/share}/wrapix/notify.sock"
+    SOCKET="''${XDG_RUNTIME_DIR:-$HOME/.local/share}/wrix/notify.sock"
     mkdir -p "$(dirname "$SOCKET")"
     rm -f "$SOCKET"
     trap 'rm -f "$SOCKET"' EXIT
@@ -173,7 +173,7 @@ pkgs.writeShellApplication {
         ''
           # Darwin: listen on TCP (for containers) and Unix socket (for local testing)
           # Containers reach host via vmnet gateway (typically 192.168.64.1)
-          echo "wrapix-notifyd: listening on TCP port ${tcpPort} and $SOCKET"
+          echo "wrix-notifyd: listening on TCP port ${tcpPort} and $SOCKET"
           socat UNIX-LISTEN:"$SOCKET",fork EXEC:"bash $HANDLER_SCRIPT" &
           SOCKET_PID=$!
           trap 'rm -f "$SOCKET" "$HANDLER_SCRIPT"; kill $SOCKET_PID 2>/dev/null' EXIT
@@ -184,7 +184,7 @@ pkgs.writeShellApplication {
       else
         ''
           # Linux: listen on Unix socket only (mounted into containers)
-          echo "wrapix-notifyd: listening on $SOCKET"
+          echo "wrix-notifyd: listening on $SOCKET"
           socat UNIX-LISTEN:"$SOCKET",fork EXEC:"bash $HANDLER_SCRIPT"
         ''
     }

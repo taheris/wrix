@@ -1,7 +1,7 @@
 # Playwright MCP server definition
 #
 # Server providing browser automation for AI-assisted frontend development
-# and testing within wrapix sandboxes.
+# and testing within wrix sandboxes.
 #
 # Exports:
 #   - name: Server identifier ("playwright")
@@ -46,10 +46,10 @@ let
           # (the read-only nix store) and EACCES's any tool that opens a
           # browser context (e.g. browser_take_screenshot). Pinning
           # userDataDir to a writable container path keeps the persistent
-          # context inside the wrapix HOME and matches the runtime layout
+          # context inside the wrix HOME and matches the runtime layout
           # the entrypoint already provisions. See
           # playwright-core/lib/tools/mcp/browserFactory.js:createUserDataDir.
-          userDataDir = "/home/wrapix/.cache/playwright-mcp";
+          userDataDir = "/home/wrix/.cache/playwright-mcp";
           launchOptions = {
             args = mandatoryFlags ++ userArgs;
             channel = "chromium";

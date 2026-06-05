@@ -2,11 +2,11 @@
 # Verifier for the mkSandbox wrapper's image-ref env-var hand-off
 # contract:
 #
-#   The wrapped `wrapix` binary at $out/bin/wrapix must let an
-#   orchestrator pre-export WRAPIX_DEFAULT_IMAGE_REF and
-#   WRAPIX_DEFAULT_IMAGE_SOURCE before exec'ing it — the caller's
+#   The wrapped `wrix` binary at $out/bin/wrix must let an
+#   orchestrator pre-export WRIX_DEFAULT_IMAGE_REF and
+#   WRIX_DEFAULT_IMAGE_SOURCE before exec'ing it — the caller's
 #   values must reach the launcher, NOT the wrapper's baked defaults.
-#   WRAPIX_AGENT, by contrast, MUST stay clobbered: the wrapper is
+#   WRIX_AGENT, by contrast, MUST stay clobbered: the wrapper is
 #   bound to its built `(profile × agent)` image variant and an
 #   exec-time override would break that binding.
 #
@@ -14,9 +14,9 @@
 #
 #   1. Production-source assertion — `lib/sandbox/default.nix` uses
 #      `makeWrapper --set-default` for the two image env vars and
-#      `--set` for WRAPIX_AGENT. The [check?] grep target on its own
-#      cannot distinguish `--set WRAPIX_AGENT` from
-#      `--set-default WRAPIX_AGENT` (substring), so the directive
+#      `--set` for WRIX_AGENT. The [check?] grep target on its own
+#      cannot distinguish `--set WRIX_AGENT` from
+#      `--set-default WRIX_AGENT` (substring), so the directive
 #      assertion is paired with the behavioral assertion below.
 #
 #   2. Behavioral assertion — the bash idioms makeWrapper emits for
@@ -51,7 +51,7 @@ WRAPPER_NIX="$REPO_ROOT/lib/sandbox/default.nix"
 LINUX_LAUNCHER_NIX="$REPO_ROOT/lib/sandbox/linux/default.nix"
 DARWIN_LAUNCHER_NIX="$REPO_ROOT/lib/sandbox/darwin/default.nix"
 
-TEST_TMP=$(mktemp -d -t wrapix-wrapper-image-env-override.XXXXXX)
+TEST_TMP=$(mktemp -d -t wrix-wrapper-image-env-override.XXXXXX)
 trap 'rm -rf "$TEST_TMP"' EXIT
 
 BASH_BIN="${BASH:-$(command -v bash)}"
@@ -73,26 +73,26 @@ STUB="$TEST_TMP/stub-launcher"
 cat > "$STUB" <<EOF
 #!$BASH_BIN
 set -u
-printf 'WRAPIX_AGENT=%s\n' "\${WRAPIX_AGENT-<UNSET>}"
-printf 'WRAPIX_DEFAULT_IMAGE_REF=%s\n' "\${WRAPIX_DEFAULT_IMAGE_REF-<UNSET>}"
-printf 'WRAPIX_DEFAULT_IMAGE_SOURCE=%s\n' "\${WRAPIX_DEFAULT_IMAGE_SOURCE-<UNSET>}"
+printf 'WRIX_AGENT=%s\n' "\${WRIX_AGENT-<UNSET>}"
+printf 'WRIX_DEFAULT_IMAGE_REF=%s\n' "\${WRIX_DEFAULT_IMAGE_REF-<UNSET>}"
+printf 'WRIX_DEFAULT_IMAGE_SOURCE=%s\n' "\${WRIX_DEFAULT_IMAGE_SOURCE-<UNSET>}"
 EOF
 chmod +x "$STUB"
 
 # Hermetic wrapper — reproduces the env-setup section that
-# `makeWrapper --set WRAPIX_AGENT ... --set-default WRAPIX_DEFAULT_IMAGE_REF ...
-# --set-default WRAPIX_DEFAULT_IMAGE_SOURCE ...` writes. The idioms
+# `makeWrapper --set WRIX_AGENT ... --set-default WRIX_DEFAULT_IMAGE_REF ...
+# --set-default WRIX_DEFAULT_IMAGE_SOURCE ...` writes. The idioms
 # are the documented output of nixpkgs
 # pkgs/build-support/setup-hooks/make-wrapper.sh.
 WRAPPER="$TEST_TMP/wrapper"
 cat > "$WRAPPER" <<EOF
 #!$BASH_BIN
-export WRAPIX_AGENT='$BAKED_AGENT'
-if [[ -z "\${WRAPIX_DEFAULT_IMAGE_REF-}" ]]; then
-    export WRAPIX_DEFAULT_IMAGE_REF='$BAKED_REF'
+export WRIX_AGENT='$BAKED_AGENT'
+if [[ -z "\${WRIX_DEFAULT_IMAGE_REF-}" ]]; then
+    export WRIX_DEFAULT_IMAGE_REF='$BAKED_REF'
 fi
-if [[ -z "\${WRAPIX_DEFAULT_IMAGE_SOURCE-}" ]]; then
-    export WRAPIX_DEFAULT_IMAGE_SOURCE='$BAKED_SOURCE'
+if [[ -z "\${WRIX_DEFAULT_IMAGE_SOURCE-}" ]]; then
+    export WRIX_DEFAULT_IMAGE_SOURCE='$BAKED_SOURCE'
 fi
 exec "$STUB" "\$@"
 EOF
@@ -109,15 +109,15 @@ run_wrapper() {
 test_caller_unset_uses_baked_defaults() {
   local out="$TEST_TMP/unset.out"
   run_wrapper "$out" \
-    -u WRAPIX_DEFAULT_IMAGE_REF \
-    -u WRAPIX_DEFAULT_IMAGE_SOURCE \
-    -u WRAPIX_AGENT
-  if ! grep -qxF "WRAPIX_DEFAULT_IMAGE_REF=$BAKED_REF" "$out"; then
-    fail "unset REF: launcher saw $(grep '^WRAPIX_DEFAULT_IMAGE_REF=' "$out"); expected $BAKED_REF"
+    -u WRIX_DEFAULT_IMAGE_REF \
+    -u WRIX_DEFAULT_IMAGE_SOURCE \
+    -u WRIX_AGENT
+  if ! grep -qxF "WRIX_DEFAULT_IMAGE_REF=$BAKED_REF" "$out"; then
+    fail "unset REF: launcher saw $(grep '^WRIX_DEFAULT_IMAGE_REF=' "$out"); expected $BAKED_REF"
     return 1
   fi
-  if ! grep -qxF "WRAPIX_DEFAULT_IMAGE_SOURCE=$BAKED_SOURCE" "$out"; then
-    fail "unset SOURCE: launcher saw $(grep '^WRAPIX_DEFAULT_IMAGE_SOURCE=' "$out"); expected $BAKED_SOURCE"
+  if ! grep -qxF "WRIX_DEFAULT_IMAGE_SOURCE=$BAKED_SOURCE" "$out"; then
+    fail "unset SOURCE: launcher saw $(grep '^WRIX_DEFAULT_IMAGE_SOURCE=' "$out"); expected $BAKED_SOURCE"
     return 1
   fi
   pass "Caller-unset → both image vars resolve to wrapper-baked defaults"
@@ -127,14 +127,14 @@ test_caller_unset_uses_baked_defaults() {
 test_caller_set_ref_wins_independently() {
   local out="$TEST_TMP/set-ref.out"
   run_wrapper "$out" \
-    -u WRAPIX_DEFAULT_IMAGE_SOURCE \
-    WRAPIX_DEFAULT_IMAGE_REF=caller-ref
-  if ! grep -qxF 'WRAPIX_DEFAULT_IMAGE_REF=caller-ref' "$out"; then
-    fail "caller-set REF: launcher saw $(grep '^WRAPIX_DEFAULT_IMAGE_REF=' "$out"); expected caller-ref"
+    -u WRIX_DEFAULT_IMAGE_SOURCE \
+    WRIX_DEFAULT_IMAGE_REF=caller-ref
+  if ! grep -qxF 'WRIX_DEFAULT_IMAGE_REF=caller-ref' "$out"; then
+    fail "caller-set REF: launcher saw $(grep '^WRIX_DEFAULT_IMAGE_REF=' "$out"); expected caller-ref"
     return 1
   fi
-  if ! grep -qxF "WRAPIX_DEFAULT_IMAGE_SOURCE=$BAKED_SOURCE" "$out"; then
-    fail "caller-set REF: SOURCE unexpectedly clobbered; saw $(grep '^WRAPIX_DEFAULT_IMAGE_SOURCE=' "$out")"
+  if ! grep -qxF "WRIX_DEFAULT_IMAGE_SOURCE=$BAKED_SOURCE" "$out"; then
+    fail "caller-set REF: SOURCE unexpectedly clobbered; saw $(grep '^WRIX_DEFAULT_IMAGE_SOURCE=' "$out")"
     return 1
   fi
   pass "Caller-set REF + unset SOURCE → REF=caller's, SOURCE=baked default"
@@ -144,14 +144,14 @@ test_caller_set_ref_wins_independently() {
 test_caller_set_source_wins_independently() {
   local out="$TEST_TMP/set-source.out"
   run_wrapper "$out" \
-    -u WRAPIX_DEFAULT_IMAGE_REF \
-    WRAPIX_DEFAULT_IMAGE_SOURCE=/nix/store/caller-source
-  if ! grep -qxF "WRAPIX_DEFAULT_IMAGE_REF=$BAKED_REF" "$out"; then
-    fail "caller-set SOURCE: REF unexpectedly clobbered; saw $(grep '^WRAPIX_DEFAULT_IMAGE_REF=' "$out")"
+    -u WRIX_DEFAULT_IMAGE_REF \
+    WRIX_DEFAULT_IMAGE_SOURCE=/nix/store/caller-source
+  if ! grep -qxF "WRIX_DEFAULT_IMAGE_REF=$BAKED_REF" "$out"; then
+    fail "caller-set SOURCE: REF unexpectedly clobbered; saw $(grep '^WRIX_DEFAULT_IMAGE_REF=' "$out")"
     return 1
   fi
-  if ! grep -qxF 'WRAPIX_DEFAULT_IMAGE_SOURCE=/nix/store/caller-source' "$out"; then
-    fail "caller-set SOURCE: launcher saw $(grep '^WRAPIX_DEFAULT_IMAGE_SOURCE=' "$out"); expected /nix/store/caller-source"
+  if ! grep -qxF 'WRIX_DEFAULT_IMAGE_SOURCE=/nix/store/caller-source' "$out"; then
+    fail "caller-set SOURCE: launcher saw $(grep '^WRIX_DEFAULT_IMAGE_SOURCE=' "$out"); expected /nix/store/caller-source"
     return 1
   fi
   pass "Caller-set SOURCE + unset REF → SOURCE=caller's, REF=baked default"
@@ -161,68 +161,68 @@ test_caller_set_source_wins_independently() {
 test_caller_set_both_image_vars_win() {
   local out="$TEST_TMP/set-both.out"
   run_wrapper "$out" \
-    WRAPIX_DEFAULT_IMAGE_REF=caller-ref \
-    WRAPIX_DEFAULT_IMAGE_SOURCE=/nix/store/caller-source
-  if ! grep -qxF 'WRAPIX_DEFAULT_IMAGE_REF=caller-ref' "$out"; then
-    fail "caller-set both: REF saw $(grep '^WRAPIX_DEFAULT_IMAGE_REF=' "$out"); expected caller-ref"
+    WRIX_DEFAULT_IMAGE_REF=caller-ref \
+    WRIX_DEFAULT_IMAGE_SOURCE=/nix/store/caller-source
+  if ! grep -qxF 'WRIX_DEFAULT_IMAGE_REF=caller-ref' "$out"; then
+    fail "caller-set both: REF saw $(grep '^WRIX_DEFAULT_IMAGE_REF=' "$out"); expected caller-ref"
     return 1
   fi
-  if ! grep -qxF 'WRAPIX_DEFAULT_IMAGE_SOURCE=/nix/store/caller-source' "$out"; then
-    fail "caller-set both: SOURCE saw $(grep '^WRAPIX_DEFAULT_IMAGE_SOURCE=' "$out"); expected /nix/store/caller-source"
+  if ! grep -qxF 'WRIX_DEFAULT_IMAGE_SOURCE=/nix/store/caller-source' "$out"; then
+    fail "caller-set both: SOURCE saw $(grep '^WRIX_DEFAULT_IMAGE_SOURCE=' "$out"); expected /nix/store/caller-source"
     return 1
   fi
   pass "Caller-set both image vars → both reach the launcher verbatim"
 }
 
-# WRAPIX_AGENT is NOT caller-overridable. Per the bead Note 4, the
+# WRIX_AGENT is NOT caller-overridable. Per the bead Note 4, the
 # directive grep cannot prove non-overridability (`--set` substring-
 # matches `--set-default`); this is the load-bearing behavioral check.
 test_agent_is_not_caller_overridable() {
   local out="$TEST_TMP/agent-set.out"
-  run_wrapper "$out" WRAPIX_AGENT=caller-agent
-  if ! grep -qxF "WRAPIX_AGENT=$BAKED_AGENT" "$out"; then
-    fail "WRAPIX_AGENT was caller-overridable: launcher saw $(grep '^WRAPIX_AGENT=' "$out"); expected $BAKED_AGENT"
+  run_wrapper "$out" WRIX_AGENT=caller-agent
+  if ! grep -qxF "WRIX_AGENT=$BAKED_AGENT" "$out"; then
+    fail "WRIX_AGENT was caller-overridable: launcher saw $(grep '^WRIX_AGENT=' "$out"); expected $BAKED_AGENT"
     return 1
   fi
-  pass "Caller-set WRAPIX_AGENT is clobbered → launcher sees baked agent value"
+  pass "Caller-set WRIX_AGENT is clobbered → launcher sees baked agent value"
 }
 
 # Production source uses the directives whose emitted idioms the
 # hermetic wrapper above reproduces. Without this assertion, the
 # behavioral test would still pass even if the production code
 # regressed to `--set` for the image vars (or to `--set-default` for
-# WRAPIX_AGENT). The directive assertion + behavioral assertion are
+# WRIX_AGENT). The directive assertion + behavioral assertion are
 # jointly load-bearing.
 test_production_source_uses_correct_directives() {
-  if ! grep -nE -- '--set-default[[:space:]]+WRAPIX_DEFAULT_IMAGE_REF' "$WRAPPER_NIX" >/dev/null; then
-    fail "lib/sandbox/default.nix: WRAPIX_DEFAULT_IMAGE_REF must use --set-default (caller-overridable)"
+  if ! grep -nE -- '--set-default[[:space:]]+WRIX_DEFAULT_IMAGE_REF' "$WRAPPER_NIX" >/dev/null; then
+    fail "lib/sandbox/default.nix: WRIX_DEFAULT_IMAGE_REF must use --set-default (caller-overridable)"
     return 1
   fi
-  if ! grep -nE -- '--set-default[[:space:]]+WRAPIX_DEFAULT_IMAGE_SOURCE' "$WRAPPER_NIX" >/dev/null; then
-    fail "lib/sandbox/default.nix: WRAPIX_DEFAULT_IMAGE_SOURCE must use --set-default (caller-overridable)"
+  if ! grep -nE -- '--set-default[[:space:]]+WRIX_DEFAULT_IMAGE_SOURCE' "$WRAPPER_NIX" >/dev/null; then
+    fail "lib/sandbox/default.nix: WRIX_DEFAULT_IMAGE_SOURCE must use --set-default (caller-overridable)"
     return 1
   fi
-  if grep -nE -- '--set-default[[:space:]]+WRAPIX_AGENT' "$WRAPPER_NIX" >/dev/null; then
-    fail "lib/sandbox/default.nix: WRAPIX_AGENT must NOT use --set-default — the wrapper is bound to its (profile × agent) image"
+  if grep -nE -- '--set-default[[:space:]]+WRIX_AGENT' "$WRAPPER_NIX" >/dev/null; then
+    fail "lib/sandbox/default.nix: WRIX_AGENT must NOT use --set-default — the wrapper is bound to its (profile × agent) image"
     return 1
   fi
-  if ! grep -nE -- '--set[[:space:]]+WRAPIX_AGENT' "$WRAPPER_NIX" >/dev/null; then
-    fail "lib/sandbox/default.nix: WRAPIX_AGENT must use --set (unconditional)"
+  if ! grep -nE -- '--set[[:space:]]+WRIX_AGENT' "$WRAPPER_NIX" >/dev/null; then
+    fail "lib/sandbox/default.nix: WRIX_AGENT must use --set (unconditional)"
     return 1
   fi
-  pass "lib/sandbox/default.nix uses --set-default for image vars, --set for WRAPIX_AGENT"
+  pass "lib/sandbox/default.nix uses --set-default for image vars, --set for WRIX_AGENT"
 }
 
 test_launchers_pass_agent_to_container() {
-  if ! grep -nF -- '-e "WRAPIX_AGENT=$WRAPIX_AGENT"' "$LINUX_LAUNCHER_NIX" >/dev/null; then
-    fail "lib/sandbox/linux/default.nix: launcher must pass WRAPIX_AGENT into podman env"
+  if ! grep -nF -- '-e "WRIX_AGENT=$WRIX_AGENT"' "$LINUX_LAUNCHER_NIX" >/dev/null; then
+    fail "lib/sandbox/linux/default.nix: launcher must pass WRIX_AGENT into podman env"
     return 1
   fi
-  if ! grep -nF -- '-e "WRAPIX_AGENT=$WRAPIX_AGENT"' "$DARWIN_LAUNCHER_NIX" >/dev/null; then
-    fail "lib/sandbox/darwin/default.nix: launcher must pass WRAPIX_AGENT into container env"
+  if ! grep -nF -- '-e "WRIX_AGENT=$WRIX_AGENT"' "$DARWIN_LAUNCHER_NIX" >/dev/null; then
+    fail "lib/sandbox/darwin/default.nix: launcher must pass WRIX_AGENT into container env"
     return 1
   fi
-  pass "Linux and Darwin launchers pass WRAPIX_AGENT into the container"
+  pass "Linux and Darwin launchers pass WRIX_AGENT into the container"
 }
 
 ALL_TESTS=(

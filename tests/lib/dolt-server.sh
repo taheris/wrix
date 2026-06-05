@@ -61,7 +61,7 @@ kill_stale_test_dolt_servers() {
     done < <(pgrep -af 'dolt sql-server' \
               | grep -- '--loglevel=warning' \
               | grep -v -- '--data-dir' \
-              | grep -v '/workspace/.wrapix' \
+              | grep -v '/workspace/.wrix' \
               | awk '{print $1}')
   fi
 
@@ -82,7 +82,7 @@ setup_shared_dolt_server() {
   kill_stale_test_dolt_servers
 
   SHARED_DOLT_HOST="$bind_host"
-  SHARED_DOLT_DIR=$(mktemp -d -t "wrapix-test-dolt-XXXXXX")
+  SHARED_DOLT_DIR=$(mktemp -d -t "wrix-test-dolt-XXXXXX")
 
   # Initialize dolt data directory
   mkdir -p "$SHARED_DOLT_DIR/data"

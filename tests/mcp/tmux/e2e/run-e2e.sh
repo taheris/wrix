@@ -2,7 +2,7 @@
 # E2E Test Runner for tmux-mcp sandbox tests
 #
 # This script runs all end-to-end tests for the tmux-mcp MCP server
-# running inside wrapix sandbox containers.
+# running inside wrix sandbox containers.
 #
 # Prerequisites:
 # - nix (with flakes enabled)

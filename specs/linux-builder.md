@@ -4,7 +4,7 @@ Remote Nix builder running in an Apple `container` VM on macOS, exposed via `ssh
 
 ## Problem Statement
 
-macOS users need `aarch64-linux` builds for container images, cross-platform CI, and Linux-only code paths. Apple Silicon can run Linux VMs efficiently, but wiring a Nix remote builder (persistent store, SSH keys, route configuration, nix-darwin integration) by hand is fiddly. The Linux Builder packages all of that as a single `wrapix-builder` CLI.
+macOS users need `aarch64-linux` builds for container images, cross-platform CI, and Linux-only code paths. Apple Silicon can run Linux VMs efficiently, but wiring a Nix remote builder (persistent store, SSH keys, route configuration, nix-darwin integration) by hand is fiddly. The Linux Builder packages all of that as a single `wrix-builder` CLI.
 
 ## Architecture
 
@@ -19,10 +19,10 @@ nix-daemon                         sshd (:22)
                                        │
                                    /nix (VirtioFS mount)
                                        │
-~/.local/share/wrapix/builder-nix/ ◄───┘
+~/.local/share/wrix/builder-nix/ ◄───┘
 ```
 
-The builder runs under Apple's `container` CLI (Virtualization.framework microVM, same boundary class as wrapix sandboxes on macOS — see `specs/security.md`). `/nix` is bind-mounted from `~/.local/share/wrapix/builder-nix/` so the store persists across container restarts. SSH host and client keys live next to the store under `builder-keys/`.
+The builder runs under Apple's `container` CLI (Virtualization.framework microVM, same boundary class as wrix sandboxes on macOS — see `specs/security.md`). `/nix` is bind-mounted from `~/.local/share/wrix/builder-nix/` so the store persists across container restarts. SSH host and client keys live next to the store under `builder-keys/`.
 
 ### Trust Model
 
@@ -32,17 +32,17 @@ The container boundary is the isolation primitive; Nix's internal sandbox is dis
 
 | Command | Description |
 |---------|-------------|
-| `wrapix-builder start` | Start builder container |
-| `wrapix-builder stop` | Stop and remove container |
-| `wrapix-builder status` | Show builder state |
-| `wrapix-builder ssh [cmd]` | Connect or run remote command |
-| `wrapix-builder setup` | Configure routes and SSH known_hosts (sudo) |
-| `wrapix-builder config` | Print nix-darwin configuration snippet |
+| `wrix-builder start` | Start builder container |
+| `wrix-builder stop` | Stop and remove container |
+| `wrix-builder status` | Show builder state |
+| `wrix-builder ssh [cmd]` | Connect or run remote command |
+| `wrix-builder setup` | Configure routes and SSH known_hosts (sudo) |
+| `wrix-builder config` | Print nix-darwin configuration snippet |
 
 ## Storage Layout
 
 ```
-~/.local/share/wrapix/
+~/.local/share/wrix/
 ├── builder-nix/      # Persistent /nix store
 └── builder-keys/     # SSH keys
     ├── host_ed25519
@@ -51,13 +51,13 @@ The container boundary is the isolation primitive; Nix's internal sandbox is dis
 
 ## Setup Process
 
-1. `wrapix-builder start` creates the container with the VirtioFS `/nix` mount; first start copies `/nix-image/*` to initialize the store
-2. `wrapix-builder setup` adds the host route and SSH `known_hosts` entry (sudo required)
-3. User adds `builders = ssh-ng://builder@localhost:2222 aarch64-linux` to `~/.config/nix/nix.conf` (or runs the snippet from `wrapix-builder config` in a nix-darwin module)
+1. `wrix-builder start` creates the container with the VirtioFS `/nix` mount; first start copies `/nix-image/*` to initialize the store
+2. `wrix-builder setup` adds the host route and SSH `known_hosts` entry (sudo required)
+3. User adds `builders = ssh-ng://builder@localhost:2222 aarch64-linux` to `~/.config/nix/nix.conf` (or runs the snippet from `wrix-builder config` in a nix-darwin module)
 
 ## Success Criteria
 
-- The `wrapix-builder` integration suite passes on macOS 26+ (start, status, SSH, nix-daemon, remote `nixpkgs#hello` build, store persistence across `stop`/`start`, `config` snippet); skips with exit 77 on non-Darwin or older macOS
+- The `wrix-builder` integration suite passes on macOS 26+ (start, status, SSH, nix-daemon, remote `nixpkgs#hello` build, store persistence across `stop`/`start`, `config` snippet); skips with exit 77 on non-Darwin or older macOS
   [system](bash tests/standalone/builder-test.sh)
 - sshd inside the container has `PasswordAuthentication no` and binds the listener to `127.0.0.1`
   [check](grep -nE 'PasswordAuthentication|ListenAddress' lib/sandbox/builder/entrypoint.sh)
@@ -66,12 +66,12 @@ The container boundary is the isolation primitive; Nix's internal sandbox is dis
 
 ### Functional
 
-1. **Container lifecycle** — `wrapix-builder start` / `stop` / `status` manage a single Apple `container` instance named for the builder.
-2. **Persistent Nix store** — `/nix` is bind-mounted from `~/.local/share/wrapix/builder-nix/`; the first `start` seeds it from the image's initial store, subsequent starts reuse it.
+1. **Container lifecycle** — `wrix-builder start` / `stop` / `status` manage a single Apple `container` instance named for the builder.
+2. **Persistent Nix store** — `/nix` is bind-mounted from `~/.local/share/wrix/builder-nix/`; the first `start` seeds it from the image's initial store, subsequent starts reuse it.
 3. **SSH access** — sshd listens on 22 inside the container; the Apple `container` CLI forwards `127.0.0.1:2222` on the host to it. Authentication is key-based only.
-4. **Route and known_hosts setup** — `wrapix-builder setup` runs sudo-required host configuration so the nix-daemon can reach the listener and trust the host key.
-5. **Key management** — host and client SSH keys are generated on first run, stored under `~/.local/share/wrapix/builder-keys/`, and never regenerated unless the user opts in.
-6. **nix-darwin integration** — `wrapix-builder config` emits the buildMachines snippet for use in nix-darwin modules.
+4. **Route and known_hosts setup** — `wrix-builder setup` runs sudo-required host configuration so the nix-daemon can reach the listener and trust the host key.
+5. **Key management** — host and client SSH keys are generated on first run, stored under `~/.local/share/wrix/builder-keys/`, and never regenerated unless the user opts in.
+6. **nix-darwin integration** — `wrix-builder config` emits the buildMachines snippet for use in nix-darwin modules.
 
 ### Non-Functional
 

@@ -19,7 +19,7 @@
 # The container is launched the way the Linux launcher launches the default
 # boundary (lib/sandbox/linux/default.nix): no `--userns=keep-id`, so the
 # process is rootless container-root (the store owner); `--passwd-entry` names
-# it `wrapix`, and a `U=true` tmpfs at /home/wrapix gives Nix a writable HOME.
+# it `wrix`, and a `U=true` tmpfs at /home/wrix gives Nix a writable HOME.
 # The default entrypoint is bypassed (`--entrypoint /bin/bash`) so the probe
 # is the focused additive-Nix path, not the agent bootstrap.
 #
@@ -62,7 +62,7 @@ cd "$REPO_ROOT"
 
 IMAGE_STREAM=$(nix build --no-link --print-out-paths --no-warn-dirty .#test-image-nix)
 
-WORKSPACE=$(mktemp -d -t wrapix-nix-in-container.XXXXXX)
+WORKSPACE=$(mktemp -d -t wrix-nix-in-container.XXXXXX)
 cleanup() {
   rm -rf "$WORKSPACE"
   if podman image exists "$IMAGE_REF"; then
@@ -71,8 +71,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-IMAGE_REF=$(wrapix_unique_image_ref "wrapix-test-nix-in-container")
-wrapix_load_test_image "$IMAGE_STREAM" "wrapix-nix-claude" "$IMAGE_REF"
+IMAGE_REF=$(wrix_unique_image_ref "wrix-test-nix-in-container")
+wrix_load_test_image "$IMAGE_STREAM" "wrix-nix-claude" "$IMAGE_REF"
 
 # The probe runs entirely inside the container so the flake resolves and
 # realizes against the image's own Nix store, never the host's. It drives a
@@ -85,7 +85,7 @@ wrapix_load_test_image "$IMAGE_STREAM" "wrapix-nix-claude" "$IMAGE_REF"
 # `|| true` absorbs only that expected EOF status, not a real error (SH-6).
 read -r -d '' IN_CONTAINER <<'PROBE' || true
 set -euo pipefail
-export HOME=/home/wrapix
+export HOME=/home/wrix
 export NIX_CONFIG="experimental-features = nix-command flakes"
 
 uid=$(id -u)
@@ -166,16 +166,16 @@ PROBE
 # Mirror the launcher's default-boundary invocation: no keep-id (rootless
 # container-root owns the store), IS_SANDBOX=1 (claude's root-permission escape
 # hatch, used instead of the libfakeuid getuid spoof that blanks its TUI here —
-# wx-nsage), a wrapix passwd entry, and a writable tmpfs HOME
+# wx-nsage), a wrix passwd entry, and a writable tmpfs HOME
 # (lib/sandbox/linux/default.nix).
 set +e
 output=$(podman run --rm --network=pasta \
-  --passwd-entry "wrapix:*:$(id -u):$(id -g)::/home/wrapix:/bin/bash" \
-  --mount type=tmpfs,destination=/home/wrapix,U=true \
+  --passwd-entry "wrix:*:$(id -u):$(id -g)::/home/wrix:/bin/bash" \
+  --mount type=tmpfs,destination=/home/wrix,U=true \
   --entrypoint /bin/bash \
   -v "$WORKSPACE:/workspace:rw" \
   -w /workspace \
-  -e HOME=/home/wrapix \
+  -e HOME=/home/wrix \
   -e IS_SANDBOX=1 \
   "$IMAGE_REF" \
   -c "$IN_CONTAINER" 2>&1)

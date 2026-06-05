@@ -1,14 +1,14 @@
-# wrapix-builder: CLI wrapper for Linux remote builder
+# wrix-builder: CLI wrapper for Linux remote builder
 #
 # Manages a container that serves as an ssh-ng:// remote builder
 # for Nix on macOS. Uses Apple's container CLI (macOS 26+).
 #
 # Usage:
-#   wrapix-builder start   - Start the builder container
-#   wrapix-builder stop    - Stop and remove the container
-#   wrapix-builder status  - Show builder status
-#   wrapix-builder ssh     - Connect to builder via SSH
-#   wrapix-builder config  - Print nix.conf snippet for remote builder
+#   wrix-builder start   - Start the builder container
+#   wrix-builder stop    - Stop and remove the container
+#   wrix-builder status  - Show builder status
+#   wrix-builder ssh     - Connect to builder via SSH
+#   wrix-builder config  - Print nix.conf snippet for remote builder
 #
 { pkgs, linuxPkgs }:
 
@@ -22,24 +22,24 @@ let
   # SSH keys in nix store (stable, accessible to nix-darwin and root)
   keys = import ./hostkey.nix { inherit pkgs; };
 
-  script = pkgs.writeShellScriptBin "wrapix-builder" ''
+  script = pkgs.writeShellScriptBin "wrix-builder" ''
       set -euo pipefail
 
       # XDG-compliant directories
       XDG_DATA_HOME="''${XDG_DATA_HOME:-$HOME/.local/share}"
       XDG_CACHE_HOME="''${XDG_CACHE_HOME:-$HOME/.cache}"
-      WRAPIX_DATA="$XDG_DATA_HOME/wrapix"
-      WRAPIX_CACHE="$XDG_CACHE_HOME/wrapix"
+      WRIX_DATA="$XDG_DATA_HOME/wrix"
+      WRIX_CACHE="$XDG_CACHE_HOME/wrix"
 
       # Builder-specific paths
       KEYS_DIR="${keys}"
-      NIX_STORE="$WRAPIX_DATA/builder-nix"
-      CONTAINER_NAME="wrapix-builder"
-      BUILDER_IMAGE="wrapix-builder:latest"
+      NIX_STORE="$WRIX_DATA/builder-nix"
+      CONTAINER_NAME="wrix-builder"
+      BUILDER_IMAGE="wrix-builder:latest"
       SSH_PORT=2222
 
       usage() {
-        echo "Usage: wrapix-builder <command>"
+        echo "Usage: wrix-builder <command>"
         echo ""
         echo "Commands:"
         echo "  start        - Start the builder container"
@@ -95,8 +95,8 @@ let
           # Delete old image if exists
           container image delete "$BUILDER_IMAGE" 2>/dev/null || true
           # Convert Docker-format tar to OCI-archive format
-          OCI_TAR="$WRAPIX_CACHE/builder-image-oci.tar"
-          mkdir -p "$WRAPIX_CACHE"
+          OCI_TAR="$WRIX_CACHE/builder-image-oci.tar"
+          mkdir -p "$WRIX_CACHE"
           ${pkgs.skopeo}/bin/skopeo --insecure-policy copy --quiet "docker-archive:${builderImage}" "oci-archive:$OCI_TAR"
           # Load and capture the digest from output
           LOAD_OUTPUT=$(container image load --input "$OCI_TAR" 2>&1)
@@ -119,7 +119,7 @@ let
           state=$(container inspect "$CONTAINER_NAME" 2>/dev/null | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
           if [ "$state" = "running" ]; then
             echo "Builder container is already running"
-            echo "Use 'wrapix-builder ssh' to connect"
+            echo "Use 'wrix-builder ssh' to connect"
             exit 0
           fi
           # Container exists but not running - remove and recreate
@@ -153,7 +153,7 @@ let
           echo "This may take a few minutes..."
 
           # Run temp container without volume mount to export /nix
-          TEMP_CONTAINER="wrapix-builder-init-$$"
+          TEMP_CONTAINER="wrix-builder-init-$$"
           container run --name "$TEMP_CONTAINER" -d "$BUILDER_IMAGE" >/dev/null 2>&1
           sleep 3
 
@@ -211,9 +211,9 @@ let
         echo "Builder started successfully!"
         echo ""
         echo "Next steps:"
-        echo "  wrapix-builder setup   - Configure routes and SSH for nix-daemon (requires sudo)"
-        echo "  wrapix-builder ssh     - Connect to builder via SSH"
-        echo "  wrapix-builder config  - Print nix-darwin configuration"
+        echo "  wrix-builder setup   - Configure routes and SSH for nix-daemon (requires sudo)"
+        echo "  wrix-builder ssh     - Connect to builder via SSH"
+        echo "  wrix-builder config  - Print nix-darwin configuration"
       }
 
       cmd_stop() {
@@ -242,14 +242,14 @@ let
           echo "Builder: not created"
           echo ""
           echo "Nix store: $NIX_STORE"
-          echo "Run 'wrapix-builder start' to create and start the builder"
+          echo "Run 'wrix-builder start' to create and start the builder"
         fi
       }
 
       cmd_ssh() {
         if ! container_exists; then
           echo "Error: Builder is not running"
-          echo "Run 'wrapix-builder start' first"
+          echo "Run 'wrix-builder start' first"
           exit 1
         fi
 
@@ -257,7 +257,7 @@ let
         state=$(container inspect "$CONTAINER_NAME" 2>/dev/null | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
         if [ "$state" != "running" ]; then
           echo "Error: Builder container is not running (state: $state)"
-          echo "Run 'wrapix-builder start' first"
+          echo "Run 'wrix-builder start' first"
           exit 1
         fi
 
@@ -274,18 +274,18 @@ let
     # Add to nix-darwin configuration:
 
     # SSH config (environment.etc):
-    "ssh/ssh_config.d/100-wrapix-builder.conf".text = '''
-      Host wrapix-builder
+    "ssh/ssh_config.d/100-wrix-builder.conf".text = '''
+      Host wrix-builder
         Hostname localhost
         Port 2222
         User builder
-        HostKeyAlias wrapix-builder
+        HostKeyAlias wrix-builder
         IdentityFile $KEYS_DIR/builder_ed25519
     ''';
 
     # buildMachines (no sshKey needed, uses SSH config):
     {
-      hostName = "wrapix-builder";
+      hostName = "wrix-builder";
       systems = [ "aarch64-linux" ];
       protocol = "ssh-ng";
       maxJobs = 4;
@@ -293,9 +293,9 @@ let
       publicHostKey = builtins.readFile $KEYS_DIR/public_host_key_base64;
     }
 
-    # Or import from wrapix flake:
-    # sshKey: inputs.wrapix.packages.<system>.wrapix-builder.sshKey
-    # publicHostKey: inputs.wrapix.packages.<system>.wrapix-builder.publicHostKey
+    # Or import from wrix flake:
+    # sshKey: inputs.wrix.packages.<system>.wrix-builder.sshKey
+    # publicHostKey: inputs.wrix.packages.<system>.wrix-builder.publicHostKey
     NIXCONFIG
       }
 
@@ -315,7 +315,7 @@ let
         output=$($container_cmd inspect "$CONTAINER_NAME" 2>/dev/null) || true
         if [ -z "$output" ] || [ "$output" = "[]" ]; then
           echo "Error: Builder container is not running"
-          echo "Run 'wrapix-builder start' first"
+          echo "Run 'wrix-builder start' first"
           exit 1
         fi
 
@@ -323,21 +323,21 @@ let
         state=$(echo "$output" | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
         if [ "$state" != "running" ]; then
           echo "Error: Builder container is not running (state: $state)"
-          echo "Run 'wrapix-builder start' first"
+          echo "Run 'wrix-builder start' first"
           exit 1
         fi
 
         # Copy SSH key with proper permissions (SSH rejects world-readable keys)
         # Can't symlink because nix store has 444 permissions
-        echo "Installing SSH key at /etc/nix/wrapix_builder_ed25519..."
-        rm -f /etc/nix/wrapix_builder_ed25519
-        cp "$KEYS_DIR/builder_ed25519" /etc/nix/wrapix_builder_ed25519
-        chmod 600 /etc/nix/wrapix_builder_ed25519
-        chown root:nixbld /etc/nix/wrapix_builder_ed25519
+        echo "Installing SSH key at /etc/nix/wrix_builder_ed25519..."
+        rm -f /etc/nix/wrix_builder_ed25519
+        cp "$KEYS_DIR/builder_ed25519" /etc/nix/wrix_builder_ed25519
+        chmod 600 /etc/nix/wrix_builder_ed25519
+        chown root:nixbld /etc/nix/wrix_builder_ed25519
 
         # Symlink for host key is fine (not a private key)
-        echo "Creating host key symlink at /etc/nix/wrapix_builder_host_key_base64..."
-        ln -sf "$KEYS_DIR/public_host_key_base64" /etc/nix/wrapix_builder_host_key_base64
+        echo "Creating host key symlink at /etc/nix/wrix_builder_host_key_base64..."
+        ln -sf "$KEYS_DIR/public_host_key_base64" /etc/nix/wrix_builder_host_key_base64
 
         # Add host key to root's known_hosts (nix-daemon runs as root and reads this)
         echo "Adding to root's known_hosts..."
@@ -349,25 +349,25 @@ let
 
         # Remove old entries
         if [ -f "$root_known_hosts" ]; then
-          grep -v "^wrapix-builder " "$root_known_hosts" > "$root_known_hosts.tmp" 2>/dev/null || true
+          grep -v "^wrix-builder " "$root_known_hosts" > "$root_known_hosts.tmp" 2>/dev/null || true
           mv "$root_known_hosts.tmp" "$root_known_hosts"
         fi
 
         # Add entry using the raw public key (format: hostname key-type key)
-        echo "wrapix-builder $host_key" >> "$root_known_hosts"
+        echo "wrix-builder $host_key" >> "$root_known_hosts"
         chmod 600 "$root_known_hosts"
 
         # Verify SSH works
-        ssh -o BatchMode=yes wrapix-builder true 2>/dev/null || {
-          echo "Error: Failed to connect to wrapix-builder"
-          echo "Check that routes are configured: wrapix-builder setup-routes"
+        ssh -o BatchMode=yes wrix-builder true 2>/dev/null || {
+          echo "Error: Failed to connect to wrix-builder"
+          echo "Check that routes are configured: wrix-builder setup-routes"
           exit 1
         }
         echo "Host key added to known_hosts"
       }
 
       cmd_setup() {
-        echo "=== Setting up wrapix-builder ==="
+        echo "=== Setting up wrix-builder ==="
         echo ""
         echo "Step 1: Configuring network routes..."
         cmd_setup_routes
@@ -376,7 +376,7 @@ let
         cmd_setup_ssh
         echo ""
         echo "=== Setup complete ==="
-        echo "You can now use 'nix run' with wrapix-builder as a remote builder"
+        echo "You can now use 'nix run' with wrix-builder as a remote builder"
       }
 
       # Main command dispatch

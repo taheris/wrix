@@ -62,15 +62,15 @@ pkgs.writeShellScriptBin "test-darwin" ''
     sleep 2
   fi
 
-  TEST_IMAGE="wrapix-integration-test:latest"
+  TEST_IMAGE="wrix-integration-test:latest"
   XDG_CACHE_HOME="''${XDG_CACHE_HOME:-$HOME/.cache}"
-  WRAPIX_CACHE="$XDG_CACHE_HOME/wrapix"
-  mkdir -p "$WRAPIX_CACHE"
+  WRIX_CACHE="$XDG_CACHE_HOME/wrix"
+  mkdir -p "$WRIX_CACHE"
 
   # Load test image
   echo "Loading test image..."
   container image delete "$TEST_IMAGE" 2>/dev/null || true
-  OCI_TAR="$WRAPIX_CACHE/integration-test-image.tar"
+  OCI_TAR="$WRIX_CACHE/integration-test-image.tar"
   ${pkgs.skopeo}/bin/skopeo --insecure-policy copy --quiet "docker-archive:${profileImage}" "oci-archive:$OCI_TAR"
   LOAD_OUTPUT=$(container image load --input "$OCI_TAR" 2>&1)
   LOADED_REF=$(echo "$LOAD_OUTPUT" | grep -oE 'untagged@sha256:[a-f0-9]+' | head -1)
@@ -105,7 +105,7 @@ pkgs.writeShellScriptBin "test-darwin" ''
     -v "$WORKSPACE:/workspace" \
     -e BD_NO_DB=1 \
     -e HOST_UID=$(id -u) \
-    -e WRAPIX_PROMPT="test" \
+    -e WRIX_PROMPT="test" \
     --network default \
     --dns 100.100.100.100 \
     --dns 1.1.1.1 \
@@ -138,7 +138,7 @@ pkgs.writeShellScriptBin "test-darwin" ''
   chmod +x "$WORKSPACE/mount-test.sh"
 
   # Set up directory mount (simulating ~/.claude)
-  # VirtioFS maps files as root, so we use staging + WRAPIX_DIR_MOUNTS
+  # VirtioFS maps files as root, so we use staging + WRIX_DIR_MOUNTS
   CLAUDE_DIR="$TEST_DIR/claude-config"
   mkdir -p "$CLAUDE_DIR/mcp"
 
@@ -160,8 +160,8 @@ pkgs.writeShellScriptBin "test-darwin" ''
   # Build mount environment variables in same format as production:
   # DIR_MOUNTS:  /staging/path:/destination/path
   # FILE_MOUNTS: /staging/path/filename:/destination/path
-  DIR_MOUNTS="/mnt/wrapix/dir0:/home/wrapix/.claude"
-  FILE_MOUNTS="/mnt/wrapix/file0/claude.json:/home/wrapix/.claude.json"
+  DIR_MOUNTS="/mnt/wrix/dir0:/home/wrix/.claude"
+  FILE_MOUNTS="/mnt/wrix/file0/claude.json:/home/wrix/.claude.json"
 
   # Dereference symlinks on host (security: avoids mounting /nix/store)
   CLAUDE_DIR_DEREF="$TEST_DIR/claude-config-deref"
@@ -172,14 +172,14 @@ pkgs.writeShellScriptBin "test-darwin" ''
   container run --rm \
     -w / \
     -v "$WORKSPACE:/workspace" \
-    -v "$CLAUDE_DIR_DEREF:/mnt/wrapix/dir0" \
-    -v "$CLAUDE_JSON_DIR:/mnt/wrapix/file0" \
+    -v "$CLAUDE_DIR_DEREF:/mnt/wrix/dir0" \
+    -v "$CLAUDE_JSON_DIR:/mnt/wrix/file0" \
     -e BD_NO_DB=1 \
     -e HOST_UID=$(id -u) \
-    -e WRAPIX_DIR_MOUNTS="$DIR_MOUNTS" \
-    -e WRAPIX_FILE_MOUNTS="$FILE_MOUNTS" \
-    -e WRAPIX_NOTIFY_TCP=1 \
-    -e WRAPIX_PROMPT="test" \
+    -e WRIX_DIR_MOUNTS="$DIR_MOUNTS" \
+    -e WRIX_FILE_MOUNTS="$FILE_MOUNTS" \
+    -e WRIX_NOTIFY_TCP=1 \
+    -e WRIX_PROMPT="test" \
     --network default \
     --dns 100.100.100.100 \
     --dns 1.1.1.1 \
@@ -218,14 +218,14 @@ pkgs.writeShellScriptBin "test-darwin" ''
     -v "$WORKSPACE:/workspace" \
     -e BD_NO_DB=1 \
     -e HOST_UID=$(id -u) \
-    -e WRAPIX_PROMPT="test" \
+    -e WRIX_PROMPT="test" \
     --network default \
     --entrypoint /bin/bash \
     "$TEST_IMAGE" -c '
       # Simulate entrypoint passwd setup (test bypasses entrypoint)
-      sed -i "s/^wrapix:x:1000:1000:/wrapix:x:'"$(id -u)"':'"$(id -u)"':/" /etc/passwd
-      sed -i "s/^wrapix:x:1000:/wrapix:x:'"$(id -u)"':/" /etc/group
-      export HOME="/home/wrapix"
+      sed -i "s/^wrix:x:1000:1000:/wrix:x:'"$(id -u)"':'"$(id -u)"':/" /etc/passwd
+      sed -i "s/^wrix:x:1000:/wrix:x:'"$(id -u)"':/" /etc/group
+      export HOME="/home/wrix"
       exec /workspace/uid-test.sh
     '
   UID_EXIT=$?

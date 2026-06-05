@@ -2,7 +2,7 @@
 # Verifier for the tmux-mcp integration suite (specs/tmux-mcp.md).
 #
 # Drives the existing tests/mcp/tmux/test_*.sh scripts directly against
-# the host's tmux + the wrapix-built tmux-mcp binary — no container, no
+# the host's tmux + the wrix-built tmux-mcp binary — no container, no
 # VM. Each test exercises the MCP server's JSON-RPC surface over stdin/
 # stdout for one tool (create_pane, send_keys, capture_pane, kill_pane,
 # list_panes, exited_pane, error_handling, audit_log, cleanup_on_exit).

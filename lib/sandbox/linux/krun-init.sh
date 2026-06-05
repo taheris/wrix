@@ -14,8 +14,8 @@ git config --global safe.directory /workspace
 
 # Reconstruct container command args from launcher env var
 ARGS=()
-if [ -n "${WRAPIX_KRUN_CMD:-}" ]; then
-  eval "ARGS=($WRAPIX_KRUN_CMD)"
+if [ -n "${WRIX_KRUN_CMD:-}" ]; then
+  eval "ARGS=($WRIX_KRUN_CMD)"
 fi
 
 # Activate UID spoofing (terminal handled by krun-relay's real PTY)

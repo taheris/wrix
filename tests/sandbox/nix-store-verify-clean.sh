@@ -22,7 +22,7 @@
 # The container is launched the way the Linux launcher launches the default
 # boundary (lib/sandbox/linux/default.nix): no `--userns=keep-id`, so the
 # process is rootless container-root (the store owner), and `--passwd-entry`
-# names it `wrapix`. The default entrypoint is bypassed (`--entrypoint /bin/bash`) so
+# names it `wrix`. The default entrypoint is bypassed (`--entrypoint /bin/bash`) so
 # the probe is the focused store-verify path, not the agent bootstrap. No
 # network is needed — `--verify` reads only the baked store and DB — so unlike
 # nix-in-container.sh this verifier never self-skips on a missing substituter.
@@ -62,8 +62,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-IMAGE_REF=$(wrapix_unique_image_ref "wrapix-test-nix-store-verify-clean")
-wrapix_load_test_image "$IMAGE_STREAM" "wrapix-nix-claude" "$IMAGE_REF"
+IMAGE_REF=$(wrix_unique_image_ref "wrix-test-nix-store-verify-clean")
+wrix_load_test_image "$IMAGE_STREAM" "wrix-nix-claude" "$IMAGE_REF"
 
 # The probe runs entirely inside the container so `nix-store --verify` reads the
 # image's own baked store and DB, never the host's. `--check-contents` re-hashes
@@ -75,7 +75,7 @@ wrapix_load_test_image "$IMAGE_STREAM" "wrapix-nix-claude" "$IMAGE_REF"
 # `|| true` absorbs only that expected EOF status, not a real error (SH-6).
 read -r -d '' IN_CONTAINER <<'PROBE' || true
 set -euo pipefail
-export HOME=/home/wrapix
+export HOME=/home/wrix
 export NIX_CONFIG="experimental-features = nix-command flakes"
 
 uid=$(id -u)
@@ -115,13 +115,13 @@ PROBE
 # Mirror the launcher's default-boundary invocation: no keep-id (rootless
 # container-root owns the store), IS_SANDBOX=1 (claude's root-permission escape
 # hatch, used instead of the libfakeuid getuid spoof that blanks its TUI here —
-# wx-nsage), and a wrapix passwd entry (lib/sandbox/linux/default.nix). No
+# wx-nsage), and a wrix passwd entry (lib/sandbox/linux/default.nix). No
 # network: --verify reads only the baked store.
 set +e
 output=$(podman run --rm --network=none \
-  --passwd-entry "wrapix:*:$(id -u):$(id -g)::/home/wrapix:/bin/bash" \
+  --passwd-entry "wrix:*:$(id -u):$(id -g)::/home/wrix:/bin/bash" \
   --entrypoint /bin/bash \
-  -e HOME=/home/wrapix \
+  -e HOME=/home/wrix \
   -e IS_SANDBOX=1 \
   "$IMAGE_REF" \
   -c "$IN_CONTAINER" 2>&1)

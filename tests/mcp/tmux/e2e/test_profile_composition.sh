@@ -91,15 +91,15 @@ fi
 # Extract the image stream path and ref from the makeWrapper-generated
 # wrapper. Profile-specific sandboxes are built as `makeWrapper --set-default`
 # over the bare launcher, so the wrapper lines are
-# `WRAPIX_DEFAULT_IMAGE_{SOURCE,REF}=${WRAPIX_DEFAULT_IMAGE_{SOURCE,REF}-'…'}`
+# `WRIX_DEFAULT_IMAGE_{SOURCE,REF}=${WRIX_DEFAULT_IMAGE_{SOURCE,REF}-'…'}`
 # (the `-'…'` default-fallback form, not the older `--set` bare `'…'` form).
 # Match the first single-quoted value that follows the variable name.
-IMAGE_PATH=$(grep -oP "WRAPIX_DEFAULT_IMAGE_SOURCE=[^']*'\K[^']+" "${PACKAGE_PATH}/bin/wrapix" | head -1) || {
-    log_error "Could not find WRAPIX_DEFAULT_IMAGE_SOURCE in wrapper script"
+IMAGE_PATH=$(grep -oP "WRIX_DEFAULT_IMAGE_SOURCE=[^']*'\K[^']+" "${PACKAGE_PATH}/bin/wrix" | head -1) || {
+    log_error "Could not find WRIX_DEFAULT_IMAGE_SOURCE in wrapper script"
     exit 1
 }
-WRAPPER_IMAGE_REF=$(grep -oP "WRAPIX_DEFAULT_IMAGE_REF=[^']*'\K[^']+" "${PACKAGE_PATH}/bin/wrapix" | head -1) || {
-    log_error "Could not find WRAPIX_DEFAULT_IMAGE_REF in wrapper script"
+WRAPPER_IMAGE_REF=$(grep -oP "WRIX_DEFAULT_IMAGE_REF=[^']*'\K[^']+" "${PACKAGE_PATH}/bin/wrix" | head -1) || {
+    log_error "Could not find WRIX_DEFAULT_IMAGE_REF in wrapper script"
     exit 1
 }
 
@@ -119,8 +119,8 @@ if [[ "$HAS_PODMAN" != "true" ]]; then
 fi
 
 log_info "Loading image into podman..."
-IMAGE_REF=$(wrapix_unique_image_ref "wrapix-test-profile-composition")
-wrapix_load_test_image "${IMAGE_PATH}" "$(wrapix_image_short_name "$WRAPPER_IMAGE_REF")" "${IMAGE_REF}"
+IMAGE_REF=$(wrix_unique_image_ref "wrix-test-profile-composition")
+wrix_load_test_image "${IMAGE_PATH}" "$(wrix_image_short_name "$WRAPPER_IMAGE_REF")" "${IMAGE_REF}"
 log_info "Image loaded as ${IMAGE_REF}"
 
 # Create a temporary workspace
@@ -190,7 +190,7 @@ check_command_output "rustc --version" "rustc" "rustc is functional"
 check_command "cargo" "cargo (Rust package manager)"
 
 # Verify RUST_SRC_PATH is set (CARGO_HOME is intentionally unset: cargo
-# defaults to $HOME/.cargo = /home/wrapix/.cargo via the container's $HOME).
+# defaults to $HOME/.cargo = /home/wrix/.cargo via the container's $HOME).
 check_command_output "echo \$RUST_SRC_PATH" "rustlib/src/rust/library" "RUST_SRC_PATH is set correctly"
 
 echo ""

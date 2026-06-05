@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Unit tests for session transcript audit trail (.wrapix/log/)
+# Unit tests for session transcript audit trail (.wrix/log/)
 # Tests the write_session_log function from entrypoint scripts
 # shellcheck disable=SC2329,SC2034  # SC2329: functions invoked via ALL_TESTS; SC2034: color vars used in functions
 set -euo pipefail
@@ -31,7 +31,7 @@ setup() {
   TEST_DIR=$(mktemp -d -t "session-log-test-XXXXXX")
   export WORKSPACE="$TEST_DIR/workspace"
   mkdir -p "$WORKSPACE/.claude"
-  mkdir -p "$WORKSPACE/.wrapix"
+  mkdir -p "$WORKSPACE/.wrix"
 
   # Simulate the session start variables
   SESSION_START_EPOCH=$(date +%s)
@@ -42,8 +42,8 @@ setup() {
 
 teardown() {
   rm -rf "$TEST_DIR"
-  unset LOOM_MODE WRAPIX_SESSION_ID
-  rm -f /tmp/wrapix-bead-id
+  unset LOOM_MODE WRIX_SESSION_ID
+  rm -f /tmp/wrix-bead-id
 }
 
 # Portable write_session_log extracted from entrypoint (parameterized workspace)
@@ -62,8 +62,8 @@ write_session_log() {
   fi
 
   local bead_id=""
-  if [ -f /tmp/wrapix-bead-id ]; then
-    bead_id=$(cat /tmp/wrapix-bead-id 2>/dev/null || true)
+  if [ -f /tmp/wrix-bead-id ]; then
+    bead_id=$(cat /tmp/wrix-bead-id 2>/dev/null || true)
   fi
 
   local claude_session_id=""
@@ -72,8 +72,8 @@ write_session_log() {
       | jq -r '.sessionId // empty' 2>/dev/null || true)
   fi
 
-  mkdir -p "$workspace/.wrapix/log"
-  local log_file="$workspace/.wrapix/log/${SESSION_START_ISO//[:.]/-}.json"
+  mkdir -p "$workspace/.wrix/log"
+  local log_file="$workspace/.wrix/log/${SESSION_START_ISO//[:.]/-}.json"
 
   jq -n \
     --arg start "$SESSION_START_ISO" \
@@ -82,7 +82,7 @@ write_session_log() {
     --argjson exit_code "$exit_code" \
     --arg mode "$mode" \
     --arg bead_id "$bead_id" \
-    --arg session_id "${WRAPIX_SESSION_ID:-}" \
+    --arg session_id "${WRIX_SESSION_ID:-}" \
     --arg claude_session_id "$claude_session_id" \
     --arg claude_session_dir "$workspace/.claude" \
     '{
@@ -92,7 +92,7 @@ write_session_log() {
       exit_code: $exit_code,
       mode: $mode,
       bead_id: (if $bead_id == "" then null else $bead_id end),
-      wrapix_session_id: (if $session_id == "" then null else $session_id end),
+      wrix_session_id: (if $session_id == "" then null else $session_id end),
       claude_session_id: (if $claude_session_id == "" then null else $claude_session_id end),
       claude_session_dir: $claude_session_dir
     }' > "$log_file" 2>/dev/null || true
@@ -105,7 +105,7 @@ write_session_log() {
 #-----------------------------------------------------------------------------
 
 test_log_file_created() {
-  test_header "Log file is created in .wrapix/log/"
+  test_header "Log file is created in .wrix/log/"
   setup
 
   local log_file
@@ -214,9 +214,9 @@ test_log_exit_code() {
 }
 
 test_log_bead_id_from_file() {
-  test_header "Bead ID is read from /tmp/wrapix-bead-id"
+  test_header "Bead ID is read from /tmp/wrix-bead-id"
   setup
-  echo "wx-abc123" > /tmp/wrapix-bead-id
+  echo "wx-abc123" > /tmp/wrix-bead-id
 
   local log_file
   log_file=$(write_session_log 0)
@@ -235,7 +235,7 @@ test_log_bead_id_from_file() {
 test_log_bead_id_null_when_missing() {
   test_header "Bead ID is null when no file exists"
   setup
-  rm -f /tmp/wrapix-bead-id
+  rm -f /tmp/wrix-bead-id
 
   local log_file
   log_file=$(write_session_log 0)
@@ -272,20 +272,20 @@ test_log_claude_session_id() {
   teardown
 }
 
-test_log_wrapix_session_id() {
-  test_header "WRAPIX_SESSION_ID is recorded"
+test_log_wrix_session_id() {
+  test_header "WRIX_SESSION_ID is recorded"
   setup
-  export WRAPIX_SESSION_ID="main:0.1"
+  export WRIX_SESSION_ID="main:0.1"
 
   local log_file
   log_file=$(write_session_log 0)
   local session_id
-  session_id=$(jq -r '.wrapix_session_id' "$log_file")
+  session_id=$(jq -r '.wrix_session_id' "$log_file")
 
   if [ "$session_id" = "main:0.1" ]; then
-    test_pass "Wrapix session ID recorded as main:0.1"
+    test_pass "Wrix session ID recorded as main:0.1"
   else
-    test_fail "Wrapix session ID is '$session_id', expected 'main:0.1'"
+    test_fail "Wrix session ID is '$session_id', expected 'main:0.1'"
   fi
 
   teardown
@@ -368,7 +368,7 @@ ALL_TESTS=(
   test_log_bead_id_from_file
   test_log_bead_id_null_when_missing
   test_log_claude_session_id
-  test_log_wrapix_session_id
+  test_log_wrix_session_id
   test_log_duration_non_negative
   test_log_filename_format
   test_log_timestamps_iso8601

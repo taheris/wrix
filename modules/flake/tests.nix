@@ -7,7 +7,7 @@
       system,
       linuxPkgs,
       treefmtWrapper,
-      wrapix,
+      wrix,
       ...
     }:
     let
@@ -16,7 +16,7 @@
           pkgs
           system
           linuxPkgs
-          wrapix
+          wrix
           ;
         treefmt = treefmtWrapper;
         src = self;

@@ -8,7 +8,7 @@
 # two hooks (a skip-if-missing wrapper probe and a sentinel touch), then
 # runs `git add -A && git commit -m test` inside the container with the
 # entrypoint as the entrypoint. The entrypoint installs core.hooksPath
-# to wrapix.prekHooks before exec'ing the override; the commit's
+# to wrix.prekHooks before exec'ing the override; the commit's
 # pre-commit shim then dispatches the .pre-commit-config.yaml hooks via
 # prek. Sentinel marker file proves the chain fired.
 
@@ -36,7 +36,7 @@ cd "$REPO_ROOT"
 
 IMAGE_STREAM=$(nix build --no-link --print-out-paths --no-warn-dirty .#test-image-base)
 
-WORKSPACE=$(mktemp -d -t wrapix-container-pre-commit.XXXXXX)
+WORKSPACE=$(mktemp -d -t wrix-container-pre-commit.XXXXXX)
 cleanup() {
   rm -rf "$WORKSPACE"
   if podman image exists "$IMAGE_REF"; then
@@ -45,8 +45,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-IMAGE_REF=$(wrapix_unique_image_ref "wrapix-test-container-pre-commit")
-wrapix_load_test_image "$IMAGE_STREAM" "wrapix-base-claude" "$IMAGE_REF"
+IMAGE_REF=$(wrix_unique_image_ref "wrix-test-container-pre-commit")
+wrix_load_test_image "$IMAGE_STREAM" "wrix-base-claude" "$IMAGE_REF"
 
 # Seed the workspace: git repo + .pre-commit-config.yaml + sentinel.
 git -C "$WORKSPACE" init -q -b main
@@ -81,10 +81,10 @@ SCRIPT
 chmod 755 "$WORKSPACE/.git/sentinel-pre-commit.sh"
 
 # Run the container with `git add -A && git commit` as the override.
-commit_log=$(mktemp -t wrapix-container-pre-commit-log.XXXXXX)
+commit_log=$(mktemp -t wrix-container-pre-commit-log.XXXXXX)
 trap 'rm -rf "$WORKSPACE" "$commit_log"; if podman image exists "$IMAGE_REF"; then podman rmi "$IMAGE_REF" >/dev/null; fi' EXIT
 if ! podman run --rm --network=pasta --userns=keep-id \
-  -e HOME=/home/wrapix \
+  -e HOME=/home/wrix \
   -e GIT_AUTHOR_NAME=test -e GIT_AUTHOR_EMAIL=test@example.com \
   -e GIT_COMMITTER_NAME=test -e GIT_COMMITTER_EMAIL=test@example.com \
   -v "$WORKSPACE:/workspace:rw" \
@@ -104,12 +104,12 @@ cat "$commit_log" >&2
   ls -la "$WORKSPACE/.git/" 2>&1 | head -20 >&2
   echo "--- container core.hooksPath + prek ---" >&2
   podman run --rm --network=pasta --userns=keep-id \
-    -e HOME=/home/wrapix \
+    -e HOME=/home/wrix \
     -v "$WORKSPACE:/workspace:rw" \
     --entrypoint /bin/bash "$IMAGE_REF" \
     -c 'echo "hooksPath=$(git -C /workspace config --local --get core.hooksPath)";
-        echo "WRAPIX_PREK_HOOKS=$WRAPIX_PREK_HOOKS";
-        ls -la "$WRAPIX_PREK_HOOKS/" 2>&1 | head -15;
+        echo "WRIX_PREK_HOOKS=$WRIX_PREK_HOOKS";
+        ls -la "$WRIX_PREK_HOOKS/" 2>&1 | head -15;
         echo "prek=$(command -v prek)"' >&2
   exit 1
 }

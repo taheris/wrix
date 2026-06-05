@@ -13,9 +13,9 @@ Before implementing features, consult `docs/README.md`:
 ```bash
 nix develop          # Enter devShell
 nix build            # Build sandbox
-nix build .#wrapix-rust    # With Rust profile
-nix build .#wrapix-python  # With Python profile
-nix build .#wrapix-mcp     # With all MCP servers (tmux, playwright)
+nix build .#sandbox-rust    # With Rust profile
+nix build .#sandbox-python  # With Python profile
+nix build .#sandbox-mcp     # With all MCP servers (tmux, playwright)
 ```
 
 ## Issue Tracking (Beads)

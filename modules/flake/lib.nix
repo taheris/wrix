@@ -10,7 +10,7 @@
       ...
     }:
     let
-      wrapix = import ../../lib {
+      wrix = import ../../lib {
         inherit pkgs system linuxPkgs;
         inherit (inputs) crane fenix;
         treefmt = treefmtWrapper;
@@ -19,11 +19,11 @@
     in
     {
       _module.args = {
-        inherit wrapix;
+        inherit wrix;
       };
 
       legacyPackages.lib = {
-        inherit (wrapix)
+        inherit (wrix)
           deriveProfile
           mkDevShell
           mkProfileImages

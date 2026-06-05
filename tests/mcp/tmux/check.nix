@@ -1,7 +1,7 @@
 # tmux-mcp tests - shellcheck the integration scripts.
 #
 # The crate's clippy + nextest land in tests/default.nix via
-# wrapix.tmuxMcpPackage. The live integration suite (test_*.sh + e2e/) is
+# wrix.tmuxMcpPackage. The live integration suite (test_*.sh + e2e/) is
 # driven host-side by tests/mcp/tmux/{integration,e2e-sandbox}.sh, which
 # the loom gate dispatches per criterion; nothing here boots a VM.
 {

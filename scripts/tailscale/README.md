@@ -32,7 +32,7 @@ sudo scripts/tailscale/setup-routing.sh
 
 ```bash
 SCRIPT_PATH="$(cd scripts/tailscale && pwd)"
-LOG_DIR="/var/log/wrapix"
+LOG_DIR="/var/log/wrix"
 sudo mkdir -p "$LOG_DIR"
 
 sed -e "s|__SCRIPT_PATH__|$SCRIPT_PATH|g" \
@@ -52,7 +52,7 @@ sudo launchctl load /Library/LaunchDaemons/com.local.tailscale-routing.plist
 
 ```bash
 sudo launchctl list | grep tailscale-routing
-tail -f /var/log/wrapix/tailscale-routing.log
+tail -f /var/log/wrix/tailscale-routing.log
 ```
 
 ## Uninstall
