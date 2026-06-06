@@ -11,6 +11,7 @@ let
     createStagingDir
     imageLoadStep
     mkDeployKeyExpr
+    rememberImageRef
     pruneStaleImages
     stageBeads
     ;
@@ -460,6 +461,7 @@ in
         # (per specs/sandbox.md § Image install path). Body lives in
         # `lib/util/shell.nix` and is shared with the wrix-spawn-load verifier.
         ${imageLoadStep}
+        ${rememberImageRef}
         # Prune stale wrix-* tags from every profile on every invocation,
         # not just after a fresh load — otherwise a cached current profile
         # lets stale hashes from other profiles accumulate indefinitely.

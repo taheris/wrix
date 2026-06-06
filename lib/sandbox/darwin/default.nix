@@ -12,6 +12,7 @@ let
     createStagingDir
     mkDeployKeyExpr
     pruneStaleImages
+    rememberImageRef
     stageBeads
     ;
 
@@ -253,6 +254,7 @@ in
                   verbose "Loaded image $PROFILE_IMAGE"
                 fi
               fi
+              ${rememberImageRef}
               # Prune runs on every invocation, not just after load, so stale
               # hashes from other profiles get swept even when the current
               # profile is cached.

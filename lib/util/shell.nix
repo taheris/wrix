@@ -187,13 +187,32 @@ _:
     else
       ''$(basename "$PROJECT_DIR")-$(hostname -s 2>/dev/null || uname -n)'';
 
+  # Remember the image ref a workspace just used so global pruning does not
+  # evict another recently-used workspace's cached sandbox image. The list is
+  # MRU-ordered and bounded; stale refs eventually fall out naturally.
+  rememberImageRef = ''
+    if [[ -n "''${IMAGE_REF:-}" && -n "''${WRIX_CACHE:-}" ]]; then
+      mkdir -p "$WRIX_CACHE"
+      _wrix_refs_file="$WRIX_CACHE/image-refs"
+      _wrix_refs_tmp=$(mktemp "$WRIX_CACHE/image-refs.XXXXXX")
+      {
+        printf '%s\n' "$IMAGE_REF"
+        if [[ -f "$_wrix_refs_file" ]]; then
+          cat "$_wrix_refs_file"
+        fi
+      } | awk 'NF && !seen[$0]++ && kept < 32 { print; kept++ }' > "$_wrix_refs_tmp"
+      mv "$_wrix_refs_tmp" "$_wrix_refs_file"
+    fi
+  '';
+
   # Prune stale image tags across every wrix-* repo (not just the active
   # one). After a fresh load, :latest and the new hash tag are aliases for
   # the same image ID; old hash tags from prior rebuilds are stray. For each
-  # wrix-* repo, keep :latest and any tag that aliases it (same ID/digest)
-  # and delete the rest. Without this, rebuilding one profile leaves stale
-  # hashes from every other profile accumulating forever, since the old
-  # filter was scoped to the currently-invoked profile only.
+  # wrix-* repo, keep :latest, any tag that aliases it (same ID/digest), and
+  # any recently-used sandbox refs recorded in $WRIX_CACHE/image-refs. Without
+  # the recorded-ref keep set, launching sandbox B retags wrix-*:latest and
+  # deletes sandbox A's hash tag/image, forcing A to re-stream every base layer
+  # when the user switches back.
   #
   # runtime:
   #   "podman"    — Linux, beads-dolt; repos are localhost/wrix-*.
@@ -246,6 +265,13 @@ _:
               }
             }' \
         | while read -r _stale; do
+            _keep_file="''${WRIX_IMAGE_KEEP_FILE:-}"
+            if [[ -z "$_keep_file" && -n "''${WRIX_CACHE:-}" ]]; then
+              _keep_file="$WRIX_CACHE/image-refs"
+            fi
+            if [[ -n "$_keep_file" && -f "$_keep_file" ]] && grep -Fxq "$_stale" "$_keep_file"; then
+              continue
+            fi
             if ! _err=$(${spec.delete} "$_stale" 2>&1); then
               case "$_err" in
                 *"in use"*|*"is using"*)

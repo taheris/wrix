@@ -7,7 +7,7 @@ let
   inherit (pkgs) runCommandLocal;
 
   shellUtils = import ../../lib/util/shell.nix { };
-  inherit (shellUtils) expandPathFn pruneStaleImages;
+  inherit (shellUtils) expandPathFn pruneStaleImages rememberImageRef;
 
 in
 {
@@ -165,6 +165,55 @@ in
 
     mkdir "$out"
   '';
+
+  prune-stale-images-keeps-recorded-ref =
+    runCommandLocal "test-prune-stale-images-keeps-recorded-ref" { }
+      ''
+        set -euo pipefail
+
+        export WRIX_CACHE="$PWD/cache"
+        IMAGE_REF="localhost/wrix-rust:c07457c7"
+        ${rememberImageRef}
+
+        cat > podman <<'EOF'
+        #!${pkgs.bash}/bin/bash
+        set -euo pipefail
+
+        case "$1" in
+          images)
+            printf '%s\n' \
+              'localhost/wrix-rust latest new-id' \
+              'localhost/wrix-rust c07457c7 old-id' \
+              'localhost/wrix-rust abandoned older-id'
+            ;;
+          rmi)
+            printf '%s\n' "$*" >> rmi.log
+            ;;
+          *)
+            echo "unexpected podman command: $*" >&2
+            exit 64
+            ;;
+        esac
+        EOF
+        chmod +x podman
+        : > rmi.log
+
+        ${pruneStaleImages { cmd = "$PWD/podman"; }}
+
+        if grep -q 'localhost/wrix-rust:c07457c7' rmi.log; then
+          echo "FAIL: recorded ref was pruned" >&2
+          cat rmi.log >&2
+          exit 1
+        fi
+
+        if ! grep -q 'localhost/wrix-rust:abandoned' rmi.log; then
+          echo "FAIL: unrecorded stale ref was not pruned" >&2
+          cat rmi.log >&2
+          exit 1
+        fi
+
+        mkdir "$out"
+      '';
 
   # Edge cases and boundary conditions
   expand-path-edge-cases = runCommandLocal "test-expand-path-edge-cases" { } ''
