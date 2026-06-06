@@ -7,230 +7,302 @@
 # github sync is skipped with a notice.
 set -euo pipefail
 
-# Context guard — runs first, before the auto-export write and any bd dolt call.
-# Inside a loom-managed bead clone `origin` points at the driver workdir (not
-# GitHub) and `.git/beads-worktrees/<branch>` is absent; the driver publishes
-# main+beads after a Clean review verdict and the worker's bd writes are already
-# authoritative through the bind-mounted Dolt socket, so a push here targets the
-# wrong remote and races the driver. No-op rather than publish.
-if [[ -n "${LOOM_INSIDE:-}" ]]; then
-  echo "beads-push: \$LOOM_INSIDE set — loom driver owns publish; skipping" >&2
-  exit 0
-fi
+TMP_FILES=()
 
-BRANCH="$(grep '^sync-branch:' .beads/config.yaml 2>/dev/null | awk '{print $2}' | tr -d '"' || echo beads)"
-BRANCH="${BRANCH:-beads}"
+cleanup() {
+  local path
+  for path in "${TMP_FILES[@]}"; do
+    rm -f "$path"
+  done
+}
+trap cleanup EXIT
 
-# Peel back to the main workspace: when beads-push is invoked from inside
-# .git/beads-worktrees/<branch>, git rev-parse --show-toplevel returns the
-# worktree itself, which is not where the dolt socket lives.
-# || true: the empty-ROOT guard below turns an unresolved root into an
-# actionable error rather than letting (null) flow into the worktree git calls.
-ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-case "$ROOT" in
-  */.git/beads-worktrees/*) ROOT="${ROOT%/.git/beads-worktrees/*}" ;;
-esac
-# Fail fast when no workspace root resolves ($LOOM_INSIDE is already handled
-# above): an empty ROOT would otherwise poison WT and the later `cd "$WT"` /
-# worktree git calls with `fatal: not a git repository: (null)`.
-if [[ -z "$ROOT" ]]; then
-  echo "beads-push: cannot resolve a git repository from '$PWD' — run inside a workspace checkout" >&2
-  exit 1
-fi
-WT="$ROOT/.git/beads-worktrees/$BRANCH"
-# Dolt-remote lives next to the database inside .beads/dolt/ so the
-# relative URL file://../dolt-remote resolves correctly from both the
-# CLI (.beads/dolt/<db>/) and the SQL server (/data/<db>/ in containers).
-REMOTE_DIR="$ROOT/.beads/dolt/dolt-remote"
+make_tmp_file() {
+  local path
+  path=$(mktemp)
+  TMP_FILES+=("$path")
+  printf '%s\n' "$path"
+}
 
-# Disable bd's auto-export hook: redundant with the explicit `bd dolt` calls
-# below, and its `git add .beads/issues.jsonl` warns noisily in any repo that
-# gitignores the JSONL (the common case post-Dolt). Idempotent and persists
-# in .beads/config.yaml — no save/restore.
-bd config set export.auto false >/dev/null
+skip_loom_managed_clone() {
+  # Loom clones push through the driver; publishing here targets the wrong remote and races it.
+  if [[ -n "${LOOM_INSIDE:-}" ]]; then
+    echo "beads-push: \$LOOM_INSIDE set — loom driver owns publish; skipping" >&2
+    exit 0
+  fi
+}
 
-# Gate the flatten+rebuild path: any remote file >= THRESHOLD_MB triggers a
-# full history squash + remote rebuild. GitHub's hard limit is 100 MiB per
-# file; 50 MiB gives us headroom for the next push cycle's growth before the
-# gate trips again. The gate is the circuit breaker for when dolt chunk files
-# grow (schema migrations, long-running reconcile churn, etc).
-THRESHOLD_MB=${BEADS_REMOTE_REBUILD_MB:-50}
-threshold_bytes=$((THRESHOLD_MB * 1024 * 1024))
-needs_rebuild=0
-if [ -d "$REMOTE_DIR" ]; then
-  while IFS= read -r sz; do
-    if [ "$sz" -ge "$threshold_bytes" ]; then needs_rebuild=1; break; fi
-  done < <(find "$REMOTE_DIR" -type f -exec stat -f '%z' {} + 2>/dev/null \
-           || find "$REMOTE_DIR" -type f -printf '%s\n' 2>/dev/null)
-fi
+load_workspace_context() {
+  # Peel beads-worktree invocations back to the main workspace where the Dolt socket lives.
+  BRANCH="$(grep '^sync-branch:' .beads/config.yaml 2>/dev/null | awk '{print $2}' | tr -d '"' || echo beads)"
+  BRANCH="${BRANCH:-beads}"
 
-if [ "$needs_rebuild" = 1 ]; then
-  if ! command -v beads-dolt >/dev/null 2>&1; then
-    echo "beads-push: remote file >= ${THRESHOLD_MB}MiB but beads-dolt not on PATH — cannot rebuild" >&2
+  # empty-ROOT guard below makes unresolved git roots actionable.
+  ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  case "$ROOT" in
+    */.git/beads-worktrees/*) ROOT="${ROOT%/.git/beads-worktrees/*}" ;;
+  esac
+
+  if [[ -z "$ROOT" ]]; then
+    echo "beads-push: cannot resolve a git repository from '$PWD' — run inside a workspace checkout" >&2
     exit 1
   fi
-  echo "beads-push: remote file >= ${THRESHOLD_MB}MiB — flattening history + rebuilding remote" >&2
-  bd flatten --force
-  find "$REMOTE_DIR" -mindepth 1 -delete
-  beads-dolt stop || true
-  beads-dolt start "$ROOT"
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    [ -S "$ROOT/.wrix/dolt.sock" ] && break
-    sleep 1
-  done
-fi
 
-# Push before pull so local commits become the merge base for any subsequent
-# remote activity. Pulling ahead of push would run Dolt's default three-way
-# merge over rows the local session has just written and can silently revert
-# operator state (e.g. a `bd close`) to the remote value.
-bd dolt commit || true  # best-effort: no-op when there are no pending writes
+  WT="$ROOT/.git/beads-worktrees/$BRANCH"
+  WORKTREE_REMOTE_DIR="$WT/.beads/dolt-remote"
+  REMOTE_DIR="$ROOT/.beads/dolt/dolt-remote"
+}
 
-push_stderr="$(mktemp)"
-trap 'rm -f "$push_stderr"' EXIT
-
-push_rc=0
-bd dolt push "$@" 2>"$push_stderr" || push_rc=$?
-cat "$push_stderr" >&2
-
-if [[ "$push_rc" -ne 0 ]]; then
-  # Fast-forward rejection (remote advanced) is the only push failure that
-  # triggers the pull-fallback path. Network, auth, and disk failures
-  # propagate as-is per spec Session-Close Sync / Ordering.
-  if ! grep -qiE 'non-fast-forward|fast-forward|reject|behind|out of date|denied' "$push_stderr"; then
-    exit "$push_rc"
+repair_dolt_origin_remote() {
+  # Host-only: never persist a container-local /workspace remote into shared Beads config.
+  if [[ -n "${IS_SANDBOX:-}" || "$ROOT" == /workspace* ]]; then
+    return 0
+  fi
+  if [[ ! -d "$WORKTREE_REMOTE_DIR" ]]; then
+    return 0
   fi
 
-  # Pull-fallback intent protection. Snapshot status/labels intent for every
-  # issue the local commits touched, using dolt_commit_diff_<table> between
-  # local HEAD and the remote-tracking branch. Updates only — insert/delete
-  # row collisions stay with Dolt default per spec Out of Scope.
-  dolt_local='HEAD'
-  dolt_remote='remotes/origin/main'
+  local remote
+  remote="file://$WORKTREE_REMOTE_DIR"
+  if bd dolt remote list 2>/dev/null | grep -Fq "$remote"; then
+    return 0
+  fi
 
-  mapfile -t affected_ids < <(
-    bd sql --csv "
-      SELECT DISTINCT id FROM (
-        SELECT to_id AS id
-        FROM dolt_commit_diff_issues
-        WHERE to_commit = '${dolt_local}' AND from_commit = '${dolt_remote}'
-          AND (from_status IS NULL OR from_status <> to_status)
-        UNION
-        SELECT to_issue_id AS id
-        FROM dolt_commit_diff_labels
-        WHERE to_commit = '${dolt_local}' AND from_commit = '${dolt_remote}'
-        UNION
-        SELECT from_issue_id AS id
-        FROM dolt_commit_diff_labels
-        WHERE to_commit = '${dolt_local}' AND from_commit = '${dolt_remote}'
-      ) AS touched
-      WHERE id IS NOT NULL
-    " | tail -n +2
-  )
+  echo "beads-push: repairing Dolt origin remote -> $remote" >&2
+  if bd dolt remote list 2>/dev/null | awk '{ print $1 }' | grep -Fxq origin; then
+    bd sql "CALL DOLT_REMOTE('remove', 'origin')" >/dev/null
+  fi
+  bd sql "CALL DOLT_REMOTE('add', 'origin', $(sql_quote "$remote"))" >/dev/null
+}
 
+sql_quote() {
+  local value="$1"
+  value=${value//\'/\'\'}
+  printf "'%s'" "$value"
+}
+
+disable_auto_export() {
+  # Persistent suppression is intentional; explicit bd dolt sync makes JSONL auto-export redundant.
+  bd config set export.auto false >/dev/null
+}
+
+remote_file_exceeds_threshold() {
+  local threshold_bytes threshold_mb sz
+  threshold_mb="${BEADS_REMOTE_REBUILD_MB:-50}"
+  threshold_bytes=$((threshold_mb * 1024 * 1024))
+
+  [[ -d "$REMOTE_DIR" ]] || return 1
+  while IFS= read -r sz; do
+    if [[ "$sz" -ge "$threshold_bytes" ]]; then
+      return 0
+    fi
+  done < <(find "$REMOTE_DIR" -type f -exec stat -f '%z' {} + 2>/dev/null \
+           || find "$REMOTE_DIR" -type f -printf '%s\n' 2>/dev/null)
+  return 1
+}
+
+rebuild_remote_if_needed() {
+  local threshold_mb
+  threshold_mb="${BEADS_REMOTE_REBUILD_MB:-50}"
+  if ! remote_file_exceeds_threshold; then
+    return 0
+  fi
+
+  if ! command -v beads-dolt >/dev/null 2>&1; then
+    echo "beads-push: remote file >= ${threshold_mb}MiB but beads-dolt not on PATH — cannot rebuild" >&2
+    exit 1
+  fi
+
+  echo "beads-push: remote file >= ${threshold_mb}MiB — flattening history + rebuilding remote" >&2
+  bd flatten --force
+  find "$REMOTE_DIR" -mindepth 1 -delete
+  beads-dolt stop || true # best-effort: the Dolt container may already be absent before rebuild.
+  beads-dolt start "$ROOT"
+  wait_for_rebuilt_socket
+}
+
+wait_for_rebuilt_socket() {
+  local attempt
+  for ((attempt = 0; attempt < 10; attempt++)); do
+    [[ -S "$ROOT/.wrix/dolt.sock" ]] && break
+    sleep 1
+  done
+}
+
+is_fast_forward_rejection() {
+  local stderr_file="$1"
+  grep -qiE 'non-fast-forward|fast-forward|reject|behind|out of date|denied' "$stderr_file"
+}
+
+query_affected_ids() {
+  bd sql --csv "
+    SELECT DISTINCT id FROM (
+      SELECT to_id AS id
+      FROM dolt_commit_diff_issues
+      WHERE to_commit = 'HEAD' AND from_commit = 'remotes/origin/main'
+        AND (from_status IS NULL OR from_status <> to_status)
+      UNION
+      SELECT to_issue_id AS id
+      FROM dolt_commit_diff_labels
+      WHERE to_commit = 'HEAD' AND from_commit = 'remotes/origin/main'
+      UNION
+      SELECT from_issue_id AS id
+      FROM dolt_commit_diff_labels
+      WHERE to_commit = 'HEAD' AND from_commit = 'remotes/origin/main'
+    ) AS touched
+    WHERE id IS NOT NULL
+  " | tail -n +2
+}
+
+sql_string_list() {
+  local id in_list
+  in_list=""
+  for id in "$@"; do
+    in_list+="'${id//\'/\'\'}',"
+  done
+  printf '%s\n' "${in_list%,}"
+}
+
+snapshot_query_for_ids() {
+  local in_list="$1"
+  cat <<SQL
+    SELECT i.id, i.status,
+      COALESCE((SELECT GROUP_CONCAT(label ORDER BY label SEPARATOR ',')
+                FROM labels WHERE issue_id = i.id), '') AS labels
+    FROM issues i
+    WHERE i.id IN (${in_list})
+    ORDER BY i.id
+SQL
+}
+
+pull_with_intent_protection() {
+  # On fallback, snapshot local status/label intent and refuse divergent pulls.
+  local in_list intent_file post_file snapshot_query
+  local -a affected_ids
+
+  mapfile -t affected_ids < <(query_affected_ids)
   if [[ "${#affected_ids[@]}" -eq 0 ]]; then
     bd dolt pull
     bd dolt push "$@"
-  else
-    in_list=""
-    for id in "${affected_ids[@]}"; do
-      in_list+="'${id//\'/\'\'}',"
-    done
-    in_list="${in_list%,}"
+    return 0
+  fi
 
-    snapshot_query="
-      SELECT i.id, i.status,
-        COALESCE((SELECT GROUP_CONCAT(label ORDER BY label SEPARATOR ',')
-                  FROM labels WHERE issue_id = i.id), '') AS labels
-      FROM issues i
-      WHERE i.id IN (${in_list})
-      ORDER BY i.id
-    "
+  in_list=$(sql_string_list "${affected_ids[@]}")
+  snapshot_query=$(snapshot_query_for_ids "$in_list")
+  intent_file=$(make_tmp_file)
+  post_file=$(make_tmp_file)
 
-    intent_file="$(mktemp)"
-    post_file="$(mktemp)"
-    trap 'rm -f "$push_stderr" "$intent_file" "$post_file"' EXIT
+  bd sql --csv "$snapshot_query" >"$intent_file"
+  bd dolt pull
+  bd sql --csv "$snapshot_query" >"$post_file"
 
-    bd sql --csv "$snapshot_query" >"$intent_file"
-    bd dolt pull
-    bd sql --csv "$snapshot_query" >"$post_file"
+  if ! diff -q "$intent_file" "$post_file" >/dev/null; then
+    echo "beads-push: pull-fallback diverged from local intent on status/labels — refusing to push" >&2
+    diff "$intent_file" "$post_file" >&2 || true # best-effort: surface row-level diff for the operator.
+    printf 'beads-push: affected issue IDs: %s\n' "${affected_ids[*]}" >&2
+    exit 1
+  fi
 
-    if ! diff -q "$intent_file" "$post_file" >/dev/null; then
-      echo "beads-push: pull-fallback diverged from local intent on status/labels — refusing to push" >&2
-      diff "$intent_file" "$post_file" >&2 || true  # best-effort: surface row-level diff for the operator
-      printf 'beads-push: affected issue IDs: %s\n' "${affected_ids[*]}" >&2
-      exit 1
+  bd dolt push "$@"
+}
+
+sync_dolt_remote() {
+  # Push before pull so local commits become the merge base for any fallback merge.
+  local push_rc push_stderr
+  commit_dolt_changes
+
+  push_stderr=$(make_tmp_file)
+  push_rc=0
+  bd dolt push "$@" 2>"$push_stderr" || push_rc=$?
+  cat "$push_stderr" >&2
+
+  if [[ "$push_rc" -eq 0 ]]; then
+    return 0
+  fi
+  if ! is_fast_forward_rejection "$push_stderr"; then
+    exit "$push_rc"
+  fi
+
+  pull_with_intent_protection "$@"
+}
+
+commit_dolt_changes() {
+  bd dolt commit || true # best-effort: no-op when there are no pending writes.
+}
+
+ensure_beads_worktree() {
+    # Recreate absent or dangling beads worktrees relative to the current workspace root.
+    if [[ -d "$WT" ]] && git -C "$WT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        return 0
     fi
 
-    bd dolt push "$@"
-  fi
-fi
+    if [[ -d "$WT" ]]; then
+        git worktree prune
+        rm -rf "$WT"
+    fi
+    if git rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
+        git worktree add "$WT" "$BRANCH" --quiet
+    elif git rev-parse --verify "origin/$BRANCH" >/dev/null 2>&1; then
+        git worktree add "$WT" "origin/$BRANCH" --quiet
+    else
+        echo "beads-push: no '$BRANCH' branch found — skipping github sync" >&2
+        exit 0
+    fi
+}
 
-# Beads-branch (github mirror) sync begins here. The `beads` branch carries no
-# prek config, so a post-checkout/commit hook firing on it aborts the sync with
-# `No prek.toml … found`. Skip prek uniformly across every git call below —
-# including the `git worktree add` that recreates the worktree — by exporting
-# the bypass once. The preceding Dolt commit/push phase is unaffected.
-export PREK_ALLOW_NO_CONFIG=1
+sync_beads_git_branch() {
+    skip_prek_for_beads_branch
+    ensure_beads_worktree
+    fix_worktree_pointers
 
-# Recreate the beads worktree when it is absent OR present-but-invalid. A
-# dangling `.git/worktrees/$BRANCH` (admin dir pruned/removed) leaves a stale
-# gitdir pointer that the pointer-fix below cannot repair; detect it via a
-# failing rev-parse, then prune the registration, drop the directory, and re-add
-# relative to the current $ROOT. Removing the directory is non-destructive: the
-# canonical bead data was already pushed to the Dolt remote above, the $BRANCH
-# commits live in the shared .git object store, and dolt-remote/ is rsynced
-# fresh from $REMOTE_DIR below.
-if [ ! -d "$WT" ] || ! git -C "$WT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  if [ -d "$WT" ]; then
-    git worktree prune
-    rm -rf "$WT"
-  fi
-  if git rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
-    git worktree add "$WT" "$BRANCH" --quiet
-  elif git rev-parse --verify "origin/$BRANCH" >/dev/null 2>&1; then
-    git worktree add "$WT" "origin/$BRANCH" --quiet
-  else
-    echo "beads-push: no '$BRANCH' branch found — skipping github sync" >&2
-    exit 0
-  fi
-fi
+    cd "$WT"
+    commit_dirty_worktree
+    git pull --rebase --quiet
 
-# Fix worktree pointers when running inside a container: the .git file
-# and worktree metadata may reference host-side paths that don't exist here.
-_wt_gitdir="$ROOT/.git/worktrees/$BRANCH"
-if [ -f "$WT/.git" ]; then
-  _current=$(sed 's/^gitdir: //' "$WT/.git")
-  if [ ! -d "$_current" ] && [ -d "$_wt_gitdir" ]; then
-    printf 'gitdir: %s\n' "$_wt_gitdir" > "$WT/.git"
-    printf '%s/.git\n' "$WT" > "$_wt_gitdir/gitdir"
-  fi
-fi
+    if [[ -d "$REMOTE_DIR" ]]; then
+        rsync -a --delete "$REMOTE_DIR/" "$WT/.beads/dolt-remote/"
+    fi
 
-cd "$WT"
+    commit_dirty_worktree
+    git push -u origin "$BRANCH" --quiet
+    echo "beads-push: synced to GitHub"
+}
 
-# Commit any leftover dirt from a prior interrupted run before pulling.
-# || true: update-index exits 1 when it flushes stale stat entries — that's
-# the signal we want flushed so the subsequent status reflects real content.
-git update-index --refresh >/dev/null || true
-if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
-  git add -A
-  git commit -m "bd sync" --quiet
-fi
+skip_prek_for_beads_branch() {
+    export PREK_ALLOW_NO_CONFIG=1
+}
 
-git pull --rebase --quiet
+fix_worktree_pointers() {
+    # Container checkouts can see host-side absolute gitdir pointers that need rewriting.
+    local current wt_gitdir
+    wt_gitdir="$ROOT/.git/worktrees/$BRANCH"
+    if [[ ! -f "$WT/.git" ]]; then
+        return 0
+    fi
 
-if [ -d "$REMOTE_DIR" ]; then
-  rsync -a --delete "$REMOTE_DIR/" "$WT/.beads/dolt-remote/"
-fi
+    current=$(sed 's/^gitdir: //' "$WT/.git")
+    if [[ ! -d "$current" && -d "$wt_gitdir" ]]; then
+        printf 'gitdir: %s\n' "$wt_gitdir" >"$WT/.git"
+        printf '%s/.git\n' "$WT" >"$wt_gitdir/gitdir"
+    fi
+}
 
-# || true: update-index exits 1 when it flushes stale stat entries — that's
-# the signal we want flushed so the subsequent status reflects real content.
-git update-index --refresh >/dev/null || true
-if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
-  git add -A
-  git commit -m "bd sync" --quiet
-fi
+commit_dirty_worktree() {
+    git update-index --refresh >/dev/null || true # expected: refresh returns 1 when it flushes stale stat entries.
+    if [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then
+        git add -A
+        git commit -m "bd sync" --quiet
+    fi
+}
 
-git push -u origin "$BRANCH" --quiet
-echo "beads-push: synced to GitHub"
+main() {
+  skip_loom_managed_clone
+  load_workspace_context
+  repair_dolt_origin_remote
+  disable_auto_export
+  rebuild_remote_if_needed
+  sync_dolt_remote "$@"
+  sync_beads_git_branch
+}
+
+main "$@"

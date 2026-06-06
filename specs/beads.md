@@ -285,6 +285,12 @@ upstream, not by this spec.
   message or write `.beads/issues.jsonl`
   [judge](../tests/judges/beads.sh#test_beadspush_disables_autoexport)
 
+- On host invocations, `beads-push` repairs a missing or stale Dolt `origin`
+  remote to the current checkout's host-path beads worktree remote before
+  Dolt sync, while sandbox/container invocations skip the repair so a
+  `/workspace` path is never persisted into shared Beads config
+  [judge](../tests/judges/beads.sh#test_beadspush_repairs_host_dolt_remote)
+
 - When `$LOOM_INSIDE` is set, `beads-push` performs no git or dolt
   operation and exits 0 with a one-line notice, so a consumer may invoke it
   unconditionally inside a loom-managed bead clone — where `origin` points
@@ -348,17 +354,24 @@ upstream, not by this spec.
    hook on every invocation past the context guard (idempotent); the
    pre-pull cleanup in the beads worktree uses `git status --porcelain` so
    any dirt the rebase would refuse is committed first.
-9. **Context-aware invocation** — `beads-push` is safe to invoke
+9. **Host remote repair** — on host invocations, `beads-push` repairs a
+   missing or stale Dolt `origin` remote to the current checkout's
+   host-path beads worktree remote before Dolt sync. The repair updates the
+   SQL Dolt remote directly rather than writing `sync.remote`, so it cannot
+   commit host-local absolute paths into `.beads/config.yaml`.
+   Sandbox/container invocations skip this repair so they do not poison
+   shared config with `/workspace` paths.
+10. **Context-aware invocation** — `beads-push` is safe to invoke
    unconditionally. Under `$LOOM_INSIDE` it is a full no-op (exit 0); when
    the git root is unresolvable it fails fast with an actionable message;
    otherwise it runs the dolt-sync and beads-branch sync. Consumers need no
    `$LOOM_INSIDE` guard around the call.
-10. **Beads-worktree resilience** — the beads-branch sync recreates the
-    beads worktree when it is absent or present-but-invalid (dangling gitdir
-    after the admin directory was pruned/removed), rebuilding relative to the
-    current `$ROOT` so host and container paths stay correct; and every git
-    invocation in that section, including the recreating `git worktree add`,
-    skips prek so the config-less `beads` branch does not abort the sync.
+11. **Beads-worktree resilience** — the beads-branch sync recreates the
+   beads worktree when it is absent or present-but-invalid (dangling gitdir
+   after the admin directory was pruned/removed), rebuilding relative to the
+   current `$ROOT` so host and container paths stay correct; and every git
+   invocation in that section, including the recreating `git worktree add`,
+   skips prek so the config-less `beads` branch does not abort the sync.
 
 ### Non-Functional
 
