@@ -6,9 +6,9 @@ credential surfaces, network exfil baseline, and audit anchor.
 ## Problem Statement
 
 AI coding agents running inside wrix sandboxes hold three kinds of
-credentials (deploy key, signing key, agent API credentials), reach a small set
-of network destinations, and produce session artefacts the operator
-can later inspect. The per-component specs (`sandbox.md`, `image-builder.md`,
+credentials (deploy key, signing key, agent API credentials), reach network
+destinations governed by wrix's `open` / `limit` egress policy, and produce
+session artefacts the operator can later inspect. The per-component specs (`sandbox.md`, `image-builder.md`,
 `linux-builder.md`, `profiles.md`) own the *mechanics* of each surface;
 this spec owns the cross-cutting *trust model* that ties them together —
 what the threat is, why each mitigation is fit for that threat, and
@@ -162,27 +162,34 @@ surface. Wrix only delivers the secret into the container.
 
 ### Network Exfil Baseline
 
-`WRIX_NETWORK=limit` mode restricts the container to a merged
-allowlist. The **base allowlist** every profile inherits is enumerated
-by `profiles.md`; this spec owns the *rubric* the membership must
-satisfy. Each base-allowlist entry must either pair with a specific
-credential (the exfil risk is accepted for the agent autonomy that
-credential enables) or be credentialless (the exfil risk is bounded by
-what an anonymous request can leak).
+Sandbox networking has an always-on local-network isolation baseline owned by
+`sandbox.md`: no inbound sandbox ports, IPv6 disabled/blocked for v1, and no
+outbound access to LAN/private/host-local/VPN/special ranges except exact
+wrix-owned endpoint and DNS exceptions. `WRIX_NETWORK=open` allows public
+internet outbound under that baseline. `WRIX_NETWORK=limit` further restricts
+public egress to a merged allowlist.
+
+The **base allowlist** every profile inherits for `limit` mode is enumerated
+by `profiles.md`; this spec owns the *rubric* the membership must satisfy.
+Each base-allowlist entry must either pair with a specific credential (the
+exfil risk is accepted for the agent autonomy that credential enables) or be
+credentialless (the exfil risk is bounded by what an anonymous request can
+leak).
 
 The current entries map as:
 
-- `api.anthropic.com` pairs with `CLAUDE_CODE_OAUTH_TOKEN` — required
-  for any agent operation.
-- The GitHub hosts pair with the deploy key — required for `git push`
-  and `git fetch`.
+- `api.anthropic.com` pairs with `CLAUDE_CODE_OAUTH_TOKEN` — required for any
+  agent operation.
+- The GitHub hosts pair with the deploy key — required for `git push` and
+  `git fetch`.
 - `cache.nixos.org` is credentialless and read-only — bounded risk.
 
-Per-profile additions (e.g. `crates.io` for rust, `pypi.org` for
-python) must satisfy the same rubric and are owned by `profiles.md`.
-Mode mechanics (`WRIX_NETWORK=open` vs `limit`, iptables
-enforcement, NET_ADMIN fallback to open mode on rootless Linux) are
-owned by `sandbox.md`.
+Per-profile additions (e.g. `crates.io` for rust, `pypi.org` for python) must
+satisfy the same rubric and are owned by `profiles.md`. Network mechanics
+(`open` vs `limit`, in-sandbox firewall setup, exact local endpoint exceptions,
+DNS exceptions, one-time startup domain resolution, IPv6 policy, and fail-closed
+`capsh` capability drop) are owned by `sandbox.md`. Darwin host `pf` is not part
+of the sandbox network contract.
 
 ### Audit Trail
 
@@ -218,15 +225,19 @@ this section is the index, not a restatement.
 
 - **Boundary class** (microVM on macOS always; opt-in via
   `WRIX_MICROVM=1` on Linux; krun memory overhead) — `sandbox.md`
-- **Network mode mechanics** (`open` vs `limit`, iptables-based
-  enforcement, NET_ADMIN fallback to open on rootless Linux) —
-  `sandbox.md`
+- **Network mode mechanics** (`open` vs `limit`, always-on local-network
+  blocking, exact endpoint/DNS exceptions, one-time domain resolution, IPv6
+  policy, fail-closed in-sandbox firewall setup, and `capsh` `NET_ADMIN`
+  drop) — `sandbox.md`
 - **Base allowlist enumeration** — `profiles.md`
 - **Per-profile allowlist additions** — `profiles.md`
 - **Nix build sandbox disabled inside the container image** —
   `image-builder.md`
 - **Builder SSH keys** (localhost-bound, Nix-store residence,
   multi-user trust framing) — `linux-builder.md`
+- **Project Nix cache** (per-workspace explicit binary cache, no host
+  `/nix/store` serving, no host Nix daemon socket, no sandbox signing key) —
+  `services.md`
 
 ## Success Criteria
 
@@ -304,4 +315,8 @@ this section is the index, not a restatement.
 - **OAuth secrets-file mount** (`/run/secrets/oauth_token`). Env
   passthrough is the chosen mechanism.
 - **Image signing** and supply-chain verification of pulled artefacts.
+- **Serving the host `/nix/store` to sandboxes** via Harmonia, nix-serve, or
+  equivalent host-store-backed binary-cache tools. Wrix's project cache is an
+  explicit cache populated by project-scoped publish rules, not a host-store
+  view.
 - **Multi-tenant sharing** of a sandbox between operators.

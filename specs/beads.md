@@ -16,24 +16,25 @@ correctness gate loom's ability to make progress.
 Beads is an external CLI (`bd`) backed by a Dolt SQL database. Wrix
 provides:
 
-- A **per-workspace Dolt container** (`<basename>-beads`) serving
-  `.beads/dolt` on a workspace-hashed port. One container per workspace path,
-  reused across invocations; the name and port derive from
+- A **Dolt service** inside the per-workspace service container
+  (`<basename>-service`, owned by `services.md`) serving `.beads/dolt` on
+  workspace-hashed endpoints. One service container exists per workspace
+  path and is reused across invocations; identity derives from
   `sha256(workspace path)` so concurrent workspaces do not collide.
-- A **shellHook** that ensures the container is running and exports
-  `BEADS_DOLT_SERVER_*` env vars so `bd` connects through the container
+- A **shellHook** that ensures the service container is running and exports
+  `BEADS_DOLT_SERVER_*` env vars so `bd` connects through the Dolt service
   rather than embedding Dolt in-process.
-- **CLI bundles** on the devShell PATH: `beads-dolt` (container manager —
-  `start`/`stop`/`status`/`port`/`name`/`socket`/`host`/`attach`) and
-  `beads-push` (session-close branch sync).
+- **Wrix CLI surfaces** on the devShell PATH: `wrix service dolt`
+  (Dolt-service manager — `start`/`stop`/`status`/`port`/`name`/`socket`/
+  `host`/`attach`) and `wrix beads push` (session-close branch sync).
 
 ### Container lifecycle isolation
 
-The Dolt container started by `beads.shellHook` must have a lifecycle
-independent of the process that triggered shellHook evaluation. Stopping or
-restarting the caller (a shell, an editor process, a systemd user service)
-must not block on container teardown, nor cause the container to be SIGKILLed
-as a side effect of the caller's stop timeout.
+The service container started by `beads.shellHook` / `services.md` has a
+lifecycle independent of the process that triggered shellHook evaluation.
+Stopping or restarting the caller (a shell, an editor process, a systemd user
+service) does not block on container teardown, nor cause the service
+container to be SIGKILLed as a side effect of the caller's stop timeout.
 
 Rationale: shellHook fires from any process that enters the devShell —
 direnv, `nix print-dev-env`, an editor's `.envrc`-driven evaluation. When
@@ -50,7 +51,7 @@ invariant; the implementation chooses the mechanism per platform.
 
 ## CLI Surface
 
-`bd …` commands are upstream beads; `beads-push` is the wrix-provided
+`bd …` commands are upstream beads; `wrix beads push` is the wrix-provided
 session-close wrapper.
 
 | Command | Purpose |
@@ -65,7 +66,7 @@ session-close wrapper.
 | `bd close <id>` | Close issue |
 | `bd dep add <issue> <depends-on>` | Add dependency |
 | `bd dolt pull` / `bd dolt push` | Sync the local Dolt database against the remote |
-| `beads-push` | Session-close sync: commit the Dolt remote and push the `beads` git branch (see *Session-Close Sync*) |
+| `wrix beads push` | Session-close sync: commit the Dolt remote and push the `beads` git branch (see *Session-Close Sync*) |
 
 Issue types: task, bug, feature, epic, question, docs. Priority levels
 range from 0 (critical) to 4 (backlog); the `P0`–`P4` form is accepted
@@ -79,7 +80,7 @@ branch worktree:
 - **Main worktree `.beads/`** holds the repository config (`config.yaml`)
   and database metadata (`metadata.json`) — the only files git tracks
   under `.beads/`. Everything else is gitignored: the local Dolt database
-  (`dolt/`, served by the per-workspace Dolt container), the JSONL backup
+  (`dolt/`, served by the per-workspace service container), the JSONL backup
   (`backup/`), and runtime state (`bd.sock`, lock/log files, sync state).
 - **Beads branch worktree** at `.git/beads-worktrees/beads/.beads/` holds
   `dolt-remote/`, the canonical Dolt remote committed on the `beads`
@@ -88,11 +89,17 @@ branch worktree:
 `bd dolt pull` / `bd dolt push` move data between the local `dolt/` and
 the remote (on disk in the beads branch worktree).
 `bd dolt push` alone does not move the `beads` git branch to GitHub —
-that's the role of `beads-push` (see *Session-Close Sync*).
+that's the role of `wrix beads push` (see *Session-Close Sync*).
 
 The shellHook exports the connection info `bd` uses to reach the Dolt
-server: `BEADS_DOLT_SERVER_SOCKET` on Linux, `BEADS_DOLT_SERVER_HOST` and
-`BEADS_DOLT_SERVER_PORT` on Darwin.
+service inside `<basename>-service`: `BEADS_DOLT_SERVER_SOCKET` on Linux,
+`BEADS_DOLT_SERVER_HOST` and `BEADS_DOLT_SERVER_PORT` on Darwin.
+
+Sandbox launchers stage only the beads files needed to locate the Dolt-backed
+workspace (`config.yaml` and `metadata.json`). They do not stage
+`.beads/issues.jsonl`; JSONL is a backup/export artefact, not a live recovery
+source for sandboxed clients. A sandbox whose Dolt service endpoint is missing
+fails loudly rather than falling back to JSONL import or embedded Dolt.
 
 ## Configuration
 
@@ -103,33 +110,33 @@ Key settings in `.beads/config.yaml`:
 | `issue-prefix` | Prefix for issue IDs (e.g., "wx" → "wx-1") |
 | `sync-branch` | Git branch for beads data |
 | `sync.mode` | Sync mode: `dolt-native` |
-| `export.auto` | bd JSONL auto-export toggle; set `false` by `beads-push` (see *Auto-export suppression*) |
+| `export.auto` | bd JSONL auto-export toggle; set `false` by `wrix beads push` (see *Auto-export suppression*) |
 
 ## Session-Close Sync
 
-`beads-push` is the session-close synchronization step: it lands local
+`wrix beads push` is the session-close synchronization step: it lands local
 operator state (`bd close`, `bd update --status=…`, label changes) into
 the on-disk Dolt remote, then pushes the `beads` git branch to GitHub.
 
 ### Invocation contexts
 
-`beads-push` is safe to invoke unconditionally — it detects its context and
+`wrix beads push` is safe to invoke unconditionally — it detects its context and
 acts accordingly rather than requiring consumers to guard the call. A
-consumer's session-close step is therefore an unconditional `beads-push`;
+consumer's session-close step is therefore an unconditional `wrix beads push`;
 no `$LOOM_INSIDE` check and no manual dolt-sync-race workaround belong in
 downstream "land the plane" instructions.
 
 - **Loom-managed bead clone (`$LOOM_INSIDE` set).** Full no-op: no git or
-  dolt operation runs and `beads-push` exits 0 with a one-line notice.
+  dolt operation runs and `wrix beads push` exits 0 with a one-line notice.
   Inside a loom clone `origin` points at the driver workdir (not GitHub)
   and `.git/beads-worktrees/<branch>` does not exist; the loom driver
   publishes `main` + `beads` after a Clean review verdict, and the worker's
   `bd` writes are already authoritative through the bind-mounted Dolt
   socket. Running `bd dolt push` here would target the wrong remote and add
-  a second writer racing the driver, so `beads-push` declines entirely.
+  a second writer racing the driver, so `wrix beads push` declines entirely.
 - **Unresolvable repository (`$LOOM_INSIDE` unset).** When
   `git rev-parse --show-toplevel` does not resolve a workspace root,
-  `beads-push` fails fast with an actionable stderr message naming the
+  `wrix beads push` fails fast with an actionable stderr message naming the
   unresolved repository, rather than letting an empty `ROOT` flow into a
   git invocation that prints `fatal: not a git repository: (null)`.
 - **Normal host session.** The dolt-sync (see *Ordering*) and beads-branch
@@ -141,10 +148,10 @@ This context guard runs first — before the auto-export write and any
 
 ### Ordering
 
-`beads-push` attempts `bd dolt push` before `bd dolt pull`. When the
+`wrix beads push` attempts `bd dolt push` before `bd dolt pull`. When the
 push succeeds, the local state reaches the remote verbatim and no merge
 is computed. Only when the push fails because the remote has advanced
-(a fast-forward rejection from Dolt) does `beads-push` fall back to
+(a fast-forward rejection from Dolt) does `wrix beads push` fall back to
 pull-then-push. Other push failures (network, auth, disk) propagate
 as-is rather than triggering the fallback.
 
@@ -159,19 +166,19 @@ against pre-write remote state.
 
 ### Pull-fallback intent protection
 
-On the pull-fallback path, `beads-push` must not silently overwrite
+On the pull-fallback path, `wrix beads push` must not silently overwrite
 local operator state. Before `bd dolt pull`, it records
 `(issue_id, intended_status, intended_labels)` for every row where the
 local-ahead-of-remote commits modified `status` or `labels` (sourced
 from a Dolt system-table column diff between local HEAD and the remote
 tracking branch). After the pull, it re-reads those rows; any row
 whose post-pull value diverges from the recorded intent causes
-`beads-push` to exit non-zero with the affected issue IDs in stderr.
+`wrix beads push` to exit non-zero with the affected issue IDs in stderr.
 No push is attempted. The operator resolves the conflict by hand.
 
 ### Auto-export suppression
 
-`beads-push` disables bd's auto-export hook
+`wrix beads push` disables bd's auto-export hook
 (`bd config set export.auto false`) on every invocation that proceeds past
 the context guard (a `$LOOM_INSIDE` no-op runs nothing at all). The hook is
 redundant with the explicit `bd dolt` calls the script already makes,
@@ -187,7 +194,7 @@ The beads-branch sync recreates the beads worktree when it is absent **or**
 present-but-invalid. The recreate guard fires both when the worktree
 directory does not exist and when it exists but is no longer a valid git
 worktree — e.g. its admin directory `.git/worktrees/<branch>` was pruned or
-removed, leaving a dangling gitdir pointer. In the invalid case `beads-push`
+removed, leaving a dangling gitdir pointer. In the invalid case `wrix beads push`
 prunes the stale worktree registration, removes the directory, and re-adds
 the worktree relative to the current `$ROOT` (falling back to
 `origin/<branch>`, or skipping with a notice when no `<branch>` exists).
@@ -211,7 +218,7 @@ preceding Dolt commit/push phase is unchanged.
 
 ### Pre-pull cleanup
 
-Before `git pull --rebase` in the beads worktree, `beads-push` commits
+Before `git pull --rebase` in the beads worktree, `wrix beads push` commits
 any pre-existing dirt (untracked files, modified tracked files) from
 prior interrupted runs that would otherwise abort the rebase. The
 detection surface is the same one `git rebase` itself consults —
@@ -245,53 +252,56 @@ upstream, not by this spec.
 ## Success Criteria
 
 - `bd dolt pull` and `bd dolt push` succeed inside the wrix sandbox using
-  the host-mounted `.beads/` directory, with no fallback to a per-container
-  embedded Dolt
-  [judge](../tests/judges/beads.sh#test_sync_in_container)
+  staged beads config plus the shared Dolt service, with no fallback to a
+  per-container embedded Dolt or JSONL import
+  [judge?](../tests/judges/beads.sh#test_sync_in_container)
 
-- `beads.shellHook` launches the Dolt container with a lifecycle independent
+- `beads.shellHook` launches the workspace service container with a lifecycle independent
   of the caller, so stopping a long-running parent (e.g. a `systemd --user`
   service that triggered shellHook evaluation via envrc) does not block on
-  container teardown nor deliver SIGKILL to the container as a side effect
+  container teardown nor deliver SIGKILL to the service container as a side effect
   of the caller's stop timeout
-  [judge](../tests/judges/beads.sh#test_shellhook_lifecycle_isolation)
+  [judge?](../tests/judges/beads.sh#test_shellhook_lifecycle_isolation)
 
-- The same workspace path yields the same container name and port across
+- The same workspace path yields the same `<repo>-service` container name and Dolt endpoint across
   `beads.shellHook` invocations; different workspace paths yield different
-  names and ports
-  [judge](../tests/judges/beads.sh#test_workspace_naming_determinism)
+  names and endpoints
+  [judge?](../tests/judges/beads.sh#test_workspace_naming_determinism)
 
 - `beads.shellHook` fails non-zero with a stderr message when no container
   runtime is available or when Dolt does not become reachable within the
   startup budget — no fallback to embedded Dolt
   [judge](../tests/judges/beads.sh#test_shellhook_fail_loud)
 
-- `beads-push` attempts `bd dolt push` before `bd dolt pull`, so a
+- Sandboxed clients receive staged beads config/metadata but not `.beads/issues.jsonl`, so a missing Dolt endpoint fails loudly instead of triggering JSONL auto-import or embedded Dolt recovery
+  [system?](bash tests/services/dolt-cli.sh test_no_jsonl_staged)
+
+- `wrix beads push` attempts `bd dolt push` before `bd dolt pull`, so a
   session-close run against an up-to-date remote never enters the Dolt
   merge path
   [judge](../tests/judges/beads.sh#test_beadspush_pushes_before_pulls)
 
-- On the pull-fallback path, `beads-push` snapshots local `status` and
+- On the pull-fallback path, `wrix beads push` snapshots local `status` and
   `labels` intent before pulling and exits non-zero with the affected
   issue IDs in stderr when the post-pull row state diverges from that
   intent — no push attempted, no silent overwrite
   [judge](../tests/judges/beads.sh#test_beadspush_failloud_on_intent_overwrite)
 
-- `beads-push` disables bd's auto-export hook on every invocation that
+- `wrix beads push` disables bd's auto-export hook on every invocation that
   proceeds past the context guard (idempotent), leaving
   `export.auto: false` persisted in
   `.beads/config.yaml`, so subsequent bd calls inside and outside
-  `beads-push` no longer emit the `Warning: auto-export: git add failed`
+  `wrix beads push` no longer emits the `Warning: auto-export: git add failed`
   message or write `.beads/issues.jsonl`
   [judge](../tests/judges/beads.sh#test_beadspush_disables_autoexport)
 
-- On host invocations, `beads-push` repairs a missing or stale Dolt `origin`
+- On host invocations, `wrix beads push` repairs a missing or stale Dolt `origin`
   remote to the current checkout's host-path beads worktree remote before
   Dolt sync, while sandbox/container invocations skip the repair so a
   `/workspace` path is never persisted into shared Beads config
   [judge](../tests/judges/beads.sh#test_beadspush_repairs_host_dolt_remote)
 
-- When `$LOOM_INSIDE` is set, `beads-push` performs no git or dolt
+- When `$LOOM_INSIDE` is set, `wrix beads push` performs no git or dolt
   operation and exits 0 with a one-line notice, so a consumer may invoke it
   unconditionally inside a loom-managed bead clone — where `origin` points
   at the driver workdir and `.git/beads-worktrees/<branch>` is absent —
@@ -299,13 +309,13 @@ upstream, not by this spec.
   [judge](../tests/judges/beads.sh#test_beadspush_loom_inside_noop)
 
 - When `$LOOM_INSIDE` is unset and `git rev-parse --show-toplevel` does not
-  resolve a workspace root, `beads-push` exits non-zero with an actionable
+  resolve a workspace root, `wrix beads push` exits non-zero with an actionable
   stderr message naming the unresolved repository — never proceeding with an
   empty `ROOT` into a git invocation that prints
   `fatal: not a git repository: (null)`
   [judge](../tests/judges/beads.sh#test_beadspush_failloud_missing_repo)
 
-- `beads-push`'s pre-pull cleanup commits any pre-existing dirt in the
+- `wrix beads push`'s pre-pull cleanup commits any pre-existing dirt in the
   beads worktree — untracked files OR modified tracked files left by a
   previously-interrupted run — using the same detection surface
   `git rebase` itself consults, so the subsequent `git pull --rebase`
@@ -314,9 +324,9 @@ upstream, not by this spec.
 
 - When the beads worktree directory exists but is no longer a valid git
   worktree (its `.git/worktrees/<branch>` admin directory was pruned or
-  removed, leaving a dangling gitdir), `beads-push` prunes, removes, and
+  removed, leaving a dangling gitdir), `wrix beads push` prunes, removes, and
   recreates the worktree relative to the current `$ROOT`, then completes the
-  beads-branch sync — exiting 0, printing `beads-push: synced to GitHub`, and
+  beads-branch sync — exiting 0, printing `wrix beads push: synced to GitHub`, and
   advancing `origin/<branch>` with no `fatal: not a git repository: (null)`
   error
   [judge](../tests/judges/beads.sh#test_beadspush_recovers_orphaned_worktree)
@@ -340,28 +350,29 @@ upstream, not by this spec.
    Options Format Contract content.
 4. **Sync** — `bd dolt pull` / `bd dolt push` operate over the Dolt remote
    in the `beads` branch worktree.
-5. **Per-workspace Dolt container** — `beads.shellHook` derives a
-   deterministic container name and port from the workspace path
-   (sha256-based) so concurrent workspaces do not collide.
-6. **Lifecycle isolation** — the container started by `beads.shellHook`
-   has a lifecycle independent of the process that triggered its
-   evaluation.
-7. **Session-close sync** — `beads-push` attempts `bd dolt push` before
+5. **Per-workspace Dolt service** — `beads.shellHook` reaches Dolt through
+   the `<repo>-service` container defined in `services.md`; the Dolt endpoint
+   is deterministic from the workspace path (sha256-based) so concurrent
+   workspaces do not collide.
+6. **Lifecycle isolation** — the service container started by
+   `beads.shellHook` has a lifecycle independent of the process that
+   triggered its evaluation.
+7. **Session-close sync** — `wrix beads push` attempts `bd dolt push` before
    `bd dolt pull`; on the pull-fallback path it snapshots local `status`
    and `labels` intent before pulling and refuses to overwrite divergent
    rows.
-8. **Auto-export suppression** — `beads-push` disables bd's auto-export
+8. **Auto-export suppression** — `wrix beads push` disables bd's auto-export
    hook on every invocation past the context guard (idempotent); the
    pre-pull cleanup in the beads worktree uses `git status --porcelain` so
    any dirt the rebase would refuse is committed first.
-9. **Host remote repair** — on host invocations, `beads-push` repairs a
+9. **Host remote repair** — on host invocations, `wrix beads push` repairs a
    missing or stale Dolt `origin` remote to the current checkout's
    host-path beads worktree remote before Dolt sync. The repair updates the
    SQL Dolt remote directly rather than writing `sync.remote`, so it cannot
    commit host-local absolute paths into `.beads/config.yaml`.
    Sandbox/container invocations skip this repair so they do not poison
    shared config with `/workspace` paths.
-10. **Context-aware invocation** — `beads-push` is safe to invoke
+10. **Context-aware invocation** — `wrix beads push` is safe to invoke
    unconditionally. Under `$LOOM_INSIDE` it is a full no-op (exit 0); when
    the git root is unresolvable it fails fast with an actionable message;
    otherwise it runs the dolt-sync and beads-branch sync. Consumers need no
@@ -372,6 +383,10 @@ upstream, not by this spec.
    current `$ROOT` so host and container paths stay correct; and every git
    invocation in that section, including the recreating `git worktree add`,
    skips prek so the config-less `beads` branch does not abort the sync.
+12. **Sandbox config staging** — sandbox launchers stage beads config and
+   metadata only. They do not stage `.beads/issues.jsonl`, and they do not
+   permit JSONL auto-import or embedded Dolt fallback when the Dolt service is
+   unavailable.
 
 ### Non-Functional
 
@@ -379,16 +394,17 @@ upstream, not by this spec.
    stderr message when prerequisites are missing or the Dolt server is
    unreachable. No fallback to embedded Dolt.
 2. **Portability** — works on Linux (podman) and Darwin (Apple `container`
-   or podman-via-VM) via the same `beads-dolt` CLI surface.
-3. **Conflict-free sync** — `beads-push` pushes before it pulls so the
+   or podman-via-VM) via the same `wrix service dolt` surface from
+   `services.md`.
+3. **Conflict-free sync** — `wrix beads push` pushes before it pulls so the
    common case bypasses any merge; on the pull-fallback path it fails
    loud rather than silently overwriting `status` or `labels` (see
    *Session-Close Sync*).
-4. **Caller-agnostic, fail-loud invocation** — `beads-push` never emits a
+4. **Caller-agnostic, fail-loud invocation** — `wrix beads push` never emits a
    bare `fatal: not a git repository: (null)`; an unresolvable repository
    produces an actionable non-zero error, and a loom-managed clone produces
    a clean no-op. Downstream session-close instructions reduce to an
-   unconditional `beads-push` step.
+   unconditional `wrix beads push` step.
 
 ## Out of Scope
 
@@ -399,21 +415,22 @@ upstream, not by this spec.
   ensures its own container is independent; what the caller does is the
   caller's concern
 - Downstream consumers' session-close documentation (e.g. another repo's
-  `AGENTS.md` land-the-plane block) — `beads-push` owns the context-handling
+  `AGENTS.md` land-the-plane block) — `wrix beads push` owns the context-handling
   behavior so consumers invoke it unconditionally; how each repo documents
   that call is the repo's concern
 - Publication of `main` + `beads` from inside a loom-managed bead clone —
-  the loom driver owns that after a Clean review verdict; `beads-push`
+  the loom driver owns that after a Clean review verdict; `wrix beads push`
   deliberately no-ops under `$LOOM_INSIDE` rather than publishing
 - Container runtime selection (covered by `sandbox.md`)
-- Opt-in / legacy ordering flag for `beads-push` — push-before-pull is
+- Non-beads services in `<repo>-service` (covered by `services.md`)
+- Opt-in / legacy ordering flag for `wrix beads push` — push-before-pull is
   the unconditional default
 - Conflict detection on columns other than `status` and `labels`
 - Insert / delete row collisions during the pull-fallback merge (the
   intent-protection check covers updates only)
 - One-shot cleanup of historical `gc:session`-labelled rows and their
   events in the Dolt database — operator concern, not part of
-  `beads-push`'s recurring responsibilities
+  `wrix beads push`'s recurring responsibilities
 - Per-invocation suppression of bd auto-export via env var or flag —
-  current bd has no such opt-out; `beads-push` writes the persistent
+  current bd has no such opt-out; `wrix beads push` writes the persistent
   config-file setting instead

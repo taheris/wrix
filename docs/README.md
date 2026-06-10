@@ -26,6 +26,7 @@ pin — keep it current when specs land or retire.
 | [profiles.md](../specs/profiles.md) | [`lib/sandbox/profiles.nix`](../lib/sandbox/profiles.nix) | wx-1thzk | Pre-configured development environments |
 | [sandbox.md](../specs/sandbox.md) | [`lib/sandbox/default.nix`](../lib/sandbox/default.nix) | wx-fzop9 | Platform-agnostic container isolation |
 | [security.md](../specs/security.md) | [`lib/sandbox/{linux,darwin}/default.nix`](../lib/sandbox/) | — | Cross-cutting credential, network, and audit-trail invariants |
+| [services.md](../specs/services.md) | `crates/wrix-service/`, `crates/wrix-cache/` | wx-fvr1x | Per-workspace service container and project Nix cache |
 | [tmux-mcp.md](../specs/tmux-mcp.md) | [`lib/mcp/tmux/`](../lib/mcp/tmux/) | wx-4f3g | AI-assisted debugging via tmux panes |
 
 ## Terminology Index
@@ -35,13 +36,16 @@ pin — keep it current when specs land or retire.
 | **bd** | CLI for the beads issue tracker |
 | **beads** | Persistent issue tracker (used by the `bd` CLI) |
 | **deploy key** | SSH key for git push operations from container |
-| **dolt** | SQL database backing beads; shared via `beads-dolt` container |
+| **dolt** | SQL database backing beads; shared via the workspace service container |
 | **focus-aware** | Notification suppression when terminal is focused |
 | **loom** | External Rust workflow orchestrator that drives wrix sandboxes ([taheris/loom](https://github.com/taheris/loom)) |
 | **pasta** | Linux userspace networking for Podman containers |
 | **playwright-mcp** | MCP server wrapping @playwright/mcp for browser automation in sandboxes |
 | **prek** | Rust-based pre-commit framework (drop-in replacement for pre-commit) |
+| **project Nix cache** | Per-workspace local binary cache for Nix derivations scoped to a repository |
 | **profile** | Pre-configured set of packages and environment variables |
+| **ProfileConfig** | Immutable Nix-generated JSON config consumed by the Rust `wrix` launcher |
 | **sandbox** | Isolated container environment for running Claude Code |
+| **service container** | Per-workspace `<repo>-service` container hosting shared local services |
 | **tmux-mcp** | MCP server for AI-assisted debugging via tmux panes |
 | **virtio-fs** | Shared filesystem for macOS container VMs |

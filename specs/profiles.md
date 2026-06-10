@@ -27,9 +27,11 @@ via direct field access. The shared store path is what makes cross-boundary
 sccache hits possible — the invariants and success criteria below exist
 to keep that identity from drifting.
 
-`mkDevShell` additionally manages prek hook installation by pointing
-`core.hooksPath` at a standalone `wrix.prekHooks` derivation — see
-[Prek hook management](#prek-hook-management) for the contract.
+`mkDevShell` additionally manages workspace lifecycle integration: it starts
+`services.md`'s per-workspace service container when beads or the project Nix
+cache is enabled, and it points `core.hooksPath` at a standalone
+`wrix.prekHooks` derivation — see [Prek hook management](#prek-hook-management)
+for the hook contract.
 
 Rust toolchains are baked into the container image at build time, never
 bootstrapped from rustup at container start. fenix supplies proper Nix
@@ -69,11 +71,11 @@ Curated developer toolkit. The rust and python profiles extend this set. Grouped
 |----------|----------|
 | Shell + POSIX core | bash, coreutils, diffutils, findutils, gawk, gnugrep, gnused, gnutar, gzip, less, patch, rsync, tree, unzip, util-linux, whichQuiet, zip |
 | File + text | fd, file, ripgrep, vim |
-| Network + process | curl, iproute2, iptables, iputils, lsof, netcat, openssh, procps |
+| Network + process | curl, iproute2, nftables, iptables, libcap (capsh), iputils, lsof, netcat, openssh, procps |
 | Data | jq, yq |
 | Package manager | nix |
 | VCS + PRs | git, gh |
-| Issue tracker | beads, beads-push, dolt, gc |
+| Issue tracker | beads (`bd`), wrix (`wrix beads push`), dolt, gc |
 | Agent tooling | man, prek, shellcheck, tmux, treefmt (wrapped with project formatters) |
 
 `whichQuiet` is a local `pkgs.which` wrapper that suppresses `"no X in (PATH)"` noise.
@@ -364,6 +366,7 @@ wrix.mkDevShell {
   shellHook = "...";          # optional, appended after profile.shellHook
   env       = { ... };        # optional, right-merged into profile.env
   prekHooks = true;           # optional, see Prek hook management below
+  nixCache  = true;           # optional, false disables services.md project cache
 }
 ```
 
@@ -380,13 +383,57 @@ Composition rules (deterministic, no consumer override):
 | env       | `profile.env // env` (consumer wins on conflict)                                       |
 | shellHook | `<wrix-internal lifecycle setup> + profile.shellHook + <consumer shellHook>` (fixed order) |
 
-The internal lifecycle setup performs wrix-specific bootstrap (beads
-init, dolt remote configuration, prek `core.hooksPath` configuration —
-see [Prek hook management](#prek-hook-management) below). It runs
-before `profile.shellHook` so its tooling installs resolve through the
-system PATH rather than the profile-extended one; the consumer's
-`shellHook` runs last so consumer-set env can override profile-set env
-after the profile's exports have fired.
+The internal lifecycle setup performs wrix-specific bootstrap (workspace
+service startup for beads and the project Nix cache, dolt remote
+configuration, prek `core.hooksPath` configuration — see
+[Prek hook management](#prek-hook-management) below). It runs before
+`profile.shellHook` so its tooling installs resolve through the system PATH
+rather than the profile-extended one; the consumer's `shellHook` runs last so
+consumer-set env can override profile-set env after the profile's exports have
+fired.
+
+`nixCache` defaults to `true` and enables the standard project cache owned by
+`services.md`; `nixCache = false` is the explicit opt-out. The boolean form
+uses the defaults below; attrset form customizes them:
+
+```nix
+nixCache = {
+  enable = true;
+  requireTrustedNix = true;
+
+  publish = {
+    packages = true;
+    checks = true;
+    devShell = true;
+    includeRoots = [ ];
+    excludeRoots = [ ];
+  };
+
+  warm = {
+    packages = true;
+    checks = false;
+    devShell = true;
+    includeRoots = [ ];
+    excludeRoots = [ ];
+  };
+
+  warnSize = "50G";
+  pendingTtl = "7d";
+  pruneInterval = "24h";
+};
+```
+
+`publish` roots are allowed to enter the cache when built or explicitly
+published. `warm` roots are proactively built by `wrix service cache warm`;
+checks are not warmed unless explicitly requested. `includeRoots` /
+`excludeRoots` are flake installables or explicit flake attr paths, not raw
+`/nix/store` paths, and excludes win. When the cache is enabled, `mkDevShell`
+configures host Nix to pull from the local project cache and to publish
+project-scoped builds back to it; if host Nix ignores the required trust or
+post-build settings, devshell entry fails loud with remediation instead of
+silently running cold. Shell entry does not eagerly evaluate all roots; when
+the publish manifest is missing or stale it prints a short reminder unless
+`WRIX_NIX_CACHE_REMINDER=0` is set.
 
 ### Prek hook management
 
@@ -618,6 +665,8 @@ dests live under `/home/wrix/` inside the container, not under
   [system](bash tests/profiles/mkdevshell.sh test_shellhook_order)
 - `wrix.mkDevShell {}` without `profile` errors at evaluation
   [system](bash tests/profiles/mkdevshell.sh test_profile_required)
+- `wrix.mkDevShell { profile = ...; }` starts the workspace service container by default, exposes the project cache `file://` substituter/trusted key/post-build hook to host Nix, uses the `nixCache` publish/warm schema from `services.md`, and prints a suppressible reminder when the publish manifest is missing or stale; `nixCache = false` suppresses only the cache service, not beads
+  [system?](bash tests/services/host-nix-config.sh test_mkdevshell_nix_cache)
 - The materialized `wrix.prekHooks` derivation contains exactly five executable files (one per stage: `pre-commit`, `pre-push`, `prepare-commit-msg`, `post-checkout`, `post-merge`) and no other paths
   [system](bash tests/profiles/prek-hooks-bundle.sh test_bundle_contents)
 - Each materialized shim's content matches `prek hook-impl --hook-type=<stage>` for its stage
@@ -685,6 +734,7 @@ dests live under `/home/wrix/` inside the container, not under
 8. **Rust Package Construction** — Rust profile exposes `buildPackage` for crane-backed Rust packages with split `bin`/`clippy`/`nextest` derivations
 9. **Devshell Construction** — Top-level `mkDevShell { profile; ... }` is the single profile-aware entry point for host devshells; consumers do not splice `profile.shellHook` directly
 10. **Prek Hook Management** — `mkDevShell` configures `core.hooksPath` from a wrix-shipped shim bundle (`wrix.prekHooks`) when `.pre-commit-config.yaml` is present, opted out via `prekHooks = false`. Consumers do not vendor shims or set `core.hooksPath` themselves.
+11. **Project Nix Cache Integration** — `mkDevShell` enables the `services.md` project cache by default for host pulls and host publishing of project-scoped Nix derivations; `nixCache = false` opts out.
 
 ### Non-Functional
 
