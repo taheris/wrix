@@ -254,19 +254,19 @@ upstream, not by this spec.
 - `bd dolt pull` and `bd dolt push` succeed inside the wrix sandbox using
   staged beads config plus the shared Dolt service, with no fallback to a
   per-container embedded Dolt or JSONL import
-  [judge?](../tests/judges/beads.sh#test_sync_in_container)
+  [judge](../tests/judges/beads.sh#test_sync_in_container)
 
 - `beads.shellHook` launches the workspace service container with a lifecycle independent
   of the caller, so stopping a long-running parent (e.g. a `systemd --user`
   service that triggered shellHook evaluation via envrc) does not block on
   container teardown nor deliver SIGKILL to the service container as a side effect
   of the caller's stop timeout
-  [judge?](../tests/judges/beads.sh#test_shellhook_lifecycle_isolation)
+  [judge](../tests/judges/beads.sh#test_shellhook_lifecycle_isolation)
 
 - The same workspace path yields the same `<repo>-service` container name and Dolt endpoint across
   `beads.shellHook` invocations; different workspace paths yield different
   names and endpoints
-  [judge?](../tests/judges/beads.sh#test_workspace_naming_determinism)
+  [judge](../tests/judges/beads.sh#test_workspace_naming_determinism)
 
 - `beads.shellHook` fails non-zero with a stderr message when no container
   runtime is available or when Dolt does not become reachable within the
