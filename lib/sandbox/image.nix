@@ -197,6 +197,17 @@ let
     rootPaths = leafContents ++ agentImage.lowerTiersContents;
   };
 
+  # dockerTools builds config/layer metadata in derivations that run after the
+  # image customisation layer has been produced. If automatic GC runs in that
+  # gap, store paths that are only transitive references of buildEnv outputs can
+  # disappear before dockerTools traverses the image graph. Keep a tiny marker
+  # in the customisation layer that references every materialized image root so
+  # the graph has a concrete edge to the full expected closure throughout the
+  # build.
+  imageStoreRoots = pkgs.writeText "wrix-${profile.name}-${agent}-store-roots" (
+    concatStringsSep "\n" (map toString (leafContents ++ agentImage.lowerTiersContents)) + "\n"
+  );
+
   imageName = "wrix-${profile.name}${pkgs.lib.optionalString (agent != "direct") "-${agent}"}";
 
   # The leaf budgets only its tier-2 delta plus the customisation layer; with
@@ -253,6 +264,8 @@ let
 
       cp ${sshConfig.gitSshSetup} git-ssh-setup.sh
       chmod 0644 git-ssh-setup.sh
+
+      cp ${imageStoreRoots} etc/wrix/store-roots
 
       ${pkgs.lib.optionalString krunSupport ''
         cp ${./linux/krun-init.sh} krun-init.sh

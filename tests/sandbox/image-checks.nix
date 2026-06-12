@@ -614,20 +614,20 @@ let
   # not the base+stable one), the appended package is tier 3 leaf (in neither
   # tier's `lowerTiersClosure`, only the whole image closure). Built via image.nix
   # directly with a light agent package so the check does not drag in claude-code.
-  membershipAppendedPkg = pkgs.writeShellScriptBin "wrix-stable-membership-appended" ''
+  membershipAppendedPkg = linuxPkgs.writeShellScriptBin "wrix-stable-membership-appended" ''
     echo "downstream-appended package"
   '';
-  membershipRunnerPkg = pkgs.writeShellScriptBin "wrix-stable-membership-runner" ''
+  membershipRunnerPkg = linuxPkgs.writeShellScriptBin "wrix-stable-membership-runner" ''
     echo "consumer-supplied agent runtime"
   '';
   membershipImage = import ../../lib/sandbox/image.nix {
-    inherit pkgs;
+    pkgs = linuxPkgs;
     asTarball = !isLinux;
     profile = {
       name = "membership";
-      corePackages = [ pkgs.coreutils ];
+      corePackages = [ linuxPkgs.coreutils ];
       packages = [
-        pkgs.coreutils
+        linuxPkgs.coreutils
         membershipAppendedPkg
       ];
       env = { };
@@ -638,56 +638,63 @@ let
     claudeConfig = { };
     claudeSettings = { };
   };
-  membershipImageClosure = pkgs.closureInfo { rootPaths = [ membershipImage ]; };
+  membershipImageClosure = linuxPkgs.closureInfo { rootPaths = [ membershipImage ]; };
   stableProfileMembershipTest = pkgs.writeShellApplication {
     name = "test-stable-profile-membership";
-    runtimeInputs = [
+    runtimeInputs = lib.optionals isLinux [
       pkgs.coreutils
       pkgs.gnugrep
     ];
-    text = ''
-      tier1_closure=${membershipImage.stableProfileImage.lowerTiersClosure}/store-paths
-      tier2_closure=${membershipImage.agentImage.lowerTiersClosure}/store-paths
-      image_closure=${membershipImageClosure}/store-paths
-      appended=${membershipAppendedPkg}
-      runner=${membershipRunnerPkg}
+    text =
+      if isLinux then
+        ''
+          tier1_closure=${membershipImage.stableProfileImage.lowerTiersClosure}/store-paths
+          tier2_closure=${membershipImage.agentImage.lowerTiersClosure}/store-paths
+          image_closure=${membershipImageClosure}/store-paths
+          appended=${membershipAppendedPkg}
+          runner=${membershipRunnerPkg}
 
-      # Neither the agent runtime nor a downstream-appended package belongs in
-      # tier 1 (the base+stable union).
-      for above in "$appended" "$runner"; do
-          if grep -qxF "$above" "$tier1_closure"; then
-              echo "FAIL: non-tier-1 path leaked into the wrix-stable-profile tier-1 closure" >&2
-              echo "  leaked : $above" >&2
-              echo "  tier-1 : $tier1_closure" >&2
+          # Neither the agent runtime nor a downstream-appended package belongs in
+          # tier 1 (the base+stable union).
+          for above in "$appended" "$runner"; do
+              if grep -qxF "$above" "$tier1_closure"; then
+                  echo "FAIL: non-tier-1 path leaked into the wrix-stable-profile tier-1 closure" >&2
+                  echo "  leaked : $above" >&2
+                  echo "  tier-1 : $tier1_closure" >&2
+                  exit 1
+              fi
+              if ! grep -qxF "$above" "$image_closure"; then
+                  echo "FAIL: expected path missing from the leaf image closure" >&2
+                  echo "  expected: $above" >&2
+                  echo "  image   : $image_closure" >&2
+                  exit 1
+              fi
+          done
+
+          # The agent runtime is tier 2: present in the agent tier's lowerTiersClosure
+          # (base+stable+agent), absent from tier 1.
+          if ! grep -qxF "$runner" "$tier2_closure"; then
+              echo "FAIL: agent runtime absent from the wrix-agent tier-2 closure" >&2
+              echo "  expected: $runner" >&2
+              echo "  tier-2  : $tier2_closure" >&2
               exit 1
           fi
-          if ! grep -qxF "$above" "$image_closure"; then
-              echo "FAIL: expected path missing from the leaf image closure" >&2
-              echo "  expected: $above" >&2
-              echo "  image   : $image_closure" >&2
+
+          # The appended package is tier 3 leaf: in neither lower tier's closure.
+          if grep -qxF "$appended" "$tier2_closure"; then
+              echo "FAIL: downstream-appended package leaked into the wrix-agent tier-2 closure" >&2
+              echo "  leaked : $appended" >&2
+              echo "  tier-2 : $tier2_closure" >&2
               exit 1
           fi
-      done
 
-      # The agent runtime is tier 2: present in the agent tier's lowerTiersClosure
-      # (base+stable+agent), absent from tier 1.
-      if ! grep -qxF "$runner" "$tier2_closure"; then
-          echo "FAIL: agent runtime absent from the wrix-agent tier-2 closure" >&2
-          echo "  expected: $runner" >&2
-          echo "  tier-2  : $tier2_closure" >&2
-          exit 1
-      fi
-
-      # The appended package is tier 3 leaf: in neither lower tier's closure.
-      if grep -qxF "$appended" "$tier2_closure"; then
-          echo "FAIL: downstream-appended package leaked into the wrix-agent tier-2 closure" >&2
-          echo "  leaked : $appended" >&2
-          echo "  tier-2 : $tier2_closure" >&2
-          exit 1
-      fi
-
-      echo "test-stable-profile-membership: PASS (agent runtime is tier 2, appended package is tier-3 leaf, neither in tier 1)"
-    '';
+          echo "test-stable-profile-membership: PASS (agent runtime is tier 2, appended package is tier-3 leaf, neither in tier 1)"
+        ''
+      else
+        ''
+          echo "test-stable-profile-membership: skipped on this platform (streamLayeredImage is Linux-only)" >&2
+          exit 0
+        '';
   };
 
   # Pinned-toolchain tier guard (specs/image-builder.md § Provenance-Tiered
@@ -699,7 +706,16 @@ let
   # `lowerTiersClosure`. Skipped when the fenix input is absent (no rust profile).
   toolchainFixtureSha = "sha256-SXRtAuO4IqNOQq+nLbrsDFbVk+3aVA8NNpSZsKlVH/8=";
   pinnedToolchainStableTest =
-    if fenix == null then
+    if !isLinux then
+      pkgs.writeShellApplication {
+        name = "test-pinned-toolchain-stable-tier";
+        runtimeInputs = [ pkgs.coreutils ];
+        text = ''
+          echo "test-pinned-toolchain-stable-tier: skipped on this platform (streamLayeredImage is Linux-only)" >&2
+          exit 0
+        '';
+      }
+    else if fenix == null then
       pkgs.writeShellApplication {
         name = "test-pinned-toolchain-stable-tier";
         runtimeInputs = [ pkgs.coreutils ];
@@ -760,14 +776,15 @@ let
       settings ? { },
     }:
     import ../../lib/sandbox/image.nix {
-      inherit pkgs agent;
+      pkgs = linuxPkgs;
+      inherit agent;
       profile = {
         name = "leafprobe";
-        corePackages = [ pkgs.coreutils ];
-        packages = [ pkgs.coreutils ];
+        corePackages = [ linuxPkgs.coreutils ];
+        packages = [ linuxPkgs.coreutils ];
         env = { };
       };
-      agentPkg = if agentPkg == null then pkgs.hello else agentPkg;
+      agentPkg = if agentPkg == null then linuxPkgs.hello else agentPkg;
       entrypointSh = ../../lib/sandbox/linux/entrypoint.sh;
       claudeConfig = { };
       claudeSettings = settings;
@@ -956,11 +973,11 @@ let
   # scannable.
   agentExclusiveProfile = {
     name = "agentexcl";
-    corePackages = [ pkgs.coreutils ];
-    packages = [ pkgs.coreutils ];
+    corePackages = [ linuxPkgs.coreutils ];
+    packages = [ linuxPkgs.coreutils ];
     env = { };
   };
-  agentExclusiveRunner = pkgs.writeShellScriptBin "wrix-agent-exclusive-runner" ''
+  agentExclusiveRunner = linuxPkgs.writeShellScriptBin "wrix-agent-exclusive-runner" ''
     echo "agent exclusive direct runner"
   '';
   mkAgentExclusiveImage =
@@ -969,7 +986,8 @@ let
       agentPkg ? null,
     }:
     import ../../lib/sandbox/image.nix {
-      inherit pkgs agent;
+      pkgs = linuxPkgs;
+      inherit agent;
       profile = agentExclusiveProfile;
       agentPkg = if agentPkg == null then claudeCodePkg else agentPkg;
       entrypointSh = ../../lib/sandbox/linux/entrypoint.sh;
@@ -981,48 +999,55 @@ let
     agentPkg = agentExclusiveRunner;
   };
   agentExclusiveClaude = mkAgentExclusiveImage { agent = "claude"; };
-  agentExclusiveDirectClosure = pkgs.closureInfo { rootPaths = [ agentExclusiveDirect ]; };
-  agentExclusiveClaudeClosure = pkgs.closureInfo { rootPaths = [ agentExclusiveClaude ]; };
+  agentExclusiveDirectClosure = linuxPkgs.closureInfo { rootPaths = [ agentExclusiveDirect ]; };
+  agentExclusiveClaudeClosure = linuxPkgs.closureInfo { rootPaths = [ agentExclusiveClaude ]; };
   agentExclusiveTest = pkgs.writeShellApplication {
     name = "test-agent-exclusive";
-    runtimeInputs = [
+    runtimeInputs = lib.optionals isLinux [
       pkgs.coreutils
       pkgs.gnugrep
     ];
-    text = ''
-      direct_closure=${agentExclusiveDirectClosure}/store-paths
-      claude_closure=${agentExclusiveClaudeClosure}/store-paths
-      claude_code=${claudeCodePkg}
-      runner=${agentExclusiveRunner}
+    text =
+      if isLinux then
+        ''
+          direct_closure=${agentExclusiveDirectClosure}/store-paths
+          claude_closure=${agentExclusiveClaudeClosure}/store-paths
+          claude_code=${claudeCodePkg}
+          runner=${agentExclusiveRunner}
 
-      # direct image: the runner is present, claude-code is absent.
-      if ! grep -qxF "$runner" "$direct_closure"; then
-          echo "FAIL: direct runner missing from the agent=direct image closure" >&2
-          echo "  expected: $runner" >&2
-          exit 1
-      fi
-      if grep -qxF "$claude_code" "$direct_closure"; then
-          echo "FAIL: claude-code present in an agent=direct image (a non-claude image" >&2
-          echo "      must carry no claude-code)" >&2
-          echo "  unexpected: $claude_code" >&2
-          exit 1
-      fi
+          # direct image: the runner is present, claude-code is absent.
+          if ! grep -qxF "$runner" "$direct_closure"; then
+              echo "FAIL: direct runner missing from the agent=direct image closure" >&2
+              echo "  expected: $runner" >&2
+              exit 1
+          fi
+          if grep -qxF "$claude_code" "$direct_closure"; then
+              echo "FAIL: claude-code present in an agent=direct image (a non-claude image" >&2
+              echo "      must carry no claude-code)" >&2
+              echo "  unexpected: $claude_code" >&2
+              exit 1
+          fi
 
-      # claude image: claude-code is present, the direct runner is absent
-      # (exactly one agent per image).
-      if ! grep -qxF "$claude_code" "$claude_closure"; then
-          echo "FAIL: claude-code missing from the agent=claude image closure" >&2
-          echo "  expected: $claude_code" >&2
-          exit 1
-      fi
-      if grep -qxF "$runner" "$claude_closure"; then
-          echo "FAIL: direct runner present in an agent=claude image (more than one agent)" >&2
-          echo "  unexpected: $runner" >&2
-          exit 1
-      fi
+          # claude image: claude-code is present, the direct runner is absent
+          # (exactly one agent per image).
+          if ! grep -qxF "$claude_code" "$claude_closure"; then
+              echo "FAIL: claude-code missing from the agent=claude image closure" >&2
+              echo "  expected: $claude_code" >&2
+              exit 1
+          fi
+          if grep -qxF "$runner" "$claude_closure"; then
+              echo "FAIL: direct runner present in an agent=claude image (more than one agent)" >&2
+              echo "  unexpected: $runner" >&2
+              exit 1
+          fi
 
-      echo "test-agent-exclusive: PASS (direct image has runner + no claude-code; claude image has claude-code + no runner)"
-    '';
+          echo "test-agent-exclusive: PASS (direct image has runner + no claude-code; claude image has claude-code + no runner)"
+        ''
+      else
+        ''
+          echo "test-agent-exclusive: skipped on this platform (streamLayeredImage is Linux-only)" >&2
+          exit 0
+        '';
   };
 
   # Iteration-cost-bounded probe (specs/image-builder.md Success Criteria:

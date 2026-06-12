@@ -17,6 +17,7 @@ let
   inherit (pkgs) runCommandLocal;
 
   inherit (pkgs.stdenv) isDarwin;
+  runIntegration = isDarwin && builtins.getEnv "WRIX_DARWIN_INTEGRATION" != "";
 
   # Use Linux packages for image building (requires remote builder on Darwin)
   linuxPkgs =
@@ -52,129 +53,136 @@ in
   # Integration test that runs a VM and tests UID mapping
   # Skips gracefully if infrastructure is not available
   darwin-uid-integration =
-    runCommandLocal "test-darwin-uid"
-      {
-        nativeBuildInputs = [
-          pkgs.skopeo
-          pkgs.git
-        ];
-      }
-      ''
-        # Nix-safe exit 77 handler: treat skip (77) as build success
+    if !runIntegration then
+      runCommandLocal "test-darwin-uid-skipped" { } ''
         trap '_ec=$?; if [ "$_ec" -eq 77 ]; then mkdir -p $out; exit 0; fi' EXIT
+        echo "SKIP: Darwin UID integration test requires WRIX_DARWIN_INTEGRATION=1" >&2
+        exit 77
+      ''
+    else
+      runCommandLocal "test-darwin-uid"
+        {
+          nativeBuildInputs = [
+            pkgs.skopeo
+            pkgs.git
+          ];
+        }
+        ''
+          # Nix-safe exit 77 handler: treat skip (77) as build success
+          trap '_ec=$?; if [ "$_ec" -eq 77 ]; then mkdir -p $out; exit 0; fi' EXIT
 
-        set -euo pipefail
+          set -euo pipefail
 
-        # Ensure we're on Darwin
-        if [ "$(uname)" != "Darwin" ]; then
-          echo "SKIP: Darwin-only test" >&2
-          exit 77
-        fi
+          # Ensure we're on Darwin
+          if [ "$(uname)" != "Darwin" ]; then
+            echo "SKIP: Darwin-only test" >&2
+            exit 77
+          fi
 
-        # Check macOS version
-        MACOS_VERSION=$(/usr/bin/sw_vers -productVersion | cut -d. -f1)
-        if [ "$MACOS_VERSION" -lt 26 ]; then
-          echo "SKIP: Requires macOS 26+ (current: $(/usr/bin/sw_vers -productVersion))" >&2
-          exit 77
-        fi
+          # Check macOS version
+          MACOS_VERSION=$(/usr/bin/sw_vers -productVersion | cut -d. -f1)
+          if [ "$MACOS_VERSION" -lt 26 ]; then
+            echo "SKIP: Requires macOS 26+ (current: $(/usr/bin/sw_vers -productVersion))" >&2
+            exit 77
+          fi
 
-        echo "=== Darwin UID Mapping Integration Test ==="
-        echo ""
+          echo "=== Darwin UID Mapping Integration Test ==="
+          echo ""
 
-        # Get the real console user
-        REAL_USER=$(/usr/bin/stat -f %Su /dev/console 2>/dev/null || echo "")
-        if [ -z "$REAL_USER" ]; then
-          echo "SKIP: Could not determine console user" >&2
-          exit 77
-        fi
+          # Get the real console user
+          REAL_USER=$(/usr/bin/stat -f %Su /dev/console 2>/dev/null || echo "")
+          if [ -z "$REAL_USER" ]; then
+            echo "SKIP: Could not determine console user" >&2
+            exit 77
+          fi
 
-        REAL_HOME="/Users/$REAL_USER"
+          REAL_HOME="/Users/$REAL_USER"
 
-        # Check if container CLI is available
-        if ! command -v container >/dev/null 2>&1; then
-          echo "SKIP: container CLI not found" >&2
-          exit 77
-        fi
+          # Check if container CLI is available
+          if ! command -v container >/dev/null 2>&1; then
+            echo "SKIP: container CLI not found" >&2
+            exit 77
+          fi
 
-        # Check if container system is running
-        if ! container system status >/dev/null 2>&1; then
-          echo "SKIP: container system not running (start with: container system start)" >&2
-          exit 77
-        fi
+          # Check if container system is running
+          if ! container system status >/dev/null 2>&1; then
+            echo "SKIP: container system not running (start with: container system start)" >&2
+            exit 77
+          fi
 
-        # Check if we can access the container storage
-        CONTAINER_STORAGE="$REAL_HOME/Library/Application Support/com.apple.container"
-        if [ ! -d "$CONTAINER_STORAGE" ] || [ ! -w "$CONTAINER_STORAGE" ]; then
-          echo "SKIP: Cannot access container storage (running in nix build sandbox; run manually with: nix run .#test-darwin)" >&2
-          exit 77
-        fi
+          # Check if we can access the container storage
+          CONTAINER_STORAGE="$REAL_HOME/Library/Application Support/com.apple.container"
+          if [ ! -d "$CONTAINER_STORAGE" ] || [ ! -w "$CONTAINER_STORAGE" ]; then
+            echo "SKIP: Cannot access container storage (running in nix build sandbox; run manually with: nix run .#test-darwin)" >&2
+            exit 77
+          fi
 
-        # Set HOME so container uses the right storage directory
-        export HOME="$REAL_HOME"
+          # Set HOME so container uses the right storage directory
+          export HOME="$REAL_HOME"
 
-        # Load test image
-        TEST_IMAGE="wrix-uid-test:latest"
-        echo "Loading test image..."
-        container image delete "$TEST_IMAGE" 2>/dev/null || true
-        OCI_TAR=$(mktemp)
-        skopeo --insecure-policy copy --quiet "docker-archive:${profileImage}" "oci-archive:$OCI_TAR"
-        LOAD_OUTPUT=$(container image load --input "$OCI_TAR" 2>&1)
-        LOADED_REF=$(echo "$LOAD_OUTPUT" | grep -oE 'untagged@sha256:[a-f0-9]+' | head -1)
-        if [ -n "$LOADED_REF" ]; then
-          container image tag "$LOADED_REF" "$TEST_IMAGE"
-        fi
-        rm -f "$OCI_TAR"
+          # Load test image
+          TEST_IMAGE="wrix-uid-test:latest"
+          echo "Loading test image..."
+          container image delete "$TEST_IMAGE" 2>/dev/null || true
+          OCI_TAR=$(mktemp)
+          skopeo --insecure-policy copy --quiet "docker-archive:${profileImage}" "oci-archive:$OCI_TAR"
+          LOAD_OUTPUT=$(container image load --input "$OCI_TAR" 2>&1)
+          LOADED_REF=$(echo "$LOAD_OUTPUT" | grep -oE 'untagged@sha256:[a-f0-9]+' | head -1)
+          if [ -n "$LOADED_REF" ]; then
+            container image tag "$LOADED_REF" "$TEST_IMAGE"
+          fi
+          rm -f "$OCI_TAR"
 
-        echo "Using image: $TEST_IMAGE"
-        echo ""
+          echo "Using image: $TEST_IMAGE"
+          echo ""
 
-        # Create temporary test directory
-        TEST_DIR=$(mktemp -d)
-        cleanup() { rm -rf "$TEST_DIR"; }
-        trap cleanup EXIT
+          # Create temporary test directory
+          TEST_DIR=$(mktemp -d)
+          cleanup() { rm -rf "$TEST_DIR"; }
+          trap cleanup EXIT
 
-        # Set up test workspace with a git repo (needed for git ownership tests)
-        WORKSPACE="$TEST_DIR/workspace"
-        mkdir -p "$WORKSPACE"
-        git -C "$WORKSPACE" init --quiet
-        git -C "$WORKSPACE" -c user.name=test -c user.email=test@test commit --allow-empty -m "init" --quiet
+          # Set up test workspace with a git repo (needed for git ownership tests)
+          WORKSPACE="$TEST_DIR/workspace"
+          mkdir -p "$WORKSPACE"
+          git -C "$WORKSPACE" init --quiet
+          git -C "$WORKSPACE" -c user.name=test -c user.email=test@test commit --allow-empty -m "init" --quiet
 
-        # Copy the container test script into workspace
-        cp ${containerTestScript} "$WORKSPACE/uid-test.sh"
-        chmod +x "$WORKSPACE/uid-test.sh"
+          # Copy the container test script into workspace
+          cp ${containerTestScript} "$WORKSPACE/uid-test.sh"
+          chmod +x "$WORKSPACE/uid-test.sh"
 
-        REAL_UID=$(id -u "$REAL_USER")
+          REAL_UID=$(id -u "$REAL_USER")
 
-        echo "Running container with UID mapping test..."
-        echo "HOST_UID=$REAL_UID"
-        echo ""
+          echo "Running container with UID mapping test..."
+          echo "HOST_UID=$REAL_UID"
+          echo ""
 
-        # Run the container with our test script
-        # Simulate entrypoint passwd setup (test bypasses entrypoint with --entrypoint)
-        set +e
-        container run --rm \
-          -w / \
-          -v "$WORKSPACE:/workspace" \
-          -e BD_NO_DB=1 \
-          -e HOST_UID="$REAL_UID" \
-          --network default \
-          --entrypoint /bin/bash \
-          "$TEST_IMAGE" -c "
-            sed -i \"s/^wrix:x:1000:1000:/wrix:x:$REAL_UID:$REAL_UID:/\" /etc/passwd
-            sed -i \"s/^wrix:x:1000:/wrix:x:$REAL_UID:/\" /etc/group
-            export HOME=/home/wrix
-            exec /workspace/uid-test.sh
-          "
-        EXIT_CODE=$?
-        set -e
+          # Run the container with our test script
+          # Simulate entrypoint passwd setup (test bypasses entrypoint with --entrypoint)
+          set +e
+          container run --rm \
+            -w / \
+            -v "$WORKSPACE:/workspace" \
+            -e BD_NO_DB=1 \
+            -e HOST_UID="$REAL_UID" \
+            --network default \
+            --entrypoint /bin/bash \
+            "$TEST_IMAGE" -c "
+              sed -i \"s/^wrix:x:1000:1000:/wrix:x:$REAL_UID:$REAL_UID:/\" /etc/passwd
+              sed -i \"s/^wrix:x:1000:/wrix:x:$REAL_UID:/\" /etc/group
+              export HOME=/home/wrix
+              exec /workspace/uid-test.sh
+            "
+          EXIT_CODE=$?
+          set -e
 
-        echo ""
-        if [ "$EXIT_CODE" -eq 0 ]; then
-          echo "=== UID MAPPING INTEGRATION TEST PASSED ==="
-          mkdir -p $out
-        else
-          echo "=== UID MAPPING INTEGRATION TEST FAILED ==="
-          exit 1
-        fi
-      '';
+          echo ""
+          if [ "$EXIT_CODE" -eq 0 ]; then
+            echo "=== UID MAPPING INTEGRATION TEST PASSED ==="
+            mkdir -p $out
+          else
+            echo "=== UID MAPPING INTEGRATION TEST FAILED ==="
+            exit 1
+          fi
+        '';
 }

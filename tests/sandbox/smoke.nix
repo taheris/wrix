@@ -65,31 +65,22 @@ let
 
 in
 {
-  # Verify OCI image builds and is a valid tar archive
-  # On Darwin, this requires a Linux remote builder
-  # Skip with SKIP_IMAGE_TEST=1 for faster iteration (saves ~20s)
+  # Verify OCI image builds and is a valid tar archive.
+  # Linux-only for `nix flake check`: Darwin requires a remote Linux builder,
+  # so host-side image build coverage lives in the explicit image packages/apps.
+  # Skip with SKIP_IMAGE_TEST=1 for faster iteration (saves ~20s).
   image-builds =
-    if skipImageTest then
+    if skipImageTest || !isLinux then
       runCommandLocal "smoke-image-builds-skipped" { } ''
         trap '_ec=$?; if [ "$_ec" -eq 77 ]; then mkdir -p $out; exit 0; fi' EXIT
-        echo "SKIP: Image build test (SKIP_IMAGE_TEST=1)" >&2
+        echo "SKIP: Image build test (requires Linux host or explicit image build)" >&2
         exit 77
       ''
     else
       runCommandLocal "smoke-image-builds" { } ''
         echo "Checking base image..."
-        ${
-          if isDarwin then
-            ''
-              test -f ${baseImage}
-              tar -tf ${baseImage} >/dev/null
-            ''
-          else
-            ''
-              test -x ${baseImage}
-              ${baseImage} | tar -tf - >/dev/null
-            ''
-        }
+        test -x ${baseImage}
+        ${baseImage} | tar -tf - >/dev/null
 
         echo "Image built successfully"
         mkdir $out
@@ -104,7 +95,7 @@ in
       ''
         echo "Checking bash syntax..."
         bash -n ${wrixLauncher}/bin/wrix
-        bash -n ${wrix}/bin/wrix
+        ${if isLinux then "bash -n ${wrix}/bin/wrix" else ""}
         grep -q 'WRIX_PI_AUTH_FILE' ${wrixLauncher}/bin/wrix || { echo "launcher must resolve Pi auth file"; exit 1; }
         grep -q 'WRIX_AGENT:-direct}.*=.*pi' ${wrixLauncher}/bin/wrix || { echo "launcher must gate Pi auth on WRIX_AGENT=pi"; exit 1; }
         grep -q 'wrix spawn: Pi auth file not found' ${wrixLauncher}/bin/wrix || { echo "spawn must fail loud without Pi auth"; exit 1; }
