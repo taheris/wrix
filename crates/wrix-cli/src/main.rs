@@ -107,7 +107,7 @@ fn run_cache(
         return Ok(ExitCode::SUCCESS);
     }
     if let Some(command) = wrix_cache::command::Command::parse(&args[0]) {
-        return wrix_cache::command::run(command, stdout);
+        return wrix_cache::command::run(command, &args[1..], stdout);
     }
     writeln!(stderr, "unknown cache command: {}", args[0])?;
     wrix_cache::command::write_help(stderr)?;

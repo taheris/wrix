@@ -3,6 +3,8 @@ use std::{
     process::ExitCode,
 };
 
+use crate::publisher::{self, Mode};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Command {
     Status,
@@ -23,31 +25,88 @@ impl Command {
             _ => None,
         }
     }
-
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Status => "status",
-            Self::Publish => "publish",
-            Self::Warm => "warm",
-            Self::Prune => "prune",
-            Self::RotateKey => "rotate-key",
-        }
-    }
 }
 
 pub fn write_help(stdout: &mut impl Write) -> io::Result<()> {
     stdout.write_all(
-        b"Manage the workspace project cache.\n\nUsage: wrix service cache <command>\n\nCommands:\n  status\n  publish\n  warm\n  prune\n  rotate-key\n",
+        b"Manage the workspace project cache.\n\nUsage: wrix service cache <command> [options]\n\nCommands:\n  status\n  publish\n  warm [--checks]\n  prune\n  rotate-key\n",
     )
 }
 
-pub fn run(command: Command, stdout: &mut impl Write) -> io::Result<ExitCode> {
-    writeln!(
-        stdout,
-        "wrix service cache {}: unavailable in this build",
-        command.as_str()
-    )?;
+pub fn run(command: Command, args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode> {
+    match command {
+        Command::Status => run_status(args, stdout),
+        Command::Publish => run_publish(args, stdout),
+        Command::Warm => run_warm(args, stdout),
+        Command::Prune => run_prune(args, stdout),
+        Command::RotateKey => run_rotate_key(args, stdout),
+    }
+}
+
+fn run_status(args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode> {
+    reject_args(args)?;
+    writeln!(stdout, "project cache status: available")?;
     Ok(ExitCode::SUCCESS)
+}
+
+fn run_publish(args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode> {
+    reject_args(args)?;
+    let report = publisher::run_current_workspace(Mode::Publish)?;
+    write_report(stdout, &report)?;
+    Ok(ExitCode::SUCCESS)
+}
+
+fn run_warm(args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode> {
+    let checks = parse_warm_args(args)?;
+    let report = publisher::run_current_workspace(Mode::Warm { checks })?;
+    write_report(stdout, &report)?;
+    Ok(ExitCode::SUCCESS)
+}
+
+fn run_prune(args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode> {
+    reject_args(args)?;
+    let report = publisher::run_current_workspace(Mode::Prune)?;
+    write_report(stdout, &report)?;
+    Ok(ExitCode::SUCCESS)
+}
+
+fn run_rotate_key(args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode> {
+    reject_args(args)?;
+    writeln!(stdout, "project cache rotate-key: not implemented")?;
+    Ok(ExitCode::FAILURE)
+}
+
+fn write_report(stdout: &mut impl Write, report: &publisher::Report) -> io::Result<()> {
+    for line in report.lines() {
+        writeln!(stdout, "{line}")?;
+    }
+    Ok(())
+}
+
+fn parse_warm_args(args: &[String]) -> io::Result<bool> {
+    let mut checks = false;
+    for arg in args {
+        match arg.as_str() {
+            "--checks" => checks = true,
+            other => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown cache warm option: {other}"),
+                ));
+            }
+        }
+    }
+    Ok(checks)
+}
+
+fn reject_args(args: &[String]) -> io::Result<()> {
+    if args.is_empty() {
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("unexpected cache option: {}", args[0]),
+    ))
 }
 
 #[cfg(test)]

@@ -120,17 +120,16 @@ fn run_hook(args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode> {
 
 fn run_publish(args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode> {
     let config = PublishConfig::parse(args)?;
-    writeln!(
-        stdout,
-        "wrix-cache-publish: accepted {} for workspace {} using {} and {} ({})",
-        config.drv_path,
-        config.workspace_hash,
-        config.state_root.display(),
-        config.cache_root.display(),
-        config.manifest.display()
+    let report = crate::publisher::run_hook_record(
+        &config.workspace_hash,
+        &config.state_root,
+        &config.cache_root,
+        &config.manifest,
+        &config.drv_path,
+        &config.out_paths,
     )?;
-    if !config.out_paths.is_empty() {
-        writeln!(stdout, "out_paths: {}", config.out_paths)?;
+    for line in report.lines() {
+        writeln!(stdout, "{line}")?;
     }
     Ok(ExitCode::SUCCESS)
 }
