@@ -156,11 +156,11 @@ Direct remote-builder access to the local project cache is out of scope for v1. 
 - Rust packaging exposes `wrix` as the human-facing CLI plus explicit helper binaries from `wrix-cache`; wrix does not rely on hidden private multiplexer subcommands
   [system](bash tests/services/cli-surface.sh test_rust_helper_binaries)
 - Linux beads clients reach Dolt through the workspace Unix socket, while Darwin beads clients receive the service container's TCP host/port endpoint
-  [system?](bash tests/services/dolt-endpoints.sh)
+  [system](bash tests/services/dolt-endpoints.sh)
 - Default `mkDevShell` cache enablement creates Linux XDG state/cache roots or Darwin Library state/cache roots, plus GC-root directory, signing key, public key, publish-root manifest, pending directory, lock file, status file, and endpoint metadata outside `/workspace`; `nixCache = false` does not create cache state solely for cache use
   [system](bash tests/services/nix-cache-state.sh test_state_layout)
 - Host devshell Nix uses `file://<cache-root>` as the project cache substituter, trusts the generated public key, enables `builders-use-substitutes`, installs a project-specific immutable post-build hook, and fails loudly when the host Nix daemon ignores any required setting
-  [system?](bash tests/services/host-nix-config.sh)
+  [system](bash tests/services/host-nix-config.sh)
 - `wrix run` and `wrix spawn` inject container `NIX_CONFIG` that points at the project cache HTTP endpoint, trusts only the generated public key for that cache, and enables `builders-use-substitutes`
   [system?](bash tests/services/sandbox-nix-config.sh test_container_pull_config)
 - The service cache HTTP endpoint is a Rust static read-only server for `<cache-root>`, uses an explicit persisted loopback host port in the `21000–22999` range, serves only Nix binary-cache paths, and does not require container DNS for sandbox substitution
@@ -170,7 +170,7 @@ Direct remote-builder access to the local project cache is out of scope for v1. 
 - With `WRIX_NETWORK=limit`, sandbox Nix can reach exactly the project cache endpoint while unrelated host-local services remain outside the generated allowlist
   [system?](bash tests/services/sandbox-nix-config.sh test_limit_mode_cache_endpoint)
 - The post-build hook drops privileges before publishing, never executes workspace files, and publishes only when `DRV_PATH` matches a configured publish-root derivation in `<state-root>/publish-roots.json`
-  [system?](bash tests/services/project-cache-hook.sh test_hook_manifest_scope)
+  [system](bash tests/services/project-cache-hook.sh test_hook_manifest_scope)
 - `wrix service cache publish` refreshes the publish manifest, publishes only already-realized configured roots, drains matching pending records, updates GC markers, and does not build missing roots
   [system?](bash tests/services/project-cache-publish.sh test_realized_only_publish)
 - `wrix service cache warm` builds default warm roots (packages plus selected devShell), excludes checks by default, includes checks with `--checks`, then publishes and prunes

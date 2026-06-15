@@ -155,6 +155,7 @@ with_fake_tools() {
   export WRIX_NIX_STORE="$bin_dir/nix-store"
   export WRIX_NIX_STORE_BIN="$bin_dir/nix-store"
   export WRIX_NIX_BIN="$bin_dir/nix"
+  unset NIX_CONFIG WRIX_FAKE_NIX_IGNORE
 }
 
 assert_contains() {
@@ -163,6 +164,7 @@ assert_contains() {
   local needle="$3"
   if [[ "$haystack" != *"$needle"* ]]; then
     fail "$label missing '$needle'"
+    return 1
   fi
 }
 
@@ -209,23 +211,23 @@ test_host_nix_configures_cache_and_hook() {
         . "$REPO_ROOT/lib/services/host-nix-config.sh"
     ) 2>"$TEST_TMP/reminder.err"
   )"
-  assert_contains "NIX_CONFIG" "$output" "extra-substituters = file://$cache_root"
-  assert_contains "NIX_CONFIG" "$output" "extra-trusted-public-keys = $public_key"
-  assert_contains "NIX_CONFIG" "$output" "builders-use-substitutes = true"
-  assert_contains "NIX_CONFIG" "$output" "post-build-hook = $TEST_TMP/fake-store/"
+  assert_contains "NIX_CONFIG" "$output" "extra-substituters = file://$cache_root" || return 1
+  assert_contains "NIX_CONFIG" "$output" "extra-trusted-public-keys = $public_key" || return 1
+  assert_contains "NIX_CONFIG" "$output" "builders-use-substitutes = true" || return 1
+  assert_contains "NIX_CONFIG" "$output" "post-build-hook = $TEST_TMP/fake-store/" || return 1
 
   hook_path="$(printf '%s\n' "$output" | awk -F ' = ' '/post-build-hook/{print $2}')"
   wrapper="$hook_path"
-  [[ -x "$wrapper" ]] || fail "stored hook wrapper is not executable: $wrapper"
+  [[ -x "$wrapper" ]] || { fail "stored hook wrapper is not executable: $wrapper"; return 1; }
   endpoints="$(cat "$TEST_TMP/endpoints.json")"
-  assert_contains "wrapper workspace hash" "$(cat "$wrapper")" "$(json_get "$TEST_TMP/endpoints.json" workspace_hash)"
-  assert_contains "wrapper owner uid" "$(cat "$wrapper")" "--owner-uid \"$(id -u)\""
-  assert_contains "wrapper owner gid" "$(cat "$wrapper")" "--owner-gid \"$(id -g)\""
-  assert_contains "wrapper state root" "$(cat "$wrapper")" "$state_root"
-  assert_contains "wrapper cache root" "$(cat "$wrapper")" "$cache_root"
-  assert_contains "wrapper manifest" "$(cat "$wrapper")" "$state_root/publish-roots.json"
-  assert_contains "wrapper publisher" "$(cat "$wrapper")" "$REPO_ROOT/target/debug/wrix-cache-publish"
-  assert_contains "endpoint metadata" "$endpoints" "$cache_root"
+  assert_contains "wrapper workspace hash" "$(cat "$wrapper")" "$(json_get "$TEST_TMP/endpoints.json" workspace_hash)" || return 1
+  assert_contains "wrapper owner uid" "$(cat "$wrapper")" "--owner-uid \"$(id -u)\"" || return 1
+  assert_contains "wrapper owner gid" "$(cat "$wrapper")" "--owner-gid \"$(id -g)\"" || return 1
+  assert_contains "wrapper state root" "$(cat "$wrapper")" "$state_root" || return 1
+  assert_contains "wrapper cache root" "$(cat "$wrapper")" "$cache_root" || return 1
+  assert_contains "wrapper manifest" "$(cat "$wrapper")" "$state_root/publish-roots.json" || return 1
+  assert_contains "wrapper publisher" "$(cat "$wrapper")" "$REPO_ROOT/target/debug/wrix-cache-publish" || return 1
+  assert_contains "endpoint metadata" "$endpoints" "$cache_root" || return 1
 }
 
 test_host_nix_config_fails_when_trusted_setting_ignored() {
@@ -250,7 +252,7 @@ test_host_nix_config_fails_when_trusted_setting_ignored() {
     fail "host config succeeded even though fake Nix ignored the hook"
     return 1
   fi
-  assert_contains "ignored error" "$(cat "$TEST_TMP/ignored.err")" "host Nix does not honor post-build-hook"
+  assert_contains "ignored error" "$(cat "$TEST_TMP/ignored.err")" "host Nix does not honor post-build-hook" || return 1
 }
 
 test_host_nix_config_rejects_non_wrix_hook() {
@@ -272,7 +274,7 @@ test_host_nix_config_rejects_non_wrix_hook() {
     fail "host config accepted a non-wrix hook"
     return 1
   fi
-  assert_contains "conflict error" "$(cat "$TEST_TMP/conflict.err")" "existing non-wrix post-build-hook conflicts"
+  assert_contains "conflict error" "$(cat "$TEST_TMP/conflict.err")" "existing non-wrix post-build-hook conflicts" || return 1
 }
 
 ALL_TESTS=(

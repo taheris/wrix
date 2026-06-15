@@ -122,13 +122,19 @@ wrix_host_append_nix_config() {
   local cache_root="$1"
   local public_key="$2"
   local hook_path="$3"
-  local addition
+  local addition base_config
   addition="extra-substituters = file://$cache_root
 extra-trusted-public-keys = $public_key
 builders-use-substitutes = true
 post-build-hook = $hook_path"
-  if [[ -n "${NIX_CONFIG:-}" ]]; then
-    export NIX_CONFIG="$NIX_CONFIG
+  base_config="${NIX_CONFIG:-}"
+  if [[ -n "$base_config" ]]; then
+    base_config="$(printf '%s\n' "$base_config" | awk '
+      !($0 ~ /^[[:space:]]*post-build-hook[[:space:]]*=/ && $0 ~ /wrix-cache/)
+    ')"
+  fi
+  if [[ -n "$base_config" ]]; then
+    export NIX_CONFIG="$base_config
 $addition"
   else
     export NIX_CONFIG="$addition"
