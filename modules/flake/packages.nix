@@ -97,6 +97,19 @@ _:
         "aarch64-linux"
         "x86_64-linux"
       ];
+      wrixSandboxLauncher = (wrix.mkSandbox { profile = profiles.base; }).launcher;
+      wrixCli = pkgs.writeShellScriptBin "wrix" ''
+        set -euo pipefail
+
+        case "''${1:-}" in
+          run|spawn)
+            exec ${wrixSandboxLauncher}/bin/wrix "$@"
+            ;;
+          *)
+            exec ${wrix.rustPackage.wrix}/bin/wrix "$@"
+            ;;
+        esac
+      '';
 
     in
     {
@@ -126,7 +139,7 @@ _:
         )
         // {
           tmux-mcp = wrix.tmuxMcpPackage.bin;
-          wrix = wrix.rustPackage.wrix;
+          wrix = wrixCli;
           wrix-cache-hook = wrix.rustPackage.cacheHook;
           wrix-cache-publish = wrix.rustPackage.cachePublish;
           wrix-cache-serve = wrix.rustPackage.cacheServe;

@@ -94,6 +94,29 @@ test_wrix_service_cli() {
   done
 }
 
+test_wrix_spawn_delegates_to_sandbox_launcher() {
+  local package spawn_config output
+  package="$(build_package wrix)" || return 1
+  spawn_config="$TEST_TMP/spawn.json"
+  cat >"$spawn_config" <<JSON
+{
+  "workspace": "$REPO_ROOT",
+  "image_ref": "localhost/wrix-test:latest",
+  "image_source": "",
+  "env": [],
+  "agent_args": ["echo", "hello"],
+  "mounts": []
+}
+JSON
+
+  output="$(WRIX_DRY_RUN=1 "$package/bin/wrix" spawn --spawn-config "$spawn_config" --stdio)"
+  assert_contains "spawn dry run" "$output" "SUBCOMMAND=spawn"
+  assert_contains "spawn dry run" "$output" "STDIO=1"
+  if [[ "$output" == *"unavailable in this build"* ]]; then
+    fail "wrix spawn still points at the Rust stub"
+  fi
+}
+
 test_rust_helper_binaries() {
   local wrix_package hook_package publish_package serve_package
   wrix_package="$(build_package wrix)" || return 1
@@ -122,6 +145,7 @@ test_rust_helper_binaries() {
 
 ALL_TESTS=(
   test_wrix_service_cli
+  test_wrix_spawn_delegates_to_sandbox_launcher
   test_rust_helper_binaries
 )
 
