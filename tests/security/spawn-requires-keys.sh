@@ -70,18 +70,21 @@ mkdir -p "$EMPTY_HOME/.ssh/deploy_keys"
 REAL_DEPLOY_KEY="$TEST_TMP/real-deploy-key"
 echo "fake-key-material" > "$REAL_DEPLOY_KEY"
 
-# Common preamble for a sourced block probe: empty mount/staging state and
-# an empty $HOME so no fallback key resolves unless we provide an env pointer.
+# Common preamble for a sourced block probe: empty mount/staging state, a
+# non-Pi agent, and an empty $HOME so no fallback key resolves unless we
+# provide an env pointer.
 write_probe_preamble() {
   local probe="$1" label="$2"
   cat >"$probe" <<EOF
-set -e
-HOME=$EMPTY_HOME
+set -euo pipefail
+HOME="$EMPTY_HOME"
+WRIX_AGENT=direct
+unset WRIX_PI_AUTH_FILE
 VOLUME_ARGS=""
 MOUNT_ARGS=""
 FILE_MOUNTS=""
 DEPLOY_KEY_ARGS=""
-STAGING_ROOT=$TEST_TMP/staging-$label
+STAGING_ROOT="$TEST_TMP/staging-$label"
 mkdir -p "\$STAGING_ROOT"
 EOF
 }
