@@ -1,0 +1,23 @@
+[package]
+name = "wrix-cache"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+wrix-core = { workspace = true }
+
+[[bin]]
+name = "wrix-cache-hook"
+path = "src/bin/wrix-cache-hook.rs"
+
+[[bin]]
+name = "wrix-cache-publish"
+path = "src/bin/wrix-cache-publish.rs"
+
+[[bin]]
+name = "wrix-cache-serve"
+path = "src/bin/wrix-cache-serve.rs"
+
+[lints]
+workspace = true

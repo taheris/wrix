@@ -1,0 +1,8 @@
+[package]
+name = "wrix-beads"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true

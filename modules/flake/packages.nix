@@ -93,11 +93,6 @@ _:
         concatMap (agent: mkProfileVariants "-${agent}" { inherit agent; }) agents
       );
 
-      # Profile-agnostic launcher (`packages.wrix`) — no image baked in.
-      # Orchestrators export WRIX_DEFAULT_IMAGE_REF/WRIX_DEFAULT_IMAGE_SOURCE
-      # (or pass image_ref/image_source via SpawnConfig) before invoking it.
-      wrixLauncher = (wrix.mkSandbox { profile = profiles.base; }).launcher;
-
       isLinux = elem system [
         "aarch64-linux"
         "x86_64-linux"
@@ -111,11 +106,7 @@ _:
         // imagePkgs
         // imageOverlays
         // {
-          inherit (pkgs)
-            beads
-            beads-dolt
-            beads-push
-            ;
+          inherit (pkgs) beads;
 
           default = sandboxOverlays.sandbox-pi;
           nodejs = linuxPkgs.nodejs_22;
@@ -135,7 +126,10 @@ _:
         )
         // {
           tmux-mcp = wrix.tmuxMcpPackage.bin;
-          wrix = wrixLauncher;
+          wrix = wrix.rustPackage.wrix;
+          wrix-cache-hook = wrix.rustPackage.cacheHook;
+          wrix-cache-publish = wrix.rustPackage.cachePublish;
+          wrix-cache-serve = wrix.rustPackage.cacheServe;
           wrix-builder = import ../../lib/builder { inherit pkgs linuxPkgs; };
           wrix-notifyd = import ../../lib/notify/daemon.nix { inherit pkgs; };
         };

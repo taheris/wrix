@@ -152,9 +152,9 @@ Direct remote-builder access to the local project cache is out of scope for v1. 
 - `mkDevShell` starts the service container by default for the project cache, `nixCache = false` suppresses cache-only startup, and any service container survives the process that evaluated the shell hook
   [system?](bash tests/services/lifecycle.sh test_devshell_start_is_independent)
 - The public CLI is `wrix service ...` / `wrix beads push`; no `beads-dolt`, `beads-push`, `wrix-svc`, or `<repo>-beads` compatibility surface is installed or required
-  [system?](bash tests/services/cli-surface.sh test_wrix_service_cli)
+  [system](bash tests/services/cli-surface.sh test_wrix_service_cli)
 - Rust packaging exposes `wrix` as the human-facing CLI plus explicit helper binaries from `wrix-cache`; wrix does not rely on hidden private multiplexer subcommands
-  [system?](bash tests/services/cli-surface.sh test_rust_helper_binaries)
+  [system](bash tests/services/cli-surface.sh test_rust_helper_binaries)
 - Linux beads clients reach Dolt through the workspace Unix socket, while Darwin beads clients receive the service container's TCP host/port endpoint
   [system?](bash tests/services/dolt-endpoints.sh)
 - Default `mkDevShell` cache enablement creates Linux XDG state/cache roots or Darwin Library state/cache roots, plus GC-root directory, signing key, public key, publish-root manifest, pending directory, lock file, status file, and endpoint metadata outside `/workspace`; `nixCache = false` does not create cache state solely for cache use

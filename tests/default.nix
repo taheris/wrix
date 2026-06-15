@@ -93,6 +93,8 @@ let
   rustChecks = {
     tmux-mcp-clippy = wrix.tmuxMcpPackage.clippy;
     tmux-mcp-nextest = wrix.tmuxMcpPackage.nextest;
+    wrix-rust-clippy = wrix.rustPackage.clippy;
+    wrix-rust-nextest = wrix.rustPackage.nextest;
   };
 
   # README example verification

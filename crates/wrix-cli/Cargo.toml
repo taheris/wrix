@@ -1,0 +1,18 @@
+[package]
+name = "wrix-cli"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "wrix"
+path = "src/main.rs"
+
+[dependencies]
+wrix-beads = { workspace = true }
+wrix-cache = { workspace = true }
+wrix-sandbox = { workspace = true }
+wrix-service = { workspace = true }
+
+[lints]
+workspace = true

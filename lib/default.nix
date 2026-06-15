@@ -19,6 +19,10 @@ let
       ;
   };
   beads = import ./beads { inherit pkgs linuxPkgs; };
+  rustCli = import ./services/rust.nix {
+    inherit pkgs;
+    rustProfile = sandbox.profiles.rust;
+  };
   tmuxMcp = import ./mcp/tmux/mcp-server.nix {
     inherit pkgs;
     rustProfile = sandbox.profiles.rust;
@@ -32,6 +36,7 @@ in
   inherit (sandbox) profiles mkSandbox mkProfileImages;
   tmuxMcpPackage = tmuxMcp;
   inherit beads;
+  rustPackage = rustCli;
 
   prekHooks = prekHooksBundle;
   inherit (prekWrappers) prePushChecks skipIfMissing;

@@ -14,7 +14,6 @@ let
     p: with p; [
       bash
       beads
-      beads-push
       coreutils
       curl
       diffutils
