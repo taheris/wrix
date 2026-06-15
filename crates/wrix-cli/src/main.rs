@@ -66,7 +66,7 @@ fn run_service(
             wrix_service::command::write_help(stdout)?;
             return Ok(ExitCode::SUCCESS);
         }
-        return wrix_service::command::run_top(command, stdout);
+        return wrix_service::command::run_top(command, &args[1..], stdout);
     }
 
     match args[0].as_str() {

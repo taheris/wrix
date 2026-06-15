@@ -3,6 +3,8 @@ use std::{
     process::ExitCode,
 };
 
+use crate::lifecycle::{self, CacheMode};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Top {
     Start,
@@ -31,16 +33,6 @@ impl Top {
             "logs" => Some(Self::Logs),
             "endpoints" => Some(Self::Endpoints),
             _ => None,
-        }
-    }
-
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Start => "start",
-            Self::Stop => "stop",
-            Self::Status => "status",
-            Self::Logs => "logs",
-            Self::Endpoints => "endpoints",
         }
     }
 }
@@ -82,12 +74,30 @@ pub fn write_dolt_help(stdout: &mut impl Write) -> io::Result<()> {
     )
 }
 
-pub fn run_top(command: Top, stdout: &mut impl Write) -> io::Result<ExitCode> {
-    writeln!(
-        stdout,
-        "wrix service {}: unavailable in this build",
-        command.as_str()
-    )?;
+pub fn run_top(command: Top, args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode> {
+    let cache_mode = parse_cache_mode(args)?;
+    match command {
+        Top::Start => {
+            let status = lifecycle::start(cache_mode)?;
+            stdout.write_all(status.render().as_bytes())?;
+        }
+        Top::Stop => {
+            let status = lifecycle::stop(cache_mode)?;
+            stdout.write_all(status.render().as_bytes())?;
+        }
+        Top::Status => {
+            let status = lifecycle::status(cache_mode)?;
+            stdout.write_all(status.render().as_bytes())?;
+        }
+        Top::Logs => {
+            let logs = lifecycle::logs(cache_mode)?;
+            stdout.write_all(&logs)?;
+        }
+        Top::Endpoints => {
+            let endpoints = lifecycle::endpoints(cache_mode)?;
+            stdout.write_all(endpoints.as_bytes())?;
+        }
+    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -100,9 +110,26 @@ pub fn run_dolt(command: Dolt, stdout: &mut impl Write) -> io::Result<ExitCode> 
     Ok(ExitCode::SUCCESS)
 }
 
+fn parse_cache_mode(args: &[String]) -> io::Result<CacheMode> {
+    let mut cache_mode = CacheMode::Enabled;
+    for arg in args {
+        match arg.as_str() {
+            "--no-cache" => cache_mode = CacheMode::Disabled,
+            other => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown service option: {other}"),
+                ));
+            }
+        }
+    }
+    Ok(cache_mode)
+}
+
 #[cfg(test)]
 mod test {
-    use super::{Dolt, Top};
+    use super::{Dolt, Top, parse_cache_mode};
+    use crate::lifecycle::CacheMode;
 
     #[test]
     fn top_command_parser_accepts_public_service_commands() {
@@ -121,5 +148,11 @@ mod test {
         assert_eq!(Dolt::parse("host"), Some(Dolt::Host));
         assert_eq!(Dolt::parse("attach"), Some(Dolt::Attach));
         assert_eq!(Dolt::parse("gc"), Some(Dolt::Gc));
+    }
+
+    #[test]
+    fn no_cache_option_disables_cache_startup() {
+        let args = vec![String::from("--no-cache")];
+        assert_eq!(parse_cache_mode(&args).unwrap(), CacheMode::Disabled);
     }
 }

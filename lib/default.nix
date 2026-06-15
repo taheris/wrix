@@ -90,6 +90,7 @@ in
       env ? { },
       shellHook ? "",
       prekHooks ? true,
+      nixCache ? true,
     }:
     let
       hooksTarget =
@@ -115,6 +116,21 @@ in
               unset _wrix_hooks_target _wrix_hooks_current
             fi
           '';
+      serviceHook =
+        if nixCache == false then
+          ''
+            if [[ -d "$PWD/.beads/dolt" ]]; then
+              _wrix_service_bin="''${WRIX_BIN:-${rustCli.wrix}/bin/wrix}"
+              "$_wrix_service_bin" service start --no-cache
+              unset _wrix_service_bin
+            fi
+          ''
+        else
+          ''
+            _wrix_service_bin="''${WRIX_BIN:-${rustCli.wrix}/bin/wrix}"
+            "$_wrix_service_bin" service start
+            unset _wrix_service_bin
+          '';
     in
     pkgs.mkShell {
       packages =
@@ -126,6 +142,8 @@ in
         ];
       env = profile.env // env;
       shellHook = ''
+        ${serviceHook}
+
         # Configure Dolt origin remote for bd dolt pull/push (no-op if already set)
         if [ -d .beads/dolt/beads/.dolt ] && [ -d .git/beads-worktrees/beads/.beads/dolt-remote ]; then
           _dolt_remote="file://$PWD/.git/beads-worktrees/beads/.beads/dolt-remote"
