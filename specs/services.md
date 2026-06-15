@@ -148,9 +148,9 @@ Direct remote-builder access to the local project cache is out of scope for v1. 
 ## Success Criteria
 
 - A workspace that starts services gets a container named `<repo>-service`; the same canonical workspace path yields the same container name, preferred service ports, state roots, and cache root, while two different checkout paths do not collide
-  [system?](bash tests/services/lifecycle.sh test_workspace_identity)
+  [system](bash tests/services/lifecycle.sh test_workspace_identity)
 - `mkDevShell` starts the service container by default for the project cache, `nixCache = false` suppresses cache-only startup, and any service container survives the process that evaluated the shell hook
-  [system?](bash tests/services/lifecycle.sh test_devshell_start_is_independent)
+  [system](bash tests/services/lifecycle.sh test_devshell_start_is_independent)
 - The public CLI is `wrix service ...` / `wrix beads push`; no `beads-dolt`, `beads-push`, `wrix-svc`, or `<repo>-beads` compatibility surface is installed or required
   [system](bash tests/services/cli-surface.sh test_wrix_service_cli)
 - Rust packaging exposes `wrix` as the human-facing CLI plus explicit helper binaries from `wrix-cache`; wrix does not rely on hidden private multiplexer subcommands
@@ -158,7 +158,7 @@ Direct remote-builder access to the local project cache is out of scope for v1. 
 - Linux beads clients reach Dolt through the workspace Unix socket, while Darwin beads clients receive the service container's TCP host/port endpoint
   [system?](bash tests/services/dolt-endpoints.sh)
 - Default `mkDevShell` cache enablement creates Linux XDG state/cache roots or Darwin Library state/cache roots, plus GC-root directory, signing key, public key, publish-root manifest, pending directory, lock file, status file, and endpoint metadata outside `/workspace`; `nixCache = false` does not create cache state solely for cache use
-  [system?](bash tests/services/nix-cache-state.sh test_state_layout)
+  [system](bash tests/services/nix-cache-state.sh test_state_layout)
 - Host devshell Nix uses `file://<cache-root>` as the project cache substituter, trusts the generated public key, enables `builders-use-substitutes`, installs a project-specific immutable post-build hook, and fails loudly when the host Nix daemon ignores any required setting
   [system?](bash tests/services/host-nix-config.sh)
 - `wrix run` and `wrix spawn` inject container `NIX_CONFIG` that points at the project cache HTTP endpoint, trusts only the generated public key for that cache, and enables `builders-use-substitutes`
