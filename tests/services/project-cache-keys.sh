@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+
+TEST_TMP="$(mktemp -d -t wrix-services-cache-keys.XXXXXX)"
+cleanup() {
+  rm -rf "$TEST_TMP"
+}
+trap cleanup EXIT
+
+fail() {
+  local message="$1"
+  printf 'FAIL: %s\n' "$message" >&2
+  exit 1
+}
+
+build_wrix() {
+  cargo build --quiet --manifest-path "$REPO_ROOT/Cargo.toml" -p wrix-cli --bin wrix
+  printf '%s\n' "$REPO_ROOT/target/debug/wrix"
+}
+
+state_root() {
+  local roots=("$XDG_STATE_HOME"/wrix/workspaces/*)
+  if [[ ! -d "${roots[0]}" ]]; then
+    fail "state root was not created"
+  fi
+  printf '%s\n' "${roots[0]}"
+}
+
+cache_root() {
+  local roots=("$XDG_CACHE_HOME"/wrix/workspaces/*/binary-cache)
+  if [[ ! -d "${roots[0]}" ]]; then
+    fail "cache root was not created"
+  fi
+  printf '%s\n' "${roots[0]}"
+}
+
+assert_contains() {
+  local label="$1"
+  local haystack="$2"
+  local needle="$3"
+  if [[ "$haystack" != *"$needle"* ]]; then
+    fail "$label missing '$needle'"
+  fi
+}
+
+test_rotate_key_wipes_cache() {
+  local wrix_bin workspace state cache old_public output new_public
+  wrix_bin="$(build_wrix)"
+  export HOME="$TEST_TMP/home"
+  export XDG_STATE_HOME="$TEST_TMP/state"
+  export XDG_CACHE_HOME="$TEST_TMP/cache"
+  export WRIX_NIX_STORE_BIN="$TEST_TMP/missing-nix-store"
+  mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+  workspace="$TEST_TMP/workspace"
+  mkdir -p "$workspace"
+
+  (cd "$workspace" && "$wrix_bin" service cache status >"$TEST_TMP/status.out")
+  state="$(state_root)"
+  cache="$(cache_root)"
+  old_public="$(cat "$state/keys/cache.pub")"
+  printf 'StorePath: /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-root\n' >"$cache/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.narinfo"
+  printf 'old nar\n' >"$cache/nar/old.nar"
+
+  output="$(cd "$workspace" && "$wrix_bin" service cache rotate-key)"
+  assert_contains "rotate output" "$output" "rotated project cache key"
+  new_public="$(cat "$state/keys/cache.pub")"
+  [[ "$new_public" != "$old_public" ]] || fail "public key did not change"
+  [[ ! -e "$cache/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.narinfo" ]] || fail "narinfo survived key rotation"
+  [[ ! -e "$cache/nar/old.nar" ]] || fail "nar payload survived key rotation"
+  [[ -f "$cache/nix-cache-info" ]] || fail "nix-cache-info missing after rotation"
+  if grep -qF "$old_public" "$state/keys/cache.pub"; then
+    fail "rotated public key still trusts old key text"
+  fi
+}
+
+ALL_TESTS=(
+  test_rotate_key_wipes_cache
+)
+
+run_all() {
+  local failed=0
+  local fn
+  for fn in "${ALL_TESTS[@]}"; do
+    printf '=== %s ===\n' "$fn"
+    if "$fn"; then
+      printf 'PASS: %s\n' "$fn"
+    else
+      printf 'FAIL: %s\n' "$fn" >&2
+      failed=$((failed + 1))
+    fi
+  done
+  if [[ "$failed" -ne 0 ]]; then
+    printf '%s test(s) failed\n' "$failed" >&2
+    return 1
+  fi
+}
+
+if [[ "$#" -eq 0 ]]; then
+  run_all
+else
+  fn="$1"
+  if ! declare -f "$fn" >/dev/null 2>&1; then
+    printf 'Unknown function: %s\n' "$fn" >&2
+    exit 1
+  fi
+  "$fn"
+fi

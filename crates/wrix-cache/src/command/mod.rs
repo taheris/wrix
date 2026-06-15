@@ -45,7 +45,8 @@ pub fn run(command: Command, args: &[String], stdout: &mut impl Write) -> io::Re
 
 fn run_status(args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode> {
     reject_args(args)?;
-    writeln!(stdout, "project cache status: available")?;
+    let report = publisher::status_current_workspace()?;
+    write_report(stdout, &report)?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -72,8 +73,9 @@ fn run_prune(args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode> {
 
 fn run_rotate_key(args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode> {
     reject_args(args)?;
-    writeln!(stdout, "project cache rotate-key: not implemented")?;
-    Ok(ExitCode::FAILURE)
+    let report = publisher::run_current_workspace(Mode::RotateKey)?;
+    write_report(stdout, &report)?;
+    Ok(ExitCode::SUCCESS)
 }
 
 fn write_report(stdout: &mut impl Write, report: &publisher::Report) -> io::Result<()> {

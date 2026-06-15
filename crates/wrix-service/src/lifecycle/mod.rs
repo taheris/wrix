@@ -152,6 +152,10 @@ impl Plan {
                 &self.paths.cache_root().join("nix-cache-info"),
                 nix_cache_info().as_bytes(),
             )?;
+            wrix_cache::publisher::prune_stale_dirty(
+                self.paths.state_root(),
+                self.paths.cache_root(),
+            )?;
         }
         if self.dolt.is_some() {
             fs::create_dir_all(self.workspace.canonical_path().join(".wrix"))?;
