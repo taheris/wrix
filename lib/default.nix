@@ -30,6 +30,9 @@ let
 
   prekHooksBundle = import ./prek/bundle.nix { inherit pkgs; };
   prekWrappers = import ./prek/wrappers.nix { inherit pkgs; };
+  hostNixConfig = pkgs.writeText "wrix-host-nix-config.sh" (
+    builtins.readFile ./services/host-nix-config.sh
+  );
 
 in
 {
@@ -116,8 +119,9 @@ in
               unset _wrix_hooks_target _wrix_hooks_current
             fi
           '';
+      nixCacheEnabled = if builtins.isAttrs nixCache then nixCache.enable or true else nixCache != false;
       serviceHook =
-        if nixCache == false then
+        if !nixCacheEnabled then
           ''
             if [[ -d "$PWD/.beads/dolt" ]]; then
               _wrix_service_bin="''${WRIX_BIN:-${rustCli.wrix}/bin/wrix}"
@@ -129,7 +133,16 @@ in
           ''
             _wrix_service_bin="''${WRIX_BIN:-${rustCli.wrix}/bin/wrix}"
             "$_wrix_service_bin" service start
-            unset _wrix_service_bin
+            _wrix_nix_config=$(
+              WRIX_SERVICE_BIN="$_wrix_service_bin" \
+                WRIX_CACHE_HOOK_BIN="${rustCli.cacheHook}/bin/wrix-cache-hook" \
+                WRIX_CACHE_PUBLISH_BIN="${rustCli.cachePublish}/bin/wrix-cache-publish" \
+                WRIX_BASH_BIN="${pkgs.bash}/bin/bash" \
+                WRIX_HOST_NIX_CONFIG_PRINT=1 \
+                ${pkgs.bash}/bin/bash ${hostNixConfig}
+            )
+            export NIX_CONFIG="$_wrix_nix_config"
+            unset _wrix_service_bin _wrix_nix_config
           '';
     in
     pkgs.mkShell {

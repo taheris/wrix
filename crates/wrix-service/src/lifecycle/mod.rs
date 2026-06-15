@@ -146,14 +146,7 @@ impl Plan {
                 &self.paths.cache_status_path(),
                 default_cache_status().as_bytes(),
             )?;
-            write_if_missing(
-                &self.paths.cache_secret_path(),
-                self.default_secret().as_bytes(),
-            )?;
-            write_if_missing(
-                &self.paths.cache_public_path(),
-                self.default_public_key().as_bytes(),
-            )?;
+            self.ensure_cache_keys()?;
             write_if_missing(&self.paths.publish_roots_path(), b"{\n  \"roots\": []\n}\n")?;
             write_if_missing(
                 &self.paths.cache_root().join("nix-cache-info"),
@@ -205,12 +198,24 @@ impl Plan {
         )
     }
 
-    fn default_secret(&self) -> String {
-        format!("wrix-cache-secret-{}\n", self.workspace.hash())
-    }
-
-    fn default_public_key(&self) -> String {
-        format!("wrix-cache:{}\n", self.workspace.hash())
+    fn ensure_cache_keys(&self) -> io::Result<()> {
+        if self.paths.cache_secret_path().exists() && self.paths.cache_public_path().exists() {
+            return Ok(());
+        }
+        let key_name = format!("wrix-cache-{}", self.workspace.hash());
+        match generate_cache_keypair(
+            &key_name,
+            &self.paths.cache_secret_path(),
+            &self.paths.cache_public_path(),
+        ) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => write_fallback_cache_keys(
+                &key_name,
+                &self.paths.cache_secret_path(),
+                &self.paths.cache_public_path(),
+            ),
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -729,6 +734,59 @@ fn default_cache_status() -> String {
 
 fn nix_cache_info() -> String {
     String::from("StoreDir: /nix/store\nWantMassQuery: 1\nPriority: 40\n")
+}
+
+fn generate_cache_keypair(
+    key_name: &str,
+    secret_path: &Path,
+    public_path: &Path,
+) -> io::Result<()> {
+    let nix_store = env::var("WRIX_NIX_STORE").unwrap_or_else(|_| String::from("nix-store"));
+    let secret_tmp = secret_path.with_extension(format!("secret.{}.tmp", std::process::id()));
+    let public_tmp = public_path.with_extension(format!("pub.{}.tmp", std::process::id()));
+    remove_if_exists(&secret_tmp)?;
+    remove_if_exists(&public_tmp)?;
+    let output = Command::new(nix_store)
+        .arg("--generate-binary-cache-key")
+        .arg(key_name)
+        .arg(&secret_tmp)
+        .arg(&public_tmp)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()?;
+    if !output.status.success() {
+        remove_if_exists(&secret_tmp)?;
+        remove_if_exists(&public_tmp)?;
+        return Err(io::Error::other(
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        ));
+    }
+    fs::rename(secret_tmp, secret_path)?;
+    fs::rename(public_tmp, public_path)
+}
+
+fn write_fallback_cache_keys(
+    key_name: &str,
+    secret_path: &Path,
+    public_path: &Path,
+) -> io::Result<()> {
+    write_if_missing(
+        secret_path,
+        format!("{key_name}:missing-nix-store-secret\n"),
+    )?;
+    write_if_missing(
+        public_path,
+        format!("{key_name}:missing-nix-store-public\n"),
+    )
+}
+
+fn remove_if_exists(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 fn home_dir() -> io::Result<PathBuf> {
