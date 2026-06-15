@@ -24,7 +24,20 @@ pub struct Plan {
     workspace: Workspace,
     paths: Paths,
     cache_port: Option<u16>,
-    dolt_port: Option<u16>,
+    dolt: Option<DoltEndpoint>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DoltEndpoint {
+    transport: DoltTransport,
+    socket_path: PathBuf,
+    tcp_port: Option<u16>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DoltTransport {
+    UnixSocket,
+    Tcp,
 }
 
 #[derive(Clone, Debug)]
@@ -64,13 +77,22 @@ impl Plan {
             )?),
             CacheMode::Disabled => None,
         };
-        let dolt_port = if workspace.canonical_path().join(".beads/dolt").is_dir() {
-            Some(select_port(
-                prior_ports.dolt_tcp_port,
-                DOLT_PORT_START,
-                DOLT_PORT_WIDTH,
-                workspace.hash(),
-            )?)
+        let dolt = if workspace.canonical_path().join(".beads/dolt").is_dir() {
+            let transport = DoltTransport::from_env()?;
+            let tcp_port = match transport {
+                DoltTransport::UnixSocket => None,
+                DoltTransport::Tcp => Some(select_port(
+                    prior_ports.dolt_tcp_port,
+                    DOLT_PORT_START,
+                    DOLT_PORT_WIDTH,
+                    workspace.hash(),
+                )?),
+            };
+            Some(DoltEndpoint {
+                transport,
+                socket_path: workspace.canonical_path().join(".wrix/dolt.sock"),
+                tcp_port,
+            })
         } else {
             None
         };
@@ -78,7 +100,7 @@ impl Plan {
             workspace,
             paths,
             cache_port,
-            dolt_port,
+            dolt,
         })
     }
 
@@ -98,8 +120,12 @@ impl Plan {
         self.cache_port
     }
 
-    pub const fn dolt_port(&self) -> Option<u16> {
-        self.dolt_port
+    pub const fn dolt(&self) -> Option<&DoltEndpoint> {
+        self.dolt.as_ref()
+    }
+
+    pub fn dolt_port(&self) -> Option<u16> {
+        self.dolt.as_ref().and_then(DoltEndpoint::tcp_port)
     }
 
     const fn cache_enabled(&self) -> bool {
@@ -134,6 +160,9 @@ impl Plan {
                 nix_cache_info().as_bytes(),
             )?;
         }
+        if self.dolt.is_some() {
+            fs::create_dir_all(self.workspace.canonical_path().join(".wrix"))?;
+        }
         self.write_services()
     }
 
@@ -143,7 +172,9 @@ impl Plan {
 
     pub fn services_json(&self) -> String {
         let cache_port = json_port(self.cache_port);
-        let dolt_port = json_port(self.dolt_port);
+        let dolt = json_dolt_endpoint(self.dolt.as_ref());
+        let dolt_unix = json_dolt_unix(self.dolt.as_ref());
+        let dolt_tcp = json_dolt_tcp(self.dolt.as_ref());
         format!(
             concat!(
                 "{{\n",
@@ -155,6 +186,8 @@ impl Plan {
                 "  \"cache_root\": \"{}\",\n",
                 "  \"endpoints\": {{\n",
                 "    \"cache_http\": {},\n",
+                "    \"dolt\": {},\n",
+                "    \"dolt_unix\": {},\n",
                 "    \"dolt_tcp\": {}\n",
                 "  }}\n",
                 "}}\n"
@@ -166,7 +199,9 @@ impl Plan {
             escape_json(&self.paths.state_root().display().to_string()),
             escape_json(&self.paths.cache_root().display().to_string()),
             cache_port,
-            dolt_port
+            dolt,
+            dolt_unix,
+            dolt_tcp
         )
     }
 
@@ -176,6 +211,66 @@ impl Plan {
 
     fn default_public_key(&self) -> String {
         format!("wrix-cache:{}\n", self.workspace.hash())
+    }
+}
+
+impl DoltEndpoint {
+    pub const fn transport(&self) -> DoltTransport {
+        self.transport
+    }
+
+    pub fn socket_path(&self) -> &Path {
+        self.socket_path.as_path()
+    }
+
+    pub const fn tcp_port(&self) -> Option<u16> {
+        self.tcp_port
+    }
+
+    pub const fn tcp_host(&self) -> Option<&'static str> {
+        match self.transport {
+            DoltTransport::UnixSocket => None,
+            DoltTransport::Tcp => Some("127.0.0.1"),
+        }
+    }
+}
+
+impl DoltTransport {
+    fn from_env() -> io::Result<Self> {
+        match env::var("WRIX_DOLT_TRANSPORT") {
+            Ok(value) => Self::parse(&value),
+            Err(env::VarError::NotPresent) => Ok(Self::platform_default()),
+            Err(env::VarError::NotUnicode(_)) => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "WRIX_DOLT_TRANSPORT must be valid Unicode",
+            )),
+        }
+    }
+
+    fn parse(input: &str) -> io::Result<Self> {
+        match input {
+            "unix" | "socket" => Ok(Self::UnixSocket),
+            "tcp" => Ok(Self::Tcp),
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("unknown Dolt transport: {other}"),
+            )),
+        }
+    }
+
+    const fn platform_default() -> Self {
+        if cfg!(target_os = "macos") {
+            Self::Tcp
+        } else {
+            Self::UnixSocket
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::UnixSocket => "unix",
+            Self::Tcp => "tcp",
+        }
     }
 }
 
@@ -264,6 +359,8 @@ impl Status {
                 "state_root: {}\n",
                 "cache_root: {}\n",
                 "cache_http_port: {}\n",
+                "dolt_transport: {}\n",
+                "dolt_socket: {}\n",
                 "dolt_tcp_port: {}\n",
                 "runtime: {:?}\n"
             ),
@@ -273,6 +370,8 @@ impl Status {
             self.plan.paths().state_root().display(),
             self.plan.paths().cache_root().display(),
             option_port(self.plan.cache_port()),
+            option_transport(self.plan.dolt()),
+            option_socket(self.plan.dolt()),
             option_port(self.plan.dolt_port()),
             self.runtime
         )
@@ -382,14 +481,33 @@ impl Runtime {
                 .arg("-v")
                 .arg(format!("{}:/cache:ro", plan.paths().cache_root().display()));
         }
-        if let Some(port) = plan.dolt_port() {
-            command.arg("-p").arg(format!("127.0.0.1:{port}:3306"));
+        if let Some(dolt) = plan.dolt() {
+            command.arg("-v").arg(format!(
+                "{}:/var/lib/wrix/beads/dolt:rw",
+                plan.workspace()
+                    .canonical_path()
+                    .join(".beads/dolt")
+                    .display()
+            ));
+            match dolt.transport() {
+                DoltTransport::UnixSocket => {
+                    command.arg("-v").arg(format!(
+                        "{}:/run/wrix:rw",
+                        plan.workspace().canonical_path().join(".wrix").display()
+                    ));
+                }
+                DoltTransport::Tcp => {
+                    if let Some(port) = dolt.tcp_port() {
+                        command.arg("-p").arg(format!("127.0.0.1:{port}:3306"));
+                    }
+                }
+            }
         }
         command
             .arg(&self.image)
             .arg("sh")
             .arg("-c")
-            .arg("sleep infinity")
+            .arg(container_command(plan))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
@@ -518,6 +636,25 @@ fn read_endpoint_port(content: &str, name: &str) -> Option<u16> {
     digits.parse().ok()
 }
 
+fn container_command(plan: &Plan) -> String {
+    match (plan.cache_enabled(), plan.dolt()) {
+        (true, Some(dolt)) => format!("wrix-cache-serve /cache & {}", dolt_server_command(dolt)),
+        (false, Some(dolt)) => dolt_server_command(dolt),
+        (true, None) => String::from("exec wrix-cache-serve /cache"),
+        (false, None) => String::from("sleep infinity"),
+    }
+}
+
+fn dolt_server_command(dolt: &DoltEndpoint) -> String {
+    let base = "exec dolt sql-server --data-dir /var/lib/wrix/beads/dolt";
+    match dolt.transport() {
+        DoltTransport::UnixSocket => {
+            format!("{base} --host 127.0.0.1 --socket /run/wrix/dolt.sock")
+        }
+        DoltTransport::Tcp => format!("{base} --host 0.0.0.0 --port 3306"),
+    }
+}
+
 fn json_port(port: Option<u16>) -> String {
     port.map_or_else(
         || String::from("null"),
@@ -525,8 +662,63 @@ fn json_port(port: Option<u16>) -> String {
     )
 }
 
+fn json_dolt_endpoint(dolt: Option<&DoltEndpoint>) -> String {
+    dolt.map_or_else(
+        || String::from("null"),
+        |endpoint| match endpoint.transport() {
+            DoltTransport::UnixSocket => format!(
+                "{{ \"transport\": \"unix\", \"socket\": \"{}\", \"env\": {{ \"BEADS_DOLT_SERVER_SOCKET\": \"{}\" }} }}",
+                escape_json(&endpoint.socket_path().display().to_string()),
+                escape_json(&endpoint.socket_path().display().to_string())
+            ),
+            DoltTransport::Tcp => format!(
+                "{{ \"transport\": \"tcp\", \"host\": \"127.0.0.1\", \"port\": {}, \"env\": {{ \"BEADS_DOLT_SERVER_HOST\": \"127.0.0.1\", \"BEADS_DOLT_SERVER_PORT\": \"{}\" }} }}",
+                option_port_value(endpoint.tcp_port()),
+                option_port_value(endpoint.tcp_port())
+            ),
+        },
+    )
+}
+
+fn json_dolt_unix(dolt: Option<&DoltEndpoint>) -> String {
+    match dolt {
+        Some(endpoint) if endpoint.transport() == DoltTransport::UnixSocket => format!(
+            "{{ \"socket\": \"{}\" }}",
+            escape_json(&endpoint.socket_path().display().to_string())
+        ),
+        _ => String::from("null"),
+    }
+}
+
+fn json_dolt_tcp(dolt: Option<&DoltEndpoint>) -> String {
+    match dolt {
+        Some(endpoint) if endpoint.transport() == DoltTransport::Tcp => {
+            json_port(endpoint.tcp_port())
+        }
+        _ => String::from("null"),
+    }
+}
+
 fn option_port(port: Option<u16>) -> String {
     port.map_or_else(|| String::from("disabled"), |value| value.to_string())
+}
+
+fn option_port_value(port: Option<u16>) -> String {
+    port.map_or_else(|| String::from("null"), |value| value.to_string())
+}
+
+fn option_transport(dolt: Option<&DoltEndpoint>) -> String {
+    dolt.map_or_else(
+        || String::from("disabled"),
+        |endpoint| endpoint.transport().as_str().to_owned(),
+    )
+}
+
+fn option_socket(dolt: Option<&DoltEndpoint>) -> String {
+    dolt.map_or_else(
+        || String::from("disabled"),
+        |endpoint| endpoint.socket_path().display().to_string(),
+    )
 }
 
 fn default_cache_status() -> String {

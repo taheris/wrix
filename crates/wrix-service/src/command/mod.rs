@@ -3,7 +3,7 @@ use std::{
     process::ExitCode,
 };
 
-use crate::lifecycle::{self, CacheMode};
+use crate::lifecycle::{self, CacheMode, DoltTransport};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Top {
@@ -49,17 +49,6 @@ impl Dolt {
             _ => None,
         }
     }
-
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Status => "status",
-            Self::Socket => "socket",
-            Self::Port => "port",
-            Self::Host => "host",
-            Self::Attach => "attach",
-            Self::Gc => "gc",
-        }
-    }
 }
 
 pub fn write_help(stdout: &mut impl Write) -> io::Result<()> {
@@ -102,12 +91,76 @@ pub fn run_top(command: Top, args: &[String], stdout: &mut impl Write) -> io::Re
 }
 
 pub fn run_dolt(command: Dolt, stdout: &mut impl Write) -> io::Result<ExitCode> {
-    writeln!(
-        stdout,
-        "wrix service dolt {}: unavailable in this build",
-        command.as_str()
-    )?;
+    let plan = lifecycle::Plan::for_current_dir(CacheMode::Disabled)?;
+    let Some(endpoint) = plan.dolt() else {
+        writeln!(stdout, "dolt: disabled")?;
+        return Ok(ExitCode::FAILURE);
+    };
+
+    match command {
+        Dolt::Status => {
+            writeln!(stdout, "dolt: enabled")?;
+            writeln!(stdout, "transport: {}", endpoint.transport().as_str())?;
+            writeln!(stdout, "socket: {}", endpoint.socket_path().display())?;
+            if let Some(port) = endpoint.tcp_port() {
+                writeln!(stdout, "host: 127.0.0.1")?;
+                writeln!(stdout, "port: {port}")?;
+            }
+        }
+        Dolt::Socket => {
+            if endpoint.transport() == DoltTransport::UnixSocket {
+                writeln!(stdout, "{}", endpoint.socket_path().display())?;
+            } else {
+                writeln!(stdout, "dolt socket unavailable for tcp transport")?;
+                return Ok(ExitCode::FAILURE);
+            }
+        }
+        Dolt::Port => {
+            if let Some(port) = endpoint.tcp_port() {
+                writeln!(stdout, "{port}")?;
+            } else {
+                writeln!(stdout, "dolt tcp port unavailable for unix transport")?;
+                return Ok(ExitCode::FAILURE);
+            }
+        }
+        Dolt::Host => {
+            if let Some(host) = endpoint.tcp_host() {
+                writeln!(stdout, "{host}")?;
+            } else {
+                writeln!(stdout, "dolt tcp host unavailable for unix transport")?;
+                return Ok(ExitCode::FAILURE);
+            }
+        }
+        Dolt::Attach => {
+            writeln!(stdout, "{}", attach_command(endpoint))?;
+        }
+        Dolt::Gc => {
+            writeln!(
+                stdout,
+                "dolt gc: run against {}",
+                plan.workspace()
+                    .canonical_path()
+                    .join(".beads/dolt")
+                    .display()
+            )?;
+        }
+    }
     Ok(ExitCode::SUCCESS)
+}
+
+fn attach_command(endpoint: &lifecycle::DoltEndpoint) -> String {
+    match endpoint.transport() {
+        DoltTransport::UnixSocket => format!(
+            "dolt sql-client --socket {}",
+            endpoint.socket_path().display()
+        ),
+        DoltTransport::Tcp => format!(
+            "dolt sql-client --host 127.0.0.1 --port {}",
+            endpoint
+                .tcp_port()
+                .map_or_else(|| String::from("<unavailable>"), |port| port.to_string())
+        ),
+    }
 }
 
 fn parse_cache_mode(args: &[String]) -> io::Result<CacheMode> {

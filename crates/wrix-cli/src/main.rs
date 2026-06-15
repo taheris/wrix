@@ -124,7 +124,7 @@ fn run_beads(
         return Ok(ExitCode::SUCCESS);
     }
     if let Some(command) = wrix_beads::command::Command::parse(&args[0]) {
-        return wrix_beads::command::run(command, stdout);
+        return wrix_beads::command::run(command, stdout, stderr);
     }
     writeln!(stderr, "unknown beads command: {}", args[0])?;
     wrix_beads::command::write_help(stderr)?;
