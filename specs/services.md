@@ -172,21 +172,21 @@ Direct remote-builder access to the local project cache is out of scope for v1. 
 - The post-build hook drops privileges before publishing, never executes workspace files, and publishes only when `DRV_PATH` matches a configured publish-root derivation in `<state-root>/publish-roots.json`
   [system](bash tests/services/project-cache-hook.sh test_hook_manifest_scope)
 - `wrix service cache publish` refreshes the publish manifest, publishes only already-realized configured roots, drains matching pending records, updates GC markers, and does not build missing roots
-  [system?](bash tests/services/project-cache-publish.sh test_realized_only_publish)
+  [system](bash tests/services/project-cache-publish.sh test_realized_only_publish)
 - `wrix service cache warm` builds default warm roots (packages plus selected devShell), excludes checks by default, includes checks with `--checks`, then publishes and prunes
-  [system?](bash tests/services/project-cache-warm.sh test_warm_roots)
+  [system](bash tests/services/project-cache-warm.sh test_warm_roots)
 - Publishing copies only paths reachable from configured current-workspace flake roots, subtracts paths already available from upstream substituters, and never publishes an arbitrary host store path outside that scoped closure
-  [system?](bash tests/services/project-cache-publish.sh test_project_scope_filter)
+  [system](bash tests/services/project-cache-publish.sh test_project_scope_filter)
 - Publishing uses the flat Nix binary-cache layout with signed narinfos and `--no-recursive` copies of the filtered path set
-  [system?](bash tests/services/project-cache-publish.sh test_flat_cache_signed_no_recursive)
+  [system](bash tests/services/project-cache-publish.sh test_flat_cache_signed_no_recursive)
 - Lock contention in the automatic publisher prints a waiting message; lock timeout writes a pending JSON record and warning, and a later explicit publish drains matching pending records
-  [system?](bash tests/services/project-cache-locking.sh test_pending_on_lock_timeout)
+  [system](bash tests/services/project-cache-locking.sh test_pending_on_lock_timeout)
 - Updating a root to a new output replaces that root's GC marker and prunes cache entries no longer reachable from any marker on explicit prune/publish/warm, so repeated publishes do not grow the cache indefinitely
-  [system?](bash tests/services/project-cache-prune.sh)
+  [system](bash tests/services/project-cache-prune.sh)
 - `wrix service cache rotate-key` invalidates the local cache, generates a new keypair, updates metadata, and requires republishing rather than trusting old and new keys simultaneously
-  [system?](bash tests/services/project-cache-keys.sh test_rotate_key_wipes_cache)
+  [system](bash tests/services/project-cache-keys.sh test_rotate_key_wipes_cache)
 - `wrix service cache status` reports cache size and warns above the default 50 GiB soft threshold without deleting reachable entries solely to satisfy that threshold
-  [system?](bash tests/services/project-cache-status.sh test_warn_size)
+  [system](bash tests/services/project-cache-status.sh test_warn_size)
 - The container-facing cache transport is HTTP only; wrix does not configure Unix-socket cache substituters, host Nix daemon sockets, shared mutable `/nix/store`, or host-store-serving tools for sandbox cache reads
   [check?](sh -c "! grep -R 'host.nix-daemon\|nix-daemon.*socket\|unix:.*cache\|harmonia\|nix-serve' lib tests")
 
