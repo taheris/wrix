@@ -417,11 +417,8 @@ in
             ;;
         esac
 
-        # Network filtering requires NET_ADMIN capability for iptables
-        NETWORK_CAP_ARGS=""
-        if [ "$WRIX_NETWORK" = "limit" ]; then
-          NETWORK_CAP_ARGS="--cap-add=NET_ADMIN"
-        fi
+        # Baseline network filtering is always installed before the agent starts.
+        NETWORK_CAP_ARGS="--cap-add=NET_ADMIN"
 
         # Calculate CPUs (use override or half of available, minimum 2)
         ${

@@ -90,6 +90,15 @@ fi
 
 cd /workspace
 
+WRIX_IPTABLES_BIN="$(command -v iptables)" || { echo "Error: iptables is required for sandbox network policy" >&2; exit 1; }
+WRIX_IP6TABLES_BIN="$(command -v ip6tables)" || { echo "Error: ip6tables is required for sandbox IPv6 blocking" >&2; exit 1; }
+WRIX_CAPSH_BIN="$(command -v capsh)" || { echo "Error: capsh is required to drop NET_ADMIN before agent start" >&2; exit 1; }
+WRIX_GETENT_BIN="$(command -v getent)" || { echo "Error: getent is required to resolve network allowlist domains" >&2; exit 1; }
+WRIX_AWK_BIN="$(command -v awk)" || { echo "Error: awk is required to resolve network allowlist domains" >&2; exit 1; }
+WRIX_SORT_BIN="$(command -v sort)" || { echo "Error: sort is required to resolve network allowlist domains" >&2; exit 1; }
+WRIX_GREP_BIN="$(command -v grep)" || { echo "Error: grep is required to verify sandbox network policy" >&2; exit 1; }
+export WRIX_IPTABLES_BIN WRIX_IP6TABLES_BIN WRIX_CAPSH_BIN WRIX_GETENT_BIN WRIX_AWK_BIN WRIX_SORT_BIN WRIX_GREP_BIN
+
 if [[ -d /workspace/bin ]]; then export PATH="/workspace/bin:$PATH"; fi
 
 # Point core.hooksPath at the prek bundle baked into the image, per
@@ -263,58 +272,235 @@ if [[ "${WRIX_WAIT_FOR_ROUTE:-}" = "1" ]]; then
   fi
 fi
 
-# Apply network filtering when WRIX_NETWORK=limit
-# Runs as root (before unshare), so iptables works without extra capabilities
-if [[ "${WRIX_NETWORK:-open}" = "limit" ]]; then
-  echo "Network mode: limit (restricting outbound to allowlist)" >&2
+# BEGIN wrix network policy
+wrix_die() {
+  echo "Error: $*" >&2
+  exit 1
+}
 
-  if ! command -v iptables >/dev/null 2>&1; then
-    echo "Warning: iptables not available, network filtering disabled" >&2
-  elif iptables -P OUTPUT DROP; then
-    # Allow loopback traffic
-    iptables -A OUTPUT -o lo -j ACCEPT
+wrix_iptables() {
+  "$WRIX_IPTABLES_BIN" -w "$@" || wrix_die "iptables $* failed"
+}
 
-    # Allow established/related connections (responses to allowed requests)
-    iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+wrix_ip6tables() {
+  "$WRIX_IP6TABLES_BIN" -w "$@" || wrix_die "ip6tables $* failed"
+}
 
-    # Allow DNS (needed to resolve allowlisted domains at runtime)
-    iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
-    iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
+wrix_ipv4_is_special() {
+  local ip="$1"
+  local first second third _fourth
+  [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  IFS=. read -r first second third _fourth <<< "$ip"
+  case "$first" in
+    0|10|127|224|225|226|227|228|229|230|231|232|233|234|235|236|237|238|239|240|241|242|243|244|245|246|247|248|249|250|251|252|253|254|255)
+      return 0
+      ;;
+    100)
+      [[ "$second" -ge 64 && "$second" -le 127 ]]
+      ;;
+    169)
+      [[ "$second" -eq 254 ]]
+      ;;
+    172)
+      [[ "$second" -ge 16 && "$second" -le 31 ]]
+      ;;
+    192)
+      [[ ( "$second" -eq 0 && ( "$third" -eq 0 || "$third" -eq 2 ) ) || ( "$second" -eq 88 && "$third" -eq 99 ) || "$second" -eq 168 ]]
+      ;;
+    198)
+      [[ "$second" -eq 18 || "$second" -eq 19 || ( "$second" -eq 51 && "$third" -eq 100 ) ]]
+      ;;
+    203)
+      [[ "$second" -eq 0 && "$third" -eq 113 ]]
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
 
-    # Resolve and allow each domain in the allowlist
-    IFS=',' read -ra DOMAINS <<< "${WRIX_NETWORK_ALLOWLIST:-}"
-    for domain in "${DOMAINS[@]}"; do
-      [[ -z "$domain" ]] && continue
-      # Resolve domain to IPv4 addresses
-      # best-effort: unresolvable domain -> no iptables rule added, traffic stays blocked
-      while IFS=' ' read -r ip _rest; do
-        [[ -z "$ip" ]] && continue
-        iptables -A OUTPUT -d "$ip" -j ACCEPT
-      done < <(getent ahostsv4 "$domain" 2>/dev/null | awk '{print $1}' | sort -u)
-    done
-
-    # IPv6: set default drop policy and allow same exceptions
-    if command -v ip6tables >/dev/null 2>&1 && ip6tables -P OUTPUT DROP; then
-      ip6tables -A OUTPUT -o lo -j ACCEPT
-      ip6tables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-      ip6tables -A OUTPUT -p udp --dport 53 -j ACCEPT
-      ip6tables -A OUTPUT -p tcp --dport 53 -j ACCEPT
-
-      for domain in "${DOMAINS[@]}"; do
-        [[ -z "$domain" ]] && continue
-        # best-effort: no IPv6 records -> no ip6tables rule, domain only reachable via IPv4
-        while IFS=' ' read -r ip _rest; do
-          [[ -z "$ip" ]] && continue
-          ip6tables -A OUTPUT -d "$ip" -j ACCEPT
-        done < <(getent ahostsv6 "$domain" 2>/dev/null | awk '{print $1}' | sort -u)
-      done
-    fi
-
-    echo "Network filtering active: ${WRIX_NETWORK_ALLOWLIST:-}" >&2
-  else
-    echo "Warning: iptables -P OUTPUT DROP failed, network filtering disabled" >&2
+wrix_resolve_ipv4() {
+  local host="$1"
+  local records
+  if [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    printf '%s\n' "$host"
+    return 0
   fi
-fi
+  if ! records=$("$WRIX_GETENT_BIN" ahostsv4 "$host" | "$WRIX_AWK_BIN" "{print \$1}" | "$WRIX_SORT_BIN" -u); then
+    return 1
+  fi
+  [[ -n "$records" ]] || return 1
+  printf '%s\n' "$records"
+}
+
+wrix_allow_ipv4_host() {
+  local host="$1"
+  local port="$2"
+  local proto="$3"
+  local reason="$4"
+  local records ip
+  records=$(wrix_resolve_ipv4 "$host") || wrix_die "$reason host is unresolvable: $host"
+  while IFS= read -r ip; do
+    [[ -n "$ip" ]] || continue
+    if [[ -n "$port" ]]; then
+      wrix_iptables -A OUTPUT -p "$proto" -d "$ip" --dport "$port" -j ACCEPT
+    else
+      wrix_iptables -A OUTPUT -d "$ip" -j ACCEPT
+    fi
+  done <<< "$records"
+}
+
+wrix_allow_dns_exceptions() {
+  local servers="${WRIX_NETWORK_DNS_SERVERS:-}"
+  local kind server _rest
+  local -a dns_servers
+  if [[ -f /etc/resolv.conf ]]; then
+    while read -r kind server _rest; do
+      [[ "$kind" = "nameserver" && -n "${server:-}" ]] || continue
+      servers="$servers,$server"
+    done < /etc/resolv.conf
+  fi
+  IFS=',' read -ra dns_servers <<< "$servers"
+  for server in "${dns_servers[@]}"; do
+    [[ "$server" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+    wrix_iptables -A OUTPUT -p udp -d "$server" --dport 53 -j ACCEPT
+    wrix_iptables -A OUTPUT -p tcp -d "$server" --dport 53 -j ACCEPT
+  done
+}
+
+wrix_allow_local_endpoints() {
+  local endpoints="${WRIX_NETWORK_LOCAL_ENDPOINTS:-}"
+  local endpoint target proto host port
+  local -a endpoint_entries
+  if [[ -n "${BEADS_DOLT_SERVER_HOST:-}" && -n "${BEADS_DOLT_SERVER_PORT:-}" ]]; then
+    endpoints="$endpoints,${BEADS_DOLT_SERVER_HOST}:${BEADS_DOLT_SERVER_PORT}/tcp"
+  fi
+  if [[ -n "${WRIX_NIX_CACHE_HOST:-}" && -n "${WRIX_NIX_CACHE_PORT:-}" ]]; then
+    endpoints="$endpoints,${WRIX_NIX_CACHE_HOST}:${WRIX_NIX_CACHE_PORT}/tcp"
+  fi
+  if [[ -n "${WRIX_PROJECT_CACHE_HOST:-}" && -n "${WRIX_PROJECT_CACHE_PORT:-}" ]]; then
+    endpoints="$endpoints,${WRIX_PROJECT_CACHE_HOST}:${WRIX_PROJECT_CACHE_PORT}/tcp"
+  fi
+  IFS=',' read -ra endpoint_entries <<< "$endpoints"
+  for endpoint in "${endpoint_entries[@]}"; do
+    [[ -n "$endpoint" ]] || continue
+    proto="tcp"
+    target="$endpoint"
+    if [[ "$endpoint" = */* ]]; then
+      proto="${endpoint##*/}"
+      target="${endpoint%/*}"
+    fi
+    [[ "$proto" = "tcp" || "$proto" = "udp" ]] || wrix_die "invalid local endpoint protocol: $endpoint"
+    [[ "$target" = *:* ]] || wrix_die "invalid local endpoint, expected host:port: $endpoint"
+    host="${target%:*}"
+    port="${target##*:}"
+    [[ "$port" =~ ^[0-9]+$ ]] || wrix_die "invalid local endpoint port: $endpoint"
+    wrix_allow_ipv4_host "$host" "$port" "$proto" "local endpoint"
+  done
+}
+
+wrix_block_special_ipv4_ranges() {
+  local cidr
+  local blocked_cidrs=(
+    0.0.0.0/8
+    10.0.0.0/8
+    100.64.0.0/10
+    127.0.0.0/8
+    169.254.0.0/16
+    172.16.0.0/12
+    192.0.0.0/24
+    192.0.2.0/24
+    192.88.99.0/24
+    192.168.0.0/16
+    198.18.0.0/15
+    198.51.100.0/24
+    203.0.113.0/24
+    224.0.0.0/4
+    240.0.0.0/4
+  )
+  for cidr in "${blocked_cidrs[@]}"; do
+    wrix_iptables -A OUTPUT -d "$cidr" -j REJECT
+  done
+}
+
+wrix_allow_limit_domains() {
+  local domain records ip
+  local -a allowlist_domains
+  IFS=',' read -ra allowlist_domains <<< "${WRIX_NETWORK_ALLOWLIST:-}"
+  for domain in "${allowlist_domains[@]}"; do
+    [[ -n "$domain" ]] || continue
+    records=$(wrix_resolve_ipv4 "$domain") || wrix_die "allowlist domain is unresolvable: $domain"
+    while IFS= read -r ip; do
+      [[ -n "$ip" ]] || continue
+      if wrix_ipv4_is_special "$ip"; then
+        wrix_die "allowlist domain resolves to blocked local/special address: $domain -> $ip"
+      fi
+      wrix_iptables -A OUTPUT -d "$ip" -j ACCEPT
+    done <<< "$records"
+  done
+}
+
+wrix_verify_firewall_policy() {
+  "$WRIX_IPTABLES_BIN" -S INPUT | "$WRIX_GREP_BIN" -qx -- "-P INPUT DROP" || wrix_die "INPUT default-drop policy was not installed"
+  "$WRIX_IPTABLES_BIN" -S OUTPUT | "$WRIX_GREP_BIN" -qx -- "-P OUTPUT DROP" || wrix_die "OUTPUT default-drop policy was not installed"
+  "$WRIX_IPTABLES_BIN" -C OUTPUT -d 10.0.0.0/8 -j REJECT || wrix_die "local-network reject rules were not installed"
+  "$WRIX_IP6TABLES_BIN" -S OUTPUT | "$WRIX_GREP_BIN" -qx -- "-P OUTPUT DROP" || wrix_die "IPv6 OUTPUT default-drop policy was not installed"
+}
+
+apply_wrix_network_policy() {
+  local mode="${WRIX_NETWORK:-open}"
+  case "$mode" in
+    open|limit) ;;
+    *) wrix_die "WRIX_NETWORK must be 'open' or 'limit' (got: $mode)" ;;
+  esac
+
+  echo "Network mode: $mode (local-network baseline enforced)" >&2
+  wrix_iptables -F INPUT
+  wrix_iptables -F FORWARD
+  wrix_iptables -F OUTPUT
+  wrix_iptables -P INPUT DROP
+  wrix_iptables -P FORWARD DROP
+  wrix_iptables -P OUTPUT DROP
+  wrix_iptables -A INPUT -i lo -j ACCEPT
+  wrix_iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+  wrix_iptables -A OUTPUT -o lo -j ACCEPT
+  wrix_iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+  wrix_ip6tables -F INPUT
+  wrix_ip6tables -F FORWARD
+  wrix_ip6tables -F OUTPUT
+  wrix_ip6tables -P INPUT DROP
+  wrix_ip6tables -P FORWARD DROP
+  wrix_ip6tables -P OUTPUT DROP
+
+  wrix_allow_dns_exceptions
+  wrix_allow_local_endpoints
+  wrix_block_special_ipv4_ranges
+
+  if [[ "$mode" = "limit" ]]; then
+    wrix_allow_limit_domains
+  else
+    wrix_iptables -A OUTPUT -j ACCEPT
+  fi
+
+  wrix_verify_firewall_policy
+}
+
+wrix_verify_net_admin_drop() {
+  local probe
+  probe="\"\$WRIX_IPTABLES_BIN\" -A OUTPUT -j ACCEPT >/dev/null 2>&1"
+  if "$WRIX_CAPSH_BIN" --drop=cap_net_admin -- -c "$probe"; then
+    wrix_die "NET_ADMIN capability drop could not be verified"
+  fi
+}
+
+run_without_net_admin() {
+  wrix_verify_net_admin_drop
+  "$WRIX_CAPSH_BIN" --drop=cap_net_admin -- -c 'exec "$@"' wrix-no-net-admin "$@"
+}
+# END wrix network policy
+
+apply_wrix_network_policy
 
 # Session audit trail: write structured log entry on exit
 # Log format documented in specs/security.md § Audit Trail
@@ -380,27 +566,27 @@ write_session_log() {
 MAIN_EXIT=0
 if [[ $# -gt 0 ]]; then
   # Command override: run the specified command instead of the selected agent.
-  unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
+  run_without_net_admin unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
     "$@" || MAIN_EXIT=$?
 elif [[ "$WRIX_AGENT" = "pi" ]] && [[ "${WRIX_STDIO:-}" = "1" ]]; then
   # Pi RPC mode: pi listens on stdin/stdout for JSONL commands.
   # Loom drives the session from the host via piped stdio.
-  unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
+  run_without_net_admin unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
     pi --mode rpc || MAIN_EXIT=$?
 elif [[ "$WRIX_AGENT" = "pi" ]]; then
-  unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
+  run_without_net_admin unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
     pi || MAIN_EXIT=$?
 elif [[ "$WRIX_AGENT" = "direct" ]]; then
   # Direct mode: loom-direct-runner listens on stdin/stdout for JSONL
   # commands and drives a loom-llm Conversation with the six sandbox-aware
   # tools. Loom drives the session from the host via piped stdio.
-  unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
+  run_without_net_admin unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
     loom-direct-runner || MAIN_EXIT=$?
 elif [[ "$WRIX_AGENT" = "claude" ]] && [[ "${WRIX_STDIO:-}" = "1" ]]; then
   # Claude stream-json mode: loom drives the session from the host via piped
   # stdio. Symmetric to the pi branch above. Canonical claude args live here
   # (single source of truth) so workflow code doesn't have to thread them.
-  unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
+  run_without_net_admin unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
     claude \
       --dangerously-skip-permissions \
       --print \
@@ -419,7 +605,7 @@ else
 
 $(cat /workspace/docs/README.md)"
   fi
-  unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
+  run_without_net_admin unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
     claude --dangerously-skip-permissions --append-system-prompt "$SYSTEM_PROMPT" || MAIN_EXIT=$?
 fi
 

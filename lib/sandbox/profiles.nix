@@ -53,6 +53,7 @@ let
     iproute2
     iptables
     iputils
+    libcap
     netcat
     openssh
     procps

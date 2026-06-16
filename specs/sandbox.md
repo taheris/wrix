@@ -204,15 +204,15 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 - The launcher accepts `WRIX_NETWORK=open` and `WRIX_NETWORK=limit`; any other value errors before the container starts
   [check](grep -nE "WRIX_NETWORK must be 'open' or 'limit'" lib/sandbox/linux/default.nix lib/sandbox/darwin/default.nix)
 - In `WRIX_NETWORK=open`, sandbox outbound to public internet succeeds, but outbound to LAN/private/host-local/VPN/special IPv4 ranges fails except for exact DNS and wrix-owned endpoint exceptions
-  [system?](bash tests/sandbox/network-baseline.sh test_open_blocks_lan)
+  [system](bash tests/sandbox/network-baseline.sh test_open_blocks_lan)
 - In `WRIX_NETWORK=limit`, outbound succeeds only to the merged allowlist plus exact DNS and wrix-owned endpoint exceptions; allowlist domains are resolved once at startup, unresolvable domains fail launch, and non-allowlisted public internet plus LAN/private/host-local/VPN/special ranges fail
-  [system?](bash tests/sandbox/network-baseline.sh test_limit_allowlist)
+  [system](bash tests/sandbox/network-baseline.sh test_limit_allowlist)
 - IPv6 egress is disabled or blocked in both network modes for v1
-  [system?](bash tests/sandbox/network-baseline.sh test_ipv6_blocked)
+  [system](bash tests/sandbox/network-baseline.sh test_ipv6_blocked)
 - If firewall setup, IPv6 disablement, or `NET_ADMIN` drop cannot be verified, the launcher fails closed before the agent starts and never falls back to LAN-open networking
-  [system?](bash tests/sandbox/network-baseline.sh test_fail_closed)
+  [system](bash tests/sandbox/network-baseline.sh test_fail_closed)
 - After startup, the agent process cannot modify firewall rules (for example `nft flush ruleset` on the nft backend, or the equivalent backend flush command, fails inside the running sandbox)
-  [system?](bash tests/sandbox/network-baseline.sh test_agent_lacks_net_admin)
+  [system](bash tests/sandbox/network-baseline.sh test_agent_lacks_net_admin)
 - `WRIX_MICROVM=1` selects `podman --runtime krun` on Linux when `/dev/kvm` is available, and fails loudly when KVM is missing
   [check](grep -nE 'WRIX_MICROVM|--runtime krun|/dev/kvm' lib/sandbox/linux/default.nix)
 - `wrix run` errors at startup with a clear message when no valid Nix-generated `ProfileConfig` JSON is supplied
