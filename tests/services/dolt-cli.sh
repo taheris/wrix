@@ -79,6 +79,59 @@ fi
 exec "$@"
 EOF
   chmod +x "$bin_dir/unshare"
+
+  cat >"$bin_dir/iptables" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+args=" $* "
+if [[ "$args" == *" -S INPUT "* ]]; then
+  printf '%s\n' '-P INPUT DROP'
+  exit 0
+fi
+if [[ "$args" == *" -S OUTPUT "* ]]; then
+  printf '%s\n' '-P OUTPUT DROP'
+  exit 0
+fi
+exit 0
+EOF
+  chmod +x "$bin_dir/iptables"
+
+  cat >"$bin_dir/ip6tables" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+args=" $* "
+if [[ "$args" == *" -S OUTPUT "* ]]; then
+  printf '%s\n' '-P OUTPUT DROP'
+fi
+exit 0
+EOF
+  chmod +x "$bin_dir/ip6tables"
+
+  cat >"$bin_dir/capsh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" != "--drop=cap_net_admin" || "${2:-}" != "--" || "${3:-}" != "-c" ]]; then
+  printf 'unexpected capsh invocation: %s\n' "$*" >&2
+  exit 64
+fi
+script="$4"
+shift 4
+if [[ "$script" == *'-A OUTPUT -j ACCEPT'* ]]; then
+  exit 1
+fi
+exec bash -c "$script" "$@"
+EOF
+  chmod +x "$bin_dir/capsh"
+
+  cat >"$bin_dir/getent" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" != "ahostsv4" ]]; then
+  exit 2
+fi
+printf '198.51.100.9 STREAM %s\n' "${2:-localhost}"
+EOF
+  chmod +x "$bin_dir/getent"
 }
 
 rewrite_entrypoint_workspace() {

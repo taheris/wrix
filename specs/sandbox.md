@@ -216,11 +216,11 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 - `WRIX_MICROVM=1` selects `podman --runtime krun` on Linux when `/dev/kvm` is available, and fails loudly when KVM is missing
   [check](grep -nE 'WRIX_MICROVM|--runtime krun|/dev/kvm' lib/sandbox/linux/default.nix)
 - `wrix run` errors at startup with a clear message when no valid Nix-generated `ProfileConfig` JSON is supplied
-  [system?](bash tests/sandbox/missing-profile-config.sh)
+  [system](bash tests/sandbox/missing-profile-config.sh)
 - `mkSandbox`'s `package` wrapper passes an immutable Nix-store `ProfileConfig` JSON path to the Rust `wrix` CLI instead of generating a large shell launcher
-  [system?](bash tests/sandbox/profile-config-wrapper.sh)
+  [system](bash tests/sandbox/profile-config-wrapper.sh)
 - The selected agent runtime comes from `ProfileConfig` and cannot be changed by caller env independently of the selected image/profile
-  [system?](bash tests/sandbox/profile-config-agent-pin.sh)
+  [system](bash tests/sandbox/profile-config-agent-pin.sh)
 - `wrix spawn --spawn-config <file>` parses the documented `SpawnConfig` fields (`image_ref`, `image_source`, `workspace`, `env`, `agent_args`, `mounts`) and rejects attempts to change the selected agent independently of `ProfileConfig`
   [system?](bash tests/sandbox/spawn-config-schema.sh)
 - On Linux, each `SpawnConfig.mounts` entry becomes a `-v <host_path>:<container_path>` podman argument, with `:ro` appended when `read_only: true`. A missing or empty `mounts` list produces no additional `-v` flags.
