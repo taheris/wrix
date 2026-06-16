@@ -54,8 +54,8 @@ fn push(stdout: &mut impl Write, stderr: &mut impl Write) -> io::Result<ExitCode
     };
 
     env::set_current_dir(&context.root)?;
-    repair_dolt_origin_remote(&context, stderr)?;
     disable_auto_export()?;
+    repair_dolt_origin_remote(&context, stderr)?;
     if sync_dolt_remote(stderr)? != ExitCode::SUCCESS {
         return Ok(ExitCode::FAILURE);
     }
@@ -132,7 +132,13 @@ fn repair_dolt_origin_remote(context: &Context, stderr: &mut impl Write) -> io::
 
     let remote = format!("file://{}", context.worktree_remote_dir.display());
     let list = run_output("bd", &["dolt", "remote", "list"])?;
-    if list.status.success() && String::from_utf8_lossy(&list.stdout).contains(&remote) {
+    let origin = if list.status.success() {
+        let text = String::from_utf8_lossy(&list.stdout);
+        origin_remote_url(&text).map(ToOwned::to_owned)
+    } else {
+        None
+    };
+    if origin.as_deref() == Some(remote.as_str()) {
         return Ok(());
     }
 
@@ -140,19 +146,22 @@ fn repair_dolt_origin_remote(context: &Context, stderr: &mut impl Write) -> io::
         stderr,
         "wrix beads push: repairing Dolt origin remote -> {remote}"
     )?;
-    if list.status.success()
-        && String::from_utf8_lossy(&list.stdout)
-            .lines()
-            .any(remote_is_origin)
-    {
+    if origin.is_some() {
         run_required("bd", &["sql", "CALL DOLT_REMOTE('remove', 'origin')"])?;
     }
     let add = format!("CALL DOLT_REMOTE('add', 'origin', {})", sql_quote(&remote));
     run_required("bd", &["sql", &add])
 }
 
-fn remote_is_origin(line: &str) -> bool {
-    line.split_whitespace().next() == Some("origin")
+fn origin_remote_url(remote_list: &str) -> Option<&str> {
+    remote_list.lines().find_map(|line| {
+        let mut fields = line.split_whitespace();
+        if fields.next() == Some("origin") {
+            fields.next()
+        } else {
+            None
+        }
+    })
 }
 
 fn sql_quote(value: &str) -> String {
@@ -429,7 +438,7 @@ fn status_to_exit(output: &Output) -> ExitCode {
 
 #[cfg(test)]
 mod test {
-    use super::{Command, is_fast_forward_rejection, snapshot_query_for_ids};
+    use super::{Command, is_fast_forward_rejection, origin_remote_url, snapshot_query_for_ids};
 
     #[test]
     fn beads_command_parser_accepts_push() {
@@ -450,5 +459,11 @@ mod test {
         let query = snapshot_query_for_ids(&ids);
         assert!(query.contains("'wx-one'"));
         assert!(query.contains("'wx-''two'"));
+    }
+
+    #[test]
+    fn origin_remote_url_ignores_matching_non_origin_remote() {
+        let remote_list = "backup file:///workspace/.beads/dolt-remote\norigin file:///stale";
+        assert_eq!(origin_remote_url(remote_list), Some("file:///stale"));
     }
 }

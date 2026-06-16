@@ -62,14 +62,19 @@ repair_dolt_origin_remote() {
     return 0
   fi
 
-  local remote
+  local origin_url remote remote_list
   remote="file://$WORKTREE_REMOTE_DIR"
-  if bd dolt remote list 2>/dev/null | grep -Fq "$remote"; then
-    return 0
+  if remote_list=$(bd dolt remote list); then
+    origin_url=$(awk '$1 == "origin" { print $2; exit }' <<<"$remote_list")
+    if [[ "$origin_url" == "$remote" ]]; then
+      return 0
+    fi
+  else
+    origin_url=""
   fi
 
   echo "beads-push: repairing Dolt origin remote -> $remote" >&2
-  if bd dolt remote list 2>/dev/null | awk '{ print $1 }' | grep -Fxq origin; then
+  if [[ -n "$origin_url" ]]; then
     bd sql "CALL DOLT_REMOTE('remove', 'origin')" >/dev/null
   fi
   bd sql "CALL DOLT_REMOTE('add', 'origin', $(sql_quote "$remote"))" >/dev/null
@@ -298,8 +303,8 @@ commit_dirty_worktree() {
 main() {
   skip_loom_managed_clone
   load_workspace_context
-  repair_dolt_origin_remote
   disable_auto_export
+  repair_dolt_origin_remote
   rebuild_remote_if_needed
   sync_dolt_remote "$@"
   sync_beads_git_branch
