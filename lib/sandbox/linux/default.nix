@@ -1,5 +1,8 @@
 # Linux sandbox implementation using a single container
-{ pkgs }:
+{
+  pkgs,
+  serviceCli ? null,
+}:
 
 let
   inherit (builtins) concatStringsSep readFile;
@@ -22,6 +25,7 @@ let
   sshConfig = import ../../util/ssh.nix;
 
   prompt = writeText "wrix-prompt" (readFile ../prompt.txt);
+  serviceBin = if serviceCli == null then "wrix" else "${serviceCli}/bin/wrix";
 
   # crun built with libkrun support for microVM boundary
   # Provides 'krun' binary (symlink to crun) for podman --runtime krun
@@ -54,7 +58,6 @@ in
       name = "wrix";
       runtimeInputs = [
         crun-krun
-        pkgs.beads-dolt
         pkgs.jq
         pkgs.podman
         pkgs.skopeo
@@ -173,12 +176,10 @@ in
 
         verbose "Project dir: $PROJECT_DIR"
 
-        # Ensure the per-workspace wrix-beads dolt container is running
-        # before launching. Without it, bd inside the container has no
-        # server to talk to and the socket at $PROJECT_DIR/.wrix/dolt.sock
-        # won't exist. beads-dolt start is idempotent.
-        if [ -d "$PROJECT_DIR/.beads/dolt" ] && command -v podman >/dev/null 2>&1; then
-          beads-dolt start "$PROJECT_DIR"
+        BEADS_DOLT_SOCKET=""
+        if [ -d "$PROJECT_DIR/.beads/dolt" ]; then
+          (cd "$PROJECT_DIR" && "${serviceBin}" service start --no-cache >/dev/null)
+          BEADS_DOLT_SOCKET=$(cd "$PROJECT_DIR" && "${serviceBin}" service dolt socket)
         fi
 
         # Read git author from host config (overrideable via env vars)
@@ -576,6 +577,7 @@ in
           -e "WRIX_NETWORK_ALLOWLIST=${networkAllowlist}"
         )
         [ -n "$PI_AUTH_JSON_MOUNT" ] && ENV_ARGS+=(-e "WRIX_PI_AUTH_JSON=$PI_AUTH_JSON_MOUNT")
+        [ -n "$BEADS_DOLT_SOCKET" ] && ENV_ARGS+=(-e "BEADS_DOLT_SERVER_SOCKET=/workspace/.wrix/dolt.sock")
         [ -n "$KRUN_CMD_ENV" ] && ENV_ARGS+=(-e "$KRUN_CMD_ENV")
         # default boundary: the process is the store-owning rootless container-0
         # (see USERNS_ARGS above). Tell claude it is sandboxed so it permits

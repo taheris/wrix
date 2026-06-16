@@ -28,8 +28,12 @@ let
       fenix
       treefmt
       ;
+    serviceCli = rustCli.wrix;
   };
-  beads = import ./beads { inherit pkgs linuxPkgs; };
+  beads = import ./beads {
+    inherit pkgs;
+    inherit (rustCli) wrix;
+  };
   rustCli = import ./services/rust.nix {
     inherit pkgs;
     rustProfile = sandbox.profiles.rust;
@@ -214,13 +218,7 @@ in
           };
       serviceHook =
         if !nixCacheEnabled then
-          ''
-            if [[ -d "$PWD/.beads/dolt" ]]; then
-              _wrix_service_bin="''${WRIX_BIN:-${rustCli.wrix}/bin/wrix}"
-              "$_wrix_service_bin" service start --no-cache
-              unset _wrix_service_bin
-            fi
-          ''
+          beads.shellHook
         else
           ''
             _wrix_service_bin="''${WRIX_BIN:-${rustCli.wrix}/bin/wrix}"
@@ -236,12 +234,14 @@ in
             export NIX_CONFIG="$_wrix_nix_config"
             unset _wrix_service_bin _wrix_nix_config
           '';
+      beadsHook = if nixCacheEnabled then beads.waitAndExport else "";
     in
     pkgs.mkShell {
       packages =
         (profile.hostPackages or profile.packages)
         ++ packages
         ++ [
+          rustCli.wrix
           prekWrappers.prePushChecks
           prekWrappers.skipIfMissing
         ];
@@ -255,9 +255,8 @@ in
           (cd .beads/dolt/beads && dolt remote add origin "$_dolt_remote" 2>/dev/null || true)
         fi
 
-        # Start per-workspace dolt container and export env vars suppressing
-        # bd's embedded autostart. See lib/beads/default.nix.
-        ${beads.shellHook}
+        # Export service-published Dolt env vars suppressing bd's embedded autostart.
+        ${beadsHook}
 
         ${prekHookSetup}
 

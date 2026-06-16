@@ -14,25 +14,12 @@
         else
           system;
 
-      beadsPkgs =
-        hostPkgs_: linuxPkgs_:
-        let
-          m = import ../../lib/beads {
-            pkgs = hostPkgs_;
-            linuxPkgs = linuxPkgs_;
-          };
-        in
-        {
-          beads-dolt = m.dolt;
-          beads-push = m.push;
-        };
-
       # Agent runtime packages exposed to consumers:
       #
       #   claude-code — tracks nixos-unstable via flake.lock
       #                 (stream-json framing for the claude backend);
       #                 bumping nixpkgs may bump claude-code's wire surface.
-      linuxOverlay = final: _prev: beadsPkgs final final;
+      linuxOverlay = _final: _prev: { };
 
       linuxPkgs = import nixpkgs {
         system = linuxSystem;
@@ -42,7 +29,7 @@
         config.allowUnfree = true;
       };
 
-      hostOverlay = final: _prev: beadsPkgs final linuxPkgs;
+      hostOverlay = _final: _prev: { };
 
     in
     {

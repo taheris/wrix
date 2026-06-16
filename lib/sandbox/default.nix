@@ -5,6 +5,7 @@
   crane ? null,
   fenix ? null,
   treefmt ? null,
+  serviceCli ? null,
 }:
 
 let
@@ -25,8 +26,8 @@ let
     "x86_64-linux"
   ];
 
-  darwinSandbox = import ./darwin { inherit pkgs; };
-  linuxSandbox = import ./linux { inherit pkgs; };
+  darwinSandbox = import ./darwin { inherit pkgs serviceCli; };
+  linuxSandbox = import ./linux { inherit pkgs serviceCli; };
 
   manifest = import ./manifest.nix { inherit pkgs; };
   imageTagLib = import ../util/image-tag.nix { };

@@ -215,7 +215,7 @@ _:
   # when the user switches back.
   #
   # runtime:
-  #   "podman"    — Linux, beads-dolt; repos are localhost/wrix-*.
+  #   "podman"    — Linux; repos are localhost/wrix-*.
   #   "container" — Darwin's Apple container CLI; repos are wrix-*.
   # cmd: override the CLI binary (absolute path for systemd units, etc.).
   pruneStaleImages =
@@ -235,8 +235,8 @@ _:
             # runtime). Empty if none — lets callers print a friendly notice
             # naming the holder instead of a generic rmi error.
             holder = ''${bin} ps -a --filter "ancestor=$_stale" --format '{{.Names}}' | head -n1'';
-            # Workspace label set by beads-dolt cmd_start. Empty for legacy
-            # containers or when the holder disappears mid-check.
+            # Workspace label set by service/sandbox containers. Empty when
+            # the holder disappears mid-check.
             holderWorkspace = ''${bin} inspect --format '{{ index .Config.Labels "wrix.workspace" }}' "$_holder"'';
           };
           container = {

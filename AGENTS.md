@@ -49,10 +49,10 @@ bd dolt pull
 git add <files>
 git commit -m "..."   # Hooks run: nixfmt, shellcheck, flake check, tests
 git push
-beads-push            # Sync beads branch: bd dolt commit + push + git push origin beads
+wrix beads push       # Sync beads branch: bd dolt commit + push + git push origin beads
 ```
 
-Work is NOT complete until both pushes succeed. `beads-push` is required — `bd dolt
+Work is NOT complete until both pushes succeed. `wrix beads push` is required — `bd dolt
 push` alone does not sync the `beads` git branch to GitHub.
 
 ## Code Style

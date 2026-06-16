@@ -1,5 +1,8 @@
 # Darwin sandbox using Apple container CLI (macOS 26+)
-{ pkgs }:
+{
+  pkgs,
+  serviceCli ? null,
+}:
 
 let
   inherit (builtins) readFile;
@@ -22,6 +25,7 @@ let
   sshConfig = import ../../util/ssh.nix;
 
   promptDir = writeTextDir "wrix-prompt" (readFile ../prompt.txt);
+  serviceBin = if serviceCli == null then "wrix" else "${serviceCli}/bin/wrix";
 
 in
 {
@@ -152,10 +156,8 @@ in
                 sleep 2
               fi
 
-              # Ensure the per-workspace wrix-beads dolt container is running.
-              # Uses Apple container CLI (same runtime as the sandbox itself).
               if [ -d "$PROJECT_DIR/.beads/dolt" ]; then
-                ${pkgs.beads-dolt}/bin/beads-dolt start "$PROJECT_DIR"
+                (cd "$PROJECT_DIR" && "${serviceBin}" service start --no-cache >/dev/null)
               fi
 
               ${fixVmnetRoute}
@@ -465,13 +467,11 @@ in
               MOUNT_ARGS="$MOUNT_ARGS -v $BEADS_STAGING:/workspace/.beads"
             fi
 
-            # VirtioFS can't pass Unix sockets. Dolt runs as an Apple Container
-            # and publishes its port to all host interfaces including vmnet.
-            # The sandbox container reaches dolt via the vmnet gateway IP.
-            # No socat bridge needed — both containers are on the same vmnet.
+            BEADS_DOLT_HOST=""
             BEADS_DOLT_PORT=""
             if [ -d "$PROJECT_DIR/.beads/dolt" ]; then
-              BEADS_DOLT_PORT=$(${pkgs.beads-dolt}/bin/beads-dolt port "$PROJECT_DIR")
+              BEADS_DOLT_HOST=$(cd "$PROJECT_DIR" && "${serviceBin}" service dolt host)
+              BEADS_DOLT_PORT=$(cd "$PROJECT_DIR" && "${serviceBin}" service dolt port)
             fi
 
             # Session registration for focus-aware notifications (tmux only)
@@ -532,12 +532,9 @@ in
             ENV_ARGS+=(-e "WRIX_AGENT=$WRIX_AGENT")
             [ -n "$DIR_MOUNTS" ] && ENV_ARGS+=(-e "WRIX_DIR_MOUNTS=$DIR_MOUNTS")
             [ -n "$FILE_MOUNTS" ] && ENV_ARGS+=(-e "WRIX_FILE_MOUNTS=$FILE_MOUNTS")
-            # VirtioFS can't pass Unix sockets — use TCP for notifications and dolt.
-            # Dolt is now also an Apple Container publishing to all interfaces;
-            # the sandbox VM reaches it via the vmnet gateway.
             ENV_ARGS+=(-e "WRIX_NOTIFY_TCP=1")
             [ -n "$BEADS_DOLT_PORT" ] && ENV_ARGS+=(-e "BEADS_DOLT_SERVER_PORT=$BEADS_DOLT_PORT")
-            [ -n "$BEADS_DOLT_PORT" ] && ENV_ARGS+=(-e "BEADS_DOLT_SERVER_HOST=192.168.64.1")
+            [ -n "$BEADS_DOLT_HOST" ] && ENV_ARGS+=(-e "BEADS_DOLT_SERVER_HOST=$BEADS_DOLT_HOST")
             # Pass network mode and allowlist for WRIX_NETWORK=limit filtering
             ENV_ARGS+=(-e "WRIX_NETWORK=$WRIX_NETWORK")
             [ "$_vpn_conflict" = true ] && ENV_ARGS+=(-e "WRIX_WAIT_FOR_ROUTE=1")
