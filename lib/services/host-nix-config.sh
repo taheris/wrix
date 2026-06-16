@@ -145,13 +145,16 @@ wrix_host_nix_config_main() {
   local service_bin="${WRIX_SERVICE_BIN:-wrix}"
   local hook_bin="${WRIX_CACHE_HOOK_BIN:-wrix-cache-hook}"
   local publish_bin="${WRIX_CACHE_PUBLISH_BIN:-wrix-cache-publish}"
+  local require_trusted="${WRIX_NIX_CACHE_REQUIRE_TRUSTED:-1}"
   local endpoints workspace_hash state_root cache_root public_key manifest_path hook_build_root hook_store hook_path before_config after_config owner_uid owner_gid
 
   command -v "${WRIX_NIX_BIN:-nix}" >/dev/null 2>&1 || { wrix_host_fail "nix is not on PATH"; return 1; }
   command -v "${WRIX_NIX_STORE_BIN:-nix-store}" >/dev/null 2>&1 || { wrix_host_fail "nix-store is not on PATH"; return 1; }
 
   before_config="$(wrix_host_config_snapshot)" || return 1
-  wrix_host_reject_conflicting_hook "$before_config" || return 1
+  if [[ "$require_trusted" != "0" ]]; then
+    wrix_host_reject_conflicting_hook "$before_config" || return 1
+  fi
 
   endpoints="$($service_bin service endpoints)" || return 1
   workspace_hash="$(wrix_host_json_string "$endpoints" "workspace_hash")"
@@ -176,12 +179,14 @@ wrix_host_nix_config_main() {
   wrix_host_append_nix_config "$cache_root" "$public_key" "$hook_path"
   after_config="$(wrix_host_config_snapshot)" || return 1
 
-  wrix_host_assert_contains "project cache substituter" "$after_config" "file://$cache_root" || return 1
-  wrix_host_assert_contains "project cache public key" "$after_config" "$public_key" || return 1
-  wrix_host_assert_line_equals "builders-use-substitutes" "$after_config" "builders-use-substitutes" "true" || return 1
-  wrix_host_assert_line_equals "post-build-hook" "$after_config" "post-build-hook" "$hook_path" || return 1
+  if [[ "$require_trusted" != "0" ]]; then
+    wrix_host_assert_contains "project cache substituter" "$after_config" "file://$cache_root" || return 1
+    wrix_host_assert_contains "project cache public key" "$after_config" "$public_key" || return 1
+    wrix_host_assert_line_equals "builders-use-substitutes" "$after_config" "builders-use-substitutes" "true" || return 1
+    wrix_host_assert_line_equals "post-build-hook" "$after_config" "post-build-hook" "$hook_path" || return 1
+  fi
 
-  if [[ "${WRIX_NIX_CACHE_REMINDER:-1}" != "0" && -f "$manifest_path" ]] && ! grep -q '"drv_path"\|"drvPath"' "$manifest_path"; then
+  if [[ "${WRIX_NIX_CACHE_REMINDER:-1}" != "0" ]] && { [[ ! -f "$manifest_path" ]] || ! grep -q '"drv_path"\|"drvPath"' "$manifest_path"; }; then
     printf 'wrix: project cache publish manifest is empty; run wrix service cache publish to refresh it.\n' >&2
   fi
 

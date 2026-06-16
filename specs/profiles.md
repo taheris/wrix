@@ -666,7 +666,7 @@ dests live under `/home/wrix/` inside the container, not under
 - `wrix.mkDevShell {}` without `profile` errors at evaluation
   [system](bash tests/profiles/mkdevshell.sh test_profile_required)
 - `wrix.mkDevShell { profile = ...; }` starts the workspace service container by default, exposes the project cache `file://` substituter/trusted key/post-build hook to host Nix, uses the `nixCache` publish/warm schema from `services.md`, and prints a suppressible reminder when the publish manifest is missing or stale; `nixCache = false` suppresses only the cache service, not beads
-  [system?](bash tests/services/host-nix-config.sh test_mkdevshell_nix_cache)
+  [system](bash tests/services/host-nix-config.sh test_mkdevshell_nix_cache)
 - The materialized `wrix.prekHooks` derivation contains exactly five executable files (one per stage: `pre-commit`, `pre-push`, `prepare-commit-msg`, `post-checkout`, `post-merge`) and no other paths
   [system](bash tests/profiles/prek-hooks-bundle.sh test_bundle_contents)
 - Each materialized shim's content matches `prek hook-impl --hook-type=<stage>` for its stage

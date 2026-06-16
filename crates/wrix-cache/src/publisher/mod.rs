@@ -258,25 +258,29 @@ enum RootSet {
 }
 
 fn discover_roots(root_set: RootSet) -> io::Result<Vec<Root>> {
+    let config = RootConfig::from_env(root_set);
     if let Some(path) = env::var_os("WRIX_CACHE_ROOTS_FILE") {
         let roots = roots_from_file(Path::new(&path))?;
-        return Ok(filter_roots(roots, root_set));
+        return Ok(filter_roots(roots, &config));
     }
     let system = current_system()?;
     let mut installables = Vec::new();
-    installables.extend(attr_installables("packages", &system)?);
-    match root_set {
-        RootSet::Publish => installables.extend(attr_installables("checks", &system)?),
-        RootSet::Warm { checks: true } => {
-            installables.extend(attr_installables("checks", &system)?);
-        }
-        RootSet::Warm { checks: false } => {}
+    if config.packages {
+        installables.extend(attr_installables("packages", &system)?);
     }
-    if let Some(shell) = selected_dev_shell() {
+    if config.checks {
+        installables.extend(attr_installables("checks", &system)?);
+    }
+    if config.dev_shell
+        && let Some(shell) = selected_dev_shell()
+    {
         let installable = format!(".#devShells.{system}.{shell}");
         if drv_path(&installable).is_ok() {
             installables.push((format!("devShells.{system}.{shell}"), installable));
         }
+    }
+    for (index, installable) in env_lines(config.include_env).into_iter().enumerate() {
+        installables.push((format!("include.{index}"), installable));
     }
     let mut roots = Vec::new();
     for (name, installable) in installables {
@@ -288,17 +292,81 @@ fn discover_roots(root_set: RootSet) -> io::Result<Vec<Root>> {
             out_paths: Vec::new(),
         });
     }
-    Ok(roots)
+    Ok(filter_roots(roots, &config))
 }
 
-fn filter_roots(roots: Vec<Root>, root_set: RootSet) -> Vec<Root> {
+#[derive(Debug)]
+struct RootConfig {
+    packages: bool,
+    checks: bool,
+    dev_shell: bool,
+    include_env: &'static str,
+    exclude_env: &'static str,
+}
+
+impl RootConfig {
+    fn from_env(root_set: RootSet) -> Self {
+        match root_set {
+            RootSet::Publish => Self {
+                packages: env_bool("WRIX_CACHE_PUBLISH_PACKAGES", true),
+                checks: env_bool("WRIX_CACHE_PUBLISH_CHECKS", true),
+                dev_shell: env_bool("WRIX_CACHE_PUBLISH_DEVSHELL", true),
+                include_env: "WRIX_CACHE_PUBLISH_INCLUDE",
+                exclude_env: "WRIX_CACHE_PUBLISH_EXCLUDE",
+            },
+            RootSet::Warm { checks } => Self {
+                packages: env_bool("WRIX_CACHE_WARM_PACKAGES", true),
+                checks: checks || env_bool("WRIX_CACHE_WARM_CHECKS", false),
+                dev_shell: env_bool("WRIX_CACHE_WARM_DEVSHELL", true),
+                include_env: "WRIX_CACHE_WARM_INCLUDE",
+                exclude_env: "WRIX_CACHE_WARM_EXCLUDE",
+            },
+        }
+    }
+}
+
+fn filter_roots(roots: Vec<Root>, config: &RootConfig) -> Vec<Root> {
+    let excludes: BTreeSet<String> = env_lines(config.exclude_env).into_iter().collect();
     roots
         .into_iter()
-        .filter(|root| match root_set {
-            RootSet::Publish | RootSet::Warm { checks: true } => true,
-            RootSet::Warm { checks: false } => !root.name.starts_with("checks."),
-        })
+        .filter(|root| root_category_enabled(root, config))
+        .filter(|root| !excludes.contains(&root.name) && !excludes.contains(&root.installable))
         .collect()
+}
+
+fn root_category_enabled(root: &Root, config: &RootConfig) -> bool {
+    if root.name.starts_with("packages.") {
+        return config.packages;
+    }
+    if root.name.starts_with("checks.") {
+        return config.checks;
+    }
+    if root.name.starts_with("devShells.") {
+        return config.dev_shell;
+    }
+    true
+}
+
+fn env_bool(name: &str, default: bool) -> bool {
+    match env::var(name) {
+        Ok(value) if matches!(value.as_str(), "0" | "false" | "no") => false,
+        Ok(value) if matches!(value.as_str(), "1" | "true" | "yes") => true,
+        Ok(_) | Err(_) => default,
+    }
+}
+
+fn env_lines(name: &str) -> Vec<String> {
+    env::var(name).map_or_else(
+        |_| Vec::new(),
+        |value| {
+            value
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(str::to_owned)
+                .collect()
+        },
+    )
 }
 
 fn roots_from_file(path: &Path) -> io::Result<Vec<Root>> {

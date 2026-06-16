@@ -8,6 +8,17 @@
 }:
 
 let
+  inherit (builtins)
+    concatStringsSep
+    elemAt
+    fromJSON
+    hasAttr
+    isAttrs
+    isString
+    match
+    readFile
+    ;
+
   sandbox = import ./sandbox {
     inherit
       pkgs
@@ -30,9 +41,37 @@ let
 
   prekHooksBundle = import ./prek/bundle.nix { inherit pkgs; };
   prekWrappers = import ./prek/wrappers.nix { inherit pkgs; };
-  hostNixConfig = pkgs.writeText "wrix-host-nix-config.sh" (
-    builtins.readFile ./services/host-nix-config.sh
-  );
+  hostNixConfig = pkgs.writeText "wrix-host-nix-config.sh" (readFile ./services/host-nix-config.sh);
+
+  boolEnv = value: if value then "1" else "0";
+  listEnv = values: concatStringsSep "\n" (map toString values);
+  scaledValue =
+    name: scales: value:
+    let
+      text = if isString value then value else toString value;
+      parsed = match "([0-9]+)([A-Za-z]*)" text;
+      suffix = elemAt parsed 1;
+    in
+    if parsed == null || !(hasAttr suffix scales) then
+      throw "invalid nixCache.${name} value: ${text}"
+    else
+      toString ((fromJSON (elemAt parsed 0)) * scales.${suffix});
+  sizeBytes = scaledValue "warnSize" {
+    "" = 1;
+    K = 1024;
+    M = 1024 * 1024;
+    G = 1024 * 1024 * 1024;
+    T = 1024 * 1024 * 1024 * 1024;
+  };
+  durationSeconds =
+    name:
+    scaledValue name {
+      "" = 1;
+      s = 1;
+      m = 60;
+      h = 60 * 60;
+      d = 24 * 60 * 60;
+    };
 
 in
 {
@@ -119,7 +158,60 @@ in
               unset _wrix_hooks_target _wrix_hooks_current
             fi
           '';
-      nixCacheEnabled = if builtins.isAttrs nixCache then nixCache.enable or true else nixCache != false;
+      defaultNixCache = {
+        enable = true;
+        requireTrustedNix = true;
+        publish = {
+          packages = true;
+          checks = true;
+          devShell = true;
+          includeRoots = [ ];
+          excludeRoots = [ ];
+        };
+        warm = {
+          packages = true;
+          checks = false;
+          devShell = true;
+          includeRoots = [ ];
+          excludeRoots = [ ];
+        };
+        warnSize = "50G";
+        pendingTtl = "7d";
+        pruneInterval = "24h";
+      };
+      nixCacheConfig =
+        if nixCache == false then
+          defaultNixCache // { enable = false; }
+        else if isAttrs nixCache then
+          defaultNixCache
+          // nixCache
+          // {
+            publish = defaultNixCache.publish // (nixCache.publish or { });
+            warm = defaultNixCache.warm // (nixCache.warm or { });
+          }
+        else
+          defaultNixCache;
+      nixCacheEnabled = nixCacheConfig.enable;
+      cacheEnv =
+        if !nixCacheEnabled then
+          { }
+        else
+          {
+            WRIX_NIX_CACHE_REQUIRE_TRUSTED = boolEnv nixCacheConfig.requireTrustedNix;
+            WRIX_CACHE_PUBLISH_PACKAGES = boolEnv nixCacheConfig.publish.packages;
+            WRIX_CACHE_PUBLISH_CHECKS = boolEnv nixCacheConfig.publish.checks;
+            WRIX_CACHE_PUBLISH_DEVSHELL = boolEnv nixCacheConfig.publish.devShell;
+            WRIX_CACHE_PUBLISH_INCLUDE = listEnv nixCacheConfig.publish.includeRoots;
+            WRIX_CACHE_PUBLISH_EXCLUDE = listEnv nixCacheConfig.publish.excludeRoots;
+            WRIX_CACHE_WARM_PACKAGES = boolEnv nixCacheConfig.warm.packages;
+            WRIX_CACHE_WARM_CHECKS = boolEnv nixCacheConfig.warm.checks;
+            WRIX_CACHE_WARM_DEVSHELL = boolEnv nixCacheConfig.warm.devShell;
+            WRIX_CACHE_WARM_INCLUDE = listEnv nixCacheConfig.warm.includeRoots;
+            WRIX_CACHE_WARM_EXCLUDE = listEnv nixCacheConfig.warm.excludeRoots;
+            WRIX_CACHE_SOFT_LIMIT_BYTES = sizeBytes nixCacheConfig.warnSize;
+            WRIX_CACHE_PENDING_RETENTION_SECS = durationSeconds "pendingTtl" nixCacheConfig.pendingTtl;
+            WRIX_CACHE_PRUNE_INTERVAL_SECS = durationSeconds "pruneInterval" nixCacheConfig.pruneInterval;
+          };
       serviceHook =
         if !nixCacheEnabled then
           ''
@@ -153,7 +245,7 @@ in
           prekWrappers.prePushChecks
           prekWrappers.skipIfMissing
         ];
-      env = profile.env // env;
+      env = profile.env // cacheEnv // env;
       shellHook = ''
         ${serviceHook}
 

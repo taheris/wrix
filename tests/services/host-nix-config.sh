@@ -22,6 +22,22 @@ build_wrix() {
   printf '%s\n' "$REPO_ROOT/target/debug/wrix"
 }
 
+resolve_system() {
+  nix eval --raw --impure --no-warn-dirty --expr 'builtins.currentSystem'
+}
+
+eval_expr_json() {
+  local expr="$1"
+  local system
+  system="$(resolve_system)"
+  nix eval --json --impure --no-warn-dirty --expr "
+    let
+      flake = builtins.getFlake \"git+file://$REPO_ROOT\";
+      lib = flake.legacyPackages.\"$system\".lib;
+    in $expr
+  "
+}
+
 write_fake_runtime() {
   local runtime="$1"
   cat >"$runtime" <<'EOF'
@@ -168,6 +184,16 @@ assert_contains() {
   fi
 }
 
+assert_not_contains() {
+  local label="$1"
+  local haystack="$2"
+  local needle="$3"
+  if [[ "$haystack" == *"$needle"* ]]; then
+    fail "$label unexpectedly contains '$needle'"
+    return 1
+  fi
+}
+
 json_get() {
   local file="$1"
   local path="$2"
@@ -180,6 +206,95 @@ for part in sys.argv[2].split('.'):
     value = value[part]
 print(value)
 PY
+}
+
+test_mkdevshell_nix_cache() {
+  if ! command -v nix >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
+    exit 77
+  fi
+  local result result_file default_hook disabled_hook custom_env
+  if ! result="$(eval_expr_json '
+    let
+      defaultShell = lib.mkDevShell { profile = lib.profiles.base; };
+      disabledShell = lib.mkDevShell { profile = lib.profiles.base; nixCache = false; };
+      customShell = lib.mkDevShell {
+        profile = lib.profiles.base;
+        nixCache = {
+          enable = true;
+          requireTrustedNix = false;
+          publish = {
+            packages = false;
+            checks = false;
+            devShell = false;
+            includeRoots = [ ".#packages.custom" ".#checks.extra" ];
+            excludeRoots = [ ".#packages.skip" ];
+          };
+          warm = {
+            packages = false;
+            checks = true;
+            devShell = false;
+            includeRoots = [ ".#devShells.custom" ];
+            excludeRoots = [ ".#checks.skip" ];
+          };
+          warnSize = "1G";
+          pendingTtl = "2d";
+          pruneInterval = "3h";
+        };
+      };
+    in {
+      defaultHook = defaultShell.shellHook;
+      disabledHook = disabledShell.shellHook;
+      customEnv = {
+        inherit (customShell)
+          WRIX_NIX_CACHE_REQUIRE_TRUSTED
+          WRIX_CACHE_PUBLISH_PACKAGES
+          WRIX_CACHE_PUBLISH_CHECKS
+          WRIX_CACHE_PUBLISH_DEVSHELL
+          WRIX_CACHE_PUBLISH_INCLUDE
+          WRIX_CACHE_PUBLISH_EXCLUDE
+          WRIX_CACHE_WARM_PACKAGES
+          WRIX_CACHE_WARM_CHECKS
+          WRIX_CACHE_WARM_DEVSHELL
+          WRIX_CACHE_WARM_INCLUDE
+          WRIX_CACHE_WARM_EXCLUDE
+          WRIX_CACHE_SOFT_LIMIT_BYTES
+          WRIX_CACHE_PENDING_RETENTION_SECS
+          WRIX_CACHE_PRUNE_INTERVAL_SECS
+          ;
+      };
+    }
+  ')"; then
+    fail "mkDevShell nixCache evaluation failed"
+    return 1
+  fi
+  result_file="$TEST_TMP/mkdevshell.json"
+  printf '%s\n' "$result" >"$result_file"
+  default_hook="$(json_get "$result_file" defaultHook)"
+  disabled_hook="$(json_get "$result_file" disabledHook)"
+  custom_env="$(json_get "$result_file" customEnv.WRIX_CACHE_PUBLISH_INCLUDE)"
+
+  assert_contains "default mkDevShell hook" "$default_hook" "service start" || return 1
+  assert_contains "default mkDevShell hook" "$default_hook" "WRIX_HOST_NIX_CONFIG_PRINT=1" || return 1
+  assert_contains "default mkDevShell hook" "$default_hook" "export NIX_CONFIG" || return 1
+  assert_not_contains "default mkDevShell hook" "$default_hook" "service start --no-cache" || return 1
+  assert_contains "disabled mkDevShell hook" "$disabled_hook" '.beads/dolt' || return 1
+  assert_contains "disabled mkDevShell hook" "$disabled_hook" "service start --no-cache" || return 1
+  assert_not_contains "disabled mkDevShell hook" "$disabled_hook" "WRIX_HOST_NIX_CONFIG_PRINT=1" || return 1
+  assert_contains "custom publish include" "$custom_env" ".#packages.custom" || return 1
+  assert_contains "custom publish include" "$custom_env" ".#checks.extra" || return 1
+  [[ "$(json_get "$result_file" customEnv.WRIX_NIX_CACHE_REQUIRE_TRUSTED)" == "0" ]] || { fail "requireTrustedNix did not map to 0"; return 1; }
+  [[ "$(json_get "$result_file" customEnv.WRIX_CACHE_PUBLISH_PACKAGES)" == "0" ]] || { fail "publish.packages did not map to 0"; return 1; }
+  [[ "$(json_get "$result_file" customEnv.WRIX_CACHE_PUBLISH_CHECKS)" == "0" ]] || { fail "publish.checks did not map to 0"; return 1; }
+  [[ "$(json_get "$result_file" customEnv.WRIX_CACHE_PUBLISH_DEVSHELL)" == "0" ]] || { fail "publish.devShell did not map to 0"; return 1; }
+  [[ "$(json_get "$result_file" customEnv.WRIX_CACHE_PUBLISH_EXCLUDE)" == ".#packages.skip" ]] || { fail "publish.excludeRoots did not map"; return 1; }
+  [[ "$(json_get "$result_file" customEnv.WRIX_CACHE_WARM_PACKAGES)" == "0" ]] || { fail "warm.packages did not map to 0"; return 1; }
+  [[ "$(json_get "$result_file" customEnv.WRIX_CACHE_WARM_CHECKS)" == "1" ]] || { fail "warm.checks did not map to 1"; return 1; }
+  [[ "$(json_get "$result_file" customEnv.WRIX_CACHE_WARM_DEVSHELL)" == "0" ]] || { fail "warm.devShell did not map to 0"; return 1; }
+  [[ "$(json_get "$result_file" customEnv.WRIX_CACHE_WARM_INCLUDE)" == ".#devShells.custom" ]] || { fail "warm.includeRoots did not map"; return 1; }
+  [[ "$(json_get "$result_file" customEnv.WRIX_CACHE_WARM_EXCLUDE)" == ".#checks.skip" ]] || { fail "warm.excludeRoots did not map"; return 1; }
+  [[ "$(json_get "$result_file" customEnv.WRIX_CACHE_SOFT_LIMIT_BYTES)" == "1073741824" ]] || { fail "warnSize did not map to bytes"; return 1; }
+  [[ "$(json_get "$result_file" customEnv.WRIX_CACHE_PENDING_RETENTION_SECS)" == "172800" ]] || { fail "pendingTtl did not map to seconds"; return 1; }
+  [[ "$(json_get "$result_file" customEnv.WRIX_CACHE_PRUNE_INTERVAL_SECS)" == "10800" ]] || { fail "pruneInterval did not map to seconds"; return 1; }
 }
 
 test_host_nix_configures_cache_and_hook() {
@@ -278,6 +393,7 @@ test_host_nix_config_rejects_non_wrix_hook() {
 }
 
 ALL_TESTS=(
+  test_mkdevshell_nix_cache
   test_host_nix_configures_cache_and_hook
   test_host_nix_config_fails_when_trusted_setting_ignored
   test_host_nix_config_rejects_non_wrix_hook
