@@ -102,7 +102,7 @@ _:
         set -euo pipefail
 
         case "''${1:-}" in
-          run|spawn)
+          --profile-config|--profile-config=*|run|spawn)
             exec ${wrixSandboxLauncher}/bin/wrix "$@"
             ;;
           *)

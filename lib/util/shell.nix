@@ -45,8 +45,12 @@ _:
     else
       _wrix_skip_load=0
       _wrix_desired_digest=""
-      if [[ -n "''${IMAGE_DIGEST_PATH:-}" && -s "$IMAGE_DIGEST_PATH" ]]; then
-        _wrix_desired_digest=$(cat "$IMAGE_DIGEST_PATH")
+      if [[ -n "''${IMAGE_DIGEST_PATH:-}" ]]; then
+        if [[ "$IMAGE_DIGEST_PATH" == sha256:* ]]; then
+          _wrix_desired_digest="$IMAGE_DIGEST_PATH"
+        elif [[ -s "$IMAGE_DIGEST_PATH" ]]; then
+          _wrix_desired_digest=$(cat "$IMAGE_DIGEST_PATH")
+        fi
       fi
       if [[ -n "$_wrix_desired_digest" ]]; then
         if podman image inspect --format '{{.Id}}' "$_wrix_desired_digest" >/dev/null 2>&1; then

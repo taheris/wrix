@@ -83,14 +83,12 @@ PACKAGE_PATH=$(nix build "${REPO_ROOT}#sandbox-mcp" --print-out-paths 2>/dev/nul
     exit 1
 }
 
-IMAGE_STREAM=$(grep -oP "WRIX_DEFAULT_IMAGE_SOURCE=[^']*'\K[^']+" "${PACKAGE_PATH}/bin/wrix" | head -1) || {
-    log_error "Could not find WRIX_DEFAULT_IMAGE_SOURCE in wrapper script"
+PROFILE_CONFIG=$(grep -oE -- '--profile-config[[:space:]]+[^[:space:]]+' "${PACKAGE_PATH}/bin/wrix" | awk '{print $2}' | head -1) || {
+    log_error "Could not find --profile-config in wrapper script"
     exit 1
 }
-WRAPPER_IMAGE_REF=$(grep -oP "WRIX_DEFAULT_IMAGE_REF=[^']*'\K[^']+" "${PACKAGE_PATH}/bin/wrix" | head -1) || {
-    log_error "Could not find WRIX_DEFAULT_IMAGE_REF in wrapper script"
-    exit 1
-}
+IMAGE_STREAM=$(jq -r '.image.source' "${PROFILE_CONFIG}")
+WRAPPER_IMAGE_REF=$(jq -r '.image.ref' "${PROFILE_CONFIG}")
 if [[ ! -x "${IMAGE_STREAM}" ]]; then
     log_error "Built image stream not found at ${IMAGE_STREAM}"
     exit 1

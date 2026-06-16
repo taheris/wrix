@@ -47,15 +47,16 @@ if ! PACKAGE_PATH=$(nix build --no-link --print-out-paths --no-warn-dirty .#sand
   echo "FAIL: nix build .#sandbox-rust-mcp" >&2
   exit 1
 fi
-IMAGE_STREAM=$(grep -oP "WRIX_DEFAULT_IMAGE_SOURCE=[^']*'\K[^']+" "$PACKAGE_PATH/bin/wrix" | head -1)
-WRAPPER_IMAGE_REF=$(grep -oP "WRIX_DEFAULT_IMAGE_REF=[^']*'\K[^']+" "$PACKAGE_PATH/bin/wrix" | head -1)
+PROFILE_CONFIG=$(grep -oE -- '--profile-config[[:space:]]+[^[:space:]]+' "$PACKAGE_PATH/bin/wrix" | awk '{print $2}' | head -1)
+IMAGE_STREAM=$(jq -r '.image.source' "$PROFILE_CONFIG")
+WRAPPER_IMAGE_REF=$(jq -r '.image.ref' "$PROFILE_CONFIG")
 
 [[ -n "$IMAGE_STREAM" && -e "$IMAGE_STREAM" ]] || {
-  echo "FAIL: could not extract IMAGE_SOURCE from $PACKAGE_PATH/bin/wrix" >&2
+  echo "FAIL: could not extract image.source from $PROFILE_CONFIG" >&2
   exit 1
 }
 [[ -n "$WRAPPER_IMAGE_REF" ]] || {
-  echo "FAIL: could not extract IMAGE_REF from $PACKAGE_PATH/bin/wrix" >&2
+  echo "FAIL: could not extract image.ref from $PROFILE_CONFIG" >&2
   exit 1
 }
 

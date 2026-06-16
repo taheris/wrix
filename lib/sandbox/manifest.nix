@@ -20,10 +20,15 @@ let
   # sandbox default.nix).
   refPrefix = if pkgs.stdenv.isDarwin then "" else "localhost/";
 
-  mkEntry = image: {
-    ref = "${refPrefix}${image.imageName}:${imageTagLib.mkImageTag image}";
-    source = "${image}";
-  };
+  mkEntry =
+    image:
+    {
+      ref = "${refPrefix}${image.imageName}:${imageTagLib.mkImageTag image}";
+      source = "${image}";
+    }
+    // pkgs.lib.optionalAttrs (image ? profileConfig) {
+      profile_config = "${image.profileConfig}";
+    };
 in
 {
   mkProfileImages =

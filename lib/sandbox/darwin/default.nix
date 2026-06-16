@@ -32,10 +32,7 @@ in
   mkSandbox =
     {
       profile,
-      cpus ? null,
-      memoryMb ? 4096,
       deployKey ? null,
-      networkAllowlist ? "",
       ...
     }:
     let
@@ -55,6 +52,52 @@ in
             # XDG-compliant directories for staging and image cache
             XDG_CACHE_HOME="''${XDG_CACHE_HOME:-$HOME/.cache}"
             WRIX_CACHE="$XDG_CACHE_HOME/wrix"
+
+            PROFILE_CONFIG=""
+            while [[ $# -gt 0 ]]; do
+              case "$1" in
+                --profile-config)
+                  [[ $# -lt 2 ]] && { echo "Error: --profile-config requires <file>" >&2; exit 2; }
+                  PROFILE_CONFIG="$2"; shift 2 ;;
+                --profile-config=*) PROFILE_CONFIG="''${1#--profile-config=}"; shift ;;
+                --) shift; break ;;
+                *) break ;;
+              esac
+            done
+            if [[ -z "$PROFILE_CONFIG" ]]; then
+              echo "Error: wrix requires --profile-config <Nix store ProfileConfig JSON>" >&2
+              exit 2
+            fi
+            if [[ ! -f "$PROFILE_CONFIG" ]]; then
+              echo "Error: profile config not found: $PROFILE_CONFIG" >&2
+              exit 1
+            fi
+            if ! PROFILE_SCHEMA=$(${pkgs.jq}/bin/jq -er '.schema' "$PROFILE_CONFIG"); then
+              echo "Error: invalid ProfileConfig JSON: $PROFILE_CONFIG" >&2
+              exit 1
+            fi
+            if [[ "$PROFILE_SCHEMA" != "1" ]]; then
+              echo "Error: unsupported ProfileConfig schema: $PROFILE_SCHEMA" >&2
+              exit 1
+            fi
+            if ! PROFILE_AGENT=$(${pkgs.jq}/bin/jq -er '.agent.kind | select(. == "direct" or . == "claude" or . == "pi")' "$PROFILE_CONFIG"); then
+              echo "Error: ProfileConfig agent.kind must be direct, claude, or pi" >&2
+              exit 1
+            fi
+            if ! PROFILE_IMAGE_REF=$(${pkgs.jq}/bin/jq -er '.image.ref | strings | select(length > 0)' "$PROFILE_CONFIG"); then
+              echo "Error: ProfileConfig image.ref must be a non-empty string" >&2
+              exit 1
+            fi
+            if ! PROFILE_IMAGE_SOURCE=$(${pkgs.jq}/bin/jq -er '.image.source | strings | select(length > 0)' "$PROFILE_CONFIG"); then
+              echo "Error: ProfileConfig image.source must be a non-empty string" >&2
+              exit 1
+            fi
+            PROFILE_IMAGE_DIGEST=$(${pkgs.jq}/bin/jq -r '.image.digest // ""' "$PROFILE_CONFIG")
+            PROFILE_NETWORK_ALLOWLIST=$(${pkgs.jq}/bin/jq -r '(.profile.network_allowlist // []) | join(",")' "$PROFILE_CONFIG")
+            PROFILE_CPUS=$(${pkgs.jq}/bin/jq -r '.resources.cpus // ""' "$PROFILE_CONFIG")
+            PROFILE_MEMORY_MB=$(${pkgs.jq}/bin/jq -r '.resources.memory_mb // 4096' "$PROFILE_CONFIG")
+            PROFILE_PIDS_LIMIT=$(${pkgs.jq}/bin/jq -r '.resources.pids_limit // 4096' "$PROFILE_CONFIG")
+            WRIX_AGENT="$PROFILE_AGENT"
 
             # Subcommand dispatch: `wrix run` (interactive, TTY) vs
             # `wrix spawn` (stdio, JSON spawn-config).
@@ -93,6 +136,10 @@ in
                 echo "Error: spawn-config file not found: $SPAWN_CONFIG" >&2
                 exit 1
               fi
+              if ${pkgs.jq}/bin/jq -e 'has("agent") or has("agent_kind") or has("wrix_agent")' "$SPAWN_CONFIG" >/dev/null; then
+                echo "Error: SpawnConfig cannot change the ProfileConfig agent" >&2
+                exit 1
+              fi
               # Stable JSON shape (the loom repo SpawnConfig): image_ref,
               # image_source, workspace, env, initial_prompt, agent_args, repin.
               PROJECT_DIR=$(${pkgs.jq}/bin/jq -r '.workspace' "$SPAWN_CONFIG")
@@ -101,7 +148,7 @@ in
               # the orchestrator provides only image_ref.
               IMAGE_OVERRIDE_REF=$(${pkgs.jq}/bin/jq -r '.image_ref // ""' "$SPAWN_CONFIG")
               IMAGE_OVERRIDE_SOURCE=$(${pkgs.jq}/bin/jq -r '.image_source // ""' "$SPAWN_CONFIG")
-              IMAGE_OVERRIDE_DIGEST=$(${pkgs.jq}/bin/jq -r '.image_digest_path // ""' "$SPAWN_CONFIG")
+              IMAGE_OVERRIDE_DIGEST=$(${pkgs.jq}/bin/jq -r '.image_digest // .image_digest_path // ""' "$SPAWN_CONFIG")
               while IFS= read -r pair; do
                 [ -z "$pair" ] && continue
                 SPAWN_ENV+=("$pair")
@@ -133,6 +180,8 @@ in
             if [ "''${WRIX_DRY_RUN:-}" = "1" ]; then
               printf 'SUBCOMMAND=%s\n' "$SUBCOMMAND"
               printf 'STDIO=%s\n' "$USE_STDIO"
+              printf 'PROFILE_CONFIG=%s\n' "$PROFILE_CONFIG"
+              printf 'PROFILE_AGENT=%s\n' "$PROFILE_AGENT"
               printf 'WORKSPACE=%s\n' "$PROJECT_DIR"
               printf 'IMAGE_OVERRIDE_REF=%s\n' "$IMAGE_OVERRIDE_REF"
               printf 'IMAGE_OVERRIDE_SOURCE=%s\n' "$IMAGE_OVERRIDE_SOURCE"
@@ -163,26 +212,19 @@ in
               ${fixVmnetRoute}
             fi
 
-            # Image is supplied to the launcher at runtime, not baked in. For
-            # `wrix run`, $WRIX_DEFAULT_IMAGE_REF and $WRIX_DEFAULT_IMAGE_SOURCE
-            # are set by the per-profile makeWrapper composition (or by an
-            # orchestrator like loom). For `wrix spawn`, the SpawnConfig
-            # carries `image_ref` and `image_source`.
+            # Image defaults come from immutable ProfileConfig. SpawnConfig may
+            # override image transport fields for orchestrators, but not the agent.
             IMAGE_REF=""
             IMAGE_SOURCE=""
             IMAGE_DIGEST_PATH=""
             if [ "$SUBCOMMAND" = "run" ]; then
-              if [ -z "''${WRIX_DEFAULT_IMAGE_REF:-}" ] || [ -z "''${WRIX_DEFAULT_IMAGE_SOURCE:-}" ]; then
-                echo "Error: wrix run requires WRIX_DEFAULT_IMAGE_REF and WRIX_DEFAULT_IMAGE_SOURCE" >&2
-                exit 1
-              fi
-              IMAGE_REF="$WRIX_DEFAULT_IMAGE_REF"
-              IMAGE_SOURCE="$WRIX_DEFAULT_IMAGE_SOURCE"
-              IMAGE_DIGEST_PATH="''${WRIX_DEFAULT_IMAGE_DIGEST:-}"
+              IMAGE_REF="$PROFILE_IMAGE_REF"
+              IMAGE_SOURCE="$PROFILE_IMAGE_SOURCE"
+              IMAGE_DIGEST_PATH="$PROFILE_IMAGE_DIGEST"
             else
-              IMAGE_REF="$IMAGE_OVERRIDE_REF"
-              IMAGE_SOURCE="$IMAGE_OVERRIDE_SOURCE"
-              IMAGE_DIGEST_PATH="$IMAGE_OVERRIDE_DIGEST"
+              IMAGE_REF="''${IMAGE_OVERRIDE_REF:-$PROFILE_IMAGE_REF}"
+              IMAGE_SOURCE="''${IMAGE_OVERRIDE_SOURCE:-$PROFILE_IMAGE_SOURCE}"
+              IMAGE_DIGEST_PATH="''${IMAGE_OVERRIDE_DIGEST:-$PROFILE_IMAGE_DIGEST}"
             fi
 
             PROFILE_IMAGE="$IMAGE_REF"
@@ -202,8 +244,12 @@ in
                 # when IMAGE_DIGEST_PATH is empty (legacy spawn callers).
                 _wrix_skip_load=0
                 _wrix_desired_digest=""
-                if [ -n "''${IMAGE_DIGEST_PATH:-}" ] && [ -s "$IMAGE_DIGEST_PATH" ]; then
-                  _wrix_desired_digest=$(cat "$IMAGE_DIGEST_PATH")
+                if [ -n "''${IMAGE_DIGEST_PATH:-}" ]; then
+                  if [[ "$IMAGE_DIGEST_PATH" == sha256:* ]]; then
+                    _wrix_desired_digest="$IMAGE_DIGEST_PATH"
+                  elif [ -s "$IMAGE_DIGEST_PATH" ]; then
+                    _wrix_desired_digest=$(cat "$IMAGE_DIGEST_PATH")
+                  fi
                 fi
 
                 if [ -n "$_wrix_desired_digest" ]; then
@@ -439,7 +485,7 @@ in
             # the auth file's parent at a staging path and expose only auth.json
             # to Pi via WRIX_PI_AUTH_JSON.
             PI_AUTH_JSON_MOUNT=""
-            if [ "''${WRIX_AGENT:-direct}" = "pi" ]; then
+            if [ "$WRIX_AGENT" = "pi" ]; then
               PI_AUTH_FILE="''${WRIX_PI_AUTH_FILE:-$HOME/.pi/agent/auth.json}"
               if [ -n "''${WRIX_PI_AUTH_FILE:-}" ]; then
                 if [ ! -f "$PI_AUTH_FILE" ]; then
@@ -538,29 +584,24 @@ in
             # Pass network mode and allowlist for WRIX_NETWORK=limit filtering
             ENV_ARGS+=(-e "WRIX_NETWORK=$WRIX_NETWORK")
             [ "$_vpn_conflict" = true ] && ENV_ARGS+=(-e "WRIX_WAIT_FOR_ROUTE=1")
-            ENV_ARGS+=(-e "WRIX_NETWORK_ALLOWLIST=${networkAllowlist}")
+            ENV_ARGS+=(-e "WRIX_NETWORK_ALLOWLIST=$PROFILE_NETWORK_ALLOWLIST")
             [ -n "$PI_AUTH_JSON_MOUNT" ] && ENV_ARGS+=(-e "WRIX_PI_AUTH_JSON=$PI_AUTH_JSON_MOUNT")
 
             # Generate unique container name
             CONTAINER_NAME="wrix-$$"
 
-            # Calculate CPUs (use override or half of available, minimum 2)
-            ${
-              if cpus != null then
-                ''
-                  CPUS=${toString cpus}
-                ''
-              else
-                ''
-                  CPUS=$(($(sysctl -n hw.ncpu) / 2))
-                  [ "$CPUS" -lt 2 ] && CPUS=2
-                ''
-            }
+            # Calculate CPUs (use ProfileConfig override or half of available, minimum 2)
+            if [ -n "$PROFILE_CPUS" ]; then
+              CPUS="$PROFILE_CPUS"
+            else
+              CPUS=$(($(sysctl -n hw.ncpu) / 2))
+              [ "$CPUS" -lt 2 ] && CPUS=2
+            fi
 
             # Ensure .claude directory exists on host for session persistence
             mkdir -p "$PROJECT_DIR/.claude"
 
-            verbose "Starting container (cpus=$CPUS, memory=${toString memoryMb}M)..."
+            verbose "Starting container (cpus=$CPUS, memory=''${PROFILE_MEMORY_MB}M)..."
 
             # Run container
             # Note: -w / because WorkingDir=/workspace fails before mounts are ready
@@ -585,7 +626,7 @@ in
               "''${TTY_ARGS[@]}" \
               -w / \
               -c "$CPUS" \
-              -m ${toString memoryMb}M \
+              -m "''${PROFILE_MEMORY_MB}M" \
               --network default \
               --dns 100.100.100.100 \
               --dns 1.1.1.1 \

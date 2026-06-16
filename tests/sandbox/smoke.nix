@@ -57,10 +57,9 @@ let
   };
   sandbox = sandboxLib.mkSandbox { profile = sandboxLib.profiles.base; };
   wrix = sandbox.package;
-  # Underlying profile-baked launcher (no image env vars wrapper). Smoke
+  # Underlying profile-baked launcher (no ProfileConfig wrapper). Smoke
   # tests that grep the script for krun / network / mount logic should
-  # target this — the `package` wrapper only sets WRIX_AGENT and the
-  # default image ref/source.
+  # target this — the `package` wrapper only adds --profile-config.
   wrixLauncher = sandbox.launcher;
 
 in
@@ -97,7 +96,8 @@ in
         bash -n ${wrixLauncher}/bin/wrix
         ${if isLinux then "bash -n ${wrix}/bin/wrix" else ""}
         grep -q 'WRIX_PI_AUTH_FILE' ${wrixLauncher}/bin/wrix || { echo "launcher must resolve Pi auth file"; exit 1; }
-        grep -q 'WRIX_AGENT:-direct}.*=.*pi' ${wrixLauncher}/bin/wrix || { echo "launcher must gate Pi auth on WRIX_AGENT=pi"; exit 1; }
+        grep -q 'WRIX_AGENT="$PROFILE_AGENT"' ${wrixLauncher}/bin/wrix || { echo "launcher must derive WRIX_AGENT from ProfileConfig"; exit 1; }
+        grep -q 'WRIX_AGENT" = "pi"' ${wrixLauncher}/bin/wrix || { echo "launcher must gate Pi auth on WRIX_AGENT=pi"; exit 1; }
         grep -q 'wrix spawn: Pi auth file not found' ${wrixLauncher}/bin/wrix || { echo "spawn must fail loud without Pi auth"; exit 1; }
         grep -Eq '/mnt/wrix/(file/pi-auth.json|pi-agent-auth)' ${wrixLauncher}/bin/wrix || { echo "Pi auth mount must use a staging path"; exit 1; }
 

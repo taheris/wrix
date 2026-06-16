@@ -302,9 +302,8 @@ let
       networkAllowlist = concatStringsSep "," (finalProfile.networkAllowlist or [ ]);
 
       # Profile-baked launcher (mounts, writableDirs, networkAllowlist) with
-      # no image interpolation. The launcher reads its image at runtime from
-      # WRIX_DEFAULT_IMAGE_REF / WRIX_DEFAULT_IMAGE_SOURCE (interactive
-      # `wrix run`) or from SpawnConfig (`wrix spawn`).
+      # no image interpolation. Image, agent, resources, network, service, and
+      # feature defaults are supplied by immutable ProfileConfig JSON.
       launcher =
         if isLinux then
           linuxSandbox.mkSandbox {
@@ -354,30 +353,89 @@ let
           ;
       };
 
-      # Profile-specific sandbox: makeWrapper composes launcher + image,
-      # baking in the agent-runtime selector and image ref/source as defaults
-      # so `wrix run` works without the caller exporting env vars.
+      profileConfigBase = pkgs.writeText "${packageName}-profile-config-base.json" (
+        builtins.toJSON {
+          schema = 1;
+          inherit system;
+          profile = {
+            inherit (finalProfile) name;
+            env = finalProfile.env or { };
+            mounts = map (mount: {
+              inherit (mount) source dest;
+              mode = mount.mode or "ro";
+            }) (finalProfile.mounts or [ ]);
+            writable_dirs = finalProfile.writableDirs or [ ];
+            network_allowlist = finalProfile.networkAllowlist or [ ];
+          };
+          image = {
+            ref = mkImageRef image;
+            source = "${image}";
+            digest = "";
+          };
+          agent = {
+            kind = agent;
+          };
+          resources = {
+            inherit cpus;
+            memory_mb = memoryMb;
+            pids_limit = 4096;
+          };
+          security = {
+            deploy_key = deployKey;
+          };
+          network = {
+            default_mode = "open";
+            ipv6 = "disabled";
+          };
+          services = {
+            beads = {
+              enable = "auto";
+            };
+            nix_cache = {
+              enable = true;
+            };
+          };
+          features = {
+            mcp_runtime = mcpRuntime;
+          };
+        }
+      );
+
+      profileConfig =
+        pkgs.runCommand "${packageName}-profile-config.json" { nativeBuildInputs = [ pkgs.jq ]; }
+          ''
+            set -euo pipefail
+            jq --arg digest "$(cat ${image.digest})" '.image.digest = $digest' ${profileConfigBase} > "$out"
+          '';
+
+      imageWithConfig = image // {
+        inherit profileConfig;
+      };
+
+      # Profile-specific sandbox: makeWrapper composes launcher + immutable
+      # ProfileConfig so `wrix run` works without mutable image or agent env.
       packageName = "wrix-${finalProfile.name}${packageSuffix}";
       packageSuffix = if agent == "direct" then "" else "-${agent}";
       package =
         pkgs.runCommand packageName
           {
             nativeBuildInputs = [ pkgs.makeWrapper ];
-            passthru = { inherit launcher image; };
+            passthru = {
+              image = imageWithConfig;
+              inherit launcher profileConfig;
+            };
             meta.mainProgram = "wrix";
           }
           ''
             mkdir -p "$out/bin"
             makeWrapper "${launcher}/bin/wrix" "$out/bin/wrix" \
-              --set WRIX_AGENT "${agent}" \
-              --set-default WRIX_DEFAULT_IMAGE_REF "${mkImageRef image}" \
-              --set-default WRIX_DEFAULT_IMAGE_SOURCE "${image}" \
-              --set-default WRIX_DEFAULT_IMAGE_DIGEST "${image.digest}"
+              --add-flags "--profile-config ${profileConfig}"
           '';
 
     in
     {
-      inherit package image launcher;
+      inherit package launcher profileConfig;
+      image = imageWithConfig;
       profile = finalProfile;
     };
 
