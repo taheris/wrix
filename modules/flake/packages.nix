@@ -97,13 +97,13 @@ _:
         "aarch64-linux"
         "x86_64-linux"
       ];
-      wrixSandboxLauncher = (wrix.mkSandbox { profile = profiles.base; }).launcher;
+      wrixSandboxPackage = (wrix.mkSandbox { profile = profiles.base; }).package;
       wrixCli = pkgs.writeShellScriptBin "wrix" ''
         set -euo pipefail
 
         case "''${1:-}" in
           --profile-config|--profile-config=*|run|spawn)
-            exec ${wrixSandboxLauncher}/bin/wrix "$@"
+            exec ${wrixSandboxPackage}/bin/wrix "$@"
             ;;
           *)
             exec ${wrix.rustPackage.wrix}/bin/wrix "$@"
