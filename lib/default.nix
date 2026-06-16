@@ -28,7 +28,7 @@ let
       fenix
       treefmt
       ;
-    serviceCli = rustCli.wrix;
+    serviceCli = if crane == null || fenix == null then null else rustCli.wrix;
   };
   beads = import ./beads {
     inherit pkgs;
