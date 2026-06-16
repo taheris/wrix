@@ -506,23 +506,24 @@ wrix.lib.${system}.mkProfileImages {
 ```
 
 The output is a `pkgs.writeText "profile-images.json" <…>` derivation whose
-content is a JSON object keyed by profile name. Each value is `{ ref,
-source }` — `ref` is the podman image reference (`localhost/wrix-<name>:<hash>`),
-`source` is the Nix store path the launcher hands to `podman load`. Both
-fields are computed Nix-side from the image derivation so consumers never
-re-implement the tag logic. Loom maps the manifest entry's `ref` and
-`source` to `SpawnConfig.image_ref` and `SpawnConfig.image_source`
-respectively when building each spawn-config.
+content is a JSON object keyed by profile name. Each value is keyed by the
+image's selected agent (`direct`, `claude`, or `pi`) and contains `{ ref,
+source, profile_config }` — `ref` is the podman image reference
+(`localhost/wrix-<name>:<hash>`), `source` is the Nix store path the launcher
+loads, and `profile_config` is the immutable `ProfileConfig` path passed to
+`wrix spawn`. These fields are computed Nix-side from the image derivation so
+consumers never re-implement the tag logic. Loom maps the selected agent
+variant's fields to `wrix spawn` inputs when building each spawn-config.
 
-The bundled manifest is keyed by profile only and points at the default
-`direct` image for each profile. Agent overlays are separate image variants:
-Claude is exposed by `packages.image-<profile>-claude`, and Pi is exposed by
-`packages.image-<profile>-pi`.
+The bundled `packages.profile-images` manifest covers the `direct` image for
+each profile. `packages.profile-images-pi` covers the Pi images used by the
+repo devshell's `LOOM_PROFILES_MANIFEST`. Agent overlays are separate image
+variants: Claude is exposed by `packages.image-<profile>-claude`, and Pi is
+exposed by `packages.image-<profile>-pi`.
 
-The repo's bundled manifest covering `base`, `rust`, `python` is exposed as
-`packages.profile-images`. External flakes adding custom profiles call
-`mkProfileImages` themselves to produce a manifest covering their full
-profile set, then point `LOOM_PROFILES_MANIFEST` at it.
+External flakes adding custom profiles call `mkProfileImages` themselves to
+produce a manifest covering their full profile set, then point
+`LOOM_PROFILES_MANIFEST` at it.
 
 ## Flake Outputs
 
@@ -536,7 +537,7 @@ Profiles surface as three sibling output families:
 | `packages.sandbox-<profile>` | `makeWrapper` of `packages.wrix` + `packages.image-<profile>` with `WRIX_AGENT=direct` baked in | One-shot users (`nix run .#sandbox-rust`) |
 | `packages.sandbox-<profile>-claude` | Claude variant with `WRIX_AGENT=claude` baked in | One-shot users that want Claude |
 | `packages.sandbox-<profile>-pi` | Pi variant with `WRIX_AGENT=pi` baked in | One-shot users that want Pi; `packages.default` points at base `sandbox-pi` |
-| `packages.profile-images` | JSON manifest from `mkProfileImages`, keyed by profile (not by profile×agent) | External orchestrators (e.g. Loom via `LOOM_PROFILES_MANIFEST`) |
+| `packages.profile-images` | JSON manifest from `mkProfileImages`, keyed by profile then selected agent variant | External orchestrators (e.g. Loom via `LOOM_PROFILES_MANIFEST`) |
 
 `<profile>` covers the built-in profiles (`base`, `rust`, `python`). The
 `-mcp` axis (runtime MCP server selection) is independent of agent and
@@ -697,9 +698,9 @@ dests live under `/home/wrix/` inside the container, not under
   [judge](../tests/judges/profiles.sh#test_rust_toolchain_field)
 - `wrix.profiles.rust` and `wrix.rustProfile { toolchain; sha256; }` closures contain zero `*-nightly-*` derivations after a fresh `nix flake update` (regression guard against reintroducing `fenix.packages.${system}.rust-analyzer`, which drags a nightly cargo/rustc/rust-std closure)
   [system](bash tests/profiles/no-nightly-closure.sh test_no_nightly_closure)
-- `mkProfileImages { rust = …; }` produces a JSON file whose entry for `rust` has both `ref` and `source` fields, with `source` resolving to the same store path as `(wrix.mkSandbox { profile = wrix.profiles.rust; }).image`
+- `mkProfileImages { rust = …; }` produces a JSON file whose entry for `rust` is keyed by the image's selected agent and whose selected-agent entry has `ref`, `source`, and `profile_config` fields, with `source` resolving to the same store path as the corresponding `(wrix.mkSandbox { profile = wrix.profiles.rust; agent = …; }).image`
   [system](bash tests/profiles/profile-images-manifest.sh test_manifest_shape)
-- `packages.image-<name>`, `packages.sandbox-<name>`, and `packages.profile-images` all evaluate for each built-in profile
+- `packages.image-<name>`, `packages.sandbox-<name>`, `packages.profile-images`, and `packages.profile-images-pi` all evaluate for each built-in profile
   [system](bash tests/profiles/profile-images-manifest.sh test_flake_outputs_present)
 - `profiles.rust.buildPackage` is exposed and returns an attrset with `bin`, `clippy`, `nextest`, and `cargoArtifacts` fields
   [system](bash tests/profiles/build-package.sh test_build_package_exposed)

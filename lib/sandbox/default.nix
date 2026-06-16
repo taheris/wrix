@@ -412,7 +412,7 @@ let
           '';
 
       imageWithConfig = image // {
-        inherit profileConfig;
+        inherit agent profileConfig;
       };
 
       # Profile-specific sandbox: makeWrapper composes launcher + immutable

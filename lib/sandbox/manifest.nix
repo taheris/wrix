@@ -1,10 +1,10 @@
 # Profile-image manifest helper.
 #
-# Builds a `profile-images.json` derivation mapping each profile name to the
-# podman ref and Nix store path needed to spawn its image. Orchestrators
-# (e.g. Loom via `LOOM_PROFILES_MANIFEST`) read this at startup and use each
-# entry's `ref`/`source` to populate `SpawnConfig.image_ref`/`image_source`
-# per bead.
+# Builds a `profile-images.json` derivation mapping each profile name to one
+# agent variant (`direct`, `claude`, or `pi`) with the image ref, image source,
+# and profile config needed to spawn that variant. Orchestrators (e.g. Loom via
+# `LOOM_PROFILES_MANIFEST`) read this at startup and use the selected variant to
+# populate `wrix spawn` inputs per bead.
 #
 # See specs/profiles.md § Profile-Image Manifest.
 {
@@ -12,6 +12,9 @@
 }:
 
 let
+  inherit (builtins) elem mapAttrs;
+  inherit (pkgs.lib) optionalAttrs;
+
   imageTagLib = import ../util/image-tag.nix { };
 
   # podman accepts `localhost/<name>:<tag>` refs; Apple's `container` CLI
@@ -20,21 +23,37 @@ let
   # sandbox default.nix).
   refPrefix = if pkgs.stdenv.isDarwin then "" else "localhost/";
 
-  mkEntry =
+  mkImageEntry =
     image:
     {
       ref = "${refPrefix}${image.imageName}:${imageTagLib.mkImageTag image}";
       source = "${image}";
     }
-    // pkgs.lib.optionalAttrs (image ? profileConfig) {
+    // optionalAttrs (image ? profileConfig) {
       profile_config = "${image.profileConfig}";
     };
+
+  mkAgentEntry =
+    image:
+    let
+      agent = image.agent or "direct";
+      agents = [
+        "direct"
+        "claude"
+        "pi"
+      ];
+
+    in
+    if elem agent agents then
+      { ${agent} = mkImageEntry image; }
+    else
+      throw "mkProfileImages: image.agent must be one of direct, claude, or pi";
 in
 {
   mkProfileImages =
     images:
     let
-      manifest = builtins.mapAttrs (_name: mkEntry) images;
+      manifest = mapAttrs (_name: mkAgentEntry) images;
     in
     pkgs.writeTextFile {
       name = "profile-images.json";
