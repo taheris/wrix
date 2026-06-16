@@ -28,7 +28,7 @@ The agent binary baked into the image is selected **at build time** by `mkSandbo
 
 `packages.image-<profile>` ships the default direct runtime. Agent overlays are exposed as `packages.image-<profile>-claude` and `packages.image-<profile>-pi`.
 
-Pi images seed OpenAI Codex subscription defaults and high reasoning. Run `/login` in Pi and choose ChatGPT Plus/Pro (Codex) once; credentials persist in host `~/.pi/agent/auth.json`. Pi session state is written under workspace `.pi/`, so consumer repositories should add `.pi/` to `.gitignore`.
+Pi images seed OpenAI Codex subscription defaults, high reasoning, trusted project fallback, and all-at-once steering/follow-up queues. Run `/login` in Pi and choose ChatGPT Plus/Pro (Codex) once; credentials persist in host `~/.pi/agent/auth.json`. Pi session state is written under workspace `.pi/`, so consumer repositories should add `.pi/` to `.gitignore`.
 
 ## Flake Integration
 

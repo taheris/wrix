@@ -133,6 +133,9 @@ let
     defaultProvider = "openai-codex";
     defaultModel = "gpt-5.5";
     defaultThinkingLevel = "high";
+    defaultProjectTrust = "always";
+    steeringMode = "all";
+    followUpMode = "all";
     sessionDir = "/workspace/.pi/agent/sessions";
     transport = "websocket-cached";
   };

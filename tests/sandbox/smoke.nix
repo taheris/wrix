@@ -166,6 +166,9 @@ in
     grep -q 'defaultProvider = "openai-codex"' "$DEFAULTS" || { echo "Pi default provider must be OpenAI Codex"; exit 1; }
     grep -q 'defaultModel = "gpt-5.5"' "$DEFAULTS" || { echo "Pi default model must be gpt-5.5"; exit 1; }
     grep -q 'defaultThinkingLevel = "high"' "$DEFAULTS" || { echo "Pi default reasoning must be high"; exit 1; }
+    grep -q 'defaultProjectTrust = "always"' "$DEFAULTS" || { echo "Pi must trust /workspace by default"; exit 1; }
+    grep -q 'steeringMode = "all"' "$DEFAULTS" || { echo "Pi steering mode must default to all"; exit 1; }
+    grep -q 'followUpMode = "all"' "$DEFAULTS" || { echo "Pi follow-up mode must default to all"; exit 1; }
     grep -q 'sessionDir = "/workspace/.pi/agent/sessions"' "$DEFAULTS" || { echo "Pi sessions must persist via explicit sessionDir"; exit 1; }
     grep -q 'optionalString (agent == "pi")' "$IMAGE" || { echo "Pi settings must only be baked for agent=pi"; exit 1; }
     grep -q 'etc/wrix/pi-agent/settings.json' "$IMAGE" || { echo "Pi settings seed must be written under /etc/wrix/pi-agent"; exit 1; }
