@@ -481,6 +481,82 @@ let
     '';
   };
 
+  entrypointResolverBaseTest = pkgs.writeShellApplication {
+    name = "test-entrypoint-resolver-base";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.gnugrep
+      pkgs.gnutar
+      pkgs.jq
+    ];
+    text = ''
+      image_closure=${defaultImageClosure}/store-paths
+      base_contents=${baseContentsClosure}/store-paths
+      resolver=${linuxPkgs.getent.provider}
+
+      if [[ ! -x "$resolver/bin/getent" ]]; then
+          echo "FAIL: pkgs.getent.provider does not provide bin/getent as expected" >&2
+          echo "  resolver: $resolver" >&2
+          exit 1
+      fi
+
+      if ! grep -qxF "$resolver" "$base_contents"; then
+          echo "FAIL: getent provider missing from wrix-base-image contents" >&2
+          echo "  expected: $resolver" >&2
+          echo "  base    : $base_contents" >&2
+          exit 1
+      fi
+
+      if ! grep -qxF "$resolver" "$image_closure"; then
+          echo "FAIL: getent provider missing from default sandbox image closure" >&2
+          echo "  expected: $resolver" >&2
+          echo "  closure : $image_closure" >&2
+          exit 1
+      fi
+
+      tmp=$(mktemp -d)
+      trap 'rm -rf "$tmp"' EXIT
+      ${defaultImage} > "$tmp/image.tar"
+      tar -xf "$tmp/image.tar" -C "$tmp"
+
+      jq -r '.[0].Layers[]' "$tmp/manifest.json" > "$tmp/layers"
+
+      getent_target=""
+      while IFS= read -r layer; do
+          line=$(tar -tvf "$tmp/$layer" | grep -E '(^| )\.?/bin/getent -> /nix/store/' || true)
+          if [[ -n "$line" ]]; then
+              getent_target=''${line##* -> }
+          fi
+      done < "$tmp/layers"
+
+      if [[ -z "$getent_target" ]]; then
+          echo "FAIL: composed image does not expose /bin/getent" >&2
+          exit 1
+      fi
+      if [[ "$getent_target" != /nix/store/* ]]; then
+          echo "FAIL: /bin/getent does not point into /nix/store: $getent_target" >&2
+          exit 1
+      fi
+
+      target_member="''${getent_target#/}"
+      target_present=0
+      while IFS= read -r layer; do
+          if tar -tf "$tmp/$layer" | grep -qxF "$target_member" \
+              || tar -tf "$tmp/$layer" | grep -qxF "$getent_target"; then
+              target_present=1
+              break
+          fi
+      done < "$tmp/layers"
+      if [[ "$target_present" != "1" ]]; then
+          echo "FAIL: /bin/getent target is absent from image layers" >&2
+          echo "  /bin/getent -> $getent_target" >&2
+          exit 1
+      fi
+
+      echo "test-entrypoint-resolver-base: PASS"
+    '';
+  };
+
   # Hash-stability guard for `wrix-base-image` (specs/image-builder.md
   # § Base Image Layering). The base captures only the nixpkgs-pin-dependent
   # bottom-of-closure, so its derivation hash must not move when any
@@ -1535,6 +1611,7 @@ in
     claudeRuntimeNoopTest
     prekHooksClosureTest
     baseImageUniversalTest
+    entrypointResolverBaseTest
     baseImageHashStableTest
     stableProfileHashStableTest
     stableProfileMembershipTest

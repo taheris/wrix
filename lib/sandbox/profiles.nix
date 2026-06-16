@@ -50,6 +50,7 @@ let
 
   # Container images only — Linux-specific or where the host version is preferred.
   imageOnlyPackages = with pkgs; [
+    getent.provider
     iproute2
     iptables
     iputils

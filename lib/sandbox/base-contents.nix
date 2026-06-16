@@ -10,6 +10,7 @@
 
 [
   pkgs.glibc
+  pkgs.getent.provider
   pkgs.gcc-unwrapped.lib
   pkgs.openssl.out
   pkgs.cacert

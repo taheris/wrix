@@ -14,6 +14,7 @@ _:
         test-claude-runtime-noop = test.apps.claude-runtime-noop;
         test-customisation-layer-bounded = test.apps.customisation-layer-bounded;
         test-downstream-change-leaf-only = test.apps.downstream-change-leaf-only;
+        test-entrypoint-resolver-base = test.apps.entrypoint-resolver-base;
         test-image-digest-matches-stored-id = test.apps.image-digest-matches-stored-id;
         test-image-install-digest-skip = test.apps.image-install-digest-skip;
         test-image-nix-db-consistent = test.apps.image-nix-db-consistent;

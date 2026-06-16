@@ -152,6 +152,7 @@ let
       test-claude-runtime-noop \
       test-prek-hooks-closure \
       test-base-image-universal \
+      test-entrypoint-resolver-base \
       test-base-image-hash-stable \
       test-stable-profile-hash-stable \
       test-stable-profile-membership \
@@ -248,6 +249,12 @@ in
       meta.description = "Verify wrix-base-image holds only universal bottom-of-closure paths (no profile-specific rustc)";
       type = "app";
       program = "${sandboxImageChecks.baseImageUniversalTest}/bin/test-base-image-universal";
+    };
+
+    entrypoint-resolver-base = {
+      meta.description = "Verify sandbox images include getent for entrypoint allowlist resolution";
+      type = "app";
+      program = "${sandboxImageChecks.entrypointResolverBaseTest}/bin/test-entrypoint-resolver-base";
     };
 
     base-image-hash-stable = {
