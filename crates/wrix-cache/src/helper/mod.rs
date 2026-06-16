@@ -1,6 +1,7 @@
 use std::{
     env, fs,
-    io::{self, Write},
+    io::{self, BufRead, BufReader, Write},
+    net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Command, ExitCode, Stdio},
 };
@@ -86,15 +87,95 @@ fn run(
     match helper {
         Helper::Hook => run_hook(args, stdout),
         Helper::Publish => run_publish(args, stdout),
-        Helper::Serve => {
-            writeln!(
-                stderr,
-                "{} accepts no public arguments yet; pass --help for usage.",
-                helper.binary_name()
-            )?;
-            Ok(ExitCode::FAILURE)
+        Helper::Serve => run_serve(args, stderr),
+    }
+}
+
+fn run_serve(args: &[String], stderr: &mut impl Write) -> io::Result<ExitCode> {
+    if args.len() != 1 {
+        writeln!(stderr, "Usage: wrix-cache-serve <cache-root>")?;
+        return Ok(ExitCode::FAILURE);
+    }
+    let root = PathBuf::from(&args[0]);
+    require_absolute_dir("cache root", &root)?;
+    let listener = TcpListener::bind(("0.0.0.0", 8080))?;
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => handle_cache_request(stream, &root)?,
+            Err(error) => writeln!(stderr, "wrix-cache-serve: accept failed: {error}")?,
         }
     }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn handle_cache_request(stream: TcpStream, root: &Path) -> io::Result<()> {
+    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut first_line = String::new();
+    reader.read_line(&mut first_line)?;
+    let mut parts = first_line.split_whitespace();
+    let method = parts.next().unwrap_or("");
+    let target = parts.next().unwrap_or("");
+    let mut stream = stream;
+    match method {
+        "GET" => serve_cache_path(&mut stream, root, target, true),
+        "HEAD" => serve_cache_path(&mut stream, root, target, false),
+        _ => write_response(
+            &mut stream,
+            "405 Method Not Allowed",
+            b"method not allowed\n",
+            true,
+        ),
+    }
+}
+
+fn serve_cache_path(
+    stream: &mut TcpStream,
+    root: &Path,
+    target: &str,
+    include_body: bool,
+) -> io::Result<()> {
+    let Some(relative) = parse_cache_target(target) else {
+        return write_response(stream, "404 Not Found", b"not found\n", include_body);
+    };
+    let path = root.join(relative);
+    if !path.is_file() {
+        return write_response(stream, "404 Not Found", b"not found\n", include_body);
+    }
+    let body = fs::read(path)?;
+    write_response(stream, "200 OK", &body, include_body)
+}
+
+fn parse_cache_target(target: &str) -> Option<&str> {
+    let path = target.split('?').next()?.trim_start_matches('/');
+    if path.is_empty() || path.contains("..") || path.contains('\\') {
+        return None;
+    }
+    if path == "nix-cache-info"
+        || path.ends_with(".narinfo")
+        || path.starts_with("nar/")
+        || path.starts_with("log/")
+    {
+        Some(path)
+    } else {
+        None
+    }
+}
+
+fn write_response(
+    stream: &mut TcpStream,
+    status: &str,
+    body: &[u8],
+    include_body: bool,
+) -> io::Result<()> {
+    write!(
+        stream,
+        "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )?;
+    if include_body {
+        stream.write_all(body)?;
+    }
+    Ok(())
 }
 
 fn run_hook(args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode> {
@@ -404,7 +485,7 @@ fn write_help(helper: Helper, stdout: &mut impl Write) -> io::Result<()> {
 
 #[cfg(test)]
 mod test {
-    use super::{manifest_allows_drv, manifest_key_values};
+    use super::{manifest_allows_drv, manifest_key_values, parse_cache_target};
 
     #[test]
     fn manifest_scope_accepts_matching_drv_path() {
@@ -420,5 +501,19 @@ mod test {
             pairs,
             vec![(String::from("drvPath"), String::from("/nix/store/aaa.drv"))]
         );
+    }
+
+    #[test]
+    fn cache_server_accepts_only_nix_cache_paths() {
+        assert_eq!(
+            parse_cache_target("/nix-cache-info"),
+            Some("nix-cache-info")
+        );
+        assert_eq!(parse_cache_target("/abc.narinfo"), Some("abc.narinfo"));
+        assert_eq!(parse_cache_target("/nar/abc.nar"), Some("nar/abc.nar"));
+        assert_eq!(parse_cache_target("/log/abc"), Some("log/abc"));
+        assert_eq!(parse_cache_target("/"), None);
+        assert_eq!(parse_cache_target("/nar/../secret"), None);
+        assert_eq!(parse_cache_target("/index.html"), None);
     }
 }

@@ -163,6 +163,14 @@ impl Plan {
         self.write_services()
     }
 
+    fn beads_worktree_remote(&self) -> Option<PathBuf> {
+        let path = self
+            .workspace
+            .canonical_path()
+            .join(".git/beads-worktrees/beads/.beads/dolt-remote");
+        path.is_dir().then_some(path)
+    }
+
     fn write_services(&self) -> io::Result<()> {
         fs::write(self.paths.services_path(), self.services_json())
     }
@@ -449,6 +457,7 @@ impl PortLease {
 struct Runtime {
     binary: String,
     image: String,
+    image_source: Option<PathBuf>,
 }
 
 impl Runtime {
@@ -457,6 +466,7 @@ impl Runtime {
             binary: env::var("WRIX_CONTAINER_RUNTIME").unwrap_or_else(|_| default_runtime()),
             image: env::var("WRIX_SERVICE_IMAGE")
                 .unwrap_or_else(|_| String::from("localhost/wrix-service:latest")),
+            image_source: env::var_os("WRIX_SERVICE_IMAGE_SOURCE").map(PathBuf::from),
         }
     }
 
@@ -467,6 +477,7 @@ impl Runtime {
             RuntimeStatus::Stopped => self.remove(&name)?,
             RuntimeStatus::Missing => {}
         }
+        self.ensure_image()?;
         let mut command = Command::new(&self.binary);
         command
             .arg("run")
@@ -498,6 +509,11 @@ impl Runtime {
                     .join(".beads/dolt")
                     .display()
             ));
+            if let Some(remote) = plan.beads_worktree_remote() {
+                command
+                    .arg("-v")
+                    .arg(format!("{}:{}:rw", remote.display(), remote.display()));
+            }
             match dolt.transport() {
                 DoltTransport::UnixSocket => {
                     command.arg("-v").arg(format!(
@@ -528,6 +544,96 @@ impl Runtime {
                 String::from_utf8_lossy(&output.stderr).into_owned(),
             ))
         }
+    }
+
+    fn ensure_image(&self) -> io::Result<()> {
+        let Some(source) = &self.image_source else {
+            return Ok(());
+        };
+        if self.image_exists()? {
+            return Ok(());
+        }
+        self.load_image(source)
+    }
+
+    fn image_exists(&self) -> io::Result<bool> {
+        let status = if self.binary == "container" {
+            Command::new(&self.binary)
+                .arg("image")
+                .arg("inspect")
+                .arg(&self.image)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()?
+        } else {
+            Command::new(&self.binary)
+                .arg("image")
+                .arg("exists")
+                .arg(&self.image)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()?
+        };
+        Ok(status.success())
+    }
+
+    fn load_image(&self, source: &Path) -> io::Result<()> {
+        let status = if self.binary == "container" {
+            Command::new(&self.binary)
+                .arg("image")
+                .arg("load")
+                .arg("--input")
+                .arg(source)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()?
+        } else {
+            Command::new(&self.binary)
+                .arg("load")
+                .arg("--input")
+                .arg(source)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()?
+        };
+        if !status.success() {
+            Err(io::Error::other(format!(
+                "failed to load service image from {}",
+                source.display()
+            )))
+        } else if self.image_exists()? || self.tag_loaded_image()? {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!(
+                "loaded service image from {}, but image {} is unavailable",
+                source.display(),
+                self.image
+            )))
+        }
+    }
+
+    fn tag_loaded_image(&self) -> io::Result<bool> {
+        for source in ["wrix-service:latest", "localhost/wrix-service:latest"] {
+            if source == self.image {
+                continue;
+            }
+            let status = Command::new(&self.binary)
+                .arg("tag")
+                .arg(source)
+                .arg(&self.image)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()?;
+            if status.success() && self.image_exists()? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     fn remove(&self, name: &ContainerName) -> io::Result<()> {

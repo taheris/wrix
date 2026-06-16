@@ -1,4 +1,4 @@
-_:
+{ inputs, ... }:
 
 {
   perSystem =
@@ -8,6 +8,7 @@ _:
       test,
       wrix,
       linuxPkgs,
+      treefmtWrapper,
       ...
     }:
     let
@@ -110,6 +111,20 @@ _:
             ;;
         esac
       '';
+      serviceProfiles = import ../../lib/sandbox/profiles.nix {
+        pkgs = linuxPkgs;
+        hostPkgs = linuxPkgs;
+        inherit (inputs) crane fenix;
+        treefmt = treefmtWrapper;
+      };
+      serviceRust = import ../../lib/services/rust.nix {
+        pkgs = linuxPkgs;
+        rustProfile = serviceProfiles.rust;
+      };
+      serviceImage = import ../../lib/services/image.nix {
+        pkgs = linuxPkgs;
+        inherit (serviceRust) cacheServe;
+      };
 
     in
     {
@@ -143,6 +158,7 @@ _:
           wrix-cache-hook = wrix.rustPackage.cacheHook;
           wrix-cache-publish = wrix.rustPackage.cachePublish;
           wrix-cache-serve = wrix.rustPackage.cacheServe;
+          wrix-service-image = serviceImage;
           wrix-builder = import ../../lib/builder { inherit pkgs linuxPkgs; };
           wrix-notifyd = import ../../lib/notify/daemon.nix { inherit pkgs; };
         };

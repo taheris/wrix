@@ -42,6 +42,13 @@ state_file() {
   printf '%s/%s.state\n' "$STATE_DIR" "$name"
 }
 
+image_file() {
+  local name="$1"
+  name="${name//\//_}"
+  name="${name//:/_}"
+  printf '%s/%s.image\n' "$STATE_DIR" "$name"
+}
+
 log_call() {
   printf '%s\n' "$*" >>"$STATE_DIR/calls"
 }
@@ -54,6 +61,27 @@ case "${1:-}" in
       fi
       exit 1
     fi
+    ;;
+  image)
+    if [[ "${2:-}" == "exists" ]]; then
+      if [[ -f "$(image_file "${3:-}")" ]]; then
+        exit 0
+      fi
+      exit 1
+    fi
+    ;;
+  load)
+    image="localhost/wrix-service:latest"
+    previous=""
+    source=""
+    for arg in "$@"; do
+      if [[ "$previous" == "--input" ]]; then
+        source="$arg"
+      fi
+      previous="$arg"
+    done
+    printf 'loaded from %s\n' "$source" >"$(image_file "$image")"
+    log_call "$*"
     ;;
   inspect)
     name="${@: -1}"
@@ -262,10 +290,53 @@ test_devshell_start_is_independent() {
   fi
 }
 
+test_service_start_loads_image_source() {
+  local wrix_bin
+  wrix_bin="$(build_wrix)"
+  with_fake_runtime_env
+
+  export HOME="$TEST_TMP/home-image-source"
+  export XDG_STATE_HOME="$TEST_TMP/xdg-state-image-source"
+  export XDG_CACHE_HOME="$TEST_TMP/xdg-cache-image-source"
+  export WRIX_SERVICE_IMAGE_SOURCE="$TEST_TMP/wrix-service.tar.gz"
+  mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+  printf 'image archive\n' >"$WRIX_SERVICE_IMAGE_SOURCE"
+
+  local workspace="$TEST_TMP/image-source-repo"
+  mkdir -p "$workspace"
+  (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/image-source-start.txt")
+
+  assert_file_contains "service image load" "$WRIX_FAKE_RUNTIME_STATE/calls" "load --input $WRIX_SERVICE_IMAGE_SOURCE"
+  assert_file_contains "service run after load" "$WRIX_FAKE_RUNTIME_STATE/run-image-source-repo-service" "localhost/wrix-service:latest"
+}
+
+test_service_mounts_beads_worktree_remote() {
+  local wrix_bin
+  wrix_bin="$(build_wrix)"
+  with_fake_runtime_env
+
+  export HOME="$TEST_TMP/home-beads-remote"
+  export XDG_STATE_HOME="$TEST_TMP/xdg-state-beads-remote"
+  export XDG_CACHE_HOME="$TEST_TMP/xdg-cache-beads-remote"
+  mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+
+  local workspace="$TEST_TMP/beads-remote-repo"
+  local worktree_remote="$workspace/.git/beads-worktrees/beads/.beads/dolt-remote"
+  mkdir -p "$workspace/.beads/dolt" "$worktree_remote"
+  (cd "$workspace" && "$wrix_bin" service start --no-cache >"$TEST_TMP/beads-remote-start.txt")
+
+  assert_file_contains \
+    "beads remote bind mount" \
+    "$WRIX_FAKE_RUNTIME_STATE/run-beads-remote-repo-service" \
+    "$worktree_remote:$worktree_remote:rw"
+}
+
 ALL_TESTS=(
   test_fake_runtime_contract
   test_workspace_identity
   test_devshell_start_is_independent
+  test_service_start_loads_image_source
+  test_service_mounts_beads_worktree_remote
 )
 
 run_all() {

@@ -26,6 +26,7 @@ let
             _wrix_runtime=podman
           else
             _wrix_beads_fail "beads: .beads/dolt exists but no service container runtime is available — install Apple container or podman, or set WRIX_CONTAINER_RUNTIME"
+            return 1 2>/dev/null || exit 1
           fi
         fi
         unset _wrix_runtime
@@ -35,6 +36,7 @@ let
         _wrix_runtime="''${WRIX_CONTAINER_RUNTIME:-podman}"
         if ! command -v "$_wrix_runtime" >/dev/null 2>&1; then
           _wrix_beads_fail "beads: .beads/dolt exists but service runtime '$_wrix_runtime' is not on PATH — cannot start wrix service dolt"
+          return 1 2>/dev/null || exit 1
         fi
         unset _wrix_runtime
       '';
@@ -42,6 +44,7 @@ let
   startDirect = ''
     if ! "$_wrix_service_bin" service start --no-cache; then
       _wrix_beads_fail "beads: wrix service start --no-cache failed — Dolt will not be available"
+      return 1 2>/dev/null || exit 1
     fi
   '';
 
@@ -56,6 +59,7 @@ let
           if ! systemd-run --user --scope --quiet --collect \
                -- "$_wrix_service_bin" service start --no-cache; then
             _wrix_beads_fail "beads: wrix service start --no-cache failed — Dolt will not be available"
+            return 1 2>/dev/null || exit 1
           fi
         else
           ${startDirect}
@@ -65,19 +69,24 @@ let
   waitAndExport = ''
     if [[ -d "$PWD/.beads/dolt" ]]; then
       ${fail}
+      unset BEADS_DOLT_SERVER_SOCKET BEADS_DOLT_SERVER_HOST BEADS_DOLT_SERVER_PORT
+      export BEADS_DOLT_AUTO_START=0
       _wrix_service_bin="''${WRIX_BIN:-${wrixBin}}"
       if ! _wrix_endpoints=$("$_wrix_service_bin" service endpoints --no-cache); then
         _wrix_beads_fail "beads: wrix service endpoints failed — cannot export Dolt endpoint"
+        return 1 2>/dev/null || exit 1
       fi
       _wrix_transport=$(printf '%s\n' "$_wrix_endpoints" | ${jqBin} -r '.endpoints.dolt.transport // empty')
       if [[ -z "$_wrix_transport" ]]; then
         _wrix_beads_fail "beads: wrix service did not publish a Dolt endpoint — refusing embedded Dolt fallback"
+        return 1 2>/dev/null || exit 1
       fi
       case "$_wrix_transport" in
         unix)
           _wrix_socket=$(printf '%s\n' "$_wrix_endpoints" | ${jqBin} -r '.endpoints.dolt.socket // empty')
           if [[ -z "$_wrix_socket" ]]; then
             _wrix_beads_fail "beads: wrix service Dolt endpoint is missing its socket path"
+            return 1 2>/dev/null || exit 1
           fi
           _wrix_waited=0
           while [[ ! -S "$_wrix_socket" && "$_wrix_waited" -lt 30 ]]; do
@@ -86,6 +95,7 @@ let
           done
           if [[ ! -S "$_wrix_socket" ]]; then
             _wrix_beads_fail "beads: Dolt socket did not appear at $_wrix_socket — refusing embedded Dolt fallback"
+            return 1 2>/dev/null || exit 1
           fi
           export BEADS_DOLT_SERVER_SOCKET="$_wrix_socket"
           unset BEADS_DOLT_SERVER_HOST BEADS_DOLT_SERVER_PORT
@@ -95,6 +105,7 @@ let
           _wrix_port=$(printf '%s\n' "$_wrix_endpoints" | ${jqBin} -r '.endpoints.dolt.port // empty')
           if [[ -z "$_wrix_host" || -z "$_wrix_port" ]]; then
             _wrix_beads_fail "beads: wrix service Dolt endpoint is missing TCP host or port"
+            return 1 2>/dev/null || exit 1
           fi
           _wrix_waited=0
           while ! bash -c "echo >/dev/tcp/$_wrix_host/$_wrix_port" 2>/dev/null && [[ "$_wrix_waited" -lt 30 ]]; do
@@ -103,6 +114,7 @@ let
           done
           if ! bash -c "echo >/dev/tcp/$_wrix_host/$_wrix_port" 2>/dev/null; then
             _wrix_beads_fail "beads: Dolt TCP endpoint $_wrix_host:$_wrix_port is not reachable — refusing embedded Dolt fallback"
+            return 1 2>/dev/null || exit 1
           fi
           export BEADS_DOLT_SERVER_HOST="$_wrix_host"
           export BEADS_DOLT_SERVER_PORT="$_wrix_port"
@@ -110,9 +122,9 @@ let
           ;;
         *)
           _wrix_beads_fail "beads: unsupported wrix service Dolt transport '$_wrix_transport'"
+          return 1 2>/dev/null || exit 1
           ;;
       esac
-      export BEADS_DOLT_AUTO_START=0
       unset _wrix_service_bin _wrix_endpoints _wrix_transport _wrix_socket _wrix_host _wrix_port _wrix_waited
     fi
   '';
