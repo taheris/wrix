@@ -274,7 +274,7 @@ upstream, not by this spec.
   [judge](../tests/judges/beads.sh#test_shellhook_fail_loud)
 
 - Sandboxed clients receive staged beads config/metadata but not `.beads/issues.jsonl`, so a missing Dolt endpoint fails loudly instead of triggering JSONL auto-import or embedded Dolt recovery
-  [system?](bash tests/services/dolt-cli.sh test_no_jsonl_staged)
+  [system](bash tests/services/dolt-cli.sh test_no_jsonl_staged)
 
 - `wrix beads push` attempts `bd dolt push` before `bd dolt pull`, so a
   session-close run against an up-to-date remote never enters the Dolt
