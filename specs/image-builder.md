@@ -134,6 +134,8 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
   [system](nix run .#test-downstream-change-leaf-only)
 - The selected agent runtime rides its own tier `wrix-agent-<agent>-<name>`, chained atop `wrix-stable-profile-<name>`; an agent-version change leaves every tier-0 and tier-1 blob byte-identical
   [system](nix run .#test-agent-tier-isolated)
+- The leaf image declares the selected agent variant in `/etc/wrix/image-agent`, which the entrypoint uses to reject ProfileConfig/image mismatches before agent exec
+  [system](bash tests/sandbox/agent-binary-guard.sh)
 - A non-selected agent's binary is absent from the image: an `agent = "direct"` image contains neither `claude-code` nor a `pi` runtime
   [system](nix run .#test-agent-exclusive)
 - default `agent = "direct"` produces an image that contains `loom-direct-runner`

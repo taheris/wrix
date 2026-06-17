@@ -257,6 +257,7 @@ let
       chmod 777 home/wrix
 
       mkdir -p etc/wrix
+      printf '%s\n' '${agent}' > etc/wrix/image-agent
       echo "127.0.0.1 localhost" > etc/hosts
 
       cp ${entrypointSh} entrypoint.sh

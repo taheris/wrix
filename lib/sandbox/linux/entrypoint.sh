@@ -67,6 +67,24 @@ case "$WRIX_AGENT" in
     ;;
 esac
 
+IMAGE_AGENT_FILE="/etc/wrix/image-agent"
+if [[ -f "$IMAGE_AGENT_FILE" ]]; then
+  IMAGE_AGENT="$(<"$IMAGE_AGENT_FILE")"
+else
+  IMAGE_AGENT=""
+fi
+case "$IMAGE_AGENT" in
+  ""|claude|pi|direct) ;;
+  *)
+    echo "Error: image declares unknown agent in $IMAGE_AGENT_FILE: $IMAGE_AGENT (expected 'claude', 'pi', or 'direct')" >&2
+    exit 1
+    ;;
+esac
+if [[ -n "$IMAGE_AGENT" && "$IMAGE_AGENT" != "$WRIX_AGENT" ]]; then
+  echo "Error: ProfileConfig selected WRIX_AGENT=$WRIX_AGENT, but this image was built for agent=$IMAGE_AGENT; use the matching profile_config for the selected image/agent variant" >&2
+  exit 1
+fi
+
 # A command override ($# > 0) execs "$@" instead of the agent, so the
 # binary-presence guard applies only to agent-exec runs.
 if [[ $# -eq 0 ]] && ! command -v "$WRIX_AGENT_BIN" >/dev/null 2>&1; then

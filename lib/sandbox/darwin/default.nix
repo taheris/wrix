@@ -226,6 +226,7 @@ in
               IMAGE_SOURCE="''${IMAGE_OVERRIDE_SOURCE:-$PROFILE_IMAGE_SOURCE}"
               IMAGE_DIGEST_PATH="''${IMAGE_OVERRIDE_DIGEST:-$PROFILE_IMAGE_DIGEST}"
             fi
+            verbose "Resolved ProfileConfig (agent=$WRIX_AGENT, profile_config=$PROFILE_CONFIG, image=$IMAGE_REF)"
 
             PROFILE_IMAGE="$IMAGE_REF"
             IMAGE_REPO="''${IMAGE_REF%:*}"

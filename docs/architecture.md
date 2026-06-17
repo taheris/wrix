@@ -120,11 +120,12 @@ supply a matching per-call `ProfileConfig` and image.
 Exactly one agent rides each image — a non-claude image carries no
 `claude-code` (`agent = "direct"` bakes neither `claude-code` nor `pi`). The
 default direct runtime is installed in `packages.image-<profile>`;
-`claude` and `pi` are exposed as agent overlay images. Before exec,
-the entrypoint verifies the selected agent's
-binary is present (`command -v`) and fails loudly when it is absent from the
-image — e.g. `WRIX_AGENT=pi` against a claude image on the raw-launcher
-path — rather than emitting a bare `command not found`.
+`claude` and `pi` are exposed as agent overlay images. The image declares its
+baked variant in `/etc/wrix/image-agent`; before exec, the entrypoint rejects a
+`ProfileConfig`/image mismatch, then verifies the selected agent's binary is
+present (`command -v`) and fails loudly when it is absent from the image — e.g.
+`WRIX_AGENT=pi` against a claude image on the raw-launcher path — rather than
+emitting a bare `command not found`.
 
 ### Direct mode (orchestrator integration)
 

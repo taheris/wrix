@@ -165,7 +165,7 @@ in
 
     grep -q 'defaultProvider = "openai-codex"' "$DEFAULTS" || { echo "Pi default provider must be OpenAI Codex"; exit 1; }
     grep -q 'defaultModel = "gpt-5.5"' "$DEFAULTS" || { echo "Pi default model must be gpt-5.5"; exit 1; }
-    grep -q 'defaultThinkingLevel = "high"' "$DEFAULTS" || { echo "Pi default reasoning must be high"; exit 1; }
+    grep -q 'defaultThinkingLevel = "xhigh"' "$DEFAULTS" || { echo "Pi default reasoning must be xhigh"; exit 1; }
     grep -q 'defaultProjectTrust = "always"' "$DEFAULTS" || { echo "Pi must trust /workspace by default"; exit 1; }
     grep -q 'steeringMode = "all"' "$DEFAULTS" || { echo "Pi steering mode must default to all"; exit 1; }
     grep -q 'followUpMode = "all"' "$DEFAULTS" || { echo "Pi follow-up mode must default to all"; exit 1; }

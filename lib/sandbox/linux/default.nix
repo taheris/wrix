@@ -491,6 +491,7 @@ in
           IMAGE_SOURCE="''${IMAGE_OVERRIDE_SOURCE:-$PROFILE_IMAGE_SOURCE}"
           IMAGE_DIGEST_PATH="''${IMAGE_OVERRIDE_DIGEST:-$PROFILE_IMAGE_DIGEST}"
         fi
+        verbose "Resolved ProfileConfig (agent=$WRIX_AGENT, profile_config=$PROFILE_CONFIG, image=$IMAGE_REF)"
 
         # Image install transport: skopeo copy oci-archive: → containers-storage:
         # (per specs/sandbox.md § Image install path). Body lives in

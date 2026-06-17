@@ -132,7 +132,7 @@ let
   basePiSettings = {
     defaultProvider = "openai-codex";
     defaultModel = "gpt-5.5";
-    defaultThinkingLevel = "high";
+    defaultThinkingLevel = "xhigh";
     defaultProjectTrust = "always";
     steeringMode = "all";
     followUpMode = "all";
