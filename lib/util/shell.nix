@@ -28,9 +28,9 @@ _:
   # untouched (where `mkImageRef`'s tag changes but the content does not),
   # the case the prior `podman image exists $IMAGE_REF` preflight missed.
   #
-  # $IMAGE_DIGEST_PATH may be empty (e.g. legacy `wrix spawn` callers that
-  # don't yet supply `image_digest_path`); the step falls back to the
-  # ref-existence check so spawn-side idempotency is preserved.
+  # $IMAGE_DIGEST_PATH may be empty (for example, when `wrix spawn` selects an
+  # image override not represented by the supplied ProfileConfig); the step
+  # falls back to the ref-existence check so spawn-side idempotency is preserved.
   #
   # On miss, the install transport is `skopeo copy oci-archive: →
   # containers-storage:` (per specs/sandbox.md § Image install path).

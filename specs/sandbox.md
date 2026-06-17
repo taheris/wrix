@@ -222,7 +222,7 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 - The selected agent runtime comes from `ProfileConfig` and cannot be changed by caller env independently of the selected image/profile
   [system](bash tests/sandbox/profile-config-agent-pin.sh)
 - `wrix spawn --spawn-config <file>` parses the documented `SpawnConfig` fields (`image_ref`, `image_source`, `workspace`, `env`, `agent_args`, `mounts`) and rejects attempts to change the selected agent independently of `ProfileConfig`
-  [system?](bash tests/sandbox/spawn-config-schema.sh)
+  [system](bash tests/sandbox/spawn-config-schema.sh)
 - On Linux, each `SpawnConfig.mounts` entry becomes a `-v <host_path>:<container_path>` podman argument, with `:ro` appended when `read_only: true`. A missing or empty `mounts` list produces no additional `-v` flags.
   [system](bash tests/sandbox/spawn-config-mounts.sh)
 - On Darwin, the same mount classifier handles `profile.mounts` and `SpawnConfig.mounts` — one mechanism, not two. Directories are staged + copied at launch, regular files copy-from-parent-dir, and entries whose `host_path` is a Unix socket cause the launcher to fail loudly before the container starts. (VirtioFS does not pass socket operations, so a silently-mounted socket would dead-end at the first `connect()`.)

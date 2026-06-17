@@ -131,7 +131,6 @@ in
         USE_STDIO=0
         IMAGE_OVERRIDE_REF=""
         IMAGE_OVERRIDE_SOURCE=""
-        IMAGE_OVERRIDE_DIGEST=""
         CONTAINER_CMD=()
         # SpawnConfig env allowlist: KEY=VALUE pairs (one per array slot)
         SPAWN_ENV=()
@@ -157,38 +156,47 @@ in
             echo "Error: spawn-config file not found: $SPAWN_CONFIG" >&2
             exit 1
           fi
-          if jq -e 'has("agent") or has("agent_kind") or has("wrix_agent")' "$SPAWN_CONFIG" >/dev/null; then
-            echo "Error: SpawnConfig cannot change the ProfileConfig agent" >&2
+          if ! jq -e 'type == "object"' "$SPAWN_CONFIG" >/dev/null; then
+            echo "Error: invalid SpawnConfig JSON: expected object" >&2
             exit 1
           fi
-          # Stable JSON shape (the loom repo SpawnConfig): image_ref,
-          # image_source, workspace, env, initial_prompt, agent_args, repin.
-          # Loom is the producer; we consume image_ref, image_source,
-          # workspace, env, agent_args here. initial_prompt and repin are
-          # consumed in-container by the agent (loom writes the files into
-          # the workspace before spawn).
+          PROFILE_OVERRIDE_FIELD=$(jq -r 'first(["agent", "agent_kind", "wrix_agent", "WRIX_AGENT", "profile", "profile_name", "profile_config", "image_agent", "image-agent"][] as $field | select(has($field)) | $field) // ""' "$SPAWN_CONFIG")
+          if [[ -n "$PROFILE_OVERRIDE_FIELD" ]]; then
+            echo "Error: SpawnConfig cannot change the ProfileConfig agent/profile/image-agent field: $PROFILE_OVERRIDE_FIELD" >&2
+            exit 1
+          fi
+          UNDOCUMENTED_OVERRIDE_FIELD=$(jq -r 'first(["image_digest", "image_digest_path"][] as $field | select(has($field)) | $field) // ""' "$SPAWN_CONFIG")
+          if [[ -n "$UNDOCUMENTED_OVERRIDE_FIELD" ]]; then
+            echo "Error: SpawnConfig field $UNDOCUMENTED_OVERRIDE_FIELD is not a documented per-launch override; use a matching ProfileConfig image" >&2
+            exit 1
+          fi
+          if ! jq -e '(
+            (.workspace | type == "string" and length > 0) and
+            (.image_ref == null or (.image_ref | type == "string")) and
+            (.image_source == null or (.image_source | type == "string")) and
+            (.env | type == "array") and
+            all(.env[]; (type == "array") and (length == 2) and ((.[0] | type == "string" and length > 0) and (.[1] | type == "string"))) and
+            (.agent_args | type == "array") and
+            all(.agent_args[]; type == "string") and
+            (.mounts == null or ((.mounts | type == "array") and all(.mounts[]; (type == "object") and ((.host_path | type == "string" and length > 0) and (.container_path | type == "string" and length > 0) and (.read_only | type == "boolean")))))
+          )' "$SPAWN_CONFIG" >/dev/null; then
+            echo "Error: invalid SpawnConfig schema: expected workspace string, optional image_ref/image_source strings, env [key,value] string pairs, agent_args strings, and mounts with host_path/container_path/read_only" >&2
+            exit 1
+          fi
           PROJECT_DIR=$(jq -r '.workspace' "$SPAWN_CONFIG")
-          # `// ""` coerces missing keys / explicit nulls to empty strings,
-          # so the load-step gate (`-n "$IMAGE_SOURCE"`) skips cleanly when
-          # the orchestrator provides only image_ref.
           IMAGE_OVERRIDE_REF=$(jq -r '.image_ref // ""' "$SPAWN_CONFIG")
           IMAGE_OVERRIDE_SOURCE=$(jq -r '.image_source // ""' "$SPAWN_CONFIG")
-          IMAGE_OVERRIDE_DIGEST=$(jq -r '.image_digest // .image_digest_path // ""' "$SPAWN_CONFIG")
           while IFS= read -r pair; do
-            [ -z "$pair" ] && continue
+            [[ -z "$pair" ]] && continue
             SPAWN_ENV+=("$pair")
-          done < <(jq -r '.env[]? | "\(.[0])=\(.[1])"' "$SPAWN_CONFIG")
+          done < <(jq -r '.env[] | "\(.[0])=\(.[1])"' "$SPAWN_CONFIG")
           while IFS= read -r arg; do
             CONTAINER_CMD+=("$arg")
-          done < <(jq -r '.agent_args[]?' "$SPAWN_CONFIG")
-          # SpawnConfig.mounts: pre-render each entry to the podman volume
-          # syntax `host:container[:ro]`. Missing / empty array yields zero
-          # entries (matches the loom-side `#[serde(default,
-          # skip_serializing_if = "Vec::is_empty")]` on SpawnConfig.mounts).
+          done < <(jq -r '.agent_args[]' "$SPAWN_CONFIG")
           while IFS= read -r entry; do
-            [ -z "$entry" ] && continue
+            [[ -z "$entry" ]] && continue
             SPAWN_MOUNTS+=("$entry")
-          done < <(jq -r '.mounts[]? | "\(.host_path):\(.container_path)" + (if .read_only == true then ":ro" else "" end)' "$SPAWN_CONFIG")
+          done < <(jq -r '(.mounts? // [])[] | "\(.host_path):\(.container_path)" + (if .read_only == true then ":ro" else "" end)' "$SPAWN_CONFIG")
         else
           PROJECT_DIR="''${1:-$(pwd)}"
           shift || true
@@ -210,7 +218,6 @@ in
           printf 'WORKSPACE=%s\n' "$PROJECT_DIR"
           printf 'IMAGE_OVERRIDE_REF=%s\n' "$IMAGE_OVERRIDE_REF"
           printf 'IMAGE_OVERRIDE_SOURCE=%s\n' "$IMAGE_OVERRIDE_SOURCE"
-          printf 'IMAGE_OVERRIDE_DIGEST=%s\n' "$IMAGE_OVERRIDE_DIGEST"
           for pair in "''${SPAWN_ENV[@]}"; do printf 'ENV=%s\n' "$pair"; done
           for arg in "''${CONTAINER_CMD[@]}"; do printf 'CMD=%s\n' "$arg"; done
           for entry in "''${SPAWN_MOUNTS[@]}"; do printf 'MOUNT=-v %s\n' "$entry"; done
@@ -489,7 +496,11 @@ in
         else
           IMAGE_REF="''${IMAGE_OVERRIDE_REF:-$PROFILE_IMAGE_REF}"
           IMAGE_SOURCE="''${IMAGE_OVERRIDE_SOURCE:-$PROFILE_IMAGE_SOURCE}"
-          IMAGE_DIGEST_PATH="''${IMAGE_OVERRIDE_DIGEST:-$PROFILE_IMAGE_DIGEST}"
+          if [[ ( -z "$IMAGE_OVERRIDE_REF" || "$IMAGE_OVERRIDE_REF" == "$PROFILE_IMAGE_REF" ) && ( -z "$IMAGE_OVERRIDE_SOURCE" || "$IMAGE_OVERRIDE_SOURCE" == "$PROFILE_IMAGE_SOURCE" ) ]]; then
+            IMAGE_DIGEST_PATH="$PROFILE_IMAGE_DIGEST"
+          else
+            IMAGE_DIGEST_PATH=""
+          fi
         fi
         verbose "Resolved ProfileConfig (agent=$WRIX_AGENT, profile_config=$PROFILE_CONFIG, image=$IMAGE_REF)"
 
