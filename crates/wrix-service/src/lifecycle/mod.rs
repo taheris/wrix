@@ -714,7 +714,7 @@ fn select_port(
     hash: &WorkspaceHash,
 ) -> io::Result<u16> {
     if let Some(port) = prior
-        && is_loopback_port_available(port)
+        && (start..start + width).contains(&port)
     {
         return Ok(port);
     }

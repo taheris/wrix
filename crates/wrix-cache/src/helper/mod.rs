@@ -137,21 +137,35 @@ fn serve_cache_path(
     let Some(relative) = parse_cache_target(target) else {
         return write_response(stream, "404 Not Found", b"not found\n", include_body);
     };
-    let path = root.join(relative);
-    if !path.is_file() {
+    let Some(path) = resolve_cache_file(root, relative)? else {
         return write_response(stream, "404 Not Found", b"not found\n", include_body);
-    }
+    };
     let body = fs::read(path)?;
     write_response(stream, "200 OK", &body, include_body)
 }
 
+fn resolve_cache_file(root: &Path, relative: &str) -> io::Result<Option<PathBuf>> {
+    let root = root.canonicalize()?;
+    let path = root.join(relative);
+    let path = match path.canonicalize() {
+        Ok(path) => path,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    if path.starts_with(&root) && path.is_file() {
+        Ok(Some(path))
+    } else {
+        Ok(None)
+    }
+}
+
 fn parse_cache_target(target: &str) -> Option<&str> {
     let path = target.split('?').next()?.trim_start_matches('/');
-    if path.is_empty() || path.contains("..") || path.contains('\\') {
+    if path.is_empty() || path.contains('\\') || has_forbidden_segment(path) {
         return None;
     }
     if path == "nix-cache-info"
-        || path.ends_with(".narinfo")
+        || is_root_narinfo(path)
         || path.starts_with("nar/")
         || path.starts_with("log/")
     {
@@ -159,6 +173,15 @@ fn parse_cache_target(target: &str) -> Option<&str> {
     } else {
         None
     }
+}
+
+fn has_forbidden_segment(path: &str) -> bool {
+    path.split('/')
+        .any(|segment| segment.is_empty() || matches!(segment, "." | ".."))
+}
+
+fn is_root_narinfo(path: &str) -> bool {
+    path.ends_with(".narinfo") && !path.contains('/')
 }
 
 fn write_response(
@@ -476,7 +499,7 @@ fn write_help(helper: Helper, stdout: &mut impl Write) -> io::Result<()> {
         ),
         Helper::Serve => writeln!(
             stdout,
-            "{}\n\nUsage: {} [--help]",
+            "{}\n\nUsage: {} <cache-root>",
             helper.purpose(),
             helper.binary_name()
         ),
@@ -485,7 +508,17 @@ fn write_help(helper: Helper, stdout: &mut impl Write) -> io::Result<()> {
 
 #[cfg(test)]
 mod test {
-    use super::{manifest_allows_drv, manifest_key_values, parse_cache_target};
+    use std::{
+        fs,
+        io::{Read, Write},
+        net::{TcpListener, TcpStream},
+        path::Path,
+        thread,
+    };
+
+    use super::{
+        handle_cache_request, manifest_allows_drv, manifest_key_values, parse_cache_target,
+    };
 
     #[test]
     fn manifest_scope_accepts_matching_drv_path() {
@@ -514,6 +547,85 @@ mod test {
         assert_eq!(parse_cache_target("/log/abc"), Some("log/abc"));
         assert_eq!(parse_cache_target("/"), None);
         assert_eq!(parse_cache_target("/nar/../secret"), None);
+        assert_eq!(parse_cache_target("/nar//secret"), None);
+        assert_eq!(parse_cache_target("/nested/abc.narinfo"), None);
         assert_eq!(parse_cache_target("/index.html"), None);
+    }
+
+    #[test]
+    fn cache_server_returns_get_body_for_allowed_path() {
+        let root = temp_cache_root("get-body");
+        fs::write(root.join("nix-cache-info"), "StoreDir: /nix/store\n").unwrap();
+        let response = request(&root, "GET /nix-cache-info HTTP/1.1\r\n\r\n");
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(response.ends_with("StoreDir: /nix/store\n"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_server_head_omits_body() {
+        let root = temp_cache_root("head-no-body");
+        fs::write(root.join("abc.narinfo"), "StorePath: /nix/store/abc\n").unwrap();
+        let response = request(&root, "HEAD /abc.narinfo HTTP/1.1\r\n\r\n");
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(response.ends_with("\r\n\r\n"));
+        assert!(!response.contains("StorePath"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_server_rejects_write_methods_and_traversal() {
+        let root = temp_cache_root("rejects");
+        fs::create_dir_all(root.join("nar")).unwrap();
+        fs::write(root.join("secret"), "secret\n").unwrap();
+        fs::write(root.join("nar/good.nar"), "nar\n").unwrap();
+        let method = request(&root, "POST /nar/good.nar HTTP/1.1\r\n\r\n");
+        let traversal = request(&root, "GET /nar/../secret HTTP/1.1\r\n\r\n");
+        assert!(method.starts_with("HTTP/1.1 405 Method Not Allowed\r\n"));
+        assert!(traversal.starts_with("HTTP/1.1 404 Not Found\r\n"));
+        assert!(!traversal.contains("secret"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cache_server_rejects_symlink_escape() {
+        let root = temp_cache_root("symlink-escape");
+        let outside = root.with_extension("outside-secret");
+        fs::create_dir_all(root.join("nar")).unwrap();
+        fs::write(&outside, "secret\n").unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("nar/link.nar")).unwrap();
+        let response = request(&root, "GET /nar/link.nar HTTP/1.1\r\n\r\n");
+        assert!(response.starts_with("HTTP/1.1 404 Not Found\r\n"));
+        assert!(!response.contains("secret"));
+        fs::remove_file(outside).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn request(root: &Path, request: &str) -> String {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let root = root.to_path_buf();
+        let handle = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            handle_cache_request(stream, &root).unwrap();
+        });
+        let mut stream = TcpStream::connect(address).unwrap();
+        stream.write_all(request.as_bytes()).unwrap();
+        stream.shutdown(std::net::Shutdown::Write).unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        handle.join().unwrap();
+        response
+    }
+
+    fn temp_cache_root(name: &str) -> std::path::PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("wrix-cache-serve-{name}-{}", std::process::id()));
+        if root.exists() {
+            fs::remove_dir_all(&root).unwrap();
+        }
+        fs::create_dir_all(&root).unwrap();
+        root
     }
 }

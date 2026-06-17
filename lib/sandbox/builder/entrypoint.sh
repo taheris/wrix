@@ -75,8 +75,8 @@ else
     echo "Warning: No authorized keys found at $KEYS_FILE" >&2
 fi
 
-# Configure nix-daemon
-# Use socket in /run to avoid VirtioFS permission issues with /nix
+# Configure the Nix daemon
+# Use /run for the client endpoint to avoid VirtioFS permission issues with /nix
 echo "Configuring nix..."
 mkdir -p /etc/nix /run/nix
 cat > /etc/nix/nix.conf <<EOF
@@ -90,13 +90,13 @@ max-free = 3221225472
 EOF
 
 # Set NIX_DAEMON_SOCKET_PATH for SSH sessions (non-interactive commands need this)
-echo "NIX_DAEMON_SOCKET_PATH=/run/nix/nix-daemon.socket" > "$BUILDER_HOME/.ssh/environment"
+echo "NIX_DAEMON_SOCKET_PATH=/run/nix/daemon.sock" > "$BUILDER_HOME/.ssh/environment"
 chown "$BUILDER_UID:$BUILDER_UID" "$BUILDER_HOME/.ssh/environment"
 chmod 600 "$BUILDER_HOME/.ssh/environment"
 
-# Start nix-daemon with socket in /run (VirtioFS can't handle sockets in /nix)
+# Start the Nix daemon with its client endpoint under /run
 echo "Starting nix-daemon..."
-export NIX_DAEMON_SOCKET_PATH=/run/nix/nix-daemon.socket
+export NIX_DAEMON_SOCKET_PATH=/run/nix/daemon.sock
 nix-daemon &
 
 # Start sshd in background

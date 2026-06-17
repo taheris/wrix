@@ -124,8 +124,8 @@ pkgs.dockerTools.buildLayeredImage {
       "PATH=${builderEnv}/bin:/bin:/usr/bin"
       "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
       "NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
-      # Use socket in /run to avoid VirtioFS permission issues
-      "NIX_DAEMON_SOCKET_PATH=/run/nix/nix-daemon.socket"
+      # Use /run to avoid VirtioFS permission issues
+      "NIX_DAEMON_SOCKET_PATH=/run/nix/daemon.sock"
     ];
     Entrypoint = [ "/entrypoint.sh" ];
     ExposedPorts = {

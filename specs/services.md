@@ -162,13 +162,13 @@ Direct remote-builder access to the local project cache is out of scope for v1. 
 - Host devshell Nix uses `file://<cache-root>` as the project cache substituter, trusts the generated public key, enables `builders-use-substitutes`, installs a project-specific immutable post-build hook, and fails loudly when the host Nix daemon ignores any required setting
   [system](bash tests/services/host-nix-config.sh)
 - `wrix run` and `wrix spawn` inject container `NIX_CONFIG` that points at the project cache HTTP endpoint, trusts only the generated public key for that cache, and enables `builders-use-substitutes`
-  [system?](bash tests/services/sandbox-nix-config.sh test_container_pull_config)
+  [system](bash tests/services/sandbox-nix-config.sh test_container_pull_config)
 - The service cache HTTP endpoint is a Rust static read-only server for `<cache-root>`, uses an explicit persisted loopback host port in the `21000–22999` range, serves only Nix binary-cache paths, and does not require container DNS for sandbox substitution
-  [system?](bash tests/services/sandbox-nix-config.sh test_no_container_dns_dependency)
+  [system](bash tests/services/sandbox-nix-config.sh test_no_container_dns_dependency)
 - Sandboxes receive no cache signing key, no durable state root mount, no host `/nix/store` mount, and no host Nix daemon socket as part of project-cache integration
-  [system?](bash tests/services/sandbox-nix-config.sh test_no_host_store_or_cache_secret)
+  [system](bash tests/services/sandbox-nix-config.sh test_no_host_store_or_cache_secret)
 - With `WRIX_NETWORK=limit`, sandbox Nix can reach exactly the project cache endpoint while unrelated host-local services remain outside the generated allowlist
-  [system?](bash tests/services/sandbox-nix-config.sh test_limit_mode_cache_endpoint)
+  [system](bash tests/services/sandbox-nix-config.sh test_limit_mode_cache_endpoint)
 - The post-build hook drops privileges before publishing, never executes workspace files, and publishes only when `DRV_PATH` matches a configured publish-root derivation in `<state-root>/publish-roots.json`
   [system](bash tests/services/project-cache-hook.sh test_hook_manifest_scope)
 - `wrix service cache publish` refreshes the publish manifest, publishes only already-realized configured roots, drains matching pending records, updates GC markers, and does not build missing roots
@@ -188,7 +188,7 @@ Direct remote-builder access to the local project cache is out of scope for v1. 
 - `wrix service cache status` reports cache size and warns above the default 50 GiB soft threshold without deleting reachable entries solely to satisfy that threshold
   [system](bash tests/services/project-cache-status.sh test_warn_size)
 - The container-facing cache transport is HTTP only; wrix does not configure Unix-socket cache substituters, host Nix daemon sockets, shared mutable `/nix/store`, or host-store-serving tools for sandbox cache reads
-  [check?](sh -c "! grep -R 'host.nix-daemon\|nix-daemon.*socket\|unix:.*cache\|harmonia\|nix-serve' lib tests")
+  [check](sh -c "! grep -R 'host.nix-daemon\|nix-daemon.*socket\|unix:.*cache\|harmonia\|nix-serve' lib tests")
 
 ## Requirements
 

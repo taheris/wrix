@@ -112,10 +112,56 @@ in
         fi
         PROFILE_IMAGE_DIGEST=$(jq -r '.image.digest // ""' "$PROFILE_CONFIG")
         PROFILE_NETWORK_ALLOWLIST=$(jq -r '(.profile.network_allowlist // []) | join(",")' "$PROFILE_CONFIG")
+        PROFILE_NIX_CACHE_ENABLE=$(jq -r 'if ((.services.nix_cache.enable // true) == false or (.services.nix_cache.enable // true) == "false") then "0" else "1" end' "$PROFILE_CONFIG")
         PROFILE_CPUS=$(jq -r '.resources.cpus // ""' "$PROFILE_CONFIG")
         PROFILE_MEMORY_MB=$(jq -r '.resources.memory_mb // 4096' "$PROFILE_CONFIG")
         PROFILE_PIDS_LIMIT=$(jq -r '.resources.pids_limit // 4096' "$PROFILE_CONFIG")
         WRIX_AGENT="$PROFILE_AGENT"
+        WRIX_PROJECT_CACHE_URL=""
+        WRIX_PROJECT_CACHE_HOST=""
+        WRIX_PROJECT_CACHE_PORT=""
+        WRIX_PROJECT_CACHE_NIX_CONFIG=""
+        BEADS_DOLT_SOCKET=""
+
+        wrix_sandbox_cache_host() {
+          local host="$1"
+          local resolved="''${WRIX_PROJECT_CACHE_SANDBOX_HOST:-$host}"
+          if [[ ! "$resolved" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Error: project cache sandbox host must be a numeric IPv4 address: $resolved" >&2
+            exit 1
+          fi
+          printf '%s\n' "$resolved"
+        }
+
+        wrix_configure_project_cache() {
+          local endpoints cache_host cache_port state_root public_key_path public_key
+          endpoints=$(cd "$PROJECT_DIR" && "${serviceBin}" service endpoints)
+          cache_host=$(jq -er '.endpoints.cache_http.host | strings | select(length > 0)' <<<"$endpoints")
+          cache_port=$(jq -er '.endpoints.cache_http.port | numbers' <<<"$endpoints")
+          state_root=$(jq -er '.state_root | strings | select(length > 0)' <<<"$endpoints")
+          public_key_path="$state_root/keys/cache.pub"
+          if [[ ! -f "$public_key_path" ]]; then
+            echo "Error: project cache public key not found: $public_key_path" >&2
+            exit 1
+          fi
+          WRIX_PROJECT_CACHE_HOST=$(wrix_sandbox_cache_host "$cache_host")
+          WRIX_PROJECT_CACHE_PORT="$cache_port"
+          WRIX_PROJECT_CACHE_URL="http://$WRIX_PROJECT_CACHE_HOST:$WRIX_PROJECT_CACHE_PORT"
+          public_key=$(tr -d '\n' <"$public_key_path")
+          WRIX_PROJECT_CACHE_NIX_CONFIG=$(printf 'extra-substituters = %s\nextra-trusted-public-keys = %s\nbuilders-use-substitutes = true' "$WRIX_PROJECT_CACHE_URL" "$public_key")
+        }
+
+        wrix_ensure_workspace_services() {
+          if [[ "$PROFILE_NIX_CACHE_ENABLE" = "1" ]]; then
+            (cd "$PROJECT_DIR" && "${serviceBin}" service start >/dev/null)
+            wrix_configure_project_cache
+          elif [[ -d "$PROJECT_DIR/.beads/dolt" ]]; then
+            (cd "$PROJECT_DIR" && "${serviceBin}" service start --no-cache >/dev/null)
+          fi
+          if [[ -d "$PROJECT_DIR/.beads/dolt" ]]; then
+            BEADS_DOLT_SOCKET=$(cd "$PROJECT_DIR" && "${serviceBin}" service dolt socket)
+          fi
+        }
 
         # Subcommand dispatch: `wrix run` (interactive, TTY) vs
         # `wrix spawn` (stdio, JSON spawn-config). Default with no
@@ -206,6 +252,10 @@ in
           fi
         fi
 
+        if [[ "''${WRIX_DRY_RUN:-}" != "1" || "''${WRIX_DRY_RUN_SERVICES:-0}" = "1" ]]; then
+          wrix_ensure_workspace_services
+        fi
+
         # WRIX_DRY_RUN=1: print resolved spawn state and exit without
         # touching the filesystem or invoking podman. Used by tests to
         # verify SpawnConfig parsing and per-bead profile selection
@@ -218,6 +268,12 @@ in
           printf 'WORKSPACE=%s\n' "$PROJECT_DIR"
           printf 'IMAGE_OVERRIDE_REF=%s\n' "$IMAGE_OVERRIDE_REF"
           printf 'IMAGE_OVERRIDE_SOURCE=%s\n' "$IMAGE_OVERRIDE_SOURCE"
+          if [[ -n "$WRIX_PROJECT_CACHE_URL" ]]; then
+            printf 'PROJECT_CACHE_URL=%s\n' "$WRIX_PROJECT_CACHE_URL"
+            printf 'ENV=WRIX_PROJECT_CACHE_HOST=%s\n' "$WRIX_PROJECT_CACHE_HOST"
+            printf 'ENV=WRIX_PROJECT_CACHE_PORT=%s\n' "$WRIX_PROJECT_CACHE_PORT"
+            printf 'ENV=NIX_CONFIG=%s\n' "$WRIX_PROJECT_CACHE_NIX_CONFIG"
+          fi
           for pair in "''${SPAWN_ENV[@]}"; do printf 'ENV=%s\n' "$pair"; done
           for arg in "''${CONTAINER_CMD[@]}"; do printf 'CMD=%s\n' "$arg"; done
           for entry in "''${SPAWN_MOUNTS[@]}"; do printf 'MOUNT=-v %s\n' "$entry"; done
@@ -231,12 +287,6 @@ in
         ${expandPathFn}
 
         verbose "Project dir: $PROJECT_DIR"
-
-        BEADS_DOLT_SOCKET=""
-        if [ -d "$PROJECT_DIR/.beads/dolt" ]; then
-          (cd "$PROJECT_DIR" && "${serviceBin}" service start --no-cache >/dev/null)
-          BEADS_DOLT_SOCKET=$(cd "$PROJECT_DIR" && "${serviceBin}" service dolt socket)
-        fi
 
         # Read git author from host config (overrideable via env vars)
         GIT_AUTHOR_NAME="''${GIT_AUTHOR_NAME:-$(git config --global user.name 2>/dev/null || echo 'Wrix Sandbox')}"
@@ -622,6 +672,11 @@ in
           -e "WRIX_NETWORK=$WRIX_NETWORK"
           -e "WRIX_NETWORK_ALLOWLIST=$PROFILE_NETWORK_ALLOWLIST"
         )
+        if [[ -n "$WRIX_PROJECT_CACHE_URL" ]]; then
+          ENV_ARGS+=(-e "WRIX_PROJECT_CACHE_HOST=$WRIX_PROJECT_CACHE_HOST")
+          ENV_ARGS+=(-e "WRIX_PROJECT_CACHE_PORT=$WRIX_PROJECT_CACHE_PORT")
+          ENV_ARGS+=(-e "NIX_CONFIG=$WRIX_PROJECT_CACHE_NIX_CONFIG")
+        fi
         [ -n "$PI_AUTH_JSON_MOUNT" ] && ENV_ARGS+=(-e "WRIX_PI_AUTH_JSON=$PI_AUTH_JSON_MOUNT")
         [ -n "$BEADS_DOLT_SOCKET" ] && ENV_ARGS+=(-e "BEADS_DOLT_SERVER_SOCKET=/workspace/.wrix/dolt.sock")
         [ -n "$KRUN_CMD_ENV" ] && ENV_ARGS+=(-e "$KRUN_CMD_ENV")
