@@ -66,6 +66,8 @@ case "${1:-}" in
     fi
     exit 1
     ;;
+  ps)
+    ;;
   run)
     name=""
     previous=""
@@ -105,7 +107,7 @@ case "$*" in
     secret_path="$3"
     public_path="$4"
     printf '%s-secret\n' "$key_name" >"$secret_path"
-    printf '%s:public-key\n' "$key_name" >"$public_path"
+    printf '%s:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n' "$key_name" >"$public_path"
     ;;
   --add-fixed*)
     src="${@: -1}"
@@ -167,6 +169,7 @@ with_fake_tools() {
   export PATH="$bin_dir:$PATH"
   export WRIX_CONTAINER_RUNTIME="$bin_dir/podman"
   export WRIX_FAKE_RUNTIME_STATE="$TEST_TMP/runtime-state"
+  export WRIX_SERVICE_ALLOW_TEMP_CACHE=1
   export WRIX_FAKE_NIX_STORE_ROOT="$TEST_TMP/fake-store"
   export WRIX_NIX_STORE="$bin_dir/nix-store"
   export WRIX_NIX_STORE_BIN="$bin_dir/nix-store"

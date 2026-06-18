@@ -5,7 +5,10 @@ use std::{
     process::{Command, Stdio},
 };
 
-use wrix_core::path::{ContainerName, Workspace, WorkspaceHash};
+use wrix_core::{
+    cache_key,
+    path::{ContainerName, Workspace, WorkspaceHash},
+};
 
 const SCHEMA_VERSION: u8 = 1;
 const CACHE_PORT_START: u16 = 21_000;
@@ -69,13 +72,15 @@ impl Plan {
         let paths = Paths::for_workspace(workspace.hash())?;
         let prior_ports = PortLease::read(&paths.services_path())?;
         let cache_port = match cache_mode {
-            CacheMode::Enabled => Some(select_port(
-                prior_ports.cache_http_port,
-                CACHE_PORT_START,
-                CACHE_PORT_WIDTH,
-                workspace.hash(),
-            )?),
-            CacheMode::Disabled => None,
+            CacheMode::Enabled if cache_allowed_for_workspace(workspace.canonical_path()) => {
+                Some(select_port(
+                    prior_ports.cache_http_port,
+                    CACHE_PORT_START,
+                    CACHE_PORT_WIDTH,
+                    workspace.hash(),
+                )?)
+            }
+            CacheMode::Enabled | CacheMode::Disabled => None,
         };
         let dolt = if workspace.canonical_path().join(".beads/dolt").is_dir() {
             let transport = DoltTransport::from_env()?;
@@ -130,6 +135,10 @@ impl Plan {
 
     const fn cache_enabled(&self) -> bool {
         self.cache_port.is_some()
+    }
+
+    const fn has_services(&self) -> bool {
+        self.cache_port.is_some() || self.dolt.is_some()
     }
 
     fn ensure_layout(&self) -> io::Result<()> {
@@ -211,23 +220,14 @@ impl Plan {
     }
 
     fn ensure_cache_keys(&self) -> io::Result<()> {
-        if self.paths.cache_secret_path().exists() && self.paths.cache_public_path().exists() {
-            return Ok(());
-        }
         let key_name = format!("wrix-cache-{}", self.workspace.hash());
-        match generate_cache_keypair(
+        let nix_store = env::var("WRIX_NIX_STORE").unwrap_or_else(|_| String::from("nix-store"));
+        cache_key::ensure_keypair(
             &key_name,
             &self.paths.cache_secret_path(),
             &self.paths.cache_public_path(),
-        ) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => write_fallback_cache_keys(
-                &key_name,
-                &self.paths.cache_secret_path(),
-                &self.paths.cache_public_path(),
-            ),
-            Err(error) => Err(error),
-        }
+            &nix_store,
+        )
     }
 }
 
@@ -399,7 +399,9 @@ pub fn start(cache_mode: CacheMode) -> io::Result<Status> {
     let plan = Plan::for_current_dir(cache_mode)?;
     plan.ensure_layout()?;
     let runtime = Runtime::from_env();
-    runtime.ensure_running(&plan)?;
+    if plan.has_services() {
+        runtime.ensure_running(&plan)?;
+    }
     status_for_plan(plan)
 }
 
@@ -637,20 +639,26 @@ impl Runtime {
     }
 
     fn remove(&self, name: &ContainerName) -> io::Result<()> {
-        let status = Command::new(&self.binary)
+        self.remove_identifier(name.as_str()).map_err(|error| {
+            io::Error::other(format!(
+                "failed to remove service container {name}: {error}"
+            ))
+        })
+    }
+
+    fn remove_identifier(&self, identifier: &str) -> io::Result<()> {
+        let output = Command::new(&self.binary)
             .arg("rm")
             .arg("-f")
-            .arg(name.as_str())
+            .arg(identifier)
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()?;
-        if status.success() {
+            .output()?;
+        if output.status.success() {
             Ok(())
         } else {
-            Err(io::Error::other(format!(
-                "failed to remove service container {name}"
-            )))
+            Err(io::Error::other(
+                String::from_utf8_lossy(&output.stderr).into_owned(),
+            ))
         }
     }
 
@@ -705,6 +713,22 @@ fn default_runtime() -> String {
     } else {
         String::from("podman")
     }
+}
+
+fn cache_allowed_for_workspace(path: &Path) -> bool {
+    env::var("WRIX_SERVICE_ALLOW_TEMP_CACHE").is_ok_and(|value| value == "1")
+        || !temp_roots().iter().any(|root| path.starts_with(root))
+}
+
+fn temp_roots() -> Vec<PathBuf> {
+    let mut roots = vec![
+        env::temp_dir(),
+        PathBuf::from("/tmp"),
+        PathBuf::from("/var/tmp"),
+    ];
+    roots.sort();
+    roots.dedup();
+    roots
 }
 
 fn select_port(
@@ -844,59 +868,6 @@ fn default_cache_status() -> String {
 
 fn nix_cache_info() -> String {
     String::from("StoreDir: /nix/store\nWantMassQuery: 1\nPriority: 40\n")
-}
-
-fn generate_cache_keypair(
-    key_name: &str,
-    secret_path: &Path,
-    public_path: &Path,
-) -> io::Result<()> {
-    let nix_store = env::var("WRIX_NIX_STORE").unwrap_or_else(|_| String::from("nix-store"));
-    let secret_tmp = secret_path.with_extension(format!("secret.{}.tmp", std::process::id()));
-    let public_tmp = public_path.with_extension(format!("pub.{}.tmp", std::process::id()));
-    remove_if_exists(&secret_tmp)?;
-    remove_if_exists(&public_tmp)?;
-    let output = Command::new(nix_store)
-        .arg("--generate-binary-cache-key")
-        .arg(key_name)
-        .arg(&secret_tmp)
-        .arg(&public_tmp)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()?;
-    if !output.status.success() {
-        remove_if_exists(&secret_tmp)?;
-        remove_if_exists(&public_tmp)?;
-        return Err(io::Error::other(
-            String::from_utf8_lossy(&output.stderr).into_owned(),
-        ));
-    }
-    fs::rename(secret_tmp, secret_path)?;
-    fs::rename(public_tmp, public_path)
-}
-
-fn write_fallback_cache_keys(
-    key_name: &str,
-    secret_path: &Path,
-    public_path: &Path,
-) -> io::Result<()> {
-    write_if_missing(
-        secret_path,
-        format!("{key_name}:missing-nix-store-secret\n"),
-    )?;
-    write_if_missing(
-        public_path,
-        format!("{key_name}:missing-nix-store-public\n"),
-    )
-}
-
-fn remove_if_exists(path: &Path) -> io::Result<()> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error),
-    }
 }
 
 fn home_dir() -> io::Result<PathBuf> {

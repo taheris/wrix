@@ -119,6 +119,9 @@ in
             wrix_configure_project_cache() {
               local endpoints cache_host cache_port state_root public_key_path public_key
               endpoints=$(cd "$PROJECT_DIR" && "${serviceBin}" service endpoints)
+              if ! ${pkgs.jq}/bin/jq -e '.endpoints.cache_http != null' <<<"$endpoints" >/dev/null; then
+                return 0
+              fi
               cache_host=$(${pkgs.jq}/bin/jq -er '.endpoints.cache_http.host | strings | select(length > 0)' <<<"$endpoints")
               cache_port=$(${pkgs.jq}/bin/jq -er '.endpoints.cache_http.port | numbers' <<<"$endpoints")
               state_root=$(${pkgs.jq}/bin/jq -er '.state_root | strings | select(length > 0)' <<<"$endpoints")
@@ -131,6 +134,10 @@ in
               WRIX_PROJECT_CACHE_PORT="$cache_port"
               WRIX_PROJECT_CACHE_URL="http://$WRIX_PROJECT_CACHE_HOST:$WRIX_PROJECT_CACHE_PORT"
               public_key=$(tr -d '\n' <"$public_key_path")
+              if ! [[ "$public_key" =~ ^[^:]+:[A-Za-z0-9+/]{43}=$ ]]; then
+                echo "Error: project cache public key is invalid: $public_key_path" >&2
+                exit 1
+              fi
               WRIX_PROJECT_CACHE_NIX_CONFIG=$(printf 'extra-substituters = %s\nextra-trusted-public-keys = %s\nbuilders-use-substitutes = true' "$WRIX_PROJECT_CACHE_URL" "$public_key")
             }
 

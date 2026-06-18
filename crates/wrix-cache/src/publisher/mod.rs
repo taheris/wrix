@@ -9,7 +9,10 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use wrix_core::path::{Workspace, WorkspaceHash};
+use wrix_core::{
+    cache_key,
+    path::{Workspace, WorkspaceHash},
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Mode {
@@ -895,49 +898,11 @@ fn wipe_cache(paths: &Paths) -> io::Result<()> {
 }
 
 fn generate_project_keypair(paths: &Paths) -> io::Result<()> {
-    let key_name = paths
-        .state_root
-        .file_name()
-        .and_then(|value| value.to_str())
-        .map_or_else(
-            || String::from("wrix-cache"),
-            |value| format!("wrix-cache-{value}"),
-        );
-    let secret_tmp = paths
-        .cache_secret_path()
-        .with_extension(format!("secret.{}.tmp", std::process::id()));
-    let public_tmp = paths
-        .cache_public_path()
-        .with_extension(format!("pub.{}.tmp", std::process::id()));
-    remove_file_if_exists(&secret_tmp)?;
-    remove_file_if_exists(&public_tmp)?;
-    match Command::new(nix_store_bin())
-        .arg("--generate-binary-cache-key")
-        .arg(&key_name)
-        .arg(&secret_tmp)
-        .arg(&public_tmp)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-    {
-        Ok(output) if output.status.success() => {
-            fs::rename(secret_tmp, paths.cache_secret_path())?;
-            fs::rename(public_tmp, paths.cache_public_path())
-        }
-        Ok(_) | Err(_) => write_fallback_keypair(paths, &key_name),
-    }
-}
-
-fn write_fallback_keypair(paths: &Paths, key_name: &str) -> io::Result<()> {
-    let nonce = format!("{}-{}", now_nanos(), std::process::id());
-    fs::write(
-        paths.cache_secret_path(),
-        format!("{key_name}:local-secret:{nonce}\n"),
-    )?;
-    fs::write(
-        paths.cache_public_path(),
-        format!("{key_name}:local-public:{nonce}\n"),
+    cache_key::generate_keypair(
+        &paths.key_name(),
+        &paths.cache_secret_path(),
+        &paths.cache_public_path(),
+        &nix_store_bin(),
     )
 }
 
@@ -980,8 +945,12 @@ impl Paths {
         fs::create_dir_all(self.cache_root.join("log"))?;
         write_if_missing(&self.cache_lock_path(), "")?;
         write_if_missing(&self.cache_status_path(), cache_status(false))?;
-        write_if_missing(&self.cache_secret_path(), "wrix-cache:missing-secret\n")?;
-        write_if_missing(&self.cache_public_path(), "wrix-cache:missing-public\n")?;
+        cache_key::ensure_keypair(
+            &self.key_name(),
+            &self.cache_secret_path(),
+            &self.cache_public_path(),
+            &nix_store_bin(),
+        )?;
         write_if_missing(
             &self.cache_root.join("nix-cache-info"),
             "StoreDir: /nix/store\nWantMassQuery: 1\nPriority: 40\n",
@@ -1026,6 +995,16 @@ impl Paths {
 
     fn cache_public_path(&self) -> PathBuf {
         self.keys_dir().join("cache.pub")
+    }
+
+    fn key_name(&self) -> String {
+        self.state_root
+            .file_name()
+            .and_then(|value| value.to_str())
+            .map_or_else(
+                || String::from("wrix-cache"),
+                |value| format!("wrix-cache-{value}"),
+            )
     }
 }
 
@@ -1277,12 +1256,6 @@ fn now_epoch() -> u64 {
     system_time_epoch(SystemTime::now()).unwrap_or(0)
 }
 
-fn now_nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_nanos())
-}
-
 fn system_time_epoch(time: SystemTime) -> Option<u64> {
     time.duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
@@ -1364,14 +1337,6 @@ fn read_endpoints_text(paths: &Paths) -> io::Result<String> {
     match fs::read_to_string(paths.services_path()) {
         Ok(content) => Ok(content),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(String::from("unavailable")),
-        Err(error) => Err(error),
-    }
-}
-
-fn remove_file_if_exists(path: &Path) -> io::Result<()> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
     }
 }

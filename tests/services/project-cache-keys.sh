@@ -17,7 +17,7 @@ fail() {
 }
 
 build_wrix() {
-  cargo build --quiet --manifest-path "$REPO_ROOT/Cargo.toml" -p wrix-cli --bin wrix
+  cargo build --quiet --manifest-path "$REPO_ROOT/Cargo.toml" -p wrix-cli --bin wrix || return 1
   printf '%s\n' "$REPO_ROOT/target/debug/wrix"
 }
 
@@ -46,14 +46,48 @@ assert_contains() {
   fi
 }
 
+write_fake_nix_store() {
+  local nix_store="$1"
+  cat >"$nix_store" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${1:-}" == "--generate-binary-cache-key" ]]; then
+  key_name="$2"
+  secret_path="$3"
+  public_path="$4"
+  counter_path="${WRIX_FAKE_KEY_COUNTER:?}"
+  counter=0
+  if [[ -f "$counter_path" ]]; then
+    counter="$(<"$counter_path")"
+  fi
+  counter=$((counter + 1))
+  printf '%s\n' "$counter" >"$counter_path"
+  public_material="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+  if (( counter > 1 )); then
+    public_material="AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+  fi
+  printf '%s-secret-%s\n' "$key_name" "$counter" >"$secret_path"
+  printf '%s:%s\n' "$key_name" "$public_material" >"$public_path"
+  exit 0
+fi
+
+printf 'unsupported fake nix-store command: %s\n' "$*" >&2
+exit 2
+EOF
+  chmod +x "$nix_store"
+}
+
 test_rotate_key_wipes_cache() {
   local wrix_bin workspace state cache old_public output new_public
   wrix_bin="$(build_wrix)"
   export HOME="$TEST_TMP/home"
   export XDG_STATE_HOME="$TEST_TMP/state"
   export XDG_CACHE_HOME="$TEST_TMP/cache"
-  export WRIX_NIX_STORE_BIN="$TEST_TMP/missing-nix-store"
-  mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+  mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME" "$TEST_TMP/bin"
+  write_fake_nix_store "$TEST_TMP/bin/nix-store"
+  export WRIX_NIX_STORE_BIN="$TEST_TMP/bin/nix-store"
+  export WRIX_FAKE_KEY_COUNTER="$TEST_TMP/key-counter"
   workspace="$TEST_TMP/workspace"
   mkdir -p "$workspace"
 

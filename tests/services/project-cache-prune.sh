@@ -61,6 +61,15 @@ write_fake_nix_store() {
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${1:-}" == "--generate-binary-cache-key" ]]; then
+  key_name="$2"
+  secret_path="$3"
+  public_path="$4"
+  printf '%s-secret\n' "$key_name" >"$secret_path"
+  printf '%s:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n' "$key_name" >"$public_path"
+  exit 0
+fi
+
 if [[ "${1:-}" == "--query" && "${2:-}" == "--requisites" ]]; then
   shift 2
   printf '%s\n' "$@"

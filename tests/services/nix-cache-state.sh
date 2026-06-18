@@ -24,7 +24,7 @@ require_python() {
 }
 
 build_wrix() {
-  cargo build --quiet -p wrix-cli --bin wrix
+  cargo build --quiet -p wrix-cli --bin wrix || return 1
   printf '%s\n' "$REPO_ROOT/target/debug/wrix"
 }
 
@@ -58,6 +58,8 @@ case "${1:-}" in
       exit 0
     fi
     exit 1
+    ;;
+  ps)
     ;;
   run)
     name=""
@@ -134,6 +136,7 @@ with_fake_runtime_env() {
   write_fake_runtime "$runtime_dir/podman"
   export WRIX_CONTAINER_RUNTIME="$runtime_dir/podman"
   export WRIX_FAKE_RUNTIME_STATE="$state_dir"
+  export WRIX_SERVICE_ALLOW_TEMP_CACHE=1
 }
 
 test_fake_runtime_contract() {
@@ -212,9 +215,45 @@ test_state_layout() {
   fi
 }
 
+test_invalid_public_key_regenerated() {
+  require_python
+  local wrix_bin
+  wrix_bin="$(build_wrix)"
+  with_fake_runtime_env
+
+  export HOME="$TEST_TMP/home-invalid-key"
+  export XDG_STATE_HOME="$TEST_TMP/xdg-state-invalid-key"
+  export XDG_CACHE_HOME="$TEST_TMP/xdg-cache-invalid-key"
+  mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+
+  local workspace="$TEST_TMP/invalid-key-workspace"
+  mkdir -p "$workspace"
+  (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/invalid-key-start.txt")
+  (cd "$workspace" && "$wrix_bin" service endpoints >"$TEST_TMP/invalid-key-endpoints.json")
+
+  local state_root invalid_key regenerated_key
+  state_root="$(json_get "$TEST_TMP/invalid-key-endpoints.json" state_root)"
+  invalid_key="wrix-cache:be619e8138e924f7"
+  printf '%s\n' "$invalid_key" >"$state_root/keys/cache.pub"
+
+  (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/invalid-key-restart.txt")
+  regenerated_key="$(<"$state_root/keys/cache.pub")"
+  if [[ "$regenerated_key" == "$invalid_key" ]]; then
+    fail "service start left invalid project cache public key in place"
+  fi
+  python3 - "$regenerated_key" <<'PY'
+import base64
+import sys
+name, payload = sys.argv[1].strip().split(':', 1)
+if not name or len(base64.b64decode(payload)) != 32:
+    raise SystemExit(1)
+PY
+}
+
 ALL_TESTS=(
   test_fake_runtime_contract
   test_state_layout
+  test_invalid_public_key_regenerated
 )
 
 run_all() {

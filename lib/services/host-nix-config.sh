@@ -31,6 +31,18 @@ wrix_host_require_value() {
   fi
 }
 
+wrix_host_require_public_key() {
+  local public_key="$1"
+  if [[ -z "$public_key" ]]; then
+    wrix_host_fail "missing cache public key in service state"
+    return 1
+  fi
+  if ! [[ "$public_key" =~ ^[^:]+:[A-Za-z0-9+/]{43}=$ ]]; then
+    wrix_host_fail "invalid cache public key in service state; run env -u NIX_CONFIG wrix service cache rotate-key"
+    return 1
+  fi
+}
+
 wrix_host_config_snapshot() {
   local nix_bin="${WRIX_NIX_BIN:-nix}"
   if "$nix_bin" config show 2>/dev/null; then
@@ -157,6 +169,9 @@ wrix_host_nix_config_main() {
   fi
 
   endpoints="$($service_bin service endpoints)" || return 1
+  if printf '%s\n' "$endpoints" | grep -q '"cache_http":[[:space:]]*null'; then
+    return 0
+  fi
   workspace_hash="$(wrix_host_json_string "$endpoints" "workspace_hash")"
   state_root="$(wrix_host_json_string "$endpoints" "state_root")"
   cache_root="$(wrix_host_json_string "$endpoints" "cache_root")"
@@ -165,7 +180,7 @@ wrix_host_nix_config_main() {
   wrix_host_require_value "cache_root" "$cache_root" || return 1
 
   public_key="$(tr -d '\n' <"$state_root/keys/cache.pub")"
-  wrix_host_require_value "cache public key" "$public_key" || return 1
+  wrix_host_require_public_key "$public_key" || return 1
   manifest_path="$state_root/publish-roots.json"
   owner_uid="$(id -u)"
   owner_gid="$(id -g)"

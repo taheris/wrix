@@ -24,7 +24,7 @@ require_python() {
 }
 
 build_wrix() {
-  cargo build --quiet -p wrix-cli --bin wrix
+  cargo build --quiet -p wrix-cli --bin wrix || return 1
   printf '%s\n' "$REPO_ROOT/target/debug/wrix"
 }
 
@@ -90,9 +90,30 @@ case "${1:-}" in
     fi
     if [[ "$*" == *'{{.State.Running}}'* ]]; then
       printf 'true\n'
+    elif [[ "$*" == *'index .Config.Labels "wrix.workspace"'* ]]; then
+      workspace="<no value>"
+      if [[ -f "$STATE_DIR/run-$name" ]]; then
+        run_args="$(<"$STATE_DIR/run-$name")"
+        for token in $run_args; do
+          case "$token" in
+            wrix.workspace=*) workspace="${token#wrix.workspace=}" ;;
+          esac
+        done
+      fi
+      printf '%s\n' "$workspace"
     else
       printf 'running\n'
     fi
+    ;;
+  ps)
+    for run_file in "$STATE_DIR"/run-*; do
+      [[ -e "$run_file" ]] || continue
+      run_args="$(<"$run_file")"
+      if [[ "$run_args" == *'wrix.kind=service'* ]]; then
+        name="${run_file##*/run-}"
+        printf '%s\n' "$name"
+      fi
+    done
     ;;
   run)
     name=""
@@ -113,7 +134,7 @@ case "${1:-}" in
     ;;
   rm)
     name="${@: -1}"
-    rm -f "$(state_file "$name")"
+    rm -f "$(state_file "$name")" "$STATE_DIR/run-$name"
     log_call "$*"
     ;;
   logs)
@@ -186,6 +207,7 @@ with_fake_runtime_env() {
   write_fake_runtime "$runtime_dir/podman"
   export WRIX_CONTAINER_RUNTIME="$runtime_dir/podman"
   export WRIX_FAKE_RUNTIME_STATE="$state_dir"
+  export WRIX_SERVICE_ALLOW_TEMP_CACHE=1
 }
 
 test_fake_runtime_contract() {
@@ -290,6 +312,31 @@ test_devshell_start_is_independent() {
   fi
 }
 
+test_temp_cache_only_workspace_does_not_start_service() {
+  require_python
+  local wrix_bin
+  wrix_bin="$(build_wrix)"
+  with_fake_runtime_env
+  unset WRIX_SERVICE_ALLOW_TEMP_CACHE
+
+  export HOME="$TEST_TMP/home-temp-cache-only"
+  export XDG_STATE_HOME="$TEST_TMP/xdg-state-temp-cache-only"
+  export XDG_CACHE_HOME="$TEST_TMP/xdg-cache-temp-cache-only"
+  mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+
+  local workspace="$TEST_TMP/temp-cache-only-workspace"
+  mkdir -p "$workspace"
+  (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/temp-cache-only-start.txt")
+  (cd "$workspace" && "$wrix_bin" service endpoints >"$TEST_TMP/temp-cache-only-endpoints.json")
+
+  if "$WRIX_CONTAINER_RUNTIME" container exists temp-cache-only-workspace-service; then
+    fail "cache-only temp workspace started a persistent service container"
+  fi
+  local cache_endpoint
+  cache_endpoint="$(json_get "$TEST_TMP/temp-cache-only-endpoints.json" endpoints.cache_http)"
+  assert_equals "temp cache endpoint" "None" "$cache_endpoint"
+}
+
 test_service_start_loads_image_source() {
   local wrix_bin
   wrix_bin="$(build_wrix)"
@@ -335,6 +382,7 @@ ALL_TESTS=(
   test_fake_runtime_contract
   test_workspace_identity
   test_devshell_start_is_independent
+  test_temp_cache_only_workspace_does_not_start_service
   test_service_start_loads_image_source
   test_service_mounts_beads_worktree_remote
 )

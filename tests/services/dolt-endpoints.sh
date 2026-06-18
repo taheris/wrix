@@ -68,6 +68,8 @@ case "${1:-}" in
     fi
     exit 1
     ;;
+  ps)
+    ;;
   run)
     name=""
     previous=""
@@ -107,6 +109,7 @@ with_fake_runtime_env() {
   write_fake_runtime "$runtime_dir/podman"
   export WRIX_CONTAINER_RUNTIME="$runtime_dir/podman"
   export WRIX_FAKE_RUNTIME_STATE="$state_dir"
+  export WRIX_SERVICE_ALLOW_TEMP_CACHE=1
 }
 
 json_get() {
