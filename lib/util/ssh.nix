@@ -2,8 +2,8 @@
 #
 # Centralises container-side mount targets so Linux and Darwin launchers
 # all use the same key locations.  The runtime setup script (gitSshSetup)
-# is sourced by entrypoints to export GIT_SSH_COMMAND, write ~/.ssh/config,
-# and configure git signing.
+# is sourced by entrypoints to configure git's SSH command, write
+# ~/.ssh/config, and configure git signing.
 {
   # Container-side key directory.
   # NOT under ~/.ssh/ — on Linux, podman auto-creates parent dirs for

@@ -8,14 +8,17 @@
 #   WRIX_GIT_SIGN    — set to "0" to disable auto-signing (default: on
 #                        when WRIX_SIGNING_KEY is set)
 #
-# Emits a `GIT_SSH_COMMAND` env var (exported into the caller's shell) so
-# `git push` and other git-over-ssh operations use the deploy key, and
-# configures global git signing when a signing key is provided. Safe to
+# Emits a `GIT_SSH_COMMAND` env var and stores the same command in
+# git's global `core.sshCommand` so `git push` and other git-over-ssh
+# operations use the deploy key, and configures global git signing when
+# a signing key is provided. Safe to
 # source multiple times and safe to source when no keys are present — it
 # becomes a no-op.
 
 if [[ -n "${WRIX_DEPLOY_KEY:-}" ]] && [[ -f "$WRIX_DEPLOY_KEY" ]]; then
-  export GIT_SSH_COMMAND="ssh -i $WRIX_DEPLOY_KEY -o IdentitiesOnly=yes"
+  printf -v WRIX_DEPLOY_KEY_SSH_ARG '%q' "$WRIX_DEPLOY_KEY"
+  export GIT_SSH_COMMAND="ssh -i $WRIX_DEPLOY_KEY_SSH_ARG -o IdentitiesOnly=yes"
+  git config --global --replace-all core.sshCommand "$GIT_SSH_COMMAND"
 
   # Write SSH config so bare `ssh -T git@github.com` also works (not just
   # git commands that honour GIT_SSH_COMMAND).

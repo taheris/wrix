@@ -21,12 +21,10 @@
 #   - the child-env env vars are set to the in-container paths
 #   - the host source path does NOT cross as the child's env value
 #
-# A final test sources lib/util/git-ssh-setup.sh with the in-container
+# Final tests source lib/util/git-ssh-setup.sh with the in-container
 # WRIX_DEPLOY_KEY / WRIX_SIGNING_KEY pointing at the fixture keys
-# (the host-side stand-in for /etc/wrix/keys/) and asserts that a
-# fresh-repo `git commit --allow-empty` produces a non-empty `gpgsig`
-# block — exercising the same code path the entrypoint runs inside a
-# real sandbox container.
+# (the host-side stand-in for /etc/wrix/keys/) and assert that git SSH
+# auth uses the deploy key while commit signing uses the signing key.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -202,6 +200,7 @@ test_git_signing_produces_gpgsig() {
   git init -q "$repo"
 
   local err_log="$TEST_TMP/git-sign.log"
+  # shellcheck disable=SC2030,SC2031
   if ! (
     set -e
     cd "$repo"
@@ -232,10 +231,90 @@ test_git_signing_produces_gpgsig() {
   pass "git commit produces non-empty gpgsig with WRIX_SIGNING_KEY routed via env-first"
 }
 
+# ----------------------------------------------------------------------------
+# Test 4: normal git-over-SSH uses WRIX_DEPLOY_KEY even without env inheritance
+# ----------------------------------------------------------------------------
+test_git_ssh_command_uses_deploy_key_from_git_config() {
+  local repo="$TEST_TMP/ssh-repo"
+  local ssh_home="$TEST_TMP/ssh-home"
+  local fake_bin="$TEST_TMP/fake-ssh-bin"
+  local ssh_argv_log="$TEST_TMP/fake-ssh.argv"
+  local err_log="$TEST_TMP/git-ssh.log"
+  mkdir -p "$ssh_home" "$fake_bin"
+  git init -q "$repo"
+  git -C "$repo" remote add origin git@github.com:owner/repo.git
+
+  cat >"$fake_bin/ssh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${WRIX_FAKE_SSH_ARGV_LOG:?}"
+printf '%s\n' "$@" > "$WRIX_FAKE_SSH_ARGV_LOG"
+printf '0000'
+EOF
+  chmod +x "$fake_bin/ssh"
+
+  # shellcheck disable=SC2030,SC2031
+  if ! (
+    set -e
+    cd "$repo"
+    unset XDG_CONFIG_HOME GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM WRIX_SIGNING_KEY
+    export HOME="$ssh_home"
+    export WRIX_DEPLOY_KEY="$HOST_DEPLOY_KEY"
+    # shellcheck source=/dev/null
+    source "$GIT_SSH_SETUP"
+
+    expected="ssh -i $HOST_DEPLOY_KEY -o IdentitiesOnly=yes"
+    [[ "${GIT_SSH_COMMAND:-}" = "$expected" ]]
+    [[ "$(git config --global --get core.sshCommand)" = "$expected" ]]
+
+    export PATH="$fake_bin:$PATH"
+    export WRIX_FAKE_SSH_ARGV_LOG="$ssh_argv_log"
+    unset GIT_SSH_COMMAND
+    git ls-remote origin >/dev/null
+  ) >"$err_log" 2>&1; then
+    fail "git ls-remote did not use deploy-key SSH setup"
+    sed 's/^/    /' "$err_log" >&2
+    return
+  fi
+
+  if [[ ! -f "$ssh_argv_log" ]]; then
+    fail "fake ssh was not invoked by git ls-remote"
+    return
+  fi
+
+  local -a ssh_argv
+  mapfile -t ssh_argv < "$ssh_argv_log"
+  local saw_identity=0
+  local saw_identities_only=0
+  local i
+  for ((i = 0; i < ${#ssh_argv[@]}; i++)); do
+    if [[ "${ssh_argv[$i]}" = "-i" && "${ssh_argv[$((i + 1))]:-}" = "$HOST_DEPLOY_KEY" ]]; then
+      saw_identity=1
+    fi
+    if [[ "${ssh_argv[$i]}" = "-o" && "${ssh_argv[$((i + 1))]:-}" = "IdentitiesOnly=yes" ]]; then
+      saw_identities_only=1
+    fi
+  done
+
+  if [[ "$saw_identity" -ne 1 ]]; then
+    fail "git ssh command did not pass deploy key with -i"
+    printf '    %s\n' "${ssh_argv[@]}" >&2
+    return
+  fi
+  if [[ "$saw_identities_only" -ne 1 ]]; then
+    fail "git ssh command did not pass IdentitiesOnly=yes"
+    printf '    %s\n' "${ssh_argv[@]}" >&2
+    return
+  fi
+
+  pass "git-over-SSH uses WRIX_DEPLOY_KEY with IdentitiesOnly=yes"
+}
+
 ALL_TESTS=(
   test_linux_env_first_resolution
   test_darwin_env_first_resolution
   test_git_signing_produces_gpgsig
+  test_git_ssh_command_uses_deploy_key_from_git_config
 )
 
 for fn in "${ALL_TESTS[@]}"; do
