@@ -300,6 +300,56 @@ test_mkdevshell_nix_cache() {
   [[ "$(json_get "$result_file" customEnv.WRIX_CACHE_PRUNE_INTERVAL_SECS)" == "10800" ]] || { fail "pruneInterval did not map to seconds"; return 1; }
 }
 
+test_mkdevshell_skips_service_in_loom_integration_worktree() {
+  if ! command -v nix >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
+    exit 77
+  fi
+  local result result_file hook_file hook calls workspace fake_wrix output
+  if ! result="$(eval_expr_json '
+    let
+      shell = lib.mkDevShell { profile = lib.profiles.base; };
+    in { hook = shell.shellHook; }
+  ')"; then
+    fail "mkDevShell hook evaluation failed"
+    return 1
+  fi
+  result_file="$TEST_TMP/loom-integration-shell.json"
+  hook_file="$TEST_TMP/loom-integration-shell-hook.sh"
+  calls="$TEST_TMP/loom-integration-wrix-calls"
+  fake_wrix="$TEST_TMP/fake-wrix"
+  workspace="$TEST_TMP/.loom/integration"
+  printf '%s\n' "$result" >"$result_file"
+  hook="$(json_get "$result_file" hook)"
+  printf '%s\n' "$hook" >"$hook_file"
+  : >"$calls"
+  mkdir -p "$workspace"
+  cat >"$fake_wrix" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "${WRIX_FAKE_WRIX_CALLS:?}"
+exit 42
+EOF
+  chmod +x "$fake_wrix"
+
+  if ! output="$(
+    (
+      cd "$workspace"
+      export WRIX_BIN="$fake_wrix"
+      export WRIX_FAKE_WRIX_CALLS="$calls"
+      # shellcheck source=/dev/null
+      . "$hook_file"
+    ) 2>&1
+  )"; then
+    fail "mkDevShell hook failed in .loom/integration: $output"
+    return 1
+  fi
+  if [[ -s "$calls" ]]; then
+    fail "mkDevShell invoked wrix service in .loom/integration: $(cat "$calls")"
+    return 1
+  fi
+  assert_contains "mkDevShell output" "$output" "Wrix development shell" || return 1
+}
+
 test_host_nix_configures_cache_and_hook() {
   if ! command -v python3 >/dev/null 2>&1; then
     exit 77
@@ -397,6 +447,7 @@ test_host_nix_config_rejects_non_wrix_hook() {
 
 ALL_TESTS=(
   test_mkdevshell_nix_cache
+  test_mkdevshell_skips_service_in_loom_integration_worktree
   test_host_nix_configures_cache_and_hook
   test_host_nix_config_fails_when_trusted_setting_ignored
   test_host_nix_config_rejects_non_wrix_hook

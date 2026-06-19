@@ -163,6 +163,12 @@ in
             unset _wrix_service_bin _wrix_nix_config
           '';
       beadsHook = if nixCacheEnabled then beads.waitAndExport else "";
+      serviceSkipSetup = ''
+        _wrix_skip_service=0
+        case "$PWD" in
+          */.loom/integration|*/.loom/integration/*) _wrix_skip_service=1 ;;
+        esac
+      '';
     in
     pkgs.mkShell {
       packages =
@@ -175,7 +181,10 @@ in
         ];
       env = profile.env // cacheEnv // env;
       shellHook = ''
-        ${serviceHook}
+        ${serviceSkipSetup}
+        if [[ "$_wrix_skip_service" != "1" ]]; then
+          ${serviceHook}
+        fi
 
         # Configure Dolt origin remote for bd dolt pull/push (no-op if already set)
         if [ -d .beads/dolt/beads/.dolt ] && [ -d .git/beads-worktrees/beads/.beads/dolt-remote ]; then
@@ -183,8 +192,10 @@ in
           (cd .beads/dolt/beads && dolt remote add origin "$_dolt_remote" 2>/dev/null || true)
         fi
 
-        # Export service-published Dolt env vars suppressing bd's embedded autostart.
-        ${beadsHook}
+        if [[ "$_wrix_skip_service" != "1" ]]; then
+          ${beadsHook}
+        fi
+        unset _wrix_skip_service
 
         ${prekHookSetup}
 
