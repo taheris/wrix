@@ -16,11 +16,12 @@ correctness gate loom's ability to make progress.
 Beads is an external CLI (`bd`) backed by a Dolt SQL database. Wrix
 provides:
 
-- A **Dolt service** inside the per-workspace service container
-  (`<basename>-service`, owned by `services.md`) serving `.beads/dolt` on
-  workspace-hashed endpoints. One service container exists per workspace
-  path and is reused across invocations; identity derives from
-  `sha256(workspace path)` so concurrent workspaces do not collide.
+- A **Dolt service** inside the repository-root service container
+  (`<repo>-service`, owned by `services.md`) serving `.beads/dolt` on
+  identity-hashed endpoints. One service container exists per service
+  identity path and is reused across invocations; Loom paths under `.loom/`
+  share the outer repository identity so bead clones do not create their own
+  service containers.
 - A **shellHook** that ensures the service container is running and exports
   `BEADS_DOLT_SERVER_*` env vars so `bd` connects through the Dolt service
   rather than embedding Dolt in-process.
@@ -92,8 +93,8 @@ the remote (on disk in the beads branch worktree).
 that's the role of `wrix beads push` (see *Session-Close Sync*).
 
 The shellHook exports the connection info `bd` uses to reach the Dolt
-service inside `<basename>-service`: `BEADS_DOLT_SERVER_SOCKET` on Linux,
-`BEADS_DOLT_SERVER_HOST` and `BEADS_DOLT_SERVER_PORT` on Darwin.
+service inside the repository-root `<repo>-service`: `BEADS_DOLT_SERVER_SOCKET`
+on Linux, `BEADS_DOLT_SERVER_HOST` and `BEADS_DOLT_SERVER_PORT` on Darwin.
 
 Sandbox launchers stage only the beads files needed to locate the Dolt-backed
 workspace (`config.yaml` and `metadata.json`). They do not stage
@@ -263,9 +264,9 @@ upstream, not by this spec.
   of the caller's stop timeout
   [judge](../tests/judges/beads.sh#test_shellhook_lifecycle_isolation)
 
-- The same workspace path yields the same `<repo>-service` container name and Dolt endpoint across
-  `beads.shellHook` invocations; different workspace paths yield different
-  names and endpoints
+- The same service identity path yields the same `<repo>-service` container name and Dolt endpoint across
+  `beads.shellHook` invocations; different checkout identity paths yield
+  different names and endpoints
   [judge](../tests/judges/beads.sh#test_workspace_naming_determinism)
 
 - `beads.shellHook` fails non-zero with a stderr message when no container
@@ -352,7 +353,7 @@ upstream, not by this spec.
    in the `beads` branch worktree.
 5. **Per-workspace Dolt service** — `beads.shellHook` reaches Dolt through
    the `<repo>-service` container defined in `services.md`; the Dolt endpoint
-   is deterministic from the workspace path (sha256-based) so concurrent
+   is deterministic from the service identity path (sha256-based) so concurrent
    workspaces do not collide.
 6. **Lifecycle isolation** — the service container started by
    `beads.shellHook` has a lifecycle independent of the process that

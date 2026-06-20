@@ -12,7 +12,7 @@
 # 2. test_flake_outputs_present — `packages.image-<name>`,
 #    `packages.sandbox-<name>`, `packages.profile-images`, and
 #    `packages.profile-images-pi` evaluate for every built-in profile (base,
-#    rust, python).
+#    rust, python), and `packages.default` resolves to `sandbox-rust-pi`.
 #
 # Usage: tests/profiles/profile-images-manifest.sh [function_name]
 # Each function exits 0 on PASS, non-zero on FAIL, 77 to skip.
@@ -122,6 +122,16 @@ test_flake_outputs_present() {
             return 1
         fi
     done
+
+    local default_name
+    if ! default_name=$(nix eval --raw --no-warn-dirty "$flake_url#default.name"); then
+        echo "packages.default.name failed to evaluate" >&2
+        return 1
+    fi
+    if [[ "$default_name" != "wrix-rust-pi" ]]; then
+        echo "packages.default resolved to $default_name, expected wrix-rust-pi" >&2
+        return 1
+    fi
 }
 
 fn="${1:-test_manifest_shape}"

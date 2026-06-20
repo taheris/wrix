@@ -64,7 +64,7 @@ pub struct Status {
 
 impl Plan {
     pub fn for_current_dir(cache_mode: CacheMode) -> io::Result<Self> {
-        let workspace = Workspace::from_current_dir()?;
+        let workspace = Workspace::from_service_current_dir()?;
         Self::for_workspace(workspace, cache_mode)
     }
 

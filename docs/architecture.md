@@ -90,7 +90,7 @@ The launcher and the OCI image are separate Nix outputs, composed at the consume
 | `packages.image-<profile>-pi` | Per-profile OCI artifact built with `agent = "pi"` |
 | `packages.sandbox-<profile>` | `makeWrapper` of the Rust CLI with an immutable Nix-store `ProfileConfig` JSON path — the user-facing `nix run .#sandbox-rust` target |
 | `packages.sandbox-<profile>-claude` | Claude overlay with agent selection encoded in `ProfileConfig` |
-| `packages.sandbox-<profile>-pi` | Pi overlay with agent selection encoded in `ProfileConfig`. Pi images seed non-secret Codex subscription defaults; the launcher mounts Pi `auth.json` only for Pi runs. `packages.default` points at `packages.sandbox-pi` |
+| `packages.sandbox-<profile>-pi` | Pi overlay with agent selection encoded in `ProfileConfig`. Pi images seed non-secret Codex subscription defaults; the launcher mounts Pi `auth.json` only for Pi runs. `packages.default` points at `packages.sandbox-rust-pi` |
 | `packages.profile-images` | JSON manifest mapping profile → selected agent variant → profile config/image metadata, for orchestrators that look up images by profile name |
 
 The launcher exposes two subcommands sharing the same Rust-owned container construction (mounts, env passthrough, deploy key, service startup, network firewall policy):

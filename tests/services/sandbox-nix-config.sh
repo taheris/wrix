@@ -151,6 +151,7 @@ with_fake_service_env() {
   export WRIX_FAKE_RUNTIME_STATE="$runtime_state"
   export WRIX_NIX_STORE="$bin_dir/nix-store"
   export WRIX_SERVICE_ALLOW_TEMP_CACHE=1
+  unset WRIX_SERVICE_IMAGE WRIX_SERVICE_IMAGE_SOURCE
   mkdir -p "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
 }
 
@@ -347,6 +348,32 @@ test_container_pull_config() {
   assert_contains "spawn output" "$spawn_output" "builders-use-substitutes = true"
 }
 
+test_loom_bead_spawn_uses_repo_service() {
+  require_python
+  local package wrix_bin repo bead repo_real profile_config output
+  package="$(build_wrix_package)"
+  wrix_bin="$package/bin/wrix"
+  with_fake_service_env "loom-bead-spawn"
+  repo="$TEST_TMP/loom-bead-spawn-repo"
+  bead="$repo/.loom/beads/lm-gzgw.3"
+  profile_config="$TEST_TMP/loom-bead-spawn-profile.json"
+  mkdir -p "$repo/.git" "$repo/.beads/dolt" "$bead/.git" "$bead/.beads"
+  repo_real="$(cd "$repo" && pwd -P)"
+  write_profile_config "$profile_config"
+
+  output="$(sandbox_dry_run spawn "$bead" "$profile_config" "$wrix_bin")"
+
+  if ! "$WRIX_CONTAINER_RUNTIME" container exists loom-bead-spawn-repo-service; then
+    fail "loom bead spawn did not start the repository service"
+  fi
+  if "$WRIX_CONTAINER_RUNTIME" container exists lm-gzgw.3-service; then
+    fail "loom bead spawn started a bead-clone service container"
+  fi
+  assert_contains "loom bead output" "$output" "WORKSPACE=$bead"
+  assert_contains "loom bead output" "$output" "ENV=BEADS_DOLT_SERVER_SOCKET=/run/wrix/dolt/dolt.sock"
+  assert_contains "loom bead output" "$output" "MOUNT=-v $repo_real/.wrix:/run/wrix/dolt:rw"
+}
+
 test_no_container_dns_dependency() {
   require_python
   local package wrix_bin workspace profile_config first_output second_output endpoints cache_port first_url second_url run_file service_args
@@ -501,6 +528,7 @@ test_limit_mode_cache_endpoint() {
 
 ALL_TESTS=(
   test_container_pull_config
+  test_loom_bead_spawn_uses_repo_service
   test_no_container_dns_dependency
   test_no_host_store_or_cache_secret
   test_limit_mode_cache_endpoint

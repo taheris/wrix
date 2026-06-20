@@ -105,6 +105,7 @@ in
             WRIX_PROJECT_CACHE_NIX_CONFIG=""
             BEADS_DOLT_HOST=""
             BEADS_DOLT_PORT=""
+            WRIX_WORKSPACE_DOLT=0
 
             wrix_sandbox_cache_host() {
               local host="$1"
@@ -141,16 +142,32 @@ in
               WRIX_PROJECT_CACHE_NIX_CONFIG=$(printf 'extra-substituters = %s\nextra-trusted-public-keys = %s\nbuilders-use-substitutes = true' "$WRIX_PROJECT_CACHE_URL" "$public_key")
             }
 
+            wrix_detect_workspace_dolt() {
+              local status_output
+              if status_output=$(cd "$PROJECT_DIR" && "${serviceBin}" service dolt status 2>&1); then
+                WRIX_WORKSPACE_DOLT=1
+                return 0
+              fi
+              case "$status_output" in
+                *"dolt: disabled"*) WRIX_WORKSPACE_DOLT=0 ;;
+                *)
+                  printf '%s\n' "$status_output" >&2
+                  exit 1
+                  ;;
+              esac
+            }
+
             wrix_ensure_workspace_services() {
+              wrix_detect_workspace_dolt
               if [[ "$PROFILE_NIX_CACHE_ENABLE" = "1" ]]; then
                 (cd "$PROJECT_DIR" && "${serviceBin}" service start >/dev/null)
                 wrix_configure_project_cache
-              elif [[ -d "$PROJECT_DIR/.beads/dolt" ]]; then
+              elif [[ "$WRIX_WORKSPACE_DOLT" = "1" ]]; then
                 (cd "$PROJECT_DIR" && "${serviceBin}" service start --no-cache >/dev/null)
               fi
-              if [[ -d "$PROJECT_DIR/.beads/dolt" ]]; then
-                BEADS_DOLT_HOST=$(cd "$PROJECT_DIR" && "${serviceBin}" service dolt host)
+              if [[ "$WRIX_WORKSPACE_DOLT" = "1" ]]; then
                 BEADS_DOLT_PORT=$(cd "$PROJECT_DIR" && "${serviceBin}" service dolt port)
+                BEADS_DOLT_HOST=$(cd "$PROJECT_DIR" && "${serviceBin}" service dolt host)
               fi
             }
 
@@ -262,6 +279,12 @@ in
                 printf 'ENV=WRIX_PROJECT_CACHE_HOST=%s\n' "$WRIX_PROJECT_CACHE_HOST"
                 printf 'ENV=WRIX_PROJECT_CACHE_PORT=%s\n' "$WRIX_PROJECT_CACHE_PORT"
                 printf 'ENV=NIX_CONFIG=%s\n' "$WRIX_PROJECT_CACHE_NIX_CONFIG"
+              fi
+              if [[ -n "$BEADS_DOLT_PORT" ]]; then
+                printf 'ENV=BEADS_DOLT_SERVER_PORT=%s\n' "$BEADS_DOLT_PORT"
+              fi
+              if [[ -n "$BEADS_DOLT_HOST" ]]; then
+                printf 'ENV=BEADS_DOLT_SERVER_HOST=%s\n' "$BEADS_DOLT_HOST"
               fi
               for pair in "''${SPAWN_ENV[@]}"; do printf 'ENV=%s\n' "$pair"; done
               for arg in "''${CONTAINER_CMD[@]}"; do printf 'CMD=%s\n' "$arg"; done

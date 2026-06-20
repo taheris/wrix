@@ -247,6 +247,12 @@ if [[ -f /workspace/.beads/config.yaml ]]; then
   if [[ "$BACKEND" = "dolt" ]]; then
     if [[ -n "${BEADS_DOLT_SERVER_HOST:-}" ]] && [[ -n "${BEADS_DOLT_SERVER_PORT:-}" ]]; then
       export BEADS_DOLT_AUTO_START=0
+    elif [[ -n "${BEADS_DOLT_SERVER_SOCKET:-}" ]]; then
+      if [[ ! -S "$BEADS_DOLT_SERVER_SOCKET" ]]; then
+        echo "Error: configured Dolt socket is unavailable: $BEADS_DOLT_SERVER_SOCKET" >&2
+        exit 1
+      fi
+      export BEADS_DOLT_AUTO_START=0
     elif [[ -n "${BEADS_DOLT_SERVER_PORT:-}" ]]; then
       BEADS_DOLT_SERVER_HOST=$(ip route 2>/dev/null | awk '/default/ {print $3; exit}')
       export BEADS_DOLT_SERVER_HOST

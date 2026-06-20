@@ -136,7 +136,7 @@
         // {
           inherit (pkgs) beads;
 
-          default = sandboxOverlays.sandbox-pi;
+          default = sandboxOverlays.sandbox-rust-pi;
           nodejs = linuxPkgs.nodejs_22;
           profile-images = wrix.mkProfileImages profileImages;
           profile-images-pi = wrix.mkProfileImages profilePiImages;

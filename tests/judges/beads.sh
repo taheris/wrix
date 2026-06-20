@@ -3,7 +3,7 @@
 
 test_sync_in_container() {
   judge_files "lib/sandbox/linux/default.nix" "lib/sandbox/darwin/default.nix" "lib/sandbox/linux/entrypoint.sh" "lib/sandbox/darwin/entrypoint.sh"
-  judge_criterion "Sandbox launchers start or reach the workspace service with 'wrix service start --no-cache', read the service-published Dolt endpoint through 'wrix service dolt ...', and pass BEADS_DOLT_SERVER_* into the container with BEADS_DOLT_AUTO_START disabled by the entrypoint. Linux uses the mounted /workspace/.wrix/dolt.sock path; Darwin uses the service TCP host/port. A missing endpoint is fatal rather than silently falling back to a per-container Dolt or JSONL import."
+  judge_criterion "Sandbox launchers start or reach the workspace service with 'wrix service start --no-cache', read the service-published Dolt endpoint through 'wrix service dolt ...', and pass BEADS_DOLT_SERVER_* into the container with BEADS_DOLT_AUTO_START disabled by the entrypoint. Linux uses the service Unix socket mounted into the sandbox; Darwin uses the service TCP host/port. A missing endpoint is fatal rather than silently falling back to a per-container Dolt or JSONL import."
 }
 
 
@@ -19,7 +19,7 @@ test_shellhook_fail_loud() {
 
 test_workspace_naming_determinism() {
   judge_files "crates/wrix-core/src/path/mod.rs" "crates/wrix-service/src/lifecycle/mod.rs" "lib/beads/default.nix"
-  judge_criterion "Workspace identity for beads comes from the services contract: the same canonical workspace path yields the same '<repo>-service' container name, workspace-hashed state root, and service endpoints across invocations, while different checkout paths do not collide. PASS if beads.shellHook delegates naming/endpoint selection to 'wrix service ...' and no longer carries legacy '<basename>-beads' helper logic; FAIL if '_name' or equivalent basename(path)-beads helpers can satisfy the criterion."
+  judge_criterion "Workspace identity for beads comes from the services contract: the same service identity path yields the same '<repo>-service' container name, workspace-hashed state root, and service endpoints across invocations, while different checkout identity paths do not collide. PASS if beads.shellHook delegates naming/endpoint selection to 'wrix service ...' and no longer carries legacy '<basename>-beads' helper logic; FAIL if '_name' or equivalent basename(path)-beads helpers can satisfy the criterion."
 }
 
 test_beadspush_pushes_before_pulls() {

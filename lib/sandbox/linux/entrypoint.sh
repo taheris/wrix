@@ -180,18 +180,22 @@ elif [[ "$WRIX_AGENT" = "pi" ]]; then
   fi
 fi
 
-# Connect bd to the host's wrix-beads dolt container via the mounted
-# unix socket. The host starts wrix-beads (lib/beads/default.nix shellHook)
-# and bind-mounts /workspace/.wrix/dolt.sock into every wrix container.
-# Missing socket is fatal when the dolt backend is configured — we refuse
-# to fall back to bd's embedded autostart (which would fork a per-container
-# dolt that diverges from the host's authoritative state).
+# Connect bd to the host workspace service through the launcher-provided
+# TCP or Unix-socket endpoint. Missing endpoints are fatal when the Dolt
+# backend is configured because embedded autostart would diverge from the
+# host's authoritative state.
 if [[ -f /workspace/.beads/config.yaml ]]; then
   # best-effort: missing/malformed metadata.json -> default to sqlite backend
   BACKEND=$(jq -r '.backend // "sqlite"' /workspace/.beads/metadata.json 2>/dev/null || echo "sqlite")
 
   if [[ "$BACKEND" = "dolt" ]]; then
     if [[ -n "${BEADS_DOLT_SERVER_HOST:-}" ]] && [[ -n "${BEADS_DOLT_SERVER_PORT:-}" ]]; then
+      export BEADS_DOLT_AUTO_START=0
+    elif [[ -n "${BEADS_DOLT_SERVER_SOCKET:-}" ]]; then
+      if [[ ! -S "$BEADS_DOLT_SERVER_SOCKET" ]]; then
+        echo "Error: configured Dolt socket is unavailable: $BEADS_DOLT_SERVER_SOCKET" >&2
+        exit 1
+      fi
       export BEADS_DOLT_AUTO_START=0
     elif [[ -S /workspace/.wrix/dolt.sock ]]; then
       export BEADS_DOLT_SERVER_SOCKET=/workspace/.wrix/dolt.sock

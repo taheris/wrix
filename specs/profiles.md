@@ -536,7 +536,7 @@ Profiles surface as three sibling output families:
 | `packages.image-<profile>-pi` | OCI artifact built with `agent = "pi"` | Consumers driving Pi images directly |
 | `packages.sandbox-<profile>` | `makeWrapper` of `packages.wrix` + `packages.image-<profile>` with `WRIX_AGENT=direct` baked in | One-shot users (`nix run .#sandbox-rust`) |
 | `packages.sandbox-<profile>-claude` | Claude variant with `WRIX_AGENT=claude` baked in | One-shot users that want Claude |
-| `packages.sandbox-<profile>-pi` | Pi variant with `WRIX_AGENT=pi` baked in | One-shot users that want Pi; `packages.default` points at base `sandbox-pi` |
+| `packages.sandbox-<profile>-pi` | Pi variant with `WRIX_AGENT=pi` baked in | One-shot users that want Pi; `packages.default` points at rust `sandbox-rust-pi` |
 | `packages.profile-images` | JSON manifest from `mkProfileImages`, keyed by profile then selected agent variant | External orchestrators (e.g. Loom via `LOOM_PROFILES_MANIFEST`) |
 
 `<profile>` covers the built-in profiles (`base`, `rust`, `python`). The
@@ -700,7 +700,7 @@ dests live under `/home/wrix/` inside the container, not under
   [system](bash tests/profiles/no-nightly-closure.sh test_no_nightly_closure)
 - `mkProfileImages { rust = …; }` produces a JSON file whose entry for `rust` is keyed by the image's selected agent and whose selected-agent entry has `ref`, `source`, and `profile_config` fields, with `source` resolving to the same store path as the corresponding `(wrix.mkSandbox { profile = wrix.profiles.rust; agent = …; }).image`
   [system](bash tests/profiles/profile-images-manifest.sh test_manifest_shape)
-- `packages.image-<name>`, `packages.sandbox-<name>`, `packages.profile-images`, and `packages.profile-images-pi` all evaluate for each built-in profile
+- `packages.image-<name>`, `packages.sandbox-<name>`, `packages.profile-images`, and `packages.profile-images-pi` all evaluate for each built-in profile, and `packages.default` resolves to `sandbox-rust-pi`
   [system](bash tests/profiles/profile-images-manifest.sh test_flake_outputs_present)
 - `profiles.rust.buildPackage` is exposed and returns an attrset with `bin`, `clippy`, `nextest`, and `cargoArtifacts` fields
   [system](bash tests/profiles/build-package.sh test_build_package_exposed)

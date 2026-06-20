@@ -121,7 +121,9 @@ in
         WRIX_PROJECT_CACHE_HOST=""
         WRIX_PROJECT_CACHE_PORT=""
         WRIX_PROJECT_CACHE_NIX_CONFIG=""
-        BEADS_DOLT_SOCKET=""
+        BEADS_DOLT_CONTAINER_SOCKET=""
+        BEADS_DOLT_SOCKET_MOUNT_SOURCE=""
+        WRIX_WORKSPACE_DOLT=0
 
         wrix_sandbox_cache_host() {
           local host="$1"
@@ -158,15 +160,45 @@ in
           WRIX_PROJECT_CACHE_NIX_CONFIG=$(printf 'extra-substituters = %s\nextra-trusted-public-keys = %s\nbuilders-use-substitutes = true' "$WRIX_PROJECT_CACHE_URL" "$public_key")
         }
 
+        wrix_configure_dolt_socket() {
+          local socket="$1"
+          local project_real=""
+          BEADS_DOLT_CONTAINER_SOCKET="/workspace/.wrix/dolt.sock"
+          project_real=$(cd "$PROJECT_DIR" && pwd -P)
+          if [[ "$socket" = "$project_real/.wrix/dolt.sock" ]]; then
+            return 0
+          fi
+          BEADS_DOLT_SOCKET_MOUNT_SOURCE=$(dirname "$socket")
+          BEADS_DOLT_CONTAINER_SOCKET="/run/wrix/dolt/dolt.sock"
+        }
+
+        wrix_detect_workspace_dolt() {
+          local status_output
+          if status_output=$(cd "$PROJECT_DIR" && "${serviceBin}" service dolt status 2>&1); then
+            WRIX_WORKSPACE_DOLT=1
+            return 0
+          fi
+          case "$status_output" in
+            *"dolt: disabled"*) WRIX_WORKSPACE_DOLT=0 ;;
+            *)
+              printf '%s\n' "$status_output" >&2
+              exit 1
+              ;;
+          esac
+        }
+
         wrix_ensure_workspace_services() {
+          local socket
+          wrix_detect_workspace_dolt
           if [[ "$PROFILE_NIX_CACHE_ENABLE" = "1" ]]; then
             (cd "$PROJECT_DIR" && "${serviceBin}" service start >/dev/null)
             wrix_configure_project_cache
-          elif [[ -d "$PROJECT_DIR/.beads/dolt" ]]; then
+          elif [[ "$WRIX_WORKSPACE_DOLT" = "1" ]]; then
             (cd "$PROJECT_DIR" && "${serviceBin}" service start --no-cache >/dev/null)
           fi
-          if [[ -d "$PROJECT_DIR/.beads/dolt" ]]; then
-            BEADS_DOLT_SOCKET=$(cd "$PROJECT_DIR" && "${serviceBin}" service dolt socket)
+          if [[ "$WRIX_WORKSPACE_DOLT" = "1" ]]; then
+            socket=$(cd "$PROJECT_DIR" && "${serviceBin}" service dolt socket)
+            wrix_configure_dolt_socket "$socket"
           fi
         }
 
@@ -281,6 +313,12 @@ in
             printf 'ENV=WRIX_PROJECT_CACHE_PORT=%s\n' "$WRIX_PROJECT_CACHE_PORT"
             printf 'ENV=NIX_CONFIG=%s\n' "$WRIX_PROJECT_CACHE_NIX_CONFIG"
           fi
+          if [[ -n "$BEADS_DOLT_CONTAINER_SOCKET" ]]; then
+            printf 'ENV=BEADS_DOLT_SERVER_SOCKET=%s\n' "$BEADS_DOLT_CONTAINER_SOCKET"
+          fi
+          if [[ -n "$BEADS_DOLT_SOCKET_MOUNT_SOURCE" ]]; then
+            printf 'MOUNT=-v %s:/run/wrix/dolt:rw\n' "$BEADS_DOLT_SOCKET_MOUNT_SOURCE"
+          fi
           for pair in "''${SPAWN_ENV[@]}"; do printf 'ENV=%s\n' "$pair"; done
           for arg in "''${CONTAINER_CMD[@]}"; do printf 'CMD=%s\n' "$arg"; done
           for entry in "''${SPAWN_MOUNTS[@]}"; do printf 'MOUNT=-v %s\n' "$entry"; done
@@ -303,6 +341,9 @@ in
 
         # Build volume args
         VOLUME_ARGS="-v $PROJECT_DIR:/workspace:rw"
+        if [[ -n "$BEADS_DOLT_SOCKET_MOUNT_SOURCE" ]]; then
+          VOLUME_ARGS="$VOLUME_ARGS -v $BEADS_DOLT_SOCKET_MOUNT_SOURCE:/run/wrix/dolt:rw"
+        fi
 
         # Ensure project .claude dir exists for session persistence (/resume, /rename)
         # ~/.claude is container-local (tmpfs); entrypoint symlinks persistent items.
@@ -685,7 +726,7 @@ in
           ENV_ARGS+=(-e "NIX_CONFIG=$WRIX_PROJECT_CACHE_NIX_CONFIG")
         fi
         [ -n "$PI_AUTH_JSON_MOUNT" ] && ENV_ARGS+=(-e "WRIX_PI_AUTH_JSON=$PI_AUTH_JSON_MOUNT")
-        [ -n "$BEADS_DOLT_SOCKET" ] && ENV_ARGS+=(-e "BEADS_DOLT_SERVER_SOCKET=/workspace/.wrix/dolt.sock")
+        [ -n "$BEADS_DOLT_CONTAINER_SOCKET" ] && ENV_ARGS+=(-e "BEADS_DOLT_SERVER_SOCKET=$BEADS_DOLT_CONTAINER_SOCKET")
         [ -n "$KRUN_CMD_ENV" ] && ENV_ARGS+=(-e "$KRUN_CMD_ENV")
         # default boundary: the process is the store-owning rootless container-0
         # (see USERNS_ARGS above). Tell claude it is sandboxed so it permits

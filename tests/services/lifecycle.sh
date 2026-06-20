@@ -208,6 +208,7 @@ with_fake_runtime_env() {
   export WRIX_CONTAINER_RUNTIME="$runtime_dir/podman"
   export WRIX_FAKE_RUNTIME_STATE="$state_dir"
   export WRIX_SERVICE_ALLOW_TEMP_CACHE=1
+  unset WRIX_SERVICE_IMAGE WRIX_SERVICE_IMAGE_SOURCE
 }
 
 test_fake_runtime_contract() {
@@ -337,6 +338,41 @@ test_temp_cache_only_workspace_does_not_start_service() {
   assert_equals "temp cache endpoint" "None" "$cache_endpoint"
 }
 
+test_loom_bead_workspace_uses_repo_service() {
+  require_python
+  local wrix_bin
+  wrix_bin="$(build_wrix)"
+  with_fake_runtime_env
+
+  export HOME="$TEST_TMP/home-loom-bead"
+  export XDG_STATE_HOME="$TEST_TMP/xdg-state-loom-bead"
+  export XDG_CACHE_HOME="$TEST_TMP/xdg-cache-loom-bead"
+  mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+
+  local repo="$TEST_TMP/loom-repo"
+  local bead="$repo/.loom/beads/lm-gzgw.3"
+  local repo_real
+  mkdir -p "$repo/.git" "$bead/.git"
+  repo_real="$(cd "$repo" && pwd -P)"
+  (cd "$bead" && "$wrix_bin" service start >"$TEST_TMP/loom-bead-start.txt")
+  (cd "$bead" && "$wrix_bin" service endpoints >"$TEST_TMP/loom-bead-endpoints.json")
+
+  if ! "$WRIX_CONTAINER_RUNTIME" container exists loom-repo-service; then
+    fail "loom bead workspace did not start the repository service"
+  fi
+  if "$WRIX_CONTAINER_RUNTIME" container exists lm-gzgw.3-service; then
+    fail "loom bead workspace started a bead-clone service container"
+  fi
+  assert_equals \
+    "loom bead container name" \
+    "loom-repo-service" \
+    "$(json_get "$TEST_TMP/loom-bead-endpoints.json" container_name)"
+  assert_equals \
+    "loom bead workspace path" \
+    "$repo_real" \
+    "$(json_get "$TEST_TMP/loom-bead-endpoints.json" workspace_path)"
+}
+
 test_service_start_loads_image_source() {
   local wrix_bin
   wrix_bin="$(build_wrix)"
@@ -383,6 +419,7 @@ ALL_TESTS=(
   test_workspace_identity
   test_devshell_start_is_independent
   test_temp_cache_only_workspace_does_not_start_service
+  test_loom_bead_workspace_uses_repo_service
   test_service_start_loads_image_source
   test_service_mounts_beads_worktree_remote
 )

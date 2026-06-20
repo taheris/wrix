@@ -1,7 +1,7 @@
 use std::{
     ffi::OsStr,
     fmt, io,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -22,13 +22,29 @@ impl Workspace {
         Self::from_path(current_dir)
     }
 
+    pub fn from_service_current_dir() -> io::Result<Self> {
+        let current_dir = std::env::current_dir()?;
+        Self::from_service_path(current_dir)
+    }
+
     pub fn from_path(path: impl AsRef<Path>) -> io::Result<Self> {
         let canonical_path = path.as_ref().canonicalize()?;
+        Ok(Self::from_canonical_path(canonical_path))
+    }
+
+    pub fn from_service_path(path: impl AsRef<Path>) -> io::Result<Self> {
+        let canonical_path = path.as_ref().canonicalize()?;
+        Ok(Self::from_canonical_path(service_workspace_path(
+            &canonical_path,
+        )))
+    }
+
+    fn from_canonical_path(canonical_path: PathBuf) -> Self {
         let hash = WorkspaceHash::from_path(&canonical_path);
-        Ok(Self {
+        Self {
             canonical_path,
             hash,
-        })
+        }
     }
 
     pub fn canonical_path(&self) -> &Path {
@@ -115,6 +131,48 @@ fn sanitize_container_component(input: &str) -> String {
         .to_owned()
 }
 
+fn service_workspace_path(path: &Path) -> PathBuf {
+    loom_control_root(path)
+        .or_else(|| repository_root(path))
+        .unwrap_or_else(|| path.to_path_buf())
+}
+
+fn loom_control_root(path: &Path) -> Option<PathBuf> {
+    let components = path.components().collect::<Vec<_>>();
+    for (index, component) in components.iter().enumerate() {
+        if component.as_os_str() != OsStr::new(".loom") {
+            continue;
+        }
+        let prefix = path_from_components(&components[..index]);
+        if prefix.as_os_str().is_empty() {
+            return None;
+        }
+        if let Some(root) = repository_root(&prefix) {
+            return Some(root);
+        }
+    }
+    None
+}
+
+fn repository_root(path: &Path) -> Option<PathBuf> {
+    path.ancestors()
+        .find(|ancestor| has_repository_marker(ancestor))
+        .map(Path::to_path_buf)
+}
+
+fn has_repository_marker(path: &Path) -> bool {
+    let marker = path.join(".git");
+    marker.is_dir() || marker.is_file()
+}
+
+fn path_from_components(components: &[Component<'_>]) -> PathBuf {
+    let mut path = PathBuf::new();
+    for component in components {
+        path.push(component.as_os_str());
+    }
+    path
+}
+
 #[cfg(test)]
 mod test {
     use std::{fs, path::Path};
@@ -152,6 +210,39 @@ mod test {
         assert_eq!(
             workspace.container_name().as_str(),
             "container-repo-service"
+        );
+    }
+
+    #[test]
+    fn service_workspace_uses_repository_root_for_subdirectory() {
+        let root = tempfile_root("service-repo-root");
+        let child = root.join("src/bin");
+        fs::create_dir(root.join(".git")).unwrap();
+        fs::create_dir_all(&child).unwrap();
+        let workspace = Workspace::from_service_path(child).unwrap();
+        assert_eq!(workspace.canonical_path(), root.canonicalize().unwrap());
+        assert_eq!(
+            workspace.container_name().as_str(),
+            "service-repo-root-service"
+        );
+    }
+
+    #[test]
+    fn service_workspace_uses_outer_repository_for_loom_clone() {
+        let root = tempfile_root("loom-service-repo");
+        let bead = root.join(".loom/beads/lm-gzgw.3");
+        fs::create_dir(root.join(".git")).unwrap();
+        fs::create_dir_all(bead.join(".git")).unwrap();
+        let workspace = Workspace::from_service_path(&bead).unwrap();
+        let clone_workspace = Workspace::from_path(bead).unwrap();
+        assert_eq!(workspace.canonical_path(), root.canonicalize().unwrap());
+        assert_eq!(
+            workspace.container_name().as_str(),
+            "loom-service-repo-service"
+        );
+        assert_eq!(
+            clone_workspace.container_name().as_str(),
+            "lm-gzgw.3-service"
         );
     }
 

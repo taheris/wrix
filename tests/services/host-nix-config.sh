@@ -174,7 +174,7 @@ with_fake_tools() {
   export WRIX_NIX_STORE="$bin_dir/nix-store"
   export WRIX_NIX_STORE_BIN="$bin_dir/nix-store"
   export WRIX_NIX_BIN="$bin_dir/nix"
-  unset NIX_CONFIG WRIX_FAKE_NIX_IGNORE
+  unset NIX_CONFIG WRIX_FAKE_NIX_IGNORE WRIX_SERVICE_IMAGE WRIX_SERVICE_IMAGE_SOURCE
 }
 
 assert_contains() {
@@ -300,11 +300,11 @@ test_mkdevshell_nix_cache() {
   [[ "$(json_get "$result_file" customEnv.WRIX_CACHE_PRUNE_INTERVAL_SECS)" == "10800" ]] || { fail "pruneInterval did not map to seconds"; return 1; }
 }
 
-test_mkdevshell_skips_service_in_loom_integration_worktree() {
+test_mkdevshell_loom_internal_worktree_uses_repo_service() {
   if ! command -v nix >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
     exit 77
   fi
-  local result result_file hook_file hook calls workspace fake_wrix output
+  local result result_file hook_file hook workspace repo wrix_bin output
   if ! result="$(eval_expr_json '
     let
       shell = lib.mkDevShell { profile = lib.profiles.base; };
@@ -315,27 +315,19 @@ test_mkdevshell_skips_service_in_loom_integration_worktree() {
   fi
   result_file="$TEST_TMP/loom-integration-shell.json"
   hook_file="$TEST_TMP/loom-integration-shell-hook.sh"
-  calls="$TEST_TMP/loom-integration-wrix-calls"
-  fake_wrix="$TEST_TMP/fake-wrix"
-  workspace="$TEST_TMP/.loom/integration"
+  repo="$TEST_TMP/loom-integration-repo"
+  workspace="$repo/.loom/integration"
   printf '%s\n' "$result" >"$result_file"
   hook="$(json_get "$result_file" hook)"
   printf '%s\n' "$hook" >"$hook_file"
-  : >"$calls"
-  mkdir -p "$workspace"
-  cat >"$fake_wrix" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\n' "$*" >> "${WRIX_FAKE_WRIX_CALLS:?}"
-exit 42
-EOF
-  chmod +x "$fake_wrix"
+  mkdir -p "$repo/.git" "$workspace"
+  wrix_bin="$(build_wrix)"
+  with_fake_tools
 
   if ! output="$(
     (
       cd "$workspace"
-      export WRIX_BIN="$fake_wrix"
-      export WRIX_FAKE_WRIX_CALLS="$calls"
+      export WRIX_BIN="$wrix_bin"
       # shellcheck source=/dev/null
       . "$hook_file"
     ) 2>&1
@@ -343,11 +335,15 @@ EOF
     fail "mkDevShell hook failed in .loom/integration: $output"
     return 1
   fi
-  if [[ -s "$calls" ]]; then
-    fail "mkDevShell invoked wrix service in .loom/integration: $(cat "$calls")"
+  assert_contains "mkDevShell output" "$output" "Wrix development shell" || return 1
+  if ! "$WRIX_CONTAINER_RUNTIME" container exists loom-integration-repo-service; then
+    fail "mkDevShell did not start the repository service from .loom/integration"
     return 1
   fi
-  assert_contains "mkDevShell output" "$output" "Wrix development shell" || return 1
+  if "$WRIX_CONTAINER_RUNTIME" container exists integration-service; then
+    fail "mkDevShell started an internal .loom service container"
+    return 1
+  fi
 }
 
 test_host_nix_configures_cache_and_hook() {
@@ -447,7 +443,7 @@ test_host_nix_config_rejects_non_wrix_hook() {
 
 ALL_TESTS=(
   test_mkdevshell_nix_cache
-  test_mkdevshell_skips_service_in_loom_integration_worktree
+  test_mkdevshell_loom_internal_worktree_uses_repo_service
   test_host_nix_configures_cache_and_hook
   test_host_nix_config_fails_when_trusted_setting_ignored
   test_host_nix_config_rejects_non_wrix_hook
