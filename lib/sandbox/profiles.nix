@@ -1,9 +1,9 @@
 {
   pkgs,
   hostPkgs ? pkgs,
-  crane ? null,
-  fenix ? null,
-  treefmt ? null,
+  crane ? throw "lib/sandbox/profiles.nix: profiles.rust requires the crane input; pass `crane` to this file",
+  fenix ? throw "lib/sandbox/profiles.nix: profiles.rust requires the fenix input; pass `fenix` to this file",
+  treefmt ? throw "lib/sandbox/profiles.nix: basePackages requires the treefmt wrapper; pass `treefmt` to this file",
 }:
 
 let
@@ -133,18 +133,12 @@ let
       networkAllowlist = baseNetworkAllowlist ++ networkAllowlist;
     };
 
-  requireFenix =
-    if fenix == null then
-      throw "lib/sandbox/profiles.nix: profiles.rust requires the fenix input; pass `fenix` to this file"
-    else
-      fenix;
-
   # Two fenix package sets so the rust profile can serve both the image (always
   # Linux) and host-platform consumers (devshell, buildPackage) without forcing
   # a cross-build. On Linux hosts both resolve to the same /nix/store path; on
   # Darwin they diverge (image stays Linux, host gets Darwin).
-  imageFenixPkgs = requireFenix.packages.${pkgs.stdenv.hostPlatform.system};
-  hostFenixPkgs = requireFenix.packages.${hostPkgs.stdenv.hostPlatform.system};
+  imageFenixPkgs = fenix.packages.${pkgs.stdenv.hostPlatform.system};
+  hostFenixPkgs = fenix.packages.${hostPkgs.stdenv.hostPlatform.system};
 
   mkRustToolchain =
     fenixSet: base:
@@ -164,12 +158,7 @@ let
   # binaries (the devshell + `nix build .#tmux-mcp` path). The in-image build
   # uses a separate profile instance constructed with hostPkgs = pkgs; see
   # lib/sandbox/default.nix.
-  mkCraneLib =
-    toolchain:
-    if crane == null then
-      throw "lib/sandbox/profiles.nix: profiles.rust requires the crane input; pass `crane` to this file"
-    else
-      (crane.mkLib hostPkgs).overrideToolchain (_: toolchain);
+  mkCraneLib = toolchain: (crane.mkLib hostPkgs).overrideToolchain (_: toolchain);
 
   # bin closes over src + cargoArtifacts only — no edge to clippy/nextest, no
   # extraSrcs — so devshell consumers stay warm across test-fixture edits.
@@ -388,11 +377,7 @@ let
     );
 
   # Project-wide formatter wrapper. Forced when basePackages is materialized
-  treefmtPkg =
-    if treefmt == null then
-      throw "lib/sandbox/profiles.nix: basePackages requires the treefmt wrapper; pass `treefmt` to this file"
-    else
-      treefmt;
+  treefmtPkg = treefmt;
 
   # Suppress GNU which's verbose "no X in (PATH)" errors
   whichQuiet = pkgs.writeShellScriptBin "which" ''

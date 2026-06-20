@@ -6,7 +6,8 @@
   treefmt,
   src,
   wrix,
-  fenix ? null,
+  crane,
+  fenix,
 }:
 
 let
@@ -17,7 +18,15 @@ let
   # ============================================================================
 
   # Smoke tests run on all platforms
-  smokeTests = import ./sandbox/smoke.nix { inherit pkgs system treefmt; };
+  smokeTests = import ./sandbox/smoke.nix {
+    inherit
+      pkgs
+      system
+      treefmt
+      crane
+      fenix
+      ;
+  };
 
   # Test sandbox image with `hello` as a stand-in for claude/beads.
   # Exposed as `packages.test-image-base` so the host-side podman
@@ -85,9 +94,11 @@ let
       pkgs
       system
       linuxPkgs
+      crane
       fenix
       treefmt
       ;
+    serviceCli = wrix.rustPackage.wrix;
   };
 
   rustChecks = {

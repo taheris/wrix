@@ -3,6 +3,8 @@
   pkgs,
   system,
   treefmt,
+  crane,
+  fenix,
 }:
 
 let
@@ -53,6 +55,8 @@ let
       system
       linuxPkgs
       treefmt
+      crane
+      fenix
       ;
   };
   sandbox = sandboxLib.mkSandbox { profile = sandboxLib.profiles.base; };

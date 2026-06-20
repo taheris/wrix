@@ -75,8 +75,12 @@ Curated developer toolkit. The rust and python profiles extend this set. Grouped
 | Data | jq, yq |
 | Package manager | nix |
 | VCS + PRs | git, gh |
-| Issue tracker | beads (`bd`), wrix (`wrix beads push`), dolt, gc |
+| Issue tracker | beads (`bd`), dolt, gc |
 | Agent tooling | man, prek, shellcheck, tmux, treefmt (wrapped with project formatters) |
+
+`mkSandbox` adds the Linux-built `wrix` CLI to every resolved sandbox profile,
+so `wrix beads push` is available in containers without making the reusable
+profile attrset depend on the wrix workspace build.
 
 `whichQuiet` is a local `pkgs.which` wrapper that suppresses `"no X in (PATH)"` noise.
 

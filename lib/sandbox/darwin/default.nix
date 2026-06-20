@@ -1,7 +1,7 @@
 # Darwin sandbox using Apple container CLI (macOS 26+)
 {
   pkgs,
-  serviceCli ? null,
+  serviceCli,
 }:
 
 let
@@ -25,7 +25,7 @@ let
   sshConfig = import ../../util/ssh.nix;
 
   promptDir = writeTextDir "wrix-prompt" (readFile ../prompt.txt);
-  serviceBin = if serviceCli == null then "wrix" else "${serviceCli}/bin/wrix";
+  serviceBin = "${serviceCli}/bin/wrix";
 
 in
 {

@@ -5,8 +5,10 @@
   pkgs,
   system,
   linuxPkgs,
-  fenix ? null,
-  treefmt ? null,
+  crane,
+  fenix,
+  treefmt,
+  serviceCli,
 }:
 
 let
@@ -24,8 +26,10 @@ let
       pkgs
       system
       linuxPkgs
+      crane
       fenix
       treefmt
+      serviceCli
       ;
   };
   defaultImage = (sandboxLib.mkSandbox { profile = sandboxLib.profiles.base; }).image;
@@ -779,7 +783,7 @@ let
   # build a project-pinned rust profile from a fixture rust-toolchain.toml and
   # assert every rust-specific core package (the pinned toolchain plus its fixed
   # support packages) is reachable from the leaf image's tier-1
-  # `lowerTiersClosure`. Skipped when the fenix input is absent (no rust profile).
+  # `lowerTiersClosure`.
   toolchainFixtureSha = "sha256-SXRtAuO4IqNOQq+nLbrsDFbVk+3aVA8NNpSZsKlVH/8=";
   pinnedToolchainStableTest =
     if !isLinux then
@@ -788,15 +792,6 @@ let
         runtimeInputs = [ pkgs.coreutils ];
         text = ''
           echo "test-pinned-toolchain-stable-tier: skipped on this platform (streamLayeredImage is Linux-only)" >&2
-          exit 0
-        '';
-      }
-    else if fenix == null then
-      pkgs.writeShellApplication {
-        name = "test-pinned-toolchain-stable-tier";
-        runtimeInputs = [ pkgs.coreutils ];
-        text = ''
-          echo "test-pinned-toolchain-stable-tier: skipped (fenix input absent, no rust profile)" >&2
           exit 0
         '';
       }

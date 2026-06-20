@@ -195,6 +195,8 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
   [system](bash tests/sandbox/filesystem-isolation.sh)
 - `mounts` and `env` passed to `mkSandbox` are merged into the profile and reach the container as configured
   [system](bash tests/sandbox/custom-mounts-env.sh)
+- Every sandbox image carries the `wrix` CLI, so `wrix beads push` resolves inside the container without entering `nix develop` or running `nix run`
+  [system](bash tests/sandbox/custom-mounts-env.sh test_wrix_cli_added_to_sandbox_profile)
 - In a fresh container built from a profile that ships `nix`, the runtime process (rootless container-root) runs `nix develop -c true`, a `nix build` of a flake target, and a store-mutating op against a baked root-owned path to completion (exit 0) with no `Operation not permitted` failure on a `/nix/store` path
   [system](bash tests/sandbox/nix-in-container.sh)
 - The default container boundary does not `LD_PRELOAD` `libfakeuid` (its `getuid()→1000` spoof blanks claude's TUI when the process is really root — wx-nsage); instead it sets `IS_SANDBOX=1` so claude permits `--dangerously-skip-permissions` as root without spoofing. libfakeuid remains krun-only

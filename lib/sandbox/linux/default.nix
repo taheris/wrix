@@ -1,7 +1,7 @@
 # Linux sandbox implementation using a single container
 {
   pkgs,
-  serviceCli ? null,
+  serviceCli,
 }:
 
 let
@@ -25,7 +25,7 @@ let
   sshConfig = import ../../util/ssh.nix;
 
   prompt = writeText "wrix-prompt" (readFile ../prompt.txt);
-  serviceBin = if serviceCli == null then "wrix" else "${serviceCli}/bin/wrix";
+  serviceBin = "${serviceCli}/bin/wrix";
 
   # crun built with libkrun support for microVM boundary
   # Provides 'krun' binary (symlink to crun) for podman --runtime krun

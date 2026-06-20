@@ -2,9 +2,9 @@
   pkgs,
   system,
   linuxPkgs ? pkgs,
-  crane ? null,
-  fenix ? null,
-  treefmt ? null,
+  crane,
+  fenix,
+  treefmt,
 }:
 
 let
@@ -39,7 +39,7 @@ let
       fenix
       treefmt
       ;
-    serviceCli = if crane == null || fenix == null then null else rustCli.wrix;
+    serviceCli = rustCli.wrix;
   };
 
   tmuxMcp = import ./mcp/tmux/mcp-server.nix {

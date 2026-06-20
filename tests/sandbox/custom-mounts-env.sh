@@ -271,6 +271,35 @@ test_default_inputs_preserve_profile() {
   pass "Default mounts=[] and env={} leave the profile's mounts/env unchanged"
 }
 
+# ============================================================================
+# Every sandbox image carries the wrix CLI so session-close commands like
+# `wrix beads push` resolve without entering a devShell or running nix.
+# ============================================================================
+test_wrix_cli_added_to_sandbox_profile() {
+  local result
+  if ! result=$(eval_expr_json "
+    let
+      hasWrix = packages: builtins.any (p: (p.meta.mainProgram or \"\") == \"wrix\") packages;
+      profiles = [ lib.profiles.base lib.profiles.rust lib.profiles.python ];
+      sandboxFor = profile: lib.mkSandbox { inherit profile; };
+      missing = builtins.filter (profile: !(hasWrix (sandboxFor profile).profile.packages)) profiles;
+    in {
+      missingProfiles = builtins.map (profile: profile.name) missing;
+    }
+  "); then
+    fail "nix eval sandbox-wrix-cli expression failed"
+    return 1
+  fi
+
+  local missing
+  missing=$(echo "$result" | jq -r '.missingProfiles | join(",")')
+  if [[ -n "$missing" ]]; then
+    fail "mkSandbox did not add wrix CLI to profiles: $missing"
+    return 1
+  fi
+  pass "mkSandbox adds the wrix CLI to every built-in sandbox profile"
+}
+
 # ----------------------------------------------------------------------------
 
 ALL_TESTS=(
@@ -279,6 +308,7 @@ ALL_TESTS=(
   test_env_right_merge
   test_env_preserves_profile_keys
   test_default_inputs_preserve_profile
+  test_wrix_cli_added_to_sandbox_profile
 )
 
 run_all() {

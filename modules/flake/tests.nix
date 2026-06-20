@@ -20,7 +20,7 @@
           ;
         treefmt = treefmtWrapper;
         src = self;
-        inherit (inputs) fenix;
+        inherit (inputs) crane fenix;
       };
 
     in

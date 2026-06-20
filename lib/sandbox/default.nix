@@ -2,10 +2,10 @@
   pkgs,
   system,
   linuxPkgs,
-  crane ? null,
-  fenix ? null,
-  treefmt ? null,
-  serviceCli ? null,
+  crane,
+  fenix,
+  treefmt,
+  serviceCli,
 }:
 
 let
@@ -68,6 +68,13 @@ let
     pkgs = linuxPkgs;
     rustProfile = imageProfilesModule.rust;
   };
+
+  imageRustCli = import ../services/rust.nix {
+    pkgs = linuxPkgs;
+    rustProfile = imageProfilesModule.rust;
+  };
+
+  sandboxToolPackages = [ (linuxPkgs.lib.hiPrio imageRustCli.wrix) ];
 
   # Claude config (~/.claude.json) - onboarding state and runtime flags
   claudeConfig = {
@@ -257,9 +264,9 @@ let
       mcpServerConfigs =
         if mcpRuntime then mapAttrs (name: _: mcpRegistry.${name}.mkServerConfig { }) mcpRegistry else { };
 
-      # Extend profile with user packages + MCP server packages
+      # Extend profile with wrix-owned sandbox tools, user packages, and MCP server packages.
       finalProfile = extendProfile profile {
-        packages = packages ++ mcpConfig.packages;
+        packages = sandboxToolPackages ++ packages ++ mcpConfig.packages;
         inherit mounts env;
       };
 
