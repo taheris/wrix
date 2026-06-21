@@ -160,7 +160,7 @@ Direct remote-builder access to the local project cache is out of scope for v1. 
 - On Linux, `wrix service start` installs the service image through the shared runtime image installer from an archive-less `nix-descriptor` source; on Darwin it uses the tar-loadable `docker-archive` fallback
   [system](bash tests/services/lifecycle.sh test_service_start_loads_image_source)
 - The service image carries wrix-managed image labels, including `wrix.managed=true` and `wrix.image.kind=service`
-  [system?](bash tests/services/lifecycle.sh test_service_image_labels)
+  [system](bash tests/services/lifecycle.sh test_service_image_labels)
 - Cache-only service startup is suppressed for temp-directory scratch workspaces, so tests and integration runs do not accumulate `tmp.*-service` containers
   [system](bash tests/services/lifecycle.sh test_temp_cache_only_workspace_does_not_start_service)
 - Loom bead clone paths under `.loom/beads/<id>` use the outer repository service identity, so launches do not accumulate bead-named `*-service` containers

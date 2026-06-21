@@ -2,8 +2,13 @@
 #
 # These are Nix strings containing shell code that can be interpolated
 # into the generated launcher scripts for both Linux and Darwin.
-_:
+{
+  pkgs ? null,
+}:
 
+let
+  jqBin = if pkgs == null then "jq" else "${pkgs.jq}/bin/jq";
+in
 {
   # Safe path expansion function - only expands ~ and $HOME/$USER, not arbitrary commands
   # Usage: src=$(expand_path "$src")
@@ -193,37 +198,71 @@ _:
     else
       ''$(basename "$PROJECT_DIR")-$(hostname -s 2>/dev/null || uname -n)'';
 
-  # Remember the image ref a workspace just used so global pruning does not
-  # evict another recently-used workspace's cached sandbox image. The list is
-  # MRU-ordered and bounded; stale refs eventually fall out naturally.
+  # Remember the image a workspace just used in a shared eight-record MRU.
   rememberImageRef = ''
     if [[ -n "''${IMAGE_REF:-}" && -n "''${WRIX_CACHE:-}" ]]; then
       mkdir -p "$WRIX_CACHE"
-      _wrix_refs_file="$WRIX_CACHE/image-refs"
-      _wrix_refs_tmp=$(mktemp "$WRIX_CACHE/image-refs.XXXXXX")
-      {
-        printf '%s\n' "$IMAGE_REF"
-        if [[ -f "$_wrix_refs_file" ]]; then
-          cat "$_wrix_refs_file"
+      _wrix_mru_file="$WRIX_CACHE/image-mru.json"
+      _wrix_mru_tmp=$(mktemp "$WRIX_CACHE/image-mru.XXXXXX")
+      _wrix_mru_old=$(mktemp "$WRIX_CACHE/image-mru-old.XXXXXX")
+      _wrix_digest=""
+      _wrix_image_id=""
+
+      if [[ -n "''${IMAGE_DIGEST_PATH:-}" ]]; then
+        if [[ "$IMAGE_DIGEST_PATH" == sha256:* ]]; then
+          _wrix_digest="$IMAGE_DIGEST_PATH"
+        elif [[ -s "$IMAGE_DIGEST_PATH" ]]; then
+          _wrix_digest=$(cat "$IMAGE_DIGEST_PATH")
         fi
-      } | awk 'NF && !seen[$0]++ && kept < 32 { print; kept++ }' > "$_wrix_refs_tmp"
-      mv "$_wrix_refs_tmp" "$_wrix_refs_file"
+      fi
+
+      if command -v podman >/dev/null 2>&1; then
+        if _wrix_image_id=$(podman image inspect --format '{{.Id}}' "$IMAGE_REF" 2>/dev/null); then
+          :
+        else
+          _wrix_image_id=""
+        fi
+      elif command -v container >/dev/null 2>&1; then
+        if _wrix_image_id=$(container image inspect "$IMAGE_REF" 2>/dev/null | ${jqBin} -r '.[0].id // .[0].digest // empty'); then
+          :
+        else
+          _wrix_image_id=""
+        fi
+      fi
+
+      if [[ -f "$_wrix_mru_file" ]]; then
+        if ${jqBin} -e 'type == "array"' "$_wrix_mru_file" >/dev/null; then
+          cp "$_wrix_mru_file" "$_wrix_mru_old"
+        else
+          echo "wrix: resetting invalid image MRU: $_wrix_mru_file" >&2
+          printf '[]\n' > "$_wrix_mru_old"
+        fi
+      else
+        printf '[]\n' > "$_wrix_mru_old"
+      fi
+
+      ${jqBin} -n \
+        --arg ref "$IMAGE_REF" \
+        --arg digest "$_wrix_digest" \
+        --arg id "$_wrix_image_id" \
+        --slurpfile old "$_wrix_mru_old" \
+        'def compact_record: with_entries(select(.value != ""));
+         def record_key: [(.ref // ""), (.digest // ""), (.id // "")] | @json;
+         ([{ ref: $ref, digest: $digest, id: $id } | compact_record] + ($old[0] // []))
+         | map(select((.ref // "") != "" or (.digest // "") != "" or (.id // "") != ""))
+         | reduce .[] as $item ({ seen: {}, out: [] };
+             ($item | record_key) as $key
+             | if .seen[$key] then . else (.seen[$key] = true | .out += [$item]) end)
+         | .out[:8]' \
+        > "$_wrix_mru_tmp"
+      mv "$_wrix_mru_tmp" "$_wrix_mru_file"
+      rm -f "$_wrix_mru_old"
     fi
   '';
 
-  # Prune stale image tags across every wrix-* repo (not just the active
-  # one). After a fresh load, :latest and the new hash tag are aliases for
-  # the same image ID; old hash tags from prior rebuilds are stray. For each
-  # wrix-* repo, keep :latest, any tag that aliases it (same ID/digest), and
-  # any recently-used sandbox refs recorded in $WRIX_CACHE/image-refs. Without
-  # the recorded-ref keep set, launching sandbox B retags wrix-*:latest and
-  # deletes sandbox A's hash tag/image, forcing A to re-stream every base layer
-  # when the user switches back.
-  #
-  # runtime:
-  #   "podman"    — Linux; repos are localhost/wrix-*.
-  #   "container" — Darwin's Apple container CLI; repos are wrix-*.
-  # cmd: override the CLI binary (absolute path for systemd units, etc.).
+  # Prune wrix-owned images outside the current/container-used/MRU keep set.
+  # Legacy wrix-* refs are included so older unlabelled wrix tags age out; an
+  # unlabelled <none>:<none> image is never an automatic-delete candidate.
   pruneStaleImages =
     {
       runtime ? "podman",
@@ -237,74 +276,183 @@ _:
             list = "${bin} images --format '{{.Repository}} {{.Tag}} {{.ID}}'";
             delete = "${bin} rmi";
             pattern = "^localhost/wrix-";
-            # Name the container pinning a given tag (via $_stale at shell
-            # runtime). Empty if none — lets callers print a friendly notice
-            # naming the holder instead of a generic rmi error.
-            holder = ''${bin} ps -a --filter "ancestor=$_stale" --format '{{.Names}}' | head -n1'';
-            # Workspace label set by service/sandbox containers. Empty when
-            # the holder disappears mid-check.
-            holderWorkspace = ''${bin} inspect --format '{{ index .Config.Labels "wrix.workspace" }}' "$_holder"'';
+            imageId = ''${bin} image inspect --format '{{.Id}}' "$1"'';
+            imageDigest = ''${bin} image inspect --format '{{.Digest}}' "$1"'';
+            managedLabel = ''${bin} image inspect --format '{{ index .Config.Labels "wrix.managed" }}' "$1"'';
+            holder = ''${bin} ps -a --filter "ancestor=$_target" --format '{{.Names}}' | head -n1'';
           };
           container = {
             list = "${bin} image list | tail -n +2";
             delete = "${bin} image delete";
             pattern = "^wrix-";
-            # Apple's container CLI has no ancestor filter — fall through
-            # to the generic "pinned by a container" message.
-            holder = "echo ''";
-            holderWorkspace = "echo ''";
+            imageId = ''${bin} image inspect "$1" | ${jqBin} -r ".[0].id // .[0].digest // empty"'';
+            imageDigest = ''${bin} image inspect "$1" | ${jqBin} -r ".[0].digest // .[0].id // empty"'';
+            managedLabel = ''${bin} image inspect "$1" | ${jqBin} -r ".[0].labels[\"wrix.managed\"] // .[0].Labels[\"wrix.managed\"] // empty"'';
+            holder = "printf ''";
           };
         }
         .${runtime};
     in
     ''
+      _wrix_keep_refs=$(mktemp)
+      _wrix_keep_ids=$(mktemp)
+      _wrix_keep_digests=$(mktemp)
+
+      _wrix_normal_value() {
+        local _value="$1"
+        case "$_value" in
+          ""|"<none>"|"<no value>"|"null") return 1 ;;
+          *) printf '%s\n' "$_value" ;;
+        esac
+      }
+
+      _wrix_add_keep_ref() {
+        local _value
+        if _value=$(_wrix_normal_value "$1"); then
+          printf '%s\n' "$_value" >> "$_wrix_keep_refs"
+        fi
+      }
+
+      _wrix_add_keep_id() {
+        local _value
+        if _value=$(_wrix_normal_value "$1"); then
+          printf '%s\n' "$_value" >> "$_wrix_keep_ids"
+        fi
+      }
+
+      _wrix_add_keep_digest() {
+        local _value
+        if _value=$(_wrix_normal_value "$1"); then
+          printf '%s\n' "$_value" >> "$_wrix_keep_digests"
+        fi
+      }
+
+      _wrix_image_id() {
+        ${spec.imageId}
+      }
+
+      _wrix_image_digest() {
+        ${spec.imageDigest}
+      }
+
+      _wrix_managed_label() {
+        ${spec.managedLabel}
+      }
+
+      _wrix_keep_match() {
+        local _ref="$1"
+        local _id="$2"
+        local _digest="$3"
+        if [[ -n "$_ref" ]] && grep -Fxq "$_ref" "$_wrix_keep_refs"; then
+          return 0
+        fi
+        if [[ -n "$_id" ]] && grep -Fxq "$_id" "$_wrix_keep_ids"; then
+          return 0
+        fi
+        if [[ -n "$_digest" ]] && grep -Fxq "$_digest" "$_wrix_keep_digests"; then
+          return 0
+        fi
+        return 1
+      }
+
+      if [[ -n "''${IMAGE_REF:-}" ]]; then
+        _wrix_add_keep_ref "$IMAGE_REF"
+        if _wrix_current_id=$(_wrix_image_id "$IMAGE_REF" 2>/dev/null); then
+          _wrix_add_keep_id "$_wrix_current_id"
+        fi
+        if _wrix_current_digest=$(_wrix_image_digest "$IMAGE_REF" 2>/dev/null); then
+          _wrix_add_keep_digest "$_wrix_current_digest"
+        fi
+      fi
+      if [[ -n "''${IMAGE_DIGEST_PATH:-}" ]]; then
+        if [[ "$IMAGE_DIGEST_PATH" == sha256:* ]]; then
+          _wrix_add_keep_digest "$IMAGE_DIGEST_PATH"
+        elif [[ -s "$IMAGE_DIGEST_PATH" ]]; then
+          _wrix_add_keep_digest "$(cat "$IMAGE_DIGEST_PATH")"
+        fi
+      fi
+
+      _wrix_mru_file="''${WRIX_IMAGE_KEEP_FILE:-}"
+      if [[ -z "$_wrix_mru_file" && -n "''${WRIX_CACHE:-}" ]]; then
+        _wrix_mru_file="$WRIX_CACHE/image-mru.json"
+      fi
+      if [[ -n "$_wrix_mru_file" && -f "$_wrix_mru_file" ]]; then
+        if ${jqBin} -e 'type == "array"' "$_wrix_mru_file" >/dev/null; then
+          ${jqBin} -r '.[] | .ref // empty' "$_wrix_mru_file" >> "$_wrix_keep_refs"
+          ${jqBin} -r '.[] | .id // empty' "$_wrix_mru_file" >> "$_wrix_keep_ids"
+          ${jqBin} -r '.[] | .digest // empty' "$_wrix_mru_file" >> "$_wrix_keep_digests"
+        else
+          while IFS= read -r _legacy_ref; do
+            _wrix_add_keep_ref "$_legacy_ref"
+          done < "$_wrix_mru_file"
+        fi
+      elif [[ -n "''${WRIX_CACHE:-}" && -f "$WRIX_CACHE/image-refs" ]]; then
+        while IFS= read -r _legacy_ref; do
+          _wrix_add_keep_ref "$_legacy_ref"
+        done < "$WRIX_CACHE/image-refs"
+      fi
+
       ${spec.list} \
-        | awk '
-            $1 ~ "${spec.pattern}" {
-              if ($2 == "latest") { latest[$1] = $3 }
-              else { rows[NR] = $1 " " $2 " " $3 }
-            }
-            END {
-              for (i in rows) {
-                split(rows[i], f, " ")
-                if (f[3] != latest[f[1]]) print f[1] ":" f[2]
-              }
-            }' \
-        | while read -r _stale; do
-            _keep_file="''${WRIX_IMAGE_KEEP_FILE:-}"
-            if [[ -z "$_keep_file" && -n "''${WRIX_CACHE:-}" ]]; then
-              _keep_file="$WRIX_CACHE/image-refs"
+        | while read -r _repo _tag _listed_id _rest; do
+            [[ -n "''${_repo:-}" ]] || continue
+            _ref=""
+            if [[ "$_repo" != "<none>" && "$_tag" != "<none>" ]]; then
+              _ref="$_repo:$_tag"
             fi
-            if [[ -n "$_keep_file" && -f "$_keep_file" ]] && grep -Fxq "$_stale" "$_keep_file"; then
+            _target="''${_ref:-$_listed_id}"
+            if ! _target=$(_wrix_normal_value "$_target"); then
               continue
             fi
-            if ! _err=$(${spec.delete} "$_stale" 2>&1); then
+
+            _managed=""
+            if _managed=$(_wrix_managed_label "$_target" 2>/dev/null); then
+              :
+            else
+              _managed=""
+            fi
+            _legacy=0
+            if [[ -n "$_ref" && "$_ref" =~ ${spec.pattern} ]]; then
+              _legacy=1
+            fi
+            if [[ "$_managed" != "true" && "$_legacy" != "1" ]]; then
+              continue
+            fi
+
+            _id="$_listed_id"
+            if _inspected_id=$(_wrix_image_id "$_target" 2>/dev/null); then
+              if _normal_id=$(_wrix_normal_value "$_inspected_id"); then
+                _id="$_normal_id"
+              fi
+            fi
+            _digest=""
+            if _inspected_digest=$(_wrix_image_digest "$_target" 2>/dev/null); then
+              if _normal_digest=$(_wrix_normal_value "$_inspected_digest"); then
+                _digest="$_normal_digest"
+              fi
+            fi
+            if _wrix_keep_match "$_ref" "$_id" "$_digest"; then
+              continue
+            fi
+
+            _holder=""
+            if _holder=$(${spec.holder} 2>/dev/null); then
+              if [[ -n "$_holder" ]]; then
+                continue
+              fi
+            fi
+
+            if ! _err=$(${spec.delete} "$_target" 2>&1); then
               case "$_err" in
                 *"in use"*|*"is using"*)
-                  if _holder=$(${spec.holder}); then
-                    if [[ -n "$_holder" ]]; then
-                      if ! _holder_ws=$(${spec.holderWorkspace} 2>&1); then
-                        _holder_ws="" # best-effort: holder can disappear before inspect.
-                      fi
-                      # Skip cross-workspace pins silently: the holder is
-                      # correctly pinned to its own workspace's flake.lock,
-                      # not actually stale from its perspective.
-                      if [[ -n "$_holder_ws" && "$_holder_ws" != "$PWD" ]]; then
-                        continue
-                      fi
-                      echo "prune-stale-images: $_stale pinned by container $_holder — upgrades on next start" >&2
-                    else
-                      echo "prune-stale-images: $_stale pinned by a container — upgrades on next start" >&2
-                    fi
-                  else
-                    echo "prune-stale-images: $_stale pinned by a container (holder lookup failed)" >&2
-                  fi
+                  echo "prune-stale-images: $_target pinned by a container — upgrades on next start" >&2
                   ;;
                 *)
-                  echo "prune-stale-images: could not remove $_stale: $_err" >&2
+                  echo "prune-stale-images: could not remove $_target: $_err" >&2
                   ;;
               esac
             fi
           done
+
+      rm -f "$_wrix_keep_refs" "$_wrix_keep_ids" "$_wrix_keep_digests"
     '';
 }

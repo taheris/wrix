@@ -29,6 +29,7 @@ _:
         test-profiles-build-package = test.apps.profiles-build-package;
         test-stable-profile-hash-stable = test.apps.stable-profile-hash-stable;
         test-stable-profile-membership = test.apps.stable-profile-membership;
+        test-wrix-image-labels = test.apps.wrix-image-labels;
         test-wrix-images-source-kind = test.apps.wrix-images-source-kind;
         test-wrix-spawn-load = test.apps.wrix-spawn-load;
       };

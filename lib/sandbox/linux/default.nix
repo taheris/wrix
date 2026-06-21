@@ -21,7 +21,7 @@ let
 
   knownHosts = import ../known-hosts.nix { inherit pkgs; };
   paths = import ../../util/path.nix { };
-  shellLib = import ../../util/shell.nix { };
+  shellLib = import ../../util/shell.nix { inherit pkgs; };
   sshConfig = import ../../util/ssh.nix;
 
   prompt = writeText "wrix-prompt" (readFile ../prompt.txt);

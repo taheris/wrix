@@ -41,6 +41,7 @@ let
       ;
   };
   defaultImage = (sandboxLib.mkSandbox { profile = sandboxLib.profiles.base; }).image;
+  builderImage = import ../../lib/sandbox/builder/image.nix { pkgs = linuxPkgs; };
   expectedImageSourceKind = if isLinux then "nix-descriptor" else "docker-archive";
 
   claudeImage =
@@ -482,6 +483,112 @@ let
       ${sourceKindChecks}
 
       echo "test-wrix-images-source-kind: PASS"
+    '';
+  };
+
+  imageLabelMatrix = {
+    base = {
+      image = sourceKindMatrix.base;
+      kind = "profile";
+      profile = "base";
+      agent = "direct";
+    };
+    rust = {
+      image = sourceKindMatrix.rust;
+      kind = "profile";
+      profile = "rust";
+      agent = "direct";
+    };
+    python = {
+      image = sourceKindMatrix.python;
+      kind = "profile";
+      profile = "python";
+      agent = "direct";
+    };
+    base-pi = {
+      image = sourceKindMatrix.base-pi;
+      kind = "profile";
+      profile = "base";
+      agent = "pi";
+    };
+    base-claude = {
+      image = sourceKindMatrix.base-claude;
+      kind = "profile";
+      profile = "base";
+      agent = "claude";
+    };
+    wrix-builder = {
+      image = builderImage;
+      kind = "builder";
+    };
+  };
+  imageLabelChecks = concatStringsSep "\n" (
+    mapAttrsToList (
+      name: expected:
+      let
+        labels = expected.image.labels or (throw "${name} image labels are missing");
+      in
+      ''
+        check_label "${name}" "wrix.managed" "${labels."wrix.managed" or ""}" "true"
+        check_label "${name}" "wrix.image.kind" "${labels."wrix.image.kind" or ""}" "${expected.kind}"
+      ''
+      + lib.optionalString (expected.kind == "profile") ''
+        check_label "${name}" "wrix.profile.name" "${
+          labels."wrix.profile.name" or ""
+        }" "${expected.profile}"
+        check_label "${name}" "wrix.agent.kind" "${labels."wrix.agent.kind" or ""}" "${expected.agent}"
+      ''
+    ) imageLabelMatrix
+  );
+  descriptorLabelChecks = concatStringsSep "\n" (
+    optionals isLinux (
+      mapAttrsToList (
+        name: image:
+        let
+          inherit (image) labels;
+          source = toString image.source;
+        in
+        ''
+          check_descriptor_label "${name}" "${source}" "wrix.managed" "${labels."wrix.managed"}"
+          check_descriptor_label "${name}" "${source}" "wrix.image.kind" "${labels."wrix.image.kind"}"
+          check_descriptor_label "${name}" "${source}" "wrix.profile.name" "${labels."wrix.profile.name"}"
+          check_descriptor_label "${name}" "${source}" "wrix.agent.kind" "${labels."wrix.agent.kind"}"
+        ''
+      ) sourceKindMatrix
+    )
+  );
+  wrixImageLabelsTest = pkgs.writeShellApplication {
+    name = "test-wrix-image-labels";
+    runtimeInputs = [ pkgs.jq ];
+    text = ''
+      check_label() {
+          local name="$1"
+          local key="$2"
+          local actual="$3"
+          local expected="$4"
+          if [[ -z "$actual" || "$actual" != "$expected" ]]; then
+              echo "FAIL: $name label $key=$actual, expected $expected" >&2
+              exit 1
+          fi
+      }
+
+      check_descriptor_label() {
+          local name="$1"
+          local source_path="$2"
+          local key="$3"
+          local expected="$4"
+          local actual
+          actual=$(jq -r --arg key "$key" '.config.labels[$key] // empty' "$source_path")
+          if [[ "$actual" != "$expected" ]]; then
+              echo "FAIL: $name descriptor label $key=$actual, expected $expected" >&2
+              exit 1
+          fi
+      }
+
+      ${imageLabelChecks}
+      ${descriptorLabelChecks}
+
+      echo "test-wrix-image-labels: PASS"
     '';
   };
 
@@ -1695,6 +1802,7 @@ in
     imageDigestNoTarTest
     imageTierGraphTest
     wrixImagesSourceKindTest
+    wrixImageLabelsTest
     claudeRuntimeNoopTest
     prekHooksClosureTest
     baseImageUniversalTest

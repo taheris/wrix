@@ -252,6 +252,13 @@ let
   ]
   ++ (mapAttrsToList (name: value: "${name}=${value}") (profile.env or { }));
 
+  imageLabels = {
+    "wrix.managed" = "true";
+    "wrix.image.kind" = "profile";
+    "wrix.profile.name" = profile.name;
+    "wrix.agent.kind" = agent;
+  };
+
   rawImage = buildImage {
     name = imageName;
     tag = "latest";
@@ -339,6 +346,7 @@ let
 
     config = {
       Env = imageConfigEnv;
+      Labels = imageLabels;
       WorkingDir = "/workspace";
       Entrypoint = [ "/entrypoint.sh" ];
     };
@@ -360,6 +368,7 @@ let
     layering_pipeline = "${layeringPipeline}";
     config = {
       env = imageConfigEnv;
+      labels = imageLabels;
       working_dir = "/workspace";
       entrypoint = [ "/entrypoint.sh" ];
     };
@@ -400,6 +409,7 @@ rawImage
   source = imageSource;
   source_kind = sourceKind;
   digest_source_kind = sourceKind;
+  labels = imageLabels;
   # Expose the chained `fromImage` base so callers (and the
   # base-image-hash-stable verifier, specs/image-builder.md § Base Image
   # Layering) can assert the base derivation is invariant under profile-level

@@ -6,7 +6,7 @@
 let
   inherit (pkgs) runCommandLocal;
 
-  shellUtils = import ../../lib/util/shell.nix { };
+  shellUtils = import ../../lib/util/shell.nix { inherit pkgs; };
   inherit (shellUtils) expandPathFn pruneStaleImages rememberImageRef;
 
 in
@@ -166,14 +166,68 @@ in
     mkdir "$out"
   '';
 
+  remember-image-mru-bounds-and-identifiers =
+    runCommandLocal "test-remember-image-mru-bounds-and-identifiers" { }
+      ''
+        set -euo pipefail
+
+        export WRIX_CACHE="$PWD/cache"
+        mkdir -p "$WRIX_CACHE" "$PWD/bin"
+        cat > "$PWD/bin/podman" <<'EOF'
+        #!${pkgs.bash}/bin/bash
+        set -euo pipefail
+        if [[ "$1 $2" == "image inspect" && "$3" == "--format" ]]; then
+          ref="''${5##*:}"
+          printf 'id-%s\n' "$ref"
+          exit 0
+        fi
+        echo "unexpected podman command: $*" >&2
+        exit 64
+        EOF
+        chmod +x "$PWD/bin/podman"
+        export PATH="$PWD/bin:$PATH"
+
+        for idx in $(seq 1 10); do
+          IMAGE_REF="localhost/wrix-rust:tag$idx"
+          IMAGE_DIGEST_PATH="sha256:00000000000000000000000000000000000000000000000000000000000000$idx"
+          ${rememberImageRef}
+        done
+
+        count=$(${pkgs.jq}/bin/jq 'length' "$WRIX_CACHE/image-mru.json")
+        if [[ "$count" != "8" ]]; then
+          echo "FAIL: MRU length is $count, expected 8" >&2
+          cat "$WRIX_CACHE/image-mru.json" >&2
+          exit 1
+        fi
+
+        first_ref=$(${pkgs.jq}/bin/jq -r '.[0].ref' "$WRIX_CACHE/image-mru.json")
+        last_ref=$(${pkgs.jq}/bin/jq -r '.[7].ref' "$WRIX_CACHE/image-mru.json")
+        first_id=$(${pkgs.jq}/bin/jq -r '.[0].id' "$WRIX_CACHE/image-mru.json")
+        first_digest=$(${pkgs.jq}/bin/jq -r '.[0].digest' "$WRIX_CACHE/image-mru.json")
+        if [[ "$first_ref" != "localhost/wrix-rust:tag10" || "$last_ref" != "localhost/wrix-rust:tag3" ]]; then
+          echo "FAIL: MRU order/bound mismatch" >&2
+          cat "$WRIX_CACHE/image-mru.json" >&2
+          exit 1
+        fi
+        if [[ "$first_id" != "id-tag10" || "$first_digest" != sha256:*0010 ]]; then
+          echo "FAIL: MRU did not record image id and digest" >&2
+          cat "$WRIX_CACHE/image-mru.json" >&2
+          exit 1
+        fi
+
+        mkdir "$out"
+      '';
+
   prune-stale-images-keeps-recorded-ref =
     runCommandLocal "test-prune-stale-images-keeps-recorded-ref" { }
       ''
         set -euo pipefail
 
         export WRIX_CACHE="$PWD/cache"
-        IMAGE_REF="localhost/wrix-rust:c07457c7"
-        ${rememberImageRef}
+        mkdir -p "$WRIX_CACHE"
+        cat > "$WRIX_CACHE/image-mru.json" <<'JSON'
+        [{"ref":"localhost/wrix-rust:c07457c7"}]
+        JSON
 
         cat > podman <<'EOF'
         #!${pkgs.bash}/bin/bash
@@ -185,6 +239,11 @@ in
               'localhost/wrix-rust latest new-id' \
               'localhost/wrix-rust c07457c7 old-id' \
               'localhost/wrix-rust abandoned older-id'
+            ;;
+          image)
+            exit 1
+            ;;
+          ps)
             ;;
           rmi)
             printf '%s\n' "$*" >> rmi.log
@@ -211,6 +270,127 @@ in
           cat rmi.log >&2
           exit 1
         fi
+
+        mkdir "$out"
+      '';
+
+  prune-stale-images-retention-policy =
+    runCommandLocal "test-prune-stale-images-retention-policy" { }
+      ''
+        set -euo pipefail
+
+        export WRIX_CACHE="$PWD/cache"
+        mkdir -p "$WRIX_CACHE"
+        IMAGE_REF="localhost/wrix-current:live"
+        IMAGE_DIGEST_PATH="sha256:current-digest"
+        cat > "$WRIX_CACHE/image-mru.json" <<'JSON'
+        [
+          {"ref":"localhost/wrix-recent-by-ref:old"},
+          {"digest":"sha256:recent-digest"},
+          {"id":"recent-id"}
+        ]
+        JSON
+
+        cat > podman <<'EOF'
+        #!${pkgs.bash}/bin/bash
+        set -euo pipefail
+
+        image_id() {
+          case "$1" in
+            localhost/wrix-current:live) printf 'current-id\n' ;;
+            localhost/wrix-recent-by-digest:old) printf 'recent-digest-id\n' ;;
+            localhost/wrix-recent-by-id:old) printf 'recent-id\n' ;;
+            localhost/wrix-used:old) printf 'used-id\n' ;;
+            localhost/wrix-stale:old) printf 'stale-id\n' ;;
+            localhost/wrix-legacy:old) printf 'legacy-id\n' ;;
+            managed-dangling-id) printf 'managed-dangling-id\n' ;;
+            dangling-id) printf 'dangling-id\n' ;;
+            *) printf '%s\n' "$1" ;;
+          esac
+        }
+
+        image_digest() {
+          case "$1" in
+            localhost/wrix-current:live) printf 'sha256:current-digest\n' ;;
+            localhost/wrix-recent-by-digest:old) printf 'sha256:recent-digest\n' ;;
+            *) printf '<no value>\n' ;;
+          esac
+        }
+
+        managed_label() {
+          case "$1" in
+            localhost/wrix-current:live|localhost/wrix-recent-by-ref:old|localhost/wrix-recent-by-digest:old|localhost/wrix-recent-by-id:old|localhost/wrix-used:old|localhost/wrix-stale:old|managed-dangling-id) printf 'true\n' ;;
+            *) printf '<no value>\n' ;;
+          esac
+        }
+
+        case "$1" in
+          images)
+            printf '%s\n' \
+              'localhost/wrix-current live current-id' \
+              'localhost/wrix-recent-by-ref old recent-ref-id' \
+              'localhost/wrix-recent-by-digest old recent-digest-id' \
+              'localhost/wrix-recent-by-id old recent-id' \
+              'localhost/wrix-used old used-id' \
+              'localhost/wrix-stale old stale-id' \
+              'localhost/wrix-legacy old legacy-id' \
+              '<none> <none> dangling-id' \
+              '<none> <none> managed-dangling-id' \
+              'docker.io/library/ubuntu latest user-id'
+            ;;
+          image)
+            target="''${@: -1}"
+            case "''${4:-}" in
+              '{{.Id}}') image_id "$target" ;;
+              '{{.Digest}}') image_digest "$target" ;;
+              '{{ index .Config.Labels "wrix.managed" }}') managed_label "$target" ;;
+              *) echo "unexpected image inspect format: $*" >&2; exit 64 ;;
+            esac
+            ;;
+          ps)
+            if [[ "$*" == *'ancestor=localhost/wrix-used:old'* ]]; then
+              printf 'service-holder\n'
+            fi
+            ;;
+          rmi)
+            printf '%s\n' "$2" >> rmi.log
+            ;;
+          *)
+            echo "unexpected podman command: $*" >&2
+            exit 64
+            ;;
+        esac
+        EOF
+        chmod +x podman
+        : > rmi.log
+
+        ${pruneStaleImages { cmd = "$PWD/podman"; }}
+
+        for kept in \
+          'localhost/wrix-current:live' \
+          'localhost/wrix-recent-by-ref:old' \
+          'localhost/wrix-recent-by-digest:old' \
+          'localhost/wrix-recent-by-id:old' \
+          'localhost/wrix-used:old' \
+          'dangling-id' \
+          'docker.io/library/ubuntu:latest'; do
+          if grep -Fxq "$kept" rmi.log; then
+            echo "FAIL: kept image was pruned: $kept" >&2
+            cat rmi.log >&2
+            exit 1
+          fi
+        done
+
+        for pruned in \
+          'localhost/wrix-stale:old' \
+          'localhost/wrix-legacy:old' \
+          'managed-dangling-id'; do
+          if ! grep -Fxq "$pruned" rmi.log; then
+            echo "FAIL: stale image was not pruned: $pruned" >&2
+            cat rmi.log >&2
+            exit 1
+          fi
+        done
 
         mkdir "$out"
       '';

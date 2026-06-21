@@ -56,6 +56,11 @@ let
     Subsystem sftp internal-sftp
   '';
 
+  labels = {
+    "wrix.managed" = "true";
+    "wrix.image.kind" = "builder";
+  };
+
   # Create merged environment with all packages
   builderEnv = pkgs.buildEnv {
     name = "wrix-builder-env";
@@ -129,8 +134,12 @@ pkgs.dockerTools.buildLayeredImage {
       "NIX_DAEMON_SOCKET_PATH=/run/nix/daemon.sock"
     ];
     Entrypoint = [ "/entrypoint.sh" ];
+    Labels = labels;
     ExposedPorts = {
       "22/tcp" = { };
     };
   };
+}
+// {
+  inherit labels;
 }

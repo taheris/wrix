@@ -165,6 +165,7 @@ let
       test-image-tier-graph \
       test-image-tier-membership \
       test-wrix-images-source-kind \
+      test-wrix-image-labels \
       test-claude-runtime-noop \
       test-prek-hooks-closure \
       test-base-image-universal \
@@ -278,6 +279,12 @@ in
       meta.description = "Verify built-in wrix profile images expose platform source kinds.";
       type = "app";
       program = "${sandboxImageChecks.wrixImagesSourceKindTest}/bin/test-wrix-images-source-kind";
+    };
+
+    wrix-image-labels = {
+      meta.description = "Verify wrix-managed image labels on profile and support images.";
+      type = "app";
+      program = "${sandboxImageChecks.wrixImageLabelsTest}/bin/test-wrix-image-labels";
     };
 
     prek-hooks-closure = {

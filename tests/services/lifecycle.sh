@@ -23,6 +23,13 @@ require_python() {
   fi
 }
 
+require_nix() {
+  if ! command -v nix >/dev/null 2>&1; then
+    printf 'SKIP: nix is required for image label assertions\n' >&2
+    exit 77
+  fi
+}
+
 build_wrix() {
   cargo build --quiet -p wrix-cli --bin wrix || return 1
   printf '%s\n' "$REPO_ROOT/target/debug/wrix"
@@ -393,6 +400,28 @@ test_service_start_loads_image_source() {
   assert_file_contains "service run after load" "$WRIX_FAKE_RUNTIME_STATE/run-image-source-repo-service" "localhost/wrix-service:latest"
 }
 
+test_service_image_labels() {
+  require_python
+  require_nix
+
+  local labels_json
+  labels_json="$(nix eval --no-warn-dirty --json "$REPO_ROOT#wrix-service-image.labels")"
+  python3 - "$labels_json" <<'PY'
+import json
+import sys
+labels = json.loads(sys.argv[1])
+expected = {
+    "wrix.managed": "true",
+    "wrix.image.kind": "service",
+}
+for key, value in expected.items():
+    actual = labels.get(key)
+    if actual != value:
+        print(f"FAIL: service image label {key}={actual!r}, expected {value!r}", file=sys.stderr)
+        sys.exit(1)
+PY
+}
+
 test_service_mounts_beads_worktree_remote() {
   local wrix_bin
   wrix_bin="$(build_wrix)"
@@ -421,6 +450,7 @@ ALL_TESTS=(
   test_temp_cache_only_workspace_does_not_start_service
   test_loom_bead_workspace_uses_repo_service
   test_service_start_loads_image_source
+  test_service_image_labels
   test_service_mounts_beads_worktree_remote
 )
 

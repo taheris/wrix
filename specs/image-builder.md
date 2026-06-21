@@ -190,7 +190,7 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
 - Every wrix-managed Nix-built Linux image source is archive-less (`source_kind = "nix-descriptor"`) unless a spec names an explicit exemption; Darwin sources remain tar-loadable fallbacks
   [system](nix run .#test-wrix-images-source-kind)
 - Wrix-managed images carry wrix-managed image labels, including `wrix.managed=true` and `wrix.image.kind`; profile images also carry `wrix.profile.name` and `wrix.agent.kind`
-  [system?](nix run .#test-wrix-image-labels)
+  [system](nix run .#test-wrix-image-labels)
 
 ## Requirements
 
