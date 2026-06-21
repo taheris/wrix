@@ -81,7 +81,11 @@ fi
 script="\$4"
 shift 4
 if [[ "$drops_net_admin" = "1" ]]; then
-  WRIX_STUB_NET_ADMIN_DROPPED=1 "$BASH_BIN" -c "\$script" "\$@"
+  if [[ "\${WRIX_STUB_CAPSH_RESET_PATH:-0}" = "1" ]]; then
+    PATH=/no-such-path WRIX_STUB_NET_ADMIN_DROPPED=1 "$BASH_BIN" -c "\$script" "\$@"
+  else
+    WRIX_STUB_NET_ADMIN_DROPPED=1 "$BASH_BIN" -c "\$script" "\$@"
+  fi
 else
   "$BASH_BIN" -c "\$script" "\$@"
 fi
@@ -262,7 +266,7 @@ test_agent_lacks_net_admin() {
     WRIX_GREP_BIN="$GREP_BIN" \
     WRIX_STUB_FIREWALL_LOG="$stub_dir/firewall.log" \
     "$BASH_BIN" -c ". '$block'; run_without_net_admin '$BASH_BIN' -c 'exit 0'"
-    assert_log_contains "$platform capsh" "$stub_dir/firewall.log" "capsh --drop=cap_net_admin -- -c exec \"\$@\" wrix-no-net-admin"
+    assert_log_contains "$platform capsh" "$stub_dir/firewall.log" "capsh --drop=cap_net_admin -- -c PATH=\"\$1\"; shift; export PATH; exec \"\$@\" wrix-no-net-admin"
 
     stub_dir="$TEST_TMP/drop-fail-$platform"
     prepare_stubs "$stub_dir" 0
@@ -281,12 +285,53 @@ test_agent_lacks_net_admin() {
   pass "agent commands run under a verified NET_ADMIN drop"
 }
 
+test_capsh_shell_receives_entrypoint_path() {
+  local platform stub_dir block agent_dir agent_log
+  for platform in linux darwin; do
+    stub_dir="$TEST_TMP/path-$platform"
+    prepare_stubs "$stub_dir" 1
+    block="$TEST_TMP/$platform-policy.sh"
+    agent_dir="$stub_dir/agent-bin"
+    agent_log="$stub_dir/agent.log"
+    mkdir -p "$agent_dir"
+    cat >"$agent_dir/pi" <<STUB
+#!$BASH_BIN
+set -euo pipefail
+printf 'pi argv:' >"\${WRIX_STUB_AGENT_LOG:?}"
+for arg in "\$@"; do
+  printf ' <%s>' "\$arg" >>"\$WRIX_STUB_AGENT_LOG"
+done
+printf '\n' >>"\$WRIX_STUB_AGENT_LOG"
+STUB
+    chmod +x "$agent_dir/pi"
+    case "$platform" in
+      linux) extract_policy_block "$LINUX_ENTRYPOINT" "$block" ;;
+      darwin) extract_policy_block "$DARWIN_ENTRYPOINT" "$block" ;;
+    esac
+    WRIX_IPTABLES_BIN="$stub_dir/iptables" \
+    WRIX_IP6TABLES_BIN="$stub_dir/ip6tables" \
+    WRIX_CAPSH_BIN="$stub_dir/capsh" \
+    WRIX_GETENT_BIN="$stub_dir/getent" \
+    WRIX_AWK_BIN="$AWK_BIN" \
+    WRIX_SORT_BIN="$SORT_BIN" \
+    WRIX_GREP_BIN="$GREP_BIN" \
+    WRIX_STUB_FIREWALL_LOG="$stub_dir/firewall.log" \
+    WRIX_STUB_AGENT_BIN_DIR="$agent_dir" \
+    WRIX_STUB_AGENT_LOG="$agent_log" \
+    WRIX_STUB_CAPSH_RESET_PATH=1 \
+    "$BASH_BIN" -c '. "$1"; PATH="$WRIX_STUB_AGENT_BIN_DIR:/bin:/usr/bin"; export -n PATH; wrix_verify_net_admin_drop() { :; }; run_without_net_admin pi alpha beta' _ "$block"
+    assert_log_contains "$platform agent argv" "$agent_log" "pi argv: <alpha> <beta>"
+  done
+  pass "capsh shell receives the entrypoint PATH for agent lookup"
+}
+
 ALL_TESTS=(
   test_open_blocks_lan
   test_limit_allowlist
   test_ipv6_blocked
   test_fail_closed
   test_agent_lacks_net_admin
+  test_capsh_shell_receives_entrypoint_path
 )
 
 run_all() {

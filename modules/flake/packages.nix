@@ -86,6 +86,7 @@
       sandboxPkgs = listToAttrs (mkProfileVariants "" { }) // {
         debug =
           (wrix.mkSandbox {
+            agent = "pi";
             profile = profiles.rust;
             packages = [ linuxPkgs.podman ];
           }).package;
@@ -98,7 +99,7 @@
         "aarch64-linux"
         "x86_64-linux"
       ];
-      wrixSandboxPackage = (wrix.mkSandbox { profile = profiles.base; }).package;
+      wrixSandboxPackage = sandboxOverlays.sandbox-rust-pi;
       wrixCli = pkgs.writeShellScriptBin "wrix" ''
         set -euo pipefail
 

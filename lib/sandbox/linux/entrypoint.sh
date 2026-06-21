@@ -435,8 +435,9 @@ wrix_verify_net_admin_drop() {
 }
 
 run_without_net_admin() {
+  local wrix_entrypoint_path="$PATH"
   wrix_verify_net_admin_drop
-  "$WRIX_CAPSH_BIN" --drop=cap_net_admin -- -c 'exec "$@"' wrix-no-net-admin "$@"
+  "$WRIX_CAPSH_BIN" --drop=cap_net_admin -- -c 'PATH="$1"; shift; export PATH; exec "$@"' wrix-no-net-admin "$wrix_entrypoint_path" "$@"
 }
 # END wrix network policy
 
