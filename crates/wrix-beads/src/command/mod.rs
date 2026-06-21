@@ -268,7 +268,7 @@ fn sync_beads_git_branch(
     }
     repair_worktree_pointers(context)?;
     commit_dirty_worktree(&context.worktree)?;
-    run_required_in(&context.worktree, "git", &["pull", "--rebase", "--quiet"])?;
+    run_git_required_in(&context.worktree, &["pull", "--rebase", "--quiet"])?;
 
     if context.remote_dir.is_dir() {
         let source = format!("{}/", context.remote_dir.display());
@@ -277,9 +277,8 @@ fn sync_beads_git_branch(
     }
 
     commit_dirty_worktree(&context.worktree)?;
-    run_required_in(
+    run_git_required_in(
         &context.worktree,
-        "git",
         &["push", "-u", "origin", &context.branch, "--quiet"],
     )?;
     writeln!(stdout, "wrix beads push: synced to GitHub")?;
@@ -288,40 +287,30 @@ fn sync_beads_git_branch(
 
 fn ensure_beads_worktree(context: &Context, stderr: &mut impl Write) -> io::Result<bool> {
     if context.worktree.is_dir()
-        && run_output_in(
-            &context.worktree,
-            "git",
-            &["rev-parse", "--is-inside-work-tree"],
-        )?
-        .status
-        .success()
+        && run_git_output_in(&context.worktree, &["rev-parse", "--is-inside-work-tree"])?
+            .status
+            .success()
     {
         return Ok(true);
     }
     if context.worktree.is_dir() {
-        run_required("git", &["worktree", "prune"])?;
+        run_git_required(&["worktree", "prune"])?;
         fs::remove_dir_all(&context.worktree)?;
     }
-    if run_output("git", &["rev-parse", "--verify", &context.branch])?
+    if run_git_output(&["rev-parse", "--verify", &context.branch])?
         .status
         .success()
     {
         let worktree = context.worktree_text();
-        run_required(
-            "git",
-            &["worktree", "add", &worktree, &context.branch, "--quiet"],
-        )?;
+        run_git_required(&["worktree", "add", &worktree, &context.branch, "--quiet"])?;
     } else {
         let origin_branch = format!("origin/{}", context.branch);
-        if run_output("git", &["rev-parse", "--verify", &origin_branch])?
+        if run_git_output(&["rev-parse", "--verify", &origin_branch])?
             .status
             .success()
         {
             let worktree = context.worktree_text();
-            run_required(
-                "git",
-                &["worktree", "add", &worktree, &origin_branch, "--quiet"],
-            )?;
+            run_git_required(&["worktree", "add", &worktree, &origin_branch, "--quiet"])?;
         } else {
             writeln!(
                 stderr,
@@ -362,20 +351,19 @@ fn repair_worktree_pointers(context: &Context) -> io::Result<()> {
 }
 
 fn commit_dirty_worktree(worktree: &Path) -> io::Result<()> {
-    let refresh = run_output_in(worktree, "git", &["update-index", "--refresh"])?;
+    let refresh = run_git_output_in(worktree, &["update-index", "--refresh"])?;
     if !refresh.stderr.is_empty() {
         io::stderr().write_all(&refresh.stderr)?;
     }
-    let status = run_required_output_in(
+    let status = run_git_required_output_in(
         worktree,
-        "git",
         &["status", "--porcelain", "--untracked-files=normal"],
     )?;
     if status.stdout.is_empty() {
         return Ok(());
     }
-    run_required_in(worktree, "git", &["add", "-A"])?;
-    run_required_in(worktree, "git", &["commit", "-m", "bd sync", "--quiet"])
+    run_git_required_in(worktree, &["add", "-A"])?;
+    run_git_required_in(worktree, &["commit", "-m", "bd sync", "--quiet"])
 }
 
 fn run_required(program: &str, args: &[&str]) -> io::Result<()> {
@@ -393,6 +381,49 @@ fn run_required_output(program: &str, args: &[&str]) -> io::Result<Output> {
 
 fn run_required_output_in(cwd: &Path, program: &str, args: &[&str]) -> io::Result<Output> {
     let output = run_output_in(cwd, program, args)?;
+    required_output_result(program, output)
+}
+
+fn run_output(program: &str, args: &[&str]) -> io::Result<Output> {
+    run_output_in(Path::new("."), program, args)
+}
+
+fn run_output_in(cwd: &Path, program: &str, args: &[&str]) -> io::Result<Output> {
+    process_command_in(cwd, program, args).output()
+}
+
+fn run_git_required(args: &[&str]) -> io::Result<()> {
+    run_git_required_in(Path::new("."), args)
+}
+
+fn run_git_required_in(cwd: &Path, args: &[&str]) -> io::Result<()> {
+    let output = run_git_output_in(cwd, args)?;
+    status_to_result(&output)
+}
+
+fn run_git_required_output_in(cwd: &Path, args: &[&str]) -> io::Result<Output> {
+    let output = run_git_output_in(cwd, args)?;
+    required_output_result("git", output)
+}
+
+fn run_git_output(args: &[&str]) -> io::Result<Output> {
+    run_git_output_in(Path::new("."), args)
+}
+
+fn run_git_output_in(cwd: &Path, args: &[&str]) -> io::Result<Output> {
+    let mut command = process_command_in(cwd, "git", args);
+    command.env("PREK_ALLOW_NO_CONFIG", "1").output()
+}
+
+fn process_command_in(cwd: &Path, program: &str, args: &[&str]) -> ProcessCommand {
+    let mut command = ProcessCommand::new(program);
+    command.args(args);
+    command.current_dir(cwd);
+    command.stdin(Stdio::null());
+    command
+}
+
+fn required_output_result(program: &str, output: Output) -> io::Result<Output> {
     if output.status.success() {
         Ok(output)
     } else {
@@ -402,19 +433,6 @@ fn run_required_output_in(cwd: &Path, program: &str, args: &[&str]) -> io::Resul
             String::from_utf8_lossy(&output.stderr)
         )))
     }
-}
-
-fn run_output(program: &str, args: &[&str]) -> io::Result<Output> {
-    run_output_in(Path::new("."), program, args)
-}
-
-fn run_output_in(cwd: &Path, program: &str, args: &[&str]) -> io::Result<Output> {
-    ProcessCommand::new(program)
-        .args(args)
-        .current_dir(cwd)
-        .env("PREK_ALLOW_NO_CONFIG", "1")
-        .stdin(Stdio::null())
-        .output()
 }
 
 fn status_to_result(output: &Output) -> io::Result<()> {

@@ -280,13 +280,13 @@ upstream, not by this spec.
 - `wrix beads push` attempts `bd dolt push` before `bd dolt pull`, so a
   session-close run against an up-to-date remote never enters the Dolt
   merge path
-  [judge](../tests/judges/beads.sh#test_beadspush_pushes_before_pulls)
+  [system](bash tests/beads-push.sh test_beadspush_pushes_before_pulls)
 
 - On the pull-fallback path, `wrix beads push` snapshots local `status` and
   `labels` intent before pulling and exits non-zero with the affected
   issue IDs in stderr when the post-pull row state diverges from that
   intent — no push attempted, no silent overwrite
-  [judge](../tests/judges/beads.sh#test_beadspush_failloud_on_intent_overwrite)
+  [system](bash tests/beads-push.sh test_beadspush_failloud_on_intent_overwrite)
 
 - `wrix beads push` disables bd's auto-export hook on every invocation that
   proceeds past the context guard (idempotent), leaving
@@ -294,34 +294,34 @@ upstream, not by this spec.
   `.beads/config.yaml`, so subsequent bd calls inside and outside
   `wrix beads push` no longer emits the `Warning: auto-export: git add failed`
   message or write `.beads/issues.jsonl`
-  [judge](../tests/judges/beads.sh#test_beadspush_disables_autoexport)
+  [system](bash tests/beads-push.sh test_beadspush_disables_autoexport)
 
 - On host invocations, `wrix beads push` repairs a missing or stale Dolt `origin`
   remote to the current checkout's host-path beads worktree remote before
   Dolt sync, while sandbox/container invocations skip the repair so a
   `/workspace` path is never persisted into shared Beads config
-  [judge](../tests/judges/beads.sh#test_beadspush_repairs_host_dolt_remote)
+  [system](bash tests/beads-push.sh test_beadspush_repairs_host_dolt_remote)
 
 - When `$LOOM_INSIDE` is set, `wrix beads push` performs no git or dolt
   operation and exits 0 with a one-line notice, so a consumer may invoke it
   unconditionally inside a loom-managed bead clone — where `origin` points
   at the driver workdir and `.git/beads-worktrees/<branch>` is absent —
   without error and without a second writer racing the driver
-  [judge](../tests/judges/beads.sh#test_beadspush_loom_inside_noop)
+  [system](bash tests/beads-push.sh test_beadspush_loom_inside_noop)
 
 - When `$LOOM_INSIDE` is unset and `git rev-parse --show-toplevel` does not
   resolve a workspace root, `wrix beads push` exits non-zero with an actionable
   stderr message naming the unresolved repository — never proceeding with an
   empty `ROOT` into a git invocation that prints
   `fatal: not a git repository: (null)`
-  [judge](../tests/judges/beads.sh#test_beadspush_failloud_missing_repo)
+  [system](bash tests/beads-push.sh test_beadspush_failloud_missing_repo)
 
 - `wrix beads push`'s pre-pull cleanup commits any pre-existing dirt in the
   beads worktree — untracked files OR modified tracked files left by a
   previously-interrupted run — using the same detection surface
   `git rebase` itself consults, so the subsequent `git pull --rebase`
   never aborts with "You have unstaged changes"
-  [judge](../tests/judges/beads.sh#test_beadspush_pre_pull_cleanup_canonical)
+  [system](bash tests/beads-push.sh test_beadspush_pre_pull_cleanup_canonical)
 
 - When the beads worktree directory exists but is no longer a valid git
   worktree (its `.git/worktrees/<branch>` admin directory was pruned or
@@ -330,14 +330,14 @@ upstream, not by this spec.
   beads-branch sync — exiting 0, printing `wrix beads push: synced to GitHub`, and
   advancing `origin/<branch>` with no `fatal: not a git repository: (null)`
   error
-  [judge](../tests/judges/beads.sh#test_beadspush_recovers_orphaned_worktree)
+  [system](bash tests/beads-push.sh test_beadspush_recovers_orphaned_worktree)
 
 - Every git invocation in the beads-branch sync, including the
   `git worktree add` that recreates the worktree, skips prek, so a fresh
   worktree recreate completes without the caller setting
   `PREK_ALLOW_NO_CONFIG` and without a `No prek.toml … found` error from the
   config-less `beads` branch
-  [judge](../tests/judges/beads.sh#test_beadspush_worktree_recreate_skips_prek)
+  [system](bash tests/beads-push.sh test_beadspush_worktree_recreate_skips_prek)
 
 ## Requirements
 
