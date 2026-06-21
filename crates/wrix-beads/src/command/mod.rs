@@ -55,8 +55,12 @@ fn push(stdout: &mut impl Write, stderr: &mut impl Write) -> io::Result<ExitCode
 
     env::set_current_dir(&context.root)?;
     disable_auto_export()?;
-    repair_dolt_origin_remote(&context, stderr)?;
-    if sync_dolt_remote(stderr)? != ExitCode::SUCCESS {
+    let remote_override = prepare_dolt_origin_remote(&context, stderr)?;
+    let sync_result = sync_dolt_remote(stderr);
+    let restore_result = remote_override.restore();
+    let sync_status = sync_result?;
+    restore_result?;
+    if sync_status != ExitCode::SUCCESS {
         return Ok(ExitCode::FAILURE);
     }
     sync_beads_git_branch(&context, stdout, stderr)
@@ -122,12 +126,12 @@ fn read_sync_branch(root: &Path) -> io::Result<String> {
     Ok(String::from("beads"))
 }
 
-fn repair_dolt_origin_remote(context: &Context, stderr: &mut impl Write) -> io::Result<()> {
-    if env::var_os("IS_SANDBOX").is_some() || context.root.starts_with("/workspace") {
-        return Ok(());
-    }
+fn prepare_dolt_origin_remote(
+    context: &Context,
+    stderr: &mut impl Write,
+) -> io::Result<DoltRemoteOverride> {
     if !context.worktree_remote_dir.is_dir() {
-        return Ok(());
+        return Ok(DoltRemoteOverride::inactive());
     }
 
     let remote = format!("file://{}", context.worktree_remote_dir.display());
@@ -139,17 +143,68 @@ fn repair_dolt_origin_remote(context: &Context, stderr: &mut impl Write) -> io::
         None
     };
     if origin.as_deref() == Some(remote.as_str()) {
-        return Ok(());
+        return Ok(DoltRemoteOverride::inactive());
+    }
+
+    if env::var_os("IS_SANDBOX").is_some() || context.root.starts_with("/workspace") {
+        return DoltRemoteOverride::install_temporary(origin, &remote, stderr);
     }
 
     writeln!(
         stderr,
         "wrix beads push: repairing Dolt origin remote -> {remote}"
     )?;
-    if origin.is_some() {
+    replace_dolt_origin(origin.as_deref(), &remote)?;
+    Ok(DoltRemoteOverride::inactive())
+}
+
+struct DoltRemoteOverride {
+    original: Option<String>,
+    active: bool,
+}
+
+impl DoltRemoteOverride {
+    const fn inactive() -> Self {
+        Self {
+            original: None,
+            active: false,
+        }
+    }
+
+    fn install_temporary(
+        original: Option<String>,
+        remote: &str,
+        stderr: &mut impl Write,
+    ) -> io::Result<Self> {
+        writeln!(
+            stderr,
+            "wrix beads push: temporarily using sandbox Dolt origin remote -> {remote}"
+        )?;
+        replace_dolt_origin(original.as_deref(), remote)?;
+        Ok(Self {
+            original,
+            active: true,
+        })
+    }
+
+    fn restore(self) -> io::Result<()> {
+        if !self.active {
+            return Ok(());
+        }
+        run_required("bd", &["sql", "CALL DOLT_REMOTE('remove', 'origin')"])?;
+        if let Some(remote) = self.original {
+            let add = format!("CALL DOLT_REMOTE('add', 'origin', {})", sql_quote(&remote));
+            run_required("bd", &["sql", &add])?;
+        }
+        Ok(())
+    }
+}
+
+fn replace_dolt_origin(existing: Option<&str>, remote: &str) -> io::Result<()> {
+    if existing.is_some() {
         run_required("bd", &["sql", "CALL DOLT_REMOTE('remove', 'origin')"])?;
     }
-    let add = format!("CALL DOLT_REMOTE('add', 'origin', {})", sql_quote(&remote));
+    let add = format!("CALL DOLT_REMOTE('add', 'origin', {})", sql_quote(remote));
     run_required("bd", &["sql", &add])
 }
 

@@ -66,6 +66,11 @@ if [[ "${1:-}" == "config" && "${2:-}" == "set" && "${3:-}" == "export.auto" && 
 fi
 
 if [[ "${1:-}" == "dolt" && "${2:-}" == "remote" && "${3:-}" == "list" ]]; then
+  origin_state="$state_dir/origin-remote"
+  if [[ -f "$origin_state" ]]; then
+    printf 'origin %s\n' "$(cat "$origin_state")"
+    exit 0
+  fi
   case "${FAKE_BD_REMOTE_LIST:-empty}" in
     correct)
       printf 'origin file://%s/.git/beads-worktrees/beads/.beads/dolt-remote\n' "${FAKE_REPO_ROOT:?}"
@@ -154,6 +159,18 @@ if [[ "${1:-}" == "sql" ]]; then
     else
       printf '%s\n' 'id,status,labels' 'wx-1,closed,ready'
     fi
+    exit 0
+  fi
+  if [[ "$query" == "CALL DOLT_REMOTE('remove', 'origin')" ]]; then
+    rm -f "$state_dir/origin-remote"
+    exit 0
+  fi
+  if [[ "$query" == "CALL DOLT_REMOTE('add', 'origin', '"*"')" ]]; then
+    prefix="CALL DOLT_REMOTE('add', 'origin', '"
+    suffix="')"
+    remote_url="${query#"$prefix"}"
+    remote_url="${remote_url%"$suffix"}"
+    printf '%s\n' "$remote_url" >"$state_dir/origin-remote"
     exit 0
   fi
   if [[ "$query" == *"DOLT_REMOTE"* ]]; then
@@ -601,12 +618,21 @@ test_beadspush_repairs_host_dolt_remote() {
   assert_file_not_contains "$case_dir/log" 'dolt remote add'
 
   local sandbox_case
-  sandbox_case="$(make_case sandbox-remote-skip)"
+  sandbox_case="$(make_case sandbox-remote-temporary)"
   mkdir -p "$sandbox_case/root/.git/beads-worktrees/beads/.beads/dolt-remote"
   run_push "$sandbox_case" "IS_SANDBOX=1" "FAKE_BD_REMOTE_LIST=stale"
   assert_rc "$sandbox_case" 0
-  assert_log_absent "$sandbox_case" 'dolt remote list'
-  assert_log_absent "$sandbox_case" 'DOLT_REMOTE'
+  assert_file_contains "$sandbox_case/stderr" "temporarily using sandbox Dolt origin remote -> file://$sandbox_case/root/.git/beads-worktrees/beads/.beads/dolt-remote"
+  assert_log_order "$sandbox_case" \
+    'config set export.auto false' \
+    'dolt remote list' \
+    "CALL DOLT_REMOTE('remove', 'origin')" \
+    "CALL DOLT_REMOTE('add', 'origin', 'file://$sandbox_case/root/.git/beads-worktrees/beads/.beads/dolt-remote')" \
+    'dolt commit' \
+    'dolt push' \
+    "CALL DOLT_REMOTE('remove', 'origin')" \
+    "CALL DOLT_REMOTE('add', 'origin', 'file:///stale/beads')"
+  assert_file_contains "$sandbox_case/state/origin-remote" 'file:///stale/beads'
 }
 
 test_beadspush_loom_inside_noop() {

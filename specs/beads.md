@@ -298,8 +298,9 @@ upstream, not by this spec.
 
 - On host invocations, `wrix beads push` repairs a missing or stale Dolt `origin`
   remote to the current checkout's host-path beads worktree remote before
-  Dolt sync, while sandbox/container invocations skip the repair so a
-  `/workspace` path is never persisted into shared Beads config
+  Dolt sync; sandbox/container invocations temporarily point `origin` at the
+  current checkout's beads worktree remote for the sync and restore the prior
+  remote before exit, so a `/workspace` path is not left in shared Beads config
   [system](bash tests/beads-push.sh test_beadspush_repairs_host_dolt_remote)
 
 - When `$LOOM_INSIDE` is set, `wrix beads push` performs no git or dolt
@@ -366,13 +367,14 @@ upstream, not by this spec.
    hook on every invocation past the context guard (idempotent); the
    pre-pull cleanup in the beads worktree uses `git status --porcelain` so
    any dirt the rebase would refuse is committed first.
-9. **Host remote repair** — on host invocations, `wrix beads push` repairs a
-   missing or stale Dolt `origin` remote to the current checkout's
+9. **Dolt origin remote handling** — on host invocations, `wrix beads push`
+   repairs a missing or stale Dolt `origin` remote to the current checkout's
    host-path beads worktree remote before Dolt sync. The repair updates the
    SQL Dolt remote directly rather than writing `sync.remote`, so it cannot
-   commit host-local absolute paths into `.beads/config.yaml`.
-   Sandbox/container invocations skip this repair so they do not poison
-   shared config with `/workspace` paths.
+   commit host-local absolute paths into `.beads/config.yaml`. Sandbox/container
+   invocations use the same current-checkout remote only as a temporary sync
+   override and restore the prior `origin` before exit, so they do not leave
+   `/workspace` paths in shared config.
 10. **Context-aware invocation** — `wrix beads push` is safe to invoke
    unconditionally. Under `$LOOM_INSIDE` it is a full no-op (exit 0); when
    the git root is unresolvable it fails fast with an actionable message;
