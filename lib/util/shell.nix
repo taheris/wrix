@@ -18,8 +18,8 @@ _:
   '';
 
   # Idempotent install of the sandbox image into the local containers store.
-  # Expects $IMAGE_REF, $IMAGE_SOURCE, $IMAGE_DIGEST_PATH, and `verbose` in
-  # the caller's scope.
+  # Expects $IMAGE_REF, $IMAGE_SOURCE, $IMAGE_SOURCE_KIND, $IMAGE_DIGEST_PATH,
+  # and `verbose` in the caller's scope.
   #
   # Preflight is content-digest based (specs/sandbox.md § Image install path):
   # when the image's OCI config digest is already present in the local store,
@@ -32,13 +32,9 @@ _:
   # image override not represented by the supplied ProfileConfig); the step
   # falls back to the ref-existence check so spawn-side idempotency is preserved.
   #
-  # On miss, the install transport is `skopeo copy oci-archive: →
-  # containers-storage:` (per specs/sandbox.md § Image install path).
-  # `streamLayeredImage` emits a Docker-format tar; we materialize it to a
-  # temp file, convert docker-archive → oci-archive via skopeo, then copy
-  # oci-archive → containers-storage. The containers-storage transport
-  # hashes each blob on write and skips ones already present, bounding
-  # rewrite I/O by the changed-blob delta rather than image size.
+  # On miss, the install transport dispatches by source kind. Linux descriptors
+  # flow through `skopeo copy nix:<descriptor> → containers-storage:<ref>`;
+  # tar-loadable archives flow through `docker-archive:<path>`.
   imageLoadStep = ''
     if [[ -z "$IMAGE_SOURCE" ]]; then
       verbose "Using cached image $IMAGE_REF"
@@ -68,23 +64,13 @@ _:
         verbose "Using cached image $IMAGE_REF"
       else
         verbose "Loading image from $IMAGE_SOURCE..."
+        _wrix_source_kind="''${IMAGE_SOURCE_KIND:-legacy-stream}"
         _wrix_img_tmp=$(mktemp -d)
-        "$IMAGE_SOURCE" >"$_wrix_img_tmp/image.tar"
-        skopeo --insecure-policy copy --quiet \
-          "docker-archive:$_wrix_img_tmp/image.tar" \
-          "oci-archive:$_wrix_img_tmp/image.oci"
-        # The oci-archive -> containers-storage leg writes into podman's
-        # store. skopeo resolves that store on its own and, when
-        # XDG_RUNTIME_DIR is unset, falls back to the rootful runroot
-        # (/run/containers/storage) a non-root user cannot create — the
-        # failure `podman load` dodged because podman computes the rootless
-        # runtime dir itself. Pin the destination to podman's actual store
-        # (driver@graphroot+runroot, queried from `podman info`) so skopeo
-        # writes exactly where podman reads, regardless of XDG_RUNTIME_DIR.
-        # This supersedes a `podman unshare skopeo` wrapper, which refuses to
-        # run under a remote podman client (CONTAINER_HOST set). If `podman
-        # info` can't be resolved, fall back to the bare ref and let skopeo
-        # resolve the store itself.
+        # The containers-storage leg writes into podman's store. skopeo resolves
+        # that store on its own and, when XDG_RUNTIME_DIR is unset, falls back to
+        # the rootful runroot (/run/containers/storage) a non-root user cannot
+        # create. Pin the destination to podman's actual store so skopeo writes
+        # exactly where podman reads.
         _wrix_store_ref="containers-storage:$IMAGE_REF"
         _wrix_store_spec=$(podman info \
           --format '{{.Store.GraphDriverName}}@{{.Store.GraphRoot}}+{{.Store.RunRoot}}' \
@@ -92,9 +78,28 @@ _:
         if [[ "$_wrix_store_spec" == *@*+* ]]; then
           _wrix_store_ref="containers-storage:[$_wrix_store_spec]$IMAGE_REF"
         fi
-        skopeo --insecure-policy copy --quiet \
-          "oci-archive:$_wrix_img_tmp/image.oci" \
-          "$_wrix_store_ref"
+        case "$_wrix_source_kind" in
+          nix-descriptor)
+            skopeo --insecure-policy copy --quiet \
+              "nix:$IMAGE_SOURCE" \
+              "$_wrix_store_ref"
+            ;;
+          docker-archive)
+            skopeo --insecure-policy copy --quiet \
+              "docker-archive:$IMAGE_SOURCE" \
+              "$_wrix_store_ref"
+            ;;
+          legacy-stream)
+            "$IMAGE_SOURCE" >"$_wrix_img_tmp/image.tar"
+            skopeo --insecure-policy copy --quiet \
+              "docker-archive:$_wrix_img_tmp/image.tar" \
+              "$_wrix_store_ref"
+            ;;
+          *)
+            echo "Error: unsupported image source_kind: $_wrix_source_kind" >&2
+            exit 1
+            ;;
+        esac
         rm -rf "$_wrix_img_tmp"
         IMAGE_REPO="''${IMAGE_REF%:*}"
         # best-effort: :latest is pruneStaleImages' keep-anchor; a tag

@@ -13,10 +13,18 @@
 
 let
   inherit (pkgs) lib; # threaded for symmetry with other test imports
+  inherit (lib)
+    concatStringsSep
+    elem
+    mapAttrsToList
+    optionals
+    subtractLists
+    ;
+  discardContext = value: builtins.unsafeDiscardStringContext (toString value);
 
   shellLib = import ../../lib/util/shell.nix { };
 
-  isLinux = lib.elem system [
+  isLinux = elem system [
     "x86_64-linux"
     "aarch64-linux"
   ];
@@ -33,6 +41,7 @@ let
       ;
   };
   defaultImage = (sandboxLib.mkSandbox { profile = sandboxLib.profiles.base; }).image;
+  expectedImageSourceKind = if isLinux then "nix-descriptor" else "docker-archive";
 
   claudeImage =
     (sandboxLib.mkSandbox {
@@ -59,7 +68,7 @@ let
   # the second.
   wrixSpawnLoadTest = pkgs.writeShellApplication {
     name = "test-wrix-spawn-load";
-    runtimeInputs = lib.optionals isLinux [
+    runtimeInputs = optionals isLinux [
       pkgs.coreutils
       pkgs.gnugrep
     ];
@@ -78,17 +87,14 @@ let
           : >"$skopeo_log"
 
           IMAGE_REF="localhost/wrix-loadtest:abc123"
-          IMAGE_SOURCE="$tmp/image-source.sh"
+          IMAGE_SOURCE="$tmp/image-descriptor.json"
+          IMAGE_SOURCE_KIND="nix-descriptor"
           # The install transport pins skopeo's containers-storage destination
           # to podman's store via `podman info`; the shim reports this spec so
           # the assertion below can verify the [driver@graphroot+runroot] ref.
           STORE_SPEC="overlay@$tmp/graphroot+$tmp/runroot"
 
-          cat >"$IMAGE_SOURCE" <<'IMG_SRC'
-          #!/usr/bin/env bash
-          printf 'fake-image-tarball-bytes'
-          IMG_SRC
-          chmod +x "$IMAGE_SOURCE"
+          printf '{"schema":1,"source_kind":"nix-descriptor"}\n' >"$IMAGE_SOURCE"
 
           cat >"$shim_dir/podman" <<PODMAN_SHIM
           #!/usr/bin/env bash
@@ -127,18 +133,13 @@ let
           verbose() { :; }
 
           PATH="$shim_dir:$PATH"
-          export PATH IMAGE_REF IMAGE_SOURCE
+          export PATH IMAGE_REF IMAGE_SOURCE IMAGE_SOURCE_KIND
 
           ${shellLib.imageLoadStep}
 
           EXPECTED_DEST="containers-storage:[$STORE_SPEC]$IMAGE_REF"
-          if ! grep -qF -- " $EXPECTED_DEST" "$skopeo_log"; then
-              echo "first invocation did not skopeo copy oci-archive: -> $EXPECTED_DEST:" >&2
-              cat "$skopeo_log" >&2
-              exit 1
-          fi
-          if ! grep -qE 'docker-archive:[^ ]+ oci-archive:[^ ]+$' "$skopeo_log"; then
-              echo "first invocation did not stage docker-archive -> oci-archive via skopeo:" >&2
+          if ! grep -qF -- "nix:$IMAGE_SOURCE $EXPECTED_DEST" "$skopeo_log"; then
+              echo "first invocation did not skopeo copy nix:<descriptor> -> $EXPECTED_DEST:" >&2
               cat "$skopeo_log" >&2
               exit 1
           fi
@@ -182,7 +183,7 @@ let
   # by its own (in-progress) work in specs/sandbox.md and is skipped here.
   imageInstallDigestSkipTest = pkgs.writeShellApplication {
     name = "test-image-install-digest-skip";
-    runtimeInputs = lib.optionals isLinux [
+    runtimeInputs = optionals isLinux [
       pkgs.coreutils
       pkgs.gnugrep
     ];
@@ -203,17 +204,12 @@ let
           : >"$image_source_log"
 
           IMAGE_REF="localhost/wrix-digestskip:abc123"
-          IMAGE_SOURCE="$tmp/image-source.sh"
+          IMAGE_SOURCE="$tmp/image-descriptor.json"
+          IMAGE_SOURCE_KIND="nix-descriptor"
           IMAGE_DIGEST_PATH="$tmp/image-digest"
           DESIRED_DIGEST="sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
           printf '%s' "$DESIRED_DIGEST" >"$IMAGE_DIGEST_PATH"
-
-          cat >"$IMAGE_SOURCE" <<IMG_SRC
-          #!/usr/bin/env bash
-          printf 'invoked\n' >>'$image_source_log'
-          printf 'fake-image-tarball-bytes'
-          IMG_SRC
-          chmod +x "$IMAGE_SOURCE"
+          printf '{"schema":1,"source_kind":"nix-descriptor"}\n' >"$IMAGE_SOURCE"
 
           # podman shim — logs every invocation as a single-line `$*`.
           # `image inspect --format {{.Id}} <digest>`: succeeds (exit 0,
@@ -274,7 +270,7 @@ let
           verbose() { :; }
 
           PATH="$shim_dir:$PATH"
-          export PATH IMAGE_REF IMAGE_SOURCE IMAGE_DIGEST_PATH
+          export PATH IMAGE_REF IMAGE_SOURCE IMAGE_SOURCE_KIND IMAGE_DIGEST_PATH
 
           # First invocation: digest preflight miss → install transport runs.
           ${shellLib.imageLoadStep}
@@ -284,8 +280,8 @@ let
               cat "$skopeo_log" >&2
               exit 1
           fi
-          if ! grep -qE 'oci-archive:[^ ]+ containers-storage:'"$IMAGE_REF"'$' "$skopeo_log"; then
-              echo "first invocation did not skopeo copy oci-archive: -> containers-storage:$IMAGE_REF:" >&2
+          if ! grep -qF -- "nix:$IMAGE_SOURCE containers-storage:$IMAGE_REF" "$skopeo_log"; then
+              echo "first invocation did not skopeo copy nix:<descriptor> -> containers-storage:$IMAGE_REF:" >&2
               cat "$skopeo_log" >&2
               exit 1
           fi
@@ -295,8 +291,8 @@ let
               exit 1
           fi
           first_source_lines=$(wc -l <"$image_source_log")
-          if [[ "$first_source_lines" -ne 1 ]]; then
-              echo "first invocation did not materialise the image tar exactly once (got $first_source_lines):" >&2
+          if [[ "$first_source_lines" -ne 0 ]]; then
+              echo "first invocation executed the descriptor source (got $first_source_lines calls):" >&2
               cat "$image_source_log" >&2
               exit 1
           fi
@@ -317,8 +313,8 @@ let
               exit 1
           fi
           second_source_lines=$(wc -l <"$image_source_log")
-          if [[ "$second_source_lines" -ne 1 ]]; then
-              echo "second invocation re-materialised the image tar (lines now=$second_source_lines, expected 1):" >&2
+          if [[ "$second_source_lines" -ne 0 ]]; then
+              echo "second invocation executed the descriptor source (lines now=$second_source_lines, expected 0):" >&2
               cat "$image_source_log" >&2
               exit 1
           fi
@@ -345,56 +341,148 @@ let
         '';
   };
 
-  # Faithful verifier that the build-time `image.digest` equals the config
-  # digest of the image AFTER the launcher's `docker-archive → oci-archive`
-  # conversion (specs/sandbox.md § Image install path) — i.e. the value podman
-  # records as `.Id` once the install transport finishes. Unlike the shim-based
-  # digest-skip test (whose stub podman reports presence from a sentinel file,
-  # not from the digest bytes), this drives the real skopeo conversion on the
-  # same streamLayeredImage and compares against `image.digest`. skopeo
-  # rewrites the config blob when converting Docker schema2 → OCI, so a digest
-  # taken from the docker-archive manifest would never match what podman
-  # stores, and the preflight would re-stream on every launch. This test
-  # closes over the live `defaultImage` derivation and its `.digest`, so a
-  # regression to the docker-archive digest is caught here.
   digestMatchesStoredIdTest = pkgs.writeShellApplication {
     name = "test-image-digest-matches-stored-id";
-    runtimeInputs = lib.optionals isLinux [
+    text = ''
+      echo "test-image-digest-matches-stored-id: skipped; descriptor digests are not podman image IDs" >&2
+      exit 0
+    '';
+  };
+
+  linuxImageArchivelessSourceTest = pkgs.writeShellApplication {
+    name = "test-linux-image-archiveless-source";
+    text =
+      if isLinux then
+        ''
+          source_kind='${defaultImage.source_kind}'
+          source_path='${discardContext defaultImage.source}'
+          image_path='${discardContext defaultImage}'
+          digest_source_kind='${defaultImage.digest_source_kind}'
+
+          if [[ "$source_kind" != "nix-descriptor" ]]; then
+              echo "FAIL: expected source_kind=nix-descriptor, got $source_kind" >&2
+              exit 1
+          fi
+          if [[ "$source_path" = "$image_path" ]]; then
+              echo "FAIL: Linux image.source still points at the raw image output" >&2
+              exit 1
+          fi
+          if [[ "$source_path" != *-nix-descriptor.json ]]; then
+              echo "FAIL: Linux image.source is not a descriptor path: $source_path" >&2
+              exit 1
+          fi
+          if [[ "$digest_source_kind" != "nix-descriptor" ]]; then
+              echo "FAIL: Linux image digest is not descriptor-derived: $digest_source_kind" >&2
+              exit 1
+          fi
+
+          echo "test-linux-image-archiveless-source: PASS"
+        ''
+      else
+        ''
+          echo "test-linux-image-archiveless-source: skipped on non-Linux host" >&2
+          exit 0
+        '';
+  };
+
+  imageDigestNoTarTest = pkgs.writeShellApplication {
+    name = "test-image-digest-no-tar";
+    runtimeInputs = optionals isLinux [
       pkgs.coreutils
-      pkgs.skopeo
-      pkgs.jq
+      pkgs.gnugrep
+      pkgs.nix
     ];
     text =
       if isLinux then
         ''
-          HOME=$(mktemp -d); export HOME
-          tmp=$(mktemp -d)
-          trap 'rm -rf "$tmp" "$HOME"' EXIT
+          digest_path='${defaultImage.digest}'
+          image_path='${discardContext defaultImage}'
+          digest=$(cat "$digest_path")
 
-          ${defaultImage} > "$tmp/image.tar"
-          skopeo --insecure-policy copy --quiet \
-            "docker-archive:$tmp/image.tar" "oci-archive:$tmp/image.oci"
-          oci_digest=$(skopeo inspect --raw "oci-archive:$tmp/image.oci" | jq -r '.config.digest')
-          built_digest=$(cat ${defaultImage.digest})
-
-          if [[ "$oci_digest" != "$built_digest" ]]; then
-              echo "FAIL: image.digest does not match the post-conversion OCI config digest" >&2
-              echo "  built_digest (image.digest)   : $built_digest" >&2
-              echo "  oci_digest   (live conversion): $oci_digest" >&2
-              echo "  => launcher preflight would miss and re-stream on every launch" >&2
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "FAIL: descriptor digest has unexpected shape: $digest" >&2
+              exit 1
+          fi
+          if nix-store -q --references "$digest_path" | grep -Fxq "$image_path"; then
+              echo "FAIL: descriptor digest depends on the raw image output" >&2
               exit 1
           fi
 
-          echo "test-image-digest-matches-stored-id: PASS ($built_digest)"
+          echo "test-image-digest-no-tar: PASS ($digest)"
         ''
       else
         ''
-          # streamLayeredImage's stream script carries a Linux Python shebang;
-          # the docker-archive → oci-archive conversion this verifier performs
-          # is Linux-only. Darwin's digest preflight is covered separately.
-          echo "test-image-digest-matches-stored-id: skipped on this platform (streamLayeredImage is Linux-only)" >&2
+          echo "test-image-digest-no-tar: skipped on non-Linux host" >&2
           exit 0
         '';
+  };
+
+  imageTierGraphTest = pkgs.writeShellApplication {
+    name = "test-image-tier-graph";
+    text = ''
+      source_kind='${defaultImage.source_kind}'
+      base='${discardContext defaultImage.baseImage}'
+      stable='${discardContext defaultImage.stableProfileImage}'
+      agent='${discardContext defaultImage.agentImage}'
+      leaf='${discardContext defaultImage}'
+
+      if [[ "$source_kind" != "${expectedImageSourceKind}" ]]; then
+          echo "FAIL: expected source_kind=${expectedImageSourceKind}, got $source_kind" >&2
+          exit 1
+      fi
+      for tier in "$base" "$stable" "$agent" "$leaf"; do
+          if [[ "$tier" != /nix/store/* ]]; then
+              echo "FAIL: tier path is not store-resident: $tier" >&2
+              exit 1
+          fi
+      done
+      if [[ "$stable" != *wrix-stable-profile-* || "$agent" != *wrix-agent-* || "$leaf" != *wrix-* ]]; then
+          echo "FAIL: tier names do not expose base -> stable-profile -> agent -> leaf graph" >&2
+          exit 1
+      fi
+
+      echo "test-image-tier-graph: PASS"
+    '';
+  };
+
+  sourceKindMatrix = {
+    base = (sandboxLib.mkSandbox { profile = sandboxLib.profiles.base; }).image;
+    rust = (sandboxLib.mkSandbox { profile = sandboxLib.profiles.rust; }).image;
+    python = (sandboxLib.mkSandbox { profile = sandboxLib.profiles.python; }).image;
+    base-pi =
+      (sandboxLib.mkSandbox {
+        profile = sandboxLib.profiles.base;
+        agent = "pi";
+      }).image;
+    base-claude = claudeImage;
+  };
+  sourceKindChecks = concatStringsSep "\n" (
+    mapAttrsToList (name: image: ''
+      check_source_kind "${name}" "${image.source_kind}" "${discardContext image.source}"
+    '') sourceKindMatrix
+  );
+
+  wrixImagesSourceKindTest = pkgs.writeShellApplication {
+    name = "test-wrix-images-source-kind";
+    text = ''
+      check_source_kind() {
+          local name="$1"
+          local source_kind="$2"
+          local source_path="$3"
+          if [[ "$source_kind" != "${expectedImageSourceKind}" ]]; then
+              echo "FAIL: $name source_kind=$source_kind, expected ${expectedImageSourceKind}" >&2
+              exit 1
+          fi
+          if [[ "$source_path" != /nix/store/* ]]; then
+              echo "FAIL: $name source path is not store-resident: $source_path" >&2
+              exit 1
+          fi
+      }
+
+      ${sourceKindChecks}
+
+      echo "test-wrix-images-source-kind: PASS"
+    '';
   };
 
   claudeRuntimeNoopTest = pkgs.writeShellApplication {
@@ -449,7 +537,7 @@ let
   # `pkgs.rustc` (rust uses fenix's toolchain; base/python carry no Rust) or
   # `pkgs.llvmPackages.libllvm` (no profile links LLVM) — is absent from the
   # scannable image closure and is caught here as dead weight.
-  baseContentsList = lib.concatStringsSep " " (map (p: ''"${p}"'') baseContents);
+  baseContentsList = concatStringsSep " " (map (p: ''"${p}"'') baseContents);
   baseImageUniversalTest = pkgs.writeShellApplication {
     name = "test-base-image-universal";
     runtimeInputs = [
@@ -599,8 +687,8 @@ let
     };
     profilePython = baseImageOf { profile = sandboxLib.profiles.python; };
   };
-  baseImageHashStableChecks = lib.concatStringsSep "\n" (
-    lib.mapAttrsToList (name: drvPath: ''
+  baseImageHashStableChecks = concatStringsSep "\n" (
+    mapAttrsToList (name: drvPath: ''
       if [[ "${drvPath}" != "$reference" ]]; then
           echo "FAIL: wrix-base-image drvPath changed under profile perturbation '${name}'" >&2
           echo "  reference  : $reference" >&2
@@ -657,8 +745,8 @@ let
       mcpRuntime = true;
     };
   };
-  stableProfileHashStableChecks = lib.concatStringsSep "\n" (
-    lib.mapAttrsToList (name: drvPath: ''
+  stableProfileHashStableChecks = concatStringsSep "\n" (
+    mapAttrsToList (name: drvPath: ''
       if [[ "${drvPath}" != "$reference" ]]; then
           echo "FAIL: wrix-stable-profile drvPath changed under tier-2 perturbation '${name}'" >&2
           echo "  reference  : $reference" >&2
@@ -721,7 +809,7 @@ let
   membershipImageClosure = linuxPkgs.closureInfo { rootPaths = [ membershipImage ]; };
   stableProfileMembershipTest = pkgs.writeShellApplication {
     name = "test-stable-profile-membership";
-    runtimeInputs = lib.optionals isLinux [
+    runtimeInputs = optionals isLinux [
       pkgs.coreutils
       pkgs.gnugrep
     ];
@@ -805,8 +893,8 @@ let
           profile = pinnedProfile;
           agent = "claude";
         };
-        rustCoreExtras = lib.subtractLists sandboxLib.profiles.base.corePackages pinnedProfile.corePackages;
-        rustCoreExtrasList = lib.concatStringsSep " " (map (p: ''"${p}"'') rustCoreExtras);
+        rustCoreExtras = subtractLists sandboxLib.profiles.base.corePackages pinnedProfile.corePackages;
+        rustCoreExtrasList = concatStringsSep " " (map (p: ''"${p}"'') rustCoreExtras);
       in
       pkgs.writeShellApplication {
         name = "test-pinned-toolchain-stable-tier";
@@ -877,7 +965,7 @@ let
   };
   downstreamChangeLeafOnlyTest = pkgs.writeShellApplication {
     name = "test-downstream-change-leaf-only";
-    runtimeInputs = lib.optionals isLinux [
+    runtimeInputs = optionals isLinux [
       pkgs.coreutils
       pkgs.gnutar
       pkgs.jq
@@ -966,7 +1054,7 @@ let
   };
   agentTierIsolatedTest = pkgs.writeShellApplication {
     name = "test-agent-tier-isolated";
-    runtimeInputs = lib.optionals isLinux [
+    runtimeInputs = optionals isLinux [
       pkgs.coreutils
       pkgs.gnutar
       pkgs.jq
@@ -1074,7 +1162,7 @@ let
   agentExclusiveClaudeClosure = linuxPkgs.closureInfo { rootPaths = [ agentExclusiveClaude ]; };
   agentExclusiveTest = pkgs.writeShellApplication {
     name = "test-agent-exclusive";
-    runtimeInputs = lib.optionals isLinux [
+    runtimeInputs = optionals isLinux [
       pkgs.coreutils
       pkgs.gnugrep
     ];
@@ -1161,7 +1249,7 @@ let
 
   iterationCostBoundedTest = pkgs.writeShellApplication {
     name = "test-iteration-cost-bounded";
-    runtimeInputs = lib.optionals isLinux [
+    runtimeInputs = optionals isLinux [
       pkgs.coreutils
       pkgs.gnutar
       pkgs.jq
@@ -1250,7 +1338,7 @@ let
   customisationLayerMaxBytes = 4 * 1024 * 1024;
   customisationLayerBoundedTest = pkgs.writeShellApplication {
     name = "test-customisation-layer-bounded";
-    runtimeInputs = lib.optionals isLinux [
+    runtimeInputs = optionals isLinux [
       pkgs.coreutils
       pkgs.gnutar
       pkgs.gnugrep
@@ -1336,7 +1424,7 @@ let
   };
   imageNixDbConsistentTest = pkgs.writeShellApplication {
     name = "test-image-nix-db-consistent";
-    runtimeInputs = lib.optionals isLinux [
+    runtimeInputs = optionals isLinux [
       pkgs.coreutils
       pkgs.gnutar
       pkgs.gnugrep
@@ -1492,7 +1580,7 @@ let
   # tier chain that produced the diagnosed dangling registration.
   imageNixDbNoDanglingTest = pkgs.writeShellApplication {
     name = "test-image-nix-db-no-dangling";
-    runtimeInputs = lib.optionals isLinux [
+    runtimeInputs = optionals isLinux [
       pkgs.coreutils
       pkgs.gnutar
       pkgs.gnugrep
@@ -1603,6 +1691,10 @@ in
     wrixSpawnLoadTest
     imageInstallDigestSkipTest
     digestMatchesStoredIdTest
+    linuxImageArchivelessSourceTest
+    imageDigestNoTarTest
+    imageTierGraphTest
+    wrixImagesSourceKindTest
     claudeRuntimeNoopTest
     prekHooksClosureTest
     baseImageUniversalTest

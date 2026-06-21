@@ -6,8 +6,8 @@
 #
 # 1. test_manifest_shape — `mkProfileImages { rust = ...; }` produces JSON
 #    whose profile entry is keyed by the image's agent and whose variant carries
-#    `ref`, `source`, and `profile_config` fields, with `source` resolving to
-#    the same Nix store path as the matching `mkSandbox` image.
+#    `ref`, `source`, `source_kind`, and `profile_config` fields, with `source`
+#    and `source_kind` matching the corresponding `mkSandbox` image metadata.
 #
 # 2. test_flake_outputs_present — `packages.image-<name>`,
 #    `packages.sandbox-<name>`, `packages.profile-images`, and
@@ -31,7 +31,7 @@ test_manifest_shape() {
         return 1
     fi
 
-    # Pull the manifest entry and the matching image's outPath in one eval
+    # Pull the manifest entry and the matching image metadata in one eval
     # so they're computed against the same flake state. Using passthru.manifest
     # avoids realizing the writeText derivation (which would transitively
     # build the rust profile image).
@@ -47,22 +47,28 @@ test_manifest_shape() {
       in {
         rustEntry = manifestDrv.passthru.manifest.rust.direct;
         rustPiEntry = piManifestDrv.passthru.manifest.rust.pi;
-        rustImageOutPath = rustImage.outPath;
-        rustPiImageOutPath = rustPiImage.outPath;
+        rustImageSource = rustImage.source;
+        rustImageSourceKind = rustImage.source_kind;
+        rustPiImageSource = rustPiImage.source;
+        rustPiImageSourceKind = rustPiImage.source_kind;
       }
     "); then
         echo "nix eval of mkProfileImages failed" >&2
         return 1
     fi
 
-    local source ref profile_config expected_source pi_source pi_ref pi_expected_source
+    local source ref source_kind profile_config expected_source expected_source_kind pi_source pi_ref pi_source_kind pi_expected_source pi_expected_source_kind
     source=$(echo "$result" | jq -r '.rustEntry.source')
     ref=$(echo "$result" | jq -r '.rustEntry.ref')
+    source_kind=$(echo "$result" | jq -r '.rustEntry.source_kind')
     profile_config=$(echo "$result" | jq -r '.rustEntry.profile_config')
-    expected_source=$(echo "$result" | jq -r '.rustImageOutPath')
+    expected_source=$(echo "$result" | jq -r '.rustImageSource')
+    expected_source_kind=$(echo "$result" | jq -r '.rustImageSourceKind')
     pi_source=$(echo "$result" | jq -r '.rustPiEntry.source')
     pi_ref=$(echo "$result" | jq -r '.rustPiEntry.ref')
-    pi_expected_source=$(echo "$result" | jq -r '.rustPiImageOutPath')
+    pi_source_kind=$(echo "$result" | jq -r '.rustPiEntry.source_kind')
+    pi_expected_source=$(echo "$result" | jq -r '.rustPiImageSource')
+    pi_expected_source_kind=$(echo "$result" | jq -r '.rustPiImageSourceKind')
 
     if [[ -z "$source" || "$source" == "null" ]]; then
         echo "manifest .rust.direct.source is missing or empty" >&2
@@ -72,17 +78,29 @@ test_manifest_shape() {
         echo "manifest .rust.direct.ref is missing or empty" >&2
         return 1
     fi
+    if [[ -z "$source_kind" || "$source_kind" == "null" ]]; then
+        echo "manifest .rust.direct.source_kind is missing or empty" >&2
+        return 1
+    fi
     if [[ -z "$profile_config" || "$profile_config" == "null" ]]; then
         echo "manifest .rust.direct.profile_config is missing or empty" >&2
         return 1
     fi
 
     if [[ "$source" != "$expected_source" ]]; then
-        echo "manifest .rust.direct.source ($source) != (mkSandbox { profile = profiles.rust; }).image outPath ($expected_source)" >&2
+        echo "manifest .rust.direct.source ($source) != mkSandbox image.source ($expected_source)" >&2
+        return 1
+    fi
+    if [[ "$source_kind" != "$expected_source_kind" ]]; then
+        echo "manifest .rust.direct.source_kind ($source_kind) != mkSandbox image.source_kind ($expected_source_kind)" >&2
         return 1
     fi
     if [[ "$pi_source" != "$pi_expected_source" ]]; then
-        echo "manifest .rust.pi.source ($pi_source) != (mkSandbox { profile = profiles.rust; agent = \"pi\"; }).image outPath ($pi_expected_source)" >&2
+        echo "manifest .rust.pi.source ($pi_source) != mkSandbox pi image.source ($pi_expected_source)" >&2
+        return 1
+    fi
+    if [[ "$pi_source_kind" != "$pi_expected_source_kind" ]]; then
+        echo "manifest .rust.pi.source_kind ($pi_source_kind) != mkSandbox pi image.source_kind ($pi_expected_source_kind)" >&2
         return 1
     fi
 

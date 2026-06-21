@@ -2,7 +2,7 @@
 #
 # Builds a `profile-images.json` derivation mapping each profile name to one
 # agent variant (`direct`, `claude`, or `pi`) with the image ref, image source,
-# and profile config needed to spawn that variant. Orchestrators (e.g. Loom via
+# source kind, and profile config needed to spawn that variant. Orchestrators (e.g. Loom via
 # `LOOM_PROFILES_MANIFEST`) read this at startup and use the selected variant to
 # populate `wrix spawn` inputs per bead.
 #
@@ -25,9 +25,14 @@ let
 
   mkImageEntry =
     image:
+    let
+      sourceKind = image.source_kind or (throw "mkProfileImages: image.source_kind is required");
+      source = image.source or image;
+    in
     {
       ref = "${refPrefix}${image.imageName}:${imageTagLib.mkImageTag image}";
-      source = "${image}";
+      source = "${source}";
+      source_kind = sourceKind;
     }
     // optionalAttrs (image ? profileConfig) {
       profile_config = "${image.profileConfig}";

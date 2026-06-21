@@ -24,6 +24,22 @@ FAILED=0
 pass() { printf '  PASS: %s\n' "$1"; PASSED=$((PASSED + 1)); }
 fail() { printf '  FAIL: %s\n' "$1" >&2; FAILED=$((FAILED + 1)); }
 
+expected_source_kind() {
+  case "$(uname -s)" in
+    Darwin) printf 'docker-archive\n' ;;
+    *) printf 'nix-descriptor\n' ;;
+  esac
+}
+
+alternate_source_kind() {
+  case "$EXPECTED_SOURCE_KIND" in
+    docker-archive) printf 'nix-descriptor\n' ;;
+    *) printf 'docker-archive\n' ;;
+  esac
+}
+
+EXPECTED_SOURCE_KIND=$(expected_source_kind)
+
 PACKAGE_LINK="$TEST_TMP/package"
 nix build \
   --impure --no-warn-dirty \
@@ -73,7 +89,7 @@ test_wrapper_does_not_set_image_default_env() {
 test_profile_config_contains_launcher_contract_fields() {
   local config
   config=$(profile_config_from_wrapper)
-  if ! jq -e '
+  if ! jq -e --arg source_kind "$EXPECTED_SOURCE_KIND" '
     .schema == 1 and
     (.system | type == "string") and
     (.profile.name | type == "string") and
@@ -83,6 +99,7 @@ test_profile_config_contains_launcher_contract_fields() {
     (.profile.network_allowlist | type == "array") and
     (.image.ref | type == "string" and length > 0) and
     (.image.source | type == "string" and length > 0) and
+    (.image.source_kind == $source_kind) and
     (.image.digest | type == "string" and startswith("sha256:")) and
     (.agent.kind == "direct") and
     (.resources.memory_mb | type == "number") and
@@ -98,6 +115,54 @@ test_profile_config_contains_launcher_contract_fields() {
     return 1
   fi
   pass "ProfileConfig JSON contains the schema v1 launcher contract fields"
+}
+
+test_image_source_kind() {
+  local config source kind missing_config bad_config bad_kind out err rc
+  config=$(profile_config_from_wrapper)
+  source=$(jq -r '.image.source // ""' "$config")
+  kind=$(jq -r '.image.source_kind // ""' "$config")
+  if [[ "$kind" != "$EXPECTED_SOURCE_KIND" ]]; then
+    fail "ProfileConfig image.source_kind=$kind, expected $EXPECTED_SOURCE_KIND"
+    return 1
+  fi
+  if [[ "$source" != /nix/store/* ]]; then
+    fail "ProfileConfig image.source is not store-resident: $source"
+    return 1
+  fi
+
+  missing_config="$TEST_TMP/missing-source-kind.json"
+  jq 'del(.image.source_kind)' "$config" >"$missing_config"
+  out="$TEST_TMP/missing-source-kind.out"
+  err="$TEST_TMP/missing-source-kind.err"
+  rc=0
+  WRIX_DRY_RUN=1 "$WRIX" --profile-config "$missing_config" run "$WORKSPACE" >"$out" 2>"$err" || rc=$?
+  if [[ "$rc" == "0" ]]; then
+    fail "launcher accepted ProfileConfig without image.source_kind"
+    return 1
+  fi
+  if ! grep -qF 'image.source_kind' "$err"; then
+    fail "missing source_kind error did not name image.source_kind: $(cat "$err")"
+    return 1
+  fi
+
+  bad_kind=$(alternate_source_kind)
+  bad_config="$TEST_TMP/bad-source-kind.json"
+  jq --arg kind "$bad_kind" '.image.source_kind = $kind' "$config" >"$bad_config"
+  out="$TEST_TMP/bad-source-kind.out"
+  err="$TEST_TMP/bad-source-kind.err"
+  rc=0
+  WRIX_DRY_RUN=1 "$WRIX" --profile-config "$bad_config" run "$WORKSPACE" >"$out" 2>"$err" || rc=$?
+  if [[ "$rc" == "0" ]]; then
+    fail "launcher accepted incompatible ProfileConfig image.source_kind=$bad_kind"
+    return 1
+  fi
+  if ! grep -qF "image.source_kind must be $EXPECTED_SOURCE_KIND" "$err"; then
+    fail "bad source_kind error did not name expected kind: $(cat "$err")"
+    return 1
+  fi
+
+  pass "ProfileConfig carries platform source_kind and launcher rejects missing/incompatible kinds"
 }
 
 test_wrapper_invokes_launcher_with_profile_config() {
@@ -119,6 +184,7 @@ ALL_TESTS=(
   test_wrapper_passes_store_profile_config_arg
   test_wrapper_does_not_set_image_default_env
   test_profile_config_contains_launcher_contract_fields
+  test_image_source_kind
   test_wrapper_invokes_launcher_with_profile_config
 )
 

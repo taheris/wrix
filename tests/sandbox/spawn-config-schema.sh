@@ -34,6 +34,22 @@ fail() {
   FAILED=$((FAILED + 1))
 }
 
+expected_source_kind() {
+  case "$(uname -s)" in
+    Darwin) printf 'docker-archive\n' ;;
+    *) printf 'nix-descriptor\n' ;;
+  esac
+}
+
+alternate_source_kind() {
+  case "$EXPECTED_SOURCE_KIND" in
+    docker-archive) printf 'nix-descriptor\n' ;;
+    *) printf 'docker-archive\n' ;;
+  esac
+}
+
+EXPECTED_SOURCE_KIND=$(expected_source_kind)
+
 LAUNCHER_LINK="$TEST_TMP/launcher"
 nix build \
   --impure --no-warn-dirty \
@@ -53,8 +69,8 @@ if [[ ! -x "$WRIX" ]]; then
 fi
 
 PROFILE_CONFIG="$TEST_TMP/profile-config.json"
-cat >"$PROFILE_CONFIG" <<'JSON'
-{"schema":1,"system":"test","profile":{"name":"base","env":{},"mounts":[],"writable_dirs":[],"network_allowlist":[]},"image":{"ref":"wrix-base:test","source":"/nix/store/fake-image","digest":"sha256:test"},"agent":{"kind":"direct"},"resources":{"cpus":null,"memory_mb":4096,"pids_limit":4096},"security":{"deploy_key":null},"network":{"default_mode":"open","ipv6":"disabled"},"services":{"beads":{"enable":"auto"},"nix_cache":{"enable":true}},"features":{"mcp_runtime":false}}
+cat >"$PROFILE_CONFIG" <<JSON
+{"schema":1,"system":"test","profile":{"name":"base","env":{},"mounts":[],"writable_dirs":[],"network_allowlist":[]},"image":{"ref":"wrix-base:test","source":"/nix/store/fake-image","source_kind":"$EXPECTED_SOURCE_KIND","digest":"sha256:test"},"agent":{"kind":"direct"},"resources":{"cpus":null,"memory_mb":4096,"pids_limit":4096},"security":{"deploy_key":null},"network":{"default_mode":"open","ipv6":"disabled"},"services":{"beads":{"enable":"auto"},"nix_cache":{"enable":true}},"features":{"mcp_runtime":false}}
 JSON
 
 WORKSPACE="$TEST_TMP/workspace"
@@ -66,10 +82,12 @@ write_valid_spawn_config() {
   jq -n \
     --arg workspace "$WORKSPACE" \
     --arg mount_host "$mount_host" \
+    --arg source_kind "$EXPECTED_SOURCE_KIND" \
     '{
       workspace: $workspace,
       image_ref: "wrix-override:test",
       image_source: "/nix/store/fake-override",
+      image_source_kind: $source_kind,
       env: [["FOO", "bar"], ["EMPTY", ""]],
       agent_args: ["--print", "hello"],
       mounts: [{host_path: $mount_host, container_path: "/mnt/schema", read_only: true}],
@@ -133,6 +151,7 @@ test_documented_spawn_fields_parse() {
   assert_file_contains "documented fields" "$out" "WORKSPACE=$WORKSPACE" || return 1
   assert_file_contains "documented fields" "$out" "IMAGE_OVERRIDE_REF=wrix-override:test" || return 1
   assert_file_contains "documented fields" "$out" "IMAGE_OVERRIDE_SOURCE=/nix/store/fake-override" || return 1
+  assert_file_contains "documented fields" "$out" "IMAGE_OVERRIDE_SOURCE_KIND=$EXPECTED_SOURCE_KIND" || return 1
   assert_file_contains "documented fields" "$out" "ENV=FOO=bar" || return 1
   assert_file_contains "documented fields" "$out" "ENV=EMPTY=" || return 1
   assert_file_contains "documented fields" "$out" "CMD=--print" || return 1
@@ -140,6 +159,40 @@ test_documented_spawn_fields_parse() {
   assert_file_contains "documented fields" "$out" "$mount_host" || return 1
   assert_file_contains "documented fields" "$out" "/mnt/schema" || return 1
   pass "documented SpawnConfig fields parse while consumer-defined fields are ignored"
+}
+
+test_spawn_requires_image_source_kind_for_source_override() {
+  local config="$TEST_TMP/source-without-kind.json"
+  jq -n --arg workspace "$WORKSPACE" '{workspace: $workspace, image_ref: "wrix:test", image_source: "/nix/store/fake-override", env: [], agent_args: [], mounts: []}' >"$config"
+
+  local out="$TEST_TMP/source-without-kind.out" err="$TEST_TMP/source-without-kind.err" rc
+  rc=$(run_launcher "$out" "$err" --profile-config "$PROFILE_CONFIG" spawn --spawn-config "$config")
+  if [[ "$rc" == "0" ]]; then
+    fail "image_source without image_source_kind was accepted"
+    return 1
+  fi
+  assert_file_contains "source kind required" "$err" "image_source requires image_source_kind" || return 1
+  pass "SpawnConfig image_source overrides require image_source_kind"
+}
+
+test_spawn_rejects_incompatible_image_source_kind() {
+  local bad_kind config out err rc
+  bad_kind=$(alternate_source_kind)
+  config="$TEST_TMP/bad-source-kind.json"
+  jq -n \
+    --arg workspace "$WORKSPACE" \
+    --arg bad_kind "$bad_kind" \
+    '{workspace: $workspace, image_ref: "wrix:test", image_source: "/nix/store/fake-override", image_source_kind: $bad_kind, env: [], agent_args: [], mounts: []}' >"$config"
+
+  out="$TEST_TMP/bad-source-kind.out"
+  err="$TEST_TMP/bad-source-kind.err"
+  rc=$(run_launcher "$out" "$err" --profile-config "$PROFILE_CONFIG" spawn --spawn-config "$config")
+  if [[ "$rc" == "0" ]]; then
+    fail "incompatible image_source_kind was accepted"
+    return 1
+  fi
+  assert_file_contains "bad source kind" "$err" "image_source_kind must be $EXPECTED_SOURCE_KIND" || return 1
+  pass "SpawnConfig rejects image_source_kind values incompatible with the platform"
 }
 
 test_spawn_rejects_bad_schema_types() {
@@ -218,6 +271,8 @@ test_spawn_rejects_invalid_mount_entry() {
 ALL_TESTS=(
   test_spawn_requires_profile_config
   test_documented_spawn_fields_parse
+  test_spawn_requires_image_source_kind_for_source_override
+  test_spawn_rejects_incompatible_image_source_kind
   test_spawn_rejects_bad_schema_types
   test_spawn_rejects_profile_override_fields
   test_spawn_rejects_undocumented_digest_override

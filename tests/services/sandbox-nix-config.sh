@@ -24,6 +24,13 @@ fail() {
   return 1
 }
 
+expected_source_kind() {
+  case "$(uname -s)" in
+    Darwin) printf 'docker-archive\n' ;;
+    *) printf 'nix-descriptor\n' ;;
+  esac
+}
+
 require_python() {
   if ! command -v python3 >/dev/null 2>&1; then
     printf 'SKIP: python3 is required for JSON assertions\n' >&2
@@ -157,7 +164,9 @@ with_fake_service_env() {
 
 write_profile_config() {
   local path="$1"
-  cat >"$path" <<'JSON'
+  local source_kind
+  source_kind=$(expected_source_kind)
+  cat >"$path" <<JSON
 {
   "schema": 1,
   "system": "test",
@@ -171,6 +180,7 @@ write_profile_config() {
   "image": {
     "ref": "localhost/wrix-test:latest",
     "source": "/nix/store/fake-image",
+    "source_kind": "$source_kind",
     "digest": "sha256:test"
   },
   "agent": {

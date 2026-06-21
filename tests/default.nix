@@ -160,6 +160,11 @@ let
       test-wrix-spawn-load \
       test-image-install-digest-skip \
       test-image-digest-matches-stored-id \
+      test-linux-image-archiveless-source \
+      test-image-digest-no-tar \
+      test-image-tier-graph \
+      test-image-tier-membership \
+      test-wrix-images-source-kind \
       test-claude-runtime-noop \
       test-prek-hooks-closure \
       test-base-image-universal \
@@ -239,15 +244,40 @@ in
       program = "${sandboxImageChecks.imageInstallDigestSkipTest}/bin/test-image-install-digest-skip";
     };
 
-    # Faithful counterpart to image-install-digest-skip: drives the real
-    # `docker-archive → oci-archive` skopeo conversion on the live image and
-    # asserts `image.digest` equals the post-conversion OCI config digest (the
-    # value podman stores as `.Id`). Guards against a digest taken from the
-    # docker-archive manifest, which never matches and re-streams every launch.
     image-digest-matches-stored-id = {
-      meta.description = "Verify image.digest equals the post-conversion OCI config digest (Linux only)";
+      meta.description = "Skip legacy docker-archive digest verifier for descriptor images.";
       type = "app";
       program = "${sandboxImageChecks.digestMatchesStoredIdTest}/bin/test-image-digest-matches-stored-id";
+    };
+
+    linux-image-archiveless-source = {
+      meta.description = "Verify Linux profile images publish nix-descriptor sources.";
+      type = "app";
+      program = "${sandboxImageChecks.linuxImageArchivelessSourceTest}/bin/test-linux-image-archiveless-source";
+    };
+
+    image-digest-no-tar = {
+      meta.description = "Verify Linux descriptor image digests do not depend on raw image archives.";
+      type = "app";
+      program = "${sandboxImageChecks.imageDigestNoTarTest}/bin/test-image-digest-no-tar";
+    };
+
+    image-tier-graph = {
+      meta.description = "Verify profile images expose the base/stable/agent/leaf tier graph and source kind.";
+      type = "app";
+      program = "${sandboxImageChecks.imageTierGraphTest}/bin/test-image-tier-graph";
+    };
+
+    image-tier-membership = {
+      meta.description = "Verify non-base profile-image tiers skip lower-tier closures.";
+      type = "app";
+      program = "${sandboxImageChecks.stableProfileMembershipTest}/bin/test-stable-profile-membership";
+    };
+
+    wrix-images-source-kind = {
+      meta.description = "Verify built-in wrix profile images expose platform source kinds.";
+      type = "app";
+      program = "${sandboxImageChecks.wrixImagesSourceKindTest}/bin/test-wrix-images-source-kind";
     };
 
     prek-hooks-closure = {

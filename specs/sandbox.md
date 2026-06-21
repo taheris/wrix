@@ -228,7 +228,7 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 - `mkSandbox`'s `package` wrapper passes an immutable Nix-store `ProfileConfig` JSON path to the Rust `wrix` CLI instead of generating a large shell launcher
   [system](bash tests/sandbox/profile-config-wrapper.sh)
 - `ProfileConfig.image` includes `ref`, `source`, explicit `source_kind`, and `digest`; the launcher/runtime installer rejects configs where `source_kind` is missing or incompatible with the selected platform install path
-  [system?](bash tests/sandbox/profile-config-wrapper.sh test_image_source_kind)
+  [system](bash tests/sandbox/profile-config-wrapper.sh test_image_source_kind)
 - The selected agent runtime comes from `ProfileConfig` and cannot be changed by caller env independently of the selected image/profile
   [system](bash tests/sandbox/profile-config-agent-pin.sh)
 - `wrix spawn --spawn-config <file>` parses the documented `SpawnConfig` fields (`image_ref`, `image_source`, `image_source_kind`, `workspace`, `env`, `agent_args`, `mounts`), rejects `image_source` overrides without an explicit matching `image_source_kind`, and rejects attempts to change the selected agent independently of `ProfileConfig`

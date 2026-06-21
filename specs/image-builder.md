@@ -138,13 +138,13 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
 - The runtime image installer (under both `wrix run` and `wrix spawn`) short-circuits when the image's content digest is already present in the platform store: no source execution, no tar materialization, no stream invocation, no `*-load` CLI call
   [system](nix run .#test-image-install-digest-skip)
 - On Linux, `mkImage` emits an archive-less image descriptor (`source_kind = "nix-descriptor"`) rather than a Docker archive, OCI archive, or stream script
-  [system?](nix run .#test-linux-image-archiveless-source)
+  [system](nix run .#test-linux-image-archiveless-source)
 - The Linux image digest used for install preflight is computed from descriptor/config metadata without executing the image source, materializing a whole-image tar, or running Docker-archive-to-OCI conversion
-  [system?](nix run .#test-image-digest-no-tar)
+  [system](nix run .#test-image-digest-no-tar)
 - Each profile image is a four-tier graph — leaf atop `wrix-agent-<agent>-<name>`, atop `wrix-stable-profile-<name>`, atop `wrix-base-image` — with Linux represented as descriptor layers and Darwin represented as a tar-loadable fallback
-  [system?](nix run .#test-image-tier-graph)
+  [system](nix run .#test-image-tier-graph)
 - A deterministic layer-membership verifier proves each non-base profile-image tier removes or skips the union of all lower tiers' closures, so no tier re-emits a store path a lower tier already ships
-  [system?](nix run .#test-image-tier-membership)
+  [system](nix run .#test-image-tier-membership)
 - `wrix-base-image`'s derivation hash is invariant under changes to profile-level inputs — `profile.packages`, `profile.env`, MCP configs, the merged Claude settings JSON, and the agent runtime selection
   [system](nix run .#test-base-image-hash-stable)
 - `wrix-base-image` holds only the universal bottom-of-closure: no profile-specific compiler toolchain leaks in (e.g. `pkgs.rustc`, which no profile references — the rust profile uses fenix's toolchain)
@@ -188,7 +188,7 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
 - The Darwin entrypoint mirrors the Linux entrypoint's `core.hooksPath` setup for `/workspace/.git`
   [check](grep -nE 'core\.hooksPath|prekHooks' lib/sandbox/darwin/entrypoint.sh)
 - Every wrix-managed Nix-built Linux image source is archive-less (`source_kind = "nix-descriptor"`) unless a spec names an explicit exemption; Darwin sources remain tar-loadable fallbacks
-  [system?](nix run .#test-wrix-images-source-kind)
+  [system](nix run .#test-wrix-images-source-kind)
 - Wrix-managed images carry wrix-managed image labels, including `wrix.managed=true` and `wrix.image.kind`; profile images also carry `wrix.profile.name` and `wrix.agent.kind`
   [system?](nix run .#test-wrix-image-labels)
 

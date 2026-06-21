@@ -208,7 +208,7 @@ let
     concatStringsSep "\n" (map toString (leafContents ++ agentImage.lowerTiersContents)) + "\n"
   );
 
-  imageName = "wrix-${profile.name}${pkgs.lib.optionalString (agent != "direct") "-${agent}"}";
+  imageName = "wrix-${profile.name}${optionalString (agent != "direct") "-${agent}"}";
 
   # The leaf budgets only its tier-2 delta plus the customisation layer; with
   # base (64) and stable-profile (48) below it, this keeps the stacked image at
@@ -242,6 +242,16 @@ let
           > "$out"
       '';
 
+  imageConfigEnv = [
+    # GIT_AUTHOR_*/GIT_COMMITTER_* set at runtime by launcher (from host git config)
+    "LANG=C.UTF-8"
+    "PATH=${profileEnv}/bin:/bin:/usr/bin"
+    "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
+    "WRIX_PREK_HOOKS=${prekHooksBundle}"
+    "XDG_CACHE_HOME=/var/cache"
+  ]
+  ++ (mapAttrsToList (name: value: "${name}=${value}") (profile.env or { }));
+
   rawImage = buildImage {
     name = imageName;
     tag = "latest";
@@ -268,7 +278,7 @@ let
 
       cp ${imageStoreRoots} etc/wrix/store-roots
 
-      ${pkgs.lib.optionalString krunSupport ''
+      ${optionalString krunSupport ''
         cp ${./linux/krun-init.sh} krun-init.sh
         chmod +x krun-init.sh
         mkdir -p lib
@@ -328,73 +338,68 @@ let
     '';
 
     config = {
-      Env = [
-        # GIT_AUTHOR_*/GIT_COMMITTER_* set at runtime by launcher (from host git config)
-        "LANG=C.UTF-8"
-        "PATH=${profileEnv}/bin:/bin:/usr/bin"
-        "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
-        "WRIX_PREK_HOOKS=${prekHooksBundle}"
-        "XDG_CACHE_HOME=/var/cache"
-      ]
-      ++ (mapAttrsToList (name: value: "${name}=${value}") (profile.env or { }));
+      Env = imageConfigEnv;
       WorkingDir = "/workspace";
       Entrypoint = [ "/entrypoint.sh" ];
     };
   };
 
-  # Content digest of the OCI config blob (== podman's `.Id` / the Apple
-  # container CLI's image digest), extracted at build time so the launcher's
-  # preflight (specs/sandbox.md § Image install path) can decide whether the
-  # image is already present without re-streaming or invoking *-load. Stable
-  # across drv-hash rebuilds when the image content is unchanged — which
-  # `mkImageRef`'s drv-hash tag cannot detect.
-  #
-  # The digest MUST be computed through the same Docker schema2 → OCI
-  # conversion the launcher's install transport runs: skopeo rewrites the
-  # config blob on conversion, so the docker-archive manifest's `.Config`
-  # digest does NOT equal the config digest of the stored OCI image. Reading
-  # the post-conversion OCI config digest here is what makes the preflight a
-  # real hit instead of a guaranteed miss that re-streams on every launch.
-  #
-  # The conversion targets the `oci:` directory layout, not `oci-archive:`:
-  # the archive transport hardcodes `/var/tmp` for its assembly temp dir
-  # (ignoring `TMPDIR`), which does not exist in the Nix build sandbox. The
-  # directory layout writes blobs in place and yields the identical config
-  # digest the launcher's `oci-archive:` transport stores as podman's `.Id`.
+  sourceKind = if asTarball then "docker-archive" else "nix-descriptor";
+
+  descriptorMetadata = {
+    schema = 1;
+    source_kind = "nix-descriptor";
+    image = {
+      name = imageName;
+      tag = "latest";
+    };
+    profile = profile.name;
+    inherit agent;
+    materialized_roots = map toString (leafContents ++ agentImage.lowerTiersContents);
+    lower_tiers_closure = "${agentImage.lowerTiersClosure}/store-paths";
+    layering_pipeline = "${layeringPipeline}";
+    config = {
+      env = imageConfigEnv;
+      working_dir = "/workspace";
+      entrypoint = [ "/entrypoint.sh" ];
+    };
+  };
+  descriptorDigest = "sha256:${builtins.hashString "sha256" (builtins.unsafeDiscardStringContext (builtins.toJSON descriptorMetadata))}";
+  nixDescriptorSource = pkgs.writeText "${imageName}-nix-descriptor.json" (
+    builtins.toJSON (descriptorMetadata // { digest = descriptorDigest; })
+  );
+  descriptorDigestFile = pkgs.writeText "${imageName}-descriptor-digest" descriptorDigest;
+  imageSource = if asTarball then rawImage else nixDescriptorSource;
+
+  # Darwin's tar-loadable fallback keeps using the post-conversion OCI config
+  # digest that Apple's container store reports. Linux descriptor images use a
+  # descriptor-metadata digest above, so building the digest never materializes
+  # or converts the whole image archive.
   digestFile =
-    hostPkgs.runCommandLocal "${imageName}-digest"
-      {
-        nativeBuildInputs = [
-          hostPkgs.skopeo
-          hostPkgs.jq
-        ];
-      }
-      (
+    if asTarball then
+      hostPkgs.runCommandLocal "${imageName}-digest"
+        {
+          nativeBuildInputs = [
+            hostPkgs.skopeo
+            hostPkgs.jq
+          ];
+        }
         ''
           export HOME=$TMPDIR
-        ''
-        + (
-          if asTarball then
-            ''
-              skopeo --insecure-policy copy --quiet \
-                "docker-archive:${rawImage}" "oci:$TMPDIR/image-oci:latest"
-            ''
-          else
-            ''
-              ${rawImage} > "$TMPDIR/image.tar"
-              skopeo --insecure-policy copy --quiet \
-                "docker-archive:$TMPDIR/image.tar" "oci:$TMPDIR/image-oci:latest"
-            ''
-        )
-        + ''
+          skopeo --insecure-policy copy --quiet \
+            "docker-archive:${rawImage}" "oci:$TMPDIR/image-oci:latest"
           skopeo inspect --raw "oci:$TMPDIR/image-oci:latest" \
             | jq -r '.config.digest' > $out
         ''
-      );
+    else
+      descriptorDigestFile;
 in
 rawImage
 // {
   digest = digestFile;
+  source = imageSource;
+  source_kind = sourceKind;
+  digest_source_kind = sourceKind;
   # Expose the chained `fromImage` base so callers (and the
   # base-image-hash-stable verifier, specs/image-builder.md § Base Image
   # Layering) can assert the base derivation is invariant under profile-level

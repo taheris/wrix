@@ -110,6 +110,10 @@ in
           echo "Error: ProfileConfig image.source must be a non-empty string" >&2
           exit 1
         fi
+        if ! PROFILE_IMAGE_SOURCE_KIND=$(jq -er '.image.source_kind | select(. == "nix-descriptor")' "$PROFILE_CONFIG"); then
+          echo "Error: ProfileConfig image.source_kind must be nix-descriptor on Linux" >&2
+          exit 1
+        fi
         PROFILE_IMAGE_DIGEST=$(jq -r '.image.digest // ""' "$PROFILE_CONFIG")
         PROFILE_NETWORK_ALLOWLIST=$(jq -r '(.profile.network_allowlist // []) | join(",")' "$PROFILE_CONFIG")
         PROFILE_NIX_CACHE_ENABLE=$(jq -r 'if ((.services.nix_cache.enable // true) == false or (.services.nix_cache.enable // true) == "false") then "0" else "1" end' "$PROFILE_CONFIG")
@@ -216,6 +220,7 @@ in
         USE_STDIO=0
         IMAGE_OVERRIDE_REF=""
         IMAGE_OVERRIDE_SOURCE=""
+        IMAGE_OVERRIDE_SOURCE_KIND=""
         CONTAINER_CMD=()
         # SpawnConfig env allowlist: KEY=VALUE pairs (one per array slot)
         SPAWN_ENV=()
@@ -259,18 +264,28 @@ in
             (.workspace | type == "string" and length > 0) and
             (.image_ref == null or (.image_ref | type == "string")) and
             (.image_source == null or (.image_source | type == "string")) and
+            (.image_source_kind == null or (.image_source_kind | type == "string")) and
             (.env | type == "array") and
             all(.env[]; (type == "array") and (length == 2) and ((.[0] | type == "string" and length > 0) and (.[1] | type == "string"))) and
             (.agent_args | type == "array") and
             all(.agent_args[]; type == "string") and
             (.mounts == null or ((.mounts | type == "array") and all(.mounts[]; (type == "object") and ((.host_path | type == "string" and length > 0) and (.container_path | type == "string" and length > 0) and (.read_only | type == "boolean")))))
           )' "$SPAWN_CONFIG" >/dev/null; then
-            echo "Error: invalid SpawnConfig schema: expected workspace string, optional image_ref/image_source strings, env [key,value] string pairs, agent_args strings, and mounts with host_path/container_path/read_only" >&2
+            echo "Error: invalid SpawnConfig schema: expected workspace string, optional image_ref/image_source/image_source_kind strings, env [key,value] string pairs, agent_args strings, and mounts with host_path/container_path/read_only" >&2
             exit 1
           fi
           PROJECT_DIR=$(jq -r '.workspace' "$SPAWN_CONFIG")
           IMAGE_OVERRIDE_REF=$(jq -r '.image_ref // ""' "$SPAWN_CONFIG")
           IMAGE_OVERRIDE_SOURCE=$(jq -r '.image_source // ""' "$SPAWN_CONFIG")
+          IMAGE_OVERRIDE_SOURCE_KIND=$(jq -r '.image_source_kind // ""' "$SPAWN_CONFIG")
+          if [[ -n "$IMAGE_OVERRIDE_SOURCE" && -z "$IMAGE_OVERRIDE_SOURCE_KIND" ]]; then
+            echo "Error: SpawnConfig image_source requires image_source_kind" >&2
+            exit 1
+          fi
+          if [[ -n "$IMAGE_OVERRIDE_SOURCE_KIND" && "$IMAGE_OVERRIDE_SOURCE_KIND" != "nix-descriptor" ]]; then
+            echo "Error: SpawnConfig image_source_kind must be nix-descriptor on Linux" >&2
+            exit 1
+          fi
           while IFS= read -r pair; do
             [[ -z "$pair" ]] && continue
             SPAWN_ENV+=("$pair")
@@ -307,6 +322,7 @@ in
           printf 'WORKSPACE=%s\n' "$PROJECT_DIR"
           printf 'IMAGE_OVERRIDE_REF=%s\n' "$IMAGE_OVERRIDE_REF"
           printf 'IMAGE_OVERRIDE_SOURCE=%s\n' "$IMAGE_OVERRIDE_SOURCE"
+          printf 'IMAGE_OVERRIDE_SOURCE_KIND=%s\n' "$IMAGE_OVERRIDE_SOURCE_KIND"
           if [[ -n "$WRIX_PROJECT_CACHE_URL" ]]; then
             printf 'PROJECT_CACHE_URL=%s\n' "$WRIX_PROJECT_CACHE_URL"
             printf 'ENV=WRIX_PROJECT_CACHE_HOST=%s\n' "$WRIX_PROJECT_CACHE_HOST"
@@ -586,15 +602,18 @@ in
         # override image transport fields for orchestrators, but not the agent.
         IMAGE_REF=""
         IMAGE_SOURCE=""
+        IMAGE_SOURCE_KIND=""
         IMAGE_DIGEST_PATH=""
-        if [ "$SUBCOMMAND" = "run" ]; then
+        if [[ "$SUBCOMMAND" = "run" ]]; then
           IMAGE_REF="$PROFILE_IMAGE_REF"
           IMAGE_SOURCE="$PROFILE_IMAGE_SOURCE"
+          IMAGE_SOURCE_KIND="$PROFILE_IMAGE_SOURCE_KIND"
           IMAGE_DIGEST_PATH="$PROFILE_IMAGE_DIGEST"
         else
           IMAGE_REF="''${IMAGE_OVERRIDE_REF:-$PROFILE_IMAGE_REF}"
           IMAGE_SOURCE="''${IMAGE_OVERRIDE_SOURCE:-$PROFILE_IMAGE_SOURCE}"
-          if [[ ( -z "$IMAGE_OVERRIDE_REF" || "$IMAGE_OVERRIDE_REF" == "$PROFILE_IMAGE_REF" ) && ( -z "$IMAGE_OVERRIDE_SOURCE" || "$IMAGE_OVERRIDE_SOURCE" == "$PROFILE_IMAGE_SOURCE" ) ]]; then
+          IMAGE_SOURCE_KIND="''${IMAGE_OVERRIDE_SOURCE_KIND:-$PROFILE_IMAGE_SOURCE_KIND}"
+          if [[ ( -z "$IMAGE_OVERRIDE_REF" || "$IMAGE_OVERRIDE_REF" == "$PROFILE_IMAGE_REF" ) && ( -z "$IMAGE_OVERRIDE_SOURCE" || "$IMAGE_OVERRIDE_SOURCE" == "$PROFILE_IMAGE_SOURCE" ) && ( -z "$IMAGE_OVERRIDE_SOURCE_KIND" || "$IMAGE_OVERRIDE_SOURCE_KIND" == "$PROFILE_IMAGE_SOURCE_KIND" ) ]]; then
             IMAGE_DIGEST_PATH="$PROFILE_IMAGE_DIGEST"
           else
             IMAGE_DIGEST_PATH=""
