@@ -60,7 +60,7 @@ The container boundary is the isolation primitive; Nix's internal sandbox is dis
 - The `wrix-builder` integration suite passes on macOS 26+ (start, status, SSH, nix-daemon, remote `nixpkgs#hello` build, store persistence across `stop`/`start`, `config` snippet); skips with exit 77 on non-Darwin or older macOS
   [system](bash tests/standalone/builder-test.sh)
 - sshd inside the container has `PasswordAuthentication no` and binds the listener to `127.0.0.1`
-  [check](grep -nE 'PasswordAuthentication|ListenAddress' lib/sandbox/builder/entrypoint.sh)
+  [check](bash -c 'grep -Fxq "PasswordAuthentication no" lib/sandbox/builder/entrypoint.sh && grep -Fxq "ListenAddress 127.0.0.1" lib/sandbox/builder/entrypoint.sh')
 
 ## Requirements
 

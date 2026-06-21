@@ -25,6 +25,7 @@ mkdir -p /etc/ssh
 rm -f /etc/ssh/sshd_config  # Remove broken symlink if exists
 cat > /etc/ssh/sshd_config <<EOF
 Port 22
+ListenAddress 127.0.0.1
 HostKey /etc/ssh/ssh_host_ed25519_key
 AuthorizedKeysFile /home/%u/.ssh/authorized_keys
 PasswordAuthentication no
