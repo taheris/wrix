@@ -24,8 +24,19 @@ require_python() {
 }
 
 build_wrix() {
-  cargo build --quiet -p wrix-cli --bin wrix
-  printf '%s\n' "$REPO_ROOT/target/debug/wrix"
+  if command -v cargo >/dev/null 2>&1; then
+    cargo build --quiet -p wrix-cli --bin wrix
+    printf '%s\n' "$REPO_ROOT/target/debug/wrix"
+    return 0
+  fi
+  if command -v nix >/dev/null 2>&1; then
+    local out_link="$TEST_TMP/wrix-package"
+    nix build --no-warn-dirty --out-link "$out_link" "$REPO_ROOT#wrix" >/dev/null
+    printf '%s\n' "$out_link/bin/wrix"
+    return 0
+  fi
+  printf 'SKIP: cargo or nix is required to build wrix\n' >&2
+  exit 77
 }
 
 write_fake_runtime() {
@@ -212,6 +223,69 @@ test_linux_dolt_uses_workspace_socket() {
   assert_equals "dolt socket command" "$socket" "$socket_output"
 }
 
+test_workspace_naming_determinism() {
+  require_python
+  local wrix_bin first_workspace second_workspace first_endpoints first_again_endpoints second_endpoints
+  local first_name first_name_again second_name first_hash first_hash_again second_hash
+  local first_socket first_socket_again second_socket first_state first_state_again second_state
+  wrix_bin="$(build_wrix)"
+  with_fake_runtime_env
+
+  export HOME="$TEST_TMP/home-determinism"
+  export XDG_STATE_HOME="$TEST_TMP/state-determinism"
+  export XDG_CACHE_HOME="$TEST_TMP/cache-determinism"
+  export WRIX_DOLT_TRANSPORT="unix"
+  first_workspace="$TEST_TMP/deterministic-one"
+  second_workspace="$TEST_TMP/deterministic-two"
+  mkdir -p \
+    "$first_workspace/.beads/dolt" \
+    "$second_workspace/.beads/dolt" \
+    "$HOME" \
+    "$XDG_STATE_HOME" \
+    "$XDG_CACHE_HOME"
+
+  (cd "$first_workspace" && "$wrix_bin" service start --no-cache >"$TEST_TMP/start-deterministic-one.txt")
+  (cd "$first_workspace" && "$wrix_bin" service endpoints --no-cache >"$TEST_TMP/endpoints-deterministic-one.json")
+  (cd "$first_workspace" && "$wrix_bin" service start --no-cache >"$TEST_TMP/start-deterministic-one-again.txt")
+  (cd "$first_workspace" && "$wrix_bin" service endpoints --no-cache >"$TEST_TMP/endpoints-deterministic-one-again.json")
+  (cd "$second_workspace" && "$wrix_bin" service start --no-cache >"$TEST_TMP/start-deterministic-two.txt")
+  (cd "$second_workspace" && "$wrix_bin" service endpoints --no-cache >"$TEST_TMP/endpoints-deterministic-two.json")
+
+  first_endpoints="$TEST_TMP/endpoints-deterministic-one.json"
+  first_again_endpoints="$TEST_TMP/endpoints-deterministic-one-again.json"
+  second_endpoints="$TEST_TMP/endpoints-deterministic-two.json"
+  first_name="$(json_get "$first_endpoints" container_name)"
+  first_name_again="$(json_get "$first_again_endpoints" container_name)"
+  second_name="$(json_get "$second_endpoints" container_name)"
+  first_hash="$(json_get "$first_endpoints" workspace_hash)"
+  first_hash_again="$(json_get "$first_again_endpoints" workspace_hash)"
+  second_hash="$(json_get "$second_endpoints" workspace_hash)"
+  first_socket="$(json_get "$first_endpoints" endpoints.dolt.socket)"
+  first_socket_again="$(json_get "$first_again_endpoints" endpoints.dolt.socket)"
+  second_socket="$(json_get "$second_endpoints" endpoints.dolt.socket)"
+  first_state="$(json_get "$first_endpoints" state_root)"
+  first_state_again="$(json_get "$first_again_endpoints" state_root)"
+  second_state="$(json_get "$second_endpoints" state_root)"
+
+  assert_equals "stable container name" "$first_name" "$first_name_again"
+  assert_equals "stable workspace hash" "$first_hash" "$first_hash_again"
+  assert_equals "stable Dolt socket" "$first_socket" "$first_socket_again"
+  assert_equals "stable state root" "$first_state" "$first_state_again"
+  assert_equals "first container name" "deterministic-one-service" "$first_name"
+  assert_equals "second container name" "deterministic-two-service" "$second_name"
+  assert_not_contains "first name avoids legacy beads helper" "$first_name" "-beads"
+  assert_not_contains "second name avoids legacy beads helper" "$second_name" "-beads"
+  if [[ "$first_hash" == "$second_hash" ]]; then
+    fail "different checkout paths produced the same workspace hash: $first_hash"
+  fi
+  if [[ "$first_socket" == "$second_socket" ]]; then
+    fail "different checkout paths produced the same Dolt socket: $first_socket"
+  fi
+  if [[ "$first_state" == "$second_state" ]]; then
+    fail "different checkout paths produced the same state root: $first_state"
+  fi
+}
+
 test_fallback_dolt_uses_loopback_tcp() {
   require_python
   local wrix_bin workspace endpoints port run_args host_output port_output
@@ -254,6 +328,7 @@ test_fallback_dolt_uses_loopback_tcp() {
 ALL_TESTS=(
   test_fake_runtime_contract
   test_linux_dolt_uses_workspace_socket
+  test_workspace_naming_determinism
   test_fallback_dolt_uses_loopback_tcp
 )
 

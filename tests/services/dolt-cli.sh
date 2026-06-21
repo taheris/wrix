@@ -5,7 +5,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 
 TEST_TMP="$(mktemp -d -t wrix-services-dolt-cli.XXXXXX)"
+SOCKET_PIDS=()
 cleanup() {
+  local pid
+  for pid in "${SOCKET_PIDS[@]}"; do
+    kill "$pid" 2>/dev/null || true # best-effort: socket helper may already be gone.
+  done
   rm -rf "$TEST_TMP"
 }
 trap cleanup EXIT
@@ -21,6 +26,14 @@ require_command() {
   if ! command -v "$command_name" >/dev/null 2>&1; then
     printf 'SKIP: %s is required\n' "$command_name" >&2
     exit 77
+  fi
+}
+
+entrypoint_agent() {
+  if [[ -f /etc/wrix/image-agent ]]; then
+    tr -d '\n' </etc/wrix/image-agent
+  else
+    printf 'direct\n'
   fi
 }
 
@@ -134,6 +147,46 @@ EOF
   chmod +x "$bin_dir/getent"
 }
 
+write_asserting_bd() {
+  local bin_dir="$1"
+  local log_file="$2"
+  cat >"$bin_dir/bd" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s|auto=%s|socket=%s|host=%s|port=%s\n' \
+  "\$*" \
+  "\${BEADS_DOLT_AUTO_START:-}" \
+  "\${BEADS_DOLT_SERVER_SOCKET:-}" \
+  "\${BEADS_DOLT_SERVER_HOST:-}" \
+  "\${BEADS_DOLT_SERVER_PORT:-}" >>"$log_file"
+case "\$*" in
+  "dolt pull"|"dolt push") ;;
+  *)
+    printf 'unexpected bd invocation: %s\n' "\$*" >&2
+    exit 64
+    ;;
+esac
+if [[ "\${BEADS_DOLT_AUTO_START:-}" != "0" ]]; then
+  printf 'BEADS_DOLT_AUTO_START was not disabled\n' >&2
+  exit 65
+fi
+if [[ -n "\${BEADS_DOLT_SERVER_SOCKET:-}" ]]; then
+  if [[ ! -S "\$BEADS_DOLT_SERVER_SOCKET" ]]; then
+    printf 'Dolt socket is unavailable: %s\n' "\$BEADS_DOLT_SERVER_SOCKET" >&2
+    exit 66
+  fi
+elif [[ -z "\${BEADS_DOLT_SERVER_HOST:-}" || -z "\${BEADS_DOLT_SERVER_PORT:-}" ]]; then
+  printf 'no Dolt service endpoint was exported\n' >&2
+  exit 67
+fi
+if [[ -e .beads/issues.jsonl ]]; then
+  printf 'JSONL backup was staged into the sandbox\n' >&2
+  exit 68
+fi
+EOF
+  chmod +x "$bin_dir/bd"
+}
+
 rewrite_entrypoint_workspace() {
   local source_path="$1"
   local workspace="$2"
@@ -177,24 +230,78 @@ run_stage_beads() {
   "
 }
 
+start_unix_socket() {
+  local socket_path="$1"
+  rm -f "$socket_path"
+  python3 - "$socket_path" <<'PY' &
+import socket
+import sys
+import time
+
+path = sys.argv[1]
+server = socket.socket(socket.AF_UNIX)
+server.bind(path)
+server.listen(1)
+time.sleep(60)
+PY
+  local pid="$!"
+  SOCKET_PIDS+=("$pid")
+  local attempt
+  for ((attempt = 0; attempt < 100; attempt++)); do
+    if [[ -S "$socket_path" ]]; then
+      return 0
+    fi
+    sleep 0.05
+  done
+  fail "socket helper did not create $socket_path"
+}
+
+run_entrypoint_command() {
+  local entrypoint="$1"
+  local workspace="$2"
+  local stdout_path="$3"
+  local stderr_path="$4"
+  shift 4
+  local home_dir="$TEST_TMP/home"
+  local agent
+  local -a endpoint_env
+  agent="$(entrypoint_agent)"
+  endpoint_env=(
+    -u BEADS_DOLT_SERVER_HOST
+    -u BEADS_DOLT_SERVER_PORT
+    -u BEADS_DOLT_SERVER_SOCKET
+    -u BEADS_DOLT_AUTO_START
+  )
+  if [[ -n "${BEADS_TEST_DOLT_SOCKET:-}" ]]; then
+    endpoint_env+=("BEADS_DOLT_SERVER_SOCKET=$BEADS_TEST_DOLT_SOCKET")
+  fi
+  if [[ -n "${BEADS_TEST_DOLT_HOST:-}" ]]; then
+    endpoint_env+=("BEADS_DOLT_SERVER_HOST=$BEADS_TEST_DOLT_HOST")
+  fi
+  if [[ -n "${BEADS_TEST_DOLT_PORT:-}" ]]; then
+    endpoint_env+=("BEADS_DOLT_SERVER_PORT=$BEADS_TEST_DOLT_PORT")
+  fi
+  mkdir -p "$home_dir"
+  env \
+    "${endpoint_env[@]}" \
+    HOME="$home_dir" \
+    HOST_UID="$(id -u)" \
+    WRIX_AGENT="$agent" \
+    WRIX_NETWORK=open \
+    PATH="$workspace/bin:$PATH" \
+    bash "$entrypoint" "$@" >"$stdout_path" 2>"$stderr_path"
+}
+
 run_entrypoint() {
   local entrypoint="$1"
   local workspace="$2"
   local stdout_path="$3"
   local stderr_path="$4"
-  local home_dir="$TEST_TMP/home"
-  mkdir -p "$home_dir"
-  env \
-    -u BEADS_DOLT_SERVER_HOST \
-    -u BEADS_DOLT_SERVER_PORT \
-    -u BEADS_DOLT_SERVER_SOCKET \
-    -u BEADS_DOLT_AUTO_START \
-    HOME="$home_dir" \
-    HOST_UID="$(id -u)" \
-    WRIX_AGENT=direct \
-    WRIX_NETWORK=open \
-    PATH="$workspace/bin:$PATH" \
-    bash "$entrypoint" echo ok >"$stdout_path" 2>"$stderr_path"
+  run_entrypoint_command "$entrypoint" "$workspace" "$stdout_path" "$stderr_path" echo ok
+}
+
+assert_launcher_exports_service_endpoint() {
+  bash "$REPO_ROOT/tests/services/sandbox-nix-config.sh" test_loom_bead_spawn_uses_repo_service
 }
 
 assert_dolt_endpoint_failure() {
@@ -235,6 +342,60 @@ assert_darwin_does_not_import_jsonl() {
   assert_path_absent "$bd_log"
 }
 
+test_fake_bd_contract() {
+  require_command python3
+  local workspace="$TEST_TMP/fake-bd-workspace"
+  local log_file="$TEST_TMP/fake-bd.log"
+  local socket_path="$TEST_TMP/fake-bd.sock"
+  mkdir -p "$workspace/bin" "$workspace/.beads"
+  write_asserting_bd "$workspace/bin" "$log_file"
+  start_unix_socket "$socket_path"
+
+  (
+    cd "$workspace"
+    BEADS_DOLT_AUTO_START=0 \
+      BEADS_DOLT_SERVER_SOCKET="$socket_path" \
+      "$workspace/bin/bd" dolt pull
+  )
+
+  assert_contains "fake bd log" "$(<"$log_file")" "dolt pull|auto=0|socket=$socket_path"
+}
+
+test_sync_in_container() {
+  require_command nix
+  require_command python3
+  require_command jq
+
+  local source_workspace="$TEST_TMP/sync-source-workspace"
+  local staging_root="$TEST_TMP/sync-staging"
+  local workspace="$TEST_TMP/sync-container-workspace"
+  local entrypoint="$TEST_TMP/sync-entrypoint.sh"
+  local bd_log="$TEST_TMP/sync-bd.log"
+  local stdout_path="$TEST_TMP/sync.out"
+  local stderr_path="$TEST_TMP/sync.err"
+  local socket_path="$TEST_TMP/sync-dolt.sock"
+
+  assert_launcher_exports_service_endpoint
+  write_beads_files "$source_workspace" dolt
+  mkdir -p "$staging_root" "$workspace"
+  run_stage_beads "$source_workspace" "$staging_root"
+  cp -R "$staging_root/beads" "$workspace/.beads"
+  write_fake_container_tools "$workspace/bin" "$bd_log"
+  write_asserting_bd "$workspace/bin" "$bd_log"
+  rewrite_entrypoint_workspace "$REPO_ROOT/lib/sandbox/linux/entrypoint.sh" "$workspace" "$entrypoint"
+  start_unix_socket "$socket_path"
+
+  if ! BEADS_TEST_DOLT_SOCKET="$socket_path" \
+    run_entrypoint_command "$entrypoint" "$workspace" "$stdout_path" "$stderr_path" \
+      bash -c 'bd dolt pull && bd dolt push'; then
+    fail "linux entrypoint failed for staged Dolt sync: $(<"$stderr_path")"
+  fi
+
+  assert_contains "bd pull" "$(<"$bd_log")" "dolt pull|auto=0|socket=$socket_path"
+  assert_contains "bd push" "$(<"$bd_log")" "dolt push|auto=0|socket=$socket_path"
+  assert_path_absent "$workspace/.beads/issues.jsonl"
+}
+
 test_no_jsonl_staged() {
   require_command nix
   require_command python3
@@ -256,6 +417,8 @@ test_no_jsonl_staged() {
 }
 
 ALL_TESTS=(
+  test_fake_bd_contract
+  test_sync_in_container
   test_no_jsonl_staged
 )
 
