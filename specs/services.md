@@ -158,7 +158,7 @@ Direct remote-builder access to the local project cache is out of scope for v1. 
 - `mkDevShell` starts the service container by default for the project cache, `nixCache = false` suppresses cache-only startup, and any service container survives the process that evaluated the shell hook
   [system](bash tests/services/lifecycle.sh test_devshell_start_is_independent)
 - On Linux, `wrix service start` installs the service image through the shared runtime image installer from an archive-less `nix-descriptor` source; on Darwin it uses the tar-loadable `docker-archive` fallback
-  [system?](bash tests/services/lifecycle.sh test_service_start_loads_image_source)
+  [system](bash tests/services/lifecycle.sh test_service_start_loads_image_source)
 - The service image carries wrix-managed image labels, including `wrix.managed=true` and `wrix.image.kind=service`
   [system?](bash tests/services/lifecycle.sh test_service_image_labels)
 - Cache-only service startup is suppressed for temp-directory scratch workspaces, so tests and integration runs do not accumulate `tmp.*-service` containers

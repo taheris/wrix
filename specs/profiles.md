@@ -710,7 +710,7 @@ dests live under `/home/wrix/` inside the container, not under
 - `wrix.profiles.rust` and `wrix.rustProfile { toolchain; sha256; }` closures contain zero `*-nightly-*` derivations after a fresh `nix flake update` (regression guard against reintroducing `fenix.packages.${system}.rust-analyzer`, which drags a nightly cargo/rustc/rust-std closure)
   [system](bash tests/profiles/no-nightly-closure.sh test_no_nightly_closure)
 - `mkProfileImages { rust = …; }` produces a JSON file whose entry for `rust` is keyed by the image's selected agent and whose selected-agent entry has `ref`, `source`, `source_kind`, and `profile_config` fields, with `source` and `source_kind` resolving to the same image source path and source kind as the corresponding `(wrix.mkSandbox { profile = wrix.profiles.rust; agent = …; }).image`
-  [system?](bash tests/profiles/profile-images-manifest.sh test_manifest_shape)
+  [system](bash tests/profiles/profile-images-manifest.sh test_manifest_shape)
 - `packages.image-<name>`, `packages.sandbox-<name>`, `packages.profile-images`, and `packages.profile-images-pi` all evaluate for each built-in profile, and `packages.default` resolves to `sandbox-rust-pi`
   [system](bash tests/profiles/profile-images-manifest.sh test_flake_outputs_present)
 - `profiles.rust.buildPackage` is exposed and returns an attrset with `bin`, `clippy`, `nextest`, and `cargoArtifacts` fields

@@ -136,7 +136,7 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
 ## Success Criteria
 
 - The runtime image installer (under both `wrix run` and `wrix spawn`) short-circuits when the image's content digest is already present in the platform store: no source execution, no tar materialization, no stream invocation, no `*-load` CLI call
-  [system?](nix run .#test-image-install-digest-skip)
+  [system](nix run .#test-image-install-digest-skip)
 - On Linux, `mkImage` emits an archive-less image descriptor (`source_kind = "nix-descriptor"`) rather than a Docker archive, OCI archive, or stream script
   [system?](nix run .#test-linux-image-archiveless-source)
 - The Linux image digest used for install preflight is computed from descriptor/config metadata without executing the image source, materializing a whole-image tar, or running Docker-archive-to-OCI conversion

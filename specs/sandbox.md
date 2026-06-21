@@ -232,7 +232,7 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 - The selected agent runtime comes from `ProfileConfig` and cannot be changed by caller env independently of the selected image/profile
   [system](bash tests/sandbox/profile-config-agent-pin.sh)
 - `wrix spawn --spawn-config <file>` parses the documented `SpawnConfig` fields (`image_ref`, `image_source`, `image_source_kind`, `workspace`, `env`, `agent_args`, `mounts`), rejects `image_source` overrides without an explicit matching `image_source_kind`, and rejects attempts to change the selected agent independently of `ProfileConfig`
-  [system?](bash tests/sandbox/spawn-config-schema.sh)
+  [system](bash tests/sandbox/spawn-config-schema.sh)
 - On Linux, each `SpawnConfig.mounts` entry becomes a `-v <host_path>:<container_path>` podman argument, with `:ro` appended when `read_only: true`. A missing or empty `mounts` list produces no additional `-v` flags.
   [system](bash tests/sandbox/spawn-config-mounts.sh)
 - On Darwin, the same mount classifier handles `profile.mounts` and `SpawnConfig.mounts` — one mechanism, not two. Directories are staged + copied at launch, regular files copy-from-parent-dir, and entries whose `host_path` is a Unix socket cause the launcher to fail loudly before the container starts. (VirtioFS does not pass socket operations, so a silently-mounted socket would dead-end at the first `connect()`.)
@@ -254,7 +254,7 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 - Both `lib/sandbox/linux/entrypoint.sh` and `lib/sandbox/darwin/entrypoint.sh` implement the `/workspace/bin` PATH prepend
   [check](grep -nE 'PATH="/workspace/bin:' lib/sandbox/linux/entrypoint.sh lib/sandbox/darwin/entrypoint.sh)
 - The runtime image installer preflight checks whether the selected image source's content digest matches any image already present in the platform store before invoking the install pipeline; on a digest hit, no image source is executed, no tar bytes are streamed, and no `*-load` CLI is invoked
-  [system?](bash tests/sandbox/image-install-digest-skip.sh)
+  [system](bash tests/sandbox/image-install-digest-skip.sh)
 - On Linux, the runtime image installer dispatches `source_kind = "nix-descriptor"` through an archive-less `skopeo nix:<descriptor> → containers-storage:<ref>` (or equivalent wrix) install path; the docker/OCI archive conversion path is not used for Linux descriptor sources
   [system?](bash tests/sandbox/image-install-archiveless.sh)
 - A second spawn of an already-loaded image performs no writes to the platform store's layer directory and does not execute the image source
@@ -264,7 +264,7 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 - The runtime image cleanup path records a bounded cross-workspace MRU of eight wrix image refs/digests/image IDs, preserves images used by existing containers, prunes wrix-managed images outside the keep set, and does not automatically remove unlabelled `<none>:<none>` images
   [system?](bash tests/sandbox/image-retention-cleanup.sh)
 - On Darwin, the runtime image installer uses `container image load --input <tar>` for `source_kind = "docker-archive"` image install (per Apple's available CLI surface) and relies on the digest-skip preflight while per-blob install remains out of scope
-  [check?](grep -nE 'source_kind|container image load' lib/sandbox/darwin/default.nix)
+  [check](grep -nE 'source_kind|container image load' lib/sandbox/darwin/default.nix)
 
 ## Requirements
 
