@@ -9,6 +9,8 @@ use std::{
 #[cfg(unix)]
 use std::os::unix::{fs::PermissionsExt, process::CommandExt};
 
+use wrix_core::path::WorkspaceHash;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Helper {
     Hook,
@@ -397,12 +399,12 @@ impl<'a> FlagParser<'a> {
 }
 
 fn validate_workspace_hash(hash: &str) -> io::Result<()> {
-    if hash.len() == 16 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    if WorkspaceHash::is_valid_str(hash) {
         return Ok(());
     }
     Err(io::Error::new(
         io::ErrorKind::InvalidInput,
-        "workspace hash must be sixteen hexadecimal characters",
+        "workspace hash must be a lowercase sha256 hex digest",
     ))
 }
 

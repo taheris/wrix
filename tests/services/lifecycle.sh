@@ -188,6 +188,14 @@ assert_not_equals() {
   fi
 }
 
+assert_sha256_hex() {
+  local label="$1"
+  local value="$2"
+  if [[ ! "$value" =~ ^[0-9a-f]{64}$ ]]; then
+    fail "$label: expected lowercase sha256 hex, got '$value'"
+  fi
+}
+
 assert_port_range() {
   local label="$1"
   local port="$2"
@@ -195,6 +203,15 @@ assert_port_range() {
   local end="$4"
   if (( port < start || port > end )); then
     fail "$label: port $port outside $start-$end"
+  fi
+}
+
+assert_contains() {
+  local label="$1"
+  local haystack="$2"
+  local needle="$3"
+  if [[ "$haystack" != *"$needle"* ]]; then
+    fail "$label: missing '$needle'"
   fi
 }
 
@@ -264,6 +281,8 @@ test_workspace_identity() {
   first_hash="$(json_get "$TEST_TMP/first-endpoints.json" workspace_hash)"
   first_hash_again="$(json_get "$TEST_TMP/first-endpoints-again.json" workspace_hash)"
   second_hash="$(json_get "$TEST_TMP/second-endpoints.json" workspace_hash)"
+  assert_sha256_hex "first workspace hash" "$first_hash"
+  assert_sha256_hex "second workspace hash" "$second_hash"
   assert_equals "stable workspace hash" "$first_hash" "$first_hash_again"
   assert_not_equals "different checkout hash" "$first_hash" "$second_hash"
 
@@ -276,6 +295,8 @@ test_workspace_identity() {
   first_port="$(json_get "$TEST_TMP/first-endpoints.json" endpoints.cache_http.port)"
   second_port="$(json_get "$TEST_TMP/second-endpoints.json" endpoints.cache_http.port)"
   assert_equals "stable state root" "$first_state" "$first_state_again"
+  assert_contains "state root uses workspace hash" "$first_state" "$first_hash"
+  assert_contains "cache root uses workspace hash" "$first_cache" "$first_hash"
   assert_not_equals "different state roots" "$first_state" "$second_state"
   assert_not_equals "different cache roots" "$first_cache" "$second_cache"
   assert_not_equals "different cache ports" "$first_port" "$second_port"
@@ -363,6 +384,16 @@ test_loom_bead_workspace_uses_repo_service() {
   repo_real="$(cd "$repo" && pwd -P)"
   (cd "$bead" && "$wrix_bin" service start >"$TEST_TMP/loom-bead-start.txt")
   (cd "$bead" && "$wrix_bin" service endpoints >"$TEST_TMP/loom-bead-endpoints.json")
+  (cd "$repo" && "$wrix_bin" service endpoints >"$TEST_TMP/loom-repo-endpoints.json")
+
+  local bead_hash repo_hash bead_port repo_port
+  bead_hash="$(json_get "$TEST_TMP/loom-bead-endpoints.json" workspace_hash)"
+  repo_hash="$(json_get "$TEST_TMP/loom-repo-endpoints.json" workspace_hash)"
+  bead_port="$(json_get "$TEST_TMP/loom-bead-endpoints.json" endpoints.cache_http.port)"
+  repo_port="$(json_get "$TEST_TMP/loom-repo-endpoints.json" endpoints.cache_http.port)"
+  assert_sha256_hex "loom bead workspace hash" "$bead_hash"
+  assert_equals "loom bead outer hash" "$repo_hash" "$bead_hash"
+  assert_equals "loom bead outer cache port" "$repo_port" "$bead_port"
 
   if ! "$WRIX_CONTAINER_RUNTIME" container exists loom-repo-service; then
     fail "loom bead workspace did not start the repository service"

@@ -4,5 +4,8 @@ edition.workspace = true
 license.workspace = true
 version.workspace = true
 
+[dependencies]
+sha2 = { workspace = true }
+
 [lints]
 workspace = true

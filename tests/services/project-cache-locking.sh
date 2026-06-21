@@ -154,13 +154,14 @@ test_pending_on_lock_timeout() {
   export WRIX_CACHE_ROOTS_FILE="$roots_file"
 
   (cd "$workspace" && "$REPO_ROOT/target/debug/wrix" service cache publish >"$TEST_TMP/initial.out")
-  local state cache output pending
+  local state cache workspace_hash output pending
   state="$(state_root)"
   cache="$(cache_root)"
+  workspace_hash="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   printf 'held\n' >"$state/cache.lock.owner"
 
   output="$(WRIX_CACHE_LOCK_TIMEOUT_MS=1 "$REPO_ROOT/target/debug/wrix-cache-publish" \
-    --workspace-hash 0123456789abcdef \
+    --workspace-hash "$workspace_hash" \
     --state-root "$state" \
     --cache-root "$cache" \
     --manifest "$state/publish-roots.json" \

@@ -54,11 +54,12 @@ assert_no_publish() {
 }
 
 test_hook_manifest_scope() {
-  local hook_bin state_root cache_root workspace publisher log allowed_drv skipped_drv output
+  local hook_bin state_root cache_root workspace workspace_hash publisher log allowed_drv skipped_drv output
   hook_bin="$(build_hook)"
   state_root="$TEST_TMP/state"
   cache_root="$TEST_TMP/cache"
   workspace="$TEST_TMP/workspace"
+  workspace_hash="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   publisher="$TEST_TMP/publisher"
   log="$TEST_TMP/publish.log"
   allowed_drv="/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-allowed.drv"
@@ -87,7 +88,7 @@ JSON
 JSON
 
   WRIX_PUBLISH_LOG="$log" DRV_PATH="$allowed_drv" OUT_PATHS="/nix/store/out" "$hook_bin" \
-    --workspace-hash 0123456789abcdef \
+    --workspace-hash "$workspace_hash" \
     --owner-uid "$(id -u)" \
     --owner-gid "$(id -g)" \
     --state-root "$state_root" \
@@ -98,7 +99,7 @@ JSON
   [[ -f "$log" ]] || fail "matching manifest derivation did not invoke publisher"
   assert_contains "publisher uid" "$(cat "$log")" "uid=$(id -u)"
   assert_contains "publisher gid" "$(cat "$log")" "gid=$(id -g)"
-  assert_contains "publisher args" "$(cat "$log")" "--workspace-hash 0123456789abcdef"
+  assert_contains "publisher args" "$(cat "$log")" "--workspace-hash $workspace_hash"
   assert_contains "publisher args" "$(cat "$log")" "--state-root $state_root"
   assert_contains "publisher args" "$(cat "$log")" "--cache-root $cache_root"
   assert_contains "publisher args" "$(cat "$log")" "--manifest $state_root/publish-roots.json"
@@ -107,7 +108,7 @@ JSON
 
   rm -f "$log"
   output="$(WRIX_PUBLISH_LOG="$log" DRV_PATH="$skipped_drv" OUT_PATHS="/nix/store/out" "$hook_bin" \
-    --workspace-hash 0123456789abcdef \
+    --workspace-hash "$workspace_hash" \
     --owner-uid "$(id -u)" \
     --owner-gid "$(id -g)" \
     --state-root "$state_root" \

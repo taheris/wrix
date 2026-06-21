@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+set -euo pipefail
+
 # Judge rubrics for beads.md success criteria
 
 test_sync_in_container() {
@@ -19,7 +21,7 @@ test_shellhook_fail_loud() {
 
 test_workspace_naming_determinism() {
   judge_files "crates/wrix-core/src/path/mod.rs" "crates/wrix-service/src/lifecycle/mod.rs" "lib/beads/default.nix"
-  judge_criterion "Workspace identity for beads comes from the services contract: the same service identity path yields the same '<repo>-service' container name, workspace-hashed state root, and service endpoints across invocations, while different checkout identity paths do not collide. PASS if beads.shellHook delegates naming/endpoint selection to 'wrix service ...' and no longer carries legacy '<basename>-beads' helper logic; FAIL if '_name' or equivalent basename(path)-beads helpers can satisfy the criterion."
+  judge_criterion "Workspace identity for beads comes from the services contract: the same service identity path yields the same '<repo>-service' container name, sha256-derived workspace hash, state/cache roots, preferred service ports, and Dolt endpoints across invocations, while different checkout identity paths do not collide. PASS if beads.shellHook delegates naming/endpoint selection to 'wrix service ...' and no longer carries legacy '<basename>-beads' helper logic; FAIL if WorkspaceHash is not a sha256 digest of the canonical service identity path, if port/root derivation uses a non-sha256 or basename-only identity, or if '_name' or equivalent basename(path)-beads helpers can satisfy the criterion."
 }
 
 test_beadspush_pushes_before_pulls() {
