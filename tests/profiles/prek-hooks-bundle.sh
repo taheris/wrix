@@ -13,6 +13,11 @@
 #     also pins the Nix-store prek package on PATH so git hooks work outside
 #     the devShell.
 #
+#   test_pre_push_stamp_written_and_consumed
+#     The materialized pre-push shim writes .wrix/push-verified for the
+#     current HEAD after a passing pre-push check, then consumes that stamp
+#     on a retry of the same HEAD.
+#
 # Usage:
 #   tests/profiles/prek-hooks-bundle.sh                  # run all tests
 #   tests/profiles/prek-hooks-bundle.sh test_<name>      # run a single test
@@ -123,11 +128,87 @@ test_shims_are_plain_hook_impl() {
   [[ "$failed" -eq 0 ]]
 }
 
+# ============================================================================
+test_pre_push_stamp_written_and_consumed() {
+  local bundle
+  if ! bundle=$(require_bundle "$@"); then
+    echo "FAIL: nix build lib.prekHooks failed" >&2
+    return 1
+  fi
+
+  local work
+  work=$(mktemp -d)
+
+  local failed=0
+  git -C "$work" init -q -b main
+  git -C "$work" config user.email test@example.com
+  git -C "$work" config user.name Test
+  cat >"$work/.pre-commit-config.yaml" <<'YAML'
+repos:
+  - repo: local
+    hooks:
+      - id: pass
+        name: pass
+        entry: true
+        language: system
+        stages: [pre-push]
+        always_run: true
+        pass_filenames: false
+YAML
+  echo seed >"$work/seed.txt"
+  git -C "$work" add .
+  git -C "$work" commit -q -m initial
+
+  local head_sha old_sha ref_line stamp first_out first_err second_out second_err
+  head_sha=$(git -C "$work" rev-parse HEAD)
+  old_sha=0000000000000000000000000000000000000000
+  ref_line="refs/heads/main $head_sha refs/heads/main $old_sha"
+  stamp="$work/.wrix/push-verified"
+  first_out="$work/first.out"
+  first_err="$work/first.err"
+  second_out="$work/second.out"
+  second_err="$work/second.err"
+
+  if ! (cd "$work" && printf '%s\n' "$ref_line" | "$bundle/pre-push" origin example) >"$first_out" 2>"$first_err"; then
+    echo "FAIL: first pre-push invocation failed" >&2
+    cat "$first_out" >&2
+    cat "$first_err" >&2
+    failed=$((failed + 1))
+  elif [[ ! -f "$stamp" ]]; then
+    echo "FAIL: pre-push did not write $stamp" >&2
+    failed=$((failed + 1))
+  elif [[ "$(<"$stamp")" != "$head_sha" ]]; then
+    echo "FAIL: pre-push stamp did not contain HEAD sha" >&2
+    failed=$((failed + 1))
+  fi
+
+  if [[ "$failed" -eq 0 ]]; then
+    if ! (cd "$work" && printf '%s\n' "$ref_line" | "$bundle/pre-push" origin example) >"$second_out" 2>"$second_err"; then
+      echo "FAIL: stamped pre-push invocation failed" >&2
+      cat "$second_out" >&2
+      cat "$second_err" >&2
+      failed=$((failed + 1))
+    elif [[ -e "$stamp" ]]; then
+      echo "FAIL: pre-push did not consume the matching stamp" >&2
+      failed=$((failed + 1))
+    elif [[ -s "$second_out" || -s "$second_err" ]]; then
+      echo "FAIL: stamped pre-push invocation did not short-circuit cleanly" >&2
+      cat "$second_out" >&2
+      cat "$second_err" >&2
+      failed=$((failed + 1))
+    fi
+  fi
+
+  rm -rf "$work"
+  [[ "$failed" -eq 0 ]]
+}
+
 # ----------------------------------------------------------------------------
 
 ALL_TESTS=(
   test_bundle_contents
   test_shims_are_plain_hook_impl
+  test_pre_push_stamp_written_and_consumed
 )
 
 run_all() {

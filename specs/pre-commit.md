@@ -110,17 +110,17 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
 ## Success Criteria
 
 - The `wrix.prekHooks` derivation contains executable shims for `pre-commit`, `pre-push`, `prepare-commit-msg`, `post-checkout`, and `post-merge`
-  [check](grep -nE '\$out/(pre-commit|pre-push|prepare-commit-msg|post-checkout|post-merge)' lib/prek/bundle.nix)
+  [system](bash tests/profiles/prek-hooks-bundle.sh test_bundle_contents)
 - `mkDevShell` sets `core.hooksPath` to the `wrix.prekHooks` store path on every devshell entry when `.pre-commit-config.yaml` is present
-  [check](grep -nE 'core\.hooksPath|prekHooks' lib/default.nix)
+  [system](bash tests/profiles/mkdevshell-prek.sh test_auto_set_when_config_present)
 - The pre-commit and pre-push shims both invoke `prek hook-impl --hook-type=<stage>` (not `prek run`, which would mistake git's positional args for hook/project selectors)
-  [check](grep -nE 'hook-impl --hook-type=' lib/prek/hooks/pre-commit lib/prek/hooks/pre-push)
+  [system](bash tests/profiles/prek-hooks-bundle.sh test_shims_are_plain_hook_impl)
 - No shim sources `lock.sh`, calls `_prek_acquire_lock`, or invokes `flock`; every shim invokes `prek hook-impl --hook-type=<its-stage>` and pins the Nix-store `prek` package on `PATH`
   [system](bash tests/profiles/prek-hooks-bundle.sh test_shims_are_plain_hook_impl)
 - The pre-push shim writes and consumes `.wrix/push-verified`
-  [check](grep -nE 'push-verified' lib/prek/hooks/pre-push)
+  [system](bash tests/profiles/prek-hooks-bundle.sh test_pre_push_stamp_written_and_consumed)
 - `wrix.prePushChecks` and `wrix.skipIfMissing` are exposed by the wrix library and land on the host devShell's `PATH`
-  [check](grep -nE 'prePushChecks|skipIfMissing' lib/default.nix)
+  [system](bash tests/profiles/mkdevshell-prek.sh test_wrappers_exposed_and_on_devshell_path)
 - `pre-push-checks` exits 0 without running the wrapped command when `.loom/marker.json` is present and `loom gate verify-marker` exits 0
   [system](bash tests/prek/pre-push-checks-marker-valid.sh)
 - `pre-push-checks` execs the wrapped command when `.loom/marker.json` is present and `loom gate verify-marker` exits non-zero
@@ -138,7 +138,7 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
 - A pre-push hook configured in `.pre-commit-config.yaml` fires when `git push` runs inside a profile container
   [system](bash tests/sandbox/container-pre-push.sh)
 - Heavy realization checks — those whose input closure includes the full sandbox base image or the full Rust workspace build — are referenced from a CI-only flake output (e.g., `.#test-ci`), not from `flake.nix#checks` which pre-push's `nix flake check` runs
-  [check?](grep -nE 'test-ci' flake.nix)
+  [system](bash tests/prek/ci-only-heavy-checks.sh)
 
 ## Requirements
 

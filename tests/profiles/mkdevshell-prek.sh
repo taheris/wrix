@@ -27,6 +27,10 @@
 #     Pre-set core.hooksPath to /some/old/path, then enter with prekHooks=false.
 #     core.hooksPath still equals /some/old/path (passive opt-out by design).
 #
+#   test_wrappers_exposed_and_on_devshell_path
+#     pre-push-checks and skip-if-missing are exported from the flake library
+#     and included in mkDevShell's package set.
+#
 # Usage:
 #   tests/profiles/mkdevshell-prek.sh                  # run all tests
 #   tests/profiles/mkdevshell-prek.sh test_<name>      # run a single test
@@ -90,11 +94,26 @@ get_hooks_path() {
 # Returns 1 (with a diagnostic) if the subshell exits non-zero.
 run_hook_or_fail() {
   local dir="$1" hook="$2" stderr_file="$3"
-  local hook_file rc=0
+  local hook_file service_bin rc=0
   hook_file=$(mktemp -p "$TMP_BASE")
+  service_bin=$(mktemp -p "$TMP_BASE")
   printf '%s' "$hook" > "$hook_file"
+  cat > "$service_bin" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" = "service" && "${2:-}" = "start" ]]; then
+  exit 0
+fi
+if [[ "${1:-}" = "service" && "${2:-}" = "endpoints" ]]; then
+  printf '%s\n' '{"cache_http":null}'
+  exit 0
+fi
+echo "fake wrix: unexpected args: $*" >&2
+exit 2
+SCRIPT
+  chmod +x "$service_bin"
   # shellcheck source=/dev/null
-  ( cd "$dir" && source "$hook_file" ) >/dev/null 2>"$stderr_file" || rc=$?
+  ( cd "$dir" && WRIX_BIN="$service_bin" source "$hook_file" ) >/dev/null 2>"$stderr_file" || rc=$?
   if (( rc != 0 )); then
     echo "shellHook source returned exit code $rc; stderr:" >&2
     cat "$stderr_file" >&2
@@ -293,6 +312,51 @@ test_opt_out_preserves_stale_config() {
   fi
 }
 
+# ============================================================================
+test_wrappers_exposed_and_on_devshell_path() {
+  local result
+  result=$(eval_expr_json '
+    let
+      shell = lib.mkDevShell { profile = lib.profiles.base; };
+      packageNames = map (drv: drv.pname or drv.name or (builtins.toString drv)) shell.nativeBuildInputs;
+    in {
+      hasPrePushChecks = lib ? prePushChecks;
+      hasSkipIfMissing = lib ? skipIfMissing;
+      prePushChecksPath = if lib ? prePushChecks then builtins.toString lib.prePushChecks else "";
+      skipIfMissingPath = if lib ? skipIfMissing then builtins.toString lib.skipIfMissing else "";
+      inherit packageNames;
+    }
+  ')
+
+  local failed=0
+  if [[ "$(jq -r '.hasPrePushChecks' <<<"$result")" != "true" ]]; then
+    echo "FAIL: flake legacyPackages.lib does not expose prePushChecks" >&2
+    failed=$((failed + 1))
+  fi
+  if [[ "$(jq -r '.hasSkipIfMissing' <<<"$result")" != "true" ]]; then
+    echo "FAIL: flake legacyPackages.lib does not expose skipIfMissing" >&2
+    failed=$((failed + 1))
+  fi
+  if [[ -z "$(jq -r '.prePushChecksPath' <<<"$result")" ]]; then
+    echo "FAIL: prePushChecks did not evaluate to a store path" >&2
+    failed=$((failed + 1))
+  fi
+  if [[ -z "$(jq -r '.skipIfMissingPath' <<<"$result")" ]]; then
+    echo "FAIL: skipIfMissing did not evaluate to a store path" >&2
+    failed=$((failed + 1))
+  fi
+  if ! jq -e 'any(.packageNames[]; . == "pre-push-checks")' <<<"$result" >/dev/null; then
+    echo "FAIL: mkDevShell nativeBuildInputs lacks pre-push-checks" >&2
+    failed=$((failed + 1))
+  fi
+  if ! jq -e 'any(.packageNames[]; . == "skip-if-missing")' <<<"$result" >/dev/null; then
+    echo "FAIL: mkDevShell nativeBuildInputs lacks skip-if-missing" >&2
+    failed=$((failed + 1))
+  fi
+
+  [[ "$failed" -eq 0 ]]
+}
+
 # ----------------------------------------------------------------------------
 
 ALL_TESTS=(
@@ -302,6 +366,7 @@ ALL_TESTS=(
   test_derivation_substitute
   test_stale_config_overwrite_with_warning
   test_opt_out_preserves_stale_config
+  test_wrappers_exposed_and_on_devshell_path
 )
 
 run_all() {

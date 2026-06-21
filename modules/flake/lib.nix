@@ -28,9 +28,11 @@
           mkDevShell
           mkProfileImages
           mkSandbox
+          prePushChecks
           prekHooks
           profiles
           rustProfile
+          skipIfMissing
           ;
       };
     };
