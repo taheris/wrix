@@ -32,13 +32,14 @@ REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 LINUX_LAUNCHER_NIX="$REPO_ROOT/lib/sandbox/linux/default.nix"
 DARWIN_LAUNCHER_NIX="$REPO_ROOT/lib/sandbox/darwin/default.nix"
 GIT_SSH_SETUP="$REPO_ROOT/lib/util/git-ssh-setup.sh"
+BASH_BIN="${BASH:-$(command -v bash)}"
 
 skip() {
   echo "SKIP: $1" >&2
   exit 77
 }
 
-for tool in ssh-keygen git awk sed; do
+for tool in ssh-keygen git awk sed getent; do
   command -v "$tool" >/dev/null 2>&1 || skip "$tool not on PATH"
 done
 
@@ -232,7 +233,61 @@ test_git_signing_produces_gpgsig() {
 }
 
 # ----------------------------------------------------------------------------
-# Test 4: normal git-over-SSH uses WRIX_DEPLOY_KEY even without env inheritance
+# Test 4: bare SSH config is written for $HOME and the effective user's home
+# ----------------------------------------------------------------------------
+test_ssh_config_written_for_effective_user_home() {
+  local home_dir="$TEST_TMP/home-config"
+  local effective_home="$TEST_TMP/effective-home"
+  local fake_bin="$TEST_TMP/fake-user-bin"
+  local err_log="$TEST_TMP/ssh-config-home.log"
+  mkdir -p "$home_dir" "$effective_home" "$fake_bin"
+
+  cat >"$fake_bin/id" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" = "-u" ]]; then
+  printf '4242\n'
+else
+  echo "unexpected fake id invocation: $*" >&2
+  exit 64
+fi
+EOF
+  chmod +x "$fake_bin/id"
+
+  cat >"$fake_bin/getent" <<EOF
+#!$BASH_BIN
+set -euo pipefail
+if [[ "\${1:-}" = "passwd" && "\${2:-}" = "4242" ]]; then
+  printf 'wrix:x:4242:4242::%s:/bin/sh\n' "$effective_home"
+else
+  echo "unexpected fake getent invocation: \$*" >&2
+  exit 64
+fi
+EOF
+  chmod +x "$fake_bin/getent"
+
+  # shellcheck disable=SC2030,SC2031
+  if ! (
+    set -e
+    unset XDG_CONFIG_HOME GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM WRIX_SIGNING_KEY
+    export HOME="$home_dir"
+    export PATH="$fake_bin:$PATH"
+    export WRIX_DEPLOY_KEY="$HOST_DEPLOY_KEY"
+    # shellcheck source=/dev/null
+    source "$GIT_SSH_SETUP"
+    grep -qF "IdentityFile $HOST_DEPLOY_KEY" "$home_dir/.ssh/config"
+    grep -qF "IdentityFile $HOST_DEPLOY_KEY" "$effective_home/.ssh/config"
+  ) >"$err_log" 2>&1; then
+    fail "SSH config was not written for both HOME and effective user home"
+    sed 's/^/    /' "$err_log" >&2
+    return
+  fi
+
+  pass "bare SSH config is available to OpenSSH's effective-user home lookup"
+}
+
+# ----------------------------------------------------------------------------
+# Test 5: normal git-over-SSH uses WRIX_DEPLOY_KEY even without env inheritance
 # ----------------------------------------------------------------------------
 test_git_ssh_command_uses_deploy_key_from_git_config() {
   local repo="$TEST_TMP/ssh-repo"
@@ -314,6 +369,7 @@ ALL_TESTS=(
   test_linux_env_first_resolution
   test_darwin_env_first_resolution
   test_git_signing_produces_gpgsig
+  test_ssh_config_written_for_effective_user_home
   test_git_ssh_command_uses_deploy_key_from_git_config
 )
 

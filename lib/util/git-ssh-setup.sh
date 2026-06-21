@@ -15,21 +15,38 @@
 # source multiple times and safe to source when no keys are present — it
 # becomes a no-op.
 
+write_wrix_ssh_config() {
+  local ssh_home="$1"
+  [[ -n "$ssh_home" ]] || return 0
+  mkdir -p "$ssh_home/.ssh"
+  chmod 700 "$ssh_home/.ssh"
+  cat > "$ssh_home/.ssh/config" <<SSHEOF
+Host github.com
+  IdentityFile $WRIX_DEPLOY_KEY
+  IdentitiesOnly yes
+SSHEOF
+  chmod 600 "$ssh_home/.ssh/config"
+}
+
+wrix_effective_user_home() {
+  local passwd_entry passwd_home
+  if passwd_entry=$(getent passwd "$(id -u)"); then
+    passwd_home="${passwd_entry#*:*:*:*:*:}"
+    printf '%s\n' "${passwd_home%%:*}"
+  fi
+}
+
 if [[ -n "${WRIX_DEPLOY_KEY:-}" ]] && [[ -f "$WRIX_DEPLOY_KEY" ]]; then
   printf -v WRIX_DEPLOY_KEY_SSH_ARG '%q' "$WRIX_DEPLOY_KEY"
   export GIT_SSH_COMMAND="ssh -i $WRIX_DEPLOY_KEY_SSH_ARG -o IdentitiesOnly=yes"
   git config --global --replace-all core.sshCommand "$GIT_SSH_COMMAND"
 
-  # Write SSH config so bare `ssh -T git@github.com` also works (not just
-  # git commands that honour GIT_SSH_COMMAND).
-  mkdir -p "$HOME/.ssh"
-  chmod 700 "$HOME/.ssh"
-  cat > "$HOME/.ssh/config" <<SSHEOF
-Host github.com
-  IdentityFile $WRIX_DEPLOY_KEY
-  IdentitiesOnly yes
-SSHEOF
-  chmod 600 "$HOME/.ssh/config"
+  WRIX_EFFECTIVE_HOME=$(wrix_effective_user_home)
+  write_wrix_ssh_config "$HOME"
+  if [[ -n "$WRIX_EFFECTIVE_HOME" && "$WRIX_EFFECTIVE_HOME" != "$HOME" ]]; then
+    write_wrix_ssh_config "$WRIX_EFFECTIVE_HOME"
+  fi
+  unset WRIX_EFFECTIVE_HOME
 fi
 
 if [[ -n "${WRIX_SIGNING_KEY:-}" ]] && [[ -f "$WRIX_SIGNING_KEY" ]]; then
