@@ -260,7 +260,7 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 - A second spawn of an already-loaded image performs no writes to the platform store's layer directory and does not execute the image source
   [system?](bash tests/sandbox/image-install-no-rewrite.sh)
 - On Linux, re-installing an image that differs from the cached one in only its top customisation layer generates and transfers only changed/missing layer blobs, not O(image-size) bytes
-  [system?](bash tests/sandbox/image-install-delta-bounded.sh)
+  [system](bash tests/sandbox/image-install-delta-bounded.sh)
 - The runtime image cleanup path records a bounded cross-workspace MRU of eight wrix image refs/digests/image IDs, preserves images used by existing containers, prunes wrix-managed images outside the keep set, and does not automatically remove unlabelled `<none>:<none>` images
   [system?](bash tests/sandbox/image-retention-cleanup.sh)
 - On Darwin, the runtime image installer uses `container image load --input <tar>` for `source_kind = "docker-archive"` image install (per Apple's available CLI surface) and relies on the digest-skip preflight while per-blob install remains out of scope
