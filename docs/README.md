@@ -18,7 +18,7 @@ pin — keep it current when specs land or retire.
 | Spec | Code | Beads | Purpose |
 |------|------|-------|---------|
 | [beads.md](../specs/beads.md) | [`.beads/`](../.beads/) | wx-v7m8n | Issue tracking with dependency support |
-| [image-builder.md](../specs/image-builder.md) | [`lib/sandbox/image.nix`](../lib/sandbox/image.nix) | wx-nf6eu | Nix-based OCI image creation |
+| [image-builder.md](../specs/image-builder.md) | [`lib/sandbox/image.nix`](../lib/sandbox/image.nix) | wx-nf6eu | Nix-based OCI image source creation |
 | [linux-builder.md](../specs/linux-builder.md) | [`lib/builder/default.nix`](../lib/builder/default.nix) | wx-ope | Remote Nix builds for macOS |
 | [notifications.md](../specs/notifications.md) | [`lib/notify/`](../lib/notify/) | wx-q6x | Desktop notifications with focus suppression |
 | [playwright-mcp.md](../specs/playwright-mcp.md) | [`lib/mcp/playwright/`](../lib/mcp/playwright/) | wx-9mvh | Browser automation for frontend development |
@@ -38,6 +38,7 @@ pin — keep it current when specs land or retire.
 | **deploy key** | SSH key for git push operations from container |
 | **dolt** | SQL database backing beads; shared via the workspace service container |
 | **focus-aware** | Notification suppression when terminal is focused |
+| **image source** | Platform image input produced by Nix: Linux `nix-descriptor`, Darwin `docker-archive` |
 | **loom** | External Rust workflow orchestrator that drives wrix sandboxes ([taheris/loom](https://github.com/taheris/loom)) |
 | **pasta** | Linux userspace networking for Podman containers |
 | **playwright-mcp** | MCP server wrapping @playwright/mcp for browser automation in sandboxes |
