@@ -158,6 +158,7 @@ let
 
     for app in \
       test-wrix-spawn-load \
+      test-image-install-real-skopeo \
       test-image-install-digest-skip \
       test-image-digest-matches-stored-id \
       test-linux-image-archiveless-source \
@@ -243,6 +244,12 @@ in
       meta.description = "Verify launcher digest-preflight short-circuits image install (Linux only)";
       type = "app";
       program = "${sandboxImageChecks.imageInstallDigestSkipTest}/bin/test-image-install-digest-skip";
+    };
+
+    image-install-real-skopeo = {
+      meta.description = "Verify launcher image install against real packaged skopeo (Linux only)";
+      type = "app";
+      program = "${sandboxImageChecks.imageInstallRealSkopeoTest}/bin/test-image-install-real-skopeo";
     };
 
     image-digest-matches-stored-id = {

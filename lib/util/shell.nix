@@ -85,9 +85,29 @@ in
         fi
         case "$_wrix_source_kind" in
           nix-descriptor)
-            skopeo --insecure-policy copy --quiet \
+            _wrix_skopeo_err="$_wrix_img_tmp/skopeo-nix.err"
+            if skopeo --insecure-policy copy --quiet \
               "nix:$IMAGE_SOURCE" \
-              "$_wrix_store_ref"
+              "$_wrix_store_ref" 2>"$_wrix_skopeo_err"; then
+              :
+            else
+              _wrix_skopeo_status=$?
+              if grep -Eq 'unknown transport.*nix' "$_wrix_skopeo_err"; then
+                _wrix_fallback_stream=$(${jqBin} -er '.fallback_stream // empty | strings | select(length > 0)' "$IMAGE_SOURCE") || {
+                  cat "$_wrix_skopeo_err" >&2
+                  echo "Error: nix-descriptor source is not supported by this skopeo and has no fallback_stream: $IMAGE_SOURCE" >&2
+                  exit "$_wrix_skopeo_status"
+                }
+                verbose "skopeo lacks nix transport; falling back to descriptor stream $_wrix_fallback_stream"
+                "$_wrix_fallback_stream" >"$_wrix_img_tmp/image.tar"
+                skopeo --insecure-policy copy --quiet \
+                  "docker-archive:$_wrix_img_tmp/image.tar" \
+                  "$_wrix_store_ref"
+              else
+                cat "$_wrix_skopeo_err" >&2
+                exit "$_wrix_skopeo_status"
+              fi
+            fi
             ;;
           docker-archive)
             skopeo --insecure-policy copy --quiet \

@@ -375,7 +375,13 @@ let
   };
   descriptorDigest = "sha256:${builtins.hashString "sha256" (builtins.unsafeDiscardStringContext (builtins.toJSON descriptorMetadata))}";
   nixDescriptorSource = pkgs.writeText "${imageName}-nix-descriptor.json" (
-    builtins.toJSON (descriptorMetadata // { digest = descriptorDigest; })
+    builtins.toJSON (
+      descriptorMetadata
+      // {
+        digest = descriptorDigest;
+        fallback_stream = "${rawImage}";
+      }
+    )
   );
   descriptorDigestFile = pkgs.writeText "${imageName}-descriptor-digest" descriptorDigest;
   imageSource = if asTarball then rawImage else nixDescriptorSource;

@@ -72,6 +72,7 @@ let
     runtimeInputs = optionals isLinux [
       pkgs.coreutils
       pkgs.gnugrep
+      pkgs.jq
     ];
     text =
       if isLinux then
@@ -84,18 +85,28 @@ let
           mkdir -p "$shim_dir" "$state"
           podman_log="$state/podman.log"
           skopeo_log="$state/skopeo.log"
+          image_source_log="$state/image-source.log"
           : >"$podman_log"
           : >"$skopeo_log"
+          : >"$image_source_log"
 
           IMAGE_REF="localhost/wrix-loadtest:abc123"
           IMAGE_SOURCE="$tmp/image-descriptor.json"
           IMAGE_SOURCE_KIND="nix-descriptor"
+          IMAGE_STREAM="$tmp/image-stream"
           # The install transport pins skopeo's containers-storage destination
           # to podman's store via `podman info`; the shim reports this spec so
           # the assertion below can verify the [driver@graphroot+runroot] ref.
           STORE_SPEC="overlay@$tmp/graphroot+$tmp/runroot"
 
-          printf '{"schema":1,"source_kind":"nix-descriptor"}\n' >"$IMAGE_SOURCE"
+          jq -n --arg stream "$IMAGE_STREAM" '{schema:1,source_kind:"nix-descriptor",fallback_stream:$stream}' >"$IMAGE_SOURCE"
+
+          cat >"$IMAGE_STREAM" <<IMAGE_STREAM_SHIM
+          #!/usr/bin/env bash
+          set -euo pipefail
+          printf 'stream\n' >>'$image_source_log'
+          IMAGE_STREAM_SHIM
+          chmod +x "$IMAGE_STREAM"
 
           cat >"$shim_dir/podman" <<PODMAN_SHIM
           #!/usr/bin/env bash
@@ -127,6 +138,12 @@ let
           #!/usr/bin/env bash
           set -euo pipefail
           printf '%s\n' "\$*" >>'$skopeo_log'
+          case "\$*" in
+              *"nix:$IMAGE_SOURCE"*)
+                  printf 'FATA[0000] Invalid source name nix:%s: Invalid image name "nix:%s", unknown transport "nix"\n' '$IMAGE_SOURCE' '$IMAGE_SOURCE' >&2
+                  exit 1
+                  ;;
+          esac
           exit 0
           SKOPEO_SHIM
           chmod +x "$shim_dir/skopeo"
@@ -144,6 +161,17 @@ let
               cat "$skopeo_log" >&2
               exit 1
           fi
+          if ! grep -qF -- "docker-archive:" "$skopeo_log"; then
+              echo "first invocation did not fall back to docker-archive after missing nix transport:" >&2
+              cat "$skopeo_log" >&2
+              exit 1
+          fi
+          source_lines=$(wc -l <"$image_source_log")
+          if [[ "$source_lines" -ne 1 ]]; then
+              echo "first invocation did not execute fallback stream exactly once (got $source_lines):" >&2
+              cat "$image_source_log" >&2
+              exit 1
+          fi
           if ! grep -q "^tag $IMAGE_REF .*:latest$" "$podman_log"; then
               echo "first invocation did not tag $IMAGE_REF as :latest:" >&2
               cat "$podman_log" >&2
@@ -159,6 +187,12 @@ let
               cat "$skopeo_log" >&2
               exit 1
           fi
+          source_lines=$(wc -l <"$image_source_log")
+          if [[ "$source_lines" -ne 1 ]]; then
+              echo "second invocation re-executed fallback stream (got $source_lines total):" >&2
+              cat "$image_source_log" >&2
+              exit 1
+          fi
           if ! grep -q "^image exists $IMAGE_REF$" "$podman_log"; then
               echo "second invocation did not check 'image exists $IMAGE_REF':" >&2
               cat "$podman_log" >&2
@@ -170,6 +204,110 @@ let
       else
         ''
           echo "test-wrix-spawn-load: not available on Darwin (no podman dependency on macOS)" >&2
+          exit 0
+        '';
+  };
+
+  # Linux-only integration verifier for the real packaged `skopeo` transport
+  # surface. The fast shim tests above prove command shape and idempotence; this
+  # one catches the real failure mode where stock skopeo rejects `nix:`.
+  imageInstallRealSkopeoTest = pkgs.writeShellApplication {
+    name = "test-image-install-real-skopeo";
+    runtimeInputs = optionals isLinux [
+      pkgs.coreutils
+      pkgs.gnugrep
+      pkgs.jq
+    ];
+    text =
+      if isLinux then
+        ''
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+
+          shim_dir="$tmp/bin"
+          state="$tmp/state"
+          mkdir -p "$shim_dir" "$state"
+          podman_log="$state/podman.log"
+          stream_log="$state/stream.log"
+          : >"$podman_log"
+          : >"$stream_log"
+
+          IMAGE_REF="localhost/wrix-real-skopeo:abc123"
+          IMAGE_SOURCE="$tmp/image-descriptor.json"
+          IMAGE_SOURCE_KIND="nix-descriptor"
+          IMAGE_STREAM="$tmp/image-stream"
+          STORE_SPEC="vfs@$tmp/graphroot+$tmp/runroot"
+
+          jq -n --arg stream "$IMAGE_STREAM" '{schema:1,source_kind:"nix-descriptor",fallback_stream:$stream}' >"$IMAGE_SOURCE"
+
+          cat >"$IMAGE_STREAM" <<IMAGE_STREAM_SHIM
+          #!/usr/bin/env bash
+          set -euo pipefail
+          printf 'stream\n' >>'$stream_log'
+          printf 'fallback archive bytes\n'
+          IMAGE_STREAM_SHIM
+          chmod +x "$IMAGE_STREAM"
+
+          cat >"$shim_dir/podman" <<PODMAN_SHIM
+          #!/usr/bin/env bash
+          set -euo pipefail
+          printf '%s\n' "\$*" >>'$podman_log'
+          case "\$1" in
+              image)
+                  case "\$2" in
+                      inspect) exit 1 ;;
+                      exists) exit 1 ;;
+                      *) exit 0 ;;
+                  esac
+                  ;;
+              info)
+                  printf '%s\n' '$STORE_SPEC'
+                  exit 0
+                  ;;
+              tag)
+                  exit 0
+                  ;;
+              *) exit 0 ;;
+          esac
+          PODMAN_SHIM
+          chmod +x "$shim_dir/podman"
+
+          cat >"$shim_dir/skopeo" <<SKOPEO_SHIM
+          #!/usr/bin/env bash
+          set -euo pipefail
+          case "\$*" in
+              *"nix:$IMAGE_SOURCE"*)
+                  exec '${pkgs.skopeo}/bin/skopeo' "\$@"
+                  ;;
+          esac
+          exit 0
+          SKOPEO_SHIM
+          chmod +x "$shim_dir/skopeo"
+
+          verbose() { :; }
+
+          PATH="$shim_dir:$PATH"
+          export PATH IMAGE_REF IMAGE_SOURCE IMAGE_SOURCE_KIND
+
+          ${shellLib.imageLoadStep}
+
+          stream_lines=$(wc -l <"$stream_log")
+          if [[ "$stream_lines" -ne 1 ]]; then
+              echo "real-skopeo integration did not execute fallback stream exactly once (got $stream_lines):" >&2
+              cat "$stream_log" >&2
+              exit 1
+          fi
+          if ! grep -q "^tag $IMAGE_REF .*:latest$" "$podman_log"; then
+              echo "real-skopeo integration did not tag $IMAGE_REF as :latest:" >&2
+              cat "$podman_log" >&2
+              exit 1
+          fi
+
+          echo "test-image-install-real-skopeo: PASS"
+        ''
+      else
+        ''
+          echo "test-image-install-real-skopeo: skipped on non-Linux host" >&2
           exit 0
         '';
   };
@@ -1796,6 +1934,7 @@ in
 {
   inherit
     wrixSpawnLoadTest
+    imageInstallRealSkopeoTest
     imageInstallDigestSkipTest
     digestMatchesStoredIdTest
     linuxImageArchivelessSourceTest
