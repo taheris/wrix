@@ -17,11 +17,11 @@
 { pkgs }:
 
 let
+  inherit (pkgs.lib) recursiveUpdate;
+
   chromiumRevision = pkgs.playwright-driver.passthru.browsersJSON.chromium.revision;
   chromiumPath = "${pkgs.playwright-driver.browsers}/chromium-${chromiumRevision}/chrome-linux64/chrome";
 
-  # Flags that are always applied — cannot be overridden by user config.
-  # See specs/playwright-mcp.md § Security Model for rationale.
   mandatoryFlags = [
     "--no-sandbox"
     "--disable-dev-shm-usage"
@@ -35,34 +35,45 @@ let
       config,
     }:
     let
-      userLaunchOptions = builtins.removeAttrs (config.launchOptions or { }) [ "args" ];
-      userArgs = (config.launchOptions or { }).args or [ ];
-      userConfig = builtins.removeAttrs config [ "launchOptions" ];
+      configBrowser = config.browser or { };
+      configContextOptions = config.contextOptions or { };
+      configLaunchOptions = config.launchOptions or { };
+      browserLaunchOptions = configBrowser.launchOptions or { };
+      userArgs = (configLaunchOptions.args or [ ]) ++ (browserLaunchOptions.args or [ ]);
+      userLaunchOptions =
+        builtins.removeAttrs (recursiveUpdate configLaunchOptions browserLaunchOptions)
+          [
+            "args"
+            "channel"
+            "executablePath"
+            "headless"
+          ];
+      userBrowser = builtins.removeAttrs configBrowser [
+        "browserName"
+        "launchOptions"
+      ];
+      userConfig = builtins.removeAttrs config [
+        "browser"
+        "contextOptions"
+        "launchOptions"
+      ];
 
-      configJSON = {
-        browser = {
-          # @playwright/mcp otherwise calls createUserDataDir() which mkdirs
-          # `mcp-<channel>-<cwdHash>` under playwright-core's registry path
-          # (the read-only nix store) and EACCES's any tool that opens a
-          # browser context (e.g. browser_take_screenshot). Pinning
-          # userDataDir to a writable container path keeps the persistent
-          # context inside the wrix HOME and matches the runtime layout
-          # the entrypoint already provisions. See
-          # playwright-core/lib/tools/mcp/browserFactory.js:createUserDataDir.
-          userDataDir = "/home/wrix/.cache/playwright-mcp";
-          launchOptions = {
-            args = mandatoryFlags ++ userArgs;
-            channel = "chromium";
-            executablePath = chromiumPath;
-            inherit headless;
-          }
-          // userLaunchOptions;
+      browser = userBrowser // {
+        browserName = "chromium";
+        userDataDir = configBrowser.userDataDir or "/home/wrix/.cache/playwright-mcp";
+        launchOptions = userLaunchOptions // {
+          args = mandatoryFlags ++ userArgs;
+          channel = "chromium";
+          executablePath = chromiumPath;
+          inherit headless;
         };
-        contextOptions = {
-          inherit viewport;
-        };
-      }
-      // userConfig;
+      };
+      contextOptions = configContextOptions // {
+        inherit viewport;
+      };
+      configJSON = userConfig // {
+        inherit browser contextOptions;
+      };
     in
     pkgs.writeText "playwright-mcp-config.json" (builtins.toJSON configJSON);
 in

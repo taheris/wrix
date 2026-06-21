@@ -1,17 +1,11 @@
 #!/usr/bin/env bash
-# Build tests for playwright-mcp
-#
-# Tests:
-# 1. test_image_contains_chromium: Nix image built with mcp.playwright = {}
-#    contains the chromium binary at the expected path derived from
-#    playwright-driver.browsers
-#
-# Prerequisites:
-# - nix (with flakes enabled)
-
 set -euo pipefail
 
-# Colors
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=tests/mcp/playwright/lib.sh
+source "${SCRIPT_DIR}/lib.sh"
+playwright_require_linux
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
@@ -22,102 +16,89 @@ log_pass() { echo -e "${GREEN}[PASS]${NC} $*"; }
 log_fail() { echo -e "${RED}[FAIL]${NC} $*"; }
 log_info() { echo -e "${GREEN}[INFO]${NC} $*"; }
 
-# --- Tests ---
+TEMP_DIR=""
+
+cleanup() {
+    local exit_code=$?
+    if [[ -n "${TEMP_DIR:-}" && -d "$TEMP_DIR" ]]; then
+        rm -rf "$TEMP_DIR"
+    fi
+    exit "$exit_code"
+}
+trap cleanup EXIT
+
+contains_line() {
+    local needle="$1"
+    local haystack="$2"
+
+    grep -Fx "$needle" "$haystack" >/dev/null
+}
 
 test_image_contains_chromium() {
-    log_test "test_image_contains_chromium: playwright packages include chromium binary"
+    log_test "test_image_contains_chromium: mcp.playwright sandbox image closes over chromium and server"
 
-    # Step 1: Build playwright-driver.browsers and get the store path
-    log_info "Building playwright-driver.browsers..."
-    local browsers_path
-    browsers_path=$(nix build 'nixpkgs#playwright-driver.browsers' --no-link --print-out-paths 2>/dev/null) || {
-        log_fail "Failed to build playwright-driver.browsers"
-        return 1
-    }
-    log_info "Browsers path: $browsers_path"
+    TEMP_DIR=$(mktemp -d)
+    local user_data_dir="${TEMP_DIR}/user-data"
+    local config_file chrome_path browsers_path mcp_path package_names_json closure_path image_path image_closure
 
-    # Step 2: Get the chromium revision from playwright-driver
-    log_info "Resolving chromium revision..."
-    local revision
-    revision=$(nix eval --raw 'nixpkgs#playwright-driver.passthru.browsersJSON.chromium.revision' 2>/dev/null) || {
-        log_fail "Failed to get chromium revision from playwright-driver.passthru.browsersJSON"
-        return 1
-    }
-    log_info "Chromium revision: $revision"
+    config_file=$(playwright_config_path "$user_data_dir") || return 1
+    chrome_path=$(jq -r '.browser.launchOptions.executablePath' "$config_file") || return 1
+    browsers_path=$(playwright_build_package playwright-browsers) || return 1
+    mcp_path=$(playwright_build_package playwright-mcp) || return 1
 
-    # Step 3: Verify the chromium binary exists at the expected path
-    local chrome_path="${browsers_path}/chromium-${revision}/chrome-linux64/chrome"
-    log_info "Expected chrome path: $chrome_path"
+    log_info "Generated config: $config_file"
+    log_info "Chromium path: $chrome_path"
+    log_info "Browsers package: $browsers_path"
+    log_info "MCP server package: $mcp_path"
 
-    if [[ ! -f "$chrome_path" ]]; then
-        log_fail "Chromium binary not found at: $chrome_path"
-        log_fail "Contents of browsers path:"
-        ls -la "$browsers_path" 2>/dev/null || true
+    if [[ "$chrome_path" != "${browsers_path}"/*/chrome-linux64/chrome ]]; then
+        log_fail "Generated chromium path is not derived from playwright-browsers"
         return 1
     fi
 
     if [[ ! -x "$chrome_path" ]]; then
-        log_fail "Chromium binary exists but is not executable: $chrome_path"
+        log_fail "Chromium binary is not executable: $chrome_path"
         return 1
     fi
-    log_info "Chromium binary found and executable"
 
-    # Step 4: Build the MCP server package and verify it exists
-    log_info "Building playwright-mcp server..."
-    local mcp_path
-    mcp_path=$(nix build 'nixpkgs#playwright-mcp' --no-link --print-out-paths 2>/dev/null) || {
-        log_fail "Failed to build playwright-mcp"
-        return 1
-    }
-
-    local mcp_bin="${mcp_path}/bin/playwright-mcp"
-    if [[ ! -x "$mcp_bin" ]]; then
-        log_fail "playwright-mcp binary not found at: $mcp_bin"
+    if [[ ! -x "${mcp_path}/bin/playwright-mcp" ]]; then
+        log_fail "playwright-mcp binary is not executable: ${mcp_path}/bin/playwright-mcp"
         return 1
     fi
-    log_info "MCP server binary found: $mcp_bin"
 
-    # Step 5: Verify the Nix expression produces the correct chromium path
-    # by evaluating the server definition from our flake
-    log_info "Evaluating playwright server definition..."
-    local flake_dir
-    flake_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-
-    # Evaluate the config file path and check its contents
-    local config_store_path
-    config_store_path=$(nix eval --raw --file "${flake_dir}/lib/mcp/playwright/default.nix" \
-        --apply 'f: let pkgs = import <nixpkgs> {}; def = f { inherit pkgs; }; cfg = def.mkServerConfig {}; in builtins.elemAt cfg.args 1' 2>/dev/null) || {
-        # Fallback: just verify the path construction matches between the Nix
-        # expression and what we computed above
-        log_info "Skipping config file evaluation (expected in sandboxed builds)"
-    }
-
-    if [[ -n "${config_store_path:-}" ]] && [[ -f "$config_store_path" ]]; then
-        log_info "Verifying config file contents..."
-        local config_chrome
-        config_chrome=$(jq -r '.browser.launchOptions.executablePath' "$config_store_path" 2>/dev/null) || true
-        if [[ -n "${config_chrome:-}" ]] && [[ "$config_chrome" == *"/chrome" ]]; then
-            if [[ -x "$config_chrome" ]]; then
-                log_info "Config references valid chromium at: $config_chrome"
-            else
-                log_fail "Config references non-existent chromium: $config_chrome"
-                return 1
-            fi
-        fi
+    package_names_json=$(playwright_sandbox_package_names_json --argstr userDataDir "$user_data_dir") || return 1
+    if ! jq -e 'index("playwright-mcp") and index("playwright-browsers")' <<<"$package_names_json" >/dev/null; then
+        log_fail "mcp.playwright sandbox profile did not include the Playwright packages"
+        echo "$package_names_json" >&2
+        return 1
     fi
+    log_info "mcp.playwright sandbox profile includes Playwright packages"
 
-    # Step 6: Verify chromium is in the closure of playwright-driver.browsers
-    log_info "Checking package closure..."
-    local closure_size
-    closure_size=$(nix path-info -S "$browsers_path" 2>/dev/null | awk '{print $2}') || true
-    if [[ -n "${closure_size:-}" ]]; then
-        log_info "Browsers closure size: $closure_size bytes"
+    closure_path=$(playwright_sandbox_package_closure --argstr userDataDir "$user_data_dir") || return 1
+    if ! contains_line "$browsers_path" "${closure_path}/store-paths"; then
+        log_fail "Sandbox package closure is missing playwright-browsers"
+        return 1
     fi
+    if ! contains_line "$mcp_path" "${closure_path}/store-paths"; then
+        log_fail "Sandbox package closure is missing playwright-mcp"
+        return 1
+    fi
+    log_info "Sandbox package closure contains Playwright packages"
+
+    image_path=$(playwright_sandbox_image --argstr userDataDir "$user_data_dir") || return 1
+    image_closure=$(nix path-info --recursive "$image_path") || return 1
+    if [[ "$image_closure" != *"$browsers_path"* ]]; then
+        log_fail "Built sandbox image closure is missing playwright-browsers"
+        return 1
+    fi
+    if [[ "$image_closure" != *"$mcp_path"* ]]; then
+        log_fail "Built sandbox image closure is missing playwright-mcp"
+        return 1
+    fi
+    log_info "Built sandbox image closure contains Playwright packages"
 
     log_pass "test_image_contains_chromium"
 }
-
-# --- Main ---
 
 main() {
     echo ""
@@ -129,21 +110,18 @@ main() {
     local passed=0
     local failed=0
 
-    # shellcheck disable=SC2043
-    for test_fn in test_image_contains_chromium; do
-        if "$test_fn"; then
-            ((passed++)) || true
-        else
-            ((failed++)) || true
-        fi
-        echo ""
-    done
+    if test_image_contains_chromium; then
+        passed=$((passed + 1))
+    else
+        failed=$((failed + 1))
+    fi
+    echo ""
 
     echo "=========================================="
     log_info "Results: $passed passed, $failed failed"
     echo "=========================================="
 
-    if [[ $failed -gt 0 ]]; then
+    if ((failed > 0)); then
         exit 1
     fi
 }
