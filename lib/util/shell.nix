@@ -38,7 +38,7 @@ in
   # and archive sources derive the selected source digest before preflight.
   #
   # On miss, the install transport dispatches by source kind. Linux descriptors
-  # flow through `skopeo copy nix:<descriptor> → containers-storage:<ref>`;
+  # point at an OCI layout and copy that layout directly into containers-storage;
   # tar-loadable archives flow through `docker-archive:<path>`.
   imageLoadStep = ''
     if [[ -z "$IMAGE_SOURCE" ]]; then
@@ -104,29 +104,17 @@ in
         fi
         case "$_wrix_source_kind" in
           nix-descriptor)
-            _wrix_skopeo_err="$_wrix_img_tmp/skopeo-nix.err"
-            if skopeo --insecure-policy copy --quiet \
-              "nix:$IMAGE_SOURCE" \
-              "$_wrix_store_ref" 2>"$_wrix_skopeo_err"; then
-              :
-            else
-              _wrix_skopeo_status=$?
-              if grep -Eq 'unknown transport.*nix' "$_wrix_skopeo_err"; then
-                _wrix_fallback_stream=$(${jqBin} -er '.fallback_stream // empty | strings | select(length > 0)' "$IMAGE_SOURCE") || {
-                  cat "$_wrix_skopeo_err" >&2
-                  echo "Error: nix-descriptor source is not supported by this skopeo and has no fallback_stream: $IMAGE_SOURCE" >&2
-                  exit "$_wrix_skopeo_status"
-                }
-                verbose "skopeo lacks nix transport; falling back to descriptor stream $_wrix_fallback_stream"
-                "$_wrix_fallback_stream" >"$_wrix_img_tmp/image.tar"
-                skopeo --insecure-policy copy --quiet \
-                  "docker-archive:$_wrix_img_tmp/image.tar" \
-                  "$_wrix_store_ref"
-              else
-                cat "$_wrix_skopeo_err" >&2
-                exit "$_wrix_skopeo_status"
-              fi
-            fi
+            _wrix_oci_layout=$(${jqBin} -er '.oci_layout // empty | strings | select(length > 0)' "$IMAGE_SOURCE") || {
+              echo "Error: nix-descriptor image source is missing oci_layout: $IMAGE_SOURCE" >&2
+              exit 1
+            }
+            _wrix_oci_ref=$(${jqBin} -er '.oci_ref // "latest" | strings | select(length > 0)' "$IMAGE_SOURCE") || {
+              echo "Error: nix-descriptor image source has an invalid oci_ref: $IMAGE_SOURCE" >&2
+              exit 1
+            }
+            skopeo --insecure-policy copy --quiet \
+              "oci:$_wrix_oci_layout:$_wrix_oci_ref" \
+              "$_wrix_store_ref"
             ;;
           docker-archive)
             skopeo --insecure-policy copy --quiet \

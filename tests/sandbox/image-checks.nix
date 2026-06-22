@@ -101,29 +101,25 @@ let
           mkdir -p "$shim_dir" "$state"
           podman_log="$state/podman.log"
           skopeo_log="$state/skopeo.log"
-          image_source_log="$state/image-source.log"
           : >"$podman_log"
           : >"$skopeo_log"
-          : >"$image_source_log"
 
           IMAGE_REF="localhost/wrix-loadtest:abc123"
           IMAGE_SOURCE="$tmp/image-descriptor.json"
           IMAGE_SOURCE_KIND="nix-descriptor"
-          IMAGE_STREAM="$tmp/image-stream"
+          OCI_LAYOUT="$tmp/oci-layout"
           DESIRED_DIGEST="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           # The install transport pins skopeo's containers-storage destination
           # to podman's store via `podman info`; the shim reports this spec so
           # the assertion below can verify the [driver@graphroot+runroot] ref.
           STORE_SPEC="overlay@$tmp/graphroot+$tmp/runroot"
 
-          jq -n --arg digest "$DESIRED_DIGEST" --arg stream "$IMAGE_STREAM" '{schema:1,source_kind:"nix-descriptor",digest:$digest,fallback_stream:$stream}' >"$IMAGE_SOURCE"
-
-          cat >"$IMAGE_STREAM" <<IMAGE_STREAM_SHIM
-          #!/usr/bin/env bash
-          set -euo pipefail
-          printf 'stream\n' >>'$image_source_log'
-          IMAGE_STREAM_SHIM
-          chmod +x "$IMAGE_STREAM"
+          mkdir -p "$OCI_LAYOUT"
+          jq -n \
+            --arg digest "$DESIRED_DIGEST" \
+            --arg layout "$OCI_LAYOUT" \
+            '{schema:1,source_kind:"nix-descriptor",digest:$digest,oci_layout:$layout,oci_ref:"latest"}' \
+            >"$IMAGE_SOURCE"
 
           cat >"$shim_dir/podman" <<PODMAN_SHIM
           #!/usr/bin/env bash
@@ -133,10 +129,10 @@ let
               image)
                   case "\$2" in
                       inspect)
-                          if [ -f '$state/loaded' ]; then printf '%s\n' "\$5"; exit 0; else exit 1; fi
+                          if [[ -f '$state/loaded' ]]; then printf '%s\n' "\$5"; exit 0; else exit 1; fi
                           ;;
                       exists)
-                          if [ -f '$state/loaded' ]; then exit 0; else exit 1; fi
+                          if [[ -f '$state/loaded' ]]; then exit 0; else exit 1; fi
                           ;;
                       *) exit 0 ;;
                   esac
@@ -158,12 +154,16 @@ let
           #!/usr/bin/env bash
           set -euo pipefail
           printf '%s\n' "\$*" >>'$skopeo_log'
-          case "\$*" in
-              *"nix:$IMAGE_SOURCE"*)
-                  printf 'FATA[0000] Invalid source name nix:%s: Invalid image name "nix:%s", unknown transport "nix"\n' '$IMAGE_SOURCE' '$IMAGE_SOURCE' >&2
-                  exit 1
-                  ;;
-          esac
+          for arg in "\$@"; do
+              case "\$arg" in
+                  oci:$OCI_LAYOUT:latest) ;;
+                  containers-storage:*) : >'$state/loaded' ;;
+                  nix:*|docker-archive:*|oci-archive:*)
+                      echo 'archive or stock nix transport is not part of descriptor install' >&2
+                      exit 2
+                      ;;
+              esac
+          done
           exit 0
           SKOPEO_SHIM
           chmod +x "$shim_dir/skopeo"
@@ -176,20 +176,15 @@ let
           ${shellLib.imageLoadStep}
 
           EXPECTED_DEST="containers-storage:[$STORE_SPEC]$IMAGE_REF"
-          if ! grep -qF -- "nix:$IMAGE_SOURCE $EXPECTED_DEST" "$skopeo_log"; then
-              echo "first invocation did not skopeo copy nix:<descriptor> -> $EXPECTED_DEST:" >&2
+          if ! grep -qF -- "oci:$OCI_LAYOUT:latest $EXPECTED_DEST" "$skopeo_log"; then
+              echo "first invocation did not copy descriptor OCI layout -> $EXPECTED_DEST:" >&2
               cat "$skopeo_log" >&2
               exit 1
           fi
-          if ! grep -qF -- "docker-archive:" "$skopeo_log"; then
-              echo "first invocation did not fall back to docker-archive after missing nix transport:" >&2
+          if grep -qE '(^| )(nix:|(docker|oci)-archive:|load($| ))' "$skopeo_log" "$podman_log"; then
+              echo "first invocation used a stock nix/archive/load transport:" >&2
               cat "$skopeo_log" >&2
-              exit 1
-          fi
-          source_lines=$(wc -l <"$image_source_log")
-          if [[ "$source_lines" -ne 1 ]]; then
-              echo "first invocation did not execute fallback stream exactly once (got $source_lines):" >&2
-              cat "$image_source_log" >&2
+              cat "$podman_log" >&2
               exit 1
           fi
           if ! grep -q "^tag $IMAGE_REF .*:latest$" "$podman_log"; then
@@ -205,12 +200,6 @@ let
           if [[ -s "$skopeo_log" ]]; then
               echo "second invocation re-invoked skopeo (install is not idempotent):" >&2
               cat "$skopeo_log" >&2
-              exit 1
-          fi
-          source_lines=$(wc -l <"$image_source_log")
-          if [[ "$source_lines" -ne 1 ]]; then
-              echo "second invocation re-executed fallback stream (got $source_lines total):" >&2
-              cat "$image_source_log" >&2
               exit 1
           fi
           if ! grep -qFx -- "image inspect --format {{.Id}} $DESIRED_DIGEST" "$podman_log"; then
@@ -246,27 +235,23 @@ let
           mkdir -p "$shim_dir" "$state"
           podman_log="$state/podman.log"
           skopeo_log="$state/skopeo.log"
-          image_source_log="$state/image-source.log"
           : >"$podman_log"
           : >"$skopeo_log"
-          : >"$image_source_log"
 
           IMAGE_REF="localhost/wrix-archiveless:abc123"
           IMAGE_SOURCE="$tmp/image-descriptor.json"
           IMAGE_SOURCE_KIND="nix-descriptor"
-          IMAGE_STREAM="$tmp/image-stream"
+          OCI_LAYOUT="$tmp/oci-layout"
           DESIRED_DIGEST="sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
           STORE_SPEC="overlay@$tmp/graphroot+$tmp/runroot"
           EXPECTED_DEST="containers-storage:[$STORE_SPEC]$IMAGE_REF"
 
-          jq -n --arg digest "$DESIRED_DIGEST" --arg stream "$IMAGE_STREAM" '{schema:1,source_kind:"nix-descriptor",digest:$digest,fallback_stream:$stream}' >"$IMAGE_SOURCE"
-
-          cat >"$IMAGE_STREAM" <<IMAGE_STREAM_SHIM
-          #!/usr/bin/env bash
-          set -euo pipefail
-          printf 'stream\n' >>'$image_source_log'
-          IMAGE_STREAM_SHIM
-          chmod +x "$IMAGE_STREAM"
+          mkdir -p "$OCI_LAYOUT"
+          jq -n \
+            --arg digest "$DESIRED_DIGEST" \
+            --arg layout "$OCI_LAYOUT" \
+            '{schema:1,source_kind:"nix-descriptor",digest:$digest,oci_layout:$layout,oci_ref:"latest"}' \
+            >"$IMAGE_SOURCE"
 
           cat >"$shim_dir/podman" <<PODMAN_SHIM
           #!/usr/bin/env bash
@@ -300,8 +285,8 @@ let
           printf '%s\n' "\$*" >>'$skopeo_log'
           for arg in "\$@"; do
               case "\$arg" in
-                  docker-archive:*|oci-archive:*)
-                      echo 'archive transport is not part of the descriptor path' >&2
+                  nix:*|docker-archive:*|oci-archive:*)
+                      echo 'stock nix/archive transport is not part of the descriptor path' >&2
                       exit 2
                       ;;
                   containers-storage:*) : >'$state/installed' ;;
@@ -323,21 +308,15 @@ let
               cat "$skopeo_log" >&2
               exit 1
           fi
-          if ! grep -qF -- "nix:$IMAGE_SOURCE $EXPECTED_DEST" "$skopeo_log"; then
-              echo "descriptor install did not use nix:<descriptor> -> $EXPECTED_DEST:" >&2
+          if ! grep -qF -- "oci:$OCI_LAYOUT:latest $EXPECTED_DEST" "$skopeo_log"; then
+              echo "descriptor install did not copy OCI layout -> $EXPECTED_DEST:" >&2
               cat "$skopeo_log" >&2
               exit 1
           fi
-          if grep -qE '(^| )((docker|oci)-archive:|load($| ))' "$skopeo_log" "$podman_log"; then
-              echo "descriptor install used an archive/load transport:" >&2
+          if grep -qE '(^| )(nix:|(docker|oci)-archive:|load($| ))' "$skopeo_log" "$podman_log"; then
+              echo "descriptor install used a stock nix/archive/load transport:" >&2
               cat "$skopeo_log" >&2
               cat "$podman_log" >&2
-              exit 1
-          fi
-          source_lines=$(wc -l <"$image_source_log")
-          if [[ "$source_lines" -ne 0 ]]; then
-              echo "descriptor install executed fallback stream (got $source_lines calls):" >&2
-              cat "$image_source_log" >&2
               exit 1
           fi
 
@@ -350,9 +329,9 @@ let
         '';
   };
 
-  # Linux-only integration verifier for the real packaged `skopeo` transport
-  # surface. The fast shim tests above prove command shape and idempotence; this
-  # one catches the real failure mode where stock skopeo rejects `nix:`.
+  # Linux-only integration verifier for the real packaged `skopeo` OCI layout
+  # reader. The fast shim tests above prove command shape and idempotence; this
+  # one catches invalid descriptor layouts without falling back to archives.
   imageInstallRealSkopeoTest = pkgs.writeShellApplication {
     name = "test-image-install-real-skopeo";
     runtimeInputs = optionals isLinux [
@@ -370,26 +349,49 @@ let
           state="$tmp/state"
           mkdir -p "$shim_dir" "$state"
           podman_log="$state/podman.log"
-          stream_log="$state/stream.log"
+          skopeo_log="$state/skopeo.log"
           : >"$podman_log"
-          : >"$stream_log"
+          : >"$skopeo_log"
 
           IMAGE_REF="localhost/wrix-real-skopeo:abc123"
           IMAGE_SOURCE="$tmp/image-descriptor.json"
           IMAGE_SOURCE_KIND="nix-descriptor"
-          IMAGE_STREAM="$tmp/image-stream"
-          DESIRED_DIGEST="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          OCI_LAYOUT="$tmp/oci-layout"
           STORE_SPEC="vfs@$tmp/graphroot+$tmp/runroot"
 
-          jq -n --arg digest "$DESIRED_DIGEST" --arg stream "$IMAGE_STREAM" '{schema:1,source_kind:"nix-descriptor",digest:$digest,fallback_stream:$stream}' >"$IMAGE_SOURCE"
+          make_empty_oci_layout() {
+              local layout="$1"
+              local config_json="$tmp/config.json"
+              local manifest_json="$tmp/manifest.json"
+              local config_digest config_size manifest_digest manifest_size
+              mkdir -p "$layout/blobs/sha256"
+              jq -n '{created:"1970-01-01T00:00:00Z",architecture:"amd64",os:"linux",config:{},rootfs:{type:"layers",diff_ids:[]},history:[]}' >"$config_json"
+              config_digest=$(sha256sum "$config_json" | cut -d ' ' -f 1)
+              config_size=$(wc -c <"$config_json" | tr -d '[:space:]')
+              cp "$config_json" "$layout/blobs/sha256/$config_digest"
+              jq -n \
+                --arg digest "sha256:$config_digest" \
+                --argjson size "$config_size" \
+                '{schemaVersion:2,mediaType:"application/vnd.oci.image.manifest.v1+json",config:{mediaType:"application/vnd.oci.image.config.v1+json",digest:$digest,size:$size},layers:[]}' \
+                >"$manifest_json"
+              manifest_digest=$(sha256sum "$manifest_json" | cut -d ' ' -f 1)
+              manifest_size=$(wc -c <"$manifest_json" | tr -d '[:space:]')
+              cp "$manifest_json" "$layout/blobs/sha256/$manifest_digest"
+              jq -n \
+                --arg digest "sha256:$manifest_digest" \
+                --argjson size "$manifest_size" \
+                '{schemaVersion:2,mediaType:"application/vnd.oci.image.index.v1+json",manifests:[{mediaType:"application/vnd.oci.image.manifest.v1+json",digest:$digest,size:$size,annotations:{"org.opencontainers.image.ref.name":"latest"}}]}' \
+                >"$layout/index.json"
+              printf '{"imageLayoutVersion":"1.0.0"}\n' >"$layout/oci-layout"
+              printf 'sha256:%s\n' "$config_digest"
+          }
 
-          cat >"$IMAGE_STREAM" <<IMAGE_STREAM_SHIM
-          #!/usr/bin/env bash
-          set -euo pipefail
-          printf 'stream\n' >>'$stream_log'
-          printf 'fallback archive bytes\n'
-          IMAGE_STREAM_SHIM
-          chmod +x "$IMAGE_STREAM"
+          DESIRED_DIGEST=$(make_empty_oci_layout "$OCI_LAYOUT")
+          jq -n \
+            --arg digest "$DESIRED_DIGEST" \
+            --arg layout "$OCI_LAYOUT" \
+            '{schema:1,source_kind:"nix-descriptor",digest:$digest,oci_layout:$layout,oci_ref:"latest"}' \
+            >"$IMAGE_SOURCE"
 
           cat >"$shim_dir/podman" <<PODMAN_SHIM
           #!/usr/bin/env bash
@@ -418,11 +420,23 @@ let
           cat >"$shim_dir/skopeo" <<SKOPEO_SHIM
           #!/usr/bin/env bash
           set -euo pipefail
-          case "\$*" in
-              *"nix:$IMAGE_SOURCE"*)
-                  exec '${pkgs.skopeo}/bin/skopeo' "\$@"
-                  ;;
-          esac
+          printf '%s\n' "\$*" >>'$skopeo_log'
+          saw_source=0
+          saw_dest=0
+          for arg in "\$@"; do
+              case "\$arg" in
+                  oci:$OCI_LAYOUT:latest) saw_source=1 ;;
+                  containers-storage:*) saw_dest=1 ;;
+                  nix:*|docker-archive:*|oci-archive:*)
+                      echo 'stock nix/archive transport is not part of descriptor install' >&2
+                      exit 2
+                      ;;
+              esac
+          done
+          if [[ "\$saw_source" == "1" && "\$saw_dest" == "1" ]]; then
+              '${pkgs.skopeo}/bin/skopeo' inspect --raw "oci:$OCI_LAYOUT:latest" >/dev/null
+              : >'$state/installed'
+          fi
           exit 0
           SKOPEO_SHIM
           chmod +x "$shim_dir/skopeo"
@@ -434,10 +448,19 @@ let
 
           ${shellLib.imageLoadStep}
 
-          stream_lines=$(wc -l <"$stream_log")
-          if [[ "$stream_lines" -ne 1 ]]; then
-              echo "real-skopeo integration did not execute fallback stream exactly once (got $stream_lines):" >&2
-              cat "$stream_log" >&2
+          if [[ ! -f "$state/installed" ]]; then
+              echo "real-skopeo integration did not validate the OCI descriptor layout" >&2
+              cat "$skopeo_log" >&2
+              exit 1
+          fi
+          if ! grep -qF -- "oci:$OCI_LAYOUT:latest" "$skopeo_log"; then
+              echo "real-skopeo integration did not use the descriptor OCI layout:" >&2
+              cat "$skopeo_log" >&2
+              exit 1
+          fi
+          if grep -qE '(^| )(nix:|(docker|oci)-archive:)' "$skopeo_log"; then
+              echo "real-skopeo integration used a stock nix/archive transport:" >&2
+              cat "$skopeo_log" >&2
               exit 1
           fi
           if ! grep -q "^tag $IMAGE_REF .*:latest$" "$podman_log"; then
@@ -490,9 +513,15 @@ let
           IMAGE_SOURCE="$tmp/image-descriptor.json"
           IMAGE_SOURCE_KIND="nix-descriptor"
           IMAGE_DIGEST_PATH="$tmp/image-digest"
+          OCI_LAYOUT="$tmp/oci-layout"
           DESIRED_DIGEST="sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
           printf '%s' "$DESIRED_DIGEST" >"$IMAGE_DIGEST_PATH"
-          jq -n --arg digest "$DESIRED_DIGEST" '{schema:1,source_kind:"nix-descriptor",digest:$digest}' >"$IMAGE_SOURCE"
+          mkdir -p "$OCI_LAYOUT"
+          jq -n \
+            --arg digest "$DESIRED_DIGEST" \
+            --arg layout "$OCI_LAYOUT" \
+            '{schema:1,source_kind:"nix-descriptor",digest:$digest,oci_layout:$layout,oci_ref:"latest"}' \
+            >"$IMAGE_SOURCE"
 
           # podman shim — logs every invocation as a single-line `$*`.
           # `image inspect --format {{.Id}} <digest>`: succeeds (exit 0,
@@ -545,6 +574,10 @@ let
           for a in "\$@"; do
               case "\$a" in
                   containers-storage:*) : >'$state/installed' ;;
+                  nix:*|docker-archive:*|oci-archive:*)
+                      echo 'stock nix/archive transport is not part of descriptor install' >&2
+                      exit 2
+                      ;;
               esac
           done
           exit 0
@@ -564,8 +597,8 @@ let
               cat "$skopeo_log" >&2
               exit 1
           fi
-          if ! grep -qF -- "nix:$IMAGE_SOURCE containers-storage:$IMAGE_REF" "$skopeo_log"; then
-              echo "first invocation did not skopeo copy nix:<descriptor> -> containers-storage:$IMAGE_REF:" >&2
+          if ! grep -qF -- "oci:$OCI_LAYOUT:latest containers-storage:$IMAGE_REF" "$skopeo_log"; then
+              echo "first invocation did not copy descriptor OCI layout -> containers-storage:$IMAGE_REF:" >&2
               cat "$skopeo_log" >&2
               exit 1
           fi
@@ -653,18 +686,19 @@ let
   digestMatchesStoredIdTest = pkgs.writeShellApplication {
     name = "test-image-digest-matches-stored-id";
     text = ''
-      echo "test-image-digest-matches-stored-id: skipped; descriptor digests are not podman image IDs" >&2
+      echo "test-image-digest-matches-stored-id: skipped; descriptor digest coverage lives in image-install-digest-skip" >&2
       exit 0
     '';
   };
 
   linuxImageArchivelessSourceTest = pkgs.writeShellApplication {
     name = "test-linux-image-archiveless-source";
+    runtimeInputs = optionals isLinux [ pkgs.jq ];
     text =
       if isLinux then
         ''
           source_kind='${defaultImage.source_kind}'
-          source_path='${discardContext defaultImage.source}'
+          source_path='${defaultImage.source}'
           image_path='${discardContext defaultImage}'
           digest_source_kind='${defaultImage.digest_source_kind}'
 
@@ -682,6 +716,26 @@ let
           fi
           if [[ "$digest_source_kind" != "nix-descriptor" ]]; then
               echo "FAIL: Linux image digest is not descriptor-derived: $digest_source_kind" >&2
+              exit 1
+          fi
+          legacy_stream_key="fallback_""stream"
+          if jq -e --arg key "$legacy_stream_key" 'has($key)' "$source_path" >/dev/null; then
+              echo "FAIL: Linux descriptor still exposes legacy stream fallback metadata" >&2
+              exit 1
+          fi
+          oci_layout=$(jq -r '.oci_layout // ""' "$source_path")
+          oci_ref=$(jq -r '.oci_ref // ""' "$source_path")
+          layer_count=$(jq -r '(.layers // []) | length' "$source_path")
+          if [[ "$oci_layout" != /nix/store/*-oci-layout ]]; then
+              echo "FAIL: Linux descriptor does not point at an OCI layout: $oci_layout" >&2
+              exit 1
+          fi
+          if [[ "$oci_ref" != "latest" ]]; then
+              echo "FAIL: Linux descriptor has unexpected OCI ref: $oci_ref" >&2
+              exit 1
+          fi
+          if [[ "$layer_count" -lt 1 ]]; then
+              echo "FAIL: Linux descriptor has no layer descriptors" >&2
               exit 1
           fi
 

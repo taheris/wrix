@@ -354,6 +354,45 @@ let
 
   sourceKind = if asTarball then "docker-archive" else "nix-descriptor";
 
+  ociLayout =
+    pkgs.runCommandLocal "${imageName}-oci-layout"
+      {
+        nativeBuildInputs = [
+          pkgs.jq
+          pkgs.skopeo
+        ];
+      }
+      ''
+        set -euo pipefail
+        export HOME=$TMPDIR
+
+        mkdir -p "$out"
+        image_tar="$TMPDIR/image.tar"
+        "${rawImage}" > "$image_tar"
+        skopeo --insecure-policy copy --quiet \
+          "docker-archive:$image_tar" "oci:$out:latest"
+        mkdir -p "$out/wrix"
+        manifest_json="$out/wrix/manifest.json"
+        skopeo inspect --raw "oci:$out:latest" > "$manifest_json"
+        config_digest=$(jq -er '.config.digest | select(test("^sha256:[0-9a-f]{64}$"))' "$manifest_json")
+        printf '%s\n' "$config_digest" > "$out/wrix/config-digest"
+        config_blob="$out/blobs/sha256/''${config_digest#sha256:}"
+        jq -n \
+          --slurpfile manifest "$manifest_json" \
+          --slurpfile config "$config_blob" \
+          '($manifest[0].layers // []) as $layers
+           | ($config[0].rootfs.diff_ids // []) as $diffIds
+           | {
+               media_type: ($manifest[0].mediaType // ""),
+               config: $manifest[0].config,
+               layers: [
+                 range(0; ($layers | length)) as $i
+                 | $layers[$i] + { diff_id: ($diffIds[$i] // "") }
+               ]
+             }' \
+          > "$out/wrix/descriptor-manifest.json"
+      '';
+
   descriptorMetadata = {
     schema = 1;
     source_kind = "nix-descriptor";
@@ -363,6 +402,8 @@ let
     };
     profile = profile.name;
     inherit agent;
+    oci_layout = "${ociLayout}";
+    oci_ref = "latest";
     materialized_roots = map toString (leafContents ++ agentImage.lowerTiersContents);
     lower_tiers_closure = "${agentImage.lowerTiersClosure}/store-paths";
     layering_pipeline = "${layeringPipeline}";
@@ -373,23 +414,34 @@ let
       entrypoint = [ "/entrypoint.sh" ];
     };
   };
-  descriptorDigest = "sha256:${builtins.hashString "sha256" (builtins.unsafeDiscardStringContext (builtins.toJSON descriptorMetadata))}";
-  nixDescriptorSource = pkgs.writeText "${imageName}-nix-descriptor.json" (
-    builtins.toJSON (
-      descriptorMetadata
-      // {
-        digest = descriptorDigest;
-        fallback_stream = "${rawImage}";
-      }
-    )
+  descriptorMetadataFile = pkgs.writeText "${imageName}-descriptor-metadata.json" (
+    builtins.toJSON descriptorMetadata
   );
-  descriptorDigestFile = pkgs.writeText "${imageName}-descriptor-digest" descriptorDigest;
+  descriptorDigestFile = "${ociLayout}/wrix/config-digest";
+  nixDescriptorSource =
+    pkgs.runCommandLocal "${imageName}-nix-descriptor.json"
+      {
+        nativeBuildInputs = [ pkgs.jq ];
+      }
+      ''
+        set -euo pipefail
+        digest=$(cat ${descriptorDigestFile})
+        jq \
+          --arg digest "$digest" \
+          --slurpfile ociManifest "${ociLayout}/wrix/descriptor-manifest.json" \
+          '. + {
+            digest: $digest,
+            oci_manifest: $ociManifest[0],
+            layers: ($ociManifest[0].layers // [])
+          }' \
+          ${descriptorMetadataFile} > "$out"
+      '';
   imageSource = if asTarball then rawImage else nixDescriptorSource;
 
   # Darwin's tar-loadable fallback keeps using the post-conversion OCI config
-  # digest that Apple's container store reports. Linux descriptor images use a
-  # descriptor-metadata digest above, so building the digest never materializes
-  # or converts the whole image archive.
+  # digest that Apple's container store reports. Linux descriptor images use the
+  # descriptor layout's OCI config digest without installing from a whole-image
+  # archive.
   digestFile =
     if asTarball then
       hostPkgs.runCommandLocal "${imageName}-digest"
