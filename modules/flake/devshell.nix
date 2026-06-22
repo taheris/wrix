@@ -5,21 +5,11 @@ _:
     {
       config,
       pkgs,
-      system,
       wrix,
       ...
     }:
     let
-      isDarwin = builtins.elem system [
-        "aarch64-darwin"
-        "x86_64-darwin"
-      ];
-      serviceImageTag = builtins.substring 0 8 (
-        builtins.hashString "sha256" (
-          builtins.unsafeDiscardStringContext (toString config.packages.wrix-service-image)
-        )
-      );
-      serviceImagePrefix = if isDarwin then "" else "localhost/";
+      serviceImage = config.packages.wrix-service-image;
     in
     {
       devShells.default = wrix.mkDevShell {
@@ -28,8 +18,10 @@ _:
         env = {
           LOOM_PROFILES_MANIFEST = "${config.packages.profile-images-pi}";
           WRIX_AGENT = "pi";
-          WRIX_SERVICE_IMAGE = "${serviceImagePrefix}wrix-service:${serviceImageTag}";
-          WRIX_SERVICE_IMAGE_SOURCE = "${config.packages.wrix-service-image}";
+          WRIX_SERVICE_IMAGE = serviceImage.ref;
+          WRIX_SERVICE_IMAGE_SOURCE = "${serviceImage.source}";
+          WRIX_SERVICE_IMAGE_SOURCE_KIND = serviceImage.source_kind;
+          WRIX_SERVICE_IMAGE_DIGEST = "${serviceImage.digest}";
         };
 
         packages = [

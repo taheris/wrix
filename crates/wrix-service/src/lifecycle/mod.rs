@@ -398,7 +398,7 @@ impl Status {
 pub fn start(cache_mode: CacheMode) -> io::Result<Status> {
     let plan = Plan::for_current_dir(cache_mode)?;
     plan.ensure_layout()?;
-    let runtime = Runtime::from_env();
+    let runtime = Runtime::from_env()?;
     if plan.has_services() {
         runtime.ensure_running(&plan)?;
     }
@@ -407,7 +407,7 @@ pub fn start(cache_mode: CacheMode) -> io::Result<Status> {
 
 pub fn stop(cache_mode: CacheMode) -> io::Result<Status> {
     let plan = Plan::for_current_dir(cache_mode)?;
-    let runtime = Runtime::from_env();
+    let runtime = Runtime::from_env()?;
     runtime.remove(&plan.container_name())?;
     status_for_plan(plan)
 }
@@ -419,7 +419,7 @@ pub fn status(cache_mode: CacheMode) -> io::Result<Status> {
 
 pub fn logs(cache_mode: CacheMode) -> io::Result<Vec<u8>> {
     let plan = Plan::for_current_dir(cache_mode)?;
-    Runtime::from_env().logs(&plan.container_name())
+    Runtime::from_env()?.logs(&plan.container_name())
 }
 
 pub fn endpoints(cache_mode: CacheMode) -> io::Result<String> {
@@ -433,7 +433,7 @@ pub fn endpoints(cache_mode: CacheMode) -> io::Result<String> {
 }
 
 fn status_for_plan(plan: Plan) -> io::Result<Status> {
-    let runtime = Runtime::from_env().status(&plan.container_name())?;
+    let runtime = Runtime::from_env()?.status(&plan.container_name())?;
     Ok(Status { runtime, plan })
 }
 
@@ -456,20 +456,137 @@ impl PortLease {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeKind {
+    Podman,
+    Container,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ImageSourceKind {
+    NixDescriptor,
+    DockerArchive,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ImageSource {
+    path: PathBuf,
+    kind: ImageSourceKind,
+    digest: Option<String>,
+}
+
 struct Runtime {
     binary: String,
+    kind: RuntimeKind,
     image: String,
-    image_source: Option<PathBuf>,
+    image_source: Option<ImageSource>,
+}
+
+impl RuntimeKind {
+    fn for_binary(binary: &str) -> Self {
+        let name = Path::new(binary)
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or(binary);
+        if name == "container" {
+            Self::Container
+        } else {
+            Self::Podman
+        }
+    }
+}
+
+impl ImageSourceKind {
+    fn parse(input: &str) -> io::Result<Self> {
+        match input {
+            "nix-descriptor" => Ok(Self::NixDescriptor),
+            "docker-archive" => Ok(Self::DockerArchive),
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("unknown service image source_kind: {other}"),
+            )),
+        }
+    }
+
+    const fn skopeo_source(self) -> &'static str {
+        match self {
+            Self::NixDescriptor => "nix",
+            Self::DockerArchive => "docker-archive",
+        }
+    }
+}
+
+impl ImageSource {
+    fn from_env(path: PathBuf) -> io::Result<Self> {
+        let kind = match env::var("WRIX_SERVICE_IMAGE_SOURCE_KIND") {
+            Ok(value) => ImageSourceKind::parse(&value)?,
+            Err(env::VarError::NotPresent) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "WRIX_SERVICE_IMAGE_SOURCE_KIND is required when WRIX_SERVICE_IMAGE_SOURCE is set",
+                ));
+            }
+            Err(env::VarError::NotUnicode(_)) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "WRIX_SERVICE_IMAGE_SOURCE_KIND must be valid Unicode",
+                ));
+            }
+        };
+        let digest = match env::var("WRIX_SERVICE_IMAGE_DIGEST") {
+            Ok(value) if value.is_empty() => None,
+            Ok(value) => Some(value),
+            Err(env::VarError::NotPresent) => None,
+            Err(env::VarError::NotUnicode(_)) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "WRIX_SERVICE_IMAGE_DIGEST must be valid Unicode",
+                ));
+            }
+        };
+        Ok(Self { path, kind, digest })
+    }
+
+    fn desired_digest(&self) -> io::Result<Option<String>> {
+        let Some(value) = &self.digest else {
+            return Ok(None);
+        };
+        if value.starts_with("sha256:") {
+            return Ok(Some(value.clone()));
+        }
+        let path = Path::new(value);
+        if !path.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "service image digest path does not exist: {}",
+                    path.display()
+                ),
+            ));
+        }
+        let digest = fs::read_to_string(path)?.trim().to_owned();
+        if digest.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(digest))
+        }
+    }
 }
 
 impl Runtime {
-    fn from_env() -> Self {
-        Self {
-            binary: env::var("WRIX_CONTAINER_RUNTIME").unwrap_or_else(|_| default_runtime()),
+    fn from_env() -> io::Result<Self> {
+        let binary = env::var("WRIX_CONTAINER_RUNTIME").unwrap_or_else(|_| default_runtime());
+        let image_source = env::var_os("WRIX_SERVICE_IMAGE_SOURCE")
+            .map(PathBuf::from)
+            .map(ImageSource::from_env)
+            .transpose()?;
+        Ok(Self {
+            kind: RuntimeKind::for_binary(&binary),
+            binary,
             image: env::var("WRIX_SERVICE_IMAGE")
                 .unwrap_or_else(|_| String::from("localhost/wrix-service:latest")),
-            image_source: env::var_os("WRIX_SERVICE_IMAGE_SOURCE").map(PathBuf::from),
-        }
+            image_source,
+        })
     }
 
     fn ensure_running(&self, plan: &Plan) -> io::Result<()> {
@@ -552,69 +669,185 @@ impl Runtime {
         let Some(source) = &self.image_source else {
             return Ok(());
         };
-        if self.image_exists()? {
+        if self.image_cached(source)? {
             return Ok(());
         }
-        self.load_image(source)
-    }
-
-    fn image_exists(&self) -> io::Result<bool> {
-        let status = if self.binary == "container" {
-            Command::new(&self.binary)
-                .arg("image")
-                .arg("inspect")
-                .arg(&self.image)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()?
-        } else {
-            Command::new(&self.binary)
-                .arg("image")
-                .arg("exists")
-                .arg(&self.image)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()?
-        };
-        Ok(status.success())
-    }
-
-    fn load_image(&self, source: &Path) -> io::Result<()> {
-        let status = if self.binary == "container" {
-            Command::new(&self.binary)
-                .arg("image")
-                .arg("load")
-                .arg("--input")
-                .arg(source)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()?
-        } else {
-            Command::new(&self.binary)
-                .arg("load")
-                .arg("--input")
-                .arg(source)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()?
-        };
-        if !status.success() {
-            Err(io::Error::other(format!(
-                "failed to load service image from {}",
-                source.display()
-            )))
-        } else if self.image_exists()? || self.tag_loaded_image()? {
+        self.install_image(source)?;
+        if self.image_exists()? || self.tag_loaded_image()? {
             Ok(())
         } else {
             Err(io::Error::other(format!(
-                "loaded service image from {}, but image {} is unavailable",
-                source.display(),
+                "installed service image from {}, but image {} is unavailable",
+                source.path.display(),
                 self.image
             )))
+        }
+    }
+
+    fn image_cached(&self, source: &ImageSource) -> io::Result<bool> {
+        if let Some(digest) = source.desired_digest()?
+            && self.image_digest_exists(&digest)?
+            && (self.tag_image(&digest, &self.image)? || self.image_exists()?)
+        {
+            return Ok(true);
+        }
+        self.image_exists()
+    }
+
+    fn image_digest_exists(&self, digest: &str) -> io::Result<bool> {
+        if self.kind == RuntimeKind::Container {
+            return Ok(false);
+        }
+        let status = Command::new(&self.binary)
+            .arg("image")
+            .arg("inspect")
+            .arg("--format")
+            .arg("{{.Id}}")
+            .arg(digest)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+        Ok(status.success())
+    }
+
+    fn image_exists(&self) -> io::Result<bool> {
+        let mut command = Command::new(&self.binary);
+        command.arg("image");
+        match self.kind {
+            RuntimeKind::Container => {
+                command.arg("inspect");
+            }
+            RuntimeKind::Podman => {
+                command.arg("exists");
+            }
+        }
+        let status = command
+            .arg(&self.image)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+        Ok(status.success())
+    }
+
+    fn install_image(&self, source: &ImageSource) -> io::Result<()> {
+        match self.kind {
+            RuntimeKind::Container => self.load_container_image(source),
+            RuntimeKind::Podman => self.copy_podman_image(source),
+        }
+    }
+
+    fn load_container_image(&self, source: &ImageSource) -> io::Result<()> {
+        if source.kind != ImageSourceKind::DockerArchive {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "container runtime requires service image source_kind=docker-archive",
+            ));
+        }
+        let output = Command::new(&self.binary)
+            .arg("image")
+            .arg("load")
+            .arg("--input")
+            .arg(&source.path)
+            .stdin(Stdio::null())
+            .output()?;
+        if !output.status.success() {
+            return Err(io::Error::other(format!(
+                "failed to load service image from {}: {}",
+                source.path.display(),
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+        if let Some(loaded_ref) = loaded_container_ref(&output.stdout, &output.stderr)
+            && !self.tag_image(&loaded_ref, &self.image)?
+        {
+            return Err(io::Error::other(format!(
+                "failed to tag loaded service image {loaded_ref} as {}",
+                self.image
+            )));
+        }
+        Ok(())
+    }
+
+    fn copy_podman_image(&self, source: &ImageSource) -> io::Result<()> {
+        let store_ref = self.container_storage_ref()?;
+        let source_ref = format!("{}:{}", source.kind.skopeo_source(), source.path.display());
+        match skopeo_copy(&source_ref, &store_ref)? {
+            Ok(()) => self.tag_latest(),
+            Err(error)
+                if source.kind == ImageSourceKind::NixDescriptor
+                    && error.contains("unknown transport")
+                    && error.contains("nix") =>
+            {
+                Self::copy_descriptor_fallback(source, &store_ref, &error)?;
+                self.tag_latest()
+            }
+            Err(error) => Err(io::Error::other(error)),
+        }
+    }
+
+    fn copy_descriptor_fallback(
+        source: &ImageSource,
+        store_ref: &str,
+        skopeo_error: &str,
+    ) -> io::Result<()> {
+        let descriptor = fs::read_to_string(&source.path)?;
+        let Some(stream) = json_string_field(&descriptor, "fallback_stream") else {
+            return Err(io::Error::other(format!(
+                "{skopeo_error}\nError: nix-descriptor source is not supported by this skopeo and has no fallback_stream: {}",
+                source.path.display()
+            )));
+        };
+        let temp_dir = create_temp_dir("wrix-service-image")?;
+        let result = Self::copy_descriptor_fallback_in_temp(&stream, store_ref, &temp_dir);
+        match (result, fs::remove_dir_all(&temp_dir)) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Ok(()), Err(error)) | (Err(error), _) => Err(error),
+        }
+    }
+
+    fn copy_descriptor_fallback_in_temp(
+        stream: &str,
+        store_ref: &str,
+        temp_dir: &Path,
+    ) -> io::Result<()> {
+        let image_tar = temp_dir.join("image.tar");
+        let output = fs::File::create(&image_tar)?;
+        let status = Command::new(stream)
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(output))
+            .stderr(Stdio::inherit())
+            .status()?;
+        if !status.success() {
+            return Err(io::Error::other(format!(
+                "failed to stream service image fallback from {stream}"
+            )));
+        }
+        let source_ref = format!("docker-archive:{}", image_tar.display());
+        match skopeo_copy(&source_ref, store_ref)? {
+            Ok(()) => Ok(()),
+            Err(error) => Err(io::Error::other(error)),
+        }
+    }
+
+    fn container_storage_ref(&self) -> io::Result<String> {
+        let default = format!("containers-storage:{}", self.image);
+        let output = Command::new(&self.binary)
+            .arg("info")
+            .arg("--format")
+            .arg("{{.Store.GraphDriverName}}@{{.Store.GraphRoot}}+{{.Store.RunRoot}}")
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()?;
+        if !output.status.success() {
+            return Ok(default);
+        }
+        let spec = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        if spec.contains('@') && spec.contains('+') {
+            Ok(format!("containers-storage:[{spec}]{}", self.image))
+        } else {
+            Ok(default)
         }
     }
 
@@ -623,19 +856,46 @@ impl Runtime {
             if source == self.image {
                 continue;
             }
-            let status = Command::new(&self.binary)
-                .arg("tag")
-                .arg(source)
-                .arg(&self.image)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()?;
-            if status.success() && self.image_exists()? {
+            if self.tag_image(source, &self.image)? && self.image_exists()? {
                 return Ok(true);
             }
         }
         Ok(false)
+    }
+
+    fn tag_latest(&self) -> io::Result<()> {
+        let Some(repo) = self.image.rsplit_once(':').map(|(repo, _tag)| repo) else {
+            return Ok(());
+        };
+        let latest = format!("{repo}:latest");
+        if self.tag_image(&self.image, &latest)? {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!(
+                "failed to tag service image {} as {latest}",
+                self.image
+            )))
+        }
+    }
+
+    fn tag_image(&self, source: &str, target: &str) -> io::Result<bool> {
+        let mut command = Command::new(&self.binary);
+        match self.kind {
+            RuntimeKind::Container => {
+                command.arg("image").arg("tag");
+            }
+            RuntimeKind::Podman => {
+                command.arg("tag");
+            }
+        }
+        let status = command
+            .arg(source)
+            .arg(target)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+        Ok(status.success())
     }
 
     fn remove(&self, name: &ContainerName) -> io::Result<()> {
@@ -705,6 +965,103 @@ impl Runtime {
             Ok(RuntimeStatus::Stopped)
         }
     }
+}
+
+fn skopeo_copy(source_ref: &str, store_ref: &str) -> io::Result<Result<(), String>> {
+    let output = Command::new("skopeo")
+        .arg("--insecure-policy")
+        .arg("copy")
+        .arg("--quiet")
+        .arg(source_ref)
+        .arg(store_ref)
+        .stdin(Stdio::null())
+        .output()?;
+    if output.status.success() {
+        Ok(Ok(()))
+    } else {
+        Ok(Err(format!(
+            "skopeo copy failed with status {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        )))
+    }
+}
+
+fn create_temp_dir(prefix: &str) -> io::Result<PathBuf> {
+    for attempt in 0..100 {
+        let path = env::temp_dir().join(format!("{prefix}-{}-{attempt}", std::process::id()));
+        match fs::create_dir(&path) {
+            Ok(()) => return Ok(path),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        format!("could not create a unique {prefix} temp directory"),
+    ))
+}
+
+fn json_string_field(input: &str, name: &str) -> Option<String> {
+    let marker = format!("\"{name}\"");
+    let start = input.find(&marker)?;
+    let after_name = &input[start + marker.len()..];
+    let after_colon = &after_name[after_name.find(':')? + 1..];
+    let value_start = after_colon.find(|ch: char| !ch.is_whitespace())?;
+    parse_json_string(&after_colon[value_start..])
+}
+
+fn parse_json_string(input: &str) -> Option<String> {
+    if !input.starts_with('"') {
+        return None;
+    }
+    let mut output = String::new();
+    let mut escaped = false;
+    for ch in input[1..].chars() {
+        if escaped {
+            match ch {
+                '"' => output.push('"'),
+                '\\' => output.push('\\'),
+                '/' => output.push('/'),
+                'b' => output.push('\u{0008}'),
+                'f' => output.push('\u{000c}'),
+                'n' => output.push('\n'),
+                'r' => output.push('\r'),
+                't' => output.push('\t'),
+                _ => return None,
+            }
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else if ch == '"' {
+            return Some(output);
+        } else {
+            output.push(ch);
+        }
+    }
+    None
+}
+
+fn loaded_container_ref(stdout: &[u8], stderr: &[u8]) -> Option<String> {
+    let text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(stdout),
+        String::from_utf8_lossy(stderr)
+    );
+    for token in text.split_whitespace() {
+        let token = token.trim_matches(|ch| matches!(ch, '"' | '\'' | ',' | ';'));
+        let Some(rest) = token.strip_prefix("untagged@sha256:") else {
+            continue;
+        };
+        let digest = rest
+            .chars()
+            .take_while(char::is_ascii_hexdigit)
+            .collect::<String>();
+        if !digest.is_empty() {
+            return Some(format!("untagged@sha256:{digest}"));
+        }
+    }
+    None
 }
 
 fn default_runtime() -> String {
@@ -914,7 +1271,10 @@ fn push_unicode_escape(output: &mut String, value: char) {
 
 #[cfg(test)]
 mod test {
-    use super::{Plan, read_endpoint_port};
+    use super::{
+        ImageSourceKind, Plan, RuntimeKind, json_string_field, loaded_container_ref,
+        read_endpoint_port,
+    };
     use wrix_core::path::Workspace;
 
     #[test]
@@ -922,6 +1282,47 @@ mod test {
         let content = r#"{"endpoints":{"cache_http":{"host":"127.0.0.1","port":21042},"dolt_tcp":{"host":"127.0.0.1","port":23042}}}"#;
         assert_eq!(read_endpoint_port(content, "cache_http"), Some(21_042));
         assert_eq!(read_endpoint_port(content, "dolt_tcp"), Some(23_042));
+    }
+
+    #[test]
+    fn service_image_source_kind_parser_accepts_contract_values() {
+        assert_eq!(
+            ImageSourceKind::parse("nix-descriptor").unwrap(),
+            ImageSourceKind::NixDescriptor
+        );
+        assert_eq!(
+            ImageSourceKind::parse("docker-archive").unwrap(),
+            ImageSourceKind::DockerArchive
+        );
+        assert!(ImageSourceKind::parse("tarball").is_err());
+    }
+
+    #[test]
+    fn runtime_kind_parser_accepts_container_path() {
+        assert_eq!(RuntimeKind::for_binary("container"), RuntimeKind::Container);
+        assert_eq!(
+            RuntimeKind::for_binary("/nix/store/example/bin/container"),
+            RuntimeKind::Container
+        );
+        assert_eq!(RuntimeKind::for_binary("podman"), RuntimeKind::Podman);
+    }
+
+    #[test]
+    fn json_string_field_reads_descriptor_fallback_stream() {
+        let content = r#"{"schema":1,"fallback_stream":"/nix/store/fake-stream"}"#;
+        assert_eq!(
+            json_string_field(content, "fallback_stream"),
+            Some(String::from("/nix/store/fake-stream"))
+        );
+    }
+
+    #[test]
+    fn loaded_container_ref_extracts_apple_load_ref() {
+        let output = b"loading\nLoaded: untagged@sha256:abcdef0123456789, done\n";
+        assert_eq!(
+            loaded_container_ref(output, b""),
+            Some(String::from("untagged@sha256:abcdef0123456789"))
+        );
     }
 
     #[test]

@@ -16,7 +16,9 @@ let
   inherit (lib)
     concatStringsSep
     elem
+    hasAttr
     mapAttrsToList
+    optionalString
     optionals
     subtractLists
     ;
@@ -42,6 +44,20 @@ let
   };
   defaultImage = (sandboxLib.mkSandbox { profile = sandboxLib.profiles.base; }).image;
   builderImage = import ../../lib/sandbox/builder/image.nix { pkgs = linuxPkgs; };
+  serviceProfiles = import ../../lib/sandbox/profiles.nix {
+    pkgs = linuxPkgs;
+    hostPkgs = linuxPkgs;
+    inherit crane fenix treefmt;
+  };
+  serviceRust = import ../../lib/services/rust.nix {
+    pkgs = linuxPkgs;
+    rustProfile = serviceProfiles.rust;
+  };
+  serviceImage = import ../../lib/services/image.nix {
+    pkgs = linuxPkgs;
+    inherit (serviceRust) cacheServe;
+    asTarball = !isLinux;
+  };
   expectedImageSourceKind = if isLinux then "nix-descriptor" else "docker-archive";
 
   claudeImage =
@@ -748,6 +764,7 @@ let
         agent = "pi";
       }).image;
     base-claude = claudeImage;
+    wrix-service = serviceImage;
   };
   sourceKindChecks = concatStringsSep "\n" (
     mapAttrsToList (name: image: ''
@@ -809,6 +826,10 @@ let
       profile = "base";
       agent = "claude";
     };
+    wrix-service = {
+      image = serviceImage;
+      kind = "service";
+    };
     wrix-builder = {
       image = builderImage;
       kind = "builder";
@@ -843,7 +864,11 @@ let
         ''
           check_descriptor_label "${name}" "${source}" "wrix.managed" "${labels."wrix.managed"}"
           check_descriptor_label "${name}" "${source}" "wrix.image.kind" "${labels."wrix.image.kind"}"
+        ''
+        + optionalString (hasAttr "wrix.profile.name" labels) ''
           check_descriptor_label "${name}" "${source}" "wrix.profile.name" "${labels."wrix.profile.name"}"
+        ''
+        + optionalString (hasAttr "wrix.agent.kind" labels) ''
           check_descriptor_label "${name}" "${source}" "wrix.agent.kind" "${labels."wrix.agent.kind"}"
         ''
       ) sourceKindMatrix

@@ -56,8 +56,41 @@ image_file() {
   printf '%s/%s.image\n' "$STATE_DIR" "$name"
 }
 
+image_exists() {
+  local name="$1"
+  [[ -f "$(image_file "$name")" ]]
+}
+
+write_image() {
+  local name="$1"
+  local detail="$2"
+  printf '%s\n' "$detail" >"$(image_file "$name")"
+}
+
 log_call() {
   printf '%s\n' "$*" >>"$STATE_DIR/calls"
+}
+
+last_arg() {
+  local value=""
+  local arg
+  for arg in "$@"; do
+    value="$arg"
+  done
+  printf '%s\n' "$value"
+}
+
+input_arg() {
+  local previous=""
+  local arg
+  for arg in "$@"; do
+    if [[ "$previous" == "--input" ]]; then
+      printf '%s\n' "$arg"
+      return 0
+    fi
+    previous="$arg"
+  done
+  return 1
 }
 
 case "${1:-}" in
@@ -70,25 +103,60 @@ case "${1:-}" in
     fi
     ;;
   image)
-    if [[ "${2:-}" == "exists" ]]; then
-      if [[ -f "$(image_file "${3:-}")" ]]; then
-        exit 0
-      fi
-      exit 1
-    fi
+    case "${2:-}" in
+      exists|inspect)
+        name="$(last_arg "$@")"
+        if image_exists "$name"; then
+          if [[ "$*" == *'{{.Id}}'* ]]; then
+            printf 'sha256:fake-image-id\n'
+          fi
+          exit 0
+        fi
+        exit 1
+        ;;
+      load)
+        source="$(input_arg "$@")"
+        write_image "wrix-service:latest" "loaded from $source"
+        log_call "$*"
+        ;;
+      tag)
+        source="${3:-}"
+        target="${4:-}"
+        if image_exists "$source" || [[ "$source" == sha256:* ]]; then
+          write_image "$target" "tagged from $source"
+          log_call "$*"
+          exit 0
+        fi
+        exit 1
+        ;;
+      list)
+        printf 'NAME TAG DIGEST\n'
+        for image in "$STATE_DIR"/*.image; do
+          [[ -e "$image" ]] || continue
+          name="${image##*/}"
+          name="${name%.image}"
+          printf '%s latest sha256:fake\n' "$name"
+        done
+        ;;
+    esac
     ;;
   load)
-    image="localhost/wrix-service:latest"
-    previous=""
-    source=""
-    for arg in "$@"; do
-      if [[ "$previous" == "--input" ]]; then
-        source="$arg"
-      fi
-      previous="$arg"
-    done
-    printf 'loaded from %s\n' "$source" >"$(image_file "$image")"
+    source="$(input_arg "$@")"
+    write_image "localhost/wrix-service:latest" "loaded from $source"
     log_call "$*"
+    ;;
+  info)
+    printf 'overlay@%s/graph+%s/runroot\n' "$STATE_DIR" "$STATE_DIR"
+    ;;
+  tag)
+    source="${2:-}"
+    target="${3:-}"
+    if image_exists "$source" || [[ "$source" == sha256:* ]]; then
+      write_image "$target" "tagged from $source"
+      log_call "$*"
+      exit 0
+    fi
+    exit 1
     ;;
   inspect)
     name="${@: -1}"
@@ -101,6 +169,7 @@ case "${1:-}" in
       workspace="<no value>"
       if [[ -f "$STATE_DIR/run-$name" ]]; then
         run_args="$(<"$STATE_DIR/run-$name")"
+        # intentional word-splitting: fake runtime stores argv as a space-delimited log line.
         for token in $run_args; do
           case "$token" in
             wrix.workspace=*) workspace="${token#wrix.workspace=}" ;;
@@ -154,6 +223,55 @@ case "${1:-}" in
 esac
 EOF
   chmod +x "$runtime"
+}
+
+write_fake_skopeo() {
+  local skopeo="$1"
+  cat >"$skopeo" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+STATE_DIR="${WRIX_FAKE_RUNTIME_STATE:?}"
+mkdir -p "$STATE_DIR"
+
+image_file() {
+  local name="$1"
+  name="${name//\//_}"
+  name="${name//:/_}"
+  printf '%s/%s.image\n' "$STATE_DIR" "$name"
+}
+
+log_call() {
+  printf '%s\n' "skopeo $*" >>"$STATE_DIR/calls"
+}
+
+if [[ "${1:-}" == "--insecure-policy" ]]; then
+  shift
+fi
+if [[ "${1:-}" != "copy" ]]; then
+  printf 'unsupported fake skopeo command: %s\n' "$*" >&2
+  exit 2
+fi
+shift
+if [[ "${1:-}" == "--quiet" ]]; then
+  shift
+fi
+source_ref="${1:-}"
+store_ref="${2:-}"
+log_call "--insecure-policy copy --quiet $source_ref $store_ref"
+if [[ "${WRIX_FAKE_SKOPEO_UNKNOWN_NIX:-0}" == "1" && "$source_ref" == nix:* ]]; then
+  printf 'unknown transport "nix"\n' >&2
+  exit 1
+fi
+if [[ "$store_ref" == containers-storage:* ]]; then
+  image_ref="${store_ref#containers-storage:}"
+  if [[ "$image_ref" == \[*\]* ]]; then
+    image_ref="${image_ref#*]}"
+  fi
+  printf 'copied from %s\n' "$source_ref" >"$(image_file "$image_ref")"
+fi
+EOF
+  chmod +x "$skopeo"
 }
 
 json_get() {
@@ -225,14 +343,18 @@ assert_file_contains() {
 }
 
 with_fake_runtime_env() {
+  local runtime_name="${1:-podman}"
   local runtime_dir="$TEST_TMP/runtime-bin"
-  local state_dir="$TEST_TMP/runtime-state"
+  local state_dir="$TEST_TMP/runtime-state-$runtime_name"
+  rm -rf "$runtime_dir" "$state_dir"
   mkdir -p "$runtime_dir" "$state_dir"
-  write_fake_runtime "$runtime_dir/podman"
-  export WRIX_CONTAINER_RUNTIME="$runtime_dir/podman"
+  write_fake_runtime "$runtime_dir/$runtime_name"
+  write_fake_skopeo "$runtime_dir/skopeo"
+  export PATH="$runtime_dir:$PATH"
+  export WRIX_CONTAINER_RUNTIME="$runtime_dir/$runtime_name"
   export WRIX_FAKE_RUNTIME_STATE="$state_dir"
   export WRIX_SERVICE_ALLOW_TEMP_CACHE=1
-  unset WRIX_SERVICE_IMAGE WRIX_SERVICE_IMAGE_SOURCE
+  unset WRIX_SERVICE_IMAGE WRIX_SERVICE_IMAGE_SOURCE WRIX_SERVICE_IMAGE_SOURCE_KIND WRIX_SERVICE_IMAGE_DIGEST
 }
 
 test_fake_runtime_contract() {
@@ -419,28 +541,75 @@ test_service_start_loads_image_source() {
   export HOME="$TEST_TMP/home-image-source"
   export XDG_STATE_HOME="$TEST_TMP/xdg-state-image-source"
   export XDG_CACHE_HOME="$TEST_TMP/xdg-cache-image-source"
-  export WRIX_SERVICE_IMAGE_SOURCE="$TEST_TMP/wrix-service.tar.gz"
+  export WRIX_SERVICE_IMAGE="localhost/wrix-service:test"
+  export WRIX_SERVICE_IMAGE_SOURCE="$TEST_TMP/wrix-service-descriptor.json"
+  export WRIX_SERVICE_IMAGE_SOURCE_KIND="nix-descriptor"
   mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
-  printf 'image archive\n' >"$WRIX_SERVICE_IMAGE_SOURCE"
+  printf '{"schema":1,"source_kind":"nix-descriptor"}\n' >"$WRIX_SERVICE_IMAGE_SOURCE"
 
   local workspace="$TEST_TMP/image-source-repo"
   mkdir -p "$workspace"
   (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/image-source-start.txt")
 
-  assert_file_contains "service image load" "$WRIX_FAKE_RUNTIME_STATE/calls" "load --input $WRIX_SERVICE_IMAGE_SOURCE"
-  assert_file_contains "service run after load" "$WRIX_FAKE_RUNTIME_STATE/run-image-source-repo-service" "localhost/wrix-service:latest"
+  assert_file_contains \
+    "service image nix descriptor install" \
+    "$WRIX_FAKE_RUNTIME_STATE/calls" \
+    "skopeo --insecure-policy copy --quiet nix:$WRIX_SERVICE_IMAGE_SOURCE containers-storage:"
+  if grep -F -- "load --input $WRIX_SERVICE_IMAGE_SOURCE" "$WRIX_FAKE_RUNTIME_STATE/calls" >/dev/null; then
+    fail "nix-descriptor service image used tar load path"
+  fi
+  assert_file_contains \
+    "service run after descriptor install" \
+    "$WRIX_FAKE_RUNTIME_STATE/run-image-source-repo-service" \
+    "$WRIX_SERVICE_IMAGE"
+
+  with_fake_runtime_env container
+  export HOME="$TEST_TMP/home-image-source-darwin"
+  export XDG_STATE_HOME="$TEST_TMP/xdg-state-image-source-darwin"
+  export XDG_CACHE_HOME="$TEST_TMP/xdg-cache-image-source-darwin"
+  export WRIX_SERVICE_IMAGE="wrix-service:darwin-test"
+  export WRIX_SERVICE_IMAGE_SOURCE="$TEST_TMP/wrix-service-archive.tar"
+  export WRIX_SERVICE_IMAGE_SOURCE_KIND="docker-archive"
+  mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+  printf 'image archive\n' >"$WRIX_SERVICE_IMAGE_SOURCE"
+
+  local darwin_workspace="$TEST_TMP/image-source-darwin-repo"
+  mkdir -p "$darwin_workspace"
+  (cd "$darwin_workspace" && "$wrix_bin" service start >"$TEST_TMP/image-source-darwin-start.txt")
+
+  assert_file_contains \
+    "service image docker archive load" \
+    "$WRIX_FAKE_RUNTIME_STATE/calls" \
+    "image load --input $WRIX_SERVICE_IMAGE_SOURCE"
+  assert_file_contains \
+    "service image docker archive tag" \
+    "$WRIX_FAKE_RUNTIME_STATE/calls" \
+    "image tag wrix-service:latest $WRIX_SERVICE_IMAGE"
+  assert_file_contains \
+    "service run after archive load" \
+    "$WRIX_FAKE_RUNTIME_STATE/run-image-source-darwin-repo-service" \
+    "$WRIX_SERVICE_IMAGE"
 }
 
 test_service_image_labels() {
   require_python
   require_nix
 
-  local labels_json
-  labels_json="$(nix eval --no-warn-dirty --json "$REPO_ROOT#wrix-service-image.labels")"
-  python3 - "$labels_json" <<'PY'
+  local expected_source_kind
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    expected_source_kind="docker-archive"
+  else
+    expected_source_kind="nix-descriptor"
+  fi
+
+  local metadata_json
+  metadata_json="$(nix eval --no-warn-dirty --json "$REPO_ROOT#wrix-service-image" --apply 'image: { inherit (image) labels ref source_kind; source = toString image.source; digest = toString image.digest; }')"
+  python3 - "$metadata_json" "$expected_source_kind" <<'PY'
 import json
 import sys
-labels = json.loads(sys.argv[1])
+metadata = json.loads(sys.argv[1])
+expected_source_kind = sys.argv[2]
+labels = metadata["labels"]
 expected = {
     "wrix.managed": "true",
     "wrix.image.kind": "service",
@@ -450,6 +619,22 @@ for key, value in expected.items():
     if actual != value:
         print(f"FAIL: service image label {key}={actual!r}, expected {value!r}", file=sys.stderr)
         sys.exit(1)
+if metadata["source_kind"] != expected_source_kind:
+    print(
+        f"FAIL: service image source_kind={metadata['source_kind']!r}, expected {expected_source_kind!r}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+for field in ["source", "digest"]:
+    if not metadata[field].startswith("/nix/store/"):
+        print(f"FAIL: service image {field} is not a store path: {metadata[field]!r}", file=sys.stderr)
+        sys.exit(1)
+if expected_source_kind == "nix-descriptor" and not metadata["ref"].startswith("localhost/wrix-service:"):
+    print(f"FAIL: Linux service image ref lacks localhost prefix: {metadata['ref']!r}", file=sys.stderr)
+    sys.exit(1)
+if expected_source_kind == "docker-archive" and not metadata["ref"].startswith("wrix-service:"):
+    print(f"FAIL: Darwin service image ref has unexpected shape: {metadata['ref']!r}", file=sys.stderr)
+    sys.exit(1)
 PY
 }
 

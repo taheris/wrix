@@ -125,6 +125,7 @@
       serviceImage = import ../../lib/services/image.nix {
         pkgs = linuxPkgs;
         inherit (serviceRust) cacheServe;
+        asTarball = !isLinux;
       };
 
     in
