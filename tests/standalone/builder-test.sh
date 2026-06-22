@@ -15,6 +15,23 @@ macos_major_version() {
   printf '%s\n' "${version%%.*}"
 }
 
+print_output() {
+  local output_file="$1"
+
+  if [[ -s "$output_file" ]]; then
+    echo "  Command output:"
+    sed 's/^/    /' "$output_file"
+  fi
+}
+
+run_builder_setup() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$BUILDER" setup
+  else
+    sudo -n "$BUILDER" setup
+  fi
+}
+
 echo "=== wrix-builder Integration Test ==="
 echo "Date: $(date)"
 echo ""
@@ -34,6 +51,8 @@ if [[ "$MACOS_MAJOR" -lt 26 ]]; then
   skip "Requires macOS 26+ (current: $MACOS_VERSION)"
 fi
 
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMP_DIR"' EXIT
 FAILED=0
 
 # Build wrix-builder
@@ -99,54 +118,77 @@ else
   FAILED=1
 fi
 
-# Test 6: Remote build test
+# Test 6: Host setup for remote builds
 echo ""
-echo "Test 6: Remote build (nixpkgs#hello)"
-KEYS_DIR="$HOME/.local/share/wrix/builder-keys"
+echo "Test 6: Host setup for remote builds"
+SETUP_OUTPUT="$TMP_DIR/setup.log"
+if run_builder_setup >"$SETUP_OUTPUT" 2>&1; then
+  echo "  PASS: Host SSH setup completed"
+else
+  echo "  FAIL: Host SSH setup failed"
+  print_output "$SETUP_OUTPUT"
+  FAILED=1
+fi
+
+# Test 7: Remote build test
+echo ""
+echo "Test 7: Remote build (nixpkgs#hello)"
+SYSTEM_CLIENT_KEY="/etc/nix/wrix_builder_ed25519"
+REMOTE_BUILD_OUTPUT="$TMP_DIR/remote-build.log"
 if nix build \
-  --builders "ssh-ng://builder@localhost:2222 aarch64-linux $KEYS_DIR/builder_ed25519 4 1" \
+  --builders "ssh-ng://builder@localhost:2222 aarch64-linux $SYSTEM_CLIENT_KEY 4 1" \
   --max-jobs 0 \
   --no-link \
-  nixpkgs#hello 2>/dev/null; then
+  nixpkgs#hello >"$REMOTE_BUILD_OUTPUT" 2>&1; then
   echo "  PASS: Remote build succeeded"
 else
   echo "  FAIL: Remote build failed"
-  echo "  (This may fail if no remote Linux builder is available for aarch64-linux)"
-  # Don't fail the whole test for this - it requires a working Linux builder chain
+  print_output "$REMOTE_BUILD_OUTPUT"
+  FAILED=1
 fi
 
-# Test 7: Store persistence across restart
+# Test 8: Store persistence across restart
 echo ""
-echo "Test 7: Store persistence"
+echo "Test 8: Store persistence"
 echo "  Building a test derivation..."
-# Build something and capture a store path
-TEST_STORE_PATH=$("$BUILDER" ssh "nix build --no-link --print-out-paths nixpkgs#hello" 2>/dev/null) || TEST_STORE_PATH=""
-if [[ -z "$TEST_STORE_PATH" ]]; then
-  echo "  WARNING: Could not build test derivation (skipping persistence check)"
-else
-  echo "  Built: $TEST_STORE_PATH"
-  echo "  Stopping builder..."
-  "$BUILDER" stop
-  sleep 2
-  echo "  Starting builder..."
-  if "$BUILDER" start; then
-    sleep 5
-    echo "  Checking if store path persisted..."
-    if "$BUILDER" ssh "test -e '$TEST_STORE_PATH'" 2>/dev/null; then
-      echo "  PASS: Store path persisted across restart"
+PERSISTENCE_BUILD_OUTPUT="$TMP_DIR/persistence-build.log"
+if TEST_STORE_PATH=$("$BUILDER" ssh "nix build --no-link --print-out-paths nixpkgs#hello" 2>"$PERSISTENCE_BUILD_OUTPUT"); then
+  if [[ -z "$TEST_STORE_PATH" ]]; then
+    echo "  FAIL: Build produced no store path"
+    FAILED=1
+  else
+    echo "  Built: $TEST_STORE_PATH"
+    echo "  Stopping builder..."
+    if "$BUILDER" stop; then
+      sleep 2
+      echo "  Starting builder..."
+      if "$BUILDER" start; then
+        sleep 5
+        echo "  Checking if store path persisted..."
+        if "$BUILDER" ssh "test -e '$TEST_STORE_PATH'" 2>/dev/null; then
+          echo "  PASS: Store path persisted across restart"
+        else
+          echo "  FAIL: Store path lost after restart"
+          FAILED=1
+        fi
+      else
+        echo "  FAIL: Failed to restart builder"
+        FAILED=1
+      fi
     else
-      echo "  FAIL: Store path lost after restart"
+      echo "  FAIL: Failed to stop builder before persistence check"
       FAILED=1
     fi
-  else
-    echo "  FAIL: Failed to restart builder"
-    FAILED=1
   fi
+else
+  echo "  FAIL: Could not build test derivation"
+  print_output "$PERSISTENCE_BUILD_OUTPUT"
+  FAILED=1
 fi
 
-# Test 8: Config output
+# Test 9: Config output
 echo ""
-echo "Test 8: Config command"
+echo "Test 9: Config command"
 if "$BUILDER" config | grep -q 'protocol = "ssh-ng"'; then
   echo "  PASS: Config outputs valid nix.conf snippet"
 else
@@ -157,8 +199,12 @@ fi
 # Cleanup
 echo ""
 echo "=== Cleanup ==="
-"$BUILDER" stop
-echo "Builder stopped"
+if "$BUILDER" stop; then
+  echo "Builder stopped"
+else
+  echo "  FAIL: Cleanup stop failed"
+  FAILED=1
+fi
 
 # Summary
 echo ""

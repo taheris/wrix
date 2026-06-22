@@ -32,7 +32,12 @@ let
       WRIX_CACHE="$XDG_CACHE_HOME/wrix"
 
       # Builder-specific paths
-      KEYS_DIR="${keys}"
+      STORE_KEYS_DIR="${keys}"
+      CLIENT_KEYS_DIR="$WRIX_DATA/builder-keys"
+      CLIENT_KEY="$CLIENT_KEYS_DIR/builder_ed25519"
+      CLIENT_KNOWN_HOSTS="$CLIENT_KEYS_DIR/known_hosts"
+      SYSTEM_CLIENT_KEY="/etc/nix/wrix_builder_ed25519"
+      SYSTEM_HOST_KEY="/etc/nix/wrix_builder_host_key_base64"
       NIX_STORE="$WRIX_DATA/builder-nix"
       CONTAINER_NAME="wrix-builder"
       BUILDER_IMAGE="wrix-builder:latest"
@@ -53,15 +58,48 @@ let
         exit 1
       }
 
-      container_exists() {
-        # container inspect returns [] with exit 0 even when container doesn't exist
+      container_name_exists() {
+        local name="$1"
         local output
-        output=$(container inspect "$CONTAINER_NAME" 2>/dev/null) || return 1
-        [ "$output" != "[]" ]
+        output=$(container inspect "$name" 2>/dev/null) || return 1
+        [[ "$output" != "[]" ]]
+      }
+
+      container_exists() {
+        container_name_exists "$CONTAINER_NAME"
+      }
+
+      container_state() {
+        local name="$1"
+        container inspect "$name" 2>/dev/null | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4
+      }
+
+      cleanup_container() {
+        local name="$1"
+        if ! container_name_exists "$name"; then
+          return 0
+        fi
+        if ! container stop "$name" >/dev/null 2>&1; then
+          echo "Warning: could not stop container $name during cleanup" >&2
+        fi
+        if ! container rm "$name" >/dev/null 2>&1; then
+          echo "Warning: could not remove container $name during cleanup" >&2
+        fi
+      }
+
+      ensure_ssh_client_material() {
+        local host_key
+        mkdir -p "$CLIENT_KEYS_DIR"
+        rm -f "$CLIENT_KEY"
+        cp "$STORE_KEYS_DIR/builder_ed25519" "$CLIENT_KEY"
+        chmod 600 "$CLIENT_KEY"
+        host_key=$(cat "$STORE_KEYS_DIR/ssh_host_ed25519_key.pub")
+        printf '[localhost]:%s %s\n' "$SSH_PORT" "$host_key" > "$CLIENT_KNOWN_HOSTS"
+        chmod 600 "$CLIENT_KNOWN_HOSTS"
       }
 
       check_macos_version() {
-        if [ "$(sw_vers -productVersion | cut -d. -f1)" -lt 26 ]; then
+        if [[ "$(sw_vers -productVersion | cut -d. -f1)" -lt 26 ]]; then
           echo "Error: macOS 26+ required (current: $(sw_vers -productVersion))"
           exit 1
         fi
@@ -77,113 +115,108 @@ let
 
 
       load_builder_image() {
-        # Load image into container registry if not present or outdated
-        # Use the store version file to detect if image changed (same source of truth as store init)
-        STORE_VERSION_FILE="$NIX_STORE/.image-version"
-        CURRENT_IMAGE="${builderImage}"
+        local current_image="${builderImage}"
+        local loaded_ref
+        local load_output
+        local needs_load=false
+        local oci_tar
+        local store_version_file="$NIX_STORE/.image-version"
 
-        needs_load=false
         if ! container image inspect "$BUILDER_IMAGE" >/dev/null 2>&1; then
           needs_load=true
-        elif [ ! -f "$STORE_VERSION_FILE" ] || [ "$(cat "$STORE_VERSION_FILE")" != "$CURRENT_IMAGE" ]; then
-          # Image changed or no version file - need to reload to ensure consistency
+        elif [[ ! -f "$store_version_file" || "$(cat "$store_version_file")" != "$current_image" ]]; then
           needs_load=true
         fi
 
-        if [ "$needs_load" = true ]; then
+        if [[ "$needs_load" == true ]]; then
           echo "Loading builder image..."
-          # Delete old image if exists
-          container image delete "$BUILDER_IMAGE" 2>/dev/null || true
-          # Convert Docker-format tar to OCI-archive format
-          OCI_TAR="$WRIX_CACHE/builder-image-oci.tar"
-          mkdir -p "$WRIX_CACHE"
-          ${pkgs.skopeo}/bin/skopeo --insecure-policy copy --quiet "docker-archive:${builderImage}" "oci-archive:$OCI_TAR"
-          # Load and capture the digest from output
-          LOAD_OUTPUT=$(container image load --input "$OCI_TAR" 2>&1)
-          LOADED_REF=$(echo "$LOAD_OUTPUT" | grep -oE 'untagged@sha256:[a-f0-9]+' | head -1)
-          if [ -n "$LOADED_REF" ]; then
-            container image tag "$LOADED_REF" "$BUILDER_IMAGE"
+          if container image inspect "$BUILDER_IMAGE" >/dev/null 2>&1; then
+            container image delete "$BUILDER_IMAGE"
           fi
-          rm -f "$OCI_TAR"
+          oci_tar="$WRIX_CACHE/builder-image-oci.tar"
+          mkdir -p "$WRIX_CACHE"
+          ${pkgs.skopeo}/bin/skopeo --insecure-policy copy --quiet "docker-archive:${builderImage}" "oci-archive:$oci_tar"
+          load_output=$(container image load --input "$oci_tar" 2>&1)
+          loaded_ref=$(printf '%s\n' "$load_output" | awk 'match($0, /untagged@sha256:[a-f0-9]+/) { print substr($0, RSTART, RLENGTH); exit }')
+          if [[ -z "$loaded_ref" ]]; then
+            echo "Error: Could not determine loaded builder image reference" >&2
+            printf '%s\n' "$load_output" >&2
+            exit 1
+          fi
+          container image tag "$loaded_ref" "$BUILDER_IMAGE"
+          rm -f "$oci_tar"
           container image prune
         fi
       }
 
       cmd_start() {
+        local current_image="${builderImage}"
+        local initialized_size
+        local needs_init=false
+        local state
+        local store_version_file="$NIX_STORE/.image-version"
+        local temp_container
+
         check_macos_version
         ensure_container_system
 
-        # Check if container exists and is running
         if container_exists; then
-          local state
-          state=$(container inspect "$CONTAINER_NAME" 2>/dev/null | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
-          if [ "$state" = "running" ]; then
+          state=$(container_state "$CONTAINER_NAME")
+          if [[ "$state" == "running" ]]; then
             echo "Builder container is already running"
             echo "Use 'wrix-builder ssh' to connect"
             exit 0
           fi
-          # Container exists but not running - remove and recreate
           echo "Cleaning up stale container..."
-          container rm "$CONTAINER_NAME" 2>/dev/null || true
+          container rm "$CONTAINER_NAME"
         fi
 
+        ensure_ssh_client_material
         load_builder_image
 
-        # Ensure persistent Nix store directory exists
         mkdir -p "$NIX_STORE"
 
-        # Track image version inside the persistent store
-        # Re-initialize if store is empty OR if image has changed
-        STORE_VERSION_FILE="$NIX_STORE/.image-version"
-        CURRENT_IMAGE="${builderImage}"
-
-        needs_init=false
-        if [ ! -d "$NIX_STORE/store" ] || [ -z "$(ls -A "$NIX_STORE/store" 2>/dev/null)" ]; then
+        if [[ ! -d "$NIX_STORE/store" || -z "$(ls -A "$NIX_STORE/store" 2>/dev/null)" ]]; then
           needs_init=true
           echo "Initializing persistent Nix store (first run)..."
-        elif [ ! -f "$STORE_VERSION_FILE" ] || [ "$(cat "$STORE_VERSION_FILE")" != "$CURRENT_IMAGE" ]; then
+        elif [[ ! -f "$store_version_file" || "$(cat "$store_version_file")" != "$current_image" ]]; then
           needs_init=true
           echo "Builder image changed, re-initializing persistent Nix store..."
-          chmod -R u+w "$NIX_STORE" 2>/dev/null || true
+          if ! chmod -R u+w "$NIX_STORE"; then
+            echo "Error: Failed to make existing Nix store writable" >&2
+            exit 1
+          fi
           rm -rf "$NIX_STORE"
           mkdir -p "$NIX_STORE"
         fi
 
-        if [ "$needs_init" = true ]; then
+        if [[ "$needs_init" == true ]]; then
           echo "This may take a few minutes..."
 
-          # Run temp container without volume mount to export /nix
-          TEMP_CONTAINER="wrix-builder-init-$$"
-          container run --name "$TEMP_CONTAINER" -d "$BUILDER_IMAGE" >/dev/null 2>&1
+          temp_container="wrix-builder-init-$$"
+          container run --name "$temp_container" -d "$BUILDER_IMAGE" >/dev/null 2>&1
           sleep 3
 
-          # Copy /nix from container to host
-          # Use container exec with tar to stream the content
-          # Permission warnings are expected (some store paths are 000) and harmless
-          # Tar returns exit 2 for these warnings, so we ignore it and verify success below
-          container exec "$TEMP_CONTAINER" tar -cf - -C / nix 2>/dev/null | tar -xf - -C "$NIX_STORE" --strip-components=1 2>/dev/null || true
+          if ! container exec "$temp_container" tar -cf - -C / nix 2>/dev/null | tar -xf - -C "$NIX_STORE" --strip-components=1 2>/dev/null; then
+            echo "Warning: Nix store export reported errors; verifying copied store" >&2
+          fi
 
-          # Verify the store was populated
-          if [ ! -d "$NIX_STORE/store" ] || [ -z "$(ls -A "$NIX_STORE/store" 2>/dev/null)" ]; then
+          if [[ ! -d "$NIX_STORE/store" || -z "$(ls -A "$NIX_STORE/store" 2>/dev/null)" ]]; then
             echo "Error: Failed to initialize Nix store"
-            container stop "$TEMP_CONTAINER" >/dev/null 2>&1 || true
-            container rm "$TEMP_CONTAINER" >/dev/null 2>&1 || true
+            cleanup_container "$temp_container"
             exit 1
           fi
 
-          # Cleanup temp container
-          container stop "$TEMP_CONTAINER" >/dev/null 2>&1 || true
-          container rm "$TEMP_CONTAINER" >/dev/null 2>&1 || true
+          cleanup_container "$temp_container"
 
-          # Record which image this store was initialized from
-          echo "$CURRENT_IMAGE" > "$STORE_VERSION_FILE"
+          echo "$current_image" > "$store_version_file"
 
-          echo "Nix store initialized ($(du -sh "$NIX_STORE" 2>/dev/null | cut -f1))"
+          initialized_size=$(du -sh "$NIX_STORE" 2>/dev/null | cut -f1) || initialized_size="unknown"
+          echo "Nix store initialized ($initialized_size)"
         fi
 
         echo "Creating builder container..."
 
-        # Mount keys (from nix store) and nix store (for persistence)
         container run \
           --name "$CONTAINER_NAME" \
           -d \
@@ -191,17 +224,16 @@ let
           -m 4096M \
           --network default \
           -p "127.0.0.1:$SSH_PORT:22" \
-          -v "$KEYS_DIR:/run/keys:ro" \
+          -v "$STORE_KEYS_DIR:/run/keys:ro" \
           -v "$NIX_STORE:/nix" \
           "$BUILDER_IMAGE"
 
-        # Wait for nix-daemon to be ready
         echo "Waiting for services to start..."
-        for i in $(seq 1 120); do
+        for i in {1..120}; do
           if container exec "$CONTAINER_NAME" pgrep -x nix-daemon >/dev/null 2>&1; then
             break
           fi
-          if [ "$i" -eq 120 ]; then
+          if [[ "$i" -eq 120 ]]; then
             echo "Warning: nix-daemon did not start within 120 seconds"
           fi
           sleep 1
@@ -218,23 +250,24 @@ let
 
       cmd_stop() {
         echo "Stopping builder container..."
-        container stop "$CONTAINER_NAME" 2>/dev/null || true
-        container rm "$CONTAINER_NAME" 2>/dev/null || true
+        cleanup_container "$CONTAINER_NAME"
         echo "Builder stopped"
       }
 
       cmd_status() {
+        local state
+        local store_size
+
         if container_exists; then
-          local state
-          state=$(container inspect "$CONTAINER_NAME" 2>/dev/null | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
+          state=$(container_state "$CONTAINER_NAME")
           echo "Builder: $state"
           echo ""
           echo "SSH connection:"
-          echo "  ssh -p $SSH_PORT -i $KEYS_DIR/builder_ed25519 builder@localhost"
+          echo "  wrix-builder ssh"
           echo ""
-          echo "SSH keys: $KEYS_DIR"
+          echo "SSH keys: $CLIENT_KEYS_DIR"
           echo "Nix store: $NIX_STORE"
-          if [ "$state" = "running" ] && [ -d "$NIX_STORE" ]; then
+          if [[ "$state" == "running" && -d "$NIX_STORE" ]]; then
             store_size=$(du -sh "$NIX_STORE" 2>/dev/null | cut -f1) || store_size="unknown"
             echo "Store size: $store_size"
           fi
@@ -247,25 +280,36 @@ let
       }
 
       cmd_ssh() {
+        local -a ssh_args
+        local state
+
         if ! container_exists; then
           echo "Error: Builder is not running"
           echo "Run 'wrix-builder start' first"
           exit 1
         fi
 
-        local state
-        state=$(container inspect "$CONTAINER_NAME" 2>/dev/null | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
-        if [ "$state" != "running" ]; then
+        state=$(container_state "$CONTAINER_NAME")
+        if [[ "$state" != "running" ]]; then
           echo "Error: Builder container is not running (state: $state)"
           echo "Run 'wrix-builder start' first"
           exit 1
         fi
 
-        # Use container exec for reliable access (--uid 1000 = builder user)
-        if [ $# -eq 0 ]; then
-          exec container exec -it --uid 1000 "$CONTAINER_NAME" /bin/bash -l
+        ensure_ssh_client_material
+        ssh_args=(
+          -p "$SSH_PORT"
+          -i "$CLIENT_KEY"
+          -o BatchMode=yes
+          -o IdentitiesOnly=yes
+          -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile="$CLIENT_KNOWN_HOSTS"
+        )
+
+        if [[ $# -eq 0 ]]; then
+          exec ssh "''${ssh_args[@]}" "builder@localhost"
         else
-          exec container exec --uid 1000 "$CONTAINER_NAME" /bin/bash -c "$*"
+          exec ssh "''${ssh_args[@]}" "builder@localhost" "$@"
         fi
       }
 
@@ -280,7 +324,7 @@ let
         Port 2222
         User builder
         HostKeyAlias wrix-builder
-        IdentityFile $KEYS_DIR/builder_ed25519
+        IdentityFile $SYSTEM_CLIENT_KEY
     ''';
 
     # buildMachines (no sshKey needed, uses SSH config):
@@ -290,7 +334,7 @@ let
       protocol = "ssh-ng";
       maxJobs = 4;
       supportedFeatures = [ "big-parallel" "benchmark" ];
-      publicHostKey = builtins.readFile $KEYS_DIR/public_host_key_base64;
+      publicHostKey = builtins.readFile $STORE_KEYS_DIR/public_host_key_base64;
     }
 
     # Or import from wrix flake:
@@ -304,65 +348,62 @@ let
       }
 
       cmd_setup_ssh() {
-        # Container commands must run as original user when script is run with sudo
-        local container_cmd="container"
-        if [ -n "''${SUDO_USER:-}" ]; then
-          container_cmd="sudo -u $SUDO_USER container"
+        local -a container_cmd=(container)
+        local host_key
+        local output
+        local root_known_hosts="/var/root/.ssh/known_hosts"
+        local state
+
+        if [[ -n "''${SUDO_USER:-}" ]]; then
+          container_cmd=(sudo -u "$SUDO_USER" container)
         fi
 
-        # Check if container exists
-        local output
-        output=$($container_cmd inspect "$CONTAINER_NAME" 2>/dev/null) || true
-        if [ -z "$output" ] || [ "$output" = "[]" ]; then
+        if ! output=$("''${container_cmd[@]}" inspect "$CONTAINER_NAME" 2>/dev/null); then
+          output=""
+        fi
+        if [[ -z "$output" || "$output" == "[]" ]]; then
           echo "Error: Builder container is not running"
           echo "Run 'wrix-builder start' first"
           exit 1
         fi
 
-        local state
-        state=$(echo "$output" | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
-        if [ "$state" != "running" ]; then
+        state=$(printf '%s\n' "$output" | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
+        if [[ "$state" != "running" ]]; then
           echo "Error: Builder container is not running (state: $state)"
           echo "Run 'wrix-builder start' first"
           exit 1
         fi
 
-        # Copy SSH key with proper permissions (SSH rejects world-readable keys)
-        # Can't symlink because nix store has 444 permissions
-        echo "Installing SSH key at /etc/nix/wrix_builder_ed25519..."
-        rm -f /etc/nix/wrix_builder_ed25519
-        cp "$KEYS_DIR/builder_ed25519" /etc/nix/wrix_builder_ed25519
-        chmod 600 /etc/nix/wrix_builder_ed25519
-        chown root:nixbld /etc/nix/wrix_builder_ed25519
+        echo "Installing SSH key at $SYSTEM_CLIENT_KEY..."
+        rm -f "$SYSTEM_CLIENT_KEY"
+        cp "$STORE_KEYS_DIR/builder_ed25519" "$SYSTEM_CLIENT_KEY"
+        chmod 600 "$SYSTEM_CLIENT_KEY"
+        chown root:nixbld "$SYSTEM_CLIENT_KEY"
 
-        # Symlink for host key is fine (not a private key)
-        echo "Creating host key symlink at /etc/nix/wrix_builder_host_key_base64..."
-        ln -sf "$KEYS_DIR/public_host_key_base64" /etc/nix/wrix_builder_host_key_base64
+        echo "Creating host key symlink at $SYSTEM_HOST_KEY..."
+        ln -sf "$STORE_KEYS_DIR/public_host_key_base64" "$SYSTEM_HOST_KEY"
 
-        # Add host key to root's known_hosts (nix-daemon runs as root and reads this)
         echo "Adding to root's known_hosts..."
-        local host_key
-        host_key=$(cat "$KEYS_DIR/ssh_host_ed25519_key.pub")
-        local root_known_hosts="/var/root/.ssh/known_hosts"
+        host_key=$(cat "$STORE_KEYS_DIR/ssh_host_ed25519_key.pub")
         mkdir -p /var/root/.ssh
         chmod 700 /var/root/.ssh
 
-        # Remove old entries
-        if [ -f "$root_known_hosts" ]; then
-          grep -v "^wrix-builder " "$root_known_hosts" > "$root_known_hosts.tmp" 2>/dev/null || true
+        if [[ -f "$root_known_hosts" ]]; then
+          awk -v port="$SSH_PORT" '$1 != "wrix-builder" && $1 != "[localhost]:" port { print }' "$root_known_hosts" > "$root_known_hosts.tmp"
           mv "$root_known_hosts.tmp" "$root_known_hosts"
         fi
 
-        # Add entry using the raw public key (format: hostname key-type key)
-        echo "wrix-builder $host_key" >> "$root_known_hosts"
+        {
+          printf 'wrix-builder %s\n' "$host_key"
+          printf '[localhost]:%s %s\n' "$SSH_PORT" "$host_key"
+        } >> "$root_known_hosts"
         chmod 600 "$root_known_hosts"
 
-        # Verify SSH works
-        ssh -o BatchMode=yes wrix-builder true 2>/dev/null || {
+        if ! ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$root_known_hosts" -i "$SYSTEM_CLIENT_KEY" -p "$SSH_PORT" builder@localhost true 2>/dev/null; then
           echo "Error: Failed to connect to wrix-builder"
           echo "Check that routes are configured: wrix-builder setup-routes"
           exit 1
-        }
+        fi
         echo "Host key added to known_hosts"
       }
 
