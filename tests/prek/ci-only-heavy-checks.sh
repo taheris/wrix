@@ -26,6 +26,7 @@ TEST_CI_PROGRAM="$TEST_CI_ROOT/bin/test-ci"
 
 HEAVY_APPS=(
   test-wrix-spawn-load
+  test-image-install-archiveless
   test-image-install-digest-skip
   test-image-digest-matches-stored-id
   test-claude-runtime-noop

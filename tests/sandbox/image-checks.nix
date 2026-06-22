@@ -94,12 +94,13 @@ let
           IMAGE_SOURCE="$tmp/image-descriptor.json"
           IMAGE_SOURCE_KIND="nix-descriptor"
           IMAGE_STREAM="$tmp/image-stream"
+          DESIRED_DIGEST="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           # The install transport pins skopeo's containers-storage destination
           # to podman's store via `podman info`; the shim reports this spec so
           # the assertion below can verify the [driver@graphroot+runroot] ref.
           STORE_SPEC="overlay@$tmp/graphroot+$tmp/runroot"
 
-          jq -n --arg stream "$IMAGE_STREAM" '{schema:1,source_kind:"nix-descriptor",fallback_stream:$stream}' >"$IMAGE_SOURCE"
+          jq -n --arg digest "$DESIRED_DIGEST" --arg stream "$IMAGE_STREAM" '{schema:1,source_kind:"nix-descriptor",digest:$digest,fallback_stream:$stream}' >"$IMAGE_SOURCE"
 
           cat >"$IMAGE_STREAM" <<IMAGE_STREAM_SHIM
           #!/usr/bin/env bash
@@ -115,6 +116,9 @@ let
           case "\$1" in
               image)
                   case "\$2" in
+                      inspect)
+                          if [ -f '$state/loaded' ]; then printf '%s\n' "\$5"; exit 0; else exit 1; fi
+                          ;;
                       exists)
                           if [ -f '$state/loaded' ]; then exit 0; else exit 1; fi
                           ;;
@@ -193,8 +197,8 @@ let
               cat "$image_source_log" >&2
               exit 1
           fi
-          if ! grep -q "^image exists $IMAGE_REF$" "$podman_log"; then
-              echo "second invocation did not check 'image exists $IMAGE_REF':" >&2
+          if ! grep -qFx -- "image inspect --format {{.Id}} $DESIRED_DIGEST" "$podman_log"; then
+              echo "second invocation did not preflight the descriptor digest $DESIRED_DIGEST:" >&2
               cat "$podman_log" >&2
               exit 1
           fi
@@ -204,6 +208,128 @@ let
       else
         ''
           echo "test-wrix-spawn-load: not available on Darwin (no podman dependency on macOS)" >&2
+          exit 0
+        '';
+  };
+
+  imageInstallArchivelessTest = pkgs.writeShellApplication {
+    name = "test-image-install-archiveless";
+    runtimeInputs = optionals isLinux [
+      pkgs.coreutils
+      pkgs.gnugrep
+      pkgs.jq
+    ];
+    text =
+      if isLinux then
+        ''
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+
+          shim_dir="$tmp/bin"
+          state="$tmp/state"
+          mkdir -p "$shim_dir" "$state"
+          podman_log="$state/podman.log"
+          skopeo_log="$state/skopeo.log"
+          image_source_log="$state/image-source.log"
+          : >"$podman_log"
+          : >"$skopeo_log"
+          : >"$image_source_log"
+
+          IMAGE_REF="localhost/wrix-archiveless:abc123"
+          IMAGE_SOURCE="$tmp/image-descriptor.json"
+          IMAGE_SOURCE_KIND="nix-descriptor"
+          IMAGE_STREAM="$tmp/image-stream"
+          DESIRED_DIGEST="sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          STORE_SPEC="overlay@$tmp/graphroot+$tmp/runroot"
+          EXPECTED_DEST="containers-storage:[$STORE_SPEC]$IMAGE_REF"
+
+          jq -n --arg digest "$DESIRED_DIGEST" --arg stream "$IMAGE_STREAM" '{schema:1,source_kind:"nix-descriptor",digest:$digest,fallback_stream:$stream}' >"$IMAGE_SOURCE"
+
+          cat >"$IMAGE_STREAM" <<IMAGE_STREAM_SHIM
+          #!/usr/bin/env bash
+          set -euo pipefail
+          printf 'stream\n' >>'$image_source_log'
+          IMAGE_STREAM_SHIM
+          chmod +x "$IMAGE_STREAM"
+
+          cat >"$shim_dir/podman" <<PODMAN_SHIM
+          #!/usr/bin/env bash
+          set -euo pipefail
+          printf '%s\n' "\$*" >>'$podman_log'
+          case "\$1" in
+              image)
+                  case "\$2" in
+                      inspect) exit 1 ;;
+                      exists) exit 1 ;;
+                      *) exit 0 ;;
+                  esac
+                  ;;
+              info)
+                  printf '%s\n' '$STORE_SPEC'
+                  exit 0
+                  ;;
+              tag) exit 0 ;;
+              load)
+                  echo 'podman load is not part of the archiveless descriptor path' >&2
+                  exit 2
+                  ;;
+              *) exit 0 ;;
+          esac
+          PODMAN_SHIM
+          chmod +x "$shim_dir/podman"
+
+          cat >"$shim_dir/skopeo" <<SKOPEO_SHIM
+          #!/usr/bin/env bash
+          set -euo pipefail
+          printf '%s\n' "\$*" >>'$skopeo_log'
+          for arg in "\$@"; do
+              case "\$arg" in
+                  docker-archive:*|oci-archive:*)
+                      echo 'archive transport is not part of the descriptor path' >&2
+                      exit 2
+                      ;;
+                  containers-storage:*) : >'$state/installed' ;;
+              esac
+          done
+          exit 0
+          SKOPEO_SHIM
+          chmod +x "$shim_dir/skopeo"
+
+          verbose() { :; }
+
+          PATH="$shim_dir:$PATH"
+          export PATH IMAGE_REF IMAGE_SOURCE IMAGE_SOURCE_KIND
+
+          ${shellLib.imageLoadStep}
+
+          if [[ ! -f "$state/installed" ]]; then
+              echo "descriptor install did not reach containers-storage" >&2
+              cat "$skopeo_log" >&2
+              exit 1
+          fi
+          if ! grep -qF -- "nix:$IMAGE_SOURCE $EXPECTED_DEST" "$skopeo_log"; then
+              echo "descriptor install did not use nix:<descriptor> -> $EXPECTED_DEST:" >&2
+              cat "$skopeo_log" >&2
+              exit 1
+          fi
+          if grep -qE '(^| )((docker|oci)-archive:|load($| ))' "$skopeo_log" "$podman_log"; then
+              echo "descriptor install used an archive/load transport:" >&2
+              cat "$skopeo_log" >&2
+              cat "$podman_log" >&2
+              exit 1
+          fi
+          source_lines=$(wc -l <"$image_source_log")
+          if [[ "$source_lines" -ne 0 ]]; then
+              echo "descriptor install executed fallback stream (got $source_lines calls):" >&2
+              cat "$image_source_log" >&2
+              exit 1
+          fi
+
+          echo "test-image-install-archiveless: PASS"
+        ''
+      else
+        ''
+          echo "test-image-install-archiveless: skipped on non-Linux host" >&2
           exit 0
         '';
   };
@@ -236,9 +362,10 @@ let
           IMAGE_SOURCE="$tmp/image-descriptor.json"
           IMAGE_SOURCE_KIND="nix-descriptor"
           IMAGE_STREAM="$tmp/image-stream"
+          DESIRED_DIGEST="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
           STORE_SPEC="vfs@$tmp/graphroot+$tmp/runroot"
 
-          jq -n --arg stream "$IMAGE_STREAM" '{schema:1,source_kind:"nix-descriptor",fallback_stream:$stream}' >"$IMAGE_SOURCE"
+          jq -n --arg digest "$DESIRED_DIGEST" --arg stream "$IMAGE_STREAM" '{schema:1,source_kind:"nix-descriptor",digest:$digest,fallback_stream:$stream}' >"$IMAGE_SOURCE"
 
           cat >"$IMAGE_STREAM" <<IMAGE_STREAM_SHIM
           #!/usr/bin/env bash
@@ -325,6 +452,7 @@ let
     runtimeInputs = optionals isLinux [
       pkgs.coreutils
       pkgs.gnugrep
+      pkgs.jq
     ];
     text =
       if isLinux then
@@ -348,7 +476,7 @@ let
           IMAGE_DIGEST_PATH="$tmp/image-digest"
           DESIRED_DIGEST="sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
           printf '%s' "$DESIRED_DIGEST" >"$IMAGE_DIGEST_PATH"
-          printf '{"schema":1,"source_kind":"nix-descriptor"}\n' >"$IMAGE_SOURCE"
+          jq -n --arg digest "$DESIRED_DIGEST" '{schema:1,source_kind:"nix-descriptor",digest:$digest}' >"$IMAGE_SOURCE"
 
           # podman shim — logs every invocation as a single-line `$*`.
           # `image inspect --format {{.Id}} <digest>`: succeeds (exit 0,
@@ -375,6 +503,7 @@ let
                           fi
                           ;;
                       exists)
+                          if [ -f '$state/force-ref-miss' ]; then exit 1; fi
                           if [ -f '$state/installed' ]; then exit 0; else exit 1; fi
                           ;;
                       *) exit 0 ;;
@@ -465,6 +594,31 @@ let
           if grep -qE '^load($| )' "$podman_log"; then
               echo "second invocation logged a podman load command (expected none):" >&2
               cat "$podman_log" >&2
+              exit 1
+          fi
+
+          : >"$podman_log"
+          : >"$skopeo_log"
+          : >"$state/force-ref-miss"
+          IMAGE_DIGEST_PATH=""
+
+          ${shellLib.imageLoadStep}
+
+          rm -f "$state/force-ref-miss"
+          if [[ -s "$skopeo_log" ]]; then
+              echo "descriptor-derived digest preflight re-invoked skopeo:" >&2
+              cat "$skopeo_log" >&2
+              exit 1
+          fi
+          if ! grep -qFx -- "image inspect --format {{.Id}} $DESIRED_DIGEST" "$podman_log"; then
+              echo "descriptor-derived digest preflight did not inspect $DESIRED_DIGEST:" >&2
+              cat "$podman_log" >&2
+              exit 1
+          fi
+          descriptor_source_lines=$(wc -l <"$image_source_log")
+          if [[ "$descriptor_source_lines" -ne 0 ]]; then
+              echo "descriptor-derived digest preflight executed the descriptor source (lines=$descriptor_source_lines):" >&2
+              cat "$image_source_log" >&2
               exit 1
           fi
 
@@ -1934,6 +2088,7 @@ in
 {
   inherit
     wrixSpawnLoadTest
+    imageInstallArchivelessTest
     imageInstallRealSkopeoTest
     imageInstallDigestSkipTest
     digestMatchesStoredIdTest

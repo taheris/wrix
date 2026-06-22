@@ -256,7 +256,7 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 - The runtime image installer preflight checks whether the selected image source's content digest matches any image already present in the platform store before invoking the install pipeline; on a digest hit, no image source is executed, no tar bytes are streamed, and no `*-load` CLI is invoked
   [system](bash tests/sandbox/image-install-digest-skip.sh)
 - On Linux, the runtime image installer dispatches `source_kind = "nix-descriptor"` through an archive-less `skopeo nix:<descriptor> → containers-storage:<ref>` (or equivalent wrix) install path; the docker/OCI archive conversion path is not used for Linux descriptor sources
-  [system?](bash tests/sandbox/image-install-archiveless.sh)
+  [system](bash tests/sandbox/image-install-archiveless.sh)
 - A second spawn of an already-loaded image performs no writes to the platform store's layer directory and does not execute the image source
   [system?](bash tests/sandbox/image-install-no-rewrite.sh)
 - On Linux, re-installing an image that differs from the cached one in only its top customisation layer generates and transfers only changed/missing layer blobs, not O(image-size) bytes

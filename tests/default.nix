@@ -158,6 +158,7 @@ let
 
     for app in \
       test-wrix-spawn-load \
+      test-image-install-archiveless \
       test-image-install-real-skopeo \
       test-image-install-digest-skip \
       test-image-digest-matches-stored-id \
@@ -250,6 +251,12 @@ in
       meta.description = "Verify launcher image install against real packaged skopeo (Linux only)";
       type = "app";
       program = "${sandboxImageChecks.imageInstallRealSkopeoTest}/bin/test-image-install-real-skopeo";
+    };
+
+    image-install-archiveless = {
+      meta.description = "Verify Linux descriptor image install avoids archive transports.";
+      type = "app";
+      program = "${sandboxImageChecks.imageInstallArchivelessTest}/bin/test-image-install-archiveless";
     };
 
     image-digest-matches-stored-id = {

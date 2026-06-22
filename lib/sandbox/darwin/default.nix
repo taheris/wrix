@@ -362,19 +362,35 @@ in
                 # enumerate wrix-* refs and compare each ref's content digest.
                 # On a hit, the requested ref is aliased to the matching content
                 # and no tar bytes are streamed, no skopeo conversion, no
-                # `container image load` is invoked. Falls back to ref-existence
-                # when IMAGE_DIGEST_PATH is empty.
+                # `container image load` is invoked. SpawnConfig source overrides
+                # derive this digest from the selected docker-archive before load.
                 _wrix_skip_load=0
+                case "$IMAGE_SOURCE_KIND" in
+                  docker-archive) ;;
+                  *)
+                    echo "Error: unsupported image source_kind on Darwin: $IMAGE_SOURCE_KIND" >&2
+                    exit 1
+                    ;;
+                esac
                 _wrix_desired_digest=""
-                if [ -n "''${IMAGE_DIGEST_PATH:-}" ]; then
-                  if [[ "$IMAGE_DIGEST_PATH" == sha256:* ]]; then
+                if [[ -n "''${IMAGE_DIGEST_PATH:-}" ]]; then
+                  if [[ "$IMAGE_DIGEST_PATH" =~ ^sha256:[0-9a-f]{64}$ ]]; then
                     _wrix_desired_digest="$IMAGE_DIGEST_PATH"
-                  elif [ -s "$IMAGE_DIGEST_PATH" ]; then
-                    _wrix_desired_digest=$(cat "$IMAGE_DIGEST_PATH")
+                  elif [[ -s "$IMAGE_DIGEST_PATH" ]]; then
+                    _wrix_digest_candidate=$(cat "$IMAGE_DIGEST_PATH")
+                    if [[ "$_wrix_digest_candidate" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                      _wrix_desired_digest="$_wrix_digest_candidate"
+                    fi
+                  fi
+                fi
+                if [[ -z "$_wrix_desired_digest" ]]; then
+                  if ! _wrix_desired_digest=$(${pkgs.skopeo}/bin/skopeo inspect --raw "docker-archive:$IMAGE_SOURCE" | ${pkgs.jq}/bin/jq -er '.config.digest // empty | strings | select(test("^sha256:[0-9a-f]{64}$"))'); then
+                    echo "Error: docker-archive image source is missing a sha256 digest: $IMAGE_SOURCE" >&2
+                    exit 1
                   fi
                 fi
 
-                if [ -n "$_wrix_desired_digest" ]; then
+                if [[ -n "$_wrix_desired_digest" ]]; then
                   _wrix_desired_short="''${_wrix_desired_digest#sha256:}"
                   _wrix_match_ref=""
                   while IFS= read -r _ref; do
@@ -403,24 +419,28 @@ in
                 else
                   verbose "Image hash changed or missing, reloading..."
                   echo "Loading profile image..."
-                  # Drop the prior :latest alias so the new load can claim the same
-                  # repo name; pruneStaleImages later cleans residual hash tags.
-                  container image delete "$IMAGE_REPO:latest" 2>/dev/null || true
-                  # Convert Docker-format tar to OCI-archive for Apple container CLI.
-                  # --insecure-policy is safe: images are built locally from Nix
-                  # derivations (trusted source with cryptographic hashes).
-                  OCI_TAR="$WRIX_CACHE/profile-image-oci.tar"
-                  mkdir -p "$WRIX_CACHE"
-                  ${pkgs.skopeo}/bin/skopeo --insecure-policy copy --quiet "docker-archive:$IMAGE_SOURCE" "oci-archive:$OCI_TAR"
-                  LOAD_OUTPUT=$(container image load --input "$OCI_TAR" 2>&1)
-                  LOADED_REF=$(echo "$LOAD_OUTPUT" | grep -oE 'untagged@sha256:[a-f0-9]+' | head -1)
-                  if [ -n "$LOADED_REF" ]; then
-                    container image tag "$LOADED_REF" "$PROFILE_IMAGE"
-                    # Maintain :latest as the keep-anchor for pruneStaleImages.
-                    container image tag "$LOADED_REF" "$IMAGE_REPO:latest"
-                  fi
-                  rm -f "$OCI_TAR"
-                  container image prune
+                  case "$IMAGE_SOURCE_KIND" in
+                    docker-archive)
+                      # Drop the prior :latest alias so the new load can claim the same
+                      # repo name; pruneStaleImages later cleans residual hash tags.
+                      container image delete "$IMAGE_REPO:latest" 2>/dev/null || true
+                      # Convert Docker-format tar to OCI-archive for Apple container CLI.
+                      # --insecure-policy is safe: images are built locally from Nix
+                      # derivations (trusted source with cryptographic hashes).
+                      OCI_TAR="$WRIX_CACHE/profile-image-oci.tar"
+                      mkdir -p "$WRIX_CACHE"
+                      ${pkgs.skopeo}/bin/skopeo --insecure-policy copy --quiet "docker-archive:$IMAGE_SOURCE" "oci-archive:$OCI_TAR"
+                      LOAD_OUTPUT=$(container image load --input "$OCI_TAR" 2>&1)
+                      LOADED_REF=$(echo "$LOAD_OUTPUT" | grep -oE 'untagged@sha256:[a-f0-9]+' | head -1)
+                      if [ -n "$LOADED_REF" ]; then
+                        container image tag "$LOADED_REF" "$PROFILE_IMAGE"
+                        # Maintain :latest as the keep-anchor for pruneStaleImages.
+                        container image tag "$LOADED_REF" "$IMAGE_REPO:latest"
+                      fi
+                      rm -f "$OCI_TAR"
+                      container image prune
+                      ;;
+                  esac
                   verbose "Loaded image $PROFILE_IMAGE"
                 fi
               fi

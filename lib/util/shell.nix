@@ -34,8 +34,8 @@ in
   # the case the prior `podman image exists $IMAGE_REF` preflight missed.
   #
   # $IMAGE_DIGEST_PATH may be empty (for example, when `wrix spawn` selects an
-  # image override not represented by the supplied ProfileConfig); the step
-  # falls back to the ref-existence check so spawn-side idempotency is preserved.
+  # image override not represented by the supplied ProfileConfig); descriptor
+  # and archive sources derive the selected source digest before preflight.
   #
   # On miss, the install transport dispatches by source kind. Linux descriptors
   # flow through `skopeo copy nix:<descriptor> → containers-storage:<ref>`;
@@ -45,13 +45,33 @@ in
       verbose "Using cached image $IMAGE_REF"
     else
       _wrix_skip_load=0
+      _wrix_source_kind="''${IMAGE_SOURCE_KIND:-legacy-stream}"
       _wrix_desired_digest=""
       if [[ -n "''${IMAGE_DIGEST_PATH:-}" ]]; then
-        if [[ "$IMAGE_DIGEST_PATH" == sha256:* ]]; then
+        if [[ "$IMAGE_DIGEST_PATH" =~ ^sha256:[0-9a-f]{64}$ ]]; then
           _wrix_desired_digest="$IMAGE_DIGEST_PATH"
         elif [[ -s "$IMAGE_DIGEST_PATH" ]]; then
-          _wrix_desired_digest=$(cat "$IMAGE_DIGEST_PATH")
+          _wrix_digest_candidate=$(cat "$IMAGE_DIGEST_PATH")
+          if [[ "$_wrix_digest_candidate" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            _wrix_desired_digest="$_wrix_digest_candidate"
+          fi
         fi
+      fi
+      if [[ -z "$_wrix_desired_digest" ]]; then
+        case "$_wrix_source_kind" in
+          nix-descriptor)
+            if ! _wrix_desired_digest=$(${jqBin} -er '.digest // empty | strings | select(test("^sha256:[0-9a-f]{64}$"))' "$IMAGE_SOURCE"); then
+              echo "Error: nix-descriptor image source is missing a sha256 digest: $IMAGE_SOURCE" >&2
+              exit 1
+            fi
+            ;;
+          docker-archive)
+            if ! _wrix_desired_digest=$(skopeo inspect --raw "docker-archive:$IMAGE_SOURCE" | ${jqBin} -er '.config.digest // empty | strings | select(test("^sha256:[0-9a-f]{64}$"))'); then
+              echo "Error: docker-archive image source is missing a sha256 digest: $IMAGE_SOURCE" >&2
+              exit 1
+            fi
+            ;;
+        esac
       fi
       if [[ -n "$_wrix_desired_digest" ]]; then
         if podman image inspect --format '{{.Id}}' "$_wrix_desired_digest" >/dev/null 2>&1; then
@@ -69,7 +89,6 @@ in
         verbose "Using cached image $IMAGE_REF"
       else
         verbose "Loading image from $IMAGE_SOURCE..."
-        _wrix_source_kind="''${IMAGE_SOURCE_KIND:-legacy-stream}"
         _wrix_img_tmp=$(mktemp -d)
         # The containers-storage leg writes into podman's store. skopeo resolves
         # that store on its own and, when XDG_RUNTIME_DIR is unset, falls back to
