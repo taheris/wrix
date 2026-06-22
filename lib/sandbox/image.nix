@@ -355,7 +355,7 @@ let
   sourceKind = if asTarball then "docker-archive" else "nix-descriptor";
 
   ociLayout =
-    pkgs.runCommandLocal "${imageName}-oci-layout"
+    pkgs.runCommandLocal "${imageName}-oci"
       {
         nativeBuildInputs = [
           pkgs.jq

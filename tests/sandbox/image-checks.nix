@@ -726,7 +726,7 @@ let
           oci_layout=$(jq -r '.oci_layout // ""' "$source_path")
           oci_ref=$(jq -r '.oci_ref // ""' "$source_path")
           layer_count=$(jq -r '(.layers // []) | length' "$source_path")
-          if [[ "$oci_layout" != /nix/store/*-oci-layout ]]; then
+          if [[ "$oci_layout" != /nix/store/*-oci ]]; then
               echo "FAIL: Linux descriptor does not point at an OCI layout: $oci_layout" >&2
               exit 1
           fi
