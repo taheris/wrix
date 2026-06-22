@@ -46,12 +46,106 @@ WRIX_AWK_BIN="$(command -v awk)" || { echo "Error: awk is required to resolve ne
 WRIX_SORT_BIN="$(command -v sort)" || { echo "Error: sort is required to resolve network allowlist domains" >&2; exit 1; }
 WRIX_GREP_BIN="$(command -v grep)" || { echo "Error: grep is required to verify sandbox network policy" >&2; exit 1; }
 export WRIX_IPTABLES_BIN WRIX_IP6TABLES_BIN WRIX_CAPSH_BIN WRIX_GETENT_BIN WRIX_AWK_BIN WRIX_SORT_BIN WRIX_GREP_BIN
+if WRIX_REAL_BD_BIN="$(command -v bd)"; then
+  export WRIX_REAL_BD_BIN
+else
+  WRIX_REAL_BD_BIN=""
+fi
 
 # Prepend /workspace/bin AFTER the entrypoint's own git bootstrap (git-ssh-setup,
 # safe.directory, hooksPath) so those resolve the baked git, never a consumer
 # shim — but BEFORE the agent guard/dispatch so a /workspace/bin/<agent> shim
 # still resolves for the agent.
 if [[ -d /workspace/bin ]]; then export PATH="/workspace/bin:$PATH"; fi
+
+wrix_install_bd_remote_wrapper() {
+  [[ -n "${WRIX_REAL_BD_BIN:-}" ]] || return 0
+  local wrapper_dir="/tmp/wrix-bd"
+  mkdir -p "$wrapper_dir"
+  cat >"$wrapper_dir/bd" <<'WRIX_BD_WRAPPER'
+#!/bin/bash
+set -euo pipefail
+
+real_bd="${WRIX_REAL_BD_BIN:?}"
+
+wrix_bd_sql_quote() {
+  local value="$1"
+  value="${value//\'/\'\'}"
+  printf "'%s'" "$value"
+}
+
+if [[ "${1:-}" != "dolt" || ( "${2:-}" != "pull" && "${2:-}" != "push" ) ]]; then
+  exec "$real_bd" "$@"
+fi
+
+root="/workspace"
+if [[ -f /workspace/.git || -f /workspace/.git/HEAD ]] && git_root=$(git -C /workspace rev-parse --show-toplevel); then
+  root="$git_root"
+fi
+branch="beads"
+if [[ -f "$root/.beads/config.yaml" ]] && command -v yq >/dev/null; then
+  if parsed_branch=$(yq -r '."sync-branch" // "beads"' "$root/.beads/config.yaml"); then
+    if [[ -n "$parsed_branch" && "$parsed_branch" != "null" ]]; then
+      branch="$parsed_branch"
+    fi
+  fi
+fi
+remote_dir="$root/.git/beads-worktrees/$branch/.beads/dolt-remote"
+if [[ ! -d "$remote_dir" ]]; then
+  exec "$real_bd" "$@"
+fi
+desired="file://$remote_dir"
+if ! remote_list=$("$real_bd" dolt remote list); then
+  exec "$real_bd" "$@"
+fi
+original=$(printf '%s\n' "$remote_list" | awk '$1 == "origin" { print $2; exit }')
+if [[ "$original" == "$desired" ]]; then
+  exec "$real_bd" "$@"
+fi
+
+if [[ -n "$original" ]]; then
+  "$real_bd" sql "CALL DOLT_REMOTE('remove', 'origin')"
+fi
+"$real_bd" sql "CALL DOLT_REMOTE('add', 'origin', $(wrix_bd_sql_quote "$desired"))"
+
+wrix_bd_restore_origin() {
+  local add_status=0
+  local status=0
+  set +e
+  "$real_bd" sql "CALL DOLT_REMOTE('remove', 'origin')"
+  status=$?
+  if [[ -n "$original" ]]; then
+    "$real_bd" sql "CALL DOLT_REMOTE('add', 'origin', $(wrix_bd_sql_quote "$original"))"
+    add_status=$?
+    if [[ "$add_status" -ne 0 && "$status" -eq 0 ]]; then
+      status=$add_status
+    fi
+  fi
+  set -e
+  return "$status"
+}
+
+trap 'wrix_bd_restore_origin' EXIT
+set +e
+"$real_bd" "$@"
+command_status=$?
+set -e
+trap - EXIT
+restore_status=0
+wrix_bd_restore_origin || restore_status=$?
+if [[ "$command_status" -ne 0 ]]; then
+  exit "$command_status"
+fi
+exit "$restore_status"
+WRIX_BD_WRAPPER
+  chmod +x "$wrapper_dir/bd"
+  if [[ "$PATH" == /workspace/bin:* ]]; then
+    PATH="/workspace/bin:$wrapper_dir:${PATH#/workspace/bin:}"
+  else
+    PATH="$wrapper_dir:$PATH"
+  fi
+  export PATH
+}
 
 # WRIX_AGENT selects the agent runtime. 'direct' is the default base image;
 # 'claude' and 'pi' are explicit agent overlays. Each agent seeds its own config
@@ -206,6 +300,7 @@ if [[ -f /workspace/.beads/config.yaml ]]; then
       echo "  Start the host ${_repo:-repo}-beads container (enter the devShell) before launching this container." >&2
       exit 1
     fi
+    wrix_install_bd_remote_wrapper
   fi
 
   # best-effort: files may not exist or not be tracked; restoring them is idempotent cleanup

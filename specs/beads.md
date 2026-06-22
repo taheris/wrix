@@ -257,6 +257,12 @@ upstream, not by this spec.
   per-container embedded Dolt or JSONL import
   [system](bash tests/services/dolt-cli.sh test_sync_in_container)
 
+- Direct `bd dolt pull` / `bd dolt push` inside the sandbox temporarily use
+  the container-visible `/workspace` beads-worktree remote when the persisted
+  Dolt `origin` points at the host checkout path, and restore the persisted
+  remote after the command
+  [system](bash tests/services/dolt-cli.sh test_bd_dolt_sync_uses_container_remote)
+
 - `beads.shellHook` launches the workspace service container with a lifecycle independent
   of the caller, so stopping a long-running parent (e.g. a `systemd --user`
   service that triggered shellHook evaluation via envrc) does not block on
@@ -390,6 +396,11 @@ upstream, not by this spec.
    metadata only. They do not stage `.beads/issues.jsonl`, and they do not
    permit JSONL auto-import or embedded Dolt fallback when the Dolt service is
    unavailable.
+13. **Sandbox Dolt remote mapping** — direct `bd dolt pull` / `bd dolt push`
+   inside a sandbox temporarily remap Dolt `origin` to the container-visible
+   `/workspace/.git/beads-worktrees/<branch>/.beads/dolt-remote` for the
+   command and restore the persisted host-path remote afterwards, so the same
+   database works from host and container contexts.
 
 ### Non-Functional
 

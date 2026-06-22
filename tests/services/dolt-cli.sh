@@ -76,7 +76,11 @@ EOF
   cat >"$bin_dir/yq" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-printf 'wx\n'
+if [[ "$*" == *'sync-branch'* ]]; then
+  printf 'beads\n'
+else
+  printf 'wx\n'
+fi
 EOF
   chmod +x "$bin_dir/yq"
 
@@ -153,12 +157,49 @@ write_asserting_bd() {
   cat >"$bin_dir/bd" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-printf '%s|auto=%s|socket=%s|host=%s|port=%s\n' \
+origin_file="$log_file.origin"
+current_origin() {
+  if [[ -f "\$origin_file" ]]; then
+    cat "\$origin_file"
+  else
+    printf '%s' "\${FAKE_BD_ORIGIN_REMOTE:-}"
+  fi
+}
+printf '%s|auto=%s|socket=%s|host=%s|port=%s|origin=%s\n' \
   "\$*" \
   "\${BEADS_DOLT_AUTO_START:-}" \
   "\${BEADS_DOLT_SERVER_SOCKET:-}" \
   "\${BEADS_DOLT_SERVER_HOST:-}" \
-  "\${BEADS_DOLT_SERVER_PORT:-}" >>"$log_file"
+  "\${BEADS_DOLT_SERVER_PORT:-}" \
+  "\$(current_origin)" >>"$log_file"
+if [[ "\${1:-}" == "dolt" && "\${2:-}" == "remote" && "\${3:-}" == "list" ]]; then
+  origin="\$(current_origin)"
+  if [[ -n "\$origin" ]]; then
+    printf 'origin %s\n' "\$origin"
+  fi
+  exit 0
+fi
+if [[ "\${1:-}" == "sql" ]]; then
+  query=""
+  argument=""
+  for argument in "\$@"; do
+    query="\$argument"
+  done
+  if [[ "\$query" == "CALL DOLT_REMOTE('remove', 'origin')" ]]; then
+    rm -f "\$origin_file"
+    exit 0
+  fi
+  if [[ "\$query" == "CALL DOLT_REMOTE('add', 'origin', '"*"')" ]]; then
+    prefix="CALL DOLT_REMOTE('add', 'origin', '"
+    suffix="')"
+    remote_url="\${query#"\$prefix"}"
+    remote_url="\${remote_url%"\$suffix"}"
+    printf '%s\n' "\$remote_url" >"\$origin_file"
+    exit 0
+  fi
+  printf 'unexpected bd sql: %s\n' "\$query" >&2
+  exit 64
+fi
 case "\$*" in
   "dolt pull"|"dolt push") ;;
   *)
@@ -166,6 +207,10 @@ case "\$*" in
     exit 64
     ;;
 esac
+if [[ -n "\${BD_EXPECT_ORIGIN:-}" && "\$(current_origin)" != "\$BD_EXPECT_ORIGIN" ]]; then
+  printf 'origin %s, expected %s\n' "\$(current_origin)" "\$BD_EXPECT_ORIGIN" >&2
+  exit 69
+fi
 if [[ "\${BEADS_DOLT_AUTO_START:-}" != "0" ]]; then
   printf 'BEADS_DOLT_AUTO_START was not disabled\n' >&2
   exit 65
@@ -361,6 +406,47 @@ test_fake_bd_contract() {
   assert_contains "fake bd log" "$(<"$log_file")" "dolt pull|auto=0|socket=$socket_path"
 }
 
+test_bd_dolt_sync_uses_container_remote() {
+  require_command python3
+  local workspace="$TEST_TMP/remote-wrapper-workspace"
+  local entrypoint="$TEST_TMP/remote-wrapper-entrypoint.sh"
+  local bd_log="$TEST_TMP/remote-wrapper-bd.log"
+  local stdout_path="$TEST_TMP/remote-wrapper.out"
+  local stderr_path="$TEST_TMP/remote-wrapper.err"
+  local socket_path="$TEST_TMP/remote-wrapper-dolt.sock"
+  local real_bd_dir="$TEST_TMP/remote-wrapper-real-bd-bin"
+  local old_path="$PATH"
+  local container_remote
+  local host_remote
+
+  write_beads_files "$workspace" dolt
+  rm -f "$workspace/.beads/issues.jsonl"
+  mkdir -p "$workspace/bin" "$workspace/.git/beads-worktrees/beads/.beads/dolt-remote"
+  write_fake_container_tools "$workspace/bin" "$bd_log"
+  write_asserting_bd "$workspace/bin" "$bd_log"
+  mkdir -p "$real_bd_dir"
+  mv "$workspace/bin/bd" "$real_bd_dir/bd"
+  export PATH="$real_bd_dir:$PATH"
+  rewrite_entrypoint_workspace "$REPO_ROOT/lib/sandbox/linux/entrypoint.sh" "$workspace" "$entrypoint"
+  start_unix_socket "$socket_path"
+  container_remote="file://$workspace/.git/beads-worktrees/beads/.beads/dolt-remote"
+  host_remote="file:///home/shaun/src/github.com/taheris/wrix/.git/beads-worktrees/beads/.beads/dolt-remote"
+
+  export FAKE_BD_ORIGIN_REMOTE="$host_remote"
+  export BD_EXPECT_ORIGIN="$container_remote"
+  if ! BEADS_TEST_DOLT_SOCKET="$socket_path" \
+    run_entrypoint_command "$entrypoint" "$workspace" "$stdout_path" "$stderr_path" \
+      bash -c 'bd dolt pull'; then
+    fail "entrypoint failed to remap bd remote: $(<"$stderr_path")"
+  fi
+  unset FAKE_BD_ORIGIN_REMOTE BD_EXPECT_ORIGIN
+  export PATH="$old_path"
+
+  assert_contains "bd remote add" "$(<"$bd_log")" "CALL DOLT_REMOTE('add', 'origin', '$container_remote')"
+  assert_contains "bd pull remapped" "$(<"$bd_log")" "dolt pull|auto=0|socket=$socket_path|host=|port=|origin=$container_remote"
+  assert_contains "bd remote restore" "$(<"$bd_log.origin")" "$host_remote"
+}
+
 test_sync_in_container() {
   require_command nix
   require_command python3
@@ -418,6 +504,7 @@ test_no_jsonl_staged() {
 
 ALL_TESTS=(
   test_fake_bd_contract
+  test_bd_dolt_sync_uses_container_remote
   test_sync_in_container
   test_no_jsonl_staged
 )
