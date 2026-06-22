@@ -35,19 +35,18 @@ PermitUserEnvironment yes
 Subsystem sftp internal-sftp
 EOF
 
-# Install SSH host key from nix store (stable for publicHostKey in nix-darwin)
-HOST_KEY="/run/keys/ssh_host_ed25519_key"
-if [ -f "$HOST_KEY" ]; then
-    echo "Installing SSH host key..."
-    cp "$HOST_KEY" /etc/ssh/ssh_host_ed25519_key
-    cp "${HOST_KEY}.pub" /etc/ssh/ssh_host_ed25519_key.pub
-    chmod 600 /etc/ssh/ssh_host_ed25519_key
-    chmod 644 /etc/ssh/ssh_host_ed25519_key.pub
-else
-    # Fallback: generate ephemeral key (publicHostKey will change on restart)
-    echo "Warning: No host key at $HOST_KEY, generating ephemeral key..." >&2
-    ssh-keygen -t ed25519 -f /etc/ssh/ssh_host_ed25519_key -N ""
+# Install SSH host key from the host-user key directory.
+HOST_KEY="/run/keys/host_ed25519"
+if [ ! -f "$HOST_KEY" ] || [ ! -f "${HOST_KEY}.pub" ]; then
+    echo "ERROR: Builder host key missing under /run/keys" >&2
+    exit 1
 fi
+
+echo "Installing SSH host key..."
+cp "$HOST_KEY" /etc/ssh/ssh_host_ed25519_key
+cp "${HOST_KEY}.pub" /etc/ssh/ssh_host_ed25519_key.pub
+chmod 600 /etc/ssh/ssh_host_ed25519_key
+chmod 644 /etc/ssh/ssh_host_ed25519_key.pub
 
 # Setup builder user if not exists
 if ! id "$BUILDER_USER" >/dev/null 2>&1; then
@@ -66,15 +65,16 @@ chmod 700 "$BUILDER_HOME/.ssh"
 chown "$BUILDER_UID:$BUILDER_UID" "$BUILDER_HOME/.ssh"
 
 # Install authorized keys from mounted keys
-KEYS_FILE="/run/keys/builder_ed25519.pub"
-if [ -f "$KEYS_FILE" ]; then
-    echo "Installing authorized keys..."
-    cp "$KEYS_FILE" "$BUILDER_HOME/.ssh/authorized_keys"
-    chmod 600 "$BUILDER_HOME/.ssh/authorized_keys"
-    chown "$BUILDER_UID:$BUILDER_UID" "$BUILDER_HOME/.ssh/authorized_keys"
-else
-    echo "Warning: No authorized keys found at $KEYS_FILE" >&2
+KEYS_FILE="/run/keys/client_ed25519.pub"
+if [ ! -f "$KEYS_FILE" ]; then
+    echo "ERROR: Builder client public key missing under /run/keys" >&2
+    exit 1
 fi
+
+echo "Installing authorized keys..."
+cp "$KEYS_FILE" "$BUILDER_HOME/.ssh/authorized_keys"
+chmod 600 "$BUILDER_HOME/.ssh/authorized_keys"
+chown "$BUILDER_UID:$BUILDER_UID" "$BUILDER_HOME/.ssh/authorized_keys"
 
 # Configure the Nix daemon
 # Use /run for the client endpoint to avoid VirtioFS permission issues with /nix

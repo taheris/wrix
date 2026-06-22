@@ -181,49 +181,22 @@ in
     mkdir $out
   '';
 
-  # Verify builder key generation produces expected outputs
-  # Security note: Keys are in Nix store (world-readable), mitigated by localhost-only SSH
-  # See specs/linux-builder.md for trust model.
+  # Verify builder key generation produces host-user-owned material.
   builder-keys-structure =
-    let
-      builderKeys = import ../../lib/builder/hostkey.nix { inherit pkgs; };
-    in
-    runCommandLocal "smoke-builder-keys" { } ''
-      echo "Checking builder key structure..."
-
-      # Verify all expected files exist
-      test -f ${builderKeys}/ssh_host_ed25519_key || { echo "FAIL: Missing host private key"; exit 1; }
-      test -f ${builderKeys}/ssh_host_ed25519_key.pub || { echo "FAIL: Missing host public key"; exit 1; }
-      test -f ${builderKeys}/builder_ed25519 || { echo "FAIL: Missing client private key"; exit 1; }
-      test -f ${builderKeys}/builder_ed25519.pub || { echo "FAIL: Missing client public key"; exit 1; }
-      test -f ${builderKeys}/public_host_key_base64 || { echo "FAIL: Missing base64 host key"; exit 1; }
-      echo "PASS: All expected key files present"
-
-      # Verify keys are ed25519 (not weaker algorithms)
-      grep -q "ssh-ed25519" ${builderKeys}/ssh_host_ed25519_key.pub || { echo "FAIL: Host key not ed25519"; exit 1; }
-      grep -q "ssh-ed25519" ${builderKeys}/builder_ed25519.pub || { echo "FAIL: Client key not ed25519"; exit 1; }
-      echo "PASS: Keys use ed25519 algorithm"
-
-      # Verify private keys have expected OpenSSH format header
-      head -1 ${builderKeys}/ssh_host_ed25519_key | grep -q "BEGIN OPENSSH PRIVATE KEY" || { echo "FAIL: Host private key format invalid"; exit 1; }
-      head -1 ${builderKeys}/builder_ed25519 | grep -q "BEGIN OPENSSH PRIVATE KEY" || { echo "FAIL: Client private key format invalid"; exit 1; }
-      echo "PASS: Private keys have valid format"
-
-      # Verify base64 host key is non-empty and valid base64
-      test -s ${builderKeys}/public_host_key_base64 || { echo "FAIL: Base64 key is empty"; exit 1; }
-      echo "PASS: Base64 public host key present"
-
-      # Document that keys are in Nix store (world-readable)
-      # This is intentional - see specs/linux-builder.md for trust model.
-      echo ""
-      echo "NOTE: Keys are in Nix store at ${builderKeys}"
-      echo "This is documented in specs/linux-builder.md (Trust Model section)"
-      echo "Mitigations: localhost-only SSH, password auth disabled, machine-local keys"
-
-      echo ""
-      echo "Builder key structure validation passed"
-      mkdir $out
-    '';
+    runCommandLocal "smoke-builder-keys"
+      {
+        nativeBuildInputs = [
+          bash
+          pkgs.coreutils
+          pkgs.gnugrep
+          pkgs.openssh
+        ];
+      }
+      ''
+        echo "Checking builder key structure..."
+        REPO_ROOT="${../..}" bash "${../../tests/builder/key-material.sh}"
+        mkdir $out
+      '';
 
   # Verify builder sshd security configuration
   # Security properties:

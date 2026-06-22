@@ -233,8 +233,7 @@ this section is the index, not a restatement.
 - **Per-profile allowlist additions** — `profiles.md`
 - **Nix build sandbox disabled inside the container image** —
   `image-builder.md`
-- **Builder SSH keys** (localhost-bound, Nix-store residence,
-  multi-user trust framing) — `linux-builder.md`
+- **Builder SSH keys and trust model** — `linux-builder.md`
 - **Project Nix cache** (per-workspace explicit binary cache, no host
   `/nix/store` serving, no host Nix daemon socket, no sandbox signing key) —
   `services.md`

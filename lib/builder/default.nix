@@ -19,23 +19,40 @@ let
     pkgs = linuxPkgs;
   };
 
-  # SSH keys in nix store (stable, accessible to nix-darwin and root)
-  keys = import ./hostkey.nix { inherit pkgs; };
-
   script = pkgs.writeShellScriptBin "wrix-builder" ''
       set -euo pipefail
+      . ${./keys.sh}
+      WRIX_BUILDER_SSH_KEYGEN="''${WRIX_BUILDER_SSH_KEYGEN:-${pkgs.openssh}/bin/ssh-keygen}"
+      WRIX_BUILDER_BASE64="''${WRIX_BUILDER_BASE64:-${pkgs.coreutils}/bin/base64}"
 
-      # XDG-compliant directories
-      XDG_DATA_HOME="''${XDG_DATA_HOME:-$HOME/.local/share}"
-      XDG_CACHE_HOME="''${XDG_CACHE_HOME:-$HOME/.cache}"
+      resolve_user_home() {
+        local user="$1"
+        local home=""
+        if command -v dscl >/dev/null 2>&1; then
+          home=$(dscl . -read "/Users/$user" NFSHomeDirectory | awk '{ print $2 }') || home=""
+        fi
+        if [[ -z "$home" ]] && command -v getent >/dev/null 2>&1; then
+          home=$(getent passwd "$user" | cut -d: -f6) || home=""
+        fi
+        [[ -n "$home" ]] || home="$HOME"
+        printf '%s\n' "$home"
+      }
+
+      BUILDER_HOST_HOME="$HOME"
+      if [[ "$(id -u)" -eq 0 && -n "''${SUDO_USER:-}" ]]; then
+        BUILDER_HOST_HOME=$(resolve_user_home "$SUDO_USER")
+      fi
+
+      XDG_DATA_HOME="''${XDG_DATA_HOME:-$BUILDER_HOST_HOME/.local/share}"
+      XDG_CACHE_HOME="''${XDG_CACHE_HOME:-$BUILDER_HOST_HOME/.cache}"
       WRIX_DATA="$XDG_DATA_HOME/wrix"
       WRIX_CACHE="$XDG_CACHE_HOME/wrix"
 
-      # Builder-specific paths
-      STORE_KEYS_DIR="${keys}"
-      CLIENT_KEYS_DIR="$WRIX_DATA/builder-keys"
-      CLIENT_KEY="$CLIENT_KEYS_DIR/builder_ed25519"
-      CLIENT_KNOWN_HOSTS="$CLIENT_KEYS_DIR/known_hosts"
+      BUILDER_KEYS_DIR="$WRIX_DATA/builder-keys"
+      HOST_KEY="$BUILDER_KEYS_DIR/host_ed25519"
+      HOST_KEY_BASE64="$BUILDER_KEYS_DIR/public_host_key_base64"
+      CLIENT_KEY="$BUILDER_KEYS_DIR/client_ed25519"
+      CLIENT_KNOWN_HOSTS="$BUILDER_KEYS_DIR/known_hosts"
       SYSTEM_CLIENT_KEY="/etc/nix/wrix_builder_ed25519"
       SYSTEM_HOST_KEY="/etc/nix/wrix_builder_host_key_base64"
       NIX_STORE="$WRIX_DATA/builder-nix"
@@ -88,14 +105,11 @@ let
       }
 
       ensure_ssh_client_material() {
-        local host_key
-        mkdir -p "$CLIENT_KEYS_DIR"
-        rm -f "$CLIENT_KEY"
-        cp "$STORE_KEYS_DIR/builder_ed25519" "$CLIENT_KEY"
-        chmod 600 "$CLIENT_KEY"
-        host_key=$(cat "$STORE_KEYS_DIR/ssh_host_ed25519_key.pub")
-        printf '[localhost]:%s %s\n' "$SSH_PORT" "$host_key" > "$CLIENT_KNOWN_HOSTS"
-        chmod 600 "$CLIENT_KNOWN_HOSTS"
+        wrix_builder_ensure_key_material "$BUILDER_KEYS_DIR" "$SSH_PORT"
+      }
+
+      require_ssh_client_material() {
+        wrix_builder_require_key_material "$BUILDER_KEYS_DIR"
       }
 
       check_macos_version() {
@@ -194,7 +208,11 @@ let
           echo "This may take a few minutes..."
 
           temp_container="wrix-builder-init-$$"
-          container run --name "$temp_container" -d "$BUILDER_IMAGE" >/dev/null 2>&1
+          container run \
+            --name "$temp_container" \
+            -d \
+            -v "$BUILDER_KEYS_DIR:/run/keys:ro" \
+            "$BUILDER_IMAGE" >/dev/null 2>&1
           sleep 3
 
           if ! container exec "$temp_container" tar -cf - -C / nix 2>/dev/null | tar -xf - -C "$NIX_STORE" --strip-components=1 2>/dev/null; then
@@ -224,7 +242,7 @@ let
           -m 4096M \
           --network default \
           -p "127.0.0.1:$SSH_PORT:22" \
-          -v "$STORE_KEYS_DIR:/run/keys:ro" \
+          -v "$BUILDER_KEYS_DIR:/run/keys:ro" \
           -v "$NIX_STORE:/nix" \
           "$BUILDER_IMAGE"
 
@@ -265,7 +283,7 @@ let
           echo "SSH connection:"
           echo "  wrix-builder ssh"
           echo ""
-          echo "SSH keys: $CLIENT_KEYS_DIR"
+          echo "SSH keys: $BUILDER_KEYS_DIR"
           echo "Nix store: $NIX_STORE"
           if [[ "$state" == "running" && -d "$NIX_STORE" ]]; then
             store_size=$(du -sh "$NIX_STORE" 2>/dev/null | cut -f1) || store_size="unknown"
@@ -317,6 +335,10 @@ let
         cat <<NIXCONFIG
     # Add to nix-darwin configuration:
 
+    # Run wrix-builder setup before evaluating this module; setup installs:
+    #   $SYSTEM_CLIENT_KEY
+    #   $SYSTEM_HOST_KEY
+
     # SSH config (environment.etc):
     "ssh/ssh_config.d/100-wrix-builder.conf".text = '''
       Host wrix-builder
@@ -334,12 +356,12 @@ let
       protocol = "ssh-ng";
       maxJobs = 4;
       supportedFeatures = [ "big-parallel" "benchmark" ];
-      publicHostKey = builtins.readFile $STORE_KEYS_DIR/public_host_key_base64;
+      publicHostKey = builtins.readFile $SYSTEM_HOST_KEY;
     }
 
-    # Or import from wrix flake:
+    # Or import runtime paths from wrix flake:
     # sshKey: inputs.wrix.packages.<system>.wrix-builder.sshKey
-    # publicHostKey: inputs.wrix.packages.<system>.wrix-builder.publicHostKey
+    # publicHostKeyFile: inputs.wrix.packages.<system>.wrix-builder.publicHostKeyFile
     NIXCONFIG
       }
 
@@ -353,6 +375,13 @@ let
         local output
         local root_known_hosts="/var/root/.ssh/known_hosts"
         local state
+
+        if [[ "$(id -u)" -ne 0 ]]; then
+          sudo XDG_DATA_HOME="$XDG_DATA_HOME" "$0" setup-ssh
+          return
+        fi
+
+        require_ssh_client_material
 
         if [[ -n "''${SUDO_USER:-}" ]]; then
           container_cmd=(sudo -u "$SUDO_USER" container)
@@ -374,17 +403,21 @@ let
           exit 1
         fi
 
+        mkdir -p /etc/nix
+
         echo "Installing SSH key at $SYSTEM_CLIENT_KEY..."
         rm -f "$SYSTEM_CLIENT_KEY"
-        cp "$STORE_KEYS_DIR/builder_ed25519" "$SYSTEM_CLIENT_KEY"
+        cp "$CLIENT_KEY" "$SYSTEM_CLIENT_KEY"
         chmod 600 "$SYSTEM_CLIENT_KEY"
         chown root:nixbld "$SYSTEM_CLIENT_KEY"
 
-        echo "Creating host key symlink at $SYSTEM_HOST_KEY..."
-        ln -sf "$STORE_KEYS_DIR/public_host_key_base64" "$SYSTEM_HOST_KEY"
+        echo "Installing host key metadata at $SYSTEM_HOST_KEY..."
+        rm -f "$SYSTEM_HOST_KEY"
+        cp "$HOST_KEY_BASE64" "$SYSTEM_HOST_KEY"
+        chmod 644 "$SYSTEM_HOST_KEY"
 
         echo "Adding to root's known_hosts..."
-        host_key=$(cat "$STORE_KEYS_DIR/ssh_host_ed25519_key.pub")
+        host_key=$(cat "$HOST_KEY.pub")
         mkdir -p /var/root/.ssh
         chmod 700 /var/root/.ssh
 
@@ -438,11 +471,8 @@ in
 # Expose the script with passthru attributes for nix-darwin integration
 script.overrideAttrs (old: {
   passthru = (old.passthru or { }) // {
-    # Public host key for nix-darwin buildMachines
-    publicHostKey = builtins.readFile "${keys}/public_host_key_base64";
-    # SSH key path for nix-darwin buildMachines or SSH config IdentityFile
-    sshKey = "${keys}/builder_ed25519";
-    # Path to keys directory (for reference)
-    keysPath = keys;
+    publicHostKeyFile = "/etc/nix/wrix_builder_host_key_base64";
+    sshKey = "/etc/nix/wrix_builder_ed25519";
+    keysPath = "~/.local/share/wrix/builder-keys";
   };
 })
