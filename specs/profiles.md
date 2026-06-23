@@ -548,11 +548,13 @@ Profiles surface as three sibling output families:
 | `packages.sandbox-<profile>` | `makeWrapper` of `packages.wrix` + `packages.image-<profile>` with `WRIX_AGENT=direct` baked in | One-shot users (`nix run .#sandbox-rust`) |
 | `packages.sandbox-<profile>-claude` | Claude variant with `WRIX_AGENT=claude` baked in | One-shot users that want Claude |
 | `packages.sandbox-<profile>-pi` | Pi variant with `WRIX_AGENT=pi` baked in | One-shot users that want Pi; `packages.default` points at rust `sandbox-rust-pi` |
+| `packages.sandbox-<profile>-mcp` | Direct-agent wrapper built with `mcpRuntime = true`, baking every registered MCP server and deferring selection to `WRIX_MCP` at launch | One-shot users that want runtime MCP server selection without a per-sandbox `mcp` build |
+| `packages.sandbox-<profile>-<agent>-mcp` | Agent overlay wrapper built with both `agent = "<agent>"` and `mcpRuntime = true` | One-shot users that need a selected agent plus runtime MCP server selection |
 | `packages.profile-images` | JSON manifest from `mkProfileImages`, keyed by profile then selected agent variant | External orchestrators (e.g. Loom via `LOOM_PROFILES_MANIFEST`) |
 
 `<profile>` covers the built-in profiles (`base`, `rust`, `python`). The
-`-mcp` axis (runtime MCP server selection) is independent of agent and
-remains its own family of outputs in `modules/flake/packages.nix`.
+`-mcp` axis is all-server runtime MCP selection, independent of agent, and
+does not create per-server profile variants such as `-tmux` or `-playwright`.
 
 ## Downstream Integration
 
@@ -711,7 +713,7 @@ dests live under `/home/wrix/` inside the container, not under
   [system](bash tests/profiles/no-nightly-closure.sh test_no_nightly_closure)
 - `mkProfileImages { rust = …; }` produces a JSON file whose entry for `rust` is keyed by the image's selected agent and whose selected-agent entry has `ref`, `source`, `source_kind`, and `profile_config` fields, with `source` and `source_kind` resolving to the same image source path and source kind as the corresponding `(wrix.mkSandbox { profile = wrix.profiles.rust; agent = …; }).image`
   [system](bash tests/profiles/profile-images-manifest.sh test_manifest_shape)
-- `packages.image-<name>`, `packages.sandbox-<name>`, `packages.profile-images`, and `packages.profile-images-pi` all evaluate for each built-in profile, and `packages.default` resolves to `sandbox-rust-pi`
+- `packages.image-<name>[-<agent>]`, `packages.sandbox-<name>[-<agent>][-mcp]`, `packages.profile-images`, and `packages.profile-images-pi` all evaluate for each built-in profile, and `packages.default` resolves to `sandbox-rust-pi`
   [system](bash tests/profiles/profile-images-manifest.sh test_flake_outputs_present)
 - `profiles.rust.buildPackage` is exposed and returns an attrset with `bin`, `clippy`, `nextest`, and `cargoArtifacts` fields
   [system](bash tests/profiles/build-package.sh test_build_package_exposed)

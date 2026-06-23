@@ -8,7 +8,7 @@ AI agents lack the ability to debug applications the way humans do — running a
 
 ## Architecture
 
-A Rust binary implementing the MCP protocol (JSON-RPC over stdio) that drives a tmux session named `debug-{pid}`. The server runs inside the wrix container — `sandbox.md` is the security boundary; this spec adds no further isolation. Container construction, MCP opt-in plumbing (`mcp.tmux = { … }`), and trust model belong to `sandbox.md`. This spec owns the wire protocol, pane lifecycle, and audit format.
+A Rust binary implementing the MCP protocol (JSON-RPC over stdio) that drives a tmux session named `debug-{pid}`. The server runs inside the wrix container — `sandbox.md` is the security boundary; this spec adds no further isolation. Container construction, explicit MCP opt-in plumbing (`mcp.tmux = { … }`), runtime MCP image bundles (`mcpRuntime` / `sandbox-*-mcp`), and trust model belong to `sandbox.md` and `profiles.md`. This spec owns the wire protocol, pane lifecycle, and audit format.
 
 Load-bearing decisions:
 
@@ -76,13 +76,13 @@ mkSandbox {
 }
 ```
 
-Profiles do not need a `-debug` variant — MCP servers compose orthogonally with the base profile.
+The tmux server does not define a per-server `-debug` or `-tmux` profile variant. Explicit `mcp.tmux` opt-in composes with the selected workspace profile; all-server runtime MCP bundles are owned by `sandbox.md` and `profiles.md`.
 
 ## Success Criteria
 
 - The tmux-mcp integration suite passes: pane lifecycle (create/list/kill), `send_keys` + `capture_pane` round-trip, exited-pane status reporting, error-handling envelopes, audit-log JSON-Lines format, and session cleanup on server exit
   [system](bash tests/mcp/tmux/integration.sh)
-- `mcp.tmux` composes with the rust-debug profile image via `mkSandbox`'s `mcp` parameter: the image build succeeds, tmux and tmux-mcp resolve on PATH inside the container, and the MCP server responds to a JSON-RPC `initialize` request
+- `mcp.tmux` composes with the rust profile via an explicit `mkSandbox { mcp.tmux = { }; }` instantiation: the image build succeeds, tmux and tmux-mcp resolve on PATH inside the container, and the MCP server responds to a JSON-RPC `initialize` request
   [system](bash tests/mcp/tmux/e2e-sandbox.sh)
 - Tool error responses construct `isError: true` envelopes via the MCP standard path
   [system](bash tests/mcp/tmux/tool-error-envelope.sh test_tool_handler_error_response_uses_mcp_success_envelope)
@@ -96,7 +96,7 @@ Profiles do not need a `-debug` variant — MCP servers compose orthogonally wit
 1. **MCP tool surface** — the five tools above are registered and respond to the documented parameters; capture defaults to 100 lines and caps at 1000.
 2. **Pane lifecycle visibility** — exited panes remain inspectable until explicitly killed; the server tracks `running` vs `exited` state.
 3. **Audit logging** — opt-in JSONL log with the documented record shape; capture bodies optionally land in a per-capture file under `auditFull`.
-4. **MCP opt-in via sandbox** — the server is enabled per-sandbox via `mcp.tmux = { … }`; it does not proliferate profile variants.
+4. **MCP opt-in via sandbox** — the server is enabled per-sandbox via `mcp.tmux = { … }`; it does not define a tmux-specific `-debug` or `-tmux` profile variant. Runtime MCP bundles that include every registered server are owned by `sandbox.md`/`profiles.md`, not this server spec.
 5. **Single managed tmux session** — the server owns one `debug-{pid}` session and tears it down on exit.
 
 ### Non-Functional

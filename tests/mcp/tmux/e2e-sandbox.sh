@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Verifier for tmux-mcp's mkSandbox composition (specs/tmux-mcp.md).
 #
-# Builds the sandbox-rust-mcp image (the rust profile with `mcp.tmux = {}`
-# threaded through mkSandbox), loads it into the host's rootless podman,
-# and asserts:
+# Instantiates `mkSandbox { profile = profiles.rust; mcp.tmux = {}; }`
+# directly, loads the resulting image into the host's rootless podman, and
+# asserts:
 #   1. tmux resolves on PATH inside the container;
 #   2. tmux-mcp resolves on PATH inside the container;
 #   3. the MCP server responds to a JSON-RPC `initialize` request.
@@ -42,9 +42,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if ! PACKAGE_PATH=$(nix build --no-link --print-out-paths --no-warn-dirty .#sandbox-rust-mcp 2>"$build_log"); then
+if ! PACKAGE_PATH=$(nix build --no-link --print-out-paths --no-warn-dirty --impure --expr "
+  let
+    flake = builtins.getFlake \"git+file://$REPO_ROOT\";
+    system = builtins.currentSystem;
+    lib = flake.legacyPackages.\${system}.lib;
+  in
+    (lib.mkSandbox { profile = lib.profiles.rust; mcp.tmux = { }; }).package
+" 2>"$build_log"); then
   cat "$build_log" >&2
-  echo "FAIL: nix build .#sandbox-rust-mcp" >&2
+  echo "FAIL: nix build explicit mkSandbox mcp.tmux sandbox" >&2
   exit 1
 fi
 PROFILE_CONFIG=$(grep -oE -- '--profile-config[[:space:]]+[^[:space:]]+' "$PACKAGE_PATH/bin/wrix" | awk '{print $2}' | head -1)

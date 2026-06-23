@@ -9,10 +9,10 @@
 #    `ref`, `source`, `source_kind`, and `profile_config` fields, with `source`
 #    and `source_kind` matching the corresponding `mkSandbox` image metadata.
 #
-# 2. test_flake_outputs_present — `packages.image-<name>`,
-#    `packages.sandbox-<name>`, `packages.profile-images`, and
-#    `packages.profile-images-pi` evaluate for every built-in profile (base,
-#    rust, python), and `packages.default` resolves to `sandbox-rust-pi`.
+# 2. test_flake_outputs_present — `packages.image-<name>[-<agent>]`,
+#    `packages.sandbox-<name>[-<agent>][-mcp]`, `packages.profile-images`,
+#    and `packages.profile-images-pi` evaluate for every built-in profile
+#    (base, rust, python), and `packages.default` resolves to `sandbox-rust-pi`.
 #
 # 3. test_manifest_derivation_is_lightweight — the manifest JSON derivation
 #    builds without realizing the profile images it names.
@@ -122,19 +122,25 @@ test_manifest_shape() {
 test_flake_outputs_present() {
     local flake_url="git+file://$REPO_ROOT"
 
-    # `sandbox-base` is exposed as bare `sandbox`; `rust`/`python` keep the
-    # `sandbox-<name>` suffix.
     local outputs=(
-        "image-base"
-        "image-rust"
-        "image-python"
-        "sandbox"
-        "sandbox-rust"
-        "sandbox-python"
         "profile-images"
         "profile-images-pi"
         "wrix"
     )
+
+    local profile_suffix
+    for profile_suffix in "-base" "-rust" "-python"; do
+        outputs+=("image${profile_suffix}" "image${profile_suffix}-claude" "image${profile_suffix}-pi")
+    done
+
+    local sandbox_profile_suffix agent_suffix mcp_suffix
+    for sandbox_profile_suffix in "" "-rust" "-python"; do
+        for agent_suffix in "" "-claude" "-pi"; do
+            for mcp_suffix in "" "-mcp"; do
+                outputs+=("sandbox${sandbox_profile_suffix}${agent_suffix}${mcp_suffix}")
+            done
+        done
+    done
 
     local out
     for out in "${outputs[@]}"; do
