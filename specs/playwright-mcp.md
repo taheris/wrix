@@ -87,13 +87,13 @@ The container image is Linux (aarch64 or x86_64), so `pkgs.playwright-driver.bro
 - The image built with `mcp.playwright = {}` contains the chromium binary in its store closure
   [system](bash tests/mcp/playwright/build-test.sh)
 - Chromium executable path is derived from `pkgs.playwright-driver.browsers`, not from a hard-coded path or `npx`
-  [check](grep -nE 'playwright-driver\.browsers|executable-path' lib/mcp/playwright/default.nix)
+  [system](bash tests/mcp/playwright/smoke-test.sh test_chromium_executable_path_derives_from_playwright_browsers)
 - The automatic Chromium flags `--no-sandbox`, `--disable-dev-shm-usage`, and `--disable-gpu` are always passed through `launchOptions.args`
-  [check](grep -nE '\-\-no-sandbox|\-\-disable-dev-shm-usage|\-\-disable-gpu' lib/mcp/playwright/default.nix)
+  [system](bash tests/mcp/playwright/smoke-test.sh test_mandatory_flags_are_non_overridable)
 - The `headless`, `viewport`, and `config` user options reach the MCP server's serialized config file
-  [check](grep -nE 'headless|viewport|launchOptions' lib/mcp/playwright/default.nix)
+  [system](bash tests/mcp/playwright/smoke-test.sh test_user_options_reach_serialized_config)
 - The server definition exposes the MCP registry triple (`name`, `packages`, `mkServerConfig`) so `mkSandbox` can compose it like any other server
-  [check](grep -nE '^\s*(name|packages|mkServerConfig)\s*=' lib/mcp/playwright/default.nix)
+  [system](bash tests/mcp/playwright/smoke-test.sh test_registry_triple_shape)
 
 ## Requirements
 

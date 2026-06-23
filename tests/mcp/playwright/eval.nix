@@ -73,6 +73,14 @@ let
     server-args-json = builtins.toJSON serverConfig.args;
     server-command = serverConfig.command;
     server-env-json = builtins.toJSON serverConfig.env;
+    server-registry-json = builtins.toJSON {
+      inherit (serverDef) name;
+      packageNames = map getName serverDef.packages;
+      mkServerConfigIsFunction = builtins.isFunction serverDef.mkServerConfig;
+      sampleConfig = {
+        inherit (serverConfig) command args env;
+      };
+    };
     package = packageByName;
     package-path = toString packageByName;
     sandbox-image = sandbox.image;

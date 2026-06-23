@@ -145,36 +145,101 @@ assert_json_arg() {
     return 1
 }
 
-test_generated_config_passthrough() {
-    log_test "test_generated_config_passthrough: mkServerConfig serializes wrix options"
+assert_json_text() {
+    local json="$1"
+    local filter="$2"
+    local message="$3"
+
+    if jq -e "$filter" <<<"$json" >/dev/null; then
+        log_info "$message"
+        return 0
+    fi
+
+    log_fail "$message"
+    jq . <<<"$json" >&2
+    return 1
+}
+
+test_chromium_executable_path_derives_from_playwright_browsers() {
+    log_test "test_chromium_executable_path_derives_from_playwright_browsers: generated config uses packaged Chromium"
+
+    new_temp_dir
+    local user_data_dir="${TEMP_DIR}/user-data"
+    local config_file
+    local chrome_path
+    local browsers_path
+    config_file=$(playwright_config_path "$user_data_dir") || return 1
+    chrome_path=$(jq -r '.browser.launchOptions.executablePath' "$config_file") || return 1
+    browsers_path=$(playwright_build_package playwright-browsers) || return 1
+
+    if [[ "$chrome_path" != "${browsers_path}"/chromium-*/chrome-linux64/chrome ]]; then
+        log_fail "Chromium path is not derived from playwright-browsers: $chrome_path"
+        log_fail "playwright-browsers path: $browsers_path"
+        return 1
+    fi
+    log_info "Chromium path is under playwright-browsers"
+
+    if [[ ! -x "$chrome_path" ]]; then
+        log_fail "Configured chromium path is not executable: $chrome_path"
+        return 1
+    fi
+    log_info "Chromium path is executable"
+
+    log_pass "test_chromium_executable_path_derives_from_playwright_browsers"
+}
+
+test_mandatory_flags_are_non_overridable() {
+    log_test "test_mandatory_flags_are_non_overridable: generated config prepends automatic Chromium flags"
 
     new_temp_dir
     local user_data_dir="${TEMP_DIR}/user-data"
     local extra_config
     local config_file
-    extra_config=$(jq -nc '{browser:{browserName:"firefox",launchOptions:{args:["--font-render-hinting=none"],channel:"chrome",executablePath:"/bad/chrome",headless:true,slowMo:0}},contextOptions:{acceptDownloads:false,viewport:{width:1,height:1}},metadata:{source:"passthrough"}}') || return 1
+    extra_config=$(jq -nc '{launchOptions:{args:["--config-arg"],channel:"chrome",executablePath:"/bad/top",headless:true},browser:{launchOptions:{args:["--browser-arg"],channel:"chrome",executablePath:"/bad/browser",headless:true}}}') || return 1
+    config_file=$(playwright_config_path "$user_data_dir" false 1280 720 "$extra_config") || return 1
+
+    assert_json "$config_file" '.browser.launchOptions.args == ["--no-sandbox","--disable-dev-shm-usage","--disable-gpu","--config-arg","--browser-arg"]' "mandatory flags lead launchOptions.args and user args append" || return 1
+    assert_json "$config_file" '.browser.launchOptions.channel == "chromium"' "channel remains non-overridable" || return 1
+    assert_json "$config_file" '.browser.launchOptions.headless == false' "headless option cannot be overridden by config" || return 1
+    assert_json "$config_file" '.browser.launchOptions.executablePath != "/bad/top" and .browser.launchOptions.executablePath != "/bad/browser"' "executablePath remains non-overridable" || return 1
+
+    log_pass "test_mandatory_flags_are_non_overridable"
+}
+
+test_user_options_reach_serialized_config() {
+    log_test "test_user_options_reach_serialized_config: headless viewport and passthrough config are serialized"
+
+    new_temp_dir
+    local user_data_dir="${TEMP_DIR}/user-data"
+    local extra_config
+    local config_file
+    extra_config=$(jq -nc '{browser:{browserName:"firefox"},launchOptions:{slowMo:0},contextOptions:{acceptDownloads:false,viewport:{width:1,height:1}},metadata:{source:"passthrough"}}') || return 1
     config_file=$(playwright_config_path "$user_data_dir" false 1440 900 "$extra_config") || return 1
 
     assert_json "$config_file" '.browser.browserName == "chromium"' "browserName is pinned to chromium" || return 1
     assert_json_arg "$config_file" dir "$user_data_dir" ".browser.userDataDir == \$dir" "userDataDir reaches generated config" || return 1
     assert_json "$config_file" '.browser.launchOptions.headless == false' "headless option reaches launchOptions" || return 1
-    assert_json "$config_file" '.browser.launchOptions.channel == "chromium"' "channel remains non-overridable" || return 1
-    assert_json "$config_file" '.browser.launchOptions.executablePath | endswith("/chrome")' "chromium executable path is serialized" || return 1
-    assert_json "$config_file" '.browser.launchOptions.args[0:3] == ["--no-sandbox","--disable-dev-shm-usage","--disable-gpu"]' "mandatory flags lead launchOptions.args" || return 1
-    assert_json "$config_file" '.browser.launchOptions.args[3] == "--font-render-hinting=none"' "user launch args append after mandatory flags" || return 1
-    assert_json "$config_file" '.browser.launchOptions.slowMo == 0' "other launchOptions fields pass through" || return 1
+    assert_json "$config_file" '.browser.launchOptions.slowMo == 0' "launchOptions fields pass through" || return 1
     assert_json "$config_file" '.contextOptions.viewport == {"width":1440,"height":900}' "viewport option reaches contextOptions" || return 1
     assert_json "$config_file" '.contextOptions.acceptDownloads == false' "contextOptions fields pass through" || return 1
     assert_json "$config_file" '.metadata.source == "passthrough"' "top-level config fields pass through" || return 1
 
-    local chrome_path
-    chrome_path=$(jq -r '.browser.launchOptions.executablePath' "$config_file") || return 1
-    if [[ ! -x "$chrome_path" ]]; then
-        log_fail "Configured chromium path is not executable: $chrome_path"
-        return 1
-    fi
+    log_pass "test_user_options_reach_serialized_config"
+}
 
-    log_pass "test_generated_config_passthrough"
+test_registry_triple_shape() {
+    log_test "test_registry_triple_shape: server definition exposes the MCP registry triple"
+
+    local registry_json
+    registry_json=$(playwright_eval_raw server-registry-json) || return 1
+
+    assert_json_text "$registry_json" '.name == "playwright"' "registry name is playwright" || return 1
+    assert_json_text "$registry_json" '.packageNames | index("playwright-mcp")' "registry packages include playwright-mcp" || return 1
+    assert_json_text "$registry_json" '.packageNames | index("playwright-browsers")' "registry packages include playwright-browsers" || return 1
+    assert_json_text "$registry_json" '.mkServerConfigIsFunction == true' "mkServerConfig is a function" || return 1
+    assert_json_text "$registry_json" '.sampleConfig.command == "playwright-mcp" and .sampleConfig.args[0] == "--config"' "mkServerConfig returns a Playwright MCP command with config args" || return 1
+
+    log_pass "test_registry_triple_shape"
 }
 
 test_mcp_initialize() {
@@ -201,9 +266,15 @@ test_mcp_initialize() {
 
     local expected_tools=(
         "browser_navigate"
-        "browser_take_screenshot"
+        "browser_navigate_back"
         "browser_click"
+        "browser_fill_form"
+        "browser_select_option"
+        "browser_hover"
+        "browser_take_screenshot"
         "browser_snapshot"
+        "browser_network_requests"
+        "browser_tabs"
         "browser_console_messages"
     )
 
@@ -217,6 +288,10 @@ test_mcp_initialize() {
     done
 
     tool_count=$(echo "$response" | jq '.result.tools | length') || return 1
+    if ((tool_count < ${#expected_tools[@]})); then
+        log_fail "Server returned fewer tools than the expected category coverage: $tool_count"
+        return 1
+    fi
     log_info "Server reported $tool_count tools"
 
     stop_mcp_server
@@ -256,6 +331,15 @@ test_offline_startup() {
     log_pass "test_offline_startup"
 }
 
+ALL_TESTS=(
+    test_chromium_executable_path_derives_from_playwright_browsers
+    test_mandatory_flags_are_non_overridable
+    test_user_options_reach_serialized_config
+    test_registry_triple_shape
+    test_mcp_initialize
+    test_offline_startup
+)
+
 main() {
     echo ""
     log_info "=========================================="
@@ -266,8 +350,21 @@ main() {
     local passed=0
     local failed=0
     local test_fn
+    local tests
 
-    for test_fn in test_generated_config_passthrough test_mcp_initialize test_offline_startup; do
+    if (($# == 0)); then
+        tests=("${ALL_TESTS[@]}")
+    else
+        tests=("$@")
+    fi
+
+    for test_fn in "${tests[@]}"; do
+        if ! declare -F "$test_fn" >/dev/null; then
+            log_fail "Unknown test function: $test_fn"
+            failed=$((failed + 1))
+            continue
+        fi
+
         if "$test_fn"; then
             passed=$((passed + 1))
         else
