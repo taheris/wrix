@@ -128,10 +128,18 @@ in
         BEADS_DOLT_CONTAINER_SOCKET=""
         BEADS_DOLT_SOCKET_MOUNT_SOURCE=""
         WRIX_WORKSPACE_DOLT=0
+        WRIX_PASTA_HOST_LOOPBACK_IP="169.254.1.2"
+        WRIX_PODMAN_NETWORK="pasta:--map-host-loopback,$WRIX_PASTA_HOST_LOOPBACK_IP,--map-guest-addr,none,-t,none,-u,none,-T,none,-U,none"
 
         wrix_sandbox_cache_host() {
           local host="$1"
-          local resolved="''${WRIX_PROJECT_CACHE_SANDBOX_HOST:-$host}"
+          local resolved="''${WRIX_PROJECT_CACHE_SANDBOX_HOST:-}"
+          if [[ -z "$resolved" ]]; then
+            case "$host" in
+              127.*) resolved="$WRIX_PASTA_HOST_LOOPBACK_IP" ;;
+              *) resolved="$host" ;;
+            esac
+          fi
           if [[ ! "$resolved" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Error: project cache sandbox host must be a numeric IPv4 address: $resolved" >&2
             exit 1
@@ -323,6 +331,7 @@ in
           printf 'IMAGE_OVERRIDE_REF=%s\n' "$IMAGE_OVERRIDE_REF"
           printf 'IMAGE_OVERRIDE_SOURCE=%s\n' "$IMAGE_OVERRIDE_SOURCE"
           printf 'IMAGE_OVERRIDE_SOURCE_KIND=%s\n' "$IMAGE_OVERRIDE_SOURCE_KIND"
+          printf 'PODMAN_NETWORK=%s\n' "$WRIX_PODMAN_NETWORK"
           if [[ -n "$WRIX_PROJECT_CACHE_URL" ]]; then
             printf 'PROJECT_CACHE_URL=%s\n' "$WRIX_PROJECT_CACHE_URL"
             printf 'ENV=WRIX_PROJECT_CACHE_HOST=%s\n' "$WRIX_PROJECT_CACHE_HOST"
@@ -764,7 +773,7 @@ in
           --cpus="$CPUS" \
           --memory="''${PROFILE_MEMORY_MB}m" \
           --pids-limit="$PROFILE_PIDS_LIMIT" \
-          --network=pasta \
+          --network="$WRIX_PODMAN_NETWORK" \
           $USERNS_ARGS \
           --passwd-entry "wrix:*:$(id -u):$(id -g)::/home/wrix:/bin/bash" \
           --mount type=tmpfs,destination=/home/wrix,U=true \

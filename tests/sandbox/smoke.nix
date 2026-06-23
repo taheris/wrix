@@ -364,6 +364,47 @@ in
         exit 77
       '';
 
+  linux-pasta-port-forwarding-disabled =
+    if isLinux then
+      runCommandLocal "smoke-linux-pasta-port-forwarding-disabled"
+        {
+          nativeBuildInputs = [ bash ];
+        }
+        ''
+          set -euo pipefail
+
+          workspace="$PWD/workspace"
+          home="$PWD/home"
+          profile_config="$PWD/profile-config.json"
+          mkdir -p "$workspace" "$home"
+          cat > "$profile_config" <<'JSON'
+          {"schema":1,"system":"test","profile":{"name":"base","env":{},"mounts":[],"writable_dirs":[],"network_allowlist":[]},"image":{"ref":"wrix-base:test","source":"/nix/store/fake-image","source_kind":"nix-descriptor","digest":"sha256:test"},"agent":{"kind":"direct"},"resources":{"cpus":null,"memory_mb":4096,"pids_limit":4096},"security":{"deploy_key":null},"network":{"default_mode":"open","ipv6":"disabled"},"services":{"beads":{"enable":"auto"},"nix_cache":{"enable":false}},"features":{"mcp_runtime":false}}
+          JSON
+
+          output=$(HOME="$home" WRIX_DRY_RUN=1 ${wrixLauncher}/bin/wrix --profile-config "$profile_config" run "$workspace" true)
+          case "$output" in
+            *"PODMAN_NETWORK=pasta:"*"--map-host-loopback,169.254.1.2"*"--map-guest-addr,none"*"-t,none"*"-u,none"*"-T,none"*"-U,none"*) ;;
+            *)
+              printf 'launcher dry-run did not disable pasta auto-forwarding:\n%s\n' "$output" >&2
+              exit 1
+              ;;
+          esac
+          case "$output" in
+            *"-t,auto"*|*"-u,auto"*|*"-T,auto"*|*"-U,auto"*)
+              printf 'launcher dry-run enabled pasta auto-forwarding:\n%s\n' "$output" >&2
+              exit 1
+              ;;
+          esac
+
+          mkdir $out
+        ''
+    else
+      runCommandLocal "smoke-linux-pasta-port-forwarding-disabled" { } ''
+        trap '_ec=$?; if [ "$_ec" -eq 77 ]; then mkdir -p $out; exit 0; fi' EXIT
+        echo "SKIP: pasta forwarding guard (Linux-only test)" >&2
+        exit 77
+      '';
+
   # Verify WRIX_NETWORK environment variable support in launcher and entrypoints
   # Security property: network filtering restricts outbound access in limit mode
   # See specs/security.md § Network Exfil Baseline and specs/sandbox.md.

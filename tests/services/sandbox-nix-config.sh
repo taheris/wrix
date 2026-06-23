@@ -31,6 +31,13 @@ expected_source_kind() {
   esac
 }
 
+expected_sandbox_cache_host() {
+  case "$(uname -s)" in
+    Darwin) printf '127.0.0.1\n' ;;
+    *) printf '169.254.1.2\n' ;;
+  esac
+}
+
 require_python() {
   if ! command -v python3 >/dev/null 2>&1; then
     printf 'SKIP: python3 is required for JSON assertions\n' >&2
@@ -48,7 +55,16 @@ build_wrix_package() {
     exit 77
   fi
   local out_link="$TEST_TMP/wrix-package"
-  nix build --no-warn-dirty --out-link "$out_link" "$REPO_ROOT#wrix" >/dev/null
+  nix build \
+    --impure --no-warn-dirty \
+    --out-link "$out_link" \
+    --expr "
+      let
+        flake = builtins.getFlake \"git+file://$REPO_ROOT\";
+        system = builtins.currentSystem;
+        lib = flake.legacyPackages.\${system}.lib;
+      in (lib.mkSandbox { profile = lib.profiles.base; }).launcher
+    " >/dev/null
   WRIX_PACKAGE="$out_link"
   printf '%s\n' "$WRIX_PACKAGE"
 }
@@ -158,7 +174,7 @@ with_fake_service_env() {
   export WRIX_FAKE_RUNTIME_STATE="$runtime_state"
   export WRIX_NIX_STORE="$bin_dir/nix-store"
   export WRIX_SERVICE_ALLOW_TEMP_CACHE=1
-  unset WRIX_SERVICE_IMAGE WRIX_SERVICE_IMAGE_SOURCE
+  unset WRIX_PROJECT_CACHE_SANDBOX_HOST WRIX_SERVICE_IMAGE WRIX_SERVICE_IMAGE_SOURCE
   mkdir -p "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
 }
 
@@ -327,7 +343,7 @@ prepare_launcher_workspace() {
 
 test_container_pull_config() {
   require_python
-  local package wrix_bin workspace profile_config run_output spawn_output endpoints state_root public_key cache_port cache_url
+  local package wrix_bin workspace profile_config run_output spawn_output endpoints state_root public_key cache_host cache_port cache_url
   local -a prepared
   package="$(build_wrix_package)"
   wrix_bin="$package/bin/wrix"
@@ -341,14 +357,15 @@ test_container_pull_config() {
   endpoints="$(services_json_path)"
   state_root="$(json_get "$endpoints" state_root)"
   public_key="$(tr -d '\n' <"$state_root/keys/cache.pub")"
+  cache_host="$(expected_sandbox_cache_host)"
   cache_port="$(json_get "$endpoints" endpoints.cache_http.port)"
-  cache_url="http://127.0.0.1:$cache_port"
+  cache_url="http://$cache_host:$cache_port"
 
   assert_contains "run output" "$run_output" "PROJECT_CACHE_URL=$cache_url"
   assert_contains "run output" "$run_output" "extra-substituters = $cache_url"
   assert_contains "run output" "$run_output" "extra-trusted-public-keys = $public_key"
   assert_contains "run output" "$run_output" "builders-use-substitutes = true"
-  assert_contains "run output" "$run_output" "ENV=WRIX_PROJECT_CACHE_HOST=127.0.0.1"
+  assert_contains "run output" "$run_output" "ENV=WRIX_PROJECT_CACHE_HOST=$cache_host"
   assert_contains "run output" "$run_output" "ENV=WRIX_PROJECT_CACHE_PORT=$cache_port"
 
   assert_contains "spawn output" "$spawn_output" "SUBCOMMAND=spawn"
