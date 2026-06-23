@@ -7,7 +7,10 @@ REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 
 TEST_TMP="$(mktemp -d -t wrix-services-host-nix.XXXXXX)"
 cleanup() {
-  rm -rf "$TEST_TMP"
+  if [[ -d "$TEST_TMP" ]]; then
+    chmod -R u+w "$TEST_TMP"
+    rm -rf "$TEST_TMP"
+  fi
 }
 trap cleanup EXIT
 
@@ -323,6 +326,10 @@ test_mkdevshell_loom_internal_worktree_uses_repo_service() {
   mkdir -p "$repo/.git" "$workspace"
   wrix_bin="$(build_wrix)"
   with_fake_tools
+  export HOME="$TEST_TMP/home-loom-integration"
+  export XDG_STATE_HOME="$TEST_TMP/state-loom-integration"
+  export XDG_CACHE_HOME="$TEST_TMP/cache-loom-integration"
+  mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
 
   if ! output="$(
     (

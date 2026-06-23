@@ -62,13 +62,23 @@ impl Workspace {
     }
 
     pub fn container_name(&self) -> ContainerName {
-        let repository = self
-            .repository_name()
+        ContainerName(format!("{}-service", self.repository_slug()))
+    }
+
+    pub fn disambiguated_container_name(&self) -> ContainerName {
+        ContainerName(format!(
+            "{}-{}-service",
+            self.repository_slug(),
+            self.hash.short_prefix()
+        ))
+    }
+
+    fn repository_slug(&self) -> String {
+        self.repository_name()
             .and_then(OsStr::to_str)
             .map(sanitize_container_component)
             .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| String::from("workspace"));
-        ContainerName(format!("{repository}-service"))
+            .unwrap_or_else(|| String::from("workspace"))
     }
 }
 
@@ -89,6 +99,10 @@ impl WorkspaceHash {
         self.0.as_str()
     }
 
+    pub fn short_prefix(&self) -> &str {
+        &self.0[..12]
+    }
+
     pub fn is_valid_str(value: &str) -> bool {
         value.len() == Self::HEX_LEN && value.bytes().all(is_lower_hex_digit)
     }
@@ -107,6 +121,14 @@ impl WorkspaceHash {
 }
 
 impl ContainerName {
+    pub fn from_persisted(value: String) -> Option<Self> {
+        (!value.is_empty()
+            && value
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-')))
+        .then_some(Self(value))
+    }
+
     pub const fn as_str(&self) -> &str {
         self.0.as_str()
     }
@@ -248,6 +270,12 @@ mod test {
         assert_eq!(
             workspace.container_name().as_str(),
             "container-repo-service"
+        );
+        assert!(
+            workspace
+                .disambiguated_container_name()
+                .as_str()
+                .starts_with("container-repo-")
         );
     }
 

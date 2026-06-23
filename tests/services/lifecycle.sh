@@ -263,6 +263,26 @@ if [[ "${WRIX_FAKE_SKOPEO_UNKNOWN_NIX:-0}" == "1" && "$source_ref" == nix:* ]]; 
   printf 'unknown transport "nix"\n' >&2
   exit 1
 fi
+case "$source_ref" in
+  nix:*)
+    source_path="${source_ref#nix:}"
+    if [[ ! -f "$source_path" ]]; then
+      printf 'missing nix descriptor: %s\n' "$source_path" >&2
+      exit 2
+    fi
+    if ! grep -Eq '"source_kind"[[:space:]]*:[[:space:]]*"nix-descriptor"' "$source_path"; then
+      printf 'invalid nix descriptor: %s\n' "$source_path" >&2
+      exit 2
+    fi
+    ;;
+  docker-archive:*)
+    source_path="${source_ref#docker-archive:}"
+    if [[ ! -f "$source_path" ]]; then
+      printf 'missing docker archive: %s\n' "$source_path" >&2
+      exit 2
+    fi
+    ;;
+esac
 if [[ "$store_ref" == containers-storage:* ]]; then
   image_ref="${store_ref#containers-storage:}"
   if [[ "$image_ref" == \[*\]* ]]; then
@@ -425,6 +445,28 @@ test_workspace_identity() {
   assert_port_range "first cache port" "$first_port" 21000 22999
   assert_port_range "second cache port" "$second_port" 21000 22999
 
+  local same_parent_one="$TEST_TMP/same-one"
+  local same_parent_two="$TEST_TMP/same-two"
+  local same_first_ws="$same_parent_one/repo"
+  local same_second_ws="$same_parent_two/repo"
+  mkdir -p "$same_first_ws" "$same_second_ws"
+  (cd "$same_first_ws" && "$wrix_bin" service start >"$TEST_TMP/same-first-start.txt")
+  (cd "$same_first_ws" && "$wrix_bin" service endpoints >"$TEST_TMP/same-first-endpoints.json")
+  (cd "$same_second_ws" && "$wrix_bin" service start >"$TEST_TMP/same-second-start.txt")
+  (cd "$same_second_ws" && "$wrix_bin" service endpoints >"$TEST_TMP/same-second-endpoints.json")
+
+  local same_first_name same_second_name same_first_hash same_second_hash
+  same_first_name="$(json_get "$TEST_TMP/same-first-endpoints.json" container_name)"
+  same_second_name="$(json_get "$TEST_TMP/same-second-endpoints.json" container_name)"
+  same_first_hash="$(json_get "$TEST_TMP/same-first-endpoints.json" workspace_hash)"
+  same_second_hash="$(json_get "$TEST_TMP/same-second-endpoints.json" workspace_hash)"
+  assert_not_equals "same basename container names" "$same_first_name" "$same_second_name"
+  assert_not_equals "same basename hashes" "$same_first_hash" "$same_second_hash"
+  assert_contains "same basename first name" "$same_first_name" "repo"
+  assert_contains "same basename second name" "$same_second_name" "repo"
+  "$WRIX_CONTAINER_RUNTIME" container exists "$same_first_name"
+  "$WRIX_CONTAINER_RUNTIME" container exists "$same_second_name"
+
   assert_file_contains "detached run" "$WRIX_FAKE_RUNTIME_STATE/run-repo-one-service" "run -d --name repo-one-service"
   assert_file_contains "workspace hash label" "$WRIX_FAKE_RUNTIME_STATE/run-repo-one-service" "wrix.workspace.hash=$first_hash"
 }
@@ -534,34 +576,47 @@ test_loom_bead_workspace_uses_repo_service() {
 }
 
 test_service_start_loads_image_source() {
-  local wrix_bin
+  require_python
+  require_nix
+  local wrix_bin metadata_json metadata_file real_image real_source real_source_kind real_source_link
   wrix_bin="$(build_wrix)"
-  with_fake_runtime_env
+  metadata_json="$(nix eval --no-warn-dirty --json "$REPO_ROOT#wrix-service-image" --apply 'image: { inherit (image) ref source_kind; source = toString image.source; }')"
+  metadata_file="$TEST_TMP/service-image-metadata.json"
+  printf '%s\n' "$metadata_json" >"$metadata_file"
+  real_image="$(json_get "$metadata_file" ref)"
+  real_source="$(json_get "$metadata_file" source)"
+  real_source_kind="$(json_get "$metadata_file" source_kind)"
+  real_source_link="$TEST_TMP/wrix-service-image-source"
+  nix build --no-warn-dirty --out-link "$real_source_link" "$REPO_ROOT#wrix-service-image.source" >/dev/null
+  real_source="$real_source_link"
 
-  export HOME="$TEST_TMP/home-image-source"
-  export XDG_STATE_HOME="$TEST_TMP/xdg-state-image-source"
-  export XDG_CACHE_HOME="$TEST_TMP/xdg-cache-image-source"
-  export WRIX_SERVICE_IMAGE="localhost/wrix-service:test"
-  export WRIX_SERVICE_IMAGE_SOURCE="$TEST_TMP/wrix-service-descriptor.json"
-  export WRIX_SERVICE_IMAGE_SOURCE_KIND="nix-descriptor"
-  mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
-  printf '{"schema":1,"source_kind":"nix-descriptor"}\n' >"$WRIX_SERVICE_IMAGE_SOURCE"
+  if [[ "$real_source_kind" == "nix-descriptor" ]]; then
+    with_fake_runtime_env
 
-  local workspace="$TEST_TMP/image-source-repo"
-  mkdir -p "$workspace"
-  (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/image-source-start.txt")
+    export HOME="$TEST_TMP/home-image-source"
+    export XDG_STATE_HOME="$TEST_TMP/xdg-state-image-source"
+    export XDG_CACHE_HOME="$TEST_TMP/xdg-cache-image-source"
+    export WRIX_SERVICE_IMAGE="$real_image"
+    export WRIX_SERVICE_IMAGE_SOURCE="$real_source"
+    export WRIX_SERVICE_IMAGE_SOURCE_KIND="$real_source_kind"
+    mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
 
-  assert_file_contains \
-    "service image nix descriptor install" \
-    "$WRIX_FAKE_RUNTIME_STATE/calls" \
-    "skopeo --insecure-policy copy --quiet nix:$WRIX_SERVICE_IMAGE_SOURCE containers-storage:"
-  if grep -F -- "load --input $WRIX_SERVICE_IMAGE_SOURCE" "$WRIX_FAKE_RUNTIME_STATE/calls" >/dev/null; then
-    fail "nix-descriptor service image used tar load path"
+    local workspace="$TEST_TMP/image-source-repo"
+    mkdir -p "$workspace"
+    (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/image-source-start.txt")
+
+    assert_file_contains \
+      "service image nix descriptor install" \
+      "$WRIX_FAKE_RUNTIME_STATE/calls" \
+      "skopeo --insecure-policy copy --quiet nix:$WRIX_SERVICE_IMAGE_SOURCE containers-storage:"
+    if grep -F -- "load --input $WRIX_SERVICE_IMAGE_SOURCE" "$WRIX_FAKE_RUNTIME_STATE/calls" >/dev/null; then
+      fail "nix-descriptor service image used tar load path"
+    fi
+    assert_file_contains \
+      "service run after descriptor install" \
+      "$WRIX_FAKE_RUNTIME_STATE/run-image-source-repo-service" \
+      "$WRIX_SERVICE_IMAGE"
   fi
-  assert_file_contains \
-    "service run after descriptor install" \
-    "$WRIX_FAKE_RUNTIME_STATE/run-image-source-repo-service" \
-    "$WRIX_SERVICE_IMAGE"
 
   with_fake_runtime_env container
   export HOME="$TEST_TMP/home-image-source-darwin"
@@ -570,8 +625,15 @@ test_service_start_loads_image_source() {
   export WRIX_SERVICE_IMAGE="wrix-service:darwin-test"
   export WRIX_SERVICE_IMAGE_SOURCE="$TEST_TMP/wrix-service-archive.tar"
   export WRIX_SERVICE_IMAGE_SOURCE_KIND="docker-archive"
+  if [[ "$real_source_kind" == "docker-archive" ]]; then
+    export WRIX_SERVICE_IMAGE="$real_image"
+    export WRIX_SERVICE_IMAGE_SOURCE="$real_source"
+    export WRIX_SERVICE_IMAGE_SOURCE_KIND="$real_source_kind"
+  fi
   mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
-  printf 'image archive\n' >"$WRIX_SERVICE_IMAGE_SOURCE"
+  if [[ "$real_source_kind" != "docker-archive" ]]; then
+    printf 'image archive\n' >"$WRIX_SERVICE_IMAGE_SOURCE"
+  fi
 
   local darwin_workspace="$TEST_TMP/image-source-darwin-repo"
   mkdir -p "$darwin_workspace"

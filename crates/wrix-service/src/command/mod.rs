@@ -67,23 +67,23 @@ pub fn run_top(command: Top, args: &[String], stdout: &mut impl Write) -> io::Re
     let cache_mode = parse_cache_mode(args)?;
     match command {
         Top::Start => {
-            let status = lifecycle::start(cache_mode)?;
+            let status = lifecycle::start(cache_mode).map_err(io::Error::other)?;
             stdout.write_all(status.render().as_bytes())?;
         }
         Top::Stop => {
-            let status = lifecycle::stop(cache_mode)?;
+            let status = lifecycle::stop(cache_mode).map_err(io::Error::other)?;
             stdout.write_all(status.render().as_bytes())?;
         }
         Top::Status => {
-            let status = lifecycle::status(cache_mode)?;
+            let status = lifecycle::status(cache_mode).map_err(io::Error::other)?;
             stdout.write_all(status.render().as_bytes())?;
         }
         Top::Logs => {
-            let logs = lifecycle::logs(cache_mode)?;
+            let logs = lifecycle::logs(cache_mode).map_err(io::Error::other)?;
             stdout.write_all(&logs)?;
         }
         Top::Endpoints => {
-            let endpoints = lifecycle::endpoints(cache_mode)?;
+            let endpoints = lifecycle::endpoints(cache_mode).map_err(io::Error::other)?;
             stdout.write_all(endpoints.as_bytes())?;
         }
     }
@@ -91,7 +91,7 @@ pub fn run_top(command: Top, args: &[String], stdout: &mut impl Write) -> io::Re
 }
 
 pub fn run_dolt(command: Dolt, stdout: &mut impl Write) -> io::Result<ExitCode> {
-    let plan = lifecycle::Plan::for_current_dir(CacheMode::Disabled)?;
+    let plan = lifecycle::Plan::for_current_dir(CacheMode::Disabled).map_err(io::Error::other)?;
     let Some(endpoint) = plan.dolt() else {
         writeln!(stdout, "dolt: disabled")?;
         return Ok(ExitCode::FAILURE);

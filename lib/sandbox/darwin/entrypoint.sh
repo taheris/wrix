@@ -330,7 +330,7 @@ elif [[ "$WRIX_AGENT" = "pi" ]]; then
   fi
 fi
 
-# Connect bd to the host's wrix-beads dolt server.
+# Connect bd to the host workspace service.
 # VirtioFS can't pass Unix sockets, so the launcher passes
 # BEADS_DOLT_SERVER_PORT for TCP. The socat bridge on the host retries
 # until the container network interface appears, so we wait here too.
@@ -364,7 +364,7 @@ if [[ -f /workspace/.beads/config.yaml ]]; then
     else
       echo "Error: dolt backend configured but no connection available" >&2
       _repo=$(git -C /workspace remote get-url origin 2>/dev/null | sed 's|.*/||;s|\.git$||')
-      echo "  Start the host ${_repo:-repo}-beads container (enter the devShell) before launching this container." >&2
+      echo "  Start the host ${_repo:-repo}-service container with wrix service start before launching this container." >&2
       exit 1
     fi
     wrix_install_bd_remote_wrapper

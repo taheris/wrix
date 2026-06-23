@@ -20,6 +20,13 @@ build_bins() {
   cargo build --quiet --manifest-path "$REPO_ROOT/Cargo.toml" -p wrix-cli --bin wrix -p wrix-cache --bin wrix-cache-publish
 }
 
+require_python() {
+  if ! command -v python3 >/dev/null 2>&1; then
+    printf 'SKIP: python3 is required for lock contention assertions\n' >&2
+    exit 77
+  fi
+}
+
 write_fake_nix() {
   local nix="$1"
   cat >"$nix" <<'EOF'
@@ -141,6 +148,7 @@ assert_contains() {
 }
 
 test_pending_on_lock_timeout() {
+  require_python
   build_bins
   with_fake_tools
   export HOME="$TEST_TMP/home"
@@ -158,7 +166,35 @@ test_pending_on_lock_timeout() {
   state="$(state_root)"
   cache="$(cache_root)"
   workspace_hash="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-  printf 'held\n' >"$state/cache.lock.owner"
+  local lock_ready="$TEST_TMP/lock.ready"
+  local lock_release="$TEST_TMP/lock.release"
+  local lock_pid
+  local attempt
+  python3 - "$state/cache.lock" "$lock_ready" "$lock_release" <<'PY' &
+import fcntl
+import pathlib
+import sys
+import time
+
+lock_path = pathlib.Path(sys.argv[1])
+ready_path = pathlib.Path(sys.argv[2])
+release_path = pathlib.Path(sys.argv[3])
+with lock_path.open("a+", encoding="utf-8") as handle:
+    fcntl.flock(handle, fcntl.LOCK_EX)
+    ready_path.write_text("ready\n", encoding="utf-8")
+    while not release_path.exists():
+        time.sleep(0.05)
+PY
+  lock_pid="$!"
+  attempt=0
+  while [[ "$attempt" -lt 100 ]]; do
+    if [[ -f "$lock_ready" ]]; then
+      break
+    fi
+    attempt=$((attempt + 1))
+    sleep 0.05
+  done
+  [[ -f "$lock_ready" ]] || fail "cache.lock holder did not acquire the lock"
 
   output="$(WRIX_CACHE_LOCK_TIMEOUT_MS=1 "$REPO_ROOT/target/debug/wrix-cache-publish" \
     --workspace-hash "$workspace_hash" \
@@ -173,7 +209,8 @@ test_pending_on_lock_timeout() {
   [[ -f "${pending[0]}" ]] || fail "pending record was not written"
   assert_contains "pending record" "$(cat "${pending[0]}")" "/nix/store/dddddddddddddddddddddddddddddddd-pending"
 
-  rm -f "$state/cache.lock.owner"
+  : >"$lock_release"
+  wait "$lock_pid"
   (cd "$workspace" && "$REPO_ROOT/target/debug/wrix" service cache publish >"$TEST_TMP/drain.out")
   if compgen -G "$state/pending/*.json" >/dev/null; then
     fail "matching pending record was not drained"

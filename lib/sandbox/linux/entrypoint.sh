@@ -297,7 +297,7 @@ if [[ -f /workspace/.beads/config.yaml ]]; then
     else
       echo "Error: dolt backend configured but no connection available (socket or TCP)" >&2
       _repo=$(git -C /workspace remote get-url origin 2>/dev/null | sed 's|.*/||;s|\.git$||')
-      echo "  Start the host ${_repo:-repo}-beads container (enter the devShell) before launching this container." >&2
+      echo "  Start the host ${_repo:-repo}-service container with wrix service start before launching this container." >&2
       exit 1
     fi
     wrix_install_bd_remote_wrapper

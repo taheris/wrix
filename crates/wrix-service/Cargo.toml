@@ -5,6 +5,8 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+displaydoc = { workspace = true }
+thiserror = { workspace = true }
 wrix-cache = { workspace = true }
 wrix-core = { workspace = true }
 

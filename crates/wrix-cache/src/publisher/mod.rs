@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeSet, HashSet},
     env,
-    fs::{self, OpenOptions},
+    fs::{self, File, OpenOptions},
     io::{self, ErrorKind},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -9,6 +9,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use fs2::FileExt;
 use wrix_core::{
     cache_key,
     path::{Workspace, WorkspaceHash},
@@ -198,7 +199,7 @@ fn with_explicit_lock<T>(
 
 #[derive(Debug)]
 struct OperationLock {
-    marker_path: PathBuf,
+    file: File,
 }
 
 impl OperationLock {
@@ -207,26 +208,18 @@ impl OperationLock {
         timeout: Option<Duration>,
         lines: &mut Vec<String>,
     ) -> io::Result<Option<Self>> {
-        let marker_path = paths.lock_marker_path();
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(paths.cache_lock_path())?;
         let started = SystemTime::now();
         let mut announced = false;
         loop {
-            match OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&marker_path)
-            {
-                Ok(mut file) => {
-                    use std::io::Write as _;
-                    writeln!(
-                        file,
-                        "pid={} created_at={}",
-                        std::process::id(),
-                        now_epoch()
-                    )?;
-                    return Ok(Some(Self { marker_path }));
-                }
-                Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+            match file.try_lock_exclusive() {
+                Ok(()) => return Ok(Some(Self { file })),
+                Err(error) if error.kind() == ErrorKind::WouldBlock => {
                     if !announced {
                         lines.push(format!(
                             "waiting for project cache lock {}",
@@ -246,11 +239,7 @@ impl OperationLock {
     }
 
     fn release(self) -> io::Result<()> {
-        match fs::remove_file(self.marker_path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error),
-        }
+        self.file.unlock()
     }
 }
 
@@ -959,10 +948,6 @@ impl Paths {
 
     fn cache_lock_path(&self) -> PathBuf {
         self.state_root.join("cache.lock")
-    }
-
-    fn lock_marker_path(&self) -> PathBuf {
-        self.state_root.join("cache.lock.owner")
     }
 
     fn cache_status_path(&self) -> PathBuf {
