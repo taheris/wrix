@@ -38,7 +38,7 @@ command -v podman >/dev/null 2>&1 || skip "podman not on PATH"
 
 cd "$REPO_ROOT"
 
-IMAGE_STREAM=$(nix build --no-link --print-out-paths --no-warn-dirty .#test-image-base)
+IMAGE_STREAM=$(nix build --no-link --print-out-paths --no-warn-dirty .#test-image-base-direct)
 
 WORKSPACE=$(mktemp -d -t wrix-workspace-bin.XXXXXX)
 cleanup() {
@@ -50,12 +50,12 @@ cleanup() {
 trap cleanup EXIT
 
 IMAGE_REF=$(wrix_unique_image_ref "wrix-test-workspace-bin-path")
-wrix_load_test_image "$IMAGE_STREAM" "wrix-base-claude" "$IMAGE_REF"
+wrix_load_test_image "$IMAGE_STREAM" "wrix-base" "$IMAGE_REF"
 
 run_entrypoint() {
   # Invoke the default entrypoint (/entrypoint.sh) with a command override so
   # the line that prepends /workspace/bin runs before our probe.
-  podman run --rm --network=pasta --userns=keep-id \
+  podman run --rm --cap-add=NET_ADMIN --network=pasta \
     -v "$WORKSPACE:/workspace:rw" \
     "$IMAGE_REF" \
     bash -c "$1"

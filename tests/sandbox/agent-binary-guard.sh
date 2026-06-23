@@ -74,7 +74,7 @@ run_agent() {
     printf '%s\n' "$image_agent_override" >"$image_agent_file"
     volume_args+=(-v "$image_agent_file:/etc/wrix/image-agent:ro")
   fi
-  podman run --rm --network=pasta --userns=keep-id \
+  podman run --rm --cap-add=NET_ADMIN --network=pasta \
     "${env_args[@]}" \
     "${volume_args[@]}" \
     "$IMAGE_REF"
