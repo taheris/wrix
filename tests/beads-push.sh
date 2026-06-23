@@ -109,6 +109,14 @@ if [[ "${1:-}" == "dolt" && "${2:-}" == "push" ]]; then
       printf 'authentication failed\n' >&2
       exit 1
       ;;
+    permission_denied)
+      printf 'permission denied (publickey)\n' >&2
+      exit 1
+      ;;
+    access_denied)
+      printf 'access denied\n' >&2
+      exit 1
+      ;;
     reject_intent)
       if [[ "$count" -eq 1 ]]; then
         printf 'non-fast-forward update rejected\n' >&2
@@ -560,12 +568,23 @@ test_beadspush_pushes_before_pulls() {
   assert_log_absent "$case_dir" 'dolt pull'
 
   local auth_case
-  auth_case="$(make_case push-auth-fail-no-pull)"
-  run_push "$auth_case" "FAKE_BD_PUSH_MODE=auth_fail" "FAKE_GIT_BRANCH_EXISTS=0"
-  assert_rc "$auth_case" 1
-  assert_file_contains "$auth_case/stderr" 'authentication failed'
-  assert_log_count "$auth_case" 'dolt push' 1
-  assert_log_absent "$auth_case" 'dolt pull'
+  local auth_mode
+  local auth_message
+  local -a auth_failures=(
+    'auth_fail:authentication failed'
+    'permission_denied:permission denied'
+    'access_denied:access denied'
+  )
+  for auth_case in "${auth_failures[@]}"; do
+    auth_mode="${auth_case%%:*}"
+    auth_message="${auth_case#*:}"
+    auth_case="$(make_case "push-$auth_mode-no-pull")"
+    run_push "$auth_case" "FAKE_BD_PUSH_MODE=$auth_mode" "FAKE_GIT_BRANCH_EXISTS=0"
+    assert_rc "$auth_case" 1
+    assert_file_contains "$auth_case/stderr" "$auth_message"
+    assert_log_count "$auth_case" 'dolt push' 1
+    assert_log_absent "$auth_case" 'dolt pull'
+  done
 }
 
 test_beadspush_failloud_on_intent_overwrite() {

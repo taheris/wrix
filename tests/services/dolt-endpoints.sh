@@ -130,10 +130,18 @@ json_get() {
   python3 - "$file" "$path" <<'PY'
 import json
 import sys
-with open(sys.argv[1], encoding="utf-8") as handle:
+
+file_path = sys.argv[1]
+json_path = sys.argv[2]
+with open(file_path, encoding="utf-8") as handle:
     value = json.load(handle)
-for part in sys.argv[2].split('.'):
-    value = value[part]
+for part in json_path.split('.'):
+    if value is None:
+        raise SystemExit(f"{file_path}: {json_path} crosses null before {part}")
+    try:
+        value = value[part]
+    except (KeyError, TypeError) as error:
+        raise SystemExit(f"{file_path}: missing JSON path {json_path} at {part}") from error
 print(value)
 PY
 }

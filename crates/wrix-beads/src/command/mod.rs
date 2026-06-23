@@ -250,11 +250,13 @@ fn is_fast_forward_rejection(stderr: &[u8]) -> bool {
     let text = String::from_utf8_lossy(stderr).to_lowercase();
     [
         "non-fast-forward",
-        "fast-forward",
-        "reject",
+        "non fast forward",
+        "not a fast-forward",
+        "cannot fast forward",
+        "remote contains work",
+        "fetch first",
         "behind",
         "out of date",
-        "denied",
     ]
     .iter()
     .any(|needle| text.contains(needle))
@@ -524,6 +526,8 @@ mod test {
             b"non-fast-forward update rejected"
         ));
         assert!(!is_fast_forward_rejection(b"authentication failed"));
+        assert!(!is_fast_forward_rejection(b"permission denied (publickey)"));
+        assert!(!is_fast_forward_rejection(b"access denied"));
     }
 
     #[test]
