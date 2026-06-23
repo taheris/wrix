@@ -486,7 +486,13 @@ case "\$*" in
     printf '%s\n' 'table inet wrix { chain input { type filter hook input priority 0; policy drop; } }'
     ;;
   "list chain inet wrix output")
-    printf '%s\n' 'table inet wrix { chain output { type filter hook output priority 0; policy drop; ip daddr 10.0.0.0/8 reject } }'
+    printf '%s\n' 'table inet wrix { chain output { type filter hook output priority 0; policy drop;'
+    i=0
+    while [[ "\$i" -lt 4000 ]]; do
+      printf '%s\n' 'counter packets 0 bytes 0'
+      i=\$((i + 1))
+    done
+    printf '%s\n' 'ip daddr 10.0.0.0/8 reject } }'
     ;;
 esac
 exit 0

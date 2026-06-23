@@ -564,16 +564,23 @@ wrix_allow_limit_domains() {
 }
 
 wrix_verify_nft_policy() {
-  "$WRIX_NFT_BIN" list chain inet wrix input | "$WRIX_GREP_BIN" -q 'policy drop' || wrix_die "INPUT default-drop policy was not installed"
-  "$WRIX_NFT_BIN" list chain inet wrix output | "$WRIX_GREP_BIN" -q 'policy drop' || wrix_die "OUTPUT default-drop policy was not installed"
-  "$WRIX_NFT_BIN" list chain inet wrix output | "$WRIX_GREP_BIN" -q 'ip daddr 10.0.0.0/8 reject' || wrix_die "local-network reject rules were not installed"
+  local input_chain output_chain
+  input_chain=$("$WRIX_NFT_BIN" list chain inet wrix input) || wrix_die "could not inspect nft INPUT policy"
+  output_chain=$("$WRIX_NFT_BIN" list chain inet wrix output) || wrix_die "could not inspect nft OUTPUT policy"
+  "$WRIX_GREP_BIN" -q 'policy drop' <<<"$input_chain" || wrix_die "INPUT default-drop policy was not installed"
+  "$WRIX_GREP_BIN" -q 'policy drop' <<<"$output_chain" || wrix_die "OUTPUT default-drop policy was not installed"
+  "$WRIX_GREP_BIN" -q 'ip daddr 10.0.0.0/8 reject' <<<"$output_chain" || wrix_die "local-network reject rules were not installed"
 }
 
 wrix_verify_iptables_policy() {
-  "$WRIX_IPTABLES_BIN" -S INPUT | "$WRIX_GREP_BIN" -qx -- "-P INPUT DROP" || wrix_die "INPUT default-drop policy was not installed"
-  "$WRIX_IPTABLES_BIN" -S OUTPUT | "$WRIX_GREP_BIN" -qx -- "-P OUTPUT DROP" || wrix_die "OUTPUT default-drop policy was not installed"
+  local input_rules output_rules ip6_output_rules
+  input_rules=$("$WRIX_IPTABLES_BIN" -S INPUT) || wrix_die "could not inspect iptables INPUT policy"
+  output_rules=$("$WRIX_IPTABLES_BIN" -S OUTPUT) || wrix_die "could not inspect iptables OUTPUT policy"
+  ip6_output_rules=$("$WRIX_IP6TABLES_BIN" -S OUTPUT) || wrix_die "could not inspect ip6tables OUTPUT policy"
+  "$WRIX_GREP_BIN" -qx -- "-P INPUT DROP" <<<"$input_rules" || wrix_die "INPUT default-drop policy was not installed"
+  "$WRIX_GREP_BIN" -qx -- "-P OUTPUT DROP" <<<"$output_rules" || wrix_die "OUTPUT default-drop policy was not installed"
   "$WRIX_IPTABLES_BIN" -C OUTPUT -d 10.0.0.0/8 -j REJECT || wrix_die "local-network reject rules were not installed"
-  "$WRIX_IP6TABLES_BIN" -S OUTPUT | "$WRIX_GREP_BIN" -qx -- "-P OUTPUT DROP" || wrix_die "IPv6 OUTPUT default-drop policy was not installed"
+  "$WRIX_GREP_BIN" -qx -- "-P OUTPUT DROP" <<<"$ip6_output_rules" || wrix_die "IPv6 OUTPUT default-drop policy was not installed"
 }
 
 wrix_verify_firewall_policy() {
