@@ -101,9 +101,9 @@ test_wrix_service_cli() {
   done
 }
 
-test_wrix_spawn_delegates_to_sandbox_launcher() {
+test_default_wrix_spawn_delegates_to_sandbox_launcher() {
   local package profile_config spawn_config output
-  package="$(build_package wrix)" || return 1
+  package="$(build_package default)" || return 1
   profile_config="$TEST_TMP/profile-config.json"
   local source_kind
   source_kind=$(expected_source_kind)
@@ -158,7 +158,7 @@ test_rust_helper_binaries() {
 
 ALL_TESTS=(
   test_wrix_service_cli
-  test_wrix_spawn_delegates_to_sandbox_launcher
+  test_default_wrix_spawn_delegates_to_sandbox_launcher
   test_rust_helper_binaries
 )
 

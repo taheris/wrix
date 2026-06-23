@@ -25,7 +25,7 @@ _:
         };
 
         packages = [
-          config.packages.wrix
+          (pkgs.lib.hiPrio config.packages.default)
           config.treefmt.build.wrapper
           pkgs.flock
           pkgs.podman

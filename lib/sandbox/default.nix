@@ -421,14 +421,13 @@ let
         inherit agent profileConfig;
       };
 
-      # Profile-specific sandbox: makeWrapper composes launcher + immutable
+      # Profile-specific sandbox: wrapper composes launcher + immutable
       # ProfileConfig so `wrix run` works without mutable image or agent env.
       packageName = "wrix-${finalProfile.name}${packageSuffix}";
       packageSuffix = if agent == "direct" then "" else "-${agent}";
       package =
         pkgs.runCommand packageName
           {
-            nativeBuildInputs = [ pkgs.makeWrapper ];
             passthru = {
               image = imageWithConfig;
               inherit launcher profileConfig;
@@ -437,8 +436,19 @@ let
           }
           ''
             mkdir -p "$out/bin"
-            makeWrapper "${launcher}/bin/wrix" "$out/bin/wrix" \
-              --add-flags "--profile-config ${profileConfig}"
+            cat > "$out/bin/wrix" <<'WRIX_WRAPPER'
+            #!${pkgs.runtimeShell}
+            set -euo pipefail
+            case "''${1:-}" in
+              --help|-h|help|service|beads)
+                exec ${serviceCli}/bin/wrix "$@"
+                ;;
+              *)
+                exec ${launcher}/bin/wrix --profile-config ${profileConfig} "$@"
+                ;;
+            esac
+            WRIX_WRAPPER
+            chmod +x "$out/bin/wrix"
           '';
 
     in

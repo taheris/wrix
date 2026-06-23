@@ -165,6 +165,16 @@ test_image_source_kind() {
   pass "ProfileConfig carries platform source_kind and launcher rejects missing/incompatible kinds"
 }
 
+test_wrapper_dispatches_service_commands() {
+  local output
+  output="$($WRIX service --help)"
+  if [[ "$output" != *"Usage: wrix service <command>"* ]]; then
+    fail "wrapped package did not dispatch service commands to the Rust CLI: $output"
+    return 1
+  fi
+  pass "wrapped package dispatches service commands to the Rust CLI"
+}
+
 test_wrapper_invokes_launcher_with_profile_config() {
   local out="$TEST_TMP/dry-run.out" err="$TEST_TMP/dry-run.err" config rc=0
   config=$(profile_config_from_wrapper)
@@ -185,6 +195,7 @@ ALL_TESTS=(
   test_wrapper_does_not_set_image_default_env
   test_profile_config_contains_launcher_contract_fields
   test_image_source_kind
+  test_wrapper_dispatches_service_commands
   test_wrapper_invokes_launcher_with_profile_config
 )
 
