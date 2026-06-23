@@ -5,9 +5,8 @@
 #     mkDevShell {} (no profile) errors at evaluation — no two-arg fallback.
 #
 #   test_profile_shellhook_spliced
-#     mkDevShell { profile = profiles.rust; } shellHook contains the rust
-#     profile's exports (RUSTC_WRAPPER, SCCACHE_DIR, SCCACHE_CACHE_SIZE,
-#     CARGO_INCREMENTAL).
+#     mkDevShell { profile = profiles.rust; } exports the rust profile's
+#     shellHook values when the generated hook is sourced.
 #
 #   test_packages_merge
 #     mkDevShell { profile = base; packages = [extra]; }.packages contains
@@ -31,6 +30,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+TMP_BASE="$(mktemp -d)"
+trap 'rm -rf "$TMP_BASE"' EXIT
 
 resolve_system() {
   nix eval --raw --impure --no-warn-dirty --expr 'builtins.currentSystem'
@@ -61,6 +62,77 @@ eval_expr_json() {
   "
 }
 
+write_fake_devshell_tools() {
+  local bin_dir="$1"
+  mkdir -p "$bin_dir"
+  cat > "$bin_dir/wrix" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "service" && "${2:-}" == "start" ]]; then
+  exit 0
+fi
+if [[ "${1:-}" == "service" && "${2:-}" == "endpoints" ]]; then
+  printf '%s\n' '{"cache_http":null}'
+  exit 0
+fi
+echo "fake wrix: unexpected args: $*" >&2
+exit 2
+SCRIPT
+  cat > "$bin_dir/nix" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "config" && "${2:-}" == "show" ]]; then
+  printf '%s\n' "${NIX_CONFIG:-}"
+  exit 0
+fi
+if [[ "${1:-}" == "show-config" ]]; then
+  printf '%s\n' "${NIX_CONFIG:-}"
+  exit 0
+fi
+echo "fake nix: unexpected args: $*" >&2
+exit 2
+SCRIPT
+  cat > "$bin_dir/nix-store" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+exit 0
+SCRIPT
+  cat > "$bin_dir/host-nix-config.sh" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' 'extra-substituters = file:///tmp/wrix-test-cache'
+SCRIPT
+  chmod +x "$bin_dir/wrix" "$bin_dir/nix" "$bin_dir/nix-store" "$bin_dir/host-nix-config.sh"
+}
+
+source_hook_env() {
+  local hook="$1"
+  local tmp hook_file bin_dir
+  tmp=$(mktemp -d -p "$TMP_BASE")
+  hook_file="$tmp/shell-hook.sh"
+  bin_dir="$tmp/bin"
+  write_fake_devshell_tools "$bin_dir"
+  sed -E "s|/nix/store/[[:alnum:]]+-wrix-host-nix-config\.sh|$bin_dir/host-nix-config.sh|g" <<<"$hook" > "$hook_file"
+  mkdir -p "$tmp/home" "$tmp/workspace"
+  (
+    cd "$tmp/workspace"
+    export HOME="$tmp/home"
+    export PATH="$bin_dir:$PATH"
+    export WRIX_BIN="$bin_dir/wrix"
+    export SCCACHE_DIR="/home/wrix/.cache/sccache"
+    unset CARGO_BUILD_RUSTC_WRAPPER CARGO_INCREMENTAL NIX_CONFIG RUSTC_WRAPPER SCCACHE_CACHE_SIZE
+    # shellcheck source=/dev/null
+    source "$hook_file" >/dev/null
+    env
+  )
+}
+
+env_value() {
+  local env_output="$1"
+  local key="$2"
+  awk -v key="$key" 'BEGIN { FS = "=" } $1 == key { sub("^[^=]*=", ""); print; exit }' <<<"$env_output"
+}
+
 # ============================================================================
 # mkDevShell requires `profile` — no default, no two-arg fallback.
 # ============================================================================
@@ -72,24 +144,45 @@ test_profile_required() {
 }
 
 # ============================================================================
-# rust profile shellHook is spliced verbatim into the devshell shellHook.
+# rust profile shellHook exports the expected values when sourced.
 # ============================================================================
 test_profile_shellhook_spliced() {
-  local hook
+  local hook env_output rustc_wrapper cargo_wrapper sccache_dir sccache_size cargo_incremental
   if ! hook=$(eval_expr_raw "(lib.mkDevShell { profile = lib.profiles.rust; }).shellHook"); then
     echo "FAIL: mkDevShell { profile = profiles.rust; } evaluation failed" >&2
     return 1
   fi
+  if ! env_output=$(source_hook_env "$hook"); then
+    echo "FAIL: generated shellHook failed when sourced" >&2
+    return 1
+  fi
 
-  local missing=0
-  local marker
-  for marker in 'RUSTC_WRAPPER' 'SCCACHE_DIR' 'SCCACHE_CACHE_SIZE' 'CARGO_INCREMENTAL'; do
-    if ! grep -q "$marker" <<<"$hook"; then
-      echo "FAIL: rust profile shellHook missing export of $marker" >&2
-      missing=$((missing + 1))
-    fi
-  done
-  [[ "$missing" -eq 0 ]]
+  rustc_wrapper=$(env_value "$env_output" RUSTC_WRAPPER)
+  cargo_wrapper=$(env_value "$env_output" CARGO_BUILD_RUSTC_WRAPPER)
+  sccache_dir=$(env_value "$env_output" SCCACHE_DIR)
+  sccache_size=$(env_value "$env_output" SCCACHE_CACHE_SIZE)
+  cargo_incremental=$(env_value "$env_output" CARGO_INCREMENTAL)
+
+  [[ "$rustc_wrapper" == */bin/sccache ]] || {
+    echo "FAIL: RUSTC_WRAPPER should export a sccache binary, got '$rustc_wrapper'" >&2
+    return 1
+  }
+  [[ "$cargo_wrapper" == "$rustc_wrapper" ]] || {
+    echo "FAIL: CARGO_BUILD_RUSTC_WRAPPER should match RUSTC_WRAPPER, got '$cargo_wrapper'" >&2
+    return 1
+  }
+  [[ "$sccache_dir" == "$TMP_BASE"/*/home/.cache/sccache ]] || {
+    echo "FAIL: SCCACHE_DIR should default under HOME/.cache/sccache, got '$sccache_dir'" >&2
+    return 1
+  }
+  [[ "$sccache_size" == "50G" ]] || {
+    echo "FAIL: SCCACHE_CACHE_SIZE should export 50G, got '$sccache_size'" >&2
+    return 1
+  }
+  [[ "$cargo_incremental" == "0" ]] || {
+    echo "FAIL: CARGO_INCREMENTAL should export 0, got '$cargo_incremental'" >&2
+    return 1
+  }
 }
 
 # ============================================================================

@@ -83,6 +83,21 @@ make_repo() {
   printf '%s\n' "$dir"
 }
 
+make_linked_worktree() {
+  local primary worktree branch
+  primary=$(make_repo)
+  git -C "$primary" config user.email "wrix-test@example.invalid"
+  git -C "$primary" config user.name "Wrix Test"
+  : > "$primary/README.md"
+  git -C "$primary" add README.md
+  git -C "$primary" commit -q -m "initial commit"
+  worktree=$(mktemp -d -p "$TMP_BASE")
+  rmdir "$worktree"
+  branch="wrix-test-$(basename "$worktree" | tr -c '[:alnum:]' '-')"
+  git -C "$primary" worktree add -q -b "$branch" "$worktree"
+  printf '%s\n' "$worktree"
+}
+
 get_hooks_path() {
   local dir="$1" val
   if val=$(cd "$dir" && git config --local --get core.hooksPath); then
@@ -94,10 +109,17 @@ get_hooks_path() {
 # Returns 1 (with a diagnostic) if the subshell exits non-zero.
 run_hook_or_fail() {
   local dir="$1" hook="$2" stderr_file="$3"
-  local hook_file service_bin rc=0
+  local hook_file service_bin host_config rc=0
   hook_file=$(mktemp -p "$TMP_BASE")
   service_bin=$(mktemp -p "$TMP_BASE")
-  printf '%s' "$hook" > "$hook_file"
+  host_config=$(mktemp -p "$TMP_BASE")
+  cat > "$host_config" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+exit 0
+SCRIPT
+  chmod +x "$host_config"
+  sed -E "s|/nix/store/[[:alnum:]]+-wrix-host-nix-config\.sh|$host_config|g" <<<"$hook" > "$hook_file"
   cat > "$service_bin" <<'SCRIPT'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -142,25 +164,34 @@ mkdevshell_hook_with_custom_deriv_json() {
   '
 }
 
-# ============================================================================
-test_auto_set_when_config_present() {
-  local dir bundle hook stderr_file actual
-  bundle=$(default_bundle_path)
-  dir=$(make_repo)
+assert_auto_set_hooks_path() {
+  local dir="$1"
+  local bundle="$2"
+  local label="$3"
+  local hook stderr_file actual
   stderr_file=$(mktemp -p "$TMP_BASE")
   : > "$dir/.pre-commit-config.yaml"
 
   hook=$(mkdevshell_hook "true")
   if ! run_hook_or_fail "$dir" "$hook" "$stderr_file"; then
-    echo "FAIL: shellHook source failed" >&2
+    echo "FAIL: shellHook source failed for $label" >&2
     return 1
   fi
 
   actual=$(get_hooks_path "$dir")
   if [[ "$actual" != "$bundle" ]]; then
-    echo "FAIL: expected core.hooksPath='$bundle', got '$actual'" >&2
+    echo "FAIL: $label expected core.hooksPath='$bundle', got '$actual'" >&2
     return 1
   fi
+}
+
+# ============================================================================
+test_auto_set_when_config_present() {
+  local bundle
+  bundle=$(default_bundle_path)
+
+  assert_auto_set_hooks_path "$(make_repo)" "$bundle" "regular repository" || return 1
+  assert_auto_set_hooks_path "$(make_linked_worktree)" "$bundle" "linked worktree" || return 1
 }
 
 # ============================================================================

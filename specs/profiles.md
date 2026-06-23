@@ -664,11 +664,11 @@ dests live under `/home/wrix/` inside the container, not under
 - deriveProfile correctly merges packages and environment
   [judge](../tests/judges/profiles.sh#test_derive_profile_merge)
 - A built-in profile's `corePackages` equals its `basePackages` floor plus its own toolchain, `rustProfile { toolchain = ./file }` includes the pinned toolchain in `corePackages`, and cargo-nextest remains rust leaf tooling rather than tier-1 core content
-  [system?](bash tests/profiles/core-packages.sh test_core_membership)
+  [system](bash tests/profiles/core-packages.sh test_core_membership)
 - `deriveProfile p { packages = [extra]; }` appends `extra` to `.packages` but leaves `.corePackages` equal to `p.corePackages`, so `packages` − `corePackages` is exactly the downstream-added delta
-  [system?](bash tests/profiles/core-packages.sh test_extra_not_in_core)
+  [system](bash tests/profiles/core-packages.sh test_extra_not_in_core)
 - Profiles are composable (can extend extended profiles)
-  [system](bash tests/mcp/tmux/e2e/test_profile_composition.sh)
+  [system](bash tests/profiles/profile-composition.sh test_nested_derive_profile)
 - `wrix.mkDevShell { profile = wrix.rustProfile { ... }; }` produces a devshell whose env contains `RUSTC_WRAPPER=sccache`, `SCCACHE_DIR`, `SCCACHE_CACHE_SIZE`, and `CARGO_INCREMENTAL=0` (the rust profile's `shellHook` was spliced)
   [system](bash tests/profiles/mkdevshell.sh test_profile_shellhook_spliced)
 - `wrix.mkDevShell { profile; packages = [extra]; }` shell has both `profile.packages` and `extra` available on PATH
@@ -697,8 +697,8 @@ dests live under `/home/wrix/` inside the container, not under
   [system](bash tests/profiles/mkdevshell-prek.sh test_stale_config_overwrite_with_warning)
 - `wrix.mkDevShell { profile = ...; prekHooks = false; }` entered in a repo whose local git config already has `core.hooksPath` set leaves that value unchanged (passive opt-out preserves stale state per design)
   [system](bash tests/profiles/mkdevshell-prek.sh test_opt_out_preserves_stale_config)
-- `lib/default.nix` mkDevShell shellHook contains no `prek install` invocation and no `chmod` on `.git/hooks`
-  [check](sh -c "! grep -nE 'prek install|chmod.*\.git/hooks' lib/default.nix")
+- The mkDevShell implementation contains no `prek install` invocation and no `chmod` on `.git/hooks`
+  [check](sh -c "! grep -nE 'prek install|chmod.*\.git/hooks' lib/devshell/default.nix lib/default.nix")
 - `modules/flake/devshell.nix` does not set `core.hooksPath` (mkDevShell owns it)
   [check](sh -c "! grep -nE 'core\.hooksPath' modules/flake/devshell.nix")
 - Host devshell built via `wrix.mkDevShell { profile = wrix.rustProfile { toolchain; sha256; }; }` resolves `rustc` to the same `/nix/store/...` path as the sandbox built from the same profile

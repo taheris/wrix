@@ -35,7 +35,6 @@ let
       nix
       patch
       prek
-      python3
       ripgrep
       rsync
       shellcheck
@@ -356,7 +355,7 @@ let
       # so the :- default falls through to $HOME/.cache/sccache; user-set
       # overrides survive.
       shellHook = ''
-        [ "''${SCCACHE_DIR:-}" = "/home/wrix/.cache/sccache" ] && unset SCCACHE_DIR
+        [[ "''${SCCACHE_DIR:-}" = "/home/wrix/.cache/sccache" ]] && unset SCCACHE_DIR
         export PATH="${hostToolchain}/bin:$PATH"
         export RUSTC_WRAPPER="${hostPkgs.sccache}/bin/sccache"
         export CARGO_BUILD_RUSTC_WRAPPER="${hostPkgs.sccache}/bin/sccache"
@@ -415,13 +414,15 @@ in
   python = mkProfile {
     name = "python";
 
-    packages = with pkgs; [
+    corePackages = with pkgs; [
+      python3
       ruff
       ty
       uv
     ];
 
     hostPackages = with hostPkgs; [
+      python3
       ruff
       ty
       uv

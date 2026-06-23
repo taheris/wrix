@@ -77,10 +77,10 @@ in
           ""
         else
           ''
-            if [ -d .git ] && [ -f .pre-commit-config.yaml ]; then
+            if git rev-parse --git-dir >/dev/null 2>&1 && [[ -f .pre-commit-config.yaml ]]; then
               _wrix_hooks_target='${hooksTarget}'
               if _wrix_hooks_current=$(git config --local --get core.hooksPath); then
-                if [ "$_wrix_hooks_current" != "$_wrix_hooks_target" ]; then
+                if [[ "$_wrix_hooks_current" != "$_wrix_hooks_target" ]]; then
                   echo "wrix: overriding stale core.hooksPath ($_wrix_hooks_current) -> $_wrix_hooks_target" >&2
                 fi
               fi

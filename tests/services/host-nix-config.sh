@@ -163,12 +163,23 @@ EOF
   chmod +x "$nix"
 }
 
+write_fake_systemctl() {
+  local systemctl="$1"
+  cat >"$systemctl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+exit 1
+EOF
+  chmod +x "$systemctl"
+}
+
 with_fake_tools() {
   local bin_dir="$TEST_TMP/bin"
   mkdir -p "$bin_dir" "$TEST_TMP/runtime-state" "$TEST_TMP/fake-store"
   write_fake_runtime "$bin_dir/podman"
   write_fake_nix_store "$bin_dir/nix-store"
   write_fake_nix "$bin_dir/nix"
+  write_fake_systemctl "$bin_dir/systemctl"
   export PATH="$bin_dir:$PATH"
   export WRIX_CONTAINER_RUNTIME="$bin_dir/podman"
   export WRIX_FAKE_RUNTIME_STATE="$TEST_TMP/runtime-state"
@@ -219,6 +230,8 @@ test_mkdevshell_nix_cache() {
     exit 77
   fi
   local result result_file default_hook disabled_hook custom_env
+  local default_hook_file disabled_hook_file wrix_bin workspace output nix_config stderr_file suppressed_stderr saved_path
+  local disabled_workspace socket_path fake_wrix args_log disabled_output disabled_stderr
   if ! result="$(eval_expr_json '
     let
       defaultShell = lib.mkDevShell { profile = lib.profiles.base; };
@@ -274,10 +287,14 @@ test_mkdevshell_nix_cache() {
     return 1
   fi
   result_file="$TEST_TMP/mkdevshell.json"
+  default_hook_file="$TEST_TMP/mkdevshell-default-hook.sh"
+  disabled_hook_file="$TEST_TMP/mkdevshell-disabled-hook.sh"
   printf '%s\n' "$result" >"$result_file"
   default_hook="$(json_get "$result_file" defaultHook)"
   disabled_hook="$(json_get "$result_file" disabledHook)"
   custom_env="$(json_get "$result_file" customEnv.WRIX_CACHE_PUBLISH_INCLUDE)"
+  sed -E "s|/nix/store/[[:alnum:]]+-wrix-host-nix-config\.sh|$REPO_ROOT/lib/services/host-nix-config.sh|g" <<<"$default_hook" >"$default_hook_file"
+  printf '%s\n' "$disabled_hook" >"$disabled_hook_file"
 
   assert_contains "default mkDevShell hook" "$default_hook" "service start" || return 1
   assert_contains "default mkDevShell hook" "$default_hook" "WRIX_HOST_NIX_CONFIG_PRINT=1" || return 1
@@ -301,6 +318,106 @@ test_mkdevshell_nix_cache() {
   [[ "$(json_get "$result_file" customEnv.WRIX_CACHE_SOFT_LIMIT_BYTES)" == "1073741824" ]] || { fail "warnSize did not map to bytes"; return 1; }
   [[ "$(json_get "$result_file" customEnv.WRIX_CACHE_PENDING_RETENTION_SECS)" == "172800" ]] || { fail "pendingTtl did not map to seconds"; return 1; }
   [[ "$(json_get "$result_file" customEnv.WRIX_CACHE_PRUNE_INTERVAL_SECS)" == "10800" ]] || { fail "pruneInterval did not map to seconds"; return 1; }
+
+  wrix_bin="$(build_wrix)"
+  saved_path="$PATH"
+  with_fake_tools
+  export HOME="$TEST_TMP/home-mkdevshell"
+  export XDG_STATE_HOME="$TEST_TMP/state-mkdevshell"
+  export XDG_CACHE_HOME="$TEST_TMP/cache-mkdevshell"
+  mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+  workspace="$TEST_TMP/mkdevshell-cache-workspace"
+  stderr_file="$TEST_TMP/mkdevshell-cache.err"
+  mkdir -p "$workspace"
+
+  if ! output="$(
+    (
+      cd "$workspace"
+      # shellcheck source=/dev/null
+      WRIX_BIN="$wrix_bin" . "$default_hook_file" >/dev/null
+      printf '%s\n' "$NIX_CONFIG"
+    ) 2>"$stderr_file"
+  )"; then
+    fail "default mkDevShell hook failed: $(cat "$stderr_file")"
+    return 1
+  fi
+  nix_config="$output"
+  assert_contains "sourced NIX_CONFIG" "$nix_config" "extra-substituters = file://" || return 1
+  assert_contains "sourced NIX_CONFIG" "$nix_config" "extra-trusted-public-keys = " || return 1
+  assert_contains "sourced NIX_CONFIG" "$nix_config" "builders-use-substitutes = true" || return 1
+  assert_contains "sourced NIX_CONFIG" "$nix_config" "post-build-hook = $TEST_TMP/fake-store/" || return 1
+  assert_contains "mkDevShell cache reminder" "$(cat "$stderr_file")" "publish manifest is empty" || return 1
+  if ! "$WRIX_CONTAINER_RUNTIME" container exists mkdevshell-cache-workspace-service; then
+    fail "default mkDevShell hook did not start the workspace service"
+    return 1
+  fi
+
+  suppressed_stderr="$TEST_TMP/mkdevshell-cache-suppressed.err"
+  if ! (
+    cd "$workspace"
+    export WRIX_NIX_CACHE_REMINDER=0
+    # shellcheck source=/dev/null
+    WRIX_BIN="$wrix_bin" . "$default_hook_file" >/dev/null
+  ) 2>"$suppressed_stderr"; then
+    fail "default mkDevShell hook with suppressed reminder failed: $(cat "$suppressed_stderr")"
+    return 1
+  fi
+  assert_not_contains "suppressed reminder stderr" "$(cat "$suppressed_stderr")" "publish manifest is empty" || return 1
+
+  disabled_workspace="$TEST_TMP/mkdevshell-beads-workspace"
+  socket_path="$TEST_TMP/mkdevshell-beads.sock"
+  fake_wrix="$TEST_TMP/fake-wrix-beads"
+  args_log="$TEST_TMP/fake-wrix-beads.args"
+  disabled_stderr="$TEST_TMP/mkdevshell-disabled.err"
+  : > "$args_log"
+  mkdir -p "$disabled_workspace/.beads/dolt"
+  python3 - "$socket_path" <<'PY'
+import os
+import socket
+import sys
+path = sys.argv[1]
+try:
+    os.unlink(path)
+except FileNotFoundError:
+    pass
+sock = socket.socket(socket.AF_UNIX)
+sock.bind(path)
+sock.close()
+PY
+  cat >"$fake_wrix" <<SCRIPT
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "\$*" >> "$args_log"
+if [[ "\${1:-}" == "service" && "\${2:-}" == "start" && "\${3:-}" == "--no-cache" ]]; then
+  exit 0
+fi
+if [[ "\${1:-}" == "service" && "\${2:-}" == "endpoints" && "\${3:-}" == "--no-cache" ]]; then
+  printf '%s\n' '{"endpoints":{"dolt":{"transport":"unix","socket":"$socket_path"}}}'
+  exit 0
+fi
+printf 'fake wrix beads: unexpected args: %s\n' "\$*" >&2
+exit 2
+SCRIPT
+  chmod +x "$fake_wrix"
+  if ! disabled_output="$(
+    (
+      cd "$disabled_workspace"
+      unset NIX_CONFIG BEADS_DOLT_SERVER_SOCKET BEADS_DOLT_SERVER_HOST BEADS_DOLT_SERVER_PORT
+      # shellcheck source=/dev/null
+      WRIX_BIN="$fake_wrix" . "$disabled_hook_file" >/dev/null
+      printf 'NIX_CONFIG=%s\n' "${NIX_CONFIG:-}"
+      printf 'BEADS_DOLT_SERVER_SOCKET=%s\n' "${BEADS_DOLT_SERVER_SOCKET:-}"
+    ) 2>"$disabled_stderr"
+  )"; then
+    fail "disabled mkDevShell hook failed: $(cat "$disabled_stderr")"
+    return 1
+  fi
+  assert_contains "nixCache=false beads socket" "$disabled_output" "BEADS_DOLT_SERVER_SOCKET=$socket_path" || return 1
+  assert_not_contains "nixCache=false output" "$disabled_output" "extra-substituters" || return 1
+  assert_contains "nixCache=false wrix calls" "$(cat "$args_log")" "service start --no-cache" || return 1
+  assert_contains "nixCache=false wrix calls" "$(cat "$args_log")" "service endpoints --no-cache" || return 1
+  PATH="$saved_path"
+  export PATH
 }
 
 test_mkdevshell_loom_internal_worktree_uses_repo_service() {
