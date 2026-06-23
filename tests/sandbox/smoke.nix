@@ -10,6 +10,7 @@
 let
   inherit (pkgs) bash runCommandLocal;
   inherit (builtins) elem getEnv;
+  inherit (pkgs.lib) getName;
 
   isLinux = elem system [
     "x86_64-linux"
@@ -375,9 +376,12 @@ in
       baseAllowlist = sandboxLib.profiles.base.networkAllowlist;
       rustAllowlist = sandboxLib.profiles.rust.networkAllowlist;
       pythonAllowlist = sandboxLib.profiles.python.networkAllowlist;
+      basePackageNames = map getName sandboxLib.profiles.base.packages;
 
-      # Pure Nix assertions for profile allowlists (no image build)
+      # Pure Nix assertions for profile allowlists and firewall tools (no image build)
       allowlistChecks =
+        assert elem "nftables" basePackageNames;
+        assert elem "iptables" basePackageNames;
         assert elem "api.anthropic.com" baseAllowlist;
         assert elem "github.com" baseAllowlist;
         assert elem "cache.nixos.org" baseAllowlist;
@@ -426,12 +430,14 @@ in
 
         # Entrypoint checks (source files, no build needed)
         LINUX_EP="${../../lib/sandbox/linux/entrypoint.sh}"
-        grep -q 'iptables' "$LINUX_EP" || { echo "FAIL: Missing iptables in Linux entrypoint"; exit 1; }
+        grep -q 'WRIX_FIREWALL_BACKEND="nft"' "$LINUX_EP" || { echo "FAIL: Missing nft firewall default in Linux entrypoint"; exit 1; }
+        grep -q 'WRIX_FIREWALL_BACKEND="iptables"' "$LINUX_EP" || { echo "FAIL: Missing iptables fallback in Linux entrypoint"; exit 1; }
         grep -q 'WRIX_NETWORK' "$LINUX_EP" || { echo "FAIL: Missing WRIX_NETWORK check in Linux entrypoint"; exit 1; }
         echo "PASS: Linux entrypoint has network filtering"
 
         DARWIN_EP="${../../lib/sandbox/darwin/entrypoint.sh}"
-        grep -q 'iptables' "$DARWIN_EP" || { echo "FAIL: Missing iptables in Darwin entrypoint"; exit 1; }
+        grep -q 'WRIX_FIREWALL_BACKEND="nft"' "$DARWIN_EP" || { echo "FAIL: Missing nft firewall default in Darwin entrypoint"; exit 1; }
+        grep -q 'WRIX_FIREWALL_BACKEND="iptables"' "$DARWIN_EP" || { echo "FAIL: Missing iptables fallback in Darwin entrypoint"; exit 1; }
         grep -q 'WRIX_NETWORK' "$DARWIN_EP" || { echo "FAIL: Missing WRIX_NETWORK check in Darwin entrypoint"; exit 1; }
         echo "PASS: Darwin entrypoint has network filtering"
 

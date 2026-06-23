@@ -178,8 +178,18 @@ test_agent_lacks_net_admin() {
 
   probe=$(cat <<'PROBE'
 set -euo pipefail
-if iptables -A OUTPUT -j ACCEPT >/tmp/wrix-net-admin-probe 2>&1; then
-  echo 'agent retained NET_ADMIN after startup' >&2
+if command -v nft >/dev/null 2>&1; then
+  if nft flush ruleset >/tmp/wrix-net-admin-probe 2>&1; then
+    echo 'agent retained NET_ADMIN after startup' >&2
+    exit 1
+  fi
+elif command -v iptables >/dev/null 2>&1; then
+  if iptables -A OUTPUT -j ACCEPT >/tmp/wrix-net-admin-probe 2>&1; then
+    echo 'agent retained NET_ADMIN after startup' >&2
+    exit 1
+  fi
+else
+  echo 'no firewall backend command found in sandbox' >&2
   exit 1
 fi
 PROBE

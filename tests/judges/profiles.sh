@@ -3,7 +3,7 @@
 
 test_base_profile_functional() {
   judge_files "lib/sandbox/profiles.nix"
-  judge_criterion "Base profile provides a functional development environment with essential tools (git, curl, basic shell utilities)"
+  judge_criterion "Base profile provides a functional development environment with essential tools (git, curl, basic shell utilities, nftables as the primary firewall backend, and iptables as the fallback backend)"
 }
 
 test_rust_profile() {

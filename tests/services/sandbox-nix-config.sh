@@ -448,7 +448,7 @@ extract_policy_block() {
   ' "$source" >"$out"
 }
 
-write_firewall_stub() {
+write_iptables_stub() {
   local path="$1"
   local family="$2"
   cat >"$path" <<STUB
@@ -472,6 +472,28 @@ STUB
   chmod +x "$path"
 }
 
+write_nft_stub() {
+  local path="$1"
+  cat >"$path" <<STUB
+#!$BASH_BIN
+set -euo pipefail
+printf 'nft %s\n' "\$*" >>"\${WRIX_STUB_FIREWALL_LOG:?}"
+case "\$*" in
+  "-f -")
+    cat >/dev/null
+    ;;
+  "list chain inet wrix input")
+    printf '%s\n' 'table inet wrix { chain input { type filter hook input priority 0; policy drop; } }'
+    ;;
+  "list chain inet wrix output")
+    printf '%s\n' 'table inet wrix { chain output { type filter hook output priority 0; policy drop; ip daddr 10.0.0.0/8 reject } }'
+    ;;
+esac
+exit 0
+STUB
+  chmod +x "$path"
+}
+
 write_getent_stub() {
   local path="$1"
   cat >"$path" <<STUB
@@ -486,21 +508,25 @@ STUB
 prepare_policy_stubs() {
   local dir="$1"
   mkdir -p "$dir"
-  write_firewall_stub "$dir/iptables" iptables
-  write_firewall_stub "$dir/ip6tables" ip6tables
+  write_nft_stub "$dir/nft"
+  write_iptables_stub "$dir/iptables" iptables
+  write_iptables_stub "$dir/ip6tables" ip6tables
   write_getent_stub "$dir/getent"
   : >"$dir/getent.log"
 }
 
 run_policy() {
   local platform="$1"
-  local stub_dir="$2"
+  local backend="$2"
+  local stub_dir="$3"
   local block="$stub_dir/$platform-policy.sh"
   case "$platform" in
     linux) extract_policy_block "$LINUX_ENTRYPOINT" "$block" ;;
     darwin) extract_policy_block "$DARWIN_ENTRYPOINT" "$block" ;;
     *) fail "unknown platform: $platform" ;;
   esac
+  WRIX_FIREWALL_BACKEND="$backend" \
+  WRIX_NFT_BIN="$stub_dir/nft" \
   WRIX_IPTABLES_BIN="$stub_dir/iptables" \
   WRIX_IP6TABLES_BIN="$stub_dir/ip6tables" \
   WRIX_GETENT_BIN="$stub_dir/getent" \
@@ -519,21 +545,61 @@ run_policy() {
     >"$stub_dir/$platform.out" 2>"$stub_dir/$platform.err"
 }
 
-test_limit_mode_cache_endpoint() {
+test_limit_mode_cache_endpoint_uses_nft_backend() {
+  local failed=0
   local platform stub_dir log
   for platform in linux darwin; do
-    stub_dir="$TEST_TMP/limit-$platform"
+    stub_dir="$TEST_TMP/limit-nft-$platform"
     prepare_policy_stubs "$stub_dir"
-    run_policy "$platform" "$stub_dir"
+    if ! run_policy "$platform" nft "$stub_dir"; then
+      fail "$platform nft policy did not apply"
+      failed=1
+      continue
+    fi
     log="$stub_dir/firewall.log"
-    assert_file_contains "$platform policy" "$log" "iptables -w -A OUTPUT -p tcp -d 127.0.0.1 --dport 21042 -j ACCEPT"
-    assert_file_contains "$platform policy" "$log" "iptables -w -A OUTPUT -d 127.0.0.0/8 -j REJECT"
-    assert_file_not_contains "$platform policy" "$log" "--dport 21043 -j ACCEPT"
-    assert_file_not_contains "$platform policy" "$log" "iptables -w -A OUTPUT -j ACCEPT"
+    assert_file_contains "$platform nft policy" "$log" "nft add rule inet wrix output ip daddr 127.0.0.1 tcp dport 21042 accept" || failed=1
+    assert_file_contains "$platform nft policy" "$log" "nft add rule inet wrix output ip daddr 127.0.0.0/8 reject" || failed=1
+    assert_file_not_contains "$platform nft policy" "$log" "dport 21043 accept" || failed=1
+    assert_file_not_contains "$platform nft policy" "$log" "nft add rule inet wrix output meta nfproto ipv4 accept" || failed=1
+    assert_file_not_contains "$platform nft policy" "$log" "iptables -w" || failed=1
     if [[ -s "$stub_dir/getent.log" ]]; then
       fail "$platform resolved the numeric project cache endpoint through name service"
+      failed=1
     fi
   done
+  [[ "$failed" -eq 0 ]]
+}
+
+test_limit_mode_cache_endpoint_uses_iptables_fallback() {
+  local failed=0
+  local platform stub_dir log
+  for platform in linux darwin; do
+    stub_dir="$TEST_TMP/limit-iptables-$platform"
+    prepare_policy_stubs "$stub_dir"
+    if ! run_policy "$platform" iptables "$stub_dir"; then
+      fail "$platform iptables policy did not apply"
+      failed=1
+      continue
+    fi
+    log="$stub_dir/firewall.log"
+    assert_file_contains "$platform iptables policy" "$log" "iptables -w -A OUTPUT -p tcp -d 127.0.0.1 --dport 21042 -j ACCEPT" || failed=1
+    assert_file_contains "$platform iptables policy" "$log" "iptables -w -A OUTPUT -d 127.0.0.0/8 -j REJECT" || failed=1
+    assert_file_not_contains "$platform iptables policy" "$log" "--dport 21043 -j ACCEPT" || failed=1
+    assert_file_not_contains "$platform iptables policy" "$log" "iptables -w -A OUTPUT -j ACCEPT" || failed=1
+    assert_file_not_contains "$platform iptables policy" "$log" "nft add rule" || failed=1
+    if [[ -s "$stub_dir/getent.log" ]]; then
+      fail "$platform resolved the numeric project cache endpoint through name service"
+      failed=1
+    fi
+  done
+  [[ "$failed" -eq 0 ]]
+}
+
+test_limit_mode_cache_endpoint() {
+  local failed=0
+  test_limit_mode_cache_endpoint_uses_nft_backend || failed=1
+  test_limit_mode_cache_endpoint_uses_iptables_fallback || failed=1
+  [[ "$failed" -eq 0 ]]
 }
 
 ALL_TESTS=(

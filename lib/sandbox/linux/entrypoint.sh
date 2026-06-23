@@ -38,14 +38,43 @@ if [[ -d /workspace/.git ]] \
   unset _wrix_hooks_current
 fi
 
-WRIX_IPTABLES_BIN="$(command -v iptables)" || { echo "Error: iptables is required for sandbox network policy" >&2; exit 1; }
-WRIX_IP6TABLES_BIN="$(command -v ip6tables)" || { echo "Error: ip6tables is required for sandbox IPv6 blocking" >&2; exit 1; }
+WRIX_FIREWALL_BACKEND="${WRIX_FIREWALL_BACKEND:-}"
+WRIX_NFT_BIN=""
+WRIX_IPTABLES_BIN=""
+WRIX_IP6TABLES_BIN=""
+case "$WRIX_FIREWALL_BACKEND" in
+  "")
+    if WRIX_NFT_BIN="$(command -v nft)"; then
+      WRIX_FIREWALL_BACKEND="nft"
+    else
+      WRIX_NFT_BIN=""
+      WRIX_FIREWALL_BACKEND="iptables"
+    fi
+    ;;
+  nft|iptables) ;;
+  *)
+    echo "Error: WRIX_FIREWALL_BACKEND must be 'nft' or 'iptables' (got: $WRIX_FIREWALL_BACKEND)" >&2
+    exit 1
+    ;;
+esac
+if [[ "$WRIX_FIREWALL_BACKEND" = "nft" ]]; then
+  if [[ -z "$WRIX_NFT_BIN" ]]; then
+    WRIX_NFT_BIN="$(command -v nft)" || { echo "Error: nft is required for sandbox network policy" >&2; exit 1; }
+  fi
+else
+  if [[ -z "$WRIX_IPTABLES_BIN" ]]; then
+    WRIX_IPTABLES_BIN="$(command -v iptables)" || { echo "Error: iptables is required for sandbox network policy" >&2; exit 1; }
+  fi
+  if [[ -z "$WRIX_IP6TABLES_BIN" ]]; then
+    WRIX_IP6TABLES_BIN="$(command -v ip6tables)" || { echo "Error: ip6tables is required for sandbox IPv6 blocking" >&2; exit 1; }
+  fi
+fi
 WRIX_CAPSH_BIN="$(command -v capsh)" || { echo "Error: capsh is required to drop NET_ADMIN before agent start" >&2; exit 1; }
 WRIX_GETENT_BIN="$(command -v getent)" || { echo "Error: getent is required to resolve network allowlist domains" >&2; exit 1; }
 WRIX_AWK_BIN="$(command -v awk)" || { echo "Error: awk is required to resolve network allowlist domains" >&2; exit 1; }
 WRIX_SORT_BIN="$(command -v sort)" || { echo "Error: sort is required to resolve network allowlist domains" >&2; exit 1; }
 WRIX_GREP_BIN="$(command -v grep)" || { echo "Error: grep is required to verify sandbox network policy" >&2; exit 1; }
-export WRIX_IPTABLES_BIN WRIX_IP6TABLES_BIN WRIX_CAPSH_BIN WRIX_GETENT_BIN WRIX_AWK_BIN WRIX_SORT_BIN WRIX_GREP_BIN
+export WRIX_FIREWALL_BACKEND WRIX_NFT_BIN WRIX_IPTABLES_BIN WRIX_IP6TABLES_BIN WRIX_CAPSH_BIN WRIX_GETENT_BIN WRIX_AWK_BIN WRIX_SORT_BIN WRIX_GREP_BIN
 if WRIX_REAL_BD_BIN="$(command -v bd)"; then
   export WRIX_REAL_BD_BIN
 else
@@ -313,12 +342,75 @@ wrix_die() {
   exit 1
 }
 
+wrix_nft() {
+  "$WRIX_NFT_BIN" "$@" || wrix_die "nft $* failed"
+}
+
+wrix_nft_load_base_ruleset() {
+  "$WRIX_NFT_BIN" -f - <<'NFT' || wrix_die "nft base ruleset load failed"
+flush ruleset
+table inet wrix {
+  chain input {
+    type filter hook input priority 0; policy drop;
+  }
+
+  chain forward {
+    type filter hook forward priority 0; policy drop;
+  }
+
+  chain output {
+    type filter hook output priority 0; policy drop;
+  }
+}
+NFT
+}
+
 wrix_iptables() {
   "$WRIX_IPTABLES_BIN" -w "$@" || wrix_die "iptables $* failed"
 }
 
 wrix_ip6tables() {
   "$WRIX_IP6TABLES_BIN" -w "$@" || wrix_die "ip6tables $* failed"
+}
+
+wrix_firewall_allow_ipv4() {
+  local ip="$1"
+  local port="$2"
+  local proto="$3"
+  case "$WRIX_FIREWALL_BACKEND" in
+    nft)
+      if [[ -n "$port" ]]; then
+        wrix_nft add rule inet wrix output ip daddr "$ip" "$proto" dport "$port" accept
+      else
+        wrix_nft add rule inet wrix output ip daddr "$ip" accept
+      fi
+      ;;
+    iptables)
+      if [[ -n "$port" ]]; then
+        wrix_iptables -A OUTPUT -p "$proto" -d "$ip" --dport "$port" -j ACCEPT
+      else
+        wrix_iptables -A OUTPUT -d "$ip" -j ACCEPT
+      fi
+      ;;
+    *) wrix_die "firewall backend was not selected" ;;
+  esac
+}
+
+wrix_firewall_reject_ipv4_cidr() {
+  local cidr="$1"
+  case "$WRIX_FIREWALL_BACKEND" in
+    nft) wrix_nft add rule inet wrix output ip daddr "$cidr" reject ;;
+    iptables) wrix_iptables -A OUTPUT -d "$cidr" -j REJECT ;;
+    *) wrix_die "firewall backend was not selected" ;;
+  esac
+}
+
+wrix_firewall_allow_public_ipv4() {
+  case "$WRIX_FIREWALL_BACKEND" in
+    nft) wrix_nft add rule inet wrix output meta nfproto ipv4 accept ;;
+    iptables) wrix_iptables -A OUTPUT -j ACCEPT ;;
+    *) wrix_die "firewall backend was not selected" ;;
+  esac
 }
 
 wrix_ipv4_is_special() {
@@ -377,11 +469,7 @@ wrix_allow_ipv4_host() {
   records=$(wrix_resolve_ipv4 "$host") || wrix_die "$reason host is unresolvable: $host"
   while IFS= read -r ip; do
     [[ -n "$ip" ]] || continue
-    if [[ -n "$port" ]]; then
-      wrix_iptables -A OUTPUT -p "$proto" -d "$ip" --dport "$port" -j ACCEPT
-    else
-      wrix_iptables -A OUTPUT -d "$ip" -j ACCEPT
-    fi
+    wrix_firewall_allow_ipv4 "$ip" "$port" "$proto"
   done <<< "$records"
 }
 
@@ -398,8 +486,8 @@ wrix_allow_dns_exceptions() {
   IFS=',' read -ra dns_servers <<< "$servers"
   for server in "${dns_servers[@]}"; do
     [[ "$server" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
-    wrix_iptables -A OUTPUT -p udp -d "$server" --dport 53 -j ACCEPT
-    wrix_iptables -A OUTPUT -p tcp -d "$server" --dport 53 -j ACCEPT
+    wrix_firewall_allow_ipv4 "$server" 53 udp
+    wrix_firewall_allow_ipv4 "$server" 53 tcp
   done
 }
 
@@ -454,7 +542,7 @@ wrix_block_special_ipv4_ranges() {
     240.0.0.0/4
   )
   for cidr in "${blocked_cidrs[@]}"; do
-    wrix_iptables -A OUTPUT -d "$cidr" -j REJECT
+    wrix_firewall_reject_ipv4_cidr "$cidr"
   done
 }
 
@@ -470,16 +558,62 @@ wrix_allow_limit_domains() {
       if wrix_ipv4_is_special "$ip"; then
         wrix_die "allowlist domain resolves to blocked local/special address: $domain -> $ip"
       fi
-      wrix_iptables -A OUTPUT -d "$ip" -j ACCEPT
+      wrix_firewall_allow_ipv4 "$ip" "" ""
     done <<< "$records"
   done
 }
 
-wrix_verify_firewall_policy() {
+wrix_verify_nft_policy() {
+  "$WRIX_NFT_BIN" list chain inet wrix input | "$WRIX_GREP_BIN" -q 'policy drop' || wrix_die "INPUT default-drop policy was not installed"
+  "$WRIX_NFT_BIN" list chain inet wrix output | "$WRIX_GREP_BIN" -q 'policy drop' || wrix_die "OUTPUT default-drop policy was not installed"
+  "$WRIX_NFT_BIN" list chain inet wrix output | "$WRIX_GREP_BIN" -q 'ip daddr 10.0.0.0/8 reject' || wrix_die "local-network reject rules were not installed"
+}
+
+wrix_verify_iptables_policy() {
   "$WRIX_IPTABLES_BIN" -S INPUT | "$WRIX_GREP_BIN" -qx -- "-P INPUT DROP" || wrix_die "INPUT default-drop policy was not installed"
   "$WRIX_IPTABLES_BIN" -S OUTPUT | "$WRIX_GREP_BIN" -qx -- "-P OUTPUT DROP" || wrix_die "OUTPUT default-drop policy was not installed"
   "$WRIX_IPTABLES_BIN" -C OUTPUT -d 10.0.0.0/8 -j REJECT || wrix_die "local-network reject rules were not installed"
   "$WRIX_IP6TABLES_BIN" -S OUTPUT | "$WRIX_GREP_BIN" -qx -- "-P OUTPUT DROP" || wrix_die "IPv6 OUTPUT default-drop policy was not installed"
+}
+
+wrix_verify_firewall_policy() {
+  case "$WRIX_FIREWALL_BACKEND" in
+    nft) wrix_verify_nft_policy ;;
+    iptables) wrix_verify_iptables_policy ;;
+    *) wrix_die "firewall backend was not selected" ;;
+  esac
+}
+
+wrix_reset_firewall_policy() {
+  case "$WRIX_FIREWALL_BACKEND" in
+    nft)
+      wrix_nft_load_base_ruleset
+      wrix_nft add rule inet wrix input iifname "lo" accept
+      wrix_nft add rule inet wrix input ct state established,related accept
+      wrix_nft add rule inet wrix output oifname "lo" accept
+      wrix_nft add rule inet wrix output ct state established,related accept
+      ;;
+    iptables)
+      wrix_iptables -F INPUT
+      wrix_iptables -F FORWARD
+      wrix_iptables -F OUTPUT
+      wrix_iptables -P INPUT DROP
+      wrix_iptables -P FORWARD DROP
+      wrix_iptables -P OUTPUT DROP
+      wrix_iptables -A INPUT -i lo -j ACCEPT
+      wrix_iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+      wrix_iptables -A OUTPUT -o lo -j ACCEPT
+      wrix_iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+      wrix_ip6tables -F INPUT
+      wrix_ip6tables -F FORWARD
+      wrix_ip6tables -F OUTPUT
+      wrix_ip6tables -P INPUT DROP
+      wrix_ip6tables -P FORWARD DROP
+      wrix_ip6tables -P OUTPUT DROP
+      ;;
+    *) wrix_die "firewall backend was not selected" ;;
+  esac
 }
 
 apply_wrix_network_policy() {
@@ -488,26 +622,10 @@ apply_wrix_network_policy() {
     open|limit) ;;
     *) wrix_die "WRIX_NETWORK must be 'open' or 'limit' (got: $mode)" ;;
   esac
+  [[ -n "${WRIX_FIREWALL_BACKEND:-}" ]] || wrix_die "firewall backend was not selected"
 
-  echo "Network mode: $mode (local-network baseline enforced)" >&2
-  wrix_iptables -F INPUT
-  wrix_iptables -F FORWARD
-  wrix_iptables -F OUTPUT
-  wrix_iptables -P INPUT DROP
-  wrix_iptables -P FORWARD DROP
-  wrix_iptables -P OUTPUT DROP
-  wrix_iptables -A INPUT -i lo -j ACCEPT
-  wrix_iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-  wrix_iptables -A OUTPUT -o lo -j ACCEPT
-  wrix_iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-
-  wrix_ip6tables -F INPUT
-  wrix_ip6tables -F FORWARD
-  wrix_ip6tables -F OUTPUT
-  wrix_ip6tables -P INPUT DROP
-  wrix_ip6tables -P FORWARD DROP
-  wrix_ip6tables -P OUTPUT DROP
-
+  echo "Network mode: $mode (local-network baseline enforced; firewall=$WRIX_FIREWALL_BACKEND)" >&2
+  wrix_reset_firewall_policy
   wrix_allow_dns_exceptions
   wrix_allow_local_endpoints
   wrix_block_special_ipv4_ranges
@@ -515,7 +633,7 @@ apply_wrix_network_policy() {
   if [[ "$mode" = "limit" ]]; then
     wrix_allow_limit_domains
   else
-    wrix_iptables -A OUTPUT -j ACCEPT
+    wrix_firewall_allow_public_ipv4
   fi
 
   wrix_verify_firewall_policy
@@ -523,7 +641,11 @@ apply_wrix_network_policy() {
 
 wrix_verify_net_admin_drop() {
   local probe
-  probe="\"\$WRIX_IPTABLES_BIN\" -A OUTPUT -j ACCEPT >/dev/null 2>&1"
+  case "$WRIX_FIREWALL_BACKEND" in
+    nft) probe="\"\$WRIX_NFT_BIN\" add rule inet wrix output accept >/dev/null 2>&1" ;;
+    iptables) probe="\"\$WRIX_IPTABLES_BIN\" -A OUTPUT -j ACCEPT >/dev/null 2>&1" ;;
+    *) wrix_die "firewall backend was not selected" ;;
+  esac
   if "$WRIX_CAPSH_BIN" --drop=cap_net_admin -- -c "$probe"; then
     wrix_die "NET_ADMIN capability drop could not be verified"
   fi
@@ -532,6 +654,7 @@ wrix_verify_net_admin_drop() {
 run_without_net_admin() {
   local wrix_entrypoint_path="$PATH"
   wrix_verify_net_admin_drop
+  # shellcheck disable=SC2016
   "$WRIX_CAPSH_BIN" --drop=cap_net_admin -- -c 'PATH="$1"; shift; export PATH; exec "$@"' wrix-no-net-admin "$wrix_entrypoint_path" "$@"
 }
 # END wrix network policy

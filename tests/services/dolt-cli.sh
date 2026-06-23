@@ -424,6 +424,7 @@ run_entrypoint_command() {
     HOME="$home_dir" \
     HOST_UID="$(id -u)" \
     WRIX_AGENT="$agent" \
+    WRIX_FIREWALL_BACKEND=iptables \
     WRIX_NETWORK=open \
     PATH="$workspace/bin:$PATH" \
     bash "$entrypoint" "$@" >"$stdout_path" 2>"$stderr_path"

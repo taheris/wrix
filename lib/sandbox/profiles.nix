@@ -51,6 +51,7 @@ let
   imageOnlyPackages = with pkgs; [
     getent.provider
     iproute2
+    nftables
     iptables
     iputils
     libcap
