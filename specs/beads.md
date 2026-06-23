@@ -25,9 +25,10 @@ provides:
 - A **shellHook** that ensures the service container is running and exports
   `BEADS_DOLT_SERVER_*` env vars so `bd` connects through the Dolt service
   rather than embedding Dolt in-process.
-- **Wrix CLI surfaces** on the devShell PATH: `wrix service dolt`
-  (Dolt-service manager — `start`/`stop`/`status`/`port`/`name`/`socket`/
-  `host`/`attach`) and `wrix beads push` (session-close branch sync).
+- **Wrix CLI surfaces** on the devShell PATH: `wrix service ...` manages
+  shared service lifecycle, `wrix service dolt ...` exposes Dolt endpoint and
+  diagnostic commands, and `wrix beads push` handles session-close branch sync.
+  `services.md` owns the exact service CLI surface.
 
 ### Container lifecycle isolation
 
@@ -408,8 +409,8 @@ upstream, not by this spec.
    stderr message when prerequisites are missing or the Dolt server is
    unreachable. No fallback to embedded Dolt.
 2. **Portability** — works on Linux (podman) and Darwin (Apple `container`
-   or podman-via-VM) via the same `wrix service dolt` surface from
-   `services.md`.
+   or podman-via-VM) via the service lifecycle and Dolt endpoint surfaces
+   defined by `services.md`.
 3. **Conflict-free sync** — `wrix beads push` pushes before it pulls so the
    common case bypasses any merge; on the pull-fallback path it fails
    loud rather than silently overwriting `status` or `labels` (see
