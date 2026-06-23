@@ -51,6 +51,8 @@ pub enum Error {
     InstalledImageUnavailable { path: String, image: String },
     /// service lifecycle operation failed: {message}
     Operation { message: String },
+    /// service port {port} is already in use by {owner}; stop that process/container or free the port before retrying
+    PortInUse { port: u16, owner: String },
     /// no available loopback port in {start}-{end}
     NoAvailableLoopbackPort { start: u16, end: u16 },
     /// could not create a unique {prefix} temp directory
@@ -183,6 +185,17 @@ impl Plan {
 
     const fn has_services(&self) -> bool {
         self.cache_port.is_some() || self.dolt.is_some()
+    }
+
+    fn selected_host_ports(&self) -> Vec<u16> {
+        let mut ports = Vec::new();
+        if let Some(port) = self.cache_port {
+            ports.push(port);
+        }
+        if let Some(port) = self.dolt_port() {
+            ports.push(port);
+        }
+        ports
     }
 
     fn ensure_layout(&self) -> Result<()> {
@@ -440,9 +453,12 @@ impl Status {
 }
 
 pub fn start(cache_mode: CacheMode) -> Result<Status> {
-    let plan = Plan::for_current_dir(cache_mode)?;
-    plan.ensure_layout()?;
+    let mut plan = Plan::for_current_dir(cache_mode)?;
     let runtime = Runtime::from_env()?;
+    if plan.has_services() && runtime.reconcile_legacy_containers(&plan)? {
+        plan = Plan::for_workspace(plan.workspace().clone(), cache_mode)?;
+    }
+    plan.ensure_layout()?;
     if plan.has_services() {
         runtime.ensure_running(&plan)?;
     }
@@ -585,6 +601,15 @@ struct DescriptorSource {
     oci_ref: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ContainerInfo {
+    name: String,
+    kind: Option<String>,
+    workspace_hash: Option<String>,
+    workspace_path: Option<String>,
+    published_ports: Vec<u16>,
+}
+
 struct Runtime {
     binary: String,
     kind: RuntimeKind,
@@ -701,6 +726,40 @@ impl DescriptorSource {
     }
 }
 
+impl ContainerInfo {
+    fn belongs_to_workspace(&self, plan: &Plan) -> bool {
+        let workspace_path = plan.workspace().canonical_path().display().to_string();
+        self.workspace_hash.as_deref() == Some(plan.workspace().hash().as_str())
+            || self.workspace_path.as_deref() == Some(workspace_path.as_str())
+    }
+
+    fn publishes_any(&self, ports: &[u16]) -> bool {
+        self.published_ports
+            .iter()
+            .any(|published| ports.contains(published))
+    }
+
+    fn is_legacy_service_on_selected_port(&self, ports: &[u16]) -> bool {
+        self.kind.as_deref() == Some("service")
+            && self.workspace_hash.is_none()
+            && self.workspace_path.is_none()
+            && self.publishes_any(ports)
+    }
+
+    fn owner_description(&self) -> String {
+        let mut description = format!("container {}", self.name);
+        if self.kind.as_deref() == Some("service") {
+            description.push_str(" (wrix service");
+            if let Some(hash) = &self.workspace_hash {
+                description.push_str(", workspace hash ");
+                description.push_str(hash);
+            }
+            description.push(')');
+        }
+        description
+    }
+}
+
 impl Runtime {
     fn from_env() -> Result<Self> {
         let binary = env::var("WRIX_CONTAINER_RUNTIME").unwrap_or_else(|_| default_runtime());
@@ -720,10 +779,15 @@ impl Runtime {
     fn ensure_running(&self, plan: &Plan) -> Result<()> {
         let name = plan.container_name();
         match self.status(&name)? {
-            RuntimeStatus::Running => return Ok(()),
+            RuntimeStatus::Running => {
+                self.reconcile_legacy_containers(plan)?;
+                return Ok(());
+            }
             RuntimeStatus::Stopped => self.remove(&name)?,
             RuntimeStatus::Missing => {}
         }
+        self.reconcile_legacy_containers(plan)?;
+        self.ensure_plan_ports_available(plan)?;
         self.ensure_image()?;
         let mut command = Command::new(&self.binary);
         command
@@ -798,8 +862,172 @@ impl Runtime {
         if output.status.success() {
             Ok(())
         } else {
+            let message = String::from_utf8_lossy(&output.stderr).into_owned();
+            bind_port_from_runtime_error(&message).map_or_else(
+                || Err(Error::Operation { message }),
+                |port| Err(self.port_in_use_error(port)),
+            )
+        }
+    }
+
+    fn reconcile_legacy_containers(&self, plan: &Plan) -> Result<bool> {
+        let planned_name = plan.container_name();
+        let selected_ports = plan.selected_host_ports();
+        let mut removed = false;
+        for container in self.list_container_infos()? {
+            if container.name == planned_name.as_str() {
+                continue;
+            }
+            if container.belongs_to_workspace(plan)
+                || container.is_legacy_service_on_selected_port(&selected_ports)
+            {
+                self.remove_identifier(&container.name)?;
+                removed = true;
+            }
+        }
+        Ok(removed)
+    }
+
+    fn ensure_plan_ports_available(&self, plan: &Plan) -> Result<()> {
+        for port in plan.selected_host_ports() {
+            if let Some(owner) = self.container_port_owner(port)? {
+                return Err(Error::PortInUse {
+                    port,
+                    owner: owner.owner_description(),
+                });
+            }
+            if !is_loopback_port_available(port) {
+                return Err(self.port_in_use_error(port));
+            }
+        }
+        Ok(())
+    }
+
+    fn port_in_use_error(&self, port: u16) -> Error {
+        let owner = match self.describe_port_owner(port) {
+            Ok(value) => value,
+            Err(error) => format!("an unknown owner; owner lookup failed: {error}"),
+        };
+        Error::PortInUse { port, owner }
+    }
+
+    fn describe_port_owner(&self, port: u16) -> Result<String> {
+        if let Some(owner) = self.container_port_owner(port)? {
+            return Ok(owner.owner_description());
+        }
+        Ok(process_port_owner(port)
+            .unwrap_or_else(|| format!("an unknown process on 127.0.0.1:{port}")))
+    }
+
+    fn container_port_owner(&self, port: u16) -> Result<Option<ContainerInfo>> {
+        for container in self.list_container_infos()? {
+            if container.published_ports.contains(&port) {
+                return Ok(Some(container));
+            }
+        }
+        Ok(None)
+    }
+
+    fn list_container_infos(&self) -> Result<Vec<ContainerInfo>> {
+        if self.kind == RuntimeKind::Container {
+            return Ok(Vec::new());
+        }
+        let names = self.list_container_names()?;
+        let mut containers = Vec::with_capacity(names.len());
+        for name in names {
+            containers.push(ContainerInfo {
+                kind: self.inspect_label(&name, "wrix.kind")?,
+                workspace_hash: self.inspect_label(&name, "wrix.workspace.hash")?,
+                workspace_path: self.inspect_label(&name, "wrix.workspace")?,
+                published_ports: self.published_ports(&name)?,
+                name,
+            });
+        }
+        Ok(containers)
+    }
+
+    fn list_container_names(&self) -> Result<Vec<String>> {
+        let output = Command::new(&self.binary)
+            .arg("ps")
+            .arg("-a")
+            .arg("--format")
+            .arg("{{.Names}}")
+            .stdin(Stdio::null())
+            .output()?;
+        if !output.status.success() {
+            return Err(Error::Operation {
+                message: format!(
+                    "failed to list containers: {}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                ),
+            });
+        }
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_owned)
+            .collect())
+    }
+
+    fn inspect_label(&self, name: &str, label: &str) -> Result<Option<String>> {
+        let template = format!("{{{{ index .Config.Labels \"{label}\" }}}}");
+        self.inspect_format(name, &template)
+    }
+
+    fn inspect_format(&self, name: &str, template: &str) -> Result<Option<String>> {
+        let output = Command::new(&self.binary)
+            .arg("inspect")
+            .arg("--format")
+            .arg(template)
+            .arg(name)
+            .stdin(Stdio::null())
+            .output()?;
+        if !output.status.success() {
+            let output_text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if is_missing_container_remove_error(&output_text) {
+                return Ok(None);
+            }
+            return Err(Error::Operation {
+                message: format!("failed to inspect container {name}: {output_text}"),
+            });
+        }
+        let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        if value.is_empty() || value == "<no value>" {
+            Ok(None)
+        } else {
+            Ok(Some(value))
+        }
+    }
+
+    fn published_ports(&self, name: &str) -> Result<Vec<u16>> {
+        let output = Command::new(&self.binary)
+            .arg("port")
+            .arg(name)
+            .stdin(Stdio::null())
+            .output()?;
+        if output.status.success() {
+            return Ok(parse_published_ports(&String::from_utf8_lossy(
+                &output.stdout,
+            )));
+        }
+        let output_text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if is_missing_container_remove_error(&output_text) {
+            Ok(Vec::new())
+        } else {
             Err(Error::Operation {
-                message: String::from_utf8_lossy(&output.stderr).into_owned(),
+                message: format!(
+                    "failed to inspect published ports for container {name}: {output_text}"
+                ),
             })
         }
     }
@@ -1124,6 +1352,85 @@ fn is_missing_container_remove_error(stderr: &str) -> bool {
         || text.contains("no container with")
 }
 
+fn parse_published_ports(input: &str) -> Vec<u16> {
+    let mut ports = Vec::new();
+    for line in input.lines() {
+        for token in line.split_whitespace() {
+            let token = token.trim_matches(|ch| matches!(ch, ',' | ';'));
+            let Some((_host, port_text)) = token.rsplit_once(':') else {
+                continue;
+            };
+            let digits = port_text
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>();
+            if let Ok(port) = digits.parse::<u16>()
+                && !ports.contains(&port)
+            {
+                ports.push(port);
+            }
+        }
+    }
+    ports
+}
+
+fn bind_port_from_runtime_error(message: &str) -> Option<u16> {
+    let lower = message.to_ascii_lowercase();
+    let marker = "failed to bind port ";
+    let start = lower.find(marker)? + marker.len();
+    message[start..]
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>()
+        .parse()
+        .ok()
+}
+
+fn process_port_owner(port: u16) -> Option<String> {
+    lsof_port_owner(port).or_else(|| ss_port_owner(port))
+}
+
+fn lsof_port_owner(port: u16) -> Option<String> {
+    let Ok(output) = Command::new("lsof")
+        .arg("-nP")
+        .arg(format!("-iTCP@127.0.0.1:{port}"))
+        .arg("-sTCP:LISTEN")
+        .stdin(Stdio::null())
+        .output()
+    else {
+        return None;
+    };
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .skip(1)
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(|line| format!("process reported by lsof ({line})"))
+}
+
+fn ss_port_owner(port: u16) -> Option<String> {
+    let Ok(output) = Command::new("ss")
+        .arg("-H")
+        .arg("-ltnp")
+        .stdin(Stdio::null())
+        .output()
+    else {
+        return None;
+    };
+    if !output.status.success() {
+        return None;
+    }
+    let needle = format!(":{port}");
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|line| line.contains(&needle))
+        .map(|line| format!("process reported by ss ({line})"))
+}
+
 fn create_temp_dir(prefix: &str) -> Result<PathBuf> {
     for attempt in 0..100 {
         let path = env::temp_dir().join(format!("{prefix}-{}-{attempt}", std::process::id()));
@@ -1427,8 +1734,8 @@ mod test {
     use std::path::Path;
 
     use super::{
-        DescriptorSource, Error, ImageSourceKind, Plan, RuntimeKind, loaded_container_ref,
-        read_endpoint_port,
+        DescriptorSource, Error, ImageSourceKind, Plan, RuntimeKind, bind_port_from_runtime_error,
+        loaded_container_ref, parse_published_ports, read_endpoint_port,
     };
     use wrix_core::path::Workspace;
 
@@ -1437,6 +1744,22 @@ mod test {
         let content = r#"{"endpoints":{"cache_http":{"host":"127.0.0.1","port":21042},"dolt_tcp":{"host":"127.0.0.1","port":23042}}}"#;
         assert_eq!(read_endpoint_port(content, "cache_http"), Some(21_042));
         assert_eq!(read_endpoint_port(content, "dolt_tcp"), Some(23_042));
+    }
+
+    #[test]
+    fn published_port_parser_extracts_loopback_bindings() {
+        let ports =
+            parse_published_ports("8080/tcp -> 127.0.0.1:21232\n3306/tcp -> 127.0.0.1:23042\n");
+
+        assert_eq!(ports, vec![21_232, 23_042]);
+    }
+
+    #[test]
+    fn runtime_bind_error_parser_extracts_pasta_port() {
+        let message =
+            "pasta failed with exit code 1:\nFailed to bind port 21232 (Address already in use)";
+
+        assert_eq!(bind_port_from_runtime_error(message), Some(21_232));
     }
 
     #[test]

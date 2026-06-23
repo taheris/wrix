@@ -17,10 +17,11 @@ fail() {
 }
 
 require_python() {
-  if ! command -v python3 >/dev/null 2>&1; then
-    printf 'SKIP: python3 is required for JSON assertions\n' >&2
-    exit 77
+  if command -v python3 >/dev/null 2>&1 || command -v jq >/dev/null 2>&1; then
+    return 0
   fi
+  printf 'SKIP: python3 or jq is required for JSON assertions\n' >&2
+  exit 77
 }
 
 require_nix() {
@@ -47,6 +48,11 @@ mkdir -p "$STATE_DIR"
 state_file() {
   local name="$1"
   printf '%s/%s.state\n' "$STATE_DIR" "$name"
+}
+
+run_file() {
+  local name="$1"
+  printf '%s/run-%s\n' "$STATE_DIR" "$name"
 }
 
 image_file() {
@@ -89,6 +95,111 @@ input_arg() {
       return 0
     fi
     previous="$arg"
+  done
+  return 1
+}
+
+label_value() {
+  local name="$1"
+  local label="$2"
+  local run_path
+  run_path="$(run_file "$name")"
+  if [[ ! -f "$run_path" ]]; then
+    return 1
+  fi
+  local run_args
+  run_args="$(<"$run_path")"
+  local previous=""
+  local token
+  local prefix="$label="
+  # intentional word-splitting: fake runtime stores argv as a space-delimited log line.
+  for token in $run_args; do
+    if [[ "$previous" == "--label" && "$token" == "$prefix"* ]]; then
+      printf '%s\n' "${token#"$prefix"}"
+      return 0
+    fi
+    previous="$token"
+  done
+  return 1
+}
+
+host_ports_for_args() {
+  local run_args="$1"
+  local previous=""
+  local token
+  local mapping
+  local rest
+  local host_port
+  # intentional word-splitting: fake runtime stores argv as a space-delimited log line.
+  for token in $run_args; do
+    if [[ "$previous" == "-p" || "$previous" == "--publish" ]]; then
+      mapping="$token"
+      case "$mapping" in
+        127.0.0.1:*:*)
+          rest="${mapping#127.0.0.1:}"
+          host_port="${rest%%:*}"
+          printf '%s\n' "$host_port"
+          ;;
+        *:*)
+          host_port="${mapping%%:*}"
+          printf '%s\n' "$host_port"
+          ;;
+      esac
+    fi
+    previous="$token"
+  done
+}
+
+port_lines_for_args() {
+  local run_args="$1"
+  local previous=""
+  local token
+  local mapping
+  local rest
+  local host_port
+  local container_port
+  # intentional word-splitting: fake runtime stores argv as a space-delimited log line.
+  for token in $run_args; do
+    if [[ "$previous" == "-p" || "$previous" == "--publish" ]]; then
+      mapping="$token"
+      case "$mapping" in
+        127.0.0.1:*:*)
+          rest="${mapping#127.0.0.1:}"
+          host_port="${rest%%:*}"
+          container_port="${rest##*:}"
+          printf '%s/tcp -> 127.0.0.1:%s\n' "$container_port" "$host_port"
+          ;;
+      esac
+    fi
+    previous="$token"
+  done
+}
+
+first_conflicting_port() {
+  local candidate_name="$1"
+  local run_args="$2"
+  local port
+  local existing_file
+  local existing_name
+  local existing_args
+  local existing_port
+  # intentional word-splitting: fake runtime emits one host port per line.
+  for port in $(host_ports_for_args "$run_args"); do
+    for existing_file in "$STATE_DIR"/run-*; do
+      [[ -e "$existing_file" ]] || continue
+      existing_name="${existing_file##*/run-}"
+      if [[ "$existing_name" == "$candidate_name" ]]; then
+        continue
+      fi
+      existing_args="$(<"$existing_file")"
+      # intentional word-splitting: fake runtime emits one host port per line.
+      for existing_port in $(host_ports_for_args "$existing_args"); do
+        if [[ "$existing_port" == "$port" ]]; then
+          printf '%s\n' "$port"
+          return 0
+        fi
+      done
+    done
   done
   return 1
 }
@@ -165,30 +276,30 @@ case "${1:-}" in
     fi
     if [[ "$*" == *'{{.State.Running}}'* ]]; then
       printf 'true\n'
-    elif [[ "$*" == *'index .Config.Labels "wrix.workspace"'* ]]; then
-      workspace="<no value>"
-      if [[ -f "$STATE_DIR/run-$name" ]]; then
-        run_args="$(<"$STATE_DIR/run-$name")"
-        # intentional word-splitting: fake runtime stores argv as a space-delimited log line.
-        for token in $run_args; do
-          case "$token" in
-            wrix.workspace=*) workspace="${token#wrix.workspace=}" ;;
-          esac
-        done
+    elif [[ "$*" == *'index .Config.Labels "'* ]]; then
+      args="$*"
+      marker='index .Config.Labels "'
+      label="${args#*"$marker"}"
+      label="${label%%\"*}"
+      if ! label_value "$name" "$label"; then
+        printf '<no value>\n'
       fi
-      printf '%s\n' "$workspace"
     else
       printf '[{"status":"running"}]\n'
     fi
     ;;
+  port)
+    name="${2:-}"
+    if [[ ! -f "$(state_file "$name")" ]]; then
+      exit 1
+    fi
+    port_lines_for_args "$(<"$(run_file "$name")")"
+    ;;
   ps)
     for run_file in "$STATE_DIR"/run-*; do
       [[ -e "$run_file" ]] || continue
-      run_args="$(<"$run_file")"
-      if [[ "$run_args" == *'wrix.kind=service'* ]]; then
-        name="${run_file##*/run-}"
-        printf '%s\n' "$name"
-      fi
+      name="${run_file##*/run-}"
+      printf '%s\n' "$name"
     done
     ;;
   run)
@@ -204,13 +315,18 @@ case "${1:-}" in
       printf 'missing --name\n' >&2
       exit 2
     fi
+    if conflict_port="$(first_conflicting_port "$name" "$*")"; then
+      printf 'pasta failed with exit code 1:\nFailed to bind port %s (Address already in use) for option '\''-t 127.0.0.1/%s-%s:8080-8080'\''\n' \
+        "$conflict_port" "$conflict_port" "$conflict_port" >&2
+      exit 1
+    fi
     printf 'running\n' >"$(state_file "$name")"
-    printf '%s\n' "$*" >"$STATE_DIR/run-$name"
+    printf '%s\n' "$*" >"$(run_file "$name")"
     log_call "$*"
     ;;
   rm)
     name="${@: -1}"
-    rm -f "$(state_file "$name")" "$STATE_DIR/run-$name"
+    rm -f "$(state_file "$name")" "$(run_file "$name")"
     log_call "$*"
     ;;
   logs)
@@ -290,7 +406,8 @@ EOF
 json_get() {
   local file="$1"
   local path="$2"
-  python3 - "$file" "$path" <<'PY'
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$file" "$path" <<'PY'
 import json
 import sys
 with open(sys.argv[1], encoding="utf-8") as handle:
@@ -299,6 +416,94 @@ for part in sys.argv[2].split('.'):
     value = value[part]
 print(value)
 PY
+  else
+    jq -r --arg path "$path" 'getpath($path | split(".")) | if . == null then "None" else . end' "$file"
+  fi
+}
+
+assert_service_descriptor_contract() {
+  local descriptor="$1"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$descriptor" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    descriptor = json.load(handle)
+legacy_stream_key = "fallback_" + "stream"
+if legacy_stream_key in descriptor:
+    print("FAIL: service descriptor exposes legacy stream fallback metadata", file=sys.stderr)
+    sys.exit(1)
+if descriptor.get("source_kind") != "nix-descriptor":
+    print("FAIL: service descriptor source_kind is not nix-descriptor", file=sys.stderr)
+    sys.exit(1)
+if not descriptor.get("oci_layout"):
+    print("FAIL: service descriptor is missing oci_layout", file=sys.stderr)
+    sys.exit(1)
+if not str(descriptor.get("digest", "")).startswith("sha256:"):
+    print("FAIL: service descriptor is missing digest", file=sys.stderr)
+    sys.exit(1)
+PY
+  else
+    jq -e 'has("fallback_stream") | not' "$descriptor" >/dev/null \
+      || fail "service descriptor exposes legacy stream fallback metadata"
+    jq -e '.source_kind == "nix-descriptor"' "$descriptor" >/dev/null \
+      || fail "service descriptor source_kind is not nix-descriptor"
+    jq -e '(.oci_layout // "") != ""' "$descriptor" >/dev/null \
+      || fail "service descriptor is missing oci_layout"
+    jq -e '(.digest // "") | startswith("sha256:")' "$descriptor" >/dev/null \
+      || fail "service descriptor is missing digest"
+  fi
+}
+
+assert_service_image_metadata_contract() {
+  local metadata_json="$1"
+  local expected_source_kind="$2"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$metadata_json" "$expected_source_kind" <<'PY'
+import json
+import sys
+metadata = json.loads(sys.argv[1])
+expected_source_kind = sys.argv[2]
+labels = metadata["labels"]
+expected = {
+    "wrix.managed": "true",
+    "wrix.image.kind": "service",
+}
+for key, value in expected.items():
+    actual = labels.get(key)
+    if actual != value:
+        print(f"FAIL: service image label {key}={actual!r}, expected {value!r}", file=sys.stderr)
+        sys.exit(1)
+if metadata["source_kind"] != expected_source_kind:
+    print(
+        f"FAIL: service image source_kind={metadata['source_kind']!r}, expected {expected_source_kind!r}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+for field in ["source", "digest"]:
+    if not metadata[field].startswith("/nix/store/"):
+        print(f"FAIL: service image {field} is not a store path: {metadata[field]!r}", file=sys.stderr)
+        sys.exit(1)
+if expected_source_kind == "nix-descriptor" and not metadata["ref"].startswith("localhost/wrix-service:"):
+    print(f"FAIL: Linux service image ref lacks localhost prefix: {metadata['ref']!r}", file=sys.stderr)
+    sys.exit(1)
+if expected_source_kind == "docker-archive" and not metadata["ref"].startswith("wrix-service:"):
+    print(f"FAIL: Darwin service image ref has unexpected shape: {metadata['ref']!r}", file=sys.stderr)
+    sys.exit(1)
+PY
+  else
+    printf '%s\n' "$metadata_json" | jq -e --arg source_kind "$expected_source_kind" '
+      .labels["wrix.managed"] == "true" and
+      .labels["wrix.image.kind"] == "service" and
+      .source_kind == $source_kind and
+      (.source | startswith("/nix/store/")) and
+      (.digest | startswith("/nix/store/")) and
+      (
+        ($source_kind == "nix-descriptor" and (.ref | startswith("localhost/wrix-service:"))) or
+        ($source_kind == "docker-archive" and (.ref | startswith("wrix-service:")))
+      )
+    ' >/dev/null || fail "service image metadata does not match the service image contract"
+  fi
 }
 
 assert_equals() {
@@ -380,6 +585,22 @@ test_fake_runtime_contract() {
   if "$WRIX_CONTAINER_RUNTIME" container exists demo; then
     fail "demo should be removed"
   fi
+
+  "$WRIX_CONTAINER_RUNTIME" run -d \
+    --name labelled \
+    --label wrix.kind=service \
+    --label wrix.workspace.hash=abc123 \
+    -p 127.0.0.1:21042:8080 \
+    image sh -c 'sleep infinity'
+  assert_equals \
+    "label inspect" \
+    "abc123" \
+    "$($WRIX_CONTAINER_RUNTIME inspect --format '{{ index .Config.Labels "wrix.workspace.hash" }}' labelled)"
+  assert_contains "port listing" "$($WRIX_CONTAINER_RUNTIME port labelled)" "8080/tcp -> 127.0.0.1:21042"
+  if "$WRIX_CONTAINER_RUNTIME" run -d --name conflict -p 127.0.0.1:21042:8080 image sh -c 'sleep infinity' 2>"$TEST_TMP/fake-conflict.err"; then
+    fail "fake runtime allowed duplicate host port"
+  fi
+  assert_file_contains "fake bind error" "$TEST_TMP/fake-conflict.err" "Failed to bind port 21042"
 }
 
 test_workspace_identity() {
@@ -498,6 +719,92 @@ test_devshell_start_is_independent() {
   fi
 }
 
+test_start_replaces_stale_same_workspace_service_on_cache_port() {
+  require_python
+  local wrix_bin
+  wrix_bin="$(build_wrix)"
+  with_fake_runtime_env
+
+  export HOME="$TEST_TMP/home-stale-service"
+  export XDG_STATE_HOME="$TEST_TMP/xdg-state-stale-service"
+  export XDG_CACHE_HOME="$TEST_TMP/xdg-cache-stale-service"
+  mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+
+  local workspace="$TEST_TMP/stale-service-repo"
+  mkdir -p "$workspace"
+  (cd "$workspace" && "$wrix_bin" service endpoints >"$TEST_TMP/stale-service-endpoints-before.json")
+
+  local workspace_hash cache_port planned_name
+  workspace_hash="$(json_get "$TEST_TMP/stale-service-endpoints-before.json" workspace_hash)"
+  cache_port="$(json_get "$TEST_TMP/stale-service-endpoints-before.json" endpoints.cache_http.port)"
+  planned_name="$(json_get "$TEST_TMP/stale-service-endpoints-before.json" container_name)"
+
+  "$WRIX_CONTAINER_RUNTIME" run -d \
+    --name loom-service \
+    --label wrix.kind=service \
+    --label "wrix.workspace.hash=$workspace_hash" \
+    -p "127.0.0.1:$cache_port:8080" \
+    image sh -c 'sleep infinity'
+
+  (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/stale-service-start.txt")
+
+  if "$WRIX_CONTAINER_RUNTIME" container exists loom-service; then
+    fail "stale same-workspace service container was not removed"
+  fi
+  "$WRIX_CONTAINER_RUNTIME" container exists "$planned_name"
+  assert_file_contains "stale service removed" "$WRIX_FAKE_RUNTIME_STATE/calls" "rm -f loom-service"
+  assert_file_contains \
+    "planned service kept selected cache port" \
+    "$WRIX_FAKE_RUNTIME_STATE/run-$planned_name" \
+    "-p 127.0.0.1:$cache_port:8080"
+}
+
+test_start_reports_unrelated_cache_port_owner() {
+  require_python
+  local wrix_bin
+  wrix_bin="$(build_wrix)"
+  with_fake_runtime_env
+
+  export HOME="$TEST_TMP/home-unrelated-port"
+  export XDG_STATE_HOME="$TEST_TMP/xdg-state-unrelated-port"
+  export XDG_CACHE_HOME="$TEST_TMP/xdg-cache-unrelated-port"
+  mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+
+  local workspace="$TEST_TMP/unrelated-port-repo"
+  mkdir -p "$workspace"
+  (cd "$workspace" && "$wrix_bin" service endpoints >"$TEST_TMP/unrelated-port-endpoints.json")
+
+  local cache_port planned_name
+  cache_port="$(json_get "$TEST_TMP/unrelated-port-endpoints.json" endpoints.cache_http.port)"
+  planned_name="$(json_get "$TEST_TMP/unrelated-port-endpoints.json" container_name)"
+
+  "$WRIX_CONTAINER_RUNTIME" run -d \
+    --name foreign-service \
+    --label wrix.kind=service \
+    --label "wrix.workspace.hash=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
+    -p "127.0.0.1:$cache_port:8080" \
+    image sh -c 'sleep infinity'
+
+  if (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/unrelated-port-start.txt" 2>"$TEST_TMP/unrelated-port-error.txt"); then
+    fail "service start succeeded with unrelated cache port owner"
+  fi
+
+  local error_text
+  error_text="$(<"$TEST_TMP/unrelated-port-error.txt")"
+  assert_contains \
+    "unrelated port diagnostic" \
+    "$error_text" \
+    "service port $cache_port is already in use by container foreign-service"
+  assert_contains "unrelated port action" "$error_text" "free the port before retrying"
+  if [[ "$error_text" == *"pasta failed"* ]]; then
+    fail "service start surfaced raw pasta bind text: $error_text"
+  fi
+  "$WRIX_CONTAINER_RUNTIME" container exists foreign-service
+  if "$WRIX_CONTAINER_RUNTIME" container exists "$planned_name"; then
+    fail "planned service started despite unrelated cache port owner"
+  fi
+}
+
 test_temp_cache_only_workspace_does_not_start_service() {
   require_python
   local wrix_bin
@@ -594,25 +901,7 @@ test_service_start_loads_image_source() {
     export WRIX_SERVICE_IMAGE_SOURCE_KIND="$real_source_kind"
     mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
 
-    python3 - "$WRIX_SERVICE_IMAGE_SOURCE" <<'PY'
-import json
-import sys
-with open(sys.argv[1], encoding="utf-8") as handle:
-    descriptor = json.load(handle)
-legacy_stream_key = "fallback_" + "stream"
-if legacy_stream_key in descriptor:
-    print("FAIL: service descriptor exposes legacy stream fallback metadata", file=sys.stderr)
-    sys.exit(1)
-if descriptor.get("source_kind") != "nix-descriptor":
-    print("FAIL: service descriptor source_kind is not nix-descriptor", file=sys.stderr)
-    sys.exit(1)
-if not descriptor.get("oci_layout"):
-    print("FAIL: service descriptor is missing oci_layout", file=sys.stderr)
-    sys.exit(1)
-if not str(descriptor.get("digest", "")).startswith("sha256:"):
-    print("FAIL: service descriptor is missing digest", file=sys.stderr)
-    sys.exit(1)
-PY
+    assert_service_descriptor_contract "$WRIX_SERVICE_IMAGE_SOURCE"
     local oci_layout oci_ref
     oci_layout="$(json_get "$WRIX_SERVICE_IMAGE_SOURCE" oci_layout)"
     oci_ref="$(json_get "$WRIX_SERVICE_IMAGE_SOURCE" oci_ref)"
@@ -696,38 +985,7 @@ test_service_image_labels() {
 
   local metadata_json
   metadata_json="$(nix eval --no-warn-dirty --json "$REPO_ROOT#wrix-service-image" --apply 'image: { inherit (image) labels ref source_kind; source = toString image.source; digest = toString image.digest; }')"
-  python3 - "$metadata_json" "$expected_source_kind" <<'PY'
-import json
-import sys
-metadata = json.loads(sys.argv[1])
-expected_source_kind = sys.argv[2]
-labels = metadata["labels"]
-expected = {
-    "wrix.managed": "true",
-    "wrix.image.kind": "service",
-}
-for key, value in expected.items():
-    actual = labels.get(key)
-    if actual != value:
-        print(f"FAIL: service image label {key}={actual!r}, expected {value!r}", file=sys.stderr)
-        sys.exit(1)
-if metadata["source_kind"] != expected_source_kind:
-    print(
-        f"FAIL: service image source_kind={metadata['source_kind']!r}, expected {expected_source_kind!r}",
-        file=sys.stderr,
-    )
-    sys.exit(1)
-for field in ["source", "digest"]:
-    if not metadata[field].startswith("/nix/store/"):
-        print(f"FAIL: service image {field} is not a store path: {metadata[field]!r}", file=sys.stderr)
-        sys.exit(1)
-if expected_source_kind == "nix-descriptor" and not metadata["ref"].startswith("localhost/wrix-service:"):
-    print(f"FAIL: Linux service image ref lacks localhost prefix: {metadata['ref']!r}", file=sys.stderr)
-    sys.exit(1)
-if expected_source_kind == "docker-archive" and not metadata["ref"].startswith("wrix-service:"):
-    print(f"FAIL: Darwin service image ref has unexpected shape: {metadata['ref']!r}", file=sys.stderr)
-    sys.exit(1)
-PY
+  assert_service_image_metadata_contract "$metadata_json" "$expected_source_kind"
 }
 
 test_service_mounts_beads_worktree_remote() {
@@ -755,6 +1013,8 @@ ALL_TESTS=(
   test_fake_runtime_contract
   test_workspace_identity
   test_devshell_start_is_independent
+  test_start_replaces_stale_same_workspace_service_on_cache_port
+  test_start_reports_unrelated_cache_port_owner
   test_temp_cache_only_workspace_does_not_start_service
   test_loom_bead_workspace_uses_repo_service
   test_service_start_loads_image_source
