@@ -4,46 +4,73 @@
 # - Darwin containers: uses TCP to host gateway (VirtioFS can't pass Unix sockets)
 # - Linux containers: uses Unix socket (mounted from host)
 #
-# Silently succeeds if daemon is not running.
+# Succeeds when the best-effort notification daemon is unavailable.
 #
 # Usage: wrix-notify "Title" "Message" ["Sound"]
 { pkgs }:
 
 pkgs.writeShellScriptBin "wrix-notify" ''
+  set -euo pipefail
+
   SOCKET="/run/wrix/notify.sock"
-  TCP_PORT=5959      # Must match daemon.nix
+  TCP_PORT=5959
   VERBOSE="''${WRIX_NOTIFY_VERBOSE:-0}"
   title="''${1:-Claude Code}"
   message="''${2:-}"
   sound="''${3:-}"
 
-  # Build JSON payload (compact single-line for line-based daemon protocol)
-  # Include session_id for focus-aware notifications (empty if not in tmux)
+  log_verbose() {
+    if [[ "$VERBOSE" == "1" ]]; then
+      printf 'wrix-notify: %s\n' "$1" >&2
+    fi
+  }
+
   payload=$(${pkgs.jq}/bin/jq -cn --arg t "$title" --arg m "$message" --arg s "$sound" \
     --arg sid "''${WRIX_SESSION_ID:-}" \
     '{title: $t, message: $m, sound: $s, session_id: $sid}')
 
-  # Darwin containers set WRIX_NOTIFY_TCP=1 (VirtioFS can't pass Unix sockets)
-  if [ "''${WRIX_NOTIFY_TCP:-}" = "1" ]; then
-    # Get gateway IP (the host) from routing table
-    GATEWAY=$(${pkgs.iproute2}/bin/ip route | ${pkgs.gawk}/bin/awk '/default/ {print $3; exit}')
-    if [ -z "$GATEWAY" ]; then
-      [ "$VERBOSE" = "1" ] && echo "wrix-notify: no gateway found" >&2
+  send_tcp() {
+    local tcp_host="$1"
+    local tcp_port="$2"
+
+    log_verbose "using TCP to $tcp_host:$tcp_port"
+    if ! printf '%s\n' "$payload" | ${pkgs.socat}/bin/socat -u - "TCP:$tcp_host:$tcp_port,connect-timeout=1" >/dev/null 2>/dev/null; then # best-effort: host notification daemon may be absent or disconnect early.
+      log_verbose "TCP send failed"
+    fi
+    log_verbose "sent via TCP"
+  }
+
+  resolve_default_gateway() {
+    ${pkgs.iproute2}/bin/ip route | ${pkgs.gawk}/bin/awk '/default/ {print $3; exit}'
+  }
+
+  tcp_endpoint="''${WRIX_NOTIFY_TCP:-}"
+  if [[ -n "$tcp_endpoint" ]]; then
+    if [[ "$tcp_endpoint" == "1" ]]; then
+      tcp_host=$(resolve_default_gateway)
+      tcp_port="$TCP_PORT"
+    else
+      tcp_host="''${tcp_endpoint%:*}"
+      tcp_port="''${tcp_endpoint##*:}"
+    fi
+
+    if [[ -z "$tcp_host" || -z "$tcp_port" || "$tcp_host" == "$tcp_endpoint" || ! "$tcp_port" =~ ^[0-9]+$ ]]; then
+      log_verbose "invalid TCP endpoint: $tcp_endpoint"
       exit 0
     fi
-    [ "$VERBOSE" = "1" ] && echo "wrix-notify: using TCP to $GATEWAY:$TCP_PORT" >&2
-    printf '%s\n' "$payload" | ${pkgs.netcat}/bin/nc -N "$GATEWAY" "$TCP_PORT" 2>/dev/null || true
-    [ "$VERBOSE" = "1" ] && echo "wrix-notify: sent via TCP" >&2
+
+    send_tcp "$tcp_host" "$tcp_port"
     exit 0
   fi
 
-  # Linux containers: use Unix socket mounted from host
-  if [ ! -S "$SOCKET" ]; then
-    [ "$VERBOSE" = "1" ] && echo "wrix-notify: socket not found at $SOCKET" >&2
-    exit 0  # Silent success if daemon not running
+  if [[ ! -S "$SOCKET" ]]; then
+    log_verbose "socket not found at $SOCKET"
+    exit 0
   fi
 
-  printf '%s\n' "$payload" | ${pkgs.netcat}/bin/nc -U -N "$SOCKET" 2>/dev/null || true
-  [ "$VERBOSE" = "1" ] && echo "wrix-notify: sent to $SOCKET" >&2
+  if ! printf '%s\n' "$payload" | ${pkgs.socat}/bin/socat -u - "UNIX-CONNECT:$SOCKET" >/dev/null 2>/dev/null; then # best-effort: host notification daemon may be absent or disconnect early.
+    log_verbose "Unix socket send failed"
+  fi
+  log_verbose "sent to $SOCKET"
   exit 0
 ''

@@ -178,7 +178,7 @@ pkgs.writeShellScriptBin "test-darwin" ''
     -e HOST_UID=$(id -u) \
     -e WRIX_DIR_MOUNTS="$DIR_MOUNTS" \
     -e WRIX_FILE_MOUNTS="$FILE_MOUNTS" \
-    -e WRIX_NOTIFY_TCP=1 \
+    -e WRIX_NOTIFY_TCP=192.168.64.1:5959 \
     -e WRIX_PROMPT="test" \
     --network default \
     --dns 100.100.100.100 \

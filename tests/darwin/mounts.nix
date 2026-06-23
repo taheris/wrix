@@ -196,7 +196,7 @@ in
             -e HOST_UID=$(id -u "$REAL_USER") \
             -e WRIX_DIR_MOUNTS="$DIR_MOUNTS" \
             -e WRIX_FILE_MOUNTS="$FILE_MOUNTS" \
-            -e WRIX_NOTIFY_TCP=1 \
+            -e WRIX_NOTIFY_TCP=192.168.64.1:5959 \
             -e WRIX_PROMPT="test" \
             --network default \
             --entrypoint /bin/bash \

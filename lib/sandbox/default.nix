@@ -119,7 +119,7 @@ let
     };
 
     hooks = {
-      Notification = [
+      Stop = [
         {
           matcher = "";
           hooks = [

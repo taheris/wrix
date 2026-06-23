@@ -1,216 +1,450 @@
 #!/usr/bin/env bash
-# Notification connectivity test - run inside container
-#
-# Tests notification connectivity to host daemon.
-# - Darwin containers: uses TCP to gateway (VirtioFS can't pass Unix sockets)
-# - Linux containers: uses mounted Unix socket
-#
-# Skips gracefully if daemon is not running on host.
 set -euo pipefail
-
-echo "=== Notification Connectivity Test ==="
 
 TCP_PORT=5959
 DARWIN_GATEWAY="192.168.64.1"
-SOCKET="/run/wrix/notify.sock"
+LINUX_SOCKET="/run/wrix/notify.sock"
 CONNECT_TIMEOUT_SECONDS=3
-TCP_PAYLOAD='{"title":"test","message":"tcp test"}'
-SOCKET_PAYLOAD='{"title":"test","message":"socket test"}'
-CLIENT_TITLE="test"
-CLIENT_MESSAGE="client test"
-TMP_DIR="$(mktemp -d)"
-trap 'rm -rf "$TMP_DIR"' EXIT
+TEST_TMP=""
+BACKGROUND_PIDS=()
 
-print_output() {
-  local output_file="$1"
-
-  if [[ -s "$output_file" ]]; then
-    echo "  Command output:"
-    sed 's/^/    /' "$output_file"
+ensure_tmp() {
+  if [[ -z "$TEST_TMP" ]]; then
+    TEST_TMP=$(mktemp -d -t wrix-notify-test.XXXXXX)
+    trap cleanup EXIT
   fi
+}
+
+cleanup() {
+  local pid
+
+  for pid in "${BACKGROUND_PIDS[@]}"; do
+    kill "$pid" 2>/dev/null || true # best-effort: test listeners may already have exited.
+    wait "$pid" 2>/dev/null || true # best-effort: reap listeners that are still tracked.
+  done
+  if [[ -n "$TEST_TMP" ]]; then
+    rm -rf "$TEST_TMP"
+  fi
+}
+
+fail() {
+  local message="$1"
+
+  echo "FAIL: $message" >&2
+  exit 1
 }
 
 fail_with_output() {
   local message="$1"
   local output_file="$2"
 
-  echo "  FAIL: $message"
-  print_output "$output_file"
+  echo "FAIL: $message" >&2
+  if [[ -s "$output_file" ]]; then
+    sed 's/^/  /' "$output_file" >&2
+  fi
   exit 1
 }
 
-fail() {
+skip() {
   local message="$1"
 
-  echo "  FAIL: $message"
-  exit 1
-}
-
-skip_daemon_not_running() {
-  local detail="$1"
-
-  echo "  SKIP: $detail"
-  echo ""
-  echo "  Start the host daemon with: nix run .#wrix-notifyd"
+  echo "SKIP: $message"
   exit 77
 }
 
-is_connection_refused() {
+pass() {
+  local message="$1"
+
+  echo "PASS: $message"
+}
+
+require_command() {
+  local name="$1"
+
+  if ! command -v "$name" >/dev/null 2>&1; then
+    fail "required command not found on PATH: $name"
+  fi
+}
+
+require_command_or_skip() {
+  local name="$1"
+
+  if ! command -v "$name" >/dev/null 2>&1; then
+    skip "command not available on this platform: $name"
+  fi
+}
+
+resolve_repo_root() {
+  local git_root
+
+  if [[ -n "${REPO_ROOT:-}" ]]; then
+    printf '%s\n' "$REPO_ROOT"
+    return 0
+  fi
+
+  if git_root=$(git rev-parse --show-toplevel 2>/dev/null); then
+    printf '%s\n' "$git_root"
+    return 0
+  fi
+
+  pwd
+}
+
+wait_for_unix_socket() {
+  local socket="$1"
+  local attempt
+
+  for ((attempt = 0; attempt < 50; attempt += 1)); do
+    if [[ -S "$socket" ]]; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  return 1
+}
+
+wait_for_tcp_listener() {
+  local host="$1"
+  local port="$2"
+  local attempt
+
+  for ((attempt = 0; attempt < 50; attempt += 1)); do
+    if nc -z -w "$CONNECT_TIMEOUT_SECONDS" "$host" "$port" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  return 1
+}
+
+wait_for_capture() {
+  local capture="$1"
+  local attempt
+
+  for ((attempt = 0; attempt < 50; attempt += 1)); do
+    if [[ -s "$capture" ]]; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  return 1
+}
+
+start_unix_capture() {
+  local socket="$1"
+  local capture="$2"
+  local log_file="$3"
+  local pid
+
+  mkdir -p "$(dirname "$socket")"
+  rm -f "$socket"
+  : >"$capture"
+  socat -u UNIX-LISTEN:"$socket",fork OPEN:"$capture",creat,append >"$log_file" 2>&1 &
+  pid=$!
+  BACKGROUND_PIDS+=("$pid")
+  wait_for_unix_socket "$socket"
+}
+
+start_tcp_capture() {
+  local host="$1"
+  local port="$2"
+  local capture="$3"
+  local log_file="$4"
+  local pid
+
+  : >"$capture"
+  socat -u TCP-LISTEN:"$port",bind="$host",fork,reuseaddr OPEN:"$capture",creat,append >"$log_file" 2>&1 &
+  pid=$!
+  BACKGROUND_PIDS+=("$pid")
+  wait_for_tcp_listener "$host" "$port"
+}
+
+assert_json_field() {
+  local capture="$1"
+  local field="$2"
+  local expected="$3"
+  local actual
+
+  actual=$(tail -n 1 "$capture" | jq -r --arg field "$field" '.[$field]')
+  if [[ "$actual" != "$expected" ]]; then
+    fail "captured .$field was '$actual', expected '$expected'"
+  fi
+}
+
+run_notify_with_timeout() {
   local output_file="$1"
+  local title="$2"
+  local message="$3"
+  local sound="$4"
+  local rc=0
 
-  grep -qi "connection refused" "$output_file"
+  timeout 1s wrix-notify "$title" "$message" "$sound" >"$output_file" 2>&1 || rc=$?
+  if [[ "$rc" -eq 124 ]]; then
+    fail_with_output "wrix-notify waited for an acknowledgement" "$output_file"
+  fi
+  if [[ "$rc" -ne 0 ]]; then
+    fail_with_output "wrix-notify exited non-zero" "$output_file"
+  fi
 }
 
-get_default_gateway() {
-  ip route | awk '/default/ {print $3; exit}'
+test_client_tcp_endpoint_override() {
+  ensure_tmp
+  require_command jq
+  require_command nc
+  require_command socat
+  require_command timeout
+  require_command wrix-notify
+
+  local capture="$TEST_TMP/tcp-capture.jsonl"
+  local listener_log="$TEST_TMP/tcp-listener.log"
+  local output_file="$TEST_TMP/wrix-notify.log"
+  local port=$((42000 + (BASHPID % 20000)))
+  local title="notify tcp override $BASHPID"
+  local message="client payload reached fake daemon"
+  local sound="Ping"
+  local session_id="notify-test:0.1"
+
+  if ! start_tcp_capture "127.0.0.1" "$port" "$capture" "$listener_log"; then
+    fail_with_output "could not start TCP capture listener" "$listener_log"
+  fi
+
+  WRIX_NOTIFY_TCP="127.0.0.1:$port" \
+    WRIX_SESSION_ID="$session_id" \
+    run_notify_with_timeout "$output_file" "$title" "$message" "$sound"
+
+  if ! wait_for_capture "$capture"; then
+    fail_with_output "fake TCP daemon did not receive wrix-notify payload" "$listener_log"
+  fi
+
+  assert_json_field "$capture" title "$title"
+  assert_json_field "$capture" message "$message"
+  assert_json_field "$capture" sound "$sound"
+  assert_json_field "$capture" session_id "$session_id"
+  pass "wrix-notify honors WRIX_NOTIFY_TCP=host:port and sends one JSON envelope"
 }
 
-probe_tcp_listener() {
-  local gateway="$1"
+write_spawn_config() {
+  local output_file="$1"
+  local workspace="$2"
+  local title="$3"
+  local message="$4"
+  local sound="$5"
+  local session_id="$6"
+
+  jq -n \
+    --arg workspace "$workspace" \
+    --arg title "$title" \
+    --arg message "$message" \
+    --arg sound "$sound" \
+    --arg session_id "$session_id" \
+    '{
+      workspace: $workspace,
+      env: [
+        ["WRIX_NOTIFY_TEST_IN_CONTAINER", "1"],
+        ["WRIX_NOTIFY_TEST_TITLE", $title],
+        ["WRIX_NOTIFY_TEST_MESSAGE", $message],
+        ["WRIX_NOTIFY_TEST_SOUND", $sound],
+        ["WRIX_SESSION_ID", $session_id]
+      ],
+      agent_args: ["bash", "/workspace/notify-test.sh", "--inside-container"]
+    }' >"$output_file"
+}
+
+run_spawned_container_check() {
+  local spawn_config="$1"
   local output_file="$2"
+  local repo_root="$3"
+  local runtime_dir="$4"
+  local deploy_key="$5"
+  local rc=0
 
-  nc -nvz -w "$CONNECT_TIMEOUT_SECONDS" "$gateway" "$TCP_PORT" >"$output_file" 2>&1
-}
+  (
+    cd "$repo_root"
+    XDG_RUNTIME_DIR="$runtime_dir" \
+      WRIX_DEPLOY_KEY="$deploy_key" \
+      WRIX_GIT_SIGN=0 \
+      nix run --no-warn-dirty .#sandbox-base -- spawn --spawn-config "$spawn_config"
+  ) >"$output_file" 2>&1 || rc=$?
 
-send_tcp_notification() {
-  local gateway="$1"
-  local output_file="$2"
-
-  printf '%s\n' "$TCP_PAYLOAD" | nc -N -w "$CONNECT_TIMEOUT_SECONDS" "$gateway" "$TCP_PORT" >"$output_file" 2>&1
-}
-
-probe_unix_listener() {
-  local output_file="$1"
-
-  nc -zUv -w "$CONNECT_TIMEOUT_SECONDS" "$SOCKET" >"$output_file" 2>&1
-}
-
-send_unix_notification() {
-  local output_file="$1"
-
-  printf '%s\n' "$SOCKET_PAYLOAD" | nc -U -N -w "$CONNECT_TIMEOUT_SECONDS" "$SOCKET" >"$output_file" 2>&1
-}
-
-run_client_command() {
-  local output_file="$1"
-
-  wrix-notify "$CLIENT_TITLE" "$CLIENT_MESSAGE" >"$output_file" 2>&1
-}
-
-check_client_command() {
-  local test_number="$1"
-  local output_file="$TMP_DIR/wrix-notify.log"
-
-  echo ""
-  echo "Test $test_number: wrix-notify client command"
-  if ! command -v wrix-notify >"$output_file" 2>&1; then
-    fail_with_output "wrix-notify is not available on PATH" "$output_file"
-  fi
-  if run_client_command "$output_file"; then
-    echo "  PASS: wrix-notify command completed"
-  else
-    fail_with_output "wrix-notify command failed" "$output_file"
+  if [[ "$rc" -ne 0 ]]; then
+    fail_with_output "wrix spawn notification check failed" "$output_file"
   fi
 }
 
-run_darwin_tcp_check() {
-  local gateway
-  local probe_output="$TMP_DIR/tcp-probe.log"
-  local send_output="$TMP_DIR/tcp-send.log"
+test_container_payload_inside() {
+  require_command timeout
+  require_command wrix-notify
 
-  echo ""
-  echo "Transport: TCP to gateway (Darwin container)"
+  local title="${WRIX_NOTIFY_TEST_TITLE:?}"
+  local message="${WRIX_NOTIFY_TEST_MESSAGE:?}"
+  local sound="${WRIX_NOTIFY_TEST_SOUND:?}"
+  local output_file="/tmp/wrix-notify-inside.log"
 
-  if ! gateway="$(get_default_gateway)"; then
-    fail "Could not inspect the default route"
-  fi
-  if [[ -z "$gateway" ]]; then
-    fail "Could not determine gateway IP"
-  fi
-  if [[ "$gateway" != "$DARWIN_GATEWAY" ]]; then
-    fail "Expected Darwin vmnet gateway $DARWIN_GATEWAY, got $gateway"
-  fi
-  echo "  Gateway: $gateway"
-
-  echo ""
-  echo "Test 1: TCP listener at host ($gateway:$TCP_PORT)"
-  if probe_tcp_listener "$gateway" "$probe_output"; then
-    echo "  PASS: TCP listener is reachable"
-  elif is_connection_refused "$probe_output"; then
-    skip_daemon_not_running "No TCP listener at $gateway:$TCP_PORT"
-  else
-    fail_with_output "TCP listener probe failed" "$probe_output"
+  if [[ -n "${WRIX_NOTIFY_TCP:-}" ]]; then
+    if [[ "$WRIX_NOTIFY_TCP" != *:* ]]; then
+      fail "WRIX_NOTIFY_TCP inside the container is not host:port: $WRIX_NOTIFY_TCP"
+    fi
+  elif [[ ! -S "$LINUX_SOCKET" ]]; then
+    fail "notification socket was not mounted at $LINUX_SOCKET"
   fi
 
-  echo ""
-  echo "Test 2: TCP notification write"
-  if send_tcp_notification "$gateway" "$send_output"; then
-    echo "  PASS: Successfully sent notification via TCP"
-  else
-    fail_with_output "Connected to TCP listener but notification write failed" "$send_output"
-  fi
-
-  check_client_command 3
+  run_notify_with_timeout "$output_file" "$title" "$message" "$sound"
 }
 
-run_linux_socket_check() {
-  local perms
-  local stat_output="$TMP_DIR/socket-stat.log"
-  local probe_output="$TMP_DIR/socket-probe.log"
-  local send_output="$TMP_DIR/socket-send.log"
+test_container_transport_linux() {
+  ensure_tmp
+  require_command jq
+  require_command nc
+  require_command nix
+  require_command socat
+  require_command_or_skip podman
 
-  echo ""
-  echo "Transport: Unix socket (Linux container)"
-
-  echo ""
-  echo "Test 1: Socket existence"
-  if [[ -S "$SOCKET" ]]; then
-    echo "  PASS: Socket exists at $SOCKET"
-  else
-    skip_daemon_not_running "Socket not mounted at $SOCKET"
+  if ! podman info >/dev/null 2>&1; then
+    skip "podman runtime is not available"
   fi
 
-  echo ""
-  echo "Test 2: Socket permissions"
-  if perms="$(stat -c '%a' "$SOCKET" 2>"$stat_output")"; then
-    case "$perms" in
-      777 | 755 | 700 | 666)
-        echo "  PASS: Socket has accessible permissions ($perms)"
-        ;;
-      *)
-        fail "Socket has inaccessible permissions ($perms)"
-        ;;
-    esac
-  else
-    fail_with_output "Could not read socket permissions" "$stat_output"
+  local runtime_dir="$TEST_TMP/runtime"
+  local socket_dir="$runtime_dir/wrix"
+  local socket="$socket_dir/notify.sock"
+  local capture="$TEST_TMP/linux-capture.jsonl"
+  local listener_log="$TEST_TMP/linux-listener.log"
+  local output_file="$TEST_TMP/wrix-spawn.log"
+  local workspace="$TEST_TMP/workspace"
+  local spawn_config="$TEST_TMP/spawn.json"
+  local deploy_key="$TEST_TMP/deploy_key"
+  local title="notify container linux $BASHPID"
+  local message="container payload reached unix daemon"
+  local sound="Ping"
+  local session_id="notify-test:0.1"
+  local repo_root
+
+  repo_root=$(resolve_repo_root)
+  mkdir -p "$workspace" "$socket_dir"
+  cp "$repo_root/tests/standalone/notify-test.sh" "$workspace/notify-test.sh"
+  printf 'not-a-real-key\n' >"$deploy_key"
+  chmod 600 "$deploy_key"
+
+  if ! start_unix_capture "$socket" "$capture" "$listener_log"; then
+    fail_with_output "could not start Unix socket capture listener" "$listener_log"
   fi
 
-  echo ""
-  echo "Test 3: Socket listener"
-  if probe_unix_listener "$probe_output"; then
-    echo "  PASS: Socket listener is reachable"
-  elif is_connection_refused "$probe_output"; then
-    skip_daemon_not_running "No daemon is listening on $SOCKET"
-  else
-    fail_with_output "Socket listener probe failed" "$probe_output"
+  write_spawn_config "$spawn_config" "$workspace" "$title" "$message" "$sound" "$session_id"
+  run_spawned_container_check "$spawn_config" "$output_file" "$repo_root" "$runtime_dir" "$deploy_key"
+
+  if ! wait_for_capture "$capture"; then
+    fail_with_output "fake Unix daemon did not receive container wrix-notify payload" "$listener_log"
   fi
 
-  echo ""
-  echo "Test 4: Socket notification write"
-  if send_unix_notification "$send_output"; then
-    echo "  PASS: Successfully wrote to socket"
-  else
-    fail_with_output "Connected to socket listener but notification write failed" "$send_output"
-  fi
-
-  check_client_command 5
+  assert_json_field "$capture" title "$title"
+  assert_json_field "$capture" message "$message"
+  assert_json_field "$capture" sound "$sound"
+  assert_json_field "$capture" session_id "$session_id"
+  pass "container wrix-notify reaches host Unix socket daemon"
 }
 
-if [[ "${WRIX_NOTIFY_TCP:-}" == "1" ]]; then
-  run_darwin_tcp_check
-else
-  run_linux_socket_check
-fi
+test_container_transport_darwin() {
+  ensure_tmp
+  require_command jq
+  require_command nc
+  require_command nix
+  require_command socat
+  require_command_or_skip container
 
-echo ""
-echo "=== ALL TESTS PASSED ==="
+  local capture="$TEST_TMP/darwin-capture.jsonl"
+  local listener_log="$TEST_TMP/darwin-listener.log"
+  local output_file="$TEST_TMP/wrix-spawn.log"
+  local workspace="$TEST_TMP/workspace"
+  local spawn_config="$TEST_TMP/spawn.json"
+  local deploy_key="$TEST_TMP/deploy_key"
+  local title="notify container darwin $BASHPID"
+  local message="container payload reached tcp daemon"
+  local sound="Ping"
+  local session_id="notify-test:0.1"
+  local repo_root
+
+  if ! start_tcp_capture "$DARWIN_GATEWAY" "$TCP_PORT" "$capture" "$listener_log"; then
+    skip "could not bind fake daemon to $DARWIN_GATEWAY:$TCP_PORT"
+  fi
+
+  repo_root=$(resolve_repo_root)
+  mkdir -p "$workspace"
+  cp "$repo_root/tests/standalone/notify-test.sh" "$workspace/notify-test.sh"
+  printf 'not-a-real-key\n' >"$deploy_key"
+  chmod 600 "$deploy_key"
+
+  write_spawn_config "$spawn_config" "$workspace" "$title" "$message" "$sound" "$session_id"
+  run_spawned_container_check "$spawn_config" "$output_file" "$repo_root" "$TEST_TMP/runtime" "$deploy_key"
+
+  if ! wait_for_capture "$capture"; then
+    fail_with_output "fake TCP daemon did not receive container wrix-notify payload" "$listener_log"
+  fi
+
+  assert_json_field "$capture" title "$title"
+  assert_json_field "$capture" message "$message"
+  assert_json_field "$capture" sound "$sound"
+  assert_json_field "$capture" session_id "$session_id"
+  pass "container wrix-notify reaches host TCP daemon"
+}
+
+test_container_transport() {
+  if [[ "${WRIX_NOTIFY_TEST_IN_CONTAINER:-}" == "1" ]]; then
+    test_container_payload_inside
+    return 0
+  fi
+
+  case "$(uname -s)" in
+    Linux) test_container_transport_linux ;;
+    Darwin) test_container_transport_darwin ;;
+    *) skip "unsupported platform: $(uname -s)" ;;
+  esac
+}
+
+test_macos_tcp_bind_address() {
+  local repo_root
+  local daemon_file
+
+  repo_root=$(resolve_repo_root)
+  daemon_file="$repo_root/lib/notify/daemon.nix"
+
+  if ! grep -Eq 'TCP-LISTEN:\$\{tcpPort\},bind=192\.168\.64\.1' "$daemon_file"; then
+    fail "wrix-notifyd TCP listener does not bind to 192.168.64.1"
+  fi
+  if grep -Eq 'TCP-LISTEN:.*bind=0\.0\.0\.0' "$daemon_file"; then
+    fail "wrix-notifyd TCP listener binds to 0.0.0.0"
+  fi
+  pass "wrix-notifyd binds the TCP listener to 192.168.64.1 only"
+}
+
+test_claude_stop_hook_config() {
+  local repo_root
+  local sandbox_file
+
+  repo_root=$(resolve_repo_root)
+  sandbox_file="$repo_root/lib/sandbox/default.nix"
+
+  if ! grep -Eq 'Stop = \[' "$sandbox_file"; then
+    fail "Claude settings do not define a Stop hook"
+  fi
+  if grep -Eq 'Notification = \[' "$sandbox_file"; then
+    fail "Claude settings still define the notify command under Notification"
+  fi
+  if ! grep -Eq 'command = "wrix-notify' "$sandbox_file"; then
+    fail "Claude Stop hook does not invoke wrix-notify"
+  fi
+  pass "Claude settings invoke wrix-notify from a Stop hook"
+}
+
+main() {
+  local test_name="${1:-test_container_transport}"
+
+  case "$test_name" in
+    --inside-container) test_container_payload_inside ;;
+    test_client_tcp_endpoint_override) test_client_tcp_endpoint_override ;;
+    test_claude_stop_hook_config) test_claude_stop_hook_config ;;
+    test_container_transport) test_container_transport ;;
+    test_macos_tcp_bind_address) test_macos_tcp_bind_address ;;
+    *) fail "unknown notify test: $test_name" ;;
+  esac
+}
+
+main "$@"

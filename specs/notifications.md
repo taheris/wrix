@@ -38,9 +38,9 @@ Newline-delimited JSON, one envelope per notification:
 
 ## Focus Detection
 
-1. Launcher registers the tmux session with a window ID
+1. Launcher registers the tmux session with the platform focus target
 2. The session file lands in the runtime directory
-3. Daemon checks whether the session's window is focused
+3. Daemon checks whether the registered target is focused
 4. Notification is suppressed if focused
 
 | Platform | Focus Detection Method |
@@ -78,27 +78,46 @@ The daemon's macOS TCP transport binds to the vmnet gateway (192.168.64.1:5959),
 
 ## Success Criteria
 
-- `wrix-notify` invoked from inside a container reaches a running host daemon via the platform-appropriate transport (Linux Unix socket, Darwin TCP to gateway); skips with exit 77 when the daemon is not running
-  [system](bash tests/standalone/notify-test.sh)
+- `wrix-notify` invoked through `wrix spawn` from inside a container reaches a running host daemon via the platform-appropriate transport (Linux Unix socket, Darwin TCP to gateway); skips with exit 77 when the container runtime is unavailable
+  [system](nix run .#test-notify -- test_container_transport)
+- `wrix-notify` honors `WRIX_NOTIFY_TCP=host:port`, sends exactly one JSON envelope containing title, message, optional sound, and `session_id`, and exits without waiting for an acknowledgement
+  [system](nix run .#test-notify -- test_client_tcp_endpoint_override)
+- Claude Code settings invoke `wrix-notify` from a `Stop` hook
+  [check](nix run .#test-notify -- test_claude_stop_hook_config)
+- The host daemon dispatches via native notification bridges and continues serving after client disconnects
+  [judge](../tests/judges/notifications.sh#test_native_dispatch_and_reliability)
+- Focus-aware suppression happens only when the daemon positively identifies the registered session target as focused
+  [judge](../tests/judges/notifications.sh#test_focus_suppression)
+- Launchers register tmux session focus targets using the same session-file naming that the daemon reads
+  [judge](../tests/judges/notifications.sh#test_session_registration)
 - macOS TCP listener binds to the vmnet gateway address (`192.168.64.1`); `0.0.0.0` is not used as a bind address
-  [check](grep -nE '192\.168\.64\.1|0\.0\.0\.0' lib/notify/daemon.nix)
+  [check](nix run .#test-notify -- test_macos_tcp_bind_address)
 
 ## Requirements
 
 ### Functional
 
 1. **Client command** — `wrix-notify <title> <message>` sends a notification envelope from inside the container.
+   [system](nix run .#test-notify -- test_container_transport)
 2. **Host daemon** — `wrix-notifyd` receives envelopes and dispatches via the platform-native notification bridge.
+   [judge](../tests/judges/notifications.sh#test_native_dispatch_and_reliability)
 3. **Cross-platform transport** — Linux uses a Unix socket bind-mounted into the container at `/run/wrix/notify.sock`; macOS uses TCP to the vmnet gateway (5959). VirtioFS does not pass Unix sockets between host and container, so TCP is mandatory on macOS.
+   [system](nix run .#test-notify -- test_container_transport)
 4. **Focus-aware suppression** — when the registered tmux session's window is focused, the daemon discards the notification before dispatch.
-5. **Session tracking** — the launcher registers `(session_id, window_id)` on container start so focus detection has a target.
+   [judge](../tests/judges/notifications.sh#test_focus_suppression)
+5. **Session tracking** — the launcher registers `(session_id, window_id)` on Linux or `(session_id, terminal_app)` on macOS at container start so focus detection has a target.
+   [judge](../tests/judges/notifications.sh#test_session_registration)
 6. **Sound support** — clients may pass an optional `sound` field consumed by `terminal-notifier` on macOS.
+   [system](nix run .#test-notify -- test_client_tcp_endpoint_override)
 
 ### Non-Functional
 
 1. **Low latency** — notifications appear within one second of `wrix-notify` invocation.
+   [system](nix run .#test-notify -- test_client_tcp_endpoint_override)
 2. **Reliable** — daemon survives client disconnects and accepts new connections without restart.
+   [judge](../tests/judges/notifications.sh#test_native_dispatch_and_reliability)
 3. **Non-blocking client** — `wrix-notify` exits immediately after writing the envelope, with no acknowledgement round-trip.
+   [system](nix run .#test-notify -- test_client_tcp_endpoint_override)
 
 ## Out of Scope
 

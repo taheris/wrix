@@ -26,6 +26,7 @@ _:
         test-image-tier-membership = test.apps.image-tier-membership;
         test-iteration-cost-bounded = test.apps.iteration-cost-bounded;
         test-linux-image-archiveless-source = test.apps.linux-image-archiveless-source;
+        test-notify = test.apps.notify;
         test-pinned-toolchain-stable-tier = test.apps.pinned-toolchain-stable-tier;
         test-prek-hooks-closure = test.apps.prek-hooks-closure;
         test-profiles-build-package = test.apps.profiles-build-package;

@@ -238,18 +238,18 @@ fi
 # Test 10: Notification transport configuration (Darwin uses TCP, not mounted sockets)
 echo ""
 echo "Test 10: Notification transport"
-if [ "${WRIX_NOTIFY_TCP:-}" = "1" ]; then
-  echo "  PASS: WRIX_NOTIFY_TCP=1 (TCP transport enabled)"
+if [[ "${WRIX_NOTIFY_TCP:-}" == "192.168.64.1:5959" ]]; then
+  echo "  PASS: WRIX_NOTIFY_TCP=$WRIX_NOTIFY_TCP (TCP endpoint enabled)"
   GATEWAY=$(ip route | awk '/default/ {print $3; exit}')
-  if [ -n "$GATEWAY" ]; then
-    echo "  PASS: Gateway found at $GATEWAY (notifications use TCP port 5959)"
+  if [[ "$GATEWAY" == "192.168.64.1" ]]; then
+    echo "  PASS: Gateway found at $GATEWAY"
   else
-    echo "  FAIL: No gateway found"
+    echo "  FAIL: Expected gateway 192.168.64.1, got ${GATEWAY:-<empty>}"
     FAILED=1
   fi
 else
-  echo "  FAIL: WRIX_NOTIFY_TCP not set"
-  echo "        Darwin containers should have WRIX_NOTIFY_TCP=1"
+  echo "  FAIL: WRIX_NOTIFY_TCP should be 192.168.64.1:5959"
+  echo "        got: ${WRIX_NOTIFY_TCP:-<unset>}"
   FAILED=1
 fi
 

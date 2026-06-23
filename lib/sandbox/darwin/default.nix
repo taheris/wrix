@@ -562,7 +562,7 @@ in
 
             # Notifications use TCP to gateway (port 5959) instead of mounted Unix socket
             # VirtioFS cannot pass Unix socket operations, so the container client
-            # connects to the host daemon via TCP (WRIX_NOTIFY_TCP=1 set below)
+            # connects to the host daemon via the explicit TCP endpoint below.
 
             # Add deploy key and signing key (not under ~/.ssh/ — see lib/util/ssh.nix).
             # Host-source resolution precedence per specs/security.md:
@@ -713,7 +713,7 @@ in
             ENV_ARGS+=(-e "WRIX_AGENT=$WRIX_AGENT")
             [ -n "$DIR_MOUNTS" ] && ENV_ARGS+=(-e "WRIX_DIR_MOUNTS=$DIR_MOUNTS")
             [ -n "$FILE_MOUNTS" ] && ENV_ARGS+=(-e "WRIX_FILE_MOUNTS=$FILE_MOUNTS")
-            ENV_ARGS+=(-e "WRIX_NOTIFY_TCP=1")
+            ENV_ARGS+=(-e "WRIX_NOTIFY_TCP=192.168.64.1:5959")
             [ -n "$BEADS_DOLT_PORT" ] && ENV_ARGS+=(-e "BEADS_DOLT_SERVER_PORT=$BEADS_DOLT_PORT")
             [ -n "$BEADS_DOLT_HOST" ] && ENV_ARGS+=(-e "BEADS_DOLT_SERVER_HOST=$BEADS_DOLT_HOST")
             # Pass network mode and allowlist for WRIX_NETWORK=limit filtering

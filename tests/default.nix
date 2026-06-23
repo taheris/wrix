@@ -11,7 +11,19 @@
 }:
 
 let
-  inherit (pkgs) writeShellScriptBin;
+  inherit (pkgs)
+    bash
+    coreutils
+    gawk
+    git
+    gnugrep
+    gnused
+    jq
+    netcat
+    nix
+    socat
+    writeShellScriptBin
+    ;
 
   # ============================================================================
   # Pure Nix Checks (run via `nix flake check`)
@@ -200,10 +212,20 @@ let
   # REPO_ROOT from the caller's git toplevel and threads jq + nix onto PATH.
   testProfilesBuildPackage = writeShellScriptBin "test-profiles-build-package" ''
     set -euo pipefail
-    : "''${REPO_ROOT:=$(${pkgs.git}/bin/git -C "''${PWD}" rev-parse --show-toplevel)}"
+    : "''${REPO_ROOT:=$(${git}/bin/git -C "''${PWD}" rev-parse --show-toplevel)}"
     export REPO_ROOT
-    export PATH="${pkgs.jq}/bin:${pkgs.git}/bin:${pkgs.nix}/bin:$PATH"
-    exec ${pkgs.bash}/bin/bash "$REPO_ROOT/tests/profiles/build-package.sh" "$@"
+    export PATH="${jq}/bin:${git}/bin:${nix}/bin:$PATH"
+    exec ${bash}/bin/bash "$REPO_ROOT/tests/profiles/build-package.sh" "$@"
+  '';
+
+  notifyClient = import ../lib/notify/client.nix { inherit pkgs; };
+
+  testNotify = writeShellScriptBin "test-notify" ''
+    set -euo pipefail
+    : "''${REPO_ROOT:=$(${git}/bin/git -C "''${PWD}" rev-parse --show-toplevel)}"
+    export REPO_ROOT
+    export PATH="${notifyClient}/bin:${bash}/bin:${coreutils}/bin:${gawk}/bin:${git}/bin:${gnugrep}/bin:${gnused}/bin:${jq}/bin:${netcat}/bin:${nix}/bin:${socat}/bin:$PATH"
+    exec ${bash}/bin/bash "$REPO_ROOT/tests/standalone/notify-test.sh" "$@"
   '';
 
 in
@@ -389,6 +411,12 @@ in
       meta.description = "Run full CI-only image and profile verifiers.";
       type = "app";
       program = "${testCi}/bin/test-ci";
+    };
+
+    notify = {
+      meta.description = "Verify notification client, daemon, and container transport contracts.";
+      type = "app";
+      program = "${testNotify}/bin/test-notify";
     };
 
     # profiles.rust.buildPackage [verify] hash invariants (specs/profiles.md).
