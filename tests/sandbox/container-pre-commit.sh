@@ -34,7 +34,7 @@ command -v git    >/dev/null 2>&1 || skip "git not on PATH"
 
 cd "$REPO_ROOT"
 
-IMAGE_STREAM=$(nix build --no-link --print-out-paths --no-warn-dirty .#test-image-base)
+IMAGE_STREAM=$(nix build --no-link --print-out-paths --no-warn-dirty .#test-image-base-direct)
 
 WORKSPACE=$(mktemp -d -t wrix-container-pre-commit.XXXXXX)
 cleanup() {
@@ -46,7 +46,7 @@ cleanup() {
 trap cleanup EXIT
 
 IMAGE_REF=$(wrix_unique_image_ref "wrix-test-container-pre-commit")
-wrix_load_test_image "$IMAGE_STREAM" "wrix-base-claude" "$IMAGE_REF"
+wrix_load_test_image "$IMAGE_STREAM" "wrix-base" "$IMAGE_REF"
 
 # Seed the workspace: git repo + .pre-commit-config.yaml + sentinel.
 git -C "$WORKSPACE" init -q -b main
@@ -76,6 +76,7 @@ YAML
 
 cat > "$WORKSPACE/.git/sentinel-pre-commit.sh" <<'SCRIPT'
 #!/usr/bin/env bash
+set -euo pipefail
 touch /workspace/.git/sentinel-fired-precommit
 SCRIPT
 chmod 755 "$WORKSPACE/.git/sentinel-pre-commit.sh"
@@ -101,7 +102,7 @@ cat "$commit_log" >&2
 [[ -f "$WORKSPACE/.git/sentinel-fired-precommit" ]] || {
   echo "FAIL: pre-commit sentinel did not fire" >&2
   echo "--- workspace state ---" >&2
-  ls -la "$WORKSPACE/.git/" 2>&1 | head -20 >&2
+  find "$WORKSPACE/.git" -maxdepth 1 -mindepth 1 -printf '%p\n' 2>&1 | head -20 >&2
   echo "--- container core.hooksPath + prek ---" >&2
   podman run --rm --network=pasta --userns=keep-id \
     -e HOME=/home/wrix \

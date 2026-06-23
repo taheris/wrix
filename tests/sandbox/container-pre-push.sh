@@ -35,7 +35,7 @@ command -v git    >/dev/null 2>&1 || skip "git not on PATH"
 
 cd "$REPO_ROOT"
 
-IMAGE_STREAM=$(nix build --no-link --print-out-paths --no-warn-dirty .#test-image-base)
+IMAGE_STREAM=$(nix build --no-link --print-out-paths --no-warn-dirty .#test-image-base-direct)
 
 WORKSPACE=$(mktemp -d -t wrix-container-pre-push.XXXXXX)
 cleanup() {
@@ -47,7 +47,7 @@ cleanup() {
 trap cleanup EXIT
 
 IMAGE_REF=$(wrix_unique_image_ref "wrix-test-container-pre-push")
-wrix_load_test_image "$IMAGE_STREAM" "wrix-base-claude" "$IMAGE_REF"
+wrix_load_test_image "$IMAGE_STREAM" "wrix-base" "$IMAGE_REF"
 
 # Seed the workspace: working repo + bare file:// remote + sentinel +
 # initial commit (made on the host; no hooks fire because core.hooksPath
@@ -81,6 +81,7 @@ YAML
 
 cat > "$WORKSPACE/.git/sentinel-pre-push.sh" <<'SCRIPT'
 #!/usr/bin/env bash
+set -euo pipefail
 touch /workspace/.git/sentinel-fired-prepush
 SCRIPT
 chmod 755 "$WORKSPACE/.git/sentinel-pre-push.sh"

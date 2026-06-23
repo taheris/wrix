@@ -99,7 +99,6 @@ in
       ''
         echo "Checking bash syntax..."
         bash -n ${wrixLauncher}/bin/wrix
-        ${if isLinux then "bash -n ${wrix}/bin/wrix" else ""}
         grep -q 'WRIX_PI_AUTH_FILE' ${wrixLauncher}/bin/wrix || { echo "launcher must resolve Pi auth file"; exit 1; }
         grep -q 'WRIX_AGENT="$PROFILE_AGENT"' ${wrixLauncher}/bin/wrix || { echo "launcher must derive WRIX_AGENT from ProfileConfig"; exit 1; }
         grep -q 'WRIX_AGENT" = "pi"' ${wrixLauncher}/bin/wrix || { echo "launcher must gate Pi auth on WRIX_AGENT=pi"; exit 1; }
@@ -107,6 +106,22 @@ in
         grep -Eq '/mnt/wrix/(file/pi-auth.json|pi-agent-auth)' ${wrixLauncher}/bin/wrix || { echo "Pi auth mount must use a staging path"; exit 1; }
 
         echo "Script syntax validation passed"
+        mkdir $out
+      '';
+
+  package-script-syntax =
+    runCommandLocal "smoke-package-script-syntax"
+      {
+        nativeBuildInputs = [ bash ];
+      }
+      ''
+        echo "Checking sandbox package wrapper syntax..."
+        ${
+          if isLinux then
+            "bash -n ${wrix}/bin/wrix"
+          else
+            "echo \"SKIP: sandbox package wrapper syntax (Linux-only)\" >&2"
+        }
         mkdir $out
       '';
 

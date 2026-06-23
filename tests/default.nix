@@ -130,6 +130,15 @@ let
     wrix-rust-nextest = wrix.rustPackage.nextest;
   };
 
+  prePushSmokeTests = pkgs.lib.removeAttrs smokeTests [
+    "image-builds"
+    "package-script-syntax"
+  ];
+
+  ciChecks = rustChecks // {
+    inherit (smokeTests) image-builds package-script-syntax;
+  };
+
   # README example verification
   readmeTest = {
     readme = import ./readme.nix { inherit pkgs src; };
@@ -141,9 +150,8 @@ let
     // darwinNetworkTests
     // darwinUidTests
     // readmeTest
-    // rustChecks
     // shellTests
-    // smokeTests
+    // prePushSmokeTests
     // tmuxMcpTests
     // tomlTests;
 
@@ -177,6 +185,17 @@ let
     }
 
     run_step "nix flake check" ${pkgs.nix}/bin/nix flake check --no-warn-dirty
+
+    for check in \
+      tmux-mcp-clippy \
+      tmux-mcp-nextest \
+      wrix-rust-clippy \
+      wrix-rust-nextest \
+      image-builds \
+      package-script-syntax
+    do
+      run_step "$check" ${pkgs.nix}/bin/nix build --no-link --no-warn-dirty ".#legacyPackages.${system}.ciChecks.$check"
+    done
 
     for app in \
       test-wrix-spawn-load \
@@ -443,6 +462,7 @@ in
     darwinNetworkTests
     darwinUidTests
     readmeTest
+    ciChecks
     rustChecks
     shellTests
     smokeTests

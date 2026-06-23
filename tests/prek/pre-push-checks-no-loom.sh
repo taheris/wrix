@@ -1,33 +1,18 @@
 #!/usr/bin/env bash
-# Verifier for criterion 146 of specs/pre-commit.md:
-#
-#   `pre-push-checks` execs the wrapped command when `loom gate verify-marker`
-#   is not on `PATH`.
-#
-# Resolution order: marker present but `loom` missing from PATH → exec.
-# PATH is constrained to the wrapper bin dir only; no loom shim is wired,
-# so `command -v loom` inside the wrapper returns failure. The wrapped
-# command (touch) is invoked via absolute path so PATH does not need to
-# carry coreutils.
-
+# Verifies pre-push-checks falls through when loom is absent from PATH.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+# shellcheck source=tests/prek/wrapper-test-lib.sh
+source "$SCRIPT_DIR/wrapper-test-lib.sh"
 
 TEST_TMP="$(mktemp -d -t wrix-prek-no-loom.XXXXXX)"
 trap 'rm -rf "$TEST_TMP"' EXIT
 
-BASH_BIN="$(command -v bash)"
+wrix_prek_require_tool touch
 TOUCH_BIN="$(command -v touch)"
-
-WRAPPER_BIN="$TEST_TMP/wrapper-bin/pre-push-checks"
-mkdir -p "$(dirname "$WRAPPER_BIN")"
-{
-    printf '#!%s\n' "$BASH_BIN"
-    cat "$REPO_ROOT/lib/prek/wrappers/pre-push-checks.sh"
-} > "$WRAPPER_BIN"
-chmod +x "$WRAPPER_BIN"
+PRE_PUSH_CHECKS_BIN="$(wrix_prek_wrapper_bin prePushChecks pre-push-checks)"
+PRE_PUSH_CHECKS_DIR="$(dirname "$PRE_PUSH_CHECKS_BIN")"
 
 WORK="$TEST_TMP/work"
 mkdir -p "$WORK/.loom"
@@ -37,19 +22,19 @@ SENTINEL="$TEST_TMP/sentinel"
 
 rc=0
 (
-    cd "$WORK"
-    env -i PATH="$TEST_TMP/wrapper-bin" \
-        pre-push-checks "$TOUCH_BIN" "$SENTINEL"
+  cd "$WORK"
+  env -i PATH="$PRE_PUSH_CHECKS_DIR" \
+    pre-push-checks "$TOUCH_BIN" "$SENTINEL"
 ) || rc=$?
 
 if [[ "$rc" -ne 0 ]]; then
-    echo "FAIL: wrapper exited $rc; expected 0 (touch should succeed)" >&2
-    exit 1
+  echo "FAIL: wrapper exited $rc; expected 0 (touch should succeed)" >&2
+  exit 1
 fi
 
 if [[ ! -e "$SENTINEL" ]]; then
-    echo "FAIL: sentinel '$SENTINEL' was not created; expected wrapper to exec wrapped command" >&2
-    exit 1
+  echo "FAIL: sentinel '$SENTINEL' was not created; expected wrapper to exec wrapped command" >&2
+  exit 1
 fi
 
 echo "PASS: loom missing → wrapper exec'd wrapped command despite marker present"

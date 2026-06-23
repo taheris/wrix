@@ -28,5 +28,6 @@
       _module.args.test = test;
 
       inherit (test) checks;
+      legacyPackages.ciChecks = test.ciChecks;
     };
 }
