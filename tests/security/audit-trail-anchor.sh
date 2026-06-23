@@ -1,88 +1,136 @@
 #!/usr/bin/env bash
-# Verifier for criterion 207 of specs/security.md:
-#
-#   After a sandbox session, a session-metadata index file exists under
-#   /workspace/.wrix/log/; its timestamp_start, timestamp_end,
-#   exit_code, mode, and claude_session_dir fields are populated; and
-#   claude_session_dir resolves to an existing directory.
-#
-# Runs the entrypoint with `/bin/true` as the command override so the
-# EXIT trap fires without booting any agent runtime. Asserts the
-# host-side $WORKSPACE/.wrix/log/*.json carries the contract fields.
-
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
-# shellcheck source=tests/lib/podman-image.sh
-source "$SCRIPT_DIR/../lib/podman-image.sh"
+# shellcheck source=tests/lib/live-sandbox.sh
+source "$SCRIPT_DIR/../lib/live-sandbox.sh"
 
-skip() {
-  echo "SKIP: $1" >&2
-  exit 77
-}
-
-uname_s=$(uname -s)
-[[ "$uname_s" = "Linux" ]] || skip "Linux-only verifier (uname=$uname_s); macOS entrypoint covered by tests/darwin/*"
-command -v nix    >/dev/null 2>&1 || skip "nix not on PATH"
-command -v podman >/dev/null 2>&1 || skip "podman not on PATH"
-command -v jq     >/dev/null 2>&1 || skip "jq not on PATH"
-# Nested rootless podman can't load OCI images (overlayfs deadlock); skip vs hang.
-[[ -e /run/.containerenv ]] && skip "nested container: podman load unavailable"
-
+wrix_require_live_sandbox_linux
 cd "$REPO_ROOT"
 
-IMAGE_STREAM=$(nix build --no-link --print-out-paths --no-warn-dirty .#test-image-base)
-
-WORKSPACE=$(mktemp -d -t wrix-audit-trail.XXXXXX)
+TEST_TMP=$(mktemp -d -t wrix-audit-trail.XXXXXX)
+IMAGE_REFS=()
 cleanup() {
-  rm -rf "$WORKSPACE"
-  if podman image exists "$IMAGE_REF"; then
-    podman rmi "$IMAGE_REF" >/dev/null
-  fi
+  local image_ref
+
+  rm -rf "$TEST_TMP"
+  for image_ref in "${IMAGE_REFS[@]}"; do
+    wrix_remove_image_ref "$image_ref"
+  done
 }
 trap cleanup EXIT
 
-IMAGE_REF=$(wrix_unique_image_ref "wrix-test-audit-trail-anchor")
-wrix_load_test_image "$IMAGE_STREAM" "wrix-base-claude" "$IMAGE_REF"
+PASSED=0
+FAILED=0
 
-# Run the entrypoint with a no-op command override. The launcher's
-# always-on env (HOME, GIT_AUTHOR_*, GIT_COMMITTER_*) is replicated so
-# the entrypoint's claude-config branch and write_session_log fire the
-# same way they would under real `wrix run`.
-podman run --rm --network=pasta --userns=keep-id \
-  -e HOME=/home/wrix \
-  -e WRIX_AGENT=claude \
-  -e GIT_AUTHOR_NAME=test -e GIT_AUTHOR_EMAIL=test@example.com \
-  -e GIT_COMMITTER_NAME=test -e GIT_COMMITTER_EMAIL=test@example.com \
-  -v "$WORKSPACE:/workspace:rw" \
-  "$IMAGE_REF" /bin/true
-
-log_count=$(find "$WORKSPACE/.wrix/log" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l)
-[[ "$log_count" -eq 1 ]] || {
-  echo "FAIL: expected exactly one session-metadata JSON, got $log_count" >&2
-  exit 1
+pass() {
+  local message="$1"
+  printf '  PASS: %s\n' "$message"
+  PASSED=$((PASSED + 1))
 }
 
-log_file=$(find "$WORKSPACE/.wrix/log" -maxdepth 1 -name '*.json' | head -n1)
-
-for field in timestamp_start timestamp_end exit_code mode claude_session_dir; do
-  value=$(jq -r ".${field} // empty" "$log_file")
-  [[ -n "$value" ]] || {
-    echo "FAIL: field $field empty/null in $log_file" >&2
-    cat "$log_file" >&2
-    exit 1
-  }
-done
-
-claude_dir=$(jq -r '.claude_session_dir' "$log_file")
-[[ "$claude_dir" = "/workspace/.claude" ]] || {
-  echo "FAIL: unexpected claude_session_dir: $claude_dir" >&2
-  exit 1
-}
-[[ -d "$WORKSPACE/.claude" ]] || {
-  echo "FAIL: claude_session_dir does not exist on host: $WORKSPACE/.claude" >&2
-  exit 1
+fail() {
+  local message="$1"
+  printf '  FAIL: %s\n' "$message" >&2
+  FAILED=$((FAILED + 1))
 }
 
-echo "PASS: audit-trail-anchor" >&2
+LAUNCHER=$(wrix_build_live_launcher)
+DEPLOY_KEY="$TEST_TMP/deploy-key"
+HOME_DIR="$TEST_TMP/home"
+XDG_CACHE_HOME="$TEST_TMP/cache"
+PI_AUTH_FILE="$TEST_TMP/pi-auth.json"
+mkdir -p "$HOME_DIR" "$XDG_CACHE_HOME"
+wrix_make_ed25519_key "$DEPLOY_KEY" "audit-trail-test"
+printf '{}\n' >"$PI_AUTH_FILE"
+chmod 600 "$PI_AUTH_FILE"
+
+expected_session_dir() {
+  local agent="$1"
+
+  case "$agent" in
+    claude) printf '%s\n' "/workspace/.claude" ;;
+    pi) printf '%s\n' "/workspace/.pi/agent/sessions" ;;
+    direct) printf '%s\n' "/workspace" ;;
+    *)
+      printf 'unknown agent: %s\n' "$agent" >&2
+      return 64
+      ;;
+  esac
+}
+
+assert_audit_log_for_agent() {
+  local agent="$1"
+  local image_source image_ref profile_config spawn_config workspace out err rc log_count log_file field value session_dir host_session_dir
+
+  image_source=$(wrix_realize_test_image_source "$agent")
+  image_ref="localhost/wrix-audit-$agent-$$:latest"
+  IMAGE_REFS+=("$image_ref")
+  profile_config="$TEST_TMP/profile-$agent.json"
+  spawn_config="$TEST_TMP/spawn-$agent.json"
+  workspace="$TEST_TMP/workspace-$agent"
+  out="$TEST_TMP/$agent.out"
+  err="$TEST_TMP/$agent.err"
+  mkdir -p "$workspace"
+  wrix_write_profile_config "$profile_config" "$image_ref" "$image_source" "$agent"
+  wrix_write_spawn_config "$spawn_config" "$workspace" bash -lc 'exit 0'
+
+  rc=0
+  if [[ "$agent" = "pi" ]]; then
+    HOME="$HOME_DIR" XDG_CACHE_HOME="$XDG_CACHE_HOME" \
+      WRIX_DEPLOY_KEY="$DEPLOY_KEY" WRIX_GIT_SIGN=0 WRIX_PI_AUTH_FILE="$PI_AUTH_FILE" \
+      wrix_run_spawn "$LAUNCHER" "$profile_config" "$spawn_config" >"$out" 2>"$err" || rc=$?
+  else
+    HOME="$HOME_DIR" XDG_CACHE_HOME="$XDG_CACHE_HOME" \
+      WRIX_DEPLOY_KEY="$DEPLOY_KEY" WRIX_GIT_SIGN=0 \
+      wrix_run_spawn "$LAUNCHER" "$profile_config" "$spawn_config" >"$out" 2>"$err" || rc=$?
+  fi
+  if [[ "$rc" -ne 0 ]]; then
+    fail "$agent: live launcher session failed"
+    sed 's/^/    /' "$err" >&2
+    return
+  fi
+
+  if [[ -d "$workspace/.wrix/log" ]]; then
+    log_count=$(find "$workspace/.wrix/log" -maxdepth 1 -name '*.json' | wc -l)
+  else
+    log_count=0
+  fi
+  if [[ "$log_count" -ne 1 ]]; then
+    fail "$agent: expected exactly one session-metadata JSON, got $log_count"
+    return
+  fi
+  log_file=$(find "$workspace/.wrix/log" -maxdepth 1 -name '*.json' | head -n1)
+
+  for field in timestamp_start timestamp_end exit_code mode claude_session_dir; do
+    value=$(jq -r ".${field} // empty" "$log_file")
+    if [[ -z "$value" ]]; then
+      fail "$agent: field $field empty/null in $log_file"
+      sed 's/^/    /' "$log_file" >&2
+      return
+    fi
+  done
+
+  session_dir=$(expected_session_dir "$agent")
+  value=$(jq -r '.claude_session_dir' "$log_file")
+  if [[ "$value" != "$session_dir" ]]; then
+    fail "$agent: unexpected claude_session_dir: $value"
+    return
+  fi
+  host_session_dir="$workspace${session_dir#/workspace}"
+  if [[ ! -d "$host_session_dir" ]]; then
+    fail "$agent: claude_session_dir does not exist on host: $host_session_dir"
+    return
+  fi
+
+  pass "$agent: live launcher writes mandatory session-metadata index"
+}
+
+assert_audit_log_for_agent claude
+assert_audit_log_for_agent pi
+assert_audit_log_for_agent direct
+
+echo
+echo "Results: $PASSED passed, $FAILED failed"
+[[ "$FAILED" -eq 0 ]]

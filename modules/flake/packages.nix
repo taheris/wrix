@@ -135,7 +135,9 @@
           if isLinux then
             {
               test-image-base = test.testImages.base;
+              test-image-base-direct = test.testImages.baseDirect;
               test-image-base-perturbed = test.testImages.basePerturbed;
+              test-image-base-pi = test.testImages.basePi;
               test-image-nix = test.testImages.nix;
             }
           else

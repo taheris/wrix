@@ -62,6 +62,16 @@ let
         _wrix_delta_bounded_probe = "v2";
       };
     };
+    baseDirect = import ./sandbox/test-image.nix {
+      pkgs = linuxPkgs;
+      inherit treefmt;
+      agent = "direct";
+    };
+    basePi = import ./sandbox/test-image.nix {
+      pkgs = linuxPkgs;
+      inherit treefmt;
+      agent = "pi";
+    };
     # Same image but with `pkgs.nix` added to the profile's packages — a
     # nix-shipping profile. Consumed by tests/sandbox/nix-in-container.sh,
     # which drives live `nix develop`/`nix build` as the unprivileged

@@ -476,42 +476,42 @@ in
         # Set-but-missing env is fail-loud (parent-process mistake).
         DEPLOY_KEY_NAME=${deployKeyExpr}
         DEPLOY_KEY=""
-        if [ -n "''${WRIX_DEPLOY_KEY:-}" ]; then
-          if [ ! -f "$WRIX_DEPLOY_KEY" ]; then
+        if [[ -n "''${WRIX_DEPLOY_KEY:-}" ]]; then
+          if [[ ! -f "$WRIX_DEPLOY_KEY" ]]; then
             echo "wrix: WRIX_DEPLOY_KEY=$WRIX_DEPLOY_KEY: file does not exist" >&2
             exit 1
           fi
           DEPLOY_KEY="$WRIX_DEPLOY_KEY"
-        elif [ -f "$HOME/.ssh/deploy_keys/$DEPLOY_KEY_NAME" ]; then
+        elif [[ -f "$HOME/.ssh/deploy_keys/$DEPLOY_KEY_NAME" ]]; then
           DEPLOY_KEY="$HOME/.ssh/deploy_keys/$DEPLOY_KEY_NAME"
         fi
         SIGNING_KEY=""
-        if [ -n "''${WRIX_SIGNING_KEY:-}" ]; then
-          if [ ! -f "$WRIX_SIGNING_KEY" ]; then
+        if [[ -n "''${WRIX_SIGNING_KEY:-}" ]]; then
+          if [[ ! -f "$WRIX_SIGNING_KEY" ]]; then
             echo "wrix: WRIX_SIGNING_KEY=$WRIX_SIGNING_KEY: file does not exist" >&2
             exit 1
           fi
           SIGNING_KEY="$WRIX_SIGNING_KEY"
-        elif [ -f "$HOME/.ssh/deploy_keys/$DEPLOY_KEY_NAME-signing" ]; then
+        elif [[ -f "$HOME/.ssh/deploy_keys/$DEPLOY_KEY_NAME-signing" ]]; then
           SIGNING_KEY="$HOME/.ssh/deploy_keys/$DEPLOY_KEY_NAME-signing"
         fi
         DEPLOY_KEY_ARGS=""
-        if [ -n "$DEPLOY_KEY" ]; then
+        if [[ -n "$DEPLOY_KEY" ]]; then
           VOLUME_ARGS="$VOLUME_ARGS -v $DEPLOY_KEY:${sshConfig.containerKeyDir}/$DEPLOY_KEY_NAME:ro"
           DEPLOY_KEY_ARGS="-e WRIX_DEPLOY_KEY=${sshConfig.containerKeyDir}/$DEPLOY_KEY_NAME"
         fi
-        if [ -n "$SIGNING_KEY" ]; then
+        if [[ -n "$SIGNING_KEY" ]]; then
           VOLUME_ARGS="$VOLUME_ARGS -v $SIGNING_KEY:${sshConfig.containerKeyDir}/$DEPLOY_KEY_NAME-signing:ro"
           DEPLOY_KEY_ARGS="$DEPLOY_KEY_ARGS -e WRIX_SIGNING_KEY=${sshConfig.containerKeyDir}/$DEPLOY_KEY_NAME-signing"
         fi
 
         # spawn (loop agent) must sign and push: fail loud on a keyless boot, not at land-the-plane (specs/security.md § Deploy & Signing Keys).
-        if [ "$SUBCOMMAND" = "spawn" ]; then
-          if [ -z "$DEPLOY_KEY" ]; then
+        if [[ "$SUBCOMMAND" = "spawn" ]]; then
+          if [[ -z "$DEPLOY_KEY" ]]; then
             echo "wrix spawn: no deploy key resolved — set WRIX_DEPLOY_KEY to an existing file, or place one at $HOME/.ssh/deploy_keys/$DEPLOY_KEY_NAME" >&2
             exit 1
           fi
-          if [ "''${WRIX_GIT_SIGN:-1}" != "0" ] && [ -z "$SIGNING_KEY" ]; then
+          if [[ "''${WRIX_GIT_SIGN:-1}" != "0" && -z "$SIGNING_KEY" ]]; then
             echo "wrix spawn: no signing key resolved — set WRIX_SIGNING_KEY to an existing file, place one at $HOME/.ssh/deploy_keys/$DEPLOY_KEY_NAME-signing, or set WRIX_GIT_SIGN=0 to disable commit signing" >&2
             exit 1
           fi

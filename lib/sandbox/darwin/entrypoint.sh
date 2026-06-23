@@ -622,6 +622,15 @@ run_without_net_admin() {
 
 apply_wrix_network_policy
 
+wrix_session_dir_for_agent() {
+  case "${WRIX_AGENT:-direct}" in
+    claude) printf '%s\n' "/workspace/.claude" ;;
+    pi) printf '%s\n' "/workspace/.pi/agent/sessions" ;;
+    direct) printf '%s\n' "/workspace" ;;
+    *) printf '%s\n' "/workspace" ;;
+  esac
+}
+
 # Session audit trail: write structured log entry on exit
 # Log format documented in specs/security.md § Audit Trail
 write_session_log() {
@@ -637,25 +646,25 @@ write_session_log() {
     mode="loom"
   fi
 
-  # Read bead ID if loom wrote one during the session
   local bead_id=""
-  if [[ -f /tmp/wrix-bead-id ]]; then
-    # best-effort: loom didn't write a bead id -> field stays empty in session log
-    bead_id=$(cat /tmp/wrix-bead-id 2>/dev/null || true)
+  if [[ -r /tmp/wrix-bead-id ]]; then
+    bead_id=$(cat /tmp/wrix-bead-id)
   fi
 
-  # Find most recent claude session ID from history
   local claude_session_id=""
   if [[ -f /workspace/.claude/history.jsonl ]]; then
-    # best-effort: missing/malformed history.jsonl -> session id stays empty
-    claude_session_id=$(tail -1 /workspace/.claude/history.jsonl 2>/dev/null \
-      | jq -r '.sessionId // empty' 2>/dev/null || true)
+    # best-effort: unreadable or malformed history means the optional id stays empty.
+    if ! claude_session_id=$(tail -1 /workspace/.claude/history.jsonl 2>/dev/null \
+      | jq -r '.sessionId // empty' 2>/dev/null); then
+      claude_session_id=""
+    fi
   fi
 
-  mkdir -p /workspace/.wrix/log
+  local claude_session_dir
+  claude_session_dir=$(wrix_session_dir_for_agent)
+  mkdir -p "$claude_session_dir" /workspace/.wrix/log
   local log_file="/workspace/.wrix/log/${SESSION_START_ISO//[:.]/-}.json"
 
-  # Build JSON with jq to ensure proper escaping
   jq -n \
     --arg start "$SESSION_START_ISO" \
     --arg end "$end_iso" \
@@ -665,7 +674,7 @@ write_session_log() {
     --arg bead_id "$bead_id" \
     --arg session_id "${WRIX_SESSION_ID:-}" \
     --arg claude_session_id "$claude_session_id" \
-    --arg claude_session_dir "/workspace/.claude" \
+    --arg claude_session_dir "$claude_session_dir" \
     '{
       timestamp_start: $start,
       timestamp_end: $end,
@@ -676,8 +685,7 @@ write_session_log() {
       wrix_session_id: (if $session_id == "" then null else $session_id end),
       claude_session_id: (if $claude_session_id == "" then null else $claude_session_id end),
       claude_session_dir: $claude_session_dir
-    }' > "$log_file" 2>/dev/null || true
-    # best-effort: /workspace/.wrix/log unwritable in some profiles -> skip session log rather than fail exit trap
+    }' > "$log_file"
 }
 
 # Drop to HOST_UID via user namespace (maps inner HOST_UID to outer root,
