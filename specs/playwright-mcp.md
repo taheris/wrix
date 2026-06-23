@@ -8,7 +8,7 @@ AI agents building web frontends cannot see what they've built. They edit HTML/C
 
 ## Architecture
 
-Wraps Microsoft's `@playwright/mcp` server (59 built-in tools) to provide browser automation inside wrix sandboxes. The agent can navigate pages, take screenshots (returned as base64 PNG for direct visual interpretation), fill forms, click elements, and inspect accessibility trees — enabling a tight edit-code-check-browser iteration loop.
+Wraps Microsoft's `@playwright/mcp` server to provide browser automation inside wrix sandboxes. The agent can navigate pages, take screenshots (returned as base64 PNG for direct visual interpretation), fill forms, click elements, and inspect accessibility trees — enabling a tight edit-code-check-browser iteration loop.
 
 The server is registered in the main Claude session via `mkSandbox`'s `mcp` parameter (see `sandbox.md`); MCP servers compose orthogonally with workspace profiles. Container construction, isolation, and trust boundary belong to `sandbox.md`; this spec owns the Playwright server's wiring on top.
 
@@ -21,17 +21,15 @@ Load-bearing decisions:
 
 ## MCP Tools
 
-All 59 tools from `@playwright/mcp` are available. Categories for the primary use cases:
+Wrix does not define or freeze a Playwright tool whitelist. It starts the bundled `@playwright/mcp` server and exposes whatever tool set that package reports through `tools/list`. Categories for the primary use cases, using representative current tool names asserted by the smoke verifier:
 
 | Category | Tools | Purpose |
 |----------|-------|---------|
-| Navigation | `browser_navigate`, `browser_go_back`, `browser_go_forward` | Page navigation |
-| Interaction | `browser_click`, `browser_fill`, `browser_select_option`, `browser_hover` | User input simulation |
-| Vision | `browser_screenshot`, `browser_pdf_save` | Visual capture (base64 PNG) |
-| Content | `browser_snapshot`, `browser_get_text` | Page structure, text extraction, and accessibility tree |
-| Network | `browser_network_requests`, `browser_route` | Request monitoring and mocking |
-| Tabs | `browser_tab_new`, `browser_tab_select`, `browser_tab_close` | Multi-page management |
-| Console | `browser_console_messages` | JavaScript error detection |
+| Navigation | `browser_navigate`, `browser_navigate_back` | Page navigation |
+| Interaction | `browser_click`, `browser_fill_form`, `browser_select_option`, `browser_hover` | User input simulation |
+| Vision and content | `browser_take_screenshot`, `browser_snapshot` | Visual capture and accessibility tree inspection |
+| Diagnostics | `browser_network_requests`, `browser_console_messages` | Request and console inspection |
+| Browser session | `browser_tabs` | Browser tab state management |
 
 ## Configuration
 
@@ -80,7 +78,7 @@ The container image is Linux (aarch64 or x86_64), so `pkgs.playwright-driver.bro
 
 ## Success Criteria
 
-- MCP server starts, responds to `initialize` with the tool list, and runs fully offline (no network downloads at startup)
+- MCP server starts, responds to `initialize` and `tools/list` with representative bundled tools, and runs fully offline (no network downloads at startup)
   [system](bash tests/mcp/playwright/smoke-test.sh)
 - Screenshot returns base64 PNG when navigating to a local HTTP server
   [system](bash tests/mcp/playwright/screenshot-test.sh)
@@ -99,7 +97,7 @@ The container image is Linux (aarch64 or x86_64), so `pkgs.playwright-driver.bro
 
 ### Functional
 
-1. **MCP tool surface** — every tool the bundled `@playwright/mcp` exposes is registered; the spec does not maintain its own tool whitelist. The category table above is illustrative, not exhaustive. (At the time of writing, upstream ships 59 tools.)
+1. **MCP tool surface** — every tool the bundled `@playwright/mcp` exposes is registered; the spec does not maintain its own tool whitelist. The category table above is illustrative, not exhaustive, and the smoke verifier checks representative tools returned by the live server rather than a fixed upstream count.
 2. **Offline operation** — `pkgs.playwright-mcp` and `pkgs.playwright-driver.browsers` bake the server and Chromium into the image. No `npx` or browser download at runtime.
 3. **MCP opt-in via sandbox** — enabled per sandbox via `mcp.playwright = { … }`; composes with the workspace profile and other MCP servers without a `-playwright` profile variant.
 4. **Configuration passthrough** — `headless`, `viewport`, and `config` options reach `@playwright/mcp`'s serialized JSON config.
@@ -117,4 +115,4 @@ The container image is Linux (aarch64 or x86_64), so `pkgs.playwright-driver.bro
 - **Custom browser support (Firefox, WebKit)** — Chromium only for v1; `playwright-driver.browsers` ships all three, easy to add later.
 - **Persistent browser profiles** — clean state per container launch is correct sandbox behavior.
 - **Playwright test runner (`@playwright/test`)** — different tool; users add it to profile packages independently.
-- **HAR recording / replay** — not built into `@playwright/mcp`; `browser_network_requests` and `browser_route` cover common network debugging needs.
+- **HAR recording / replay** — not built into `@playwright/mcp`; `browser_network_requests` covers common request inspection needs.
