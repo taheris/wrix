@@ -276,11 +276,7 @@ impl DoltTransport {
     }
 
     const fn platform_default() -> Self {
-        if cfg!(target_os = "macos") {
-            Self::Tcp
-        } else {
-            Self::UnixSocket
-        }
+        Self::UnixSocket
     }
 
     pub const fn as_str(self) -> &'static str {
@@ -638,10 +634,18 @@ impl Runtime {
             }
             match dolt.transport() {
                 DoltTransport::UnixSocket => {
-                    command.arg("-v").arg(format!(
-                        "{}:/run/wrix:rw",
-                        plan.workspace().canonical_path().join(".wrix").display()
-                    ));
+                    if self.kind == RuntimeKind::Container {
+                        let _ = fs::remove_file(dolt.socket_path());
+                        command.arg("--publish-socket").arg(format!(
+                            "{}:/run/wrix/dolt.sock",
+                            dolt.socket_path().display()
+                        ));
+                    } else {
+                        command.arg("-v").arg(format!(
+                            "{}:/run/wrix:rw",
+                            plan.workspace().canonical_path().join(".wrix").display()
+                        ));
+                    }
                 }
                 DoltTransport::Tcp => {
                     if let Some(port) = dolt.tcp_port() {
@@ -939,9 +943,16 @@ impl Runtime {
         if output.status.success() {
             Ok(())
         } else {
-            Err(io::Error::other(
-                String::from_utf8_lossy(&output.stderr).into_owned(),
-            ))
+            let output_text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if is_missing_container_remove_error(&output_text) {
+                Ok(())
+            } else {
+                Err(io::Error::other(output_text))
+            }
         }
     }
 
@@ -1015,6 +1026,14 @@ fn skopeo_copy(source_ref: &str, store_ref: &str) -> io::Result<Result<(), Strin
             String::from_utf8_lossy(&output.stderr)
         )))
     }
+}
+
+fn is_missing_container_remove_error(stderr: &str) -> bool {
+    let text = stderr.to_ascii_lowercase();
+    text.contains("notfound")
+        || text.contains("not found")
+        || text.contains("no such container")
+        || text.contains("no container with")
 }
 
 fn create_temp_dir(prefix: &str) -> io::Result<PathBuf> {
@@ -1172,7 +1191,7 @@ fn container_command(plan: &Plan) -> String {
 }
 
 fn dolt_server_command(dolt: &DoltEndpoint) -> String {
-    let base = "exec dolt sql-server --data-dir /var/lib/wrix/beads/dolt";
+    let base = "mkdir -p /run/wrix && exec dolt sql-server --data-dir /var/lib/wrix/beads/dolt";
     match dolt.transport() {
         DoltTransport::UnixSocket => {
             format!("{base} --host 127.0.0.1 --socket /run/wrix/dolt.sock")

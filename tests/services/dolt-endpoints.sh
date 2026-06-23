@@ -114,11 +114,12 @@ EOF
 }
 
 with_fake_runtime_env() {
+  local runtime_name="${1:-podman}"
   local runtime_dir="$TEST_TMP/runtime-bin"
   local state_dir="$TEST_TMP/runtime-state"
   mkdir -p "$runtime_dir" "$state_dir"
-  write_fake_runtime "$runtime_dir/podman"
-  export WRIX_CONTAINER_RUNTIME="$runtime_dir/podman"
+  write_fake_runtime "$runtime_dir/$runtime_name"
+  export WRIX_CONTAINER_RUNTIME="$runtime_dir/$runtime_name"
   export WRIX_FAKE_RUNTIME_STATE="$state_dir"
   export WRIX_SERVICE_ALLOW_TEMP_CACHE=1
 }
@@ -198,6 +199,7 @@ test_linux_dolt_uses_workspace_socket() {
   unset WRIX_DOLT_TRANSPORT
   workspace="$TEST_TMP/socket-repo"
   mkdir -p "$workspace/.beads/dolt" "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+  workspace="$(cd "$workspace" && pwd -P)"
 
   (cd "$workspace" && "$wrix_bin" service start --no-cache >"$TEST_TMP/start-unix.txt")
   (cd "$workspace" && "$wrix_bin" service endpoints --no-cache >"$TEST_TMP/endpoints-unix.json")
@@ -223,6 +225,37 @@ test_linux_dolt_uses_workspace_socket() {
   assert_equals "dolt socket command" "$socket" "$socket_output"
 }
 
+test_container_dolt_uses_published_socket() {
+  require_python
+  local wrix_bin workspace socket endpoints run_args
+  wrix_bin="$(build_wrix)"
+  with_fake_runtime_env container
+
+  export HOME="$TEST_TMP/home-container-socket"
+  export XDG_STATE_HOME="$TEST_TMP/state-container-socket"
+  export XDG_CACHE_HOME="$TEST_TMP/cache-container-socket"
+  export WRIX_DOLT_TRANSPORT="unix"
+  workspace="$TEST_TMP/container-socket-repo"
+  mkdir -p "$workspace/.beads/dolt" "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+  workspace="$(cd "$workspace" && pwd -P)"
+
+  (cd "$workspace" && "$wrix_bin" service start --no-cache >"$TEST_TMP/start-container-socket.txt")
+  (cd "$workspace" && "$wrix_bin" service endpoints --no-cache >"$TEST_TMP/endpoints-container-socket.json")
+  endpoints="$TEST_TMP/endpoints-container-socket.json"
+  socket="$workspace/.wrix/dolt.sock"
+
+  assert_equals "dolt transport" "unix" "$(json_get "$endpoints" endpoints.dolt.transport)"
+  assert_equals "dolt socket" "$socket" "$(json_get "$endpoints" endpoints.dolt.socket)"
+  assert_equals "beads socket env" "$socket" "$(json_get "$endpoints" endpoints.dolt.env.BEADS_DOLT_SERVER_SOCKET)"
+
+  run_args="$(<"$WRIX_FAKE_RUNTIME_STATE/run-container-socket-repo-service")"
+  assert_contains "dolt data mount" "$run_args" "$workspace/.beads/dolt:/var/lib/wrix/beads/dolt:rw"
+  assert_contains "published dolt socket" "$run_args" "--publish-socket $socket:/run/wrix/dolt.sock"
+  assert_contains "socket server option" "$run_args" "--socket /run/wrix/dolt.sock"
+  assert_not_contains "no virtiofs socket directory mount" "$run_args" "$workspace/.wrix:/run/wrix:rw"
+  assert_not_contains "no tcp publish on container socket" "$run_args" ":3306"
+}
+
 test_workspace_naming_determinism() {
   require_python
   local wrix_bin first_workspace second_workspace first_endpoints first_again_endpoints second_endpoints
@@ -243,6 +276,8 @@ test_workspace_naming_determinism() {
     "$HOME" \
     "$XDG_STATE_HOME" \
     "$XDG_CACHE_HOME"
+  first_workspace="$(cd "$first_workspace" && pwd -P)"
+  second_workspace="$(cd "$second_workspace" && pwd -P)"
 
   (cd "$first_workspace" && "$wrix_bin" service start --no-cache >"$TEST_TMP/start-deterministic-one.txt")
   (cd "$first_workspace" && "$wrix_bin" service endpoints --no-cache >"$TEST_TMP/endpoints-deterministic-one.json")
@@ -298,6 +333,7 @@ test_fallback_dolt_uses_loopback_tcp() {
   export WRIX_DOLT_TRANSPORT="tcp"
   workspace="$TEST_TMP/tcp-repo"
   mkdir -p "$workspace/.beads/dolt" "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+  workspace="$(cd "$workspace" && pwd -P)"
 
   (cd "$workspace" && "$wrix_bin" service start --no-cache >"$TEST_TMP/start-tcp.txt")
   (cd "$workspace" && "$wrix_bin" service endpoints --no-cache >"$TEST_TMP/endpoints-tcp.json")
@@ -328,6 +364,7 @@ test_fallback_dolt_uses_loopback_tcp() {
 ALL_TESTS=(
   test_fake_runtime_contract
   test_linux_dolt_uses_workspace_socket
+  test_container_dolt_uses_published_socket
   test_workspace_naming_determinism
   test_fallback_dolt_uses_loopback_tcp
 )
