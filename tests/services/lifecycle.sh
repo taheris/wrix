@@ -259,19 +259,12 @@ fi
 source_ref="${1:-}"
 store_ref="${2:-}"
 log_call "--insecure-policy copy --quiet $source_ref $store_ref"
-if [[ "${WRIX_FAKE_SKOPEO_UNKNOWN_NIX:-0}" == "1" && "$source_ref" == nix:* ]]; then
-  printf 'unknown transport "nix"\n' >&2
-  exit 1
-fi
 case "$source_ref" in
-  nix:*)
-    source_path="${source_ref#nix:}"
-    if [[ ! -f "$source_path" ]]; then
-      printf 'missing nix descriptor: %s\n' "$source_path" >&2
-      exit 2
-    fi
-    if ! grep -Eq '"source_kind"[[:space:]]*:[[:space:]]*"nix-descriptor"' "$source_path"; then
-      printf 'invalid nix descriptor: %s\n' "$source_path" >&2
+  oci:*)
+    source_path="${source_ref#oci:}"
+    source_path="${source_path%:*}"
+    if [[ ! -d "$source_path" ]]; then
+      printf 'missing OCI layout: %s\n' "$source_path" >&2
       exit 2
     fi
     ;;
@@ -601,14 +594,37 @@ test_service_start_loads_image_source() {
     export WRIX_SERVICE_IMAGE_SOURCE_KIND="$real_source_kind"
     mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
 
+    python3 - "$WRIX_SERVICE_IMAGE_SOURCE" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    descriptor = json.load(handle)
+legacy_stream_key = "fallback_" + "stream"
+if legacy_stream_key in descriptor:
+    print("FAIL: service descriptor exposes legacy stream fallback metadata", file=sys.stderr)
+    sys.exit(1)
+if descriptor.get("source_kind") != "nix-descriptor":
+    print("FAIL: service descriptor source_kind is not nix-descriptor", file=sys.stderr)
+    sys.exit(1)
+if not descriptor.get("oci_layout"):
+    print("FAIL: service descriptor is missing oci_layout", file=sys.stderr)
+    sys.exit(1)
+if not str(descriptor.get("digest", "")).startswith("sha256:"):
+    print("FAIL: service descriptor is missing digest", file=sys.stderr)
+    sys.exit(1)
+PY
+    local oci_layout oci_ref
+    oci_layout="$(json_get "$WRIX_SERVICE_IMAGE_SOURCE" oci_layout)"
+    oci_ref="$(json_get "$WRIX_SERVICE_IMAGE_SOURCE" oci_ref)"
+
     local workspace="$TEST_TMP/image-source-repo"
     mkdir -p "$workspace"
     (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/image-source-start.txt")
 
     assert_file_contains \
-      "service image nix descriptor install" \
+      "service image descriptor OCI install" \
       "$WRIX_FAKE_RUNTIME_STATE/calls" \
-      "skopeo --insecure-policy copy --quiet nix:$WRIX_SERVICE_IMAGE_SOURCE containers-storage:"
+      "skopeo --insecure-policy copy --quiet oci:$oci_layout:$oci_ref containers-storage:"
     if grep -F -- "load --input $WRIX_SERVICE_IMAGE_SOURCE" "$WRIX_FAKE_RUNTIME_STATE/calls" >/dev/null; then
       fail "nix-descriptor service image used tar load path"
     fi

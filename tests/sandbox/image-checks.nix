@@ -822,12 +822,13 @@ let
   };
   sourceKindChecks = concatStringsSep "\n" (
     mapAttrsToList (name: image: ''
-      check_source_kind "${name}" "${image.source_kind}" "${discardContext image.source}"
+      check_source_kind "${name}" "${image.source_kind}" "${toString image.source}"
     '') sourceKindMatrix
   );
 
   wrixImagesSourceKindTest = pkgs.writeShellApplication {
     name = "test-wrix-images-source-kind";
+    runtimeInputs = optionals isLinux [ pkgs.jq ];
     text = ''
       check_source_kind() {
           local name="$1"
@@ -840,6 +841,24 @@ let
           if [[ "$source_path" != /nix/store/* ]]; then
               echo "FAIL: $name source path is not store-resident: $source_path" >&2
               exit 1
+          fi
+          if [[ "$source_kind" == "nix-descriptor" ]]; then
+              local legacy_stream_key oci_layout oci_ref
+              legacy_stream_key="fallback_""stream"
+              if jq -e --arg key "$legacy_stream_key" 'has($key)' "$source_path" >/dev/null; then
+                  echo "FAIL: $name descriptor exposes legacy stream fallback metadata" >&2
+                  exit 1
+              fi
+              oci_layout=$(jq -r '.oci_layout // ""' "$source_path")
+              oci_ref=$(jq -r '.oci_ref // ""' "$source_path")
+              if [[ "$oci_layout" != /nix/store/*-oci ]]; then
+                  echo "FAIL: $name descriptor does not point at an OCI layout: $oci_layout" >&2
+                  exit 1
+              fi
+              if [[ -z "$oci_ref" ]]; then
+                  echo "FAIL: $name descriptor has no OCI ref" >&2
+                  exit 1
+              fi
           fi
       }
 

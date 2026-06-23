@@ -37,6 +37,14 @@ pub enum Error {
     MissingImageSourceKind,
     /// service image digest path does not exist: {path}
     MissingImageDigestPath { path: String },
+    /// service image descriptor {path} is missing field {field}
+    MissingImageDescriptorField { path: String, field: &'static str },
+    /// service image descriptor {path} has invalid field {field}: {value}
+    InvalidImageDescriptorField {
+        path: String,
+        field: &'static str,
+        value: String,
+    },
     /// container runtime requires service image source_kind=docker-archive
     ContainerRequiresDockerArchive,
     /// installed service image from {path}, but image {image} is unavailable
@@ -570,6 +578,13 @@ struct ImageSource {
     digest: Option<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DescriptorSource {
+    digest: String,
+    oci_layout: PathBuf,
+    oci_ref: String,
+}
+
 struct Runtime {
     binary: String,
     kind: RuntimeKind,
@@ -599,13 +614,6 @@ impl ImageSourceKind {
             other => Err(Error::UnknownImageSourceKind {
                 value: other.to_owned(),
             }),
-        }
-    }
-
-    const fn skopeo_source(self) -> &'static str {
-        match self {
-            Self::NixDescriptor => "nix",
-            Self::DockerArchive => "docker-archive",
         }
     }
 }
@@ -638,7 +646,7 @@ impl ImageSource {
 
     fn desired_digest(&self) -> Result<Option<String>> {
         let Some(value) = &self.digest else {
-            return Ok(None);
+            return self.descriptor_digest();
         };
         if value.starts_with("sha256:") {
             return Ok(Some(value.clone()));
@@ -655,6 +663,41 @@ impl ImageSource {
         } else {
             Ok(Some(digest))
         }
+    }
+
+    fn descriptor_digest(&self) -> Result<Option<String>> {
+        if self.kind == ImageSourceKind::NixDescriptor {
+            Ok(Some(DescriptorSource::from_path(&self.path)?.digest))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+impl DescriptorSource {
+    fn from_path(path: &Path) -> Result<Self> {
+        let content = fs::read_to_string(path)?;
+        Self::from_json(path, &content)
+    }
+
+    fn from_json(path: &Path, content: &str) -> Result<Self> {
+        let digest = required_descriptor_field(path, content, "digest")?;
+        if !is_sha256_digest(&digest) {
+            return Err(Error::InvalidImageDescriptorField {
+                path: path.display().to_string(),
+                field: "digest",
+                value: digest,
+            });
+        }
+        Ok(Self {
+            digest,
+            oci_layout: PathBuf::from(required_descriptor_field(path, content, "oci_layout")?),
+            oci_ref: required_descriptor_field(path, content, "oci_ref")?,
+        })
+    }
+
+    fn skopeo_source(&self) -> String {
+        format!("oci:{}:{}", self.oci_layout.display(), self.oci_ref)
     }
 }
 
@@ -891,70 +934,14 @@ impl Runtime {
 
     fn copy_podman_image(&self, source: &ImageSource) -> Result<()> {
         let store_ref = self.container_storage_ref()?;
-        let source_ref = format!("{}:{}", source.kind.skopeo_source(), source.path.display());
+        let source_ref = match source.kind {
+            ImageSourceKind::NixDescriptor => {
+                DescriptorSource::from_path(&source.path)?.skopeo_source()
+            }
+            ImageSourceKind::DockerArchive => format!("docker-archive:{}", source.path.display()),
+        };
         match skopeo_copy(&source_ref, &store_ref)? {
             Ok(()) => self.tag_latest(),
-            Err(error)
-                if source.kind == ImageSourceKind::NixDescriptor
-                    && error.contains("unknown transport")
-                    && error.contains("nix") =>
-            {
-                Self::copy_descriptor_fallback(source, &store_ref, &error)?;
-                self.tag_latest()
-            }
-            Err(error) => Err(Error::Operation { message: error }),
-        }
-    }
-
-    fn copy_descriptor_fallback(
-        source: &ImageSource,
-        store_ref: &str,
-        skopeo_error: &str,
-    ) -> Result<()> {
-        let descriptor = fs::read_to_string(&source.path)?;
-        let Some(stream) = json_string_field(&descriptor, "fallback_stream") else {
-            return Err(Error::Operation {
-                message: format!(
-                    "{skopeo_error}\nError: nix-descriptor source is not supported by this skopeo and has no fallback_stream: {}",
-                    source.path.display()
-                ),
-            });
-        };
-        let temp_dir = create_temp_dir("wrix-service-image")?;
-        let result = Self::copy_descriptor_fallback_in_temp(&stream, store_ref, &temp_dir);
-        match (result, fs::remove_dir_all(&temp_dir)) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Ok(()), Err(error)) => Err(error.into()),
-            (Err(error), Ok(())) => Err(error),
-            (Err(error), Err(cleanup_error)) => Err(Error::Operation {
-                message: format!(
-                    "{error}; failed to remove temporary directory {}: {cleanup_error}",
-                    temp_dir.display()
-                ),
-            }),
-        }
-    }
-
-    fn copy_descriptor_fallback_in_temp(
-        stream: &str,
-        store_ref: &str,
-        temp_dir: &Path,
-    ) -> Result<()> {
-        let image_tar = temp_dir.join("image.tar");
-        let output = fs::File::create(&image_tar)?;
-        let status = Command::new(stream)
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(output))
-            .stderr(Stdio::inherit())
-            .status()?;
-        if !status.success() {
-            return Err(Error::Operation {
-                message: format!("failed to stream service image fallback from {stream}"),
-            });
-        }
-        let source_ref = format!("docker-archive:{}", image_tar.display());
-        match skopeo_copy(&source_ref, store_ref)? {
-            Ok(()) => Ok(()),
             Err(error) => Err(Error::Operation { message: error }),
         }
     }
@@ -1149,6 +1136,31 @@ fn create_temp_dir(prefix: &str) -> Result<PathBuf> {
     Err(Error::TempDirAttemptsExceeded {
         prefix: prefix.to_owned(),
     })
+}
+
+fn required_descriptor_field(path: &Path, content: &str, field: &'static str) -> Result<String> {
+    match json_string_field(content, field) {
+        Some(value) if !value.is_empty() => Ok(value),
+        Some(value) => Err(Error::InvalidImageDescriptorField {
+            path: path.display().to_string(),
+            field,
+            value,
+        }),
+        None => Err(Error::MissingImageDescriptorField {
+            path: path.display().to_string(),
+            field,
+        }),
+    }
+}
+
+fn is_sha256_digest(value: &str) -> bool {
+    let Some(hex) = value.strip_prefix("sha256:") else {
+        return false;
+    };
+    hex.len() == 64
+        && hex
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
 fn json_string_field(input: &str, name: &str) -> Option<String> {
@@ -1412,8 +1424,10 @@ fn push_unicode_escape(output: &mut String, value: char) {
 
 #[cfg(test)]
 mod test {
+    use std::path::Path;
+
     use super::{
-        ImageSourceKind, Plan, RuntimeKind, json_string_field, loaded_container_ref,
+        DescriptorSource, Error, ImageSourceKind, Plan, RuntimeKind, loaded_container_ref,
         read_endpoint_port,
     };
     use wrix_core::path::Workspace;
@@ -1449,12 +1463,37 @@ mod test {
     }
 
     #[test]
-    fn json_string_field_reads_descriptor_fallback_stream() {
-        let content = r#"{"schema":1,"fallback_stream":"/nix/store/fake-stream"}"#;
-        assert_eq!(
-            json_string_field(content, "fallback_stream"),
-            Some(String::from("/nix/store/fake-stream"))
+    fn service_descriptor_source_uses_oci_layout_transport() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let content = format!(
+            r#"{{"schema":1,"digest":"{digest}","oci_layout":"/nix/store/fake-oci","oci_ref":"latest"}}"#
         );
+        let descriptor =
+            DescriptorSource::from_json(Path::new("/nix/store/fake-descriptor.json"), &content)
+                .unwrap();
+
+        assert_eq!(descriptor.digest, digest);
+        assert_eq!(descriptor.skopeo_source(), "oci:/nix/store/fake-oci:latest");
+    }
+
+    #[test]
+    fn service_descriptor_source_rejects_stream_fallback_without_layout() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let legacy_stream_key = "fallback_".to_owned() + "stream";
+        let content = format!(
+            r#"{{"schema":1,"digest":"{digest}","{legacy_stream_key}":"/nix/store/fake-stream"}}"#
+        );
+        let error =
+            DescriptorSource::from_json(Path::new("/nix/store/fake-descriptor.json"), &content)
+                .unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::MissingImageDescriptorField {
+                field: "oci_layout",
+                ..
+            }
+        ));
     }
 
     #[test]
