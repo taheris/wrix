@@ -602,8 +602,11 @@ impl Runtime {
             .arg("run")
             .arg("-d")
             .arg("--name")
-            .arg(name.as_str())
-            .arg("--restart=unless-stopped")
+            .arg(name.as_str());
+        if self.kind == RuntimeKind::Podman {
+            command.arg("--restart=unless-stopped");
+        }
+        command
             .arg("--label")
             .arg(format!(
                 "wrix.workspace={}",
@@ -745,11 +748,31 @@ impl Runtime {
                 "container runtime requires service image source_kind=docker-archive",
             ));
         }
+        let temp_dir = create_temp_dir("wrix-service-image")?;
+        let result = self.load_container_image_in_temp(source, &temp_dir);
+        match (result, fs::remove_dir_all(&temp_dir)) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Ok(()), Err(error)) | (Err(error), _) => Err(error),
+        }
+    }
+
+    fn load_container_image_in_temp(
+        &self,
+        source: &ImageSource,
+        temp_dir: &Path,
+    ) -> io::Result<()> {
+        let oci_archive = temp_dir.join("image.oci");
+        let source_ref = format!("docker-archive:{}", source.path.display());
+        let archive_ref = format!("oci-archive:{}", oci_archive.display());
+        match skopeo_copy(&source_ref, &archive_ref)? {
+            Ok(()) => {}
+            Err(error) => return Err(io::Error::other(error)),
+        }
         let output = Command::new(&self.binary)
             .arg("image")
             .arg("load")
             .arg("--input")
-            .arg(&source.path)
+            .arg(&oci_archive)
             .stdin(Stdio::null())
             .output()?;
         if !output.status.success() {
@@ -938,31 +961,38 @@ impl Runtime {
     }
 
     fn status(&self, name: &ContainerName) -> io::Result<RuntimeStatus> {
-        let exists = Command::new(&self.binary)
-            .arg("container")
-            .arg("exists")
-            .arg(name.as_str())
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()?;
-        if !exists.success() {
+        let mut command = Command::new(&self.binary);
+        match self.kind {
+            RuntimeKind::Container => {
+                command.arg("inspect");
+            }
+            RuntimeKind::Podman => {
+                command
+                    .arg("inspect")
+                    .arg("--format")
+                    .arg("{{.State.Running}}");
+            }
+        }
+        let output = command.arg(name.as_str()).stdin(Stdio::null()).output()?;
+        if !output.status.success() {
             return Ok(RuntimeStatus::Missing);
         }
-        let output = Command::new(&self.binary)
-            .arg("inspect")
-            .arg("--format")
-            .arg("{{.State.Running}}")
-            .arg(name.as_str())
-            .stdin(Stdio::null())
-            .output()?;
-        if !output.status.success() {
-            return Ok(RuntimeStatus::Stopped);
-        }
-        if String::from_utf8_lossy(&output.stdout).trim() == "true" {
-            Ok(RuntimeStatus::Running)
-        } else {
-            Ok(RuntimeStatus::Stopped)
+        match self.kind {
+            RuntimeKind::Container => {
+                let text = String::from_utf8_lossy(&output.stdout);
+                if text.contains(r#""status":"running""#) {
+                    Ok(RuntimeStatus::Running)
+                } else {
+                    Ok(RuntimeStatus::Stopped)
+                }
+            }
+            RuntimeKind::Podman => {
+                if String::from_utf8_lossy(&output.stdout).trim() == "true" {
+                    Ok(RuntimeStatus::Running)
+                } else {
+                    Ok(RuntimeStatus::Stopped)
+                }
+            }
         }
     }
 }

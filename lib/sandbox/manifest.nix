@@ -12,7 +12,7 @@
 }:
 
 let
-  inherit (builtins) elem mapAttrs;
+  inherit (builtins) elem mapAttrs unsafeDiscardStringContext;
   inherit (pkgs.lib) optionalAttrs;
 
   imageTagLib = import ../util/image-tag.nix { };
@@ -28,14 +28,15 @@ let
     let
       sourceKind = image.source_kind or (throw "mkProfileImages: image.source_kind is required");
       source = image.source or image;
+      storePathText = value: unsafeDiscardStringContext (toString value);
     in
     {
       ref = "${refPrefix}${image.imageName}:${imageTagLib.mkImageTag image}";
-      source = "${source}";
+      source = storePathText source;
       source_kind = sourceKind;
     }
     // optionalAttrs (image ? profileConfig) {
-      profile_config = "${image.profileConfig}";
+      profile_config = storePathText image.profileConfig;
     };
 
   mkAgentEntry =

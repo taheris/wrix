@@ -2,7 +2,7 @@
 # Verify shape and presence of the profile-image manifest produced by
 # `wrix.lib.${system}.mkProfileImages` (specs/profiles.md).
 #
-# Two contracts:
+# Three contracts:
 #
 # 1. test_manifest_shape — `mkProfileImages { rust = ...; }` produces JSON
 #    whose profile entry is keyed by the image's agent and whose variant carries
@@ -13,6 +13,9 @@
 #    `packages.sandbox-<name>`, `packages.profile-images`, and
 #    `packages.profile-images-pi` evaluate for every built-in profile (base,
 #    rust, python), and `packages.default` resolves to `sandbox-rust-pi`.
+#
+# 3. test_manifest_derivation_is_lightweight — the manifest JSON derivation
+#    builds without realizing the profile images it names.
 #
 # Usage: tests/profiles/profile-images-manifest.sh [function_name]
 # Each function exits 0 on PASS, non-zero on FAIL, 77 to skip.
@@ -148,6 +151,26 @@ test_flake_outputs_present() {
     fi
     if [[ "$default_name" != "wrix-rust-pi" ]]; then
         echo "packages.default resolved to $default_name, expected wrix-rust-pi" >&2
+        return 1
+    fi
+}
+
+test_manifest_derivation_is_lightweight() {
+    local flake_url="git+file://$REPO_ROOT"
+    local result
+
+    if ! result=$(nix build --print-out-paths --no-link --no-warn-dirty "$flake_url#profile-images-pi"); then
+        echo "packages.profile-images-pi failed to build" >&2
+        return 1
+    fi
+
+    if ! jq -e '
+      (.base.pi.source | type == "string") and
+      (.rust.pi.source | type == "string") and
+      (.python.pi.source | type == "string") and
+      (.rust.pi.profile_config | type == "string")
+    ' "$result" >/dev/null; then
+        echo "packages.profile-images-pi did not produce the expected manifest JSON" >&2
         return 1
     fi
 }

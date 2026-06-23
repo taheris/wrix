@@ -99,19 +99,6 @@
         "aarch64-linux"
         "x86_64-linux"
       ];
-      wrixSandboxPackage = sandboxOverlays.sandbox-rust-pi;
-      wrixCli = pkgs.writeShellScriptBin "wrix" ''
-        set -euo pipefail
-
-        case "''${1:-}" in
-          --profile-config|--profile-config=*|run|spawn)
-            exec ${wrixSandboxPackage}/bin/wrix "$@"
-            ;;
-          *)
-            exec ${wrix.rustPackage.wrix}/bin/wrix "$@"
-            ;;
-        esac
-      '';
       serviceProfiles = import ../../lib/sandbox/profiles.nix {
         pkgs = linuxPkgs;
         hostPkgs = linuxPkgs;
@@ -156,7 +143,7 @@
         )
         // {
           tmux-mcp = wrix.tmuxMcpPackage.bin;
-          wrix = wrixCli;
+          wrix = wrix.rustPackage.wrix;
           wrix-cache-hook = wrix.rustPackage.cacheHook;
           wrix-cache-publish = wrix.rustPackage.cachePublish;
           wrix-cache-serve = wrix.rustPackage.cacheServe;

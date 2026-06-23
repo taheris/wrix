@@ -86,11 +86,13 @@ let
           ];
         }
         ''
-          export HOME=$TMPDIR
-          skopeo --insecure-policy copy --quiet \
+          export TMPDIR="$PWD/tmp"
+          export HOME="$TMPDIR"
+          mkdir -p "$TMPDIR"
+          skopeo --tmpdir "$TMPDIR" --insecure-policy copy --quiet \
             "docker-archive:${rawImage}" "oci:$TMPDIR/image-oci:latest"
-          skopeo inspect --raw "oci:$TMPDIR/image-oci:latest" \
-            | jq -r '.config.digest' > $out
+          skopeo --tmpdir "$TMPDIR" inspect --raw "oci:$TMPDIR/image-oci:latest" \
+            | jq -r '.config.digest' > "$out"
         ''
     else
       descriptorDigestFile;

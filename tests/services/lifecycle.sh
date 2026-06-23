@@ -178,7 +178,7 @@ case "${1:-}" in
       fi
       printf '%s\n' "$workspace"
     else
-      printf 'running\n'
+      printf '[{"status":"running"}]\n'
     fi
     ;;
   ps)
@@ -578,9 +578,13 @@ test_service_start_loads_image_source() {
   (cd "$darwin_workspace" && "$wrix_bin" service start >"$TEST_TMP/image-source-darwin-start.txt")
 
   assert_file_contains \
+    "service image docker archive converted for container" \
+    "$WRIX_FAKE_RUNTIME_STATE/calls" \
+    "skopeo --insecure-policy copy --quiet docker-archive:$WRIX_SERVICE_IMAGE_SOURCE oci-archive:"
+  assert_file_contains \
     "service image docker archive load" \
     "$WRIX_FAKE_RUNTIME_STATE/calls" \
-    "image load --input $WRIX_SERVICE_IMAGE_SOURCE"
+    "image load --input"
   assert_file_contains \
     "service image docker archive tag" \
     "$WRIX_FAKE_RUNTIME_STATE/calls" \
@@ -589,6 +593,16 @@ test_service_start_loads_image_source() {
     "service run after archive load" \
     "$WRIX_FAKE_RUNTIME_STATE/run-image-source-darwin-repo-service" \
     "$WRIX_SERVICE_IMAGE"
+  if grep -F -- "--restart" "$WRIX_FAKE_RUNTIME_STATE/run-image-source-darwin-repo-service" >/dev/null; then
+    fail "container runtime service run included unsupported --restart flag"
+  fi
+  local run_count
+  run_count=$(grep -cF -- "run -d --name image-source-darwin-repo-service" "$WRIX_FAKE_RUNTIME_STATE/calls")
+  (cd "$darwin_workspace" && "$wrix_bin" service start >"$TEST_TMP/image-source-darwin-start-again.txt")
+  assert_equals \
+    "container runtime second start run count" \
+    "$run_count" \
+    "$(grep -cF -- "run -d --name image-source-darwin-repo-service" "$WRIX_FAKE_RUNTIME_STATE/calls")"
 }
 
 test_service_image_labels() {
