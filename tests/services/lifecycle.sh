@@ -759,6 +759,38 @@ test_start_replaces_stale_same_workspace_service_on_cache_port() {
     "-p 127.0.0.1:$cache_port:8080"
 }
 
+test_cache_start_recreates_running_no_cache_service() {
+  require_python
+  local wrix_bin
+  wrix_bin="$(build_wrix)"
+  with_fake_runtime_env
+
+  export HOME="$TEST_TMP/home-cache-reconfigure"
+  export XDG_STATE_HOME="$TEST_TMP/xdg-state-cache-reconfigure"
+  export XDG_CACHE_HOME="$TEST_TMP/xdg-cache-cache-reconfigure"
+  mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+
+  local workspace="$TEST_TMP/cache-reconfigure-repo"
+  mkdir -p "$workspace/.beads/dolt"
+  (cd "$workspace" && "$wrix_bin" service start --no-cache >"$TEST_TMP/cache-reconfigure-no-cache-start.txt")
+  (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/cache-reconfigure-cache-start.txt")
+  (cd "$workspace" && "$wrix_bin" service endpoints >"$TEST_TMP/cache-reconfigure-endpoints.json")
+
+  local cache_port planned_name
+  cache_port="$(json_get "$TEST_TMP/cache-reconfigure-endpoints.json" endpoints.cache_http.port)"
+  planned_name="$(json_get "$TEST_TMP/cache-reconfigure-endpoints.json" container_name)"
+
+  assert_file_contains "no-cache service removed" "$WRIX_FAKE_RUNTIME_STATE/calls" "rm -f $planned_name"
+  assert_file_contains \
+    "recreated service publishes cache" \
+    "$WRIX_FAKE_RUNTIME_STATE/run-$planned_name" \
+    "-p 127.0.0.1:$cache_port:8080"
+  assert_file_contains \
+    "recreated service labelled cache-enabled" \
+    "$WRIX_FAKE_RUNTIME_STATE/run-$planned_name" \
+    "--label wrix.cache.enabled=true"
+}
+
 test_start_reports_unrelated_cache_port_owner() {
   require_python
   local wrix_bin
@@ -1014,6 +1046,7 @@ ALL_TESTS=(
   test_workspace_identity
   test_devshell_start_is_independent
   test_start_replaces_stale_same_workspace_service_on_cache_port
+  test_cache_start_recreates_running_no_cache_service
   test_start_reports_unrelated_cache_port_owner
   test_temp_cache_only_workspace_does_not_start_service
   test_loom_bead_workspace_uses_repo_service

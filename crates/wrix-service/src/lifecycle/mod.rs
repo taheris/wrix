@@ -17,6 +17,7 @@ const CACHE_PORT_START: u16 = 21_000;
 const CACHE_PORT_WIDTH: u16 = 2_000;
 const DOLT_PORT_START: u16 = 23_000;
 const DOLT_PORT_WIDTH: u16 = 2_000;
+const CACHE_ENABLED_LABEL: &str = "wrix.cache.enabled";
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -781,7 +782,10 @@ impl Runtime {
         match self.status(&name)? {
             RuntimeStatus::Running => {
                 self.reconcile_legacy_containers(plan)?;
-                return Ok(());
+                if self.running_container_satisfies_plan(&name, plan)? {
+                    return Ok(());
+                }
+                self.remove(&name)?;
             }
             RuntimeStatus::Stopped => self.remove(&name)?,
             RuntimeStatus::Missing => {}
@@ -807,7 +811,16 @@ impl Runtime {
             .arg("--label")
             .arg(format!("wrix.workspace.hash={}", plan.workspace().hash()))
             .arg("--label")
-            .arg("wrix.kind=service");
+            .arg("wrix.kind=service")
+            .arg("--label")
+            .arg(format!(
+                "{CACHE_ENABLED_LABEL}={}",
+                if plan.cache_enabled() {
+                    "true"
+                } else {
+                    "false"
+                }
+            ));
         if let Some(port) = plan.cache_port() {
             command
                 .arg("-p")
@@ -868,6 +881,25 @@ impl Runtime {
                 |port| Err(self.port_in_use_error(port)),
             )
         }
+    }
+
+    fn running_container_satisfies_plan(&self, name: &ContainerName, plan: &Plan) -> Result<bool> {
+        if plan.cache_enabled()
+            && self
+                .inspect_label(name.as_str(), CACHE_ENABLED_LABEL)?
+                .as_deref()
+                != Some("true")
+        {
+            return Ok(false);
+        }
+        if self.kind == RuntimeKind::Podman {
+            let published_ports = self.published_ports(name.as_str())?;
+            return Ok(plan
+                .selected_host_ports()
+                .iter()
+                .all(|port| published_ports.contains(port)));
+        }
+        Ok(true)
     }
 
     fn reconcile_legacy_containers(&self, plan: &Plan) -> Result<bool> {
