@@ -218,6 +218,7 @@ let
       test-stable-profile-membership \
       test-pinned-toolchain-stable-tier \
       test-downstream-change-leaf-only \
+      test-archiveless-generated-change \
       test-agent-tier-isolated \
       test-agent-exclusive \
       test-iteration-cost-bounded \
@@ -398,6 +399,12 @@ in
       meta.description = "Verify a leaf change leaves every tier-0, tier-1, and tier-2 layer blob byte-identical (Linux only)";
       type = "app";
       program = "${sandboxImageChecks.downstreamChangeLeafOnlyTest}/bin/test-downstream-change-leaf-only";
+    };
+
+    archiveless-generated-change = {
+      meta.description = "Verify generated metadata changes only the descriptor and top customisation layer.";
+      type = "app";
+      program = "${sandboxImageChecks.archivelessGeneratedChangeTest}/bin/test-archiveless-generated-change";
     };
 
     agent-tier-isolated = {

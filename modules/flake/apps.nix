@@ -9,6 +9,7 @@ _:
         test-ci = test.apps.ci;
         test-agent-exclusive = test.apps.agent-exclusive;
         test-agent-tier-isolated = test.apps.agent-tier-isolated;
+        test-archiveless-generated-change = test.apps.archiveless-generated-change;
         test-base-image-hash-stable = test.apps.base-image-hash-stable;
         test-base-image-universal = test.apps.base-image-universal;
         test-claude-runtime-noop = test.apps.claude-runtime-noop;

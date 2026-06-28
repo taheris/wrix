@@ -478,18 +478,134 @@ let
         '';
   };
 
+  digestSkipPodman = pkgs.writeShellApplication {
+    name = "podman";
+    runtimeInputs = [ pkgs.coreutils ];
+    text = ''
+      state_dir="''${WRIX_DIGEST_SKIP_STATE:?}"
+      mkdir -p "$state_dir/images"
+      printf '%s\n' "$*" >> "$state_dir/podman.log"
+
+      image_file() {
+          local ref="$1"
+          ref="''${ref//\//_}"
+          ref="''${ref//:/_}"
+          printf '%s/images/%s\n' "$state_dir" "$ref"
+      }
+
+      case "''${1:-}" in
+          image)
+              case "''${2:-}" in
+                  inspect)
+                      target="''${!#}"
+                      if [[ "$target" == sha256:* ]]; then
+                          [[ -f "$state_dir/digest-present" ]] || exit 1
+                          printf '%s\n' "$target"
+                          exit 0
+                      fi
+                      [[ -f "$(image_file "$target")" ]] || exit 1
+                      case "$*" in
+                          *'{{.Digest}}'*) printf 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n' ;;
+                          *) printf 'sha256:fake-image-id\n' ;;
+                      esac
+                      ;;
+                  exists)
+                      [[ -f "$(image_file "''${3:-}")" ]]
+                      ;;
+                  *) exit 0 ;;
+              esac
+              ;;
+          tag)
+              source="''${2:-}"
+              target="''${3:-}"
+              if [[ "$source" == sha256:* ]]; then
+                  [[ -f "$state_dir/digest-present" ]] || exit 1
+              elif [[ ! -f "$(image_file "$source")" ]]; then
+                  exit 1
+              fi
+              printf '%s\n' "$source" > "$(image_file "$target")"
+              ;;
+          images|ps|rmi)
+              exit 0
+              ;;
+          info)
+              printf 'overlay@%s/graph+%s/runroot\n' "$state_dir" "$state_dir"
+              ;;
+          run)
+              : > "$state_dir/container-ran"
+              ;;
+          *)
+              printf 'unexpected fake podman command: %s\n' "$*" >&2
+              exit 2
+              ;;
+      esac
+    '';
+  };
+
+  digestSkipSkopeo = pkgs.writeShellApplication {
+    name = "skopeo";
+    runtimeInputs = [ pkgs.coreutils ];
+    text = ''
+      state_dir="''${WRIX_DIGEST_SKIP_STATE:?}"
+      mkdir -p "$state_dir"
+      printf '%s\n' "$*" >> "$state_dir/skopeo.log"
+      printf 'skopeo must not run on a digest-hit install\n' >&2
+      exit 2
+    '';
+  };
+
+  digestSkipServiceCli = pkgs.writeShellApplication {
+    name = "wrix";
+    text = ''
+      if [[ "''${1:-}" == "service" && "''${2:-}" == "dolt" && "''${3:-}" == "status" ]]; then
+          echo 'dolt: disabled' >&2
+          exit 1
+      fi
+      if [[ "''${1:-}" == "service" && "''${2:-}" == "start" ]]; then
+          exit 0
+      fi
+      if [[ "''${1:-}" == "service" && "''${2:-}" == "endpoints" ]]; then
+          printf '{"endpoints":{"cache_http":null}}\n'
+          exit 0
+      fi
+      printf 'unexpected fake service command: %s\n' "$*" >&2
+      exit 2
+    '';
+  };
+
+  digestSkipLauncher =
+    if isLinux then
+      (import ../../lib/sandbox/linux/default.nix {
+        pkgs = pkgs // {
+          podman = digestSkipPodman;
+          skopeo = digestSkipSkopeo;
+        };
+        serviceCli = digestSkipServiceCli;
+      }).mkSandbox
+        {
+          profile = {
+            name = "digestskip";
+            mounts = [ ];
+            writableDirs = [ ];
+          };
+        }
+    else
+      null;
+
   # Linux-only verifier for the digest-preflight short-circuit (specs/sandbox.md
   # § Image install path; specs/image-builder.md Success Criteria #1). Drives
-  # the shared `imageLoadStep` snippet through shim podman + skopeo binaries.
-  # The shim records the image as content-digest-present after the first
-  # install transport runs; the second `imageLoadStep` must observe the
-  # digest hit and short-circuit — no skopeo copies, no tar materialization,
-  # no `*-load` CLI call. Darwin's digest preflight is verified separately
-  # by its own (in-progress) work in specs/sandbox.md and is skipped here.
+  # the live generated Linux launcher under both `wrix run` and `wrix spawn`,
+  # with shim podman + skopeo binaries standing in for external runtimes.
+  # The live launcher cases pre-seed the platform store's content digest;
+  # the installer must short-circuit before source execution, skopeo copies,
+  # tar materialization, or any `*-load` CLI call. Darwin's digest preflight
+  # is verified separately by its own platform-resident verifier.
   imageInstallDigestSkipTest = pkgs.writeShellApplication {
     name = "test-image-install-digest-skip";
     runtimeInputs = optionals isLinux [
       pkgs.coreutils
+      pkgs.gawk
+      pkgs.git
       pkgs.gnugrep
       pkgs.jq
     ];
@@ -523,6 +639,88 @@ let
             '{schema:1,source_kind:"nix-descriptor",digest:$digest,oci_layout:$layout,oci_ref:"latest"}' \
             >"$IMAGE_SOURCE"
 
+          run_live_launcher_digest_hit() {
+              local mode="$1"
+              local live_state="$tmp/live-$mode"
+              local live_home="$tmp/home-$mode"
+              local workspace="$tmp/workspace-$mode"
+              local live_source="$tmp/source-$mode"
+              local profile_config="$tmp/profile-$mode.json"
+              mkdir -p "$live_state" "$live_home" "$workspace"
+              : >"$live_state/podman.log"
+              : >"$live_state/skopeo.log"
+              : >"$live_state/digest-present"
+              cat >"$live_source" <<'LIVE_SOURCE'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          printf 'executed\n' >> "''${WRIX_DIGEST_SKIP_STATE:?}/source-executed"
+          exit 99
+          LIVE_SOURCE
+              chmod +x "$live_source"
+              jq -n \
+                --arg source "$live_source" \
+                --arg digest "$DESIRED_DIGEST" \
+                '{
+                  schema: 1,
+                  system: "test",
+                  profile: { name: "digestskip", env: {}, mounts: [], writable_dirs: [], network_allowlist: [] },
+                  image: { ref: "localhost/wrix-digestskip:live", source: $source, source_kind: "nix-descriptor", digest: $digest },
+                  agent: { kind: "direct" },
+                  resources: { cpus: null, memory_mb: 4096, pids_limit: 4096 },
+                  security: { deploy_key: null },
+                  network: { default_mode: "open", ipv6: "disabled" },
+                  services: { beads: { enable: "auto" }, nix_cache: { enable: false } },
+                  features: { mcp_runtime: false }
+                }' >"$profile_config"
+
+              if [[ "$mode" == "run" ]]; then
+                  HOME="$live_home" \
+                  WRIX_DIGEST_SKIP_STATE="$live_state" \
+                  WRIX_IMAGE_KEEP_FILE="$live_state/image-mru.json" \
+                    ${digestSkipLauncher}/bin/wrix --profile-config "$profile_config" run "$workspace" true
+              else
+                  local deploy_key="$tmp/deploy-key-$mode"
+                  local spawn_config="$tmp/spawn-$mode.json"
+                  printf 'deploy key\n' >"$deploy_key"
+                  jq -n --arg workspace "$workspace" \
+                    '{workspace: $workspace, env: [], agent_args: ["true"], mounts: []}' \
+                    >"$spawn_config"
+                  HOME="$live_home" \
+                  WRIX_DEPLOY_KEY="$deploy_key" \
+                  WRIX_GIT_SIGN=0 \
+                  WRIX_DIGEST_SKIP_STATE="$live_state" \
+                  WRIX_IMAGE_KEEP_FILE="$live_state/image-mru.json" \
+                    ${digestSkipLauncher}/bin/wrix --profile-config "$profile_config" spawn --spawn-config "$spawn_config"
+              fi
+
+              if [[ -s "$live_state/skopeo.log" ]]; then
+                  echo "live $mode digest hit invoked skopeo:" >&2
+                  cat "$live_state/skopeo.log" >&2
+                  exit 1
+              fi
+              if [[ -e "$live_state/source-executed" ]]; then
+                  echo "live $mode digest hit executed the image source" >&2
+                  exit 1
+              fi
+              if [[ ! -f "$live_state/container-ran" ]]; then
+                  echo "live $mode did not reach podman run after digest skip" >&2
+                  cat "$live_state/podman.log" >&2
+                  exit 1
+              fi
+              if ! grep -qFx -- "image inspect --format {{.Id}} $DESIRED_DIGEST" "$live_state/podman.log"; then
+                  echo "live $mode did not inspect the desired content digest:" >&2
+                  cat "$live_state/podman.log" >&2
+                  exit 1
+              fi
+              if grep -qE '(^| )load($| )' "$live_state/podman.log"; then
+                  echo "live $mode issued a *-load CLI call:" >&2
+                  cat "$live_state/podman.log" >&2
+                  exit 1
+              fi
+          }
+          run_live_launcher_digest_hit run
+          run_live_launcher_digest_hit spawn
+
           # podman shim — logs every invocation as a single-line `$*`.
           # `image inspect --format {{.Id}} <digest>`: succeeds (exit 0,
           # echoes the digest) iff the shim has been marked installed,
@@ -540,7 +738,7 @@ let
               image)
                   case "\$2" in
                       inspect)
-                          if [ -f '$state/installed' ]; then
+                          if [[ -f '$state/installed' ]]; then
                               printf '%s\n' "\$5"
                               exit 0
                           else
@@ -548,8 +746,8 @@ let
                           fi
                           ;;
                       exists)
-                          if [ -f '$state/force-ref-miss' ]; then exit 1; fi
-                          if [ -f '$state/installed' ]; then exit 0; else exit 1; fi
+                          if [[ -f '$state/force-ref-miss' ]]; then exit 1; fi
+                          if [[ -f '$state/installed' ]]; then exit 0; else exit 1; fi
                           ;;
                       *) exit 0 ;;
                   esac
@@ -693,7 +891,12 @@ let
 
   linuxImageArchivelessSourceTest = pkgs.writeShellApplication {
     name = "test-linux-image-archiveless-source";
-    runtimeInputs = optionals isLinux [ pkgs.jq ];
+    runtimeInputs = optionals isLinux [
+      pkgs.coreutils
+      pkgs.gnugrep
+      pkgs.jq
+      pkgs.nix
+    ];
     text =
       if isLinux then
         ''
@@ -739,6 +942,20 @@ let
               exit 1
           fi
 
+          assert_no_deriver_reference() {
+              local label="$1"
+              local path="$2"
+              local forbidden="$3"
+              local deriver
+              deriver=$(nix-store -q --deriver "$path")
+              if [[ "$deriver" != "unknown-deriver" ]] && nix-store -q --references "$deriver" | grep -Fxq "$forbidden"; then
+                  echo "FAIL: $label builder depends on the raw whole-image output: $forbidden" >&2
+                  exit 1
+              fi
+          }
+          assert_no_deriver_reference "descriptor source" "$source_path" "$image_path"
+          assert_no_deriver_reference "descriptor OCI layout" "$oci_layout" "$image_path"
+
           echo "test-linux-image-archiveless-source: PASS"
         ''
       else
@@ -767,7 +984,13 @@ let
               exit 1
           fi
           if nix-store -q --references "$digest_path" | grep -Fxq "$image_path"; then
-              echo "FAIL: descriptor digest depends on the raw image output" >&2
+              echo "FAIL: descriptor digest references the raw image output" >&2
+              exit 1
+          fi
+          digest_root="''${digest_path%/wrix/config-digest}"
+          digest_deriver=$(nix-store -q --deriver "$digest_root")
+          if [[ "$digest_deriver" != "unknown-deriver" ]] && nix-store -q --references "$digest_deriver" | grep -Fxq "$image_path"; then
+              echo "FAIL: descriptor digest builder depends on the raw whole-image output" >&2
               exit 1
           fi
 
@@ -822,18 +1045,24 @@ let
   };
   sourceKindChecks = concatStringsSep "\n" (
     mapAttrsToList (name: image: ''
-      check_source_kind "${name}" "${image.source_kind}" "${toString image.source}"
+      check_source_kind "${name}" "${image.source_kind}" "${toString image.source}" "${discardContext image}"
     '') sourceKindMatrix
   );
 
   wrixImagesSourceKindTest = pkgs.writeShellApplication {
     name = "test-wrix-images-source-kind";
-    runtimeInputs = optionals isLinux [ pkgs.jq ];
+    runtimeInputs = optionals isLinux [
+      pkgs.coreutils
+      pkgs.gnugrep
+      pkgs.jq
+      pkgs.nix
+    ];
     text = ''
       check_source_kind() {
           local name="$1"
           local source_kind="$2"
           local source_path="$3"
+          local image_path="$4"
           if [[ "$source_kind" != "${expectedImageSourceKind}" ]]; then
               echo "FAIL: $name source_kind=$source_kind, expected ${expectedImageSourceKind}" >&2
               exit 1
@@ -857,6 +1086,17 @@ let
               fi
               if [[ -z "$oci_ref" ]]; then
                   echo "FAIL: $name descriptor has no OCI ref" >&2
+                  exit 1
+              fi
+              local source_deriver oci_deriver
+              source_deriver=$(nix-store -q --deriver "$source_path")
+              if [[ "$source_deriver" != "unknown-deriver" ]] && nix-store -q --references "$source_deriver" | grep -Fxq "$image_path"; then
+                  echo "FAIL: $name descriptor source builder depends on the raw whole-image output" >&2
+                  exit 1
+              fi
+              oci_deriver=$(nix-store -q --deriver "$oci_layout")
+              if [[ "$oci_deriver" != "unknown-deriver" ]] && nix-store -q --references "$oci_deriver" | grep -Fxq "$image_path"; then
+                  echo "FAIL: $name descriptor OCI layout builder depends on the raw whole-image output" >&2
                   exit 1
               fi
           fi
@@ -1525,6 +1765,82 @@ let
           # iteration-cost bound is the tiered chain alone (specs/image-builder.md
           # § Out of Scope).
           echo "test-downstream-change-leaf-only: skipped on this platform (streamLayeredImage is Linux-only)" >&2
+          exit 0
+        '';
+  };
+
+  archivelessGeneratedChangeTest = pkgs.writeShellApplication {
+    name = "test-archiveless-generated-change";
+    runtimeInputs = optionals isLinux [
+      pkgs.coreutils
+      pkgs.gnugrep
+      pkgs.gnutar
+      pkgs.jq
+      pkgs.nix
+    ];
+    text =
+      if isLinux then
+        ''
+          source_a=${leafProbeSettingsA.source}
+          source_b=${leafProbeSettingsB.source}
+          raw_a=${discardContext leafProbeSettingsA}
+          raw_b=${discardContext leafProbeSettingsB}
+          agent_tar=${leafProbeSettingsA.agentImage}
+
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+
+          digest_a=$(jq -r '.digest' "$source_a")
+          digest_b=$(jq -r '.digest' "$source_b")
+          if [[ "$digest_a" == "$digest_b" ]]; then
+              echo "FAIL: generated metadata change left the descriptor/config digest unchanged" >&2
+              exit 1
+          fi
+
+          jq -r '.layers[].digest' "$source_a" | sort -u > "$tmp/a.layers"
+          jq -r '.layers[].digest' "$source_b" | sort -u > "$tmp/b.layers"
+          tar -xOf "$agent_tar" manifest.json \
+            | jq -r '.[0].Layers[] | sub("/layer.tar$"; "") | "sha256:" + .' \
+            | sort -u > "$tmp/lower.layers"
+          comm -12 "$tmp/a.layers" "$tmp/b.layers" > "$tmp/shared.layers"
+
+          missing=$(comm -23 "$tmp/lower.layers" "$tmp/shared.layers")
+          if [[ -n "$missing" ]]; then
+              echo "FAIL: generated metadata change altered a lower-tier layer blob" >&2
+              echo "$missing" >&2
+              exit 1
+          fi
+
+          only_a=$(comm -23 "$tmp/a.layers" "$tmp/b.layers" | wc -l)
+          only_b=$(comm -13 "$tmp/a.layers" "$tmp/b.layers" | wc -l)
+          if [[ "$only_a" -ne 1 || "$only_b" -ne 1 ]]; then
+              echo "FAIL: generated metadata change should alter only the top customisation layer (only_a=$only_a only_b=$only_b)" >&2
+              exit 1
+          fi
+
+          assert_no_raw_image_input() {
+              local label="$1"
+              local path="$2"
+              local forbidden="$3"
+              local deriver
+              deriver=$(nix-store -q --deriver "$path")
+              if [[ "$deriver" != "unknown-deriver" ]] && nix-store -q --references "$deriver" | grep -Fxq "$forbidden"; then
+                  echo "FAIL: $label builder depends on the raw whole-image output" >&2
+                  exit 1
+              fi
+          }
+          oci_a=$(jq -r '.oci_layout' "$source_a")
+          oci_b=$(jq -r '.oci_layout' "$source_b")
+          assert_no_raw_image_input "descriptor A" "$source_a" "$raw_a"
+          assert_no_raw_image_input "descriptor B" "$source_b" "$raw_b"
+          assert_no_raw_image_input "OCI layout A" "$oci_a" "$raw_a"
+          assert_no_raw_image_input "OCI layout B" "$oci_b" "$raw_b"
+
+          echo "test-archiveless-generated-change: PASS (lower tiers unchanged; one customisation layer changed)"
+        ''
+      else
+        ''
+          echo "test-archiveless-generated-change: skipped on this platform (Linux-only descriptor verifier)" >&2
           exit 0
         '';
   };
@@ -2204,6 +2520,7 @@ in
     stableProfileMembershipTest
     pinnedToolchainStableTest
     downstreamChangeLeafOnlyTest
+    archivelessGeneratedChangeTest
     agentTierIsolatedTest
     agentExclusiveTest
     iterationCostBoundedTest

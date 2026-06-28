@@ -158,7 +158,7 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
 - A tier-3 (leaf) change — a downstream-appended package, an agent-settings field, or an MCP-config field — leaves every tier-0, tier-1, and tier-2 (agent) layer-blob byte-identical in the resulting image's manifest; only leaf blobs change
   [system](nix run .#test-downstream-change-leaf-only)
 - A generated-metadata-only change — agent settings, MCP config, entrypoint metadata, or Nix DB registration — changes only the image descriptor/config and the tiny top customisation layer, and the Linux archive-less install path does not read, tar, or copy lower-tier blobs
-  [system?](nix run .#test-archiveless-generated-change)
+  [system](nix run .#test-archiveless-generated-change)
 - The selected agent runtime rides its own tier `wrix-agent-<agent>-<name>`, chained atop `wrix-stable-profile-<name>`; an agent-version change leaves every tier-0 and tier-1 blob byte-identical
   [system](nix run .#test-agent-tier-isolated)
 - The leaf image declares the selected agent variant in `/etc/wrix/image-agent`, which the entrypoint uses to reject ProfileConfig/image mismatches before agent exec

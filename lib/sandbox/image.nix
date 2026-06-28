@@ -354,44 +354,11 @@ let
 
   sourceKind = if asTarball then "docker-archive" else "nix-descriptor";
 
-  ociLayout =
-    pkgs.runCommandLocal "${imageName}-oci"
-      {
-        nativeBuildInputs = [
-          pkgs.jq
-          pkgs.skopeo
-        ];
-      }
-      ''
-        set -euo pipefail
-        export HOME=$TMPDIR
-
-        mkdir -p "$out"
-        image_tar="$TMPDIR/image.tar"
-        "${rawImage}" > "$image_tar"
-        skopeo --insecure-policy copy --quiet \
-          "docker-archive:$image_tar" "oci:$out:latest"
-        mkdir -p "$out/wrix"
-        manifest_json="$out/wrix/manifest.json"
-        skopeo inspect --raw "oci:$out:latest" > "$manifest_json"
-        config_digest=$(jq -er '.config.digest | select(test("^sha256:[0-9a-f]{64}$"))' "$manifest_json")
-        printf '%s\n' "$config_digest" > "$out/wrix/config-digest"
-        config_blob="$out/blobs/sha256/''${config_digest#sha256:}"
-        jq -n \
-          --slurpfile manifest "$manifest_json" \
-          --slurpfile config "$config_blob" \
-          '($manifest[0].layers // []) as $layers
-           | ($config[0].rootfs.diff_ids // []) as $diffIds
-           | {
-               media_type: ($manifest[0].mediaType // ""),
-               config: $manifest[0].config,
-               layers: [
-                 range(0; ($layers | length)) as $i
-                 | $layers[$i] + { diff_id: ($diffIds[$i] // "") }
-               ]
-             }' \
-          > "$out/wrix/descriptor-manifest.json"
-      '';
+  mkOciLayout = import ./oci-layout.nix { inherit pkgs; };
+  ociLayout = mkOciLayout {
+    image = rawImage;
+    name = "${imageName}-oci";
+  };
 
   descriptorMetadata = {
     schema = 1;

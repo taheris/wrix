@@ -58,6 +58,7 @@ CI_APPS=(
   test-stable-profile-membership
   test-pinned-toolchain-stable-tier
   test-downstream-change-leaf-only
+  test-archiveless-generated-change
   test-agent-tier-isolated
   test-agent-exclusive
   test-iteration-cost-bounded

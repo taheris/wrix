@@ -67,7 +67,11 @@ wrix_load_test_image "$IMAGE_STREAM" "wrix-base-claude" "$IMAGE_REF"
 run_agent() {
   local selected_agent="$1"
   local image_agent_override="${2:-}"
-  local env_args=(-e "WRIX_AGENT=$selected_agent")
+  local env_args=(
+    -e "WRIX_AGENT=$selected_agent"
+    -e "WRIX_FIREWALL_BACKEND=nft"
+    -e "PATH=/workspace/bin:/bin:/usr/bin"
+  )
   local volume_args=(-v "$WORKSPACE:/workspace:rw")
   if [[ -n "$image_agent_override" ]]; then
     local image_agent_file="$WORKSPACE/image-agent-$image_agent_override"
@@ -129,9 +133,42 @@ mkdir -p "$WORKSPACE/bin"
 SENTINEL="WRIX_DIRECT_RAN_OK"
 cat > "$WORKSPACE/bin/loom-direct-runner" <<EOF
 #!/bin/bash
+set -euo pipefail
 echo "$SENTINEL"
 EOF
-chmod +x "$WORKSPACE/bin/loom-direct-runner"
+cat > "$WORKSPACE/bin/nft" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+case "$*" in
+  "list chain inet wrix input")
+    echo 'chain input { type filter hook input priority 0; policy drop; }'
+    ;;
+  "list chain inet wrix output")
+    echo 'chain output { type filter hook output priority 0; policy drop; ip daddr 10.0.0.0/8 reject; }'
+    ;;
+  *)
+    if [[ "${1:-}" == "-f" ]]; then
+      cat >/dev/null
+    fi
+    ;;
+esac
+EOF
+cat > "$WORKSPACE/bin/capsh" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+if [[ "${1:-}" == "--drop=cap_net_admin" && "${2:-}" == "--" && "${3:-}" == "-c" ]]; then
+  script="$4"
+  shift 4
+  if [[ "$script" == *'exec "$@"'* ]]; then
+    shift
+    export PATH="$1"
+    shift
+    exec "$@"
+  fi
+fi
+exit 1
+EOF
+chmod +x "$WORKSPACE/bin/loom-direct-runner" "$WORKSPACE/bin/nft" "$WORKSPACE/bin/capsh"
 
 set +e
 # Mount matching image-agent metadata here to reuse the lightweight claude test
