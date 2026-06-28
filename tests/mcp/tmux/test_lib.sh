@@ -14,7 +14,8 @@ set -euo pipefail
 
 # Find repo root
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export REPO_ROOT="${SCRIPT_DIR}/../.."
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+export REPO_ROOT
 
 # Colors for output
 export RED='\033[0;31m'
@@ -96,13 +97,25 @@ find_mcp_binary() {
         return 0
     fi
 
-    local cargo_bin="${REPO_ROOT}/lib/mcp/tmux/tmux-mcp/target/debug/tmux-mcp"
+    local cargo_bin="${REPO_ROOT}/target/debug/tmux-mcp"
     if [[ -x "$cargo_bin" ]]; then
         echo "$cargo_bin"
         return 0
     fi
 
-    local release_bin="${REPO_ROOT}/lib/mcp/tmux/tmux-mcp/target/release/tmux-mcp"
+    cargo_bin="${REPO_ROOT}/lib/mcp/tmux/tmux-mcp/target/debug/tmux-mcp"
+    if [[ -x "$cargo_bin" ]]; then
+        echo "$cargo_bin"
+        return 0
+    fi
+
+    local release_bin="${REPO_ROOT}/target/release/tmux-mcp"
+    if [[ -x "$release_bin" ]]; then
+        echo "$release_bin"
+        return 0
+    fi
+
+    release_bin="${REPO_ROOT}/lib/mcp/tmux/tmux-mcp/target/release/tmux-mcp"
     if [[ -x "$release_bin" ]]; then
         echo "$release_bin"
         return 0
@@ -257,10 +270,16 @@ mcp_send_keys() {
 
 mcp_capture_pane() {
     local pane_id="$1"
-    local lines="${2:-100}"
     local id
+    local args
     id=$(next_request_id)
-    mcp_request "{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"tools/call\",\"params\":{\"name\":\"tmux_capture_pane\",\"arguments\":{\"pane_id\":\"$pane_id\",\"lines\":$lines}}}"
+    args="{\"pane_id\":\"$pane_id\""
+    if [[ $# -ge 2 ]]; then
+        local lines="$2"
+        args="$args,\"lines\":$lines"
+    fi
+    args="$args}"
+    mcp_request "{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"tools/call\",\"params\":{\"name\":\"tmux_capture_pane\",\"arguments\":$args}}"
 }
 
 mcp_kill_pane() {

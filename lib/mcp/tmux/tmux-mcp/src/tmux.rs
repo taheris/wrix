@@ -15,6 +15,8 @@ pub enum TmuxError {
     SessionNotFound(String),
     /// Window/pane not found
     WindowNotFound(String),
+    /// Tmux returned malformed window information
+    InvalidWindowInfo { line: String, reason: String },
     /// IO error during command execution
     IoError(io::Error),
 }
@@ -34,6 +36,9 @@ impl std::fmt::Display for TmuxError {
                     "Tmux window '{}' not found. Use tmux_list_panes to see active panes.",
                     name
                 )
+            }
+            TmuxError::InvalidWindowInfo { line, reason } => {
+                write!(f, "Invalid tmux window info '{}': {}", line, reason)
             }
             TmuxError::IoError(e) => write!(f, "IO error: {}", e),
         }
@@ -81,7 +86,7 @@ pub struct TmuxSession<E: CommandExecutor = RealExecutor> {
 }
 
 impl TmuxSession<RealExecutor> {
-    /// Create a new TmuxSession with default executor
+    /// Create a new `TmuxSession` with default executor
     pub fn new() -> Self {
         Self::with_executor(RealExecutor)
     }
@@ -94,7 +99,7 @@ impl Default for TmuxSession<RealExecutor> {
 }
 
 impl<E: CommandExecutor> TmuxSession<E> {
-    /// Create a new TmuxSession with a custom executor (for testing)
+    /// Create a new `TmuxSession` with a custom executor
     pub fn with_executor(executor: E) -> Self {
         let pid = std::process::id();
         Self {
@@ -107,12 +112,14 @@ impl<E: CommandExecutor> TmuxSession<E> {
     }
 
     /// Get the session name
+    #[cfg(test)]
     pub fn session_name(&self) -> &str {
         &self.session_name
     }
 
     /// Check if the session has been created
-    pub fn is_created(&self) -> bool {
+    #[cfg(test)]
+    pub const fn is_created(&self) -> bool {
         self.session_created
     }
 
@@ -134,16 +141,60 @@ impl<E: CommandExecutor> TmuxSession<E> {
                 || stderr.contains("no such window")
             {
                 // Extract window name from args if possible
+                let target_prefix = format!("{}:", self.session_name);
                 let window_name = args
                     .iter()
-                    .find(|a| a.starts_with(&format!("{}:", self.session_name)))
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| "unknown".to_string());
+                    .find(|a| a.starts_with(&target_prefix))
+                    .map_or_else(|| "unknown".to_string(), std::string::ToString::to_string);
                 Err(TmuxError::WindowNotFound(window_name))
             } else {
                 Err(TmuxError::CommandFailed { command, stderr })
             }
         }
+    }
+
+    fn set_window_remain_on_exit(&self, target: &str) -> TmuxResult<()> {
+        match self.run_tmux(&["set-option", "-t", target, "remain-on-exit", "on"]) {
+            Ok(_) | Err(TmuxError::WindowNotFound(_)) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn parse_window_info_line(line: &str) -> TmuxResult<WindowInfo> {
+        let parts: Vec<&str> = line.split('|').collect();
+        if parts.len() < 3 {
+            return Err(TmuxError::InvalidWindowInfo {
+                line: line.to_string(),
+                reason: "expected window_name|pane_pid|pane_dead".to_string(),
+            });
+        }
+
+        let pid = parts[1]
+            .parse::<u32>()
+            .map_err(|error| TmuxError::InvalidWindowInfo {
+                line: line.to_string(),
+                reason: format!("invalid pane pid: {error}"),
+            })?;
+
+        Ok(WindowInfo {
+            name: parts[0].to_string(),
+            pid: Some(pid),
+            is_dead: parts[2] == "1",
+        })
+    }
+
+    fn keep_recent_lines(output: &str, max_lines: i32) -> String {
+        let max_lines = usize::try_from(max_lines.max(1)).map_or(1, std::convert::identity);
+        let mut lines: Vec<&str> = output.lines().collect();
+        while lines.last().is_some_and(|line| line.is_empty()) {
+            lines.pop();
+        }
+        let start = lines.len().saturating_sub(max_lines);
+        let mut trimmed = lines[start..].join("\n");
+        if output.ends_with('\n') && !trimmed.is_empty() {
+            trimmed.push('\n');
+        }
+        trimmed
     }
 
     /// Create the tmux session if it doesn't exist
@@ -195,10 +246,7 @@ impl<E: CommandExecutor> TmuxSession<E> {
         let target = format!("{}:{}", self.session_name, name);
         self.run_tmux(&["new-window", "-t", &self.session_name, "-n", name, command])?;
 
-        // Best-effort per-window remain-on-exit for robustness across tmux versions.
-        // Session-level remain-on-exit (set in ensure_session) handles fast-exit
-        // commands where the window dies before this runs.
-        let _ = self.run_tmux(&["set-option", "-t", &target, "remain-on-exit", "on"]);
+        self.set_window_remain_on_exit(&target)?;
 
         Ok(name.to_string())
     }
@@ -213,13 +261,26 @@ impl<E: CommandExecutor> TmuxSession<E> {
     /// Capture output from a pane
     ///
     /// Returns the captured text. The `lines` parameter controls how many
-    /// lines of history to capture (negative start value).
+    /// recent lines are returned.
     pub fn capture_pane(&self, pane_id: &str, lines: i32) -> TmuxResult<String> {
         let target = format!("{}:{}", self.session_name, pane_id);
-        // -p: print to stdout, -S: start line (negative = history)
-        let start = format!("-{}", lines);
-        let output = self.run_tmux(&["capture-pane", "-t", &target, "-p", "-S", &start])?;
-        Ok(output)
+        let line_limit = lines.clamp(1, 1000);
+        let info = self.get_window_info(pane_id)?;
+        let output = if info.is_dead {
+            self.run_tmux(&[
+                "capture-pane",
+                "-t",
+                &target,
+                "-p",
+                "-S",
+                "-1000",
+                "-E",
+                "-1",
+            ])?
+        } else {
+            self.run_tmux(&["capture-pane", "-t", &target, "-p", "-S", "-1000"])?
+        };
+        Ok(Self::keep_recent_lines(&output, line_limit))
     }
 
     /// Kill a pane/window
@@ -231,7 +292,7 @@ impl<E: CommandExecutor> TmuxSession<E> {
 
     /// List all windows in the session
     ///
-    /// Returns a list of (window_name, pane_pid, pane_dead) tuples
+    /// Returns parsed `window_name`, `pane_pid`, and `pane_dead` fields
     pub fn list_windows(&self) -> TmuxResult<Vec<WindowInfo>> {
         if !self.session_created {
             return Ok(Vec::new());
@@ -241,46 +302,24 @@ impl<E: CommandExecutor> TmuxSession<E> {
         let format = "#{window_name}|#{pane_pid}|#{pane_dead}";
         let output = self.run_tmux(&["list-windows", "-t", &self.session_name, "-F", format])?;
 
-        let windows = output
+        output
             .lines()
             .filter(|line| !line.is_empty())
-            .filter_map(|line| {
-                let parts: Vec<&str> = line.split('|').collect();
-                if parts.len() >= 3 {
-                    let name = parts[0].to_string();
-                    let pid = parts[1].parse::<u32>().ok();
-                    let is_dead = parts[2] == "1";
-                    Some(WindowInfo { name, pid, is_dead })
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        Ok(windows)
+            .map(Self::parse_window_info_line)
+            .collect()
     }
 
     /// Get info about a specific window
     pub fn get_window_info(&self, pane_id: &str) -> TmuxResult<WindowInfo> {
         let target = format!("{}:{}", self.session_name, pane_id);
         let format = "#{window_name}|#{pane_pid}|#{pane_dead}";
-        let output = self.run_tmux(&["list-windows", "-t", &target, "-F", format])?;
+        let output = self.run_tmux(&["display-message", "-p", "-t", &target, format])?;
 
-        output
+        let line = output
             .lines()
             .next()
-            .and_then(|line| {
-                let parts: Vec<&str> = line.split('|').collect();
-                if parts.len() >= 3 {
-                    let name = parts[0].to_string();
-                    let pid = parts[1].parse::<u32>().ok();
-                    let is_dead = parts[2] == "1";
-                    Some(WindowInfo { name, pid, is_dead })
-                } else {
-                    None
-                }
-            })
-            .ok_or_else(|| TmuxError::WindowNotFound(pane_id.to_string()))
+            .ok_or_else(|| TmuxError::WindowNotFound(pane_id.to_string()))?;
+        Self::parse_window_info_line(line)
     }
 
     /// Kill the entire session (cleanup)
@@ -289,24 +328,20 @@ impl<E: CommandExecutor> TmuxSession<E> {
             return Ok(());
         }
 
-        // Ignore errors - session might already be gone
-        let _ = self.run_tmux(&["kill-session", "-t", &self.session_name]);
-        self.session_created = false;
-        Ok(())
-    }
-}
-
-impl<E: CommandExecutor> Drop for TmuxSession<E> {
-    fn drop(&mut self) {
-        // Best effort cleanup - ignore errors
-        let _ = self.kill_session();
+        match self.run_tmux(&["kill-session", "-t", &self.session_name]) {
+            Ok(_) | Err(TmuxError::SessionNotFound(_)) => {
+                self.session_created = false;
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
     }
 }
 
 /// Information about a tmux window
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowInfo {
-    /// Window name (used as pane_id)
+    /// Window name, used as `pane_id`
     pub name: String,
     /// Process ID running in the pane (if available)
     pub pid: Option<u32>,
@@ -315,8 +350,9 @@ pub struct WindowInfo {
 }
 
 impl WindowInfo {
-    /// Get the status as a string ("running" or "exited")
-    pub fn status(&self) -> &'static str {
+    /// Get the status as a string (`running` or `exited`)
+    #[cfg(test)]
+    pub const fn status(&self) -> &'static str {
         if self.is_dead { "exited" } else { "running" }
     }
 }
@@ -324,47 +360,6 @@ impl WindowInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
-    use std::rc::Rc;
-
-    /// Mock executor that records commands and returns predefined outputs
-    struct MockExecutor {
-        calls: Rc<RefCell<Vec<Vec<String>>>>,
-        responses: Rc<RefCell<Vec<io::Result<Output>>>>,
-    }
-
-    impl MockExecutor {
-        fn new() -> Self {
-            Self {
-                calls: Rc::new(RefCell::new(Vec::new())),
-                responses: Rc::new(RefCell::new(Vec::new())),
-            }
-        }
-
-        fn with_responses(responses: Vec<io::Result<Output>>) -> Self {
-            Self {
-                calls: Rc::new(RefCell::new(Vec::new())),
-                responses: Rc::new(RefCell::new(responses)),
-            }
-        }
-
-        fn get_calls(&self) -> Vec<Vec<String>> {
-            self.calls.borrow().clone()
-        }
-
-        fn success_output(stdout: &str) -> Output {
-            Output {
-                status: std::process::ExitStatus::default(),
-                stdout: stdout.as_bytes().to_vec(),
-                stderr: Vec::new(),
-            }
-        }
-    }
-
-    // Note: CommandExecutor requires Send + Sync, but RefCell is not Sync.
-    // For single-threaded tests, we use a simpler approach.
-    // In a real scenario, we'd use parking_lot::Mutex or similar.
-    // For these unit tests, we'll use a different mock strategy.
 
     /// Simpler mock that doesn't require interior mutability
     #[derive(Default)]
@@ -376,13 +371,8 @@ mod tests {
         fn execute(&self, args: &[&str]) -> io::Result<Output> {
             // Return success for most commands
             let stdout = match args.first() {
-                Some(&"new-session") => "",
-                Some(&"set-option") => "",
-                Some(&"new-window") => "",
-                Some(&"send-keys") => "",
-                Some(&"kill-window") => "",
-                Some(&"kill-session") => "",
                 Some(&"capture-pane") => "test output line 1\ntest output line 2\n",
+                Some(&"display-message") => "test|12345|0\n",
                 Some(&"list-windows") => "server|12345|0\nclient|12346|1\n",
                 _ => "",
             };
@@ -390,31 +380,6 @@ mod tests {
                 status: std::process::ExitStatus::default(),
                 stdout: stdout.as_bytes().to_vec(),
                 stderr: Vec::new(),
-            })
-        }
-    }
-
-    /// Mock executor that fails commands
-    struct FailingMockExecutor {
-        error_message: String,
-    }
-
-    impl FailingMockExecutor {
-        fn new(error_message: &str) -> Self {
-            Self {
-                error_message: error_message.to_string(),
-            }
-        }
-    }
-
-    impl CommandExecutor for FailingMockExecutor {
-        fn execute(&self, _args: &[&str]) -> io::Result<Output> {
-            // Simulate failed exit status - we can't create a failed ExitStatus directly,
-            // so we return success status but with stderr content that we check
-            Ok(Output {
-                status: std::process::ExitStatus::default(),
-                stdout: Vec::new(),
-                stderr: self.error_message.as_bytes().to_vec(),
             })
         }
     }
@@ -441,10 +406,10 @@ mod tests {
             self.calls
                 .lock()
                 .unwrap()
-                .push(args.iter().map(|s| s.to_string()).collect());
+                .push(args.iter().map(std::string::ToString::to_string).collect());
 
             let stdout = match args.first() {
-                Some(&"list-windows") => "test-pane|12345|0\n",
+                Some(&"display-message" | &"list-windows") => "test-pane|12345|0\n",
                 Some(&"capture-pane") => "captured output\n",
                 _ => "",
             };
@@ -545,7 +510,7 @@ mod tests {
         assert_eq!(capture_call[0], "capture-pane");
         assert!(capture_call.contains(&"-p".to_string()));
         assert!(capture_call.contains(&"-S".to_string()));
-        assert!(capture_call.contains(&"-100".to_string()));
+        assert!(capture_call.contains(&"-1000".to_string()));
     }
 
     #[test]

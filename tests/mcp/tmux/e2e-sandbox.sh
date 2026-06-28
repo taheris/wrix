@@ -24,6 +24,7 @@ uname_s=$(uname -s)
 [[ "$uname_s" = "Linux" ]] || skip "Linux-only verifier (uname=$uname_s)"
 command -v nix    >/dev/null 2>&1 || skip "nix not on PATH"
 command -v podman >/dev/null 2>&1 || skip "podman not on PATH"
+command -v skopeo >/dev/null 2>&1 || skip "skopeo not on PATH"
 # Nested rootless podman can't load OCI images (overlayfs deadlock); skip vs hang.
 [[ -e /run/.containerenv ]] && skip "nested container: podman load unavailable"
 
@@ -79,9 +80,12 @@ for cmd in tmux tmux-mcp; do
 done
 
 init_req='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"e2e-sandbox","version":"1.0"}}}'
-result=$(printf '%s\n' "$init_req" | timeout 10 podman run --rm -i \
+if ! result=$(printf '%s\n' "$init_req" | timeout 10 podman run --rm -i \
   --entrypoint /bin/bash "$IMAGE_REF" \
-  -c "tmux-mcp 2>/dev/null" || true)
+  -c "tmux-mcp" 2>&1); then
+  echo "FAIL: tmux-mcp initialize invocation failed: $result" >&2
+  exit 1
+fi
 
 [[ "$result" == *serverInfo* ]] || {
   echo "FAIL: tmux-mcp did not respond to initialize: $result" >&2

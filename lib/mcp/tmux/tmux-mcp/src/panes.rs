@@ -16,7 +16,7 @@ pub enum PaneStatus {
 
 impl PaneStatus {
     /// Convert status to string representation
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             PaneStatus::Running => "running",
             PaneStatus::Exited => "exited",
@@ -26,7 +26,7 @@ impl PaneStatus {
 
 impl std::fmt::Display for PaneStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
+        write!(f, "{}", (*self).as_str())
     }
 }
 
@@ -44,8 +44,8 @@ pub struct PaneState {
 }
 
 impl PaneState {
-    /// Create a new PaneState
-    pub fn new(id: String, name: String, command: String) -> Self {
+    /// Create a new `PaneState`
+    pub const fn new(id: String, name: String, command: String) -> Self {
         Self {
             id,
             name,
@@ -55,16 +55,18 @@ impl PaneState {
     }
 
     /// Update the pane status
-    pub fn set_status(&mut self, status: PaneStatus) {
+    pub const fn set_status(&mut self, status: PaneStatus) {
         self.status = status;
     }
 
     /// Check if the pane is running
+    #[cfg(test)]
     pub fn is_running(&self) -> bool {
         self.status == PaneStatus::Running
     }
 
     /// Check if the pane has exited
+    #[cfg(test)]
     pub fn is_exited(&self) -> bool {
         self.status == PaneStatus::Exited
     }
@@ -80,7 +82,7 @@ pub struct PaneManager {
 }
 
 impl PaneManager {
-    /// Create a new PaneManager
+    /// Create a new `PaneManager`
     pub fn new() -> Self {
         Self {
             panes: HashMap::new(),
@@ -109,11 +111,13 @@ impl PaneManager {
     }
 
     /// Get a pane by its ID
+    #[cfg(test)]
     pub fn get(&self, pane_id: &str) -> Option<&PaneState> {
         self.panes.get(pane_id)
     }
 
     /// Get a mutable reference to a pane by its ID
+    #[cfg(test)]
     pub fn get_mut(&mut self, pane_id: &str) -> Option<&mut PaneState> {
         self.panes.get_mut(pane_id)
     }
@@ -130,12 +134,10 @@ impl PaneManager {
 
     /// Update a pane's status
     pub fn update_status(&mut self, pane_id: &str, status: PaneStatus) -> bool {
-        if let Some(pane) = self.panes.get_mut(pane_id) {
+        self.panes.get_mut(pane_id).is_some_and(|pane| {
             pane.set_status(status);
             true
-        } else {
-            false
-        }
+        })
     }
 
     /// Get all panes as an iterator
@@ -144,16 +146,19 @@ impl PaneManager {
     }
 
     /// Get the number of tracked panes
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.panes.len()
     }
 
     /// Check if there are no tracked panes
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.panes.is_empty()
     }
 
     /// Get all pane IDs
+    #[cfg(test)]
     pub fn pane_ids(&self) -> Vec<String> {
         self.panes.keys().cloned().collect()
     }
@@ -452,8 +457,7 @@ mod tests {
         manager.create_pane("cargo run", Some("server"));
         manager.create_pane("bash", Some("client"));
 
-        let panes: Vec<&PaneState> = manager.iter().collect();
-        assert_eq!(panes.len(), 2);
+        assert_eq!(manager.iter().count(), 2);
     }
 
     #[test]

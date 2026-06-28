@@ -354,7 +354,7 @@ pub struct McpHandler {
 }
 
 impl McpHandler {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self { initialized: false }
     }
 
@@ -374,23 +374,21 @@ impl McpHandler {
     }
 
     /// Handle initialized notification (no response needed)
-    pub fn handle_initialized(&mut self) {
+    pub const fn handle_initialized(&mut self) {
         // Mark as fully initialized, ready for tool calls
         self.initialized = true;
     }
 
     /// Handle tools/list request
-    pub fn handle_tools_list(&self) -> ToolsListResult {
+    pub fn handle_tools_list() -> ToolsListResult {
         ToolsListResult {
             tools: get_tool_definitions(),
         }
     }
 
     /// Check if a request is valid given current state
-    pub fn validate_request(&self, method: &McpMethod) -> Result<(), &'static str> {
+    pub const fn validate_request(&self, method: &McpMethod) -> Result<(), &'static str> {
         match method {
-            McpMethod::Initialize => Ok(()),
-            McpMethod::Initialized => Ok(()),
             McpMethod::ToolsList | McpMethod::ToolsCall(_) => {
                 if self.initialized {
                     Ok(())
@@ -398,7 +396,7 @@ impl McpHandler {
                     Err("Server not initialized. Send 'initialize' first.")
                 }
             }
-            McpMethod::Unknown(_) => Ok(()), // Let routing handle unknown methods
+            McpMethod::Initialize | McpMethod::Initialized | McpMethod::Unknown(_) => Ok(()),
         }
     }
 }
@@ -410,9 +408,24 @@ impl Default for McpHandler {
 }
 
 /// Parse a line of input as a JSON-RPC request
-pub fn parse_request(line: &str) -> Result<JsonRpcRequest, JsonRpcResponse> {
-    serde_json::from_str(line)
-        .map_err(|e| JsonRpcResponse::error(None, PARSE_ERROR, format!("Parse error: {}", e)))
+pub fn parse_request(line: &str) -> Result<JsonRpcRequest, Box<JsonRpcResponse>> {
+    let request: JsonRpcRequest = serde_json::from_str(line).map_err(|e| {
+        Box::new(JsonRpcResponse::error(
+            None,
+            PARSE_ERROR,
+            format!("Parse error: {e}"),
+        ))
+    })?;
+
+    if request.jsonrpc == "2.0" {
+        Ok(request)
+    } else {
+        Err(Box::new(JsonRpcResponse::error(
+            request.id,
+            INVALID_REQUEST,
+            "Invalid JSON-RPC version. Expected '2.0'.",
+        )))
+    }
 }
 
 /// Serialize a response to a JSON string (single line)
@@ -662,8 +675,7 @@ mod tests {
 
     #[test]
     fn test_handler_tools_list() {
-        let handler = McpHandler::new();
-        let result = handler.handle_tools_list();
+        let result = McpHandler::handle_tools_list();
 
         assert_eq!(result.tools.len(), 5);
     }
@@ -743,10 +755,8 @@ mod tests {
         match method {
             McpMethod::Initialize => {
                 let result = handler.handle_initialize();
-                let response = JsonRpcResponse::success(
-                    request.id.clone(),
-                    serde_json::to_value(result).unwrap(),
-                );
+                let response =
+                    JsonRpcResponse::success(request.id, serde_json::to_value(result).unwrap());
                 let response_json = serialize_response(&response);
 
                 assert!(response_json.contains("protocolVersion"));
@@ -761,10 +771,8 @@ mod tests {
         let request_json = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
 
         let request = parse_request(request_json).unwrap();
-        let handler = McpHandler::new();
-        let result = handler.handle_tools_list();
-        let response =
-            JsonRpcResponse::success(request.id.clone(), serde_json::to_value(result).unwrap());
+        let result = McpHandler::handle_tools_list();
+        let response = JsonRpcResponse::success(request.id, serde_json::to_value(result).unwrap());
         let response_json = serialize_response(&response);
 
         // Verify all 5 tools are in the response

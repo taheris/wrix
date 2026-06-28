@@ -89,8 +89,8 @@ PROFILE_CONFIG=$(grep -oE -- '--profile-config[[:space:]]+[^[:space:]]+' "${PACK
 }
 IMAGE_STREAM=$(jq -r '.image.source' "${PROFILE_CONFIG}")
 WRAPPER_IMAGE_REF=$(jq -r '.image.ref' "${PROFILE_CONFIG}")
-if [[ ! -x "${IMAGE_STREAM}" ]]; then
-    log_error "Built image stream not found at ${IMAGE_STREAM}"
+if [[ ! -e "${IMAGE_STREAM}" ]]; then
+    log_error "Built image source not found at ${IMAGE_STREAM}"
     exit 1
 fi
 
@@ -135,19 +135,25 @@ MCP_PRESENCE=$(podman run --rm \
 }
 log_info "tmux-mcp found in container"
 
-# Verify the MCP server responds to basic input (if it supports --help or version)
-log_info "Verifying MCP server can start..."
-MCP_START=$(timeout 5 podman run --rm \
+log_info "Verifying MCP server responds to initialize..."
+init_req='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}'
+if ! MCP_START=$(printf '%s\n' "${init_req}" | timeout 5 podman run --rm -i \
     --network=pasta \
     --userns=keep-id \
     --entrypoint /bin/bash \
     -v "${WORKSPACE}:/workspace:rw" \
     -w /workspace \
     "${IMAGE_REF}" \
-    -c "echo '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{}}}' | timeout 2 tmux-mcp 2>/dev/null || true; echo 'startup-test-complete'" 2>&1) || true
+    -c "tmux-mcp" 2>&1); then
+    log_error "tmux-mcp initialize invocation failed"
+    log_error "Output: ${MCP_START}"
+    exit 1
+fi
 
-if [[ "${MCP_START}" != *"startup-test-complete"* ]]; then
-    log_warn "MCP server may not be fully implemented yet"
+if [[ "${MCP_START}" != *"serverInfo"* ]]; then
+    log_error "tmux-mcp did not return initialize serverInfo"
+    log_error "Output: ${MCP_START}"
+    exit 1
 fi
 
 log_info "All checks passed!"

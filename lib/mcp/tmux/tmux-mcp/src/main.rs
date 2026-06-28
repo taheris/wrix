@@ -12,9 +12,10 @@ mod tmux;
 use audit::MaybeAuditLogger;
 use mcp::{
     INTERNAL_ERROR, INVALID_PARAMS, JsonRpcResponse, METHOD_NOT_FOUND, McpHandler, McpMethod,
-    ToolCallParams, ToolCallResult,
+    RequestId, ToolCallParams, ToolCallResult,
 };
 use panes::{PaneManager, PaneStatus};
+use serde::Serialize;
 use serde_json::Value;
 use std::io::{self, BufRead, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -65,23 +66,37 @@ fn handle_tool_call<E: CommandExecutor>(
     }
 }
 
-/// Handle tmux_create_pane tool call
+fn audit_failure(tool: &str, error: impl std::fmt::Display) -> ToolCallResult {
+    ToolCallResult::error(format!(
+        "{tool} completed, but audit logging failed: {error}"
+    ))
+}
+
+fn json_success<T: Serialize>(id: Option<RequestId>, result: T) -> JsonRpcResponse {
+    match serde_json::to_value(result) {
+        Ok(value) => JsonRpcResponse::success(id, value),
+        Err(error) => JsonRpcResponse::error(
+            id,
+            INTERNAL_ERROR,
+            format!("Failed to serialize response: {error}"),
+        ),
+    }
+}
+
+/// Handle `tmux_create_pane` tool call
 fn handle_create_pane<E: CommandExecutor>(
     state: &mut AppState<E>,
     args: &std::collections::HashMap<String, Value>,
 ) -> ToolCallResult {
     // Extract required 'command' parameter
-    let command = match args.get("command").and_then(|v| v.as_str()) {
-        Some(cmd) => cmd,
-        None => {
-            return ToolCallResult::error(
-                "Missing required parameter 'command'. Provide the command to run in the pane.",
-            );
-        }
+    let Some(command) = args.get("command").and_then(Value::as_str) else {
+        return ToolCallResult::error(
+            "Missing required parameter 'command'. Provide the command to run in the pane.",
+        );
     };
 
     // Extract optional 'name' parameter
-    let name = args.get("name").and_then(|v| v.as_str());
+    let name = args.get("name").and_then(Value::as_str);
 
     // Register pane with PaneManager (generates unique ID)
     let pane_id = state.pane_manager.create_pane(command, name);
@@ -89,8 +104,9 @@ fn handle_create_pane<E: CommandExecutor>(
     // Create the actual tmux pane using the generated ID
     match state.tmux_session.create_pane(command, &pane_id) {
         Ok(_) => {
-            // Log the operation
-            let _ = state.audit.log_create_pane(&pane_id, command, name);
+            if let Err(error) = state.audit.log_create_pane(&pane_id, command, name) {
+                return audit_failure("tmux_create_pane", error);
+            }
 
             let display_name = name.unwrap_or(&pane_id);
             ToolCallResult::success(format!(
@@ -106,29 +122,23 @@ fn handle_create_pane<E: CommandExecutor>(
     }
 }
 
-/// Handle tmux_send_keys tool call
+/// Handle `tmux_send_keys` tool call
 fn handle_send_keys<E: CommandExecutor>(
-    state: &mut AppState<E>,
+    state: &AppState<E>,
     args: &std::collections::HashMap<String, Value>,
 ) -> ToolCallResult {
     // Extract required 'pane_id' parameter
-    let pane_id = match args.get("pane_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => {
-            return ToolCallResult::error(
-                "Missing required parameter 'pane_id'. Use tmux_list_panes to see active panes.",
-            );
-        }
+    let Some(pane_id) = args.get("pane_id").and_then(Value::as_str) else {
+        return ToolCallResult::error(
+            "Missing required parameter 'pane_id'. Use tmux_list_panes to see active panes.",
+        );
     };
 
     // Extract required 'keys' parameter
-    let keys = match args.get("keys").and_then(|v| v.as_str()) {
-        Some(k) => k,
-        None => {
-            return ToolCallResult::error(
-                "Missing required parameter 'keys'. Provide the keystrokes to send.",
-            );
-        }
+    let Some(keys) = args.get("keys").and_then(Value::as_str) else {
+        return ToolCallResult::error(
+            "Missing required parameter 'keys'. Provide the keystrokes to send.",
+        );
     };
 
     // Verify pane exists in our tracking
@@ -142,8 +152,9 @@ fn handle_send_keys<E: CommandExecutor>(
     // Send keys to tmux
     match state.tmux_session.send_keys(pane_id, keys) {
         Ok(()) => {
-            // Log the operation
-            let _ = state.audit.log_send_keys(pane_id, keys);
+            if let Err(error) = state.audit.log_send_keys(pane_id, keys) {
+                return audit_failure("tmux_send_keys", error);
+            }
 
             ToolCallResult::success(format!("Sent keys to pane '{}'", pane_id))
         }
@@ -151,27 +162,23 @@ fn handle_send_keys<E: CommandExecutor>(
     }
 }
 
-/// Handle tmux_capture_pane tool call
+/// Handle `tmux_capture_pane` tool call
 fn handle_capture_pane<E: CommandExecutor>(
     state: &mut AppState<E>,
     args: &std::collections::HashMap<String, Value>,
 ) -> ToolCallResult {
     // Extract required 'pane_id' parameter
-    let pane_id = match args.get("pane_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => {
-            return ToolCallResult::error(
-                "Missing required parameter 'pane_id'. Use tmux_list_panes to see active panes.",
-            );
-        }
+    let Some(pane_id) = args.get("pane_id").and_then(Value::as_str) else {
+        return ToolCallResult::error(
+            "Missing required parameter 'pane_id'. Use tmux_list_panes to see active panes.",
+        );
     };
 
     // Extract optional 'lines' parameter (default 100, max 1000)
-    let lines = args
-        .get("lines")
-        .and_then(|v| v.as_i64())
-        .map(|n| n.clamp(1, 1000) as i32)
-        .unwrap_or(100);
+    let lines = args.get("lines").and_then(Value::as_i64).map_or(100, |n| {
+        let clamped = n.clamp(1, 1000);
+        i32::try_from(clamped).map_or(100, std::convert::identity)
+    });
 
     // Verify pane exists in our tracking
     if !state.pane_manager.contains(pane_id) {
@@ -186,20 +193,28 @@ fn handle_capture_pane<E: CommandExecutor>(
         Ok(output) => {
             let output_bytes = output.len();
 
-            // Log the operation
-            let _ = state.audit.log_capture_pane(pane_id, lines, output_bytes);
+            if let Err(error) = state.audit.log_capture_pane(pane_id, lines, output_bytes) {
+                return audit_failure("tmux_capture_pane", error);
+            }
 
-            // Optionally save full capture
-            let _ = state.audit.save_full_capture(pane_id, &output);
+            if let Err(error) = state.audit.save_full_capture(pane_id, &output) {
+                return audit_failure("tmux_capture_pane full capture", error);
+            }
 
-            // Update pane status based on tmux state
-            if let Ok(info) = state.tmux_session.get_window_info(pane_id) {
-                let new_status = if info.is_dead {
-                    PaneStatus::Exited
-                } else {
-                    PaneStatus::Running
-                };
-                state.pane_manager.update_status(pane_id, new_status);
+            match state.tmux_session.get_window_info(pane_id) {
+                Ok(info) => {
+                    let new_status = if info.is_dead {
+                        PaneStatus::Exited
+                    } else {
+                        PaneStatus::Running
+                    };
+                    state.pane_manager.update_status(pane_id, new_status);
+                }
+                Err(error) => {
+                    return ToolCallResult::error(format!(
+                        "Captured pane, but failed to refresh pane status: {error}"
+                    ));
+                }
             }
 
             ToolCallResult::success(output)
@@ -208,19 +223,16 @@ fn handle_capture_pane<E: CommandExecutor>(
     }
 }
 
-/// Handle tmux_kill_pane tool call
+/// Handle `tmux_kill_pane` tool call
 fn handle_kill_pane<E: CommandExecutor>(
     state: &mut AppState<E>,
     args: &std::collections::HashMap<String, Value>,
 ) -> ToolCallResult {
     // Extract required 'pane_id' parameter
-    let pane_id = match args.get("pane_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => {
-            return ToolCallResult::error(
-                "Missing required parameter 'pane_id'. Use tmux_list_panes to see active panes.",
-            );
-        }
+    let Some(pane_id) = args.get("pane_id").and_then(Value::as_str) else {
+        return ToolCallResult::error(
+            "Missing required parameter 'pane_id'. Use tmux_list_panes to see active panes.",
+        );
     };
 
     // Verify pane exists in our tracking
@@ -234,11 +246,11 @@ fn handle_kill_pane<E: CommandExecutor>(
     // Kill the tmux pane
     match state.tmux_session.kill_pane(pane_id) {
         Ok(()) => {
-            // Remove from tracking
             state.pane_manager.remove(pane_id);
 
-            // Log the operation
-            let _ = state.audit.log_kill_pane(pane_id);
+            if let Err(error) = state.audit.log_kill_pane(pane_id) {
+                return audit_failure("tmux_kill_pane", error);
+            }
 
             ToolCallResult::success(format!("Killed pane '{}'", pane_id))
         }
@@ -246,24 +258,29 @@ fn handle_kill_pane<E: CommandExecutor>(
     }
 }
 
-/// Handle tmux_list_panes tool call
+/// Handle `tmux_list_panes` tool call
 fn handle_list_panes<E: CommandExecutor>(state: &mut AppState<E>) -> ToolCallResult {
-    // Update pane statuses from tmux before listing
-    if let Ok(windows) = state.tmux_session.list_windows() {
-        for window in windows {
-            let status = if window.is_dead {
-                PaneStatus::Exited
-            } else {
-                PaneStatus::Running
-            };
-            // Update status for panes we're tracking (keyed by our generated IDs)
-            // Windows are named with the pane_id we generated
-            state.pane_manager.update_status(&window.name, status);
+    match state.tmux_session.list_windows() {
+        Ok(windows) => {
+            for window in windows {
+                let status = if window.is_dead {
+                    PaneStatus::Exited
+                } else {
+                    PaneStatus::Running
+                };
+                state.pane_manager.update_status(&window.name, status);
+            }
+        }
+        Err(error) => {
+            return ToolCallResult::error(format!(
+                "Failed to refresh pane status before listing panes: {error}"
+            ));
         }
     }
 
-    // Log the operation
-    let _ = state.audit.log_list_panes();
+    if let Err(error) = state.audit.log_list_panes() {
+        return audit_failure("tmux_list_panes", error);
+    }
 
     // Build the list of panes
     let panes: Vec<serde_json::Value> = state
@@ -282,8 +299,10 @@ fn handle_list_panes<E: CommandExecutor>(state: &mut AppState<E>) -> ToolCallRes
     if panes.is_empty() {
         ToolCallResult::success("No active panes. Use tmux_create_pane to create one.")
     } else {
-        let json = serde_json::to_string_pretty(&panes).unwrap_or_else(|_| "[]".to_string());
-        ToolCallResult::success(json)
+        match serde_json::to_string_pretty(&panes) {
+            Ok(json) => ToolCallResult::success(json),
+            Err(error) => ToolCallResult::error(format!("Failed to serialize pane list: {error}")),
+        }
     }
 }
 
@@ -295,36 +314,27 @@ fn process_request<E: CommandExecutor>(
     // Parse the request
     let request = match mcp::parse_request(line) {
         Ok(req) => req,
-        Err(err_response) => return Some(err_response),
+        Err(err_response) => return Some(*err_response),
     };
 
     // Parse the method
     let method = match McpMethod::from_request(&request) {
         Ok(m) => m,
         Err(e) => {
-            return Some(JsonRpcResponse::error(
-                request.id.clone(),
-                INVALID_PARAMS,
-                e,
-            ));
+            return Some(JsonRpcResponse::error(request.id, INVALID_PARAMS, e));
         }
     };
 
     // Validate request against current state
     if let Err(e) = state.mcp_handler.validate_request(&method) {
-        return Some(JsonRpcResponse::error(
-            request.id.clone(),
-            INTERNAL_ERROR,
-            e,
-        ));
+        return Some(JsonRpcResponse::error(request.id, INTERNAL_ERROR, e));
     }
 
     // Handle the method
     match method {
         McpMethod::Initialize => {
             let result = state.mcp_handler.handle_initialize();
-            let value = serde_json::to_value(result).unwrap();
-            Some(JsonRpcResponse::success(request.id, value))
+            Some(json_success(request.id, result))
         }
         McpMethod::Initialized => {
             state.mcp_handler.handle_initialized();
@@ -332,14 +342,12 @@ fn process_request<E: CommandExecutor>(
             None
         }
         McpMethod::ToolsList => {
-            let result = state.mcp_handler.handle_tools_list();
-            let value = serde_json::to_value(result).unwrap();
-            Some(JsonRpcResponse::success(request.id, value))
+            let result = McpHandler::handle_tools_list();
+            Some(json_success(request.id, result))
         }
         McpMethod::ToolsCall(params) => {
             let result = handle_tool_call(state, &params);
-            let value = serde_json::to_value(result).unwrap();
-            Some(JsonRpcResponse::success(request.id, value))
+            Some(json_success(request.id, result))
         }
         McpMethod::Unknown(name) => Some(JsonRpcResponse::error(
             request.id,
@@ -350,66 +358,65 @@ fn process_request<E: CommandExecutor>(
 }
 
 /// Set up signal handlers for graceful shutdown
-fn setup_signal_handlers() {
+fn setup_signal_handlers() -> io::Result<()> {
     #[cfg(unix)]
     {
-        // Set up SIGTERM and SIGINT handlers for graceful shutdown
-        unsafe {
-            libc::signal(libc::SIGTERM, signal_handler as libc::sighandler_t);
-            libc::signal(libc::SIGINT, signal_handler as libc::sighandler_t);
-        }
+        use signal_hook::consts::signal::{SIGINT, SIGTERM};
+
+        let mut signals = signal_hook::iterator::Signals::new([SIGTERM, SIGINT])?;
+        std::thread::Builder::new()
+            .name("tmux-mcp-signal-handler".to_string())
+            .spawn(move || {
+                if signals.forever().next().is_some() {
+                    SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
+                }
+            })
+            .map(|_| ())
+    }
+
+    #[cfg(not(unix))]
+    {
+        Ok(())
     }
 }
 
-#[cfg(unix)]
-extern "C" fn signal_handler(_: libc::c_int) {
-    SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
-}
-
-/// Main server loop - reads JSON-RPC requests from stdin, writes responses to stdout
-fn run_server() -> io::Result<()> {
-    // Set up signal handlers for graceful shutdown
-    setup_signal_handlers();
-
-    let mut state = AppState::new();
-
+fn run_server_loop<E: CommandExecutor>(state: &mut AppState<E>) -> io::Result<()> {
     let stdin = io::stdin();
     let mut stdout = io::stdout();
 
-    // Read lines from stdin
     for line in stdin.lock().lines() {
-        // Check for shutdown request
         if SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
             break;
         }
 
         let line = line?;
-
-        // Skip empty lines
         if line.trim().is_empty() {
             continue;
         }
 
-        // Process the request
-        if let Some(response) = process_request(&mut state, &line) {
+        if let Some(response) = process_request(state, &line) {
             let response_json = mcp::serialize_response(&response);
             writeln!(stdout, "{}", response_json)?;
             stdout.flush()?;
         }
     }
 
-    // Explicit cleanup - Drop will be called when state goes out of scope
-    // This ensures tmux session is cleaned up even on signal
-    drop(state);
-
     Ok(())
 }
 
-fn main() {
-    if let Err(e) = run_server() {
-        eprintln!("Server error: {}", e);
-        std::process::exit(1);
-    }
+/// Main server loop - reads JSON-RPC requests from stdin, writes responses to stdout
+fn run_server() -> io::Result<()> {
+    setup_signal_handlers()?;
+
+    let mut state = AppState::new();
+    let loop_result = run_server_loop(&mut state);
+    let cleanup_result = state.tmux_session.kill_session().map_err(io::Error::other);
+
+    loop_result.and(cleanup_result)
+}
+
+fn main() -> io::Result<()> {
+    run_server()
 }
 
 #[cfg(test)]
@@ -423,7 +430,7 @@ mod tests {
     impl CommandExecutor for MockExecutor {
         fn execute(&self, args: &[&str]) -> std::io::Result<std::process::Output> {
             let stdout = match args.first() {
-                Some(&"list-windows") => "debug-1|12345|0\n",
+                Some(&"display-message" | &"list-windows") => "debug-1|12345|0\n",
                 Some(&"capture-pane") => "line 1\nline 2\nline 3\n",
                 _ => "",
             };
@@ -580,7 +587,7 @@ mod tests {
         args.insert("pane_id".to_string(), Value::String("debug-1".to_string()));
         args.insert("keys".to_string(), Value::String("echo hello".to_string()));
 
-        let result = handle_send_keys(&mut state, &args);
+        let result = handle_send_keys(&state, &args);
 
         assert!(!result.is_error);
         assert!(result.content[0].text.contains("Sent keys"));
@@ -588,7 +595,7 @@ mod tests {
 
     #[test]
     fn test_handle_send_keys_pane_not_found() {
-        let mut state = test_state();
+        let state = test_state();
 
         let mut args = HashMap::new();
         args.insert(
@@ -597,7 +604,7 @@ mod tests {
         );
         args.insert("keys".to_string(), Value::String("echo hello".to_string()));
 
-        let result = handle_send_keys(&mut state, &args);
+        let result = handle_send_keys(&state, &args);
 
         assert!(result.is_error);
         assert!(result.content[0].text.contains("not found"));
@@ -605,12 +612,12 @@ mod tests {
 
     #[test]
     fn test_handle_send_keys_missing_pane_id() {
-        let mut state = test_state();
+        let state = test_state();
 
         let mut args = HashMap::new();
         args.insert("keys".to_string(), Value::String("echo hello".to_string()));
 
-        let result = handle_send_keys(&mut state, &args);
+        let result = handle_send_keys(&state, &args);
 
         assert!(result.is_error);
         assert!(

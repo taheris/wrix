@@ -13,7 +13,7 @@ use serde::Serialize;
 use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Environment variable for audit log path
@@ -27,44 +27,44 @@ pub const AUDIT_FULL_ENV: &str = "TMUX_DEBUG_AUDIT_FULL";
 pub struct AuditEntry {
     /// ISO 8601 timestamp
     pub ts: String,
-    /// Tool name (without tmux_ prefix)
+    /// Tool name without `tmux_` prefix
     pub tool: String,
     /// Pane ID (if applicable)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pane_id: Option<String>,
-    /// Command that was executed (for create_pane)
+    /// Command that was executed for `create_pane`
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
-    /// Pane name (for create_pane)
+    /// Pane name for `create_pane`
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Keys sent (for send_keys)
+    /// Keys sent for `send_keys`
     #[serde(skip_serializing_if = "Option::is_none")]
     pub keys: Option<String>,
-    /// Number of lines captured (for capture_pane)
+    /// Number of lines captured for `capture_pane`
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lines: Option<i32>,
-    /// Output byte count (for capture_pane)
+    /// Output byte count for `capture_pane`
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_bytes: Option<usize>,
 }
 
 impl AuditEntry {
-    /// Create an entry for create_pane
+    /// Create an entry for `create_pane`
     pub fn create_pane(pane_id: &str, command: &str, name: Option<&str>) -> Self {
         Self {
             ts: Self::timestamp(),
             tool: "create_pane".to_string(),
             pane_id: Some(pane_id.to_string()),
             command: Some(command.to_string()),
-            name: name.map(|s| s.to_string()),
+            name: name.map(std::string::ToString::to_string),
             keys: None,
             lines: None,
             output_bytes: None,
         }
     }
 
-    /// Create an entry for send_keys
+    /// Create an entry for `send_keys`
     pub fn send_keys(pane_id: &str, keys: &str) -> Self {
         Self {
             ts: Self::timestamp(),
@@ -78,7 +78,7 @@ impl AuditEntry {
         }
     }
 
-    /// Create an entry for capture_pane
+    /// Create an entry for `capture_pane`
     pub fn capture_pane(pane_id: &str, lines: i32, output_bytes: usize) -> Self {
         Self {
             ts: Self::timestamp(),
@@ -92,7 +92,7 @@ impl AuditEntry {
         }
     }
 
-    /// Create an entry for kill_pane
+    /// Create an entry for `kill_pane`
     pub fn kill_pane(pane_id: &str) -> Self {
         Self {
             ts: Self::timestamp(),
@@ -106,7 +106,7 @@ impl AuditEntry {
         }
     }
 
-    /// Create an entry for list_panes
+    /// Create an entry for `list_panes`
     pub fn list_panes() -> Self {
         Self {
             ts: Self::timestamp(),
@@ -124,13 +124,12 @@ impl AuditEntry {
     fn timestamp() -> String {
         use std::time::{SystemTime, UNIX_EPOCH};
 
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default();
+        let Ok(duration) = SystemTime::now().duration_since(UNIX_EPOCH) else {
+            return "1970-01-01T00:00:00Z".to_string();
+        };
 
         // Format as ISO 8601 with UTC timezone
-        let secs = now.as_secs();
-        let (year, month, day, hour, min, sec) = Self::timestamp_parts(secs);
+        let (year, month, day, hour, min, sec) = Self::timestamp_parts(duration.as_secs());
 
         format!(
             "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
@@ -141,18 +140,17 @@ impl AuditEntry {
     /// Convert Unix timestamp to date/time parts
     fn timestamp_parts(secs: u64) -> (i32, u32, u32, u32, u32, u32) {
         // Days since Unix epoch
-        let days = (secs / 86400) as i32;
-        let day_secs = (secs % 86400) as u32;
+        let day_secs = secs % 86_400;
 
         // Time within day
-        let hour = day_secs / 3600;
-        let min = (day_secs % 3600) / 60;
-        let sec = day_secs % 60;
+        let hour = u32::try_from(day_secs / 3_600).map_or(0, std::convert::identity);
+        let min = u32::try_from((day_secs % 3_600) / 60).map_or(0, std::convert::identity);
+        let sec = u32::try_from(day_secs % 60).map_or(0, std::convert::identity);
 
         // Calculate year, month, day using a simple algorithm
         // Start from 1970 and count forward
         let mut year = 1970;
-        let mut remaining_days = days;
+        let mut remaining_days = secs / 86_400;
 
         loop {
             let days_in_year = if Self::is_leap_year(year) { 366 } else { 365 };
@@ -160,18 +158,18 @@ impl AuditEntry {
                 break;
             }
             remaining_days -= days_in_year;
-            year += 1;
+            year = year.saturating_add(1);
         }
 
         // Find month and day
         let leap = Self::is_leap_year(year);
-        let days_in_months: [i32; 12] = if leap {
+        let days_in_months: [u64; 12] = if leap {
             [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
         } else {
             [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
         };
 
-        let mut month = 1;
+        let mut month = 1_u32;
         for days_in_month in days_in_months {
             if remaining_days < days_in_month {
                 break;
@@ -180,13 +178,13 @@ impl AuditEntry {
             month += 1;
         }
 
-        let day = remaining_days + 1; // Days are 1-indexed
+        let day = u32::try_from(remaining_days + 1).map_or(1, std::convert::identity);
 
-        (year, month as u32, day as u32, hour, min, sec)
+        (year, month, day, hour, min, sec)
     }
 
     /// Check if a year is a leap year
-    fn is_leap_year(year: i32) -> bool {
+    const fn is_leap_year(year: i32) -> bool {
         (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
     }
 
@@ -207,12 +205,12 @@ pub struct AuditLogger {
 }
 
 impl AuditLogger {
-    /// Create a new AuditLogger from environment variables
+    /// Create a new `AuditLogger` from environment variables
     ///
     /// Returns `None` if `TMUX_DEBUG_AUDIT` is not set.
     pub fn from_env() -> Option<Self> {
-        let log_path = env::var(AUDIT_LOG_ENV).ok()?;
-        let full_capture_dir = env::var(AUDIT_FULL_ENV).ok().map(PathBuf::from);
+        let log_path = env::var_os(AUDIT_LOG_ENV)?;
+        let full_capture_dir = env::var_os(AUDIT_FULL_ENV).map(PathBuf::from);
 
         Some(Self {
             log_path: PathBuf::from(log_path),
@@ -221,7 +219,8 @@ impl AuditLogger {
         })
     }
 
-    /// Create a new AuditLogger with explicit paths
+    /// Create a new `AuditLogger` with explicit paths
+    #[cfg(test)]
     pub fn new(log_path: impl Into<PathBuf>, full_capture_dir: Option<PathBuf>) -> Self {
         Self {
             log_path: log_path.into(),
@@ -230,23 +229,21 @@ impl AuditLogger {
         }
     }
 
-    /// Check if the logger is configured
-    pub fn is_enabled(&self) -> bool {
-        true // If created, it's enabled
-    }
-
     /// Check if full capture is enabled
-    pub fn has_full_capture(&self) -> bool {
+    #[cfg(test)]
+    pub const fn has_full_capture(&self) -> bool {
         self.full_capture_dir.is_some()
     }
 
     /// Get the log path
-    pub fn log_path(&self) -> &Path {
+    #[cfg(test)]
+    pub fn log_path(&self) -> &std::path::Path {
         &self.log_path
     }
 
     /// Get the full capture directory
-    pub fn full_capture_dir(&self) -> Option<&Path> {
+    #[cfg(test)]
+    pub fn full_capture_dir(&self) -> Option<&std::path::Path> {
         self.full_capture_dir.as_deref()
     }
 
@@ -259,10 +256,10 @@ impl AuditLogger {
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
         // Ensure parent directory exists
-        if let Some(parent) = self.log_path.parent() {
-            if !parent.exists() {
-                fs::create_dir_all(parent)?;
-            }
+        if let Some(parent) = self.log_path.parent()
+            && !parent.exists()
+        {
+            fs::create_dir_all(parent)?;
         }
 
         // Open file in append mode
@@ -279,9 +276,8 @@ impl AuditLogger {
     ///
     /// Returns the filename if saved, or `None` if full capture is not enabled.
     pub fn save_full_capture(&self, pane_id: &str, content: &str) -> io::Result<Option<String>> {
-        let capture_dir = match &self.full_capture_dir {
-            Some(dir) => dir,
-            None => return Ok(None),
+        let Some(capture_dir) = &self.full_capture_dir else {
+            return Ok(None);
         };
 
         // Ensure capture directory exists
@@ -312,30 +308,29 @@ impl MaybeAuditLogger {
     }
 
     /// Create with an explicit logger
-    pub fn new(logger: Option<AuditLogger>) -> Self {
+    #[cfg(test)]
+    pub const fn new(logger: Option<AuditLogger>) -> Self {
         Self(logger)
     }
 
     /// Create a disabled logger
-    pub fn disabled() -> Self {
+    #[cfg(test)]
+    pub const fn disabled() -> Self {
         Self(None)
     }
 
     /// Check if logging is enabled
-    pub fn is_enabled(&self) -> bool {
+    #[cfg(test)]
+    pub const fn is_enabled(&self) -> bool {
         self.0.is_some()
     }
 
     /// Log an audit entry (no-op if disabled)
     pub fn log(&self, entry: &AuditEntry) -> io::Result<()> {
-        if let Some(logger) = &self.0 {
-            logger.log(entry)
-        } else {
-            Ok(())
-        }
+        self.0.as_ref().map_or(Ok(()), |logger| logger.log(entry))
     }
 
-    /// Log create_pane (no-op if disabled)
+    /// Log `create_pane` (no-op if disabled)
     pub fn log_create_pane(
         &self,
         pane_id: &str,
@@ -345,12 +340,12 @@ impl MaybeAuditLogger {
         self.log(&AuditEntry::create_pane(pane_id, command, name))
     }
 
-    /// Log send_keys (no-op if disabled)
+    /// Log `send_keys` (no-op if disabled)
     pub fn log_send_keys(&self, pane_id: &str, keys: &str) -> io::Result<()> {
         self.log(&AuditEntry::send_keys(pane_id, keys))
     }
 
-    /// Log capture_pane (no-op if disabled)
+    /// Log `capture_pane` (no-op if disabled)
     pub fn log_capture_pane(
         &self,
         pane_id: &str,
@@ -360,23 +355,21 @@ impl MaybeAuditLogger {
         self.log(&AuditEntry::capture_pane(pane_id, lines, output_bytes))
     }
 
-    /// Log kill_pane (no-op if disabled)
+    /// Log `kill_pane` (no-op if disabled)
     pub fn log_kill_pane(&self, pane_id: &str) -> io::Result<()> {
         self.log(&AuditEntry::kill_pane(pane_id))
     }
 
-    /// Log list_panes (no-op if disabled)
+    /// Log `list_panes` (no-op if disabled)
     pub fn log_list_panes(&self) -> io::Result<()> {
         self.log(&AuditEntry::list_panes())
     }
 
     /// Save full capture if enabled
     pub fn save_full_capture(&self, pane_id: &str, content: &str) -> io::Result<Option<String>> {
-        if let Some(logger) = &self.0 {
+        self.0.as_ref().map_or(Ok(None), |logger| {
             logger.save_full_capture(pane_id, content)
-        } else {
-            Ok(None)
-        }
+        })
     }
 }
 
@@ -390,6 +383,7 @@ impl Default for MaybeAuditLogger {
 mod tests {
     use super::*;
     use std::fs;
+    use std::path::Path;
     use tempfile::TempDir;
 
     // --- AuditEntry Tests ---
@@ -529,7 +523,7 @@ mod tests {
         // 2026-01-30T10:15:32Z = 1769681732 seconds since epoch
         // Let's verify a simpler known date first: 2000-01-01T00:00:00Z
         // = 946684800 seconds
-        let (year, month, day, hour, min, sec) = AuditEntry::timestamp_parts(946684800);
+        let (year, month, day, hour, min, sec) = AuditEntry::timestamp_parts(946_684_800);
         assert_eq!((year, month, day, hour, min, sec), (2000, 1, 1, 0, 0, 0));
     }
 
@@ -542,7 +536,7 @@ mod tests {
         // Total from Jan 1 2000: 31 + 28 days + 12 hours = 59 days + 12 hours
         // = 5097600 seconds from 2000-01-01
         // From epoch: 946684800 + 5097600 = 951782400
-        let (year, month, day, hour, min, sec) = AuditEntry::timestamp_parts(951782400);
+        let (year, month, day, hour, min, sec) = AuditEntry::timestamp_parts(951_782_400);
         assert_eq!((year, month, day, hour, min, sec), (2000, 2, 29, 0, 0, 0));
     }
 
@@ -642,8 +636,8 @@ mod tests {
 
         // Each line should be valid JSON
         for line in content.lines() {
-            let parsed: serde_json::Value =
-                serde_json::from_str(line).expect(&format!("Line should be valid JSON: {}", line));
+            let parsed: serde_json::Value = serde_json::from_str(line)
+                .unwrap_or_else(|_| panic!("Line should be valid JSON: {line}"));
             assert!(parsed.is_object());
         }
     }
@@ -673,7 +667,11 @@ mod tests {
         assert!(filename.is_some());
         let filename = filename.unwrap();
         assert!(filename.starts_with("debug-1-capture-"));
-        assert!(filename.ends_with(".txt"));
+        assert!(
+            std::path::Path::new(&filename)
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("txt"))
+        );
 
         // Verify file was created with correct content
         let file_path = capture_dir.join(&filename);
@@ -688,7 +686,7 @@ mod tests {
         let log_path = temp_dir.path().join("audit.log");
         let capture_dir = temp_dir.path().join("captures");
 
-        let logger = AuditLogger::new(&log_path, Some(capture_dir.clone()));
+        let logger = AuditLogger::new(&log_path, Some(capture_dir));
 
         let f1 = logger
             .save_full_capture("debug-1", "content 1")

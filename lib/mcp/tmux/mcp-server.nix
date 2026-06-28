@@ -11,8 +11,9 @@
 { pkgs, rustProfile }:
 
 rustProfile.buildPackage {
-  src = ./tmux-mcp;
-  cargoLock = ./tmux-mcp/Cargo.lock;
+  src = ../../..;
+  cargoLock = ../../../Cargo.lock;
+  cargoExtraArgs = "-p tmux-mcp";
 
   # tmux must be on PATH at runtime; propagate so consumers pick it up.
   buildInputs = [ pkgs.tmux ];

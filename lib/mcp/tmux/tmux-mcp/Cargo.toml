@@ -1,17 +1,17 @@
 [package]
 name = "tmux-mcp"
-version = "0.1.0"
-edition = "2021"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
 description = "MCP server providing tmux pane management for AI-assisted debugging"
-license = "MIT"
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tokio = { version = "1", features = ["full"] }
-
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+signal-hook = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
