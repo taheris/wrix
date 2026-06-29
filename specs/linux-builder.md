@@ -62,9 +62,9 @@ The container boundary is the isolation primitive; Nix's internal sandbox is dis
 - sshd inside the container has `PasswordAuthentication no` and binds the listener to `127.0.0.1`
   [check](bash -c 'grep -Fxq "PasswordAuthentication no" lib/sandbox/builder/entrypoint.sh && grep -Fxq "ListenAddress 127.0.0.1" lib/sandbox/builder/entrypoint.sh')
 - Builder host and client SSH keys are generated under the host user's `~/.local/share/wrix/builder-keys/` directory with private keys mode `600`
-  [check](bash tests/builder/key-material.sh test_generates_per_user_ed25519_material)
+  [system](bash tests/builder/key-material.sh test_generates_per_user_ed25519_material)
 - Re-running builder key-material initialization preserves existing private keys
-  [check](bash tests/builder/key-material.sh test_preserves_existing_private_keys)
+  [system](bash tests/builder/key-material.sh test_preserves_existing_private_keys)
 
 ## Requirements
 

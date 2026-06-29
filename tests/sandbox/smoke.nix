@@ -71,6 +71,7 @@ let
   };
   sandbox = sandboxLib.mkSandbox { profile = sandboxLib.profiles.base; };
   wrix = sandbox.package;
+  wrixBuilder = import ../../lib/builder { inherit pkgs linuxPkgs; };
   # Underlying profile-baked launcher (no ProfileConfig wrapper). Smoke
   # tests that grep the script for krun / network / mount logic should
   # target this — the `package` wrapper only adds --profile-config.
@@ -214,12 +215,13 @@ in
           bash
           pkgs.coreutils
           pkgs.gnugrep
+          pkgs.gnutar
           pkgs.openssh
         ];
       }
       ''
         echo "Checking builder key structure..."
-        REPO_ROOT="${../..}" bash "${../../tests/builder/key-material.sh}"
+        WRIX_BUILDER_BIN="${wrixBuilder}/bin/wrix-builder" REPO_ROOT="${../..}" bash "${../../tests/builder/key-material.sh}"
         mkdir $out
       '';
 

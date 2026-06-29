@@ -4,11 +4,11 @@
 # for Nix on macOS. Uses Apple's container CLI (macOS 26+).
 #
 # Usage:
-#   wrix-builder start   - Start the builder container
-#   wrix-builder stop    - Stop and remove the container
-#   wrix-builder status  - Show builder status
-#   wrix-builder ssh     - Connect to builder via SSH
-#   wrix-builder config  - Print nix.conf snippet for remote builder
+#   wrix-builder start   - Start the builder container.
+#   wrix-builder stop    - Stop and remove the container.
+#   wrix-builder status  - Show builder status.
+#   wrix-builder ssh     - Connect to builder via SSH.
+#   wrix-builder config  - Print nix.conf snippet for remote builder.
 #
 { pkgs, linuxPkgs }:
 
@@ -64,14 +64,14 @@ let
         echo "Usage: wrix-builder <command>"
         echo ""
         echo "Commands:"
-        echo "  start        - Start the builder container"
-        echo "  stop         - Stop and remove the container"
-        echo "  status       - Show builder status and SSH connection info"
-        echo "  ssh          - Connect to builder via SSH (or run a command)"
-        echo "  config       - Print nix-darwin configuration for remote builder"
-        echo "  setup        - Run all setup steps (routes + ssh, requires sudo)"
-        echo "  setup-routes - Fix container network routes (requires sudo)"
-        echo "  setup-ssh    - Add host key to root's known_hosts (requires sudo)"
+        echo "  start        - Start the builder container."
+        echo "  stop         - Stop and remove the container."
+        echo "  status       - Show builder status and SSH connection info."
+        echo "  ssh          - Connect to builder via SSH or run a command."
+        echo "  config       - Print nix-darwin configuration for remote builder."
+        echo "  setup        - Configure routes and SSH using sudo."
+        echo "  setup-routes - Configure container network routes using sudo."
+        echo "  setup-ssh    - Add the host key to root's known_hosts using sudo."
         exit 1
       }
 
@@ -261,9 +261,9 @@ let
         echo "Builder started successfully!"
         echo ""
         echo "Next steps:"
-        echo "  wrix-builder setup   - Configure routes and SSH for nix-daemon (requires sudo)"
-        echo "  wrix-builder ssh     - Connect to builder via SSH"
-        echo "  wrix-builder config  - Print nix-darwin configuration"
+        echo "  wrix-builder setup   - Configure routes and SSH for nix-daemon using sudo."
+        echo "  wrix-builder ssh     - Connect to builder via SSH."
+        echo "  wrix-builder config  - Print nix-darwin configuration."
       }
 
       cmd_stop() {
