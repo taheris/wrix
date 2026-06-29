@@ -188,7 +188,7 @@ first_conflicting_port() {
     for existing_file in "$STATE_DIR"/run-*; do
       [[ -e "$existing_file" ]] || continue
       existing_name="${existing_file##*/run-}"
-      if [[ "$existing_name" == "$candidate_name" ]]; then
+      if [[ "$existing_name" == "$candidate_name" || ! -f "$(state_file "$existing_name")" ]]; then
         continue
       fi
       existing_args="$(<"$existing_file")"
@@ -272,6 +272,7 @@ case "${1:-}" in
   inspect)
     name="${@: -1}"
     if [[ ! -f "$(state_file "$name")" ]]; then
+      printf 'Error: no such object: "%s"\n' "$name" >&2
       exit 1
     fi
     if [[ "$*" == *'{{.State.Running}}'* ]]; then
@@ -291,6 +292,7 @@ case "${1:-}" in
   port)
     name="${2:-}"
     if [[ ! -f "$(state_file "$name")" ]]; then
+      printf 'Error: no such object: "%s"\n' "$name" >&2
       exit 1
     fi
     port_lines_for_args "$(<"$(run_file "$name")")"
@@ -759,6 +761,41 @@ test_start_replaces_stale_same_workspace_service_on_cache_port() {
     "-p 127.0.0.1:$cache_port:8080"
 }
 
+test_start_ignores_container_removed_after_ps() {
+  require_python
+  local wrix_bin
+  wrix_bin="$(build_wrix)"
+  with_fake_runtime_env
+
+  export HOME="$TEST_TMP/home-removed-after-ps"
+  export XDG_STATE_HOME="$TEST_TMP/xdg-state-removed-after-ps"
+  export XDG_CACHE_HOME="$TEST_TMP/xdg-cache-removed-after-ps"
+  mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+
+  local workspace="$TEST_TMP/removed-after-ps-repo"
+  mkdir -p "$workspace"
+  (cd "$workspace" && "$wrix_bin" service endpoints >"$TEST_TMP/removed-after-ps-endpoints.json")
+
+  local cache_port planned_name
+  cache_port="$(json_get "$TEST_TMP/removed-after-ps-endpoints.json" endpoints.cache_http.port)"
+  planned_name="$(json_get "$TEST_TMP/removed-after-ps-endpoints.json" container_name)"
+
+  # Simulate a Podman race where `ps` listed a container, but the container was
+  # removed before follow-up inspect/port calls. The fake runtime lists run-*
+  # files from ps, while inspect/port require the state file.
+  printf 'run -d --name admiring_albattani --label wrix.kind=service -p 127.0.0.1:%s:8080 image sh -c sleep\n' \
+    "$cache_port" \
+    >"$WRIX_FAKE_RUNTIME_STATE/run-admiring_albattani"
+
+  (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/removed-after-ps-start.txt")
+
+  "$WRIX_CONTAINER_RUNTIME" container exists "$planned_name"
+  assert_file_contains \
+    "planned service starts after stale ps entry" \
+    "$WRIX_FAKE_RUNTIME_STATE/run-$planned_name" \
+    "-p 127.0.0.1:$cache_port:8080"
+}
+
 test_cache_start_recreates_running_no_cache_service() {
   require_python
   local wrix_bin
@@ -1046,6 +1083,7 @@ ALL_TESTS=(
   test_workspace_identity
   test_devshell_start_is_independent
   test_start_replaces_stale_same_workspace_service_on_cache_port
+  test_start_ignores_container_removed_after_ps
   test_cache_start_recreates_running_no_cache_service
   test_start_reports_unrelated_cache_port_owner
   test_temp_cache_only_workspace_does_not_start_service

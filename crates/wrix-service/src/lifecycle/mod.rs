@@ -1381,6 +1381,7 @@ fn is_missing_container_remove_error(stderr: &str) -> bool {
     text.contains("notfound")
         || text.contains("not found")
         || text.contains("no such container")
+        || text.contains("no such object")
         || text.contains("no container with")
 }
 
@@ -1767,7 +1768,8 @@ mod test {
 
     use super::{
         DescriptorSource, Error, ImageSourceKind, Plan, RuntimeKind, bind_port_from_runtime_error,
-        loaded_container_ref, parse_published_ports, read_endpoint_port,
+        is_missing_container_remove_error, loaded_container_ref, parse_published_ports,
+        read_endpoint_port,
     };
     use wrix_core::path::Workspace;
 
@@ -1792,6 +1794,13 @@ mod test {
             "pasta failed with exit code 1:\nFailed to bind port 21232 (Address already in use)";
 
         assert_eq!(bind_port_from_runtime_error(message), Some(21_232));
+    }
+
+    #[test]
+    fn missing_container_parser_accepts_podman_no_such_object() {
+        assert!(is_missing_container_remove_error(
+            "Error: no such object: \"admiring_albattani\""
+        ));
     }
 
     #[test]
