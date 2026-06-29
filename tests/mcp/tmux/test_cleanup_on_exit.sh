@@ -67,18 +67,18 @@ main() {
     local saved_pid="$MCP_PID"
 
     # Close file descriptors first
-    exec 3>&- 2>/dev/null || true
-    exec 4<&- 2>/dev/null || true
+    exec 3>&- 2>/dev/null || true # best-effort: descriptor may already be closed by cleanup.
+    exec 4<&- 2>/dev/null || true # best-effort: descriptor may already be closed by cleanup.
     # shellcheck disable=SC2034  # globals from test_lib.sh used by cleanup_mcp
     MCP_FD_IN=""
     # shellcheck disable=SC2034
     MCP_FD_OUT=""
 
     # Kill the server process
-    kill "$saved_pid" 2>/dev/null || true
+    kill "$saved_pid" 2>/dev/null || true # best-effort: EOF may have already stopped the server.
 
     # Wait for it to exit
-    wait "$saved_pid" 2>/dev/null || true
+    wait "$saved_pid" 2>/dev/null || true # best-effort: forced shutdown may return a signal status.
     MCP_PID=""
     log_pass "MCP server killed"
 
@@ -93,13 +93,13 @@ main() {
         log_fail "Tmux session should be cleaned up after server exit"
         log_error "Session $session_name still exists"
         # Clean up manually for test
-        tmux kill-session -t "$session_name" 2>/dev/null || true
+        tmux kill-session -t "$session_name" 2>/dev/null || true # best-effort: remove leaked session before failing.
         exit 1
     fi
     log_pass "Tmux session cleaned up on server exit"
 
     # Clean up fifos
-    rm -f "$MCP_FIFO_IN" "$MCP_FIFO_OUT" 2>/dev/null || true
+    rm -f "$MCP_FIFO_IN" "$MCP_FIFO_OUT" 2>/dev/null || true # best-effort: cleanup paths may already be gone.
     MCP_FIFO_IN=""
     MCP_FIFO_OUT=""
 
@@ -120,30 +120,29 @@ main() {
     assert_tmux_session_exists "$session_name"
     log_pass "New session created"
 
-    # Send SIGTERM
+    # Send SIGTERM while stdio remains open
     saved_pid="$MCP_PID"
-    exec 3>&- 2>/dev/null || true
-    exec 4<&- 2>/dev/null || true
+    kill -TERM "$saved_pid"
+    wait "$saved_pid"
+    MCP_PID=""
+    exec 3>&-
+    exec 4<&-
     # shellcheck disable=SC2034  # globals from test_lib.sh used by cleanup_mcp
     MCP_FD_IN=""
     # shellcheck disable=SC2034
     MCP_FD_OUT=""
 
-    kill -TERM "$saved_pid" 2>/dev/null || true
-    wait "$saved_pid" 2>/dev/null || true
-    MCP_PID=""
-
     sleep 0.5
 
     if tmux has-session -t "$session_name" 2>/dev/null; then
         log_fail "Session should be cleaned up after SIGTERM"
-        tmux kill-session -t "$session_name" 2>/dev/null || true
+        tmux kill-session -t "$session_name" 2>/dev/null || true # best-effort: remove leaked session before failing.
         exit 1
     fi
     log_pass "Session cleaned up after SIGTERM"
 
     # Clean up fifos
-    rm -f "$MCP_FIFO_IN" "$MCP_FIFO_OUT" 2>/dev/null || true
+    rm -f "$MCP_FIFO_IN" "$MCP_FIFO_OUT" 2>/dev/null || true # best-effort: cleanup paths may already be gone.
     MCP_FIFO_IN=""
     MCP_FIFO_OUT=""
 

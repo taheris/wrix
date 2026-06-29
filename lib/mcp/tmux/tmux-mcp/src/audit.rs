@@ -9,6 +9,7 @@
 //! Log entries include timestamp, tool name, parameters, and output size.
 //! Output content is logged by byte count only unless full capture is enabled.
 
+use crate::pane::PaneId;
 use serde::Serialize;
 use std::env;
 use std::fs::{self, File, OpenOptions};
@@ -31,7 +32,7 @@ pub struct AuditEntry {
     pub tool: String,
     /// Pane ID (if applicable)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub pane_id: Option<String>,
+    pub pane_id: Option<PaneId>,
     /// Command that was executed for `create_pane`
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
@@ -51,11 +52,11 @@ pub struct AuditEntry {
 
 impl AuditEntry {
     /// Create an entry for `create_pane`
-    pub fn create_pane(pane_id: &str, command: &str, name: Option<&str>) -> Self {
+    pub fn create_pane(pane_id: &PaneId, command: &str, name: Option<&str>) -> Self {
         Self {
             ts: Self::timestamp(),
             tool: "create_pane".to_string(),
-            pane_id: Some(pane_id.to_string()),
+            pane_id: Some(pane_id.clone()),
             command: Some(command.to_string()),
             name: name.map(std::string::ToString::to_string),
             keys: None,
@@ -65,11 +66,11 @@ impl AuditEntry {
     }
 
     /// Create an entry for `send_keys`
-    pub fn send_keys(pane_id: &str, keys: &str) -> Self {
+    pub fn send_keys(pane_id: &PaneId, keys: &str) -> Self {
         Self {
             ts: Self::timestamp(),
             tool: "send_keys".to_string(),
-            pane_id: Some(pane_id.to_string()),
+            pane_id: Some(pane_id.clone()),
             command: None,
             name: None,
             keys: Some(keys.to_string()),
@@ -79,11 +80,11 @@ impl AuditEntry {
     }
 
     /// Create an entry for `capture_pane`
-    pub fn capture_pane(pane_id: &str, lines: i32, output_bytes: usize) -> Self {
+    pub fn capture_pane(pane_id: &PaneId, lines: i32, output_bytes: usize) -> Self {
         Self {
             ts: Self::timestamp(),
             tool: "capture_pane".to_string(),
-            pane_id: Some(pane_id.to_string()),
+            pane_id: Some(pane_id.clone()),
             command: None,
             name: None,
             keys: None,
@@ -93,11 +94,11 @@ impl AuditEntry {
     }
 
     /// Create an entry for `kill_pane`
-    pub fn kill_pane(pane_id: &str) -> Self {
+    pub fn kill_pane(pane_id: &PaneId) -> Self {
         Self {
             ts: Self::timestamp(),
             tool: "kill_pane".to_string(),
-            pane_id: Some(pane_id.to_string()),
+            pane_id: Some(pane_id.clone()),
             command: None,
             name: None,
             keys: None,
@@ -275,7 +276,7 @@ impl AuditLogger {
     /// Save full capture content to a file
     ///
     /// Returns the filename if saved, or `None` if full capture is not enabled.
-    pub fn save_full_capture(&self, pane_id: &str, content: &str) -> io::Result<Option<String>> {
+    pub fn save_full_capture(&self, pane_id: &PaneId, content: &str) -> io::Result<Option<String>> {
         let Some(capture_dir) = &self.full_capture_dir else {
             return Ok(None);
         };
@@ -333,7 +334,7 @@ impl MaybeAuditLogger {
     /// Log `create_pane` (no-op if disabled)
     pub fn log_create_pane(
         &self,
-        pane_id: &str,
+        pane_id: &PaneId,
         command: &str,
         name: Option<&str>,
     ) -> io::Result<()> {
@@ -341,14 +342,14 @@ impl MaybeAuditLogger {
     }
 
     /// Log `send_keys` (no-op if disabled)
-    pub fn log_send_keys(&self, pane_id: &str, keys: &str) -> io::Result<()> {
+    pub fn log_send_keys(&self, pane_id: &PaneId, keys: &str) -> io::Result<()> {
         self.log(&AuditEntry::send_keys(pane_id, keys))
     }
 
     /// Log `capture_pane` (no-op if disabled)
     pub fn log_capture_pane(
         &self,
-        pane_id: &str,
+        pane_id: &PaneId,
         lines: i32,
         output_bytes: usize,
     ) -> io::Result<()> {
@@ -356,7 +357,7 @@ impl MaybeAuditLogger {
     }
 
     /// Log `kill_pane` (no-op if disabled)
-    pub fn log_kill_pane(&self, pane_id: &str) -> io::Result<()> {
+    pub fn log_kill_pane(&self, pane_id: &PaneId) -> io::Result<()> {
         self.log(&AuditEntry::kill_pane(pane_id))
     }
 
@@ -366,7 +367,7 @@ impl MaybeAuditLogger {
     }
 
     /// Save full capture if enabled
-    pub fn save_full_capture(&self, pane_id: &str, content: &str) -> io::Result<Option<String>> {
+    pub fn save_full_capture(&self, pane_id: &PaneId, content: &str) -> io::Result<Option<String>> {
         self.0.as_ref().map_or(Ok(None), |logger| {
             logger.save_full_capture(pane_id, content)
         })
@@ -386,14 +387,22 @@ mod tests {
     use std::path::Path;
     use tempfile::TempDir;
 
+    fn pane_id(value: &str) -> PaneId {
+        PaneId::parse(value).unwrap()
+    }
+
+    fn pane_id_text(entry: &AuditEntry) -> Option<&str> {
+        entry.pane_id.as_ref().map(PaneId::as_str)
+    }
+
     // --- AuditEntry Tests ---
 
     #[test]
     fn test_audit_entry_create_pane() {
-        let entry = AuditEntry::create_pane("debug-1", "cargo run", Some("server"));
+        let entry = AuditEntry::create_pane(&pane_id("debug-1"), "cargo run", Some("server"));
 
         assert_eq!(entry.tool, "create_pane");
-        assert_eq!(entry.pane_id, Some("debug-1".to_string()));
+        assert_eq!(pane_id_text(&entry), Some("debug-1"));
         assert_eq!(entry.command, Some("cargo run".to_string()));
         assert_eq!(entry.name, Some("server".to_string()));
         assert!(entry.keys.is_none());
@@ -403,7 +412,7 @@ mod tests {
 
     #[test]
     fn test_audit_entry_create_pane_no_name() {
-        let entry = AuditEntry::create_pane("debug-1", "cargo run", None);
+        let entry = AuditEntry::create_pane(&pane_id("debug-1"), "cargo run", None);
 
         assert_eq!(entry.tool, "create_pane");
         assert!(entry.name.is_none());
@@ -411,30 +420,30 @@ mod tests {
 
     #[test]
     fn test_audit_entry_send_keys() {
-        let entry = AuditEntry::send_keys("debug-1", "curl -X POST localhost:3000");
+        let entry = AuditEntry::send_keys(&pane_id("debug-1"), "curl -X POST localhost:3000");
 
         assert_eq!(entry.tool, "send_keys");
-        assert_eq!(entry.pane_id, Some("debug-1".to_string()));
+        assert_eq!(pane_id_text(&entry), Some("debug-1"));
         assert_eq!(entry.keys, Some("curl -X POST localhost:3000".to_string()));
         assert!(entry.command.is_none());
     }
 
     #[test]
     fn test_audit_entry_capture_pane() {
-        let entry = AuditEntry::capture_pane("debug-1", 200, 4523);
+        let entry = AuditEntry::capture_pane(&pane_id("debug-1"), 200, 4523);
 
         assert_eq!(entry.tool, "capture_pane");
-        assert_eq!(entry.pane_id, Some("debug-1".to_string()));
+        assert_eq!(pane_id_text(&entry), Some("debug-1"));
         assert_eq!(entry.lines, Some(200));
         assert_eq!(entry.output_bytes, Some(4523));
     }
 
     #[test]
     fn test_audit_entry_kill_pane() {
-        let entry = AuditEntry::kill_pane("debug-1");
+        let entry = AuditEntry::kill_pane(&pane_id("debug-1"));
 
         assert_eq!(entry.tool, "kill_pane");
-        assert_eq!(entry.pane_id, Some("debug-1".to_string()));
+        assert_eq!(pane_id_text(&entry), Some("debug-1"));
     }
 
     #[test]
@@ -449,7 +458,7 @@ mod tests {
 
     #[test]
     fn test_audit_entry_json_create_pane() {
-        let entry = AuditEntry::create_pane("debug-1", "cargo run", Some("server"));
+        let entry = AuditEntry::create_pane(&pane_id("debug-1"), "cargo run", Some("server"));
         let json = entry.to_json().unwrap();
 
         assert!(json.contains(r#""tool":"create_pane""#));
@@ -464,7 +473,7 @@ mod tests {
 
     #[test]
     fn test_audit_entry_json_capture_pane() {
-        let entry = AuditEntry::capture_pane("debug-1", 100, 5000);
+        let entry = AuditEntry::capture_pane(&pane_id("debug-1"), 100, 5000);
         let json = entry.to_json().unwrap();
 
         assert!(json.contains(r#""tool":"capture_pane""#));
@@ -574,7 +583,7 @@ mod tests {
 
         let logger = AuditLogger::new(&log_path, None);
 
-        let entry = AuditEntry::create_pane("debug-1", "cargo run", Some("server"));
+        let entry = AuditEntry::create_pane(&pane_id("debug-1"), "cargo run", Some("server"));
         logger.log(&entry).unwrap();
 
         let content = fs::read_to_string(&log_path).unwrap();
@@ -592,12 +601,18 @@ mod tests {
 
         // Log multiple entries
         logger
-            .log(&AuditEntry::create_pane("debug-1", "cargo run", None))
+            .log(&AuditEntry::create_pane(
+                &pane_id("debug-1"),
+                "cargo run",
+                None,
+            ))
             .unwrap();
         logger
-            .log(&AuditEntry::send_keys("debug-1", "test"))
+            .log(&AuditEntry::send_keys(&pane_id("debug-1"), "test"))
             .unwrap();
-        logger.log(&AuditEntry::kill_pane("debug-1")).unwrap();
+        logger
+            .log(&AuditEntry::kill_pane(&pane_id("debug-1")))
+            .unwrap();
 
         let content = fs::read_to_string(&log_path).unwrap();
         let lines: Vec<&str> = content.lines().collect();
@@ -626,10 +641,14 @@ mod tests {
 
         let logger = AuditLogger::new(&log_path, None);
         logger
-            .log(&AuditEntry::create_pane("debug-1", "cargo run", None))
+            .log(&AuditEntry::create_pane(
+                &pane_id("debug-1"),
+                "cargo run",
+                None,
+            ))
             .unwrap();
         logger
-            .log(&AuditEntry::capture_pane("debug-1", 100, 5000))
+            .log(&AuditEntry::capture_pane(&pane_id("debug-1"), 100, 5000))
             .unwrap();
 
         let content = fs::read_to_string(&log_path).unwrap();
@@ -648,7 +667,9 @@ mod tests {
     fn test_audit_logger_save_full_capture_disabled() {
         let logger = AuditLogger::new("/tmp/test.log", None);
 
-        let result = logger.save_full_capture("debug-1", "some content").unwrap();
+        let result = logger
+            .save_full_capture(&pane_id("debug-1"), "some content")
+            .unwrap();
         assert!(result.is_none());
     }
 
@@ -661,7 +682,7 @@ mod tests {
         let logger = AuditLogger::new(&log_path, Some(capture_dir.clone()));
 
         let filename = logger
-            .save_full_capture("debug-1", "captured content")
+            .save_full_capture(&pane_id("debug-1"), "captured content")
             .unwrap();
 
         assert!(filename.is_some());
@@ -689,15 +710,15 @@ mod tests {
         let logger = AuditLogger::new(&log_path, Some(capture_dir));
 
         let f1 = logger
-            .save_full_capture("debug-1", "content 1")
+            .save_full_capture(&pane_id("debug-1"), "content 1")
             .unwrap()
             .unwrap();
         let f2 = logger
-            .save_full_capture("debug-1", "content 2")
+            .save_full_capture(&pane_id("debug-1"), "content 2")
             .unwrap()
             .unwrap();
         let f3 = logger
-            .save_full_capture("debug-2", "content 3")
+            .save_full_capture(&pane_id("debug-2"), "content 3")
             .unwrap()
             .unwrap();
 
@@ -714,7 +735,9 @@ mod tests {
         let capture_dir = temp_dir.path().join("nested/captures");
 
         let logger = AuditLogger::new(&log_path, Some(capture_dir.clone()));
-        logger.save_full_capture("debug-1", "content").unwrap();
+        logger
+            .save_full_capture(&pane_id("debug-1"), "content")
+            .unwrap();
 
         assert!(capture_dir.exists());
     }
@@ -729,11 +752,13 @@ mod tests {
 
         // All operations should succeed silently
         logger
-            .log_create_pane("debug-1", "cargo run", None)
+            .log_create_pane(&pane_id("debug-1"), "cargo run", None)
             .unwrap();
-        logger.log_send_keys("debug-1", "test").unwrap();
-        logger.log_capture_pane("debug-1", 100, 5000).unwrap();
-        logger.log_kill_pane("debug-1").unwrap();
+        logger.log_send_keys(&pane_id("debug-1"), "test").unwrap();
+        logger
+            .log_capture_pane(&pane_id("debug-1"), 100, 5000)
+            .unwrap();
+        logger.log_kill_pane(&pane_id("debug-1")).unwrap();
         logger.log_list_panes().unwrap();
     }
 
@@ -748,7 +773,7 @@ mod tests {
         assert!(logger.is_enabled());
 
         logger
-            .log_create_pane("debug-1", "cargo run", Some("server"))
+            .log_create_pane(&pane_id("debug-1"), "cargo run", Some("server"))
             .unwrap();
 
         let content = fs::read_to_string(&log_path).unwrap();
@@ -759,7 +784,9 @@ mod tests {
     fn test_maybe_audit_logger_save_full_capture_disabled() {
         let logger = MaybeAuditLogger::disabled();
 
-        let result = logger.save_full_capture("debug-1", "content").unwrap();
+        let result = logger
+            .save_full_capture(&pane_id("debug-1"), "content")
+            .unwrap();
         assert!(result.is_none());
     }
 
@@ -772,7 +799,9 @@ mod tests {
         let inner = AuditLogger::new(&log_path, Some(capture_dir));
         let logger = MaybeAuditLogger::new(Some(inner));
 
-        let result = logger.save_full_capture("debug-1", "content").unwrap();
+        let result = logger
+            .save_full_capture(&pane_id("debug-1"), "content")
+            .unwrap();
         assert!(result.is_some());
     }
 
@@ -784,7 +813,7 @@ mod tests {
         let content = "Hello, World! 🦀"; // Contains multi-byte character
         let byte_len = content.len(); // Should be > character count due to emoji
 
-        let entry = AuditEntry::capture_pane("debug-1", 100, byte_len);
+        let entry = AuditEntry::capture_pane(&pane_id("debug-1"), 100, byte_len);
         assert_eq!(entry.output_bytes, Some(byte_len));
 
         // Verify the byte count
@@ -794,7 +823,7 @@ mod tests {
     #[test]
     fn test_json_output_does_not_contain_full_content() {
         // Verify that the JSON log entry only contains byte count, not content
-        let entry = AuditEntry::capture_pane("debug-1", 100, 5000);
+        let entry = AuditEntry::capture_pane(&pane_id("debug-1"), 100, 5000);
         let json = entry.to_json().unwrap();
 
         // Should have output_bytes

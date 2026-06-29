@@ -299,10 +299,12 @@ dependencies = [
 name = "tmux-mcp"
 version = "0.1.0"
 dependencies = [
+ "displaydoc",
  "serde",
  "serde_json",
  "signal-hook",
  "tempfile",
+ "thiserror",
 ]
 
 [[package]]

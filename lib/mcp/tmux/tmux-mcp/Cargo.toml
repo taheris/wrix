@@ -6,9 +6,11 @@ version.workspace = true
 description = "MCP server providing tmux pane management for AI-assisted debugging"
 
 [dependencies]
+displaydoc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 signal-hook = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

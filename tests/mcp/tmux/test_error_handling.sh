@@ -29,7 +29,7 @@ main() {
 
     # Test 1: Send keys to nonexistent pane
     log_test "Test 1: Send keys to nonexistent pane..."
-    response=$(mcp_send_keys "nonexistent-pane-xyz" "echo hello")
+    response=$(mcp_send_keys "debug-999" "echo hello")
     assert_error "$response" "Send keys to nonexistent pane should fail"
 
     local content
@@ -39,7 +39,7 @@ main() {
 
     # Test 2: Capture from nonexistent pane
     log_test "Test 2: Capture from nonexistent pane..."
-    response=$(mcp_capture_pane "nonexistent-pane-xyz" 50)
+    response=$(mcp_capture_pane "debug-999" 50)
     assert_error "$response" "Capture from nonexistent pane should fail"
 
     content=$(get_content_text "$response")
@@ -48,7 +48,7 @@ main() {
 
     # Test 3: Kill nonexistent pane
     log_test "Test 3: Kill nonexistent pane..."
-    response=$(mcp_kill_pane "nonexistent-pane-xyz")
+    response=$(mcp_kill_pane "debug-999")
     assert_error "$response" "Kill nonexistent pane should fail"
 
     content=$(get_content_text "$response")
@@ -103,7 +103,7 @@ main() {
 
     # Test 8: Verify errors contain helpful hints
     log_test "Test 8: Error messages contain helpful hints..."
-    response=$(mcp_send_keys "bad-pane" "test")
+    response=$(mcp_send_keys "debug-998" "test")
     content=$(get_content_text "$response")
     assert_contains "$content" "tmux_list_panes" "Error should suggest using list_panes"
     log_pass "Error messages include helpful hints"

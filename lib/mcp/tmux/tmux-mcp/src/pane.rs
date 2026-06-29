@@ -1,21 +1,89 @@
-//! Pane state management
-//!
-//! This module tracks the state of all tmux panes created by the MCP server.
-//! It provides unique ID generation, status tracking, and pane lifecycle management.
+//! Pane state management.
 
+use displaydoc::Display;
+use serde::Serialize;
 use std::collections::HashMap;
+use std::fmt;
+use thiserror::Error;
 
-/// Status of a pane
+const PANE_ID_PREFIX: &str = "debug-";
+
+/// Pane identifier parse failure.
+#[derive(Debug, Display, Error, PartialEq, Eq)]
+pub enum PaneIdError {
+    /// Pane id '{value}' must use debug-N with N greater than zero
+    InvalidFormat { value: String },
+    /// Pane id sequence exhausted
+    SequenceExhausted,
+}
+
+/// Identifier for a pane managed by this server.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[serde(transparent)]
+pub struct PaneId(String);
+
+impl PaneId {
+    fn from_sequence(sequence: u64) -> Result<Self, PaneIdError> {
+        if sequence == 0 {
+            return Err(PaneIdError::InvalidFormat {
+                value: format!("{PANE_ID_PREFIX}{sequence}"),
+            });
+        }
+
+        Ok(Self(format!("{PANE_ID_PREFIX}{sequence}")))
+    }
+
+    /// Parse and validate a pane identifier.
+    pub fn parse(value: impl Into<String>) -> Result<Self, PaneIdError> {
+        let value = value.into();
+        let Some(suffix) = value.strip_prefix(PANE_ID_PREFIX) else {
+            return Err(PaneIdError::InvalidFormat { value });
+        };
+
+        if suffix.is_empty() {
+            return Err(PaneIdError::InvalidFormat { value });
+        }
+
+        let Ok(parsed) = suffix.parse::<u64>() else {
+            return Err(PaneIdError::InvalidFormat { value });
+        };
+
+        if parsed == 0 {
+            return Err(PaneIdError::InvalidFormat { value });
+        }
+
+        Ok(Self(value))
+    }
+
+    /// Borrow the validated identifier string.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for PaneId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl AsRef<str> for PaneId {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+/// Status of a pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaneStatus {
-    /// Process is still running
+    /// Process is still running.
     Running,
-    /// Process has exited (pane remains visible per tmux remain-on-exit)
+    /// Process has exited and remains visible for post-mortem capture.
     Exited,
 }
 
 impl PaneStatus {
-    /// Convert status to string representation
+    /// Convert status to its wire representation.
     pub const fn as_str(self) -> &'static str {
         match self {
             PaneStatus::Running => "running",
@@ -24,28 +92,28 @@ impl PaneStatus {
     }
 }
 
-impl std::fmt::Display for PaneStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for PaneStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", (*self).as_str())
     }
 }
 
-/// State of a single pane
+/// State of a single pane.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaneState {
-    /// Unique pane identifier (debug-N format)
-    pub id: String,
-    /// Human-readable name (may be same as id if not specified)
+    /// Unique pane identifier.
+    pub id: PaneId,
+    /// Human-readable name.
     pub name: String,
-    /// Current status of the pane
+    /// Current status of the pane.
     pub status: PaneStatus,
-    /// Command that was executed in the pane
+    /// Command that was executed in the pane.
     pub command: String,
 }
 
 impl PaneState {
-    /// Create a new `PaneState`
-    pub const fn new(id: String, name: String, command: String) -> Self {
+    /// Create a new `PaneState`.
+    pub const fn new(id: PaneId, name: String, command: String) -> Self {
         Self {
             id,
             name,
@@ -54,35 +122,33 @@ impl PaneState {
         }
     }
 
-    /// Update the pane status
+    /// Update the pane status.
     pub const fn set_status(&mut self, status: PaneStatus) {
         self.status = status;
     }
 
-    /// Check if the pane is running
+    /// Check if the pane is running.
     #[cfg(test)]
     pub fn is_running(&self) -> bool {
         self.status == PaneStatus::Running
     }
 
-    /// Check if the pane has exited
+    /// Check if the pane has exited.
     #[cfg(test)]
     pub fn is_exited(&self) -> bool {
         self.status == PaneStatus::Exited
     }
 }
 
-/// Manages all pane state for the MCP server
+/// Manages all pane state for the MCP server.
 #[derive(Debug)]
 pub struct PaneManager {
-    /// Map of pane ID to pane state
-    panes: HashMap<String, PaneState>,
-    /// Counter for generating unique IDs
+    panes: HashMap<PaneId, PaneState>,
     next_id: u64,
 }
 
 impl PaneManager {
-    /// Create a new `PaneManager`
+    /// Create a new `PaneManager`.
     pub fn new() -> Self {
         Self {
             panes: HashMap::new(),
@@ -90,76 +156,79 @@ impl PaneManager {
         }
     }
 
-    /// Generate a unique pane ID in debug-N format
-    pub fn generate_id(&mut self) -> String {
-        let id = format!("debug-{}", self.next_id);
-        self.next_id += 1;
-        id
+    /// Generate a unique pane ID in debug-N format.
+    pub fn generate_id(&mut self) -> Result<PaneId, PaneIdError> {
+        let id = PaneId::from_sequence(self.next_id)?;
+        self.next_id = self
+            .next_id
+            .checked_add(1)
+            .ok_or(PaneIdError::SequenceExhausted)?;
+        Ok(id)
     }
 
-    /// Register a new pane with the manager
-    ///
-    /// Returns the pane ID that was used (either generated or the provided name)
-    pub fn create_pane(&mut self, command: &str, name: Option<&str>) -> String {
-        let id = self.generate_id();
-        let display_name = name.unwrap_or(&id).to_string();
-
+    /// Register a new pane with the manager.
+    pub fn create_pane(
+        &mut self,
+        command: &str,
+        name: Option<&str>,
+    ) -> Result<PaneId, PaneIdError> {
+        let id = self.generate_id()?;
+        let display_name = name.unwrap_or_else(|| id.as_str()).to_string();
         let state = PaneState::new(id.clone(), display_name, command.to_string());
         self.panes.insert(id.clone(), state);
-
-        id
+        Ok(id)
     }
 
-    /// Get a pane by its ID
+    /// Get a pane by its ID.
     #[cfg(test)]
-    pub fn get(&self, pane_id: &str) -> Option<&PaneState> {
+    pub fn get(&self, pane_id: &PaneId) -> Option<&PaneState> {
         self.panes.get(pane_id)
     }
 
-    /// Get a mutable reference to a pane by its ID
+    /// Get a mutable reference to a pane by its ID.
     #[cfg(test)]
-    pub fn get_mut(&mut self, pane_id: &str) -> Option<&mut PaneState> {
+    pub fn get_mut(&mut self, pane_id: &PaneId) -> Option<&mut PaneState> {
         self.panes.get_mut(pane_id)
     }
 
-    /// Check if a pane exists
-    pub fn contains(&self, pane_id: &str) -> bool {
+    /// Check if a pane exists.
+    pub fn contains(&self, pane_id: &PaneId) -> bool {
         self.panes.contains_key(pane_id)
     }
 
-    /// Remove a pane from tracking (called when pane is killed)
-    pub fn remove(&mut self, pane_id: &str) -> Option<PaneState> {
+    /// Remove a pane from tracking.
+    pub fn remove(&mut self, pane_id: &PaneId) -> Option<PaneState> {
         self.panes.remove(pane_id)
     }
 
-    /// Update a pane's status
-    pub fn update_status(&mut self, pane_id: &str, status: PaneStatus) -> bool {
+    /// Update a pane's status.
+    pub fn update_status(&mut self, pane_id: &PaneId, status: PaneStatus) -> bool {
         self.panes.get_mut(pane_id).is_some_and(|pane| {
             pane.set_status(status);
             true
         })
     }
 
-    /// Get all panes as an iterator
+    /// Get all panes as an iterator.
     pub fn iter(&self) -> impl Iterator<Item = &PaneState> {
         self.panes.values()
     }
 
-    /// Get the number of tracked panes
+    /// Get the number of tracked panes.
     #[cfg(test)]
     pub fn len(&self) -> usize {
         self.panes.len()
     }
 
-    /// Check if there are no tracked panes
+    /// Check if there are no tracked panes.
     #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.panes.is_empty()
     }
 
-    /// Get all pane IDs
+    /// Get all pane IDs.
     #[cfg(test)]
-    pub fn pane_ids(&self) -> Vec<String> {
+    pub fn pane_ids(&self) -> Vec<PaneId> {
         self.panes.keys().cloned().collect()
     }
 }
@@ -174,7 +243,24 @@ impl Default for PaneManager {
 mod tests {
     use super::*;
 
-    // --- PaneStatus Tests ---
+    fn pane_id(value: &str) -> PaneId {
+        PaneId::parse(value).unwrap()
+    }
+
+    #[test]
+    fn test_pane_id_parse_accepts_generated_format() {
+        let id = pane_id("debug-42");
+        assert_eq!(id.as_str(), "debug-42");
+        assert_eq!(id.to_string(), "debug-42");
+    }
+
+    #[test]
+    fn test_pane_id_parse_rejects_invalid_values() {
+        assert!(PaneId::parse("pane-1").is_err());
+        assert!(PaneId::parse("debug-").is_err());
+        assert!(PaneId::parse("debug-zero").is_err());
+        assert!(PaneId::parse("debug-0").is_err());
+    }
 
     #[test]
     fn test_pane_status_as_str() {
@@ -195,17 +281,12 @@ mod tests {
         assert_ne!(PaneStatus::Running, PaneStatus::Exited);
     }
 
-    // --- PaneState Tests ---
-
     #[test]
     fn test_pane_state_new() {
-        let state = PaneState::new(
-            "debug-1".to_string(),
-            "server".to_string(),
-            "cargo run".to_string(),
-        );
+        let id = pane_id("debug-1");
+        let state = PaneState::new(id.clone(), "server".to_string(), "cargo run".to_string());
 
-        assert_eq!(state.id, "debug-1");
+        assert_eq!(state.id, id);
         assert_eq!(state.name, "server");
         assert_eq!(state.command, "cargo run");
         assert_eq!(state.status, PaneStatus::Running);
@@ -214,7 +295,7 @@ mod tests {
     #[test]
     fn test_pane_state_initial_status_is_running() {
         let state = PaneState::new(
-            "debug-1".to_string(),
+            pane_id("debug-1"),
             "test".to_string(),
             "echo hello".to_string(),
         );
@@ -226,13 +307,12 @@ mod tests {
     #[test]
     fn test_pane_state_set_status() {
         let mut state = PaneState::new(
-            "debug-1".to_string(),
+            pane_id("debug-1"),
             "test".to_string(),
             "echo hello".to_string(),
         );
 
         assert!(state.is_running());
-
         state.set_status(PaneStatus::Exited);
         assert!(state.is_exited());
         assert!(!state.is_running());
@@ -241,19 +321,14 @@ mod tests {
     #[test]
     fn test_pane_state_status_transitions() {
         let mut state = PaneState::new(
-            "debug-1".to_string(),
+            pane_id("debug-1"),
             "test".to_string(),
             "echo hello".to_string(),
         );
 
-        // Initial state: Running
         assert_eq!(state.status, PaneStatus::Running);
-
-        // Transition to Exited
         state.set_status(PaneStatus::Exited);
         assert_eq!(state.status, PaneStatus::Exited);
-
-        // Can transition back to Running (e.g., if process restarts)
         state.set_status(PaneStatus::Running);
         assert_eq!(state.status, PaneStatus::Running);
     }
@@ -261,7 +336,7 @@ mod tests {
     #[test]
     fn test_pane_state_clone() {
         let state = PaneState::new(
-            "debug-1".to_string(),
+            pane_id("debug-1"),
             "server".to_string(),
             "cargo run".to_string(),
         );
@@ -270,27 +345,24 @@ mod tests {
         assert_eq!(state, cloned);
     }
 
-    // --- PaneManager ID Generation Tests ---
-
     #[test]
     fn test_manager_generate_id_format() {
         let mut manager = PaneManager::new();
-
-        let id1 = manager.generate_id();
-        assert!(id1.starts_with("debug-"));
+        let id1 = manager.generate_id().unwrap();
+        assert!(id1.as_str().starts_with("debug-"));
     }
 
     #[test]
     fn test_manager_generate_id_sequential() {
         let mut manager = PaneManager::new();
 
-        let id1 = manager.generate_id();
-        let id2 = manager.generate_id();
-        let id3 = manager.generate_id();
+        let id1 = manager.generate_id().unwrap();
+        let id2 = manager.generate_id().unwrap();
+        let id3 = manager.generate_id().unwrap();
 
-        assert_eq!(id1, "debug-1");
-        assert_eq!(id2, "debug-2");
-        assert_eq!(id3, "debug-3");
+        assert_eq!(id1.as_str(), "debug-1");
+        assert_eq!(id2.as_str(), "debug-2");
+        assert_eq!(id3.as_str(), "debug-3");
     }
 
     #[test]
@@ -299,34 +371,30 @@ mod tests {
         let mut ids = std::collections::HashSet::new();
 
         for _ in 0..100 {
-            let id = manager.generate_id();
+            let id = manager.generate_id().unwrap();
             assert!(ids.insert(id), "Generated duplicate ID");
         }
     }
 
-    // --- PaneManager Pane Creation Tests ---
-
     #[test]
     fn test_manager_create_pane_without_name() {
         let mut manager = PaneManager::new();
+        let id = manager.create_pane("cargo run", None).unwrap();
 
-        let id = manager.create_pane("cargo run", None);
-
-        assert_eq!(id, "debug-1");
+        assert_eq!(id.as_str(), "debug-1");
         let pane = manager.get(&id).unwrap();
-        assert_eq!(pane.name, "debug-1"); // Name defaults to ID
+        assert_eq!(pane.name, "debug-1");
         assert_eq!(pane.command, "cargo run");
     }
 
     #[test]
     fn test_manager_create_pane_with_name() {
         let mut manager = PaneManager::new();
+        let id = manager.create_pane("cargo run", Some("server")).unwrap();
 
-        let id = manager.create_pane("cargo run", Some("server"));
-
-        assert_eq!(id, "debug-1");
+        assert_eq!(id.as_str(), "debug-1");
         let pane = manager.get(&id).unwrap();
-        assert_eq!(pane.name, "server"); // Custom name
+        assert_eq!(pane.name, "server");
         assert_eq!(pane.command, "cargo run");
     }
 
@@ -334,27 +402,20 @@ mod tests {
     fn test_manager_create_multiple_panes() {
         let mut manager = PaneManager::new();
 
-        let id1 = manager.create_pane("cargo run", Some("server"));
-        let id2 = manager.create_pane("bash", Some("client"));
-        let id3 = manager.create_pane("tail -f log", None);
+        let id1 = manager.create_pane("cargo run", Some("server")).unwrap();
+        let id2 = manager.create_pane("bash", Some("client")).unwrap();
+        let id3 = manager.create_pane("tail -f log", None).unwrap();
 
         assert_eq!(manager.len(), 3);
-
-        let pane1 = manager.get(&id1).unwrap();
-        let pane2 = manager.get(&id2).unwrap();
-        let pane3 = manager.get(&id3).unwrap();
-
-        assert_eq!(pane1.name, "server");
-        assert_eq!(pane2.name, "client");
-        assert_eq!(pane3.name, "debug-3");
+        assert_eq!(manager.get(&id1).unwrap().name, "server");
+        assert_eq!(manager.get(&id2).unwrap().name, "client");
+        assert_eq!(manager.get(&id3).unwrap().name, "debug-3");
     }
-
-    // --- PaneManager Lookup Tests ---
 
     #[test]
     fn test_manager_get_existing_pane() {
         let mut manager = PaneManager::new();
-        let id = manager.create_pane("cargo run", Some("server"));
+        let id = manager.create_pane("cargo run", Some("server")).unwrap();
 
         let pane = manager.get(&id);
         assert!(pane.is_some());
@@ -364,61 +425,54 @@ mod tests {
     #[test]
     fn test_manager_get_nonexistent_pane() {
         let manager = PaneManager::new();
-
-        let pane = manager.get("debug-999");
+        let pane = manager.get(&pane_id("debug-999"));
         assert!(pane.is_none());
     }
 
     #[test]
     fn test_manager_get_mut() {
         let mut manager = PaneManager::new();
-        let id = manager.create_pane("cargo run", Some("server"));
+        let id = manager.create_pane("cargo run", Some("server")).unwrap();
 
         let pane = manager.get_mut(&id).unwrap();
         pane.set_status(PaneStatus::Exited);
 
-        // Verify change persisted
         assert!(manager.get(&id).unwrap().is_exited());
     }
 
     #[test]
     fn test_manager_contains() {
         let mut manager = PaneManager::new();
-        let id = manager.create_pane("cargo run", None);
+        let id = manager.create_pane("cargo run", None).unwrap();
 
         assert!(manager.contains(&id));
-        assert!(!manager.contains("nonexistent"));
+        assert!(!manager.contains(&pane_id("debug-999")));
     }
-
-    // --- PaneManager Remove Tests ---
 
     #[test]
     fn test_manager_remove_existing_pane() {
         let mut manager = PaneManager::new();
-        let id = manager.create_pane("cargo run", Some("server"));
+        let id = manager.create_pane("cargo run", Some("server")).unwrap();
 
         assert!(manager.contains(&id));
-
         let removed = manager.remove(&id);
         assert!(removed.is_some());
         assert_eq!(removed.unwrap().name, "server");
-
         assert!(!manager.contains(&id));
     }
 
     #[test]
     fn test_manager_remove_nonexistent_pane() {
         let mut manager = PaneManager::new();
-
-        let removed = manager.remove("debug-999");
+        let removed = manager.remove(&pane_id("debug-999"));
         assert!(removed.is_none());
     }
 
     #[test]
     fn test_manager_remove_does_not_affect_other_panes() {
         let mut manager = PaneManager::new();
-        let id1 = manager.create_pane("cargo run", Some("server"));
-        let id2 = manager.create_pane("bash", Some("client"));
+        let id1 = manager.create_pane("cargo run", Some("server")).unwrap();
+        let id2 = manager.create_pane("bash", Some("client")).unwrap();
 
         manager.remove(&id1);
 
@@ -427,15 +481,12 @@ mod tests {
         assert_eq!(manager.len(), 1);
     }
 
-    // --- PaneManager Status Update Tests ---
-
     #[test]
     fn test_manager_update_status_existing() {
         let mut manager = PaneManager::new();
-        let id = manager.create_pane("cargo run", None);
+        let id = manager.create_pane("cargo run", None).unwrap();
 
         assert!(manager.get(&id).unwrap().is_running());
-
         let result = manager.update_status(&id, PaneStatus::Exited);
         assert!(result);
         assert!(manager.get(&id).unwrap().is_exited());
@@ -444,18 +495,15 @@ mod tests {
     #[test]
     fn test_manager_update_status_nonexistent() {
         let mut manager = PaneManager::new();
-
-        let result = manager.update_status("debug-999", PaneStatus::Exited);
+        let result = manager.update_status(&pane_id("debug-999"), PaneStatus::Exited);
         assert!(!result);
     }
-
-    // --- PaneManager Iteration Tests ---
 
     #[test]
     fn test_manager_iter() {
         let mut manager = PaneManager::new();
-        manager.create_pane("cargo run", Some("server"));
-        manager.create_pane("bash", Some("client"));
+        manager.create_pane("cargo run", Some("server")).unwrap();
+        manager.create_pane("bash", Some("client")).unwrap();
 
         assert_eq!(manager.iter().count(), 2);
     }
@@ -463,8 +511,8 @@ mod tests {
     #[test]
     fn test_manager_pane_ids() {
         let mut manager = PaneManager::new();
-        let id1 = manager.create_pane("cargo run", None);
-        let id2 = manager.create_pane("bash", None);
+        let id1 = manager.create_pane("cargo run", None).unwrap();
+        let id2 = manager.create_pane("bash", None).unwrap();
 
         let ids = manager.pane_ids();
         assert_eq!(ids.len(), 2);
@@ -472,17 +520,15 @@ mod tests {
         assert!(ids.contains(&id2));
     }
 
-    // --- PaneManager Capacity Tests ---
-
     #[test]
     fn test_manager_len() {
         let mut manager = PaneManager::new();
         assert_eq!(manager.len(), 0);
 
-        manager.create_pane("cargo run", None);
+        manager.create_pane("cargo run", None).unwrap();
         assert_eq!(manager.len(), 1);
 
-        manager.create_pane("bash", None);
+        manager.create_pane("bash", None).unwrap();
         assert_eq!(manager.len(), 2);
     }
 
@@ -491,36 +537,30 @@ mod tests {
         let mut manager = PaneManager::new();
         assert!(manager.is_empty());
 
-        let id = manager.create_pane("cargo run", None);
+        let id = manager.create_pane("cargo run", None).unwrap();
         assert!(!manager.is_empty());
 
         manager.remove(&id);
         assert!(manager.is_empty());
     }
 
-    // --- State Transition Tests ---
-
     #[test]
     fn test_full_pane_lifecycle() {
         let mut manager = PaneManager::new();
 
-        // Create pane
-        let id = manager.create_pane("RUST_LOG=debug cargo run", Some("server"));
+        let id = manager
+            .create_pane("RUST_LOG=debug cargo run", Some("server"))
+            .unwrap();
         assert_eq!(manager.len(), 1);
 
-        // Verify initial state
         let pane = manager.get(&id).unwrap();
         assert!(pane.is_running());
         assert_eq!(pane.command, "RUST_LOG=debug cargo run");
 
-        // Process exits
         manager.update_status(&id, PaneStatus::Exited);
         assert!(manager.get(&id).unwrap().is_exited());
-
-        // Pane is still there (for output capture)
         assert!(manager.contains(&id));
 
-        // Kill pane (explicit cleanup)
         let removed = manager.remove(&id);
         assert!(removed.is_some());
         assert!(manager.is_empty());
@@ -530,21 +570,17 @@ mod tests {
     fn test_multiple_panes_independent_status() {
         let mut manager = PaneManager::new();
 
-        let id1 = manager.create_pane("server", Some("server"));
-        let id2 = manager.create_pane("client", Some("client"));
+        let id1 = manager.create_pane("server", Some("server")).unwrap();
+        let id2 = manager.create_pane("client", Some("client")).unwrap();
 
-        // Both start running
         assert!(manager.get(&id1).unwrap().is_running());
         assert!(manager.get(&id2).unwrap().is_running());
 
-        // Client exits, server still running
         manager.update_status(&id2, PaneStatus::Exited);
 
         assert!(manager.get(&id1).unwrap().is_running());
         assert!(manager.get(&id2).unwrap().is_exited());
     }
-
-    // --- Default Trait Test ---
 
     #[test]
     fn test_manager_default() {

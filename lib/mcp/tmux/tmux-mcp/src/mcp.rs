@@ -1,6 +1,6 @@
 //! MCP protocol handling (JSON-RPC over stdio)
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -107,7 +107,7 @@ pub struct InitializeResult {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolDefinition {
-    pub name: String,
+    pub name: ToolName,
     pub description: String,
     pub input_schema: InputSchema,
 }
@@ -128,6 +128,72 @@ pub struct PropertyDefinition {
     pub description: String,
 }
 
+/// Supported tmux MCP tool names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolName {
+    CreatePane,
+    SendKeys,
+    CapturePane,
+    KillPane,
+    ListPanes,
+    Unknown(String),
+}
+
+impl ToolName {
+    pub const CREATE_PANE: &'static str = "tmux_create_pane";
+    pub const SEND_KEYS: &'static str = "tmux_send_keys";
+    pub const CAPTURE_PANE: &'static str = "tmux_capture_pane";
+    pub const KILL_PANE: &'static str = "tmux_kill_pane";
+    pub const LIST_PANES: &'static str = "tmux_list_panes";
+
+    pub fn from_wire(name: String) -> Self {
+        match name.as_str() {
+            Self::CREATE_PANE => Self::CreatePane,
+            Self::SEND_KEYS => Self::SendKeys,
+            Self::CAPTURE_PANE => Self::CapturePane,
+            Self::KILL_PANE => Self::KillPane,
+            Self::LIST_PANES => Self::ListPanes,
+            _ => Self::Unknown(name),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::CreatePane => Self::CREATE_PANE,
+            Self::SendKeys => Self::SEND_KEYS,
+            Self::CapturePane => Self::CAPTURE_PANE,
+            Self::KillPane => Self::KILL_PANE,
+            Self::ListPanes => Self::LIST_PANES,
+            Self::Unknown(name) => name,
+        }
+    }
+}
+
+impl std::fmt::Display for ToolName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl Serialize for ToolName {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for ToolName {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let name = String::deserialize(deserializer)?;
+        Ok(Self::from_wire(name))
+    }
+}
+
 /// MCP tools/list response
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolsListResult {
@@ -137,7 +203,7 @@ pub struct ToolsListResult {
 /// MCP tool call parameters
 #[derive(Debug, Clone, Deserialize)]
 pub struct ToolCallParams {
-    pub name: String,
+    pub name: ToolName,
     #[serde(default)]
     pub arguments: HashMap<String, Value>,
 }
@@ -190,7 +256,7 @@ impl ToolCallResult {
 pub fn get_tool_definitions() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
-            name: "tmux_create_pane".to_string(),
+            name: ToolName::CreatePane,
             description: "Create a new tmux pane running a command. Use for spawning servers, \
                           test runners, or interactive shells. Returns a pane ID for subsequent \
                           operations."
@@ -221,7 +287,7 @@ pub fn get_tool_definitions() -> Vec<ToolDefinition> {
             },
         },
         ToolDefinition {
-            name: "tmux_send_keys".to_string(),
+            name: ToolName::SendKeys,
             description: "Send keystrokes to a tmux pane. Use for interactive input, running \
                           additional commands, or sending signals (e.g., Ctrl-C as '^C')."
                 .to_string(),
@@ -252,7 +318,7 @@ pub fn get_tool_definitions() -> Vec<ToolDefinition> {
             },
         },
         ToolDefinition {
-            name: "tmux_capture_pane".to_string(),
+            name: ToolName::CapturePane,
             description: "Capture recent output from a tmux pane. Use to read logs, command \
                           output, or error messages. Works on both running and exited panes."
                 .to_string(),
@@ -281,7 +347,7 @@ pub fn get_tool_definitions() -> Vec<ToolDefinition> {
             },
         },
         ToolDefinition {
-            name: "tmux_kill_pane".to_string(),
+            name: ToolName::KillPane,
             description: "Terminate a tmux pane and its running process. Use for cleanup after \
                           debugging."
                 .to_string(),
@@ -302,7 +368,7 @@ pub fn get_tool_definitions() -> Vec<ToolDefinition> {
             },
         },
         ToolDefinition {
-            name: "tmux_list_panes".to_string(),
+            name: ToolName::ListPanes,
             description: "List all active tmux panes with their IDs, names, status (running/\
                           exited), and running commands."
                 .to_string(),
@@ -483,7 +549,7 @@ mod tests {
         let method = McpMethod::from_request(&request).unwrap();
         match method {
             McpMethod::ToolsCall(params) => {
-                assert_eq!(params.name, "tmux_create_pane");
+                assert_eq!(params.name, ToolName::CreatePane);
                 assert_eq!(
                     params.arguments.get("command"),
                     Some(&Value::String("cargo run".to_string()))
@@ -573,7 +639,10 @@ mod tests {
     #[test]
     fn test_tool_definition_create_pane_schema() {
         let tools = get_tool_definitions();
-        let create_pane = tools.iter().find(|t| t.name == "tmux_create_pane").unwrap();
+        let create_pane = tools
+            .iter()
+            .find(|t| t.name == ToolName::CreatePane)
+            .unwrap();
 
         assert_eq!(create_pane.input_schema.schema_type, "object");
         assert!(create_pane.input_schema.properties.contains_key("command"));
@@ -595,7 +664,10 @@ mod tests {
     #[test]
     fn test_tool_definition_list_panes_no_required() {
         let tools = get_tool_definitions();
-        let list_panes = tools.iter().find(|t| t.name == "tmux_list_panes").unwrap();
+        let list_panes = tools
+            .iter()
+            .find(|t| t.name == ToolName::ListPanes)
+            .unwrap();
 
         assert!(list_panes.input_schema.properties.is_empty());
         assert!(list_panes.input_schema.required.is_empty());
@@ -689,7 +761,7 @@ mod tests {
 
         // Tools calls require initialization
         let params = ToolCallParams {
-            name: "tmux_list_panes".to_string(),
+            name: ToolName::ListPanes,
             arguments: HashMap::new(),
         };
         assert!(
@@ -709,7 +781,7 @@ mod tests {
 
         // And tools/call should work
         let params = ToolCallParams {
-            name: "tmux_list_panes".to_string(),
+            name: ToolName::ListPanes,
             arguments: HashMap::new(),
         };
         assert!(

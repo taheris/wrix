@@ -42,6 +42,7 @@ declare -A TESTS=(
     ["exited_pane"]="test_exited_pane.sh"
     ["error_handling"]="test_error_handling.sh"
     ["audit_log"]="test_audit_log.sh"
+    ["audit_full_capture"]="test_audit_full_capture.sh"
     ["cleanup_on_exit"]="test_cleanup_on_exit.sh"
 )
 
@@ -55,6 +56,7 @@ declare -A TEST_DESCRIPTIONS=(
     ["exited_pane"]="Create exiting pane, verify status=exited, capture final output"
     ["error_handling"]="Send keys to nonexistent pane, verify isError response"
     ["audit_log"]="Enable audit logging, run operations, verify JSON Lines format"
+    ["audit_full_capture"]="Enable full capture audit logging, capture output, verify file content"
     ["cleanup_on_exit"]="Start MCP server, create panes, kill server, verify cleanup"
 )
 
@@ -201,6 +203,7 @@ main() {
             "exited_pane"       # Lifecycle: exited pane handling
             "error_handling"    # Errors: proper error responses
             "audit_log"         # Feature: audit logging
+            "audit_full_capture" # Feature: full capture audit logging
             "cleanup_on_exit"   # Cleanup: session cleanup on exit
         )
     fi
@@ -225,9 +228,9 @@ main() {
         echo "----------------------------------------"
 
         if run_test "$test_name"; then
-            ((passed++)) || true
+            ((passed++)) || true # best-effort: arithmetic returns 1 when the prior value is zero.
         else
-            ((failed++)) || true
+            ((failed++)) || true # best-effort: arithmetic returns 1 when the prior value is zero.
             failed_tests+=("$test_name")
             if [[ $keep_going -eq 0 ]]; then
                 log_error "Stopping on first failure (use --keep-going to continue)"

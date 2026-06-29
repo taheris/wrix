@@ -5,7 +5,8 @@
 # the host's tmux + the wrix-built tmux-mcp binary — no container, no
 # VM. Each test exercises the MCP server's JSON-RPC surface over stdin/
 # stdout for one tool (create_pane, send_keys, capture_pane, kill_pane,
-# list_panes, exited_pane, error_handling, audit_log, cleanup_on_exit).
+# list_panes, exited_pane, error_handling, audit_log, audit_full_capture,
+# cleanup_on_exit).
 #
 #   Linux + nix + tmux on PATH  -> exercise the binary
 #   non-Linux                   -> exit 77 (test_*.sh assume Linux tmux semantics)
