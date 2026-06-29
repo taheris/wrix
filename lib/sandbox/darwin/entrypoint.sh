@@ -588,6 +588,9 @@ wrix_allow_local_endpoints() {
   if [[ -n "${WRIX_PROJECT_CACHE_HOST:-}" && -n "${WRIX_PROJECT_CACHE_PORT:-}" ]]; then
     endpoints="$endpoints,${WRIX_PROJECT_CACHE_HOST}:${WRIX_PROJECT_CACHE_PORT}/tcp"
   fi
+  if [[ -n "${WRIX_NOTIFY_TCP:-}" && "$WRIX_NOTIFY_TCP" == *:* ]]; then
+    endpoints="$endpoints,${WRIX_NOTIFY_TCP}/tcp"
+  fi
   IFS=',' read -ra endpoint_entries <<< "$endpoints"
   for endpoint in "${endpoint_entries[@]}"; do
     [[ -n "$endpoint" ]] || continue

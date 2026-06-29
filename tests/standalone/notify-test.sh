@@ -159,13 +159,25 @@ start_tcp_capture() {
   wait_for_tcp_listener "$host" "$port"
 }
 
+assert_single_json_envelope() {
+  local capture="$1"
+  local count
+
+  if ! count=$(jq -s 'length' "$capture"); then
+    fail "captured payload was not valid JSONL"
+  fi
+  if [[ "$count" != "1" ]]; then
+    fail "captured $count JSON envelopes, expected 1"
+  fi
+}
+
 assert_json_field() {
   local capture="$1"
   local field="$2"
   local expected="$3"
   local actual
 
-  actual=$(tail -n 1 "$capture" | jq -r --arg field "$field" '.[$field]')
+  actual=$(jq -sr --arg field "$field" '.[0][$field]' "$capture")
   if [[ "$actual" != "$expected" ]]; then
     fail "captured .$field was '$actual', expected '$expected'"
   fi
@@ -216,6 +228,7 @@ test_client_tcp_endpoint_override() {
     fail_with_output "fake TCP daemon did not receive wrix-notify payload" "$listener_log"
   fi
 
+  assert_single_json_envelope "$capture"
   assert_json_field "$capture" title "$title"
   assert_json_field "$capture" message "$message"
   assert_json_field "$capture" sound "$sound"
@@ -263,7 +276,7 @@ run_spawned_container_check() {
     XDG_RUNTIME_DIR="$runtime_dir" \
       WRIX_DEPLOY_KEY="$deploy_key" \
       WRIX_GIT_SIGN=0 \
-      nix run --no-warn-dirty .#sandbox-base -- spawn --spawn-config "$spawn_config"
+      nix run --no-warn-dirty .#sandbox -- spawn --spawn-config "$spawn_config"
   ) >"$output_file" 2>&1 || rc=$?
 
   if [[ "$rc" -ne 0 ]]; then
@@ -416,22 +429,27 @@ test_macos_tcp_bind_address() {
 }
 
 test_claude_stop_hook_config() {
+  require_command jq
+  require_command nix
+
   local repo_root
-  local sandbox_file
+  local settings_file
+  local system
 
   repo_root=$(resolve_repo_root)
-  sandbox_file="$repo_root/lib/sandbox/default.nix"
+  system=$(nix eval --raw --impure --expr builtins.currentSystem)
+  if ! settings_file=$(nix build --no-link --print-out-paths --no-warn-dirty \
+    "$repo_root#packages.$system.sandbox-claude.passthru.image.claudeSettingsJson"); then
+    fail "could not build generated Claude settings"
+  fi
 
-  if ! grep -Eq 'Stop = \[' "$sandbox_file"; then
-    fail "Claude settings do not define a Stop hook"
+  if ! jq -e '((.hooks.Stop // []) | [ .[] | select(((.hooks // []) | any(.type == "command" and ((.command // "") | startswith("wrix-notify"))))) ] | length) > 0' "$settings_file" >/dev/null; then
+    fail "generated Claude settings do not invoke wrix-notify from a Stop hook"
   fi
-  if grep -Eq 'Notification = \[' "$sandbox_file"; then
-    fail "Claude settings still define the notify command under Notification"
+  if jq -e '(.hooks // {}) | has("Notification")' "$settings_file" >/dev/null; then
+    fail "generated Claude settings still define the notify command under Notification"
   fi
-  if ! grep -Eq 'command = "wrix-notify' "$sandbox_file"; then
-    fail "Claude Stop hook does not invoke wrix-notify"
-  fi
-  pass "Claude settings invoke wrix-notify from a Stop hook"
+  pass "Claude settings invoke wrix-notify from a generated Stop hook"
 }
 
 main() {

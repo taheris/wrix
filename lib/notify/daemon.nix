@@ -122,7 +122,6 @@ let
           fi
         else
           if [[ "$VERBOSE" == "1" ]]; then echo "notifyd: tmux active pane query failed" >&2; fi
-          return 1
         fi
       fi
 

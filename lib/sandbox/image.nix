@@ -446,4 +446,6 @@ rawImage
   # exclusive) can assert the agent rides its own tar (specs/image-builder.md
   # § Provenance-Tiered Layering).
   inherit stableProfileImage agentImage;
+  # Expose generated Claude settings so verifiers inspect the image input JSON.
+  inherit claudeSettingsJson;
 }
