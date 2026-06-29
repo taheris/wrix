@@ -60,12 +60,90 @@ expected_session_dir() {
   esac
 }
 
+agent_binary() {
+  local agent="$1"
+
+  case "$agent" in
+    claude) printf '%s\n' "claude" ;;
+    pi) printf '%s\n' "pi" ;;
+    direct) printf '%s\n' "loom-direct-runner" ;;
+    *)
+      printf 'unknown agent: %s\n' "$agent" >&2
+      return 64
+      ;;
+  esac
+}
+
+transcript_marker() {
+  local agent="$1"
+  local session_dir
+
+  session_dir=$(expected_session_dir "$agent")
+  printf '%s\n' "$session_dir/wrix-audit-transcript-$agent"
+}
+
+write_agent_stub() {
+  local agent="$1"
+  local workspace="$2"
+  local binary marker session_dir stub_dir stub_path
+
+  binary=$(agent_binary "$agent")
+  marker=$(transcript_marker "$agent")
+  session_dir=$(expected_session_dir "$agent")
+  stub_dir="$workspace/bin"
+  stub_path="$stub_dir/$binary"
+  mkdir -p "$stub_dir"
+  cat >"$stub_path" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+probe_workspace="\${WRIX_AUDIT_PROBE_WORKSPACE:-/workspace}"
+session_path="\$probe_workspace${session_dir#/workspace}"
+marker_path="\$probe_workspace${marker#/workspace}"
+mkdir -p "\$session_path"
+{
+  printf 'agent=%s\n' "$agent"
+  printf 'argv='
+  printf '%q ' "\$@"
+  printf '\n'
+} >"\$marker_path"
+if [[ "$agent" = "claude" ]]; then
+  printf '{"sessionId":"wrix-audit-%s"}\n' "$agent" >"\$probe_workspace/.claude/history.jsonl"
+fi
+EOF
+  chmod +x "$stub_path"
+}
+
+assert_agent_probe_contract() {
+  local agent="$1"
+  local workspace="$TEST_TMP/probe-$agent"
+  local binary marker host_marker out
+
+  mkdir -p "$workspace"
+  write_agent_stub "$agent" "$workspace"
+  binary=$(agent_binary "$agent")
+  marker=$(transcript_marker "$agent")
+  host_marker="$workspace${marker#/workspace}"
+  out="$TEST_TMP/probe-$agent.out"
+  WRIX_AUDIT_PROBE_WORKSPACE="$workspace" "$workspace/bin/$binary" --probe >"$out"
+  if [[ ! -f "$host_marker" ]]; then
+    fail "$agent: agent probe self-test did not write marker: $host_marker"
+    return
+  fi
+  if ! grep -qF "agent=$agent" "$host_marker"; then
+    fail "$agent: agent probe self-test marker does not identify the agent"
+    sed 's/^/    /' "$host_marker" >&2
+    return
+  fi
+  pass "$agent: agent probe self-test writes its transcript marker"
+}
+
 assert_audit_log_for_agent() {
   local agent="$1"
-  local image_source image_ref profile_config spawn_config workspace out err rc log_count log_file field value session_dir host_session_dir
+  local image_source image_ref profile_config spawn_config workspace out err rc log_count log_file field value session_dir host_session_dir marker host_marker
 
   image_source=$(wrix_realize_test_image_source "$agent")
-  image_ref="localhost/wrix-audit-$agent-$$:latest"
+  image_ref=$(wrix_live_image_ref "audit-$agent-$$")
   IMAGE_REFS+=("$image_ref")
   profile_config="$TEST_TMP/profile-$agent.json"
   spawn_config="$TEST_TMP/spawn-$agent.json"
@@ -73,8 +151,9 @@ assert_audit_log_for_agent() {
   out="$TEST_TMP/$agent.out"
   err="$TEST_TMP/$agent.err"
   mkdir -p "$workspace"
+  write_agent_stub "$agent" "$workspace"
   wrix_write_profile_config "$profile_config" "$image_ref" "$image_source" "$agent"
-  wrix_write_spawn_config "$spawn_config" "$workspace" bash -lc 'exit 0'
+  wrix_write_spawn_config "$spawn_config" "$workspace"
 
   rc=0
   if [[ "$agent" = "pi" ]]; then
@@ -124,8 +203,24 @@ assert_audit_log_for_agent() {
     return
   fi
 
-  pass "$agent: live launcher writes mandatory session-metadata index"
+  marker=$(transcript_marker "$agent")
+  host_marker="$workspace${marker#/workspace}"
+  if [[ ! -f "$host_marker" ]]; then
+    fail "$agent: selected agent did not write transcript marker: $host_marker"
+    return
+  fi
+  if ! grep -qF "agent=$agent" "$host_marker"; then
+    fail "$agent: transcript marker does not identify the selected agent"
+    sed 's/^/    /' "$host_marker" >&2
+    return
+  fi
+
+  pass "$agent: live launcher runs selected agent and writes mandatory session-metadata index"
 }
+
+assert_agent_probe_contract claude
+assert_agent_probe_contract pi
+assert_agent_probe_contract direct
 
 assert_audit_log_for_agent claude
 assert_audit_log_for_agent pi

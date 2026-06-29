@@ -6,14 +6,14 @@ REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 # shellcheck source=tests/lib/live-sandbox.sh
 source "$SCRIPT_DIR/../lib/live-sandbox.sh"
 
-wrix_require_live_sandbox_linux
+wrix_require_live_sandbox
 command -v script >/dev/null 2>&1 || wrix_live_skip "script not on PATH"
 cd "$REPO_ROOT"
 
 TEST_TMP=$(mktemp -d -t wrix-spawn-keys.XXXXXX)
 cleanup() {
   rm -rf "$TEST_TMP"
-  wrix_remove_image_ref "$IMAGE_REF"
+  wrix_remove_image_ref "${IMAGE_REF:-}"
 }
 trap cleanup EXIT
 
@@ -34,7 +34,7 @@ fail() {
 
 LAUNCHER=$(wrix_build_live_launcher)
 IMAGE_SOURCE=$(wrix_realize_test_image_source claude)
-IMAGE_REF="localhost/wrix-spawn-keys-$$:latest"
+IMAGE_REF=$(wrix_live_image_ref "spawn-keys-$$")
 PROFILE_CONFIG="$TEST_TMP/profile.json"
 HOME_DIR="$TEST_TMP/home"
 XDG_CACHE_HOME="$TEST_TMP/cache"
@@ -167,9 +167,12 @@ assert_run_permits_no_keys() {
     bash -lc '[[ -z "${WRIX_DEPLOY_KEY:-}" && -z "${WRIX_SIGNING_KEY:-}" ]]'
   )
   printf -v command_line '%q ' "${cmd[@]}"
-  env -u WRIX_DEPLOY_KEY -u WRIX_SIGNING_KEY -u WRIX_GIT_SIGN \
-    HOME="$HOME_DIR" XDG_CACHE_HOME="$XDG_CACHE_HOME" \
-    script -qefc "$command_line" /dev/null >"$out" 2>"$err" || rc=$?
+  (
+    unset WRIX_DEPLOY_KEY WRIX_SIGNING_KEY WRIX_GIT_SIGN
+    export HOME="$HOME_DIR"
+    export XDG_CACHE_HOME="$XDG_CACHE_HOME"
+    wrix_run_with_pty "$command_line"
+  ) >"$out" 2>"$err" || rc=$?
 
   if [[ "$rc" -ne 0 ]]; then
     fail "$label: wrix run did not boot keyless"

@@ -6,13 +6,13 @@ REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 # shellcheck source=tests/lib/live-sandbox.sh
 source "$SCRIPT_DIR/../lib/live-sandbox.sh"
 
-wrix_require_live_sandbox_linux
+wrix_require_live_sandbox
 cd "$REPO_ROOT"
 
 TEST_TMP=$(mktemp -d -t wrix-nested-key.XXXXXX)
 cleanup() {
   rm -rf "$TEST_TMP"
-  wrix_remove_image_ref "$IMAGE_REF"
+  wrix_remove_image_ref "${IMAGE_REF:-}"
 }
 trap cleanup EXIT
 
@@ -33,7 +33,7 @@ fail() {
 
 LAUNCHER=$(wrix_build_live_launcher)
 IMAGE_SOURCE=$(wrix_realize_test_image_source claude)
-IMAGE_REF="localhost/wrix-nested-key-$$:latest"
+IMAGE_REF=$(wrix_live_image_ref "nested-key-$$")
 PROFILE_CONFIG="$TEST_TMP/profile.json"
 SPAWN_CONFIG="$TEST_TMP/spawn.json"
 WORKSPACE="$TEST_TMP/workspace"

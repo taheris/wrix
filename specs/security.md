@@ -174,18 +174,11 @@ by `profiles.md`; this spec owns the *rubric* the membership must satisfy.
 Each base-allowlist entry must either pair with a specific credential (the
 exfil risk is accepted for the agent autonomy that credential enables) or be
 credentialless (the exfil risk is bounded by what an anonymous request can
-leak).
+leak). The entry-to-domain mapping stays in `profiles.md` so the allowlist has
+a single source of truth.
 
-The current entries map as:
-
-- `api.anthropic.com` pairs with `CLAUDE_CODE_OAUTH_TOKEN` — required for any
-  agent operation.
-- The GitHub hosts pair with the deploy key — required for `git push` and
-  `git fetch`.
-- `cache.nixos.org` is credentialless and read-only — bounded risk.
-
-Per-profile additions (e.g. `crates.io` for rust, `pypi.org` for python) must
-satisfy the same rubric and are owned by `profiles.md`. Network mechanics
+Per-profile additions must satisfy the same rubric and are owned by
+`profiles.md`. Network mechanics
 (`open` vs `limit`, in-sandbox firewall setup, exact local endpoint exceptions,
 DNS exceptions, one-time startup domain resolution, IPv6 policy, and fail-closed
 `capsh` capability drop) are owned by `sandbox.md`. Darwin host `pf` is not part
