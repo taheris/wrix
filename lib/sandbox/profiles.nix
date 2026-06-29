@@ -7,6 +7,12 @@
 }:
 
 let
+  inherit (pkgs.lib)
+    cleanSourceWith
+    concatStringsSep
+    mapAttrsToList
+    ;
+
   # Packages shared by all profiles on both platforms.
   # The function accepts a package set so it can be instantiated with
   # linuxPkgs (container images) or hostPkgs (devshells).
@@ -181,7 +187,7 @@ let
         if srcFilter == null then
           craneLib.cleanCargoSource src
         else
-          pkgs.lib.cleanSourceWith {
+          cleanSourceWith {
             inherit src;
             filter = srcFilter;
           };
@@ -210,8 +216,8 @@ let
               cp -r ${cleanedSrc} $out
               chmod -R u+w $out
             ''
-            + pkgs.lib.concatStringsSep "\n" (
-              pkgs.lib.mapAttrsToList (rel: abs: ''
+            + concatStringsSep "\n" (
+              mapAttrsToList (rel: abs: ''
                 mkdir -p "$(dirname "$out/${rel}")"
                 cp -r ${abs} "$out/${rel}"
               '') extraSrcs

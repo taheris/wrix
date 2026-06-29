@@ -113,17 +113,17 @@ Before launching the agent container, `wrix` ensures the per-workspace service c
   "schema": 1,
   "system": "x86_64-linux",
   "profile": {
-    "name": "rust",
+    "name": "example",
     "env": { "KEY": "value" },
     "mounts": [
-      { "source": "~/.cargo/registry", "dest": "/home/wrix/.cargo/registry", "mode": "rw" }
+      { "source": "~/.config/example", "dest": "/home/wrix/.config/example", "mode": "ro" }
     ],
-    "writable_dirs": ["/home/wrix/.cargo"],
-    "network_allowlist": ["api.anthropic.com", "github.com", "cache.nixos.org"]
+    "writable_dirs": [],
+    "network_allowlist": ["example.org"]
   },
   "image": {
-    "ref": "localhost/wrix-rust:sha256-...",
-    "source": "/nix/store/...-wrix-rust-image.json",
+    "ref": "localhost/wrix-example:sha256-...",
+    "source": "/nix/store/...-wrix-example-image.json",
     "source_kind": "nix-descriptor",
     "digest": "sha256:..."
   },

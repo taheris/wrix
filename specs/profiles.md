@@ -701,7 +701,7 @@ dests live under `/home/wrix/` inside the container, not under
   [check](sh -c "! grep -nE 'prek install|chmod.*\.git/hooks' lib/devshell/default.nix lib/default.nix")
 - `modules/flake/devshell.nix` does not set `core.hooksPath` (mkDevShell owns it)
   [check](sh -c "! grep -nE 'core\.hooksPath' modules/flake/devshell.nix")
-- Host devshell built via `wrix.mkDevShell { profile = wrix.rustProfile { toolchain; sha256; }; }` resolves `rustc` to the same `/nix/store/...` path as the sandbox built from the same profile
+- On Linux hosts, a host devshell built via `wrix.mkDevShell { profile = wrix.rustProfile { toolchain; sha256; }; }` resolves `rustc` to the same `/nix/store/...` path as the sandbox built from the same profile; on Darwin the host and image toolchains share the pinned channel/version but resolve to platform-specific store paths per the Host/image toolchain split
   [judge](../tests/judges/profiles.sh#test_host_sandbox_rustc_same_store_path)
 - `wrix.devToolchain` is not exposed by the lib (deleted; consumers reach `profile.toolchain`)
   [check](nix eval --raw .#lib --apply 'lib: if lib ? devToolchain then throw "devToolchain still exposed" else ""')

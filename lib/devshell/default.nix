@@ -178,9 +178,15 @@ in
         ${serviceHook}
 
         # Configure Dolt origin remote for bd dolt pull/push (no-op if already set)
-        if [ -d .beads/dolt/beads/.dolt ] && [ -d .git/beads-worktrees/beads/.beads/dolt-remote ]; then
+        if [[ -d .beads/dolt/beads/.dolt && -d .git/beads-worktrees/beads/.beads/dolt-remote ]]; then
           _dolt_remote="file://$PWD/.git/beads-worktrees/beads/.beads/dolt-remote"
-          (cd .beads/dolt/beads && dolt remote add origin "$_dolt_remote" 2>/dev/null || true)
+          (
+            cd .beads/dolt/beads
+            if ! dolt remote | awk '{ print $1 }' | grep -qx origin; then
+              dolt remote add origin "$_dolt_remote"
+            fi
+          )
+          unset _dolt_remote
         fi
 
         ${beadsHook}

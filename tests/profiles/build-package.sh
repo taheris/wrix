@@ -15,10 +15,8 @@
 #      bin/clippy/nextest all close over profile.toolchain on both
 #      profiles.rust and rustProfile { toolchain; sha256; }.
 #   7. test_consumers_migrated
-#      lib/mcp/tmux/mcp-server.nix consumes profile.buildPackage (no
-#      rustPlatform.buildRustPackage / makeRustPlatform); tests/default.nix
-#      exposes the clippy/nextest check entries; modules/flake/packages.nix
-#      extracts .bin from tmuxMcpPackage.
+#      The tmux-mcp consumer calls profile.buildPackage, the flake package
+#      output is a runnable derivation, and ciChecks expose clippy/nextest.
 #
 # Usage:
 #   tests/profiles/build-package.sh                    # run all 7 tests
@@ -305,34 +303,81 @@ test_build_package_toolchain_alignment() {
 # 7. Consumers migrated to profile.buildPackage and wired through to checks
 # ============================================================================
 test_consumers_migrated() {
-  local file pat
-  file="$REPO_ROOT/lib/mcp/tmux/mcp-server.nix"
-  if [[ ! -f "$file" ]]; then
-    echo "FAIL: expected consumer file missing: $file" >&2
-    return 1
-  fi
-  for pat in 'rustPlatform.buildRustPackage' 'makeRustPlatform'; do
-    if grep -qF "$pat" "$file"; then
-      echo "FAIL: $file still references '$pat'" >&2
-      return 1
-    fi
-  done
-  if ! grep -qF 'rustProfile.buildPackage' "$file"; then
-    echo "FAIL: $file does not call rustProfile.buildPackage" >&2
+  local result
+  if ! result=$(nix eval --json --impure --no-warn-dirty --expr "
+    let
+      system = builtins.currentSystem;
+      flake = builtins.getFlake \"git+file://$REPO_ROOT\";
+      pkgs = import flake.inputs.nixpkgs { inherit system; };
+      sentinelBin = pkgs.writeText \"tmux-mcp-bin-sentinel\" \"bin\";
+      sentinelClippy = pkgs.writeText \"tmux-mcp-clippy-sentinel\" \"clippy\";
+      sentinelNextest = pkgs.writeText \"tmux-mcp-nextest-sentinel\" \"nextest\";
+      sentinelArtifacts = pkgs.writeText \"tmux-mcp-artifacts-sentinel\" \"artifacts\";
+      captured = import $REPO_ROOT/lib/mcp/tmux/mcp-server.nix {
+        inherit pkgs;
+        rustProfile = {
+          buildPackage = args: {
+            passthruArgs = args;
+            bin = sentinelBin;
+            clippy = sentinelClippy;
+            nextest = sentinelNextest;
+            cargoArtifacts = sentinelArtifacts;
+          };
+        };
+      };
+      tmuxDrv = pkgs.tmux.drvPath;
+      inputDrvPaths = map (drv: drv.drvPath) captured.passthruArgs.buildInputs;
+      propagatedDrvPaths = map (drv: drv.drvPath) captured.passthruArgs.propagatedBuildInputs;
+      ciChecks = flake.legacyPackages.\${system}.ciChecks;
+    in {
+      consumerReturnedSentinels =
+        captured.bin.drvPath == sentinelBin.drvPath
+        && captured.clippy.drvPath == sentinelClippy.drvPath
+        && captured.nextest.drvPath == sentinelNextest.drvPath
+        && captured.cargoArtifacts.drvPath == sentinelArtifacts.drvPath;
+      cargoExtraArgs = captured.passthruArgs.cargoExtraArgs or null;
+      tmuxInBuildInputs = builtins.elem tmuxDrv inputDrvPaths;
+      tmuxInPropagatedBuildInputs = builtins.elem tmuxDrv propagatedDrvPaths;
+      packageType = flake.packages.\${system}.tmux-mcp.type or null;
+      packageMainProgram = flake.packages.\${system}.tmux-mcp.meta.mainProgram or null;
+      clippyCheckType = ciChecks.tmux-mcp-clippy.type or null;
+      nextestCheckType = ciChecks.tmux-mcp-nextest.type or null;
+    }
+  "); then
+    echo "FAIL: nix eval tmux-mcp consumer wiring failed" >&2
     return 1
   fi
 
-  local checks_file="$REPO_ROOT/tests/default.nix"
-  for pat in tmux-mcp-clippy tmux-mcp-nextest; do
-    if ! grep -qF "$pat" "$checks_file"; then
-      echo "FAIL: $checks_file is missing check entry '$pat'" >&2
-      return 1
-    fi
-  done
-
-  local pkgs_file="$REPO_ROOT/modules/flake/packages.nix"
-  if ! grep -qF 'wrix.tmuxMcpPackage.bin' "$pkgs_file"; then
-    echo "FAIL: $pkgs_file does not extract .bin via 'wrix.tmuxMcpPackage.bin'" >&2
+  if [[ "$(echo "$result" | jq -r '.consumerReturnedSentinels')" != "true" ]]; then
+    echo "FAIL: tmux-mcp consumer did not return the buildPackage outputs" >&2
+    return 1
+  fi
+  if [[ "$(echo "$result" | jq -r '.cargoExtraArgs')" != "-p tmux-mcp" ]]; then
+    echo "FAIL: tmux-mcp consumer did not pass the tmux-mcp package selector" >&2
+    return 1
+  fi
+  if [[ "$(echo "$result" | jq -r '.tmuxInBuildInputs')" != "true" ]]; then
+    echo "FAIL: tmux-mcp consumer did not pass tmux as a build input" >&2
+    return 1
+  fi
+  if [[ "$(echo "$result" | jq -r '.tmuxInPropagatedBuildInputs')" != "true" ]]; then
+    echo "FAIL: tmux-mcp consumer did not propagate tmux at runtime" >&2
+    return 1
+  fi
+  if [[ "$(echo "$result" | jq -r '.packageType')" != "derivation" ]]; then
+    echo "FAIL: flake package tmux-mcp is not a derivation" >&2
+    return 1
+  fi
+  if [[ "$(echo "$result" | jq -r '.packageMainProgram')" != "tmux-mcp" ]]; then
+    echo "FAIL: flake package tmux-mcp is not the runnable bin output" >&2
+    return 1
+  fi
+  if [[ "$(echo "$result" | jq -r '.clippyCheckType')" != "derivation" ]]; then
+    echo "FAIL: ciChecks.tmux-mcp-clippy is not a derivation" >&2
+    return 1
+  fi
+  if [[ "$(echo "$result" | jq -r '.nextestCheckType')" != "derivation" ]]; then
+    echo "FAIL: ciChecks.tmux-mcp-nextest is not a derivation" >&2
     return 1
   fi
 }

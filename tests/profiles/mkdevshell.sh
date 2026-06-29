@@ -9,8 +9,8 @@
 #     shellHook values when the generated hook is sourced.
 #
 #   test_packages_merge
-#     mkDevShell { profile = base; packages = [extra]; }.packages contains
-#     both profile.packages and extra (profile.packages ++ packages).
+#     mkDevShell { profile; packages = [extra]; } makes both profile tools
+#     and extra tools resolvable on PATH.
 #
 #   test_env_right_merge
 #     mkDevShell { profile; env = { K = "v"; }; } sets K=v on the resulting
@@ -186,50 +186,102 @@ test_profile_shellhook_spliced() {
 }
 
 # ============================================================================
-# packages = profile.packages ++ packages
-# Uses two extras of different counts so we can verify the merge is append
-# rather than replace, without forcing package element evaluation.
+# packages = profile.packages ++ packages, visible through the dev env PATH
 # ============================================================================
 test_packages_merge() {
-  local result
-  if ! result=$(eval_expr_json "
+  local env_file result profile_cmd extra_cmd profile_output extra_output
+  env_file="$TMP_BASE/mkdevshell-packages-env.sh"
+
+  if ! nix print-dev-env --impure --no-warn-dirty --expr "
     let
-      base = lib.mkDevShell { profile = lib.profiles.base; };
-      ext1 = lib.mkDevShell {
-        profile  = lib.profiles.base;
-        packages = [ pkgs.hello ];
+      system = builtins.currentSystem;
+      flake = builtins.getFlake \"git+file://$REPO_ROOT\";
+      pkgs = import flake.inputs.nixpkgs { inherit system; };
+      stub = pkgs.writeShellScriptBin \"wrix-mkdevshell-stub\" ''
+        set -euo pipefail
+        exit 0
+      '';
+      profileTool = pkgs.writeShellScriptBin \"wrix-mkdevshell-profile-tool\" ''
+        set -euo pipefail
+        printf '%s\\n' profile-tool
+      '';
+      extraTool = pkgs.writeShellScriptBin \"wrix-mkdevshell-extra-tool\" ''
+        set -euo pipefail
+        printf '%s\\n' extra-tool
+      '';
+      devshell = import $REPO_ROOT/lib/devshell/default.nix {
+        inherit pkgs;
+        rustCli = {
+          wrix = stub;
+          cacheHook = stub;
+          cachePublish = stub;
+        };
+        beads = {
+          shellHook = \"\";
+          waitAndExport = \"\";
+        };
       };
-      ext3 = lib.mkDevShell {
-        profile  = lib.profiles.base;
-        packages = [ pkgs.hello pkgs.jq pkgs.curl ];
+      profile = {
+        name = \"mkdevshell-test\";
+        packages = [ profileTool ];
+        hostPackages = [ profileTool ];
+        env = { };
+        shellHook = \"\";
+        mounts = [ ];
+        networkAllowlist = [ ];
+        enabledPlugins = { };
+        writableDirs = [ ];
       };
-    in {
-      baseLen = builtins.length base.nativeBuildInputs;
-      ext1Len = builtins.length ext1.nativeBuildInputs;
-      ext3Len = builtins.length ext3.nativeBuildInputs;
+    in devshell.mkDevShell {
+      inherit profile;
+      packages = [ extraTool ];
+      nixCache = false;
+      prekHooks = false;
     }
-  "); then
-    echo "FAIL: nix eval mkDevShell packages-merge expression failed" >&2
+  " >"$env_file"; then
+    echo "FAIL: nix print-dev-env mkDevShell packages-merge expression failed" >&2
     return 1
   fi
 
-  local base_len ext1_len ext3_len
-  base_len=$(echo "$result" | jq -r '.baseLen')
-  ext1_len=$(echo "$result" | jq -r '.ext1Len')
-  ext3_len=$(echo "$result" | jq -r '.ext3Len')
+  if ! result=$(
+    set +u
+    # shellcheck source=/dev/null
+    source "$env_file" >/dev/null
+    set -u
+    profile_cmd=$(command -v wrix-mkdevshell-profile-tool)
+    extra_cmd=$(command -v wrix-mkdevshell-extra-tool)
+    profile_output=$(wrix-mkdevshell-profile-tool)
+    extra_output=$(wrix-mkdevshell-extra-tool)
+    printf 'profile_cmd=%s\n' "$profile_cmd"
+    printf 'extra_cmd=%s\n' "$extra_cmd"
+    printf 'profile_output=%s\n' "$profile_output"
+    printf 'extra_output=%s\n' "$extra_output"
+  ); then
+    echo "FAIL: generated mkDevShell environment did not expose both tools on PATH" >&2
+    return 1
+  fi
 
-  if (( base_len < 1 )); then
-    echo "FAIL: base devshell has no packages — profile.packages was not appended" >&2
+  profile_cmd=$(env_value "$result" profile_cmd)
+  extra_cmd=$(env_value "$result" extra_cmd)
+  profile_output=$(env_value "$result" profile_output)
+  extra_output=$(env_value "$result" extra_output)
+
+  [[ "$profile_cmd" == /nix/store/*/bin/wrix-mkdevshell-profile-tool ]] || {
+    echo "FAIL: profile tool did not resolve from the Nix store PATH, got '$profile_cmd'" >&2
     return 1
-  fi
-  if (( ext1_len != base_len + 1 )); then
-    echo "FAIL: adding 1 package should grow nativeBuildInputs by 1 (base=$base_len, ext1=$ext1_len)" >&2
+  }
+  [[ "$extra_cmd" == /nix/store/*/bin/wrix-mkdevshell-extra-tool ]] || {
+    echo "FAIL: extra tool did not resolve from the Nix store PATH, got '$extra_cmd'" >&2
     return 1
-  fi
-  if (( ext3_len != base_len + 3 )); then
-    echo "FAIL: adding 3 packages should grow nativeBuildInputs by 3 (base=$base_len, ext3=$ext3_len)" >&2
+  }
+  [[ "$profile_output" == "profile-tool" ]] || {
+    echo "FAIL: profile tool output mismatch: '$profile_output'" >&2
     return 1
-  fi
+  }
+  [[ "$extra_output" == "extra-tool" ]] || {
+    echo "FAIL: extra tool output mismatch: '$extra_output'" >&2
+    return 1
+  }
 }
 
 # ============================================================================
