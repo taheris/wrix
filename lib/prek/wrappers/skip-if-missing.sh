@@ -1,4 +1,6 @@
-# shellcheck shell=bash
+#!/usr/bin/env bash
+set -euo pipefail
+
 # skip-if-missing <tool> -- <command> [args…]
 #
 # Renders a hook inert in contexts where its runtime dependency is absent:
@@ -8,7 +10,6 @@
 #
 # The literal `--` separator is required to disambiguate the tool name
 # from the wrapped command's leading arguments.
-set -euo pipefail
 
 if [[ $# -lt 3 ]]; then
     echo "skip-if-missing: usage: skip-if-missing <tool> -- <command> [args…]" >&2

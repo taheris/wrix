@@ -93,7 +93,7 @@ git -C "$WORKSPACE" commit -q -m initial
 # core.hooksPath -> prek bundle, then `git push` triggers the pre-push
 # shim which runs prek hook-impl --hook-type=pre-push and invokes the
 # sentinel before the actual push proceeds.
-podman run --rm --network=pasta --userns=keep-id \
+podman run --rm --network=pasta --cap-add=NET_ADMIN \
   -e HOME=/home/wrix \
   -e GIT_AUTHOR_NAME=test -e GIT_AUTHOR_EMAIL=test@example.com \
   -e GIT_COMMITTER_NAME=test -e GIT_COMMITTER_EMAIL=test@example.com \

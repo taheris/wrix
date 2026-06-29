@@ -168,6 +168,51 @@ let
   testCi = writeShellScriptBin "test-ci" ''
     set -euo pipefail
 
+    ci_checks=(
+      tmux-mcp-clippy
+      tmux-mcp-nextest
+      wrix-rust-clippy
+      wrix-rust-nextest
+      image-builds
+      package-script-syntax
+    )
+    ci_apps=(
+      test-wrix-spawn-load
+      test-image-install-archiveless
+      test-image-install-real-skopeo
+      test-image-install-digest-skip
+      test-image-digest-matches-stored-id
+      test-linux-image-archiveless-source
+      test-image-digest-no-tar
+      test-image-tier-graph
+      test-image-tier-membership
+      test-wrix-images-source-kind
+      test-wrix-image-labels
+      test-claude-runtime-noop
+      test-prek-hooks-closure
+      test-base-image-universal
+      test-entrypoint-resolver-base
+      test-base-image-hash-stable
+      test-stable-profile-hash-stable
+      test-stable-profile-membership
+      test-pinned-toolchain-stable-tier
+      test-downstream-change-leaf-only
+      test-archiveless-generated-change
+      test-agent-tier-isolated
+      test-agent-exclusive
+      test-iteration-cost-bounded
+      test-customisation-layer-bounded
+      test-image-nix-db-consistent
+      test-image-nix-db-no-dangling
+      test-profiles-build-package
+    )
+
+    if [[ "''${1:-}" = "--list" ]]; then
+      printf 'check %s\n' "''${ci_checks[@]}"
+      printf 'app %s\n' "''${ci_apps[@]}"
+      exit 0
+    fi
+
     repo_root=$(${pkgs.git}/bin/git rev-parse --show-toplevel 2>/dev/null || pwd) # best-effort: allow running outside a git checkout.
     cd "$repo_root"
 
@@ -186,47 +231,11 @@ let
 
     run_step "nix flake check" ${pkgs.nix}/bin/nix flake check --no-warn-dirty
 
-    for check in \
-      tmux-mcp-clippy \
-      tmux-mcp-nextest \
-      wrix-rust-clippy \
-      wrix-rust-nextest \
-      image-builds \
-      package-script-syntax
-    do
+    for check in "''${ci_checks[@]}"; do
       run_step "$check" ${pkgs.nix}/bin/nix build --no-link --no-warn-dirty ".#legacyPackages.${system}.ciChecks.$check"
     done
 
-    for app in \
-      test-wrix-spawn-load \
-      test-image-install-archiveless \
-      test-image-install-real-skopeo \
-      test-image-install-digest-skip \
-      test-image-digest-matches-stored-id \
-      test-linux-image-archiveless-source \
-      test-image-digest-no-tar \
-      test-image-tier-graph \
-      test-image-tier-membership \
-      test-wrix-images-source-kind \
-      test-wrix-image-labels \
-      test-claude-runtime-noop \
-      test-prek-hooks-closure \
-      test-base-image-universal \
-      test-entrypoint-resolver-base \
-      test-base-image-hash-stable \
-      test-stable-profile-hash-stable \
-      test-stable-profile-membership \
-      test-pinned-toolchain-stable-tier \
-      test-downstream-change-leaf-only \
-      test-archiveless-generated-change \
-      test-agent-tier-isolated \
-      test-agent-exclusive \
-      test-iteration-cost-bounded \
-      test-customisation-layer-bounded \
-      test-image-nix-db-consistent \
-      test-image-nix-db-no-dangling \
-      test-profiles-build-package
-    do
+    for app in "''${ci_apps[@]}"; do
       run_step "$app" ${pkgs.nix}/bin/nix run --no-warn-dirty ".#$app"
     done
 

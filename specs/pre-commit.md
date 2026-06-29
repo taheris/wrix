@@ -103,7 +103,7 @@ The `.wrix/push-verified` stamp is a within-attempt retry safety net: the pre-pu
 
 Every profile container image installs the same prek setup that `mkDevShell` configures on the host: `core.hooksPath` resolves to `wrix.prekHooks`, and both wrappers are on `PATH`. Agent commits and bead-branch pushes from inside the container therefore fire the same `.pre-commit-config.yaml` chain the host runs, with the same enforcement: a failing hook aborts the commit or push.
 
-Profile container images do not ship `nix` by default. Nix-requiring hooks degrade via `skip-if-missing nix --` in the downstream `.pre-commit-config.yaml`, not via a wrix-side hook-id skip list. Whether `nix` is on `PATH` is a property of the profile's packages; the wrapper makes hook firing conditional on it, so the same config is correct in both contexts.
+Built-in profiles that include `nix` run nix-requiring hooks in containers; downstream profiles that omit `nix` make those hooks degrade via `skip-if-missing nix --` in `.pre-commit-config.yaml`, not via a wrix-side hook-id skip list. Whether `nix` is on `PATH` is a property of the profile's packages; the wrapper makes hook firing conditional on it, so the same config is correct in both contexts.
 
 See `image-builder.md` § Hook installation for the build-side mechanism (which PATH the wrappers land on, how the entrypoint sets `core.hooksPath`, and the platform-specific entrypoint paths).
 
@@ -164,10 +164,10 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
 - Custom per-feature hook overrides — use a project-local `.pre-commit-config.yaml` patch
 - Hook retry logic
 - Parallel hook execution
-- Parameterized `mkPrekHooks` constructor. v1 ships a single frozen `wrix.prekHooks` bundle; consumers needing a different shim set substitute a hand-built derivation via `mkDevShell { prekHooks = <derivation>; }`. A parameterized constructor lands when a second concrete use case emerges.
-- Cross-process serialization of prek hook execution. Earlier revisions wrapped every shim in a `flock`-guarded critical section to defend prek's stash/restore dance against two commits landing at once on the same working tree. That defense was retired because wrix's consumer-invocation model already eliminates the dominant contention case: loom runs each bead in a private `git clone --local` under `.loom/beads/<id>/` with a single sequential agent per container and never touches the operator's `/workspace/`, so no concurrent writers reach a shared working tree under loom's control. Residual cases (parallel host shells on a single working tree, non-loom linked worktrees) use `git commit --no-verify` / `git push --no-verify` as the escape hatch.
+- Parameterized `mkPrekHooks` constructor — consumers needing a different shim set substitute a hand-built derivation via `mkDevShell { prekHooks = <derivation>; }`.
+- Cross-process serialization of prek hook execution — concurrent writers to the same working tree are outside wrix's hook bundle contract.
 - `marker.json` schema, mint, and validation — owned by downstream loom.
 - `loom gate verify-marker` subcommand internals — owned by downstream loom.
 - `.pre-commit-config.yaml` content in downstream projects — wrix ships the wrappers, not the hook list.
-- `push-verified` stamp deprecation/removal — orthogonal to `pre-push-checks` (see § Relationship to `push-verified`); deferred until the marker mechanism covers the SSH-retry case.
+- `push-verified` stamp deprecation/removal — orthogonal to `pre-push-checks`.
 - A wrix-owned hook-id skip list for the bead container — nix absence is handled via `skip-if-missing` at the point of use, not via a wrix-side filter.

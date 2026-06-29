@@ -8,7 +8,7 @@
 }:
 
 let
-  inherit (pkgs) bash runCommandLocal;
+  inherit (pkgs) bash runCommandLocal writeShellApplication;
   inherit (builtins) elem getEnv;
   inherit (pkgs.lib) getName;
 
@@ -50,7 +50,15 @@ let
     asTarball = isDarwin;
   };
 
-  sandboxLib = import ../../lib {
+  serviceCliStub = writeShellApplication {
+    name = "wrix-service-smoke-stub";
+    text = ''
+      echo "wrix service stub is not executable in smoke tests" >&2
+      exit 64
+    '';
+  };
+
+  sandboxLib = import ../../lib/sandbox {
     inherit
       pkgs
       system
@@ -59,6 +67,7 @@ let
       crane
       fenix
       ;
+    serviceCli = serviceCliStub;
   };
   sandbox = sandboxLib.mkSandbox { profile = sandboxLib.profiles.base; };
   wrix = sandbox.package;

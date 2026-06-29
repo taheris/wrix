@@ -13,9 +13,9 @@
 # share every base-layer blob and differ only in the top-of-closure
 # layer, exercising the launcher's per-blob-dedup install transport.
 #
-# `shipNix` adds `pkgs.nix` to the profile's `packages` (a nix-shipping
-# profile, as `image-builder.md` § Hook Installation describes; bead-use
-# images omit nix by default). The leaf renames to `nix` so the resulting
+# `shipNix` produces a separately named nix-capable image for tests that
+# exercise live in-container Nix. Appending `pkgs.nix` is idempotent for
+# profiles that already include it; the leaf renames to `nix` so the resulting
 # image tags as `wrix-nix` and does not collide with the base variant in
 # the platform store. `tests/sandbox/nix-in-container.sh` builds this
 # variant to exercise live in-container Nix (additive + store-mutating) as the

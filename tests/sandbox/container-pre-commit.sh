@@ -81,10 +81,10 @@ touch /workspace/.git/sentinel-fired-precommit
 SCRIPT
 chmod 755 "$WORKSPACE/.git/sentinel-pre-commit.sh"
 
-# Run the container with `git add -A && git commit` as the override.
+# Run the container with launcher-equivalent network setup for the override.
 commit_log=$(mktemp -t wrix-container-pre-commit-log.XXXXXX)
 trap 'rm -rf "$WORKSPACE" "$commit_log"; if podman image exists "$IMAGE_REF"; then podman rmi "$IMAGE_REF" >/dev/null; fi' EXIT
-if ! podman run --rm --network=pasta --userns=keep-id \
+if ! podman run --rm --network=pasta --cap-add=NET_ADMIN \
   -e HOME=/home/wrix \
   -e GIT_AUTHOR_NAME=test -e GIT_AUTHOR_EMAIL=test@example.com \
   -e GIT_COMMITTER_NAME=test -e GIT_COMMITTER_EMAIL=test@example.com \

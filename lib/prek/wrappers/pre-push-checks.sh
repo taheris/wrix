@@ -1,4 +1,6 @@
-# shellcheck shell=bash
+#!/usr/bin/env bash
+set -euo pipefail
+
 # pre-push-checks <command> [args…]
 #
 # Wraps a slow pre-push check with a marker-aware short-circuit. Consults
@@ -16,7 +18,6 @@
 # input the wrapper consults; routing it through `pre-push-checks` would be
 # self-referential. Position it as a plain hook
 # (`entry: loom gate verify-marker`).
-set -euo pipefail
 
 if [[ $# -eq 0 ]]; then
     echo "pre-push-checks: usage: pre-push-checks <command> [args…]" >&2
