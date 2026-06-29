@@ -39,19 +39,22 @@ test_image_contains_chromium() {
 
     TEMP_DIR=$(mktemp -d)
     local user_data_dir="${TEMP_DIR}/user-data"
-    local config_file chrome_path browsers_path mcp_path package_names_json closure_path image_path image_closure
+    local config_file chrome_path chrome_target chrome_helper_path browsers_path mcp_path package_names_json closure_path image_path image_closure
 
     config_file=$(playwright_config_path "$user_data_dir") || return 1
     chrome_path=$(jq -r '.browser.launchOptions.executablePath' "$config_file") || return 1
+    chrome_target=$(playwright_chromium_executable_target "$chrome_path") || return 1
+    chrome_helper_path="${chrome_path%/bin/chrome}"
     browsers_path=$(playwright_build_package playwright-browsers) || return 1
     mcp_path=$(playwright_build_package playwright-mcp) || return 1
 
     log_info "Generated config: $config_file"
     log_info "Chromium path: $chrome_path"
+    log_info "Chromium target: $chrome_target"
     log_info "Browsers package: $browsers_path"
     log_info "MCP server package: $mcp_path"
 
-    if [[ "$chrome_path" != "${browsers_path}"/*/chrome-linux64/chrome ]]; then
+    if ! playwright_chromium_path_is_derived_from_browsers "$chrome_path" "$browsers_path"; then
         log_fail "Generated chromium path is not derived from playwright-browsers"
         return 1
     fi
@@ -67,7 +70,7 @@ test_image_contains_chromium() {
     fi
 
     package_names_json=$(playwright_sandbox_package_names_json --argstr userDataDir "$user_data_dir") || return 1
-    if ! jq -e 'index("playwright-mcp") and index("playwright-browsers")' <<<"$package_names_json" >/dev/null; then
+    if ! jq -e 'index("playwright-mcp") and index("playwright-browsers") and index("playwright-chromium-executable")' <<<"$package_names_json" >/dev/null; then
         log_fail "mcp.playwright sandbox profile did not include the Playwright packages"
         echo "$package_names_json" >&2
         return 1
@@ -83,6 +86,10 @@ test_image_contains_chromium() {
         log_fail "Sandbox package closure is missing playwright-mcp"
         return 1
     fi
+    if ! contains_line "$chrome_helper_path" "${closure_path}/store-paths"; then
+        log_fail "Sandbox package closure is missing playwright-chromium-executable"
+        return 1
+    fi
     log_info "Sandbox package closure contains Playwright packages"
 
     image_path=$(playwright_sandbox_image --argstr userDataDir "$user_data_dir") || return 1
@@ -93,6 +100,10 @@ test_image_contains_chromium() {
     fi
     if [[ "$image_closure" != *"$mcp_path"* ]]; then
         log_fail "Built sandbox image closure is missing playwright-mcp"
+        return 1
+    fi
+    if [[ "$image_closure" != *"$chrome_helper_path"* ]]; then
+        log_fail "Built sandbox image closure is missing playwright-chromium-executable"
         return 1
     fi
     log_info "Built sandbox image closure contains Playwright packages"

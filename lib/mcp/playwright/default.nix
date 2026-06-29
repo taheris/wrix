@@ -7,6 +7,7 @@
 #   - name: Server identifier ("playwright")
 #   - packages: Runtime packages (MCP server + Chromium)
 #   - mkServerConfig: Function to generate server config from user options
+#   - passthru: Introspection helpers for tests and diagnostics
 #
 # Config options:
 #   - headless: Run browser in headless mode (default: true)
@@ -19,8 +20,29 @@
 let
   inherit (pkgs.lib) recursiveUpdate;
 
-  chromiumRevision = pkgs.playwright-driver.passthru.browsersJSON.chromium.revision;
-  chromiumPath = "${pkgs.playwright-driver.browsers}/chromium-${chromiumRevision}/chrome-linux64/chrome";
+  playwrightBrowsers = pkgs.playwright-driver.browsers;
+  chromiumExecutable = pkgs.runCommand "playwright-chromium-executable" { } ''
+    set -euo pipefail
+
+    mkdir -p "$out/bin"
+    mapfile -t candidates < <(
+      find -L "${playwrightBrowsers}" \
+        -mindepth 3 \
+        -maxdepth 3 \
+        -path "${playwrightBrowsers}/chromium-*/*/chrome" \
+        -type f \
+        -perm -0100 \
+        -print
+    )
+    if [[ "''${#candidates[@]}" -ne 1 ]]; then
+      printf 'expected exactly one Chromium executable under %s, found %s\n' \
+        "${playwrightBrowsers}" \
+        "''${#candidates[@]}" >&2
+      exit 1
+    fi
+    ln -s "''${candidates[0]}" "$out/bin/chrome"
+  '';
+  chromiumPath = "${chromiumExecutable}/bin/chrome";
 
   mandatoryFlags = [
     "--no-sandbox"
@@ -28,7 +50,7 @@ let
     "--disable-gpu"
   ];
 
-  mkConfigFile =
+  mkConfig =
     {
       headless,
       viewport,
@@ -71,18 +93,21 @@ let
       contextOptions = configContextOptions // {
         inherit viewport;
       };
-      configJSON = userConfig // {
-        inherit browser contextOptions;
-      };
     in
-    pkgs.writeText "playwright-mcp-config.json" (builtins.toJSON configJSON);
+    userConfig
+    // {
+      inherit browser contextOptions;
+    };
+
+  mkConfigFile = args: pkgs.writeText "playwright-mcp-config.json" (builtins.toJSON (mkConfig args));
 in
 {
   name = "playwright";
 
   packages = [
     pkgs.playwright-mcp
-    pkgs.playwright-driver.browsers
+    playwrightBrowsers
+    chromiumExecutable
   ];
 
   mkServerConfig =
@@ -108,4 +133,8 @@ in
         PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS = "true";
       };
     };
+
+  passthru = {
+    inherit mkConfig chromiumExecutable;
+  };
 }

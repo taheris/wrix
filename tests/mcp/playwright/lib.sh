@@ -69,6 +69,52 @@ playwright_config_path() {
     printf '%s\n' "$config_path"
 }
 
+playwright_config_json() {
+    local user_data_dir="$1"
+    local headless="${2:-true}"
+    local width="${3:-1280}"
+    local height="${4:-720}"
+    local config_json="{}"
+    if [[ $# -ge 5 ]]; then
+        config_json="$5"
+    fi
+
+    playwright_eval_raw config-json \
+        --argstr userDataDir "$user_data_dir" \
+        --argstr headless "$headless" \
+        --argstr width "$width" \
+        --argstr height "$height" \
+        --argstr configJson "$config_json"
+}
+
+playwright_chromium_executable_target() {
+    local chrome_path="$1"
+
+    if [[ -L "$chrome_path" ]]; then
+        readlink "$chrome_path"
+        return 0
+    fi
+
+    printf '%s\n' "$chrome_path"
+}
+
+playwright_chromium_path_is_derived_from_browsers() {
+    local chrome_path="$1"
+    local browsers_path="$2"
+    local target
+
+    target=$(playwright_chromium_executable_target "$chrome_path") || return 1
+    case "$target" in
+        "$browsers_path"/chromium-*/chrome-linux/chrome | "$browsers_path"/chromium-*/chrome-linux64/chrome)
+            return 0
+            ;;
+        *)
+            printf 'chromium path %s does not resolve under playwright-browsers %s\n' "$target" "$browsers_path" >&2
+            return 1
+            ;;
+    esac
+}
+
 playwright_server_args() {
     local user_data_dir="$1"
     local headless="${2:-true}"

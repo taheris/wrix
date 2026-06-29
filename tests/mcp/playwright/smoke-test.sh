@@ -168,16 +168,19 @@ test_chromium_executable_path_derives_from_playwright_browsers() {
     local config_file
     local chrome_path
     local browsers_path
+    local chrome_target
     config_file=$(playwright_config_path "$user_data_dir") || return 1
     chrome_path=$(jq -r '.browser.launchOptions.executablePath' "$config_file") || return 1
     browsers_path=$(playwright_build_package playwright-browsers) || return 1
+    chrome_target=$(playwright_chromium_executable_target "$chrome_path") || return 1
 
-    if [[ "$chrome_path" != "${browsers_path}"/chromium-*/chrome-linux64/chrome ]]; then
+    if ! playwright_chromium_path_is_derived_from_browsers "$chrome_path" "$browsers_path"; then
         log_fail "Chromium path is not derived from playwright-browsers: $chrome_path"
+        log_fail "Chromium target: $chrome_target"
         log_fail "playwright-browsers path: $browsers_path"
         return 1
     fi
-    log_info "Chromium path is under playwright-browsers"
+    log_info "Chromium path resolves under playwright-browsers"
 
     if [[ ! -x "$chrome_path" ]]; then
         log_fail "Configured chromium path is not executable: $chrome_path"
@@ -186,6 +189,30 @@ test_chromium_executable_path_derives_from_playwright_browsers() {
     log_info "Chromium path is executable"
 
     log_pass "test_chromium_executable_path_derives_from_playwright_browsers"
+}
+
+test_chromium_executable_path_does_not_embed_linux_arch() {
+    log_test "test_chromium_executable_path_does_not_embed_linux_arch: Linux configs use an architecture-neutral executable"
+
+    local linux_system
+    local config_json
+    local chrome_path
+    for linux_system in x86_64-linux aarch64-linux; do
+        config_json=$(PLAYWRIGHT_SYSTEM="$linux_system" playwright_config_json "/tmp/wrix-playwright-${linux_system}") || return 1
+        chrome_path=$(jq -r '.browser.launchOptions.executablePath' <<<"$config_json") || return 1
+
+        if [[ "$chrome_path" == *"/chrome-linux64/chrome" || "$chrome_path" == *"/chrome-linux/chrome" ]]; then
+            log_fail "Chromium path embeds a Linux browser archive layout for $linux_system: $chrome_path"
+            return 1
+        fi
+        if [[ "$chrome_path" != /nix/store/*-playwright-chromium-executable/bin/chrome ]]; then
+            log_fail "Chromium path for $linux_system does not use the derived executable helper: $chrome_path"
+            return 1
+        fi
+        log_info "Chromium path for $linux_system is architecture-neutral"
+    done
+
+    log_pass "test_chromium_executable_path_does_not_embed_linux_arch"
 }
 
 test_mandatory_flags_are_non_overridable() {
@@ -236,6 +263,7 @@ test_registry_triple_shape() {
     assert_json_text "$registry_json" '.name == "playwright"' "registry name is playwright" || return 1
     assert_json_text "$registry_json" '.packageNames | index("playwright-mcp")' "registry packages include playwright-mcp" || return 1
     assert_json_text "$registry_json" '.packageNames | index("playwright-browsers")' "registry packages include playwright-browsers" || return 1
+    assert_json_text "$registry_json" '.packageNames | index("playwright-chromium-executable")' "registry packages include chromium executable helper" || return 1
     assert_json_text "$registry_json" '.mkServerConfigIsFunction == true' "mkServerConfig is a function" || return 1
     assert_json_text "$registry_json" '.sampleConfig.command == "playwright-mcp" and .sampleConfig.args[0] == "--config"' "mkServerConfig returns a Playwright MCP command with config args" || return 1
 
@@ -333,6 +361,7 @@ test_offline_startup() {
 
 ALL_TESTS=(
     test_chromium_executable_path_derives_from_playwright_browsers
+    test_chromium_executable_path_does_not_embed_linux_arch
     test_mandatory_flags_are_non_overridable
     test_user_options_reach_serialized_config
     test_registry_triple_shape

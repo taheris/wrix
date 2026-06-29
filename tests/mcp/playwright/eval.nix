@@ -47,9 +47,12 @@ let
     };
     inherit config;
   };
+  configJSON = serverDef.passthru.mkConfig mcpOptions;
   serverConfig = serverDef.mkServerConfig mcpOptions;
   configPath = builtins.elemAt serverConfig.args 1;
   configRealizer = pkgs.runCommand "playwright-mcp-config-realizer" { } ''
+    set -euo pipefail
+
     cp ${configPath} "$out"
   '';
   packageMatches = builtins.filter (pkg: getName pkg == packageName) serverDef.packages;
@@ -68,6 +71,7 @@ let
     rootPaths = sandbox.profile.packages;
   };
   outputs = {
+    config-json = builtins.toJSON configJSON;
     config-path = configPath;
     config-realizer = configRealizer;
     server-args-json = builtins.toJSON serverConfig.args;
@@ -81,6 +85,7 @@ let
         inherit (serverConfig) command args env;
       };
     };
+    chromium-executable-path = configJSON.browser.launchOptions.executablePath;
     package = packageByName;
     package-path = toString packageByName;
     sandbox-image = sandbox.image;
