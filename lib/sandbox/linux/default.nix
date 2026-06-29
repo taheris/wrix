@@ -630,7 +630,7 @@ in
         fi
         verbose "Resolved ProfileConfig (agent=$WRIX_AGENT, profile_config=$PROFILE_CONFIG, image=$IMAGE_REF)"
 
-        # Image install transport: skopeo copy oci-archive: → containers-storage:
+        # Image install transport: descriptor-backed skopeo oci: → containers-storage:
         # (per specs/sandbox.md § Image install path). Body lives in
         # `lib/util/shell.nix` and is shared with the wrix-spawn-load verifier.
         ${imageLoadStep}

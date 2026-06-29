@@ -8,6 +8,7 @@ _:
         test = test.app;
         test-ci = test.apps.ci;
         test-agent-exclusive = test.apps.agent-exclusive;
+        test-agent-pkg-threaded = test.apps.agent-pkg-threaded;
         test-agent-tier-isolated = test.apps.agent-tier-isolated;
         test-archiveless-generated-change = test.apps.archiveless-generated-change;
         test-base-image-hash-stable = test.apps.base-image-hash-stable;

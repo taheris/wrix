@@ -200,6 +200,7 @@ let
       test-archiveless-generated-change
       test-agent-tier-isolated
       test-agent-exclusive
+      test-agent-pkg-threaded
       test-iteration-cost-bounded
       test-customisation-layer-bounded
       test-image-nix-db-consistent
@@ -426,6 +427,12 @@ in
       meta.description = "Verify exactly one agent rides each image: a direct image has no claude-code, a claude image no direct runner";
       type = "app";
       program = "${sandboxImageChecks.agentExclusiveTest}/bin/test-agent-exclusive";
+    };
+
+    agent-pkg-threaded = {
+      meta.description = "Verify agentPkg is threaded into the selected agent image closure";
+      type = "app";
+      program = "${sandboxImageChecks.agentPkgThreadedTest}/bin/test-agent-pkg-threaded";
     };
 
     iteration-cost-bounded = {

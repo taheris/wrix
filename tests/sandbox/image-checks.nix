@@ -926,11 +926,29 @@ let
               echo "FAIL: Linux descriptor still exposes legacy stream fallback metadata" >&2
               exit 1
           fi
+          if ! jq -e '
+              type == "object" and
+              .schema == 1 and
+              .source_kind == "nix-descriptor" and
+              (.digest | test("^sha256:[0-9a-f]{64}$")) and
+              (.oci_manifest.media_type == "application/vnd.oci.image.manifest.v1+json") and
+              (.oci_manifest.config.digest == .digest) and
+              ((.layers // []) | length > 0) and
+              all(.layers[]; (.digest | test("^sha256:[0-9a-f]{64}$")) and (.diff_id | test("^sha256:[0-9a-f]{64}$")) and (.size | type == "number"))
+            ' "$source_path" >/dev/null; then
+              echo "FAIL: Linux descriptor JSON does not expose the expected manifest/config/layer contract" >&2
+              jq . "$source_path" >&2
+              exit 1
+          fi
           oci_layout=$(jq -r '.oci_layout // ""' "$source_path")
           oci_ref=$(jq -r '.oci_ref // ""' "$source_path")
           layer_count=$(jq -r '(.layers // []) | length' "$source_path")
           if [[ "$oci_layout" != /nix/store/*-oci ]]; then
               echo "FAIL: Linux descriptor does not point at an OCI layout: $oci_layout" >&2
+              exit 1
+          fi
+          if [[ "$oci_layout" == "$source_path" ]]; then
+              echo "FAIL: Linux descriptor source path is the OCI layout path" >&2
               exit 1
           fi
           if [[ "$oci_ref" != "latest" ]]; then
@@ -1032,21 +1050,58 @@ let
   };
 
   sourceKindMatrix = {
-    base = (sandboxLib.mkSandbox { profile = sandboxLib.profiles.base; }).image;
-    rust = (sandboxLib.mkSandbox { profile = sandboxLib.profiles.rust; }).image;
-    python = (sandboxLib.mkSandbox { profile = sandboxLib.profiles.python; }).image;
-    base-pi =
-      (sandboxLib.mkSandbox {
-        profile = sandboxLib.profiles.base;
-        agent = "pi";
-      }).image;
-    base-claude = claudeImage;
-    wrix-service = serviceImage;
+    base = {
+      inherit ((sandboxLib.mkSandbox { profile = sandboxLib.profiles.base; })) image;
+      expected_kind = expectedImageSourceKind;
+    };
+    rust = {
+      inherit ((sandboxLib.mkSandbox { profile = sandboxLib.profiles.rust; })) image;
+      expected_kind = expectedImageSourceKind;
+    };
+    python = {
+      inherit ((sandboxLib.mkSandbox { profile = sandboxLib.profiles.python; })) image;
+      expected_kind = expectedImageSourceKind;
+    };
+    base-pi = {
+      inherit
+        (
+          (sandboxLib.mkSandbox {
+            profile = sandboxLib.profiles.base;
+            agent = "pi";
+          })
+        )
+        image
+        ;
+      expected_kind = expectedImageSourceKind;
+    };
+    base-claude = {
+      image = claudeImage;
+      expected_kind = expectedImageSourceKind;
+    };
+    wrix-service = {
+      image = serviceImage;
+      expected_kind = expectedImageSourceKind;
+    };
+    wrix-builder = {
+      image = builderImage;
+      expected_kind = "exempt";
+      exemption = "specs/linux-builder.md owns the Darwin-only Apple container load path";
+    };
   };
   sourceKindChecks = concatStringsSep "\n" (
-    mapAttrsToList (name: image: ''
-      check_source_kind "${name}" "${image.source_kind}" "${toString image.source}" "${discardContext image}"
-    '') sourceKindMatrix
+    mapAttrsToList (
+      name: entry:
+      if entry.expected_kind == "exempt" then
+        ''
+          check_source_kind_exemption "${name}" "${discardContext entry.image}" "${
+            entry.image.labels."wrix.image.kind" or ""
+          }" "${entry.exemption or ""}"
+        ''
+      else
+        ''
+          check_source_kind "${name}" "${entry.expected_kind}" "${entry.image.source_kind}" "${toString entry.image.source}" "${discardContext entry.image}"
+        ''
+    ) sourceKindMatrix
   );
 
   wrixImagesSourceKindTest = pkgs.writeShellApplication {
@@ -1058,13 +1113,29 @@ let
       pkgs.nix
     ];
     text = ''
+      check_source_kind_exemption() {
+          local name="$1"
+          local image_path="$2"
+          local image_kind="$3"
+          local exemption="$4"
+          if [[ "$image_path" != /nix/store/* ]]; then
+              echo "FAIL: $name exempt image path is not store-resident: $image_path" >&2
+              exit 1
+          fi
+          if [[ "$image_kind" != "builder" || -z "$exemption" ]]; then
+              echo "FAIL: $name exemption is not tied to the builder image contract" >&2
+              exit 1
+          fi
+      }
+
       check_source_kind() {
           local name="$1"
-          local source_kind="$2"
-          local source_path="$3"
-          local image_path="$4"
-          if [[ "$source_kind" != "${expectedImageSourceKind}" ]]; then
-              echo "FAIL: $name source_kind=$source_kind, expected ${expectedImageSourceKind}" >&2
+          local expected_kind="$2"
+          local source_kind="$3"
+          local source_path="$4"
+          local image_path="$5"
+          if [[ "$source_kind" != "$expected_kind" ]]; then
+              echo "FAIL: $name source_kind=$source_kind, expected $expected_kind" >&2
               exit 1
           fi
           if [[ "$source_path" != /nix/store/* ]]; then
@@ -1078,10 +1149,28 @@ let
                   echo "FAIL: $name descriptor exposes legacy stream fallback metadata" >&2
                   exit 1
               fi
+              if ! jq -e '
+                  type == "object" and
+                  .schema == 1 and
+                  .source_kind == "nix-descriptor" and
+                  (.digest | test("^sha256:[0-9a-f]{64}$")) and
+                  (.oci_manifest.media_type == "application/vnd.oci.image.manifest.v1+json") and
+                  (.oci_manifest.config.digest == .digest) and
+                  ((.layers // []) | length > 0) and
+                  all(.layers[]; (.digest | test("^sha256:[0-9a-f]{64}$")) and (.diff_id | test("^sha256:[0-9a-f]{64}$")) and (.size | type == "number"))
+                ' "$source_path" >/dev/null; then
+                  echo "FAIL: $name descriptor JSON does not expose the expected manifest/config/layer contract" >&2
+                  jq . "$source_path" >&2
+                  exit 1
+              fi
               oci_layout=$(jq -r '.oci_layout // ""' "$source_path")
               oci_ref=$(jq -r '.oci_ref // ""' "$source_path")
               if [[ "$oci_layout" != /nix/store/*-oci ]]; then
                   echo "FAIL: $name descriptor does not point at an OCI layout: $oci_layout" >&2
+                  exit 1
+              fi
+              if [[ "$oci_layout" == "$source_path" ]]; then
+                  echo "FAIL: $name descriptor source path is the OCI layout path" >&2
                   exit 1
               fi
               if [[ -z "$oci_ref" ]]; then
@@ -1110,31 +1199,31 @@ let
 
   imageLabelMatrix = {
     base = {
-      image = sourceKindMatrix.base;
+      image = sourceKindMatrix.base.image;
       kind = "profile";
       profile = "base";
       agent = "direct";
     };
     rust = {
-      image = sourceKindMatrix.rust;
+      image = sourceKindMatrix.rust.image;
       kind = "profile";
       profile = "rust";
       agent = "direct";
     };
     python = {
-      image = sourceKindMatrix.python;
+      image = sourceKindMatrix.python.image;
       kind = "profile";
       profile = "python";
       agent = "direct";
     };
     base-pi = {
-      image = sourceKindMatrix.base-pi;
+      image = sourceKindMatrix.base-pi.image;
       kind = "profile";
       profile = "base";
       agent = "pi";
     };
     base-claude = {
-      image = sourceKindMatrix.base-claude;
+      image = sourceKindMatrix.base-claude.image;
       kind = "profile";
       profile = "base";
       agent = "claude";
@@ -1158,7 +1247,7 @@ let
         check_label "${name}" "wrix.managed" "${labels."wrix.managed" or ""}" "true"
         check_label "${name}" "wrix.image.kind" "${labels."wrix.image.kind" or ""}" "${expected.kind}"
       ''
-      + lib.optionalString (expected.kind == "profile") ''
+      + optionalString (expected.kind == "profile") ''
         check_label "${name}" "wrix.profile.name" "${
           labels."wrix.profile.name" or ""
         }" "${expected.profile}"
@@ -1169,21 +1258,25 @@ let
   descriptorLabelChecks = concatStringsSep "\n" (
     optionals isLinux (
       mapAttrsToList (
-        name: image:
-        let
-          inherit (image) labels;
-          source = toString image.source;
-        in
-        ''
-          check_descriptor_label "${name}" "${source}" "wrix.managed" "${labels."wrix.managed"}"
-          check_descriptor_label "${name}" "${source}" "wrix.image.kind" "${labels."wrix.image.kind"}"
-        ''
-        + optionalString (hasAttr "wrix.profile.name" labels) ''
-          check_descriptor_label "${name}" "${source}" "wrix.profile.name" "${labels."wrix.profile.name"}"
-        ''
-        + optionalString (hasAttr "wrix.agent.kind" labels) ''
-          check_descriptor_label "${name}" "${source}" "wrix.agent.kind" "${labels."wrix.agent.kind"}"
-        ''
+        name: entry:
+        if entry.expected_kind == "exempt" then
+          ""
+        else
+          let
+            inherit (entry) image;
+            inherit (image) labels;
+            source = toString image.source;
+          in
+          ''
+            check_descriptor_label "${name}" "${source}" "wrix.managed" "${labels."wrix.managed"}"
+            check_descriptor_label "${name}" "${source}" "wrix.image.kind" "${labels."wrix.image.kind"}"
+          ''
+          + optionalString (hasAttr "wrix.profile.name" labels) ''
+            check_descriptor_label "${name}" "${source}" "wrix.profile.name" "${labels."wrix.profile.name"}"
+          ''
+          + optionalString (hasAttr "wrix.agent.kind" labels) ''
+            check_descriptor_label "${name}" "${source}" "wrix.agent.kind" "${labels."wrix.agent.kind"}"
+          ''
       ) sourceKindMatrix
     )
   );
@@ -2022,6 +2115,42 @@ let
         '';
   };
 
+  agentPkgThreadedRunner = linuxPkgs.writeShellScriptBin "wrix-agentpkg-threaded-runner" ''
+    echo "agentPkg threaded runner"
+  '';
+  agentPkgThreadedImage = mkAgentExclusiveImage {
+    agent = "direct";
+    agentPkg = agentPkgThreadedRunner;
+  };
+  agentPkgThreadedClosure = linuxPkgs.closureInfo { rootPaths = [ agentPkgThreadedImage ]; };
+  agentPkgThreadedTest = pkgs.writeShellApplication {
+    name = "test-agent-pkg-threaded";
+    runtimeInputs = optionals isLinux [
+      pkgs.coreutils
+      pkgs.gnugrep
+    ];
+    text =
+      if isLinux then
+        ''
+          image_closure=${agentPkgThreadedClosure}/store-paths
+          selected_agent_pkg=${agentPkgThreadedRunner}
+
+          if ! grep -qxF "$selected_agent_pkg" "$image_closure"; then
+              echo "FAIL: selected agentPkg is missing from the image closure" >&2
+              echo "  expected: $selected_agent_pkg" >&2
+              echo "  closure : $image_closure" >&2
+              exit 1
+          fi
+
+          echo "test-agent-pkg-threaded: PASS"
+        ''
+      else
+        ''
+          echo "test-agent-pkg-threaded: skipped on this platform (streamLayeredImage is Linux-only)" >&2
+          exit 0
+        '';
+  };
+
   # Iteration-cost-bounded probe (specs/image-builder.md Success Criteria:
   # "A one-file perturbation in profile-level inputs (one wrapper script touched)
   # leaves every layer-blob hash in the resulting image's manifest unchanged
@@ -2523,6 +2652,7 @@ in
     archivelessGeneratedChangeTest
     agentTierIsolatedTest
     agentExclusiveTest
+    agentPkgThreadedTest
     iterationCostBoundedTest
     customisationLayerBoundedTest
     imageNixDbConsistentTest

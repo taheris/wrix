@@ -28,6 +28,10 @@ The builder runs under Apple's `container` CLI (Virtualization.framework microVM
 
 The container boundary is the isolation primitive; Nix's internal sandbox is disabled inside the container (`sandbox = false`) to avoid nested namespace complexity, and the `builder` user is trusted by the nix-daemon. This is appropriate because SSH binds to `127.0.0.1` only, password authentication is disabled, and the SSH key is reachable only by the host user who started the builder.
 
+### Image-source exemption
+
+The `wrix-builder` bootstrap image is a Linux rootfs consumed only by the macOS builder. It is loaded through Apple's tar/OCI archive path and is the explicit exemption from `image-builder.md`'s Linux `nix-descriptor` source-kind contract; the image-builder source-kind verifier enumerates that exemption while this spec owns runtime acceptance.
+
 ## CLI Surface
 
 | Command | Description |
@@ -65,6 +69,8 @@ The container boundary is the isolation primitive; Nix's internal sandbox is dis
   [system](bash tests/builder/key-material.sh test_generates_per_user_ed25519_material)
 - Re-running builder key-material initialization preserves existing private keys
   [system](bash tests/builder/key-material.sh test_preserves_existing_private_keys)
+- The `wrix-builder` bootstrap image is enumerated as the explicit image-builder source-kind exemption while retaining wrix ownership labels
+  [system](nix run .#test-wrix-images-source-kind)
 
 ## Requirements
 
