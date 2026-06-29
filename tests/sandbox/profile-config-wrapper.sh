@@ -175,19 +175,53 @@ test_wrapper_dispatches_service_commands() {
   pass "wrapped package dispatches service commands to the Rust CLI"
 }
 
-test_wrapper_invokes_launcher_with_profile_config() {
-  local out="$TEST_TMP/dry-run.out" err="$TEST_TMP/dry-run.err" config rc=0
-  config=$(profile_config_from_wrapper)
-  WRIX_DRY_RUN=1 "$WRIX" run "$WORKSPACE" >"$out" 2>"$err" || rc=$?
+profile_config_from_dry_run_output() {
+  local output_path="$1"
+  awk -F= '$1 == "PROFILE_CONFIG" { print $2; exit }' "$output_path"
+}
+
+write_spawn_config() {
+  local output_path="$1"
+  jq -n --arg workspace "$WORKSPACE" '{ workspace: $workspace, env: [], agent_args: ["true"], mounts: [] }' >"$output_path"
+}
+
+test_wrapper_invokes_run_and_spawn_with_profile_config() {
+  local run_out="$TEST_TMP/dry-run.out" run_err="$TEST_TMP/dry-run.err"
+  local spawn_out="$TEST_TMP/dry-spawn.out" spawn_err="$TEST_TMP/dry-spawn.err"
+  local spawn_config="$TEST_TMP/spawn.json" run_config spawn_config_path rc=0
+
+  WRIX_DRY_RUN=1 "$WRIX" run "$WORKSPACE" >"$run_out" 2>"$run_err" || rc=$?
   if [[ "$rc" != "0" ]]; then
-    fail "wrapped dry-run failed: $(cat "$err")"
+    fail "wrapped run dry-run failed: $(cat "$run_err")"
     return 1
   fi
-  if ! grep -qxF "PROFILE_CONFIG=$config" "$out"; then
-    fail "launcher did not receive wrapper ProfileConfig; output=$(cat "$out")"
+  run_config=$(profile_config_from_dry_run_output "$run_out")
+  if [[ "$run_config" != /nix/store/* || ! -f "$run_config" ]]; then
+    fail "run dry-run did not expose a store ProfileConfig path: $(cat "$run_out")"
     return 1
   fi
-  pass "wrapped package passes --profile-config through to the launcher"
+  if ! grep -qxF 'SUBCOMMAND=run' "$run_out"; then
+    fail "run dry-run did not reach the launcher run parser: $(cat "$run_out")"
+    return 1
+  fi
+
+  write_spawn_config "$spawn_config"
+  rc=0
+  WRIX_DRY_RUN=1 "$WRIX" spawn --spawn-config "$spawn_config" --stdio >"$spawn_out" 2>"$spawn_err" || rc=$?
+  if [[ "$rc" != "0" ]]; then
+    fail "wrapped spawn dry-run failed: $(cat "$spawn_err")"
+    return 1
+  fi
+  spawn_config_path=$(profile_config_from_dry_run_output "$spawn_out")
+  if [[ "$spawn_config_path" != "$run_config" ]]; then
+    fail "spawn did not receive the same wrapper ProfileConfig; run=$run_config spawn=$spawn_config_path output=$(cat "$spawn_out")"
+    return 1
+  fi
+  if ! grep -qxF 'SUBCOMMAND=spawn' "$spawn_out" || ! grep -qxF 'STDIO=1' "$spawn_out"; then
+    fail "spawn dry-run did not reach the launcher spawn parser: $(cat "$spawn_out")"
+    return 1
+  fi
+  pass "wrapped package passes a store ProfileConfig through live run and spawn parsing"
 }
 
 ALL_TESTS=(
@@ -196,7 +230,7 @@ ALL_TESTS=(
   test_profile_config_contains_launcher_contract_fields
   test_image_source_kind
   test_wrapper_dispatches_service_commands
-  test_wrapper_invokes_launcher_with_profile_config
+  test_wrapper_invokes_run_and_spawn_with_profile_config
 )
 
 run_all() {

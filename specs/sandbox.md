@@ -25,14 +25,14 @@ Running AI coding assistants with unrestricted host access creates security risk
 
 The **runtime image installer** is the shared host-side image install and cleanup path used by `wrix run`, `wrix spawn`, and `wrix service start`; it is not a separate public CLI.
 
-**Image install path** — Before invoking the platform install pipeline, the wrix runtime image installer checks whether the image's **content digest** (manifest digest published with the selected image source, not ref-name+tag) matches any image already present in the platform store. On Linux this digest is derived from descriptor/config metadata without executing the source; tar-loadable Darwin sources may be inspected for manifest metadata but are not loaded. On a digest hit, the install is skipped entirely — no source execution, no tar materialization, no stream invocation, and no `*-load` CLI call. On a miss, the installer dispatches by `ProfileConfig.image.source_kind`:
+**Image install path** — Before invoking the platform install pipeline, the wrix runtime image installer checks whether the image's **content digest** recorded with the selected image source (not ref-name+tag) matches any image already present in the platform store. On Linux this digest is derived from descriptor/config metadata without executing the source; tar-loadable Darwin sources may be inspected for config metadata but are not loaded. On a digest hit, the install is skipped entirely — no source execution, no tar materialization, no stream invocation, and no `*-load` CLI call. On a miss, the installer dispatches by `ProfileConfig.image.source_kind`:
 
 - Linux uses an archive-less source (`source_kind = "nix-descriptor"`) with a containers/image-compatible transport (`skopeo copy nix:<descriptor> → containers-storage:<ref>` or a wrix equivalent). The destination is asked whether each layer digest can be reused before the source opens store paths or generates a tar stream, so unchanged layers are neither generated nor copied.
 - Darwin uses `container image load --input <tar>` for tar-loadable sources (`source_kind = "docker-archive"`). Apple's `container` CLI surfaces no per-blob-dedup install path at this time; see `image-builder.md` § Out of Scope.
 
 Both platforms rely on the provenance-tiered graph (see `image-builder.md` § Provenance-Tiered Layering) to keep volatile changes isolated. Linux realizes the cache contract through descriptor-level layer reuse; Darwin keeps a tar/load fallback plus digest-skip preflight until a per-blob Apple path is verified.
 
-**Image retention and cleanup** — The wrix runtime image cleanup path maintains a bounded wrix image keep set across workspaces, stored under the user's wrix cache (implementation-owned path, file name `image-mru.json`) rather than under a single repo. It keeps the image selected for the current operation, images used by existing containers, and the eight most recently used wrix image records written by any workspace/direnv. Each MRU record includes the image ref plus the resolved manifest digest and image ID when available; cleanup keeps an image if any recorded identifier matches. Cleanup consults that shared MRU before deleting so a launch in one repo does not remove another repo's recently cached image. Wrix-managed images outside that keep set are pruned. New images are labelled by `image-builder.md` so dangling cleanup can target wrix-owned images without touching user images. On Linux, legacy tagged `localhost/wrix-*` images may be removed when outside the keep set; unlabelled `<none>:<none>` images are not automatically removed because ownership is ambiguous. Wrix may report those legacy dangling images and offer a manual/opt-in cleanup path.
+**Image retention and cleanup** — The wrix runtime image cleanup path maintains a bounded wrix image keep set across workspaces, stored under the user's wrix cache (implementation-owned path, file name `image-mru.json`) rather than under a single repo. It keeps the image selected for the current operation, images used by existing containers, and the eight most recently used wrix image records written by any workspace/direnv. Each MRU record includes the image ref plus the resolved content digest and image ID when available; cleanup keeps an image if any recorded identifier matches. Cleanup consults that shared MRU before deleting so a launch in one repo does not remove another repo's recently cached image. Wrix-managed images outside that keep set are pruned. New images are labelled by `image-builder.md` so dangling cleanup can target wrix-owned images without touching user images. On Linux, legacy tagged `localhost/wrix-*` images may be removed when outside the keep set; unlabelled `<none>:<none>` images are not automatically removed because ownership is ambiguous. Wrix may report those legacy dangling images and offer a manual/opt-in cleanup path.
 
 **Boundary class** —
 
@@ -188,13 +188,15 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 ## Success Criteria
 
 - `mkSandbox` accepts the documented parameter set (`profile`, `cpus`, `memoryMb`, `deployKey`, `packages`, `mounts`, `env`, `mcp`, `mcpRuntime`, `agent`, `agentPkg`, `agentSettings`) and returns `{ package, image, launcher, profile }`
-  [check](grep -nE 'profile \?|cpus \?|memoryMb \?|deployKey \?|packages \?|mounts \?|env \?|mcp \?|mcpRuntime \?|agent \?|agentPkg \?|agentSettings \?|inherit package image launcher' lib/sandbox/default.nix)
+  [system](bash tests/sandbox/mksandbox-api.sh test_mksandbox_accepts_documented_parameters)
 - Platform dispatch picks the Linux implementation on Linux hosts and the macOS implementation on Darwin hosts
   [check](grep -nE 'isLinux|isDarwin' lib/sandbox/default.nix)
 - Evaluating `mkSandbox` on an unsupported system throws at evaluation time rather than producing a broken derivation
   [check](grep -nE 'Unsupported system' lib/sandbox/default.nix)
-- A built sandbox starts a container and exits cleanly on both Linux and macOS
-  [system](bash tests/sandbox/container-starts.sh)
+- A built Linux sandbox starts a container and exits cleanly
+  [system](bash tests/sandbox/container-starts.sh test_linux_container_starts)
+- A built macOS sandbox starts an Apple `container` microVM and exits cleanly
+  [system](bash tests/sandbox/container-starts.sh test_darwin_container_starts)
 - Files created inside `/workspace` carry the host UID/GID, not a container-internal UID
   [system](bash tests/sandbox/uid-mapping.sh)
 - Host filesystem outside `/workspace` and declared mounts is not visible inside the container
@@ -225,8 +227,8 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
   [check](grep -nE 'WRIX_MICROVM|--runtime krun|/dev/kvm' lib/sandbox/linux/default.nix)
 - `wrix run` errors at startup with a clear message when no valid Nix-generated `ProfileConfig` JSON is supplied
   [system](bash tests/sandbox/missing-profile-config.sh)
-- `mkSandbox`'s `package` wrapper passes an immutable Nix-store `ProfileConfig` JSON path to the Rust `wrix` CLI instead of generating a large shell launcher
-  [system](bash tests/sandbox/profile-config-wrapper.sh)
+- `mkSandbox`'s `package` wrapper passes an immutable Nix-store `ProfileConfig` JSON path to the profile-agnostic launcher for both `run` and `spawn`, with image defaults supplied by `ProfileConfig` rather than mutable `WRIX_DEFAULT_IMAGE_*` env vars
+  [system](bash tests/sandbox/profile-config-wrapper.sh test_wrapper_invokes_run_and_spawn_with_profile_config)
 - `ProfileConfig.image` includes `ref`, `source`, explicit `source_kind`, and `digest`; the launcher/runtime installer rejects configs where `source_kind` is missing or incompatible with the selected platform install path
   [system](bash tests/sandbox/profile-config-wrapper.sh test_image_source_kind)
 - The selected agent runtime comes from `ProfileConfig` and cannot be changed by caller env independently of the selected image/profile
@@ -238,7 +240,7 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 - On Darwin, the same mount classifier handles `profile.mounts` and `SpawnConfig.mounts` — one mechanism, not two. Directories are staged + copied at launch, regular files copy-from-parent-dir, and entries whose `host_path` is a Unix socket cause the launcher to fail loudly before the container starts. (VirtioFS does not pass socket operations, so a silently-mounted socket would dead-end at the first `connect()`.)
   [system](bash tests/sandbox/darwin-mount-classifier.sh)
 - The container entrypoint switches on `WRIX_AGENT` and exec's the matching agent binary (`claude`, `pi`, `direct`)
-  [check](grep -nE 'WRIX_AGENT' lib/sandbox/linux/entrypoint.sh lib/sandbox/darwin/entrypoint.sh)
+  [system](bash tests/sandbox/entrypoint-contract.sh test_agent_dispatch_both_entrypoints)
 - Before exec'ing the selected agent, the entrypoint rejects a mismatch between the ProfileConfig-selected `WRIX_AGENT` and the image-declared `/etc/wrix/image-agent`, then verifies the agent's binary is present and fails loudly with a clear error when it is absent from the image (e.g. `WRIX_AGENT=pi` against a claude image), rather than emitting a bare `command not found`
   [system](bash tests/sandbox/agent-binary-guard.sh)
 - Both entrypoints seed and persist each agent's own config home — claude `~/.claude`, pi `~/.pi/agent` — not only claude's
@@ -252,13 +254,13 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 - When `/workspace/bin` does not exist, the container's `PATH` does not contain `/workspace/bin`
   [system](bash tests/sandbox/workspace-bin-path.sh)
 - Both `lib/sandbox/linux/entrypoint.sh` and `lib/sandbox/darwin/entrypoint.sh` implement the `/workspace/bin` PATH prepend
-  [check](grep -nE 'PATH="/workspace/bin:' lib/sandbox/linux/entrypoint.sh lib/sandbox/darwin/entrypoint.sh)
+  [system](bash tests/sandbox/entrypoint-contract.sh test_workspace_bin_path_prepend_both)
 - The runtime image installer preflight checks whether the selected image source's content digest matches any image already present in the platform store before invoking the install pipeline; on a digest hit, no image source is executed, no tar bytes are streamed, and no `*-load` CLI is invoked
   [system](bash tests/sandbox/image-install-digest-skip.sh)
 - On Linux, the runtime image installer dispatches `source_kind = "nix-descriptor"` through an archive-less `skopeo nix:<descriptor> → containers-storage:<ref>` (or equivalent wrix) install path; the docker/OCI archive conversion path is not used for Linux descriptor sources
   [system](bash tests/sandbox/image-install-archiveless.sh)
 - A second spawn of an already-loaded image performs no writes to the platform store's layer directory and does not execute the image source
-  [system?](bash tests/sandbox/image-install-no-rewrite.sh)
+  [system](bash tests/sandbox/image-install-no-rewrite.sh)
 - On Linux, re-installing an image that differs from the cached one in only its top customisation layer generates and transfers only changed/missing layer blobs, not O(image-size) bytes
   [system](bash tests/sandbox/image-install-delta-bounded.sh)
 - The runtime image cleanup path records a bounded cross-workspace MRU of eight wrix image refs/digests/image IDs, preserves images used by existing containers, prunes wrix-managed images outside the keep set, and does not automatically remove unlabelled `<none>:<none>` images

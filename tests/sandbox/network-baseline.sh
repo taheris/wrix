@@ -6,7 +6,16 @@ REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 # shellcheck source=tests/lib/live-sandbox.sh
 source "$SCRIPT_DIR/../lib/live-sandbox.sh"
 
+require_host_public_ipv4_egress() {
+  command -v curl >/dev/null 2>&1 || wrix_live_skip "curl not on PATH for host egress preflight"
+  if ! curl -4 --fail --silent --show-error --connect-timeout 10 --max-time 30 \
+    https://cache.nixos.org/nix-cache-info >/dev/null; then
+    wrix_live_skip "host public IPv4 egress to cache.nixos.org is unavailable"
+  fi
+}
+
 wrix_require_live_sandbox_linux
+require_host_public_ipv4_egress
 cd "$REPO_ROOT"
 
 TEST_TMP=$(mktemp -d -t wrix-network-baseline.XXXXXX)
@@ -75,7 +84,7 @@ test_open_blocks_lan() {
 
   probe=$(cat <<'PROBE'
 set -euo pipefail
-curl --fail --silent --show-error --connect-timeout 10 --max-time 30 https://cache.nixos.org/nix-cache-info >/tmp/wrix-public-egress
+curl -4 --fail --silent --show-error --connect-timeout 10 --max-time 30 https://cache.nixos.org/nix-cache-info >/tmp/wrix-public-egress
 for target in 10.0.0.1 172.16.0.1 192.168.0.1 169.254.169.254; do
   if nc -z -w 2 "$target" 80 >/tmp/wrix-private-probe 2>&1; then
     printf 'private target reachable despite baseline block: %s\n' "$target" >&2
@@ -101,8 +110,8 @@ test_limit_allowlist() {
 
   probe=$(cat <<'PROBE'
 set -euo pipefail
-curl --fail --silent --show-error --connect-timeout 10 --max-time 30 https://cache.nixos.org/nix-cache-info >/tmp/wrix-allowlisted-egress
-if curl --fail --silent --show-error --connect-timeout 5 --max-time 8 https://example.com >/tmp/wrix-nonallowlisted-egress 2>&1; then
+curl -4 --fail --silent --show-error --connect-timeout 10 --max-time 30 https://cache.nixos.org/nix-cache-info >/tmp/wrix-allowlisted-egress
+if curl -4 --fail --silent --show-error --connect-timeout 5 --max-time 8 https://example.com >/tmp/wrix-nonallowlisted-egress 2>&1; then
   echo 'non-allowlisted public egress succeeded in limit mode' >&2
   exit 1
 fi
