@@ -42,6 +42,37 @@ state_file() {
   printf '%s/%s.state\n' "$STATE_DIR" "$name"
 }
 
+run_file() {
+  local name="$1"
+  printf '%s/run-%s\n' "$STATE_DIR" "$name"
+}
+
+port_lines_for_args() {
+  local run_args="$1"
+  local previous=""
+  local token
+  local mapping
+  local rest
+  local host_port
+  local container_port
+  local -a tokens=()
+  read -r -a tokens <<<"$run_args"
+  for token in "${tokens[@]}"; do
+    if [[ "$previous" == "-p" || "$previous" == "--publish" ]]; then
+      mapping="$token"
+      case "$mapping" in
+        127.0.0.1:*:*)
+          rest="${mapping#127.0.0.1:}"
+          host_port="${rest%%:*}"
+          container_port="${rest##*:}"
+          printf '%s/tcp -> 127.0.0.1:%s\n' "$container_port" "$host_port"
+          ;;
+      esac
+    fi
+    previous="$token"
+  done
+}
+
 case "${1:-}" in
   container)
     if [[ "${2:-}" == "exists" ]]; then
@@ -75,10 +106,22 @@ case "${1:-}" in
       exit 2
     fi
     printf 'running\n' >"$(state_file "$name")"
+    printf '%s\n' "$*" >"$(run_file "$name")"
+    ;;
+  port)
+    name="${2:-}"
+    if [[ ! -f "$(state_file "$name")" ]]; then
+      printf 'Error: no such object: "%s"\n' "$name" >&2
+      exit 1
+    fi
+    run_path="$(run_file "$name")"
+    if [[ -f "$run_path" ]]; then
+      port_lines_for_args "$(<"$run_path")"
+    fi
     ;;
   rm)
     name="${@: -1}"
-    rm -f "$(state_file "$name")"
+    rm -f "$(state_file "$name")" "$(run_file "$name")"
     ;;
   logs)
     printf 'logs for %s\n' "${2:-}"

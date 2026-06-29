@@ -42,7 +42,8 @@ if [[ "${1:-}" == "copy" ]]; then
       /nix/store/*)
         base="${arg##*/}"
         hash="${base%%-*}"
-        printf 'StorePath: %s\n' "$arg" >"$cache_root/$hash.narinfo"
+        printf 'payload for %s\n' "$arg" >"$cache_root/nar/$hash.nar"
+        printf 'StorePath: %s\nURL: nar/%s.nar\n' "$arg" "$hash" >"$cache_root/$hash.narinfo"
         ;;
     esac
   done
@@ -142,13 +143,18 @@ test_root_marker_replacement_prunes_stale_outputs() {
   (cd "$workspace" && "$wrix_bin" service cache publish >"$TEST_TMP/old.out")
   cache="$(cache_root)"
   [[ -f "$cache/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.narinfo" ]] || fail "old narinfo missing after first publish"
+  [[ -f "$cache/nar/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.nar" ]] || fail "old nar payload missing after first publish"
+  printf 'orphan payload\n' >"$cache/nar/orphan.nar"
 
   write_roots_file "$roots_file" "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-new-root"
   (cd "$workspace" && "$wrix_bin" service cache publish >"$TEST_TMP/new.out")
   state="$(state_root)"
   marker="$state/gcroots/packages.x86_64-linux.root"
   [[ -f "$cache/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.narinfo" ]] || fail "new narinfo missing after second publish"
+  [[ -f "$cache/nar/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.nar" ]] || fail "new nar payload missing after second publish"
   [[ ! -e "$cache/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.narinfo" ]] || fail "stale old narinfo survived prune"
+  [[ ! -e "$cache/nar/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.nar" ]] || fail "stale old nar payload survived prune"
+  [[ ! -e "$cache/nar/orphan.nar" ]] || fail "orphan nar payload survived prune"
   [[ -f "$marker" ]] || fail "root marker missing"
   if grep -q 'old-root' "$marker"; then
     fail "root marker still contains stale output"

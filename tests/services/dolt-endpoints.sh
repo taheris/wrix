@@ -53,6 +53,37 @@ state_file() {
   printf '%s/%s.state\n' "$STATE_DIR" "$name"
 }
 
+run_file() {
+  local name="$1"
+  printf '%s/run-%s\n' "$STATE_DIR" "$name"
+}
+
+port_lines_for_args() {
+  local run_args="$1"
+  local previous=""
+  local token
+  local mapping
+  local rest
+  local host_port
+  local container_port
+  local -a tokens=()
+  read -r -a tokens <<<"$run_args"
+  for token in "${tokens[@]}"; do
+    if [[ "$previous" == "-p" || "$previous" == "--publish" ]]; then
+      mapping="$token"
+      case "$mapping" in
+        127.0.0.1:*:*)
+          rest="${mapping#127.0.0.1:}"
+          host_port="${rest%%:*}"
+          container_port="${rest##*:}"
+          printf '%s/tcp -> 127.0.0.1:%s\n' "$container_port" "$host_port"
+          ;;
+      esac
+    fi
+    previous="$token"
+  done
+}
+
 last_arg() {
   local value=""
   local arg
@@ -95,11 +126,22 @@ case "${1:-}" in
       exit 2
     fi
     printf 'running\n' >"$(state_file "$name")"
-    printf '%s\n' "$*" >"$STATE_DIR/run-$name"
+    printf '%s\n' "$*" >"$(run_file "$name")"
+    ;;
+  port)
+    name="${2:-}"
+    if [[ ! -f "$(state_file "$name")" ]]; then
+      printf 'Error: no such object: "%s"\n' "$name" >&2
+      exit 1
+    fi
+    run_path="$(run_file "$name")"
+    if [[ -f "$run_path" ]]; then
+      port_lines_for_args "$(<"$run_path")"
+    fi
     ;;
   rm)
     name="$(last_arg "$@")"
-    rm -f "$(state_file "$name")"
+    rm -f "$(state_file "$name")" "$(run_file "$name")"
     ;;
   logs)
     printf 'logs for %s\n' "${2:-}"
@@ -329,7 +371,39 @@ test_workspace_naming_determinism() {
   fi
 }
 
-test_fallback_dolt_uses_loopback_tcp() {
+test_darwin_default_dolt_uses_loopback_tcp() {
+  require_python
+  if [[ "$(uname -s)" != "Darwin" ]]; then
+    printf 'SKIP: Darwin default Dolt transport requires a Darwin host\n' >&2
+    return 0
+  fi
+  local wrix_bin workspace endpoints port run_args
+  wrix_bin="$(build_wrix)"
+  with_fake_runtime_env container
+
+  export HOME="$TEST_TMP/home-darwin-default-tcp"
+  export XDG_STATE_HOME="$TEST_TMP/state-darwin-default-tcp"
+  export XDG_CACHE_HOME="$TEST_TMP/cache-darwin-default-tcp"
+  unset WRIX_DOLT_TRANSPORT
+  workspace="$TEST_TMP/darwin-default-tcp-repo"
+  mkdir -p "$workspace/.beads/dolt" "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+  workspace="$(cd "$workspace" && pwd -P)"
+
+  (cd "$workspace" && "$wrix_bin" service start --no-cache >"$TEST_TMP/start-darwin-default-tcp.txt")
+  (cd "$workspace" && "$wrix_bin" service endpoints --no-cache >"$TEST_TMP/endpoints-darwin-default-tcp.json")
+  endpoints="$TEST_TMP/endpoints-darwin-default-tcp.json"
+  port="$(json_get "$endpoints" endpoints.dolt.port)"
+
+  assert_equals "dolt transport" "tcp" "$(json_get "$endpoints" endpoints.dolt.transport)"
+  assert_equals "dolt host" "127.0.0.1" "$(json_get "$endpoints" endpoints.dolt.host)"
+  assert_port_range "dolt tcp port" "$port" 23000 24999
+
+  run_args="$(<"$WRIX_FAKE_RUNTIME_STATE/run-darwin-default-tcp-repo-service")"
+  assert_contains "tcp publish" "$run_args" "127.0.0.1:$port:3306"
+  assert_contains "tcp server option" "$run_args" "--host 0.0.0.0 --port 3306"
+}
+
+test_explicit_tcp_dolt_uses_loopback_tcp() {
   require_python
   local wrix_bin workspace endpoints port run_args host_output port_output
   wrix_bin="$(build_wrix)"
@@ -374,7 +448,8 @@ ALL_TESTS=(
   test_linux_dolt_uses_workspace_socket
   test_container_dolt_uses_published_socket
   test_workspace_naming_determinism
-  test_fallback_dolt_uses_loopback_tcp
+  test_darwin_default_dolt_uses_loopback_tcp
+  test_explicit_tcp_dolt_uses_loopback_tcp
 )
 
 run_all() {

@@ -236,9 +236,8 @@ Direct remote-builder access to the local project cache is out of scope for v1. 
 ## Out of Scope
 
 - A singleton per-host service container. Per-workspace containers remain the isolation model for this version.
-- Serving the host `/nix/store` through Harmonia, nix-serve, or any other host-store-serving tool.
-- Mounting or proxying the host Nix daemon into sandboxes.
-- Shared mutable `/nix/store` volumes across sandboxes.
+- Host-store-backed sandbox cache designs beyond the project-cache boundary
+  cross-referenced by `security.md`.
 - Hosted cache management (Cachix, Attic, niks3, S3, or GHCR). They may be user-configured upstream substituters, but wrix's project cache is local.
 - Direct remote-builder access to the local project cache. Remote-built outputs may be published after they are available in the host store.
 - Sandboxed cache publishing or host-validated promotion. Sandboxes are read-only cache consumers in v1.

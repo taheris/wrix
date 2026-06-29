@@ -32,6 +32,8 @@ pub enum Error {
     InvalidUnicodeEnvironment { name: &'static str },
     /// unknown Dolt transport: {value}
     UnknownDoltTransport { value: String },
+    /// failed to remove stale Dolt socket {path}: {source}
+    StaleDoltSocketRemoval { path: String, source: io::Error },
     /// unknown service image source kind: {value}
     UnknownImageSourceKind { value: String },
     /// `WRIX_SERVICE_IMAGE_SOURCE_KIND` is required when `WRIX_SERVICE_IMAGE_SOURCE` is set
@@ -334,7 +336,11 @@ impl DoltTransport {
     }
 
     const fn platform_default() -> Self {
-        Self::UnixSocket
+        if cfg!(target_os = "macos") {
+            Self::Tcp
+        } else {
+            Self::UnixSocket
+        }
     }
 
     pub const fn as_str(self) -> &'static str {
@@ -844,7 +850,7 @@ impl Runtime {
             match dolt.transport() {
                 DoltTransport::UnixSocket => {
                     if self.kind == RuntimeKind::Container {
-                        let _ = fs::remove_file(dolt.socket_path());
+                        remove_stale_socket(dolt.socket_path())?;
                         command.arg("--publish-socket").arg(format!(
                             "{}:/run/wrix/dolt.sock",
                             dolt.socket_path().display()
@@ -1644,6 +1650,17 @@ fn dolt_server_command(dolt: &DoltEndpoint) -> String {
     }
 }
 
+fn remove_stale_socket(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(Error::StaleDoltSocketRemoval {
+            path: path.display().to_string(),
+            source,
+        }),
+    }
+}
+
 fn json_port(port: Option<u16>) -> String {
     port.map_or_else(
         || String::from("null"),
@@ -1767,9 +1784,9 @@ mod test {
     use std::path::Path;
 
     use super::{
-        DescriptorSource, Error, ImageSourceKind, Plan, RuntimeKind, bind_port_from_runtime_error,
-        is_missing_container_remove_error, loaded_container_ref, parse_published_ports,
-        read_endpoint_port,
+        DescriptorSource, DoltTransport, Error, ImageSourceKind, Plan, RuntimeKind,
+        bind_port_from_runtime_error, is_missing_container_remove_error, loaded_container_ref,
+        parse_published_ports, read_endpoint_port,
     };
     use wrix_core::path::Workspace;
 
@@ -1814,6 +1831,18 @@ mod test {
             ImageSourceKind::DockerArchive
         );
         assert!(ImageSourceKind::parse("tarball").is_err());
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn platform_default_dolt_transport_is_tcp_on_macos() {
+        assert_eq!(DoltTransport::platform_default(), DoltTransport::Tcp);
+    }
+
+    #[test]
+    #[cfg(not(target_os = "macos"))]
+    fn platform_default_dolt_transport_is_unix_off_macos() {
+        assert_eq!(DoltTransport::platform_default(), DoltTransport::UnixSocket);
     }
 
     #[test]

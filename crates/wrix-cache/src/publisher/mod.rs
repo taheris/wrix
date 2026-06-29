@@ -3,7 +3,7 @@ use std::{
     env,
     fs::{self, File, OpenOptions},
     io::{self, ErrorKind},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::{Command, Stdio},
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -664,6 +664,8 @@ fn prune(paths: &Paths) -> io::Result<()> {
     purge_expired_pending(paths)?;
     let reachable = marker_store_basenames(paths)?;
     if paths.cache_root.exists() {
+        let mut stale_narinfos = Vec::new();
+        let mut retained_payloads = BTreeSet::new();
         for entry in fs::read_dir(&paths.cache_root)? {
             let entry = entry?;
             let path = entry.path();
@@ -673,12 +675,94 @@ fn prune(paths: &Paths) -> io::Result<()> {
             let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
                 continue;
             };
-            if !reachable.iter().any(|base| base.starts_with(stem)) {
-                fs::remove_file(path)?;
+            let payloads = narinfo_payload_paths(paths, &path)?;
+            if reachable.iter().any(|base| base.starts_with(stem)) {
+                retained_payloads.extend(payloads);
+            } else {
+                stale_narinfos.push((path, payloads));
             }
         }
+        for (narinfo, payloads) in stale_narinfos {
+            fs::remove_file(narinfo)?;
+            for payload in payloads {
+                if !retained_payloads.contains(&payload) {
+                    remove_cache_payload(&payload)?;
+                }
+            }
+        }
+        prune_unreferenced_payloads(paths, &retained_payloads)?;
     }
     write_cache_status(paths, false, None, Some("ok"), None)
+}
+
+fn narinfo_payload_paths(paths: &Paths, narinfo: &Path) -> io::Result<Vec<PathBuf>> {
+    let content = fs::read_to_string(narinfo)?;
+    let mut payloads = Vec::new();
+    for line in content.lines() {
+        let Some(url) = line.strip_prefix("URL:") else {
+            continue;
+        };
+        if let Some(path) = cache_payload_path(paths, url.trim()) {
+            payloads.push(path);
+        }
+    }
+    Ok(payloads)
+}
+
+fn cache_payload_path(paths: &Paths, url: &str) -> Option<PathBuf> {
+    let relative = Path::new(url);
+    if relative.is_absolute() || !relative.starts_with("nar") {
+        return None;
+    }
+    if relative.components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
+        return None;
+    }
+    Some(paths.cache_root.join(relative))
+}
+
+fn prune_unreferenced_payloads(paths: &Paths, retained: &BTreeSet<PathBuf>) -> io::Result<()> {
+    let nar_dir = paths.cache_root.join("nar");
+    if nar_dir.exists() {
+        prune_payload_dir(&nar_dir, retained)?;
+    }
+    Ok(())
+}
+
+fn prune_payload_dir(dir: &Path, retained: &BTreeSet<PathBuf>) -> io::Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if entry.file_type()?.is_dir() {
+            prune_payload_dir(&path, retained)?;
+            if directory_is_empty(&path)? {
+                fs::remove_dir(path)?;
+            }
+        } else if !retained.contains(&path) {
+            remove_cache_payload(&path)?;
+        }
+    }
+    Ok(())
+}
+
+fn directory_is_empty(path: &Path) -> io::Result<bool> {
+    match fs::read_dir(path)?.next() {
+        Some(Ok(_entry)) => Ok(false),
+        Some(Err(error)) => Err(error),
+        None => Ok(true),
+    }
+}
+
+fn remove_cache_payload(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 fn marker_store_basenames(paths: &Paths) -> io::Result<Vec<String>> {

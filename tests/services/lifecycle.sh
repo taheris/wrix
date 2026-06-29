@@ -562,6 +562,15 @@ assert_file_contains() {
   fi
 }
 
+write_ps_only_stale_run_record() {
+  local name="$1"
+  local port="$2"
+  printf 'run -d --name %s --label wrix.kind=service -p 127.0.0.1:%s:8080 image sh -c sleep\n' \
+    "$name" \
+    "$port" \
+    >"$WRIX_FAKE_RUNTIME_STATE/run-$name"
+}
+
 with_fake_runtime_env() {
   local runtime_name="${1:-podman}"
   local runtime_dir="$TEST_TMP/runtime-bin"
@@ -780,12 +789,7 @@ test_start_ignores_container_removed_after_ps() {
   cache_port="$(json_get "$TEST_TMP/removed-after-ps-endpoints.json" endpoints.cache_http.port)"
   planned_name="$(json_get "$TEST_TMP/removed-after-ps-endpoints.json" container_name)"
 
-  # Simulate a Podman race where `ps` listed a container, but the container was
-  # removed before follow-up inspect/port calls. The fake runtime lists run-*
-  # files from ps, while inspect/port require the state file.
-  printf 'run -d --name admiring_albattani --label wrix.kind=service -p 127.0.0.1:%s:8080 image sh -c sleep\n' \
-    "$cache_port" \
-    >"$WRIX_FAKE_RUNTIME_STATE/run-admiring_albattani"
+  write_ps_only_stale_run_record "admiring_albattani" "$cache_port"
 
   (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/removed-after-ps-start.txt")
 
