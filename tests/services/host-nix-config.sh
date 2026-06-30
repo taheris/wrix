@@ -464,6 +464,85 @@ SCRIPT
   export PATH
 }
 
+test_mkdevshell_beads_workspace_does_not_run_raw_dolt() {
+  if ! command -v nix >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
+    exit 77
+  fi
+  local result result_file hook_file hook wrix_bin workspace stderr_file output saved_path
+  local socket_path raw_dolt_log
+  if ! result="$(eval_expr_json '
+    let
+      shell = lib.mkDevShell { profile = lib.profiles.base; };
+    in { hook = shell.shellHook; }
+  ')"; then
+    fail "mkDevShell hook evaluation failed"
+    return 1
+  fi
+  result_file="$TEST_TMP/mkdevshell-beads-cache.json"
+  hook_file="$TEST_TMP/mkdevshell-beads-cache-hook.sh"
+  printf '%s\n' "$result" >"$result_file"
+  hook="$(json_get "$result_file" hook)"
+  sed -E "s|/nix/store/[[:alnum:]]+-wrix-host-nix-config\.sh|$REPO_ROOT/lib/services/host-nix-config.sh|g" <<<"$hook" >"$hook_file"
+
+  wrix_bin="$(build_wrix)"
+  saved_path="$PATH"
+  with_fake_tools
+  raw_dolt_log="$TEST_TMP/raw-dolt.log"
+  cat >"$TEST_TMP/bin/dolt" <<SCRIPT
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'raw dolt invoked: %s\n' "\$*" >> "$raw_dolt_log"
+printf 'raw dolt should not run during mkDevShell entry\n' >&2
+exit 2
+SCRIPT
+  chmod +x "$TEST_TMP/bin/dolt"
+  export HOME="$TEST_TMP/home-mkdevshell-beads-cache"
+  export XDG_STATE_HOME="$TEST_TMP/state-mkdevshell-beads-cache"
+  export XDG_CACHE_HOME="$TEST_TMP/cache-mkdevshell-beads-cache"
+  mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+  workspace="$TEST_TMP/mkdevshell-beads-cache-workspace"
+  stderr_file="$TEST_TMP/mkdevshell-beads-cache.err"
+  mkdir -p \
+    "$workspace/.beads/dolt/beads/.dolt" \
+    "$workspace/.git/beads-worktrees/beads/.beads/dolt-remote" \
+    "$workspace/.wrix"
+  socket_path="$workspace/.wrix/dolt.sock"
+  python3 - "$socket_path" <<'PY'
+import os
+import socket
+import sys
+path = sys.argv[1]
+try:
+    os.unlink(path)
+except FileNotFoundError:
+    pass
+sock = socket.socket(socket.AF_UNIX)
+sock.bind(path)
+sock.close()
+PY
+
+  if ! output="$(
+    (
+      cd "$workspace"
+      unset BEADS_DOLT_SERVER_SOCKET BEADS_DOLT_SERVER_HOST BEADS_DOLT_SERVER_PORT
+      # shellcheck source=/dev/null
+      WRIX_BIN="$wrix_bin" . "$hook_file" >/dev/null
+      printf 'BEADS_DOLT_SERVER_SOCKET=%s\n' "${BEADS_DOLT_SERVER_SOCKET:-}"
+    ) 2>"$stderr_file"
+  )"; then
+    fail "mkDevShell hook failed in beads workspace: $(cat "$stderr_file")"
+    return 1
+  fi
+  assert_contains "beads cache hook socket" "$output" "BEADS_DOLT_SERVER_SOCKET=$socket_path" || return 1
+  if [[ -s "$raw_dolt_log" ]]; then
+    fail "mkDevShell invoked raw dolt: $(cat "$raw_dolt_log")"
+    return 1
+  fi
+  assert_not_contains "beads cache hook stderr" "$(cat "$stderr_file")" "raw dolt should not run" || return 1
+  PATH="$saved_path"
+  export PATH
+}
+
 test_mkdevshell_loom_internal_worktree_uses_repo_service() {
   if ! command -v nix >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
     exit 77
@@ -611,6 +690,7 @@ test_host_nix_config_rejects_non_wrix_hook() {
 
 ALL_TESTS=(
   test_mkdevshell_nix_cache
+  test_mkdevshell_beads_workspace_does_not_run_raw_dolt
   test_mkdevshell_loom_internal_worktree_uses_repo_service
   test_host_nix_configures_cache_and_hook
   test_host_nix_config_fails_when_trusted_setting_ignored
