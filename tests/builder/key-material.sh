@@ -216,6 +216,38 @@ set -euo pipefail
 exit 0
 SLEEP
   chmod +x "$bin_dir/sleep"
+
+  printf '#!%s\n' "$bash_bin" >"$bin_dir/skopeo"
+  cat >>"$bin_dir/skopeo" <<'SKOPEO'
+set -euo pipefail
+
+log_file="${WRIX_BUILDER_FAKE_LOG:?}"
+printf 'skopeo|%s\n' "$*" >>"$log_file"
+
+if [[ "${1:-}" == "--insecure-policy" && "${2:-}" == "copy" && "${3:-}" == "--quiet" ]]; then
+  source_ref="${4:-}"
+  dest_ref="${5:-}"
+  case "$source_ref" in
+    docker-archive:*|oci:*) ;;
+    *)
+      printf 'fake skopeo: unsupported source ref: %s\n' "$source_ref" >&2
+      exit 64
+      ;;
+  esac
+  case "$dest_ref" in
+    oci-archive:*)
+      archive_path="${dest_ref#oci-archive:}"
+      mkdir -p "$(dirname "$archive_path")"
+      printf 'fake oci archive from %s\n' "$source_ref" >"$archive_path"
+      exit 0
+      ;;
+  esac
+fi
+
+printf 'fake skopeo: unexpected args: %s\n' "$*" >&2
+exit 64
+SKOPEO
+  chmod +x "$bin_dir/skopeo"
 }
 
 prepare_builder_fixture() {
@@ -248,6 +280,7 @@ run_builder() {
     WRIX_BUILDER_FAKE_TAR_ROOT="$test_root/tar-root" \
     WRIX_BUILDER_SSH_KEYGEN="$keygen_bin" \
     WRIX_BUILDER_BASE64="$base64_bin" \
+    WRIX_BUILDER_SKOPEO="$test_root/bin/skopeo" \
     "$builder" "$@"
 }
 
@@ -339,6 +372,29 @@ test_generates_per_user_ed25519_material() {
     "wrix-builder start did not mount the per-user key directory"
 }
 
+test_loads_image_through_source_kind_contract() {
+  local test_root="$TEST_TMP/source-kind"
+
+  require_command ssh-keygen
+  require_command base64
+  require_command tar
+  prepare_builder_fixture "$test_root"
+
+  run_builder "$test_root" start
+
+  if ! grep -Eq '^skopeo\|--insecure-policy copy --quiet (docker-archive:|oci:).+ oci-archive:' "$test_root/container.log"; then
+    fail "wrix-builder start did not route the bootstrap image through a source_kind skopeo copy"
+  fi
+  assert_file_contains \
+    "$test_root/container.log" \
+    "container|image load --input" \
+    "wrix-builder start did not load the converted OCI archive with Apple container"
+  assert_file_contains \
+    "$test_root/container.log" \
+    "container|image tag untagged@sha256:" \
+    "wrix-builder start did not tag the loaded builder image ref"
+}
+
 test_preserves_existing_private_keys() {
   local test_root="$TEST_TMP/preserve"
   local keys_dir="$test_root/home/.local/share/wrix/builder-keys"
@@ -382,6 +438,7 @@ main() {
   fi
 
   run_one test_generates_per_user_ed25519_material
+  run_one test_loads_image_through_source_kind_contract
   run_one test_preserves_existing_private_keys
 }
 

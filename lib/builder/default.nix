@@ -17,6 +17,7 @@ let
 
   builderImage = import ../sandbox/builder/image.nix {
     pkgs = linuxPkgs;
+    asTarball = pkgs.stdenv.hostPlatform.isDarwin;
   };
 
   script = pkgs.writeShellScriptBin "wrix-builder" ''
@@ -24,6 +25,8 @@ let
       . ${./keys.sh}
       WRIX_BUILDER_SSH_KEYGEN="''${WRIX_BUILDER_SSH_KEYGEN:-${pkgs.openssh}/bin/ssh-keygen}"
       WRIX_BUILDER_BASE64="''${WRIX_BUILDER_BASE64:-${pkgs.coreutils}/bin/base64}"
+      WRIX_BUILDER_SKOPEO="''${WRIX_BUILDER_SKOPEO:-${pkgs.skopeo}/bin/skopeo}"
+      WRIX_BUILDER_JQ="''${WRIX_BUILDER_JQ:-${pkgs.jq}/bin/jq}"
 
       resolve_user_home() {
         local user="$1"
@@ -57,7 +60,10 @@ let
       SYSTEM_HOST_KEY="/etc/nix/wrix_builder_host_key_base64"
       NIX_STORE="$WRIX_DATA/builder-nix"
       CONTAINER_NAME="wrix-builder"
-      BUILDER_IMAGE="wrix-builder:latest"
+      BUILDER_IMAGE="${builderImage.ref}"
+      BUILDER_IMAGE_SOURCE="${builderImage.source}"
+      BUILDER_IMAGE_SOURCE_KIND="${builderImage.source_kind}"
+      BUILDER_IMAGE_DIGEST="${builderImage.digest}"
       SSH_PORT=2222
 
       usage() {
@@ -128,14 +134,62 @@ let
       }
 
 
+      builder_image_digest() {
+        local digest_source="$BUILDER_IMAGE_DIGEST"
+        local digest=""
+
+        if [[ "$digest_source" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+          digest="$digest_source"
+        elif [[ -s "$digest_source" ]]; then
+          digest=$(cat "$digest_source")
+        else
+          echo "Error: builder image digest is missing: $digest_source" >&2
+          exit 1
+        fi
+
+        if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+          echo "Error: builder image digest is invalid: $digest" >&2
+          exit 1
+        fi
+        printf '%s\n' "$digest"
+      }
+
+      builder_image_skopeo_source() {
+        local oci_layout
+        local oci_ref
+
+        case "$BUILDER_IMAGE_SOURCE_KIND" in
+          docker-archive)
+            printf 'docker-archive:%s\n' "$BUILDER_IMAGE_SOURCE"
+            ;;
+          nix-descriptor)
+            oci_layout=$("$WRIX_BUILDER_JQ" -er '.oci_layout // empty | strings | select(length > 0)' "$BUILDER_IMAGE_SOURCE") || {
+              echo "Error: nix-descriptor builder image source is missing oci_layout: $BUILDER_IMAGE_SOURCE" >&2
+              exit 1
+            }
+            oci_ref=$("$WRIX_BUILDER_JQ" -er '.oci_ref // "latest" | strings | select(length > 0)' "$BUILDER_IMAGE_SOURCE") || {
+              echo "Error: nix-descriptor builder image source has an invalid oci_ref: $BUILDER_IMAGE_SOURCE" >&2
+              exit 1
+            }
+            printf 'oci:%s:%s\n' "$oci_layout" "$oci_ref"
+            ;;
+          *)
+            echo "Error: unsupported builder image source_kind: $BUILDER_IMAGE_SOURCE_KIND" >&2
+            exit 1
+            ;;
+        esac
+      }
+
       load_builder_image() {
-        local current_image="${builderImage}"
+        local current_image
         local loaded_ref
         local load_output
         local needs_load=false
         local oci_tar
+        local source_ref
         local store_version_file="$NIX_STORE/.image-version"
 
+        current_image=$(builder_image_digest)
         if ! container image inspect "$BUILDER_IMAGE" >/dev/null 2>&1; then
           needs_load=true
         elif [[ ! -f "$store_version_file" || "$(cat "$store_version_file")" != "$current_image" ]]; then
@@ -147,9 +201,13 @@ let
           if container image inspect "$BUILDER_IMAGE" >/dev/null 2>&1; then
             container image delete "$BUILDER_IMAGE"
           fi
+          if [[ "$BUILDER_IMAGE" != "wrix-builder:latest" ]]; then
+            container image delete "wrix-builder:latest" 2>/dev/null || true # best-effort: the legacy tag may be absent before the new image is loaded.
+          fi
+          source_ref=$(builder_image_skopeo_source)
           oci_tar="$WRIX_CACHE/builder-image-oci.tar"
           mkdir -p "$WRIX_CACHE"
-          ${pkgs.skopeo}/bin/skopeo --insecure-policy copy --quiet "docker-archive:${builderImage}" "oci-archive:$oci_tar"
+          "$WRIX_BUILDER_SKOPEO" --insecure-policy copy --quiet "$source_ref" "oci-archive:$oci_tar"
           load_output=$(container image load --input "$oci_tar" 2>&1)
           loaded_ref=$(printf '%s\n' "$load_output" | awk 'match($0, /untagged@sha256:[a-f0-9]+/) { print substr($0, RSTART, RLENGTH); exit }')
           if [[ -z "$loaded_ref" ]]; then
@@ -158,19 +216,21 @@ let
             exit 1
           fi
           container image tag "$loaded_ref" "$BUILDER_IMAGE"
+          container image tag "$loaded_ref" "wrix-builder:latest" 2>/dev/null || true # best-effort: the hash ref is authoritative when the legacy alias cannot be updated.
           rm -f "$oci_tar"
           container image prune
         fi
       }
 
       cmd_start() {
-        local current_image="${builderImage}"
+        local current_image
         local initialized_size
         local needs_init=false
         local state
         local store_version_file="$NIX_STORE/.image-version"
         local temp_container
 
+        current_image=$(builder_image_digest)
         check_macos_version
         ensure_container_system
 

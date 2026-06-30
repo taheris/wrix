@@ -43,7 +43,10 @@ let
       ;
   };
   defaultImage = (sandboxLib.mkSandbox { profile = sandboxLib.profiles.base; }).image;
-  builderImage = import ../../lib/sandbox/builder/image.nix { pkgs = linuxPkgs; };
+  builderImage = import ../../lib/sandbox/builder/image.nix {
+    pkgs = linuxPkgs;
+    asTarball = !isLinux;
+  };
   serviceProfiles = import ../../lib/sandbox/profiles.nix {
     pkgs = linuxPkgs;
     hostPkgs = linuxPkgs;
@@ -1084,50 +1087,26 @@ let
     };
     wrix-builder = {
       image = builderImage;
-      expected_kind = "exempt";
-      exemption = "specs/linux-builder.md owns the Darwin-only Apple container load path";
+      expected_kind = expectedImageSourceKind;
     };
   };
   sourceKindChecks = concatStringsSep "\n" (
-    mapAttrsToList (
-      name: entry:
-      if entry.expected_kind == "exempt" then
-        ''
-          check_source_kind_exemption "${name}" "${discardContext entry.image}" "${
-            entry.image.labels."wrix.image.kind" or ""
-          }" "${entry.exemption or ""}"
-        ''
-      else
-        ''
-          check_source_kind "${name}" "${entry.expected_kind}" "${entry.image.source_kind}" "${toString entry.image.source}" "${discardContext entry.image}"
-        ''
-    ) sourceKindMatrix
+    mapAttrsToList (name: entry: ''
+      check_source_kind "${name}" "${entry.expected_kind}" "${entry.image.source_kind}" "${toString entry.image.source}" "${discardContext entry.image}"
+    '') sourceKindMatrix
   );
 
   wrixImagesSourceKindTest = pkgs.writeShellApplication {
     name = "test-wrix-images-source-kind";
-    runtimeInputs = optionals isLinux [
+    runtimeInputs = [
       pkgs.coreutils
       pkgs.gnugrep
+    ]
+    ++ optionals isLinux [
       pkgs.jq
       pkgs.nix
     ];
     text = ''
-      check_source_kind_exemption() {
-          local name="$1"
-          local image_path="$2"
-          local image_kind="$3"
-          local exemption="$4"
-          if [[ "$image_path" != /nix/store/* ]]; then
-              echo "FAIL: $name exempt image path is not store-resident: $image_path" >&2
-              exit 1
-          fi
-          if [[ "$image_kind" != "builder" || -z "$exemption" ]]; then
-              echo "FAIL: $name exemption is not tied to the builder image contract" >&2
-              exit 1
-          fi
-      }
-
       check_source_kind() {
           local name="$1"
           local expected_kind="$2"
@@ -1192,6 +1171,21 @@ let
       }
 
       ${sourceKindChecks}
+
+      builder_ref='${builderImage.ref}'
+      builder_digest_path='${toString builderImage.digest}'
+      if [[ "$builder_ref" != ${if isLinux then "localhost/wrix-builder:" else "wrix-builder:"}* ]]; then
+          echo "FAIL: wrix-builder ref does not follow the platform ref contract: $builder_ref" >&2
+          exit 1
+      fi
+      if [[ "$builder_digest_path" != /nix/store/* ]]; then
+          echo "FAIL: wrix-builder digest path is not store-resident: $builder_digest_path" >&2
+          exit 1
+      fi
+      if ! grep -Eq '^sha256:[0-9a-f]{64}$' "$builder_digest_path"; then
+          echo "FAIL: wrix-builder digest file does not contain a sha256 digest" >&2
+          exit 1
+      fi
 
       echo "test-wrix-images-source-kind: PASS"
     '';
@@ -1259,24 +1253,21 @@ let
     optionals isLinux (
       mapAttrsToList (
         name: entry:
-        if entry.expected_kind == "exempt" then
-          ""
-        else
-          let
-            inherit (entry) image;
-            inherit (image) labels;
-            source = toString image.source;
-          in
-          ''
-            check_descriptor_label "${name}" "${source}" "wrix.managed" "${labels."wrix.managed"}"
-            check_descriptor_label "${name}" "${source}" "wrix.image.kind" "${labels."wrix.image.kind"}"
-          ''
-          + optionalString (hasAttr "wrix.profile.name" labels) ''
-            check_descriptor_label "${name}" "${source}" "wrix.profile.name" "${labels."wrix.profile.name"}"
-          ''
-          + optionalString (hasAttr "wrix.agent.kind" labels) ''
-            check_descriptor_label "${name}" "${source}" "wrix.agent.kind" "${labels."wrix.agent.kind"}"
-          ''
+        let
+          inherit (entry) image;
+          inherit (image) labels;
+          source = toString image.source;
+        in
+        ''
+          check_descriptor_label "${name}" "${source}" "wrix.managed" "${labels."wrix.managed"}"
+          check_descriptor_label "${name}" "${source}" "wrix.image.kind" "${labels."wrix.image.kind"}"
+        ''
+        + optionalString (hasAttr "wrix.profile.name" labels) ''
+          check_descriptor_label "${name}" "${source}" "wrix.profile.name" "${labels."wrix.profile.name"}"
+        ''
+        + optionalString (hasAttr "wrix.agent.kind" labels) ''
+          check_descriptor_label "${name}" "${source}" "wrix.agent.kind" "${labels."wrix.agent.kind"}"
+        ''
       ) sourceKindMatrix
     )
   );

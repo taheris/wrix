@@ -28,9 +28,9 @@ The builder runs under Apple's `container` CLI (Virtualization.framework microVM
 
 The container boundary is the isolation primitive; Nix's internal sandbox is disabled inside the container (`sandbox = false`) to avoid nested namespace complexity, and the `builder` user is trusted by the nix-daemon. This is appropriate because SSH binds to `127.0.0.1` only, password authentication is disabled, and the SSH key is reachable only by the host user who started the builder.
 
-### Image-source exemption
+### Image-source contract
 
-The `wrix-builder` bootstrap image is a Linux rootfs consumed only by the macOS builder. It is loaded through Apple's tar/OCI archive path and is the explicit exemption from `image-builder.md`'s Linux `nix-descriptor` source-kind contract; the image-builder source-kind verifier enumerates that exemption while this spec owns runtime acceptance.
+The `wrix-builder` bootstrap image is a wrix-managed support image consumed by the macOS builder. It exposes the shared `{ ref, source, source_kind, digest }` image-source contract and retains wrix ownership labels. The packaged CLI uses the contract fields to choose the source-kind load transport before invoking Apple's `container image load`; this spec owns that lifecycle and persistent-store seeding, while `image-builder.md` owns the source-kind metadata and label schema.
 
 ## CLI Surface
 
@@ -69,8 +69,11 @@ The `wrix-builder` bootstrap image is a Linux rootfs consumed only by the macOS 
   [system](bash tests/builder/key-material.sh test_generates_per_user_ed25519_material)
 - Re-running builder key-material initialization preserves existing private keys
   [system](bash tests/builder/key-material.sh test_preserves_existing_private_keys)
-- The `wrix-builder` bootstrap image is enumerated as the explicit image-builder source-kind exemption while retaining wrix ownership labels
+- The `wrix-builder` bootstrap image exposes the shared image-source contract while retaining wrix ownership labels
   [system](nix run .#test-wrix-images-source-kind)
+
+- `wrix-builder start` routes the bootstrap image through the `source_kind` load transport before invoking Apple's `container image load`
+  [system](bash tests/builder/key-material.sh test_loads_image_through_source_kind_contract)
 
 ## Requirements
 
