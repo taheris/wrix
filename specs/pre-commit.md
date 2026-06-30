@@ -84,10 +84,10 @@ Wraps a check whose required tool may not be on `PATH` in every context. Contrac
 skip-if-missing <tool> -- <command> [args…]
 ```
 
-If `<tool>` resolves on `PATH`, `exec` the command. If absent, exit 0 silently. The primary use is making nix-requiring hooks inert inside the bead container, where `nix` is intentionally absent:
+If `<tool>` resolves on `PATH`, `exec` the command. If absent, exit 0 silently. The primary use is keeping hooks inert in downstream profiles that explicitly omit a runtime dependency, or outside-Wrix contexts where the dependency is optional:
 
 ```yaml
-- id: nix-flake-check
+- id: custom-nix-check
   entry: skip-if-missing nix -- nix flake check
   language: system
   stages: [pre-push]
@@ -133,6 +133,8 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
   [system](bash tests/prek/skip-if-missing-present.sh)
 - `skip-if-missing <tool> -- <cmd>` exits 0 without running `<cmd>` when `<tool>` is absent from `PATH`
   [system](bash tests/prek/skip-if-missing-absent.sh)
+- Wrix's own `nix-flake-check` hook invokes `pre-push-checks nix flake check` directly, so a missing `nix` does not silently skip the hook in supported Wrix contexts
+  [system](bash tests/prek/wrix-nix-hook-required.sh)
 - A pre-commit hook configured in `.pre-commit-config.yaml` fires when `git commit` runs inside a profile container
   [system](bash tests/sandbox/container-pre-commit.sh)
 - A pre-push hook configured in `.pre-commit-config.yaml` fires when `git push` runs inside a profile container
@@ -170,4 +172,4 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
 - `loom gate verify-marker` subcommand internals — owned by downstream loom.
 - `.pre-commit-config.yaml` content in downstream projects — wrix ships the wrappers, not the hook list.
 - `push-verified` stamp deprecation/removal — orthogonal to `pre-push-checks`.
-- A wrix-owned hook-id skip list for the bead container — nix absence is handled via `skip-if-missing` at the point of use, not via a wrix-side filter.
+- A wrix-owned hook-id skip list for profiles that omit tools — optional dependencies are handled via `skip-if-missing` at the point of use, not via a wrix-side filter.

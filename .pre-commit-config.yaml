@@ -30,7 +30,7 @@ repos:
       # Pre-push hooks (~10s)
       - id: nix-flake-check
         name: nix flake check
-        entry: skip-if-missing nix -- pre-push-checks nix flake check
+        entry: pre-push-checks nix flake check
         language: system
         pass_filenames: false
         always_run: true
