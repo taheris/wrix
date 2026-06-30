@@ -45,11 +45,13 @@ build_wrix_builder() {
 
 write_fake_tools() {
   local bin_dir="$1"
+  local bash_bin
 
+  bash_bin="$(command -v bash)"
   mkdir -p "$bin_dir"
 
-  cat >"$bin_dir/container" <<'CONTAINER'
-#!/usr/bin/env bash
+  printf '#!%s\n' "$bash_bin" >"$bin_dir/container"
+  cat >>"$bin_dir/container" <<'CONTAINER'
 set -euo pipefail
 
 log_file="${WRIX_BUILDER_FAKE_LOG:?}"
@@ -193,8 +195,8 @@ exit 64
 CONTAINER
   chmod +x "$bin_dir/container"
 
-  cat >"$bin_dir/sw_vers" <<'SWVERS'
-#!/usr/bin/env bash
+  printf '#!%s\n' "$bash_bin" >"$bin_dir/sw_vers"
+  cat >>"$bin_dir/sw_vers" <<'SWVERS'
 set -euo pipefail
 
 if [[ "${1:-}" == "-productVersion" ]]; then
@@ -207,8 +209,8 @@ exit 64
 SWVERS
   chmod +x "$bin_dir/sw_vers"
 
-  cat >"$bin_dir/sleep" <<'SLEEP'
-#!/usr/bin/env bash
+  printf '#!%s\n' "$bash_bin" >"$bin_dir/sleep"
+  cat >>"$bin_dir/sleep" <<'SLEEP'
 set -euo pipefail
 
 exit 0
