@@ -122,7 +122,7 @@ Environment:
 - `OPENSSL_LIB_DIR=${pkgs.openssl.out}/lib` — OpenSSL libraries
 - `RUSTC_WRAPPER=${pkgs.sccache}/bin/sccache` — route compiler invocations through sccache
 - `CARGO_BUILD_RUSTC_WRAPPER=${pkgs.sccache}/bin/sccache` — same value, picked up by cargo directly
-- `SCCACHE_DIR=/home/wrix/.cache/sccache` — stable in-container cache path, mounted from host
+- `SCCACHE_DIR=/home/wrix/.cache/sccache` — stable in-container cache path; its optional host mount shares data, and `/home/wrix/.cache` remains writable via tmpfs when that mount is absent
 - `SCCACHE_CACHE_SIZE=50G` — ceiling above sccache's 10 GiB default; the default LRU-evicts mid-build for workspace-sized Rust projects. Changing this requires `sccache --stop-server` before the server picks up the new value.
 - `CARGO_INCREMENTAL=0` — sccache refuses to cache any `rustc` invocation with `-C incremental=...`; disabling incremental lets every Rust compile flow through sccache instead.
 - `CARGO_TARGET_DIR` — intentionally **unset**; cargo's per-workspace default (`<workspace>/target`) applies. Pinning `CARGO_TARGET_DIR` to a shared path across workspaces defeats cargo's freshness tracking and churns builds.
@@ -139,7 +139,7 @@ Mounts (host source → literal container dest; literal dests avoid the `~`-expa
 - `~/.cargo/git` → `/home/wrix/.cargo/git` (rw, optional) — shared git dependency cache; same rw rationale as registry (cargo writes new git checkouts here on cache miss).
 - `~/.cache/sccache` → `/home/wrix/.cache/sccache` (rw, optional) — shared sccache store between host and sandbox
 
-Writable dirs (`writableDirs = [ "/home/wrix/.cargo" ]`): on Linux, the launcher stacks a tmpfs at `/home/wrix/.cargo` with `U=true` so the dir is wrix-owned. Without this, podman creates the mountpoint parent as root (to host the registry/git binds on top, regardless of mount mode) and cargo can't write `.global-cache`/`credentials.toml` there. Darwin doesn't need the fix — its entrypoint creates these dirs via `mkdir -p` as namespaced-root-mapped-to-`HOST_UID`, already wrix-writable.
+Writable dirs (`writableDirs = [ "/home/wrix/.cargo" "/home/wrix/.cache" ]`): on Linux, the launcher stacks tmpfs mounts at `/home/wrix/.cargo` and `/home/wrix/.cache` with `U=true` so those parents are wrix-owned. Without `/home/wrix/.cargo`, podman creates the cargo mountpoint parent as root (to host the registry/git binds on top, regardless of mount mode) and cargo can't write `.global-cache`/`credentials.toml` there. Without `/home/wrix/.cache`, podman can leave the sccache parent root-owned, and sccache cannot create or write `/home/wrix/.cache/sccache` when the optional host mount is absent. Darwin doesn't need the fix — its entrypoint creates these dirs via `mkdir -p` as namespaced-root-mapped-to-`HOST_UID`, already wrix-writable.
 
 Network allowlist: `crates.io`, `static.crates.io`, `index.crates.io`
 
@@ -655,7 +655,7 @@ dests live under `/home/wrix/` inside the container, not under
   [system](bash tests/profiles/rust-profile-ctor.sh test_extension_args)
 - `wrix.rustProfile {}` (omitting required `toolchain`/`sha256`) errors at evaluation rather than silently producing an unpinned profile
   [system](bash tests/profiles/rust-profile-ctor.sh test_required_args)
-- Cargo registry and git mounts are writable so cargo can fetch crates not in the pre-warm set without `Read-only file system` errors
+- Cargo registry/git mounts and the sccache cache parent are writable so cargo can fetch crates and sccache can cache artifacts without `Read-only file system` errors
   [judge](../tests/judges/profiles.sh#test_cargo_registry_writable)
 - Python profile can run Python scripts with dependencies
   [judge](../tests/judges/profiles.sh#test_python_profile)

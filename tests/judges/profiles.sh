@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+set -euo pipefail
+
 # Judge rubrics for profiles.md success criteria
 
 test_base_profile_functional() {
@@ -43,7 +45,7 @@ test_host_sandbox_rustc_same_store_path() {
 
 test_cargo_registry_writable() {
   judge_files "lib/sandbox/profiles.nix"
-  judge_criterion "The rust profile's mounts for ~/.cargo/registry → /home/wrix/.cargo/registry and ~/.cargo/git → /home/wrix/.cargo/git are mode = \"rw\" (not \"ro\"), so cargo can write new crates and git checkouts on cache miss without 'Read-only file system (os error 30)' errors. writableDirs includes /home/wrix/.cargo so the launcher stacks a tmpfs there with U=true; without this, podman creates the bind-mount parent as root and cargo cannot write sibling files like .global-cache/credentials.toml even though the registry/git binds themselves are rw. The Darwin entrypoint is exempt — its rw cache mounts are session-scoped (writes stay in the writable layer and are discarded at exit), and writableDirs is Linux-only by design."
+  judge_criterion "The rust profile's mounts for ~/.cargo/registry → /home/wrix/.cargo/registry, ~/.cargo/git → /home/wrix/.cargo/git, and ~/.cache/sccache → /home/wrix/.cache/sccache are mode = \"rw\" (not \"ro\"), so cargo can write new crates and git checkouts while sccache writes compiler artifacts on cache miss without 'Read-only file system (os error 30)' errors. writableDirs includes both /home/wrix/.cargo and /home/wrix/.cache so the launcher stacks Linux tmpfs mounts there with U=true; /home/wrix/.cargo covers cargo sibling files like .global-cache/credentials.toml, and /home/wrix/.cache is an intentional sccache parent that stays writable when the optional ~/.cache/sccache host mount is absent. The Darwin entrypoint is exempt — its rw cache mounts are session-scoped (writes stay in the writable layer and are discarded at exit), and writableDirs is Linux-only by design."
 }
 
 test_uv_cache_writable() {
