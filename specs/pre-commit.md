@@ -26,15 +26,14 @@ Consumers do not vendor shims, do not set `core.hooksPath` themselves, and do no
 
 ## Reference Hook Configuration
 
-Wrix's own `.pre-commit-config.yaml` declares the following stage→hook mapping. This is a reference example — downstream consumers configure their own hook list independently of what wrix runs in its own tree:
+Wrix's own `.pre-commit-config.yaml` declares only the hook stages Wrix runs in this repository. This mapping is intentionally narrower than the shim bundle above; downstream consumers configure their own hook list independently of what Wrix runs in its own tree.
 
 | Stage | Hooks | Purpose |
 |-------|-------|---------|
-| pre-commit | treefmt, shellcheck, builtin hooks (trailing-whitespace, end-of-file-fixer, check-merge-conflict) | Fast validation on every commit |
-| prepare-commit-msg | bd agent trailers | Add agent identity to commits |
-| post-checkout | bd dolt pull | Pull Dolt state after branch switch |
-| post-merge | bd dolt pull | Pull Dolt state after pull/merge |
-| pre-push | nix flake check, loom integration tests | Slow validation before sharing |
+| pre-commit | treefmt, shell re-exec guard, builtin hooks (trailing-whitespace, end-of-file-fixer, check-merge-conflict) | Fast validation on every commit |
+| pre-push | nix flake check, loom gate verify | Slow validation before sharing |
+
+The bundle still exposes `prepare-commit-msg`, `post-checkout`, and `post-merge` shims. Projects that want bd agent trailers or automatic `bd dolt pull` can add those hooks to their own `.pre-commit-config.yaml` or use bd-owned installation guidance; those bd hooks are examples, not Wrix's repository contract.
 
 ## Pre-Push Stamp Dance
 
@@ -121,6 +120,8 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
   [system](bash tests/profiles/prek-hooks-bundle.sh test_pre_push_stamp_written_and_consumed)
 - `wrix.prePushChecks` and `wrix.skipIfMissing` are exposed by the wrix library and land on the host devShell's `PATH`
   [system](bash tests/profiles/mkdevshell-prek.sh test_wrappers_exposed_and_on_devshell_path)
+- Wrix's own `.pre-commit-config.yaml` matches the § Reference Hook Configuration stage→hook mapping, with hooks for `pre-commit` and `pre-push` only and no `prepare-commit-msg`, `post-checkout`, or `post-merge` hook entries
+  [system](bash tests/prek/wrix-hook-stages.sh test_wrix_config_stage_set)
 - `pre-push-checks` exits 0 without running the wrapped command when `.loom/marker.json` is present and `loom gate verify-marker` exits 0
   [system](bash tests/prek/pre-push-checks-marker-valid.sh)
 - `pre-push-checks` execs the wrapped command when `.loom/marker.json` is present and `loom gate verify-marker` exits non-zero
@@ -148,7 +149,7 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
 
 1. **Bundle ownership** — `wrix.prekHooks` owns every staged hook shim; consumers do not vendor or override unless they substitute the whole bundle via `mkDevShell { prekHooks = <derivation>; }`.
 2. **`core.hooksPath` management** — `mkDevShell` sets `core.hooksPath` idempotently per devshell entry; no per-user setup step.
-3. **Hook stages** — pre-commit (treefmt, shellcheck, builtin hooks), prepare-commit-msg (bd trailers), post-checkout / post-merge (`bd dolt pull`), pre-push (`nix flake check`, loom integration tests).
+3. **Hook stages** — the shim bundle covers pre-commit, pre-push, prepare-commit-msg, post-checkout, and post-merge; Wrix's own `.pre-commit-config.yaml` configures only pre-commit (treefmt, shell re-exec guard, builtin hooks) and pre-push (`nix flake check`, `loom gate verify`).
 4. **Stamp-file dance** — pre-push writes `.wrix/push-verified` after a successful check so a subsequent push can short-circuit if the SSH connection died during validation. See § Pre-Push Stamp Dance for the full mechanic.
 5. **Marker-aware short-circuit** — `pre-push-checks` consults `loom gate verify-marker`'s exit code to decide whether to skip the wrapped command; see § Hook-Entry Wrappers for the resolution order.
 6. **Graceful degrade in wrappers** — `pre-push-checks` execs the wrapped command when either `loom gate verify-marker` or `.loom/marker.json` is absent. `skip-if-missing` exits 0 silently when `<tool>` is absent from `PATH`. Neither wrapper exits non-zero on a missing-input path.
