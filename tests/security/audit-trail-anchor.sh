@@ -182,7 +182,7 @@ assert_audit_log_for_agent() {
   fi
   log_file=$(find "$workspace/.wrix/log" -maxdepth 1 -name '*.json' | head -n1)
 
-  for field in timestamp_start timestamp_end exit_code mode claude_session_dir; do
+  for field in timestamp_start timestamp_end exit_code mode agent_session_dir; do
     value=$(jq -r ".${field} // empty" "$log_file")
     if [[ -z "$value" ]]; then
       fail "$agent: field $field empty/null in $log_file"
@@ -190,16 +190,21 @@ assert_audit_log_for_agent() {
       return
     fi
   done
+  if jq -e 'has("claude_session_dir")' "$log_file" >/dev/null; then
+    fail "$agent: deprecated claude_session_dir present in $log_file"
+    sed 's/^/    /' "$log_file" >&2
+    return
+  fi
 
   session_dir=$(expected_session_dir "$agent")
-  value=$(jq -r '.claude_session_dir' "$log_file")
+  value=$(jq -r '.agent_session_dir' "$log_file")
   if [[ "$value" != "$session_dir" ]]; then
-    fail "$agent: unexpected claude_session_dir: $value"
+    fail "$agent: unexpected agent_session_dir: $value"
     return
   fi
   host_session_dir="$workspace${session_dir#/workspace}"
   if [[ ! -d "$host_session_dir" ]]; then
-    fail "$agent: claude_session_dir does not exist on host: $host_session_dir"
+    fail "$agent: agent_session_dir does not exist on host: $host_session_dir"
     return
   fi
 

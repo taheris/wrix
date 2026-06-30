@@ -84,7 +84,7 @@ write_session_log() {
     --arg bead_id "$bead_id" \
     --arg session_id "${WRIX_SESSION_ID:-}" \
     --arg claude_session_id "$claude_session_id" \
-    --arg claude_session_dir "$workspace/.claude" \
+    --arg agent_session_dir "$workspace/.claude" \
     '{
       timestamp_start: $start,
       timestamp_end: $end,
@@ -94,7 +94,7 @@ write_session_log() {
       bead_id: (if $bead_id == "" then null else $bead_id end),
       wrix_session_id: (if $session_id == "" then null else $session_id end),
       claude_session_id: (if $claude_session_id == "" then null else $claude_session_id end),
-      claude_session_dir: $claude_session_dir
+      agent_session_dir: $agent_session_dir
     }' > "$log_file" 2>/dev/null || true
 
   echo "$log_file"
@@ -145,7 +145,7 @@ test_log_required_fields() {
   local json
   json=$(cat "$log_file")
 
-  local fields=("timestamp_start" "timestamp_end" "duration_seconds" "exit_code" "mode" "bead_id" "claude_session_dir")
+  local fields=("timestamp_start" "timestamp_end" "duration_seconds" "exit_code" "mode" "bead_id" "agent_session_dir")
   for field in "${fields[@]}"; do
     if echo "$json" | jq -e "has(\"$field\")" >/dev/null 2>&1; then
       test_pass "Has field: $field"
@@ -153,6 +153,22 @@ test_log_required_fields() {
       test_fail "Missing field: $field"
     fi
   done
+
+  teardown
+}
+
+test_log_deprecated_claude_session_dir_absent() {
+  test_header "Deprecated claude_session_dir is absent"
+  setup
+
+  local log_file
+  log_file=$(write_session_log 0)
+
+  if jq -e 'has("claude_session_dir")' "$log_file" >/dev/null; then
+    test_fail "Deprecated claude_session_dir is present"
+  else
+    test_pass "Deprecated claude_session_dir is absent"
+  fi
 
   teardown
 }
@@ -362,6 +378,7 @@ ALL_TESTS=(
   test_log_file_created
   test_log_valid_json
   test_log_required_fields
+  test_log_deprecated_claude_session_dir_absent
   test_log_interactive_mode
   test_log_loom_mode
   test_log_exit_code

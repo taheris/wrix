@@ -793,9 +793,9 @@ write_session_log() {
     fi
   fi
 
-  local claude_session_dir
-  claude_session_dir=$(wrix_session_dir_for_agent)
-  mkdir -p "$claude_session_dir" /workspace/.wrix/log
+  local agent_session_dir
+  agent_session_dir=$(wrix_session_dir_for_agent)
+  mkdir -p "$agent_session_dir" /workspace/.wrix/log
   local log_file="/workspace/.wrix/log/${SESSION_START_ISO//[:.]/-}.json"
 
   jq -n \
@@ -807,7 +807,7 @@ write_session_log() {
     --arg bead_id "$bead_id" \
     --arg session_id "${WRIX_SESSION_ID:-}" \
     --arg claude_session_id "$claude_session_id" \
-    --arg claude_session_dir "$claude_session_dir" \
+    --arg agent_session_dir "$agent_session_dir" \
     '{
       timestamp_start: $start,
       timestamp_end: $end,
@@ -817,7 +817,7 @@ write_session_log() {
       bead_id: (if $bead_id == "" then null else $bead_id end),
       wrix_session_id: (if $session_id == "" then null else $session_id end),
       claude_session_id: (if $claude_session_id == "" then null else $claude_session_id end),
-      claude_session_dir: $claude_session_dir
+      agent_session_dir: $agent_session_dir
     }' > "$log_file"
 }
 

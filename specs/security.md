@@ -186,17 +186,18 @@ of the sandbox network contract.
 
 ### Audit Trail
 
-Policy-leakage detection is anchored in the **agent's own session
-transcript** (the directory under `/workspace/.claude/` containing
-the agent's tool-call-level history). At session end, wrix writes a
-**session-metadata index** to `/workspace/.wrix/log/<timestamp>.json`
-containing:
+Policy-leakage detection is anchored in the selected **agent's own
+session transcript**. Claude uses `/workspace/.claude/`, Pi uses
+`/workspace/.pi/agent/sessions`, and direct mode uses `/workspace` as
+the transcript root for the externally supplied runner. At session end,
+wrix writes a **session-metadata index** to
+`/workspace/.wrix/log/<timestamp>.json` containing:
 
 - `timestamp_start`, `timestamp_end`, `duration_seconds`
 - `exit_code`, `mode`
 - `bead_id` (null in non-orchestrated sessions)
 - `wrix_session_id`, `claude_session_id`
-- `claude_session_dir` — pointer to the agent transcript
+- `agent_session_dir` — pointer to the selected agent's transcript directory
 
 The index is the **audit anchor**; the agent transcript is the
 **audit content**. The index is the smallest artefact that makes a session
@@ -254,8 +255,8 @@ this section is the index, not a restatement.
   [system](bash tests/security/spawn-requires-keys.sh)
 - After a sandbox session, a session-metadata index file exists under
   `/workspace/.wrix/log/`; its `timestamp_start`, `timestamp_end`,
-  `exit_code`, `mode`, and `claude_session_dir` fields are populated;
-  and `claude_session_dir` resolves to an existing directory.
+  `exit_code`, `mode`, and `agent_session_dir` fields are populated;
+  and `agent_session_dir` resolves to an existing directory.
   [system](bash tests/security/audit-trail-anchor.sh)
 
 ## Requirements
@@ -277,8 +278,8 @@ this section is the index, not a restatement.
    same precedence rule; behavior is identical across platforms
    modulo the launcher's outer shell/applescript wrapping.
 4. **Audit anchor** — every sandbox session writes a session-metadata
-   index whose `claude_session_dir` field points at the directory
-   containing the agent transcript for that session.
+   index whose `agent_session_dir` field points at the directory
+   containing the selected agent's transcript for that session.
 
 ### Non-Functional
 
