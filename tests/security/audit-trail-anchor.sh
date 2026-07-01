@@ -6,7 +6,7 @@ REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 # shellcheck source=tests/lib/live-sandbox.sh
 source "$SCRIPT_DIR/../lib/live-sandbox.sh"
 
-wrix_require_live_sandbox_linux
+wrix_require_live_sandbox
 cd "$REPO_ROOT"
 
 TEST_TMP=$(mktemp -d -t wrix-audit-trail.XXXXXX)

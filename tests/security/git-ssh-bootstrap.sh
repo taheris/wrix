@@ -90,7 +90,15 @@ if grep -Eiq 'Host key verification failed|No .* host key is known|REMOTE HOST I
   sed 's/^/ssh: /' "$ssh_err" >&2
   fail_probe "ssh -T failed host-key verification"
 fi
-printf 'ssh -T git@github.com exited %s without host-key verification failure\n' "$ssh_rc"
+if grep -Fq 'Permission denied (publickey)' "$ssh_err"; then
+  printf 'ssh -T git@github.com reached GitHub authentication after host-key verification (rc=%s)\n' "$ssh_rc"
+elif grep -Eiq 'successfully authenticated' "$ssh_out" || grep -Eiq 'successfully authenticated' "$ssh_err"; then
+  printf 'ssh -T git@github.com authenticated after host-key verification (rc=%s)\n' "$ssh_rc"
+else
+  sed 's/^/ssh stdout: /' "$ssh_out" >&2
+  sed 's/^/ssh stderr: /' "$ssh_err" >&2
+  fail_probe "ssh -T did not reach GitHub authentication with pinned host-key verification (rc=$ssh_rc)"
+fi
 
 rm -rf smoke-repo
 git init -q smoke-repo

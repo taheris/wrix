@@ -43,6 +43,17 @@ mkdir -p "$HOME_DIR/.ssh/deploy_keys" "$XDG_CACHE_HOME"
 wrix_make_ed25519_key "$DEPLOY_KEY" "spawn-key-test"
 wrix_write_profile_config "$PROFILE_CONFIG" "$IMAGE_REF" "$IMAGE_SOURCE" claude
 
+default_deploy_key_name() {
+  local workspace="$1"
+  local host workspace_base
+
+  if ! host=$(hostname -s); then
+    host=$(uname -n)
+  fi
+  workspace_base=$(basename "$workspace")
+  printf '%s-%s\n' "$workspace_base" "$host"
+}
+
 write_case_spawn_config() {
   local label="$1"
   local workspace="$TEST_TMP/workspace-$label"
@@ -151,6 +162,45 @@ assert_spawn_nosign_still_needs_deploy() {
   pass "$label: WRIX_GIT_SIGN=0 still requires deploy key"
 }
 
+assert_spawn_uses_home_fallback_keys() {
+  local label="spawn-home-fallback"
+  local workspace="$TEST_TMP/workspace-$label"
+  local deploy_key_name fallback_deploy_key fallback_signing_key spawn_config out err rc
+
+  deploy_key_name=$(default_deploy_key_name "$workspace")
+  fallback_deploy_key="$HOME_DIR/.ssh/deploy_keys/$deploy_key_name"
+  fallback_signing_key="$HOME_DIR/.ssh/deploy_keys/$deploy_key_name-signing"
+  wrix_make_ed25519_key "$fallback_deploy_key" "spawn-fallback-deploy"
+  wrix_make_ed25519_key "$fallback_signing_key" "spawn-fallback-signing"
+
+  # shellcheck disable=SC2016
+  spawn_config=$(write_case_spawn_config "$label" bash -lc '
+set -euo pipefail
+[[ "${WRIX_DEPLOY_KEY:-}" = /etc/wrix/keys/* ]]
+[[ "${WRIX_SIGNING_KEY:-}" = /etc/wrix/keys/*-signing ]]
+[[ -f "$WRIX_DEPLOY_KEY" ]]
+[[ -f "$WRIX_SIGNING_KEY" ]]
+[[ "$(git config --global --get user.signingkey)" = "$WRIX_SIGNING_KEY" ]]
+git init -q .
+git commit --allow-empty -q -m fallback-signed
+git cat-file -p HEAD | grep -q "^gpgsig"
+')
+  out="$TEST_TMP/$label.out"
+  err="$TEST_TMP/$label.err"
+  rc=0
+  env -u WRIX_DEPLOY_KEY -u WRIX_SIGNING_KEY -u WRIX_GIT_SIGN \
+    HOME="$HOME_DIR" XDG_CACHE_HOME="$XDG_CACHE_HOME" \
+    "$LAUNCHER/bin/wrix" --profile-config "$PROFILE_CONFIG" spawn --spawn-config "$spawn_config" \
+    >"$out" 2>"$err" || rc=$?
+
+  if [[ "$rc" -ne 0 ]]; then
+    fail "$label: wrix spawn did not use deploy_keys fallback files"
+    sed 's/^/    /' "$err" >&2
+    return
+  fi
+  pass "$label: unset key env falls back to HOME deploy_keys and signs commits"
+}
+
 assert_run_permits_no_keys() {
   local label="run-no-keys"
   local workspace="$TEST_TMP/workspace-$label"
@@ -186,6 +236,7 @@ assert_spawn_fails_no_keys
 assert_spawn_fails_no_signing
 assert_spawn_nosign_deploy_only
 assert_spawn_nosign_still_needs_deploy
+assert_spawn_uses_home_fallback_keys
 assert_run_permits_no_keys
 
 echo

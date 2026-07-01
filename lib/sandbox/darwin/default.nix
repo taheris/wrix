@@ -621,12 +621,9 @@ in
               fi
             fi
 
-            # Pi subscription credentials are file-backed. Mount them only
-            # when the selected image is Pi; settings are non-secret image
-            # defaults. Apple Container/VirtioFS mounts directories, so mount
-            # the auth file's parent at a staging path and expose only auth.json
-            # to Pi via WRIX_PI_AUTH_JSON.
+            # Pi credentials use a private one-file staging mount on Darwin.
             PI_AUTH_JSON_MOUNT=""
+            PI_AUTH_STAGING_FILE=""
             if [ "$WRIX_AGENT" = "pi" ]; then
               PI_AUTH_FILE="''${WRIX_PI_AUTH_FILE:-$HOME/.pi/agent/auth.json}"
               if [ -n "''${WRIX_PI_AUTH_FILE:-}" ]; then
@@ -644,9 +641,13 @@ in
                 fi
                 chmod 600 "$PI_AUTH_FILE"
               fi
-              PI_AUTH_DIR=$(dirname "$PI_AUTH_FILE")
               PI_AUTH_NAME=$(basename "$PI_AUTH_FILE")
-              MOUNT_ARGS="$MOUNT_ARGS -v $PI_AUTH_DIR:/mnt/wrix/pi-agent-auth"
+              PI_AUTH_STAGING_DIR="$STAGING_ROOT/pi-agent-auth"
+              PI_AUTH_STAGING_FILE="$PI_AUTH_STAGING_DIR/$PI_AUTH_NAME"
+              mkdir -p "$PI_AUTH_STAGING_DIR"
+              cp "$PI_AUTH_FILE" "$PI_AUTH_STAGING_FILE"
+              chmod 600 "$PI_AUTH_STAGING_FILE"
+              MOUNT_ARGS="$MOUNT_ARGS -v $PI_AUTH_STAGING_DIR:/mnt/wrix/pi-agent-auth"
               PI_AUTH_JSON_MOUNT="/mnt/wrix/pi-agent-auth/$PI_AUTH_NAME"
             fi
 
@@ -778,6 +779,15 @@ in
               "$RUN_IMAGE" \
               "''${CONTAINER_CMD[@]}" \
               || CONTAINER_EXIT=$?
+            if [[ -n "''${PI_AUTH_STAGING_FILE:-}" ]]; then
+              if [[ -f "$PI_AUTH_STAGING_FILE" ]]; then
+                cp "$PI_AUTH_STAGING_FILE" "$PI_AUTH_FILE"
+                chmod 600 "$PI_AUTH_FILE"
+              else
+                echo "wrix: Pi auth staging file disappeared: $PI_AUTH_STAGING_FILE" >&2
+                CONTAINER_EXIT=1
+              fi
+            fi
             exit $CONTAINER_EXIT
     '';
 }
