@@ -110,46 +110,35 @@ in
     mkdir $out
   '';
 
-  known-hosts-installer-repairs-unwritable-ssh-dir =
-    if !pkgs.stdenv.hostPlatform.isLinux then
-      runCommandLocal "test-known-hosts-installer-skipped" { } ''
-        set -euo pipefail
-        echo "SKIP: known_hosts installer permission test is Linux-only" >&2
-        mkdir "$out"
+  known-hosts-installer-skips-existing-ssh-dir =
+    runCommandLocal "test-known-hosts-installer-skips-existing-ssh-dir" { }
       ''
-    else
-      runCommandLocal "test-known-hosts-installer-repairs-unwritable-ssh-dir"
-        {
-          nativeBuildInputs = [ pkgs.util-linux ];
-        }
-        ''
-          set -euo pipefail
+        set -euo pipefail
 
-          chmod 0755 "$PWD"
-          root="$PWD/root"
-          known_hosts="$PWD/known_hosts"
-          mkdir -p "$root/etc/ssh"
-          printf '%s\n' 'github.com ssh-ed25519 test' > "$known_hosts"
-          chmod 0555 "$root/etc/ssh"
+        root="$PWD/root"
+        known_hosts="$PWD/known_hosts"
+        mkdir -p "$root/etc/ssh" "$PWD/bin"
+        printf '%s\n' 'github.com ssh-ed25519 test' > "$known_hosts"
 
-          runner=()
-          if [[ "$(id -u)" = "0" ]]; then
-            chown -R 65534:65534 "$root" "$known_hosts"
-            runner=(setpriv --reuid=65534 --regid=65534 --clear-groups)
-          fi
+        cat > "$PWD/bin/chmod" <<'EOF'
+        #!${pkgs.bash}/bin/bash
+        set -euo pipefail
+        echo "chmod: changing permissions of './etc/ssh': Operation not permitted" >&2
+        exit 1
+        EOF
+        chmod +x "$PWD/bin/chmod"
+        export PATH="$PWD/bin:$PATH"
 
-          "''${runner[@]}" ${pkgs.bash}/bin/bash ${../../lib/sandbox/install-known-hosts.sh} "$known_hosts" "$root"
+        ${pkgs.bash}/bin/bash ${../../lib/sandbox/install-known-hosts.sh} "$known_hosts" "$root"
 
-          cmp "$known_hosts" "$root/etc/ssh/ssh_known_hosts"
-          cmp "$known_hosts" "$root/etc/wrix/known_hosts_dir/known_hosts"
-          mode=$(stat -c %a "$root/etc/ssh")
-          if [[ "$mode" != "755" ]]; then
-            echo "FAIL: /etc/ssh mode is $mode, expected 755" >&2
-            exit 1
-          fi
+        cmp "$known_hosts" "$root/etc/wrix/known_hosts_dir/known_hosts"
+        if [[ -e "$root/etc/ssh/ssh_known_hosts" ]]; then
+          echo "FAIL: installer mutated an existing /etc/ssh directory" >&2
+          exit 1
+        fi
 
-          mkdir "$out"
-        '';
+        mkdir "$out"
+      '';
 
   prune-stale-images-empty-holder = runCommandLocal "test-prune-stale-images-empty-holder" { } ''
     set -euo pipefail
