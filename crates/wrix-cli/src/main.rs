@@ -220,7 +220,7 @@ mod test {
         assert!(matches!(code, Ok(value) if value == ExitCode::SUCCESS));
         assert!(stderr.is_empty());
         let output = String::from_utf8(stdout).unwrap();
-        assert!(output.contains("dolt <status|socket|port|host|attach|gc>"));
+        assert!(output.contains("dolt <status|socket|port|host|attach|gc|wait>"));
         assert!(output.contains("cache <status|publish|warm|prune|rotate-key>"));
     }
 

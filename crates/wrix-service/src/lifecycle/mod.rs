@@ -1,9 +1,14 @@
 use std::{
     env, fs, io,
-    net::TcpListener,
+    net::{SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
+
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
 
 use displaydoc::Display;
 use thiserror::Error as ThisError;
@@ -18,6 +23,10 @@ const CACHE_PORT_WIDTH: u16 = 2_000;
 const DOLT_PORT_START: u16 = 23_000;
 const DOLT_PORT_WIDTH: u16 = 2_000;
 const CACHE_ENABLED_LABEL: &str = "wrix.cache.enabled";
+const DOLT_TRANSPORT_LABEL: &str = "wrix.dolt.transport";
+const DOLT_DISABLED_LABEL_VALUE: &str = "disabled";
+const DOLT_READY_TIMEOUT: Duration = Duration::from_secs(6);
+const DOLT_READY_INTERVAL: Duration = Duration::from_millis(200);
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -34,6 +43,12 @@ pub enum Error {
     UnknownDoltTransport { value: String },
     /// failed to remove stale Dolt socket {path}: {source}
     StaleDoltSocketRemoval { path: String, source: io::Error },
+    /// Dolt endpoint {endpoint} did not become reachable within {timeout} seconds: {source}
+    DoltEndpointUnavailable {
+        endpoint: String,
+        timeout: u64,
+        source: io::Error,
+    },
     /// unknown service image source kind: {value}
     UnknownImageSourceKind { value: String },
     /// `WRIX_SERVICE_IMAGE_SOURCE_KIND` is required when `WRIX_SERVICE_IMAGE_SOURCE` is set
@@ -494,6 +509,11 @@ pub fn endpoints(cache_mode: CacheMode) -> Result<String> {
     Ok(plan.services_json())
 }
 
+pub fn wait_for_dolt(cache_mode: CacheMode) -> Result<()> {
+    let plan = Plan::for_current_dir(cache_mode)?;
+    wait_for_dolt_plan(&plan)
+}
+
 fn status_for_plan(plan: Plan) -> Result<Status> {
     let runtime = Runtime::from_env()?.status(&plan.container_name())?;
     Ok(Status { runtime, plan })
@@ -821,6 +841,11 @@ impl Runtime {
                 } else {
                     "false"
                 }
+            ))
+            .arg("--label")
+            .arg(format!(
+                "{DOLT_TRANSPORT_LABEL}={}",
+                expected_dolt_transport_label(plan)
             ));
         if let Some(port) = plan.cache_port() {
             command
@@ -844,8 +869,8 @@ impl Runtime {
             }
             match dolt.transport() {
                 DoltTransport::UnixSocket => {
+                    remove_stale_socket(dolt.socket_path())?;
                     if self.kind == RuntimeKind::Container {
-                        remove_stale_socket(dolt.socket_path())?;
                         command.arg("--publish-socket").arg(format!(
                             "{}:/run/wrix/dolt.sock",
                             dolt.socket_path().display()
@@ -890,6 +915,13 @@ impl Runtime {
                 .inspect_label(name.as_str(), CACHE_ENABLED_LABEL)?
                 .as_deref()
                 != Some("true")
+        {
+            return Ok(false);
+        }
+        let expected_dolt = expected_dolt_transport_label(plan);
+        let actual_dolt = self.inspect_label(name.as_str(), DOLT_TRANSPORT_LABEL)?;
+        if actual_dolt.as_deref() != Some(expected_dolt)
+            && !(actual_dolt.is_none() && expected_dolt == DOLT_DISABLED_LABEL_VALUE)
         {
             return Ok(false);
         }
@@ -1645,6 +1677,11 @@ fn dolt_server_command(dolt: &DoltEndpoint) -> String {
     }
 }
 
+fn expected_dolt_transport_label(plan: &Plan) -> &'static str {
+    plan.dolt()
+        .map_or(DOLT_DISABLED_LABEL_VALUE, |dolt| dolt.transport().as_str())
+}
+
 fn remove_stale_socket(path: &Path) -> Result<()> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
@@ -1653,6 +1690,63 @@ fn remove_stale_socket(path: &Path) -> Result<()> {
             path: path.display().to_string(),
             source,
         }),
+    }
+}
+
+fn wait_for_dolt_plan(plan: &Plan) -> Result<()> {
+    let Some(dolt) = plan.dolt() else {
+        return Ok(());
+    };
+    let deadline = Instant::now() + DOLT_READY_TIMEOUT;
+    loop {
+        match probe_dolt_endpoint(dolt) {
+            Ok(()) => return Ok(()),
+            Err(source) if Instant::now() >= deadline => {
+                return Err(Error::DoltEndpointUnavailable {
+                    endpoint: dolt_endpoint_description(dolt),
+                    timeout: DOLT_READY_TIMEOUT.as_secs(),
+                    source,
+                });
+            }
+            Err(_) => {}
+        }
+        thread::sleep(DOLT_READY_INTERVAL);
+    }
+}
+
+fn probe_dolt_endpoint(dolt: &DoltEndpoint) -> io::Result<()> {
+    match dolt.transport() {
+        DoltTransport::UnixSocket => connect_unix_socket(dolt.socket_path()),
+        DoltTransport::Tcp => {
+            let Some(port) = dolt.tcp_port() else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Dolt TCP endpoint has no port",
+                ));
+            };
+            let addr = SocketAddr::from(([127, 0, 0, 1], port));
+            TcpStream::connect_timeout(&addr, DOLT_READY_INTERVAL).map(|_| ())
+        }
+    }
+}
+
+#[cfg(unix)]
+fn connect_unix_socket(path: &Path) -> io::Result<()> {
+    UnixStream::connect(path).map(|_| ())
+}
+
+#[cfg(not(unix))]
+fn connect_unix_socket(_path: &Path) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "Unix sockets are not supported on this platform",
+    ))
+}
+
+fn dolt_endpoint_description(dolt: &DoltEndpoint) -> String {
+    match dolt.transport() {
+        DoltTransport::UnixSocket => dolt.socket_path().display().to_string(),
+        DoltTransport::Tcp => format!("127.0.0.1:{}", option_port_value(dolt.tcp_port())),
     }
 }
 

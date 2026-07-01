@@ -6,7 +6,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 
 TEST_TMP="$(mktemp -d -t wrix-services-host-nix.XXXXXX)"
+SOCKET_PIDS=()
 cleanup() {
+  local pid
+  for pid in "${SOCKET_PIDS[@]}"; do
+    kill "$pid" 2>/dev/null || true
+  done
+  if [[ -d "$TEST_TMP" ]]; then
+    while IFS= read -r pid; do
+      kill "$pid" 2>/dev/null || true
+    done < <(find "$TEST_TMP" -name socket-pids -type f -exec cat {} + 2>/dev/null || true)
+  fi
   if [[ -d "$TEST_TMP" ]]; then
     chmod -R u+w "$TEST_TMP"
     rm -rf "$TEST_TMP"
@@ -86,6 +96,45 @@ port_lines_for_args() {
   done
 }
 
+socket_path_for_args() {
+  local run_args="$1"
+  local previous=""
+  local token
+  local source
+  local -a tokens=()
+  read -r -a tokens <<<"$run_args"
+  for token in "${tokens[@]}"; do
+    if [[ "$previous" == "-v" && "$token" == *":/run/wrix:rw" ]]; then
+      source="${token%:/run/wrix:rw}"
+      printf '%s/dolt.sock\n' "$source"
+      return 0
+    fi
+    if [[ "$previous" == "--publish-socket" && "$token" == *":/run/wrix/dolt.sock" ]]; then
+      printf '%s\n' "${token%:/run/wrix/dolt.sock}"
+      return 0
+    fi
+    previous="$token"
+  done
+  return 1
+}
+
+start_socket_listener() {
+  local socket_path="$1"
+  mkdir -p "$(dirname "$socket_path")"
+  rm -f "$socket_path"
+  python3 - "$socket_path" <<'PY' &
+import socket
+import sys
+import time
+path = sys.argv[1]
+server = socket.socket(socket.AF_UNIX)
+server.bind(path)
+server.listen(1)
+time.sleep(60)
+PY
+  printf '%s\n' "$!" >>"$STATE_DIR/socket-pids"
+}
+
 case "${1:-}" in
   container)
     if [[ "${2:-}" == "exists" ]]; then
@@ -114,6 +163,9 @@ case "${1:-}" in
     [[ -n "$name" ]]
     printf 'running\n' >"$(state_file "$name")"
     printf '%s\n' "$*" >"$(run_file "$name")"
+    if socket_path="$(socket_path_for_args "$*")"; then
+      start_socket_listener "$socket_path"
+    fi
     ;;
   port)
     name="${2:-}"
@@ -269,6 +321,31 @@ print(value)
 PY
 }
 
+start_unix_socket() {
+  local socket_path="$1"
+  rm -f "$socket_path"
+  python3 - "$socket_path" <<'PY' &
+import socket
+import sys
+import time
+path = sys.argv[1]
+server = socket.socket(socket.AF_UNIX)
+server.bind(path)
+server.listen(1)
+time.sleep(60)
+PY
+  local pid="$!"
+  SOCKET_PIDS+=("$pid")
+  local attempt
+  for ((attempt = 0; attempt < 100; attempt++)); do
+    if [[ -S "$socket_path" ]]; then
+      return 0
+    fi
+    sleep 0.05
+  done
+  fail "socket helper did not create $socket_path"
+}
+
 test_mkdevshell_nix_cache() {
   if ! command -v nix >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
     exit 77
@@ -415,19 +492,7 @@ test_mkdevshell_nix_cache() {
   disabled_stderr="$TEST_TMP/mkdevshell-disabled.err"
   : > "$args_log"
   mkdir -p "$disabled_workspace/.beads/dolt"
-  python3 - "$socket_path" <<'PY'
-import os
-import socket
-import sys
-path = sys.argv[1]
-try:
-    os.unlink(path)
-except FileNotFoundError:
-    pass
-sock = socket.socket(socket.AF_UNIX)
-sock.bind(path)
-sock.close()
-PY
+  start_unix_socket "$socket_path"
   cat >"$fake_wrix" <<SCRIPT
 #!/usr/bin/env bash
 set -euo pipefail
@@ -437,6 +502,9 @@ if [[ "\${1:-}" == "service" && "\${2:-}" == "start" && "\${3:-}" == "--no-cache
 fi
 if [[ "\${1:-}" == "service" && "\${2:-}" == "endpoints" && "\${3:-}" == "--no-cache" ]]; then
   printf '%s\n' '{"endpoints":{"dolt":{"transport":"unix","socket":"$socket_path"}}}'
+  exit 0
+fi
+if [[ "\${1:-}" == "service" && "\${2:-}" == "dolt" && "\${3:-}" == "wait" ]]; then
   exit 0
 fi
 printf 'fake wrix beads: unexpected args: %s\n' "\$*" >&2
@@ -460,6 +528,7 @@ SCRIPT
   assert_not_contains "nixCache=false output" "$disabled_output" "extra-substituters" || return 1
   assert_contains "nixCache=false wrix calls" "$(cat "$args_log")" "service start --no-cache" || return 1
   assert_contains "nixCache=false wrix calls" "$(cat "$args_log")" "service endpoints --no-cache" || return 1
+  assert_contains "nixCache=false wrix calls" "$(cat "$args_log")" "service dolt wait" || return 1
   PATH="$saved_path"
   export PATH
 }
@@ -507,19 +576,7 @@ SCRIPT
     "$workspace/.git/beads-worktrees/beads/.beads/dolt-remote" \
     "$workspace/.wrix"
   socket_path="$workspace/.wrix/dolt.sock"
-  python3 - "$socket_path" <<'PY'
-import os
-import socket
-import sys
-path = sys.argv[1]
-try:
-    os.unlink(path)
-except FileNotFoundError:
-    pass
-sock = socket.socket(socket.AF_UNIX)
-sock.bind(path)
-sock.close()
-PY
+  start_unix_socket "$socket_path"
 
   if ! output="$(
     (

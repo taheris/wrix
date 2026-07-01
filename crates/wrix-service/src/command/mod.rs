@@ -22,6 +22,7 @@ pub enum Dolt {
     Host,
     Attach,
     Gc,
+    Wait,
 }
 
 impl Top {
@@ -46,6 +47,7 @@ impl Dolt {
             "host" => Some(Self::Host),
             "attach" => Some(Self::Attach),
             "gc" => Some(Self::Gc),
+            "wait" => Some(Self::Wait),
             _ => None,
         }
     }
@@ -53,13 +55,13 @@ impl Dolt {
 
 pub fn write_help(stdout: &mut impl Write) -> io::Result<()> {
     stdout.write_all(
-        b"Manage workspace services.\n\nUsage: wrix service <command>\n\nCommands:\n  start\n  stop\n  status\n  logs\n  endpoints\n  dolt <status|socket|port|host|attach|gc>\n  cache <status|publish|warm|prune|rotate-key>\n",
+        b"Manage workspace services.\n\nUsage: wrix service <command>\n\nCommands:\n  start\n  stop\n  status\n  logs\n  endpoints\n  dolt <status|socket|port|host|attach|gc|wait>\n  cache <status|publish|warm|prune|rotate-key>\n",
     )
 }
 
 pub fn write_dolt_help(stdout: &mut impl Write) -> io::Result<()> {
     stdout.write_all(
-        b"Manage the workspace Dolt service.\n\nUsage: wrix service dolt <command>\n\nCommands:\n  status\n  socket\n  port\n  host\n  attach\n  gc\n",
+        b"Manage the workspace Dolt service.\n\nUsage: wrix service dolt <command>\n\nCommands:\n  status\n  socket\n  port\n  host\n  attach\n  gc\n  wait\n",
     )
 }
 
@@ -144,6 +146,9 @@ pub fn run_dolt(command: Dolt, stdout: &mut impl Write) -> io::Result<ExitCode> 
                     .display()
             )?;
         }
+        Dolt::Wait => {
+            lifecycle::wait_for_dolt(CacheMode::Disabled).map_err(io::Error::other)?;
+        }
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -201,6 +206,7 @@ mod test {
         assert_eq!(Dolt::parse("host"), Some(Dolt::Host));
         assert_eq!(Dolt::parse("attach"), Some(Dolt::Attach));
         assert_eq!(Dolt::parse("gc"), Some(Dolt::Gc));
+        assert_eq!(Dolt::parse("wait"), Some(Dolt::Wait));
     }
 
     #[test]

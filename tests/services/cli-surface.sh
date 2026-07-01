@@ -77,7 +77,7 @@ test_wrix_service_cli() {
     assert_contains "service help" "$service_help" "$command"
   done
 
-  for command in status socket port host attach gc; do
+  for command in status socket port host attach gc wait; do
     assert_contains "dolt help" "$dolt_help" "$command"
   done
 

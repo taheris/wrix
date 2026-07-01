@@ -99,6 +99,9 @@ case "$*" in
   "service endpoints --no-cache")
     printf '%s\n' "${WRIX_FAKE_ENDPOINTS:?}"
     ;;
+  "service dolt wait")
+    exit "${WRIX_FAKE_DOLT_WAIT_RC:-0}"
+    ;;
   *)
     printf 'unexpected wrix invocation: %s\n' "$*" >&2
     exit 64
@@ -258,6 +261,7 @@ test_shellhook_lifecycle_isolation() {
   assert_file_contains "systemd start" "$log_file" "systemd-run --user --scope --quiet --collect -- $bin_dir/wrix service start --no-cache"
   assert_file_contains "public service start" "$log_file" "wrix service start --no-cache"
   assert_file_contains "public service endpoints" "$log_file" "wrix service endpoints --no-cache"
+  assert_file_contains "public service wait" "$log_file" "wrix service dolt wait"
   assert_file_not_contains "legacy helper" "$log_file" "beads-dolt"
   assert_contains "systemd env" "$(<"$stdout_file")" "AUTO=0"
   assert_contains "systemd env" "$(<"$stdout_file")" "SOCKET=$workspace/.wrix/dolt.sock"
@@ -283,6 +287,7 @@ test_shellhook_lifecycle_isolation() {
 
   assert_file_not_contains "fallback bypasses systemd" "$fallback_log" "systemd-run"
   assert_file_contains "fallback public service start" "$fallback_log" "wrix service start --no-cache"
+  assert_file_contains "fallback public service wait" "$fallback_log" "wrix service dolt wait"
   assert_contains "fallback env" "$(<"$fallback_out")" "AUTO=0"
   assert_contains "fallback env" "$(<"$fallback_out")" "SOCKET=$fallback_workspace/.wrix/dolt.sock"
 }

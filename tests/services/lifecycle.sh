@@ -832,6 +832,43 @@ test_cache_start_recreates_running_no_cache_service() {
     "--label wrix.cache.enabled=true"
 }
 
+test_dolt_start_recreates_running_cache_only_service() {
+  require_python
+  local wrix_bin
+  wrix_bin="$(build_wrix)"
+  with_fake_runtime_env
+
+  export HOME="$TEST_TMP/home-dolt-reconfigure"
+  export XDG_STATE_HOME="$TEST_TMP/xdg-state-dolt-reconfigure"
+  export XDG_CACHE_HOME="$TEST_TMP/xdg-cache-dolt-reconfigure"
+  mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+
+  local workspace="$TEST_TMP/dolt-reconfigure-repo"
+  mkdir -p "$workspace"
+  (cd "$workspace" && "$wrix_bin" service endpoints >"$TEST_TMP/dolt-reconfigure-endpoints.json")
+
+  local planned_name
+  planned_name="$(json_get "$TEST_TMP/dolt-reconfigure-endpoints.json" container_name)"
+
+  (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/dolt-reconfigure-cache-start.txt")
+  mkdir -p "$workspace/.beads/dolt"
+  (cd "$workspace" && "$wrix_bin" service start --no-cache >"$TEST_TMP/dolt-reconfigure-dolt-start.txt")
+
+  assert_file_contains "cache-only service removed for dolt" "$WRIX_FAKE_RUNTIME_STATE/calls" "rm -f $planned_name"
+  assert_file_contains \
+    "recreated service disables cache for no-cache start" \
+    "$WRIX_FAKE_RUNTIME_STATE/run-$planned_name" \
+    "--label wrix.cache.enabled=false"
+  assert_file_contains \
+    "recreated service labelled dolt unix" \
+    "$WRIX_FAKE_RUNTIME_STATE/run-$planned_name" \
+    "--label wrix.dolt.transport=unix"
+  assert_file_contains \
+    "recreated service runs dolt" \
+    "$WRIX_FAKE_RUNTIME_STATE/run-$planned_name" \
+    "dolt sql-server"
+}
+
 test_start_reports_unrelated_cache_port_owner() {
   require_python
   local wrix_bin
@@ -1089,6 +1126,7 @@ ALL_TESTS=(
   test_start_replaces_stale_same_workspace_service_on_cache_port
   test_start_ignores_container_removed_after_ps
   test_cache_start_recreates_running_no_cache_service
+  test_dolt_start_recreates_running_cache_only_service
   test_start_reports_unrelated_cache_port_owner
   test_temp_cache_only_workspace_does_not_start_service
   test_loom_bead_workspace_uses_repo_service

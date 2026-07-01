@@ -97,6 +97,10 @@ let
             _wrix_beads_fail "beads: Dolt socket did not appear at $_wrix_socket — refusing embedded Dolt fallback"
             return 1 2>/dev/null || exit 1
           fi
+          if ! "$_wrix_service_bin" service dolt wait >/dev/null; then
+            _wrix_beads_fail "beads: Dolt socket $_wrix_socket is not accepting connections — refusing embedded Dolt fallback"
+            return 1 2>/dev/null || exit 1
+          fi
           export BEADS_DOLT_SERVER_SOCKET="$_wrix_socket"
           unset BEADS_DOLT_SERVER_HOST BEADS_DOLT_SERVER_PORT
           ;;
@@ -114,6 +118,10 @@ let
           done
           if ! bash -c "echo >/dev/tcp/$_wrix_host/$_wrix_port" 2>/dev/null; then
             _wrix_beads_fail "beads: Dolt TCP endpoint $_wrix_host:$_wrix_port is not reachable — refusing embedded Dolt fallback"
+            return 1 2>/dev/null || exit 1
+          fi
+          if ! "$_wrix_service_bin" service dolt wait >/dev/null; then
+            _wrix_beads_fail "beads: Dolt TCP endpoint $_wrix_host:$_wrix_port is not accepting connections — refusing embedded Dolt fallback"
             return 1 2>/dev/null || exit 1
           fi
           export BEADS_DOLT_SERVER_HOST="$_wrix_host"
