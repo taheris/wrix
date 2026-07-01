@@ -11,6 +11,7 @@
 }:
 
 let
+  inherit (pkgs.lib) concatStringsSep;
   inherit (pkgs)
     bash
     coreutils
@@ -166,85 +167,112 @@ let
     exec ${pkgs.nix}/bin/nix flake check "$@"
   '';
 
+  mkCiApp = package: executable: {
+    name = executable;
+    inherit package executable;
+  };
+
+  ciApps = [
+    (mkCiApp sandboxImageChecks.wrixSpawnLoadTest "test-wrix-spawn-load")
+    (mkCiApp sandboxImageChecks.imageInstallArchivelessTest "test-image-install-archiveless")
+    (mkCiApp sandboxImageChecks.imageInstallRealSkopeoTest "test-image-install-real-skopeo")
+    (mkCiApp sandboxImageChecks.imageInstallDigestSkipTest "test-image-install-digest-skip")
+    (mkCiApp sandboxImageChecks.digestMatchesStoredIdTest "test-image-digest-matches-stored-id")
+    (mkCiApp sandboxImageChecks.linuxImageArchivelessSourceTest "test-linux-image-archiveless-source")
+    (mkCiApp sandboxImageChecks.imageDigestNoTarTest "test-image-digest-no-tar")
+    (mkCiApp sandboxImageChecks.imageTierGraphTest "test-image-tier-graph")
+    (mkCiApp sandboxImageChecks.stableProfileMembershipTest "test-image-tier-membership")
+    (mkCiApp sandboxImageChecks.wrixImagesSourceKindTest "test-wrix-images-source-kind")
+    (mkCiApp sandboxImageChecks.wrixImageLabelsTest "test-wrix-image-labels")
+    (mkCiApp sandboxImageChecks.claudeRuntimeNoopTest "test-claude-runtime-noop")
+    (mkCiApp sandboxImageChecks.prekHooksClosureTest "test-prek-hooks-closure")
+    (mkCiApp sandboxImageChecks.baseImageUniversalTest "test-base-image-universal")
+    (mkCiApp sandboxImageChecks.entrypointResolverBaseTest "test-entrypoint-resolver-base")
+    (mkCiApp sandboxImageChecks.baseImageHashStableTest "test-base-image-hash-stable")
+    (mkCiApp sandboxImageChecks.stableProfileHashStableTest "test-stable-profile-hash-stable")
+    (mkCiApp sandboxImageChecks.stableProfileMembershipTest "test-stable-profile-membership")
+    (mkCiApp sandboxImageChecks.pinnedToolchainStableTest "test-pinned-toolchain-stable-tier")
+    (mkCiApp sandboxImageChecks.downstreamChangeLeafOnlyTest "test-downstream-change-leaf-only")
+    (mkCiApp sandboxImageChecks.archivelessGeneratedChangeTest "test-archiveless-generated-change")
+    (mkCiApp sandboxImageChecks.agentTierIsolatedTest "test-agent-tier-isolated")
+    (mkCiApp sandboxImageChecks.agentExclusiveTest "test-agent-exclusive")
+    (mkCiApp sandboxImageChecks.agentPkgThreadedTest "test-agent-pkg-threaded")
+    (mkCiApp sandboxImageChecks.iterationCostBoundedTest "test-iteration-cost-bounded")
+    (mkCiApp sandboxImageChecks.customisationLayerBoundedTest "test-customisation-layer-bounded")
+    (mkCiApp sandboxImageChecks.imageNixDbConsistentTest "test-image-nix-db-consistent")
+    (mkCiApp sandboxImageChecks.imageNixDbNoDanglingTest "test-image-nix-db-no-dangling")
+    (mkCiApp testProfilesBuildPackage "test-profiles-build-package")
+  ];
+
+  ciAppNameLines = concatStringsSep "\n" (map (app: "      ${app.name}") ciApps);
+  ciAppDerivations = builtins.listToAttrs (
+    map (app: {
+      inherit (app) name;
+      value = app.package;
+    }) ciApps
+  );
+  testAppDerivations = ciAppDerivations // {
+    test-notify = testNotify;
+  };
+
   testCi = writeShellScriptBin "test-ci" ''
-    set -euo pipefail
+        set -euo pipefail
 
-    ci_checks=(
-      tmux-mcp-clippy
-      tmux-mcp-nextest
-      wrix-rust-clippy
-      wrix-rust-nextest
-      image-builds
-      package-script-syntax
-    )
-    ci_apps=(
-      test-wrix-spawn-load
-      test-image-install-archiveless
-      test-image-install-real-skopeo
-      test-image-install-digest-skip
-      test-image-digest-matches-stored-id
-      test-linux-image-archiveless-source
-      test-image-digest-no-tar
-      test-image-tier-graph
-      test-image-tier-membership
-      test-wrix-images-source-kind
-      test-wrix-image-labels
-      test-claude-runtime-noop
-      test-prek-hooks-closure
-      test-base-image-universal
-      test-entrypoint-resolver-base
-      test-base-image-hash-stable
-      test-stable-profile-hash-stable
-      test-stable-profile-membership
-      test-pinned-toolchain-stable-tier
-      test-downstream-change-leaf-only
-      test-archiveless-generated-change
-      test-agent-tier-isolated
-      test-agent-exclusive
-      test-agent-pkg-threaded
-      test-iteration-cost-bounded
-      test-customisation-layer-bounded
-      test-image-nix-db-consistent
-      test-image-nix-db-no-dangling
-      test-profiles-build-package
-    )
+        ci_checks=(
+          tmux-mcp-clippy
+          tmux-mcp-nextest
+          wrix-rust-clippy
+          wrix-rust-nextest
+          image-builds
+          package-script-syntax
+        )
+        ci_apps=(
+    ${ciAppNameLines}
+        )
 
-    if [[ "''${1:-}" = "--list" ]]; then
-      printf 'check %s\n' "''${ci_checks[@]}"
-      printf 'app %s\n' "''${ci_apps[@]}"
-      exit 0
-    fi
+        if [[ "''${1:-}" = "--list" ]]; then
+          printf 'check %s\n' "''${ci_checks[@]}"
+          printf 'app %s\n' "''${ci_apps[@]}"
+          exit 0
+        fi
 
-    repo_root=$(${pkgs.git}/bin/git rev-parse --show-toplevel 2>/dev/null || pwd) # best-effort: allow running outside a git checkout.
-    cd "$repo_root"
+        repo_root=$(${pkgs.git}/bin/git rev-parse --show-toplevel 2>/dev/null || pwd) # best-effort: allow running outside a git checkout.
+        cd "$repo_root"
 
-    failed=0
-    run_step() {
-      local name="$1"
-      shift
-      echo "=== $name ==="
-      if "$@"; then
-        echo "PASS: $name"
-      else
-        echo "FAIL: $name" >&2
-        failed=$((failed + 1))
-      fi
-    }
+        failed=0
+        run_step() {
+          local name="$1"
+          shift
+          echo "=== $name ==="
+          if "$@"; then
+            echo "PASS: $name"
+          else
+            echo "FAIL: $name" >&2
+            failed=$((failed + 1))
+          fi
+        }
 
-    run_step "nix flake check" ${pkgs.nix}/bin/nix flake check --no-warn-dirty
+        run_ci_app() {
+          local app="$1"
+          local runner
+          runner=$(${pkgs.nix}/bin/nix build --no-link --print-out-paths --no-warn-dirty ".#legacyPackages.${system}.ciApps.$app")
+          "$runner/bin/$app"
+        }
 
-    for check in "''${ci_checks[@]}"; do
-      run_step "$check" ${pkgs.nix}/bin/nix build --no-link --no-warn-dirty ".#legacyPackages.${system}.ciChecks.$check"
-    done
+        run_step "nix flake check" ${pkgs.nix}/bin/nix flake check --no-warn-dirty
 
-    for app in "''${ci_apps[@]}"; do
-      run_step "$app" ${pkgs.nix}/bin/nix run --no-warn-dirty ".#$app"
-    done
+        for check in "''${ci_checks[@]}"; do
+          run_step "$check" ${pkgs.nix}/bin/nix build --no-link --no-warn-dirty ".#legacyPackages.${system}.ciChecks.$check"
+        done
 
-    if [[ "$failed" -ne 0 ]]; then
-      echo "$failed CI step(s) failed" >&2
-      exit 1
-    fi
+        for app in "''${ci_apps[@]}"; do
+          run_step "$app" run_ci_app "$app"
+        done
+
+        if [[ "$failed" -ne 0 ]]; then
+          echo "$failed CI step(s) failed" >&2
+          exit 1
+        fi
   '';
 
   # profiles.rust.buildPackage hash invariant verifies (specs/profiles.md).
@@ -486,6 +514,8 @@ in
     darwinNetworkTests
     darwinUidTests
     readmeTest
+    ciAppDerivations
+    testAppDerivations
     ciChecks
     rustChecks
     shellTests

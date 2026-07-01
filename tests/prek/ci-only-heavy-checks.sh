@@ -25,7 +25,7 @@ trap cleanup EXIT
 
 CHECKS_MAP="$WORK_DIR/checks.json"
 CI_CHECKS_MAP="$WORK_DIR/ci-checks.json"
-APPS_MAP="$WORK_DIR/apps.json"
+CI_APPS_MAP="$WORK_DIR/ci-apps.json"
 LISTED_TARGETS="$WORK_DIR/test-ci-list.txt"
 LISTED_CHECKS="$WORK_DIR/listed-checks.txt"
 LISTED_APPS="$WORK_DIR/listed-apps.txt"
@@ -44,15 +44,6 @@ write_derivation_map() {
     "$flake_ref" > "$output"
 }
 
-write_app_program_map() {
-  local flake_ref="$1"
-  local output="$2"
-
-  nix eval --json --no-warn-dirty \
-    --apply 'apps: builtins.mapAttrs (name: app: app.program) apps' \
-    "$flake_ref" > "$output"
-}
-
 is_heavy_derivation() {
   local drv="$1"
 
@@ -68,35 +59,6 @@ write_heavy_derivations() {
 
   : > "$output"
   while IFS=$'\t' read -r name drv; do
-    if is_heavy_derivation "$drv"; then
-      printf '%s\n' "$name" >> "$output"
-    fi
-  done < <(jq -r 'to_entries[] | [.key, .value] | @tsv' "$map_file")
-  sort -u -o "$output" "$output"
-}
-
-app_root_from_program() {
-  local program="$1"
-
-  if [[ "$program" != */bin/* ]]; then
-    return 1
-  fi
-  printf '%s\n' "${program%/bin/*}"
-}
-
-write_heavy_apps() {
-  local map_file="$1"
-  local output="$2"
-  local name program root drv
-
-  : > "$output"
-  while IFS=$'\t' read -r name program; do
-    [[ "$name" = "test-ci" ]] && continue
-    if ! root="$(app_root_from_program "$program")"; then
-      echo "FAIL: apps.$SYSTEM.$name program is not under /bin: $program" >&2
-      return 1
-    fi
-    drv="$(nix path-info --derivation "$root")"
     if is_heavy_derivation "$drv"; then
       printf '%s\n' "$name" >> "$output"
     fi
@@ -136,10 +98,10 @@ fi
 
 write_derivation_map "$REPO_ROOT#checks.$SYSTEM" "$CHECKS_MAP"
 write_derivation_map "$REPO_ROOT#legacyPackages.$SYSTEM.ciChecks" "$CI_CHECKS_MAP"
-write_app_program_map "$REPO_ROOT#apps.$SYSTEM" "$APPS_MAP"
+write_derivation_map "$REPO_ROOT#legacyPackages.$SYSTEM.ciApps" "$CI_APPS_MAP"
 write_heavy_derivations "$CHECKS_MAP" "$HEAVY_CHECKS"
 write_heavy_derivations "$CI_CHECKS_MAP" "$HEAVY_CI_CHECKS"
-write_heavy_apps "$APPS_MAP" "$HEAVY_APPS" || failed=$((failed + 1))
+write_heavy_derivations "$CI_APPS_MAP" "$HEAVY_APPS"
 write_listed_targets "$LISTED_TARGETS" "$LISTED_CHECKS" "$LISTED_APPS"
 
 if ! fail_if_file_nonempty "checks.$SYSTEM contains heavy realization checks" "$HEAVY_CHECKS"; then

@@ -141,6 +141,10 @@ test_profile_required() {
     echo "FAIL: lib.mkDevShell {} should error at evaluation (missing profile)" >&2
     return 1
   fi
+  if eval_expr_raw "let sandbox = lib.mkSandbox { profile = lib.profiles.base; }; in (lib.mkDevShell { inherit sandbox; profile = lib.profiles.base; }).shellHook" >/dev/null 2>/dev/null; then
+    echo "FAIL: lib.mkDevShell should reject simultaneous sandbox and profile" >&2
+    return 1
+  fi
 }
 
 # ============================================================================

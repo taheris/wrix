@@ -150,13 +150,21 @@ test_flake_outputs_present() {
         fi
     done
 
-    local default_name
+    local default_name default_main
     if ! default_name=$(nix eval --raw --no-warn-dirty "$flake_url#default.name"); then
         echo "packages.default.name failed to evaluate" >&2
         return 1
     fi
     if [[ "$default_name" != "wrix-rust-pi" ]]; then
         echo "packages.default resolved to $default_name, expected wrix-rust-pi" >&2
+        return 1
+    fi
+    if ! default_main=$(nix eval --raw --no-warn-dirty "$flake_url#default.meta.mainProgram"); then
+        echo "packages.default.meta.mainProgram failed to evaluate" >&2
+        return 1
+    fi
+    if [[ "$default_main" != "wrix-run" ]]; then
+        echo "packages.default mainProgram is $default_main, expected wrix-run" >&2
         return 1
     fi
 }

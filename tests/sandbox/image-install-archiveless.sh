@@ -10,4 +10,6 @@ skip() {
 [[ "$(uname -s)" = "Linux" ]] || skip "Linux-only descriptor install verifier"
 command -v nix >/dev/null 2>&1 || skip "nix not on PATH"
 
-exec nix run --no-warn-dirty .#test-image-install-archiveless -- "$@"
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+exec "$REPO_ROOT/tests/test-app.sh" test-image-install-archiveless "$@"

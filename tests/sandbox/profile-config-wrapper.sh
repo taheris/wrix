@@ -53,6 +53,7 @@ nix build \
   "
 
 WRIX="$PACKAGE_LINK/bin/wrix"
+WRIX_RUN="$PACKAGE_LINK/bin/wrix-run"
 WORKSPACE="$TEST_TMP/workspace"
 mkdir -p "$WORKSPACE"
 
@@ -188,7 +189,15 @@ write_spawn_config() {
 test_wrapper_invokes_run_and_spawn_with_profile_config() {
   local run_out="$TEST_TMP/dry-run.out" run_err="$TEST_TMP/dry-run.err"
   local spawn_out="$TEST_TMP/dry-spawn.out" spawn_err="$TEST_TMP/dry-spawn.err"
+  local main_out="$TEST_TMP/dry-main.out" main_err="$TEST_TMP/dry-main.err"
+  local main_spawn_out="$TEST_TMP/dry-main-spawn.out" main_spawn_err="$TEST_TMP/dry-main-spawn.err"
+  local bare_out="$TEST_TMP/bare-wrix.out" bare_err="$TEST_TMP/bare-wrix.err"
   local spawn_config="$TEST_TMP/spawn.json" run_config spawn_config_path rc=0
+
+  if [[ ! -x "$WRIX_RUN" ]]; then
+    fail "wrapped package does not expose executable wrix-run"
+    return 1
+  fi
 
   WRIX_DRY_RUN=1 "$WRIX" run "$WORKSPACE" >"$run_out" 2>"$run_err" || rc=$?
   if [[ "$rc" != "0" ]]; then
@@ -202,6 +211,28 @@ test_wrapper_invokes_run_and_spawn_with_profile_config() {
   fi
   if ! grep -qxF 'SUBCOMMAND=run' "$run_out"; then
     fail "run dry-run did not reach the launcher run parser: $(cat "$run_out")"
+    return 1
+  fi
+
+  rc=0
+  WRIX_DRY_RUN=1 "$WRIX" >"$bare_out" 2>"$bare_err" || rc=$?
+  if [[ "$rc" != "0" ]]; then
+    fail "bare wrix wrapper should print help successfully: $(cat "$bare_err")"
+    return 1
+  fi
+  if grep -q '^SUBCOMMAND=' "$bare_out" || [[ "$(cat "$bare_out")" != *"Usage: wrix <command>"* ]]; then
+    fail "bare wrix wrapper should remain explicit help, got: $(cat "$bare_out")"
+    return 1
+  fi
+
+  rc=0
+  WRIX_DRY_RUN=1 "$WRIX_RUN" "$WORKSPACE" >"$main_out" 2>"$main_err" || rc=$?
+  if [[ "$rc" != "0" ]]; then
+    fail "wrix-run default dry-run failed: $(cat "$main_err")"
+    return 1
+  fi
+  if ! grep -qxF 'SUBCOMMAND=run' "$main_out"; then
+    fail "wrix-run did not default to run: $(cat "$main_out")"
     return 1
   fi
 
@@ -221,7 +252,19 @@ test_wrapper_invokes_run_and_spawn_with_profile_config() {
     fail "spawn dry-run did not reach the launcher spawn parser: $(cat "$spawn_out")"
     return 1
   fi
-  pass "wrapped package passes a store ProfileConfig through live run and spawn parsing"
+
+  rc=0
+  WRIX_DRY_RUN=1 "$WRIX_RUN" spawn --spawn-config "$spawn_config" --stdio >"$main_spawn_out" 2>"$main_spawn_err" || rc=$?
+  if [[ "$rc" != "0" ]]; then
+    fail "wrix-run spawn dry-run failed: $(cat "$main_spawn_err")"
+    return 1
+  fi
+  if ! grep -qxF 'SUBCOMMAND=spawn' "$main_spawn_out" || ! grep -qxF 'STDIO=1' "$main_spawn_out"; then
+    fail "wrix-run did not pass explicit spawn through: $(cat "$main_spawn_out")"
+    return 1
+  fi
+
+  pass "wrapped package exposes explicit wrix and runnable wrix-run with the same ProfileConfig"
 }
 
 ALL_TESTS=(

@@ -57,7 +57,8 @@ in
 {
   mkDevShell =
     {
-      profile,
+      sandbox ? null,
+      profile ? null,
       packages ? [ ],
       env ? { },
       shellHook ? "",
@@ -65,6 +66,16 @@ in
       nixCache ? true,
     }:
     let
+      resolvedProfile =
+        if sandbox != null && profile != null then
+          throw "mkDevShell accepts either `sandbox` or `profile`, not both"
+        else if sandbox != null then
+          sandbox.profile
+        else if profile != null then
+          profile
+        else
+          throw "mkDevShell requires either `profile` or `sandbox`";
+      wrixPackage = if sandbox == null then rustCli.wrix else sandbox.package;
       hooksTarget =
         if prekHooks == false then
           null
@@ -147,7 +158,7 @@ in
           beads.shellHook
         else
           ''
-            _wrix_service_bin="''${WRIX_BIN:-${rustCli.wrix}/bin/wrix}"
+            _wrix_service_bin="''${WRIX_BIN:-${wrixPackage}/bin/wrix}"
             if ! "$_wrix_service_bin" service start; then
               return 1 2>/dev/null || exit 1
             fi
@@ -166,14 +177,14 @@ in
     in
     pkgs.mkShell {
       packages =
-        (profile.hostPackages or profile.packages)
+        (resolvedProfile.hostPackages or resolvedProfile.packages)
         ++ packages
         ++ [
-          rustCli.wrix
+          wrixPackage
           prekWrappers.prePushChecks
           prekWrappers.skipIfMissing
         ];
-      env = profile.env // cacheEnv // env;
+      env = resolvedProfile.env // cacheEnv // env;
       shellHook = ''
         ${serviceHook}
 
@@ -183,7 +194,7 @@ in
 
         echo "Wrix development shell"
 
-        ${profile.shellHook or ""}
+        ${resolvedProfile.shellHook or ""}
         ${shellHook}
       '';
     };

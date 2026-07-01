@@ -30,7 +30,7 @@ let
     rustProfile = sandbox.profiles.rust;
   };
 
-  sandbox = import ./sandbox {
+  sandboxLib = import ./sandbox {
     inherit
       pkgs
       system
@@ -40,6 +40,23 @@ let
       treefmt
       ;
     serviceCli = rustCli.wrix;
+  };
+
+  sandbox = sandboxLib // {
+    mkSandbox =
+      args:
+      let
+        resolved = sandboxLib.mkSandbox args;
+      in
+      resolved
+      // {
+        devShell =
+          devShellArgs:
+          if devShellArgs ? sandbox || devShellArgs ? profile then
+            throw "sandbox.devShell does not accept `sandbox` or `profile`; use mkDevShell directly for profile-only shells"
+          else
+            devshell.mkDevShell ({ sandbox = resolved; } // devShellArgs);
+      };
   };
 
   tmuxMcp = import ./mcp/tmux/mcp-server.nix {

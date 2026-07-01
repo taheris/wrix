@@ -10,11 +10,13 @@ _:
     }:
     let
       serviceImage = config.packages.wrix-service-image;
+      sandbox = wrix.mkSandbox {
+        profile = wrix.profiles.rust;
+        agent = "pi";
+      };
     in
     {
-      devShells.default = wrix.mkDevShell {
-        profile = wrix.profiles.rust;
-
+      devShells.default = sandbox.devShell {
         env = {
           LOOM_PROFILES_MANIFEST = "${config.packages.profile-images-pi}";
           WRIX_AGENT = "pi";
@@ -25,7 +27,6 @@ _:
         };
 
         packages = [
-          (pkgs.lib.hiPrio config.packages.default)
           config.treefmt.build.wrapper
           pkgs.flock
           pkgs.podman

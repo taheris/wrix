@@ -400,7 +400,7 @@ let
               image = imageWithConfig;
               inherit launcher profileConfig;
             };
-            meta.mainProgram = "wrix";
+            meta.mainProgram = "wrix-run";
           }
           ''
             mkdir -p "$out/bin"
@@ -409,7 +409,20 @@ let
             set -euo pipefail
             exec ${launcher}/bin/wrix --profile-config ${profileConfig} "$@"
             WRIX_WRAPPER
+            cat > "$out/bin/wrix-run" <<'WRIX_RUN_WRAPPER'
+            #!${pkgs.runtimeShell}
+            set -euo pipefail
+            case "''${1:-}" in
+              run|spawn|service|beads)
+                exec ${launcher}/bin/wrix --profile-config ${profileConfig} "$@"
+                ;;
+              *)
+                exec ${launcher}/bin/wrix --profile-config ${profileConfig} run "$@"
+                ;;
+            esac
+            WRIX_RUN_WRAPPER
             chmod +x "$out/bin/wrix"
+            chmod +x "$out/bin/wrix-run"
           '';
 
     in

@@ -51,12 +51,19 @@ test_mksandbox_accepts_documented_parameters() {
         agentPkg = extraPkg;
         agentSettings = { };
       };
-      required = [ \"package\" \"image\" \"launcher\" \"profile\" ];
+      required = [ \"package\" \"image\" \"launcher\" \"profile\" \"devShell\" ];
+      shell = sandbox.devShell { };
+      profileOverride = builtins.tryEval ((sandbox.devShell { profile = flake.legacyPackages.\${system}.lib.profiles.base; }).shellHook);
+      sandboxOverride = builtins.tryEval ((sandbox.devShell { sandbox = sandbox; }).shellHook);
     in
     {
       required_present = builtins.all (name: builtins.hasAttr name sandbox) required;
       launcher_is_raw_wrix = sandbox.launcher == flake.packages.\${system}.wrix;
+      package_main_program = sandbox.package.meta.mainProgram or \"\";
+      devshell_rejects_profile = profileOverride.success;
+      devshell_rejects_sandbox = sandboxOverride.success;
       profile_name = sandbox.profile.name;
+      shell_name = shell.name or \"\";
       env_value = sandbox.profile.env.WRIX_API_CONTRACT or \"\";
       mount_present = builtins.any (
         mount:
@@ -75,7 +82,11 @@ test_mksandbox_accepts_documented_parameters() {
   if ! jq -e '
     .required_present == true and
     .launcher_is_raw_wrix == true and
+    .package_main_program == "wrix-run" and
+    .devshell_rejects_profile == false and
+    .devshell_rejects_sandbox == false and
     .profile_name == "base" and
+    (.shell_name | type == "string" and length > 0) and
     .env_value == "1" and
     .mount_present == true and
     (.package_count > .base_package_count)

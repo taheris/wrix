@@ -107,6 +107,8 @@ test_core_membership() {
       hasRustSccacheCore = hasPackage \"sccache\" rust.corePackages;
       hasRustNextestLeaf = hasPackage \"cargo-nextest\" (leaf rust);
       hasRustNextestCore = hasPackage \"cargo-nextest\" rust.corePackages;
+      hasMakeCore = hasPackage \"gnumake\" base.corePackages || hasPackage \"make\" base.corePackages;
+      hasOpenSshCore = hasPackage \"openssh\" base.corePackages;
       hasPythonCore = hasPackage \"python3\" python.corePackages;
       hasUvCore = hasPackage \"uv\" python.corePackages;
       hasRuffCore = hasPackage \"ruff\" python.corePackages;
@@ -131,6 +133,8 @@ test_core_membership() {
   [[ "$base_core" -gt 0 ]] || fail "base corePackages should be non-empty, got $base_core"
   [[ "$base_core" -eq "$base_pkgs" ]] || fail "base corePackages ($base_core) should equal packages ($base_pkgs)"
   [[ "$base_leaf" -eq 0 ]] || fail "base leaf delta should be empty, got $base_leaf"
+  [[ "$(json_field "$result" hasMakeCore)" == "true" ]] || fail "make should be a member of base corePackages"
+  [[ "$(json_field "$result" hasOpenSshCore)" == "true" ]] || fail "openssh should be a member of base corePackages"
   [[ "$rust_core" -gt "$base_core" ]] || fail "rust corePackages ($rust_core) should exceed base ($base_core)"
   [[ "$rust_leaf" -eq 1 ]] || fail "rust leaf delta should contain only cargo-nextest, got $rust_leaf"
   [[ "$python_core" -gt "$base_core" ]] || fail "python corePackages ($python_core) should exceed base ($base_core)"

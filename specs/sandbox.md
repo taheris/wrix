@@ -8,18 +8,19 @@ Running AI coding assistants with unrestricted host access creates security risk
 
 ## Architecture
 
-`mkSandbox` is the entry point. It composes three concerns owned elsewhere and returns a four-field attrset:
+`mkSandbox` is the entry point. It composes three concerns owned elsewhere and returns a sandbox attrset:
 
 - A workspace **profile** — packages, env, mounts, network allowlist, plugins (`profiles.md`)
 - An OCI **image source** built from the profile and the selected agent runtime (`image-builder.md`)
 - A profile-agnostic **launcher** binary (`wrix`)
 
-`mkSandbox` returns `{ package, image, launcher, profile }`:
+`mkSandbox` returns `{ package, image, launcher, profile, devShell }`:
 
-- `package` — `wrix` wrapped with an immutable Nix-store `ProfileConfig` JSON path. The wrapper is bound to its built `(profile × agent)` image variant; agent selection and image defaults come from the JSON, not mutable shell logic. One-shot users invoke `package` directly.
+- `package` — a configured sandbox package. `bin/wrix` is the explicit configured CLI, and the package `meta.mainProgram` is `wrix-run`, which defaults `nix run .#sandbox-*` to `wrix run`. The wrapper is bound to its built `(profile × agent)` image variant; agent selection and image defaults come from the JSON, not mutable shell logic. One-shot users invoke `package` directly.
 - `image` — the per-profile OCI image-source derivation/attrset. It carries the source path plus metadata (`ref`, `source_kind`, `digest`, and `profileConfig`) so orchestrators can feed it through the platform install path without re-deriving tags or source-kind rules (see *Image install path* below).
 - `launcher` — the raw Rust `wrix` derivation. Orchestrators (e.g. loom) pass `--profile-config <store-path>` and, for `spawn`, a per-launch `SpawnConfig` JSON.
 - `profile` — the resolved profile attrset after merging consumer `packages`, `mounts`, `env`, and MCP server packages.
+- `devShell` — a helper function for host devshells backed by this sandbox object, so `wrix run` inside the shell and `nix run .#sandbox-*` use the same configured package.
 
 **Platform dispatch** — `lib/sandbox/default.nix` selects the Podman launcher (`lib/sandbox/linux/`) or the Apple `container` CLI launcher (`lib/sandbox/darwin/`). Unsupported systems throw at evaluation.
 
@@ -93,7 +94,7 @@ mkSandbox {
 }
 ```
 
-Returns `{ package, image, launcher, profile }`.
+Returns `{ package, image, launcher, profile, devShell }`.
 
 ## Launcher Subcommands
 
@@ -190,7 +191,7 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 
 ## Success Criteria
 
-- `mkSandbox` accepts the documented parameter set (`profile`, `cpus`, `memoryMb`, `deployKey`, `packages`, `mounts`, `env`, `mcp`, `mcpRuntime`, `agent`, `agentPkg`, `agentSettings`) and returns `{ package, image, launcher, profile }`
+- `mkSandbox` accepts the documented parameter set (`profile`, `cpus`, `memoryMb`, `deployKey`, `packages`, `mounts`, `env`, `mcp`, `mcpRuntime`, `agent`, `agentPkg`, `agentSettings`) and returns `{ package, image, launcher, profile, devShell }`
   [system](bash tests/sandbox/mksandbox-api.sh test_mksandbox_accepts_documented_parameters)
 - Platform dispatch picks the Linux implementation on Linux hosts and the macOS implementation on Darwin hosts
   [check](grep -nE 'isLinux|isDarwin' lib/sandbox/default.nix)
@@ -230,7 +231,7 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
   [check](grep -nE 'WRIX_MICROVM|--runtime krun|/dev/kvm' lib/sandbox/linux/default.nix)
 - `wrix run` errors at startup with a clear message when no valid Nix-generated `ProfileConfig` JSON is supplied
   [system](bash tests/sandbox/missing-profile-config.sh)
-- `mkSandbox`'s `package` wrapper passes an immutable Nix-store `ProfileConfig` JSON path to the profile-agnostic launcher for both `run` and `spawn`, with image defaults supplied by `ProfileConfig` rather than mutable `WRIX_DEFAULT_IMAGE_*` env vars
+- `mkSandbox`'s `package` wrapper keeps `bin/wrix` explicit, exposes `wrix-run` as `meta.mainProgram` for `nix run`, and passes an immutable Nix-store `ProfileConfig` JSON path to the profile-agnostic launcher for both `run` and `spawn`, with image defaults supplied by `ProfileConfig` rather than mutable `WRIX_DEFAULT_IMAGE_*` env vars
   [system](bash tests/sandbox/profile-config-wrapper.sh test_wrapper_invokes_run_and_spawn_with_profile_config)
 - `ProfileConfig.image` includes `ref`, `source`, explicit `source_kind`, and `digest`; the launcher/runtime installer rejects configs where `source_kind` is missing or incompatible with the selected platform install path
   [system](bash tests/sandbox/profile-config-wrapper.sh test_image_source_kind)
@@ -275,7 +276,7 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 
 ### Functional
 
-1. **mkSandbox API** — accepts the parameters above; returns `{ package, image, launcher, profile }`. Profile schema lives in `profiles.md`; image build in `image-builder.md`; MCP server contracts in `tmux-mcp.md` and `playwright-mcp.md`.
+1. **mkSandbox API** — accepts the parameters above; returns `{ package, image, launcher, profile, devShell }`. Profile schema lives in `profiles.md`; image build in `image-builder.md`; MCP server contracts in `tmux-mcp.md` and `playwright-mcp.md`.
 2. **Platform dispatch** — Linux selects the Podman launcher; macOS selects the Apple `container` CLI launcher; unsupported systems throw.
 3. **Workspace mount** — CWD bind-mounts at `/workspace`; profile mounts merge on top.
 4. **UID mapping** — files created in `/workspace` carry host UID/GID.

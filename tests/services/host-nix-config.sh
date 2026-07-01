@@ -449,7 +449,7 @@ test_mkdevshell_nix_cache() {
   mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
   workspace="$TEST_TMP/mkdevshell-cache-workspace"
   stderr_file="$TEST_TMP/mkdevshell-cache.err"
-  mkdir -p "$workspace"
+  mkdir -p "$workspace/.git"
 
   if ! output="$(
     (
@@ -662,7 +662,7 @@ test_host_nix_configures_cache_and_hook() {
   export XDG_CACHE_HOME="$TEST_TMP/cache"
   mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
   workspace="$TEST_TMP/workspace"
-  mkdir -p "$workspace"
+  mkdir -p "$workspace/.git"
   (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/start.txt")
   (cd "$workspace" && "$wrix_bin" service endpoints >"$TEST_TMP/endpoints.json")
   state_root="$(json_get "$TEST_TMP/endpoints.json" state_root)"
@@ -710,7 +710,7 @@ test_host_nix_config_fails_when_trusted_setting_ignored() {
   export XDG_CACHE_HOME="$TEST_TMP/cache-ignored"
   mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
   workspace="$TEST_TMP/workspace-ignored"
-  mkdir -p "$workspace"
+  mkdir -p "$workspace/.git"
   (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/start-ignored.txt")
   if (
     cd "$workspace"
@@ -733,7 +733,7 @@ test_host_nix_config_rejects_non_wrix_hook() {
   export NIX_CONFIG="post-build-hook = /tmp/other-hook"
   mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
   workspace="$TEST_TMP/workspace-conflict"
-  mkdir -p "$workspace"
+  mkdir -p "$workspace/.git"
   (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/start-conflict.txt")
   if (
     cd "$workspace"

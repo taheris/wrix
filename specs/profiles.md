@@ -69,7 +69,7 @@ Curated developer toolkit. The rust and python profiles extend this set. Grouped
 
 | Category | Packages |
 |----------|----------|
-| Shell + POSIX core | bash, coreutils, diffutils, findutils, gawk, gnugrep, gnused, gnutar, gzip, less, patch, rsync, tree, unzip, util-linux, whichQuiet, zip |
+| Shell + POSIX core | bash, coreutils, diffutils, findutils, gawk, gnugrep, gnused, gnutar, gnumake, gzip, less, patch, rsync, tree, unzip, util-linux, whichQuiet, zip |
 | File + text | fd, file, ripgrep, vim |
 | Network + process | curl, iproute2, nftables, iptables, libcap (capsh), iputils, lsof, netcat, openssh, procps |
 | Data | jq, yq |
@@ -357,13 +357,27 @@ compose their preferred build via
 
 ## mkDevShell
 
-Single profile-aware entry point for host devshells. `mkDevShell` is the
-only consumer-facing path for splicing a profile's `shellHook` into a
-local shell — there is no manual splice path, no hand-copy alternative
-for the profile's env exports, and no separate "add `profile.toolchain`
-to your packages" step.
+Single profile-aware entry point for host devshells. The safest path is
+`sandbox.devShell { ... }`, where a `mkSandbox` result supplies the profile
+and the configured `wrix` package together. `mkDevShell` remains the lower-level
+helper for profile-only shells. Both paths splice a profile's `shellHook` into
+a local shell — there is no manual splice path, no hand-copy alternative for
+the profile's env exports, and no separate "add `profile.toolchain` to your
+packages" step.
 
 ```nix
+sandbox = wrix.mkSandbox {
+  profile = rustProfile;
+};
+
+sandbox.devShell {
+  packages  = [ ... ];        # optional host-only tools
+  shellHook = "...";          # optional, appended after profile.shellHook
+  env       = { ... };        # optional, right-merged into profile.env
+  prekHooks = true;           # optional, see Prek hook management below
+  nixCache  = true;           # optional, false disables services.md project cache
+}
+
 wrix.mkDevShell {
   profile   = rustProfile;   # REQUIRED — any profile attrset
   packages  = [ ... ];        # optional, appended to profile.packages
@@ -374,10 +388,14 @@ wrix.mkDevShell {
 }
 ```
 
-**`profile` is required.** No default. A devshell that needs no toolchain
-extension still passes `profile = profiles.base;` explicitly — there is
-no implicit fallthrough. Calling `mkDevShell {}` without `profile` errors
-at evaluation.
+**Exactly one of `profile` or `sandbox` is required.** No default. A devshell
+that needs no toolchain extension still passes `profile = profiles.base;`
+explicitly, or uses `sandbox.devShell { }` from a concrete sandbox. Calling
+`mkDevShell {}` without `profile` or `sandbox` errors at evaluation; passing
+both is rejected because it can pair one profile with another sandbox's
+configured `wrix` wrapper.
+`sandbox.devShell { ... }` never accepts `profile` or `sandbox` overrides; it is
+already bound to the sandbox object it came from.
 
 Composition rules (deterministic, no consumer override):
 
@@ -545,9 +563,9 @@ Profiles surface as three sibling output families:
 | `packages.image-<profile>` | OCI image source (Linux: archive-less `nix-descriptor`; Darwin: tarball `docker-archive`); built with `agent = "direct"` (the default base image) | Orchestrators that install images through wrix's platform install path; manifest entries |
 | `packages.image-<profile>-claude` | OCI image source built with `agent = "claude"` and the platform `source_kind` | Orchestrators that install Claude images through wrix's platform install path |
 | `packages.image-<profile>-pi` | OCI image source built with `agent = "pi"` and the platform `source_kind` | Orchestrators that install Pi images through wrix's platform install path |
-| `packages.sandbox-<profile>` | `makeWrapper` of `packages.wrix` + `packages.image-<profile>` with `WRIX_AGENT=direct` baked in | One-shot users (`nix run .#sandbox-rust`) |
-| `packages.sandbox-<profile>-claude` | Claude variant with `WRIX_AGENT=claude` baked in | One-shot users that want Claude |
-| `packages.sandbox-<profile>-pi` | Pi variant with `WRIX_AGENT=pi` baked in | One-shot users that want Pi; `packages.default` points at rust `sandbox-rust-pi` |
+| `packages.sandbox-<profile>` | Configured sandbox package with explicit `bin/wrix` plus `meta.mainProgram = "wrix-run"` for default `nix run`; direct agent variant | One-shot users (`nix run .#sandbox-rust`) |
+| `packages.sandbox-<profile>-claude` | Configured Claude variant with explicit `bin/wrix` plus `wrix-run` main program | One-shot users that want Claude |
+| `packages.sandbox-<profile>-pi` | Configured Pi variant with explicit `bin/wrix` plus `wrix-run` main program | One-shot users that want Pi; `packages.default` points at rust `sandbox-rust-pi` |
 | `packages.sandbox-<profile>-mcp` | Direct-agent wrapper built with `mcpRuntime = true`, baking every registered MCP server and deferring selection to `WRIX_MCP` at launch | One-shot users that want runtime MCP server selection without a per-sandbox `mcp` build |
 | `packages.sandbox-<profile>-<agent>-mcp` | Agent overlay wrapper built with both `agent = "<agent>"` and `mcpRuntime = true` | One-shot users that need a selected agent plus runtime MCP server selection |
 | `packages.profile-images` | JSON manifest from `mkProfileImages`, keyed by profile then selected agent variant | External orchestrators (e.g. Loom via `LOOM_PROFILES_MANIFEST`) |
@@ -663,7 +681,7 @@ dests live under `/home/wrix/` inside the container, not under
   [judge](../tests/judges/profiles.sh#test_uv_cache_writable)
 - deriveProfile correctly merges packages and environment
   [judge](../tests/judges/profiles.sh#test_derive_profile_merge)
-- A built-in profile's `corePackages` equals its `basePackages` floor plus its own toolchain, `rustProfile { toolchain = ./file }` includes the pinned toolchain in `corePackages`, and cargo-nextest remains rust leaf tooling rather than tier-1 core content
+- A built-in profile's `corePackages` equals its `basePackages` floor plus its own toolchain, the base floor includes common build/SSH tools (`gnumake`, `openssh`), `rustProfile { toolchain = ./file }` includes the pinned toolchain in `corePackages`, and cargo-nextest remains rust leaf tooling rather than tier-1 core content
   [system](bash tests/profiles/core-packages.sh test_core_membership)
 - `deriveProfile p { packages = [extra]; }` appends `extra` to `.packages` but leaves `.corePackages` equal to `p.corePackages`, so `packages` − `corePackages` is exactly the downstream-added delta
   [system](bash tests/profiles/core-packages.sh test_extra_not_in_core)
@@ -677,7 +695,9 @@ dests live under `/home/wrix/` inside the container, not under
   [system](bash tests/profiles/mkdevshell.sh test_env_right_merge)
 - `wrix.mkDevShell { profile; shellHook = "marker_xyz"; }` shell hook contains both `profile.shellHook` content AND `marker_xyz`, with the consumer hook firing **after** the profile's
   [system](bash tests/profiles/mkdevshell.sh test_shellhook_order)
-- `wrix.mkDevShell {}` without `profile` errors at evaluation
+- `wrix.mkDevShell {}` without `profile` or `sandbox` errors at evaluation
+- `wrix.mkDevShell { sandbox = ...; profile = ...; }` errors at evaluation
+- `sandbox.devShell { profile = ...; }` and `sandbox.devShell { sandbox = ...; }` error at evaluation
   [system](bash tests/profiles/mkdevshell.sh test_profile_required)
 - `wrix.mkDevShell { profile = ...; }` starts the workspace service container by default, exposes the project cache `file://` substituter/trusted key/post-build hook to host Nix, uses the `nixCache` publish/warm schema from `services.md`, and prints a suppressible reminder when the publish manifest is missing or stale; `nixCache = false` suppresses only the cache service, not beads
   [system](bash tests/services/host-nix-config.sh test_mkdevshell_nix_cache)
@@ -713,7 +733,7 @@ dests live under `/home/wrix/` inside the container, not under
   [system](bash tests/profiles/no-nightly-closure.sh test_no_nightly_closure)
 - `mkProfileImages { rust = …; }` produces a JSON file whose entry for `rust` is keyed by the image's selected agent and whose selected-agent entry has `ref`, `source`, `source_kind`, and `profile_config` fields, with `source` and `source_kind` resolving to the same image source path and source kind as the corresponding `(wrix.mkSandbox { profile = wrix.profiles.rust; agent = …; }).image`
   [system](bash tests/profiles/profile-images-manifest.sh test_manifest_shape)
-- `packages.image-<name>[-<agent>]`, `packages.sandbox-<name>[-<agent>][-mcp]`, `packages.profile-images`, and `packages.profile-images-pi` all evaluate for each built-in profile, and `packages.default` resolves to `sandbox-rust-pi`
+- `packages.image-<name>[-<agent>]`, `packages.sandbox-<name>[-<agent>][-mcp]`, `packages.profile-images`, and `packages.profile-images-pi` all evaluate for each built-in profile, and `packages.default` resolves to `sandbox-rust-pi` with `meta.mainProgram = "wrix-run"`
   [system](bash tests/profiles/profile-images-manifest.sh test_flake_outputs_present)
 - `profiles.rust.buildPackage` is exposed and returns an attrset with `bin`, `clippy`, `nextest`, and `cargoArtifacts` fields
   [system](bash tests/profiles/build-package.sh test_build_package_exposed)
@@ -729,7 +749,7 @@ dests live under `/home/wrix/` inside the container, not under
   [system](bash tests/profiles/build-package.sh test_build_package_toolchain_alignment)
 - `lib/mcp/tmux/mcp-server.nix` is a thin `wrix.profiles.rust.buildPackage` consumer (no direct `pkgs.rustPlatform.buildRustPackage` or `makeRustPlatform` call); `packages.tmux-mcp` consumes `.bin`; `tests/default.nix` exposes `tmux-mcp-clippy`, `tmux-mcp-nextest` checks
   [system](bash tests/profiles/build-package.sh test_consumers_migrated)
-- `modules/flake/devshell.nix` is a thin `wrix.mkDevShell { profile = wrix.profiles.rust; ... }` consumer (no hand-rolled `RUSTC_WRAPPER`/`SCCACHE_DIR`/`PATH` exports, no separate `profile.toolchain` entry in `packages`)
+- `modules/flake/devshell.nix` is a thin `sandbox.devShell { ... }` consumer (no hand-rolled `RUSTC_WRAPPER`/`SCCACHE_DIR`/`PATH` exports, no separate `profile.toolchain` entry in `packages`)
   [check](sh -c "! grep -nE 'RUSTC_WRAPPER|SCCACHE_DIR' modules/flake/devshell.nix")
 - Container entrypoints (`lib/sandbox/linux/entrypoint.sh`, `lib/sandbox/darwin/entrypoint.sh`) contain no rustup bootstrap logic — toolchain is baked into the image at build time
   [check](sh -c "! grep -nE 'rustup' lib/sandbox/linux/entrypoint.sh lib/sandbox/darwin/entrypoint.sh")
@@ -746,7 +766,7 @@ dests live under `/home/wrix/` inside the container, not under
 6. **Mount Specifications** — Profiles can define default mounts (e.g., cargo cache)
 7. **Toolchain Configuration** — Top-level `rustProfile { toolchain; sha256; ... }` constructor produces a project-pinned rust profile from a `rust-toolchain.toml`
 8. **Rust Package Construction** — Rust profile exposes `buildPackage` for crane-backed Rust packages with split `bin`/`clippy`/`nextest` derivations
-9. **Devshell Construction** — Top-level `mkDevShell { profile; ... }` is the single profile-aware entry point for host devshells; consumers do not splice `profile.shellHook` directly
+9. **Devshell Construction** — `sandbox.devShell { ... }` is the preferred host devshell entry point when a concrete sandbox exists, and top-level `mkDevShell { profile; ... }` remains available for profile-only shells; consumers do not splice `profile.shellHook` directly
 10. **Prek Hook Management** — `mkDevShell` configures `core.hooksPath` from a wrix-shipped shim bundle (`wrix.prekHooks`) when `.pre-commit-config.yaml` is present, opted out via `prekHooks = false`. Consumers do not vendor shims or set `core.hooksPath` themselves.
 11. **Project Nix Cache Integration** — `mkDevShell` enables the `services.md` project cache by default for host pulls and host publishing of project-scoped Nix derivations; `nixCache = false` opts out.
 

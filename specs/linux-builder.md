@@ -70,7 +70,7 @@ The `wrix-builder` bootstrap image is a wrix-managed support image consumed by t
 - Re-running builder key-material initialization preserves existing private keys
   [system](bash tests/builder/key-material.sh test_preserves_existing_private_keys)
 - The `wrix-builder` bootstrap image exposes the shared image-source contract while retaining wrix ownership labels
-  [system](nix run .#test-wrix-images-source-kind)
+  [system](bash tests/test-app.sh test-wrix-images-source-kind)
 
 - `wrix-builder start` routes the bootstrap image through the `source_kind` load transport before invoking Apple's `container image load`
   [system](bash tests/builder/key-material.sh test_loads_image_through_source_kind_contract)

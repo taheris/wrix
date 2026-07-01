@@ -33,12 +33,14 @@ let
       gnugrep
       gnused
       gnutar
+      gnumake
       gzip
       jq
       less
       lsof
       man
       nix
+      openssh
       patch
       prek
       ripgrep
@@ -62,7 +64,6 @@ let
     iputils
     libcap
     netcat
-    openssh
     procps
     util-linux
   ];

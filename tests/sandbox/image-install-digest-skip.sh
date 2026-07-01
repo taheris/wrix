@@ -8,7 +8,7 @@
 #
 # The actual shim podman + skopeo flow lives in
 # tests/sandbox/image-checks.nix:imageInstallDigestSkipTest and is exposed
-# as `nix run .#test-image-install-digest-skip`. This bash entry exists so
+# as `bash tests/test-app.sh test-image-install-digest-skip`. This bash entry exists so
 # the spec criterion `[system?](bash tests/sandbox/image-install-digest-skip.sh)`
 # resolves; it delegates to the nix-built test.
 #
@@ -32,5 +32,4 @@ uname_s=$(uname -s)
 [[ "$uname_s" = "Linux" ]] || skip "Linux-only verifier (uname=$uname_s); Darwin digest preflight covered separately"
 command -v nix >/dev/null 2>&1 || skip "nix not on PATH"
 
-cd "$REPO_ROOT"
-exec nix run --no-warn-dirty .#test-image-install-digest-skip -- "$@"
+exec "$REPO_ROOT/tests/test-app.sh" test-image-install-digest-skip "$@"

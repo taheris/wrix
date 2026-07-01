@@ -49,15 +49,20 @@ The canonical pattern feeds one profile to both the host devshell and the sandbo
             toolchain = ./rust-toolchain.toml;
             sha256    = "sha256-...";
           };
+          sandbox = wrix.mkSandbox { profile = rustProfile; };
         in {
-          devShells.default = wrix.mkDevShell { profile = rustProfile; };
-          packages.image    = (wrix.mkSandbox { profile = rustProfile; }).image;
+          devShells.default = sandbox.devShell { };
+          packages.image    = sandbox.image;
         };
     };
 }
 ```
 
-`wrix.mkDevShell { profile = ...; }` is the sole entry point for profile-aware host devshells — it splices `profile.shellHook` automatically, so consumers never hand-roll PATH or `RUSTC_WRAPPER` exports. See [specs/profiles.md](specs/profiles.md) for the `rustProfile` constructor signature and `mkDevShell` composition rules.
+`sandbox.devShell { }` is the safest host-devshell entry point: the same
+sandbox object supplies the profile, image config, and configured `wrix`
+wrapper used by `nix run`. `wrix.mkDevShell { profile = ...; }` remains
+available for profile-only shells. See [specs/profiles.md](specs/profiles.md)
+for the `rustProfile` constructor signature and devshell composition rules.
 
 ### mkSandbox Options
 
