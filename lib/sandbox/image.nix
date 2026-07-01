@@ -274,11 +274,9 @@ let
       chmod 1777 tmp var/cache var/tmp
       chmod 777 home/wrix
 
-      mkdir -p etc/wrix/known_hosts_dir etc/ssh
+      mkdir -p etc/wrix
       printf '%s\n' '${agent}' > etc/wrix/image-agent
-      cp ${knownHosts}/known_hosts etc/wrix/known_hosts_dir/known_hosts
-      cp ${knownHosts}/known_hosts etc/ssh/ssh_known_hosts
-      chmod 0644 etc/wrix/known_hosts_dir/known_hosts etc/ssh/ssh_known_hosts
+      ${pkgs.bash}/bin/bash ${./install-known-hosts.sh} ${knownHosts}/known_hosts .
       echo "127.0.0.1 localhost" > etc/hosts
 
       cp ${entrypointSh} entrypoint.sh
