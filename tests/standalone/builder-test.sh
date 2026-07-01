@@ -32,6 +32,35 @@ run_builder_setup() {
   fi
 }
 
+assert_builder_config_output() {
+  local config_file="$1"
+  local assertion_file="$2"
+
+  cat >"$assertion_file" <<NIX
+let
+  module = import $config_file;
+  machine = builtins.head module.nix.buildMachines;
+  sshConfig = module.environment.etc."ssh/ssh_config.d/100-wrix-builder.conf".text;
+in
+  assert builtins.isAttrs module;
+  assert builtins.isAttrs module.environment.etc;
+  assert builtins.isString sshConfig;
+  assert sshConfig != "";
+  assert builtins.isList module.nix.buildMachines;
+  assert builtins.length module.nix.buildMachines == 1;
+  assert machine.hostName == "wrix-builder";
+  assert machine.protocol == "ssh-ng";
+  assert machine.systems == [ "aarch64-linux" ];
+  assert machine.maxJobs == 4;
+  assert machine.supportedFeatures == [ "big-parallel" "benchmark" ];
+  assert machine ? publicHostKey;
+  true
+NIX
+
+  nix-instantiate --parse "$config_file" >/dev/null
+  nix-instantiate --eval --strict "$assertion_file" >/dev/null
+}
+
 echo "=== wrix-builder Integration Test ==="
 echo "Date: $(date)"
 echo ""
@@ -189,10 +218,13 @@ fi
 # Test 9: Config output
 echo ""
 echo "Test 9: Config command"
-if "$BUILDER" config | grep -q 'protocol = "ssh-ng"'; then
-  echo "  PASS: Config outputs valid nix.conf snippet"
+CONFIG_FILE="$TMP_DIR/builder-config.nix"
+CONFIG_ASSERTION="$TMP_DIR/builder-config-assertion.nix"
+if "$BUILDER" config >"$CONFIG_FILE" && assert_builder_config_output "$CONFIG_FILE" "$CONFIG_ASSERTION"; then
+  echo "  PASS: Config outputs a parseable nix-darwin module snippet"
 else
-  echo "  FAIL: Config command failed"
+  echo "  FAIL: Config command did not output a valid nix-darwin module snippet"
+  print_output "$CONFIG_FILE"
   FAILED=1
 fi
 

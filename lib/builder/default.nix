@@ -399,24 +399,26 @@ let
     #   $SYSTEM_CLIENT_KEY
     #   $SYSTEM_HOST_KEY
 
-    # SSH config (environment.etc):
-    "ssh/ssh_config.d/100-wrix-builder.conf".text = '''
-      Host wrix-builder
-        Hostname localhost
-        Port 2222
-        User builder
-        HostKeyAlias wrix-builder
-        IdentityFile $SYSTEM_CLIENT_KEY
-    ''';
-
-    # buildMachines (no sshKey needed, uses SSH config):
     {
-      hostName = "wrix-builder";
-      systems = [ "aarch64-linux" ];
-      protocol = "ssh-ng";
-      maxJobs = 4;
-      supportedFeatures = [ "big-parallel" "benchmark" ];
-      publicHostKey = builtins.readFile $SYSTEM_HOST_KEY;
+      environment.etc."ssh/ssh_config.d/100-wrix-builder.conf".text = '''
+        Host wrix-builder
+          Hostname localhost
+          Port 2222
+          User builder
+          HostKeyAlias wrix-builder
+          IdentityFile $SYSTEM_CLIENT_KEY
+      ''';
+
+      nix.buildMachines = [
+        {
+          hostName = "wrix-builder";
+          systems = [ "aarch64-linux" ];
+          protocol = "ssh-ng";
+          maxJobs = 4;
+          supportedFeatures = [ "big-parallel" "benchmark" ];
+          publicHostKey = builtins.readFile $SYSTEM_HOST_KEY;
+        }
+      ];
     }
 
     # Or import runtime paths from wrix flake:

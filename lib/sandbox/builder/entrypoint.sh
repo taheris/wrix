@@ -1,7 +1,7 @@
 #!/bin/sh
 
-# shellcheck disable=SC3040
-# Busybox ash supports `-o pipefail` even though POSIX sh does not
+# shellcheck disable=SC3010,SC3040
+# Busybox ash supports `-o pipefail` and `[[ ]]` even though POSIX sh does not
 set -euo pipefail
 
 BUILDER_USER="builder"
@@ -9,7 +9,7 @@ BUILDER_UID=1000
 BUILDER_HOME="/home/$BUILDER_USER"
 
 # Verify /nix/store is populated (bootstrap is done by CLI before container start)
-if [ ! -d /nix/store ] || [ -z "$(/bin/ls -A /nix/store 2>/dev/null)" ]; then
+if [[ ! -d /nix/store ]] || [[ -z "$(/bin/ls -A /nix/store 2>/dev/null)" ]]; then
     echo "ERROR: /nix/store is empty. Run 'wrix-builder start' to initialize." >&2
     exit 1
 fi
@@ -37,7 +37,7 @@ EOF
 
 # Install SSH host key from the host-user key directory.
 HOST_KEY="/run/keys/host_ed25519"
-if [ ! -f "$HOST_KEY" ] || [ ! -f "${HOST_KEY}.pub" ]; then
+if [[ ! -f "$HOST_KEY" ]] || [[ ! -f "${HOST_KEY}.pub" ]]; then
     echo "ERROR: Builder host key missing under /run/keys" >&2
     exit 1
 fi
@@ -66,7 +66,7 @@ chown "$BUILDER_UID:$BUILDER_UID" "$BUILDER_HOME/.ssh"
 
 # Install authorized keys from mounted keys
 KEYS_FILE="/run/keys/client_ed25519.pub"
-if [ ! -f "$KEYS_FILE" ]; then
+if [[ ! -f "$KEYS_FILE" ]]; then
     echo "ERROR: Builder client public key missing under /run/keys" >&2
     exit 1
 fi
