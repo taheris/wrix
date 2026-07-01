@@ -117,6 +117,50 @@ JSON
     --publisher-helper "$publisher")"
   assert_contains "skip output" "$output" "skipping non-project derivation"
   assert_no_publish "workspace manifest copy" "$log"
+
+  local drop_log drop_dir fake_bin
+  drop_dir="$TEST_TMP/drop-privilege"
+  drop_log="$drop_dir/publish.log"
+  mkdir -p "$drop_dir"
+  if [[ "$(id -u)" == "0" ]]; then
+    chmod 0755 "$TEST_TMP"
+    chmod 0777 "$drop_dir"
+    WRIX_PUBLISH_LOG="$drop_log" DRV_PATH="$allowed_drv" OUT_PATHS="/nix/store/out" "$hook_bin" \
+      --workspace-hash "$workspace_hash" \
+      --owner-uid 65534 \
+      --owner-gid 65534 \
+      --state-root "$state_root" \
+      --cache-root "$cache_root" \
+      --manifest "$state_root/publish-roots.json" \
+      --publisher-helper "$publisher"
+    assert_contains "publisher dropped uid" "$(cat "$drop_log")" "uid=65534"
+    assert_contains "publisher dropped gid" "$(cat "$drop_log")" "gid=65534"
+  else
+    fake_bin="$TEST_TMP/fake-id-bin"
+    mkdir -p "$fake_bin"
+    cat >"$fake_bin/id" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "-u" ]]; then
+  printf '0\n'
+  exit 0
+fi
+command id "$@"
+SCRIPT
+    chmod +x "$fake_bin/id"
+    rm -f "$drop_log"
+    if PATH="$fake_bin:$PATH" WRIX_PUBLISH_LOG="$drop_log" DRV_PATH="$allowed_drv" OUT_PATHS="/nix/store/out" "$hook_bin" \
+      --workspace-hash "$workspace_hash" \
+      --owner-uid 65534 \
+      --owner-gid 65534 \
+      --state-root "$state_root" \
+      --cache-root "$cache_root" \
+      --manifest "$state_root/publish-roots.json" \
+      --publisher-helper "$publisher" >"$TEST_TMP/drop.out" 2>"$TEST_TMP/drop.err"; then
+      fail "hook ran publisher without privilege-drop enforcement"
+    fi
+    assert_no_publish "failed privilege drop" "$drop_log"
+  fi
 }
 
 ALL_TESTS=(

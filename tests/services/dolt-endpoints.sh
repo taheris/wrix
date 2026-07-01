@@ -17,10 +17,11 @@ fail() {
 }
 
 require_python() {
-  if ! command -v python3 >/dev/null 2>&1; then
-    printf 'SKIP: python3 is required for JSON assertions\n' >&2
-    exit 77
+  if command -v python3 >/dev/null 2>&1 || command -v jq >/dev/null 2>&1; then
+    return 0
   fi
+  printf 'SKIP: python3 or jq is required for JSON assertions\n' >&2
+  exit 77
 }
 
 build_wrix() {
@@ -164,12 +165,14 @@ with_fake_runtime_env() {
   export WRIX_CONTAINER_RUNTIME="$runtime_dir/$runtime_name"
   export WRIX_FAKE_RUNTIME_STATE="$state_dir"
   export WRIX_SERVICE_ALLOW_TEMP_CACHE=1
+  unset WRIX_SERVICE_IMAGE WRIX_SERVICE_IMAGE_SOURCE WRIX_SERVICE_IMAGE_SOURCE_KIND WRIX_SERVICE_IMAGE_DIGEST
 }
 
 json_get() {
   local file="$1"
   local path="$2"
-  python3 - "$file" "$path" <<'PY'
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$file" "$path" <<'PY'
 import json
 import sys
 
@@ -186,6 +189,9 @@ for part in json_path.split('.'):
         raise SystemExit(f"{file_path}: missing JSON path {json_path} at {part}") from error
 print(value)
 PY
+  else
+    jq -r --arg path "$path" 'getpath($path | split(".")) | if . == null then "None" else . end' "$file"
+  fi
 }
 
 assert_equals() {
@@ -248,7 +254,7 @@ test_linux_dolt_uses_workspace_socket() {
   export XDG_CACHE_HOME="$TEST_TMP/cache-unix"
   unset WRIX_DOLT_TRANSPORT
   workspace="$TEST_TMP/socket-repo"
-  mkdir -p "$workspace/.beads/dolt" "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+  mkdir -p "$workspace/.git" "$workspace/.beads/dolt" "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
   workspace="$(cd "$workspace" && pwd -P)"
 
   (cd "$workspace" && "$wrix_bin" service start --no-cache >"$TEST_TMP/start-unix.txt")
@@ -286,7 +292,7 @@ test_container_dolt_uses_published_socket() {
   export XDG_CACHE_HOME="$TEST_TMP/cache-container-socket"
   export WRIX_DOLT_TRANSPORT="unix"
   workspace="$TEST_TMP/container-socket-repo"
-  mkdir -p "$workspace/.beads/dolt" "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+  mkdir -p "$workspace/.git" "$workspace/.beads/dolt" "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
   workspace="$(cd "$workspace" && pwd -P)"
 
   (cd "$workspace" && "$wrix_bin" service start --no-cache >"$TEST_TMP/start-container-socket.txt")
@@ -321,7 +327,9 @@ test_workspace_naming_determinism() {
   first_workspace="$TEST_TMP/deterministic-one"
   second_workspace="$TEST_TMP/deterministic-two"
   mkdir -p \
+    "$first_workspace/.git" \
     "$first_workspace/.beads/dolt" \
+    "$second_workspace/.git" \
     "$second_workspace/.beads/dolt" \
     "$HOME" \
     "$XDG_STATE_HOME" \
@@ -386,7 +394,7 @@ test_darwin_default_dolt_uses_loopback_tcp() {
   export XDG_CACHE_HOME="$TEST_TMP/cache-darwin-default-tcp"
   unset WRIX_DOLT_TRANSPORT
   workspace="$TEST_TMP/darwin-default-tcp-repo"
-  mkdir -p "$workspace/.beads/dolt" "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+  mkdir -p "$workspace/.git" "$workspace/.beads/dolt" "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
   workspace="$(cd "$workspace" && pwd -P)"
 
   (cd "$workspace" && "$wrix_bin" service start --no-cache >"$TEST_TMP/start-darwin-default-tcp.txt")
@@ -414,7 +422,7 @@ test_explicit_tcp_dolt_uses_loopback_tcp() {
   export XDG_CACHE_HOME="$TEST_TMP/cache-tcp"
   export WRIX_DOLT_TRANSPORT="tcp"
   workspace="$TEST_TMP/tcp-repo"
-  mkdir -p "$workspace/.beads/dolt" "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+  mkdir -p "$workspace/.git" "$workspace/.beads/dolt" "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
   workspace="$(cd "$workspace" && pwd -P)"
 
   (cd "$workspace" && "$wrix_bin" service start --no-cache >"$TEST_TMP/start-tcp.txt")

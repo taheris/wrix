@@ -39,10 +39,11 @@ expected_sandbox_cache_host() {
 }
 
 require_python() {
-  if ! command -v python3 >/dev/null 2>&1; then
-    printf 'SKIP: python3 is required for JSON assertions\n' >&2
-    exit 77
+  if command -v python3 >/dev/null 2>&1 || command -v jq >/dev/null 2>&1; then
+    return 0
   fi
+  printf 'SKIP: python3 or jq is required for JSON assertions\n' >&2
+  exit 77
 }
 
 build_wrix_package() {
@@ -67,6 +68,11 @@ build_wrix_package() {
     " >/dev/null
   WRIX_PACKAGE="$out_link"
   printf '%s\n' "$WRIX_PACKAGE"
+}
+
+build_cache_serve() {
+  cargo build --quiet -p wrix-cache --bin wrix-cache-serve
+  printf '%s\n' "$REPO_ROOT/target/debug/wrix-cache-serve"
 }
 
 write_fake_runtime() {
@@ -290,7 +296,8 @@ JSON
 json_get() {
   local file="$1"
   local path="$2"
-  python3 - "$file" "$path" <<'PY'
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$file" "$path" <<'PY'
 import json
 import sys
 with open(sys.argv[1], encoding="utf-8") as handle:
@@ -299,6 +306,9 @@ for part in sys.argv[2].split('.'):
     value = value[part]
 print(value)
 PY
+  else
+    jq -r --arg path "$path" 'getpath($path | split(".")) | if . == null then "None" else . end' "$file"
+  fi
 }
 
 line_value() {
@@ -361,6 +371,42 @@ assert_port_range() {
   fi
 }
 
+assert_cache_server_policy() {
+  if ! command -v curl >/dev/null 2>&1 || ! command -v timeout >/dev/null 2>&1; then
+    printf 'SKIP: curl and timeout are required for cache server assertions\n' >&2
+    exit 77
+  fi
+  local serve_bin cache_root pid body status attempt
+  serve_bin="$(build_cache_serve)"
+  cache_root="$TEST_TMP/no-dns-cache-root"
+  mkdir -p "$cache_root/nar" "$cache_root/log"
+  printf 'StoreDir: /nix/store\nWantMassQuery: 1\nPriority: 40\n' >"$cache_root/nix-cache-info"
+  printf 'StorePath: /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-demo\nSig: fake\n' >"$cache_root/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.narinfo"
+  printf 'nar payload\n' >"$cache_root/nar/demo.nar"
+
+  timeout 15s "$serve_bin" "$cache_root" >"$TEST_TMP/cache-serve.out" 2>"$TEST_TMP/cache-serve.err" &
+  pid="$!"
+  for ((attempt = 0; attempt < 50; attempt++)); do
+    if curl -fsS http://127.0.0.1:8080/nix-cache-info >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.1
+  done
+
+  body="$(curl -fsS http://127.0.0.1:8080/nix-cache-info)" || fail "cache server did not serve nix-cache-info: $(cat "$TEST_TMP/cache-serve.err")"
+  assert_contains "cache server nix-cache-info" "$body" "StoreDir: /nix/store"
+  status="$(curl -sS -o /dev/null -w '%{http_code}' -I http://127.0.0.1:8080/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.narinfo)"
+  [[ "$status" == "200" ]] || fail "cache server HEAD narinfo status was $status"
+  status="$(curl -sS -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8080/nar/demo.nar)"
+  [[ "$status" == "405" ]] || fail "cache server write method status was $status"
+  status="$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/)"
+  [[ "$status" == "404" ]] || fail "cache server directory listing status was $status"
+  status="$(curl --path-as-is -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/nar/../nix-cache-info)"
+  [[ "$status" == "404" ]] || fail "cache server traversal status was $status"
+  kill "$pid" 2>/dev/null || true # best-effort: timeout may already have stopped the helper.
+  wait "$pid" 2>/dev/null || true # best-effort: helper shutdown can race with wait.
+}
+
 sandbox_dry_run() {
   local subcommand="$1"
   local workspace="$2"
@@ -379,7 +425,7 @@ prepare_launcher_workspace() {
   local name="$1"
   local profile_config="$TEST_TMP/$name-profile.json"
   local workspace="$TEST_TMP/$name-workspace"
-  mkdir -p "$workspace"
+  mkdir -p "$workspace/.git"
   write_profile_config "$profile_config"
   printf '%s\n%s\n' "$workspace" "$profile_config"
 }
@@ -470,6 +516,7 @@ test_no_container_dns_dependency() {
   assert_not_contains "cache URL" "$first_url" "no-dns-workspace-service"
   assert_contains "service port publish" "$service_args" "127.0.0.1:$cache_port:8080"
   assert_contains "service command" "$service_args" "wrix-cache-serve /cache"
+  assert_cache_server_policy
 }
 
 test_no_host_store_or_cache_secret() {

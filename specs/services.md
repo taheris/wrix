@@ -72,7 +72,7 @@ The service image carries wrix-managed labels (`wrix.managed=true`, `wrix.image.
 wrix run ...
 wrix spawn ...
 wrix service start|stop|status|logs|endpoints
-wrix service dolt status|socket|port|host|attach|gc
+wrix service dolt status|socket|port|host|attach|gc|wait
 wrix service cache status|publish|warm|prune|rotate-key
 wrix beads push
 ```

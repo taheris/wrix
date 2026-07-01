@@ -17,10 +17,11 @@ fail() {
 }
 
 require_python() {
-  if ! command -v python3 >/dev/null 2>&1; then
-    printf 'SKIP: python3 is required for JSON assertions\n' >&2
-    exit 77
+  if command -v python3 >/dev/null 2>&1 || command -v jq >/dev/null 2>&1; then
+    return 0
   fi
+  printf 'SKIP: python3 or jq is required for JSON assertions\n' >&2
+  exit 77
 }
 
 build_wrix() {
@@ -138,7 +139,8 @@ EOF
 json_get() {
   local file="$1"
   local path="$2"
-  python3 - "$file" "$path" <<'PY'
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$file" "$path" <<'PY'
 import json
 import sys
 with open(sys.argv[1], encoding="utf-8") as handle:
@@ -147,6 +149,9 @@ for part in sys.argv[2].split('.'):
     value = value[part]
 print(value)
 PY
+  else
+    jq -r --arg path "$path" 'getpath($path | split(".")) | if . == null then "None" else . end' "$file"
+  fi
 }
 
 assert_path_exists() {
@@ -180,6 +185,7 @@ with_fake_runtime_env() {
   export WRIX_CONTAINER_RUNTIME="$runtime_dir/podman"
   export WRIX_FAKE_RUNTIME_STATE="$state_dir"
   export WRIX_SERVICE_ALLOW_TEMP_CACHE=1
+  unset WRIX_SERVICE_IMAGE WRIX_SERVICE_IMAGE_SOURCE WRIX_SERVICE_IMAGE_SOURCE_KIND WRIX_SERVICE_IMAGE_DIGEST
 }
 
 test_fake_runtime_contract() {
@@ -210,7 +216,7 @@ test_state_layout() {
   mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
 
   local workspace="$TEST_TMP/cache-workspace"
-  mkdir -p "$workspace"
+  mkdir -p "$workspace/.git"
   (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/start.txt")
   (cd "$workspace" && "$wrix_bin" service endpoints >"$TEST_TMP/endpoints.json")
 
@@ -243,7 +249,7 @@ test_state_layout() {
   local no_cache_workspace="$TEST_TMP/cache-disabled-workspace"
   export XDG_STATE_HOME="$TEST_TMP/xdg-state-disabled"
   export XDG_CACHE_HOME="$TEST_TMP/xdg-cache-disabled"
-  mkdir -p "$no_cache_workspace/.beads/dolt" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+  mkdir -p "$no_cache_workspace/.git" "$no_cache_workspace/.beads/dolt" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
   (cd "$no_cache_workspace" && "$wrix_bin" service start --no-cache >"$TEST_TMP/no-cache-start.txt")
   (cd "$no_cache_workspace" && "$wrix_bin" service endpoints --no-cache >"$TEST_TMP/no-cache-endpoints.json")
 
@@ -270,7 +276,7 @@ test_invalid_public_key_regenerated() {
   mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
 
   local workspace="$TEST_TMP/invalid-key-workspace"
-  mkdir -p "$workspace"
+  mkdir -p "$workspace/.git"
   (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/invalid-key-start.txt")
   (cd "$workspace" && "$wrix_bin" service endpoints >"$TEST_TMP/invalid-key-endpoints.json")
 
@@ -284,13 +290,17 @@ test_invalid_public_key_regenerated() {
   if [[ "$regenerated_key" == "$invalid_key" ]]; then
     fail "service start left invalid project cache public key in place"
   fi
-  python3 - "$regenerated_key" <<'PY'
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$regenerated_key" <<'PY'
 import base64
 import sys
 name, payload = sys.argv[1].strip().split(':', 1)
 if not name or len(base64.b64decode(payload)) != 32:
     raise SystemExit(1)
 PY
+  elif ! [[ "$regenerated_key" =~ ^[^:]+:[A-Za-z0-9+/]{43}=$ ]]; then
+    fail "regenerated public key has invalid shape: $regenerated_key"
+  fi
 }
 
 ALL_TESTS=(

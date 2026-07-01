@@ -10,12 +10,12 @@ SOCKET_PIDS=()
 cleanup() {
   local pid
   for pid in "${SOCKET_PIDS[@]}"; do
-    kill "$pid" 2>/dev/null || true
+    kill "$pid" 2>/dev/null || true # best-effort: socket helper may already have exited.
   done
   if [[ -d "$TEST_TMP" ]]; then
     while IFS= read -r pid; do
-      kill "$pid" 2>/dev/null || true
-    done < <(find "$TEST_TMP" -name socket-pids -type f -exec cat {} + 2>/dev/null || true)
+      kill "$pid" 2>/dev/null || true # best-effort: fake runtime socket helper may already have exited.
+    done < <(find "$TEST_TMP" -name socket-pids -type f -exec cat {} +)
   fi
   if [[ -d "$TEST_TMP" ]]; then
     chmod -R u+w "$TEST_TMP"
@@ -122,16 +122,21 @@ start_socket_listener() {
   local socket_path="$1"
   mkdir -p "$(dirname "$socket_path")"
   rm -f "$socket_path"
-  python3 - "$socket_path" <<'PY' &
+  if command -v python3 >/dev/null 2>&1; then
+    nohup python3 - "$socket_path" >/dev/null 2>&1 <<'PY' &
 import socket
 import sys
-import time
 path = sys.argv[1]
 server = socket.socket(socket.AF_UNIX)
 server.bind(path)
-server.listen(1)
-time.sleep(60)
+server.listen(16)
+while True:
+    conn, _addr = server.accept()
+    conn.close()
 PY
+  else
+    nohup nc -lkU "$socket_path" >/dev/null 2>&1 &
+  fi
   printf '%s\n' "$!" >>"$STATE_DIR/socket-pids"
 }
 
@@ -307,10 +312,19 @@ assert_not_contains() {
   fi
 }
 
+has_json_tool() {
+  command -v python3 >/dev/null 2>&1 || command -v jq >/dev/null 2>&1
+}
+
+has_socket_tool() {
+  command -v python3 >/dev/null 2>&1 || command -v nc >/dev/null 2>&1
+}
+
 json_get() {
   local file="$1"
   local path="$2"
-  python3 - "$file" "$path" <<'PY'
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$file" "$path" <<'PY'
 import json
 import sys
 with open(sys.argv[1], encoding="utf-8") as handle:
@@ -319,12 +333,16 @@ for part in sys.argv[2].split('.'):
     value = value[part]
 print(value)
 PY
+  else
+    jq -r --arg path "$path" 'getpath($path | split("."))' "$file"
+  fi
 }
 
 start_unix_socket() {
   local socket_path="$1"
   rm -f "$socket_path"
-  python3 - "$socket_path" <<'PY' &
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$socket_path" <<'PY' &
 import socket
 import sys
 import time
@@ -334,6 +352,9 @@ server.bind(path)
 server.listen(1)
 time.sleep(60)
 PY
+  else
+    nc -lkU "$socket_path" >/dev/null 2>&1 &
+  fi
   local pid="$!"
   SOCKET_PIDS+=("$pid")
   local attempt
@@ -347,7 +368,7 @@ PY
 }
 
 test_mkdevshell_nix_cache() {
-  if ! command -v nix >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
+  if ! command -v nix >/dev/null 2>&1 || ! has_json_tool || ! has_socket_tool; then
     exit 77
   fi
   local result result_file default_hook disabled_hook custom_env
@@ -491,7 +512,7 @@ test_mkdevshell_nix_cache() {
   args_log="$TEST_TMP/fake-wrix-beads.args"
   disabled_stderr="$TEST_TMP/mkdevshell-disabled.err"
   : > "$args_log"
-  mkdir -p "$disabled_workspace/.beads/dolt"
+  mkdir -p "$disabled_workspace/.git" "$disabled_workspace/.beads/dolt"
   start_unix_socket "$socket_path"
   cat >"$fake_wrix" <<SCRIPT
 #!/usr/bin/env bash
@@ -534,7 +555,7 @@ SCRIPT
 }
 
 test_mkdevshell_beads_workspace_does_not_run_raw_dolt() {
-  if ! command -v nix >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
+  if ! command -v nix >/dev/null 2>&1 || ! has_json_tool || ! has_socket_tool; then
     exit 77
   fi
   local result result_file hook_file hook wrix_bin workspace stderr_file output saved_path
@@ -572,6 +593,7 @@ SCRIPT
   workspace="$TEST_TMP/mkdevshell-beads-cache-workspace"
   stderr_file="$TEST_TMP/mkdevshell-beads-cache.err"
   mkdir -p \
+    "$workspace/.git" \
     "$workspace/.beads/dolt/beads/.dolt" \
     "$workspace/.git/beads-worktrees/beads/.beads/dolt-remote" \
     "$workspace/.wrix"
@@ -601,7 +623,7 @@ SCRIPT
 }
 
 test_mkdevshell_loom_internal_worktree_uses_repo_service() {
-  if ! command -v nix >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
+  if ! command -v nix >/dev/null 2>&1 || ! has_json_tool; then
     exit 77
   fi
   local result result_file hook_file hook workspace repo wrix_bin output
@@ -651,7 +673,7 @@ test_mkdevshell_loom_internal_worktree_uses_repo_service() {
 }
 
 test_host_nix_configures_cache_and_hook() {
-  if ! command -v python3 >/dev/null 2>&1; then
+  if ! has_json_tool; then
     exit 77
   fi
   local wrix_bin workspace output endpoints state_root cache_root public_key hook_path wrapper
@@ -699,7 +721,7 @@ test_host_nix_configures_cache_and_hook() {
 }
 
 test_host_nix_config_fails_when_trusted_setting_ignored() {
-  if ! command -v python3 >/dev/null 2>&1; then
+  if ! has_json_tool; then
     exit 77
   fi
   local wrix_bin workspace

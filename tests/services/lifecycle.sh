@@ -627,7 +627,7 @@ test_workspace_identity() {
 
   local first_ws="$TEST_TMP/repo-one"
   local second_ws="$TEST_TMP/repo-two"
-  mkdir -p "$first_ws" "$second_ws"
+  mkdir -p "$first_ws/.git" "$second_ws/.git"
 
   (cd "$first_ws" && "$wrix_bin" service start >"$TEST_TMP/first-start.txt")
   (cd "$first_ws" && "$wrix_bin" service endpoints >"$TEST_TMP/first-endpoints.json")
@@ -674,7 +674,7 @@ test_workspace_identity() {
   local same_parent_two="$TEST_TMP/same-two"
   local same_first_ws="$same_parent_one/repo"
   local same_second_ws="$same_parent_two/repo"
-  mkdir -p "$same_first_ws" "$same_second_ws"
+  mkdir -p "$same_first_ws/.git" "$same_second_ws/.git"
   (cd "$same_first_ws" && "$wrix_bin" service start >"$TEST_TMP/same-first-start.txt")
   (cd "$same_first_ws" && "$wrix_bin" service endpoints >"$TEST_TMP/same-first-endpoints.json")
   (cd "$same_second_ws" && "$wrix_bin" service start >"$TEST_TMP/same-second-start.txt")
@@ -707,7 +707,7 @@ test_devshell_start_is_independent() {
   mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
 
   local workspace="$TEST_TMP/devshell-repo"
-  mkdir -p "$workspace"
+  mkdir -p "$workspace/.git"
   (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/devshell-start.txt")
 
   "$WRIX_CONTAINER_RUNTIME" container exists devshell-repo-service
@@ -742,7 +742,7 @@ test_start_replaces_stale_same_workspace_service_on_cache_port() {
   mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
 
   local workspace="$TEST_TMP/stale-service-repo"
-  mkdir -p "$workspace"
+  mkdir -p "$workspace/.git"
   (cd "$workspace" && "$wrix_bin" service endpoints >"$TEST_TMP/stale-service-endpoints-before.json")
 
   local workspace_hash cache_port planned_name
@@ -782,7 +782,7 @@ test_start_ignores_container_removed_after_ps() {
   mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
 
   local workspace="$TEST_TMP/removed-after-ps-repo"
-  mkdir -p "$workspace"
+  mkdir -p "$workspace/.git"
   (cd "$workspace" && "$wrix_bin" service endpoints >"$TEST_TMP/removed-after-ps-endpoints.json")
 
   local cache_port planned_name
@@ -812,7 +812,7 @@ test_cache_start_recreates_running_no_cache_service() {
   mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
 
   local workspace="$TEST_TMP/cache-reconfigure-repo"
-  mkdir -p "$workspace/.beads/dolt"
+  mkdir -p "$workspace/.git" "$workspace/.beads/dolt"
   (cd "$workspace" && "$wrix_bin" service start --no-cache >"$TEST_TMP/cache-reconfigure-no-cache-start.txt")
   (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/cache-reconfigure-cache-start.txt")
   (cd "$workspace" && "$wrix_bin" service endpoints >"$TEST_TMP/cache-reconfigure-endpoints.json")
@@ -844,7 +844,7 @@ test_dolt_start_recreates_running_cache_only_service() {
   mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
 
   local workspace="$TEST_TMP/dolt-reconfigure-repo"
-  mkdir -p "$workspace"
+  mkdir -p "$workspace/.git"
   (cd "$workspace" && "$wrix_bin" service endpoints >"$TEST_TMP/dolt-reconfigure-endpoints.json")
 
   local planned_name
@@ -881,7 +881,7 @@ test_start_reports_unrelated_cache_port_owner() {
   mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
 
   local workspace="$TEST_TMP/unrelated-port-repo"
-  mkdir -p "$workspace"
+  mkdir -p "$workspace/.git"
   (cd "$workspace" && "$wrix_bin" service endpoints >"$TEST_TMP/unrelated-port-endpoints.json")
 
   local cache_port planned_name
@@ -1017,7 +1017,7 @@ test_service_start_loads_image_source() {
     oci_ref="$(json_get "$WRIX_SERVICE_IMAGE_SOURCE" oci_ref)"
 
     local workspace="$TEST_TMP/image-source-repo"
-    mkdir -p "$workspace"
+    mkdir -p "$workspace/.git"
     (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/image-source-start.txt")
 
     assert_file_contains \
@@ -1051,7 +1051,7 @@ test_service_start_loads_image_source() {
   fi
 
   local darwin_workspace="$TEST_TMP/image-source-darwin-repo"
-  mkdir -p "$darwin_workspace"
+  mkdir -p "$darwin_workspace/.git"
   (cd "$darwin_workspace" && "$wrix_bin" service start >"$TEST_TMP/image-source-darwin-start.txt")
 
   assert_file_contains \

@@ -8,6 +8,7 @@ use std::{
 use displaydoc::Display;
 use serde_json::Value;
 use thiserror::Error;
+use wrix_core::path::Workspace;
 
 use super::config::{
     AgentKind, MountMode, Platform, ProfileConfig, ProfileMount, SourceKind, SpawnConfig,
@@ -761,7 +762,7 @@ impl ServicesState {
             Kind::Spawn(spawn) => Path::new(&spawn.config.workspace),
         };
         let mut state = Self::default();
-        let dolt = workspace.join(".beads/dolt").is_dir() && detect_workspace_dolt(workspace)?;
+        let dolt = service_workspace_has_dolt(workspace)?;
         if request.profile_config.services.nix_cache.enabled {
             run_service(workspace, &["service", "start"])?;
             state.load_project_cache(workspace)?;
@@ -1199,18 +1200,9 @@ fn file_type_is_socket(_path: &Path) -> Result<bool, LaunchError> {
     Ok(false)
 }
 
-fn detect_workspace_dolt(workspace: &Path) -> Result<bool, LaunchError> {
-    let output = run_service_output(workspace, &["service", "dolt", "status"])?;
-    if output.status.success() {
-        return Ok(true);
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if stderr.contains("dolt: disabled") {
-        return Ok(false);
-    }
-    Err(LaunchError::ServiceFailed {
-        stderr: stderr.into_owned(),
-    })
+fn service_workspace_has_dolt(workspace: &Path) -> Result<bool, LaunchError> {
+    let identity = Workspace::from_service_path(workspace)?;
+    Ok(identity.canonical_path().join(".beads/dolt").is_dir())
 }
 
 fn configure_dolt_socket(workspace: &Path, socket: &str) -> Result<BeadsSocket, LaunchError> {

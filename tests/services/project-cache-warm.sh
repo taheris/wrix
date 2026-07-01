@@ -55,6 +55,24 @@ fi
 
 if [[ "${1:-}" == "copy" ]]; then
   printf '%s\n' "$*" >>"${WRIX_FAKE_COPY_LOG:?}"
+  cache_root=""
+  previous=""
+  for arg in "$@"; do
+    if [[ "$previous" == "--to" ]]; then
+      cache_root="${arg#file://}"
+    fi
+    previous="$arg"
+  done
+  mkdir -p "$cache_root/nar"
+  for arg in "$@"; do
+    case "$arg" in
+      /nix/store/*)
+        base="${arg##*/}"
+        hash="${base%%-*}"
+        printf 'StorePath: %s\nSig: fake-signature\n' "$arg" >"$cache_root/$hash.narinfo"
+        ;;
+    esac
+  done
   exit 0
 fi
 
@@ -78,6 +96,10 @@ if [[ "${1:-}" == "--generate-binary-cache-key" ]]; then
   public_path="$4"
   printf '%s-secret\n' "$key_name" >"$secret_path"
   printf '%s:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n' "$key_name" >"$public_path"
+  exit 0
+fi
+
+if [[ "${1:-}" == "--check-validity" && "${2:-}" == "--print-invalid" ]]; then
   exit 0
 fi
 
@@ -117,6 +139,14 @@ with_workspace_env() {
   export XDG_CACHE_HOME="$TEST_TMP/cache"
   rm -rf "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
   mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+}
+
+cache_root() {
+  local roots=("$XDG_CACHE_HOME"/wrix/workspaces/*/binary-cache)
+  if [[ ! -d "${roots[0]}" ]]; then
+    fail "cache root was not created"
+  fi
+  printf '%s\n' "${roots[0]}"
 }
 
 write_roots_file() {
@@ -201,6 +231,17 @@ test_warm_roots() {
   [[ -f "${state_roots[0]}/packages.x86_64-linux.pkg" ]] || fail "package marker missing after warm"
   [[ -f "${state_roots[0]}/devShells.x86_64-linux.default" ]] || fail "devShell marker missing after warm"
   [[ -f "${state_roots[0]}/checks.x86_64-linux.check" ]] || fail "check marker missing after --checks warm"
+
+  local copied cache status_file
+  copied="$(cat "$WRIX_FAKE_COPY_LOG")"
+  cache="$(cache_root)"
+  status_file="$XDG_STATE_HOME/wrix/workspaces/$(basename "$(dirname "$cache")")/cache-status.json"
+  assert_contains "warm copy" "$copied" "--to file://$cache"
+  assert_contains "warm copy" "$copied" "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-pkg"
+  assert_contains "warm copy" "$copied" "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-devshell"
+  assert_contains "warm copy" "$copied" "/nix/store/cccccccccccccccccccccccccccccccc-check"
+  [[ -f "$cache/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.narinfo" ]] || fail "package narinfo missing after warm"
+  assert_contains "warm status" "$(cat "$status_file")" '"last_prune": "ok"'
 }
 
 ALL_TESTS=(
