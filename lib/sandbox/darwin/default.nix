@@ -659,7 +659,7 @@ in
             # Session registration for focus-aware notifications (tmux only)
             WRIX_SESSION_ID=""
             WRIX_SESSION_FILE=""
-            if [ -n "''${TMUX:-}" ]; then
+            if [[ -n "''${TMUX:-}" ]]; then
               WRIX_SESSION_ID=$(tmux display-message -p '#S:#I.#P')
               WRIX_SESSION_DIR="''${XDG_DATA_HOME:-$HOME/.local/share}/wrix/sessions"
               mkdir -p "$WRIX_SESSION_DIR"
@@ -674,7 +674,9 @@ in
             fi
 
             cleanup_session() {
-              [ -n "$WRIX_SESSION_FILE" ] && [ -f "$WRIX_SESSION_FILE" ] && rm -f "$WRIX_SESSION_FILE"
+              if [[ -n "$WRIX_SESSION_FILE" && -f "$WRIX_SESSION_FILE" ]]; then
+                rm -f "$WRIX_SESSION_FILE"
+              fi
             }
             trap cleanup_session EXIT
 

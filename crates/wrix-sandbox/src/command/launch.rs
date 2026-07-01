@@ -144,6 +144,10 @@ enum ImageRuntime {
     Container,
 }
 
+const DARWIN_NOTIFY_TCP_ENDPOINT: &str = "192.168.64.1:5959";
+const LINUX_NOTIFY_CONTAINER_DIR: &str = "/run/wrix";
+const NOTIFY_SOCKET_NAME: &str = "notify.sock";
+
 #[derive(Clone, Debug)]
 struct RenderedMount {
     host: String,
@@ -541,6 +545,9 @@ impl<'a> Plan<'a> {
             container: String::from("/workspace"),
             mode: MountMode::Rw,
         }];
+        if let Some(notification) = linux_notification_socket_mount()? {
+            volumes.push(notification);
+        }
         if let Some(beads) = &self.services.beads_socket
             && let Some(source) = &beads.mount_source
         {
@@ -724,6 +731,9 @@ impl<'a> Plan<'a> {
                     .join(","),
             ),
         ]);
+        if let Some(pair) = notification_env(Platform::CURRENT) {
+            pairs.push(pair);
+        }
         if let Ok(value) = env::var("WRIX_GIT_SIGN") {
             pairs.push((String::from("WRIX_GIT_SIGN"), value));
         }
@@ -1868,6 +1878,40 @@ const fn linux_podman_network() -> &'static str {
     "pasta:--map-host-loopback,169.254.1.2,--map-guest-addr,none,-t,none,-u,none,-T,none,-U,none"
 }
 
+fn notification_env(platform: Platform) -> Option<(String, String)> {
+    match platform {
+        Platform::Darwin => Some((
+            String::from("WRIX_NOTIFY_TCP"),
+            String::from(DARWIN_NOTIFY_TCP_ENDPOINT),
+        )),
+        Platform::Linux => None,
+    }
+}
+
+fn linux_notification_socket_mount() -> Result<Option<RenderedMount>, LaunchError> {
+    linux_notification_socket_mount_from_dir(&notification_socket_dir())
+}
+
+fn notification_socket_dir() -> PathBuf {
+    env::var_os("XDG_RUNTIME_DIR")
+        .map_or_else(|| home_dir().join(".local/share"), PathBuf::from)
+        .join("wrix")
+}
+
+fn linux_notification_socket_mount_from_dir(
+    socket_dir: &Path,
+) -> Result<Option<RenderedMount>, LaunchError> {
+    let socket = socket_dir.join(NOTIFY_SOCKET_NAME);
+    if !socket.try_exists()? || !file_type_is_socket(&socket)? {
+        return Ok(None);
+    }
+    Ok(Some(RenderedMount {
+        host: socket_dir.display().to_string(),
+        container: String::from(LINUX_NOTIFY_CONTAINER_DIR),
+        mode: MountMode::Rw,
+    }))
+}
+
 fn ensure_krun() -> Result<(), LaunchError> {
     if !Path::new("/dev/kvm").exists() {
         return Err(LaunchError::KvmMissing);
@@ -1983,7 +2027,7 @@ mod test {
     use super::{
         DarwinMounts, NetworkMode, RenderedMount, Staging, deploy_key_name, linux_podman_network,
     };
-    use crate::command::config::{MountMode, ProfileMount, SpawnMount};
+    use crate::command::config::{MountMode, Platform, ProfileMount, SpawnMount};
 
     #[test]
     fn spawn_mount_renders_ro_only_when_requested() {
@@ -2008,6 +2052,36 @@ mod test {
         assert!(network.contains("--map-host-loopback,169.254.1.2"));
         assert!(network.contains("-t,none"));
         assert!(!network.contains("-t,auto"));
+    }
+
+    #[test]
+    fn darwin_notification_env_uses_vmnet_gateway() {
+        assert_eq!(
+            super::notification_env(Platform::Darwin),
+            Some((
+                String::from("WRIX_NOTIFY_TCP"),
+                String::from("192.168.64.1:5959")
+            ))
+        );
+        assert_eq!(super::notification_env(Platform::Linux), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linux_notification_mount_uses_socket_directory() {
+        use std::os::unix::net::UnixListener;
+
+        let root = scratch_dir("notify-mount");
+        let socket_dir = root.join("wrix");
+        std::fs::create_dir_all(&socket_dir).unwrap();
+        let _listener = UnixListener::bind(socket_dir.join("notify.sock")).unwrap();
+
+        let mount = super::linux_notification_socket_mount_from_dir(&socket_dir)
+            .unwrap()
+            .unwrap();
+        assert_eq!(mount.host, socket_dir.display().to_string());
+        assert_eq!(mount.container, "/run/wrix");
+        assert_eq!(mount.mode, MountMode::Rw);
     }
 
     #[test]

@@ -130,6 +130,19 @@ wait_for_capture() {
   return 1
 }
 
+wait_for_capture_within_one_second() {
+  local capture="$1"
+  local attempt
+
+  for ((attempt = 0; attempt < 100; attempt += 1)); do
+    if [[ -s "$capture" ]]; then
+      return 0
+    fi
+    sleep 0.01
+  done
+  [[ -s "$capture" ]]
+}
+
 start_unix_capture() {
   local socket="$1"
   local capture="$2"
@@ -199,6 +212,33 @@ run_notify_with_timeout() {
   fi
 }
 
+run_notify_and_assert_capture_latency() {
+  local output_file="$1"
+  local capture="$2"
+  local title="$3"
+  local message="$4"
+  local sound="$5"
+  local notify_pid
+  local rc=0
+
+  timeout 1s wrix-notify "$title" "$message" "$sound" >"$output_file" 2>&1 &
+  notify_pid=$!
+
+  if ! wait_for_capture_within_one_second "$capture"; then
+    kill "$notify_pid" 2>/dev/null || true # best-effort: timed-out client may already have exited.
+    wait "$notify_pid" 2>/dev/null || true # best-effort: reap the timed-out client after failure.
+    fail_with_output "wrix-notify payload was not captured within one second" "$output_file"
+  fi
+
+  wait "$notify_pid" || rc=$?
+  if [[ "$rc" -eq 124 ]]; then
+    fail_with_output "wrix-notify waited for an acknowledgement" "$output_file"
+  fi
+  if [[ "$rc" -ne 0 ]]; then
+    fail_with_output "wrix-notify exited non-zero" "$output_file"
+  fi
+}
+
 test_client_tcp_endpoint_override() {
   ensure_tmp
   require_command jq
@@ -222,18 +262,14 @@ test_client_tcp_endpoint_override() {
 
   WRIX_NOTIFY_TCP="127.0.0.1:$port" \
     WRIX_SESSION_ID="$session_id" \
-    run_notify_with_timeout "$output_file" "$title" "$message" "$sound"
-
-  if ! wait_for_capture "$capture"; then
-    fail_with_output "fake TCP daemon did not receive wrix-notify payload" "$listener_log"
-  fi
+    run_notify_and_assert_capture_latency "$output_file" "$capture" "$title" "$message" "$sound"
 
   assert_single_json_envelope "$capture"
   assert_json_field "$capture" title "$title"
   assert_json_field "$capture" message "$message"
   assert_json_field "$capture" sound "$sound"
   assert_json_field "$capture" session_id "$session_id"
-  pass "wrix-notify honors WRIX_NOTIFY_TCP=host:port and sends one JSON envelope"
+  pass "wrix-notify honors WRIX_NOTIFY_TCP=host:port and sends one JSON envelope within one second"
 }
 
 write_spawn_config() {
