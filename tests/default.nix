@@ -194,7 +194,10 @@ let
     (mkCiApp sandboxImageChecks.linuxImageArchivelessSourceTest "test-linux-image-archiveless-source")
     (mkCiApp sandboxImageChecks.imageDigestNoTarTest "test-image-digest-no-tar")
     (mkCiApp sandboxImageChecks.imageTierGraphTest "test-image-tier-graph")
-    (mkCiApp sandboxImageChecks.stableProfileMembershipTest "test-image-tier-membership")
+    (mkCiApp sandboxImageChecks.imageNixConfigTest "test-image-nix-config")
+    (mkCiApp sandboxImageChecks.imageCaCertificatesTest "test-image-ca-certificates")
+    (mkCiApp sandboxImageChecks.imageEntrypointCommandTest "test-image-entrypoint-command")
+    (mkCiApp sandboxImageChecks.imageTierMembershipTest "test-image-tier-membership")
     (mkCiApp sandboxImageChecks.wrixImagesSourceKindTest "test-wrix-images-source-kind")
     (mkCiApp sandboxImageChecks.wrixImageLabelsTest "test-wrix-image-labels")
     (mkCiApp sandboxImageChecks.claudeRuntimeNoopTest "test-claude-runtime-noop")
@@ -392,10 +395,28 @@ in
       program = "${sandboxImageChecks.imageTierGraphTest}/bin/test-image-tier-graph";
     };
 
+    image-nix-config = {
+      meta.description = "Verify baked profile images enable flakes and disable the in-container Nix sandbox.";
+      type = "app";
+      program = "${sandboxImageChecks.imageNixConfigTest}/bin/test-image-nix-config";
+    };
+
+    image-ca-certificates = {
+      meta.description = "Verify baked profile images contain CA certificates and SSL_CERT_FILE points at them.";
+      type = "app";
+      program = "${sandboxImageChecks.imageCaCertificatesTest}/bin/test-image-ca-certificates";
+    };
+
+    image-entrypoint-command = {
+      meta.description = "Verify the selected platform entrypoint is the image startup command.";
+      type = "app";
+      program = "${sandboxImageChecks.imageEntrypointCommandTest}/bin/test-image-entrypoint-command";
+    };
+
     image-tier-membership = {
       meta.description = "Verify non-base profile-image tiers skip lower-tier closures.";
       type = "app";
-      program = "${sandboxImageChecks.stableProfileMembershipTest}/bin/test-stable-profile-membership";
+      program = "${sandboxImageChecks.imageTierMembershipTest}/bin/test-image-tier-membership";
     };
 
     wrix-images-source-kind = {

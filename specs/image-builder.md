@@ -127,11 +127,13 @@ The runtime acceptance — a fresh container letting the runtime user run
 
 ## Hook Installation
 
-Every profile image carries the host-equivalent prek setup so commits and pushes from inside the container fire the same `.pre-commit-config.yaml` chain the host runs (see `pre-commit.md` § Hook Installation in Profile Containers):
+Every profile image carries the prek surfaces defined by `pre-commit.md` § Hook Installation in Profile Containers so commits and pushes from inside the container fire through the same hook bundle as the host. This spec owns the image-builder side of that contract:
 
-- `wrix.prekHooks`, `wrix.prePushChecks`, and `wrix.skipIfMissing` are wired into the image's package set — `prekHooks` so its store path is reachable by `core.hooksPath`, and the two wrappers so they resolve on `PATH` for prek `entry:` lines that reference them by name.
-- The platform entrypoint (`lib/sandbox/{linux,darwin}/entrypoint.sh`) sets `core.hooksPath` on `/workspace/.git` to the `wrix.prekHooks` store path when `.pre-commit-config.yaml` is present, mirroring `mkDevShell`'s host-side step.
-- Nix-requiring hooks run in containers for profiles that include `nix`; the built-in base profile floor includes it (see `profiles.md` § Base Profile). Downstream profiles that omit `nix` keep those hooks inert under `skip-if-missing nix --` (see `pre-commit.md`). The image builder does not inject `SKIP=` env vars, does not stub `nix` on `PATH`, and does not maintain a hook-id skip list.
+- the `wrix.prekHooks` bundle is materialized in the image closure and exposed to the entrypoint as the hook path;
+- the wrapper binaries defined by `pre-commit.md` § Hook-Entry Wrappers are available on the profile image `PATH`;
+- the platform entrypoint (`lib/sandbox/{linux,darwin}/entrypoint.sh`) sets `core.hooksPath` on `/workspace/.git` to the `wrix.prekHooks` store path when `.pre-commit-config.yaml` is present, mirroring `mkDevShell`'s host-side step.
+
+Wrapper behavior, hook-stage semantics, and optional-tool policy remain owned by `pre-commit.md`. The image builder does not inject `SKIP=` env vars, stub missing tools on `PATH`, or maintain a hook-id skip list.
 
 ## Success Criteria
 
@@ -172,21 +174,21 @@ Every profile image carries the host-equivalent prek setup so commits and pushes
 - The `agentPkg` code path threads the selected agent package into the image build
   [system](bash tests/test-app.sh test-agent-pkg-threaded)
 - `nix-command` and `flakes` are enabled in `/etc/nix/nix.conf` and Nix's in-container build sandbox is disabled
-  [check](grep -nE 'experimental-features|sandbox' lib/sandbox/stable-profile-image.nix)
+  [system](bash tests/test-app.sh test-image-nix-config)
 - The baked image's Nix database registers no orphaned path: every path on disk under `/nix/store` is registered valid
   [system](bash tests/test-app.sh test-image-nix-db-consistent)
 - The baked image's Nix database registers no dangling path: every path registered valid exists on disk, so a freshly provisioned container passes `nix-store --verify --check-contents` with zero missing paths and an additive `nix build` cannot fail with `No such file or directory` on a registered path. The registration is derived from the materialized contents closure, not the full build closure
   [system](bash tests/test-app.sh test-image-nix-db-no-dangling)
 - CA certificates from `pkgs.cacert` are baked into the image and `SSL_CERT_FILE` resolves to the bundle
-  [check](grep -nE 'cacert|SSL_CERT_FILE' lib/sandbox/image.nix)
+  [system](bash tests/test-app.sh test-image-ca-certificates)
 - The platform entrypoint script (`lib/sandbox/{linux,darwin}/entrypoint.sh`) is the image's startup command
-  [check](grep -nE 'entrypointSh|Entrypoint|Cmd' lib/sandbox/image.nix)
+  [system](bash tests/test-app.sh test-image-entrypoint-command)
 - `wrix.prekHooks`, `wrix.prePushChecks`, and `wrix.skipIfMissing` all land in every profile image's store closure
-  [check](grep -nrE 'prekHooks|prePushChecks|skipIfMissing' lib/sandbox/ lib/default.nix)
+  [system](bash tests/test-app.sh test-prek-hooks-closure)
 - The Linux entrypoint sets `core.hooksPath` on `/workspace/.git` to the `wrix.prekHooks` store path when `.pre-commit-config.yaml` is present
-  [check](grep -nE 'core\.hooksPath|prekHooks' lib/sandbox/linux/entrypoint.sh)
+  [system](bash tests/sandbox/entrypoint-contract.sh test_linux_core_hooks_path)
 - The Darwin entrypoint mirrors the Linux entrypoint's `core.hooksPath` setup for `/workspace/.git`
-  [check](grep -nE 'core\.hooksPath|prekHooks' lib/sandbox/darwin/entrypoint.sh)
+  [system](bash tests/sandbox/entrypoint-contract.sh test_darwin_core_hooks_path)
 - Every wrix-managed Nix-built image source covered by this spec exposes the platform source kind (`nix-descriptor` on Linux, `docker-archive` on Darwin), including service/support images such as `wrix-builder`
   [system](bash tests/test-app.sh test-wrix-images-source-kind)
 - Wrix-managed images carry wrix-managed image labels, including `wrix.managed=true` and `wrix.image.kind`; profile images also carry `wrix.profile.name` and `wrix.agent.kind`

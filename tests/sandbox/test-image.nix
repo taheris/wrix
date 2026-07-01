@@ -52,8 +52,7 @@ import ../../lib/sandbox/image.nix {
   entrypointSh = ../../lib/sandbox/linux/entrypoint.sh;
   # Mirror production (lib/sandbox/default.nix sets krunSupport = isLinux): bakes
   # /lib/libfakeuid.so + krun-relay for the krun microVM boundary. The default
-  # container boundary does not LD_PRELOAD libfakeuid (its getuid spoof blanks
-  # claude's TUI — wx-nsage); it runs as rootless container-root with IS_SANDBOX=1.
+  # container boundary runs as rootless container-root with IS_SANDBOX=1.
   krunSupport = testPkgs.stdenv.hostPlatform.isLinux;
   inherit claudeConfig;
   claudeSettings = { };

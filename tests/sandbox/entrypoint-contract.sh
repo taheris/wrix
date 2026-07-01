@@ -50,6 +50,9 @@ write_fake_runtime_tools() {
   cat >"$bin_dir/git" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ -n "${WRIX_FAKE_GIT_LOG:-}" ]]; then
+  printf '%s\n' "$*" >>"$WRIX_FAKE_GIT_LOG"
+fi
 exit 0
 EOF
   chmod +x "$bin_dir/git"
@@ -260,9 +263,51 @@ EOF
   printf 'PASS: both entrypoints dispatch WRIX_AGENT to direct, claude, and pi binaries\n' >&2
 }
 
+run_core_hooks_path_case() {
+  local platform="$1"
+  local workspace="$TEST_TMP/hooks-$platform/workspace"
+  local stdout_path="$TEST_TMP/hooks-$platform.out"
+  local stderr_path="$TEST_TMP/hooks-$platform.err"
+  local git_log="$TEST_TMP/hooks-$platform.git.log"
+  local hooks_path="$TEST_TMP/hooks-$platform/prek-hooks"
+
+  mkdir -p "$workspace/.git" "$hooks_path"
+  printf 'repos: []\n' >"$workspace/.pre-commit-config.yaml"
+  : >"$git_log"
+
+  WRIX_PREK_HOOKS="$hooks_path"
+  WRIX_FAKE_GIT_LOG="$git_log"
+  export WRIX_PREK_HOOKS WRIX_FAKE_GIT_LOG
+  if ! run_entrypoint "$platform" direct "$stdout_path" "$stderr_path" "$workspace" true; then
+    unset WRIX_PREK_HOOKS WRIX_FAKE_GIT_LOG
+    fail "$platform entrypoint failed: $(<"$stderr_path")"
+    return 1
+  fi
+  unset WRIX_PREK_HOOKS WRIX_FAKE_GIT_LOG
+
+  if ! grep -qxF -- "-C $workspace config --local core.hooksPath $hooks_path" "$git_log"; then
+    fail "$platform entrypoint did not configure core.hooksPath to WRIX_PREK_HOOKS; git log: $(<"$git_log")"
+    return 1
+  fi
+}
+
+test_linux_core_hooks_path() {
+  require_command jq
+  run_core_hooks_path_case linux
+  printf 'PASS: linux entrypoint configures core.hooksPath when pre-commit config is present\n' >&2
+}
+
+test_darwin_core_hooks_path() {
+  require_command jq
+  run_core_hooks_path_case darwin
+  printf 'PASS: darwin entrypoint configures core.hooksPath when pre-commit config is present\n' >&2
+}
+
 ALL_TESTS=(
   test_workspace_bin_path_prepend_both
   test_agent_dispatch_both_entrypoints
+  test_linux_core_hooks_path
+  test_darwin_core_hooks_path
 )
 
 run_all() {

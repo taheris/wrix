@@ -63,6 +63,81 @@ let
   };
   expectedImageSourceKind = if isLinux then "nix-descriptor" else "docker-archive";
 
+  archiveShellHelpers = ''
+    unpack_archive() {
+        local label="$1"
+        local archive="$2"
+        local dest="$3"
+        mkdir -p "$dest"
+        if [[ -x "$archive" ]]; then
+            "$archive" | tar -xf - -C "$dest"
+        else
+            tar -xf "$archive" -C "$dest"
+        fi
+        if [[ ! -f "$dest/manifest.json" ]]; then
+            echo "FAIL: $label archive did not contain manifest.json" >&2
+            exit 1
+        fi
+    }
+
+    write_unique_layers() {
+        local archive_dir="$1"
+        local output="$2"
+        jq -r '.[0].Layers[]' "$archive_dir/manifest.json" | sort -u >"$output"
+    }
+
+    list_layer_store_paths() {
+        local archive_dir="$1"
+        local layers_file="$2"
+        local layer
+        while IFS= read -r layer; do
+            [[ -n "$layer" ]] || continue
+            tar -tf "$archive_dir/$layer"
+        done <"$layers_file" \
+            | awk 'match($0, /nix\/store\/[a-z0-9]{32}-[^\/]+/) { print "/" substr($0, RSTART, RLENGTH) }' \
+            | sort -u
+    }
+
+    extract_layer_member() {
+        local archive_dir="$1"
+        local layers_file="$2"
+        local member="$3"
+        local output="$4"
+        local layer dot_member
+        dot_member="./$member"
+        while IFS= read -r layer; do
+            [[ -n "$layer" ]] || continue
+            if grep -qxF "$member" < <(tar -tf "$archive_dir/$layer"); then
+                tar -xOf "$archive_dir/$layer" "$member" >"$output"
+                return 0
+            fi
+            if grep -qxF "$dot_member" < <(tar -tf "$archive_dir/$layer"); then
+                tar -xOf "$archive_dir/$layer" "$dot_member" >"$output"
+                return 0
+            fi
+        done <"$layers_file"
+        return 1
+    }
+
+    member_exists_in_layers() {
+        local archive_dir="$1"
+        local layers_file="$2"
+        local member="$3"
+        local layer dot_member
+        dot_member="./$member"
+        while IFS= read -r layer; do
+            [[ -n "$layer" ]] || continue
+            if grep -qxF "$member" < <(tar -tf "$archive_dir/$layer"); then
+                return 0
+            fi
+            if grep -qxF "$dot_member" < <(tar -tf "$archive_dir/$layer"); then
+                return 0
+            fi
+        done <"$layers_file"
+        return 1
+    }
+  '';
+
   claudeImage =
     (sandboxLib.mkSandbox {
       profile = sandboxLib.profiles.base;
@@ -80,7 +155,9 @@ let
   baseContentsClosure = pkgs.closureInfo { rootPaths = baseContents; };
 
   claudeCodePkg = linuxPkgs.claude-code;
+  piAgentPkg = linuxPkgs.pi-coding-agent;
   prekHooksBundle = import ../../lib/prek/bundle.nix { pkgs = linuxPkgs; };
+  prekWrappers = import ../../lib/prek/wrappers.nix { pkgs = linuxPkgs; };
 
   # Linux-only shim verifier for the shared `imageLoadStep` snippet (the same
   # one `wrix spawn` runs). Asserts the skopeo-based install transport on
@@ -960,6 +1037,162 @@ let
     '';
   };
 
+  imageNixConfigTest = pkgs.writeShellApplication {
+    name = "test-image-nix-config";
+    runtimeInputs = optionals isLinux [
+      pkgs.coreutils
+      pkgs.gawk
+      pkgs.gnugrep
+      pkgs.gnutar
+      pkgs.jq
+    ];
+    text =
+      if isLinux then
+        ''
+          ${archiveShellHelpers}
+
+          extract_nix_conf() {
+              local archive_dir="$1"
+              local layers_file="$2"
+              local output="$3"
+              local layer member
+              while IFS= read -r layer; do
+                  [[ -n "$layer" ]] || continue
+                  member=$(awk '/^\/?nix\/store\/[a-z0-9]{32}-nix\.conf\/etc\/nix\/nix\.conf$/ { print; exit }' \
+                      < <(tar -tf "$archive_dir/$layer"))
+                  if [[ -n "$member" ]]; then
+                      tar -xOf "$archive_dir/$layer" "$member" >"$output"
+                      return 0
+                  fi
+              done <"$layers_file"
+              return 1
+          }
+
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+
+          unpack_archive "stable-profile" "${defaultImage.stableProfileImage}" "$tmp/stable"
+          write_unique_layers "$tmp/stable" "$tmp/stable.layers"
+          if ! extract_nix_conf "$tmp/stable" "$tmp/stable.layers" "$tmp/nix.conf"; then
+              echo "FAIL: /etc/nix/nix.conf target is absent from the stable profile image" >&2
+              exit 1
+          fi
+
+          for expected in \
+              "experimental-features = nix-command flakes" \
+              "sandbox = false"; do
+              if ! grep -qxF "$expected" "$tmp/nix.conf"; then
+                  echo "FAIL: nix.conf missing exact setting: $expected" >&2
+                  cat "$tmp/nix.conf" >&2
+                  exit 1
+              fi
+          done
+
+          echo "test-image-nix-config: PASS"
+        ''
+      else
+        ''
+          echo "test-image-nix-config: skipped on this platform (Linux-only image archive verifier)" >&2
+          exit 0
+        '';
+  };
+
+  imageCaCertificatesTest = pkgs.writeShellApplication {
+    name = "test-image-ca-certificates";
+    runtimeInputs = optionals isLinux [
+      pkgs.coreutils
+      pkgs.gawk
+      pkgs.gnugrep
+      pkgs.gnutar
+      pkgs.jq
+    ];
+    text =
+      if isLinux then
+        ''
+          ${archiveShellHelpers}
+
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+
+          unpack_archive "leaf" "${defaultImage}" "$tmp/leaf"
+          write_unique_layers "$tmp/leaf" "$tmp/leaf.layers"
+          config_file=$(jq -r '.[0].Config' "$tmp/leaf/manifest.json")
+          expected_env="SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
+
+          if ! jq -e --arg expected "$expected_env" '(.config.Env // []) | index($expected) != null' "$tmp/leaf/$config_file" >/dev/null; then
+              echo "FAIL: image config Env does not set $expected_env" >&2
+              jq '.config.Env // []' "$tmp/leaf/$config_file" >&2
+              exit 1
+          fi
+          if ! member_exists_in_layers "$tmp/leaf" "$tmp/leaf.layers" "etc/ssl/certs/ca-bundle.crt"; then
+              echo "FAIL: SSL_CERT_FILE target /etc/ssl/certs/ca-bundle.crt is absent from image layers" >&2
+              exit 1
+          fi
+          if ! grep -qxF "${linuxPkgs.cacert}" "${defaultImageClosure}/store-paths"; then
+              echo "FAIL: pkgs.cacert is absent from the default image closure" >&2
+              echo "  expected: ${linuxPkgs.cacert}" >&2
+              exit 1
+          fi
+
+          echo "test-image-ca-certificates: PASS"
+        ''
+      else
+        ''
+          echo "test-image-ca-certificates: skipped on this platform (Linux-only image archive verifier)" >&2
+          exit 0
+        '';
+  };
+
+  imageEntrypointCommandTest = pkgs.writeShellApplication {
+    name = "test-image-entrypoint-command";
+    runtimeInputs = optionals isLinux [
+      pkgs.coreutils
+      pkgs.gawk
+      pkgs.gnugrep
+      pkgs.gnutar
+      pkgs.jq
+    ];
+    text =
+      if isLinux then
+        ''
+          ${archiveShellHelpers}
+
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+
+          unpack_archive "leaf" "${defaultImage}" "$tmp/leaf"
+          write_unique_layers "$tmp/leaf" "$tmp/leaf.layers"
+          config_file=$(jq -r '.[0].Config' "$tmp/leaf/manifest.json")
+
+          if ! jq -e '.config.Entrypoint == ["/entrypoint.sh"]' "$tmp/leaf/$config_file" >/dev/null; then
+              echo "FAIL: image config Entrypoint is not /entrypoint.sh" >&2
+              jq '.config.Entrypoint' "$tmp/leaf/$config_file" >&2
+              exit 1
+          fi
+          if ! extract_layer_member "$tmp/leaf" "$tmp/leaf.layers" "entrypoint.sh" "$tmp/entrypoint.sh"; then
+              echo "FAIL: /entrypoint.sh is absent from image layers" >&2
+              exit 1
+          fi
+
+          expected_entrypoint='${../../lib/sandbox/linux/entrypoint.sh}'
+          actual_hash=$(sha256sum "$tmp/entrypoint.sh" | cut -d ' ' -f 1)
+          expected_hash=$(sha256sum "$expected_entrypoint" | cut -d ' ' -f 1)
+          if [[ "$actual_hash" != "$expected_hash" ]]; then
+              echo "FAIL: /entrypoint.sh content does not match the selected Linux entrypoint source" >&2
+              echo "  actual  : $actual_hash" >&2
+              echo "  expected: $expected_hash" >&2
+              exit 1
+          fi
+
+          echo "test-image-entrypoint-command: PASS"
+        ''
+      else
+        ''
+          echo "test-image-entrypoint-command: skipped on this platform (Linux-only image archive verifier)" >&2
+          exit 0
+        '';
+  };
+
   sourceKindMatrix = {
     base = {
       inherit ((sandboxLib.mkSandbox { profile = sandboxLib.profiles.base; })) image;
@@ -1235,6 +1468,46 @@ let
     '';
   };
 
+  prekSurfaceImageMatrix = {
+    base-direct = sourceKindMatrix.base.image;
+    rust-direct = sourceKindMatrix.rust.image;
+    python-direct = sourceKindMatrix.python.image;
+    base-claude = sourceKindMatrix.base-claude.image;
+    rust-claude =
+      (sandboxLib.mkSandbox {
+        profile = sandboxLib.profiles.rust;
+        agent = "claude";
+      }).image;
+    python-claude =
+      (sandboxLib.mkSandbox {
+        profile = sandboxLib.profiles.python;
+        agent = "claude";
+      }).image;
+    base-pi = sourceKindMatrix.base-pi.image;
+    rust-pi =
+      (sandboxLib.mkSandbox {
+        profile = sandboxLib.profiles.rust;
+        agent = "pi";
+      }).image;
+    python-pi =
+      (sandboxLib.mkSandbox {
+        profile = sandboxLib.profiles.python;
+        agent = "pi";
+      }).image;
+  };
+  prekSurfaceChecks = concatStringsSep "\n" (
+    mapAttrsToList (
+      name: image:
+      let
+        closure = pkgs.closureInfo { rootPaths = [ image ]; };
+      in
+      ''
+        check_surface "${name}" "${closure}/store-paths" "wrix.prekHooks" "${prekHooksBundle}"
+        check_surface "${name}" "${closure}/store-paths" "wrix.prePushChecks" "${prekWrappers.prePushChecks}"
+        check_surface "${name}" "${closure}/store-paths" "wrix.skipIfMissing" "${prekWrappers.skipIfMissing}"
+      ''
+    ) prekSurfaceImageMatrix
+  );
   prekHooksClosureTest = pkgs.writeShellApplication {
     name = "test-prek-hooks-closure";
     runtimeInputs = [
@@ -1242,15 +1515,20 @@ let
       pkgs.gnugrep
     ];
     text = ''
-      closure_file=${defaultImageClosure}/store-paths
-      prek_hooks_path=${prekHooksBundle}
+      check_surface() {
+          local image_name="$1"
+          local closure_file="$2"
+          local surface_name="$3"
+          local surface_path="$4"
+          if ! grep -qxF "$surface_path" "$closure_file"; then
+              echo "FAIL: $surface_name not in $image_name profile image closure" >&2
+              echo "  expected: $surface_path" >&2
+              echo "  closure : $closure_file" >&2
+              exit 1
+          fi
+      }
 
-      if ! grep -qxF "$prek_hooks_path" "$closure_file"; then
-          echo "FAIL: prek hooks bundle not in default sandbox closure" >&2
-          echo "  expected: $prek_hooks_path" >&2
-          echo "  closure : $closure_file" >&2
-          exit 1
-      fi
+      ${prekSurfaceChecks}
 
       echo "test-prek-hooks-closure: PASS"
     '';
@@ -1536,6 +1814,86 @@ let
     claudeSettings = { };
   };
   membershipImageClosure = linuxPkgs.closureInfo { rootPaths = [ membershipImage ]; };
+  imageTierMembershipTest = pkgs.writeShellApplication {
+    name = "test-image-tier-membership";
+    runtimeInputs = optionals isLinux [
+      pkgs.coreutils
+      pkgs.gawk
+      pkgs.gnugrep
+      pkgs.gnutar
+      pkgs.jq
+    ];
+    text =
+      if isLinux then
+        ''
+          ${archiveShellHelpers}
+
+          assert_new_layers() {
+              local label="$1"
+              local layers_file="$2"
+              if [[ ! -s "$layers_file" ]]; then
+                  echo "FAIL: $label emitted no tier-owned layers" >&2
+                  exit 1
+              fi
+          }
+
+          assert_no_overlap() {
+              local label="$1"
+              local emitted_paths="$2"
+              local lower_closure="$3"
+              local overlap
+              overlap=$(comm -12 "$emitted_paths" "$lower_closure")
+              if [[ -n "$overlap" ]]; then
+                  echo "FAIL: $label re-emitted store paths already shipped by lower tiers" >&2
+                  echo "$overlap" >&2
+                  exit 1
+              fi
+          }
+
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+
+          unpack_archive "tier0" "${membershipImage.baseImage}" "$tmp/tier0"
+          unpack_archive "tier1" "${membershipImage.stableProfileImage}" "$tmp/tier1"
+          unpack_archive "tier2" "${membershipImage.agentImage}" "$tmp/tier2"
+          unpack_archive "leaf" "${membershipImage}" "$tmp/leaf"
+
+          write_unique_layers "$tmp/tier0" "$tmp/tier0.layers"
+          write_unique_layers "$tmp/tier1" "$tmp/tier1.layers"
+          write_unique_layers "$tmp/tier2" "$tmp/tier2.layers"
+          write_unique_layers "$tmp/leaf" "$tmp/leaf.layers"
+
+          comm -23 "$tmp/tier1.layers" "$tmp/tier0.layers" >"$tmp/tier1.new.layers"
+          comm -23 "$tmp/tier2.layers" "$tmp/tier1.layers" >"$tmp/tier2.new.layers"
+          comm -23 "$tmp/leaf.layers" "$tmp/tier2.layers" >"$tmp/leaf.new.layers"
+
+          assert_new_layers "tier 1" "$tmp/tier1.new.layers"
+          assert_new_layers "tier 2" "$tmp/tier2.new.layers"
+          assert_new_layers "leaf" "$tmp/leaf.new.layers"
+
+          list_layer_store_paths "$tmp/tier1" "$tmp/tier1.new.layers" >"$tmp/tier1.paths"
+          list_layer_store_paths "$tmp/tier2" "$tmp/tier2.new.layers" >"$tmp/tier2.paths"
+          list_layer_store_paths "$tmp/leaf" "$tmp/leaf.new.layers" >"$tmp/leaf.paths"
+
+          sort -u "${baseContentsClosure}/store-paths" >"$tmp/base.closure"
+          sort -u "${membershipImage.stableProfileImage.lowerTiersClosure}/store-paths" >"$tmp/tier1.closure"
+          sort -u "${membershipImage.agentImage.lowerTiersClosure}/store-paths" >"$tmp/tier2.closure"
+
+          assert_no_overlap "tier 1" "$tmp/tier1.paths" "$tmp/base.closure"
+          assert_no_overlap "tier 2" "$tmp/tier2.paths" "$tmp/tier1.closure"
+          assert_no_overlap "leaf" "$tmp/leaf.paths" "$tmp/tier2.closure"
+
+          tier1_count=$(wc -l <"$tmp/tier1.new.layers")
+          tier2_count=$(wc -l <"$tmp/tier2.new.layers")
+          leaf_count=$(wc -l <"$tmp/leaf.new.layers")
+          echo "test-image-tier-membership: PASS (new layers tier1=$tier1_count tier2=$tier2_count leaf=$leaf_count skip lower closures)"
+        ''
+      else
+        ''
+          echo "test-image-tier-membership: skipped on this platform (streamLayeredImage is Linux-only)" >&2
+          exit 0
+        '';
+  };
   stableProfileMembershipTest = pkgs.writeShellApplication {
     name = "test-stable-profile-membership";
     runtimeInputs = optionals isLinux [
@@ -1655,42 +2013,70 @@ let
 
   # Probe builder for the layering tests below: a leaf image built via image.nix
   # directly with a light agent package so checks do not drag in claude-code.
-  # Each knob isolates one tier — `agent`/`agentPkg` perturb tier 2, the
-  # agent settings perturb the tier-3 leaf customisation layer.
   mkLeafProbe =
     {
       agent ? "claude",
       agentPkg ? null,
       settings ? { },
+      extraPackages ? [ ],
+      mcpServerConfigs ? { },
+      entrypointSh ? ../../lib/sandbox/linux/entrypoint.sh,
     }:
     import ../../lib/sandbox/image.nix {
       pkgs = linuxPkgs;
-      inherit agent;
+      inherit agent entrypointSh mcpServerConfigs;
       profile = {
         name = "leafprobe";
         corePackages = [ linuxPkgs.coreutils ];
-        packages = [ linuxPkgs.coreutils ];
+        packages = [ linuxPkgs.coreutils ] ++ extraPackages;
         env = { };
       };
       agentPkg = if agentPkg == null then linuxPkgs.hello else agentPkg;
-      entrypointSh = ../../lib/sandbox/linux/entrypoint.sh;
       claudeConfig = { };
       claudeSettings = settings;
     };
 
-  # Leaf-only-change guard (specs/image-builder.md § Provenance-Tiered Layering;
-  # Non-Functional § Iteration cost). Two leaf images that differ only in a
-  # tier-3 leaf input — one Claude-settings field — share an identical
-  # `wrix-base-image` (tier 0), `wrix-stable-profile-<name>` (tier 1), and
-  # `wrix-agent-<agent>-<name>` (tier 2), since none depends on the settings
-  # JSON. Every tier-0, tier-1, AND tier-2 layer blob must therefore be
-  # byte-identical across the two leaves' manifests; only the leaf customisation
-  # layer changes.
   leafProbeSettingsA = mkLeafProbe { settings = { }; };
   leafProbeSettingsB = mkLeafProbe {
     settings = {
       probe = "downstream-change-leaf-only";
     };
+  };
+  leafProbePackageA = mkLeafProbe {
+    extraPackages = [
+      (linuxPkgs.writeShellScriptBin "wrix-leaf-package-probe" ''
+        echo "leaf package alpha"
+      '')
+    ];
+  };
+  leafProbePackageB = mkLeafProbe {
+    extraPackages = [
+      (linuxPkgs.writeShellScriptBin "wrix-leaf-package-probe" ''
+        echo "leaf package beta"
+      '')
+    ];
+  };
+  leafProbeMcpA = mkLeafProbe {
+    mcpServerConfigs.probe = {
+      command = "probe-mcp";
+      args = [ "alpha" ];
+    };
+  };
+  leafProbeMcpB = mkLeafProbe {
+    mcpServerConfigs.probe = {
+      command = "probe-mcp";
+      args = [ "beta" ];
+    };
+  };
+  leafProbeEntrypointA = mkLeafProbe {
+    entrypointSh = linuxPkgs.writeShellScript "wrix-entrypoint-probe" ''
+      echo "entrypoint alpha"
+    '';
+  };
+  leafProbeEntrypointB = mkLeafProbe {
+    entrypointSh = linuxPkgs.writeShellScript "wrix-entrypoint-probe" ''
+      echo "entrypoint beta"
+    '';
   };
   downstreamChangeLeafOnlyTest = pkgs.writeShellApplication {
     name = "test-downstream-change-leaf-only";
@@ -1702,60 +2088,72 @@ let
     text =
       if isLinux then
         ''
-          imgA=${leafProbeSettingsA}
-          imgB=${leafProbeSettingsB}
-          tier1_tar=${leafProbeSettingsA.stableProfileImage}
-          tier2_tar=${leafProbeSettingsA.agentImage}
+          assert_leaf_change() {
+              local label="$1"
+              local img_a="$2"
+              local img_b="$3"
+              local tier1_tar="$4"
+              local tier2_tar="$5"
+              local case_dir="$tmp/$label"
+              local missing only_a only_b lower_count
 
-          if [[ "$imgA" == "$imgB" ]]; then
-              echo "FAIL: the two probe images resolved to the same stream script;" >&2
-              echo "      the leaf settings perturbation did not materialise a distinct leaf" >&2
-              exit 1
-          fi
+              if [[ "$img_a" == "$img_b" ]]; then
+                  echo "FAIL: $label perturbation resolved to identical image streams" >&2
+                  exit 1
+              fi
+
+              mkdir -p "$case_dir"
+              "$img_a" | tar -xO manifest.json >"$case_dir/a.json"
+              "$img_b" | tar -xO manifest.json >"$case_dir/b.json"
+              tar -xOf "$tier1_tar" manifest.json >"$case_dir/tier1.json"
+              tar -xOf "$tier2_tar" manifest.json >"$case_dir/tier2.json"
+
+              jq -r '.[0].Layers[]' "$case_dir/a.json" | sort -u >"$case_dir/a.layers"
+              jq -r '.[0].Layers[]' "$case_dir/b.json" | sort -u >"$case_dir/b.layers"
+              jq -r '.[0].Layers[]' "$case_dir/tier1.json" "$case_dir/tier2.json" | sort -u >"$case_dir/lower.layers"
+              comm -12 "$case_dir/a.layers" "$case_dir/b.layers" >"$case_dir/shared.layers"
+              lower_count=$(wc -l <"$case_dir/lower.layers")
+
+              missing=$(comm -23 "$case_dir/lower.layers" "$case_dir/shared.layers")
+              if [[ -n "$missing" ]]; then
+                  echo "FAIL: $label perturbation changed a tier-0/tier-1/tier-2 layer blob" >&2
+                  echo "$missing" >&2
+                  exit 1
+              fi
+
+              only_a=$(comm -23 "$case_dir/a.layers" "$case_dir/b.layers" | wc -l)
+              only_b=$(comm -13 "$case_dir/a.layers" "$case_dir/b.layers" | wc -l)
+              if [[ "$only_a" -eq 0 && "$only_b" -eq 0 ]]; then
+                  echo "FAIL: $label perturbation left the manifest identical" >&2
+                  exit 1
+              fi
+
+              printf '%s\n' "$label: lower=$lower_count only_in_A=$only_a only_in_B=$only_b" >&2
+          }
 
           tmp=$(mktemp -d)
           trap 'rm -rf "$tmp"' EXIT
 
-          # streamLayeredImage emits a docker-archive tar; manifest.json lists
-          # each layer blob as "<sha256>/layer.tar".
-          "$imgA" | tar -xO manifest.json > "$tmp/a.json"
-          "$imgB" | tar -xO manifest.json > "$tmp/b.json"
-          # GNU tar auto-detects the intermediate buildLayeredImage tars' compression.
-          tar -xOf "$tier1_tar" manifest.json > "$tmp/tier1.json"
-          tar -xOf "$tier2_tar" manifest.json > "$tmp/tier2.json"
+          assert_leaf_change "settings" \
+              "${leafProbeSettingsA}" \
+              "${leafProbeSettingsB}" \
+              "${leafProbeSettingsA.stableProfileImage}" \
+              "${leafProbeSettingsA.agentImage}"
+          assert_leaf_change "package-delta" \
+              "${leafProbePackageA}" \
+              "${leafProbePackageB}" \
+              "${leafProbePackageA.stableProfileImage}" \
+              "${leafProbePackageA.agentImage}"
+          assert_leaf_change "mcp-config" \
+              "${leafProbeMcpA}" \
+              "${leafProbeMcpB}" \
+              "${leafProbeMcpA.stableProfileImage}" \
+              "${leafProbeMcpA.agentImage}"
 
-          jq -r '.[0].Layers[]' "$tmp/a.json" | sort -u > "$tmp/a.layers"
-          jq -r '.[0].Layers[]' "$tmp/b.json" | sort -u > "$tmp/b.layers"
-          jq -r '.[0].Layers[]' "$tmp/tier1.json" "$tmp/tier2.json" | sort -u > "$tmp/lower.layers"
-
-          comm -12 "$tmp/a.layers" "$tmp/b.layers" > "$tmp/shared.layers"
-          lower_count=$(wc -l < "$tmp/lower.layers")
-
-          # Every tier-0 + tier-1 + tier-2 blob must survive byte-identical in
-          # BOTH leaves, i.e. appear in their shared set.
-          missing=$(comm -23 "$tmp/lower.layers" "$tmp/shared.layers")
-          if [[ -n "$missing" ]]; then
-              echo "FAIL: a tier-0/tier-1/tier-2 layer blob changed across the leaf perturbation" >&2
-              echo "  lower-tier blobs not shared by both leaves:" >&2
-              echo "$missing" >&2
-              exit 1
-          fi
-
-          only_a=$(comm -23 "$tmp/a.layers" "$tmp/b.layers" | wc -l)
-          only_b=$(comm -13 "$tmp/a.layers" "$tmp/b.layers" | wc -l)
-          if [[ "$only_a" -eq 0 && "$only_b" -eq 0 ]]; then
-              echo "FAIL: no leaf-tier blob changed; the perturbation left the manifest identical" >&2
-              exit 1
-          fi
-
-          echo "test-downstream-change-leaf-only: PASS ($lower_count tier-0/1/2 blobs byte-identical; only_in_A=$only_a only_in_B=$only_b leaf-only)"
+          echo "test-downstream-change-leaf-only: PASS"
         ''
       else
         ''
-          # streamLayeredImage's stream script carries a Linux Python shebang;
-          # the manifest diff this verifier performs is Linux-only. Darwin's
-          # iteration-cost bound is the tiered chain alone (specs/image-builder.md
-          # § Out of Scope).
           echo "test-downstream-change-leaf-only: skipped on this platform (streamLayeredImage is Linux-only)" >&2
           exit 0
         '';
@@ -1773,43 +2171,6 @@ let
     text =
       if isLinux then
         ''
-          source_a=${leafProbeSettingsA.source}
-          source_b=${leafProbeSettingsB.source}
-          raw_a=${discardContext leafProbeSettingsA}
-          raw_b=${discardContext leafProbeSettingsB}
-          agent_tar=${leafProbeSettingsA.agentImage}
-
-          tmp=$(mktemp -d)
-          trap 'rm -rf "$tmp"' EXIT
-
-          digest_a=$(jq -r '.digest' "$source_a")
-          digest_b=$(jq -r '.digest' "$source_b")
-          if [[ "$digest_a" == "$digest_b" ]]; then
-              echo "FAIL: generated metadata change left the descriptor/config digest unchanged" >&2
-              exit 1
-          fi
-
-          jq -r '.layers[].digest' "$source_a" | sort -u > "$tmp/a.layers"
-          jq -r '.layers[].digest' "$source_b" | sort -u > "$tmp/b.layers"
-          tar -xOf "$agent_tar" manifest.json \
-            | jq -r '.[0].Layers[] | sub("/layer.tar$"; "") | "sha256:" + .' \
-            | sort -u > "$tmp/lower.layers"
-          comm -12 "$tmp/a.layers" "$tmp/b.layers" > "$tmp/shared.layers"
-
-          missing=$(comm -23 "$tmp/lower.layers" "$tmp/shared.layers")
-          if [[ -n "$missing" ]]; then
-              echo "FAIL: generated metadata change altered a lower-tier layer blob" >&2
-              echo "$missing" >&2
-              exit 1
-          fi
-
-          only_a=$(comm -23 "$tmp/a.layers" "$tmp/b.layers" | wc -l)
-          only_b=$(comm -13 "$tmp/a.layers" "$tmp/b.layers" | wc -l)
-          if [[ "$only_a" -ne 1 || "$only_b" -ne 1 ]]; then
-              echo "FAIL: generated metadata change should alter only the top customisation layer (only_a=$only_a only_b=$only_b)" >&2
-              exit 1
-          fi
-
           assert_no_raw_image_input() {
               local label="$1"
               local path="$2"
@@ -1821,14 +2182,127 @@ let
                   exit 1
               fi
           }
-          oci_a=$(jq -r '.oci_layout' "$source_a")
-          oci_b=$(jq -r '.oci_layout' "$source_b")
-          assert_no_raw_image_input "descriptor A" "$source_a" "$raw_a"
-          assert_no_raw_image_input "descriptor B" "$source_b" "$raw_b"
-          assert_no_raw_image_input "OCI layout A" "$oci_a" "$raw_a"
-          assert_no_raw_image_input "OCI layout B" "$oci_b" "$raw_b"
 
-          echo "test-archiveless-generated-change: PASS (lower tiers unchanged; one customisation layer changed)"
+          assert_generated_change() {
+              local label="$1"
+              local source_a="$2"
+              local source_b="$3"
+              local raw_a="$4"
+              local raw_b="$5"
+              local agent_tar="$6"
+              local case_dir="$tmp/$label"
+              local digest_a digest_b missing only_a only_b top_a top_b oci_a oci_b
+
+              mkdir -p "$case_dir"
+              digest_a=$(jq -r '.digest' "$source_a")
+              digest_b=$(jq -r '.digest' "$source_b")
+              if [[ "$digest_a" == "$digest_b" ]]; then
+                  echo "FAIL: $label generated metadata change left the descriptor/config digest unchanged" >&2
+                  exit 1
+              fi
+
+              jq -r '.layers[].digest' "$source_a" | sort -u >"$case_dir/a.layers"
+              jq -r '.layers[].digest' "$source_b" | sort -u >"$case_dir/b.layers"
+              tar -xOf "$agent_tar" manifest.json \
+                | jq -r '.[0].Layers[] | sub("/layer.tar$"; "") | "sha256:" + .' \
+                | sort -u >"$case_dir/lower.layers"
+              comm -12 "$case_dir/a.layers" "$case_dir/b.layers" >"$case_dir/shared.layers"
+              comm -23 "$case_dir/a.layers" "$case_dir/b.layers" >"$case_dir/a.only"
+              comm -13 "$case_dir/a.layers" "$case_dir/b.layers" >"$case_dir/b.only"
+
+              missing=$(comm -23 "$case_dir/lower.layers" "$case_dir/shared.layers")
+              if [[ -n "$missing" ]]; then
+                  echo "FAIL: $label generated metadata change altered a lower-tier layer blob" >&2
+                  echo "$missing" >&2
+                  exit 1
+              fi
+
+              only_a=$(wc -l <"$case_dir/a.only")
+              only_b=$(wc -l <"$case_dir/b.only")
+              if [[ "$only_a" -ne 1 || "$only_b" -ne 1 ]]; then
+                  echo "FAIL: $label should alter only the top customisation layer (only_a=$only_a only_b=$only_b)" >&2
+                  exit 1
+              fi
+
+              top_a=$(jq -r '.layers[-1].digest' "$source_a")
+              top_b=$(jq -r '.layers[-1].digest' "$source_b")
+              if ! grep -qxF "$top_a" "$case_dir/a.only" || ! grep -qxF "$top_b" "$case_dir/b.only"; then
+                  echo "FAIL: $label changed layer is not the descriptor's final customisation layer" >&2
+                  exit 1
+              fi
+
+              oci_a=$(jq -r '.oci_layout' "$source_a")
+              oci_b=$(jq -r '.oci_layout' "$source_b")
+              assert_no_raw_image_input "$label descriptor A" "$source_a" "$raw_a"
+              assert_no_raw_image_input "$label descriptor B" "$source_b" "$raw_b"
+              assert_no_raw_image_input "$label OCI layout A" "$oci_a" "$raw_a"
+              assert_no_raw_image_input "$label OCI layout B" "$oci_b" "$raw_b"
+          }
+
+          assert_nix_db_registration_top_layer() {
+              local label="$1"
+              local leaf_stream="$2"
+              local agent_tar="$3"
+              local case_dir="$tmp/$label"
+              local db_layer cust_layer layer
+
+              mkdir -p "$case_dir/leaf" "$case_dir/lower"
+              "$leaf_stream" >"$case_dir/leaf.tar"
+              tar -xf "$case_dir/leaf.tar" -C "$case_dir/leaf"
+              cust_layer=$(jq -r '.[0].Layers[-1]' "$case_dir/leaf/manifest.json")
+              db_layer=""
+              while IFS= read -r layer; do
+                  if grep -qE '(^|\./)nix/var/nix/db/db\.sqlite$' < <(tar -tf "$case_dir/leaf/$layer"); then
+                      db_layer="$layer"
+                      break
+                  fi
+              done < <(jq -r '.[0].Layers[]' "$case_dir/leaf/manifest.json")
+
+              if [[ -z "$db_layer" ]]; then
+                  echo "FAIL: Nix DB registration was not baked into the leaf image" >&2
+                  exit 1
+              fi
+              if [[ "$db_layer" != "$cust_layer" ]]; then
+                  echo "FAIL: Nix DB registration rides in $db_layer, not top customisation layer $cust_layer" >&2
+                  exit 1
+              fi
+
+              tar -xf "$agent_tar" -C "$case_dir/lower"
+              while IFS= read -r layer; do
+                  if grep -qE '(^|\./)nix/var/nix/db/db\.sqlite$' < <(tar -tf "$case_dir/lower/$layer"); then
+                      echo "FAIL: Nix DB registration leaked into a lower tier layer" >&2
+                      exit 1
+                  fi
+              done < <(jq -r '.[0].Layers[]' "$case_dir/lower/manifest.json")
+          }
+
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+
+          assert_generated_change "settings" \
+              "${leafProbeSettingsA.source}" \
+              "${leafProbeSettingsB.source}" \
+              "${discardContext leafProbeSettingsA}" \
+              "${discardContext leafProbeSettingsB}" \
+              "${leafProbeSettingsA.agentImage}"
+          assert_generated_change "mcp-config" \
+              "${leafProbeMcpA.source}" \
+              "${leafProbeMcpB.source}" \
+              "${discardContext leafProbeMcpA}" \
+              "${discardContext leafProbeMcpB}" \
+              "${leafProbeMcpA.agentImage}"
+          assert_generated_change "entrypoint" \
+              "${leafProbeEntrypointA.source}" \
+              "${leafProbeEntrypointB.source}" \
+              "${discardContext leafProbeEntrypointA}" \
+              "${discardContext leafProbeEntrypointB}" \
+              "${leafProbeEntrypointA.agentImage}"
+          assert_nix_db_registration_top_layer \
+              "nix-db-registration" \
+              "${leafProbeSettingsA}" \
+              "${leafProbeSettingsA.agentImage}"
+
+          echo "test-archiveless-generated-change: PASS"
         ''
       else
         ''
@@ -1974,38 +2448,46 @@ let
     text =
       if isLinux then
         ''
+          default_direct_closure=${defaultImageClosure}/store-paths
           direct_closure=${agentExclusiveDirectClosure}/store-paths
           claude_closure=${agentExclusiveClaudeClosure}/store-paths
           claude_code=${claudeCodePkg}
+          pi_agent=${piAgentPkg}
           runner=${agentExclusiveRunner}
 
-          # direct image: the runner is present, claude-code is absent.
+          if ! grep -Eq '/nix/store/[a-z0-9]{32}-loom-direct-runner$' "$default_direct_closure"; then
+              echo "FAIL: default agent=direct image closure does not contain loom-direct-runner" >&2
+              echo "  closure: $default_direct_closure" >&2
+              exit 1
+          fi
+          if grep -qxF "$claude_code" "$default_direct_closure" || grep -qxF "$pi_agent" "$default_direct_closure"; then
+              echo "FAIL: default agent=direct image closure contains a non-selected agent runtime" >&2
+              exit 1
+          fi
+
           if ! grep -qxF "$runner" "$direct_closure"; then
               echo "FAIL: direct runner missing from the agent=direct image closure" >&2
               echo "  expected: $runner" >&2
               exit 1
           fi
-          if grep -qxF "$claude_code" "$direct_closure"; then
-              echo "FAIL: claude-code present in an agent=direct image (a non-claude image" >&2
-              echo "      must carry no claude-code)" >&2
-              echo "  unexpected: $claude_code" >&2
+          if grep -qxF "$claude_code" "$direct_closure" || grep -qxF "$pi_agent" "$direct_closure"; then
+              echo "FAIL: custom agent=direct image closure contains a non-selected agent runtime" >&2
               exit 1
           fi
 
-          # claude image: claude-code is present, the direct runner is absent
-          # (exactly one agent per image).
           if ! grep -qxF "$claude_code" "$claude_closure"; then
               echo "FAIL: claude-code missing from the agent=claude image closure" >&2
               echo "  expected: $claude_code" >&2
               exit 1
           fi
-          if grep -qxF "$runner" "$claude_closure"; then
-              echo "FAIL: direct runner present in an agent=claude image (more than one agent)" >&2
-              echo "  unexpected: $runner" >&2
+          if grep -qxF "$runner" "$claude_closure" \
+              || grep -qxF "$pi_agent" "$claude_closure" \
+              || grep -Eq '/nix/store/[a-z0-9]{32}-loom-direct-runner$' "$claude_closure"; then
+              echo "FAIL: agent=claude image closure contains a non-selected agent runtime" >&2
               exit 1
           fi
 
-          echo "test-agent-exclusive: PASS (direct image has runner + no claude-code; claude image has claude-code + no runner)"
+          echo "test-agent-exclusive: PASS"
         ''
       else
         ''
@@ -2537,6 +3019,10 @@ in
     linuxImageArchivelessSourceTest
     imageDigestNoTarTest
     imageTierGraphTest
+    imageNixConfigTest
+    imageCaCertificatesTest
+    imageEntrypointCommandTest
+    imageTierMembershipTest
     wrixImagesSourceKindTest
     wrixImageLabelsTest
     claudeRuntimeNoopTest
