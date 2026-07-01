@@ -2,14 +2,15 @@
 # Verify wrix.mkDevShell composition rules (specs/profiles.md § mkDevShell).
 #
 #   test_profile_required
-#     mkDevShell {} (no profile) errors at evaluation — no two-arg fallback.
+#     mkDevShell rejects missing/conflicting profile sources, and sandbox.devShell
+#     rejects attempts to override its bound sandbox/profile.
 #
 #   test_profile_shellhook_spliced
 #     mkDevShell { profile = profiles.rust; } exports the rust profile's
 #     shellHook values when the generated hook is sourced.
 #
 #   test_packages_merge
-#     mkDevShell { profile; packages = [extra]; } makes both profile tools
+#     mkDevShell { profile; packages = [extra]; } makes both profile.packages
 #     and extra tools resolvable on PATH.
 #
 #   test_env_right_merge
@@ -130,19 +131,36 @@ source_hook_env() {
 env_value() {
   local env_output="$1"
   local key="$2"
-  awk -v key="$key" 'BEGIN { FS = "=" } $1 == key { sub("^[^=]*=", ""); print; exit }' <<<"$env_output"
+  local name value
+  while IFS='=' read -r name value; do
+    if [[ "$name" == "$key" ]]; then
+      printf '%s\n' "$value"
+      return 0
+    fi
+  done <<<"$env_output"
 }
 
 # ============================================================================
-# mkDevShell requires `profile` — no default, no two-arg fallback.
+# mkDevShell/sandbox.devShell reject missing or conflicting profile sources.
 # ============================================================================
 test_profile_required() {
+  local sandbox_expr
+  sandbox_expr="let sandbox = lib.mkSandbox { profile = lib.profiles.base; }; in"
+
   if eval_expr_raw "(lib.mkDevShell {}).shellHook" >/dev/null 2>/dev/null; then
     echo "FAIL: lib.mkDevShell {} should error at evaluation (missing profile)" >&2
     return 1
   fi
-  if eval_expr_raw "let sandbox = lib.mkSandbox { profile = lib.profiles.base; }; in (lib.mkDevShell { inherit sandbox; profile = lib.profiles.base; }).shellHook" >/dev/null 2>/dev/null; then
+  if eval_expr_raw "$sandbox_expr (lib.mkDevShell { inherit sandbox; profile = lib.profiles.base; }).shellHook" >/dev/null 2>/dev/null; then
     echo "FAIL: lib.mkDevShell should reject simultaneous sandbox and profile" >&2
+    return 1
+  fi
+  if eval_expr_raw "$sandbox_expr (sandbox.devShell { profile = lib.profiles.base; }).shellHook" >/dev/null 2>/dev/null; then
+    echo "FAIL: sandbox.devShell should reject profile override" >&2
+    return 1
+  fi
+  if eval_expr_raw "$sandbox_expr (sandbox.devShell { sandbox = sandbox; }).shellHook" >/dev/null 2>/dev/null; then
+    echo "FAIL: sandbox.devShell should reject sandbox override" >&2
     return 1
   fi
 }
@@ -190,7 +208,7 @@ test_profile_shellhook_spliced() {
 }
 
 # ============================================================================
-# packages = profile.packages ++ packages, visible through the dev env PATH
+# profile.packages ++ packages is visible through the dev env PATH
 # ============================================================================
 test_packages_merge() {
   local env_file result profile_cmd extra_cmd profile_output extra_output
@@ -228,7 +246,6 @@ test_packages_merge() {
       profile = {
         name = \"mkdevshell-test\";
         packages = [ profileTool ];
-        hostPackages = [ profileTool ];
         env = { };
         shellHook = \"\";
         mounts = [ ];

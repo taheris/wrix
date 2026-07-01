@@ -29,9 +29,9 @@ to keep that identity from drifting.
 
 `mkDevShell` additionally manages workspace lifecycle integration: it starts
 `services.md`'s per-workspace service container when beads or the project Nix
-cache is enabled, and it points `core.hooksPath` at a standalone
-`wrix.prekHooks` derivation — see [Prek hook management](#prek-hook-management)
-for the hook contract.
+cache is enabled, and it points `core.hooksPath` at the hook derivation selected
+by `prekHooks`; see [Prek hook management](#prek-hook-management) for the
+devshell selection rules.
 
 Rust toolchains are baked into the container image at build time, never
 bootstrapped from rustup at container start. fenix supplies proper Nix
@@ -459,28 +459,22 @@ the publish manifest is missing or stale it prints a short reminder unless
 
 ### Prek hook management
 
-The lifecycle owns `core.hooksPath` configuration for prek-using
-repositories. Two conditions gate the install: (1)
-`.pre-commit-config.yaml` exists in the working directory, AND (2)
-`prekHooks` resolves to a derivation. When both hold, the lifecycle
-runs `git config --local core.hooksPath ${derivation}` on every
-devshell entry, pointing git at a frozen Nix-store bundle of shims.
-The default bundle is `wrix.prekHooks`, which ships a `prek
-hook-impl --hook-type=<stage>` shim for every stage prek serves. The
-pre-push shim writes `.wrix/push-verified` (HEAD SHA) after a
-successful check so a subsequent `git push` can short-circuit if the
-SSH connection died during validation. Consumers do not write their
-own shims, do not vendor `lib/prek/hooks/`, and do not set
-`core.hooksPath` from their own shellHook. There is no `prek install
--f` step to clobber hand-authored files. See `specs/pre-commit.md`
-for the bundle's contracts and the scope decision around
-concurrent-commit serialization.
+The lifecycle owns the devshell side of `core.hooksPath` configuration for
+prek-using repositories. `specs/pre-commit.md` owns the hook bundle export,
+stage set, shim behavior, wrappers, and pre-push retry stamp. Two conditions
+gate the devshell install: (1) `.pre-commit-config.yaml` exists in the working
+directory, AND (2) `prekHooks` resolves to a derivation. When both hold, the
+lifecycle runs `git config --local core.hooksPath ${derivation}` on every
+devshell entry, pointing git at the selected Nix-store hook bundle. Consumers
+choose the default bundle, opt out, or substitute a whole derivation via
+`prekHooks`; they do not set `core.hooksPath` from their own shellHook or run
+`prek install` as part of the `mkDevShell` contract.
 
 `prekHooks` resolves as follows:
 
 | Value | Resolves to |
 |-------|-------------|
-| `true` (the default) | `wrix.prekHooks` |
+| `true` (the default) | the default hook bundle owned by `specs/pre-commit.md` |
 | `false` | nothing — lifecycle is a no-op for hooks |
 | a derivation | the substituted derivation, used as-is |
 
@@ -496,10 +490,9 @@ is passive: the lifecycle does nothing, including not clearing a
 from `true` to `false` and want the stale value cleared run
 `git config --local --unset core.hooksPath` themselves.
 
-`wrix.prekHooks` is exported at the lib level. Consumers needing a
-different shim set substitute a hand-built derivation via `prekHooks =
-...`. There is no parameterized constructor in v1 — see
-`specs/pre-commit.md` *Out of Scope* for the deferral rationale.
+Consumers needing a different hook bundle substitute a hand-built derivation
+via `prekHooks = ...`. There is no parameterized constructor in v1; the exported
+bundle and constructor deferral are owned by `specs/pre-commit.md`.
 
 A consumer that wants a different shell wrapper (custom `pkgs.mkShell`
 attrs, alternate hook layering) is reaching outside the contract — they
@@ -701,11 +694,7 @@ dests live under `/home/wrix/` inside the container, not under
   [system](bash tests/profiles/mkdevshell.sh test_profile_required)
 - `wrix.mkDevShell { profile = ...; }` starts the workspace service container by default, exposes the project cache `file://` substituter/trusted key/post-build hook to host Nix, uses the `nixCache` publish/warm schema from `services.md`, and prints a suppressible reminder when the publish manifest is missing or stale; `nixCache = false` suppresses only the cache service, not beads
   [system](bash tests/services/host-nix-config.sh test_mkdevshell_nix_cache)
-- The materialized `wrix.prekHooks` derivation contains exactly five executable files (one per stage: `pre-commit`, `pre-push`, `prepare-commit-msg`, `post-checkout`, `post-merge`) and no other paths
-  [system](bash tests/profiles/prek-hooks-bundle.sh test_bundle_contents)
-- Each materialized shim's content matches `prek hook-impl --hook-type=<stage>` for its stage
-  [system](bash tests/profiles/prek-hooks-bundle.sh test_shims_are_plain_hook_impl)
-- `wrix.mkDevShell { profile = ...; }` with `.pre-commit-config.yaml` present sets `core.hooksPath` to `${wrix.prekHooks}` on entry
+- `wrix.mkDevShell { profile = ...; }` with `.pre-commit-config.yaml` present sets `core.hooksPath` to the default hook bundle on entry
   [system](bash tests/profiles/mkdevshell-prek.sh test_auto_set_when_config_present)
 - `wrix.mkDevShell { profile = ...; }` without `.pre-commit-config.yaml` does NOT set `core.hooksPath` on entry
   [system](bash tests/profiles/mkdevshell-prek.sh test_skip_when_config_absent)
@@ -713,7 +702,7 @@ dests live under `/home/wrix/` inside the container, not under
   [system](bash tests/profiles/mkdevshell-prek.sh test_opt_out)
 - `wrix.mkDevShell { profile = ...; prekHooks = <custom-derivation>; }` sets `core.hooksPath` to the substituted derivation when `.pre-commit-config.yaml` is present
   [system](bash tests/profiles/mkdevshell-prek.sh test_derivation_substitute)
-- When `prekHooks` resolves to a derivation and a previous session left `core.hooksPath` set to a different store path, entering `mkDevShell` overwrites it and prints a one-line message naming the old value (covers both the `true` default → `${wrix.prekHooks}` case and the substituted-derivation case)
+- When `prekHooks` resolves to a derivation and a previous session left `core.hooksPath` set to a different store path, entering `mkDevShell` overwrites it and prints a one-line message naming the old value (covers both the `true` default case and the substituted-derivation case)
   [system](bash tests/profiles/mkdevshell-prek.sh test_stale_config_overwrite_with_warning)
 - `wrix.mkDevShell { profile = ...; prekHooks = false; }` entered in a repo whose local git config already has `core.hooksPath` set leaves that value unchanged (passive opt-out preserves stale state per design)
   [system](bash tests/profiles/mkdevshell-prek.sh test_opt_out_preserves_stale_config)
@@ -767,7 +756,7 @@ dests live under `/home/wrix/` inside the container, not under
 7. **Toolchain Configuration** — Top-level `rustProfile { toolchain; sha256; ... }` constructor produces a project-pinned rust profile from a `rust-toolchain.toml`
 8. **Rust Package Construction** — Rust profile exposes `buildPackage` for crane-backed Rust packages with split `bin`/`clippy`/`nextest` derivations
 9. **Devshell Construction** — `sandbox.devShell { ... }` is the preferred host devshell entry point when a concrete sandbox exists, and top-level `mkDevShell { profile; ... }` remains available for profile-only shells; consumers do not splice `profile.shellHook` directly
-10. **Prek Hook Management** — `mkDevShell` configures `core.hooksPath` from a wrix-shipped shim bundle (`wrix.prekHooks`) when `.pre-commit-config.yaml` is present, opted out via `prekHooks = false`. Consumers do not vendor shims or set `core.hooksPath` themselves.
+10. **Prek Hook Management** — `mkDevShell` configures `core.hooksPath` from the hook derivation selected by `prekHooks` when `.pre-commit-config.yaml` is present, with `prekHooks = false` as the opt-out. The bundle's contents and shim behavior are owned by `specs/pre-commit.md`.
 11. **Project Nix Cache Integration** — `mkDevShell` enables the `services.md` project cache by default for host pulls and host publishing of project-scoped Nix derivations; `nixCache = false` opts out.
 
 ### Non-Functional
