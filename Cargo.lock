@@ -371,6 +371,7 @@ name = "wrix-cache"
 version = "0.1.0"
 dependencies = [
  "fs2",
+ "serde_json",
  "wrix-core",
 ]
 

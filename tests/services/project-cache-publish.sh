@@ -35,8 +35,7 @@ if [[ "${1:-}" == "path-info" && "${2:-}" == "--json" ]]; then
       printf '{"/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-pkg":{}}\n'
       ;;
     .#checks.x86_64-linux.check)
-      printf 'missing check\n' >&2
-      exit 1
+      printf '{"/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-check":{}}\n'
       ;;
     *)
       printf 'unexpected path-info installable: %s\n' "${3:-}" >&2
@@ -97,6 +96,18 @@ if [[ "${1:-}" == "--generate-binary-cache-key" ]]; then
   public_path="$4"
   printf '%s-secret\n' "$key_name" >"$secret_path"
   printf '%s:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n' "$key_name" >"$public_path"
+  exit 0
+fi
+
+if [[ "${1:-}" == "--check-validity" && "${2:-}" == "--print-invalid" ]]; then
+  shift 2
+  for path in "$@"; do
+    case "$path" in
+      /nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-check)
+        printf '%s\n' "$path"
+        ;;
+    esac
+  done
   exit 0
 fi
 
@@ -203,9 +214,11 @@ assert_not_contains() {
 
 test_fake_publish_tools_contract() {
   with_fake_tools
-  local path_info copy_output closure_output
+  local path_info copy_output closure_output invalid_output
   path_info="$($WRIX_NIX_BIN path-info --json .#packages.x86_64-linux.pkg)"
   assert_contains "fake path-info" "$path_info" "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-pkg"
+  invalid_output="$($WRIX_NIX_STORE_BIN --check-validity --print-invalid /nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-check)"
+  assert_contains "fake validity" "$invalid_output" "/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-check"
   closure_output="$($WRIX_NIX_STORE_BIN --query --requisites /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-pkg)"
   assert_contains "fake closure" "$closure_output" "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-local-dep"
   mkdir -p "$TEST_TMP/cache-contract"
@@ -243,6 +256,7 @@ $(cd "$workspace" && "$wrix_bin" service cache publish)"
   assert_contains "publish output" "$output" "unrealized root: .#checks.x86_64-linux.check"
   assert_contains "copy command" "$(cat "$WRIX_FAKE_COPY_LOG")" "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-pkg"
   assert_contains "copy command" "$(cat "$WRIX_FAKE_COPY_LOG")" "/nix/store/dddddddddddddddddddddddddddddddd-pending"
+  assert_not_contains "copy command" "$(cat "$WRIX_FAKE_COPY_LOG")" "/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-check"
   assert_not_contains "nix log" "$(cat "$WRIX_FAKE_NIX_LOG")" "nix build"
 }
 

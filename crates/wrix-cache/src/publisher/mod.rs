@@ -474,12 +474,35 @@ fn realized_roots(roots: Vec<Root>) -> io::Result<RealizedRoots> {
                 continue;
             }
         }
-        realized.push(root);
+        if store_paths_valid(&root.out_paths)? {
+            realized.push(root);
+        } else {
+            unrealized.push(format!("unrealized root: {}", root.installable));
+        }
     }
     Ok(RealizedRoots {
         roots: realized,
         unrealized,
     })
+}
+
+fn store_paths_valid(paths: &[String]) -> io::Result<bool> {
+    if paths.is_empty() {
+        return Ok(false);
+    }
+    let output = Command::new(nix_store_bin())
+        .arg("--check-validity")
+        .arg("--print-invalid")
+        .args(paths)
+        .stdin(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()?;
+    if !output.status.success() {
+        return Err(io::Error::other(
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        ));
+    }
+    Ok(output.stdout.is_empty())
 }
 
 fn output_paths(installable: &str) -> io::Result<Option<Vec<String>>> {
@@ -493,12 +516,28 @@ fn output_paths(installable: &str) -> io::Result<Option<Vec<String>>> {
         return Ok(None);
     }
     let text = String::from_utf8_lossy(&output.stdout);
-    let paths = parse_store_paths(&text);
+    let paths = parse_path_info_paths(&text)?;
     if paths.is_empty() {
         Ok(None)
     } else {
         Ok(Some(paths))
     }
+}
+
+fn parse_path_info_paths(input: &str) -> io::Result<Vec<String>> {
+    let value: serde_json::Value = serde_json::from_str(input)
+        .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?;
+    let Some(object) = value.as_object() else {
+        return Ok(Vec::new());
+    };
+    let mut paths = object
+        .keys()
+        .filter(|value| value.starts_with("/nix/store/"))
+        .cloned()
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
 }
 
 fn build_roots(roots: &[Root]) -> io::Result<()> {
@@ -1193,17 +1232,6 @@ fn split_paths(input: &str) -> Vec<String> {
         .collect()
 }
 
-fn parse_store_paths(input: &str) -> Vec<String> {
-    let mut paths = parse_json_string_array(input)
-        .into_iter()
-        .filter(|value| value.starts_with("/nix/store/"))
-        .collect::<Vec<_>>();
-    paths.extend(split_paths(input));
-    paths.sort();
-    paths.dedup();
-    paths
-}
-
 fn parse_json_string_array(input: &str) -> Vec<String> {
     let mut values = Vec::new();
     let mut rest = input;
@@ -1426,7 +1454,7 @@ fn escape_json(input: &str) -> String {
 
 #[cfg(test)]
 mod test {
-    use super::{parse_store_paths, roots_from_file, safe_marker_name};
+    use super::{parse_path_info_paths, roots_from_file, safe_marker_name};
     use std::fs;
 
     #[test]
@@ -1445,15 +1473,12 @@ mod test {
     }
 
     #[test]
-    fn extracts_store_paths_from_nix_json() {
-        let paths = parse_store_paths(r#"{"/nix/store/aaa-root":{"path":"/nix/store/bbb-out"}}"#);
-        assert_eq!(
-            paths,
-            vec![
-                String::from("/nix/store/aaa-root"),
-                String::from("/nix/store/bbb-out")
-            ]
-        );
+    fn extracts_output_paths_from_nix_path_info_json() {
+        let paths = parse_path_info_paths(
+            r#"{"/nix/store/aaa-root":{"deriver":"/nix/store/bbb-root.drv"}}"#,
+        )
+        .unwrap();
+        assert_eq!(paths, vec![String::from("/nix/store/aaa-root")]);
     }
 
     #[test]
