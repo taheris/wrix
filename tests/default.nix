@@ -134,11 +134,12 @@ let
 
   prePushSmokeTests = pkgs.lib.removeAttrs smokeTests [
     "image-builds"
+    "package-runtime-path"
     "package-script-syntax"
   ];
 
   ciChecks = rustChecks // {
-    inherit (smokeTests) image-builds package-script-syntax;
+    inherit (smokeTests) image-builds package-runtime-path package-script-syntax;
   };
 
   # README example verification

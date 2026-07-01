@@ -15,6 +15,7 @@ let
     mapAttrs
     attrValues
     ;
+  inherit (pkgs.lib) makeBinPath optionals;
 
   isDarwin = elem system [
     "aarch64-darwin"
@@ -305,6 +306,21 @@ let
       finalPiSettings = basePiSettings // (if agent == "pi" then agentSettings else { });
 
       launcher = if isLinux || isDarwin then serviceCli else throw "Unsupported system: ${system}";
+      launcherRuntimePath = makeBinPath (
+        [ pkgs.nix ]
+        ++ optionals isLinux [
+          pkgs.podman
+          pkgs.skopeo
+        ]
+        ++ optionals isDarwin [ pkgs.skopeo ]
+      );
+      launcherRuntimePathSetup = ''
+        if [[ -n "''${PATH:-}" ]]; then
+          export PATH="${launcherRuntimePath}:$PATH"
+        else
+          export PATH="${launcherRuntimePath}"
+        fi
+      '';
 
       # Expose the image derivation for consumers that inspect the image directly.
       # Its `.source` metadata is the platform install source: a Linux descriptor
@@ -407,11 +423,13 @@ let
             cat > "$out/bin/wrix" <<'WRIX_WRAPPER'
             #!${pkgs.runtimeShell}
             set -euo pipefail
+            ${launcherRuntimePathSetup}
             exec ${launcher}/bin/wrix --profile-config ${profileConfig} "$@"
             WRIX_WRAPPER
             cat > "$out/bin/wrix-run" <<'WRIX_RUN_WRAPPER'
             #!${pkgs.runtimeShell}
             set -euo pipefail
+            ${launcherRuntimePathSetup}
             case "''${1:-}" in
               run|spawn|service|beads)
                 exec ${launcher}/bin/wrix --profile-config ${profileConfig} "$@"
