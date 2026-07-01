@@ -124,6 +124,7 @@ struct Plan<'a> {
     spawn_mounts: Vec<RenderedMount>,
     services: ServicesState,
     network_mode: String,
+    git_identity: GitIdentity,
 }
 
 #[derive(Clone, Debug)]
@@ -158,6 +159,13 @@ struct ImageSource {
     source: String,
     kind: SourceKind,
     digest: String,
+}
+
+struct GitIdentity {
+    author_name: String,
+    author_email: String,
+    committer_name: String,
+    committer_email: String,
 }
 
 impl<'a> Plan<'a> {
@@ -245,6 +253,7 @@ impl<'a> Plan<'a> {
             spawn_mounts,
             services,
             network_mode,
+            git_identity: GitIdentity::load(),
         })
     }
 
@@ -577,13 +586,26 @@ impl<'a> Plan<'a> {
                 String::from("CLAUDE_CODE_OAUTH_TOKEN"),
                 env::var("CLAUDE_CODE_OAUTH_TOKEN").unwrap_or_default(),
             ));
-            if let Ok(value) = env::var("WRIX_GIT_SIGN") {
-                pairs.push((String::from("WRIX_GIT_SIGN"), value));
-            }
         }
         pairs.extend([
             (String::from("BD_NO_DAEMON"), String::from("1")),
             (String::from("HOME"), String::from("/home/wrix")),
+            (
+                String::from("GIT_AUTHOR_NAME"),
+                self.git_identity.author_name.clone(),
+            ),
+            (
+                String::from("GIT_AUTHOR_EMAIL"),
+                self.git_identity.author_email.clone(),
+            ),
+            (
+                String::from("GIT_COMMITTER_NAME"),
+                self.git_identity.committer_name.clone(),
+            ),
+            (
+                String::from("GIT_COMMITTER_EMAIL"),
+                self.git_identity.committer_email.clone(),
+            ),
             (
                 String::from("WRIX_AGENT"),
                 self.request.profile_config.agent.kind.as_str().to_owned(),
@@ -598,6 +620,9 @@ impl<'a> Plan<'a> {
                     .join(","),
             ),
         ]);
+        if let Ok(value) = env::var("WRIX_GIT_SIGN") {
+            pairs.push((String::from("WRIX_GIT_SIGN"), value));
+        }
         if let Some(cache_host) = &self.services.project_cache_host {
             pairs.push((String::from("WRIX_PROJECT_CACHE_HOST"), cache_host.clone()));
         }
@@ -678,6 +703,32 @@ impl<'a> Plan<'a> {
 
     fn cpus_for_darwin(&self) -> u32 {
         self.request.profile_config.resources.cpus.unwrap_or(2)
+    }
+}
+
+impl GitIdentity {
+    fn load() -> Self {
+        let author_name = first_configured_value(&[
+            env_value("GIT_AUTHOR_NAME"),
+            env_value("GIT_COMMITTER_NAME"),
+            git_global_config("user.name"),
+        ])
+        .unwrap_or_else(|| String::from("Wrix Sandbox"));
+        let author_email = first_configured_value(&[
+            env_value("GIT_AUTHOR_EMAIL"),
+            env_value("GIT_COMMITTER_EMAIL"),
+            git_global_config("user.email"),
+        ])
+        .unwrap_or_else(|| String::from("sandbox@wrix.dev"));
+        let committer_name = env_value("GIT_COMMITTER_NAME").unwrap_or_else(|| author_name.clone());
+        let committer_email =
+            env_value("GIT_COMMITTER_EMAIL").unwrap_or_else(|| author_email.clone());
+        Self {
+            author_name,
+            author_email,
+            committer_name,
+            committer_email,
+        }
     }
 }
 
@@ -1266,6 +1317,34 @@ fn trim_stdout(stdout: &[u8]) -> String {
 
 fn non_empty_override(value: Option<&str>) -> Option<&str> {
     value.filter(|value| !value.is_empty())
+}
+
+fn first_configured_value(values: &[Option<String>]) -> Option<String> {
+    values.iter().find_map(Clone::clone)
+}
+
+fn env_value(name: &str) -> Option<String> {
+    match env::var(name) {
+        Ok(value) if !value.is_empty() => Some(value),
+        Ok(_value) => None,
+        Err(_error) => None,
+    }
+}
+
+fn git_global_config(key: &str) -> Option<String> {
+    let output = match ProcessCommand::new("git")
+        .args(["config", "--global", "--get", key])
+        .stdin(Stdio::null())
+        .output()
+    {
+        Ok(output) => output,
+        Err(_error) => return None,
+    };
+    if !output.status.success() {
+        return None;
+    }
+    let value = trim_stdout(&output.stdout);
+    (!value.is_empty()).then_some(value)
 }
 
 fn env_flag(name: &str) -> bool {

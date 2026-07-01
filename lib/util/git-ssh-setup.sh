@@ -7,13 +7,63 @@
 #   WRIX_SIGNING_KEY — path to an ed25519 key used for commit signing
 #   WRIX_GIT_SIGN    — set to "0" to disable auto-signing (default: on
 #                        when WRIX_SIGNING_KEY is set)
+#   GIT_AUTHOR_* / GIT_COMMITTER_* — preferred commit identity values
 #
-# Emits a `GIT_SSH_COMMAND` env var and stores the same command in
-# git's global `core.sshCommand` so `git push` and other git-over-ssh
-# operations use the deploy key, and configures global git signing when
-# a signing key is provided. Safe to
-# source multiple times and safe to source when no keys are present — it
-# becomes a no-op.
+# Emits a pinned `GIT_SSH_COMMAND`, stores the same command in git's global
+# `core.sshCommand`, configures global commit identity, and configures SSH
+# signing when a signing key is provided. Safe to source multiple times and
+# safe to source when no keys are present.
+
+wrix_git_global_value() {
+  local key="$1"
+  local value
+  if value=$(git config --global --get "$key"); then
+    [[ -n "$value" ]] || return 1
+    printf '%s\n' "$value"
+    return 0
+  fi
+  return 1
+}
+
+wrix_first_non_empty() {
+  local value
+  for value in "$@"; do
+    if [[ -n "$value" ]]; then
+      printf '%s\n' "$value"
+      return 0
+    fi
+  done
+  return 1
+}
+
+wrix_configure_git_identity() {
+  local author_name author_email committer_name committer_email
+
+  if ! author_name=$(wrix_first_non_empty "${GIT_AUTHOR_NAME:-}" "${GIT_COMMITTER_NAME:-}"); then
+    if ! author_name=$(wrix_git_global_value user.name); then
+      author_name="Wrix Sandbox"
+    fi
+  fi
+  if ! author_email=$(wrix_first_non_empty "${GIT_AUTHOR_EMAIL:-}" "${GIT_COMMITTER_EMAIL:-}"); then
+    if ! author_email=$(wrix_git_global_value user.email); then
+      author_email="sandbox@wrix.dev"
+    fi
+  fi
+  if ! committer_name=$(wrix_first_non_empty "${GIT_COMMITTER_NAME:-}"); then
+    committer_name="$author_name"
+  fi
+  if ! committer_email=$(wrix_first_non_empty "${GIT_COMMITTER_EMAIL:-}"); then
+    committer_email="$author_email"
+  fi
+
+  git config --global --replace-all user.name "$author_name"
+  git config --global --replace-all user.email "$author_email"
+
+  export GIT_AUTHOR_NAME="$author_name"
+  export GIT_AUTHOR_EMAIL="$author_email"
+  export GIT_COMMITTER_NAME="$committer_name"
+  export GIT_COMMITTER_EMAIL="$committer_email"
+}
 
 write_wrix_ssh_config() {
   local ssh_home="$1"
@@ -24,6 +74,8 @@ write_wrix_ssh_config() {
 Host github.com
   IdentityFile $WRIX_DEPLOY_KEY
   IdentitiesOnly yes
+  StrictHostKeyChecking yes
+  UserKnownHostsFile /etc/ssh/ssh_known_hosts
 SSHEOF
   chmod 600 "$ssh_home/.ssh/config"
 }
@@ -36,9 +88,59 @@ wrix_effective_user_home() {
   fi
 }
 
+wrix_signing_principals() {
+  local configured_email="$1"
+  local principal seen
+  seen=""
+  for principal in "$configured_email" "${GIT_AUTHOR_EMAIL:-}" "${GIT_COMMITTER_EMAIL:-}"; do
+    [[ -n "$principal" ]] || continue
+    case ",$seen," in
+      *",$principal,"*) ;;
+      *)
+        printf '%s\n' "$principal"
+        seen="$seen,$principal"
+        ;;
+    esac
+  done
+}
+
+wrix_configure_git_signing() {
+  local allowed_signers configured_email principal pubkey pubkey_tmp
+
+  git config --global --replace-all gpg.format ssh
+  git config --global --replace-all user.signingkey "$WRIX_SIGNING_KEY"
+
+  mkdir -p "$HOME/.config/git"
+  pubkey_tmp="$HOME/.config/git/signing_key.pub.tmp"
+  allowed_signers="$HOME/.config/git/allowed_signers"
+  # best-effort: invalid key material will fail again at commit signing time.
+  if ssh-keygen -y -f "$WRIX_SIGNING_KEY" > "$pubkey_tmp" 2>/dev/null; then
+    pubkey=$(<"$pubkey_tmp")
+    if ! configured_email=$(wrix_git_global_value user.email); then
+      configured_email="${GIT_AUTHOR_EMAIL:-sandbox@wrix.dev}"
+    fi
+    : > "$allowed_signers"
+    while IFS= read -r principal; do
+      printf '%s %s\n' "$principal" "$pubkey" >> "$allowed_signers"
+    done < <(wrix_signing_principals "$configured_email")
+    rm -f "$pubkey_tmp"
+    git config --global --replace-all gpg.ssh.allowedSignersFile "$allowed_signers"
+  else
+    rm -f "$pubkey_tmp"
+  fi
+
+  if [[ "${WRIX_GIT_SIGN:-1}" = "0" ]]; then
+    git config --global --replace-all commit.gpgsign false
+  else
+    git config --global --replace-all commit.gpgsign true
+  fi
+}
+
+wrix_configure_git_identity
+
 if [[ -n "${WRIX_DEPLOY_KEY:-}" ]] && [[ -f "$WRIX_DEPLOY_KEY" ]]; then
   printf -v WRIX_DEPLOY_KEY_SSH_ARG '%q' "$WRIX_DEPLOY_KEY"
-  export GIT_SSH_COMMAND="ssh -i $WRIX_DEPLOY_KEY_SSH_ARG -o IdentitiesOnly=yes"
+  export GIT_SSH_COMMAND="ssh -i $WRIX_DEPLOY_KEY_SSH_ARG -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/ssh/ssh_known_hosts"
   git config --global --replace-all core.sshCommand "$GIT_SSH_COMMAND"
 
   WRIX_EFFECTIVE_HOME=$(wrix_effective_user_home)
@@ -50,21 +152,5 @@ if [[ -n "${WRIX_DEPLOY_KEY:-}" ]] && [[ -f "$WRIX_DEPLOY_KEY" ]]; then
 fi
 
 if [[ -n "${WRIX_SIGNING_KEY:-}" ]] && [[ -f "$WRIX_SIGNING_KEY" ]]; then
-  git config --global gpg.format ssh
-  git config --global user.signingkey "$WRIX_SIGNING_KEY"
-
-  mkdir -p "$HOME/.config/git"
-  PUBKEY_TMP="$HOME/.config/git/signing_key.pub.tmp"
-  # best-effort: ssh-keygen prints "no such file" / "invalid format" to stderr
-  # when the key is unreadable; the if-guard already handles failure, the
-  # stderr would just clutter container startup logs.
-  if ssh-keygen -y -f "$WRIX_SIGNING_KEY" > "$PUBKEY_TMP" 2>/dev/null; then
-    echo "${GIT_AUTHOR_EMAIL:-sandbox@wrix.dev} $(cat "$PUBKEY_TMP")" > "$HOME/.config/git/allowed_signers"
-    rm "$PUBKEY_TMP"
-    git config --global gpg.ssh.allowedSignersFile "$HOME/.config/git/allowed_signers"
-  fi
-
-  if [[ "${WRIX_GIT_SIGN:-1}" != "0" ]]; then
-    git config --global commit.gpgsign true
-  fi
+  wrix_configure_git_signing
 fi

@@ -242,6 +242,12 @@ this section is the index, not a restatement.
   produces a commit whose `git cat-file -p HEAD` output contains a
   non-empty `gpgsig` field.
   [system](bash tests/security/nested-key-propagation.sh)
+- A fresh spawned sandbox configures global `user.name` / `user.email`,
+  installs pinned GitHub host keys at `/etc/ssh/ssh_known_hosts`, uses
+  the mounted deploy key with strict host-key checking for GitHub SSH,
+  makes an empty signed commit, and verifies that commit as a good SSH
+  signature without manual `ssh-keyscan` or `git config`.
+  [system](bash tests/security/git-ssh-bootstrap.sh)
 - When `WRIX_DEPLOY_KEY` or `WRIX_SIGNING_KEY` is set in the
   launcher's environment but the pointed-at file does not exist, the
   launcher exits non-zero with a stderr message naming the missing

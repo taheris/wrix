@@ -46,6 +46,7 @@ let
     optionalString
     ;
   sshConfig = import ../util/ssh.nix;
+  knownHosts = import ./known-hosts.nix { inherit pkgs; };
 
   notifyClient = import ../notify/client.nix { inherit pkgs; };
 
@@ -273,8 +274,11 @@ let
       chmod 1777 tmp var/cache var/tmp
       chmod 777 home/wrix
 
-      mkdir -p etc/wrix
+      mkdir -p etc/wrix/known_hosts_dir etc/ssh
       printf '%s\n' '${agent}' > etc/wrix/image-agent
+      cp ${knownHosts}/known_hosts etc/wrix/known_hosts_dir/known_hosts
+      cp ${knownHosts}/known_hosts etc/ssh/ssh_known_hosts
+      chmod 0644 etc/wrix/known_hosts_dir/known_hosts etc/ssh/ssh_known_hosts
       echo "127.0.0.1 localhost" > etc/hosts
 
       cp ${entrypointSh} entrypoint.sh
