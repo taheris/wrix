@@ -395,6 +395,10 @@ dependencies = [
 name = "wrix-sandbox"
 version = "0.1.0"
 dependencies = [
+ "displaydoc",
+ "serde",
+ "serde_json",
+ "thiserror",
  "wrix-core",
 ]
 

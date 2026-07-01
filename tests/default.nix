@@ -38,6 +38,7 @@ let
       crane
       fenix
       ;
+    serviceCli = wrix.rustPackage.wrix;
   };
 
   # Test sandbox image with `hello` as a stand-in for claude/beads.

@@ -11,7 +11,6 @@
 let
   inherit (builtins)
     concatMap
-    concatStringsSep
     elem
     mapAttrs
     attrValues
@@ -25,9 +24,6 @@ let
     "aarch64-linux"
     "x86_64-linux"
   ];
-
-  darwinSandbox = import ./darwin { inherit pkgs serviceCli; };
-  linuxSandbox = import ./linux { inherit pkgs serviceCli; };
 
   manifest = import ./manifest.nix { inherit pkgs; };
   imageTagLib = import ../util/image-tag.nix { };
@@ -308,35 +304,7 @@ let
 
       finalPiSettings = basePiSettings // (if agent == "pi" then agentSettings else { });
 
-      # Compute comma-separated network allowlist for WRIX_NETWORK=limit mode
-      networkAllowlist = concatStringsSep "," (finalProfile.networkAllowlist or [ ]);
-
-      # Profile-baked launcher (mounts, writableDirs, networkAllowlist) with
-      # no image interpolation. Image, agent, resources, network, service, and
-      # feature defaults are supplied by immutable ProfileConfig JSON.
-      launcher =
-        if isLinux then
-          linuxSandbox.mkSandbox {
-            profile = finalProfile;
-            inherit
-              cpus
-              memoryMb
-              deployKey
-              networkAllowlist
-              ;
-          }
-        else if isDarwin then
-          darwinSandbox.mkSandbox {
-            profile = finalProfile;
-            inherit
-              cpus
-              memoryMb
-              deployKey
-              networkAllowlist
-              ;
-          }
-        else
-          throw "Unsupported system: ${system}";
+      launcher = if isLinux || isDarwin then serviceCli else throw "Unsupported system: ${system}";
 
       # Expose the image derivation for consumers that inspect the image directly.
       # Its `.source` metadata is the platform install source: a Linux descriptor
@@ -439,14 +407,7 @@ let
             cat > "$out/bin/wrix" <<'WRIX_WRAPPER'
             #!${pkgs.runtimeShell}
             set -euo pipefail
-            case "''${1:-}" in
-              --help|-h|help|service|beads)
-                exec ${serviceCli}/bin/wrix "$@"
-                ;;
-              *)
-                exec ${launcher}/bin/wrix --profile-config ${profileConfig} "$@"
-                ;;
-            esac
+            exec ${launcher}/bin/wrix --profile-config ${profileConfig} "$@"
             WRIX_WRAPPER
             chmod +x "$out/bin/wrix"
           '';

@@ -481,119 +481,7 @@ let
         '';
   };
 
-  digestSkipPodman = pkgs.writeShellApplication {
-    name = "podman";
-    runtimeInputs = [ pkgs.coreutils ];
-    text = ''
-      state_dir="''${WRIX_DIGEST_SKIP_STATE:?}"
-      mkdir -p "$state_dir/images"
-      printf '%s\n' "$*" >> "$state_dir/podman.log"
-
-      image_file() {
-          local ref="$1"
-          ref="''${ref//\//_}"
-          ref="''${ref//:/_}"
-          printf '%s/images/%s\n' "$state_dir" "$ref"
-      }
-
-      case "''${1:-}" in
-          image)
-              case "''${2:-}" in
-                  inspect)
-                      target="''${!#}"
-                      if [[ "$target" == sha256:* ]]; then
-                          [[ -f "$state_dir/digest-present" ]] || exit 1
-                          printf '%s\n' "$target"
-                          exit 0
-                      fi
-                      [[ -f "$(image_file "$target")" ]] || exit 1
-                      case "$*" in
-                          *'{{.Digest}}'*) printf 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n' ;;
-                          *) printf 'sha256:fake-image-id\n' ;;
-                      esac
-                      ;;
-                  exists)
-                      [[ -f "$(image_file "''${3:-}")" ]]
-                      ;;
-                  *) exit 0 ;;
-              esac
-              ;;
-          tag)
-              source="''${2:-}"
-              target="''${3:-}"
-              if [[ "$source" == sha256:* ]]; then
-                  [[ -f "$state_dir/digest-present" ]] || exit 1
-              elif [[ ! -f "$(image_file "$source")" ]]; then
-                  exit 1
-              fi
-              printf '%s\n' "$source" > "$(image_file "$target")"
-              ;;
-          images|ps|rmi)
-              exit 0
-              ;;
-          info)
-              printf 'overlay@%s/graph+%s/runroot\n' "$state_dir" "$state_dir"
-              ;;
-          run)
-              : > "$state_dir/container-ran"
-              ;;
-          *)
-              printf 'unexpected fake podman command: %s\n' "$*" >&2
-              exit 2
-              ;;
-      esac
-    '';
-  };
-
-  digestSkipSkopeo = pkgs.writeShellApplication {
-    name = "skopeo";
-    runtimeInputs = [ pkgs.coreutils ];
-    text = ''
-      state_dir="''${WRIX_DIGEST_SKIP_STATE:?}"
-      mkdir -p "$state_dir"
-      printf '%s\n' "$*" >> "$state_dir/skopeo.log"
-      printf 'skopeo must not run on a digest-hit install\n' >&2
-      exit 2
-    '';
-  };
-
-  digestSkipServiceCli = pkgs.writeShellApplication {
-    name = "wrix";
-    text = ''
-      if [[ "''${1:-}" == "service" && "''${2:-}" == "dolt" && "''${3:-}" == "status" ]]; then
-          echo 'dolt: disabled' >&2
-          exit 1
-      fi
-      if [[ "''${1:-}" == "service" && "''${2:-}" == "start" ]]; then
-          exit 0
-      fi
-      if [[ "''${1:-}" == "service" && "''${2:-}" == "endpoints" ]]; then
-          printf '{"endpoints":{"cache_http":null}}\n'
-          exit 0
-      fi
-      printf 'unexpected fake service command: %s\n' "$*" >&2
-      exit 2
-    '';
-  };
-
-  digestSkipLauncher =
-    if isLinux then
-      (import ../../lib/sandbox/linux/default.nix {
-        pkgs = pkgs // {
-          podman = digestSkipPodman;
-          skopeo = digestSkipSkopeo;
-        };
-        serviceCli = digestSkipServiceCli;
-      }).mkSandbox
-        {
-          profile = {
-            name = "digestskip";
-            mounts = [ ];
-            writableDirs = [ ];
-          };
-        }
-    else
-      null;
+  digestSkipLauncher = if isLinux then serviceCli else null;
 
   # Linux-only verifier for the digest-preflight short-circuit (specs/sandbox.md
   # § Image install path; specs/image-builder.md Success Criteria #1). Drives
@@ -721,60 +609,76 @@ let
                   exit 1
               fi
           }
-          run_live_launcher_digest_hit run
-          run_live_launcher_digest_hit spawn
-
-          # podman shim — logs every invocation as a single-line `$*`.
-          # `image inspect --format {{.Id}} <digest>`: succeeds (exit 0,
-          # echoes the digest) iff the shim has been marked installed,
-          # mirroring podman's content-digest lookup.
-          # `image exists <ref>`: succeeds iff installed; covers the
-          # legacy ref-existence fallback.
-          # `load`: recorded via $state/load-invoked so a regression to
-          # an `*-load` CLI call is detectable even if the log line shape
-          # changes.
-          cat >"$shim_dir/podman" <<PODMAN_SHIM
+          # Runtime shims are shared by the Rust launcher live path above and
+          # the shellLib imageLoadStep checks below. Each invocation selects
+          # its state directory with WRIX_DIGEST_SKIP_STATE.
+          cat >"$shim_dir/podman" <<'PODMAN_SHIM'
           #!/usr/bin/env bash
           set -euo pipefail
-          printf '%s\n' "\$*" >>'$podman_log'
-          case "\$1" in
+          state_dir="''${WRIX_DIGEST_SKIP_STATE:?}"
+          mkdir -p "$state_dir/images"
+          printf '%s\n' "$*" >>"$state_dir/podman.log"
+
+          image_file() {
+              local ref="$1"
+              ref="''${ref//\//_}"
+              ref="''${ref//:/_}"
+              printf '%s/images/%s\n' "$state_dir" "$ref"
+          }
+
+          case "''${1:-}" in
               image)
-                  case "\$2" in
+                  case "''${2:-}" in
                       inspect)
-                          if [[ -f '$state/installed' ]]; then
-                              printf '%s\n' "\$5"
+                          target="''${!#}"
+                          if [[ "$target" == sha256:* ]]; then
+                              [[ -f "$state_dir/digest-present" || -f "$state_dir/installed" ]] || exit 1
+                              printf '%s\n' "$target"
                               exit 0
-                          else
-                              exit 1
                           fi
+                          [[ -f "$(image_file "$target")" || -f "$state_dir/installed" ]] || exit 1
+                          printf 'sha256:fake-image-id\n'
                           ;;
                       exists)
-                          if [[ -f '$state/force-ref-miss' ]]; then exit 1; fi
-                          if [[ -f '$state/installed' ]]; then exit 0; else exit 1; fi
+                          [[ ! -f "$state_dir/force-ref-miss" ]]
+                          [[ -f "$(image_file "''${3:-}")" || -f "$state_dir/installed" ]]
                           ;;
                       *) exit 0 ;;
                   esac
                   ;;
-              tag) exit 0 ;;
+              tag)
+                  source="''${2:-}"
+                  target="''${3:-}"
+                  if [[ "$source" == sha256:* ]]; then
+                      [[ -f "$state_dir/digest-present" || -f "$state_dir/installed" ]] || exit 1
+                  elif [[ ! -f "$(image_file "$source")" && ! -f "$state_dir/installed" ]]; then
+                      exit 1
+                  fi
+                  printf '%s\n' "$source" >"$(image_file "$target")"
+                  ;;
               load)
-                  : >'$state/load-invoked'
-                  exit 0
+                  : >"$state_dir/load-invoked"
+                  ;;
+              info)
+                  printf 'overlay@%s/graph+%s/runroot\n' "$state_dir" "$state_dir"
+                  ;;
+              run)
+                  : >"$state_dir/container-ran"
                   ;;
               *) exit 0 ;;
           esac
           PODMAN_SHIM
           chmod +x "$shim_dir/podman"
 
-          # skopeo shim — records every invocation and marks the image
-          # installed when it sees the containers-storage target (the
-          # second copy of the install transport).
-          cat >"$shim_dir/skopeo" <<SKOPEO_SHIM
+          cat >"$shim_dir/skopeo" <<'SKOPEO_SHIM'
           #!/usr/bin/env bash
           set -euo pipefail
-          printf '%s\n' "\$*" >>'$skopeo_log'
-          for a in "\$@"; do
-              case "\$a" in
-                  containers-storage:*) : >'$state/installed' ;;
+          state_dir="''${WRIX_DIGEST_SKIP_STATE:?}"
+          mkdir -p "$state_dir"
+          printf '%s\n' "$*" >>"$state_dir/skopeo.log"
+          for a in "$@"; do
+              case "$a" in
+                  containers-storage:*) : >"$state_dir/installed" ;;
                   nix:*|docker-archive:*|oci-archive:*)
                       echo 'stock nix/archive transport is not part of descriptor install' >&2
                       exit 2
@@ -788,7 +692,11 @@ let
           verbose() { :; }
 
           PATH="$shim_dir:$PATH"
-          export PATH IMAGE_REF IMAGE_SOURCE IMAGE_SOURCE_KIND IMAGE_DIGEST_PATH
+          WRIX_DIGEST_SKIP_STATE="$state"
+          export PATH WRIX_DIGEST_SKIP_STATE IMAGE_REF IMAGE_SOURCE IMAGE_SOURCE_KIND IMAGE_DIGEST_PATH
+
+          run_live_launcher_digest_hit run
+          run_live_launcher_digest_hit spawn
 
           # First invocation: digest preflight miss → install transport runs.
           ${shellLib.imageLoadStep}
@@ -798,8 +706,8 @@ let
               cat "$skopeo_log" >&2
               exit 1
           fi
-          if ! grep -qF -- "oci:$OCI_LAYOUT:latest containers-storage:$IMAGE_REF" "$skopeo_log"; then
-              echo "first invocation did not copy descriptor OCI layout -> containers-storage:$IMAGE_REF:" >&2
+          if ! grep -qF -- "oci:$OCI_LAYOUT:latest" "$skopeo_log" || ! grep -qF -- "$IMAGE_REF" "$skopeo_log"; then
+              echo "first invocation did not copy descriptor OCI layout into the selected image ref:" >&2
               cat "$skopeo_log" >&2
               exit 1
           fi

@@ -5,6 +5,10 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+displaydoc = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
 wrix-core = { workspace = true }
 
 [lints]

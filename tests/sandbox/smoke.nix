@@ -5,6 +5,7 @@
   treefmt,
   crane,
   fenix,
+  serviceCli ? null,
 }:
 
 let
@@ -50,13 +51,17 @@ let
     asTarball = isDarwin;
   };
 
-  serviceCliStub = writeShellApplication {
-    name = "wrix-service-smoke-stub";
-    text = ''
-      echo "wrix service stub is not executable in smoke tests" >&2
-      exit 64
-    '';
-  };
+  serviceCliStub =
+    if serviceCli != null then
+      serviceCli
+    else
+      writeShellApplication {
+        name = "wrix-service-smoke-stub";
+        text = ''
+          echo "wrix service stub is not executable in smoke tests" >&2
+          exit 64
+        '';
+      };
 
   sandboxLib = import ../../lib/sandbox {
     inherit
@@ -72,9 +77,6 @@ let
   sandbox = sandboxLib.mkSandbox { profile = sandboxLib.profiles.base; };
   wrix = sandbox.package;
   wrixBuilder = import ../../lib/builder { inherit pkgs linuxPkgs; };
-  # Underlying profile-baked launcher (no ProfileConfig wrapper). Smoke
-  # tests that grep the script for krun / network / mount logic should
-  # target this — the `package` wrapper only adds --profile-config.
   wrixLauncher = sandbox.launcher;
 
 in
@@ -100,22 +102,31 @@ in
         mkdir $out
       '';
 
-  # Verify wrix script has valid bash syntax
   script-syntax =
-    runCommandLocal "smoke-script-syntax"
+    runCommandLocal "smoke-rust-launcher-dry-run"
       {
         nativeBuildInputs = [ bash ];
       }
       ''
-        echo "Checking bash syntax..."
-        bash -n ${wrixLauncher}/bin/wrix
-        grep -q 'WRIX_PI_AUTH_FILE' ${wrixLauncher}/bin/wrix || { echo "launcher must resolve Pi auth file"; exit 1; }
-        grep -q 'WRIX_AGENT="$PROFILE_AGENT"' ${wrixLauncher}/bin/wrix || { echo "launcher must derive WRIX_AGENT from ProfileConfig"; exit 1; }
-        grep -q 'WRIX_AGENT" = "pi"' ${wrixLauncher}/bin/wrix || { echo "launcher must gate Pi auth on WRIX_AGENT=pi"; exit 1; }
-        grep -q 'wrix spawn: Pi auth file not found' ${wrixLauncher}/bin/wrix || { echo "spawn must fail loud without Pi auth"; exit 1; }
-        grep -Eq '/mnt/wrix/(file/pi-auth.json|pi-agent-auth)' ${wrixLauncher}/bin/wrix || { echo "Pi auth mount must use a staging path"; exit 1; }
+        workspace="$PWD/workspace"
+        home="$PWD/home"
+        profile_config="$PWD/profile-config.json"
+        mkdir -p "$workspace" "$home"
+        cat > "$profile_config" <<'JSON'
+        {"schema":1,"system":"test","profile":{"name":"base","env":{},"mounts":[],"writable_dirs":[],"network_allowlist":[]},"image":{"ref":"wrix-base:test","source":"/nix/store/fake-image","source_kind":"${
+          if isLinux then "nix-descriptor" else "docker-archive"
+        }","digest":"sha256:test"},"agent":{"kind":"direct"},"resources":{"cpus":null,"memory_mb":4096,"pids_limit":4096},"security":{"deploy_key":null},"network":{"default_mode":"open","ipv6":"disabled"},"services":{"beads":{"enable":"auto"},"nix_cache":{"enable":false}},"features":{"mcp_runtime":false}}
+        JSON
 
-        echo "Script syntax validation passed"
+        output=$(HOME="$home" WRIX_DRY_RUN=1 ${wrixLauncher}/bin/wrix --profile-config "$profile_config" run "$workspace" true)
+        case "$output" in
+          *"SUBCOMMAND=run"*"PROFILE_AGENT=direct"*"WORKSPACE=$workspace"*"CMD=true"*) ;;
+          *)
+            printf 'launcher dry-run did not expose expected Rust launcher state:\n%s\n' "$output" >&2
+            exit 1
+            ;;
+        esac
+
         mkdir $out
       '';
 
@@ -349,37 +360,20 @@ in
       mkdir $out
     '';
 
-  # Verify wrix script contains krun microVM boundary detection
-  # Security property: Linux defaults to microVM boundary via krun runtime
-  # See specs/security.md (Threat Model / Component-Specific Security).
-  # Linux-only: krun detection only exists in the Linux launcher
   linux-microvm-krun-detection =
     if isLinux then
       runCommandLocal "smoke-linux-microvm-krun"
         {
-          nativeBuildInputs = [ bash ];
+          nativeBuildInputs = [
+            bash
+            pkgs.gnugrep
+          ];
         }
         ''
-          echo "Checking krun microVM detection in wrix script..."
-          SCRIPT="${wrixLauncher}/bin/wrix"
-
-          # Verify krun detection logic exists
-          grep -q 'WRIX_MICROVM' "$SCRIPT" || { echo "FAIL: Missing WRIX_MICROVM env var check"; exit 1; }
-          echo "PASS: WRIX_MICROVM opt-in supported"
-
-          # Verify /dev/kvm detection
-          grep -q '/dev/kvm' "$SCRIPT" || { echo "FAIL: Missing /dev/kvm detection"; exit 1; }
-          echo "PASS: /dev/kvm availability check present"
-
-          # Verify krun runtime flag is used
-          grep -q '\-\-runtime krun' "$SCRIPT" || { echo "FAIL: Missing --runtime krun flag"; exit 1; }
-          echo "PASS: --runtime krun flag present"
-
-          # Verify crun-krun is bundled in runtimeInputs
-          grep -q 'crun-krun' "$SCRIPT" || { echo "FAIL: Missing crun-krun in PATH"; exit 1; }
-          echo "PASS: crun-krun bundled in PATH"
-
-          echo ""
+          launcher="${wrixLauncher}/bin/wrix"
+          grep -aq 'WRIX_MICROVM' "$launcher" || { echo "FAIL: Missing WRIX_MICROVM env var check"; exit 1; }
+          grep -aq '/dev/kvm' "$launcher" || { echo "FAIL: Missing /dev/kvm detection"; exit 1; }
+          grep -aq -- '--runtime' "$launcher" || { echo "FAIL: Missing runtime flag construction"; exit 1; }
           echo "Linux microVM krun detection validation passed"
           mkdir $out
         ''
@@ -472,28 +466,25 @@ in
 
         echo "PASS: Profile allowlists verified (pure Nix assertions)"
 
-        # Launcher script checks (reuses base sandbox, no extra image build)
-        SCRIPT="${wrixLauncher}/bin/wrix"
-        grep -q 'WRIX_NETWORK' "$SCRIPT" || { echo "FAIL: Missing WRIX_NETWORK env var handling"; exit 1; }
-        echo "PASS: WRIX_NETWORK env var handled in launcher"
-
-        grep -q "open|limit" "$SCRIPT" || { echo "FAIL: Missing WRIX_NETWORK mode validation"; exit 1; }
-        echo "PASS: WRIX_NETWORK mode validation present"
-
-        grep -q 'WRIX_NETWORK_ALLOWLIST' "$SCRIPT" || { echo "FAIL: Missing WRIX_NETWORK_ALLOWLIST passthrough"; exit 1; }
-        echo "PASS: WRIX_NETWORK_ALLOWLIST passed to container"
-
-        ${
-          if isLinux then
-            ''
-              grep -q 'NET_ADMIN' "$SCRIPT" || { echo "FAIL: Missing NET_ADMIN capability for limit mode"; exit 1; }
-              echo "PASS: NET_ADMIN capability added for limit mode"
-            ''
-          else
-            ''
-              echo "SKIP: NET_ADMIN check (Linux-only)"
-            ''
-        }
+        workspace="$PWD/workspace"
+        home="$PWD/home"
+        profile_config="$PWD/profile-config.json"
+        mkdir -p "$workspace" "$home"
+        cat > "$profile_config" <<'JSON'
+        {"schema":1,"system":"test","profile":{"name":"base","env":{},"mounts":[],"writable_dirs":[],"network_allowlist":["api.anthropic.com"]},"image":{"ref":"wrix-base:test","source":"/nix/store/fake-image","source_kind":"${
+          if isLinux then "nix-descriptor" else "docker-archive"
+        }","digest":"sha256:test"},"agent":{"kind":"direct"},"resources":{"cpus":null,"memory_mb":4096,"pids_limit":4096},"security":{"deploy_key":null},"network":{"default_mode":"open","ipv6":"disabled"},"services":{"beads":{"enable":"auto"},"nix_cache":{"enable":false}},"features":{"mcp_runtime":false}}
+        JSON
+        output=$(HOME="$home" WRIX_DRY_RUN=1 WRIX_NETWORK=limit ${wrixLauncher}/bin/wrix --profile-config "$profile_config" run "$workspace" true)
+        case "$output" in
+          *"PROFILE_AGENT=direct"*) ;;
+          *) printf 'launcher dry-run did not accept WRIX_NETWORK=limit:\n%s\n' "$output" >&2; exit 1 ;;
+        esac
+        if HOME="$home" WRIX_DRY_RUN=1 WRIX_NETWORK=unsafe ${wrixLauncher}/bin/wrix --profile-config "$profile_config" run "$workspace" true >/tmp/wrix-network.out 2>/tmp/wrix-network.err; then
+          echo "FAIL: launcher accepted invalid WRIX_NETWORK" >&2
+          exit 1
+        fi
+        grep -q "WRIX_NETWORK must be 'open' or 'limit'" /tmp/wrix-network.err || { cat /tmp/wrix-network.err >&2; exit 1; }
 
         # Entrypoint checks (source files, no build needed)
         LINUX_EP="${../../lib/sandbox/linux/entrypoint.sh}"

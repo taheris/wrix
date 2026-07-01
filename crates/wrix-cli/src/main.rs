@@ -1,6 +1,7 @@
 use std::{
     env,
     io::{self, Write},
+    path::PathBuf,
     process::ExitCode,
 };
 
@@ -20,24 +21,77 @@ fn main() -> ExitCode {
 }
 
 fn run(args: &[String], stdout: &mut impl Write, stderr: &mut impl Write) -> io::Result<ExitCode> {
-    if args.is_empty() || is_help(&args[0]) {
+    let root = parse_root(args)?;
+    if root.args.is_empty() || is_help(&root.args[0]) {
         write_help(stdout)?;
         return Ok(ExitCode::SUCCESS);
     }
 
-    match args[0].as_str() {
-        "run" => run_sandbox(wrix_sandbox::command::Command::Run, &args[1..], stdout),
-        "spawn" => run_sandbox(wrix_sandbox::command::Command::Spawn, &args[1..], stdout),
-        "service" => run_service(&args[1..], stdout, stderr),
-        "beads" => run_beads(&args[1..], stdout, stderr),
+    match root.args[0].as_str() {
+        "run" => run_sandbox(
+            wrix_sandbox::command::Command::Run,
+            root.profile_config,
+            &root.args[1..],
+            stdout,
+            stderr,
+        ),
+        "spawn" => run_sandbox(
+            wrix_sandbox::command::Command::Spawn,
+            root.profile_config,
+            &root.args[1..],
+            stdout,
+            stderr,
+        ),
+        "service" => run_service(&root.args[1..], stdout, stderr),
+        "beads" => run_beads(&root.args[1..], stdout, stderr),
         command => unknown_root(command, stdout, stderr),
     }
 }
 
+struct RootArgs<'a> {
+    profile_config: Option<PathBuf>,
+    args: &'a [String],
+}
+
+fn parse_root(args: &[String]) -> io::Result<RootArgs<'_>> {
+    let mut profile_config = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--profile-config" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "--profile-config requires <file>",
+                    ));
+                };
+                profile_config = Some(PathBuf::from(value));
+                index += 2;
+            }
+            value if value.starts_with("--profile-config=") => {
+                let value = value.trim_start_matches("--profile-config=");
+                profile_config = Some(PathBuf::from(value));
+                index += 1;
+            }
+            "--" => {
+                index += 1;
+                break;
+            }
+            _ => break,
+        }
+    }
+    Ok(RootArgs {
+        profile_config,
+        args: &args[index..],
+    })
+}
+
 fn run_sandbox(
     command: wrix_sandbox::command::Command,
+    profile_config: Option<PathBuf>,
     args: &[String],
     stdout: &mut impl Write,
+    stderr: &mut impl Write,
 ) -> io::Result<ExitCode> {
     if args.first().is_some_and(|arg| is_help(arg)) {
         match command {
@@ -48,7 +102,7 @@ fn run_sandbox(
         }
         return Ok(ExitCode::SUCCESS);
     }
-    wrix_sandbox::command::run(command, stdout)
+    wrix_sandbox::command::run(command, profile_config, args, stdout, stderr)
 }
 
 fn run_service(

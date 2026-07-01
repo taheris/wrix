@@ -55,6 +55,7 @@ test_mksandbox_accepts_documented_parameters() {
     in
     {
       required_present = builtins.all (name: builtins.hasAttr name sandbox) required;
+      launcher_is_raw_wrix = sandbox.launcher == flake.packages.\${system}.wrix;
       profile_name = sandbox.profile.name;
       env_value = sandbox.profile.env.WRIX_API_CONTRACT or \"\";
       mount_present = builtins.any (
@@ -73,6 +74,7 @@ test_mksandbox_accepts_documented_parameters() {
 
   if ! jq -e '
     .required_present == true and
+    .launcher_is_raw_wrix == true and
     .profile_name == "base" and
     .env_value == "1" and
     .mount_present == true and
@@ -82,7 +84,7 @@ test_mksandbox_accepts_documented_parameters() {
     return 1
   fi
 
-  printf 'PASS: mkSandbox accepts documented parameters and exposes package/image/launcher/profile\n' >&2
+  printf 'PASS: mkSandbox accepts documented parameters and exposes raw Rust launcher\n' >&2
 }
 
 ALL_TESTS=(
