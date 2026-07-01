@@ -400,6 +400,9 @@ run_entrypoint_command() {
   local stderr_path="$4"
   shift 4
   local home_dir="$TEST_TMP/home"
+  local xdg_config_home="$home_dir/.config"
+  local xdg_cache_home="$home_dir/.cache"
+  local xdg_state_home="$home_dir/.local/state"
   local agent
   local -a endpoint_env
   agent="$(entrypoint_agent)"
@@ -418,10 +421,13 @@ run_entrypoint_command() {
   if [[ -n "${BEADS_TEST_DOLT_PORT:-}" ]]; then
     endpoint_env+=("BEADS_DOLT_SERVER_PORT=$BEADS_TEST_DOLT_PORT")
   fi
-  mkdir -p "$home_dir"
+  mkdir -p "$home_dir" "$xdg_config_home" "$xdg_cache_home" "$xdg_state_home"
   env \
     "${endpoint_env[@]}" \
     HOME="$home_dir" \
+    XDG_CONFIG_HOME="$xdg_config_home" \
+    XDG_CACHE_HOME="$xdg_cache_home" \
+    XDG_STATE_HOME="$xdg_state_home" \
     HOST_UID="$(id -u)" \
     WRIX_AGENT="$agent" \
     WRIX_FIREWALL_BACKEND=iptables \
@@ -529,7 +535,7 @@ test_bd_dolt_sync_uses_container_remote() {
   export BD_EXPECT_ORIGIN="$container_remote"
   if ! BEADS_TEST_DOLT_SOCKET="$socket_path" \
     run_entrypoint_command "$entrypoint" "$workspace" "$stdout_path" "$stderr_path" \
-      bash -c 'bd dolt pull'; then
+      bash -c 'bd dolt pull && bd dolt push'; then
     fail "entrypoint failed to remap bd remote: $(<"$stderr_path")"
   fi
   unset FAKE_BD_ORIGIN_REMOTE BD_EXPECT_ORIGIN
@@ -537,6 +543,7 @@ test_bd_dolt_sync_uses_container_remote() {
 
   assert_contains "bd remote add" "$(<"$bd_log")" "CALL DOLT_REMOTE('add', 'origin', '$container_remote')"
   assert_contains "bd pull remapped" "$(<"$bd_log")" "dolt pull|auto=0|socket=$socket_path|host=|port=|origin=$container_remote"
+  assert_contains "bd push remapped" "$(<"$bd_log")" "dolt push|auto=0|socket=$socket_path|host=|port=|origin=$container_remote"
   assert_contains "bd remote restore" "$(<"$bd_log.origin")" "$host_remote"
 }
 

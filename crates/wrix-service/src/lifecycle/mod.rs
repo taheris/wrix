@@ -491,12 +491,7 @@ pub fn logs(cache_mode: CacheMode) -> Result<Vec<u8>> {
 
 pub fn endpoints(cache_mode: CacheMode) -> Result<String> {
     let plan = Plan::for_current_dir(cache_mode)?;
-    let path = plan.paths().services_path();
-    if path.exists() {
-        Ok(fs::read_to_string(path)?)
-    } else {
-        Ok(plan.services_json())
-    }
+    Ok(plan.services_json())
 }
 
 fn status_for_plan(plan: Plan) -> Result<Status> {

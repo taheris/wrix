@@ -50,8 +50,29 @@ log_file="${WRIX_BEADS_PUSH_LOG:?}"
 state_dir="${WRIX_BEADS_PUSH_STATE:?}"
 printf 'bd|cwd=%s|prek=%s|%s\n' "$PWD" "${PREK_ALLOW_NO_CONFIG:-}" "$*" >>"$log_file"
 
+config_path="${FAKE_REPO_ROOT:?}/.beads/config.yaml"
+
+fake_auto_export_enabled() {
+  if [[ ! -f "$config_path" ]]; then
+    return 0
+  fi
+  if grep -Eq '^[[:space:]]*export[.]auto:[[:space:]]*false[[:space:]]*$' "$config_path"; then
+    return 1
+  fi
+  return 0
+}
+
+fake_auto_export() {
+  if ! fake_auto_export_enabled; then
+    return 0
+  fi
+  mkdir -p "${FAKE_REPO_ROOT:?}/.beads"
+  printf '{"id":"wx-auto"}\n' >"${FAKE_REPO_ROOT:?}/.beads/issues.jsonl"
+  printf 'auto-export .beads/issues.jsonl\n' >>"$log_file"
+  printf 'Warning: auto-export: git add failed for .beads/issues.jsonl\n' >&2
+}
+
 if [[ "${1:-}" == "config" && "${2:-}" == "set" && "${3:-}" == "export.auto" && "${4:-}" == "false" ]]; then
-  config_path="${FAKE_REPO_ROOT:?}/.beads/config.yaml"
   mkdir -p "$(dirname "$config_path")"
   if [[ -f "$config_path" ]] && grep -q '^export[.]auto:' "$config_path"; then
     tmp_path="$state_dir/config.yaml.tmp"
@@ -66,6 +87,7 @@ if [[ "${1:-}" == "config" && "${2:-}" == "set" && "${3:-}" == "export.auto" && 
 fi
 
 if [[ "${1:-}" == "dolt" && "${2:-}" == "remote" && "${3:-}" == "list" ]]; then
+  fake_auto_export
   origin_state="$state_dir/origin-remote"
   if [[ -f "$origin_state" ]]; then
     printf 'origin %s\n' "$(cat "$origin_state")"
@@ -93,10 +115,12 @@ if [[ "${1:-}" == "dolt" && "${2:-}" == "remote" && "${3:-}" == "list" ]]; then
 fi
 
 if [[ "${1:-}" == "dolt" && "${2:-}" == "commit" ]]; then
+  fake_auto_export
   exit 0
 fi
 
 if [[ "${1:-}" == "dolt" && "${2:-}" == "push" ]]; then
+  fake_auto_export
   count_file="$state_dir/bd-push-count"
   count=0
   if [[ -f "$count_file" ]]; then
@@ -134,10 +158,12 @@ if [[ "${1:-}" == "dolt" && "${2:-}" == "push" ]]; then
 fi
 
 if [[ "${1:-}" == "dolt" && "${2:-}" == "pull" ]]; then
+  fake_auto_export
   exit 0
 fi
 
 if [[ "${1:-}" == "sql" ]]; then
+  fake_auto_export
   query=""
   argument=""
   for argument in "$@"; do
@@ -356,13 +382,27 @@ verify_shims() {
   local case_dir="$1"
   local root="$case_dir/root"
   local git_out
+  local autoexport_stderr="$case_dir/shim-autoexport.err"
   local rsync_dest="$case_dir/shim-rsync-dest"
   git_out="$(env "WRIX_BEADS_PUSH_LOG=$case_dir/log" "WRIX_BEADS_PUSH_STATE=$case_dir/state" "FAKE_REPO_ROOT=$root" "$case_dir/bin/git" rev-parse --show-toplevel)"
   if [[ "$git_out" != "$root" ]]; then
     fail "fake git returned root '$git_out', want '$root'"
   fi
+  env "WRIX_BEADS_PUSH_LOG=$case_dir/log" "WRIX_BEADS_PUSH_STATE=$case_dir/state" "FAKE_REPO_ROOT=$root" "$case_dir/bin/bd" dolt commit 2>"$autoexport_stderr"
+  assert_file_contains "$autoexport_stderr" 'Warning: auto-export: git add failed'
+  assert_file_contains "$case_dir/log" '.beads/issues.jsonl'
+  if [[ ! -f "$root/.beads/issues.jsonl" ]]; then
+    fail "fake bd did not write .beads/issues.jsonl when auto-export was enabled"
+  fi
+  rm -f "$root/.beads/issues.jsonl"
   env "WRIX_BEADS_PUSH_LOG=$case_dir/log" "WRIX_BEADS_PUSH_STATE=$case_dir/state" "FAKE_REPO_ROOT=$root" "$case_dir/bin/bd" config set export.auto false
   assert_file_contains "$root/.beads/config.yaml" 'export.auto: false'
+  : >"$autoexport_stderr"
+  env "WRIX_BEADS_PUSH_LOG=$case_dir/log" "WRIX_BEADS_PUSH_STATE=$case_dir/state" "FAKE_REPO_ROOT=$root" "$case_dir/bin/bd" dolt commit 2>"$autoexport_stderr"
+  assert_file_not_contains "$autoexport_stderr" 'Warning: auto-export: git add failed'
+  if [[ -e "$root/.beads/issues.jsonl" ]]; then
+    fail "fake bd wrote .beads/issues.jsonl after export.auto was disabled"
+  fi
   env "WRIX_BEADS_PUSH_LOG=$case_dir/log" "$case_dir/bin/rsync" -a "$root/" "$rsync_dest/"
   if [[ ! -d "$rsync_dest" ]]; then
     fail "fake rsync did not create destination"
