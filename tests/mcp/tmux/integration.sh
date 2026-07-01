@@ -29,6 +29,12 @@ command -v tmux >/dev/null 2>&1 || skip "tmux not on PATH"
 
 cd "$REPO_ROOT"
 
-TMUX_MCP_BIN_DIR=$(nix build --no-link --print-out-paths --no-warn-dirty .#tmux-mcp)
+build_log=$(mktemp -t wrix-tmux-mcp-build.XXXXXX)
+if ! TMUX_MCP_BIN_DIR=$(nix build --no-link --print-out-paths --no-warn-dirty .#tmux-mcp 2>"$build_log"); then
+  cat "$build_log" >&2
+  rm -f "$build_log"
+  exit 1
+fi
+rm -f "$build_log"
 
 PATH="$TMUX_MCP_BIN_DIR/bin:$PATH" exec bash "$REPO_ROOT/tests/mcp/tmux/run-integration.sh" "$@"

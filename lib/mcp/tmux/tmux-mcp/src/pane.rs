@@ -9,7 +9,7 @@ use thiserror::Error;
 const PANE_ID_PREFIX: &str = "debug-";
 
 /// Pane identifier parse failure.
-#[derive(Debug, Display, Error, PartialEq, Eq)]
+#[derive(Debug, Clone, Display, Error, PartialEq, Eq)]
 pub enum PaneIdError {
     /// Pane id '{value}' must use debug-N with N greater than zero
     InvalidFormat { value: String },

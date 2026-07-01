@@ -72,6 +72,12 @@ main() {
     local pane_count
     pane_count=$(echo "$content" | jq 'length')
     assert_eq "3" "$pane_count" "Should have 3 panes"
+
+    local session
+    session=$(get_mcp_session_name)
+    local unmanaged_count
+    unmanaged_count=$(tmux list-windows -t "$session" -F '#{window_name}' | awk 'BEGIN { count = 0 } $0 !~ /^debug-[1-9][0-9]*$/ { count++ } END { print count }')
+    assert_eq "0" "$unmanaged_count" "Tmux session should contain only managed debug-N windows"
     log_pass "JSON structure valid"
 
     # Test 4: Verify pane attributes

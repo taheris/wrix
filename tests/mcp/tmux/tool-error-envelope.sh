@@ -27,7 +27,14 @@ require_command() {
 build_tmux_mcp() {
   if [[ -z "$TMUX_MCP_BIN" ]]; then
     local bin_dir
-    bin_dir=$(nix build --no-link --print-out-paths --no-warn-dirty .#tmux-mcp) || return 1
+    local build_log
+    build_log=$(mktemp -t wrix-tmux-mcp-build.XXXXXX) || return 1
+    if ! bin_dir=$(nix build --no-link --print-out-paths --no-warn-dirty .#tmux-mcp 2>"$build_log"); then
+      cat "$build_log" >&2
+      rm -f "$build_log"
+      return 1
+    fi
+    rm -f "$build_log"
     TMUX_MCP_BIN="$bin_dir/bin/tmux-mcp"
   fi
   printf '%s\n' "$TMUX_MCP_BIN"
@@ -43,7 +50,7 @@ run_tool_error_call() {
   local output
   if output=$(timeout 10 "$tmux_mcp" 2>"$stderr_file" <<'JSON'
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"tmux_send_keys","arguments":{"pane_id":"missing-pane","keys":"echo hello"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"tmux_send_keys","arguments":{"pane_id":"debug-999","keys":"echo hello"}}}
 JSON
   ); then
     :

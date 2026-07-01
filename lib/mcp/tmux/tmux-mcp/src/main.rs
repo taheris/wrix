@@ -11,12 +11,12 @@ mod tmux;
 
 use audit::MaybeAuditLogger;
 use mcp::{
-    INTERNAL_ERROR, INVALID_PARAMS, JsonRpcResponse, METHOD_NOT_FOUND, McpHandler, McpMethod,
-    RequestId, ToolCallParams, ToolCallResult, ToolName,
+    CapturePaneArgs, CreatePaneArgs, INTERNAL_ERROR, INVALID_PARAMS, JsonRpcResponse, KillPaneArgs,
+    METHOD_NOT_FOUND, McpHandler, McpMethod, RequestId, SendKeysArgs, ToolCall, ToolCallParams,
+    ToolCallResult,
 };
-use pane::{PaneId, PaneManager, PaneStatus};
+use pane::{PaneManager, PaneStatus};
 use serde::Serialize;
-use serde_json::Value;
 use std::io::{self, BufRead, Write};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -56,13 +56,14 @@ fn handle_tool_call<E: CommandExecutor>(
     state: &mut AppState<E>,
     params: &ToolCallParams,
 ) -> ToolCallResult {
-    match &params.name {
-        ToolName::CreatePane => handle_create_pane(state, &params.arguments),
-        ToolName::SendKeys => handle_send_keys(state, &params.arguments),
-        ToolName::CapturePane => handle_capture_pane(state, &params.arguments),
-        ToolName::KillPane => handle_kill_pane(state, &params.arguments),
-        ToolName::ListPanes => handle_list_panes(state),
-        ToolName::Unknown(name) => ToolCallResult::error(format!(
+    match &params.call {
+        ToolCall::CreatePane(args) => handle_create_pane(state, args),
+        ToolCall::SendKeys(args) => handle_send_keys(state, args),
+        ToolCall::CapturePane(args) => handle_capture_pane(state, args),
+        ToolCall::KillPane(args) => handle_kill_pane(state, args),
+        ToolCall::ListPanes => handle_list_panes(state),
+        ToolCall::Invalid(error) => ToolCallResult::error(error.to_string()),
+        ToolCall::Unknown(name) => ToolCallResult::error(format!(
             "Unknown tool '{}'. Available tools: tmux_create_pane, tmux_send_keys, \
              tmux_capture_pane, tmux_kill_pane, tmux_list_panes",
             name
@@ -70,7 +71,31 @@ fn handle_tool_call<E: CommandExecutor>(
     }
 }
 
-fn audit_failure(tool: &str, error: impl std::fmt::Display) -> ToolCallResult {
+#[derive(Debug, Clone, Copy)]
+enum AuditFailureContext {
+    CreatePane,
+    SendKeys,
+    CapturePane,
+    CapturePaneFullCapture,
+    KillPane,
+    ListPanes,
+}
+
+impl AuditFailureContext {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::CreatePane => "tmux_create_pane",
+            Self::SendKeys => "tmux_send_keys",
+            Self::CapturePane => "tmux_capture_pane",
+            Self::CapturePaneFullCapture => "tmux_capture_pane full capture",
+            Self::KillPane => "tmux_kill_pane",
+            Self::ListPanes => "tmux_list_panes",
+        }
+    }
+}
+
+fn audit_failure(context: AuditFailureContext, error: impl std::fmt::Display) -> ToolCallResult {
+    let tool = context.as_str();
     ToolCallResult::error(format!(
         "{tool} completed, but audit logging failed: {error}"
     ))
@@ -87,34 +112,13 @@ fn json_success<T: Serialize>(id: Option<RequestId>, result: T) -> JsonRpcRespon
     }
 }
 
-fn pane_id_arg(args: &std::collections::HashMap<String, Value>) -> Result<PaneId, ToolCallResult> {
-    let Some(raw_pane_id) = args.get("pane_id").and_then(Value::as_str) else {
-        return Err(ToolCallResult::error(
-            "Missing required parameter 'pane_id'. Use tmux_list_panes to see active panes.",
-        ));
-    };
-
-    PaneId::parse(raw_pane_id).map_err(|error| {
-        ToolCallResult::error(format!(
-            "Invalid parameter 'pane_id': {error}. Use tmux_list_panes to see active panes."
-        ))
-    })
-}
-
 /// Handle `tmux_create_pane` tool call
 fn handle_create_pane<E: CommandExecutor>(
     state: &mut AppState<E>,
-    args: &std::collections::HashMap<String, Value>,
+    args: &CreatePaneArgs,
 ) -> ToolCallResult {
-    // Extract required 'command' parameter
-    let Some(command) = args.get("command").and_then(Value::as_str) else {
-        return ToolCallResult::error(
-            "Missing required parameter 'command'. Provide the command to run in the pane.",
-        );
-    };
-
-    // Extract optional 'name' parameter
-    let name = args.get("name").and_then(Value::as_str);
+    let command = args.command.as_str();
+    let name = args.name.as_deref();
 
     let pane_id = match state.pane_manager.create_pane(command, name) {
         Ok(pane_id) => pane_id,
@@ -124,7 +128,7 @@ fn handle_create_pane<E: CommandExecutor>(
     match state.tmux_session.create_pane(command, &pane_id) {
         Ok(_) => {
             if let Err(error) = state.audit.log_create_pane(&pane_id, command, name) {
-                return audit_failure("tmux_create_pane", error);
+                return audit_failure(AuditFailureContext::CreatePane, error);
             }
 
             let display_name = name.unwrap_or_else(|| pane_id.as_str());
@@ -143,33 +147,22 @@ fn handle_create_pane<E: CommandExecutor>(
 /// Handle `tmux_send_keys` tool call
 fn handle_send_keys<E: CommandExecutor>(
     state: &AppState<E>,
-    args: &std::collections::HashMap<String, Value>,
+    args: &SendKeysArgs,
 ) -> ToolCallResult {
-    let pane_id = match pane_id_arg(args) {
-        Ok(pane_id) => pane_id,
-        Err(result) => return result,
-    };
+    let pane_id = &args.pane_id;
+    let keys = args.keys.as_str();
 
-    // Extract required 'keys' parameter
-    let Some(keys) = args.get("keys").and_then(Value::as_str) else {
-        return ToolCallResult::error(
-            "Missing required parameter 'keys'. Provide the keystrokes to send.",
-        );
-    };
-
-    // Verify pane exists in our tracking
-    if !state.pane_manager.contains(&pane_id) {
+    if !state.pane_manager.contains(pane_id) {
         return ToolCallResult::error(format!(
             "Pane '{}' not found. Use tmux_list_panes to see active panes.",
             pane_id
         ));
     }
 
-    // Send keys to tmux
-    match state.tmux_session.send_keys(&pane_id, keys) {
+    match state.tmux_session.send_keys(pane_id, keys) {
         Ok(()) => {
-            if let Err(error) = state.audit.log_send_keys(&pane_id, keys) {
-                return audit_failure("tmux_send_keys", error);
+            if let Err(error) = state.audit.log_send_keys(pane_id, keys) {
+                return audit_failure(AuditFailureContext::SendKeys, error);
             }
 
             ToolCallResult::success(format!("Sent keys to pane '{}'", pane_id))
@@ -181,48 +174,38 @@ fn handle_send_keys<E: CommandExecutor>(
 /// Handle `tmux_capture_pane` tool call
 fn handle_capture_pane<E: CommandExecutor>(
     state: &mut AppState<E>,
-    args: &std::collections::HashMap<String, Value>,
+    args: &CapturePaneArgs,
 ) -> ToolCallResult {
-    let pane_id = match pane_id_arg(args) {
-        Ok(pane_id) => pane_id,
-        Err(result) => return result,
-    };
+    let pane_id = &args.pane_id;
+    let lines = args.lines.as_i32();
 
-    // Extract optional 'lines' parameter (default 100, max 1000)
-    let lines = args.get("lines").and_then(Value::as_i64).map_or(100, |n| {
-        let clamped = n.clamp(1, 1000);
-        i32::try_from(clamped).map_or(100, std::convert::identity)
-    });
-
-    // Verify pane exists in our tracking
-    if !state.pane_manager.contains(&pane_id) {
+    if !state.pane_manager.contains(pane_id) {
         return ToolCallResult::error(format!(
             "Pane '{}' not found. Use tmux_list_panes to see active panes.",
             pane_id
         ));
     }
 
-    // Capture pane output from tmux
-    match state.tmux_session.capture_pane(&pane_id, lines) {
+    match state.tmux_session.capture_pane(pane_id, lines) {
         Ok(output) => {
             let output_bytes = output.len();
 
-            if let Err(error) = state.audit.log_capture_pane(&pane_id, lines, output_bytes) {
-                return audit_failure("tmux_capture_pane", error);
+            if let Err(error) = state.audit.log_capture_pane(pane_id, lines, output_bytes) {
+                return audit_failure(AuditFailureContext::CapturePane, error);
             }
 
-            if let Err(error) = state.audit.save_full_capture(&pane_id, &output) {
-                return audit_failure("tmux_capture_pane full capture", error);
+            if let Err(error) = state.audit.save_full_capture(pane_id, &output) {
+                return audit_failure(AuditFailureContext::CapturePaneFullCapture, error);
             }
 
-            match state.tmux_session.get_window_info(&pane_id) {
+            match state.tmux_session.get_window_info(pane_id) {
                 Ok(info) => {
                     let new_status = if info.is_dead {
                         PaneStatus::Exited
                     } else {
                         PaneStatus::Running
                     };
-                    state.pane_manager.update_status(&pane_id, new_status);
+                    state.pane_manager.update_status(pane_id, new_status);
                 }
                 Err(error) => {
                     return ToolCallResult::error(format!(
@@ -240,28 +223,23 @@ fn handle_capture_pane<E: CommandExecutor>(
 /// Handle `tmux_kill_pane` tool call
 fn handle_kill_pane<E: CommandExecutor>(
     state: &mut AppState<E>,
-    args: &std::collections::HashMap<String, Value>,
+    args: &KillPaneArgs,
 ) -> ToolCallResult {
-    let pane_id = match pane_id_arg(args) {
-        Ok(pane_id) => pane_id,
-        Err(result) => return result,
-    };
+    let pane_id = &args.pane_id;
 
-    // Verify pane exists in our tracking
-    if !state.pane_manager.contains(&pane_id) {
+    if !state.pane_manager.contains(pane_id) {
         return ToolCallResult::error(format!(
             "Pane '{}' not found. Use tmux_list_panes to see active panes.",
             pane_id
         ));
     }
 
-    // Kill the tmux pane
-    match state.tmux_session.kill_pane(&pane_id) {
+    match state.tmux_session.kill_pane(pane_id) {
         Ok(()) => {
-            state.pane_manager.remove(&pane_id);
+            state.pane_manager.remove(pane_id);
 
-            if let Err(error) = state.audit.log_kill_pane(&pane_id) {
-                return audit_failure("tmux_kill_pane", error);
+            if let Err(error) = state.audit.log_kill_pane(pane_id) {
+                return audit_failure(AuditFailureContext::KillPane, error);
             }
 
             ToolCallResult::success(format!("Killed pane '{}'", pane_id))
@@ -291,7 +269,7 @@ fn handle_list_panes<E: CommandExecutor>(state: &mut AppState<E>) -> ToolCallRes
     }
 
     if let Err(error) = state.audit.log_list_panes() {
-        return audit_failure("tmux_list_panes", error);
+        return audit_failure(AuditFailureContext::ListPanes, error);
     }
 
     // Build the list of panes
@@ -333,7 +311,11 @@ fn process_request<E: CommandExecutor>(
     let method = match McpMethod::from_request(&request) {
         Ok(m) => m,
         Err(e) => {
-            return Some(JsonRpcResponse::error(request.id, INVALID_PARAMS, e));
+            return Some(JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                e.to_string(),
+            ));
         }
     };
 
@@ -455,7 +437,7 @@ fn main() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use crate::pane::PaneId;
 
     fn pane_id(value: &str) -> PaneId {
         PaneId::parse(value).unwrap()
@@ -488,6 +470,37 @@ mod tests {
             tmux_session: TmuxSession::with_executor(MockExecutor),
             audit: MaybeAuditLogger::disabled(),
         }
+    }
+
+    fn create_args(command: &str, name: Option<&str>) -> CreatePaneArgs {
+        CreatePaneArgs {
+            command: command.to_string(),
+            name: name.map(std::string::ToString::to_string),
+        }
+    }
+
+    fn send_args(pane_id: &str, keys: &str) -> SendKeysArgs {
+        SendKeysArgs {
+            pane_id: pane_id_value(pane_id),
+            keys: keys.to_string(),
+        }
+    }
+
+    fn capture_args(pane_id: &str, lines: i32) -> CapturePaneArgs {
+        CapturePaneArgs {
+            pane_id: pane_id_value(pane_id),
+            lines: mcp::CaptureLines::from_i32_for_test(lines),
+        }
+    }
+
+    fn kill_args(pane_id: &str) -> KillPaneArgs {
+        KillPaneArgs {
+            pane_id: pane_id_value(pane_id),
+        }
+    }
+
+    fn pane_id_value(value: &str) -> PaneId {
+        PaneId::parse(value).unwrap()
     }
 
     // --- Initialize/Protocol Tests ---
@@ -577,13 +590,7 @@ mod tests {
     #[test]
     fn test_handle_create_pane_success() {
         let mut state = test_state();
-
-        let mut args = HashMap::new();
-        args.insert(
-            "command".to_string(),
-            Value::String("cargo run".to_string()),
-        );
-        args.insert("name".to_string(), Value::String("server".to_string()));
+        let args = create_args("cargo run", Some("server"));
 
         let result = handle_create_pane(&mut state, &args);
 
@@ -596,34 +603,42 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_create_pane_missing_command() {
+    fn test_process_create_pane_missing_command_returns_tool_error() {
         let mut state = test_state();
+        process_request(
+            &mut state,
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
+        );
 
-        let args = HashMap::new();
-        let result = handle_create_pane(&mut state, &args);
+        let response = process_request(
+            &mut state,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"tmux_create_pane","arguments":{}}}"#,
+        )
+        .unwrap();
 
-        assert!(result.is_error);
+        assert!(response.error.is_none());
+        let result = response.result.unwrap();
+        assert_eq!(
+            result.get("isError").and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
         assert!(
-            result.content[0]
-                .text
-                .contains("Missing required parameter")
+            result
+                .get("content")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|content| content.first())
+                .and_then(|content| content.get("text"))
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|text| text.contains("Missing required parameter"))
         );
     }
 
     #[test]
     fn test_handle_send_keys_success() {
         let mut state = test_state();
+        handle_create_pane(&mut state, &create_args("bash", None));
 
-        // Create a pane first
-        let mut create_args = HashMap::new();
-        create_args.insert("command".to_string(), Value::String("bash".to_string()));
-        handle_create_pane(&mut state, &create_args);
-
-        // Send keys
-        let mut args = HashMap::new();
-        args.insert("pane_id".to_string(), Value::String("debug-1".to_string()));
-        args.insert("keys".to_string(), Value::String("echo hello".to_string()));
-
+        let args = send_args("debug-1", "echo hello");
         let result = handle_send_keys(&state, &args);
 
         assert!(!result.is_error);
@@ -633,13 +648,7 @@ mod tests {
     #[test]
     fn test_handle_send_keys_pane_not_found() {
         let state = test_state();
-
-        let mut args = HashMap::new();
-        args.insert(
-            "pane_id".to_string(),
-            Value::String("debug-999".to_string()),
-        );
-        args.insert("keys".to_string(), Value::String("echo hello".to_string()));
+        let args = send_args("debug-999", "echo hello");
 
         let result = handle_send_keys(&state, &args);
 
@@ -648,13 +657,13 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_send_keys_missing_pane_id() {
-        let state = test_state();
+    fn test_invalid_tool_arguments_return_tool_error() {
+        let mut state = test_state();
+        let params = ToolCallParams {
+            call: ToolCall::Invalid(mcp::ToolInputError::MissingPaneId),
+        };
 
-        let mut args = HashMap::new();
-        args.insert("keys".to_string(), Value::String("echo hello".to_string()));
-
-        let result = handle_send_keys(&state, &args);
+        let result = handle_tool_call(&mut state, &params);
 
         assert!(result.is_error);
         assert!(
@@ -667,17 +676,9 @@ mod tests {
     #[test]
     fn test_handle_capture_pane_success() {
         let mut state = test_state();
+        handle_create_pane(&mut state, &create_args("bash", None));
 
-        // Create a pane first
-        let mut create_args = HashMap::new();
-        create_args.insert("command".to_string(), Value::String("bash".to_string()));
-        handle_create_pane(&mut state, &create_args);
-
-        // Capture pane
-        let mut args = HashMap::new();
-        args.insert("pane_id".to_string(), Value::String("debug-1".to_string()));
-        args.insert("lines".to_string(), Value::Number(50.into()));
-
+        let args = capture_args("debug-1", 50);
         let result = handle_capture_pane(&mut state, &args);
 
         assert!(!result.is_error);
@@ -688,56 +689,36 @@ mod tests {
     #[test]
     fn test_handle_capture_pane_default_lines() {
         let mut state = test_state();
+        handle_create_pane(&mut state, &create_args("bash", None));
 
-        // Create a pane first
-        let mut create_args = HashMap::new();
-        create_args.insert("command".to_string(), Value::String("bash".to_string()));
-        handle_create_pane(&mut state, &create_args);
-
-        // Capture pane without lines parameter (should default to 100)
-        let mut args = HashMap::new();
-        args.insert("pane_id".to_string(), Value::String("debug-1".to_string()));
-
+        let args = CapturePaneArgs {
+            pane_id: pane_id("debug-1"),
+            lines: mcp::CaptureLines::default(),
+        };
         let result = handle_capture_pane(&mut state, &args);
 
         assert!(!result.is_error);
     }
 
     #[test]
-    fn test_handle_capture_pane_clamps_lines() {
+    fn test_handle_capture_pane_accepts_max_lines() {
         let mut state = test_state();
+        handle_create_pane(&mut state, &create_args("bash", None));
 
-        // Create a pane first
-        let mut create_args = HashMap::new();
-        create_args.insert("command".to_string(), Value::String("bash".to_string()));
-        handle_create_pane(&mut state, &create_args);
-
-        // Request more than max (1000)
-        let mut args = HashMap::new();
-        args.insert("pane_id".to_string(), Value::String("debug-1".to_string()));
-        args.insert("lines".to_string(), Value::Number(5000.into()));
-
+        let args = capture_args("debug-1", 1000);
         let result = handle_capture_pane(&mut state, &args);
 
-        // Should succeed (lines clamped to 1000)
         assert!(!result.is_error);
     }
 
     #[test]
     fn test_handle_kill_pane_success() {
         let mut state = test_state();
-
-        // Create a pane first
-        let mut create_args = HashMap::new();
-        create_args.insert("command".to_string(), Value::String("bash".to_string()));
-        handle_create_pane(&mut state, &create_args);
+        handle_create_pane(&mut state, &create_args("bash", None));
 
         assert!(state.pane_manager.contains(&pane_id("debug-1")));
 
-        // Kill pane
-        let mut args = HashMap::new();
-        args.insert("pane_id".to_string(), Value::String("debug-1".to_string()));
-
+        let args = kill_args("debug-1");
         let result = handle_kill_pane(&mut state, &args);
 
         assert!(!result.is_error);
@@ -750,12 +731,7 @@ mod tests {
     #[test]
     fn test_handle_kill_pane_not_found() {
         let mut state = test_state();
-
-        let mut args = HashMap::new();
-        args.insert(
-            "pane_id".to_string(),
-            Value::String("debug-999".to_string()),
-        );
+        let args = kill_args("debug-999");
 
         let result = handle_kill_pane(&mut state, &args);
 
@@ -777,19 +753,8 @@ mod tests {
     fn test_handle_list_panes_with_panes() {
         let mut state = test_state();
 
-        // Create some panes
-        let mut args1 = HashMap::new();
-        args1.insert(
-            "command".to_string(),
-            Value::String("cargo run".to_string()),
-        );
-        args1.insert("name".to_string(), Value::String("server".to_string()));
-        handle_create_pane(&mut state, &args1);
-
-        let mut args2 = HashMap::new();
-        args2.insert("command".to_string(), Value::String("bash".to_string()));
-        args2.insert("name".to_string(), Value::String("client".to_string()));
-        handle_create_pane(&mut state, &args2);
+        handle_create_pane(&mut state, &create_args("cargo run", Some("server")));
+        handle_create_pane(&mut state, &create_args("bash", Some("client")));
 
         let result = handle_list_panes(&mut state);
 
@@ -804,8 +769,7 @@ mod tests {
         let mut state = test_state();
 
         let params = ToolCallParams {
-            name: ToolName::Unknown("unknown_tool".to_string()),
-            arguments: HashMap::new(),
+            call: ToolCall::Unknown("unknown_tool".to_string()),
         };
 
         let result = handle_tool_call(&mut state, &params);

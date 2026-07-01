@@ -1,8 +1,11 @@
 //! MCP protocol handling (JSON-RPC over stdio)
 
+use crate::pane::{PaneId, PaneIdError};
+use displaydoc::Display;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::collections::HashMap;
+use thiserror::Error;
 
 /// JSON-RPC request ID
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -200,12 +203,277 @@ pub struct ToolsListResult {
     pub tools: Vec<ToolDefinition>,
 }
 
-/// MCP tool call parameters
-#[derive(Debug, Clone, Deserialize)]
+/// JSON-RPC-level parse failure for a `tools/call` request.
+#[derive(Debug, Display, Error)]
+pub enum ToolCallParseError {
+    /// tools/call requires params
+    MissingParams,
+    /// tools/call params must be an object
+    ParamsNotObject,
+    /// tools/call requires string parameter 'name'
+    MissingName,
+    /// tools/call parameter 'name' must be a string
+    InvalidName,
+}
+
+/// Tool argument parse failure reported through MCP's tool-error envelope.
+#[derive(Debug, Clone, Display, Error, PartialEq, Eq)]
+pub enum ToolInputError {
+    /// Invalid parameter `arguments`: expected an object.
+    InvalidArguments,
+    /// Missing required parameter `command`. Provide the command to run in the pane.
+    MissingCommand,
+    /// Invalid parameter `command`: expected a string.
+    InvalidCommand,
+    /// Invalid parameter `name`: expected a string.
+    InvalidName,
+    /// Missing required parameter `pane_id`. Use `tmux_list_panes` to see active panes.
+    MissingPaneId,
+    /// Invalid parameter `pane_id`: expected a string. Use `tmux_list_panes` to see active panes.
+    InvalidPaneIdType,
+    /// Invalid parameter `pane_id`: {source}. Use `tmux_list_panes` to see active panes.
+    InvalidPaneId { source: PaneIdError },
+    /// Missing required parameter `keys`. Provide the keystrokes to send.
+    MissingKeys,
+    /// Invalid parameter `keys`: expected a string.
+    InvalidKeys,
+    /// Invalid parameter `lines`: expected an integer between 1 and 1000.
+    InvalidLines,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ArgumentKey {
+    Command,
+    Name,
+    PaneId,
+    Keys,
+    Lines,
+}
+
+impl ArgumentKey {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Command => "command",
+            Self::Name => "name",
+            Self::PaneId => "pane_id",
+            Self::Keys => "keys",
+            Self::Lines => "lines",
+        }
+    }
+}
+
+/// Number of lines requested for `tmux_capture_pane`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CaptureLines(i32);
+
+impl CaptureLines {
+    const DEFAULT: Self = Self(100);
+
+    fn from_value(value: Option<&Value>) -> Result<Self, ToolInputError> {
+        let Some(value) = value else {
+            return Ok(Self::DEFAULT);
+        };
+
+        let Some(lines) = value.as_i64() else {
+            return Err(ToolInputError::InvalidLines);
+        };
+
+        let clamped = lines.clamp(1, 1000);
+        let lines = i32::try_from(clamped).map_err(|_error| ToolInputError::InvalidLines)?;
+        Ok(Self(lines))
+    }
+
+    pub const fn as_i32(self) -> i32 {
+        self.0
+    }
+
+    #[cfg(test)]
+    pub const fn from_i32_for_test(value: i32) -> Self {
+        Self(value)
+    }
+}
+
+impl Default for CaptureLines {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// Arguments for `tmux_create_pane`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreatePaneArgs {
+    pub command: String,
+    pub name: Option<String>,
+}
+
+/// Arguments for `tmux_send_keys`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SendKeysArgs {
+    pub pane_id: PaneId,
+    pub keys: String,
+}
+
+/// Arguments for `tmux_capture_pane`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapturePaneArgs {
+    pub pane_id: PaneId,
+    pub lines: CaptureLines,
+}
+
+/// Arguments for `tmux_kill_pane`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KillPaneArgs {
+    pub pane_id: PaneId,
+}
+
+/// Parsed MCP tool call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolCall {
+    CreatePane(CreatePaneArgs),
+    SendKeys(SendKeysArgs),
+    CapturePane(CapturePaneArgs),
+    KillPane(KillPaneArgs),
+    ListPanes,
+    Invalid(ToolInputError),
+    Unknown(String),
+}
+
+/// MCP tool call parameters parsed into tool-specific argument types.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolCallParams {
-    pub name: ToolName,
-    #[serde(default)]
-    pub arguments: HashMap<String, Value>,
+    pub call: ToolCall,
+}
+
+impl ToolCallParams {
+    pub fn from_value(value: &Value) -> Result<Self, ToolCallParseError> {
+        let params = value
+            .as_object()
+            .ok_or(ToolCallParseError::ParamsNotObject)?;
+        let Some(name_value) = params.get("name") else {
+            return Err(ToolCallParseError::MissingName);
+        };
+        let Some(name) = name_value.as_str() else {
+            return Err(ToolCallParseError::InvalidName);
+        };
+
+        let call = match ToolName::from_wire(name.to_string()) {
+            ToolName::CreatePane => Self::tool_arguments(params)
+                .and_then(Self::parse_create_pane)
+                .map_or_else(ToolCall::Invalid, ToolCall::CreatePane),
+            ToolName::SendKeys => Self::tool_arguments(params)
+                .and_then(Self::parse_send_keys)
+                .map_or_else(ToolCall::Invalid, ToolCall::SendKeys),
+            ToolName::CapturePane => Self::tool_arguments(params)
+                .and_then(Self::parse_capture_pane)
+                .map_or_else(ToolCall::Invalid, ToolCall::CapturePane),
+            ToolName::KillPane => Self::tool_arguments(params)
+                .and_then(Self::parse_kill_pane)
+                .map_or_else(ToolCall::Invalid, ToolCall::KillPane),
+            ToolName::ListPanes => {
+                Self::tool_arguments(params).map_or_else(ToolCall::Invalid, |_| ToolCall::ListPanes)
+            }
+            ToolName::Unknown(name) => ToolCall::Unknown(name),
+        };
+
+        Ok(Self { call })
+    }
+
+    fn tool_arguments(
+        params: &Map<String, Value>,
+    ) -> Result<Option<&Map<String, Value>>, ToolInputError> {
+        match params.get("arguments") {
+            Some(Value::Object(arguments)) => Ok(Some(arguments)),
+            Some(_) => Err(ToolInputError::InvalidArguments),
+            None => Ok(None),
+        }
+    }
+
+    fn required_string(
+        arguments: Option<&Map<String, Value>>,
+        key: ArgumentKey,
+        missing: ToolInputError,
+        invalid: ToolInputError,
+    ) -> Result<String, ToolInputError> {
+        let Some(value) = arguments.and_then(|arguments| arguments.get(key.as_str())) else {
+            return Err(missing);
+        };
+        let Some(value) = value.as_str() else {
+            return Err(invalid);
+        };
+        Ok(value.to_string())
+    }
+
+    fn optional_string(
+        arguments: Option<&Map<String, Value>>,
+        key: ArgumentKey,
+        invalid: ToolInputError,
+    ) -> Result<Option<String>, ToolInputError> {
+        let Some(value) = arguments.and_then(|arguments| arguments.get(key.as_str())) else {
+            return Ok(None);
+        };
+        let Some(value) = value.as_str() else {
+            return Err(invalid);
+        };
+        Ok(Some(value.to_string()))
+    }
+
+    fn required_pane_id(arguments: Option<&Map<String, Value>>) -> Result<PaneId, ToolInputError> {
+        let raw = Self::required_string(
+            arguments,
+            ArgumentKey::PaneId,
+            ToolInputError::MissingPaneId,
+            ToolInputError::InvalidPaneIdType,
+        )?;
+        PaneId::parse(raw).map_err(|source| ToolInputError::InvalidPaneId { source })
+    }
+
+    fn parse_create_pane(
+        arguments: Option<&Map<String, Value>>,
+    ) -> Result<CreatePaneArgs, ToolInputError> {
+        Ok(CreatePaneArgs {
+            command: Self::required_string(
+                arguments,
+                ArgumentKey::Command,
+                ToolInputError::MissingCommand,
+                ToolInputError::InvalidCommand,
+            )?,
+            name: Self::optional_string(arguments, ArgumentKey::Name, ToolInputError::InvalidName)?,
+        })
+    }
+
+    fn parse_send_keys(
+        arguments: Option<&Map<String, Value>>,
+    ) -> Result<SendKeysArgs, ToolInputError> {
+        Ok(SendKeysArgs {
+            pane_id: Self::required_pane_id(arguments)?,
+            keys: Self::required_string(
+                arguments,
+                ArgumentKey::Keys,
+                ToolInputError::MissingKeys,
+                ToolInputError::InvalidKeys,
+            )?,
+        })
+    }
+
+    fn parse_capture_pane(
+        arguments: Option<&Map<String, Value>>,
+    ) -> Result<CapturePaneArgs, ToolInputError> {
+        let lines = CaptureLines::from_value(
+            arguments.and_then(|arguments| arguments.get(ArgumentKey::Lines.as_str())),
+        )?;
+        Ok(CapturePaneArgs {
+            pane_id: Self::required_pane_id(arguments)?,
+            lines,
+        })
+    }
+
+    fn parse_kill_pane(
+        arguments: Option<&Map<String, Value>>,
+    ) -> Result<KillPaneArgs, ToolInputError> {
+        Ok(KillPaneArgs {
+            pane_id: Self::required_pane_id(arguments)?,
+        })
+    }
 }
 
 /// MCP tool call result content
@@ -395,7 +663,7 @@ pub enum McpMethod {
 
 impl McpMethod {
     /// Parse a JSON-RPC request into a typed MCP method
-    pub fn from_request(request: &JsonRpcRequest) -> Result<Self, String> {
+    pub fn from_request(request: &JsonRpcRequest) -> Result<Self, ToolCallParseError> {
         match request.method.as_str() {
             "initialize" => Ok(McpMethod::Initialize),
             "notifications/initialized" | "initialized" => Ok(McpMethod::Initialized),
@@ -404,10 +672,8 @@ impl McpMethod {
                 let params = request
                     .params
                     .as_ref()
-                    .ok_or("tools/call requires params")?;
-                let tool_params: ToolCallParams = serde_json::from_value(params.clone())
-                    .map_err(|e| format!("Invalid tool call params: {}", e))?;
-                Ok(McpMethod::ToolsCall(tool_params))
+                    .ok_or(ToolCallParseError::MissingParams)?;
+                Ok(McpMethod::ToolsCall(ToolCallParams::from_value(params)?))
             }
             other => Ok(McpMethod::Unknown(other.to_string())),
         }
@@ -548,13 +814,70 @@ mod tests {
         assert_eq!(request.method, "tools/call");
         let method = McpMethod::from_request(&request).unwrap();
         match method {
-            McpMethod::ToolsCall(params) => {
-                assert_eq!(params.name, ToolName::CreatePane);
-                assert_eq!(
-                    params.arguments.get("command"),
-                    Some(&Value::String("cargo run".to_string()))
-                );
+            McpMethod::ToolsCall(params) => match params.call {
+                ToolCall::CreatePane(args) => {
+                    assert_eq!(args.command, "cargo run");
+                    assert_eq!(args.name.as_deref(), Some("server"));
+                }
+                _ => panic!("Expected create_pane call"),
+            },
+            _ => panic!("Expected ToolsCall"),
+        }
+    }
+
+    #[test]
+    fn test_parse_tool_arguments_invalid_pane_id_stays_tool_error() {
+        let json = r#"{
+            "jsonrpc": "2.0",
+            "id": 42,
+            "method": "tools/call",
+            "params": {
+                "name": "tmux_send_keys",
+                "arguments": {
+                    "pane_id": "missing-pane",
+                    "keys": "echo hello"
+                }
             }
+        }"#;
+        let request = parse_request(json).unwrap();
+
+        let method = McpMethod::from_request(&request).unwrap();
+        match method {
+            McpMethod::ToolsCall(params) => match params.call {
+                ToolCall::Invalid(ToolInputError::InvalidPaneId { source }) => {
+                    assert_eq!(
+                        source.to_string(),
+                        "Pane id 'missing-pane' must use debug-N with N greater than zero"
+                    );
+                }
+                _ => panic!("Expected invalid pane id"),
+            },
+            _ => panic!("Expected ToolsCall"),
+        }
+    }
+
+    #[test]
+    fn test_parse_capture_lines_clamps_to_maximum() {
+        let json = r#"{
+            "jsonrpc": "2.0",
+            "id": 42,
+            "method": "tools/call",
+            "params": {
+                "name": "tmux_capture_pane",
+                "arguments": {
+                    "pane_id": "debug-1",
+                    "lines": 5000
+                }
+            }
+        }"#;
+        let request = parse_request(json).unwrap();
+
+        let method = McpMethod::from_request(&request).unwrap();
+        match method {
+            McpMethod::ToolsCall(params) => match params.call {
+                ToolCall::CapturePane(args) => assert_eq!(args.lines.as_i32(), 1000),
+                _ => panic!("Expected capture_pane call"),
+            },
             _ => panic!("Expected ToolsCall"),
         }
     }
@@ -761,8 +1084,7 @@ mod tests {
 
         // Tools calls require initialization
         let params = ToolCallParams {
-            name: ToolName::ListPanes,
-            arguments: HashMap::new(),
+            call: ToolCall::ListPanes,
         };
         assert!(
             handler
@@ -781,8 +1103,7 @@ mod tests {
 
         // And tools/call should work
         let params = ToolCallParams {
-            name: ToolName::ListPanes,
-            arguments: HashMap::new(),
+            call: ToolCall::ListPanes,
         };
         assert!(
             handler

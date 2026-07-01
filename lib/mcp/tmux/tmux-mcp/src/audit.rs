@@ -23,13 +23,24 @@ pub const AUDIT_LOG_ENV: &str = "TMUX_DEBUG_AUDIT";
 /// Environment variable for full capture directory
 pub const AUDIT_FULL_ENV: &str = "TMUX_DEBUG_AUDIT_FULL";
 
+/// Tool names written to the audit log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Tool {
+    CreatePane,
+    SendKeys,
+    CapturePane,
+    KillPane,
+    ListPanes,
+}
+
 /// A single audit log entry
 #[derive(Debug, Clone, Serialize)]
 pub struct AuditEntry {
     /// ISO 8601 timestamp
     pub ts: String,
     /// Tool name without `tmux_` prefix
-    pub tool: String,
+    pub tool: Tool,
     /// Pane ID (if applicable)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pane_id: Option<PaneId>,
@@ -55,7 +66,7 @@ impl AuditEntry {
     pub fn create_pane(pane_id: &PaneId, command: &str, name: Option<&str>) -> Self {
         Self {
             ts: Self::timestamp(),
-            tool: "create_pane".to_string(),
+            tool: Tool::CreatePane,
             pane_id: Some(pane_id.clone()),
             command: Some(command.to_string()),
             name: name.map(std::string::ToString::to_string),
@@ -69,7 +80,7 @@ impl AuditEntry {
     pub fn send_keys(pane_id: &PaneId, keys: &str) -> Self {
         Self {
             ts: Self::timestamp(),
-            tool: "send_keys".to_string(),
+            tool: Tool::SendKeys,
             pane_id: Some(pane_id.clone()),
             command: None,
             name: None,
@@ -83,7 +94,7 @@ impl AuditEntry {
     pub fn capture_pane(pane_id: &PaneId, lines: i32, output_bytes: usize) -> Self {
         Self {
             ts: Self::timestamp(),
-            tool: "capture_pane".to_string(),
+            tool: Tool::CapturePane,
             pane_id: Some(pane_id.clone()),
             command: None,
             name: None,
@@ -97,7 +108,7 @@ impl AuditEntry {
     pub fn kill_pane(pane_id: &PaneId) -> Self {
         Self {
             ts: Self::timestamp(),
-            tool: "kill_pane".to_string(),
+            tool: Tool::KillPane,
             pane_id: Some(pane_id.clone()),
             command: None,
             name: None,
@@ -111,7 +122,7 @@ impl AuditEntry {
     pub fn list_panes() -> Self {
         Self {
             ts: Self::timestamp(),
-            tool: "list_panes".to_string(),
+            tool: Tool::ListPanes,
             pane_id: None,
             command: None,
             name: None,
@@ -401,7 +412,7 @@ mod tests {
     fn test_audit_entry_create_pane() {
         let entry = AuditEntry::create_pane(&pane_id("debug-1"), "cargo run", Some("server"));
 
-        assert_eq!(entry.tool, "create_pane");
+        assert_eq!(entry.tool, Tool::CreatePane);
         assert_eq!(pane_id_text(&entry), Some("debug-1"));
         assert_eq!(entry.command, Some("cargo run".to_string()));
         assert_eq!(entry.name, Some("server".to_string()));
@@ -414,7 +425,7 @@ mod tests {
     fn test_audit_entry_create_pane_no_name() {
         let entry = AuditEntry::create_pane(&pane_id("debug-1"), "cargo run", None);
 
-        assert_eq!(entry.tool, "create_pane");
+        assert_eq!(entry.tool, Tool::CreatePane);
         assert!(entry.name.is_none());
     }
 
@@ -422,7 +433,7 @@ mod tests {
     fn test_audit_entry_send_keys() {
         let entry = AuditEntry::send_keys(&pane_id("debug-1"), "curl -X POST localhost:3000");
 
-        assert_eq!(entry.tool, "send_keys");
+        assert_eq!(entry.tool, Tool::SendKeys);
         assert_eq!(pane_id_text(&entry), Some("debug-1"));
         assert_eq!(entry.keys, Some("curl -X POST localhost:3000".to_string()));
         assert!(entry.command.is_none());
@@ -432,7 +443,7 @@ mod tests {
     fn test_audit_entry_capture_pane() {
         let entry = AuditEntry::capture_pane(&pane_id("debug-1"), 200, 4523);
 
-        assert_eq!(entry.tool, "capture_pane");
+        assert_eq!(entry.tool, Tool::CapturePane);
         assert_eq!(pane_id_text(&entry), Some("debug-1"));
         assert_eq!(entry.lines, Some(200));
         assert_eq!(entry.output_bytes, Some(4523));
@@ -442,7 +453,7 @@ mod tests {
     fn test_audit_entry_kill_pane() {
         let entry = AuditEntry::kill_pane(&pane_id("debug-1"));
 
-        assert_eq!(entry.tool, "kill_pane");
+        assert_eq!(entry.tool, Tool::KillPane);
         assert_eq!(pane_id_text(&entry), Some("debug-1"));
     }
 
@@ -450,7 +461,7 @@ mod tests {
     fn test_audit_entry_list_panes() {
         let entry = AuditEntry::list_panes();
 
-        assert_eq!(entry.tool, "list_panes");
+        assert_eq!(entry.tool, Tool::ListPanes);
         assert!(entry.pane_id.is_none());
     }
 

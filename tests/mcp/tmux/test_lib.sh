@@ -78,7 +78,7 @@ cleanup() {
     log_debug "Cleanup running (exit code: $exit_code)"
 
     # Stop MCP server if running
-    stop_mcp_server 2>/dev/null || true
+    stop_mcp_server 2>/dev/null || true # best-effort: cleanup may run before server startup completes.
 
     # Remove temp directory
     if [[ -n "${TEMP_DIR:-}" ]] && [[ -d "$TEMP_DIR" ]]; then
@@ -169,25 +169,25 @@ start_mcp_server() {
 # Stop MCP server
 stop_mcp_server() {
     if [[ -n "${MCP_FD_IN:-}" ]]; then
-        exec 3>&- 2>/dev/null || true
+        exec 3>&- 2>/dev/null || true # best-effort: descriptor may already be closed by a prior cleanup.
         MCP_FD_IN=""
     fi
     if [[ -n "${MCP_FD_OUT:-}" ]]; then
-        exec 4<&- 2>/dev/null || true
+        exec 4<&- 2>/dev/null || true # best-effort: descriptor may already be closed by a prior cleanup.
         MCP_FD_OUT=""
     fi
     if [[ -n "${MCP_PID:-}" ]]; then
-        kill "$MCP_PID" 2>/dev/null || true
-        wait "$MCP_PID" 2>/dev/null || true
+        kill "$MCP_PID" 2>/dev/null || true # best-effort: server may have already exited.
+        wait "$MCP_PID" 2>/dev/null || true # best-effort: child may already be reaped after signal handling.
         log_debug "Stopped MCP server (PID: $MCP_PID)"
         MCP_PID=""
     fi
     if [[ -n "${MCP_FIFO_IN:-}" ]]; then
-        rm -f "$MCP_FIFO_IN" 2>/dev/null || true
+        rm -f "$MCP_FIFO_IN"
         MCP_FIFO_IN=""
     fi
     if [[ -n "${MCP_FIFO_OUT:-}" ]]; then
-        rm -f "$MCP_FIFO_OUT" 2>/dev/null || true
+        rm -f "$MCP_FIFO_OUT"
         MCP_FIFO_OUT=""
     fi
 }

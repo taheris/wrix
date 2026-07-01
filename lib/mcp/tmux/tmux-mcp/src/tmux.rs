@@ -24,6 +24,8 @@ pub enum TmuxError {
 /// Result type for tmux operations.
 pub type TmuxResult<T> = Result<T, TmuxError>;
 
+const BOOTSTRAP_WINDOW_NAME: &str = "__wrix_bootstrap__";
+
 /// Trait for executing tmux commands, allowing for mocking in tests.
 pub trait CommandExecutor: Send + Sync {
     fn execute(&self, args: &[&str]) -> io::Result<Output>;
@@ -123,6 +125,14 @@ impl<E: CommandExecutor> TmuxSession<E> {
         }
     }
 
+    fn remove_bootstrap_window(&self) -> TmuxResult<()> {
+        let target = format!("{}:{BOOTSTRAP_WINDOW_NAME}", self.session_name);
+        match self.run_tmux(&["kill-window", "-t", &target]) {
+            Ok(_) | Err(TmuxError::WindowNotFound { .. }) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
     fn window_info_parts(line: &str) -> TmuxResult<(&str, &str, &str)> {
         let mut parts = line.split('|');
         let Some(pane_id_raw) = parts.next() else {
@@ -212,6 +222,8 @@ impl<E: CommandExecutor> TmuxSession<E> {
             "-d",
             "-s",
             &self.session_name,
+            "-n",
+            BOOTSTRAP_WINDOW_NAME,
             "-x",
             &width,
             "-y",
@@ -245,6 +257,7 @@ impl<E: CommandExecutor> TmuxSession<E> {
         ])?;
 
         self.set_window_remain_on_exit(&target)?;
+        self.remove_bootstrap_window()?;
 
         Ok(pane_id.clone())
     }
@@ -279,10 +292,17 @@ impl<E: CommandExecutor> TmuxSession<E> {
     }
 
     /// Kill a pane/window.
-    pub fn kill_pane(&self, pane_id: &PaneId) -> TmuxResult<()> {
+    pub fn kill_pane(&mut self, pane_id: &PaneId) -> TmuxResult<()> {
         let target = format!("{}:{}", self.session_name, pane_id.as_str());
         self.run_tmux(&["kill-window", "-t", &target])?;
-        Ok(())
+        match self.run_tmux(&["list-windows", "-t", &self.session_name]) {
+            Ok(_) => Ok(()),
+            Err(TmuxError::SessionNotFound(_)) => {
+                self.session_created = false;
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// List all windows in the session.
@@ -453,6 +473,7 @@ mod tests {
         assert_eq!(calls[0][0], "new-session");
         assert!(calls[0].contains(&"-d".to_string()));
         assert!(calls[0].contains(&"-s".to_string()));
+        assert!(calls[0].contains(&BOOTSTRAP_WINDOW_NAME.to_string()));
         assert_eq!(calls[1][0], "set-hook");
         assert!(calls[1].contains(&"after-new-window".to_string()));
         assert!(calls[1].contains(&"set-option remain-on-exit on".to_string()));
@@ -460,6 +481,12 @@ mod tests {
         assert!(calls[2].contains(&"-n".to_string()));
         assert!(calls[2].contains(&"debug-1".to_string()));
         assert!(calls[2].contains(&"cargo run".to_string()));
+        assert_eq!(calls[4][0], "kill-window");
+        assert!(
+            calls[4]
+                .iter()
+                .any(|arg| arg.contains(BOOTSTRAP_WINDOW_NAME))
+        );
     }
 
     #[test]
@@ -509,10 +536,15 @@ mod tests {
         session.kill_pane(&id).unwrap();
 
         let calls = session.executor.get_calls();
-        let kill_call = calls.last().unwrap();
+        let kill_call = calls
+            .iter()
+            .find(|call| {
+                call.first() == Some(&"kill-window".to_string())
+                    && call.iter().any(|arg| arg.contains("debug-1"))
+            })
+            .unwrap();
 
         assert_eq!(kill_call[0], "kill-window");
-        assert!(kill_call.iter().any(|s| s.contains("debug-1")));
     }
 
     #[test]

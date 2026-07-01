@@ -68,6 +68,35 @@ WRAPPER_IMAGE_REF=$(jq -r '.image.ref' "$PROFILE_CONFIG")
   exit 1
 }
 
+if ! AUDIT_SETTINGS=$(nix build --no-link --print-out-paths --no-warn-dirty --impure --expr "
+  let
+    flake = builtins.getFlake \"git+file://$REPO_ROOT\";
+    system = builtins.currentSystem;
+    lib = flake.legacyPackages.\${system}.lib;
+  in
+    (lib.mkSandbox {
+      profile = lib.profiles.rust;
+      mcp.tmux = {
+        audit = \"/workspace/.debug-audit.log\";
+        auditFull = \"/workspace/.debug-audit\";
+      };
+    }).image.claudeSettingsJson
+" 2>>"$build_log"); then
+  cat "$build_log" >&2
+  echo "FAIL: nix build explicit mkSandbox mcp.tmux audit settings" >&2
+  exit 1
+fi
+
+if ! jq -e '
+  .mcpServers.tmux.command == "tmux-mcp"
+  and .mcpServers.tmux.env.TMUX_DEBUG_AUDIT == "/workspace/.debug-audit.log"
+  and .mcpServers.tmux.env.TMUX_DEBUG_AUDIT_FULL == "/workspace/.debug-audit"
+' "$AUDIT_SETTINGS" >/dev/null; then
+  echo "FAIL: mcp.tmux audit/auditFull settings not present in Claude settings" >&2
+  cat "$AUDIT_SETTINGS" >&2
+  exit 1
+fi
+
 IMAGE_REF=$(wrix_unique_image_ref "wrix-test-tmux-e2e-sandbox")
 wrix_load_test_image "$IMAGE_STREAM" "$(wrix_image_short_name "$WRAPPER_IMAGE_REF")" "$IMAGE_REF"
 
