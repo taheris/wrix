@@ -14,10 +14,9 @@
 # `mkSandbox` returns as its `profile` field, so the resolved profile is
 # honest evidence of what reaches the container.
 #
-# We drive `nix eval` against the flake to construct `mkSandbox { mounts;
-# env; }` and assert against the returned `profile.mounts` /
-# `profile.env`. This exercises the real merge code rather than grepping
-# source.
+# We drive `nix eval` against the flake for merge invariants, then invoke the
+# live Rust launcher with mocked podman/skopeo so the resolved env and mounts
+# are observed at the container argv boundary rather than inferred from source.
 #
 # Stylistic template: tests/profiles/mkdevshell.sh:test_env_right_merge.
 
@@ -275,6 +274,10 @@ test_default_inputs_preserve_profile() {
 # Every sandbox image carries the wrix CLI so session-close commands like
 # `wrix beads push` resolve without entering a devShell or running nix.
 # ============================================================================
+test_custom_mounts_env_reach_live_launcher() {
+  "$SCRIPT_DIR/rust-launcher-live.sh" test_linux_custom_mounts_env_reach_live_launcher
+}
+
 test_wrix_cli_added_to_sandbox_profile() {
   local result
   if ! result=$(eval_expr_json "
@@ -297,7 +300,29 @@ test_wrix_cli_added_to_sandbox_profile() {
     fail "mkSandbox did not add wrix CLI to profiles: $missing"
     return 1
   fi
-  pass "mkSandbox adds the wrix CLI to every built-in sandbox profile"
+
+  local source profile_env uname_s
+  if ! source=$(nix build --no-link --print-out-paths --no-warn-dirty "$REPO_ROOT#sandbox.image.source"); then
+    fail "building the default sandbox image source failed"
+    return 1
+  fi
+  uname_s=$(uname -s)
+  if [[ "$uname_s" = "Linux" ]]; then
+    profile_env=$(jq -r '.materialized_roots[]' "$source" | while IFS= read -r root; do
+      if [[ -x "$root/bin/wrix" ]]; then
+        printf '%s\n' "$root"
+        break
+      fi
+    done)
+    if [[ -z "$profile_env" ]]; then
+      fail "built sandbox image descriptor has no materialized root with bin/wrix"
+      return 1
+    fi
+  elif [[ ! -s "$source" ]]; then
+    fail "built sandbox image source is empty: $source"
+    return 1
+  fi
+  pass "mkSandbox adds the wrix CLI to built-in profiles and the built image source"
 }
 
 # ----------------------------------------------------------------------------
@@ -308,6 +333,7 @@ ALL_TESTS=(
   test_env_right_merge
   test_env_preserves_profile_keys
   test_default_inputs_preserve_profile
+  test_custom_mounts_env_reach_live_launcher
   test_wrix_cli_added_to_sandbox_profile
 )
 

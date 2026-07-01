@@ -7,21 +7,7 @@ use thiserror::Error;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Platform {
-    #[cfg_attr(
-        target_os = "macos",
-        expect(
-            dead_code,
-            reason = "the platform enum retains Linux so validation messages are shared across host builds"
-        )
-    )]
     Linux,
-    #[cfg_attr(
-        not(target_os = "macos"),
-        expect(
-            dead_code,
-            reason = "the platform enum retains Darwin so validation messages are shared across host builds"
-        )
-    )]
     Darwin,
 }
 

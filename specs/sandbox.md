@@ -22,13 +22,13 @@ Running AI coding assistants with unrestricted host access creates security risk
 - `profile` — the resolved profile attrset after merging consumer `packages`, `mounts`, `env`, and MCP server packages.
 - `devShell` — a helper function for host devshells backed by this sandbox object, so `wrix run` inside the shell and `nix run .#sandbox-*` use the same configured package.
 
-**Platform dispatch** — `lib/sandbox/default.nix` selects the Podman launcher (`lib/sandbox/linux/`) or the Apple `container` CLI launcher (`lib/sandbox/darwin/`). Unsupported systems throw at evaluation.
+**Platform dispatch** — `lib/sandbox/default.nix` selects the platform image source, entrypoint, and configured wrapper metadata, then rejects unsupported systems at evaluation. The profile-agnostic Rust `wrix` launcher performs host runtime dispatch at execution time: Linux constructs the Podman invocation, and Darwin constructs the Apple `container` invocation.
 
 The **runtime image installer** is the shared host-side image install and cleanup path used by `wrix run`, `wrix spawn`, and `wrix service start`; it is not a separate public CLI.
 
 **Image install path** — Before invoking the platform install pipeline, the wrix runtime image installer checks whether the image's **content digest** recorded with the selected image source (not ref-name+tag) matches any image already present in the platform store. On Linux this digest is derived from descriptor/config metadata without executing the source; tar-loadable Darwin sources may be inspected for config metadata but are not loaded. On a digest hit, the install is skipped entirely — no source execution, no tar materialization, no stream invocation, and no `*-load` CLI call. On a miss, the installer dispatches by `ProfileConfig.image.source_kind`:
 
-- Linux uses an archive-less source (`source_kind = "nix-descriptor"`) with a containers/image-compatible transport (`skopeo copy nix:<descriptor> → containers-storage:<ref>` or a wrix equivalent). The destination is asked whether each layer digest can be reused before the source opens store paths or generates a tar stream, so unchanged layers are neither generated nor copied.
+- Linux uses an archive-less source (`source_kind = "nix-descriptor"`) whose descriptor names a prebuilt OCI layout. The runtime installer reads that descriptor and copies `oci:<oci_layout>:<oci_ref>` into `containers-storage:<ref>` with skopeo (or an equivalent wrix-owned copy path). Digest preflight runs before the copy; on a miss, content-addressed layer storage reuses unchanged blob digests, so unchanged lower layers are not rewritten.
 - Darwin uses `container image load --input <tar>` for tar-loadable sources (`source_kind = "docker-archive"`). Apple's `container` CLI surfaces no per-blob-dedup install path at this time; see `image-builder.md` § Out of Scope.
 
 Both platforms rely on the provenance-tiered graph (see `image-builder.md` § Provenance-Tiered Layering) to keep volatile changes isolated. Linux realizes the cache contract through descriptor-level layer reuse; Darwin keeps a tar/load fallback plus digest-skip preflight until a per-blob Apple path is verified.
@@ -194,7 +194,7 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 - `mkSandbox` accepts the documented parameter set (`profile`, `cpus`, `memoryMb`, `deployKey`, `packages`, `mounts`, `env`, `mcp`, `mcpRuntime`, `agent`, `agentPkg`, `agentSettings`) and returns `{ package, image, launcher, profile, devShell }`
   [system](bash tests/sandbox/mksandbox-api.sh test_mksandbox_accepts_documented_parameters)
 - Platform dispatch picks the Linux implementation on Linux hosts and the macOS implementation on Darwin hosts
-  [check](grep -nE 'isLinux|isDarwin' lib/sandbox/default.nix)
+  [system](bash tests/sandbox/platform-dispatch.sh)
 - Evaluating `mkSandbox` on an unsupported system throws at evaluation time rather than producing a broken derivation
   [check](grep -nE 'Unsupported system' lib/sandbox/default.nix)
 - A built Linux sandbox starts a container and exits cleanly
@@ -212,11 +212,11 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 - In a fresh container built from a profile that ships `nix`, the runtime process (rootless container-root) runs `nix develop -c true`, a `nix build` of a flake target, and a store-mutating op against a baked root-owned path to completion (exit 0) with no `Operation not permitted` failure on a `/nix/store` path
   [system](bash tests/sandbox/nix-in-container.sh)
 - The default container boundary does not `LD_PRELOAD` `libfakeuid` (its `getuid()→1000` spoof blanks claude's TUI when the process is really root — wx-nsage); instead it sets `IS_SANDBOX=1` so claude permits `--dangerously-skip-permissions` as root without spoofing. libfakeuid remains krun-only
-  [check](grep -q 'IS_SANDBOX=1' lib/sandbox/linux/default.nix && ! grep -q 'LD_PRELOAD=/lib/libfakeuid.so' lib/sandbox/linux/default.nix)
+  [system](bash tests/sandbox/rust-launcher-live.sh test_linux_sets_is_sandbox_without_fakeuid)
 - A freshly provisioned container — with no prior store surgery — passes `nix-store --verify --check-contents` with zero missing or dangling paths, so an additive `nix build` cannot fail with `No such file or directory` on a path the baked Nix DB registers as valid (the build-time guarantee is owned by `image-builder.md` § In-Container Nix Store Consistency)
   [system](bash tests/sandbox/nix-store-verify-clean.sh)
 - The launcher accepts `WRIX_NETWORK=open` and `WRIX_NETWORK=limit`; any other value errors before the container starts
-  [check](grep -nE "WRIX_NETWORK must be 'open' or 'limit'" lib/sandbox/linux/default.nix lib/sandbox/darwin/default.nix)
+  [check](cargo test -p wrix-sandbox network_mode_parse_accepts_only_open_and_limit)
 - In `WRIX_NETWORK=open`, sandbox outbound to public internet succeeds, but outbound to LAN/private/host-local/VPN/special IPv4 ranges fails except for exact DNS and wrix-owned endpoint exceptions
   [system](bash tests/sandbox/network-baseline.sh test_open_blocks_lan)
 - In `WRIX_NETWORK=limit`, outbound succeeds only to the merged allowlist plus exact DNS and wrix-owned endpoint exceptions; allowlist domains are resolved once at startup, unresolvable domains fail launch, and non-allowlisted public internet plus LAN/private/host-local/VPN/special ranges fail
@@ -261,7 +261,7 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
   [system](bash tests/sandbox/entrypoint-contract.sh test_workspace_bin_path_prepend_both)
 - The runtime image installer preflight checks whether the selected image source's content digest matches any image already present in the platform store before invoking the install pipeline; on a digest hit, no image source is executed, no tar bytes are streamed, and no `*-load` CLI is invoked
   [system](bash tests/sandbox/image-install-digest-skip.sh)
-- On Linux, the runtime image installer dispatches `source_kind = "nix-descriptor"` through an archive-less `skopeo nix:<descriptor> → containers-storage:<ref>` (or equivalent wrix) install path; the docker/OCI archive conversion path is not used for Linux descriptor sources
+- On Linux, the runtime image installer dispatches `source_kind = "nix-descriptor"` through an archive-less descriptor-to-OCI-layout install path (`oci:<oci_layout>:<oci_ref>` → `containers-storage:<ref>` with skopeo, or equivalent wrix); the docker/OCI archive conversion path is not used for Linux descriptor sources
   [system](bash tests/sandbox/image-install-archiveless.sh)
 - A second spawn of an already-loaded image performs no writes to the platform store's layer directory and does not execute the image source
   [system](bash tests/sandbox/image-install-no-rewrite.sh)
@@ -270,7 +270,7 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 - The runtime image cleanup path records a bounded cross-workspace MRU of eight wrix image refs/digests/image IDs, preserves images used by existing containers, prunes wrix-managed images outside the keep set, and does not automatically remove unlabelled `<none>:<none>` images
   [system](bash tests/sandbox/image-retention-cleanup.sh)
 - On Darwin, the runtime image installer uses `container image load --input <tar>` for `source_kind = "docker-archive"` image install (per Apple's available CLI surface) and relies on the digest-skip preflight while per-blob install remains out of scope
-  [check](grep -nE 'source_kind|container image load' lib/sandbox/darwin/default.nix)
+  [system](bash tests/sandbox/image-install-darwin-load.sh)
 
 ## Requirements
 

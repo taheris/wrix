@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     env, fs, io,
     io::Write,
     path::{Path, PathBuf},
@@ -6,6 +7,7 @@ use std::{
 };
 
 use displaydoc::Display;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 use wrix_core::path::Workspace;
@@ -87,6 +89,8 @@ pub enum LaunchError {
     Io { source: io::Error },
     /// invalid service endpoint JSON: {source}
     ServiceJson { source: serde_json::Error },
+    /// invalid image MRU JSON: {source}
+    ImageMruJson { source: serde_json::Error },
     /// invalid image descriptor JSON: {source}
     DescriptorJson { source: serde_json::Error },
 }
@@ -124,8 +128,20 @@ struct Plan<'a> {
     spawn_env: Vec<(String, String)>,
     spawn_mounts: Vec<RenderedMount>,
     services: ServicesState,
-    network_mode: String,
+    network_mode: NetworkMode,
     git_identity: GitIdentity,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NetworkMode {
+    Open,
+    Limit,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ImageRuntime {
+    Podman,
+    Container,
 }
 
 #[derive(Clone, Debug)]
@@ -133,6 +149,13 @@ struct RenderedMount {
     host: String,
     container: String,
     mode: MountMode,
+}
+
+#[derive(Default)]
+struct DarwinMounts {
+    mounts: Vec<RenderedMount>,
+    dir_mappings: Vec<(String, String)>,
+    file_mappings: Vec<(String, String)>,
 }
 
 #[derive(Default)]
@@ -162,6 +185,43 @@ struct ImageSource {
     digest: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct ImageRecord {
+    #[serde(default, rename = "ref", skip_serializing_if = "String::is_empty")]
+    ref_name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    digest: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    id: String,
+}
+
+impl NetworkMode {
+    fn from_env() -> Result<Self, LaunchError> {
+        match env::var("WRIX_NETWORK") {
+            Ok(value) => Self::parse(&value).ok_or(LaunchError::InvalidNetworkMode { value }),
+            Err(env::VarError::NotPresent) => Ok(Self::Open),
+            Err(env::VarError::NotUnicode(value)) => Err(LaunchError::InvalidNetworkMode {
+                value: value.to_string_lossy().into_owned(),
+            }),
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Limit => "limit",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value.as_bytes() {
+            b"open" => Some(Self::Open),
+            b"limit" => Some(Self::Limit),
+            _ => None,
+        }
+    }
+}
+
 struct GitIdentity {
     author_name: String,
     author_email: String,
@@ -171,12 +231,7 @@ struct GitIdentity {
 
 impl<'a> Plan<'a> {
     fn new(request: &'a Request, services: ServicesState) -> Result<Self, LaunchError> {
-        let network_mode = env::var("WRIX_NETWORK").unwrap_or_else(|_| String::from("open"));
-        if !matches!(network_mode.as_str(), "open" | "limit") {
-            return Err(LaunchError::InvalidNetworkMode {
-                value: network_mode,
-            });
-        }
+        let network_mode = NetworkMode::from_env()?;
 
         let profile = &request.profile_config;
         let source = match &request.kind {
@@ -308,6 +363,11 @@ impl<'a> Plan<'a> {
         for mount in &self.spawn_mounts {
             writeln!(stdout, "MOUNT=-v {}", mount.podman_arg())?;
         }
+        if Platform::CURRENT == Platform::Darwin {
+            let staging = Staging::create()?;
+            let mounts = self.darwin_mounts(&staging)?;
+            mounts.write_dry_run(stdout)?;
+        }
         Ok(())
     }
 
@@ -325,6 +385,7 @@ impl<'a> Plan<'a> {
             self.image_source_kind,
             &self.image_digest,
         )?;
+        self.remember_and_prune_images(ImageRuntime::Podman)?;
         let staging = Staging::create()?;
         let mut volumes = self.linux_volumes(&staging)?;
         let credentials = self.credentials(&staging)?;
@@ -386,6 +447,9 @@ impl<'a> Plan<'a> {
         ) {
             command.arg("-e").arg(format!("{key}={value}"));
         }
+        if !env_flag("WRIX_MICROVM") {
+            command.arg("-e").arg("IS_SANDBOX=1");
+        }
         command
             .arg("-w")
             .arg("/workspace")
@@ -404,7 +468,9 @@ impl<'a> Plan<'a> {
             self.image_source_kind,
             &self.image_digest,
         )?;
+        self.remember_and_prune_images(ImageRuntime::Container)?;
         let staging = Staging::create()?;
+        let darwin_mounts = self.darwin_mounts(&staging)?;
         let credentials = self.credentials(&staging)?;
         let pi_auth = self.pi_auth()?;
         let mut command = ProcessCommand::new("container");
@@ -430,7 +496,7 @@ impl<'a> Plan<'a> {
             .arg("default")
             .arg("-v")
             .arg(format!("{}:/workspace", self.workspace.display()));
-        for mount in &self.spawn_mounts {
+        for mount in &darwin_mounts.mounts {
             command
                 .arg("-v")
                 .arg(format!("{}:{}", mount.host, mount.container));
@@ -449,6 +515,15 @@ impl<'a> Plan<'a> {
             pi_auth.as_ref().map(|auth| auth.container_path.as_str()),
         ) {
             command.arg("-e").arg(format!("{key}={value}"));
+        }
+        command
+            .arg("-e")
+            .arg(format!("HOST_UID={}", current_uid()?));
+        if let Some(value) = darwin_mounts.dir_env() {
+            command.arg("-e").arg(format!("WRIX_DIR_MOUNTS={value}"));
+        }
+        if let Some(value) = darwin_mounts.file_env() {
+            command.arg("-e").arg(format!("WRIX_FILE_MOUNTS={value}"));
         }
         command
             .arg("--")
@@ -480,6 +555,31 @@ impl<'a> Plan<'a> {
         }
         volumes.extend(self.spawn_mounts.clone());
         Ok(volumes)
+    }
+
+    fn darwin_mounts(&self, staging: &Staging) -> Result<DarwinMounts, LaunchError> {
+        let mut mounts = DarwinMounts::default();
+        for mount in &self.request.profile_config.profile.mounts {
+            mounts.push(&RenderedMount::from_profile(mount), staging)?;
+        }
+        for mount in &self.spawn_mounts {
+            mounts.push(mount, staging)?;
+        }
+        Ok(mounts)
+    }
+
+    fn remember_and_prune_images(&self, runtime: ImageRuntime) -> Result<(), LaunchError> {
+        let digest = if self.image_source.is_empty() {
+            String::new()
+        } else {
+            desired_digest(
+                &self.image_source,
+                self.image_source_kind,
+                &self.image_digest,
+            )?
+        };
+        remember_image_ref(runtime, &self.image_ref, &digest)?;
+        prune_stale_images(runtime, &self.image_ref, &digest)
     }
 
     fn credentials(&self, staging: &Staging) -> Result<Option<Credentials>, LaunchError> {
@@ -611,7 +711,10 @@ impl<'a> Plan<'a> {
                 String::from("WRIX_AGENT"),
                 self.request.profile_config.agent.kind.as_str().to_owned(),
             ),
-            (String::from("WRIX_NETWORK"), self.network_mode.clone()),
+            (
+                String::from("WRIX_NETWORK"),
+                self.network_mode.as_str().to_owned(),
+            ),
             (
                 String::from("WRIX_NETWORK_ALLOWLIST"),
                 self.request
@@ -734,6 +837,14 @@ impl GitIdentity {
 }
 
 impl RenderedMount {
+    fn from_profile(mount: &ProfileMount) -> Self {
+        Self {
+            host: mount.source.clone(),
+            container: mount.dest.clone(),
+            mode: mount.mode,
+        }
+    }
+
     fn from_spawn(mount: &SpawnMount) -> Self {
         Self {
             host: mount.host_path.clone(),
@@ -752,6 +863,90 @@ impl RenderedMount {
         } else {
             format!("{}:{}", self.host, self.container)
         }
+    }
+}
+
+impl DarwinMounts {
+    fn push(&mut self, mount: &RenderedMount, staging: &Staging) -> Result<(), LaunchError> {
+        let source = expand_path(&mount.host);
+        if !source.exists() {
+            return Err(LaunchError::MountSourceMissing {
+                path: source.display().to_string(),
+            });
+        }
+        if file_type_is_socket(&source)? {
+            return Err(LaunchError::SocketMountRejected {
+                socket: source.display().to_string(),
+                dest: mount.container.clone(),
+            });
+        }
+        if source.is_dir() {
+            let index = self.dir_mappings.len();
+            let host = staging.root.join(format!("dir{index}"));
+            copy_dir(&source, &host)?;
+            let container = format!("/mnt/wrix/dir{index}");
+            self.mounts.push(RenderedMount {
+                host: host.display().to_string(),
+                container: container.clone(),
+                mode: MountMode::Rw,
+            });
+            self.dir_mappings.push((container, mount.container.clone()));
+            return Ok(());
+        }
+        let parent = source.parent().map_or_else(PathBuf::new, Path::to_path_buf);
+        let file_name = source
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let container_parent = self.file_parent_mount(&parent);
+        self.file_mappings.push((
+            format!("{container_parent}/{file_name}"),
+            mount.container.clone(),
+        ));
+        Ok(())
+    }
+
+    fn file_parent_mount(&mut self, parent: &Path) -> String {
+        for mount in &self.mounts {
+            if mount.host == parent.display().to_string()
+                && mount.container.starts_with("/mnt/wrix/file")
+            {
+                return mount.container.clone();
+            }
+        }
+        let index = self
+            .mounts
+            .iter()
+            .filter(|mount| mount.container.starts_with("/mnt/wrix/file"))
+            .count();
+        let container = format!("/mnt/wrix/file{index}");
+        self.mounts.push(RenderedMount {
+            host: parent.display().to_string(),
+            container: container.clone(),
+            mode: MountMode::Rw,
+        });
+        container
+    }
+
+    fn dir_env(&self) -> Option<String> {
+        mapping_env(&self.dir_mappings)
+    }
+
+    fn file_env(&self) -> Option<String> {
+        mapping_env(&self.file_mappings)
+    }
+
+    fn write_dry_run(&self, stdout: &mut impl Write) -> Result<(), LaunchError> {
+        if let Some(value) = self.dir_env() {
+            writeln!(stdout, "DIR_MOUNTS={value}")?;
+        }
+        if let Some(value) = self.file_env() {
+            writeln!(stdout, "FILE_MOUNTS={value}")?;
+        }
+        for mount in &self.mounts {
+            writeln!(stdout, "MOUNT=-v {}:{}", mount.host, mount.container)?;
+        }
+        Ok(())
     }
 }
 
@@ -1059,6 +1254,317 @@ fn desired_digest(
     }
 }
 
+fn remember_image_ref(
+    runtime: ImageRuntime,
+    image_ref: &str,
+    digest: &str,
+) -> Result<(), LaunchError> {
+    if image_ref.is_empty() {
+        return Ok(());
+    }
+    let path = image_mru_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut records = read_image_records(&path)?;
+    records.insert(
+        0,
+        ImageRecord {
+            ref_name: image_ref.to_owned(),
+            digest: digest.to_owned(),
+            id: image_inspect_id(runtime, image_ref)?.unwrap_or_else(String::new),
+        },
+    );
+    let mut seen = BTreeSet::new();
+    let records = records
+        .into_iter()
+        .filter(|record| {
+            !record.ref_name.is_empty() || !record.digest.is_empty() || !record.id.is_empty()
+        })
+        .filter(|record| {
+            seen.insert(format!(
+                "{}\0{}\0{}",
+                record.ref_name, record.digest, record.id
+            ))
+        })
+        .take(8)
+        .collect::<Vec<_>>();
+    let json = serde_json::to_string_pretty(&records)
+        .map_err(|source| LaunchError::ImageMruJson { source })?;
+    fs::write(path, format!("{json}\n"))?;
+    Ok(())
+}
+
+fn prune_stale_images(
+    runtime: ImageRuntime,
+    image_ref: &str,
+    digest: &str,
+) -> Result<(), LaunchError> {
+    let mut keep_refs = BTreeSet::new();
+    let mut keep_ids = BTreeSet::new();
+    let mut keep_digests = BTreeSet::new();
+    add_normalized(&mut keep_refs, image_ref);
+    add_normalized(&mut keep_digests, digest);
+    if let Some(id) = image_inspect_id(runtime, image_ref)? {
+        add_normalized(&mut keep_ids, &id);
+    }
+    if let Some(actual_digest) = image_inspect_digest(runtime, image_ref)? {
+        add_normalized(&mut keep_digests, &actual_digest);
+    }
+    for record in read_image_records(&image_mru_path())? {
+        add_normalized(&mut keep_refs, &record.ref_name);
+        add_normalized(&mut keep_ids, &record.id);
+        add_normalized(&mut keep_digests, &record.digest);
+    }
+    for image in list_images(runtime)? {
+        if !image.managed && !image.legacy {
+            continue;
+        }
+        if keep_refs.contains(&image.ref_name)
+            || keep_ids.contains(&image.id)
+            || keep_digests.contains(&image.digest)
+        {
+            continue;
+        }
+        if image_in_use(runtime, &image.target)? {
+            continue;
+        }
+        delete_image(runtime, &image.target)?;
+    }
+    Ok(())
+}
+
+struct ListedImage {
+    ref_name: String,
+    target: String,
+    id: String,
+    digest: String,
+    managed: bool,
+    legacy: bool,
+}
+
+fn image_mru_path() -> PathBuf {
+    if let Some(path) = env::var_os("WRIX_IMAGE_KEEP_FILE") {
+        return PathBuf::from(path);
+    }
+    env::var_os("XDG_CACHE_HOME")
+        .map_or_else(|| home_dir().join(".cache"), PathBuf::from)
+        .join("wrix/image-mru.json")
+}
+
+fn read_image_records(path: &Path) -> Result<Vec<ImageRecord>, LaunchError> {
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+    let content = fs::read_to_string(path)?;
+    match serde_json::from_str::<Vec<ImageRecord>>(&content) {
+        Ok(records) => Ok(records),
+        Err(source) => {
+            let mut sink = io::stderr().lock();
+            writeln!(
+                sink,
+                "wrix: resetting invalid image MRU {}: {source}",
+                path.display()
+            )?;
+            Ok(Vec::new())
+        }
+    }
+}
+
+fn list_images(runtime: ImageRuntime) -> Result<Vec<ListedImage>, LaunchError> {
+    let output = match runtime {
+        ImageRuntime::Podman => run_required_output(
+            "podman",
+            &["images", "--format", "{{.Repository}} {{.Tag}} {{.ID}}"],
+        )?,
+        ImageRuntime::Container => run_required_output("container", &["image", "list"])?,
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut images = Vec::new();
+    for line in text.lines() {
+        if let Some(image) = listed_image_from_line(runtime, line) {
+            images.push(image?);
+        }
+    }
+    Ok(images)
+}
+
+fn listed_image_from_line(
+    runtime: ImageRuntime,
+    line: &str,
+) -> Option<Result<ListedImage, LaunchError>> {
+    let mut fields = line.split_whitespace();
+    let repo = fields.next()?;
+    if runtime == ImageRuntime::Container && repo.eq_ignore_ascii_case("repository") {
+        return None;
+    }
+    let tag = fields.next().unwrap_or("<none>");
+    let listed_id = fields.next().unwrap_or("");
+    let ref_name = if repo != "<none>" && tag != "<none>" {
+        format!("{repo}:{tag}")
+    } else {
+        String::new()
+    };
+    let target = normalized_value(&ref_name)
+        .or_else(|| normalized_value(listed_id))
+        .unwrap_or_default();
+    if target.is_empty() {
+        return None;
+    }
+    Some(listed_image(
+        runtime,
+        ref_name,
+        listed_id.to_owned(),
+        target,
+    ))
+}
+
+fn listed_image(
+    runtime: ImageRuntime,
+    ref_name: String,
+    listed_id: String,
+    target: String,
+) -> Result<ListedImage, LaunchError> {
+    let id = image_inspect_id(runtime, &target)?.unwrap_or(listed_id);
+    let digest = image_inspect_digest(runtime, &target)?.unwrap_or_else(String::new);
+    let managed = image_managed(runtime, &target)?;
+    let legacy = match runtime {
+        ImageRuntime::Podman => ref_name.starts_with("localhost/wrix-"),
+        ImageRuntime::Container => ref_name.starts_with("wrix-"),
+    };
+    Ok(ListedImage {
+        ref_name,
+        target,
+        id,
+        digest,
+        managed,
+        legacy,
+    })
+}
+
+fn image_inspect_id(runtime: ImageRuntime, target: &str) -> Result<Option<String>, LaunchError> {
+    image_inspect_value(runtime, target, ImageInspectField::Id)
+}
+
+fn image_inspect_digest(
+    runtime: ImageRuntime,
+    target: &str,
+) -> Result<Option<String>, LaunchError> {
+    image_inspect_value(runtime, target, ImageInspectField::Digest)
+}
+
+#[derive(Clone, Copy)]
+enum ImageInspectField {
+    Id,
+    Digest,
+    Managed,
+}
+
+fn image_inspect_value(
+    runtime: ImageRuntime,
+    target: &str,
+    field: ImageInspectField,
+) -> Result<Option<String>, LaunchError> {
+    if target.is_empty() {
+        return Ok(None);
+    }
+    let output = match runtime {
+        ImageRuntime::Podman => {
+            let format = match field {
+                ImageInspectField::Id => "{{.Id}}",
+                ImageInspectField::Digest => "{{.Digest}}",
+                ImageInspectField::Managed => "{{ index .Config.Labels \"wrix.managed\" }}",
+            };
+            run_output("podman", &["image", "inspect", "--format", format, target])?
+        }
+        ImageRuntime::Container => run_output("container", &["image", "inspect", target])?,
+    };
+    if !output.status.success() {
+        return Ok(None);
+    }
+    match runtime {
+        ImageRuntime::Podman => Ok(normalized_value(&trim_stdout(&output.stdout))),
+        ImageRuntime::Container => inspect_container_value(&output.stdout, field),
+    }
+}
+
+fn inspect_container_value(
+    stdout: &[u8],
+    field: ImageInspectField,
+) -> Result<Option<String>, LaunchError> {
+    let value = serde_json::from_slice::<Value>(stdout)
+        .map_err(|source| LaunchError::DescriptorJson { source })?;
+    let pointer = match field {
+        ImageInspectField::Id => "/0/id",
+        ImageInspectField::Digest => "/0/digest",
+        ImageInspectField::Managed => "/0/labels/wrix.managed",
+    };
+    Ok(value
+        .pointer(pointer)
+        .or_else(|| match field {
+            ImageInspectField::Managed => value.pointer("/0/Labels/wrix.managed"),
+            _ => None,
+        })
+        .and_then(Value::as_str)
+        .and_then(normalized_value))
+}
+
+fn image_managed(runtime: ImageRuntime, target: &str) -> Result<bool, LaunchError> {
+    Ok(
+        image_inspect_value(runtime, target, ImageInspectField::Managed)?.as_deref()
+            == Some("true"),
+    )
+}
+
+fn image_in_use(runtime: ImageRuntime, target: &str) -> Result<bool, LaunchError> {
+    if runtime != ImageRuntime::Podman {
+        return Ok(false);
+    }
+    let filter = format!("ancestor={target}");
+    let output = run_output(
+        "podman",
+        &["ps", "-a", "--filter", &filter, "--format", "{{.Names}}"],
+    )?;
+    Ok(output.status.success() && !trim_stdout(&output.stdout).is_empty())
+}
+
+fn delete_image(runtime: ImageRuntime, target: &str) -> Result<(), LaunchError> {
+    let output = match runtime {
+        ImageRuntime::Podman => run_output("podman", &["rmi", target])?,
+        ImageRuntime::Container => run_output("container", &["image", "delete", target])?,
+    };
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let mut sink = io::stderr().lock();
+    if stderr.contains("in use") || stderr.contains("is using") {
+        writeln!(
+            sink,
+            "prune-stale-images: {target} pinned by a container — upgrades on next start"
+        )?;
+    } else {
+        writeln!(
+            sink,
+            "prune-stale-images: could not remove {target}: {stderr}"
+        )?;
+    }
+    Ok(())
+}
+
+fn add_normalized(set: &mut BTreeSet<String>, value: &str) {
+    if let Some(value) = normalized_value(value) {
+        set.insert(value);
+    }
+}
+
+fn normalized_value(value: &str) -> Option<String> {
+    match value.trim() {
+        "" | "<none>" | "<no value>" | "null" => None,
+        value => Some(value.to_owned()),
+    }
+}
+
 fn linux_store_ref(image_ref: &str) -> String {
     let mut store_ref = format!("containers-storage:{image_ref}");
     if let Ok(output) = run_output(
@@ -1298,6 +1804,11 @@ fn status_to_exit(status: std::process::ExitStatus) -> ExitCode {
         .map_or(ExitCode::FAILURE, ExitCode::from)
 }
 
+fn current_uid() -> Result<String, LaunchError> {
+    let output = run_required_output("id", &["-u"])?;
+    Ok(trim_stdout(&output.stdout))
+}
+
 fn read_json_file(path: &str) -> Result<Value, LaunchError> {
     let content = fs::read_to_string(path)?;
     serde_json::from_str(&content).map_err(|source| LaunchError::DescriptorJson { source })
@@ -1309,6 +1820,16 @@ fn trim_stdout(stdout: &[u8]) -> String {
 
 fn non_empty_override(value: Option<&str>) -> Option<&str> {
     value.filter(|value| !value.is_empty())
+}
+
+fn mapping_env(mappings: &[(String, String)]) -> Option<String> {
+    (!mappings.is_empty()).then(|| {
+        mappings
+            .iter()
+            .map(|(source, dest)| format!("{source}:{dest}"))
+            .collect::<Vec<_>>()
+            .join(",")
+    })
 }
 
 fn first_configured_value(values: &[Option<String>]) -> Option<String> {
@@ -1459,8 +1980,10 @@ fn stable_mount_index(path: &Path) -> u64 {
 mod test {
     use std::path::{Path, PathBuf};
 
-    use super::{RenderedMount, deploy_key_name, linux_podman_network};
-    use crate::command::config::{MountMode, SpawnMount};
+    use super::{
+        DarwinMounts, NetworkMode, RenderedMount, Staging, deploy_key_name, linux_podman_network,
+    };
+    use crate::command::config::{MountMode, ProfileMount, SpawnMount};
 
     #[test]
     fn spawn_mount_renders_ro_only_when_requested() {
@@ -1488,6 +2011,55 @@ mod test {
     }
 
     #[test]
+    fn network_mode_parse_accepts_only_open_and_limit() {
+        assert_eq!(NetworkMode::parse("open"), Some(NetworkMode::Open));
+        assert_eq!(NetworkMode::parse("limit"), Some(NetworkMode::Limit));
+        assert_eq!(NetworkMode::parse("lan"), None);
+    }
+
+    #[test]
+    fn darwin_mount_classifier_handles_profile_and_spawn_mounts() {
+        let root = scratch_dir("darwin-mounts");
+        let host_dir = root.join("host-dir");
+        let host_file = root.join("host-file");
+        let staging_root = root.join("stage");
+        std::fs::create_dir_all(&host_dir).unwrap();
+        std::fs::write(host_dir.join("payload"), b"dir").unwrap();
+        std::fs::write(&host_file, b"file").unwrap();
+        std::fs::create_dir_all(&staging_root).unwrap();
+
+        let staging = Staging { root: staging_root };
+        let profile_mount = ProfileMount {
+            source: host_dir.display().to_string(),
+            dest: String::from("/mnt/profile-dir"),
+            mode: MountMode::Ro,
+        };
+        let spawn_mount = SpawnMount {
+            host_path: host_file.display().to_string(),
+            container_path: String::from("/etc/spawn-file"),
+            read_only: true,
+        };
+        let mut mounts = DarwinMounts::default();
+        mounts
+            .push(&RenderedMount::from_profile(&profile_mount), &staging)
+            .unwrap();
+        mounts
+            .push(&RenderedMount::from_spawn(&spawn_mount), &staging)
+            .unwrap();
+
+        assert_eq!(
+            mounts.dir_env().as_deref(),
+            Some("/mnt/wrix/dir0:/mnt/profile-dir")
+        );
+        assert!(
+            mounts
+                .file_env()
+                .is_some_and(|value| value.ends_with(":/etc/spawn-file"))
+        );
+        assert_eq!(mounts.mounts.len(), 2);
+    }
+
+    #[test]
     fn stable_mount_index_is_deterministic() {
         assert_eq!(
             super::stable_mount_index(&PathBuf::from("/tmp/a")),
@@ -1501,5 +2073,14 @@ mod test {
             deploy_key_name(Path::new("/workspace/repo"), Some("custom-key")),
             "custom-key"
         );
+    }
+
+    fn scratch_dir(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("wrix-sandbox-{name}-{}", std::process::id()));
+        if root.exists() {
+            std::fs::remove_dir_all(&root).unwrap();
+        }
+        std::fs::create_dir_all(&root).unwrap();
+        root
     }
 }
