@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+set -euo pipefail
+
 # Judge rubrics for playwright-mcp.md success criteria
 
 test_chromium_path_derivation() {

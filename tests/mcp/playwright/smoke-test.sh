@@ -19,6 +19,7 @@ log_info() { echo -e "${GREEN}[INFO]${NC} $*"; }
 MCP_PID=""
 TEMP_DIR=""
 REQUEST_ID=0
+MCP_EXTRA_ENV=()
 
 cleanup() {
     local exit_code=$?
@@ -70,7 +71,7 @@ start_mcp_server() {
     mapfile -t server_env <<<"$server_env_output"
 
     mkfifo "${TEMP_DIR}/in" "${TEMP_DIR}/out"
-    env "${server_env[@]}" "$mcp_bin" "${server_args[@]}" <"${TEMP_DIR}/in" >"${TEMP_DIR}/out" 2>"${TEMP_DIR}/mcp.stderr" &
+    env "${MCP_EXTRA_ENV[@]}" "${server_env[@]}" "$mcp_bin" "${server_args[@]}" <"${TEMP_DIR}/in" >"${TEMP_DIR}/out" 2>"${TEMP_DIR}/mcp.stderr" &
     MCP_PID=$!
 
     sleep 0.3
@@ -158,6 +159,42 @@ assert_json_text() {
     log_fail "$message"
     jq . <<<"$json" >&2
     return 1
+}
+
+assert_representative_tools() {
+    local response="$1"
+    local tools
+    local tool_count
+    local expected_tools=(
+        "browser_navigate"
+        "browser_navigate_back"
+        "browser_click"
+        "browser_fill_form"
+        "browser_select_option"
+        "browser_hover"
+        "browser_take_screenshot"
+        "browser_snapshot"
+        "browser_network_requests"
+        "browser_tabs"
+        "browser_console_messages"
+    )
+    local tool
+
+    tools=$(echo "$response" | jq -r '[.result.tools[].name] | join(",")') || return 1
+    for tool in "${expected_tools[@]}"; do
+        if [[ ",$tools," != *",$tool,"* ]]; then
+            log_fail "Expected tool '$tool' not found in tool list"
+            log_fail "Available tools: $tools"
+            return 1
+        fi
+    done
+
+    tool_count=$(echo "$response" | jq '.result.tools | length') || return 1
+    if ((tool_count < ${#expected_tools[@]})); then
+        log_fail "Server returned fewer tools than the expected category coverage: $tool_count"
+        return 1
+    fi
+    log_info "Server reported $tool_count tools"
 }
 
 test_chromium_executable_path_derives_from_playwright_browsers() {
@@ -270,13 +307,45 @@ test_registry_triple_shape() {
     log_pass "test_registry_triple_shape"
 }
 
+test_network_guard_blocks_ipv4_connect() {
+    log_test "test_network_guard_blocks_ipv4_connect: deny helper blocks IPv4 connects"
+
+    new_temp_dir
+    local preload_dir
+    local network_log
+    local guard_env
+    preload_dir=$(playwright_build_mode network-deny-preload) || return 1
+    network_log="${TEMP_DIR}/network-attempts.log"
+    : >"$network_log"
+    guard_env=(
+        "LD_PRELOAD=${preload_dir}/lib/libwrix-deny-network.so"
+        "WRIX_NETWORK_DENY_LOG=$network_log"
+    )
+
+    if env "${guard_env[@]}" "$BASH" -c ': >/dev/tcp/127.0.0.1/9' 2>"${TEMP_DIR}/network-guard.stderr"; then
+        log_fail "Network guard allowed an IPv4 connect"
+        return 1
+    fi
+
+    if ! grep -q '^connect family=2$' "$network_log"; then
+        log_fail "Network guard did not log the IPv4 connect"
+        cat "$network_log" >&2
+        if [[ -s "${TEMP_DIR}/network-guard.stderr" ]]; then
+            cat "${TEMP_DIR}/network-guard.stderr" >&2
+        fi
+        return 1
+    fi
+
+    log_pass "test_network_guard_blocks_ipv4_connect"
+}
+
 test_mcp_initialize() {
     log_test "test_mcp_initialize: MCP server starts from generated config and returns tools"
 
     new_temp_dir
     start_mcp_server "${TEMP_DIR}/user-data" || return 1
 
-    local id response server_name tools tool_count
+    local id response server_name
     id=$(next_id)
     response=$(mcp_request "{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1.0\"}}}") || return 1
     server_name=$(echo "$response" | jq -r '.result.serverInfo.name') || return 1
@@ -290,47 +359,19 @@ test_mcp_initialize() {
 
     id=$(next_id)
     response=$(mcp_request "{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"tools/list\"}") || return 1
-    tools=$(echo "$response" | jq -r '[.result.tools[].name] | join(",")') || return 1
-
-    local expected_tools=(
-        "browser_navigate"
-        "browser_navigate_back"
-        "browser_click"
-        "browser_fill_form"
-        "browser_select_option"
-        "browser_hover"
-        "browser_take_screenshot"
-        "browser_snapshot"
-        "browser_network_requests"
-        "browser_tabs"
-        "browser_console_messages"
-    )
-
-    local tool
-    for tool in "${expected_tools[@]}"; do
-        if [[ ",$tools," != *",$tool,"* ]]; then
-            log_fail "Expected tool '$tool' not found in tool list"
-            log_fail "Available tools: $tools"
-            return 1
-        fi
-    done
-
-    tool_count=$(echo "$response" | jq '.result.tools | length') || return 1
-    if ((tool_count < ${#expected_tools[@]})); then
-        log_fail "Server returned fewer tools than the expected category coverage: $tool_count"
-        return 1
-    fi
-    log_info "Server reported $tool_count tools"
+    assert_representative_tools "$response" || return 1
 
     stop_mcp_server
     log_pass "test_mcp_initialize"
 }
 
 test_offline_startup() {
-    log_test "test_offline_startup: generated env disables browser downloads"
+    log_test "test_offline_startup: startup succeeds with outbound network denied"
 
     new_temp_dir
     local env_json
+    local preload_dir
+    local network_log
     env_json=$(playwright_eval_raw server-env-json --argstr userDataDir "${TEMP_DIR}/user-data") || return 1
     if ! jq -e '.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD == "1" and .PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS == "true"' <<<"$env_json" >/dev/null; then
         log_fail "Generated server env did not include offline Playwright settings"
@@ -338,7 +379,26 @@ test_offline_startup() {
         return 1
     fi
 
-    start_mcp_server "${TEMP_DIR}/user-data" || return 1
+    preload_dir=$(playwright_build_mode network-deny-preload) || return 1
+    network_log="${TEMP_DIR}/network-attempts.log"
+    : >"$network_log"
+    MCP_EXTRA_ENV=(
+        "LD_PRELOAD=${preload_dir}/lib/libwrix-deny-network.so"
+        "WRIX_NETWORK_DENY_LOG=$network_log"
+        "HTTP_PROXY=http://127.0.0.1:9"
+        "HTTPS_PROXY=http://127.0.0.1:9"
+        "ALL_PROXY=http://127.0.0.1:9"
+        "NO_PROXY="
+    )
+    if ! start_mcp_server "${TEMP_DIR}/user-data"; then
+        MCP_EXTRA_ENV=()
+        if [[ -s "$network_log" ]]; then
+            log_fail "Network attempts observed during offline startup"
+            cat "$network_log" >&2
+        fi
+        return 1
+    fi
+    MCP_EXTRA_ENV=()
 
     local id response server_name error
     id=$(next_id)
@@ -355,7 +415,19 @@ test_offline_startup() {
         return 1
     fi
 
+    mcp_notify '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+
+    id=$(next_id)
+    response=$(mcp_request "{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"tools/list\"}") || return 1
+    assert_representative_tools "$response" || return 1
+
     stop_mcp_server
+    if [[ -s "$network_log" ]]; then
+        log_fail "Network attempts observed during offline startup"
+        cat "$network_log" >&2
+        return 1
+    fi
+    log_info "Network guard observed no IPv4 or IPv6 startup attempts"
     log_pass "test_offline_startup"
 }
 
@@ -365,6 +437,7 @@ ALL_TESTS=(
     test_mandatory_flags_are_non_overridable
     test_user_options_reach_serialized_config
     test_registry_triple_shape
+    test_network_guard_blocks_ipv4_connect
     test_mcp_initialize
     test_offline_startup
 )
