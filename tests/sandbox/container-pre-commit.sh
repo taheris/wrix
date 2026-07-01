@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verifier for criterion 152 of specs/pre-commit.md:
+# Verifier for specs/pre-commit.md § Hook Installation in Profile Containers:
 #
 #   A pre-commit hook configured in `.pre-commit-config.yaml` fires when
 #   `git commit` runs inside a profile container.

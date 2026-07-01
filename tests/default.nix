@@ -134,12 +134,24 @@ let
 
   prePushSmokeTests = pkgs.lib.removeAttrs smokeTests [
     "image-builds"
+    "linux-microvm-krun-detection"
+    "linux-pasta-port-forwarding-disabled"
+    "network-mode-configuration"
     "package-runtime-path"
     "package-script-syntax"
+    "script-syntax"
   ];
 
   ciChecks = rustChecks // {
-    inherit (smokeTests) image-builds package-runtime-path package-script-syntax;
+    inherit (smokeTests)
+      image-builds
+      linux-microvm-krun-detection
+      linux-pasta-port-forwarding-disabled
+      network-mode-configuration
+      package-runtime-path
+      package-script-syntax
+      script-syntax
+      ;
   };
 
   # README example verification
@@ -225,7 +237,12 @@ let
           wrix-rust-clippy
           wrix-rust-nextest
           image-builds
+          linux-microvm-krun-detection
+          linux-pasta-port-forwarding-disabled
+          network-mode-configuration
+          package-runtime-path
           package-script-syntax
+          script-syntax
         )
         ci_apps=(
     ${ciAppNameLines}

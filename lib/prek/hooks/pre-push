@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-_git_common_dir=$(git rev-parse --git-common-dir)
-_wrix_dir=$(dirname "$_git_common_dir")/.wrix
+_worktree_root=$(git rev-parse --show-toplevel)
+_wrix_dir="$_worktree_root/.wrix"
 _stamp_file="$_wrix_dir/push-verified"
 _head_sha=$(git rev-parse HEAD)
 

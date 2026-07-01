@@ -129,6 +129,57 @@ test_shims_are_plain_hook_impl() {
 }
 
 # ============================================================================
+assert_pre_push_stamp_written_and_consumed() {
+  local bundle="$1"
+  local worktree="$2"
+  local branch="$3"
+  local label="$4"
+
+  local failed=0
+  local head_sha old_sha ref_line stamp first_out first_err second_out second_err
+  head_sha=$(git -C "$worktree" rev-parse HEAD)
+  old_sha=0000000000000000000000000000000000000000
+  ref_line="refs/heads/$branch $head_sha refs/heads/$branch $old_sha"
+  stamp="$worktree/.wrix/push-verified"
+  first_out="$worktree/$label-first.out"
+  first_err="$worktree/$label-first.err"
+  second_out="$worktree/$label-second.out"
+  second_err="$worktree/$label-second.err"
+
+  rm -rf "$worktree/.wrix"
+  if ! (cd "$worktree" && printf '%s\n' "$ref_line" | "$bundle/pre-push" origin example) >"$first_out" 2>"$first_err"; then
+    echo "FAIL: $label first pre-push invocation failed" >&2
+    cat "$first_out" >&2
+    cat "$first_err" >&2
+    failed=$((failed + 1))
+  elif [[ ! -f "$stamp" ]]; then
+    echo "FAIL: $label pre-push did not write $stamp" >&2
+    failed=$((failed + 1))
+  elif [[ "$(<"$stamp")" != "$head_sha" ]]; then
+    echo "FAIL: $label pre-push stamp did not contain HEAD sha" >&2
+    failed=$((failed + 1))
+  fi
+
+  if [[ "$failed" -eq 0 ]]; then
+    if ! (cd "$worktree" && printf '%s\n' "$ref_line" | "$bundle/pre-push" origin example) >"$second_out" 2>"$second_err"; then
+      echo "FAIL: $label stamped pre-push invocation failed" >&2
+      cat "$second_out" >&2
+      cat "$second_err" >&2
+      failed=$((failed + 1))
+    elif [[ -e "$stamp" ]]; then
+      echo "FAIL: $label pre-push did not consume the matching stamp" >&2
+      failed=$((failed + 1))
+    elif [[ -s "$second_out" || -s "$second_err" ]]; then
+      echo "FAIL: $label stamped pre-push invocation did not short-circuit cleanly" >&2
+      cat "$second_out" >&2
+      cat "$second_err" >&2
+      failed=$((failed + 1))
+    fi
+  fi
+
+  [[ "$failed" -eq 0 ]]
+}
+
 test_pre_push_stamp_written_and_consumed() {
   local bundle
   if ! bundle=$(require_bundle "$@"); then
@@ -136,14 +187,17 @@ test_pre_push_stamp_written_and_consumed() {
     return 1
   fi
 
-  local work
+  local work main linked
   work=$(mktemp -d)
+  main="$work/main"
+  linked="$work/linked"
+  mkdir -p "$main"
 
   local failed=0
-  git -C "$work" init -q -b main
-  git -C "$work" config user.email test@example.com
-  git -C "$work" config user.name Test
-  cat >"$work/.pre-commit-config.yaml" <<'YAML'
+  git -C "$main" init -q -b main
+  git -C "$main" config user.email test@example.com
+  git -C "$main" config user.name Test
+  cat >"$main/.pre-commit-config.yaml" <<'YAML'
 repos:
   - repo: local
     hooks:
@@ -155,48 +209,17 @@ repos:
         always_run: true
         pass_filenames: false
 YAML
-  echo seed >"$work/seed.txt"
-  git -C "$work" add .
-  git -C "$work" commit -q -m initial
+  echo seed >"$main/seed.txt"
+  git -C "$main" add .
+  git -C "$main" commit -q -m initial
 
-  local head_sha old_sha ref_line stamp first_out first_err second_out second_err
-  head_sha=$(git -C "$work" rev-parse HEAD)
-  old_sha=0000000000000000000000000000000000000000
-  ref_line="refs/heads/main $head_sha refs/heads/main $old_sha"
-  stamp="$work/.wrix/push-verified"
-  first_out="$work/first.out"
-  first_err="$work/first.err"
-  second_out="$work/second.out"
-  second_err="$work/second.err"
-
-  if ! (cd "$work" && printf '%s\n' "$ref_line" | "$bundle/pre-push" origin example) >"$first_out" 2>"$first_err"; then
-    echo "FAIL: first pre-push invocation failed" >&2
-    cat "$first_out" >&2
-    cat "$first_err" >&2
-    failed=$((failed + 1))
-  elif [[ ! -f "$stamp" ]]; then
-    echo "FAIL: pre-push did not write $stamp" >&2
-    failed=$((failed + 1))
-  elif [[ "$(<"$stamp")" != "$head_sha" ]]; then
-    echo "FAIL: pre-push stamp did not contain HEAD sha" >&2
+  if ! assert_pre_push_stamp_written_and_consumed "$bundle" "$main" main main-worktree; then
     failed=$((failed + 1))
   fi
 
-  if [[ "$failed" -eq 0 ]]; then
-    if ! (cd "$work" && printf '%s\n' "$ref_line" | "$bundle/pre-push" origin example) >"$second_out" 2>"$second_err"; then
-      echo "FAIL: stamped pre-push invocation failed" >&2
-      cat "$second_out" >&2
-      cat "$second_err" >&2
-      failed=$((failed + 1))
-    elif [[ -e "$stamp" ]]; then
-      echo "FAIL: pre-push did not consume the matching stamp" >&2
-      failed=$((failed + 1))
-    elif [[ -s "$second_out" || -s "$second_err" ]]; then
-      echo "FAIL: stamped pre-push invocation did not short-circuit cleanly" >&2
-      cat "$second_out" >&2
-      cat "$second_err" >&2
-      failed=$((failed + 1))
-    fi
+  git -C "$main" worktree add -q -b linked "$linked"
+  if ! assert_pre_push_stamp_written_and_consumed "$bundle" "$linked" linked linked-worktree; then
+    failed=$((failed + 1))
   fi
 
   rm -rf "$work"
