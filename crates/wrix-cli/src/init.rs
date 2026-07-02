@@ -1,11 +1,30 @@
 use std::{
     env, fmt, fs, io,
     io::Write,
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Command as ProcessCommand, ExitCode, Stdio},
 };
 
 use serde_json::Value;
+
+const GITHUB_KNOWN_HOSTS: &str = concat!(
+    "github.com ssh-ed25519 ",
+    "AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl\n",
+    "github.com ssh-rsa ",
+    "AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=\n",
+    "github.com ecdsa-sha2-nistp256 ",
+    "AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=\n",
+);
+
+const TRANSPORT_TRAMPOLINE: &str = concat!(
+    "sh -c '",
+    "common_dir=$(git rev-parse --git-common-dir) || exit 255; ",
+    "case \"$common_dir\" in /*) ;; *) ",
+    "root=$(git rev-parse --show-toplevel) || exit 255; ",
+    "common_dir=\"$root/$common_dir\" ;; esac; ",
+    "exec \"$common_dir/wrix/git-ssh\" \"$@\"' wrix-git-ssh",
+);
 
 pub fn run(
     profile_config_path: Option<&Path>,
@@ -18,7 +37,10 @@ pub fn run(
         return Ok(ExitCode::SUCCESS);
     }
 
-    match build_plan(profile_config_path, args) {
+    match build_plan(profile_config_path, args).and_then(|plan| {
+        plan.apply()?;
+        Ok(plan)
+    }) {
         Ok(plan) => {
             plan.write(stdout)?;
             Ok(ExitCode::SUCCESS)
@@ -204,6 +226,28 @@ struct Plan {
 }
 
 impl Plan {
+    fn apply(&self) -> Result<(), Error> {
+        let common_dir = git_common_dir(&self.root)?;
+        let state_dir = common_dir.join("wrix");
+        create_secure_dir(&state_dir)?;
+        let known_hosts_path = state_dir.join("github_known_hosts");
+        write_secure_file(&known_hosts_path, GITHUB_KNOWN_HOSTS, 0o600)?;
+        let helper_path = state_dir.join("git-ssh");
+        write_secure_file(
+            &helper_path,
+            &transport_helper_script(&self.key_name),
+            0o700,
+        )?;
+        write_common_git_config(&common_dir, "core.sshCommand", TRANSPORT_TRAMPOLINE)?;
+        verify_transport_helper(
+            &self.root,
+            &common_dir,
+            &helper_path,
+            &known_hosts_path,
+            &self.key_name,
+        )
+    }
+
     fn write(&self, stdout: &mut impl Write) -> io::Result<()> {
         writeln!(stdout, "wrix init: repository policy resolved")?;
         writeln!(stdout, "repo: {}", self.root.display())?;
@@ -376,6 +420,330 @@ fn ensure_remote_exists(root: &Path, remote: &RemoteName) -> Result<(), Error> {
     Err(Error::MissingRemote {
         remote: remote.clone(),
     })
+}
+
+fn git_common_dir(root: &Path) -> Result<PathBuf, Error> {
+    let output = ProcessCommand::new("git")
+        .arg("rev-parse")
+        .arg("--git-common-dir")
+        .current_dir(root)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(Error::GitIo)?;
+    if !output.status.success() {
+        return Err(Error::GitCommonDir {
+            detail: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        });
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if value.is_empty() {
+        return Err(Error::GitCommonDir {
+            detail: String::from("git returned an empty common directory"),
+        });
+    }
+    let common_dir = PathBuf::from(value);
+    let common_dir = if common_dir.is_absolute() {
+        common_dir
+    } else {
+        root.join(common_dir)
+    };
+    common_dir.canonicalize().map_err(|source| Error::StateIo {
+        path: path_string(&common_dir),
+        source,
+    })
+}
+
+fn create_secure_dir(path: &Path) -> Result<(), Error> {
+    fs::create_dir_all(path).map_err(|source| Error::StateIo {
+        path: path_string(path),
+        source,
+    })?;
+    set_mode(path, 0o700)
+}
+
+fn write_secure_file(path: &Path, content: &str, mode: u32) -> Result<(), Error> {
+    fs::write(path, content).map_err(|source| Error::StateIo {
+        path: path_string(path),
+        source,
+    })?;
+    set_mode(path, mode)
+}
+
+fn set_mode(path: &Path, mode: u32) -> Result<(), Error> {
+    fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(|source| {
+        Error::Permission {
+            path: path_string(path),
+            mode: format!("{mode:04o}"),
+            source,
+        }
+    })
+}
+
+fn write_common_git_config(common_dir: &Path, key: &str, value: &str) -> Result<(), Error> {
+    let config_path = common_dir.join("config");
+    let output = ProcessCommand::new("git")
+        .arg("config")
+        .arg("--file")
+        .arg(&config_path)
+        .arg("--replace-all")
+        .arg(key)
+        .arg(value)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(Error::GitIo)?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(Error::GitConfig {
+        key: key.to_owned(),
+        detail: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+    })
+}
+
+fn read_common_git_config(common_dir: &Path, key: &str) -> Result<String, Error> {
+    let output = ProcessCommand::new("git")
+        .arg("config")
+        .arg("--file")
+        .arg(common_dir.join("config"))
+        .arg("--get")
+        .arg(key)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(Error::GitIo)?;
+    if !output.status.success() {
+        return Err(Error::GitConfig {
+            key: key.to_owned(),
+            detail: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+fn verify_transport_helper(
+    root: &Path,
+    common_dir: &Path,
+    helper_path: &Path,
+    known_hosts_path: &Path,
+    key_name: &KeyName,
+) -> Result<(), Error> {
+    let configured = read_common_git_config(common_dir, "core.sshCommand")?;
+    ensure_context_stable_ssh_command(root, &configured)?;
+    if configured != TRANSPORT_TRAMPOLINE {
+        return Err(Error::TransportConfigMismatch { value: configured });
+    }
+    require_mode(common_dir.join("wrix"), 0o700)?;
+    require_mode(helper_path, 0o700)?;
+    require_mode(known_hosts_path, 0o600)?;
+    let expected_key = resolved_deploy_key(key_name)?;
+    let effective_config = probe_helper_config(root, helper_path)?;
+    require_ssh_config_value(&effective_config, "batchmode", "yes")?;
+    require_ssh_config_value(&effective_config, "identitiesonly", "yes")?;
+    require_ssh_config_value_any(&effective_config, "stricthostkeychecking", &["yes", "true"])?;
+    require_ssh_config_value(&effective_config, "identityagent", "none")?;
+    require_ssh_config_value(&effective_config, "globalknownhostsfile", "/dev/null")?;
+    require_ssh_config_value(
+        &effective_config,
+        "userknownhostsfile",
+        &path_string(known_hosts_path),
+    )?;
+    require_ssh_config_value(&effective_config, "identityfile", "none")?;
+    require_ssh_config_value(
+        &effective_config,
+        "identityfile",
+        &path_string(&expected_key),
+    )
+}
+
+fn ensure_context_stable_ssh_command(root: &Path, value: &str) -> Result<(), Error> {
+    let root = path_string(root);
+    let forbidden = [
+        ("/nix/store", "host-only Nix store path"),
+        ("/etc/wrix/keys", "container private-key path"),
+        ("/workspace", "container workspace path"),
+        (".ssh/deploy_keys", "private-key lookup path"),
+        ("WRIX_DEPLOY_KEY", "environment private-key path"),
+    ];
+    if !root.is_empty() && root != "/" && value.contains(&root) {
+        return Err(Error::TransportConfigUnstable {
+            value: value.to_owned(),
+            reason: String::from("workspace path"),
+        });
+    }
+    for (needle, reason) in forbidden {
+        if value.contains(needle) {
+            return Err(Error::TransportConfigUnstable {
+                value: value.to_owned(),
+                reason: String::from(reason),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn require_mode(path: impl AsRef<Path>, expected: u32) -> Result<(), Error> {
+    let path = path.as_ref();
+    let metadata = fs::metadata(path).map_err(|source| Error::StateIo {
+        path: path_string(path),
+        source,
+    })?;
+    let actual = metadata.permissions().mode() & 0o777;
+    if actual == expected {
+        return Ok(());
+    }
+    Err(Error::PermissionMode {
+        path: path_string(path),
+        expected: format!("{expected:04o}"),
+        actual: format!("{actual:04o}"),
+    })
+}
+
+fn resolved_deploy_key(key_name: &KeyName) -> Result<PathBuf, Error> {
+    if let Ok(value) = env::var("WRIX_DEPLOY_KEY")
+        && !value.trim().is_empty()
+    {
+        let path = PathBuf::from(value);
+        if path.is_file() {
+            return path.canonicalize().map_err(|source| Error::StateIo {
+                path: path_string(&path),
+                source,
+            });
+        }
+        return Err(Error::DeployKeyEnvMissing {
+            path: path_string(&path),
+        });
+    }
+    let home = env::var("HOME").map_err(|source| Error::HomeMissing { source })?;
+    if home.trim().is_empty() {
+        return Err(Error::HomeEmpty);
+    }
+    let path = Path::new(&home)
+        .join(".ssh")
+        .join("deploy_keys")
+        .join(key_name.to_string());
+    if path.is_file() {
+        return path.canonicalize().map_err(|source| Error::StateIo {
+            path: path_string(&path),
+            source,
+        });
+    }
+    Err(Error::DeployKeyMissing {
+        path: path_string(&path),
+    })
+}
+
+fn probe_helper_config(root: &Path, helper_path: &Path) -> Result<String, Error> {
+    let output = ProcessCommand::new(helper_path)
+        .arg("-G")
+        .arg("github.com")
+        .current_dir(root)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|source| Error::HelperIo {
+            path: path_string(helper_path),
+            source,
+        })?;
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
+    }
+    Err(Error::HelperVerify {
+        detail: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+    })
+}
+
+fn require_ssh_config_value(output: &str, key: &str, expected: &str) -> Result<(), Error> {
+    require_ssh_config_value_any(output, key, &[expected])
+}
+
+fn require_ssh_config_value_any(output: &str, key: &str, expected: &[&str]) -> Result<(), Error> {
+    for value in ssh_config_values(output, key) {
+        if expected.contains(&value) {
+            return Ok(());
+        }
+    }
+    Err(Error::HelperVerify {
+        detail: format!("ssh -G output is missing {key} = {}", expected.join(" or ")),
+    })
+}
+
+fn ssh_config_values<'a>(output: &'a str, key: &str) -> Vec<&'a str> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let (name, value) = line.split_once(' ')?;
+            if name == key {
+                Some(value.trim())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn transport_helper_script(key_name: &KeyName) -> String {
+    format!(
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+
+key_name={key_name}
+
+fail() {{
+  local message="$1"
+  printf 'wrix git ssh: %s\n' "$message" >&2
+  exit 255
+}}
+
+absolute_path() {{
+  local input="$1"
+  local dir base
+  dir="$(dirname "$input")"
+  base="$(basename "$input")"
+  dir="$(cd "$dir" && pwd -P)"
+  printf '%s/%s\n' "$dir" "$base"
+}}
+
+resolve_key() {{
+  local candidate
+  if [[ -n "${{WRIX_DEPLOY_KEY:-}}" ]]; then
+    if [[ -f "$WRIX_DEPLOY_KEY" ]]; then
+      absolute_path "$WRIX_DEPLOY_KEY"
+      return 0
+    fi
+    fail "WRIX_DEPLOY_KEY does not point at a file: $WRIX_DEPLOY_KEY"
+  fi
+  if [[ -z "${{HOME:-}}" ]]; then
+    fail "HOME is not set and WRIX_DEPLOY_KEY is unset"
+  fi
+  candidate="$HOME/.ssh/deploy_keys/$key_name"
+  if [[ -f "$candidate" ]]; then
+    absolute_path "$candidate"
+    return 0
+  fi
+  fail "no deploy key resolved; set WRIX_DEPLOY_KEY or create $candidate"
+}}
+
+script_dir="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd -P)"
+known_hosts="$script_dir/github_known_hosts"
+if [[ ! -f "$known_hosts" ]]; then
+  fail "pinned GitHub known-hosts file is missing: $known_hosts"
+fi
+key_path="$(resolve_key)"
+exec ssh -F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$known_hosts" -o GlobalKnownHostsFile=/dev/null -o IdentityAgent=none -o IdentityFile=none -i "$key_path" "$@"
+"#,
+        key_name = shell_single_quote(&key_name.to_string())
+    )
+}
+
+fn shell_single_quote(value: &str) -> String {
+    let mut quoted = String::from("'");
+    for character in value.chars() {
+        if character == '\'' {
+            quoted.push_str("'\\''");
+        } else {
+            quoted.push(character);
+        }
+    }
+    quoted.push('\'');
+    quoted
 }
 
 fn derive_key_name(root: &Path) -> Result<KeyName, Error> {
@@ -667,6 +1035,40 @@ enum Error {
     MissingGitRoot { cwd: String, detail: String },
     /// configured Git remote '{remote}' is not set
     MissingRemote { remote: RemoteName },
+    /// cannot resolve Git common directory: {detail}
+    GitCommonDir { detail: String },
+    /// cannot write Wrix Git state at {path}: {source}
+    StateIo { path: String, source: io::Error },
+    /// cannot set {path} permissions to {mode}: {source}
+    Permission {
+        path: String,
+        mode: String,
+        source: io::Error,
+    },
+    /// Wrix Git state {path} has mode {actual}, expected {expected}
+    PermissionMode {
+        path: String,
+        expected: String,
+        actual: String,
+    },
+    /// failed to write Git config {key}: {detail}
+    GitConfig { key: String, detail: String },
+    /// core.sshCommand is not context-stable ({reason}): {value}
+    TransportConfigUnstable { value: String, reason: String },
+    /// core.sshCommand does not match the Wrix common-dir trampoline: {value}
+    TransportConfigMismatch { value: String },
+    /// WRIX_DEPLOY_KEY does not point at a file: {path}
+    DeployKeyEnvMissing { path: String },
+    /// HOME is not set; cannot resolve fallback deploy key: {source}
+    HomeMissing { source: env::VarError },
+    /// HOME is empty; cannot resolve fallback deploy key
+    HomeEmpty,
+    /// fallback deploy key does not exist: {path}
+    DeployKeyMissing { path: String },
+    /// cannot execute Wrix Git transport helper {path}: {source}
+    HelperIo { path: String, source: io::Error },
+    /// Wrix Git transport helper verification failed: {detail}
+    HelperVerify { detail: String },
     /// cannot derive default deploy key name from repository root {root}
     CannotDeriveKeyName { root: String },
     /// failed to resolve hostname: {0}
