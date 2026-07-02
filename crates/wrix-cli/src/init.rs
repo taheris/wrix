@@ -123,6 +123,22 @@ impl fmt::Display for RemoteName {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct GithubRepo {
+    owner: String,
+    name: String,
+}
+
+impl GithubRepo {
+    fn api_path(&self) -> String {
+        format!("repos/{}/{}", self.owner, self.name)
+    }
+
+    fn label(&self) -> String {
+        format!("{}/{}", self.owner, self.name)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum DeployPolicy {
     #[default]
@@ -228,6 +244,7 @@ struct Plan {
     signing: SigningPolicy,
     signing_key: Option<PathBuf>,
     remote: RemoteName,
+    github_repo: Option<GithubRepo>,
     hooks: HookPolicy,
     verification: VerificationPolicy,
     deploy: DeployPolicy,
@@ -240,8 +257,33 @@ struct SigningIdentity {
     principals: Vec<String>,
 }
 
+#[derive(Clone, Debug)]
+struct RemoteKey {
+    id: String,
+    title: String,
+    key: String,
+    read_only: Option<bool>,
+}
+
+enum LocalKeyState {
+    Missing,
+    Reusable,
+    Conflict { detail: String },
+}
+
+enum RemoteKeyPlan {
+    Reuse,
+    Create,
+    Replace { ids: Vec<String>, create: bool },
+}
+
 impl Plan {
     fn apply(&self) -> Result<(), Error> {
+        if self.deploy == DeployPolicy::Provision {
+            self.provision_deploy()?;
+        }
+
+        let signing_key = self.resolve_signing_key()?;
         let common_dir = git_common_dir(&self.root)?;
         let state_dir = common_dir.join("wrix");
         create_secure_dir(&state_dir)?;
@@ -258,7 +300,7 @@ impl Plan {
             &self.root,
             &common_dir,
             &self.key_name,
-            self.signing_key.as_deref(),
+            signing_key.as_deref(),
         )?;
         configure_prek_hooks(&self.root, &common_dir, self.hooks)?;
         verify_transport_helper(
@@ -275,6 +317,57 @@ impl Plan {
             verify_online(&self.root, &common_dir, &self.remote)?;
         }
         Ok(())
+    }
+
+    fn provision_deploy(&self) -> Result<(), Error> {
+        let repo = self
+            .github_repo
+            .as_ref()
+            .ok_or_else(|| Error::DeployRemoteMissing {
+                remote: self.remote.clone(),
+            })?;
+        let key_dir = deploy_key_dir()?;
+        let key_name = self.key_name.to_string();
+        let deploy_path = key_dir.join(&key_name);
+        let deploy_comment = format!("wrix deploy key {}", repo.label());
+        ensure_local_ed25519_keypair("deploy key", &deploy_path, &deploy_comment, self.force)?;
+        let deploy_public_key = crate::sign::public_key(&deploy_path)?;
+        let deploy_plan = plan_github_deploy_key(repo, &key_name, &deploy_public_key, self.force)?;
+
+        let signing_plan = if self.signing == SigningPolicy::Enabled {
+            let signing_file = crate::sign::signing_key_file_name(&key_name);
+            let signing_path = key_dir.join(&signing_file);
+            let signing_comment = format!("wrix signing key {}", repo.label());
+            ensure_local_ed25519_keypair(
+                "signing key",
+                &signing_path,
+                &signing_comment,
+                self.force,
+            )?;
+            let signing_public_key = crate::sign::public_key(&signing_path)?;
+            let plan = plan_github_signing_key(&signing_file, &signing_public_key, self.force)?;
+            Some((signing_file, signing_public_key, plan))
+        } else {
+            None
+        };
+
+        apply_github_deploy_key_plan(repo, &key_name, &deploy_public_key, deploy_plan)?;
+        if let Some((signing_file, signing_public_key, plan)) = signing_plan {
+            apply_github_signing_key_plan(&signing_file, &signing_public_key, plan)?;
+        }
+        Ok(())
+    }
+
+    fn resolve_signing_key(&self) -> Result<Option<PathBuf>, Error> {
+        if self.signing == SigningPolicy::Disabled {
+            return Ok(None);
+        }
+        if let Some(path) = &self.signing_key {
+            return Ok(Some(path.clone()));
+        }
+        Ok(Some(crate::sign::resolve_key_for_key_name(
+            &self.key_name.to_string(),
+        )?))
     }
 
     fn write(&self, stdout: &mut impl Write) -> io::Result<()> {
@@ -326,12 +419,21 @@ fn build_plan(profile_config_path: Option<&Path>, args: &[String]) -> Result<Pla
     if flags.deploy.enabled() && verification == VerificationPolicy::Offline {
         return Err(Error::DeployOfflinePolicy);
     }
-    ensure_remote_exists(&root, &remote)?;
+    let remote_url = remote_url(&root, &remote)?;
+    let github_repo = if flags.deploy.enabled() {
+        Some(parse_github_remote(&remote, &remote_url)?)
+    } else {
+        None
+    };
     let signing_key = if signing == SigningPolicy::Enabled {
         require_signing_program()?;
-        Some(crate::sign::resolve_key_for_key_name(
-            &key_name.to_string(),
-        )?)
+        if flags.deploy.enabled() {
+            None
+        } else {
+            Some(crate::sign::resolve_key_for_key_name(
+                &key_name.to_string(),
+            )?)
+        }
     } else {
         None
     };
@@ -342,6 +444,7 @@ fn build_plan(profile_config_path: Option<&Path>, args: &[String]) -> Result<Pla
         signing,
         signing_key,
         remote,
+        github_repo,
         hooks,
         verification,
         deploy: flags.deploy,
@@ -442,21 +545,71 @@ fn git_root(current_dir: &Path) -> Result<PathBuf, Error> {
     Ok(PathBuf::from(root))
 }
 
-fn ensure_remote_exists(root: &Path, remote: &RemoteName) -> Result<(), Error> {
-    let key = format!("remote.{}.url", remote.as_str());
+fn remote_url(root: &Path, remote: &RemoteName) -> Result<String, Error> {
     let output = ProcessCommand::new("git")
-        .arg("config")
-        .arg("--get")
-        .arg(&key)
+        .arg("remote")
+        .arg("get-url")
+        .arg(remote.as_str())
         .current_dir(root)
         .stdin(Stdio::null())
         .output()
         .map_err(Error::GitIo)?;
-    if output.status.success() && !String::from_utf8_lossy(&output.stdout).trim().is_empty() {
-        return Ok(());
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if output.status.success() && !value.is_empty() {
+        return Ok(value);
     }
     Err(Error::MissingRemote {
         remote: remote.clone(),
+    })
+}
+
+fn parse_github_remote(remote: &RemoteName, url: &str) -> Result<GithubRepo, Error> {
+    let url = url.trim();
+    let path = if let Some(path) = url.strip_prefix("git@github.com:") {
+        path
+    } else if let Some(path) = url.strip_prefix("ssh://git@github.com/") {
+        path
+    } else if let Some(path) = url.strip_prefix("ssh://git@github.com:22/") {
+        path
+    } else if let Some(path) = url.strip_prefix("ssh://github.com/") {
+        path
+    } else if let Some(path) = url.strip_prefix("https://github.com/") {
+        path
+    } else if let Some(path) = url.strip_prefix("http://github.com/") {
+        path
+    } else if let Some(path) = url.strip_prefix("git://github.com/") {
+        path
+    } else {
+        return Err(Error::UnsupportedDeployRemote {
+            remote: remote.clone(),
+            url: url.to_owned(),
+        });
+    };
+    parse_github_repo_path(remote, url, path)
+}
+
+fn parse_github_repo_path(remote: &RemoteName, url: &str, path: &str) -> Result<GithubRepo, Error> {
+    let path = path.split(['?', '#']).next().unwrap_or(path);
+    let path = path.trim_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    let path = path.trim_matches('/');
+    let mut parts = path.split('/');
+    let owner = parts.next().unwrap_or_default();
+    let name = parts.next().unwrap_or_default();
+    if owner.is_empty()
+        || name.is_empty()
+        || parts.next().is_some()
+        || owner.chars().any(char::is_whitespace)
+        || name.chars().any(char::is_whitespace)
+    {
+        return Err(Error::UnsupportedDeployRemote {
+            remote: remote.clone(),
+            url: url.to_owned(),
+        });
+    }
+    Ok(GithubRepo {
+        owner: owner.to_owned(),
+        name: name.to_owned(),
     })
 }
 
@@ -536,6 +689,461 @@ fn write_common_git_config(common_dir: &Path, key: &str, value: &str) -> Result<
         key: key.to_owned(),
         detail: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
     })
+}
+
+fn deploy_key_dir() -> Result<PathBuf, Error> {
+    let home = env::var("HOME").map_err(|source| Error::HomeMissing { source })?;
+    if home.trim().is_empty() {
+        return Err(Error::HomeEmpty);
+    }
+    let ssh_dir = Path::new(&home).join(".ssh");
+    create_secure_dir(&ssh_dir)?;
+    let key_dir = ssh_dir.join("deploy_keys");
+    create_secure_dir(&key_dir)?;
+    Ok(key_dir)
+}
+
+fn ensure_local_ed25519_keypair(
+    kind: &'static str,
+    path: &Path,
+    comment: &str,
+    force: ForcePolicy,
+) -> Result<PathBuf, Error> {
+    match local_key_state(kind, path)? {
+        LocalKeyState::Reusable => Ok(path.to_path_buf()),
+        LocalKeyState::Missing => generate_ed25519_keypair(kind, path, comment),
+        LocalKeyState::Conflict { detail: _ } if force.enabled() => {
+            remove_local_key_material(path)?;
+            generate_ed25519_keypair(kind, path, comment)
+        }
+        LocalKeyState::Conflict { detail } => Err(Error::LocalKeyConflict {
+            kind,
+            path: path_string(path),
+            detail,
+        }),
+    }
+}
+
+fn local_key_state(kind: &'static str, path: &Path) -> Result<LocalKeyState, Error> {
+    let public_path = public_key_path(path);
+    let private_exists = path_exists(path)?;
+    let public_exists = path_exists(&public_path)?;
+    if !private_exists {
+        if public_exists {
+            return Ok(LocalKeyState::Conflict {
+                detail: format!("{kind} public key exists without its private key"),
+            });
+        }
+        return Ok(LocalKeyState::Missing);
+    }
+
+    let metadata = fs::metadata(path).map_err(|source| Error::StateIo {
+        path: path_string(path),
+        source,
+    })?;
+    if !metadata.is_file() {
+        return Ok(LocalKeyState::Conflict {
+            detail: String::from("private key path is not a regular file"),
+        });
+    }
+    let actual = metadata.permissions().mode() & 0o777;
+    let group_or_other_mode = actual % 0o100;
+    let owner_can_read = (actual & 0o400) != 0;
+    if !owner_can_read || group_or_other_mode != 0 {
+        return Ok(LocalKeyState::Conflict {
+            detail: format!(
+                "private key mode is {actual:04o}; expected owner-readable mode with no group or other permissions"
+            ),
+        });
+    }
+
+    let public_key = match crate::sign::public_key(path) {
+        Ok(public_key) => public_key,
+        Err(source) => {
+            return Ok(LocalKeyState::Conflict {
+                detail: format!("cannot derive public key: {source}"),
+            });
+        }
+    };
+    if !is_ed25519_public_key(&public_key) {
+        return Ok(LocalKeyState::Conflict {
+            detail: String::from("private key is not an ed25519 key"),
+        });
+    }
+    if !public_exists {
+        return Ok(LocalKeyState::Conflict {
+            detail: format!("public key file is missing: {}", public_path.display()),
+        });
+    }
+
+    let public_file = fs::read_to_string(&public_path).map_err(|source| Error::StateIo {
+        path: path_string(&public_path),
+        source,
+    })?;
+    if same_public_key(&public_file, &public_key) {
+        return Ok(LocalKeyState::Reusable);
+    }
+    Ok(LocalKeyState::Conflict {
+        detail: String::from("public key file does not match the private key"),
+    })
+}
+
+fn path_exists(path: &Path) -> Result<bool, Error> {
+    path.try_exists().map_err(|source| Error::StateIo {
+        path: path_string(path),
+        source,
+    })
+}
+
+fn public_key_path(path: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.pub", path.display()))
+}
+
+fn remove_local_key_material(path: &Path) -> Result<(), Error> {
+    for candidate in [path.to_path_buf(), public_key_path(path)] {
+        if path_exists(&candidate)? {
+            fs::remove_file(&candidate).map_err(|source| Error::StateIo {
+                path: path_string(&candidate),
+                source,
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn generate_ed25519_keypair(
+    kind: &'static str,
+    path: &Path,
+    comment: &str,
+) -> Result<PathBuf, Error> {
+    if let Some(parent) = path.parent() {
+        create_secure_dir(parent)?;
+    }
+    let output = ProcessCommand::new("ssh-keygen")
+        .arg("-q")
+        .arg("-t")
+        .arg("ed25519")
+        .arg("-N")
+        .arg("")
+        .arg("-C")
+        .arg(comment)
+        .arg("-f")
+        .arg(path)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|source| Error::SshKeygenIo { source })?;
+    if !output.status.success() {
+        return Err(Error::SshKeygen {
+            path: path_string(path),
+            detail: command_output_detail(&output.stdout, &output.stderr),
+        });
+    }
+    set_mode(path, 0o600)?;
+    set_mode(&public_key_path(path), 0o644)?;
+    match local_key_state(kind, path)? {
+        LocalKeyState::Reusable => Ok(path.to_path_buf()),
+        LocalKeyState::Missing => Err(Error::LocalKeyConflict {
+            kind,
+            path: path_string(path),
+            detail: String::from("ssh-keygen did not create a keypair"),
+        }),
+        LocalKeyState::Conflict { detail } => Err(Error::LocalKeyConflict {
+            kind,
+            path: path_string(path),
+            detail,
+        }),
+    }
+}
+
+fn plan_github_deploy_key(
+    repo: &GithubRepo,
+    title: &str,
+    public_key: &str,
+    force: ForcePolicy,
+) -> Result<RemoteKeyPlan, Error> {
+    let keys = list_github_deploy_keys(repo)?;
+    remote_key_plan(
+        &keys,
+        title,
+        public_key,
+        force,
+        "deploy key",
+        deploy_key_matches,
+    )
+}
+
+fn plan_github_signing_key(
+    title: &str,
+    public_key: &str,
+    force: ForcePolicy,
+) -> Result<RemoteKeyPlan, Error> {
+    let keys = list_github_signing_keys()?;
+    remote_key_plan(
+        &keys,
+        title,
+        public_key,
+        force,
+        "signing key",
+        signing_key_matches,
+    )
+}
+
+fn remote_key_plan(
+    keys: &[RemoteKey],
+    title: &str,
+    public_key: &str,
+    force: ForcePolicy,
+    kind: &'static str,
+    matches_requested: fn(&RemoteKey, &str, &str) -> bool,
+) -> Result<RemoteKeyPlan, Error> {
+    let conflicts = keys
+        .iter()
+        .filter(|key| remote_key_conflicts(key, title, public_key))
+        .filter(|key| !matches_requested(key, title, public_key))
+        .cloned()
+        .collect::<Vec<_>>();
+    let has_match = keys
+        .iter()
+        .any(|key| matches_requested(key, title, public_key));
+    if conflicts.is_empty() {
+        if has_match {
+            return Ok(RemoteKeyPlan::Reuse);
+        }
+        return Ok(RemoteKeyPlan::Create);
+    }
+    if !force.enabled() {
+        return Err(Error::RemoteKeyConflict {
+            kind,
+            title: title.to_owned(),
+            detail: remote_conflict_detail(&conflicts),
+        });
+    }
+    Ok(RemoteKeyPlan::Replace {
+        ids: conflicts.into_iter().map(|key| key.id).collect(),
+        create: !has_match,
+    })
+}
+
+fn apply_github_deploy_key_plan(
+    repo: &GithubRepo,
+    title: &str,
+    public_key: &str,
+    plan: RemoteKeyPlan,
+) -> Result<(), Error> {
+    match plan {
+        RemoteKeyPlan::Reuse => Ok(()),
+        RemoteKeyPlan::Create => create_github_deploy_key(repo, title, public_key),
+        RemoteKeyPlan::Replace { ids, create } => {
+            for id in ids {
+                delete_github_deploy_key(repo, &id)?;
+            }
+            if create {
+                create_github_deploy_key(repo, title, public_key)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn apply_github_signing_key_plan(
+    title: &str,
+    public_key: &str,
+    plan: RemoteKeyPlan,
+) -> Result<(), Error> {
+    match plan {
+        RemoteKeyPlan::Reuse => Ok(()),
+        RemoteKeyPlan::Create => create_github_signing_key(title, public_key),
+        RemoteKeyPlan::Replace { ids, create } => {
+            for id in ids {
+                delete_github_signing_key(&id)?;
+            }
+            if create {
+                create_github_signing_key(title, public_key)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn list_github_deploy_keys(repo: &GithubRepo) -> Result<Vec<RemoteKey>, Error> {
+    let endpoint = format!("{}/keys?per_page=100", repo.api_path());
+    let value = gh_api_json("list repository deploy keys", gh_get_args(endpoint))?;
+    parse_remote_keys("list repository deploy keys", &value)
+}
+
+fn list_github_signing_keys() -> Result<Vec<RemoteKey>, Error> {
+    let value = gh_api_json(
+        "list user signing keys",
+        gh_get_args(String::from("user/ssh_signing_keys?per_page=100")),
+    )?;
+    parse_remote_keys("list user signing keys", &value)
+}
+
+fn create_github_deploy_key(repo: &GithubRepo, title: &str, public_key: &str) -> Result<(), Error> {
+    let args = vec![
+        String::from("--method"),
+        String::from("POST"),
+        format!("{}/keys", repo.api_path()),
+        String::from("--raw-field"),
+        format!("title={title}"),
+        String::from("--raw-field"),
+        format!("key={public_key}"),
+        String::from("--field"),
+        String::from("read_only=false"),
+    ];
+    gh_api("create repository deploy key", args)?;
+    Ok(())
+}
+
+fn create_github_signing_key(title: &str, public_key: &str) -> Result<(), Error> {
+    let args = vec![
+        String::from("--method"),
+        String::from("POST"),
+        String::from("user/ssh_signing_keys"),
+        String::from("--raw-field"),
+        format!("title={title}"),
+        String::from("--raw-field"),
+        format!("key={public_key}"),
+    ];
+    gh_api("create user signing key", args)?;
+    Ok(())
+}
+
+fn delete_github_deploy_key(repo: &GithubRepo, id: &str) -> Result<(), Error> {
+    let args = vec![
+        String::from("--method"),
+        String::from("DELETE"),
+        format!("{}/keys/{id}", repo.api_path()),
+    ];
+    gh_api("delete repository deploy key", args)?;
+    Ok(())
+}
+
+fn delete_github_signing_key(id: &str) -> Result<(), Error> {
+    let args = vec![
+        String::from("--method"),
+        String::from("DELETE"),
+        format!("user/ssh_signing_keys/{id}"),
+    ];
+    gh_api("delete user signing key", args)?;
+    Ok(())
+}
+
+fn gh_get_args(endpoint: String) -> Vec<String> {
+    vec![String::from("--method"), String::from("GET"), endpoint]
+}
+
+fn gh_api_json(operation: &'static str, args: Vec<String>) -> Result<Value, Error> {
+    let output = gh_api(operation, args)?;
+    serde_json::from_str(&output).map_err(|source| Error::GhJson { operation, source })
+}
+
+fn gh_api(operation: &'static str, args: Vec<String>) -> Result<String, Error> {
+    let output = ProcessCommand::new("gh")
+        .arg("api")
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|source| Error::GhIo { source })?;
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned());
+    }
+    Err(Error::GhApi {
+        operation,
+        detail: command_output_detail(&output.stdout, &output.stderr),
+    })
+}
+
+fn parse_remote_keys(operation: &'static str, value: &Value) -> Result<Vec<RemoteKey>, Error> {
+    let Some(array) = value.as_array() else {
+        return Err(Error::GhSchema {
+            operation,
+            message: String::from("expected a JSON array"),
+        });
+    };
+    array
+        .iter()
+        .map(|entry| parse_remote_key(operation, entry))
+        .collect()
+}
+
+fn parse_remote_key(operation: &'static str, value: &Value) -> Result<RemoteKey, Error> {
+    let id = value
+        .get("id")
+        .and_then(|id| {
+            id.as_i64()
+                .map(|value| value.to_string())
+                .or_else(|| id.as_u64().map(|value| value.to_string()))
+                .or_else(|| id.as_str().map(ToOwned::to_owned))
+        })
+        .ok_or_else(|| Error::GhSchema {
+            operation,
+            message: String::from("key entry is missing id"),
+        })?;
+    let title = value
+        .get("title")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::GhSchema {
+            operation,
+            message: String::from("key entry is missing title"),
+        })?
+        .to_owned();
+    let key = value
+        .get("key")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::GhSchema {
+            operation,
+            message: String::from("key entry is missing key"),
+        })?
+        .to_owned();
+    let read_only = value.get("read_only").and_then(Value::as_bool);
+    Ok(RemoteKey {
+        id,
+        title,
+        key,
+        read_only,
+    })
+}
+
+fn deploy_key_matches(key: &RemoteKey, title: &str, public_key: &str) -> bool {
+    key.title == title && same_public_key(&key.key, public_key) && key.read_only == Some(false)
+}
+
+fn signing_key_matches(key: &RemoteKey, title: &str, public_key: &str) -> bool {
+    key.title == title && same_public_key(&key.key, public_key)
+}
+
+fn remote_key_conflicts(key: &RemoteKey, title: &str, public_key: &str) -> bool {
+    key.title == title || same_public_key(&key.key, public_key)
+}
+
+fn remote_conflict_detail(conflicts: &[RemoteKey]) -> String {
+    conflicts
+        .iter()
+        .map(|key| format!("id {} title {}", key.id, key.title))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn same_public_key(left: &str, right: &str) -> bool {
+    let Some(left) = normalized_public_key(left) else {
+        return false;
+    };
+    let Some(right) = normalized_public_key(right) else {
+        return false;
+    };
+    left == right
+}
+
+fn is_ed25519_public_key(value: &str) -> bool {
+    normalized_public_key(value).is_some_and(|value| value.starts_with("ssh-ed25519 "))
+}
+
+fn normalized_public_key(value: &str) -> Option<String> {
+    let mut parts = value.split_whitespace();
+    let key_type = parts.next()?;
+    let key_body = parts.next()?;
+    Some(format!("{key_type} {key_body}"))
 }
 
 fn require_signing_program() -> Result<(), Error> {
@@ -1037,7 +1645,7 @@ fn command_output_detail(stdout: &[u8], stderr: &[u8]) -> String {
     let stdout = String::from_utf8_lossy(stdout).trim().to_owned();
     let stderr = String::from_utf8_lossy(stderr).trim().to_owned();
     match (stdout.is_empty(), stderr.is_empty()) {
-        (true, true) => String::from("git ls-remote exited non-zero without output"),
+        (true, true) => String::from("command exited non-zero without output"),
         (false, true) => stdout,
         (true, false) => stderr,
         (false, false) => format!("{stdout}\n{stderr}"),
@@ -1572,6 +2180,43 @@ enum Error {
     MissingGitRoot { cwd: String, detail: String },
     /// configured Git remote '{remote}' is not set
     MissingRemote { remote: RemoteName },
+    /// --deploy supports only github.com remotes; remote '{remote}' has unsupported URL {url}
+    UnsupportedDeployRemote { remote: RemoteName, url: String },
+    /// deploy provisioning has no parsed GitHub remote for '{remote}'
+    DeployRemoteMissing { remote: RemoteName },
+    /// {kind} {path} conflicts with requested deploy provisioning: {detail}
+    LocalKeyConflict {
+        kind: &'static str,
+        path: String,
+        detail: String,
+    },
+    /// cannot execute ssh-keygen for deploy provisioning: {source}
+    SshKeygenIo { source: io::Error },
+    /// ssh-keygen failed to generate keypair at {path}: {detail}
+    SshKeygen { path: String, detail: String },
+    /// cannot execute GitHub CLI gh; install gh and authenticate before running --deploy: {source}
+    GhIo { source: io::Error },
+    /// GitHub CLI gh api failed during {operation}: {detail}
+    GhApi {
+        operation: &'static str,
+        detail: String,
+    },
+    /// GitHub CLI gh api returned invalid JSON during {operation}: {source}
+    GhJson {
+        operation: &'static str,
+        source: serde_json::Error,
+    },
+    /// GitHub CLI gh api response during {operation} had unexpected shape: {message}
+    GhSchema {
+        operation: &'static str,
+        message: String,
+    },
+    /// remote {kind} registration titled {title} conflicts with requested key: {detail}
+    RemoteKeyConflict {
+        kind: &'static str,
+        title: String,
+        detail: String,
+    },
     /// cannot resolve Git common directory: {detail}
     GitCommonDir { detail: String },
     /// cannot write Wrix Git state at {path}: {source}
@@ -1704,8 +2349,9 @@ mod test {
     use std::path::Path;
 
     use super::{
-        DeployPolicy, FilePolicy, ForcePolicy, HookPolicy, KeyName, OnlineFailure, RemoteName,
-        SigningPolicy, VerificationPolicy, classify_online_failure, parse_file_policy, parse_flags,
+        DeployPolicy, FilePolicy, ForcePolicy, GithubRepo, HookPolicy, KeyName, OnlineFailure,
+        RemoteName, SigningPolicy, VerificationPolicy, classify_online_failure, parse_file_policy,
+        parse_flags, parse_github_remote,
     };
 
     #[test]
@@ -1769,6 +2415,26 @@ online_verify = false
             classify_online_failure("ssh: Could not resolve hostname github.com"),
             OnlineFailure::Other,
         );
+    }
+
+    #[test]
+    fn github_remote_parser_accepts_github_urls_only() {
+        let remote = RemoteName(String::from("origin"));
+        assert_eq!(
+            parse_github_remote(&remote, "git@github.com:owner/repo.git").unwrap(),
+            GithubRepo {
+                owner: String::from("owner"),
+                name: String::from("repo"),
+            },
+        );
+        assert_eq!(
+            parse_github_remote(&remote, "https://github.com/owner/repo").unwrap(),
+            GithubRepo {
+                owner: String::from("owner"),
+                name: String::from("repo"),
+            },
+        );
+        assert!(parse_github_remote(&remote, "git@example.com:owner/repo.git").is_err());
     }
 
     fn assert_policy(
