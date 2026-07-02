@@ -107,9 +107,9 @@ The online verifier must exercise the same Git config path Loom uses from `.loom
 - `wrix init` succeeds without `wrix.toml`, does not create `wrix.toml` for default behavior, and applies flag > `wrix.toml` > ProfileConfig > derived-default precedence for key name, signing, remote, hook, and online verification policy.
   [system](bash tests/cli/init-config.sh test_defaults_and_overrides)
 - `wrix init` writes shared/common Git config that is inherited by a `.loom/integration`-style linked worktree, and that config contains no absolute host deploy-key path, container `/etc/wrix/keys` private-key path, host-only/container-only helper path, or host-only/container-only allowed-signers path.
-  [system?](bash tests/cli/init-git-bootstrap.sh test_common_config_inherited_by_loom_integration)
+  [system](bash tests/cli/init-git-bootstrap.sh test_common_config_inherited_by_loom_integration)
 - With `$HOME` and the effective-user home differing, the Git transport helper resolves `WRIX_DEPLOY_KEY` first, `$HOME/.ssh/deploy_keys/<key-name>` second, fails when neither exists, invokes SSH with strict pinned-host-key options without using user SSH config, default identities, or `StrictHostKeyChecking=no`, and leaves any Wrix-created SSH directories at `0700` plus `config` / `known_hosts` files at `0600`.
-  [system?](bash tests/cli/init-git-bootstrap.sh test_strict_context_aware_ssh_helper)
+  [system](bash tests/cli/init-git-bootstrap.sh test_strict_context_aware_ssh_helper)
 - SSH commit signing is enabled by default; a missing `<key-name>-signing` key fails hard, `--no-sign` disables signing explicitly, and a signed test commit verifies against the generated allowed-signers file.
   [system?](bash tests/cli/init-signing.sh test_signing_required_by_default)
 - `wrix init --deploy` generates separate passphraseless deploy and signing ed25519 keys with secure permissions when signing is enabled, registers the deploy key with write access and the signing key with GitHub, reuses matching existing keys, and replaces conflicts only with `--force`.
