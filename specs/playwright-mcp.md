@@ -16,7 +16,7 @@ Load-bearing decisions:
 
 - Wraps `@playwright/mcp` rather than reimplementing browser automation
 - Uses `pkgs.playwright-mcp` from nixpkgs for offline operation — no `npx` at runtime
-- Uses `pkgs.playwright-driver.browsers` for Chromium (Playwright-specific build at the exact expected revision; avoids upstream version skew)
+- Uses `pkgs.playwright-driver.browsers` as the Playwright browser source (exact expected revision; wrix selects Chromium from that bundle while avoiding upstream version skew)
 - Chromium's internal sandbox is disabled (`--no-sandbox`) because the wrix container is the trust boundary (see *Chromium Sandbox Disabled* below)
 
 ## MCP Tools
@@ -74,7 +74,7 @@ Passing `--no-sandbox` removes a redundant inner layer that cannot work, not pro
 
 ## Platform Support
 
-The container image is Linux (aarch64 or x86_64), so `pkgs.playwright-driver.browsers` always resolves to a Linux Chromium build regardless of host platform. All automatic Chromium flags apply identically across platforms; the differences (Podman vs Apple `container` CLI, rootless container vs microVM, `/dev/shm` sizing) belong to `sandbox.md`. `--disable-dev-shm-usage` is essential on Linux rootless containers (where `/dev/shm` is typically 64MB) and harmless under macOS / krun microVMs.
+The container image is Linux (aarch64 or x86_64), so `pkgs.playwright-driver.browsers` always resolves to Linux browser payloads and the configured executable path points at a Linux Chromium build regardless of host platform. All automatic Chromium flags apply identically across platforms; the differences (Podman vs Apple `container` CLI, rootless container vs microVM, `/dev/shm` sizing) belong to `sandbox.md`. `--disable-dev-shm-usage` is essential on Linux rootless containers (where `/dev/shm` is typically 64MB) and harmless under macOS / krun microVMs.
 
 ## Success Criteria
 
@@ -98,21 +98,21 @@ The container image is Linux (aarch64 or x86_64), so `pkgs.playwright-driver.bro
 ### Functional
 
 1. **MCP tool surface** — every tool the bundled `@playwright/mcp` exposes is registered; the spec does not maintain its own tool whitelist. The category table above is illustrative, not exhaustive, and the smoke verifier checks representative tools returned by the live server rather than a fixed upstream count.
-2. **Offline operation** — `pkgs.playwright-mcp` and `pkgs.playwright-driver.browsers` bake the server and Chromium into the image. No `npx` or browser download at runtime.
+2. **Offline operation** — `pkgs.playwright-mcp` and `pkgs.playwright-driver.browsers` bake the server and Playwright browser bundle into the image. No `npx` or browser download at runtime.
 3. **MCP opt-in via sandbox** — enabled per sandbox via `mcp.playwright = { … }`; composes with the workspace profile and other MCP servers without a `-playwright` profile variant.
 4. **Configuration passthrough** — `headless`, `viewport`, and `config` options reach `@playwright/mcp`'s serialized JSON config.
 5. **Non-overridable flags** — `--no-sandbox`, `--disable-dev-shm-usage`, `--disable-gpu` are always set on `browser.launchOptions.args`. User-supplied `launchOptions.args` are appended, not substituted.
 
 ### Non-Functional
 
-1. **Image size cost** — enabling `mcp.playwright` adds ~400MB to the image (Chromium ~350MB, Node.js + MCP server ~50MB). Sandboxes without `mcp.playwright` are unaffected.
+1. **Image size cost** — enabling `mcp.playwright` adds the `pkgs.playwright-mcp` and `pkgs.playwright-driver.browsers` closures to the image. The Playwright browser bundle may include Firefox, WebKit, headless shell, and other payloads even though wrix v1 selects Chromium only. Sandboxes without `mcp.playwright` are unaffected.
 2. **Reproducibility** — Chromium revision pinned via `pkgs.playwright-driver.browsers`; no runtime downloads.
 3. **Headless only in v1** — headful mode requires X forwarding and is not implemented.
 
 ## Out of Scope
 
 - **Performance metrics** — not in the `@playwright/mcp` tool set; would require custom tooling.
-- **Custom browser support (Firefox, WebKit)** — Chromium only for v1; `playwright-driver.browsers` ships all three, easy to add later.
+- **Custom browser support (Firefox, WebKit)** — Chromium is the only supported browser for v1. Firefox and WebKit payloads may be present because `playwright-driver.browsers` is the packaged browser bundle, but wrix does not expose them as supported targets.
 - **Persistent browser profiles** — clean state per container launch is correct sandbox behavior.
 - **Playwright test runner (`@playwright/test`)** — different tool; users add it to profile packages independently.
 - **HAR recording / replay** — not built into `@playwright/mcp`; `browser_network_requests` covers common request inspection needs.
