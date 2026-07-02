@@ -775,6 +775,36 @@ pub fn serialize_response(response: &JsonRpcResponse) -> String {
 mod tests {
     use super::*;
 
+    struct HandlerPathExecutor;
+
+    impl crate::tmux::CommandExecutor for HandlerPathExecutor {
+        fn execute(&self, _args: &[&str]) -> std::io::Result<std::process::Output> {
+            Ok(std::process::Output {
+                status: std::process::ExitStatus::default(),
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            })
+        }
+    }
+
+    fn handler_path_state() -> crate::AppState<HandlerPathExecutor> {
+        crate::AppState {
+            mcp_handler: McpHandler::new(),
+            pane_manager: crate::pane::PaneManager::new(),
+            tmux_session: crate::tmux::TmuxSession::with_executor(HandlerPathExecutor),
+            audit: crate::audit::MaybeAuditLogger::disabled(),
+        }
+    }
+
+    fn validation_error_response() -> JsonRpcResponse {
+        let mut state = handler_path_state();
+        let initialize = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#;
+        crate::process_request(&mut state, initialize).unwrap();
+
+        let request = r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"tmux_create_pane","arguments":{}}}"#;
+        crate::process_request(&mut state, request).unwrap()
+    }
+
     // --- Request Parsing Tests ---
 
     #[test]
@@ -1133,6 +1163,46 @@ mod tests {
 
         assert!(json.contains(r#""isError":true"#));
         assert!(json.contains("not found"));
+    }
+
+    #[test]
+    fn tool_handler_validation_errors_use_success_envelope() {
+        let response = validation_error_response();
+
+        assert_eq!(response.id, Some(RequestId::Number(2)));
+        assert!(response.error.is_none());
+        let result = response.result.unwrap();
+        assert_eq!(result.get("isError").and_then(Value::as_bool), Some(true));
+        assert!(
+            result
+                .get("content")
+                .and_then(Value::as_array)
+                .is_some_and(|content| !content.is_empty())
+        );
+    }
+
+    #[test]
+    fn tool_handler_error_content_has_no_custom_code_field() {
+        let response = validation_error_response();
+        let result = response.result.unwrap();
+        let content = result
+            .get("content")
+            .and_then(Value::as_array)
+            .and_then(|content| content.first())
+            .and_then(Value::as_object)
+            .unwrap();
+
+        assert_eq!(content.get("type").and_then(Value::as_str), Some("text"));
+        assert!(
+            content
+                .get("text")
+                .and_then(Value::as_str)
+                .is_some_and(|text| text.contains("Missing required parameter"))
+        );
+        assert!(!result.as_object().unwrap().contains_key("code"));
+        assert!(!result.as_object().unwrap().contains_key("errorCode"));
+        assert!(!content.contains_key("code"));
+        assert!(!content.contains_key("errorCode"));
     }
 
     // --- Full Round-Trip Tests ---
