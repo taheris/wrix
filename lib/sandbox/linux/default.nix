@@ -463,9 +463,9 @@ in
           echo "      Run 'nix run .#wrix-notifyd' on host for desktop notifications" >&2
         fi
 
-        # Mount host podman socket for sibling container access (opt-in)
+        # Mount host podman socket for sibling container access (explicit unsafe opt-in)
         PODMAN_SOCKET_ARGS=""
-        if [ -n "''${WRIX_PODMAN_SOCKET:-}" ]; then
+        if [ -n "''${WRIX_UNSAFE_PODMAN_SOCKET:-}" ]; then
           PODMAN_SOCK="''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"
           if [ -S "$PODMAN_SOCK" ]; then
             PODMAN_SOCKET_ARGS="-v $PODMAN_SOCK:/run/podman/podman.sock -e CONTAINER_HOST=unix:///run/podman/podman.sock"
@@ -473,7 +473,7 @@ in
             # $PROJECT_DIR is the host path (the launcher runs on the host).
             PODMAN_SOCKET_ARGS="$PODMAN_SOCKET_ARGS -e GC_HOST_WORKSPACE=$PROJECT_DIR"
           else
-            echo "Error: WRIX_PODMAN_SOCKET set but socket not found at $PODMAN_SOCK" >&2
+            echo "Error: WRIX_UNSAFE_PODMAN_SOCKET set but socket not found at $PODMAN_SOCK" >&2
             exit 1
           fi
         fi
@@ -554,7 +554,7 @@ in
         BEADS_ARGS=""
         if [ -n "$BEADS_STAGING" ]; then
           BEADS_ARGS="-v $BEADS_STAGING:/workspace/.beads"
-          if [ -n "''${WRIX_PODMAN_SOCKET:-}" ]; then
+          if [ -n "''${WRIX_UNSAFE_PODMAN_SOCKET:-}" ]; then
             PODMAN_SOCKET_ARGS="$PODMAN_SOCKET_ARGS -e GC_HOST_BEADS=$BEADS_STAGING"
           fi
         fi

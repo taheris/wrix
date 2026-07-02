@@ -40,6 +40,8 @@ Both platforms rely on the provenance-tiered graph (see `image-builder.md` § Pr
 - macOS: microVM via Virtualization.framework, always
 - Linux: rootless container by default; `WRIX_MICROVM=1` opts into `podman --runtime krun` when `/dev/kvm` is available. krun is bundled via Nix; without KVM the opt-in fails loudly rather than silently degrading.
 
+The host Podman API is outside the normal sandbox boundary. Linux exposes it only through the explicit unsafe operator opt-in `WRIX_UNSAFE_PODMAN_SOCKET`, which mounts the host user's Podman socket and exports `CONTAINER_HOST` for sibling-container workflows. The legacy `WRIX_PODMAN_SOCKET` name has no effect.
+
 Threat-model rationale for these choices lives in `specs/security.md`.
 
 **Network posture** — `WRIX_NETWORK` selects public egress posture at launch time. The launcher passes the mode, merged allowlist, DNS exceptions, and wrix-owned local endpoint exceptions into the container via env/config; the entrypoint installs a Linux in-sandbox firewall ruleset before the agent starts. Linux Podman uses `nftables` by default. Darwin does not use host `pf`; it uses the firewall backend available inside the Linux guest/container (`nftables` when supported, otherwise a verified equivalent such as iptables).
@@ -241,6 +243,10 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
   [system](bash tests/sandbox/spawn-config-schema.sh)
 - On Linux, each `SpawnConfig.mounts` entry becomes a `-v <host_path>:<container_path>` podman argument, with `:ro` appended when `read_only: true`. A missing or empty `mounts` list produces no additional `-v` flags.
   [system](bash tests/sandbox/spawn-config-mounts.sh)
+- Default Linux launches do not mount the host Podman socket or export `CONTAINER_HOST` / `GC_HOST_*`; `WRIX_PODMAN_SOCKET` is ignored, and the socket path is available only through the explicit unsafe `WRIX_UNSAFE_PODMAN_SOCKET` opt-in, which fails loudly when set but the host socket is absent.
+  [system](bash tests/sandbox/unsafe-podman-socket.sh)
+- With a real Unix socket at the host Podman socket path, `WRIX_UNSAFE_PODMAN_SOCKET` renders the socket mount plus `CONTAINER_HOST` and `GC_HOST_*` env using host-visible paths; without the opt-in, that same socket is not mounted.
+  [check](cargo test -p wrix-sandbox unsafe_podman_socket_mounts_only_on_explicit_opt_in)
 - On Darwin, the same mount classifier handles `profile.mounts` and `SpawnConfig.mounts` — one mechanism, not two. Directories are staged + copied at launch, regular files copy-from-parent-dir, and entries whose `host_path` is a Unix socket cause the launcher to fail loudly before the container starts. (VirtioFS does not pass socket operations, so a silently-mounted socket would dead-end at the first `connect()`.)
   [system](bash tests/sandbox/darwin-mount-classifier.sh)
 - The container entrypoint switches on `WRIX_AGENT` and exec's the matching agent binary (`claude`, `pi`, `direct`)
@@ -293,7 +299,7 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 
 ### Non-Functional
 
-1. **Rootless / no elevated privileges** — Linux runs rootless Podman; macOS runs the Apple `container` CLI as the calling user. No host capabilities granted.
+1. **Rootless / no elevated privileges** — Linux runs rootless Podman; macOS runs the Apple `container` CLI as the calling user. No host capabilities are granted by default; `WRIX_UNSAFE_PODMAN_SOCKET` is an explicit unsafe opt-in outside the normal sandbox boundary.
 2. **Boundary class** — macOS is always microVM; Linux defaults to rootless container, opts into microVM with `WRIX_MICROVM=1` (see `specs/security.md`).
 3. **Network posture** — no inbound ports on either platform. In both `WRIX_NETWORK=open` and `WRIX_NETWORK=limit`, LAN/private/host-local/VPN/special outbound is blocked with exact DNS and wrix-owned endpoint exceptions only. `open` allows public-internet outbound; `limit` restricts public egress to the merged allowlist. Filtering is fail-closed and drops `NET_ADMIN` before the agent starts.
 4. **Near-native performance** — minimal overhead beyond the container/microVM boundary cost; krun adds ~100MB per microVM.

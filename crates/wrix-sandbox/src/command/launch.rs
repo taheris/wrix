@@ -81,6 +81,8 @@ pub enum LaunchError {
     PiAuthMissing { path: String },
     /// wrix spawn: Pi auth file not found at {path} — run 'pi' and /login on the host, or set WRIX_PI_AUTH_FILE to an existing auth.json
     SpawnPiAuthMissing { path: String },
+    /// WRIX_UNSAFE_PODMAN_SOCKET set but socket not found at {path}
+    UnsafePodmanSocketMissing { path: String },
     /// /dev/kvm not found. A microVM boundary requires KVM support.
     KvmMissing,
     /// krun runtime not found. A microVM boundary requires crun with libkrun.
@@ -128,6 +130,7 @@ struct Plan<'a> {
     spawn_env: Vec<(String, String)>,
     spawn_mounts: Vec<RenderedMount>,
     services: ServicesState,
+    host_podman_socket: Option<HostPodmanSocket>,
     network_mode: NetworkMode,
     git_identity: GitIdentity,
 }
@@ -147,6 +150,8 @@ enum ImageRuntime {
 const DARWIN_NOTIFY_TCP_ENDPOINT: &str = "192.168.64.1:5959";
 const LINUX_NOTIFY_CONTAINER_DIR: &str = "/run/wrix";
 const NOTIFY_SOCKET_NAME: &str = "notify.sock";
+const PODMAN_SOCKET_CONTAINER_PATH: &str = "/run/podman/podman.sock";
+const UNSAFE_PODMAN_SOCKET_ENV: &str = "WRIX_UNSAFE_PODMAN_SOCKET";
 
 #[derive(Clone, Debug)]
 struct RenderedMount {
@@ -180,6 +185,11 @@ struct BeadsSocket {
 struct BeadsTcp {
     host: String,
     port: u16,
+}
+
+#[derive(Clone, Debug)]
+struct HostPodmanSocket {
+    source: PathBuf,
 }
 
 struct ImageSource {
@@ -299,6 +309,11 @@ impl<'a> Plan<'a> {
                     .collect(),
             ),
         };
+        let host_podman_socket = if Platform::CURRENT == Platform::Linux {
+            host_podman_socket_from_env()?
+        } else {
+            None
+        };
 
         Ok(Self {
             request,
@@ -312,6 +327,7 @@ impl<'a> Plan<'a> {
             spawn_env,
             spawn_mounts,
             services,
+            host_podman_socket,
             network_mode,
             git_identity: GitIdentity::load(),
         })
@@ -355,6 +371,9 @@ impl<'a> Plan<'a> {
             writeln!(stdout, "PODMAN_NETWORK={}", linux_podman_network())?;
         }
         self.services.write_dry_run(stdout)?;
+        if let Some(socket) = &self.host_podman_socket {
+            socket.write_dry_run(stdout, &self.workspace, None)?;
+        }
         if let Kind::Spawn(spawn) = &self.request.kind {
             writeln!(stdout, "SPAWN_CONFIG={}", spawn.config_path.display())?;
         }
@@ -400,12 +419,16 @@ impl<'a> Plan<'a> {
         if let Some(pi_auth) = &pi_auth {
             volumes.push(pi_auth.mount.clone());
         }
-        if let Some(beads) = stage_beads(&self.workspace, &staging)? {
+        let staged_beads = stage_beads(&self.workspace, &staging)?;
+        if let Some(beads) = &staged_beads {
             volumes.push(RenderedMount {
                 host: beads.display().to_string(),
                 container: String::from("/workspace/.beads"),
                 mode: MountMode::Rw,
             });
+        }
+        if let Some(socket) = &self.host_podman_socket {
+            volumes.push(socket.mount());
         }
 
         let mut command = ProcessCommand::new("podman");
@@ -449,6 +472,9 @@ impl<'a> Plan<'a> {
             credentials.as_ref(),
             pi_auth.as_ref().map(|auth| auth.container_path.as_str()),
         ) {
+            command.arg("-e").arg(format!("{key}={value}"));
+        }
+        for (key, value) in self.host_podman_socket_env_pairs(staged_beads.as_deref()) {
             command.arg("-e").arg(format!("{key}={value}"));
         }
         if !env_flag("WRIX_MICROVM") {
@@ -667,6 +693,12 @@ impl<'a> Plan<'a> {
         }))
     }
 
+    fn host_podman_socket_env_pairs(&self, staged_beads: Option<&Path>) -> Vec<(String, String)> {
+        self.host_podman_socket.as_ref().map_or_else(Vec::new, |_| {
+            HostPodmanSocket::env_pairs(&self.workspace, staged_beads)
+        })
+    }
+
     fn env_pairs(
         &self,
         credentials: Option<&Credentials>,
@@ -817,6 +849,46 @@ impl<'a> Plan<'a> {
 
     fn cpus_for_darwin(&self) -> u32 {
         self.request.profile_config.resources.cpus.unwrap_or(2)
+    }
+}
+
+impl HostPodmanSocket {
+    fn mount(&self) -> RenderedMount {
+        RenderedMount {
+            host: self.source.display().to_string(),
+            container: String::from(PODMAN_SOCKET_CONTAINER_PATH),
+            mode: MountMode::Rw,
+        }
+    }
+
+    fn env_pairs(workspace: &Path, staged_beads: Option<&Path>) -> Vec<(String, String)> {
+        let mut pairs = vec![
+            (
+                String::from("CONTAINER_HOST"),
+                format!("unix://{PODMAN_SOCKET_CONTAINER_PATH}"),
+            ),
+            (
+                String::from("GC_HOST_WORKSPACE"),
+                workspace.display().to_string(),
+            ),
+        ];
+        if let Some(beads) = staged_beads {
+            pairs.push((String::from("GC_HOST_BEADS"), beads.display().to_string()));
+        }
+        pairs
+    }
+
+    fn write_dry_run(
+        &self,
+        stdout: &mut impl Write,
+        workspace: &Path,
+        staged_beads: Option<&Path>,
+    ) -> Result<(), LaunchError> {
+        writeln!(stdout, "MOUNT=-v {}", self.mount().podman_arg())?;
+        for (key, value) in Self::env_pairs(workspace, staged_beads) {
+            writeln!(stdout, "ENV={key}={value}")?;
+        }
+        Ok(())
     }
 }
 
@@ -1912,6 +1984,36 @@ fn linux_notification_socket_mount_from_dir(
     }))
 }
 
+fn host_podman_socket_from_env() -> Result<Option<HostPodmanSocket>, LaunchError> {
+    if !env_flag(UNSAFE_PODMAN_SOCKET_ENV) {
+        return Ok(None);
+    }
+    host_podman_socket_from_flag(true, &podman_runtime_dir()?)
+}
+
+fn host_podman_socket_from_flag(
+    enabled: bool,
+    runtime_dir: &Path,
+) -> Result<Option<HostPodmanSocket>, LaunchError> {
+    if !enabled {
+        return Ok(None);
+    }
+    let source = runtime_dir.join("podman/podman.sock");
+    if !source.try_exists()? || !file_type_is_socket(&source)? {
+        return Err(LaunchError::UnsafePodmanSocketMissing {
+            path: source.display().to_string(),
+        });
+    }
+    Ok(Some(HostPodmanSocket { source }))
+}
+
+fn podman_runtime_dir() -> Result<PathBuf, LaunchError> {
+    if let Some(value) = env::var_os("XDG_RUNTIME_DIR") {
+        return Ok(PathBuf::from(value));
+    }
+    Ok(PathBuf::from(format!("/run/user/{}", current_uid()?)))
+}
+
 fn ensure_krun() -> Result<(), LaunchError> {
     if !Path::new("/dev/kvm").exists() {
         return Err(LaunchError::KvmMissing);
@@ -2025,7 +2127,8 @@ mod test {
     use std::path::{Path, PathBuf};
 
     use super::{
-        DarwinMounts, NetworkMode, RenderedMount, Staging, deploy_key_name, linux_podman_network,
+        DarwinMounts, HostPodmanSocket, LaunchError, NetworkMode, RenderedMount, Staging,
+        deploy_key_name, linux_podman_network,
     };
     use crate::command::config::{MountMode, Platform, ProfileMount, SpawnMount};
 
@@ -2089,6 +2192,57 @@ mod test {
         assert_eq!(NetworkMode::parse("open"), Some(NetworkMode::Open));
         assert_eq!(NetworkMode::parse("limit"), Some(NetworkMode::Limit));
         assert_eq!(NetworkMode::parse("lan"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unsafe_podman_socket_mounts_only_on_explicit_opt_in() {
+        use std::os::unix::net::UnixListener;
+
+        let runtime_dir = scratch_dir("unsafe-podman");
+        let socket_dir = runtime_dir.join("podman");
+        std::fs::create_dir_all(&socket_dir).unwrap();
+        let socket_path = socket_dir.join("podman.sock");
+        let _listener = UnixListener::bind(&socket_path).unwrap();
+
+        assert!(
+            super::host_podman_socket_from_flag(false, &runtime_dir)
+                .unwrap()
+                .is_none()
+        );
+
+        let socket = super::host_podman_socket_from_flag(true, &runtime_dir)
+            .unwrap()
+            .unwrap();
+        assert_eq!(socket.source, socket_path);
+        assert_eq!(
+            socket.mount().podman_arg(),
+            format!("{}:/run/podman/podman.sock", socket_path.display())
+        );
+        let pairs = HostPodmanSocket::env_pairs(
+            Path::new("/host/workspace"),
+            Some(Path::new("/host/beads")),
+        );
+        assert!(pairs.contains(&(
+            String::from("CONTAINER_HOST"),
+            String::from("unix:///run/podman/podman.sock")
+        )));
+        assert!(pairs.contains(&(
+            String::from("GC_HOST_WORKSPACE"),
+            String::from("/host/workspace")
+        )));
+        assert!(pairs.contains(&(String::from("GC_HOST_BEADS"), String::from("/host/beads"))));
+    }
+
+    #[test]
+    fn unsafe_podman_socket_missing_fails_loud() {
+        let runtime_dir = scratch_dir("unsafe-podman-missing");
+        let error = super::host_podman_socket_from_flag(true, &runtime_dir).unwrap_err();
+        assert!(matches!(
+            error,
+            LaunchError::UnsafePodmanSocketMissing { path }
+                if path.ends_with("podman/podman.sock")
+        ));
     }
 
     #[test]

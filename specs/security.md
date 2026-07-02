@@ -30,6 +30,13 @@ the container/microVM into the host. This is mitigated by the
 hardware-virtualized boundary owned by `sandbox.md` (microVM on macOS,
 opt-in via `WRIX_MICROVM=1` on Linux).
 
+The normal boundary model excludes host container-runtime control.
+`WRIX_UNSAFE_PODMAN_SOCKET` is an operator-declared unsafe exception:
+it exposes the host user's Podman API inside the sandbox, which can
+start containers with host bind mounts and is therefore outside the
+normal sandbox mitigations. It is disabled by default, and the legacy
+`WRIX_PODMAN_SOCKET` name has no effect.
+
 Defense against policy leakage requires restricting *what's available
 inside the boundary* (network, credentials, filesystem), not
 strengthening the boundary itself. The credential and network-baseline
@@ -231,6 +238,9 @@ this section is the index, not a restatement.
 - **Project Nix cache** (per-workspace explicit binary cache, no host
   `/nix/store` serving, no host Nix daemon socket, no sandbox signing key) —
   `services.md`
+- **Unsafe host Podman socket opt-in** (Linux-only socket mount mechanics,
+  legacy-env rejection, and fail-loud missing-socket behavior) —
+  `sandbox.md`
 
 ## Success Criteria
 
@@ -264,6 +274,10 @@ this section is the index, not a restatement.
   `exit_code`, `mode`, and `agent_session_dir` fields are populated;
   and `agent_session_dir` resolves to an existing directory.
   [system](bash tests/security/audit-trail-anchor.sh)
+- Default launches do not expose the host Podman API; `WRIX_PODMAN_SOCKET`
+  does not enable it, and `WRIX_UNSAFE_PODMAN_SOCKET` is the only opt-in,
+  failing loudly when set but the host socket is absent.
+  [system](bash tests/sandbox/unsafe-podman-socket.sh)
 
 ## Requirements
 
@@ -298,6 +312,10 @@ this section is the index, not a restatement.
 3. **Audit fit** — the agent transcript is treated as fit-for-purpose
    audit content for the stated threat model (policy leakage from a
    misbehaving but not adversarial agent).
+4. **Unsafe host-runtime control** — host Podman API access is absent by
+   default. When enabled through `WRIX_UNSAFE_PODMAN_SOCKET`, it is outside
+   the normal sandbox boundary and inherits the operator's host Podman
+   privileges.
 
 ## Out of Scope
 
