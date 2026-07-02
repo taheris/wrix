@@ -8,7 +8,7 @@ Wrix workspaces need long-lived local services that are shared by host commands 
 
 ## Architecture
 
-`wrix` is a Rust host-side CLI. `wrix service ...` manages a per-workspace service container named `<repo>-service`; `wrix beads push` owns the Beads session-close workflow; `wrix run` and `wrix spawn` own sandbox launches. The workspace identity is the canonical repository root when the current path is inside a Git checkout, including Loom-managed paths under `.loom/`; outside a checkout it falls back to the canonical current path. The human-readable container name uses the repository basename, while ports, state paths, labels, and locks derive from a hash of the identity path so multiple checkouts of the same repository do not collide.
+`cli.md` owns the root `wrix` command grammar and dispatch. This spec owns the behavior behind `wrix service ...`: a per-workspace service container named `<repo>-service` plus the Dolt and project-cache operations exposed through that service group. The workspace identity is the canonical repository root when the current path is inside a Git checkout, including Loom-managed paths under `.loom/`; outside a checkout it falls back to the canonical current path. The human-readable container name uses the repository basename, while ports, state paths, labels, and locks derive from a hash of the identity path so multiple checkouts of the same repository do not collide.
 
 The service container owns two service families:
 
@@ -64,29 +64,22 @@ The `<repo>-service` container image is a wrix-managed Nix-built image and follo
 
 The service image carries wrix-managed labels (`wrix.managed=true`, `wrix.image.kind=service`) so the shared runtime image cleanup path can prune stale wrix images without touching user images. Service image cleanup uses the wrix image-retention policy owned by `sandbox.md`; this spec owns only that service lifecycle uses the shared image source-kind contract and labels the service image.
 
-### CLI surface
+### Service Command Ownership
 
-`wrix` is the single public CLI:
+`wrix service` is for service/container/cache/Dolt-server management. `cli.md` owns the root command shape and help behavior; this spec owns the service operations behind these command groups:
 
 ```text
-wrix run ...
-wrix spawn ...
 wrix service start|stop|status|logs|endpoints
 wrix service dolt status|socket|port|host|attach|gc|wait
 wrix service cache status|publish|warm|prune|rotate-key
-wrix beads push
 ```
 
-`wrix service` is for service/container/cache/Dolt-server management. `wrix beads push` is the Beads session-close workflow; wrix does not expose a `wrix service dolt push` command because that collides semantically with upstream `bd dolt push`. The old `beads-dolt`, `beads-push`, and `<repo>-beads` surfaces are retired.
+`wrix beads push` is the Beads session-close workflow owned by `beads.md`; wrix does not expose a `wrix service dolt push` command because that collides semantically with upstream `bd dolt push`. The old `beads-dolt`, `beads-push`, and `<repo>-beads` surfaces are retired.
 
-The host-side implementation is Rust-first. The Rust workspace uses proper public crates/helper binaries rather than hidden private multiplexer subcommands:
+The service implementation is Rust-first. Service internals are proper Rust crates/helper binaries rather than hidden private multiplexer subcommands:
 
-- `wrix-core` — shared types: workspace identity, platform paths, config schemas, state metadata, errors.
-- `wrix-cli` — the human-facing `wrix` binary.
-- `wrix-sandbox` — Rust host orchestration for `run` / `spawn` container launches.
 - `wrix-service` — service-container lifecycle, endpoint metadata, port leasing, Dolt service management.
 - `wrix-cache` — project-cache library plus helper binaries `wrix-cache-hook`, `wrix-cache-publish`, and `wrix-cache-serve`; the HTTP cache server lives here rather than in a separate crate.
-- `wrix-beads` — `wrix beads push` workflow.
 
 Nix may install immutable helper binaries for privileged hook/static-server entry points, but only `wrix` is the intended human-facing CLI.
 
@@ -167,7 +160,7 @@ Direct remote-builder access to the local project cache is out of scope for v1. 
   [system](bash tests/services/lifecycle.sh test_loom_bead_workspace_uses_repo_service)
 - Loom integration worktrees under `.loom/integration` use the outer repository service identity, so devshell entry does not accumulate integration-named `*-service` containers
   [system](bash tests/services/host-nix-config.sh test_mkdevshell_loom_internal_worktree_uses_repo_service)
-- The public CLI is `wrix service ...` / `wrix beads push`; no `beads-dolt`, `beads-push`, `wrix-svc`, or `<repo>-beads` compatibility surface is installed or required
+- Service management is exposed through `wrix service ...`, session-close sync is exposed through `wrix beads push` per `cli.md`, and no `beads-dolt`, `beads-push`, `wrix-svc`, or `<repo>-beads` compatibility surface is installed or required
   [system](bash tests/services/cli-surface.sh test_wrix_service_cli)
 - Rust packaging exposes `wrix` as the human-facing CLI plus explicit helper binaries from `wrix-cache`; wrix does not rely on hidden private multiplexer subcommands
   [system](bash tests/services/cli-surface.sh test_rust_helper_binaries)
@@ -211,7 +204,7 @@ Direct remote-builder access to the local project cache is out of scope for v1. 
 ### Functional
 
 1. **Workspace identity** — services are keyed by the canonical repository root for paths inside a Git checkout, and by the canonical current path otherwise. Container names use `<repo>-service`; ports and state/cache roots derive from the identity path hash. Loom-managed paths under `.loom/` use the outer repository identity.
-2. **Rust host CLI** — public service/cache/beads orchestration is exposed through the Rust `wrix` CLI, not through standalone `wrix-svc`, `beads-dolt`, or `beads-push` binaries. Separable internals are proper Rust crates/helper binaries, not hidden public subcommands.
+2. **Service command surface** — public service/cache orchestration is exposed through `wrix service ...` under the root CLI owned by `cli.md`, not through standalone `wrix-svc`, `beads-dolt`, or `beads-push` binaries. Separable internals are proper Rust crates/helper binaries, not hidden public subcommands.
 3. **Lifecycle management** — `wrix service start` is idempotent and caller-independent; `stop`, `status`, `logs`, and endpoint queries operate on the selected workspace only. Cache-only starts in temp-directory scratch workspaces are no-ops rather than persistent service containers.
 4. **Service image source** — the service image follows the shared wrix-managed image source-kind contract and runtime image installer: Linux uses an archive-less `nix-descriptor` source, Darwin uses the tar-loadable `docker-archive` fallback, and the image is labelled with `wrix.managed=true` plus `wrix.image.kind=service`.
 5. **Dolt hosting** — when `.beads/dolt` exists, the service container runs the Dolt SQL server for beads and publishes the endpoint in the shape `beads.md` expects.

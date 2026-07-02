@@ -4,7 +4,7 @@ Staged git hooks via [prek](https://github.com/j178/prek), packaged as a Nix-sto
 
 ## Problem Statement
 
-A wrix consumer using prek wants the same hook chain to fire in every context — host devshell, profile container, agent-driven bead clone — without per-context shim files, manual `prek install` steps, or `core.hooksPath` book-keeping. Wrix ships one frozen Nix-store hook bundle and threads it through every install path so the consumer's `.pre-commit-config.yaml` is the only place hooks are configured.
+A wrix consumer using prek wants the same hook chain to fire in every context — host devshell, initialized host checkout, profile container, Loom driver worktree, and agent-driven bead clone — without per-context shim files, manual `prek install` steps, or consumer-owned `core.hooksPath` book-keeping. Wrix ships one frozen Nix-store hook bundle and threads it through Wrix-owned install paths so the consumer's `.pre-commit-config.yaml` is the only place hooks are configured.
 
 ## Architecture
 
@@ -20,7 +20,7 @@ All git hooks for prek-using wrix repositories are served from a single Nix-stor
 
 Each shim uses `prek hook-impl --hook-type=<stage>` rather than `prek run` because git passes positional args that `prek run` would mistake for hook/project selectors.
 
-`mkDevShell` (see `profiles.md` § Prek hook management) sets `core.hooksPath` to the bundle on every devshell entry whenever `.pre-commit-config.yaml` is present. Profile container images install the same bundle via the container entrypoint (see `image-builder.md` § Hook installation).
+`mkDevShell` (see `profiles.md` § Prek hook management) sets `core.hooksPath` to the bundle on every devshell entry whenever `.pre-commit-config.yaml` is present. `wrix init` (see `cli.md`) applies the same bundle for ordinary host Git and Loom driver worktrees outside the devshell. Profile container images install the same bundle via the container entrypoint (see `image-builder.md` § Hook installation).
 
 Consumers do not vendor shims, do not set `core.hooksPath` themselves, and do not run `prek install`. Git never reads `.git/hooks/` while `core.hooksPath` is set, so whatever lands there (e.g. `bd hooks install`) is inert — no chmod-lockdown is needed and no `prek install -f` runs from any wrix lifecycle.
 
@@ -112,6 +112,8 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
   [system](bash tests/profiles/prek-hooks-bundle.sh test_bundle_contents)
 - `mkDevShell` sets `core.hooksPath` to the `wrix.prekHooks` store path on every devshell entry when `.pre-commit-config.yaml` is present
   [system](bash tests/profiles/mkdevshell-prek.sh test_auto_set_when_config_present)
+- `wrix init` sets shared repo-local `core.hooksPath` to the same `wrix.prekHooks` bundle for ordinary host Git and `.loom/integration`-style linked worktrees when `.pre-commit-config.yaml` is present and hook setup is enabled
+  [system?](bash tests/cli/init-prek.sh test_prek_hooks)
 - The pre-commit and pre-push shims both invoke `prek hook-impl --hook-type=<stage>` (not `prek run`, which would mistake git's positional args for hook/project selectors)
   [system](bash tests/profiles/prek-hooks-bundle.sh test_shims_are_plain_hook_impl)
 - No shim sources `lock.sh`, calls `_prek_acquire_lock`, or invokes `flock`; every shim invokes `prek hook-impl --hook-type=<its-stage>` and pins the Nix-store `prek` package on `PATH`
@@ -148,7 +150,7 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
 ### Functional
 
 1. **Bundle ownership** — `wrix.prekHooks` owns every staged hook shim; consumers do not vendor or override unless they substitute the whole bundle via `mkDevShell { prekHooks = <derivation>; }`.
-2. **`core.hooksPath` management** — `mkDevShell` sets `core.hooksPath` idempotently per devshell entry; no per-user setup step.
+2. **`core.hooksPath` management** — Wrix-owned install paths set `core.hooksPath` idempotently: `mkDevShell` per devshell entry and `wrix init` for ordinary host Git / Loom driver worktrees. Consumers do not run `prek install` or maintain hook shims themselves.
 3. **Hook stages** — the shim bundle covers pre-commit, pre-push, prepare-commit-msg, post-checkout, and post-merge; Wrix's own `.pre-commit-config.yaml` configures only pre-commit (treefmt, shell re-exec guard, builtin hooks) and pre-push (`nix flake check`, `loom gate verify`).
 4. **Stamp-file dance** — pre-push writes `.wrix/push-verified` after a successful check so a subsequent push can short-circuit if the SSH connection died during validation. See § Pre-Push Stamp Dance for the full mechanic.
 5. **Marker-aware short-circuit** — `pre-push-checks` consults `loom gate verify-marker`'s exit code to decide whether to skip the wrapped command; see § Hook-Entry Wrappers for the resolution order.

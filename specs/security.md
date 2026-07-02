@@ -118,6 +118,27 @@ boundary. This makes the launcher recursively composable: every
 wrix launch — host-spawned or container-spawned — produces a child
 that observes its keys at the same paths under the same env vars.
 
+**Host and repository Git bootstrap.** `cli.md` owns the `wrix init`
+command that applies repo-local Git config for host shells, devshells,
+containers, and Loom linked worktrees. The security invariant is that
+Wrix-managed Git transport uses only the context-resolved deploy key:
+`WRIX_DEPLOY_KEY` when the launcher supplied an in-container path, or
+`$HOME/.ssh/deploy_keys/<name>` on the host. If neither exists, the
+operation fails instead of trying the user's default SSH identities,
+SSH agent keys, or `~/.ssh/config` identities.
+
+All Wrix-managed GitHub SSH uses strict, noninteractive host-key
+verification with Wrix-pinned GitHub host keys. `StrictHostKeyChecking=no`,
+runtime `ssh-keyscan` trust-on-first-use, and appending learned GitHub keys
+to the user's `~/.ssh/known_hosts` are outside the security model. When Wrix
+creates SSH directories or compatibility config/known-hosts files, directory
+modes are `0700` and `config` / `known_hosts` file modes are `0600`.
+
+Commit signing follows the same context-resolution rule through the signing
+key (`WRIX_SIGNING_KEY` or `$HOME/.ssh/deploy_keys/<name>-signing`). Signing
+is default-on for initialized repositories; missing signing material is a
+hard failure unless the operator explicitly disables signing.
+
 **Trust model.** The launcher's parent process is trusted to choose
 the host source path. The launcher's only validation is presence
 (`[ -f ]`); it performs no path-prefix, ownership, mode, or content
@@ -238,6 +259,8 @@ this section is the index, not a restatement.
 - **Project Nix cache** (per-workspace explicit binary cache, no host
   `/nix/store` serving, no host Nix daemon socket, no sandbox signing key) —
   `services.md`
+- **Host repo Git bootstrap** (`wrix init`, optional `wrix.toml`, helper
+  verification, and GitHub deploy/signing key provisioning) — `cli.md`
 - **Unsafe host Podman socket opt-in** (Linux-only socket mount mechanics,
   legacy-env rejection, and fail-loud missing-socket behavior) —
   `sandbox.md`
@@ -258,6 +281,12 @@ this section is the index, not a restatement.
   makes an empty signed commit, and verifies that commit as a good SSH
   signature without manual `ssh-keyscan` or `git config`.
   [system](bash tests/security/git-ssh-bootstrap.sh)
+- Wrix-initialized host Git, container Git, and a `.loom/integration`-style
+  linked worktree all use context-resolved repo deploy/signing keys, strict
+  pinned GitHub host-key verification, and no ambient user SSH identities;
+  a fresh host-side GitHub SSH operation reaches authentication or repository
+  authorization without host-key verification failure.
+  [system?](bash tests/security/git-ssh-bootstrap.sh test_host_container_and_loom_helper)
 - When `WRIX_DEPLOY_KEY` or `WRIX_SIGNING_KEY` is set in the
   launcher's environment but the pointed-at file does not exist, the
   launcher exits non-zero with a stderr message naming the missing
@@ -297,7 +326,12 @@ this section is the index, not a restatement.
 3. **Platform symmetry** — Linux and macOS launchers implement the
    same precedence rule; behavior is identical across platforms
    modulo the launcher's outer shell/applescript wrapping.
-4. **Audit anchor** — every sandbox session writes a session-metadata
+4. **Host/repository Git transport** — Wrix-initialized host Git,
+   container Git, and Loom linked worktrees use context-resolved
+   repo deploy/signing keys with strict pinned GitHub host-key
+   verification, and fail rather than falling back to ambient user
+   SSH identities or trust-on-first-use host keys.
+5. **Audit anchor** — every sandbox session writes a session-metadata
    index whose `agent_session_dir` field points at the directory
    containing the selected agent's transcript for that session.
 

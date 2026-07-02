@@ -18,6 +18,7 @@ pin — keep it current when specs land or retire.
 | Spec | Code | Beads | Purpose |
 |------|------|-------|---------|
 | [beads.md](../specs/beads.md) | [`.beads/`](../.beads/) | wx-v7m8n | Issue tracking with dependency support |
+| [cli.md](../specs/cli.md) | [`crates/wrix-cli/`](../crates/wrix-cli/) | — | Wrix command surface and repository initialization |
 | [image-builder.md](../specs/image-builder.md) | [`lib/sandbox/image.nix`](../lib/sandbox/image.nix) | wx-nf6eu | Nix-based OCI image source creation |
 | [linux-builder.md](../specs/linux-builder.md) | [`lib/builder/default.nix`](../lib/builder/default.nix) | wx-ope | Remote Nix builds for macOS |
 | [notifications.md](../specs/notifications.md) | [`lib/notify/`](../lib/notify/) | wx-q6x | Desktop notifications with focus suppression |
@@ -35,7 +36,7 @@ pin — keep it current when specs land or retire.
 |------|------------|
 | **bd** | CLI for the beads issue tracker |
 | **beads** | Persistent issue tracker (used by the `bd` CLI) |
-| **deploy key** | SSH key for git push operations from container |
+| **deploy key** | Repo-scoped SSH key for Git operations from host and container contexts |
 | **dolt** | SQL database backing beads; shared via the workspace service container |
 | **focus-aware** | Notification suppression when terminal is focused |
 | **image source** | Platform image input produced by Nix: Linux `nix-descriptor`, Darwin `docker-archive` |
@@ -50,3 +51,5 @@ pin — keep it current when specs land or retire.
 | **service container** | Per-workspace `<repo>-service` container hosting shared local services |
 | **tmux-mcp** | MCP server for AI-assisted debugging via tmux panes |
 | **virtio-fs** | Shared filesystem for macOS container VMs |
+| **wrix init** | Repo-local bootstrap command that configures and verifies Wrix-managed Git transport, signing, and hooks |
+| **wrix.toml** | Optional repo-root Wrix policy override file; absent when defaults are sufficient |

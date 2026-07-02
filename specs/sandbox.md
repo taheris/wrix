@@ -12,7 +12,7 @@ Running AI coding assistants with unrestricted host access creates security risk
 
 - A workspace **profile** — packages, env, mounts, network allowlist, plugins (`profiles.md`)
 - An OCI **image source** built from the profile and the selected agent runtime (`image-builder.md`)
-- A profile-agnostic **launcher** binary (`wrix`)
+- A profile-agnostic **launcher** binary (`wrix`; root command grammar owned by `cli.md`)
 
 `mkSandbox` returns `{ package, image, launcher, profile, devShell }`:
 
@@ -98,9 +98,9 @@ mkSandbox {
 
 Returns `{ package, image, launcher, profile, devShell }`.
 
-## Launcher Subcommands
+## Launcher Runtime Contract
 
-The Rust `wrix` launcher binary is profile-agnostic. Nix supplies build-time defaults through an immutable `ProfileConfig` JSON file, passed by `--profile-config <path>` or a wrapper-set equivalent. Both launcher subcommands share container construction (mounts, env passthrough, runtime selection, deploy key, workspace service startup, network firewall configuration); they differ only in stdio and per-launch configuration source.
+`cli.md` owns that the launcher is exposed as `wrix run` and `wrix spawn`, including help and root dispatch. This section owns the runtime contract behind those subcommands. The Rust `wrix` launcher binary is profile-agnostic. Nix supplies build-time defaults through an immutable `ProfileConfig` JSON file, passed by `--profile-config <path>` or a wrapper-set equivalent. Both launcher subcommands share container construction (mounts, env passthrough, runtime selection, deploy key, workspace service startup, network firewall configuration); they differ only in stdio and per-launch configuration source.
 
 Before launching the agent container, `wrix` ensures the per-workspace service container (`<repo>-service`) is running when beads or the project Nix cache is enabled. Dolt endpoints and project-cache `NIX_CONFIG` injection are owned by `services.md`; this spec owns only that both launcher subcommands use the same container construction path.
 
@@ -170,7 +170,7 @@ Before launching the agent container, `wrix` ensures the per-workspace service c
 - `agent_args` — argv tail passed to the agent binary
 - `mounts` — optional `[{host_path, container_path, read_only}]` list; omitted or empty means no per-launch mounts. Additive to `profile.mounts` and `mkSandbox.mounts`.
 
-Plus consumer-defined fields the entrypoint reads from inside the container. The schema is part of the wrix CLI contract — see `wrix spawn --help`. Per-launch `SpawnConfig` may override launch-time inputs (workspace, env allowlist, agent args, mounts, image ref/source for orchestrators), but it may not change the selected agent independently of the image/profile config. `wrix run` errors when no valid `ProfileConfig` is supplied; there is no implicit default image baked in.
+Plus consumer-defined fields the entrypoint reads from inside the container. The schema is part of the launcher runtime contract, and CLI help mirrors it per `cli.md`. Per-launch `SpawnConfig` may override launch-time inputs (workspace, env allowlist, agent args, mounts, image ref/source for orchestrators), but it may not change the selected agent independently of the image/profile config. `wrix run` errors when no valid `ProfileConfig` is supplied; there is no implicit default image baked in.
 
 ## Platform Implementations
 

@@ -33,7 +33,8 @@ below exist to keep that identity from drifting.
 `services.md`'s per-workspace service container when beads or the project Nix
 cache is enabled, and it points `core.hooksPath` at the hook derivation selected
 by `prekHooks`; see [Prek hook management](#prek-hook-management) for the
-devshell selection rules.
+devshell selection rules. Durable host/Loom Git setup outside devshell entry is
+owned by `cli.md`'s `wrix init`.
 
 Rust toolchains are baked into the container image at build time, never
 bootstrapped from rustup at container start. fenix supplies proper Nix
@@ -479,8 +480,10 @@ the publish manifest is missing or stale it prints a short reminder unless
 
 The lifecycle owns the devshell side of `core.hooksPath` configuration for
 prek-using repositories. `specs/pre-commit.md` owns the hook bundle export,
-stage set, shim behavior, wrappers, and pre-push retry stamp. Two conditions
-gate the devshell install: (1) `.pre-commit-config.yaml` exists in the working
+stage set, shim behavior, wrappers, and pre-push retry stamp; `cli.md` owns
+`wrix init` hook setup for ordinary host Git and Loom driver worktrees outside
+devshell entry. Two conditions gate the devshell install: (1)
+`.pre-commit-config.yaml` exists in the working
 directory, AND (2) `prekHooks` resolves to a derivation. When both hold, the
 lifecycle runs `git config --local core.hooksPath ${derivation}` on every
 devshell entry, pointing git at the selected Nix-store hook bundle. Consumers

@@ -25,10 +25,10 @@ provides:
 - A **shellHook** that ensures the service container is running and exports
   `BEADS_DOLT_SERVER_*` env vars so `bd` connects through the Dolt service
   rather than embedding Dolt in-process.
-- **Wrix CLI surfaces** on the devShell PATH: `wrix service ...` manages
-  shared service lifecycle, `wrix service dolt ...` exposes Dolt endpoint and
-  diagnostic commands, and `wrix beads push` handles session-close branch sync.
-  `services.md` owns the exact service CLI surface.
+- **Wrix CLI integration** on the devShell PATH: `cli.md` owns the root
+  command grammar; `services.md` owns `wrix service ...` service lifecycle and
+  Dolt endpoint diagnostics; this spec owns the behavior behind
+  `wrix beads push` session-close branch sync.
 
 ### Container lifecycle isolation
 
@@ -51,10 +51,11 @@ systemd-based Linux; Darwin's Apple `container` and podman-via-VM already
 satisfy the invariant via separate process trees). The spec states the
 invariant; the implementation chooses the mechanism per platform.
 
-## CLI Surface
+## Command Surface
 
-`bd …` commands are upstream beads; `wrix beads push` is the wrix-provided
-session-close wrapper.
+`bd …` commands are upstream beads. `wrix beads push` is the Wrix-provided
+session-close wrapper; `cli.md` owns its CLI placement and this spec owns its
+sync behavior.
 
 | Command | Purpose |
 |---------|---------|
@@ -68,7 +69,6 @@ session-close wrapper.
 | `bd close <id>` | Close issue |
 | `bd dep add <issue> <depends-on>` | Add dependency |
 | `bd dolt pull` / `bd dolt push` | Sync the local Dolt database against the remote |
-| `wrix beads push` | Session-close sync: commit the Dolt remote and push the `beads` git branch (see *Session-Close Sync*) |
 
 Issue types: task, bug, feature, epic, question, docs. Priority levels
 range from 0 (critical) to 4 (backlog); the `P0`–`P4` form is accepted
