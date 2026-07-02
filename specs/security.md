@@ -286,7 +286,7 @@ this section is the index, not a restatement.
   pinned GitHub host-key verification, and no ambient user SSH identities;
   a fresh host-side GitHub SSH operation reaches authentication or repository
   authorization without host-key verification failure.
-  [system?](bash tests/security/git-ssh-bootstrap.sh test_host_container_and_loom_helper)
+  [system](bash tests/security/git-ssh-bootstrap.sh test_host_container_and_loom_helper)
 - When `WRIX_DEPLOY_KEY` or `WRIX_SIGNING_KEY` is set in the
   launcher's environment but the pointed-at file does not exist, the
   launcher exits non-zero with a stderr message naming the missing

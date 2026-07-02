@@ -101,11 +101,11 @@ The online verifier must exercise the same Git config path Loom uses from `.loom
 ## Success Criteria
 
 - Root help and subcommand help expose `run`, `spawn`, `service`, `beads`, and `init`, route delegated commands to their owning crates/specs, and install no legacy `wrix-svc`, `beads-dolt`, `beads-push`, or `<repo>-beads` public binaries.
-  [system?](bash tests/cli/cli-surface.sh test_root_help_and_legacy_binaries)
+  [system](bash tests/cli/cli-surface.sh test_root_help_and_legacy_binaries)
 - Unknown root commands and malformed `wrix init` invocations, including `--deploy --offline` and `--deploy` when `wrix.init.online_verify = false`, exit non-zero with an actionable error and usage text, while `--help` exits zero without mutating repository state.
-  [system?](bash tests/cli/cli-surface.sh test_help_errors_are_non_mutating)
+  [system](bash tests/cli/cli-surface.sh test_help_errors_are_non_mutating)
 - `wrix init` succeeds without `wrix.toml`, does not create `wrix.toml` for default behavior, and applies flag > `wrix.toml` > ProfileConfig > derived-default precedence for key name, signing, remote, hook, and online verification policy.
-  [system?](bash tests/cli/init-config.sh test_defaults_and_overrides)
+  [system](bash tests/cli/init-config.sh test_defaults_and_overrides)
 - `wrix init` writes shared/common Git config that is inherited by a `.loom/integration`-style linked worktree, and that config contains no absolute host deploy-key path, container `/etc/wrix/keys` private-key path, host-only/container-only helper path, or host-only/container-only allowed-signers path.
   [system?](bash tests/cli/init-git-bootstrap.sh test_common_config_inherited_by_loom_integration)
 - With `$HOME` and the effective-user home differing, the Git transport helper resolves `WRIX_DEPLOY_KEY` first, `$HOME/.ssh/deploy_keys/<key-name>` second, fails when neither exists, invokes SSH with strict pinned-host-key options without using user SSH config, default identities, or `StrictHostKeyChecking=no`, and leaves any Wrix-created SSH directories at `0700` plus `config` / `known_hosts` files at `0600`.

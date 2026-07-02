@@ -1,3 +1,5 @@
+mod init;
+
 use std::{
     env,
     io::{self, Write},
@@ -44,7 +46,13 @@ fn run(args: &[String], stdout: &mut impl Write, stderr: &mut impl Write) -> io:
         ),
         "service" => run_service(&root.args[1..], stdout, stderr),
         "beads" => run_beads(&root.args[1..], stdout, stderr),
-        command => unknown_root(command, stdout, stderr),
+        "init" => init::run(
+            root.profile_config.as_deref(),
+            &root.args[1..],
+            stdout,
+            stderr,
+        ),
+        command => unknown_root(command, stderr),
     }
 }
 
@@ -185,13 +193,9 @@ fn run_beads(
     Ok(ExitCode::FAILURE)
 }
 
-fn unknown_root(
-    command: &str,
-    stdout: &mut impl Write,
-    stderr: &mut impl Write,
-) -> io::Result<ExitCode> {
+fn unknown_root(command: &str, stderr: &mut impl Write) -> io::Result<ExitCode> {
     writeln!(stderr, "unknown command: {command}")?;
-    write_help(stdout)?;
+    write_help(stderr)?;
     Ok(ExitCode::FAILURE)
 }
 
@@ -201,7 +205,7 @@ fn is_help(arg: &str) -> bool {
 
 fn write_help(stdout: &mut impl Write) -> io::Result<()> {
     stdout.write_all(
-        b"Manage wrix sandboxes and workspace services.\n\nUsage: wrix <command>\n\nCommands:\n  run\n  spawn\n  service\n  beads\n",
+        b"Manage Wrix sandboxes, services, and repository setup.\n\nUsage: wrix <command>\n\nCommands:\n  run\n  spawn\n  service\n  beads\n  init\n",
     )
 }
 

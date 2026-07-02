@@ -379,6 +379,9 @@ dependencies = [
 name = "wrix-cli"
 version = "0.1.0"
 dependencies = [
+ "displaydoc",
+ "serde_json",
+ "thiserror",
  "wrix-beads",
  "wrix-cache",
  "wrix-sandbox",
