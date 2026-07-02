@@ -3,6 +3,7 @@
 #
 # Usage:
 #   tests/profiles/profile-composition.sh test_nested_derive_profile
+#   tests/profiles/profile-composition.sh test_host_packages_split
 
 set -euo pipefail
 
@@ -37,6 +38,7 @@ eval_profile_json() {
       lib = np.lib;
       coreOuts = prof: map (p: p.outPath) prof.corePackages;
       leaf = prof: builtins.filter (p: !(builtins.elem p.outPath (coreOuts prof))) prof.packages;
+      hostPackagesOf = prof: prof.hostPackages or [ ];
       hasPackage = needle: packages:
         builtins.any
           (p:
@@ -119,8 +121,36 @@ test_nested_derive_profile() {
   [[ "$(json_field "$result" hasCowsayCore)" == "false" ]] || fail "second extension package leaked into corePackages"
 }
 
+test_host_packages_split() {
+  local result
+  result=$(eval_profile_json '
+    let
+      base = wlib.profiles.base;
+      ext = wlib.deriveProfile base {
+        packages = [ np.hello ];
+        hostPackages = [ np.cowsay ];
+      };
+    in {
+      packagesDiff = (builtins.length ext.packages) - (builtins.length base.packages);
+      hostPackagesDiff = (builtins.length (hostPackagesOf ext)) - (builtins.length (hostPackagesOf base));
+      hasImageHello = hasPackage "hello" ext.packages;
+      hasHostCowsay = hasPackage "cowsay" (hostPackagesOf ext);
+      hasHostHello = hasPackage "hello" (hostPackagesOf ext);
+      hasImageCowsay = hasPackage "cowsay" ext.packages;
+    }
+  ')
+
+  [[ "$(json_field "$result" packagesDiff)" -eq 1 ]] || fail "packages extension should append exactly one image package"
+  [[ "$(json_field "$result" hostPackagesDiff)" -eq 1 ]] || fail "hostPackages extension should append exactly one host package"
+  [[ "$(json_field "$result" hasImageHello)" == "true" ]] || fail "image package extension missing from packages"
+  [[ "$(json_field "$result" hasHostCowsay)" == "true" ]] || fail "hostPackages extension missing from hostPackages"
+  [[ "$(json_field "$result" hasHostHello)" == "false" ]] || fail "image package extension leaked into hostPackages"
+  [[ "$(json_field "$result" hasImageCowsay)" == "false" ]] || fail "hostPackages extension leaked into packages"
+}
+
 ALL_TESTS=(
   test_nested_derive_profile
+  test_host_packages_split
 )
 
 run_all() {

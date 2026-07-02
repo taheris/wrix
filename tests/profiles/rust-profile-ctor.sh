@@ -6,10 +6,10 @@
 #     error at evaluation rather than silently producing an unpinned profile.
 #
 #   test_extension_args
-#     rustProfile { toolchain; sha256; packages = [p]; env = { K = "v"; ... };
-#                   mounts = [m]; networkAllowlist = [a]; }
-#     lands extension args in the matching profile slots: packages, mounts,
-#     and networkAllowlist appended after the pinned-profile base; env is
+#     rustProfile { toolchain; sha256; packages = [p]; hostPackages = [h];
+#                   env = { K = "v"; ... }; mounts = [m]; networkAllowlist = [a]; }
+#     lands extension args in the matching profile slots: packages, hostPackages,
+#     mounts, and networkAllowlist appended after the pinned-profile base; env is
 #     right-merged (consumer wins on conflict).
 #
 # Usage:
@@ -51,8 +51,8 @@ eval_expr_json() {
   nix eval --json --impure --no-warn-dirty --expr "
     let
       flake = builtins.getFlake \"git+file://$REPO_ROOT\";
-      pkgs = flake.legacyPackages.\"$system\";
-      lib = pkgs.lib;
+      pkgs = import flake.inputs.nixpkgs { system = \"$system\"; };
+      lib = flake.legacyPackages.\"$system\".lib;
     in $expr
   "
 }
@@ -100,6 +100,7 @@ test_extension_args() {
     toolchain = $REPO_ROOT/tests/fixtures/rust-toolchain.toml;
     sha256 = \"$TOOLCHAIN_FIXTURE_SHA\";
     packages = [ pkgs.hello ];
+    hostPackages = [ pkgs.cowsay ];
     env = { CTOR_TEST_KEY = \"ctor_test_value\"; SCCACHE_CACHE_SIZE = \"99G\"; };
     mounts = [ { source = \"/host/ctor\"; dest = \"/ctn/ctor\"; mode = \"ro\"; optional = true; } ];
     networkAllowlist = [ \"ctor.example.com\" ];
@@ -112,11 +113,15 @@ test_extension_args() {
       ext  = $ext_expr;
     in {
       packagesDiff       = (builtins.length ext.packages) - (builtins.length base.packages);
+      hostPackagesDiff   = (builtins.length ext.hostPackages) - (builtins.length base.hostPackages);
       mountsDiff         = (builtins.length ext.mounts)   - (builtins.length base.mounts);
       networkDiff        = (builtins.length ext.networkAllowlist) - (builtins.length base.networkAllowlist);
       envExtAdded        = ext.env.CTOR_TEST_KEY or null;
       envRightMergeWins  = ext.env.SCCACHE_CACHE_SIZE;
       baseSccacheSize    = base.env.SCCACHE_CACHE_SIZE;
+      hostPackagePresent = builtins.elem pkgs.cowsay.outPath (map (p: p.outPath) ext.hostPackages);
+      hostPackageImageAbsent = ! (builtins.elem pkgs.cowsay.outPath (map (p: p.outPath) ext.packages));
+      imagePackageHostAbsent = ! (builtins.elem pkgs.hello.outPath (map (p: p.outPath) ext.hostPackages));
       mountDestPresent   = builtins.any (m: m.dest == \"/ctn/ctor\") ext.mounts;
       networkPresent     = builtins.elem \"ctor.example.com\" ext.networkAllowlist;
       baseNetworkPreserved = builtins.elem \"crates.io\" ext.networkAllowlist;
@@ -126,20 +131,29 @@ test_extension_args() {
     return 1
   fi
 
-  local packages_diff mounts_diff network_diff env_added env_override base_sccache \
-    mount_present network_present base_net_preserved
-  packages_diff=$(echo "$result"      | jq -r '.packagesDiff')
-  mounts_diff=$(echo "$result"        | jq -r '.mountsDiff')
-  network_diff=$(echo "$result"       | jq -r '.networkDiff')
-  env_added=$(echo "$result"          | jq -r '.envExtAdded')
-  env_override=$(echo "$result"       | jq -r '.envRightMergeWins')
-  base_sccache=$(echo "$result"       | jq -r '.baseSccacheSize')
-  mount_present=$(echo "$result"      | jq -r '.mountDestPresent')
-  network_present=$(echo "$result"    | jq -r '.networkPresent')
-  base_net_preserved=$(echo "$result" | jq -r '.baseNetworkPreserved')
+  local packages_diff host_packages_diff mounts_diff network_diff env_added env_override base_sccache \
+    host_package_present host_package_image_absent image_package_host_absent mount_present \
+    network_present base_net_preserved
+  packages_diff=$(echo "$result"             | jq -r '.packagesDiff')
+  host_packages_diff=$(echo "$result"        | jq -r '.hostPackagesDiff')
+  mounts_diff=$(echo "$result"               | jq -r '.mountsDiff')
+  network_diff=$(echo "$result"              | jq -r '.networkDiff')
+  env_added=$(echo "$result"                 | jq -r '.envExtAdded')
+  env_override=$(echo "$result"              | jq -r '.envRightMergeWins')
+  base_sccache=$(echo "$result"              | jq -r '.baseSccacheSize')
+  host_package_present=$(echo "$result"      | jq -r '.hostPackagePresent')
+  host_package_image_absent=$(echo "$result" | jq -r '.hostPackageImageAbsent')
+  image_package_host_absent=$(echo "$result" | jq -r '.imagePackageHostAbsent')
+  mount_present=$(echo "$result"             | jq -r '.mountDestPresent')
+  network_present=$(echo "$result"           | jq -r '.networkPresent')
+  base_net_preserved=$(echo "$result"        | jq -r '.baseNetworkPreserved')
 
   if [[ "$packages_diff" != "1" ]]; then
     echo "FAIL: packages should be appended (diff expected 1, got $packages_diff)" >&2
+    return 1
+  fi
+  if [[ "$host_packages_diff" != "1" ]]; then
+    echo "FAIL: hostPackages should be appended (diff expected 1, got $host_packages_diff)" >&2
     return 1
   fi
   if [[ "$mounts_diff" != "1" ]]; then
@@ -160,6 +174,18 @@ test_extension_args() {
   fi
   if [[ "$base_sccache" != "50G" ]]; then
     echo "FAIL: base env.SCCACHE_CACHE_SIZE expected '50G', got '$base_sccache' — base profile drift" >&2
+    return 1
+  fi
+  if [[ "$host_package_present" != "true" ]]; then
+    echo "FAIL: hostPackages extension package missing from ext.hostPackages" >&2
+    return 1
+  fi
+  if [[ "$host_package_image_absent" != "true" ]]; then
+    echo "FAIL: hostPackages extension package should not be appended to image packages" >&2
+    return 1
+  fi
+  if [[ "$image_package_host_absent" != "true" ]]; then
+    echo "FAIL: image packages extension package should not be appended to hostPackages" >&2
     return 1
   fi
   if [[ "$mount_present" != "true" ]]; then

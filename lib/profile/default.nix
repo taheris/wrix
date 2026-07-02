@@ -19,6 +19,7 @@
       toolchain,
       sha256,
       packages ? [ ],
+      hostPackages ? [ ],
       env ? { },
       mounts ? [ ],
       networkAllowlist ? [ ],
@@ -32,6 +33,7 @@
     base
     // {
       packages = base.packages ++ packages;
+      hostPackages = (base.hostPackages or [ ]) ++ hostPackages;
       env = base.env // env;
       mounts = base.mounts ++ mounts;
       networkAllowlist = base.networkAllowlist ++ networkAllowlist;

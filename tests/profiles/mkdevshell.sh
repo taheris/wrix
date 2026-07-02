@@ -9,9 +9,9 @@
 #     mkDevShell { profile = profiles.rust; } exports the rust profile's
 #     shellHook values when the generated hook is sourced.
 #
-#   test_packages_merge
-#     mkDevShell { profile; packages = [extra]; } makes both profile.packages
-#     and extra tools resolvable on PATH.
+#   test_host_packages_source
+#     mkDevShell { profile; packages = [extra]; } makes profile.hostPackages
+#     and extra tools resolvable on PATH while leaving image packages out.
 #
 #   test_env_right_merge
 #     mkDevShell { profile; env = { K = "v"; }; } sets K=v on the resulting
@@ -208,11 +208,11 @@ test_profile_shellhook_spliced() {
 }
 
 # ============================================================================
-# profile.packages ++ packages is visible through the dev env PATH
+# profile.hostPackages ++ packages is visible through the dev env PATH
 # ============================================================================
-test_packages_merge() {
-  local env_file result profile_cmd extra_cmd profile_output extra_output
-  env_file="$TMP_BASE/mkdevshell-packages-env.sh"
+test_host_packages_source() {
+  local env_file result host_cmd extra_cmd image_found host_output extra_output
+  env_file="$TMP_BASE/mkdevshell-host-packages-env.sh"
 
   if ! nix print-dev-env --impure --no-warn-dirty --expr "
     let
@@ -223,9 +223,13 @@ test_packages_merge() {
         set -euo pipefail
         exit 0
       '';
-      profileTool = pkgs.writeShellScriptBin \"wrix-mkdevshell-profile-tool\" ''
+      imageTool = pkgs.writeShellScriptBin \"wrix-mkdevshell-image-tool\" ''
         set -euo pipefail
-        printf '%s\\n' profile-tool
+        printf '%s\\n' image-tool
+      '';
+      hostTool = pkgs.writeShellScriptBin \"wrix-mkdevshell-host-tool\" ''
+        set -euo pipefail
+        printf '%s\\n' host-tool
       '';
       extraTool = pkgs.writeShellScriptBin \"wrix-mkdevshell-extra-tool\" ''
         set -euo pipefail
@@ -245,7 +249,8 @@ test_packages_merge() {
       };
       profile = {
         name = \"mkdevshell-test\";
-        packages = [ profileTool ];
+        packages = [ imageTool ];
+        hostPackages = [ hostTool ];
         env = { };
         shellHook = \"\";
         mounts = [ ];
@@ -260,7 +265,7 @@ test_packages_merge() {
       prekHooks = false;
     }
   " >"$env_file"; then
-    echo "FAIL: nix print-dev-env mkDevShell packages-merge expression failed" >&2
+    echo "FAIL: nix print-dev-env mkDevShell hostPackages expression failed" >&2
     return 1
   fi
 
@@ -269,34 +274,45 @@ test_packages_merge() {
     # shellcheck source=/dev/null
     source "$env_file" >/dev/null
     set -u
-    profile_cmd=$(command -v wrix-mkdevshell-profile-tool)
+    host_cmd=$(command -v wrix-mkdevshell-host-tool)
     extra_cmd=$(command -v wrix-mkdevshell-extra-tool)
-    profile_output=$(wrix-mkdevshell-profile-tool)
+    if command -v wrix-mkdevshell-image-tool >/dev/null; then
+      image_found=1
+    else
+      image_found=0
+    fi
+    host_output=$(wrix-mkdevshell-host-tool)
     extra_output=$(wrix-mkdevshell-extra-tool)
-    printf 'profile_cmd=%s\n' "$profile_cmd"
+    printf 'host_cmd=%s\n' "$host_cmd"
     printf 'extra_cmd=%s\n' "$extra_cmd"
-    printf 'profile_output=%s\n' "$profile_output"
+    printf 'image_found=%s\n' "$image_found"
+    printf 'host_output=%s\n' "$host_output"
     printf 'extra_output=%s\n' "$extra_output"
   ); then
-    echo "FAIL: generated mkDevShell environment did not expose both tools on PATH" >&2
+    echo "FAIL: generated mkDevShell environment did not expose expected tools on PATH" >&2
     return 1
   fi
 
-  profile_cmd=$(env_value "$result" profile_cmd)
+  host_cmd=$(env_value "$result" host_cmd)
   extra_cmd=$(env_value "$result" extra_cmd)
-  profile_output=$(env_value "$result" profile_output)
+  image_found=$(env_value "$result" image_found)
+  host_output=$(env_value "$result" host_output)
   extra_output=$(env_value "$result" extra_output)
 
-  [[ "$profile_cmd" == /nix/store/*/bin/wrix-mkdevshell-profile-tool ]] || {
-    echo "FAIL: profile tool did not resolve from the Nix store PATH, got '$profile_cmd'" >&2
+  [[ "$host_cmd" == /nix/store/*/bin/wrix-mkdevshell-host-tool ]] || {
+    echo "FAIL: host tool did not resolve from the Nix store PATH, got '$host_cmd'" >&2
     return 1
   }
   [[ "$extra_cmd" == /nix/store/*/bin/wrix-mkdevshell-extra-tool ]] || {
     echo "FAIL: extra tool did not resolve from the Nix store PATH, got '$extra_cmd'" >&2
     return 1
   }
-  [[ "$profile_output" == "profile-tool" ]] || {
-    echo "FAIL: profile tool output mismatch: '$profile_output'" >&2
+  [[ "$image_found" == "0" ]] || {
+    echo "FAIL: image-only profile package should not be present on the host PATH" >&2
+    return 1
+  }
+  [[ "$host_output" == "host-tool" ]] || {
+    echo "FAIL: host tool output mismatch: '$host_output'" >&2
     return 1
   }
   [[ "$extra_output" == "extra-tool" ]] || {
@@ -387,7 +403,7 @@ test_shellhook_order() {
 ALL_TESTS=(
   test_profile_required
   test_profile_shellhook_spliced
-  test_packages_merge
+  test_host_packages_source
   test_env_right_merge
   test_shellhook_order
 )
