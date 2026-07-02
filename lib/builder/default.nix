@@ -180,6 +180,79 @@ let
         esac
       }
 
+      container_image_refs() {
+        local list_output
+
+        if ! list_output=$(container image list); then
+          echo "Warning: could not list images for builder cleanup" >&2
+          return 0
+        fi
+
+        printf '%s\n' "$list_output" | awk '
+          NR == 1 { next }
+          $1 ~ /^untagged@sha256:[0-9a-f]+$/ { print $1; next }
+          NF >= 2 && $1 != "<none>" && $2 != "<none>" { print $1 ":" $2 }
+        '
+      }
+
+      builder_image_json_digest() {
+        "$WRIX_BUILDER_JQ" -r '
+          ((if type == "array" then .[0] else . end) // {})
+          | .digest // .id // .Id // empty
+        '
+      }
+
+      builder_image_json_has_builder_labels() {
+        "$WRIX_BUILDER_JQ" -e '
+          ((if type == "array" then .[0] else . end) // {}) as $image
+          | ($image.labels // $image.Labels // $image.config.labels // $image.config.Labels // $image.Config.Labels // {}) as $labels
+          | $labels["wrix.managed"] == "true" and $labels["wrix.image.kind"] == "builder"
+        ' >/dev/null
+      }
+
+      builder_image_is_legacy_ref() {
+        local ref="$1"
+
+        [[ "$ref" == wrix-builder:* ]]
+      }
+
+      cleanup_stale_builder_images() {
+        local current_image="$1"
+        local loaded_ref="''${2:-}"
+        local current_short="''${current_image#sha256:}"
+        local image_json
+        local ref
+        local ref_digest
+        local ref_short
+
+        while IFS= read -r ref; do
+          [[ -n "$ref" ]] || continue
+          [[ "$ref" != "$BUILDER_IMAGE" ]] || continue
+          [[ -z "$loaded_ref" || "$ref" != "$loaded_ref" ]] || continue
+          [[ "$ref" != "wrix-builder:latest" ]] || continue
+
+          if ! image_json=$(container image inspect "$ref"); then
+            echo "Warning: could not inspect image $ref during builder cleanup" >&2
+            continue
+          fi
+
+          ref_digest=$(printf '%s\n' "$image_json" | builder_image_json_digest)
+          if [[ -z "$ref_digest" && "$ref" == untagged@sha256:* ]]; then
+            ref_digest="sha256:''${ref#untagged@sha256:}"
+          fi
+          ref_short="''${ref_digest#sha256:}"
+          if [[ -n "$ref_short" && "$ref_short" == "$current_short" ]]; then
+            continue
+          fi
+
+          if printf '%s\n' "$image_json" | builder_image_json_has_builder_labels || builder_image_is_legacy_ref "$ref"; then
+            if ! container image delete "$ref" >/dev/null; then
+              echo "Warning: could not delete stale builder image $ref" >&2
+            fi
+          fi
+        done < <(container_image_refs)
+      }
+
       load_builder_image() {
         local current_image
         local loaded_ref
@@ -218,7 +291,7 @@ let
           container image tag "$loaded_ref" "$BUILDER_IMAGE"
           container image tag "$loaded_ref" "wrix-builder:latest" 2>/dev/null || true # best-effort: the hash ref is authoritative when the legacy alias cannot be updated.
           rm -f "$oci_tar"
-          container image prune
+          cleanup_stale_builder_images "$current_image" "$loaded_ref"
         fi
       }
 

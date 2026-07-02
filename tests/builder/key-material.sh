@@ -57,8 +57,106 @@ set -euo pipefail
 log_file="${WRIX_BUILDER_FAKE_LOG:?}"
 state_dir="${WRIX_BUILDER_FAKE_STATE:?}"
 tar_root="${WRIX_BUILDER_FAKE_TAR_ROOT:?}"
-mkdir -p "$state_dir/containers"
+mkdir -p "$state_dir/containers" "$state_dir/images"
 printf 'container|%s\n' "$*" >>"$log_file"
+
+image_file() {
+  local ref="$1"
+  local key="$ref"
+
+  key="${key//\//_}"
+  key="${key//:/_}"
+  key="${key//@/_}"
+  printf '%s\n' "$state_dir/images/$key"
+}
+
+image_write() {
+  local ref="$1"
+  local digest="$2"
+  local managed="$3"
+  local kind="$4"
+  local path
+
+  path="$(image_file "$ref")"
+  printf '%s\n%s\n%s\n%s\n' "$ref" "$digest" "$managed" "$kind" >"$path"
+}
+
+image_read_field() {
+  local ref="$1"
+  local field="$2"
+  local path
+
+  path="$(image_file "$ref")"
+  [[ -f "$path" ]] || return 1
+  sed -n "${field}p" "$path"
+}
+
+image_remove() {
+  local ref="$1"
+  local path
+
+  path="$(image_file "$ref")"
+  rm -f "$path"
+}
+
+image_list() {
+  local digest
+  local path
+  local ref
+
+  printf 'NAME TAG DIGEST\n'
+  for path in "$state_dir/images"/*; do
+    [[ -f "$path" ]] || continue
+    ref="$(sed -n '1p' "$path")"
+    digest="$(sed -n '2p' "$path")"
+    case "$ref" in
+      untagged@sha256:*)
+        printf '%s\n' "$ref"
+        ;;
+      *)
+        printf '%s %s %s\n' "${ref%:*}" "${ref##*:}" "$digest"
+        ;;
+    esac
+  done
+}
+
+image_inspect() {
+  local digest
+  local kind
+  local managed
+  local ref="$1"
+
+  digest="$(image_read_field "$ref" 2)" || return 1
+  managed="$(image_read_field "$ref" 3)" || return 1
+  kind="$(image_read_field "$ref" 4)" || return 1
+  printf '[{"digest":"%s","labels":{"wrix.managed":"%s","wrix.image.kind":"%s"}}]\n' \
+    "$digest" \
+    "$managed" \
+    "$kind"
+}
+
+image_tag() {
+  local digest
+  local kind
+  local managed
+  local source="$1"
+  local target="$2"
+
+  digest="$(image_read_field "$source" 2)" || digest="sha256:$(printf '%064d' 1)"
+  managed="$(image_read_field "$source" 3)" || managed="true"
+  kind="$(image_read_field "$source" 4)" || kind="builder"
+  image_write "$target" "$digest" "$managed" "$kind"
+}
+
+image_load() {
+  local loaded_sha
+  local loaded_ref
+
+  loaded_sha="$(printf '%064d' 1)"
+  loaded_ref="untagged@sha256:$loaded_sha"
+  image_write "$loaded_ref" "sha256:$loaded_sha" "true" "builder"
+  printf 'Loaded image: %s\n' "$loaded_ref"
+}
 
 container_file() {
   local name="$1"
@@ -126,11 +224,39 @@ case "${1:-}" in
     ;;
   image)
     case "${2:-}" in
-      inspect | delete | tag | prune)
+      inspect)
+        if [[ "$#" -lt 3 ]]; then
+          printf 'fake container: image inspect requires a ref\n' >&2
+          exit 64
+        fi
+        image_inspect "$3"
+        exit 0
+        ;;
+      delete)
+        if [[ "$#" -lt 3 ]]; then
+          printf 'fake container: image delete requires a ref\n' >&2
+          exit 64
+        fi
+        image_remove "$3"
+        exit 0
+        ;;
+      tag)
+        if [[ "$#" -lt 4 ]]; then
+          printf 'fake container: image tag requires source and target refs\n' >&2
+          exit 64
+        fi
+        image_tag "$3" "$4"
+        exit 0
+        ;;
+      prune)
+        exit 0
+        ;;
+      list)
+        image_list
         exit 0
         ;;
       load)
-        printf 'Loaded image: untagged@sha256:%064d\n' 1
+        image_load
         exit 0
         ;;
     esac
@@ -259,6 +385,30 @@ prepare_builder_fixture() {
   write_fake_tools "$test_root/bin"
 }
 
+fake_image_file() {
+  local ref="$2"
+  local state_dir="$1"
+  local key="$ref"
+
+  key="${key//\//_}"
+  key="${key//:/_}"
+  key="${key//@/_}"
+  printf '%s\n' "$state_dir/images/$key"
+}
+
+fake_write_image() {
+  local digest="$3"
+  local kind="$5"
+  local managed="$4"
+  local path
+  local ref="$2"
+  local state_dir="$1"
+
+  mkdir -p "$state_dir/images"
+  path="$(fake_image_file "$state_dir" "$ref")"
+  printf '%s\n%s\n%s\n%s\n' "$ref" "$digest" "$managed" "$kind" >"$path"
+}
+
 run_builder() {
   local test_root="$1"
   local builder
@@ -330,6 +480,16 @@ assert_file_contains() {
   grep -Fq -- "$expected" "$path" || fail "$message"
 }
 
+assert_file_lacks() {
+  local path="$1"
+  local unexpected="$2"
+  local message="$3"
+
+  if grep -Fq -- "$unexpected" "$path"; then
+    fail "$message"
+  fi
+}
+
 test_generates_per_user_ed25519_material() {
   local test_root="$TEST_TMP/generate"
   local keys_dir="$test_root/home/.local/share/wrix/builder-keys"
@@ -395,6 +555,49 @@ test_loads_image_through_source_kind_contract() {
     "wrix-builder start did not tag the loaded builder image ref"
 }
 
+test_builder_cleanup_is_wrix_scoped() {
+  local stale_unlabelled_digest
+  local test_root="$TEST_TMP/scoped-cleanup"
+
+  stale_unlabelled_digest="sha256:$(printf '%064d' 6)"
+  require_command ssh-keygen
+  require_command base64
+  require_command tar
+  prepare_builder_fixture "$test_root"
+  fake_write_image "$test_root/state" "stale-labelled:old" "sha256:$(printf '%064d' 2)" "true" "builder"
+  fake_write_image "$test_root/state" "wrix-builder:old" "sha256:$(printf '%064d' 3)" "" ""
+  fake_write_image "$test_root/state" "wrix-profile:old" "sha256:$(printf '%064d' 4)" "true" "profile"
+  fake_write_image "$test_root/state" "user-image:latest" "sha256:$(printf '%064d' 5)" "" ""
+  fake_write_image "$test_root/state" "untagged@${stale_unlabelled_digest}" "$stale_unlabelled_digest" "" ""
+
+  run_builder "$test_root" start
+
+  assert_file_contains \
+    "$test_root/container.log" \
+    "container|image delete stale-labelled:old" \
+    "builder cleanup did not delete the stale labelled builder image"
+  assert_file_contains \
+    "$test_root/container.log" \
+    "container|image delete wrix-builder:old" \
+    "builder cleanup did not delete the legacy wrix-builder ref"
+  assert_file_lacks \
+    "$test_root/container.log" \
+    "container|image prune" \
+    "builder cleanup called global container image prune"
+  assert_file_lacks \
+    "$test_root/container.log" \
+    "container|image delete wrix-profile:old" \
+    "builder cleanup deleted a non-builder wrix-managed image"
+  assert_file_lacks \
+    "$test_root/container.log" \
+    "container|image delete user-image:latest" \
+    "builder cleanup deleted an unrelated user image"
+  assert_file_lacks \
+    "$test_root/container.log" \
+    "container|image delete untagged@${stale_unlabelled_digest}" \
+    "builder cleanup deleted an unlabelled dangling image"
+}
+
 test_preserves_existing_private_keys() {
   local test_root="$TEST_TMP/preserve"
   local keys_dir="$test_root/home/.local/share/wrix/builder-keys"
@@ -439,6 +642,7 @@ main() {
 
   run_one test_generates_per_user_ed25519_material
   run_one test_loads_image_through_source_kind_contract
+  run_one test_builder_cleanup_is_wrix_scoped
   run_one test_preserves_existing_private_keys
 }
 
