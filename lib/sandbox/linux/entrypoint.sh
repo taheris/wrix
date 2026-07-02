@@ -99,7 +99,7 @@ wrix_install_bd_remote_wrapper() {
   local wrapper_dir="/tmp/wrix-bd"
   mkdir -p "$wrapper_dir"
   cat >"$wrapper_dir/bd" <<'WRIX_BD_WRAPPER'
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 real_bd="${WRIX_REAL_BD_BIN:?}"

@@ -17,9 +17,31 @@ SESSION_START_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 #
 # Compare Linux entrypoint which uses Podman's --userns=keep-id for the same effect.
 
-# Update wrix user to use host UID so id(1) resolves the correct username
-sed -i "s/^wrix:x:1000:1000:/wrix:x:$HOST_UID:$HOST_UID:/" /etc/passwd
-sed -i "s/^wrix:x:1000:/wrix:x:$HOST_UID:/" /etc/group
+rewrite_wrix_identity() {
+  local uid="${HOST_UID:?}"
+  local passwd_path="/etc/passwd"
+  local group_path="/etc/group"
+  local passwd_tmp=""
+  local group_tmp=""
+
+  if [[ "$uid" == "0" ]]; then
+    return 0
+  fi
+  if [[ ! -w /etc ]]; then
+    echo "Warning: /etc is not writable; skipping wrix UID rewrite" >&2
+    return 0
+  fi
+
+  passwd_tmp="$(mktemp /etc/passwd.XXXXXX)"
+  group_tmp="$(mktemp /etc/group.XXXXXX)"
+  sed "s/^wrix:x:[0-9][0-9]*:[0-9][0-9]*:/wrix:x:$uid:$uid:/" "$passwd_path" >"$passwd_tmp"
+  sed "s/^wrix:x:[0-9][0-9]*:/wrix:x:$uid:/" "$group_path" >"$group_tmp"
+  chmod 0644 "$passwd_tmp" "$group_tmp"
+  mv "$passwd_tmp" "$passwd_path"
+  mv "$group_tmp" "$group_path"
+}
+
+rewrite_wrix_identity
 
 export USER="wrix"
 export HOME="/home/wrix"
@@ -140,7 +162,7 @@ wrix_install_bd_remote_wrapper() {
   local wrapper_dir="/tmp/wrix-bd"
   mkdir -p "$wrapper_dir"
   cat >"$wrapper_dir/bd" <<'WRIX_BD_WRAPPER'
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 real_bd="${WRIX_REAL_BD_BIN:?}"
