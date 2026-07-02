@@ -27,6 +27,27 @@ build_wrix() {
   printf '%s\n' "$out_link/bin/wrix"
 }
 
+write_online_success_git() {
+  local bin_dir="$TEST_TMP/fake-git"
+  local real_git
+  real_git="$(command -v git)"
+  mkdir -p "$bin_dir"
+  cat >"$bin_dir/git" <<SH
+#!/usr/bin/env bash
+set -euo pipefail
+
+for arg in "\$@"; do
+  if [[ "\$arg" == "ls-remote" ]]; then
+    printf '%s\tHEAD\n' "0123456789012345678901234567890123456789"
+    exit 0
+  fi
+done
+exec "$real_git" "\$@"
+SH
+  chmod 700 "$bin_dir/git"
+  printf '%s\n' "$bin_dir"
+}
+
 expected_source_kind() {
   case "$(uname -s)" in
     Darwin) printf 'docker-archive\n' ;;
@@ -87,22 +108,27 @@ run_init() {
   local repo="$1"
   local deploy_key="$2"
   local signing_key="$3"
-  local bin_dir
+  local bin_dir path_value
   shift 3
   bin_dir="$(dirname "$1")"
-  (cd "$repo" && PATH="$bin_dir:$PATH" HOSTNAME=devhost WRIX_DEPLOY_KEY="$deploy_key" WRIX_SIGNING_KEY="$signing_key" "$@")
+  path_value="$bin_dir:$PATH"
+  if [[ -n "${WRIX_TEST_PATH_PREFIX:-}" ]]; then
+    path_value="$WRIX_TEST_PATH_PREFIX:$path_value"
+  fi
+  (cd "$repo" && PATH="$path_value" HOSTNAME=devhost WRIX_DEPLOY_KEY="$deploy_key" WRIX_SIGNING_KEY="$signing_key" "$@")
 }
 
 test_defaults_and_overrides() {
-  local wrix_bin repo profile_config deploy_key signing_key output
+  local wrix_bin repo profile_config deploy_key signing_key output fake_git
   wrix_bin="$(build_wrix)"
   repo="$(setup_repo config-defaults)"
   profile_config="$TEST_TMP/profile-config.json"
   deploy_key="$(write_fake_deploy_key)"
   signing_key="$(write_signing_key)"
+  fake_git="$(write_online_success_git)"
   write_profile_config "$profile_config"
 
-  output="$(run_init "$repo" "$deploy_key" "$signing_key" "$wrix_bin" init)"
+  output="$(WRIX_TEST_PATH_PREFIX="$fake_git" run_init "$repo" "$deploy_key" "$signing_key" "$wrix_bin" init)"
   assert_policy_line "derived defaults" "$output" "deploy_key" "config-defaults-devhost"
   assert_policy_line "derived defaults" "$output" "sign_commits" "true"
   assert_policy_line "derived defaults" "$output" "remote" "origin"
@@ -112,7 +138,7 @@ test_defaults_and_overrides() {
     fail "wrix init created wrix.toml for default behavior"
   fi
 
-  output="$(run_init "$repo" "$deploy_key" "$signing_key" "$wrix_bin" --profile-config "$profile_config" init)"
+  output="$(WRIX_TEST_PATH_PREFIX="$fake_git" run_init "$repo" "$deploy_key" "$signing_key" "$wrix_bin" --profile-config "$profile_config" init)"
   assert_policy_line "profile config" "$output" "deploy_key" "profile-key"
   assert_policy_line "profile config" "$output" "remote" "origin"
 

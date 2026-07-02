@@ -271,6 +271,9 @@ impl Plan {
         if let Some(identity) = signing_identity {
             verify_signing_commit(&self.root, &identity)?;
         }
+        if self.verification == VerificationPolicy::Online {
+            verify_online(&self.root, &common_dir, &self.remote)?;
+        }
         Ok(())
     }
 
@@ -559,6 +562,7 @@ fn configure_signing(
         write_common_git_config(common_dir, "commit.gpgsign", "false")?;
         return Ok(None);
     };
+    require_private_key_mode("signing key", signing_key)?;
     let identity = signing_identity(root)?;
     let public_key = crate::sign::public_key(signing_key)?;
     write_allowed_signers(common_dir, &identity.principals, &public_key)?;
@@ -917,6 +921,7 @@ fn verify_transport_helper(
     require_mode(helper_path, 0o700)?;
     require_mode(known_hosts_path, 0o600)?;
     let expected_key = resolved_deploy_key(key_name)?;
+    require_private_key_mode("deploy key", &expected_key)?;
     let effective_config = probe_helper_config(root, helper_path)?;
     require_ssh_config_value(&effective_config, "batchmode", "yes")?;
     require_ssh_config_value(&effective_config, "identitiesonly", "yes")?;
@@ -934,6 +939,138 @@ fn verify_transport_helper(
         "identityfile",
         &path_string(&expected_key),
     )
+}
+
+fn verify_online(root: &Path, common_dir: &Path, remote: &RemoteName) -> Result<(), Error> {
+    let cwd = online_verification_cwd(root, common_dir)?;
+    require_runtime_git_config(&cwd, "core.sshCommand", TRANSPORT_TRAMPOLINE)?;
+    let output = online_git_ls_remote(&cwd, remote)?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let detail = command_output_detail(&output.stdout, &output.stderr);
+    match classify_online_failure(&detail) {
+        OnlineFailure::HostKey => Err(Error::OnlineHostKey {
+            remote: remote.clone(),
+            detail,
+        }),
+        OnlineFailure::Authorization => Err(Error::OnlineAuthorization {
+            remote: remote.clone(),
+            detail,
+        }),
+        OnlineFailure::Other => Err(Error::OnlineVerify {
+            remote: remote.clone(),
+            detail,
+        }),
+    }
+}
+
+fn online_verification_cwd(root: &Path, common_dir: &Path) -> Result<PathBuf, Error> {
+    let integration = root.join(".loom").join("integration");
+    if !integration.is_dir() {
+        return Ok(root.to_path_buf());
+    }
+    let integration_common_dir = git_common_dir(&integration)?;
+    if integration_common_dir == common_dir {
+        return Ok(integration);
+    }
+    Err(Error::OnlineWorktreeCommonDir {
+        path: path_string(&integration),
+        expected: path_string(common_dir),
+        actual: path_string(&integration_common_dir),
+    })
+}
+
+fn require_runtime_git_config(cwd: &Path, key: &str, expected: &str) -> Result<(), Error> {
+    let output = ProcessCommand::new("git")
+        .arg("config")
+        .arg("--get")
+        .arg(key)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(Error::GitIo)?;
+    if !output.status.success() {
+        return Err(Error::GitConfigQuery {
+            key: key.to_owned(),
+            detail: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        });
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if value == expected {
+        return Ok(());
+    }
+    Err(Error::RuntimeConfigMismatch {
+        key: key.to_owned(),
+        value,
+        expected: expected.to_owned(),
+        cwd: path_string(cwd),
+    })
+}
+
+fn online_git_ls_remote(cwd: &Path, remote: &RemoteName) -> Result<std::process::Output, Error> {
+    let mut command = ProcessCommand::new("git");
+    command
+        .arg("ls-remote")
+        .arg(remote.as_str())
+        .arg("HEAD")
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .env_clear()
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_SSH_VARIANT", "ssh");
+    copy_env_if_present(&mut command, "PATH");
+    copy_env_if_present(&mut command, "HOME");
+    copy_env_if_present(&mut command, "WRIX_DEPLOY_KEY");
+    command.output().map_err(Error::GitIo)
+}
+
+fn copy_env_if_present(command: &mut ProcessCommand, name: &'static str) {
+    if let Some(value) = env::var_os(name) {
+        command.env(name, value);
+    }
+}
+
+fn command_output_detail(stdout: &[u8], stderr: &[u8]) -> String {
+    let stdout = String::from_utf8_lossy(stdout).trim().to_owned();
+    let stderr = String::from_utf8_lossy(stderr).trim().to_owned();
+    match (stdout.is_empty(), stderr.is_empty()) {
+        (true, true) => String::from("git ls-remote exited non-zero without output"),
+        (false, true) => stdout,
+        (true, false) => stderr,
+        (false, false) => format!("{stdout}\n{stderr}"),
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OnlineFailure {
+    HostKey,
+    Authorization,
+    Other,
+}
+
+fn classify_online_failure(detail: &str) -> OnlineFailure {
+    let detail = detail.to_ascii_lowercase();
+    if detail.contains("host key verification failed")
+        || detail.contains("no matching host key")
+        || detail.contains("no hostkey alg")
+        || detail.contains("no ed25519 host key is known")
+        || detail.contains("no ecdsa host key is known")
+        || detail.contains("no rsa host key is known")
+        || detail.contains("remote host identification has changed")
+    {
+        return OnlineFailure::HostKey;
+    }
+    if detail.contains("permission denied (publickey)")
+        || detail.contains("repository not found")
+        || detail.contains("authentication failed")
+        || detail.contains("access denied")
+    {
+        return OnlineFailure::Authorization;
+    }
+    OnlineFailure::Other
 }
 
 fn ensure_context_stable_ssh_command(root: &Path, value: &str) -> Result<(), Error> {
@@ -975,6 +1112,24 @@ fn require_mode(path: impl AsRef<Path>, expected: u32) -> Result<(), Error> {
     Err(Error::PermissionMode {
         path: path_string(path),
         expected: format!("{expected:04o}"),
+        actual: format!("{actual:04o}"),
+    })
+}
+
+fn require_private_key_mode(kind: &'static str, path: &Path) -> Result<(), Error> {
+    let metadata = fs::metadata(path).map_err(|source| Error::StateIo {
+        path: path_string(path),
+        source,
+    })?;
+    let actual = metadata.permissions().mode() & 0o777;
+    let group_or_other_mode = actual % 0o100;
+    let owner_can_read = actual >= 0o400;
+    if metadata.is_file() && owner_can_read && group_or_other_mode == 0 {
+        return Ok(());
+    }
+    Err(Error::PrivateKeyMode {
+        kind,
+        path: path_string(path),
         actual: format!("{actual:04o}"),
     })
 }
@@ -1433,6 +1588,12 @@ enum Error {
         expected: String,
         actual: String,
     },
+    /// {kind} {path} has mode {actual}; expected owner-readable mode with no group or other permissions
+    PrivateKeyMode {
+        kind: &'static str,
+        path: String,
+        actual: String,
+    },
     /// failed to write Git config {key}: {detail}
     GitConfig { key: String, detail: String },
     /// failed to read Git config {key}: {detail}
@@ -1470,6 +1631,25 @@ enum Error {
     TransportConfigUnstable { value: String, reason: String },
     /// core.sshCommand does not match the Wrix common-dir trampoline: {value}
     TransportConfigMismatch { value: String },
+    /// runtime Git config {key} in {cwd} is {value}, expected {expected}
+    RuntimeConfigMismatch {
+        key: String,
+        value: String,
+        expected: String,
+        cwd: String,
+    },
+    /// online verification worktree {path} uses common dir {actual}, expected {expected}
+    OnlineWorktreeCommonDir {
+        path: String,
+        expected: String,
+        actual: String,
+    },
+    /// online verification failed host-key verification for remote '{remote}': {detail}
+    OnlineHostKey { remote: RemoteName, detail: String },
+    /// online verification reached GitHub but authentication or repository authorization failed for remote '{remote}': {detail}
+    OnlineAuthorization { remote: RemoteName, detail: String },
+    /// online verification failed for remote '{remote}': {detail}
+    OnlineVerify { remote: RemoteName, detail: String },
     /// hook setup is enabled but WRIX_PREK_HOOKS is not set; use the Nix-packaged wrix or pass --no-hooks
     PrekHooksEnvMissing,
     /// WRIX_PREK_HOOKS is not valid Unicode: {source}
@@ -1524,8 +1704,8 @@ mod test {
     use std::path::Path;
 
     use super::{
-        DeployPolicy, FilePolicy, ForcePolicy, HookPolicy, KeyName, RemoteName, SigningPolicy,
-        VerificationPolicy, parse_file_policy, parse_flags,
+        DeployPolicy, FilePolicy, ForcePolicy, HookPolicy, KeyName, OnlineFailure, RemoteName,
+        SigningPolicy, VerificationPolicy, classify_online_failure, parse_file_policy, parse_flags,
     };
 
     #[test]
@@ -1570,6 +1750,24 @@ online_verify = false
             Some(&RemoteName(String::from("upstream"))),
             Some(HookPolicy::Disabled),
             Some(VerificationPolicy::Offline),
+        );
+    }
+
+    #[test]
+    fn online_failure_classification_distinguishes_host_key_and_auth() {
+        assert_eq!(
+            classify_online_failure("Host key verification failed."),
+            OnlineFailure::HostKey,
+        );
+        assert_eq!(
+            classify_online_failure(
+                "ERROR: Repository not found.\nfatal: Could not read from remote repository."
+            ),
+            OnlineFailure::Authorization,
+        );
+        assert_eq!(
+            classify_online_failure("ssh: Could not resolve hostname github.com"),
+            OnlineFailure::Other,
         );
     }
 
