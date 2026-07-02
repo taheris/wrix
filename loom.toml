@@ -5,3 +5,6 @@ sccache_dir = ".loom/sccache"
 [phase.default]
 profile = "rust"
 agent.backend = "pi"
+
+[runner.test]
+command = "bash tests/loom-nextest-file-targets.sh '{paths}'"

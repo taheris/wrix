@@ -10,5 +10,8 @@ thiserror = { workspace = true }
 wrix-cache = { workspace = true }
 wrix-core = { workspace = true }
 
+[dev-dependencies]
+wrix-cli = { workspace = true }
+
 [lints]
 workspace = true

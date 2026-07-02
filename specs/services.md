@@ -147,7 +147,7 @@ Direct remote-builder access to the local project cache is out of scope for v1. 
 ## Success Criteria
 
 - A workspace that starts services gets a container named `<repo>-service`; the same service identity path yields the same container name, preferred service ports, state roots, and cache root, while two different checkout paths do not collide
-  [test?](crates/wrix-service/tests/lifecycle.rs::workspace_identity_is_stable_and_collision_resistant)
+  [test](crates/wrix-service/tests/lifecycle.rs::workspace_identity_is_stable_and_collision_resistant)
 - `mkDevShell` starts the service container by default for the project cache, `nixCache = false` suppresses cache-only startup, and any service container survives the process that evaluated the shell hook
   [system?](verify:services.devshell-start-independent)
 - On Linux, `wrix service start` installs the service image through the shared runtime image installer from an archive-less `nix-descriptor` source; on Darwin it uses the tar-loadable `docker-archive` fallback
@@ -155,17 +155,17 @@ Direct remote-builder access to the local project cache is out of scope for v1. 
 - The service image carries wrix-managed image labels, including `wrix.managed=true` and `wrix.image.kind=service`
   [system?](verify:services.image-labels)
 - Cache-only service startup is suppressed for temp-directory scratch workspaces, so tests and integration runs do not accumulate `tmp.*-service` containers
-  [test?](crates/wrix-service/tests/lifecycle.rs::temp_cache_only_workspace_does_not_start_service)
+  [test](crates/wrix-service/tests/lifecycle.rs::temp_cache_only_workspace_does_not_start_service)
 - Loom bead clone paths under `.loom/beads/<id>` use the outer repository service identity, so launches do not accumulate bead-named `*-service` containers
-  [test?](crates/wrix-service/tests/lifecycle.rs::loom_bead_workspace_uses_repo_service_identity)
+  [test](crates/wrix-service/tests/lifecycle.rs::loom_bead_workspace_uses_repo_service_identity)
 - Loom integration worktrees under `.loom/integration` use the outer repository service identity, so devshell entry does not accumulate integration-named `*-service` containers
-  [test?](crates/wrix-service/tests/lifecycle.rs::loom_integration_workspace_uses_repo_service_identity)
+  [test](crates/wrix-service/tests/lifecycle.rs::loom_integration_workspace_uses_repo_service_identity)
 - Service management is exposed through `wrix service ...`, session-close sync is exposed through `wrix beads push` per `cli.md`, and no `beads-dolt`, `beads-push`, `wrix-svc`, or `<repo>-beads` compatibility surface is installed or required
-  [test?](crates/wrix-service/tests/command_surface.rs::service_surface_is_reached_through_wrix_root)
+  [test](crates/wrix-service/tests/command_surface.rs::service_surface_is_reached_through_wrix_root)
 - Rust packaging exposes `wrix` as the human-facing CLI plus explicit helper binaries from `wrix-cache`; wrix does not rely on hidden private multiplexer subcommands
   [check?](verify:services.rust-helper-binaries)
 - Linux beads clients reach Dolt through the workspace Unix socket, while Darwin beads clients receive the service container's TCP host/port endpoint
-  [test?](crates/wrix-service/tests/lifecycle.rs::dolt_endpoint_transport_is_platform_specific)
+  [test](crates/wrix-service/tests/lifecycle.rs::dolt_endpoint_transport_is_platform_specific)
 - Default `mkDevShell` cache enablement creates Linux XDG state/cache roots or Darwin Library state/cache roots, plus GC-root directory, signing key, public key, publish-root manifest, pending directory, lock file, status file, and endpoint metadata outside `/workspace`; `nixCache = false` does not create cache state solely for cache use
   [test?](crates/wrix-service/tests/cache_state.rs::state_layout_is_outside_workspace_and_respects_opt_out)
 - Host devshell Nix uses `file://<cache-root>` as the project cache substituter, trusts the generated public key, enables `builders-use-substitutes`, installs a project-specific immutable post-build hook, and fails loudly when the host Nix daemon ignores any required setting

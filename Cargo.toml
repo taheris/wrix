@@ -29,6 +29,7 @@ tempfile = "3.27.0"
 thiserror = "2.0.17"
 wrix-beads = { path = "crates/wrix-beads" }
 wrix-cache = { path = "crates/wrix-cache" }
+wrix-cli = { path = "crates/wrix-cli" }
 wrix-core = { path = "crates/wrix-core" }
 wrix-sandbox = { path = "crates/wrix-sandbox" }
 wrix-service = { path = "crates/wrix-service" }

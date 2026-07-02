@@ -413,6 +413,7 @@ dependencies = [
  "displaydoc",
  "thiserror",
  "wrix-cache",
+ "wrix-cli",
  "wrix-core",
 ]
 
