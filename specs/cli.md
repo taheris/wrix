@@ -26,6 +26,12 @@ Global `--profile-config <file>` remains the launcher configuration input for `r
 
 Root help lists every public command group and points detailed behavior to each command's help. Unknown commands exit non-zero, name the unknown token, and print enough usage text for the operator to choose a valid command. Historical standalone entry points such as `wrix-svc`, `beads-dolt`, `beads-push`, and `<repo>-beads` are not public compatibility surfaces.
 
+### Shared verifier app
+
+The repository exposes a developer-facing flake app `.#verify` for Nix-owned and shell/system-boundary verifier logic. It is not a `wrix` subcommand and is not part of the human CLI surface. Specs reference its checks through logical annotation targets of the form `verify:<domain>.<check-id>`; runner configuration maps those IDs to a batched invocation such as `nix run .#verify -- <domain>.<check-id> ...`, so many criteria do not spawn one Nix process each.
+
+`.#verify --list` prints the supported logical IDs and is the authoritative inventory for the runner's configured verifier registry. Invoking `.#verify` with one or more IDs runs exactly those checks and reports unknown IDs as actionable failures. Each ID has a single owner spec: the domain prefix names the owning area (`profiles.*`, `images.*`, `sandbox.*`, `prek.*`, and so on), while this spec owns the shared app surface and batching contract.
+
 ### Optional `wrix.toml`
 
 `wrix.toml` is an optional repository-root override file. A repository with default Wrix behavior does not need the file, and `wrix init` does not create it merely to record defaults. When present, it contains policy only — never private key material, generated host keys, absolute private-key paths, per-machine cache paths, or secrets.
@@ -100,39 +106,46 @@ The online verifier must exercise the same Git config path Loom uses from `.loom
 
 ## Success Criteria
 
-- Root help and subcommand help expose `run`, `spawn`, `service`, `beads`, and `init`, route delegated commands to their owning crates/specs, and install no legacy `wrix-svc`, `beads-dolt`, `beads-push`, or `<repo>-beads` public binaries.
-  [system](bash tests/cli/cli-surface.sh test_root_help_and_legacy_binaries)
+- Root help and subcommand help expose `run`, `spawn`, `service`, `beads`, and `init`, and delegated command help reaches the owning command group.
+  [test?](crates/wrix-cli/tests/cli_surface.rs::root_and_subcommand_help)
+- The packaged `wrix` output installs no legacy `wrix-svc`, `beads-dolt`, `beads-push`, or `<repo>-beads` public binaries.
+  [check?](verify:cli.package-surface)
+- `.#verify --list` exposes the supported `verify:<domain>.<check-id>` target IDs, and `.#verify <id>...` runs the requested IDs in one process with actionable failures for unknown IDs.
+  [check?](verify:cli.shared-verifier-app)
+- Runner configuration maps `verify:` annotations to the batched `.#verify` app invocation rather than spawning one Nix process per criterion, and treats the `.#verify --list` inventory as the verifier registry.
+  [check?](verify:cli.verify-runner-batching)
 - Unknown root commands and malformed `wrix init` invocations, including `--deploy --offline` and `--deploy` when `wrix.init.online_verify = false`, exit non-zero with an actionable error and usage text, while `--help` exits zero without mutating repository state.
-  [system](bash tests/cli/cli-surface.sh test_help_errors_are_non_mutating)
+  [test?](crates/wrix-cli/tests/cli_surface.rs::help_errors_are_non_mutating)
 - `wrix init` succeeds without `wrix.toml`, does not create `wrix.toml` for default behavior, and applies flag > `wrix.toml` > ProfileConfig > derived-default precedence for key name, signing, remote, hook, and online verification policy.
-  [system](bash tests/cli/init-config.sh test_defaults_and_overrides)
+  [test?](crates/wrix-cli/tests/init_config.rs::defaults_and_overrides)
 - `wrix init` writes shared/common Git config that is inherited by a `.loom/integration`-style linked worktree, and that config contains no absolute host deploy-key path, container `/etc/wrix/keys` private-key path, host-only/container-only helper path, or host-only/container-only allowed-signers path.
-  [system](bash tests/cli/init-git-bootstrap.sh test_common_config_inherited_by_loom_integration)
+  [test?](crates/wrix-cli/tests/init_git_bootstrap.rs::common_config_inherited_by_loom_integration)
 - With `$HOME` and the effective-user home differing, the Git transport helper resolves `WRIX_DEPLOY_KEY` first, `$HOME/.ssh/deploy_keys/<key-name>` second, fails when neither exists, invokes SSH with strict pinned-host-key options without using user SSH config, default identities, or `StrictHostKeyChecking=no`, and leaves any Wrix-created SSH directories at `0700` plus `config` / `known_hosts` files at `0600`.
-  [system](bash tests/cli/init-git-bootstrap.sh test_strict_context_aware_ssh_helper)
+  [test?](crates/wrix-cli/tests/init_git_bootstrap.rs::strict_context_aware_ssh_helper)
 - SSH commit signing is enabled by default; a missing `<key-name>-signing` key fails hard, `--no-sign` disables signing explicitly, and a signed test commit verifies against the generated allowed-signers file.
-  [system](bash tests/cli/init-signing.sh test_signing_required_by_default)
+  [test?](crates/wrix-cli/tests/init_signing.rs::signing_required_by_default)
 - `wrix init --deploy` generates separate passphraseless deploy and signing ed25519 keys with secure permissions when signing is enabled, registers the deploy key with write access and the signing key with GitHub, reuses matching existing keys, and replaces conflicts only with `--force`.
-  [system](bash tests/cli/init-deploy.sh test_github_deploy_and_signing_keys)
+  [test?](crates/wrix-cli/tests/init_deploy.rs::github_deploy_and_signing_keys)
 - Online verification runs a fresh host-side Git operation from a minimal Loom-driver-like environment through the Wrix helper and distinguishes host-key verification failure from GitHub auth/repository authorization failure; `--offline` or `wrix.init.online_verify = false` skips network and GitHub API calls while preserving local verification.
-  [system](bash tests/cli/init-verify.sh test_online_and_offline_verification)
+  [test?](crates/wrix-cli/tests/init_verify.rs::online_and_offline_verification)
 - When `.pre-commit-config.yaml` exists and hook setup is enabled, `wrix init` points repo-local `core.hooksPath` at Wrix's prek hook bundle in the same shared config inherited by `.loom/integration`; when hooks are disabled by flag or config it leaves hook config unchanged.
-  [system](bash tests/cli/init-prek.sh test_prek_hooks)
+  [test?](crates/wrix-cli/tests/init_prek.rs::prek_hooks)
 
 ## Requirements
 
 ### Functional
 
 1. **Single public CLI** — `wrix` owns root command parsing, global options, help/error behavior, and dispatch to `run`, `spawn`, `service`, `beads`, and `init`.
-2. **Delegation boundaries** — `sandbox.md` owns `run`/`spawn` launch semantics, `services.md` owns service/cache semantics, `beads.md` owns `beads push` behavior, `pre-commit.md` owns the hook bundle, and `security.md` owns credential trust invariants.
-3. **Optional config** — `wrix.toml` is read only when present and stores override policy only. Defaults must not require a tracked Wrix config file. `--no-hooks` is the invocation-scoped form of `wrix.init.prek_hooks = false`.
-4. **Init apply-and-verify** — `wrix init` applies repository-local Git transport, signing, hook, and known-host state, then verifies the result before exiting success.
-5. **Common worktree inheritance** — init writes shared/common Git config when possible so linked worktrees, including `.loom/integration`, inherit Wrix transport/signing/hook policy.
-6. **Context-aware key resolution** — Git helpers resolve env-provided keys first, `$HOME/.ssh/deploy_keys/` keys second, and otherwise fail. Signing keys follow the same rule with `-signing` suffix.
-7. **Signing default** — SSH commit signing is enabled by default. Missing signing material is a hard failure unless the operator disables signing explicitly by flag or config.
-8. **Strict GitHub SSH** — Git transport uses pinned GitHub host keys, strict host-key checking, batch mode, and identities-only SSH. It never uses trust-on-first-use or ambient user SSH identities.
-9. **Deploy provisioning** — `wrix init --deploy` provisions a deploy key and, unless signing is disabled, a signing key for GitHub repositories, then runs the normal init verification path. `--deploy` is invalid under `--offline` or `wrix.init.online_verify = false` because provisioning requires remote API calls.
-10. **Offline mode** — `--offline` and `wrix.init.online_verify = false` disable network/API verification only; local config, key, permission, signing, helper, and hook checks still run, but offline success does not assert GitHub reachability or repository authorization.
+2. **Shared verifier app** — `.#verify` owns the repository-local verifier app surface used by `verify:<domain>.<check-id>` annotations, supports batched execution plus `--list`, provides the verifier-registry inventory, and is the target that runner configuration uses for grouped `verify:` annotations.
+3. **Delegation boundaries** — `sandbox.md` owns `run`/`spawn` launch semantics, `services.md` owns service/cache semantics, `beads.md` owns `beads push` behavior, `pre-commit.md` owns the hook bundle, and `security.md` owns credential trust invariants.
+4. **Optional config** — `wrix.toml` is read only when present and stores override policy only. Defaults must not require a tracked Wrix config file. `--no-hooks` is the invocation-scoped form of `wrix.init.prek_hooks = false`.
+5. **Init apply-and-verify** — `wrix init` applies repository-local Git transport, signing, hook, and known-host state, then verifies the result before exiting success.
+6. **Common worktree inheritance** — init writes shared/common Git config when possible so linked worktrees, including `.loom/integration`, inherit Wrix transport/signing/hook policy.
+7. **Context-aware key resolution** — Git helpers resolve env-provided keys first, `$HOME/.ssh/deploy_keys/` keys second, and otherwise fail. Signing keys follow the same rule with `-signing` suffix.
+8. **Signing default** — SSH commit signing is enabled by default. Missing signing material is a hard failure unless the operator disables signing explicitly by flag or config.
+9. **Strict GitHub SSH** — Git transport uses pinned GitHub host keys, strict host-key checking, batch mode, and identities-only SSH. It never uses trust-on-first-use or ambient user SSH identities.
+10. **Deploy provisioning** — `wrix init --deploy` provisions a deploy key and, unless signing is disabled, a signing key for GitHub repositories, then runs the normal init verification path. `--deploy` is invalid under `--offline` or `wrix.init.online_verify = false` because provisioning requires remote API calls.
+11. **Offline mode** — `--offline` and `wrix.init.online_verify = false` disable network/API verification only; local config, key, permission, signing, helper, and hook checks still run, but offline success does not assert GitHub reachability or repository authorization.
 
 ### Non-Functional
 

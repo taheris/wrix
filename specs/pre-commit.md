@@ -109,41 +109,41 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
 ## Success Criteria
 
 - The `wrix.prekHooks` derivation contains executable shims for `pre-commit`, `pre-push`, `prepare-commit-msg`, `post-checkout`, and `post-merge`
-  [system](bash tests/profiles/prek-hooks-bundle.sh test_bundle_contents)
+  [check?](verify:prek.bundle-contents)
 - `mkDevShell` sets `core.hooksPath` to the `wrix.prekHooks` store path on every devshell entry when `.pre-commit-config.yaml` is present
-  [system](bash tests/profiles/mkdevshell-prek.sh test_auto_set_when_config_present)
+  [system?](verify:prek.devshell-auto-set)
 - `wrix init` sets shared repo-local `core.hooksPath` to the same `wrix.prekHooks` bundle for ordinary host Git and `.loom/integration`-style linked worktrees when `.pre-commit-config.yaml` is present and hook setup is enabled
-  [system](bash tests/cli/init-prek.sh test_prek_hooks)
+  [test?](crates/wrix-cli/tests/init_prek.rs::prek_hooks)
 - The pre-commit and pre-push shims both invoke `prek hook-impl --hook-type=<stage>` (not `prek run`, which would mistake git's positional args for hook/project selectors)
-  [system](bash tests/profiles/prek-hooks-bundle.sh test_shims_are_plain_hook_impl)
+  [system?](verify:prek.shims-use-hook-impl)
 - No shim sources `lock.sh`, calls `_prek_acquire_lock`, or invokes `flock`; every shim invokes `prek hook-impl --hook-type=<its-stage>` and pins the Nix-store `prek` package on `PATH`
-  [system](bash tests/profiles/prek-hooks-bundle.sh test_shims_are_plain_hook_impl)
+  [system?](verify:prek.shims-no-flock)
 - The pre-push shim writes and consumes `.wrix/push-verified`
-  [system](bash tests/profiles/prek-hooks-bundle.sh test_pre_push_stamp_written_and_consumed)
+  [system?](verify:prek.pre-push-stamp)
 - `wrix.prePushChecks` and `wrix.skipIfMissing` are exposed by the wrix library and land on the host devShell's `PATH`
-  [system](bash tests/profiles/mkdevshell-prek.sh test_wrappers_exposed_and_on_devshell_path)
+  [check?](verify:prek.wrappers-on-devshell-path)
 - Wrix's own `.pre-commit-config.yaml` matches the § Reference Hook Configuration stage→hook mapping, with hooks for `pre-commit` and `pre-push` only and no `prepare-commit-msg`, `post-checkout`, or `post-merge` hook entries
-  [system](bash tests/prek/wrix-hook-stages.sh test_wrix_config_stage_set)
+  [check?](verify:prek.config-stage-set)
 - `pre-push-checks` exits 0 without running the wrapped command when `.loom/marker.json` is present and `loom gate verify-marker` exits 0
-  [system](bash tests/prek/pre-push-checks-marker-valid.sh)
+  [system?](verify:prek.pre-push-checks-marker-valid)
 - `pre-push-checks` execs the wrapped command when `.loom/marker.json` is present and `loom gate verify-marker` exits non-zero
-  [system](bash tests/prek/pre-push-checks-marker-stale.sh)
+  [system?](verify:prek.pre-push-checks-marker-stale)
 - `pre-push-checks` execs the wrapped command when `.loom/marker.json` is absent
-  [system](bash tests/prek/pre-push-checks-no-marker.sh)
+  [system?](verify:prek.pre-push-checks-no-marker)
 - `pre-push-checks` execs the wrapped command when `loom gate verify-marker` is not on `PATH`
-  [system](bash tests/prek/pre-push-checks-no-loom.sh)
+  [system?](verify:prek.pre-push-checks-no-loom)
 - `skip-if-missing <tool> -- <cmd>` execs `<cmd>` when `<tool>` resolves on `PATH`
-  [system](bash tests/prek/skip-if-missing-present.sh)
+  [system?](verify:prek.skip-if-missing-present)
 - `skip-if-missing <tool> -- <cmd>` exits 0 without running `<cmd>` when `<tool>` is absent from `PATH`
-  [system](bash tests/prek/skip-if-missing-absent.sh)
+  [system?](verify:prek.skip-if-missing-absent)
 - Wrix's own `nix-flake-check` hook invokes `pre-push-checks nix flake check` directly, so a missing `nix` does not silently skip the hook in supported Wrix contexts
-  [system](bash tests/prek/wrix-nix-hook-required.sh)
+  [check?](verify:prek.nix-hook-required)
 - A pre-commit hook configured in `.pre-commit-config.yaml` fires when `git commit` runs inside a profile container
-  [system](bash tests/sandbox/container-pre-commit.sh)
+  [system?](verify:prek.container-pre-commit)
 - A pre-push hook configured in `.pre-commit-config.yaml` fires when `git push` runs inside a profile container
-  [system](bash tests/sandbox/container-pre-push.sh)
+  [system?](verify:prek.container-pre-push)
 - Heavy realization checks — those whose input closure includes the full sandbox base image or the full Rust workspace build — are referenced from a CI-only flake output (e.g., `.#test-ci`), not from `flake.nix#checks` which pre-push's `nix flake check` runs
-  [system](bash tests/prek/ci-only-heavy-checks.sh)
+  [check?](verify:prek.ci-only-heavy-checks)
 
 ## Requirements
 

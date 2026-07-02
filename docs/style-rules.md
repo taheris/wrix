@@ -77,12 +77,15 @@ the Mayor via `bd human` instead.
   imperative-keyword prose (`MUST` / `MUST NOT` / `REQUIRES` /
   `CANNOT` / `NEVER` / `SHALL`). Each contract must carry — or live
   in a section that carries — a `[check]`, `[test]`, `[system]`, or
-  `[judge]` annotation pointing at a real verifier. `loom gate verify`
+  `[judge]` annotation pointing at a real verifier, or a pending
+  annotation marked per `docs/spec-conventions.md`. `loom gate verify`
   enforces this across every contract surface and fails pre-commit on
   any of:
-  - **Annotations:** target does not resolve (command's first token
-    missing on PATH; test path doesn't match any function; judge file
-    absent)
+  - **Annotations:** non-pending target does not resolve (command's first
+    token missing on PATH; `verify:<domain>.<check-id>` is absent from the
+    configured verifier registry sourced from `.#verify --list`; test path
+    doesn't match any function; judge file absent), or a pending target
+    already resolves and passes but still carries the `?` marker
   - **Tables:** row count does not match matching verifier-entry count
     in the same section
   - **Normative prose:** section contains imperative-keyword
@@ -119,6 +122,22 @@ the Mayor via `bd human` instead.
   or other named term appears in multiple specs in `specs/`, the
   meaning, type, and behaviour must match. `loom gate check` walks
   shared terms across `specs/` and flags definitions that diverge.
+- **TST-10** — *Use the native test harness for native code behavior.*
+  Rust-owned behavior is verified by Rust tests unless the claim only exists
+  after packaging, Nix evaluation, container launch, real OS hook execution,
+  or an external service boundary. Shell verifiers are allowed for those
+  system boundaries, but not as a replacement for Rust assertions over CLI
+  parsing, help/error rendering, config precedence, serialization, command
+  construction, filesystem planning, or workflow state-machine logic. Tests
+  may assert user-visible output, but they must do so through the native
+  harness instead of shell grep when the code under test is Rust.
+
+- **TST-11** — *Use Nix-native checks for Nix-owned contracts.* Nix-owned
+  behavior is verified by Nix evaluation, derivation checks, or the shared
+  `verify:<domain>.<check-id>` verifier unless the claim
+  requires a live container, host daemon, network boundary, real Git/OpenSSH
+  operation, or shell-script execution. Shell verifiers must not be used
+  merely to grep Nix source or wrap a pure Nix assertion.
 
 ## Rust (RS-)
 

@@ -127,9 +127,33 @@ verifies the claim*:
 
 | Annotation | What the verifier does | Target shape |
 |------------|------------------------|--------------|
-| **`[check]`** | Static analysis of source (presence, absence, structural property across files) | `[check](command)` — a shell command that runs a walk / lint / AST analysis. Each annotation invokes its own process. |
-| **`[test]`** | Runs the code in isolation and asserts behaviour | `[test](path)` — a language-native test path (e.g. `crate::module::test_name` for Rust, `tests/test_foo.py::test_bar` for Python). The gate batches all `[test]` targets in a single `loom gate test` invocation into one runner subprocess. |
-| **`[system]`** | Runs the assembled system (containers, packaging, end-to-end) | `[system](command)` — a shell command that exercises the full system. Each annotation invokes its own process. |
+| **`[check]`** | Static analysis of source (presence, absence, structural property across files) | `[check](command)` for an ad hoc shell command, or `[check](verify:<domain>.<check-id>)` for a configured logical verifier target. |
+| **`[test]`** | Runs the code in isolation and asserts behaviour | `[test](path)` — a language-native or runner-recognized test selector. Rust targets use the canonical `cargo test -- --list` selector when the test exists (for example `crate::module::test_name`) or a file-qualified integration-test selector such as `crates/<crate>/tests/<file>.rs::<test_name>` when that path is the stable target being planned. The gate batches all `[test]` targets in a single `loom gate test` invocation into one runner subprocess. |
+| **`[system]`** | Runs the assembled system (containers, packaging, end-to-end) | `[system](command)` for an ad hoc shell command, or `[system](verify:<domain>.<check-id>)` for a configured logical verifier target. |
+
+`verify:<domain>.<check-id>` targets are logical IDs, not shell commands.
+The runner configuration maps them to the repository's shared verifier
+entry point and SHOULD batch multiple IDs into one process (for example,
+`nix run .#verify -- <id>...`) so spec precision does not create one Nix
+process per criterion. The configured verifier registry is the gate's
+view of those IDs; for Wrix, `.#verify --list` is the authoritative ID
+inventory and runner configuration must not define a divergent set.
+
+### Pending modifier
+
+Append `?` inside the annotation name — `[check?]`, `[test?]`,
+`[system?]`, or `[judge?]` — when a planning edit names a verifier target
+that does not resolve yet, or when the verifier can run but the asserted
+condition is expected to become true only after follow-on implementation.
+The pending annotation is still the contract surface; the marker is an
+honest declaration that the verifier binding or assertion is not complete
+yet.
+
+Remove the `?` in the same change that makes the target resolve and pass.
+A non-pending annotation whose target is missing is a gate flag; a pending
+annotation whose target already resolves and passes is also a gate flag.
+The pending modifier never relaxes atomic acceptance: each Success Criteria
+bullet still carries exactly one annotation.
 
 ### Stochastic annotation
 
@@ -145,11 +169,13 @@ ergonomics, naming consistency).
 ### Annotation flags
 
 A criterion without an annotation is a flag at `loom gate verify`
-(no resolvable verifier). A criterion whose annotation points at a
-missing or stubbed verifier is a flag at the same audit. A
-criterion whose annotation is satisfied by a unit-test pass but
-production diverges from that unit is a flag at `loom gate review`'s
-verifier-honesty walk.
+(no resolvable verifier). A non-pending criterion whose annotation
+points at a missing or stubbed verifier is a flag at the same audit;
+a pending criterion whose target already resolves and passes but
+still carries the `?` marker is also a flag. A criterion whose
+annotation is satisfied by a unit-test pass but production diverges
+from that unit is a flag at `loom gate review`'s verifier-honesty
+walk.
 
 ### Deterministic ceiling
 

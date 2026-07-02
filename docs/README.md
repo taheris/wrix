@@ -18,7 +18,7 @@ pin — keep it current when specs land or retire.
 | Spec | Code | Beads | Purpose |
 |------|------|-------|---------|
 | [beads.md](../specs/beads.md) | [`.beads/`](../.beads/) | wx-v7m8n | Issue tracking with dependency support |
-| [cli.md](../specs/cli.md) | [`crates/wrix-cli/`](../crates/wrix-cli/) | — | Wrix command surface and repository initialization |
+| [cli.md](../specs/cli.md) | [`crates/wrix-cli/`](../crates/wrix-cli/), `.#verify` | — | Wrix command surface, repository initialization, and shared verifier app |
 | [image-builder.md](../specs/image-builder.md) | [`lib/sandbox/image.nix`](../lib/sandbox/image.nix) | wx-nf6eu | Nix-based OCI image source creation |
 | [linux-builder.md](../specs/linux-builder.md) | [`lib/builder/default.nix`](../lib/builder/default.nix) | wx-ope | Remote Nix builds for macOS |
 | [notifications.md](../specs/notifications.md) | [`lib/notify/`](../lib/notify/) | wx-q6x | Desktop notifications with focus suppression |
@@ -50,6 +50,7 @@ pin — keep it current when specs land or retire.
 | **sandbox** | Isolated container environment for running Claude Code |
 | **service container** | Per-workspace `<repo>-service` container hosting shared local services |
 | **tmux-mcp** | MCP server for AI-assisted debugging via tmux panes |
+| **verify target** | Logical verifier ID of the form `verify:<domain>.<check-id>`; `.#verify --list` is the authoritative ID inventory and runner config batches selected IDs through `.#verify` |
 | **virtio-fs** | Shared filesystem for macOS container VMs |
 | **wrix init** | Repo-local bootstrap command that configures and verifies Wrix-managed Git transport, signing, and hooks |
 | **wrix.toml** | Optional repo-root Wrix policy override file; absent when defaults are sufficient |

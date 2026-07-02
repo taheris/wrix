@@ -256,44 +256,44 @@ upstream, not by this spec.
 - `bd dolt pull` and `bd dolt push` succeed inside the wrix sandbox using
   staged beads config plus the shared Dolt service, with no fallback to a
   per-container embedded Dolt or JSONL import
-  [system](bash tests/services/dolt-cli.sh test_sync_in_container)
+  [system?](verify:beads.dolt-sync-in-container)
 
 - Direct `bd dolt pull` / `bd dolt push` inside the sandbox temporarily use
   the container-visible `/workspace` beads-worktree remote when the persisted
   Dolt `origin` points at the host checkout path, and restore the persisted
   remote after the command
-  [system](bash tests/services/dolt-cli.sh test_bd_dolt_sync_uses_container_remote)
+  [system?](verify:beads.dolt-sync-uses-container-remote)
 
 - `beads.shellHook` launches the workspace service container with a lifecycle independent
   of the caller, so stopping a long-running parent (e.g. a `systemd --user`
   service that triggered shellHook evaluation via envrc) does not block on
   container teardown nor deliver SIGKILL to the service container as a side effect
   of the caller's stop timeout
-  [system](bash tests/services/beads-shellhook.sh test_shellhook_lifecycle_isolation)
+  [system?](verify:beads.shellhook-lifecycle-isolation)
 
 - The same service identity path yields the same `<repo>-service` container name and Dolt endpoint across
   `beads.shellHook` invocations; different checkout identity paths yield
   different names and endpoints
-  [system](bash tests/services/dolt-endpoints.sh test_workspace_naming_determinism)
+  [system?](verify:beads.workspace-naming-determinism)
 
 - `beads.shellHook` fails non-zero with a stderr message when no container
   runtime is available or when Dolt does not become reachable within the
   startup budget — no fallback to embedded Dolt
-  [system](bash tests/services/beads-shellhook.sh test_shellhook_fail_loud)
+  [system?](verify:beads.shellhook-fail-loud)
 
 - Sandboxed clients receive staged beads config/metadata but not `.beads/issues.jsonl`, so a missing Dolt endpoint fails loudly instead of triggering JSONL auto-import or embedded Dolt recovery
-  [system](bash tests/services/dolt-cli.sh test_no_jsonl_staged)
+  [system?](verify:beads.no-jsonl-staged)
 
 - `wrix beads push` attempts `bd dolt push` before `bd dolt pull`, so a
   session-close run against an up-to-date remote never enters the Dolt
   merge path
-  [system](bash tests/beads-push.sh test_beadspush_pushes_before_pulls)
+  [test?](crates/wrix-beads/tests/push_workflow.rs::push_precedes_pull)
 
 - On the pull-fallback path, `wrix beads push` snapshots local `status` and
   `labels` intent before pulling and exits non-zero with the affected
   issue IDs in stderr when the post-pull row state diverges from that
   intent — no push attempted, no silent overwrite
-  [system](bash tests/beads-push.sh test_beadspush_failloud_on_intent_overwrite)
+  [test?](crates/wrix-beads/tests/push_workflow.rs::pull_fallback_preserves_local_intent)
 
 - `wrix beads push` disables bd's auto-export hook on every invocation that
   proceeds past the context guard (idempotent), leaving
@@ -301,35 +301,35 @@ upstream, not by this spec.
   `.beads/config.yaml`, so subsequent bd calls inside and outside
   `wrix beads push` no longer emits the `Warning: auto-export: git add failed`
   message or write `.beads/issues.jsonl`
-  [system](bash tests/beads-push.sh test_beadspush_disables_autoexport)
+  [test?](crates/wrix-beads/tests/push_workflow.rs::disables_auto_export_idempotently)
 
 - On host invocations, `wrix beads push` repairs a missing or stale Dolt `origin`
   remote to the current checkout's host-path beads worktree remote before
   Dolt sync; sandbox/container invocations temporarily point `origin` at the
   current checkout's beads worktree remote for the sync and restore the prior
   remote before exit, so a `/workspace` path is not left in shared Beads config
-  [system](bash tests/beads-push.sh test_beadspush_repairs_host_dolt_remote)
+  [test?](crates/wrix-beads/tests/push_workflow.rs::repairs_or_temporarily_overrides_dolt_origin)
 
 - When `$LOOM_INSIDE` is set, `wrix beads push` performs no git or dolt
   operation and exits 0 with a one-line notice, so a consumer may invoke it
   unconditionally inside a loom-managed bead clone — where `origin` points
   at the driver workdir and `.git/beads-worktrees/<branch>` is absent —
   without error and without a second writer racing the driver
-  [system](bash tests/beads-push.sh test_beadspush_loom_inside_noop)
+  [test?](crates/wrix-beads/tests/push_workflow.rs::loom_inside_is_noop)
 
 - When `$LOOM_INSIDE` is unset and `git rev-parse --show-toplevel` does not
   resolve a workspace root, `wrix beads push` exits non-zero with an actionable
   stderr message naming the unresolved repository — never proceeding with an
   empty `ROOT` into a git invocation that prints
   `fatal: not a git repository: (null)`
-  [system](bash tests/beads-push.sh test_beadspush_failloud_missing_repo)
+  [test?](crates/wrix-beads/tests/push_workflow.rs::missing_repo_fails_before_git_sync)
 
 - `wrix beads push`'s pre-pull cleanup commits any pre-existing dirt in the
   beads worktree — untracked files OR modified tracked files left by a
   previously-interrupted run — using the same detection surface
   `git rebase` itself consults, so the subsequent `git pull --rebase`
   never aborts with "You have unstaged changes"
-  [system](bash tests/beads-push.sh test_beadspush_pre_pull_cleanup_canonical)
+  [test?](crates/wrix-beads/tests/push_workflow.rs::pre_pull_cleanup_uses_canonical_dirty_detection)
 
 - When the beads worktree directory exists but is no longer a valid git
   worktree (its `.git/worktrees/<branch>` admin directory was pruned or
@@ -338,14 +338,14 @@ upstream, not by this spec.
   beads-branch sync — exiting 0, printing `wrix beads push: synced to GitHub`, and
   advancing `origin/<branch>` with no `fatal: not a git repository: (null)`
   error
-  [system](bash tests/beads-push.sh test_beadspush_recovers_orphaned_worktree)
+  [test?](crates/wrix-beads/tests/push_workflow.rs::recovers_orphaned_worktree_relative_to_root)
 
 - Every git invocation in the beads-branch sync, including the
   `git worktree add` that recreates the worktree, skips prek, so a fresh
   worktree recreate completes without the caller setting
   `PREK_ALLOW_NO_CONFIG` and without a `No prek.toml … found` error from the
   config-less `beads` branch
-  [system](bash tests/beads-push.sh test_beadspush_worktree_recreate_skips_prek)
+  [test?](crates/wrix-beads/tests/push_workflow.rs::git_sync_invocations_skip_prek)
 
 ## Requirements
 

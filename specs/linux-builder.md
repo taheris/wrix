@@ -62,18 +62,18 @@ The `wrix-builder` bootstrap image is a wrix-managed support image consumed by t
 ## Success Criteria
 
 - The `wrix-builder` integration suite passes on macOS 26+ (start, status, SSH, nix-daemon, remote `nixpkgs#hello` build, store persistence across `stop`/`start`, `config` snippet); skips with exit 77 on non-Darwin or older macOS
-  [system](bash tests/standalone/builder-test.sh)
+  [system?](verify:linux-builder.integration)
 - sshd inside the container has `PasswordAuthentication no` and binds the listener to `127.0.0.1`
-  [check](bash -c 'grep -Fxq "PasswordAuthentication no" lib/sandbox/builder/entrypoint.sh && grep -Fxq "ListenAddress 127.0.0.1" lib/sandbox/builder/entrypoint.sh')
+  [check?](verify:linux-builder.sshd-hardening)
 - Builder host and client SSH keys are generated under the host user's `~/.local/share/wrix/builder-keys/` directory with private keys mode `600`
-  [system](bash tests/builder/key-material.sh test_generates_per_user_ed25519_material)
+  [system?](verify:linux-builder.key-material-generation)
 - Re-running builder key-material initialization preserves existing private keys
-  [system](bash tests/builder/key-material.sh test_preserves_existing_private_keys)
+  [system?](verify:linux-builder.key-material-idempotent)
 - The `wrix-builder` bootstrap image exposes the shared image-source contract while retaining wrix ownership labels
-  [system](bash tests/test-app.sh test-wrix-images-source-kind)
+  [check?](verify:linux-builder.image-source-kind)
 
 - `wrix-builder start` routes the bootstrap image through the `source_kind` load transport before invoking Apple's `container image load`
-  [system](bash tests/builder/key-material.sh test_loads_image_through_source_kind_contract)
+  [system?](verify:linux-builder.source-kind-load-transport)
 
 ## Requirements
 

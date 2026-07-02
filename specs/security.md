@@ -274,39 +274,39 @@ this section is the index, not a restatement.
   present at those in-container paths, and `git commit` in the child
   produces a commit whose `git cat-file -p HEAD` output contains a
   non-empty `gpgsig` field.
-  [system](bash tests/security/nested-key-propagation.sh)
+  [system?](verify:security.nested-key-propagation)
 - A fresh spawned sandbox configures global `user.name` / `user.email`,
   installs pinned GitHub host keys at `/etc/ssh/ssh_known_hosts`, uses
   the mounted deploy key with strict host-key checking for GitHub SSH,
   makes an empty signed commit, and verifies that commit as a good SSH
   signature without manual `ssh-keyscan` or `git config`.
-  [system](bash tests/security/git-ssh-bootstrap.sh)
+  [system?](verify:security.git-ssh-bootstrap)
 - Wrix-initialized host Git, container Git, and a `.loom/integration`-style
   linked worktree all use context-resolved repo deploy/signing keys, strict
   pinned GitHub host-key verification, and no ambient user SSH identities;
   a fresh host-side GitHub SSH operation reaches authentication or repository
   authorization without host-key verification failure.
-  [system](bash tests/security/git-ssh-bootstrap.sh test_host_container_and_loom_helper)
+  [system?](verify:security.host-container-loom-git-helper)
 - When `WRIX_DEPLOY_KEY` or `WRIX_SIGNING_KEY` is set in the
   launcher's environment but the pointed-at file does not exist, the
   launcher exits non-zero with a stderr message naming the missing
   path, before the container is started.
-  [system](bash tests/security/key-env-missing-file.sh)
+  [test?](crates/wrix-sandbox/tests/launch.rs::missing_key_env_paths_fail_before_container_start)
 - Under `wrix spawn`, when a deploy key or signing key does not
   resolve (no env pointer and no `$HOME/.ssh/deploy_keys/` fallback),
   the launcher exits non-zero with a stderr message naming the
   unresolved key, before the container is started; interactive
   `wrix run` still boots without keys under the same condition.
-  [system](bash tests/security/spawn-requires-keys.sh)
+  [test?](crates/wrix-sandbox/tests/launch.rs::spawn_requires_resolved_keys_but_run_allows_missing_keys)
 - After a sandbox session, a session-metadata index file exists under
   `/workspace/.wrix/log/`; its `timestamp_start`, `timestamp_end`,
   `exit_code`, `mode`, and `agent_session_dir` fields are populated;
   and `agent_session_dir` resolves to an existing directory.
-  [system](bash tests/security/audit-trail-anchor.sh)
+  [system?](verify:security.audit-trail-anchor)
 - Default launches do not expose the host Podman API; `WRIX_PODMAN_SOCKET`
   does not enable it, and `WRIX_UNSAFE_PODMAN_SOCKET` is the only opt-in,
   failing loudly when set but the host socket is absent.
-  [system](bash tests/sandbox/unsafe-podman-socket.sh)
+  [test?](crates/wrix-sandbox/tests/launch.rs::podman_api_socket_requires_explicit_unsafe_opt_in)
 
 ## Requirements
 

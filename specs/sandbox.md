@@ -194,89 +194,89 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 ## Success Criteria
 
 - `mkSandbox` accepts the documented parameter set (`profile`, `cpus`, `memoryMb`, `deployKey`, `packages`, `mounts`, `env`, `mcp`, `mcpRuntime`, `agent`, `agentPkg`, `agentSettings`) and returns `{ package, image, launcher, profile, devShell }`
-  [system](bash tests/sandbox/mksandbox-api.sh test_mksandbox_accepts_documented_parameters)
+  [check?](verify:sandbox.mksandbox-api)
 - Platform dispatch picks the Linux implementation on Linux hosts and the macOS implementation on Darwin hosts
-  [system](bash tests/sandbox/platform-dispatch.sh)
+  [check?](verify:sandbox.platform-dispatch)
 - Evaluating `mkSandbox` on an unsupported system throws at evaluation time rather than producing a broken derivation
-  [check](grep -nE 'Unsupported system' lib/sandbox/default.nix)
+  [check?](verify:sandbox.unsupported-system-error)
 - A built Linux sandbox starts a container and exits cleanly
-  [system](bash tests/sandbox/container-starts.sh test_linux_container_starts)
+  [system?](verify:sandbox.linux-container-starts)
 - A built macOS sandbox starts an Apple `container` microVM and exits cleanly
-  [system](bash tests/sandbox/container-starts.sh test_darwin_container_starts)
+  [system?](verify:sandbox.darwin-container-starts)
 - Files created inside `/workspace` carry the host UID/GID, not a container-internal UID
-  [system](bash tests/sandbox/uid-mapping.sh)
+  [system?](verify:sandbox.uid-mapping)
 - Host filesystem outside `/workspace` and declared mounts is not visible inside the container
-  [system](bash tests/sandbox/filesystem-isolation.sh)
+  [system?](verify:sandbox.filesystem-isolation)
 - `mounts` and `env` passed to `mkSandbox` are merged into the profile and reach the container as configured
-  [system](bash tests/sandbox/custom-mounts-env.sh)
+  [system?](verify:sandbox.custom-mounts-env)
 - Every sandbox image carries the `wrix` CLI, so `wrix beads push` resolves inside the container without entering `nix develop` or running `nix run`
-  [system](bash tests/sandbox/custom-mounts-env.sh test_wrix_cli_added_to_sandbox_profile)
+  [check?](verify:sandbox.wrix-cli-in-profile)
 - In a fresh container built from a profile that ships `nix`, the runtime process (rootless container-root) runs `nix develop -c true`, a `nix build` of a flake target, and a store-mutating op against a baked root-owned path to completion (exit 0) with no `Operation not permitted` failure on a `/nix/store` path
-  [system](bash tests/sandbox/nix-in-container.sh)
+  [system?](verify:sandbox.nix-in-container)
 - The default container boundary does not `LD_PRELOAD` `libfakeuid` (its `getuid()→1000` spoof blanks claude's TUI when the process is really root — wx-nsage); instead it sets `IS_SANDBOX=1` so claude permits `--dangerously-skip-permissions` as root without spoofing. libfakeuid remains krun-only
-  [system](bash tests/sandbox/rust-launcher-live.sh test_linux_sets_is_sandbox_without_fakeuid)
+  [test?](crates/wrix-sandbox/tests/launch.rs::linux_default_boundary_sets_is_sandbox_without_fakeuid)
 - A freshly provisioned container — with no prior store surgery — passes `nix-store --verify --check-contents` with zero missing or dangling paths, so an additive `nix build` cannot fail with `No such file or directory` on a path the baked Nix DB registers as valid (the build-time guarantee is owned by `image-builder.md` § In-Container Nix Store Consistency)
-  [system](bash tests/sandbox/nix-store-verify-clean.sh)
+  [system?](verify:sandbox.nix-store-verify-clean)
 - The launcher accepts `WRIX_NETWORK=open` and `WRIX_NETWORK=limit`; any other value errors before the container starts
-  [check](cargo test -p wrix-sandbox network_mode_parse_accepts_only_open_and_limit)
+  [test](command::launch::test::network_mode_parse_accepts_only_open_and_limit)
 - In `WRIX_NETWORK=open`, sandbox outbound to public internet succeeds, but outbound to LAN/private/host-local/VPN/special IPv4 ranges fails except for exact DNS and wrix-owned endpoint exceptions
-  [system](bash tests/sandbox/network-baseline.sh test_open_blocks_lan)
+  [system?](verify:sandbox.network-open-blocks-lan)
 - In `WRIX_NETWORK=limit`, outbound succeeds only to the merged allowlist plus exact DNS and wrix-owned endpoint exceptions; allowlist domains are resolved once at startup, unresolvable domains fail launch, and non-allowlisted public internet plus LAN/private/host-local/VPN/special ranges fail
-  [system](bash tests/sandbox/network-baseline.sh test_limit_allowlist)
+  [system?](verify:sandbox.network-limit-allowlist)
 - IPv6 egress is disabled or blocked in both network modes for v1
-  [system](bash tests/sandbox/network-baseline.sh test_ipv6_blocked)
+  [system?](verify:sandbox.network-ipv6-blocked)
 - If firewall setup, IPv6 disablement, or `NET_ADMIN` drop cannot be verified, the launcher fails closed before the agent starts and never falls back to LAN-open networking
-  [system](bash tests/sandbox/network-baseline.sh test_fail_closed)
+  [system?](verify:sandbox.network-fail-closed)
 - After startup, the agent process cannot modify firewall rules (for example `nft flush ruleset` on the nft backend, or the equivalent backend flush command, fails inside the running sandbox)
-  [system](bash tests/sandbox/network-baseline.sh test_agent_lacks_net_admin)
+  [system?](verify:sandbox.agent-lacks-net-admin)
 - `WRIX_MICROVM=1` selects `podman --runtime krun` on Linux when `/dev/kvm` is available, and fails loudly when KVM is missing
-  [check](grep -nE 'WRIX_MICROVM|--runtime krun|/dev/kvm' lib/sandbox/linux/default.nix)
+  [check?](verify:sandbox.linux-microvm-runtime)
 - `wrix run` errors at startup with a clear message when no valid Nix-generated `ProfileConfig` JSON is supplied
-  [system](bash tests/sandbox/missing-profile-config.sh)
+  [test?](crates/wrix-sandbox/tests/command.rs::run_requires_valid_profile_config)
 - `mkSandbox`'s `package` wrapper keeps `bin/wrix` explicit, exposes `wrix-run` as `meta.mainProgram` for `nix run`, and passes an immutable Nix-store `ProfileConfig` JSON path to the profile-agnostic launcher for both `run` and `spawn`, with image defaults supplied by `ProfileConfig` rather than mutable `WRIX_DEFAULT_IMAGE_*` env vars
-  [system](bash tests/sandbox/profile-config-wrapper.sh test_wrapper_invokes_run_and_spawn_with_profile_config)
+  [check?](verify:sandbox.profile-config-wrapper)
 - `ProfileConfig.image` includes `ref`, `source`, explicit `source_kind`, and `digest`; the launcher/runtime installer rejects configs where `source_kind` is missing or incompatible with the selected platform install path
-  [system](bash tests/sandbox/profile-config-wrapper.sh test_image_source_kind)
+  [check?](verify:sandbox.profile-config-image-source-kind)
 - The selected agent runtime comes from `ProfileConfig` and cannot be changed by caller env independently of the selected image/profile
-  [system](bash tests/sandbox/profile-config-agent-pin.sh)
+  [test?](crates/wrix-sandbox/tests/command.rs::profile_config_agent_cannot_be_overridden_by_env)
 - `wrix spawn --spawn-config <file>` parses the documented `SpawnConfig` fields (`image_ref`, `image_source`, `image_source_kind`, `workspace`, `env`, `agent_args`, `mounts`), rejects `image_source` overrides without an explicit matching `image_source_kind`, and rejects attempts to change the selected agent independently of `ProfileConfig`
-  [system](bash tests/sandbox/spawn-config-schema.sh)
+  [test?](crates/wrix-sandbox/tests/spawn_config.rs::spawn_config_schema_and_agent_pin)
 - On Linux, each `SpawnConfig.mounts` entry becomes a `-v <host_path>:<container_path>` podman argument, with `:ro` appended when `read_only: true`. A missing or empty `mounts` list produces no additional `-v` flags.
-  [system](bash tests/sandbox/spawn-config-mounts.sh)
+  [test?](crates/wrix-sandbox/tests/spawn_config.rs::linux_spawn_mounts_render_podman_volume_args)
 - Default Linux launches do not mount the host Podman socket or export `CONTAINER_HOST` / `GC_HOST_*`; `WRIX_PODMAN_SOCKET` is ignored, and the socket path is available only through the explicit unsafe `WRIX_UNSAFE_PODMAN_SOCKET` opt-in, which fails loudly when set but the host socket is absent.
-  [system](bash tests/sandbox/unsafe-podman-socket.sh)
+  [test?](crates/wrix-sandbox/tests/launch.rs::unsafe_podman_socket_env_is_ignored_without_explicit_opt_in)
 - With a real Unix socket at the host Podman socket path, `WRIX_UNSAFE_PODMAN_SOCKET` renders the socket mount plus `CONTAINER_HOST` and `GC_HOST_*` env using host-visible paths; without the opt-in, that same socket is not mounted.
-  [check](cargo test -p wrix-sandbox unsafe_podman_socket_mounts_only_on_explicit_opt_in)
+  [test](command::launch::test::unsafe_podman_socket_mounts_only_on_explicit_opt_in)
 - On Darwin, the same mount classifier handles `profile.mounts` and `SpawnConfig.mounts` — one mechanism, not two. Directories are staged + copied at launch, regular files copy-from-parent-dir, and entries whose `host_path` is a Unix socket cause the launcher to fail loudly before the container starts. (VirtioFS does not pass socket operations, so a silently-mounted socket would dead-end at the first `connect()`.)
-  [system](bash tests/sandbox/darwin-mount-classifier.sh)
+  [test?](crates/wrix-sandbox/tests/darwin_mounts.rs::mount_classifier_handles_profile_and_spawn_mounts_uniformly)
 - The container entrypoint switches on `WRIX_AGENT` and exec's the matching agent binary (`claude`, `pi`, `direct`)
-  [system](bash tests/sandbox/entrypoint-contract.sh test_agent_dispatch_both_entrypoints)
+  [check?](verify:sandbox.entrypoint-agent-dispatch)
 - Before exec'ing the selected agent, the entrypoint rejects a mismatch between the ProfileConfig-selected `WRIX_AGENT` and the image-declared `/etc/wrix/image-agent`, then verifies the agent's binary is present and fails loudly with a clear error when it is absent from the image (e.g. `WRIX_AGENT=pi` against a claude image), rather than emitting a bare `command not found`
-  [system](bash tests/sandbox/agent-binary-guard.sh)
+  [system?](verify:sandbox.agent-binary-guard)
 - Both entrypoints seed and persist each agent's own config home — claude `~/.claude`, pi `~/.pi/agent` — not only claude's
-  [check](grep -nE '\.pi/agent' lib/sandbox/linux/entrypoint.sh lib/sandbox/darwin/entrypoint.sh)
+  [check?](verify:sandbox.agent-config-homes)
 - Deploy key `<name>` is mounted at `/etc/wrix/keys/<name>` inside the container when `deployKey = "<name>"` is set (the `.pub` file is not mounted; the entrypoint regenerates it on demand via `ssh-keygen -y`)
-  [check](grep -nE 'containerKeyDir|deployKey' lib/sandbox/linux/default.nix lib/sandbox/darwin/default.nix)
+  [test?](crates/wrix-sandbox/tests/launch.rs::deploy_key_mount_uses_container_key_dir_without_public_key)
 - `agentSettings` merges into the selected agent's baked settings; non-empty `agentSettings` with `agent = "direct"` fails at evaluation time
-  [check](grep -nE 'agentSettings|baseClaudeSettings|basePiSettings' lib/sandbox/default.nix)
+  [check?](verify:sandbox.agent-settings)
 - When `/workspace/bin` exists inside the container, it appears first on `PATH`, so a consumer-supplied shim at `/workspace/bin/<name>` resolves ahead of a same-named binary baked into the image
-  [system](bash tests/sandbox/workspace-bin-path.sh)
+  [system?](verify:sandbox.workspace-bin-path-present)
 - When `/workspace/bin` does not exist, the container's `PATH` does not contain `/workspace/bin`
-  [system](bash tests/sandbox/workspace-bin-path.sh)
+  [system?](verify:sandbox.workspace-bin-path-absent)
 - Both `lib/sandbox/linux/entrypoint.sh` and `lib/sandbox/darwin/entrypoint.sh` implement the `/workspace/bin` PATH prepend
-  [system](bash tests/sandbox/entrypoint-contract.sh test_workspace_bin_path_prepend_both)
+  [check?](verify:sandbox.entrypoint-workspace-bin-prepend)
 - The runtime image installer preflight checks whether the selected image source's content digest matches any image already present in the platform store before invoking the install pipeline; on a digest hit, no image source is executed, no tar bytes are streamed, and no `*-load` CLI is invoked
-  [system](bash tests/sandbox/image-install-digest-skip.sh)
+  [test?](crates/wrix-sandbox/tests/image_install.rs::digest_preflight_skips_source_execution_on_hit)
 - On Linux, the runtime image installer dispatches `source_kind = "nix-descriptor"` through an archive-less descriptor-to-OCI-layout install path (`oci:<oci_layout>:<oci_ref>` → `containers-storage:<ref>` with skopeo, or equivalent wrix); the docker/OCI archive conversion path is not used for Linux descriptor sources
-  [system](bash tests/sandbox/image-install-archiveless.sh)
+  [test?](crates/wrix-sandbox/tests/image_install.rs::linux_descriptor_sources_use_archiveless_install_path)
 - A second spawn of an already-loaded image performs no writes to the platform store's layer directory and does not execute the image source
-  [system](bash tests/sandbox/image-install-no-rewrite.sh)
+  [test?](crates/wrix-sandbox/tests/image_install.rs::already_loaded_image_performs_no_store_writes)
 - On Linux, re-installing an image that differs from the cached one in only its top customisation layer generates and transfers only changed/missing layer blobs, not O(image-size) bytes
-  [system](bash tests/sandbox/image-install-delta-bounded.sh)
+  [test?](crates/wrix-sandbox/tests/image_install.rs::linux_reinstall_transfers_only_changed_layers)
 - The runtime image cleanup path records a bounded cross-workspace MRU of eight wrix image refs/digests/image IDs, preserves images used by existing containers, prunes wrix-managed images outside the keep set, and does not automatically remove unlabelled `<none>:<none>` images
-  [system](bash tests/sandbox/image-retention-cleanup.sh)
+  [test?](crates/wrix-sandbox/tests/image_retention.rs::cleanup_prunes_only_wrix_managed_images_outside_bounded_keep_set)
 - On Darwin, the runtime image installer uses `container image load --input <tar>` for `source_kind = "docker-archive"` image install (per Apple's available CLI surface) and relies on the digest-skip preflight while per-blob install remains out of scope
-  [system](bash tests/sandbox/image-install-darwin-load.sh)
+  [test?](crates/wrix-sandbox/tests/image_install.rs::darwin_docker_archive_sources_use_container_image_load)
 
 ## Requirements
 

@@ -79,19 +79,19 @@ The container image is Linux (aarch64 or x86_64), so `pkgs.playwright-driver.bro
 ## Success Criteria
 
 - MCP server starts, responds to `initialize` and `tools/list` with representative bundled tools, and runs fully offline (no network downloads at startup)
-  [system](bash tests/mcp/playwright/smoke-test.sh)
+  [system?](verify:playwright-mcp.smoke)
 - Screenshot returns base64 PNG when navigating to a local HTTP server
-  [system](bash tests/mcp/playwright/screenshot-test.sh)
+  [system?](verify:playwright-mcp.screenshot)
 - The image built with `mcp.playwright = {}` contains the chromium binary in its store closure
-  [system](bash tests/mcp/playwright/build-test.sh)
+  [check?](verify:playwright-mcp.chromium-closure)
 - Chromium executable path is derived from `pkgs.playwright-driver.browsers`, not from a hard-coded path or `npx`
-  [system](bash tests/mcp/playwright/smoke-test.sh test_chromium_executable_path_derives_from_playwright_browsers)
+  [check?](verify:playwright-mcp.chromium-executable-path)
 - The automatic Chromium flags `--no-sandbox`, `--disable-dev-shm-usage`, and `--disable-gpu` are always passed through `launchOptions.args`
-  [system](bash tests/mcp/playwright/smoke-test.sh test_mandatory_flags_are_non_overridable)
+  [check?](verify:playwright-mcp.mandatory-flags)
 - The `headless`, `viewport`, and `config` user options reach the MCP server's serialized config file
-  [system](bash tests/mcp/playwright/smoke-test.sh test_user_options_reach_serialized_config)
+  [check?](verify:playwright-mcp.user-options-config)
 - The server definition exposes the MCP registry triple (`name`, `packages`, `mkServerConfig`) so `mkSandbox` can compose it like any other server
-  [system](bash tests/mcp/playwright/smoke-test.sh test_registry_triple_shape)
+  [check?](verify:playwright-mcp.registry-triple)
 
 ## Requirements
 
