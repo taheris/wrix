@@ -132,6 +132,14 @@ impl Plan {
 
     pub fn for_workspace(workspace: Workspace, cache_mode: CacheMode) -> Result<Self> {
         let paths = Paths::for_workspace(workspace.hash())?;
+        Self::for_workspace_with_paths(workspace, cache_mode, paths)
+    }
+
+    pub fn for_workspace_with_paths(
+        workspace: Workspace,
+        cache_mode: CacheMode,
+        paths: Paths,
+    ) -> Result<Self> {
         let container_name = select_container_name(&workspace, &paths)?;
         let prior_ports = PortLease::read(&paths.services_path())?;
         let cache_port = match cache_mode {
@@ -216,7 +224,7 @@ impl Plan {
         ports
     }
 
-    fn ensure_layout(&self) -> Result<()> {
+    pub fn ensure_layout(&self) -> Result<()> {
         fs::create_dir_all(self.paths.state_root())?;
         if self.cache_enabled() {
             fs::create_dir_all(self.paths.cache_root())?;
@@ -367,6 +375,13 @@ impl DoltTransport {
 }
 
 impl Paths {
+    pub fn new(state_root: impl Into<PathBuf>, cache_root: impl Into<PathBuf>) -> Self {
+        Self {
+            state_root: state_root.into(),
+            cache_root: cache_root.into(),
+        }
+    }
+
     fn for_workspace(hash: &WorkspaceHash) -> Result<Self> {
         let home = home_dir()?;
         let state_root = if cfg!(target_os = "macos") {

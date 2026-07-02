@@ -1837,7 +1837,7 @@ fn run_service(workspace: &Path, args: &[&str]) -> Result<Output, LaunchError> {
 }
 
 fn run_service_output(workspace: &Path, args: &[&str]) -> Result<Output, LaunchError> {
-    let current = env::current_exe()?;
+    let current = service_command()?;
     let mut command = ProcessCommand::new(current);
     command
         .args(args)
@@ -1845,6 +1845,15 @@ fn run_service_output(workspace: &Path, args: &[&str]) -> Result<Output, LaunchE
         .stdin(Stdio::null())
         .output()
         .map_err(LaunchError::from)
+}
+
+fn service_command() -> Result<PathBuf, LaunchError> {
+    if env_flag("WRIX_DRY_RUN")
+        && let Some(path) = env::var_os("WRIX_DRY_RUN_SERVICE_BIN")
+    {
+        return Ok(PathBuf::from(path));
+    }
+    env::current_exe().map_err(LaunchError::from)
 }
 
 fn run_required(program: &str, args: &[&str]) -> Result<(), LaunchError> {

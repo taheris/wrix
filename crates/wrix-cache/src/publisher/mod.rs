@@ -58,15 +58,44 @@ impl Report {
 pub fn run_current_workspace(mode: Mode) -> io::Result<Report> {
     let workspace = Workspace::from_current_dir()?;
     let paths = Paths::for_workspace(workspace.hash())?;
-    paths.ensure()?;
-    run(&workspace, &paths, mode)
+    run_at(&workspace, &paths, mode)
+}
+
+pub fn run_workspace_at(
+    workspace: &Workspace,
+    state_root: &Path,
+    cache_root: &Path,
+    mode: Mode,
+) -> io::Result<Report> {
+    let paths = Paths {
+        state_root: state_root.to_path_buf(),
+        cache_root: cache_root.to_path_buf(),
+    };
+    run_at(workspace, &paths, mode)
 }
 
 pub fn status_current_workspace() -> io::Result<Report> {
     let workspace = Workspace::from_current_dir()?;
     let paths = Paths::for_workspace(workspace.hash())?;
+    status_at_paths(&paths)
+}
+
+pub fn status_at(state_root: &Path, cache_root: &Path) -> io::Result<Report> {
+    let paths = Paths {
+        state_root: state_root.to_path_buf(),
+        cache_root: cache_root.to_path_buf(),
+    };
+    status_at_paths(&paths)
+}
+
+fn run_at(workspace: &Workspace, paths: &Paths, mode: Mode) -> io::Result<Report> {
     paths.ensure()?;
-    status_report(&paths)
+    run(workspace, paths, mode)
+}
+
+fn status_at_paths(paths: &Paths) -> io::Result<Report> {
+    paths.ensure()?;
+    status_report(paths)
 }
 
 pub fn prune_stale_dirty(state_root: &Path, cache_root: &Path) -> io::Result<bool> {

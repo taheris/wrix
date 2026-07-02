@@ -167,35 +167,35 @@ Direct remote-builder access to the local project cache is out of scope for v1. 
 - Linux beads clients reach Dolt through the workspace Unix socket, while Darwin beads clients receive the service container's TCP host/port endpoint
   [test](crates/wrix-service/tests/lifecycle.rs::dolt_endpoint_transport_is_platform_specific)
 - Default `mkDevShell` cache enablement creates Linux XDG state/cache roots or Darwin Library state/cache roots, plus GC-root directory, signing key, public key, publish-root manifest, pending directory, lock file, status file, and endpoint metadata outside `/workspace`; `nixCache = false` does not create cache state solely for cache use
-  [test?](crates/wrix-service/tests/cache_state.rs::state_layout_is_outside_workspace_and_respects_opt_out)
+  [test](crates/wrix-service/tests/cache_state.rs::state_layout_is_outside_workspace_and_respects_opt_out)
 - Host devshell Nix uses `file://<cache-root>` as the project cache substituter, trusts the generated public key, enables `builders-use-substitutes`, installs a project-specific immutable post-build hook, and fails loudly when the host Nix daemon ignores any required setting
   [system?](verify:services.host-nix-config)
 - `wrix run` and `wrix spawn` inject container `NIX_CONFIG` that points at the project cache HTTP endpoint, trusts only the generated public key for that cache, and enables `builders-use-substitutes`
-  [test?](crates/wrix-sandbox/tests/project_cache.rs::run_and_spawn_inject_container_pull_config)
+  [test](crates/wrix-sandbox/tests/project_cache.rs::run_and_spawn_inject_container_pull_config)
 - The service cache HTTP endpoint is a Rust static read-only server for `<cache-root>`, uses an explicit persisted loopback host port in the `21000–22999` range, serves only Nix binary-cache paths, and does not require container DNS for sandbox substitution
-  [test?](crates/wrix-cache/tests/helper_server.rs::static_server_serves_only_binary_cache_paths_on_persisted_loopback_port)
+  [test](crates/wrix-cache/tests/helper_server.rs::static_server_serves_only_binary_cache_paths_on_persisted_loopback_port)
 - Sandboxes receive no cache signing key, no durable state root mount, no host `/nix/store` mount, and no host Nix daemon socket as part of project-cache integration
-  [test?](crates/wrix-sandbox/tests/project_cache.rs::sandbox_cache_integration_excludes_host_store_and_secrets)
+  [test](crates/wrix-sandbox/tests/project_cache.rs::sandbox_cache_integration_excludes_host_store_and_secrets)
 - With `WRIX_NETWORK=limit`, sandbox Nix can reach exactly the project cache endpoint while unrelated host-local services remain outside the generated allowlist
   [system?](verify:services.limit-mode-cache-endpoint)
 - The post-build hook drops privileges before publishing, never executes workspace files, and publishes only when `DRV_PATH` matches a configured publish-root derivation in `<state-root>/publish-roots.json`
-  [test?](crates/wrix-cache/tests/hook.rs::post_build_hook_scopes_publish_to_manifest_roots)
+  [test](crates/wrix-cache/tests/hook.rs::post_build_hook_scopes_publish_to_manifest_roots)
 - `wrix service cache publish` refreshes the publish manifest, publishes only already-realized configured roots, drains matching pending records, updates GC markers, and does not build missing roots
-  [test?](crates/wrix-cache/tests/publisher.rs::publish_realized_roots_drains_pending_and_updates_gc_markers)
+  [test](crates/wrix-cache/tests/publisher.rs::publish_realized_roots_drains_pending_and_updates_gc_markers)
 - `wrix service cache warm` builds default warm roots (packages plus selected devShell), excludes checks by default, includes checks with `--checks`, then publishes and prunes
-  [test?](crates/wrix-cache/tests/publisher.rs::warm_roots_include_checks_only_when_requested)
+  [test](crates/wrix-cache/tests/publisher.rs::warm_roots_include_checks_only_when_requested)
 - Publishing copies only paths reachable from configured current-workspace flake roots, subtracts paths already available from upstream substituters, and never publishes an arbitrary host store path outside that scoped closure
-  [test?](crates/wrix-cache/tests/publisher.rs::publish_filters_to_current_workspace_closure)
+  [test](crates/wrix-cache/tests/publisher.rs::publish_filters_to_current_workspace_closure)
 - Publishing uses the flat Nix binary-cache layout with signed narinfos and `--no-recursive` copies of the filtered path set
-  [test?](crates/wrix-cache/tests/publisher.rs::publish_uses_flat_signed_cache_with_nonrecursive_copies)
+  [test](crates/wrix-cache/tests/publisher.rs::publish_uses_flat_signed_cache_with_nonrecursive_copies)
 - Lock contention in the automatic publisher prints a waiting message; lock timeout writes a pending JSON record and warning, and a later explicit publish drains matching pending records
-  [test?](crates/wrix-cache/tests/publisher.rs::lock_timeout_records_pending_and_explicit_publish_drains)
+  [test](crates/wrix-cache/tests/publisher.rs::lock_timeout_records_pending_and_explicit_publish_drains)
 - Updating a root to a new output replaces that root's GC marker and prunes cache entries no longer reachable from any marker on explicit prune/publish/warm, so repeated publishes do not grow the cache indefinitely
-  [test?](crates/wrix-cache/tests/publisher.rs::prune_keeps_only_paths_reachable_from_current_markers)
+  [test](crates/wrix-cache/tests/publisher.rs::prune_keeps_only_paths_reachable_from_current_markers)
 - `wrix service cache rotate-key` invalidates the local cache, generates a new keypair, updates metadata, and requires republishing rather than trusting old and new keys simultaneously
-  [test?](crates/wrix-cache/tests/publisher.rs::rotate_key_invalidates_cache_and_replaces_trust_root)
+  [test](crates/wrix-cache/tests/publisher.rs::rotate_key_invalidates_cache_and_replaces_trust_root)
 - `wrix service cache status` reports cache size and warns above the default 50 GiB soft threshold without deleting reachable entries solely to satisfy that threshold
-  [test?](crates/wrix-cache/tests/publisher.rs::status_warns_above_soft_size_without_pruning)
+  [test](crates/wrix-cache/tests/publisher.rs::status_warns_above_soft_size_without_pruning)
 - The container-facing cache transport is HTTP only; wrix does not configure Unix-socket cache substituters, host Nix daemon sockets, shared mutable `/nix/store`, or host-store-serving tools for sandbox cache reads
   [check?](verify:services.cache-transport-http-only)
 

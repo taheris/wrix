@@ -9,6 +9,9 @@ fs2 = { workspace = true }
 serde_json = { workspace = true }
 wrix-core = { workspace = true }
 
+[dev-dependencies]
+tempfile = { workspace = true }
+
 [[bin]]
 name = "wrix-cache-hook"
 path = "src/bin/wrix-cache-hook.rs"

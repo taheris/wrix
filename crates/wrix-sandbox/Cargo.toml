@@ -11,5 +11,8 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 wrix-core = { workspace = true }
 
+[dev-dependencies]
+tempfile = { workspace = true }
+
 [lints]
 workspace = true

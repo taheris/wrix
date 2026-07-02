@@ -94,13 +94,20 @@ fn run(
 }
 
 fn run_serve(args: &[String], stderr: &mut impl Write) -> io::Result<ExitCode> {
-    if args.len() != 1 {
-        writeln!(stderr, "Usage: wrix-cache-serve <cache-root>")?;
-        return Ok(ExitCode::FAILURE);
-    }
-    let root = PathBuf::from(&args[0]);
+    let (listen, root) = match args {
+        [root] => ("0.0.0.0:8080", root.as_str()),
+        [flag, listen, root] if flag == "--listen" => (listen.as_str(), root.as_str()),
+        _ => {
+            writeln!(
+                stderr,
+                "Usage: wrix-cache-serve [--listen HOST:PORT] <cache-root>"
+            )?;
+            return Ok(ExitCode::FAILURE);
+        }
+    };
+    let root = PathBuf::from(root);
     require_absolute_dir("cache root", &root)?;
-    let listener = TcpListener::bind(("0.0.0.0", 8080))?;
+    let listener = TcpListener::bind(listen)?;
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => handle_cache_request(stream, &root)?,
@@ -501,7 +508,7 @@ fn write_help(helper: Helper, stdout: &mut impl Write) -> io::Result<()> {
         ),
         Helper::Serve => writeln!(
             stdout,
-            "{}\n\nUsage: {} <cache-root>",
+            "{}\n\nUsage: {} [--listen HOST:PORT] <cache-root>",
             helper.purpose(),
             helper.binary_name()
         ),
