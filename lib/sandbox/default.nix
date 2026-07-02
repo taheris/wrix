@@ -439,8 +439,14 @@ let
                 ;;
             esac
             WRIX_RUN_WRAPPER
+            cat > "$out/bin/wrix-git-sign" <<'WRIX_GIT_SIGN_WRAPPER'
+            #!${pkgs.runtimeShell}
+            set -euo pipefail
+            exec ${launcher}/bin/wrix-git-sign "$@"
+            WRIX_GIT_SIGN_WRAPPER
             chmod +x "$out/bin/wrix"
             chmod +x "$out/bin/wrix-run"
+            chmod +x "$out/bin/wrix-git-sign"
           '';
 
     in

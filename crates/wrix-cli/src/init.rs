@@ -226,11 +226,18 @@ struct Plan {
     root: PathBuf,
     key_name: KeyName,
     signing: SigningPolicy,
+    signing_key: Option<PathBuf>,
     remote: RemoteName,
     hooks: HookPolicy,
     verification: VerificationPolicy,
     deploy: DeployPolicy,
     force: ForcePolicy,
+}
+
+struct SigningIdentity {
+    name: String,
+    email: String,
+    principals: Vec<String>,
 }
 
 impl Plan {
@@ -247,6 +254,12 @@ impl Plan {
             0o700,
         )?;
         write_common_git_config(&common_dir, "core.sshCommand", TRANSPORT_TRAMPOLINE)?;
+        let signing_identity = configure_signing(
+            &self.root,
+            &common_dir,
+            &self.key_name,
+            self.signing_key.as_deref(),
+        )?;
         configure_prek_hooks(&self.root, &common_dir, self.hooks)?;
         verify_transport_helper(
             &self.root,
@@ -254,7 +267,11 @@ impl Plan {
             &helper_path,
             &known_hosts_path,
             &self.key_name,
-        )
+        )?;
+        if let Some(identity) = signing_identity {
+            verify_signing_commit(&self.root, &identity)?;
+        }
+        Ok(())
     }
 
     fn write(&self, stdout: &mut impl Write) -> io::Result<()> {
@@ -307,11 +324,20 @@ fn build_plan(profile_config_path: Option<&Path>, args: &[String]) -> Result<Pla
         return Err(Error::DeployOfflinePolicy);
     }
     ensure_remote_exists(&root, &remote)?;
+    let signing_key = if signing == SigningPolicy::Enabled {
+        require_signing_program()?;
+        Some(crate::sign::resolve_key_for_key_name(
+            &key_name.to_string(),
+        )?)
+    } else {
+        None
+    };
 
     Ok(Plan {
         root,
         key_name,
         signing,
+        signing_key,
         remote,
         hooks,
         verification,
@@ -505,6 +531,289 @@ fn write_common_git_config(common_dir: &Path, key: &str, value: &str) -> Result<
     }
     Err(Error::GitConfig {
         key: key.to_owned(),
+        detail: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+    })
+}
+
+fn require_signing_program() -> Result<(), Error> {
+    let output = ProcessCommand::new(crate::sign::PROGRAM_NAME)
+        .arg("--wrix-probe")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|source| Error::SigningProgramIo { source })?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(Error::SigningProgramProbe {
+        detail: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+    })
+}
+
+fn configure_signing(
+    root: &Path,
+    common_dir: &Path,
+    key_name: &KeyName,
+    signing_key: Option<&Path>,
+) -> Result<Option<SigningIdentity>, Error> {
+    let Some(signing_key) = signing_key else {
+        write_common_git_config(common_dir, "commit.gpgsign", "false")?;
+        return Ok(None);
+    };
+    let identity = signing_identity(root)?;
+    let public_key = crate::sign::public_key(signing_key)?;
+    write_allowed_signers(common_dir, &identity.principals, &public_key)?;
+    write_common_git_config(common_dir, "gpg.format", "ssh")?;
+    write_common_git_config(common_dir, "gpg.ssh.program", crate::sign::PROGRAM_NAME)?;
+    write_common_git_config(
+        common_dir,
+        "gpg.ssh.allowedSignersFile",
+        crate::sign::ALLOWED_SIGNERS_CONFIG,
+    )?;
+    write_common_git_config(
+        common_dir,
+        "user.signingkey",
+        &crate::sign::signing_key_config(&key_name.to_string()),
+    )?;
+    write_common_git_config(common_dir, "commit.gpgsign", "true")?;
+    verify_signing_config(root, common_dir, key_name)?;
+    Ok(Some(identity))
+}
+
+fn write_allowed_signers(
+    common_dir: &Path,
+    principals: &[String],
+    public_key: &str,
+) -> Result<(), Error> {
+    let path = common_dir.join("wrix").join("allowed_signers");
+    let mut content = String::new();
+    for principal in principals {
+        content.push_str(principal);
+        content.push(' ');
+        content.push_str(public_key);
+        content.push('\n');
+    }
+    write_secure_file(&path, &content, 0o600)
+}
+
+fn verify_signing_config(root: &Path, common_dir: &Path, key_name: &KeyName) -> Result<(), Error> {
+    require_common_config_value(common_dir, "gpg.format", "ssh")?;
+    require_stable_common_config_value(
+        root,
+        common_dir,
+        "gpg.ssh.program",
+        crate::sign::PROGRAM_NAME,
+    )?;
+    require_stable_common_config_value(
+        root,
+        common_dir,
+        "gpg.ssh.allowedSignersFile",
+        crate::sign::ALLOWED_SIGNERS_CONFIG,
+    )?;
+    require_stable_common_config_value(
+        root,
+        common_dir,
+        "user.signingkey",
+        &crate::sign::signing_key_config(&key_name.to_string()),
+    )?;
+    require_common_config_value(common_dir, "commit.gpgsign", "true")?;
+    require_mode(common_dir.join("wrix").join("allowed_signers"), 0o600)
+}
+
+fn require_common_config_value(common_dir: &Path, key: &str, expected: &str) -> Result<(), Error> {
+    let value = read_common_git_config(common_dir, key)?;
+    if value == expected {
+        return Ok(());
+    }
+    Err(Error::SigningConfigMismatch {
+        key: key.to_owned(),
+        value,
+        expected: expected.to_owned(),
+    })
+}
+
+fn require_stable_common_config_value(
+    root: &Path,
+    common_dir: &Path,
+    key: &str,
+    expected: &str,
+) -> Result<(), Error> {
+    require_common_config_value(common_dir, key, expected)?;
+    let value = read_common_git_config(common_dir, key)?;
+    ensure_context_stable_signing_config(root, key, &value)
+}
+
+fn ensure_context_stable_signing_config(root: &Path, key: &str, value: &str) -> Result<(), Error> {
+    let root = path_string(root);
+    let forbidden = [
+        ("/nix/store", "host-only Nix store path"),
+        ("/etc/wrix/keys", "container private-key path"),
+        ("/workspace", "container workspace path"),
+        (".ssh/deploy_keys", "private-key lookup path"),
+        ("WRIX_SIGNING_KEY", "environment private-key path"),
+    ];
+    if !root.is_empty() && root != "/" && value.contains(&root) {
+        return Err(Error::SigningConfigUnstable {
+            key: key.to_owned(),
+            value: value.to_owned(),
+            reason: String::from("workspace path"),
+        });
+    }
+    for (needle, reason) in forbidden {
+        if value.contains(needle) {
+            return Err(Error::SigningConfigUnstable {
+                key: key.to_owned(),
+                value: value.to_owned(),
+                reason: String::from(reason),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn signing_identity(root: &Path) -> Result<SigningIdentity, Error> {
+    let mut principals = Vec::new();
+    if let Some(value) = optional_git_config(root, "user.email")? {
+        push_principal(&mut principals, &value);
+    }
+    if let Some(value) = optional_env("GIT_AUTHOR_EMAIL")? {
+        push_principal(&mut principals, &value);
+    }
+    if let Some(value) = optional_env("GIT_COMMITTER_EMAIL")? {
+        push_principal(&mut principals, &value);
+    }
+    if principals.is_empty() {
+        principals.push(String::from("sandbox@wrix.dev"));
+    }
+    let email = principals
+        .first()
+        .cloned()
+        .unwrap_or_else(|| String::from("sandbox@wrix.dev"));
+    Ok(SigningIdentity {
+        name: signing_name(root)?,
+        email,
+        principals,
+    })
+}
+
+fn signing_name(root: &Path) -> Result<String, Error> {
+    if let Some(value) = optional_env("GIT_COMMITTER_NAME")? {
+        return Ok(value);
+    }
+    if let Some(value) = optional_env("GIT_AUTHOR_NAME")? {
+        return Ok(value);
+    }
+    if let Some(value) = optional_git_config(root, "user.name")? {
+        return Ok(value);
+    }
+    Ok(String::from("Wrix Init Verification"))
+}
+
+fn push_principal(principals: &mut Vec<String>, value: &str) {
+    let value = value.trim();
+    if value.is_empty() || value.chars().any(char::is_whitespace) {
+        return;
+    }
+    if principals.iter().any(|existing| existing == value) {
+        return;
+    }
+    principals.push(value.to_owned());
+}
+
+fn optional_env(name: &'static str) -> Result<Option<String>, Error> {
+    match env::var(name) {
+        Ok(value) => {
+            let value = value.trim();
+            if value.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(value.to_owned()))
+            }
+        }
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(source) => Err(Error::IdentityEnvInvalid { name, source }),
+    }
+}
+
+fn optional_git_config(root: &Path, key: &str) -> Result<Option<String>, Error> {
+    let output = ProcessCommand::new("git")
+        .arg("config")
+        .arg("--get")
+        .arg(key)
+        .current_dir(root)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(Error::GitIo)?;
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if output.status.success() {
+        if value.is_empty() {
+            return Ok(None);
+        }
+        return Ok(Some(value));
+    }
+    let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    if output.status.code() == Some(1) && detail.is_empty() {
+        return Ok(None);
+    }
+    Err(Error::GitConfigQuery {
+        key: key.to_owned(),
+        detail,
+    })
+}
+
+fn verify_signing_commit(root: &Path, identity: &SigningIdentity) -> Result<(), Error> {
+    let tree = git_stdout(root, &["mktree"])?;
+    let output = ProcessCommand::new("git")
+        .arg("commit-tree")
+        .arg("-S")
+        .arg(&tree)
+        .arg("-m")
+        .arg("wrix init signing verification")
+        .current_dir(root)
+        .env("GIT_AUTHOR_NAME", &identity.name)
+        .env("GIT_AUTHOR_EMAIL", &identity.email)
+        .env("GIT_COMMITTER_NAME", &identity.name)
+        .env("GIT_COMMITTER_EMAIL", &identity.email)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(Error::GitIo)?;
+    if !output.status.success() {
+        return Err(Error::SigningCommit {
+            detail: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        });
+    }
+    let commit = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if commit.is_empty() {
+        return Err(Error::SigningCommit {
+            detail: String::from("git commit-tree returned an empty commit id"),
+        });
+    }
+    let output = ProcessCommand::new("git")
+        .arg("verify-commit")
+        .arg(&commit)
+        .current_dir(root)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(Error::GitIo)?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(Error::SigningVerify {
+        detail: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+    })
+}
+
+fn git_stdout(root: &Path, args: &[&str]) -> Result<String, Error> {
+    let output = ProcessCommand::new("git")
+        .args(args)
+        .current_dir(root)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(Error::GitIo)?;
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned());
+    }
+    Err(Error::GitCommand {
+        command: args.join(" "),
         detail: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
     })
 }
@@ -1126,6 +1435,37 @@ enum Error {
     },
     /// failed to write Git config {key}: {detail}
     GitConfig { key: String, detail: String },
+    /// failed to read Git config {key}: {detail}
+    GitConfigQuery { key: String, detail: String },
+    /// {0}
+    Signing(#[from] crate::sign::Error),
+    /// cannot execute wrix-git-sign from PATH: {source}
+    SigningProgramIo { source: io::Error },
+    /// wrix-git-sign PATH probe failed: {detail}
+    SigningProgramProbe { detail: String },
+    /// signing Git config {key} is not context-stable ({reason}): {value}
+    SigningConfigUnstable {
+        key: String,
+        value: String,
+        reason: String,
+    },
+    /// signing Git config {key} is {value}, expected {expected}
+    SigningConfigMismatch {
+        key: String,
+        value: String,
+        expected: String,
+    },
+    /// {name} is not valid Unicode: {source}
+    IdentityEnvInvalid {
+        name: &'static str,
+        source: env::VarError,
+    },
+    /// Git signing verification command failed ({command}): {detail}
+    GitCommand { command: String, detail: String },
+    /// signed test commit failed: {detail}
+    SigningCommit { detail: String },
+    /// signed test commit did not verify: {detail}
+    SigningVerify { detail: String },
     /// core.sshCommand is not context-stable ({reason}): {value}
     TransportConfigUnstable { value: String, reason: String },
     /// core.sshCommand does not match the Wrix common-dir trampoline: {value}

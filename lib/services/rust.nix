@@ -41,6 +41,7 @@ let
       ''
         mkdir -p "$out/bin"
         makeWrapper "${workspace.bin}/bin/${name}" "$out/bin/${name}" ${concatStringsSep " " wrapperArgs}
+        ln -s "${workspace.bin}/bin/wrix-git-sign" "$out/bin/wrix-git-sign"
       '';
 
 in

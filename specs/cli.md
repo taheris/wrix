@@ -111,7 +111,7 @@ The online verifier must exercise the same Git config path Loom uses from `.loom
 - With `$HOME` and the effective-user home differing, the Git transport helper resolves `WRIX_DEPLOY_KEY` first, `$HOME/.ssh/deploy_keys/<key-name>` second, fails when neither exists, invokes SSH with strict pinned-host-key options without using user SSH config, default identities, or `StrictHostKeyChecking=no`, and leaves any Wrix-created SSH directories at `0700` plus `config` / `known_hosts` files at `0600`.
   [system](bash tests/cli/init-git-bootstrap.sh test_strict_context_aware_ssh_helper)
 - SSH commit signing is enabled by default; a missing `<key-name>-signing` key fails hard, `--no-sign` disables signing explicitly, and a signed test commit verifies against the generated allowed-signers file.
-  [system?](bash tests/cli/init-signing.sh test_signing_required_by_default)
+  [system](bash tests/cli/init-signing.sh test_signing_required_by_default)
 - `wrix init --deploy` generates separate passphraseless deploy and signing ed25519 keys with secure permissions when signing is enabled, registers the deploy key with write access and the signing key with GitHub, reuses matching existing keys, and replaces conflicts only with `--force`.
   [system?](bash tests/cli/init-deploy.sh test_github_deploy_and_signing_keys)
 - Online verification runs a fresh host-side Git operation from a minimal Loom-driver-like environment through the Wrix helper and distinguishes host-key verification failure from GitHub auth/repository authorization failure; `--offline` or `wrix.init.online_verify = false` skips network and GitHub API calls while preserving local verification.

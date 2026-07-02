@@ -77,22 +77,32 @@ write_fake_deploy_key() {
   printf '%s\n' "$key"
 }
 
+write_signing_key() {
+  local key="$TEST_TMP/signing-key"
+  ssh-keygen -q -t ed25519 -N '' -f "$key" >/dev/null
+  printf '%s\n' "$key"
+}
+
 run_init() {
   local repo="$1"
   local deploy_key="$2"
-  shift 2
-  (cd "$repo" && HOSTNAME=devhost WRIX_DEPLOY_KEY="$deploy_key" "$@")
+  local signing_key="$3"
+  local bin_dir
+  shift 3
+  bin_dir="$(dirname "$1")"
+  (cd "$repo" && PATH="$bin_dir:$PATH" HOSTNAME=devhost WRIX_DEPLOY_KEY="$deploy_key" WRIX_SIGNING_KEY="$signing_key" "$@")
 }
 
 test_defaults_and_overrides() {
-  local wrix_bin repo profile_config deploy_key output
+  local wrix_bin repo profile_config deploy_key signing_key output
   wrix_bin="$(build_wrix)"
   repo="$(setup_repo config-defaults)"
   profile_config="$TEST_TMP/profile-config.json"
   deploy_key="$(write_fake_deploy_key)"
+  signing_key="$(write_signing_key)"
   write_profile_config "$profile_config"
 
-  output="$(run_init "$repo" "$deploy_key" "$wrix_bin" init)"
+  output="$(run_init "$repo" "$deploy_key" "$signing_key" "$wrix_bin" init)"
   assert_policy_line "derived defaults" "$output" "deploy_key" "config-defaults-devhost"
   assert_policy_line "derived defaults" "$output" "sign_commits" "true"
   assert_policy_line "derived defaults" "$output" "remote" "origin"
@@ -102,7 +112,7 @@ test_defaults_and_overrides() {
     fail "wrix init created wrix.toml for default behavior"
   fi
 
-  output="$(run_init "$repo" "$deploy_key" "$wrix_bin" --profile-config "$profile_config" init)"
+  output="$(run_init "$repo" "$deploy_key" "$signing_key" "$wrix_bin" --profile-config "$profile_config" init)"
   assert_policy_line "profile config" "$output" "deploy_key" "profile-key"
   assert_policy_line "profile config" "$output" "remote" "origin"
 
@@ -117,7 +127,7 @@ remote = "upstream"
 prek_hooks = false
 online_verify = false
 TOML
-  output="$(run_init "$repo" "$deploy_key" "$wrix_bin" --profile-config "$profile_config" init)"
+  output="$(run_init "$repo" "$deploy_key" "$signing_key" "$wrix_bin" --profile-config "$profile_config" init)"
   assert_policy_line "wrix.toml" "$output" "deploy_key" "toml-key"
   assert_policy_line "wrix.toml" "$output" "sign_commits" "false"
   assert_policy_line "wrix.toml" "$output" "remote" "upstream"
@@ -134,7 +144,7 @@ remote = "upstream"
 prek_hooks = true
 online_verify = true
 TOML
-  output="$(run_init "$repo" "$deploy_key" "$wrix_bin" --profile-config "$profile_config" init --key flag-key --remote origin --offline --no-sign --no-hooks --force)"
+  output="$(run_init "$repo" "$deploy_key" "$signing_key" "$wrix_bin" --profile-config "$profile_config" init --key flag-key --remote origin --offline --no-sign --no-hooks --force)"
   assert_policy_line "flag overrides" "$output" "deploy_key" "flag-key"
   assert_policy_line "flag overrides" "$output" "sign_commits" "false"
   assert_policy_line "flag overrides" "$output" "remote" "origin"

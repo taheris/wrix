@@ -1,5 +1,3 @@
-mod init;
-
 use std::{
     env,
     io::{self, Write},
@@ -46,7 +44,7 @@ fn run(args: &[String], stdout: &mut impl Write, stderr: &mut impl Write) -> io:
         ),
         "service" => run_service(&root.args[1..], stdout, stderr),
         "beads" => run_beads(&root.args[1..], stdout, stderr),
-        "init" => init::run(
+        "init" => wrix_cli::init::run(
             root.profile_config.as_deref(),
             &root.args[1..],
             stdout,
