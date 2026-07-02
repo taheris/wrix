@@ -117,7 +117,7 @@ The online verifier must exercise the same Git config path Loom uses from `.loom
 - Online verification runs a fresh host-side Git operation from a minimal Loom-driver-like environment through the Wrix helper and distinguishes host-key verification failure from GitHub auth/repository authorization failure; `--offline` or `wrix.init.online_verify = false` skips network and GitHub API calls while preserving local verification.
   [system?](bash tests/cli/init-verify.sh test_online_and_offline_verification)
 - When `.pre-commit-config.yaml` exists and hook setup is enabled, `wrix init` points repo-local `core.hooksPath` at Wrix's prek hook bundle in the same shared config inherited by `.loom/integration`; when hooks are disabled by flag or config it leaves hook config unchanged.
-  [system?](bash tests/cli/init-prek.sh test_prek_hooks)
+  [system](bash tests/cli/init-prek.sh test_prek_hooks)
 
 ## Requirements
 

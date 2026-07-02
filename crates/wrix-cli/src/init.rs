@@ -25,6 +25,14 @@ const TRANSPORT_TRAMPOLINE: &str = concat!(
     "common_dir=\"$root/$common_dir\" ;; esac; ",
     "exec \"$common_dir/wrix/git-ssh\" \"$@\"' wrix-git-ssh",
 );
+const PREK_HOOKS_ENV: &str = "WRIX_PREK_HOOKS";
+const PREK_HOOK_NAMES: [&str; 5] = [
+    "pre-commit",
+    "pre-push",
+    "prepare-commit-msg",
+    "post-checkout",
+    "post-merge",
+];
 
 pub fn run(
     profile_config_path: Option<&Path>,
@@ -239,6 +247,7 @@ impl Plan {
             0o700,
         )?;
         write_common_git_config(&common_dir, "core.sshCommand", TRANSPORT_TRAMPOLINE)?;
+        configure_prek_hooks(&self.root, &common_dir, self.hooks)?;
         verify_transport_helper(
             &self.root,
             &common_dir,
@@ -497,6 +506,70 @@ fn write_common_git_config(common_dir: &Path, key: &str, value: &str) -> Result<
     Err(Error::GitConfig {
         key: key.to_owned(),
         detail: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+    })
+}
+
+fn configure_prek_hooks(root: &Path, common_dir: &Path, policy: HookPolicy) -> Result<(), Error> {
+    if policy == HookPolicy::Disabled || !root.join(".pre-commit-config.yaml").is_file() {
+        return Ok(());
+    }
+    let hooks_path = resolve_prek_hooks_path()?;
+    write_common_git_config(common_dir, "core.hooksPath", &path_string(&hooks_path))?;
+    verify_prek_hooks(common_dir, &hooks_path)
+}
+
+fn resolve_prek_hooks_path() -> Result<PathBuf, Error> {
+    let value = match env::var(PREK_HOOKS_ENV) {
+        Ok(value) => value,
+        Err(env::VarError::NotPresent) => return Err(Error::PrekHooksEnvMissing),
+        Err(source) => return Err(Error::PrekHooksEnvInvalid { source }),
+    };
+    if value.trim().is_empty() {
+        return Err(Error::PrekHooksEnvEmpty);
+    }
+    let path = PathBuf::from(value);
+    let metadata = fs::metadata(&path).map_err(|source| Error::PrekHooksIo {
+        path: path_string(&path),
+        source,
+    })?;
+    if !metadata.is_dir() {
+        return Err(Error::PrekHooksNotDirectory {
+            path: path_string(&path),
+        });
+    }
+    path.canonicalize().map_err(|source| Error::PrekHooksIo {
+        path: path_string(&path),
+        source,
+    })
+}
+
+fn verify_prek_hooks(common_dir: &Path, hooks_path: &Path) -> Result<(), Error> {
+    let configured = read_common_git_config(common_dir, "core.hooksPath")?;
+    let expected = path_string(hooks_path);
+    if configured != expected {
+        return Err(Error::PrekHooksConfigMismatch {
+            value: configured,
+            expected,
+        });
+    }
+    for hook_name in PREK_HOOK_NAMES {
+        require_executable_hook(hooks_path.join(hook_name))?;
+    }
+    Ok(())
+}
+
+fn require_executable_hook(path: impl AsRef<Path>) -> Result<(), Error> {
+    let path = path.as_ref();
+    let metadata = fs::metadata(path).map_err(|source| Error::PrekHooksIo {
+        path: path_string(path),
+        source,
+    })?;
+    let is_executable = metadata.is_file() && (metadata.permissions().mode() & 0o111) != 0;
+    if is_executable {
+        return Ok(());
+    }
+    Err(Error::PrekHookNotExecutable {
+        path: path_string(path),
     })
 }
 
@@ -1057,6 +1130,20 @@ enum Error {
     TransportConfigUnstable { value: String, reason: String },
     /// core.sshCommand does not match the Wrix common-dir trampoline: {value}
     TransportConfigMismatch { value: String },
+    /// hook setup is enabled but WRIX_PREK_HOOKS is not set; use the Nix-packaged wrix or pass --no-hooks
+    PrekHooksEnvMissing,
+    /// WRIX_PREK_HOOKS is not valid Unicode: {source}
+    PrekHooksEnvInvalid { source: env::VarError },
+    /// WRIX_PREK_HOOKS is empty; use the Nix-packaged wrix or pass --no-hooks
+    PrekHooksEnvEmpty,
+    /// cannot read Wrix prek hook bundle at {path}: {source}
+    PrekHooksIo { path: String, source: io::Error },
+    /// Wrix prek hook bundle is not a directory: {path}
+    PrekHooksNotDirectory { path: String },
+    /// Wrix prek hook is missing or not executable: {path}
+    PrekHookNotExecutable { path: String },
+    /// core.hooksPath is {value}, expected Wrix prek hook bundle {expected}
+    PrekHooksConfigMismatch { value: String, expected: String },
     /// WRIX_DEPLOY_KEY does not point at a file: {path}
     DeployKeyEnvMissing { path: String },
     /// HOME is not set; cannot resolve fallback deploy key: {source}

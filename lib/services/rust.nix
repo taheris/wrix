@@ -1,6 +1,8 @@
 { pkgs, rustProfile }:
 
 let
+  inherit (builtins) concatStringsSep;
+
   workspace = rustProfile.buildPackage {
     src = ../..;
     cargoLock = ../../Cargo.lock;
@@ -11,18 +13,34 @@ let
     };
   };
 
+  prekHooksBundle = import ../prek/bundle.nix { inherit pkgs; };
+
+  binaryMeta = name: {
+    description = "Rust ${name} binary";
+    mainProgram = name;
+  };
+
   mkBinaryPackage =
     name:
     pkgs.runCommand name
       {
-        meta = {
-          description = "Rust ${name} binary";
-          mainProgram = name;
-        };
+        meta = binaryMeta name;
       }
       ''
         mkdir -p "$out/bin"
         ln -s "${workspace.bin}/bin/${name}" "$out/bin/${name}"
+      '';
+
+  mkWrappedBinaryPackage =
+    name: wrapperArgs:
+    pkgs.runCommand name
+      {
+        nativeBuildInputs = [ pkgs.makeWrapper ];
+        meta = binaryMeta name;
+      }
+      ''
+        mkdir -p "$out/bin"
+        makeWrapper "${workspace.bin}/bin/${name}" "$out/bin/${name}" ${concatStringsSep " " wrapperArgs}
       '';
 
 in
@@ -30,7 +48,11 @@ in
   inherit (workspace) cargoArtifacts clippy nextest;
 
   package = workspace.bin;
-  wrix = mkBinaryPackage "wrix";
+  wrix = mkWrappedBinaryPackage "wrix" [
+    "--set"
+    "WRIX_PREK_HOOKS"
+    "${prekHooksBundle}"
+  ];
   cacheHook = mkBinaryPackage "wrix-cache-hook";
   cachePublish = mkBinaryPackage "wrix-cache-publish";
   cacheServe = mkBinaryPackage "wrix-cache-serve";

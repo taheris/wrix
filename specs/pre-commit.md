@@ -113,7 +113,7 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
 - `mkDevShell` sets `core.hooksPath` to the `wrix.prekHooks` store path on every devshell entry when `.pre-commit-config.yaml` is present
   [system](bash tests/profiles/mkdevshell-prek.sh test_auto_set_when_config_present)
 - `wrix init` sets shared repo-local `core.hooksPath` to the same `wrix.prekHooks` bundle for ordinary host Git and `.loom/integration`-style linked worktrees when `.pre-commit-config.yaml` is present and hook setup is enabled
-  [system?](bash tests/cli/init-prek.sh test_prek_hooks)
+  [system](bash tests/cli/init-prek.sh test_prek_hooks)
 - The pre-commit and pre-push shims both invoke `prek hook-impl --hook-type=<stage>` (not `prek run`, which would mistake git's positional args for hook/project selectors)
   [system](bash tests/profiles/prek-hooks-bundle.sh test_shims_are_plain_hook_impl)
 - No shim sources `lock.sh`, calls `_prek_acquire_lock`, or invokes `flock`; every shim invokes `prek hook-impl --hook-type=<its-stage>` and pins the Nix-store `prek` package on `PATH`
