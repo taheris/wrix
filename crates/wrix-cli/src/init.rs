@@ -61,10 +61,10 @@ pub fn run(
     }
 }
 
+pub const HELP: &str = "Initialize repository Git policy.\n\nUsage: wrix init [--deploy] [--key <name>] [--remote <name>] [--offline] [--no-sign] [--no-hooks] [--force]\n\nOptions:\n  --deploy\n  --key <name>\n  --remote <name>\n  --offline\n  --no-sign\n  --no-hooks\n  --force\n";
+
 pub fn write_help(stdout: &mut impl Write) -> io::Result<()> {
-    stdout.write_all(
-        b"Initialize repository Git policy.\n\nUsage: wrix init [--deploy] [--key <name>] [--remote <name>] [--offline] [--no-sign] [--no-hooks] [--force]\n\nOptions:\n  --deploy\n  --key <name>\n  --remote <name>\n  --offline\n  --no-sign\n  --no-hooks\n  --force\n",
-    )
+    stdout.write_all(HELP.as_bytes())
 }
 
 fn is_help(arg: &str) -> bool {

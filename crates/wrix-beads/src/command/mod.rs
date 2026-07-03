@@ -19,9 +19,11 @@ impl Command {
     }
 }
 
+pub const HELP: &str =
+    "Manage beads workflows.\n\nUsage: wrix beads <command>\n\nCommands:\n  push\n";
+
 pub fn write_help(stdout: &mut impl Write) -> io::Result<()> {
-    stdout
-        .write_all(b"Manage beads workflows.\n\nUsage: wrix beads <command>\n\nCommands:\n  push\n")
+    stdout.write_all(HELP.as_bytes())
 }
 
 pub fn run(

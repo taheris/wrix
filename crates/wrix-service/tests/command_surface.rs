@@ -29,7 +29,8 @@ fn service_surface_is_reached_through_wrix_root() -> TestResult {
         let rejected = run_wrix(&[legacy, "--help"])?;
         assert_eq!(rejected.code, ExitCode::FAILURE);
         assert!(rejected.stdout.is_empty());
-        assert!(rejected.stderr.contains("unknown command:"));
+        assert!(rejected.stderr.contains(legacy));
+        assert!(rejected.stderr.contains("Usage: wrix <command>"));
         assert!(!rejected.stderr.contains("Usage: wrix service"));
     }
 

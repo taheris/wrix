@@ -6,6 +6,7 @@ let
   workspace = rustProfile.buildPackage {
     src = ../..;
     cargoLock = ../../Cargo.lock;
+    nativeBuildInputs = [ pkgs.git ];
 
     meta = {
       description = "Rust wrix service and cache CLI foundation";

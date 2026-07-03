@@ -36,14 +36,16 @@ impl Command {
     }
 }
 
+pub const RUN_HELP: &str =
+    "Run an interactive sandbox.\n\nUsage: wrix [--profile-config <file>] run [DIR] [CMD ...]\n";
+pub const SPAWN_HELP: &str = "Spawn a programmatic sandbox.\n\nUsage: wrix [--profile-config <file>] spawn --spawn-config <file> [--stdio]\n";
+
 pub fn write_run_help(stdout: &mut impl Write) -> io::Result<()> {
-    stdout.write_all(b"Run an interactive sandbox.\n\nUsage: wrix [--profile-config <file>] run [DIR] [CMD ...]\n")
+    stdout.write_all(RUN_HELP.as_bytes())
 }
 
 pub fn write_spawn_help(stdout: &mut impl Write) -> io::Result<()> {
-    stdout.write_all(
-        b"Spawn a programmatic sandbox.\n\nUsage: wrix [--profile-config <file>] spawn --spawn-config <file> [--stdio]\n",
-    )
+    stdout.write_all(SPAWN_HELP.as_bytes())
 }
 
 pub fn run(

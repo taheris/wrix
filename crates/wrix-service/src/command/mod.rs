@@ -53,16 +53,15 @@ impl Dolt {
     }
 }
 
+pub const HELP: &str = "Manage workspace services.\n\nUsage: wrix service <command>\n\nCommands:\n  start\n  stop\n  status\n  logs\n  endpoints\n  dolt <status|socket|port|host|attach|gc|wait>\n  cache <status|publish|warm|prune|rotate-key>\n";
+pub const DOLT_HELP: &str = "Manage the workspace Dolt service.\n\nUsage: wrix service dolt <command>\n\nCommands:\n  status\n  socket\n  port\n  host\n  attach\n  gc\n  wait\n";
+
 pub fn write_help(stdout: &mut impl Write) -> io::Result<()> {
-    stdout.write_all(
-        b"Manage workspace services.\n\nUsage: wrix service <command>\n\nCommands:\n  start\n  stop\n  status\n  logs\n  endpoints\n  dolt <status|socket|port|host|attach|gc|wait>\n  cache <status|publish|warm|prune|rotate-key>\n",
-    )
+    stdout.write_all(HELP.as_bytes())
 }
 
 pub fn write_dolt_help(stdout: &mut impl Write) -> io::Result<()> {
-    stdout.write_all(
-        b"Manage the workspace Dolt service.\n\nUsage: wrix service dolt <command>\n\nCommands:\n  status\n  socket\n  port\n  host\n  attach\n  gc\n  wait\n",
-    )
+    stdout.write_all(DOLT_HELP.as_bytes())
 }
 
 pub fn run_top(command: Top, args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode> {

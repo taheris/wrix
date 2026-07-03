@@ -9,6 +9,7 @@ name = "wrix"
 path = "src/main.rs"
 
 [dependencies]
+clap = { workspace = true }
 displaydoc = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -16,6 +17,9 @@ wrix-beads = { workspace = true }
 wrix-cache = { workspace = true }
 wrix-sandbox = { workspace = true }
 wrix-service = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true
