@@ -2,7 +2,7 @@
 # Verify shape and presence of the profile-image manifest produced by
 # `wrix.lib.${system}.mkProfileImages` (specs/profiles.md).
 #
-# Three contracts:
+# Four contracts:
 #
 # 1. test_manifest_shape — `mkProfileImages { rust = ...; }` produces JSON
 #    whose profile entry is keyed by the image's agent and whose variant carries
@@ -14,8 +14,12 @@
 #    and `packages.profile-images-pi` evaluate for every built-in profile
 #    (base, rust, python), and `packages.default` resolves to `sandbox-rust-pi`.
 #
-# 3. test_manifest_derivation_is_lightweight — the manifest JSON derivation
-#    builds without realizing the profile images it names.
+# 3. test_runtime_manifest_retains_store_context — the Pi runtime manifest
+#    exported to Loom retains Nix context on `source` and `profile_config`.
+#
+# 4. test_eval_manifest_access_is_lightweight — `passthru.manifest` remains
+#    available through evaluation-only inspection without building the runtime
+#    manifest derivation exported to Loom.
 #
 # Usage: tests/profiles/profile-images-manifest.sh [function_name]
 # Each function exits 0 on PASS, non-zero on FAIL, 77 to skip.
@@ -169,22 +173,76 @@ test_flake_outputs_present() {
     fi
 }
 
-test_manifest_derivation_is_lightweight() {
+test_runtime_manifest_retains_store_context() {
     local flake_url="git+file://$REPO_ROOT"
-    local result
 
-    if ! result=$(nix build --print-out-paths --no-link --no-warn-dirty "$flake_url#profile-images-pi"); then
-        echo "packages.profile-images-pi failed to build" >&2
+    local system
+    if ! system=$(nix eval --raw --impure --no-warn-dirty --expr 'builtins.currentSystem'); then
+        echo "nix eval builtins.currentSystem failed" >&2
+        return 1
+    fi
+
+    local result
+    if ! result=$(nix eval --json --impure --no-warn-dirty --expr "
+      let
+        flake = builtins.getFlake \"$flake_url\";
+        manifest = flake.packages.${system}.profile-images-pi.passthru.manifest;
+        entryContext = entry: {
+          source = builtins.hasContext entry.source;
+          profile_config = builtins.hasContext entry.profile_config;
+        };
+      in {
+        runtimeJson = builtins.hasContext (builtins.toJSON manifest);
+        base = entryContext manifest.base.pi;
+        rust = entryContext manifest.rust.pi;
+        python = entryContext manifest.python.pi;
+      }
+    "); then
+        echo "nix eval of profile-images-pi context failed" >&2
         return 1
     fi
 
     if ! jq -e '
-      (.base.pi.source | type == "string") and
-      (.rust.pi.source | type == "string") and
-      (.python.pi.source | type == "string") and
-      (.rust.pi.profile_config | type == "string")
-    ' "$result" >/dev/null; then
-        echo "packages.profile-images-pi did not produce the expected manifest JSON" >&2
+      .runtimeJson == true and
+      all([.base, .rust, .python][]; .source == true and .profile_config == true)
+    ' <<<"$result" >/dev/null; then
+        echo "packages.profile-images-pi runtime manifest lost Nix store context: $result" >&2
+        return 1
+    fi
+}
+
+test_eval_manifest_access_is_lightweight() {
+    local flake_url="git+file://$REPO_ROOT"
+
+    local system
+    if ! system=$(nix eval --raw --impure --no-warn-dirty --expr 'builtins.currentSystem'); then
+        echo "nix eval builtins.currentSystem failed" >&2
+        return 1
+    fi
+
+    local result
+    if ! result=$(nix eval --json --impure --no-warn-dirty --expr "
+      let
+        flake = builtins.getFlake \"$flake_url\";
+        manifest = flake.packages.${system}.profile-images-pi.passthru.manifest;
+      in {
+        baseSource = manifest.base.pi.source;
+        rustSource = manifest.rust.pi.source;
+        pythonSource = manifest.python.pi.source;
+        rustProfileConfig = manifest.rust.pi.profile_config;
+      }
+    "); then
+        echo "nix eval of profile-images-pi passthru manifest failed" >&2
+        return 1
+    fi
+
+    if ! jq -e '
+      (.baseSource | type == "string") and
+      (.rustSource | type == "string") and
+      (.pythonSource | type == "string") and
+      (.rustProfileConfig | type == "string")
+    ' <<<"$result" >/dev/null; then
+        echo "packages.profile-images-pi passthru manifest did not expose expected JSON strings: $result" >&2
         return 1
     fi
 }
