@@ -10,8 +10,10 @@ let
     bash
     coreutils
     findutils
+    gawk
     git
     gnugrep
+    gnused
     jq
     nix
     python3
@@ -20,6 +22,7 @@ let
 
   domainRegistries = [
     (import ./cli.nix { inherit pkgs system; })
+    (import ./services.nix { inherit pkgs system; })
   ];
   registry = builtins.foldl' (acc: next: acc // next) { } domainRegistries;
   targetNames = sort builtins.lessThan (attrNames registry);
@@ -38,7 +41,7 @@ let
   verify = writeShellScriptBin "verify" ''
     set -euo pipefail
 
-    export PATH="${bash}/bin:${coreutils}/bin:${findutils}/bin:${git}/bin:${gnugrep}/bin:${jq}/bin:${nix}/bin:${python3}/bin:$PATH"
+    export PATH="${bash}/bin:${coreutils}/bin:${findutils}/bin:${gawk}/bin:${git}/bin:${gnugrep}/bin:${gnused}/bin:${jq}/bin:${nix}/bin:${python3}/bin:$PATH"
     SELF="$0"
 
     fail() {
@@ -98,6 +101,24 @@ let
       else
         git rev-parse --show-toplevel
       fi
+    }
+
+    run_repo_script() {
+      local relative_path="$1"
+      shift
+      local root
+      root="$(repo_root)"
+      REPO_ROOT="$root" bash "$root/$relative_path" "$@"
+    }
+
+    run_repo_script_with_wrix() {
+      local relative_path="$1"
+      shift
+      local root
+      local package
+      root="$(repo_root)"
+      package="$(build_flake_package wrix)"
+      WRIX_TEST_WRIX_BIN="$package/bin/wrix" REPO_ROOT="$root" bash "$root/$relative_path" "$@"
     }
 
     build_flake_package() {
@@ -186,6 +207,12 @@ let
       fi
       status="$?"
       evidence="$(summarize_evidence "$out_file" "failed with exit $status")"
+      if [[ "$status" -eq 77 ]]; then
+        cat "$out_file" >&2
+        rm -f "$out_file"
+        emit_verdict "$target" true "skipped: $evidence"
+        return 0
+      fi
       cat "$out_file" >&2
       rm -f "$out_file"
       emit_verdict "$target" false "$evidence"

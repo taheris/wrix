@@ -31,6 +31,10 @@ fail() {
 }
 
 build_wrix() {
+  if [[ -n "${WRIX_TEST_WRIX_BIN:-}" ]]; then
+    printf '%s\n' "$WRIX_TEST_WRIX_BIN"
+    return 0
+  fi
   cargo build --quiet -p wrix-cli --bin wrix
   printf '%s\n' "$REPO_ROOT/target/debug/wrix"
 }

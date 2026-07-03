@@ -32,6 +32,10 @@ require_nix() {
 }
 
 build_wrix() {
+  if [[ -n "${WRIX_TEST_WRIX_BIN:-}" ]]; then
+    printf '%s\n' "$WRIX_TEST_WRIX_BIN"
+    return 0
+  fi
   cargo build --quiet -p wrix-cli --bin wrix || return 1
   printf '%s\n' "$REPO_ROOT/target/debug/wrix"
 }

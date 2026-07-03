@@ -149,11 +149,11 @@ Direct remote-builder access to the local project cache is out of scope for v1. 
 - A workspace that starts services gets a container named `<repo>-service`; the same service identity path yields the same container name, preferred service ports, state roots, and cache root, while two different checkout paths do not collide
   [test](crates/wrix-service/tests/lifecycle.rs::workspace_identity_is_stable_and_collision_resistant)
 - `mkDevShell` starts the service container by default for the project cache, `nixCache = false` suppresses cache-only startup, and any service container survives the process that evaluated the shell hook
-  [system?](verify:services.devshell-start-independent)
+  [system](verify:services.devshell-start-independent)
 - On Linux, `wrix service start` installs the service image through the shared runtime image installer from an archive-less `nix-descriptor` source; on Darwin it uses the tar-loadable `docker-archive` fallback
-  [system?](verify:services.start-loads-image-source)
+  [system](verify:services.start-loads-image-source)
 - The service image carries wrix-managed image labels, including `wrix.managed=true` and `wrix.image.kind=service`
-  [system?](verify:services.image-labels)
+  [system](verify:services.image-labels)
 - Cache-only service startup is suppressed for temp-directory scratch workspaces, so tests and integration runs do not accumulate `tmp.*-service` containers
   [test](crates/wrix-service/tests/lifecycle.rs::temp_cache_only_workspace_does_not_start_service)
 - Loom bead clone paths under `.loom/beads/<id>` use the outer repository service identity, so launches do not accumulate bead-named `*-service` containers
@@ -163,13 +163,13 @@ Direct remote-builder access to the local project cache is out of scope for v1. 
 - Service management is exposed through `wrix service ...`, session-close sync is exposed through `wrix beads push` per `cli.md`, and no `beads-dolt`, `beads-push`, `wrix-svc`, or `<repo>-beads` compatibility surface is installed or required
   [test](crates/wrix-service/tests/command_surface.rs::service_surface_is_reached_through_wrix_root)
 - Rust packaging exposes `wrix` as the human-facing CLI plus explicit helper binaries from `wrix-cache`; wrix does not rely on hidden private multiplexer subcommands
-  [check?](verify:services.rust-helper-binaries)
+  [check](verify:services.rust-helper-binaries)
 - Linux beads clients reach Dolt through the workspace Unix socket, while Darwin beads clients receive the service container's TCP host/port endpoint
   [test](crates/wrix-service/tests/lifecycle.rs::dolt_endpoint_transport_is_platform_specific)
 - Default `mkDevShell` cache enablement creates Linux XDG state/cache roots or Darwin Library state/cache roots, plus GC-root directory, signing key, public key, publish-root manifest, pending directory, lock file, status file, and endpoint metadata outside `/workspace`; `nixCache = false` does not create cache state solely for cache use
   [test](crates/wrix-service/tests/cache_state.rs::state_layout_is_outside_workspace_and_respects_opt_out)
 - Host devshell Nix uses `file://<cache-root>` as the project cache substituter, trusts the generated public key, enables `builders-use-substitutes`, installs a project-specific immutable post-build hook, and fails loudly when the host Nix daemon ignores any required setting
-  [system?](verify:services.host-nix-config)
+  [system](verify:services.host-nix-config)
 - `wrix run` and `wrix spawn` inject container `NIX_CONFIG` that points at the project cache HTTP endpoint, trusts only the generated public key for that cache, and enables `builders-use-substitutes`
   [test](crates/wrix-sandbox/tests/project_cache.rs::run_and_spawn_inject_container_pull_config)
 - The service cache HTTP endpoint is a Rust static read-only server for `<cache-root>`, uses an explicit persisted loopback host port in the `21000–22999` range, serves only Nix binary-cache paths, and does not require container DNS for sandbox substitution
@@ -177,7 +177,7 @@ Direct remote-builder access to the local project cache is out of scope for v1. 
 - Sandboxes receive no cache signing key, no durable state root mount, no host `/nix/store` mount, and no host Nix daemon socket as part of project-cache integration
   [test](crates/wrix-sandbox/tests/project_cache.rs::sandbox_cache_integration_excludes_host_store_and_secrets)
 - With `WRIX_NETWORK=limit`, sandbox Nix can reach exactly the project cache endpoint while unrelated host-local services remain outside the generated allowlist
-  [system?](verify:services.limit-mode-cache-endpoint)
+  [system](verify:services.limit-mode-cache-endpoint)
 - The post-build hook drops privileges before publishing, never executes workspace files, and publishes only when `DRV_PATH` matches a configured publish-root derivation in `<state-root>/publish-roots.json`
   [test](crates/wrix-cache/tests/hook.rs::post_build_hook_scopes_publish_to_manifest_roots)
 - `wrix service cache publish` refreshes the publish manifest, publishes only already-realized configured roots, drains matching pending records, updates GC markers, and does not build missing roots
@@ -197,7 +197,7 @@ Direct remote-builder access to the local project cache is out of scope for v1. 
 - `wrix service cache status` reports cache size and warns above the default 50 GiB soft threshold without deleting reachable entries solely to satisfy that threshold
   [test](crates/wrix-cache/tests/publisher.rs::status_warns_above_soft_size_without_pruning)
 - The container-facing cache transport is HTTP only; wrix does not configure Unix-socket cache substituters, host Nix daemon sockets, shared mutable `/nix/store`, or host-store-serving tools for sandbox cache reads
-  [check?](verify:services.cache-transport-http-only)
+  [check](verify:services.cache-transport-http-only)
 
 ## Requirements
 
