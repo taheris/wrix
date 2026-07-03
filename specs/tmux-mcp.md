@@ -81,9 +81,9 @@ The tmux server does not define a per-server `-debug` or `-tmux` profile variant
 ## Success Criteria
 
 - The tmux-mcp integration suite passes: pane lifecycle (create/list/kill), `send_keys` + `capture_pane` round-trip, exited-pane status reporting, error-handling envelopes, audit-log JSON-Lines format, and session cleanup on server exit
-  [system?](verify:tmux-mcp.integration)
+  [system](verify:tmux-mcp.integration)
 - `mcp.tmux` composes with the rust profile via an explicit `mkSandbox { mcp.tmux = { }; }` instantiation: the image build succeeds, tmux and tmux-mcp resolve on PATH inside the container, and the MCP server responds to a JSON-RPC `initialize` request
-  [system?](verify:tmux-mcp.e2e-sandbox)
+  [system](verify:tmux-mcp.e2e-sandbox)
 - Tool error responses construct `isError: true` envelopes via the MCP standard path
   [test](mcp::tests::tool_handler_validation_errors_use_success_envelope)
 - No custom error-code field is present in the error envelope (the consumer reads plain text)

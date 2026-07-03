@@ -23,6 +23,7 @@ let
   domainRegistries = [
     (import ./cli.nix { inherit pkgs system; })
     (import ./services.nix { inherit pkgs system; })
+    (import ./tmux-mcp.nix { inherit pkgs system; })
   ];
   registry = builtins.foldl' (acc: next: acc // next) { } domainRegistries;
   targetNames = sort builtins.lessThan (attrNames registry);
@@ -200,12 +201,18 @@ let
       local status
       local evidence
       out_file="$(mktemp -t wrix-verify.XXXXXX)"
-      if run_target "$target" >"$out_file" 2>&1; then
+      set +e
+      (
+        set -euo pipefail
+        run_target "$target"
+      ) >"$out_file" 2>&1
+      status="$?"
+      set -e
+      if [[ "$status" -eq 0 ]]; then
         rm -f "$out_file"
         emit_verdict "$target" true passed
         return 0
       fi
-      status="$?"
       evidence="$(summarize_evidence "$out_file" "failed with exit $status")"
       if [[ "$status" -eq 77 ]]; then
         cat "$out_file" >&2
