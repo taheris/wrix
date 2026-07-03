@@ -4,5 +4,8 @@ edition.workspace = true
 license.workspace = true
 version.workspace = true
 
+[dev-dependencies]
+tempfile = { workspace = true }
+
 [lints]
 workspace = true
