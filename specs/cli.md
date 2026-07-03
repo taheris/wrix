@@ -125,9 +125,9 @@ The online verifier must exercise the same Git config path Loom uses from `.loom
 - SSH commit signing is enabled by default; a missing `<key-name>-signing` key fails hard, `--no-sign` disables signing explicitly, and a signed test commit verifies against the generated allowed-signers file.
   [test](crates/wrix-cli/tests/init_signing.rs::signing_required_by_default)
 - `wrix init --deploy` generates separate passphraseless deploy and signing ed25519 keys with secure permissions when signing is enabled, registers the deploy key with write access and the signing key with GitHub, reuses matching existing keys, and replaces conflicts only with `--force`.
-  [test?](crates/wrix-cli/tests/init_deploy.rs::github_deploy_and_signing_keys)
+  [test](crates/wrix-cli/tests/init_deploy.rs::github_deploy_and_signing_keys)
 - Online verification runs a fresh host-side Git operation from a minimal Loom-driver-like environment through the Wrix helper and distinguishes host-key verification failure from GitHub auth/repository authorization failure; `--offline` or `wrix.init.online_verify = false` skips network and GitHub API calls while preserving local verification.
-  [test?](crates/wrix-cli/tests/init_verify.rs::online_and_offline_verification)
+  [test](crates/wrix-cli/tests/init_verify.rs::online_and_offline_verification)
 - When `.pre-commit-config.yaml` exists and hook setup is enabled, `wrix init` points repo-local `core.hooksPath` at Wrix's prek hook bundle in the same shared config inherited by `.loom/integration`; when hooks are disabled by flag or config it leaves hook config unchanged.
   [test](crates/wrix-cli/tests/init_prek.rs::prek_hooks)
 

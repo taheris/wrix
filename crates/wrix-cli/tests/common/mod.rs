@@ -202,6 +202,231 @@ pub fn write_online_success_git(path: &Path) -> TestResult<PathBuf> {
     Ok(path.to_path_buf())
 }
 
+pub fn write_capturing_git(
+    path: &Path,
+    mode_file: &Path,
+    capture_dir: &Path,
+) -> TestResult<PathBuf> {
+    fs::create_dir_all(path)?;
+    let real_git = command_path("git")?;
+    let script = r#"#!/usr/bin/env bash
+set -euo pipefail
+
+capture_dir=@CAPTURE_DIR@
+mode_file=@MODE_FILE@
+for arg in "$@"; do
+  if [[ "$arg" == "ls-remote" ]]; then
+    mkdir -p "$capture_dir"
+    pwd -P >"$capture_dir/cwd"
+    printf '%s\n' "$@" >"$capture_dir/args"
+    env | sort >"$capture_dir/env"
+    mode="$(<"$mode_file")"
+    case "$mode" in
+      success)
+        printf '%s\tHEAD\n' "0123456789012345678901234567890123456789"
+        exit 0
+        ;;
+      host-key)
+        printf 'Host key verification failed.\n' >&2
+        exit 128
+        ;;
+      auth)
+        printf 'Permission denied (publickey).\nfatal: Could not read from remote repository.\n' >&2
+        exit 128
+        ;;
+      fail-if-online)
+        printf 'unexpected online verification\n' >&2
+        exit 99
+        ;;
+      *)
+        printf 'unknown fake git mode: %s\n' "$mode" >&2
+        exit 98
+        ;;
+    esac
+  fi
+done
+exec @REAL_GIT@ "$@"
+"#
+    .replace(
+        "@CAPTURE_DIR@",
+        &shell_single_quote(&capture_dir.display().to_string()),
+    )
+    .replace(
+        "@MODE_FILE@",
+        &shell_single_quote(&mode_file.display().to_string()),
+    )
+    .replace(
+        "@REAL_GIT@",
+        &shell_single_quote(&real_git.display().to_string()),
+    );
+    let git = path.join("git");
+    fs::write(&git, script)?;
+    set_mode(&git, 0o700)?;
+    Ok(path.to_path_buf())
+}
+
+pub fn write_fake_gh(path: &Path, state_dir: &Path, log_file: &Path) -> TestResult<PathBuf> {
+    fs::create_dir_all(path)?;
+    fs::create_dir_all(state_dir)?;
+    if !log_file.exists() {
+        fs::write(log_file, "")?;
+    }
+    let script = r#"#!/usr/bin/env bash
+set -euo pipefail
+
+state_dir=@STATE_DIR@
+log_file=@LOG_FILE@
+
+get_field() {
+  local prefix="$1"
+  shift
+  local field
+  for field in "$@"; do
+    if [[ "$field" == "$prefix"* ]]; then
+      printf '%s\n' "${field#"$prefix"}"
+      return 0
+    fi
+  done
+  printf 'missing field: %s\n' "$prefix" >&2
+  return 1
+}
+
+write_deploy_list() {
+  if [[ ! -f "$state_dir/deploy_title" ]]; then
+    printf '[]\n'
+    return 0
+  fi
+  local id title key read_only
+  id="$(<"$state_dir/deploy_id")"
+  title="$(<"$state_dir/deploy_title")"
+  key="$(<"$state_dir/deploy_key")"
+  read_only="$(<"$state_dir/deploy_read_only")"
+  printf '[{"id":%s,"title":"%s","key":"%s","read_only":%s}]\n' "$id" "$title" "$key" "$read_only"
+}
+
+write_signing_list() {
+  if [[ ! -f "$state_dir/signing_title" ]]; then
+    printf '[]\n'
+    return 0
+  fi
+  local id title key
+  id="$(<"$state_dir/signing_id")"
+  title="$(<"$state_dir/signing_title")"
+  key="$(<"$state_dir/signing_key")"
+  printf '[{"id":%s,"title":"%s","key":"%s"}]\n' "$id" "$title" "$key"
+}
+
+if [[ "${1:-}" != "api" ]]; then
+  printf 'unsupported gh command\n' >&2
+  exit 2
+fi
+shift
+method="GET"
+endpoint=""
+fields=()
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --method)
+      method="$2"
+      shift 2
+      ;;
+    --raw-field | --field)
+      fields+=("$2")
+      shift 2
+      ;;
+    --*)
+      printf 'unsupported gh api option: %s\n' "$1" >&2
+      exit 2
+      ;;
+    *)
+      if [[ -z "$endpoint" ]]; then
+        endpoint="$1"
+      fi
+      shift
+      ;;
+  esac
+done
+printf '%s %s %s\n' "$method" "$endpoint" "${fields[*]}" >>"$log_file"
+
+if [[ "$method" == "GET" && "$endpoint" == repos/example/*/keys\?per_page=100 ]]; then
+  write_deploy_list
+elif [[ "$method" == "GET" && "$endpoint" == "user/ssh_signing_keys?per_page=100" ]]; then
+  write_signing_list
+elif [[ "$method" == "POST" && "$endpoint" == repos/example/*/keys ]]; then
+  title="$(get_field "title=" "${fields[@]}")"
+  key="$(get_field "key=" "${fields[@]}")"
+  read_only="$(get_field "read_only=" "${fields[@]}")"
+  if [[ "$read_only" != "false" ]]; then
+    printf 'deploy key was not requested with write access\n' >&2
+    exit 3
+  fi
+  printf '1\n' >"$state_dir/deploy_id"
+  printf '%s\n' "$title" >"$state_dir/deploy_title"
+  printf '%s\n' "$key" >"$state_dir/deploy_key"
+  printf '%s\n' "$read_only" >"$state_dir/deploy_read_only"
+  printf '{"id":1}\n'
+elif [[ "$method" == "POST" && "$endpoint" == "user/ssh_signing_keys" ]]; then
+  title="$(get_field "title=" "${fields[@]}")"
+  key="$(get_field "key=" "${fields[@]}")"
+  printf '2\n' >"$state_dir/signing_id"
+  printf '%s\n' "$title" >"$state_dir/signing_title"
+  printf '%s\n' "$key" >"$state_dir/signing_key"
+  printf '{"id":2}\n'
+elif [[ "$method" == "DELETE" && "$endpoint" == repos/example/*/keys/* ]]; then
+  rm -f "$state_dir/deploy_id" "$state_dir/deploy_title" "$state_dir/deploy_key" "$state_dir/deploy_read_only"
+  printf '{}\n'
+elif [[ "$method" == "DELETE" && "$endpoint" == user/ssh_signing_keys/* ]]; then
+  rm -f "$state_dir/signing_id" "$state_dir/signing_title" "$state_dir/signing_key"
+  printf '{}\n'
+else
+  printf 'unsupported gh api call: %s %s\n' "$method" "$endpoint" >&2
+  exit 2
+fi
+"#
+    .replace(
+        "@STATE_DIR@",
+        &shell_single_quote(&state_dir.display().to_string()),
+    )
+    .replace(
+        "@LOG_FILE@",
+        &shell_single_quote(&log_file.display().to_string()),
+    );
+    let gh = path.join("gh");
+    fs::write(&gh, script)?;
+    set_mode(&gh, 0o700)?;
+    Ok(path.to_path_buf())
+}
+
+pub fn write_logging_ssh_keygen(path: &Path, log_file: &Path) -> TestResult<PathBuf> {
+    fs::create_dir_all(path)?;
+    if !log_file.exists() {
+        fs::write(log_file, "")?;
+    }
+    let real_ssh_keygen = command_path("ssh-keygen")?;
+    let script = r#"#!/usr/bin/env bash
+set -euo pipefail
+
+log_file=@LOG_FILE@
+{
+  printf '__CALL__\n'
+  printf '%s\n' "$@"
+} >>"$log_file"
+exec @REAL_SSH_KEYGEN@ "$@"
+"#
+    .replace(
+        "@LOG_FILE@",
+        &shell_single_quote(&log_file.display().to_string()),
+    )
+    .replace(
+        "@REAL_SSH_KEYGEN@",
+        &shell_single_quote(&real_ssh_keygen.display().to_string()),
+    );
+    let ssh_keygen = path.join("ssh-keygen");
+    fs::write(&ssh_keygen, script)?;
+    set_mode(&ssh_keygen, 0o700)?;
+    Ok(path.to_path_buf())
+}
+
 pub fn write_fake_ssh(path: &Path) -> TestResult<PathBuf> {
     fs::create_dir_all(path)?;
     let ssh = path.join("ssh");
