@@ -1,6 +1,9 @@
 mod config;
 mod launch;
 
+pub use config::{MountMode, ProfileMount, SpawnMount};
+pub use launch::{DarwinBindMount, DarwinMountPlan, LaunchError, classify_darwin_mounts};
+
 use std::{
     io::{self, Write},
     path::PathBuf,

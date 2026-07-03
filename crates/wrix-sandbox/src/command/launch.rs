@@ -149,6 +149,19 @@ struct RenderedMount {
     mode: MountMode,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DarwinBindMount {
+    pub host: String,
+    pub container: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DarwinMountPlan {
+    pub mounts: Vec<DarwinBindMount>,
+    pub dir_mappings: Vec<(String, String)>,
+    pub file_mappings: Vec<(String, String)>,
+}
+
 #[derive(Default)]
 struct DarwinMounts {
     mounts: Vec<RenderedMount>,
@@ -313,6 +326,13 @@ impl<'a> Plan<'a> {
     }
 
     fn write_dry_run(&self, stdout: &mut impl Write) -> Result<(), LaunchError> {
+        let staging = Staging::create()?;
+        let credentials = if self.spawn() {
+            None
+        } else {
+            self.credentials(&staging)?
+        };
+
         writeln!(stdout, "SUBCOMMAND={}", self.subcommand())?;
         writeln!(stdout, "STDIO={}", u8::from(self.stdio))?;
         writeln!(
@@ -350,6 +370,20 @@ impl<'a> Plan<'a> {
             writeln!(stdout, "PODMAN_NETWORK={}", linux_podman_network())?;
         }
         self.services.write_dry_run(stdout)?;
+        if let Some(credentials) = &credentials {
+            writeln!(stdout, "MOUNT=-v {}", credentials.mount().podman_arg())?;
+            for (key, value) in credential_env_pairs(credentials) {
+                writeln!(stdout, "ENV={key}={value}")?;
+            }
+        }
+        for (key, value) in self.launcher_identity_env_pairs() {
+            writeln!(stdout, "ENV={key}={value}")?;
+        }
+        if Platform::CURRENT == Platform::Linux {
+            for (key, value) in Self::linux_boundary_env_pairs() {
+                writeln!(stdout, "ENV={key}={value}")?;
+            }
+        }
         if let Some(socket) = &self.host_podman_socket {
             socket.write_dry_run(stdout, &self.workspace, None)?;
         }
@@ -366,7 +400,6 @@ impl<'a> Plan<'a> {
             writeln!(stdout, "MOUNT=-v {}", mount.podman_arg())?;
         }
         if Platform::CURRENT == Platform::Darwin {
-            let staging = Staging::create()?;
             let mounts = self.darwin_mounts(&staging)?;
             mounts.write_dry_run(stdout)?;
         }
@@ -451,8 +484,8 @@ impl<'a> Plan<'a> {
         for (key, value) in self.host_podman_socket_env_pairs(staged_beads.as_deref()) {
             command.arg("-e").arg(format!("{key}={value}"));
         }
-        if !env_flag("WRIX_MICROVM") {
-            command.arg("-e").arg("IS_SANDBOX=1");
+        for (key, value) in Self::linux_boundary_env_pairs() {
+            command.arg("-e").arg(format!("{key}={value}"));
         }
         command
             .arg("-w")
@@ -560,14 +593,11 @@ impl<'a> Plan<'a> {
     }
 
     fn darwin_mounts(&self, staging: &Staging) -> Result<DarwinMounts, LaunchError> {
-        let mut mounts = DarwinMounts::default();
-        for mount in &self.request.profile_config.profile.mounts {
-            mounts.push(&RenderedMount::from_profile(mount), staging)?;
-        }
-        for mount in &self.spawn_mounts {
-            mounts.push(mount, staging)?;
-        }
-        Ok(mounts)
+        darwin_mounts_from_rendered(
+            &self.request.profile_config.profile.mounts,
+            &self.spawn_mounts,
+            &staging.root,
+        )
     }
 
     fn install_image(&self, runtime: Runtime) -> Result<(), LaunchError> {
@@ -733,23 +763,8 @@ impl<'a> Plan<'a> {
                 String::from("GIT_COMMITTER_EMAIL"),
                 self.git_identity.committer_email.clone(),
             ),
-            (
-                String::from("WRIX_AGENT"),
-                self.request.profile_config.agent.kind.as_str().to_owned(),
-            ),
-            (
-                String::from("WRIX_NETWORK"),
-                self.network_mode.as_str().to_owned(),
-            ),
-            (
-                String::from("WRIX_NETWORK_ALLOWLIST"),
-                self.request
-                    .profile_config
-                    .profile
-                    .network_allowlist
-                    .join(","),
-            ),
         ]);
+        pairs.extend(self.launcher_identity_env_pairs());
         if let Some(pair) = notification_env(Platform::CURRENT) {
             pairs.push(pair);
         }
@@ -785,18 +800,38 @@ impl<'a> Plan<'a> {
             pairs.push((String::from("WRIX_PI_AUTH_JSON"), auth.to_owned()));
         }
         if let Some(credentials) = credentials {
-            pairs.push((
-                String::from("WRIX_DEPLOY_KEY"),
-                format!("/etc/wrix/keys/{}", credentials.name),
-            ));
-            if credentials.signing.is_some() {
-                pairs.push((
-                    String::from("WRIX_SIGNING_KEY"),
-                    format!("/etc/wrix/keys/{}-signing", credentials.name),
-                ));
-            }
+            pairs.extend(credential_env_pairs(credentials));
         }
         pairs
+    }
+
+    fn launcher_identity_env_pairs(&self) -> Vec<(String, String)> {
+        vec![
+            (
+                String::from("WRIX_AGENT"),
+                self.request.profile_config.agent.kind.as_str().to_owned(),
+            ),
+            (
+                String::from("WRIX_NETWORK"),
+                self.network_mode.as_str().to_owned(),
+            ),
+            (
+                String::from("WRIX_NETWORK_ALLOWLIST"),
+                self.request
+                    .profile_config
+                    .profile
+                    .network_allowlist
+                    .join(","),
+            ),
+        ]
+    }
+
+    fn linux_boundary_env_pairs() -> Vec<(String, String)> {
+        if env_flag("WRIX_MICROVM") {
+            Vec::new()
+        } else {
+            vec![(String::from("IS_SANDBOX"), String::from("1"))]
+        }
     }
 
     const fn subcommand(&self) -> &'static str {
@@ -935,8 +970,63 @@ impl RenderedMount {
     }
 }
 
+impl DarwinMountPlan {
+    pub fn dir_env(&self) -> Option<String> {
+        mapping_env(&self.dir_mappings)
+    }
+
+    pub fn file_env(&self) -> Option<String> {
+        mapping_env(&self.file_mappings)
+    }
+}
+
+impl From<DarwinMounts> for DarwinMountPlan {
+    fn from(mounts: DarwinMounts) -> Self {
+        Self {
+            mounts: mounts
+                .mounts
+                .into_iter()
+                .map(|mount| DarwinBindMount {
+                    host: mount.host,
+                    container: mount.container,
+                })
+                .collect(),
+            dir_mappings: mounts.dir_mappings,
+            file_mappings: mounts.file_mappings,
+        }
+    }
+}
+
+pub fn classify_darwin_mounts(
+    profile_mounts: &[ProfileMount],
+    spawn_mounts: &[SpawnMount],
+    staging_root: &Path,
+) -> Result<DarwinMountPlan, LaunchError> {
+    let rendered_spawn = spawn_mounts
+        .iter()
+        .map(RenderedMount::from_spawn)
+        .collect::<Vec<_>>();
+    darwin_mounts_from_rendered(profile_mounts, &rendered_spawn, staging_root)
+        .map(DarwinMountPlan::from)
+}
+
+fn darwin_mounts_from_rendered(
+    profile_mounts: &[ProfileMount],
+    spawn_mounts: &[RenderedMount],
+    staging_root: &Path,
+) -> Result<DarwinMounts, LaunchError> {
+    let mut mounts = DarwinMounts::default();
+    for mount in profile_mounts {
+        mounts.push(&RenderedMount::from_profile(mount), staging_root)?;
+    }
+    for mount in spawn_mounts {
+        mounts.push(mount, staging_root)?;
+    }
+    Ok(mounts)
+}
+
 impl DarwinMounts {
-    fn push(&mut self, mount: &RenderedMount, staging: &Staging) -> Result<(), LaunchError> {
+    fn push(&mut self, mount: &RenderedMount, staging_root: &Path) -> Result<(), LaunchError> {
         let source = expand_path(&mount.host);
         if !source.exists() {
             return Err(LaunchError::MountSourceMissing {
@@ -951,7 +1041,7 @@ impl DarwinMounts {
         }
         if source.is_dir() {
             let index = self.dir_mappings.len();
-            let host = staging.root.join(format!("dir{index}"));
+            let host = staging_root.join(format!("dir{index}"));
             copy_dir(&source, &host)?;
             let container = format!("/mnt/wrix/dir{index}");
             self.mounts.push(RenderedMount {
@@ -1154,6 +1244,20 @@ impl Credentials {
             mode: MountMode::Ro,
         }
     }
+}
+
+fn credential_env_pairs(credentials: &Credentials) -> Vec<(String, String)> {
+    let mut pairs = vec![(
+        String::from("WRIX_DEPLOY_KEY"),
+        format!("/etc/wrix/keys/{}", credentials.name),
+    )];
+    if credentials.signing.is_some() {
+        pairs.push((
+            String::from("WRIX_SIGNING_KEY"),
+            format!("/etc/wrix/keys/{}-signing", credentials.name),
+        ));
+    }
+    pairs
 }
 
 struct Staging {
@@ -1735,10 +1839,10 @@ mod test {
         };
         let mut mounts = DarwinMounts::default();
         mounts
-            .push(&RenderedMount::from_profile(&profile_mount), &staging)
+            .push(&RenderedMount::from_profile(&profile_mount), &staging.root)
             .unwrap();
         mounts
-            .push(&RenderedMount::from_spawn(&spawn_mount), &staging)
+            .push(&RenderedMount::from_spawn(&spawn_mount), &staging.root)
             .unwrap();
 
         assert_eq!(
