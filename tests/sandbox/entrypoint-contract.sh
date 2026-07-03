@@ -136,6 +136,7 @@ rewrite_entrypoint() {
   local workspace="$2"
   local etc_wrix="$3"
   local dest_path="$4"
+  local home_dir="$5"
   local source_path setup_path
   source_path="$(entrypoint_source "$platform")"
   setup_path="$workspace/git-ssh-setup.sh"
@@ -143,6 +144,7 @@ rewrite_entrypoint() {
   chmod +x "$setup_path"
   sed \
     -e "s|/workspace|$workspace|g" \
+    -e "s|/home/wrix|$home_dir|g" \
     -e "s|/etc/wrix/|$etc_wrix/|g" \
     -e "s|\. /git-ssh-setup\.sh|. $setup_path|g" \
     "$source_path" >"$dest_path"
@@ -177,7 +179,7 @@ run_entrypoint() {
   mkdir -p "$case_dir" "$home_dir" "$workspace/.claude" "$workspace/.wrix/log"
   write_fake_runtime_tools "$tool_dir"
   prepare_wrix_etc "$etc_wrix" "$agent"
-  rewrite_entrypoint "$platform" "$workspace" "$etc_wrix" "$entrypoint"
+  rewrite_entrypoint "$platform" "$workspace" "$etc_wrix" "$entrypoint" "$home_dir"
 
   env \
     HOME="$home_dir" \
@@ -263,6 +265,41 @@ EOF
   printf 'PASS: both entrypoints dispatch WRIX_AGENT to direct, claude, and pi binaries\n' >&2
 }
 
+test_agent_config_homes_both_entrypoints() {
+  require_command jq
+  local platform
+  for platform in linux darwin; do
+    local claude_workspace="$TEST_TMP/config-$platform-claude/workspace"
+    local claude_stdout="$TEST_TMP/config-$platform-claude.out"
+    local claude_stderr="$TEST_TMP/config-$platform-claude.err"
+    local claude_case claude_home
+    claude_case="$TEST_TMP/$platform-claude-$(basename "$claude_stdout" .out)"
+    claude_home="$claude_case/home"
+    if ! run_entrypoint "$platform" claude "$claude_stdout" "$claude_stderr" "$claude_workspace" true; then
+      fail "$platform claude config-home entrypoint failed: $(<"$claude_stderr")"
+      return 1
+    fi
+    [[ -f "$claude_home/.claude.json" ]] || { fail "$platform claude config file missing"; return 1; }
+    [[ -f "$claude_home/.claude/settings.json" ]] || { fail "$platform claude settings missing"; return 1; }
+    [[ -f "$claude_workspace/.claude/settings.json" ]] || { fail "$platform workspace claude settings missing"; return 1; }
+
+    local pi_workspace="$TEST_TMP/config-$platform-pi/workspace"
+    local pi_stdout="$TEST_TMP/config-$platform-pi.out"
+    local pi_stderr="$TEST_TMP/config-$platform-pi.err"
+    local pi_case pi_home
+    pi_case="$TEST_TMP/$platform-pi-$(basename "$pi_stdout" .out)"
+    pi_home="$pi_case/home"
+    if ! run_entrypoint "$platform" pi "$pi_stdout" "$pi_stderr" "$pi_workspace" true; then
+      fail "$platform pi config-home entrypoint failed: $(<"$pi_stderr")"
+      return 1
+    fi
+    [[ -f "$pi_home/.pi/agent/settings.json" ]] || { fail "$platform pi settings missing"; return 1; }
+    [[ -d "$pi_workspace/.pi/agent/sessions" ]] || { fail "$platform pi sessions dir missing"; return 1; }
+    [[ ! -e "$pi_home/.claude/settings.json" ]] || { fail "$platform pi run seeded claude settings"; return 1; }
+  done
+  printf 'PASS: both entrypoints seed claude and pi config homes separately\n' >&2
+}
+
 run_core_hooks_path_case() {
   local platform="$1"
   local workspace="$TEST_TMP/hooks-$platform/workspace"
@@ -306,6 +343,7 @@ test_darwin_core_hooks_path() {
 ALL_TESTS=(
   test_workspace_bin_path_prepend_both
   test_agent_dispatch_both_entrypoints
+  test_agent_config_homes_both_entrypoints
   test_linux_core_hooks_path
   test_darwin_core_hooks_path
 )

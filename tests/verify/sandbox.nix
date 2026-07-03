@@ -1,0 +1,79 @@
+{ pkgs, ... }:
+
+let
+  inherit (pkgs.lib) escapeShellArg;
+
+  sandboxScript = script: function: ''
+    run_repo_script ${escapeShellArg "tests/sandbox/${script}.sh"} ${escapeShellArg function}
+  '';
+  sandboxScriptAll = script: ''
+    run_repo_script ${escapeShellArg "tests/sandbox/${script}.sh"}
+  '';
+  sandboxScriptWithWrix = script: function: ''
+    run_repo_script_with_wrix ${escapeShellArg "tests/sandbox/${script}.sh"} ${escapeShellArg function}
+  '';
+  sandboxScriptAllWithWrix = script: ''
+    run_repo_script_with_wrix ${escapeShellArg "tests/sandbox/${script}.sh"}
+  '';
+  containerStarts = sandboxScript "container-starts";
+  customMountsEnv = sandboxScript "custom-mounts-env";
+  entrypoint = sandboxScript "entrypoint-contract";
+  network = sandboxScript "network-baseline";
+  platform = sandboxScript "platform-dispatch";
+  profileConfig = sandboxScript "profile-config-wrapper";
+in
+{
+  "sandbox.agent-binary-guard" = sandboxScriptAll "agent-binary-guard";
+
+  "sandbox.agent-config-homes" = entrypoint "test_agent_config_homes_both_entrypoints";
+
+  "sandbox.agent-lacks-net-admin" = network "test_agent_lacks_net_admin";
+
+  "sandbox.agent-settings" = sandboxScriptAll "agent-settings";
+
+  "sandbox.custom-mounts-env" = sandboxScriptAllWithWrix "custom-mounts-env";
+
+  "sandbox.darwin-container-starts" = containerStarts "test_darwin_container_starts";
+
+  "sandbox.entrypoint-agent-dispatch" = entrypoint "test_agent_dispatch_both_entrypoints";
+
+  "sandbox.entrypoint-workspace-bin-prepend" = entrypoint "test_workspace_bin_path_prepend_both";
+
+  "sandbox.filesystem-isolation" = sandboxScriptAll "filesystem-isolation";
+
+  "sandbox.linux-container-starts" = containerStarts "test_linux_container_starts";
+
+  "sandbox.linux-microvm-runtime" =
+    sandboxScriptWithWrix "rust-launcher-live" "test_linux_microvm_runtime";
+
+  "sandbox.mksandbox-api" =
+    sandboxScript "mksandbox-api" "test_mksandbox_accepts_documented_parameters";
+
+  "sandbox.network-fail-closed" = network "test_fail_closed";
+
+  "sandbox.network-ipv6-blocked" = network "test_ipv6_blocked";
+
+  "sandbox.network-limit-allowlist" = network "test_limit_allowlist";
+
+  "sandbox.network-open-blocks-lan" = network "test_open_blocks_lan";
+
+  "sandbox.nix-in-container" = sandboxScriptAll "nix-in-container";
+
+  "sandbox.nix-store-verify-clean" = sandboxScriptAll "nix-store-verify-clean";
+
+  "sandbox.platform-dispatch" = platform "test_platform_dispatch_current_system";
+
+  "sandbox.profile-config-image-source-kind" = profileConfig "test_image_source_kind";
+
+  "sandbox.profile-config-wrapper" = profileConfig "test_profile_config_wrapper_contract";
+
+  "sandbox.uid-mapping" = sandboxScriptAll "uid-mapping";
+
+  "sandbox.unsupported-system-error" = platform "test_unsupported_system_error";
+
+  "sandbox.workspace-bin-path-absent" = sandboxScriptAll "workspace-bin-path";
+
+  "sandbox.workspace-bin-path-present" = sandboxScriptAll "workspace-bin-path";
+
+  "sandbox.wrix-cli-in-profile" = customMountsEnv "test_wrix_cli_added_to_sandbox_profile";
+}

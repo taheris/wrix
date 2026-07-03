@@ -41,19 +41,43 @@ alternate_source_kind() {
 EXPECTED_SOURCE_KIND=$(expected_source_kind)
 
 PACKAGE_LINK="$TEST_TMP/package"
-nix build \
-  --impure --no-warn-dirty \
-  --out-link "$PACKAGE_LINK" \
-  --expr "
-    let
-      flake = builtins.getFlake \"git+file://$REPO_ROOT\";
-      system = builtins.currentSystem;
-      lib = flake.legacyPackages.\${system}.lib;
-    in (lib.mkSandbox { profile = lib.profiles.base; }).package
-  "
-
 WRIX="$PACKAGE_LINK/bin/wrix"
 WRIX_RUN="$PACKAGE_LINK/bin/wrix-run"
+
+build_wrapper_package() {
+  local log="$TEST_TMP/package-build.log"
+  if [[ -x "$WRIX" && -x "$WRIX_RUN" ]]; then
+    return 0
+  fi
+  if ! nix build \
+    --impure --no-warn-dirty \
+    --out-link "$PACKAGE_LINK" \
+    --expr "
+      let
+        flake = builtins.getFlake \"git+file://$REPO_ROOT\";
+        system = builtins.currentSystem;
+        lib = flake.legacyPackages.\${system}.lib;
+      in (lib.mkSandbox { profile = lib.profiles.base; }).package
+    " >"$log" 2>&1; then
+    fail "nix build of mkSandbox package failed"
+    tail -n 80 "$log" >&2
+    return 1
+  fi
+}
+
+raw_wrix_launcher() {
+  local link="$TEST_TMP/raw-wrix"
+  local log="$TEST_TMP/raw-wrix-build.log"
+  if [[ ! -x "$link/bin/wrix" ]]; then
+    if ! nix build --no-warn-dirty --out-link "$link" "$REPO_ROOT#wrix" >"$log" 2>&1; then
+      printf 'raw wrix launcher build failed\n' >&2
+      tail -n 80 "$log" >&2
+      return 1
+    fi
+  fi
+  printf '%s\n' "$link/bin/wrix"
+}
+
 WORKSPACE="$TEST_TMP/workspace"
 mkdir -p "$WORKSPACE"
 
@@ -62,6 +86,7 @@ profile_config_from_wrapper() {
 }
 
 test_wrapper_passes_store_profile_config_arg() {
+  build_wrapper_package || return 1
   local config
   config=$(profile_config_from_wrapper)
   if [[ -z "$config" ]]; then
@@ -80,6 +105,7 @@ test_wrapper_passes_store_profile_config_arg() {
 }
 
 test_wrapper_does_not_set_image_default_env() {
+  build_wrapper_package || return 1
   if grep -qE 'WRIX_DEFAULT_IMAGE_(REF|SOURCE|DIGEST)' "$WRIX"; then
     fail "wrapper still contains mutable WRIX_DEFAULT_IMAGE_* env defaults"
     return 1
@@ -88,6 +114,7 @@ test_wrapper_does_not_set_image_default_env() {
 }
 
 test_profile_config_contains_launcher_contract_fields() {
+  build_wrapper_package || return 1
   local config
   config=$(profile_config_from_wrapper)
   if ! jq -e --arg source_kind "$EXPECTED_SOURCE_KIND" '
@@ -119,8 +146,13 @@ test_profile_config_contains_launcher_contract_fields() {
 }
 
 test_image_source_kind() {
-  local config source kind missing_config bad_config bad_kind out err rc
+  build_wrapper_package || return 1
+  local config source kind missing_config bad_config bad_kind out err rc raw_wrix
   config=$(profile_config_from_wrapper)
+  if ! raw_wrix=$(raw_wrix_launcher); then
+    fail "raw wrix launcher is unavailable"
+    return 1
+  fi
   source=$(jq -r '.image.source // ""' "$config")
   kind=$(jq -r '.image.source_kind // ""' "$config")
   if [[ "$kind" != "$EXPECTED_SOURCE_KIND" ]]; then
@@ -137,7 +169,7 @@ test_image_source_kind() {
   out="$TEST_TMP/missing-source-kind.out"
   err="$TEST_TMP/missing-source-kind.err"
   rc=0
-  WRIX_DRY_RUN=1 "$WRIX" --profile-config "$missing_config" run "$WORKSPACE" >"$out" 2>"$err" || rc=$?
+  WRIX_DRY_RUN=1 "$raw_wrix" --profile-config "$missing_config" run "$WORKSPACE" >"$out" 2>"$err" || rc=$?
   if [[ "$rc" == "0" ]]; then
     fail "launcher accepted ProfileConfig without image.source_kind"
     return 1
@@ -153,7 +185,7 @@ test_image_source_kind() {
   out="$TEST_TMP/bad-source-kind.out"
   err="$TEST_TMP/bad-source-kind.err"
   rc=0
-  WRIX_DRY_RUN=1 "$WRIX" --profile-config "$bad_config" run "$WORKSPACE" >"$out" 2>"$err" || rc=$?
+  WRIX_DRY_RUN=1 "$raw_wrix" --profile-config "$bad_config" run "$WORKSPACE" >"$out" 2>"$err" || rc=$?
   if [[ "$rc" == "0" ]]; then
     fail "launcher accepted incompatible ProfileConfig image.source_kind=$bad_kind"
     return 1
@@ -167,6 +199,7 @@ test_image_source_kind() {
 }
 
 test_wrapper_dispatches_service_commands() {
+  build_wrapper_package || return 1
   local output
   output="$($WRIX service --help)"
   if [[ "$output" != *"Usage: wrix service <command>"* ]]; then
@@ -186,12 +219,19 @@ write_spawn_config() {
   jq -n --arg workspace "$WORKSPACE" '{ workspace: $workspace, env: [], agent_args: ["true"], mounts: [] }' >"$output_path"
 }
 
+write_deploy_key_fixture() {
+  local output_path="$1"
+  printf 'profile-config-wrapper deploy key fixture\n' >"$output_path"
+}
+
 test_wrapper_invokes_run_and_spawn_with_profile_config() {
+  build_wrapper_package || return 1
   local run_out="$TEST_TMP/dry-run.out" run_err="$TEST_TMP/dry-run.err"
   local spawn_out="$TEST_TMP/dry-spawn.out" spawn_err="$TEST_TMP/dry-spawn.err"
   local main_out="$TEST_TMP/dry-main.out" main_err="$TEST_TMP/dry-main.err"
   local main_spawn_out="$TEST_TMP/dry-main-spawn.out" main_spawn_err="$TEST_TMP/dry-main-spawn.err"
   local bare_out="$TEST_TMP/bare-wrix.out" bare_err="$TEST_TMP/bare-wrix.err"
+  local deploy_key="$TEST_TMP/deploy-key"
   local spawn_config="$TEST_TMP/spawn.json" run_config spawn_config_path rc=0
 
   if [[ ! -x "$WRIX_RUN" ]]; then
@@ -237,8 +277,9 @@ test_wrapper_invokes_run_and_spawn_with_profile_config() {
   fi
 
   write_spawn_config "$spawn_config"
+  write_deploy_key_fixture "$deploy_key"
   rc=0
-  WRIX_DRY_RUN=1 "$WRIX" spawn --spawn-config "$spawn_config" --stdio >"$spawn_out" 2>"$spawn_err" || rc=$?
+  WRIX_DEPLOY_KEY="$deploy_key" WRIX_GIT_SIGN=0 WRIX_DRY_RUN=1 "$WRIX" spawn --spawn-config "$spawn_config" --stdio >"$spawn_out" 2>"$spawn_err" || rc=$?
   if [[ "$rc" != "0" ]]; then
     fail "wrapped spawn dry-run failed: $(cat "$spawn_err")"
     return 1
@@ -254,7 +295,7 @@ test_wrapper_invokes_run_and_spawn_with_profile_config() {
   fi
 
   rc=0
-  WRIX_DRY_RUN=1 "$WRIX_RUN" spawn --spawn-config "$spawn_config" --stdio >"$main_spawn_out" 2>"$main_spawn_err" || rc=$?
+  WRIX_DEPLOY_KEY="$deploy_key" WRIX_GIT_SIGN=0 WRIX_DRY_RUN=1 "$WRIX_RUN" spawn --spawn-config "$spawn_config" --stdio >"$main_spawn_out" 2>"$main_spawn_err" || rc=$?
   if [[ "$rc" != "0" ]]; then
     fail "wrix-run spawn dry-run failed: $(cat "$main_spawn_err")"
     return 1
@@ -267,14 +308,27 @@ test_wrapper_invokes_run_and_spawn_with_profile_config() {
   pass "wrapped package exposes explicit wrix and runnable wrix-run with the same ProfileConfig"
 }
 
-ALL_TESTS=(
+WRAPPER_CONTRACT_TESTS=(
   test_wrapper_passes_store_profile_config_arg
   test_wrapper_does_not_set_image_default_env
   test_profile_config_contains_launcher_contract_fields
-  test_image_source_kind
   test_wrapper_dispatches_service_commands
   test_wrapper_invokes_run_and_spawn_with_profile_config
 )
+
+ALL_TESTS=(
+  "${WRAPPER_CONTRACT_TESTS[@]}"
+  test_image_source_kind
+)
+
+test_profile_config_wrapper_contract() {
+  build_wrapper_package || return 1
+  local fn failed=0
+  for fn in "${WRAPPER_CONTRACT_TESTS[@]}"; do
+    "$fn" || failed=$((failed + 1))
+  done
+  [[ "$failed" -eq 0 ]]
+}
 
 run_all() {
   local fn rc

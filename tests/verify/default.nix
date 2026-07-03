@@ -26,6 +26,7 @@ let
     (import ./cli.nix { inherit pkgs system; })
     (import ./prek.nix { inherit pkgs system; })
     (import ./profiles.nix { inherit pkgs system; })
+    (import ./sandbox.nix { inherit pkgs system; })
     (import ./security.nix { inherit pkgs system; })
     (import ./services.nix { inherit pkgs system; })
     (import ./tmux-mcp.nix { inherit pkgs system; })

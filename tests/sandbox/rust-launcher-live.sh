@@ -32,12 +32,18 @@ register_tmp() {
 
 require_linux() {
   [[ "$(uname -s)" = "Linux" ]] || skip "Linux-only Rust launcher verifier"
-  command -v cargo >/dev/null 2>&1 || skip "cargo not on PATH"
   command -v jq >/dev/null 2>&1 || skip "jq not on PATH"
+  if [[ -z "${WRIX_TEST_WRIX_BIN:-}" ]]; then
+    command -v cargo >/dev/null 2>&1 || skip "cargo not on PATH"
+  fi
 }
 
 wrix_bin() {
   local target_dir="${CARGO_TARGET_DIR:-$REPO_ROOT/target}"
+  if [[ -n "${WRIX_TEST_WRIX_BIN:-}" ]]; then
+    printf '%s\n' "$WRIX_TEST_WRIX_BIN"
+    return 0
+  fi
   cargo build --quiet -p wrix-cli --bin wrix
   printf '%s\n' "$target_dir/debug/wrix"
 }
@@ -139,6 +145,15 @@ for arg in "$@"; do
 done
 SKOPEO_SHIM
   chmod +x "$bin/skopeo"
+
+  cat >"$bin/krun" <<'KRUN_SHIM'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "--version" ]]; then
+  printf 'krun test shim\n'
+fi
+KRUN_SHIM
+  chmod +x "$bin/krun"
 }
 
 write_profile_config() {
@@ -183,6 +198,22 @@ run_live_run() {
   WRIX_IMAGE_KEEP_FILE="$tmp/state/image-mru.json" \
   WRIX_TEST_STATE="$tmp/state" \
   WRIX_TEST_DIGEST="$digest" \
+    "$wrix" --profile-config "$profile_config" run "$workspace" true
+}
+
+run_live_run_microvm() {
+  local tmp="$1"
+  local profile_config="$2"
+  local workspace="$3"
+  local digest="$4"
+  local wrix="$5"
+  PATH="$tmp/bin:$PATH" \
+  HOME="$tmp/home" \
+  XDG_CACHE_HOME="$tmp/cache" \
+  WRIX_IMAGE_KEEP_FILE="$tmp/state/image-mru.json" \
+  WRIX_TEST_STATE="$tmp/state" \
+  WRIX_TEST_DIGEST="$digest" \
+  WRIX_MICROVM=1 \
     "$wrix" --profile-config "$profile_config" run "$workspace" true
 }
 
@@ -255,6 +286,43 @@ test_linux_sets_is_sandbox_without_fakeuid() {
     fail "default Linux boundary passed libfakeuid LD_PRELOAD"
   fi
   printf 'PASS: live Rust Linux launcher sets IS_SANDBOX without libfakeuid\n'
+}
+
+test_linux_microvm_runtime() {
+  require_linux
+  local tmp wrix workspace descriptor layout profile_config digest output status
+  tmp=$(mktemp -d -t wrix-live.XXXXXX)
+  register_tmp "$tmp"
+  setup_fake_runtime "$tmp"
+  wrix=$(wrix_bin)
+  workspace="$tmp/workspace"
+  descriptor="$tmp/descriptor.json"
+  layout="$tmp/oci-layout"
+  profile_config="$tmp/profile.json"
+  digest="sha256:2323232323232323232323232323232323232323232323232323232323232323"
+  write_descriptor "$descriptor" "$layout" "$digest"
+  write_profile_config "$profile_config" "$workspace" "$descriptor" "$digest"
+
+  set +e
+  output=$(run_live_run_microvm "$tmp" "$profile_config" "$workspace" "$digest" "$wrix" 2>&1)
+  status="$?"
+  set -e
+
+  if [[ -e /dev/kvm ]]; then
+    [[ "$status" -eq 0 ]] || fail "microVM launch failed despite /dev/kvm: $output"
+    grep -q -- '--runtime krun --userns=keep-id' "$tmp/state/podman.log" || fail "microVM launch did not select podman --runtime krun with keep-id"
+    if grep -q -- '-e IS_SANDBOX=1' "$tmp/state/podman.log"; then
+      fail "microVM boundary used default-boundary IS_SANDBOX env"
+    fi
+    printf 'PASS: live Rust Linux launcher selects krun runtime when KVM is present\n'
+  else
+    [[ "$status" -ne 0 ]] || fail "microVM launch without /dev/kvm unexpectedly succeeded"
+    [[ "$output" == *'/dev/kvm not found'* ]] || fail "missing-KVM error did not name /dev/kvm: $output"
+    if grep -q '^run ' "$tmp/state/podman.log"; then
+      fail "launcher reached podman run after missing-KVM failure"
+    fi
+    printf 'PASS: live Rust Linux launcher fails loudly when KVM is missing\n'
+  fi
 }
 
 test_linux_archiveless_install_uses_oci_layout() {
@@ -381,6 +449,7 @@ IMAGES
 if [[ $# -eq 0 ]]; then
   test_linux_custom_mounts_env_reach_live_launcher
   test_linux_sets_is_sandbox_without_fakeuid
+  test_linux_microvm_runtime
   test_linux_archiveless_install_uses_oci_layout
   test_linux_second_spawn_skips_loaded_image
   test_linux_delta_bounded_uses_descriptor_transport
