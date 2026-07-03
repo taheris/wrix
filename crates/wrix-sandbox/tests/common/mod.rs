@@ -80,6 +80,7 @@ pub fn run_child(
         .env_remove("WRIX_UNSAFE_PODMAN_SOCKET")
         .env_remove("WRIX_DEPLOY_KEY")
         .env_remove("WRIX_SIGNING_KEY")
+        .env_remove("WRIX_GIT_SIGN")
         .env_remove("CLAUDE_CODE_OAUTH_TOKEN");
     if let Some(profile_config) = spec.profile_config {
         command.env("WRIX_SANDBOX_PROFILE_CONFIG", profile_config);

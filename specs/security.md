@@ -291,13 +291,13 @@ this section is the index, not a restatement.
   launcher's environment but the pointed-at file does not exist, the
   launcher exits non-zero with a stderr message naming the missing
   path, before the container is started.
-  [test?](crates/wrix-sandbox/tests/launch.rs::missing_key_env_paths_fail_before_container_start)
+  [test](crates/wrix-sandbox/tests/launch.rs::missing_key_env_paths_fail_before_container_start)
 - Under `wrix spawn`, when a deploy key or signing key does not
   resolve (no env pointer and no `$HOME/.ssh/deploy_keys/` fallback),
   the launcher exits non-zero with a stderr message naming the
   unresolved key, before the container is started; interactive
   `wrix run` still boots without keys under the same condition.
-  [test?](crates/wrix-sandbox/tests/launch.rs::spawn_requires_resolved_keys_but_run_allows_missing_keys)
+  [test](crates/wrix-sandbox/tests/launch.rs::spawn_requires_resolved_keys_but_run_allows_missing_keys)
 - After a sandbox session, a session-metadata index file exists under
   `/workspace/.wrix/log/`; its `timestamp_start`, `timestamp_end`,
   `exit_code`, `mode`, and `agent_session_dir` fields are populated;
@@ -306,7 +306,7 @@ this section is the index, not a restatement.
 - Default launches do not expose the host Podman API; `WRIX_PODMAN_SOCKET`
   does not enable it, and `WRIX_UNSAFE_PODMAN_SOCKET` is the only opt-in,
   failing loudly when set but the host socket is absent.
-  [test?](crates/wrix-sandbox/tests/launch.rs::podman_api_socket_requires_explicit_unsafe_opt_in)
+  [test](crates/wrix-sandbox/tests/launch.rs::podman_api_socket_requires_explicit_unsafe_opt_in)
 
 ## Requirements
 

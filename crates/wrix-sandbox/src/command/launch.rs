@@ -328,6 +328,7 @@ impl<'a> Plan<'a> {
     fn write_dry_run(&self, stdout: &mut impl Write) -> Result<(), LaunchError> {
         let staging = Staging::create()?;
         let credentials = if self.spawn() {
+            self.credential_sources()?;
             None
         } else {
             self.credentials(&staging)?
@@ -632,7 +633,7 @@ impl<'a> Plan<'a> {
         Ok(())
     }
 
-    fn credentials(&self, staging: &Staging) -> Result<Option<Credentials>, LaunchError> {
+    fn credential_sources(&self) -> Result<Option<CredentialSources>, LaunchError> {
         let name = deploy_key_name(
             &self.workspace,
             self.request.profile_config.security.deploy_key.as_deref(),
@@ -654,15 +655,26 @@ impl<'a> Plan<'a> {
                 });
             }
         }
-        let Some(deploy_path) = deploy else {
+        let Some(deploy) = deploy else {
+            return Ok(None);
+        };
+        Ok(Some(CredentialSources {
+            deploy,
+            signing,
+            name,
+        }))
+    }
+
+    fn credentials(&self, staging: &Staging) -> Result<Option<Credentials>, LaunchError> {
+        let Some(sources) = self.credential_sources()? else {
             return Ok(None);
         };
         let key_root = staging.root.join("deploy_keys");
         fs::create_dir_all(&key_root)?;
-        let deploy_target = key_root.join(&name);
-        fs::copy(&deploy_path, &deploy_target)?;
-        let signing_target = if let Some(path) = signing {
-            let target = key_root.join(&signing_name);
+        let deploy_target = key_root.join(&sources.name);
+        fs::copy(&sources.deploy, &deploy_target)?;
+        let signing_target = if let Some(path) = sources.signing {
+            let target = key_root.join(format!("{}-signing", sources.name));
             fs::copy(path, &target)?;
             Some(target)
         } else {
@@ -671,7 +683,7 @@ impl<'a> Plan<'a> {
         Ok(Some(Credentials {
             deploy: deploy_target,
             signing: signing_target,
-            name,
+            name: sources.name,
         }))
     }
 
@@ -1219,6 +1231,12 @@ impl ServicesState {
         }
         Ok(())
     }
+}
+
+struct CredentialSources {
+    deploy: PathBuf,
+    signing: Option<PathBuf>,
+    name: String,
 }
 
 struct Credentials {

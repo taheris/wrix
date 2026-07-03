@@ -111,6 +111,7 @@ impl Fixture {
         fs::create_dir_all(&workspace)?;
         fs::create_dir_all(state_root.join("keys"))?;
         fs::create_dir_all(&cache_root)?;
+        write_deploy_keys(root.path())?;
         fs::write(state_root.join("keys/cache.pub"), format!("{PUBLIC_KEY}\n"))?;
         let profile_config = root.path().join("profile.json");
         let spawn_config = root.path().join("spawn.json");
@@ -168,6 +169,14 @@ impl Fixture {
     }
 }
 
+fn write_deploy_keys(root: &Path) -> io::Result<()> {
+    let key_dir = root.join("home/.ssh/deploy_keys");
+    fs::create_dir_all(&key_dir)?;
+    fs::write(key_dir.join("repo-key"), "private key\n")?;
+    fs::write(key_dir.join("repo-key-signing"), "signing key\n")?;
+    Ok(())
+}
+
 fn write_profile_config(path: &PathBuf) -> io::Result<()> {
     fs::write(
         path,
@@ -188,6 +197,7 @@ fn write_profile_config(path: &PathBuf) -> io::Result<()> {
     "digest": "sha256:{}"
   }},
   "agent": {{ "kind": "direct" }},
+  "security": {{ "deploy_key": "repo-key" }},
   "services": {{ "nix_cache": {{ "enable": true }} }}
 }}
 "#,

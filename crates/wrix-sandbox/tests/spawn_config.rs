@@ -15,7 +15,7 @@ fn spawn_config_schema_and_agent_pin() -> TestResult {
     let mount_host = root.path().join("documented-mount");
     fs::create_dir_all(&workspace)?;
     fs::create_dir_all(&mount_host)?;
-    common::write_profile_config(&profile_config, &ProfileFixture::default())?;
+    write_profile_config_with_keys(root.path(), &profile_config)?;
 
     let documented = root.path().join("documented.json");
     write_json(
@@ -135,7 +135,7 @@ fn linux_spawn_mounts_render_podman_volume_args() -> TestResult {
     let workspace = root.path().join("workspace");
     let profile_config = root.path().join("profile.json");
     fs::create_dir_all(&workspace)?;
-    common::write_profile_config(&profile_config, &ProfileFixture::default())?;
+    write_profile_config_with_keys(root.path(), &profile_config)?;
 
     let rw = root.path().join("rw-src");
     let ro = root.path().join("ro-src");
@@ -231,6 +231,21 @@ fn mount_lines(output: &str) -> Vec<&str> {
 
 fn path_text(path: &std::path::Path) -> String {
     path.display().to_string()
+}
+
+fn write_profile_config_with_keys(root: &std::path::Path, path: &std::path::Path) -> TestResult {
+    let key_dir = root.join("home/.ssh/deploy_keys");
+    fs::create_dir_all(&key_dir)?;
+    fs::write(key_dir.join("repo-key"), "private key\n")?;
+    fs::write(key_dir.join("repo-key-signing"), "signing key\n")?;
+    common::write_profile_config(
+        path,
+        &ProfileFixture {
+            deploy_key: Some(String::from("repo-key")),
+            ..ProfileFixture::default()
+        },
+    )?;
+    Ok(())
 }
 
 const fn alternate_source_kind() -> &'static str {
