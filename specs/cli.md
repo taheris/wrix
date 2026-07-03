@@ -117,19 +117,19 @@ The online verifier must exercise the same Git config path Loom uses from `.loom
 - Unknown root commands and malformed `wrix init` invocations, including `--deploy --offline` and `--deploy` when `wrix.init.online_verify = false`, exit non-zero with an actionable error and usage text, while `--help` exits zero without mutating repository state.
   [test](crates/wrix-cli/tests/cli_surface.rs::help_errors_are_non_mutating)
 - `wrix init` succeeds without `wrix.toml`, does not create `wrix.toml` for default behavior, and applies flag > `wrix.toml` > ProfileConfig > derived-default precedence for key name, signing, remote, hook, and online verification policy.
-  [test?](crates/wrix-cli/tests/init_config.rs::defaults_and_overrides)
+  [test](crates/wrix-cli/tests/init_config.rs::defaults_and_overrides)
 - `wrix init` writes shared/common Git config that is inherited by a `.loom/integration`-style linked worktree, and that config contains no absolute host deploy-key path, container `/etc/wrix/keys` private-key path, host-only/container-only helper path, or host-only/container-only allowed-signers path.
-  [test?](crates/wrix-cli/tests/init_git_bootstrap.rs::common_config_inherited_by_loom_integration)
+  [test](crates/wrix-cli/tests/init_git_bootstrap.rs::common_config_inherited_by_loom_integration)
 - With `$HOME` and the effective-user home differing, the Git transport helper resolves `WRIX_DEPLOY_KEY` first, `$HOME/.ssh/deploy_keys/<key-name>` second, fails when neither exists, invokes SSH with strict pinned-host-key options without using user SSH config, default identities, or `StrictHostKeyChecking=no`, and leaves any Wrix-created SSH directories at `0700` plus `config` / `known_hosts` files at `0600`.
-  [test?](crates/wrix-cli/tests/init_git_bootstrap.rs::strict_context_aware_ssh_helper)
+  [test](crates/wrix-cli/tests/init_git_bootstrap.rs::strict_context_aware_ssh_helper)
 - SSH commit signing is enabled by default; a missing `<key-name>-signing` key fails hard, `--no-sign` disables signing explicitly, and a signed test commit verifies against the generated allowed-signers file.
-  [test?](crates/wrix-cli/tests/init_signing.rs::signing_required_by_default)
+  [test](crates/wrix-cli/tests/init_signing.rs::signing_required_by_default)
 - `wrix init --deploy` generates separate passphraseless deploy and signing ed25519 keys with secure permissions when signing is enabled, registers the deploy key with write access and the signing key with GitHub, reuses matching existing keys, and replaces conflicts only with `--force`.
   [test?](crates/wrix-cli/tests/init_deploy.rs::github_deploy_and_signing_keys)
 - Online verification runs a fresh host-side Git operation from a minimal Loom-driver-like environment through the Wrix helper and distinguishes host-key verification failure from GitHub auth/repository authorization failure; `--offline` or `wrix.init.online_verify = false` skips network and GitHub API calls while preserving local verification.
   [test?](crates/wrix-cli/tests/init_verify.rs::online_and_offline_verification)
 - When `.pre-commit-config.yaml` exists and hook setup is enabled, `wrix init` points repo-local `core.hooksPath` at Wrix's prek hook bundle in the same shared config inherited by `.loom/integration`; when hooks are disabled by flag or config it leaves hook config unchanged.
-  [test?](crates/wrix-cli/tests/init_prek.rs::prek_hooks)
+  [test](crates/wrix-cli/tests/init_prek.rs::prek_hooks)
 
 ## Requirements
 
