@@ -49,21 +49,33 @@ wrix_write_profile_config "$PROFILE_CONFIG" "$IMAGE_REF" "$IMAGE_SOURCE" claude
 # shellcheck disable=SC2016
 wrix_write_spawn_config "$SPAWN_CONFIG" "$WORKSPACE" bash -lc '
 set -euo pipefail
-[[ "${WRIX_DEPLOY_KEY:-}" = /etc/wrix/keys/* ]]
-[[ "${WRIX_SIGNING_KEY:-}" = /etc/wrix/keys/*-signing ]]
-[[ -f "$WRIX_DEPLOY_KEY" ]]
-[[ -f "$WRIX_SIGNING_KEY" ]]
+
+fail_probe() {
+  local message="$1"
+  printf "nested-key probe failed: %s\n" "$message" >&2
+  exit 1
+}
+
+case "${WRIX_DEPLOY_KEY:-}" in
+  /etc/wrix/keys/*) ;;
+  *) fail_probe "WRIX_DEPLOY_KEY is not staged under /etc/wrix/keys: ${WRIX_DEPLOY_KEY:-unset}" ;;
+esac
+case "${WRIX_SIGNING_KEY:-}" in
+  /etc/wrix/keys/*-signing) ;;
+  *) fail_probe "WRIX_SIGNING_KEY is not staged under /etc/wrix/keys: ${WRIX_SIGNING_KEY:-unset}" ;;
+esac
+[[ -f "$WRIX_DEPLOY_KEY" ]] || fail_probe "mounted deploy key is missing: $WRIX_DEPLOY_KEY"
+[[ -f "$WRIX_SIGNING_KEY" ]] || fail_probe "mounted signing key is missing: $WRIX_SIGNING_KEY"
 ssh_command=$(git config --global --get core.sshCommand)
 case "$ssh_command" in
   *"-i $WRIX_DEPLOY_KEY"*"IdentitiesOnly=yes"*) ;;
-  *)
-    printf "unexpected core.sshCommand: %s\n" "$ssh_command" >&2
-    exit 1
-    ;;
+  *) fail_probe "unexpected core.sshCommand: $ssh_command" ;;
 esac
 git init -q .
 git commit --allow-empty -q -m test-signed
-git cat-file -p HEAD | grep -q "^gpgsig"
+if ! git cat-file -p HEAD | grep -q "^gpgsig"; then
+  fail_probe "signed commit is missing gpgsig metadata"
+fi
 '
 
 test_nested_key_propagation() {

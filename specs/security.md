@@ -274,19 +274,19 @@ this section is the index, not a restatement.
   present at those in-container paths, and `git commit` in the child
   produces a commit whose `git cat-file -p HEAD` output contains a
   non-empty `gpgsig` field.
-  [system?](verify:security.nested-key-propagation)
+  [system](verify:security.nested-key-propagation)
 - A fresh spawned sandbox configures global `user.name` / `user.email`,
   installs pinned GitHub host keys at `/etc/ssh/ssh_known_hosts`, uses
   the mounted deploy key with strict host-key checking for GitHub SSH,
   makes an empty signed commit, and verifies that commit as a good SSH
   signature without manual `ssh-keyscan` or `git config`.
-  [system?](verify:security.git-ssh-bootstrap)
+  [system](verify:security.git-ssh-bootstrap)
 - Wrix-initialized host Git, container Git, and a `.loom/integration`-style
   linked worktree all use context-resolved repo deploy/signing keys, strict
   pinned GitHub host-key verification, and no ambient user SSH identities;
   a fresh host-side GitHub SSH operation reaches authentication or repository
   authorization without host-key verification failure.
-  [system?](verify:security.host-container-loom-git-helper)
+  [system](verify:security.host-container-loom-git-helper)
 - When `WRIX_DEPLOY_KEY` or `WRIX_SIGNING_KEY` is set in the
   launcher's environment but the pointed-at file does not exist, the
   launcher exits non-zero with a stderr message naming the missing
@@ -302,7 +302,7 @@ this section is the index, not a restatement.
   `/workspace/.wrix/log/`; its `timestamp_start`, `timestamp_end`,
   `exit_code`, `mode`, and `agent_session_dir` fields are populated;
   and `agent_session_dir` resolves to an existing directory.
-  [system?](verify:security.audit-trail-anchor)
+  [system](verify:security.audit-trail-anchor)
 - Default launches do not expose the host Podman API; `WRIX_PODMAN_SOCKET`
   does not enable it, and `WRIX_UNSAFE_PODMAN_SOCKET` is the only opt-in,
   failing loudly when set but the host socket is absent.
