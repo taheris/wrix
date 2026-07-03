@@ -6,12 +6,14 @@
 #     pre-commit, pre-push, prepare-commit-msg, post-checkout, post-merge —
 #     and no other paths.
 #
-#   test_shims_are_plain_hook_impl
-#     Every shim invokes `prek hook-impl --hook-type=<its-stage>` and none
-#     source lock.sh, call _prek_acquire_lock, or invoke flock — the bundle
-#     no longer wraps any stage in a serialized critical section. Every shim
-#     also pins the Nix-store prek package on PATH so git hooks work outside
-#     the devShell.
+#   test_shims_use_hook_impl
+#     The materialized pre-commit and pre-push shims invoke
+#     `prek hook-impl --hook-type=<stage>` rather than `prek run`.
+#
+#   test_shims_no_flock
+#     No materialized shim sources lock.sh, calls _prek_acquire_lock, or
+#     invokes flock; every shim invokes hook-impl and pins the Nix-store
+#     prek package on PATH.
 #
 #   test_pre_push_stamp_written_and_consumed
 #     The materialized pre-push shim writes .wrix/push-verified for the
@@ -84,11 +86,36 @@ test_bundle_contents() {
 }
 
 # ============================================================================
-# Every shim is a plain hook-impl invocation: no lock.sh source, no
-# _prek_acquire_lock call, no flock invocation; and each shim names its own
-# stage via --hook-type=<stage>.
+test_shims_use_hook_impl() {
+  local bundle
+  if ! bundle=$(require_bundle "$@"); then
+    echo "FAIL: nix build lib.prekHooks failed" >&2
+    return 1
+  fi
+
+  local failed=0
+  local hook
+  for hook in pre-commit pre-push; do
+    if [[ ! -f "$bundle/$hook" ]]; then
+      echo "FAIL: bundle missing shim: $hook" >&2
+      failed=$((failed + 1))
+      continue
+    fi
+    if grep -qE '^[[:space:]]*[^#].*\bprek run\b' "$bundle/$hook"; then
+      echo "FAIL: $hook invokes 'prek run' instead of hook-impl" >&2
+      failed=$((failed + 1))
+    fi
+    if ! grep -qE "hook-impl .*--hook-type=$hook( |$)" "$bundle/$hook"; then
+      echo "FAIL: $hook does not invoke 'prek hook-impl --hook-type=$hook'" >&2
+      failed=$((failed + 1))
+    fi
+  done
+
+  [[ "$failed" -eq 0 ]]
+}
+
 # ============================================================================
-test_shims_are_plain_hook_impl() {
+test_shims_no_flock() {
   local bundle
   if ! bundle=$(require_bundle "$@"); then
     echo "FAIL: nix build lib.prekHooks failed" >&2
@@ -230,7 +257,8 @@ YAML
 
 ALL_TESTS=(
   test_bundle_contents
-  test_shims_are_plain_hook_impl
+  test_shims_use_hook_impl
+  test_shims_no_flock
   test_pre_push_stamp_written_and_consumed
 )
 

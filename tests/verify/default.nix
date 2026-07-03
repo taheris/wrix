@@ -17,12 +17,14 @@ let
     jq
     nix
     openssh
+    prek
     python3
     writeShellScriptBin
     ;
 
   domainRegistries = [
     (import ./cli.nix { inherit pkgs system; })
+    (import ./prek.nix { inherit pkgs system; })
     (import ./security.nix { inherit pkgs system; })
     (import ./services.nix { inherit pkgs system; })
     (import ./tmux-mcp.nix { inherit pkgs system; })
@@ -44,7 +46,7 @@ let
   verify = writeShellScriptBin "verify" ''
     set -euo pipefail
 
-    export PATH="${bash}/bin:${coreutils}/bin:${findutils}/bin:${gawk}/bin:${git}/bin:${gnugrep}/bin:${gnused}/bin:${jq}/bin:${nix}/bin:${openssh}/bin:${python3}/bin:$PATH"
+    export PATH="${bash}/bin:${coreutils}/bin:${findutils}/bin:${gawk}/bin:${git}/bin:${gnugrep}/bin:${gnused}/bin:${jq}/bin:${nix}/bin:${openssh}/bin:${prek}/bin:${python3}/bin:$PATH"
     SELF="$0"
 
     fail() {
