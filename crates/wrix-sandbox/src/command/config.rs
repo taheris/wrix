@@ -5,6 +5,8 @@ use serde::Deserialize;
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::image::SourceKind;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Platform {
     Linux,
@@ -29,22 +31,6 @@ impl Platform {
         match self {
             Self::Linux => "Linux",
             Self::Darwin => "Darwin",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "kebab-case")]
-pub enum SourceKind {
-    NixDescriptor,
-    DockerArchive,
-}
-
-impl SourceKind {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::NixDescriptor => "nix-descriptor",
-            Self::DockerArchive => "docker-archive",
         }
     }
 }

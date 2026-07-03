@@ -1,5 +1,4 @@
 use std::{
-    collections::BTreeSet,
     env, fs, io,
     io::Write,
     path::{Path, PathBuf},
@@ -7,14 +6,14 @@ use std::{
 };
 
 use displaydoc::Display;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 use wrix_core::path::Workspace;
 
+use crate::image::{self, CommandStore, InstallRequest, RetentionRequest, Runtime, SourceKind};
+
 use super::config::{
-    AgentKind, MountMode, Platform, ProfileConfig, ProfileMount, SourceKind, SpawnConfig,
-    SpawnMount,
+    AgentKind, MountMode, Platform, ProfileConfig, ProfileMount, SpawnConfig, SpawnMount,
 };
 
 pub struct Request {
@@ -57,14 +56,6 @@ pub enum LaunchError {
     ServiceFailed { stderr: String },
     /// command failed: {program}: {stderr}
     ProcessFailed { program: String, stderr: String },
-    /// nix-descriptor image source is missing a sha256 digest: {path}
-    MissingDescriptorDigest { path: String },
-    /// nix-descriptor image source is missing oci_layout: {path}
-    MissingDescriptorLayout { path: String },
-    /// docker-archive image source is missing a sha256 digest: {path}
-    MissingDockerArchiveDigest { path: String },
-    /// unsupported image source_kind: {kind}
-    UnsupportedImageSourceKind { kind: &'static str },
     /// mount source not found: {path}
     MountSourceMissing { path: String },
     /// Unix-socket mount source rejected: {socket} -> {dest}
@@ -91,15 +82,19 @@ pub enum LaunchError {
     Io { source: io::Error },
     /// invalid service endpoint JSON: {source}
     ServiceJson { source: serde_json::Error },
-    /// invalid image MRU JSON: {source}
-    ImageMruJson { source: serde_json::Error },
-    /// invalid image descriptor JSON: {source}
-    DescriptorJson { source: serde_json::Error },
+    /// {source}
+    Image { source: image::Error },
 }
 
 impl From<io::Error> for LaunchError {
     fn from(source: io::Error) -> Self {
         Self::Io { source }
+    }
+}
+
+impl From<image::Error> for LaunchError {
+    fn from(source: image::Error) -> Self {
+        Self::Image { source }
     }
 }
 
@@ -139,12 +134,6 @@ struct Plan<'a> {
 enum NetworkMode {
     Open,
     Limit,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ImageRuntime {
-    Podman,
-    Container,
 }
 
 const DARWIN_NOTIFY_TCP_ENDPOINT: &str = "192.168.64.1:5959";
@@ -197,16 +186,6 @@ struct ImageSource {
     source: String,
     kind: SourceKind,
     digest: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct ImageRecord {
-    #[serde(default, rename = "ref", skip_serializing_if = "String::is_empty")]
-    ref_name: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    digest: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    id: String,
 }
 
 impl NetworkMode {
@@ -402,13 +381,8 @@ impl<'a> Plan<'a> {
     }
 
     fn launch_linux(&self) -> Result<ExitCode, LaunchError> {
-        install_linux_image(
-            &self.image_ref,
-            &self.image_source,
-            self.image_source_kind,
-            &self.image_digest,
-        )?;
-        self.remember_and_prune_images(ImageRuntime::Podman)?;
+        self.install_image(Runtime::Podman)?;
+        self.remember_and_prune_images(Runtime::Podman)?;
         let staging = Staging::create()?;
         let mut volumes = self.linux_volumes(&staging)?;
         let credentials = self.credentials(&staging)?;
@@ -492,13 +466,8 @@ impl<'a> Plan<'a> {
     }
 
     fn launch_darwin(&self) -> Result<ExitCode, LaunchError> {
-        install_darwin_image(
-            &self.image_ref,
-            &self.image_source,
-            self.image_source_kind,
-            &self.image_digest,
-        )?;
-        self.remember_and_prune_images(ImageRuntime::Container)?;
+        self.install_image(Runtime::Container)?;
+        self.remember_and_prune_images(Runtime::Container)?;
         let staging = Staging::create()?;
         let darwin_mounts = self.darwin_mounts(&staging)?;
         let credentials = self.credentials(&staging)?;
@@ -601,18 +570,36 @@ impl<'a> Plan<'a> {
         Ok(mounts)
     }
 
-    fn remember_and_prune_images(&self, runtime: ImageRuntime) -> Result<(), LaunchError> {
-        let digest = if self.image_source.is_empty() {
-            String::new()
-        } else {
-            desired_digest(
-                &self.image_source,
-                self.image_source_kind,
-                &self.image_digest,
-            )?
-        };
-        remember_image_ref(runtime, &self.image_ref, &digest)?;
-        prune_stale_images(runtime, &self.image_ref, &digest)
+    fn install_image(&self, runtime: Runtime) -> Result<(), LaunchError> {
+        let mut store = CommandStore;
+        image::install(
+            &mut store,
+            &InstallRequest {
+                runtime,
+                image_ref: &self.image_ref,
+                image_source: &self.image_source,
+                source_kind: self.image_source_kind,
+                digest: &self.image_digest,
+            },
+        )?;
+        Ok(())
+    }
+
+    fn remember_and_prune_images(&self, runtime: Runtime) -> Result<(), LaunchError> {
+        let mru_path = image::default_mru_path();
+        let mut store = CommandStore;
+        image::remember_and_prune(
+            &mut store,
+            &RetentionRequest {
+                runtime,
+                image_ref: &self.image_ref,
+                image_source: &self.image_source,
+                source_kind: self.image_source_kind,
+                digest: &self.image_digest,
+                mru_path: &mru_path,
+            },
+        )?;
+        Ok(())
     }
 
     fn credentials(&self, staging: &Staging) -> Result<Option<Credentials>, LaunchError> {
@@ -1193,519 +1180,6 @@ impl Drop for Staging {
     }
 }
 
-fn install_linux_image(
-    image_ref: &str,
-    image_source: &str,
-    kind: SourceKind,
-    digest: &str,
-) -> Result<(), LaunchError> {
-    if image_source.is_empty() {
-        return Ok(());
-    }
-    let desired = desired_digest(image_source, kind, digest)?;
-    if !desired.is_empty()
-        && run_output(
-            "podman",
-            &["image", "inspect", "--format", "{{.Id}}", &desired],
-        )
-        .is_ok_and(|output| output.status.success())
-    {
-        let _tag = run_output("podman", &["tag", &desired, image_ref]);
-        return Ok(());
-    }
-    let store_ref = linux_store_ref(image_ref);
-    match kind {
-        SourceKind::NixDescriptor => {
-            let descriptor = read_json_file(image_source)?;
-            let layout = descriptor
-                .get("oci_layout")
-                .and_then(Value::as_str)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| LaunchError::MissingDescriptorLayout {
-                    path: image_source.to_owned(),
-                })?;
-            let oci_ref = descriptor
-                .get("oci_ref")
-                .and_then(Value::as_str)
-                .filter(|value| !value.is_empty())
-                .unwrap_or("latest");
-            run_required(
-                "skopeo",
-                &[
-                    "--insecure-policy",
-                    "copy",
-                    "--quiet",
-                    &format!("oci:{layout}:{oci_ref}"),
-                    &store_ref,
-                ],
-            )?;
-        }
-        SourceKind::DockerArchive => {
-            run_required(
-                "skopeo",
-                &[
-                    "--insecure-policy",
-                    "copy",
-                    "--quiet",
-                    &format!("docker-archive:{image_source}"),
-                    &store_ref,
-                ],
-            )?;
-        }
-    }
-    if let Some(repo) = image_ref.rsplit_once(':').map(|(repo, _tag)| repo) {
-        let latest = format!("{repo}:latest");
-        let _tag = run_output("podman", &["tag", image_ref, &latest]);
-    }
-    Ok(())
-}
-
-fn install_darwin_image(
-    image_ref: &str,
-    image_source: &str,
-    kind: SourceKind,
-    digest: &str,
-) -> Result<(), LaunchError> {
-    if image_source.is_empty() {
-        return Ok(());
-    }
-    if kind != SourceKind::DockerArchive {
-        return Err(LaunchError::UnsupportedImageSourceKind {
-            kind: kind.as_str(),
-        });
-    }
-    let desired = desired_digest(image_source, kind, digest)?;
-    if !desired.is_empty() && darwin_image_digest_present(&desired)? {
-        return Ok(());
-    }
-    run_required("container", &["image", "load", "--input", image_source])?;
-    if let Some(untagged) = darwin_first_untagged_ref(image_ref) {
-        run_required("container", &["image", "tag", &untagged, image_ref])?;
-    }
-    Ok(())
-}
-
-fn desired_digest(
-    image_source: &str,
-    kind: SourceKind,
-    digest: &str,
-) -> Result<String, LaunchError> {
-    if digest.starts_with("sha256:") {
-        return Ok(digest.to_owned());
-    }
-    let path = Path::new(digest);
-    if path.is_file() {
-        let value = fs::read_to_string(path)?;
-        let trimmed = value.trim();
-        if trimmed.starts_with("sha256:") {
-            return Ok(trimmed.to_owned());
-        }
-    }
-    match kind {
-        SourceKind::NixDescriptor => {
-            let descriptor = read_json_file(image_source)?;
-            descriptor
-                .get("digest")
-                .and_then(Value::as_str)
-                .filter(|value| value.starts_with("sha256:"))
-                .map(ToOwned::to_owned)
-                .ok_or_else(|| LaunchError::MissingDescriptorDigest {
-                    path: image_source.to_owned(),
-                })
-        }
-        SourceKind::DockerArchive => {
-            let output = run_required_output(
-                "skopeo",
-                &[
-                    "inspect",
-                    "--raw",
-                    &format!("docker-archive:{image_source}"),
-                ],
-            )?;
-            let value = serde_json::from_slice::<Value>(&output.stdout)
-                .map_err(|source| LaunchError::DescriptorJson { source })?;
-            value
-                .pointer("/config/digest")
-                .and_then(Value::as_str)
-                .filter(|value| value.starts_with("sha256:"))
-                .map(ToOwned::to_owned)
-                .ok_or_else(|| LaunchError::MissingDockerArchiveDigest {
-                    path: image_source.to_owned(),
-                })
-        }
-    }
-}
-
-fn remember_image_ref(
-    runtime: ImageRuntime,
-    image_ref: &str,
-    digest: &str,
-) -> Result<(), LaunchError> {
-    if image_ref.is_empty() {
-        return Ok(());
-    }
-    let path = image_mru_path();
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let mut records = read_image_records(&path)?;
-    records.insert(
-        0,
-        ImageRecord {
-            ref_name: image_ref.to_owned(),
-            digest: digest.to_owned(),
-            id: image_inspect_id(runtime, image_ref)?.unwrap_or_else(String::new),
-        },
-    );
-    let mut seen = BTreeSet::new();
-    let records = records
-        .into_iter()
-        .filter(|record| {
-            !record.ref_name.is_empty() || !record.digest.is_empty() || !record.id.is_empty()
-        })
-        .filter(|record| {
-            seen.insert(format!(
-                "{}\0{}\0{}",
-                record.ref_name, record.digest, record.id
-            ))
-        })
-        .take(8)
-        .collect::<Vec<_>>();
-    let json = serde_json::to_string_pretty(&records)
-        .map_err(|source| LaunchError::ImageMruJson { source })?;
-    fs::write(path, format!("{json}\n"))?;
-    Ok(())
-}
-
-fn prune_stale_images(
-    runtime: ImageRuntime,
-    image_ref: &str,
-    digest: &str,
-) -> Result<(), LaunchError> {
-    let mut keep_refs = BTreeSet::new();
-    let mut keep_ids = BTreeSet::new();
-    let mut keep_digests = BTreeSet::new();
-    add_normalized(&mut keep_refs, image_ref);
-    add_normalized(&mut keep_digests, digest);
-    if let Some(id) = image_inspect_id(runtime, image_ref)? {
-        add_normalized(&mut keep_ids, &id);
-    }
-    if let Some(actual_digest) = image_inspect_digest(runtime, image_ref)? {
-        add_normalized(&mut keep_digests, &actual_digest);
-    }
-    for record in read_image_records(&image_mru_path())? {
-        add_normalized(&mut keep_refs, &record.ref_name);
-        add_normalized(&mut keep_ids, &record.id);
-        add_normalized(&mut keep_digests, &record.digest);
-    }
-    for image in list_images(runtime)? {
-        if !image.managed && !image.legacy {
-            continue;
-        }
-        if keep_refs.contains(&image.ref_name)
-            || keep_ids.contains(&image.id)
-            || keep_digests.contains(&image.digest)
-        {
-            continue;
-        }
-        if image_in_use(runtime, &image.target)? {
-            continue;
-        }
-        delete_image(runtime, &image.target)?;
-    }
-    Ok(())
-}
-
-struct ListedImage {
-    ref_name: String,
-    target: String,
-    id: String,
-    digest: String,
-    managed: bool,
-    legacy: bool,
-}
-
-fn image_mru_path() -> PathBuf {
-    if let Some(path) = env::var_os("WRIX_IMAGE_KEEP_FILE") {
-        return PathBuf::from(path);
-    }
-    env::var_os("XDG_CACHE_HOME")
-        .map_or_else(|| home_dir().join(".cache"), PathBuf::from)
-        .join("wrix/image-mru.json")
-}
-
-fn read_image_records(path: &Path) -> Result<Vec<ImageRecord>, LaunchError> {
-    if !path.is_file() {
-        return Ok(Vec::new());
-    }
-    let content = fs::read_to_string(path)?;
-    match serde_json::from_str::<Vec<ImageRecord>>(&content) {
-        Ok(records) => Ok(records),
-        Err(source) => {
-            let mut sink = io::stderr().lock();
-            writeln!(
-                sink,
-                "wrix: resetting invalid image MRU {}: {source}",
-                path.display()
-            )?;
-            Ok(Vec::new())
-        }
-    }
-}
-
-fn list_images(runtime: ImageRuntime) -> Result<Vec<ListedImage>, LaunchError> {
-    let output = match runtime {
-        ImageRuntime::Podman => run_required_output(
-            "podman",
-            &["images", "--format", "{{.Repository}} {{.Tag}} {{.ID}}"],
-        )?,
-        ImageRuntime::Container => run_required_output("container", &["image", "list"])?,
-    };
-    let text = String::from_utf8_lossy(&output.stdout);
-    let mut images = Vec::new();
-    for line in text.lines() {
-        if let Some(image) = listed_image_from_line(runtime, line) {
-            images.push(image?);
-        }
-    }
-    Ok(images)
-}
-
-fn listed_image_from_line(
-    runtime: ImageRuntime,
-    line: &str,
-) -> Option<Result<ListedImage, LaunchError>> {
-    let mut fields = line.split_whitespace();
-    let repo = fields.next()?;
-    if runtime == ImageRuntime::Container && repo.eq_ignore_ascii_case("repository") {
-        return None;
-    }
-    let tag = fields.next().unwrap_or("<none>");
-    let listed_id = fields.next().unwrap_or("");
-    let ref_name = if repo != "<none>" && tag != "<none>" {
-        format!("{repo}:{tag}")
-    } else {
-        String::new()
-    };
-    let target = normalized_value(&ref_name)
-        .or_else(|| normalized_value(listed_id))
-        .unwrap_or_default();
-    if target.is_empty() {
-        return None;
-    }
-    Some(listed_image(
-        runtime,
-        ref_name,
-        listed_id.to_owned(),
-        target,
-    ))
-}
-
-fn listed_image(
-    runtime: ImageRuntime,
-    ref_name: String,
-    listed_id: String,
-    target: String,
-) -> Result<ListedImage, LaunchError> {
-    let id = image_inspect_id(runtime, &target)?.unwrap_or(listed_id);
-    let digest = image_inspect_digest(runtime, &target)?.unwrap_or_else(String::new);
-    let managed = image_managed(runtime, &target)?;
-    let legacy = match runtime {
-        ImageRuntime::Podman => ref_name.starts_with("localhost/wrix-"),
-        ImageRuntime::Container => ref_name.starts_with("wrix-"),
-    };
-    Ok(ListedImage {
-        ref_name,
-        target,
-        id,
-        digest,
-        managed,
-        legacy,
-    })
-}
-
-fn image_inspect_id(runtime: ImageRuntime, target: &str) -> Result<Option<String>, LaunchError> {
-    image_inspect_value(runtime, target, ImageInspectField::Id)
-}
-
-fn image_inspect_digest(
-    runtime: ImageRuntime,
-    target: &str,
-) -> Result<Option<String>, LaunchError> {
-    image_inspect_value(runtime, target, ImageInspectField::Digest)
-}
-
-#[derive(Clone, Copy)]
-enum ImageInspectField {
-    Id,
-    Digest,
-    Managed,
-}
-
-fn image_inspect_value(
-    runtime: ImageRuntime,
-    target: &str,
-    field: ImageInspectField,
-) -> Result<Option<String>, LaunchError> {
-    if target.is_empty() {
-        return Ok(None);
-    }
-    let output = match runtime {
-        ImageRuntime::Podman => {
-            let format = match field {
-                ImageInspectField::Id => "{{.Id}}",
-                ImageInspectField::Digest => "{{.Digest}}",
-                ImageInspectField::Managed => "{{ index .Config.Labels \"wrix.managed\" }}",
-            };
-            run_output("podman", &["image", "inspect", "--format", format, target])?
-        }
-        ImageRuntime::Container => run_output("container", &["image", "inspect", target])?,
-    };
-    if !output.status.success() {
-        return Ok(None);
-    }
-    match runtime {
-        ImageRuntime::Podman => Ok(normalized_value(&trim_stdout(&output.stdout))),
-        ImageRuntime::Container => inspect_container_value(&output.stdout, field),
-    }
-}
-
-fn inspect_container_value(
-    stdout: &[u8],
-    field: ImageInspectField,
-) -> Result<Option<String>, LaunchError> {
-    let value = serde_json::from_slice::<Value>(stdout)
-        .map_err(|source| LaunchError::DescriptorJson { source })?;
-    let pointer = match field {
-        ImageInspectField::Id => "/0/id",
-        ImageInspectField::Digest => "/0/digest",
-        ImageInspectField::Managed => "/0/labels/wrix.managed",
-    };
-    Ok(value
-        .pointer(pointer)
-        .or_else(|| match field {
-            ImageInspectField::Managed => value.pointer("/0/Labels/wrix.managed"),
-            _ => None,
-        })
-        .and_then(Value::as_str)
-        .and_then(normalized_value))
-}
-
-fn image_managed(runtime: ImageRuntime, target: &str) -> Result<bool, LaunchError> {
-    Ok(
-        image_inspect_value(runtime, target, ImageInspectField::Managed)?.as_deref()
-            == Some("true"),
-    )
-}
-
-fn image_in_use(runtime: ImageRuntime, target: &str) -> Result<bool, LaunchError> {
-    if runtime != ImageRuntime::Podman {
-        return Ok(false);
-    }
-    let filter = format!("ancestor={target}");
-    let output = run_output(
-        "podman",
-        &["ps", "-a", "--filter", &filter, "--format", "{{.Names}}"],
-    )?;
-    Ok(output.status.success() && !trim_stdout(&output.stdout).is_empty())
-}
-
-fn delete_image(runtime: ImageRuntime, target: &str) -> Result<(), LaunchError> {
-    let output = match runtime {
-        ImageRuntime::Podman => run_output("podman", &["rmi", target])?,
-        ImageRuntime::Container => run_output("container", &["image", "delete", target])?,
-    };
-    if output.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let mut sink = io::stderr().lock();
-    if stderr.contains("in use") || stderr.contains("is using") {
-        writeln!(
-            sink,
-            "prune-stale-images: {target} pinned by a container — upgrades on next start"
-        )?;
-    } else {
-        writeln!(
-            sink,
-            "prune-stale-images: could not remove {target}: {stderr}"
-        )?;
-    }
-    Ok(())
-}
-
-fn add_normalized(set: &mut BTreeSet<String>, value: &str) {
-    if let Some(value) = normalized_value(value) {
-        set.insert(value);
-    }
-}
-
-fn normalized_value(value: &str) -> Option<String> {
-    match value.trim() {
-        "" | "<none>" | "<no value>" | "null" => None,
-        value => Some(value.to_owned()),
-    }
-}
-
-fn linux_store_ref(image_ref: &str) -> String {
-    let mut store_ref = format!("containers-storage:{image_ref}");
-    if let Ok(output) = run_output(
-        "podman",
-        &[
-            "info",
-            "--format",
-            "{{.Store.GraphDriverName}}@{{.Store.GraphRoot}}+{{.Store.RunRoot}}",
-        ],
-    ) && output.status.success()
-    {
-        let spec = trim_stdout(&output.stdout);
-        if spec.contains('@') && spec.contains('+') {
-            store_ref = format!("containers-storage:[{spec}]{image_ref}");
-        }
-    }
-    store_ref
-}
-
-fn darwin_image_digest_present(digest: &str) -> Result<bool, LaunchError> {
-    let Ok(output) = run_output("container", &["image", "list"]) else {
-        return Ok(false);
-    };
-    if !output.status.success() {
-        return Ok(false);
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
-    for line in text.lines().skip(1) {
-        let mut fields = line.split_whitespace();
-        let Some(repo) = fields.next() else {
-            continue;
-        };
-        let Some(tag) = fields.next() else {
-            continue;
-        };
-        let reference = format!("{repo}:{tag}");
-        let inspect = run_output("container", &["image", "inspect", &reference])?;
-        if !inspect.status.success() {
-            continue;
-        }
-        let value = serde_json::from_slice::<Value>(&inspect.stdout)
-            .map_err(|source| LaunchError::DescriptorJson { source })?;
-        let actual = value
-            .pointer("/0/digest")
-            .or_else(|| value.pointer("/0/id"))
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if actual.trim_start_matches("sha256:") == digest.trim_start_matches("sha256:") {
-            let _tag = run_output("container", &["image", "tag", &reference, &reference]);
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-const fn darwin_first_untagged_ref(_image_ref: &str) -> Option<String> {
-    None
-}
-
 fn render_profile_mount(
     mount: &ProfileMount,
     staging: &Staging,
@@ -1856,18 +1330,6 @@ fn service_command() -> Result<PathBuf, LaunchError> {
     env::current_exe().map_err(LaunchError::from)
 }
 
-fn run_required(program: &str, args: &[&str]) -> Result<(), LaunchError> {
-    let output = run_output(program, args)?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(LaunchError::ProcessFailed {
-            program: program.to_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        })
-    }
-}
-
 fn run_required_output(program: &str, args: &[&str]) -> Result<Output, LaunchError> {
     let output = run_output(program, args)?;
     if output.status.success() {
@@ -1898,11 +1360,6 @@ fn status_to_exit(status: std::process::ExitStatus) -> ExitCode {
 fn current_uid() -> Result<String, LaunchError> {
     let output = run_required_output("id", &["-u"])?;
     Ok(trim_stdout(&output.stdout))
-}
-
-fn read_json_file(path: &str) -> Result<Value, LaunchError> {
-    let content = fs::read_to_string(path)?;
-    serde_json::from_str(&content).map_err(|source| LaunchError::DescriptorJson { source })
 }
 
 fn trim_stdout(stdout: &[u8]) -> String {

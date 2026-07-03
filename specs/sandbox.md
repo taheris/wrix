@@ -266,17 +266,17 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 - Both `lib/sandbox/linux/entrypoint.sh` and `lib/sandbox/darwin/entrypoint.sh` implement the `/workspace/bin` PATH prepend
   [check?](verify:sandbox.entrypoint-workspace-bin-prepend)
 - The runtime image installer preflight checks whether the selected image source's content digest matches any image already present in the platform store before invoking the install pipeline; on a digest hit, no image source is executed, no tar bytes are streamed, and no `*-load` CLI is invoked
-  [test?](crates/wrix-sandbox/tests/image_install.rs::digest_preflight_skips_source_execution_on_hit)
+  [test](crates/wrix-sandbox/tests/image_install.rs::digest_preflight_skips_source_execution_on_hit)
 - On Linux, the runtime image installer dispatches `source_kind = "nix-descriptor"` through an archive-less descriptor-to-OCI-layout install path (`oci:<oci_layout>:<oci_ref>` → `containers-storage:<ref>` with skopeo, or equivalent wrix); the docker/OCI archive conversion path is not used for Linux descriptor sources
-  [test?](crates/wrix-sandbox/tests/image_install.rs::linux_descriptor_sources_use_archiveless_install_path)
+  [test](crates/wrix-sandbox/tests/image_install.rs::linux_descriptor_sources_use_archiveless_install_path)
 - A second spawn of an already-loaded image performs no writes to the platform store's layer directory and does not execute the image source
-  [test?](crates/wrix-sandbox/tests/image_install.rs::already_loaded_image_performs_no_store_writes)
+  [test](crates/wrix-sandbox/tests/image_install.rs::already_loaded_image_performs_no_store_writes)
 - On Linux, re-installing an image that differs from the cached one in only its top customisation layer generates and transfers only changed/missing layer blobs, not O(image-size) bytes
-  [test?](crates/wrix-sandbox/tests/image_install.rs::linux_reinstall_transfers_only_changed_layers)
+  [test](crates/wrix-sandbox/tests/image_install.rs::linux_reinstall_transfers_only_changed_layers)
 - The runtime image cleanup path records a bounded cross-workspace MRU of eight wrix image refs/digests/image IDs, preserves images used by existing containers, prunes wrix-managed images outside the keep set, and does not automatically remove unlabelled `<none>:<none>` images
-  [test?](crates/wrix-sandbox/tests/image_retention.rs::cleanup_prunes_only_wrix_managed_images_outside_bounded_keep_set)
+  [test](crates/wrix-sandbox/tests/image_retention.rs::cleanup_prunes_only_wrix_managed_images_outside_bounded_keep_set)
 - On Darwin, the runtime image installer uses `container image load --input <tar>` for `source_kind = "docker-archive"` image install (per Apple's available CLI surface) and relies on the digest-skip preflight while per-blob install remains out of scope
-  [test?](crates/wrix-sandbox/tests/image_install.rs::darwin_docker_archive_sources_use_container_image_load)
+  [test](crates/wrix-sandbox/tests/image_install.rs::darwin_docker_archive_sources_use_container_image_load)
 
 ## Requirements
 
