@@ -109,11 +109,11 @@ The online verifier must exercise the same Git config path Loom uses from `.loom
 - Root help and subcommand help expose `run`, `spawn`, `service`, `beads`, and `init`, and delegated command help reaches the owning command group.
   [test](crates/wrix-cli/tests/cli_surface.rs::root_and_subcommand_help)
 - The packaged `wrix` output installs no legacy `wrix-svc`, `beads-dolt`, `beads-push`, or `<repo>-beads` public binaries.
-  [check?](verify:cli.package-surface)
+  [check](verify:cli.package-surface)
 - `.#verify --list` exposes the supported `verify:<domain>.<check-id>` target IDs, and `.#verify <id>...` runs the requested IDs in one process with actionable failures for unknown IDs.
-  [check?](verify:cli.shared-verifier-app)
+  [check](verify:cli.shared-verifier-app)
 - Runner configuration maps `verify:` annotations to the batched `.#verify` app invocation rather than spawning one Nix process per criterion, and treats the `.#verify --list` inventory as the verifier registry.
-  [check?](verify:cli.verify-runner-batching)
+  [check](verify:cli.verify-runner-batching)
 - Unknown root commands and malformed `wrix init` invocations, including `--deploy --offline` and `--deploy` when `wrix.init.online_verify = false`, exit non-zero with an actionable error and usage text, while `--help` exits zero without mutating repository state.
   [test](crates/wrix-cli/tests/cli_surface.rs::help_errors_are_non_mutating)
 - `wrix init` succeeds without `wrix.toml`, does not create `wrix.toml` for default behavior, and applies flag > `wrix.toml` > ProfileConfig > derived-default precedence for key name, signing, remote, hook, and online verification policy.

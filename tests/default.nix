@@ -132,6 +132,8 @@ let
     wrix-rust-nextest = wrix.rustPackage.nextest;
   };
 
+  verify = import ./verify { inherit pkgs system; };
+
   prePushSmokeTests = pkgs.lib.removeAttrs smokeTests [
     "image-builds"
     "linux-microvm-krun-detection"
@@ -563,5 +565,6 @@ in
     testImages
     tmuxMcpTests
     tomlTests
+    verify
     ;
 }

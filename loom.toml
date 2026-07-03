@@ -8,3 +8,19 @@ agent.backend = "pi"
 
 [runner.test]
 command = "bash tests/loom-nextest-file-targets.sh '{paths}'"
+
+[runner.check.verify]
+match = '^verify:(.+)$'
+command = "nix run .#verify -- {targets}"
+target = "{capture_1}"
+join = " "
+parse = "json-lines"
+cwd = "."
+
+[runner.system.verify]
+match = '^verify:(.+)$'
+command = "nix run .#verify -- {targets}"
+target = "{capture_1}"
+join = " "
+parse = "json-lines"
+cwd = "."
