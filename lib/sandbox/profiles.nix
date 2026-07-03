@@ -43,6 +43,7 @@ let
       openssh
       patch
       prek
+      python3
       ripgrep
       rsync
       shellcheck
@@ -423,14 +424,12 @@ in
     name = "python";
 
     corePackages = with pkgs; [
-      python3
       ruff
       ty
       uv
     ];
 
     hostPackages = with hostPkgs; [
-      python3
       ruff
       ty
       uv

@@ -85,9 +85,9 @@ See [specs/sandbox.md](specs/sandbox.md) for full details.
 
 | Profile | Packages |
 |---------|----------|
-| `base` | git, ripgrep, fd, jq, vim, treefmt wrapper |
+| `base` | git, ripgrep, fd, jq, python3, vim, treefmt wrapper |
 | `rust` | base + fenix toolchain, sccache, gcc, openssl, pkg-config |
-| `python` | base + python3, uv, ty, ruff |
+| `python` | base + uv, ty, ruff |
 
 See [specs/profiles.md](specs/profiles.md) for the full schema and `buildPackage` API.
 
