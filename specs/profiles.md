@@ -675,7 +675,7 @@ dests live under `/home/wrix/` inside the container, not under
 - Base profile provides functional development environment
   [judge](../tests/judges/profiles.sh#test_base_profile_functional)
 - Base profile exposes `python3` on both image and host package surfaces for stdlib-only ad hoc scripting, while `uv`, `ruff`, `ty`, `UV_CACHE_DIR`, and the uv cache mount remain Python-profile-only.
-  [check?](verify:profiles.base-python-boundary)
+  [check](verify:profiles.base-python-boundary)
 - Rust profile can compile and run Rust projects
   [judge](../tests/judges/profiles.sh#test_rust_profile)
 - Rust profile toolchain survives nixpkgs updates (no dynamic linker breakage)
@@ -685,9 +685,9 @@ dests live under `/home/wrix/` inside the container, not under
 - `wrix.rustProfile { toolchain = ./rust-toolchain.toml; sha256 = "..."; }` produces a working profile whose `toolchain` field is a fenix-combine derivation reflecting the file's component set
   [judge](../tests/judges/profiles.sh#test_rust_profile_constructor)
 - `wrix.rustProfile { toolchain; sha256; packages = [p]; hostPackages = [h]; env = { K = "v"; }; mounts = [m]; networkAllowlist = [a]; }` lands extension args in the matching profile slots (package/mount/allowlist surfaces appended, env right-merged)
-  [check?](verify:profiles.rust-extension-args)
+  [check](verify:profiles.rust-extension-args)
 - `wrix.rustProfile {}` (omitting required `toolchain`/`sha256`) errors at evaluation rather than silently producing an unpinned profile
-  [check?](verify:profiles.rust-required-args)
+  [check](verify:profiles.rust-required-args)
 - Cargo registry/git mounts and the sccache cache parent are writable so cargo can fetch crates and sccache can cache artifacts without `Read-only file system` errors
   [judge](../tests/judges/profiles.sh#test_cargo_registry_writable)
 - Python profile can run Python scripts with dependencies
@@ -697,73 +697,73 @@ dests live under `/home/wrix/` inside the container, not under
 - deriveProfile correctly merges image packages, host packages, and environment
   [judge](../tests/judges/profiles.sh#test_derive_profile_merge)
 - A built-in profile's `corePackages` equals its `basePackages` floor plus its own toolchain, the base floor includes common build/SSH tools (`gnumake`, `openssh`), `rustProfile { toolchain = ./file }` includes the pinned toolchain in `corePackages`, and cargo-nextest remains rust leaf tooling rather than tier-1 core content
-  [check?](verify:profiles.core-membership)
+  [check](verify:profiles.core-membership)
 - `deriveProfile p { packages = [extra]; }` appends `extra` to `.packages` but leaves `.corePackages` equal to `p.corePackages`, so `packages` − `corePackages` is exactly the downstream-added delta
-  [check?](verify:profiles.extra-packages-not-core)
+  [check](verify:profiles.extra-packages-not-core)
 - `deriveProfile p { packages = [image]; hostPackages = [host]; }` keeps image and host package extensions on their respective package surfaces without crossing either direction
-  [check?](verify:profiles.host-image-package-split)
+  [check](verify:profiles.host-image-package-split)
 - Profiles are composable (can extend extended profiles)
-  [check?](verify:profiles.nested-derive)
+  [check](verify:profiles.nested-derive)
 - `wrix.mkDevShell { profile = wrix.rustProfile { ... }; }` produces a devshell whose env contains `RUSTC_WRAPPER=sccache`, `SCCACHE_DIR`, `SCCACHE_CACHE_SIZE`, and `CARGO_INCREMENTAL=0` (the rust profile's `shellHook` was spliced)
-  [check?](verify:devshell.profile-shellhook-spliced)
+  [check](verify:devshell.profile-shellhook-spliced)
 - `wrix.mkDevShell { profile; packages = [extra]; }` shell has both `profile.hostPackages` and `extra` available on PATH, while image-only `profile.packages` stay out of the host PATH
-  [check?](verify:devshell.host-packages-source)
+  [check](verify:devshell.host-packages-source)
 - `wrix.mkDevShell { profile; env = { K = "v"; }; }` shell has env var `K=v` (right-merge with profile.env, consumer wins on conflict)
-  [check?](verify:devshell.env-right-merge)
+  [check](verify:devshell.env-right-merge)
 - `wrix.mkDevShell { profile; shellHook = "marker_xyz"; }` shell hook contains both `profile.shellHook` content AND `marker_xyz`, with the consumer hook firing **after** the profile's
-  [check?](verify:devshell.shellhook-order)
+  [check](verify:devshell.shellhook-order)
 - Devshell constructors reject missing or ambiguous profile selection: `wrix.mkDevShell {}` without `profile` or `sandbox`, `wrix.mkDevShell { sandbox = ...; profile = ...; }`, and `sandbox.devShell { profile = ...; }` / `sandbox.devShell { sandbox = ...; }` all error at evaluation.
-  [check?](verify:devshell.profile-required)
+  [check](verify:devshell.profile-required)
 - `wrix.mkDevShell { profile = ...; }` starts the workspace service container by default, exposes the project cache `file://` substituter/trusted key/post-build hook to host Nix, uses the `nixCache` publish/warm schema from `services.md`, and prints a suppressible reminder when the publish manifest is missing or stale; `nixCache = false` suppresses only the cache service, not beads
-  [system?](verify:devshell.nix-cache)
+  [system](verify:devshell.nix-cache)
 - `wrix.mkDevShell { profile = ...; }` with `.pre-commit-config.yaml` present sets `core.hooksPath` to the default hook bundle on entry
-  [system?](verify:devshell.prek-auto-set)
+  [system](verify:devshell.prek-auto-set)
 - `wrix.mkDevShell { profile = ...; }` without `.pre-commit-config.yaml` does NOT set `core.hooksPath` on entry
-  [system?](verify:devshell.prek-skip-absent-config)
+  [system](verify:devshell.prek-skip-absent-config)
 - `wrix.mkDevShell { profile = ...; prekHooks = false; }` does NOT set `core.hooksPath` even when `.pre-commit-config.yaml` is present
-  [system?](verify:devshell.prek-opt-out)
+  [system](verify:devshell.prek-opt-out)
 - `wrix.mkDevShell { profile = ...; prekHooks = <custom-derivation>; }` sets `core.hooksPath` to the substituted derivation when `.pre-commit-config.yaml` is present
-  [system?](verify:devshell.prek-derivation-substitute)
+  [system](verify:devshell.prek-derivation-substitute)
 - When `prekHooks` resolves to a derivation and a previous session left `core.hooksPath` set to a different store path, entering `mkDevShell` overwrites it and prints a one-line message naming the old value (covers both the `true` default case and the substituted-derivation case)
-  [system?](verify:devshell.prek-stale-config-overwrite)
+  [system](verify:devshell.prek-stale-config-overwrite)
 - `wrix.mkDevShell { profile = ...; prekHooks = false; }` entered in a repo whose local git config already has `core.hooksPath` set leaves that value unchanged (passive opt-out preserves stale state per design)
-  [system?](verify:devshell.prek-opt-out-preserves-stale-config)
+  [system](verify:devshell.prek-opt-out-preserves-stale-config)
 - The mkDevShell implementation contains no `prek install` invocation and no `chmod` on `.git/hooks`
-  [check?](verify:devshell.no-prek-install)
+  [check](verify:devshell.no-prek-install)
 - `modules/flake/devshell.nix` does not set `core.hooksPath` (mkDevShell owns it)
-  [check?](verify:devshell.flake-module-does-not-own-hooks-path)
+  [check](verify:devshell.flake-module-does-not-own-hooks-path)
 - On Linux hosts, a host devshell built via `wrix.mkDevShell { profile = wrix.rustProfile { toolchain; sha256; }; }` resolves `rustc` to the same `/nix/store/...` path as the sandbox built from the same profile; on Darwin the host and image toolchains share the pinned channel/version but resolve to platform-specific store paths per the Host/image toolchain split
   [judge](../tests/judges/profiles.sh#test_host_sandbox_rustc_same_store_path)
 - `wrix.devToolchain` is not exposed by the lib (deleted; consumers reach `profile.toolchain`)
-  [check?](verify:profiles.no-dev-toolchain-lib)
+  [check](verify:profiles.no-dev-toolchain-lib)
 - `profiles.rust.withToolchain` is not exposed on the rust profile attrset (replaced by top-level `wrix.rustProfile`)
-  [check?](verify:profiles.no-rust-with-toolchain)
+  [check](verify:profiles.no-rust-with-toolchain)
 - `profile.toolchain` is exposed on both `wrix.profiles.rust` and `wrix.rustProfile { toolchain; sha256; }`, and points at the same host-platform derivation `shellHook` interpolates into the PATH prepend (matches the image's toolchain in `profile.packages` on Linux hosts; diverges on Darwin per *Host/image toolchain split*)
   [judge](../tests/judges/profiles.sh#test_rust_toolchain_field)
 - `wrix.profiles.rust` and `wrix.rustProfile { toolchain; sha256; }` closures contain zero `*-nightly-*` derivations after a fresh `nix flake update` (regression guard against reintroducing `fenix.packages.${system}.rust-analyzer`, which drags a nightly cargo/rustc/rust-std closure)
-  [check?](verify:profiles.rust-no-nightly-closure)
+  [check](verify:profiles.rust-no-nightly-closure)
 - `mkProfileImages { rust = …; }` produces a JSON file whose entry for `rust` is keyed by the image's selected agent and whose selected-agent entry has `ref`, `source`, `source_kind`, and `profile_config` fields, with `source` and `source_kind` resolving to the same image source path and source kind as the corresponding `(wrix.mkSandbox { profile = wrix.profiles.rust; agent = …; }).image`
-  [check?](verify:profiles.images-manifest-shape)
+  [check](verify:profiles.images-manifest-shape)
 - `packages.image-<name>[-<agent>]`, `packages.sandbox-<name>[-<agent>][-mcp]`, `packages.profile-images`, and `packages.profile-images-pi` all evaluate for each built-in profile, and `packages.default` resolves to `sandbox-rust-pi` with `meta.mainProgram = "wrix-run"`
-  [check?](verify:profiles.image-flake-outputs)
+  [check](verify:profiles.image-flake-outputs)
 - `profiles.rust.buildPackage` is exposed and returns an attrset with `bin`, `clippy`, `nextest`, and `cargoArtifacts` fields
-  [check?](verify:profiles.rust-build-package-exposed)
+  [check](verify:profiles.rust-build-package-exposed)
 - Editing a workspace source file changes the `bin` derivation hash but does **not** change the `cargoArtifacts` derivation hash (dep cache reused across edits)
-  [check?](verify:profiles.rust-build-package-workspace-edit-reuses-deps)
+  [check](verify:profiles.rust-build-package-workspace-edit-reuses-deps)
 - Source filter excludes non-Cargo files: editing a `README.md` or other `*.md` file inside `src` does **not** change the `bin`, `clippy`, or `nextest` derivation hashes
-  [check?](verify:profiles.rust-build-package-source-filter-excludes-noncargo)
+  [check](verify:profiles.rust-build-package-source-filter-excludes-noncargo)
 - Editing a `.rs` file invalidates `bin`, `clippy`, and `nextest` together (the workspace source closure is shared by all three) but does **not** invalidate `cargoArtifacts`
-  [check?](verify:profiles.rust-build-package-workspace-edit-skips-cargo-artifacts)
+  [check](verify:profiles.rust-build-package-workspace-edit-skips-cargo-artifacts)
 - Editing a file in `extraSrcs` invalidates `clippy` and `nextest` but does **not** invalidate `bin` or `cargoArtifacts`
-  [check?](verify:profiles.rust-build-package-extra-srcs-scoped-to-checks)
+  [check](verify:profiles.rust-build-package-extra-srcs-scoped-to-checks)
 - `bin`, `clippy`, and `nextest` all close over `profile.toolchain`, so `${toolchain}/bin/rustc` resolves to the same `/nix/store/...` path across all three derivations, on both `wrix.profiles.rust` and `wrix.rustProfile { toolchain; sha256; }`
-  [check?](verify:profiles.rust-build-package-toolchain-alignment)
+  [check](verify:profiles.rust-build-package-toolchain-alignment)
 - `lib/mcp/tmux/mcp-server.nix` is a thin `wrix.profiles.rust.buildPackage` consumer (no direct `pkgs.rustPlatform.buildRustPackage` or `makeRustPlatform` call); `packages.tmux-mcp` consumes `.bin`; `tests/default.nix` exposes `tmux-mcp-clippy`, `tmux-mcp-nextest` checks
-  [check?](verify:profiles.rust-build-package-consumers-migrated)
+  [check](verify:profiles.rust-build-package-consumers-migrated)
 - `modules/flake/devshell.nix` is a thin `sandbox.devShell { ... }` consumer (no hand-rolled `RUSTC_WRAPPER`/`SCCACHE_DIR`/`PATH` exports, no separate `profile.toolchain` entry in `packages`)
-  [check?](verify:devshell.flake-module-thin-consumer)
+  [check](verify:devshell.flake-module-thin-consumer)
 - Container entrypoints (`lib/sandbox/linux/entrypoint.sh`, `lib/sandbox/darwin/entrypoint.sh`) contain no rustup bootstrap logic — toolchain is baked into the image at build time
-  [check?](verify:profiles.sandbox-entrypoints-no-rustup)
+  [check](verify:profiles.sandbox-entrypoints-no-rustup)
 
 ## Requirements
 

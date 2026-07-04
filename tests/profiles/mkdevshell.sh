@@ -106,8 +106,18 @@ SCRIPT
   chmod +x "$bin_dir/wrix" "$bin_dir/nix" "$bin_dir/nix-store" "$bin_dir/host-nix-config.sh"
 }
 
+apply_env_json() {
+  local env_json="$1"
+  local name value
+  while IFS='=' read -r name value; do
+    printf -v "$name" '%s' "$value"
+    export "${name?}"
+  done < <(jq -r 'to_entries[] | select(.value != null) | "\(.key)=\(.value)"' <<<"$env_json")
+}
+
 source_hook_env() {
   local hook="$1"
+  local devshell_env="$2"
   local tmp hook_file bin_dir
   tmp=$(mktemp -d -p "$TMP_BASE")
   hook_file="$tmp/shell-hook.sh"
@@ -120,8 +130,8 @@ source_hook_env() {
     export HOME="$tmp/home"
     export PATH="$bin_dir:$PATH"
     export WRIX_BIN="$bin_dir/wrix"
-    export SCCACHE_DIR="/home/wrix/.cache/sccache"
-    unset CARGO_BUILD_RUSTC_WRAPPER CARGO_INCREMENTAL NIX_CONFIG RUSTC_WRAPPER SCCACHE_CACHE_SIZE
+    apply_env_json "$devshell_env"
+    unset NIX_CONFIG
     # shellcheck source=/dev/null
     source "$hook_file" >/dev/null
     env
@@ -166,15 +176,28 @@ test_profile_required() {
 }
 
 # ============================================================================
-# rust profile shellHook exports the expected values when sourced.
+# rust profile env plus shellHook exports the expected values when sourced.
 # ============================================================================
 test_profile_shellhook_spliced() {
-  local hook env_output rustc_wrapper cargo_wrapper sccache_dir sccache_size cargo_incremental
-  if ! hook=$(eval_expr_raw "(lib.mkDevShell { profile = lib.profiles.rust; }).shellHook"); then
-    echo "FAIL: mkDevShell { profile = profiles.rust; } evaluation failed" >&2
+  local devshell_env hook env_output rustc_wrapper cargo_wrapper sccache_dir sccache_size cargo_incremental
+  if ! devshell_env=$(eval_expr_json '
+    let shell = lib.mkDevShell { profile = lib.profiles.rust; };
+    in {
+      CARGO_BUILD_RUSTC_WRAPPER = shell.CARGO_BUILD_RUSTC_WRAPPER or null;
+      CARGO_INCREMENTAL = shell.CARGO_INCREMENTAL or null;
+      RUSTC_WRAPPER = shell.RUSTC_WRAPPER or null;
+      SCCACHE_CACHE_SIZE = shell.SCCACHE_CACHE_SIZE or null;
+      SCCACHE_DIR = shell.SCCACHE_DIR or null;
+    }
+  '); then
+    echo "FAIL: mkDevShell { profile = profiles.rust; } env evaluation failed" >&2
     return 1
   fi
-  if ! env_output=$(source_hook_env "$hook"); then
+  if ! hook=$(eval_expr_raw "(lib.mkDevShell { profile = lib.profiles.rust; }).shellHook"); then
+    echo "FAIL: mkDevShell { profile = profiles.rust; } shellHook evaluation failed" >&2
+    return 1
+  fi
+  if ! env_output=$(source_hook_env "$hook" "$devshell_env"); then
     echo "FAIL: generated shellHook failed when sourced" >&2
     return 1
   fi
