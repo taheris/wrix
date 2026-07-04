@@ -26,6 +26,7 @@ let
     (import ./cli.nix { inherit pkgs system; })
     (import ./images.nix { inherit pkgs system; })
     (import ./linux-builder.nix { inherit pkgs system; })
+    (import ./notifications.nix { inherit pkgs system; })
     (import ./playwright-mcp.nix { inherit pkgs system; })
     (import ./prek.nix { inherit pkgs system; })
     (import ./profiles.nix { inherit pkgs system; })

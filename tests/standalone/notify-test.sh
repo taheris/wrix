@@ -449,17 +449,36 @@ test_container_transport() {
 }
 
 test_macos_tcp_bind_address() {
+  require_command nix
+
   local repo_root
-  local daemon_file
+  local daemon_text
 
   repo_root=$(resolve_repo_root)
-  daemon_file="$repo_root/lib/notify/daemon.nix"
-
-  if ! grep -Eq 'TCP-LISTEN:\$\{tcpPort\},bind=192\.168\.64\.1' "$daemon_file"; then
-    fail "wrix-notifyd TCP listener does not bind to 192.168.64.1"
+  if ! daemon_text=$(REPO_ROOT="$repo_root" nix eval --raw --impure --expr '
+    let
+      root = builtins.getEnv "REPO_ROOT";
+      fakePkgs = {
+        stdenv = { isDarwin = true; };
+        bash = "bash";
+        coreutils = "coreutils";
+        jq = "jq";
+        socat = "socat";
+        terminal-notifier = "terminal-notifier";
+        libnotify = "libnotify";
+        writeShellApplication = args: args.text;
+      };
+    in
+    import (root + "/lib/notify/daemon.nix") { pkgs = fakePkgs; }
+  '); then
+    fail "could not evaluate generated Darwin wrix-notifyd launcher text"
   fi
-  if grep -Eq 'TCP-LISTEN:.*bind=0\.0\.0\.0' "$daemon_file"; then
-    fail "wrix-notifyd TCP listener binds to 0.0.0.0"
+
+  if [[ "$daemon_text" != *"TCP-LISTEN:5959,bind=192.168.64.1"* ]]; then
+    fail "generated Darwin wrix-notifyd listener does not bind to 192.168.64.1"
+  fi
+  if [[ "$daemon_text" == *"TCP-LISTEN:"*"bind=0.0.0.0"* ]]; then
+    fail "generated Darwin wrix-notifyd listener binds to 0.0.0.0"
   fi
   pass "wrix-notifyd binds the TCP listener to 192.168.64.1 only"
 }
