@@ -8,6 +8,8 @@ BUILDER_USER="builder"
 BUILDER_UID=1000
 BUILDER_HOME="/home/$BUILDER_USER"
 
+. /usr/lib/wrix-builder/sshd.sh
+
 # Verify /nix/store is populated (bootstrap is done by CLI before container start)
 if [[ ! -d /nix/store ]] || [[ -z "$(/bin/ls -A /nix/store 2>/dev/null)" ]]; then
     echo "ERROR: /nix/store is empty. Run 'wrix-builder start' to initialize." >&2
@@ -18,22 +20,10 @@ fi
 # VirtioFS UID mapping shows host-owned files as owned by builder inside container,
 # so no runtime chmod needed. Skipping chmod saves 30-60+ seconds on large stores.
 
-# Generate sshd_config (can't use image's config as it may be a broken symlink
-# when /nix is mounted from persistent store with different store paths)
 echo "Configuring sshd..."
 mkdir -p /etc/ssh
-rm -f /etc/ssh/sshd_config  # Remove broken symlink if exists
-cat > /etc/ssh/sshd_config <<EOF
-Port 22
-ListenAddress 127.0.0.1
-HostKey /etc/ssh/ssh_host_ed25519_key
-AuthorizedKeysFile /home/%u/.ssh/authorized_keys
-PasswordAuthentication no
-PermitRootLogin no
-AllowUsers $BUILDER_USER
-PermitUserEnvironment yes
-Subsystem sftp internal-sftp
-EOF
+rm -f /etc/ssh/sshd_config
+wrix_builder_write_sshd_config "$BUILDER_USER" /etc/ssh/sshd_config
 
 # Install SSH host key from the host-user key directory.
 HOST_KEY="/run/keys/host_ed25519"

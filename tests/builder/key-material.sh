@@ -533,7 +533,12 @@ test_generates_per_user_ed25519_material() {
 }
 
 test_loads_image_through_source_kind_contract() {
+  local expected_source_prefix="oci:"
   local test_root="$TEST_TMP/source-kind"
+
+  if [[ "$(uname)" == "Darwin" ]]; then
+    expected_source_prefix="docker-archive:"
+  fi
 
   require_command ssh-keygen
   require_command base64
@@ -542,8 +547,8 @@ test_loads_image_through_source_kind_contract() {
 
   run_builder "$test_root" start
 
-  if ! grep -Eq '^skopeo\|--insecure-policy copy --quiet (docker-archive:|oci:).+ oci-archive:' "$test_root/container.log"; then
-    fail "wrix-builder start did not route the bootstrap image through a source_kind skopeo copy"
+  if ! grep -Eq "^skopeo\\|--insecure-policy copy --quiet ${expected_source_prefix}.+ oci-archive:" "$test_root/container.log"; then
+    fail "wrix-builder start did not route the bootstrap image through the $expected_source_prefix source_kind transport"
   fi
   assert_file_contains \
     "$test_root/container.log" \

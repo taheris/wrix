@@ -142,6 +142,9 @@ let
 
       cp ${./entrypoint.sh} entrypoint.sh
       chmod +x entrypoint.sh
+      mkdir -p usr/lib/wrix-builder
+      cp ${./sshd.sh} usr/lib/wrix-builder/sshd.sh
+      chmod 644 usr/lib/wrix-builder/sshd.sh
 
       # Fix Nix permissions for non-root users
       # Store must be writable to add new paths and create lock files

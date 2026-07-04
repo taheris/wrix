@@ -125,6 +125,10 @@ let
     serviceCli = wrix.rustPackage.wrix;
   };
 
+  linuxBuilderChecks = import ./builder/checks.nix {
+    inherit pkgs system linuxPkgs;
+  };
+
   rustChecks = {
     tmux-mcp-clippy = wrix.tmuxMcpPackage.clippy;
     tmux-mcp-nextest = wrix.tmuxMcpPackage.nextest;
@@ -222,6 +226,8 @@ let
     (mkCiApp sandboxImageChecks.customisationLayerBoundedTest "test-customisation-layer-bounded")
     (mkCiApp sandboxImageChecks.imageNixDbConsistentTest "test-image-nix-db-consistent")
     (mkCiApp sandboxImageChecks.imageNixDbNoDanglingTest "test-image-nix-db-no-dangling")
+    (mkCiApp linuxBuilderChecks.sshdHardeningTest "test-linux-builder-sshd-hardening")
+    (mkCiApp linuxBuilderChecks.imageSourceKindTest "test-linux-builder-image-source-kind")
     (mkCiApp testProfilesBuildPackage "test-profiles-build-package")
   ];
 
@@ -579,6 +585,7 @@ in
     ciAppDerivations
     testAppDerivations
     ciChecks
+    linuxBuilderChecks
     rustChecks
     shellTests
     smokeTests

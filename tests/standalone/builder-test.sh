@@ -61,6 +61,8 @@ NIX
   nix-instantiate --eval --strict "$assertion_file" >/dev/null
 }
 
+REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}" # best-effort: allow direct script runs outside a git checkout.
+
 echo "=== wrix-builder Integration Test ==="
 echo "Date: $(date)"
 echo ""
@@ -86,8 +88,8 @@ FAILED=0
 
 # Build wrix-builder
 echo "=== Building wrix-builder ==="
-nix build .#wrix-builder
-BUILDER="./result/bin/wrix-builder"
+BUILDER_OUTPUT="$(nix build --no-link --print-out-paths --no-warn-dirty "$REPO_ROOT#wrix-builder")"
+BUILDER="$BUILDER_OUTPUT/bin/wrix-builder"
 
 # Test 1: Start builder
 echo ""

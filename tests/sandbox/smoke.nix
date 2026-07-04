@@ -329,41 +329,50 @@ in
         mkdir $out
       '';
 
-  # Verify builder sshd security configuration
-  # Security properties:
-  # - PasswordAuthentication no (key-based auth only)
-  # - PermitRootLogin no (no root access)
-  # - AllowUsers builder (single non-root user)
   builder-sshd-security =
     runCommandLocal "smoke-builder-sshd-security"
       {
-        nativeBuildInputs = [ bash ];
+        nativeBuildInputs = [
+          bash
+          pkgs.coreutils
+          pkgs.gawk
+        ];
       }
       ''
+        set -euo pipefail
+
         echo "Checking builder sshd security configuration..."
-        SCRIPT="${../../lib/sandbox/builder/entrypoint.sh}"
+        tmp="$(mktemp -d)"
+        trap 'rm -rf "$tmp"' EXIT
+        config="$tmp/sshd_config"
 
-        # Verify password authentication is disabled
-        grep -q 'PasswordAuthentication no' "$SCRIPT" || { echo "FAIL: PasswordAuthentication must be 'no'"; exit 1; }
-        echo "PASS: Password authentication disabled"
+        source "${../../lib/sandbox/builder/sshd.sh}"
+        wrix_builder_write_sshd_config builder "$config"
 
-        # Verify root login is disabled
-        grep -q 'PermitRootLogin no' "$SCRIPT" || { echo "FAIL: PermitRootLogin must be 'no'"; exit 1; }
-        echo "PASS: Root login disabled"
+        directive_value() {
+          local key="$1"
+          awk -v key="$key" 'tolower($1) == key { $1 = ""; sub(/^[[:space:]]+/, ""); print }' "$config"
+        }
 
-        # Verify only builder user is allowed (uses $BUILDER_USER variable which is set to "builder")
-        grep -q 'AllowUsers \$BUILDER_USER' "$SCRIPT" || { echo "FAIL: AllowUsers must restrict to BUILDER_USER"; exit 1; }
-        grep -q 'BUILDER_USER="builder"' "$SCRIPT" || { echo "FAIL: BUILDER_USER must be set to builder"; exit 1; }
-        echo "PASS: SSH access restricted to builder user"
+        require_directive() {
+          local key="$1"
+          local expected="$2"
+          local actual
+          actual="$(directive_value "$key")"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "FAIL: sshd_config $key is '$actual', expected '$expected'" >&2
+            exit 1
+          fi
+        }
 
-        # Verify no password hash in /etc/passwd (login disabled)
-        # The entrypoint creates user with 'x' password field (no password login)
-        grep -q '\$BUILDER_USER:x:' "$SCRIPT" || { echo "FAIL: Builder user should have 'x' password field"; exit 1; }
-        echo "PASS: Builder user has no password set"
+        require_directive port 22
+        require_directive listenaddress 127.0.0.1
+        require_directive passwordauthentication no
+        require_directive permitrootlogin no
+        require_directive allowusers builder
 
-        echo ""
         echo "Builder sshd security validation passed"
-        mkdir $out
+        mkdir "$out"
       '';
 
   # Verify builder SSH port is bound to localhost only
