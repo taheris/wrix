@@ -256,33 +256,33 @@ upstream, not by this spec.
 - `bd dolt pull` and `bd dolt push` succeed inside the wrix sandbox using
   staged beads config plus the shared Dolt service, with no fallback to a
   per-container embedded Dolt or JSONL import
-  [system?](verify:beads.dolt-sync-in-container)
+  [system](verify:beads.dolt-sync-in-container)
 
 - Direct `bd dolt pull` / `bd dolt push` inside the sandbox temporarily use
   the container-visible `/workspace` beads-worktree remote when the persisted
   Dolt `origin` points at the host checkout path, and restore the persisted
   remote after the command
-  [system?](verify:beads.dolt-sync-uses-container-remote)
+  [system](verify:beads.dolt-sync-uses-container-remote)
 
 - `beads.shellHook` launches the workspace service container with a lifecycle independent
   of the caller, so stopping a long-running parent (e.g. a `systemd --user`
   service that triggered shellHook evaluation via envrc) does not block on
   container teardown nor deliver SIGKILL to the service container as a side effect
   of the caller's stop timeout
-  [system?](verify:beads.shellhook-lifecycle-isolation)
+  [system](verify:beads.shellhook-lifecycle-isolation)
 
 - The same service identity path yields the same `<repo>-service` container name and Dolt endpoint across
   `beads.shellHook` invocations; different checkout identity paths yield
   different names and endpoints
-  [system?](verify:beads.workspace-naming-determinism)
+  [system](verify:beads.workspace-naming-determinism)
 
 - `beads.shellHook` fails non-zero with a stderr message when no container
   runtime is available or when Dolt does not become reachable within the
   startup budget — no fallback to embedded Dolt
-  [system?](verify:beads.shellhook-fail-loud)
+  [system](verify:beads.shellhook-fail-loud)
 
 - Sandboxed clients receive staged beads config/metadata but not `.beads/issues.jsonl`, so a missing Dolt endpoint fails loudly instead of triggering JSONL auto-import or embedded Dolt recovery
-  [system?](verify:beads.no-jsonl-staged)
+  [system](verify:beads.no-jsonl-staged)
 
 - `wrix beads push` attempts `bd dolt push` before `bd dolt pull`, so a
   session-close run against an up-to-date remote never enters the Dolt
