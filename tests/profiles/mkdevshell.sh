@@ -134,7 +134,11 @@ source_hook_env() {
     unset NIX_CONFIG
     # shellcheck source=/dev/null
     source "$hook_file" >/dev/null
-    env
+    printf 'RUSTC_WRAPPER=%s\n' "${RUSTC_WRAPPER-}"
+    printf 'CARGO_BUILD_RUSTC_WRAPPER=%s\n' "${CARGO_BUILD_RUSTC_WRAPPER-}"
+    printf 'SCCACHE_DIR=%s\n' "${SCCACHE_DIR-}"
+    printf 'SCCACHE_CACHE_SIZE=%s\n' "${SCCACHE_CACHE_SIZE-}"
+    printf 'CARGO_INCREMENTAL=%s\n' "${CARGO_INCREMENTAL-}"
   )
 }
 
