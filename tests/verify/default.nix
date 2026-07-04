@@ -24,6 +24,7 @@ let
 
   domainRegistries = [
     (import ./cli.nix { inherit pkgs system; })
+    (import ./playwright-mcp.nix { inherit pkgs system; })
     (import ./prek.nix { inherit pkgs system; })
     (import ./profiles.nix { inherit pkgs system; })
     (import ./sandbox.nix { inherit pkgs system; })
