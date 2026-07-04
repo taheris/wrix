@@ -1231,6 +1231,61 @@ let
       expected_kind = expectedImageSourceKind;
     };
   };
+  imageAgentMarkerMatrix = {
+    direct = sourceKindMatrix.base.image;
+    claude = sourceKindMatrix.base-claude.image;
+    pi = sourceKindMatrix.base-pi.image;
+  };
+  imageAgentMarkerChecks = concatStringsSep "\n" (
+    mapAttrsToList (agent: image: ''
+      check_agent_marker "${agent}" "${image}"
+    '') imageAgentMarkerMatrix
+  );
+  imageAgentMarkerTest = pkgs.writeShellApplication {
+    name = "test-image-agent-marker";
+    runtimeInputs = optionals isLinux [
+      pkgs.coreutils
+      pkgs.gnutar
+      pkgs.jq
+    ];
+    text =
+      if isLinux then
+        ''
+          ${archiveShellHelpers}
+
+          check_agent_marker() {
+              local expected_agent="$1"
+              local image="$2"
+              local image_dir="$tmp/$expected_agent"
+              local marker_file="$tmp/$expected_agent-marker"
+              local marker
+              unpack_archive "$expected_agent" "$image" "$image_dir"
+              write_unique_layers "$image_dir" "$image_dir.layers"
+              if ! extract_layer_member "$image_dir" "$image_dir.layers" "etc/wrix/image-agent" "$marker_file"; then
+                  echo "FAIL: $expected_agent image does not declare /etc/wrix/image-agent" >&2
+                  exit 1
+              fi
+              marker=$(<"$marker_file")
+              if [[ "$marker" != "$expected_agent" ]]; then
+                  echo "FAIL: $expected_agent image declares agent '$marker'" >&2
+                  exit 1
+              fi
+          }
+
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+
+          ${imageAgentMarkerChecks}
+
+          echo "test-image-agent-marker: PASS"
+        ''
+      else
+        ''
+          echo "test-image-agent-marker: skipped on this platform (Linux-only image archive verifier)" >&2
+          exit 0
+        '';
+  };
+
   sourceKindChecks = concatStringsSep "\n" (
     mapAttrsToList (name: entry: ''
       check_source_kind "${name}" "${entry.expected_kind}" "${entry.image.source_kind}" "${toString entry.image.source}" "${discardContext entry.image}"
@@ -1444,6 +1499,46 @@ let
       ${descriptorLabelChecks}
 
       echo "test-wrix-image-labels: PASS"
+    '';
+  };
+
+  agentDirectRunnerTest = pkgs.writeShellApplication {
+    name = "test-agent-direct-runner";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.gnugrep
+    ];
+    text = ''
+      closure_file=${defaultImageClosure}/store-paths
+
+      if ! grep -Eq '/nix/store/[a-z0-9]{32}-loom-direct-runner$' "$closure_file"; then
+          echo "FAIL: default agent=direct image closure does not contain loom-direct-runner" >&2
+          echo "  closure: $closure_file" >&2
+          exit 1
+      fi
+
+      echo "test-agent-direct-runner: PASS"
+    '';
+  };
+
+  agentClaudeRuntimeTest = pkgs.writeShellApplication {
+    name = "test-agent-claude-runtime";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.gnugrep
+    ];
+    text = ''
+      closure_file=${claudeImageClosure}/store-paths
+      claude_code_path=${claudeCodePkg}
+
+      if ! grep -qxF "$claude_code_path" "$closure_file"; then
+          echo "FAIL: claude-code missing from claude sandbox closure" >&2
+          echo "  expected: $claude_code_path" >&2
+          echo "  closure : $closure_file" >&2
+          exit 1
+      fi
+
+      echo "test-agent-claude-runtime: PASS"
     '';
   };
 
@@ -3022,9 +3117,12 @@ in
     imageNixConfigTest
     imageCaCertificatesTest
     imageEntrypointCommandTest
+    imageAgentMarkerTest
     imageTierMembershipTest
     wrixImagesSourceKindTest
     wrixImageLabelsTest
+    agentDirectRunnerTest
+    agentClaudeRuntimeTest
     claudeRuntimeNoopTest
     prekHooksClosureTest
     baseImageUniversalTest

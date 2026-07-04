@@ -199,9 +199,12 @@ let
     (mkCiApp sandboxImageChecks.imageNixConfigTest "test-image-nix-config")
     (mkCiApp sandboxImageChecks.imageCaCertificatesTest "test-image-ca-certificates")
     (mkCiApp sandboxImageChecks.imageEntrypointCommandTest "test-image-entrypoint-command")
+    (mkCiApp sandboxImageChecks.imageAgentMarkerTest "test-image-agent-marker")
     (mkCiApp sandboxImageChecks.imageTierMembershipTest "test-image-tier-membership")
     (mkCiApp sandboxImageChecks.wrixImagesSourceKindTest "test-wrix-images-source-kind")
     (mkCiApp sandboxImageChecks.wrixImageLabelsTest "test-wrix-image-labels")
+    (mkCiApp sandboxImageChecks.agentDirectRunnerTest "test-agent-direct-runner")
+    (mkCiApp sandboxImageChecks.agentClaudeRuntimeTest "test-agent-claude-runtime")
     (mkCiApp sandboxImageChecks.claudeRuntimeNoopTest "test-claude-runtime-noop")
     (mkCiApp sandboxImageChecks.prekHooksClosureTest "test-prek-hooks-closure")
     (mkCiApp sandboxImageChecks.baseImageUniversalTest "test-base-image-universal")
@@ -415,6 +418,12 @@ in
       program = "${sandboxImageChecks.imageEntrypointCommandTest}/bin/test-image-entrypoint-command";
     };
 
+    image-agent-marker = {
+      meta.description = "Verify profile images declare the selected agent in /etc/wrix/image-agent.";
+      type = "app";
+      program = "${sandboxImageChecks.imageAgentMarkerTest}/bin/test-image-agent-marker";
+    };
+
     image-tier-membership = {
       meta.description = "Verify non-base profile-image tiers skip lower-tier closures.";
       type = "app";
@@ -497,6 +506,18 @@ in
       meta.description = "Verify exactly one agent rides each image: a direct image has no claude-code, a claude image no direct runner";
       type = "app";
       program = "${sandboxImageChecks.agentExclusiveTest}/bin/test-agent-exclusive";
+    };
+
+    agent-direct-runner = {
+      meta.description = "Verify default direct profile images contain loom-direct-runner.";
+      type = "app";
+      program = "${sandboxImageChecks.agentDirectRunnerTest}/bin/test-agent-direct-runner";
+    };
+
+    agent-claude-runtime = {
+      meta.description = "Verify claude profile images contain claude-code.";
+      type = "app";
+      program = "${sandboxImageChecks.agentClaudeRuntimeTest}/bin/test-agent-claude-runtime";
     };
 
     agent-pkg-threaded = {
