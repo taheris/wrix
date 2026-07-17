@@ -26,10 +26,11 @@ in
   "prek.pre-push-checks-marker-valid" = wholeRepoScript "tests/prek/pre-push-checks-marker-valid.sh";
   "prek.pre-push-checks-marker-stale" = wholeRepoScript "tests/prek/pre-push-checks-marker-stale.sh";
   "prek.pre-push-checks-no-marker" = wholeRepoScript "tests/prek/pre-push-checks-no-marker.sh";
+  "prek.pre-push-checks-no-metadata" = wholeRepoScript "tests/prek/pre-push-checks-no-metadata.sh";
   "prek.pre-push-checks-no-loom" = wholeRepoScript "tests/prek/pre-push-checks-no-loom.sh";
   "prek.skip-if-missing-present" = wholeRepoScript "tests/prek/skip-if-missing-present.sh";
   "prek.skip-if-missing-absent" = wholeRepoScript "tests/prek/skip-if-missing-absent.sh";
-  "prek.nix-hook-required" = wholeRepoScript "tests/prek/wrix-nix-hook-required.sh";
+  "prek.config-wrapper-contract" = wholeRepoScript "tests/prek/wrix-pre-push-config.sh";
   "prek.container-pre-commit" = wholeRepoScript "tests/sandbox/container-pre-commit.sh";
   "prek.container-pre-push" = wholeRepoScript "tests/sandbox/container-pre-push.sh";
   "prek.ci-only-heavy-checks" = wholeRepoScript "tests/prek/ci-only-heavy-checks.sh";

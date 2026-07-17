@@ -2,7 +2,7 @@
 
 {
   prePushChecks = pkgs.writeShellScriptBin "pre-push-checks" (
-    builtins.readFile ./wrappers/pre-push-checks.sh
+    builtins.readFile ../../bin/pre-push-checks
   );
 
   skipIfMissing = pkgs.writeShellScriptBin "skip-if-missing" (
