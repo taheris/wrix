@@ -174,7 +174,10 @@ let
     // shellTests
     // prePushSmokeTests
     // tmuxMcpTests
-    // tomlTests;
+    // tomlTests
+    // {
+      image-assembly-native = sandboxImageChecks.imageAssemblyNativeCheck;
+    };
 
   # ============================================================================
   # Test Runner Apps

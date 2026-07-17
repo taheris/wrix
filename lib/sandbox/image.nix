@@ -48,12 +48,18 @@ let
   sshConfig = import ../util/ssh.nix;
   knownHosts = import ./known-hosts.nix { inherit pkgs; };
 
+  # Image contents always come from the Linux package set. Archive assembly is
+  # platform-independent, however, so Darwin uses host-native dockerTools. This
+  # keeps graph flattening, tar creation, and Nix DB generation off QEMU while
+  # preserving Linux store paths and the target OCI architecture in the image.
+  imageBuilderPkgs = if asTarball then hostPkgs else pkgs;
+
   notifyClient = import ../notify/client.nix { inherit pkgs; };
 
   # Shared nixpkgs-pin-dependent bottom-of-closure. Chained under the
   # per-profile image via `fromImage` so it loads into the platform store once
   # (specs/image-builder.md § Base Image Layering).
-  wrixBaseImage = import ./base-image.nix { inherit pkgs; };
+  wrixBaseImage = import ./base-image.nix { inherit pkgs imageBuilderPkgs; };
 
   # Tier 1: the fixed-per-instance closure (profile.corePackages + the
   # wrix-generated derivations that do not vary with profile.packages, MCP
@@ -61,7 +67,7 @@ let
   # agent binary lives here — it rides the agent tier above (specs/image-builder.md
   # § Provenance-Tiered Layering).
   stableProfileImage = import ./stable-profile-image.nix {
-    inherit pkgs profile;
+    inherit pkgs imageBuilderPkgs profile;
   };
 
   # Bundle referenced from config.Env WRIX_PREK_HOOKS so the entrypoint can
@@ -133,6 +139,7 @@ let
   agentImage = import ./agent-image.nix {
     inherit
       pkgs
+      imageBuilderPkgs
       agentPackages
       agentImageName
       stableProfileImage
@@ -161,7 +168,10 @@ let
     ];
   };
   buildImage =
-    if asTarball then pkgs.dockerTools.buildLayeredImage else pkgs.dockerTools.streamLayeredImage;
+    if asTarball then
+      imageBuilderPkgs.dockerTools.buildLayeredImage
+    else
+      imageBuilderPkgs.dockerTools.streamLayeredImage;
 
   leafContents = [
     pkgs.dockerTools.usrBinEnv
@@ -194,7 +204,7 @@ let
   # The DB rides in the leaf customisation layer — registration is metadata, it
   # copies no lower-tier store path up, so the provenance-tiered chain is
   # unperturbed.
-  imageNixDb = pkgs.closureInfo {
+  imageNixDb = imageBuilderPkgs.closureInfo {
     rootPaths = leafContents ++ agentImage.lowerTiersContents;
   };
 
@@ -205,7 +215,7 @@ let
   # in the customisation layer that references every materialized image root so
   # the graph has a concrete edge to the full expected closure throughout the
   # build.
-  imageStoreRoots = pkgs.writeText "wrix-${profile.name}-${agent}-store-roots" (
+  imageStoreRoots = imageBuilderPkgs.writeText "wrix-${profile.name}-${agent}-store-roots" (
     concatStringsSep "\n" (map toString (leafContents ++ agentImage.lowerTiersContents)) + "\n"
   );
 
@@ -224,9 +234,9 @@ let
   # per-tier contents keep intra-tier ordering stable (specs/image-builder.md
   # § Base Image Layering).
   layeringPipeline =
-    pkgs.runCommandLocal "${imageName}-layering.json"
+    imageBuilderPkgs.runCommandLocal "${imageName}-layering.json"
       {
-        nativeBuildInputs = [ pkgs.jq ];
+        nativeBuildInputs = [ imageBuilderPkgs.jq ];
         lowerClosure = agentImage.lowerTiersClosure;
       }
       ''
@@ -263,6 +273,7 @@ let
   rawImage = buildImage {
     name = imageName;
     tag = "latest";
+    architecture = pkgs.go.GOARCH;
     inherit layeringPipeline;
     includeNixDB = true;
     fromImage = agentImage;
@@ -276,7 +287,7 @@ let
 
       mkdir -p etc/wrix
       printf '%s\n' '${agent}' > etc/wrix/image-agent
-      ${pkgs.bash}/bin/bash ${./install-known-hosts.sh} ${knownHosts}/known_hosts .
+      ${imageBuilderPkgs.bash}/bin/bash ${./install-known-hosts.sh} ${knownHosts}/known_hosts .
       echo "127.0.0.1 localhost" > etc/hosts
 
       cp ${entrypointSh} entrypoint.sh
@@ -320,7 +331,7 @@ let
       # registers neither an orphan nor a dangling path (specs/image-builder.md
       # § In-Container Nix Store Consistency).
       NIX_STATE_DIR=$PWD/nix/var/nix \
-        ${pkgs.buildPackages.nix}/bin/nix-store --load-db \
+        ${imageBuilderPkgs.buildPackages.nix}/bin/nix-store --load-db \
         < ${imageNixDb}/registration
 
       # Fix Nix permissions for non-root users

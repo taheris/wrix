@@ -22,6 +22,7 @@ let
   ];
   builderImage = import ../../lib/sandbox/builder/image.nix {
     pkgs = linuxPkgs;
+    hostPkgs = pkgs;
     asTarball = !isLinux;
   };
   expectedSourceKind = if isLinux then "nix-descriptor" else "docker-archive";

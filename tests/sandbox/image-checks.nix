@@ -16,6 +16,7 @@ let
   inherit (lib)
     concatStringsSep
     elem
+    filterAttrs
     hasAttr
     mapAttrsToList
     optionalString
@@ -45,6 +46,7 @@ let
   defaultImage = (sandboxLib.mkSandbox { profile = sandboxLib.profiles.base; }).image;
   builderImage = import ../../lib/sandbox/builder/image.nix {
     pkgs = linuxPkgs;
+    hostPkgs = pkgs;
     asTarball = !isLinux;
   };
   serviceProfiles = import ../../lib/sandbox/profiles.nix {
@@ -58,10 +60,46 @@ let
   };
   serviceImage = import ../../lib/services/image.nix {
     pkgs = linuxPkgs;
+    hostPkgs = pkgs;
     inherit (serviceRust) cacheServe;
     asTarball = !isLinux;
   };
   expectedImageSourceKind = if isLinux then "nix-descriptor" else "docker-archive";
+
+  imageStream = image: image.stream or image;
+  imageLayers = image: (imageStream image).conf.drvAttrs.layersJsonFile;
+  imageAssemblyDerivations = {
+    profile = defaultImage;
+    profile-stream = imageStream defaultImage;
+    profile-config = (imageStream defaultImage).conf;
+    profile-layers = imageLayers defaultImage;
+    profile-pipeline = (imageLayers defaultImage).drvAttrs.pipeline;
+    base = defaultImage.baseImage;
+    base-layers = imageLayers defaultImage.baseImage;
+    stable-profile = defaultImage.stableProfileImage;
+    stable-profile-closure = defaultImage.stableProfileImage.lowerTiersClosure;
+    stable-profile-layers = imageLayers defaultImage.stableProfileImage;
+    stable-profile-pipeline = (imageLayers defaultImage.stableProfileImage).drvAttrs.pipeline;
+    agent = defaultImage.agentImage;
+    agent-closure = defaultImage.agentImage.lowerTiersClosure;
+    agent-layers = imageLayers defaultImage.agentImage;
+    agent-pipeline = (imageLayers defaultImage.agentImage).drvAttrs.pipeline;
+    builder = builderImage;
+    builder-layers = imageLayers builderImage;
+    service = serviceImage;
+    service-layers = imageLayers serviceImage;
+  };
+  nonNativeImageAssembly = filterAttrs (_name: drv: drv.system != system) imageAssemblyDerivations;
+  nonNativeImageAssemblyMessage = concatStringsSep ", " (
+    mapAttrsToList (name: drv: "${name}=${drv.system}") nonNativeImageAssembly
+  );
+  imageAssemblyNativeCheck =
+    assert
+      nonNativeImageAssembly == { }
+      || throw "image assembly derivations must use ${system}, found ${nonNativeImageAssemblyMessage}";
+    pkgs.runCommandLocal "test-image-assembly-native" { } ''
+      mkdir "$out"
+    '';
 
   archiveShellHelpers = ''
     unpack_archive() {
@@ -1892,6 +1930,7 @@ let
   '';
   membershipImage = import ../../lib/sandbox/image.nix {
     pkgs = linuxPkgs;
+    hostPkgs = pkgs;
     asTarball = !isLinux;
     profile = {
       name = "membership";
@@ -3140,5 +3179,6 @@ in
     customisationLayerBoundedTest
     imageNixDbConsistentTest
     imageNixDbNoDanglingTest
+    imageAssemblyNativeCheck
     ;
 }

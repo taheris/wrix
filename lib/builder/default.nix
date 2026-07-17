@@ -17,6 +17,7 @@ let
 
   builderImage = import ../sandbox/builder/image.nix {
     pkgs = linuxPkgs;
+    hostPkgs = pkgs;
     asTarball = pkgs.stdenv.hostPlatform.isDarwin;
   };
 

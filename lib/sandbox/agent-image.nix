@@ -11,13 +11,14 @@
 # tar-only constraint base-image.nix records for tier 0.
 {
   pkgs,
+  imageBuilderPkgs ? pkgs,
   agentPackages,
   agentImageName,
   stableProfileImage,
 }:
 
 let
-  inherit (pkgs) dockerTools;
+  inherit (imageBuilderPkgs) dockerTools;
 
   # The selected agent runtime, laid down as its own real store path(s) — not
   # wrapped in a buildEnv, whose merged symlink tree dockerTools copies to the
@@ -43,7 +44,7 @@ let
   # Everything tiers 0+1+2 ship, exposed so the leaf's custom layeringPipeline
   # can remove_paths the whole union. The custom pipeline does not dedup
   # fromImage, so the leaf must strip this explicitly.
-  lowerTiersClosure = pkgs.closureInfo {
+  lowerTiersClosure = imageBuilderPkgs.closureInfo {
     rootPaths = lowerTiersRootPaths;
   };
 
@@ -57,9 +58,9 @@ let
   # (base + stable-profile) closure first — a path a lower tier already ships is
   # never re-emitted here.
   layeringPipeline =
-    pkgs.runCommandLocal "${agentImageName}-layering.json"
+    imageBuilderPkgs.runCommandLocal "${agentImageName}-layering.json"
       {
-        nativeBuildInputs = [ pkgs.jq ];
+        nativeBuildInputs = [ imageBuilderPkgs.jq ];
         lowerClosure = stableProfileImage.lowerTiersClosure;
       }
       ''
@@ -79,6 +80,7 @@ in
 dockerTools.buildLayeredImage {
   name = agentImageName;
   tag = "latest";
+  architecture = pkgs.go.GOARCH;
   fromImage = stableProfileImage;
   inherit layeringPipeline;
 

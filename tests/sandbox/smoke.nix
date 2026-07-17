@@ -46,6 +46,7 @@ let
 
   baseImage = import ../../lib/sandbox/image.nix {
     pkgs = linuxPkgs;
+    hostPkgs = pkgs;
     profile = profiles.base;
     agent = "claude";
     agentPkg = linuxPkgs.claude-code;

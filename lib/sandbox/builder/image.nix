@@ -7,6 +7,7 @@
 #
 {
   pkgs,
+  hostPkgs ? pkgs,
   asTarball ? false,
 }:
 
@@ -17,10 +18,11 @@ let
     dockerTools
     jq
     runCommandLocal
-    skopeo
     writeText
     writeTextDir
     ;
+
+  imageBuilderPkgs = if asTarball then hostPkgs else pkgs;
 
   # Static busybox for bootstrapping when /nix volume is empty
   # Provides /bin/sh and basic commands independent of /nix/store
@@ -116,10 +118,15 @@ let
     };
   };
 
-  buildImage = if asTarball then dockerTools.buildLayeredImage else dockerTools.streamLayeredImage;
+  buildImage =
+    if asTarball then
+      imageBuilderPkgs.dockerTools.buildLayeredImage
+    else
+      dockerTools.streamLayeredImage;
   rawImage = buildImage {
     name = imageName;
     tag = "latest";
+    architecture = pkgs.go.GOARCH;
     maxLayers = 50;
     includeNixDB = true;
 
@@ -212,11 +219,11 @@ let
   imageSource = if asTarball then rawImage else nixDescriptorSource;
   digestFile =
     if asTarball then
-      runCommandLocal "${imageName}-digest"
+      imageBuilderPkgs.runCommandLocal "${imageName}-digest"
         {
           nativeBuildInputs = [
-            jq
-            skopeo
+            imageBuilderPkgs.jq
+            imageBuilderPkgs.skopeo
           ];
         }
         ''

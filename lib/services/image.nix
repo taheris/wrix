@@ -1,5 +1,6 @@
 {
   pkgs,
+  hostPkgs ? pkgs,
   cacheServe,
   asTarball ? false,
 }:
@@ -12,9 +13,10 @@ let
     dockerTools
     jq
     runCommandLocal
-    skopeo
     writeText
     ;
+
+  imageBuilderPkgs = if asTarball then hostPkgs else pkgs;
 
   imageTagLib = import ../util/image-tag.nix { };
   imageName = "wrix-service";
@@ -36,10 +38,15 @@ let
     ];
     Labels = labels;
   };
-  buildImage = if asTarball then dockerTools.buildLayeredImage else dockerTools.streamLayeredImage;
+  buildImage =
+    if asTarball then
+      imageBuilderPkgs.dockerTools.buildLayeredImage
+    else
+      dockerTools.streamLayeredImage;
   rawImage = buildImage {
     name = imageName;
     tag = "latest";
+    architecture = pkgs.go.GOARCH;
 
     inherit contents;
 
@@ -96,11 +103,11 @@ let
   imageSource = if asTarball then rawImage else nixDescriptorSource;
   digestFile =
     if asTarball then
-      runCommandLocal "${imageName}-digest"
+      imageBuilderPkgs.runCommandLocal "${imageName}-digest"
         {
           nativeBuildInputs = [
-            jq
-            skopeo
+            imageBuilderPkgs.jq
+            imageBuilderPkgs.skopeo
           ];
         }
         ''

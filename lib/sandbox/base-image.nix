@@ -13,14 +13,16 @@
 # the `fromImage` of the per-profile image on both Linux and Darwin.
 {
   pkgs,
+  imageBuilderPkgs ? pkgs,
 }:
 
 let
-  inherit (pkgs) dockerTools;
+  inherit (imageBuilderPkgs) dockerTools;
 in
 dockerTools.buildLayeredImage {
   name = "wrix-base-image";
   tag = "latest";
+  architecture = pkgs.go.GOARCH;
   maxLayers = 64;
 
   contents = import ./base-contents.nix { inherit pkgs; };

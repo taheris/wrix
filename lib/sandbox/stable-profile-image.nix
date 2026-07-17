@@ -12,17 +12,18 @@
 # streamLayeredImage Python shebang cannot execute on macOS).
 {
   pkgs,
+  imageBuilderPkgs ? pkgs,
   profile,
 }:
 
 let
-  inherit (pkgs) dockerTools;
+  inherit (imageBuilderPkgs) dockerTools;
 
   notifyClient = import ../notify/client.nix { inherit pkgs; };
   prekHooksBundle = import ../prek/bundle.nix { inherit pkgs; };
   prekWrappers = import ../prek/wrappers.nix { inherit pkgs; };
 
-  wrixBaseImage = import ./base-image.nix { inherit pkgs; };
+  wrixBaseImage = import ./base-image.nix { inherit pkgs imageBuilderPkgs; };
   baseContents = import ./base-contents.nix { inherit pkgs; };
 
   nixConfig = pkgs.writeTextDir "etc/nix/nix.conf" ''
@@ -107,7 +108,7 @@ let
   # remove_paths the whole union (specs/image-builder.md § Base Image Layering).
   # The custom pipeline does not dedup fromImage, so the leaf must strip this
   # explicitly.
-  lowerTiersClosure = pkgs.closureInfo {
+  lowerTiersClosure = imageBuilderPkgs.closureInfo {
     rootPaths = lowerTiersRootPaths;
   };
 
@@ -121,10 +122,10 @@ let
   # (wrix-base-image's) closure first — a path base already ships is never
   # re-emitted here.
   layeringPipeline =
-    pkgs.runCommandLocal "wrix-stable-profile-${profile.name}-layering.json"
+    imageBuilderPkgs.runCommandLocal "wrix-stable-profile-${profile.name}-layering.json"
       {
-        nativeBuildInputs = [ pkgs.jq ];
-        baseClosure = pkgs.closureInfo { rootPaths = baseContents; };
+        nativeBuildInputs = [ imageBuilderPkgs.jq ];
+        baseClosure = imageBuilderPkgs.closureInfo { rootPaths = baseContents; };
       }
       ''
         set -euo pipefail
@@ -143,6 +144,7 @@ in
 dockerTools.buildLayeredImage {
   name = "wrix-stable-profile-${profile.name}";
   tag = "latest";
+  architecture = pkgs.go.GOARCH;
   fromImage = wrixBaseImage;
   inherit layeringPipeline;
 
