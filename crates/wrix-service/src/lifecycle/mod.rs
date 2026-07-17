@@ -8,7 +8,7 @@ use std::{
 };
 
 #[cfg(unix)]
-use std::os::unix::net::UnixStream;
+use std::os::unix::{fs::FileTypeExt, net::UnixStream};
 
 use displaydoc::Display;
 use thiserror::Error as ThisError;
@@ -940,6 +940,12 @@ impl Runtime {
         {
             return Ok(false);
         }
+        if let Some(dolt) = plan.dolt()
+            && dolt.transport() == DoltTransport::UnixSocket
+            && !is_unix_socket(dolt.socket_path())?
+        {
+            return Ok(false);
+        }
         if self.kind == RuntimeKind::Podman {
             let published_ports = self.published_ports(name.as_str())?;
             return Ok(plan
@@ -1706,6 +1712,20 @@ fn remove_stale_socket(path: &Path) -> Result<()> {
             source,
         }),
     }
+}
+
+#[cfg(unix)]
+fn is_unix_socket(path: &Path) -> Result<bool> {
+    match fs::metadata(path) {
+        Ok(metadata) => Ok(metadata.file_type().is_socket()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(source) => Err(source.into()),
+    }
+}
+
+#[cfg(not(unix))]
+fn is_unix_socket(_path: &Path) -> Result<bool> {
+    Ok(false)
 }
 
 fn wait_for_dolt_plan(plan: &Plan) -> Result<()> {

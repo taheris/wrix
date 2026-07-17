@@ -873,6 +873,33 @@ test_dolt_start_recreates_running_cache_only_service() {
     "dolt sql-server"
 }
 
+test_start_recreates_running_service_with_missing_dolt_socket() {
+  require_python
+  local wrix_bin
+  wrix_bin="$(build_wrix)"
+  with_fake_runtime_env
+
+  export HOME="$TEST_TMP/home-missing-dolt-socket"
+  export XDG_STATE_HOME="$TEST_TMP/xdg-state-missing-dolt-socket"
+  export XDG_CACHE_HOME="$TEST_TMP/xdg-cache-missing-dolt-socket"
+  mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+
+  local workspace="$TEST_TMP/missing-dolt-socket-repo"
+  mkdir -p "$workspace/.git" "$workspace/.beads/dolt"
+  (cd "$workspace" && "$wrix_bin" service start --no-cache >"$TEST_TMP/missing-dolt-socket-first.txt")
+  (cd "$workspace" && "$wrix_bin" service start --no-cache >"$TEST_TMP/missing-dolt-socket-second.txt")
+
+  local planned_name run_count
+  planned_name="missing-dolt-socket-repo-service"
+  run_count="$(grep -cF -- "run -d --name $planned_name" "$WRIX_FAKE_RUNTIME_STATE/calls")"
+
+  assert_equals "missing Dolt socket service run count" "2" "$run_count"
+  assert_file_contains \
+    "missing Dolt socket service removed" \
+    "$WRIX_FAKE_RUNTIME_STATE/calls" \
+    "rm -f $planned_name"
+}
+
 test_start_reports_unrelated_cache_port_owner() {
   require_python
   local wrix_bin
@@ -1131,6 +1158,7 @@ ALL_TESTS=(
   test_start_ignores_container_removed_after_ps
   test_cache_start_recreates_running_no_cache_service
   test_dolt_start_recreates_running_cache_only_service
+  test_start_recreates_running_service_with_missing_dolt_socket
   test_start_reports_unrelated_cache_port_owner
   test_temp_cache_only_workspace_does_not_start_service
   test_loom_bead_workspace_uses_repo_service
