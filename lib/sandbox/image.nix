@@ -48,10 +48,7 @@ let
   sshConfig = import ../util/ssh.nix;
   knownHosts = import ./known-hosts.nix { inherit pkgs; };
 
-  # Image contents always come from the Linux package set. Archive assembly is
-  # platform-independent, however, so Darwin uses host-native dockerTools. This
-  # keeps graph flattening, tar creation, and Nix DB generation off QEMU while
-  # preserving Linux store paths and the target OCI architecture in the image.
+  # Darwin assembles Linux-targeted archives natively to avoid QEMU.
   imageBuilderPkgs = if asTarball then hostPkgs else pkgs;
 
   notifyClient = import ../notify/client.nix { inherit pkgs; };
