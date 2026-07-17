@@ -173,6 +173,8 @@ let
     else
       imageBuilderPkgs.dockerTools.streamLayeredImage;
 
+  materializedRoots = leafContents ++ agentImage.lowerTiersContents;
+
   leafContents = [
     pkgs.dockerTools.usrBinEnv
     pkgs.dockerTools.binSh
@@ -205,7 +207,7 @@ let
   # copies no lower-tier store path up, so the provenance-tiered chain is
   # unperturbed.
   imageNixDb = imageBuilderPkgs.closureInfo {
-    rootPaths = leafContents ++ agentImage.lowerTiersContents;
+    rootPaths = materializedRoots;
   };
 
   # dockerTools builds config/layer metadata in derivations that run after the
@@ -216,7 +218,7 @@ let
   # the graph has a concrete edge to the full expected closure throughout the
   # build.
   imageStoreRoots = imageBuilderPkgs.writeText "wrix-${profile.name}-${agent}-store-roots" (
-    concatStringsSep "\n" (map toString (leafContents ++ agentImage.lowerTiersContents)) + "\n"
+    concatStringsSep "\n" (map toString materializedRoots) + "\n"
   );
 
   imageName = "wrix-${profile.name}${optionalString (agent != "direct") "-${agent}"}";
@@ -384,7 +386,7 @@ let
     inherit agent;
     oci_layout = "${ociLayout}";
     oci_ref = "latest";
-    materialized_roots = map toString (leafContents ++ agentImage.lowerTiersContents);
+    materialized_roots = map toString materializedRoots;
     lower_tiers_closure = "${agentImage.lowerTiersClosure}/store-paths";
     layering_pipeline = "${layeringPipeline}";
     config = {
@@ -460,5 +462,5 @@ rawImage
   # § Provenance-Tiered Layering).
   inherit stableProfileImage agentImage;
   # Expose generated agent settings so verifiers inspect the image input JSON.
-  inherit claudeSettingsJson piSettingsJson;
+  inherit claudeSettingsJson materializedRoots piSettingsJson;
 }

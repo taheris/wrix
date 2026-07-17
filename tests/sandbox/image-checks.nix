@@ -182,8 +182,9 @@ let
       agent = "claude";
     }).image;
 
-  defaultImageClosure = pkgs.closureInfo { rootPaths = [ defaultImage ]; };
-  claudeImageClosure = pkgs.closureInfo { rootPaths = [ claudeImage ]; };
+  materializedImageClosure = image: pkgs.closureInfo { rootPaths = image.materializedRoots; };
+  defaultImageClosure = materializedImageClosure defaultImage;
+  claudeImageClosure = materializedImageClosure claudeImage;
 
   # Closure over the actual base-image contents (built with linuxPkgs, matching
   # lib/sandbox/image.nix). The base image itself is a compressed tarball whose
@@ -1632,7 +1633,7 @@ let
     mapAttrsToList (
       name: image:
       let
-        closure = pkgs.closureInfo { rootPaths = [ image ]; };
+        closure = materializedImageClosure image;
       in
       ''
         check_surface "${name}" "${closure}/store-paths" "wrix.prekHooks" "${prekHooksBundle}"
