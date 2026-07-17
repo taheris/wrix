@@ -161,12 +161,16 @@ fn linux_reinstall_transfers_only_changed_layers() -> TestResult {
 }
 
 #[test]
-fn darwin_docker_archive_sources_use_container_image_load() -> TestResult {
+fn darwin_docker_archive_sources_tag_loaded_image() -> TestResult {
     let root = tempfile::Builder::new().prefix("image-darwin").tempdir()?;
     let archive = root.path().join("image.tar");
     fs::write(&archive, b"fake archive")?;
-    let digest = digest('f');
-    let mut store = FakeStore::default();
+    let desired_digest = digest('f');
+    let loaded_ref = format!("untagged@{}", digest('0'));
+    let mut store = FakeStore {
+        loaded_archive_ref: Some(loaded_ref.clone()),
+        ..FakeStore::default()
+    };
 
     image::install(
         &mut store,
@@ -175,15 +179,21 @@ fn darwin_docker_archive_sources_use_container_image_load() -> TestResult {
             image_ref: "wrix-darwin:test",
             image_source: &archive.display().to_string(),
             source_kind: SourceKind::DockerArchive,
-            digest: &digest,
+            digest: &desired_digest,
         },
     )?;
 
     assert_eq!(
         store.calls,
-        vec![Call::LoadArchive {
-            archive: archive.display().to_string(),
-        }]
+        vec![
+            Call::LoadArchive {
+                archive: archive.display().to_string(),
+            },
+            Call::Tag {
+                source: loaded_ref,
+                target: String::from("wrix-darwin:test"),
+            },
+        ]
     );
     assert!(!store.archive_copy_used());
     assert!(store.copy_calls().is_empty());
@@ -234,6 +244,7 @@ struct FakeStore {
     transferred_layers: Vec<String>,
     transferred_bytes: u64,
     docker_archive_digest: Option<String>,
+    loaded_archive_ref: Option<String>,
 }
 
 impl FakeStore {
@@ -317,14 +328,14 @@ impl Store for FakeStore {
         Ok(())
     }
 
-    fn load_docker_archive(&mut self, archive: &str) -> Result<(), image::Error> {
+    fn load_docker_archive(&mut self, archive: &str) -> Result<Option<String>, image::Error> {
         self.calls.push(Call::LoadArchive {
             archive: archive.to_owned(),
         });
         if let Some(digest) = &self.docker_archive_digest {
             self.present_digests.insert(digest.clone());
         }
-        Ok(())
+        Ok(self.loaded_archive_ref.clone())
     }
 
     fn docker_archive_config_digest(

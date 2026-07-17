@@ -8,7 +8,7 @@ Sandboxes need container images with all profile packages pre-installed, an agen
 
 ## Architecture
 
-`mkImage` (in `lib/sandbox/image.nix`) is the internal API called by `mkSandbox` (see `sandbox.md`). Inputs: a profile, an agent runtime selector, the resolved selected `agentPkg`, an entrypoint script path (Linux or Darwin), optional krun support, merged agent settings JSON, and the resolved MCP server configs. On Linux it emits a JSON image descriptor (`source_kind = "nix-descriptor"`) plus a prebuilt OCI layout whose layer descriptors are consumed by the runtime image installer's `skopeo oci:` install path. On Darwin it emits a Docker/OCI tar archive loadable by Apple's `container image load` path (`source_kind = "docker-archive"`). Service/support images do not necessarily use `mkImage`, but they expose the same `{ ref, source, source_kind, digest }` contract and ownership labels. The Darwin-only `wrix-builder` bootstrap image is a support image in that family: `linux-builder.md` owns its Apple `container` lifecycle and persistent-store seeding contract, while this spec owns its source-kind metadata and wrix-managed labels.
+`mkImage` (in `lib/sandbox/image.nix`) is the internal API called by `mkSandbox` (see `sandbox.md`). Inputs: a profile, an agent runtime selector, the resolved selected `agentPkg`, an entrypoint script path (Linux or Darwin), optional krun support, merged agent settings JSON, and the resolved MCP server configs. On Linux it emits a JSON image descriptor (`source_kind = "nix-descriptor"`) plus a prebuilt OCI layout whose layer descriptors are consumed by the runtime image installer's `skopeo oci:` install path. On Darwin it emits a Docker archive (`source_kind = "docker-archive"`) that the runtime installer converts to a temporary OCI archive for Apple's `container image load` path. Service/support images do not necessarily use `mkImage`, but they expose the same `{ ref, source, source_kind, digest }` contract and ownership labels. The Darwin-only `wrix-builder` bootstrap image is a support image in that family: `linux-builder.md` owns its Apple `container` lifecycle and persistent-store seeding contract, while this spec owns its source-kind metadata and wrix-managed labels.
 
 Profile image layout:
 
@@ -36,7 +36,7 @@ Source kinds are stable API values:
 | `source_kind` | Meaning |
 |---------------|---------|
 | `nix-descriptor` | Linux JSON descriptor consumed by wrix; it points at a prebuilt OCI layout copied with `skopeo oci:` and is not itself a whole-image tar or stream script |
-| `docker-archive` | Tar-loadable archive consumed by Darwin's `container image load --input <tar>` fallback |
+| `docker-archive` | Docker archive converted to a temporary OCI archive for Darwin's `container image load --input <oci-archive>` fallback |
 
 ## Provenance-Tiered Layering
 
@@ -198,7 +198,7 @@ Wrapper behavior, hook-stage semantics, and optional-tool policy remain owned by
 
 ### Functional
 
-1. **OCI image generation** — `mkImage` returns a platform image source: a Linux descriptor consumed by wrix's `skopeo oci:` install path, and a Darwin tar archive consumed by `container image load`.
+1. **OCI image generation** — `mkImage` returns a platform image source: a Linux descriptor consumed by wrix's `skopeo oci:` install path, and a Darwin Docker archive converted to a temporary OCI archive before `container image load`.
 2. **Package bundling** — every derivation in the profile's `packages` list lands in the image's store closure.
 3. **Agent runtime composition** — the `agent` parameter selects the single agent runtime the image carries: `direct` (default placeholder runner), `claude` (`claude-code` from nixpkgs), or `pi` (`pi-coding-agent` from nixpkgs by default). `agentPkg` overrides the selected runtime package. Exactly one agent is baked — a non-selected agent's binary is absent (a `direct` image carries no `claude-code`) — and it rides its own tier (tier 2, see § Provenance-Tiered Layering), composing orthogonally with the workspace profile.
 4. **Nix configuration** — `flakes` and `nix-command` are enabled; the in-container Nix sandbox is disabled (the outer container is the boundary).
@@ -221,4 +221,4 @@ Wrapper behavior, hook-stage semantics, and optional-tool policy remain owned by
 - Multi-architecture manifests (arm64 + amd64 in a single ref)
 - Image signing
 - Registry push automation (consumers install from a Nix store path via the runtime image installer's platform install path; remote registries are user-side concerns)
-- Per-layer-blob-dedup install on Darwin — Apple's `container` CLI exposes only `container image load --input <tar>` for local archive import; neither a `skopeo` transport into Apple's container store nor an Apple-native per-blob-dedup install primitive has been verified. Darwin keeps the tar/load fallback and content-digest install-skip preflight. Promoting Darwin to archive-less or per-blob-dedup install requires a verified transport into the Apple `container` store.
+- Per-layer-blob-dedup install on Darwin — Apple's `container` CLI exposes only `container image load --input <oci-archive>` for local archive import; neither a `skopeo` transport into Apple's container store nor an Apple-native per-blob-dedup install primitive has been verified. Darwin keeps the Docker-to-OCI archive/load fallback and content-digest install-skip preflight. Promoting Darwin to archive-less or per-blob-dedup install requires a verified transport into the Apple `container` store.

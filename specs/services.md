@@ -60,7 +60,7 @@ The service container has the same caller-independent lifecycle invariant as the
 
 ### Service image source
 
-The `<repo>-service` container image is a wrix-managed Nix-built image and follows `image-builder.md`'s source-kind contract. On Linux, `wrix service start` installs the service image through the shared wrix runtime image installer from an archive-less `nix-descriptor` source into `containers-storage`. On Darwin, it uses the tar-loadable `docker-archive` fallback required by Apple's `container image load` path.
+The `<repo>-service` container image is a wrix-managed Nix-built image and follows `image-builder.md`'s source-kind contract. On Linux, `wrix service start` installs the service image through the shared wrix runtime image installer from an archive-less `nix-descriptor` source into `containers-storage`. On Darwin, it converts the `docker-archive` fallback to a temporary OCI archive before using Apple's `container image load` path.
 
 The service image carries wrix-managed labels (`wrix.managed=true`, `wrix.image.kind=service`) so the shared runtime image cleanup path can prune stale wrix images without touching user images. Service image cleanup uses the wrix image-retention policy owned by `sandbox.md`; this spec owns only that service lifecycle uses the shared image source-kind contract and labels the service image.
 

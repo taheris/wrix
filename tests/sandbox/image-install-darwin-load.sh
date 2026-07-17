@@ -25,6 +25,7 @@ tmp=$(mktemp -d -t wrix-darwin-load.XXXXXX)
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/bin" "$tmp/workspace" "$tmp/home"
 : >"$tmp/container.log"
+: >"$tmp/skopeo.log"
 
 cargo build --quiet -p wrix-cli --bin wrix
 wrix="$TARGET_DIR/debug/wrix"
@@ -36,13 +37,31 @@ printf '%s\n' "$*" >>"${WRIX_TEST_STATE:?}/container.log"
 case "${1:-} ${2:-}" in
   'image list') ;;
   'image inspect') exit 1 ;;
-  'image load') : >"$WRIX_TEST_STATE/loaded" ;;
+  'image load')
+    [[ "${3:-}" == "--input" ]]
+    [[ -f "${4:-}" ]]
+    printf '%s\n' "${4:-}" >"$WRIX_TEST_STATE/loaded-path"
+    printf 'Loaded: untagged@sha256:%064d\n' 0
+    ;;
   'image tag') ;;
   'run ') : >"$WRIX_TEST_STATE/container-ran" ;;
   *) ;;
 esac
 CONTAINER_SHIM
 chmod +x "$tmp/bin/container"
+
+cat >"$tmp/bin/skopeo" <<'SKOPEO_SHIM'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"${WRIX_TEST_STATE:?}/skopeo.log"
+[[ "${1:-}" == "--insecure-policy" ]]
+[[ "${2:-}" == "copy" ]]
+[[ "${3:-}" == "--quiet" ]]
+[[ "${4:-}" == docker-archive:* ]]
+[[ "${5:-}" == oci-archive:* ]]
+printf 'fake OCI archive\n' >"${5#oci-archive:}"
+SKOPEO_SHIM
+chmod +x "$tmp/bin/skopeo"
 
 image_source="$tmp/image.tar"
 digest="sha256:abababababababababababababababababababababababababababababababab"
@@ -54,8 +73,14 @@ jq -n --arg source "$image_source" --arg digest "$digest" \
 
 PATH="$tmp/bin:$PATH" HOME="$tmp/home" WRIX_TEST_STATE="$tmp" "$wrix" --profile-config "$profile_config" run "$tmp/workspace" true
 
-grep -qF -- "image load --input $image_source" "$tmp/container.log" || fail "Darwin live launcher did not call container image load --input"
-if grep -qE 'docker-archive:|oci-archive:|nix:' "$tmp/container.log"; then
-  fail "Darwin live launcher used a non-Apple load transport"
-fi
-printf 'PASS: Darwin live Rust launcher uses container image load --input\n'
+loaded_path=$(<"$tmp/loaded-path")
+[[ "$loaded_path" != "$image_source" ]] || fail "Darwin live launcher passed the Docker archive directly to container image load"
+[[ "$loaded_path" == */image.oci ]] || fail "Darwin live launcher did not load a converted OCI archive"
+[[ ! -e "$loaded_path" ]] || fail "Darwin live launcher left its converted OCI archive behind"
+grep -qF -- "--insecure-policy copy --quiet docker-archive:$image_source oci-archive:$loaded_path" "$tmp/skopeo.log" \
+  || fail "Darwin live launcher did not convert the Docker archive with skopeo"
+grep -qF -- "image load --input $loaded_path" "$tmp/container.log" \
+  || fail "Darwin live launcher did not pass the converted OCI archive to container image load"
+grep -qF -- "image tag untagged@sha256:$(printf '%064d' 0) wrix-darwin:test" "$tmp/container.log" \
+  || fail "Darwin live launcher did not tag the loaded OCI image"
+printf 'PASS: Darwin live Rust launcher converts and loads a Docker archive\n'

@@ -248,8 +248,8 @@ impl Store for FakeStore {
         Ok(())
     }
 
-    fn load_docker_archive(&mut self, _archive: &str) -> Result<(), image::Error> {
-        Ok(())
+    fn load_docker_archive(&mut self, _archive: &str) -> Result<Option<String>, image::Error> {
+        Ok(None)
     }
 
     fn docker_archive_config_digest(

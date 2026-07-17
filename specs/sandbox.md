@@ -29,7 +29,7 @@ The **runtime image installer** is the shared host-side image install and cleanu
 **Image install path** — Before invoking the platform install pipeline, the wrix runtime image installer checks whether the image's **content digest** recorded with the selected image source (not ref-name+tag) matches any image already present in the platform store. On Linux this digest is derived from descriptor/config metadata without executing the source; tar-loadable Darwin sources may be inspected for config metadata but are not loaded. On a digest hit, the install is skipped entirely — no source execution, no tar materialization, no stream invocation, and no `*-load` CLI call. On a miss, the installer dispatches by `ProfileConfig.image.source_kind`:
 
 - Linux uses an archive-less source (`source_kind = "nix-descriptor"`) whose descriptor names a prebuilt OCI layout. The runtime installer reads that descriptor and copies `oci:<oci_layout>:<oci_ref>` into `containers-storage:<ref>` with skopeo (or an equivalent wrix-owned copy path). Digest preflight runs before the copy; on a miss, content-addressed layer storage reuses unchanged blob digests, so unchanged lower layers are not rewritten.
-- Darwin uses `container image load --input <tar>` for tar-loadable sources (`source_kind = "docker-archive"`). Apple's `container` CLI surfaces no per-blob-dedup install path at this time; see `image-builder.md` § Out of Scope.
+- Darwin converts tar-loadable sources (`source_kind = "docker-archive"`) to a temporary OCI archive, then invokes `container image load --input <oci-archive>`. Apple's `container` CLI surfaces no per-blob-dedup install path at this time; see `image-builder.md` § Out of Scope.
 
 Both platforms rely on the provenance-tiered graph (see `image-builder.md` § Provenance-Tiered Layering) to keep volatile changes isolated. Linux realizes the cache contract through descriptor-level layer reuse; Darwin keeps a tar/load fallback plus digest-skip preflight until a per-blob Apple path is verified.
 
@@ -277,8 +277,8 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
   [test](../crates/wrix-sandbox/tests/image_install.rs::linux_reinstall_transfers_only_changed_layers)
 - The runtime image cleanup path records a bounded cross-workspace MRU of eight wrix image refs/digests/image IDs, preserves images used by existing containers, prunes wrix-managed images outside the keep set, and does not automatically remove unlabelled `<none>:<none>` images
   [test](../crates/wrix-sandbox/tests/image_retention.rs::cleanup_prunes_only_wrix_managed_images_outside_bounded_keep_set)
-- On Darwin, the runtime image installer uses `container image load --input <tar>` for `source_kind = "docker-archive"` image install (per Apple's available CLI surface) and relies on the digest-skip preflight while per-blob install remains out of scope
-  [test](../crates/wrix-sandbox/tests/image_install.rs::darwin_docker_archive_sources_use_container_image_load)
+- On Darwin, the runtime image installer converts `source_kind = "docker-archive"` sources to temporary OCI archives before invoking `container image load --input <oci-archive>`, then removes the temporary archive and relies on digest-skip preflight while per-blob install remains out of scope
+  [system](../tests/sandbox/image-install-darwin-load.sh)
 
 ## Requirements
 

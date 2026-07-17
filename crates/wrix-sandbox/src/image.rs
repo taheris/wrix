@@ -94,6 +94,12 @@ pub enum Error {
     MissingDockerArchiveDigest { path: String },
     /// unsupported image source_kind: {kind}
     UnsupportedSourceKind { kind: &'static str },
+    /// {error}; failed to remove temporary image directory {path}: {source}
+    TemporaryImageCleanup {
+        error: Box<Error>,
+        path: String,
+        source: io::Error,
+    },
     /// invalid image descriptor JSON: {source}
     DescriptorJson { source: serde_json::Error },
     /// invalid image MRU JSON: {source}
@@ -119,7 +125,7 @@ pub trait Store {
 
     fn copy_docker_archive(&mut self, archive: &str, destination: &str) -> Result<(), Error>;
 
-    fn load_docker_archive(&mut self, archive: &str) -> Result<(), Error>;
+    fn load_docker_archive(&mut self, archive: &str) -> Result<Option<String>, Error>;
 
     fn docker_archive_config_digest(&mut self, archive: &str) -> Result<Option<String>, Error>;
 
@@ -134,14 +140,6 @@ pub trait Store {
     fn image_in_use(&mut self, runtime: Runtime, target: &str) -> Result<bool, Error>;
 
     fn delete_image(&mut self, runtime: Runtime, target: &str) -> Result<(), Error>;
-
-    fn first_untagged_ref(
-        &mut self,
-        _runtime: Runtime,
-        _image_ref: &str,
-    ) -> Result<Option<String>, Error> {
-        Ok(None)
-    }
 }
 
 #[derive(Default)]
@@ -176,8 +174,7 @@ pub fn install(store: &mut impl Store, request: &InstallRequest<'_>) -> Result<(
             store.copy_docker_archive(request.image_source, &store_ref)?;
         }
         (Runtime::Container, SourceKind::DockerArchive) => {
-            store.load_docker_archive(request.image_source)?;
-            if let Some(untagged) = store.first_untagged_ref(request.runtime, request.image_ref)? {
+            if let Some(untagged) = store.load_docker_archive(request.image_source)? {
                 store.tag(request.runtime, &untagged, request.image_ref)?;
             }
         }
@@ -562,8 +559,19 @@ impl Store for CommandStore {
         )
     }
 
-    fn load_docker_archive(&mut self, archive: &str) -> Result<(), Error> {
-        run_required("container", &["image", "load", "--input", archive])
+    fn load_docker_archive(&mut self, archive: &str) -> Result<Option<String>, Error> {
+        let temp_dir = create_temp_dir("wrix-image")?;
+        let result = load_container_archive(archive, &temp_dir);
+        match (result, fs::remove_dir_all(&temp_dir)) {
+            (Ok(loaded), Ok(())) => Ok(loaded),
+            (Ok(_loaded), Err(source)) => Err(source.into()),
+            (Err(error), Ok(())) => Err(error),
+            (Err(error), Err(source)) => Err(Error::TemporaryImageCleanup {
+                error: Box::new(error),
+                path: temp_dir.display().to_string(),
+                source,
+            }),
+        }
     }
 
     fn docker_archive_config_digest(&mut self, archive: &str) -> Result<Option<String>, Error> {
@@ -735,6 +743,70 @@ fn container_reference_from_line(line: &str) -> Option<String> {
     Some(format!("{repo}:{tag}"))
 }
 
+fn create_temp_dir(prefix: &str) -> Result<PathBuf, Error> {
+    for attempt in 0..100 {
+        let path = env::temp_dir().join(format!("{prefix}-{}-{attempt}", std::process::id()));
+        match fs::create_dir(&path) {
+            Ok(()) => return Ok(path),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        format!("could not create a unique {prefix} temporary directory"),
+    )
+    .into())
+}
+
+fn load_container_archive(archive: &str, temp_dir: &Path) -> Result<Option<String>, Error> {
+    let oci_archive = temp_dir.join("image.oci");
+    let source = format!("docker-archive:{archive}");
+    let destination = format!("oci-archive:{}", oci_archive.display());
+    run_required(
+        "skopeo",
+        &[
+            "--insecure-policy",
+            "copy",
+            "--quiet",
+            &source,
+            &destination,
+        ],
+    )?;
+    let output = run_required_output(
+        "container",
+        &[
+            "image",
+            "load",
+            "--input",
+            &oci_archive.display().to_string(),
+        ],
+    )?;
+    Ok(loaded_container_ref(&output.stdout, &output.stderr))
+}
+
+fn loaded_container_ref(stdout: &[u8], stderr: &[u8]) -> Option<String> {
+    let text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(stdout),
+        String::from_utf8_lossy(stderr)
+    );
+    for token in text.split_whitespace() {
+        let token = token.trim_matches(|ch| matches!(ch, '"' | '\'' | ',' | ';'));
+        let Some(rest) = token.strip_prefix("untagged@sha256:") else {
+            continue;
+        };
+        let digest = rest
+            .chars()
+            .take_while(char::is_ascii_hexdigit)
+            .collect::<String>();
+        if !digest.is_empty() {
+            return Some(format!("untagged@sha256:{digest}"));
+        }
+    }
+    None
+}
+
 fn run_required(program: &str, args: &[&str]) -> Result<(), Error> {
     let output = run_output(program, args)?;
     if output.status.success() {
@@ -773,4 +845,19 @@ fn trim_stdout(stdout: &[u8]) -> String {
 
 fn home_dir() -> PathBuf {
     env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from)
+}
+
+#[cfg(test)]
+mod test {
+    use super::loaded_container_ref;
+
+    #[test]
+    fn apple_load_output_parser_extracts_untagged_ref() {
+        let output = b"loading\nLoaded: untagged@sha256:abcdef0123456789, done\n";
+
+        assert_eq!(
+            loaded_container_ref(output, b""),
+            Some(String::from("untagged@sha256:abcdef0123456789"))
+        );
+    }
 }
