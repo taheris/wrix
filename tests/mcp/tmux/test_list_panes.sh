@@ -76,7 +76,7 @@ main() {
     local session
     session=$(get_mcp_session_name)
     local unmanaged_count
-    unmanaged_count=$(tmux list-windows -t "$session" -F '#{window_name}' | awk 'BEGIN { count = 0 } $0 !~ /^debug-[1-9][0-9]*$/ { count++ } END { print count }')
+    unmanaged_count=$(mcp_tmux "$session" list-windows -t "$session" -F '#{window_name}' | awk 'BEGIN { count = 0 } $0 !~ /^debug-[1-9][0-9]*$/ { count++ } END { print count }')
     assert_eq "0" "$unmanaged_count" "Tmux session should contain only managed debug-N windows"
     log_pass "JSON structure valid"
 

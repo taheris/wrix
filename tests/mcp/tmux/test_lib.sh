@@ -442,13 +442,21 @@ assert_json_field() {
     assert_eq "$expected" "$actual" "$message"
 }
 
+mcp_tmux() {
+    local server_name="$1"
+    local process_id="${server_name#debug-}"
+    local socket_path="${TMPDIR:-/tmp}/tmux-mcp-${process_id}.sock"
+    shift
+    tmux -S "$socket_path" "$@"
+}
+
 # Check if tmux window exists
 assert_tmux_window_exists() {
     local session="$1"
     local window="$2"
     local message="${3:-Tmux window should exist}"
 
-    if tmux list-windows -t "$session" 2>/dev/null | grep -q "$window"; then
+    if mcp_tmux "$session" list-windows -t "$session" 2>/dev/null | grep -q "$window"; then
         return 0
     else
         log_fail "$message"
@@ -463,7 +471,7 @@ assert_tmux_window_not_exists() {
     local window="$2"
     local message="${3:-Tmux window should not exist}"
 
-    if ! tmux list-windows -t "$session" 2>/dev/null | grep -q "$window"; then
+    if ! mcp_tmux "$session" list-windows -t "$session" 2>/dev/null | grep -q "$window"; then
         return 0
     else
         log_fail "$message"
@@ -478,7 +486,7 @@ assert_tmux_session_exists() {
     local session="$1"
     local message="${2:-Tmux session should exist}"
 
-    if tmux has-session -t "$session" 2>/dev/null; then
+    if mcp_tmux "$session" has-session -t "$session" 2>/dev/null; then
         return 0
     else
         log_fail "$message"
@@ -491,7 +499,7 @@ assert_tmux_session_not_exists() {
     local session="$1"
     local message="${2:-Tmux session should not exist}"
 
-    if ! tmux has-session -t "$session" 2>/dev/null; then
+    if ! mcp_tmux "$session" has-session -t "$session" 2>/dev/null; then
         return 0
     else
         log_fail "$message"

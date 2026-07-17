@@ -54,7 +54,7 @@ main() {
 
     # Count windows in session
     local window_count
-    window_count=$(tmux list-windows -t "$session_name" 2>/dev/null | wc -l)
+    window_count=$(mcp_tmux "$session_name" list-windows -t "$session_name" 2>/dev/null | wc -l)
     log_info "Window count: $window_count"
 
     if [[ "$window_count" -lt 3 ]]; then
@@ -89,11 +89,11 @@ main() {
     log_test "Verifying tmux session is cleaned up..."
 
     # The session should no longer exist
-    if tmux has-session -t "$session_name" 2>/dev/null; then
+    if mcp_tmux "$session_name" has-session -t "$session_name" 2>/dev/null; then
         log_fail "Tmux session should be cleaned up after server exit"
         log_error "Session $session_name still exists"
         # Clean up manually for test
-        tmux kill-session -t "$session_name" 2>/dev/null || true # best-effort: remove leaked session before failing.
+        mcp_tmux "$session_name" kill-session -t "$session_name" 2>/dev/null || true # best-effort: remove leaked session before failing.
         exit 1
     fi
     log_pass "Tmux session cleaned up on server exit"
@@ -134,9 +134,9 @@ main() {
 
     sleep 0.5
 
-    if tmux has-session -t "$session_name" 2>/dev/null; then
+    if mcp_tmux "$session_name" has-session -t "$session_name" 2>/dev/null; then
         log_fail "Session should be cleaned up after SIGTERM"
-        tmux kill-session -t "$session_name" 2>/dev/null || true # best-effort: remove leaked session before failing.
+        mcp_tmux "$session_name" kill-session -t "$session_name" 2>/dev/null || true # best-effort: remove leaked session before failing.
         exit 1
     fi
     log_pass "Session cleaned up after SIGTERM"

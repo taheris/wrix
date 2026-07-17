@@ -2,7 +2,10 @@
 
 use crate::pane::PaneId;
 use displaydoc::Display;
+use std::fmt;
+use std::fs;
 use std::io;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use thiserror::Error;
 
@@ -15,6 +18,8 @@ pub enum TmuxError {
     SessionNotFound(String),
     /// Tmux target '{target}' not found. Use `tmux_list_panes` to see active panes.
     WindowNotFound { target: String },
+    /// Failed to remove tmux socket {path:?}: {source}
+    SocketCleanup { path: PathBuf, source: io::Error },
     /// Invalid tmux window info '{line}': {reason}
     InvalidWindowInfo { line: String, reason: String },
     /// IO error: {0}
@@ -26,24 +31,70 @@ pub type TmuxResult<T> = Result<T, TmuxError>;
 
 const BOOTSTRAP_WINDOW_NAME: &str = "__wrix_bootstrap__";
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ServerName(String);
+
+impl ServerName {
+    fn for_current_process() -> Self {
+        Self(format!("debug-{}", std::process::id()))
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ServerName {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SocketPath(PathBuf);
+
+impl SocketPath {
+    fn for_current_process() -> Self {
+        Self(std::env::temp_dir().join(format!("tmux-mcp-{}.sock", std::process::id())))
+    }
+
+    fn as_path(&self) -> &Path {
+        &self.0
+    }
+}
+
 /// Trait for executing tmux commands, allowing for mocking in tests.
 pub trait CommandExecutor: Send + Sync {
     fn execute(&self, args: &[&str]) -> io::Result<Output>;
 }
 
-/// Real command executor that runs actual tmux commands.
-#[derive(Default)]
-pub struct RealExecutor;
+/// Real command executor that runs commands against a process-specific tmux server.
+pub struct RealExecutor {
+    socket_path: SocketPath,
+}
+
+impl RealExecutor {
+    const fn new(socket_path: SocketPath) -> Self {
+        Self { socket_path }
+    }
+
+    fn command(&self, args: &[&str]) -> Command {
+        let mut command = Command::new("tmux");
+        command.arg("-S").arg(self.socket_path.as_path()).args(args);
+        command
+    }
+}
 
 impl CommandExecutor for RealExecutor {
     fn execute(&self, args: &[&str]) -> io::Result<Output> {
-        Command::new("tmux").args(args).output()
+        self.command(args).output()
     }
 }
 
 /// Manages a tmux session for the MCP server.
 pub struct TmuxSession<E: CommandExecutor = RealExecutor> {
-    session_name: String,
+    session_name: ServerName,
+    socket_path: SocketPath,
     session_created: bool,
     executor: E,
     width: u32,
@@ -53,7 +104,13 @@ pub struct TmuxSession<E: CommandExecutor = RealExecutor> {
 impl TmuxSession<RealExecutor> {
     /// Create a new `TmuxSession` with default executor.
     pub fn new() -> Self {
-        Self::with_executor(RealExecutor)
+        let session_name = ServerName::for_current_process();
+        let socket_path = SocketPath::for_current_process();
+        Self::with_identity(
+            RealExecutor::new(socket_path.clone()),
+            session_name,
+            socket_path,
+        )
     }
 }
 
@@ -65,10 +122,19 @@ impl Default for TmuxSession<RealExecutor> {
 
 impl<E: CommandExecutor> TmuxSession<E> {
     /// Create a new `TmuxSession` with a custom executor.
+    #[cfg(test)]
     pub fn with_executor(executor: E) -> Self {
-        let pid = std::process::id();
+        Self::with_identity(
+            executor,
+            ServerName::for_current_process(),
+            SocketPath::for_current_process(),
+        )
+    }
+
+    const fn with_identity(executor: E, session_name: ServerName, socket_path: SocketPath) -> Self {
         Self {
-            session_name: format!("debug-{pid}"),
+            session_name,
+            socket_path,
             session_created: false,
             executor,
             width: 200,
@@ -79,7 +145,7 @@ impl<E: CommandExecutor> TmuxSession<E> {
     /// Get the session name.
     #[cfg(test)]
     pub fn session_name(&self) -> &str {
-        &self.session_name
+        self.session_name.as_str()
     }
 
     /// Check if the session has been created.
@@ -98,8 +164,11 @@ impl<E: CommandExecutor> TmuxSession<E> {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
         let command = format!("tmux {}", args.join(" "));
 
-        if stderr.contains("session not found") || stderr.contains("no server running") {
-            Err(TmuxError::SessionNotFound(self.session_name.clone()))
+        if stderr.contains("session not found")
+            || stderr.contains("can't find session")
+            || stderr.contains("no server running")
+        {
+            Err(TmuxError::SessionNotFound(self.session_name.to_string()))
         } else if stderr.contains("can't find window")
             || stderr.contains("window not found")
             || stderr.contains("no such window")
@@ -116,6 +185,17 @@ impl<E: CommandExecutor> TmuxSession<E> {
         args.iter()
             .find(|arg| arg.contains(':'))
             .map_or_else(|| "unknown".to_string(), |arg| (*arg).to_string())
+    }
+
+    fn remove_socket(&self) -> TmuxResult<()> {
+        match fs::remove_file(self.socket_path.as_path()) {
+            Ok(()) => Ok(()),
+            Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(source) => Err(TmuxError::SocketCleanup {
+                path: self.socket_path.as_path().to_path_buf(),
+                source,
+            }),
+        }
     }
 
     fn set_window_remain_on_exit(&self, target: &str) -> TmuxResult<()> {
@@ -215,13 +295,14 @@ impl<E: CommandExecutor> TmuxSession<E> {
             return Ok(());
         }
 
+        self.remove_socket()?;
         let width = self.width.to_string();
         let height = self.height.to_string();
         self.run_tmux(&[
             "new-session",
             "-d",
             "-s",
-            &self.session_name,
+            self.session_name.as_str(),
             "-n",
             BOOTSTRAP_WINDOW_NAME,
             "-x",
@@ -233,7 +314,7 @@ impl<E: CommandExecutor> TmuxSession<E> {
         self.run_tmux(&[
             "set-hook",
             "-t",
-            &self.session_name,
+            self.session_name.as_str(),
             "after-new-window",
             "set-option remain-on-exit on",
         ])?;
@@ -250,7 +331,7 @@ impl<E: CommandExecutor> TmuxSession<E> {
         self.run_tmux(&[
             "new-window",
             "-t",
-            &self.session_name,
+            self.session_name.as_str(),
             "-n",
             pane_id.as_str(),
             command,
@@ -295,11 +376,11 @@ impl<E: CommandExecutor> TmuxSession<E> {
     pub fn kill_pane(&mut self, pane_id: &PaneId) -> TmuxResult<()> {
         let target = format!("{}:{}", self.session_name, pane_id.as_str());
         self.run_tmux(&["kill-window", "-t", &target])?;
-        match self.run_tmux(&["list-windows", "-t", &self.session_name]) {
+        match self.run_tmux(&["list-windows", "-t", self.session_name.as_str()]) {
             Ok(_) => Ok(()),
             Err(TmuxError::SessionNotFound(_)) => {
                 self.session_created = false;
-                Ok(())
+                self.remove_socket()
             }
             Err(error) => Err(error),
         }
@@ -312,7 +393,13 @@ impl<E: CommandExecutor> TmuxSession<E> {
         }
 
         let format = "#{window_name}|#{pane_pid}|#{pane_dead}";
-        let output = self.run_tmux(&["list-windows", "-t", &self.session_name, "-F", format])?;
+        let output = self.run_tmux(&[
+            "list-windows",
+            "-t",
+            self.session_name.as_str(),
+            "-F",
+            format,
+        ])?;
 
         let mut windows = Vec::new();
         for line in output.lines().filter(|line| !line.is_empty()) {
@@ -340,17 +427,16 @@ impl<E: CommandExecutor> TmuxSession<E> {
 
     /// Kill the entire session.
     pub fn kill_session(&mut self) -> TmuxResult<()> {
-        if !self.session_created {
-            return Ok(());
+        if self.session_created {
+            match self.run_tmux(&["kill-session", "-t", self.session_name.as_str()]) {
+                Ok(_) | Err(TmuxError::SessionNotFound(_)) => {
+                    self.session_created = false;
+                }
+                Err(error) => return Err(error),
+            }
         }
 
-        match self.run_tmux(&["kill-session", "-t", &self.session_name]) {
-            Ok(_) | Err(TmuxError::SessionNotFound(_)) => {
-                self.session_created = false;
-                Ok(())
-            }
-            Err(error) => Err(error),
-        }
+        self.remove_socket()
     }
 }
 
@@ -435,6 +521,24 @@ mod tests {
                 stderr: Vec::new(),
             })
         }
+    }
+
+    #[test]
+    fn real_executor_targets_process_specific_server() {
+        let socket_path = SocketPath::for_current_process();
+        let executor = RealExecutor::new(socket_path.clone());
+        let command = executor.command(&["list-windows"]);
+        let args = command.get_args().collect::<Vec<_>>();
+
+        assert_eq!(command.get_program(), "tmux");
+        assert_eq!(
+            args,
+            [
+                std::ffi::OsStr::new("-S"),
+                socket_path.as_path().as_os_str(),
+                std::ffi::OsStr::new("list-windows"),
+            ]
+        );
     }
 
     #[test]
@@ -588,6 +692,22 @@ mod tests {
     fn test_kill_session_noop_when_not_created() {
         let mut session = TmuxSession::with_executor(StaticMockExecutor);
         session.kill_session().unwrap();
+    }
+
+    #[test]
+    fn kill_session_removes_owned_socket() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let socket_path = SocketPath(temp_dir.path().join("tmux.sock"));
+        let mut session = TmuxSession::with_identity(
+            StaticMockExecutor,
+            ServerName("debug-1".to_string()),
+            socket_path.clone(),
+        );
+        fs::write(socket_path.as_path(), b"stale socket").unwrap();
+
+        session.kill_session().unwrap();
+
+        assert!(!socket_path.as_path().exists());
     }
 
     #[test]

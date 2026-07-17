@@ -44,7 +44,7 @@ main() {
     assert_tmux_session_exists "$session_name" "MCP tmux session should exist"
 
     # The window is named with the pane_id
-    if ! tmux list-windows -t "$session_name" 2>/dev/null | grep -q .; then
+    if ! mcp_tmux "$session_name" list-windows -t "$session_name" 2>/dev/null | grep -q .; then
         log_fail "Expected at least one window in session $session_name"
         exit 1
     fi
