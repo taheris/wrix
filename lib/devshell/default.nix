@@ -6,6 +6,7 @@
 
 let
   inherit (builtins)
+    attrNames
     concatStringsSep
     elemAt
     fromJSON
@@ -15,6 +16,8 @@ let
     match
     readFile
     ;
+
+  inherit (pkgs.lib) escapeShellArgs toShellVars;
 
   hostNixConfig = pkgs.writeText "wrix-host-nix-config.sh" (readFile ../services/host-nix-config.sh);
   prekHooksBundle = import ../prek/bundle.nix { inherit pkgs; };
@@ -174,6 +177,14 @@ in
             unset _wrix_service_bin _wrix_nix_config
           '';
       beadsHook = if nixCacheEnabled then beads.waitAndExport else "";
+      consumerEnvHook =
+        if env == { } then
+          ""
+        else
+          ''
+            ${toShellVars env}
+            export ${escapeShellArgs (attrNames env)}
+          '';
     in
     pkgs.mkShell {
       packages =
@@ -195,6 +206,7 @@ in
         echo "Wrix development shell"
 
         ${resolvedProfile.shellHook or ""}
+        ${consumerEnvHook}
         ${shellHook}
       '';
     };

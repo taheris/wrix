@@ -48,7 +48,7 @@ in
   "devshell.prek-stale-config-overwrite" = mkDevShellPrek "test_stale_config_overwrite_with_warning";
   "devshell.profile-required" = mkDevShell "test_profile_required";
   "devshell.profile-shellhook-spliced" = mkDevShell "test_profile_shellhook_spliced";
-  "devshell.shellhook-order" = nixEval "devshell.shellhook-order";
+  "devshell.shellhook-order" = mkDevShell "test_shellhook_order";
 
   "profiles.base-python-boundary" = corePackages "test_base_python_boundary";
   "profiles.core-membership" = corePackages "test_core_membership";

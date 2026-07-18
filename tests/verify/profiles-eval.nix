@@ -9,11 +9,9 @@ let
     all
     attrNames
     concatStringsSep
-    elemAt
     getAttr
     getFlake
     hasAttr
-    length
     readFile
     throw
     toString
@@ -23,19 +21,12 @@ let
   pkgs = flake.inputs.nixpkgs.legacyPackages.${system};
   wlib = flake.legacyPackages.${system}.lib;
   inherit (pkgs) writeShellScriptBin writeText;
-  inherit (pkgs.lib) hasInfix splitString toLower;
+  inherit (pkgs.lib) hasInfix toLower;
 
   ensure = condition: message: if condition then true else throw "verify:${target}: ${message}";
   readRepo = path: readFile "${rootString}/${path}";
   lacks = needle: text: !(hasInfix needle text);
   lacksLower = needle: text: lacks needle (toLower text);
-  hasBefore =
-    needle: marker: text:
-    let
-      parts = splitString marker text;
-    in
-    length parts == 2 && hasInfix needle (elemAt parts 0);
-
   devshellSource = readRepo "lib/devshell/default.nix";
   flakeDevshellSource = readRepo "modules/flake/devshell.nix";
   entrypointSources = [
@@ -110,19 +101,6 @@ let
     "devshell.no-prek-install" =
       ensure (lacks "prek install" devshellSource) "mkDevShell invokes prek install"
       && ensure (lacks ".git/hooks" devshellSource) "mkDevShell mutates .git/hooks";
-
-    "devshell.shellhook-order" =
-      let
-        marker = "WRIX_MKDEVSHELL_CONSUMER_MARKER_XYZ";
-        hook =
-          (wlib.mkDevShell {
-            profile = wlib.profiles.rust;
-            shellHook = "echo ${marker}";
-          }).shellHook;
-        profileHookPrecedesConsumer = hasBefore "RUSTC_WRAPPER" marker hook;
-      in
-      ensure (hasInfix marker hook) "consumer shellHook marker is absent"
-      && ensure profileHookPrecedesConsumer "consumer shellHook does not follow the profile shellHook";
 
     "profiles.no-dev-toolchain-lib" = ensure (
       !(hasAttr "devToolchain" wlib)

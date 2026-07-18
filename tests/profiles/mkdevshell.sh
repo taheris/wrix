@@ -14,14 +14,12 @@
 #     and extra tools resolvable on PATH while leaving image packages out.
 #
 #   test_env_right_merge
-#     mkDevShell { profile; env = { K = "v"; }; } sets K=v on the resulting
-#     shell derivation. When the key collides with profile.env (e.g.
-#     CARGO_INCREMENTAL on the rust profile), consumer wins.
+#     mkDevShell { profile; env = { K = "v"; }; } preserves consumer values
+#     after the generated devshell hook runs, including rust-profile conflicts.
 #
 #   test_shellhook_order
-#     mkDevShell { profile = profiles.rust; shellHook = "MARKER_XYZ"; }
-#     shellHook contains both the rust profile's exports AND the consumer
-#     marker, with the consumer marker appearing AFTER the profile exports.
+#     Sourcing the generated hook executes the profile hook before the consumer
+#     hook, and both hooks' effects are observable in the resulting shell.
 #
 # Usage:
 #   tests/profiles/mkdevshell.sh                  # run all tests
@@ -139,6 +137,9 @@ source_hook_env() {
     printf 'SCCACHE_DIR=%s\n' "${SCCACHE_DIR-}"
     printf 'SCCACHE_CACHE_SIZE=%s\n' "${SCCACHE_CACHE_SIZE-}"
     printf 'CARGO_INCREMENTAL=%s\n' "${CARGO_INCREMENTAL-}"
+    printf 'MKDEVSHELL_TEST_KEY=%s\n' "${MKDEVSHELL_TEST_KEY-}"
+    printf 'WRIX_TEST_PROFILE_HOOK_FIRED=%s\n' "${WRIX_TEST_PROFILE_HOOK_FIRED-}"
+    printf 'WRIX_TEST_HOOK_ORDER=%s\n' "${WRIX_TEST_HOOK_ORDER-}"
   )
 }
 
@@ -352,77 +353,93 @@ test_host_packages_source() {
 # env = profile.env // env (right-biased; consumer wins on conflict)
 # ============================================================================
 test_env_right_merge() {
-  local result
-  if ! result=$(eval_expr_json "
-    let
-      added = lib.mkDevShell {
-        profile = lib.profiles.base;
-        env     = { MKDEVSHELL_TEST_KEY = \"mkdevshell_test_value\"; };
+  local devshell_env hook env_output added_value rustc_wrapper cargo_wrapper
+  if ! devshell_env=$(eval_expr_json '
+    let shell = lib.mkDevShell {
+      profile = lib.profiles.rust;
+      env = {
+        MKDEVSHELL_TEST_KEY = "mkdevshell_test_value";
+        RUSTC_WRAPPER = "/consumer/rustc-wrapper";
+        CARGO_BUILD_RUSTC_WRAPPER = "/consumer/cargo-rustc-wrapper";
       };
-      conflict = lib.mkDevShell {
-        profile = lib.profiles.rust;
-        env     = { CARGO_INCREMENTAL = \"1\"; };
-      };
+    };
     in {
-      addedValue        = added.MKDEVSHELL_TEST_KEY or null;
-      conflictValue     = conflict.CARGO_INCREMENTAL or null;
+      CARGO_BUILD_RUSTC_WRAPPER = shell.CARGO_BUILD_RUSTC_WRAPPER or null;
+      MKDEVSHELL_TEST_KEY = shell.MKDEVSHELL_TEST_KEY or null;
+      RUSTC_WRAPPER = shell.RUSTC_WRAPPER or null;
     }
-  "); then
+  '); then
     echo "FAIL: nix eval mkDevShell env-merge expression failed" >&2
     return 1
   fi
+  if ! hook=$(eval_expr_raw '(lib.mkDevShell {
+    profile = lib.profiles.rust;
+    env = {
+      MKDEVSHELL_TEST_KEY = "mkdevshell_test_value";
+      RUSTC_WRAPPER = "/consumer/rustc-wrapper";
+      CARGO_BUILD_RUSTC_WRAPPER = "/consumer/cargo-rustc-wrapper";
+    };
+  }).shellHook'); then
+    echo "FAIL: mkDevShell env-merge shellHook evaluation failed" >&2
+    return 1
+  fi
+  if ! env_output=$(source_hook_env "$hook" "$devshell_env"); then
+    echo "FAIL: generated env-merge shellHook failed when sourced" >&2
+    return 1
+  fi
 
-  local added_value conflict_value
-  added_value=$(echo "$result"    | jq -r '.addedValue')
-  conflict_value=$(echo "$result" | jq -r '.conflictValue')
+  added_value=$(env_value "$env_output" MKDEVSHELL_TEST_KEY)
+  rustc_wrapper=$(env_value "$env_output" RUSTC_WRAPPER)
+  cargo_wrapper=$(env_value "$env_output" CARGO_BUILD_RUSTC_WRAPPER)
 
-  if [[ "$added_value" != "mkdevshell_test_value" ]]; then
+  [[ "$added_value" == "mkdevshell_test_value" ]] || {
     echo "FAIL: env.MKDEVSHELL_TEST_KEY expected 'mkdevshell_test_value', got '$added_value'" >&2
     return 1
-  fi
-  if [[ "$conflict_value" != "1" ]]; then
-    echo "FAIL: consumer env.CARGO_INCREMENTAL=1 should override rust profile's '0', got '$conflict_value'" >&2
+  }
+  [[ "$rustc_wrapper" == "/consumer/rustc-wrapper" ]] || {
+    echo "FAIL: consumer RUSTC_WRAPPER was overwritten after shellHook execution: '$rustc_wrapper'" >&2
     return 1
-  fi
+  }
+  [[ "$cargo_wrapper" == "/consumer/cargo-rustc-wrapper" ]] || {
+    echo "FAIL: consumer CARGO_BUILD_RUSTC_WRAPPER was overwritten after shellHook execution: '$cargo_wrapper'" >&2
+    return 1
+  }
 }
 
 # ============================================================================
 # shellHook order: lifecycle → profile.shellHook → consumer shellHook
 # ============================================================================
 test_shellhook_order() {
-  local marker="WRIX_MKDEVSHELL_CONSUMER_MARKER_XYZ"
-  local hook
-  if ! hook=$(eval_expr_raw "
-    (lib.mkDevShell {
-      profile   = lib.profiles.rust;
-      shellHook = \"echo $marker\";
+  local hook env_output profile_fired final_order
+  if ! hook=$(eval_expr_raw '
+    let
+      profile = lib.deriveProfile lib.profiles.base {
+        shellHook = "export WRIX_TEST_PROFILE_HOOK_FIRED=1; export WRIX_TEST_HOOK_ORDER=profile";
+      };
+    in (lib.mkDevShell {
+      inherit profile;
+      shellHook = "export WRIX_TEST_HOOK_ORDER=consumer";
     }).shellHook
-  "); then
+  '); then
     echo "FAIL: mkDevShell shellHook-order evaluation failed" >&2
     return 1
   fi
-
-  if ! grep -q "$marker" <<<"$hook"; then
-    echo "FAIL: consumer marker '$marker' missing from devshell shellHook" >&2
+  if ! env_output=$(source_hook_env "$hook" '{}'); then
+    echo "FAIL: generated shellHook failed when sourced" >&2
     return 1
   fi
 
-  local rustc_line marker_line
-  rustc_line=$(grep -n 'RUSTC_WRAPPER' <<<"$hook" | head -1 | cut -d: -f1)
-  marker_line=$(grep -n "$marker"      <<<"$hook" | head -1 | cut -d: -f1)
+  profile_fired=$(env_value "$env_output" WRIX_TEST_PROFILE_HOOK_FIRED)
+  final_order=$(env_value "$env_output" WRIX_TEST_HOOK_ORDER)
 
-  if [[ -z "$rustc_line" ]]; then
-    echo "FAIL: rust profile RUSTC_WRAPPER export missing from shellHook" >&2
+  [[ "$profile_fired" == "1" ]] || {
+    echo "FAIL: profile shellHook did not execute" >&2
     return 1
-  fi
-  if [[ -z "$marker_line" ]]; then
-    echo "FAIL: consumer marker line not found" >&2
+  }
+  [[ "$final_order" == "consumer" ]] || {
+    echo "FAIL: consumer shellHook did not execute last: '$final_order'" >&2
     return 1
-  fi
-  if (( marker_line <= rustc_line )); then
-    echo "FAIL: consumer shellHook (line $marker_line) must appear AFTER profile.shellHook (RUSTC_WRAPPER on line $rustc_line)" >&2
-    return 1
-  fi
+  }
 }
 
 # ----------------------------------------------------------------------------

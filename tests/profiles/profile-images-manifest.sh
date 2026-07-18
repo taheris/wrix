@@ -31,68 +31,77 @@ REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 
 test_manifest_shape() {
     local flake_url="git+file://$REPO_ROOT"
+    local system manifest_path expected
+    local source ref source_kind profile_config expected_source expected_source_kind expected_profile_config
+    local pi_source pi_ref pi_source_kind pi_profile_config pi_expected_source pi_expected_source_kind pi_expected_profile_config
 
-    local system
     if ! system=$(nix eval --raw --impure --no-warn-dirty --expr 'builtins.currentSystem'); then
         echo "nix eval builtins.currentSystem failed" >&2
         return 1
     fi
 
-    # Pull the manifest entry and the matching image metadata in one eval
-    # so they're computed against the same flake state. Using passthru.manifest
-    # avoids realizing the writeText derivation (which would transitively
-    # build the rust profile image).
-    local result
-    if ! result=$(nix eval --json --impure --no-warn-dirty --expr "
+    if ! manifest_path=$(nix build --no-link --print-out-paths --impure --no-warn-dirty --expr "
       let
         flake = builtins.getFlake \"$flake_url\";
         lib = flake.legacyPackages.${system}.lib;
         rustImage = (lib.mkSandbox { profile = lib.profiles.rust; }).image;
         rustPiImage = (lib.mkSandbox { profile = lib.profiles.rust; agent = \"pi\"; }).image;
-        manifestDrv = lib.mkProfileImages { rust = rustImage; };
-        piManifestDrv = lib.mkProfileImages { rust = rustPiImage; };
-      in {
-        rustEntry = manifestDrv.passthru.manifest.rust.direct;
-        rustPiEntry = piManifestDrv.passthru.manifest.rust.pi;
-        rustImageSource = rustImage.source;
-        rustImageSourceKind = rustImage.source_kind;
-        rustPiImageSource = rustPiImage.source;
-        rustPiImageSourceKind = rustPiImage.source_kind;
+      in lib.mkProfileImages {
+        rust = rustImage;
+        rustPi = rustPiImage;
       }
     "); then
-        echo "nix eval of mkProfileImages failed" >&2
+        echo "nix build of mkProfileImages failed" >&2
+        return 1
+    fi
+    if [[ ! -f "$manifest_path" ]]; then
+        echo "realized mkProfileImages output is not a JSON file: $manifest_path" >&2
+        return 1
+    fi
+    if ! jq -e '
+      (keys | sort) == ["rust", "rustPi"] and
+      (.rust | keys) == ["direct"] and
+      (.rustPi | keys) == ["pi"] and
+      (.rust.direct | keys | sort) == ["profile_config", "ref", "source", "source_kind"] and
+      (.rustPi.pi | keys | sort) == ["profile_config", "ref", "source", "source_kind"]
+    ' "$manifest_path" >/dev/null; then
+        echo "realized mkProfileImages JSON has the wrong profile or entry shape" >&2
         return 1
     fi
 
-    local source ref source_kind profile_config expected_source expected_source_kind pi_source pi_ref pi_source_kind pi_expected_source pi_expected_source_kind
-    source=$(echo "$result" | jq -r '.rustEntry.source')
-    ref=$(echo "$result" | jq -r '.rustEntry.ref')
-    source_kind=$(echo "$result" | jq -r '.rustEntry.source_kind')
-    profile_config=$(echo "$result" | jq -r '.rustEntry.profile_config')
-    expected_source=$(echo "$result" | jq -r '.rustImageSource')
-    expected_source_kind=$(echo "$result" | jq -r '.rustImageSourceKind')
-    pi_source=$(echo "$result" | jq -r '.rustPiEntry.source')
-    pi_ref=$(echo "$result" | jq -r '.rustPiEntry.ref')
-    pi_source_kind=$(echo "$result" | jq -r '.rustPiEntry.source_kind')
-    pi_expected_source=$(echo "$result" | jq -r '.rustPiImageSource')
-    pi_expected_source_kind=$(echo "$result" | jq -r '.rustPiImageSourceKind')
+    if ! expected=$(nix eval --json --impure --no-warn-dirty --expr "
+      let
+        flake = builtins.getFlake \"$flake_url\";
+        lib = flake.legacyPackages.${system}.lib;
+        rustImage = (lib.mkSandbox { profile = lib.profiles.rust; }).image;
+        rustPiImage = (lib.mkSandbox { profile = lib.profiles.rust; agent = \"pi\"; }).image;
+      in {
+        rustImageSource = rustImage.source;
+        rustImageSourceKind = rustImage.source_kind;
+        rustProfileConfig = rustImage.profileConfig;
+        rustPiImageSource = rustPiImage.source;
+        rustPiImageSourceKind = rustPiImage.source_kind;
+        rustPiProfileConfig = rustPiImage.profileConfig;
+      }
+    "); then
+        echo "nix eval of matching mkSandbox image metadata failed" >&2
+        return 1
+    fi
 
-    if [[ -z "$source" || "$source" == "null" ]]; then
-        echo "manifest .rust.direct.source is missing or empty" >&2
-        return 1
-    fi
-    if [[ -z "$ref" || "$ref" == "null" ]]; then
-        echo "manifest .rust.direct.ref is missing or empty" >&2
-        return 1
-    fi
-    if [[ -z "$source_kind" || "$source_kind" == "null" ]]; then
-        echo "manifest .rust.direct.source_kind is missing or empty" >&2
-        return 1
-    fi
-    if [[ -z "$profile_config" || "$profile_config" == "null" ]]; then
-        echo "manifest .rust.direct.profile_config is missing or empty" >&2
-        return 1
-    fi
+    source=$(jq -r '.rust.direct.source' "$manifest_path")
+    ref=$(jq -r '.rust.direct.ref' "$manifest_path")
+    source_kind=$(jq -r '.rust.direct.source_kind' "$manifest_path")
+    profile_config=$(jq -r '.rust.direct.profile_config' "$manifest_path")
+    expected_source=$(jq -r '.rustImageSource' <<<"$expected")
+    expected_source_kind=$(jq -r '.rustImageSourceKind' <<<"$expected")
+    expected_profile_config=$(jq -r '.rustProfileConfig' <<<"$expected")
+    pi_source=$(jq -r '.rustPi.pi.source' "$manifest_path")
+    pi_ref=$(jq -r '.rustPi.pi.ref' "$manifest_path")
+    pi_source_kind=$(jq -r '.rustPi.pi.source_kind' "$manifest_path")
+    pi_profile_config=$(jq -r '.rustPi.pi.profile_config' "$manifest_path")
+    pi_expected_source=$(jq -r '.rustPiImageSource' <<<"$expected")
+    pi_expected_source_kind=$(jq -r '.rustPiImageSourceKind' <<<"$expected")
+    pi_expected_profile_config=$(jq -r '.rustPiProfileConfig' <<<"$expected")
 
     if [[ "$source" != "$expected_source" ]]; then
         echo "manifest .rust.direct.source ($source) != mkSandbox image.source ($expected_source)" >&2
@@ -102,23 +111,29 @@ test_manifest_shape() {
         echo "manifest .rust.direct.source_kind ($source_kind) != mkSandbox image.source_kind ($expected_source_kind)" >&2
         return 1
     fi
+    if [[ "$profile_config" != "$expected_profile_config" ]]; then
+        echo "manifest .rust.direct.profile_config ($profile_config) != mkSandbox image.profileConfig ($expected_profile_config)" >&2
+        return 1
+    fi
     if [[ "$pi_source" != "$pi_expected_source" ]]; then
-        echo "manifest .rust.pi.source ($pi_source) != mkSandbox pi image.source ($pi_expected_source)" >&2
+        echo "manifest .rustPi.pi.source ($pi_source) != mkSandbox pi image.source ($pi_expected_source)" >&2
         return 1
     fi
     if [[ "$pi_source_kind" != "$pi_expected_source_kind" ]]; then
-        echo "manifest .rust.pi.source_kind ($pi_source_kind) != mkSandbox pi image.source_kind ($pi_expected_source_kind)" >&2
+        echo "manifest .rustPi.pi.source_kind ($pi_source_kind) != mkSandbox pi image.source_kind ($pi_expected_source_kind)" >&2
+        return 1
+    fi
+    if [[ "$pi_profile_config" != "$pi_expected_profile_config" ]]; then
+        echo "manifest .rustPi.pi.profile_config ($pi_profile_config) != mkSandbox pi image.profileConfig ($pi_expected_profile_config)" >&2
         return 1
     fi
 
-    # ref is `[localhost/]wrix-<name>:<hash>`; the prefix is platform-dependent
-    # (linux uses localhost/, darwin omits it). Accept both.
     if ! [[ "$ref" =~ ^(localhost/)?wrix-rust:[a-f0-9]+$ ]]; then
         echo "manifest .rust.direct.ref ($ref) does not match expected pattern '[localhost/]wrix-rust:<hex>'" >&2
         return 1
     fi
     if ! [[ "$pi_ref" =~ ^(localhost/)?wrix-rust-pi:[a-f0-9]+$ ]]; then
-        echo "manifest .rust.pi.ref ($pi_ref) does not match expected pattern '[localhost/]wrix-rust-pi:<hex>'" >&2
+        echo "manifest .rustPi.pi.ref ($pi_ref) does not match expected pattern '[localhost/]wrix-rust-pi:<hex>'" >&2
         return 1
     fi
 }
