@@ -1,7 +1,22 @@
 { pkgs, ... }:
 
 let
-  inherit (pkgs.lib) escapeShellArg;
+  inherit (pkgs.lib)
+    escapeShellArg
+    makeBinPath
+    optionalString
+    optionals
+    ;
+
+  containerRuntimePath = makeBinPath (
+    optionals pkgs.stdenv.isLinux [
+      pkgs.podman
+      pkgs.shadow
+      pkgs.skopeo
+      pkgs.util-linux
+    ]
+  );
+  containerRuntimeEnvironment = optionalString pkgs.stdenv.isLinux "PATH=${escapeShellArg containerRuntimePath}:$PATH ";
 
   repoScript = path: function: ''
     run_repo_script ${escapeShellArg path} ${escapeShellArg function}
@@ -9,6 +24,10 @@ let
 
   wholeRepoScript = path: ''
     run_repo_script ${escapeShellArg path}
+  '';
+
+  containerScript = path: ''
+    ${containerRuntimeEnvironment}run_repo_script ${escapeShellArg path}
   '';
 in
 {
@@ -31,7 +50,7 @@ in
   "prek.skip-if-missing-present" = wholeRepoScript "tests/prek/skip-if-missing-present.sh";
   "prek.skip-if-missing-absent" = wholeRepoScript "tests/prek/skip-if-missing-absent.sh";
   "prek.config-wrapper-contract" = wholeRepoScript "tests/prek/wrix-pre-push-config.sh";
-  "prek.container-pre-commit" = wholeRepoScript "tests/sandbox/container-pre-commit.sh";
-  "prek.container-pre-push" = wholeRepoScript "tests/sandbox/container-pre-push.sh";
+  "prek.container-pre-commit" = containerScript "tests/sandbox/container-pre-commit.sh";
+  "prek.container-pre-push" = containerScript "tests/sandbox/container-pre-push.sh";
   "prek.ci-only-heavy-checks" = wholeRepoScript "tests/prek/ci-only-heavy-checks.sh";
 }
