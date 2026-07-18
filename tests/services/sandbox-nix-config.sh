@@ -413,9 +413,16 @@ sandbox_dry_run() {
   local profile_config="$3"
   local wrix_bin="$4"
   local spawn_config="$TEST_TMP/spawn.json"
+  local deploy_key="$TEST_TMP/sandbox-dry-run-deploy-key"
   if [[ "$subcommand" == "spawn" ]]; then
     write_spawn_config "$spawn_config" "$workspace"
-    WRIX_DRY_RUN=1 WRIX_DRY_RUN_SERVICES=1 "$wrix_bin" --profile-config "$profile_config" spawn --spawn-config "$spawn_config" --stdio
+    printf 'sandbox dry-run deploy key fixture\n' >"$deploy_key"
+    env -u WRIX_SIGNING_KEY \
+      WRIX_DEPLOY_KEY="$deploy_key" \
+      WRIX_GIT_SIGN=0 \
+      WRIX_DRY_RUN=1 \
+      WRIX_DRY_RUN_SERVICES=1 \
+      "$wrix_bin" --profile-config "$profile_config" spawn --spawn-config "$spawn_config" --stdio
   else
     WRIX_DRY_RUN=1 WRIX_DRY_RUN_SERVICES=1 "$wrix_bin" --profile-config "$profile_config" run "$workspace" echo hello
   fi
