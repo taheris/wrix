@@ -127,7 +127,7 @@ write_fake_systemd() {
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'systemctl %s\n' "$*" >>"${WRIX_FAKE_LOG:?}"
-if [[ "$*" == "--user is-active dbus.service" ]]; then
+if [[ "$*" == "--user show-environment" ]]; then
   exit "${WRIX_FAKE_SYSTEMD_ACTIVE:-0}"
 fi
 exit 64

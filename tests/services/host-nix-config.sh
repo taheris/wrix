@@ -443,6 +443,9 @@ test_mkdevshell_nix_cache() {
   printf '%s\n' "$disabled_hook" >"$disabled_hook_file"
 
   assert_contains "default mkDevShell hook" "$default_hook" "service start" || return 1
+  if [[ "$(uname -s)" == "Linux" ]]; then
+    assert_contains "default mkDevShell hook" "$default_hook" "systemd-run --user --scope --quiet --collect" || return 1
+  fi
   assert_contains "default mkDevShell hook" "$default_hook" "WRIX_HOST_NIX_CONFIG_PRINT=1" || return 1
   assert_contains "default mkDevShell hook" "$default_hook" "export NIX_CONFIG" || return 1
   assert_not_contains "default mkDevShell hook" "$default_hook" "service start --no-cache" || return 1

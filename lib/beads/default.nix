@@ -8,6 +8,7 @@ let
 
   wrixBin = if wrix == null then "wrix" else "${wrix}/bin/wrix";
   jqBin = "${pkgs.jq}/bin/jq";
+  startIndependent = import ../services/start.nix { inherit isDarwin; };
 
   fail = ''
     _wrix_beads_fail() {
@@ -41,30 +42,13 @@ let
         unset _wrix_runtime
       '';
 
-  startDirect = ''
-    if ! "$_wrix_service_bin" service start --no-cache; then
+  startService = startIndependent {
+    command = ''"$_wrix_service_bin" service start --no-cache'';
+    onFailure = ''
       _wrix_beads_fail "beads: wrix service start --no-cache failed — Dolt will not be available"
       return 1 2>/dev/null || exit 1
-    fi
-  '';
-
-  startService =
-    if isDarwin then
-      startDirect
-    else
-      ''
-        if command -v systemd-run >/dev/null 2>&1 \
-           && command -v systemctl >/dev/null 2>&1 \
-           && systemctl --user is-active dbus.service >/dev/null 2>&1; then
-          if ! systemd-run --user --scope --quiet --collect \
-               -- "$_wrix_service_bin" service start --no-cache; then
-            _wrix_beads_fail "beads: wrix service start --no-cache failed — Dolt will not be available"
-            return 1 2>/dev/null || exit 1
-          fi
-        else
-          ${startDirect}
-        fi
-      '';
+    '';
+  };
 
   waitAndExport = ''
     if [[ -d "$PWD/.beads/dolt" ]]; then

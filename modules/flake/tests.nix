@@ -30,6 +30,7 @@
       inherit (test) checks;
       legacyPackages.ciChecks = test.ciChecks;
       legacyPackages.ciApps = test.ciAppDerivations;
+      legacyPackages.systemTests = test.systemTests;
       legacyPackages.testApps = test.testAppDerivations;
     };
 }

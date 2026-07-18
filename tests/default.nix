@@ -11,7 +11,7 @@
 }:
 
 let
-  inherit (pkgs.lib) concatStringsSep;
+  inherit (pkgs.lib) concatStringsSep optionalAttrs removeAttrs;
   inherit (pkgs)
     bash
     coreutils
@@ -138,7 +138,13 @@ let
 
   verify = import ./verify { inherit pkgs system; };
 
-  prePushSmokeTests = pkgs.lib.removeAttrs smokeTests [
+  systemTests = optionalAttrs pkgs.stdenv.isLinux {
+    services-devshell-start-independent = import ./services/devshell-lifecycle.nix {
+      inherit pkgs wrix;
+    };
+  };
+
+  prePushSmokeTests = removeAttrs smokeTests [
     "image-builds"
     "linux-microvm-krun-detection"
     "linux-pasta-port-forwarding-disabled"
@@ -592,6 +598,7 @@ in
     rustChecks
     shellTests
     smokeTests
+    systemTests
     testCi
     testImages
     tmuxMcpTests

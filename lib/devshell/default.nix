@@ -20,6 +20,7 @@ let
   inherit (pkgs.lib) escapeShellArgs toShellVars;
 
   hostNixConfig = pkgs.writeText "wrix-host-nix-config.sh" (readFile ../services/host-nix-config.sh);
+  startIndependent = import ../services/start.nix { inherit (pkgs.stdenv) isDarwin; };
   prekHooksBundle = import ../prek/bundle.nix { inherit pkgs; };
   prekWrappers = import ../prek/wrappers.nix { inherit pkgs; };
 
@@ -162,9 +163,10 @@ in
         else
           ''
             _wrix_service_bin="''${WRIX_BIN:-${wrixPackage}/bin/wrix}"
-            if ! "$_wrix_service_bin" service start; then
-              return 1 2>/dev/null || exit 1
-            fi
+            ${startIndependent {
+              command = ''"$_wrix_service_bin" service start'';
+              onFailure = "return 1 2>/dev/null || exit 1";
+            }}
             _wrix_nix_config=$(
               WRIX_SERVICE_BIN="$_wrix_service_bin" \
                 WRIX_CACHE_HOOK_BIN="${rustCli.cacheHook}/bin/wrix-cache-hook" \

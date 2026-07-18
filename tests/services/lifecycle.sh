@@ -700,40 +700,6 @@ test_workspace_identity() {
   assert_file_contains "workspace hash label" "$WRIX_FAKE_RUNTIME_STATE/run-repo-one-service" "wrix.workspace.hash=$first_hash"
 }
 
-test_devshell_start_is_independent() {
-  local wrix_bin
-  wrix_bin="$(build_wrix)"
-  with_fake_runtime_env
-
-  export HOME="$TEST_TMP/home-devshell"
-  export XDG_STATE_HOME="$TEST_TMP/xdg-state-devshell"
-  export XDG_CACHE_HOME="$TEST_TMP/xdg-cache-devshell"
-  mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
-
-  local workspace="$TEST_TMP/devshell-repo"
-  mkdir -p "$workspace/.git"
-  (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/devshell-start.txt")
-
-  "$WRIX_CONTAINER_RUNTIME" container exists devshell-repo-service
-  if grep -F -- 'rm -f devshell-repo-service' "$WRIX_FAKE_RUNTIME_STATE/calls" >/dev/null; then
-    fail "service start removed the container during shell exit simulation"
-  fi
-  assert_file_contains "detached devshell run" "$WRIX_FAKE_RUNTIME_STATE/run-devshell-repo-service" "run -d --name devshell-repo-service"
-
-  local no_cache_workspace="$TEST_TMP/no-cache-repo"
-  export XDG_STATE_HOME="$TEST_TMP/xdg-state-no-cache"
-  export XDG_CACHE_HOME="$TEST_TMP/xdg-cache-no-cache"
-  mkdir -p "$no_cache_workspace" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
-  (cd "$no_cache_workspace" && "$wrix_bin" service start --no-cache >"$TEST_TMP/no-cache-start.txt")
-  if [[ -d "$XDG_STATE_HOME/wrix/workspaces" ]]; then
-    local cache_files
-    cache_files="$(find "$XDG_STATE_HOME/wrix/workspaces" -name cache.lock -print)"
-    if [[ -n "$cache_files" ]]; then
-      fail "--no-cache created cache state without beads: $cache_files"
-    fi
-  fi
-}
-
 test_start_replaces_stale_same_workspace_service_on_cache_port() {
   require_python
   local wrix_bin
@@ -1153,7 +1119,6 @@ test_service_mounts_beads_worktree_remote() {
 ALL_TESTS=(
   test_fake_runtime_contract
   test_workspace_identity
-  test_devshell_start_is_independent
   test_start_replaces_stale_same_workspace_service_on_cache_port
   test_start_ignores_container_removed_after_ps
   test_cache_start_recreates_running_no_cache_service
