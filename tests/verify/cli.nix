@@ -55,8 +55,8 @@ _:
     local root
     local list_output
     root="$(repo_root)"
-    python3 ${./check-runner-config.py} "$root/loom.toml"
     list_output="$("$SELF" --list)"
+    printf '%s\n' "$list_output" | python3 ${./check-runner-config.py} "$root/loom.toml"
     assert_contains "verify inventory" "$list_output" "verify:cli.package-surface"
     assert_contains "verify inventory" "$list_output" "verify:cli.shared-verifier-app"
     assert_contains "verify inventory" "$list_output" "verify:cli.verify-runner-batching"
