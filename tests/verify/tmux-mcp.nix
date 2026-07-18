@@ -1,14 +1,31 @@
 { pkgs, ... }:
 
 let
-  inherit (pkgs.lib) escapeShellArg;
+  inherit (pkgs.lib)
+    escapeShellArg
+    makeBinPath
+    optionalString
+    optionals
+    ;
 
-  tmuxScript = script: ''
+  containerRuntimePath = makeBinPath (
+    optionals pkgs.stdenv.isLinux [
+      pkgs.podman
+      pkgs.shadow
+      pkgs.skopeo
+      pkgs.util-linux
+    ]
+  );
+  containerRuntimeEnvironment = optionalString pkgs.stdenv.isLinux "PATH=${escapeShellArg containerRuntimePath}:$PATH ";
+  repoScript = script: ''
     run_repo_script ${escapeShellArg "tests/mcp/tmux/${script}.sh"}
+  '';
+  sandboxScript = script: ''
+    ${containerRuntimeEnvironment}run_repo_script ${escapeShellArg "tests/mcp/tmux/${script}.sh"}
   '';
 in
 {
-  "tmux-mcp.e2e-sandbox" = tmuxScript "e2e-sandbox";
+  "tmux-mcp.e2e-sandbox" = sandboxScript "e2e-sandbox";
 
-  "tmux-mcp.integration" = tmuxScript "integration";
+  "tmux-mcp.integration" = repoScript "integration";
 }

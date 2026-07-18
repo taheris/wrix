@@ -228,8 +228,8 @@ let
       if [[ "$status" -eq 77 ]]; then
         cat "$out_file" >&2
         rm -f "$out_file"
-        emit_verdict "$target" true "skipped: $evidence"
-        return 0
+        emit_verdict "$target" false "skipped: $evidence"
+        return 1
       fi
       cat "$out_file" >&2
       rm -f "$out_file"

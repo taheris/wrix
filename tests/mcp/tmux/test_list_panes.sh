@@ -112,12 +112,8 @@ main() {
 
     local name_three
     name_three=$(echo "$pane_three" | jq -r '.name')
-    # If no name provided, name might be null or the ID
-    if [[ "$name_three" == "null" ]] || [[ "$name_three" == "$id3" ]]; then
-        log_pass "Unnamed pane has expected name value"
-    else
-        log_pass "Unnamed pane has name: $name_three"
-    fi
+    assert_eq "$id3" "$name_three" "Unnamed pane should use its pane ID as its name"
+    log_pass "Unnamed pane uses its pane ID as its name"
 
     # Cleanup
     log_test "Cleanup: killing panes..."

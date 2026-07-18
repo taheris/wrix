@@ -173,12 +173,11 @@ main() {
     # Test: Verify timestamp format (ISO 8601)
     log_test "Verifying timestamp format..."
     ts=$(echo "$create_entry" | jq -r '.ts')
-    # Should match pattern like 2026-01-30T10:15:32Z
-    if [[ "$ts" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2} ]]; then
-        log_pass "Timestamp is ISO 8601 format: $ts"
-    else
-        log_warn "Timestamp format may not be ISO 8601: $ts"
+    if [[ ! "$ts" =~ ^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z$ ]]; then
+        log_fail "Timestamp is not ISO 8601 UTC: $ts"
+        exit 1
     fi
+    log_pass "Timestamp is ISO 8601 UTC: $ts"
 
     echo ""
     log_pass "All audit_log tests passed!"

@@ -26,6 +26,9 @@ _:
     local unknown_out
     local unknown_err
     local unknown_message
+    local skipped_out
+    local skipped_err
+    local skipped_status
     list_output="$("$SELF" --list)"
     assert_contains "verify list" "$list_output" "verify:cli.package-surface"
     assert_contains "verify list" "$list_output" "verify:cli.shared-verifier-app"
@@ -49,6 +52,27 @@ _:
     assert_contains "unknown target" "$unknown_message" "Unknown verify target: verify:cli.not-registered"
     assert_contains "unknown target" "$unknown_message" "nix run .#verify -- --list"
     assert_contains "unknown target" "$unknown_message" "verify:cli.package-surface"
+
+    skipped_err="$(mktemp -t wrix-verify-skipped.XXXXXX)"
+    run_target() {
+      printf 'SKIP: synthetic unavailable prerequisite\n'
+      return 77
+    }
+    set +e
+    skipped_out="$(run_one synthetic.skip 2>"$skipped_err")"
+    skipped_status="$?"
+    set -e
+    rm -f "$skipped_err"
+    if [[ "$skipped_status" -ne 1 ]]; then
+      fail "skipped verifier exited $skipped_status; expected 1"
+    fi
+    if ! printf '%s\n' "$skipped_out" | jq -e '
+      .target == "synthetic.skip"
+      and .pass == false
+      and (.evidence | startswith("skipped: SKIP:"))
+    ' >/dev/null; then
+      fail "skipped verifier did not emit a failing JSON verdict: $skipped_out"
+    fi
   '';
 
   "cli.verify-runner-batching" = ''
