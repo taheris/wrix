@@ -372,9 +372,15 @@ test_offline_startup() {
     local env_json
     local preload_dir
     local network_log
-    env_json=$(playwright_eval_raw server-env-json --argstr userDataDir "${TEMP_DIR}/user-data") || return 1
-    if ! jq -e '.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD == "1" and .PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS == "true"' <<<"$env_json" >/dev/null; then
-        log_fail "Generated server env did not include offline Playwright settings"
+    local user_data_dir="${TEMP_DIR}/user-data"
+    env_json=$(playwright_eval_raw server-env-json --argstr userDataDir "$user_data_dir") || return 1
+    if ! jq -e --arg user_data_dir "$user_data_dir" '
+        .PLAYWRIGHT_MCP_ISOLATED == "0"
+        and .PLAYWRIGHT_MCP_USER_DATA_DIR == $user_data_dir
+        and .PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD == "1"
+        and .PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS == "true"
+    ' <<<"$env_json" >/dev/null; then
+        log_fail "Generated server env did not select a writable persistent profile with offline settings"
         echo "$env_json" >&2
         return 1
     fi

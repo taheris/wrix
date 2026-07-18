@@ -99,7 +99,6 @@ let
       inherit browser contextOptions;
     };
 
-  mkConfigFile = args: pkgs.writeText "playwright-mcp-config.json" (builtins.toJSON (mkConfig args));
 in
 {
   name = "playwright";
@@ -120,7 +119,8 @@ in
       config ? { },
     }:
     let
-      configFile = mkConfigFile { inherit headless viewport config; };
+      generatedConfig = mkConfig { inherit headless viewport config; };
+      configFile = pkgs.writeText "playwright-mcp-config.json" (builtins.toJSON generatedConfig);
     in
     {
       command = "playwright-mcp";
@@ -129,6 +129,8 @@ in
         "${configFile}"
       ];
       env = {
+        PLAYWRIGHT_MCP_ISOLATED = "0";
+        PLAYWRIGHT_MCP_USER_DATA_DIR = generatedConfig.browser.userDataDir;
         PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
         PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS = "true";
       };
