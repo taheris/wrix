@@ -54,6 +54,8 @@ result=$(nix eval --impure --no-warn-dirty --json --expr "
     directRejected = directAttempt.success == false;
     claudeModel = claudeSettings.env.ANTHROPIC_MODEL or \"\";
     claudeProbe = claudeSettings.env.WRIX_AGENT_SETTINGS_PROBE or \"\";
+    piEditorPadding = piSettings.editorPaddingX or null;
+    piInstallTelemetry = piSettings.enableInstallTelemetry or null;
     piModel = piSettings.defaultModel or \"\";
     piProbe = piSettings.customProbe or \"\";
   }
@@ -63,10 +65,12 @@ if ! jq -e '
   .directRejected == true and
   .claudeModel == "wrix-agent-settings-probe" and
   .claudeProbe == "1" and
+  .piEditorPadding == 1 and
+  .piInstallTelemetry == false and
   .piModel == "wrix-pi-settings-probe" and
   .piProbe == "1"
 ' <<<"$result" >/dev/null; then
   fail "agentSettings contract failed: $result"
 fi
 
-printf 'PASS: agentSettings merges into selected agent settings and direct rejects non-empty settings\n' >&2
+printf 'PASS: agent settings merge and Pi UI/telemetry defaults are preserved\n' >&2

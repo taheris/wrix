@@ -138,6 +138,8 @@ let
     defaultModel = "gpt-5.6-sol";
     defaultThinkingLevel = "xhigh";
     defaultProjectTrust = "always";
+    editorPaddingX = 1;
+    enableInstallTelemetry = false;
     steeringMode = "all";
     followUpMode = "all";
     sessionDir = "/workspace/.pi/agent/sessions";
