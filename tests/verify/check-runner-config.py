@@ -1,3 +1,5 @@
+import re
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -16,6 +18,8 @@ DUPLICATED_TARGETS = (
     "verify:cli.shared-verifier-app",
     "verify:cli.verify-runner-batching",
 )
+SOURCE_ANNOTATION = re.compile(r"\[(?:test|judge)\??\]\(([^)]+)\)")
+TEST_RUNNER_COMMAND = "bash tests/loom-nextest-file-targets.sh '{paths}'"
 
 
 def fail(message):
@@ -35,8 +39,57 @@ def runner_entry(runner, tier):
         fail(f"missing [runner.{tier}.verify]")
 
 
+def file_selector_error(root, spec, target):
+    path_text = re.split(r"#|::", target, maxsplit=1)[0]
+    if "/" not in path_text:
+        return None
+    if path_text.startswith("crates/"):
+        return f"{spec.relative_to(root)} target {target!r} is workspace-relative; file targets must be spec-relative"
+    resolved = spec.parent / path_text
+    if not resolved.is_file():
+        return f"{spec.relative_to(root)} target {target!r} resolves to missing file {resolved}"
+    return None
+
+
+def test_file_selectors(root):
+    synthetic_spec = root / "specs/synthetic.md"
+    require(
+        file_selector_error(
+            root,
+            synthetic_spec,
+            "crates/example/tests/sample.rs::test_name",
+        )
+        is not None,
+        "workspace-relative synthetic file selector was not rejected",
+    )
+    for spec in sorted((root / "specs").glob("*.md")):
+        for match in SOURCE_ANNOTATION.finditer(spec.read_text()):
+            target = match.group(1)
+            error = file_selector_error(root, spec, target)
+            require(error is None, error)
+
+
+def test_file_selector_adapter(root):
+    adapter = root / "tests/loom-nextest-file-targets.sh"
+    completed = subprocess.run(
+        [
+            str(adapter),
+            "--print-filter",
+            "../crates/example/tests/sample.rs::file_test | module::unit_test",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    require(
+        completed.stdout.strip() == "test(file_test) + test(module::unit_test)",
+        f"file selector adapter emitted unexpected filter {completed.stdout.strip()!r}",
+    )
+
+
 def main():
     path = Path(sys.argv[1])
+    root = path.parent
     raw = path.read_text()
     config = tomllib.loads(raw)
     runner = config.get("runner", {})
@@ -48,6 +101,13 @@ def main():
                 entry.get(key) == value,
                 f"[runner.{tier}.verify] {key} is {entry.get(key)!r}, expected {value!r}",
             )
+
+    require(
+        runner.get("test", {}).get("command") == TEST_RUNNER_COMMAND,
+        f"[runner.test] command must be {TEST_RUNNER_COMMAND!r}",
+    )
+    test_file_selectors(root)
+    test_file_selector_adapter(root)
 
     for duplicated in DUPLICATED_TARGETS:
         require(

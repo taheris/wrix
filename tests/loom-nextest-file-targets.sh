@@ -4,8 +4,13 @@ set -euo pipefail
 main() {
   local joined_targets="${1:-}"
   local filter
-  filter="$(nextest_filter "$joined_targets")"
 
+  if [[ "$joined_targets" == "--print-filter" ]]; then
+    nextest_filter "${2:-}"
+    return
+  fi
+
+  filter="$(nextest_filter "$joined_targets")"
   if [[ -z "$filter" ]]; then
     printf 'loom nextest target adapter: no test targets supplied\n' >&2
     return 2
@@ -33,8 +38,8 @@ nextest_filter() {
       continue
     fi
     name="$target"
-    if [[ "$target" =~ ^crates/[^/]+/tests/[^/]+\.rs::(.+)$ ]]; then
-      name="${BASH_REMATCH[1]}"
+    if [[ "$target" =~ ^(\.\./)?crates/[^/]+/tests/[^/]+\.rs::(.+)$ ]]; then
+      name="${BASH_REMATCH[2]}"
     fi
     if [[ -n "$filter" ]]; then
       filter+=" + "
