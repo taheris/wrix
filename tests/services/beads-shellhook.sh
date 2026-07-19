@@ -5,12 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 
 TEST_TMP="$(mktemp -d -t wrix-beads-shellhook.XXXXXX)"
-SOCKET_PIDS=()
 cleanup() {
-  local pid
-  for pid in "${SOCKET_PIDS[@]}"; do
-    kill "$pid" 2>/dev/null || true # best-effort: socket helper may already be gone.
-  done
   rm -rf "$TEST_TMP"
 }
 trap cleanup EXIT
@@ -53,15 +48,6 @@ assert_file_contains() {
   local needle="$3"
   if ! grep -F -- "$needle" "$file" >/dev/null; then
     fail "$label: missing '$needle' in $file"
-  fi
-}
-
-assert_file_not_contains() {
-  local label="$1"
-  local file="$2"
-  local needle="$3"
-  if [[ -f "$file" ]] && grep -F -- "$needle" "$file" >/dev/null; then
-    fail "$label: unexpected '$needle' in $file"
   fi
 }
 
@@ -164,32 +150,6 @@ prepare_beads_workspace() {
   mkdir -p "$workspace/.beads/dolt" "$workspace/.wrix"
 }
 
-start_unix_socket() {
-  local socket_path="$1"
-  rm -f "$socket_path"
-  python3 - "$socket_path" <<'PY' &
-import socket
-import sys
-import time
-
-path = sys.argv[1]
-server = socket.socket(socket.AF_UNIX)
-server.bind(path)
-server.listen(1)
-time.sleep(60)
-PY
-  local pid="$!"
-  SOCKET_PIDS+=("$pid")
-  local attempt
-  for ((attempt = 0; attempt < 100; attempt++)); do
-    if [[ -S "$socket_path" ]]; then
-      return 0
-    fi
-    sleep 0.05
-  done
-  fail "socket helper did not create $socket_path"
-}
-
 json_unix_endpoint() {
   local socket_path="$1"
   jq -n --arg socket "$socket_path" '{endpoints:{dolt:{transport:"unix",socket:$socket}}}'
@@ -232,64 +192,6 @@ test_fake_shellhook_tools_contract() {
   assert_file_contains "fake systemd-run logs wrapper" "$log_file" "systemd-run --user --scope --quiet --collect -- $bin_dir/wrix service start --no-cache"
   assert_file_contains "fake wrix logs start" "$log_file" "wrix service start --no-cache"
   assert_contains "fake endpoints" "$(<"$endpoint_file")" "\"transport\": \"unix\""
-}
-
-test_shellhook_lifecycle_isolation() {
-  require_shellhook_deps
-  local hook_file="$TEST_TMP/shellHook-linux.sh"
-  write_linux_shellhook "$hook_file"
-
-  local workspace="$TEST_TMP/systemd-repo"
-  local bin_dir="$TEST_TMP/systemd-bin"
-  local log_file="$TEST_TMP/systemd.log"
-  local stdout_file="$TEST_TMP/systemd.out"
-  local stderr_file="$TEST_TMP/systemd.err"
-  prepare_beads_workspace "$workspace"
-  start_unix_socket "$workspace/.wrix/dolt.sock"
-  write_fake_wrix "$bin_dir"
-  write_fake_runtime "$bin_dir"
-  write_fake_systemd "$bin_dir"
-
-  run_hook_with_env "$workspace" "$hook_file" "$stdout_file" "$stderr_file" \
-    PATH="$bin_dir:$PATH" \
-    WRIX_BIN="$bin_dir/wrix" \
-    WRIX_CONTAINER_RUNTIME=podman \
-    WRIX_FAKE_LOG="$log_file" \
-    WRIX_FAKE_SYSTEMD_ACTIVE=0 \
-    WRIX_FAKE_ENDPOINTS="$(json_unix_endpoint "$workspace/.wrix/dolt.sock")"
-
-  assert_file_contains "systemd start" "$log_file" "systemd-run --user --scope --quiet --collect -- $bin_dir/wrix service start --no-cache"
-  assert_file_contains "public service start" "$log_file" "wrix service start --no-cache"
-  assert_file_contains "public service endpoints" "$log_file" "wrix service endpoints --no-cache"
-  assert_file_contains "public service wait" "$log_file" "wrix service dolt wait"
-  assert_file_not_contains "legacy helper" "$log_file" "beads-dolt"
-  assert_contains "systemd env" "$(<"$stdout_file")" "AUTO=0"
-  assert_contains "systemd env" "$(<"$stdout_file")" "SOCKET=$workspace/.wrix/dolt.sock"
-
-  local fallback_workspace="$TEST_TMP/fallback-repo"
-  local fallback_bin="$TEST_TMP/fallback-bin"
-  local fallback_log="$TEST_TMP/fallback.log"
-  local fallback_out="$TEST_TMP/fallback.out"
-  local fallback_err="$TEST_TMP/fallback.err"
-  prepare_beads_workspace "$fallback_workspace"
-  start_unix_socket "$fallback_workspace/.wrix/dolt.sock"
-  write_fake_wrix "$fallback_bin"
-  write_fake_runtime "$fallback_bin"
-  write_fake_systemd "$fallback_bin"
-
-  run_hook_with_env "$fallback_workspace" "$hook_file" "$fallback_out" "$fallback_err" \
-    PATH="$fallback_bin:$PATH" \
-    WRIX_BIN="$fallback_bin/wrix" \
-    WRIX_CONTAINER_RUNTIME=podman \
-    WRIX_FAKE_LOG="$fallback_log" \
-    WRIX_FAKE_SYSTEMD_ACTIVE=3 \
-    WRIX_FAKE_ENDPOINTS="$(json_unix_endpoint "$fallback_workspace/.wrix/dolt.sock")"
-
-  assert_file_not_contains "fallback bypasses systemd" "$fallback_log" "systemd-run"
-  assert_file_contains "fallback public service start" "$fallback_log" "wrix service start --no-cache"
-  assert_file_contains "fallback public service wait" "$fallback_log" "wrix service dolt wait"
-  assert_contains "fallback env" "$(<"$fallback_out")" "AUTO=0"
-  assert_contains "fallback env" "$(<"$fallback_out")" "SOCKET=$fallback_workspace/.wrix/dolt.sock"
 }
 
 test_shellhook_fail_loud() {
@@ -353,7 +255,6 @@ test_shellhook_fail_loud() {
 
 ALL_TESTS=(
   test_fake_shellhook_tools_contract
-  test_shellhook_lifecycle_isolation
   test_shellhook_fail_loud
 )
 

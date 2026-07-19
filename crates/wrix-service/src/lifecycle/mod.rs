@@ -880,7 +880,12 @@ impl Runtime {
             if let Some(remote) = plan.beads_worktree_remote() {
                 command
                     .arg("-v")
-                    .arg(format!("{}:{}:rw", remote.display(), remote.display()));
+                    .arg(format!("{}:{}:rw", remote.display(), remote.display()))
+                    .arg("-v")
+                    .arg(format!(
+                        "{}:/workspace/.git/beads-worktrees/beads/.beads/dolt-remote:rw",
+                        remote.display()
+                    ));
             }
             match dolt.transport() {
                 DoltTransport::UnixSocket => {

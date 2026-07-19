@@ -74,6 +74,9 @@ let
       inherit treefmt;
       agent = "pi";
     };
+    baseBeads = import ./sandbox/beads-test-image.nix {
+      pkgs = linuxPkgs;
+    };
     # Same image but with `pkgs.nix` added to the profile's packages — a
     # nix-shipping profile. Consumed by tests/sandbox/nix-in-container.sh,
     # which drives live `nix develop`/`nix build` as the unprivileged
@@ -139,6 +142,10 @@ let
   verify = import ./verify { inherit pkgs system; };
 
   systemTests = optionalAttrs pkgs.stdenv.isLinux {
+    beads-live-system = import ./services/beads-system.nix {
+      inherit pkgs wrix;
+      beadsImage = testImages.baseBeads;
+    };
     services-devshell-start-independent = import ./services/devshell-lifecycle.nix {
       inherit pkgs wrix;
     };
