@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verifies pre-push-checks falls through when marker metadata is absent.
+# Verifies pre-push-checks falls through when the hook id is absent.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -58,4 +58,4 @@ if [[ -e "$LOOM_CALL_LOG" ]]; then
   exit 1
 fi
 
-printf 'PASS: marker metadata absent → wrapper execed wrapped command\n'
+printf 'PASS: hook id absent → wrapper execed wrapped command\n'

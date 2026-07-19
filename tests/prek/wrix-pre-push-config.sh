@@ -56,7 +56,7 @@ chmod +x "$TEST_TMP/bin/loom"
     "$PREK_BIN" run --stage pre-push --all-files --no-progress
 )
 
-expected=$'nix-flake-check|skip-if-missing nix -- nix flake check|@{u}..HEAD\nloom-gate-verify|skip-if-missing loom -- loom gate verify --diff @{upstream}..HEAD|@{u}..HEAD'
+expected=$'nix-flake-check|nix flake check|@{u}..HEAD\nloom-gate-verify|skip-if-missing loom -- env WRIX_PRE_PUSH=1 loom gate verify --diff @{upstream}..HEAD|@{u}..HEAD'
 actual="$(<"$CALL_LOG")"
 if [[ "$actual" != "$expected" ]]; then
   echo "FAIL: pre-push hooks did not pass canonical marker metadata" >&2

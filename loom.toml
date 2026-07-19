@@ -17,9 +17,25 @@ join = " "
 parse = "json-lines"
 cwd = "."
 
+[runner.check.test-ci]
+match = '^test-ci:(.+)$'
+command = "bin/test-ci-verifiers {targets}"
+target = "{capture_1}"
+join = " "
+parse = "json-lines"
+cwd = "."
+
 [runner.system.verify]
 match = '^verify:(.+)$'
 command = "nix run .#verify -- {targets}"
+target = "{capture_1}"
+join = " "
+parse = "json-lines"
+cwd = "."
+
+[runner.system.test-ci]
+match = '^test-ci:(.+)$'
+command = "bin/test-ci-verifiers {targets}"
 target = "{capture_1}"
 join = " "
 parse = "json-lines"

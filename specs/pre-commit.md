@@ -31,7 +31,7 @@ Wrix's own `.pre-commit-config.yaml` declares only the hook stages Wrix runs in 
 | Stage | Hooks | Purpose |
 |-------|-------|---------|
 | pre-commit | treefmt, shell re-exec guard, builtin hooks (trailing-whitespace, end-of-file-fixer, check-merge-conflict) | Fast validation on every commit |
-| pre-push | nix flake check, loom gate verify | Slow validation before sharing |
+| pre-push | nix flake check, loom gate verify | Slow validation before sharing; `test-ci:` verifier targets run on Linux and skip by default on Darwin |
 
 The bundle still exposes `prepare-commit-msg`, `post-checkout`, and `post-merge` shims. Projects that want bd agent trailers or automatic `bd dolt pull` can add those hooks to their own `.pre-commit-config.yaml` or use bd-owned installation guidance; those bd hooks are examples, not Wrix's repository contract.
 
@@ -50,13 +50,13 @@ The stamp is single-use, scoped to a specific HEAD SHA, and consumed on the next
 Wraps a slow check with a marker-aware, per-hook short-circuit. Contract:
 
 ```
-bin/pre-push-checks --hook-id <id> --hook-entry <entry> [--push-range <range>] -- <command> [args…]
+bin/pre-push-checks --hook-id <id> [--hook-entry <entry>] [--push-range <range>] -- <command> [args…]
 ```
 
 Resolution order:
 
 1. If `.loom/marker.json` is absent in the current working directory, execute the wrapped command.
-2. If hook id or entry metadata is absent, execute the wrapped command without a marker shortcut.
+2. If a hook id is present and entry metadata is omitted, derive the stable entry identity from the wrapped command. If the hook id is absent, execute the wrapped command without a marker shortcut.
 3. Resolve an omitted push range from the current upstream, falling back to the literal `@{u}..HEAD` range when no upstream is configured.
 4. If `loom` is missing from `PATH`, execute the wrapped command.
 5. Otherwise, invoke `loom gate verify-marker` with the hook id, hook entry, and push range:
@@ -65,11 +65,13 @@ Resolution order:
 
 The wrapper does **not** read or interpret `marker.json`. Schema, mint, and validation are owned by the downstream Loom project; Wrix supplies the hook identity, entry, and range to `loom gate verify-marker` and acts on its exit code.
 
-Loom-managed `.pre-commit-config.yaml` entries reference the repository path and repeat the wrapped command as stable marker metadata:
+Loom-managed `.pre-commit-config.yaml` entries use folded YAML for readability; the wrapper derives marker metadata from the wrapped command:
 
 ```yaml
 - id: cargo-clippy
-  entry: bin/pre-push-checks --hook-id cargo-clippy --hook-entry 'cargo clippy --workspace --all-targets -- -D warnings' -- cargo clippy --workspace --all-targets -- -D warnings
+  entry: >-
+    bin/pre-push-checks --hook-id cargo-clippy --
+    cargo clippy --workspace --all-targets -- -D warnings
   language: system
   stages: [pre-push]
   files: \.rs$
@@ -104,7 +106,7 @@ The `.wrix/push-verified` stamp is a within-attempt retry safety net: the pre-pu
 
 Every profile container image installs the same prek setup that `mkDevShell` configures on the host: `core.hooksPath` resolves to `wrix.prekHooks`, and both wrappers are on `PATH`. Agent commits and bead-branch pushes from inside the container therefore fire the same `.pre-commit-config.yaml` chain the host runs, with the same enforcement: a failing hook aborts the commit or push.
 
-Built-in profiles that include `nix` run nix-requiring hooks in containers; downstream profiles that omit `nix` make those hooks degrade via `skip-if-missing nix --` in `.pre-commit-config.yaml`, not via a wrix-side hook-id skip list. Whether `nix` is on `PATH` is a property of the profile's packages; the wrapper makes hook firing conditional on it, so the same config is correct in both contexts.
+Wrix's own pre-push contract requires `nix flake check`, so a profile running this repository's hooks must provide `nix`; absence is a hook failure. Downstream repositories may still mark their own genuinely optional tools with `skip-if-missing` at the point of use rather than relying on a wrix-side hook-id skip list.
 
 See `image-builder.md` § Hook installation for the build-side mechanism (which PATH the wrappers land on, how the entrypoint sets `core.hooksPath`, and the platform-specific entrypoint paths).
 
@@ -126,7 +128,7 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
   [check](verify:prek.wrappers-on-devshell-path)
 - Wrix's own `.pre-commit-config.yaml` matches the § Reference Hook Configuration stage→hook mapping, with hooks for `pre-commit` and `pre-push` only and no `prepare-commit-msg`, `post-checkout`, or `post-merge` hook entries
   [check](verify:prek.config-stage-set)
-- Every Wrix pre-push entry uses `bin/pre-push-checks`, passes its own id and exact wrapped entry as marker metadata, and separates wrapper arguments from the command
+- Every Wrix pre-push entry uses `bin/pre-push-checks`, passes its own id, derives exact entry metadata from the wrapped command, and separates wrapper arguments from the command
   [system](verify:prek.config-wrapper-contract)
 - `pre-push-checks` passes the hook id, entry, and push range to `loom gate verify-marker` and exits 0 without running the wrapped command when marker validation succeeds
   [system](verify:prek.pre-push-checks-marker-valid)
@@ -134,7 +136,7 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
   [system](verify:prek.pre-push-checks-marker-stale)
 - `pre-push-checks` execs the wrapped command when `.loom/marker.json` is absent
   [system](verify:prek.pre-push-checks-no-marker)
-- `pre-push-checks` execs the wrapped command without consulting Loom when hook id or entry metadata is absent
+- `pre-push-checks` derives omitted entry metadata from the wrapped command and execs without consulting Loom when the hook id is absent
   [system](verify:prek.pre-push-checks-no-metadata)
 - `pre-push-checks` execs the wrapped command when `loom gate verify-marker` is not on `PATH`
   [system](verify:prek.pre-push-checks-no-loom)
@@ -142,13 +144,15 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
   [system](verify:prek.skip-if-missing-present)
 - `skip-if-missing <tool> -- <cmd>` exits 0 without running `<cmd>` when `<tool>` is absent from `PATH`
   [system](verify:prek.skip-if-missing-absent)
-- Wrix's own `nix-flake-check` hook is the first pre-push entry and wraps `skip-if-missing nix -- nix flake check` with the canonical repo-local marker metadata
+- Wrix's own `nix-flake-check` hook is the first pre-push entry, requires `nix` to be present, and wraps `nix flake check` with canonical derived marker metadata
   [system](verify:prek.config-wrapper-contract)
 - A pre-commit hook configured in `.pre-commit-config.yaml` fires when `git commit` runs inside a profile container
   [system](verify:prek.container-pre-commit)
 - A pre-push hook configured in `.pre-commit-config.yaml` fires when `git push` runs inside a profile container
   [system](verify:prek.container-pre-push)
 - Heavy realization checks — those whose input closure includes the full sandbox base image or the full Rust workspace build — are referenced from a CI-only flake output (e.g., `.#test-ci`), not from `flake.nix#checks` which pre-push's `nix flake check` runs
+  [check](verify:prek.ci-only-heavy-checks)
+- Full image realization criteria use `test-ci:<app>` targets instead of the generic `verify:` registry; pre-push runs those targets on Linux and reports a policy skip without realizing them on Darwin
   [check](verify:prek.ci-only-heavy-checks)
 
 ## Requirements
@@ -157,10 +161,10 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
 
 1. **Bundle ownership** — `wrix.prekHooks` owns every staged hook shim; consumers do not vendor or override unless they substitute the whole bundle via `mkDevShell { prekHooks = <derivation>; }`.
 2. **`core.hooksPath` management** — Wrix-owned install paths set `core.hooksPath` idempotently: `mkDevShell` per devshell entry and `wrix init` for ordinary host Git / Loom driver worktrees. Consumers do not run `prek install` or maintain hook shims themselves.
-3. **Hook stages** — the shim bundle covers pre-commit, pre-push, prepare-commit-msg, post-checkout, and post-merge; Wrix's own `.pre-commit-config.yaml` configures only pre-commit (treefmt, shell re-exec guard, builtin hooks) and pre-push (`nix flake check`, `loom gate verify`).
+3. **Hook stages** — the shim bundle covers pre-commit, pre-push, prepare-commit-msg, post-checkout, and post-merge; Wrix's own `.pre-commit-config.yaml` configures only pre-commit (treefmt, shell re-exec guard, builtin hooks) and pre-push (`nix flake check`, `loom gate verify`). The pre-push Loom invocation exports `WRIX_PRE_PUSH=1`, allowing the `test-ci:` runner to retain CI-only realizations on Linux while skipping them by default on Darwin.
 4. **Stamp-file dance** — pre-push writes `.wrix/push-verified` after a successful check so a subsequent push can short-circuit if the SSH connection died during validation. See § Pre-Push Stamp Dance for the full mechanic.
 5. **Marker-aware short-circuit** — each pre-push entry supplies stable hook id, entry, and range metadata through `bin/pre-push-checks`; the wrapper consults `loom gate verify-marker` to skip only the exact covered command.
-6. **Graceful degrade in wrappers** — `pre-push-checks` executes the wrapped command when the marker, metadata, or Loom binary is absent, or when marker validation fails. `skip-if-missing` exits 0 silently when `<tool>` is absent from `PATH`. Neither wrapper exits non-zero on a missing-input path.
+6. **Graceful degrade in wrappers** — `pre-push-checks` executes the wrapped command when the marker, hook id, or Loom binary is absent, or when marker validation fails. `skip-if-missing` exits 0 silently when `<tool>` is absent from `PATH`. Neither wrapper exits non-zero on a missing-input path.
 7. **Container hook parity** — profile containers install `core.hooksPath` and both wrappers on `PATH` so `.pre-commit-config.yaml` fires equivalently inside the container and on the host.
 
 ### Non-Functional
@@ -168,7 +172,7 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
 1. **`--no-verify` honored** — git's standard hook-bypass flag is the documented escape hatch when a hook would otherwise block an emergency commit or push.
 2. **Schema independence** — Wrix's coupling to Loom is bounded by `.loom/marker.json` plus the hook-id, hook-entry, push-range, and exit-code contract of `loom gate verify-marker`. Marker schema and validation evolution do not require a Wrix change.
 3. **No new runtime dependencies** — both wrappers are Bash scripts packaged by Wrix and use no external runtime utilities beyond commands already present in the devShell and profile-image base layer.
-4. **Pre-push cost bound** — The pre-push chain is the interactive critical path of `git push`; it must complete promptly even on a **cold Nix store**, inclusive of the time to realise its inputs. No command on pre-push may require realization of the full sandbox base-image closure or the full Rust workspace build. Wrix's `nix flake check` invocation on pre-push covers the `flake.nix#checks` subset that meets this bound; heavier checks live under a separate flake output (e.g., `.#test-ci`) that only CI realises. The marker short-circuit in `pre-push-checks` and the `wrix-base-image` chaining in `image-builder.md` both reduce the warm-cache cost of pre-push, but neither relaxes this cold-cache constraint — checks that *could* require full-closure realization on a cold store belong in CI regardless of warm-cache speed.
+4. **Platform-aware pre-push cost** — The pre-push chain is the interactive critical path of `git push`. `nix flake check` covers only the fast `flake.nix#checks` subset on every platform. Heavier checks live under `.#test-ci`; the `test-ci:` Loom runner keeps those checks in Linux pre-push but skips them by default during Darwin pre-push, where realizing Linux image closures is disproportionately expensive. Running `nix run .#test-ci` directly or invoking Loom outside the pre-push environment still exercises them on Darwin. The marker short-circuit in `pre-push-checks` and the `wrix-base-image` chaining in `image-builder.md` reduce repeated warm-cache cost.
 
 ## Out of Scope
 

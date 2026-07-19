@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo "pre-push-checks: usage: pre-push-checks --hook-id <id> --hook-entry <entry> [--push-range <range>] -- <command> [args…]" >&2
+  echo "pre-push-checks: usage: pre-push-checks --hook-id <id> [--hook-entry <entry>] [--push-range <range>] -- <command> [args…]" >&2
 }
 
 scrub_git_local_env() {
@@ -63,6 +63,10 @@ done
 if [[ $# -eq 0 ]]; then
   usage
   exit 2
+fi
+
+if [[ -n "$hook_id" && -z "$hook_entry" ]]; then
+  hook_entry="$*"
 fi
 
 if [[ ! -f .loom/marker.json ]]; then

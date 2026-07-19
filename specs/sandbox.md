@@ -213,7 +213,7 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 - `mounts` and `env` passed to `mkSandbox` are merged into the profile and reach the container as configured
   [system](verify:sandbox.custom-mounts-env)
 - Every sandbox image carries the `wrix` CLI, so `wrix beads push` resolves inside the container without entering `nix develop` or running `nix run`
-  [check](verify:sandbox.wrix-cli-in-profile)
+  [check](test-ci:test-wrix-cli-in-profile)
 - In a fresh container built from a profile that ships `nix`, the runtime process (rootless container-root) runs `nix develop -c true`, a `nix build` of a flake target, and a store-mutating op against a baked root-owned path to completion (exit 0) with no `Operation not permitted` failure on a `/nix/store` path
   [system](verify:sandbox.nix-in-container)
 - The default container boundary does not `LD_PRELOAD` `libfakeuid` (its `getuid()→1000` spoof blanks claude's TUI when the process is really root — wx-nsage); instead it sets `IS_SANDBOX=1` so claude permits `--dangerously-skip-permissions` as root without spoofing. libfakeuid remains krun-only
@@ -237,9 +237,9 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 - `wrix run` errors at startup with a clear message when no valid Nix-generated `ProfileConfig` JSON is supplied
   [test](../crates/wrix-sandbox/tests/command.rs::run_requires_valid_profile_config)
 - `mkSandbox`'s `package` wrapper keeps `bin/wrix` explicit, exposes `wrix-run` as `meta.mainProgram` for `nix run`, and passes an immutable Nix-store `ProfileConfig` JSON path to the profile-agnostic launcher for both `run` and `spawn`, with image defaults supplied by `ProfileConfig` rather than mutable `WRIX_DEFAULT_IMAGE_*` env vars
-  [check](verify:sandbox.profile-config-wrapper)
+  [check](test-ci:test-profile-config-wrapper)
 - `ProfileConfig.image` includes `ref`, `source`, explicit `source_kind`, and `digest`; the launcher/runtime installer rejects configs where `source_kind` is missing or incompatible with the selected platform install path
-  [check](verify:sandbox.profile-config-image-source-kind)
+  [check](test-ci:test-profile-config-image-source-kind)
 - The selected agent runtime comes from `ProfileConfig` and cannot be changed by caller env independently of the selected image/profile
   [test](../crates/wrix-sandbox/tests/command.rs::profile_config_agent_cannot_be_overridden_by_env)
 - `wrix spawn --spawn-config <file>` parses the documented `SpawnConfig` fields (`image_ref`, `image_source`, `image_source_kind`, `workspace`, `env`, `agent_args`, `mounts`), rejects `image_source` overrides without an explicit matching `image_source_kind`, and rejects attempts to change the selected agent independently of `ProfileConfig`
@@ -261,9 +261,9 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 - Deploy key `<name>` is mounted at `/etc/wrix/keys/<name>` inside the container when `deployKey = "<name>"` is set (the `.pub` file is not mounted; the entrypoint regenerates it on demand via `ssh-keygen -y`)
   [test](../crates/wrix-sandbox/tests/launch.rs::deploy_key_mount_uses_container_key_dir_without_public_key)
 - `agentSettings` merges into the selected agent's baked settings; non-empty `agentSettings` with `agent = "direct"` fails at evaluation time
-  [check](verify:sandbox.agent-settings)
+  [check](test-ci:test-sandbox-agent-settings)
 - Pi images seed `editorPaddingX = 1` and `enableInstallTelemetry = false`, so the input editor has one cell of horizontal padding and Pi's anonymous install/update ping plus optional provider attribution headers are disabled by default; update checking remains a separate Pi setting.
-  [check](verify:sandbox.agent-settings)
+  [check](test-ci:test-sandbox-agent-settings)
 - When `/workspace/bin` exists inside the container, it appears first on `PATH`, so a consumer-supplied shim at `/workspace/bin/<name>` resolves ahead of a same-named binary baked into the image
   [system](verify:sandbox.workspace-bin-path-present)
 - When `/workspace/bin` does not exist, the container's `PATH` does not contain `/workspace/bin`

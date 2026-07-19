@@ -11,7 +11,12 @@
 }:
 
 let
-  inherit (pkgs.lib) concatStringsSep optionalAttrs removeAttrs;
+  inherit (pkgs.lib)
+    concatStringsSep
+    escapeShellArg
+    optionalAttrs
+    removeAttrs
+    ;
   inherit (pkgs)
     bash
     coreutils
@@ -248,6 +253,17 @@ let
     (mkCiApp linuxBuilderChecks.imageSourceKindTest "test-linux-builder-image-source-kind")
     (mkCiApp linuxBuilderChecks.sourceKindLoadTransportTest "test-linux-builder-source-kind-load-transport")
     (mkCiApp testProfilesBuildPackage "test-profiles-build-package")
+    (mkCiApp testProfileImagesManifestShape "test-profile-images-manifest-shape")
+    (mkCiApp testProfileConfigImageSourceKind "test-profile-config-image-source-kind")
+    (mkCiApp testProfileConfigWrapper "test-profile-config-wrapper")
+    (mkCiApp testOptionalProfileMount "test-optional-profile-mount")
+    (mkCiApp testWrixCliInProfile "test-wrix-cli-in-profile")
+    (mkCiApp testSandboxAgentSettings "test-sandbox-agent-settings")
+    (mkCiApp testPlaywrightChromiumClosure "test-playwright-chromium-closure")
+    (mkCiApp testPlaywrightChromiumExecutablePath "test-playwright-chromium-executable-path")
+    (mkCiApp testPlaywrightMandatoryFlags "test-playwright-mandatory-flags")
+    (mkCiApp testPlaywrightUserOptionsConfig "test-playwright-user-options-config")
+    (mkCiApp testBeadsLiveSystem "test-beads-live-system")
   ];
 
   ciAppNameLines = concatStringsSep "\n" (map (app: "      ${app.name}") ciApps);
@@ -291,6 +307,64 @@ let
         repo_root=$(${pkgs.git}/bin/git rev-parse --show-toplevel 2>/dev/null || pwd) # best-effort: allow running outside a git checkout.
         cd "$repo_root"
 
+        is_ci_app() {
+          local requested="$1"
+          local app
+          for app in "''${ci_apps[@]}"; do
+            if [[ "$app" == "$requested" ]]; then
+              return 0
+            fi
+          done
+          return 1
+        }
+
+        run_ci_app() {
+          local app="$1"
+          local runner
+          runner=$(${pkgs.nix}/bin/nix build --no-link --print-out-paths --no-warn-dirty ".#legacyPackages.${system}.ciApps.$app")
+          "$runner/bin/$app"
+        }
+
+        if [[ "''${1:-}" = "--json" ]]; then
+          shift
+          if [[ "$#" -eq 0 ]]; then
+            echo "test-ci --json requires at least one CI app" >&2
+            exit 64
+          fi
+
+          json_failed=0
+          for app in "$@"; do
+            if ! is_ci_app "$app"; then
+              ${jq}/bin/jq -cn \
+                --arg target "$app" \
+                --arg evidence "unknown test-ci app" \
+                '{target:$target,pass:false,evidence:$evidence}'
+              json_failed=$((json_failed + 1))
+              continue
+            fi
+
+            app_log=$(mktemp -t wrix-test-ci.XXXXXX)
+            if run_ci_app "$app" >"$app_log" 2>&1; then
+              ${jq}/bin/jq -cn \
+                --arg target "$app" \
+                '{target:$target,pass:true,evidence:"passed"}'
+            else
+              evidence=$(head -c 4000 "$app_log")
+              ${jq}/bin/jq -cn \
+                --arg target "$app" \
+                --arg evidence "$evidence" \
+                '{target:$target,pass:false,evidence:$evidence}'
+              json_failed=$((json_failed + 1))
+            fi
+            rm -f "$app_log"
+          done
+
+          if [[ "$json_failed" -ne 0 ]]; then
+            exit 1
+          fi
+          exit 0
+        fi
+
         failed=0
         run_step() {
           local name="$1"
@@ -302,13 +376,6 @@ let
             echo "FAIL: $name" >&2
             failed=$((failed + 1))
           fi
-        }
-
-        run_ci_app() {
-          local app="$1"
-          local runner
-          runner=$(${pkgs.nix}/bin/nix build --no-link --print-out-paths --no-warn-dirty ".#legacyPackages.${system}.ciApps.$app")
-          "$runner/bin/$app"
         }
 
         run_step "nix flake check" ${pkgs.nix}/bin/nix flake check --no-warn-dirty
@@ -337,6 +404,87 @@ let
     export REPO_ROOT
     export PATH="${jq}/bin:${git}/bin:${nix}/bin:$PATH"
     exec ${bash}/bin/bash "$REPO_ROOT/tests/profiles/build-package.sh" "$@"
+  '';
+
+  mkRepoScriptCiApp =
+    {
+      name,
+      script,
+      args,
+      environment ? "",
+    }:
+    writeShellScriptBin name ''
+      set -euo pipefail
+      : "''${REPO_ROOT:=$(${git}/bin/git -C "''${PWD}" rev-parse --show-toplevel)}"
+      export REPO_ROOT
+      export PATH="${bash}/bin:${coreutils}/bin:${gawk}/bin:${git}/bin:${gnugrep}/bin:${gnused}/bin:${jq}/bin:${nix}/bin:$PATH"
+      ${environment}
+      exec ${bash}/bin/bash "$REPO_ROOT/${script}" ${concatStringsSep " " (map escapeShellArg args)}
+    '';
+
+  testProfileImagesManifestShape = mkRepoScriptCiApp {
+    name = "test-profile-images-manifest-shape";
+    script = "tests/profiles/profile-images-manifest.sh";
+    args = [ "test_manifest_shape" ];
+  };
+  testProfileConfigImageSourceKind = mkRepoScriptCiApp {
+    name = "test-profile-config-image-source-kind";
+    script = "tests/sandbox/profile-config-wrapper.sh";
+    args = [ "test_image_source_kind" ];
+  };
+  testProfileConfigWrapper = mkRepoScriptCiApp {
+    name = "test-profile-config-wrapper";
+    script = "tests/sandbox/profile-config-wrapper.sh";
+    args = [ "test_profile_config_wrapper_contract" ];
+  };
+  testOptionalProfileMount = mkRepoScriptCiApp {
+    name = "test-optional-profile-mount";
+    script = "tests/sandbox/profile-config-wrapper.sh";
+    args = [ "test_missing_optional_profile_mount_is_skipped" ];
+  };
+  testWrixCliInProfile = mkRepoScriptCiApp {
+    name = "test-wrix-cli-in-profile";
+    script = "tests/sandbox/custom-mounts-env.sh";
+    args = [ "test_wrix_cli_added_to_sandbox_profile" ];
+  };
+  testSandboxAgentSettings = mkRepoScriptCiApp {
+    name = "test-sandbox-agent-settings";
+    script = "tests/sandbox/agent-settings.sh";
+    args = [ ];
+  };
+
+  ciLinuxSystem =
+    if system == "aarch64-darwin" then
+      "aarch64-linux"
+    else if system == "x86_64-darwin" then
+      "x86_64-linux"
+    else
+      system;
+  mkPlaywrightCiApp =
+    name: script: function:
+    mkRepoScriptCiApp {
+      inherit name script;
+      args = [ function ];
+      environment = "export PLAYWRIGHT_SYSTEM=${escapeShellArg ciLinuxSystem}";
+    };
+  testPlaywrightChromiumClosure =
+    mkPlaywrightCiApp "test-playwright-chromium-closure" "tests/mcp/playwright/build-test.sh"
+      "test_image_derivation_closes_over_chromium";
+  testPlaywrightChromiumExecutablePath =
+    mkPlaywrightCiApp "test-playwright-chromium-executable-path" "tests/mcp/playwright/smoke-test.sh"
+      "test_chromium_executable_path_derives_from_playwright_browsers";
+  testPlaywrightMandatoryFlags =
+    mkPlaywrightCiApp "test-playwright-mandatory-flags" "tests/mcp/playwright/smoke-test.sh"
+      "test_mandatory_flags_are_non_overridable";
+  testPlaywrightUserOptionsConfig =
+    mkPlaywrightCiApp "test-playwright-user-options-config" "tests/mcp/playwright/smoke-test.sh"
+      "test_user_options_reach_serialized_config";
+
+  testBeadsLiveSystem = writeShellScriptBin "test-beads-live-system" ''
+    set -euo pipefail
+    : "''${REPO_ROOT:=$(${git}/bin/git -C "''${PWD}" rev-parse --show-toplevel)}"
+    exec ${nix}/bin/nix build --no-link --no-warn-dirty \
+      "$REPO_ROOT#legacyPackages.${ciLinuxSystem}.systemTests.beads-live-system"
   '';
 
   notifyClient = import ../lib/notify/client.nix { inherit pkgs; };

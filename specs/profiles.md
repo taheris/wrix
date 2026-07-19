@@ -692,7 +692,7 @@ dests live under `/home/wrix/` inside the container, not under
 - Cargo registry/git mounts and the sccache cache parent are writable so cargo can fetch crates and sccache can cache artifacts without `Read-only file system` errors
   [judge](../tests/judges/profiles.sh#test_cargo_registry_writable)
 - A profile mount with `optional = true` is preserved in `ProfileConfig` and omitted from launch planning when its expanded host source does not exist, on both supported platform paths
-  [system](verify:sandbox.optional-profile-mount)
+  [system](test-ci:test-optional-profile-mount)
 - Python profile can run Python scripts with dependencies
   [judge](../tests/judges/profiles.sh#test_python_profile)
 - uv cache mount is writable so uv can fetch packages not in the pre-warm set without `Read-only file system` errors
@@ -746,7 +746,7 @@ dests live under `/home/wrix/` inside the container, not under
 - `wrix.profiles.rust` and `wrix.rustProfile { toolchain; sha256; }` closures contain zero `*-nightly-*` derivations after a fresh `nix flake update` (regression guard against reintroducing `fenix.packages.${system}.rust-analyzer`, which drags a nightly cargo/rustc/rust-std closure)
   [check](verify:profiles.rust-no-nightly-closure)
 - `mkProfileImages { rust = …; }` produces a JSON file whose entry for `rust` is keyed by the image's selected agent and whose selected-agent entry has `ref`, `source`, `source_kind`, and `profile_config` fields, with `source` and `source_kind` resolving to the same image source path and source kind as the corresponding `(wrix.mkSandbox { profile = wrix.profiles.rust; agent = …; }).image`
-  [check](verify:profiles.images-manifest-shape)
+  [check](test-ci:test-profile-images-manifest-shape)
 - `packages.image-<name>[-<agent>]`, `packages.sandbox-<name>[-<agent>][-mcp]`, `packages.profile-images`, and `packages.profile-images-pi` all evaluate for each built-in profile, and `packages.default` resolves to `sandbox-rust-pi` with `meta.mainProgram = "wrix-run"`
   [check](verify:profiles.image-flake-outputs)
 - `profiles.rust.buildPackage` is exposed and returns an attrset with `bin`, `clippy`, `nextest`, and `cargoArtifacts` fields

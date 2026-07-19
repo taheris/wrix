@@ -138,61 +138,61 @@ Wrapper behavior, hook-stage semantics, and optional-tool policy remain owned by
 ## Success Criteria
 
 - The runtime image installer metadata lets `wrix run` and `wrix spawn` short-circuit when the image's content digest is already present in the platform store: no source execution, no tar materialization, no stream invocation, no `*-load` CLI call
-  [check](verify:images.install-digest-skip)
+  [check](test-ci:test-image-install-digest-skip)
 - On Linux, `mkImage` emits a JSON image descriptor (`source_kind = "nix-descriptor"`) as the selected source path; the descriptor points at a prebuilt OCI layout but is not itself the raw image output, a Docker archive, an OCI archive, or a stream script
-  [check](verify:images.linux-archiveless-source)
+  [check](test-ci:test-linux-image-archiveless-source)
 - The Linux image digest used for install preflight is computed from descriptor/config metadata without executing the image source, materializing a whole-image tar, or running Docker-archive-to-OCI conversion
-  [check](verify:images.digest-no-tar)
+  [check](test-ci:test-image-digest-no-tar)
 - Each profile image is a four-tier graph — leaf atop `wrix-agent-<agent>-<name>`, atop `wrix-stable-profile-<name>`, atop `wrix-base-image` — with Linux represented as descriptor layers and Darwin represented as a tar-loadable fallback
-  [check](verify:images.tier-graph)
+  [check](test-ci:test-image-tier-graph)
 - A deterministic layer-membership verifier proves each non-base profile-image tier removes or skips the union of all lower tiers' closures, so no tier re-emits a store path a lower tier already ships
-  [check](verify:images.tier-membership)
+  [check](test-ci:test-image-tier-membership)
 - `wrix-base-image`'s derivation hash is invariant under changes to profile-level inputs — `profile.packages`, `profile.env`, MCP configs, the merged Claude settings JSON, and the agent runtime selection
-  [check](verify:images.base-hash-stable)
+  [check](test-ci:test-base-image-hash-stable)
 - `wrix-base-image` holds only the universal bottom-of-closure: no profile-specific compiler toolchain leaks in (e.g. `pkgs.rustc`, which no profile references — the rust profile uses fenix's toolchain)
-  [check](verify:images.base-universal)
+  [check](test-ci:test-base-image-universal)
 - `wrix-stable-profile-<name>`'s derivation hash is invariant under the agent runtime selection and all leaf (tier-3) inputs — downstream-appended packages (`profile.packages` − `corePackages`), the merged agent settings JSON, and MCP configs
-  [check](verify:images.stable-profile-hash-stable)
+  [check](test-ci:test-stable-profile-hash-stable)
 - `wrix-stable-profile-<name>` holds only fixed-per-instance content: no agent runtime and no downstream-appended package leaks into it
-  [check](verify:images.stable-profile-membership)
+  [check](test-ci:test-stable-profile-membership)
 - A downstream-pinned toolchain (`rustProfile { toolchain = ./rust-toolchain.toml }`) lands in tier 1 (`wrix-stable-profile-<name>`), not the leaf
-  [check](verify:images.pinned-toolchain-stable-tier)
+  [check](test-ci:test-pinned-toolchain-stable-tier)
 - A tier-3 (leaf) change — a downstream-appended package, an agent-settings field, or an MCP-config field — leaves every tier-0, tier-1, and tier-2 (agent) layer-blob byte-identical in the resulting image's manifest; only leaf blobs change
-  [check](verify:images.downstream-change-leaf-only)
+  [check](test-ci:test-downstream-change-leaf-only)
 - A generated-metadata-only change — agent settings, MCP config, entrypoint metadata, or Nix DB registration — changes only the image descriptor/config and the tiny top customisation layer; lower-tier layer blobs stay byte-identical and descriptor/layout builders do not depend on the raw whole-image output
-  [check](verify:images.archiveless-generated-change)
+  [check](test-ci:test-archiveless-generated-change)
 - The selected agent runtime rides its own tier `wrix-agent-<agent>-<name>`, chained atop `wrix-stable-profile-<name>`; an agent-version change leaves every tier-0 and tier-1 blob byte-identical
-  [check](verify:images.agent-tier-isolated)
+  [check](test-ci:test-agent-tier-isolated)
 - The leaf image declares the selected agent variant in `/etc/wrix/image-agent`
-  [check](verify:images.agent-marker)
+  [check](test-ci:test-image-agent-marker)
 - A non-selected agent's binary is absent from the image: an `agent = "direct"` image contains neither `claude-code` nor a `pi` runtime
-  [check](verify:images.agent-exclusive)
+  [check](test-ci:test-agent-exclusive)
 - default `agent = "direct"` produces an image that contains `loom-direct-runner`
-  [check](verify:images.agent-direct-runner)
+  [check](test-ci:test-agent-direct-runner)
 - `agent = "claude"` produces an image that contains `claude-code`
-  [check](verify:images.agent-claude-runtime)
+  [check](test-ci:test-agent-claude-runtime)
 - The `agentPkg` code path threads the selected agent package into the image build
-  [check](verify:images.agent-pkg-threaded)
+  [check](test-ci:test-agent-pkg-threaded)
 - `nix-command` and `flakes` are enabled in `/etc/nix/nix.conf` and Nix's in-container build sandbox is disabled
-  [check](verify:images.nix-config)
+  [check](test-ci:test-image-nix-config)
 - The baked image's Nix database registers no orphaned path: every path on disk under `/nix/store` is registered valid
-  [check](verify:images.nix-db-consistent)
+  [check](test-ci:test-image-nix-db-consistent)
 - The baked image's Nix database registers no dangling path: every path registered valid exists on disk, so a freshly provisioned container passes `nix-store --verify --check-contents` with zero missing paths and an additive `nix build` cannot fail with `No such file or directory` on a registered path. The registration is derived from the materialized contents closure, not the full build closure
-  [check](verify:images.nix-db-no-dangling)
+  [check](test-ci:test-image-nix-db-no-dangling)
 - CA certificates from `pkgs.cacert` are baked into the image and `SSL_CERT_FILE` resolves to the bundle
-  [check](verify:images.ca-certificates)
+  [check](test-ci:test-image-ca-certificates)
 - The Linux platform entrypoint is the image startup command; Darwin starts with its immutable network bootstrap, which drops `NET_ADMIN` before `exec`ing the Darwin agent entrypoint
-  [check](verify:images.entrypoint-command)
+  [check](test-ci:test-image-entrypoint-command)
 - `wrix.prekHooks`, `wrix.prePushChecks`, and `wrix.skipIfMissing` all land in every profile image's store closure
-  [check](verify:images.prek-hooks-closure)
+  [check](test-ci:test-prek-hooks-closure)
 - The Linux entrypoint sets `core.hooksPath` on `/workspace/.git` to the `wrix.prekHooks` store path when `.pre-commit-config.yaml` is present
   [check](verify:images.linux-entrypoint-core-hooks-path)
 - The Darwin entrypoint mirrors the Linux entrypoint's `core.hooksPath` setup for `/workspace/.git`
   [check](verify:images.darwin-entrypoint-core-hooks-path)
 - Every wrix-managed Nix-built image source covered by this spec exposes the platform source kind (`nix-descriptor` on Linux, `docker-archive` on Darwin), including service/support images such as `wrix-builder`
-  [check](verify:images.source-kind)
+  [check](test-ci:test-wrix-images-source-kind)
 - Wrix-managed images carry wrix-managed image labels, including `wrix.managed=true` and `wrix.image.kind`; profile images also carry `wrix.profile.name` and `wrix.agent.kind`
-  [check](verify:images.labels)
+  [check](test-ci:test-wrix-image-labels)
 
 ## Requirements
 

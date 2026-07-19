@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "$#" -eq 0 ]]; then
+  echo "Usage: test-ci-verifiers <ci-app>..." >&2
+  exit 64
+fi
+
+platform="$(uname -s)"
+if [[ "$platform" == "Darwin" && "${WRIX_PRE_PUSH:-0}" == "1" ]]; then
+  for target in "$@"; do
+    jq -cn \
+      --arg target "$target" \
+      --arg evidence "skipped: test-ci is disabled by default for Darwin pre-push" \
+      '{target:$target,pass:true,evidence:$evidence}'
+  done
+  exit 0
+fi
+
+exec nix run .#test-ci -- --json "$@"

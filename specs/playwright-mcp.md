@@ -83,13 +83,13 @@ The container image is Linux (aarch64 or x86_64), so `pkgs.playwright-driver.bro
 - Screenshot returns base64 PNG when navigating to a local HTTP server
   [system](verify:playwright-mcp.screenshot)
 - The image built with `mcp.playwright = {}` contains the chromium binary in its store closure
-  [check](verify:playwright-mcp.chromium-closure)
+  [check](test-ci:test-playwright-chromium-closure)
 - Chromium executable path is derived from `pkgs.playwright-driver.browsers`, not from a hard-coded path or `npx`
-  [check](verify:playwright-mcp.chromium-executable-path)
+  [check](test-ci:test-playwright-chromium-executable-path)
 - The automatic Chromium flags `--no-sandbox`, `--disable-dev-shm-usage`, and `--disable-gpu` are always passed through `launchOptions.args`
-  [check](verify:playwright-mcp.mandatory-flags)
+  [check](test-ci:test-playwright-mandatory-flags)
 - The `headless`, `viewport`, and `config` user options reach the MCP server's serialized config file
-  [check](verify:playwright-mcp.user-options-config)
+  [check](test-ci:test-playwright-user-options-config)
 - The server definition exposes the MCP registry triple (`name`, `packages`, `mkServerConfig`) so `mkSandbox` can compose it like any other server
   [check](verify:playwright-mcp.registry-triple)
 

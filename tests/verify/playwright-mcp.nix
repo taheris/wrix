@@ -32,14 +32,6 @@ let
   smoke = playwrightCheck "smoke-test";
 in
 {
-  "playwright-mcp.chromium-closure" =
-    playwrightCheck "build-test" "test_image_derivation_closes_over_chromium";
-
-  "playwright-mcp.chromium-executable-path" =
-    smoke "test_chromium_executable_path_derives_from_playwright_browsers";
-
-  "playwright-mcp.mandatory-flags" = smoke "test_mandatory_flags_are_non_overridable";
-
   "playwright-mcp.registry-triple" = smoke "test_registry_triple_shape";
 
   "playwright-mcp.screenshot" = linuxHostOnly (playwrightHostAll "screenshot-test");
@@ -51,6 +43,4 @@ in
     ]
   );
 
-  "playwright-mcp.user-options-config" =
-    playwrightCheck "smoke-test" "test_user_options_reach_serialized_config";
 }

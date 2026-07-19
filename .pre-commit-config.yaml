@@ -11,7 +11,7 @@ repos:
 
   - repo: local
     hooks:
-      # Fast pre-commit tests (~1s)
+      # Fast pre-commit checks
       - id: treefmt
         name: treefmt
         entry: treefmt --fail-on-change
@@ -27,28 +27,23 @@ repos:
         pass_filenames: true
         stages: [pre-commit]
 
-      # Pre-push hooks (~10s)
+      # Slow tests use loom markers
       - id: nix-flake-check
         name: nix flake check
-        entry: bin/pre-push-checks --hook-id nix-flake-check --hook-entry 'skip-if-missing nix -- nix flake check' -- skip-if-missing nix -- nix flake check
+        entry: >-
+          bin/pre-push-checks --hook-id nix-flake-check --
+          nix flake check
         language: system
         pass_filenames: false
         always_run: true
         stages: [pre-push]
 
-      # loom gate verify enforces every spec annotation (and the
-      # spec-convention integrity rules — e.g. resolved `?` markers).
-      # --diff @{upstream}..HEAD scopes to the commits the push will
-      # publish; loom's no-flag default is `HEAD` (last commit only)
-      # outside a molecule context, which would miss earlier commits in
-      # the push range. skip-if-missing keeps the hook inert in contexts
-      # where loom isn't on PATH (bead containers without the rust-mcp
-      # profile, fresh clones outside the devshell). bin/pre-push-checks
-      # skips the slow verifier when loom has minted a marker covering
-      # this hook id, entry, and push range.
       - id: loom-gate-verify
         name: loom gate verify
-        entry: bin/pre-push-checks --hook-id loom-gate-verify --hook-entry 'skip-if-missing loom -- loom gate verify --diff @{upstream}..HEAD' -- skip-if-missing loom -- loom gate verify --diff @{upstream}..HEAD
+        entry: >-
+          bin/pre-push-checks --hook-id loom-gate-verify --
+          skip-if-missing loom --
+          env WRIX_PRE_PUSH=1 loom gate verify --diff @{upstream}..HEAD
         language: system
         pass_filenames: false
         always_run: true

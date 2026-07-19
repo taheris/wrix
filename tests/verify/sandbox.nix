@@ -16,11 +16,9 @@ let
     run_repo_script_with_wrix ${escapeShellArg "tests/sandbox/${script}.sh"}
   '';
   containerStarts = sandboxScript "container-starts";
-  customMountsEnv = sandboxScript "custom-mounts-env";
   entrypoint = sandboxScript "entrypoint-contract";
   network = sandboxScript "network-baseline";
   platform = sandboxScript "platform-dispatch";
-  profileConfig = sandboxScript "profile-config-wrapper";
   linuxOnly =
     body:
     if pkgs.stdenv.isLinux then
@@ -36,8 +34,6 @@ in
   "sandbox.agent-config-homes" = entrypoint "test_agent_config_homes_both_entrypoints";
 
   "sandbox.agent-lacks-net-admin" = network "test_agent_lacks_net_admin";
-
-  "sandbox.agent-settings" = sandboxScriptAll "agent-settings";
 
   "sandbox.custom-mounts-env" = sandboxScriptAllWithWrix "custom-mounts-env";
 
@@ -70,17 +66,11 @@ in
 
   "sandbox.network-open-blocks-lan" = network "test_open_blocks_lan";
 
-  "sandbox.optional-profile-mount" = profileConfig "test_missing_optional_profile_mount_is_skipped";
-
   "sandbox.nix-in-container" = sandboxScriptAll "nix-in-container";
 
   "sandbox.nix-store-verify-clean" = sandboxScriptAll "nix-store-verify-clean";
 
   "sandbox.platform-dispatch" = platform "test_platform_dispatch_current_system";
-
-  "sandbox.profile-config-image-source-kind" = profileConfig "test_image_source_kind";
-
-  "sandbox.profile-config-wrapper" = profileConfig "test_profile_config_wrapper_contract";
 
   "sandbox.uid-mapping" = sandboxScriptAll "uid-mapping";
 
@@ -90,5 +80,4 @@ in
 
   "sandbox.workspace-bin-path-present" = sandboxScriptAll "workspace-bin-path";
 
-  "sandbox.wrix-cli-in-profile" = customMountsEnv "test_wrix_cli_added_to_sandbox_profile";
 }

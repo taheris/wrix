@@ -127,9 +127,9 @@ verifies the claim*:
 
 | Annotation | What the verifier does | Target shape |
 |------------|------------------------|--------------|
-| **`[check]`** | Static analysis of source (presence, absence, structural property across files) | `[check](command)` for an ad hoc shell command, or `[check](verify:<domain>.<check-id>)` for a configured logical verifier target. |
+| **`[check]`** | Static analysis of source (presence, absence, structural property across files) | `[check](command)` for an ad hoc shell command, `[check](verify:<domain>.<check-id>)` for a configured logical verifier target, or `[check](test-ci:<app>)` for a CI-only realization target. |
 | **`[test]`** | Runs the code in isolation and asserts behaviour | `[test](path)` — a language-native or runner-recognized test selector. File-qualified targets are relative to the owning spec file. Rust targets use the canonical `cargo test -- --list` selector when the test exists (for example `crate::module::test_name`) or a selector such as `../crates/<crate>/tests/<file>.rs::<test_name>` from a spec under `specs/` when the file-qualified path is the stable target being planned. The gate batches all `[test]` targets in a single `loom gate test` invocation into one runner subprocess. |
-| **`[system]`** | Runs the assembled system (containers, packaging, end-to-end) | `[system](command)` for an ad hoc shell command, or `[system](verify:<domain>.<check-id>)` for a configured logical verifier target. |
+| **`[system]`** | Runs the assembled system (containers, packaging, end-to-end) | `[system](command)` for an ad hoc shell command, `[system](verify:<domain>.<check-id>)` for a configured logical verifier target, or `[system](test-ci:<app>)` for a CI-only realization target. |
 
 `verify:<domain>.<check-id>` targets are logical IDs, not shell commands.
 The runner configuration maps them to the repository's shared verifier
@@ -138,6 +138,12 @@ entry point and SHOULD batch multiple IDs into one process (for example,
 process per criterion. The configured verifier registry is the gate's
 view of those IDs; for Wrix, `.#verify --list` is the authoritative ID
 inventory and runner configuration must not define a divergent set.
+
+`test-ci:<app>` targets are CI-only logical IDs backed by apps listed by
+`nix run .#test-ci -- --list`. They keep full image and workspace-build
+closures out of the generic `.#verify` registry. Wrix batches selected
+`test-ci:` targets through `bin/test-ci-verifiers`; during pre-push the runner
+executes them on Linux and reports the configured platform skip on Darwin.
 
 ### Pending modifier
 

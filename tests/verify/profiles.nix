@@ -55,7 +55,6 @@ in
   "profiles.extra-packages-not-core" = corePackages "test_extra_not_in_core";
   "profiles.host-image-package-split" = profileComposition "test_host_packages_split";
   "profiles.image-flake-outputs" = profileImages "test_flake_outputs_present";
-  "profiles.images-manifest-shape" = profileImages "test_manifest_shape";
   "profiles.nested-derive" = profileComposition "test_nested_derive_profile";
   "profiles.no-dev-toolchain-lib" = nixEval "profiles.no-dev-toolchain-lib";
   "profiles.no-rust-with-toolchain" = nixEval "profiles.no-rust-with-toolchain";
