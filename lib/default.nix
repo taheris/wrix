@@ -18,6 +18,7 @@ let
       pkgs
       rustCli
       beads
+      serviceImage
       ;
   };
 
@@ -41,6 +42,8 @@ let
       ;
     serviceCli = rustCli.wrix;
   };
+
+  inherit (sandboxLib) serviceImage;
 
   sandbox = sandboxLib // {
     mkSandbox =
@@ -70,7 +73,7 @@ in
   inherit (prek) prekHooks prePushChecks skipIfMissing;
   inherit (profile) deriveProfile rustProfile;
   inherit (sandbox) profiles mkSandbox mkProfileImages;
-  inherit beads;
+  inherit beads serviceImage;
 
   rustPackage = rustCli;
   tmuxMcpPackage = tmuxMcp;

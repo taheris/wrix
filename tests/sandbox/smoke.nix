@@ -81,6 +81,7 @@ let
       ;
     serviceCli = serviceCliStub;
   };
+  inherit (sandboxLib) serviceImage;
   sandbox = sandboxLib.mkSandbox { profile = sandboxLib.profiles.base; };
   wrix = sandbox.package;
   wrixBuilder = import ../../lib/builder { inherit pkgs linuxPkgs; };
@@ -89,6 +90,10 @@ let
   pathProbeCli = writeShellScriptBin "wrix" ''
     set -euo pipefail
     printf 'NIX_STORE=%s\n' "$(command -v nix-store)"
+    printf 'WRIX_SERVICE_IMAGE=%s\n' "''${WRIX_SERVICE_IMAGE:-}"
+    printf 'WRIX_SERVICE_IMAGE_SOURCE=%s\n' "''${WRIX_SERVICE_IMAGE_SOURCE:-}"
+    printf 'WRIX_SERVICE_IMAGE_SOURCE_KIND=%s\n' "''${WRIX_SERVICE_IMAGE_SOURCE_KIND:-}"
+    printf 'WRIX_SERVICE_IMAGE_DIGEST=%s\n' "''${WRIX_SERVICE_IMAGE_DIGEST:-}"
     ${
       if isLinux then
         ''
@@ -240,6 +245,22 @@ in
 
         mkdir $out
       '';
+
+  package-service-image-contract = runCommandLocal "smoke-package-service-image-contract" { } ''
+        set -euo pipefail
+
+        mkdir -p home
+        output=$(env -i HOME="$PWD/home" PATH=/path-not-used ${pathProbePackage}/bin/wrix service status)
+        if [[ "$output" != *"WRIX_SERVICE_IMAGE=${serviceImage.ref}"* ]] \
+          || [[ "$output" != *"WRIX_SERVICE_IMAGE_SOURCE=${serviceImage.source}"* ]] \
+          || [[ "$output" != *"WRIX_SERVICE_IMAGE_SOURCE_KIND=${serviceImage.source_kind}"* ]] \
+          || [[ "$output" != *"WRIX_SERVICE_IMAGE_DIGEST=${serviceImage.digest}"* ]]; then
+          printf 'configured wrapper did not bind the service image contract:\n%s\n' "$output" >&2
+          exit 1
+        fi
+
+    mkdir "$out"
+  '';
 
   # Verify Darwin entrypoint script syntax and mount handling logic
   darwin-entrypoint-syntax =

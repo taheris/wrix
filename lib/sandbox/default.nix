@@ -71,6 +71,13 @@ let
     rustProfile = imageProfilesModule.rust;
   };
 
+  serviceImage = import ../services/image.nix {
+    pkgs = linuxPkgs;
+    hostPkgs = pkgs;
+    inherit (imageRustCli) cacheServe;
+    asTarball = isDarwin;
+  };
+
   sandboxToolPackages = [ (linuxPkgs.lib.hiPrio imageRustCli.wrix) ];
 
   # Claude config (~/.claude.json) - onboarding state and runtime flags
@@ -325,6 +332,12 @@ let
           export PATH="${launcherRuntimePath}"
         fi
       '';
+      serviceImageEnvSetup = ''
+        export WRIX_SERVICE_IMAGE="''${WRIX_SERVICE_IMAGE:-${serviceImage.ref}}"
+        export WRIX_SERVICE_IMAGE_SOURCE="''${WRIX_SERVICE_IMAGE_SOURCE:-${serviceImage.source}}"
+        export WRIX_SERVICE_IMAGE_SOURCE_KIND="''${WRIX_SERVICE_IMAGE_SOURCE_KIND:-${serviceImage.source_kind}}"
+        export WRIX_SERVICE_IMAGE_DIGEST="''${WRIX_SERVICE_IMAGE_DIGEST:-${serviceImage.digest}}"
+      '';
 
       # Expose the image derivation for consumers that inspect the image directly.
       # Its `.source` metadata is the platform install source: a Linux descriptor
@@ -430,12 +443,14 @@ let
             #!${pkgs.runtimeShell}
             set -euo pipefail
             ${launcherRuntimePathSetup}
+            ${serviceImageEnvSetup}
             exec ${launcher}/bin/wrix --profile-config ${profileConfig} "$@"
             WRIX_WRAPPER
             cat > "$out/bin/wrix-run" <<'WRIX_RUN_WRAPPER'
             #!${pkgs.runtimeShell}
             set -euo pipefail
             ${launcherRuntimePathSetup}
+            ${serviceImageEnvSetup}
             case "''${1:-}" in
               run|spawn|service|beads)
                 exec ${launcher}/bin/wrix --profile-config ${profileConfig} "$@"
@@ -470,6 +485,7 @@ in
     mkImageRef
     profiles
     rustProfileFromFile
+    serviceImage
     baseClaudeSettings
     ;
   inherit (manifest) mkProfileImages;

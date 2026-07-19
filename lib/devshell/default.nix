@@ -2,6 +2,7 @@
   pkgs,
   rustCli,
   beads,
+  serviceImage,
 }:
 
 let
@@ -157,6 +158,12 @@ in
             WRIX_CACHE_PENDING_RETENTION_SECS = durationSeconds "pendingTtl" nixCacheConfig.pendingTtl;
             WRIX_CACHE_PRUNE_INTERVAL_SECS = durationSeconds "pruneInterval" nixCacheConfig.pruneInterval;
           };
+      serviceEnv = {
+        WRIX_SERVICE_IMAGE = serviceImage.ref;
+        WRIX_SERVICE_IMAGE_SOURCE = "${serviceImage.source}";
+        WRIX_SERVICE_IMAGE_SOURCE_KIND = serviceImage.source_kind;
+        WRIX_SERVICE_IMAGE_DIGEST = "${serviceImage.digest}";
+      };
       serviceHook =
         if !nixCacheEnabled then
           beads.shellHook
@@ -197,7 +204,7 @@ in
           prekWrappers.prePushChecks
           prekWrappers.skipIfMissing
         ];
-      env = resolvedProfile.env // cacheEnv // env;
+      env = resolvedProfile.env // serviceEnv // cacheEnv // env;
       shellHook = ''
         ${serviceHook}
 

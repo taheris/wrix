@@ -36,15 +36,8 @@ let
 
   flakeModuleThinConsumer =
     let
-      fakeServiceImage = {
-        ref = "wrix-service:test";
-        source = writeText "wrix-service-image-source" "source";
-        source_kind = "nix-descriptor";
-        digest = writeText "wrix-service-image-digest" "sha256:test";
-      };
       fakeConfig = {
         packages = {
-          wrix-service-image = fakeServiceImage;
           profile-images-pi = writeText "profile-images-pi" "{}";
         };
         treefmt.build.wrapper = writeShellScriptBin "treefmt" "exit 0";
@@ -84,6 +77,10 @@ let
         "RUSTC_WRAPPER"
         "SCCACHE_DIR"
         "SCCACHE_CACHE_SIZE"
+        "WRIX_SERVICE_IMAGE"
+        "WRIX_SERVICE_IMAGE_DIGEST"
+        "WRIX_SERVICE_IMAGE_SOURCE"
+        "WRIX_SERVICE_IMAGE_SOURCE_KIND"
       ];
     in
     all (name: !(hasAttr name (args.env or { }))) forbiddenEnv

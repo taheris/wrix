@@ -6,10 +6,6 @@
 let
   inherit (pkgs.lib) escapeShellArg makeBinPath;
 
-  serviceImage = import ../../lib/services/image.nix {
-    inherit pkgs;
-    inherit (wrix.rustPackage) cacheServe;
-  };
   defaultShell = wrix.mkDevShell {
     profile = wrix.profiles.base;
     prekHooks = false;
@@ -41,10 +37,10 @@ let
     export WRIX_CONTAINER_RUNTIME=podman
     export WRIX_NIX_CACHE_REQUIRE_TRUSTED=0
     export WRIX_SERVICE_ALLOW_TEMP_CACHE=1
-    export WRIX_SERVICE_IMAGE=${escapeShellArg serviceImage.ref}
-    export WRIX_SERVICE_IMAGE_SOURCE=${escapeShellArg "${serviceImage.source}"}
-    export WRIX_SERVICE_IMAGE_SOURCE_KIND=${escapeShellArg serviceImage.source_kind}
-    export WRIX_SERVICE_IMAGE_DIGEST=${escapeShellArg "${serviceImage.digest}"}
+    export WRIX_SERVICE_IMAGE=${escapeShellArg defaultShell.WRIX_SERVICE_IMAGE}
+    export WRIX_SERVICE_IMAGE_SOURCE=${escapeShellArg defaultShell.WRIX_SERVICE_IMAGE_SOURCE}
+    export WRIX_SERVICE_IMAGE_SOURCE_KIND=${escapeShellArg defaultShell.WRIX_SERVICE_IMAGE_SOURCE_KIND}
+    export WRIX_SERVICE_IMAGE_DIGEST=${escapeShellArg defaultShell.WRIX_SERVICE_IMAGE_DIGEST}
     cd /home/alice/devshell-repo
     source ${defaultHook}
     touch /home/alice/default-hook.ready
