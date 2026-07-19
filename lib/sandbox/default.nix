@@ -164,6 +164,7 @@ let
     {
       profile,
       entrypointSh,
+      networkBootstrapSh ? null,
       krunSupport ? false,
       claudeSettings ? baseClaudeSettings,
       piSettings ? basePiSettings,
@@ -178,6 +179,7 @@ let
       inherit
         profile
         entrypointSh
+        networkBootstrapSh
         krunSupport
         claudeConfig
         claudeSettings
@@ -336,6 +338,7 @@ let
             ./darwin/entrypoint.sh
           else
             null;
+        networkBootstrapSh = if isDarwin then ./darwin/network-bootstrap.sh else null;
         krunSupport = isLinux;
         asTarball = isDarwin;
         claudeSettings = finalClaudeSettings;

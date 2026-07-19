@@ -507,7 +507,11 @@ impl<'a> Plan<'a> {
         let credentials = self.credentials(&staging)?;
         let pi_auth = self.pi_auth()?;
         let mut command = ProcessCommand::new("container");
-        command.arg("run").arg("--rm");
+        command
+            .arg("run")
+            .arg("--rm")
+            .arg("--cap-add")
+            .arg("CAP_NET_ADMIN");
         if self.spawn() {
             if self.stdio {
                 command.arg("-i");

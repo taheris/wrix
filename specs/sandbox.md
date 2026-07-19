@@ -44,14 +44,14 @@ The host Podman API is outside the normal sandbox boundary. Linux exposes it onl
 
 Threat-model rationale for these choices lives in `specs/security.md`.
 
-**Network posture** — `WRIX_NETWORK` selects public egress posture at launch time. The launcher passes the mode, merged allowlist, DNS exceptions, and wrix-owned local endpoint exceptions into the container via env/config; the entrypoint installs a Linux in-sandbox firewall ruleset before the agent starts. Linux Podman uses `nftables` by default. Darwin does not use host `pf`; it uses the firewall backend available inside the Linux guest/container (`nftables` when supported, otherwise a verified equivalent such as iptables).
+**Network posture** — `WRIX_NETWORK` selects public egress posture at launch time. The launcher passes the mode, merged allowlist, DNS exceptions, and wrix-owned local endpoint exceptions into the container via env/config; the Linux entrypoint installs an in-sandbox firewall ruleset before the agent starts, while Darwin uses an immutable first-stage bootstrap before any workspace setup or agent code runs. Linux Podman uses `nftables` by default. Darwin does not use host `pf`; it uses the firewall backend available inside the Linux guest/container (`nftables` when supported, otherwise a verified equivalent such as iptables).
 
 Baseline network isolation is always enforced in both modes: no inbound ports, IPv6 disabled/blocked for v1, and outbound traffic to LAN/private/host-local/VPN/special ranges is blocked. Exact exceptions are allowed only for wrix-owned endpoints (for example the project cache host-gateway IP/port, Darwin Dolt TCP endpoint) and configured DNS resolvers on TCP/UDP port 53.
 
 - `open` (default) — public-internet outbound is allowed, but LAN/private/host-local/VPN/special ranges remain blocked.
 - `limit` — outbound is restricted to the profile's merged `networkAllowlist` plus exact wrix-owned local endpoint and DNS exceptions; LAN/private/host-local/VPN/special ranges remain blocked. Any other value errors at the launcher before the container starts.
 
-Filtering is fail-closed. Linux rootless Podman grants temporary in-container `NET_ADMIN` so the entrypoint can install namespace-local firewall rules atomically, then uses `capsh` to drop `NET_ADMIN` before execing the agent. `WRIX_MICROVM=1` remains an optional stronger boundary, not a requirement. macOS runs in a microVM unconditionally and applies the same baseline/limit policy inside that boundary without mutating the Darwin host firewall. `WRIX_NETWORK=limit` domains are resolved once at startup; any unresolvable allowlist domain fails launch instead of being silently omitted. If firewall setup, IPv6 disablement, or capability drop cannot be verified, launch fails; wrix never falls back to LAN-open networking.
+Filtering is fail-closed. Linux rootless Podman grants temporary in-container `NET_ADMIN` so the entrypoint can install namespace-local firewall rules atomically, then uses `capsh` to drop `NET_ADMIN` before execing the agent. `WRIX_MICROVM=1` remains an optional stronger boundary, not a requirement. macOS runs in a microVM unconditionally; its immutable bootstrap alone receives `NET_ADMIN`, uses only image-pinned tools, verifies the policy, and replaces itself through `capsh` with a stage that rejects `NET_ADMIN` in every Linux capability set before touching `/workspace`. The Darwin host firewall is never mutated. `WRIX_NETWORK=limit` domains are resolved once at startup; any unresolvable allowlist domain fails launch instead of being silently omitted. If firewall setup, IPv6 disablement, or capability drop cannot be verified, launch fails; wrix never falls back to LAN-open networking.
 
 **Agent runtime axis** — the `agent` parameter selects, **at build time**, the single agent binary the image bakes and the entrypoint launches. The binary must be in the image, so this is not a runtime knob.
 
@@ -187,6 +187,7 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 - Requires macOS 26+ and Apple Silicon
 - Virtualization.framework microVM, always (no separate container-mode path)
 - vmnet networking with the same always-on in-guest firewall policy: no inbound ports, public-internet outbound in `open`, allowlist-only outbound in `limit`, LAN/private/host-local/VPN/special ranges blocked in both modes, IPv6 disabled/blocked for v1. The Darwin host `pf` firewall is not part of the sandbox contract.
+- An immutable `/network-bootstrap.sh` is the only stage granted `NET_ADMIN`; it uses image-pinned binaries, verifies the firewall, and `exec`s `/entrypoint.sh` through `capsh` after dropping `NET_ADMIN`. The agent entrypoint fails before workspace setup unless the trusted bootstrap marker exists and `NET_ADMIN` is absent from inheritable, permitted, effective, bounding, and ambient capability sets.
 - VirtioFS workspace mount
 - Mount classifier handles `profile.mounts` and `SpawnConfig.mounts` uniformly — directories staged + copied at launch, regular files copy-from-parent-dir, Unix-socket sources rejected at launch
 - Entrypoint creates user matching host UID
@@ -203,6 +204,8 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
   [system](verify:sandbox.linux-container-starts)
 - A built macOS sandbox starts an Apple `container` microVM and exits cleanly
   [system](verify:sandbox.darwin-container-starts)
+- The Darwin network bootstrap cannot resolve tools from `/workspace`, verifies the firewall before invoking `capsh`, preserves the agent argv, and enters stage two only after requesting an irreversible `NET_ADMIN` drop
+  [system](verify:sandbox.darwin-network-bootstrap)
 - Files created inside `/workspace` carry the host UID/GID, not a container-internal UID
   [system](verify:sandbox.uid-mapping)
 - Host filesystem outside `/workspace` and declared mounts is not visible inside the container
@@ -278,7 +281,7 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
 - The runtime image cleanup path records a bounded cross-workspace MRU of eight wrix image refs/digests/image IDs, preserves images used by existing containers, prunes wrix-managed images outside the keep set, and does not automatically remove unlabelled `<none>:<none>` images
   [test](../crates/wrix-sandbox/tests/image_retention.rs::cleanup_prunes_only_wrix_managed_images_outside_bounded_keep_set)
 - On Darwin, the runtime image installer converts `source_kind = "docker-archive"` sources to temporary OCI archives before invoking `container image load --input <oci-archive>`, then removes the temporary archive and relies on digest-skip preflight while per-blob install remains out of scope
-  [system](../tests/sandbox/image-install-darwin-load.sh)
+  [system](verify:sandbox.darwin-image-load)
 
 ## Requirements
 

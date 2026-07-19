@@ -83,4 +83,6 @@ grep -qF -- "image load --input $loaded_path" "$tmp/container.log" \
   || fail "Darwin live launcher did not pass the converted OCI archive to container image load"
 grep -qF -- "image tag untagged@sha256:$(printf '%064d' 0) wrix-darwin:test" "$tmp/container.log" \
   || fail "Darwin live launcher did not tag the loaded OCI image"
+grep -qF -- "run --rm --cap-add CAP_NET_ADMIN" "$tmp/container.log" \
+  || fail "Darwin live launcher did not grant temporary NET_ADMIN for firewall setup"
 printf 'PASS: Darwin live Rust launcher converts and loads a Docker archive\n'

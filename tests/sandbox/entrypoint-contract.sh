@@ -137,16 +137,25 @@ rewrite_entrypoint() {
   local etc_wrix="$3"
   local dest_path="$4"
   local home_dir="$5"
-  local source_path setup_path
+  local source_path setup_path capability_status ready_file capability_hex
   source_path="$(entrypoint_source "$platform")"
   setup_path="$workspace/git-ssh-setup.sh"
+  capability_status="$workspace/proc-self-status"
+  ready_file="$workspace/network-ready"
+  capability_hex="${WRIX_TEST_CAP_STATUS_HEX:-0000000000000000}"
   printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' >"$setup_path"
+  printf 'CapInh:\t%s\nCapPrm:\t%s\nCapEff:\t%s\nCapBnd:\t%s\nCapAmb:\t%s\n' \
+    "$capability_hex" "$capability_hex" "$capability_hex" "$capability_hex" "$capability_hex" \
+    >"$capability_status"
+  : >"$ready_file"
   chmod +x "$setup_path"
   sed \
     -e "s|/workspace|$workspace|g" \
     -e "s|/home/wrix|$home_dir|g" \
     -e "s|/etc/wrix/|$etc_wrix/|g" \
     -e "s|\. /git-ssh-setup\.sh|. $setup_path|g" \
+    -e "s|/proc/self/status|$capability_status|g" \
+    -e "s|/run/wrix-network-ready|$ready_file|g" \
     "$source_path" >"$dest_path"
   chmod +x "$dest_path"
 }
@@ -340,12 +349,44 @@ test_darwin_core_hooks_path() {
   printf 'PASS: darwin entrypoint configures core.hooksPath when pre-commit config is present\n' >&2
 }
 
+test_darwin_entrypoint_rejects_net_admin() {
+  local workspace="$TEST_TMP/net-admin-darwin/workspace"
+  local stdout_path="$TEST_TMP/net-admin-darwin.out"
+  local stderr_path="$TEST_TMP/net-admin-darwin.err"
+  mkdir -p "$workspace/bin"
+  cat >"$workspace/bin/loom-direct-runner" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+: >"${WRIX_TEST_AGENT_RAN:?}"
+EOF
+  chmod +x "$workspace/bin/loom-direct-runner"
+
+  export WRIX_TEST_CAP_STATUS_HEX=0000000000001000
+  export WRIX_TEST_AGENT_RAN="$TEST_TMP/net-admin-darwin.agent-ran"
+  if run_entrypoint darwin direct "$stdout_path" "$stderr_path" "$workspace"; then
+    unset WRIX_TEST_CAP_STATUS_HEX WRIX_TEST_AGENT_RAN
+    fail "Darwin entrypoint accepted NET_ADMIN after the bootstrap"
+    return 1
+  fi
+  unset WRIX_TEST_CAP_STATUS_HEX WRIX_TEST_AGENT_RAN
+  if [[ -e "$TEST_TMP/net-admin-darwin.agent-ran" ]]; then
+    fail "Darwin entrypoint ran workspace code before rejecting NET_ADMIN"
+    return 1
+  fi
+  grep -qF 'NET_ADMIN survived the Darwin network bootstrap' "$stderr_path" || {
+    fail "Darwin entrypoint did not report the capability boundary failure: $(<"$stderr_path")"
+    return 1
+  }
+  printf 'PASS: Darwin entrypoint rejects NET_ADMIN before workspace code runs\n' >&2
+}
+
 ALL_TESTS=(
   test_workspace_bin_path_prepend_both
   test_agent_dispatch_both_entrypoints
   test_agent_config_homes_both_entrypoints
   test_linux_core_hooks_path
   test_darwin_core_hooks_path
+  test_darwin_entrypoint_rejects_net_admin
 )
 
 run_all() {

@@ -165,7 +165,20 @@ dest = Path(sys.argv[3])
 setup = workspace / 'git-ssh-setup.sh'
 setup.write_text('#!/usr/bin/env bash\nset -euo pipefail\n', encoding='utf-8')
 setup.chmod(0o755)
+cap_status = workspace / 'proc-self-status'
+cap_status.write_text(
+    'CapInh:\t0000000000000000\n'
+    'CapPrm:\t0000000000000000\n'
+    'CapEff:\t0000000000000000\n'
+    'CapBnd:\t0000000000000000\n'
+    'CapAmb:\t0000000000000000\n',
+    encoding='utf-8',
+)
+network_ready = workspace / 'wrix-network-ready'
+network_ready.touch()
 text = source.read_text(encoding='utf-8').replace('/workspace', str(workspace))
+text = text.replace('/proc/self/status', str(cap_status))
+text = text.replace('/run/wrix-network-ready', str(network_ready))
 text = text.replace('. /git-ssh-setup.sh', f'. {shlex.quote(str(setup))}')
 dest.write_text(text, encoding='utf-8')
 PY

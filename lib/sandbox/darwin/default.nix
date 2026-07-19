@@ -766,6 +766,7 @@ in
             container run \
               --name "$CONTAINER_NAME" \
               --rm \
+              --cap-add CAP_NET_ADMIN \
               "''${TTY_ARGS[@]}" \
               -w / \
               -c "$CPUS" \

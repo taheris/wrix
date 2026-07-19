@@ -22,6 +22,7 @@
   hostPkgs ? pkgs,
   profile,
   entrypointSh,
+  networkBootstrapSh ? null,
   krunSupport ? false,
   claudeConfig,
   claudeSettings,
@@ -219,6 +220,7 @@ let
   );
 
   imageName = "wrix-${profile.name}${optionalString (agent != "direct") "-${agent}"}";
+  imageEntrypoint = if networkBootstrapSh == null then "/entrypoint.sh" else "/network-bootstrap.sh";
 
   # The leaf budgets only its tier-2 delta plus the customisation layer; with
   # base (64) and stable-profile (48) below it, this keeps the stacked image at
@@ -292,6 +294,15 @@ let
       cp ${entrypointSh} entrypoint.sh
       chmod +x entrypoint.sh
 
+      ${optionalString (networkBootstrapSh != null) ''
+        cp ${networkBootstrapSh} network-bootstrap.sh
+        chmod +x network-bootstrap.sh
+        mkdir -p usr/local/libexec/wrix-network
+        for tool in nft iptables ip6tables capsh getent awk sort grep nc sleep; do
+          ln -s "${profileEnv}/bin/$tool" "usr/local/libexec/wrix-network/$tool"
+        done
+      ''}
+
       cp ${sshConfig.gitSshSetup} git-ssh-setup.sh
       chmod 0644 git-ssh-setup.sh
 
@@ -360,7 +371,7 @@ let
       Env = imageConfigEnv;
       Labels = imageLabels;
       WorkingDir = "/workspace";
-      Entrypoint = [ "/entrypoint.sh" ];
+      Entrypoint = [ imageEntrypoint ];
     };
   };
 
@@ -390,7 +401,7 @@ let
       env = imageConfigEnv;
       labels = imageLabels;
       working_dir = "/workspace";
-      entrypoint = [ "/entrypoint.sh" ];
+      entrypoint = [ imageEntrypoint ];
     };
   };
   descriptorMetadataFile = pkgs.writeText "${imageName}-descriptor-metadata.json" (

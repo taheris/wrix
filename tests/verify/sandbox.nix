@@ -35,6 +35,10 @@ in
 
   "sandbox.darwin-container-starts" = containerStarts "test_darwin_container_starts";
 
+  "sandbox.darwin-image-load" = sandboxScriptAll "image-install-darwin-load";
+
+  "sandbox.darwin-network-bootstrap" = sandboxScriptAll "darwin-network-bootstrap";
+
   "sandbox.entrypoint-agent-dispatch" = entrypoint "test_agent_dispatch_both_entrypoints";
 
   "sandbox.entrypoint-workspace-bin-prepend" = entrypoint "test_workspace_bin_path_prepend_both";

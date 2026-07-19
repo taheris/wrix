@@ -52,6 +52,7 @@ let
     agentPkg = linuxPkgs.claude-code;
     entrypointSh =
       if isDarwin then ../../lib/sandbox/darwin/entrypoint.sh else ../../lib/sandbox/linux/entrypoint.sh;
+    networkBootstrapSh = if isDarwin then ../../lib/sandbox/darwin/network-bootstrap.sh else null;
     claudeConfig = { };
     claudeSettings = { };
     asTarball = isDarwin;
@@ -252,6 +253,7 @@ in
       ''
         echo "Checking Darwin entrypoint syntax..."
         bash -n ${../../lib/sandbox/darwin/entrypoint.sh}
+        bash -n ${../../lib/sandbox/darwin/network-bootstrap.sh}
 
         echo "Verifying entrypoint handles mount env vars..."
         # Test that entrypoint processes WRIX_DIR_MOUNTS correctly
@@ -604,10 +606,14 @@ in
         echo "PASS: Linux entrypoint has network filtering"
 
         DARWIN_EP="${../../lib/sandbox/darwin/entrypoint.sh}"
-        grep -q 'WRIX_FIREWALL_BACKEND="nft"' "$DARWIN_EP" || { echo "FAIL: Missing nft firewall default in Darwin entrypoint"; exit 1; }
-        grep -q 'WRIX_FIREWALL_BACKEND="iptables"' "$DARWIN_EP" || { echo "FAIL: Missing iptables fallback in Darwin entrypoint"; exit 1; }
-        grep -q 'WRIX_NETWORK' "$DARWIN_EP" || { echo "FAIL: Missing WRIX_NETWORK check in Darwin entrypoint"; exit 1; }
-        echo "PASS: Darwin entrypoint has network filtering"
+        DARWIN_BOOTSTRAP="${../../lib/sandbox/darwin/network-bootstrap.sh}"
+        grep -q 'WRIX_FIREWALL_BACKEND="nft"' "$DARWIN_BOOTSTRAP" || { echo "FAIL: Missing nft firewall default in Darwin bootstrap"; exit 1; }
+        grep -q 'WRIX_FIREWALL_BACKEND="iptables"' "$DARWIN_BOOTSTRAP" || { echo "FAIL: Missing iptables fallback in Darwin bootstrap"; exit 1; }
+        grep -q 'WRIX_NETWORK' "$DARWIN_BOOTSTRAP" || { echo "FAIL: Missing WRIX_NETWORK check in Darwin bootstrap"; exit 1; }
+        grep -q -- '--drop=cap_net_admin' "$DARWIN_BOOTSTRAP" || { echo "FAIL: Darwin bootstrap does not drop NET_ADMIN"; exit 1; }
+        grep -q 'CapBnd:' "$DARWIN_EP" || { echo "FAIL: Darwin agent entrypoint does not reject retained NET_ADMIN"; exit 1; }
+        grep -q -- '--cap-add CAP_NET_ADMIN' ${../../lib/sandbox/darwin/default.nix} || { echo "FAIL: Darwin launcher does not grant temporary NET_ADMIN"; exit 1; }
+        echo "PASS: Darwin bootstrap installs network filtering before capability-free agent setup"
 
         echo ""
         echo "WRIX_NETWORK configuration validation passed"
