@@ -347,6 +347,7 @@ PROBE
 LAUNCHER=$(wrix_build_live_launcher)
 IMAGE_SOURCE=$(wrix_realize_test_image_source claude)
 IMAGE_REF=$(wrix_live_image_ref "git-ssh-bootstrap-$$")
+wrix_remove_image_ref "$IMAGE_REF"
 PROFILE_CONFIG="$TEST_TMP/profile.json"
 SPAWN_CONFIG="$TEST_TMP/spawn.json"
 WORKSPACE="$TEST_TMP/workspace"
@@ -395,7 +396,7 @@ test_host_container_and_loom_helper() {
   home_deploy="$home/.ssh/deploy_keys/parity-key"
   home_signing="$home/.ssh/deploy_keys/parity-key-signing"
   ambient_home="$TEST_TMP/parity-ambient-home"
-  fake_bin="$TEST_TMP/parity-fake-bin"
+  fake_bin="$workspace/fake-bin"
   parity_spawn="$TEST_TMP/parity-spawn.json"
   out="$TEST_TMP/parity-container.out"
   err="$TEST_TMP/parity-container.err"

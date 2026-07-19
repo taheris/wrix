@@ -145,6 +145,7 @@ assert_audit_log_for_agent() {
   image_source=$(wrix_realize_test_image_source "$agent")
   image_ref=$(wrix_live_image_ref "audit-$agent-$$")
   IMAGE_REFS+=("$image_ref")
+  wrix_remove_image_ref "$image_ref"
   profile_config="$TEST_TMP/profile-$agent.json"
   spawn_config="$TEST_TMP/spawn-$agent.json"
   workspace="$TEST_TMP/workspace-$agent"
