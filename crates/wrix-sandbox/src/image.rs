@@ -850,10 +850,10 @@ impl Store for CommandStore {
                 Ok(!trim_stdout(&output.stdout).is_empty())
             }
             Runtime::Container => {
-                let id = inspect_value(runtime, target, InspectField::Id)?.unwrap_or_default();
+                let id = inspect_value(runtime, target, InspectField::Id)?;
                 let output =
                     run_required_output("container", &["list", "--all", "--format", "json"])?;
-                container_image_in_use(&output.stdout, target, &id)
+                container_image_in_use(&output.stdout, target, id.as_deref())
             }
         }
     }
@@ -970,11 +970,11 @@ fn container_image_row(image: &Value) -> Option<String> {
     Some(format!("{repository} {tag} {id}"))
 }
 
-fn container_image_in_use(stdout: &[u8], target: &str, id: &str) -> Result<bool, Error> {
+fn container_image_in_use(stdout: &[u8], target: &str, id: Option<&str>) -> Result<bool, Error> {
     let value = serde_json::from_slice::<Value>(stdout)
         .map_err(|source| Error::DescriptorJson { source })?;
     let target = target.strip_prefix("docker.io/library/").unwrap_or(target);
-    let id = id.trim_start_matches("sha256:");
+    let id = id.map(|value| value.trim_start_matches("sha256:"));
     Ok(value.as_array().into_iter().flatten().any(|container| {
         let reference = container
             .pointer("/configuration/image/reference")
@@ -988,7 +988,7 @@ fn container_image_in_use(stdout: &[u8], target: &str, id: &str) -> Result<bool,
             .pointer("/configuration/image/descriptor/digest")
             .and_then(Value::as_str)
             .map(|digest| digest.trim_start_matches("sha256:"));
-        reference == Some(target) || (!id.is_empty() && descriptor == Some(id))
+        reference == Some(target) || id.is_some_and(|id| descriptor == Some(id))
     }))
 }
 
@@ -1010,11 +1010,13 @@ fn darwin_digest_present(digest: &str) -> Result<bool, Error> {
         }
         let value = serde_json::from_slice::<Value>(&inspect.stdout)
             .map_err(|source| Error::DescriptorJson { source })?;
-        let actual = value
+        let Some(actual) = value
             .pointer("/0/digest")
             .or_else(|| value.pointer("/0/id"))
             .and_then(Value::as_str)
-            .unwrap_or_default();
+        else {
+            continue;
+        };
         if actual.trim_start_matches("sha256:") == digest.trim_start_matches("sha256:") {
             return Ok(true);
         }
@@ -1255,15 +1257,19 @@ mod test {
         .expect("serialize container list fixture");
 
         assert!(
-            container_image_in_use(&output, "untagged@sha256:manifest-digest", "index-digest")
+            container_image_in_use(
+                &output,
+                "untagged@sha256:manifest-digest",
+                Some("index-digest")
+            )
+            .expect("parse container list")
+        );
+        assert!(
+            container_image_in_use(&output, "wrix-service:abc123", None)
                 .expect("parse container list")
         );
         assert!(
-            container_image_in_use(&output, "wrix-service:abc123", "")
-                .expect("parse container list")
-        );
-        assert!(
-            !container_image_in_use(&output, "wrix-service:stale", "stale-index")
+            !container_image_in_use(&output, "wrix-service:stale", Some("stale-index"))
                 .expect("parse container list")
         );
     }

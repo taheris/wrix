@@ -1,7 +1,10 @@
 use std::{
     collections::BTreeSet,
     fs,
-    sync::{Arc, Barrier},
+    sync::{
+        Arc, Barrier,
+        atomic::{AtomicUsize, Ordering},
+    },
     thread,
 };
 
@@ -103,18 +106,21 @@ fn concurrent_mru_updates_preserve_each_workspace_record() -> TestResult {
         .prefix("image-retention-concurrent")
         .tempdir()?;
     let mru_path = Arc::new(root.path().join("image-mru.json"));
-    let barrier = Arc::new(Barrier::new(2));
+    fs::write(&*mru_path, "[]\n")?;
+    let barrier = Arc::new(Barrier::new(3));
+    let completed = Arc::new(AtomicUsize::new(0));
     let mut handles = Vec::new();
     for index in 0..2 {
         let path = Arc::clone(&mru_path);
         let ready = Arc::clone(&barrier);
+        let completed = Arc::clone(&completed);
         handles.push(thread::spawn(move || -> Result<(), image::Error> {
             let image_ref = format!("localhost/wrix-workspace-{index}:live");
             let image_id = format!("workspace-{index}-id");
             let mut store =
                 FakeStore::with_images(vec![fake_image(&image_ref, &image_id).managed()]);
             ready.wait();
-            image::remember_and_prune(
+            let result = image::remember_and_prune(
                 &mut store,
                 &RetentionRequest {
                     runtime: Runtime::Podman,
@@ -124,12 +130,27 @@ fn concurrent_mru_updates_preserve_each_workspace_record() -> TestResult {
                     digest: None,
                     mru_path: &path,
                 },
-            )
+            );
+            completed.fetch_add(1, Ordering::Release);
+            result
         }));
     }
+    let reader_path = Arc::clone(&mru_path);
+    let reader_ready = Arc::clone(&barrier);
+    let reader_completed = Arc::clone(&completed);
+    let reader = thread::spawn(move || -> Result<(), std::io::Error> {
+        reader_ready.wait();
+        while reader_completed.load(Ordering::Acquire) < 2 {
+            serde_json::from_slice::<Vec<image::Record>>(&fs::read(&*reader_path)?)
+                .map_err(std::io::Error::other)?;
+            thread::yield_now();
+        }
+        Ok(())
+    });
     for handle in handles {
         handle.join().map_err(|_| "retention worker panicked")??;
     }
+    reader.join().map_err(|_| "retention reader panicked")??;
 
     let records = serde_json::from_slice::<Vec<image::Record>>(&fs::read(&*mru_path)?)?;
     assert_eq!(records.len(), 2);

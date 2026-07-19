@@ -521,6 +521,11 @@ impl<'a> Plan<'a> {
                 }
             }
             if Platform::CURRENT == Platform::Linux {
+                for mount in &self.request.profile_config.profile.mounts {
+                    if let Some(rendered) = render_profile_mount(mount, staging)? {
+                        writeln!(stdout, "MOUNT=-v {}", rendered.podman_arg())?;
+                    }
+                }
                 for (key, value) in Self::linux_boundary_env_pairs() {
                     writeln!(stdout, "ENV={key}={value}")?;
                 }
@@ -530,12 +535,10 @@ impl<'a> Plan<'a> {
             }
             if let Kind::Spawn(spawn) = &self.request.kind {
                 writeln!(stdout, "SPAWN_CONFIG={}", spawn.config_path.display())?;
-                if Platform::CURRENT == Platform::Linux {
-                    writeln!(
-                        stdout,
-                        "MOUNT=-v {}:{LINUX_SPAWN_CONFIG_PATH}:ro",
-                        spawn.config_path.display()
-                    )?;
+                if Platform::CURRENT == Platform::Linux
+                    && let Some(mount) = self.linux_spawn_config_mount()
+                {
+                    writeln!(stdout, "MOUNT=-v {}", mount.podman_arg())?;
                 }
             }
             for (key, value) in &self.spawn_env {

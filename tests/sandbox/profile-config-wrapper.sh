@@ -44,6 +44,8 @@ PACKAGE_LINK="$TEST_TMP/package"
 WRIX="$PACKAGE_LINK/bin/wrix"
 WRIX_RUN="$PACKAGE_LINK/bin/wrix-run"
 OPTIONAL_MOUNT_SOURCE="$TEST_TMP/missing-optional-mount"
+REQUIRED_MOUNT_SOURCE="$TEST_TMP/present-required-mount"
+mkdir -p "$REQUIRED_MOUNT_SOURCE"
 
 build_wrapper_package() {
   local log="$TEST_TMP/package-build.log"
@@ -59,12 +61,20 @@ build_wrapper_package() {
         system = builtins.currentSystem;
         lib = flake.legacyPackages.\${system}.lib;
         profile = lib.deriveProfile lib.profiles.base {
-          mounts = [{
-            source = \"$OPTIONAL_MOUNT_SOURCE\";
-            dest = \"/mnt/optional-cache\";
-            mode = \"rw\";
-            optional = true;
-          }];
+          mounts = [
+            {
+              source = \"$OPTIONAL_MOUNT_SOURCE\";
+              dest = \"/mnt/optional-cache\";
+              mode = \"rw\";
+              optional = true;
+            }
+            {
+              source = \"$REQUIRED_MOUNT_SOURCE\";
+              dest = \"/mnt/required-cache\";
+              mode = \"rw\";
+              optional = false;
+            }
+          ];
         };
       in (lib.mkSandbox { inherit profile; }).package
     " >"$log" 2>&1; then
@@ -128,17 +138,26 @@ test_profile_config_contains_launcher_contract_fields() {
   config=$(profile_config_from_wrapper)
   if ! jq -e \
     --arg source_kind "$EXPECTED_SOURCE_KIND" \
-    --arg optional_source "$OPTIONAL_MOUNT_SOURCE" '
+    --arg optional_source "$OPTIONAL_MOUNT_SOURCE" \
+    --arg required_source "$REQUIRED_MOUNT_SOURCE" '
     .schema == 1 and
     (.system | type == "string") and
     (.profile.name | type == "string") and
     (.profile.env | type == "object") and
-    (.profile.mounts == [{
-      source: $optional_source,
-      dest: "/mnt/optional-cache",
-      mode: "rw",
-      optional: true
-    }]) and
+    (.profile.mounts == [
+      {
+        source: $optional_source,
+        dest: "/mnt/optional-cache",
+        mode: "rw",
+        optional: true
+      },
+      {
+        source: $required_source,
+        dest: "/mnt/required-cache",
+        mode: "rw",
+        optional: false
+      }
+    ]) and
     (.profile.writable_dirs | type == "array") and
     (.profile.network_allowlist | type == "array") and
     (.image.ref | type == "string" and length > 0) and
@@ -176,6 +195,10 @@ test_missing_optional_profile_mount_is_skipped() {
   fi
   if grep -qF '/mnt/optional-cache' "$out"; then
     fail "missing optional profile mount reached container argv: $(cat "$out")"
+    return 1
+  fi
+  if ! grep -qF '/mnt/required-cache' "$out"; then
+    fail "present required profile mount did not reach container argv: $(cat "$out")"
     return 1
   fi
   pass "Nix-generated missing optional profile mount is skipped by the Rust launcher"
