@@ -282,6 +282,12 @@ test_host_packages_source() {
           shellHook = \"\";
           waitAndExport = \"\";
         };
+        serviceImage = {
+          ref = \"wrix-service:test\";
+          source = pkgs.writeText \"wrix-service-image-source\" \"source\";
+          source_kind = \"docker-archive\";
+          digest = pkgs.writeText \"wrix-service-image-digest\" \"sha256:test\";
+        };
       };
       profile = {
         name = \"mkdevshell-test\";

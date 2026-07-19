@@ -163,6 +163,7 @@ let
     "linux-pasta-port-forwarding-disabled"
     "network-mode-configuration"
     "package-runtime-path"
+    "package-service-image-contract"
     "package-script-syntax"
     "script-syntax"
   ];
@@ -175,6 +176,7 @@ let
       linux-pasta-port-forwarding-disabled
       network-mode-configuration
       package-runtime-path
+      package-service-image-contract
       package-script-syntax
       script-syntax
       ;
@@ -291,6 +293,7 @@ let
           linux-pasta-port-forwarding-disabled
           network-mode-configuration
           package-runtime-path
+          package-service-image-contract
           package-script-syntax
           script-syntax
         )
