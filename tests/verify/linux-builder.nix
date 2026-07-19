@@ -36,6 +36,5 @@ in
 
   "linux-builder.image-source-kind" = ciApp "test-linux-builder-image-source-kind";
 
-  "linux-builder.source-kind-load-transport" =
-    builderScript "test_loads_image_through_source_kind_contract";
+  "linux-builder.source-kind-load-transport" = ciApp "test-linux-builder-source-kind-load-transport";
 }

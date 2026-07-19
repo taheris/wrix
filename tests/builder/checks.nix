@@ -1,32 +1,30 @@
-{
-  pkgs,
-  system,
-  linuxPkgs,
-}:
+{ pkgs, linuxPkgs }:
 
 let
   inherit (builtins) toJSON;
-  inherit (pkgs.lib) elem;
   inherit (pkgs)
+    bash
     coreutils
     gawk
     gnugrep
+    gnused
     gnutar
     jq
+    openssh
     writeShellApplication
     ;
 
-  isLinux = elem system [
-    "aarch64-linux"
-    "x86_64-linux"
-  ];
   builderImage = import ../../lib/sandbox/builder/image.nix {
     pkgs = linuxPkgs;
     hostPkgs = pkgs;
-    asTarball = !isLinux;
+    asTarball = true;
   };
-  expectedSourceKind = if isLinux then "nix-descriptor" else "docker-archive";
-  expectedRefPrefix = if isLinux then "localhost/wrix-builder:" else "wrix-builder:";
+  darwinTransportBuilder = import ../../lib/builder {
+    inherit pkgs linuxPkgs;
+    asTarball = true;
+  };
+  expectedSourceKind = "docker-archive";
+  expectedRefPrefix = "wrix-builder:";
   labelsJson = toJSON builderImage.labels;
 
   archiveShellHelpers = ''
@@ -146,6 +144,23 @@ in
       require_directive hostkey /etc/ssh/ssh_host_ed25519_key
 
       echo "test-linux-builder-sshd-hardening: PASS"
+    '';
+  };
+
+  sourceKindLoadTransportTest = writeShellApplication {
+    name = "test-linux-builder-source-kind-load-transport";
+    runtimeInputs = [
+      bash
+      coreutils
+      gawk
+      gnugrep
+      gnused
+      gnutar
+      openssh
+    ];
+    text = ''
+      WRIX_BUILDER_BIN='${darwinTransportBuilder}/bin/wrix-builder' \
+        bash ${./key-material.sh} test_loads_image_through_source_kind_contract
     '';
   };
 

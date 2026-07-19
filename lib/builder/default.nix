@@ -10,7 +10,11 @@
 #   wrix-builder ssh     - Connect to builder via SSH.
 #   wrix-builder config  - Print nix.conf snippet for remote builder.
 #
-{ pkgs, linuxPkgs }:
+{
+  pkgs,
+  linuxPkgs,
+  asTarball ? pkgs.stdenv.hostPlatform.isDarwin,
+}:
 
 let
   shellLib = import ../util/shell.nix { };
@@ -18,7 +22,7 @@ let
   builderImage = import ../sandbox/builder/image.nix {
     pkgs = linuxPkgs;
     hostPkgs = pkgs;
-    asTarball = pkgs.stdenv.hostPlatform.isDarwin;
+    inherit asTarball;
   };
 
   script = pkgs.writeShellScriptBin "wrix-builder" ''

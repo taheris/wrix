@@ -126,7 +126,7 @@ let
   };
 
   linuxBuilderChecks = import ./builder/checks.nix {
-    inherit pkgs system linuxPkgs;
+    inherit pkgs linuxPkgs;
   };
 
   rustChecks = {
@@ -237,6 +237,7 @@ let
     (mkCiApp sandboxImageChecks.imageNixDbNoDanglingTest "test-image-nix-db-no-dangling")
     (mkCiApp linuxBuilderChecks.sshdHardeningTest "test-linux-builder-sshd-hardening")
     (mkCiApp linuxBuilderChecks.imageSourceKindTest "test-linux-builder-image-source-kind")
+    (mkCiApp linuxBuilderChecks.sourceKindLoadTransportTest "test-linux-builder-source-kind-load-transport")
     (mkCiApp testProfilesBuildPackage "test-profiles-build-package")
   ];
 

@@ -533,12 +533,8 @@ test_generates_per_user_ed25519_material() {
 }
 
 test_loads_image_through_source_kind_contract() {
-  local expected_source_prefix="oci:"
+  local expected_source_prefix="docker-archive:"
   local test_root="$TEST_TMP/source-kind"
-
-  if [[ "$(uname)" == "Darwin" ]]; then
-    expected_source_prefix="docker-archive:"
-  fi
 
   require_command ssh-keygen
   require_command base64

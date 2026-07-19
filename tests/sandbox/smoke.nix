@@ -326,7 +326,14 @@ in
       }
       ''
         echo "Checking builder key structure..."
-        WRIX_BUILDER_BIN="${wrixBuilder}/bin/wrix-builder" REPO_ROOT="${../..}" bash "${../../tests/builder/key-material.sh}"
+        for test_name in \
+          test_generates_per_user_ed25519_material \
+          test_builder_cleanup_is_wrix_scoped \
+          test_preserves_existing_private_keys; do
+          WRIX_BUILDER_BIN="${wrixBuilder}/bin/wrix-builder" \
+            REPO_ROOT="${../..}" \
+            bash "${../../tests/builder/key-material.sh}" "$test_name"
+        done
         mkdir $out
       '';
 
