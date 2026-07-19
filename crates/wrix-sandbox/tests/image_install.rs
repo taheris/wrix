@@ -193,6 +193,9 @@ fn darwin_docker_archive_sources_tag_loaded_image() -> TestResult {
                 source: loaded_ref,
                 target: String::from("wrix-darwin:test"),
             },
+            Call::Delete {
+                target: format!("untagged@{}", digest('0')),
+            },
         ]
     );
     assert!(!store.archive_copy_used());
@@ -233,6 +236,9 @@ enum Call {
     },
     LoadArchive {
         archive: String,
+    },
+    Delete {
+        target: String,
     },
 }
 
@@ -373,7 +379,10 @@ impl Store for FakeStore {
         Ok(false)
     }
 
-    fn delete_image(&mut self, _runtime: Runtime, _target: &str) -> Result<(), image::Error> {
+    fn delete_image(&mut self, _runtime: Runtime, target: &str) -> Result<(), image::Error> {
+        self.calls.push(Call::Delete {
+            target: target.to_owned(),
+        });
         Ok(())
     }
 }

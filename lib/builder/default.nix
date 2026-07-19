@@ -188,15 +188,17 @@ let
       container_image_refs() {
         local list_output
 
-        if ! list_output=$(container image list); then
+        if ! list_output=$(container image list --format json); then
           echo "Warning: could not list images for builder cleanup" >&2
           return 0
         fi
 
-        printf '%s\n' "$list_output" | awk '
-          NR == 1 { next }
-          $1 ~ /^untagged@sha256:[0-9a-f]+$/ { print $1; next }
-          NF >= 2 && $1 != "<none>" && $2 != "<none>" { print $1 ":" $2 }
+        printf '%s\n' "$list_output" | "$WRIX_BUILDER_JQ" -r '
+          (if type == "array" then .[] else . end)
+          | .configuration.name // empty
+          | strings
+          | select(length > 0)
+          | sub("^docker.io/library/"; "")
         '
       }
 
@@ -210,7 +212,14 @@ let
       builder_image_json_has_builder_labels() {
         "$WRIX_BUILDER_JQ" -e '
           ((if type == "array" then .[0] else . end) // {}) as $image
-          | ($image.labels // $image.Labels // $image.config.labels // $image.config.Labels // $image.Config.Labels // {}) as $labels
+          | ([
+              $image.labels?,
+              $image.Labels?,
+              $image.config.labels?,
+              $image.config.Labels?,
+              $image.Config.Labels?,
+              $image.variants[]?.config.config.Labels?
+            ] | map(select(type == "object")) | add // {}) as $labels
           | $labels["wrix.managed"] == "true" and $labels["wrix.image.kind"] == "builder"
         ' >/dev/null
       }
@@ -223,7 +232,6 @@ let
 
       cleanup_stale_builder_images() {
         local current_image="$1"
-        local loaded_ref="''${2:-}"
         local current_short="''${current_image#sha256:}"
         local image_json
         local ref
@@ -233,7 +241,6 @@ let
         while IFS= read -r ref; do
           [[ -n "$ref" ]] || continue
           [[ "$ref" != "$BUILDER_IMAGE" ]] || continue
-          [[ -z "$loaded_ref" || "$ref" != "$loaded_ref" ]] || continue
           [[ "$ref" != "wrix-builder:latest" ]] || continue
 
           if ! image_json=$(container image inspect "$ref"); then
@@ -295,8 +302,12 @@ let
           fi
           container image tag "$loaded_ref" "$BUILDER_IMAGE"
           container image tag "$loaded_ref" "wrix-builder:latest" 2>/dev/null || true # best-effort: the hash ref is authoritative when the legacy alias cannot be updated.
+          if ! container image delete "$loaded_ref" >/dev/null; then
+            echo "Error: Could not delete temporary loaded builder image $loaded_ref" >&2
+            exit 1
+          fi
           rm -f "$oci_tar"
-          cleanup_stale_builder_images "$current_image" "$loaded_ref"
+          cleanup_stale_builder_images "$current_image"
         fi
       }
 

@@ -176,6 +176,7 @@ pub fn install(store: &mut impl Store, request: &InstallRequest<'_>) -> Result<(
         (Runtime::Container, SourceKind::DockerArchive) => {
             if let Some(untagged) = store.load_docker_archive(request.image_source)? {
                 store.tag(request.runtime, &untagged, request.image_ref)?;
+                store.delete_image(request.runtime, &untagged)?;
             }
         }
         (Runtime::Container, kind) => {
@@ -440,14 +441,7 @@ fn listed_image_from_line(
     }
     let tag = fields.next().unwrap_or("<none>");
     let listed_id = fields.next().unwrap_or("");
-    let ref_name = if repo != "<none>" && tag != "<none>" {
-        format!("{repo}:{tag}")
-    } else {
-        String::new()
-    };
-    let target = normalized_value(&ref_name)
-        .or_else(|| normalized_value(listed_id))
-        .unwrap_or_default();
+    let (ref_name, target) = listed_image_identity(runtime, repo, tag, listed_id);
     if target.is_empty() {
         return Ok(None);
     }
@@ -470,6 +464,29 @@ fn listed_image_from_line(
         managed,
         legacy,
     }))
+}
+
+fn listed_image_identity(
+    runtime: Runtime,
+    repo: &str,
+    tag: &str,
+    listed_id: &str,
+) -> (String, String) {
+    let untagged_container_ref =
+        runtime == Runtime::Container && tag == "<none>" && repo.starts_with("untagged@sha256:");
+    let ref_name = if repo != "<none>" && tag != "<none>" {
+        format!("{repo}:{tag}")
+    } else {
+        String::new()
+    };
+    let target = if untagged_container_ref {
+        repo.to_owned()
+    } else {
+        normalized_value(&ref_name)
+            .or_else(|| normalized_value(listed_id))
+            .unwrap_or_default()
+    };
+    (ref_name, target)
 }
 
 fn add_normalized(set: &mut BTreeSet<String>, value: &str) {
@@ -588,17 +605,23 @@ impl Store for CommandStore {
     }
 
     fn image_rows(&mut self, runtime: Runtime) -> Result<Vec<String>, Error> {
-        let output = match runtime {
-            Runtime::Podman => run_required_output(
-                "podman",
-                &["images", "--format", "{{.Repository}} {{.Tag}} {{.ID}}"],
-            )?,
-            Runtime::Container => run_required_output("container", &["image", "list"])?,
-        };
-        Ok(String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .map(ToOwned::to_owned)
-            .collect())
+        match runtime {
+            Runtime::Podman => {
+                let output = run_required_output(
+                    "podman",
+                    &["images", "--format", "{{.Repository}} {{.Tag}} {{.ID}}"],
+                )?;
+                Ok(String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .map(ToOwned::to_owned)
+                    .collect())
+            }
+            Runtime::Container => {
+                let output =
+                    run_required_output("container", &["image", "list", "--format", "json"])?;
+                container_image_rows(&output.stdout)
+            }
+        }
     }
 
     fn image_id(&mut self, runtime: Runtime, target: &str) -> Result<Option<String>, Error> {
@@ -614,8 +637,10 @@ impl Store for CommandStore {
     }
 
     fn image_in_use(&mut self, runtime: Runtime, target: &str) -> Result<bool, Error> {
-        if runtime != Runtime::Podman {
-            return Ok(false);
+        if runtime == Runtime::Container {
+            let id = inspect_value(runtime, target, InspectField::Id)?.unwrap_or_default();
+            let output = run_required_output("container", &["list", "--all", "--format", "json"])?;
+            return container_image_in_use(&output.stdout, target, &id);
         }
         let filter = format!("ancestor={target}");
         let output = run_output(
@@ -693,14 +718,70 @@ fn inspect_container_value(stdout: &[u8], field: InspectField) -> Result<Option<
         InspectField::Digest => "/0/digest",
         InspectField::Managed => "/0/labels/wrix.managed",
     };
-    Ok(value
-        .pointer(pointer)
-        .or_else(|| match field {
-            InspectField::Managed => value.pointer("/0/Labels/wrix.managed"),
-            _ => None,
+    let value = value.pointer(pointer).or_else(|| match field {
+        InspectField::Managed => value
+            .pointer("/0/Labels/wrix.managed")
+            .or_else(|| container_variant_label(&value, "wrix.managed")),
+        _ => None,
+    });
+    Ok(value.and_then(Value::as_str).and_then(normalized_value))
+}
+
+fn container_variant_label<'a>(image: &'a Value, label: &str) -> Option<&'a Value> {
+    image
+        .pointer("/0/variants")?
+        .as_array()?
+        .iter()
+        .find_map(|variant| {
+            variant
+                .pointer("/config/config/Labels")?
+                .as_object()?
+                .get(label)
         })
-        .and_then(Value::as_str)
-        .and_then(normalized_value))
+}
+
+fn container_image_rows(stdout: &[u8]) -> Result<Vec<String>, Error> {
+    let value = serde_json::from_slice::<Value>(stdout)
+        .map_err(|source| Error::DescriptorJson { source })?;
+    Ok(value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(container_image_row)
+        .collect())
+}
+
+fn container_image_row(image: &Value) -> Option<String> {
+    let name = image.pointer("/configuration/name")?.as_str()?;
+    let name = name.strip_prefix("docker.io/library/").unwrap_or(name);
+    let id = image.pointer("/id")?.as_str()?;
+    if name.starts_with("untagged@sha256:") {
+        return Some(format!("{name} <none> {id}"));
+    }
+    let (repository, tag) = name.rsplit_once(':').unwrap_or((name, "latest"));
+    Some(format!("{repository} {tag} {id}"))
+}
+
+fn container_image_in_use(stdout: &[u8], target: &str, id: &str) -> Result<bool, Error> {
+    let value = serde_json::from_slice::<Value>(stdout)
+        .map_err(|source| Error::DescriptorJson { source })?;
+    let target = target.strip_prefix("docker.io/library/").unwrap_or(target);
+    let id = id.trim_start_matches("sha256:");
+    Ok(value.as_array().into_iter().flatten().any(|container| {
+        let reference = container
+            .pointer("/configuration/image/reference")
+            .and_then(Value::as_str)
+            .map(|reference| {
+                reference
+                    .strip_prefix("docker.io/library/")
+                    .unwrap_or(reference)
+            });
+        let descriptor = container
+            .pointer("/configuration/image/descriptor/digest")
+            .and_then(Value::as_str)
+            .map(|digest| digest.trim_start_matches("sha256:"));
+        reference == Some(target) || (!id.is_empty() && descriptor == Some(id))
+    }))
 }
 
 fn darwin_digest_present(digest: &str) -> Result<bool, Error> {
@@ -849,7 +930,12 @@ fn home_dir() -> PathBuf {
 
 #[cfg(test)]
 mod test {
-    use super::loaded_container_ref;
+    use serde_json::json;
+
+    use super::{
+        InspectField, Runtime, container_image_in_use, container_image_rows,
+        inspect_container_value, listed_image_identity, loaded_container_ref,
+    };
 
     #[test]
     fn apple_load_output_parser_extracts_untagged_ref() {
@@ -858,6 +944,95 @@ mod test {
         assert_eq!(
             loaded_container_ref(output, b""),
             Some(String::from("untagged@sha256:abcdef0123456789"))
+        );
+    }
+
+    #[test]
+    fn apple_image_list_parser_preserves_full_untagged_reference() {
+        let output = serde_json::to_vec(&json!([
+            {
+                "configuration": {
+                    "name": "docker.io/library/wrix-rust:abc123"
+                },
+                "id": "named-index-digest"
+            },
+            {
+                "configuration": {
+                    "name": "untagged@sha256:full-manifest-digest"
+                },
+                "id": "untagged-index-digest"
+            }
+        ]))
+        .expect("serialize image list fixture");
+
+        assert_eq!(
+            container_image_rows(&output).expect("parse image list"),
+            vec![
+                String::from("wrix-rust abc123 named-index-digest"),
+                String::from("untagged@sha256:full-manifest-digest <none> untagged-index-digest"),
+            ]
+        );
+    }
+
+    #[test]
+    fn apple_image_inspect_finds_managed_label_in_variant() {
+        let output = serde_json::to_vec(&json!([{
+            "variants": [{
+                "config": {
+                    "config": {
+                        "Labels": {
+                            "wrix.managed": "true"
+                        }
+                    }
+                }
+            }]
+        }]))
+        .expect("serialize image inspect fixture");
+
+        assert_eq!(
+            inspect_container_value(&output, InspectField::Managed).expect("parse image inspect"),
+            Some(String::from("true"))
+        );
+    }
+
+    #[test]
+    fn apple_untagged_row_uses_full_reference_as_cleanup_target() {
+        let (ref_name, target) = listed_image_identity(
+            Runtime::Container,
+            "untagged@sha256:full-manifest-digest",
+            "<none>",
+            "untagged-index-digest",
+        );
+
+        assert!(ref_name.is_empty());
+        assert_eq!(target, "untagged@sha256:full-manifest-digest");
+    }
+
+    #[test]
+    fn apple_container_list_preserves_images_used_by_existing_containers() {
+        let output = serde_json::to_vec(&json!([{
+            "configuration": {
+                "image": {
+                    "descriptor": {
+                        "digest": "sha256:index-digest"
+                    },
+                    "reference": "docker.io/library/wrix-service:abc123"
+                }
+            }
+        }]))
+        .expect("serialize container list fixture");
+
+        assert!(
+            container_image_in_use(&output, "untagged@sha256:manifest-digest", "index-digest")
+                .expect("parse container list")
+        );
+        assert!(
+            container_image_in_use(&output, "wrix-service:abc123", "")
+                .expect("parse container list")
+        );
+        assert!(
+            !container_image_in_use(&output, "wrix-service:stale", "stale-index")
+                .expect("parse container list")
         );
     }
 }

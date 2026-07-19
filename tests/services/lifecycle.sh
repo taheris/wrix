@@ -231,8 +231,10 @@ case "${1:-}" in
         ;;
       load)
         source="$(input_arg "$@")"
-        write_image "wrix-service:latest" "loaded from $source"
+        loaded_ref="untagged@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        write_image "$loaded_ref" "loaded from $source"
         log_call "$*"
+        printf 'Loaded: %s\n' "$loaded_ref"
         ;;
       tag)
         source="${3:-}"
@@ -243,6 +245,11 @@ case "${1:-}" in
           exit 0
         fi
         exit 1
+        ;;
+      delete)
+        target="${3:-}"
+        rm -f "$(image_file "$target")"
+        log_call "$*"
         ;;
       list)
         printf 'NAME TAG DIGEST\n'
@@ -1062,7 +1069,11 @@ test_service_start_loads_image_source() {
   assert_file_contains \
     "service image docker archive tag" \
     "$WRIX_FAKE_RUNTIME_STATE/calls" \
-    "image tag wrix-service:latest $WRIX_SERVICE_IMAGE"
+    "image tag untagged@sha256:0000000000000000000000000000000000000000000000000000000000000000 $WRIX_SERVICE_IMAGE"
+  assert_file_contains \
+    "service image temporary load ref cleanup" \
+    "$WRIX_FAKE_RUNTIME_STATE/calls" \
+    "image delete untagged@sha256:0000000000000000000000000000000000000000000000000000000000000000"
   assert_file_contains \
     "service run after archive load" \
     "$WRIX_FAKE_RUNTIME_STATE/run-image-source-darwin-repo-service" \

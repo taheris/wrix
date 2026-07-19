@@ -101,23 +101,31 @@ image_remove() {
 
 image_list() {
   local digest
+  local first=true
+  local kind
+  local managed
   local path
   local ref
 
-  printf 'NAME TAG DIGEST\n'
+  printf '['
   for path in "$state_dir/images"/*; do
     [[ -f "$path" ]] || continue
     ref="$(sed -n '1p' "$path")"
     digest="$(sed -n '2p' "$path")"
-    case "$ref" in
-      untagged@sha256:*)
-        printf '%s\n' "$ref"
-        ;;
-      *)
-        printf '%s %s %s\n' "${ref%:*}" "${ref##*:}" "$digest"
-        ;;
-    esac
+    managed="$(sed -n '3p' "$path")"
+    kind="$(sed -n '4p' "$path")"
+    if [[ "$first" == true ]]; then
+      first=false
+    else
+      printf ','
+    fi
+    printf '{"configuration":{"name":"%s"},"id":"%s","variants":[{"config":{"config":{"Labels":{"wrix.managed":"%s","wrix.image.kind":"%s"}}}}]}' \
+      "$ref" \
+      "$digest" \
+      "$managed" \
+      "$kind"
   done
+  printf ']\n'
 }
 
 image_inspect() {
@@ -129,7 +137,7 @@ image_inspect() {
   digest="$(image_read_field "$ref" 2)" || return 1
   managed="$(image_read_field "$ref" 3)" || return 1
   kind="$(image_read_field "$ref" 4)" || return 1
-  printf '[{"digest":"%s","labels":{"wrix.managed":"%s","wrix.image.kind":"%s"}}]\n' \
+  printf '[{"digest":"%s","variants":[{"config":{"config":{"Labels":{"wrix.managed":"%s","wrix.image.kind":"%s"}}}}]}]\n' \
     "$digest" \
     "$managed" \
     "$kind"
@@ -252,6 +260,10 @@ case "${1:-}" in
         exit 0
         ;;
       list)
+        if [[ "${3:-}" != "--format" || "${4:-}" != "json" ]]; then
+          printf 'fake container: image list requires --format json\n' >&2
+          exit 64
+        fi
         image_list
         exit 0
         ;;
@@ -534,8 +546,10 @@ test_generates_per_user_ed25519_material() {
 
 test_loads_image_through_source_kind_contract() {
   local expected_source_prefix="docker-archive:"
+  local loaded_ref
   local test_root="$TEST_TMP/source-kind"
 
+  loaded_ref="untagged@sha256:$(printf '%064d' 1)"
   require_command ssh-keygen
   require_command base64
   require_command tar
@@ -554,12 +568,18 @@ test_loads_image_through_source_kind_contract() {
     "$test_root/container.log" \
     "container|image tag untagged@sha256:" \
     "wrix-builder start did not tag the loaded builder image ref"
+  assert_file_contains \
+    "$test_root/container.log" \
+    "container|image delete $loaded_ref" \
+    "wrix-builder start did not delete the temporary loaded builder image ref"
 }
 
 test_builder_cleanup_is_wrix_scoped() {
+  local stale_managed_digest
   local stale_unlabelled_digest
   local test_root="$TEST_TMP/scoped-cleanup"
 
+  stale_managed_digest="sha256:$(printf '%064d' 7)"
   stale_unlabelled_digest="sha256:$(printf '%064d' 6)"
   require_command ssh-keygen
   require_command base64
@@ -570,6 +590,7 @@ test_builder_cleanup_is_wrix_scoped() {
   fake_write_image "$test_root/state" "wrix-profile:old" "sha256:$(printf '%064d' 4)" "true" "profile"
   fake_write_image "$test_root/state" "user-image:latest" "sha256:$(printf '%064d' 5)" "" ""
   fake_write_image "$test_root/state" "untagged@${stale_unlabelled_digest}" "$stale_unlabelled_digest" "" ""
+  fake_write_image "$test_root/state" "untagged@${stale_managed_digest}" "$stale_managed_digest" "true" "builder"
 
   run_builder "$test_root" start
 
@@ -581,6 +602,10 @@ test_builder_cleanup_is_wrix_scoped() {
     "$test_root/container.log" \
     "container|image delete wrix-builder:old" \
     "builder cleanup did not delete the legacy wrix-builder ref"
+  assert_file_contains \
+    "$test_root/container.log" \
+    "container|image delete untagged@${stale_managed_digest}" \
+    "builder cleanup did not delete a stale managed dangling builder image"
   assert_file_lacks \
     "$test_root/container.log" \
     "container|image prune" \

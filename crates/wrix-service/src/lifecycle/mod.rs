@@ -1238,17 +1238,37 @@ impl Runtime {
                 ),
             });
         }
-        if let Some(loaded_ref) = loaded_container_ref(&output.stdout, &output.stderr)
-            && !self.tag_image(&loaded_ref, &self.image)?
-        {
-            return Err(Error::Operation {
-                message: format!(
-                    "failed to tag loaded service image {loaded_ref} as {}",
-                    self.image
-                ),
-            });
+        if let Some(loaded_ref) = loaded_container_ref(&output.stdout, &output.stderr) {
+            if !self.tag_image(&loaded_ref, &self.image)? {
+                return Err(Error::Operation {
+                    message: format!(
+                        "failed to tag loaded service image {loaded_ref} as {}",
+                        self.image
+                    ),
+                });
+            }
+            self.delete_container_image(&loaded_ref)?;
         }
         Ok(())
+    }
+
+    fn delete_container_image(&self, target: &str) -> Result<()> {
+        let output = Command::new(&self.binary)
+            .arg("image")
+            .arg("delete")
+            .arg(target)
+            .stdin(Stdio::null())
+            .output()?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(Error::Operation {
+                message: format!(
+                    "failed to delete temporary loaded service image {target}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ),
+            })
+        }
     }
 
     fn copy_podman_image(&self, source: &ImageSource) -> Result<()> {
