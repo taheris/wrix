@@ -1,6 +1,7 @@
 use std::{
     env, fs, io,
     io::Write,
+    net::Ipv4Addr,
     path::{Path, PathBuf},
     process::{Command as ProcessCommand, ExitCode, Output, Stdio},
 };
@@ -82,6 +83,14 @@ pub enum LaunchError {
     Io { source: io::Error },
     /// invalid service endpoint JSON: {source}
     ServiceJson { source: serde_json::Error },
+    /// invalid Apple container network JSON: {source}
+    DarwinNetworkJson { source: serde_json::Error },
+    /// Apple container network has an unsupported IPv4 subnet: {subnet}
+    DarwinNetworkSubnet { subnet: String },
+    /// could not find the Apple vmnet interface for gateway {gateway}
+    DarwinVmnetInterfaceMissing { gateway: String },
+    /// failed to add Apple vmnet route {route} through {interface}
+    DarwinVmnetRouteFailed { route: String, interface: String },
     /// {source}
     Image { source: image::Error },
 }
@@ -500,6 +509,7 @@ impl<'a> Plan<'a> {
     }
 
     fn launch_darwin(&self) -> Result<ExitCode, LaunchError> {
+        let vpn_conflict = fix_darwin_vmnet_route()?;
         self.install_image(Runtime::Container)?;
         self.remember_and_prune_images(Runtime::Container)?;
         let staging = Staging::create()?;
@@ -561,6 +571,9 @@ impl<'a> Plan<'a> {
         }
         if let Some(value) = darwin_mounts.file_env() {
             command.arg("-e").arg(format!("WRIX_FILE_MOUNTS={value}"));
+        }
+        if vpn_conflict {
+            command.arg("-e").arg("WRIX_WAIT_FOR_ROUTE=1");
         }
         command
             .arg("--")
@@ -1493,6 +1506,165 @@ fn run_output(program: &str, args: &[&str]) -> Result<Output, LaunchError> {
         .map_err(LaunchError::from)
 }
 
+#[derive(Debug, Eq, PartialEq)]
+struct DarwinNetwork {
+    subnet: String,
+    gateway: String,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct DarwinSplitRoute {
+    network: String,
+    probe: String,
+}
+
+fn fix_darwin_vmnet_route() -> Result<bool, LaunchError> {
+    let default_route = run_required_output("route", &["-n", "get", "default"])?;
+    let Some(default_interface) = route_interface(&default_route.stdout) else {
+        return Ok(false);
+    };
+    if !default_interface.starts_with("utun") {
+        return Ok(false);
+    }
+
+    let network_output = run_required_output("container", &["network", "inspect", "default"])?;
+    let Some(network) = parse_darwin_network(&network_output.stdout)? else {
+        return Ok(false);
+    };
+    let routes = darwin_split_routes(&network.subnet)?;
+    let ifconfig = run_required_output("ifconfig", &[])?;
+    let Some(vmnet_interface) = vmnet_interface(&ifconfig.stdout, &network.gateway) else {
+        return Err(LaunchError::DarwinVmnetInterfaceMissing {
+            gateway: network.gateway,
+        });
+    };
+
+    let mut announced = false;
+    for route in routes {
+        let current = run_output("route", &["-n", "get", &route.probe])?;
+        if current.status.success()
+            && route_interface(&current.stdout).as_deref() == Some(vmnet_interface.as_str())
+        {
+            continue;
+        }
+        if !announced {
+            let mut stderr = io::stderr().lock();
+            writeln!(
+                stderr,
+                "Adding vmnet route (VPN detected on {default_interface})"
+            )?;
+            announced = true;
+        }
+        let status = ProcessCommand::new("sudo")
+            .args([
+                "route",
+                "add",
+                "-net",
+                &route.network,
+                "-interface",
+                &vmnet_interface,
+            ])
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status()?;
+        if !status.success() {
+            let current = run_output("route", &["-n", "get", &route.probe])?;
+            if !current.status.success()
+                || route_interface(&current.stdout).as_deref() != Some(vmnet_interface.as_str())
+            {
+                return Err(LaunchError::DarwinVmnetRouteFailed {
+                    route: route.network,
+                    interface: vmnet_interface,
+                });
+            }
+        }
+    }
+
+    Ok(true)
+}
+
+fn parse_darwin_network(stdout: &[u8]) -> Result<Option<DarwinNetwork>, LaunchError> {
+    let value = serde_json::from_slice::<Value>(stdout)
+        .map_err(|source| LaunchError::DarwinNetworkJson { source })?;
+    let network = value
+        .as_array()
+        .and_then(|networks| networks.first())
+        .unwrap_or(&value);
+    let Some(subnet) = network
+        .pointer("/status/ipv4Subnet")
+        .and_then(Value::as_str)
+    else {
+        return Ok(None);
+    };
+    let Some(gateway) = network
+        .pointer("/status/ipv4Gateway")
+        .and_then(Value::as_str)
+    else {
+        return Ok(None);
+    };
+    Ok(Some(DarwinNetwork {
+        subnet: subnet.to_owned(),
+        gateway: gateway.to_owned(),
+    }))
+}
+
+fn darwin_split_routes(subnet: &str) -> Result<[DarwinSplitRoute; 2], LaunchError> {
+    let Some((network, prefix)) = subnet.split_once('/') else {
+        return Err(LaunchError::DarwinNetworkSubnet {
+            subnet: subnet.to_owned(),
+        });
+    };
+    let Ok(address) = network.parse::<Ipv4Addr>() else {
+        return Err(LaunchError::DarwinNetworkSubnet {
+            subnet: subnet.to_owned(),
+        });
+    };
+    if prefix != "24" || address.octets()[3] != 0 {
+        return Err(LaunchError::DarwinNetworkSubnet {
+            subnet: subnet.to_owned(),
+        });
+    }
+    let [first, second, third, _last] = address.octets();
+    Ok([
+        DarwinSplitRoute {
+            network: format!("{first}.{second}.{third}.0/25"),
+            probe: format!("{first}.{second}.{third}.2"),
+        },
+        DarwinSplitRoute {
+            network: format!("{first}.{second}.{third}.128/25"),
+            probe: format!("{first}.{second}.{third}.130"),
+        },
+    ])
+}
+
+fn route_interface(stdout: &[u8]) -> Option<String> {
+    String::from_utf8_lossy(stdout).lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("interface:")
+            .map(str::trim)
+            .filter(|interface| !interface.is_empty())
+            .map(str::to_owned)
+    })
+}
+
+fn vmnet_interface(stdout: &[u8], gateway: &str) -> Option<String> {
+    let mut interface = None;
+    for line in String::from_utf8_lossy(stdout).lines() {
+        if !line.starts_with(char::is_whitespace)
+            && let Some((name, _rest)) = line.split_once(':')
+        {
+            interface = Some(name.to_owned());
+            continue;
+        }
+        let mut fields = line.split_whitespace();
+        if fields.next() == Some("inet") && fields.next() == Some(gateway) {
+            return interface;
+        }
+    }
+    None
+}
+
 fn status_to_exit(status: std::process::ExitStatus) -> ExitCode {
     status
         .code()
@@ -1736,8 +1908,9 @@ mod test {
     use std::path::{Path, PathBuf};
 
     use super::{
-        DarwinMounts, HostPodmanSocket, LaunchError, NetworkMode, RenderedMount, Staging,
-        deploy_key_name, linux_podman_network,
+        DarwinMounts, DarwinNetwork, DarwinSplitRoute, HostPodmanSocket, LaunchError, NetworkMode,
+        RenderedMount, Staging, darwin_split_routes, deploy_key_name, linux_podman_network,
+        parse_darwin_network, route_interface, vmnet_interface,
     };
     use crate::command::config::{MountMode, Platform, ProfileMount, SpawnMount};
 
@@ -1776,6 +1949,49 @@ mod test {
             ))
         );
         assert_eq!(super::notification_env(Platform::Linux), None);
+    }
+
+    #[test]
+    fn darwin_network_parses_apple_inspect_array() {
+        let inspect = br#"[
+          {
+            "status": {
+              "ipv4Gateway": "192.168.64.1",
+              "ipv4Subnet": "192.168.64.0/24"
+            }
+          }
+        ]"#;
+        assert_eq!(
+            parse_darwin_network(inspect).unwrap(),
+            Some(DarwinNetwork {
+                subnet: String::from("192.168.64.0/24"),
+                gateway: String::from("192.168.64.1"),
+            })
+        );
+    }
+
+    #[test]
+    fn darwin_vmnet_route_parsers_find_interfaces_and_split_subnet() {
+        let default_route = b"   route to: default\n  interface: utun11\n";
+        let ifconfig = b"en0: flags=8863<UP>\n\tinet 192.168.1.2 netmask 0xffffff00\nbridge100: flags=8a63<UP>\n\tinet 192.168.64.1 netmask 0xffffff00\n";
+        assert_eq!(route_interface(default_route).as_deref(), Some("utun11"));
+        assert_eq!(
+            vmnet_interface(ifconfig, "192.168.64.1").as_deref(),
+            Some("bridge100")
+        );
+        assert_eq!(
+            darwin_split_routes("192.168.64.0/24").unwrap(),
+            [
+                DarwinSplitRoute {
+                    network: String::from("192.168.64.0/25"),
+                    probe: String::from("192.168.64.2"),
+                },
+                DarwinSplitRoute {
+                    network: String::from("192.168.64.128/25"),
+                    probe: String::from("192.168.64.130"),
+                },
+            ]
+        );
     }
 
     #[cfg(unix)]

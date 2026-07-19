@@ -230,6 +230,24 @@ case "${1:-}" in
         ;;
     esac
     ;;
+  network)
+    if [[ "${2:-}" == "inspect" && "${3:-}" == "default" ]]; then
+      cat <<'JSON'
+[
+  {
+    "configuration" : {
+      "name" : "default"
+    },
+    "status" : {
+      "ipv4Gateway" : "192.168.64.1",
+      "ipv4Subnet" : "192.168.64.0/24"
+    }
+  }
+]
+JSON
+      exit 0
+    fi
+    ;;
   image)
     case "${2:-}" in
       inspect)
@@ -354,6 +372,52 @@ set -euo pipefail
 exit 0
 SLEEP
   chmod +x "$bin_dir/sleep"
+
+  printf '#!%s\n' "$bash_bin" >"$bin_dir/route"
+  cat >>"$bin_dir/route" <<'ROUTE'
+set -euo pipefail
+
+log_file="${WRIX_BUILDER_FAKE_LOG:?}"
+if [[ "$*" == "-n get default" ]]; then
+  cat <<'OUTPUT'
+   route to: default
+destination: default
+  interface: utun11
+OUTPUT
+  exit 0
+fi
+printf 'route|%s\n' "$*" >>"$log_file"
+ROUTE
+  chmod +x "$bin_dir/route"
+
+  printf '#!%s\n' "$bash_bin" >"$bin_dir/netstat"
+  cat >>"$bin_dir/netstat" <<'NETSTAT'
+set -euo pipefail
+
+printf 'default link#29 UCSg utun11\n'
+NETSTAT
+  chmod +x "$bin_dir/netstat"
+
+  printf '#!%s\n' "$bash_bin" >"$bin_dir/ifconfig"
+  cat >>"$bin_dir/ifconfig" <<'IFCONFIG'
+set -euo pipefail
+
+cat <<'OUTPUT'
+bridge100: flags=8a63<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST>
+        inet 192.168.64.1 netmask 0xffffff00 broadcast 192.168.64.255
+OUTPUT
+IFCONFIG
+  chmod +x "$bin_dir/ifconfig"
+
+  printf '#!%s\n' "$bash_bin" >"$bin_dir/sudo"
+  cat >>"$bin_dir/sudo" <<'SUDO'
+set -euo pipefail
+
+log_file="${WRIX_BUILDER_FAKE_LOG:?}"
+printf 'sudo|%s\n' "$*" >>"$log_file"
+exec "$@"
+SUDO
+  chmod +x "$bin_dir/sudo"
 
   printf '#!%s\n' "$bash_bin" >"$bin_dir/skopeo"
   cat >>"$bin_dir/skopeo" <<'SKOPEO'
@@ -624,6 +688,27 @@ test_builder_cleanup_is_wrix_scoped() {
     "builder cleanup deleted an unlabelled dangling image"
 }
 
+test_setup_routes_parses_spaced_apple_network_json() {
+  local test_root="$TEST_TMP/setup-routes"
+
+  prepare_builder_fixture "$test_root"
+
+  run_builder "$test_root" setup-routes
+
+  assert_file_contains \
+    "$test_root/container.log" \
+    "container|network inspect default" \
+    "builder route setup did not inspect the Apple default network"
+  assert_file_contains \
+    "$test_root/container.log" \
+    "sudo|route add -net 192.168.64.0/25 -interface bridge100" \
+    "builder route setup did not add the lower vmnet split route"
+  assert_file_contains \
+    "$test_root/container.log" \
+    "sudo|route add -net 192.168.64.128/25 -interface bridge100" \
+    "builder route setup did not add the upper vmnet split route"
+}
+
 test_preserves_existing_private_keys() {
   local test_root="$TEST_TMP/preserve"
   local keys_dir="$test_root/home/.local/share/wrix/builder-keys"
@@ -669,6 +754,7 @@ main() {
   run_one test_generates_per_user_ed25519_material
   run_one test_loads_image_through_source_kind_contract
   run_one test_builder_cleanup_is_wrix_scoped
+  run_one test_setup_routes_parses_spaced_apple_network_json
   run_one test_preserves_existing_private_keys
 }
 

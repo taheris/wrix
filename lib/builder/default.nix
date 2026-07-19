@@ -17,7 +17,7 @@
 }:
 
 let
-  shellLib = import ../util/shell.nix { };
+  shellLib = import ../util/shell.nix { inherit pkgs; };
 
   builderImage = import ../sandbox/builder/image.nix {
     pkgs = linuxPkgs;

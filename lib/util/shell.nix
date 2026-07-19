@@ -192,8 +192,10 @@ in
     _fix_vmnet_route() {
       local _subnet _net _default_if _prefix _vmnet_if
       _subnet=$(container network inspect default 2>/dev/null \
-        | grep -oE '"ipv4Subnet":"[^"]+"' | head -1 \
-        | sed 's/.*"ipv4Subnet":"//;s/"$//;s/\\//g') || return 0
+        | ${jqBin} -r '
+            (if type == "array" then .[0] else . end)
+            | .status.ipv4Subnet // empty
+          ') || return 0
       [[ -z "$_subnet" ]] && return 0
       _net="''${_subnet%%/*}"
       _default_if=$(route -n get default 2>/dev/null \

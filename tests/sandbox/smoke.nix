@@ -331,6 +331,7 @@ in
         for test_name in \
           test_generates_per_user_ed25519_material \
           test_builder_cleanup_is_wrix_scoped \
+          test_setup_routes_parses_spaced_apple_network_json \
           test_preserves_existing_private_keys; do
           WRIX_BUILDER_BIN="${wrixBuilder}/bin/wrix-builder" \
             REPO_ROOT="${../..}" \
