@@ -132,6 +132,7 @@ source_hook_env() {
     unset NIX_CONFIG
     # shellcheck source=/dev/null
     source "$hook_file" >/dev/null
+    printf 'RUSTC=%s\n' "${RUSTC-}"
     printf 'RUSTC_WRAPPER=%s\n' "${RUSTC_WRAPPER-}"
     printf 'CARGO_BUILD_RUSTC_WRAPPER=%s\n' "${CARGO_BUILD_RUSTC_WRAPPER-}"
     printf 'SCCACHE_DIR=%s\n' "${SCCACHE_DIR-}"
@@ -184,12 +185,13 @@ test_profile_required() {
 # rust profile env plus shellHook exports the expected values when sourced.
 # ============================================================================
 test_profile_shellhook_spliced() {
-  local devshell_env hook env_output rustc_wrapper cargo_wrapper sccache_dir sccache_size cargo_incremental
+  local devshell_env hook env_output rustc expected_rustc rustc_wrapper cargo_wrapper sccache_dir sccache_size cargo_incremental
   if ! devshell_env=$(eval_expr_json '
     let shell = lib.mkDevShell { profile = lib.profiles.rust; };
     in {
       CARGO_BUILD_RUSTC_WRAPPER = shell.CARGO_BUILD_RUSTC_WRAPPER or null;
       CARGO_INCREMENTAL = shell.CARGO_INCREMENTAL or null;
+      RUSTC = shell.RUSTC or null;
       RUSTC_WRAPPER = shell.RUSTC_WRAPPER or null;
       SCCACHE_CACHE_SIZE = shell.SCCACHE_CACHE_SIZE or null;
       SCCACHE_DIR = shell.SCCACHE_DIR or null;
@@ -207,12 +209,18 @@ test_profile_shellhook_spliced() {
     return 1
   fi
 
+  rustc=$(env_value "$env_output" RUSTC)
+  expected_rustc=$(eval_expr_raw '"${lib.profiles.rust.toolchain}/bin/rustc"')
   rustc_wrapper=$(env_value "$env_output" RUSTC_WRAPPER)
   cargo_wrapper=$(env_value "$env_output" CARGO_BUILD_RUSTC_WRAPPER)
   sccache_dir=$(env_value "$env_output" SCCACHE_DIR)
   sccache_size=$(env_value "$env_output" SCCACHE_CACHE_SIZE)
   cargo_incremental=$(env_value "$env_output" CARGO_INCREMENTAL)
 
+  [[ "$rustc" == "$expected_rustc" ]] || {
+    echo "FAIL: RUSTC should select the profile toolchain, got '$rustc'" >&2
+    return 1
+  }
   [[ "$rustc_wrapper" == */bin/sccache ]] || {
     echo "FAIL: RUSTC_WRAPPER should export a sccache binary, got '$rustc_wrapper'" >&2
     return 1
@@ -353,12 +361,13 @@ test_host_packages_source() {
 # env = profile.env // env (right-biased; consumer wins on conflict)
 # ============================================================================
 test_env_right_merge() {
-  local devshell_env hook env_output added_value rustc_wrapper cargo_wrapper
+  local devshell_env hook env_output added_value rustc rustc_wrapper cargo_wrapper
   if ! devshell_env=$(eval_expr_json '
     let shell = lib.mkDevShell {
       profile = lib.profiles.rust;
       env = {
         MKDEVSHELL_TEST_KEY = "mkdevshell_test_value";
+        RUSTC = "/consumer/rustc";
         RUSTC_WRAPPER = "/consumer/rustc-wrapper";
         CARGO_BUILD_RUSTC_WRAPPER = "/consumer/cargo-rustc-wrapper";
       };
@@ -366,6 +375,7 @@ test_env_right_merge() {
     in {
       CARGO_BUILD_RUSTC_WRAPPER = shell.CARGO_BUILD_RUSTC_WRAPPER or null;
       MKDEVSHELL_TEST_KEY = shell.MKDEVSHELL_TEST_KEY or null;
+      RUSTC = shell.RUSTC or null;
       RUSTC_WRAPPER = shell.RUSTC_WRAPPER or null;
     }
   '); then
@@ -376,6 +386,7 @@ test_env_right_merge() {
     profile = lib.profiles.rust;
     env = {
       MKDEVSHELL_TEST_KEY = "mkdevshell_test_value";
+      RUSTC = "/consumer/rustc";
       RUSTC_WRAPPER = "/consumer/rustc-wrapper";
       CARGO_BUILD_RUSTC_WRAPPER = "/consumer/cargo-rustc-wrapper";
     };
@@ -389,11 +400,16 @@ test_env_right_merge() {
   fi
 
   added_value=$(env_value "$env_output" MKDEVSHELL_TEST_KEY)
+  rustc=$(env_value "$env_output" RUSTC)
   rustc_wrapper=$(env_value "$env_output" RUSTC_WRAPPER)
   cargo_wrapper=$(env_value "$env_output" CARGO_BUILD_RUSTC_WRAPPER)
 
   [[ "$added_value" == "mkdevshell_test_value" ]] || {
     echo "FAIL: env.MKDEVSHELL_TEST_KEY expected 'mkdevshell_test_value', got '$added_value'" >&2
+    return 1
+  }
+  [[ "$rustc" == "/consumer/rustc" ]] || {
+    echo "FAIL: consumer RUSTC was overwritten after shellHook execution: '$rustc'" >&2
     return 1
   }
   [[ "$rustc_wrapper" == "/consumer/rustc-wrapper" ]] || {

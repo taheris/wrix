@@ -124,6 +124,7 @@ Environment:
 - `LIBRARY_PATH=${pkgs.postgresql.lib}/lib` — PostgreSQL library discovery at link time
 - `OPENSSL_INCLUDE_DIR=${pkgs.openssl.dev}/include` — OpenSSL headers
 - `OPENSSL_LIB_DIR=${pkgs.openssl.out}/lib` — OpenSSL libraries
+- `RUSTC=${toolchain}/bin/rustc` — pass the selected compiler to Cargo as an absolute path so a long-lived sccache server can execute the correct toolchain across repositories
 - `RUSTC_WRAPPER=${pkgs.sccache}/bin/sccache` — route compiler invocations through sccache
 - `CARGO_BUILD_RUSTC_WRAPPER=${pkgs.sccache}/bin/sccache` — same value, picked up by cargo directly
 - `SCCACHE_DIR=/home/wrix/.cache/sccache` — stable in-container cache path; its optional host mount shares data, and `/home/wrix/.cache` remains writable via tmpfs when that mount is absent
@@ -131,7 +132,7 @@ Environment:
 - `CARGO_INCREMENTAL=0` — sccache refuses to cache any `rustc` invocation with `-C incremental=...`; disabling incremental lets every Rust compile flow through sccache instead.
 - `CARGO_TARGET_DIR` — intentionally **unset**; cargo's per-workspace default (`<workspace>/target`) applies. Pinning `CARGO_TARGET_DIR` to a shared path across workspaces defeats cargo's freshness tracking and churns builds.
 
-**Host devshell alignment.** The profile's `shellHook` prepends `${toolchain}/bin` to `PATH` and re-exports `RUSTC_WRAPPER`, `SCCACHE_DIR`, `SCCACHE_CACHE_SIZE`, and `CARGO_INCREMENTAL=0` so the host shell uses the same fenix-pinned `rustc` binary as the sandbox. Without the PATH prepend, host PATH falls through to rustup's `rustc` (or whichever appears first), and the diverging sysroot path baked into rlib metadata invalidates every sccache key across the boundary — even when both sides report the same Rust version. Consumers reach this alignment by passing the rust profile to `mkDevShell { profile = ...; }`, which splices `profile.shellHook` automatically — there is no consumer-facing splice path. `rustProfile { toolchain; sha256; }` rebuilds the snippet over the project-pinned toolchain so `packages`, `hostPackages`, `env`, `shellHook`, and `toolchain` (see below) all close over the same derivation.
+**Host devshell alignment.** The profile's `shellHook` prepends `${toolchain}/bin` to `PATH` and re-exports `RUSTC` as the toolchain's absolute compiler path alongside `RUSTC_WRAPPER`, `SCCACHE_DIR`, `SCCACHE_CACHE_SIZE`, and `CARGO_INCREMENTAL=0`. The absolute compiler path lets host dev shells with different toolchain pins share one long-lived sccache server without relying on the server's startup `PATH`. Without the PATH prepend, host PATH falls through to rustup's `rustc` (or whichever appears first), and the diverging sysroot path baked into rlib metadata invalidates every sccache key across the boundary — even when both sides report the same Rust version. Consumers reach this alignment by passing the rust profile to `mkDevShell { profile = ...; }`, which splices `profile.shellHook` automatically — there is no consumer-facing splice path. `rustProfile { toolchain; sha256; }` rebuilds the snippet over the project-pinned toolchain so `packages`, `hostPackages`, `env`, `shellHook`, and `toolchain` (see below) all close over the same derivation.
 
 **Toolchain derivation (`profile.toolchain`).** The rust profile exposes the resolved fenix `combine` derivation as `profile.toolchain` — the same store path interpolated into `shellHook`'s PATH prepend and shared by `buildPackage`'s craneLib. Sibling Nix apps that run cargo (e.g. `pkgs.writeShellApplication { runtimeInputs = [ rustProfile.toolchain ]; ... }`) must point `runtimeInputs` at this field rather than re-instantiating fenix in their own flake. Re-instantiation produces a different `/nix/store/...` path even when fenix versions match, and again when calling `fromToolchainFile` directly (bare `rust-<ver>` vs the `combine`-wrapped `rust-mixed`); sccache hashes the compiler binary, so a divergent path means every cache key misses across the boundary. Both `profiles.rust` (the unpinned default) and `rustProfile { toolchain; sha256; }` (the project-pinned constructor) set this field to the toolchain they were built from.
 
@@ -706,7 +707,7 @@ dests live under `/home/wrix/` inside the container, not under
   [check](verify:profiles.host-image-package-split)
 - Profiles are composable (can extend extended profiles)
   [check](verify:profiles.nested-derive)
-- `wrix.mkDevShell { profile = wrix.rustProfile { ... }; }` produces a devshell whose env contains `RUSTC_WRAPPER=sccache`, `SCCACHE_DIR`, `SCCACHE_CACHE_SIZE`, and `CARGO_INCREMENTAL=0` (the rust profile's `shellHook` was spliced)
+- `wrix.mkDevShell { profile = wrix.rustProfile { ... }; }` produces a devshell whose env contains an absolute `RUSTC` under `profile.toolchain`, `RUSTC_WRAPPER=sccache`, `SCCACHE_DIR`, `SCCACHE_CACHE_SIZE`, and `CARGO_INCREMENTAL=0` (the rust profile's `shellHook` was spliced)
   [check](verify:devshell.profile-shellhook-spliced)
 - `wrix.mkDevShell { profile; packages = [extra]; }` shell has both `profile.hostPackages` and `extra` available on PATH, while image-only `profile.packages` stay out of the host PATH
   [check](verify:devshell.host-packages-source)
@@ -762,7 +763,7 @@ dests live under `/home/wrix/` inside the container, not under
   [check](verify:profiles.rust-build-package-toolchain-alignment)
 - `lib/mcp/tmux/mcp-server.nix` is a thin `wrix.profiles.rust.buildPackage` consumer (no direct `pkgs.rustPlatform.buildRustPackage` or `makeRustPlatform` call); `packages.tmux-mcp` consumes `.bin`; `tests/default.nix` exposes `tmux-mcp-clippy`, `tmux-mcp-nextest` checks
   [check](verify:profiles.rust-build-package-consumers-migrated)
-- `modules/flake/devshell.nix` is a thin `sandbox.devShell { ... }` consumer (no hand-rolled `RUSTC_WRAPPER`/`SCCACHE_DIR`/`PATH` exports, no separate `profile.toolchain` entry in `packages`)
+- `modules/flake/devshell.nix` is a thin `sandbox.devShell { ... }` consumer (no hand-rolled `RUSTC`/`RUSTC_WRAPPER`/`SCCACHE_DIR`/`PATH` exports, no separate `profile.toolchain` entry in `packages`)
   [check](verify:devshell.flake-module-thin-consumer)
 - Container entrypoints (`lib/sandbox/linux/entrypoint.sh`, `lib/sandbox/darwin/entrypoint.sh`) contain no rustup bootstrap logic — toolchain is baked into the image at build time
   [check](verify:profiles.sandbox-entrypoints-no-rustup)

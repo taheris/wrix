@@ -306,6 +306,7 @@ let
         LIBRARY_PATH = "${pkgs.postgresql.lib}/lib";
         OPENSSL_INCLUDE_DIR = "${pkgs.openssl.dev}/include";
         OPENSSL_LIB_DIR = "${pkgs.openssl.out}/lib";
+        RUSTC = "${imageToolchain}/bin/rustc";
         RUSTC_WRAPPER = "${pkgs.sccache}/bin/sccache";
         RUST_SRC_PATH = "${imageToolchain}/lib/rustlib/src/rust/library";
         SCCACHE_CACHE_SIZE = "50G";
@@ -366,6 +367,7 @@ let
       shellHook = ''
         [[ "''${SCCACHE_DIR:-}" = "/home/wrix/.cache/sccache" ]] && unset SCCACHE_DIR
         export PATH="${hostToolchain}/bin:$PATH"
+        export RUSTC="${hostToolchain}/bin/rustc"
         export RUSTC_WRAPPER="${hostPkgs.sccache}/bin/sccache"
         export CARGO_BUILD_RUSTC_WRAPPER="${hostPkgs.sccache}/bin/sccache"
         export SCCACHE_DIR="''${SCCACHE_DIR:-$HOME/.cache/sccache}"
