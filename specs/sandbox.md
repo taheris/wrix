@@ -275,7 +275,7 @@ Plus consumer-defined fields the entrypoint reads from the original config mount
 - Both `lib/sandbox/linux/entrypoint.sh` and `lib/sandbox/darwin/entrypoint.sh` implement the `/workspace/bin` PATH prepend
   [check](verify:sandbox.entrypoint-workspace-bin-prepend)
 - The packaged runtime image installer preflight checks whether the selected image source's content digest matches any image already present in the platform store before invoking the install pipeline; on a digest hit, no image source is executed, no tar bytes are streamed, and no `*-load` CLI is invoked
-  [system](verify:sandbox.image-install-digest-skip)
+  [system](test-ci:test-image-install-digest-skip)
 - On Linux, the runtime image installer dispatches `source_kind = "nix-descriptor"` through an archive-less descriptor-to-OCI-layout install path (`oci:<oci_layout>:<oci_ref>` → `containers-storage:<ref>` with skopeo, or equivalent wrix); the docker/OCI archive conversion path is not used for Linux descriptor sources
   [test](../crates/wrix-sandbox/tests/image_install.rs::linux_descriptor_sources_use_archiveless_install_path)
 - A second spawn of an already-loaded image performs no writes to the platform store's layer directory and does not execute the image source

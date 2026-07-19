@@ -58,8 +58,6 @@ in
   "profiles.nested-derive" = profileComposition "test_nested_derive_profile";
   "profiles.no-dev-toolchain-lib" = nixEval "profiles.no-dev-toolchain-lib";
   "profiles.no-rust-with-toolchain" = nixEval "profiles.no-rust-with-toolchain";
-  "profiles.optional-mount" =
-    repoScript "tests/sandbox/profile-config-wrapper.sh" "test_optional_mount_survives_profile_config_and_skips_absent_source";
   "profiles.rust-build-package-consumers-migrated" = buildPackage "test_consumers_migrated";
   "profiles.rust-build-package-exposed" = buildPackage "test_build_package_exposed";
   "profiles.rust-build-package-extra-srcs-scoped-to-checks" =

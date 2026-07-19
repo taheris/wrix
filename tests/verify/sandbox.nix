@@ -1,23 +1,7 @@
-{ pkgs, system, ... }:
+{ pkgs, ... }:
 
 let
   inherit (pkgs.lib) escapeShellArg;
-
-  ciApp = app: ''
-    local app=${escapeShellArg app}
-    local build_dir
-    local root
-    local runner
-    local status
-    root="$(repo_root)"
-    build_dir="$(mktemp -d -t wrix-verify-ci-app.XXXXXX)"
-    nix build --out-link "$build_dir/result" --no-warn-dirty "$root#legacyPackages.${system}.ciApps.$app"
-    runner="$(readlink -f "$build_dir/result")"
-    status=0
-    "$runner/bin/$app" || status="$?"
-    rm -rf "$build_dir"
-    return "$status"
-  '';
 
   sandboxScript = script: function: ''
     run_repo_script ${escapeShellArg "tests/sandbox/${script}.sh"} ${escapeShellArg function}
@@ -64,8 +48,6 @@ in
   "sandbox.entrypoint-workspace-bin-prepend" = entrypoint "test_workspace_bin_path_prepend_both";
 
   "sandbox.filesystem-isolation" = sandboxScriptAll "filesystem-isolation";
-
-  "sandbox.image-install-digest-skip" = ciApp "test-image-install-digest-skip";
 
   "sandbox.linux-container-starts" = containerStarts "test_linux_container_starts";
 

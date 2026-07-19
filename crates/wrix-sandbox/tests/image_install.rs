@@ -254,10 +254,10 @@ impl Store for FakeStore {
         self.calls.push(Call::LoadArchive {
             archive: archive.to_owned(),
         });
-        if let Some(digest) = &self.docker_archive_digest {
-            if let Ok(digest) = Digest::parse(digest) {
-                self.present_digests.insert(digest);
-            }
+        if let Some(digest) = &self.docker_archive_digest
+            && let Ok(digest) = Digest::parse(digest)
+        {
+            self.present_digests.insert(digest);
         }
         Ok(self.loaded_archive_ref.clone())
     }

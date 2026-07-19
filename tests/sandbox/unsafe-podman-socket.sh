@@ -16,15 +16,90 @@ cleanup() {
 }
 trap cleanup EXIT
 
+command -v jq >/dev/null 2>&1 || {
+  echo "skip: jq not on PATH" >&2
+  exit 77
+}
+command -v python3 >/dev/null 2>&1 || {
+  echo "skip: python3 not on PATH" >&2
+  exit 77
+}
+
 PROFILE_CONFIG="$TEST_TMP/profile-config.json"
 WORKSPACE="$TEST_TMP/workspace"
 HOME_DIR="$TEST_TMP/home"
 RUNTIME_DIR="$TEST_TMP/runtime"
-mkdir -p "$WORKSPACE" "$HOME_DIR" "$RUNTIME_DIR"
+STATE_DIR="$TEST_TMP/state"
+BIN_DIR="$TEST_TMP/bin"
+CACHE_DIR="$TEST_TMP/cache"
+LAYOUT="$TEST_TMP/oci-layout"
+DESCRIPTOR="$TEST_TMP/image-descriptor.json"
+DIGEST="sha256:0000000000000000000000000000000000000000000000000000000000000000"
+PODMAN_LOG="$STATE_DIR/podman.log"
+mkdir -p "$WORKSPACE" "$HOME_DIR" "$RUNTIME_DIR" "$STATE_DIR" "$BIN_DIR" "$CACHE_DIR" "$LAYOUT"
+: >"$PODMAN_LOG"
 
-cat > "$PROFILE_CONFIG" <<'JSON'
-{"schema":1,"system":"test","profile":{"name":"base","env":{},"mounts":[],"writable_dirs":[],"network_allowlist":[]},"image":{"ref":"wrix-base:test","source":"/nix/store/fake-image","source_kind":"nix-descriptor","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"agent":{"kind":"direct"},"resources":{"cpus":null,"memory_mb":4096,"pids_limit":4096},"security":{"deploy_key":null},"network":{"default_mode":"open","ipv6":"disabled"},"services":{"beads":{"enable":"auto"},"nix_cache":{"enable":true}},"features":{"mcp_runtime":false}}
-JSON
+jq -n \
+  --arg digest "$DIGEST" \
+  --arg layout "$LAYOUT" \
+  '{schema:1,source_kind:"nix-descriptor",digest:$digest,oci_layout:$layout,oci_ref:"latest"}' \
+  >"$DESCRIPTOR"
+jq -n \
+  --arg source "$DESCRIPTOR" \
+  --arg digest "$DIGEST" \
+  '{schema:1,system:"test",profile:{name:"base",env:{},mounts:[],writable_dirs:[],network_allowlist:[]},image:{ref:"localhost/wrix-unsafe:test",source:$source,source_kind:"nix-descriptor",digest:$digest},agent:{kind:"direct"},resources:{cpus:null,memory_mb:4096,pids_limit:4096},security:{deploy_key:null},network:{default_mode:"open",ipv6:"disabled"},services:{beads:{enable:"auto"},nix_cache:{enable:false}},features:{mcp_runtime:false}}' \
+  >"$PROFILE_CONFIG"
+
+cat >"$BIN_DIR/podman" <<'PODMAN'
+#!/usr/bin/env bash
+set -euo pipefail
+state="${WRIX_TEST_STATE:?}"
+printf '%s\n' "$*" >>"$state/podman.log"
+case "${1:-}" in
+  image)
+    if [[ "${2:-}" == "inspect" ]]; then
+      target="${!#}"
+      if [[ "$target" == sha256:* ]]; then
+        [[ -f "$state/digest-present" ]] || exit 1
+        printf '%s\n' "$target"
+      else
+        case "${4:-}" in
+          '{{.Id}}') printf 'unsafe-image-id\n' ;;
+          '{{.Digest}}') printf '%s\n' "${WRIX_TEST_DIGEST:?}" ;;
+          '{{ index .Config.Labels "wrix.managed" }}') printf 'true\n' ;;
+          *) printf 'unsafe-image-id\n' ;;
+        esac
+      fi
+    fi
+    ;;
+  images)
+    printf 'localhost/wrix-unsafe test unsafe-image-id\n'
+    ;;
+  info)
+    printf 'overlay@%s/graph+%s/run\n' "$state" "$state"
+    ;;
+  ps)
+    ;;
+  run)
+    : >"$state/container-ran"
+    ;;
+  tag)
+    : >"$state/digest-present"
+    ;;
+  rmi)
+    ;;
+esac
+PODMAN
+chmod +x "$BIN_DIR/podman"
+
+cat >"$BIN_DIR/skopeo" <<'SKOPEO'
+#!/usr/bin/env bash
+set -euo pipefail
+state="${WRIX_TEST_STATE:?}"
+printf '%s\n' "$*" >>"$state/skopeo.log"
+: >"$state/digest-present"
+SKOPEO
+chmod +x "$BIN_DIR/skopeo"
 
 run_launcher() {
   local out_file="$1"
@@ -40,10 +115,16 @@ run_launcher() {
   (
     cd "$REPO_ROOT"
     env \
-      WRIX_DRY_RUN=1 \
+      -u WRIX_DEPLOY_KEY \
+      -u WRIX_SIGNING_KEY \
+      PATH="$BIN_DIR:$PATH" \
       CARGO_HOME="$HOST_CARGO_HOME" \
       HOME="$HOME_DIR" \
+      XDG_CACHE_HOME="$CACHE_DIR" \
       XDG_RUNTIME_DIR="$RUNTIME_DIR" \
+      WRIX_IMAGE_KEEP_FILE="$STATE_DIR/image-mru.json" \
+      WRIX_TEST_DIGEST="$DIGEST" \
+      WRIX_TEST_STATE="$STATE_DIR" \
       "$@" \
       "${launcher[@]}" \
       --profile-config "$PROFILE_CONFIG" \
@@ -60,7 +141,7 @@ assert_absent() {
   local label="$1"
   local file="$2"
   local needle="$3"
-  if grep -qF "$needle" "$file"; then
+  if grep -qF -- "$needle" "$file"; then
     fail "$label: unexpected '$needle' in $(tr '\n' ' ' < "$file")"
     return 1
   fi
@@ -70,7 +151,7 @@ assert_contains() {
   local label="$1"
   local file="$2"
   local needle="$3"
-  if ! grep -qF "$needle" "$file"; then
+  if ! grep -qF -- "$needle" "$file"; then
     fail "$label: expected '$needle'; got $(tr '\n' ' ' < "$file")"
     return 1
   fi
@@ -85,10 +166,14 @@ test_default_launch_omits_host_podman_socket() {
     fail "default launch exited $rc; stderr=$(tr '\n' ' ' < "$err_file")"
     return 1
   fi
-  assert_absent "default launch" "$out_file" "/run/podman/podman.sock" || return 1
-  assert_absent "default launch" "$out_file" "CONTAINER_HOST" || return 1
-  assert_absent "default launch" "$out_file" "GC_HOST_WORKSPACE" || return 1
-  assert_absent "default launch" "$out_file" "GC_HOST_BEADS" || return 1
+  [[ -f "$STATE_DIR/container-ran" ]] || {
+    fail "default launch did not reach podman run"
+    return 1
+  }
+  assert_absent "default launch" "$PODMAN_LOG" "/run/podman/podman.sock" || return 1
+  assert_absent "default launch" "$PODMAN_LOG" "CONTAINER_HOST" || return 1
+  assert_absent "default launch" "$PODMAN_LOG" "GC_HOST_WORKSPACE" || return 1
+  assert_absent "default launch" "$PODMAN_LOG" "GC_HOST_BEADS" || return 1
 }
 
 test_legacy_podman_socket_env_is_ignored() {
@@ -100,10 +185,10 @@ test_legacy_podman_socket_env_is_ignored() {
     fail "legacy env launch exited $rc; stderr=$(tr '\n' ' ' < "$err_file")"
     return 1
   fi
-  assert_absent "legacy env launch" "$out_file" "/run/podman/podman.sock" || return 1
-  assert_absent "legacy env launch" "$out_file" "CONTAINER_HOST" || return 1
-  assert_absent "legacy env launch" "$out_file" "GC_HOST_WORKSPACE" || return 1
-  assert_absent "legacy env launch" "$out_file" "GC_HOST_BEADS" || return 1
+  assert_absent "legacy env launch" "$PODMAN_LOG" "/run/podman/podman.sock" || return 1
+  assert_absent "legacy env launch" "$PODMAN_LOG" "CONTAINER_HOST" || return 1
+  assert_absent "legacy env launch" "$PODMAN_LOG" "GC_HOST_WORKSPACE" || return 1
+  assert_absent "legacy env launch" "$PODMAN_LOG" "GC_HOST_BEADS" || return 1
 }
 
 test_unsafe_podman_socket_opt_in_mounts_real_socket() {
@@ -137,8 +222,8 @@ PY
     fail "unsafe opt-in with socket exited $rc; stderr=$(tr '\n' ' ' < "$err_file")"
     return 1
   fi
-  assert_contains "unsafe socket mount" "$out_file" "MOUNT=-v $socket_path:/run/podman/podman.sock" || return 1
-  assert_contains "unsafe socket env" "$out_file" "ENV=CONTAINER_HOST=unix:///run/podman/podman.sock" || return 1
+  assert_contains "unsafe socket mount" "$PODMAN_LOG" "-v $socket_path:/run/podman/podman.sock" || return 1
+  assert_contains "unsafe socket env" "$PODMAN_LOG" "-e CONTAINER_HOST=unix:///run/podman/podman.sock" || return 1
 }
 
 test_unsafe_podman_socket_opt_in_fails_loud_without_socket() {
