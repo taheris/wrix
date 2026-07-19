@@ -1643,6 +1643,11 @@ fn temp_roots() -> Vec<PathBuf> {
         PathBuf::from("/tmp"),
         PathBuf::from("/var/tmp"),
     ];
+    for root in &mut roots {
+        if let Ok(canonical) = root.canonicalize() {
+            *root = canonical;
+        }
+    }
     roots.sort();
     roots.dedup();
     roots

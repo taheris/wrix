@@ -1,21 +1,10 @@
-{ pkgs, system, ... }:
+{ pkgs, ... }:
 
 let
   inherit (pkgs.lib) escapeShellArg;
 
   notifyTest = function: ''
-    local build_dir
-    local root
-    local runner
-    local status
-    root="$(repo_root)"
-    build_dir="$(mktemp -d -t wrix-verify-notify.XXXXXX)"
-    nix build --out-link "$build_dir/result" --no-warn-dirty "$root#legacyPackages.${system}.testApps.test-notify"
-    runner="$(readlink -f "$build_dir/result")"
-    status=0
-    "$runner/bin/test-notify" ${escapeShellArg function} || status="$?"
-    rm -rf "$build_dir"
-    return "$status"
+    run_repo_script ${escapeShellArg "tests/standalone/notify-test.sh"} ${escapeShellArg function}
   '';
 in
 {

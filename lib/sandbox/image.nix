@@ -282,8 +282,9 @@ let
     contents = leafContents;
 
     extraCommands = ''
-      mkdir -p tmp home/wrix root var/run var/cache var/tmp mnt/wrix/file mnt/wrix/dir
+      mkdir -p tmp home/wrix root run var/run var/cache var/tmp mnt/wrix/file mnt/wrix/dir
       chmod 1777 tmp var/cache var/tmp
+      chmod 0755 run var/run
       chmod 777 home/wrix
 
       mkdir -p etc/wrix

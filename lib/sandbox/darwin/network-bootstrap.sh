@@ -9,6 +9,7 @@ set -euo pipefail
 readonly WRIX_NETWORK_TOOL_DIR="/usr/local/libexec/wrix-network"
 readonly WRIX_AGENT_ENTRYPOINT="/entrypoint.sh"
 readonly WRIX_NETWORK_READY_FILE="/run/wrix-network-ready"
+readonly WRIX_NETWORK_READY_DIR="${WRIX_NETWORK_READY_FILE%/*}"
 
 wrix_die() {
   echo "Error: $*" >&2
@@ -16,6 +17,8 @@ wrix_die() {
 }
 
 [[ -x "$WRIX_AGENT_ENTRYPOINT" ]] || wrix_die "Darwin agent entrypoint is unavailable"
+[[ -d "$WRIX_NETWORK_READY_DIR" && ! -L "$WRIX_NETWORK_READY_DIR" ]] \
+  || wrix_die "trusted Darwin runtime directory is unavailable: $WRIX_NETWORK_READY_DIR"
 [[ ! -e "$WRIX_NETWORK_READY_FILE" ]] || wrix_die "Darwin network bootstrap marker already exists"
 
 WRIX_NFT_BIN="$WRIX_NETWORK_TOOL_DIR/nft"

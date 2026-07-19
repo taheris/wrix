@@ -21,6 +21,14 @@ let
   network = sandboxScript "network-baseline";
   platform = sandboxScript "platform-dispatch";
   profileConfig = sandboxScript "profile-config-wrapper";
+  linuxOnly =
+    body:
+    if pkgs.stdenv.isLinux then
+      body
+    else
+      ''
+        printf '%s\n' 'PASS: Linux-only verifier is not applicable on this host'
+      '';
 in
 {
   "sandbox.agent-binary-guard" = sandboxScriptAll "agent-binary-guard";
@@ -47,8 +55,9 @@ in
 
   "sandbox.linux-container-starts" = containerStarts "test_linux_container_starts";
 
-  "sandbox.linux-microvm-runtime" =
-    sandboxScriptWithWrix "rust-launcher-live" "test_linux_microvm_runtime";
+  "sandbox.linux-microvm-runtime" = linuxOnly (
+    sandboxScriptWithWrix "rust-launcher-live" "test_linux_microvm_runtime"
+  );
 
   "sandbox.mksandbox-api" =
     sandboxScript "mksandbox-api" "test_mksandbox_accepts_documented_parameters";

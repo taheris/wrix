@@ -111,6 +111,26 @@ test_image_contains_chromium() {
     log_pass "test_image_contains_chromium"
 }
 
+test_image_derivation_closes_over_chromium() {
+    log_test "test_image_derivation_closes_over_chromium: image derivation references chromium and server closures"
+
+    local browsers_drv mcp_drv chrome_drv image_drv requisites
+    browsers_drv=$(playwright_instantiate_mode package --argstr packageName playwright-browsers) || return 1
+    mcp_drv=$(playwright_instantiate_mode package --argstr packageName playwright-mcp) || return 1
+    chrome_drv=$(playwright_instantiate_mode package --argstr packageName playwright-chromium-executable) || return 1
+    image_drv=$(playwright_instantiate_mode sandbox-image) || return 1
+    requisites=$(nix-store -q --requisites --include-outputs "$image_drv") || return 1
+
+    for required in "$browsers_drv" "$mcp_drv" "$chrome_drv"; do
+        if ! grep -Fx "$required" <<<"$requisites" >/dev/null; then
+            log_fail "Image derivation closure is missing $required"
+            return 1
+        fi
+    done
+
+    log_pass "test_image_derivation_closes_over_chromium"
+}
+
 main() {
     echo ""
     log_info "=========================================="
@@ -118,15 +138,23 @@ main() {
     log_info "=========================================="
     echo ""
 
-    local passed=0
-    local failed=0
-
-    if test_image_contains_chromium; then
-        passed=$((passed + 1))
-    else
-        failed=$((failed + 1))
+    local passed=0 failed=0 test_fn
+    local tests=(test_image_contains_chromium)
+    if (($# > 0)); then
+        tests=("$@")
     fi
-    echo ""
+
+    for test_fn in "${tests[@]}"; do
+        if ! declare -F "$test_fn" >/dev/null; then
+            log_fail "Unknown test function: $test_fn"
+            failed=$((failed + 1))
+        elif "$test_fn"; then
+            passed=$((passed + 1))
+        else
+            failed=$((failed + 1))
+        fi
+        echo ""
+    done
 
     echo "=========================================="
     log_info "Results: $passed passed, $failed failed"

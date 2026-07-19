@@ -152,6 +152,7 @@ let
   };
 
   prePushSmokeTests = removeAttrs smokeTests [
+    "builder-keys-structure"
     "image-builds"
     "linux-microvm-krun-detection"
     "linux-pasta-port-forwarding-disabled"
@@ -163,6 +164,7 @@ let
 
   ciChecks = rustChecks // {
     inherit (smokeTests)
+      builder-keys-structure
       image-builds
       linux-microvm-krun-detection
       linux-pasta-port-forwarding-disabled
@@ -263,6 +265,7 @@ let
         set -euo pipefail
 
         ci_checks=(
+          builder-keys-structure
           tmux-mcp-clippy
           tmux-mcp-nextest
           wrix-rust-clippy
