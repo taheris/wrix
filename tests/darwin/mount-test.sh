@@ -13,7 +13,7 @@ set -euo pipefail
 # (tests/darwin/default.nix). It creates workspace-test.txt, staging directories
 # at /mnt/wrix/dir0, and sets WRIX_DIR_MOUNTS. When running without the
 # harness (e.g., via wrix-mcp on Linux), these fixtures are absent.
-if [ ! -f /workspace/workspace-test.txt ] && [ -z "${WRIX_DIR_MOUNTS:-}" ]; then
+if [[ ! -f /workspace/workspace-test.txt ]] && [[ -z "${WRIX_DIR_MOUNTS:-}" ]]; then
   echo "SKIP: Darwin test fixtures not present (workspace-test.txt missing, WRIX_DIR_MOUNTS unset)"
   echo "This test requires the test harness from tests/darwin/default.nix."
   exit 77
@@ -33,9 +33,9 @@ FAILED=0
 
 # Test 1: Workspace mount
 echo "Test 1: Workspace mount at /workspace"
-if [ -f /workspace/workspace-test.txt ]; then
+if [[ -f /workspace/workspace-test.txt ]]; then
   CONTENT=$(cat /workspace/workspace-test.txt)
-  if [ "$CONTENT" = "workspace-file-content" ]; then
+  if [[ "$CONTENT" = "workspace-file-content" ]]; then
     echo "  PASS: Content matches"
   else
     echo "  FAIL: Content mismatch: $CONTENT"
@@ -50,7 +50,7 @@ fi
 # Test 2: Directory mount environment variable
 echo ""
 echo "Test 2: WRIX_DIR_MOUNTS env var"
-if [ -n "${WRIX_DIR_MOUNTS:-}" ]; then
+if [[ -n "${WRIX_DIR_MOUNTS:-}" ]]; then
   echo "  PASS: WRIX_DIR_MOUNTS=$WRIX_DIR_MOUNTS"
 else
   echo "  FAIL: WRIX_DIR_MOUNTS not set"
@@ -60,7 +60,7 @@ fi
 # Test 3: File mount environment variable
 echo ""
 echo "Test 3: WRIX_FILE_MOUNTS env var"
-if [ -n "${WRIX_FILE_MOUNTS:-}" ]; then
+if [[ -n "${WRIX_FILE_MOUNTS:-}" ]]; then
   echo "  PASS: WRIX_FILE_MOUNTS=$WRIX_FILE_MOUNTS"
 else
   echo "  FAIL: WRIX_FILE_MOUNTS not set"
@@ -72,11 +72,11 @@ fi
 # Symlinks are dereferenced on HOST before mounting (security)
 echo ""
 echo "Test 4: Directory mount staging"
-if [ -d /mnt/wrix/dir0 ]; then
+if [[ -d /mnt/wrix/dir0 ]]; then
   echo "  PASS: Staging directory exists at /mnt/wrix/dir0"
-  if [ -e /mnt/wrix/dir0/settings.json ]; then
+  if [[ -e /mnt/wrix/dir0/settings.json ]]; then
     # Verify it's a regular file (symlinks dereferenced on host)
-    if [ -L /mnt/wrix/dir0/settings.json ]; then
+    if [[ -L /mnt/wrix/dir0/settings.json ]]; then
       echo "  FAIL: settings.json is still a symlink (should be dereferenced on host)"
       readlink /mnt/wrix/dir0/settings.json
       FAILED=1
@@ -96,7 +96,7 @@ if [ -d /mnt/wrix/dir0 ]; then
     ls -la /mnt/wrix/dir0/ || true
     FAILED=1
   fi
-  if [ -f /mnt/wrix/dir0/mcp/config.json ]; then
+  if [[ -f /mnt/wrix/dir0/mcp/config.json ]]; then
     echo "  PASS: Nested mcp/config.json exists in staging"
   else
     echo "  FAIL: mcp/config.json not found in staging"
@@ -113,13 +113,13 @@ fi
 # Note: We bypass entrypoint for testing, so manually simulate the copy
 echo ""
 echo "Test 5: Directory copy from staging to destination"
-if [ -n "${WRIX_DIR_MOUNTS:-}" ]; then
+if [[ -n "${WRIX_DIR_MOUNTS:-}" ]]; then
   # Parse WRIX_DIR_MOUNTS and copy directories (simulating entrypoint behavior)
   IFS=',' read -ra MOUNTS <<< "$WRIX_DIR_MOUNTS"
   for mapping in "${MOUNTS[@]}"; do
     src="${mapping%%:*}"
     dst="${mapping#*:}"
-    if [ -d "$src" ]; then
+    if [[ -d "$src" ]]; then
       mkdir -p "$(dirname "$dst")"
       cp -r "$src" "$dst"  # Symlinks already dereferenced on host
       echo "  Copied $src -> $dst"
@@ -127,9 +127,9 @@ if [ -n "${WRIX_DIR_MOUNTS:-}" ]; then
   done
 fi
 
-if [ -d "$TEST_HOME/.claude" ]; then
+if [[ -d "$TEST_HOME/.claude" ]]; then
   echo "  PASS: Directory copied to $TEST_HOME/.claude"
-  if [ -f "$TEST_HOME/.claude/settings.json" ]; then
+  if [[ -f "$TEST_HOME/.claude/settings.json" ]]; then
     if grep -q "settings-value" "$TEST_HOME/.claude/settings.json"; then
       echo "  PASS: settings.json content correct"
     else
@@ -138,7 +138,7 @@ if [ -d "$TEST_HOME/.claude" ]; then
       FAILED=1
     fi
     # Verify it's a regular file (symlinks dereferenced on host before mount)
-    if [ -L "$TEST_HOME/.claude/settings.json" ]; then
+    if [[ -L "$TEST_HOME/.claude/settings.json" ]]; then
       echo "  FAIL: settings.json is still a symlink"
       ls -la "$TEST_HOME/.claude/settings.json"
       FAILED=1
@@ -150,7 +150,7 @@ if [ -d "$TEST_HOME/.claude" ]; then
     ls -la "$TEST_HOME/.claude/" || true
     FAILED=1
   fi
-  if [ -f "$TEST_HOME/.claude/mcp/config.json" ]; then
+  if [[ -f "$TEST_HOME/.claude/mcp/config.json" ]]; then
     echo "  PASS: Nested mcp/config.json exists in copy"
   else
     echo "  FAIL: mcp/config.json not found in copy"
@@ -167,7 +167,7 @@ fi
 # VirtioFS only supports directory mounts, so files are staged via parent dir
 echo ""
 echo "Test 6: File mount staging"
-if [ -f /mnt/wrix/file0/claude.json ]; then
+if [[ -f /mnt/wrix/file0/claude.json ]]; then
   if grep -q "test-api-key-12345" /mnt/wrix/file0/claude.json; then
     echo "  PASS: claude.json content correct at /mnt/wrix/file0/claude.json"
   else
@@ -185,13 +185,13 @@ fi
 # Note: We bypass entrypoint for testing, so manually simulate the copy
 echo ""
 echo "Test 7: File copy from staging to destination"
-if [ -n "${WRIX_FILE_MOUNTS:-}" ]; then
+if [[ -n "${WRIX_FILE_MOUNTS:-}" ]]; then
   # Parse WRIX_FILE_MOUNTS and copy files (simulating entrypoint behavior)
   IFS=',' read -ra MOUNTS <<< "$WRIX_FILE_MOUNTS"
   for mapping in "${MOUNTS[@]}"; do
     src="${mapping%%:*}"
     dst="${mapping#*:}"
-    if [ -f "$src" ]; then
+    if [[ -f "$src" ]]; then
       mkdir -p "$(dirname "$dst")"
       cp "$src" "$dst"
       echo "  Copied $src -> $dst"
@@ -199,7 +199,7 @@ if [ -n "${WRIX_FILE_MOUNTS:-}" ]; then
   done
 fi
 
-if [ -f "$TEST_HOME/.claude.json" ]; then
+if [[ -f "$TEST_HOME/.claude.json" ]]; then
   if grep -q "test-api-key-12345" "$TEST_HOME/.claude.json"; then
     echo "  PASS: claude.json copied to $TEST_HOME/.claude.json"
   else
@@ -228,7 +228,7 @@ fi
 echo ""
 echo "Test 9: Workspace is writable"
 echo "test-content" > /workspace/test-output.txt
-if [ -f /workspace/test-output.txt ]; then
+if [[ -f /workspace/test-output.txt ]]; then
   echo "  PASS: Wrote to workspace"
 else
   echo "  FAIL: Could not write to workspace"
@@ -254,13 +254,13 @@ else
 fi
 
 # Legacy socket mounts (for user-defined mounts, not notifications)
-if [ -n "${WRIX_SOCK_MOUNTS:-}" ]; then
+if [[ -n "${WRIX_SOCK_MOUNTS:-}" ]]; then
   echo "  INFO: WRIX_SOCK_MOUNTS=$WRIX_SOCK_MOUNTS (user-defined)"
   IFS=',' read -ra SOCKETS <<< "$WRIX_SOCK_MOUNTS"
   for sock in "${SOCKETS[@]}"; do
-    if [ -S "$sock" ]; then
+    if [[ -S "$sock" ]]; then
       PERMS=$(stat -c '%a' "$sock" 2>/dev/null || stat -f '%Lp' "$sock" 2>/dev/null || echo "unknown")
-      if [ "$PERMS" = "000" ]; then
+      if [[ "$PERMS" = "000" ]]; then
         echo "  WARN: Socket $sock has 0000 permissions (VirtioFS limitation)"
       else
         echo "  PASS: Socket $sock has accessible permissions ($PERMS)"
@@ -272,7 +272,7 @@ if [ -n "${WRIX_SOCK_MOUNTS:-}" ]; then
 fi
 
 echo ""
-if [ "$FAILED" -eq 0 ]; then
+if [[ "$FAILED" -eq 0 ]]; then
   echo "=== ALL TESTS PASSED ==="
   exit 0
 else

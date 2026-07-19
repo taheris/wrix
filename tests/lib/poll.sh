@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+set -euo pipefail
+
 # Shared poll_until helper for integration tests.
 #
 # Usage:
@@ -18,14 +20,14 @@ poll_until() {
   local interval="${3:-1}"
   local elapsed=0
   echo "  > waiting (up to ${timeout}s): $cmd"
-  while [ "$elapsed" -lt "$timeout" ]; do
+  while [[ "$elapsed" -lt "$timeout" ]]; do
     if eval "$cmd" >/dev/null 2>&1; then
       echo "  > satisfied after ${elapsed}s"
       return 0
     fi
-    if [ -n "${POLL_WATCH_PID:-}" ] && ! kill -0 "$POLL_WATCH_PID" 2>/dev/null; then
+    if [[ -n "${POLL_WATCH_PID:-}" ]] && ! kill -0 "$POLL_WATCH_PID" 2>/dev/null; then
       echo "  > watched pid $POLL_WATCH_PID died during poll"
-      if [ -n "${POLL_WATCH_LOG:-}" ] && [ -f "$POLL_WATCH_LOG" ]; then
+      if [[ -n "${POLL_WATCH_LOG:-}" ]] && [[ -f "$POLL_WATCH_LOG" ]]; then
         echo "  ${POLL_WATCH_LOG} tail:"
         tail -20 "$POLL_WATCH_LOG" | sed 's/^/    /'
       fi

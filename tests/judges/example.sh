@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+set -euo pipefail
+
 # Example judge rubric — reference for writing new judge tests.
 #
 # Each function defines a rubric by calling:

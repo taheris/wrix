@@ -246,7 +246,7 @@ write_profile_config() {
     "ref": "localhost/wrix-test:latest",
     "source": "/nix/store/fake-image",
     "source_kind": "$source_kind",
-    "digest": "sha256:test"
+    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   },
   "agent": {
     "kind": "direct"

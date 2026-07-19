@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+set -euo pipefail
+
 # Shared Dolt SQL server lifecycle for test suites.
 #
 # Provides setup/teardown functions that start a single dolt sql-server

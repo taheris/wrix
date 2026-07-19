@@ -29,8 +29,8 @@ test_native_dispatch_and_reliability() {
 }
 
 test_session_registration() {
-  judge_files "lib/sandbox/linux/default.nix" "lib/sandbox/darwin/default.nix" "lib/notify/daemon.nix"
-  judge_criterion "The launchers register focus targets for tmux sessions in the runtime session directory before starting the container, and the daemon reads those files using the same safe session_id filename scheme. PASS if Linux records a window_id when available, macOS records the frontmost terminal_app when available, both records include session_id, and cleanup removes only the current session file."
+  judge_files "crates/wrix-sandbox/src/command/launch.rs" "lib/notify/daemon.nix"
+  judge_criterion "The live Rust launcher registers focus targets for tmux sessions in the runtime session directory before starting the container, passes the derived WRIX_SESSION_ID into the container, and removes the current session file after launch. The daemon must read that file with the same session_id filename normalization. PASS if Linux records window_id when available, macOS records terminal_app when available, and both records include session_id."
 }
 
 test_client_in_container() {

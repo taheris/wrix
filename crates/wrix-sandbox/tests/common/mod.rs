@@ -81,7 +81,14 @@ pub fn run_child(
         .env_remove("WRIX_DEPLOY_KEY")
         .env_remove("WRIX_SIGNING_KEY")
         .env_remove("WRIX_GIT_SIGN")
-        .env_remove("CLAUDE_CODE_OAUTH_TOKEN");
+        .env_remove("WRIX_MCP")
+        .env_remove("WRIX_MCP_TMUX_AUDIT")
+        .env_remove("WRIX_MCP_TMUX_AUDIT_FULL")
+        .env_remove("WRIX_PI_AUTH_FILE")
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("ANTHROPIC_API_KEY")
+        .env_remove("CLAUDE_CODE_OAUTH_TOKEN")
+        .env_remove("TMUX");
     if let Some(profile_config) = spec.profile_config {
         command.env("WRIX_SANDBOX_PROFILE_CONFIG", profile_config);
     }

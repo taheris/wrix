@@ -140,7 +140,6 @@ impl AuditEntry {
             return "1970-01-01T00:00:00Z".to_string();
         };
 
-        // Format as ISO 8601 with UTC timezone
         let (year, month, day, hour, min, sec) = Self::timestamp_parts(duration.as_secs());
 
         format!(
@@ -151,16 +150,10 @@ impl AuditEntry {
 
     /// Convert Unix timestamp to date/time parts
     fn timestamp_parts(secs: u64) -> (i32, u32, u32, u32, u32, u32) {
-        // Days since Unix epoch
         let day_secs = secs % 86_400;
-
-        // Time within day
         let hour = u32::try_from(day_secs / 3_600).map_or(0, std::convert::identity);
         let min = u32::try_from((day_secs % 3_600) / 60).map_or(0, std::convert::identity);
         let sec = u32::try_from(day_secs % 60).map_or(0, std::convert::identity);
-
-        // Calculate year, month, day using a simple algorithm
-        // Start from 1970 and count forward
         let mut year = 1970;
         let mut remaining_days = secs / 86_400;
 
@@ -173,7 +166,6 @@ impl AuditEntry {
             year = year.saturating_add(1);
         }
 
-        // Find month and day
         let leap = Self::is_leap_year(year);
         let days_in_months: [u64; 12] = if leap {
             [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]

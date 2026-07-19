@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+set -euo pipefail
+
 # Judge rubrics for linux-builder.md success criteria
 
 test_ssh_key_auth() {

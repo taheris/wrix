@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+set -euo pipefail
+
 # Judge rubrics for image-builder.md success criteria
 
 test_oci_format() {

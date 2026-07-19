@@ -5,7 +5,9 @@ use std::{
 };
 
 use serde_json::json;
-use wrix_sandbox::image::{self, InstallRequest, Layer, OciSource, Runtime, SourceKind, Store};
+use wrix_sandbox::image::{
+    self, Digest, InstallRequest, Layer, OciSource, Runtime, SourceKind, Store,
+};
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
@@ -26,14 +28,13 @@ fn digest_preflight_skips_source_execution_on_hit() -> TestResult {
             image_ref: "localhost/wrix-hit:test",
             image_source: &missing_source.display().to_string(),
             source_kind: SourceKind::NixDescriptor,
-            digest: &digest,
+            digest: Some(&digest),
         },
     )?;
 
     assert!(!missing_source.exists());
     assert!(store.copy_calls().is_empty());
     assert!(!store.loaded_archive());
-    assert_eq!(store.transferred_bytes, 0);
     Ok(())
 }
 
@@ -58,7 +59,7 @@ fn linux_descriptor_sources_use_archiveless_install_path() -> TestResult {
             image_ref: "localhost/wrix-oci:test",
             image_source: &descriptor.display().to_string(),
             source_kind: SourceKind::NixDescriptor,
-            digest: &digest,
+            digest: Some(&digest),
         },
     )?;
 
@@ -93,70 +94,18 @@ fn already_loaded_image_performs_no_store_writes() -> TestResult {
         image_ref: "localhost/wrix-loaded:test",
         image_source: &descriptor_source,
         source_kind: SourceKind::NixDescriptor,
-        digest: &digest,
+        digest: Some(&digest),
     };
 
     image::install(&mut store, &request)?;
-    assert_eq!(store.transferred_bytes, 24);
+    assert_eq!(store.copy_calls().len(), 1);
     fs::remove_file(&descriptor)?;
     store.clear_observations();
 
     image::install(&mut store, &request)?;
 
-    assert_eq!(store.transferred_bytes, 0);
     assert!(store.copy_calls().is_empty());
     assert!(!store.loaded_archive());
-    Ok(())
-}
-
-#[test]
-fn linux_reinstall_transfers_only_changed_layers() -> TestResult {
-    let root = tempfile::Builder::new().prefix("image-delta").tempdir()?;
-    let digest_a = digest('d');
-    let digest_b = digest('e');
-    let descriptor_a = write_descriptor(
-        root.path(),
-        "descriptor-a.json",
-        &root.path().join("layout-a"),
-        &digest_a,
-        &[layer('1', 100), layer('2', 200), layer('3', 3)],
-    )?;
-    let descriptor_b = write_descriptor(
-        root.path(),
-        "descriptor-b.json",
-        &root.path().join("layout-b"),
-        &digest_b,
-        &[layer('1', 100), layer('2', 200), layer('4', 5)],
-    )?;
-    let mut store = FakeStore::default();
-
-    image::install(
-        &mut store,
-        &InstallRequest {
-            runtime: Runtime::Podman,
-            image_ref: "localhost/wrix-delta:test",
-            image_source: &descriptor_a.display().to_string(),
-            source_kind: SourceKind::NixDescriptor,
-            digest: &digest_a,
-        },
-    )?;
-    assert_eq!(store.transferred_bytes, 303);
-    store.clear_observations();
-
-    image::install(
-        &mut store,
-        &InstallRequest {
-            runtime: Runtime::Podman,
-            image_ref: "localhost/wrix-delta:test",
-            image_source: &descriptor_b.display().to_string(),
-            source_kind: SourceKind::NixDescriptor,
-            digest: &digest_b,
-        },
-    )?;
-
-    assert_eq!(store.transferred_layers, vec![digest('4')]);
-    assert_eq!(store.transferred_bytes, 5);
-    assert_eq!(store.copy_calls().len(), 1);
     Ok(())
 }
 
@@ -179,7 +128,7 @@ fn darwin_docker_archive_sources_tag_loaded_image() -> TestResult {
             image_ref: "wrix-darwin:test",
             image_source: &archive.display().to_string(),
             source_kind: SourceKind::DockerArchive,
-            digest: &desired_digest,
+            digest: Some(&desired_digest),
         },
     )?;
 
@@ -200,23 +149,6 @@ fn darwin_docker_archive_sources_tag_loaded_image() -> TestResult {
     );
     assert!(!store.archive_copy_used());
     assert!(store.copy_calls().is_empty());
-    Ok(())
-}
-
-#[test]
-fn fake_store_models_content_addressed_layer_reuse() -> TestResult {
-    let mut store = FakeStore::default();
-    let source = OciSource {
-        digest: digest('0'),
-        layout: String::from("/oci"),
-        reference: String::from("latest"),
-        layers: vec![layer('1', 10), layer('1', 10), layer('2', 20)],
-    };
-
-    store.copy_oci_layout(&source, "containers-storage:fake")?;
-
-    assert_eq!(store.transferred_layers, vec![digest('1'), digest('2')]);
-    assert_eq!(store.transferred_bytes, 30);
     Ok(())
 }
 
@@ -244,11 +176,8 @@ enum Call {
 
 #[derive(Default)]
 struct FakeStore {
-    present_digests: BTreeSet<String>,
-    stored_layers: BTreeSet<String>,
+    present_digests: BTreeSet<Digest>,
     calls: Vec<Call>,
-    transferred_layers: Vec<String>,
-    transferred_bytes: u64,
     docker_archive_digest: Option<String>,
     loaded_archive_ref: Option<String>,
 }
@@ -256,8 +185,6 @@ struct FakeStore {
 impl FakeStore {
     fn clear_observations(&mut self) {
         self.calls.clear();
-        self.transferred_layers.clear();
-        self.transferred_bytes = 0;
     }
 
     fn copy_calls(&self) -> Vec<Call> {
@@ -283,7 +210,7 @@ impl FakeStore {
 
 impl Store for FakeStore {
     fn digest_present(&mut self, _runtime: Runtime, digest: &str) -> Result<bool, image::Error> {
-        Ok(self.present_digests.contains(digest))
+        Ok(Digest::parse(digest).is_ok_and(|digest| self.present_digests.contains(&digest)))
     }
 
     fn tag(&mut self, _runtime: Runtime, source: &str, target: &str) -> Result<(), image::Error> {
@@ -307,15 +234,7 @@ impl Store for FakeStore {
             source: format!("oci:{}:{}", source.layout, source.reference),
             destination: destination.to_owned(),
         });
-        for layer in &source.layers {
-            if self.stored_layers.insert(layer.digest.clone()) {
-                self.transferred_layers.push(layer.digest.clone());
-                self.transferred_bytes += layer.size;
-            }
-        }
-        if !source.digest.is_empty() {
-            self.present_digests.insert(source.digest.clone());
-        }
+        self.present_digests.insert(source.digest.clone());
         Ok(())
     }
 
@@ -328,9 +247,6 @@ impl Store for FakeStore {
             archive: archive.to_owned(),
             destination: destination.to_owned(),
         });
-        if let Some(digest) = &self.docker_archive_digest {
-            self.present_digests.insert(digest.clone());
-        }
         Ok(())
     }
 
@@ -339,7 +255,9 @@ impl Store for FakeStore {
             archive: archive.to_owned(),
         });
         if let Some(digest) = &self.docker_archive_digest {
-            self.present_digests.insert(digest.clone());
+            if let Ok(digest) = Digest::parse(digest) {
+                self.present_digests.insert(digest);
+            }
         }
         Ok(self.loaded_archive_ref.clone())
     }
@@ -391,7 +309,7 @@ fn write_descriptor(
     root: &Path,
     name: &str,
     layout: &Path,
-    digest: &str,
+    digest: &Digest,
     layers: &[Layer],
 ) -> io::Result<PathBuf> {
     fs::create_dir_all(layout)?;
@@ -420,6 +338,10 @@ fn layer(ch: char, size: u64) -> Layer {
     }
 }
 
-fn digest(ch: char) -> String {
-    format!("sha256:{}", ch.to_string().repeat(64))
+fn digest(ch: char) -> Digest {
+    let value = format!("sha256:{}", ch.to_string().repeat(64));
+    let Ok(digest) = Digest::parse(&value) else {
+        std::process::abort();
+    };
+    digest
 }

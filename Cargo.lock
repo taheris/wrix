@@ -521,6 +521,7 @@ name = "wrix-sandbox"
 version = "0.1.0"
 dependencies = [
  "displaydoc",
+ "fs2",
  "serde",
  "serde_json",
  "tempfile",

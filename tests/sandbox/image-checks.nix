@@ -607,8 +607,7 @@ let
 
   digestSkipLauncher = if isLinux then serviceCli else null;
 
-  # Linux-only verifier for the digest-preflight short-circuit (specs/sandbox.md
-  # § Image install path; specs/image-builder.md Success Criteria #1). Drives
+  # Linux-only verifier for the runtime digest-preflight short-circuit. Drives
   # the live generated Linux launcher under both `wrix run` and `wrix spawn`,
   # with shim podman + skopeo binaries standing in for external runtimes.
   # The live launcher cases pre-seed the platform store's content digest;
@@ -761,7 +760,12 @@ let
                               exit 0
                           fi
                           [[ -f "$(image_file "$target")" || -f "$state_dir/installed" ]] || exit 1
-                          printf 'sha256:fake-image-id\n'
+                          case "''${4:-}" in
+                              '{{.Id}}') printf 'fake-image-id\n' ;;
+                              '{{.Digest}}') printf 'sha256:0000000000000000000000000000000000000000000000000000000000000000\n' ;;
+                              '{{ index .Config.Labels "wrix.managed" }}') printf 'true\n' ;;
+                              *) printf 'fake-image-id\n' ;;
+                          esac
                           ;;
                       exists)
                           [[ ! -f "$state_dir/force-ref-miss" ]]

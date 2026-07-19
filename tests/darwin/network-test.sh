@@ -21,7 +21,7 @@ FAILED=0
 echo "Test 1: Network interfaces"
 if ip addr show 2>/dev/null; then
   DEFAULT_IF=$(ip route show default 2>/dev/null | awk '/^default/ {print $5; exit}')
-  if [ -n "$DEFAULT_IF" ] && ip addr show "$DEFAULT_IF" 2>/dev/null | grep -q "inet "; then
+  if [[ -n "$DEFAULT_IF" ]] && ip addr show "$DEFAULT_IF" 2>/dev/null | grep -q "inet "; then
     IF_IP=$(ip addr show "$DEFAULT_IF" | grep "inet " | awk '{print $2}')
     echo "  PASS: $DEFAULT_IF configured with $IF_IP"
   else
@@ -48,7 +48,7 @@ echo ""
 
 # Test 3: Check DNS configuration
 echo "Test 3: DNS configuration (/etc/resolv.conf)"
-if [ -f /etc/resolv.conf ]; then
+if [[ -f /etc/resolv.conf ]]; then
   cat /etc/resolv.conf
   # Verify explicit DNS servers are configured (Tailscale MagicDNS + Cloudflare)
   if grep -q "100.100.100.100" /etc/resolv.conf || grep -q "1.1.1.1" /etc/resolv.conf; then
@@ -65,7 +65,7 @@ echo ""
 # Test 4: Ping gateway (informational - requires cap_net_raw)
 GATEWAY=$(ip route show default 2>/dev/null | awk '{print $3}')
 echo "Test 4: Ping gateway ($GATEWAY)"
-if [ -n "$GATEWAY" ] && ping -c 2 -W 5 "$GATEWAY" >/dev/null 2>&1; then
+if [[ -n "$GATEWAY" ]] && ping -c 2 -W 5 "$GATEWAY" >/dev/null 2>&1; then
   echo "  PASS: Gateway reachable via ICMP"
 else
   echo "  INFO: ICMP unavailable (expected without cap_net_raw)"
@@ -121,7 +121,7 @@ echo "Default route:"
 ip route show default 2>/dev/null || echo "  (no default route)"
 echo ""
 
-if [ "$FAILED" -eq 0 ]; then
+if [[ "$FAILED" -eq 0 ]]; then
   echo "=== NETWORK TESTS PASSED ==="
   echo "(TCP + HTTPS verified. ICMP requires cap_net_raw.)"
   exit 0

@@ -14,7 +14,7 @@ git config --global safe.directory /workspace
 
 # Reconstruct container command args from launcher env var
 ARGS=()
-if [ -n "${WRIX_KRUN_CMD:-}" ]; then
+if [[ -n "${WRIX_KRUN_CMD:-}" ]]; then
   eval "ARGS=($WRIX_KRUN_CMD)"
 fi
 

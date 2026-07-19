@@ -101,7 +101,8 @@ let
 
     check_terminal_focused() {
       local session_id="$1"
-      local safe_id="''${session_id//[:\.]/-}"
+      local safe_id
+      safe_id=$(printf '%s' "$session_id" | tr -c 'A-Za-z0-9_-' '-')
       local session_file="$WRIX_SESSION_DIR/$safe_id.json"
 
       if [[ ! -f "$session_file" ]]; then

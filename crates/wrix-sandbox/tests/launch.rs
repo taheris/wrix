@@ -178,6 +178,172 @@ fn deploy_key_mount_uses_container_key_dir_without_public_key() -> TestResult {
 }
 
 #[test]
+fn host_provider_credentials_reach_run_environment() -> TestResult {
+    let root = tempfile::Builder::new().prefix("provider-env").tempdir()?;
+    let workspace = root.path().join("workspace");
+    let profile_config = root.path().join("profile.json");
+    fs::create_dir_all(&workspace)?;
+    common::write_profile_config(&profile_config, &ProfileFixture::default())?;
+
+    let run = run_launch(
+        root.path(),
+        "provider-env",
+        &profile_config,
+        &workspace,
+        vec![
+            (
+                String::from("OPENAI_API_KEY"),
+                OsString::from("openai-test"),
+            ),
+            (
+                String::from("ANTHROPIC_API_KEY"),
+                OsString::from("anthropic-test"),
+            ),
+        ],
+    )?;
+
+    assert!(run.success, "{}", run.stderr);
+    assert!(run.stdout.contains("ENV=OPENAI_API_KEY=[REDACTED]"));
+    assert!(run.stdout.contains("ENV=ANTHROPIC_API_KEY=[REDACTED]"));
+    assert!(!run.stdout.contains("openai-test"));
+    assert!(!run.stdout.contains("anthropic-test"));
+    Ok(())
+}
+
+#[test]
+fn runtime_mcp_host_configuration_reaches_entrypoint() -> TestResult {
+    let root = tempfile::Builder::new()
+        .prefix("runtime-mcp-env")
+        .tempdir()?;
+    let workspace = root.path().join("workspace");
+    let profile_config = root.path().join("profile.json");
+    fs::create_dir_all(&workspace)?;
+    common::write_profile_config(&profile_config, &ProfileFixture::default())?;
+
+    let run = run_launch(
+        root.path(),
+        "runtime-mcp-env",
+        &profile_config,
+        &workspace,
+        vec![
+            (String::from("WRIX_MCP"), OsString::from("tmux")),
+            (
+                String::from("WRIX_MCP_TMUX_AUDIT"),
+                OsString::from("/workspace/audit.jsonl"),
+            ),
+            (
+                String::from("WRIX_MCP_TMUX_AUDIT_FULL"),
+                OsString::from("/workspace/audit"),
+            ),
+        ],
+    )?;
+
+    assert!(run.success, "{}", run.stderr);
+    assert!(run.stdout.contains("ENV=WRIX_MCP=tmux"));
+    assert!(
+        run.stdout
+            .contains("ENV=WRIX_MCP_TMUX_AUDIT=/workspace/audit.jsonl")
+    );
+    assert!(
+        run.stdout
+            .contains("ENV=WRIX_MCP_TMUX_AUDIT_FULL=/workspace/audit")
+    );
+    Ok(())
+}
+
+#[test]
+fn absent_optional_profile_mount_is_skipped() -> TestResult {
+    let root = tempfile::Builder::new()
+        .prefix("optional-mount")
+        .tempdir()?;
+    let workspace = root.path().join("workspace");
+    let profile_config = root.path().join("profile.json");
+    let missing = root.path().join("missing-cache");
+    fs::create_dir_all(&workspace)?;
+    common::write_profile_config(
+        &profile_config,
+        &ProfileFixture {
+            mounts: vec![json!({
+                "source": missing.display().to_string(),
+                "dest": "/home/wrix/.cache/example",
+                "mode": "rw",
+                "optional": true
+            })],
+            ..ProfileFixture::default()
+        },
+    )?;
+
+    let run = run_launch(
+        root.path(),
+        "optional-mount",
+        &profile_config,
+        &workspace,
+        Vec::new(),
+    )?;
+
+    assert!(run.success, "{}", run.stderr);
+    assert!(!run.stdout.contains("/home/wrix/.cache/example"));
+    Ok(())
+}
+
+#[test]
+fn pi_auth_file_uses_platform_delivery_path() -> TestResult {
+    let root = tempfile::Builder::new()
+        .prefix("pi-auth-delivery")
+        .tempdir()?;
+    let workspace = root.path().join("workspace");
+    let profile_config = root.path().join("profile.json");
+    let auth = root.path().join("pi/auth.json");
+    fs::create_dir_all(&workspace)?;
+    fs::create_dir_all(auth.parent().ok_or("auth path has no parent")?)?;
+    fs::write(&auth, "{}\n")?;
+    common::write_profile_config(
+        &profile_config,
+        &ProfileFixture {
+            agent_kind: String::from("pi"),
+            ..ProfileFixture::default()
+        },
+    )?;
+
+    let run = run_launch(
+        root.path(),
+        "pi-auth-delivery",
+        &profile_config,
+        &workspace,
+        vec![(
+            String::from("WRIX_PI_AUTH_FILE"),
+            auth.as_os_str().to_os_string(),
+        )],
+    )?;
+
+    assert!(run.success, "{}", run.stderr);
+    if cfg!(target_os = "macos") {
+        assert!(run.stdout.contains(&format!(
+            "MOUNT=-v {}:/mnt/wrix/pi-agent-auth",
+            auth.parent().ok_or("auth path has no parent")?.display()
+        )));
+        assert!(
+            run.stdout
+                .contains("ENV=WRIX_PI_AUTH_JSON=/mnt/wrix/pi-agent-auth/auth.json")
+        );
+        assert!(!run.stdout.contains(&format!(
+            "MOUNT=-v {}:/mnt/wrix/pi-agent-auth",
+            auth.display()
+        )));
+    } else {
+        assert!(run.stdout.contains(&format!(
+            "MOUNT=-v {}:/mnt/wrix/file/pi-auth.json",
+            auth.display()
+        )));
+        assert!(
+            run.stdout
+                .contains("ENV=WRIX_PI_AUTH_JSON=/mnt/wrix/file/pi-auth.json")
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn linux_default_boundary_sets_is_sandbox_without_fakeuid() -> TestResult {
     if !cfg!(target_os = "linux") {
         return Ok(());

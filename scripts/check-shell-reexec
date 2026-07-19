@@ -19,7 +19,7 @@ set -euo pipefail
 # suffix in the `file:line:` prefix doesn't match \b(bash|sh)\b and
 # accidentally pass the bad pattern through.
 bad=$(grep -HnE '^[^#]*exec[^"]*"\$0"' "$@" | grep -vE 'exec[^"]*\b(bash|sh)\b[^"]*"\$0"' || true)
-if [ -n "$bad" ]; then
+if [[ -n "$bad" ]]; then
     printf '%s\n' "$bad" >&2
     echo "" >&2
     echo "fixture re-exec must invoke bash/sh explicitly — kernel shebang" >&2

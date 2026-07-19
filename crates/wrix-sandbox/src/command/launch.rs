@@ -11,7 +11,9 @@ use serde_json::Value;
 use thiserror::Error;
 use wrix_core::path::Workspace;
 
-use crate::image::{self, CommandStore, InstallRequest, RetentionRequest, Runtime, SourceKind};
+use crate::image::{
+    self, CommandStore, Digest, InstallRequest, RetentionRequest, Runtime, SourceKind,
+};
 
 use super::config::{
     AgentKind, MountMode, Platform, ProfileConfig, ProfileMount, SpawnConfig, SpawnMount,
@@ -81,6 +83,11 @@ pub enum LaunchError {
     KrunMissing,
     /// {source}
     Io { source: io::Error },
+    /// launch failed ({operation}) and cleanup also failed: {cleanup}
+    CleanupAfterFailure {
+        operation: Box<LaunchError>,
+        cleanup: io::Error,
+    },
     /// invalid service endpoint JSON: {source}
     ServiceJson { source: serde_json::Error },
     /// invalid Apple container network JSON: {source}
@@ -107,6 +114,27 @@ impl From<image::Error> for LaunchError {
     }
 }
 
+fn complete_with_cleanup<T>(
+    result: Result<T, LaunchError>,
+    cleanup: Result<(), LaunchError>,
+) -> Result<T, LaunchError> {
+    match (result, cleanup) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Ok(_value), Err(cleanup)) => Err(cleanup),
+        (Err(operation), Ok(())) => Err(operation),
+        (Err(operation), Err(LaunchError::Io { source: cleanup })) => {
+            Err(LaunchError::CleanupAfterFailure {
+                operation: Box::new(operation),
+                cleanup,
+            })
+        }
+        (Err(operation), Err(cleanup)) => Err(LaunchError::CleanupAfterFailure {
+            operation: Box::new(operation),
+            cleanup: io::Error::other(cleanup.to_string()),
+        }),
+    }
+}
+
 pub fn execute(request: &Request, stdout: &mut impl Write) -> Result<ExitCode, LaunchError> {
     let dry_run = env_flag("WRIX_DRY_RUN");
     let services = if !dry_run || env_flag("WRIX_DRY_RUN_SERVICES") {
@@ -128,7 +156,7 @@ struct Plan<'a> {
     image_ref: String,
     image_source: String,
     image_source_kind: SourceKind,
-    image_digest: String,
+    image_digest: Option<Digest>,
     stdio: bool,
     agent_args: Vec<String>,
     spawn_env: Vec<(String, String)>,
@@ -137,6 +165,7 @@ struct Plan<'a> {
     host_podman_socket: Option<HostPodmanSocket>,
     network_mode: NetworkMode,
     git_identity: GitIdentity,
+    session_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -150,12 +179,16 @@ const LINUX_NOTIFY_CONTAINER_DIR: &str = "/run/wrix";
 const NOTIFY_SOCKET_NAME: &str = "notify.sock";
 const PODMAN_SOCKET_CONTAINER_PATH: &str = "/run/podman/podman.sock";
 const UNSAFE_PODMAN_SOCKET_ENV: &str = "WRIX_UNSAFE_PODMAN_SOCKET";
+const LINUX_SPAWN_CONFIG_PATH: &str = "/run/wrix/spawn-config.json";
+const DARWIN_SPAWN_CONFIG_DIR: &str = "/mnt/wrix/spawn-config";
+const DARWIN_PI_AUTH_DIR: &str = "/mnt/wrix/pi-agent-auth";
 
 #[derive(Clone, Debug)]
 struct RenderedMount {
     host: String,
     container: String,
     mode: MountMode,
+    optional: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -207,7 +240,90 @@ struct ImageSource {
     ref_name: String,
     source: String,
     kind: SourceKind,
-    digest: String,
+    digest: Option<Digest>,
+}
+
+struct SessionRegistration {
+    path: Option<PathBuf>,
+}
+
+impl SessionRegistration {
+    fn create(session_id: Option<&str>, platform: Platform) -> Result<Self, LaunchError> {
+        Self::create_in(session_id, platform, &session_directory(platform))
+    }
+
+    fn create_in(
+        session_id: Option<&str>,
+        platform: Platform,
+        directory: &Path,
+    ) -> Result<Self, LaunchError> {
+        let Some(session_id) = session_id else {
+            return Ok(Self { path: None });
+        };
+        fs::create_dir_all(directory)?;
+        let safe_id = session_id
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
+                    character
+                } else {
+                    '-'
+                }
+            })
+            .collect::<String>();
+        let path = directory.join(format!("{safe_id}.json"));
+        let focus = focus_target(platform);
+        let value = match platform {
+            Platform::Linux => serde_json::json!({
+                "session_id": session_id,
+                "window_id": focus,
+            }),
+            Platform::Darwin => serde_json::json!({
+                "session_id": session_id,
+                "terminal_app": focus,
+            }),
+        };
+        let content =
+            serde_json::to_vec(&value).map_err(|source| LaunchError::ServiceJson { source })?;
+        fs::write(&path, content)?;
+        Ok(Self { path: Some(path) })
+    }
+
+    fn remove(self) -> Result<(), LaunchError> {
+        if let Some(path) = self.path {
+            fs::remove_file(path)?;
+        }
+        Ok(())
+    }
+}
+
+struct KrunPlan {
+    rows: u32,
+    columns: u32,
+    command: Option<String>,
+}
+
+impl KrunPlan {
+    fn new(args: &[String]) -> Self {
+        let (rows, columns) = terminal_size().unwrap_or((24, 80));
+        let command = (!args.is_empty()).then(|| serialize_shell_args(args));
+        Self {
+            rows,
+            columns,
+            command,
+        }
+    }
+
+    fn env_pairs(&self) -> Vec<(String, String)> {
+        let mut pairs = vec![
+            (String::from("WRIX_TERM_ROWS"), self.rows.to_string()),
+            (String::from("WRIX_TERM_COLS"), self.columns.to_string()),
+        ];
+        if let Some(command) = &self.command {
+            pairs.push((String::from("WRIX_KRUN_CMD"), command.clone()));
+        }
+        pairs
+    }
 }
 
 impl NetworkMode {
@@ -273,7 +389,7 @@ impl<'a> Plan<'a> {
                 {
                     profile.image.digest.clone()
                 } else {
-                    String::new()
+                    None
                 };
                 ImageSource {
                     ref_name,
@@ -331,258 +447,311 @@ impl<'a> Plan<'a> {
             host_podman_socket,
             network_mode,
             git_identity: GitIdentity::load(),
+            session_id: tmux_session_id(),
         })
     }
 
     fn write_dry_run(&self, stdout: &mut impl Write) -> Result<(), LaunchError> {
-        let staging = Staging::create()?;
-        let credentials = if self.spawn() {
-            self.credential_sources()?;
-            None
-        } else {
-            self.credentials(&staging)?
-        };
+        Staging::with(|staging| {
+            let credentials = if self.spawn() {
+                self.credential_sources()?;
+                None
+            } else {
+                self.credentials(staging)?
+            };
+            let pi_auth = self.pi_auth()?;
 
-        writeln!(stdout, "SUBCOMMAND={}", self.subcommand())?;
-        writeln!(stdout, "STDIO={}", u8::from(self.stdio))?;
-        writeln!(
-            stdout,
-            "PROFILE_CONFIG={}",
-            self.request.profile_config_path.display()
-        )?;
-        writeln!(
-            stdout,
-            "PROFILE_AGENT={}",
-            self.request.profile_config.agent.kind.as_str()
-        )?;
-        writeln!(
-            stdout,
-            "PROFILE_NAME={}",
-            self.request.profile_config.profile.name
-        )?;
-        writeln!(stdout, "WORKSPACE={}", self.workspace.display())?;
-        writeln!(
-            stdout,
-            "IMAGE_OVERRIDE_REF={}",
-            self.override_ref_for_dry_run()
-        )?;
-        writeln!(
-            stdout,
-            "IMAGE_OVERRIDE_SOURCE={}",
-            self.override_source_for_dry_run()
-        )?;
-        writeln!(
-            stdout,
-            "IMAGE_OVERRIDE_SOURCE_KIND={}",
-            self.override_source_kind_for_dry_run()
-        )?;
-        if Platform::CURRENT == Platform::Linux {
-            writeln!(stdout, "PODMAN_NETWORK={}", linux_podman_network())?;
-        }
-        self.services.write_dry_run(stdout)?;
-        if let Some(credentials) = &credentials {
-            writeln!(stdout, "MOUNT=-v {}", credentials.mount().podman_arg())?;
-            for (key, value) in credential_env_pairs(credentials) {
+            writeln!(stdout, "SUBCOMMAND={}", self.subcommand())?;
+            writeln!(stdout, "STDIO={}", u8::from(self.stdio))?;
+            writeln!(
+                stdout,
+                "PROFILE_CONFIG={}",
+                self.request.profile_config_path.display()
+            )?;
+            writeln!(
+                stdout,
+                "PROFILE_AGENT={}",
+                self.request.profile_config.agent.kind.as_str()
+            )?;
+            writeln!(
+                stdout,
+                "PROFILE_NAME={}",
+                self.request.profile_config.profile.name
+            )?;
+            writeln!(stdout, "WORKSPACE={}", self.workspace.display())?;
+            writeln!(
+                stdout,
+                "IMAGE_OVERRIDE_REF={}",
+                self.override_ref_for_dry_run()
+            )?;
+            writeln!(
+                stdout,
+                "IMAGE_OVERRIDE_SOURCE={}",
+                self.override_source_for_dry_run()
+            )?;
+            writeln!(
+                stdout,
+                "IMAGE_OVERRIDE_SOURCE_KIND={}",
+                self.override_source_kind_for_dry_run()
+            )?;
+            if Platform::CURRENT == Platform::Linux {
+                writeln!(stdout, "PODMAN_NETWORK={}", linux_podman_network())?;
+            }
+            self.services.write_dry_run(stdout)?;
+            if let Some(credentials) = &credentials {
+                writeln!(stdout, "MOUNT=-v {}", credentials.mount().podman_arg())?;
+                for (key, value) in credential_env_pairs(credentials) {
+                    writeln!(stdout, "ENV={key}={value}")?;
+                }
+            }
+            for (key, value) in self.launcher_identity_env_pairs() {
                 writeln!(stdout, "ENV={key}={value}")?;
             }
-        }
-        for (key, value) in self.launcher_identity_env_pairs() {
-            writeln!(stdout, "ENV={key}={value}")?;
-        }
-        if Platform::CURRENT == Platform::Linux {
-            for (key, value) in Self::linux_boundary_env_pairs() {
+            for (key, value) in Self::runtime_host_env_pairs() {
+                let rendered = if is_secret_env(&key) {
+                    "[REDACTED]"
+                } else {
+                    &value
+                };
+                writeln!(stdout, "ENV={key}={rendered}")?;
+            }
+            if let Some(path) = self.spawn_config_container_path() {
+                writeln!(stdout, "ENV=WRIX_SPAWN_CONFIG={path}")?;
+            }
+            if let Some(auth) = &pi_auth {
+                let path = auth.container_path(Platform::CURRENT);
+                writeln!(stdout, "ENV=WRIX_PI_AUTH_JSON={path}")?;
+                if Platform::CURRENT == Platform::Linux {
+                    writeln!(stdout, "MOUNT=-v {}", auth.linux_mount().podman_arg())?;
+                }
+            }
+            if Platform::CURRENT == Platform::Linux {
+                for (key, value) in Self::linux_boundary_env_pairs() {
+                    writeln!(stdout, "ENV={key}={value}")?;
+                }
+            }
+            if let Some(socket) = &self.host_podman_socket {
+                socket.write_dry_run(stdout, &self.workspace, None)?;
+            }
+            if let Kind::Spawn(spawn) = &self.request.kind {
+                writeln!(stdout, "SPAWN_CONFIG={}", spawn.config_path.display())?;
+                if Platform::CURRENT == Platform::Linux {
+                    writeln!(
+                        stdout,
+                        "MOUNT=-v {}:{LINUX_SPAWN_CONFIG_PATH}:ro",
+                        spawn.config_path.display()
+                    )?;
+                }
+            }
+            for (key, value) in &self.spawn_env {
                 writeln!(stdout, "ENV={key}={value}")?;
             }
-        }
-        if let Some(socket) = &self.host_podman_socket {
-            socket.write_dry_run(stdout, &self.workspace, None)?;
-        }
-        if let Kind::Spawn(spawn) = &self.request.kind {
-            writeln!(stdout, "SPAWN_CONFIG={}", spawn.config_path.display())?;
-        }
-        for (key, value) in &self.spawn_env {
-            writeln!(stdout, "ENV={key}={value}")?;
-        }
-        for arg in &self.agent_args {
-            writeln!(stdout, "CMD={arg}")?;
-        }
-        for mount in &self.spawn_mounts {
-            writeln!(stdout, "MOUNT=-v {}", mount.podman_arg())?;
-        }
-        if Platform::CURRENT == Platform::Darwin {
-            let mounts = self.darwin_mounts(&staging)?;
-            mounts.write_dry_run(stdout)?;
-        }
-        Ok(())
+            for arg in &self.agent_args {
+                writeln!(stdout, "CMD={arg}")?;
+            }
+            for mount in &self.spawn_mounts {
+                writeln!(stdout, "MOUNT=-v {}", mount.podman_arg())?;
+            }
+            if Platform::CURRENT == Platform::Darwin {
+                let mounts = self.darwin_mounts(staging, pi_auth.as_ref())?;
+                mounts.write_dry_run(stdout)?;
+            }
+            Ok(())
+        })
     }
 
     fn launch(&self) -> Result<ExitCode, LaunchError> {
-        match Platform::CURRENT {
+        let registration =
+            SessionRegistration::create(self.session_id.as_deref(), Platform::CURRENT)?;
+        let result = match Platform::CURRENT {
             Platform::Linux => self.launch_linux(),
             Platform::Darwin => self.launch_darwin(),
-        }
+        };
+        complete_with_cleanup(result, registration.remove())
     }
 
     fn launch_linux(&self) -> Result<ExitCode, LaunchError> {
         self.install_image(Runtime::Podman)?;
         self.remember_and_prune_images(Runtime::Podman)?;
-        let staging = Staging::create()?;
-        let mut volumes = self.linux_volumes(&staging)?;
-        let credentials = self.credentials(&staging)?;
-        if let Some(credentials) = &credentials {
-            volumes.push(credentials.mount());
-        }
-        let pi_auth = self.pi_auth()?;
-        if let Some(pi_auth) = &pi_auth {
-            volumes.push(pi_auth.mount.clone());
-        }
-        let staged_beads = stage_beads(&self.workspace, &staging)?;
-        if let Some(beads) = &staged_beads {
-            volumes.push(RenderedMount {
-                host: beads.display().to_string(),
-                container: String::from("/workspace/.beads"),
-                mode: MountMode::Rw,
-            });
-        }
-        if let Some(socket) = &self.host_podman_socket {
-            volumes.push(socket.mount());
-        }
-
-        let mut command = ProcessCommand::new("podman");
-        command.arg("run").arg("--rm");
-        if self.spawn() {
-            if self.stdio {
-                command.arg("-i");
+        Staging::with(|staging| {
+            let mut volumes = self.linux_volumes(staging)?;
+            let credentials = self.credentials(staging)?;
+            if let Some(credentials) = &credentials {
+                volumes.push(credentials.mount());
             }
-        } else {
-            command.arg("-i").arg("-t");
-        }
-        command.arg("--cap-add=NET_ADMIN");
-        if env_flag("WRIX_MICROVM") {
-            ensure_krun()?;
-            command.arg("--runtime").arg("krun").arg("--userns=keep-id");
-        }
-        command
-            .arg(format!(
-                "--memory={}m",
-                self.request.profile_config.resources.memory_mb
-            ))
-            .arg(format!(
-                "--pids-limit={}",
-                self.request.profile_config.resources.pids_limit
-            ))
-            .arg(format!("--network={}", linux_podman_network()))
-            .arg("--mount")
-            .arg("type=tmpfs,destination=/home/wrix,U=true");
-        if let Some(cpus) = self.request.profile_config.resources.cpus {
-            command.arg(format!("--cpus={cpus}"));
-        }
-        for dir in &self.request.profile_config.profile.writable_dirs {
+            let pi_auth = self.pi_auth()?;
+            if let Some(pi_auth) = &pi_auth {
+                volumes.push(pi_auth.linux_mount());
+            }
+            if let Some(spawn_mount) = self.linux_spawn_config_mount() {
+                volumes.push(spawn_mount);
+            }
+            let staged_beads = stage_beads(&self.workspace, staging)?;
+            if let Some(beads) = &staged_beads {
+                volumes.push(RenderedMount {
+                    host: beads.display().to_string(),
+                    container: String::from("/workspace/.beads"),
+                    mode: MountMode::Rw,
+                    optional: false,
+                });
+            }
+            if let Some(socket) = &self.host_podman_socket {
+                volumes.push(socket.mount());
+            }
+
+            let krun = if env_flag("WRIX_MICROVM") {
+                ensure_krun()?;
+                Some(KrunPlan::new(&self.agent_args))
+            } else {
+                None
+            };
+            let mut command = ProcessCommand::new("podman");
+            command.arg("run").arg("--rm");
+            if self.spawn() {
+                if self.stdio {
+                    command.arg("-i");
+                }
+            } else {
+                command.arg("-i").arg("-t");
+            }
+            command.arg("--cap-add=NET_ADMIN");
+            if krun.is_some() {
+                command
+                    .arg("--runtime")
+                    .arg("krun")
+                    .arg("--userns=keep-id")
+                    .arg("--entrypoint")
+                    .arg("/krun-relay");
+            }
             command
+                .arg(format!(
+                    "--memory={}m",
+                    self.request.profile_config.resources.memory_mb
+                ))
+                .arg(format!(
+                    "--pids-limit={}",
+                    self.request.profile_config.resources.pids_limit
+                ))
+                .arg(format!("--network={}", linux_podman_network()))
                 .arg("--mount")
-                .arg(format!("type=tmpfs,destination={dir},U=true"));
-        }
-        for volume in &volumes {
-            command.arg("-v").arg(volume.podman_arg());
-        }
-        for (key, value) in self.env_pairs(
-            credentials.as_ref(),
-            pi_auth.as_ref().map(|auth| auth.container_path.as_str()),
-        ) {
-            command.arg("-e").arg(format!("{key}={value}"));
-        }
-        for (key, value) in self.host_podman_socket_env_pairs(staged_beads.as_deref()) {
-            command.arg("-e").arg(format!("{key}={value}"));
-        }
-        for (key, value) in Self::linux_boundary_env_pairs() {
-            command.arg("-e").arg(format!("{key}={value}"));
-        }
-        command
-            .arg("-w")
-            .arg("/workspace")
-            .arg(&self.image_ref)
-            .args(&self.agent_args)
-            .stdin(Stdio::inherit())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit());
-        Ok(status_to_exit(command.status()?))
+                .arg("type=tmpfs,destination=/home/wrix,U=true");
+            if let Some(cpus) = self.request.profile_config.resources.cpus {
+                command.arg(format!("--cpus={cpus}"));
+            }
+            for dir in &self.request.profile_config.profile.writable_dirs {
+                command
+                    .arg("--mount")
+                    .arg(format!("type=tmpfs,destination={dir},U=true"));
+            }
+            for volume in &volumes {
+                command.arg("-v").arg(volume.podman_arg());
+            }
+            for (key, value) in self.env_pairs(
+                credentials.as_ref(),
+                pi_auth
+                    .as_ref()
+                    .map(|auth| auth.container_path(Platform::Linux)),
+            ) {
+                command.arg("-e").arg(format!("{key}={value}"));
+            }
+            for (key, value) in self.host_podman_socket_env_pairs(staged_beads.as_deref()) {
+                command.arg("-e").arg(format!("{key}={value}"));
+            }
+            for (key, value) in Self::linux_boundary_env_pairs() {
+                command.arg("-e").arg(format!("{key}={value}"));
+            }
+            if let Some(krun) = &krun {
+                for (key, value) in krun.env_pairs() {
+                    command.arg("-e").arg(format!("{key}={value}"));
+                }
+            }
+            command.arg("-w").arg("/workspace").arg(&self.image_ref);
+            if krun.is_none() {
+                command.args(&self.agent_args);
+            }
+            command
+                .stdin(Stdio::inherit())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit());
+            Ok(status_to_exit(command.status()?))
+        })
     }
 
     fn launch_darwin(&self) -> Result<ExitCode, LaunchError> {
         let vpn_conflict = fix_darwin_vmnet_route()?;
         self.install_image(Runtime::Container)?;
         self.remember_and_prune_images(Runtime::Container)?;
-        let staging = Staging::create()?;
-        let darwin_mounts = self.darwin_mounts(&staging)?;
-        let credentials = self.credentials(&staging)?;
-        let pi_auth = self.pi_auth()?;
-        let mut command = ProcessCommand::new("container");
-        command
-            .arg("run")
-            .arg("--rm")
-            .arg("--cap-add")
-            .arg("CAP_NET_ADMIN");
-        if self.spawn() {
-            if self.stdio {
-                command.arg("-i");
+        Staging::with(|staging| {
+            let credentials = self.credentials(staging)?;
+            let pi_auth = self.pi_auth()?;
+            let darwin_mounts = self.darwin_mounts(staging, pi_auth.as_ref())?;
+            let mut command = ProcessCommand::new("container");
+            command
+                .arg("run")
+                .arg("--rm")
+                .arg("--cap-add")
+                .arg("CAP_NET_ADMIN");
+            if self.spawn() {
+                if self.stdio {
+                    command.arg("-i");
+                }
+            } else {
+                command.arg("-t").arg("-i");
             }
-        } else {
-            command.arg("-t").arg("-i");
-        }
-        command
-            .arg("-w")
-            .arg("/")
-            .arg("-c")
-            .arg(self.cpus_for_darwin().to_string())
-            .arg("-m")
-            .arg(format!(
-                "{}M",
-                self.request.profile_config.resources.memory_mb
-            ))
-            .arg("--network")
-            .arg("default")
-            .arg("-v")
-            .arg(format!("{}:/workspace", self.workspace.display()));
-        for mount in &darwin_mounts.mounts {
             command
+                .arg("-w")
+                .arg("/")
+                .arg("-c")
+                .arg(self.cpus_for_darwin().to_string())
+                .arg("-m")
+                .arg(format!(
+                    "{}M",
+                    self.request.profile_config.resources.memory_mb
+                ))
+                .arg("--network")
+                .arg("default")
                 .arg("-v")
-                .arg(format!("{}:{}", mount.host, mount.container));
-        }
-        if let Some(credentials) = &credentials {
-            let key_mount = credentials.mount();
+                .arg(format!("{}:/workspace", self.workspace.display()));
+            for mount in &darwin_mounts.mounts {
+                command
+                    .arg("-v")
+                    .arg(format!("{}:{}", mount.host, mount.container));
+            }
+            if let Some(credentials) = &credentials {
+                let key_mount = credentials.mount();
+                command
+                    .arg("-v")
+                    .arg(format!("{}:{}", key_mount.host, key_mount.container));
+            }
+            for (key, value) in self.env_pairs(
+                credentials.as_ref(),
+                pi_auth
+                    .as_ref()
+                    .map(|auth| auth.container_path(Platform::Darwin)),
+            ) {
+                command.arg("-e").arg(format!("{key}={value}"));
+            }
             command
-                .arg("-v")
-                .arg(format!("{}:{}", key_mount.host, key_mount.container));
-        }
-        if let Some(pi_auth) = &pi_auth {
-            command.arg("-v").arg(pi_auth.mount.podman_arg());
-        }
-        for (key, value) in self.env_pairs(
-            credentials.as_ref(),
-            pi_auth.as_ref().map(|auth| auth.container_path.as_str()),
-        ) {
-            command.arg("-e").arg(format!("{key}={value}"));
-        }
-        command
-            .arg("-e")
-            .arg(format!("HOST_UID={}", current_uid()?));
-        if let Some(value) = darwin_mounts.dir_env() {
-            command.arg("-e").arg(format!("WRIX_DIR_MOUNTS={value}"));
-        }
-        if let Some(value) = darwin_mounts.file_env() {
-            command.arg("-e").arg(format!("WRIX_FILE_MOUNTS={value}"));
-        }
-        if vpn_conflict {
-            command.arg("-e").arg("WRIX_WAIT_FOR_ROUTE=1");
-        }
-        command
-            .arg("--")
-            .arg(&self.image_ref)
-            .args(&self.agent_args)
-            .stdin(Stdio::inherit())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit());
-        Ok(status_to_exit(command.status()?))
+                .arg("-e")
+                .arg(format!("HOST_UID={}", current_uid()?));
+            if let Some(value) = darwin_mounts.dir_env() {
+                command.arg("-e").arg(format!("WRIX_DIR_MOUNTS={value}"));
+            }
+            if let Some(value) = darwin_mounts.file_env() {
+                command.arg("-e").arg(format!("WRIX_FILE_MOUNTS={value}"));
+            }
+            if vpn_conflict {
+                command.arg("-e").arg("WRIX_WAIT_FOR_ROUTE=1");
+            }
+            command
+                .arg("--")
+                .arg(&self.image_ref)
+                .args(&self.agent_args)
+                .stdin(Stdio::inherit())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit());
+            Ok(status_to_exit(command.status()?))
+        })
     }
 
     fn linux_volumes(&self, staging: &Staging) -> Result<Vec<RenderedMount>, LaunchError> {
@@ -590,6 +759,7 @@ impl<'a> Plan<'a> {
             host: self.workspace.display().to_string(),
             container: String::from("/workspace"),
             mode: MountMode::Rw,
+            optional: false,
         }];
         if let Some(notification) = linux_notification_socket_mount()? {
             volumes.push(notification);
@@ -601,6 +771,7 @@ impl<'a> Plan<'a> {
                 host: source.display().to_string(),
                 container: String::from("/run/wrix/dolt"),
                 mode: MountMode::Rw,
+                optional: false,
             });
         }
         for mount in &self.request.profile_config.profile.mounts {
@@ -612,12 +783,60 @@ impl<'a> Plan<'a> {
         Ok(volumes)
     }
 
-    fn darwin_mounts(&self, staging: &Staging) -> Result<DarwinMounts, LaunchError> {
-        darwin_mounts_from_rendered(
+    fn darwin_mounts(
+        &self,
+        staging: &Staging,
+        pi_auth: Option<&PiAuth>,
+    ) -> Result<DarwinMounts, LaunchError> {
+        let mut mounts = darwin_mounts_from_rendered(
             &self.request.profile_config.profile.mounts,
             &self.spawn_mounts,
             &staging.root,
-        )
+        )?;
+        if let Some(spawn_mount) = self.stage_darwin_spawn_config(staging)? {
+            mounts.mounts.push(spawn_mount);
+        }
+        if let Some(auth) = pi_auth {
+            mounts.mounts.push(auth.darwin_mount());
+        }
+        Ok(mounts)
+    }
+
+    fn linux_spawn_config_mount(&self) -> Option<RenderedMount> {
+        let Kind::Spawn(spawn) = &self.request.kind else {
+            return None;
+        };
+        Some(RenderedMount {
+            host: spawn.config_path.display().to_string(),
+            container: String::from(LINUX_SPAWN_CONFIG_PATH),
+            mode: MountMode::Ro,
+            optional: false,
+        })
+    }
+
+    fn stage_darwin_spawn_config(
+        &self,
+        staging: &Staging,
+    ) -> Result<Option<RenderedMount>, LaunchError> {
+        let Kind::Spawn(spawn) = &self.request.kind else {
+            return Ok(None);
+        };
+        let host = staging.root.join("spawn-config");
+        fs::create_dir_all(&host)?;
+        fs::copy(&spawn.config_path, host.join("spawn-config.json"))?;
+        Ok(Some(RenderedMount {
+            host: host.display().to_string(),
+            container: String::from(DARWIN_SPAWN_CONFIG_DIR),
+            mode: MountMode::Ro,
+            optional: false,
+        }))
+    }
+
+    fn spawn_config_container_path(&self) -> Option<&'static str> {
+        self.spawn().then_some(match Platform::CURRENT {
+            Platform::Linux => LINUX_SPAWN_CONFIG_PATH,
+            Platform::Darwin => "/mnt/wrix/spawn-config/spawn-config.json",
+        })
     }
 
     fn install_image(&self, runtime: Runtime) -> Result<(), LaunchError> {
@@ -629,7 +848,7 @@ impl<'a> Plan<'a> {
                 image_ref: &self.image_ref,
                 image_source: &self.image_source,
                 source_kind: self.image_source_kind,
-                digest: &self.image_digest,
+                digest: self.image_digest.as_ref(),
             },
         )?;
         Ok(())
@@ -645,7 +864,7 @@ impl<'a> Plan<'a> {
                 image_ref: &self.image_ref,
                 image_source: &self.image_source,
                 source_kind: self.image_source_kind,
-                digest: &self.image_digest,
+                digest: self.image_digest.as_ref(),
                 mru_path: &mru_path,
             },
         )?;
@@ -730,15 +949,7 @@ impl<'a> Plan<'a> {
                 fs::write(&path, b"{}\n")?;
             }
         }
-        let container_path = String::from("/mnt/wrix/file/pi-auth.json");
-        Ok(Some(PiAuth {
-            mount: RenderedMount {
-                host: path.display().to_string(),
-                container: container_path.clone(),
-                mode: MountMode::Rw,
-            },
-            container_path,
-        }))
+        Ok(Some(PiAuth { host: path }))
     }
 
     fn host_podman_socket_env_pairs(&self, staged_beads: Option<&Path>) -> Vec<(String, String)> {
@@ -750,7 +961,7 @@ impl<'a> Plan<'a> {
     fn env_pairs(
         &self,
         credentials: Option<&Credentials>,
-        pi_auth: Option<&str>,
+        pi_auth: Option<String>,
     ) -> Vec<(String, String)> {
         let mut pairs = self
             .request
@@ -760,20 +971,15 @@ impl<'a> Plan<'a> {
             .iter()
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect::<Vec<_>>();
+        pairs.extend(Self::runtime_host_env_pairs());
         if self.spawn() {
             pairs.extend(self.spawn_env.iter().cloned());
             if self.stdio {
                 pairs.push((String::from("WRIX_STDIO"), String::from("1")));
             }
-        } else {
-            pairs.push((
-                String::from("WRIX_VERBOSE"),
-                env::var("WRIX_VERBOSE").unwrap_or_default(),
-            ));
-            pairs.push((
-                String::from("CLAUDE_CODE_OAUTH_TOKEN"),
-                env::var("CLAUDE_CODE_OAUTH_TOKEN").unwrap_or_default(),
-            ));
+        }
+        if let Some(path) = self.spawn_config_container_path() {
+            pairs.push((String::from("WRIX_SPAWN_CONFIG"), path.to_owned()));
         }
         pairs.extend([
             (String::from("BD_NO_DAEMON"), String::from("1")),
@@ -802,6 +1008,9 @@ impl<'a> Plan<'a> {
         if let Ok(value) = env::var("WRIX_GIT_SIGN") {
             pairs.push((String::from("WRIX_GIT_SIGN"), value));
         }
+        if let Some(session_id) = &self.session_id {
+            pairs.push((String::from("WRIX_SESSION_ID"), session_id.clone()));
+        }
         if let Some(cache_host) = &self.services.project_cache_host {
             pairs.push((String::from("WRIX_PROJECT_CACHE_HOST"), cache_host.clone()));
         }
@@ -828,12 +1037,28 @@ impl<'a> Plan<'a> {
             ));
         }
         if let Some(auth) = pi_auth {
-            pairs.push((String::from("WRIX_PI_AUTH_JSON"), auth.to_owned()));
+            pairs.push((String::from("WRIX_PI_AUTH_JSON"), auth));
         }
         if let Some(credentials) = credentials {
             pairs.extend(credential_env_pairs(credentials));
         }
         pairs
+    }
+
+    fn runtime_host_env_pairs() -> Vec<(String, String)> {
+        const PASSTHROUGH: [&str; 7] = [
+            "ANTHROPIC_API_KEY",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "OPENAI_API_KEY",
+            "WRIX_MCP",
+            "WRIX_MCP_TMUX_AUDIT",
+            "WRIX_MCP_TMUX_AUDIT_FULL",
+            "WRIX_VERBOSE",
+        ];
+        PASSTHROUGH
+            .iter()
+            .filter_map(|name| env::var(name).ok().map(|value| ((*name).to_owned(), value)))
+            .collect()
     }
 
     fn launcher_identity_env_pairs(&self) -> Vec<(String, String)> {
@@ -911,6 +1136,7 @@ impl HostPodmanSocket {
             host: self.source.display().to_string(),
             container: String::from(PODMAN_SOCKET_CONTAINER_PATH),
             mode: MountMode::Rw,
+            optional: false,
         }
     }
 
@@ -977,6 +1203,7 @@ impl RenderedMount {
             host: mount.source.clone(),
             container: mount.dest.clone(),
             mode: mount.mode,
+            optional: mount.optional,
         }
     }
 
@@ -989,6 +1216,7 @@ impl RenderedMount {
             } else {
                 MountMode::Rw
             },
+            optional: false,
         }
     }
 
@@ -1091,6 +1319,7 @@ impl DarwinMounts {
                 host: host.display().to_string(),
                 container: container.clone(),
                 mode: MountMode::Rw,
+                optional: false,
             });
             self.dir_mappings.push((container, mount.container.clone()));
             return Ok(());
@@ -1126,6 +1355,7 @@ impl DarwinMounts {
             host: parent.display().to_string(),
             container: container.clone(),
             mode: MountMode::Rw,
+            optional: false,
         });
         container
     }
@@ -1277,8 +1507,44 @@ struct Credentials {
 }
 
 struct PiAuth {
-    mount: RenderedMount,
-    container_path: String,
+    host: PathBuf,
+}
+
+impl PiAuth {
+    fn linux_mount(&self) -> RenderedMount {
+        RenderedMount {
+            host: self.host.display().to_string(),
+            container: String::from("/mnt/wrix/file/pi-auth.json"),
+            mode: MountMode::Rw,
+            optional: false,
+        }
+    }
+
+    fn darwin_mount(&self) -> RenderedMount {
+        let host = self
+            .host
+            .parent()
+            .map_or_else(|| self.host.clone(), Path::to_path_buf);
+        RenderedMount {
+            host: host.display().to_string(),
+            container: String::from(DARWIN_PI_AUTH_DIR),
+            mode: MountMode::Rw,
+            optional: false,
+        }
+    }
+
+    fn container_path(&self, platform: Platform) -> String {
+        match platform {
+            Platform::Linux => String::from("/mnt/wrix/file/pi-auth.json"),
+            Platform::Darwin => {
+                let name = self.host.file_name().map_or_else(
+                    || String::from("auth.json"),
+                    |name| name.to_string_lossy().into_owned(),
+                );
+                format!("{DARWIN_PI_AUTH_DIR}/{name}")
+            }
+        }
+    }
 }
 
 impl Credentials {
@@ -1291,6 +1557,7 @@ impl Credentials {
             host: host.display().to_string(),
             container: String::from("/etc/wrix/keys"),
             mode: MountMode::Ro,
+            optional: false,
         }
     }
 }
@@ -1325,11 +1592,12 @@ impl Staging {
         fs::create_dir_all(&root)?;
         Ok(Self { root })
     }
-}
 
-impl Drop for Staging {
-    fn drop(&mut self) {
-        let _drop_result = fs::remove_dir_all(&self.root);
+    fn with<T>(operation: impl FnOnce(&Self) -> Result<T, LaunchError>) -> Result<T, LaunchError> {
+        let staging = Self::create()?;
+        let result = operation(&staging);
+        let cleanup = fs::remove_dir_all(&staging.root).map_err(LaunchError::from);
+        complete_with_cleanup(result, cleanup)
     }
 }
 
@@ -1355,6 +1623,7 @@ fn render_profile_mount(
             host: target.display().to_string(),
             container: mount.dest.clone(),
             mode: mount.mode,
+            optional: false,
         }));
     }
     if file_type_is_socket(&source)? {
@@ -1367,6 +1636,7 @@ fn render_profile_mount(
         host: source.display().to_string(),
         container: mount.dest.clone(),
         mode: mount.mode,
+        optional: false,
     }))
 }
 
@@ -1699,6 +1969,13 @@ fn first_configured_value(values: &[Option<String>]) -> Option<String> {
     values.iter().find_map(Clone::clone)
 }
 
+fn is_secret_env(name: &str) -> bool {
+    matches!(
+        name,
+        "ANTHROPIC_API_KEY" | "CLAUDE_CODE_OAUTH_TOKEN" | "OPENAI_API_KEY"
+    )
+}
+
 fn env_value(name: &str) -> Option<String> {
     match env::var(name) {
         Ok(value) if !value.is_empty() => Some(value),
@@ -1762,6 +2039,7 @@ fn linux_notification_socket_mount_from_dir(
         host: socket_dir.display().to_string(),
         container: String::from(LINUX_NOTIFY_CONTAINER_DIR),
         mode: MountMode::Rw,
+        optional: false,
     }))
 }
 
@@ -1793,6 +2071,84 @@ fn podman_runtime_dir() -> Result<PathBuf, LaunchError> {
         return Ok(PathBuf::from(value));
     }
     Ok(PathBuf::from(format!("/run/user/{}", current_uid()?)))
+}
+
+fn tmux_session_id() -> Option<String> {
+    env::var_os("TMUX")?;
+    let output = run_output(
+        "tmux",
+        &[
+            "display-message",
+            "-p",
+            "#{session_name}:#{window_index}.#{pane_index}",
+        ],
+    )
+    .ok()?;
+    output.status.success().then(|| trim_stdout(&output.stdout))
+}
+
+fn session_directory(platform: Platform) -> PathBuf {
+    let base = match platform {
+        Platform::Linux => env::var_os("XDG_RUNTIME_DIR"),
+        Platform::Darwin => env::var_os("XDG_DATA_HOME"),
+    };
+    base.map_or_else(|| home_dir().join(".local/share"), PathBuf::from)
+        .join("wrix/sessions")
+}
+
+fn focus_target(platform: Platform) -> Option<String> {
+    let (program, args): (&str, &[&str]) = match platform {
+        Platform::Linux => ("niri", &["msg", "-j", "focused-window"]),
+        Platform::Darwin => (
+            "osascript",
+            &[
+                "-e",
+                "tell application \"System Events\" to name of first process whose frontmost is true",
+            ],
+        ),
+    };
+    let output = run_output(program, args).ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    match platform {
+        Platform::Linux => serde_json::from_slice::<Value>(&output.stdout)
+            .ok()?
+            .get("id")
+            .and_then(|value| match value {
+                Value::String(text) => Some(text.clone()),
+                Value::Number(number) => Some(number.to_string()),
+                _ => None,
+            }),
+        Platform::Darwin => {
+            let target = trim_stdout(&output.stdout);
+            (!target.is_empty()).then_some(target)
+        }
+    }
+}
+
+fn terminal_size() -> Option<(u32, u32)> {
+    let terminal = fs::File::open("/dev/tty").ok()?;
+    let output = ProcessCommand::new("stty")
+        .arg("size")
+        .stdin(terminal)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = trim_stdout(&output.stdout);
+    let mut dimensions = text
+        .split_whitespace()
+        .filter_map(|value| value.parse::<u32>().ok());
+    Some((dimensions.next()?, dimensions.next()?))
+}
+
+fn serialize_shell_args(args: &[String]) -> String {
+    args.iter()
+        .map(|arg| format!("'{}'", arg.replace('\'', "'\"'\"'")))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn ensure_krun() -> Result<(), LaunchError> {
@@ -1909,8 +2265,8 @@ mod test {
 
     use super::{
         DarwinMounts, DarwinNetwork, DarwinSplitRoute, HostPodmanSocket, LaunchError, NetworkMode,
-        RenderedMount, Staging, darwin_split_routes, deploy_key_name, linux_podman_network,
-        parse_darwin_network, route_interface, vmnet_interface,
+        PiAuth, RenderedMount, SessionRegistration, Staging, darwin_split_routes, deploy_key_name,
+        linux_podman_network, parse_darwin_network, route_interface, vmnet_interface,
     };
     use crate::command::config::{MountMode, Platform, ProfileMount, SpawnMount};
 
@@ -2168,6 +2524,40 @@ mod test {
             super::darwin_mounts_from_rendered(&profile_mounts, &[], &staging.root),
             Err(LaunchError::MountSourceMissing { .. })
         ));
+    }
+
+    #[test]
+    fn darwin_pi_auth_mounts_parent_at_internal_staging_path() {
+        let auth = PiAuth {
+            host: PathBuf::from("/host/pi/auth.json"),
+        };
+
+        let mount = auth.darwin_mount();
+
+        assert_eq!(mount.host, "/host/pi");
+        assert_eq!(mount.container, "/mnt/wrix/pi-agent-auth");
+        assert_eq!(
+            auth.container_path(Platform::Darwin),
+            "/mnt/wrix/pi-agent-auth/auth.json"
+        );
+    }
+
+    #[test]
+    fn session_registration_uses_daemon_filename_and_removes_current_file() {
+        let root = scratch_dir("session-registration");
+        let registration =
+            SessionRegistration::create_in(Some("main:2.1"), Platform::Linux, &root).unwrap();
+        let path = root.join("main-2-1.json");
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+
+        assert_eq!(
+            value.get("session_id").and_then(serde_json::Value::as_str),
+            Some("main:2.1")
+        );
+        assert!(value.get("window_id").is_some());
+        registration.remove().unwrap();
+        assert!(!path.exists());
     }
 
     #[test]

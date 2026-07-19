@@ -9,7 +9,7 @@ FAILED=0
 FAILED_TESTS=()
 
 # Colors
-if [ -t 2 ]; then
+if [[ -t 2 ]]; then
   RED='\033[0;31m'
   GREEN='\033[0;32m'
   YELLOW='\033[0;33m'
@@ -57,17 +57,17 @@ write_session_log() {
   local duration=$(( end_epoch - SESSION_START_EPOCH ))
 
   local mode="interactive"
-  if [ "${LOOM_MODE:-}" = "1" ]; then
+  if [[ "${LOOM_MODE:-}" = "1" ]]; then
     mode="loom"
   fi
 
   local bead_id=""
-  if [ -f /tmp/wrix-bead-id ]; then
+  if [[ -f /tmp/wrix-bead-id ]]; then
     bead_id=$(cat /tmp/wrix-bead-id 2>/dev/null || true)
   fi
 
   local claude_session_id=""
-  if [ -f "$workspace/.claude/history.jsonl" ]; then
+  if [[ -f "$workspace/.claude/history.jsonl" ]]; then
     claude_session_id=$(tail -1 "$workspace/.claude/history.jsonl" 2>/dev/null \
       | jq -r '.sessionId // empty' 2>/dev/null || true)
   fi
@@ -111,7 +111,7 @@ test_log_file_created() {
   local log_file
   log_file=$(write_session_log 0)
 
-  if [ -f "$log_file" ]; then
+  if [[ -f "$log_file" ]]; then
     test_pass "Log file created at $log_file"
   else
     test_fail "Log file not created"
@@ -183,7 +183,7 @@ test_log_interactive_mode() {
   local mode
   mode=$(jq -r '.mode' "$log_file")
 
-  if [ "$mode" = "interactive" ]; then
+  if [[ "$mode" = "interactive" ]]; then
     test_pass "Mode is 'interactive'"
   else
     test_fail "Mode is '$mode', expected 'interactive'"
@@ -202,7 +202,7 @@ test_log_loom_mode() {
   local mode
   mode=$(jq -r '.mode' "$log_file")
 
-  if [ "$mode" = "loom" ]; then
+  if [[ "$mode" = "loom" ]]; then
     test_pass "Mode is 'loom'"
   else
     test_fail "Mode is '$mode', expected 'loom'"
@@ -220,7 +220,7 @@ test_log_exit_code() {
   local exit_code
   exit_code=$(jq '.exit_code' "$log_file")
 
-  if [ "$exit_code" = "42" ]; then
+  if [[ "$exit_code" = "42" ]]; then
     test_pass "Exit code recorded as 42"
   else
     test_fail "Exit code is '$exit_code', expected 42"
@@ -239,7 +239,7 @@ test_log_bead_id_from_file() {
   local bead_id
   bead_id=$(jq -r '.bead_id' "$log_file")
 
-  if [ "$bead_id" = "wx-abc123" ]; then
+  if [[ "$bead_id" = "wx-abc123" ]]; then
     test_pass "Bead ID recorded as wx-abc123"
   else
     test_fail "Bead ID is '$bead_id', expected 'wx-abc123'"
@@ -258,7 +258,7 @@ test_log_bead_id_null_when_missing() {
   local bead_id
   bead_id=$(jq -r '.bead_id' "$log_file")
 
-  if [ "$bead_id" = "null" ]; then
+  if [[ "$bead_id" = "null" ]]; then
     test_pass "Bead ID is null"
   else
     test_fail "Bead ID is '$bead_id', expected null"
@@ -279,7 +279,7 @@ test_log_claude_session_id() {
   local session_id
   session_id=$(jq -r '.claude_session_id' "$log_file")
 
-  if [ "$session_id" = "abc-def-123" ]; then
+  if [[ "$session_id" = "abc-def-123" ]]; then
     test_pass "Claude session ID recorded as abc-def-123"
   else
     test_fail "Claude session ID is '$session_id', expected 'abc-def-123'"
@@ -298,7 +298,7 @@ test_log_wrix_session_id() {
   local session_id
   session_id=$(jq -r '.wrix_session_id' "$log_file")
 
-  if [ "$session_id" = "main:0.1" ]; then
+  if [[ "$session_id" = "main:0.1" ]]; then
     test_pass "Wrix session ID recorded as main:0.1"
   else
     test_fail "Wrix session ID is '$session_id', expected 'main:0.1'"
@@ -316,7 +316,7 @@ test_log_duration_non_negative() {
   local duration
   duration=$(jq '.duration_seconds' "$log_file")
 
-  if [ "$duration" -ge 0 ]; then
+  if [[ "$duration" -ge 0 ]]; then
     test_pass "Duration is non-negative: $duration"
   else
     test_fail "Duration is negative: $duration"
@@ -402,7 +402,7 @@ echo ""
 echo "=============================="
 echo -e "Results: ${GREEN}$PASSED passed${NC}, ${RED}$FAILED failed${NC}"
 
-if [ ${#FAILED_TESTS[@]} -gt 0 ]; then
+if [[ ${#FAILED_TESTS[@]} -gt 0 ]]; then
   echo ""
   echo "Failed tests:"
   for ft in "${FAILED_TESTS[@]}"; do

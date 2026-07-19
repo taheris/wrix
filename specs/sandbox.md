@@ -28,7 +28,7 @@ The **runtime image installer** is the shared host-side image install and cleanu
 
 **Image install path** — Before invoking the platform install pipeline, the wrix runtime image installer checks whether the image's **content digest** recorded with the selected image source (not ref-name+tag) matches any image already present in the platform store. On Linux this digest is derived from descriptor/config metadata without executing the source; tar-loadable Darwin sources may be inspected for config metadata but are not loaded. On a digest hit, the install is skipped entirely — no source execution, no tar materialization, no stream invocation, and no `*-load` CLI call. On a miss, the installer dispatches by `ProfileConfig.image.source_kind`:
 
-- Linux uses an archive-less source (`source_kind = "nix-descriptor"`) whose descriptor names a prebuilt OCI layout. The runtime installer reads that descriptor and copies `oci:<oci_layout>:<oci_ref>` into `containers-storage:<ref>` with skopeo (or an equivalent wrix-owned copy path). Digest preflight runs before the copy; on a miss, content-addressed layer storage reuses unchanged blob digests, so unchanged lower layers are not rewritten.
+- Linux uses an archive-less source (`source_kind = "nix-descriptor"`) whose descriptor names a prebuilt OCI layout. The runtime installer reads that descriptor and copies `oci:<oci_layout>:<oci_ref>` into `containers-storage:<ref>` with skopeo (or an equivalent wrix-owned copy path). Digest preflight runs before the copy; on a miss, wrix delegates the copy to the destination store's content-addressed transport.
 - Darwin converts tar-loadable sources (`source_kind = "docker-archive"`) to a temporary OCI archive, then invokes `container image load --input <oci-archive>`. Apple's `container` CLI surfaces no per-blob-dedup install path at this time; see `image-builder.md` § Out of Scope.
 
 Both platforms rely on the provenance-tiered graph (see `image-builder.md` § Provenance-Tiered Layering) to keep volatile changes isolated. Linux realizes the cache contract through descriptor-level layer reuse; Darwin keeps a tar/load fallback plus digest-skip preflight until a per-blob Apple path is verified.
@@ -170,7 +170,7 @@ Before launching the agent container, `wrix` ensures the per-workspace service c
 - `agent_args` — argv tail passed to the agent binary
 - `mounts` — optional `[{host_path, container_path, read_only}]` list; omitted or empty means no per-launch mounts. Additive to `profile.mounts` and `mkSandbox.mounts`.
 
-Plus consumer-defined fields the entrypoint reads from inside the container. The schema is part of the launcher runtime contract, and CLI help mirrors it per `cli.md`. Per-launch `SpawnConfig` may override launch-time inputs (workspace, env allowlist, agent args, mounts, image ref/source for orchestrators), but it may not change the selected agent independently of the image/profile config. `wrix run` errors when no valid `ProfileConfig` is supplied; there is no implicit default image baked in.
+Plus consumer-defined fields the entrypoint reads from the original config mounted read-only inside the container at the path named by `WRIX_SPAWN_CONFIG`. The schema is part of the launcher runtime contract, and CLI help mirrors it per `cli.md`. Per-launch `SpawnConfig` may override launch-time inputs (workspace, env allowlist, agent args, mounts, image ref/source for orchestrators), but it may not change the selected agent independently of the image/profile config. `wrix run` errors when no valid `ProfileConfig` is supplied; there is no implicit default image baked in.
 
 ## Platform Implementations
 
@@ -232,8 +232,8 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
   [system](verify:sandbox.network-fail-closed)
 - After startup, the agent process cannot modify firewall rules (for example `nft flush ruleset` on the nft backend, or the equivalent backend flush command, fails inside the running sandbox)
   [system](verify:sandbox.agent-lacks-net-admin)
-- `WRIX_MICROVM=1` selects `podman --runtime krun` on Linux when `/dev/kvm` is available, and fails loudly when KVM is missing
-  [check](verify:sandbox.linux-microvm-runtime)
+- `WRIX_MICROVM=1` selects `podman --runtime krun --userns=keep-id` on Linux when `/dev/kvm` is available, enters through `/krun-relay`, serializes the requested command through `WRIX_KRUN_CMD`, passes terminal dimensions for PTY setup, reaches the krun-only `krun-init.sh`/libfakeuid boundary, and fails loudly when KVM is missing
+  [system](verify:sandbox.linux-microvm-runtime)
 - `wrix run` errors at startup with a clear message when no valid Nix-generated `ProfileConfig` JSON is supplied
   [test](../crates/wrix-sandbox/tests/command.rs::run_requires_valid_profile_config)
 - `mkSandbox`'s `package` wrapper keeps `bin/wrix` explicit, exposes `wrix-run` as `meta.mainProgram` for `nix run`, and passes an immutable Nix-store `ProfileConfig` JSON path to the profile-agnostic launcher for both `run` and `spawn`, with image defaults supplied by `ProfileConfig` rather than mutable `WRIX_DEFAULT_IMAGE_*` env vars
@@ -242,14 +242,18 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
   [check](test-ci:test-profile-config-image-source-kind)
 - The selected agent runtime comes from `ProfileConfig` and cannot be changed by caller env independently of the selected image/profile
   [test](../crates/wrix-sandbox/tests/command.rs::profile_config_agent_cannot_be_overridden_by_env)
-- `wrix spawn --spawn-config <file>` parses the documented `SpawnConfig` fields (`image_ref`, `image_source`, `image_source_kind`, `workspace`, `env`, `agent_args`, `mounts`), rejects `image_source` overrides without an explicit matching `image_source_kind`, and rejects attempts to change the selected agent independently of `ProfileConfig`
-  [test](../crates/wrix-sandbox/tests/spawn_config.rs::spawn_config_schema_and_agent_pin)
+- `wrix spawn --spawn-config <file>` parses the documented `SpawnConfig` fields (`image_ref`, `image_source`, `image_source_kind`, `workspace`, `env`, `agent_args`, `mounts`) into the launch plan
+  [test](../crates/wrix-sandbox/tests/spawn_config.rs::documented_spawn_config_fields_render_into_launch_plan)
+- A `SpawnConfig.image_source` override requires an explicit source kind compatible with the current platform
+  [test](../crates/wrix-sandbox/tests/spawn_config.rs::image_source_override_requires_source_kind)
+- `SpawnConfig` cannot change the selected agent independently of `ProfileConfig`
+  [test](../crates/wrix-sandbox/tests/spawn_config.rs::spawn_config_cannot_override_agent)
+- Consumer-defined `SpawnConfig` fields remain available to the in-container entrypoint through the read-only config mount and `WRIX_SPAWN_CONFIG`
+  [test](../crates/wrix-sandbox/tests/spawn_config.rs::consumer_spawn_config_fields_are_mounted_for_entrypoint)
 - On Linux, each `SpawnConfig.mounts` entry becomes a `-v <host_path>:<container_path>` podman argument, with `:ro` appended when `read_only: true`. A missing or empty `mounts` list produces no additional `-v` flags.
   [test](../crates/wrix-sandbox/tests/spawn_config.rs::linux_spawn_mounts_render_podman_volume_args)
-- Default Linux launches do not mount the host Podman socket or export `CONTAINER_HOST` / `GC_HOST_*`; `WRIX_PODMAN_SOCKET` is ignored, and the socket path is available only through the explicit unsafe `WRIX_UNSAFE_PODMAN_SOCKET` opt-in, which fails loudly when set but the host socket is absent.
-  [test](../crates/wrix-sandbox/tests/launch.rs::unsafe_podman_socket_env_is_ignored_without_explicit_opt_in)
-- With a real Unix socket at the host Podman socket path, `WRIX_UNSAFE_PODMAN_SOCKET` renders the socket mount plus `CONTAINER_HOST` and `GC_HOST_*` env using host-visible paths; without the opt-in, that same socket is not mounted.
-  [test](command::launch::test::unsafe_podman_socket_mounts_only_on_explicit_opt_in)
+- The packaged launcher does not mount the host Podman socket or export `CONTAINER_HOST` / `GC_HOST_*` by default; `WRIX_PODMAN_SOCKET` is ignored; and only `WRIX_UNSAFE_PODMAN_SOCKET` renders a real socket mount plus host-visible `CONTAINER_HOST` / `GC_HOST_*`, failing loudly when the socket is absent
+  [system](verify:sandbox.unsafe-podman-socket)
 - On Darwin, the same mount classifier handles `profile.mounts` and `SpawnConfig.mounts` — one mechanism, not two. Directories are staged + copied at launch, regular files copy-from-parent-dir, and entries whose `host_path` is a Unix socket cause the launcher to fail loudly before the container starts. (VirtioFS does not pass socket operations, so a silently-mounted socket would dead-end at the first `connect()`.)
   [test](../crates/wrix-sandbox/tests/darwin_mounts.rs::mount_classifier_handles_profile_and_spawn_mounts_uniformly)
 - The container entrypoint switches on `WRIX_AGENT` and exec's the matching agent binary (`claude`, `pi`, `direct`)
@@ -270,16 +274,20 @@ Plus consumer-defined fields the entrypoint reads from inside the container. The
   [system](verify:sandbox.workspace-bin-path-absent)
 - Both `lib/sandbox/linux/entrypoint.sh` and `lib/sandbox/darwin/entrypoint.sh` implement the `/workspace/bin` PATH prepend
   [check](verify:sandbox.entrypoint-workspace-bin-prepend)
-- The runtime image installer preflight checks whether the selected image source's content digest matches any image already present in the platform store before invoking the install pipeline; on a digest hit, no image source is executed, no tar bytes are streamed, and no `*-load` CLI is invoked
-  [test](../crates/wrix-sandbox/tests/image_install.rs::digest_preflight_skips_source_execution_on_hit)
+- The packaged runtime image installer preflight checks whether the selected image source's content digest matches any image already present in the platform store before invoking the install pipeline; on a digest hit, no image source is executed, no tar bytes are streamed, and no `*-load` CLI is invoked
+  [system](verify:sandbox.image-install-digest-skip)
 - On Linux, the runtime image installer dispatches `source_kind = "nix-descriptor"` through an archive-less descriptor-to-OCI-layout install path (`oci:<oci_layout>:<oci_ref>` → `containers-storage:<ref>` with skopeo, or equivalent wrix); the docker/OCI archive conversion path is not used for Linux descriptor sources
   [test](../crates/wrix-sandbox/tests/image_install.rs::linux_descriptor_sources_use_archiveless_install_path)
 - A second spawn of an already-loaded image performs no writes to the platform store's layer directory and does not execute the image source
   [test](../crates/wrix-sandbox/tests/image_install.rs::already_loaded_image_performs_no_store_writes)
-- On Linux, re-installing an image that differs from the cached one in only its top customisation layer generates and transfers only changed/missing layer blobs, not O(image-size) bytes
-  [test](../crates/wrix-sandbox/tests/image_install.rs::linux_reinstall_transfers_only_changed_layers)
-- The runtime image cleanup path records a bounded cross-workspace MRU of eight wrix image refs/digests/image IDs, preserves images used by existing containers, prunes wrix-managed images outside the keep set, and does not automatically remove unlabelled `<none>:<none>` images
+- The runtime image cleanup path records a bounded cross-workspace MRU of eight typed wrix image refs/digests/image IDs, preserves images used by Podman containers, prunes wrix-managed images outside the keep set, and does not automatically remove unlabelled `<none>:<none>` images
   [test](../crates/wrix-sandbox/tests/image_retention.rs::cleanup_prunes_only_wrix_managed_images_outside_bounded_keep_set)
+- Concurrent launches update the shared MRU without losing either workspace's record or exposing partially-written JSON
+  [test](../crates/wrix-sandbox/tests/image_retention.rs::concurrent_mru_updates_preserve_each_workspace_record)
+- Apple `container list` records are parsed for image references and descriptor IDs so cleanup preserves images used by existing Apple containers
+  [test](image::test::apple_container_list_preserves_images_used_by_existing_containers)
+- Runtime MCP selection and tmux audit overrides from the host reach the bundled entrypoint through `WRIX_MCP` and `WRIX_MCP_TMUX_*`
+  [test](../crates/wrix-sandbox/tests/launch.rs::runtime_mcp_host_configuration_reaches_entrypoint)
 - On Darwin, the runtime image installer converts `source_kind = "docker-archive"` sources to temporary OCI archives before invoking `container image load --input <oci-archive>`, then removes the temporary archive and relies on digest-skip preflight while per-blob install remains out of scope
   [system](verify:sandbox.darwin-image-load)
 

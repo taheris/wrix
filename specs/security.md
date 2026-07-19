@@ -30,12 +30,7 @@ the container/microVM into the host. This is mitigated by the
 hardware-virtualized boundary owned by `sandbox.md` (microVM on macOS,
 opt-in via `WRIX_MICROVM=1` on Linux).
 
-The normal boundary model excludes host container-runtime control.
-`WRIX_UNSAFE_PODMAN_SOCKET` is an operator-declared unsafe exception:
-it exposes the host user's Podman API inside the sandbox, which can
-start containers with host bind mounts and is therefore outside the
-normal sandbox mitigations. It is disabled by default, and the legacy
-`WRIX_PODMAN_SOCKET` name has no effect.
+The normal boundary model excludes host container-runtime control. The unsafe host-Podman exception defined by `sandbox.md` can start containers with host bind mounts and is therefore outside the normal sandbox mitigations.
 
 Defense against policy leakage requires restricting *what's available
 inside the boundary* (network, credentials, filesystem), not
@@ -303,10 +298,14 @@ this section is the index, not a restatement.
   `exit_code`, `mode`, and `agent_session_dir` fields are populated;
   and `agent_session_dir` resolves to an existing directory.
   [system](verify:security.audit-trail-anchor)
-- Default launches do not expose the host Podman API; `WRIX_PODMAN_SOCKET`
-  does not enable it, and `WRIX_UNSAFE_PODMAN_SOCKET` is the only opt-in,
-  failing loudly when set but the host socket is absent.
-  [test](../crates/wrix-sandbox/tests/launch.rs::podman_api_socket_requires_explicit_unsafe_opt_in)
+- Host provider credentials supplied through `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` reach the selected runtime without being baked into the image
+  [system](verify:security.provider-credential-env)
+- Launcher dry-run output identifies provider credential env names but redacts their values
+  [test](../crates/wrix-sandbox/tests/launch.rs::host_provider_credentials_reach_run_environment)
+- Linux delivers Pi's selected auth file as a single-file runtime bind
+  [test](../crates/wrix-sandbox/tests/launch.rs::pi_auth_file_uses_platform_delivery_path)
+- Darwin mounts the Pi auth file's parent at an internal staging directory and points Pi at only the selected filename
+  [test](command::launch::test::darwin_pi_auth_mounts_parent_at_internal_staging_path)
 
 ## Requirements
 
@@ -331,7 +330,8 @@ this section is the index, not a restatement.
    repo deploy/signing keys with strict pinned GitHub host-key
    verification, and fail rather than falling back to ambient user
    SSH identities or trust-on-first-use host keys.
-5. **Audit anchor** — every sandbox session writes a session-metadata
+5. **Agent credentials** — provider keys cross the boundary only through runtime environment delivery, while Pi auth crosses through the platform-specific file delivery described in *Credential Surfaces*. Neither channel contributes secret material to an image layer.
+6. **Audit anchor** — every sandbox session writes a session-metadata
    index whose `agent_session_dir` field points at the directory
    containing the selected agent's transcript for that session.
 
@@ -346,10 +346,6 @@ this section is the index, not a restatement.
 3. **Audit fit** — the agent transcript is treated as fit-for-purpose
    audit content for the stated threat model (policy leakage from a
    misbehaving but not adversarial agent).
-4. **Unsafe host-runtime control** — host Podman API access is absent by
-   default. When enabled through `WRIX_UNSAFE_PODMAN_SOCKET`, it is outside
-   the normal sandbox boundary and inherits the operator's host Podman
-   privileges.
 
 ## Out of Scope
 

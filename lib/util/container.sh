@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+set -euo pipefail
+
 # Container runtime abstraction — Apple container CLI (Darwin) / podman (Linux).
 #
 # Source this file to get cr_* functions that dispatch to the correct runtime.

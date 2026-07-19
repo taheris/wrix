@@ -1,6 +1,12 @@
-use std::{collections::BTreeSet, fs};
+use std::{
+    collections::BTreeSet,
+    fs,
+    sync::{Arc, Barrier},
+    thread,
+};
 
-use wrix_sandbox::image::{self, OciSource, RetentionRequest, Runtime, SourceKind, Store};
+use serde_json::json;
+use wrix_sandbox::image::{self, Digest, OciSource, RetentionRequest, Runtime, SourceKind, Store};
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
@@ -12,56 +18,24 @@ fn cleanup_prunes_only_wrix_managed_images_outside_bounded_keep_set() -> TestRes
     let mru_path = root.path().join("image-mru.json");
     fs::write(
         &mru_path,
-        serde_json::to_vec(&vec![
-            image::Record {
-                ref_name: String::from("localhost/wrix-recent-by-ref:old"),
-                digest: String::new(),
-                id: String::new(),
-            },
-            image::Record {
-                ref_name: String::new(),
-                digest: digest('r'),
-                id: String::new(),
-            },
-            image::Record {
-                ref_name: String::new(),
-                digest: String::new(),
-                id: String::from("recent-id"),
-            },
-            image::Record {
-                ref_name: String::from("localhost/wrix-filler-1:old"),
-                digest: String::new(),
-                id: String::new(),
-            },
-            image::Record {
-                ref_name: String::from("localhost/wrix-filler-2:old"),
-                digest: String::new(),
-                id: String::new(),
-            },
-            image::Record {
-                ref_name: String::from("localhost/wrix-filler-3:old"),
-                digest: String::new(),
-                id: String::new(),
-            },
-            image::Record {
-                ref_name: String::from("localhost/wrix-filler-4:old"),
-                digest: String::new(),
-                id: String::new(),
-            },
-            image::Record {
-                ref_name: String::from("localhost/wrix-dropped-by-bound:old"),
-                digest: String::new(),
-                id: String::new(),
-            },
-        ])?,
+        serde_json::to_vec(&json!([
+            {"ref": "localhost/wrix-recent-by-ref:old"},
+            {"digest": digest('d')},
+            {"id": "recent-id"},
+            {"ref": "localhost/wrix-filler-1:old"},
+            {"ref": "localhost/wrix-filler-2:old"},
+            {"ref": "localhost/wrix-filler-3:old"},
+            {"ref": "localhost/wrix-filler-4:old"},
+            {"ref": "localhost/wrix-dropped-by-bound:old"}
+        ]))?,
     )?;
     let mut store = FakeStore::with_images(vec![
         fake_image("localhost/wrix-current:live", "current-id")
-            .with_digest(&digest('c'))
+            .with_digest(digest('c').as_str())
             .managed(),
         fake_image("localhost/wrix-recent-by-ref:old", "recent-ref-id").managed(),
         fake_image("localhost/wrix-recent-by-digest:old", "recent-digest-id")
-            .with_digest(&digest('r'))
+            .with_digest(digest('d').as_str())
             .managed(),
         fake_image("localhost/wrix-recent-by-id:old", "recent-id").managed(),
         fake_image("localhost/wrix-used:old", "used-id")
@@ -80,20 +54,26 @@ fn cleanup_prunes_only_wrix_managed_images_outside_bounded_keep_set() -> TestRes
             image_ref: "localhost/wrix-current:live",
             image_source: "digest-from-profile-config",
             source_kind: SourceKind::NixDescriptor,
-            digest: &digest('c'),
+            digest: Some(&digest('c')),
             mru_path: &mru_path,
         },
     )?;
 
     let records = serde_json::from_slice::<Vec<image::Record>>(&fs::read(&mru_path)?)?;
     assert_eq!(records.len(), 8);
-    assert_eq!(records[0].ref_name, "localhost/wrix-current:live");
-    assert_eq!(records[0].digest, digest('c'));
-    assert_eq!(records[0].id, "current-id");
+    assert_eq!(
+        records[0].ref_name.as_deref(),
+        Some("localhost/wrix-current:live")
+    );
+    assert_eq!(records[0].digest.as_ref(), Some(&digest('c')));
+    assert_eq!(
+        records[0].id.as_ref().map(image::ImageId::as_str),
+        Some("current-id")
+    );
     assert!(
         !records
             .iter()
-            .any(|record| record.ref_name == "localhost/wrix-dropped-by-bound:old")
+            .any(|record| record.ref_name.as_deref() == Some("localhost/wrix-dropped-by-bound:old"))
     );
 
     let deleted = store.deleted.iter().cloned().collect::<BTreeSet<_>>();
@@ -119,9 +99,90 @@ fn cleanup_prunes_only_wrix_managed_images_outside_bounded_keep_set() -> TestRes
 }
 
 #[test]
+fn concurrent_mru_updates_preserve_each_workspace_record() -> TestResult {
+    let root = tempfile::Builder::new()
+        .prefix("image-retention-concurrent")
+        .tempdir()?;
+    let mru_path = Arc::new(root.path().join("image-mru.json"));
+    let barrier = Arc::new(Barrier::new(2));
+    let mut handles = Vec::new();
+    for index in 0..2 {
+        let path = Arc::clone(&mru_path);
+        let ready = Arc::clone(&barrier);
+        handles.push(thread::spawn(move || -> Result<(), image::Error> {
+            let image_ref = format!("localhost/wrix-workspace-{index}:live");
+            let image_id = format!("workspace-{index}-id");
+            let mut store =
+                FakeStore::with_images(vec![fake_image(&image_ref, &image_id).managed()]);
+            ready.wait();
+            image::remember_and_prune(
+                &mut store,
+                &RetentionRequest {
+                    runtime: Runtime::Podman,
+                    image_ref: &image_ref,
+                    image_source: "",
+                    source_kind: SourceKind::NixDescriptor,
+                    digest: None,
+                    mru_path: &path,
+                },
+            )
+        }));
+    }
+    for handle in handles {
+        handle.join().map_err(|_| "retention worker panicked")??;
+    }
+
+    let records = serde_json::from_slice::<Vec<image::Record>>(&fs::read(&*mru_path)?)?;
+    assert_eq!(records.len(), 2);
+    for index in 0..2 {
+        let expected = format!("localhost/wrix-workspace-{index}:live");
+        assert!(
+            records
+                .iter()
+                .any(|record| record.ref_name.as_deref() == Some(expected.as_str()))
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn container_cleanup_preserves_images_used_by_apple_containers() -> TestResult {
+    let root = tempfile::Builder::new()
+        .prefix("image-retention-container")
+        .tempdir()?;
+    let mru_path = root.path().join("image-mru.json");
+    let mut store = FakeStore::with_images(vec![
+        fake_image("wrix-current:live", "current-id").managed(),
+        fake_image("wrix-running:old", "running-id")
+            .managed()
+            .in_use(),
+    ]);
+
+    image::remember_and_prune(
+        &mut store,
+        &RetentionRequest {
+            runtime: Runtime::Container,
+            image_ref: "wrix-current:live",
+            image_source: "",
+            source_kind: SourceKind::DockerArchive,
+            digest: None,
+            mru_path: &mru_path,
+        },
+    )?;
+
+    assert!(
+        !store
+            .deleted
+            .iter()
+            .any(|target| target == "wrix-running:old")
+    );
+    Ok(())
+}
+
+#[test]
 fn fake_store_matches_podman_listing_contract() -> TestResult {
     let mut store = FakeStore::with_images(vec![
-        fake_image("localhost/wrix-test:old", "image-id").with_digest(&digest('a')),
+        fake_image("localhost/wrix-test:old", "image-id").with_digest(digest('a').as_str()),
         FakeImage::dangling("dangling-id"),
     ]);
 
@@ -138,7 +199,7 @@ fn fake_store_matches_podman_listing_contract() -> TestResult {
     );
     assert_eq!(
         store.image_digest(Runtime::Podman, "image-id")?,
-        Some(digest('a'))
+        Some(digest('a').as_str().to_owned())
     );
     Ok(())
 }
@@ -236,7 +297,8 @@ impl Store for FakeStore {
         source: &OciSource,
         _destination: &str,
     ) -> Result<(), image::Error> {
-        self.present_digests.insert(source.digest.clone());
+        self.present_digests
+            .insert(source.digest.as_str().to_owned());
         Ok(())
     }
 
@@ -305,6 +367,10 @@ fn fake_image(ref_name: &str, id: &str) -> FakeImage {
     }
 }
 
-fn digest(ch: char) -> String {
-    format!("sha256:{}", ch.to_string().repeat(64))
+fn digest(ch: char) -> Digest {
+    let value = format!("sha256:{}", ch.to_string().repeat(64));
+    let Ok(digest) = Digest::parse(&value) else {
+        std::process::abort();
+    };
+    digest
 }

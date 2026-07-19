@@ -108,7 +108,7 @@ test_default_wrix_spawn_delegates_to_sandbox_launcher() {
   local source_kind
   source_kind=$(expected_source_kind)
   cat >"$profile_config" <<JSON
-{"schema":1,"system":"test","profile":{"name":"base","env":{},"mounts":[],"writable_dirs":[],"network_allowlist":[]},"image":{"ref":"localhost/wrix-test:latest","source":"/nix/store/fake-image","source_kind":"$source_kind","digest":"sha256:test"},"agent":{"kind":"direct"},"resources":{"cpus":null,"memory_mb":4096,"pids_limit":4096},"security":{"deploy_key":null},"network":{"default_mode":"open","ipv6":"disabled"},"services":{"beads":{"enable":"auto"},"nix_cache":{"enable":true}},"features":{"mcp_runtime":false}}
+{"schema":1,"system":"test","profile":{"name":"base","env":{},"mounts":[],"writable_dirs":[],"network_allowlist":[]},"image":{"ref":"localhost/wrix-test:latest","source":"/nix/store/fake-image","source_kind":"$source_kind","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"agent":{"kind":"direct"},"resources":{"cpus":null,"memory_mb":4096,"pids_limit":4096},"security":{"deploy_key":null},"network":{"default_mode":"open","ipv6":"disabled"},"services":{"beads":{"enable":"auto"},"nix_cache":{"enable":true}},"features":{"mcp_runtime":false}}
 JSON
   spawn_config="$TEST_TMP/spawn.json"
   cat >"$spawn_config" <<JSON

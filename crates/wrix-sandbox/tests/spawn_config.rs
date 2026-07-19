@@ -8,56 +8,83 @@ use wrix_sandbox::command::Command;
 use common::{ChildSpec, ProfileFixture, TestResult};
 
 #[test]
-fn spawn_config_schema_and_agent_pin() -> TestResult {
-    let root = tempfile::Builder::new().prefix("spawn-schema").tempdir()?;
-    let workspace = root.path().join("workspace");
-    let profile_config = root.path().join("profile.json");
-    let mount_host = root.path().join("documented-mount");
-    fs::create_dir_all(&workspace)?;
+fn documented_spawn_config_fields_render_into_launch_plan() -> TestResult {
+    let fixture = SpawnFixture::new("spawn-documented")?;
+    let mount_host = fixture.root.path().join("documented-mount");
     fs::create_dir_all(&mount_host)?;
-    write_profile_config_with_keys(root.path(), &profile_config)?;
-
-    let documented = root.path().join("documented.json");
-    write_json(
-        &documented,
+    let config = fixture.write(
+        "documented",
         &json!({
-            "workspace": path_text(&workspace),
+            "workspace": path_text(&fixture.workspace),
             "image_ref": "wrix-override:test",
             "image_source": "/nix/store/fake-override",
             "image_source_kind": common::expected_source_kind(),
             "env": [["FOO", "bar"], ["EMPTY", ""]],
             "agent_args": ["--print", "hello"],
-            "mounts": [{"host_path": path_text(&mount_host), "container_path": "/mnt/schema", "read_only": true}],
-            "initial_prompt": "consumer field",
-            "repin": true
+            "mounts": [{"host_path": path_text(&mount_host), "container_path": "/mnt/schema", "read_only": true}]
         }),
     )?;
-    let run = run_spawn(root.path(), "documented", &profile_config, &documented)?;
+
+    let run = fixture.run("documented", &config)?;
+
     assert!(run.success, "{}", run.stderr);
     assert!(run.stderr.is_empty(), "{}", run.stderr);
-    assert!(run.stdout.contains("STDIO=1"));
-    assert!(run.stdout.contains("PROFILE_AGENT=direct"));
-    assert!(run.stdout.contains("ENV=WRIX_AGENT=direct"));
-    assert!(run.stdout.contains("IMAGE_OVERRIDE_REF=wrix-override:test"));
-    assert!(
-        run.stdout
-            .contains("IMAGE_OVERRIDE_SOURCE=/nix/store/fake-override")
-    );
+    for expected in [
+        "STDIO=1",
+        "PROFILE_AGENT=direct",
+        "ENV=WRIX_AGENT=direct",
+        "IMAGE_OVERRIDE_REF=wrix-override:test",
+        "IMAGE_OVERRIDE_SOURCE=/nix/store/fake-override",
+        "ENV=FOO=bar",
+        "ENV=EMPTY=",
+        "CMD=--print",
+        "CMD=hello",
+        "/mnt/schema",
+    ] {
+        assert!(
+            run.stdout.contains(expected),
+            "missing {expected}: {}",
+            run.stdout
+        );
+    }
     assert!(run.stdout.contains(&format!(
         "IMAGE_OVERRIDE_SOURCE_KIND={}",
         common::expected_source_kind()
     )));
-    assert!(run.stdout.contains("ENV=FOO=bar"));
-    assert!(run.stdout.contains("ENV=EMPTY="));
-    assert!(run.stdout.contains("CMD=--print"));
-    assert!(run.stdout.contains("CMD=hello"));
-    assert!(run.stdout.contains("/mnt/schema"));
+    Ok(())
+}
 
-    let without_kind = root.path().join("without-kind.json");
-    write_json(
-        &without_kind,
+#[test]
+fn consumer_spawn_config_fields_are_mounted_for_entrypoint() -> TestResult {
+    let fixture = SpawnFixture::new("spawn-consumer-fields")?;
+    let config = fixture.write(
+        "consumer-fields",
         &json!({
-            "workspace": path_text(&workspace),
+            "workspace": path_text(&fixture.workspace),
+            "env": [],
+            "agent_args": [],
+            "mounts": [],
+            "initial_prompt": "consumer field",
+            "repin": true
+        }),
+    )?;
+
+    let run = fixture.run("consumer-fields", &config)?;
+
+    assert!(run.success, "{}", run.stderr);
+    assert!(run.stdout.contains("ENV=WRIX_SPAWN_CONFIG="));
+    assert!(run.stdout.contains(&config.display().to_string()));
+    assert!(run.stdout.contains("spawn-config.json:ro"));
+    Ok(())
+}
+
+#[test]
+fn image_source_override_requires_source_kind() -> TestResult {
+    let fixture = SpawnFixture::new("spawn-missing-kind")?;
+    let config = fixture.write(
+        "without-kind",
+        &json!({
+            "workspace": path_text(&fixture.workspace),
             "image_ref": "wrix-override:test",
             "image_source": "/nix/store/fake-override",
             "env": [],
@@ -65,19 +92,24 @@ fn spawn_config_schema_and_agent_pin() -> TestResult {
             "mounts": []
         }),
     )?;
-    let missing_kind = run_spawn(root.path(), "without-kind", &profile_config, &without_kind)?;
-    assert!(!missing_kind.success);
+
+    let run = fixture.run("without-kind", &config)?;
+
+    assert!(!run.success);
     assert!(
-        missing_kind
-            .stderr
+        run.stderr
             .contains("image_source requires image_source_kind")
     );
+    Ok(())
+}
 
-    let incompatible = root.path().join("incompatible-kind.json");
-    write_json(
-        &incompatible,
+#[test]
+fn image_source_kind_must_match_platform() -> TestResult {
+    let fixture = SpawnFixture::new("spawn-incompatible-kind")?;
+    let config = fixture.write(
+        "incompatible-kind",
         &json!({
-            "workspace": path_text(&workspace),
+            "workspace": path_text(&fixture.workspace),
             "image_ref": "wrix-override:test",
             "image_source": "/nix/store/fake-override",
             "image_source_kind": alternate_source_kind(),
@@ -86,42 +118,38 @@ fn spawn_config_schema_and_agent_pin() -> TestResult {
             "mounts": []
         }),
     )?;
-    let bad_kind = run_spawn(
-        root.path(),
-        "incompatible-kind",
-        &profile_config,
-        &incompatible,
-    )?;
-    assert!(!bad_kind.success);
-    assert!(bad_kind.stderr.contains(&format!(
+
+    let run = fixture.run("incompatible-kind", &config)?;
+
+    assert!(!run.success);
+    assert!(run.stderr.contains(&format!(
         "image_source_kind must be {}",
         common::expected_source_kind()
     )));
+    Ok(())
+}
 
-    let agent_override = root.path().join("agent-override.json");
-    write_json(
-        &agent_override,
+#[test]
+fn spawn_config_cannot_override_agent() -> TestResult {
+    let fixture = SpawnFixture::new("spawn-agent-override")?;
+    let config = fixture.write(
+        "agent-override",
         &json!({
-            "workspace": path_text(&workspace),
+            "workspace": path_text(&fixture.workspace),
             "env": [],
             "agent_args": [],
             "mounts": [],
             "agent": { "kind": "pi" }
         }),
     )?;
-    let override_run = run_spawn(
-        root.path(),
-        "agent-override",
-        &profile_config,
-        &agent_override,
-    )?;
-    assert!(!override_run.success);
+
+    let run = fixture.run("agent-override", &config)?;
+
+    assert!(!run.success);
     assert!(
-        override_run
-            .stderr
+        run.stderr
             .contains("SpawnConfig cannot change the ProfileConfig agent")
     );
-
     Ok(())
 }
 
@@ -131,19 +159,13 @@ fn linux_spawn_mounts_render_podman_volume_args() -> TestResult {
         return Ok(());
     }
 
-    let root = tempfile::Builder::new().prefix("spawn-mounts").tempdir()?;
-    let workspace = root.path().join("workspace");
-    let profile_config = root.path().join("profile.json");
-    fs::create_dir_all(&workspace)?;
-    write_profile_config_with_keys(root.path(), &profile_config)?;
-
-    let rw = root.path().join("rw-src");
-    let ro = root.path().join("ro-src");
-    let two = root.path().join("two.json");
-    write_json(
-        &two,
+    let fixture = SpawnFixture::new("spawn-mounts")?;
+    let rw = fixture.root.path().join("rw-src");
+    let ro = fixture.root.path().join("ro-src");
+    let two = fixture.write(
+        "two",
         &json!({
-            "workspace": path_text(&workspace),
+            "workspace": path_text(&fixture.workspace),
             "env": [],
             "agent_args": [],
             "mounts": [
@@ -152,39 +174,28 @@ fn linux_spawn_mounts_render_podman_volume_args() -> TestResult {
             ]
         }),
     )?;
-    let two_run = run_spawn(root.path(), "two-mounts", &profile_config, &two)?;
+    let two_run = fixture.run("two-mounts", &two)?;
     assert!(two_run.success, "{}", two_run.stderr);
-    let mounts = mount_lines(&two_run.stdout);
+    let mounts = spawn_mount_lines(&two_run.stdout);
     assert_eq!(mounts.len(), 2, "{}", two_run.stdout);
     assert!(mounts.iter().any(|line| line.ends_with(":/mnt/rw")));
     assert!(mounts.iter().any(|line| line.ends_with(":/mnt/ro:ro")));
 
-    let missing = root.path().join("missing.json");
-    write_json(
-        &missing,
-        &json!({"workspace": path_text(&workspace), "env": [], "agent_args": []}),
-    )?;
-    let missing_run = run_spawn(root.path(), "missing-mounts", &profile_config, &missing)?;
-    assert!(missing_run.success, "{}", missing_run.stderr);
-    assert!(
-        mount_lines(&missing_run.stdout).is_empty(),
-        "{}",
-        missing_run.stdout
-    );
-
-    let empty = root.path().join("empty.json");
-    write_json(
-        &empty,
-        &json!({"workspace": path_text(&workspace), "env": [], "agent_args": [], "mounts": []}),
-    )?;
-    let empty_run = run_spawn(root.path(), "empty-mounts", &profile_config, &empty)?;
-    assert!(empty_run.success, "{}", empty_run.stderr);
-    assert!(
-        mount_lines(&empty_run.stdout).is_empty(),
-        "{}",
-        empty_run.stdout
-    );
-
+    for (label, value) in [
+        (
+            "missing-mounts",
+            json!({"workspace": path_text(&fixture.workspace), "env": [], "agent_args": []}),
+        ),
+        (
+            "empty-mounts",
+            json!({"workspace": path_text(&fixture.workspace), "env": [], "agent_args": [], "mounts": []}),
+        ),
+    ] {
+        let config = fixture.write(label, &value)?;
+        let run = fixture.run(label, &config)?;
+        assert!(run.success, "{}", run.stderr);
+        assert!(spawn_mount_lines(&run.stdout).is_empty(), "{}", run.stdout);
+    }
     Ok(())
 }
 
@@ -194,58 +205,70 @@ fn spawn_config_child() -> TestResult {
     common::run_command_child()
 }
 
-fn run_spawn(
-    root: &std::path::Path,
-    label: &str,
-    profile_config: &std::path::Path,
-    spawn_config: &std::path::Path,
-) -> TestResult<common::ChildRun> {
-    common::run_child(
-        "spawn_config_child",
-        root,
-        label,
-        ChildSpec {
-            command: Command::Spawn,
-            profile_config: Some(profile_config.to_path_buf()),
-            args: vec![
-                String::from("--spawn-config"),
-                spawn_config.display().to_string(),
-                String::from("--stdio"),
-            ],
-            env: Vec::new(),
-        },
-    )
+struct SpawnFixture {
+    root: tempfile::TempDir,
+    workspace: std::path::PathBuf,
+    profile_config: std::path::PathBuf,
 }
 
-fn write_json(path: &std::path::Path, value: &Value) -> TestResult {
-    fs::write(path, format!("{}\n", serde_json::to_string_pretty(&value)?))?;
-    Ok(())
+impl SpawnFixture {
+    fn new(prefix: &str) -> TestResult<Self> {
+        let root = tempfile::Builder::new().prefix(prefix).tempdir()?;
+        let workspace = root.path().join("workspace");
+        let profile_config = root.path().join("profile.json");
+        fs::create_dir_all(&workspace)?;
+        let key_dir = root.path().join("home/.ssh/deploy_keys");
+        fs::create_dir_all(&key_dir)?;
+        fs::write(key_dir.join("repo-key"), "private key\n")?;
+        fs::write(key_dir.join("repo-key-signing"), "signing key\n")?;
+        common::write_profile_config(
+            &profile_config,
+            &ProfileFixture {
+                deploy_key: Some(String::from("repo-key")),
+                ..ProfileFixture::default()
+            },
+        )?;
+        Ok(Self {
+            root,
+            workspace,
+            profile_config,
+        })
+    }
+
+    fn write(&self, label: &str, value: &Value) -> TestResult<std::path::PathBuf> {
+        let path = self.root.path().join(format!("{label}.json"));
+        fs::write(&path, format!("{}\n", serde_json::to_string_pretty(value)?))?;
+        Ok(path)
+    }
+
+    fn run(&self, label: &str, spawn_config: &std::path::Path) -> TestResult<common::ChildRun> {
+        common::run_child(
+            "spawn_config_child",
+            self.root.path(),
+            label,
+            ChildSpec {
+                command: Command::Spawn,
+                profile_config: Some(self.profile_config.clone()),
+                args: vec![
+                    String::from("--spawn-config"),
+                    spawn_config.display().to_string(),
+                    String::from("--stdio"),
+                ],
+                env: Vec::new(),
+            },
+        )
+    }
 }
 
-fn mount_lines(output: &str) -> Vec<&str> {
+fn spawn_mount_lines(output: &str) -> Vec<&str> {
     output
         .lines()
-        .filter(|line| line.starts_with("MOUNT=-v "))
+        .filter(|line| line.starts_with("MOUNT=-v ") && !line.contains("spawn-config.json"))
         .collect()
 }
 
 fn path_text(path: &std::path::Path) -> String {
     path.display().to_string()
-}
-
-fn write_profile_config_with_keys(root: &std::path::Path, path: &std::path::Path) -> TestResult {
-    let key_dir = root.join("home/.ssh/deploy_keys");
-    fs::create_dir_all(&key_dir)?;
-    fs::write(key_dir.join("repo-key"), "private key\n")?;
-    fs::write(key_dir.join("repo-key-signing"), "signing key\n")?;
-    common::write_profile_config(
-        path,
-        &ProfileFixture {
-            deploy_key: Some(String::from("repo-key")),
-            ..ProfileFixture::default()
-        },
-    )?;
-    Ok(())
 }
 
 const fn alternate_source_kind() -> &'static str {

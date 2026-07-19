@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+set -euo pipefail
+
 # Judge rubrics for tmux-mcp.md success criteria
 
 test_context_isolation() {

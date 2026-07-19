@@ -7,7 +7,8 @@ use std::{
 };
 
 use displaydoc::Display;
-use serde::{Deserialize, Serialize};
+use fs2::FileExt;
+use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -33,13 +34,87 @@ pub enum Runtime {
     Container,
 }
 
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct Digest(String);
+
+impl Digest {
+    pub fn parse(value: &str) -> Result<Self, DigestParseError> {
+        let Some(hex) = value.strip_prefix("sha256:") else {
+            return Err(DigestParseError {
+                value: value.to_owned(),
+            });
+        };
+        if hex.len() != 64 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(DigestParseError {
+                value: value.to_owned(),
+            });
+        }
+        Ok(Self(value.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for Digest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(&value).map_err(de::Error::custom)
+    }
+}
+
+#[derive(Clone, Debug, Display, Error)]
+/// invalid sha256 content digest: {value}
+pub struct DigestParseError {
+    value: String,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct ImageId(String);
+
+impl ImageId {
+    pub fn parse(value: &str) -> Result<Self, ImageIdParseError> {
+        normalized_value(value)
+            .map(Self)
+            .ok_or_else(|| ImageIdParseError {
+                value: value.to_owned(),
+            })
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for ImageId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(&value).map_err(de::Error::custom)
+    }
+}
+
+#[derive(Clone, Debug, Display, Error)]
+/// invalid image ID: {value}
+pub struct ImageIdParseError {
+    value: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct InstallRequest<'a> {
     pub runtime: Runtime,
     pub image_ref: &'a str,
     pub image_source: &'a str,
     pub source_kind: SourceKind,
-    pub digest: &'a str,
+    pub digest: Option<&'a Digest>,
 }
 
 #[derive(Clone, Debug)]
@@ -48,13 +123,13 @@ pub struct RetentionRequest<'a> {
     pub image_ref: &'a str,
     pub image_source: &'a str,
     pub source_kind: SourceKind,
-    pub digest: &'a str,
+    pub digest: Option<&'a Digest>,
     pub mru_path: &'a Path,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OciSource {
-    pub digest: String,
+    pub digest: Digest,
     pub layout: String,
     pub reference: String,
     pub layers: Vec<Layer>,
@@ -62,20 +137,32 @@ pub struct OciSource {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct Layer {
-    #[serde(default)]
-    pub digest: String,
+    pub digest: Digest,
     #[serde(default)]
     pub size: u64,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Record {
-    #[serde(default, rename = "ref", skip_serializing_if = "String::is_empty")]
-    pub ref_name: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub digest: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub id: String,
+    #[serde(
+        default,
+        rename = "ref",
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_normalized_string"
+    )]
+    pub ref_name: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_digest"
+    )]
+    pub digest: Option<Digest>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_image_id"
+    )]
+    pub id: Option<ImageId>,
 }
 
 #[expect(
@@ -105,7 +192,23 @@ pub enum Error {
     /// invalid image MRU JSON: {source}
     MruJson { source: serde_json::Error },
     /// {source}
+    Digest { source: DigestParseError },
+    /// {source}
+    ImageId { source: ImageIdParseError },
+    /// {source}
     Io { source: io::Error },
+}
+
+impl From<DigestParseError> for Error {
+    fn from(source: DigestParseError) -> Self {
+        Self::Digest { source }
+    }
+}
+
+impl From<ImageIdParseError> for Error {
+    fn from(source: ImageIdParseError) -> Self {
+        Self::ImageId { source }
+    }
 }
 
 impl From<io::Error> for Error {
@@ -155,9 +258,9 @@ pub fn install(store: &mut impl Store, request: &InstallRequest<'_>) -> Result<(
         request.source_kind,
         request.digest,
     )?;
-    if !desired.is_empty() && store.digest_present(request.runtime, &desired)? {
+    if store.digest_present(request.runtime, desired.as_str())? {
         if request.runtime == Runtime::Podman {
-            store.tag(request.runtime, &desired, request.image_ref)?;
+            store.tag(request.runtime, desired.as_str(), request.image_ref)?;
         }
         return Ok(());
     }
@@ -200,29 +303,31 @@ pub fn remember_and_prune(
     request: &RetentionRequest<'_>,
 ) -> Result<(), Error> {
     let digest = if request.image_source.is_empty() {
-        String::new()
+        None
     } else {
-        desired_digest(
+        Some(desired_digest(
             store,
             request.image_source,
             request.source_kind,
             request.digest,
-        )?
+        )?)
     };
-    remember(
-        store,
-        request.runtime,
-        request.mru_path,
-        request.image_ref,
-        &digest,
-    )?;
-    prune(
-        store,
-        request.runtime,
-        request.mru_path,
-        request.image_ref,
-        &digest,
-    )
+    with_mru_lock(request.mru_path, || {
+        remember(
+            store,
+            request.runtime,
+            request.mru_path,
+            request.image_ref,
+            digest.as_ref(),
+        )?;
+        prune(
+            store,
+            request.runtime,
+            request.mru_path,
+            request.image_ref,
+            digest.as_ref(),
+        )
+    })
 }
 
 pub fn default_mru_path() -> PathBuf {
@@ -238,33 +343,23 @@ fn desired_digest(
     store: &mut impl Store,
     image_source: &str,
     kind: SourceKind,
-    digest: &str,
-) -> Result<String, Error> {
-    if digest.starts_with("sha256:") {
-        return Ok(digest.to_owned());
-    }
-    let path = Path::new(digest);
-    if path.is_file() {
-        let value = fs::read_to_string(path)?;
-        let trimmed = value.trim();
-        if trimmed.starts_with("sha256:") {
-            return Ok(trimmed.to_owned());
-        }
+    digest: Option<&Digest>,
+) -> Result<Digest, Error> {
+    if let Some(digest) = digest {
+        return Ok(digest.clone());
     }
     match kind {
         SourceKind::NixDescriptor => {
-            let descriptor = read_descriptor(image_source)?;
-            if descriptor.digest.starts_with("sha256:") {
-                Ok(descriptor.digest)
-            } else {
-                Err(Error::MissingDescriptorDigest {
+            read_descriptor(image_source)?
+                .digest
+                .ok_or_else(|| Error::MissingDescriptorDigest {
                     path: image_source.to_owned(),
                 })
-            }
         }
         SourceKind::DockerArchive => store
             .docker_archive_config_digest(image_source)?
-            .filter(|value| value.starts_with("sha256:"))
+            .map(|value| Digest::parse(&value))
+            .transpose()?
             .ok_or_else(|| Error::MissingDockerArchiveDigest {
                 path: image_source.to_owned(),
             }),
@@ -276,42 +371,38 @@ fn remember(
     runtime: Runtime,
     path: &Path,
     image_ref: &str,
-    digest: &str,
+    digest: Option<&Digest>,
 ) -> Result<(), Error> {
-    if image_ref.is_empty() {
+    let Some(ref_name) = normalized_value(image_ref) else {
         return Ok(());
-    }
+    };
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
+    let id = store
+        .image_id(runtime, image_ref)?
+        .map(|value| ImageId::parse(&value))
+        .transpose()?;
     let mut records = read_records(path)?;
     records.insert(
         0,
         Record {
-            ref_name: image_ref.to_owned(),
-            digest: digest.to_owned(),
-            id: store
-                .image_id(runtime, image_ref)?
-                .unwrap_or_else(String::new),
+            ref_name: Some(ref_name),
+            digest: digest.cloned(),
+            id,
         },
     );
     let mut seen = BTreeSet::new();
     let records = records
         .into_iter()
-        .filter(|record| {
-            !record.ref_name.is_empty() || !record.digest.is_empty() || !record.id.is_empty()
-        })
-        .filter(|record| {
-            seen.insert(format!(
-                "{}\0{}\0{}",
-                record.ref_name, record.digest, record.id
-            ))
-        })
+        .filter(|record| seen.insert(record.clone()))
         .take(8)
         .collect::<Vec<_>>();
     let json =
         serde_json::to_string_pretty(&records).map_err(|source| Error::MruJson { source })?;
-    fs::write(path, format!("{json}\n"))?;
+    let temporary = path.with_extension(format!("mru-{}.tmp", std::process::id()));
+    fs::write(&temporary, format!("{json}\n"))?;
+    fs::rename(temporary, path)?;
     Ok(())
 }
 
@@ -320,31 +411,45 @@ fn prune(
     runtime: Runtime,
     mru_path: &Path,
     image_ref: &str,
-    digest: &str,
+    digest: Option<&Digest>,
 ) -> Result<(), Error> {
     let mut keep_refs = BTreeSet::new();
     let mut keep_ids = BTreeSet::new();
     let mut keep_digests = BTreeSet::new();
     add_normalized(&mut keep_refs, image_ref);
-    add_normalized(&mut keep_digests, digest);
+    if let Some(digest) = digest {
+        keep_digests.insert(digest.clone());
+    }
     if let Some(id) = store.image_id(runtime, image_ref)? {
-        add_normalized(&mut keep_ids, &id);
+        keep_ids.insert(ImageId::parse(&id)?);
     }
     if let Some(actual_digest) = store.image_digest(runtime, image_ref)? {
-        add_normalized(&mut keep_digests, &actual_digest);
+        keep_digests.insert(Digest::parse(&actual_digest)?);
     }
     for record in read_records(mru_path)? {
-        add_normalized(&mut keep_refs, &record.ref_name);
-        add_normalized(&mut keep_ids, &record.id);
-        add_normalized(&mut keep_digests, &record.digest);
+        if let Some(ref_name) = record.ref_name {
+            keep_refs.insert(ref_name);
+        }
+        if let Some(id) = record.id {
+            keep_ids.insert(id);
+        }
+        if let Some(digest) = record.digest {
+            keep_digests.insert(digest);
+        }
     }
     for image in list_images(store, runtime)? {
         if !image.managed && !image.legacy {
             continue;
         }
-        if keep_refs.contains(&image.ref_name)
+        if image
+            .ref_name
+            .as_ref()
+            .is_some_and(|ref_name| keep_refs.contains(ref_name))
             || keep_ids.contains(&image.id)
-            || keep_digests.contains(&image.digest)
+            || image
+                .digest
+                .as_ref()
+                .is_some_and(|digest| keep_digests.contains(digest))
         {
             continue;
         }
@@ -356,10 +461,25 @@ fn prune(
     Ok(())
 }
 
+fn with_mru_lock<T>(path: &Path, operation: impl FnOnce() -> Result<T, Error>) -> Result<T, Error> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let lock_path = path.with_extension("lock");
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(lock_path)?;
+    FileExt::lock_exclusive(&lock)?;
+    operation()
+}
+
 #[derive(Debug, Deserialize)]
 struct Descriptor {
     #[serde(default)]
-    digest: String,
+    digest: Option<Digest>,
     #[serde(default)]
     oci_layout: String,
     #[serde(default)]
@@ -375,8 +495,11 @@ impl Descriptor {
                 path: path.to_owned(),
             });
         }
+        let digest = self.digest.ok_or_else(|| Error::MissingDescriptorDigest {
+            path: path.to_owned(),
+        })?;
         Ok(OciSource {
-            digest: self.digest,
+            digest,
             layout: self.oci_layout,
             reference: self.oci_ref.unwrap_or_else(|| String::from("latest")),
             layers: self.layers,
@@ -385,10 +508,10 @@ impl Descriptor {
 }
 
 struct ListedImage {
-    ref_name: String,
+    ref_name: Option<String>,
     target: String,
-    id: String,
-    digest: String,
+    id: ImageId,
+    digest: Option<Digest>,
     managed: bool,
     legacy: bool,
 }
@@ -441,20 +564,26 @@ fn listed_image_from_line(
     }
     let tag = fields.next().unwrap_or("<none>");
     let listed_id = fields.next().unwrap_or("");
-    let (ref_name, target) = listed_image_identity(runtime, repo, tag, listed_id);
-    if target.is_empty() {
+    let ref_name = (repo != "<none>" && tag != "<none>").then(|| format!("{repo}:{tag}"));
+    let Some(target) = ref_name.clone().or_else(|| normalized_value(listed_id)) else {
         return Ok(None);
-    }
+    };
     let id = store
         .image_id(runtime, &target)?
         .unwrap_or_else(|| listed_id.to_owned());
+    let id = ImageId::parse(&id)?;
     let digest = store
         .image_digest(runtime, &target)?
-        .unwrap_or_else(String::new);
+        .map(|value| Digest::parse(&value))
+        .transpose()?;
     let managed = store.image_managed(runtime, &target)?;
     let legacy = match runtime {
-        Runtime::Podman => ref_name.starts_with("localhost/wrix-"),
-        Runtime::Container => ref_name.starts_with("wrix-"),
+        Runtime::Podman => ref_name
+            .as_ref()
+            .is_some_and(|name| name.starts_with("localhost/wrix-")),
+        Runtime::Container => ref_name
+            .as_ref()
+            .is_some_and(|name| name.starts_with("wrix-")),
     };
     Ok(Some(ListedImage {
         ref_name,
@@ -493,6 +622,37 @@ fn add_normalized(set: &mut BTreeSet<String>, value: &str) {
     if let Some(value) = normalized_value(value) {
         set.insert(value);
     }
+}
+
+fn deserialize_optional_normalized_string<'de, D>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?.and_then(|value| normalized_value(&value)))
+}
+
+fn deserialize_optional_digest<'de, D>(deserializer: D) -> Result<Option<Digest>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    value
+        .and_then(|value| normalized_value(&value))
+        .map(|value| Digest::parse(&value).map_err(de::Error::custom))
+        .transpose()
+}
+
+fn deserialize_optional_image_id<'de, D>(deserializer: D) -> Result<Option<ImageId>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    value
+        .and_then(|value| normalized_value(&value))
+        .map(|value| ImageId::parse(&value).map_err(de::Error::custom))
+        .transpose()
 }
 
 fn normalized_value(value: &str) -> Option<String> {
@@ -637,17 +797,22 @@ impl Store for CommandStore {
     }
 
     fn image_in_use(&mut self, runtime: Runtime, target: &str) -> Result<bool, Error> {
-        if runtime == Runtime::Container {
-            let id = inspect_value(runtime, target, InspectField::Id)?.unwrap_or_default();
-            let output = run_required_output("container", &["list", "--all", "--format", "json"])?;
-            return container_image_in_use(&output.stdout, target, &id);
+        match runtime {
+            Runtime::Podman => {
+                let filter = format!("ancestor={target}");
+                let output = run_required_output(
+                    "podman",
+                    &["ps", "-a", "--filter", &filter, "--format", "{{.Names}}"],
+                )?;
+                Ok(!trim_stdout(&output.stdout).is_empty())
+            }
+            Runtime::Container => {
+                let id = inspect_value(runtime, target, InspectField::Id)?.unwrap_or_default();
+                let output =
+                    run_required_output("container", &["list", "--all", "--format", "json"])?;
+                container_image_in_use(&output.stdout, target, &id)
+            }
         }
-        let filter = format!("ancestor={target}");
-        let output = run_output(
-            "podman",
-            &["ps", "-a", "--filter", &filter, "--format", "{{.Names}}"],
-        )?;
-        Ok(output.status.success() && !trim_stdout(&output.stdout).is_empty())
     }
 
     fn delete_image(&mut self, runtime: Runtime, target: &str) -> Result<(), Error> {

@@ -24,7 +24,7 @@ count_nightly_in_closure() {
 
 test_no_nightly_closure() {
   local fixture_path="$REPO_ROOT/tests/fixtures/rust-toolchain.toml"
-  if [ ! -f "$fixture_path" ]; then
+  if [[ ! -f "$fixture_path" ]]; then
     echo "fixture not found: $fixture_path" >&2
     return 1
   fi
@@ -47,7 +47,7 @@ test_no_nightly_closure() {
 
   local default_count
   default_count=$(count_nightly_in_closure "$default_drv")
-  if [ "$default_count" -ne 0 ]; then
+  if [[ "$default_count" -ne 0 ]]; then
     echo "default rust toolchain closure contains $default_count nightly-* derivation(s) — likely regression to fenix.packages.\${system}.rust-analyzer" >&2
     return 1
   fi
@@ -66,7 +66,7 @@ test_no_nightly_closure() {
 
   local pinned_count
   pinned_count=$(count_nightly_in_closure "$pinned_drv")
-  if [ "$pinned_count" -ne 0 ]; then
+  if [[ "$pinned_count" -ne 0 ]]; then
     echo "rustProfile toolchain closure contains $pinned_count nightly-* derivation(s) — likely regression to fenix.packages.\${system}.rust-analyzer" >&2
     return 1
   fi

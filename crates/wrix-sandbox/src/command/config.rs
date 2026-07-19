@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::image::SourceKind;
+use crate::image::{Digest, SourceKind};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Platform {
@@ -98,7 +98,7 @@ pub struct Image {
     pub reference: String,
     pub source: String,
     pub source_kind: SourceKind,
-    pub digest: String,
+    pub digest: Option<Digest>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -304,7 +304,7 @@ fn parse_profile_value(value: Value, platform: Platform) -> Result<ProfileConfig
 
     let raw = serde_json::from_value::<RawProfileConfig>(value)
         .map_err(|source| ConfigError::InvalidProfileConfigSchemaShape { source })?;
-    let digest = raw.image.digest.unwrap_or_default();
+    let digest = raw.image.digest;
     Ok(ProfileConfig {
         profile: raw.profile,
         image: Image {
@@ -410,7 +410,7 @@ struct RawProfileConfig {
 #[derive(Debug, Deserialize)]
 struct RawImage {
     #[serde(default)]
-    digest: Option<String>,
+    digest: Option<Digest>,
 }
 
 #[derive(Debug, Deserialize)]

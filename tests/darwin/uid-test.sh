@@ -15,7 +15,7 @@ set -euo pipefail
 # the container. When running outside an Apple Container VM (e.g., via wrix-mcp
 # on Linux), VirtioFS is not present and this test is not applicable.
 WORKSPACE_OWNER_CHECK=$(stat -c %u /workspace 2>/dev/null || echo "unknown")
-if [ "$WORKSPACE_OWNER_CHECK" != "0" ]; then
+if [[ "$WORKSPACE_OWNER_CHECK" != "0" ]]; then
   echo "SKIP: VirtioFS not detected (/workspace owned by UID $WORKSPACE_OWNER_CHECK, expected 0)"
   echo "This test only applies to Apple Container CLI VMs with VirtioFS mounts."
   exit 77
@@ -34,7 +34,7 @@ WORKSPACE_OWNER=$(stat -c %u /workspace 2>/dev/null)
 GIT_OWNER=$(stat -c %u /workspace/.git 2>/dev/null)
 echo "  /workspace owner UID: $WORKSPACE_OWNER"
 echo "  /workspace/.git owner UID: $GIT_OWNER"
-if [ "$WORKSPACE_OWNER" = "0" ] && [ "$GIT_OWNER" = "0" ]; then
+if [[ "$WORKSPACE_OWNER" = "0" ]] && [[ "$GIT_OWNER" = "0" ]]; then
   echo "  PASS: VirtioFS maps to root as expected"
 else
   echo "  FAIL: Expected UID 0, got workspace=$WORKSPACE_OWNER git=$GIT_OWNER"
@@ -45,7 +45,7 @@ echo ""
 # Test 2: After unshare, process runs as HOST_UID
 echo "Test 2: Process UID after unshare"
 INNER_UID=$(unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- id -u)
-if [ "$INNER_UID" = "$HOST_UID" ]; then
+if [[ "$INNER_UID" = "$HOST_UID" ]]; then
   echo "  PASS: Process runs as UID $HOST_UID"
 else
   echo "  FAIL: Expected UID $HOST_UID, got $INNER_UID"
@@ -57,7 +57,7 @@ echo ""
 echo "Test 3: VirtioFS ownership inside unshare namespace"
 INNER_WORKSPACE_OWNER=$(unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- stat -c %u /workspace)
 INNER_GIT_OWNER=$(unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- stat -c %u /workspace/.git)
-if [ "$INNER_WORKSPACE_OWNER" = "$HOST_UID" ] && [ "$INNER_GIT_OWNER" = "$HOST_UID" ]; then
+if [[ "$INNER_WORKSPACE_OWNER" = "$HOST_UID" ]] && [[ "$INNER_GIT_OWNER" = "$HOST_UID" ]]; then
   echo "  PASS: VirtioFS files appear as UID $HOST_UID"
 else
   echo "  FAIL: Expected UID $HOST_UID, got workspace=$INNER_WORKSPACE_OWNER git=$INNER_GIT_OWNER"
@@ -70,7 +70,7 @@ echo "Test 4: git rev-parse inside unshare namespace"
 GIT_OUTPUT=$(unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
   git -C /workspace rev-parse --show-toplevel 2>&1)
 GIT_EXIT=$?
-if [ "$GIT_EXIT" -eq 0 ] && [ "$GIT_OUTPUT" = "/workspace" ]; then
+if [[ "$GIT_EXIT" -eq 0 ]] && [[ "$GIT_OUTPUT" = "/workspace" ]]; then
   echo "  PASS: git rev-parse succeeds (no dubious ownership)"
 else
   echo "  FAIL: git rev-parse failed (exit=$GIT_EXIT): $GIT_OUTPUT"
@@ -82,11 +82,11 @@ echo ""
 echo "Test 5: File creation inside unshare namespace"
 unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
   bash -c 'echo "uid-test" > /workspace/.uid-mapping-test'
-if [ -f /workspace/.uid-mapping-test ]; then
+if [[ -f /workspace/.uid-mapping-test ]]; then
   # Inside the outer namespace (root), the file appears as root-owned
   FILE_OWNER=$(stat -c %u /workspace/.uid-mapping-test)
   echo "  File owner (outer namespace): $FILE_OWNER"
-  if [ "$FILE_OWNER" = "0" ]; then
+  if [[ "$FILE_OWNER" = "0" ]]; then
     echo "  PASS: File created with correct ownership mapping"
   else
     echo "  FAIL: Expected owner UID 0 in outer namespace, got $FILE_OWNER"
@@ -104,7 +104,7 @@ echo "Test 6: HOME directory access inside unshare namespace"
 HOME_OWNER=$(unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- stat -c %u "$HOME")
 HOME_WRITABLE=$(unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
   bash -c "touch \$HOME/.uid-test && echo yes && rm \$HOME/.uid-test" 2>&1)
-if [ "$HOME_OWNER" = "$HOST_UID" ] && [ "$HOME_WRITABLE" = "yes" ]; then
+if [[ "$HOME_OWNER" = "$HOST_UID" ]] && [[ "$HOME_WRITABLE" = "yes" ]]; then
   echo "  PASS: HOME owned by $HOST_UID and writable"
 else
   echo "  FAIL: HOME owner=$HOME_OWNER writable=$HOME_WRITABLE"
@@ -116,7 +116,7 @@ echo ""
 echo "Test 7: Username resolution"
 USERNAME=$(unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- id -un 2>/dev/null || echo "unknown")
 echo "  Username: $USERNAME"
-if [ "$USERNAME" = "wrix" ]; then
+if [[ "$USERNAME" = "wrix" ]]; then
   echo "  PASS: Username resolves to wrix"
 else
   echo "  WARN: Username is '$USERNAME' (expected 'wrix')"
@@ -124,7 +124,7 @@ else
 fi
 echo ""
 
-if [ "$FAILED" -eq 0 ]; then
+if [[ "$FAILED" -eq 0 ]]; then
   echo "=== ALL UID MAPPING TESTS PASSED ==="
   exit 0
 else

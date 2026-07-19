@@ -116,8 +116,6 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
   [check](verify:prek.bundle-contents)
 - `mkDevShell` sets `core.hooksPath` to the `wrix.prekHooks` store path on every devshell entry when `.pre-commit-config.yaml` is present
   [system](verify:prek.devshell-auto-set)
-- `wrix init` sets shared repo-local `core.hooksPath` to the same `wrix.prekHooks` bundle for ordinary host Git and `.loom/integration`-style linked worktrees when `.pre-commit-config.yaml` is present and hook setup is enabled
-  [test](../crates/wrix-cli/tests/init_prek.rs::prek_hooks)
 - The pre-commit and pre-push shims both invoke `prek hook-impl --hook-type=<stage>` (not `prek run`, which would mistake git's positional args for hook/project selectors)
   [system](verify:prek.shims-use-hook-impl)
 - No shim sources `lock.sh`, calls `_prek_acquire_lock`, or invokes `flock`; every shim invokes `prek hook-impl --hook-type=<its-stage>` and pins the Nix-store `prek` package on `PATH`
@@ -160,7 +158,7 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
 ### Functional
 
 1. **Bundle ownership** — `wrix.prekHooks` owns every staged hook shim; consumers do not vendor or override unless they substitute the whole bundle via `mkDevShell { prekHooks = <derivation>; }`.
-2. **`core.hooksPath` management** — Wrix-owned install paths set `core.hooksPath` idempotently: `mkDevShell` per devshell entry and `wrix init` for ordinary host Git / Loom driver worktrees. Consumers do not run `prek install` or maintain hook shims themselves.
+2. **`core.hooksPath` management** — The bundle is the hook path consumed by Wrix-owned install surfaces. `profiles.md` owns devshell installation and `cli.md` owns `wrix init`; consumers do not run `prek install` or maintain hook shims themselves.
 3. **Hook stages** — the shim bundle covers pre-commit, pre-push, prepare-commit-msg, post-checkout, and post-merge; Wrix's own `.pre-commit-config.yaml` configures only pre-commit (treefmt, shell re-exec guard, builtin hooks) and pre-push (`nix flake check`, `loom gate verify`). The pre-push Loom invocation exports `WRIX_PRE_PUSH=1`, allowing the `test-ci:` runner to retain CI-only realizations on Linux while skipping them by default on Darwin.
 4. **Stamp-file dance** — pre-push writes `.wrix/push-verified` after a successful check so a subsequent push can short-circuit if the SSH connection died during validation. See § Pre-Push Stamp Dance for the full mechanic.
 5. **Marker-aware short-circuit** — each pre-push entry supplies stable hook id, entry, and range metadata through `bin/pre-push-checks`; the wrapper consults `loom gate verify-marker` to skip only the exact covered command.

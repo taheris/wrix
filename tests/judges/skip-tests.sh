@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+set -euo pipefail
+
 # Judge rubrics for skip-tests success criteria
 
 test_binary_guards_removed() {
