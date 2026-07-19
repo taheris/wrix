@@ -6,6 +6,7 @@ use std::{
     process::{Command as ProcessCommand, ExitCode, Stdio},
 };
 
+use serde::Deserialize;
 use serde_json::Value;
 
 const GITHUB_KNOWN_HOSTS: &str = concat!(
@@ -224,13 +225,43 @@ struct Flags {
     force: ForcePolicy,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct FilePolicy {
     deploy_key: Option<KeyName>,
     signing: Option<SigningPolicy>,
     remote: Option<RemoteName>,
     hooks: Option<HookPolicy>,
     verification: Option<VerificationPolicy>,
+}
+
+#[derive(Default, Deserialize)]
+struct RawFilePolicy {
+    #[serde(default)]
+    wrix: RawWrixPolicy,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawWrixPolicy {
+    #[serde(default)]
+    git: RawGitPolicy,
+    #[serde(default)]
+    init: RawInitPolicy,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawGitPolicy {
+    deploy_key: Option<String>,
+    sign_commits: Option<bool>,
+    remote: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawInitPolicy {
+    prek_hooks: Option<bool>,
+    online_verify: Option<bool>,
 }
 
 #[derive(Default)]
@@ -1964,187 +1995,33 @@ fn load_file_policy(path: &Path) -> Result<FilePolicy, Error> {
 }
 
 fn parse_file_policy(path: &Path, content: &str) -> Result<FilePolicy, Error> {
-    let mut policy = FilePolicy::default();
-    let mut section = Vec::new();
-    for (line_index, line) in content.lines().enumerate() {
-        let line_number = line_index + 1;
-        let line = strip_comment(line).trim();
-        if line.is_empty() {
-            continue;
-        }
-        if line.starts_with('[') {
-            section = parse_section(path, line_number, line)?;
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            return Err(Error::ConfigSyntax {
-                path: path_string(path),
-                line: line_number,
-                message: String::from("expected key = value"),
-            });
-        };
-        let mut parts = section.clone();
-        parts.extend(key.trim().split('.').map(str::trim).map(ToOwned::to_owned));
-        apply_file_value(path, line_number, &parts, value.trim(), &mut policy)?;
-    }
-    Ok(policy)
-}
-
-fn parse_section(path: &Path, line: usize, input: &str) -> Result<Vec<String>, Error> {
-    if input.starts_with("[[") || !input.ends_with(']') {
-        return Err(Error::ConfigSyntax {
-            path: path_string(path),
-            line,
-            message: String::from("expected a table header like [wrix.git]"),
-        });
-    }
-    let inner = &input[1..input.len() - 1];
-    let parts = inner
-        .split('.')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-    if parts.is_empty() {
-        return Err(Error::ConfigSyntax {
-            path: path_string(path),
-            line,
-            message: String::from("empty table header"),
-        });
-    }
-    Ok(parts)
-}
-
-fn apply_file_value(
-    path: &Path,
-    line: usize,
-    parts: &[String],
-    value: &str,
-    policy: &mut FilePolicy,
-) -> Result<(), Error> {
-    let parts = parts.iter().map(String::as_str).collect::<Vec<_>>();
-    match parts.as_slice() {
-        ["wrix", "git", "deploy_key"] => {
-            let value = parse_string_value(path, line, value)?;
-            policy.deploy_key = Some(KeyName::parse(&value, "wrix.git.deploy_key")?);
-        }
-        ["wrix", "git", "sign_commits"] => {
-            policy.signing = Some(SigningPolicy::from_bool(parse_bool_value(
-                path, line, value,
-            )?));
-        }
-        ["wrix", "git", "remote"] => {
-            let value = parse_string_value(path, line, value)?;
-            policy.remote = Some(RemoteName::parse(&value, "wrix.git.remote")?);
-        }
-        ["wrix", "init", "prek_hooks"] => {
-            policy.hooks = Some(HookPolicy::from_bool(parse_bool_value(path, line, value)?));
-        }
-        ["wrix", "init", "online_verify"] => {
-            policy.verification = Some(VerificationPolicy::from_bool(parse_bool_value(
-                path, line, value,
-            )?));
-        }
-        ["wrix", ..] => {
-            return Err(Error::ConfigSyntax {
-                path: path_string(path),
-                line,
-                message: format!("unsupported wrix.toml key: {}", parts.join(".")),
-            });
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
-fn strip_comment(line: &str) -> &str {
-    let mut in_string = false;
-    let mut escaped = false;
-    for (index, character) in line.char_indices() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        match character {
-            '\\' if in_string => escaped = true,
-            '"' => in_string = !in_string,
-            '#' if !in_string => return &line[..index],
-            _ => {}
-        }
-    }
-    line
-}
-
-fn parse_string_value(path: &Path, line: usize, value: &str) -> Result<String, Error> {
-    let mut chars = value.chars();
-    if chars.next() != Some('"') {
-        return Err(Error::ConfigSyntax {
-            path: path_string(path),
-            line,
-            message: String::from("expected a quoted string"),
-        });
-    }
-
-    let mut output = String::new();
-    let mut escaped = false;
-    let mut closed = false;
-    let mut consumed = 1;
-    for character in value[1..].chars() {
-        consumed += character.len_utf8();
-        if escaped {
-            match character {
-                '"' => output.push('"'),
-                '\\' => output.push('\\'),
-                'n' => output.push('\n'),
-                'r' => output.push('\r'),
-                't' => output.push('\t'),
-                other => {
-                    return Err(Error::ConfigSyntax {
-                        path: path_string(path),
-                        line,
-                        message: format!("unsupported string escape: \\{other}"),
-                    });
-                }
-            }
-            escaped = false;
-            continue;
-        }
-        match character {
-            '\\' => escaped = true,
-            '"' => {
-                closed = true;
-                break;
-            }
-            other => output.push(other),
-        }
-    }
-    if !closed {
-        return Err(Error::ConfigSyntax {
-            path: path_string(path),
-            line,
-            message: String::from("unterminated string"),
-        });
-    }
-    if !value[consumed..].trim().is_empty() {
-        return Err(Error::ConfigSyntax {
-            path: path_string(path),
-            line,
-            message: String::from("unexpected content after string value"),
-        });
-    }
-    Ok(output)
-}
-
-fn parse_bool_value(path: &Path, line: usize, value: &str) -> Result<bool, Error> {
-    match value.trim() {
-        "true" => Ok(true),
-        "false" => Ok(false),
-        _ => Err(Error::ConfigSyntax {
-            path: path_string(path),
-            line,
-            message: String::from("expected true or false"),
-        }),
-    }
+    let raw = toml::from_str::<RawFilePolicy>(content).map_err(|source| Error::ConfigToml {
+        path: path_string(path),
+        source,
+    })?;
+    Ok(FilePolicy {
+        deploy_key: raw
+            .wrix
+            .git
+            .deploy_key
+            .as_deref()
+            .map(|value| KeyName::parse(value, "wrix.git.deploy_key"))
+            .transpose()?,
+        signing: raw.wrix.git.sign_commits.map(SigningPolicy::from_bool),
+        remote: raw
+            .wrix
+            .git
+            .remote
+            .as_deref()
+            .map(|value| RemoteName::parse(value, "wrix.git.remote"))
+            .transpose()?,
+        hooks: raw.wrix.init.prek_hooks.map(HookPolicy::from_bool),
+        verification: raw
+            .wrix
+            .init
+            .online_verify
+            .map(VerificationPolicy::from_bool),
+    })
 }
 
 fn path_string(path: &Path) -> String {
@@ -2336,11 +2213,10 @@ enum Error {
     },
     /// cannot read {path}: {source}
     ConfigIo { path: String, source: io::Error },
-    /// invalid {path} at line {line}: {message}
-    ConfigSyntax {
+    /// invalid TOML in {path}: {source}
+    ConfigToml {
         path: String,
-        line: usize,
-        message: String,
+        source: toml::de::Error,
     },
 }
 
@@ -2378,16 +2254,16 @@ mod test {
 
     #[test]
     fn wrix_toml_parses_supported_policy_keys() {
-        let content = r#"
+        let content = r"
 [wrix.git]
-deploy_key = "toml-key"
+deploy_key = 'toml-key'
 sign_commits = false
-remote = "upstream"
+remote = 'upstream'
 
 [wrix.init]
 prek_hooks = false
 online_verify = false
-"#;
+";
         let policy = parse_file_policy(Path::new("wrix.toml"), content).unwrap();
         assert_policy(
             &policy,
@@ -2397,6 +2273,17 @@ online_verify = false
             Some(HookPolicy::Disabled),
             Some(VerificationPolicy::Offline),
         );
+    }
+
+    #[test]
+    fn wrix_toml_rejects_duplicate_policy_keys() {
+        let content = r"
+[wrix.git]
+deploy_key = 'first-key'
+deploy_key = 'second-key'
+";
+        let error = parse_file_policy(Path::new("wrix.toml"), content).unwrap_err();
+        assert!(error.to_string().contains("duplicate key"));
     }
 
     #[test]

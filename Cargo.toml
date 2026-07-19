@@ -28,6 +28,7 @@ sha2 = "0.10.9"
 signal-hook = "0.3.18"
 tempfile = "3.27.0"
 thiserror = "2.0.17"
+toml = "0.9.8"
 wrix-beads = { path = "crates/wrix-beads" }
 wrix-cache = { path = "crates/wrix-cache" }
 wrix-cli = { path = "crates/wrix-cli" }

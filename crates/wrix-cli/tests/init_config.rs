@@ -95,15 +95,9 @@ fn defaults_and_overrides() -> TestResult {
     )?;
     fs::write(
         repo.path().join("wrix.toml"),
-        r#"[wrix.git]
-deploy_key = "toml-key"
-sign_commits = false
-remote = "upstream"
-
-[wrix.init]
-prek_hooks = false
-online_verify = false
-"#,
+        r"wrix.git = { deploy_key = 'toml-key', sign_commits = false, remote = 'upstream' }
+wrix.init = { prek_hooks = false, online_verify = false }
+",
     )?;
     let mut command = init_command(repo.path(), &home, &deploy_key, &signing_key, &hooks, &[])?;
     command
