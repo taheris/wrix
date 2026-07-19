@@ -58,7 +58,7 @@ let
     }:
     let
       configBrowser = config.browser or { };
-      configContextOptions = config.contextOptions or { };
+      configContextOptions = configBrowser.contextOptions or { };
       configLaunchOptions = config.launchOptions or { };
       browserLaunchOptions = configBrowser.launchOptions or { };
       userArgs = (configLaunchOptions.args or [ ]) ++ (browserLaunchOptions.args or [ ]);
@@ -72,6 +72,7 @@ let
           ];
       userBrowser = builtins.removeAttrs configBrowser [
         "browserName"
+        "contextOptions"
         "launchOptions"
       ];
       userConfig = builtins.removeAttrs config [
@@ -83,6 +84,9 @@ let
       browser = userBrowser // {
         browserName = "chromium";
         userDataDir = configBrowser.userDataDir or "/home/wrix/.cache/playwright-mcp";
+        contextOptions = configContextOptions // {
+          inherit viewport;
+        };
         launchOptions = userLaunchOptions // {
           args = mandatoryFlags ++ userArgs;
           channel = "chromium";
@@ -90,13 +94,10 @@ let
           inherit headless;
         };
       };
-      contextOptions = configContextOptions // {
-        inherit viewport;
-      };
     in
     userConfig
     // {
-      inherit browser contextOptions;
+      inherit browser;
     };
 
 in

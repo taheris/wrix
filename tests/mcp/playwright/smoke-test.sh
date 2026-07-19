@@ -277,18 +277,59 @@ test_user_options_reach_serialized_config() {
     local user_data_dir="${TEMP_DIR}/user-data"
     local extra_config
     local config_file
-    extra_config=$(jq -nc '{browser:{browserName:"firefox"},launchOptions:{slowMo:0},contextOptions:{acceptDownloads:false,viewport:{width:1,height:1}},metadata:{source:"passthrough"}}') || return 1
+    extra_config=$(jq -nc '{browser:{browserName:"firefox",launchOptions:{slowMo:0},contextOptions:{acceptDownloads:false,viewport:{width:1,height:1}}},timeouts:{action:4321}}') || return 1
     config_file=$(playwright_config_path "$user_data_dir" false 1440 900 "$extra_config") || return 1
 
     assert_json "$config_file" '.browser.browserName == "chromium"' "browserName is pinned to chromium" || return 1
     assert_json_arg "$config_file" dir "$user_data_dir" ".browser.userDataDir == \$dir" "userDataDir reaches generated config" || return 1
     assert_json "$config_file" '.browser.launchOptions.headless == false' "headless option reaches launchOptions" || return 1
     assert_json "$config_file" '.browser.launchOptions.slowMo == 0' "launchOptions fields pass through" || return 1
-    assert_json "$config_file" '.contextOptions.viewport == {"width":1440,"height":900}' "viewport option reaches contextOptions" || return 1
-    assert_json "$config_file" '.contextOptions.acceptDownloads == false' "contextOptions fields pass through" || return 1
-    assert_json "$config_file" '.metadata.source == "passthrough"' "top-level config fields pass through" || return 1
+    assert_json "$config_file" '.browser.contextOptions.viewport == {"width":1440,"height":900}' "viewport option reaches browser.contextOptions" || return 1
+    assert_json "$config_file" '.browser.contextOptions.acceptDownloads == false' "contextOptions fields pass through" || return 1
+    assert_json "$config_file" '.contextOptions == null' "contextOptions are not emitted at the unsupported top level" || return 1
+    assert_json "$config_file" '.timeouts.action == 4321' "top-level config fields pass through" || return 1
 
     log_pass "test_user_options_reach_serialized_config"
+}
+
+test_viewport_option_reaches_live_browser() {
+    log_test "test_viewport_option_reaches_live_browser: configured viewport controls the browser page"
+
+    new_temp_dir
+    local width=911
+    local height=613
+    local expected="${width}x${height}"
+    local id
+    local request
+    local response
+    local error
+    start_mcp_server "${TEMP_DIR}/user-data" true "$width" "$height" || return 1
+
+    id=$(next_id)
+    request=$(jq -nc --argjson id "$id" '{jsonrpc:"2.0",id:$id,method:"initialize",params:{protocolVersion:"2024-11-05",capabilities:{},clientInfo:{name:"test",version:"1.0"}}}') || return 1
+    response=$(mcp_request "$request") || return 1
+    if ! jq -e '.result.serverInfo.name == "Playwright"' <<<"$response" >/dev/null; then
+        log_fail "Initialize failed: $response"
+        return 1
+    fi
+    mcp_notify '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+
+    id=$(next_id)
+    request=$(jq -nc --argjson id "$id" '{jsonrpc:"2.0",id:$id,method:"tools/call",params:{name:"browser_evaluate",arguments:{function:"() => `${window.innerWidth}x${window.innerHeight}`"}}}') || return 1
+    response=$(mcp_request "$request" 30) || return 1
+    error=$(jq -r '.error // empty' <<<"$response") || return 1
+    if [[ -n "$error" ]]; then
+        log_fail "Browser evaluation failed: $error"
+        return 1
+    fi
+    if ! jq -e --arg expected "$expected" 'any(.result.content[]?; .type == "text" and (.text | contains($expected)))' <<<"$response" >/dev/null; then
+        log_fail "Browser viewport does not match $expected"
+        jq . <<<"$response" >&2
+        return 1
+    fi
+
+    stop_mcp_server
+    log_pass "test_viewport_option_reaches_live_browser"
 }
 
 test_registry_triple_shape() {
@@ -442,6 +483,7 @@ ALL_TESTS=(
     test_chromium_executable_path_does_not_embed_linux_arch
     test_mandatory_flags_are_non_overridable
     test_user_options_reach_serialized_config
+    test_viewport_option_reaches_live_browser
     test_registry_triple_shape
     test_network_guard_blocks_ipv4_connect
     test_mcp_initialize

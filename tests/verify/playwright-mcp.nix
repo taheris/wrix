@@ -31,5 +31,8 @@ in
     "test_offline_startup"
   ];
 
-  "playwright-mcp.user-options-config" = smoke "test_user_options_reach_serialized_config";
+  "playwright-mcp.user-options-config" = playwrightScriptFunctions "smoke-test" [
+    "test_user_options_reach_serialized_config"
+    "test_viewport_option_reaches_live_browser"
+  ];
 }
