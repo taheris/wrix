@@ -690,6 +690,8 @@ dests live under `/home/wrix/` inside the container, not under
   [check](verify:profiles.rust-required-args)
 - Cargo registry/git mounts and the sccache cache parent are writable so cargo can fetch crates and sccache can cache artifacts without `Read-only file system` errors
   [judge](../tests/judges/profiles.sh#test_cargo_registry_writable)
+- A profile mount with `optional = true` is preserved in `ProfileConfig` and omitted from launch planning when its expanded host source does not exist, on both supported platform paths
+  [system](verify:sandbox.optional-profile-mount)
 - Python profile can run Python scripts with dependencies
   [judge](../tests/judges/profiles.sh#test_python_profile)
 - uv cache mount is writable so uv can fetch packages not in the pre-warm set without `Read-only file system` errors

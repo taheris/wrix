@@ -82,6 +82,8 @@ pub struct ProfileMount {
     pub dest: String,
     #[serde(default = "default_mount_mode")]
     pub mode: MountMode,
+    #[serde(default)]
+    pub optional: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -522,5 +524,36 @@ mod test {
         let config = parse_profile_value(value, Platform::Linux).unwrap();
         assert_eq!(config.profile.env.get("FOO"), Some(&String::from("bar")));
         assert_eq!(config.security.deploy_key, Some(String::from("repo-key")));
+    }
+
+    #[test]
+    fn profile_config_preserves_mount_optionality() {
+        let value = json!({
+            "schema": 1,
+            "profile": {
+                "name": "base",
+                "mounts": [
+                    {
+                        "source": "/host/optional",
+                        "dest": "/container/optional",
+                        "mode": "rw",
+                        "optional": true
+                    },
+                    {
+                        "source": "/host/required",
+                        "dest": "/container/required"
+                    }
+                ]
+            },
+            "image": {
+                "ref": "wrix:test",
+                "source": "/nix/store/fake",
+                "source_kind": "nix-descriptor"
+            },
+            "agent": { "kind": "direct" }
+        });
+        let config = parse_profile_value(value, Platform::Linux).unwrap();
+        assert!(config.profile.mounts[0].optional);
+        assert!(!config.profile.mounts[1].optional);
     }
 }

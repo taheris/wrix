@@ -19,6 +19,7 @@ fn mount_classifier_handles_profile_and_spawn_mounts_uniformly() -> TestResult {
         source: host_dir.display().to_string(),
         dest: String::from("/mnt/profile-dir"),
         mode: MountMode::Ro,
+        optional: false,
     }];
     let spawn_mounts = vec![SpawnMount {
         host_path: host_file.display().to_string(),

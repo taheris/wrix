@@ -587,7 +587,9 @@ impl<'a> Plan<'a> {
             });
         }
         for mount in &self.request.profile_config.profile.mounts {
-            volumes.push(render_profile_mount(mount, staging)?);
+            if let Some(rendered) = render_profile_mount(mount, staging)? {
+                volumes.push(rendered);
+            }
         }
         volumes.extend(self.spawn_mounts.clone());
         Ok(volumes)
@@ -1029,18 +1031,30 @@ fn darwin_mounts_from_rendered(
 ) -> Result<DarwinMounts, LaunchError> {
     let mut mounts = DarwinMounts::default();
     for mount in profile_mounts {
-        mounts.push(&RenderedMount::from_profile(mount), staging_root)?;
+        mounts.push(
+            &RenderedMount::from_profile(mount),
+            staging_root,
+            mount.optional,
+        )?;
     }
     for mount in spawn_mounts {
-        mounts.push(mount, staging_root)?;
+        mounts.push(mount, staging_root, false)?;
     }
     Ok(mounts)
 }
 
 impl DarwinMounts {
-    fn push(&mut self, mount: &RenderedMount, staging_root: &Path) -> Result<(), LaunchError> {
+    fn push(
+        &mut self,
+        mount: &RenderedMount,
+        staging_root: &Path,
+        optional: bool,
+    ) -> Result<(), LaunchError> {
         let source = expand_path(&mount.host);
         if !source.exists() {
+            if optional {
+                return Ok(());
+            }
             return Err(LaunchError::MountSourceMissing {
                 path: source.display().to_string(),
             });
@@ -1305,9 +1319,12 @@ impl Drop for Staging {
 fn render_profile_mount(
     mount: &ProfileMount,
     staging: &Staging,
-) -> Result<RenderedMount, LaunchError> {
+) -> Result<Option<RenderedMount>, LaunchError> {
     let source = expand_path(&mount.source);
     if !source.exists() {
+        if mount.optional {
+            return Ok(None);
+        }
         return Err(LaunchError::MountSourceMissing {
             path: source.display().to_string(),
         });
@@ -1317,11 +1334,11 @@ fn render_profile_mount(
             .root
             .join(format!("dir{}", stable_mount_index(&source)));
         copy_dir(&source, &target)?;
-        return Ok(RenderedMount {
+        return Ok(Some(RenderedMount {
             host: target.display().to_string(),
             container: mount.dest.clone(),
             mode: mount.mode,
-        });
+        }));
     }
     if file_type_is_socket(&source)? {
         return Err(LaunchError::SocketMountRejected {
@@ -1329,11 +1346,11 @@ fn render_profile_mount(
             dest: mount.dest.clone(),
         });
     }
-    Ok(RenderedMount {
+    Ok(Some(RenderedMount {
         host: source.display().to_string(),
         container: mount.dest.clone(),
         mode: mount.mode,
-    })
+    }))
 }
 
 fn stage_beads(workspace: &Path, staging: &Staging) -> Result<Option<PathBuf>, LaunchError> {
@@ -1849,6 +1866,7 @@ mod test {
             source: host_dir.display().to_string(),
             dest: String::from("/mnt/profile-dir"),
             mode: MountMode::Ro,
+            optional: false,
         };
         let spawn_mount = SpawnMount {
             host_path: host_file.display().to_string(),
@@ -1857,10 +1875,18 @@ mod test {
         };
         let mut mounts = DarwinMounts::default();
         mounts
-            .push(&RenderedMount::from_profile(&profile_mount), &staging.root)
+            .push(
+                &RenderedMount::from_profile(&profile_mount),
+                &staging.root,
+                profile_mount.optional,
+            )
             .unwrap();
         mounts
-            .push(&RenderedMount::from_spawn(&spawn_mount), &staging.root)
+            .push(
+                &RenderedMount::from_spawn(&spawn_mount),
+                &staging.root,
+                false,
+            )
             .unwrap();
 
         assert_eq!(
@@ -1873,6 +1899,55 @@ mod test {
                 .is_some_and(|value| value.ends_with(":/etc/spawn-file"))
         );
         assert_eq!(mounts.mounts.len(), 2);
+    }
+
+    #[test]
+    fn missing_optional_profile_mount_is_skipped_by_platform_planners() {
+        let root = scratch_dir("optional-profile-mount");
+        let staging_root = root.join("stage");
+        std::fs::create_dir_all(&staging_root).unwrap();
+        let staging = Staging { root: staging_root };
+        let profile_mounts = [ProfileMount {
+            source: root.join("missing").display().to_string(),
+            dest: String::from("/mnt/optional"),
+            mode: MountMode::Rw,
+            optional: true,
+        }];
+
+        assert!(
+            super::render_profile_mount(&profile_mounts[0], &staging)
+                .unwrap()
+                .is_none()
+        );
+        let darwin =
+            super::darwin_mounts_from_rendered(&profile_mounts, &[], &staging.root).unwrap();
+        assert!(darwin.mounts.is_empty());
+        assert!(darwin.dir_mappings.is_empty());
+        assert!(darwin.file_mappings.is_empty());
+    }
+
+    #[test]
+    fn missing_required_profile_mount_is_rejected_by_platform_planners() {
+        let root = scratch_dir("required-profile-mount");
+        let staging_root = root.join("stage");
+        std::fs::create_dir_all(&staging_root).unwrap();
+        let staging = Staging { root: staging_root };
+        let profile_mounts = [ProfileMount {
+            source: root.join("missing").display().to_string(),
+            dest: String::from("/mnt/required"),
+            mode: MountMode::Rw,
+            optional: false,
+        }];
+
+        let linux_error = super::render_profile_mount(&profile_mounts[0], &staging).unwrap_err();
+        assert!(matches!(
+            linux_error,
+            LaunchError::MountSourceMissing { .. }
+        ));
+        assert!(matches!(
+            super::darwin_mounts_from_rendered(&profile_mounts, &[], &staging.root),
+            Err(LaunchError::MountSourceMissing { .. })
+        ));
     }
 
     #[test]

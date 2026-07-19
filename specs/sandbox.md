@@ -119,7 +119,7 @@ Before launching the agent container, `wrix` ensures the per-workspace service c
     "name": "example",
     "env": { "KEY": "value" },
     "mounts": [
-      { "source": "~/.config/example", "dest": "/home/wrix/.config/example", "mode": "ro" }
+      { "source": "~/.config/example", "dest": "/home/wrix/.config/example", "mode": "ro", "optional": false }
     ],
     "writable_dirs": [
       "/home/wrix/.cargo",

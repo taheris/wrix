@@ -43,6 +43,7 @@ EXPECTED_SOURCE_KIND=$(expected_source_kind)
 PACKAGE_LINK="$TEST_TMP/package"
 WRIX="$PACKAGE_LINK/bin/wrix"
 WRIX_RUN="$PACKAGE_LINK/bin/wrix-run"
+OPTIONAL_MOUNT_SOURCE="$TEST_TMP/missing-optional-mount"
 
 build_wrapper_package() {
   local log="$TEST_TMP/package-build.log"
@@ -57,7 +58,15 @@ build_wrapper_package() {
         flake = builtins.getFlake \"git+file://$REPO_ROOT\";
         system = builtins.currentSystem;
         lib = flake.legacyPackages.\${system}.lib;
-      in (lib.mkSandbox { profile = lib.profiles.base; }).package
+        profile = lib.deriveProfile lib.profiles.base {
+          mounts = [{
+            source = \"$OPTIONAL_MOUNT_SOURCE\";
+            dest = \"/mnt/optional-cache\";
+            mode = \"rw\";
+            optional = true;
+          }];
+        };
+      in (lib.mkSandbox { inherit profile; }).package
     " >"$log" 2>&1; then
     fail "nix build of mkSandbox package failed"
     tail -n 80 "$log" >&2
@@ -117,12 +126,19 @@ test_profile_config_contains_launcher_contract_fields() {
   build_wrapper_package || return 1
   local config
   config=$(profile_config_from_wrapper)
-  if ! jq -e --arg source_kind "$EXPECTED_SOURCE_KIND" '
+  if ! jq -e \
+    --arg source_kind "$EXPECTED_SOURCE_KIND" \
+    --arg optional_source "$OPTIONAL_MOUNT_SOURCE" '
     .schema == 1 and
     (.system | type == "string") and
     (.profile.name | type == "string") and
     (.profile.env | type == "object") and
-    (.profile.mounts | type == "array") and
+    (.profile.mounts == [{
+      source: $optional_source,
+      dest: "/mnt/optional-cache",
+      mode: "rw",
+      optional: true
+    }]) and
     (.profile.writable_dirs | type == "array") and
     (.profile.network_allowlist | type == "array") and
     (.image.ref | type == "string" and length > 0) and
@@ -143,6 +159,26 @@ test_profile_config_contains_launcher_contract_fields() {
     return 1
   fi
   pass "ProfileConfig JSON contains the schema v1 launcher contract fields"
+}
+
+test_missing_optional_profile_mount_is_skipped() {
+  build_wrapper_package || return 1
+  local out="$TEST_TMP/optional-mount.out" err="$TEST_TMP/optional-mount.err" rc=0
+  if [[ -e "$OPTIONAL_MOUNT_SOURCE" ]]; then
+    fail "optional mount fixture unexpectedly exists: $OPTIONAL_MOUNT_SOURCE"
+    return 1
+  fi
+
+  WRIX_DRY_RUN=1 "$WRIX" run "$WORKSPACE" >"$out" 2>"$err" || rc=$?
+  if [[ "$rc" != "0" ]]; then
+    fail "missing optional profile mount failed launch planning: $(cat "$err")"
+    return 1
+  fi
+  if grep -qF '/mnt/optional-cache' "$out"; then
+    fail "missing optional profile mount reached container argv: $(cat "$out")"
+    return 1
+  fi
+  pass "Nix-generated missing optional profile mount is skipped by the Rust launcher"
 }
 
 test_image_source_kind() {
@@ -319,6 +355,7 @@ WRAPPER_CONTRACT_TESTS=(
 ALL_TESTS=(
   "${WRAPPER_CONTRACT_TESTS[@]}"
   test_image_source_kind
+  test_missing_optional_profile_mount_is_skipped
 )
 
 test_profile_config_wrapper_contract() {

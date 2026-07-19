@@ -57,6 +57,8 @@ in
 
   "sandbox.network-open-blocks-lan" = network "test_open_blocks_lan";
 
+  "sandbox.optional-profile-mount" = profileConfig "test_missing_optional_profile_mount_is_skipped";
+
   "sandbox.nix-in-container" = sandboxScriptAll "nix-in-container";
 
   "sandbox.nix-store-verify-clean" = sandboxScriptAll "nix-store-verify-clean";
