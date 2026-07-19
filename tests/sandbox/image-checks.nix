@@ -192,6 +192,14 @@ let
   # the contents list the image is built from.
   baseContents = import ../../lib/sandbox/base-contents.nix { pkgs = linuxPkgs; };
   baseContentsClosure = pkgs.closureInfo { rootPaths = baseContents; };
+  baseProfileUniversalClosure = pkgs.closureInfo {
+    rootPaths = sandboxLib.profiles.base.corePackages ++ [
+      linuxPkgs.dockerTools.usrBinEnv
+      linuxPkgs.dockerTools.binSh
+      linuxPkgs.dockerTools.caCertificates
+    ];
+  };
+  nonUniversalBaseFixture = pkgs.writeText "wrix-non-universal-base-fixture" "not shared";
 
   claudeCodePkg = linuxPkgs.claude-code;
   piAgentPkg = linuxPkgs.pi-coding-agent;
@@ -1669,15 +1677,10 @@ let
   };
 
   # Membership guard for the universal bottom-of-closure (specs/image-builder.md
-  # § Base Image Layering). The base holds only nixpkgs-pin-dependent paths that
-  # every profile actually closes over. The base profile is the minimal package
-  # set (every other profile adds to it), so its image closure is the universal
-  # lower bound: a base member is genuinely shared iff it is reachable there.
-  # The fromImage base tar is a compressed blob whose store refs are unscannable,
-  # so a member that no profile references — a profile-specific toolchain such as
-  # `pkgs.rustc` (rust uses fenix's toolchain; base/python carry no Rust) or
-  # `pkgs.llvmPackages.libllvm` (no profile links LLVM) — is absent from the
-  # scannable image closure and is caught here as dead weight.
+  # § Provenance-Tiered Layering). Every profile extends the base profile's
+  # package floor, and every image adds the same nixpkgs-provided leaf roots.
+  # Their closure is an independent universality bound that excludes
+  # materializedRoots, which include baseContents.
   baseContentsList = concatStringsSep " " (map (p: ''"${p}"'') baseContents);
   baseImageUniversalTest = pkgs.writeShellApplication {
     name = "test-base-image-universal";
@@ -1686,24 +1689,34 @@ let
       pkgs.gnugrep
     ];
     text = ''
-      image_closure=${defaultImageClosure}/store-paths
-      base_contents=${baseContentsClosure}/store-paths
+      profile_closure=${baseProfileUniversalClosure}/store-paths
+      base_closure=${baseContentsClosure}/store-paths
 
-      # Universality: every base member must be reachable from the base profile's
-      # own packages, else it is dead weight loaded into every image's base layer.
+      assert_members_reachable() {
+          local closure_file="$1"
+          shift
+          local member
+          for member in "$@"; do
+              if ! grep -qxF "$member" "$closure_file"; then
+                  echo "FAIL: wrix-base-image member not reachable from independent universal roots" >&2
+                  echo "  member : $member" >&2
+                  echo "  closure: $closure_file" >&2
+                  return 1
+              fi
+          done
+      }
+
+      # expected failure: the synthetic path is absent from the universal roots.
+      if assert_members_reachable "$profile_closure" "${nonUniversalBaseFixture}" >/dev/null 2>&1; then
+          echo "FAIL: universality assertion accepted a synthetic non-universal path" >&2
+          exit 1
+      fi
+
       members=(${baseContentsList})
-      for member in "''${members[@]}"; do
-          if ! grep -qxF "$member" "$image_closure"; then
-              echo "FAIL: wrix-base-image member not shared by the base profile closure" >&2
-              echo "  member : $member" >&2
-              echo "  closure: $image_closure" >&2
-              exit 1
-          fi
-      done
+      assert_members_reachable "$profile_closure" "''${members[@]}"
 
-      # Exclusion: no profile references rustc or libllvm, so neither is a base member.
       for toolchain in ${linuxPkgs.rustc} ${linuxPkgs.llvmPackages.libllvm}; do
-          if grep -qxF "$toolchain" "$base_contents"; then
+          if grep -qxF "$toolchain" "$base_closure"; then
               echo "FAIL: profile-specific toolchain present in wrix-base-image contents" >&2
               echo "  unexpected: $toolchain" >&2
               exit 1
